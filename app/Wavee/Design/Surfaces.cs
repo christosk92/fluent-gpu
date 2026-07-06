@@ -193,9 +193,12 @@ sealed class CoverShimmer : Component
         {
             // Share the displayed image's decode handle (same src + decode target) so this reads the SAME load-state and
             // forks no second decode. UseImage doesn't consume a hook cell, so the conditional call is safe.
-            var state = UseImage(url, _decodeW, _decodeH).State;
-            if (state is ImageState.Ready or ImageState.Failed) settled.Value = true;   // resolved → stop subscribing
-            else loading = true;                                                        // None/Pending → breathe
+            var binding = UseImage(url, _decodeW, _decodeH);
+            var state = binding.State;
+            var failure = binding.Failure;
+            if (state == ImageState.Ready) settled.Value = true;
+            else if (state == ImageState.Failed && failure != ImageFailureKind.Canceled) settled.Value = true;
+            else loading = state is ImageState.None or ImageState.Pending;
         }
         // On the loading→settled edge `loading` flips, the dep changes, and the effect re-seeds a finite flat track
         // (loop:false) — the looping pulse is replaced in place and the loop-track count drops so the frame loop quiesces.

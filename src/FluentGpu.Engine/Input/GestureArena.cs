@@ -149,7 +149,7 @@ internal sealed class GestureArena
     /// events, so without this the frame loop would idle and the <c>OnFrameEnd</c> timer tick would never fire; the host
     /// ORs this into a wake reason so frames keep coming until the Hold promotes (§7A.4 — the timer is ticked on the held
     /// frames) or the contact strays/lifts and the member rejects. Zero-cost when no arena is open (the
-    /// <see cref="OpenArenaCount"/> early-out — the same pattern <c>ScrollAnimator.HasActive</c> uses); the bit clears the
+    /// <see cref="OpenArenaCount"/> early-out — the same pattern <c>ScrollIntegrator.HasActive</c> uses); the bit clears the
     /// instant the Hold resolves (<see cref="GestureArenaState.WinnerSlot"/> ≥ 0) or rejects, so the idle mask returns to
     /// None right after the context flyout fires (no lingering keep-alive while the finger merely rests).</summary>
     public bool HasArmedHold()

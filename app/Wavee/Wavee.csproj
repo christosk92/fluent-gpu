@@ -10,7 +10,11 @@
          intentional. The portable Backend/ subtree's cross-platform discipline is enforced by TerraFX-freedom (the
          VerticalSlice guard), not by this analyzer — and Wavee.Tests, which builds Backend/ cross-platform, likewise
          suppresses CA1416. The macOS/Linux credential paths (KeyringProtector) stay guarded by OperatingSystem checks. -->
-    <NoWarn>$(NoWarn);CA1416</NoWarn>
+    <NoWarn>$(NoWarn);CA1416;NU1701</NoWarn>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- The app version (Settings → About reads InformationalVersion via assembly metadata). -->
+    <Version>0.1.0</Version>
+    <InformationalVersion>0.1.0-dev</InformationalVersion>
   </PropertyGroup>
 
   <!-- Composition root: the Windows backend (D3D12 / Win32 / DirectWrite / WIC) wired into the
@@ -21,14 +25,26 @@
     <ProjectReference Include="..\..\src\FluentGpu.Windows\FluentGpu.Windows.csproj" />
     <ProjectReference Include="..\..\src\FluentGpu.WindowsApi\FluentGpu.WindowsApi.csproj" />
     <ProjectReference Include="..\Wavee.Core\Wavee.Core.csproj" />
+    <ProjectReference Include="..\vendor\NVorbis\NVorbis\NVorbis.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup Condition="Exists('..\Wavee.PlayPlay\Wavee.PlayPlay.csproj')">
+    <DefineConstants>$(DefineConstants);WAVEE_PLAYPLAY_LOCAL</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup Condition="Exists('..\Wavee.PlayPlay\Wavee.PlayPlay.csproj')">
+    <Compile Include="..\Wavee.PlayPlay\*.cs" Link="Wavee.PlayPlay\%(Filename)%(Extension)" />
   </ItemGroup>
 
   <!-- Real Spotify wire protocol (handshake + login). Vendored .proto compiled via Grpc.Tools → the Wavee.Protocol
        namespace. Used ONLY by app/Wavee/SpotifyLive (the live-network layer); the unit-tested Backend stays protobuf-free. -->
   <ItemGroup>
     <PackageReference Include="Google.Protobuf" Version="3.35.0" />
+    <PackageReference Include="FlacBox" Version="1.0.0" />
     <!-- DPAPI (Windows) — the OPTIONAL at-rest protector swapped behind the portable ICredentialProtector seam. -->
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="9.0.0" />
+    <!-- §2.7 — pure-managed (AOT-safe) zstd decode for the Content-Encoding: zstd /changes + /diff playlist-v2 responses. -->
+    <PackageReference Include="ZstdSharp.Port" Version="0.8.6" />
     <!-- STEP 4 — the persistent cold tier (offline-first source of truth). Portable native bundle (win/mac/linux). -->
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.8" />
     <!-- NU1903: Microsoft.Data.Sqlite 10.0.8 pulls the transitive SQLitePCLRaw.lib.e_sqlite3 2.1.11, which ships a SQLite

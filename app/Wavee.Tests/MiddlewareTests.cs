@@ -87,8 +87,8 @@ public class HttpMiddlewareTests
 
         Assert.Equal(200, resp.Status);
         Assert.Equal("CT123", captured!.Headers["client-token"]);
-        Assert.Equal("Win32_x86_64", captured.Headers["App-Platform"]);
-        Assert.Equal("128800483", captured.Headers["Spotify-App-Version"]);
+        Assert.Equal(SpotifyHeaders.AppPlatform, captured.Headers["App-Platform"]);
+        Assert.Equal("129300667", captured.Headers["Spotify-App-Version"]);
         Assert.StartsWith("Spotify/", captured.Headers["User-Agent"]);
     }
 
@@ -102,7 +102,7 @@ public class HttpMiddlewareTests
         await new HttpPipeline(inner, ctm).SendAsync(Req, TestContext.Current.CancellationToken);
 
         Assert.False(captured!.Headers.ContainsKey("client-token"));   // null token → header omitted, not "Bearer null"
-        Assert.Equal("Win32_x86_64", captured.Headers["App-Platform"]);
+        Assert.Equal(SpotifyHeaders.AppPlatform, captured.Headers["App-Platform"]);
     }
 }
 

@@ -3,16 +3,16 @@ namespace FluentGpu.Animation;
 /// <summary>
 /// The centralized scroll "feel" profile — every WinUI-parity scroll constant in one POD, so on-device tuning is a
 /// VALUE edit (never a logic edit) and the headless determinism gates can pin the exact numbers they were balanced
-/// against. Consumed by <see cref="ScrollAnimator"/> (the fling/ease/spring knobs) and <c>InputDispatcher</c> (the
+/// against. Consumed by <see cref="ScrollIntegrator"/> (the fling/ease/spring knobs) and <c>InputDispatcher</c> (the
 /// per-notch wheel distance). Pure managed, no TerraFX/COM — lives in the portable engine.
 ///
 /// <para><b>Per-notch mouse-wheel distance.</b> A mouse/free-spin wheel notch (the <c>WheelNotch</c> field on an
 /// <c>InputEvent</c>, a signed fractional notch count = rawAmount/120) scrolls
-/// <c>max(<see cref="WheelPerNotchMinDip"/>, <see cref="WheelPerNotchViewportFrac"/>·viewport)</c> DIP — the WinUI
-/// bounded content-relative mouse-wheel line height (<c>max(48, 10%·viewport)</c>). This keeps tall pages responsive
-/// without the previous 15% profile's oversized 88–120 DIP impulses. Synthetic/test wheel input that
-/// carries a DIP <c>ScrollDelta</c> (no notch) bypasses this scaling entirely (the headless harness path). (Precision
-/// touchpad pan rides the dedicated engine-owned <c>PanTouchpad</c>/<c>TickTouchpad</c> path, not this wheel notch path.)</para>
+/// <c>max(<see cref="WheelPerNotchMinDip"/>, <see cref="WheelPerNotchViewportFrac"/>·viewport)·lines/3</c> DIP — the
+/// WinUI bounded content-relative mouse-wheel line height (<c>max(48, 10%·vp)·lines/3</c>, where <c>lines</c> is
+/// <c>SPI_GETWHEELSCROLLLINES</c>; scroll-feel-rework-v2 §3.2). This keeps tall pages responsive. Synthetic/test wheel
+/// input that carries a DIP <c>ScrollDelta</c> (no notch) bypasses this scaling entirely (the headless harness path).
+/// (Precision touchpad pan rides the phase-tagged scroll contract (ScrollBegin/Update/End — 1:1), not this notch path.)</para>
 ///
 /// <para><b>Velocity sampler note.</b> The touch fling velocity estimator (a fixed-ring windowed least-squares
 /// regression in <c>InputDispatcher.TouchVelocity</c>) uses an engine-internal fixed window identical across profiles,
@@ -27,17 +27,32 @@ public readonly record struct ScrollTuning(
     float FlingSettleVelocityPxPerS,  // below this fling speed the integrator reverts to TargetChase (settles)
     float OverscrollSpringOmega)      // critically-damped overscroll release spring frequency (rad/s)
 {
+    // ── scroll-feel-rework-v2 §4.6 constants (ONE shipping feel — no env knobs on the scroll path). Physics-owned
+    // values (SnapBackOmega / RubberC / BandAsymptoteFraction) alias OverscrollPhysics so there is one source of truth;
+    // the resample / wheel-chase / fling-estimator constants are homed here (consumed by the integrator + dispatcher).
+    public const float SnapBackOmega = OverscrollPhysics.SnapBackOmega;              // 12.5 rad/s — WebKit λ=12.5
+    public const float RubberC = OverscrollPhysics.RubberC;                          // 0.55 — iOS rubber-band slope at 0
+    public const float BandAsymptoteFraction = OverscrollPhysics.BandAsymptoteFraction; // 0.15·vp — band asymptote
+    public const float WheelChaseHalflifeMs = 40f;      // velocity-preserving crit-damped wheel chase (~130ms settle)
+    public const float ResampleLatencyMs = 5f;          // TouchpadTracking: resample to frameT − 5ms
+    public const float ResampleMaxPredictionMs = 8f;    // extrapolation cap (also ≤50% of the last inter-sample Δ)
+    public const float ResampleMinDeltaMs = 2f;         // min usable sample spacing
+    public const float VelWindowMs = 40f;               // Fling IMPULSE estimator window (= the trailing window; one gate)
+    public const float AssumeStoppedMs = 40f;           // newest sample older than this at lift ⇒ v = 0
+    public const float FlingSeedGate = 50f;             // |v| ≥ 50 px/s seeds a coast (Android min-fling)
+    public const float FlingMaxVelocityPxPerS = 8000f;  // fling seed clamp (Android max-fling)
+
     /// <summary>The shipping default — the felt WinUI-parity profile the real (Win32) app and the engine default use.
-    /// The fling/ease/spring values match <see cref="ScrollAnimator"/>'s documented constants exactly, so non-wheel-distance
+    /// The fling/ease/spring values match <see cref="ScrollIntegrator"/>'s documented constants exactly, so non-wheel-distance
     /// mouse-wheel behavior keeps the documented target chase.</summary>
     public static readonly ScrollTuning WinUiLike = new(
         WheelPerNotchMinDip: 48f,
         WheelPerNotchViewportFrac: 0.10f,
         WheelFlingMaxVelocityPxPerS: 4500f,
-        WheelEaseTauMs: ScrollAnimator.WheelEaseTauMs,
-        FlingDecayPerS: ScrollAnimator.FlingDecayPerS,
-        FlingSettleVelocityPxPerS: ScrollAnimator.FlingMinVelocityPxPerS,
-        OverscrollSpringOmega: OverscrollPhysics.SpringOmegaRadPerS);
+        WheelEaseTauMs: ScrollIntegrator.WheelEaseTauMs,
+        FlingDecayPerS: ScrollIntegrator.FlingDecayPerS,
+        FlingSettleVelocityPxPerS: ScrollIntegrator.FlingMinVelocityPxPerS,
+        OverscrollSpringOmega: OverscrollPhysics.SnapBackOmega);   // v2: 12.5 rad/s (was 42)
 
     /// <summary>The gate-calibrated profile: identical feel to <see cref="WinUiLike"/> but with a per-notch distance of
     /// exactly 1 DIP (<see cref="WheelPerNotchMinDip"/> = 1, <see cref="WheelPerNotchViewportFrac"/> = 0), so a

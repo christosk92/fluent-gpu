@@ -7,10 +7,15 @@
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
     <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <!-- CA1416: source-includes the cross-platform Backend, whose portability is guarded by TerraFX-freedom, not this
          analyzer. xUnit1051: the v3 "pass TestContext.Current.CancellationToken" nag is noise for these deterministic,
          non-cancellable unit tests. -->
     <NoWarn>$(NoWarn);CA1416;xUnit1051</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="Exists('..\Wavee.PlayPlay\Wavee.PlayPlay.csproj')">
+    <DefineConstants>$(DefineConstants);WAVEE_PLAYPLAY_LOCAL</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
@@ -18,6 +23,7 @@
     <PackageReference Include="xunit.v3" Version="3.0.0" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.3" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.8" />   <!-- the Backend source-include now contains SqliteColdStore -->
+    <PackageReference Include="ZstdSharp.Port" Version="0.8.6" />           <!-- the Backend source-include now contains SpotifyZstd -->
     <!-- NU1903: pin the patched SQLite bundle 3.0.0 (overrides the transitive 2.1.11 carrying the known SQLite vulnerability). -->
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.0" />
     <!-- the Backend source-include also contains ExtendedMetadataSource → compile the metadata protos here too -->
@@ -37,18 +43,51 @@
     <!-- feature extension payloads carried over the SAME extended-metadata transport (album recommended-playlist hydration) -->
     <Protobuf Include="..\Wavee\SpotifyLive\Protos\recommended_playlists.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
     <Protobuf Include="..\Wavee\SpotifyLive\Protos\list_metadata_v2.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
+    <!-- music-video associations (VIDEO_ASSOCIATIONS payload) — VideoAssociationTests parses this against the wire -->
+    <Protobuf Include="..\Wavee\SpotifyLive\Protos\video_associations.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
     <!-- playlist membership + collection delta wire types (the Backend mapping logic is unit-tested here) -->
     <Protobuf Include="..\Wavee\SpotifyLive\Protos\playlist_permission.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
     <Protobuf Include="..\Wavee\SpotifyLive\Protos\playlist4_external.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
     <Protobuf Include="..\Wavee\SpotifyLive\Protos\collection2v2.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
+    <!-- audio playback resolution: storage-resolve + AUDIO_FILES (FLAC) — LiveTrackResolverTests parse these -->
+    <Protobuf Include="..\Wavee\SpotifyLive\Protos\storage-resolve.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
+    <Protobuf Include="..\Wavee\SpotifyLive\Protos\audio_files_extension.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
+    <Protobuf Include="..\Wavee\SpotifyLive\Protos\playplay.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
 
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Wavee.Core\Wavee.Core.csproj" />
+    <Compile Include="..\Wavee\Diagnostics\*.cs" />
     <Compile Include="..\Wavee\Backend\**\*.cs" />
+    <!-- The REAL production VirtualCollection<T> (portable, Signals-only), source-included so DiscographyPaginationTests
+         can exercise its provisional-seed reconciliation directly. Its lone dependency (FluentGpu.Signals.Signal<T>) is
+         satisfied by VirtualCollectionSignalShim.cs — so we test the real reconciliation code without referencing the
+         FluentGpu.Engine assembly (which would shadow the source-included Backend's Channel / DealerRouter). -->
+    <Compile Include="..\..\src\FluentGpu.Controls\VirtualCollection.cs" />
     <!-- the pure (FluentGpu-free) QR encoder, source-included so QrTests can round-trip-decode its output -->
     <Compile Include="..\Wavee\Features\Auth\Qr.cs" />
+    <!-- the pure keyed tracklist diff (Wavee.Core + BCL only) behind the §4.6 choreography — MembershipDiffTests -->
+    <Compile Include="..\Wavee\Components\MembershipDiff.cs" />
+    <!-- the live music-video data service (Backend-only deps), source-included so VideoAssociationTests can drive it -->
+    <Compile Include="..\Wavee\SpotifyLive\SpotifyVideoService.cs" />
+    <!-- audio resilience surfaces (all protobuf-free) source-included so the key-resolver / provisioner / IPC-manager
+         resilience + error paths are unit-tested without referencing the Windows Wavee assembly. -->
+    <Compile Include="..\Wavee\SpotifyLive\Audio\ILicenseClient.cs" />
+    <Compile Include="..\Wavee\SpotifyLive\Audio\IPlayPlayKeyDeriver.cs" />
+    <Compile Include="..\Wavee\SpotifyLive\Audio\AudioRuntimeStatusService.cs" />
+    <Compile Include="..\Wavee\SpotifyLive\Audio\AudioKeyResolver.cs" />
+    <Compile Include="..\Wavee\SpotifyLive\Audio\PlayPlayLicenseClient.cs" />
+    <Compile Include="..\Wavee\SpotifyLive\Audio\AudioFormatProbe.cs" />
+    <Compile Include="..\Wavee\SpotifyLive\Audio\Host\Dsp\*.cs" />
+    <Compile Include="..\Wavee\SpotifyLive\Audio\Runtime\*.cs" />
+    <Compile Include="..\Wavee\SpotifyLive\Audio\PlayPlayRuntimeProvisioner.cs" />
+    <!-- the track resolver (extended-metadata file discovery + Ogg/FLAC selection) — LiveTrackResolverTests drive it -->
+    <Compile Include="..\Wavee\SpotifyLive\LiveTrackResolver.cs" />
+  </ItemGroup>
+
+  <ItemGroup Condition="Exists('..\Wavee.PlayPlay\Wavee.PlayPlay.csproj')">
+    <Compile Include="..\Wavee.PlayPlay\*.cs" Link="Wavee.PlayPlay\%(Filename)%(Extension)" />
   </ItemGroup>
 
 </Project>

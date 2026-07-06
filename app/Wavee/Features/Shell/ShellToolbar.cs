@@ -483,11 +483,12 @@ sealed class OmnibarSuggestionsPopup : Component
         bool loading = _loading.Value;
         float width = _width.Value > 0f ? _width.Value : 720f;
 
+        // No client-side re-filter: the server's fuzzy matching (apostrophes, word order) is authoritative;
+        // a literal Contains() check would drop most of its hits. Staleness is handled at publish time.
         var rows = new List<Element>();
         int queryCount = 0;
         foreach (var query in s.Queries)
         {
-            if (!Matches(query, q)) continue;
             rows.Add(QueryRow(query, q));
             if (++queryCount >= 6) break;
         }
@@ -495,7 +496,6 @@ sealed class OmnibarSuggestionsPopup : Component
         int richCount = 0;
         foreach (var item in s.Items)
         {
-            if (!Matches(item, q)) continue;
             if (richCount == 0 && rows.Count > 0) rows.Add(Divider());
             rows.Add(RichRow(item));
             if (++richCount >= 10) break;
@@ -676,11 +676,4 @@ sealed class OmnibarSuggestionsPopup : Component
         };
     }
 
-    static bool Matches(string value, string query)
-        => query.Length == 0 || value.Contains(query, StringComparison.OrdinalIgnoreCase);
-
-    static bool Matches(SearchSuggestionItem item, string query)
-        => query.Length == 0
-        || item.Title.Contains(query, StringComparison.OrdinalIgnoreCase)
-        || (item.Subtitle?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false);
 }

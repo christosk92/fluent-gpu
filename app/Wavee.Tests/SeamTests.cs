@@ -1,6 +1,7 @@
 using Wavee.Backend;
 using Wavee.Core;
 using Xunit;
+using Col = Wavee.Protocol.Collection;
 
 namespace Wavee.Tests;
 
@@ -28,7 +29,8 @@ public class SeamAdapterTests
         var store = new InMemoryStore();
         var mut = new MutationEngine(store, [new SetReplayStrategy()]);
         var ctx = new SessionContext("me", "US", "premium", "en", Tier.Premium, false);
-        IMutationSource ims = new EngineMutationSource(store, mut, new StubTransport(), () => ctx, "liked");
+        var stub = new StubTransport();
+        IMutationSource ims = new EngineMutationSource(store, mut, stub, () => ctx, "liked");
 
         Assert.True(ims.Capabilities.HasFlag(SourceCapabilities.Mutations));
         Assert.True(ims.Owns("spotify:track:1"));
@@ -37,8 +39,17 @@ public class SeamAdapterTests
 
         await ims.SetSavedAsync("spotify:track:7", true);
 
-        Assert.True(ims.IsSaved("spotify:track:7"));
+        Assert.True(ims.IsSaved("spotify:track:7"));           // Pending → Confirmed after the drain
         Assert.Contains("spotify:track:7", ims.Saved);
+        Assert.Equal(0, mut.Pending);                          // drained + reconciled
+
+        // the drain hit the REAL collection write route/body (§2.4), not the old /collection/{set}/{verb}/{uri} GET.
+        Assert.Equal("/collection/v2/write", stub.LastRequestRoute);
+        Assert.Equal("POST", stub.LastRequestMethod);
+        var wr = Col.WriteRequest.Parser.ParseFrom(stub.LastRequestBody);
+        Assert.Equal("collection", wr.Set);                   // track → liked → "collection" wire set
+        Assert.Equal("spotify:track:7", Assert.Single(wr.Items).Uri);
+        Assert.False(wr.Items[0].IsRemoved);
     }
 
     [Fact]

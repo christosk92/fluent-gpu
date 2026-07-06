@@ -242,9 +242,10 @@ public sealed class LazyGrid : Component
         float target = LazyGridMath.ExpandedTarget(sc.ViewportH, sc.ContentH, rowStart, drawerH);
         if (MathF.Abs(target - sc.OffsetY) < 1f) return;
 
-        sc.ScrollMode = ScrollAnimator.ProgrammaticMode;
+        sc.Phase = ScrollIntegrator.WheelAnimating;
+        sc.PhaseFlags = ScrollState.PhaseProgrammatic;
         sc.FlingVelocity = 0f;
-        sc.TargetY = target;
+        sc.PendingTargetY = target;
         Context.ArmScroll?.Invoke(vp);
         Context.RequestRerender();
     }

@@ -50,20 +50,18 @@ public sealed class AggregateCatalog : IMusicLibrary, ICollectionEvents
     public IAsyncEnumerable<TrackPage> StreamTracksAsync(string contextUri, CancellationToken ct = default)
         => _reg.OwnerOf(contextUri)?.StreamTracksAsync(contextUri, ct) ?? EmptyPages(ct);
 
-    // Paged discography window + facet total — served from the (live-fetched) artist overview's releases, split by kind.
-    // No synthetic fallback: an artist with no releases in a facet returns an EMPTY page (the UI shows an empty state).
+    // Paged discography window + facet total — routed to the owning source (mirrors GetArtistAsync). The live source
+    // (StoreLibrarySource) owns paging + the real facet total; the DIM on non-paging sources serves the overview slice.
     public async Task<DiscographyPage> GetDiscographyAsync(string artistUri, DiscographyKind kind, int offset, int limit, CancellationToken ct = default)
     {
-        var artist = await GetArtistAsync(artistUri, ct).ConfigureAwait(false);
-        var all = artist?.TopAlbums ?? System.Array.Empty<Album>();
-        var filtered = new List<Album>();
-        foreach (var a in all) if (KindMatches(a.Kind, kind)) filtered.Add(a);
-        var items = new List<Album>();
-        for (int i = offset; i < filtered.Count && items.Count < limit; i++) items.Add(filtered[i]);
-        return new DiscographyPage(items, filtered.Count);
+        foreach (var s in _reg.CatalogSources)
+            if (s.Owns(artistUri)) return await s.GetDiscographyAsync(artistUri, kind, offset, limit, ct).ConfigureAwait(false);
+        return new DiscographyPage(System.Array.Empty<Album>(), 0);
     }
 
-    static bool KindMatches(AlbumKind ak, DiscographyKind dk) => dk switch
+    /// <summary>The one discography kind↔AlbumKind filter (Singles ⇒ Single OR EP), shared by the overview-slice DIM
+    /// (<see cref="ICatalogSource"/>) and the live source so the offline count matches the live facet grouping.</summary>
+    public static bool KindMatches(AlbumKind ak, DiscographyKind dk) => dk switch
     {
         DiscographyKind.Singles => ak is AlbumKind.Single or AlbumKind.EP,
         DiscographyKind.Compilations => ak == AlbumKind.Compilation,

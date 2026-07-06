@@ -73,6 +73,17 @@ public readonly record struct GradientSpec(GradientShape Shape, float AngleDeg, 
     public static GradientSpec Vertical(ColorF top, ColorF bottom) => new(GradientShape.Linear, 90f, [new GradientStop(0f, top), new GradientStop(1f, bottom)]);
 }
 
+/// <summary>A left→right WIPE fill for a glyph run — a general text-reveal effect (the lyrics karaoke uses it, but it is
+/// app-neutral: progress text, sweep reveals, …). <see cref="Split"/> (0..1) is a fraction of the run's content IN
+/// READING ORDER: the replay lays a wrapped run's visual lines END-TO-END (line 1 left→right, then line 2, …) over glyph
+/// EDGES (first glyph's left edge → last glyph's right edge), so a glyph before <see cref="Split"/> in reading order is
+/// painted <see cref="Before"/> and one after it <see cref="After"/>, with a <see cref="Softness"/>-wide soft boundary the
+/// replay remaps so <see cref="Split"/>==1 fully clears the run's trailing edge (and ==0 leaves it wholly unsung);
+/// <see cref="Lift"/> floats a just-passed glyph up by Lift DIP (settling behind the boundary). Carried in a sparse scene
+/// side-table and emitted as <c>DrawGlyphRunGradient</c> (reuses the glyph PSO via per-instance color/offset — no new
+/// shader). Advancing <see cref="Split"/> per frame is reshape-free.</summary>
+public readonly record struct GlyphWipe(ColorF Before, ColorF After, float Split, float Softness = 0.06f, float Lift = 0f);
+
 /// <summary>
 /// A per-node acrylic (frosted glass): the engine samples the canvas behind the node, resolves transparent backdrop
 /// through <see cref="Fallback"/>, blurs it (<see cref="BlurSigma"/>), then applies WinUI's luminosity/tint recipe.
@@ -93,7 +104,19 @@ public readonly record struct AcrylicSpec(ColorF Tint, float TintOpacity, float 
     // NOTE: Flyout/FlyoutLight are the per-theme RAW recipes — controls should read the theme-aware
     // `Tok.AcrylicFlyout` (FluentGpu.Dsl Tokens.cs) instead of hard-binding the dark constant.
     public static AcrylicSpec Flyout => InAppDefault;
-    public static AcrylicSpec FlyoutLight => new(ColorF.FromRgba(0xFC, 0xFC, 0xFC), 0.0f, 30f, 0.02f, 0.85f, ColorF.FromRgba(0xF9, 0xF9, 0xF9));
+    // Luminosity 0.96 (matching InAppDefault's proven dark value, not WinUI's 0.85): at 0.85 the near-white plate
+    // dissolves into the pale Mica-lit pages beneath it — the flyout must read as a solid surface with faint bleed.
+    public static AcrylicSpec FlyoutLight => new(ColorF.FromRgba(0xFC, 0xFC, 0xFC), 0.05f, 30f, 0.02f, 0.96f, ColorF.FromRgba(0xF9, 0xF9, 0xF9));
+}
+
+/// <summary>Renderer policy for a per-node self-blur layer.</summary>
+public enum BlurCachePolicy : byte
+{
+    Normal = 0,
+    /// <summary>During user-scroll hold, reuse a retained blur if available; otherwise draw the subtree inline for this frame.</summary>
+    HoldIfCached = 1,
+    /// <summary>During user-scroll hold, reuse a retained blur if available; otherwise skip this decorative blur for this frame.</summary>
+    HoldOrSkipOnMiss = 2,
 }
 
 /// <summary>Which edges an <see cref="EdgeFadeSpec"/> feathers (a bit mask).</summary>

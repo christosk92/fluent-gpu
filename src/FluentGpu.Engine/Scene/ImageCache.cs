@@ -1,4 +1,5 @@
 using FluentGpu.Foundation;
+using FluentGpu.Hosting.Threading;
 
 namespace FluentGpu.Scene;
 
@@ -113,7 +114,10 @@ public sealed class ImageCache
         public int Attempts;               // fetch attempts the decoder made (>1 ⇒ transient retries occurred)
         public float TextureMs = float.NaN;   // clock (ms) when the FIRST texture (blurhash or full-res) appeared → fade origin
         public ImageTransition Transition;     // the placeholder→image reveal (duration + easing); set at request
+        public float LastRestartMs = float.NegativeInfinity;   // backoff gate for visible/transient-failure retries
     }
+
+    const float RestartBackoffMs = 2000f;   // min gap between visible retries on the same handle (avoids hammering a dead URL)
 
     private readonly Dictionary<SourceKey, int> _byKey = new();
     private readonly Dictionary<int, Entry> _byId = new();
@@ -126,6 +130,7 @@ public sealed class ImageCache
     private ImageReadyHandler _pixelSink;
     private ImageUploadAttemptHandler? _pixelAttemptSink;
     private System.Action<int> _evictSink;
+    private ImageUploadQueue? _asyncUploads;   // non-null ⇒ async render thread: GPU work is handed off, not called inline
     // IImageDecoder guarantees a successful completion calls onPixels immediately before onComplete for the same id.
     // Remember that one admission result so OnDecodeComplete can fold GPU rejection into the terminal cache state.
     private int _uploadResultId;
@@ -177,8 +182,15 @@ public sealed class ImageCache
     }
 
     /// <summary>The host wires this to <c>IGpuDevice.EvictImage</c>; the cache calls it when residency evicts an image so
-    /// the backend frees the GPU texture. Set once at composition.</summary>
+    /// the backend frees the GPU texture. Set once at composition. Under the async render thread the host wires this to
+    /// <see cref="ImageUploadQueue.EnqueueEvict"/> instead, so the eviction is drained + freed on the render thread.</summary>
     public void SetEvictSink(System.Action<int> sink) => _evictSink = sink ?? _noEvict;
+
+    /// <summary>ASYNC render thread only (render-thread-seam landing plan §9, Step 1). When set, the pixel/evict sinks
+    /// hand GPU work to the render thread via this queue instead of touching the device on the UI thread; an upload is
+    /// optimistically admitted <c>Ready</c> and the render thread posts a REJECTION back here, drained each <see cref="Pump"/>
+    /// by <see cref="DrainAsyncRejections"/>. Null in default/force-sync (the direct sinks run with no cross-thread overlap).</summary>
+    public void SetAsyncUploadQueue(ImageUploadQueue queue) => _asyncUploads = queue;
 
     public long UsedBytes { get; private set; }
     public int Count => _byId.Count;
@@ -205,9 +217,7 @@ public sealed class ImageCache
             hit.LastUsed = _clock++;
             // Evicted entries keep their key as a tombstone so a retained ImageEl node can re-pin the same handle and
             // recover without needing its original URL. Capacity rejection is likewise retryable after all owners release.
-            if (hit.State == ImageState.None ||
-                (hit.State == ImageState.Failed && hit.Failure == ImageFailureKind.Canceled) ||
-                (hit.State == ImageState.Failed && hit.Failure == ImageFailureKind.GpuResourceExhausted && hit.Refs == 0))
+            if (ShouldRestart(hit, priority))
                 RestartDecode(id, hit, priority);
             // A visible node arriving over a prefetch entry promotes the in-flight decode to the front of the queue.
             if (priority < ImagePriority.Prefetch) _decoder.Prioritize(id, priority);
@@ -258,6 +268,8 @@ public sealed class ImageCache
     public ImageFailureKind FailureOf(ImageHandle h) => _byId.TryGetValue(h.Id, out var e) ? e.Failure : ImageFailureKind.None;
     /// <summary>How many fetch attempts the decoder made (≥1 once resolved; &gt;1 means transient retries happened).</summary>
     public int AttemptsOf(ImageHandle h) => _byId.TryGetValue(h.Id, out var e) ? e.Attempts : 0;
+    /// <summary>The source URL bound to a handle (null when unknown).</summary>
+    public string? SourceOf(ImageHandle h) => _byId.TryGetValue(h.Id, out var e) ? e.Key.Source : null;
 
     /// <summary>Cancel an in-flight decode (row recycled / unmounted) — frees worker + network effort under fast scroll.</summary>
     public void Cancel(ImageHandle h) => _decoder.Cancel(h.Id);
@@ -311,15 +323,51 @@ public sealed class ImageCache
         if (!_byId.TryGetValue(h.Id, out var e)) return;
         e.Refs++;
         e.LastUsed = _clock++;
-        if (e.State == ImageState.None) RestartDecode(h.Id, e, ImagePriority.Visible);
+        if (ShouldRestart(e, ImagePriority.Visible)) RestartDecode(h.Id, e, ImagePriority.Visible);
         else if (e.State == ImageState.Pending) _decoder.Prioritize(h.Id, ImagePriority.Visible);
     }
     public void Unpin(ImageHandle h) { if (_byId.TryGetValue(h.Id, out var e) && e.Refs > 0) e.Refs--; }
+
+    /// <summary>Whether a cache entry should (re)start decoding at <paramref name="priority"/>.</summary>
+    static bool ShouldRestart(Entry e, ImagePriority priority)
+    {
+        if (e.State == ImageState.None) return true;
+        if (e.State == ImageState.Failed)
+        {
+            if (e.Failure == ImageFailureKind.Canceled) return true;
+            if (e.Failure == ImageFailureKind.GpuResourceExhausted && e.Refs == 0) return true;
+            if (IsTransientFailure(e.Failure) && (e.Refs > 0 || priority == ImagePriority.Visible))
+                return true;   // backoff applied in RestartDecode
+        }
+        return false;
+    }
+
+    static bool IsTransientFailure(ImageFailureKind k)
+        => k is ImageFailureKind.Network or ImageFailureKind.Timeout or ImageFailureKind.ServerError;
     public int RefsOf(ImageHandle h) => _byId.TryGetValue(h.Id, out var e) ? e.Refs : 0;
+
+    /// <summary>Device-lost recovery (threading-render-seam.md §9): the backend's image textures are gone (the store was
+    /// recreated by RecoverDevice). Re-decode every resident (Ready) image from its retained source so it re-uploads
+    /// through the Step-1 handoff to the fresh store. UI thread (invoked on the recover-done frame). Ready→Pending, which
+    /// keeps the frame loop awake until the re-uploads land. Safe to iterate: Entry is a class (mutated in place, no
+    /// structural dictionary change) and RestartDecode only calls the decoder (never adds/removes _byId keys).</summary>
+    public void ReRealizeAllResident()
+    {
+        foreach (var (id, e) in _byId)
+            if (e.State == ImageState.Ready)
+            {
+                UsedBytes -= e.Bytes;   // the texture is gone; RestartDecode re-adds the bytes when the fresh decode completes
+                RestartDecode(id, e, e.Refs > 0 ? ImagePriority.Visible : ImagePriority.Prefetch);
+            }
+    }
 
     private void RestartDecode(int id, Entry e, ImagePriority priority)
     {
         if (e.State == ImageState.Pending) { _decoder.Prioritize(id, priority); return; }
+        if (e.State == ImageState.Failed && IsTransientFailure(e.Failure)
+            && _clockMs - e.LastRestartMs < RestartBackoffMs)
+            return;
+        e.LastRestartMs = _clockMs;
         e.State = ImageState.Pending;
         e.Failure = ImageFailureKind.None;
         e.Attempts = 0;
@@ -342,9 +390,35 @@ public sealed class ImageCache
     public int Pump()
     {
         _pumpCompleted = 0;
+        if (_asyncUploads is { } q) DrainAsyncRejections(q);   // fold +1-frame async upload rejections before this pump's decodes
         _decoder.Pump(_onComplete, _onPixels);
         if (_pumpCompleted > 0) EvictToBudget();
         return _pumpCompleted;
+    }
+
+    // ASYNC only (Step 1): the render thread stages uploads a frame after the UI optimistically admitted them Ready.
+    // On rejection (atlas/pool exhaustion) it posts the result here; fold it into the terminal Failed state, undo the
+    // optimistic byte accounting, and release any partial placement — the deferred analogue of OnDecodeComplete's
+    // synchronous admission-failure path (381-390). Only a still-optimistically-Ready entry is downgraded: if it has
+    // since been evicted, re-requested, or already failed, the reject is stale → skip (a rare ABA the sync path shares).
+    private void DrainAsyncRejections(ImageUploadQueue q)
+    {
+        while (q.TryDequeueResult(out var r))
+        {
+            if (!_byId.TryGetValue(r.Id, out var e) || e.State != ImageState.Ready) continue;
+            UsedBytes -= e.Bytes;
+            e.Bytes = 0;
+            _evictSink(r.Id);   // async ⇒ enqueues an evict job (releases any resident blur-hash/partial placement)
+            bool wasActiveDeadline = e.Transition.Enabled && !float.IsNaN(e.TextureMs)
+                && e.TextureMs + e.Transition.DurationMs >= _clockMs;
+            e.TextureMs = float.NaN;
+            e.State = ImageState.Failed;
+            e.Failure = r.Result == ImageUploadResult.ResourceExhausted ? ImageFailureKind.GpuResourceExhausted : ImageFailureKind.GpuUpload;
+            if (wasActiveDeadline) RecomputeCrossfadeDeadline();
+            _totalFailed++;
+            Diag.Set("media", "failed", _totalFailed);
+            ImageStatusChanged?.Invoke(r.Id, e.State, e.Failure, e.Attempts);
+        }
     }
 
     private ImageUploadResult UploadPixels(int id, System.ReadOnlySpan<byte> pixels, int w, int h)
@@ -389,6 +463,7 @@ public sealed class ImageCache
             if (wasActiveDeadline) RecomputeCrossfadeDeadline();
         }
         if (e.State == ImageState.Pending) _pendingCount--;   // leaving Pending (Ready/Failed) — mirror the former scan
+        bool restartVisibleCancel = !ok && failure == ImageFailureKind.Canceled && e.Refs > 0;
         e.State = ok ? ImageState.Ready : ImageState.Failed;
         e.Failure = ok ? ImageFailureKind.None : failure;
         e.Attempts = attempts;
@@ -404,7 +479,15 @@ public sealed class ImageCache
         Diag.Set("media", "failed", _totalFailed);
         Diag.Set("media", "retried", _totalRetried);
         Diag.Set("media", "pending", PendingCount);
-        ImageStatusChanged?.Invoke(id, e.State, e.Failure, attempts);
+        if (restartVisibleCancel)
+        {
+            RestartDecode(id, e, ImagePriority.Visible);
+            Diag.Set("media", "pending", PendingCount);
+        }
+        else
+        {
+            ImageStatusChanged?.Invoke(id, e.State, e.Failure, attempts);
+        }
     }
 
     private void EvictToBudget()

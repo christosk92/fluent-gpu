@@ -24,6 +24,10 @@ internal static class Mdl
     public static readonly string Queue = Of(0xE14C);
     public static readonly string Lyrics = Of(0xE90A);
     public static readonly string Device = Of(0xE770);
+    public static readonly string CellPhone = Of(0xE8EA);      // device picker: Phone
+    public static readonly string Speakers = Of(0xE7F5);       // device picker: Speaker / AVR / cast audio
+    public static readonly string TvMonitor = Of(0xE7F4);      // device picker: TV / console / cast video
+    public static readonly string ThisPc = Of(0xE977);         // device picker: This PC / Computer
     public static readonly string Pin = Of(0xE718);            // pin / unpin a sidebar row
     public static readonly string FolderOpen = Of(0xE838);     // expanded playlist folder
     public static readonly string HeartFill = Of(0xEB52);      // saved/liked (filled heart) — the Mutations on-state

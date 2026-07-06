@@ -20,6 +20,9 @@ packages/
 *.gcdump
 fluentgpu-*-counters.csv
 
+# Wavee probe output (WAVEE_*_PROBE CSV/summary dumps — regenerated on demand)
+.wavee-diagnostics/
+
 # --screenshot fidelity captures (generated PNGs for visual diffing)
 out/
 .shots/
@@ -35,3 +38,14 @@ out/
 
 # Trusted Signing account config (not secret, but keep it local; commit the .template instead).
 build/signing/metadata.json
+
+# PlayPlay runtime payloads (manifest carries pins — never commit real copies).
+**/playplay-runtime.json
+private-runtimes/
+
+# Legacy audio-runtime pack dir (superseded by manifest-driven bare DLL layout).
+app/audio-runtime/
+
+# Local PlayPlay native-derivation package. This contains version/arch-specific
+# reverse-engineering glue and is intentionally kept out of source control.
+app/Wavee.PlayPlay/

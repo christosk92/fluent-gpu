@@ -1,77 +1,223 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using Google.Protobuf;
 using Wavee.Backend;
+using Wavee.Backend.Audio;
 using Wavee.Backend.Spotify;
 using Wavee.Core;
+using Wavee.SpotifyLive.Audio;
 using M = Wavee.Protocol.Metadata;
+using Af = Wavee.Protocol.Audiofiles;
 using Wavee.Protocol.Storage;
 
 namespace Wavee.SpotifyLive;
 
 // ── Stage F — the live track resolver: Track -> AudioStreamHandle ─────────────────────────────────────────────────────
-// gid (base62) -> full metadata.proto Track -> select the OGG file by quality -> storage-resolve (CDN) + audio-key.
-// IMPORTANT: a track's own file[] is often EMPTY (market/licensing); the playable file then lives in an ALTERNATIVE track
-// (Track.alternative[], which typically carries only files). We fall through to the first alternative with files and use
-// THAT alternative's gid for the audio-key request (the file belongs to the alternative). Resolution is in scope; the
-// decrypt/decode/output it feeds is the deferred host.
+// File IDs are discovered via EXTENDED-METADATA, not the legacy /metadata/4/track/ route (which now returns a shell with
+// an empty file[]). TRACK_V4 (kind 10) carries the Ogg/AAC file[] (+ alternative[] + original_audio); AUDIO_FILES (kind 5)
+// on the spotify:audio: entity carries FLAC. We prefer lossless (FLAC) when the account returns it, else the Ogg ladder,
+// falling through to an ALTERNATIVE track's file[] (using that alternative's gid for the audio key). Resolution is in
+// scope; the decrypt/decode/output it feeds is the x64 host.
 public sealed class LiveTrackResolver : ITrackResolver
 {
     readonly ITransport _transport;
     readonly IAudioKeySource _keys;
+    readonly Func<string, CancellationToken, Task<ByteString?>> _fetchTrackV4;
+    readonly Func<string, CancellationToken, Task<ByteString?>>? _fetchAudioFilesV5;
+    readonly bool _preferLossless;
+    readonly Func<AudioQualityPreference>? _quality;
+    readonly AudioFormatProbe? _probe;
     readonly Action<string>? _log;
+    readonly ConcurrentDictionary<string, Task<TrackMeta>> _metaCache = new();
 
-    public LiveTrackResolver(ITransport transport, IAudioKeySource keys, Action<string>? log = null)
+    public LiveTrackResolver(
+        ITransport transport,
+        IAudioKeySource keys,
+        Func<string, CancellationToken, Task<ByteString?>> fetchTrackV4,
+        Func<string, CancellationToken, Task<ByteString?>>? fetchAudioFilesV5 = null,
+        bool preferLossless = false,
+        Action<string>? log = null,
+        AudioFormatProbe? probe = null,
+        Func<AudioQualityPreference>? quality = null)
     {
         _transport = transport;
         _keys = keys;
+        _fetchTrackV4 = fetchTrackV4;
+        _fetchAudioFilesV5 = fetchAudioFilesV5;
+        _preferLossless = preferLossless;
+        _quality = quality;
+        _probe = probe;
         _log = log;
+    }
+
+    // The effective preference: the live per-resolve delegate (the persisted setting) wins; the legacy bool maps to the
+    // Lossless/VeryHigh320 rungs so existing call sites and tests keep their exact behavior.
+    AudioQualityPreference Quality => _quality?.Invoke() ?? (_preferLossless ? AudioQualityPreference.Lossless : AudioQualityPreference.VeryHigh320);
+
+    /// <summary>The fast half: extended-metadata → file select (Ogg or FLAC). No CDN, no key — so the head fetch (which
+    /// needs no key) can start the moment this returns, in parallel with the body resolve. Coalesced + cached per track uri
+    /// (file IDs are immutable); a failed resolve is dropped so it retries.</summary>
+    public readonly record struct TrackMeta(byte[] FileId, string FileIdHex, byte[] FileGid, AudioFormat Fmt, long DurMs, string TrackUri, float NormalizationGainDb);
+
+    public Task<TrackMeta> ResolveMetaAsync(Track track, CancellationToken ct = default)
+    {
+        // Cache the shared fetch task (CancellationToken.None so one caller's cancel can't poison the shared result).
+        var task = _metaCache.GetOrAdd(track.Uri, _ => FetchMetaAsync(track));
+        return AwaitAndDropOnFailure(track.Uri, task);
+    }
+
+    async Task<TrackMeta> AwaitAndDropOnFailure(string uri, Task<TrackMeta> task)
+    {
+        try { return await task.ConfigureAwait(false); }
+        catch { _metaCache.TryRemove(new KeyValuePair<string, Task<TrackMeta>>(uri, task)); throw; }
+    }
+
+    async Task<TrackMeta> FetchMetaAsync(Track track)
+    {
+        var trackPayload = await _fetchTrackV4(track.Uri, CancellationToken.None).ConfigureAwait(false);
+        if (trackPayload is null) throw new AudioPlaybackException(AudioKeyFailureReason.Restricted, "no TRACK_V4 extension for " + track.Uri);
+        var t = M.Track.Parser.ParseFrom(trackPayload);
+
+        var quality = Quality;
+
+        // Lossless: AUDIO_FILES lives on the spotify:audio: entity derived from original_audio.uuid.
+        Af.AudioFilesExtensionResponse? audioFiles = null;
+        if ((quality == AudioQualityPreference.Lossless || _probe is not null) && _fetchAudioFilesV5 is { } fetchFlac && t.OriginalAudio?.Uuid is { Length: 16 } uuid)
+        {
+            var audioUri = "spotify:audio:" + Base62.Encode(uuid.Span);
+            try
+            {
+                var flacPayload = await fetchFlac(audioUri, CancellationToken.None).ConfigureAwait(false);
+                if (flacPayload is not null) audioFiles = Af.AudioFilesExtensionResponse.Parser.ParseFrom(flacPayload);
+            }
+            catch (Exception ex) { _log?.Invoke($"resolve {track.Uri}: AUDIO_FILES fetch failed ({ex.Message}) — Ogg only"); }
+        }
+
+        StartFormatProbe(track.Uri, t, audioFiles);
+
+        var flac = quality == AudioQualityPreference.Lossless && audioFiles is not null ? SelectFlac(audioFiles) : null;
+        var ogg = SelectOgg(t, quality);
+
+        // Prefer FLAC when the account returned it; else the Ogg ladder (main track, then an alternative).
+        if (flac is { } fl)
+        {
+            var gain = NormalizationGain(audioFiles!);
+            var hex = Convert.ToHexStringLower(fl.fileId);
+            _log?.Invoke($"resolve {track.Uri}: selected {fl.fmt} (lossless) file {hex} gain={gain:0.0}dB");
+            return new TrackMeta(fl.fileId, hex, t.Gid.ToByteArray(), fl.fmt,   // FLAC AP-key uses the track's gid
+                t.HasDuration ? t.Duration : track.DurationMs, track.Uri, gain);
+        }
+        if (ogg is { } og)
+        {
+            var hex = Convert.ToHexStringLower(og.fileId);
+            _log?.Invoke($"resolve {track.Uri}: selected {og.fmt} file {hex}");
+            return new TrackMeta(og.fileId, hex, og.gid, og.fmt, og.durMs > 0 ? og.durMs : track.DurationMs, track.Uri, 0f);
+        }
+        throw new AudioPlaybackException(AudioKeyFailureReason.Restricted, "no playable file (Ogg or FLAC, incl. alternatives)");
+    }
+
+    void StartFormatProbe(string uri, M.Track track, Af.AudioFilesExtensionResponse? audioFiles)
+    {
+        var probe = _probe;
+        if (probe is null) return;
+        _ = Task.Run(async () =>
+        {
+            try { await probe.ProbeAsync(uri, track, audioFiles, CancellationToken.None).ConfigureAwait(false); }
+            catch (Exception ex) { _log?.Invoke($"probe {uri}: failed ({ex.Message})"); }
+        });
+    }
+
+    /// <summary>The slow half: storage-resolve (CDN, format-agnostic — keyed by fileId) + audio key (AP, else PlayPlay).
+    /// Throws a typed <see cref="AudioPlaybackException"/> on any failure — never a silent empty handle.</summary>
+    public async Task<AudioStreamHandle> ResolveBodyAsync(TrackMeta m, CancellationToken ct = default)
+    {
+        string cdn = "";
+        string[]? cdnUrls = null;
+        var sr = await _transport.Request(Channel.Spclient, "/storage-resolve/files/audio/interactive/" + m.FileIdHex, default, ct).ConfigureAwait(false);
+        if (sr.Ok)
+        {
+            var r = StorageResolveResponse.Parser.ParseFrom(sr.Body);
+            if (r.Result == StorageResolveResponse.Types.Result.Restricted)
+                throw new AudioPlaybackException(AudioKeyFailureReason.Restricted, "storage-resolve: restricted");
+            if (r.Cdnurl.Count > 0)
+            {
+                cdn = r.Cdnurl[0];
+                cdnUrls = new string[r.Cdnurl.Count];
+                for (int i = 0; i < r.Cdnurl.Count; i++) cdnUrls[i] = r.Cdnurl[i];
+            }
+        }
+        if (cdnUrls is null || cdnUrls.Length == 0)
+            throw new AudioPlaybackException(AudioKeyFailureReason.Network, "no CDN url from storage-resolve");
+
+        _log?.Invoke($"storage-resolve {m.FileIdHex}: {cdnUrls.Length} cdn url(s); fetching key");
+        var key = await _keys.GetKeyAsync(m.FileId, m.FileGid, ct).ConfigureAwait(false);   // typed throw on AP+PlayPlay failure
+        var nativeSeed = _keys is IPlayPlayNativeSeedSource seedSource
+            ? seedSource.GetNativeCdnSeed(m.FileIdHex)
+            : default;
+        return new AudioStreamHandle(m.TrackUri, m.FileIdHex, cdn, key, m.Fmt, m.DurMs, m.NormalizationGainDb, cdnUrls, NativeCdnSeed: nativeSeed);
     }
 
     public async Task<AudioStreamHandle> ResolveAsync(Track track, CancellationToken ct = default)
     {
         try
         {
-            var gid = Base62.Decode(track.Id, 16);
-            var meta = await _transport.Request(Channel.Spclient, "/metadata/4/track/" + Convert.ToHexStringLower(gid), default, ct).ConfigureAwait(false);
-            if (!meta.Ok) { _log?.Invoke("metadata fetch failed (" + meta.Status + ") for " + track.Uri); return Fallback(track); }
-
-            var t = M.Track.Parser.ParseFrom(meta.Body);
-            var sel = SelectFile(t);
-            if (sel is null) { _log?.Invoke("no playable OGG file (incl. alternatives) for " + track.Uri); return Fallback(track); }
-            var (fileId, fileGid, fmt, durMs) = sel.Value;
-            string fileIdHex = Convert.ToHexStringLower(fileId);
-
-            string cdn = "";
-            var sr = await _transport.Request(Channel.Spclient, "/storage-resolve/files/audio/interactive/" + fileIdHex, default, ct).ConfigureAwait(false);
-            if (sr.Ok)
-            {
-                var r = StorageResolveResponse.Parser.ParseFrom(sr.Body);
-                if (r.Cdnurl.Count > 0) cdn = r.Cdnurl[0];
-            }
-
-            ReadOnlyMemory<byte> key = default;
-            try { key = await _keys.GetKeyAsync(fileId, fileGid, ct).ConfigureAwait(false); }
-            catch (Exception ex) { _log?.Invoke("audio-key fetch failed (" + ex.Message + ") for " + track.Uri + " — host will derive"); }
-
-            return new AudioStreamHandle(track.Uri, fileIdHex, cdn, key, fmt, durMs > 0 ? durMs : track.DurationMs, 0f);
+            var meta = await ResolveMetaAsync(track, ct).ConfigureAwait(false);
+            return await ResolveBodyAsync(meta, ct).ConfigureAwait(false);
         }
-        catch (Exception ex) { _log?.Invoke("resolve failed for " + track.Uri + ": " + ex.Message); return Fallback(track); }
+        catch (AudioPlaybackException) { throw; }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            _log?.Invoke("resolve failed for " + track.Uri + ": " + ex.Message);
+            throw new AudioPlaybackException(AudioKeyFailureReason.Network, ex.Message);
+        }
     }
 
-    static AudioStreamHandle Fallback(Track t) => new(t.Uri, "", "", default, AudioFormat.OggVorbis320, t.DurationMs, 0f);
-
-    // Prefer the main track's files; if none, fall through to the FIRST alternative that has files (and its gid).
-    static (byte[] fileId, byte[] gid, AudioFormat fmt, long durMs)? SelectFile(M.Track track)
+    // Spotify loudness normalization: gain = target(-14 LUFS) − track loudness, capped so the true peak stays ≤ −1 dBFS.
+    static float NormalizationGain(Af.AudioFilesExtensionResponse resp)
     {
-        var pick = PickFrom(track.File);
+        var np = resp.DefaultFileNormalizationParams;
+        if (np is null) return 0f;
+        const float target = -14f;
+        float gain = target - np.LoudnessDb;
+        float peakHeadroom = -1f - np.TruePeakDb;
+        return gain > peakHeadroom ? peakHeadroom : gain;
+    }
+
+    // FLAC from the AUDIO_FILES payload (24-bit preferred over 16-bit). gid = the track's (the FLAC is an alt encoding).
+    internal static (byte[] fileId, AudioFormat fmt)? SelectFlac(Af.AudioFilesExtensionResponse resp)
+    {
+        Af.ExtendedAudioFile? best = null;
+        int bestRank = 0;
+        foreach (var ef in resp.Files)
+        {
+            var f = ef.File;
+            if (f is null || f.FileId.Length == 0) continue;
+            int rank = f.Format switch
+            {
+                M.AudioFile.Types.Format.FlacFlac24Bit => 2,
+                M.AudioFile.Types.Format.FlacFlac => 1,
+                _ => 0,
+            };
+            if (rank > bestRank) { bestRank = rank; best = ef; }
+        }
+        if (best is null) return null;
+        return (best.File.FileId.ToByteArray(), bestRank == 2 ? AudioFormat.Flac24 : AudioFormat.Flac);
+    }
+
+    // Prefer the main track's Ogg files; if none, fall through to the FIRST alternative that has files (and its gid).
+    internal static (byte[] fileId, byte[] gid, AudioFormat fmt, long durMs)? SelectOgg(M.Track track, AudioQualityPreference quality = AudioQualityPreference.VeryHigh320)
+    {
+        var pick = PickOgg(track.File, quality);
         if (pick is not null)
             return (pick.Value.fileId, track.Gid.ToByteArray(), pick.Value.fmt, track.HasDuration ? track.Duration : 0);
 
         foreach (var alt in track.Alternative)
         {
-            var ap = PickFrom(alt.File);
+            var ap = PickOgg(alt.File, quality);
             if (ap is not null)
                 return (ap.Value.fileId, alt.Gid.ToByteArray(), ap.Value.fmt,
                     alt.HasDuration ? alt.Duration : (track.HasDuration ? track.Duration : 0));
@@ -79,25 +225,29 @@ public sealed class LiveTrackResolver : ITrackResolver
         return null;
     }
 
-    // Quality ladder: OGG 320 > 160 > 96 (only OGG Vorbis — we advertise VeryHigh, not HIFI/FLAC).
-    static (byte[] fileId, AudioFormat fmt)? PickFrom(IEnumerable<M.AudioFile> files)
+    // Quality ladder: aim at the chosen rung (96/160/320); a missing rung falls back to the NEAREST available file,
+    // preferring lower bitrates first (don't exceed the user's bandwidth choice), so something always plays.
+    static (byte[] fileId, AudioFormat fmt)? PickOgg(IEnumerable<M.AudioFile> files, AudioQualityPreference quality)
     {
+        int target = quality switch { AudioQualityPreference.Normal96 => 0, AudioQualityPreference.High160 => 1, _ => 2 };
         M.AudioFile? best = null;
-        int bestRank = 0;
+        int bestScore = 0;
+        AudioFormat bestFmt = AudioFormat.OggVorbis96;
         foreach (var f in files)
         {
             if (f.FileId.Length == 0) continue;
-            int rank = f.Format switch
+            (int rung, AudioFormat fmt) = f.Format switch
             {
-                M.AudioFile.Types.Format.OggVorbis320 => 3,
-                M.AudioFile.Types.Format.OggVorbis160 => 2,
-                M.AudioFile.Types.Format.OggVorbis96 => 1,
-                _ => 0,
+                M.AudioFile.Types.Format.OggVorbis96 => (0, AudioFormat.OggVorbis96),
+                M.AudioFile.Types.Format.OggVorbis160 => (1, AudioFormat.OggVorbis160),
+                M.AudioFile.Types.Format.OggVorbis320 => (2, AudioFormat.OggVorbis320),
+                _ => (-1, AudioFormat.OggVorbis96),
             };
-            if (rank > bestRank) { bestRank = rank; best = f; }
+            if (rung < 0) continue;
+            int score = rung == target ? 100 : rung < target ? 50 - (target - rung) : 10 - (rung - target);
+            if (score > bestScore) { bestScore = score; best = f; bestFmt = fmt; }
         }
         if (best is null) return null;
-        var fmt = bestRank == 3 ? AudioFormat.OggVorbis320 : bestRank == 2 ? AudioFormat.OggVorbis160 : AudioFormat.OggVorbis96;
-        return (best.FileId.ToByteArray(), fmt);
+        return (best.FileId.ToByteArray(), bestFmt);
     }
 }

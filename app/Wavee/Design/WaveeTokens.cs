@@ -37,61 +37,29 @@ public static class PlayerDock
     public const float Reserve = BarH;
 }
 
-/// <summary>Wavee app shell colors. Kept app-local so the engine theme tokens stay WinUI-faithful. Two baked palettes
-/// (light / dark) selected by the active theme — mirrors the engine's TokenSet pointer-swap, so the theme branch exists
-/// exactly ONCE (no per-property ternary, and nothing "defaults" to one theme). The standard WinUI layer-over-Mica
-/// material now lives in the engine as <see cref="Tok.LayerOnMicaBaseAlt"/>; the values here are Wavee's own design.</summary>
+/// <summary>Wavee app shell colors. Derived from the active <see cref="Tok.Palette"/> shell ramp (seed-built per preset).
+/// BOTH themes are Mica-first: the chrome is translucent seed-tinted layers over the DWM backdrop (light mirrors dark's
+/// proven LayerOnMicaBaseAlt stack; the seed's luminance anchors are solved as flattened-over-reference-Mica targets in
+/// PaletteBuilder, so the tonal ladder holds across wallpapers and never inverts).</summary>
 public static class WaveeColors
 {
     /// <summary>One theme's shell surfaces (the values that aren't simply a plain engine token).</summary>
     public sealed record Palette(
         ColorF Toolbar, ColorF Sidebar, ColorF PlayerBar, ColorF FileArea, ColorF Content, ColorF ContentAlt,
         ColorF PremiumText,
-        // Track-list row states. Zebra = odd-row rest; hover/press carry an even + a (deeper) zebra variant. The odd/even
-        // pick stays at the call site (that's row STATE, not theme); here we only hold the two themes' values.
         ColorF RowZebra, ColorF RowHover, ColorF RowHoverZebra, ColorF RowPressed, ColorF RowPressedZebra);
 
-    // LIGHT — a TRANSLUCENT warm layer over Mica (so the desktop backdrop reads through), warm-tinted so it doesn't wash
-    // out into the near-white light Mica the way WinUI's cold #B3FFFFFF did. Zones differ by tint + opacity: toolbar
-    // shelf (lightest / most bleed) > sidebar rail > player dock (deepest / most opaque). The content "page" floats on
-    // top — translucent enough that Mica textures it (kills the flat sheet), warm + high-alpha so the track list is crisp.
-    static readonly Palette LightPalette = new(
-        Toolbar:    ColorF.FromRgba(0xF6, 0xF4, 0xF0, 0xB3),   // warm shelf @ ~70%
-        Sidebar:    ColorF.FromRgba(0xEC, 0xEA, 0xE5, 0xC4),   // recessed warm rail @ ~77%
-        PlayerBar:  ColorF.FromRgba(0xE7, 0xE5, 0xE0, 0xD1),   // deepest dock @ ~82% — least bleed
-        FileArea:   ColorF.FromRgba(0xFB, 0xFA, 0xF8, 0xD9),   // warm page @ ~85%
-        Content:    ColorF.FromRgba(0xFB, 0xFA, 0xF8, 0xD9),
-        ContentAlt: ColorF.FromRgba(0xF4, 0xF3, 0xF0),         // recessed inset within content (opaque canvas tone)
-        PremiumText: Tok.Light.SystemFillSuccess,
-        RowZebra:        ColorF.FromRgba(0xF7, 0xF6, 0xF3),    // subtle warm zebra band (odd rows)
-        RowHover:        ColorF.FromRgba(0xEC, 0xE9, 0xE2),    // even-row hover
-        RowHoverZebra:   ColorF.FromRgba(0xE6, 0xE3, 0xDB),    // zebra-row hover (deeper — the card starts lighter)
-        RowPressed:      ColorF.FromRgba(0xE5, 0xE2, 0xDA),
-        RowPressedZebra: ColorF.FromRgba(0xDF, 0xDC, 0xD3));
+    static ShellPalette ActiveShell => Tok.Theme == ThemeKind.Light ? Tok.Palette.LightShell : Tok.Palette.DarkShell;
 
-    // DARK — WinUI-faithful: the chrome is the one translucent dark layer over Mica (Tok.LayerOnMicaBaseAlt = #733A3A3A);
-    // the content card is the translucent FillCardDefault (Mica bleeds through nicely). Read off the DARK TokenSet
-    // directly so it bakes once — these tokens don't depend on the live accent override.
-    static readonly Palette DarkPalette = new(
-        Toolbar:    Tok.Dark.LayerOnMicaBaseAlt,
-        Sidebar:    Tok.Dark.LayerOnMicaBaseAlt,
-        PlayerBar:  Tok.Dark.LayerOnMicaBaseAlt,
-        FileArea:   Tok.Dark.FillCardDefault,
-        Content:    Tok.Dark.FillCardDefault,
-        ContentAlt: Tok.Dark.FillCardSecondary,
-        PremiumText: ColorF.FromRgba(0x1D, 0xB9, 0x54),
-        RowZebra:        Tok.Dark.FillSubtleTertiary,     // dark rows: WinUI subtle translucent fills (Mica bleeds through)
-        RowHover:        Tok.Dark.FillSubtleSecondary,
-        RowHoverZebra:   Tok.Dark.FillSubtleSecondary,    // dark hover isn't zebra-split — same subtle fill either way
-        RowPressed:      Tok.Dark.FillSubtleTertiary,
-        RowPressedZebra: Tok.Dark.FillSubtleTertiary);
-
-    /// <summary>The ONE theme switch (mirrors <c>Tok.T</c>); every surface below resolves through it.</summary>
-    static Palette Active => Tok.Theme == ThemeKind.Light ? LightPalette : DarkPalette;
+    static Palette Active => new(
+        ActiveShell.Toolbar, ActiveShell.Sidebar, ActiveShell.PlayerBar,
+        ActiveShell.FileArea, ActiveShell.Content, ActiveShell.ContentAlt,
+        PremiumText: Tok.Theme == ThemeKind.Light ? Tok.SystemFillSuccess : ColorF.FromRgba(0x1D, 0xB9, 0x54),
+        ActiveShell.RowZebra, ActiveShell.RowHover, ActiveShell.RowHoverZebra,
+        ActiveShell.RowPressed, ActiveShell.RowPressedZebra);
 
     // The shell root is Mica passthrough: FluentApp sets Theme.WindowBackground = Transparent when mica:true, so DWM
-    // composites Mica BaseAlt behind the client area; the (translucent) chrome above tints it. The root must NOT paint an
-    // opaque slab or it covers the backdrop entirely (inactive-window determinism is handled by AppHost).
+    // composites Mica BaseAlt behind the client area; the translucent chrome above tints it (both themes).
     public static ColorF Window => ColorF.Transparent;
     public static ColorF TitleBar => ColorF.Transparent;
 
@@ -112,4 +80,11 @@ public static class WaveeColors
     public static ColorF ChromeHover => Tok.FillSubtleSecondary;
     public static ColorF ChromePressed => Tok.FillSubtleTertiary;
     public static ColorF Badge => Tok.AccentDefault;
+
+    /// <summary>Swatch preview for the palette picker: the preset's chrome bar flattened over the reference Mica for
+    /// the CURRENT theme — i.e. what that preset's toolbar actually reads as, so the swatch matches what clicking it
+    /// produces (the old hardcoded swatch hexes drifted from the real preset output and ignored dark entirely).</summary>
+    public static ColorF PresetSwatch(ThemePalette palette) => Tok.Theme == ThemeKind.Light
+        ? ColorContrast.Flatten(palette.LightShell.Toolbar, MicaRef.LightDefault)
+        : ColorContrast.Flatten(palette.DarkShell.Toolbar, MicaRef.DarkDefault);
 }

@@ -55,6 +55,7 @@ sealed class LibraryPage : Component
         var svc = UseContext(Services.Slot);
         var store = UseContext(LibraryStore.Slot);
         var bridge = UseContext(PlaybackBridge.Slot);
+        var ui = UseContext(ShellUi.Slot);   // rail state (Task B4): the 3-column artist layout tightens its mid pane when the rail is open
         if (svc is null || store is null) return new BoxEl { Grow = 1f };
         this.UseSoftReveal(dy: 0f, blur: 0f);
 
@@ -71,6 +72,7 @@ sealed class LibraryPage : Component
 
         string sel = _selectedKey.Value;   // subscribe
         bool artists = IsArtists;
+        bool railOpen = ui?.RailOpen.Value ?? false;   // subscribe → re-render (tighter mid pane) on a rail toggle
         string albumKey = _albumKey.Value;   // subscribe
 
         // Hooks must NEVER be branched. All three kinds are the same LibraryPage type, so a branched hook count let the
@@ -81,7 +83,7 @@ sealed class LibraryPage : Component
         var albumTracks = UseAsyncResource(ct => LoadDetail(svc, artists ? albumKey : "", ct), DetailModel.Empty, artists ? albumKey : "");
 
         Element right = artists
-            ? ArtistColumns(artist, albumTracks, svc, bridge, sel.Length > 0)
+            ? ArtistColumns(artist, albumTracks, svc, bridge, sel.Length > 0, railOpen)
             : DetailColumn(detail, svc, bridge, sel.Length > 0);
 
         return new BoxEl
@@ -244,15 +246,16 @@ sealed class LibraryPage : Component
             Children = [Embed.Comp(() => new LibraryDetailPane(detail, _kind == "podcasts", svc, bridge))] };
     }
 
-    Element ArtistColumns(Loadable<Artist> artist, Loadable<DetailModel> albumTracks, Services svc, PlaybackBridge? bridge, bool hasSel)
+    Element ArtistColumns(Loadable<Artist> artist, Loadable<DetailModel> albumTracks, Services svc, PlaybackBridge? bridge, bool hasSel, bool railOpen)
     {
         if (!hasSel) return Placeholder(Strings.Library.SelectArtist);
         Element artistPane = Pane with
         {
             // Basis = the user's chosen width, but Shrink so a narrow shell never paints the grid wider than this column
             // (Shrink=0 + fixed Width let the viewport outgrow the flex slot → discography tiles under the tracks pane).
-            Basis = _midW.Value, MinWidth = 300f, MaxWidth = _midW.Value, Shrink = 1f, Grow = 0f,
-            Children = [Embed.Comp(() => new LibraryArtistPane(artist, svc, bridge, _albumKey))],
+            // When the rail is open the 3-column sum-of-minimums must fit a narrower content region → drop this floor 300→220.
+            Basis = _midW.Value, MinWidth = railOpen ? 220f : 300f, MaxWidth = _midW.Value, Shrink = 1f, Grow = 0f,
+            Children = [Embed.Comp(() => new LibraryArtistPane(artist, _albumKey))],
         };
         Element tracksPane = _albumKey.Value.Length > 0
             ? Pane with { Key = "lib:tracks", Grow = 1f, Basis = 0f, MinWidth = 220f, Shrink = 1f,
@@ -383,8 +386,13 @@ sealed class LibraryDetailPane : Component
         void AddToQueue()
         {
             var m = Cur(); if (m is null) return;
-            int n = Math.Min(m.Tracks.Count, 50);
-            for (int i = 0; i < n; i++) _ = _svc.Player.EnqueueAsync(m.Tracks[i].Uri);
+            int n = DetailQueueActions.AddToEnd(_svc.Player, m.Tracks);
+            if (n > 0) Toasts.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), ToastSeverity.Success);
+        }
+        void PlayNext()
+        {
+            var m = Cur(); if (m is null) return;
+            int n = DetailQueueActions.PlayNext(_svc.Player, m.Tracks);
             if (n > 0) Toasts.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), ToastSeverity.Success);
         }
         void AddToPlaylist()
@@ -396,7 +404,10 @@ sealed class LibraryDetailPane : Component
         }
         return new DetailHandlers(Play, () => Play(0), Shuffle, PlayContext, go, Tok.AccentDefault,
             _sort, s => _sort.Value = s, _query, _flags, f => _flags.Value = f, _density, d => _density.Value = d,
-            AddToQueue, AddToPlaylist);
+            PlayNext, AddToQueue, AddToPlaylist,
+            // The embedded TrackList has no trailing shelves, so these are never invoked here; route through DetailNav
+            // (no preview/morph store) so behaviour stays a plain nav if that ever changes.
+            a => DetailNav.OpenAlbum(null, null, go, a), p => DetailNav.OpenPlaylist(null, null, go, p));
     }
 
     Element Hero(DetailModel m) => new BoxEl
@@ -479,21 +490,19 @@ sealed class LibraryDetailPane : Component
     };
 }
 
-// The compact artist pane (WaveeMusic ArtistsLibraryView column 2): a circular hero + actions + an "In library /
-// Discography" toggle + the artist's releases. Picking a release sets the host's _albumKey → the 3rd column (tracks).
+// The compact artist pane (WaveeMusic ArtistsLibraryView column 2): the artist's releases grid only. Picking a release
+// sets the host's _albumKey → the 3rd column (tracks).
 sealed class LibraryArtistPane : Component
 {
     readonly Loadable<Artist> _artist;
-    readonly Services _svc;
-    readonly PlaybackBridge? _bridge;
     readonly Signal<string> _albumKey;
-    readonly Signal<int> _mode = new(1);   // 0 In library · 1 Discography (both show TopAlbums for the synth catalog)
     readonly SelectionModel _discoSel = new();   // discography grid single-selection (drives the 3rd column)
-    public LibraryArtistPane(Loadable<Artist> artist, Services svc, PlaybackBridge? bridge, Signal<string> albumKey)
-    { _artist = artist; _svc = svc; _bridge = bridge; _albumKey = albumKey; }
+    public LibraryArtistPane(Loadable<Artist> artist, Signal<string> albumKey)
+    { _artist = artist; _albumKey = albumKey; }
 
     public override Element Render()
     {
+        var go = UseContext(HistoryStore.NavCtx);
         var st = (LoadState)_artist.State.Value;   // subscribe
         var a = _artist.Value.Value;               // subscribe
         var albums = a?.TopAlbums ?? Array.Empty<Album>();
@@ -502,49 +511,33 @@ sealed class LibraryArtistPane : Component
         UseEffect(() => SyncDisco(albums), _albumKey.Value + "|" + albums.Count + "|" + (albums.Count > 0 ? albums[0].Uri : ""));
 
         if (st != LoadState.Ready || a is null || a.Name.Length == 0) return Skeleton();
+        if (go is null) return Discography(albums);
 
-        int mode = _mode.Value;                    // subscribe
         return new BoxEl
         {
             Direction = 1, Grow = 1f, ClipToBounds = true,
-            Children =
-            [
-                Hero(a),
-                Actions(a.Uri),
-                new BoxEl { Padding = new Edges4(WaveeSpace.XL, 0f, WaveeSpace.XL, WaveeSpace.M), Children = [SelectorBar.Create([Loc.Get(Strings.Library.InLibrary), Loc.Get(Strings.Library.FullDiscography)], mode, i => _mode.Value = i)] },
-                Discography(albums),
-            ],
+            Children = [ArtistNav(a, go), Discography(albums)],
         };
     }
 
-    Element Hero(Artist a) => new BoxEl
+    static Element ArtistNav(Artist a, Action<string, string?> go) => new BoxEl
     {
-        Direction = 0, Gap = WaveeSpace.L, AlignItems = FlexAlign.Center,
-        Padding = new Edges4(WaveeSpace.XL, WaveeSpace.XL, WaveeSpace.XL, WaveeSpace.M),
+        Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.End,
+        Padding = new Edges4(WaveeSpace.M, WaveeSpace.M, WaveeSpace.S, WaveeSpace.M),
         Children =
         [
-            new BoxEl { Width = 104f, Height = 104f, Shrink = 0f, Corners = CornerRadius4.All(52f), ClipToBounds = true, Shadow = Elevation.Card,
-                Children = [Surfaces.Artwork(a.Image, a.Id.GetHashCode() & 0x7fffffff, 104f, 104f, 52f, decodePx: 256)] },
-            new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Gap = 3f,
+            new BoxEl
+            {
+                Direction = 0, Gap = WaveeSpace.XS, AlignItems = FlexAlign.Center,
+                Corners = CornerRadius4.All(16f), Padding = new Edges4(WaveeSpace.M, WaveeSpace.XS, WaveeSpace.M, WaveeSpace.XS),
+                HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary, HoverScale = 1.02f, PressScale = 0.98f,
+                OnClick = () => go("artist:" + a.Uri, a.Name),
                 Children =
                 [
-                    new TextEl(Loc.Get(Strings.Search.TypeArtist).ToUpperInvariant()) { Size = 11f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 50f },
-                    new TextEl(a.Name) { Size = 23f, Weight = 800, Color = Tok.TextPrimary, MaxLines = 2, Wrap = TextWrap.Wrap, Trim = TextTrim.CharacterEllipsis },
-                    new TextEl(Strings.Artist.MonthlyListeners(a.MonthlyListeners.ToString("N0"))) { Size = 12f, Color = Tok.TextTertiary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-                ] },
-        ],
-    };
-
-    Element Actions(string uri) => new BoxEl
-    {
-        Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
-        Padding = new Edges4(WaveeSpace.XL, 0f, WaveeSpace.XL, WaveeSpace.M),
-        Children =
-        [
-            new BoxEl { Direction = 0, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center, Corners = CornerRadius4.All(20f), Padding = new Edges4(18f, 9f, 18f, 9f),
-                Fill = Tok.AccentDefault, HoverScale = 1.04f, PressScale = 0.97f, Shadow = Elevation.Card, OnClick = () => { _ = _svc.Player.PlayAsync(uri, 0); },
-                Children = [Icon(Icons.Play, 14f, Tok.TextOnAccentPrimary), new TextEl(Loc.Get(Strings.Artist.Play)) { Size = 14f, Weight = 700, Color = Tok.TextOnAccentPrimary }] },
-            Embed.Comp(() => new FollowButton(uri)),
+                    new TextEl(Loc.Get(Strings.Detail.GoToArtist)) { Size = 12f, Weight = 600, Color = Tok.TextSecondary, HoverColor = Tok.TextPrimary },
+                    Icon(Icons.OpenInNewWindow, 14f, Tok.TextSecondary),
+                ],
+            },
         ],
     };
 
@@ -570,7 +563,8 @@ sealed class LibraryArtistPane : Component
         string ak = _albumKey.Peek();
         int idx = -1;
         if (ak.Length > 0) for (int i = 0; i < albums.Count; i++) if ("album:" + albums[i].Uri == ak) { idx = i; break; }
-        if (idx < 0) { if (_discoSel.SelectedCount > 0) _discoSel.DeselectAll(); }
+        if (idx < 0 && albums.Count > 0) _albumKey.Value = "album:" + albums[0].Uri;
+        else if (idx < 0) { if (_discoSel.SelectedCount > 0) _discoSel.DeselectAll(); }
         else if (_discoSel.FirstSelectedIndex != idx) _discoSel.Select(idx);
     }
 
@@ -595,13 +589,7 @@ sealed class LibraryArtistPane : Component
 
     static Element Skeleton() => new BoxEl
     {
-        Direction = 1, Padding = new Edges4(WaveeSpace.XL, WaveeSpace.XL, WaveeSpace.XL, WaveeSpace.XL), Gap = WaveeSpace.L,
-        Children =
-        [
-            new BoxEl { Direction = 0, Gap = WaveeSpace.L, AlignItems = FlexAlign.Center,
-                Children = [new BoxEl { Width = 104f, Height = 104f, Corners = CornerRadius4.All(52f), Fill = Tok.FillCardDefault },
-                    new BoxEl { Direction = 1, Grow = 1f, Gap = WaveeSpace.S, Children = [new BoxEl { Width = 200f, Height = 22f, Corners = CornerRadius4.All(4f), Fill = Tok.FillCardDefault }, new BoxEl { Width = 140f, Height = 12f, Corners = CornerRadius4.All(4f), Fill = Tok.FillCardDefault }] }] },
-            new BoxEl { Direction = 1, Gap = WaveeSpace.S, Children = Enumerable.Range(0, 5).Select(_ => (Element)new BoxEl { Height = 48f, Corners = CornerRadius4.All(6f), Fill = Tok.FillCardDefault }).ToArray() },
-        ],
+        Direction = 1, Grow = 1f, Padding = new Edges4(WaveeSpace.M, WaveeSpace.M, WaveeSpace.M, WaveeSpace.M), Gap = WaveeSpace.S,
+        Children = Enumerable.Range(0, 8).Select(_ => (Element)new BoxEl { Height = 148f, Corners = CornerRadius4.All(6f), Fill = Tok.FillCardDefault }).ToArray(),
     };
 }

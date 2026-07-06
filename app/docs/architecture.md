@@ -4,9 +4,11 @@
 > the underlying data/services** in the Wavee-fluent app. It wires the **catalog** surface (Home, Library/Sidebar,
 > playlist/album/**artist**/**show** detail, **search**, **library grids**) from real Spotify export JSON + synthesized
 > peers, plus **mutations** (save/like/follow with an optimistic+persisted outbox), a **local-files** peer source, and
-> **podcasts**. Playback / Connect-remote / session / lyrics now implement their seam ports behind the in-process fakes
-> and register in the source list; per-facet **federation** (`Federated*`) stays the documented `registry.OfCapability`
-> hook, deferred until a 2nd real source (§4.3). Keep this file honest: when a capability moves, update the matrix (§9).
+> **podcasts**. The **session** facet registers in the source list; **playback / Connect-remote / lyrics** are NOT
+> in-process sources anymore — local playback is unsupported (a play intent shows a "choose a remote device" toast), so
+> playback happens only on a live Connect device after login and the device roster comes from the live cluster. Per-facet
+> **federation** (`Federated*`) stays the documented `registry.OfCapability` hook, deferred until a 2nd real source (§4.3).
+> Keep this file honest: when a capability moves, update the matrix (§9).
 
 This design is grounded in a 14-domain, 292-capability functional inventory of the production **WaveeMusic**
 client (full report archived alongside the planning session) and in industry best practice:
@@ -281,12 +283,12 @@ provider, so geo/tier/region checks are baked in rather than re-derived in the U
 | Mutations: save / like / follow | `IMutationSource` | **Implemented** | `LocalMutationSource` (optimistic + persisted outbox) + `LibraryBridge`; hearts/follow wired everywhere, capability-gated |
 | Local files as a source | `LocalSource` | **Implemented** | owns `local:` / `wavee:local:*`; `TrackOrigin.Local`; opens via the sidebar Local row through the shared detail surface |
 | Podcasts / shows / episodes | `IPodcastSource` | **Implemented (synthetic)** | `FakePodcastSource`; podcasts grid + `ShowPage` (episodes, date/duration, resume-progress); playable |
-| Playback (transport, resolve, gapless, DSP) | `IPlaybackSource` | **Seam port live** | `FakePlaybackProvider` implements `IPlaybackSource` + registered (Playback\|Lyrics); legacy `IPlaybackPlayer` stays the app surface |
-| Spotify Connect / remote / devices | `IRemoteSource` | **Seam port live** | `FakeConnectDevices` implements `IRemoteSource` + registered (Remote) |
+| Playback (transport, resolve, gapless, DSP) | `IPlaybackPlayer` | **Remote-only** | local audio unsupported: `UnsupportedPlaybackPlayer` rejects play intents (→ "choose a remote device" toast); the live `PlaybackController` forwards playback to the active Connect device after login (no in-process `IPlaybackSource`) |
+| Spotify Connect / remote / devices | `IConnectDevices` | **Live-only** | pre-login `NoConnectDevices` (empty roster); the device picker + roster come from the live Connect cluster (`LiveConnectDevices`); no in-process `IRemoteSource` |
 | Session / auth / account tier / market | `ISessionSource` | **Seam port live** | `FakeSpotifySession` implements `ISessionSource` + registered (Session) |
-| Lyrics | `ILyricsSource` | **Seam port live** | `FakePlaybackProvider` implements `ILyricsSource` (the Playback+Lyrics source) |
+| Lyrics | `ILyricsProvider` | **Live-only** | pre-login `NoLyricsProvider`; the live `AggregatingLyricsProvider` swaps in on login (no in-process `ILyricsSource`) |
 | Provider-mappings / dedup / fallback | `ProviderRef` / `ProviderPolicy` | **Model + hooks** | `ProviderRef`/`ProviderMapping`/`ProviderPolicy`/`PlayableTrack` groundwork; federation = `registry.OfCapability` |
-| Mutations: playlist create / add / queue | `UserPlaylistSource` + `EnqueueAsync` | **Implemented** | create (sidebar +), add-to-playlist (default target), add-to-queue, batch selection actions — all wired with toasts; session-scoped user playlists are playable (player context resolver) |
+| Mutations: playlist create / add / queue | `UserPlaylistSource` + `EnqueueAsync` | **Implemented** | create (sidebar +), add-to-playlist (default target), add-to-queue, batch selection actions — all wired with toasts; add-to-queue / play-next forward to the active remote device (else the "choose a remote device" toast) |
 | Mutations: playlist picker / reorder / folders | `IMutationSource` | **Seam** | the remaining increment — a "choose which playlist" flyout, drag-reorder, the folder tree, and durable persistence of user playlists |
 | Federated playback / remote / session | `Federated*` | **Seam (deferred)** | per §4.3, deferred until a 2nd real source; the hook is `registry.OfCapability(cap)`, now exercised by the registered facet sources |
 
@@ -304,9 +306,10 @@ provider, so geo/tier/region checks are baked in rather than re-derived in the U
   `PlayableTrack`); `Sources/CollectionEvents.cs` (the `ICollectionEvents` off-page library-delta seam, §3/§6).
 - **Spotify adapter (Wavee.Core/Spotify):** `SpotifyExport.cs` (parse), `SpotifyExportMapper.cs` (ACL),
   `SpotifyHomeComposer.cs` (grouping), `SpotifyExportSource.cs`.
-- **Fake adapter:** `Wavee.Core/Fakes/FakeSource.cs` (wraps `FakeData`); the in-process facet fakes
-  (`FakePlaybackProvider` = Playback+Lyrics, `FakeSpotifySession` = Session, `FakeConnectDevices` = Remote) now
-  implement their seam ports + register in the source list.
+- **Fake adapter:** `Wavee.Core/Fakes/FakeSource.cs` (wraps `FakeData`); `FakeSpotifySession` = Session (the one
+  in-process facet source still registered). Playback/Remote/Lyrics are no longer in-process sources — the pre-login
+  stubs are `UnsupportedPlaybackPlayer` / `NoConnectDevices` / `NoLyricsProvider` (`Wavee.Core/Playback/UnsupportedPlayback.cs`),
+  swapped for the live Connect stack on login.
 - **Wiring/assets:** `app/Wavee/App/Services.cs` (the unified `SourceRegistry`); `app/Wavee/App/LibraryBridge.cs`
   (the Mutations Core→Signal bridge); `app/Wavee/App/LibraryStore.cs` (the root collection + per-entity detail cache —
   cache-first instant navigation + off-page freshness, §3/§6); `app/Wavee/Wavee.csproj`; `app/Wavee/assets/spotify/*.json`;

@@ -124,6 +124,91 @@ public sealed class ExtendedMetadataSource : IMetadataSource
         return values.TryGetValue((uri, kind), out var value) ? value : null;
     }
 
+    // ── Conditional reads (etag + 304) ────────────────────────────────────────────────────────────────────────────────
+    // Like GetExtensionsAsync, but the caller passes the etag it last cached per (uri, kind) — sent as ExtensionQuery.etag
+    // so the server can answer 304 (not-modified) — and gets back the per-entity status_code + (new) etag + offline TTL,
+    // not just the 200 payload. This is the "cache it like a normal extended-metadata thing" path: 200 = fresh payload,
+    // 304 = keep cached, 404 = no such extension. Large request lists are chunked by body size (one POST is not unbounded).
+    public readonly record struct ExtensionResult(int Status, string? Etag, long OfflineTtlSeconds, ByteString? Payload);
+
+    static readonly IReadOnlyDictionary<(string Uri, Xm.ExtensionKind Kind), ExtensionResult> NoResults
+        = new Dictionary<(string, Xm.ExtensionKind), ExtensionResult>();
+
+    public async Task<IReadOnlyDictionary<(string Uri, Xm.ExtensionKind Kind), ExtensionResult>> GetExtensionsWithHeadersAsync(
+        IReadOnlyList<(string Uri, Xm.ExtensionKind Kind, string? Etag)> requests, CancellationToken ct = default)
+    {
+        if (requests.Count == 0) return NoResults;
+        var session = _ctx();
+        var result = new Dictionary<(string, Xm.ExtensionKind), ExtensionResult>(requests.Count);
+        foreach (var (start, count) in ExtensionRanges(requests))
+        {
+            using var resp = await SendAsync(GzipExtensionRequest(requests, start, count, session), ct).ConfigureAwait(false);
+            if (resp.Status != 200) throw new InvalidOperationException($"extended-metadata fetch failed ({resp.Status})");
+            var parsed = Xm.BatchedExtensionResponse.Parser.ParseFrom(resp.Body);   // streamed, no LOH byte[]
+            foreach (var array in parsed.ExtendedMetadata)
+            {
+                long arrayOfflineTtl = array.Header?.OfflineTtlInSeconds ?? 0;   // per-array fallback for the per-entity TTL
+                foreach (var data in array.ExtensionData)
+                {
+                    var hdr = data.Header;
+                    int status = hdr is { HasStatusCode: true } ? hdr.StatusCode : (data.ExtensionData is null ? 0 : 200);
+                    string? etag = hdr is { HasEtag: true, Etag.Length: > 0 } ? hdr.Etag : null;
+                    long offlineTtl = hdr is { HasOfflineTtlInSeconds: true } ? hdr.OfflineTtlInSeconds : arrayOfflineTtl;
+                    ByteString? payload = data.ExtensionData?.Value is { IsEmpty: false } v ? v : null;
+                    result[(data.EntityUri, array.ExtensionKind)] = new ExtensionResult(status, etag, offlineTtl, payload);
+                }
+            }
+        }
+        return result;
+    }
+
+    // Body-size chunking for the conditional path (the plain GzipExtensionRequest builds one POST; here a 10k-entity
+    // detect must not be a single unbounded body). Estimate ≈ uri + etag + tags; never split below one request.
+    static IEnumerable<(int Start, int Count)> ExtensionRanges(
+        IReadOnlyList<(string Uri, Xm.ExtensionKind Kind, string? Etag)> reqs,
+        int maxBodyBytes = MetadataChunking.DefaultMaxBodyBytes, int headerBytes = 64)
+    {
+        int start = 0, size = headerBytes;
+        for (int i = 0; i < reqs.Count; i++)
+        {
+            int cost = reqs[i].Uri.Length + (reqs[i].Etag?.Length ?? 0) + 16;
+            if (i > start && size + cost > maxBodyBytes) { yield return (start, i - start); start = i; size = headerBytes; }
+            size += cost;
+        }
+        if (reqs.Count > start) yield return (start, reqs.Count - start);
+    }
+
+    // The conditional sibling of GzipExtensionRequest(requests, ctx): builds one chunk [start, start+count) and sets
+    // ExtensionQuery.etag when the caller cached one (so the server can 304). Multiple kinds under a uri group as before.
+    static byte[] GzipExtensionRequest(IReadOnlyList<(string Uri, Xm.ExtensionKind Kind, string? Etag)> requests,
+        int start, int count, SessionContext ctx)
+    {
+        Span<byte> taskId = stackalloc byte[16];
+        RandomNumberGenerator.Fill(taskId);
+        var request = new Xm.BatchedEntityRequest
+        {
+            Header = new Xm.BatchedEntityRequestHeader { Country = ctx.Market, Catalogue = ctx.Catalogue, TaskId = ByteString.CopyFrom(taskId) },
+        };
+        var byUri = new Dictionary<string, Xm.EntityRequest>(StringComparer.Ordinal);
+        for (int i = start; i < start + count; i++)
+        {
+            var (uri, kind, etag) = requests[i];
+            if (!byUri.TryGetValue(uri, out var er))
+            {
+                er = new Xm.EntityRequest { EntityUri = uri };
+                byUri[uri] = er;
+                request.EntityRequest.Add(er);
+            }
+            var query = new Xm.ExtensionQuery { ExtensionKind = kind };
+            if (!string.IsNullOrEmpty(etag)) query.Etag = etag;
+            er.Query.Add(query);
+        }
+
+        using var ms = new MemoryStream();
+        using (var gz = new GZipStream(ms, CompressionLevel.Fastest, leaveOpen: true)) request.WriteTo(gz);
+        return ms.ToArray();
+    }
+
     // One EntityRequest per uri (its kinds grouped under it), serialized straight into gzip — the same envelope
     // GzipRequest builds, but keyed by an explicit (uri, kind) list instead of the EntityRef→KindFor mapping.
     static byte[] GzipExtensionRequest(IReadOnlyList<(string Uri, Xm.ExtensionKind Kind)> requests, SessionContext ctx)
@@ -213,7 +298,10 @@ public sealed class ExtendedMetadataSource : IMetadataSource
         AlbumRef album = new("", "", "");
         Image? image = null;
         if (t.Album is { } al) { var (aref, cover) = proj.Album(al.Gid, al.Name, al.CoverGroup); album = aref; image = cover; }
-        store.UpsertTrack(new Track(id, "spotify:track:" + id, t.Name, artists, album, t.Duration, t.Explicit, image));
+        string? isrc = null;   // Track.external_id (field 10) — the ISRC drives the lyrics exact-recording fast-path
+        foreach (var x in t.ExternalId)
+            if (string.Equals(x.Type, "isrc", StringComparison.OrdinalIgnoreCase)) { isrc = x.Id; break; }
+        store.UpsertTrack(new Track(id, "spotify:track:" + id, t.Name, artists, album, t.Duration, t.Explicit, image, Isrc: isrc));
     }
 
     static void ProjectAlbum(Lean.LeanAlbum al, IStore store, ProjCtx proj)

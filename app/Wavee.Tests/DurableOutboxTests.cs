@@ -60,14 +60,15 @@ public class DurableOutboxTests
             {
                 var store = new CachedStore(cold);
                 store.SetMembership("spotify:playlist:p", new[] { new PlaylistMember("a", "spotify:track:a", null, 0), new PlaylistMember("b", "spotify:track:b", null, 0) }, new byte[] { 7 });
-                var eng = new MutationEngine(store, new IMutationStrategy[] { new SetReplayStrategy(), new OpRebaseStrategy() }, cold);
+                var eng = new MutationEngine(store, new IMutationStrategy[] { new SetReplayStrategy(), new OpRebaseStrategy(store) }, cold);
                 eng.Edit("spotify:playlist:p", new[] { new PlaylistOp(PlaylistOpKind.Remove, FromIndex: 0, Length: 1) }, new byte[] { 7 });
                 Assert.Equal(1, eng.Pending);
             }
 
             using (var cold2 = new SqliteColdStore(path))
             {
-                var eng2 = new MutationEngine(new CachedStore(cold2), new IMutationStrategy[] { new SetReplayStrategy(), new OpRebaseStrategy() }, cold2);
+                var store2 = new CachedStore(cold2);
+                var eng2 = new MutationEngine(store2, new IMutationStrategy[] { new SetReplayStrategy(), new OpRebaseStrategy(store2) }, cold2);
                 Assert.Equal(1, eng2.Pending);   // the op-rebase edit (ops + base_rev) round-tripped through SQLite
                 await eng2.Drain(new StubTransport(), SessionContext.LoggedOut);
                 Assert.Equal(0, eng2.Pending);

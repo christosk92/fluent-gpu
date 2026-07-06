@@ -25,9 +25,10 @@ public sealed class LayoutInvalidator
     /// <summary>A fixed-size, non-flexing, overflow-clipping container — its size is independent of its children, so the
     /// up-rule stops here (layout.md §4.3). (AspectRatio is not modeled in the live LayoutInput; add when it lands.)</summary>
     private static bool IsLayoutBoundary(in LayoutInput s, NodeFlags f)
-        => !float.IsNaN(s.Width) && !float.IsNaN(s.Height)
+        => (f & NodeFlags.LayoutBoundary) != 0
+        || (!float.IsNaN(s.Width) && !float.IsNaN(s.Height)
         && s.FlexGrow == 0f && s.FlexShrink == 0f
-        && (f & NodeFlags.ClipsToBounds) != 0;
+        && (f & NodeFlags.ClipsToBounds) != 0);
 
     private NodeHandle FindRelayoutRoot(NodeHandle node)
     {

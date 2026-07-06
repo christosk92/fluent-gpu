@@ -17,6 +17,16 @@ public interface IAudioKeySource
     Task<ReadOnlyMemory<byte>> GetKeyAsync(ReadOnlyMemory<byte> fileId, ReadOnlyMemory<byte> trackGid, CancellationToken ct = default);
 }
 
+public interface IPlayPlayNativeSeedSource
+{
+    ReadOnlyMemory<byte> GetNativeCdnSeed(string fileIdHex);
+}
+
+public interface IPlayPlayCdnDecryptorFactory
+{
+    Wavee.Backend.Audio.CdnDecryptor? CreateCdnDecryptor(ReadOnlyMemory<byte> nativeCdnSeed);
+}
+
 /// <summary>Headless stub: a 16-byte zero key (the silent host ignores it).</summary>
 public sealed class StubAudioKeySource : IAudioKeySource
 {

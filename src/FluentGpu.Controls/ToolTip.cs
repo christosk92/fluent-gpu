@@ -321,7 +321,8 @@ public sealed class ToolTip : Component
 
     // WinUI ToolTip bubble (ToolTip_themeresources.xaml DefaultToolTipStyle:42-76):
     //   Background = ToolTipBackgroundBrush = AcrylicInAppFillColorDefaultBrush (:14 dark / :40 light) —
-    //     theme-aware Tok.AcrylicFlyout (dark #2C2C2C @0.15 lum 0.96 fb #2C2C2C; light #FCFCFC @0.0 lum 0.85 fb #F9F9F9)
+    //     theme-aware Tok.AcrylicFlyout (dark #2C2C2C @0.15 lum 0.96 fb #2C2C2C; light #FCFCFC @0.05 lum 0.96 fb #F9F9F9
+    //     — light luminosity raised from WinUI's 0.85 so the plate reads solid over the Mica-lit pale pages)
     //   BorderBrush = SurfaceStrokeColorFlyout (Tok.StrokeFlyoutDefault), BorderThickness = 1
     //   CornerRadius = ControlCornerRadius (4px), Padding = ToolTipBorderPadding 9,6,9,8
     //   FontSize = ToolTipContentThemeFontSize 12, Foreground = TextFillColorPrimary, MaxWidth = 320, TextWrapping = Wrap.

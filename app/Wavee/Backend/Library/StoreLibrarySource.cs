@@ -8,6 +8,10 @@ using Wavee.Core;
 
 namespace Wavee.Backend.Library;
 
+// Disambiguate from the UI type Wavee.DiscographyPage (a Component) that is otherwise in scope under the Wavee.* namespace.
+// (Declared inside the namespace so it wins over the enclosing-namespace member.)
+using DiscographyPage = Wavee.Core.DiscographyPage;
+
 // ── The catalog↔Store bridge ─────────────────────────────────────────────────────────────────────────────────────────
 // A catalog source (the UI binds against ICatalogSource via AggregateCatalog) whose reads project the PERSISTENT Store:
 // the unordered library sets (collection_items, via SavedUris) and the ordered playlist membership are JOINED at read to
@@ -19,10 +23,19 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
     readonly IStore _store;
     readonly SimpleSubject<CollectionKind> _collections = new();
     readonly IDisposable _sub;
+    readonly object _profileGate = new();
+    readonly Dictionary<string, HashSet<string>> _profilePlaylistDeps = new(StringComparer.Ordinal);
+    readonly HashSet<string> _profilePlaylistCollectionDeps = new(StringComparer.Ordinal);
+    IUserProfileService? _userProfiles;
+    IDisposable? _profileSub;
 
     /// <summary>Set by the live bootstrap: fetch a playlist's membership+tracks / an album's tracks on FIRST open (the
     /// rootlist + collection sync stores headers only). Null offline/in tests → reads stay pure store lookups.</summary>
     public Func<string, CancellationToken, Task>? OnDemandFetch { get; set; }
+
+    /// <summary>Set by the go-live block: the single library-sync loop. When present, playlist opens route through it (SWR —
+    /// blocking first fetch / background revalidate); null offline/in tests → the OnDemandFetch path (album/artist unchanged).</summary>
+    public Wavee.Backend.Sync.LibrarySync? Sync { get; set; }
 
     /// <summary>Set by the live bootstrap: the editorial/personalized Pathfinder home groups, prepended ABOVE the
     /// store-derived library shelves. Null offline → only the library-derived home.</summary>
@@ -32,9 +45,31 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
     /// store track search is the fallback. Returns null on failure → caller degrades to offline.</summary>
     public Func<string, SearchFacet, int, int, CancellationToken, Task<SearchResults?>>? LiveSearch { get; set; }
 
+    /// <summary>Set by the live bootstrap: page an artist's discography facet online (Pathfinder). Null offline → the
+    /// override serves the in-memory overview slice. Returns null on failure → the override throws so the VC retries.</summary>
+    public Func<string, DiscographyKind, int, int, CancellationToken, Task<DiscographyPage?>>? LiveDiscography { get; set; }
+
     /// <summary>Set by the live bootstrap: as-you-type search suggestions (Pathfinder searchSuggestions). Empty offline.</summary>
     public Func<string, CancellationToken, Task<IReadOnlyList<string>>>? LiveSuggest { get; set; }
     public Func<string, CancellationToken, Task<SearchSuggestions>>? LiveSuggestRich { get; set; }
+
+    /// <summary>Optional live user profile overlay for playlist owners / added-by contributors. Null offline/in tests.</summary>
+    public IUserProfileService? UserProfiles
+    {
+        get => _userProfiles;
+        set
+        {
+            if (ReferenceEquals(_userProfiles, value)) return;
+            _profileSub?.Dispose();
+            _userProfiles = value;
+            lock (_profileGate)
+            {
+                _profilePlaylistDeps.Clear();
+                _profilePlaylistCollectionDeps.Clear();
+            }
+            _profileSub = value?.Changed.Subscribe(Wavee.Backend.Observers.From<string>(OnProfileChanged));
+        }
+    }
 
     public StoreLibrarySource(IStore store)
     {
@@ -53,9 +88,20 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         await EnsureFetchedAsync(uri, ct).ConfigureAwait(false);
         var header = _store.GetPlaylist(uri);
         if (header is null) return null;
-        var tracks = JoinMembership(uri);
+        var members = _store.Membership(uri);
+        PrefetchPlaylistUsers(uri, header, members);
+        var owner = OverlayOwner(uri, header, collectionDependency: false);
+        var tracks = JoinMembership(uri, members);
         Image? cover = header.Cover ?? MosaicCover(TilesFromTracks(tracks));   // cover-less → mosaic/single for the detail hero too
-        return header with { Cover = cover, Tracks = tracks, TrackCount = tracks.Count };
+        return header with
+        {
+            OwnerName = owner?.Name ?? header.Owner?.Name ?? header.OwnerName,
+            Owner = owner ?? header.Owner,
+            Collaborators = BuildCollaborators(header, owner, members),
+            Cover = cover,
+            Tracks = tracks,
+            TrackCount = tracks.Count,
+        };
     }
 
     // 4+ distinct album covers → a 2×2 mosaic Image (Url empty + tiles, detected by Surfaces.Artwork/Shelf); 1–3 → the
@@ -91,10 +137,53 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         return _store.GetArtist(uri);
     }
 
+    // Discography paging — the LIVE override that pages the real facet beyond the ~10-item overview slice the DIM sees.
+    public async Task<DiscographyPage> GetDiscographyAsync(string uri, DiscographyKind kind, int offset, int limit, CancellationToken ct = default)
+    {
+        var artist = await GetArtistAsync(uri, ct).ConfigureAwait(false);   // cached; triggers the overview fetch if cold
+        var all = artist?.TopAlbums ?? Array.Empty<Album>();
+        var filtered = new List<Album>();
+        foreach (var a in all) if (AggregateCatalog.KindMatches(a.Kind, kind)) filtered.Add(a);   // shared kind filter (Singles ⇒ Single/EP)
+        int facet = artist?.FacetTotal(kind) ?? 0;
+        // Deliverability lives in the source: offline can only promise what it holds → no permanent trailing shimmer offline.
+        int total = (LiveDiscography is not null && facet > 0) ? Math.Max(facet, filtered.Count) : filtered.Count;
+
+        if (limit <= 0) return new DiscographyPage(Array.Empty<Album>(), total);   // total-only probe: no network
+
+        // The whole facet already fits in memory (the ≤10-item case), or there is no live delegate → serve from memory.
+        if (filtered.Count >= total || LiveDiscography is null)
+        {
+            var window = new List<Album>();
+            for (int i = offset; i < filtered.Count && window.Count < limit; i++) window.Add(filtered[i]);
+            return new DiscographyPage(window, total);
+        }
+
+        var page = await LiveDiscography(uri, kind, offset, limit, ct).ConfigureAwait(false);
+        // null → the fetch failed; throw so VirtualCollection clears the in-flight page guard and retries on next re-window.
+        if (page is null) throw new InvalidOperationException($"Spotify discography ({kind}) page fetch returned no response.");
+        // Return the live page with ITS OWN Total UNTOUCHED — never clamp a fresh authoritative total up to a stale cached one.
+        return page;
+    }
+
+    // The artist overview (TopTracks/stats/palette/bio) is a heavy Pathfinder GraphQL read; revalidate it on a generous
+    // window rather than on every open. Longer than the 1h entity-metadata Etag because artist stats/discography change
+    // slowly. (Tunable: drop to TimeSpan.FromHours(1) to mirror the Etag path exactly.)
+    static readonly TimeSpan ArtistOverviewTtl = TimeSpan.FromHours(12);
+
     // First open fetches the detail envelope. Albums are upgraded until they have BOTH tracks and the full Pathfinder
     // metadata; a track-only extended-metadata album is not allowed to strand the page without artist art/releases.
     async Task EnsureFetchedAsync(string uri, CancellationToken ct)
     {
+        // Playlist on-open routing through the sync loop (SWR, §2.6): empty membership → blocking first fetch (today's
+        // skeleton path); else fire-and-forget revalidate (5-min window / dirty-gated in the loop) and serve cache now —
+        // no await, no flicker. Null Sync (offline/tests) → the OnDemandFetch path below (album/artist unchanged).
+        if (Sync is { } sync && uri.StartsWith("spotify:playlist:", StringComparison.Ordinal))
+        {
+            if (_store.Membership(uri).Count == 0) await sync.OpenPlaylistAsync(uri, ct).ConfigureAwait(false);
+            else sync.Enqueue(new Wavee.Backend.Sync.SyncCommand(Wavee.Backend.Sync.SyncKind.OpenPlaylist, uri));
+            return;
+        }
+
         var fetch = OnDemandFetch;
         if (fetch is null) return;
         bool need = false;
@@ -106,7 +195,12 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
             need = album is null || album.Tracks is null or { Count: 0 } || album.Hydration < AlbumHydrationLevel.Full;
         }
         else if (uri.StartsWith("spotify:artist:", StringComparison.Ordinal))
-            need = _store.GetArtist(uri)?.TopTracks is null or { Count: 0 };   // cache: fetch once, then served from the store (the virtualized discography reads it many times)
+        {
+            // SWR: re-fetch when the overview is missing its top tracks OR the freshness stamp is older than the TTL. A
+            // record persisted by an earlier build has FetchedAt == default (epoch) → reads as stale → heals on next open.
+            var a = _store.GetArtist(uri);
+            need = a is null || a.TopTracks is null or { Count: 0 } || DateTimeOffset.UtcNow - a.FetchedAt > ArtistOverviewTtl;
+        }
         if (need) { try { await fetch(uri, ct).ConfigureAwait(false); } catch { } }
     }
 
@@ -134,7 +228,22 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
 
     public Task<IReadOnlyList<Album>> GetAlbumsAsync(CancellationToken ct = default) => Task.FromResult(JoinSet("albums", _store.GetAlbum));
     public Task<IReadOnlyList<Artist>> GetArtistsAsync(CancellationToken ct = default) => Task.FromResult(JoinSet("artists", _store.GetArtist));
-    public Task<IReadOnlyList<Track>> GetLikedSongsAsync(CancellationToken ct = default) => Task.FromResult(JoinSet("liked", _store.GetTrack));
+
+    // Liked Songs is an ADD-ORDERED collection (newest first — the Spotify default) with the add date a first-class,
+    // sortable column: join the timestamped set and stamp AddedAt onto the read-model copy (same shape JoinMembership
+    // gives playlist rows), so the detail surface derives the Date-added column + default sort from the data itself.
+    public Task<IReadOnlyList<Track>> GetLikedSongsAsync(CancellationToken ct = default)
+    {
+        var items = SortedByAddedDesc(_store.SavedItems("liked"));
+        var list = new List<Track>(items.Count);
+        for (int i = 0; i < items.Count; i++)
+        {
+            var t = _store.GetTrack(items[i].Uri);
+            if (t is null) continue;   // offline-first inner join: a not-yet-hydrated member has no row until it lands
+            list.Add(items[i].AddedAtMs > 0 ? t with { AddedAt = DateTimeOffset.FromUnixTimeMilliseconds(items[i].AddedAtMs) } : t);
+        }
+        return Task.FromResult<IReadOnlyList<Track>>(list);
+    }
 
     public Task<SearchResults> SearchAsync(string query, CancellationToken ct = default)
         => SearchAsync(query, SearchFacet.All, 0, 30, ct);
@@ -238,17 +347,27 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
     public Task<Show?> GetShowAsync(string uri, CancellationToken ct = default) => Task.FromResult(_store.GetShow(uri));
 
     // ── joins ──
+    // Every library set reads in ADD order, newest first (the Spotify collection default); unknown timestamps (0) sink
+    // to the end.
     IReadOnlyList<T> JoinSet<T>(string setId, Func<string, T?> get) where T : class
     {
-        var uris = _store.SavedUris(setId);
-        var list = new List<T>(uris.Count);
-        for (int i = 0; i < uris.Count; i++) { var v = get(uris[i]); if (v is not null) list.Add(v); }   // inner join: skip not-yet-hydrated
+        var items = SortedByAddedDesc(_store.SavedItems(setId));
+        var list = new List<T>(items.Count);
+        for (int i = 0; i < items.Count; i++) { var v = get(items[i].Uri); if (v is not null) list.Add(v); }   // inner join: skip not-yet-hydrated
         return list;
     }
 
-    IReadOnlyList<Track> JoinMembership(string playlistUri)
+    static List<SavedItem> SortedByAddedDesc(IReadOnlyList<SavedItem> items)
     {
-        var members = _store.Membership(playlistUri);
+        var list = new List<SavedItem>(items);
+        list.Sort((a, b) => b.AddedAtMs.CompareTo(a.AddedAtMs));
+        return list;
+    }
+
+    IReadOnlyList<Track> JoinMembership(string playlistUri) => JoinMembership(playlistUri, _store.Membership(playlistUri));
+
+    IReadOnlyList<Track> JoinMembership(string playlistUri, IReadOnlyList<PlaylistMember> members)
+    {
         var list = new List<Track>(members.Count);
         for (int i = 0; i < members.Count; i++)
         {
@@ -256,7 +375,7 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
             var t = _store.GetTrack(m.ItemUri);
             if (t is null) continue;   // offline-first inner join: a not-yet-hydrated member has no row until it lands
             DateTimeOffset? at = m.AddedAt > 0 ? DateTimeOffset.FromUnixTimeMilliseconds(m.AddedAt) : null;
-            list.Add(t with { AddedAt = at, AddedBy = m.AddedBy });   // stamp membership facts onto the read-model copy
+            list.Add(t with { AddedAt = at, AddedBy = m.AddedBy, ContextUid = m.ItemId });   // stamp membership facts (+ per-row uid) onto the read-model copy
         }
         return list;
     }
@@ -269,11 +388,107 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         Image? cover = h?.Cover ?? MosaicCover(tiles);
         return h is null
             ? new PlaylistSummary(uri, uri, "", count, cover, tiles)
-            : new PlaylistSummary(uri, h.Name, h.OwnerName, count > 0 ? count : h.TrackCount, cover, tiles);
+            : new PlaylistSummary(uri, h.Name, OwnerDisplayName(uri, h, collectionDependency: true), count > 0 ? count : h.TrackCount, cover, tiles);
     }
 
     // Up to 4 DISTINCT album covers from the playlist's resident tracks — the mosaic source for a cover-less playlist.
     // Derived read-through (NOT memoized on the header), so it recomputes when the tracklist changes.
+    string OwnerDisplayName(string playlistUri, Playlist header, bool collectionDependency)
+    {
+        var owner = OverlayOwner(playlistUri, header, collectionDependency);
+        return owner?.Name ?? header.Owner?.Name ?? header.OwnerName;
+    }
+
+    Owner? OverlayOwner(string playlistUri, Playlist header, bool collectionDependency)
+    {
+        var raw = RawOwnerId(header);
+        if (raw.Length == 0) return header.Owner;
+        RegisterProfileDependency(raw, playlistUri, collectionDependency);
+        _userProfiles?.Prefetch(new[] { raw });
+        return _userProfiles?.Get(raw) ?? header.Owner;
+    }
+
+    static string RawOwnerId(Playlist header)
+        => header.Owner?.Id is { Length: > 0 } id ? id : header.OwnerName;
+
+    void PrefetchPlaylistUsers(string playlistUri, Playlist header, IReadOnlyList<PlaylistMember> members)
+    {
+        if (_userProfiles is null) return;
+        var ids = new List<string>(1 + members.Count);
+        var owner = RawOwnerId(header);
+        if (owner.Length > 0)
+        {
+            ids.Add(owner);
+            RegisterProfileDependency(owner, playlistUri, collectionDependency: false);
+        }
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        for (int i = 0; i < members.Count; i++)
+        {
+            var id = members[i].AddedBy;
+            if (string.IsNullOrWhiteSpace(id) || !seen.Add(id)) continue;
+            ids.Add(id);
+            RegisterProfileDependency(id, playlistUri, collectionDependency: false);
+        }
+        if (ids.Count > 0) _userProfiles.Prefetch(ids);
+    }
+
+    IReadOnlyList<Owner>? BuildCollaborators(Playlist header, Owner? resolvedOwner, IReadOnlyList<PlaylistMember> members)
+    {
+        var result = new List<Owner>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var rawOwner = RawOwnerId(header);
+        var owner = resolvedOwner ?? header.Owner;
+        if (owner is not null) Add(owner);
+        else if (rawOwner.Length > 0) Add(new Owner(ProfileId(rawOwner), header.OwnerName, null));
+
+        for (int i = 0; i < members.Count; i++)
+        {
+            var raw = members[i].AddedBy;
+            if (string.IsNullOrWhiteSpace(raw)) continue;
+            var profile = _userProfiles?.Get(raw);
+            Add(new Owner(profile?.Id ?? ProfileId(raw), profile?.Name ?? raw, profile?.Avatar));
+        }
+
+        return result.Count > 0 ? result : header.Collaborators;
+
+        void Add(Owner value)
+        {
+            var key = UserProfileIds.Normalize(value.Id) ?? value.Id;
+            if (!seen.Add(key)) return;
+            result.Add(value);
+        }
+    }
+
+    static string ProfileId(string raw)
+        => UserProfileIds.BareId(UserProfileIds.Normalize(raw) ?? raw);
+
+    void RegisterProfileDependency(string rawUserId, string playlistUri, bool collectionDependency)
+    {
+        var canonical = UserProfileIds.Normalize(rawUserId);
+        if (canonical is null) return;
+        lock (_profileGate)
+        {
+            if (!_profilePlaylistDeps.TryGetValue(canonical, out var playlists))
+                _profilePlaylistDeps[canonical] = playlists = new HashSet<string>(StringComparer.Ordinal);
+            playlists.Add(playlistUri);
+            if (collectionDependency) _profilePlaylistCollectionDeps.Add(canonical);
+        }
+    }
+
+    void OnProfileChanged(string userUri)
+    {
+        List<string>? playlists = null;
+        bool collection;
+        lock (_profileGate)
+        {
+            if (_profilePlaylistDeps.TryGetValue(userUri, out var deps)) playlists = new List<string>(deps);
+            collection = _profilePlaylistCollectionDeps.Contains(userUri);
+        }
+        if (playlists is not null)
+            for (int i = 0; i < playlists.Count; i++) _store.Bump(playlists[i]);
+        if (collection) _collections.OnNext(CollectionKind.Playlists);
+    }
+
     internal IReadOnlyList<string>? MosaicTilesOf(string uri)
     {
         var members = _store.Membership(uri);
@@ -315,5 +530,9 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         public void OnError(Exception e) { }
     }
 
-    public void Dispose() => _sub.Dispose();
+    public void Dispose()
+    {
+        _profileSub?.Dispose();
+        _sub.Dispose();
+    }
 }

@@ -95,6 +95,23 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     private const int MaxFreePooledTexturesPerBucket = 4;
     private int _atlasCount, _poolCount;
 
+    // Seam Step 1 (ASYNC only): Stage/Free/FlushUploads become render-thread-confined once the host wires the upload
+    // queue (AppHost drains it inside the render submit). Armed via MarkRenderConfined; a stray UI-thread Stage/Free then
+    // throws under FGGUARD. Inert in default/force-sync (force-sync stages UI-side with no overlap). [Conditional]-erased
+    // in Release. NOT set from D3D12Device.MarkRenderConfined (that's submit/present, both modes) — see the seam split.
+    private bool _renderConfined;
+    public void MarkRenderConfined() => _renderConfined = true;
+    [System.Diagnostics.Conditional("FGGUARD")]
+    private void AssertRenderThread() { if (_renderConfined) FluentGpu.Hosting.Threading.ThreadGuard.AssertRender(); }
+
+    // O(1) census mirrors of the former AtlasPageCount/PooledTextureCount ENUMERATIONS. Under async the store mutates on
+    // the render thread while DiagResourceTotals (FG_MEM_DIAG) reads the census on another thread: a foreach over _pages
+    // (torn Tex pointer) / _pool.Values (structural Dictionary add ⇒ InvalidOperationException) is unsafe. These ints are
+    // maintained at every Tex-alloc/free (atlas pages) and free-stack push/pop (pool), read via Volatile.Read. Interlocked
+    // is belt-and-suspenders — post-Step-1 both writers are render-side, but it costs ~nothing at these rare sites.
+    private int _atlasPageMirror;    // count of atlas pages with a live Tex (was: for-loop counting _pages[i].Tex != null)
+    private int _pooledFreeMirror;   // sum of the per-bucket free-pool stack depths (was: foreach _pool.Values .Count)
+
     public ID3D12DescriptorHeap* Heap => _srvHeap;
     public int DroppedThisRun { get; private set; }
     public int AtlasImages => _atlasCount;
@@ -111,16 +128,11 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     // ── MemCensus accessors (O(1), or a tiny fixed-bucket sum at census cadence — never per-frame) ──
     /// <summary>Images currently packed into atlas pages — O(1) census (alias of <see cref="AtlasImages"/>).</summary>
     internal int AtlasImageCount => _atlasCount;
-    internal int AtlasPageCount
-    {
-        get { int n = 0; for (int i = 0; i < _pages.Count; i++) if (_pages[i].Tex != null) n++; return n; }
-    }
+    internal int AtlasPageCount => System.Threading.Volatile.Read(ref _atlasPageMirror);
     /// <summary>FREE pooled bucket textures retained for reuse — sum of the per-bucket free stacks (a handful of
-    /// buckets; census cadence). Distinct from <see cref="PoolImages"/> (pooled textures currently IN USE).</summary>
-    internal int PooledTextureCount
-    {
-        get { int n = 0; foreach (var stk in _pool.Values) n += stk.Count; return n; }
-    }
+    /// buckets; census cadence). Distinct from <see cref="PoolImages"/> (pooled textures currently IN USE). O(1) mirror
+    /// (see <see cref="_pooledFreeMirror"/>) — enumerating <c>_pool</c> would race the render-thread pool mutation under async.</summary>
+    internal int PooledTextureCount => System.Threading.Volatile.Read(ref _pooledFreeMirror);
     /// <summary>Resources awaiting the deferred fence-gated reclaim (the retire list) — O(1) census.</summary>
     internal int RetiredCount => _retired.Count;
 
@@ -170,6 +182,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     /// copies pixels into a staging buffer with a 256-aligned row pitch. The GPU copy is deferred to <see cref="FlushUploads"/>.</summary>
     public ImageUploadResult Stage(int id, ReadOnlySpan<byte> pbgra8, int w, int h)
     {
+        AssertRenderThread();   // seam Step 1: render-confined under async (drained inside SubmitDrawList); UI-staged otherwise
         if (_device == null || w <= 0 || h <= 0 || pbgra8.Length < (long)w * h * 4)
             return ImageUploadResult.Invalid;
         int bucket = BucketFor(Math.Max(w, h));
@@ -250,6 +263,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     /// upload buffer — all DEFERRED behind the frame fence (an in-flight frame may still sample it).</summary>
     public void Free(int id)
     {
+        AssertRenderThread();   // seam Step 1: render-confined under async
         if (_byId.Remove(id, out var t))
         {
             _pendingCopies.Remove(id);
@@ -273,6 +287,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     /// deferred copies (atlas cells into their page; pool/standalone into the whole texture) and transition to PSR.</summary>
     public void FlushUploads(ID3D12GraphicsCommandList* cmd)
     {
+        AssertRenderThread();   // seam Step 1: render-confined under async (always render-side; assert makes it explicit)
         _frame++;
         for (int i = _retired.Count - 1; i >= 0; i--)
         {
@@ -332,7 +347,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     // ── pool ──────────────────────────────────────────────────────────────────
     private bool AcquirePooled(int bucket, out Pooled pt)
     {
-        if (_pool.TryGetValue(bucket, out var stk) && stk.Count > 0) { pt = stk.Pop(); return true; }
+        if (_pool.TryGetValue(bucket, out var stk) && stk.Count > 0) { pt = stk.Pop(); System.Threading.Interlocked.Decrement(ref _pooledFreeMirror); return true; }
         if (!TryAcquireSlot(out int slot)) { pt = default; return false; }
         var res = CreateTexture(bucket, bucket);            // cold pool growth (the only CreateTexture in steady state)
         CreateSrv(res, slot, out var srv);
@@ -356,6 +371,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
             return;
         }
         stk.Push(pt);
+        System.Threading.Interlocked.Increment(ref _pooledFreeMirror);   // free-pool depth +1 — census mirror
     }
 
     // ── atlas ─────────────────────────────────────────────────────────────────
@@ -378,6 +394,8 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         var pg = reuse >= 0 ? _pages[reuse] : new AtlasPage();
         pg.Free.Clear();
         pg.Tex = CreateTexture(PageSize, PageSize);
+        System.Threading.Interlocked.Increment(ref _atlasPageMirror);   // page gains a live Tex (null→non-null) — census mirror
+
         pg.Slot = slot;
         pg.Bucket = bucket;
         pg.Used = 0;
@@ -411,6 +429,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         D3D12MemoryDiagnostics.Release(pg.Tex, "Image.Texture");
         pg.Tex->Release();
         pg.Tex = null;
+        System.Threading.Interlocked.Decrement(ref _atlasPageMirror);   // page loses its live Tex (non-null→null) — census mirror
         pg.Srv = default;
         pg.Live = false;
         pg.State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST;

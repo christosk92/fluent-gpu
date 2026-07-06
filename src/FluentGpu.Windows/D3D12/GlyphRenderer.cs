@@ -25,6 +25,26 @@ internal struct GlyphInstance
     public float Pad;   // pad to 80 bytes: HLSL rounds structured-buffer stride up to 16 (float4 alignment)
 }
 
+/// <summary>A gradient-glyph instance for the sub-glyph karaoke wipe: like <see cref="GlyphInstance"/> but the per-PIXEL
+/// fill is a linear gradient along the run axis (before→after over a soft band at <see cref="Split"/>), so a single glyph
+/// straddling the split renders half sung / half unsung (BetterLyrics LyricsLineRendererBase). <see cref="Gt0"/>/<see
+/// cref="Gt1"/> are this glyph's run-local-x extent (0..1); the VS interpolates them across the quad → per-pixel run
+/// position. A SEPARATE path from <see cref="GlyphInstance"/> so normal text keeps its lean 80-byte single-color instance.
+/// Field ORDER keeps every float4 (m/before/after) at a 16-byte-aligned offset (structured-buffer rule), matching the HLSL.</summary>
+internal struct GradGlyphInstance
+{
+    public float DstX, DstY, DstW, DstH;       // dst(2) + size(2)
+    public float U0, V0, U1, V1;               // uv0(2) + uv1(2)
+    public float M11, M12, M21, M22;           // m (float4) — 2x3 world, rotation/scale part
+    public float BR, BG, BB, BA;               // before (sung) color
+    public float AR, AG, AB, AA;               // after (unsung) color
+    public float Dx, Dy;                       // t (float2) — world translation
+    public float Gt0, Gt1;                     // run-local-x extent of this glyph (0..1 along the run)
+    public float Split, Fade;                  // wipe split + soft fade band (run fractions)
+    public float Opacity;
+    public float Pad;                          // → 28 floats / 112 bytes
+}
+
 internal struct GlyphEntry { public int X, Y, W, H; public float BearingX, BearingY, Advance; }
 internal struct FaceMetrics { public ushort Em; public short Asc, Desc; }
 /// <summary>Glyph-atlas cache key. <paramref name="Fam"/> is a family id (codepoint path) OR a face id (glyph-id path);
@@ -181,6 +201,14 @@ internal sealed unsafe class GlyphRenderer : IDisposable
     private int _cursor;
     private int _active;
 
+    // Sub-glyph gradient-wipe path: a second PSO (per-pixel before→after fill) with its own instance buffers. Only the
+    // active lyric line + its glow feed it (~tens of glyphs), so a small cap; normal text never touches it.
+    private ID3D12PipelineState* _psoGrad;
+    private const int MaxGradGlyphs = 1024;
+    private readonly ID3D12Resource*[] _gradInstances = new ID3D12Resource*[FrameCount];
+    private readonly GradGlyphInstance*[] _mappedGrad = new GradGlyphInstance*[FrameCount];
+    private int _gradCursor;
+
     private const string Hlsl = """
 struct G { float2 dst; float2 size; float2 uv0; float2 uv1; float4 color; float4 m; float2 t; float opacity; float pad; };
 StructuredBuffer<G> gInst : register(t1);
@@ -209,6 +237,42 @@ float4 PSMain(VSOut i) : SV_Target
     float a = gAtlas.Sample(gSamp, i.uv).r;   // grayscale coverage, used directly (no gamma boost — that thickened all text)
     float aOut = i.color.a * a * i.opacity;
     return float4(i.color.rgb * aOut, aOut);   // premultiplied alpha
+}
+""";
+
+    // Sub-glyph karaoke wipe: same atlas/sampler/viewport bindings as the glyph shader, but the fill is a per-pixel linear
+    // gradient along the run axis. `gt` interpolates this glyph's run-local-x extent [gt0,gt1] across the quad, and the PS
+    // mixes before→after over a soft band at `split` — so a glyph straddling the split renders half sung / half unsung.
+    private const string HlslGrad = """
+struct GG { float2 dst; float2 size; float2 uv0; float2 uv1; float4 m; float4 before; float4 after; float2 t; float2 gt; float2 splitFade; float opacity; float pad; };
+StructuredBuffer<GG> gInstG : register(t1);
+Texture2D gAtlas : register(t0);
+SamplerState gSamp : register(s0);
+cbuffer Root : register(b0) { float2 gViewport; };
+struct VSOutG { float4 pos : SV_Position; float2 uv : TEXCOORD0; float4 before : TEXCOORD1; float4 after : TEXCOORD2; float opacity : TEXCOORD3; float gt : TEXCOORD4; float2 splitFade : TEXCOORD5; };
+
+VSOutG VSMain(float2 corner : POSITION, uint iid : SV_InstanceID)
+{
+    GG g = gInstG[iid];
+    float2 lp = g.dst + corner * g.size;
+    float2 world = float2(g.m.x * lp.x + g.m.z * lp.y + g.t.x, g.m.y * lp.x + g.m.w * lp.y + g.t.y);
+    float2 ndc = float2(world.x / gViewport.x * 2.0 - 1.0, 1.0 - world.y / gViewport.y * 2.0);
+    VSOutG o;
+    o.pos = float4(ndc, 0.0, 1.0);
+    o.uv = lerp(g.uv0, g.uv1, corner);
+    o.before = g.before; o.after = g.after; o.opacity = g.opacity;
+    o.gt = lerp(g.gt.x, g.gt.y, corner.x);   // run-local-x at this pixel column (0..1)
+    o.splitFade = g.splitFade;
+    return o;
+}
+
+float4 PSMain(VSOutG i) : SV_Target
+{
+    float cov = gAtlas.Sample(gSamp, i.uv).r;                                     // glyph coverage
+    float a = saturate((i.splitFade.x - i.gt) / max(i.splitFade.y, 1e-4) + 0.5);  // 1 = sung (before), 0 = unsung (after)
+    float4 col = lerp(i.after, i.before, a);
+    float aOut = col.a * cov * i.opacity;
+    return float4(col.rgb * aOut, aOut);   // premultiplied
 }
 """;
 
@@ -506,6 +570,109 @@ float4 PSMain(VSOut i) : SV_Target
         Replay(baked, colors, forceColor, color, world, opacity, inMotion ? 0f : SnapDy(baked, world, dpiScale), outList);
     }
 
+    private float[] _gradDy = Array.Empty<float>();
+    private float[] _gradScale = Array.Empty<float>();   // per-glyph scale pop at the wipe front (BetterLyrics char pop)
+    private float[] _gradRo0 = Array.Empty<float>();     // per-glyph reading-order LEFT  (continuous across wrapped visual lines)
+    private float[] _gradRo1 = Array.Empty<float>();     // per-glyph reading-order RIGHT
+
+    /// <summary>Glyph-WIPE variant of <see cref="LayoutRun"/> (the <c>GlyphWipe</c> primitive): shapes/caches the run
+    /// under the SAME <see cref="RunKey"/> (so re-using it costs no reshape), then computes a PER-GLYPH color + Y offset
+    /// from the wipe <paramref name="split"/> (0..1 along the run's x-extent) — left of the split is
+    /// <paramref name="before"/>, right is <paramref name="after"/>, with a <paramref name="softness"/>-wide soft
+    /// boundary and a <paramref name="lift"/>-DIP per-glyph float trailing it — and replays through the EXISTING
+    /// per-instance color/transform path (no new shader/PSO). The split advancing per frame only changes the computed
+    /// per-glyph values, never the cache key, so there is no per-frame reshape.</summary>
+    public void LayoutRunGradient(StringId textId, StringId familyId, string text, string family, float size, int weight, float originX, float topY, float maxWidth, int wrap, int trim, int maxLines,
+        float charSpacing, float lineHeight, int lineStacking, int lineBounds, ColorF before, ColorF after, float split, float softness, float lift, float dpiScale, Affine2D world, float opacity, List<GradGlyphInstance> outList,
+        int spanRunId = 0, bool inMotion = false)
+    {
+        var key = MakeRunKey(textId, familyId, size, weight, maxWidth, wrap, trim, maxLines, originX, topY, dpiScale, charSpacing, lineHeight, lineStacking, lineBounds, spanRunId);
+
+        ShapedGlyph[] quadsArr; int count;
+        ref var hit = ref CollectionsMarshal.GetValueRefOrNullRef(_runCache, key);
+        if (!Unsafe.IsNullRef(ref hit))
+        {
+            hit.LastUsedFrame = _frame; _runsCached++;
+            quadsArr = hit.Glyphs; count = hit.Count;
+        }
+        else
+        {
+            _scratch.Clear();
+            ShapeInto(text, family, size, weight, originX, topY, maxWidth, wrap, trim, maxLines, charSpacing, lineHeight, lineStacking, lineBounds, dpiScale, _scratch);
+            count = _scratch.Count;
+            var arr = RentQuads(count);
+            for (int i = 0; i < count; i++) arr[i] = _scratch[i];
+            _runCache[key] = new ShapedRun { Glyphs = arr, Colors = null, Count = count, LastUsedFrame = _frame };
+            _runsShaped++;
+            quadsArr = arr;
+        }
+
+        var quads = quadsArr.AsSpan(0, count);
+        if (count == 0) return;
+        if (_gradDy.Length < count) _gradDy = new float[count];
+        if (_gradScale.Length < count) _gradScale = new float[count];
+        if (_gradRo0.Length < count) _gradRo0 = new float[count];
+        if (_gradRo1.Length < count) _gradRo1 = new float[count];
+
+        // READING-ORDER wipe axis. The wipe `split` is a 0..1 fraction of the run's CONTENT IN READING ORDER, not of
+        // its raw x-extent. A wrapped run lays its 2nd+ visual lines back at x≈0 (EmitLine restarts the pen per line —
+        // TextLayoutEngine.EmitLine: `float x = 0f` per line), so a pure-x boundary (each glyph's DstX vs split·width)
+        // paints the LEFT glyphs of line 2 as "already sung" while the still-grey tail of line 1 sits at a LARGER x —
+        // i.e. out of reading order (the wrapped-2nd-line glow bug). Instead we exploit that the quads ARE in reading
+        // order (EmitLine appends each visual line in turn, left→right within the line; non-inking break glyphs are
+        // dropped upstream) and lay the lines END-TO-END into one monotonic coordinate: each glyph's position is
+        // (sum of all prior visual-line widths) + its offset from its OWN line's left edge. A visual-line break is where
+        // x jumps backward past a full em (within a line x only grows; a wrap resets it to the line origin — a jump of
+        // the whole preceding line's width). For a single (non-wrapped) line this collapses to a plain left-edge-to-
+        // right-edge normalization, so the boundary reaches the run's true right edge (the last glyph fully fills at
+        // split==1). `split`/`fade`/`lift` stay fractions of the total reading-order length.
+        float lineBase = 0f;                    // cumulative width of completed visual lines (reading-order origin of this line)
+        float lineMinX = quads[0].DstX;         // x-origin of the current visual line
+        float lineRight = quads[0].DstX;        // running right edge within the current visual line (x space)
+        float lineTol = MathF.Max(size, 1f);    // a wrap jumps back ≫ one em; within-line bearing/marks stay within it
+        for (int i = 0; i < count; i++)
+        {
+            float gx = quads[i].DstX;
+            if (i > 0 && gx < lineRight - lineTol)   // x jumped backward past a full line → a new visual line
+            {
+                lineBase += lineRight - lineMinX;    // bank the completed line's width
+                lineMinX = gx;
+                lineRight = gx;
+            }
+            float gr = gx + quads[i].DstW;
+            if (gr > lineRight) lineRight = gr;
+            _gradRo0[i] = lineBase + (gx - lineMinX);
+            _gradRo1[i] = lineBase + (gr - lineMinX);
+        }
+        float total = MathF.Max(lineBase + (lineRight - lineMinX), 1e-3f);
+        float fade = MathF.Max(softness, 1e-4f);
+        // Remap split onto the shader's boundary so the `fade`-wide soft band — which the gradient PS CENTRES on the
+        // boundary (a = saturate((split - gt)/fade + 0.5)) — fully clears the run at BOTH extremes: split==1 places the
+        // boundary half a band PAST the trailing edge (gt = 1 + fade/2) so the last glyph is 100% `before` (white), and
+        // split==0 half a band BEFORE the leading edge (gt = -fade/2) so nothing is sung. Without this the trailing
+        // fade/2 never fills — the "final syllable never reaches white" defect. The reading-order axis above already puts
+        // the last glyph's right edge at gt==1, so this remap is what COMPLETES it. s = split*(1+fade) - fade/2 is the
+        // exact closed-form inverse of the PS band: monotonic, pivoting at 0.5 (mid-line wipe timing unchanged), endpoint-exact.
+        float splitShader = split * (1f + fade) - 0.5f * fade;
+        // BetterLyrics per-char motion at the karaoke front (LyricsAnimator.cs): the SUNG run sits at the baseline while the
+        // unsung run is sunk by `lift` (≈10% line-height), each glyph rising into place as the wipe sweeps it; and the glyph
+        // AT the split magnifies (scale pop ≈1.12), settling to 1.0 within `popWindow` of the front. The colour wipe itself
+        // is per-PIXEL in the gradient PS (ReplayGradient feeds each glyph its reading-order extent), so the boundary cuts
+        // THROUGH a glyph — half sung / half unsung — not glyph-by-glyph.
+        const float popWindow = 0.12f;
+        float popPeak = lift > 0f ? 0.12f : 0f;
+        for (int i = 0; i < count; i++)
+        {
+            float gtc = (_gradRo0[i] + _gradRo1[i]) * 0.5f / total;   // glyph-centre reading-order position (drives float/scale)
+            float a = Math.Clamp((splitShader - gtc) / fade + 0.5f, 0f, 1f);
+            _gradDy[i] = lift * (1f - a);   // unsung sunk by `lift`, rising to the baseline (0) as it is swept (settles to 0 at split==1)
+            float d = MathF.Abs(splitShader - gtc);
+            _gradScale[i] = popPeak > 0f && d < popWindow ? 1f + popPeak * (1f - d / popWindow) : 1f;
+        }
+        ReplayGradient(quads, world, opacity, inMotion ? 0f : SnapDy(quads, world, dpiScale), before, after, splitShader, fade, total,
+            _gradRo0.AsSpan(0, count), _gradRo1.AsSpan(0, count), _gradDy.AsSpan(0, count), _gradScale.AsSpan(0, count), outList);
+    }
+
     /// <summary>Wire the interner so the run cache can drop runs whose text id was reclaimed (resolves empty).</summary>
     public void SetLivenessSource(StringTable strings) => _liveness = strings;
 
@@ -563,18 +730,55 @@ float4 PSMain(VSOut i) : SV_Target
     /// <paramref name="colors"/> (span runs): the per-quad span tint — A==0 inherits <paramref name="color"/>;
     /// <paramref name="forceColor"/> repaints every quad in <paramref name="color"/> regardless (the recorder's
     /// selected-text recolor re-emit, which must override span colors like WinUI's selection repaint).</summary>
-    private static void Replay(ReadOnlySpan<ShapedGlyph> glyphs, ColorF[]? colors, bool forceColor, ColorF color, Affine2D world, float opacity, float snapDy, List<GlyphInstance> outList)
+    private static void Replay(ReadOnlySpan<ShapedGlyph> glyphs, ColorF[]? colors, bool forceColor, ColorF color, Affine2D world, float opacity, float snapDy, List<GlyphInstance> outList, ReadOnlySpan<float> perGlyphDy = default, ReadOnlySpan<float> perGlyphScale = default)
     {
         for (int i = 0; i < glyphs.Length; i++)
         {
             ref readonly var s = ref glyphs[i];
             ColorF c = colors is not null && !forceColor && colors[i].A > 0f ? colors[i] : color;
+            float dx = s.DstX, dy = s.DstY + snapDy + (i < perGlyphDy.Length ? perGlyphDy[i] : 0f), dw = s.DstW, dh = s.DstH;
+            float sc = i < perGlyphScale.Length ? perGlyphScale[i] : 1f;
+            if (sc != 1f)   // scale the glyph quad about its own centre (UV unchanged → the cached bitmap magnifies)
+            {
+                dx += dw * (1f - sc) * 0.5f; dy += dh * (1f - sc) * 0.5f; dw *= sc; dh *= sc;
+            }
             outList.Add(new GlyphInstance
             {
-                DstX = s.DstX, DstY = s.DstY + snapDy, DstW = s.DstW, DstH = s.DstH,
+                DstX = dx, DstY = dy, DstW = dw, DstH = dh,
                 U0 = s.U0, V0 = s.V0, U1 = s.U1, V1 = s.V1,
                 R = c.R, G = c.G, B = c.B, A = c.A,
                 M11 = world.M11, M12 = world.M12, M21 = world.M21, M22 = world.M22, Dx = world.Dx, Dy = world.Dy, Opacity = opacity,
+            });
+        }
+    }
+
+    /// <summary>Emit gradient-glyph instances for the sub-glyph wipe: per glyph, apply the per-glyph float (Dy) + scale pop
+    /// to the quad and record its run-local-x extent [gt0,gt1] plus before/after/split/fade — the PS does the per-PIXEL
+    /// colour mix, so the wipe boundary cuts THROUGH glyphs (half sung / half unsung), not glyph-by-glyph.</summary>
+    private static void ReplayGradient(ReadOnlySpan<ShapedGlyph> glyphs, Affine2D world, float opacity, float snapDy,
+        ColorF before, ColorF after, float split, float fade, float total,
+        ReadOnlySpan<float> ro0, ReadOnlySpan<float> ro1,
+        ReadOnlySpan<float> perGlyphDy, ReadOnlySpan<float> perGlyphScale, List<GradGlyphInstance> outList)
+    {
+        float inv = 1f / total;
+        for (int i = 0; i < glyphs.Length; i++)
+        {
+            ref readonly var s = ref glyphs[i];
+            float dx = s.DstX, dy = s.DstY + snapDy + (i < perGlyphDy.Length ? perGlyphDy[i] : 0f), dw = s.DstW, dh = s.DstH;
+            float sc = i < perGlyphScale.Length ? perGlyphScale[i] : 1f;
+            if (sc != 1f) { dx += dw * (1f - sc) * 0.5f; dy += dh * (1f - sc) * 0.5f; dw *= sc; dh *= sc; }
+            outList.Add(new GradGlyphInstance
+            {
+                DstX = dx, DstY = dy, DstW = dw, DstH = dh,
+                U0 = s.U0, V0 = s.V0, U1 = s.U1, V1 = s.V1,
+                M11 = world.M11, M12 = world.M12, M21 = world.M21, M22 = world.M22, Dx = world.Dx, Dy = world.Dy,
+                BR = before.R, BG = before.G, BB = before.B, BA = before.A,
+                AR = after.R, AG = after.G, AB = after.B, AA = after.A,
+                // Reading-order extent of this glyph (continuous across wrapped visual lines), 0..1 along the run. The VS
+                // lerps gt0→gt1 across the quad's x — within a single glyph reading order is monotonic with x, so the
+                // per-pixel wipe through the glyph stays correct.
+                Gt0 = ro0[i] * inv, Gt1 = ro1[i] * inv,
+                Split = split, Fade = fade, Opacity = opacity,
             });
         }
     }
@@ -886,6 +1090,16 @@ float4 PSMain(VSOut i) : SV_Target
             ID3D12PipelineState* pso;
             Check(device->CreateGraphicsPipelineState(&pd, __uuidof<ID3D12PipelineState>(), (void**)&pso), "CreateGraphicsPipelineState(glyph)");
             _pso = pso;
+
+            // Sub-glyph gradient-wipe PSO: identical root sig / input layout / blend, swap in the gradient shaders.
+            ID3DBlob* vsg = ShaderCompiler.Compile(HlslGrad, "VSMain", "vs_5_1");
+            ID3DBlob* psg = ShaderCompiler.Compile(HlslGrad, "PSMain", "ps_5_1");
+            pd.VS = new D3D12_SHADER_BYTECODE { pShaderBytecode = vsg->GetBufferPointer(), BytecodeLength = vsg->GetBufferSize() };
+            pd.PS = new D3D12_SHADER_BYTECODE { pShaderBytecode = psg->GetBufferPointer(), BytecodeLength = psg->GetBufferSize() };
+            ID3D12PipelineState* psog;
+            Check(device->CreateGraphicsPipelineState(&pd, __uuidof<ID3D12PipelineState>(), (void**)&psog), "CreateGraphicsPipelineState(glyphGrad)");
+            _psoGrad = psog;
+            vsg->Release(); psg->Release();
         }
         vs->Release(); ps->Release();
 
@@ -898,6 +1112,8 @@ float4 PSMain(VSOut i) : SV_Target
         {
             _instances[f] = CreateUpload(device, (uint)(sizeof(GlyphInstance) * MaxGlyphs), "Glyph.InstanceUpload");
             void* ip; _instances[f]->Map(0, null, &ip); _mapped[f] = (GlyphInstance*)ip;   // persistently mapped
+            _gradInstances[f] = CreateUpload(device, (uint)(sizeof(GradGlyphInstance) * MaxGradGlyphs), "Glyph.GradInstanceUpload");
+            void* gp; _gradInstances[f]->Map(0, null, &gp); _mappedGrad[f] = (GradGlyphInstance*)gp;
         }
     }
 
@@ -905,6 +1121,7 @@ float4 PSMain(VSOut i) : SV_Target
     {
         _active = ((frameIndex % FrameCount) + FrameCount) % FrameCount;   // this frame's instance buffer — already fenced, so no CPU↔GPU race
         _cursor = 0;
+        _gradCursor = 0;
         _frame++;
         _runsCached = 0;
         _runsShaped = 0;
@@ -914,25 +1131,60 @@ float4 PSMain(VSOut i) : SV_Target
         if ((_frame & stride) == 0) EvictStaleRuns();
     }
 
-    public void Record(ID3D12GraphicsCommandList* cmd, List<GlyphInstance> instances, float vpW, float vpH)
+    /// <summary>Record one glyph run; <paramref name="rebind"/> false skips the static state (heap, root signature,
+    /// PSO, viewport constants, atlas table, topology, quad VB — still bound from a previous glyph run this frame;
+    /// see RoundRectPipeline.Record). Returns false when full (state untouched).</summary>
+    public bool Record(ID3D12GraphicsCommandList* cmd, List<GlyphInstance> instances, float vpW, float vpH, bool rebind = true)
     {
         int start = _cursor;
         int count = Math.Min(instances.Count, MaxGlyphs - start);
-        if (count <= 0) return;
+        if (count <= 0) return false;
         for (int i = 0; i < count; i++) _mapped[_active][start + i] = instances[i];
         _cursor += count;
 
-        ID3D12DescriptorHeap* heap = _srvHeap;
-        cmd->SetDescriptorHeaps(1, &heap);
-        cmd->SetGraphicsRootSignature(_rootSig);
-        cmd->SetPipelineState(_pso);
-        float* vp = stackalloc float[2] { vpW, vpH };
-        cmd->SetGraphicsRoot32BitConstants(0, 2, vp, 0);
-        cmd->SetGraphicsRootDescriptorTable(1, _srvGpu);
+        if (rebind)
+        {
+            ID3D12DescriptorHeap* heap = _srvHeap;
+            cmd->SetDescriptorHeaps(1, &heap);
+            cmd->SetGraphicsRootSignature(_rootSig);
+            cmd->SetPipelineState(_pso);
+            float* vp = stackalloc float[2] { vpW, vpH };
+            cmd->SetGraphicsRoot32BitConstants(0, 2, vp, 0);
+            cmd->SetGraphicsRootDescriptorTable(1, _srvGpu);
+            cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+            fixed (D3D12_VERTEX_BUFFER_VIEW* qv = &_quadView) cmd->IASetVertexBuffers(0, 1, qv);
+        }
         cmd->SetGraphicsRootShaderResourceView(2, _instances[_active]->GetGPUVirtualAddress() + (ulong)(start * sizeof(GlyphInstance)));
-        cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
-        fixed (D3D12_VERTEX_BUFFER_VIEW* qv = &_quadView) cmd->IASetVertexBuffers(0, 1, qv);
         cmd->DrawInstanced(4, (uint)count, 0, 0);
+        return true;
+    }
+
+    /// <summary>Draw the sub-glyph gradient-wipe instances (active lyric line + glow) with the gradient PSO — same atlas,
+    /// viewport, quad and double-buffering as <see cref="Record"/>, into whatever RT is bound (so a blur layer captures the
+    /// glow's gradient glyphs exactly like normal glyphs).</summary>
+    public bool RecordGradient(ID3D12GraphicsCommandList* cmd, List<GradGlyphInstance> instances, float vpW, float vpH, bool rebind = true)
+    {
+        int start = _gradCursor;
+        int count = Math.Min(instances.Count, MaxGradGlyphs - start);
+        if (count <= 0) return false;
+        for (int i = 0; i < count; i++) _mappedGrad[_active][start + i] = instances[i];
+        _gradCursor += count;
+
+        if (rebind)
+        {
+            ID3D12DescriptorHeap* heap = _srvHeap;
+            cmd->SetDescriptorHeaps(1, &heap);
+            cmd->SetGraphicsRootSignature(_rootSig);
+            cmd->SetPipelineState(_psoGrad);
+            float* vp = stackalloc float[2] { vpW, vpH };
+            cmd->SetGraphicsRoot32BitConstants(0, 2, vp, 0);
+            cmd->SetGraphicsRootDescriptorTable(1, _srvGpu);
+            cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+            fixed (D3D12_VERTEX_BUFFER_VIEW* qv = &_quadView) cmd->IASetVertexBuffers(0, 1, qv);
+        }
+        cmd->SetGraphicsRootShaderResourceView(2, _gradInstances[_active]->GetGPUVirtualAddress() + (ulong)(start * sizeof(GradGlyphInstance)));
+        cmd->DrawInstanced(4, (uint)count, 0, 0);
+        return true;
     }
 
     private static ID3D12Resource* CreateUpload(ID3D12Device* device, uint bytes, string name)

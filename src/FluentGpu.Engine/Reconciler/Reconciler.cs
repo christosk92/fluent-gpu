@@ -61,6 +61,7 @@ public sealed class TreeReconciler
     private readonly Dictionary<int, (Element[] Prev, int Len)> _forState = new();   // last realized children per ForEl node
     private readonly Dictionary<int, float> _childStagger = new();                   // node → per-child Enter stagger (ms): a parent's Element.Stagger, read by SynthesizeDeclarative
     private readonly Dictionary<string, NodeHandle> _keyNode = new();                 // MorphId → node: the shared-layout anchor a RelativeTo follower FLIPs against
+    private readonly Dictionary<int, string> _morphKeyByNode = new();                 // node → MorphId; gates shared-element teardown to actual participants
     private readonly Dictionary<int, string> _relativeKey = new();                    // follower node → the MorphId key it FLIPs relative to (Element.RelativeTo)
     // Skeleton-loading: per SkelRegionEl node, the last branch (0 none / 1 shimmer / 2 real / 3 failed), the last-mounted
     // child element (for ReconcileSingleChild's type-compare), and the reveal-group token (for the group coordinator).
@@ -116,6 +117,7 @@ public sealed class TreeReconciler
     }
     private readonly ScrollMemory _scrollMem = new();
     private readonly HashSet<int> _imagePinnedNodes = new();
+    private readonly Dictionary<int, List<NodeHandle>> _imageNodes = new();   // imageId → nodes that pinned it (for status→dirty)
     private readonly List<NodeHandle> _dirtyVirtualScratch = new();
 
     private Component? _root;
@@ -153,9 +155,11 @@ public sealed class TreeReconciler
     /// <summary>Set by the host; shared-element (connected-animation) registry. A node carrying <c>Element.MorphId</c> is
     /// registered as a participant here so its art flies between routes (backdrop-effects-animation.md §5.4/§5.6).</summary>
     public ConnectedAnimation? Connected { get; set; }
-    /// <summary>Set by the host (→ ScrollAnimator.Arm); injected into each component so a control can arm a viewport for a
+    /// <summary>Set by the host (→ ScrollIntegrator.Arm); injected into each component so a control can arm a viewport for a
     /// smooth programmatic scroll (set Target, then phase 7 eases the offset toward it).</summary>
     public Action<FluentGpu.Foundation.NodeHandle>? ArmScroll { get; set; }
+    /// <summary>Peek: any user scroll active or inside the host's post-scroll hold (see AppHost).</summary>
+    public Func<bool>? PeekMainScrollBusy { get; set; }
     /// <summary>Set by the host; image nodes request decodes through it and pin/unpin for residency (liveness).</summary>
     public ImageCache? Images { get; set; }
     /// <summary>Set by the host; bumped on any image status change so <c>UseImage</c> consumers re-render granularly.</summary>
@@ -164,7 +168,7 @@ public sealed class TreeReconciler
     public Action<NodeHandle>? OnSubtreeDeactivated { get; set; }
     /// <summary>Set by the host; called for each node as a subtree is parked/un-parked by KeepAlive so the animation +
     /// scroll tickers can quiesce that node's tracks (a parked, invisible tab must not keep the app awake / defeat the
-    /// idle wake-stop). Wired to <c>AnimEngine.SetNodeParked</c> + <c>ScrollAnimator.SetNodeParked</c>.</summary>
+    /// idle wake-stop). Wired to <c>AnimEngine.SetNodeParked</c> + <c>ScrollIntegrator.SetNodeParked</c>.</summary>
     public Action<NodeHandle, bool>? OnNodeParkedChanged { get; set; }
 
     public TreeReconciler(SceneStore scene, StringTable strings, ReactiveRuntime? runtime = null)
@@ -311,6 +315,7 @@ public sealed class TreeReconciler
         ctx.Images = Images;
         ctx.Scene = _scene;
         ctx.ArmScroll = ArmScroll;
+        ctx.PeekMainScrollBusy = PeekMainScrollBusy;
         ctx.AnchorNode = anchor;
         ctx.ResolveContextSignal = ResolveContext;
         ctx.ImageEpoch = ImageEpoch;
@@ -951,14 +956,61 @@ public sealed class TreeReconciler
     {
         if (Images is null || imageId == 0 || !_scene.IsLive(node) || !IsReachableFromRoot(node)) return;
         if (_imagePinnedNodes.Add((int)node.Raw.Index))
+        {
             Images.Pin(new ImageHandle(imageId));
+            TrackImageNode(imageId, node);
+        }
     }
 
     private void UnpinImageNode(NodeHandle node, int imageId)
     {
         if (Images is null || imageId == 0 || !_scene.IsLive(node)) return;
         if (_imagePinnedNodes.Remove((int)node.Raw.Index))
-            Images.Unpin(new ImageHandle(imageId));
+        {
+            var h = new ImageHandle(imageId);
+            Images.Unpin(h);
+            UntrackImageNode(imageId, node);
+            if (Images.RefsOf(h) == 0 && Images.StateOf(h) == ImageState.Pending)
+                Images.Cancel(h);
+        }
+    }
+
+    void TrackImageNode(int imageId, NodeHandle node)
+    {
+        if (!_imageNodes.TryGetValue(imageId, out var list))
+        {
+            list = new List<NodeHandle>(2);
+            _imageNodes[imageId] = list;
+        }
+        for (int i = 0; i < list.Count; i++) if (list[i] == node) return;
+        list.Add(node);
+    }
+
+    void UntrackImageNode(int imageId, NodeHandle node)
+    {
+        if (!_imageNodes.TryGetValue(imageId, out var list)) return;
+        for (int i = list.Count - 1; i >= 0; i--)
+        {
+            if (list[i] == node) list.RemoveAt(i);
+        }
+        if (list.Count == 0) _imageNodes.Remove(imageId);
+    }
+
+    /// <summary>Mark every on-screen Image node holding <paramref name="imageId"/> paint-dirty (image status landed).</summary>
+    public void MarkImageDirty(int imageId)
+    {
+        if (imageId == 0 || !_imageNodes.TryGetValue(imageId, out var list)) return;
+        for (int i = list.Count - 1; i >= 0; i--)
+        {
+            var node = list[i];
+            if (!_scene.IsLive(node) || _scene.Paint(node).ImageId != imageId)
+            {
+                list.RemoveAt(i);
+                continue;
+            }
+            _scene.Mark(node, NodeFlags.PaintDirty);
+        }
+        if (list.Count == 0) _imageNodes.Remove(imageId);
     }
 
     private bool IsReachableFromRoot(NodeHandle node)
@@ -986,6 +1038,16 @@ public sealed class TreeReconciler
             {
                 var fb = b.Fill.Thunk; var fs = b.Fill.Signal;
                 AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).Fill = fb is not null ? fb() : fs!.Value; _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
+            }
+            if (b.HoverFill.IsBound)
+            {
+                var hfb = b.HoverFill.Thunk; var hfs = b.HoverFill.Signal;
+                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).HoverFill = hfb is not null ? hfb() : hfs!.Value; _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
+            }
+            if (b.PressedFill.IsBound)
+            {
+                var pfb = b.PressedFill.Thunk; var pfs = b.PressedFill.Signal;
+                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).PressedFill = pfb is not null ? pfb() : pfs!.Value; _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
             }
             if (b.Validation.IsBound)
             {
@@ -1036,6 +1098,7 @@ public sealed class TreeReconciler
                 var cb = t.Color.Thunk; var cs = t.Color.Signal;
                 AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).TextColor = cb is not null ? cb() : cs!.Value; _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
             }
+            t.OnRealized?.Invoke(node);
         }
         else if (el is ImageEl ime)
         {
@@ -1050,11 +1113,14 @@ public sealed class TreeReconciler
                     int newId = Images is not null && src.Length > 0
                         ? Images.Request(src, dW, dH, ImagePriority.Visible, ime.BlurHash, ime.Transition).Id : 0;
                     ref var paint = ref _scene.Paint(node);
-                    if (newId == paint.ImageId) return;
-                    UnpinImageNode(node, paint.ImageId);
-                    paint.ImageId = newId;
-                    PinImageNode(node, newId);
-                    _scene.Mark(node, NodeFlags.PaintDirty);
+                    int oldId = paint.ImageId;
+                    if (newId != oldId)
+                    {
+                        UnpinImageNode(node, oldId);
+                        paint.ImageId = newId;
+                        if (newId != 0) PinImageNode(node, newId);
+                        _scene.Mark(node, NodeFlags.PaintDirty);
+                    }
                 }, owner: null, runNow: true));
             }
             if (ime.Placeholder.IsBound)
@@ -1432,7 +1498,7 @@ public sealed class TreeReconciler
         switch (el)
         {
             case TextEl t:
-                return !t.Text.IsBound && !t.Color.IsBound;
+                return !t.Text.IsBound && !t.Color.IsBound && t.OnRealized is null;
             case SpanTextEl:
                 return true;   // plain leaf — WriteColumns rewrites every column incl. the span run/handlers
             case ImageEl im:
@@ -1627,9 +1693,14 @@ public sealed class TreeReconciler
     {
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c)) UnmountSubtree(c);
 
-        SaveScroll(node);   // persist this viewport's offset for its ScrollKey so a cold revisit can restore it
-        Connected?.CaptureOnLeave(node, removeTag: true);   // shared-element: a tagged node leaving captures its reverse snapshot
         int idx = (int)node.Raw.Index;
+        Anim?.CancelAll(node);
+        SaveScroll(node);   // persist this viewport's offset for its ScrollKey so a cold revisit can restore it
+        if (_morphKeyByNode.Remove(idx, out string? morphKey))
+        {
+            RemoveMorphKey(node, morphKey);
+            Connected?.CaptureOnLeave(node, removeTag: true);   // shared-element: only tagged nodes participate
+        }
         if (_keepAliveState.Remove(idx, out var kas))
         {
             foreach (var ex in kas.Entries.Values)
@@ -1799,13 +1870,31 @@ public sealed class TreeReconciler
         return target;
     }
 
+    private void RemoveMorphKey(NodeHandle node, string key)
+    {
+        if (_keyNode.TryGetValue(key, out NodeHandle current) && current.Equals(node)) _keyNode.Remove(key);
+    }
+
     private void WriteColumns(NodeHandle node, Element el, bool isMount, Element? old = null)
     {
         // Shared-element (connected-animation) tag: a node carrying MorphId is a Hero participant — its laid-out rect +
         // art are tracked so they fly between routes. Runs for every element type (cover Image, skeleton/cover Box).
-        if (el.MorphId is { Length: > 0 } morphKey) { Connected?.NoteTagged(node, morphKey); _keyNode[morphKey] = node; }
+        int nodeIdx = (int)node.Raw.Index;
+        if (el.MorphId is { Length: > 0 } morphKey)
+        {
+            if (_morphKeyByNode.TryGetValue(nodeIdx, out string? oldMorphKey) && oldMorphKey != morphKey)
+                RemoveMorphKey(node, oldMorphKey);
+            _morphKeyByNode[nodeIdx] = morphKey;
+            Connected?.NoteTagged(node, morphKey);
+            _keyNode[morphKey] = node;
+        }
+        else if (_morphKeyByNode.Remove(nodeIdx, out string? oldMorphKey))
+        {
+            RemoveMorphKey(node, oldMorphKey);
+            Connected?.CaptureOnLeave(node, removeTag: true);
+        }
         // FLIP relativeTarget: record the follower → anchor-key link (resolved live by ResolveRelativeTarget at capture).
-        if (el.RelativeTo is { Length: > 0 } relKey) _relativeKey[(int)node.Raw.Index] = relKey; else _relativeKey.Remove((int)node.Raw.Index);
+        if (el.RelativeTo is { Length: > 0 } relKey) _relativeKey[nodeIdx] = relKey; else _relativeKey.Remove(nodeIdx);
 
         // Generic scroll-driven bindings (sticky / overscroll-stretch / parallax / fade / collapse / shy / pull-to-refresh):
         // compiled to POD ScrollBind rows for every element type, replacing the old per-feature StickyTop/ScrollStretchHeader passes.
@@ -1821,7 +1910,9 @@ public sealed class TreeReconciler
             case BoxEl b:
             {
                 ref NodePaint paint = ref _scene.Paint(node);
-                bool hasSurface = b.TabShape || b.Fill.IsBound || b.Fill.Value.A > 0f || b.HoverFill.A > 0f || b.PressedFill.A > 0f
+                bool hasSurface = b.TabShape || b.Fill.IsBound || b.Fill.Value.A > 0f
+                                  || b.HoverFill.IsBound || b.HoverFill.Value.A > 0f
+                                  || b.PressedFill.IsBound || b.PressedFill.Value.A > 0f
                                   || b.BorderWidth > 0f || b.OnClick is not null || b.Gradient is not null || b.BorderBrush is not null;
                 paint.VisualKind = b.TabShape ? VisualKind.TabShape : hasSurface ? VisualKind.Box : VisualKind.None;
 
@@ -1858,8 +1949,8 @@ public sealed class TreeReconciler
                 // Guarded like Opacity/Width/Height/Text: a bound fill is owned by its effect — the static must never
                 // clobber it on an update between signal fires (mount was safe only because the bind fires after this).
                 if (fillOwned) paint.Fill = b.Fill.Value;
-                paint.HoverFill = b.HoverFill;
-                paint.PressedFill = b.PressedFill;
+                if (!b.HoverFill.IsBound) paint.HoverFill = b.HoverFill.Value;
+                if (!b.PressedFill.IsBound) paint.PressedFill = b.PressedFill.Value;
                 paint.BorderColor = b.BorderColor;
                 paint.HoverBorderColor = b.HoverBorderColor;
                 paint.PressedBorderColor = b.PressedBorderColor;
@@ -1915,6 +2006,7 @@ public sealed class TreeReconciler
                 paint.PressedOpacity = b.PressedOpacity;
                 paint.OpacityGroup = b.OpacityGroup;
                 paint.BlurSigma = b.Blur;   // self-blur (Expressive Motion Kit); phase-7 AnimChannel.Blur overrides for animated nodes
+                paint.BlurCachePolicy = b.BlurCachePolicy;
 
 
 
@@ -2199,6 +2291,8 @@ public sealed class TreeReconciler
                 sc.Layout = v.Layout;
                 sc.Overscan = v.Overscan;
                 sc.EdgeCueConfig = ResolveEdgeCues(v.EdgeCues);
+                if (v.OnScrollGeometryChanged is { } obs) _scene.SetScrollObserver(node, obs.Project, obs.Action);
+                else _scene.ClearScrollObserver(node);
                 if (v.EdgeFade is { } vef) _scene.SetEdgeFade(node, vef); else _scene.ClearEdgeFade(node);
                 sc.AutoEdgeFade = v.AutoEdgeFade; sc.AutoEdgeFadeBand = v.AutoEdgeFade ? 24f : 0f;
                 sc.SuppressBar = v.SuppressScrollBar;
@@ -2275,7 +2369,8 @@ public sealed class TreeReconciler
                     {
                         UnpinImageNode(node, oldId);
                         paint.ImageId = newId;
-                        PinImageNode(node, newId);
+                        if (newId != 0) PinImageNode(node, newId);
+                        _scene.Mark(node, NodeFlags.PaintDirty);
                     }
                 }
 
@@ -2316,6 +2411,11 @@ public sealed class TreeReconciler
                 paint.TextPressedColor = t.PressedColor;
                 paint.TextDisabledColor = t.DisabledColor;
                 paint.TextFocusedColor = t.FocusedColor;
+                // Glyph wipe (general text-reveal; the lyrics karaoke uses it): a SPARSE side-table, not the hot paint
+                // struct. Mark dirty when it changes so the wiped line re-records as the split advances (reshape-free).
+                if (!Nullable.Equals(_scene.TryGetGlyphWipe(node, out var prevWipe) ? prevWipe : (GlyphWipe?)null, t.Wipe))
+                    _scene.Mark(node, NodeFlags.PaintDirty);
+                _scene.SetGlyphWipe(node, t.Wipe);
                 paint.TextDecorations = (byte)((t.Underline ? NodePaint.UnderlineBit : 0)
                                              | (t.Strikethrough ? NodePaint.StrikethroughBit : 0));
                 _scene.SetDynamicText(node, t.DynamicText);

@@ -160,6 +160,7 @@ public sealed partial class RenderContext
 {
     private readonly List<HookCell> _cells = new();
     private int _cursor;
+    private int _cleanupCellCount;
     private bool _mounted;
 
     public readonly List<Action> PendingEffects = new();        // UseEffect — after present (phase 12)
@@ -173,7 +174,10 @@ public sealed partial class RenderContext
     public AnimEngine? Anim;
     public ImageCache? Images;                  // host-injected; backs UseImage / PrefetchImage
     public SceneStore? Scene;                   // reconciler-injected; for measuring nodes (AbsoluteRect) + overlay positioning
-    public Action<NodeHandle>? ArmScroll;       // host-injected (→ ScrollAnimator.Arm): arm a viewport so phase 7 eases Offset→Target (smooth programmatic scroll)
+    public Action<NodeHandle>? ArmScroll;       // host-injected (→ ScrollIntegrator.Arm): arm a viewport so phase 7 eases Offset→Target (smooth programmatic scroll)
+    /// <summary>Host-injected peek: true while ANY viewport is in user scroll (wheel/fling/drag) or inside the post-scroll
+    /// hold window. Apps use this to defer heavy per-frame work (e.g. lyrics glow/wipe) so main-content scroll stays smooth.</summary>
+    public Func<bool>? PeekMainScrollBusy;
     public NodeHandle HostNode;                 // this component's rendered child (animation hooks target it)
     public NodeHandle AnchorNode;               // this component's anchor in the scene (context resolution walks up from here)
     public Func<NodeHandle, object, Signal<object?>?>? ResolveContextSignal;   // (anchor, channel) → nearest provider signal
@@ -217,11 +221,18 @@ public sealed partial class RenderContext
     /// <summary>Run every pending effect cleanup + dispose owned reactive primitives (component unmount).</summary>
     public void RunAllCleanups()
     {
+        if (_cleanupCellCount == 0) return;
         foreach (var cell in _cells)
         {
             if (cell is EffectCell e) e.Cleanup?.Invoke();
             else if (cell is IDisposableCell d) d.DisposeCell();
         }
+    }
+
+    private void AddCell(HookCell cell, bool cleanupCapable = false)
+    {
+        _cells.Add(cell);
+        if (cleanupCapable) _cleanupCellCount++;
     }
 
     private ReactiveRuntime Rt => Runtime ?? throw new InvalidOperationException("RenderContext.Runtime not set (component not mounted by the host).");
@@ -292,7 +303,7 @@ public sealed partial class RenderContext
     public Memo<T> UseComputed<T>(Func<T> compute)
     {
         MemoHookCell<T> cell;
-        if (!_mounted) { cell = new MemoHookCell<T>(new Memo<T>(Rt, compute)); _cells.Add(cell); }
+        if (!_mounted) { cell = new MemoHookCell<T>(new Memo<T>(Rt, compute)); AddCell(cell, cleanupCapable: true); }
         else cell = (MemoHookCell<T>)_cells[_cursor];
         _cursor++;
         return cell.Memo;
@@ -314,7 +325,7 @@ public sealed partial class RenderContext
     public void UseSignalEffect(Action effect)
     {
         SignalEffectCell cell;
-        if (!_mounted) { cell = new SignalEffectCell(new Effect(Rt, effect)); _cells.Add(cell); }
+        if (!_mounted) { cell = new SignalEffectCell(new Effect(Rt, effect)); AddCell(cell, cleanupCapable: true); }
         else cell = (SignalEffectCell)_cells[_cursor];
         _cursor++;
     }
@@ -322,7 +333,7 @@ public sealed partial class RenderContext
     private void EffectImpl(Action effect, object[] deps, List<Action> target)
     {
         EffectCell cell;
-        if (!_mounted) { cell = new EffectCell(); _cells.Add(cell); }
+        if (!_mounted) { cell = new EffectCell(); AddCell(cell, cleanupCapable: true); }
         else { DebugGuardCursor(); cell = (EffectCell)_cells[_cursor]; }
         _cursor++;
 
@@ -337,7 +348,7 @@ public sealed partial class RenderContext
     private void EffectImplKey(Action effect, DepKey deps, List<Action> target)
     {
         EffectCell cell;
-        if (!_mounted) { cell = new EffectCell(); _cells.Add(cell); }
+        if (!_mounted) { cell = new EffectCell(); AddCell(cell, cleanupCapable: true); }
         else { DebugGuardCursor(); cell = (EffectCell)_cells[_cursor]; }
         _cursor++;
 
@@ -448,7 +459,7 @@ public sealed partial class RenderContext
             var memo = new Memo<bool>(Rt, () =>
                 (componentActive is null || componentActive().Value) && (windowVisible is null || windowVisible.Value));
             cell = new MemoHookCell<bool>(memo);
-            _cells.Add(cell);
+            AddCell(cell, cleanupCapable: true);
         }
         else cell = (MemoHookCell<bool>)_cells[_cursor];
         _cursor++;
@@ -485,7 +496,7 @@ public sealed partial class RenderContext
                 Reactive.Untrack(() => { if (now) on?.Invoke(); else off?.Invoke(); });
             });
             cell = new SignalEffectCell(effect);
-            _cells.Add(cell);
+            AddCell(cell, cleanupCapable: true);
         }
         else cell = (SignalEffectCell)_cells[_cursor];
         _cursor++;
@@ -625,7 +636,11 @@ public sealed partial class RenderContext
     {
         var post = UsePost();   // UsePost consumes no hook cursor, so calling it here does not shift hook order
         AsyncResourceCell<T> cell;
-        if (!_mounted) { cell = new AsyncResourceCell<T> { Loadable = Loadable<T>.Pending(seed), Cts = new CancellationTokenSource() }; _cells.Add(cell); }
+        if (!_mounted)
+        {
+            cell = new AsyncResourceCell<T> { Loadable = Loadable<T>.Pending(seed), Cts = new CancellationTokenSource() };
+            AddCell(cell, cleanupCapable: true);
+        }
         else cell = (AsyncResourceCell<T>)_cells[_cursor];
         _cursor++;
 
@@ -646,7 +661,7 @@ public sealed partial class RenderContext
         if (!_mounted)
         {
             cell = new AsyncResourceCell<T> { Loadable = Loadable<T>.Pending(seed), Cts = new CancellationTokenSource(), Deps = deps };
-            _cells.Add(cell);
+            AddCell(cell, cleanupCapable: true);
             _cursor++;
             BeginAsyncLoad(cell, loader, post);
             return cell.Loadable;
@@ -700,7 +715,11 @@ public sealed partial class RenderContext
     {
         var post = UsePost();   // UseContext consumes no hook cursor (calling it here does not shift hook order)
         AsyncCommandCell cell;
-        if (!_mounted) { cell = new AsyncCommandCell { Command = new AsyncCommand(post), CancelOnUnmount = cancelOnUnmount }; _cells.Add(cell); }
+        if (!_mounted)
+        {
+            cell = new AsyncCommandCell { Command = new AsyncCommand(post), CancelOnUnmount = cancelOnUnmount };
+            AddCell(cell, cleanupCapable: true);
+        }
         else cell = (AsyncCommandCell)_cells[_cursor];
         _cursor++;
         return cell.Command;
@@ -712,7 +731,11 @@ public sealed partial class RenderContext
     {
         var post = UsePost();
         AsyncCommandSetCell<TKey> cell;
-        if (!_mounted) { cell = new AsyncCommandSetCell<TKey> { Commands = new AsyncCommandSet<TKey>(post), CancelOnUnmount = cancelOnUnmount }; _cells.Add(cell); }
+        if (!_mounted)
+        {
+            cell = new AsyncCommandSetCell<TKey> { Commands = new AsyncCommandSet<TKey>(post), CancelOnUnmount = cancelOnUnmount };
+            AddCell(cell, cleanupCapable: true);
+        }
         else cell = (AsyncCommandSetCell<TKey>)_cells[_cursor];
         _cursor++;
         return cell.Commands;

@@ -3,7 +3,10 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Wavee.Backend.Collections;
 using Wavee.Backend.Playlists;
+using Wavee.Backend.Spotify;
+using Pl = Wavee.Protocol.Playlist;
 
 namespace Wavee.Backend;
 
@@ -41,16 +44,37 @@ public interface IMutationOutbox
 /// desired state; a server no-op when already in that state. Rollback reverts on terminal failure.</summary>
 public sealed class SetReplayStrategy : IMutationStrategy
 {
+    const string VendorType = "application/vnd.collection-v2.spotify.proto";
+
+    // The echo ring (§7.1) records the client_update_id of each ACCEPTED write so LibrarySync can drop our own PubSubUpdate
+    // echo. Nullable: tests/scaffold that don't exercise echo suppression pass none; production always wires it.
+    readonly CollectionEchoRing? _echoRing;
+
+    public SetReplayStrategy(CollectionEchoRing? echoRing = null) => _echoRing = echoRing;
+
     public string Type => "set";
     public bool OfflineQueueable => true;
 
     public void ApplyOptimistic(OutboxOp op, IStore store)
-        => store.SetSaved(op.SetId, op.EntityKey, op.TargetSaved, SyncState.Pending);
+        // added_at = now for a save (the local like time — the server echo refines it); an unsave removes the row.
+        => store.SetSaved(op.SetId, op.EntityKey, op.TargetSaved, SyncState.Pending,
+                          op.TargetSaved ? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() : 0);
 
+    // §2.4 (fixes RC4): the real collection write — POST /collection/v2/write with the vendor media type (the gateway 400s
+    // on the generic type at the media-type layer) and an EXPLICIT method (never the RC4 bodyless-GET inference). The body is
+    // a single-item WriteRequest carrying the desired end-state (added_at in UNIX SECONDS); on accept the cuid is recorded.
     public async Task<bool> Replay(OutboxOp op, ITransport t, SessionContext ctx, CancellationToken ct)
     {
-        var verb = op.TargetSaved ? "add" : "remove";
-        var r = await t.Request(Channel.Spclient, $"/collection/{op.SetId}/{verb}/{op.EntityKey}", default, ct).ConfigureAwait(false);
+        var cuid = Guid.NewGuid().ToString("N");
+        var body = CollectionWriteMapper.BuildWrite(ctx.Account, op.SetId, op.EntityKey, op.TargetSaved,
+                                                    DateTimeOffset.UtcNow.ToUnixTimeSeconds(), cuid);
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Content-Type"] = VendorType,
+            ["Accept"] = VendorType,
+        };
+        var r = await t.Request(Channel.Spclient, "/collection/v2/write", body, ct, method: "POST", headers: headers).ConfigureAwait(false);
+        if (r.Ok) _echoRing?.Record(cuid);   // register the echo id (§7.1)
         return r.Ok;
     }
 
@@ -63,6 +87,9 @@ public sealed class SetReplayStrategy : IMutationStrategy
 /// pre-edit membership snapshot (for rollback on terminal failure) is engine-managed.</summary>
 public sealed class OpRebaseStrategy : IMutationStrategy
 {
+    readonly IStore _store;
+    public OpRebaseStrategy(IStore store) => _store = store;
+
     public string Type => "oprebase";
     public bool OfflineQueueable => true;
 
@@ -74,15 +101,165 @@ public sealed class OpRebaseStrategy : IMutationStrategy
         store.SetMembership(op.EntityKey, list, store.PlaylistRevision(op.EntityKey));
     }
 
+    // §2.7 — the /changes POST now (1) carries the first-party header set + an EXPLICIT POST method (a bare POST 200-OKs
+    // against a passive read handler → a silent no-op; that latent RC-class bug in playlist edits is fixed here), and (2)
+    // REBASES per attempt against the freshest stored revision (mirroring the reference), then CAPTURES the 200 response as
+    // the fresh membership + revision (the response IS the fresh list) so echo suppression (§7.3) sees a matching revision.
     public async Task<bool> Replay(OutboxOp op, ITransport t, SessionContext ctx, CancellationToken ct)
     {
         var path = op.EntityKey.StartsWith("spotify:", StringComparison.Ordinal) ? op.EntityKey.Substring(8).Replace(':', '/') : op.EntityKey;
-        var body = PlaylistWireMapper.BuildChanges(op.BaseRev, op.Ops ?? Array.Empty<PlaylistOp>());
-        var r = await t.Request(Channel.Spclient, $"/playlist/v2/{path}/changes", body, ct).ConfigureAwait(false);
-        return r.Ok;   // a 409 (revision conflict) surfaces as !Ok → retry/rebase on the next drain
+        var baseRev = _store.PlaylistRevision(op.EntityKey) ?? op.BaseRev;   // rebase per attempt: freshest cached rev wins
+        var body = PlaylistWireMapper.BuildChanges(baseRev, op.Ops ?? Array.Empty<PlaylistOp>());
+        var headers = SpotifyHeaders.PlaylistV2Mutation();
+        var r = await t.Request(Channel.Spclient, $"/playlist/v2/{path}/changes", body, ct, method: "POST", headers: headers).ConfigureAwait(false);
+        if (r.Ok) { CaptureChangesResponse(op.EntityKey, r.Body); return true; }
+        return false;   // a 409 (revision conflict) surfaces as !Ok → retry rebased against the fresher cached revision next drain
+    }
+
+    // Fold the /changes SelectedListContent response back into the store: full contents → replace membership + revision;
+    // rev-only (no contents) → advance just the revision, keeping current rows. Zstd-guarded (§2.7).
+    void CaptureChangesResponse(string uri, byte[] body)
+    {
+        var bytes = SpotifyZstd.MaybeDecompressZstd(body);
+        if (bytes.Length == 0) return;
+        Pl.SelectedListContent slc;
+        try { slc = Pl.SelectedListContent.Parser.ParseFrom(bytes); }
+        catch { return; }
+        var rev = PlaylistWireMapper.ResultingRevision(slc);
+        if (slc.Contents is { } contents && contents.Items.Count > 0)
+        {
+            var (members, _) = PlaylistWireMapper.ParseContents(slc);
+            _store.SetMembership(uri, members, rev ?? _store.PlaylistRevision(uri));
+        }
+        else if (rev is not null)
+            _store.SetMembership(uri, _store.Membership(uri), rev);   // rev-only: keep current rows, advance the revision
     }
 
     public void Rollback(OutboxOp op, IStore store) { /* membership restore is engine-managed via the pre-edit snapshot */ }
+}
+
+/// <summary>RootlistFollow (§2.5, fixes RC3): following/unfollowing a playlist is a rootlist ADD/REM, not a collection
+/// write. Optimistic-flips the "playlists" saved pill + edits the rootlist entry list inline; replays as a POST of the
+/// rootlist ListChanges body to /playlist/v2/user/{username}/rootlist/changes against the stored rootlist revision
+/// (bootstrapped once via a GET if absent). The 200 response IS the fresh rootlist → captured; a 409 refetches the base
+/// so the next drain rebases.</summary>
+public sealed class RootlistFollowStrategy : IMutationStrategy
+{
+    readonly IStore _store;
+    public RootlistFollowStrategy(IStore store) => _store = store;
+
+    public string Type => "rootlist";
+    public bool OfflineQueueable => true;
+
+    // (1) flip the pill (Pending — the Saved union folds it this frame, §2.8) and (2) edit the rootlist entry inline so the
+    // sidebar reflects it immediately (follow → insert at position 0; unfollow → drop the matching row). Rev-preserving.
+    public void ApplyOptimistic(OutboxOp op, IStore store)
+    {
+        var uri = op.EntityKey;
+        bool follow = op.TargetSaved;
+        store.SetSaved("playlists", uri, follow, SyncState.Pending,
+                       follow ? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() : 0);
+        var next = follow ? InsertFollow(store.Rootlist(), uri) : RemoveFollow(store.Rootlist(), uri);
+        if (next is not null) store.SetRootlist(next);   // 1-arg overload preserves the stored revision (§2.6)
+    }
+
+    public async Task<bool> Replay(OutboxOp op, ITransport t, SessionContext ctx, CancellationToken ct)
+    {
+        var uri = op.EntityKey;
+        bool follow = op.TargetSaved;
+        long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        // (1) base revision — one-time bootstrap of the rootlist if we don't have it.
+        var rev = _store.RootlistRevision();
+        if (rev is null) rev = await BootstrapRootlistAsync(t, ctx, ct).ConfigureAwait(false);
+
+        // (2) the op: follow → ADD at index 0 with item attributes (timestamp ms + public); unfollow → keyed REM
+        // (items_as_key: remove by uri, order-independent). NEVER index-based and never skipped-on-local-absence — the
+        // optimistic edit already removed the local row before this replay runs, so local absence proves nothing about
+        // the server; the server treats removing an absent uri as a no-op success.
+        var plop = follow
+            ? new PlaylistOp(PlaylistOpKind.Add, FromIndex: 0, Items: new[] { new PlaylistMember("", uri, null, nowMs) })
+            : new PlaylistOp(PlaylistOpKind.Remove, Items: new[] { new PlaylistMember("", uri, null, 0) }, ItemsAsKey: true);
+
+        // (3) body — the rootlist ListChanges shape (Delta.Info + want-flags + a nonce + ADD item attributes).
+        var body = PlaylistWireMapper.BuildRootlistChanges(rev, new[] { plop }, ctx.Account, nowMs);
+
+        // (4) POST with the first-party header set + explicit method.
+        var route = $"/playlist/v2/user/{ctx.Account}/rootlist/changes";
+        var r = await t.Request(Channel.Spclient, route, body, ct, method: "POST", headers: SpotifyHeaders.PlaylistV2Mutation()).ConfigureAwait(false);
+
+        // (5) 200 → capture the fresh rootlist/revision; 409 → refetch base (revision moved) + retry next drain; else fail.
+        if (r.Ok) { ApplyRootlistResponse(r.Body); return true; }
+        if (r.Status == 409) { await BootstrapRootlistAsync(t, ctx, ct).ConfigureAwait(false); return false; }
+        return false;
+    }
+
+    // undo the optimistic entry edit + flip the pill back (a subsequent authoritative refetch reconciles ordering).
+    public void Rollback(OutboxOp op, IStore store)
+    {
+        var uri = op.EntityKey;
+        bool follow = op.TargetSaved;
+        store.SetSaved("playlists", uri, !follow, SyncState.Confirmed);
+        var next = follow ? RemoveFollow(store.Rootlist(), uri) : InsertFollow(store.Rootlist(), uri);
+        if (next is not null) store.SetRootlist(next);
+    }
+
+    // GET the rootlist revision (+ contents if present); returns the resulting revision. Non-2xx → keep whatever's stored.
+    async Task<byte[]?> BootstrapRootlistAsync(ITransport t, SessionContext ctx, CancellationToken ct)
+    {
+        var route = $"/playlist/v2/user/{ctx.Account}/rootlist?decorate=revision";
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["Accept"] = "application/protobuf" };
+        var r = await t.Request(Channel.Spclient, route, ReadOnlyMemory<byte>.Empty, ct, method: "GET", headers: headers).ConfigureAwait(false);
+        if (!r.Ok) return _store.RootlistRevision();
+        return ApplyRootlistResponse(r.Body);
+    }
+
+    // Fold a rootlist SelectedListContent (bootstrap GET or /changes POST) into the store: full contents → rebuild entries +
+    // revision; rev-only → advance just the revision (entries preserved). Zstd-guarded (§2.7). Returns the resulting revision.
+    byte[]? ApplyRootlistResponse(byte[] body)
+    {
+        var bytes = SpotifyZstd.MaybeDecompressZstd(body);
+        if (bytes.Length == 0) return _store.RootlistRevision();
+        Pl.SelectedListContent slc;
+        try { slc = Pl.SelectedListContent.Parser.ParseFrom(bytes); }
+        catch { return _store.RootlistRevision(); }
+        var rev = PlaylistWireMapper.ResultingRevision(slc);
+        if (slc.Contents is { } contents && contents.Items.Count > 0)
+        {
+            var uris = new List<string>(contents.Items.Count);
+            foreach (var it in contents.Items) uris.Add(it.Uri);
+            _store.SetRootlist(RootlistTreeBuilder.EntriesFromUris(uris), rev);
+        }
+        else if (rev is not null)
+            _store.SetRootlist(_store.Rootlist(), rev);   // rev-only: keep current entries, advance the revision
+        return rev ?? _store.RootlistRevision();
+    }
+
+    // insert a followed playlist at position 0 (skip if already present); returns null on no-op.
+    static IReadOnlyList<RootlistEntry>? InsertFollow(IReadOnlyList<RootlistEntry> cur, string uri)
+    {
+        for (int i = 0; i < cur.Count; i++) if (cur[i].Kind == 0 && cur[i].Uri == uri) return null;   // already followed
+        var list = new List<RootlistEntry>(cur.Count + 1) { new RootlistEntry(0, 0, uri, null, 0) };
+        for (int i = 0; i < cur.Count; i++) list.Add(cur[i]);
+        return Renumber(list);
+    }
+
+    // remove the first matching kind-0 row; returns null when absent (no-op).
+    static IReadOnlyList<RootlistEntry>? RemoveFollow(IReadOnlyList<RootlistEntry> cur, string uri)
+    {
+        int found = -1;
+        for (int i = 0; i < cur.Count; i++) if (cur[i].Kind == 0 && cur[i].Uri == uri) { found = i; break; }
+        if (found < 0) return null;
+        var list = new List<RootlistEntry>(cur.Count - 1);
+        for (int i = 0; i < cur.Count; i++) if (i != found) list.Add(cur[i]);
+        return Renumber(list);
+    }
+
+    static IReadOnlyList<RootlistEntry> Renumber(List<RootlistEntry> list)
+    {
+        for (int i = 0; i < list.Count; i++) list[i] = list[i] with { Position = i };
+        return list;
+    }
 }
 
 public sealed class MutationEngine
@@ -97,23 +274,42 @@ public sealed class MutationEngine
     // the server permits duplicate playlist items, so edits must NOT dedupe).
     readonly Dictionary<string, OutboxOp> _outbox = new();
     readonly Dictionary<long, IReadOnlyList<PlaylistMember>> _editSnapshots = new();   // pre-edit membership, for OpRebase rollback
+    // §8.3 — per-op replay backoff (in-memory only: after a restart, attempts reload from SQLite and the clock resets —
+    // a restart is a natural retry moment). Drain skips ops whose next-attempt time hasn't come; cleared on success/dead-letter.
+    readonly Dictionary<long, DateTime> _nextAttemptAt = new();
+    readonly Func<DateTime> _now;
     long _seq;
 
-    static string KeyOf(OutboxOp op) => op.Type == "set" ? $"set|{op.SetId}|{op.EntityKey}" : $"{op.Type}|{op.Id}";
+    // "set" (collection saves) and "rootlist" (playlist follows) COALESCE per (set, entity) — latest end-state wins, so a
+    // follow/unfollow toggle never stacks; "oprebase" (playlist edits) append (keyed by unique id — duplicate items are
+    // legal). The "rootlist" shape is exactly what HasPending checks (rootlist|{setId}|{entityKey}).
+    static string KeyOf(OutboxOp op) => op.Type == "set" ? $"set|{op.SetId}|{op.EntityKey}"
+        : op.Type == "rootlist" ? $"rootlist|{op.SetId}|{op.EntityKey}"
+        : $"{op.Type}|{op.Id}";
 
     public List<OutboxOp> DeadLetter { get; } = new();
 
-    public MutationEngine(IStore store, IEnumerable<IMutationStrategy> strategies, IMutationOutbox? durable = null)
+    public MutationEngine(IStore store, IEnumerable<IMutationStrategy> strategies, IMutationOutbox? durable = null, Func<DateTime>? now = null)
     {
         _store = store;
         _strategies = strategies.ToDictionary(s => s.Type);
         _durable = durable;
+        _now = now ?? (() => DateTime.UtcNow);
         if (_durable is not null)
             foreach (var op in _durable.Load())   // restore pending intents from disk (the optimistic store state already persisted)
                 if (_strategies.ContainsKey(op.Type)) { _outbox[KeyOf(op)] = op; if (op.Id > _seq) _seq = op.Id; }
     }
 
     public int Pending { get { lock (_gate) return _outbox.Count; } }
+
+    /// <summary>The pending-op shield (§7.2): true when a local intent is in flight for this (setId, entityKey). Checks
+    /// BOTH the "set" key shape (collection saves) and the "rootlist" key shape (playlist follows — `rootlist|playlists|
+    /// {uri}`). The rootlist strategy lands in a later phase; the key check is built now so inbound Confirmed writes can
+    /// be skipped for a shielded key while its own drain reconciles it. Unused by production code yet.</summary>
+    public bool HasPending(string setId, string entityKey)
+    {
+        lock (_gate) return _outbox.ContainsKey($"set|{setId}|{entityKey}") || _outbox.ContainsKey($"rootlist|{setId}|{entityKey}");
+    }
 
     /// <summary>Save / unsave (idempotent). Optimistic: the store reflects it as Pending immediately; the outbox replays on drain.</summary>
     public void Save(string setId, string uri, bool saved)
@@ -123,6 +319,20 @@ public sealed class MutationEngine
         var op = new OutboxOp(id, "set", uri, setId, saved, id, 0);
         OutboxOp? replaced = null;
         lock (_gate) { if (_outbox.TryGetValue(KeyOf(op), out var ex)) replaced = ex; _outbox[KeyOf(op)] = op; }   // coalesce
+        if (_durable is not null) { if (replaced is not null) _durable.Remove(replaced.Id); _durable.Save(op); }
+        s.ApplyOptimistic(op, _store);
+    }
+
+    /// <summary>Follow / unfollow a playlist (§2.5) — a rootlist ADD/REM, not a collection write. Sibling of <see cref="Save"/>:
+    /// optimistic (the "playlists" pill flips + the rootlist entry edits immediately), coalesced per uri (latest end-state
+    /// wins — follow/unfollow toggles must not stack), and durably persisted so it replays on the next login/reconnect.</summary>
+    public void Follow(string playlistUri, bool follow)
+    {
+        if (!_strategies.TryGetValue("rootlist", out var s)) return;
+        var id = Interlocked.Increment(ref _seq);
+        var op = new OutboxOp(id, "rootlist", playlistUri, "playlists", follow, id, 0);
+        OutboxOp? replaced = null;
+        lock (_gate) { if (_outbox.TryGetValue(KeyOf(op), out var ex)) replaced = ex; _outbox[KeyOf(op)] = op; }   // coalesce per uri
         if (_durable is not null) { if (replaced is not null) _durable.Remove(replaced.Id); _durable.Save(op); }
         s.ApplyOptimistic(op, _store);
     }
@@ -150,6 +360,11 @@ public sealed class MutationEngine
         {
             var s = _strategies[op.Type];
             var key = KeyOf(op);
+
+            // §8.3 backoff: skip an op whose scheduled next-attempt time hasn't arrived — it stays Pending; the loop's
+            // post-drain reschedule (§6.3.4) guarantees it's re-visited. A rage-click can't burn all 10 attempts in a burst.
+            lock (_gate) { if (_nextAttemptAt.TryGetValue(op.Id, out var due) && _now() < due) continue; }
+
             bool ok;
             try { ok = await s.Replay(op, t, ctx, ct).ConfigureAwait(false); }
             catch { ok = false; }
@@ -163,12 +378,14 @@ public sealed class MutationEngine
                 {
                     stillCurrent = _outbox.TryGetValue(key, out var cur) && cur.Id == op.Id;
                     if (stillCurrent) { _outbox.Remove(key); _editSnapshots.Remove(op.Id); }
+                    _nextAttemptAt.Remove(op.Id);   // cleared on success
                 }
                 if (stillCurrent)
                 {
                     _durable?.Remove(op.Id);
-                    // "set" reconciles to Confirmed; "oprebase" leaves the already-applied membership (the dealer echo / next /diff confirms).
-                    if (op.Type == "set") _store.SetSaved(op.SetId, op.EntityKey, op.TargetSaved, SyncState.Confirmed);
+                    // "set" (collection saves) + "rootlist" (playlist follows) reconcile the saved pill to Confirmed;
+                    // "oprebase" leaves the already-applied membership (the dealer echo / next /diff confirms).
+                    if (op.Type == "set" || op.Type == "rootlist") _store.SetSaved(op.SetId, op.EntityKey, op.TargetSaved, SyncState.Confirmed);
                 }
                 // else: a newer Save superseded this op mid-replay → leave it Pending for the next drain.
             }
@@ -184,9 +401,15 @@ public sealed class MutationEngine
                         if (bumped.Attempts >= MaxAttempts)
                         {
                             _outbox.Remove(key); DeadLetter.Add(op); deadLetter = true;
+                            _nextAttemptAt.Remove(op.Id);
                             if (_editSnapshots.Remove(op.Id, out var snap)) snapshot = snap;
                         }
-                        else { _outbox[key] = bumped; bumpedDurable = true; }
+                        else
+                        {
+                            _outbox[key] = bumped; bumpedDurable = true;
+                            // Exponential backoff on the next attempt: min(60s, 1s · 2^attempts).
+                            _nextAttemptAt[op.Id] = _now() + TimeSpan.FromSeconds(Math.Min(60d, Math.Pow(2, op.Attempts)));
+                        }
                     }
                     // else: a newer Save superseded this op → drop this stale attempt; the newer op drains next.
                 }

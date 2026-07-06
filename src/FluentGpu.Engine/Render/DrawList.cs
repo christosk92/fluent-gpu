@@ -17,6 +17,9 @@ public enum DrawOp : int
     DrawPolylineStroke = 13,   // SDF stroked polyline with trim start/end (AnimatedIcon path-trim)
     DrawTabShape = 14,         // WinUI selected-tab shape: rounded-TOP rect + inverted (concave) bottom corner flares
                                // (TabViewItem::UpdateTabGeometry — microsoft-ui-xaml controls\dev\TabView\TabViewItem.cpp:98-123)
+    DrawGlyphRunGradient = 15, // a glyph run filled per-glyph by a karaoke WIPE (played/unplayed split along the run-local
+                               // x-axis). Reuses the glyph PSO (per-instance color); the per-glyph colors are computed at
+                               // REPLAY from the split, so the cache key (shaping) is unchanged. Decoded only when emitted.
 }
 
 /// <summary>How a <see cref="FillRoundRectCmd"/> fills its interior.</summary>
@@ -80,6 +83,15 @@ public readonly record struct FillRoundRectCmd(RectF Rect, CornerRadius4 Radii, 
 public readonly record struct DrawGlyphRunCmd(RectF Bounds, ColorF Color, StringId Text, StringId Family, float FontSize, int Weight, int Wrap, int Trim, int MaxLines,
     float CharSpacing, float LineHeight, int LineStacking, int LineBounds, Affine2D Transform, float Opacity,
     int SpanRunId = 0, int ForceColor = 0, int InMotion = 0);
+// A glyph run filled by a left->right WIPE (the GlyphWipe primitive): Split (0..1) is a fraction of the run's content in
+// READING ORDER — the replay lays a wrapped run's visual lines END-TO-END over glyph EDGES, so a glyph before Split in
+// reading order is painted Before and one after it After, with a Softness-wide soft blend the replay remaps so Split==1
+// fully clears the run's trailing edge; Lift floats a just-passed glyph up by Lift DIP (settling). Reuses the glyph PSO +
+// per-instance color/offset (NO new shader/PSO). The per-glyph values are computed at replay from Split, so the shaping
+// cache key is identical to the plain run (no reshape as the split advances). General text-reveal; the lyrics karaoke uses it.
+public readonly record struct DrawGlyphRunGradientCmd(RectF Bounds, StringId Text, StringId Family, float FontSize, int Weight, int Wrap, int Trim, int MaxLines,
+    float CharSpacing, float LineHeight, int LineStacking, int LineBounds, Affine2D Transform, float Opacity,
+    ColorF Before, ColorF After, float Split, float Softness, float Lift, int SpanRunId = 0, int InMotion = 0);
 // Tier-1 (scissor) clip: an axis-aligned DEVICE-space rect already intersected with the enclosing clip by the recorder.
 // The RHI sets the scissor to <see cref="DeviceRect"/> on PushClip and restores the previous on PopClip.
 // Tier-2 (rounded) clip: when <see cref="CornerRadius"/> > 0, <see cref="RoundedRect"/> is the clipping node's own
@@ -122,7 +134,12 @@ public readonly record struct PushLayerCmd(RectF DeviceRect, CornerRadius4 Radii
     // Acrylic-only: a STABLE per-overlay id (the scene node handle, packed index|gen) keying the compositor's retained
     // blurred-backdrop cache across frames, so a stationary acrylic surface REUSES its blur instead of re-blurring every
     // frame (design/subsystems/backdrop-effects-animation.md §2.3). 0 ⇒ no caching (re-blur every frame — prior behavior).
-    ulong LayerId = 0);
+    ulong LayerId = 0,
+    int BlurCachePolicy = 0,
+    // Self-blur only: 1 = the node's world transform moved THIS frame (recorder's inMotion — scroll/fling/FLIP). NOT part
+    // of the cross-frame pin key (backdrop-effects-animation.md §FA-2a); at rest (0) the compositor does one exact re-mint
+    // when a HIT would otherwise composite a pin captured at a different position (settle exactness for non-glyph subtrees).
+    int InMotion = 0);
 public readonly record struct PopLayerCmd(RectF DeviceRect);
 // A circular-arc stroke (ProgressRing). The arc is centred in <see cref="Rect"/> with radius (min(W,H)-Thickness)/2, a
 // <see cref="Thickness"/>-wide stroke, swept from <see cref="StartDeg"/> for <see cref="SweepDeg"/> degrees (0° = 12 o'clock,
@@ -188,6 +205,21 @@ public sealed class DrawList
         WriteOp(DrawOp.DrawGlyphRun);
         WritePayload(new DrawGlyphRunCmd(bounds, color, text, family, fontSize, weight, wrap, trim, maxLines,
             charSpacing, lineHeight, lineStacking, lineBounds, transform, opacity, spanRunId, forceColor ? 1 : 0, inMotion ? 1 : 0));
+        PushSort(sortKey);
+    }
+
+    /// <summary>A glyph run filled by a left→right wipe (the <c>GlyphWipe</c> primitive): <paramref name="split"/>
+    /// (0..1 along the run's content in READING ORDER — visual lines laid end-to-end over glyph edges) divides
+    /// <paramref name="before"/> (sung) from <paramref name="after"/> (unsung), with a <paramref name="softness"/>-wide
+    /// soft boundary the replay remaps so split==1 fully clears the trailing edge; <paramref name="lift"/> floats a
+    /// just-passed glyph up. Reuses the glyph pipeline (per-instance color/offset computed at replay) — no new shader.</summary>
+    public void DrawGlyphRunGradient(in RectF bounds, StringId text, StringId family, float fontSize, int weight, int wrap, int trim, int maxLines,
+        float charSpacing, float lineHeight, int lineStacking, int lineBounds, in Affine2D transform, float opacity,
+        in ColorF before, in ColorF after, float split, float softness, float lift, ulong sortKey = 0, int spanRunId = 0, bool inMotion = false)
+    {
+        WriteOp(DrawOp.DrawGlyphRunGradient);
+        WritePayload(new DrawGlyphRunGradientCmd(bounds, text, family, fontSize, weight, wrap, trim, maxLines,
+            charSpacing, lineHeight, lineStacking, lineBounds, transform, opacity, before, after, split, softness, lift, spanRunId, inMotion ? 1 : 0));
         PushSort(sortKey);
     }
 
@@ -285,11 +317,11 @@ public sealed class DrawList
     /// <paramref name="blurSigma"/> px, and composites once at <paramref name="groupAlpha"/> (so blur + fade read as one
     /// motion). The element's OWN pixels blur — not the backdrop behind it. Subtree commands record at opacity relative
     /// to 1, NOT pre-multiplied by the group alpha.</summary>
-    public void PushBlurLayer(in RectF deviceRect, in CornerRadius4 radii, float blurSigma, float groupAlpha, ulong sortKey = 0)
+    public void PushBlurLayer(in RectF deviceRect, in CornerRadius4 radii, float blurSigma, float groupAlpha, ulong sortKey = 0, BlurCachePolicy cachePolicy = BlurCachePolicy.Normal, bool inMotion = false)
     {
         WriteOp(DrawOp.PushLayer);
         WritePayload(new PushLayerCmd(deviceRect, radii, default, default, 0f, MathF.Max(0f, blurSigma), 0f, 0f,
-            (int)LayerKind.Blur, Math.Clamp(groupAlpha, 0f, 1f)));
+            (int)LayerKind.Blur, Math.Clamp(groupAlpha, 0f, 1f), BlurCachePolicy: (int)cachePolicy, InMotion: inMotion ? 1 : 0));
         PushSort(sortKey);
     }
 

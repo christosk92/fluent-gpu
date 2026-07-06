@@ -1,10 +1,7 @@
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
-using FluentGpu.Foundation;
 using FluentGpu.Hooks;
-using FluentGpu.Localization;
 using FluentGpu.Signals;
-using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
 
@@ -23,36 +20,49 @@ public static class Toasts
     public static void Dismiss() => Current.Value = null;
 }
 
-/// <summary>Renders the current toast (InfoBar-flavored). Re-renders only when <see cref="Toasts.Current"/> changes.</summary>
+/// <summary>Renders the current toast as a real WinUI <see cref="InfoBar"/> (severity icon + message + optional action +
+/// the 38×38 ✕ close). Re-renders only when <see cref="Toasts.Current"/> changes; auto-dismisses after a few seconds.</summary>
 public sealed class ToastHost : Component
 {
+    const int AutoDismissMs = 6000;
+
     public override Element Render()
     {
-        if (Toasts.Current.Value is not { } toast) return new BoxEl { Height = 0 };
-
-        var (bg, fg) = toast.Severity switch
+        // Hooks FIRST (stable order — rule #7), before the early return. Auto-dismiss the toast after a few seconds: a
+        // one-shot Timer per toast, generation-guarded so a rapid replacement cancels the stale dismiss, cleared via post()
+        // on the UI thread (the toast is a UI-thread signal). Mirrors WaveeShell's _railLockTimer generation pattern.
+        var toastOpt = Toasts.Current.Value;   // subscribe → re-render (and re-arm the timer) on every toast change
+        var post = UsePost();
+        var timer = UseRef<System.Threading.Timer?>(null);
+        var gen = UseRef(0);
+        UseEffect(() =>
         {
-            ToastSeverity.Success => (Tok.SystemFillSuccessBackground, Tok.SystemFillSuccess),
-            ToastSeverity.Caution => (Tok.SystemFillCautionBackground, Tok.SystemFillCaution),
-            ToastSeverity.Critical => (Tok.SystemFillCriticalBackground, Tok.SystemFillCritical),
-            _ => (Tok.FillCardDefault, Tok.AccentDefault),
+            int g = ++gen.Value;
+            timer.Value?.Dispose();
+            timer.Value = null;
+            if (toastOpt is null) return;
+            timer.Value = new System.Threading.Timer(
+                _ => post(() => { if (g == gen.Value && Toasts.Current.Peek() is not null) Toasts.Dismiss(); }),
+                null, AutoDismissMs, System.Threading.Timeout.Infinite);
+        }, toastOpt);
+
+        if (toastOpt is not { } toast) return new BoxEl { Height = 0 };
+
+        var severity = toast.Severity switch
+        {
+            ToastSeverity.Success => InfoBarSeverity.Success,
+            ToastSeverity.Caution => InfoBarSeverity.Warning,
+            ToastSeverity.Critical => InfoBarSeverity.Error,
+            _ => InfoBarSeverity.Informational,
         };
 
-        var kids = new List<Element>
-        {
-            Icon(Icons.InfoBarBackgroundCircle, 16f, fg),
-            WaveeType.TrackMeta(toast.Message),
-            new BoxEl { Grow = 1 },
-        };
-        if (toast is { ActionLabel: { } label, OnAction: { } act })
-            kids.Add(Button.Standard(label, () => { act(); Toasts.Dismiss(); }));
-        kids.Add(Button.Standard(Loc.Get(Strings.Common.Dismiss), Toasts.Dismiss));
+        // The optional CTA (e.g. "Choose device" / "Undo") becomes the InfoBar's trailing action button; clicking it runs
+        // the action then dismisses the toast. The ✕ close is the InfoBar's own button (onClose → Dismiss).
+        Element? action = toast is { ActionLabel: { } label, OnAction: { } act }
+            ? Button.Standard(label, () => { act(); Toasts.Dismiss(); })
+            : null;
 
-        return new BoxEl
-        {
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
-            Padding = Edges4.All(WaveeSpace.M), Fill = bg, Corners = CornerRadius4.All(WaveeRadius.Card),
-            Children = kids.ToArray(),
-        };
+        return InfoBar.Create(severity, title: string.Empty, message: toast.Message,
+            onClose: Toasts.Dismiss, actionButton: action);
     }
 }

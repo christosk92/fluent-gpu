@@ -76,6 +76,9 @@ public static class FluentApp
                            bool mica = true, int frames = -1, string? screenshot = null, bool customFrame = false,
                            bool micaAlt = false, int ambientFps = 0)
     {
+        if (Array.IndexOf(Environment.GetCommandLineArgs(), "--audio-host") >= 0)
+            throw new InvalidOperationException("FluentApp.Run must not be reached in --audio-host child mode.");
+
         bool consoleDiagnostics = Diag.EnvFlag("FG_DIAG") || Diag.EnvFlag("FG_DIAG_CONSOLE");
         if (consoleDiagnostics)
         {
@@ -153,6 +156,11 @@ public static class FluentApp
 
         bool fpsLog = Diag.EnvFlag("FG_FPS_LOG");   // periodic [fps] readout to stderr (frame-rate / frame-ms diagnosis)
         int n = 0;
+        // Render-side pacing signal (async): FrameMs times only the UI thread, which under async EXCLUDES submit/present/
+        // the GPU fence-wait (off-thread). So also report the render thread's ACTUAL present cadence (PresentAck delta /
+        // wall-time = real on-screen fps) + its last GPU fence-wait. present << ui-fps ⇒ GPU-bound (the real bottleneck).
+        ulong lastPresentSeq = host.RenderPresentSeq;
+        long lastPresentTick = System.Diagnostics.Stopwatch.GetTimestamp();
         while (!window.IsClosed)
         {
             host.RunFrame();
@@ -160,9 +168,17 @@ public static class FluentApp
             if (fpsLog)
             {
                 var s = host.LastStats;
-                bool spike = s.FrameMs > 11.0;   // anything over the ~11ms 90Hz line on a 120Hz panel = a dropped-frame spike
+                double gpuMs = host.LastGpuFenceWaitMs;
+                bool spike = s.FrameMs > 11.0 || gpuMs > 11.0;   // UI-thread OR render-thread GPU stall over the ~90Hz line
                 if (spike || n % 30 == 0)
-                    Console.Error.WriteLine($"[fps]{(spike ? " SPIKE" : "")} {s.Fps:0}fps {s.FrameMs:0.0}ms = flush{s.FlushMs:0.0} layout{s.LayoutMs:0.0} anim{s.AnimMs:0.0} record{s.RecordMs:0.0} submit{s.SubmitMs:0.0} (f{n})");
+                {
+                    ulong curSeq = host.RenderPresentSeq;
+                    long nowT = System.Diagnostics.Stopwatch.GetTimestamp();
+                    double presentFps = curSeq > lastPresentSeq && nowT > lastPresentTick
+                        ? (curSeq - lastPresentSeq) * (double)System.Diagnostics.Stopwatch.Frequency / (nowT - lastPresentTick) : 0;
+                    lastPresentSeq = curSeq; lastPresentTick = nowT;
+                    Console.Error.WriteLine($"[fps]{(spike ? " SPIKE" : "")} ui {s.Fps:0}fps {s.FrameMs:0.0}ms (flush{s.FlushMs:0.0} layout{s.LayoutMs:0.0} anim{s.AnimMs:0.0} record{s.RecordMs:0.0} submit{s.SubmitMs:0.0}) | present {presentFps:0}fps gpu {gpuMs:0.0}ms (f{n})");
+                }
             }
             if (frames > 0 && n >= frames) break;
             if (screenshot != null)
@@ -179,6 +195,7 @@ public static class FluentApp
         // --screenshot: read the last-rendered back buffer back to CPU and write a PNG for visual fidelity diffing.
         if (screenshot != null && device is D3D12Device d3d)
         {
+            host.QuiesceRenderThread();   // async (FG_RENDER_ASYNC): stop the render thread so CaptureBgra (a UI-thread GPU op) is the sole GPU owner
             var px = d3d.CaptureBgra(out int cw, out int ch);
             PngWriter.WriteBgra(screenshot, px, cw, ch);
             Console.Error.WriteLine($"screenshot: wrote {screenshot} ({cw}x{ch})");

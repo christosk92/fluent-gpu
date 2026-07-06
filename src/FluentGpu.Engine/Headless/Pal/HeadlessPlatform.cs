@@ -64,6 +64,8 @@ public sealed class HeadlessWindow : IPlatformWindow
     /// <inheritdoc cref="ClientSizePx"/>
     public float Scale { get; set; }
     public Action? PaintRequested { get; set; }   // unused headless (no modal resize loop)
+    /// <inheritdoc cref="FluentGpu.Pal.IPlatformWindow.InModalLoop"/>
+    public bool InModalLoop { get; set; }
     public CursorId LastCursor { get; private set; }
     public bool Shown { get; private set; }
 

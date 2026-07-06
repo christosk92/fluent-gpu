@@ -13,6 +13,9 @@ sealed class WaveeApp : Component
 {
     readonly Services _services;
 
+    internal static PlaybackBridge? ProbePlayback;
+    internal static Services? ProbeServices;
+
     // The composition root passes the settings store created early (so the theme is seeded before the first frame);
     // null in tests falls back to the store Services creates itself.
     public WaveeApp(IAppSettings? settings = null) => _services = Services.UseRealBackend ? Services.CreateReal(settings) : Services.CreateFake(settings);
@@ -22,6 +25,14 @@ sealed class WaveeApp : Component
         var bridge = _services.Playback;
         var libBridge = _services.LibraryBridge;
         var store = _services.LibraryStore;
+        if (Diag.EnvFlag("WAVEE_LIVE_LYRICS_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_PROBE") || Diag.EnvFlag("WAVEE_HOME_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_NAV_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_ADVANCE_PROBE"))
+        {
+            ProbePlayback = bridge;
+            ProbeServices = _services;
+            // Silence the async lyrics ticker BEFORE it can mount so the advance-probe alone drives OnFrame synchronously
+            // (deterministic, timer-decoupling-free). Set here at the root so it is true before the rail/ticker renders.
+            if (Diag.EnvFlag("WAVEE_LYRICS_ADVANCE_PROBE")) LyricsView.ProbeSyncMode = true;
+        }
 
         // Follow the OS dark-mode / accent live WHILE the user hasn't pinned an explicit theme (mode == System). The host
         // relays WM_SETTINGCHANGE on the UI thread; we re-read the OS state, apply it, and animate the in-place re-theme.
@@ -30,8 +41,9 @@ sealed class WaveeApp : Component
         {
             FluentApp.SystemColorsChanged += () =>
             {
-                if (_services.Settings.Get(WaveeSettings.ThemeMode) != 0) return;   // explicit Light/Dark pinned → ignore OS
-                Theme.Dark = !FluentApp.SystemUsesLightTheme();
+                if (_services.Settings.Get(WaveeSettings.ThemeMode) != 0) return;
+                var kind = FluentApp.SystemUsesLightTheme() ? ThemeKind.Light : ThemeKind.Dark;
+                Tok.Use(WaveeTheme.ResolvePalette(_services.Settings.Get(WaveeSettings.PaletteId)), kind);
                 if (FluentApp.SystemAccent() is { } a) Tok.SetAccent(a);
                 requestTheme?.Invoke(250f);
             };
@@ -40,6 +52,8 @@ sealed class WaveeApp : Component
         var post = Context.UsePost();
         var loginSession = UseRef<System.Threading.CancellationTokenSource?>(null);
         var wasAuthed = UseRef(false);   // have we EVER authenticated this run? (fake demo: logout → takeover, but no initial-launch flash)
+        var governorTimer = UseRef<System.Threading.Timer?>(null);   // rooted here so the periodic MemoryGovernor poll isn't GC-collected (the app root never unmounts)
+        var volumeSaveTimer = UseRef<System.Threading.Timer?>(null); // remember-volume: debounced persist of the slider value
 
         // ── Simultaneous live login (device code + browser race) ─────────────────────────────────────────────────────
         // The takeover runs BOTH methods at once: RestartCode polls the device code (the two-pane's QR + pairing code), and
@@ -56,13 +70,14 @@ sealed class WaveeApp : Component
             {
                 try
                 {
-                    var host = await Wavee.SpotifyLive.LiveSessionHost.StartAsync(_services, m => _services.Log.Info("connect", m), cts.Token, bridge.Progress(post), interactive: true, useBrowser: false).ConfigureAwait(false);
+                    var host = await Wavee.SpotifyLive.LiveSessionHost.StartAsync(_services, m => _services.Log.Info("connect", m), cts.Token, bridge.Progress(post), uiPost: post, interactive: true, useBrowser: false).ConfigureAwait(false);
                     if (host is not null) { post(() => { if (loginSession.Value == cts) loginSession.Value = null; }); cts.Cancel(); }   // success → stop the browser sibling
                 }
                 catch (OperationCanceledException) { }   // superseded by a newer attempt
                 catch (Exception ex)
                 {
-                    _services.Log.Info("connect", "code login failed: " + ex.Message);
+                    _services.Log.Event(WaveeLogLevel.Warning, "connect", "login.code.failed",
+                        "Code login failed", ex: ex, fields: [WaveeLogField.Of("phase", bridge.Login.Peek().Phase.ToString())]);
                     post(() => { if (loginSession.Value == cts) bridge.Login.Value = new LoginSnapshot(LoginPhase.Failed, Error: "Something went wrong signing in."); });
                 }
             });
@@ -77,7 +92,7 @@ sealed class WaveeApp : Component
             {
                 try
                 {
-                    var host = await Wavee.SpotifyLive.LiveSessionHost.StartAsync(_services, m => _services.Log.Info("connect", m), cts.Token, bridge.Progress(post), interactive: true, useBrowser: true, quietPhases: true).ConfigureAwait(false);
+                    var host = await Wavee.SpotifyLive.LiveSessionHost.StartAsync(_services, m => _services.Log.Info("connect", m), cts.Token, bridge.Progress(post), uiPost: post, interactive: true, useBrowser: true, quietPhases: true).ConfigureAwait(false);
                     if (host is not null) { post(() => { if (loginSession.Value == cts) loginSession.Value = null; }); cts.Cancel(); }
                 }
                 catch { }   // a browser failure is silent — the device-code two-pane keeps going
@@ -98,9 +113,38 @@ sealed class WaveeApp : Component
 
         Context.UseEffect(() =>
         {
+            // Remember-volume: seed the slider before the first frame the user sees; the live session seeds the device
+            // announce/local host from the same setting (LiveSessionHost). Saved back below, debounced.
+            if (_services.Settings.Get(WaveeSettings.RememberVolume))
+                bridge.Volume.Value = Math.Clamp(_services.Settings.Get(WaveeSettings.SavedVolume), 0f, 1f);
+
             bridge.Activate(post);
             libBridge.Activate(post);
             store.Activate(post);
+
+            // Persist volume changes (local intents AND remote echoes both land on bridge.Volume) with a coarse poll —
+            // Peek is a plain field read, and the registry write happens only when the value actually moved.
+            volumeSaveTimer.Value ??= new System.Threading.Timer(_ =>
+            {
+                if (!_services.Settings.Get(WaveeSettings.RememberVolume)) return;
+                float v = bridge.Volume.Peek();
+                if (Math.Abs(v - _services.Settings.Get(WaveeSettings.SavedVolume)) > 0.004f)
+                    _services.Settings.Set(WaveeSettings.SavedVolume, v);
+            }, null, dueTime: 2_000, period: 2_000);
+
+            // Drive the MemoryGovernor from a periodic OS-memory-pressure poll. The Timer fires on a background thread but
+            // marshals Trim to the UI thread (post) so the UI-thread-affine detail caches shed safely. At rest (no pressure)
+            // it sheds nothing — each cache's LRU cap already bounds steady state; under real pressure it sheds further.
+            governorTimer.Value ??= new System.Threading.Timer(_ =>
+            {
+                var info = GC.GetGCMemoryInfo();
+                double load = info.HighMemoryLoadThresholdBytes > 0 ? (double)info.MemoryLoadBytes / info.HighMemoryLoadThresholdBytes : 0.0;
+                var level = load >= 1.0 ? Wavee.Backend.Residency.MemoryPressure.Critical
+                          : load >= 0.85 ? Wavee.Backend.Residency.MemoryPressure.Moderate
+                          : Wavee.Backend.Residency.MemoryPressure.Normal;
+                post(() => _services.Residency.Trim(level));
+            }, null, dueTime: 30_000, period: 30_000);
+
             if (Diag.EnvFlag("WAVEE_FAKE_CHALLENGE"))
             {
                 // Deterministic login screenshots (no network): seed a canned pairing challenge so the takeover renders the
@@ -118,11 +162,12 @@ sealed class WaveeApp : Component
             }
             else
             {
-                // Fake demo: connect instantly + start in-memory playback so the INITIAL launch lands on the shell (no
-                // takeover flash, --screenshot renders the shell). After a logout the gate shows the demo two-pane instead.
+                // Fake demo: connect the fake session instantly so the INITIAL launch lands on the shell (no takeover flash,
+                // --screenshot renders the shell). Playback is NOT auto-started — local playback is unsupported, so a play
+                // intent shows the "choose a remote device" toast; the bar rests at "Nothing playing". After a logout the
+                // gate shows the demo two-pane instead.
                 _ = _services.Session.ConnectAsync();
-                _ = _services.Player.ResumeAsync();
-                _services.Log.Info("app", "Demo backend; fake session + playback started");
+                _services.Log.Info("app", "Demo backend; fake session started (playback remote-only)");
             }
             // Diagnostic: open the full now-playing view on launch (for --screenshot visual diffing of that surface).
             if (Diag.EnvFlag("WAVEE_NOWPLAYING_OPEN")) _services.Playback.Expanded.Value = true;

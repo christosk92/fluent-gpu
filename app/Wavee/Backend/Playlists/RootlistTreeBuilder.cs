@@ -59,4 +59,25 @@ public static class RootlistTreeBuilder
         var parts = uri.Split(':');
         return parts.Length >= 3 ? parts[2] : uri;
     }
+
+    // ── the ONE home for the flat rootlist marker → ordered RootlistEntry parse ──
+    // A rootlist is a playlist whose items are playlist-uri rows interleaved with start-group / end-group markers. Both the
+    // full-fetch path (PlaylistFetcher) and the in-place / write-response paths (LibrarySync, RootlistFollowStrategy) build
+    // the same ordered rows from a bare uri sequence — so the marker parsing lives here once (kind 0=item, 1=start, 2=end;
+    // depth tracks nesting; Position is the flat item index, which the rootlist-changes REM op indexes against).
+    public static IReadOnlyList<RootlistEntry> EntriesFromUris(IEnumerable<string> uris)
+    {
+        var entries = new List<RootlistEntry>();
+        int pos = 0, depth = 0;
+        foreach (var uri in uris)
+        {
+            if (uri.StartsWith("spotify:start-group:", StringComparison.Ordinal)) { entries.Add(new RootlistEntry(pos++, 1, uri, GroupNameOf(uri), depth)); depth++; }
+            else if (uri.StartsWith("spotify:end-group:", StringComparison.Ordinal)) { depth = Math.Max(0, depth - 1); entries.Add(new RootlistEntry(pos++, 2, uri, null, depth)); }
+            else entries.Add(new RootlistEntry(pos++, 0, uri, null, depth));
+        }
+        return entries;
+    }
+
+    // "spotify:start-group:{id}:{name}" → the (url-decoded) {name} segment.
+    static string? GroupNameOf(string uri) { var p = uri.Split(':'); return p.Length >= 4 ? Uri.UnescapeDataString(p[3]) : null; }
 }

@@ -1,3 +1,4 @@
+using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Scene;
@@ -60,6 +61,7 @@ public sealed record VirtualListEl : Element
     /// <summary>Called once when this viewport is realized into the scene, with its node handle — the escape hatch a
     /// composing control (ItemsView) uses to drive <c>ScrollState</c> (StartBringItemIntoView, sticky pinning).</summary>
     public Action<NodeHandle>? OnRealized { get; init; }
+    public (Func<ScrollGeometry, long> Project, Action<ScrollGeometry> Action)? OnScrollGeometryChanged { get; init; }
 
     // The viewport participates in its parent's layout like a box (size + flex + margin + a backing fill).
     public float Width { get; init; } = float.NaN;

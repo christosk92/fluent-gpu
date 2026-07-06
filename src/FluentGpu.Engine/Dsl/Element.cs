@@ -84,8 +84,11 @@ public sealed record BoxEl : Element
     public Edges4 Margin { get; init; }
     /// <summary>Unified channel (Prop&lt;T&gt;): a static color, a <c>Func&lt;ColorF&gt;</c> thunk, or a concrete signal.</summary>
     public Prop<ColorF> Fill { get; init; }
-    public ColorF HoverFill { get; init; }
-    public ColorF PressedFill { get; init; }
+    /// <summary>Bindable like <see cref="Fill"/>: a bound hover/press fill re-fires on RethemeAll (theme/palette
+    /// switch) and can read recycle-varying state (e.g. a virtual list's slot index for zebra-aware hover depth)
+    /// without remounting the slot. A==0 ⇒ the recorder auto-lightens/darkens <see cref="Fill"/> instead.</summary>
+    public Prop<ColorF> HoverFill { get; init; }
+    public Prop<ColorF> PressedFill { get; init; }
     public ColorF BorderColor { get; init; }
     public ColorF HoverBorderColor { get; init; }    // A==0 ⇒ recorder auto-lightens BorderColor on hover; else eases to this exact state token
     public ColorF PressedBorderColor { get; init; }  // A==0 ⇒ recorder auto-darkens BorderColor on press; else eases to this exact state token
@@ -254,6 +257,9 @@ public sealed record BoxEl : Element
     /// <c>AnimChannel.BlurSigma</c> (UseTransition/UseKeyframes) for the transitions.dev recipes (number pop-in, skeleton
     /// reveal, icon swap, page slide, …). 0 = no blur (the default). Composited only — never relayout.</summary>
     public float Blur { get; init; }
+    /// <summary>Optional retained-cache behavior for self-blur layers. Default renders normally; HoldIfCached lets
+    /// stationary effects reuse cached blurred pixels during user-scroll without globally disabling blur.</summary>
+    public BlurCachePolicy BlurCachePolicy { get; init; }
     /// <summary>Transform origin (normalized 0..1 of the box). Composited scale/rotate (and animated ScaleX/Y) pivot here;
     /// default centre (0.5,0.5). Set OriginY=0 to scale/unfold from the TOP edge (a flyout/menu), 1 for the bottom.</summary>
     public float TransformOriginX { get; init; } = 0.5f;
@@ -459,6 +465,15 @@ public sealed record TextEl(Prop<string> Text) : Element
     /// <summary>Implicit brush transition for the resting <see cref="Color"/>: a re-render that changes it on this LIVE
     /// node cross-fades over this duration (WinUI BrushTransition, 83ms in templates). NaN = snap.</summary>
     public float BrushTransitionMs { get; init; } = float.NaN;
+    /// <summary>Optional left→right glyph WIPE fill (a general text-reveal — the lyrics karaoke uses it): glyphs left of
+    /// <see cref="GlyphWipe.Split"/> use <see cref="GlyphWipe.Before"/>, right use <see cref="GlyphWipe.After"/>, with a
+    /// soft boundary + optional per-glyph lift. Null = off. Carried in a sparse scene side-table (NOT on the hot paint
+    /// struct), emitted as a gradient glyph run; advancing the split per frame is reshape-free.</summary>
+    public GlyphWipe? Wipe { get; init; }
+
+    /// <summary>Called once when this glyph run is realized into the scene, with its node handle — lets a control drive the
+    /// node directly (the lyrics ticker advances THIS run's <see cref="Wipe"/> split per frame on the scene side-table).</summary>
+    public Action<NodeHandle>? OnRealized { get; init; }
     /// <summary>Read-only text selection (rtb-02): mouse drag selects, double-click selects the word, triple-click all,
     /// Ctrl+C copies via the clipboard seam; the highlight reuses the editor's selection-rect path. Default FALSE —
     /// WinUI TextBlock selection is opt-in (TextBlock.cpp:583 IsTextSelectionEnabled property change creates the

@@ -18,7 +18,14 @@ public readonly record struct TextEditStyle(ColorF SelectionFill, ColorF Selecte
     public bool Enabled => SelectionFill.A > 0f || CaretColor.A > 0f;
 }
 
-public readonly record struct SceneRecordStats(int NodesVisited, int DrawnNodeCount, int CulledNodeCount, RectF Damage = default);
+public readonly record struct SceneRecordStats(int NodesVisited, int DrawnNodeCount, int CulledNodeCount, RectF Damage = default)
+{
+    public int BlurCandidateCount { get; init; }
+    public int BlurGroupCount { get; init; }
+    public int BlurSuppressedByScrollCount { get; init; }
+    public int BlurHoldCandidateCount { get; init; }
+    public int EdgeFadeGroupCount { get; init; }
+}
 
 /// <summary>
 /// Phase 8 (record): walks the retained SceneStore and emits the DrawList. Composites like a browser — each node's
@@ -32,6 +39,7 @@ public static class SceneRecorder
     private static readonly bool ScrollLog = Environment.GetEnvironmentVariable("FG_SCROLLLOG") == "1";
     private static int _scrollLogFrame;
     private static bool ScrollLogNow => ScrollLog && (_scrollLogFrame % 45) == 0;
+
 
     // Overlay-scrollbar arrow glyphs: the host pre-interns the four Segoe Fluent arrow chars + the icon family once
     // at startup (AppHost ctor) so EmitScrollbar draws the SAME solid-triangle glyphs as the standalone ScrollBar
@@ -51,6 +59,10 @@ public static class SceneRecorder
         public int NodesVisited;
         public int DrawnNodeCount;
         public int CulledNodeCount;
+        public int BlurCandidateCount;
+        public int BlurGroupCount;
+        public int BlurHoldCandidateCount;
+        public int EdgeFadeGroupCount;
         public RectF Damage;       // union of this frame's changed-node device bounds → the acrylic backdrop-cache damage region
         public bool HasDamage;
 
@@ -64,7 +76,14 @@ public static class SceneRecorder
             Damage = new RectF(x0, y0, x1 - x0, y1 - y0);
         }
 
-        public readonly SceneRecordStats ToStats() => new(NodesVisited, DrawnNodeCount, CulledNodeCount, HasDamage ? Damage : default);
+        public readonly SceneRecordStats ToStats() => new(NodesVisited, DrawnNodeCount, CulledNodeCount, HasDamage ? Damage : default)
+        {
+            BlurCandidateCount = this.BlurCandidateCount,
+            BlurGroupCount = this.BlurGroupCount,
+            BlurSuppressedByScrollCount = 0,
+            BlurHoldCandidateCount = this.BlurHoldCandidateCount,
+            EdgeFadeGroupCount = this.EdgeFadeGroupCount,
+        };
     }
 
     /// <param name="skipRoots">Subtree roots EXCLUDED from this record pass — out-of-bounds popup wrappers that render
@@ -72,7 +91,7 @@ public static class SceneRecorder
     /// the one SceneStore (layout/hit-test unchanged) — only their pixels move to the popup window's DrawList.</param>
     public static SceneRecordStats Record(SceneStore scene, DrawList dl, ImageCache? images = null, in FocusVisualStyle focus = default,
                                           ColorF scrollThumb = default, ColorF scrollTrack = default, in TextEditStyle textEdit = default,
-                                          ReadOnlySpan<NodeHandle> skipRoots = default)
+                                          ReadOnlySpan<NodeHandle> skipRoots = default, bool holdSelfBlurForAnyUserScroll = false)
     {
         dl.Reset();
         if (scene.Root.IsNull) return default;
@@ -101,7 +120,7 @@ public static class SceneRecorder
             if (scene.IsLive(ov)) skips[skipCount++] = ov;
         }
 
-        Walk(scene, dl, images, scene.Root, Affine2D.Identity, 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, skips[..skipCount], ref stats);
+        Walk(scene, dl, images, scene.Root, Affine2D.Identity, 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, holdSelfBlurForAnyUserScroll, skips[..skipCount], ref stats);
 
         // Exit orphans: nodes removed from the tree but kept alive for their exit animation. Draw each detached subtree
         // at its frozen parent-world origin, fading/sliding out via its own paint. Depth 0 (lowest key) so the painter
@@ -110,7 +129,7 @@ public static class SceneRecorder
         {
             var o = scene.OrphanAt(i, out float px, out float py);
             if ((scene.Flags(o) & NodeFlags.ConnectedOverlay) != 0) continue;   // an overlay-flagged orphan draws in the top band, not here
-            Walk(scene, dl, images, o, Affine2D.Translation(px, py), 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, skipRoots, ref stats);
+            Walk(scene, dl, images, o, Affine2D.Translation(px, py), 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, holdSelfBlurForAnyUserScroll, skipRoots, ref stats);
         }
 
         // E5 drag-ghost top band: walk the ghost subtree at its LIVE parent-world origin (scroll / animated ancestor
@@ -123,7 +142,7 @@ public static class SceneRecorder
             ref NodePaint gp = ref scene.Paint(ghost);
             Walk(scene, dl, images, ghost,
                  Affine2D.Translation(abs.X - gb.X - gp.LocalTransform.Dx, abs.Y - gb.Y - gp.LocalTransform.Dy),
-                 1f, 1 << 16, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, default, ref stats);
+                 1f, 1 << 16, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, holdSelfBlurForAnyUserScroll, default, ref stats);
         }
 
         // Connected-animation overlay band: flying shared-element (Hero) visuals. Each overlay draws in a top band ABOVE
@@ -141,7 +160,7 @@ public static class SceneRecorder
             ref NodePaint op = ref scene.Paint(ov);
             Walk(scene, dl, images, ov,
                  Affine2D.Translation(abs.X - ob.X - op.LocalTransform.Dx, abs.Y - ob.Y - op.LocalTransform.Dy),
-                 1f, (1 << 16) | 1, overlayClip, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, default, ref stats);
+                 1f, (1 << 16) | 1, overlayClip, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, holdSelfBlurForAnyUserScroll, default, ref stats);
         }
         return stats.ToStats();
     }
@@ -204,7 +223,7 @@ public static class SceneRecorder
         }
         var stats = new RecordAccumulator();
         Walk(scene, dl, images, root, Affine2D.Translation(pax - originDip.X, pay - originDip.Y), 1f, 0, RectF.Infinite,
-             in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, default, ref stats);
+             in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, false, default, ref stats);
         return stats.ToStats();
     }
 
@@ -227,7 +246,7 @@ public static class SceneRecorder
 
     private static void Walk(SceneStore scene, DrawList dl, ImageCache? images, NodeHandle node, Affine2D parentWorld, float parentOpacity,
                              int depth, RectF clip, in FocusVisualStyle focus, in TextEditStyle textEdit, ColorF scrollThumb, ColorF scrollTrack,
-                             float parentScaleX, float parentScaleY, bool parentInMotion, ReadOnlySpan<NodeHandle> skipRoots, ref RecordAccumulator stats)
+                             float parentScaleX, float parentScaleY, bool parentInMotion, bool parentScrollInMotion, ReadOnlySpan<NodeHandle> skipRoots, ref RecordAccumulator stats)
     {
         if (!skipRoots.IsEmpty && ContainsNode(skipRoots, node)) return;   // subtree renders in its own popup window
         NodeFlags flags = scene.Flags(node);
@@ -240,6 +259,32 @@ public static class SceneRecorder
         // Its glyph runs skip the device-grid baseline snap and ride sub-pixel WITH their plates (no 1px shear against
         // the smoothly-translating fill), then re-snap crisp on the settle frame the host queues after the last write.
         bool inMotion = parentInMotion || (flags & NodeFlags.TransformDirty) != 0;
+        // parentScrollInMotion may be seeded globally by the host when ANY viewport is in real user scroll motion. This
+        // makes stationary sibling self-blurs (lyrics DoF) HOLD under their cache policy during user scrolling (their pin
+        // serves the translated strip) rather than re-Gaussian every forced submit, so scroll input gets the GPU.
+        // Scroll-defer: a self-blur inside a viewport being actively USER-scrolled (wheel/fling/drag) this frame is HELD
+        // (its BlurCachePolicy governs a miss: crisp-on-miss or skip-on-miss), NOT re-blurred — the content is translating,
+        // so re-running both Gaussian passes on every forced submit (a scroll defeats skip-submit) is wasted; the
+        // position-INDEPENDENT pin key HITS the moving (translated) rect, so the DoF stays visible without a re-blur. The
+        // host can seed this globally so sibling effects are deferred during the same user scroll.
+        // Keys off ScrollState.UserScrollActive (ScrollIntegrator.Tick sets it = movingNow && !PhaseProgrammatic), NOT
+        // the raw Phase. The auto-scroll bring-into-view ease KEEPS the DoF (PhaseProgrammatic ⇒ not user); crucially so
+        // do its SETTLE frame (settled ⇒ movingNow false, though the Phase has already flipped to Idle while still
+        // emitting that tick's final content-transform write) and a stationary relayout that re-asserts the content
+        // transform — both left UserScrollActive false. Gating on the raw Phase dropped the blur on those frames, so the
+        // whole panel's DoF visibly vanished for one frame on every line change. The content-node TransformDirty guard
+        // confirms the content actually translated this frame (only ScrollIntegrator/Input write that), not scale/blur.
+        bool scrollInMotion = parentScrollInMotion;
+        if (!scrollInMotion && (flags & NodeFlags.Scrollable) != 0 && scene.HasScroll(node))
+        {
+            ref var scrollState = ref scene.ScrollRef(node);
+            if (scrollState.UserScrollActive)   // only a real user scroll (wheel/fling/drag/band) defers — never a programmatic auto-scroll, its settle, or a relayout
+            {
+                var scrollContent = scrollState.ContentNode;
+                if (!scrollContent.IsNull && scene.IsLive(scrollContent) && (scene.Flags(scrollContent) & NodeFlags.TransformDirty) != 0)
+                    scrollInMotion = true;
+            }
+        }
 
         ref RectF b = ref scene.Bounds(node);
         ref NodePaint p = ref scene.Paint(node);
@@ -307,14 +352,28 @@ public static class SceneRecorder
         // A self-blur group (NodePaint.BlurSigma, the Expressive Motion Kit) takes precedence: the subtree renders at
         // FULL alpha into a pooled offscreen RT, gets a separable Gaussian, and composites ONCE at the cumulative alpha
         // — so blur + fade (the transitions.dev recipes) read as one motion. It SUBSUMES the opacity group (already a
-        // composite-once-at-group-alpha), so the opacity group is skipped while blurring. Full-RT blur for now (correct;
-        // a per-rect bucket is a perf follow-up). Skipped at sigma ≈ 0 (no blur) and when fully clipped out.
+        // composite-once-at-group-alpha), so the opacity group is skipped while blurring. The compositor scissors the blur
+        // to the layer rect + ±3σ halo (OpacityLayerCompositor.BlurInPlace). Skipped at sigma ≈ 0 (no blur) and when fully clipped out.
         // Edge fade (gpu-renderer.md): feather the subtree's alpha (+ optional blur) near chosen edges, following the
         // rounded corners (the curve). Takes precedence over the opacity/self-blur groups — it composites once at the
         // group alpha and blurs via its own sigma. Explicit (BoxEl/ScrollEl.EdgeFade) or a scroller's AutoEdgeFade.
         EdgeFadeSpec edgeFade = default;
         bool isEdgeFade = overlapsClip && TryResolveEdgeFade(scene, node, flags, maybeSparsePaint, out edgeFade);
-        bool isBlurGroup = !isEdgeFade && p.BlurSigma > 0.01f && overlapsClip;
+        if (isEdgeFade) stats.EdgeFadeGroupCount++;
+        bool isBlurCandidate = !isEdgeFade && p.BlurSigma > 0.01f && overlapsClip;
+        if (isBlurCandidate)
+        {
+            stats.BlurCandidateCount++;
+        }
+        // During a user scroll, HONOR the node's hold policy (HoldIfCached ⇒ crisp-on-miss; HoldOrSkipOnMiss ⇒
+        // skip-on-miss) so a moving self-blur isn't re-Gaussian'd on every forced-submit scroll frame; at rest every
+        // policy blurs Normally (builds the pin cache, no glow dropout). NB: this must pass the ACTUAL policy through —
+        // collapsing HoldOrSkipOnMiss to Normal here silently downgraded the lyrics glow to a full per-frame Gaussian
+        // during scroll (the skip-on-miss path went dead), reintroducing the UMA-bound cost this whole change removes.
+        bool holdBlur = isBlurCandidate && scrollInMotion && p.BlurCachePolicy != BlurCachePolicy.Normal;
+        if (holdBlur) stats.BlurHoldCandidateCount++;
+        bool isBlurGroup = isBlurCandidate;
+        if (isBlurGroup) stats.BlurGroupCount++;
         bool isOpacityGroup = !isEdgeFade && !isBlurGroup && p.OpacityGroup && opacity < 0.999f && overlapsClip;
         if (isEdgeFade)
         {
@@ -333,7 +392,8 @@ public static class SceneRecorder
         }
         else if (isBlurGroup)
         {
-            dl.PushBlurLayer(deviceBounds, p.Corners, p.BlurSigma, opacity, key);
+            dl.PushBlurLayer(deviceBounds, p.Corners, p.BlurSigma, opacity, key,
+                holdBlur ? p.BlurCachePolicy : BlurCachePolicy.Normal, inMotion);
             opacity = 1f;
         }
         else if (isOpacityGroup)
@@ -516,10 +576,18 @@ public static class SceneRecorder
                 // overlays the per-range styles from SpanRunTable.Shared and tints per-span colors over textColor.
                 int spanRunId = li.TextStyle.SpanRunId;
                 if (!p.Text.IsEmpty)
-                    dl.DrawGlyphRun(local, textColor, p.Text, li.TextStyle.FontFamily, effSize, li.TextStyle.Weight,
-                        (int)li.TextStyle.Wrap, (int)li.TextStyle.Trim, li.TextStyle.MaxLines,
-                        li.TextStyle.CharSpacing, li.TextStyle.LineHeight, (int)li.TextStyle.Stacking, (int)li.TextStyle.LineBounds,
-                        world, opacity, key, spanRunId, inMotion: inMotion);
+                {
+                    if (scene.TryGetGlyphWipe(node, out var wipe))   // glyph wipe (lyrics karaoke): per-glyph color + lift from the split
+                        dl.DrawGlyphRunGradient(local, p.Text, li.TextStyle.FontFamily, effSize, li.TextStyle.Weight,
+                            (int)li.TextStyle.Wrap, (int)li.TextStyle.Trim, li.TextStyle.MaxLines,
+                            li.TextStyle.CharSpacing, li.TextStyle.LineHeight, (int)li.TextStyle.Stacking, (int)li.TextStyle.LineBounds,
+                            world, opacity, wipe.Before, wipe.After, wipe.Split, wipe.Softness, wipe.Lift, key, spanRunId, inMotion);
+                    else
+                        dl.DrawGlyphRun(local, textColor, p.Text, li.TextStyle.FontFamily, effSize, li.TextStyle.Weight,
+                            (int)li.TextStyle.Wrap, (int)li.TextStyle.Trim, li.TextStyle.MaxLines,
+                            li.TextStyle.CharSpacing, li.TextStyle.LineHeight, (int)li.TextStyle.Stacking, (int)li.TextStyle.LineBounds,
+                            world, opacity, key, spanRunId, inMotion: inMotion);
+                }
 
                 // (b1) span-run decoration bars (per-LINE, per span — the rich-text refinement of (b2) below): the
                 // text seam published the laid bar rects on the run at measure (SpanRunRects — link bands are input's;
@@ -652,12 +720,12 @@ public static class SceneRecorder
         for (var c = scene.FirstChild(node); !c.IsNull; c = scene.NextSibling(c))
         {
             if ((scene.Flags(c) & NodeFlags.StickyPinned) != 0) { anyPinned = true; continue; }
-            Walk(scene, dl, images, c, childWorld, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack, childScaleX, childScaleY, inMotion, skipRoots, ref stats);
+            Walk(scene, dl, images, c, childWorld, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack, childScaleX, childScaleY, inMotion, scrollInMotion, skipRoots, ref stats);
         }
         if (anyPinned)
             for (var c = scene.FirstChild(node); !c.IsNull; c = scene.NextSibling(c))
                 if ((scene.Flags(c) & NodeFlags.StickyPinned) != 0)
-                    Walk(scene, dl, images, c, childWorld, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack, childScaleX, childScaleY, inMotion, skipRoots, ref stats);
+                    Walk(scene, dl, images, c, childWorld, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack, childScaleX, childScaleY, inMotion, scrollInMotion, skipRoots, ref stats);
 
         // Box border chrome paints after descendants. A control border must remain visible over filled child regions
         // (dialog command rows, split-button halves, presenter bodies) instead of forcing every control to fake a

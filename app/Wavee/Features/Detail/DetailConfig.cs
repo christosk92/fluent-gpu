@@ -72,7 +72,9 @@ public sealed record DetailModel(
     string? Label = null, string? Copyright = null, string? ReleaseDate = null, IReadOnlyList<Artist>? AlbumArtists = null,
     IReadOnlyList<Album>? OtherVersions = null,   // alternate editions of this album (deluxe/remaster/…)
     string? CourtesyLine = null, string? ReleaseDatePrecision = null, int DiscCount = 1,
-    string? ShareUrl = null, bool IsPreRelease = false, DateTimeOffset? PreReleaseEnd = null)
+    string? ShareUrl = null, bool IsPreRelease = false, DateTimeOffset? PreReleaseEnd = null,
+    // Playlist-only read model: resolved collaborators plus a lookup used by Added-by cells. Tracks keep the raw wire id.
+    IReadOnlyList<Owner>? Collaborators = null, IReadOnlyDictionary<string, Owner>? UserProfilesById = null)
 {
     /// <summary>Shared-element (connected-animation) key for the cover art — set by <c>DetailPage</c> from the route
     /// ("album:"+uri / "pl:"+uri) so the cover flies to/from the like-tagged Home card. Null = no Hero.</summary>
@@ -90,7 +92,7 @@ public sealed record DetailModel(
 /// (reference-equal by construction — see <c>DetailTracks</c>).
 /// </summary>
 public readonly record struct DetailConfig(
-    bool TwoColumn,                 // false → single-column (liked): no rail, no backdrop wash
+    bool TwoColumn,                 // false → single-column: no rail, no backdrop wash
     float RailWidth,
     BadgeStyle Badges,
     bool ShowArtThumb,              // playlist/liked: a small art thumb in the title cell
@@ -129,7 +131,7 @@ public readonly record struct DetailConfig(
     public static DetailConfig Compilation => Album with { ShowTrackArtist = true };
 
     public static DetailConfig Liked => new(
-        TwoColumn: false, RailWidth: 0f, Badges: BadgeStyle.None,
+        TwoColumn: true, RailWidth: WaveeSize.RailPlaylist, Badges: BadgeStyle.None,
         ShowArtThumb: true, ShowAlbumColumn: true, Columns: ListColumns, CapTitle: true,
         Selection: ItemsSelectionMode.Extended, HasTrailing: false, Heart: HeartMode.None, ShowTrackArtist: true);
 

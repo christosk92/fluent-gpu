@@ -231,7 +231,10 @@ internal sealed class PagedShelfCore : Component
         float stride = cardW + _gap;
         float maxX = MathF.Max(0f, sc.ContentW - sc.ViewportW);
         float target = Math.Clamp(page * Math.Max(1, perPageColumns) * stride, 0f, maxX);
-        if (MathF.Abs(sc.TargetX - target) < 0.5f && MathF.Abs(sc.OffsetX - target) < 0.5f) return;
+        // Already at (idle) or already chasing this target ⇒ don't re-arm.
+        float pendCur = sc.PendingTargetX;
+        if ((!float.IsNaN(pendCur) && MathF.Abs(pendCur - target) < 0.5f) ||
+            (float.IsNaN(pendCur) && MathF.Abs(sc.OffsetX - target) < 0.5f)) return;
 
         if (Motion.ReducedMotion)
         {
@@ -246,11 +249,12 @@ internal sealed class PagedShelfCore : Component
             return;
         }
 
-        sc.ScrollMode = ScrollAnimator.ProgrammaticMode;
+        sc.Phase = ScrollIntegrator.WheelAnimating;
+        sc.PhaseFlags = ScrollState.PhaseProgrammatic;
         sc.FlingVelocity = 0f;
         sc.FlingRetargeted = false;
         sc.FlingSnapTarget = float.NaN;
-        sc.TargetX = target;
+        sc.PendingTargetX = target;
         Context.ArmScroll?.Invoke(vp);
         Context.RequestRerender();
     }

@@ -2,13 +2,17 @@ namespace Wavee.Core;
 
 public enum RepeatMode { Off, Context, Track }
 
+public readonly record struct PlaybackContextTrack(string Uri, string Uid = "");
+
 /// <summary>Playback command surface. The real implementation marshals these to the out-of-process
 /// x64 AudioHost over a named pipe; the fake implementation is in-process. State is observed via
 /// <see cref="IPlaybackState"/>, never returned from commands.</summary>
 public interface IPlaybackPlayer
 {
     Task PlayAsync(string contextUri, int startIndex = 0, CancellationToken ct = default);
+    Task PlayOrderedAsync(string contextUri, IReadOnlyList<PlaybackContextTrack> tracks, int startIndex = 0, CancellationToken ct = default);
     Task PlayTrackAsync(string trackUri, CancellationToken ct = default);
+    Task PlayTrackAsync(Track track, CancellationToken ct = default);
     Task PauseAsync(CancellationToken ct = default);
     Task ResumeAsync(CancellationToken ct = default);
     Task NextAsync(CancellationToken ct = default);
@@ -21,6 +25,10 @@ public interface IPlaybackPlayer
     Task RemoveFromQueueAsync(string entryId, CancellationToken ct = default);
     /// <summary>Append a track to the user-queue (the "Add to queue" affordance).</summary>
     Task EnqueueAsync(string trackUri, CancellationToken ct = default);
+    /// <summary>Append a known track to the user-queue without discarding already-rendered metadata.</summary>
+    Task EnqueueAsync(Track track, CancellationToken ct = default);
+    /// <summary>Insert tracks at the FRONT of the user-queue ("play next" — before already-queued items).</summary>
+    Task PlayNextAsync(IReadOnlyList<PlaybackContextTrack> tracks, CancellationToken ct = default);
     IPlaybackState State { get; }
 }
 
@@ -73,11 +81,42 @@ public interface IConnectDevices
     Task TransferAsync(string deviceId, CancellationToken ct = default);
 }
 
+/// <summary>How tightly the lyric is timed — drives whether the view can do karaoke (Syllable), line-follow (Line),
+/// or only static display (Unsynced/None). Set by the provider/normalizer.</summary>
+public enum LyricsSyncKind { None, Unsynced, Line, Syllable }
+
 public sealed record LyricSyllable(long StartMs, long EndMs, string Text);
-public sealed record LyricLine(long StartMs, string Text, IReadOnlyList<LyricSyllable> Syllables);
-public sealed record LyricsDocument(string TrackId, bool IsSynced, IReadOnlyList<LyricLine> Lines);
+
+/// <summary>One lyric line. <paramref name="Syllables"/> carry word/syllable timing when present (word-by-word).
+/// The trailing args are additive (back-compat with positional <c>new LyricLine(start, text, syllables)</c> sites):
+/// <paramref name="EndMs"/> is the line's end (else derived = next line's StartMs); <paramref name="Translation"/>
+/// and <paramref name="Romanization"/> feed the multi-layer view; <paramref name="IsWordByWord"/> flags real syllable timing.</summary>
+public sealed record LyricLine(
+    long StartMs,
+    string Text,
+    IReadOnlyList<LyricSyllable> Syllables,
+    long? EndMs = null,
+    string? Translation = null,
+    string? Romanization = null,
+    bool IsWordByWord = false);
+
+public sealed record LyricsDocument(
+    string TrackId,
+    bool IsSynced,
+    IReadOnlyList<LyricLine> Lines,
+    LyricsSyncKind Sync = LyricsSyncKind.Line,
+    string? Provider = null,
+    long OffsetMsApplied = 0);
 
 public interface ILyricsProvider
 {
     Task<LyricsDocument?> GetLyricsAsync(string trackId, CancellationToken ct = default);
+}
+
+/// <summary>Optional extension for providers that can return a fast usable lyric first, then publish a richer winner
+/// when slower sources complete. Consumers must still call <see cref="ILyricsProvider.GetLyricsAsync"/> for the initial
+/// document; this stream is only for same-track replacements with better timing/detail.</summary>
+public interface IUpgradingLyricsProvider : ILyricsProvider
+{
+    IObservable<LyricsDocument> LyricsUpgraded { get; }
 }

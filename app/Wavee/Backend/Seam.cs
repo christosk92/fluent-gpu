@@ -41,10 +41,19 @@ public sealed class EngineMutationSource : IMutationSource, IDisposable
     public bool IsSaved(string uri) => _saved.Contains(uri);
     public IObservable<IReadOnlySet<string>> SavedChanged => _savedChanged;
 
+    /// <summary>Set at go-live (§6 hardening): routes the post-write drain through the LibrarySync loop so replay/
+    /// reconcile serializes with inbound diffs instead of racing them from the caller's thread. Null (offline / tests /
+    /// fake backend) keeps the inline drain. GoOffline resets it to null.</summary>
+    public Action? ScheduleDrain { get; set; }
+
     public async Task SetSavedAsync(string uri, bool saved, CancellationToken ct = default)
     {
         // store.SetSaved → Bump → OnStoreChange updates _saved + emits, synchronously — no explicit recompute needed.
-        _mut.Save(SetForUri(uri), uri, saved);                             // optimistic + outbox; set inferred from the uri kind
+        // §2.5 — a playlist follow/unfollow is a rootlist ADD/REM (routed to Follow), NOT a collection set write; every other
+        // uri kind is a collection save with the set inferred from the uri kind.
+        if (uri.StartsWith("spotify:playlist:", StringComparison.Ordinal)) _mut.Follow(uri, saved);
+        else _mut.Save(SetForUri(uri), uri, saved);                        // optimistic + outbox; set inferred from the uri kind
+        if (ScheduleDrain is { } viaLoop) { viaLoop(); return; }           // §6 — the loop drains, serialized with inbound
         await _mut.Drain(_transport, _ctx(), ct).ConfigureAwait(false);    // replay + reconcile (stub transport = succeeds)
     }
 
@@ -76,7 +85,7 @@ public sealed class EngineMutationSource : IMutationSource, IDisposable
         if (toEmit is not null) _savedChanged.OnNext(toEmit);
     }
 
-    static readonly string[] AllSets = { "liked", "albums", "artists", "shows", "episodes" };
+    static readonly string[] AllSets = { "liked", "albums", "artists", "shows", "episodes", "playlists" };   // §2.8 — followed playlists fold into Saved
 
     // The save set is inferred from the uri kind (track→liked, album→albums, artist→artists, show→shows, episode→episodes),
     // so ONE source covers every library type while Saved/IsSaved stay a single aggregated snapshot. Non-standard uris fall
@@ -87,6 +96,7 @@ public sealed class EngineMutationSource : IMutationSource, IDisposable
         uri.StartsWith("spotify:artist:", StringComparison.Ordinal) ? "artists" :
         uri.StartsWith("spotify:show:", StringComparison.Ordinal) ? "shows" :
         uri.StartsWith("spotify:episode:", StringComparison.Ordinal) ? "episodes" :
+        uri.StartsWith("spotify:playlist:", StringComparison.Ordinal) ? "playlists" :   // §2.8 — a single-uri follow change updates Saved incrementally
         _setId;
 
     HashSet<string> BuildUnion(IStore store)

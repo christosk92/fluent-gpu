@@ -363,23 +363,32 @@ float4 PSMain(VSOut i) : SV_Target
     /// last written FrameCount frames ago, whose GPU work the device has already fenced — so no CPU↔GPU race.</summary>
     public void BeginFrame(int frameIndex) { _active = ((frameIndex % FrameCount) + FrameCount) % FrameCount; _cursor = 0; }
 
-    public void Record(ID3D12GraphicsCommandList* cmd, ReadOnlySpan<RectInstance> instances, float vpW, float vpH)
+    /// <summary>Record one run. <paramref name="rebind"/> false = this pipeline's static state (root signature, PSO,
+    /// viewport constants, topology, quad VB) is still bound on <paramref name="cmd"/> from a previous run this frame —
+    /// only the per-run instance SRV offset + draw are recorded (the segment-flush storm dedup; the device tracks which
+    /// pipeline is bound and invalidates across compositor passes). Returns false when the instance buffer is full and
+    /// nothing was recorded (the command-list state is then untouched).</summary>
+    public bool Record(ID3D12GraphicsCommandList* cmd, ReadOnlySpan<RectInstance> instances, float vpW, float vpH, bool rebind = true)
     {
         int start = _cursor;
         int count = Math.Min(instances.Length, MaxInstances - start);
-        if (count <= 0) return;
+        if (count <= 0) return false;
         for (int i = 0; i < count; i++) _mapped[_active][start + i] = instances[i];
         _cursor += count;
 
-        float* vp = stackalloc float[2] { vpW, vpH };
-        cmd->SetGraphicsRootSignature(_rootSig);
-        cmd->SetPipelineState(_pso);
-        cmd->SetGraphicsRoot32BitConstants(0, 2, vp, 0);
+        if (rebind)
+        {
+            float* vp = stackalloc float[2] { vpW, vpH };
+            cmd->SetGraphicsRootSignature(_rootSig);
+            cmd->SetPipelineState(_pso);
+            cmd->SetGraphicsRoot32BitConstants(0, 2, vp, 0);
+            cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+            fixed (D3D12_VERTEX_BUFFER_VIEW* qv = &_quadView)
+                cmd->IASetVertexBuffers(0, 1, qv);
+        }
         cmd->SetGraphicsRootShaderResourceView(1, _instances[_active]->GetGPUVirtualAddress() + (ulong)(start * sizeof(RectInstance)));
-        cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
-        fixed (D3D12_VERTEX_BUFFER_VIEW* qv = &_quadView)
-            cmd->IASetVertexBuffers(0, 1, qv);
         cmd->DrawInstanced(4, (uint)count, 0, 0);
+        return true;
     }
 
     public void Dispose()

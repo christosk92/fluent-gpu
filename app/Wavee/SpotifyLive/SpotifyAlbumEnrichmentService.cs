@@ -68,7 +68,7 @@ sealed class SpotifyAlbumEnrichmentService : IAlbumEnrichmentService
         if (doc is null) return Array.Empty<Artist>();
         var artist = SpotifyExportMapper.ArtistFromOverview(doc.RootElement);
         if (artist is null) return Array.Empty<Artist>();
-        _store.UpsertArtist(artist);
+        _store.UpsertArtist(artist with { FetchedAt = DateTimeOffset.UtcNow });   // full overview → stamp SWR freshness
         return artist.Extras?.Related is { Count: > 0 } related ? Artists(related) : Array.Empty<Artist>();
     }
 

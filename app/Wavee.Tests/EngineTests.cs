@@ -113,7 +113,8 @@ public class MutationTests
 
     sealed class FailTransport : ITransport
     {
-        public Task<Resp> Request(Channel ch, string route, ReadOnlyMemory<byte> body, CancellationToken ct = default)
+        public Task<Resp> Request(Channel ch, string route, ReadOnlyMemory<byte> body, CancellationToken ct = default,
+            string? method = null, IReadOnlyDictionary<string, string>? headers = null)
             => Task.FromResult(new Resp(false, [], 500));
         public IObservable<WireEvent> Events(string p) => new SimpleSubject<WireEvent>();
         public IObservable<WireRequest> Requests(string p) => new SimpleSubject<WireRequest>();
@@ -158,10 +159,11 @@ public class MutationTests
     public async Task Drain_TerminalFailure_DeadLettersAndRollsBack()
     {
         var store = new InMemoryStore();
-        var m = Engine(store);
+        var clock = DateTime.UtcNow;
+        var m = new MutationEngine(store, [new SetReplayStrategy()], null, () => clock);   // inject a clock so the §8.3 backoff is deterministic
         m.Save("liked", "spotify:track:1", true);
         var fail = new FailTransport();
-        for (int i = 0; i < 10; i++) await m.Drain(fail, Ctx);   // 10 attempts → terminal
+        for (int i = 0; i < 10; i++) { await m.Drain(fail, Ctx); clock = clock.AddSeconds(120); }   // advance past the backoff each time → 10 attempts → terminal
         Assert.Single(m.DeadLetter);
         Assert.Equal(0, m.Pending);
         Assert.False(store.IsSaved("liked", "spotify:track:1"));   // rolled back

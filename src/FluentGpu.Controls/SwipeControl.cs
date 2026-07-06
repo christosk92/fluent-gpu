@@ -80,11 +80,11 @@ internal sealed class SwipeControlCore : Component
     const float PanSlopPx = 4f;       // the engine drag-box convention (ListViewBaseItem_Partial.cpp:1864-1878)
     // Fling-distance projection divisor for the open/close SNAP decision. A release of speed v (px/s) coasts an extra
     // v / FlingProjectK px in the snap-settle window before resting — the resting position the WinUI InteractionTracker
-    // settles a swipe to. Derived from the engine scroller decay (ScrollAnimator.FlingDecayPerS = 0.95/s survival) over
+    // settles a swipe to. Derived from the engine scroller decay (ScrollIntegrator.FlingDecayPerS = 0.95/s survival) over
     // the ControlNormal settle window T: coast = v·(1−decay^T)/−ln(decay), so the divisor is −ln(decay)/(1−decay^T).
     // A BOUNDED window (not the full infinite-decay scroll coast) is the right model for a page/threshold snap — a slow
     // drag projects only a little (springs back under the threshold), a fast flick projects past it (opens). ≈ 4.0.
-    static readonly float FlingProjectK = ProjectDivisor(ScrollAnimator.FlingDecayPerS, Motion.ControlNormal / 1000f);
+    static readonly float FlingProjectK = ProjectDivisor(ScrollIntegrator.FlingDecayPerS, Motion.ControlNormal / 1000f);
     static float ProjectDivisor(float decayPerS, float windowS)
     {
         float k = -MathF.Log(decayPerS);                 // the per-second decay rate (−ln survival)
@@ -232,7 +232,7 @@ internal sealed class SwipeControlCore : Component
             float stackW = StackWidth(acts, mode);
             // REAL release velocity from the arena VelocitySampler (px/s along the swipe axis), projected to the inertia
             // NaturalRestingPosition the WinUI InteractionTracker would settle at: |offset| + the friction-decay fling
-            // distance the engine's own scroller uses (v / -ln(decay), ScrollAnimator.FlingDecayPerS = 0.95/s). This is
+            // distance the engine's own scroller uses (v / -ln(decay), ScrollIntegrator.FlingDecayPerS = 0.95/s). This is
             // the velocity snap WinUI does on c_ThresholdValue (SwipeControl.cpp:944-961, :1634): a fast flick rests open
             // even short of 100px, and a release toward home springs closed. Velocity that opposes the open direction
             // (sign != side) projects nothing — only outward speed counts toward resting open.

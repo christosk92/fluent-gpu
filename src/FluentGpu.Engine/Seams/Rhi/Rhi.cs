@@ -31,6 +31,48 @@ public interface IGpuDevice : IDisposable
     /// <summary>Record + batch + submit the per-frame DrawList. <paramref name="drawList"/> is the POD command stream.</summary>
     void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx);
 
+    /// <summary>Render-thread seam (Step 0): the host calls this once it has spawned the render thread so the backend can
+    /// arm its submit/present thread-confinement assert (a stray UI-thread submit/present then throws under FGGUARD).
+    /// No-op by default (headless / single-thread backends have nothing to confine).</summary>
+    void MarkRenderConfined() { }
+
+    /// <summary>Render-thread seam (Step 1, ASYNC only): the host calls this after wiring the image-upload queue so the
+    /// backend arms confinement on its image texture store (Stage/Free/FlushUploads then throw under FGGUARD off the
+    /// render thread). Separate from <see cref="MarkRenderConfined"/> because force-sync still stages on the UI thread
+    /// (no overlap), so its image store must NOT be confined. No-op by default.</summary>
+    void MarkImageUploadsRenderConfined() { }
+
+    /// <summary>Render-thread seam (Step 1, ASYNC only): drain the UI→render image-upload queue on the RENDER thread,
+    /// immediately before the frame's <see cref="SubmitDrawList(ReadOnlySpan{byte}, ReadOnlySpan{ulong}, in FrameInfo)"/>
+    /// opens its command list — staging uploads / freeing evictions there keeps the texture store single-toucher. An
+    /// upload's transferred buffer is returned to <c>ArrayPool&lt;byte&gt;.Shared</c> after staging; a rejected upload is
+    /// posted back via <see cref="ImageUploadQueue.PostReject"/>. No-op by default (headless has no queue wired).</summary>
+    void DrainImageJobs(Hosting.Threading.ImageUploadQueue queue) { }
+
+    // ── Device-lost recovery (Step 4, ASYNC only; design/subsystems/threading-render-seam.md §9) ──
+    /// <summary>Arm async device-lost SIGNALING: on a device-removed/reset/hung HRESULT the backend records the reason +
+    /// bails the frame instead of throwing on the render thread (an unobserved background exception = process death), and
+    /// its fence waits become bounded (no INFINITE hang on a lost device). Called by the host under async. No-op default.</summary>
+    void EnableAsyncDeviceLostSignaling() { }
+
+    /// <summary>The recorded device-lost reason (0 = healthy). The host polls this each UI frame; non-zero drives the
+    /// recover handshake. Default 0 (headless / single-thread never signals — they keep the throw-on-loss path).</summary>
+    int PollDeviceLost() => 0;
+
+    /// <summary>Render thread (Step 4): rebuild the lost device — dispose every ComPtr WITHOUT waiting on the dead fence,
+    /// then recreate device/queue/allocators/command-list/fence + all pipelines + every swapchain, zero the fence
+    /// bookkeeping, and clear the lost-reason. Invoked from the render loop's recover gate under the UI's park. No-op default.</summary>
+    void RecoverDevice() { }
+
+    /// <summary>Render thread (Step 4): after a submit/present threw, was it a device removal? If so, record the reason
+    /// (so the UI recover gate fires) and return true so the caller can SWALLOW the exception (keeping the render thread
+    /// alive). Returns false for a non-device-loss throw (a genuine bug — must not be masked). Default false.</summary>
+    bool NoteIfDeviceLost() => false;
+
+    /// <summary>Test hook (FG_FORCE_DEVICE_LOST): force a controlled device removal to exercise the async recovery
+    /// rendezvous on real hardware, without TDR-ing the whole desktop. No-op default (headless / no injection support).</summary>
+    void InjectDeviceLost() { }
+
     /// <summary>Diagnostic: wall-time (ms) spent BLOCKED on GPU fences — the frame fence (<c>WaitForFrame</c>) plus the
     /// present-latency waitable — inside the most recent <see cref="SubmitDrawList(ReadOnlySpan{byte}, ReadOnlySpan{ulong}, in FrameInfo)"/>.
     /// This UI-thread stall is what dominates measured "submit" time today (the render-thread seam will move it off the UI

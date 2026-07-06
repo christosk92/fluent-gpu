@@ -68,11 +68,40 @@ public sealed unsafe class D3D12Device : IGpuDevice
     private readonly List<(RectF Rect, float Radius)> _roundedClipStack = new(16);
     private AcrylicCompositor? _acrylic;
     private OpacityLayerCompositor? _opacity;
+    // ALL layered primary-stream frames composite DIRECTLY on the back buffer (no full-window offscreen canvas + blit).
+    // Opacity/blur/edge-fade groups blend over the back buffer (the blur samples its own offscreen group RT); an ACRYLIC
+    // snapshots only the small back-buffer region under it (AcrylicCompositor.SnapshotBackBufferRegion → bit-exact region
+    // copy → blur → composite). An open lyrics rail (blur layers) or a frosted in-app pill/bar therefore no longer forces
+    // a whole-window round-trip every frame — the cost grew with window area (measured 5.6ms→2.3ms submit at 1440p).
+    // Cross-frame blur cache — ALWAYS ON (no flag). A stationary self-blur reuses last frame's retained, already-blurred
+    // pixels (a small region pin), skipping the subtree render + BOTH separable Gaussian passes. This is what keeps the
+    // full dist≤6 lyrics depth-of-field (~13 self-blur layers) cheap while the MAIN TRACK LIST scrolls: the lyrics rail is
+    // a separate, stationary viewport, so its blur layers keep a recurring content+position hash frame-to-frame ⇒ pin ⇒
+    // HIT (a bit-exact CopyTextureRegion composite, not a re-blur). A HIT is pixel-identical to a MISS, and the recurrence
+    // gate (below) only pins content that was already byte-identical last frame, so stationary content never
+    // pin/miss-alternates (no flicker). The lyrics' OWN scroll (content moves ⇒ fresh hash ⇒ miss) is handled separately
+    // by the recorder's scroll-defer (it drops the blur entirely while that viewport is in motion).
+    private int _blurCacheHit, _blurCacheMiss;   // per-frame diagnostics (Diag "d3d12" blurCacheHit/Miss)
+    private int _blurHoldHit, _blurHoldFallback; // per-frame diagnostics for hold-if-cached blur layers
+    // Blur-cache recurrence test: a self-blur is PINNED (retained) on a miss ONLY when its content hash recurred from the
+    // PREVIOUS frame (⇒ a STATIONARY surface that will hit next frame). Scrolling/animating content has a fresh hash every
+    // frame ⇒ never recurs ⇒ renders into a transient slot ⇒ no per-layer distinct-RT churn (pinning every scroll miss
+    // would give each of ~13 layers its own canvas-sized RT and thrash memory bandwidth). Two swapped rings, alloc-free.
+    private ulong[] _curBlurHashes = new ulong[64];
+    private ulong[] _lastBlurHashes = new ulong[64];
+    private int _curBlurHashCount, _lastBlurHashCount;
     // Open PushLayer kinds in stream order (acrylic pops are no-ops; opacity + self-blur pops composite their leased
     // RT), and the leased (slot, alpha, σ) per open OPACITY/BLUR group — both reused across frames (0 steady alloc). A
     // blur group is an opacity group with Sigma > 0: its RT is separable-Gaussian-blurred before the flat composite.
+    private const int NoopLayerKind = -1;
     private readonly List<int> _layerKinds = new(8);
-    private readonly List<(int Slot, PushLayerCmd L)> _opacityGroups = new(4);
+    private readonly List<(int Slot, PushLayerCmd L, ulong PinHash)> _opacityGroups = new(4);
+
+    public int LastBlurCacheHit => _blurCacheHit;
+    public int LastBlurCacheMiss => _blurCacheMiss;
+    public int LastBlurHoldHit => _blurHoldHit;
+    public int LastBlurHoldFallback => _blurHoldFallback;
+    public int LastOpacityGroups => _opacity?.GroupsThisFrame ?? 0;
     private GlyphRenderer? _glyphs;
     private ImageTextureStore? _imageTextures;
     private ImagePipeline? _imagePipe;
@@ -85,11 +114,33 @@ public sealed unsafe class D3D12Device : IGpuDevice
     private int _frameImageCount;
     private int _frameImageSkipped;
     private readonly List<GlyphInstance> _glyphInsts = new();
+    private readonly List<GradGlyphInstance> _gradGlyphInsts = new();   // sub-glyph karaoke wipe (active lyric line + glow)
     private float _frameScale = 1f;
     private int _frameRectCount;
     private int _frameGlyphInstanceCount;
+    // ── Cross-segment command-list state cache ──
+    // FlushSegment fires on EVERY PushClip/PopClip/PushLayer/PopLayer, and each pipeline's Record used to fully rebind
+    // its static state (root signature + PSO + constants + topology + VB) per run — on a clip-heavy frame that was
+    // thousands of redundant command-list calls (the dominant CPU cost of a continuously-animating frame: the track-play
+    // freeze). The device tracks which pipeline's static state is currently bound on _cmdList and passes rebind:false
+    // to a run whose pipeline is already bound (that run then records only its per-run SRV offset + draw). The active
+    // scissor RECT is deduped the same way (ApplyCurrentScissor re-sets an unchanged rect constantly on the layered
+    // path). Both caches are invalidated on command-list Reset and after every compositor pass that binds its own
+    // PSO/heap/scissor outside this cache (opacity/acrylic composites + blurs) — see the InvalidateCmdState call sites.
+    // Barriers, OMSetRenderTargets and clears do NOT disturb these bindings, so the cache stays valid across opacity
+    // group Acquire/Bind/BeginRead.
+    private enum BoundPipe : byte { None, Rect, Shadow, Arc, Polyline, Gradient, Glyph, GradGlyph, Image }
+    private BoundPipe _boundPipe;
+    private RECT _lastScissor;
+    private bool _scissorValid;
+    private int _framePipeBinds, _framePipeBindsSkipped;      // full static rebinds vs runs that reused the bound state
+    private int _frameScissorSets, _frameScissorSkipped;      // RSSetScissorRects recorded vs deduped
+    private int _frameSegments, _frameRuns;                   // FlushSegment calls / painter-order runs replayed
+    private int _frameClipOps, _frameLayerOps;                // Push/PopClip and Push/PopLayer ops decoded
     private readonly StringTable _strings;
     private readonly bool _composited;
+
+    private void InvalidateCmdState() { _boundPipe = BoundPipe.None; _scissorValid = false; }
 
     // DirectComposition (Mica path): the swapchain is composed onto the HWND so DWM's Mica shows through transparent pixels.
     private IDCompositionDevice* _dcomp;
@@ -178,6 +229,82 @@ public sealed unsafe class D3D12Device : IGpuDevice
         if ((int)hr < 0) throw new InvalidOperationException($"{what} failed: 0x{(uint)hr:X8}");
     }
 
+    // Render-thread-seam confinement tripwire (seam Step 0). Armed (via MarkRenderConfined) once the render thread owns
+    // submit/present — i.e. when AppHost spawns it for FG_RENDER_THREAD (force-sync) or FG_RENDER_ASYNC. While armed, a
+    // SubmitDrawList/Present from any thread but Render throws deterministically UNDER FGGUARD, so a stray UI-side GPU
+    // touch in async is caught in CI, never shipped. Inert in the default single-thread build (_renderConfined stays
+    // false ⇒ the assert is a no-op), and the whole thing erases in Release (the [Conditional] + ThreadGuard vanish).
+    private bool _renderConfined;
+    public void MarkRenderConfined() => _renderConfined = true;
+    [System.Diagnostics.Conditional("FGGUARD")]
+    private void AssertSubmitThread() { if (_renderConfined) FluentGpu.Hosting.Threading.ThreadGuard.AssertRender(); }
+
+    // Seam Step 1 (ASYNC only): image Stage/Free/FlushUploads become render-confined once the host wires the upload
+    // queue. Force-sync leaves the store UI-staged (no overlap), so this is a SEPARATE arm from MarkRenderConfined.
+    public void MarkImageUploadsRenderConfined() => _imageTextures?.MarkRenderConfined();
+
+    // Seam Step 1 (ASYNC only): drain the UI→render image-upload queue on the render thread, just before the frame's
+    // SubmitDrawList opens its command list (so a staged texture is resident before the draw that references it). Every
+    // Stage/Free/return-to-pool here runs render-confined → the texture store is single-toucher, no lock.
+    public void DrainImageJobs(FluentGpu.Hosting.Threading.ImageUploadQueue queue)
+    {
+        AssertSubmitThread();
+        if (_imageTextures is null) return;
+        while (queue.TryDequeueJob(out var j))
+        {
+            if (j.Evict) { _imageTextures.Free(j.Id); continue; }
+            var res = j.Buffer is null ? ImageUploadResult.Invalid : _imageTextures.Stage(j.Id, j.Buffer.AsSpan(0, j.ByteLen), j.W, j.H);
+            if (res != ImageUploadResult.Accepted) queue.PostReject(j.Id, res);   // +1-frame async admission: the UI folds the rejection next Pump
+            if (j.Buffer is not null) System.Buffers.ArrayPool<byte>.Shared.Return(j.Buffer);   // ownership transferred to us; return after Stage copied it
+        }
+    }
+
+    // ── Device-lost recovery (Step 4, ASYNC only; design/subsystems/threading-render-seam.md §9) ──
+    // Armed by EnableAsyncDeviceLostSignaling under async. Armed ⇒ a device-removed/reset/hung failure on the render
+    // thread records the reason (read by PollDeviceLost) instead of throwing an unobserved background exception, and the
+    // fence waits become bounded (WaitFenceEventBounded) so a lost device can't hang the loop forever. The non-async
+    // (default/force-sync) path keeps throwing on loss, unchanged.
+    private int _deviceLostReason;
+    private bool _signalDeviceLostInsteadOfThrow;
+    public void EnableAsyncDeviceLostSignaling() => _signalDeviceLostInsteadOfThrow = true;
+    public int PollDeviceLost() => System.Threading.Volatile.Read(ref _deviceLostReason);
+
+    // Render thread: a submit/present just threw. If the device is actually removed, record the reason (so the UI recover
+    // gate fires) and report true so the caller can SWALLOW the exception (keeping the render thread alive). Returns false
+    // for a non-device-loss throw (a genuine bug — must NOT be masked).
+    public bool NoteIfDeviceLost()
+    {
+        if (_device == null) return false;
+        int reason = (int)_device->GetDeviceRemovedReason();
+        if (reason != 0) { System.Threading.Volatile.Write(ref _deviceLostReason, reason); return true; }
+        return false;
+    }
+
+    // Async fence wait that never blocks forever on a lost device: poll GetDeviceRemovedReason on a bounded cadence and
+    // bail (recording the reason) if the device died. Only bails on ACTUAL removal — a merely-slow GPU keeps waiting, so
+    // we never return early and read an unfinished back buffer.
+    private void WaitFenceEventBounded()
+    {
+        while (true)
+        {
+            if (WaitForSingleObject(_fenceEvent, 1000) == 0u) return;   // WAIT_OBJECT_0 — fence signaled
+            int reason = (int)_device->GetDeviceRemovedReason();
+            if (reason != 0) { System.Threading.Volatile.Write(ref _deviceLostReason, reason); return; }
+        }
+    }
+
+    // Test hook (FG_FORCE_DEVICE_LOST=<frameN>): force a clean DEVICE_REMOVED via ID3D12Device5::RemoveDevice — a
+    // controlled removal that does NOT TDR the whole desktop — to exercise the async recovery rendezvous on real hardware.
+    public void InjectDeviceLost()
+    {
+        ID3D12Device5* dev5;
+        if (_device != null && (int)_device->QueryInterface(__uuidof<ID3D12Device5>(), (void**)&dev5) >= 0 && dev5 != null)
+        {
+            dev5->RemoveDevice();
+            dev5->Release();
+        }
+    }
+
     private void InitDevice()
     {
         uint flags = 0;
@@ -210,6 +337,21 @@ public sealed unsafe class D3D12Device : IGpuDevice
             BackendNameSuffix = " (WARP)";
         }
         _device = device;
+
+        // Publish a coarse GPU power tier (GpuProfile) so UI quality defaults can scale to the hardware WITHOUT a render-
+        // hardware seam contract. UMA == integrated/APU (and WARP) — shares system RAM, a fraction of a discrete GPU's
+        // fill rate / bandwidth ⇒ Weak; a GPU with dedicated VRAM ⇒ Strong. Best-effort: any failure leaves the tier
+        // Unknown, which callers treat as the balanced default. This is what lets the lyrics depth-of-field stay smooth
+        // on a weak iGPU (it auto-selects the cheap path) while a discrete GPU keeps the full effect.
+        try
+        {
+            D3D12_FEATURE_DATA_ARCHITECTURE arch = default;
+            if ((int)_device->CheckFeatureSupport(D3D12_FEATURE.D3D12_FEATURE_ARCHITECTURE, &arch, (uint)sizeof(D3D12_FEATURE_DATA_ARCHITECTURE)) >= 0)
+                FluentGpu.Foundation.GpuProfile.Tier = arch.UMA != 0
+                    ? FluentGpu.Foundation.GpuPowerTier.Weak
+                    : FluentGpu.Foundation.GpuPowerTier.Strong;
+        }
+        catch { /* detection is best-effort; Unknown ⇒ balanced default */ }
 
         D3D12_COMMAND_QUEUE_DESC qd = default;
         qd.Type = D3D12_COMMAND_LIST_TYPE.D3D12_COMMAND_LIST_TYPE_DIRECT;
@@ -301,16 +443,14 @@ public sealed unsafe class D3D12Device : IGpuDevice
         }
         else if (target.Composited)
         {
-            EnsureDComp();
-            IDCompositionTarget* dcompTarget;
-            Check(_dcomp->CreateTargetForHwnd(target.Hwnd, BOOL.TRUE, &dcompTarget), "CreateTargetForHwnd");
-            target.DcompTarget = dcompTarget;
-            IDCompositionVisual* visual;
-            Check(_dcomp->CreateVisual(&visual), "CreateVisual");
-            target.DcompVisual = visual;
-            Check(target.DcompVisual->SetContent((IUnknown*)target.SwapChain), "Visual.SetContent");
-            Check(target.DcompTarget->SetRoot(target.DcompVisual), "Target.SetRoot");
-            Check(_dcomp->Commit(), "DComp.Commit");
+            // Async render-thread seam (DIM on-screen fix): the DirectComposition device/target/visual are a RENDER-THREAD
+            // SOLE-COM-OWNER (threading-render-seam.md §1). The SAME thread that Presents must create+own+Commit the visual
+            // tree — under async, presenting the composited flip swapchain from the render thread while the DComp graph was
+            // created+committed on the UI thread makes DWM composite it DIM/stale. InitSwapChain runs UI-side (ctor) or
+            // render-side (RecoverDevice), so DEFER the bind: BindDComp runs it on the PRESENTING thread (lazily on first
+            // Present, or explicitly in the render-confined RecoverDevice). CaptureBgra reads the back buffer and never hit
+            // this — the blind spot that hid the dim composite. The IDXGISwapChain + RTVs above are queue-scoped (safe here).
+            target.DcompBindPending = true;
         }
 
         CreateRtvs(target);
@@ -319,10 +459,32 @@ public sealed unsafe class D3D12Device : IGpuDevice
 
     private void EnsureDComp()
     {
+        AssertSubmitThread();   // seam: the DComp device is render-thread-confined once a render thread exists (no-op in pure single-thread)
         if (_dcomp != null) return;
         IDCompositionDevice* dc;
         Check(DCompositionCreateDevice(null, __uuidof<IDCompositionDevice>(), (void**)&dc), "DCompositionCreateDevice");
         _dcomp = dc;
+    }
+
+    // Bind (or rebind) a composited swapchain's DirectComposition target/visual on the PRESENTING thread. Deferred out of
+    // InitSwapChain (which runs UI-side in the ctor) so the whole DComp graph is created + Commit()ed by the same thread
+    // that Presents — the SOLE-COM-OWNER contract (threading-render-seam.md §1), the fix for the async DIM on-screen
+    // composite. Runs once per swapchain lifetime (clears DcompBindPending); the SetContent binding survives ResizeBuffers,
+    // so a resize does NOT re-arm it. AssertSubmitThread is a no-op in the pure single-thread path (not render-confined).
+    private void BindDComp(D3D12Swapchain target)
+    {
+        AssertSubmitThread();
+        EnsureDComp();
+        IDCompositionTarget* dcompTarget;
+        Check(_dcomp->CreateTargetForHwnd(target.Hwnd, BOOL.TRUE, &dcompTarget), "CreateTargetForHwnd");
+        target.DcompTarget = dcompTarget;
+        IDCompositionVisual* visual;
+        Check(_dcomp->CreateVisual(&visual), "CreateVisual");
+        target.DcompVisual = visual;
+        Check(target.DcompVisual->SetContent((IUnknown*)target.SwapChain), "Visual.SetContent");
+        Check(target.DcompTarget->SetRoot(target.DcompVisual), "Target.SetRoot");
+        Check(_dcomp->Commit(), "DComp.Commit");
+        target.DcompBindPending = false;
     }
 
     private void CreateRtvs(D3D12Swapchain target)
@@ -382,6 +544,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
     {
         if (target is not D3D12Swapchain sc || sc.Device != this || sc.Disposed)
             throw new InvalidOperationException("Submit target is not a live D3D12 swapchain from this device.");
+        AssertSubmitThread();   // seam Step 0: when render-confined (force-sync/async), only the render thread may submit
         Activate(sc);
         // Normally throttle to present cadence before producing this frame. A keep-alive repaint fired from inside an
         // OS modal move/size loop (host called SuppressLatencyWaitOnce) skips it so the WndProc thread isn't blocked
@@ -397,6 +560,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
         ID3D12CommandAllocator* allocator = _allocators[_frameIndex];
         Check(allocator->Reset(), "allocator.Reset");
         Check(_cmdList->Reset(allocator, null), "cmdList.Reset");
+        InvalidateCmdState();   // fresh command list — nothing is bound
         _imageTextures?.FlushUploads(_cmdList);
 
         ID3D12Resource* backBuffer = _backBuffers[_frameIndex];
@@ -412,6 +576,12 @@ public sealed unsafe class D3D12Device : IGpuDevice
         _frameGlyphInstanceCount = 0;
         _frameImageCount = 0;
         _frameImageSkipped = 0;
+        _framePipeBinds = 0; _framePipeBindsSkipped = 0;
+        _frameScissorSets = 0; _frameScissorSkipped = 0;
+        _frameSegments = 0; _frameRuns = 0; _frameClipOps = 0; _frameLayerOps = 0;
+        _blurCacheHit = 0; _blurCacheMiss = 0; _blurHoldHit = 0; _blurHoldFallback = 0;
+        (_lastBlurHashes, _curBlurHashes) = (_curBlurHashes, _lastBlurHashes);   // rotate the blur-cache recurrence ring
+        _lastBlurHashCount = _curBlurHashCount; _curBlurHashCount = 0;
         // Every pipe banks its instance upload buffer by back-buffer index: WaitForFrame above fenced the submit that
         // last USED this index (frame N-2), so writing this bank can never race frame N-1's still-in-flight GPU reads —
         // the CPU↔GPU tear that flickered on scroll/hover (the image pipe had this; the six geometry pipes were missed).
@@ -431,13 +601,22 @@ public sealed unsafe class D3D12Device : IGpuDevice
         // use-after-free → DXGI_ERROR_DEVICE_REMOVED on the next Present (the prior popup-window crash). OS-backed popups
         // are transparent (DWM supplies the acrylic), so they carry no engine layers; force them onto the streaming path
         // — never touching the shared canvas. A stray PushLayer in a popup stream is harmlessly ignored (drawn flat).
-        if (sc == _primarySwapchain && StreamHasLayer(drawList))
+        // Three submit routes for the PRIMARY swapchain: (0) NO layers → SubmitStreaming straight to the back buffer; (1)
+        // opacity/blur/edge-fade layers but NO acrylic → render the scene + composite those layers DIRECTLY on the back
+        // buffer (FG_BACKBUFFER_LAYERS): those kinds composite OVER a target without sampling it (the blur reads its own
+        // offscreen group RT, not the canvas), so the full-window offscreen canvas clear + blit is unnecessary — an open
+        // lyrics rail (blur layers) then does NOT tax the whole window's scrolling/animation; (2) an ACRYLIC layer IS
+        // present → the canvas path (acrylic must snapshot the backdrop offscreen to blur it): clear the canvas, render the
+        // scene into it, run the layer passes, blit back.
+        int layerKind = sc == _primarySwapchain ? StreamLayerKind(drawList) : 0;
+        if (layerKind != 0)
         {
-            // Layered path (acrylic AND/OR opacity groups): render the scene into an engine-owned canvas, run each
-            // layer's passes in stream order, blit to the back buffer.
-            _acrylic!.EnsureSize(_w, _h);
+            // Both opacity/blur (kind 1) and acrylic (kind 2) composite directly on the back buffer — no offscreen canvas
+            // + blit. An acrylic keeps the canvas only as its region-copy scratch (SnapshotBackBufferRegion), so size it
+            // when one is present in the stream.
+            if (layerKind == 2) _acrylic!.EnsureSize(_w, _h);
             _opacity!.EnsureSize(_w, _h);
-            SubmitWithLayers(drawList, ctx, lw, lh, rtv);
+            SubmitWithLayers(drawList, ctx, lw, lh, rtv, directToBackBuffer: true);
         }
         else
         {
@@ -455,6 +634,18 @@ public sealed unsafe class D3D12Device : IGpuDevice
         Diag.Set("d3d12", "acrylicPoolRts", _acrylic?.PooledRtCount ?? 0);    // live pooled layer RTs (steady state: 2 while a surface is open)
         Diag.Set("d3d12", "opacityGroups", _opacity?.GroupsThisFrame ?? 0);   // flat opacity groups composited this frame
         Diag.Set("d3d12", "opacityPoolRts", _opacity?.PooledRtCount ?? 0);    // live pooled group RTs (≈ nesting depth while fading)
+        Diag.Set("d3d12", "blurCacheHit", _blurCacheHit);                     // blur layers served from the cross-frame pin cache this frame
+        Diag.Set("d3d12", "blurCacheMiss", _blurCacheMiss);                   // blur layers re-rendered+re-blurred (content/position/σ changed)
+        Diag.Set("d3d12", "blurHoldHit", _blurHoldHit);
+        Diag.Set("d3d12", "blurHoldFallback", _blurHoldFallback);
+        Diag.Set("d3d12", "segments", _frameSegments);                        // FlushSegment calls (≈ 2·clips + 2·layers + 1)
+        Diag.Set("d3d12", "runs", _frameRuns);                                // painter-order runs replayed across all segments
+        Diag.Set("d3d12", "clipOps", _frameClipOps);                          // Push/PopClip ops decoded this frame
+        Diag.Set("d3d12", "layerOps", _frameLayerOps);                        // Push/PopLayer ops decoded this frame
+        Diag.Set("d3d12", "pipeBinds", _framePipeBinds);                      // full static pipeline rebinds recorded
+        Diag.Set("d3d12", "pipeBindsSkipped", _framePipeBindsSkipped);        // runs that reused the cross-segment bound state
+        Diag.Set("d3d12", "scissorSets", _frameScissorSets);                  // RSSetScissorRects recorded
+        Diag.Set("d3d12", "scissorSkipped", _frameScissorSkipped);            // scissor sets deduped (rect unchanged)
         Diag.Set("d3d12", "rects", _frameRectCount);
         Diag.Set("d3d12", "glyphInstances", _frameGlyphInstanceCount);
         Diag.Set("d3d12", "images", _frameImageCount);
@@ -490,7 +681,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
     // Residency evicted the image → free its GPU texture (deferred behind the frame fence in the store).
     public void EvictImage(int imageId) => _imageTextures?.Free(imageId);
 
-    private void ClearInsts() { _rectInsts.Clear(); _glyphInsts.Clear(); _shadowInsts.Clear(); _arcInsts.Clear(); _polylineInsts.Clear(); _gradInsts.Clear(); _imageDraws.Clear(); _runs.Clear(); }
+    private void ClearInsts() { _rectInsts.Clear(); _glyphInsts.Clear(); _gradGlyphInsts.Clear(); _shadowInsts.Clear(); _arcInsts.Clear(); _polylineInsts.Clear(); _gradInsts.Clear(); _imageDraws.Clear(); _runs.Clear(); }
 
     // Record (or extend) a painter-order run for the just-appended primitive, so RecordAll can replay in stream order.
     private void PushRun(PrimKind kind)
@@ -545,6 +736,23 @@ public sealed unsafe class D3D12Device : IGpuDevice
                             g.CharSpacing, g.LineHeight, g.LineStacking, g.LineBounds, g.Color, _frameScale, g.Transform, g.Opacity, _glyphInsts,
                             g.SpanRunId, g.ForceColor != 0, g.InMotion != 0);
                         _frameGlyphInstanceCount += _glyphInsts.Count - before;
+                    }
+                    break;
+                }
+                case DrawOp.DrawGlyphRunGradient:
+                {
+                    var g = MemoryMarshal.Read<DrawGlyphRunGradientCmd>(cmds.Slice(pos));
+                    pos += Unsafe.SizeOf<DrawGlyphRunGradientCmd>();
+                    string s = _strings.Resolve(g.Text);
+                    if (s.Length > 0)
+                    {
+                        int before = _gradGlyphInsts.Count;
+                        // Karaoke wipe: a per-PIXEL sub-glyph gradient (before→after over a soft band at the split) via a
+                        // SEPARATE gradient PSO/batch (_gradGlyphInsts) — normal text keeps its lean single-color path.
+                        _glyphs!.LayoutRunGradient(g.Text, g.Family, s, _strings.Resolve(g.Family), g.FontSize, g.Weight, g.Bounds.X, g.Bounds.Y, g.Bounds.W, g.Wrap, g.Trim, g.MaxLines,
+                            g.CharSpacing, g.LineHeight, g.LineStacking, g.LineBounds, g.Before, g.After, g.Split, g.Softness, g.Lift, _frameScale, g.Transform, g.Opacity, _gradGlyphInsts,
+                            g.SpanRunId, g.InMotion != 0);
+                        _frameGlyphInstanceCount += _gradGlyphInsts.Count - before;
                     }
                     break;
                 }
@@ -751,9 +959,18 @@ public sealed unsafe class D3D12Device : IGpuDevice
     }
 
     private void SetFullScissor()
+        => SetScissorRect(new RECT { left = 0, top = 0, right = (int)_w, bottom = (int)_h });
+
+    // Single scissor chokepoint with dedup: an unchanged rect records nothing (valid because RSSetScissorRects is pure
+    // command-list state — only invalidated when a compositor pass sets its own scissor, via InvalidateCmdState).
+    private void SetScissorRect(RECT sc)
     {
-        RECT scd = new() { left = 0, top = 0, right = (int)_w, bottom = (int)_h };
-        _cmdList->RSSetScissorRects(1, &scd);
+        if (_scissorValid && sc.left == _lastScissor.left && sc.top == _lastScissor.top
+            && sc.right == _lastScissor.right && sc.bottom == _lastScissor.bottom) { _frameScissorSkipped++; return; }
+        _lastScissor = sc;
+        _scissorValid = true;
+        _frameScissorSets++;
+        _cmdList->RSSetScissorRects(1, &sc);
     }
 
     private RECT ToScissor(in RectF r)
@@ -772,11 +989,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
         return new RECT { left = left, top = top, right = right, bottom = bottom };
     }
 
-    private void SetScissor(in RectF r)
-    {
-        RECT sc = ToScissor(r);
-        _cmdList->RSSetScissorRects(1, &sc);
-    }
+    private void SetScissor(in RectF r) => SetScissorRect(ToScissor(r));
 
     private void PushScissor(in ClipCmd clip)
     {
@@ -813,11 +1026,22 @@ public sealed unsafe class D3D12Device : IGpuDevice
         else SetScissor(_clipStack[^1]);
     }
 
+    // Bookkeep a pipeline Record outcome: `recorded` = the run actually recorded (its state is now bound);
+    // `rb` = it was asked to fully rebind (a false rb that recorded reused the cross-segment bound state).
+    private void NotePipeBind(bool recorded, bool rb, BoundPipe pipe)
+    {
+        if (!recorded) return;
+        _boundPipe = pipe;
+        if (rb) _framePipeBinds++; else _framePipeBindsSkipped++;
+    }
+
     private void RecordAll(float lw, float lh)
     {
         // Replay non-glyph primitives in painter (stream) order so a shadow sits OVER the background drawn before it and
-        // UNDER its own element. Consecutive same-kind ops are still one batched draw (each pipeline's Record/Begin fully
-        // (re)binds its state, so interleaving pipelines is safe). Glyphs always render last — text on top within a z-context.
+        // UNDER its own element. Consecutive same-kind ops are still one batched draw. A run whose pipeline is ALREADY
+        // bound on the command list (tracked in _boundPipe across segment flushes) skips the static rebind and records
+        // only its SRV offset + draw — see the state-cache comment on _boundPipe. Glyphs always render last — text on
+        // top within a z-context.
         if (_runs.Count > 0)
         {
             var rectSpan = CollectionsMarshal.AsSpan(_rectInsts);
@@ -826,21 +1050,44 @@ public sealed unsafe class D3D12Device : IGpuDevice
             var polylineSpan = CollectionsMarshal.AsSpan(_polylineInsts);
             var gradSpan = CollectionsMarshal.AsSpan(_gradInsts);
             int rc = 0, sc = 0, ac = 0, pc = 0, gc = 0, ic = 0;
+            _frameRuns += _runs.Count;
             foreach (var (kind, count) in _runs)
             {
+                bool rb;
                 switch (kind)
                 {
-                    case PrimKind.Shadow: _shadowPipe!.Record(_cmdList, shadowSpan.Slice(sc, count), lw, lh); sc += count; break;
-                    case PrimKind.Arc: _arcPipe!.Record(_cmdList, arcSpan.Slice(ac, count), lw, lh); ac += count; break;
-                    case PrimKind.Polyline: _polylinePipe!.Record(_cmdList, polylineSpan.Slice(pc, count), lw, lh); pc += count; break;
-                    case PrimKind.Gradient: _gradPipe!.Record(_cmdList, gradSpan.Slice(gc, count), lw, lh); gc += count; break;
-                    case PrimKind.Rect: _rectPipe!.Record(_cmdList, rectSpan.Slice(rc, count), lw, lh); rc += count; break;
+                    case PrimKind.Shadow:
+                        rb = _boundPipe != BoundPipe.Shadow;
+                        NotePipeBind(_shadowPipe!.Record(_cmdList, shadowSpan.Slice(sc, count), lw, lh, rb), rb, BoundPipe.Shadow);
+                        sc += count; break;
+                    case PrimKind.Arc:
+                        rb = _boundPipe != BoundPipe.Arc;
+                        NotePipeBind(_arcPipe!.Record(_cmdList, arcSpan.Slice(ac, count), lw, lh, rb), rb, BoundPipe.Arc);
+                        ac += count; break;
+                    case PrimKind.Polyline:
+                        rb = _boundPipe != BoundPipe.Polyline;
+                        NotePipeBind(_polylinePipe!.Record(_cmdList, polylineSpan.Slice(pc, count), lw, lh, rb), rb, BoundPipe.Polyline);
+                        pc += count; break;
+                    case PrimKind.Gradient:
+                        rb = _boundPipe != BoundPipe.Gradient;
+                        NotePipeBind(_gradPipe!.Record(_cmdList, gradSpan.Slice(gc, count), lw, lh, rb), rb, BoundPipe.Gradient);
+                        gc += count; break;
+                    case PrimKind.Rect:
+                        rb = _boundPipe != BoundPipe.Rect;
+                        NotePipeBind(_rectPipe!.Record(_cmdList, rectSpan.Slice(rc, count), lw, lh, rb), rb, BoundPipe.Rect);
+                        rc += count; break;
                     case PrimKind.Image:
-                        _imagePipe!.Begin(_cmdList, _imageTextures!.Heap, lw, lh);   // (re)bind heap/PSO/root-sig/VB for this image run
+                        if (_boundPipe != BoundPipe.Image)
+                        {
+                            _imagePipe!.Begin(_cmdList, _imageTextures!.Heap, lw, lh);   // (re)bind heap/PSO/root-sig/VB for this image run
+                            _boundPipe = BoundPipe.Image;
+                            _framePipeBinds++;
+                        }
+                        else _framePipeBindsSkipped++;
                         for (int k = 0; k < count; k++)
                         {
                             var (inst, id) = _imageDraws[ic + k];
-                            if (_imageTextures.TryGet(id, out var srv, out var uv))
+                            if (_imageTextures!.TryGet(id, out var srv, out var uv))
                             {
                                 var d = inst;
                                 // Compose the atlas cell (uv) with the content-fit sub-rect baked on the instance (inst.Uv*,
@@ -848,7 +1095,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
                                 // Whole-texture images (cell = 0,0,1,1) pass the content-fit rect through unchanged.
                                 d.UvX = uv.X + inst.UvX * uv.W; d.UvY = uv.Y + inst.UvY * uv.H;
                                 d.UvW = uv.W * inst.UvW; d.UvH = uv.H * inst.UvH;
-                                _imagePipe.Draw(_cmdList, srv, in d);
+                                _imagePipe!.Draw(_cmdList, srv, in d);
                             }
                             else _frameImageSkipped++;   // image recorded but its texture isn't live yet (diagnostic: should be 0 once loaded)
                         }
@@ -857,11 +1104,21 @@ public sealed unsafe class D3D12Device : IGpuDevice
                 }
             }
         }
-        if (_glyphInsts.Count > 0) _glyphs!.Record(_cmdList, _glyphInsts, lw, lh);
+        if (_glyphInsts.Count > 0)
+        {
+            bool rb = _boundPipe != BoundPipe.Glyph;
+            NotePipeBind(_glyphs!.Record(_cmdList, _glyphInsts, lw, lh, rb), rb, BoundPipe.Glyph);
+        }
+        if (_gradGlyphInsts.Count > 0)   // sub-glyph wipe, same RT/z as glyphs
+        {
+            bool rb = _boundPipe != BoundPipe.GradGlyph;
+            NotePipeBind(_glyphs!.RecordGradient(_cmdList, _gradGlyphInsts, lw, lh, rb), rb, BoundPipe.GradGlyph);
+        }
     }
 
     private void FlushSegment(float lw, float lh)
     {
+        _frameSegments++;
         _glyphs!.UploadIfDirty(_cmdList);
         RecordAll(lw, lh);
         ClearInsts();
@@ -881,6 +1138,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
                 pos += sizeof(int);
                 var clip = MemoryMarshal.Read<ClipCmd>(drawList.Slice(pos));
                 pos += Unsafe.SizeOf<ClipCmd>();
+                _frameClipOps++;
                 FlushSegment(lw, lh);
                 PushScissor(in clip);
                 continue;
@@ -888,6 +1146,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
             if (op == DrawOp.PopClip)
             {
                 pos += sizeof(int);
+                _frameClipOps++;
                 FlushSegment(lw, lh);
                 PopScissor();
                 continue;
@@ -904,11 +1163,26 @@ public sealed unsafe class D3D12Device : IGpuDevice
     // backdrop drawn so far then composites the frosted surface (content draws on top; its PopLayer is a no-op). An
     // Opacity PushLayer redirects drawing into a leased transparent canvas-sized RT; its PopLayer composites that RT
     // once over the underlying target at GroupAlpha (flat group — no double-blend). Kinds nest via _layerKinds.
-    private void SubmitWithLayers(ReadOnlySpan<byte> drawList, in FrameInfo ctx, float lw, float lh, D3D12_CPU_DESCRIPTOR_HANDLE backRtv)
+    private void SubmitWithLayers(ReadOnlySpan<byte> drawList, in FrameInfo ctx, float lw, float lh, D3D12_CPU_DESCRIPTOR_HANDLE backRtv, bool directToBackBuffer)
     {
         // completed fence gates pool retire/drain; (frameIndex & 1) selects this frame's parity-banked SRV slots.
-        _acrylic!.BeginCanvas(_cmdList, ctx.Clear, global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence), (int)(_frameIndex & 1));
-        _opacity!.BeginFrame(global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence), (int)(_frameIndex & 1));
+        ulong completed = global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence);
+        if (directToBackBuffer)
+        {
+            // Composite all layer groups straight onto the back buffer. Blur/opacity/edge-fade blend OVER it (the blur
+            // samples its own offscreen group RT); an ACRYLIC snapshots only its small back-buffer region into the canvas
+            // (BlurAndComposite below). Bind + clear the back buffer like the streaming path — the full-window scene→canvas
+            // render + blit are skipped. BeginFrameDirect sets the acrylic pool's SRV parity bank + runs upkeep WITHOUT the
+            // full-window canvas clear, so a stationary acrylic's retained-backdrop cache stays parity-correct.
+            _acrylic!.BeginFrameDirect(completed, (int)(_frameIndex & 1));
+            _cmdList->OMSetRenderTargets(1, &backRtv, BOOL.FALSE, null);
+            float* clr = stackalloc float[4] { ctx.Clear.R, ctx.Clear.G, ctx.Clear.B, ctx.Clear.A };
+            _cmdList->ClearRenderTargetView(backRtv, clr, 0, null);
+            SetFullViewport();
+        }
+        else _acrylic!.BeginCanvas(_cmdList, ctx.Clear, completed, (int)(_frameIndex & 1));
+        _opacity!.BeginFrame(completed, (int)(_frameIndex & 1));
+        InvalidateCmdState();   // canvas/back-buffer setup may have touched viewport/scissor outside the cache
         ClearInsts();
         _clipStack.Clear();
         _roundedClipStack.Clear();
@@ -923,6 +1197,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
                 pos += sizeof(int);
                 var clip = MemoryMarshal.Read<ClipCmd>(drawList.Slice(pos));
                 pos += Unsafe.SizeOf<ClipCmd>();
+                _frameClipOps++;
                 FlushSegment(lw, lh);
                 PushScissor(in clip);
                 continue;
@@ -930,6 +1205,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
             if (op == DrawOp.PopClip)
             {
                 pos += sizeof(int);
+                _frameClipOps++;
                 FlushSegment(lw, lh);
                 PopScissor();
                 continue;
@@ -939,14 +1215,78 @@ public sealed unsafe class D3D12Device : IGpuDevice
                 int p2 = pos + sizeof(int);
                 var L = MemoryMarshal.Read<PushLayerCmd>(drawList.Slice(p2));
                 pos = p2 + Unsafe.SizeOf<PushLayerCmd>();
+                _frameLayerOps++;
                 FlushSegment(lw, lh);                       // draw the backdrop-so-far into the current target
                 if (L.Kind == (int)LayerKind.Opacity || L.Kind == (int)LayerKind.Blur || L.Kind == (int)LayerKind.EdgeFade)
                 {
+                    // Blur cache: a self-blur whose subtree bytes + σ are unchanged reuses last frame's retained blurred
+                    // RT (skip the render + both Gaussian passes). Safe-bails to the normal lease path on a nested layer
+                    // or an unrecognized op. `pos` is already past the PushLayerCmd, i.e. at the first subtree op.
+                    bool holdIfCached = L.Kind == (int)LayerKind.Blur && L.BlurCachePolicy != (int)BlurCachePolicy.Normal;
+                    bool skipOnHoldMiss = L.BlurCachePolicy == (int)BlurCachePolicy.HoldOrSkipOnMiss;
+                    if (L.Kind == (int)LayerKind.Blur && L.BlurSigma > 0f
+                        && BlurPinKey.TryCompute(drawList, pos, in L, out ulong bhash, out int afterPop))
+                    {
+                        if (_curBlurHashCount < _curBlurHashes.Length) _curBlurHashes[_curBlurHashCount++] = bhash;
+                        int pin = _opacity.FindPin(bhash, _fenceValue + 1, in L, _frameScale);   // G1: a hit refreshes recency (MRU); size-exact match
+                        // An edge-clamped (partial) region can't reuse a full-strip pin without vertically squishing it,
+                        // so a clamped self-blur is uncacheable — miss (render + blur at the exact clamped region) here.
+                        bool regionClamped = _opacity.RegionIsClamped(in L, _frameScale);
+                        // Position-independent key ⇒ a scrolled (translated) strip HITS its pin. On the SETTLE frame
+                        // (InMotion==0) where the pin was captured at a different integer origin, fall through to one exact
+                        // re-blur at rest (settle exactness) instead of compositing the mid-motion pin.
+                        if (pin >= 0 && !regionClamped && !(L.InMotion == 0 && _opacity.PinOriginDiffers(pin, in L, _frameScale)))
+                        {
+                            // HIT: composite the cached blur over the enclosing target; skip the subtree + its PopLayer.
+                            if (_opacityGroups.Count > 0) _opacity.Bind(_cmdList, _opacityGroups[^1].Slot);
+                            else BindLayerTopTarget(directToBackBuffer, backRtv);
+                            _opacity.CompositePinnedBlur(_cmdList, pin, L.GroupAlpha, in L, _frameScale);
+                            InvalidateCmdState();   // the composite bound its own PSO/heap + viewport/scissor
+                            ApplyCurrentScissor();
+                            _blurCacheHit++;
+                            if (holdIfCached) _blurHoldHit++;
+                            pos = afterPop;
+                            continue;
+                        }
+                        // MISS: render into a NORMAL transient scratch (unchanged path), and TAG the group with bhash so
+                        // PopLayer copies the blurred region into a small retained pin AFTER the normal composite — but only
+                        // if this exact content recurred from last frame ⇒ STATIONARY ⇒ likely a hit next frame. A fresh hash
+                        // (scroll/animation moves content every frame) leaves pinHash 0 below ⇒ pure transient, no pin churn.
+                        if (BlurHashSeenLastFrame(bhash))
+                        {
+                            int pslot = _opacity.Acquire(_cmdList, _fenceValue + 1);
+                            // Don't pin an edge-clamped (partial) capture: it holds only the on-canvas slice, so a later
+                            // frame at a different clamp would squish it, and each clamp size would mint a distinct
+                            // duplicate same-hash pin, thrashing the budget. pinHash 0 ⇒ pure transient (re-blur next frame).
+                            ulong pinTag = regionClamped ? 0UL : bhash;
+                            _opacityGroups.Add((pslot, L, pinTag));
+                            _layerKinds.Add(L.Kind);
+                            _blurCacheMiss++;
+                            continue;
+                        }
+                        if (holdIfCached)
+                        {
+                            if (skipOnHoldMiss) pos = afterPop;
+                            else _layerKinds.Add(NoopLayerKind);
+                            _blurHoldFallback++;
+                            continue;
+                        }
+                    }
+                    else if (holdIfCached && L.BlurSigma > 0f)
+                    {
+                        // Uncacheable (TryCompute bailed on a nested layer / unknown op) under a hold policy. HoldOrSkipOnMiss
+                        // must still SKIP the subtree (drop it, exactly like the cacheable hold-miss path above) rather than
+                        // flash it crisp; without a hash we don't have afterPop, so walk the subtree to its matching PopLayer.
+                        if (skipOnHoldMiss && TrySkipLayerSubtree(drawList, pos, out int skipTo)) pos = skipTo;
+                        else _layerKinds.Add(NoopLayerKind);   // HoldIfCached (or an unwalkable subtree): crisp inline fallback
+                        _blurHoldFallback++;
+                        continue;
+                    }
                     // Lease + clear + bind the group RT; scissor state carries over so the subtree clips identically. A
                     // Blur (or edge-fade-with-blur) group carries its σ — the RT is gaussian-blurred on pop before the
                     // composite; an edge-fade carries the per-edge bands + corners, applied in EdgeFadeComposite on pop.
                     int slot = _opacity.Acquire(_cmdList, _fenceValue + 1);
-                    _opacityGroups.Add((slot, L));
+                    _opacityGroups.Add((slot, L, 0UL));
                     _layerKinds.Add(L.Kind);
                 }
                 else
@@ -957,7 +1297,9 @@ public sealed unsafe class D3D12Device : IGpuDevice
                     // CANVAS (the acrylic leaf owns its canvas binding) — combine acrylic + group on one node instead.
                     // ctx.Damage is the DIP union of nodes that moved this frame → physical px for the cache's region test.
                     _acrylic.BlurAndComposite(_cmdList, L, lw, lh, _frameScale, _fenceValue + 1,
-                        ctx.Damage.X * _frameScale, ctx.Damage.Y * _frameScale, ctx.Damage.W * _frameScale, ctx.Damage.H * _frameScale);
+                        ctx.Damage.X * _frameScale, ctx.Damage.Y * _frameScale, ctx.Damage.W * _frameScale, ctx.Damage.H * _frameScale,
+                        directToBackBuffer ? _backBuffers[_frameIndex] : null, directToBackBuffer ? backRtv : default);
+                    InvalidateCmdState();   // the acrylic passes bound their own PSOs/heap + viewport/scissor
                     if (_opacityGroups.Count > 0) _opacity.Bind(_cmdList, _opacityGroups[^1].Slot);   // back to the open group RT
                     ApplyCurrentScissor();
                     _layerKinds.Add((int)LayerKind.Acrylic);
@@ -967,23 +1309,30 @@ public sealed unsafe class D3D12Device : IGpuDevice
             if (op == DrawOp.PopLayer)
             {
                 pos += sizeof(int) + Unsafe.SizeOf<PopLayerCmd>();
+                _frameLayerOps++;
                 int kind = _layerKinds.Count > 0 ? _layerKinds[^1] : (int)LayerKind.Acrylic;
                 if (_layerKinds.Count > 0) _layerKinds.RemoveAt(_layerKinds.Count - 1);
                 if ((kind == (int)LayerKind.Opacity || kind == (int)LayerKind.Blur || kind == (int)LayerKind.EdgeFade) && _opacityGroups.Count > 0)
                 {
                     FlushSegment(lw, lh);                   // finish the subtree into the group RT
-                    var (slot, gl) = _opacityGroups[^1];
+                    var (slot, gl, pinHash) = _opacityGroups[^1];
                     _opacityGroups.RemoveAt(_opacityGroups.Count - 1);
                     // Self-blur (or edge-fade-with-blur): gaussian-blur the group RT in place (leaves it readable); else BeginRead.
                     if ((kind == (int)LayerKind.Blur || kind == (int)LayerKind.EdgeFade) && gl.BlurSigma > 0f)
-                        _opacity.BlurInPlace(_cmdList, slot, gl.BlurSigma, _fenceValue + 1);
+                        _opacity.BlurInPlace(_cmdList, slot, gl.BlurSigma, _fenceValue + 1, in gl, _frameScale);
                     else _opacity.BeginRead(_cmdList, slot);
-                    // Composite over the UNDERLYING target: the enclosing group's RT, or the canvas.
+                    InvalidateCmdState();   // BlurInPlace set its own scissor/PSO — MUST invalidate before BindLayerTopTarget's SetFullViewport dedup
+                    // Composite over the UNDERLYING target: the enclosing group's RT, or the top-level target (canvas, or
+                    // the back buffer directly on the FG_BACKBUFFER_LAYERS path).
                     if (_opacityGroups.Count > 0) _opacity.Bind(_cmdList, _opacityGroups[^1].Slot);
-                    else _acrylic.BindCanvas(_cmdList);
+                    else BindLayerTopTarget(directToBackBuffer, backRtv);
                     if (kind == (int)LayerKind.EdgeFade) _opacity.EdgeFadeComposite(_cmdList, slot, in gl, _frameScale);
                     else _opacity.Composite(_cmdList, slot, gl.GroupAlpha);
+                    // Blur-cache MISS (pinHash != 0): COPY the just-composited blurred region out of the scratch into a small
+                    // retained pin for next frame's FindPin. The scratch is ALWAYS released (the pin is a separate small RT).
+                    if (pinHash != 0) _opacity.RetainPinFromScratch(_cmdList, slot, pinHash, in gl, _frameScale, _fenceValue + 1);
                     _opacity.Release(slot);
+                    InvalidateCmdState();   // BlurInPlace/Composite/EdgeFadeComposite bound their own PSOs/heap + scissor
                     ApplyCurrentScissor();
                 }
                 continue;
@@ -994,25 +1343,50 @@ public sealed unsafe class D3D12Device : IGpuDevice
         // Defensive: a malformed stream that left groups open still composites them (full alpha chain preserved).
         while (_opacityGroups.Count > 0)
         {
-            var (slot, gl) = _opacityGroups[^1];
+            var (slot, gl, pinHash) = _opacityGroups[^1];
             _opacityGroups.RemoveAt(_opacityGroups.Count - 1);
-            if (gl.BlurSigma > 0f) _opacity.BlurInPlace(_cmdList, slot, gl.BlurSigma, _fenceValue + 1);
+            if (gl.BlurSigma > 0f) _opacity.BlurInPlace(_cmdList, slot, gl.BlurSigma, _fenceValue + 1, in gl, _frameScale);
             else _opacity.BeginRead(_cmdList, slot);
+            InvalidateCmdState();   // as in the main PopLayer branch: BlurInPlace bypassed the scissor cache
             if (_opacityGroups.Count > 0) _opacity.Bind(_cmdList, _opacityGroups[^1].Slot);
-            else _acrylic.BindCanvas(_cmdList);
+            else BindLayerTopTarget(directToBackBuffer, backRtv);
             if (gl.Kind == (int)LayerKind.EdgeFade) _opacity.EdgeFadeComposite(_cmdList, slot, in gl, _frameScale);
             else _opacity.Composite(_cmdList, slot, gl.GroupAlpha);
+            if (pinHash != 0) _opacity.RetainPinFromScratch(_cmdList, slot, pinHash, in gl, _frameScale, _fenceValue + 1);
             _opacity.Release(slot);
         }
         _layerKinds.Clear();
         _clipStack.Clear();
         _roundedClipStack.Clear();
-        _acrylic.BlitToBackBuffer(_cmdList, backRtv);
+        if (!directToBackBuffer) _acrylic.BlitToBackBuffer(_cmdList, backRtv);   // back-buffer-direct path already drew there
     }
 
-    private static bool StreamHasLayer(ReadOnlySpan<byte> cmds)
+    // Bind the TOP-LEVEL composite target for the layered path — the back buffer (FG_BACKBUFFER_LAYERS fast path) or the
+    // engine canvas (acrylic path). The caller follows with ApplyCurrentScissor to restore the enclosing clip.
+    private void BindLayerTopTarget(bool directToBackBuffer, D3D12_CPU_DESCRIPTOR_HANDLE backRtv)
     {
-        int pos = 0;
+        if (directToBackBuffer) { _cmdList->OMSetRenderTargets(1, &backRtv, BOOL.FALSE, null); SetFullViewport(); }
+        else _acrylic!.BindCanvas(_cmdList);
+    }
+
+    // The self-blur pin cache's position-independent content key is computed by FluentGpu.Render.BlurPinKey.TryCompute
+    // (portable, so the headless VerticalSlice can gate it) — it folds σ + integer device size + the subtree op bytes with
+    // each op's position REBASED to the layer origin, so a pure scroll/translation reuses the pin (see backdrop-effects-
+    // animation.md §FA-2a). It replaced the old absolute-DeviceRect hash that missed on every position change.
+
+    // Did this blur content hash appear LAST frame? (recurrence ⇒ stationary content worth pinning; see the ring fields.)
+    private bool BlurHashSeenLastFrame(ulong hash)
+    {
+        for (int i = 0; i < _lastBlurHashCount; i++) if (_lastBlurHashes[i] == hash) return true;
+        return false;
+    }
+
+    // Classify the primary stream's layers in ONE pass: 0 = no layers, 1 = opacity/blur/edge-fade layers only, 2 = an
+    // ACRYLIC layer is present. Only acrylic must snapshot the backdrop (→ needs the offscreen canvas); kind 1 can render
+    // straight to the back buffer (FG_BACKBUFFER_LAYERS). Mirrors the old StreamHasLayer decode, reading PushLayerCmd.Kind.
+    private static int StreamLayerKind(ReadOnlySpan<byte> cmds)
+    {
+        int pos = 0, kind = 0;
         while (pos + sizeof(int) <= cmds.Length)
         {
             DrawOp op = (DrawOp)MemoryMarshal.Read<int>(cmds.Slice(pos));
@@ -1021,6 +1395,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
             {
                 case DrawOp.FillRoundRect: pos += Unsafe.SizeOf<FillRoundRectCmd>(); break;
                 case DrawOp.DrawGlyphRun: pos += Unsafe.SizeOf<DrawGlyphRunCmd>(); break;
+                case DrawOp.DrawGlyphRunGradient: pos += Unsafe.SizeOf<DrawGlyphRunGradientCmd>(); break;
                 case DrawOp.PushClip: pos += Unsafe.SizeOf<ClipCmd>(); break;
                 case DrawOp.PopClip: break;
                 case DrawOp.DrawImage: pos += Unsafe.SizeOf<DrawImageCmd>(); break;
@@ -1031,9 +1406,53 @@ public sealed unsafe class D3D12Device : IGpuDevice
                 case DrawOp.DrawGradientRect: pos += Unsafe.SizeOf<DrawGradientRectCmd>(); break;
                 case DrawOp.DrawGradientStroke: pos += Unsafe.SizeOf<DrawGradientStrokeCmd>(); break;
                 case DrawOp.DrawTabShape: pos += Unsafe.SizeOf<DrawTabShapeCmd>(); break;
-                case DrawOp.PushLayer: return true;
+                case DrawOp.PushLayer:
+                    var L = MemoryMarshal.Read<PushLayerCmd>(cmds.Slice(pos));
+                    pos += Unsafe.SizeOf<PushLayerCmd>();
+                    if (L.Kind == (int)LayerKind.Acrylic) return 2;   // acrylic ⇒ canvas path required (decided)
+                    kind = 1;
+                    break;
                 case DrawOp.PopLayer: pos += Unsafe.SizeOf<PopLayerCmd>(); break;
-                default: return false;
+                default: return kind;
+            }
+        }
+        return kind;
+    }
+
+    // Byte offset just past the PopLayer matching the open layer whose subtree begins at `start` (the first op after the
+    // PushLayerCmd, already consumed), counting nested layer depth. Used to SKIP an uncacheable HoldOrSkipOnMiss self-blur
+    // when no BlurPinKey hash (⇒ no afterPop) is available. Returns false on an op this decoder can't size — mirrors the
+    // StreamLayerKind size table — so the caller keeps its crisp fallback instead of desyncing the stream.
+    private static bool TrySkipLayerSubtree(ReadOnlySpan<byte> cmds, int start, out int afterPop)
+    {
+        afterPop = start;
+        int pos = start, depth = 0;
+        while (pos + sizeof(int) <= cmds.Length)
+        {
+            DrawOp op = (DrawOp)MemoryMarshal.Read<int>(cmds.Slice(pos));
+            pos += sizeof(int);
+            switch (op)
+            {
+                case DrawOp.FillRoundRect: pos += Unsafe.SizeOf<FillRoundRectCmd>(); break;
+                case DrawOp.DrawGlyphRun: pos += Unsafe.SizeOf<DrawGlyphRunCmd>(); break;
+                case DrawOp.DrawGlyphRunGradient: pos += Unsafe.SizeOf<DrawGlyphRunGradientCmd>(); break;
+                case DrawOp.PushClip: pos += Unsafe.SizeOf<ClipCmd>(); break;
+                case DrawOp.PopClip: break;
+                case DrawOp.DrawImage: pos += Unsafe.SizeOf<DrawImageCmd>(); break;
+                case DrawOp.DrawRoundRectStroke: pos += Unsafe.SizeOf<DrawRoundRectStrokeCmd>(); break;
+                case DrawOp.DrawShadow: pos += Unsafe.SizeOf<DrawShadowCmd>(); break;
+                case DrawOp.DrawArc: pos += Unsafe.SizeOf<DrawArcCmd>(); break;
+                case DrawOp.DrawPolylineStroke: pos += Unsafe.SizeOf<DrawPolylineStrokeCmd>(); break;
+                case DrawOp.DrawGradientRect: pos += Unsafe.SizeOf<DrawGradientRectCmd>(); break;
+                case DrawOp.DrawGradientStroke: pos += Unsafe.SizeOf<DrawGradientStrokeCmd>(); break;
+                case DrawOp.DrawTabShape: pos += Unsafe.SizeOf<DrawTabShapeCmd>(); break;
+                case DrawOp.PushLayer: pos += Unsafe.SizeOf<PushLayerCmd>(); depth++; break;
+                case DrawOp.PopLayer:
+                    pos += Unsafe.SizeOf<PopLayerCmd>();
+                    if (depth == 0) { afterPop = pos; return true; }
+                    depth--;
+                    break;
+                default: return false;   // an op this decoder can't size — keep the crisp fallback
             }
         }
         return false;
@@ -1056,7 +1475,11 @@ public sealed unsafe class D3D12Device : IGpuDevice
     internal void Present(D3D12Swapchain target)
     {
         if (target.Disposed) return;
+        AssertSubmitThread();   // seam Step 0: when render-confined (force-sync/async), only the render thread may present
         Activate(target);
+        // Seam (DIM on-screen fix): bind the DirectComposition graph on the PRESENTING thread the first time this composited
+        // swapchain presents — deferred out of the UI-thread InitSwapChain so DComp is owned by the thread that Presents.
+        if (target.Composited && target.DcompBindPending) BindDComp(target);
         // A keep-alive repaint fired from inside an OS modal move/size loop (host called SuppressVsyncOnce) presents at
         // SyncInterval 0 so the WndProc thread isn't blocked up to a vblank — the live-resize/move hitch. On the composited
         // DComp flip swapchain interval-0 is a cheap, tear-free hand-off (DWM still composites at vblank); steady-state
@@ -1072,6 +1495,9 @@ public sealed unsafe class D3D12Device : IGpuDevice
             // Surface GetDeviceRemovedReason on a device-removed/reset so a GPU fault names its cause instead of a bare
             // 0x887A0005 (the empirical probe for the popup-swapchain path).
             uint reason = ((uint)pr == 0x887A0005u || (uint)pr == 0x887A0007u) ? (uint)_device->GetDeviceRemovedReason() : 0u;
+            // Step 4 (async): record the loss + bail instead of throwing on the render thread (unobserved bg exception =
+            // process death). The UI's recover gate polls PollDeviceLost and drives RecoverDevice. Non-async: unchanged throw.
+            if (_signalDeviceLostInsteadOfThrow) { System.Threading.Volatile.Write(ref _deviceLostReason, reason != 0u ? (int)reason : (int)(uint)pr); return; }
             throw new InvalidOperationException($"Present failed: 0x{(uint)pr:X8}" + (reason != 0u ? $" (device removed reason 0x{reason:X8})" : ""));
         }
         StoreActive();
@@ -1089,7 +1515,8 @@ public sealed unsafe class D3D12Device : IGpuDevice
         ulong v = _frameFenceValues[frameIndex];
         if (v == 0 || global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence) >= v) return;
         Check((HRESULT)global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.SetEventOnCompletion(_fence, v, (void*)_fenceEvent), "SetEventOnCompletion");   // GEN-COM (wired)
-        WaitForSingleObject(_fenceEvent, INFINITE);
+        if (_signalDeviceLostInsteadOfThrow) WaitFenceEventBounded();   // Step 4: no INFINITE hang on a lost device (async)
+        else WaitForSingleObject(_fenceEvent, INFINITE);
     }
 
     // Block until the swapchain is ready to accept a new frame (bounds present-queue depth → lower latency, efficient wait).
@@ -1131,7 +1558,8 @@ public sealed unsafe class D3D12Device : IGpuDevice
         if (global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence) < v)
         {
             Check((HRESULT)global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.SetEventOnCompletion(_fence, v, (void*)_fenceEvent), "SetEventOnCompletion");   // GEN-COM (wired)
-            WaitForSingleObject(_fenceEvent, INFINITE);
+            if (_signalDeviceLostInsteadOfThrow) WaitFenceEventBounded();   // Step 4: no INFINITE hang on a lost device (async)
+            else WaitForSingleObject(_fenceEvent, INFINITE);
         }
     }
 
@@ -1272,6 +1700,64 @@ public sealed unsafe class D3D12Device : IGpuDevice
         }
     }
 
+    // Step 4 (async): rebuild the lost device. Render-confined (this is the SOLE ComPtr owner; the UI is parked/blocking).
+    // Mirrors Dispose's teardown MINUS the leading WaitForGpu (the dead fence never completes — canon §9.2) and MINUS the
+    // swapchain-object removal (we recreate them in place), then re-runs the ctor's init sequence. All GPU state is
+    // CPU-reconstructible: PSOs recompile from embedded HLSL, the glyph atlas re-rasterizes on demand, and resident images
+    // re-decode via ImageCache.ReRealizeAllResident (the UI calls it on the recover-done frame).
+    public void RecoverDevice()
+    {
+        AssertSubmitThread();
+        // 1. Release every swapchain's GPU resources but KEEP the D3D12Swapchain objects (their W/H/Hwnd/Composited/etc.
+        //    survive for re-init); reset Disposed since we are recreating, not tearing down.
+        for (int i = 0; i < _swapchains.Count; i++)
+        {
+            ReleaseSwapchainResources(_swapchains[i]);
+            _swapchains[i].Disposed = false;
+        }
+        for (uint i = 0; i < FRAME_COUNT; i++) _backBuffers[i] = null;
+        // 2. Release device-level ComPtrs + pipelines (null the pipe fields so EnsurePipelines re-runs). NO WaitForGpu.
+        if (_dcomp != null) { _dcomp->Release(); _dcomp = null; }
+        _glyphs?.Dispose(); _glyphs = null;
+        _imagePipe?.Dispose(); _imagePipe = null;
+        _imageTextures?.Dispose(); _imageTextures = null;
+        _shadowPipe?.Dispose(); _shadowPipe = null;
+        _arcPipe?.Dispose(); _arcPipe = null;
+        _polylinePipe?.Dispose(); _polylinePipe = null;
+        _gradPipe?.Dispose(); _gradPipe = null;
+        _acrylic?.Dispose(); _acrylic = null;
+        _opacity?.Dispose(); _opacity = null;
+        _rectPipe?.Dispose(); _rectPipe = null;
+        if (_cmdList != null) { global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_cmdList); _cmdList = null; }
+        for (uint i = 0; i < FRAME_COUNT; i++)
+            if (_allocators[i] != null) { global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_allocators[i]); _allocators[i] = null; }
+        if (_fence != null) { global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_fence); _fence = null; }
+        if (_queue != null) { global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_queue); _queue = null; }
+        if (_factory != null) { global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_factory); _factory = null; }
+        if (_device != null) { global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_device); _device = null; }
+        if (_fenceEvent != HANDLE.NULL) { CloseHandle(_fenceEvent); _fenceEvent = HANDLE.NULL; }
+
+        // 3. Recreate the device/queue/allocators/command-list/fence/event (InitDevice resets _fenceValue = 0).
+        InitDevice();
+        // 4. Zero the per-back-buffer fence bookkeeping so WaitForFrame's v==0 early-out fires for the first FRAME_COUNT
+        //    frames — the fresh fence never reaches the stale pre-loss targets.
+        System.Array.Clear(_frameFenceValues, 0, _frameFenceValues.Length);
+        // 5. Recreate all pipelines + a fresh (empty) image store; re-arm async image confinement on the new store.
+        EnsurePipelines();
+        if (_signalDeviceLostInsteadOfThrow) _imageTextures?.MarkRenderConfined();
+        // 6. Recreate every swapchain (SwapChain / RtvHeap / BackBuffers / Backdrop) at its retained size, then rebind its
+        //    DirectComposition graph HERE (RecoverDevice is render-confined, AssertSubmitThread at the top) so the recover
+        //    frame is composited-correct on the render thread without waiting for the next Present's lazy bind.
+        for (int i = 0; i < _swapchains.Count; i++)
+        {
+            InitSwapChain(_swapchains[i]);
+            if (_swapchains[i].Composited) BindDComp(_swapchains[i]);
+        }
+        if (_primarySwapchain != null) Activate(_primarySwapchain);
+        // 7. Healthy again.
+        System.Threading.Volatile.Write(ref _deviceLostReason, 0);
+    }
+
     public void Dispose()
     {
         if (_device != null) WaitForGpu();
@@ -1320,6 +1806,7 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     internal uint W, H, FrameIndex;
     internal IDCompositionTarget* DcompTarget;
     internal IDCompositionVisual* DcompVisual;
+    internal bool DcompBindPending;   // seam: DComp graph deferred out of UI-thread InitSwapChain; bound on the presenting thread (see BindDComp)
     internal CompositionBackdrop? Backdrop;   // non-null ⇒ WUC desktop-acrylic popup (replaces the DComp path)
     internal readonly bool DesktopAcrylic;
     internal readonly ColorF AcrylicTint;

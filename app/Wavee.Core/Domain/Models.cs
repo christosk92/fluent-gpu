@@ -66,7 +66,29 @@ public sealed record Artist(
     IReadOnlyList<Track>? TopTracks = null, IReadOnlyList<Album>? AppearsOn = null,
     PinnedItem? Pinned = null, ArtistExtras? Extras = null,
     // Cover-extracted page accent (ARGB; null = none). Drives the artist page wash + Play button + section bars.
-    Palette? Palette = null);
+    Palette? Palette = null,
+    // Per-facet discography totals (data.artistUnion.discography.<facet>.totalCount). 0 = unknown → callers fall back to
+    // the in-memory TopAlbums count. Additive/defaulted; carried so the virtualized grid can size a facet up front and
+    // "See all N" gates on the true total rather than the ~10-item overview slice.
+    int AlbumsTotal = 0, int SinglesTotal = 0, int CompilationsTotal = 0,
+    // SWR freshness stamp: when the rich overview (TopTracks/stats/palette/bio) was last fetched. default = never/old →
+    // treated as stale and re-fetched on next open (which heals records persisted by an earlier build, whose deserialized
+    // FetchedAt is default). Set ONLY by a full-overview write; the store merge keeps the newer value so a thin
+    // extended-metadata / NPV / album-derived write never resets the clock.
+    DateTimeOffset FetchedAt = default);
+
+/// <summary>Per-facet discography helpers on <see cref="Artist"/> (kept next to the model; the facet split itself is
+/// <see cref="DiscographyKind"/> in Library.cs).</summary>
+public static class ArtistFacets
+{
+    /// <summary>The known total for a discography facet (0 = unknown → the caller uses the in-memory count).</summary>
+    public static int FacetTotal(this Artist artist, DiscographyKind kind) => kind switch
+    {
+        DiscographyKind.Singles => artist.SinglesTotal,
+        DiscographyKind.Compilations => artist.CompilationsTotal,
+        _ => artist.AlbumsTotal,
+    };
+}
 
 /// <summary>The optional "magazine" facet bundle for an artist (concerts, merch, playlists, videos, top cities, links,
 /// gallery, related artists, a derived tour banner). Any empty list ⇒ that section is omitted from the page.</summary>
@@ -148,7 +170,13 @@ public sealed record Track(
     // whether it is playable in this context. Default = a streamed, playable, source-unspecified track.
     TrackOrigin Origin = TrackOrigin.Streamed,
     Availability Availability = Availability.Playable,
-    string? Source = null);
+    string? Source = null,
+    // Per-context membership uid (PlaylistMember.ItemId) for Connect skip_to.track_uid + embedded page uids. READ-MODEL
+    // ONLY: stamped on the JoinMembership copy, never passed to UpsertTrack (EntityJson omits nulls → never persisted).
+    string? ContextUid = null,
+    // ISRC recording id (e.g. "USRC17607839"), sourced from the extended-metadata Track.external_id (type "isrc"). Drives
+    // the lyrics search's exact-recording fast-path (Musixmatch track_isrc). Null when unknown (thin cluster / Pathfinder).
+    string? Isrc = null);
 
 /// <summary>How a track plays — streamed from a remote source (CDN) or decoded from a local file. The seam routes
 /// playback by this; default is Streamed (the synthetic catalog's shape).</summary>
@@ -173,14 +201,16 @@ public sealed record Playlist(
     // read-only vs editable UI), the recommender format (daily-mix/editorial/…), and which provider this came from.
     Owner? Owner = null, PlaylistCapabilities Capabilities = default, string? Format = null, string? Source = null,
     // Cover-extracted page accent (ARGB; null = none). Drives the playlist page wash + Play button + section bars.
-    Palette? Palette = null);
+    Palette? Palette = null,
+    // Playlist-context user overlay, projected at read time from owner + added_by values. The store wire rows keep raw ids.
+    IReadOnlyList<Owner>? Collaborators = null);
 
 /// <summary>Album-art-derived palette. Plain ARGB <see cref="uint"/> channels keep Core
 /// framework-neutral; the app maps each to its renderer color (ColorF) at the UI boundary.</summary>
 public sealed record Palette(uint BackgroundDark, uint TintedDark, uint Light, uint Accent);
 
 public enum QueueBucket { NowPlaying, UserQueue, NextUp }
-public sealed record QueueEntry(string EntryId, Track Track, QueueBucket Bucket, bool IsAutoplay);
+public sealed record QueueEntry(string EntryId, Track Track, QueueBucket Bucket, bool IsAutoplay, string Uid = "");
 
 // ── Podcasts (docs/architecture.md §2 "Podcasts / shows / episodes") ──────────────────────────────────────────────────
 /// <summary>A podcast episode. <paramref name="ProgressMs"/> is the resume position (0 = unplayed); a real source also

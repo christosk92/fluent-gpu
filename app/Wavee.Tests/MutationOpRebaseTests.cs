@@ -15,7 +15,8 @@ public class MutationOpRebaseTests
 {
     sealed class ScriptedTransport(Func<string, Resp> respond) : ITransport
     {
-        public Task<Resp> Request(Channel ch, string route, ReadOnlyMemory<byte> body, CancellationToken ct = default) => Task.FromResult(respond(route));
+        public Task<Resp> Request(Channel ch, string route, ReadOnlyMemory<byte> body, CancellationToken ct = default,
+            string? method = null, IReadOnlyDictionary<string, string>? headers = null) => Task.FromResult(respond(route));
         public IObservable<WireEvent> Events(string topicPrefix) => new SimpleSubject<WireEvent>();
         public IObservable<WireRequest> Requests(string identPrefix) => new SimpleSubject<WireRequest>();
         public Task Reply(string requestId, RequestResult result) => Task.CompletedTask;
@@ -23,7 +24,7 @@ public class MutationOpRebaseTests
     }
 
     static PlaylistMember M(string id) => new(id, "spotify:track:" + id, null, 0);
-    static MutationEngine Engine(IStore store) => new(store, new IMutationStrategy[] { new SetReplayStrategy(), new OpRebaseStrategy() });
+    static MutationEngine Engine(IStore store) => new(store, new IMutationStrategy[] { new SetReplayStrategy(), new OpRebaseStrategy(store) });
 
     [Fact]
     public async Task Edit_AppliesOptimistically_AndDrainConfirms()
@@ -49,13 +50,14 @@ public class MutationOpRebaseTests
     {
         var store = new InMemoryStore();
         store.SetMembership("spotify:playlist:p", new[] { M("a"), M("b") }, new byte[] { 1 });
-        var eng = Engine(store);
+        var clock = DateTime.UtcNow;
+        var eng = new MutationEngine(store, new IMutationStrategy[] { new SetReplayStrategy(), new OpRebaseStrategy(store) }, null, () => clock);
 
         eng.Edit("spotify:playlist:p", new[] { new PlaylistOp(PlaylistOpKind.Remove, FromIndex: 0, Length: 2) });   // remove all
         Assert.Empty(store.Membership("spotify:playlist:p"));
 
         var t = new ScriptedTransport(_ => new Resp(false, Array.Empty<byte>(), 409));   // always fails
-        for (int i = 0; i < 10; i++) await eng.Drain(t, SessionContext.LoggedOut);        // exhaust MaxAttempts
+        for (int i = 0; i < 10; i++) { await eng.Drain(t, SessionContext.LoggedOut); clock = clock.AddSeconds(120); }   // advance past the §8.3 backoff → exhaust MaxAttempts
 
         Assert.Equal(0, eng.Pending);
         Assert.Single(eng.DeadLetter);

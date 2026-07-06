@@ -23,6 +23,21 @@ public class HomeAccentTests
     public void HexToArgb_RejectsMalformed(string hex) => Assert.Null(SpotifyExportMapper.HexToArgb(hex));
 
     [Fact]
+    public void CardFromEntity_ExtractsColorSetAccent()
+    {
+        var card = SpotifyExportMapper.CardFromEntity(Root("""
+        { "__typename": "Album", "uri": "spotify:album:A", "name": "Neon",
+          "visualIdentity": { "squareCoverImage": {
+            "extractedColorSet": { "higherContrast": {
+              "backgroundTintedBase": { "red": 59, "green": 130, "blue": 246, "alpha": 255 } } } } },
+          "artists": { "items": [ { "uri": "spotify:artist:X", "profile": { "name": "Aurora" } } ] } }
+        """));
+
+        Assert.NotNull(card);
+        Assert.Equal(0xFF3B82F6u, card!.Accent);
+    }
+
+    [Fact]
     public void CardFromEntity_ExtractsCoverAccent()
     {
         var card = SpotifyExportMapper.CardFromEntity(Root("""

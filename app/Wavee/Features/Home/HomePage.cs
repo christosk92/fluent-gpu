@@ -9,6 +9,7 @@ using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Localization;
+using FluentGpu.Scene;
 using FluentGpu.Signals;
 using Wavee.Core;
 using static FluentGpu.Dsl.Ui;
@@ -35,15 +36,19 @@ sealed class HomePage : Component
         // names/covers replace the initial URIs without a manual nav.
         var home = UseLoadable(Loadable<HomeFeed>.Pending(FakeData.HomeSeed));   // seed renders the loading shape; later refreshes swap Ready->Ready in place
         var post = UsePost();
-        var homeWorkerStarted = UseRef(false);
-        Context.UseEffect(() =>
+        // Start the background home-refresh loop + the library-change subscription ONCE, and tie BOTH to this component's
+        // lifetime. A UseSignalEffect that reads no signals runs exactly once on mount; its Reactive.OnCleanup fires on
+        // unmount (KeepAlive eviction / navigation away). Without this, each cold remount of Home leaked an orphaned 60s
+        // PeriodicTimer loop + a never-unsubscribed observer that COMPOUNDED over a long session (memory + background
+        // fetches). Mirrors the LyricsTicker lifecycle pattern (Features/Player/LyricsView.cs).
+        Context.UseSignalEffect(() =>
         {
-            if (homeWorkerStarted.Value) return;
-            homeWorkerStarted.Value = true;
-            StartHomeRefreshLoop(svc, home, post);
-
-            if (svc.Library is Wavee.Core.ICollectionEvents ev)
-                ev.CollectionsChanged.Subscribe(Wavee.Backend.Observers.From<Wavee.Core.CollectionKind>(__ => { _ = RefreshHomeOnce(svc, home, post, failIfInitial: false); }));
+            var cts = new CancellationTokenSource();
+            StartHomeRefreshLoop(svc, home, post, cts.Token);
+            IDisposable? sub = svc.Library is Wavee.Core.ICollectionEvents ev
+                ? ev.CollectionsChanged.Subscribe(Wavee.Backend.Observers.From<Wavee.Core.CollectionKind>(__ => { _ = RefreshHomeOnce(svc, home, post, failIfInitial: false); }))
+                : null;
+            Reactive.OnCleanup(() => { cts.Cancel(); cts.Dispose(); sub?.Dispose(); });
         });
         string? name = bridge?.User.Value?.DisplayName;     // subscribe → greeting refreshes on login
 
@@ -85,7 +90,21 @@ sealed class HomePage : Component
             else Play(c.Uri);
         }
 
-        Element Tile(HomeCard c) => MediaCard.QuickPick(c.Image, c.Title, c.Uri, () => NavCard(c), () => PlayCard(c));
+        Element Tile(HomeCard c, string section = "", int index = -1)
+        {
+            string? url = HomeImageDiagnostics.NormalizedUrl(c.Image);
+            return MediaCard.QuickPick(c.Image, c.Title, c.Uri, () => NavCard(c), () => PlayCard(c),
+                accent: c.Accent is { } a ? WaveePalette.Lift(WaveePalette.ToColor(a)) : null,
+                diagnostics: url is { Length: > 0 }
+                    ? Embed.Comp(() => new HomeQuickImageProbe(url, c.Uri, c.Title, section, index)).Skeletonized(false)
+                    : null);
+        }
+
+        IEnumerable<Element> QuickTiles(IReadOnlyList<HomeCard> cards, string section, int max)
+        {
+            int n = Math.Min(cards.Count, max);
+            for (int i = 0; i < n; i++) yield return Tile(cards[i], section, i);
+        }
 
         Element Shelf(HomeGroup g) => PagedShelf.Create(
             g.Cards.Count,
@@ -100,14 +119,14 @@ sealed class HomePage : Component
 
         Element Group(HomeGroup g) => g.Kind switch
         {
-            HomeGroupKind.QuickGrid => QuickGrid(g.Cards.Take(8).Select(Tile)),
+            HomeGroupKind.QuickGrid => QuickGrid(QuickTiles(g.Cards, g.Title ?? "quick-grid", 8)),
             HomeGroupKind.Hero when g.Cards.Count > 0 => Responsive.Of(w => HeroBand(g.Cards[0], GroupAccent(g), PlayCard, NavCard, w), fallback: 560f),
             HomeGroupKind.Shelf when g.Cards.Count > 0 => Shelf(g),   // accent-bar header inside the shelf
             // The "Made for you" region: an accent-bar header + the cards, behind a faintly tinted accent band.
             HomeGroupKind.CollapsedGrid => Surfaces.SectionBand(new BoxEl
             {
                 Direction = 1, Gap = WaveeSpace.M,
-                Children = [ g.Title is { } t ? Surfaces.AccentHeader(t, GroupAccent(g)) : new BoxEl(), QuickGrid(g.Cards.Select(Tile)) ],
+                Children = [ g.Title is { } t ? Surfaces.AccentHeader(t, GroupAccent(g)) : new BoxEl(), QuickGrid(QuickTiles(g.Cards, g.Title ?? "", int.MaxValue)) ],
             }, GroupAccent(g)),
             _ => new BoxEl(),
         };
@@ -120,6 +139,7 @@ sealed class HomePage : Component
             onFailed: () => ErrorState.Build(home.Error),
             content: feed =>
             {
+                HomeImageDiagnostics.LogFeed(feed);
                 // Warm below-the-fold cover art at the kind-matched decode size the moment the feed lands, so a first
                 // scroll reveals resident textures instead of decoding+uploading on the UI thread mid-scroll (the
                 // first-pass jank). Prefetch priority → background workers, so the visible cards still decode first;
@@ -145,15 +165,19 @@ sealed class HomePage : Component
         return ScrollView(page) with { Grow = 1f, ScrollKey = "home" };
     }
 
-    static void StartHomeRefreshLoop(Services svc, Loadable<HomeFeed> home, Action<Action> post)
+    static void StartHomeRefreshLoop(Services svc, Loadable<HomeFeed> home, Action<Action> post, CancellationToken ct)
     {
         _ = Task.Run(async () =>
         {
-            await RefreshHomeOnce(svc, home, post, failIfInitial: true).ConfigureAwait(false);
-            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(60));
-            while (await timer.WaitForNextTickAsync().ConfigureAwait(false))
-                await RefreshHomeOnce(svc, home, post, failIfInitial: false).ConfigureAwait(false);
-        });
+            try
+            {
+                await RefreshHomeOnce(svc, home, post, failIfInitial: true).ConfigureAwait(false);
+                using var timer = new PeriodicTimer(TimeSpan.FromSeconds(60));
+                while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
+                    await RefreshHomeOnce(svc, home, post, failIfInitial: false).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) { /* Home unmounted → stop the refresh loop cleanly */ }
+        }, ct);
     }
 
     static async Task RefreshHomeOnce(Services svc, Loadable<HomeFeed> home, Action<Action> post, bool failIfInitial)
@@ -315,4 +339,138 @@ sealed class HomePage : Component
     // ── helpers ────────────────────────────────────────────────────────────────────────────────────────
     static Element QuickGrid(IEnumerable<Element> tiles) =>
         AutoGrid(320f, WaveeSpace.M, MediaCard.QuickH, tiles.ToArray());
+}
+
+sealed class HomeQuickImageProbe : Component
+{
+    readonly string _url;
+    readonly string _uri;
+    readonly string _title;
+    readonly string _section;
+    readonly int _index;
+
+    public HomeQuickImageProbe(string url, string uri, string title, string section, int index)
+    {
+        _url = url;
+        _uri = uri;
+        _title = title;
+        _section = section;
+        _index = index;
+    }
+
+    public override Element Render()
+    {
+        var binding = UseImage(_url, (int)MediaCard.QuickW, (int)MediaCard.QuickH);
+        HomeImageDiagnostics.LogState(_uri, _title, _section, _index, _url, binding);
+        return new BoxEl { Width = 0f, Height = 0f };
+    }
+}
+
+static class HomeImageDiagnostics
+{
+    static readonly object Gate = new();
+    static readonly HashSet<string> Seen = new(StringComparer.Ordinal);
+
+    public static string? NormalizedUrl(Image? image)
+    {
+        if (image?.MosaicTiles is { Count: > 0 } tiles)
+            return tiles.Count >= 4 ? null : ImageSource.Normalize(tiles[0]);
+        return image?.Url is { Length: > 0 } u ? ImageSource.Normalize(u) : null;
+    }
+
+    public static void LogFeed(HomeFeed feed)
+    {
+        for (int gi = 0; gi < feed.Groups.Count; gi++)
+        {
+            var group = feed.Groups[gi];
+            if (group.Kind != HomeGroupKind.QuickGrid) continue;
+
+            int total = Math.Min(group.Cards.Count, 8);
+            int url = 0, mosaic = 0, missing = 0, emptyUrl = 0;
+            for (int i = 0; i < total; i++)
+            {
+                var card = group.Cards[i];
+                if (card.Image is null) { missing++; LogMissing(group, gi, card, i, "image-null"); continue; }
+                if (card.Image.MosaicTiles is { Count: >= 4 }) { mosaic++; continue; }
+                if (card.Image.Url is not { Length: > 0 }) { emptyUrl++; LogMissing(group, gi, card, i, "url-empty"); continue; }
+                url++;
+            }
+
+            LogOnce("summary|" + gi + "|" + total + "|" + url + "|" + mosaic + "|" + missing + "|" + emptyUrl,
+                () => WaveeLog.Instance.Event(WaveeLogLevel.Info, "ui", "home.image.quickgrid.summary",
+                    "Home quick-grid image inventory",
+                    fields:
+                    [
+                        WaveeLogField.Of("groupIndex", gi),
+                        WaveeLogField.Of("title", group.Title ?? ""),
+                        WaveeLogField.Of("cards", total),
+                        WaveeLogField.Of("url", url),
+                        WaveeLogField.Of("mosaic", mosaic),
+                        WaveeLogField.Of("missing", missing),
+                        WaveeLogField.Of("emptyUrl", emptyUrl),
+                    ]));
+        }
+    }
+
+    public static void LogState(string uri, string title, string section, int index, string url, ImageBinding binding)
+    {
+        string key = "state|" + uri + "|" + index + "|" + binding.State + "|" + binding.Failure + "|" + binding.Attempts;
+        LogOnce(key, () =>
+        {
+            var level = binding.State == ImageState.Failed && binding.Failure != ImageFailureKind.Canceled
+                ? WaveeLogLevel.Warning
+                : WaveeLogLevel.Debug;
+            WaveeLog.Instance.Event(level, "ui", "home.image.quickgrid.state",
+                "Home quick-grid image cache state",
+                fields:
+                [
+                    WaveeLogField.Of("uri", uri),
+                    WaveeLogField.Of("title", title),
+                    WaveeLogField.Of("section", section),
+                    WaveeLogField.Of("index", index),
+                    WaveeLogField.Of("state", binding.State.ToString()),
+                    WaveeLogField.Of("failure", binding.Failure.ToString()),
+                    WaveeLogField.Of("attempts", binding.Attempts),
+                    WaveeLogField.Of("host", WaveeLogRedaction.UrlHost(url)),
+                    WaveeLogField.Of("url", ShortUrl(url)),
+                ]);
+        });
+    }
+
+    static void LogMissing(HomeGroup group, int groupIndex, HomeCard card, int index, string reason)
+    {
+        LogOnce("missing|" + groupIndex + "|" + index + "|" + card.Uri + "|" + reason,
+            () => WaveeLog.Instance.Event(WaveeLogLevel.Warning, "ui", "home.image.quickgrid.missing",
+                "Home quick-grid card has no renderable image URL",
+                fields:
+                [
+                    WaveeLogField.Of("reason", reason),
+                    WaveeLogField.Of("groupIndex", groupIndex),
+                    WaveeLogField.Of("section", group.Title ?? ""),
+                    WaveeLogField.Of("index", index),
+                    WaveeLogField.Of("kind", card.Kind.ToString()),
+                    WaveeLogField.Of("uri", card.Uri),
+                    WaveeLogField.Of("title", card.Title),
+                    WaveeLogField.Of("mosaicTiles", card.Image?.MosaicTiles?.Count ?? 0),
+                ]));
+    }
+
+    static void LogOnce(string key, Action log)
+    {
+        lock (Gate)
+        {
+            if (!Seen.Add(key)) return;
+        }
+        log();
+    }
+
+    static string ShortUrl(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var u))
+            return url.Length <= 96 ? url : url[..96];
+        var tail = u.AbsolutePath;
+        int slash = tail.LastIndexOf('/');
+        if (slash >= 0 && slash + 1 < tail.Length) tail = tail[(slash + 1)..];
+        return u.Host + "/" + tail;
+    }
 }

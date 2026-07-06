@@ -3,12 +3,19 @@ using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using FluentGpu.Localization;
 using Wavee.Backend;
+using Wavee.Backend.Audio;
 using Wavee.Backend.Playlists;
 using Wavee.Backend.Spotify;
 using Wavee.Core;
+using Wavee.SpotifyLive.Audio;
 
 namespace Wavee.SpotifyLive;
+
+// Disambiguate from the UI type Wavee.DiscographyPage (a Component) that is otherwise in scope under the Wavee.* namespace.
+// (Declared inside the namespace so it wins over the enclosing-namespace member.)
+using DiscographyPage = Wavee.Core.DiscographyPage;
 
 // ── Live session bootstrap — bring up Connect + playback and swap it into the running app ─────────────────────────────
 // Logs in, opens the dealer + the persistent AP channel, builds the full LiveConnect stack, and calls svc.GoLive so the
@@ -19,9 +26,17 @@ public sealed class LiveSessionHost : IAsyncDisposable
     readonly LiveDealerTransport _transport;
     readonly LiveConnect _connect;
     readonly CancellationTokenSource _cts;
+    Wavee.Backend.Realtime.DealerRouter? _router;
+    Wavee.Backend.Sync.LibrarySync? _sync;
+    IDisposable? _connSub;
 
     LiveSessionHost(LiveDealerTransport transport, LiveConnect connect, CancellationTokenSource cts)
     { _transport = transport; _connect = connect; _cts = cts; }
+
+    /// <summary>Register the sync-loop teardown handles (router → sync → connectivity subscription), disposed on logout
+    /// BEFORE the transport so the loop stops recording against a torn-down socket.</summary>
+    internal void AttachSync(Wavee.Backend.Realtime.DealerRouter router, Wavee.Backend.Sync.LibrarySync sync, IDisposable? connSub)
+    { _router = router; _sync = sync; _connSub = connSub; }
 
     public LiveConnect Connect => _connect;
 
@@ -30,15 +45,27 @@ public sealed class LiveSessionHost : IAsyncDisposable
     public CancellationToken Token => _cts.Token;
 
     public static async Task<LiveSessionHost?> StartAsync(Services svc, Action<string> log, CancellationToken ct,
-        ILoginProgress? progress = null, bool interactive = true, bool useBrowser = false, bool quietPhases = false)
+        ILoginProgress? progress = null, bool interactive = true, bool useBrowser = false, bool quietPhases = false,
+        Action<Action>? uiPost = null)
     {
         var report = progress ?? NullLoginProgress.Instance;
         var adapter = new AuthStateAdapter(report, interactive, useBrowser, quietPhases);
+        string op = "live-" + Guid.NewGuid().ToString("N")[..8];
+        svc.Log.Event(WaveeLogLevel.Info, "connect", "session.start", "Live session bootstrap starting",
+            operationId: op,
+            fields:
+            [
+                WaveeLogField.Of("interactive", interactive),
+                WaveeLogField.Of("browser", useBrowser),
+                WaveeLogField.Of("quiet", quietPhases),
+            ]);
 
         // Silent resume with NO stored credential → Welcome, never the Error card (a null login is ambiguous between "no
         // credential" and "handshake failed"; this pre-check disambiguates the common first-run path).
         if (!interactive && !SpotifyLiveLogin.HasStoredCredential())
         {
+            svc.Log.Event(WaveeLogLevel.Info, "auth", "silent.no_credential", "Silent resume skipped; no stored credential",
+                operationId: op);
             report.Report(new LoginSnapshot(LoginPhase.LoggedOut));
             return null;
         }
@@ -54,6 +81,9 @@ public sealed class LiveSessionHost : IAsyncDisposable
         {
             if (ct.IsCancellationRequested || quietPhases) return null;   // superseded / cancelled / a quiet racing sibling → stay silent
             // Welcome on a silent miss (no / rejected-and-cleared credential); Failed/Expired on a genuine error or lapsed code.
+            svc.Log.Event(WaveeLogLevel.Warning, "connect", "session.login_failed", "Live login did not produce a session",
+                operationId: op,
+                fields: [WaveeLogField.Of("storedCredential", SpotifyLiveLogin.HasStoredCredential())]);
             report.Report(adapter.Terminal(credExisted: SpotifyLiveLogin.HasStoredCredential()));
             return null;
         }
@@ -62,6 +92,9 @@ public sealed class LiveSessionHost : IAsyncDisposable
         // LoginAsync already persisted so the next launch can't silent-resume straight back into the wall.
         if (live.Session.Tier != Tier.Premium)
         {
+            svc.Log.Event(WaveeLogLevel.Warning, "auth", "premium.required", "Signed-in account is not Premium",
+                operationId: op,
+                fields: [WaveeLogField.Of("tier", live.Session.Tier.ToString())]);
             live.CredStore?.Clear();
             report.Report(new LoginSnapshot(LoginPhase.PremiumRequired));
             live.ApChannel?.Dispose();
@@ -70,11 +103,51 @@ public sealed class LiveSessionHost : IAsyncDisposable
 
         var dealerJson = await SharedHttp.Client.GetStringAsync("https://apresolve.spotify.com/?type=dealer", ct).ConfigureAwait(false);
         var dealerHosts = ApResolver.ParseHosts(dealerJson, "dealer");
+        if (dealerHosts.Count > 0)
+            svc.Log.Event(WaveeLogLevel.Info, "dealer", "hosts.resolved", "Dealer access points resolved",
+                operationId: op,
+                fields: [WaveeLogField.Of("count", dealerHosts.Count), WaveeLogField.Of("first", dealerHosts[0])]);
         if (dealerHosts.Count == 0) { log("no dealer host — live session not started"); if (!ct.IsCancellationRequested) report.Report(adapter.Terminal(credExisted: true)); live.ApChannel?.Dispose(); return null; }
 
-        // The transport's token provider RE-MINTS on reconnect/expiry (not a captured constant).
-        var transport = new LiveDealerTransport(dealerHosts[0].Split(':')[0], live.TokenProvider, live.Pipeline, () => live.BaseUrl, log);
-        var connect = new LiveConnect(transport, live.DeviceId, live.ApChannel, resolveContext: null, log: log);
+        // The transport's token provider RE-MINTS on reconnect/expiry (not a captured constant). The WHOLE dealer host
+        // list is passed (failover across hosts), and a Connectivity signal is driven by the socket lifecycle so a drop
+        // shows in the UI as "Reconnecting…" (not silent stale playback) — surfaced via svc.Connectivity on go-live.
+        var connectivity = new Connectivity();
+        var transport = new LiveDealerTransport(dealerHosts, live.TokenProvider, live.Pipeline, () => live.BaseUrl, log, connectivity,
+            forceRefreshToken: live.ForceTokenProvider);   // G6 — force-mint after a failed wss handshake
+
+        // Context resolution (inbound Connect play + UI play) needs the metadata stack to hydrate the resolved order, so
+        // build it up front — over the SAME store the catalog reads — and hand the controller a unified context resolver.
+        // (extendedMetadata + metadata are reused below for the on-open fetcher + now-playing enrichment → one cache.)
+        Wavee.Backend.Metadata.ExtendedMetadataSource? extendedMetadata = null;
+        Wavee.Backend.Metadata.MetadataService? metadata = null;
+        IContextResolver? contexts = null;
+        if (svc.RealStore is { } mdStore)
+        {
+            extendedMetadata = new Wavee.Backend.Metadata.ExtendedMetadataSource(live.Pipeline, () => live.BaseUrl, () => live.Session);
+            metadata = new Wavee.Backend.Metadata.MetadataService(extendedMetadata, mdStore, () => live.Session);
+            contexts = new LiveContextResolver(transport, metadata, mdStore, log);
+        }
+
+        // Local audio (Stage H): wire the in-process decode/output stack when extended metadata can resolve file IDs.
+        // PlayPlay is optional and supplied by the ignored Wavee.PlayPlay project when present.
+        // Dedicated "audio" log category — persisted Info+ to wavee.log (WaveeLog special-cases it) so the whole
+        // fetch→key→derive→decrypt pipeline is tailable/diagnosable in a windowed/AOT build with no console.
+        Action<string> audioLog = svc.Log.ToAction("audio");
+        AudioPlaybackStack? audio = extendedMetadata is not null
+            ? new AudioPlaybackStack(transport, live.Pipeline, () => live.ApChannel, () => live.Session, extendedMetadata, svc.Settings, audioLog, svc.Log)
+            : null;
+        audioLog(audio is not null
+            ? "local-audio stack active in-process (file IDs via extended-metadata TRACK_V4/AUDIO_FILES)"
+            : "local-audio stack OFF - no metadata store; playback stays remote-only");
+        svc.Log.Event(WaveeLogLevel.Info, "audio", "stack.state", audio is not null ? "Local audio stack active" : "Local audio stack off",
+            operationId: op,
+            fields: [WaveeLogField.Of("active", audio is not null), WaveeLogField.Of("metadata", extendedMetadata is not null)]);
+        // Remember-volume: seed the device's announced/local volume from the persisted setting (0.7 default when off).
+        double initialVolume = svc.Settings.Get(WaveeSettings.RememberVolume)
+            ? Math.Clamp(svc.Settings.Get(WaveeSettings.SavedVolume), 0f, 1f) : 0.7;
+        var connect = new LiveConnect(transport, live.DeviceId, live.ApChannel, contexts, log: log, audio: audio,
+            initialVolume01: initialVolume);
         transport.Start();
         // Profile (name + avatar) and the account email fetched in PARALLEL before go-live, so CurrentUser is complete on
         // the first render (no refresh hook). Both are best-effort — a failure just omits that field.
@@ -87,40 +160,159 @@ public sealed class LiveSessionHost : IAsyncDisposable
         // Owned CTS — INDEPENDENT of the bootstrap ct (a racing-sibling cancel must not kill hydration); cancelled on logout.
         var cts = new CancellationTokenSource();
         var host = new LiveSessionHost(transport, connect, cts);
+        audio?.StartProvisioning(cts.Token);   // background PlayPlay pack provision — off the play path, owned CTS
+
+        if (audio is not null)
+        {
+            svc.PlayPlayProvisioner = audio.Provisioner;
+            void PushRuntime() => svc.Playback.UpdateRuntimeStatus(audio.Provisioner.GetSnapshot(), uiPost);
+            audio.Status.Changed += () => PushRuntime();
+            PushRuntime();
+        }
 
         // Supersede check: a newer login cancels THIS bootstrap's ct. Bail (disposing what we built) so a stale flow can't
         // AttachLive/GoLive over the winner. No await between here and GoLive → effectively atomic. AttachLive runs BEFORE
         // GoLive so a logout fired in the go-live window still tears the host down (not a no-op).
         if (ct.IsCancellationRequested) { await host.DisposeAsync().ConfigureAwait(false); return null; }
         svc.AttachLive(host, live.CredStore!);
-        svc.GoLive(connect.Controller, connect.Devices, liveSession);
+        // Point the switchable mutation transport at the live dealer BEFORE go-live so a write in the go-live window networks;
+        // set the real username into the ambient session so write bodies carry a valid account (§3).
+        svc.MutTransport?.SetInner(transport);
+        if (svc.RealSessionHost is { } sh) sh.Set(sh.Current with { Account = live.Username });
+        var lyrics = BuildLiveLyrics(() => live.BaseUrl, connect.Controller, live.TokenProvider, () => connect.Projection?.TrackResolver);
+        // Local (silent) playback is unsupported: any play that routes to THIS device shows the standard "choose a remote
+        // device" toast instead of pretending to play. The hook can fire from a dealer thread — NotifyLocalPlaybackUnsupported
+        // posts to the UI thread. (The --connect-live CLI demo never Activates the bridge, so the notify no-ops there.)
+        // Reject local playback ONLY when there's no local-audio stack (remote-only). With the stack wired, a play routed
+        // to THIS device actually decodes/outputs in process instead of showing the "choose a remote device" toast.
+        if (audio is null)
+            connect.Controller.OnLocalPlaybackRejected = () => svc.Playback.NotifyLocalPlaybackUnsupported();
+        // A failing transfer / play to the active remote device surfaces as a toast (was silent) — so "switching doesn't work"
+        // shows a reason instead of nothing. The controller also logs the HTTP status (grep "outbound transfer"/"outbound play").
+        connect.Controller.OnRemoteCommandFailed = () => svc.Playback.NotifyRemoteCommandFailed();
+        // A LOCAL play that fails (key/CDN/decode/provisioning) surfaces a typed toast + player-bar error with a Retry that
+        // re-provisions the pack (if needed) and replays the current track — instead of a silently-dropped fire-and-forget.
+        connect.Controller.OnPlaybackError = e =>
+        {
+            svc.Log.Event(WaveeLogLevel.Error, "audio", "playback.failed", "Local playback failed",
+                operationId: op,
+                fields:
+                [
+                    WaveeLogField.Of("reason", e.Reason.ToString()),
+                    WaveeLogField.Of("detail", e.Detail ?? ""),
+                ]);
+            svc.Log.Error("audio", $"playback failed [{e.Reason}]: {e.Detail}");   // → wavee.log (persisted)
+            // When the failure is "no local runtime" (nothing to retry into), route the toast action to the one-click
+            // SETUP flow instead of a Retry that would just replay and fail again. Also surface the persistent banner by
+            // pushing the RuntimeUnavailable status (so the offer isn't a one-shot toast the user can miss).
+            bool needsSetup = e.Reason is AudioKeyFailureReason.NeverProvisioned
+                or AudioKeyFailureReason.ProvisioningUnavailable
+                or AudioKeyFailureReason.ArchUnsupported;
+            if (needsSetup && audio is not null)
+            {
+                var snap = audio.Provisioner.GetSnapshot();
+                if (snap.Outcome is ProvisioningOutcome.Ready or ProvisioningOutcome.NeverAttempted)
+                    snap = new PlaybackRuntimeStatus(ProvisioningOutcome.RuntimeUnavailable);
+                svc.Playback.UpdateRuntimeStatus(snap, uiPost);
+                svc.Settings.Set(WaveeSettings.PlaybackRuntimeSetupDismissed, false);   // re-offer after an explicit play attempt
+                svc.Playback.NotifyPlaybackError(e.UserMessage, Loc.Get(Strings.Playback.Runtime.SetUp),
+                    () => svc.Playback.OpenPlaybackRuntimeSetup.Value++);
+            }
+            else
+            {
+                svc.Playback.NotifyPlaybackError(e.UserMessage, "Retry",
+                    () => { audio?.StartProvisioning(cts.Token); _ = connect.Controller.RetryCurrentAsync(); });
+            }
+        };
+        svc.GoLive(connect.Controller, connect.Devices, liveSession, connectivity, lyrics);
+        // Diagnostic one-shot: WAVEE_PLAYPLAY_PROBE=1 (or a file-id hex) fetches that file's PlayPlay obf+aes on the LIVE
+        // session and compares to the unplayplay ogg-vorbis-160 golden vector — isolates "is our live obf the vector's value".
+        if (audio is not null && Environment.GetEnvironmentVariable("WAVEE_PLAYPLAY_PROBE") is { Length: > 0 } probe)
+            _ = ProbePlayPlayAsync(audio, probe, audioLog, cts.Token);
+        // Diagnostic one-shot: WAVEE_AUDIO_FORMAT_PROBE=1 plus WAVEE_AUDIO_FORMAT_PROBE_TRACK=<track-uri-or-base62>
+        // resolves exactly one track and lets AudioFormatProbe log every exposed audio candidate, CDN prefix, preview MP3,
+        // and music-video DRM manifest without requiring a UI play action.
+        if (audio is not null && Environment.GetEnvironmentVariable("WAVEE_AUDIO_FORMAT_PROBE_TRACK") is { Length: > 0 } formatProbe)
+            _ = ProbeAudioFormatsAsync(audio, formatProbe, audioLog, cts.Token);
         report.Report(new LoginSnapshot(LoginPhase.Authenticated, User: liveSession.CurrentUser));
+        if (audio is not null && !svc.Settings.Get(WaveeSettings.PlaybackRuntimeSetupDismissed))
+        {
+            var snap = audio.Provisioner.GetSnapshot();
+            if (snap.Outcome == ProvisioningOutcome.RuntimeUnavailable)
+            {
+                void ShowSetupToast() => Toasts.Show(
+                    Loc.Get(Strings.Playback.Runtime.Missing),
+                    ToastSeverity.Caution,
+                    Loc.Get(Strings.Playback.Runtime.SetUp),
+                    () => svc.Playback.OpenPlaybackRuntimeSetup.Value++);
+                if (uiPost is { } post) post(ShowSetupToast);
+            }
+        }
         log("Live Connect session active — Wavee is a controllable device, mirrors now-playing, and shows the live account.");
 
         // Live data wiring into the SAME store the catalog reads (InMemoryStore is lock-guarded → safe off-thread):
-        if (svc.RealStore is { } store)
+        if (svc.RealStore is { } store && metadata is { } md && extendedMetadata is { } em)
         {
             // (a) fetch playlist/album TRACKS the first time a detail page opens (the sync stored headers only). The real
             //     hydrator (MetadataService over the extended-metadata batch) replaces the no-op that left lists empty.
-            var extendedMetadata = new Wavee.Backend.Metadata.ExtendedMetadataSource(live.Pipeline, () => live.BaseUrl, () => live.Session);
-            var metadata = new Wavee.Backend.Metadata.MetadataService(extendedMetadata, store, () => live.Session);
-            var fetcher = new PlaylistFetcher(live.Pipeline, () => live.BaseUrl, store, (uris, c) => metadata.SyncAllAsync(uris, c));
+            //     em + md were built above for the context resolver — reuse them so the whole session shares one cache.
+            var fetcher = new PlaylistFetcher(live.Pipeline, () => live.BaseUrl, store, (uris, c) => md.SyncAllAsync(uris, c));
+
+            // The single library-sync writer loop (RC1): the collection fetcher (revision get/set → the SQLite cold tier,
+            // mark-and-sweep shielded by the mutation outbox), the loop itself, and the dealer router that decode-and-enqueues
+            // into it. The DealerRouter no longer writes the store — the in-place apply / mark-dirty / refetch policy is the loop's.
+            var cold = svc.RealCold!;
+            var collections = new Wavee.Backend.Collections.CollectionFetcher(live.Pipeline, () => live.BaseUrl, () => live.Username, store,
+                s => cold.GetCollectionRevision(s),
+                (s, r) => cold.SetCollectionRevision(s, r, DateTimeOffset.UtcNow.ToUnixTimeSeconds()),
+                (uris, c) => md.SyncAllAsync(uris, c),
+                (s, u) => svc.RealMutations!.HasPending(s, u));
+            var sync = new Wavee.Backend.Sync.LibrarySync(store, fetcher, collections, svc.RealMutations!, svc.MutTransport!,
+                () => svc.RealSessionHost!.Current, () => live.Username, log, cts.Token, svc.EchoRing);
+            var router = new Wavee.Backend.Realtime.DealerRouter(transport, sync);
+            svc.RealSync = sync;
+            sync.Enqueue(new Wavee.Backend.Sync.SyncCommand(Wavee.Backend.Sync.SyncKind.DrainWrites));      // replay writes queued while logged out
+            sync.Enqueue(new Wavee.Backend.Sync.SyncCommand(Wavee.Backend.Sync.SyncKind.InitialHydrate));
+            // Reconnect resync (§6.2): on a transition back to Online from a drop, run the ordered convergence pass —
+            // drain the outbox FIRST (a like made during the gap sends), then rootlist + token-gated deltas + /diff for
+            // the open/dirty resident playlists. Pushes during the gap died with the socket; this pass is the recovery.
+            var prevStatus = connectivity.Status;
+            IDisposable connSub = connectivity.StatusChanged.Subscribe(Observers.From<Wavee.Core.ConnectionStatus>(s =>
+            {
+                var prev = prevStatus; prevStatus = s;
+                if (s == Wavee.Core.ConnectionStatus.Online && (prev == Wavee.Core.ConnectionStatus.Reconnecting || prev == Wavee.Core.ConnectionStatus.Offline))
+                    sync.Enqueue(new Wavee.Backend.Sync.SyncCommand(Wavee.Backend.Sync.SyncKind.ReconnectResync));
+            }));
+            host.AttachSync(router, sync, connSub);
+            // Post-write drains route through the loop (§6 hardening): replay/reconcile serializes with inbound diffs
+            // instead of racing them from the caller's thread. GoOffline resets this to inline-drain.
+            if (svc.RealMutationSource is { } mutSrc) mutSrc.ScheduleDrain = () => sync.Enqueue(new Wavee.Backend.Sync.SyncCommand(Wavee.Backend.Sync.SyncKind.DrainWrites));
+
             // Pathfinder (GraphQL) for rich catalog reads with no protobuf equivalent — the artist overview, on open.
             var pathfinder = new PathfinderClient(live.TokenProvider, _ => Task.FromResult(live.ClientToken), log);
             var homeCache = new LiveHomeCache(pathfinder);
             // Below-the-fold album enrichment (about-artist / merch / similar via Pathfinder; recommended playlists via the
             // SAME extended-metadata source, kinds 151→205) — installed into the switchable service the album pages hold.
-            svc.AlbumEnrichment.SetInner(new SpotifyAlbumEnrichmentService(pathfinder, extendedMetadata, store, log));
+            svc.AlbumEnrichment.SetInner(new SpotifyAlbumEnrichmentService(pathfinder, em, store, log));
+            // Music-video detection + the video↔audio file-id map over the SAME extended-metadata source (etag-cached).
+            svc.Video.SetInner(new SpotifyVideoService(em, store, log));
+            svc.UserProfiles.SetInner(new SpotifyUserProfileService(em, live.Pipeline, () => live.BaseUrl, log));
+            // Let the player bar reflect the now-playing track's (async-detected) video via the store change stream.
+            svc.Playback.AttachStore(store);
             if (svc.RealLibrarySource is { } libSrc)
             {
+                libSrc.Sync = sync;   // on-open SWR: playlists route through the loop (blocking first fetch / background revalidate)
                 libSrc.OnDemandFetch = async (uri, c) =>
                 {
                     if (uri.StartsWith("spotify:playlist:", StringComparison.Ordinal)) await fetcher.FetchPlaylistAsync(uri, c).ConfigureAwait(false);
                     else if (uri.StartsWith("spotify:album:", StringComparison.Ordinal)) await FetchAlbumAsync(pathfinder, store, uri, c).ConfigureAwait(false);
                     else if (uri.StartsWith("spotify:artist:", StringComparison.Ordinal)) await FetchArtistAsync(pathfinder, store, uri, c).ConfigureAwait(false);
+                    // Detect music videos for the just-hydrated tracklist (batch, off the critical path → the movie icons fill in).
+                    DetectContainerVideos(svc.Video, store, uri, c);
                 };
                 libSrc.LiveHomeFetch = c => homeCache.GetAsync(c);   // cached editorial home + separately refreshed recents
                 libSrc.LiveSearch = (q, facet, offset, limit, c) => FetchSearchAsync(pathfinder, q, facet, offset, limit, c);   // paged online search
+                libSrc.LiveDiscography = (uri, kind, off, lim, c) => FetchDiscographyPageAsync(pathfinder, uri, kind, off, lim, c);   // paged artist discography
                 libSrc.LiveSuggest = async (q, c) => (await FetchSuggestRichAsync(pathfinder, q, c).ConfigureAwait(false)).Queries;   // omnibar as-you-type suggestions
                 libSrc.LiveSuggestRich = (q, c) => FetchSuggestRichAsync(pathfinder, q, c);
             }
@@ -130,7 +322,8 @@ public sealed class LiveSessionHost : IAsyncDisposable
             connect.Projection.TrackResolver = async (uri, c) =>
             {
                 if (!uri.StartsWith("spotify:track:", StringComparison.Ordinal)) return null;
-                return await ResolveNowPlayingTrackAsync(uri, metadata, pathfinder, store, c).ConfigureAwait(false);
+                _ = svc.Video.GetAsync(uri, c);   // warm the current track's video↔audio mapping (best-effort, fire-and-forget)
+                return await ResolveNowPlayingTrackAsync(uri, md, pathfinder, store, c).ConfigureAwait(false);
             };
 
             // (b) hydrate playlist HEADERS (name/cover) so the home + sidebar show names; for cover-less playlists also
@@ -141,13 +334,15 @@ public sealed class LiveSessionHost : IAsyncDisposable
         return host;
     }
 
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
         _cts.Cancel();           // stop background hydration / in-flight fetches before tearing the transport down
+        _connSub?.Dispose();     // stop reconnect-resync triggers
+        _router?.Dispose();      // stop decoding pushes
+        if (_sync is not null) await _sync.DisposeAsync().ConfigureAwait(false);   // drain the loop to a stop before the transport
         _connect.Dispose();
         _transport.Dispose();
         _cts.Dispose();
-        return ValueTask.CompletedTask;
     }
 
     // ── AuthState → LoginSnapshot projection ─────────────────────────────────────────────────────────────────────────
@@ -194,8 +389,10 @@ public sealed class LiveSessionHost : IAsyncDisposable
         public void Report(LoginSnapshot snapshot) { }
     }
 
-    // Phase 1: hydrate each rootlist playlist's HEADER (name/cover) — fast, coalesced into one refresh. Phase 2: for the
-    // cover-less ones, pull the TRACKLIST so SummaryOf can derive a 2×2 mosaic (progressive — each fills in as it lands).
+    // Hydrate each rootlist playlist's HEADER (name/cover) — fast, coalesced into one refresh — so the home + sidebar show
+    // names on cold start. The mosaic-tracklist half was RETIRED (§3): LibrarySync.InitialHydrate is now the authoritative
+    // rootlist consumer, and a cover-less playlist's mosaic derives from its tracklist which lands on first OPEN (the on-open
+    // SWR path) rather than eagerly pulling every playlist's tracks here (the herd this design avoids).
     static async Task HydratePlaylistHeadersAsync(PlaylistFetcher fetcher, IStore store, Action<string> log, CancellationToken ct)
     {
         try
@@ -213,22 +410,97 @@ public sealed class LiveSessionHost : IAsyncDisposable
                 }
             }
             if (headers > 0) log($"hydrated {headers} playlist headers (home + sidebar names)");
-
-            // Cover-less playlists: pull the tracklist so the 2×2 mosaic can compose. NOT bulk-coalesced → each playlist's
-            // mosaic fills in as its tracks land (progressive). Throttled implicitly by being sequential + best-effort.
-            int mosaics = 0;
-            foreach (var e in store.Rootlist())
-            {
-                if (ct.IsCancellationRequested) break;
-                if (e.Kind != 0 || !e.Uri.StartsWith("spotify:playlist:", StringComparison.Ordinal)) continue;
-                if (store.GetPlaylist(e.Uri)?.Cover is not null) continue;   // has a custom cover → no mosaic needed
-                if (store.Membership(e.Uri).Count > 0) continue;            // already has a tracklist
-                try { await fetcher.FetchPlaylistAsync(e.Uri, ct).ConfigureAwait(false); mosaics++; }
-                catch { }
-            }
-            if (mosaics > 0) log($"hydrated {mosaics} cover-less playlist tracklists (mosaics)");
         }
         catch (Exception ex) { log("playlist hydration: " + ex.Message); }
+    }
+
+    // Diagnostic one-shot (WAVEE_PLAYPLAY_PROBE): fetch a file's PlayPlay obf+aes on the LIVE session and compare to the
+    // unplayplay ogg-vorbis-160 golden vector. Confirms whether the obf Spotify returns for OUR (bumped-version) request is
+    // the vector's value — i.e. whether the existing 1.2.88.483 emulator derives the right key on a non-403 request.
+    static readonly (string File, string HarObf)[] PlayPlayHarVectors =
+    [
+        ("5989137781b15a3275f8e312bceb096b7ef8f0a0", "4cc24d16068d90fe18c4e2e2cd2691d0"),
+        ("1e90abc9cde41338a87c8da5be203218ac84a82c", "a7545790cfe4cae70dd5f51712df35a8"),
+    ];
+
+    static async Task ProbePlayPlayAsync(Wavee.SpotifyLive.Audio.AudioPlaybackStack audio, string probe, Action<string> log, CancellationToken ct)
+    {
+        try
+        {
+            if (audio.RuntimeAsset is null)
+            {
+                for (int i = 0; i < 10 && audio.RuntimeAsset is null && !ct.IsCancellationRequested; i++)
+                    await Task.Delay(200, ct).ConfigureAwait(false);
+            }
+            if (audio.RuntimeAsset is null) { log("PROBE: runtime not ready"); return; }
+
+            IEnumerable<string> files = probe is "har" or "all" or "1" or "true"
+                ? PlayPlayHarVectors.Select(h => h.File)
+                : [probe.Trim().ToLowerInvariant()];
+
+            foreach (var fileHex in files)
+            {
+                log($"PROBE: full PlayPlay path for {fileHex}");
+                var key = await audio.KeyResolver.GetKeyAsync(Convert.FromHexString(fileHex), new byte[16], ct).ConfigureAwait(false);
+                log($"PROBE RESULT {fileHex[..8]}...: aes={key.Length}B redacted");
+            }
+        }
+        catch (Exception ex) { log("PROBE failed: " + ex.Message); }
+    }
+
+    static async Task ProbeAudioFormatsAsync(AudioPlaybackStack audio, string probe, Action<string> log, CancellationToken ct)
+    {
+        try
+        {
+            var uri = probe.Trim();
+            if (uri.Length == 22 && !uri.StartsWith("spotify:", StringComparison.Ordinal))
+                uri = "spotify:track:" + uri;
+            if (!uri.StartsWith("spotify:track:", StringComparison.Ordinal))
+            {
+                log("AUDIO FORMAT PROBE: invalid track probe '" + probe + "' (expected spotify:track:<id> or 22-char id)");
+                return;
+            }
+
+            var id = uri["spotify:track:".Length..];
+            var track = new Track(
+                id, uri, "probe",
+                Array.Empty<ArtistRef>(),
+                new AlbumRef("", "", ""),
+                0, false, null);
+
+            log("AUDIO FORMAT PROBE: resolving " + uri);
+            await audio.TrackResolver.ResolveMetaAsync(track, ct).ConfigureAwait(false);
+            log("AUDIO FORMAT PROBE: metadata resolved for " + uri + "; waiting for background probe logs");
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (Exception ex) { log("AUDIO FORMAT PROBE failed: " + ex.Message); }
+    }
+
+    // After a container's tracklist hydrates, batch-detect which of its tracks have a music video (fills the row indicator).
+    // Fire-and-forget off the open path — best-effort, etag-cached, and a no-op when the container has no resident tracks yet.
+    static void DetectContainerVideos(IVideoService video, IStore store, string uri, CancellationToken ct)
+    {
+        List<string>? uris = null;
+        if (uri.StartsWith("spotify:playlist:", StringComparison.Ordinal))
+        {
+            var m = store.Membership(uri);
+            if (m.Count > 0)
+            {
+                uris = new List<string>(m.Count);
+                foreach (var r in m) if (r.ItemUri.StartsWith("spotify:track:", StringComparison.Ordinal)) uris.Add(r.ItemUri);
+            }
+        }
+        else if (uri.StartsWith("spotify:album:", StringComparison.Ordinal))
+        {
+            if (store.GetAlbum(uri)?.Tracks is { Count: > 0 } tracks)
+            {
+                uris = new List<string>(tracks.Count);
+                foreach (var t in tracks) uris.Add(t.Uri);
+            }
+        }
+        if (uris is not { Count: > 0 }) return;
+        var list = uris;
+        _ = Task.Run(async () => { try { await video.DetectAsync(list, ct).ConfigureAwait(false); } catch { } }, ct);
     }
 
     // Fetch the rich artist overview via Pathfinder GraphQL → map (the export's artist-*.json IS this shape) → store.
@@ -240,7 +512,29 @@ public sealed class LiveSessionHost : IAsyncDisposable
             PathfinderClient.Platform.Desktop, ct).ConfigureAwait(false);
         if (doc is null) return;
         if (Wavee.Core.SpotifyExportMapper.ArtistFromOverview(doc.RootElement) is { Uri.Length: > 0 } artist)
-            store.UpsertArtist(artist);
+            store.UpsertArtist(artist with { FetchedAt = DateTimeOffset.UtcNow });   // stamp SWR freshness on the full overview
+    }
+
+    // One window of an artist's discography facet. The three facet ops share one persisted hash; the server keys on the
+    // operationName. Variables mirror the desktop client: uri/offset/limit + order DATE_DESC (no preReleaseV2 — that's
+    // overview-only). null doc (HTTP/stale-hash/network) → null, so the source clears the VC page guard and retries.
+    static async Task<DiscographyPage?> FetchDiscographyPageAsync(PathfinderClient pf, string artistUri, DiscographyKind kind, int offset, int limit, CancellationToken ct)
+    {
+        var op = kind switch
+        {
+            DiscographyKind.Singles => PathfinderOps.QueryArtistDiscographySingles,
+            DiscographyKind.Compilations => PathfinderOps.QueryArtistDiscographyCompilations,
+            _ => PathfinderOps.QueryArtistDiscographyAlbums,
+        };
+        using var doc = await pf.QueryAsync(op, PathfinderOps.QueryArtistDiscographyHash, w =>
+        {
+            w.WriteString("uri", artistUri);
+            w.WriteNumber("offset", offset);
+            w.WriteNumber("limit", limit);
+            w.WriteString("order", "DATE_DESC");
+        }, PathfinderClient.Platform.Desktop, ct).ConfigureAwait(false);
+        if (doc is null) return null;
+        return Wavee.Core.SpotifyExportMapper.DiscographyPageFromResponse(doc.RootElement, kind);
     }
 
     // Full-catalog online search via Pathfinder — the per-facet ops (searchTracks/Albums/Artists/Playlists) fired in
@@ -316,6 +610,99 @@ public sealed class LiveSessionHost : IAsyncDisposable
         {
             throw new TimeoutException($"Spotify {facet} search timed out.");
         }
+    }
+
+    // The real lyrics feed (docs/lyrics-aggregator-reranker-plan.md): fan out to AMLL (word-synced TTML by track id),
+    // Spotify-native (the rerank reference + a line candidate, via the authed spclient), and LRCLIB (clean metadata
+    // fallback); the reranker validates content/timing and picks the best. The request is resolved from the live
+    // now-playing track (what the lyrics view asks for). Grey CJK/Musixmatch sources stay off by default (LyricsOptions).
+    static Wavee.Backend.Lyrics.AggregatingLyricsProvider BuildLiveLyrics(
+        Func<string> baseUrl, IPlaybackPlayer controller, Func<CancellationToken, Task<string>> token,
+        Func<Func<string, CancellationToken, Task<Track?>>?> trackResolver)
+    {
+        var http = new Wavee.Backend.Lyrics.SharedHttpLyricFetch();
+
+        // Spotify color-lyrics auth — the proven WaveeMusic SpClient.GetLyricsAsync recipe: a raw bearer GET with
+        // app-platform=ANDROID + spotify-app-version. The ANDROID platform is what lets the lyrics CDN serve WITHOUT a
+        // client-token; WebPlayer/desktop platforms require a client-token and 403 without one. We must NOT route through
+        // the shared spclient pipeline (it force-stamps App-Platform=Win32_x86_64 in ClientTokenMiddleware). The bearer is
+        // the refreshing TokenProvider (survives the ~1h access-token expiry), so lyrics keep loading deep into a session.
+        async Task<string?> SpotifyGet(string url, CancellationToken c)
+        {
+            try
+            {
+                string tok = await token(c).ConfigureAwait(false);
+                if (string.IsNullOrEmpty(tok)) { Wavee.Backend.Lyrics.LyricsProbe.Note("spotify", "no access token (bearer refresh empty)"); return null; }
+                using var req = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Get, url);
+                req.Headers.TryAddWithoutValidation("Authorization", "Bearer " + tok);
+                req.Headers.TryAddWithoutValidation("app-platform", "Android");
+                req.Headers.TryAddWithoutValidation("spotify-app-version", SpotifyClientIdentity.AppVersionHeader);
+                req.Headers.TryAddWithoutValidation("Accept", "application/json");
+                using var resp = await Wavee.Backend.Spotify.SharedHttp.Client.SendAsync(req, c).ConfigureAwait(false);
+                if (!resp.IsSuccessStatusCode) { Wavee.Backend.Lyrics.LyricsProbe.Note("spotify", $"color-lyrics HTTP {(int)resp.StatusCode}"); return null; }
+                return await resp.Content.ReadAsStringAsync(c).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception e) { Wavee.Backend.Lyrics.LyricsProbe.Note("spotify", $"color-lyrics error: {e.GetType().Name}"); return null; }
+        }
+
+        var sources = new System.Collections.Generic.List<Wavee.Backend.Lyrics.ILyricCandidateSource>
+        {
+            new Wavee.Backend.Lyrics.Sources.AmllTtmlDbSource(http),
+            new Wavee.Backend.Lyrics.Sources.SpotifyNativeLyricsSource(SpotifyGet, baseUrl),
+            new Wavee.Backend.Lyrics.Sources.LrcLibSource(http),
+        };
+        // Grey providers (docs plan §6) — ENABLED: widen word/syllable coverage beyond AMLL with the reverse-engineered
+        // CJK APIs (QQ QRC, NetEase YRC, Kugou KRC) + Musixmatch richsync. The reranker still validates each against the
+        // Spotify reference, so a wrong/ mistimed grey candidate can't win.
+        var opt = Wavee.Backend.Lyrics.LyricsOptions.Default with
+        {
+            EnableGreyProviders = true,
+            PerSourceTimeoutMs = 30000,
+            TotalTimeoutMs = 30000,
+            FirstHitGraceMs = 1200,
+        };
+        if (opt.EnableGreyProviders)
+        {
+            sources.Add(new Wavee.Backend.Lyrics.Sources.MusixmatchSource());
+            sources.Add(new Wavee.Backend.Lyrics.Sources.QqMusicSource());
+            sources.Add(new Wavee.Backend.Lyrics.Sources.NeteaseSource());
+            sources.Add(new Wavee.Backend.Lyrics.Sources.KugouSource());
+        }
+
+        async Task<Wavee.Backend.Lyrics.LyricsRequest?> Resolve(string trackId, CancellationToken c)
+        {
+            var t = controller.State.CurrentTrack;
+            if (t is null || (t.Id != trackId && t.Uri != "spotify:track:" + trackId)) return null;
+
+            string uri = "spotify:track:" + trackId;
+            // The cluster's now-playing track is often THIN (no artist / no ISRC) and may not be enriched yet when the
+            // lyrics view first asks — so resolve the FULL track ourselves (the same extended-metadata + Pathfinder
+            // resolver the player bar uses). This makes the search's artist + ISRC independent of the now-playing
+            // enrichment race; otherwise every provider searches title-only (e.g. "fade away" with no artist → no match).
+            bool thin = t.Artists.Count == 0 || string.IsNullOrEmpty(t.Artists[0].Name) || string.IsNullOrEmpty(t.Isrc);
+            if (thin && trackResolver() is { } resolve)
+            {
+                try
+                {
+                    var full = await resolve(uri, c).ConfigureAwait(false);
+                    if (full is not null && (full.Uri == uri || full.Id == trackId)) t = full;
+                }
+                catch (OperationCanceledException) { throw; }
+                catch { /* best-effort — fall back to the thin track */ }
+            }
+
+            // Skip blank artist names (a thin cluster track carries a single empty ArtistRef) so the request gets [] not [""].
+            var artists = new System.Collections.Generic.List<string>(t.Artists.Count);
+            foreach (var a in t.Artists) if (!string.IsNullOrEmpty(a.Name)) artists.Add(a.Name);
+            return new Wavee.Backend.Lyrics.LyricsRequest(
+                trackId, uri, t.Title, artists, t.Album.Name, t.DurationMs,
+                Isrc: t.Isrc, Market: "from_token", HasSpotifyLyrics: null);
+        }
+
+        return new Wavee.Backend.Lyrics.AggregatingLyricsProvider(
+            sources, Resolve, opt, referenceSourceId: "spotify",
+            log: s => WaveeLog.Instance.Info("lyrics", s));
     }
 
     // The signed-in user's profile (display name + avatar) via spclient user-profile-view — the cluster/login only give
@@ -444,7 +831,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
 
             var groups = new List<HomeGroup>(home.Count + 1)
             {
-                new(HomeGroupKind.QuickGrid, "Recently played", recents, 0xFFF59E0Bu),
+                new(HomeGroupKind.QuickGrid, "Recently played", recents, SpotifyHomeComposer.GroupAccent(HomeGroupKind.QuickGrid, recents)),
             };
             groups.AddRange(home);
             return groups;
@@ -513,8 +900,11 @@ public sealed class LiveSessionHost : IAsyncDisposable
     static async Task<Track?> ResolveNowPlayingTrackAsync(string uri, Wavee.Backend.Metadata.MetadataService metadata,
         PathfinderClient pathfinder, IStore store, CancellationToken ct)
     {
-        await metadata.SyncAllAsync(new[] { uri }, ct).ConfigureAwait(false);
         var track = store.GetTrack(uri);
+        if (track?.Image is not null && track.Artists.Count > 0) return track;
+
+        await metadata.SyncAllAsync(new[] { uri }, ct).ConfigureAwait(false);
+        track = store.GetTrack(uri);
         if (track?.Image is not null && track.Artists.Count > 0) return track;
 
         using var doc = await pathfinder.QueryAsync(PathfinderOps.GetTrack, PathfinderOps.GetTrackHash,
@@ -541,6 +931,10 @@ public sealed class LiveSessionHost : IAsyncDisposable
             if (s.CurrentTrack is { } t)
                 log("  bridge now-playing: " + t.Title + " — " + (s.IsPlaying ? "playing" : "paused") + " (active=" + (s.ActiveDeviceId ?? "") + ")");
         }));
+        // Observability proof: the realtime (dealer socket) link status — toggle your network to see Reconnecting → Online.
+        using var connSub = svc.Connectivity.StatusChanged.Subscribe(Observers.From<Wavee.Core.ConnectionStatus>(
+            s => log("  realtime link: " + s)));
+        log("  realtime link: " + svc.Connectivity.Status);
 
         // Stage 1 verification: open the first rootlist playlist + an album through the catalog (fires OnDemandFetch).
         string? plUri = null, alUri = null, arUri = null;
@@ -574,8 +968,12 @@ public sealed class LiveSessionHost : IAsyncDisposable
         var sg = await svc.Library.SuggestAsync("aras", ct).ConfigureAwait(false);
         log($"  suggest 'aras' → {sg.Count}: {string.Join(" | ", System.Linq.Enumerable.Take(sg, 6))}");
 
-        log("Listening 25s (control Wavee from your phone's Connect picker to drive commands)...");
-        try { await Task.Delay(TimeSpan.FromSeconds(25), ct).ConfigureAwait(false); } catch { }
+        log("SMOKE TEST — Wavee is now a live Connect device. In the next 90s:");
+        log("  1) open Spotify on your phone/web → device picker → confirm \"Wavee\" appears;");
+        log("  2) transfer to Wavee + play a playlist/album/Liked Songs → watch now-playing + the queue below;");
+        log("  3) pause/seek/next/shuffle/repeat from the phone → each logs an inbound 'connect command' + a put-state;");
+        log("  4) (optional) toggle airplane mode briefly → watch 'realtime link: Reconnecting' then 'Online'.");
+        try { await Task.Delay(TimeSpan.FromSeconds(90), ct).ConfigureAwait(false); } catch { }
         return 0;
     }
 }

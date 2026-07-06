@@ -4,7 +4,11 @@
 
   "detail": {
     "play": "Play",
+    "shuffle": "Shuffle",
+    "playNext": "Play next",
+    "playAfter": "Play after",
     "addToQueue": "Add to queue",
+    "addToEndOfQueue": "Add to end of queue",
     "addToPlaylist": "Add to playlist",
     "copyToPlaylist": "Copy to playlist",
     "addedToQueue": "Added {count} to queue",
@@ -286,7 +290,61 @@
     "queue": "Queue",
     "devices": "Devices",
     "nowPlaying": "Now playing",
-    "playingOn": "Playing on {device}"
+    "switchToVideo": "Switch to video",
+    "switchToAudio": "Switch to audio",
+    "playingOn": "Playing on {device}",
+    "localPlaybackUnsupported": "Playback isn’t supported on this device yet",
+    "chooseDevice": "Choose device",
+    "noDevices": "No devices found",
+    "noDevicesHint": "Open Spotify on another device",
+    "unavailable": "Unavailable",
+    "remoteCommandFailed": "Couldn’t reach that device — make sure it’s online and try again"
+  },
+
+  "playback": {
+    "runtime": {
+      "title": "Local playback setup",
+      "ready": "Local playback is ready",
+      "missing": "Local playback needs a one-time setup",
+      "wrongArch": "This Spotify build doesn’t match your device",
+      "unsupported": "This playback runtime isn’t supported",
+      "signatureInvalid": "This DLL isn’t Spotify-signed",
+      "selectDll": "Select folder",
+      "useInstalled": "Use installed Spotify",
+      "continueRemote": "Continue without local playback",
+      "replace": "Replace",
+      "remove": "Remove",
+      "setUp": "Set up",
+      "loadAnyway": "Load anyway",
+      "offerBody": "Play tracks directly on this device. Wavee downloads a small one-time playback component — nothing else is installed.",
+      "downloadSetup": "Download & set up",
+      "notNow": "Not now",
+      "checkingSupport": "Checking what’s available for your device…",
+      "downloading": "Downloading…",
+      "verifying": "Verifying download…",
+      "verifyingCaption": "Checking integrity and signature",
+      "untrustedBody": "This file isn’t Spotify-signed. It matches the expected fingerprint, but the publisher signature couldn’t be verified. Only continue if you trust the source.",
+      "tryAgain": "Try again",
+      "advanced": "Advanced options",
+      "advancedBody": "Supply a Spotify.dll yourself — Wavee recognizes supported builds by fingerprint and configures the rest automatically.",
+      "back": "Back",
+      "done": "Done",
+      "install": "Install",
+      "installFromFolder": "Choose a Spotify.dll…",
+      "installFromFolderCaption": "Pick a folder or file — a supported build is recognized automatically",
+      "useInstalledCaption": "Reuse the Spotify app already installed on this PC",
+      "checkUpdate": "Check for update",
+      "chooseVersion": "Choose a version to install",
+      "recommended": "Recommended",
+      "catalogUnreachable": "Couldn’t reach the catalog — you can still install from a local source.",
+      "noPack": "Playback support isn’t available for your Spotify version yet.",
+      "upToDate": "You’re on the latest supported version.",
+      "supported": "Supported",
+      "detailVersion": "Version",
+      "detailArch": "Architecture",
+      "detailSignature": "Signature",
+      "detailLocation": "Location"
+    }
   },
 
   "nav": {
@@ -372,6 +430,7 @@
   },
 
   "common": {
+    "more": "More",
     "retry": "Retry",
     "dismiss": "Dismiss",
     "offline": "You're offline — showing saved content.",

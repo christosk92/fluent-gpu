@@ -5,6 +5,10 @@ using System.IO;
 using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+using Wavee.Backend;
+using Wavee.Core;
 
 namespace Wavee.Tests;
 
@@ -79,4 +83,43 @@ static class ConnectHarness
         public void OnError(Exception error) { }
         public void OnNext(T value) => onNext(value);
     }
+}
+
+/// <summary>A test IContextResolver: any context uri resolves to a fixed track list (uid "uid{i}", 60 s each); skip_to is
+/// honored (uid→uri→index). Stands in for LiveContextResolver in the headless controller tests.</summary>
+public sealed class FakeContextResolver : IContextResolver
+{
+    readonly QueuedTrack[] _tracks;
+
+    public FakeContextResolver(params string[] uris)
+    {
+        _tracks = new QueuedTrack[uris.Length];
+        for (int i = 0; i < uris.Length; i++) _tracks[i] = new QueuedTrack(Trk(uris[i]), "uid" + i);
+    }
+
+    public Task<ResolvedContext> ResolveAsync(ContextSpec spec, CancellationToken ct = default)
+    {
+        IReadOnlyList<QueuedTrack> tracks = _tracks;
+        if (spec.EmbeddedPages is { Count: > 0 } pages)   // a sorted/custom-ordered page sent inline wins over the fixed list
+        {
+            var arr = new QueuedTrack[pages.Count];
+            for (int i = 0; i < pages.Count; i++) arr[i] = new QueuedTrack(Trk(pages[i].Uri), pages[i].Uid);
+            tracks = arr;
+        }
+        int start = ContextResolve.FindStartIndex(tracks, spec.SkipToTrackUri, spec.SkipToTrackUid, spec.SkipToIndex);
+        return Task.FromResult(new ResolvedContext(tracks, start, null, null, false));
+    }
+
+    public Task<IReadOnlyList<QueuedTrack>> LoadMoreAsync(string nextPageUrl, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<QueuedTrack>>(Array.Empty<QueuedTrack>());
+
+    public Task<IReadOnlyList<QueuedTrack>> HydrateAsync(IReadOnlyList<QueuedRef> refs, CancellationToken ct = default)
+    {
+        var arr = new QueuedTrack[refs.Count];
+        for (int i = 0; i < refs.Count; i++) arr[i] = new QueuedTrack(Trk(refs[i].Uri), refs[i].Uid);
+        return Task.FromResult<IReadOnlyList<QueuedTrack>>(arr);
+    }
+
+    static Track Trk(string uri) => new(uri[(uri.LastIndexOf(':') + 1)..], uri, "T:" + uri,
+        Array.Empty<ArtistRef>(), new AlbumRef("", "", ""), 60000, false, null);
 }

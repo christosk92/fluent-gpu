@@ -12,8 +12,10 @@ namespace Wavee;
 
 // The Wavee shell root — the WaveeMusic 4-row chrome (tab strip + caption · toolbar · sidebar + content card; player bar
 // deferred). Owns the route as SIGNALS so the toolbar/sidebar/tabs all react, plus the open-tab list. Builds the frame
-// ONCE (Render only re-runs on a theme toggle, which re-keys the OverlayHost to remount with the new tokens); each chrome
-// piece re-renders itself from the signals it reads. Mounted by WaveeApp inside the Services + PlaybackBridge providers.
+// ONCE and never remounts it for theming: a theme/palette switch bumps Tok.Epoch and the host's RethemeAll re-renders
+// every component and re-fires every bound fill IN PLACE (there is no theme-keyed OverlayHost remount) — which is why
+// chrome fills must be Prop.Of binds or render-time token reads, never values frozen into ctor args at mount. Each
+// chrome piece re-renders itself from the signals it reads. Mounted by WaveeApp inside Services + PlaybackBridge.
 sealed class WaveeShell : Component
 {
     // One open browser-style tab: stable identity + route key, strip label/glyph, and route Arg (playlist display name).
@@ -22,6 +24,7 @@ sealed class WaveeShell : Component
     readonly Signal<Route> _route = new(new Route("home"));
     readonly Signal<bool> _canBack = new(false);
     readonly Signal<bool> _canForward = new(false);
+    const int MaxBackStack = 200;   // bound the in-memory back/forward stacks over a long session (the persisted HistoryStore keeps its own 500-entry cap)
     readonly List<Route> _history = new();
     readonly List<Route> _forwardHistory = new();
     readonly HistoryStore _historyStore = new();
@@ -30,6 +33,10 @@ sealed class WaveeShell : Component
     // scrim BEHIND the chrome (which is translucent over Mica), so the window material carries the colour. Null ⇒ plain
     // Mica. Owner-gated writes (ShellTintState) make A→B navigation race-free. Provided at the root via ShellTint.Slot.
     readonly Signal<ShellTintState> _shellTint = new(default);
+
+    // Right-rail (WaveeMusic-style lyrics / now-playing panel) UI state — created here, provided via ShellUi.Slot, and
+    // toggled from the player bar. Independent of bridge.Expanded (the fullscreen now-playing takeover).
+    readonly ShellUi _shellUi = new();
 
     int _nextTabId = 1;
     readonly List<OpenTab> _open = new() { new OpenTab(0, "home", Loc.Get(Strings.Nav.Home), Icons.Home, null) };
@@ -48,9 +55,25 @@ sealed class WaveeShell : Component
     Action<string>? _morphBegin;                               // ambient SharedTransition.Begin: capture the leaving cover for the Back/Forward fly
     readonly bool _reducedMotionOS = Motion.ReducedMotion;     // OS reduced-motion setting; restored after a drag
 
+    // Rail layout-defer lock (Task C): while the RailReflow spring re-solves content width the responsive breakpoints
+    // (track-list tier, detail mode) are gated so intermediate widths don't churn multiple remounts (the open/close
+    // flash). Armed on every rail toggle; a one-shot Timer clears it after the spring settles. RailLockMs must EXCEED
+    // the RailReflow settle (Spring(0.22f,1f) ≈ 220ms) so the lock never clears mid-flight → an extra remount.
+    bool _lastRailOpen;
+    int _railLockGen;
+    System.Threading.Timer? _railLockTimer;
+    const int RailLockMs = 300;
+
     // The pane's collapse-toggle animation (56↔expanded width eases). Snapped during a drag via Motion.ReducedMotion.
     static readonly LayoutTransition SidebarReflow = new(
         TransitionChannels.Size, TransitionDynamics.Tween(Motion.ControlFast, Easing.SmoothOut), SizeMode.Reflow);
+
+    // The right-rail open/close reflow. A critically-damped spring (damping 1.0 ⇒ NO overshoot, so the content never
+    // over-shrinks) instead of the front-loaded ControlFast ease: the content column re-solves along a smooth, evenly-
+    // paced trajectory, so the reflow reads as ONE unified motion rather than the per-frame text re-wraps / card resizes
+    // bunching into the fast early phase (the "steppy" feel).
+    static readonly LayoutTransition RailReflow = new(
+        TransitionChannels.Size, TransitionDynamics.Spring(0.22f, 1f), SizeMode.Reflow);
 
     // The shell receives its persisted settings through the IAppSettings interface (provided by the composition root,
     // Services). It never sees the concrete store — no "ForUnpackaged"/registry/publisher detail leaks in here.
@@ -64,6 +87,7 @@ sealed class WaveeShell : Component
     internal static Action? ProbeBack, ProbeForward, ProbeTheme;
     internal static Action<string>? ProbeOpenTab;
     internal static Action<string, string?, bool>? ProbeCardNav;   // replicate a Home-card click: (key, arg, doMorph=Hero fly)
+    internal static Action<Wavee.Core.Album>? ProbeOpenAlbum;      // replicate a related-album card click: DetailNav.OpenAlbum (stash preview + nav)
     internal static Action<bool>? ProbeSidebarCompact;
     internal static Action? ProbeSidebarDragBegin, ProbeSidebarDragEnd;
     internal static Action<float>? ProbeSidebarDragWidth;
@@ -74,7 +98,10 @@ sealed class WaveeShell : Component
         _sidebarCompact = new(settings.Get(WaveeSettings.SidebarCollapsed));
         _sidebarWidth = new(settings.Get(WaveeSettings.SidebarWidth));
 
-        if (Diag.EnvFlag("WAVEE_NAV_PROBE") || Diag.EnvFlag("WAVEE_CONN_STRESS") || Diag.EnvFlag("WAVEE_TRACKLIST_SHOT") || Diag.EnvFlag("WAVEE_HERO_SHOT") || Diag.EnvFlag("WAVEE_HOME_SCROLL_PROBE"))
+        // Inert probe (screenshot / UI iteration only): open the right rail to the Lyrics panel at startup.
+        if (Diag.EnvFlag("WAVEE_LYRICS_OPEN") || Diag.EnvFlag("WAVEE_LIVE_LYRICS_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_ADVANCE_PROBE")) { _shellUi.RailOpen.Value = true; _shellUi.Mode.Value = RailMode.Lyrics; }
+
+        if (Diag.EnvFlag("WAVEE_NAV_PROBE") || Diag.EnvFlag("WAVEE_RESIZE_PROBE") || Diag.EnvFlag("WAVEE_CONN_STRESS") || Diag.EnvFlag("WAVEE_TRACKLIST_SHOT") || Diag.EnvFlag("WAVEE_HERO_SHOT") || Diag.EnvFlag("WAVEE_HOME_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_PROBE") || Diag.EnvFlag("WAVEE_LIVE_LYRICS_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_ADVANCE_PROBE") || Diag.EnvFlag("WAVEE_MEM_SOAK"))
         {
             ProbeNav = GoNav; ProbeBack = Back; ProbeForward = Forward; ProbeTheme = ToggleTheme; ProbeOpenTab = OpenNewTab;
             // Exactly the Home-card path: stash a preview (→ DetailShell mounts the PREVIEW path, not the skeleton path the
@@ -86,6 +113,9 @@ sealed class WaveeShell : Component
                 if (doMorph && !Diag.EnvFlag("WAVEE_PB_NOMORPH")) _morphBegin?.Invoke(key);   // the Hero cover fly
                 GoNav(key, arg);
             };
+            // The EXACT related-album-card path (DetailTrailing → h.OpenAlbum → DetailNav.OpenAlbum): stash the card's
+            // partial model + fire the fly, then nav. Lets the probe measure album→album on the post-fix (in-place) path.
+            ProbeOpenAlbum = a => DetailNav.OpenAlbum(_navPreview, _morphBegin, GoNav, a);
             ProbeSidebarCompact = compact =>
             {
                 _sidebarCompact.Value = compact;
@@ -180,6 +210,35 @@ sealed class WaveeShell : Component
         // the OS setting on release so the collapse toggle animates normally. (A resize drag never overlaps a collapse.)
         UseEffect(() => Motion.ReducedMotion = dragging || _reducedMotionOS, dragging);
 
+        // Rail viewport-fit + layout-defer (off-render, auto-tracking effects — the render body stays subscription-free
+        // so the shell isn't re-run on every resize pixel; only the rail band / pages re-solve from the signals below).
+        var post = UsePost();
+        // (1) Maintain ShellUi.RailFits from the live viewport/sidebar/rail widths and AUTO-CLOSE the rail if it no longer
+        // fits (snap — no animation fight on shrink). Peek-guarded writes so this never re-triggers itself.
+        UseSignalEffect(() =>
+        {
+            float vpW = vpSig.Value.Width;
+            float sbW = _sidebarCompact.Value ? 56f : _sidebarWidth.Value;
+            bool fits = ShellUi.CanFitRail(vpW, sbW, _shellUi.RailWidth.Value);
+            if (_shellUi.RailFits.Peek() != fits) _shellUi.RailFits.Value = fits;
+            if (!fits && _shellUi.RailOpen.Peek()) _shellUi.RailOpen.Value = false;
+        });
+        // (2) Arm the layout-defer lock on every rail toggle (open OR close); a one-shot Timer clears it after the
+        // RailReflow spring settles. The _lastRailOpen change-guard avoids arming on an unrelated re-render; the
+        // generation guard lets a rapid re-toggle cancel a stale clear. Cleared via post() (UI thread), like LyricsTicker.
+        UseSignalEffect(() =>
+        {
+            bool open = _shellUi.RailOpen.Value;
+            if (open == _lastRailOpen) return;
+            _lastRailOpen = open;
+            _shellUi.ArmRailLock();   // stamps the arm time — the breakpoint gates read the time-bounded RailLockActive
+            int gen = ++_railLockGen;
+            _railLockTimer?.Dispose();
+            _railLockTimer = new System.Threading.Timer(
+                _ => post(() => { if (gen == _railLockGen) _shellUi.RailLayoutLocked.Value = false; }),
+                null, RailLockMs, System.Threading.Timeout.Infinite);
+        });
+
         var column = new BoxEl
         {
             Direction = 1, Grow = 1f, Height = Prop.Of(() => vpSig.Value.Height),   // window-tall → content yields, never overflows the player bar
@@ -200,7 +259,10 @@ sealed class WaveeShell : Component
                     // + content layers and double-tint them); real-layout tiling keeps the seam gap-free with nothing behind.
                     new BoxEl
                     {
-                        Direction = 0, Grow = 1f,
+                        // ClipToBounds (Task B5): a settle-frame safety net so a page's content can never paint past the
+                        // content card into the fixed rail band during the RailReflow. The card + page wrappers already
+                        // clip; this bounds the row itself while the flex-shrink chain re-solves.
+                        Direction = 0, Grow = 1f, ClipToBounds = true,
                         Children =
                         [
                             // The sidebar pane — a LITERAL row child (NOT a component): an Embed.Comp root mirrors its Grow
@@ -232,7 +294,14 @@ sealed class WaveeShell : Component
                             {
                                 // MinHeight=0 at every flex level of the content chain (see the card below) so a tall page
                                 // can shrink/clip instead of overflowing the column and covering the docked player bar.
-                                Direction = 1, Grow = 1f, MinHeight = 0f, Fill = Prop.Of(() => WaveeColors.Toolbar),
+                                // Shrink=1 + MinWidth=0 are the HORIZONTAL analogue: FlexShrink defaults to 0 (Yoga-style),
+                                // so without them this Grow=1 content region floors at its page's intrinsic min-width and
+                                // CANNOT yield when the row (sidebar + content + right rail) overruns a narrow window — the
+                                // fixed-width rail (Shrink=0) is then shoved off the right window edge and the Lyrics panel
+                                // is clipped by a per-page amount (wide pages push it further ⇒ the "rail changes size / gets
+                                // cut off depending on the page" instability). With them the content page is the ONE region
+                                // that gives (it clips/scrolls), so the rail keeps its full RailWidth on every page.
+                                Direction = 1, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Basis = 0f, Fill = Prop.Of(() => WaveeColors.Toolbar),
                                 Children =
                                 [
                                     new BoxEl
@@ -243,7 +312,7 @@ sealed class WaveeShell : Component
                                         // the column height and PUSHES THE FIXED PLAYER BAR off the bottom for a frame on
                                         // navigation — the "player bar animates away then back" glitch. With it the card
                                         // shrinks to the available space and clips/scrolls, so the player bar stays docked.
-                                        Grow = 1f, MinHeight = 0f, Margin = new Edges4(0f, 2f, 8f, 0f),
+                                        Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Margin = new Edges4(0f, 2f, 8f, 0f),
                                         // BOUND (not a static ColorF): this content "page" is a frozen literal inside the
                                         // OverlayHost.Child column (constructor args freeze at mount), so a re-render can't
                                         // re-read the token. As a bind it lives in the reconciler's _nodeBindings and the
@@ -257,6 +326,16 @@ sealed class WaveeShell : Component
                                         Children = [ Embed.Comp(() => new ContentHost(_route, ActiveTabId)) ],
                                     },
                                 ],
+                            },
+                            // Right rail — the WaveeMusic-style lyrics / now-playing panel. A literal row child (Shrink=0,
+                            // bound width) so the content card re-tiles against it; the width animates 0<->RailWidth on
+                            // toggle (SidebarReflow) and ClipToBounds hides the content while collapsed.
+                            new BoxEl
+                            {
+                                Direction = 1, Shrink = 0f, ClipToBounds = true, Fill = Prop.Of(() => WaveeColors.Sidebar),
+                                Width = Prop.Of(() => _shellUi.RailOpen.Value ? _shellUi.RailWidth.Value : 0f),
+                                Animate = RailReflow,
+                                Children = [ Embed.Comp(() => new RightRail()) ],
                             },
                         ],
                     },
@@ -316,14 +395,40 @@ sealed class WaveeShell : Component
             Grow = 1f, HitTestPassThrough = true,
             Children = [ Embed.Comp(() => new NowPlayingLayer()) ],
         };
-        var shellWithNowPlaying = Ui.ZStack(tinted, nowPlayingLayer) with { Grow = 1f };
+        // Transient toasts (ToastHost was previously never mounted anywhere): a full-bleed PASS-THROUGH positioner that pins
+        // the toast bottom-centre, just above the docked player bar. It sits ABOVE the now-playing layer so a toast is visible
+        // over the fullscreen now-playing view too. Same trap as the FPS HUD / now-playing layer: the positioner MUST be a
+        // plain BoxEl with HitTestPassThrough so empty space passes clicks through; the toast's own filled surface captures its.
+        var toastLayer = new BoxEl
+        {
+            Grow = 1f, HitTestPassThrough = true,
+            Direction = 1, Justify = FlexJustify.End, AlignItems = FlexAlign.Center,
+            Padding = new Edges4(0f, 0f, 0f, WaveeSize.PlayerBarH + 12f),
+            Children = [ new BoxEl { MaxWidth = 560f, Children = [ Embed.Comp(() => new ToastHost()) ] } ],
+        };
+        // The local-playback setup banner FLOATS over the content (top-centre, just below the toolbar) instead of
+        // inserting into the chrome column — a persistent offer must never reflow the page. Same pass-through positioner
+        // pattern as the toast layer; the wrapper adds the overlay elevation the InfoBar itself doesn't carry. Sits
+        // BELOW the toast layer so transient toasts stack above it.
+        var runtimeBannerLayer = new BoxEl
+        {
+            Grow = 1f, HitTestPassThrough = true,
+            Direction = 1, Justify = FlexJustify.Start, AlignItems = FlexAlign.Center,
+            Padding = new Edges4(0f, 48f + 48f + 8f, 0f, 0f),   // clear the TitleBar (48) + ShellToolbar (48) rows
+            Children =
+            [
+                new BoxEl { MaxWidth = 560f, Children = [ Embed.Comp(() => new PlaybackRuntimeChrome(_settings)) ] },
+            ],
+        };
+        var shellWithNowPlaying = Ui.ZStack(tinted, nowPlayingLayer, runtimeBannerLayer, toastLayer) with { Grow = 1f };
 
-        return Ctx.Provide(ShellTint.Slot, _shellTint,
+        return Ctx.Provide(ShellUi.Slot, _shellUi,
+               Ctx.Provide(ShellTint.Slot, _shellTint,
                Ctx.Provide(HistoryStore.NavCtx, (Action<string, string?>)GoNav,
                Ctx.Provide(HistoryStore.Slot, _historyStore,
                Ctx.Provide(NavPreviewStore.Slot, _navPreview,
                Ctx.Provide(SearchQuery.Slot, _searchText,
-               Embed.Comp(() => new OverlayHost { Child = shellWithNowPlaying }))))));
+               Embed.Comp(() => new OverlayHost { Child = shellWithNowPlaying })))))));
     }
 
     TabStrip BuildTabStrip() => new TabStrip
@@ -366,6 +471,7 @@ sealed class WaveeShell : Component
     void Go(string key, string? arg)
     {
         _history.Add(_route.Peek());
+        if (_history.Count > MaxBackStack) _history.RemoveAt(0);   // bound the in-memory back-stack
         _forwardHistory.Clear();
         _canForward.Value = false;
         _route.Value = new Route(key, arg);
@@ -379,6 +485,7 @@ sealed class WaveeShell : Component
         if (_history.Count == 0) return;
         _morphBegin?.Invoke(_route.Peek().Name);   // reverse fly: snapshot the leaving page's cover; the like-tagged dest on the previous route flies it back
         _forwardHistory.Add(_route.Peek());
+        if (_forwardHistory.Count > MaxBackStack) _forwardHistory.RemoveAt(0);
         _canForward.Value = true;
         _route.Value = _history[^1];
         _history.RemoveAt(_history.Count - 1);
@@ -446,8 +553,9 @@ sealed class WaveeShell : Component
 
     void ToggleTheme()
     {
-        Theme.Dark = !Theme.Dark;                                    // swap the token set (bumps Tok.Epoch)
-        _settings.Set(WaveeSettings.ThemeMode, Theme.Dark ? 2 : 1);  // an explicit pick → stop following the OS
-        _requestTheme?.Invoke(250f);                                 // animate the in-place re-theme (250ms WinUI ControlNormal); no remount
+        var next = Theme.Dark ? ThemeKind.Light : ThemeKind.Dark;
+        Tok.Use(WaveeTheme.ResolvePalette(_settings.Get(WaveeSettings.PaletteId)), next);
+        _settings.Set(WaveeSettings.ThemeMode, next == ThemeKind.Dark ? 2 : 1);
+        _requestTheme?.Invoke(250f);
     }
 }

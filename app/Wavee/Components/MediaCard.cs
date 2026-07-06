@@ -22,6 +22,33 @@ public static class MediaCard
     internal const float FabInset = 8f;
     const float Pad      = WaveeSpace.S;
 
+    static ColorF AccentCardFill(ColorF? accent) =>
+        accent is { } a
+            ? ColorF.Lerp(Tok.FillCardSecondary, a, Tok.Theme == ThemeKind.Dark ? 0.35f : 0.22f)
+            : Tok.FillCardSecondary;
+
+    static ColorF AccentCardHoverFill(ColorF? accent) =>
+        accent is { } a
+            ? ColorF.Lerp(Tok.FillCardDefault, a, Tok.Theme == ThemeKind.Dark ? 0.40f : 0.28f)
+            : Tok.FillCardDefault;
+
+    static Element ArtworkOrLiked(Image? cover, string uri, float width, float height, float radius, string? morphKey = null, int decodePx = 0, Element? diagnostics = null)
+    {
+        var art = cover is null && LikedSongsArtwork.IsLikedUri(uri) && MathF.Abs(width - height) < 0.5f
+            ? LikedSongsArtwork.Cover(width, radius, morphKey)
+            : Surfaces.Artwork(cover, Seed(uri), width, height, radius, morphKey, decodePx);
+        return diagnostics is null
+            ? art
+            : new BoxEl
+            {
+                Width = width,
+                Height = height,
+                ZStack = true,
+                ClipToBounds = true,
+                Children = [ art, diagnostics ],
+            };
+    }
+
     // ── Shelf card: square (album/playlist) or circular (artist) cover, sized to fill `cardW`. ───────────
     public static Element Shelf(Image? cover, string title, string subtitle, string uri,
                                 Action onClick, Action onPlay, float cardW, bool circular = false, string? morphKey = null,
@@ -34,10 +61,14 @@ public static class MediaCard
             // A neutral shimmer tile sits behind the art so a card is never an empty box — it breathes while the real
             // art loads and settles once it lands (or fails: some Spotify covers live on an auth-gated host we can't
             // fetch). Shares the decode handle with the Image below (ShelfDecodePx) so it reads the same load-state.
-            Surfaces.Shimmer(cover?.Url, (int)ShelfDecodePx, (int)ShelfDecodePx, inner, inner, r),
+            cover is null && LikedSongsArtwork.IsLikedUri(uri)
+                ? new BoxEl { Width = inner, Height = inner }
+                : Surfaces.Shimmer(cover?.Url, (int)ShelfDecodePx, (int)ShelfDecodePx, inner, inner, r),
             // morphKey ⇒ this cover is a connected-animation (Hero) participant. Transparent placeholder so the gradient
             // shows through until the image arrives. A cover-less playlist (MosaicTiles set) renders a 2×2 album mosaic.
-            (cover?.MosaicTiles is { Count: >= 4 } mtiles
+            (cover is null && LikedSongsArtwork.IsLikedUri(uri)
+                ? LikedSongsArtwork.Cover(inner, r, morphKey)
+                : cover?.MosaicTiles is { Count: >= 4 } mtiles
                 ? Surfaces.Mosaic(mtiles, inner, inner, r)
                 : Image(cover?.Url ?? "", ImageFit.Cover, 1f, ShelfDecodePx, r, placeholder: ColorF.Transparent) with { MorphId = morphKey }),
             // The now-playing equalizer (bottom-left, when this card's context is playing) + the play/pause FAB
@@ -86,7 +117,8 @@ public static class MediaCard
     // and the labels truncate to the engine-measured slot width (the proven NavCardContent pattern) — so it drops into a
     // responsive grid whose track width isn't known at template time.
     public static Element GridCard(Image? cover, string title, string subtitle, string uri,
-                                   Action onClick, Action onPlay, bool circular = false, Action? onNavigate = null)
+                                   Action onClick, Action onPlay, bool circular = false, Action? onNavigate = null,
+                                   ColorF? accent = null)
     {
         float r = circular ? 9999f : WaveeRadius.Card;
         var coverStack = new BoxEl
@@ -103,7 +135,7 @@ public static class MediaCard
             Direction = 1, Gap = Pad, Grow = 1f, ClipToBounds = true,
             Padding = new Edges4(Pad, Pad, Pad, WaveeSpace.M),
             Corners = CornerRadius4.All(WaveeRadius.Card),
-            Fill = Tok.FillCardSecondary, HoverFill = Tok.FillCardDefault,
+            Fill = AccentCardFill(accent), HoverFill = AccentCardHoverFill(accent),
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             HoverScale = 1.02f, PressScale = 0.99f, OnClick = onClick,
             Children =
@@ -156,18 +188,18 @@ public static class MediaCard
     }
 
     // ── Wide "jump back in" tile: cover + title (fills, ellipsised) + trailing now-playing/play overlay ───
-    public static Element QuickPick(Image? cover, string title, string uri, Action onClick, Action onPlay)
+    public static Element QuickPick(Image? cover, string title, string uri, Action onClick, Action onPlay, ColorF? accent = null, Element? diagnostics = null)
     {
         return new BoxEl
         {
             Direction = 0, Height = QuickH, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
-            Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardSecondary, HoverFill = Tok.FillCardDefault,
+            Corners = CornerRadius4.All(WaveeRadius.Card), Fill = AccentCardFill(accent), HoverFill = AccentCardHoverFill(accent),
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault, ClipToBounds = true, OnClick = onClick,
             Children =
             [
                 // Surfaces.Artwork = a neutral shimmer/placeholder tile + the real art on top (graceful when the cover
                 // is missing or on an auth-gated host that fails to fetch).
-                Surfaces.Artwork(cover, Seed(uri), QuickW, QuickH, 0f),
+                ArtworkOrLiked(cover, uri, QuickW, QuickH, 0f, diagnostics: diagnostics),
                 // Grow + Basis=0: take the remaining width (never the title's intrinsic width) → ellipsis, no overflow.
                 WaveeType.TrackTitle(title) with { Grow = 1f, Basis = 0f, Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.CharacterEllipsis },
                 new BoxEl
@@ -200,7 +232,7 @@ public static class MediaCard
             Width = art, Height = art, Shrink = 0f, ZStack = true, ClipToBounds = true, Corners = CornerRadius4.All(r),
             Children =
             [
-                Surfaces.Artwork(cover, Seed(uri), art, art, r),
+                ArtworkOrLiked(cover, uri, art, art, r),
                 Embed.Comp(() => new NowPlayingOverlay(uri, onPlay, fab, cover: true, art, centered: true)).Skeletonized(false),
             ],
         };

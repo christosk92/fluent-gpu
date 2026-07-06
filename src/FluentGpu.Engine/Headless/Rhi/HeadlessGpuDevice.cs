@@ -14,6 +14,7 @@ public sealed class HeadlessGpuDevice : IGpuDevice
 {
     private readonly List<FillRoundRectCmd> _rects = new(64);
     private readonly List<DrawGlyphRunCmd> _glyphs = new(64);
+    private readonly List<DrawGlyphRunGradientCmd> _glyphGradients = new(16);
     private readonly List<ClipCmd> _clips = new(16);
     private readonly List<DrawImageCmd> _imageDraws = new(32);
     private readonly List<DrawRoundRectStrokeCmd> _strokes = new(16);
@@ -34,6 +35,8 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     public ColorF LastClear { get; private set; }
     public IReadOnlyList<FillRoundRectCmd> LastRects => _rects;
     public IReadOnlyList<DrawGlyphRunCmd> LastGlyphs => _glyphs;
+    /// <summary>Karaoke-wipe glyph runs drawn this frame (the soft-wipe op, A1).</summary>
+    public IReadOnlyList<DrawGlyphRunGradientCmd> LastGlyphGradients => _glyphGradients;
     /// <summary>Every PushClip pushed this frame (for clip assertions; the recorder pre-intersects each one).</summary>
     public IReadOnlyList<ClipCmd> LastClips => _clips;
     /// <summary>Image quads drawn this frame (Ready==0 ⇒ placeholder shown while decode is in flight).</summary>
@@ -88,6 +91,7 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     {
         _rects.Clear();   // retains capacity → no alloc after warmup
         _glyphs.Clear();
+        _glyphGradients.Clear();
         _clips.Clear();
         _imageDraws.Clear();
         _strokes.Clear();
@@ -118,6 +122,10 @@ public sealed class HeadlessGpuDevice : IGpuDevice
                 case DrawOp.DrawGlyphRun:
                     _glyphs.Add(MemoryMarshal.Read<DrawGlyphRunCmd>(drawList.Slice(pos)));
                     pos += Unsafe.SizeOf<DrawGlyphRunCmd>();
+                    break;
+                case DrawOp.DrawGlyphRunGradient:
+                    _glyphGradients.Add(MemoryMarshal.Read<DrawGlyphRunGradientCmd>(drawList.Slice(pos)));
+                    pos += Unsafe.SizeOf<DrawGlyphRunGradientCmd>();
                     break;
                 case DrawOp.PushClip:
                     _clips.Add(MemoryMarshal.Read<ClipCmd>(drawList.Slice(pos)));

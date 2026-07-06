@@ -22,7 +22,7 @@ sealed partial class ArtistPage : Component
             bool wide = w >= 820f;
             var left = new BoxEl
             {
-                Direction = 1, Gap = WaveeSpace.L, Grow = wide ? 2f : 1f, Basis = 0f,
+                Direction = 1, Gap = WaveeSpace.L, Grow = wide ? 2f : 1f, Basis = 0f, MinWidth = 0f, ClipToBounds = true,
                 Padding = new Edges4(WaveeSpace.XL, WaveeSpace.L, WaveeSpace.XL, WaveeSpace.L),
                 Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardSecondary,
                 BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
@@ -51,7 +51,7 @@ sealed partial class ArtistPage : Component
             Tile(relatedCount, Loc.Get(Strings.Artist.Stat.Related));
             var right = new BoxEl
             {
-                Direction = 1, Gap = WaveeSpace.M, Grow = 1f, Basis = 0f,
+                Direction = 1, Gap = WaveeSpace.M, Grow = 1f, Basis = 0f, MinWidth = 0f,
                 Children =
                 [
                     AccentHeader(Loc.Get(Strings.Artist.ProfileFacts)),
@@ -91,7 +91,7 @@ sealed partial class ArtistPage : Component
         float frac = max > 0 ? (float)((double)c.Listeners / max) : 0f;
         return new BoxEl
         {
-            Direction = 1, Gap = 4f,
+            Direction = 1, Gap = 4f, Height = 34f,
             Children =
             [
                 new BoxEl { Direction = 0, AlignItems = FlexAlign.Center,

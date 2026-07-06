@@ -41,6 +41,11 @@ message LeanDisc {
     repeated LeanTrack track = 3;   // the album's tracklist (parsed: gid/name/artist/duration via LeanTrack's field numbers)
 }
 
+message LeanExternalId {            // Track.external_id (field 10): type="isrc"/"upc"/… + the id value
+    optional string type = 1;
+    optional string id = 2;
+}
+
 message LeanTrack {
     optional bytes gid = 1;
     optional string name = 2;
@@ -48,6 +53,7 @@ message LeanTrack {
     repeated LeanArtistRef artist = 4;
     optional sint32 duration = 7;
     optional bool explicit = 9;
+    repeated LeanExternalId external_id = 10;   // field 10 == metadata.proto Track.external_id (carries the ISRC)
 }
 
 message LeanAlbum {

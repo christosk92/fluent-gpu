@@ -25,10 +25,30 @@ static class WaveeSettings
     // Theme preference: 0 = System (follow the OS live), 1 = Light, 2 = Dark. Default System so a fresh install matches
     // the OS; an explicit in-app toggle pins Light/Dark and stops following the OS. Seeded at startup before the first frame.
     public static readonly SettingKey<int> ThemeMode = new("theme.mode", 0);
+    // Color palette preset: warm (default) | slate | neutral | accent (OS-accent-tinted neutrals).
+    public static readonly SettingKey<string> PaletteId = new("theme.palette", "warm");
     public static readonly SettingKey<int> RowDensity = new("detail.rowdensity", 1);   // 0 Compact · 1 Default · 2 Cozy · 3 Comfortable
     // The saved / liked / followed library set (Mutations facet) — a newline-joined list of uris. The single in-process
     // outbox: every optimistic save/follow rewrites it. (A real source would reconcile server-side + revision conflicts.)
     public static readonly SettingKey<string> SavedLibrary = new("library.saved", "");
+    // PlayPlay runtime pointer — empty string means unset (AppDataSettings cannot round-trip null strings).
+    public static readonly SettingKey<string> PlaybackRuntimePath = new("playback.runtime.path", "");
+    public static readonly SettingKey<string> PlaybackRuntimePackId = new("playback.runtime.packId", "");
+    public static readonly SettingKey<bool> PlaybackRuntimeSetupDismissed = new("playback.runtime.dismissed", false);
+    // Optional catalog-URL override (also settable via WAVEE_PLAYPLAY_CATALOG_URL). Empty = use the built-in default.
+    public static readonly SettingKey<string> PlaybackRuntimeCatalogUrl = new("playback.runtime.catalogUrl", "");
+    // Streaming quality preference (AudioQuality): 0 Normal 96 · 1 High 160 · 2 Very High 320 (3 Lossless is reserved —
+    // shown disabled in the picker). Read per resolve, so a change applies from the next track (already-resolved tracks
+    // keep their cached file selection).
+    public static readonly SettingKey<int> PlaybackQuality = new("playback.quality", 2);
+    // Volume persistence: when RememberVolume, SavedVolume (0..1) seeds the device volume at launch and is written back
+    // (debounced) as the user adjusts it.
+    public static readonly SettingKey<bool> RememberVolume = new("playback.volume.remember", true);
+    public static readonly SettingKey<float> SavedVolume = new("playback.volume", 0.7f);
+    public static readonly SettingKey<bool> EqualizerEnabled = new("playback.eq.enabled", false);
+    public static readonly SettingKey<string> EqualizerGains = new("playback.eq.gains", "0,0,0,0,0,0,0,0,0,0");
+    public static readonly SettingKey<bool> CrossfadeEnabled = new("playback.crossfade.enabled", false);
+    public static readonly SettingKey<int> CrossfadeMs = new("playback.crossfade.ms", 5000);
 }
 
 // IAppSettings backed by the engine's AppDataStore (HKCU registry, unpackaged). Every access is DEFENSIVE — a storage

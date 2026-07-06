@@ -7,13 +7,15 @@ using Wavee.Backend.Persistence;
 using Wavee.Backend.Playlists;
 using Wavee.Backend.Realtime;
 using Wavee.Backend.Spotify;
+using Wavee.Backend.Sync;
 
 namespace Wavee.SpotifyLive;
 
-// The end-to-end LIVE library sync into the REAL persistent store: connect → fetch the rootlist + every collection set
-// (hydrating metadata) → persist to SQLite → open the hm:// dealer firehose and apply/mark-dirty real-time pushes. After
-// this runs, a `--real-backend` app launch reads the library offline from disk. Needs creds + network, so the USER runs
-// it: `--spotify-sync`. The pieces are all unit-tested; this is the live composition.
+// The end-to-end LIVE library sync into the REAL persistent store, driven by the SAME LibrarySync orchestrator the app
+// runs (§11): connect → InitialHydrate through the loop (rootlist + fold + every collection set, hydrating metadata) →
+// persist to SQLite → open the hm:// dealer firehose and route pushes through the loop. After this runs, a
+// `--real-backend` app launch reads the library offline from disk. Needs creds + network, so the USER runs it:
+// `--spotify-sync`. This one-shot doubles as the integration probe of the real orchestrator — no divergent hand-wiring.
 public static class SpotifyLibrarySync
 {
     static readonly string[] Sets = { "liked", "albums", "artists", "shows", "episodes" };
@@ -32,36 +34,39 @@ public static class SpotifyLibrarySync
         var metadata = new MetadataService(new ExtendedMetadataSource(live.Pipeline, () => live.BaseUrl, () => live.Session), store, () => live.Session);
         Task Hydrate(IReadOnlyList<string> uris, CancellationToken c) => metadata.SyncAllAsync(uris, c);
 
+        var mutEngine = new MutationEngine(store, new IMutationStrategy[] { new SetReplayStrategy(), new OpRebaseStrategy(store), new RootlistFollowStrategy(store) }, cold);
+        var sessionHost = new SessionContextHost(new SessionContext(live.Username, "US", "premium", "en", Tier.Premium, false));
         var playlistFetcher = new PlaylistFetcher(live.Pipeline, () => live.BaseUrl, store, Hydrate);
         var collectionFetcher = new CollectionFetcher(live.Pipeline, () => live.BaseUrl, () => live.Username, store,
-            s => cold.GetCollectionRevision(s), (s, r) => cold.SetCollectionRevision(s, r, 0), Hydrate);
+            s => cold.GetCollectionRevision(s), (s, r) => cold.SetCollectionRevision(s, r, DateTimeOffset.UtcNow.ToUnixTimeSeconds()), Hydrate,
+            (s, u) => mutEngine.HasPending(s, u));
 
-        // 1) the rootlist (folder/playlist tree).
-        log("Syncing rootlist...");
-        try { await playlistFetcher.FetchRootlistAsync("spotify:user:" + live.Username + ":rootlist", ct).ConfigureAwait(false); }
-        catch (Exception ex) { log("  rootlist sync failed: " + ex.Message); }
+        // The dealer transport doubles as the mutation transport here (the CLI drains any restart-reloaded outbox intents
+        // over the live socket during InitialHydrate — same as the app's go-live drain).
+        var dealerJson = await SharedHttp.Client.GetStringAsync("https://apresolve.spotify.com/?type=dealer", ct).ConfigureAwait(false);
+        var dealerHosts = ApResolver.ParseHosts(dealerJson, "dealer");
+        using var transport = new LiveDealerTransport(dealerHosts, live.TokenProvider, live.Pipeline, () => live.BaseUrl, log,
+            forceRefreshToken: live.ForceTokenProvider);
+
+        // 1) InitialHydrate through the real orchestrator: drain → rootlist + "playlists" fold → every set (token-gated
+        //    delta, else full paging + mark-and-sweep), per-set failures isolated — exactly the app's go-live pass.
+        await using var sync = new LibrarySync(store, playlistFetcher, collectionFetcher, mutEngine, transport,
+            () => sessionHost.Current, () => live.Username, log, ct);
+        using var router = new DealerRouter(transport, sync);
+
+        log("Syncing library (rootlist + collection sets, via LibrarySync.InitialHydrate)...");
+        var hydrated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        sync.Enqueue(new SyncCommand(SyncKind.InitialHydrate, Done: hydrated));
+        await hydrated.Task.WaitAsync(ct).ConfigureAwait(false);
+
         var rootlist = store.Rootlist();
         log("  " + rootlist.Count(e => e.Kind == 0) + " playlists, " + rootlist.Count(e => e.Kind == 1) + " folders.");
-
-        // 2) every collection set (token-gated delta when a sync token exists, else a full page snapshot).
-        foreach (var set in Sets)
-        {
-            try { await collectionFetcher.FetchSetAsync(set, ct).ConfigureAwait(false); log("  " + set + ": " + store.SavedUris(set).Count + " items."); }
-            catch (Exception ex) { log("  " + set + " sync failed: " + ex.Message); }
-        }
-
+        foreach (var set in Sets) log("  " + set + ": " + store.SavedUris(set).Count + " items.");
         store.Flush();
         log("Library synced + persisted to " + dbPath);
 
-        // 3) open the hm:// dealer firehose: parent-rev pushes apply in place, everything else marks dirty → lazy re-fetch.
-        var dealerJson = await SharedHttp.Client.GetStringAsync("https://apresolve.spotify.com/?type=dealer", ct).ConfigureAwait(false);
-        var dealerHosts = ApResolver.ParseHosts(dealerJson, "dealer");
+        // 2) the hm:// firehose: pushes decode-and-enqueue into the SAME loop (parent-rev in-place apply / dirty / delta).
         if (dealerHosts.Count == 0) { log("No dealer host — skipping the real-time listen."); return 0; }
-
-        using var transport = new LiveDealerTransport(dealerHosts[0].Split(':')[0], _ => Task.FromResult(live.AccessToken), live.Pipeline, () => live.BaseUrl, log);
-        using var router = new DealerRouter(transport, store,
-            uri => { log("  push: " + uri + " (re-syncing)"); _ = playlistFetcher.FetchPlaylistAsync(uri, ct); },
-            set => { foreach (var s in Sets) _ = collectionFetcher.FetchSetAsync(s, ct); });
         // Stage B — register this device on Spotify Connect: ConnectService captures the dealer connection_id (the pusher
         // hello header) and PUTs /connect-state/v1/devices/{id}, so the device APPEARS in the Connect picker. Created BEFORE
         // Start() so the first connection_id hello isn't missed. Later stages add inbound command handling + the projection.
@@ -79,6 +84,9 @@ public static class SpotifyLibrarySync
         log("Dealer firehose open + Connect device announced; listening for live updates for 20s...");
         try { await Task.Delay(TimeSpan.FromSeconds(20), ct).ConfigureAwait(false); } catch { }
         store.Flush();
+        log("Sync counters: pushApplied=" + sync.PushApplied + " dirty=" + sync.PushMarkedDirty + " directApplied=" + sync.PushDirectApplied
+            + " echoDropped=" + sync.EchoDropped + " setFetches=" + sync.SetFetches
+            + " diff(applied/upToDate/full)=" + sync.DiffApplied + "/" + sync.DiffUpToDate + "/" + sync.DiffFellBack);
         return 0;
     }
 }

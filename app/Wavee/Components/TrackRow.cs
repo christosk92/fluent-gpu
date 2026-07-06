@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
+using FluentGpu.Hooks;
+using FluentGpu.Signals;
 using Wavee.Core;
 using static FluentGpu.Dsl.Ui;
 
@@ -28,6 +30,7 @@ internal static class TrackRow
     internal const float PadX = WaveeSpace.L;         // shared horizontal inset (header chrome padding == row grid padding)
     internal const float RowInset = WaveeSpace.S;     // rounded row-highlight inset (rows pad PadX−RowInset so columns stay header-aligned)
     internal const float ThumbSize = 36f;
+    internal const float CompactListItemExtent = ItemsView.ListItemExtent;
 
     // Track row height by density (0 Compact · 1 Default · 2 Cozy · 3 Comfortable).
     internal static float RowHeightFor(int density) => density switch { 0 => 40f, 2 => 56f, 3 => 64f, _ => RowHeight };
@@ -39,12 +42,41 @@ internal static class TrackRow
     // The per-row playback state the cell reflects (now-playing equalizer / buffer spinner / top-track star / saved heart).
     internal readonly record struct State(bool IsNow, bool IsPlaying, bool IsBuffering, bool IsTop, bool Saved);
 
+    internal enum ArtCardKind { Grid, Rail }
+
+    internal static State StateOf(PlaybackBridge? bridge, LibraryBridge? lib, Track t,
+                                  bool isTop = false, bool extraBuffering = false)
+    {
+        bool isNow = bridge?.CurrentTrack.Value?.Id == t.Id;
+        bool isPlaying = isNow && (bridge?.IsPlaying.Value ?? false);
+        bool isBuffering = extraBuffering || (isNow && bridge is not null && bridge.IsBuffering.Value);
+        bool saved = t.Uri.Length > 0 && (lib?.IsSaved(t.Uri) ?? false);
+        return new State(isNow, isPlaying, isBuffering, isTop, saved);
+    }
+
+    internal static void TogglePlayPause(PlaybackBridge bridge)
+    {
+        bool playing = bridge.IsPlaying.Peek();
+        bridge.IsPlaying.Value = !playing;
+        if (playing) _ = bridge.Player.PauseAsync(); else _ = bridge.Player.ResumeAsync();
+    }
+
+    internal static void Invoke(PlaybackBridge? bridge, Track track, Action startDifferent)
+    {
+        if (bridge is not null && bridge.CurrentTrack.Peek()?.Id == track.Id)
+        {
+            TogglePlayPause(bridge);
+            return;
+        }
+        startDifferent();
+    }
+
     // Builds the row GRID — ONE source for the live bound rows, the eager rows, AND the skeleton shimmer. The per-track
     // values arrive resolved (t + state flags + the title element), so the caller decides static (shimmer/eager) vs
     // index-signal-bound (detail BoundRowContent) title. Plain/diffable — no Animate — so a re-render patches cells in place.
     internal static Element Grid(Track t, int displayIndex, in State st, ColumnSet set, TrackSize[] tracks, float rowH,
                                  Element title, bool showTrackArtist, Action<string, string?> go,
-                                 Action? onPlay = null, Action? onLike = null)
+                                 Action? onPlay = null, Action? onLike = null, Owner? addedByProfile = null)
     {
         float thumb = ThumbSize;   // fixed art size → a stable dedicated art column
 
@@ -73,7 +105,7 @@ internal static class TrackRow
         if (set.Album)
             cells.Add(LeftCell(AlbumLink(t.Album, go)));
         if (set.By)
-            cells.Add(AddedByCell(t.AddedBy));
+            cells.Add(AddedByCell(t.AddedBy, addedByProfile));
         if (set.Date)
             cells.Add(LeftCell(new TextEl(DetailFormat.DateAddedLabel(t.AddedAt)) { Size = 13f, Color = Tok.TextSecondary, Grow = 1f, Basis = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis }));
         if (set.Video)
@@ -99,7 +131,7 @@ internal static class TrackRow
     internal static Element Row(Track t, int displayIndex, in State st, ColumnSet set, TrackSize[] tracks, float rowH,
                                 bool showTrackArtist, Action<string, string?> go, Action onPlay, Action? onLike = null, bool zebra = false)
     {
-        bool light = Tok.Theme == ThemeKind.Light;
+        bool oddZebra = zebra && displayIndex % 2 != 0;
         Element title = new TextEl(t.Title)
         {
             Size = 14f, Weight = 600, Color = st.IsNow ? Tok.AccentTextPrimary : Tok.TextPrimary,
@@ -109,9 +141,11 @@ internal static class TrackRow
         {
             MinHeight = rowH, ClipToBounds = true, Margin = new Edges4(RowInset, 0f, RowInset, 0f),
             Corners = CornerRadius4.All(6f),
-            Fill = zebra && displayIndex % 2 != 0 ? (light ? ColorF.FromRgba(0xF7, 0xF6, 0xF3) : Tok.FillSubtleTertiary) : ColorF.Transparent,
-            HoverFill = light ? ColorF.FromRgba(0xEC, 0xE9, 0xE2) : Tok.FillSubtleSecondary,
-            PressedFill = light ? ColorF.FromRgba(0xE5, 0xE2, 0xDA) : Tok.FillSubtleTertiary,
+            // Row fills are neutral translucent overlays in BOTH themes now (white-alpha zebra, ink-alpha hover/press
+            // in light; white-alpha in dark) — the preset tint comes from the surfaces beneath, so no theme branch.
+            Fill = oddZebra ? WaveeColors.RowZebra : ColorF.Transparent,
+            HoverFill = oddZebra ? WaveeColors.RowHoverZebra : WaveeColors.RowHover,
+            PressedFill = oddZebra ? WaveeColors.RowPressedZebra : WaveeColors.RowPressed,
             PressScale = 0.985f, BorderWidth = 1f, BorderColor = ColorF.Transparent, HoverBorderColor = Tok.StrokeCardDefault,
             Role = AutomationRole.Button, OnClick = onPlay,
             // No-op pointer-exit → registers PointerBit so this row is the "interactive ancestor" whose hover progress the
@@ -124,6 +158,140 @@ internal static class TrackRow
     // The artist subline as inline HYPERLINK spans — one clickable link per artist (each navigates on its own), joined by
     // ", ". The engine resolves the Hand cursor over each link rect and fires its OnClick on release; the press lands on
     // this text leaf (no PressedBit) so clicking an artist navigates WITHOUT playing/selecting the row.
+    // Art-forward track-list cell content for compact bound lists (artist Popular, now-playing queue). Selection,
+    // tap/double-tap and keyboard behavior belong to ItemsView + SelectorVisualsBound; this builds only the shared cell.
+    internal static Element ArtCard(Track t, in State st, ColumnSet set, Action<string, string?>? go,
+                                    Action onPlay, Action? onLike = null, float art = 48f,
+                                    bool showArtists = true, bool explicitBadge = false,
+                                    bool showDuration = true, ArtCardKind kind = ArtCardKind.Rail)
+    {
+        float radius = kind == ArtCardKind.Grid ? 4f : 5f;
+        float fab = Math.Clamp(art * 0.62f, 28f, 36f);
+        var meta = new List<Element>(5);
+
+        if (explicitBadge && t.IsExplicit) meta.Add(ExplicitBadge());
+        if (set.Video && t.HasVideo)
+        {
+            if (meta.Count > 0) meta.Add(new TextEl("Â·") { Size = 12f, Color = Tok.TextTertiary });
+            meta.Add(Icon(Icons.Movie, 13f, Tok.TextTertiary));
+        }
+        if (showArtists)
+        {
+            if (meta.Count > 0) meta.Add(new TextEl("Â·") { Size = 12f, Color = Tok.TextTertiary });
+            meta.Add(go is null
+                ? new TextEl(DetailFormat.ArtistNames(t.Artists)) { Size = 12f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f }
+                : ArtistLinks(t.Artists, go));
+        }
+
+        var textKids = new List<Element>(3)
+        {
+            new TextEl(t.Title)
+            {
+                Size = 13f,
+                Weight = 600,
+                Color = st.IsNow ? Tok.AccentTextPrimary : Tok.TextPrimary,
+                MaxLines = 1,
+                Trim = TextTrim.CharacterEllipsis,
+                MinWidth = 0f,
+            },
+        };
+        if (meta.Count > 0)
+            textKids.Add(new BoxEl { Direction = 0, Gap = 4f, AlignItems = FlexAlign.Center, Children = meta.ToArray() });
+        if (set.Plays)
+            textKids.Add(new TextEl($"{t.PlayCount:N0} plays") { Size = 10f, Color = Tok.TextTertiary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
+
+        var trailing = new List<Element>(2);
+        if (set.Heart) trailing.Add(Heart(st.Saved, onLike));
+        if (showDuration)
+            trailing.Add(new BoxEl
+            {
+                Padding = new Edges4(6f, 0f, 6f, 0f),
+                AlignItems = FlexAlign.Center,
+                Justify = FlexJustify.Center,
+                Children = [new TextEl(DetailFormat.TrackTime(t.DurationMs)) { Size = 12f, Color = Tok.TextSecondary }],
+            });
+
+        return new BoxEl
+        {
+            Direction = 0,
+            Grow = 1f,
+            Basis = 0f,
+            MinWidth = 0f,
+            MinHeight = kind == ArtCardKind.Grid ? 64f : 52f,
+            Gap = kind == ArtCardKind.Grid ? 10f : 10f,
+            Padding = kind == ArtCardKind.Grid ? new Edges4(4f, 4f, 4f, 4f) : new Edges4(4f, 2f, 4f, 2f),
+            AlignItems = FlexAlign.Center,
+            Children =
+            [
+                new BoxEl
+                {
+                    Width = art,
+                    Height = art,
+                    Shrink = 0f,
+                    ZStack = true,
+                    ClipToBounds = true,
+                    Corners = CornerRadius4.All(radius),
+                    Children =
+                    [
+                        Surfaces.Artwork(t.Image, t.Id.GetHashCode() & 0x7fffffff, art, art, radius, decodePx: (int)MathF.Max(64f, art * 2f)),
+                        st.IsBuffering
+                            ? new BoxEl { Width = art, Height = art, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Fill = ColorF.FromRgba(0, 0, 0, 110), Children = [Spinner()] }
+                            : Embed.Comp(() => new NowPlayingOverlay(t.Uri, onPlay, fab, cover: true, art, centered: true)).Skeletonized(false),
+                    ],
+                },
+                new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = 2f, Justify = FlexJustify.Center, Children = textKids.ToArray() },
+                .. trailing,
+            ],
+        };
+    }
+
+    internal static BoxEl ArtCardSelectSkin(in RowScope s, Element content, ArtCardKind kind)
+    {
+        Func<bool> isSel = s.IsSelected, isEn = s.IsEnabled;
+        var interact = s.OnInteraction;
+        Action<bool> focusChanged = s.OnFocusChanged;
+        return new BoxEl
+        {
+            Direction = 1,
+            Grow = 1f,
+            Basis = 0f,
+            MinWidth = 0f,
+            MinHeight = kind == ArtCardKind.Grid ? 66f : 54f,
+            Margin = kind == ArtCardKind.Grid ? new Edges4(0f, 1f, 0f, 1f) : new Edges4(4f, 2f, 4f, 2f),
+            Corners = CornerRadius4.All(kind == ArtCardKind.Grid ? 6f : 5f),
+            ClipToBounds = true,
+            Fill = Prop.Of(() => isSel() ? Tok.FillSubtleSecondary : ColorF.Transparent),
+            HoverFill = Tok.FillSubtleSecondary,
+            PressedFill = Tok.FillSubtleTertiary,
+            BorderWidth = 1f,
+            BorderColor = ColorF.Transparent,
+            HoverBorderColor = Tok.StrokeCardDefault,
+            PressScale = 0.99f,
+            Opacity = Prop.Of(() => isEn() ? 1f : ItemContainer.DisabledOpacity),
+            Focusable = false,
+            FocusVisualMargin = Edges4.All(1f),
+            Role = AutomationRole.Button,
+            OnPointerPressed = args => interact(
+                args.ClickCount >= 2 ? ItemContainerTrigger.DoubleTap : ItemContainerTrigger.Tap, args.Mods),
+            OnKeyDown = args =>
+            {
+                if (args.KeyCode == Keys.Enter) { interact(ItemContainerTrigger.EnterKey, args.Mods); args.Handled = true; }
+                else if (args.KeyCode == Keys.Space && !args.IsRepeat) { interact(ItemContainerTrigger.SpaceKey, args.Mods); args.Handled = true; }
+            },
+            OnFocusChanged = focusChanged,
+            OnPointerExit = static () => { },
+            Children = [content],
+        };
+    }
+
+    internal static Element ExplicitBadge() => new BoxEl
+    {
+        MinWidth = 13f, Height = 13f, Padding = new Edges4(2f, 0f, 2f, 0f),
+        Corners = CornerRadius4.All(2f), BorderWidth = 1f, BorderColor = Tok.TextTertiary,
+        Opacity = 0.6f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+        Children = [new TextEl("E") { Size = 8f, Weight = 600, Color = Tok.TextTertiary }],
+    };
+
     internal static Element ArtistLinks(IReadOnlyList<ArtistRef> artists, Action<string, string?> go)
     {
         if (artists.Count == 0) return new BoxEl();
@@ -150,23 +318,18 @@ internal static class TrackRow
             Grow = 1f, Basis = 0f,
         };
 
-    // The Added-by cell: a small initial-avatar (we carry no avatar URL in the model yet) + the contributor name.
-    internal static Element AddedByCell(string? by)
+    // The Added-by cell: resolved profile when available, otherwise the raw playlist membership id.
+    internal static Element AddedByCell(string? by, Owner? profile = null)
     {
         if (string.IsNullOrEmpty(by)) return new BoxEl();
-        string initial = by.Substring(0, 1).ToUpperInvariant();
+        string label = profile?.Name is { Length: > 0 } name ? name : by;
         return new BoxEl
         {
             Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start, Gap = WaveeSpace.S,
             Children =
             [
-                new BoxEl
-                {
-                    Width = 22f, Height = 22f, Shrink = 0f, Corners = CornerRadius4.All(11f), Fill = Tok.FillSubtleSecondary,
-                    AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                    Children = [new TextEl(initial) { Size = 11f, Weight = 600, Color = Tok.TextSecondary }],
-                },
-                new TextEl(by) { Size = 13f, Color = Tok.TextSecondary, Grow = 1f, Basis = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                PersonPicture.Create("", 22f, displayName: label, imageSourcePath: profile?.Avatar?.Url),
+                new TextEl(label) { Size = 13f, Color = Tok.TextSecondary, Grow = 1f, Basis = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
             ],
         };
     }

@@ -842,19 +842,19 @@ public static class SpotifyExportMapper
         var image = RecentImage(data);
 
         if (entityType == "ENTITY_TYPE_TRACK" || uri.StartsWith("spotify:track:", StringComparison.Ordinal))
-            return new HomeCard(uri, title, JoinNames("Song", contributors), image, HomeCardKind.Track);
+            return new HomeCard(uri, title, JoinNames("Song", contributors), image, HomeCardKind.Track, Accent: ExtractedAccent(data));
 
         if (entityType == "ENTITY_TYPE_ARTIST" || uri.StartsWith("spotify:artist:", StringComparison.Ordinal))
-            return new HomeCard(uri, title, "Artist", image, HomeCardKind.Artist);
+            return new HomeCard(uri, title, "Artist", image, HomeCardKind.Artist, Accent: ExtractedAccent(data));
 
         if (entityType == "ENTITY_TYPE_ALBUM" || uri.StartsWith("spotify:album:", StringComparison.Ordinal))
         {
             var type = TitleCase((StrAt(identity, "type") ?? "Album").Replace('_', ' '));
-            return new HomeCard(uri, title, JoinNames(type, contributors), image, HomeCardKind.Album);
+            return new HomeCard(uri, title, JoinNames(type, contributors), image, HomeCardKind.Album, Accent: ExtractedAccent(data));
         }
 
         if (entityType == "ENTITY_TYPE_PLAYLIST" || uri.StartsWith("spotify:playlist:", StringComparison.Ordinal))
-            return new HomeCard(uri, title, contributors.Count > 0 ? contributors[0].Name : "Playlist", image, HomeCardKind.Playlist);
+            return new HomeCard(uri, title, contributors.Count > 0 ? contributors[0].Name : "Playlist", image, HomeCardKind.Playlist, Accent: ExtractedAccent(data));
 
         return null;
     }
@@ -878,16 +878,37 @@ public static class SpotifyExportMapper
 
     static Image? EntityImage(JsonElement data)
         => PickImage(Dig(data, "visualIdentityTrait", "squareCoverImage", "image", "data", "sources"))
+        ?? PickImage(Dig(data, "visualIdentityTrait", "squareCoverImage", "image", "sources"))
+        ?? PickImageFromOriginalInstances(Dig(data, "visualIdentityTrait", "squareCoverImage", "originalInstances"))
         ?? PickImage(Dig(data, "visualIdentityTrait", "image", "data", "sources"))
         ?? PickImage(Dig(data, "visualIdentityTrait", "image", "sources"))
         ?? PickImage(Dig(data, "visualIdentity", "squareCoverImage", "data", "sources"))
         ?? PickImage(Dig(data, "visualIdentity", "squareCoverImage", "sources"))
+        ?? PickImageFromOriginalInstances(Dig(data, "visualIdentity", "squareCoverImage", "originalInstances"))
         ?? PickImage(Dig(data, "visuals", "avatarImage", "sources"))
         ?? PickImage(Dig(data, "image", "data", "sources"))
         ?? PickImage(Dig(data, "image", "sources"))
         ?? CoverArt(data)
         ?? ImagesCover(data)
         ?? CoverArt(Dig(data, "albumOfTrack"));
+
+    /// <summary>Pick the best <c>originalInstances[].flatFile.cdnUrl</c> (<c>i.scdn.co</c>) when image-cdn sources are absent.</summary>
+    static Image? PickImageFromOriginalInstances(JsonElement originalInstances)
+    {
+        if (originalInstances.ValueKind != JsonValueKind.Array) return null;
+        string? large = null, def = null, small = null;
+        foreach (var inst in originalInstances.EnumerateArray())
+        {
+            var url = StrAt(inst, "flatFile", "cdnUrl");
+            if (url is null) continue;
+            var size = StrAt(inst, "size") ?? "";
+            if (size == "IMAGE_SIZE_LARGE") large = url;
+            else if (size == "IMAGE_SIZE_DEFAULT") def = url;
+            else if (size == "IMAGE_SIZE_SMALL") small = url;
+        }
+        var best = large ?? def ?? small;
+        return best is null ? null : new Image(best, null, null);
+    }
 
     static string? FirstArtistName(JsonElement albumData)
     {
@@ -905,14 +926,18 @@ public static class SpotifyExportMapper
     }
 
     // ── home card accent (cover-derived section tint) ──────────────────────────────────────────────────────
-    /// <summary>A home card's cover-extracted dominant dark color (<c>coverArt.extractedColors.colorDark.hex</c>) as
-    /// ARGB — Spotify's per-cover accent that drives the section tint. Skips its generic fallback (<c>isFallback</c>) so
-    /// the composer substitutes a semantic per-kind tint instead of a muddy grey.</summary>
+    /// <summary>A home card's cover-extracted dominant tint as ARGB — from <c>coverArt</c> or
+    /// <c>visualIdentityTrait.squareCoverImage</c> (rich <c>extractedColorSet</c> or <c>extractedColors.colorDark</c>).
+    /// Skips Spotify's generic fallback (<c>isFallback</c>) so the composer substitutes a semantic per-kind tint instead.</summary>
     static uint? ExtractedAccent(JsonElement data)
+        => AccentFromCoverNode(Dig(data, "coverArt"))
+        ?? AccentFromCoverNode(Dig(data, "visualIdentityTrait", "squareCoverImage"))
+        ?? AccentFromCoverNode(Dig(data, "visualIdentity", "squareCoverImage"));
+
+    static uint? AccentFromCoverNode(JsonElement coverNode)
     {
-        var cd = Dig(data, "coverArt", "extractedColors", "colorDark");
-        if (cd.ValueKind != JsonValueKind.Object || BoolAt(cd, false, "isFallback")) return null;
-        return HexToArgb(Str(cd, "hex"));
+        if (coverNode.ValueKind != JsonValueKind.Object) return null;
+        return ExtractPalette(coverNode)?.TintedDark;
     }
 
     /// <summary>Parse a <c>#RRGGBB</c> (or bare <c>RRGGBB</c>) hex color → opaque <c>0xFFRRGGBB</c>; null when absent/malformed.</summary>
@@ -1014,7 +1039,30 @@ public static class SpotifyExportMapper
             MonthlyListeners: Long(au, "stats", "monthlyListeners"), Followers: Long(au, "stats", "followers"), Bio: bio, Verified: verified,
             WorldRank: (int)Long(au, "stats", "worldRank"), HeaderImage: header, TopTracks: topTracks,
             AppearsOn: appearsOn.Count > 0 ? appearsOn : null, Pinned: pinned, Extras: extras,
-            Palette: ExtractPalette(Dig(au, "visualIdentity", "wideFullBleedImage")));
+            Palette: ExtractPalette(Dig(au, "visualIdentity", "wideFullBleedImage")),
+            // Per-facet totals — carried alongside the first ~10 items so the grid sizes the whole facet up front.
+            AlbumsTotal: (int)Long(au, "discography", "albums", "totalCount"),
+            SinglesTotal: (int)Long(au, "discography", "singles", "totalCount"),
+            CompilationsTotal: (int)Long(au, "discography", "compilations", "totalCount"));
+    }
+
+    /// <summary>Map a LIVE paged discography response (<c>queryArtistDiscography{Albums,Singles,Compilations}</c>) →
+    /// one <see cref="DiscographyPage"/> window: the flattened release-groups at <c>data.artistUnion.discography.&lt;facet&gt;.items</c>
+    /// plus the facet's <c>totalCount</c> (clamped up to the item count so a lagging total never under-reports the
+    /// delivered items). Same hand-walk as <see cref="MapArtist"/> — no JsonSerializer.</summary>
+    public static DiscographyPage DiscographyPageFromResponse(JsonElement responseRoot, DiscographyKind kind)
+    {
+        var facet = kind switch
+        {
+            DiscographyKind.Singles => "singles",
+            DiscographyKind.Compilations => "compilations",
+            _ => "albums",
+        };
+        var node = Dig(responseRoot, "data", "artistUnion", "discography", facet);
+        var items = new List<Album>();
+        AddReleases(Dig(node, "items"), items);
+        int total = (int)Long(node, "totalCount");
+        return new DiscographyPage(items, System.Math.Max(total, items.Count));
     }
 
     static IReadOnlyList<TopCity>? MapTopCities(JsonElement items)
@@ -1053,8 +1101,10 @@ public static class SpotifyExportMapper
             "COMPILATION" => AlbumKind.Compilation,
             _ => AlbumKind.Album,
         };
-        return new Album(IdFromUri(uri), uri, Str(r, "name") ?? "", CoverArt(r),
-            System.Array.Empty<ArtistRef>(), (int)Long(r, "date", "year"), tracks, null, kind);
+        return new Album(IdFromUri(uri), uri, Str(r, "name") ?? "", CoverArt(r) ?? EntityImage(r),
+            System.Array.Empty<ArtistRef>(), (int)Long(r, "date", "year"), tracks, null, kind,
+            Palette: ExtractPalette(Dig(r, "coverArt"))
+                ?? ExtractPalette(Dig(r, "visualIdentityTrait", "squareCoverImage")));
     }
 
     // topTracks[].track shape: { name, uri, playcount(string), duration.totalMilliseconds, albumOfTrack.{uri,coverArt}, artists.items[] }

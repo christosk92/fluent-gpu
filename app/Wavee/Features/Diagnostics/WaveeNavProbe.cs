@@ -10,6 +10,7 @@ using FluentGpu.Pal;
 using FluentGpu.Pal.Windows;
 using FluentGpu.Rhi;
 using FluentGpu.Rhi.D3D12;
+using Wavee.Core;
 
 namespace Wavee;
 
@@ -48,7 +49,10 @@ internal static class WaveeNavProbe
         bool trackShot = Diag.EnvFlag("WAVEE_TRACKLIST_SHOT");
         bool heroShot = Diag.EnvFlag("WAVEE_HERO_SHOT");
         bool homeScroll = Diag.EnvFlag("WAVEE_HOME_SCROLL_PROBE");
-        if (!Diag.EnvFlag("WAVEE_NAV_PROBE") && !connStress && !trackShot && !heroShot && !homeScroll) return false;
+        bool lyricsProbe = Diag.EnvFlag("WAVEE_LYRICS_PROBE");
+        bool liveLyricsScroll = Diag.EnvFlag("WAVEE_LIVE_LYRICS_SCROLL_PROBE");
+        bool advanceProbe = Diag.EnvFlag("WAVEE_LYRICS_ADVANCE_PROBE");
+        if (!Diag.EnvFlag("WAVEE_NAV_PROBE") && !connStress && !trackShot && !heroShot && !homeScroll && !lyricsProbe && !liveLyricsScroll && !advanceProbe) return false;
         if (window is not Win32Window w || device is not D3D12Device gpu)
         {
             Console.Error.WriteLine("[wavee-nav-probe] unavailable: requires Win32Window + D3D12Device");
@@ -57,8 +61,21 @@ internal static class WaveeNavProbe
         // DiagnosticRun fires straight after window.Show(), BEFORE the first frame — so WaveeShell hasn't mounted yet
         // and ProbeNav is still null. Pump warmup frames until the shell wires its nav hook (fixes the mount race that
         // made earlier shot runs flakily report "nav hook not wired").
-        for (int i = 0; i < 240 && WaveeShell.ProbeNav is null && !w.IsClosed; i++)
-        { gpu.SuppressLatencyWaitOnce(); gpu.SuppressVsyncOnce(); host.RunFrame(); }
+        int hookFrames = (liveLyricsScroll || advanceProbe) ? Math.Max(240, EnvInt("WAVEE_PROBE_AUTH_FRAMES", 7200, 240, 36000)) : 240;
+        for (int i = 0; i < hookFrames && WaveeShell.ProbeNav is null && !w.IsClosed; i++)
+        {
+            if (liveLyricsScroll || advanceProbe)
+            {
+                host.RunFrame();
+                w.WaitForWork(Math.Min(host.RecommendedWaitMs(), 16));
+            }
+            else
+            {
+                gpu.SuppressLatencyWaitOnce();
+                gpu.SuppressVsyncOnce();
+                host.RunFrame();
+            }
+        }
         if (WaveeShell.ProbeNav is null)
         {
             Console.Error.WriteLine("[wavee-nav-probe] nav hook not wired (WaveeShell not mounted?)");
@@ -68,6 +85,9 @@ internal static class WaveeNavProbe
         else if (trackShot) RunTrackListShot(host, w, gpu);
         else if (connStress) RunConnStress(host, w, gpu);
         else if (homeScroll) RunHomeScrollProbe(host, w, gpu);
+        else if (liveLyricsScroll) RunLiveLyricsScrollProbe(host, w, gpu);
+        else if (advanceProbe) RunLyricsAdvanceProbe(host, w, gpu);
+        else if (lyricsProbe) RunLyricsProbe(host, w, gpu);
         else Run(host, w, gpu);
         return true;
     }
@@ -503,6 +523,718 @@ internal static class WaveeNavProbe
         if (summaryPath is not null) WriteProbeFile(summaryPath, report, "home-scroll-probe");
     }
 
+    // WAVEE_LIVE_LYRICS_SCROLL_PROBE=1: REAL-backend, long-duration repro for "the rest of the app scrolls poorly while
+    // lyrics are open". This intentionally refuses the fake backend and waits for live authenticated playback with an
+    // advancing position before measuring. Output defaults to .wavee-diagnostics; tune with:
+    //   WAVEE_PROBE_REAL_FRAMES (default 1800), WAVEE_PROBE_WORK_FRAMES (default 600),
+    //   WAVEE_PROBE_PLAYBACK_FRAMES / WAVEE_PROBE_LYRICS_FRAMES for readiness waits.
+    static void RunLiveLyricsScrollProbe(AppHost host, Win32Window window, D3D12Device gpu)
+    {
+        string? outDir = ProbeOutputDir();
+        string? csvPath = outDir is null ? null : Path.Combine(outDir, "wavee-live-lyrics-scroll-probe.csv");
+        string? summaryPath = outDir is null ? null : Path.Combine(outDir, "wavee-live-lyrics-scroll-probe-summary.txt");
+        var csv = new StringBuilder(1 << 18);
+        csv.AppendLine("phase,frame,label,intervalMs,frameMs,flushMs,layoutMs,animMs,recordMs,submitMs,fenceWaitMs,presentMs,gen0,gen1,comps,nodes,draws,blurCandidates,blurLayers,blurSuppressed,blurHoldCandidates,edgeFadeGroups,d3dBlurHit,d3dBlurMiss,d3dBlurHoldHit,d3dBlurHoldFallback,d3dOpacityGroups,lyricsNowMs,lyricsAuthMs,lyricsActiveLine,lyricsVoiceLine,lyricsActiveChanged,lyricsScrollSnapped,trackMs,isPlaying,mainOff,mainTarget,mainMode,mainTransformDirty,lyricsOff,lyricsTarget,lyricsMode,lyricsTransformDirty,track");
+
+        int realFrames = EnvInt("WAVEE_PROBE_REAL_FRAMES", 1800, 120, 20000);
+        int workFrames = EnvInt("WAVEE_PROBE_WORK_FRAMES", 600, 0, 20000);
+        int playbackFrames = EnvInt("WAVEE_PROBE_PLAYBACK_FRAMES", 5400, 120, 36000);
+        int lyricsFrames = EnvInt("WAVEE_PROBE_LYRICS_FRAMES", 3600, 60, 36000);
+
+        void FrameLive()
+        {
+            if (window.IsClosed) return;
+            host.RunFrame();
+            int wait = host.RecommendedWaitMs();
+            if (wait > 0) window.WaitForWork(Math.Min(wait, 16));
+        }
+        void SettleLive(int n) { for (int i = 0; i < n && !window.IsClosed; i++) FrameLive(); }
+
+        bool WaitFor(string label, int frames, Func<bool> ready)
+        {
+            for (int i = 0; i < frames && !window.IsClosed; i++)
+            {
+                if (ready()) return true;
+                FrameLive();
+            }
+            Console.Error.WriteLine($"[live-lyrics-scroll] timed out waiting for {label}");
+            return false;
+        }
+
+        if (!Services.UseRealBackend)
+        {
+            Console.Error.WriteLine("[live-lyrics-scroll] refusing to run: app is using --fake; run without --fake / with --real-backend");
+            return;
+        }
+        if (WaveeApp.ProbePlayback is null)
+        {
+            Console.Error.WriteLine("[live-lyrics-scroll] no playback bridge exposed; shell/app did not mount");
+            return;
+        }
+
+        long lastPos = -1;
+        int advances = 0;
+        bool PlaybackReady()
+        {
+            var b = WaveeApp.ProbePlayback;
+            if (b is null) return false;
+            long pos = b.PositionMs.Peek();
+            if (pos > lastPos) advances++;
+            lastPos = pos;
+            return b.Auth.Peek() == AuthStatus.Authenticated
+                && b.CurrentTrack.Peek() is not null
+                && b.IsPlaying.Peek()
+                && advances >= 2;
+        }
+
+        Console.Error.WriteLine("[live-lyrics-scroll] waiting for REAL authenticated playback with advancing position");
+        if (!WaitFor("live playing track", playbackFrames, PlaybackReady))
+        {
+            var b = WaveeApp.ProbePlayback;
+            Console.Error.WriteLine($"[live-lyrics-scroll] playback state: auth={b?.Auth.Peek()} playing={b?.IsPlaying.Peek()} track={TrackLabel(b)} pos={b?.PositionMs.Peek() ?? 0}");
+            return;
+        }
+
+        Console.Error.WriteLine($"[live-lyrics-scroll] track: {TrackLabel(WaveeApp.ProbePlayback)}");
+        NodeHandle lyrics = default;
+        bool LyricsReady()
+        {
+            lyrics = FindLyricsViewport(host.Scene);
+            if (lyrics.IsNull) return false;
+            var root = host.Scene.Root.IsNull ? default : host.Scene.AbsoluteRect(host.Scene.Root);
+            var lr = host.Scene.AbsoluteRect(lyrics);
+            return root.W <= 0f || lr.X >= root.W * 0.55f;
+        }
+
+        Console.Error.WriteLine("[live-lyrics-scroll] waiting for lyrics viewport");
+        if (!WaitFor("lyrics viewport", lyricsFrames, LyricsReady))
+        {
+            DumpScrollers(host.Scene);
+            return;
+        }
+
+        void Nav(string key, string? arg) => WaveeShell.ProbeNav!(key, arg);
+        var routes = BuildLiveLyricsRoutes(WaveeApp.ProbePlayback);
+        int routeSettleFrames = EnvInt("WAVEE_PROBE_ROUTE_SETTLE_FRAMES", 150, 12, 3600);
+        int extraRoutes = EnvInt("WAVEE_PROBE_EXTRA_ROUTES", 8, 0, 40);
+        if (extraRoutes > 0)
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var r in routes) seen.Add(r.Key + "\u001F" + (r.Arg ?? ""));
+
+            Nav("home", null);
+            SettleLive(routeSettleFrames);
+            var homeKeys = new List<string>();
+            host.CollectMorphKeys(homeKeys);
+            int added = 0, playlistN = 0, albumN = 0;
+            foreach (var key in homeKeys)
+            {
+                if (added >= extraRoutes) break;
+                bool playlist = key.StartsWith("pl:", StringComparison.Ordinal);
+                bool album = key.StartsWith("album:", StringComparison.Ordinal);
+                if (!playlist && !album) continue;
+                string sig = key + "\u001F";
+                if (!seen.Add(sig)) continue;
+                string label = playlist ? "playlist-" + (++playlistN).ToString(CultureInfo.InvariantCulture) : "album-" + (++albumN).ToString(CultureInfo.InvariantCulture);
+                routes.Add(new ProbeRoute(key, null, SafeRouteLabel(label)));
+                added++;
+            }
+            Console.Error.WriteLine($"[live-lyrics-scroll] added {added} home playlist/album routes");
+        }
+        int perRouteRealFrames = EnvInt("WAVEE_PROBE_ROUTE_FRAMES", Math.Max(60, realFrames / Math.Max(1, routes.Count)), 0, 20000);
+        int perRouteWorkFrames = EnvInt("WAVEE_PROBE_WORK_ROUTE_FRAMES", workFrames / Math.Max(1, routes.Count), 0, 20000);
+
+        var allIntervals = new List<double>(Math.Max(realFrames, perRouteRealFrames * routes.Count));
+        var intervalGroups = new List<(string Label, List<double> Values)>();
+        var phases = new List<Phase>(routes.Count * 2);
+        var routeReports = new List<string>(routes.Count);
+        int throttled = 0, maxWait = 0, measuredRoutes = 0, skippedRoutes = 0;
+        GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
+
+        foreach (var route in routes)
+        {
+            if (window.IsClosed) break;
+            Console.Error.WriteLine($"[live-lyrics-scroll] route {route.Label}: {route.Key}" + (route.Arg is null ? "" : $" ({route.Arg})"));
+            Nav(route.Key, route.Arg);
+            SettleLive(routeSettleFrames);
+
+            lyrics = FindLyricsViewport(host.Scene);
+            if (lyrics.IsNull)
+            {
+                Console.Error.WriteLine($"[live-lyrics-scroll] route {route.Label}: lyrics viewport missing after navigation");
+                skippedRoutes++;
+                continue;
+            }
+
+            NodeHandle main = FindMainScrollViewport(host.Scene, lyrics);
+            if (main.IsNull)
+            {
+                Console.Error.WriteLine($"[live-lyrics-scroll] route {route.Label}: no main page scroller; skipped");
+                skippedRoutes++;
+                continue;
+            }
+
+            var mainRect = host.Scene.AbsoluteRect(main);
+            host.Scene.TryGetScroll(main, out var mainScroll0);
+            host.Scene.TryGetScroll(lyrics, out var lyricsScroll0);
+            float mainMin = mainScroll0.OffsetY, mainMax = mainScroll0.OffsetY;
+            float lyricsMin = lyricsScroll0.OffsetY, lyricsMax = lyricsScroll0.OffsetY;
+            void TrackRouteOffsets()
+            {
+                if (host.Scene.TryGetScroll(main, out var ms))
+                {
+                    mainMin = MathF.Min(mainMin, ms.OffsetY);
+                    mainMax = MathF.Max(mainMax, ms.OffsetY);
+                }
+                if (host.Scene.TryGetScroll(lyrics, out var ls))
+                {
+                    lyricsMin = MathF.Min(lyricsMin, ls.OffsetY);
+                    lyricsMax = MathF.Max(lyricsMax, ls.OffsetY);
+                }
+            }
+            float vh = mainScroll0.ViewportH > 20f ? mainScroll0.ViewportH : (mainRect.H > 20f ? mainRect.H : 400f);
+            var posPt = new Point2(mainRect.X + mainRect.W * 0.5f, mainRect.Y + vh * 0.5f);
+            window.QueueInput(new InputEvent(InputKind.PointerMove, posPt, 0, 0));
+            SettleLive(4);
+            Console.Error.WriteLine($"[live-lyrics-scroll] route {route.Label}: wheel @ ({posPt.X:0},{posPt.Y:0}) main content={mainScroll0.ContentH:0} viewH={mainScroll0.ViewportH:0}; lyrics content={lyricsScroll0.ContentH:0} viewH={lyricsScroll0.ViewportH:0}");
+
+            var routeIntervals = new List<double>(perRouteRealFrames);
+            var realPhase = new Phase("real:" + route.Label);
+            phases.Add(realPhase);
+            int activeChangeFrames = 0, blurHeldFrames = 0, zeroBlurWithCandidates = 0;
+            int maxBlurHeld = 0, maxBlurCandidates = 0, maxBlurLayers = 0, maxBlurCacheMiss = 0;
+            int minBlurLayers = int.MaxValue;
+            void TrackLyricsPipeline(FrameStats s)
+            {
+                var ld = LyricsView.LastFrameDiagnostics;
+                if (ld.ActiveChanged) activeChangeFrames++;
+                if (s.BlurCandidateCount > 0)
+                {
+                    minBlurLayers = Math.Min(minBlurLayers, s.BlurGroupCount);
+                    if (s.BlurGroupCount == 0) zeroBlurWithCandidates++;
+                }
+                // During this MAIN-page wheel the lyrics sibling self-blur HOLDS under its cache policy (served by its
+                // position-independent pin), counted by BlurHoldCandidateCount; 0 held frames across a sustained scroll =
+                // the sibling-defer path is dead (the metric that replaced the retired BlurSuppressedByScrollCount).
+                if (s.BlurHoldCandidateCount > 0) blurHeldFrames++;
+                maxBlurHeld = Math.Max(maxBlurHeld, s.BlurHoldCandidateCount);
+                maxBlurCandidates = Math.Max(maxBlurCandidates, s.BlurCandidateCount);
+                maxBlurLayers = Math.Max(maxBlurLayers, s.BlurGroupCount);
+                maxBlurCacheMiss = Math.Max(maxBlurCacheMiss, gpu.LastBlurCacheMiss);
+            }
+            long prevTick = Stopwatch.GetTimestamp();
+            for (int i = 0; i < perRouteRealFrames && !window.IsClosed; i++)
+            {
+                float wheel = ((i / 90) & 1) == 0 ? +60f : -60f;
+                window.QueueInput(new InputEvent(InputKind.Wheel, posPt, 0, 0, wheel));
+                int g0 = GC.CollectionCount(0), g1 = GC.CollectionCount(1);
+                var s = host.RunFrame();
+                long now = Stopwatch.GetTimestamp();
+                double intervalMs = (now - prevTick) * 1000.0 / Stopwatch.Frequency;
+                prevTick = now;
+                routeIntervals.Add(intervalMs);
+                allIntervals.Add(intervalMs);
+                int dg0 = GC.CollectionCount(0) - g0, dg1 = GC.CollectionCount(1) - g1;
+                if (s.Rendered || s.DrawCommandCount > 0)
+                {
+                    realPhase.Ms.Add(s.FrameMs);
+                    if (s.FrameMs > BudgetMs) { realPhase.OverBudget++; if (dg0 > 0) realPhase.OverBudgetGc++; }
+                }
+                AppendLiveLyricsRow(csv, "real:" + route.Label, i, wheel > 0 ? "wheel-down" : "wheel-up", intervalMs, s, dg0, dg1, host.Scene, main, lyrics, WaveeApp.ProbePlayback, gpu);
+                TrackLyricsPipeline(s);
+                TrackRouteOffsets();
+                int wait = host.RecommendedWaitMs();
+                if (wait > 0)
+                {
+                    throttled++;
+                    if (wait > maxWait) maxWait = wait;
+                    window.WaitForWork(Math.Min(wait, 16));
+                }
+            }
+            intervalGroups.Add((route.Label, routeIntervals));
+
+            var workPhase = new Phase("work:" + route.Label);
+            if (perRouteWorkFrames > 0) phases.Add(workPhase);
+            for (int i = 0; i < perRouteWorkFrames && !window.IsClosed; i++)
+            {
+                float wheel = ((i / 90) & 1) == 0 ? +60f : -60f;
+                window.QueueInput(new InputEvent(InputKind.Wheel, posPt, 0, 0, wheel));
+                int g0 = GC.CollectionCount(0), g1 = GC.CollectionCount(1);
+                gpu.SuppressLatencyWaitOnce();
+                gpu.SuppressVsyncOnce();
+                var s = host.RunFrame();
+                int dg0 = GC.CollectionCount(0) - g0, dg1 = GC.CollectionCount(1) - g1;
+                if (s.Rendered || s.DrawCommandCount > 0)
+                {
+                    workPhase.Ms.Add(s.FrameMs);
+                    if (s.FrameMs > BudgetMs) { workPhase.OverBudget++; if (dg0 > 0) workPhase.OverBudgetGc++; }
+                }
+                AppendLiveLyricsRow(csv, "work:" + route.Label, i, wheel > 0 ? "wheel-down" : "wheel-up", 0, s, dg0, dg1, host.Scene, main, lyrics, WaveeApp.ProbePlayback, gpu);
+                TrackLyricsPipeline(s);
+                TrackRouteOffsets();
+            }
+
+            host.Scene.TryGetScroll(main, out var mainScroll1);
+            host.Scene.TryGetScroll(lyrics, out var lyricsScroll1);
+            bool mainMoved = mainMax - mainMin > 1f;
+            bool lyricsMoved = lyricsMax - lyricsMin > 1f;
+            string minBlur = minBlurLayers == int.MaxValue ? "-" : minBlurLayers.ToString(CultureInfo.InvariantCulture);
+            routeReports.Add($"{route.Label}: main offset {mainScroll0.OffsetY:0}->{mainScroll1.OffsetY:0} range {mainMin:0}-{mainMax:0} {(mainMoved ? "moved" : "NO-MOVE")}; lyrics offset {lyricsScroll0.OffsetY:0}->{lyricsScroll1.OffsetY:0} range {lyricsMin:0}-{lyricsMax:0} {(lyricsMoved ? "moved" : "still")}; frames real={routeIntervals.Count} work={workPhase.Ms.Count}; activeChanges={activeChangeFrames}; blurLayers min/max={minBlur}/{maxBlurLayers}; blurCandidates max={maxBlurCandidates}; blurHeld frames/max={blurHeldFrames}/{maxBlurHeld} (sibling DoF deferred during the main scroll; 0 across a moving scroll = regression); zeroBlurWithCandidates={zeroBlurWithCandidates}; maxBlurCacheMiss={maxBlurCacheMiss}");
+            measuredRoutes++;
+        }
+
+        if (measuredRoutes == 0)
+        {
+            Console.Error.WriteLine("[live-lyrics-scroll] no routes with usable main scrollers found");
+            DumpScrollers(host.Scene);
+            return;
+        }
+
+        var sb = new StringBuilder(4096);
+        sb.AppendLine();
+        sb.AppendLine("=== WAVEE LIVE LYRICS SCROLL PROBE - REAL backend, lyrics rail open, multi-page main wheel scroll ===");
+        sb.AppendLine($"track: {TrackLabel(WaveeApp.ProbePlayback)}");
+        sb.AppendLine($"routes measured={measuredRoutes}; skipped={skippedRoutes}; route frames real={perRouteRealFrames}; work={perRouteWorkFrames}; throttledWaitFrames={throttled}; maxWait={maxWait}ms");
+        AppendIntervalSummary(sb, "all real app-loop intervals", allIntervals);
+        foreach (var group in intervalGroups) AppendIntervalSummary(sb, "real intervals " + group.Label, group.Values);
+        sb.AppendLine();
+        sb.AppendLine($"{"phase",-14} {"n",5} {"p50",6} {"p90",6} {"p99",7} {"p99.9",7} {"max",8}   {"over8.3ms",10} {"(ofwhich GC)",12}");
+        foreach (var phase in phases) sb.AppendLine(Format(phase));
+        sb.AppendLine();
+        foreach (var line in routeReports) sb.AppendLine(line);
+        sb.AppendLine("CSV columns include playback, LyricsView active/voice line diagnostics, recorder blur counts, D3D blur cache counts, and main/lyrics scroll state per frame.");
+
+        string report = sb.ToString();
+        Console.Error.Write(report);
+        if (csvPath is not null) WriteProbeFile(csvPath, csv.ToString(), "live-lyrics-scroll");
+        if (summaryPath is not null) WriteProbeFile(summaryPath, report, "live-lyrics-scroll");
+    }
+
+    // WAVEE_LYRICS_ADVANCE_PROBE=1: the REDESIGNED, trustworthy lyrics probe. It drives the media clock SYNCHRONOUSLY
+    // (LyricsView.ProbeStep, with the async ticker silenced by ProbeSyncMode) so a line advance and the RunFrame that
+    // records the resulting scroll SETTLE are the SAME frame — killing the timer-decoupling artifact that made the prior
+    // probe's "blur-drop ≠ line-change" claim meaningless. Reads the DoF-defer inputs (ScrollMode / UserScrollActive /
+    // content-TransformDirty) captured at RECORD time (before ClearTransformDirty), plus the whole-frame blur counters.
+    //   P1 stationary-advance : the real BUG1 scenario — advance lyrics while NOTHING else scrolls. On the fixed engine,
+    //                           blur is NEVER suppressed (assert). On the old engine it spiked on every settle frame.
+    //   P2 sibling-isolation  : wheel-scroll the MAIN page while lyrics sit still — the lyrics viewport must stay
+    //                           mode 0 / not-user-scrolling / not-content-dirty (a sibling scroll can't cascade its DoF).
+    //   P3 skip-submit (BUG3) : stationary, no input — count frames force-PRESENTED despite a static scene (a loop anim
+    //                           marking TransformDirty defeats skip-submit → the app-wide vsync-paced present cost).
+    static void RunLyricsAdvanceProbe(AppHost host, Win32Window window, D3D12Device gpu)
+    {
+        string? outDir = ProbeOutputDir();
+        string? csvPath = outDir is null ? null : Path.Combine(outDir, "wavee-lyrics-advance-probe.csv");
+        string? summaryPath = outDir is null ? null : Path.Combine(outDir, "wavee-lyrics-advance-probe-summary.txt");
+        var csv = new StringBuilder(1 << 16);
+        csv.AppendLine("phase,line,frame,label,injectedNowMs,activeLine,voiceLine,activeChanged,voiceChanged,lyMode,lyPrevMode,lyUserScroll,lyContentDirty,lyOff,lyTgt,blurCandidates,blurGroups,blurSuppressed,blurHoldCandidates,d3dBlurMiss,d3dBlurHoldHit,d3dBlurHoldFallback,frameMs,recordMs,submitMs,fenceWaitMs,presentMs,presented,animMs,mainMode,mainContentDirty,track");
+
+        void Paced() { if (window.IsClosed) return; host.RunFrame(); window.WaitForWork(16); }   // ~16 ms dt so the spring eases realistically
+        void FrameLive() { if (window.IsClosed) return; host.RunFrame(); int wt = host.RecommendedWaitMs(); if (wt > 0) window.WaitForWork(Math.Min(wt, 16)); }
+        bool WaitFor(string label, int frames, Func<bool> ready)
+        {
+            for (int i = 0; i < frames && !window.IsClosed; i++) { if (ready()) return true; FrameLive(); }
+            Console.Error.WriteLine($"[lyrics-advance] timed out waiting for {label}");
+            return false;
+        }
+
+        if (!Services.UseRealBackend) { Console.Error.WriteLine("[lyrics-advance] refusing to run under --fake; launch the real backend, log in, and play a word-synced track"); return; }
+        if (WaveeApp.ProbePlayback is null) { Console.Error.WriteLine("[lyrics-advance] no playback bridge exposed"); return; }
+
+        long lastPos = -1; int adv = 0;
+        bool PlaybackReady()
+        {
+            var b = WaveeApp.ProbePlayback; if (b is null) return false;
+            long p = b.PositionMs.Peek(); if (p > lastPos) adv++; lastPos = p;
+            return b.Auth.Peek() == AuthStatus.Authenticated && b.CurrentTrack.Peek() is not null;
+        }
+        int playbackFrames = EnvInt("WAVEE_PROBE_PLAYBACK_FRAMES", 5400, 120, 36000);
+        Console.Error.WriteLine("[lyrics-advance] waiting for REAL authenticated playback");
+        if (!WaitFor("authenticated track", playbackFrames, PlaybackReady)) return;
+
+        int lyricsFrames = EnvInt("WAVEE_PROBE_LYRICS_FRAMES", 3600, 60, 36000);
+        NodeHandle lyricsVp = default;
+        bool LyricsReady()
+        {
+            var lv = LyricsView.ProbeActive; if (lv is null) return false;
+            lyricsVp = lv.ProbeViewport;
+            return !lyricsVp.IsNull && host.Scene.IsLive(lyricsVp) && lv.ProbeLineCount >= 3;
+        }
+        Console.Error.WriteLine("[lyrics-advance] waiting for the lyrics view + viewport + a >=3-line synced doc");
+        if (!WaitFor("lyrics view/viewport/doc", lyricsFrames, LyricsReady)) { DumpScrollers(host.Scene); return; }
+
+        var view = LyricsView.ProbeActive!;
+        int lineCount = view.ProbeLineCount;
+        host.ProbeLyricsViewport = lyricsVp;
+        NodeHandle mainVp = FindMainScrollViewport(host.Scene, lyricsVp);
+        host.ProbeMainViewport = mainVp;
+        Console.Error.WriteLine($"[lyrics-advance] track: {TrackLabel(WaveeApp.ProbePlayback)}; lines={lineCount}; sync-driving (ticker silenced)");
+
+        // Pre-settle onto line 0 so the ONE-TIME instant-jump latch fires there, then force snapped so every measured
+        // advance takes the ProgrammaticMode spring (whose SETTLE frame is where BUG1 dropped the blur).
+        view.ProbeStep(view.ProbeLineStartMs(0));
+        for (int i = 0; i < 10 && !window.IsClosed; i++) Paced();
+        view.ProbeForceSnapped();
+
+        int settleFrames = EnvInt("WAVEE_PROBE_SETTLE_FRAMES", 26, 6, 240);
+        int startLine = Math.Min(1, lineCount - 1);
+        int endLine = Math.Min(lineCount - 1, startLine + EnvInt("WAVEE_PROBE_ADVANCES", 20, 1, 4096));
+
+        // ── P1: stationary line-advance ────────────────────────────────────────────────────────────────────────────
+        int p1Frames = 0, p1BlurAbsentFrames = 0, p1SettleFrames = 0;
+        int prevLyMode = 0;
+        for (int li = startLine; li <= endLine && !window.IsClosed; li++)
+        {
+            view.ProbeStep(view.ProbeLineStartMs(li));   // advance emphasis onto line li → arms a programmatic bring-into-view
+            for (int f = 0; f < settleFrames && !window.IsClosed; f++)
+            {
+                var s = host.RunFrame();
+                window.WaitForWork(16);
+                p1Frames++;
+                bool settleEdge = prevLyMode == FluentGpu.Animation.ScrollIntegrator.WheelAnimating && s.LyricsScrollMode == 0;
+                if (settleEdge) p1SettleFrames++;
+                // BUG1 signature under the pin-cache pipeline: the recorder no longer DROPS a stationary blur (the retired
+                // BlurSuppressedByScrollCount is always 0), so the observable regression is the DoF VANISHING — a
+                // content-advance frame (content transform written, NOT a user scroll) that records zero blur candidates
+                // means the lyric depth-of-field went absent instead of being served by its pin.
+                if (!s.LyricsUserScrollActive && s.LyricsContentDirtyAtRecord && s.BlurCandidateCount == 0) p1BlurAbsentFrames++;
+                AppendAdvanceRow(csv, "P1-stationary", li, f, settleEdge ? "settle" : "", s, prevLyMode, host.Scene, lyricsVp, mainVp, gpu);
+                prevLyMode = s.LyricsScrollMode;
+            }
+        }
+
+        // ── P2: wheel the MAIN page while lyrics sit still (sibling isolation) ──────────────────────────────────────
+        int p2Frames = 0, p2LyricsTouched = 0, p2LyricsHeld = 0;
+        if (!mainVp.IsNull && host.Scene.IsLive(mainVp))
+        {
+            var mr = host.Scene.AbsoluteRect(mainVp);
+            host.Scene.TryGetScroll(mainVp, out var msc0);
+            float vh = msc0.ViewportH > 20f ? msc0.ViewportH : (mr.H > 20f ? mr.H : 400f);
+            var posPt = new Point2(mr.X + mr.W * 0.5f, mr.Y + vh * 0.5f);
+            window.QueueInput(new InputEvent(InputKind.PointerMove, posPt, 0, 0));
+            int p2Total = EnvInt("WAVEE_PROBE_P2_FRAMES", 180, 0, 4096);
+            for (int f = 0; f < p2Total && !window.IsClosed; f++)
+            {
+                window.QueueInput(new InputEvent(InputKind.Wheel, posPt, 0, 0, ((f / 45) & 1) == 0 ? +60f : -60f));
+                var s = host.RunFrame();
+                window.WaitForWork(16);
+                p2Frames++;
+                if (s.LyricsUserScrollActive || s.LyricsContentDirtyAtRecord) p2LyricsTouched++;   // must stay 0 — lyrics untouched by a main scroll
+                // Sibling isolation now MEANS the stationary lyrics DoF is HELD (served by its position-independent pin),
+                // not dropped, while the main page scrolls — BlurHoldCandidateCount > 0 with the lyrics themselves untouched.
+                if (s.BlurHoldCandidateCount > 0) p2LyricsHeld++;
+                AppendAdvanceRow(csv, "P2-mainscroll", -1, f, "", s, prevLyMode, host.Scene, lyricsVp, mainVp, gpu);
+                prevLyMode = s.LyricsScrollMode;
+            }
+        }
+
+        // ── P3: skip-submit / present cost with the rail open, no input (BUG3 mechanism) ───────────────────────────
+        int p3Frames = 0, p3Presented = 0, p3StaticButPresented = 0; double p3AnimMs = 0, p3FenceMs = 0;
+        int p3Total = EnvInt("WAVEE_PROBE_P3_FRAMES", 240, 0, 4096);
+        for (int f = 0; f < p3Total && !window.IsClosed; f++)
+        {
+            var s = host.RunFrame();
+            window.WaitForWork(16);
+            p3Frames++;
+            if (s.Presented) p3Presented++;
+            p3AnimMs += s.AnimMs; p3FenceMs += s.FenceWaitMs;
+            bool stationary = s.LyricsScrollMode == 0 && !s.LyricsContentDirtyAtRecord && s.MainScrollMode == 0 && !s.MainContentDirtyAtRecord;
+            if (s.Presented && stationary) p3StaticButPresented++;   // force-present despite a static scene → skip-submit defeated
+            AppendAdvanceRow(csv, "P3-idle", -1, f, "", s, prevLyMode, host.Scene, lyricsVp, mainVp, gpu);
+            prevLyMode = s.LyricsScrollMode;
+        }
+
+        // ── P4: BUG2 — voice-transition REMOUNT + wipe/glow integrity ─────────────────────────────────────────────
+        // Step the clock finely across interior line boundaries so VOICE crosses li-1→li while ACTIVE (the lead) stays
+        // ~stationary near li — this is the exact frame the row just above active leaves the voice slot. On the fixed
+        // (stable two-child) tree its node identity must NOT change (no remount → no re-bake flicker), and the karaoke
+        // wipe/glow must still be present on every voice line (guards against the restructure breaking the feature).
+        int p4Frames = 0, p4VoiceTransitions = 0, p4Remounts = 0, p4WipeMissing = 0, p4GlowDead = 0;
+        if (lineCount >= 4)
+        {
+            view.ProbeForceSnapped();
+            int b0 = Math.Max(2, lineCount / 3);
+            int bEnd = Math.Min(lineCount - 2, b0 + EnvInt("WAVEE_PROBE_BUG2_BOUNDARIES", 8, 1, 4096));
+            int prevVoice = -1;
+            NodeHandle prevVoiceHandle = default;
+            for (int li = b0; li <= bEnd && !window.IsClosed; li++)
+            {
+                long ls = view.ProbeLineStartMs(li);
+                for (long dt = -80; dt <= 80 && !window.IsClosed; dt += 20)
+                {
+                    view.ProbeStep(ls + dt);
+                    var s = host.RunFrame();
+                    window.WaitForWork(16);
+                    p4Frames++;
+                    var ld = LyricsView.LastFrameDiagnostics;
+                    int vln = ld.VoiceLine;
+                    if (ld.VoiceChanged && prevVoice >= 0 && prevVoice != vln)
+                    {
+                        p4VoiceTransitions++;
+                        var leaving = view.ProbeLineNode(prevVoice);   // the line that just left the voice slot (now dimmed)
+                        if (!prevVoiceHandle.IsNull && !leaving.IsNull && !leaving.Equals(prevVoiceHandle)) p4Remounts++;
+                    }
+                    if (!ld.VoiceChanged && vln >= 0)   // integrity on a STABLE voice frame (the enter frame adds the wipe one frame later)
+                    {
+                        var wn = view.ProbeLineNode(vln);
+                        if (wn.IsNull || !host.Scene.IsLive(wn) || !host.Scene.TryGetGlyphWipe(wn, out _)) p4WipeMissing++;
+                        var gn = view.ProbeGlowNode(vln);
+                        if (gn.IsNull || !host.Scene.IsLive(gn)) p4GlowDead++;
+                    }
+                    AppendAdvanceRow(csv, "P4-bug2", li, (int)dt, ld.VoiceChanged ? "voiceChg" : "", s, prevLyMode, host.Scene, lyricsVp, mainVp, gpu);
+                    prevLyMode = s.LyricsScrollMode;
+                    prevVoice = vln;
+                    prevVoiceHandle = vln >= 0 ? view.ProbeLineNode(vln) : default;
+                }
+            }
+        }
+
+        // ── report ─────────────────────────────────────────────────────────────────────────────────────────────────
+        bool bug1Fixed = p1BlurAbsentFrames == 0;
+        var sb = new StringBuilder(2048);
+        sb.AppendLine();
+        sb.AppendLine("=== WAVEE LYRICS ADVANCE PROBE — synchronous, timer-decoupling-free ===");
+        sb.AppendLine($"track: {TrackLabel(WaveeApp.ProbePlayback)}; lines={lineCount}; advances={Math.Max(0, endLine - startLine + 1)}; settleFrames/advance={settleFrames}");
+        sb.AppendLine();
+        sb.AppendLine("P1 stationary line-advance (the BUG1 scenario):");
+        sb.AppendLine($"  frames={p1Frames}; programmatic-settle frames seen={p1SettleFrames}; DoF-absent frames (contentDirty & !userScroll & zero blur candidates)={p1BlurAbsentFrames}");
+        sb.AppendLine($"  >>> BUG1 {(bug1Fixed ? "FIXED" : "PRESENT")} — lyric DoF was {(bug1Fixed ? "NEVER" : "STILL")} dropped while stationary-advancing (expect a settle edge each advance with lyMode 2->0, lyContentDirty=1, lyUserScroll=0, and a live blur candidate every content frame).");
+        sb.AppendLine();
+        sb.AppendLine("P2 main-scroll sibling isolation:");
+        sb.AppendLine($"  frames={p2Frames}; frames where lyrics were user-scrolling/content-dirty during a MAIN scroll={p2LyricsTouched} (expect 0); frames the stationary lyrics DoF was HELD (served by its pin)={p2LyricsHeld} (expect >0 while the main page moves; 0 = the sibling-defer path is dead)");
+        sb.AppendLine();
+        sb.AppendLine("P3 skip-submit / present (BUG3 mechanism):");
+        string p3rate = p3Frames > 0 ? $"{100.0 * p3Presented / p3Frames:0}%" : "n/a";
+        string p3staticRate = p3Frames > 0 ? $"{100.0 * p3StaticButPresented / p3Frames:0}%" : "n/a";
+        sb.AppendLine($"  frames={p3Frames}; presented={p3Presented} ({p3rate}); STATIC-scene-but-presented={p3StaticButPresented} ({p3staticRate} — these are skip-submit defeats from loop anims); meanAnimMs={(p3Frames > 0 ? p3AnimMs / p3Frames : 0):0.00}; meanFenceWaitMs={(p3Frames > 0 ? p3FenceMs / p3Frames : 0):0.00}");
+        sb.AppendLine();
+        bool wipeGlowIntact = p4WipeMissing == 0 && p4GlowDead == 0;
+        sb.AppendLine("P4 BUG2 voice-transition (remount + wipe/glow integrity):");
+        sb.AppendLine($"  frames={p4Frames}; voice transitions={p4VoiceTransitions}; leaving-line REMOUNTS={p4Remounts} (expect 0); voice-frames missing wipe={p4WipeMissing}; voice-frames dead glow={p4GlowDead}");
+        sb.AppendLine($"  >>> BUG2 remount {(p4Remounts == 0 ? "GONE" : "STILL PRESENT")}; karaoke wipe/glow {(wipeGlowIntact ? "INTACT" : "BROKEN — REGRESSION, revert the LyricLineView restructure")}.");
+        sb.AppendLine();
+        sb.AppendLine("CSV per-frame columns: lyMode/lyPrevMode/lyUserScroll/lyContentDirty (record-time DoF-defer inputs), blurCandidates/blurGroups/blurSuppressed, presented, per-phase timing.");
+
+        string report = sb.ToString();
+        Console.Error.Write(report);
+        if (csvPath is not null) WriteProbeFile(csvPath, csv.ToString(), "lyrics-advance");
+        if (summaryPath is not null) WriteProbeFile(summaryPath, report, "lyrics-advance");
+    }
+
+    static void AppendAdvanceRow(StringBuilder csv, string phase, int line, int frame, string label, FrameStats s, int prevLyMode,
+        FluentGpu.Scene.SceneStore scene, NodeHandle lyricsVp, NodeHandle mainVp, D3D12Device gpu)
+    {
+        var ld = LyricsView.LastFrameDiagnostics;
+        float lyOff = 0f, lyTgt = 0f;
+        if (!lyricsVp.IsNull && scene.IsLive(lyricsVp) && scene.TryGetScroll(lyricsVp, out var lsc)) { lyOff = lsc.OffsetY; lyTgt = lsc.TargetY; }
+        csv.Append(phase).Append(',')
+           .Append(line.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(frame.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(label).Append(',')
+           .Append(ld.NowMs.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(ld.ActiveLine.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(ld.VoiceLine.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(ld.ActiveChanged ? '1' : '0').Append(',')
+           .Append(ld.VoiceChanged ? '1' : '0').Append(',')
+           .Append(s.LyricsScrollMode.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(prevLyMode.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(s.LyricsUserScrollActive ? '1' : '0').Append(',')
+           .Append(s.LyricsContentDirtyAtRecord ? '1' : '0').Append(',')
+           .Append(F(lyOff)).Append(',')
+           .Append(F(lyTgt)).Append(',')
+           .Append(s.BlurCandidateCount.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(s.BlurGroupCount.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(s.BlurSuppressedByScrollCount.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(s.BlurHoldCandidateCount.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(gpu.LastBlurCacheMiss.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(gpu.LastBlurHoldHit.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(gpu.LastBlurHoldFallback.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(F(s.FrameMs)).Append(',')
+           .Append(F(s.RecordMs)).Append(',')
+           .Append(F(s.SubmitMs)).Append(',')
+           .Append(F(s.FenceWaitMs)).Append(',')
+           .Append(F(s.PresentMs)).Append(',')
+           .Append(s.Presented ? '1' : '0').Append(',')
+           .Append(F(s.AnimMs)).Append(',')
+           .Append(s.MainScrollMode.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(s.MainContentDirtyAtRecord ? '1' : '0').Append(',')
+           .Append(CsvCell(TrackLabel(WaveeApp.ProbePlayback))).AppendLine();
+    }
+
+    static int EnvInt(string name, int fallback, int min, int max)
+    {
+        if (!int.TryParse(Environment.GetEnvironmentVariable(name), NumberStyles.Integer, CultureInfo.InvariantCulture, out int v))
+            return fallback;
+        return Math.Clamp(v, min, max);
+    }
+
+    readonly record struct ProbeRoute(string Key, string? Arg, string Label);
+
+    static List<ProbeRoute> BuildLiveLyricsRoutes(PlaybackBridge? b)
+    {
+        var routes = new List<ProbeRoute>(10);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        void Add(string? key, string? arg, string label)
+        {
+            if (string.IsNullOrWhiteSpace(key)) return;
+            string sig = key + "\u001F" + (arg ?? "");
+            if (!seen.Add(sig)) return;
+            routes.Add(new ProbeRoute(key, arg, SafeRouteLabel(label)));
+        }
+
+        var track = b?.CurrentTrack.Peek();
+        Add("home", null, "home");
+        Add("liked", null, "liked");
+        Add(RichText.RouteForUri(b?.CurrentContext.Peek()), null, "current-context");
+        Add(RichText.RouteForUri(track?.Album.Uri), null, "current-album");
+        Add(RichText.RouteForUri(track?.Artists.Count > 0 ? track.Artists[0].Uri : null), null, "current-artist");
+        Add("albums", null, "albums");
+        Add("artists", null, "artists");
+        Add("podcasts", null, "podcasts");
+        Add("search", track?.Artists.Count > 0 ? track.Artists[0].Name : "the", "search");
+        return routes;
+    }
+
+    static string SafeRouteLabel(string label)
+    {
+        var sb = new StringBuilder(label.Length);
+        foreach (char ch in label)
+            sb.Append(char.IsLetterOrDigit(ch) || ch == '-' || ch == '_' ? ch : '-');
+        return sb.Length == 0 ? "route" : sb.ToString();
+    }
+
+    static string TrackLabel(PlaybackBridge? b)
+    {
+        var t = b?.CurrentTrack.Peek();
+        if (t is null) return "(none)";
+        string artist = t.Artists.Count > 0 ? t.Artists[0].Name : "";
+        return artist.Length > 0 ? $"{t.Title} - {artist} [{t.Uri}]" : $"{t.Title} [{t.Uri}]";
+    }
+
+    static string CsvCell(string text) => "\"" + text.Replace("\"", "\"\"") + "\"";
+
+    static string F(double v) => v.ToString("0.###", CultureInfo.InvariantCulture);
+
+    static void AppendLiveLyricsRow(StringBuilder csv, string phase, int frame, string label, double intervalMs, FrameStats s,
+        int gen0, int gen1, FluentGpu.Scene.SceneStore scene, NodeHandle main, NodeHandle lyrics, PlaybackBridge? b, D3D12Device gpu)
+    {
+        var ld = LyricsView.LastFrameDiagnostics;
+        csv.Append(phase).Append(',')
+           .Append(frame.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(label).Append(',')
+           .Append(F(intervalMs)).Append(',')
+           .Append(F(s.FrameMs)).Append(',')
+           .Append(F(s.FlushMs)).Append(',')
+           .Append(F(s.LayoutMs)).Append(',')
+           .Append(F(s.AnimMs)).Append(',')
+           .Append(F(s.RecordMs)).Append(',')
+           .Append(F(s.SubmitMs)).Append(',')
+           .Append(F(s.FenceWaitMs)).Append(',')
+           .Append(F(s.PresentMs)).Append(',')
+           .Append(gen0.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(gen1.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(s.ComponentsRendered.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(s.NodesVisited.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(s.DrawCommandCount.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(s.BlurCandidateCount.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(s.BlurGroupCount.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(s.BlurSuppressedByScrollCount.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(s.BlurHoldCandidateCount.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(s.EdgeFadeGroupCount.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(gpu.LastBlurCacheHit.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(gpu.LastBlurCacheMiss.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(gpu.LastBlurHoldHit.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(gpu.LastBlurHoldFallback.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(gpu.LastOpacityGroups.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(ld.NowMs.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(ld.AuthMs.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(ld.ActiveLine.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(ld.VoiceLine.ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append(ld.ActiveChanged ? '1' : '0').Append(',')
+           .Append(ld.ScrollSnapped ? '1' : '0').Append(',')
+           .Append((b?.PositionMs.Peek() ?? 0).ToString(CultureInfo.InvariantCulture)).Append(',')
+           .Append((b?.IsPlaying.Peek() ?? false) ? '1' : '0');
+        AppendScrollCells(csv, scene, main);
+        AppendScrollCells(csv, scene, lyrics);
+        csv.Append(',').Append(CsvCell(TrackLabel(b))).AppendLine();
+    }
+
+    static void AppendScrollCells(StringBuilder csv, FluentGpu.Scene.SceneStore scene, NodeHandle node)
+    {
+        if (node.IsNull || !scene.IsLive(node) || !scene.HasScroll(node) || !scene.TryGetScroll(node, out var sc))
+        {
+            csv.Append(",,,,");
+            return;
+        }
+        int transformDirty = 0;
+        if (!sc.ContentNode.IsNull && scene.IsLive(sc.ContentNode) && (scene.Flags(sc.ContentNode) & NodeFlags.TransformDirty) != 0)
+            transformDirty = 1;
+        csv.Append(',').Append(F(sc.OffsetY))
+           .Append(',').Append(F(sc.TargetY))
+           .Append(',').Append(sc.Phase.ToString(CultureInfo.InvariantCulture))
+           .Append(',').Append(transformDirty.ToString(CultureInfo.InvariantCulture));
+    }
+
+    static void AppendIntervalSummary(StringBuilder sb, string label, List<double> intervals)
+    {
+        if (intervals.Count == 0)
+        {
+            sb.AppendLine($"{label}: no frames");
+            return;
+        }
+        var a = intervals.ToArray();
+        Array.Sort(a);
+        double total = 0, worst = 0;
+        int over16 = 0, over33 = 0;
+        foreach (double v in intervals)
+        {
+            total += v;
+            if (v > worst) worst = v;
+            if (v > 16.7) over16++;
+            if (v > 33.3) over33++;
+        }
+        double mean = total / intervals.Count;
+        sb.AppendLine($"{label}: n={intervals.Count} mean={mean:0.0}ms ({(mean > 0 ? 1000.0 / mean : 0):0}fps) p50={Pct(a, 50):0.0} p90={Pct(a, 90):0.0} p99={Pct(a, 99):0.0} worst={worst:0.0}ms >16.7={over16} >33.3={over33}");
+    }
+
+    static NodeHandle FindMainScrollViewport(FluentGpu.Scene.SceneStore scene, NodeHandle lyrics)
+    {
+        var best = default(NodeHandle);
+        float bestScore = -1f;
+        RectF lyricsRect = default;
+        if (!lyrics.IsNull && scene.IsLive(lyrics)) lyricsRect = scene.AbsoluteRect(lyrics);
+        float rootW = scene.Root.IsNull ? 0f : scene.AbsoluteRect(scene.Root).W;
+
+        var stack = new Stack<NodeHandle>();
+        if (!scene.Root.IsNull) stack.Push(scene.Root);
+        while (stack.Count > 0)
+        {
+            var n = stack.Pop();
+            if (n.IsNull || !scene.IsLive(n)) continue;
+            if (n != lyrics && scene.HasScroll(n) && scene.TryGetScroll(n, out var sc) && sc.ViewportH > 50f && sc.ContentH > sc.ViewportH + 1f)
+            {
+                var r = scene.AbsoluteRect(n);
+                if (!lyrics.IsNull && lyricsRect.W > 0f && r.X >= lyricsRect.X - 4f)
+                {
+                    for (var c = scene.FirstChild(n); !c.IsNull; c = scene.NextSibling(c)) stack.Push(c);
+                    continue;
+                }
+                if (rootW > 0f && r.X > rootW * 0.72f)
+                {
+                    for (var c = scene.FirstChild(n); !c.IsNull; c = scene.NextSibling(c)) stack.Push(c);
+                    continue;
+                }
+                float w = sc.ViewportW > 20f ? sc.ViewportW : r.W;
+                float h = sc.ViewportH > 20f ? sc.ViewportH : r.H;
+                float score = w * h + MathF.Min(sc.ContentH - sc.ViewportH, 5000f);
+                if (score > bestScore) { bestScore = score; best = n; }
+            }
+            for (var c = scene.FirstChild(n); !c.IsNull; c = scene.NextSibling(c)) stack.Push(c);
+        }
+        return best;
+    }
+
     static string? ProbeOutputDir()
     {
         string? dir = Environment.GetEnvironmentVariable("WAVEE_PROBE_OUT");
@@ -530,6 +1262,116 @@ internal static class WaveeNavProbe
         catch (Exception ex)
         {
             Console.Error.WriteLine($"[{tag}] failed to write {path}: {ex.Message}");
+        }
+    }
+
+    // WAVEE_LYRICS_PROBE=1 (run with WAVEE_LYRICS_OPEN=1 to open the rail and --fake for the 40-line synced doc): measure
+    // the lyrics surface, which renders ~10-13 per-line depth-of-field self-blur layers every frame. Reports the perceived
+    // FPS at REAL vsync (GPU stalls included) AND the vsync-suppressed CPU work breakdown (flush/layout/anim/record/submit)
+    // + the rendered-frame count (the idle-spin signal), for an IDLE (paused) hold and a wheel SCROLL through the lines.
+    static void RunLyricsProbe(AppHost host, Win32Window window, D3D12Device gpu)
+    {
+        void FrameFree() { if (!window.IsClosed) { gpu.SuppressLatencyWaitOnce(); gpu.SuppressVsyncOnce(); host.RunFrame(); } }
+        void Settle(int n) { for (int i = 0; i < n && !window.IsClosed; i++) FrameFree(); }
+
+        // Optional resolution stress (WAVEE_PROBE_W/H): the layered-path submit + blit scale with the canvas pixel area,
+        // so a high-DPI / large window is where the lyrics blur actually drops frames — reproduce it here.
+        int pw = int.TryParse(Environment.GetEnvironmentVariable("WAVEE_PROBE_W"), out var w0) ? w0 : 0;
+        int ph = int.TryParse(Environment.GetEnvironmentVariable("WAVEE_PROBE_H"), out var h0) ? h0 : 0;
+        if (pw > 200 && ph > 200) { window.SetClientSize(pw, ph); Console.Error.WriteLine($"[lyrics-probe] window -> {pw}x{ph}"); }
+
+        Console.Error.WriteLine("[lyrics-probe] warmup (rail opens via WAVEE_LYRICS_OPEN; lyrics doc loads)");
+        Settle(60);
+        System.Threading.Thread.Sleep(500);     // FakeData.GetLyricsAsync Task.Delay(150) + paint settle
+        Settle(80);
+        GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
+
+        var vp = FindLyricsViewport(host.Scene);
+        if (vp.IsNull)
+        {
+            Console.Error.WriteLine("[lyrics-probe] NO lyrics viewport found (rail not open / no current track / doc empty). Scrollers seen:");
+            DumpScrollers(host.Scene);
+            return;
+        }
+        var vr = host.Scene.AbsoluteRect(vp);
+        host.Scene.TryGetScroll(vp, out var s0);
+        Console.Error.WriteLine($"[lyrics-probe] lyrics viewport rect=({vr.X:0},{vr.Y:0} {vr.W:0}x{vr.H:0}) content={s0.ContentH:0} viewH={s0.ViewportH:0}");
+
+        MeasureLyrics("IDLE  ", host, window, gpu, null);
+
+        float vh = s0.ViewportH > 20f ? s0.ViewportH : vr.H;
+        var pos = new Point2(vr.X + vr.W * 0.5f, vr.Y + vh * 0.5f);
+        window.QueueInput(new InputEvent(InputKind.PointerMove, pos, 0, 0));
+        Settle(2);
+        MeasureLyrics("SCROLL", host, window, gpu, i => window.QueueInput(new InputEvent(InputKind.Wheel, pos, 0, 0, ((i / 18) & 1) == 0 ? +50f : -50f)));
+
+        Console.Error.WriteLine("[lyrics-probe] done");
+    }
+
+    static void MeasureLyrics(string tag, AppHost host, Win32Window window, D3D12Device gpu, Action<int>? inject)
+    {
+        // (1) perceived FPS at TRUE vsync cadence (present waits for the vblank → a GPU-bound frame stretches the interval).
+        var iv = new List<double>(260);
+        long prev = Stopwatch.GetTimestamp();
+        for (int i = 0; i < 220 && !window.IsClosed; i++)
+        {
+            inject?.Invoke(i);
+            host.RunFrame();
+            long now = Stopwatch.GetTimestamp();
+            iv.Add((now - prev) * 1000.0 / Stopwatch.Frequency); prev = now;
+        }
+        var a = iv.ToArray(); double tot = 0, worst = 0; foreach (var v in a) { tot += v; if (v > worst) worst = v; }
+        double mean = a.Length > 0 ? tot / a.Length : 0; int o16 = 0, o33 = 0; foreach (var v in a) { if (v > 16.7) o16++; if (v > 33.3) o33++; }
+
+        // (2) vsync-suppressed CPU work breakdown + rendered-frame count (IDLE should render ~0 — a spin renders ~all).
+        double sFrame = 0, sFlush = 0, sLayout = 0, sAnim = 0, sRecord = 0, sSubmit = 0, wWorst = 0;
+        int rendered = 0, total = 0, g0 = GC.CollectionCount(0); long alloc0 = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 160 && !window.IsClosed; i++)
+        {
+            inject?.Invoke(i);
+            gpu.SuppressLatencyWaitOnce(); gpu.SuppressVsyncOnce();
+            var s = host.RunFrame();
+            total++;
+            if (s.Rendered || s.DrawCommandCount > 0)
+            {
+                rendered++;
+                sFrame += s.FrameMs; sFlush += s.FlushMs; sLayout += s.LayoutMs; sAnim += s.AnimMs; sRecord += s.RecordMs; sSubmit += s.SubmitMs;
+                if (s.FrameMs > wWorst) wWorst = s.FrameMs;
+            }
+        }
+        int dg0 = GC.CollectionCount(0) - g0;
+        int den = Math.Max(1, rendered);
+        double allocKb = (GC.GetAllocatedBytesForCurrentThread() - alloc0) / 1024.0 / den;
+        Console.Error.WriteLine($"[lyrics-fps] {tag} perceived(vsync): {a.Length}f mean {mean:0.0}ms ({(mean > 0 ? 1000.0 / mean : 0):0}fps) worst {worst:0.0}ms | <60fps={o16} <30fps={o33}");
+        Console.Error.WriteLine($"             work(no-vsync): rendered {rendered}/{total} | frame {sFrame / den:0.00}ms (worst {wWorst:0.00}) = flush {sFlush / den:0.00} + layout {sLayout / den:0.00} + anim {sAnim / den:0.00} + record {sRecord / den:0.00} + submit {sSubmit / den:0.00} | alloc {allocKb:0.0}KB/f gen0={dg0}");
+    }
+
+    static NodeHandle FindLyricsViewport(FluentGpu.Scene.SceneStore scene)
+    {
+        var best = default(NodeHandle); float bestX = -1f;
+        var stack = new Stack<NodeHandle>(); if (!scene.Root.IsNull) stack.Push(scene.Root);
+        while (stack.Count > 0)
+        {
+            var n = stack.Pop(); if (n.IsNull || !scene.IsLive(n)) continue;
+            if (scene.HasScroll(n) && scene.TryGetScroll(n, out var sc) && sc.ViewportH > 50f && sc.ContentH > sc.ViewportH + 1f)
+            {
+                var r = scene.AbsoluteRect(n);
+                if (r.X > bestX) { bestX = r.X; best = n; }   // rightmost content scroller = the lyrics rail (right side)
+            }
+            for (var c = scene.FirstChild(n); !c.IsNull; c = scene.NextSibling(c)) stack.Push(c);
+        }
+        return best;
+    }
+
+    static void DumpScrollers(FluentGpu.Scene.SceneStore scene)
+    {
+        var stack = new Stack<NodeHandle>(); if (!scene.Root.IsNull) stack.Push(scene.Root);
+        while (stack.Count > 0)
+        {
+            var n = stack.Pop(); if (n.IsNull || !scene.IsLive(n)) continue;
+            if (scene.HasScroll(n) && scene.TryGetScroll(n, out var sc))
+            { var r = scene.AbsoluteRect(n); Console.Error.WriteLine($"  scroller rect=({r.X:0},{r.Y:0} {r.W:0}x{r.H:0}) viewH={sc.ViewportH:0} contentH={sc.ContentH:0}"); }
+            for (var c = scene.FirstChild(n); !c.IsNull; c = scene.NextSibling(c)) stack.Push(c);
         }
     }
 
@@ -612,6 +1454,41 @@ internal static class WaveeNavProbe
             }
         }
 
+        // ── Phase 0b: ALBUM → ALBUM (the reported related-albums hitch). Two sub-phases over DISTINCT heavy album pages
+        //    (cover + tracks + related/similar/merch trailing shelves): SKELETON = today's bare related-card nav (no preview
+        //    → DetailPage.Skel.Region full-page remount on every hop); PREVIEW = the fix (a related card now opens via
+        //    DetailNav.OpenAlbum, stashing the card's partial model → DetailPage reuses the mounted shell in place). Same
+        //    routes, same settle frames, started from album land (a reused detail slot) — so the delta IS the remount the
+        //    fix removes. Distinct album indices per sub-phase so the second isn't warmed by the first's data/image cache. ──
+        var albumSkel = new Phase("album skel");
+        var albumPrev = new Phase("album preview");
+        if (WaveeShell.ProbeOpenAlbum is not null)
+        {
+            const int AlbumSettle = 12;
+            var skelAlbums = new List<Wavee.Core.Album>(8);
+            var prevAlbums = new List<Wavee.Core.Album>(8);
+            for (int i = 0; i < 8; i++) { skelAlbums.Add(Wavee.Core.FakeData.Album(120 + i)); prevAlbums.Add(Wavee.Core.FakeData.Album(140 + i)); }
+            Console.Error.WriteLine("[wavee-nav-probe] album→album (skeleton vs preview, 8 hops each)");
+
+            // OLD path: enter album land, then hop album→album via BARE nav (no preview) — skeleton remount each hop.
+            Nav("home", null); Settle(10);
+            Nav("album:" + skelAlbums[0].Uri, skelAlbums[0].Name); Settle(AlbumSettle);
+            for (int i = 1; i < skelAlbums.Count && !window.IsClosed; i++)
+            {
+                Nav("album:" + skelAlbums[i].Uri, skelAlbums[i].Name);   // bare GoNav — no preview → Skel.Region remount
+                for (int f = 0; f < AlbumSettle && !window.IsClosed; f++) Measure(albumSkel, skelAlbums[i].Uri);
+            }
+
+            // FIXED path: same shape, but each hop opens via DetailNav.OpenAlbum (stash preview + nav) — reused-shell fast path.
+            Nav("home", null); Settle(10);
+            WaveeShell.ProbeOpenAlbum(prevAlbums[0]); Settle(AlbumSettle);
+            for (int i = 1; i < prevAlbums.Count && !window.IsClosed; i++)
+            {
+                WaveeShell.ProbeOpenAlbum(prevAlbums[i]);                // the fixed related-card path
+                for (int f = 0; f < AlbumSettle && !window.IsClosed; f++) Measure(albumPrev, prevAlbums[i].Uri);
+            }
+        }
+
         // ── Phase 1: NAV-SETTLE across all route types (2 sweeps). ──
         var navSettle = new Phase("nav-settle");
         const int SettleFrames = 14;
@@ -651,7 +1528,7 @@ internal static class WaveeNavProbe
         // ── Phase 4: SCROLL via REAL mouse-wheel INPUT. NOT WriteScrollOffset (that bypasses input): here every notch is an
         //    InputKind.Wheel event injected through window.QueueInput → PumpInto → the dispatcher ring → DispatchWheel/ScrollAt
         //    (hit-test the cursor pos, route to the nearest VERTICAL scroller), and SmoothScroll eases each +60 DIP notch via
-        //    the ScrollAnimator (inertia). So this measures the full real path a mouse drives: hit-test + wheel routing + the
+        //    the ScrollIntegrator (inertia). So this measures the full real path a mouse drives: hit-test + wheel routing + the
         //    eased per-frame re-layout / virtualization re-realize / re-record, including the inertial COAST after a flick. ──
         var scroll = new Phase("scroll (real wheel)");
         if (Diag.EnvFlag("WAVEE_LIKED_SHOT")) { window.SetClientSize(1456, 820); Settle(12); Nav("liked", null); Settle(50); var px0 = gpu.CaptureBgra(out int cw0, out int ch0); PngWriter.WriteBgra(@"C:\tmp\liked_header.png", px0, cw0, ch0); }
@@ -684,7 +1561,7 @@ internal static class WaveeNavProbe
                 window.QueueInput(new InputEvent(InputKind.Wheel, pos, 0, 0, i < 100 ? +60f : -60f));
                 Measure(scroll, i < 100 ? "wheel-down" : "wheel-up");
             }
-            // Flick-and-coast: a 6-notch burst, then STOP — the ScrollAnimator eases the residual to rest. These COAST frames
+            // Flick-and-coast: a 6-notch burst, then STOP — the ScrollIntegrator eases the residual to rest. These COAST frames
             // are exactly what a programmatic offset-set can never see (it lands instantly); a real flick animates for ~15 frames.
             for (int rep = 0; rep < 6 && !window.IsClosed; rep++)
             {
@@ -794,7 +1671,7 @@ internal static class WaveeNavProbe
         }
 
         // ── Report ──
-        var phases = new[] { idle, scroll, backfwd, connNo, connFly, homeDetail, navSettle, hammer, theme };
+        var phases = new[] { idle, scroll, backfwd, connNo, connFly, albumSkel, albumPrev, homeDetail, navSettle, hammer, theme };
         var all = new Phase("ALL");
         foreach (var p in phases) { all.Ms.AddRange(p.Ms); all.OverBudget += p.OverBudget; all.OverBudgetGc += p.OverBudgetGc; }
 

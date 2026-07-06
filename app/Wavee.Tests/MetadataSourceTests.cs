@@ -26,6 +26,7 @@ public class ExtendedMetadataSourceTests
         var track = new Pb.Track { Gid = Gid(0x11), Name = name, Duration = durationMs, Explicit = isExplicit };
         track.Artist.Add(new Pb.Artist { Gid = Gid(0xAA), Name = "Artist One" });
         track.Album = new Pb.Album { Gid = Gid(0xBB), Name = "Album One" };
+        track.ExternalId.Add(new Pb.ExternalId { Type = "isrc", Id = "USRC17607839" });   // field 10 → projected Track.Isrc
         if (includeAlbumCover)
         {
             track.Album.CoverGroup = new Pb.ImageGroup();
@@ -59,6 +60,15 @@ public class ExtendedMetadataSourceTests
         Assert.StartsWith("spotify:artist:", t.Artists[0].Uri);
         Assert.Equal("Album One", t.Album.Name);
         Assert.StartsWith("spotify:track:", t.Uri);
+    }
+
+    [Fact]
+    public void ProjectResponse_ExtractsIsrc_FromExternalId()
+    {
+        var store = new InMemoryStore();
+        ExtendedMetadataSource.ProjectResponse(CraftTrackResponse("Real Song", 234000, true), store);
+        // The LeanTrack parser now reads Track.external_id (field 10) instead of discarding it.
+        Assert.Equal("USRC17607839", Assert.Single(store.QueryTracks()).Isrc);
     }
 
     [Fact]

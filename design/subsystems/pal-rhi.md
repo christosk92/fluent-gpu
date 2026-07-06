@@ -168,7 +168,9 @@ re-raises its own `AppHost.ActivationRedirected` to app code at the top of `Pain
   pump responsive). On the render-thread split the UI thread waits only on input + the snapshot-consume
   signal; the latency waitable migrates to the render thread's present loop.
 - **Modal loops:** during `WM_ENTERSIZEMOVE` the OS owns the pump; we render via a `WM_TIMER`/`WM_PAINT`
-  tick. `WM_EXITSIZEMOVE` triggers the real resize (§5.3).
+  tick. Keep-alive paints skip redundant frames when only ambient animation is awake, but still run when
+  essential work is pending (layout, warming virtual lists, decode, drag dwell). `WM_EXITSIZEMOVE` triggers
+  the real resize (§5.3).
 - **Flat C exports:** `[LibraryImport]` for `D3D12CreateDevice`, `CreateDXGIFactory2`,
   `DCompositionCreateDevice`, `DWriteCreateFactory`, `RegisterClassExW`, `CreateWindowExW`,
   `SetProcessDpiAwarenessContext`, `GetDpiForWindow` (blittable `nint`/`Guid*`/`void**` no-marshal

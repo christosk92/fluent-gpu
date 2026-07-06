@@ -23,7 +23,8 @@ public sealed record PlaylistOp(
     int ToIndex = 0,                            // MOV destination (post-removal index)
     bool AddFirst = false,                      // ADD at head
     bool AddLast = false,                       // ADD at tail
-    IReadOnlyList<PlaylistMember>? Items = null);   // ADD payload / UPDATE_ITEM attribute carrier
+    IReadOnlyList<PlaylistMember>? Items = null,    // ADD payload / UPDATE_ITEM attribute carrier / keyed-REM uris
+    bool ItemsAsKey = false);                   // REM by Items' uris instead of index (order-independent — the rootlist unfollow shape)
 
 public static class PlaylistDiffApplier
 {
@@ -56,6 +57,16 @@ public static class PlaylistDiffApplier
 
     static void ApplyRemove(List<PlaylistMember> list, PlaylistOp op)
     {
+        // Keyed REM (items_as_key): remove the first matching row per item by uri, absent = no-op. Built for the outbound
+        // rootlist-unfollow wire body; handled here too so the applier stays total if a keyed REM ever arrives in a diff.
+        if (op.ItemsAsKey)
+        {
+            if (op.Items is not { } keys) return;
+            for (int k = 0; k < keys.Count; k++)
+                for (int i = 0; i < list.Count; i++)
+                    if (list[i].ItemUri == keys[k].ItemUri) { list.RemoveAt(i); break; }
+            return;
+        }
         if (op.FromIndex < 0 || op.Length < 0 || op.FromIndex + op.Length > list.Count)
             throw new ArgumentOutOfRangeException(nameof(op), $"REM [{op.FromIndex},+{op.Length}] out of range (count {list.Count})");
         list.RemoveRange(op.FromIndex, op.Length);

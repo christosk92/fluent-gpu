@@ -21,8 +21,15 @@ readonly record struct DetailHandlers(
     // List-view controls surfaced by the chrome / header toolbar (search query, quick-filter flags, row density).
     Signal<string> Query, IReadSignal<TrackFilterFlags> Flags, Action<TrackFilterFlags> SetFlags,
     IReadSignal<int> Density, Action<int> SetDensity,
-    // Playlist/queue mutations for THIS context (add the context's tracks to the queue / a user playlist).
-    Action AddToQueue, Action AddToPlaylist);
+    // Playlist/queue mutations for THIS context (insert next / append to the queue / add to a user playlist).
+    Action PlayNext, Action AddToQueue, Action AddToPlaylist,
+    // Open a related album / "Featured on" playlist card. Unlike Go (a bare route flip), these stash the card's partial
+    // model first so the destination takes DetailPage's in-place fast path instead of a full skeleton remount. See DetailNav.
+    Action<Album> OpenAlbum, Action<PlaylistSummary> OpenPlaylist,
+    // A 1-element cell the TrackList fills with "play the VISIBLE (sorted/filtered) order from the top"; the rail's big
+    // Play late-binds through it (null until the list mounts → falls back to Play(0)). Optional so other constructions
+    // (LibraryPage) compile unchanged.
+    Action?[]? PlayAllOverride = null);
 
 // The two-column detail scaffold (mounted only once data is Ready, so its lifecycle = the loaded page's lifecycle).
 // Owns: the art-derived backdrop wash + accent, the page-scoped Mica tint (set/cleared through the activation
@@ -41,6 +48,12 @@ sealed class DetailShell : Component
     DetailConfig _cfg = DetailConfig.Album;   // derived from route kind + loaded ReleaseKind each render (reused slot re-derives)
     readonly object _tintOwner = new();   // identity for race-free last-writer-wins on ShellTint (see ShellTintState)
     readonly Signal<int> _mode = new(0);  // adaptive layout mode (0 widest), written by OnBoundsChanged
+    float _measuredW;                     // last measured page width — replayed once when the rail layout-lock clears (Task C)
+    bool _modeInitialized;                // first measurement uses the nominal breakpoints; later vertical crosses hysteresis
+    string? _listReadyRoute;              // route whose Ready track list has already been shown at least once
+    bool _readyListShownForRoute;
+    bool _staggerFirstReadyMount = true;  // read by TrackList through a delegate so reused instances see the latest route state
+    readonly Signal<bool> _verticalHeaderPinned = new(false);   // vertical detail header scrolled past the top -> compact pill
     readonly Signal<TrackSort> _sort = new(TrackSort.Default);   // track-list sort, persisted per context (loaded per route)
     readonly Signal<string> _query = new("");                    // filter search query (transient — clears on navigation)
     readonly Signal<TrackFilterFlags> _filterFlags = new(TrackFilterFlags.None);   // quick-filter toggles (transient)
@@ -50,16 +63,31 @@ sealed class DetailShell : Component
     { _route = route; _model = model; _fallbackCover = fallbackCover; }
 
     // Per-context persisted-sort keys (each album/playlist remembers its own sort). Keyed by the context uri so two
-    // different lists never share a sort; falls back to the kind when a context has no uri.
-    SettingKey<int> SortColKey() => new("detail.sort.col:" + (_ctxUri ?? _cfg.RailWidth.ToString()), 0);
+    // different lists never share a sort; falls back to the kind when a context has no uri. The column default is a −1
+    // "never chosen" sentinel so the fallback can be PER-KIND: playlists/albums open in custom (context) order, Liked
+    // Songs opens added-date-newest-first (the Spotify collection default). An explicit user choice persists ≥ 0.
+    SettingKey<int> SortColKey() => new("detail.sort.col:" + (_ctxUri ?? _cfg.RailWidth.ToString()), -1);
     SettingKey<bool> SortDescKey() => new("detail.sort.desc:" + (_ctxUri ?? _cfg.RailWidth.ToString()), false);
+    TrackSort _defaultSort = TrackSort.Default;   // per-kind fallback, derived each render (DateAdded desc for Liked)
 
     // Adaptive layout by the page's own width: 0 Wide (full rail) · 1 Mid (rail 224) · 2 Narrow (rail 188, still
     // two-column) · 3 Vertical (rail collapses to a top header, list below). Sized so the right track area keeps a
     // usable width before the vertical switch.
     const int Vertical = 3;
-    static int ModeFor(float w) => w <= 0f ? 0 : w >= 820f ? 0 : w >= 660f ? 1 : w >= 560f ? 2 : Vertical;
+    const float VerticalEnterW = 540f;
+    const float VerticalExitW = 580f;
+    static int NominalModeFor(float w) => w <= 0f ? 0 : w >= 820f ? 0 : w >= 660f ? 1 : w >= 560f ? 2 : Vertical;
+    static int ModeFor(float w, int currentMode, bool initialized)
+    {
+        if (w <= 0f) return currentMode;
+        if (!initialized) return NominalModeFor(w);
+        if (currentMode == Vertical) return w >= VerticalExitW ? NominalModeFor(w) : Vertical;
+        if (w < VerticalEnterW) return Vertical;
+        int nominal = NominalModeFor(w);
+        return nominal == Vertical ? 2 : nominal;
+    }
     static float RailW(int mode, DetailConfig cfg) => mode switch { 0 => cfg.RailWidth, 1 => 224f, _ => 188f };
+    bool StaggerFirstReadyMount() => _staggerFirstReadyMount;
 
     public override Element Render()
     {
@@ -68,14 +96,26 @@ sealed class DetailShell : Component
         var libBridge = UseContext(LibraryBridge.Slot);
         var go = UseContext(HistoryStore.NavCtx);
         var shellTint = UseContext(ShellTint.Slot);
+        var navPreview = UseContext(NavPreviewStore.Slot);   // in-app card nav stashes a preview → destination reconciles in place
+        var morph = UseContext(SharedTransition.Begin);      // connected-animation cover fly, same as a Home card
+        var shellUi = UseContext(ShellUi.Slot);              // rail layout-defer lock (Task C): gate mode churn during a rail reflow
+        bool railLocked = shellUi?.RailLayoutLocked.Value ?? false;   // subscribe → flush the settled mode when the lock clears
 
         var route = _route.Value;                      // subscribe → re-derive kind/cfg/morphKey on a detail-route swap (reused slot)
         var (kind, id) = DetailPage.ParseDetail(route);
         string? morphKey = MorphKeys.For(kind, id);
+        if (_listReadyRoute != route.Name)
+        {
+            _listReadyRoute = route.Name;
+            _readyListShownForRoute = false;
+        }
 
         var raw = _model.Value.Value;                  // subscribe → re-render preview→full (header updates in place)
         _cfg = DetailPage.ResolveConfig(kind, raw);    // release-kind-dependent (album→single); a reused slot re-derives it
         _ctxUri = raw.ContextUri;                      // the per-context sort key, refreshed as the model loads
+        _defaultSort = kind == DetailKind.Liked ? new TrackSort(SortColumn.DateAdded, Descending: true) : TrackSort.Default;
+        _staggerFirstReadyMount = !_readyListShownForRoute;
+        if (_model.IsReady) _readyListShownForRoute = true;
         // Keep the flown-in cover if the loaded model resolved a null one — a fly must land on real art, never a bare
         // placeholder (defensive: the fake catalog is already consistent for a uri; a real backend may not be).
         var m = raw with { MorphKey = morphKey, Cover = raw.Cover ?? _fallbackCover };
@@ -118,7 +158,7 @@ sealed class DetailShell : Component
             ? accent
             : WaveePalette.BackgroundDark(art ?? WaveePalette.Neutral);
         // The Mica scrim colour: the art's tinted-dark tone at a low alpha so Mica keeps reading as Mica (≈0.14). Null
-        // when there is no real palette ⇒ plain Mica. Liked (single-column) never tints.
+        // when there is no real palette ⇒ plain Mica.
         ColorF? micaTint = (art is null || !_cfg.TwoColumn) ? null : (WaveePalette.TintedDark(art) with { A = 0.14f });
 
         // ── page-scoped Mica tint via the activation lifecycle (reconciler-hooks §0bis) ──
@@ -147,9 +187,12 @@ sealed class DetailShell : Component
         // Add-to-queue / add-to-playlist act on THIS context's tracks (capped batch); each confirms with a toast.
         void AddToQueue()
         {
-            if (svc is null) return;
-            int n = Math.Min(m.Tracks.Count, 50);
-            for (int i = 0; i < n; i++) _ = svc.Player.EnqueueAsync(m.Tracks[i].Uri);
+            int n = DetailQueueActions.AddToEnd(svc?.Player, m.Tracks);
+            if (n > 0) Toasts.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), ToastSeverity.Success);
+        }
+        void PlayNext()
+        {
+            int n = DetailQueueActions.PlayNext(svc?.Player, m.Tracks);
             if (n > 0) Toasts.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), ToastSeverity.Success);
         }
         void AddToPlaylist()
@@ -168,8 +211,9 @@ sealed class DetailShell : Component
             // clear the transient search/quick-filters so they never bleed across pages.
             _query.Value = "";
             _filterFlags.Value = TrackFilterFlags.None;
-            if (settings is null) { _sort.Value = TrackSort.Default; return; }
-            _sort.Value = new TrackSort((SortColumn)settings.Get(SortColKey()), settings.Get(SortDescKey()));
+            if (settings is null) { _sort.Value = _defaultSort; return; }
+            int col = settings.Get(SortColKey());   // −1 sentinel = never chosen → the per-kind default (Liked: DateAdded desc)
+            _sort.Value = col < 0 ? _defaultSort : new TrackSort((SortColumn)col, settings.Get(SortDescKey()));
             _density.Value = settings.Get(WaveeSettings.RowDensity);
         }, _ctxUri ?? "");
         void SetSort(TrackSort s)
@@ -181,41 +225,130 @@ sealed class DetailShell : Component
         void SetDensity(int d) { _density.Value = d; settings?.Set(WaveeSettings.RowDensity, d); }   // app-wide
 
         // SetSort / SetDensity are hoisted local functions; the rail + chrome toolbars read all list-view controls off here.
-        var handlers = new DetailHandlers(Play, () => Play(0), Shuffle, PlayContext, go, accent, _sort, SetSort,
-            _query, _filterFlags, f => _filterFlags.Value = f, _density, SetDensity, AddToQueue, AddToPlaylist);
+        var playAllOverride = new Action?[1];   // TrackList fills [0] with the visible-order play; the rail's Play late-binds through it
+        var handlers = new DetailHandlers(Play, () => { var ov = playAllOverride[0]; if (ov is not null) ov(); else Play(0); },
+            Shuffle, PlayContext, go, accent, _sort, SetSort,
+            _query, _filterFlags, f => _filterFlags.Value = f, _density, SetDensity, PlayNext, AddToQueue, AddToPlaylist,
+            a => DetailNav.OpenAlbum(navPreview, morph, go, a),
+            p => DetailNav.OpenPlaylist(navPreview, morph, go, p),
+            playAllOverride);
 
         // Viewport-size context signal — resolved UNCONDITIONALLY here (rules of hooks): the positional-hook cursor must
         // see the SAME hook sequence on every render, but the branches below differ (single-column / vertical / two-column),
         // and only the two-column path needs the window height. Reading `.Value` (the subscription) is deferred to that
         // branch so single-column / vertical pages don't take a needless re-render on every resize.
         var viewportSig = UseContextSignal(Viewport.Size);
+        UseEffect(() => _verticalHeaderPinned.Value = false, route.Name);
 
-        // Single-column (liked): just the track table, full width, no rail / no wash (its toolbar stays in the chrome).
+        // Task C flush: when the rail layout-lock clears, apply the SETTLED mode once from the last measured width (the
+        // intermediate reflow widths were skipped in Measure while locked). Keyed on railLocked so it fires on the
+        // false-edge only; the write converges (dep is the bool, unchanged by writing _mode). Unconditional + placed
+        // BEFORE the single-column early return so the hook order stays stable across the layout branches.
+        UseLayoutEffect(() =>
+        {
+            if (!railLocked && _measuredW > 0f)
+            {
+                int md = ModeFor(_measuredW, _mode.Peek(), _modeInitialized);
+                _modeInitialized = true;
+                if (md != _mode.Peek()) _mode.Value = md;
+            }
+        }, railLocked);
+
+        // Single-column fallback: just the track table, full width, no rail / no wash.
         if (!_cfg.TwoColumn)
-            return Embed.Comp(() => new TrackList(_route, _model, bridge, handlers));
+            return Embed.Comp(() => new TrackList(_route, _model, bridge, handlers, staggerFirstReadyMount: StaggerFirstReadyMount));
 
         // Adaptive two-column / vertical: measure the page width → mode. Value-gated → re-render only on a breakpoint cross.
-        void Measure(RectF r) { if (r.W > 0f) { int md = ModeFor(r.W); if (md != _mode.Peek()) _mode.Value = md; } }
+        void Measure(RectF r)
+        {
+            if (r.W <= 0f) return;
+            _measuredW = r.W;
+            if (shellUi?.RailLockActive == true) return;
+            int md = ModeFor(r.W, _mode.Peek(), _modeInitialized);
+            _modeInitialized = true;
+            if (md != _mode.Peek()) _mode.Value = md;
+        }
         int mode = _mode.Value;   // subscribe → re-render on mode change
+        // Self-heal (fail-safe #2, mirroring TrackList's tier clamp): never RENDER a mode wider than the last measured
+        // width supports — a stale mode signal (stuck rail lock / lost flush) would keep the two-column layout at a
+        // width where its rail + tracks cannot coexist. Narrower-than-needed is fine; the next Measure widens it.
+        if (_measuredW > 0f && shellUi?.RailLockActive != true) { int fit = ModeFor(_measuredW, mode, _modeInitialized); if (fit > mode) mode = fit; }
+        bool verticalTracks = mode == Vertical && _cfg.Content == DetailContent.Tracks;
+        if (!verticalTracks && _verticalHeaderPinned.Peek()) _verticalHeaderPinned.Value = false;
 
-        // The track list (drops columns by breakpoint, owns the now-playing re-skin + an external SelectionModel). In
-        // VERTICAL mode its toolbar moves into the rail header, so drop it from the chrome there.
-        bool showToolbar = mode != Vertical;
+        // The track list (drops columns by breakpoint, owns the now-playing re-skin + an external SelectionModel). Its
+        // view controls (filter / sort / row size) ride a responsive Fluent command bar in the list's OWN chrome (always
+        // on for tracks; the rail owns the context actions); the podcast episode toolbar stays in the episode column on
+        // wide layouts.
+        bool showToolbar = _cfg.Content == DetailContent.Tracks || mode != Vertical;
         // Right column = the track table OR the episode list (podcast shows). Distinct Keys so an album↔show swap in the
         // reused detail slot remounts the column cleanly instead of reconciling TrackList against EpisodeList.
+        // MinWidth = 300 (the narrowest FUNCTIONAL track table, just under the tier-5 minimum): the pane may shrink but
+        // never below the width the column system can actually lay out. Steady state never gets here (ModeFor flips to
+        // Vertical below 560px), so the floor only bites on TRANSIENT frames — a mid-spring rail reflow or a stale
+        // breakpoint — where an unfloored pane fed the grid a width far below the active column set's fixed sum and the
+        // overflow guard crushed columns into overlapping glyphs. With the floor the worst transient is a clean edge
+        // clip at the card boundary, never glyph soup.
         Element right = _cfg.Content == DetailContent.Episodes
-            ? new BoxEl { Key = "right:eps", Grow = 1f, Direction = 1, Children = [Embed.Comp(() => new EpisodeList(_route, _model, bridge, handlers, showToolbar))] }
-            : new BoxEl { Key = "right:tracks", Grow = 1f, Direction = 1, Children = [Embed.Comp(() => new TrackList(_route, _model, bridge, handlers, showToolbar))] };
+            ? new BoxEl { Key = "right:eps", Grow = 1f, Shrink = 1f, MinWidth = 300f, Direction = 1, Children = [Embed.Comp(() => new EpisodeList(_route, _model, bridge, handlers, showToolbar))] }
+            : new BoxEl
+            {
+                Key = "right:tracks", Grow = 1f, Shrink = 1f, MinWidth = 300f, Direction = 1,
+                Children =
+                [
+                    Embed.Comp(() => new TrackList(_route, _model, bridge, handlers, showToolbar,
+                        staggerFirstReadyMount: StaggerFirstReadyMount,
+                        verticalHeader: verticalTracks,
+                        verticalHeaderPinned: _verticalHeaderPinned)) with { Key = verticalTracks ? "tracks:vertical" : "tracks:standard" },
+                ],
+            };
 
         // VERTICAL (narrow): the rail HEADER (cover, title, meta, play + toolbar) fixed on top + the list (Grow=1)
         // scrolling below — a single column over the wash. (The list remounts on the two-column↔vertical cross, so its
         // scroll resets there; the rail-width modes 0/1/2 keep it mounted.)
         if (mode == Vertical)
+        {
+            Element verticalContent = new BoxEl
+            {
+                Direction = 1, Grow = 1f, ClipToBounds = true,
+                Children = verticalTracks ? [right] : [DetailRail.BuildHeader(m, _cfg, handlers), right],
+            };
+            Element verticalBody = verticalTracks
+                ? new BoxEl
+                {
+                    ZStack = true, Grow = 1f, ClipToBounds = true,
+                    Children =
+                    [
+                        verticalContent,
+                        new BoxEl
+                        {
+                            Grow = 1f, HitTestPassThrough = true, Direction = 1,
+                            AlignItems = FlexAlign.Center, Justify = FlexJustify.Start,
+                            Padding = new Edges4(0f, WaveeSpace.M, 0f, 0f),
+                            Children =
+                            [
+                                Embed.Comp(() => new DetailShyPill(_model, _cfg, handlers, _verticalHeaderPinned))
+                                    with { Key = "detail-pill:" + route.Name + ":" + _model.State.Value },
+                            ],
+                        },
+                    ],
+                }
+                : verticalContent;
             return new BoxEl
             {
                 Direction = 1, Grow = 1f, Gradient = Surfaces.HeroWash(washColor), OnBoundsChanged = Measure,
-                Children = [DetailRail.BuildHeader(m, _cfg, handlers), right],
+                ClipToBounds = true,
+                Children =
+                [
+                    new BoxEl
+                    {
+                        Key = "detail:vertical",
+                        Direction = 1, Grow = 1f, ClipToBounds = true,
+                        Children = [verticalBody],
+                    },
+                ],
             };
+        }
 
         // TWO-COLUMN: a centered, max-width row [rail | right] over a top-anchored art wash (behind both columns). The
         // rail width shrinks with the mode; the track list stays mounted across modes 0/1/2 (same row position).
@@ -229,14 +362,32 @@ sealed class DetailShell : Component
         int descLines = winH < 760f ? 3 : 6;
         var row = new BoxEl
         {
-            Direction = 0, Grow = 1f, MaxWidth = 1600f,
+            // flex:1 1 0 — the same contract every other growing content container in the chain already declares
+            // (WaveeShell's content-side, the ContentHost page wrappers, LibraryPage's columns): Basis=0 makes THIS row's
+            // width the AVAILABLE content region rather than its children's intrinsic (rail + full track-table) width, and
+            // Shrink=1 + MinWidth=0 let it yield when the rail opens and the region narrows. This is the ONE node on the
+            // [rail | right] chain that previously declared neither, so it kept FlexShrink's Yoga-default 0 and its
+            // intrinsic width — overflowing the narrowed content card, whose ClipToBounds then hard-cut the right columns
+            // mid-glyph ("Plays"→"Pl") instead of the table reflowing to a tighter tier. `right` already shrinks (below);
+            // the fix is to let its PARENT shrink so the reduced width actually reaches it.
+            Direction = 0, Grow = 1f, Shrink = 1f, MinWidth = 0f, Basis = 0f, MaxWidth = 1600f,
             Children = [DetailRail.Build(m, _cfg, handlers, railW, titleSize, descLines), right],
         };
         return new BoxEl
         {
-            Direction = 0, Grow = 1f, Justify = FlexJustify.Center,
+            Direction = 1, Grow = 1f,
             Gradient = Surfaces.HeroWash(washColor), OnBoundsChanged = Measure,
-            Children = [row],
+            ClipToBounds = true,
+            Children =
+            [
+                new BoxEl
+                {
+                    Key = "detail:two-column",
+                    Direction = 0, Grow = 1f, Justify = FlexJustify.Center,
+                    ClipToBounds = true,
+                    Children = [row],
+                },
+            ],
         };
     }
 }

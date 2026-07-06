@@ -100,9 +100,10 @@ public static class ScrollBindEval
         if (offset > 0.5f) f |= ScrollState.ScrollableUpBit;
         if (offset < maxOff - 0.5f) f |= ScrollState.ScrollableDownBit;
         // MovingNow folds the conscious-scrollbar's "is the scroller in motion" trigger into the generic flag channel:
-        // a fling/wheel (ScrollMode≠0), a held overscroll band, OR a smooth target-chase (programmatic / scrollbar-track).
+        // any non-Idle Phase (Fling/WheelAnimating/TouchpadTracking/Overscroll/SnapBack), a held overscroll band, OR a
+        // residual eased target gap.
         float tgt = horiz ? sc.TargetX : sc.TargetY;
-        if (sc.ScrollMode != 0 || MathF.Abs(sc.FlingVelocity) > 1f || sc.Overscrolling || MathF.Abs(tgt - offset) > 0.5f)
+        if (sc.Phase != ScrollIntegrator.Idle || MathF.Abs(sc.FlingVelocity) > 1f || sc.Overscrolling || MathF.Abs(tgt - offset) > 0.5f)
             f |= ScrollState.MovingNowBit;
         if (sc.HasSnap && !float.IsNaN(sc.FlingSnapTarget) && MathF.Abs(offset - sc.FlingSnapTarget) <= 0.5f) f |= ScrollState.SnappedBit;
         if (sc.IdleMs >= IdleExpireMs) f |= ScrollState.IdleExpiredBit;
@@ -133,6 +134,12 @@ public static class ScrollBindEval
                 shift = Math.Clamp(sc.OffsetY + b.Inset - yN, 0f, limit);
             }
         }
+        // Device-pixel snap (scroll-feel-rework-v2 §4.6/§8, gate.scroll.subpixel-stability): the pinned shift rounds to a
+        // whole device pixel on the SAME grid the content transform uses (OverscrollPhysics.WriteContentTransform:
+        // round((offset+band)·s)/s), so a sticky header sharing the scroller's origin never seams a sub-pixel step against
+        // the content beneath it during a slow pan. The clamp above stays in logical float; only the applied shift snaps.
+        float s = scene.DeviceScale;
+        if (float.IsFinite(s) && s > 0f) shift = MathF.Round(shift * s) / s;
         ref NodePaint p = ref scene.Paint(n);
         bool pinned = shift > 0f;
         if (MathF.Abs(p.LocalTransform.Dy - shift) > 0.01f)

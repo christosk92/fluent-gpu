@@ -78,7 +78,9 @@ public sealed class SwitchablePlayer : IPlaybackPlayer
 
     public IPlaybackState State => _state;
     public Task PlayAsync(string contextUri, int startIndex = 0, CancellationToken ct = default) => Cur.PlayAsync(contextUri, startIndex, ct);
+    public Task PlayOrderedAsync(string contextUri, IReadOnlyList<PlaybackContextTrack> tracks, int startIndex = 0, CancellationToken ct = default) => Cur.PlayOrderedAsync(contextUri, tracks, startIndex, ct);
     public Task PlayTrackAsync(string trackUri, CancellationToken ct = default) => Cur.PlayTrackAsync(trackUri, ct);
+    public Task PlayTrackAsync(Track track, CancellationToken ct = default) => Cur.PlayTrackAsync(track, ct);
     public Task PauseAsync(CancellationToken ct = default) => Cur.PauseAsync(ct);
     public Task ResumeAsync(CancellationToken ct = default) => Cur.ResumeAsync(ct);
     public Task NextAsync(CancellationToken ct = default) => Cur.NextAsync(ct);
@@ -90,6 +92,8 @@ public sealed class SwitchablePlayer : IPlaybackPlayer
     public Task MoveQueueAsync(string entryId, int toIndex, CancellationToken ct = default) => Cur.MoveQueueAsync(entryId, toIndex, ct);
     public Task RemoveFromQueueAsync(string entryId, CancellationToken ct = default) => Cur.RemoveFromQueueAsync(entryId, ct);
     public Task EnqueueAsync(string trackUri, CancellationToken ct = default) => Cur.EnqueueAsync(trackUri, ct);
+    public Task EnqueueAsync(Track track, CancellationToken ct = default) => Cur.EnqueueAsync(track, ct);
+    public Task PlayNextAsync(IReadOnlyList<PlaybackContextTrack> tracks, CancellationToken ct = default) => Cur.PlayNextAsync(tracks, ct);
 }
 
 public sealed class SwitchableDevices : IConnectDevices, IDisposable
@@ -155,4 +159,135 @@ public sealed class LiveSpotifySession : ISpotifySession
     public IObservable<AuthStatus> StatusChanged => _status;
     public Task<bool> ConnectAsync(CancellationToken ct = default) => Task.FromResult(true);
     public Task LogoutAsync(CancellationToken ct = default) { Status = AuthStatus.LoggedOut; CurrentUser = null; _status.OnNext(AuthStatus.LoggedOut); return Task.CompletedTask; }
+}
+
+/// <summary>Stable lyrics facade (docs/lyrics-aggregator-reranker-plan.md §11): the UI binds <c>svc.Lyrics</c> once; on
+/// live login the composition root swaps the fake provider for the real <c>AggregatingLyricsProvider</c> via SetInner,
+/// without rebuilding the app tree. Mirrors <see cref="SwitchablePlayer"/>.</summary>
+public sealed class SwitchableLyrics : IUpgradingLyricsProvider
+{
+    readonly object _gate = new();
+    readonly Dictionary<string, LyricsDocument> _cache = new();
+    readonly Dictionary<string, Task<LyricsDocument?>> _inflight = new();
+    readonly SimpleEvent<LyricsDocument> _upgrades = new();
+    ILyricsProvider _inner;
+    IDisposable? _upgradeSub;
+    public SwitchableLyrics(ILyricsProvider inner) { _inner = inner; WireUpgrades(inner); }
+    public IObservable<LyricsDocument> LyricsUpgraded => _upgrades;
+    public void SetInner(ILyricsProvider inner)
+    {
+        lock (_gate)
+        {
+            _upgradeSub?.Dispose();
+            _inner = inner;
+            _cache.Clear();
+            _inflight.Clear();
+            WireUpgrades(inner);
+        }
+    }
+
+    void WireUpgrades(ILyricsProvider provider)
+    {
+        _upgradeSub = provider is IUpgradingLyricsProvider up
+            ? up.LyricsUpgraded.Subscribe(Observers.From<LyricsDocument>(doc => OnInnerUpgrade(provider, doc)))
+            : null;
+    }
+
+    void OnInnerUpgrade(ILyricsProvider provider, LyricsDocument doc)
+    {
+        bool forward;
+        lock (_gate)
+        {
+            if (!ReferenceEquals(_inner, provider)) return;
+            if (_cache.TryGetValue(doc.TrackId, out var current) && !IsRicher(doc, current)) return;
+            _cache[doc.TrackId] = doc;
+            forward = true;
+        }
+        if (forward) _upgrades.OnNext(doc);
+    }
+
+    static bool IsRicher(LyricsDocument next, LyricsDocument current)
+    {
+        int nr = Richness(next), cr = Richness(current);
+        if (nr != cr) return nr > cr;
+        if (nr < 3) return false;
+        return SyllableCount(next) > SyllableCount(current);
+    }
+
+    static int Richness(LyricsDocument doc)
+    {
+        if (doc.Lines.Any(l => l.IsWordByWord && l.Syllables.Count > 0)) return 3;
+        return doc.Sync switch
+        {
+            LyricsSyncKind.Syllable => 3,
+            LyricsSyncKind.Line => 2,
+            LyricsSyncKind.Unsynced => 1,
+            _ => 0,
+        };
+    }
+
+    static int SyllableCount(LyricsDocument doc)
+    {
+        int n = 0;
+        foreach (var l in doc.Lines) n += l.Syllables.Count;
+        return n;
+    }
+
+    public Task<LyricsDocument?> GetLyricsAsync(string trackId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(trackId))
+            return Task.FromResult<LyricsDocument?>(null);
+
+        Task<LyricsDocument?> task;
+        lock (_gate)
+        {
+            if (_cache.TryGetValue(trackId, out var cached))
+                return Task.FromResult<LyricsDocument?>(cached);
+
+            if (_inflight.TryGetValue(trackId, out var existing))
+            {
+                task = existing;
+            }
+            else
+            {
+                var cur = _inner;
+                task = FetchAndCacheAsync(trackId, cur);
+                _inflight[trackId] = task;
+            }
+        }
+
+        return ct.CanBeCanceled ? task.WaitAsync(ct) : task;
+    }
+
+    async Task<LyricsDocument?> FetchAndCacheAsync(string trackId, ILyricsProvider provider)
+    {
+        try
+        {
+            var doc = await provider.GetLyricsAsync(trackId, CancellationToken.None).ConfigureAwait(false);
+            lock (_gate)
+            {
+                if (ReferenceEquals(_inner, provider))
+                {
+                    if (doc is not null)
+                    {
+                        if (!_cache.TryGetValue(trackId, out var current) || IsRicher(doc, current))
+                            _cache[trackId] = doc;
+                    }
+                    _inflight.Remove(trackId);
+                }
+            }
+
+            return doc;
+        }
+        catch
+        {
+            lock (_gate)
+            {
+                if (ReferenceEquals(_inner, provider))
+                    _inflight.Remove(trackId);
+            }
+
+            throw;
+        }
+    }
 }

@@ -65,7 +65,7 @@ public static class SpotifyHomeComposer
 
     // The group's section tint: the first card carrying an extracted cover color, else a semantic per-kind fallback
     // (amber recents / blue made-for-you / the app accent for generic shelves) — ported from WaveeMusic's HomeRegion kinds.
-    static uint GroupAccent(HomeGroupKind kind, IReadOnlyList<HomeCard> cards)
+    public static uint GroupAccent(HomeGroupKind kind, IReadOnlyList<HomeCard> cards)
     {
         foreach (var c in cards) if (c.Accent is { } a) return a;
         return kind switch

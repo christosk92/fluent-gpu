@@ -35,9 +35,20 @@ static class Program
 
         // ── Observability ───────────────────────────────────────────────────────────────────────────────────────────
         string logDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Wavee", "logs");
-        WaveeLog.Instance.Configure(crashLogPath: Path.Combine(logDir, "wavee.log"), echo: DebugEcho());
+        string logPath = Path.Combine(logDir, "wavee.log");
+        WaveeLog.Instance.Configure(crashLogPath: logPath, echo: DebugEcho(),
+#if DEBUG
+            minLevel: WaveeLogLevel.Debug, fileMinLevel: WaveeLogLevel.Debug);
+#else
+            minLevel: WaveeLogLevel.Info, fileMinLevel: WaveeLogLevel.Info);
+#endif
         Diag.Sink = WaveeLog.DiagSink;                 // fold engine diagnostics (FG_DIAG) into the app log stream
-        WaveeLog.Instance.Info("app", "Wavee starting");
+        WaveeLog.Instance.Info("app", "startup", "Wavee starting",
+            WaveeLogField.Of("pid", Environment.ProcessId),
+            WaveeLogField.Of("args", args.Length),
+            WaveeLogField.Of("log", logPath),
+            WaveeLogField.Of("framework", System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription),
+            WaveeLogField.Of("os", System.Runtime.InteropServices.RuntimeInformation.OSDescription));
 
         // ── Global crash net (the two process-level handlers; the UI-thread one lives in the engine loop) ─────────────
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
@@ -47,6 +58,9 @@ static class Program
             WaveeLog.Instance.Error("crash", "Unobserved task exception", e.Exception);
             e.SetObserved();
         };
+
+        if (Array.IndexOf(args, "--audio-host") >= 0)
+            Environment.Exit(Wavee.SpotifyLive.Audio.Host.AudioHostChild.Run(args));
 
         int frames = -1;
         string? screenshot = null;
@@ -134,11 +148,34 @@ static class Program
             Environment.Exit(code);
         }
 
+        if (Array.IndexOf(args, "--playplay-runtime-status") >= 0)
+        {
+            int code = Wavee.SpotifyLive.PlayPlayRuntimeProbe.RunStatus(args, Console.Error.WriteLine);
+            Environment.Exit(code);
+        }
+
+        int regIdx = Array.IndexOf(args, "--playplay-runtime-register");
+        if (regIdx >= 0)
+        {
+            string dir = regIdx + 1 < args.Length && !args[regIdx + 1].StartsWith("--") ? args[regIdx + 1] : "";
+            if (dir.Length == 0) { Console.Error.WriteLine("usage: --playplay-runtime-register <dir>"); Environment.Exit(2); }
+            int code = Wavee.SpotifyLive.PlayPlayRuntimeProbe.RunRegister(dir, Console.Error.WriteLine);
+            Environment.Exit(code);
+        }
+
+#if WAVEE_PLAYPLAY_LOCAL
+        if (Array.IndexOf(args, "--playplay-runtime-check") >= 0)
+        {
+            int code = Wavee.SpotifyLive.PlayPlayRuntimeProbe.RunCheck(args, Console.Error.WriteLine);
+            Environment.Exit(code);
+        }
+#endif
+
         // LIVE Connect session bring-up demo: login -> dealer + AP channel -> swap the live playback backend into a REAL
         // Services (svc.GoLive) and log the now-playing the UI bridge sees through the switchable. Usage: --connect-live
         if (Array.IndexOf(args, "--connect-live") >= 0)
         {
-            using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(2));
+            using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(3));
             int code = Wavee.SpotifyLive.LiveSessionHost.RunAsync(Console.Error.WriteLine, cts.Token).GetAwaiter().GetResult();
             Environment.Exit(code);
         }
@@ -148,7 +185,8 @@ static class Program
         // and the in-app surfaces mount with the right tokens; the store is reused by the app so there's one instance.
         var settings = AppDataSettings.ForUnpackaged("Wavee", "Wavee");
         int themeMode = settings.Get(WaveeSettings.ThemeMode);
-        Theme.Dark = themeMode switch { 1 => false, 2 => true, _ => !FluentApp.SystemUsesLightTheme() };
+        var themeKind = themeMode switch { 1 => ThemeKind.Light, 2 => ThemeKind.Dark, _ => FluentApp.SystemUsesLightTheme() ? ThemeKind.Light : ThemeKind.Dark };
+        Tok.Use(WaveeTheme.ResolvePalette(settings.Get(WaveeSettings.PaletteId)), themeKind);
 
         // ── Localization: load the bundled culture tables (assets/loc/*.json, copied next to the exe) before the first
         // frame, so every Loc.Get(Strings.*) resolves. en-US is the base + terminal fallback; more cultures drop in later.
@@ -174,16 +212,19 @@ static class Program
         {
             // Diagnostic harness chain (each gated by its own env flag; all return false in a normal run): the nav/scroll
             // FPS stress probe (WAVEE_NAV_PROBE) first, then the resize probe (WAVEE_RESIZE_PROBE).
-            FluentApp.DiagnosticRun = (h, w, d) => WaveeNavProbe.TryRun(h, w, d) || WaveeResizeProbe.TryRun(h, w, d);
+            FluentApp.DiagnosticRun = (h, w, d) => WaveeNavProbe.TryRun(h, w, d) || WaveeResizeProbe.TryRun(h, w, d) || WaveeMemSoak.TryRun(h, w, d);
             // customFrame:true → the in-app TitleBar (WaveeShell) draws the Mica-extended caption buttons + drag region.
             // micaAlt:true → Mica BaseAlt (the flatter File-Explorer tint), matching WaveeMusic's MicaBackdrop Kind="BaseAlt".
             // ambientFps: pace PERPETUAL ambient motion (the always-playing seek playhead, the now-playing equalizer,
-            // skeleton shimmer, buffering spinner) to 30 Hz instead of the panel's full refresh. Wavee auto-starts
-            // playback, so the seek bar's per-frame playhead ticker would otherwise free-run the whole record+present
-            // pipeline at 120 Hz forever for a bar that moves ~3 px/s. Latency-sensitive input (scroll/hover/drag) is
-            // exempt and still runs at the display rate; FG_ANIM_FPS overrides this for diagnostics.
+            // skeleton shimmer, buffering spinner, the karaoke lyrics wipe) to 60 Hz instead of the panel's full refresh.
+            // Wavee auto-starts playback, so the seek bar's per-frame playhead ticker would otherwise free-run the whole
+            // record+present pipeline at the full refresh forever for a bar that moves ~3 px/s. 60 (raised from 30) now
+            // that the per-frame cost is cheap (rect-bounded + linear-sampled blur + back-buffer-direct layers) — the
+            // lyrics wipe/scroll read smooth without quadrupling the idle pipeline. Latency-sensitive input
+            // (scroll/hover/drag) is exempt and always runs at the display rate; FG_ANIM_FPS overrides this (=30 to
+            // revert to the old cadence, =0 for uncapped / full display rate).
             FluentApp.Run(() => new WaveeApp(settings), "Wavee Music", 1180, 760,
-                          frames: frames, screenshot: screenshot, customFrame: true, micaAlt: true, ambientFps: 30);
+                          frames: frames, screenshot: screenshot, customFrame: true, micaAlt: true, ambientFps: 60);
         }
         catch (Exception ex)
         {
@@ -205,7 +246,7 @@ static class Program
     static Action<string>? DebugEcho()
     {
 #if DEBUG
-        return Console.Error.WriteLine;
+        return Console.Out.WriteLine;
 #else
         return null;
 #endif

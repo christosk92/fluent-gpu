@@ -158,10 +158,22 @@ public sealed record TokenSet
 /// </summary>
 public static class Tok
 {
-    public static readonly TokenSet Dark = BuildDark();
-    public static readonly TokenSet Light = BuildLight();
+    public static readonly ThemePalette WarmPalette = PaletteBuilder.Build(PaletteBuilder.Warm);
+    public static readonly ThemePalette SlatePalette = PaletteBuilder.Build(PaletteBuilder.Slate);
+    public static readonly ThemePalette NeutralPalette = PaletteBuilder.Build(PaletteBuilder.Neutral);
+    public static ThemePalette AccentTintedPalette { get; private set; } = PaletteBuilder.Build(PaletteBuilder.AccentTinted(210f));
 
-    public static TokenSet T = Dark;
+    /// <summary>All built-in presets (Accent-tinted excluded — rebuilt on accent injection).</summary>
+    public static readonly ThemePalette[] Presets = [WarmPalette, SlatePalette, NeutralPalette];
+
+    // Back-compat aliases — the Warm preset is the default calibrated ramp.
+    public static TokenSet Dark => WarmPalette.Dark;
+    public static TokenSet Light => WarmPalette.Light;
+
+    static ThemePalette _palette = WarmPalette;
+    public static ThemePalette Palette => _palette;
+
+    public static TokenSet T = WarmPalette.Dark;
     public static ThemeKind Theme { get; private set; } = ThemeKind.Dark;
 
     /// <summary>Monotonic version bumped by every theme mutation (<see cref="Use"/>/<see cref="SetAccent"/>/
@@ -175,15 +187,46 @@ public static class Tok
     private static ColorF? _accent;       // live OS accent override (folds into AccentDefault/Secondary/Tertiary/Subtle)
     private static ColorF? _windowBg;     // Mica → Transparent override
 
-    public static void Use(ThemeKind kind)
+    public static void Use(ThemeKind kind) => Use(_palette, kind);
+
+    public static void Use(ThemePalette palette, ThemeKind kind)
     {
-        if (kind == Theme) return;
-        Theme = kind; T = kind == ThemeKind.Light ? Light : Dark; Epoch++;
+        if (palette == _palette && kind == Theme) return;
+        _palette = palette;
+        Theme = kind;
+        T = kind == ThemeKind.Light ? palette.Light : palette.Dark;
+        Epoch++;
     }
+
+    public static ThemePalette? PaletteById(string id) => id switch
+    {
+        "warm" => WarmPalette,
+        "slate" => SlatePalette,
+        "neutral" => NeutralPalette,
+        "accent" => AccentTintedPalette,
+        _ => null,
+    };
 
     /// <summary>Inject the OS accent (host startup) or a developer global override; all accent tokens (fill + text +
     /// subtle + hero + attention) recompute from it. Pass <c>null</c> to clear the override and revert to the theme default.</summary>
-    public static void SetAccent(ColorF? c) { if (c == _accent) return; _accent = c; Epoch++; }
+    public static void SetAccent(ColorF? c)
+    {
+        if (c == _accent) return;
+        _accent = c;
+        if (c is { } ac)
+        {
+            AccentTintedPalette = PaletteBuilder.BuildAccentTinted(ac);
+            if (_palette.Id == "accent")
+            {
+                // Re-point the ACTIVE palette too, not just T — Tok.Palette feeds the app-shell chrome (WaveeColors
+                // reads Palette.LightShell/DarkShell), which otherwise keeps serving the stale pre-injection accent
+                // palette until the next Tok.Use happens to re-resolve it.
+                _palette = AccentTintedPalette;
+                T = Theme == ThemeKind.Light ? AccentTintedPalette.Light : AccentTintedPalette.Dark;
+            }
+        }
+        Epoch++;
+    }
     public static void SetWindowBackground(ColorF c) { if (_windowBg == c) return; _windowBg = c; Epoch++; }
 
     // Fill
@@ -367,190 +410,4 @@ public static class Tok
     public static ColorF TextInverse => T.TextInverse;
 
     public static ColorF WindowBackground => _windowBg ?? T.WindowBackground;
-
-    private static TokenSet BuildDark() => new()
-    {
-        FillControlDefault   = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x0F),
-        FillControlSecondary = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x15),
-        FillControlTertiary  = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x08),
-        FillControlDisabled  = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x0B),
-        FillControlStrong         = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x8B),
-        FillControlStrongDisabled = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x3F),
-        FillControlSolid          = ColorF.FromRgba(0x45, 0x45, 0x45),
-        FillControlOnImage   = ColorF.FromRgba(0x1C, 0x1C, 0x1C, 0xB3),   // #B31C1C1C (Common_themeresources_any.xaml:34)
-        FillSubtleTransparent= ColorF.Transparent,
-        FillSubtleSecondary  = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x0F),
-        FillSubtleTertiary   = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x0A),
-        FillCardDefault      = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x0D),
-        FillCardSecondary    = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x08),
-        FillLayerDefault     = ColorF.FromRgba(0x3A, 0x3A, 0x3A, 0x4C),
-        FillLayerAlt         = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x0D),
-        LayerOnMicaBaseAlt   = ColorF.FromRgba(0x3A, 0x3A, 0x3A, 0x73),   // WinUI LayerOnMicaBaseAltFillColorDefault (dark) #733A3A3A
-        FillSolidBase        = ColorF.FromRgba(0x20, 0x20, 0x20),
-        FillSolidBaseAlt     = ColorF.FromRgba(0x1C, 0x1C, 0x1C),
-        FillSolidSecondary   = ColorF.FromRgba(0x1C, 0x1C, 0x1C),
-        FillSolidTertiary    = ColorF.FromRgba(0x28, 0x28, 0x28),
-        FillSmoke            = ColorF.FromRgba(0x00, 0x00, 0x00, 0x4D),
-        StrokeControlDefault = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x12),
-        StrokeControlSecondary = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x18),
-        StrokeCardDefault    = ColorF.FromRgba(0x00, 0x00, 0x00, 0x19),
-        StrokeDividerDefault = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x15),
-        StrokeSurfaceDefault = ColorF.FromRgba(0x75, 0x75, 0x75, 0x66),
-        StrokeFlyoutDefault = ColorF.FromRgba(0x00, 0x00, 0x00, 0x33),   // SurfaceStrokeColorFlyout (dark): 20% black
-        StrokeControlOnAccentDefault = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x14),
-        StrokeControlOnAccentSecondary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x23),
-        StrokeControlOnAccentTertiary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x37),
-        TextPrimary   = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
-        TextSecondary = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xC5),
-        TextTertiary  = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x87),
-        TextDisabled  = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x5D),
-        TextOnAccentPrimary   = ColorF.FromRgba(0x00, 0x00, 0x00),
-        TextOnAccentSecondary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x80),
-        TextOnAccentDisabled  = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x87),
-        // WinUI Default(dark) dict: TextOnAccentFillColorSelectedText = #FFFFFF (Common_themeresources_any.xaml).
-        TextOnAccentSelectedText = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
-        CaptionCloseHover   = ColorF.FromRgba(0xC4, 0x2B, 0x1C),         // Win11 shell caption close (theme-invariant)
-        CaptionClosePressed = ColorF.FromRgba(0xC4, 0x2B, 0x1C, 0xE6),
-        AccentDefault = ColorF.FromRgba(0x60, 0xCD, 0xFF),
-        AccentSecondary = ColorF.FromRgba(0x60, 0xCD, 0xFF, 0xE6),
-        AccentTertiary  = ColorF.FromRgba(0x60, 0xCD, 0xFF, 0xCC),
-        // WinUI dark: AccentTextFillColorPrimary/Secondary = SystemAccentColorLight3 (#A6D8FF), Tertiary = Light2 (#76B9ED).
-        AccentTextPrimary   = ColorF.FromRgba(0xA6, 0xD8, 0xFF),
-        AccentTextSecondary = ColorF.FromRgba(0xA6, 0xD8, 0xFF),
-        AccentTextTertiary  = ColorF.FromRgba(0x76, 0xB9, 0xED),
-        AccentDisabled  = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x28),   // WinUI AccentFillColorDisabled = #28FFFFFF
-        AccentSubtle    = ColorF.FromRgba(0x60, 0xCD, 0xFF, 0x29),
-        // WinUI Default(dark) dict: AccentFillColorSelectedTextBackgroundBrush = {ThemeResource SystemAccentColor}
-        // (the accent BASE — #FF0078D4 system default), NOT the Light2 fill above.
-        AccentSelectedTextBackground = ColorF.FromRgba(0x00, 0x78, 0xD4),
-        FocusOuter = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
-        FocusInner = ColorF.FromRgba(0x00, 0x00, 0x00, 0xB3),
-        ScrollThumb = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x8B),   // == FillControlStrong (WinUI ControlStrongFillColorDefault)
-        AcrylicTint = ColorF.FromRgba(0x2C, 0x2C, 0x2C, 0xCC),
-        AcrylicBase = ColorF.FromRgba(0x20, 0x20, 0x20, 0xD9),
-        // AcrylicInAppFillColorDefaultBrush dark (AcrylicBrush_themeresources.xaml "Default" dict):
-        // TintColor #2C2C2C, TintOpacity 0.15, TintLuminosityOpacity 0.96, FallbackColor #2C2C2C.
-        AcrylicFlyout = AcrylicSpec.InAppDefault,
-        HeroGradientTop = ColorF.FromRgba(0x2A, 0x4A, 0x66, 0xCC),
-        HeroGradientBottom = ColorF.FromRgba(0x20, 0x20, 0x20, 0x00),
-        FillControlAltSecondary  = ColorF.FromRgba(0x00, 0x00, 0x00, 0x19),
-        FillControlAltTertiary   = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x0B),
-        FillControlAltQuaternary = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x12),
-        FillControlAltDisabled   = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x00),
-        StrokeControlStrongDefault  = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x8B),
-        StrokeControlStrongDisabled = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x28),
-        FillControlInputActive   = ColorF.FromRgba(0x1E, 0x1E, 0x1E, 0xB3),
-        // SystemBaseHighColor #FFFFFFFF / SystemBaseMediumLowColor #66FFFFFF / SystemBaseMediumColor #99FFFFFF
-        // (generic.xaml:207/211/209, Default theme dictionary).
-        TextControlHeaderForeground         = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
-        TextControlHeaderForegroundDisabled = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x66),
-        TextControlDescriptionForeground    = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x99),
-        // TemporaryTextFillColorDisabled #5DFEFEFE (TextBox_themeresources.xaml:22, Default).
-        TextControlForegroundDisabled       = ColorF.FromRgba(0xFE, 0xFE, 0xFE, 0x5D),
-        SystemFillCritical = ColorF.FromRgba(0xFF, 0x99, 0xA4),
-        SystemFillCaution  = ColorF.FromRgba(0xFC, 0xE1, 0x00),
-        SystemFillSuccess  = ColorF.FromRgba(0x6C, 0xCB, 0x5F),
-        SystemFillCriticalBackground  = ColorF.FromRgba(0x44, 0x27, 0x26),
-        SystemFillCautionBackground   = ColorF.FromRgba(0x43, 0x35, 0x19),
-        SystemFillSuccessBackground   = ColorF.FromRgba(0x39, 0x3D, 0x1B),
-        SystemFillAttentionBackground = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x08),
-        SystemFillSolidNeutral = ColorF.FromRgba(0x9D, 0x9D, 0x9D),
-        TextInverse = ColorF.FromRgba(0x00, 0x00, 0x00, 0xE4),
-        WindowBackground = ColorF.FromRgba(0x20, 0x20, 0x20),
-    };
-
-    // Wavee's tuned LIGHT palette. DELIBERATELY DIVERGES from WinUI-faithful light (which reads as a flat "flashbang":
-    // every surface in a <5 L* sliver of near-white, invisible black-alpha borders, zero chroma). Instead: a sunken,
-    // faintly-warm off-white canvas with elevation-by-tint (cards rise toward white), real hairline borders, and
-    // off-black text — from the light-mode investigation's warm ramp. Dark (BuildDark) stays WinUI-faithful.
-    private static TokenSet BuildLight() => new()
-    {
-        FillControlDefault   = ColorF.FromRgba(0xFC, 0xFB, 0xF9),         // opaque warm card-white control (was #B3FFFFFF)
-        FillControlSecondary = ColorF.FromRgba(0xF3, 0xF2, 0xEF),         // hover: a soft step down (translucent → invisible on the opaque rest)
-        FillControlTertiary  = ColorF.FromRgba(0xEC, 0xEB, 0xE8),         // pressed: deeper still
-        FillControlDisabled  = ColorF.FromRgba(0xF9, 0xF9, 0xF9, 0x4D),
-        FillControlStrong         = ColorF.FromRgba(0x00, 0x00, 0x00, 0x72),
-        FillControlStrongDisabled = ColorF.FromRgba(0x00, 0x00, 0x00, 0x51),
-        FillControlSolid          = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
-        FillControlOnImage   = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xC9),   // #C9FFFFFF (Common_themeresources_any.xaml:238)
-        FillSubtleTransparent= ColorF.Transparent,
-        FillSubtleSecondary  = ColorF.FromRgba(0x00, 0x00, 0x00, 0x09),
-        FillSubtleTertiary   = ColorF.FromRgba(0x00, 0x00, 0x00, 0x06),
-        FillCardDefault      = ColorF.FromRgba(0xFC, 0xFB, 0xF9),         // raised warm card-white (opaque; floats on the sunken canvas)
-        FillCardSecondary    = ColorF.FromRgba(0xF7, 0xF6, 0xF3),         // nested card, one soft step below
-        FillLayerDefault     = ColorF.FromRgba(0xFA, 0xF9, 0xF6),         // floated panel, a hair under the card
-        FillLayerAlt         = ColorF.FromRgba(0xFF, 0xFF, 0xFF),         // reserve TRUE white for the highest layer (flyouts/dialogs) only
-        LayerOnMicaBaseAlt   = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xB3),   // WinUI LayerOnMicaBaseAltFillColorDefault (light) #B3FFFFFF
-        FillSolidBase        = ColorF.FromRgba(0xEF, 0xEE, 0xEB),         // content surface — BELOW the canvas (de-collapsed from WindowBackground)
-        FillSolidBaseAlt     = ColorF.FromRgba(0xE8, 0xE7, 0xE3),         // deepest well (recessed insets)
-        FillSolidSecondary   = ColorF.FromRgba(0xEC, 0xEB, 0xE8),         // reordered between Base and Tertiary (monotonic ramp)
-        FillSolidTertiary    = ColorF.FromRgba(0xFB, 0xFA, 0xF8),         // lightest near-white solid (raised)
-        FillSmoke            = ColorF.FromRgba(0x00, 0x00, 0x00, 0x4D),
-        StrokeControlDefault = ColorF.FromRgba(0xDE, 0xDD, 0xD9),         // real warm hairline (was 6% black ≈ 1.04:1, invisible)
-        StrokeControlSecondary = ColorF.FromRgba(0xC9, 0xC8, 0xC3),       // hover/focus edge — clears WCAG 3:1 non-text
-        StrokeCardDefault    = ColorF.FromRgba(0xE6, 0xE5, 0xE1),         // visible-on-inspection card edge
-        StrokeDividerDefault = ColorF.FromRgba(0xE3, 0xE2, 0xDF),         // section dividers that actually register
-        StrokeSurfaceDefault = ColorF.FromRgba(0x75, 0x75, 0x75, 0x66),
-        StrokeFlyoutDefault = ColorF.FromRgba(0x00, 0x00, 0x00, 0x0F),   // SurfaceStrokeColorFlyout (light): 6% black
-        StrokeControlOnAccentDefault = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x14),
-        StrokeControlOnAccentSecondary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x66),
-        StrokeControlOnAccentTertiary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x37),
-        TextPrimary   = ColorF.FromRgba(0x1F, 0x1E, 0x1B),               // off-black, warm-leaning (~14:1, halation-free vs pure black on white)
-        TextSecondary = ColorF.FromRgba(0x5C, 0x5B, 0x57),               // ~5.5:1 mid-tier
-        TextTertiary  = ColorF.FromRgba(0x73, 0x72, 0x6D),               // lifted to ~4:1 (was 2.5:1 — track #s/durations were failing AA)
-        TextDisabled  = ColorF.FromRgba(0x00, 0x00, 0x00, 0x5C),
-        TextOnAccentPrimary   = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
-        TextOnAccentSecondary = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xB3),
-        TextOnAccentDisabled  = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
-        // WinUI Light dict: TextOnAccentFillColorSelectedText = #FFFFFF (Common_themeresources_any.xaml).
-        TextOnAccentSelectedText = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
-        CaptionCloseHover   = ColorF.FromRgba(0xC4, 0x2B, 0x1C),         // Win11 shell caption close (theme-invariant)
-        CaptionClosePressed = ColorF.FromRgba(0xC4, 0x2B, 0x1C, 0xE6),
-        AccentDefault = ColorF.FromRgba(0x00, 0x5F, 0xB8),
-        AccentSecondary = ColorF.FromRgba(0x00, 0x5F, 0xB8, 0xE6),
-        AccentTertiary  = ColorF.FromRgba(0x00, 0x5F, 0xB8, 0xCC),
-        // WinUI light: AccentTextFillColorPrimary = SystemAccentColorDark2 (#004275), Secondary = Dark3 (#002642), Tertiary = Dark1 (#005FB8).
-        AccentTextPrimary   = ColorF.FromRgba(0x00, 0x42, 0x75),
-        AccentTextSecondary = ColorF.FromRgba(0x00, 0x26, 0x42),
-        AccentTextTertiary  = ColorF.FromRgba(0x00, 0x5F, 0xB8),
-        AccentDisabled  = ColorF.FromRgba(0x00, 0x00, 0x00, 0x37),
-        AccentSubtle    = ColorF.FromRgba(0x00, 0x5F, 0xB8, 0x24),
-        // WinUI Light dict: AccentFillColorSelectedTextBackgroundBrush = {ThemeResource SystemAccentColor}
-        // (the accent BASE — #FF0078D4 system default, same as dark), NOT the Dark1 fill above.
-        AccentSelectedTextBackground = ColorF.FromRgba(0x00, 0x78, 0xD4),
-        FocusOuter = ColorF.FromRgba(0x00, 0x00, 0x00, 0xE4),
-        FocusInner = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xB3),   // WinUI Light FocusStrokeColorInner = #B3FFFFFF (audit fix)
-        ScrollThumb = ColorF.FromRgba(0x00, 0x00, 0x00, 0x72),
-        AcrylicTint = ColorF.FromRgba(0xFC, 0xFC, 0xFC, 0xD9),
-        AcrylicBase = ColorF.FromRgba(0xF3, 0xF3, 0xF3, 0xE6),
-        // AcrylicInAppFillColorDefaultBrush light (AcrylicBrush_themeresources.xaml "Light" dict):
-        // TintColor #FCFCFC, TintOpacity 0.0, TintLuminosityOpacity 0.85, FallbackColor #F9F9F9.
-        AcrylicFlyout = AcrylicSpec.FlyoutLight,
-        HeroGradientTop = ColorF.FromRgba(0x7A, 0xB6, 0xE6, 0xB3),
-        HeroGradientBottom = ColorF.FromRgba(0xF3, 0xF3, 0xF3, 0x00),
-        FillControlAltSecondary  = ColorF.FromRgba(0x00, 0x00, 0x00, 0x06),
-        FillControlAltTertiary   = ColorF.FromRgba(0x00, 0x00, 0x00, 0x0F),
-        FillControlAltQuaternary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x18),
-        FillControlAltDisabled   = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x00),
-        StrokeControlStrongDefault  = ColorF.FromRgba(0x00, 0x00, 0x00, 0x72),
-        StrokeControlStrongDisabled = ColorF.FromRgba(0x00, 0x00, 0x00, 0x37),
-        FillControlInputActive   = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
-        // SystemBaseHighColor #FF000000 / SystemBaseMediumLowColor #66000000 / SystemBaseMediumColor #99000000
-        // (generic.xaml:4132/4136/4134, Light theme dictionary).
-        TextControlHeaderForeground         = ColorF.FromRgba(0x00, 0x00, 0x00),
-        TextControlHeaderForegroundDisabled = ColorF.FromRgba(0x00, 0x00, 0x00, 0x66),
-        TextControlDescriptionForeground    = ColorF.FromRgba(0x00, 0x00, 0x00, 0x99),
-        // TemporaryTextFillColorDisabled #5C010101 (TextBox_themeresources.xaml:129, Light).
-        TextControlForegroundDisabled       = ColorF.FromRgba(0x01, 0x01, 0x01, 0x5C),
-        SystemFillCritical = ColorF.FromRgba(0xC4, 0x2B, 0x1C),
-        SystemFillCaution  = ColorF.FromRgba(0x9D, 0x5D, 0x00),
-        SystemFillSuccess  = ColorF.FromRgba(0x0F, 0x7B, 0x0F),
-        SystemFillCriticalBackground  = ColorF.FromRgba(0xFD, 0xE7, 0xE9),
-        SystemFillCautionBackground   = ColorF.FromRgba(0xFF, 0xF4, 0xCE),
-        SystemFillSuccessBackground   = ColorF.FromRgba(0xDF, 0xF6, 0xDD),
-        SystemFillAttentionBackground = ColorF.FromRgba(0xF6, 0xF6, 0xF6, 0x80),
-        SystemFillSolidNeutral = ColorF.FromRgba(0x8A, 0x8A, 0x8A),
-        TextInverse = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
-        WindowBackground = ColorF.FromRgba(0xF4, 0xF3, 0xF0),            // sunken warm off-white canvas (the visible Mica fallback / engine canvas)
-    };
 }

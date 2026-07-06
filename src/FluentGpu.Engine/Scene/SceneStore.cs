@@ -57,6 +57,11 @@ public sealed class SceneStore : ISceneBackend
     // scissor. Reset to Infinite when no fly is in flight. Read once per frame by the SceneRecorder overlay pass.
     public RectF OverlayClip = RectF.Infinite;
 
+    // Effective device-pixel scale (DIP→px), set by AppHost each frame from the window scale (1 in headless / on DPI
+    // change re-read). The sole consumer is the scroll content transform's device-pixel rounding (OverscrollPhysics.
+    // WriteContentTransform), so a sub-pixel pan advances in whole device pixels while the logical offset stays float.
+    public float DeviceScale = 1f;
+
     // topology (int indices; 0 = none)
     private int[] _parent, _firstChild, _lastChild, _prevSib, _nextSib, _childCount;
 
@@ -130,6 +135,7 @@ public sealed class SceneStore : ISceneBackend
     private readonly Dictionary<int, TextSpan[]> _spanText = new();
     private readonly Dictionary<int, (int Start, int End)> _textSelection = new();
     private readonly ColdSlab<ColorF> _selectionHighlight = new();   // GEN-17 (wired)
+    private readonly ColdSlab<GlyphWipe> _glyphWipes = new();        // sparse per-node glyph wipe (general text-reveal; lyrics karaoke)
     // E5-L2 drag-drop side-tables (sparse, O(sources)/O(targets), keyed by node index): the reconciler writes them
     // from BoxEl.Draggable / BoxEl.DropTarget; Input.DragDropContext reads them at promotion / per pointer move.
     private readonly Dictionary<int, DragSource> _dragSources = new();
@@ -157,7 +163,7 @@ public sealed class SceneStore : ISceneBackend
 
     /// <summary>Optional slot-free notification (node INDEX): invoked by <see cref="FreeSubtree"/> as a node's slot is
     /// reclaimed, so subsystems that key per-node state by INDEX (rather than gen-checked handle) — the AnimEngine
-    /// layout-transition side-table, the ScrollAnimator conscious-bar timers — can drop the dormant row symmetrically.
+    /// layout-transition side-table, the ScrollIntegrator conscious-bar timers — can drop the dormant row symmetrically.
     /// Without it a freed slot's stale spec/state would be inherited by the NEXT node reusing that index. Wired by the
     /// host; null on backends that don't use the index-keyed side-tables.</summary>
     public Action<int>? OnFreeIndex { get; set; }
@@ -285,36 +291,48 @@ public sealed class SceneStore : ISceneBackend
         _dragCompleted[idx] = null;
         _dragCanceled[idx] = null;
         ClearDynamicText(idx);
-        _scroll.Remove(idx);
-        _extents.Remove(idx);
+        NodeFlags flags = _flags[idx];
+        if ((flags & NodeFlags.Scrollable) != 0)
+        {
+            _scroll.Remove(idx);
+            _extents.Remove(idx);
+            _scrollObs.Remove(idx);
+        }
         _grids.Remove(idx);
-        _hitPassThrough.Remove(idx);
-        _interact.Remove(idx);
-        _shadows.Remove(idx);
-        _arcs.Remove(idx);
-        _polylines.Remove(idx);
-        _gradients.Remove(idx);
-        _borderBrushes.Remove(idx);
-        _hoverGradients.Remove(idx);
-        _pressedGradients.Remove(idx);
-        _hoverBorderBrushes.Remove(idx);
-        _pressedBorderBrushes.Remove(idx);
-        _acrylics.Remove(idx);
-        _edgeFades.Remove(idx);
-        _measureCache.Remove(idx);
-        _brushAnims.Remove(idx);
-        _textEdits.Remove(idx);
-        _textEditSelRects.Remove(idx);
-        _textEditUnderlineRects.Remove(idx);
-        _spanText.Remove(idx);
-        _textSelection.Remove(idx);
-        _selectionHighlight.Remove(idx);
-        _dragSources.Remove(idx);
-        _dropTargets.Remove(idx);
-        _gestureSubs.Remove(idx);   // drop the node's UseGesture declaration with it (handler closures released)
+        if (_hitPassThrough.Count != 0) _hitPassThrough.Remove(idx);
+        if ((flags & NodeFlags.InteractionAnim) != 0) _interact.Remove(idx);
+        if ((flags & NodeFlags.SparsePaint) != 0)
+        {
+            _shadows.Remove(idx);
+            _arcs.Remove(idx);
+            _polylines.Remove(idx);
+            _gradients.Remove(idx);
+            _borderBrushes.Remove(idx);
+            _hoverGradients.Remove(idx);
+            _pressedGradients.Remove(idx);
+            _hoverBorderBrushes.Remove(idx);
+            _pressedBorderBrushes.Remove(idx);
+            _acrylics.Remove(idx);
+            _edgeFades.Remove(idx);
+            _brushAnims.Remove(idx);
+        }
+        if (_paint[idx].VisualKind == VisualKind.Text)
+        {
+            _measureCache.Remove(idx);
+            if (_textEdits.Count != 0) _textEdits.Remove(idx);
+            if (_textEditSelRects.Count != 0) _textEditSelRects.Remove(idx);
+            if (_textEditUnderlineRects.Count != 0) _textEditUnderlineRects.Remove(idx);
+            if (_spanText.Count != 0) _spanText.Remove(idx);
+            if (_textSelection.Count != 0) _textSelection.Remove(idx);
+            _selectionHighlight.Remove(idx);
+            _glyphWipes.Remove(idx);
+        }
+        if (_dragSources.Count != 0) _dragSources.Remove(idx);
+        if (_dropTargets.Count != 0) _dropTargets.Remove(idx);
+        if (_gestureSubs.Count != 0) _gestureSubs.Remove(idx);   // drop the node's UseGesture declaration with it (handler closures released)
         if (DragGhost == node) DragGhost = NodeHandle.Null;   // a freed ghost must not linger in the recorder's top band
-        if ((_flags[idx] & NodeFlags.ConnectedOverlay) != 0) RemoveOverlay(node);   // a freed overlay must not linger in the band
-        OnFreeIndex?.Invoke(idx);   // symmetric teardown of INDEX-keyed external side-tables (AnimEngine transitions / ScrollAnimator timers)
+        if ((flags & NodeFlags.ConnectedOverlay) != 0) RemoveOverlay(node);   // a freed overlay must not linger in the band
+        OnFreeIndex?.Invoke(idx);   // symmetric teardown of INDEX-keyed external side-tables (AnimEngine transitions / ScrollIntegrator timers)
         _gen[idx]++;
         if (_gen[idx] == 0) _gen[idx] = 1;
         _nextFree[idx] = _freeHead;
@@ -508,8 +526,23 @@ public sealed class SceneStore : ISceneBackend
 
     // ── implicit brush transitions (WinUI BrushTransition; phase-7 advanced) ──────────────────────
     public bool HasBrushAnims => _brushAnims.Count > 0;
-    public void SetBrushAnim(NodeHandle h, in BrushAnim ba) => _brushAnims.GetOrAdd((int)h.Raw.Index) = ba;
+    public void SetBrushAnim(NodeHandle h, in BrushAnim ba)
+    {
+        int idx = (int)h.Raw.Index;
+        _flags[idx] |= NodeFlags.SparsePaint;
+        _brushAnims.GetOrAdd(idx) = ba;
+    }
     public bool TryGetBrushAnim(NodeHandle h, out BrushAnim ba) => _brushAnims.TryGet((int)h.Raw.Index, out ba);
+
+    /// <summary>Force a full re-record: mark every occupied node <see cref="NodeFlags.PaintDirty"/>. Device-lost recovery
+    /// (threading-render-seam.md §9) — after <c>RecoverDevice</c> the backend's textures + glyph atlas are freshly
+    /// recreated and empty, so the next frame must regenerate the WHOLE DrawList to repopulate them via on-demand glyph
+    /// re-rasterization + image re-upload. Paired with the host's <c>_needFullLayout</c>. Cold path (once per loss).</summary>
+    public void MarkAllPaintDirty()
+    {
+        for (int i = 1; i < _high; i++)
+            if (_gen[i] != 0) _flags[i] |= NodeFlags.PaintDirty;
+    }
 
     /// <summary>Set the brush cross-fade progress, driven by the unified engine's <c>AnimChannel.BrushFade</c> track
     /// (the separate per-frame AdvanceBrushAnims ticker is deleted). Marks PaintDirty; drops the row at T≥1 so the
@@ -590,6 +623,16 @@ public sealed class SceneStore : ISceneBackend
 
     public bool TryGetSpanText(NodeHandle h, out TextSpan[] spans)
         => _spanText.TryGetValue((int)h.Raw.Index, out spans!);
+
+    /// <summary>Attach (or clear, when null) a node's <see cref="GlyphWipe"/> — the sparse carrier for a glyph-run wipe
+    /// (the lyrics karaoke). Read by the recorder's Text case → emits <c>DrawGlyphRunGradient</c>. Only wiped nodes pay.</summary>
+    public void SetGlyphWipe(NodeHandle h, GlyphWipe? w)
+    {
+        int idx = (int)h.Raw.Index;
+        if (w is null) _glyphWipes.Remove(idx);
+        else _glyphWipes.GetOrAdd(idx) = w.Value;
+    }
+    public bool TryGetGlyphWipe(NodeHandle h, out GlyphWipe w) => _glyphWipes.TryGet((int)h.Raw.Index, out w);
 
     /// <summary>Swap a text node's span-run id with ownership accounting (the scene row owns one table ref plus one
     /// StringTable ref per span family — mirroring the <c>paint.Text</c> discipline). Reconciler rewrite path; the

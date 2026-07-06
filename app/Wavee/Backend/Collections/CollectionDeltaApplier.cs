@@ -25,7 +25,7 @@ public static class CollectionDeltaApplier
         for (int i = 0; i < items.Count; i++)
         {
             var it = items[i];
-            store.SetSaved(delta.SetId, it.Uri, !it.Removed, SyncState.Confirmed);
+            store.SetSaved(delta.SetId, it.Uri, !it.Removed, SyncState.Confirmed, it.AddedAt);   // ms; 0 preserves stored
         }
     }
 }

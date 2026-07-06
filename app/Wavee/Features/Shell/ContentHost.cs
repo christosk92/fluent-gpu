@@ -32,7 +32,7 @@ sealed class ContentHost : Component
     // than tearing down and cold-remounting the rail / track-list / trailing.
     Element DetailHost() => new BoxEl
     {
-        Key = "page:detail", Grow = 1f, Direction = 1,
+        Key = "page:detail", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
         Children = [ Embed.Comp(() => new DetailPage(_route)) ],
     };
 
@@ -40,7 +40,7 @@ sealed class ContentHost : Component
     // a track's artist link) in place — route-independent Key so KeepAlive reuses the mounted slot across artists.
     Element ArtistHost() => new BoxEl
     {
-        Key = "page:artist", Grow = 1f, Direction = 1,
+        Key = "page:artist", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
         Children = [ Embed.Comp(() => new ArtistPage(_route)) ],
     };
 
@@ -55,23 +55,27 @@ sealed class ContentHost : Component
     Element PageFor(Route r)
     {
         if (r.Name == "home")
-            return new BoxEl { Key = "page:home", Grow = 1f, Direction = 1,
+            return new BoxEl { Key = "page:home", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
                 Children = [ Embed.Comp(() => new HomePage()) ] };
 
         if (r.Name == "history")
-            return new BoxEl { Key = "page:history", Grow = 1f, Direction = 1,
+            return new BoxEl { Key = "page:history", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
                 Children = [ Embed.Comp(() => new HistoryPage()) ] };
 
+        if (r.Name == "settings")
+            return new BoxEl { Key = "page:settings", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
+                Children = [ Embed.Comp(() => new SettingsPage()) ] };
+
         if (r.Name == "search")
-            return new BoxEl { Key = "page:search", Grow = 1f, Direction = 1,
+            return new BoxEl { Key = "page:search", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
                 Children = [ Embed.Comp(() => new SearchPage()) ] };
 
         if (r.Name == "albums" || r.Name == "artists" || r.Name == "podcasts")
-            return new BoxEl { Key = "page:" + r.Name, Grow = 1f, Direction = 1,
+            return new BoxEl { Key = "page:" + r.Name, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
                 Children = [ Embed.Comp(() => new LibraryPage(r.Name)) ] };
 
         if (DiscographyRoute.Is(r.Name))
-            return new BoxEl { Key = "page:disco", Grow = 1f, Direction = 1,
+            return new BoxEl { Key = "page:disco", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
                 Children = [ Embed.Comp(() => new DiscographyPage(_route)) ] };
 
         if (IsArtist(r)) return ArtistHost();
@@ -81,7 +85,7 @@ sealed class ContentHost : Component
         return new BoxEl
         {
             Key = "page:" + r.Name,
-            Grow = 1f, Direction = 1, Gap = WaveeSpace.M,
+            Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1, Gap = WaveeSpace.M,
             AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Children =
             [

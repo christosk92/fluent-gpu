@@ -42,4 +42,11 @@
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
   </PropertyGroup>
 
+  <!-- FGGUARD: thread-confinement asserts (Hosting/Threading/ThreadGuard) are [Conditional("FGGUARD")] — a deterministic
+       throw in Debug/CI/soak builds, ERASED (along with their ThreadStatic branch) from Release/Ship AOT. This is the
+       "production safety == CI coverage" line for the render-thread seam (design/subsystems/threading-render-seam.md §1.2). -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+    <DefineConstants>$(DefineConstants);FGGUARD</DefineConstants>
+  </PropertyGroup>
+
 </Project>
