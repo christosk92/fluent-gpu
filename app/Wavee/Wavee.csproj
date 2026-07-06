@@ -33,7 +33,8 @@
   </PropertyGroup>
 
   <ItemGroup Condition="Exists('..\Wavee.PlayPlay\Wavee.PlayPlay.csproj')">
-    <Compile Include="..\Wavee.PlayPlay\*.cs" Link="Wavee.PlayPlay\%(Filename)%(Extension)" />
+    <Compile Include="..\Wavee.PlayPlay\**\*.cs" Exclude="..\Wavee.PlayPlay\**\bin\**;..\Wavee.PlayPlay\**\obj\**;..\Wavee.PlayPlay\Tests\**" Link="Wavee.PlayPlay\%(RecursiveDir)%(Filename)%(Extension)" />
+    <Protobuf Include="..\Wavee.PlayPlay\Protos\playplay.proto" GrpcServices="None" ProtoRoot="..\Wavee.PlayPlay\Protos" Condition="Exists('..\Wavee.PlayPlay\Protos\playplay.proto')" />
   </ItemGroup>
 
   <!-- Real Spotify wire protocol (handshake + login). Vendored .proto compiled via Grpc.Tools → the Wavee.Protocol

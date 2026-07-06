@@ -18,7 +18,7 @@ namespace Wavee.SpotifyLive.Audio;
 public sealed class AudioPlaybackStack : IAsyncDisposable
 {
     public AudioRuntimeStatusService Status { get; }
-    public PlayPlayRuntimeProvisioner Provisioner { get; }
+    public IPlayPlayProvisioner Provisioner { get; }
     public AudioKeyResolver KeyResolver { get; }
     public HeadFileClient HeadClient { get; }
     public IAudioHost Host { get; }
@@ -45,7 +45,11 @@ public sealed class AudioPlaybackStack : IAsyncDisposable
         _log = log;
         _structuredLog = structuredLog;
         Status = new AudioRuntimeStatusService();
+#if WAVEE_PLAYPLAY_LOCAL
         Provisioner = new PlayPlayRuntimeProvisioner(settings, Status, log, structuredLog: structuredLog);
+#else
+        Provisioner = NullPlayPlayProvisioner.Instance;
+#endif
         _useOutOfProcessHost = Environment.GetEnvironmentVariable("WAVEE_AUDIO_INPROC") != "1"
             && Environment.GetEnvironmentVariable("WAVEE_AUDIO_OOP") != "0";
         if (_useOutOfProcessHost)
@@ -78,7 +82,11 @@ public sealed class AudioPlaybackStack : IAsyncDisposable
         Func<IPlayPlayKeyDeriver?> deriver = () => _supervisedHost;
 #endif
         Func<RuntimeAsset?> runtime = () => RuntimeAsset;
-        var license = new PlayPlayLicenseClient(transport, log, structuredLog);
+#if WAVEE_PLAYPLAY_LOCAL
+        ILicenseClient? license = new PlayPlayLicenseClient(transport, log, structuredLog);
+#else
+        ILicenseClient? license = null;
+#endif
         var apKeys = new LiveAudioKeySource(apChannel);
         KeyResolver = new AudioKeyResolver(apKeys, deriver, runtime, license, Status, session, log, structuredLog);
         HeadClient = new HeadFileClient(new HttpClientExchange(), session, log);

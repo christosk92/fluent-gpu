@@ -15,3 +15,14 @@ public interface ILicenseClient
     Task<(ReadOnlyMemory<byte> Key, AudioKeyFailureReason Reason)> FetchObfuscatedKeyAsync(
         string fileIdHex, PlayPlayConfig config, CancellationToken ct);
 }
+
+public readonly record struct PlayPlayLicenseResult(
+    ReadOnlyMemory<byte> Key,
+    ReadOnlyMemory<byte> Auxiliary,
+    AudioKeyFailureReason Reason,
+    string FieldSummary,
+    ReadOnlyMemory<byte> RawBody = default,
+    ReadOnlyMemory<byte> RequestBody = default)
+{
+    public static PlayPlayLicenseResult Fail(AudioKeyFailureReason reason) => new(default, default, reason, "");
+}

@@ -6,7 +6,12 @@ app/Wavee.PlayPlay/
 private-runtimes/
 app/tmp_*
 scripts/pyghidra*
+tools/pyghidra*
+tools/playplay_*
+tools/x64_*
+tools/fill_random_sweep.py
 app/docs/wavee-playplay*.md
 app/docs/playplay-*.md
 app/docs/spotiload-offline-path.md
+playplay-probe-out*.txt
 **/playplay-runtime.json

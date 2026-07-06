@@ -1,0 +1,38 @@
+name: no-drm-material
+
+# Backstop for the local pre-commit hook (.githooks/pre-commit): fails if out-of-scope
+# reverse-engineering / native-derivation material lands in the public repo tree.
+on:
+  push:
+  pull_request:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan tracked tree for out-of-scope paths
+        run: |
+          set -e
+          # Paths that must never be tracked in the public repo.
+          bad_paths=$(git ls-files | grep -Ei \
+            '(^|/)\.native/|(^|/)tmp_ghidra|(^|/)pyghidra|(^|/)Wavee\.PlayPlay/|tmp_.*playplay|playplay-probe-out|(^|/)x64_.*(decomp|derive|dispatch|vm_chain|consts)|fill_random_sweep|spotiload-offline-path|wavee-playplay-.*\.md|(^|/)playplay-[0-9].*\.md' \
+            || true)
+          if [ -n "$bad_paths" ]; then
+            echo "::error::Out-of-scope RE/DRM paths are tracked in the public repo:"
+            echo "$bad_paths"
+            exit 1
+          fi
+      - name: Scan tracked text for mechanism keywords
+        run: |
+          set -e
+          # Exclude generated/vendored/site noise; scan source-ish files only.
+          hits=$(git grep -IniE 'ghidra|unplayplay|re-unplayplay|unicorn-engine|decrypt_key|spotiload' -- \
+            ':!docs/site/**' ':!**/obj/**' ':!**/bin/**' ':!vendor/**' ':!app/vendor/**' \
+            ':!CLAUDE.md' ':!AGENTS.md' ':!.gitignore' ':!.codexignore' ':!.codex/**' ':!.claude/**' \
+            ':!.githooks/**' ':!.github/workflows/no-drm-material.yml' ':!docs/guide/playplay-private-split.md' || true)
+          if [ -n "$hits" ]; then
+            echo "::error::Mechanism keywords found in tracked files:"
+            echo "$hits"
+            exit 1
+          fi

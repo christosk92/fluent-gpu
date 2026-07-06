@@ -9,12 +9,13 @@ scope and belong to a separate workspace. Unless the user names a specific file 
 it for this session, do not read, grep, edit, or summarize:
 
 - `app/.native/**`, `app/Wavee.PlayPlay/**`, `private-runtimes/**`
-- `app/tmp_*`, `scripts/pyghidra*`
+- `app/tmp_*`, `scripts/pyghidra*`, `tools/pyghidra*`, `tools/playplay_*`, `tools/x64_*`
 - `app/docs/wavee-playplay*.md`, `app/docs/playplay-*.md`, `app/docs/spotiload-offline-path.md`
 - `**/playplay-runtime.json`
 
-These are also denied to Claude Code's file tools in `.claude/settings.json`. If a request would
-require them, ask the user to move it to the dedicated workspace.
+These live in the separate `wavee-playplay-private` repo (see `docs/guide/playplay-private-split.md`),
+are gitignored + agent-fenced here, and a pre-commit guard (`.githooks/pre-commit`) blocks them from
+re-entering the public tree. If a request would require them, ask the user to work in that repo.
 
 ## What this repository is
 

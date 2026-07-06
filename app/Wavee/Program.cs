@@ -148,6 +148,7 @@ static class Program
             Environment.Exit(code);
         }
 
+#if WAVEE_PLAYPLAY_LOCAL
         if (Array.IndexOf(args, "--playplay-runtime-status") >= 0)
         {
             int code = Wavee.SpotifyLive.PlayPlayRuntimeProbe.RunStatus(args, Console.Error.WriteLine);
@@ -163,7 +164,6 @@ static class Program
             Environment.Exit(code);
         }
 
-#if WAVEE_PLAYPLAY_LOCAL
         if (Array.IndexOf(args, "--playplay-runtime-check") >= 0)
         {
             int code = Wavee.SpotifyLive.PlayPlayRuntimeProbe.RunCheck(args, Console.Error.WriteLine);
