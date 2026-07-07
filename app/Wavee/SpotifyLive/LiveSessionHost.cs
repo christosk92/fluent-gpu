@@ -126,7 +126,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
         {
             extendedMetadata = new Wavee.Backend.Metadata.ExtendedMetadataSource(live.Pipeline, () => live.BaseUrl, () => live.Session);
             metadata = new Wavee.Backend.Metadata.MetadataService(extendedMetadata, mdStore, () => live.Session);
-            contexts = new LiveContextResolver(transport, metadata, mdStore, log);
+            contexts = new LiveContextResolver(transport, metadata, mdStore, () => live.Session, log);
         }
 
         // Local audio (Stage H): wire the in-process decode/output stack when extended metadata can resolve file IDs.
@@ -166,6 +166,10 @@ public sealed class LiveSessionHost : IAsyncDisposable
         if (audio is not null)
         {
             svc.PlayPlayProvisioner = audio.Provisioner;
+            svc.AudioBodyCache = audio.BodyDiskCache;
+            svc.AudioLicenseCache = audio.LicenseDiskCache;
+            if (audio.BodyDiskCache is not null)
+                svc.Residency.Register(3, "audio-body-disk", () => audio.BodyDiskCache.Trim());
             void PushRuntime() => svc.Playback.UpdateRuntimeStatus(audio.Provisioner.GetSnapshot(), uiPost);
             audio.Status.Changed += () => PushRuntime();
             PushRuntime();

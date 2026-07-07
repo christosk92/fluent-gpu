@@ -166,14 +166,17 @@ sealed class DetailShell : Component
         // not re-run the mount effect); CLEAR on park (UseActivation.onDeactivated), which KeepAlive always fires before
         // it evicts/unmounts a backgrounded page, so navigating away (incl. to a non-detail page) reverts to plain Mica.
         // Every clear is owner-gated so an A→B navigation lands on B's colour no matter which effect fires first.
-        if (shellTint is not null)
+        void SetTint(ColorF? c)
         {
-            void SetTint(ColorF? c) => shellTint.Value = new ShellTintState(c, _tintOwner);
-            void ClearTint() { if (ReferenceEquals(shellTint.Peek().Owner, _tintOwner)) shellTint.Value = default; }
-
-            UseEffect(() => SetTint(micaTint), micaTint?.GetHashCode() ?? 0);
-            UseActivation(onActivated: () => SetTint(micaTint), onDeactivated: ClearTint);
+            if (shellTint is not null) shellTint.Value = new ShellTintState(c, _tintOwner);
         }
+        void ClearTint()
+        {
+            if (shellTint is not null && ReferenceEquals(shellTint.Peek().Owner, _tintOwner)) shellTint.Value = default;
+        }
+
+        UseEffect(() => SetTint(micaTint), DepKey.From(micaTint?.GetHashCode() ?? 0, shellTint?.GetHashCode() ?? 0));
+        UseActivation(onActivated: () => SetTint(micaTint), onDeactivated: ClearTint);
 
         // ── handlers (close over live svc/model; not frozen ctor args) ──
         void Play(int index) { if (m.ContextUri is { } uri && svc is not null) _ = svc.Player.PlayAsync(uri, Math.Max(0, index)); }

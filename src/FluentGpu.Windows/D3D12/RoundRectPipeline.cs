@@ -48,14 +48,16 @@ internal sealed unsafe class RoundRectPipeline : IDisposable
     private const int MaxInstances = 4096;
     private const int FrameCount = 2;   // double-buffered per frame-in-flight so frame N's CPU writes never race frame N-1's GPU reads
 
-    private ID3D12RootSignature* _rootSig;
+    private SdfSharedResources _shared = null!;
     private ID3D12PipelineState* _pso;
-    private ID3D12Resource* _quad;          // 4-vertex unit quad (upload heap)
     private readonly ID3D12Resource*[] _instances = new ID3D12Resource*[FrameCount];   // structured buffer of RectInstance per frame-in-flight (upload heap, persistently mapped)
     private readonly RectInstance*[] _mapped = new RectInstance*[FrameCount];
-    private D3D12_VERTEX_BUFFER_VIEW _quadView;
     private int _cursor;
     private int _active;
+    private ulong _activeGva;
+    private int _dropped;
+
+    public int DroppedInstances => _dropped;
 
     private const string Hlsl = """
 struct Inst
@@ -208,9 +210,9 @@ float4 PSMain(VSOut i) : SV_Target
 }
 """;
 
-    public void Init(ID3D12Device* device)
+    public void Init(ID3D12Device* device, SdfSharedResources shared)
     {
-        BuildRootSignature(device);
+        _shared = shared;
         BuildPipeline(device);
         BuildBuffers(device);
     }
@@ -238,33 +240,6 @@ float4 PSMain(VSOut i) : SV_Target
         return code;
     }
 
-    private void BuildRootSignature(ID3D12Device* device)
-    {
-        D3D12_ROOT_PARAMETER* p = stackalloc D3D12_ROOT_PARAMETER[2];
-        p[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE.D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-        p[0].Anonymous.Constants.ShaderRegister = 0;
-        p[0].Anonymous.Constants.RegisterSpace = 0;
-        p[0].Anonymous.Constants.Num32BitValues = 2;   // viewport (w,h)
-        p[0].ShaderVisibility = D3D12_SHADER_VISIBILITY.D3D12_SHADER_VISIBILITY_VERTEX;
-        p[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE.D3D12_ROOT_PARAMETER_TYPE_SRV;
-        p[1].Anonymous.Descriptor.ShaderRegister = 0;   // t0
-        p[1].Anonymous.Descriptor.RegisterSpace = 0;
-        p[1].ShaderVisibility = D3D12_SHADER_VISIBILITY.D3D12_SHADER_VISIBILITY_VERTEX;
-
-        D3D12_ROOT_SIGNATURE_DESC desc = default;
-        desc.NumParameters = 2;
-        desc.pParameters = p;
-        desc.Flags = D3D12_ROOT_SIGNATURE_FLAGS.D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
-
-        ID3DBlob* sig = null; ID3DBlob* err = null;
-        Check(D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION.D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err), "SerializeRootSignature");
-        ID3D12RootSignature* rs;
-        Check(device->CreateRootSignature(0, sig->GetBufferPointer(), sig->GetBufferSize(), __uuidof<ID3D12RootSignature>(), (void**)&rs), "CreateRootSignature");
-        _rootSig = rs;
-        sig->Release();
-        if (err != null) err->Release();
-    }
-
     private void BuildPipeline(ID3D12Device* device)
     {
         ID3DBlob* vs = Compile("VSMain", "vs_5_1");
@@ -283,7 +258,7 @@ float4 PSMain(VSOut i) : SV_Target
             elem.InstanceDataStepRate = 0;
 
             D3D12_GRAPHICS_PIPELINE_STATE_DESC pd = default;
-            pd.pRootSignature = _rootSig;
+            pd.pRootSignature = _shared.RootSignature;
             pd.VS = new D3D12_SHADER_BYTECODE { pShaderBytecode = vs->GetBufferPointer(), BytecodeLength = vs->GetBufferSize() };
             pd.PS = new D3D12_SHADER_BYTECODE { pShaderBytecode = ps->GetBufferPointer(), BytecodeLength = ps->GetBufferSize() };
             pd.InputLayout = new D3D12_INPUT_LAYOUT_DESC { pInputElementDescs = &elem, NumElements = 1 };
@@ -322,14 +297,6 @@ float4 PSMain(VSOut i) : SV_Target
 
     private void BuildBuffers(ID3D12Device* device)
     {
-        // unit quad (triangle strip): (0,0)(1,0)(0,1)(1,1)
-        float* quad = stackalloc float[8] { 0, 0, 1, 0, 0, 1, 1, 1 };
-        _quad = CreateUpload(device, sizeof(float) * 8, "RoundRect.QuadUpload");
-        void* qp; _quad->Map(0, null, &qp);
-        Buffer.MemoryCopy(quad, qp, sizeof(float) * 8, sizeof(float) * 8);
-        _quad->Unmap(0, null);
-        _quadView = new D3D12_VERTEX_BUFFER_VIEW { BufferLocation = _quad->GetGPUVirtualAddress(), SizeInBytes = sizeof(float) * 8, StrideInBytes = sizeof(float) * 2 };
-
         for (int f = 0; f < FrameCount; f++)
         {
             _instances[f] = CreateUpload(device, (uint)(sizeof(RectInstance) * MaxInstances), "RoundRect.InstanceUpload");
@@ -361,32 +328,34 @@ float4 PSMain(VSOut i) : SV_Target
 
     /// <summary>Select this frame's instance buffer (by back-buffer index) and reset the cursor. The chosen buffer was
     /// last written FrameCount frames ago, whose GPU work the device has already fenced — so no CPU↔GPU race.</summary>
-    public void BeginFrame(int frameIndex) { _active = ((frameIndex % FrameCount) + FrameCount) % FrameCount; _cursor = 0; }
+    public void BeginFrame(int frameIndex) { _active = ((frameIndex % FrameCount) + FrameCount) % FrameCount; _activeGva = _instances[_active]->GetGPUVirtualAddress(); _cursor = 0; _dropped = 0; }
 
-    /// <summary>Record one run. <paramref name="rebind"/> false = this pipeline's static state (root signature, PSO,
-    /// viewport constants, topology, quad VB) is still bound on <paramref name="cmd"/> from a previous run this frame —
-    /// only the per-run instance SRV offset + draw are recorded (the segment-flush storm dedup; the device tracks which
-    /// pipeline is bound and invalidates across compositor passes). Returns false when the instance buffer is full and
-    /// nothing was recorded (the command-list state is then untouched).</summary>
-    public bool Record(ID3D12GraphicsCommandList* cmd, ReadOnlySpan<RectInstance> instances, float vpW, float vpH, bool rebind = true)
+    /// <summary>Record one run. <paramref name="bindSharedState"/> binds the shared SDF root signature, viewport
+    /// constants, topology, and quad VB; <paramref name="bindPipelineState"/> binds this pipeline's PSO. When both are
+    /// false, only the per-run instance SRV offset + draw are recorded. Returns false when the instance buffer is full
+    /// and nothing was recorded (the command-list state is then untouched).</summary>
+    public bool Record(ID3D12GraphicsCommandList* cmd, ReadOnlySpan<RectInstance> instances, float vpW, float vpH,
+                       bool bindSharedState = true, bool bindPipelineState = true)
     {
         int start = _cursor;
         int count = Math.Min(instances.Length, MaxInstances - start);
-        if (count <= 0) return false;
+        if (count <= 0) { _dropped += instances.Length; return false; }
+        _dropped += instances.Length - count;
         for (int i = 0; i < count; i++) _mapped[_active][start + i] = instances[i];
         _cursor += count;
 
-        if (rebind)
+        if (bindSharedState)
         {
             float* vp = stackalloc float[2] { vpW, vpH };
-            cmd->SetGraphicsRootSignature(_rootSig);
-            cmd->SetPipelineState(_pso);
+            cmd->SetGraphicsRootSignature(_shared.RootSignature);
             cmd->SetGraphicsRoot32BitConstants(0, 2, vp, 0);
             cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
-            fixed (D3D12_VERTEX_BUFFER_VIEW* qv = &_quadView)
-                cmd->IASetVertexBuffers(0, 1, qv);
+            var qv = _shared.QuadView;
+            cmd->IASetVertexBuffers(0, 1, &qv);
         }
-        cmd->SetGraphicsRootShaderResourceView(1, _instances[_active]->GetGPUVirtualAddress() + (ulong)(start * sizeof(RectInstance)));
+        if (bindPipelineState)
+            cmd->SetPipelineState(_pso);
+        cmd->SetGraphicsRootShaderResourceView(1, _activeGva + (ulong)(start * sizeof(RectInstance)));
         cmd->DrawInstanced(4, (uint)count, 0, 0);
         return true;
     }
@@ -395,8 +364,6 @@ float4 PSMain(VSOut i) : SV_Target
     {
         for (int f = 0; f < FrameCount; f++)
             if (_instances[f] != null) { _instances[f]->Unmap(0, null); D3D12MemoryDiagnostics.Release(_instances[f], "RoundRect.InstanceUpload"); _instances[f]->Release(); _instances[f] = null; }
-        if (_quad != null) { D3D12MemoryDiagnostics.Release(_quad, "RoundRect.QuadUpload"); _quad->Release(); _quad = null; }
         if (_pso != null) _pso->Release();
-        if (_rootSig != null) _rootSig->Release();
     }
 }

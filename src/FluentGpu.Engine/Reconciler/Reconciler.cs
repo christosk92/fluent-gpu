@@ -166,6 +166,8 @@ public sealed class TreeReconciler
     public IReadSignal<int>? ImageEpoch { get; set; }
     /// <summary>Set by the host; clears input/focus state when a retained subtree is parked off the live scene chain.</summary>
     public Action<NodeHandle>? OnSubtreeDeactivated { get; set; }
+    /// <summary>Set by the host; called when a component context's passive/layout effect queue transitions 0→1.</summary>
+    public Action<RenderContext, bool>? RegisterPendingEffectContext { get; set; }
     /// <summary>Set by the host; called for each node as a subtree is parked/un-parked by KeepAlive so the animation +
     /// scroll tickers can quiesce that node's tracks (a parked, invisible tab must not keep the app awake / defeat the
     /// idle wake-stop). Wired to <c>AnimEngine.SetNodeParked</c> + <c>ScrollIntegrator.SetNodeParked</c>.</summary>
@@ -319,6 +321,7 @@ public sealed class TreeReconciler
         ctx.AnchorNode = anchor;
         ctx.ResolveContextSignal = ResolveContext;
         ctx.ImageEpoch = ImageEpoch;
+        ctx.RegisterPendingEffectContext = RegisterPendingEffectContext;
     }
 
     private Signal<object?>? ResolveContext(NodeHandle anchor, object channel)
@@ -506,6 +509,19 @@ public sealed class TreeReconciler
         }
     }
 
+    private void ReplaceSingleChild(NodeHandle parent, Element? newChild)
+    {
+        var child = _scene.FirstChild(parent);
+        if (!child.IsNull) Remove(child);
+
+        if (newChild is null) return;
+
+        var c = _scene.CreateNode(newChild.ElementTypeId);
+        _scene.AppendChild(parent, c);
+        Mount(c, newChild);
+        _scene.Mark(parent, NodeFlags.LayoutDirty);
+    }
+
     // ── Components (render-effects) ──────────────────────────────────────────────────────────────
 
     private void MountComponent(NodeHandle node, ComponentEl ce)
@@ -689,7 +705,18 @@ public sealed class TreeReconciler
             3 => se.OnFailed?.Invoke(),
             _ => se.Content(),
         };
-        ReconcileSingleChild(node, desired, lastEl);
+        bool branchChanged = lastBranch != 0 && branch != lastBranch;
+        if (branchChanged)
+        {
+            // Pending/ready/failed edges are semantic tree replacements even when both roots have the
+            // same ElementTypeId. Diffing the shimmer root in place keeps its animation state attached
+            // to the real branch.
+            ReplaceSingleChild(node, desired);
+        }
+        else
+        {
+            ReconcileSingleChild(node, desired, lastEl);
+        }
         // Inherit the active branch's layout participation (Grow/size) onto this transparent boundary — exactly like a
         // component (ReconcileComponent) or KeepAlive (ReconcileKeepAlive) does. Without it the SkelRegion node keeps its
         // default Grow=0, so a Grow=1 content subtree (e.g. a single-column virtualized list whose only intrinsic height
@@ -1248,25 +1275,30 @@ public sealed class TreeReconciler
         if (viewport <= 0f) viewport = horizontal ? Hint(ve.Width) : Hint(ve.Height);
 
         int count = ve.ItemCount;
-        int first, last;
+        int first, last, visibleFirst, visibleLast;
         if (ve.Layout is not null)
         {
             float cross = horizontal ? (sc.ViewportH > 0f ? sc.ViewportH : Hint(ve.Height))
                                      : (sc.ViewportW > 0f ? sc.ViewportW : Hint(ve.Width));
             ve.Layout.Window(count, cross, viewport, offset, ve.Overscan, out first, out last);
+            ve.Layout.Window(count, cross, viewport, offset, 0, out visibleFirst, out visibleLast);
         }
         else
         {
             var table = _scene.ExtentTableFor(node, count, ve.EstimatedExtent);
             first = Math.Max(0, table.IndexAt(offset) - ve.Overscan);
             last = Math.Min(count, table.IndexAt(offset + viewport) + 1 + ve.Overscan);
+            visibleFirst = table.IndexAt(offset);
+            visibleLast = Math.Min(count, table.IndexAt(offset + viewport) + 1);
         }
         if (last < first) last = first;
         int w = last - first;
+        if (visibleLast < visibleFirst) visibleLast = visibleFirst;
+        int visibleSlots = Math.Clamp(visibleLast - first, 0, w);
 
         if (ve.RowBind is not null)
         {
-            RealizeBoundWindow(node, content, entry, ve, first, last, w);
+            RealizeBoundWindow(node, content, entry, ve, first, last, w, visibleSlots);
             return;
         }
 
@@ -1321,24 +1353,26 @@ public sealed class TreeReconciler
     /// runtime again after re-realize so the rebinds land in the SAME frame.
     /// </summary>
     private void RealizeBoundWindow(NodeHandle node, NodeHandle content, VirtualEntry entry,
-                                    VirtualListEl ve, int first, int last, int w)
+                                    VirtualListEl ve, int first, int last, int w, int visibleSlots)
     {
         var rowBind = ve.RowBind!;
         var slots = entry.Slots ??= new List<(Signal<int>, Element)>(Math.Max(4, w));
         bool structural = false;
         int oldFirst = entry.PrevFirst, oldLast = entry.PrevFirst + entry.PrevLen;   // E11 lifecycle window delta
 
-        // Cold-mount stagger: if filling this window needs MANY new slots (a fresh mount / hint→real grow, never a
-        // recycle — a scroll keeps slots.Count == w), realize at most ColdRealizeRowsPerFrame rows per FRAME so the
-        // initial window doesn't reconcile in one frame (the nav cold-mount spike). The scroll extent is computed from
-        // the FULL ItemCount (ContentExtent), independent of the realized window, so the scrollbar stays correct as rows
-        // fill in. A STEADY scroll realize (slots.Count already == w) is never capped — its leading edge must not lag.
-        if (!entry.Warming && ve.StaggerColdRealize && slots.Count + ColdRealizeRowsPerFrame < w) { entry.Warming = true; _warmingCount++; }
+        // Cold-mount stagger can spread overscan slot creation, but it must never present a partial visible window.
+        // A shimmer-to-ready swap has no cover once the real branch mounts, so all visible rows must exist this frame.
+        int minVisibleTarget = Math.Clamp(visibleSlots, 0, w);
+        if (!entry.Warming && ve.StaggerColdRealize && Math.Max(slots.Count + ColdRealizeRowsPerFrame, minVisibleTarget) < w) { entry.Warming = true; _warmingCount++; }
         int target = w;
         if (entry.Warming)
         {
-            if (entry.LastGrowEpoch == FrameEpoch) target = slots.Count;   // already grew this frame → roll to next frame
-            else { target = Math.Min(w, slots.Count + ColdRealizeRowsPerFrame); entry.LastGrowEpoch = FrameEpoch; }
+            if (entry.LastGrowEpoch == FrameEpoch && slots.Count >= minVisibleTarget) target = slots.Count;   // already grew this frame → roll to next frame
+            else
+            {
+                target = Math.Min(w, Math.Max(minVisibleTarget, slots.Count + ColdRealizeRowsPerFrame));
+                if (target > slots.Count) entry.LastGrowEpoch = FrameEpoch;
+            }
         }
 
         while (slots.Count < target)   // grow: the template runs ONCE per slot; its element tree is never rebuilt

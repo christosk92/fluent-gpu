@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -36,27 +37,58 @@ public sealed class Resource<TKey, TValue> where TKey : notnull
     readonly Func<TKey, SessionContext, Task<TValue>> _fetch;
     readonly FreshnessPolicy _fresh;
     readonly Func<SessionContext> _ctx;
+    readonly Func<TValue, TimeSpan?>? _ttlOf;
+    readonly int _maxEntries;
+    readonly string? _name;
+    readonly Action<string>? _debugLog;
     readonly object _gate = new();
     readonly Dictionary<TKey, Entry> _cache = new();
     int _fetchCount;
+    long _hitCount, _missCount;
 
     public int FetchCount => _fetchCount;   // dedup / coalesce assertion hook
+    public long HitCount => Interlocked.Read(ref _hitCount);
+    public long MissCount => Interlocked.Read(ref _missCount);
 
     sealed class Entry
     {
         public TValue? Val;
         public bool HasVal;
         public DateTime FetchedAt;
+        public DateTime? ExpiresAt;
+        public long LastUse;
         public Task? InFlight;
         public bool NeedsRevalidate;   // set by the dealer route (MarkStale); the revision policies gate IsStale on it
         public string? Error;          // last fetch failure (cleared on success) — surfaced via Loaded.Error, not swallowed
     }
 
-    public Resource(Func<TKey, SessionContext, Task<TValue>> fetch, FreshnessPolicy fresh, Func<SessionContext> ctx)
+    public Resource(Func<TKey, SessionContext, Task<TValue>> fetch, FreshnessPolicy fresh, Func<SessionContext> ctx,
+        Func<TValue, TimeSpan?>? ttlOf = null, int maxEntries = 0, string? name = null, Action<string>? debugLog = null)
     {
         _fetch = fetch;
         _fresh = fresh;
         _ctx = ctx;
+        _ttlOf = ttlOf;
+        _maxEntries = maxEntries;
+        _name = name;
+        _debugLog = debugLog;
+    }
+
+    /// <summary>Await-able read: serve a resident fresh value without touching the network; otherwise join/start ONE
+    /// revalidation and return the outcome.</summary>
+    public async Task<Loaded<TValue>> GetAsync(TKey key, CancellationToken ct = default)
+    {
+        var peek = Peek(key);
+        if (peek.IsReady && !peek.IsStale)
+        {
+            Interlocked.Increment(ref _hitCount);
+            LogHitMiss("hit");
+            return peek;
+        }
+        Interlocked.Increment(ref _missCount);
+        LogHitMiss("miss");
+        await Revalidate(key).WaitAsync(ct).ConfigureAwait(false);
+        return Peek(key);
     }
 
     public Loaded<TValue> Use(TKey key)
@@ -73,9 +105,11 @@ public sealed class Resource<TKey, TValue> where TKey : notnull
             val = e.Val;
             stale = hasVal && IsStale(e);
             error = hasVal ? null : e.Error;
+            if (hasVal && !stale) Touch(e);
         }
         if (hasVal)
         {
+            if (!stale) Interlocked.Increment(ref _hitCount);
             if (stale) _ = Revalidate(key);      // SWR: serve stale, refresh in the background
             return Loaded<TValue>.Ready(val!, stale);
         }
@@ -108,11 +142,22 @@ public sealed class Resource<TKey, TValue> where TKey : notnull
         lock (_gate)
         {
             if (!_cache.TryGetValue(key, out var e)) return Loaded<TValue>.Loading;
-            if (e.HasVal) return Loaded<TValue>.Ready(e.Val!, IsStale(e));
+            if (e.HasVal)
+            {
+                Touch(e);
+                return Loaded<TValue>.Ready(e.Val!, IsStale(e));
+            }
             if (e.InFlight != null) return Loaded<TValue>.Loading;   // a fetch is in progress — not yet an error
             if (e.Error != null) return Loaded<TValue>.Err(e.Error); // surface the last failure (was silently swallowed)
             return Loaded<TValue>.Loading;
         }
+    }
+
+    /// <summary>Per-entry expiry time when <c>ttlOf</c> is configured — diagnostic / test visibility.</summary>
+    public DateTime? PeekExpiresAt(TKey key)
+    {
+        lock (_gate)
+            return _cache.TryGetValue(key, out var e) && e.HasVal ? e.ExpiresAt : null;
     }
 
     /// <summary>Record a value as freshly-fetched, bypassing the per-key fetch — for a batch path that fetched many at once
@@ -126,7 +171,23 @@ public sealed class Resource<TKey, TValue> where TKey : notnull
             e.HasVal = true;
             e.Error = null;
             e.FetchedAt = DateTime.UtcNow;
+            e.ExpiresAt = ComputeExpiresAt(value);
             e.NeedsRevalidate = false;
+            Touch(e);
+            EvictIfNeeded();
+        }
+    }
+
+    /// <summary>Drop the value so the next Get/Use fetches. Unlike MarkStale, the dead value is never served again.</summary>
+    public void Invalidate(TKey key)
+    {
+        lock (_gate)
+        {
+            if (!_cache.TryGetValue(key, out var e)) return;
+            e.HasVal = false;
+            e.Val = default;
+            e.Error = null;
+            e.ExpiresAt = null;
         }
     }
 
@@ -148,7 +209,17 @@ public sealed class Resource<TKey, TValue> where TKey : notnull
         {
             Interlocked.Increment(ref _fetchCount);
             var v = await _fetch(key, _ctx()).ConfigureAwait(false);
-            lock (_gate) { e.Val = v; e.HasVal = true; e.Error = null; e.FetchedAt = DateTime.UtcNow; e.NeedsRevalidate = false; }
+            lock (_gate)
+            {
+                e.Val = v;
+                e.HasVal = true;
+                e.Error = null;
+                e.FetchedAt = DateTime.UtcNow;
+                e.ExpiresAt = ComputeExpiresAt(v);
+                e.NeedsRevalidate = false;
+                Touch(e);
+                EvictIfNeeded();
+            }
         }
         catch (Exception ex)
         {
@@ -163,15 +234,48 @@ public sealed class Resource<TKey, TValue> where TKey : notnull
         }
     }
 
-    bool IsStale(Entry e) => _fresh switch
+    DateTime? ComputeExpiresAt(TValue value) =>
+        _ttlOf?.Invoke(value) is { } t ? DateTime.UtcNow + t : null;
+
+    static void Touch(Entry e) => e.LastUse = Stopwatch.GetTimestamp();
+
+    void EvictIfNeeded()
     {
-        FreshnessPolicy.Etag et => DateTime.UtcNow - e.FetchedAt > et.Ttl,
-        FreshnessPolicy.PollWhole pw => DateTime.UtcNow - e.FetchedAt > pw.Ttl,
-        FreshnessPolicy.Immutable => false,
-        // Revision-gated: stale ONLY when the dealer route marked the key dirty (or it was never fetched). A resident,
-        // un-pushed entry is served without a re-fetch — this is the bounded-work / anti-herd contract.
-        FreshnessPolicy.RevisionDelta => e.NeedsRevalidate,
-        FreshnessPolicy.SnapshotRevision => e.NeedsRevalidate,
-        _ => true,
-    };
+        if (_maxEntries <= 0 || _cache.Count <= _maxEntries) return;
+        while (_cache.Count > _maxEntries)
+        {
+            TKey victim = default!;
+            long oldest = long.MaxValue;
+            bool found = false;
+            foreach (var (k, entry) in _cache)
+            {
+                if (entry.InFlight != null) continue;
+                if (entry.LastUse < oldest) { oldest = entry.LastUse; victim = k; found = true; }
+            }
+            if (!found) break;
+            _cache.Remove(victim);
+        }
+    }
+
+    void LogHitMiss(string kind)
+    {
+        if (_name is null) return;
+        _debugLog?.Invoke($"resource {_name}: {kind}");
+    }
+
+    bool IsStale(Entry e)
+    {
+        if (e.ExpiresAt is { } exp && DateTime.UtcNow >= exp) return true;
+        return _fresh switch
+        {
+            FreshnessPolicy.Etag et => DateTime.UtcNow - e.FetchedAt > et.Ttl,
+            FreshnessPolicy.PollWhole pw => DateTime.UtcNow - e.FetchedAt > pw.Ttl,
+            FreshnessPolicy.Immutable => false,
+            // Revision-gated: stale ONLY when the dealer route marked the key dirty (or it was never fetched). A resident,
+            // un-pushed entry is served without a re-fetch — this is the bounded-work / anti-herd contract.
+            FreshnessPolicy.RevisionDelta => e.NeedsRevalidate,
+            FreshnessPolicy.SnapshotRevision => e.NeedsRevalidate,
+            _ => true,
+        };
+    }
 }

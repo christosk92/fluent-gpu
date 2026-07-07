@@ -73,6 +73,7 @@ public sealed record PlayPlayRuntimeCatalogEntry(
         PlayPlayRuntimeManifest.TryParseArch(Arch, out var arch) && arch == RuntimeInformation.ProcessArchitecture;
 }
 
+[JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(PlayPlayRuntimeCatalog))]
 [JsonSerializable(typeof(PlayPlayRuntimeCatalogEntry))]
 [JsonSerializable(typeof(PlayPlayRuntimeManifestConfig))]

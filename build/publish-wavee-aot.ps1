@@ -1,0 +1,46 @@
+<#
+.SYNOPSIS
+  Publish Wavee as a NativeAOT single-file native exe.
+
+.EXAMPLE
+  build\publish-wavee-aot.cmd
+  pwsh build/publish-wavee-aot.ps1
+  pwsh build/publish-wavee-aot.ps1 -Arch x64
+#>
+[CmdletBinding()]
+param(
+  [ValidateSet('arm64', 'x64')]
+  [string]$Arch = $(if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64') { 'arm64' } else { 'x64' }),
+  [string]$Configuration = 'Release'
+)
+$ErrorActionPreference = 'Stop'
+
+$root   = Split-Path -Parent $PSScriptRoot
+$csproj = Join-Path $root 'app\Wavee\Wavee.csproj'
+$rid    = "win-$Arch"
+$outDir = Join-Path $root "app\Wavee\bin\$Configuration\net10.0\$rid\publish"
+$exe    = Join-Path $outDir 'Wavee.exe'
+
+function Step($m) { Write-Host "==> $m" -ForegroundColor Cyan }
+
+# ILC needs link.exe via vswhere on PATH.
+$vsInstaller = 'C:\Program Files (x86)\Microsoft Visual Studio\Installer'
+if ((Test-Path "$vsInstaller\vswhere.exe") -and ($env:PATH -notlike "*$vsInstaller*")) {
+  $env:PATH = "$vsInstaller;$env:PATH"
+}
+
+# Keep MSBuild/VBCSCompiler temp under the repo (short path, no roaming-profile locks).
+$tmp = Join-Path $root '.tmp-msbuild'
+New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+$env:TEMP = $tmp
+$env:TMP  = $tmp
+
+Step "Publishing Wavee NativeAOT ($rid, $Configuration)"
+& dotnet publish $csproj -c $Configuration -r $rid /p:NuGetAudit=false --nologo
+if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed ($LASTEXITCODE)." }
+
+if (-not (Test-Path $exe)) { throw "Expected output not found: $exe" }
+$info = Get-Item $exe
+Write-Host ""
+Write-Host "Done: $($info.FullName)" -ForegroundColor Green
+Write-Host "      $([math]::Round($info.Length / 1MB, 2)) MB"

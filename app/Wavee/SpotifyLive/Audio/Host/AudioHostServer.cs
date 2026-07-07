@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Wavee;
 using Wavee.Backend;
 using Wavee.Backend.Audio;
 #if WAVEE_PLAYPLAY_LOCAL
@@ -33,7 +34,8 @@ internal sealed class AudioHostServer : IDisposable
         _ipc = ipc;
         _launchToken = launchToken;
         _log = log;
-        _engine = new AudioPlayEngine(LogAndNotify, (_, seed) => CreateCdnDecryptor(seed));
+        _engine = new AudioPlayEngine(LogAndNotify, (_, seed) => CreateCdnDecryptor(seed),
+            AudioBodyDiskCache.FromSettings(AppDataSettings.ForUnpackaged("Wavee", "Wavee")));
         _engine.State += OnEngineState;
         _engine.TrackFinished += OnTrackFinished;
     }

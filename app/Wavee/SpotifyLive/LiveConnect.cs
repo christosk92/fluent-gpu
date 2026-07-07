@@ -62,7 +62,9 @@ public sealed class LiveConnect : IDisposable
         _host = audio is not null ? audio.Host : new SilentAudioHost();
         var resolver = audio?.TrackResolver ?? (ITrackResolver)new StubTrackResolver();
         // Instant-start: when the local-audio stack is present, resolve head+key in parallel and start on the clear head.
-        var fast = audio is not null ? new FastTrackPlayback(audio.TrackResolver, audio.HeadClient, log) : null;
+        var fast = audio is not null
+            ? new FastTrackPlayback(audio.TrackResolver, audio.HeadClient, log, audio.TrackResolver.InvalidateCdn)
+            : null;
         var outbound = new LiveOutboundControl(transport, deviceId, () => _connect.CurrentConnectionId);
         var gaboCtx = GaboContextFactory.Create();
         settings ??= AppDataSettings.ForUnpackaged("Wavee", "Wavee");

@@ -163,7 +163,9 @@ public readonly record struct ColorF(float R, float G, float B, float A)
 public readonly record struct Affine2D(float M11, float M12, float M21, float M22, float Dx, float Dy)
 {
     public static Affine2D Identity => new(1, 0, 0, 1, 0, 0);
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Affine2D Translation(float dx, float dy) => new(1, 0, 0, 1, dx, dy);
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Affine2D Scale(float sx, float sy) => new(sx, 0, 0, sy, 0, 0);
     public static Affine2D Rotation(float radians)
     {
@@ -179,6 +181,17 @@ public readonly record struct Affine2D(float M11, float M12, float M21, float M2
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public RectF TransformBounds(in RectF r)
     {
+        if (M12 == 0f && M21 == 0f)
+        {
+            float bx = M11 * r.X + Dx;
+            float by = M22 * r.Y + Dy;
+            float w = M11 * r.W;
+            float h = M22 * r.H;
+            if (w < 0f) { bx += w; w = -w; }
+            if (h < 0f) { by += h; h = -h; }
+            return new RectF(bx, by, w, h);
+        }
+
         float x = M11 * r.X + M21 * r.Y + Dx;
         float y = M12 * r.X + M22 * r.Y + Dy;
         float wx = M11 * r.W, wy = M12 * r.W;
@@ -191,6 +204,7 @@ public readonly record struct Affine2D(float M11, float M12, float M21, float M2
     }
 
     /// <summary>this ∘ other (apply <paramref name="other"/> first, then this).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Affine2D Multiply(in Affine2D o) => new(
         M11 * o.M11 + M21 * o.M12,
         M12 * o.M11 + M22 * o.M12,
@@ -198,6 +212,16 @@ public readonly record struct Affine2D(float M11, float M12, float M21, float M2
         M12 * o.M21 + M22 * o.M22,
         M11 * o.Dx + M21 * o.Dy + Dx,
         M12 * o.Dx + M22 * o.Dy + Dy);
+
+    /// <summary>Compose a child translation after this transform without allocating or multiplying a temporary matrix.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public Affine2D Translate(float dx, float dy) => new(
+        M11,
+        M12,
+        M21,
+        M22,
+        M11 * dx + M21 * dy + Dx,
+        M12 * dx + M22 * dy + Dy);
 
     /// <summary>Inverse-map a DEVICE point back through this transform into the pre-transform frame — the hit-test
     /// mirror of <see cref="Transform"/> (scale-aware pointer routing into Viewbox/zoomed content). False when the

@@ -122,14 +122,28 @@ public static partial class LyricsWordFormats
                 var syl = new List<LyricSyllable>();
                 if (e.TryGetProperty("l", out var l) && l.ValueKind == System.Text.Json.JsonValueKind.Array)
                 {
-                    var arr = l.EnumerateArray().ToList();
+                    var arr = l.EnumerateArray()
+                        .Select(x => (
+                            Text: x.TryGetProperty("c", out var cv) && cv.ValueKind == System.Text.Json.JsonValueKind.String ? cv.GetString()! : "",
+                            Offset: x.TryGetProperty("o", out var ov) ? ov.GetDouble() : 0d))
+                        .ToList();
                     for (int i = 0; i < arr.Count; i++)
                     {
-                        string c = arr[i].TryGetProperty("c", out var cv) && cv.ValueKind == System.Text.Json.JsonValueKind.String ? cv.GetString()! : "";
-                        double o = arr[i].TryGetProperty("o", out var ov) ? ov.GetDouble() : 0;
-                        double oNext = i + 1 < arr.Count && arr[i + 1].TryGetProperty("o", out var on) ? on.GetDouble() : te - ts;
-                        if (c.Length == 0) continue;
-                        syl.Add(new LyricSyllable((long)((ts + o) * 1000), (long)((ts + oNext) * 1000), c));
+                        var (c, o) = arr[i];
+                        if (c.Length == 0 || string.IsNullOrWhiteSpace(c)) continue;
+
+                        string chunk = c;
+                        int next = i + 1;
+                        while (next < arr.Count && string.IsNullOrWhiteSpace(arr[next].Text))
+                        {
+                            chunk += arr[next].Text;
+                            next++;
+                        }
+
+                        double oNext = next < arr.Count ? arr[next].Offset : te - ts;
+                        long startMs = (long)((ts + o) * 1000);
+                        long endMs = Math.Max(startMs + 1, (long)((ts + Math.Max(o, oNext)) * 1000));
+                        syl.Add(new LyricSyllable(startMs, endMs, chunk));
                     }
                 }
                 lines.Add(new LyricLine((long)(ts * 1000), text.Trim(), syl, (long)(te * 1000), IsWordByWord: syl.Count > 0));

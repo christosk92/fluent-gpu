@@ -165,6 +165,7 @@ public sealed partial class RenderContext
 
     public readonly List<Action> PendingEffects = new();        // UseEffect — after present (phase 12)
     public readonly List<Action> PendingLayoutEffects = new();  // UseLayoutEffect — after layout, before paint (phase 6.5)
+    internal Action<RenderContext, bool>? RegisterPendingEffectContext;
 
     // Injected by the reconciler/host at mount.
     public ReactiveRuntime? Runtime;            // creates signals/memos; schedules this component's render-effect
@@ -221,6 +222,8 @@ public sealed partial class RenderContext
     /// <summary>Run every pending effect cleanup + dispose owned reactive primitives (component unmount).</summary>
     public void RunAllCleanups()
     {
+        PendingEffects.Clear();
+        PendingLayoutEffects.Clear();
         if (_cleanupCellCount == 0) return;
         foreach (var cell in _cells)
         {
@@ -341,7 +344,7 @@ public sealed partial class RenderContext
         if (changed)
         {
             cell.Deps = deps;
-            target.Add(() => { cell.Cleanup?.Invoke(); effect(); });
+            EnqueueEffect(target, () => { cell.Cleanup?.Invoke(); effect(); });
         }
     }
 
@@ -356,8 +359,15 @@ public sealed partial class RenderContext
         if (changed)
         {
             cell.Key = deps;
-            target.Add(() => { cell.Cleanup?.Invoke(); effect(); });
+            EnqueueEffect(target, () => { cell.Cleanup?.Invoke(); effect(); });
         }
+    }
+
+    private void EnqueueEffect(List<Action> target, Action action)
+    {
+        if (target.Count == 0)
+            RegisterPendingEffectContext?.Invoke(this, ReferenceEquals(target, PendingLayoutEffects));
+        target.Add(action);
     }
 
     /// <summary>State driven by a reducer (the React <c>useReducer</c>); dispatches fold over the latest committed state.</summary>

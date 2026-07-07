@@ -16,7 +16,7 @@ internal sealed class RangedHttpSource : IDisposable
 {
     const int MinFetchBytes = 64 * 1024;
     const int MaxReadAheadBytes = 256 * 1024;
-    const int CdnChunkBytes = 64 * 1024;
+    internal const int CdnChunkBytes = AudioBodyDiskCache.ChunkBytes;
     static readonly bool RangeTrace = string.Equals(
         Environment.GetEnvironmentVariable("WAVEE_AUDIO_RANGE_TRACE"), "1", StringComparison.Ordinal);
 
@@ -34,6 +34,7 @@ internal sealed class RangedHttpSource : IDisposable
     readonly object _sizeGate = new();
     readonly object _dataGate = new();
     readonly Dictionary<int, byte[]> _cdnChunks = new();
+    readonly AudioBodyDiskCache? _disk;
 
     string[] _cdnUrls = [];
     long _size;
@@ -44,7 +45,8 @@ internal sealed class RangedHttpSource : IDisposable
     Task? _readAheadTask;
 
     public RangedHttpSource(HttpClient http, string name, Action<string>? log, int headFloor,
-        Action? onRangeAvailable, bool requireRange = true, int maxRetries = 3, int baseBackoffMs = 150)
+        Action? onRangeAvailable, bool requireRange = true, int maxRetries = 3, int baseBackoffMs = 150,
+        AudioBodyDiskCache? disk = null)
     {
         _http = http ?? throw new ArgumentNullException(nameof(http));
         _name = string.IsNullOrWhiteSpace(name) ? "unknown" : name;
@@ -54,6 +56,7 @@ internal sealed class RangedHttpSource : IDisposable
         _requireRange = requireRange;
         _maxRetries = Math.Max(1, maxRetries);
         _baseBackoffMs = Math.Max(0, baseBackoffMs);
+        _disk = disk;
     }
 
     public long KnownSize => Volatile.Read(ref _size);
@@ -66,6 +69,11 @@ internal sealed class RangedHttpSource : IDisposable
         var urls = cdnUrls.Where(static u => !string.IsNullOrWhiteSpace(u)).ToArray();
         if (urls.Length == 0) throw new InvalidOperationException("no CDN urls");
         _cdnUrls = urls;
+        if (knownSize is not > 0)
+        {
+            var diskSize = _disk?.KnownSize(_name);
+            if (diskSize is > 0) knownSize = diskSize;
+        }
         if (knownSize is > 0) SetSize(knownSize.Value);
     }
 
@@ -211,6 +219,14 @@ internal sealed class RangedHttpSource : IDisposable
 
     async Task FetchChunkWithMirrorsAsync(long start, long end, CancellationToken ct)
     {
+        var diskEnd = TryLoadFromDisk(start, end);
+        if (diskEnd >= end)
+        {
+            _onRangeAvailable?.Invoke();
+            return;
+        }
+        if (diskEnd > start) start = diskEnd;
+
         Exception? last = null;
         var urls = _cdnUrls;
         var sw = Stopwatch.StartNew();
@@ -327,8 +343,28 @@ internal sealed class RangedHttpSource : IDisposable
         }
     }
 
+    long TryLoadFromDisk(long start, long end)
+    {
+        if (_disk is null) return start;
+        long pos = start;
+        while (pos < end)
+        {
+            int ci = (int)(pos / CdnChunkBytes);
+            var buf = new byte[CdnChunkBytes];
+            if (!_disk.TryReadChunk(_name, ci, buf, out int len) || len <= 0) break;
+            long cs = (long)ci * CdnChunkBytes;
+            WriteCdnBytes(cs, buf, len);
+            pos = cs + len;
+            if (len < CdnChunkBytes) break;
+        }
+        if (pos > start) _ranges.AddRange(start, pos);
+        return pos;
+    }
+
     void WriteCdnBytes(long start, byte[] source, int count)
     {
+        int firstCi = (int)(start / CdnChunkBytes);
+        int lastCi = (int)((start + count - 1) / CdnChunkBytes);
         lock (_dataGate)
         {
             int src = 0;
@@ -348,6 +384,38 @@ internal sealed class RangedHttpSource : IDisposable
                 pos += n;
             }
         }
+        for (int ci = firstCi; ci <= lastCi; ci++)
+        {
+            long cs = (long)ci * CdnChunkBytes;
+            if (start + count >= cs + CdnChunkBytes) MaybeFlushChunk(ci);
+        }
+    }
+
+    void MaybeFlushChunk(int chunkIndex, bool allowPartial = false)
+    {
+        if (_disk is null) return;
+        long cs = (long)chunkIndex * CdnChunkBytes;
+        var size = Volatile.Read(ref _size);
+        int len = CdnChunkBytes;
+        if (size > 0)
+        {
+            if (cs >= size) return;
+            if (cs + CdnChunkBytes > size) len = (int)(size - cs);
+        }
+        else if (!allowPartial) return;
+
+        lock (_dataGate)
+        {
+            if (!_cdnChunks.TryGetValue(chunkIndex, out var chunk)) return;
+            _disk.WriteChunk(_name, chunkIndex, chunk.AsSpan(0, len));
+        }
+    }
+
+    void FlushTailChunkToDisk(long size)
+    {
+        if (_disk is null || size <= 0) return;
+        int lastCi = (int)((size - 1) / CdnChunkBytes);
+        MaybeFlushChunk(lastCi, allowPartial: true);
     }
 
     void SetSize(long size)
@@ -360,7 +428,11 @@ internal sealed class RangedHttpSource : IDisposable
             if (_size > 0 && _size != size) throw new IOException($"CDN size changed from {_size} to {size}");
             _size = size;
         }
+        _disk?.SetSize(_name, size);
+        FlushTailChunkToDisk(size);
     }
+
+    public void InvalidateDiskCache() => _disk?.Invalidate(_name);
 
     public void Dispose()
     {

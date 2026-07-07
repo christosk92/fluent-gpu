@@ -12,8 +12,9 @@ public GitHub record.
 
 ## How it links back in
 
-The build is absence-tolerant. The presence of `app/Wavee.PlayPlay/Wavee.PlayPlay.csproj` flips the
-`WAVEE_PLAYPLAY_LOCAL` MSBuild symbol; the package's `**/*.cs` + `Protos/playplay.proto` then source-link
+The build is absence-tolerant. The presence of `app/Wavee.PlayPlay/Client/InProcessPlayPlayKeyDeriver.cs` flips the
+`WAVEE_PLAYPLAY_LOCAL` MSBuild symbol (not the sibling csproj alone — a partial junction must not enable code paths
+that reference types which never compile); the package's `**/*.cs` + `Protos/playplay.proto` then source-link
 into the `Wavee` assembly (`app/Wavee/Wavee.csproj`), and the test project links `Tests/`. With the
 package absent, the app compiles against the public seam only: `IPlayPlayKeyDeriver`/`NullPlayPlayKeyDeriver`,
 `IPlayPlayProvisioner`/`NullPlayPlayProvisioner`, and the pure DTOs/status enums under

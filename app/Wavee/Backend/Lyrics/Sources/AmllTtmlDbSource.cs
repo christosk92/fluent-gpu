@@ -13,7 +13,7 @@ namespace Wavee.Backend.Lyrics.Sources;
 public sealed class AmllTtmlDbSource : ILyricCandidateSource
 {
     public const string DefaultTemplate =
-        "https://raw.githubusercontent.com/amll-dev/amll-ttml-db/refs/heads/main/spotify-lyrics/{0}.ttml";
+        "https://raw.githubusercontent.com/amll-dev/amll-ttml-db/main/spotify-lyrics/{0}.ttml";
 
     readonly ILyricHttp _http;
     readonly string _template;

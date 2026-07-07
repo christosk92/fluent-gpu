@@ -92,7 +92,9 @@ sealed class FakeLicense : ILicenseClient
 sealed class FakeDeriver : IPlayPlayKeyDeriver
 {
     public int Calls;
+    public int FailUntilCalls;
     public byte[]? Key;
+    public byte[]? NativeCdnSeed;
     public byte[]? LastAux;
     public byte[]? LastLicenseRaw;
     public byte[]? LastLicenseRequest;
@@ -112,7 +114,9 @@ sealed class FakeDeriver : IPlayPlayKeyDeriver
         LastAux = playPlayAux.ToArray();
         LastLicenseRaw = licenseRaw.ToArray();
         LastLicenseRequest = licenseRequest.ToArray();
-        return Task.FromResult(new PlayPlayDeriveResult(Key ?? default, Reason));
+        if (Calls <= FailUntilCalls)
+            return Task.FromResult(new PlayPlayDeriveResult(default, Reason, "fail-until"));
+        return Task.FromResult(new PlayPlayDeriveResult(Key ?? default, Reason, NativeCdnSeed: NativeCdnSeed ?? default));
     }
 }
 

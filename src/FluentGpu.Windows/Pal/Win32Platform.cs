@@ -760,6 +760,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     }
 
     private CursorId _cursor = CursorId.Arrow;
+    private readonly HCURSOR[] _cursorCache = new HCURSOR[11];
 
     /// <summary>Set the client-area cursor (applied immediately and re-asserted on every WM_SETCURSOR over the client).</summary>
     public void SetCursor(CursorId id)
@@ -769,7 +770,17 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     }
 
     private void ApplyCursor()
-        => TerraFX.Interop.Windows.Windows.SetCursor(LoadCursorW(default, (char*)IdcFor(_cursor)));
+        => TerraFX.Interop.Windows.Windows.SetCursor(CursorFor(_cursor));
+
+    private HCURSOR CursorFor(CursorId id)
+    {
+        int slot = id.Value is >= 0 and < 11 ? id.Value : 0;
+        HCURSOR h = _cursorCache[slot];
+        if (h != HCURSOR.NULL) return h;
+        h = LoadCursorW(default, (char*)IdcFor(id));
+        _cursorCache[slot] = h;
+        return h;
+    }
 
     private static int IdcFor(CursorId id) => id.Value switch
     {

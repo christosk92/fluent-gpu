@@ -352,23 +352,55 @@ public sealed class MusixmatchSource : ILyricCandidateSource
         {
             using var d = JsonDocument.Parse(json);
             // message.body.macro_calls["track.richsync.get"].message.body.richsync.richsync_body
-            if (!Nav(d.RootElement, out var richBody)) return null;
-            string? body = GreyHttp.Str(richBody, "richsync_body");
-            if (string.IsNullOrWhiteSpace(body)) return null;
-            var doc = LyricsWordFormats.ParseRichsync(body!, req.TrackId, Id);
-            return doc.Lines.Count > 0 ? new LyricsCandidate(Id, Prior, basis, doc) : null;
+            if (TryGetRichsyncBody(d.RootElement, out var body))
+            {
+                var doc = LyricsWordFormats.ParseRichsync(body, req.TrackId, Id);
+                if (doc.Lines.Count > 0) return new LyricsCandidate(Id, Prior, basis, doc);
+            }
+
+            // The same macro response normally also carries track.subtitles.get as LRC. Keep it as a line-synced fallback
+            // when richsync is missing or malformed instead of turning a valid Musixmatch hit into a miss.
+            if (TryGetSubtitleBody(d.RootElement, out var lrc))
+            {
+                var doc = LyricsText.ParseLrc(lrc, req.TrackId, Id);
+                if (doc.Lines.Count > 0) return new LyricsCandidate(Id, Prior, basis, doc);
+            }
+
+            return null;
         }
         catch { return null; }
     }
 
-    static bool Nav(JsonElement root, out JsonElement richsync)
+    static bool TryGetRichsyncBody(JsonElement root, out string body)
     {
-        richsync = default;
+        body = "";
+        if (!TryGetMacroCalls(root, out var mc) || !mc.TryGetProperty("track.richsync.get", out var rg)) return false;
+        if (!rg.TryGetProperty("message", out var m) || !m.TryGetProperty("body", out var b)) return false;
+        if (!b.TryGetProperty("richsync", out var richsync)) return false;
+        body = GreyHttp.Str(richsync, "richsync_body") ?? "";
+        return !string.IsNullOrWhiteSpace(body);
+    }
+
+    static bool TryGetSubtitleBody(JsonElement root, out string body)
+    {
+        body = "";
+        if (!TryGetMacroCalls(root, out var mc) || !mc.TryGetProperty("track.subtitles.get", out var sg)) return false;
+        if (!sg.TryGetProperty("message", out var m) || !m.TryGetProperty("body", out var b)) return false;
+        if (!b.TryGetProperty("subtitle_list", out var list) || list.ValueKind != JsonValueKind.Array) return false;
+        foreach (var item in list.EnumerateArray())
+        {
+            if (!item.TryGetProperty("subtitle", out var sub)) continue;
+            body = GreyHttp.Str(sub, "subtitle_body") ?? "";
+            if (!string.IsNullOrWhiteSpace(body)) return true;
+        }
+        return false;
+    }
+
+    static bool TryGetMacroCalls(JsonElement root, out JsonElement macroCalls)
+    {
+        macroCalls = default;
         if (!root.TryGetProperty("message", out var m) || !m.TryGetProperty("body", out var b)) return false;
-        if (!b.TryGetProperty("macro_calls", out var mc) || !mc.TryGetProperty("track.richsync.get", out var rg)) return false;
-        if (!rg.TryGetProperty("message", out var m2) || !m2.TryGetProperty("body", out var b2)) return false;
-        if (!b2.TryGetProperty("richsync", out richsync)) return false;
-        return true;
+        return b.TryGetProperty("macro_calls", out macroCalls);
     }
 
     static async Task<string?> GetTokenAsync(CancellationToken ct)

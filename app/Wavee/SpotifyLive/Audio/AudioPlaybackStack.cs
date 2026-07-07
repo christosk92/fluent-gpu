@@ -23,6 +23,8 @@ public sealed class AudioPlaybackStack : IAsyncDisposable
     public HeadFileClient HeadClient { get; }
     public IAudioHost Host { get; }
     public LiveTrackResolver TrackResolver { get; }
+    public AudioBodyDiskCache? BodyDiskCache { get; }
+    public LicenseKeyDiskCache? LicenseDiskCache { get; }
     public RuntimeAsset? RuntimeAsset { get; private set; }
     readonly Action<string>? _log;
     readonly IWaveeLog? _structuredLog;
@@ -50,6 +52,8 @@ public sealed class AudioPlaybackStack : IAsyncDisposable
 #else
         Provisioner = NullPlayPlayProvisioner.Instance;
 #endif
+        BodyDiskCache = AudioBodyDiskCache.FromSettings(settings);
+        LicenseDiskCache = LicenseKeyDiskCache.FromSettings(settings);
         _useOutOfProcessHost = Environment.GetEnvironmentVariable("WAVEE_AUDIO_INPROC") != "1"
             && Environment.GetEnvironmentVariable("WAVEE_AUDIO_OOP") != "0";
         if (_useOutOfProcessHost)
@@ -62,7 +66,8 @@ public sealed class AudioPlaybackStack : IAsyncDisposable
                 () => null,
                 () => null,
 #endif
-                log);
+                log,
+                BodyDiskCache);
             _supervisedHost.CircuitBroken += OnAudioHostCircuitBroken;
             Host = _supervisedHost;
         }
@@ -74,7 +79,8 @@ public sealed class AudioPlaybackStack : IAsyncDisposable
 #else
                 () => null,
 #endif
-                log);
+                log,
+                BodyDiskCache);
         }
 #if WAVEE_PLAYPLAY_LOCAL
         Func<IPlayPlayKeyDeriver?> deriver = () => _supervisedHost is not null ? _supervisedHost : _playPlay;
@@ -88,7 +94,7 @@ public sealed class AudioPlaybackStack : IAsyncDisposable
         ILicenseClient? license = null;
 #endif
         var apKeys = new LiveAudioKeySource(apChannel);
-        KeyResolver = new AudioKeyResolver(apKeys, deriver, runtime, license, Status, session, log, structuredLog);
+        KeyResolver = new AudioKeyResolver(apKeys, deriver, runtime, license, Status, session, log, structuredLog, LicenseDiskCache);
         HeadClient = new HeadFileClient(new HttpClientExchange(), session, log);
         Func<string, CancellationToken, Task<ByteString?>> fetchTrackV4 = (uri, ct) => extendedMetadata.GetExtensionAsync(uri, Xm.ExtensionKind.TrackV4, ct);
         Func<string, CancellationToken, Task<ByteString?>> fetchAudioFilesV5 = (uri, ct) => extendedMetadata.GetExtensionAsync(uri, Xm.ExtensionKind.AudioFiles, ct);
@@ -101,7 +107,8 @@ public sealed class AudioPlaybackStack : IAsyncDisposable
             preferLossless: false, log, formatProbe,
             // The persisted streaming-quality preference, read per resolve so a Settings change applies from the next
             // track. Clamped to the Ogg tiers — Lossless is reserved (the picker shows it disabled, "Coming soon").
-            quality: () => (AudioQualityPreference)Math.Clamp(settings.Get(WaveeSettings.PlaybackQuality), 0, 2));
+            quality: () => (AudioQualityPreference)Math.Clamp(settings.Get(WaveeSettings.PlaybackQuality), 0, 2),
+            ctx: session);
         Log(WaveeLogLevel.Debug, "audio.stack.created", "Audio playback stack created",
             WaveeLogField.Of("playplayLocal", PlayPlayLocalCompiled),
             WaveeLogField.Of("formatProbe", formatProbe is not null),
@@ -260,17 +267,20 @@ public sealed class FastTrackPlayback : IFastTrackResolver, IFastTrackWarmer
     readonly LiveTrackResolver _resolver;
     readonly HeadFileClient _heads;
     readonly Action<string>? _log;
+    readonly Action<string>? _invalidateCdn;
     readonly ConcurrentDictionary<string, byte> _warmInFlight = new(StringComparer.Ordinal);
     long _warmQuietUntilTicks;
 
     static readonly TimeSpan AutoWarmDelay = TimeSpan.FromSeconds(6);
     static readonly TimeSpan ForegroundWarmQuiet = TimeSpan.FromSeconds(10);
 
-    public FastTrackPlayback(LiveTrackResolver resolver, HeadFileClient heads, Action<string>? log = null)
+    public FastTrackPlayback(LiveTrackResolver resolver, HeadFileClient heads, Action<string>? log = null,
+        Action<string>? invalidateCdn = null)
     {
         _resolver = resolver;
         _heads = heads;
         _log = log;
+        _invalidateCdn = invalidateCdn;
     }
 
     public async Task<FastStartPlan> ResolveFastAsync(Track track, CancellationToken ct = default)
@@ -296,7 +306,7 @@ public sealed class FastTrackPlayback : IFastTrackResolver, IFastTrackWarmer
         var head = await headTask.ConfigureAwait(false);
         _log?.Invoke($"fast-resolve {track.Uri}: head ok file={meta.FileIdHex} bytes={head.Data.Length} elapsed={headSw.ElapsedMilliseconds}ms total={sw.ElapsedMilliseconds}ms");
         var start = new AudioFastStart(track.Uri, meta.FileIdHex, meta.Fmt, meta.DurMs, head.NormalizationGainDb, head.Data);
-        var bodyTask = FinishBodyAsync(rawBodyTask, head.Data.Length, head.NormalizationGainDb, _log, track.Uri, meta.FileIdHex, sw.ElapsedMilliseconds);
+        var bodyTask = FinishBodyAsync(rawBodyTask, head.Data.Length, head.NormalizationGainDb, _log, track.Uri, meta.FileIdHex, sw.ElapsedMilliseconds, _invalidateCdn);
         _log?.Invoke($"fast-resolve {track.Uri}: plan ready file={meta.FileIdHex} head={head.Data.Length}B bodyCompleted={rawBodyTask.IsCompleted} total={sw.ElapsedMilliseconds}ms");
         return new FastStartPlan(start, bodyTask);
     }
@@ -328,9 +338,15 @@ public sealed class FastTrackPlayback : IFastTrackResolver, IFastTrackWarmer
                 _log?.Invoke($"fast-warm {track.Uri}: deferred reason={reason} foregroundQuiet={quiet.TotalMilliseconds:0}ms");
                 await Task.Delay(quiet).ConfigureAwait(false);
             }
+            sw.Restart();
             _log?.Invoke($"fast-warm {track.Uri}: start reason={reason}");
             var meta = await _resolver.ResolveMetaAsync(track, CancellationToken.None).ConfigureAwait(false);
             var head = await _heads.GetAsync(meta.FileIdHex, CancellationToken.None).ConfigureAwait(false);
+            if (string.IsNullOrEmpty(meta.ExternalUrl))
+            {
+                var h = await _resolver.ResolveBodyAsync(meta, CancellationToken.None).ConfigureAwait(false);
+                _log?.Invoke($"fast-warm {track.Uri}: body ok cdn={h.CdnUrls?.Length ?? 0}");
+            }
             _log?.Invoke($"fast-warm {track.Uri}: ok file={meta.FileIdHex} head={head.Data.Length}B elapsed={sw.ElapsedMilliseconds}ms");
         }
         catch (Exception ex)
@@ -358,7 +374,7 @@ public sealed class FastTrackPlayback : IFastTrackResolver, IFastTrackWarmer
     }
 
     static async Task<AudioStreamHandle> FinishBodyAsync(Task<AudioStreamHandle> raw, int headBoundary, float gainDb,
-        Action<string>? log, string trackUri, string fileIdHex, long startedAtMs)
+        Action<string>? log, string trackUri, string fileIdHex, long startedAtMs, Action<string>? invalidateCdn = null)
     {
         var sw = Stopwatch.StartNew();
         try
@@ -366,6 +382,12 @@ public sealed class FastTrackPlayback : IFastTrackResolver, IFastTrackWarmer
             var h = await raw.ConfigureAwait(false);
             log?.Invoke($"fast-resolve {trackUri}: body ok file={fileIdHex} elapsed={sw.ElapsedMilliseconds}ms sinceStart={startedAtMs + sw.ElapsedMilliseconds}ms cdn={h.CdnUrls?.Length ?? 0}");
             return h with { HeadBoundary = headBoundary, NormalizationGainDb = gainDb };
+        }
+        catch (AudioPlaybackException ex) when (ex.Reason == AudioKeyFailureReason.Network)
+        {
+            invalidateCdn?.Invoke(fileIdHex);
+            log?.Invoke($"fast-resolve {trackUri}: body failed file={fileIdHex} elapsed={sw.ElapsedMilliseconds}ms sinceStart={startedAtMs + sw.ElapsedMilliseconds}ms {ex.GetType().Name}: {ex.Message} (cdn cache invalidated)");
+            throw;
         }
         catch (Exception ex)
         {

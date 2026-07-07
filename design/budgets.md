@@ -70,6 +70,8 @@
 | Reconciler | setState re-entrancy | `t_rerenderDepth` **cap 50** | — | bounds re-entrancy | reconciler-hooks.md:528 |
 | Reconciler | DepKey overflow | inline ≤4 deps (`stackalloc`); >4 → `ArrayPool` (not cap-32 pool) | — | — | reconciler-hooks.md:264 |
 | Hardened plan | working-set overhead | **+1–2 MB** (snapshot double-buffers, triple SceneFrame, ≥3 arenas, quarantine ring) | — | — | hardened-v1-plan.md:147 |
+| Wavee app | `AudioBodyDiskCache` (encrypted CDN bodies, `%LOCALAPPDATA%\Wavee\Cache\audio`) | user default **4 GB**; max **512** fileId pairs; max-age **30 d** | LRU by `.map` last-access; whole-file eviction (.enc+.map); `Trim` on write + `MemoryGovernor` arena (priority 3) | miss → CDN re-fetch; key-check fail / torn chunk → `Invalidate` + re-fetch | playback-api-caching Phase 6 |
+| Wavee app | `LicenseKeyDiskCache` (DPAPI obfuscated keys, `audiokeys.db`) | max **4096** rows; max-age **30 d** | LRU by `saved_at` on insert overflow | stale derive → `Invalidate` + one silent license refetch | playback-api-caching Phase 6 |
 
 ## 2. Budget gaps (own a native/GPU resource, no stated budget/eviction/failure)
 

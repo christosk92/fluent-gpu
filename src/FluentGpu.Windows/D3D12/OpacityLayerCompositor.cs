@@ -609,8 +609,22 @@ float4 PSMain(V i) : SV_Target
     /// <summary>Composite the leased RT over the currently-bound target while feathering its premultiplied alpha per-edge
     /// (following the rounded corners) per the edge-fade fields of <paramref name="L"/> — the alpha-mask edge fade. The
     /// group RT is canvas-sized + 1:1, so the layer's device rect lives in the same space as <c>SV_Position</c>.</summary>
-    public void EdgeFadeComposite(ID3D12GraphicsCommandList* cmd, int slot, in PushLayerCmd L, float scale)
+    public void EdgeFadeComposite(ID3D12GraphicsCommandList* cmd, int slot, in PushLayerCmd L, float scale, RECT clip)
     {
+        int left = Math.Clamp((int)MathF.Floor(L.DeviceRect.X * scale), 0, (int)_w);
+        int top = Math.Clamp((int)MathF.Floor(L.DeviceRect.Y * scale), 0, (int)_h);
+        int right = Math.Clamp((int)MathF.Ceiling((L.DeviceRect.X + L.DeviceRect.W) * scale), left, (int)_w);
+        int bottom = Math.Clamp((int)MathF.Ceiling((L.DeviceRect.Y + L.DeviceRect.H) * scale), top, (int)_h);
+        RECT box = new()
+        {
+            left = Math.Max(left, clip.left),
+            top = Math.Max(top, clip.top),
+            right = Math.Min(right, clip.right),
+            bottom = Math.Min(bottom, clip.bottom),
+        };
+        if (box.right <= box.left || box.bottom <= box.top) return;
+        cmd->RSSetScissorRects(1, &box);
+
         ID3D12DescriptorHeap* h = _srvHeap;
         cmd->SetDescriptorHeaps(1, &h);
         cmd->SetGraphicsRootSignature(_edgeRoot);
@@ -805,13 +819,20 @@ float4 PSMain(V i) : SV_Target
     /// blurred DeviceRect+halo strip; set the viewport to that screen rect so the fullscreen-triangle's UV[0,1] maps the
     /// whole pin onto the same pixels the miss composite wrote (PIXEL-IDENTICAL). Restores the full-canvas viewport after,
     /// preserving the device's invariant (it sets the viewport ONCE); the caller re-applies its enclosing clip.</summary>
-    public void CompositePinnedBlur(ID3D12GraphicsCommandList* cmd, int slot, float alpha, in PushLayerCmd L, float scale)
+    public void CompositePinnedBlur(ID3D12GraphicsCommandList* cmd, int slot, float alpha, in PushLayerCmd L, float scale, RECT clip)
     {
         RegionBox(in L, scale, out int minX, out int minY, out int maxX, out int maxY);
         int rw = maxX - minX, rh = maxY - minY;
         if (rw <= 0 || rh <= 0) return;
+        RECT box = new()
+        {
+            left = Math.Max(minX, clip.left),
+            top = Math.Max(minY, clip.top),
+            right = Math.Min(maxX, clip.right),
+            bottom = Math.Min(maxY, clip.bottom),
+        };
+        if (box.right <= box.left || box.bottom <= box.top) return;
         D3D12_VIEWPORT vp = new() { TopLeftX = minX, TopLeftY = minY, Width = rw, Height = rh, MaxDepth = 1 };
-        RECT box = new() { left = minX, top = minY, right = maxX, bottom = maxY };
         cmd->RSSetViewports(1, &vp);
         cmd->RSSetScissorRects(1, &box);
         Composite(cmd, slot, alpha);

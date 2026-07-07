@@ -19,6 +19,7 @@ public sealed class AudioKeyResolver : IAudioKeySource, IPlayPlayNativeSeedSourc
     readonly ConcurrentDictionary<string, PendingGid> _pendingGids = new();
     readonly ConcurrentDictionary<string, byte[]> _nativeCdnSeeds = new(StringComparer.OrdinalIgnoreCase);
     readonly ConcurrentDictionary<string, LatchState> _latch = new();
+    readonly LicenseKeyDiskCache? _licenseDisk;
     readonly Action<string>? _log;
     readonly IWaveeLog? _structuredLog;
     volatile bool _apDisabled;   // AP audio-key is account-wide: one failure means it won't serve any track this session
@@ -35,7 +36,8 @@ public sealed class AudioKeyResolver : IAudioKeySource, IPlayPlayNativeSeedSourc
         AudioRuntimeStatusService status,
         Func<SessionContext> ctx,
         Action<string>? log = null,
-        IWaveeLog? structuredLog = null)
+        IWaveeLog? structuredLog = null,
+        LicenseKeyDiskCache? licenseDisk = null)
     {
         _ap = ap;
         _playPlay = playPlay;
@@ -44,7 +46,9 @@ public sealed class AudioKeyResolver : IAudioKeySource, IPlayPlayNativeSeedSourc
         _status = status;
         _log = log;
         _structuredLog = structuredLog;
-        _cache = new Resource<string, CachedKey>(FetchKeyAsync, new FreshnessPolicy.Immutable(), ctx);
+        _licenseDisk = licenseDisk;
+        _cache = new Resource<string, CachedKey>(FetchKeyAsync, new FreshnessPolicy.Immutable(), ctx,
+            name: "audio.key", debugLog: log);
     }
 
     public async Task<ReadOnlyMemory<byte>> GetKeyAsync(ReadOnlyMemory<byte> fileId, ReadOnlyMemory<byte> trackGid, CancellationToken ct = default)
@@ -69,8 +73,7 @@ public sealed class AudioKeyResolver : IAudioKeySource, IPlayPlayNativeSeedSourc
             }
         }
 
-        await _cache.Revalidate(cacheKey).ConfigureAwait(false);
-        var loaded = _cache.Peek(cacheKey);
+        var loaded = await _cache.GetAsync(cacheKey, ct).ConfigureAwait(false);
         if (loaded.IsReady) return loaded.Value!.Key;
 
         var reason = loaded.Error is { Length: > 0 } err && Enum.TryParse<AudioKeyFailureReason>(err, out var r)
@@ -84,6 +87,18 @@ public sealed class AudioKeyResolver : IAudioKeySource, IPlayPlayNativeSeedSourc
     }
 
     async Task<CachedKey> FetchKeyAsync(string cacheKey, SessionContext ctx)
+    {
+        try
+        {
+            return await FetchKeyCoreAsync(cacheKey, ctx).ConfigureAwait(false);
+        }
+        finally
+        {
+            _pendingGids.TryRemove(cacheKey, out _);
+        }
+    }
+
+    async Task<CachedKey> FetchKeyCoreAsync(string cacheKey, SessionContext ctx)
     {
         var sep = cacheKey.IndexOf(':');
         var fileHex = sep > 0 ? cacheKey[..sep] : cacheKey;
@@ -148,6 +163,13 @@ public sealed class AudioKeyResolver : IAudioKeySource, IPlayPlayNativeSeedSourc
             throw new InvalidOperationException(last.ToString());
         }
 
+        if (_licenseDisk?.TryLoad(fileHex, out var diskLic) == true)
+        {
+            _log?.Invoke($"key {fileHex}: license disk hit — derive without network");
+            try { return await DeriveFromLicenseAsync(fileHex, fileId, diskLic, asset, deriver).ConfigureAwait(false); }
+            catch { _licenseDisk.Invalidate(fileHex); }
+        }
+
         _log?.Invoke($"key {fileHex}: PlayPlay step A — fetching obfuscated key from spclient");
         Event(WaveeLogLevel.Info, "key.playplay.license.start", "Fetching PlayPlay license",
             WaveeLogField.Of("file", WaveeLogRedaction.HashLike(fileHex)),
@@ -163,7 +185,13 @@ public sealed class AudioKeyResolver : IAudioKeySource, IPlayPlayNativeSeedSourc
             NoteLatch(fileHex, lic.Reason);
             throw new InvalidOperationException(lic.Reason.ToString());
         }
+        _licenseDisk?.Save(fileHex, lic);
+        return await DeriveFromLicenseAsync(fileHex, fileId, lic, asset, deriver).ConfigureAwait(false);
+    }
 
+    async Task<CachedKey> DeriveFromLicenseAsync(string fileHex, byte[] fileId, PlayPlayLicenseResult lic,
+        RuntimeAsset asset, IPlayPlayKeyDeriver deriver)
+    {
         var contentId = fileId.AsSpan(0, Math.Min(16, fileId.Length)).ToArray();
         var auxHex = lic.Auxiliary.IsEmpty ? "" : $" aux={lic.Auxiliary.Length}B";
         _log?.Invoke($"key {fileHex}: PlayPlay step B — deriving in native host ({asset.Config.Arch}){auxHex}");

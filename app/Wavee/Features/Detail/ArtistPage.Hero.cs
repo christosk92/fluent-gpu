@@ -89,6 +89,8 @@ sealed partial class ArtistPage : Component
             // grey, so the hero reads as the artist's own colour during the load — matching WaveeMusic's dark-base-with-accent
             // hero. The lifted _accent guarantees a visible hue even when the cover's extracted dark tone is near-black. On
             // decode the photo reveals via HeroArt's WaveeMusic-matched pop-in (320ms FluentDecelerate fade + 1.0→1.05 zoom).
+            // The media also dissolves on the same scroll interval as the copy; once the compact pill owns the header,
+            // the large photo must be visually gone, not merely behind the content.
             ColorF heroWash = ColorF.Lerp(ColorF.FromRgba(0x14, 0x14, 0x16), _accent, 0.30f);
             Element heroArt = bg?.Url is { Length: > 0 } hu
                 ? Embed.Comp(() => new HeroArt(hu, w, h, bg.BlurHash, heroWash)) with { Key = "heroart:" + hu }
@@ -96,7 +98,11 @@ sealed partial class ArtistPage : Component
             var media = new BoxEl
             {
                 Width = w, Height = h, ZStack = true, ClipToBounds = true,
-                ScrollBinds = [new() { StretchFromTop = true }], // iOS/Spotify stretchy hero (generic scroll bind)
+                ScrollBinds =
+                [
+                    new() { StretchFromTop = true }, // iOS/Spotify stretchy hero (generic scroll bind)
+                    new() { From = ScrollChannel.Offset, To = BindSink.Opacity, Range = ScrollRange.Px(h * 0.16f, h * 0.66f), OutStart = 1f, OutEnd = 0f, Ease = Easing.Linear },
+                ],
                 TransformOriginX = 0.5f, TransformOriginY = 0f,
                 // Deeper bottom fade (was 200) so the soft zone still covers the collapse clip line even with the photo's
                 // parallax lag shifting it up — keeps the live shrinking edge soft instead of a hard cut.

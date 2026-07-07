@@ -13,6 +13,7 @@ using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Signals;
 using Wavee.Backend.Audio;
+using Wavee.SpotifyLive.Audio;
 using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
@@ -61,8 +62,12 @@ sealed class SettingsPage : Component
     // General state
     readonly Signal<int> _density = new(1);
 
+    static readonly string[] s_bodyBudgetLabels = ["512 MB", "1 GB", "2 GB", "4 GB", "8 GB"];
+    static readonly long[] s_bodyBudgetBytes = [512L << 20, 1L << 30, 2L << 30, 4L << 30, 8L << 30];
+
     // Storage state (snapshot computed off-thread per visit, published via post)
-    sealed record StorageSnapshot(long LibraryDb, long Runtime, long Logs, int LogFiles, long Store, long Total);
+    sealed record StorageSnapshot(long LibraryDb, long Runtime, long Logs, int LogFiles, long Store,
+        long AudioBody, long LicenseDb, long Total);
     readonly Signal<int> _storageVersion = new(0);
     StorageSnapshot? _storage;
     bool _storageBusy;
@@ -736,7 +741,10 @@ sealed class SettingsPage : Component
         catch { }
         store += FileSize(Path.Combine(root, "store.json"));
         store += DirSize(Path.Combine(root, "WaveeMusic"));
-        return new StorageSnapshot(library, runtime, logs, logFiles, store, library + runtime + logs + store);
+        long audioBody = DirSize(AudioBodyDiskCache.DefaultDirectory());
+        long licenseDb = FileSize(LicenseKeyDiskCache.DefaultDbPath());
+        return new StorageSnapshot(library, runtime, logs, logFiles, store, audioBody, licenseDb,
+            library + runtime + logs + store + audioBody + licenseDb);
     }
 
     static long FileSize(string path)
@@ -764,6 +772,43 @@ sealed class SettingsPage : Component
         >= 1024L => (bytes / 1024.0).ToString("0", CultureInfo.InvariantCulture) + " KB",
         _ => bytes.ToString(CultureInfo.InvariantCulture) + " B",
     };
+
+    static Element StorageRow(string label, string sub, long? size, string folder, Element? extra = null)
+    {
+        var kids = new List<Element>
+        {
+            new BoxEl
+            {
+                Direction = 1, Gap = 2f, Grow = 1f, Basis = 0f, MinWidth = 200f,
+                Children =
+                [
+                    new TextEl(label) { Size = 14f, Color = Tok.TextPrimary },
+                    new TextEl(sub) { Size = 11f, Color = Tok.TextTertiary, FontFamily = "Cascadia Code", Trim = TextTrim.CharacterEllipsis, MaxLines = 1 },
+                ],
+            },
+            new TextEl(size is { } b ? FmtBytes(b) : "…") { Size = 13f, Color = Tok.TextSecondary, Shrink = 0f },
+            HyperlinkButton.Create("Open folder", () => OpenFolder(folder)),
+        };
+        if (extra is not null) kids.Add(extra);
+        return new BoxEl
+        {
+            Direction = 0, AlignItems = FlexAlign.Start, Gap = WaveeSpace.M, Wrap = true,
+            Padding = new Edges4(WaveeSpace.L, WaveeSpace.M, WaveeSpace.L, WaveeSpace.M),
+            Children = kids.ToArray(),
+        };
+    }
+
+    static int BodyBudgetIndex(long bytes)
+    {
+        int best = 3;
+        long bestDiff = long.MaxValue;
+        for (int i = 0; i < s_bodyBudgetBytes.Length; i++)
+        {
+            long diff = Math.Abs(s_bodyBudgetBytes[i] - bytes);
+            if (diff < bestDiff) { bestDiff = diff; best = i; }
+        }
+        return best;
+    }
 
     void DeleteOldLogs(Action<Action> post)
     {
@@ -794,31 +839,6 @@ sealed class SettingsPage : Component
         var s = _storage;
         string root = AppDataRoot;
 
-        Element StorageRow(string label, string sub, long? size, string folder, Element? extra = null)
-        {
-            var kids = new List<Element>
-            {
-                new BoxEl
-                {
-                    Direction = 1, Gap = 2f, Grow = 1f, Basis = 0f, MinWidth = 200f,
-                    Children =
-                    [
-                        new TextEl(label) { Size = 14f, Color = Tok.TextPrimary },
-                        new TextEl(sub) { Size = 11f, Color = Tok.TextTertiary, FontFamily = "Cascadia Code", Trim = TextTrim.CharacterEllipsis, MaxLines = 1 },
-                    ],
-                },
-                new TextEl(size is { } b ? FmtBytes(b) : "…") { Size = 13f, Color = Tok.TextSecondary, Shrink = 0f },
-                HyperlinkButton.Create("Open folder", () => OpenFolder(folder)),
-            };
-            if (extra is not null) kids.Add(extra);
-            return new BoxEl
-            {
-                Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, Wrap = true,
-                Padding = new Edges4(WaveeSpace.L, WaveeSpace.M, WaveeSpace.L, WaveeSpace.M),
-                Children = kids.ToArray(),
-            };
-        }
-
         var cold = svc?.RealStore as Wavee.Backend.Persistence.CachedStore;
 
         return new BoxEl
@@ -842,6 +862,7 @@ sealed class SettingsPage : Component
                     RowDivider(),
                     StorageRow("Local store & history", "store.json, navigation history",
                         s?.Store, root)),
+                PlaybackCacheCard(s, svc, post, settings: svc?.Settings),
                 Card(
                     CardHeader("In memory", "Working-set caches, trimmed automatically under memory pressure"),
                     RowDivider(),
@@ -857,6 +878,95 @@ sealed class SettingsPage : Component
                         }))),
             ],
         };
+    }
+
+    Element PlaybackCacheCard(StorageSnapshot? s, Services? svc, Action<Action> post, IAppSettings? settings)
+    {
+        string audioDir = AudioBodyDiskCache.DefaultDirectory();
+        string licenseDb = LicenseKeyDiskCache.DefaultDbPath();
+        var keyStats = svc?.AudioLicenseCache?.Stats();
+        int budgetIdx = BodyBudgetIndex(settings?.Get(WaveeSettings.AudioBodyCacheBudgetBytes) ?? (4L << 30));
+
+        return Card(
+            CardHeader("Playback cache", "Encrypted CDN bodies and saved license keys — survives restarts"),
+            RowDivider(),
+            SettingRow("Cache encrypted audio", "Skip re-downloading track bodies you already streamed",
+                ToggleSwitch.Create(settings?.Get(WaveeSettings.AudioBodyCacheEnabled) ?? true, () =>
+                {
+                    if (settings is null) return;
+                    settings.Set(WaveeSettings.AudioBodyCacheEnabled, !settings.Get(WaveeSettings.AudioBodyCacheEnabled));
+                    Bump();
+                })),
+            RowDivider(),
+            SettingRow("Cache license keys", "Reuse obfuscated keys across sessions (self-heals if stale)",
+                ToggleSwitch.Create(settings?.Get(WaveeSettings.AudioKeyCacheEnabled) ?? true, () =>
+                {
+                    if (settings is null) return;
+                    settings.Set(WaveeSettings.AudioKeyCacheEnabled, !settings.Get(WaveeSettings.AudioKeyCacheEnabled));
+                    Bump();
+                })),
+            RowDivider(),
+            SettingRow("Audio body budget", "LRU-evicted when full — applies on next launch",
+                new BoxEl
+                {
+                    Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S,
+                    Children =
+                    [
+                        Button.Standard("Smaller", () => ShiftBodyBudget(svc, settings, -1), isEnabled: settings is not null && budgetIdx > 0),
+                        new TextEl(s_bodyBudgetLabels[budgetIdx]) { Size = 12f, Color = Tok.TextSecondary, Width = 56f },
+                        Button.Standard("Larger", () => ShiftBodyBudget(svc, settings, 1), isEnabled: settings is not null && budgetIdx < s_bodyBudgetLabels.Length - 1),
+                    ],
+                }),
+            RowDivider(),
+            StorageRow("Encrypted audio bodies", "Wavee\\Cache\\audio — sparse 64 KB CDN chunks",
+                s?.AudioBody, audioDir,
+                Button.Standard("Clear audio cache", () => ClearAudioBodyCache(svc, post))),
+            RowDivider(),
+            StorageRow("Saved license keys",
+                keyStats is { } ks ? $"Wavee\\Cache\\audiokeys.db — {ks.Count} key{(ks.Count == 1 ? "" : "s")}" : "Wavee\\Cache\\audiokeys.db",
+                s?.LicenseDb, Path.GetDirectoryName(licenseDb) ?? audioDir,
+                Button.Standard("Clear saved keys", () => ClearLicenseKeys(svc, post))));
+    }
+
+    void ShiftBodyBudget(Services? svc, IAppSettings? settings, int delta)
+    {
+        if (settings is null) return;
+        int idx = BodyBudgetIndex(settings.Get(WaveeSettings.AudioBodyCacheBudgetBytes));
+        idx = Math.Clamp(idx + delta, 0, s_bodyBudgetBytes.Length - 1);
+        long bytes = s_bodyBudgetBytes[idx];
+        settings.Set(WaveeSettings.AudioBodyCacheBudgetBytes, bytes);
+        svc?.AudioBodyCache?.SetBudget(bytes);
+        Bump();
+    }
+
+    void ClearAudioBodyCache(Services? svc, Action<Action> post)
+    {
+        _ = Task.Run(() =>
+        {
+            try { svc?.AudioBodyCache?.ClearAll(); }
+            catch { try { if (Directory.Exists(AudioBodyDiskCache.DefaultDirectory())) foreach (var f in Directory.EnumerateFiles(AudioBodyDiskCache.DefaultDirectory())) File.Delete(f); } catch { } }
+            post(() =>
+            {
+                Toasts.Show("Cleared encrypted audio cache", ToastSeverity.Success);
+                _storage = null;
+                RefreshStorage(post);
+            });
+        });
+    }
+
+    void ClearLicenseKeys(Services? svc, Action<Action> post)
+    {
+        _ = Task.Run(() =>
+        {
+            try { svc?.AudioLicenseCache?.ClearAll(); }
+            catch { }
+            post(() =>
+            {
+                Toasts.Show("Cleared saved license keys", ToastSeverity.Success);
+                _storage = null;
+                RefreshStorage(post);
+            });
+        });
     }
 
     // ── Diagnostics ───────────────────────────────────────────────────────────────────────────────────────────────────

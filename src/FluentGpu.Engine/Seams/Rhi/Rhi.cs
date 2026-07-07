@@ -69,6 +69,11 @@ public interface IGpuDevice : IDisposable
     /// alive). Returns false for a non-device-loss throw (a genuine bug — must not be masked). Default false.</summary>
     bool NoteIfDeviceLost() => false;
 
+    /// <summary>Diagnostic hook invoked after device loss is confirmed and before <see cref="RecoverDevice"/> releases
+    /// backend state. Backends should write DRED/breadcrumb/native-resource details through <paramref name="write"/>.
+    /// Default no-op for headless and non-D3D backends.</summary>
+    void DumpDeviceLostDiagnostics(Action<string> write) { }
+
     /// <summary>Test hook (FG_FORCE_DEVICE_LOST): force a controlled device removal to exercise the async recovery
     /// rendezvous on real hardware, without TDR-ing the whole desktop. No-op default (headless / no injection support).</summary>
     void InjectDeviceLost() { }

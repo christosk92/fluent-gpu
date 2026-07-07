@@ -44,12 +44,14 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
     long _startedPlayingAtMs;
     bool _transportPaused;
     string _lastPublishKey = "";
+    readonly TrailingCoalescer _volumeTx;
 
     public DeviceStatePublisher(
         ITransport transport, string deviceId, IPlaybackState state,
         IObservable<string?> connectionId, Func<string?> currentConnectionId,
         Func<PutStateReasonKind, LocalPlaybackSnapshot?, uint, bool, byte[]> build,
-        Action<byte[]>? onCluster = null, Action<string>? log = null, Func<long>? clock = null)
+        Action<byte[]>? onCluster = null, Action<string>? log = null, Func<long>? clock = null,
+        int volumePublishWindowMs = 400, Func<int, CancellationToken, Task>? delay = null)
     {
         _transport = transport;
         _deviceId = deviceId;
@@ -59,6 +61,7 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
         _onCluster = onCluster;
         _log = log;
         _now = clock ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        _volumeTx = new TrailingCoalescer(volumePublishWindowMs, _now, delay);
         _connSub = connectionId.Subscribe(Observers.From<string?>(OnConnectionId));
     }
 
@@ -108,7 +111,10 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
             EvKind.BecameInactive => PutStateReasonKind.BecameInactive,
             _ => PutStateReasonKind.PlayerStateChanged,
         };
-        _ = PublishAsync(reason, isActive);
+        if (reason == PutStateReasonKind.VolumeChanged)
+            _volumeTx.Post(() => _ = PublishAsync(PutStateReasonKind.VolumeChanged, _state.CurrentTrack is not null));
+        else
+            _ = PublishAsync(reason, isActive);
     }
 
     public void PublishInactive() => _ = PublishAsync(PutStateReasonKind.BecameInactive, false);
@@ -127,7 +133,8 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
             string key = reason + "|" + isActive + "|" + (snap?.Track.Uri ?? "") + "|" + (snap?.Track.Uid ?? "")
                 + "|" + (snap?.IsPlaying ?? false) + "|" + (snap?.IsPaused ?? false) + "|" + (snap?.Shuffle ?? false) + "|" + (snap?.Repeat ?? RepeatMode.Off)
                 + "|" + ((snap?.PositionMs ?? 0) / 1000) + "|" + (int)Math.Round((snap?.Volume01 ?? 0) * 100) + "|" + NextSig(snap);
-            if (reason == PutStateReasonKind.PlayerStateChanged && key == _lastPublishKey) return;
+            if (reason is PutStateReasonKind.PlayerStateChanged or PutStateReasonKind.VolumeChanged
+                && key == _lastPublishKey) return;
             _lastPublishKey = key;
             mid = ++_messageId;
         }
@@ -254,5 +261,9 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
         _queueRevision = _queueRevisionCounter.ToString(CultureInfo.InvariantCulture);
     }
 
-    public void Dispose() => _connSub.Dispose();
+    public void Dispose()
+    {
+        _volumeTx.Dispose();
+        _connSub.Dispose();
+    }
 }

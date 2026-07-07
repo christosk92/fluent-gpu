@@ -14,10 +14,11 @@ public sealed class InProcessAudioHost : IAudioHost
 
     Func<IPlayPlayCdnDecryptorFactory?> _decryptors;
 
-    public InProcessAudioHost(Func<IPlayPlayCdnDecryptorFactory?> decryptors, Action<string>? log = null)
+    public InProcessAudioHost(Func<IPlayPlayCdnDecryptorFactory?> decryptors, Action<string>? log = null,
+        AudioBodyDiskCache? bodyDisk = null)
     {
         _decryptors = decryptors;
-        _engine = new AudioPlayEngine(log ?? (_ => { }), (_, seed) => _decryptors()?.CreateCdnDecryptor(seed));
+        _engine = new AudioPlayEngine(log ?? (_ => { }), (_, seed) => _decryptors()?.CreateCdnDecryptor(seed), bodyDisk);
         _engine.State += OnState;
         _engine.TrackFinished += OnTrackFinished;
     }

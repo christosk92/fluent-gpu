@@ -23,6 +23,8 @@ namespace Wavee.SpotifyLive;
 // scope; the decrypt/decode/output it feeds is the x64 host.
 public sealed class LiveTrackResolver : ITrackResolver
 {
+    public sealed record CdnResolve(string[] Urls, TimeSpan Ttl);
+
     readonly ITransport _transport;
     readonly IAudioKeySource _keys;
     readonly Func<string, CancellationToken, Task<ByteString?>> _fetchTrackV4;
@@ -33,6 +35,7 @@ public sealed class LiveTrackResolver : ITrackResolver
     readonly AudioFormatProbe? _probe;
     readonly Action<string>? _log;
     readonly ConcurrentDictionary<string, Task<TrackMeta>> _metaCache = new();
+    readonly Resource<string, CdnResolve> _cdnCache;
 
     public LiveTrackResolver(
         ITransport transport,
@@ -43,7 +46,8 @@ public sealed class LiveTrackResolver : ITrackResolver
         bool preferLossless = false,
         Action<string>? log = null,
         AudioFormatProbe? probe = null,
-        Func<AudioQualityPreference>? quality = null)
+        Func<AudioQualityPreference>? quality = null,
+        Func<SessionContext>? ctx = null)
     {
         _transport = transport;
         _keys = keys;
@@ -54,7 +58,16 @@ public sealed class LiveTrackResolver : ITrackResolver
         _quality = quality;
         _probe = probe;
         _log = log;
+        var session = ctx ?? (() => SessionContext.LoggedOut);
+        _cdnCache = new Resource<string, CdnResolve>(FetchCdnAsync, new FreshnessPolicy.Immutable(), session,
+            ttlOf: r => r.Ttl, maxEntries: 64, name: "audio.cdn", debugLog: log);
     }
+
+    /// <summary>Drop the cached CDN mirrors for a file — call when the host/stream reports a body fetch failure.</summary>
+    public void InvalidateCdn(string fileIdHex) => _cdnCache.Invalidate(fileIdHex);
+
+    /// <summary>Per-entry CDN cache expiry — diagnostic / test visibility.</summary>
+    public DateTime? PeekCdnExpiresAt(string fileIdHex) => _cdnCache.PeekExpiresAt(fileIdHex);
 
     // The effective preference: the live per-resolve delegate (the persisted setting) wins; the legacy bool maps to the
     // Lossless/VeryHigh320 rungs so existing call sites and tests keep their exact behavior.
@@ -197,23 +210,15 @@ public sealed class LiveTrackResolver : ITrackResolver
             return new AudioStreamHandle(m.TrackUri, m.FileIdHex, m.ExternalUrl, default, AudioFormat.Mp3, m.DurMs, 0f,
                 SourceKind: AudioSourceKind.ExternalPlain);
 
-        string cdn = "";
-        string[]? cdnUrls = null;
-        var sr = await _transport.Request(Channel.Spclient, "/storage-resolve/files/audio/interactive/" + m.FileIdHex, default, ct).ConfigureAwait(false);
-        if (sr.Ok)
+        var cdnLoaded = await _cdnCache.GetAsync(m.FileIdHex, ct).ConfigureAwait(false);
+        if (!cdnLoaded.IsReady)
         {
-            var r = StorageResolveResponse.Parser.ParseFrom(sr.Body);
-            if (r.Result == StorageResolveResponse.Types.Result.Restricted)
-                throw new AudioPlaybackException(AudioKeyFailureReason.Restricted, "storage-resolve: restricted");
-            if (r.Cdnurl.Count > 0)
-            {
-                cdn = r.Cdnurl[0];
-                cdnUrls = new string[r.Cdnurl.Count];
-                for (int i = 0; i < r.Cdnurl.Count; i++) cdnUrls[i] = r.Cdnurl[i];
-            }
+            var reason = cdnLoaded.Error is { Length: > 0 } err && Enum.TryParse<AudioKeyFailureReason>(err, out var r)
+                ? r : AudioKeyFailureReason.Network;
+            throw new AudioPlaybackException(reason, cdnLoaded.Error);
         }
-        if (cdnUrls is null || cdnUrls.Length == 0)
-            throw new AudioPlaybackException(AudioKeyFailureReason.Network, "no CDN url from storage-resolve");
+        var cdnUrls = cdnLoaded.Value!.Urls;
+        var cdn = cdnUrls[0];
 
         _log?.Invoke($"storage-resolve {m.FileIdHex}: {cdnUrls.Length} cdn url(s); fetching key");
         var key = await _keys.GetKeyAsync(m.FileId, m.FileGid, ct).ConfigureAwait(false);   // typed throw on AP+PlayPlay failure
@@ -221,6 +226,23 @@ public sealed class LiveTrackResolver : ITrackResolver
             ? seedSource.GetNativeCdnSeed(m.FileIdHex)
             : default;
         return new AudioStreamHandle(m.TrackUri, m.FileIdHex, cdn, key, m.Fmt, m.DurMs, m.NormalizationGainDb, cdnUrls, NativeCdnSeed: nativeSeed);
+    }
+
+    async Task<CdnResolve> FetchCdnAsync(string fileIdHex, SessionContext ctx)
+    {
+        var sr = await _transport.Request(Channel.Spclient, "/storage-resolve/files/audio/interactive/" + fileIdHex, default, CancellationToken.None).ConfigureAwait(false);
+        if (!sr.Ok)
+            throw new InvalidOperationException(AudioKeyFailureReason.Network.ToString());
+        var r = StorageResolveResponse.Parser.ParseFrom(sr.Body);
+        if (r.Result == StorageResolveResponse.Types.Result.Restricted)
+            throw new InvalidOperationException(AudioKeyFailureReason.Restricted.ToString());
+        if (r.Cdnurl.Count == 0)
+            throw new InvalidOperationException(AudioKeyFailureReason.Network.ToString());
+        var urls = new string[r.Cdnurl.Count];
+        for (int i = 0; i < r.Cdnurl.Count; i++) urls[i] = r.Cdnurl[i];
+        var ttlSec = r.HasTtlSeconds && r.TtlSeconds > 0 ? r.TtlSeconds : 1800;
+        var ttl = TimeSpan.FromSeconds(ttlSec * 0.8);
+        return new CdnResolve(urls, ttl);
     }
 
     public async Task<AudioStreamHandle> ResolveAsync(Track track, CancellationToken ct = default)

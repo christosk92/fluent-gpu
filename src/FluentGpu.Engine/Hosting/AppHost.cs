@@ -129,14 +129,17 @@ public sealed class AppHost : IDisposable
     // through this queue (drained in SubmitPresentOnRenderThread before submit) instead of touching the device on the UI
     // thread. Null in default/force-sync — there the direct device sinks run with no cross-thread overlap.
     private readonly Threading.ImageUploadQueue? _imageQueue;
-    // Step 4 (ASYNC only): device-lost recovery rendezvous. Non-null ⇒ the UI polls the device's lost-reason each frame,
-    // parks the render loop, and drives RecoverDevice through this coordinator. Null in default/force-sync (they keep the
-    // single-thread throw-on-loss behavior). FG_FORCE_DEVICE_LOST=<frameN> injects a controlled removal at that frame.
+    // Step 4 (ASYNC): device-lost recovery rendezvous. Foreground recovery is synchronous and reuses RecoverDevice
+    // directly; async parks the render loop and drives RecoverDevice through this coordinator.
     private readonly Threading.DeviceLostCoordinator? _deviceLost;
     private static readonly int s_forceLostFrame =
         int.TryParse(System.Environment.GetEnvironmentVariable("FG_FORCE_DEVICE_LOST"), out int __fl) && __fl > 0 ? __fl : -1;
     private static readonly bool s_dlTrace = Diag.EnvFlag("FG_DL_TRACE");   // device-lost recovery trace (diagnosis)
     private int _frameOrdinal;
+    private const int DeviceLostFrameRingSize = 64;
+    private readonly DeviceLostFrameSnapshot[] _deviceLostFrames = new DeviceLostFrameSnapshot[DeviceLostFrameRingSize];
+    private int _deviceLostFrameSeq;
+    private int _deviceLostRecoveryCount;
     // The effective async gate: s_renderAsync AND a REAL (non-headless) GPU backend. The render thread offloads real GPU
     // submit/present; a headless (test) backend has none, and its device seam methods (DrainImageJobs/RecoverDevice/…) are
     // no-ops — so headless always stays on the deterministic synchronous inline path regardless of the flag. Every async
@@ -153,6 +156,8 @@ public sealed class AppHost : IDisposable
     private readonly CaretBlinker _caretBlinker;
     private readonly ImageCache _images;
     private readonly Dictionary<NodeHandle, ProjCapture> _projectBefore = new();   // captured presented rects of BoundsAnimated nodes (FLIP "First")
+    private readonly List<RenderContext> _pendingLayoutEffectContexts = new();
+    private readonly List<RenderContext> _pendingPassiveEffectContexts = new();
 
     /// <summary>FLIP "First" snapshot of a BoundsAnimated node, in PARENT-RELATIVE presented space (its own layout
     /// origin + in-flight LocalTransform). Parent-relative is what makes projections respond only to LOCAL movement:
@@ -160,6 +165,17 @@ public sealed class AppHost : IDisposable
     /// unchanged, and the node rides the reflow RIGIDLY instead of re-FLIPping every frame. The parent handle is kept
     /// purely as a reparent guard — across different parents the relative frames are incomparable, so we snap.</summary>
     private readonly record struct ProjCapture(RectF Rel, NodeHandle Parent);
+
+    private readonly record struct DeviceLostFrameSnapshot(
+        int Seq, int FrameOrdinal, int RenderMode, int WidthPx, int HeightPx, float Scale, int Clicks, int PumpedEvents,
+        bool KeepAlive, bool Resized, bool Reconciled, bool LayoutNeeded, bool TransformWrote, bool MaybeUnchanged,
+        bool SkipSubmit, bool HasPendingUploads, int CommandCount, int CommandBytes, int SortKeyCount,
+        DrawListOpcodeStats OpcodeStats, int NodesVisited, int DrawNodeCount, int CulledNodeCount,
+        int BlurCandidateCount, int BlurGroupCount, int BlurSuppressedByScrollCount, int BlurHoldCandidateCount,
+        int EdgeFadeGroupCount, RectF Damage, double FlushMs, double LayoutMs, double AnimMs, double RecordMs)
+    {
+        public readonly bool IsValid => Seq != 0;
+    }
 
     // Ambient context signals (read via UseContext): published by the host, consumers subscribe granularly.
     private readonly Signal<object?> _viewportSig = new(default(Size2));
@@ -392,6 +408,74 @@ public sealed class AppHost : IDisposable
         }
     }
 
+    private void RecoverDeviceAfterDump()
+    {
+        _deviceLostRecoveryCount++;
+        DumpDeviceLostFrames(null, "async-render");
+        _device.DumpDeviceLostDiagnostics(WriteDeviceLostLine);
+        _device.RecoverDevice();
+    }
+
+    private bool TryRecoverForegroundDeviceLost(Exception ex, int clicks)
+    {
+        if (!_device.NoteIfDeviceLost()) return false;
+        _deviceLostRecoveryCount++;
+        DumpDeviceLostFrames(ex, "foreground");
+        _device.DumpDeviceLostDiagnostics(WriteDeviceLostLine);
+        _device.RecoverDevice();
+        _scene.MarkAllPaintDirty();
+        _needFullLayout = true;
+        _lastPresentedDrawListHash = 0;
+        _images.ReRealizeAllResident();
+        _frameAfterPaint = true;
+        LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, FrameMs = _frameMs };
+        PublishFrameStats(LastStats);
+        return true;
+    }
+
+    private void RememberDeviceLostFrame(int clicks, bool keepAlive, bool resized, bool reconciled, bool layoutNeeded,
+                                         bool transformWrote, bool maybeUnchanged, bool skipSubmit,
+                                         in SceneRecordStats recordStats, long frameStart, long tFlush, long tLayout,
+                                         long tAnim, long tRecord)
+    {
+        int seq = ++_deviceLostFrameSeq;
+        var size = _window.ClientSizePx;
+        int mode = _asyncActive ? 2 : (_renderThread is null ? 0 : 1);
+        _deviceLostFrames[(seq - 1) % DeviceLostFrameRingSize] = new DeviceLostFrameSnapshot(
+            seq, _frameOrdinal, mode, (int)MathF.Round(size.Width), (int)MathF.Round(size.Height),
+            _window.Scale, clicks, _tracePumpedEvents, keepAlive, resized, reconciled, layoutNeeded, transformWrote,
+            maybeUnchanged, skipSubmit, _device.HasPendingUploads, _drawList.CommandCount, _drawList.Bytes.Length,
+            _drawList.SortKeys.Length, _drawList.OpcodeStats, recordStats.NodesVisited, recordStats.DrawnNodeCount,
+            recordStats.CulledNodeCount, recordStats.BlurCandidateCount, recordStats.BlurGroupCount,
+            recordStats.BlurSuppressedByScrollCount, recordStats.BlurHoldCandidateCount,
+            recordStats.EdgeFadeGroupCount, recordStats.Damage, ToMs(tFlush - frameStart),
+            ToMs(tLayout - tFlush), ToMs(tAnim - tLayout), ToMs(tRecord - tAnim));
+    }
+
+    private void DumpDeviceLostFrames(Exception? ex, string path)
+    {
+        WriteDeviceLostLine($"[device-lost] path={path} backend={_device.BackendName} recoveries={_deviceLostRecoveryCount}" + (ex is null ? "" : $" exception={ex.GetType().Name}: {ex.Message}"));
+        int count = Math.Min(_deviceLostFrameSeq, DeviceLostFrameRingSize);
+        if (count == 0) { WriteDeviceLostLine("[device-lost] no frame breadcrumbs captured"); return; }
+        WriteDeviceLostLine($"[device-lost] last {count} frame breadcrumbs (oldest to newest)");
+        int start = _deviceLostFrameSeq - count + 1;
+        for (int i = 0; i < count; i++)
+        {
+            var f = _deviceLostFrames[(start + i - 1) % DeviceLostFrameRingSize];
+            if (!f.IsValid) continue;
+            string mode = f.RenderMode == 2 ? "async" : (f.RenderMode == 1 ? "render-thread" : "foreground");
+            WriteDeviceLostLine($"[device-lost] seq={f.Seq} frame={f.FrameOrdinal} mode={mode} size={f.WidthPx}x{f.HeightPx}@{f.Scale:0.##} clicks={f.Clicks} events={f.PumpedEvents} keepAlive={f.KeepAlive} resized={f.Resized} reconciled={f.Reconciled} layout={f.LayoutNeeded} xform={f.TransformWrote} unchanged={f.MaybeUnchanged} skip={f.SkipSubmit} uploads={f.HasPendingUploads}");
+            WriteDeviceLostLine($"[device-lost]   draw cmds={f.CommandCount} bytes={f.CommandBytes} sort={f.SortKeyCount} nodes={f.NodesVisited}/{f.DrawNodeCount}/{f.CulledNodeCount} blur={f.BlurCandidateCount}/{f.BlurGroupCount}/{f.BlurSuppressedByScrollCount}/{f.BlurHoldCandidateCount} edgeFade={f.EdgeFadeGroupCount} damage=({f.Damage.X:0.#},{f.Damage.Y:0.#},{f.Damage.W:0.#},{f.Damage.H:0.#})");
+            WriteDeviceLostLine($"[device-lost]   ms flush={f.FlushMs:0.###} layout={f.LayoutMs:0.###} anim={f.AnimMs:0.###} record={f.RecordMs:0.###} ops={f.OpcodeStats}");
+        }
+    }
+
+    private static void WriteDeviceLostLine(string line)
+    {
+        if (Diag.Sink is { } sink) sink(line);
+        else Console.Error.WriteLine(line);
+    }
+
     private bool _frameNeeded = true;        // a frame is required (reactive work pending, input, resize, …)
     private bool _frameAfterPaint;           // a wake arrived during paint → run another frame
     private bool _needFullLayout = true;     // first frame / resize / DPI / root structural change
@@ -407,15 +491,14 @@ public sealed class AppHost : IDisposable
     private double _frameMs;
     private const double FpsWindowSeconds = 1.0;
 
-    // Ambient-animation frame-rate cap (FG_ANIM_FPS env, default 0 = UNCAPPED/display-rate). 0 lets the vsync-locked
-    // present pace the loop to the panel's refresh — a clean 120 on a 120 Hz panel, a clean 60 on a 60 Hz panel — with
-    // no extra software wait. A POSITIVE cap is an OPT-IN power throttle for perpetual loops (a spinner, skeleton
-    // shimmer, reveal fade, implicit brush transition, caret blink) where a sub-refresh rate is imperceptible and idles
-    // the CPU; an app/battery policy sets it via this property. WARNING: a positive cap BELOW the panel's refresh BEATS
-    // against the vsync-locked present (the software wait stacks onto the vblank quantization), so e.g. a 60 cap on a
-    // 120 Hz panel reads ~40–60, not a clean 60 — the default is 0 precisely to avoid that. Latency-SENSITIVE motion
-    // (scroll/hover/press/drag/repeat — motion the user actively drives) is exempt and always runs at display rate; and
-    // input/worker-posts wake the loop instantly regardless of the wait, so the cap NEVER adds input latency.
+    // Ambient-animation frame-rate cap (FG_ANIM_FPS env, default 30 Hz). 0 is the explicit diagnostic/app override for
+    // UNCAPPED/display-rate ambient motion; a positive cap paces perpetual loops (a spinner, skeleton shimmer,
+    // equalizer/media playhead, reveal fade, implicit brush transition, caret blink) where a sub-refresh rate is
+    // imperceptible and idles the CPU. WARNING: a positive cap BELOW the panel's refresh BEATS against the vsync-locked
+    // present (the software wait stacks onto the vblank quantization), so e.g. a 60 cap on a 120 Hz panel reads ~40–60,
+    // not a clean 60. Latency-SENSITIVE motion (scroll/hover/press/drag/repeat — motion the user actively drives) is
+    // exempt and always runs at display rate; and input/worker-posts wake the loop instantly regardless of the wait, so
+    // the cap NEVER adds input latency.
     private long _lastFrameStartTicks;
     // Pacing → timestep coupling (fps consistency). The wait the loop used to pace INTO the current frame: 0 = display
     // rate; >0 = ambient-throttled / HUD; -1 = blocked idle. A non-zero value means the frame clock's pending delta is a
@@ -432,7 +515,7 @@ public sealed class AppHost : IDisposable
     private static readonly long MainScrollHoldTicks = (long)(0.45 * Stopwatch.Frequency);
     public int AmbientAnimationFps { get; set; } = s_ambientFpsDefault;
     private static readonly int s_ambientFpsDefault = ReadAmbientFps();
-    private static int ReadAmbientFps() => int.TryParse(Environment.GetEnvironmentVariable("FG_ANIM_FPS"), out var v) && v >= 0 ? v : 0;
+    private static int ReadAmbientFps() => int.TryParse(Environment.GetEnvironmentVariable("FG_ANIM_FPS"), out var v) && v >= 0 ? v : 30;
     private const WakeReasons LatencySensitiveWake =
         WakeReasons.Interact | WakeReasons.ScrollAnim | WakeReasons.Repeat |
         WakeReasons.DragActive | WakeReasons.DragDropWork | WakeReasons.GestureHold |
@@ -651,6 +734,7 @@ public sealed class AppHost : IDisposable
     /// this seam before each <c>RunFrame</c> (headless never overwrites it — see the <c>!_isHeadless</c> guard at the
     /// tick). Not exposed publicly; VerticalSlice has InternalsVisibleTo.</summary>
     internal ScrollIntegrator ScrollIntegratorForTest => _scrollAnim;
+    internal int DeviceLostRecoveryCountForTest => _deviceLostRecoveryCount;
 
     /// <summary>The frame loop's current wake-reason mask — why <see cref="HasActiveWork"/> would keep running this
     /// instant (for tests / census). An O(1) recompute of the same terms.</summary>
@@ -705,6 +789,7 @@ public sealed class AppHost : IDisposable
         _frameTime = frameTime ?? (_isHeadless ? new FixedFrameTimeSource() : new StopwatchFrameTimeSource());
         _swapchain = device.CreateSwapchain(new SwapchainDesc(window.Handle, window.ClientSizePx));
         _reconciler = new TreeReconciler(_scene, strings, _runtime);
+        _reconciler.RegisterPendingEffectContext = RegisterPendingEffectContext;
         _layout = new FlexLayout(_scene, fonts);
         _invalidator = new LayoutInvalidator(_scene, _layout);
         var scrollProfile = scrollTuning ?? ScrollTuning.WinUiLike;   // WinUI-parity wheel distance + feel (the Win32 app default)
@@ -952,7 +1037,7 @@ public sealed class AppHost : IDisposable
             // under render confinement) + a thread-safe UI wake to nudge the UI out of its clean block on RecoverDone.
             if (_asyncActive) { _deviceLost = new Threading.DeviceLostCoordinator(); _device.EnableAsyncDeviceLostSignaling(); }
             _renderThread = new Threading.RenderThread(_renderSeam, SubmitPresentOnRenderThread, async: _asyncActive,
-                deviceLost: _deviceLost, recover: _deviceLost is null ? null : _device.RecoverDevice, windowWake: _deviceLost is null ? null : _window.Wake);
+                deviceLost: _deviceLost, recover: _deviceLost is null ? null : RecoverDeviceAfterDump, windowWake: _deviceLost is null ? null : _window.Wake);
             _device.MarkRenderConfined();
         }
 
@@ -1293,7 +1378,7 @@ public sealed class AppHost : IDisposable
             if (willReconcile && _everLaidOut && !_scene.Root.IsNull && !resized)
             {
                 _projectBefore.Clear();
-                CaptureProjections(_scene.Root);
+                CaptureProjections();
                 capturedProjections = _projectBefore.Count > 0;
             }
             if (s_allocDiag) { db = Probe(SegFlip, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
@@ -1537,6 +1622,8 @@ public sealed class AppHost : IDisposable
                 && !_device.HasPendingUploads;   // a staged texture upload is flushed INSIDE submit — skipping would leave it white
             ulong dlHash = maybeUnchanged ? DrawListHash(_drawList.Bytes, _drawList.SortKeys) : 0UL;
             bool skipSubmit = maybeUnchanged && dlHash == _lastPresentedDrawListHash;
+            RememberDeviceLostFrame(clicks, keepAlive, resized, reconciled, layoutNeeded, transformWrote,
+                maybeUnchanged, skipSubmit, in recordStats, frameStart, tFlush, tLayout, tAnim, tRecord);
             long subStart = (keepAlive && s_resizeDiag) ? Stopwatch.GetTimestamp() : 0;
             long tSubmitDone, tSubmit, hotAlloc;
             if (skipSubmit)
@@ -1565,10 +1652,18 @@ public sealed class AppHost : IDisposable
                 else
                 {
                     if (keepAlive) _device.SuppressVsyncOnce();
-                    if (_renderSeam.TryAcquire(out var rf))
-                        _device.SubmitDrawList(_renderSeam.Bytes(rf), _renderSeam.SortKeys(rf), in rf.Submit); // 10 submit
-                    tSubmitDone = Stopwatch.GetTimestamp();     // boundary: SubmitDrawList done, Present not yet called
-                    _swapchain.Present();                       // 11 present (UI thread)
+                    try
+                    {
+                        if (_renderSeam.TryAcquire(out var rf))
+                            _device.SubmitDrawList(_renderSeam.Bytes(rf), _renderSeam.SortKeys(rf), in rf.Submit); // 10 submit
+                        tSubmitDone = Stopwatch.GetTimestamp();     // boundary: SubmitDrawList done, Present not yet called
+                        _swapchain.Present();                       // 11 present (UI thread)
+                    }
+                    catch (Exception ex)
+                    {
+                        if (!TryRecoverForegroundDeviceLost(ex, clicks)) throw;
+                        return LastStats;
+                    }
                 }
                 if (maybeUnchanged) _lastPresentedDrawListHash = dlHash;   // track the stream only across quiet runs (active frames don't hash)
                 _lastFrameSkippedSubmit = false;   // a real submit/present paced this frame
@@ -1813,11 +1908,15 @@ public sealed class AppHost : IDisposable
     }
 
     // FLIP "First" capture — every BoundsAnimated node's presented PARENT-RELATIVE rect, snapshotted BEFORE this commit.
-    private void CaptureProjections(NodeHandle n)
+    private void CaptureProjections()
     {
-        if (n.IsNull) return;
-        if ((_scene.Flags(n) & NodeFlags.BoundsAnimated) != 0)
+        var nodes = _scene.BoundsAnimatedNodes;
+        int w = 0;
+        for (int i = 0; i < nodes.Count; i++)
         {
+            NodeHandle n = nodes[i];
+            if (!_scene.IsLive(n) || (_scene.Flags(n) & NodeFlags.BoundsAnimated) == 0) continue;
+            nodes[w++] = n;
             // FLIP relativeTarget: capture relative to the resolved shared-layout anchor (if any) instead of the parent,
             // so the node rides the anchor's motion coherently (its anchor-relative rect is unchanged ⇒ no re-FLIP).
             NodeHandle anchor = _reconciler.ResolveRelativeTarget(n);
@@ -1825,8 +1924,7 @@ public sealed class AppHost : IDisposable
                 ? new ProjCapture(RelRect(n), _scene.Parent(n))
                 : new ProjCapture(RelRectIn(n, anchor), anchor);
         }
-        for (var c = _scene.FirstChild(n); !c.IsNull; c = _scene.NextSibling(c))
-            CaptureProjections(c);
+        if (w < nodes.Count) nodes.RemoveRange(w, nodes.Count - w);
     }
 
     private void ApplyProjections()
@@ -2030,21 +2128,25 @@ public sealed class AppHost : IDisposable
     }
 
     private void DrainLayoutEffects()
-    {
-        Drain(_root.Context.PendingLayoutEffects);
-        foreach (var c in _reconciler.LiveComponents) Drain(c.Context.PendingLayoutEffects);
-    }
+        => DrainPendingEffectContexts(_pendingLayoutEffectContexts, layout: true);
 
     private void DrainPassiveEffects()
+        => DrainPendingEffectContexts(_pendingPassiveEffectContexts, layout: false);
+
+    private void RegisterPendingEffectContext(RenderContext ctx, bool layout)
+        => (layout ? _pendingLayoutEffectContexts : _pendingPassiveEffectContexts).Add(ctx);
+
+    private static void DrainPendingEffectContexts(List<RenderContext> contexts, bool layout)
     {
-        Drain(_root.Context.PendingEffects);
-        foreach (var c in _reconciler.LiveComponents) Drain(c.Context.PendingEffects);
+        for (int i = 0; i < contexts.Count; i++)
+            Drain(layout ? contexts[i].PendingLayoutEffects : contexts[i].PendingEffects);
+        contexts.Clear();
     }
 
     private static void Drain(List<Action> q)
     {
         if (q.Count == 0) return;
-        foreach (var e in q) e();
+        for (int i = 0; i < q.Count; i++) q[i]();
         q.Clear();
     }
 

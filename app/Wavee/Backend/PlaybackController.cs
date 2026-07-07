@@ -121,6 +121,8 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     static readonly TimeSpan FastStartBodySupplyGrace = TimeSpan.FromMilliseconds(250);
     string _lastActive = "";
     double _lastVolume = -1;
+    double _lastIntentVolume = double.NaN;
+    readonly TrailingCoalescer _remoteVolumeTx = new(400);
     bool _ownsActivePlayback;
     string? _nextPageUrl;
     bool _contextIsInfinite;
@@ -296,7 +298,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         // Apply a volume change (incl. one a remote controller made to the active device) to the local host when WE are
         // active. Silent host = no-op today, but correct once real audio lands; never loops (the host has no readback).
         double vol = s.Volume;
-        if (Math.Abs(vol - _lastVolume) > 0.0009) { _lastVolume = vol; if (RouteLocal()) _host.SetVolume(vol); }
+        if (Math.Abs(vol - _lastVolume) > 0.0009) { _lastVolume = vol; _lastIntentVolume = vol; if (RouteLocal()) _host.SetVolume(vol); }
 
         var aid = s.ActiveDeviceId ?? "";
         if (aid == _ourDeviceId) SetActiveOwner(true);
@@ -379,12 +381,18 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
 
     public Task SetVolumeAsync(double volume01, CancellationToken ct = default)
     {
+        volume01 = Math.Clamp(volume01, 0, 1);
+        if (!double.IsNaN(_lastIntentVolume) && Math.Abs(volume01 - _lastIntentVolume) < 0.0005)
+            return Done;
+        _lastIntentVolume = volume01;
+
         _projection.NoteLocalCommand();          // optimistic: a stale cluster echo won't snap the slider back
         _projection.SetLocalVolume(volume01);    // move the slider immediately (it follows the active device's volume)
         if (RouteLocal()) return Local(() => { _host.SetVolume(volume01); EmitState(EvKind.VolumeChanged); });
         var target = _projection.ActiveDeviceId;
         if (_outbound is null || string.IsNullOrEmpty(target)) return Done;
-        return ForwardVolumeAsync(target, volume01, ct);   // remote: the dedicated connect/volume PUT, not player/command
+        _remoteVolumeTx.Post(() => _ = ForwardVolumeAsync(target, volume01, CancellationToken.None));
+        return Done;
     }
 
     async Task ForwardVolumeAsync(string target, double volume01, CancellationToken ct)
@@ -1273,5 +1281,5 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         return new Track(id, uri, uri, Array.Empty<ArtistRef>(), new AlbumRef("", "", ""), 0, false, null);
     }
 
-    public void Dispose() { _hostSub.Dispose(); _projSub.Dispose(); _lock.Dispose(); }
+    public void Dispose() { _remoteVolumeTx.Dispose(); _hostSub.Dispose(); _projSub.Dispose(); _lock.Dispose(); }
 }

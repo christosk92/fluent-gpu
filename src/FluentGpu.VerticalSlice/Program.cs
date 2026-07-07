@@ -2720,6 +2720,130 @@ static class Slice
         return false;
     }
 
+    enum DeviceLossProbeFailure { Submit, Present, PresentNonDevice }
+
+    sealed class DeviceLossProbeDevice : IGpuDevice
+    {
+        readonly DeviceLossProbeFailure _failure;
+        bool _armed = true;
+        bool _lost;
+
+        public DeviceLossProbeDevice(DeviceLossProbeFailure failure) => _failure = failure;
+        public HeadlessGpuDevice Inner { get; } = new();
+        public string BackendName => "DeviceLossProbe";
+        public bool SupportsSecondarySwapchains => true;
+        public int RecoverCount { get; private set; }
+        public int DumpCount { get; private set; }
+        public int NoteCount { get; private set; }
+
+        public ISwapchain CreateSwapchain(in SwapchainDesc desc) => new DeviceLossProbeSwapchain(this, Inner.CreateSwapchain(desc));
+
+        public void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx)
+        {
+            if (_failure == DeviceLossProbeFailure.Submit) ThrowOnce();
+            Inner.SubmitDrawList(drawList, sortKeys, in ctx);
+        }
+
+        public void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx, ISwapchain target)
+            => SubmitDrawList(drawList, sortKeys, in ctx);
+
+        public void UploadImage(int imageId, ReadOnlySpan<byte> pbgra8, int w, int h) => Inner.UploadImage(imageId, pbgra8, w, h);
+        public void EvictImage(int imageId) => Inner.EvictImage(imageId);
+        public bool NoteIfDeviceLost() { NoteCount++; return _lost; }
+        public int PollDeviceLost() => _lost ? unchecked((int)0x887A0006u) : 0;
+        public void RecoverDevice() { RecoverCount++; _lost = false; }
+        public void DumpDeviceLostDiagnostics(Action<string> write) { DumpCount++; write("[probe] device-lost diagnostics"); }
+        public void Dispose() { }
+
+        internal void Present(ISwapchain inner)
+        {
+            if (_failure is DeviceLossProbeFailure.Present or DeviceLossProbeFailure.PresentNonDevice) ThrowOnce();
+            inner.Present();
+        }
+
+        void ThrowOnce()
+        {
+            if (!_armed) return;
+            _armed = false;
+            if (_failure != DeviceLossProbeFailure.PresentNonDevice) _lost = true;
+            throw new InvalidOperationException(_lost ? "synthetic device lost" : "synthetic render bug");
+        }
+    }
+
+    sealed class DeviceLossProbeSwapchain(DeviceLossProbeDevice owner, ISwapchain inner) : ISwapchain
+    {
+        public Size2 SizePx => inner.SizePx;
+        public void Resize(Size2 px) => inner.Resize(px);
+        public void Present() => owner.Present(inner);
+        public void ConfigurePopupChrome(in PopupChromeMetrics m) => inner.ConfigurePopupChrome(in m);
+        public void AnimatePopupOpen() => inner.AnimatePopupOpen();
+        public void AnimatePopupClose() => inner.AnimatePopupClose();
+        public bool PopupAnimating => inner.PopupAnimating;
+        public void Dispose() => inner.Dispose();
+    }
+
+    static AppHost DeviceLostHost(StringTable strings, DeviceLossProbeDevice device, out HeadlessPlatformApp app, out HeadlessWindow window)
+    {
+        app = new HeadlessPlatformApp();
+        window = new HeadlessWindow(new WindowDesc("device loss", new Size2(320, 220), 1f));
+        window.Show();
+        return new AppHost(app, window, device, new HeadlessFontSystem(strings), strings, new Counter());
+    }
+
+    static void DeviceLostRecoveryChecks(StringTable strings)
+    {
+        var oldSink = Diag.Sink;
+        var lines = new List<string>();
+        Diag.Sink = lines.Add;
+        try
+        {
+            var presentDevice = new DeviceLossProbeDevice(DeviceLossProbeFailure.Present);
+            var presentHost = DeviceLostHost(strings, presentDevice, out var presentApp, out var presentWindow);
+            using (presentApp)
+            using (presentHost)
+            {
+                var lost = presentHost.RunFrame();
+                var recovered = presentHost.RunFrame();
+                Check("DL1. foreground Present device-loss is recovered; failed frame is dropped",
+                    !lost.Rendered && !lost.Presented && recovered.Presented && presentDevice.RecoverCount == 1 && presentDevice.DumpCount == 1 && presentHost.DeviceLostRecoveryCountForTest == 1,
+                    $"lostRendered={lost.Rendered} recoveredPresented={recovered.Presented} recover={presentDevice.RecoverCount} dump={presentDevice.DumpCount}");
+            }
+
+            Check("DL2. device-loss log includes frame breadcrumbs and opcode stats",
+                lines.Exists(l => l.Contains("[device-lost]")) && lines.Exists(l => l.Contains("ops=")) && lines.Exists(l => l.Contains("[probe]")),
+                $"lines={lines.Count}");
+
+            var submitDevice = new DeviceLossProbeDevice(DeviceLossProbeFailure.Submit);
+            var submitHost = DeviceLostHost(strings, submitDevice, out var submitApp, out var submitWindow);
+            using (submitApp)
+            using (submitHost)
+            {
+                var lost = submitHost.RunFrame();
+                var recovered = submitHost.RunFrame();
+                Check("DL3. foreground Submit device-loss is recovered; next frame submits cleanly",
+                    !lost.Rendered && recovered.Presented && submitDevice.Inner.FrameCount == 1 && submitDevice.RecoverCount == 1,
+                    $"frames={submitDevice.Inner.FrameCount} recover={submitDevice.RecoverCount}");
+            }
+
+            var bugDevice = new DeviceLossProbeDevice(DeviceLossProbeFailure.PresentNonDevice);
+            var bugHost = DeviceLostHost(strings, bugDevice, out var bugApp, out var bugWindow);
+            using (bugApp)
+            using (bugHost)
+            {
+                bool threw = false;
+                try { bugHost.RunFrame(); }
+                catch (InvalidOperationException ex) when (ex.Message.Contains("synthetic render bug")) { threw = true; }
+                Check("DL4. non-device-loss render exception still propagates",
+                    threw && bugDevice.RecoverCount == 0 && bugHost.DeviceLostRecoveryCountForTest == 0 && bugDevice.NoteCount == 1,
+                    $"threw={threw} recover={bugDevice.RecoverCount} notes={bugDevice.NoteCount}");
+            }
+        }
+        finally
+        {
+            Diag.Sink = oldSink;
+        }
+    }
+
     static ColorF GlyphColor(HeadlessGpuDevice dev, StringTable strings, string text)
     {
         foreach (var g in dev.LastGlyphs)
@@ -5632,8 +5756,12 @@ static class Slice
             using var host = new AppHost(app, window, device, fonts, strings, probe);
 
             host.RunFrame();
+            var firstVp = FindScrollNode(host.Scene, host.Scene.Root);
+            host.Scene.TryGetScroll(firstVp, out var firstSc);
+            int staggeredFirst = BoundSlotCount(host.Scene, host.Scene.Root);
+            int firstWindowRows = firstSc.LastRealized - firstSc.FirstRealized;
             for (int i = 0; i < 24 && host.Reconciler.HasWarmingVirtuals; i++) host.RunFrame();
-            int staggered = BoundSlotCount(host.Scene, host.Scene.Root);
+            int staggeredSettled = BoundSlotCount(host.Scene, host.Scene.Root);
             bool wasWarming = host.Reconciler.HasWarmingVirtuals;
             probe.Tier.Value = 1;   // keyed remount — staggerColdRealize:false (list already realized once)
             host.RunFrame();
@@ -5641,9 +5769,11 @@ static class Slice
             host.Scene.TryGetScroll(vp, out var sc);
             int remountSlots = BoundSlotCount(host.Scene, host.Scene.Root);
             int windowRows = sc.LastRealized - sc.FirstRealized;
-            Check("RZ-TIER. tier remount without cold stagger realizes the full viewport window in one frame",
-                !wasWarming && staggered <= 8 && remountSlots >= windowRows && remountSlots >= 8,
-                $"staggered={staggered} remount={remountSlots} window={windowRows} first={sc.FirstRealized} last={sc.LastRealized}");
+            Check("RZ-TIER. cold stagger never presents a partial visible window; tier remount fills in one frame",
+                staggeredFirst >= firstWindowRows && staggeredFirst >= 8 && firstWindowRows >= 8
+                && !wasWarming && staggeredSettled >= staggeredFirst
+                && remountSlots >= windowRows && remountSlots >= 8,
+                $"first={staggeredFirst}/{firstWindowRows} settled={staggeredSettled} remount={remountSlots} window={windowRows} first={sc.FirstRealized} last={sc.LastRealized}");
         }
 
         // Fix 2 — modal-loop keep-alive must not swallow warming virtual refill when ambient animation is live.
@@ -5659,15 +5789,18 @@ static class Slice
             host.RunFrame();
             bool warming = host.Reconciler.HasWarmingVirtuals;
             int slots0 = BoundSlotCount(host.Scene, host.Scene.Root);
+            var vp0 = FindScrollNode(host.Scene, host.Scene.Root);
+            host.Scene.TryGetScroll(vp0, out var sc0);
+            int windowRows0 = sc0.LastRealized - sc0.FirstRealized;
             host.Animation.Keyframes(host.Scene.Root, AnimChannel.Opacity,
                 [new Keyframe(0f, 0.5f, Easing.Linear), new Keyframe(1f, 1f, Easing.Linear)], 1000f, loop: true);
             bool ambient = host.CurrentWakeReasons.HasFlag(WakeReasons.Anim);
             window.InModalLoop = true;
             host.Paint(0, keepAlive: true);
             int slots1 = BoundSlotCount(host.Scene, host.Scene.Root);
-            Check("RZ-MODAL. modal-loop keep-alive refills a warming virtual list under ambient-only animation wake",
-                warming && ambient && slots0 <= 4 && slots1 > slots0,
-                $"warming={warming} ambient={ambient} slots {slots0}→{slots1} wake={host.CurrentWakeReasons}");
+            Check("RZ-MODAL. modal-loop keep-alive preserves/refills the visible virtual window under ambient-only animation wake",
+                ambient && slots0 >= windowRows0 && slots0 >= 8 && (warming ? slots1 > slots0 : slots1 >= slots0),
+                $"warming={warming} ambient={ambient} slots {slots0}→{slots1} window={windowRows0} wake={host.CurrentWakeReasons}");
         }
     }
 
@@ -20347,6 +20480,7 @@ static class Slice
         Check("8. steady frame does no work (memoized)", !steady.Rendered);
         Check("9. ZERO managed alloc on the paint half (phases 6–11)", steady.HotPhaseAllocBytes == 0, $"{steady.HotPhaseAllocBytes} bytes");
 
+        DeviceLostRecoveryChecks(strings);
         FlexChecks(strings);
         ShellDockChecks(strings);
         ShellResizeChecks(strings);

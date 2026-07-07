@@ -23,7 +23,8 @@ public sealed class HeadFileClient
     public HeadFileClient(IHttpExchange http, Func<SessionContext> ctx, Action<string>? log = null)
     {
         _log = log;
-        _cache = new Resource<string, HeadBytes>(FetchAsync, new FreshnessPolicy.Immutable(), ctx);
+        _cache = new Resource<string, HeadBytes>(FetchAsync, new FreshnessPolicy.Immutable(), ctx,
+            maxEntries: 32, name: "audio.head", debugLog: log);
         _http = http;
     }
 
@@ -31,8 +32,7 @@ public sealed class HeadFileClient
 
     public async Task<HeadBytes> GetAsync(string fileIdHex, CancellationToken ct = default)
     {
-        await _cache.Revalidate(fileIdHex).ConfigureAwait(false);   // awaits the (coalesced) fetch to completion
-        var loaded = _cache.Peek(fileIdHex);
+        var loaded = await _cache.GetAsync(fileIdHex, ct).ConfigureAwait(false);
         if (loaded.IsReady) return loaded.Value!;
         throw new InvalidOperationException("head file fetch failed: " + (loaded.Error ?? "unknown"));
     }

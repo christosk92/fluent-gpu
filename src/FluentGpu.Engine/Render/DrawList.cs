@@ -22,6 +22,39 @@ public enum DrawOp : int
                                // REPLAY from the split, so the cache key (shaping) is unchanged. Decoded only when emitted.
 }
 
+/// <summary>Per-opcode command counts for the current <see cref="DrawList"/>. Stored as scalar fields so the host can
+/// log the failed frame's shape after device loss without reparsing the command stream or retaining payload bytes.</summary>
+public struct DrawListOpcodeStats
+{
+    public int FillRoundRect, DrawGlyphRun, PushClip, PopClip, DrawImage, DrawRoundRectStroke, DrawShadow;
+    public int DrawGradientRect, PushLayer, PopLayer, DrawGradientStroke, DrawArc, DrawPolylineStroke, DrawTabShape, DrawGlyphRunGradient;
+
+    public void Add(DrawOp op)
+    {
+        switch (op)
+        {
+            case DrawOp.FillRoundRect: FillRoundRect++; break;
+            case DrawOp.DrawGlyphRun: DrawGlyphRun++; break;
+            case DrawOp.PushClip: PushClip++; break;
+            case DrawOp.PopClip: PopClip++; break;
+            case DrawOp.DrawImage: DrawImage++; break;
+            case DrawOp.DrawRoundRectStroke: DrawRoundRectStroke++; break;
+            case DrawOp.DrawShadow: DrawShadow++; break;
+            case DrawOp.DrawGradientRect: DrawGradientRect++; break;
+            case DrawOp.PushLayer: PushLayer++; break;
+            case DrawOp.PopLayer: PopLayer++; break;
+            case DrawOp.DrawGradientStroke: DrawGradientStroke++; break;
+            case DrawOp.DrawArc: DrawArc++; break;
+            case DrawOp.DrawPolylineStroke: DrawPolylineStroke++; break;
+            case DrawOp.DrawTabShape: DrawTabShape++; break;
+            case DrawOp.DrawGlyphRunGradient: DrawGlyphRunGradient++; break;
+        }
+    }
+
+    public override readonly string ToString()
+        => $"fill={FillRoundRect} glyph={DrawGlyphRun} glyphGrad={DrawGlyphRunGradient} clip={PushClip}/{PopClip} img={DrawImage} stroke={DrawRoundRectStroke} shadow={DrawShadow} grad={DrawGradientRect}/{DrawGradientStroke} layer={PushLayer}/{PopLayer} arc={DrawArc} poly={DrawPolylineStroke} tab={DrawTabShape}";
+}
+
 /// <summary>How a <see cref="FillRoundRectCmd"/> fills its interior.</summary>
 public enum FillKind : int
 {
@@ -168,6 +201,7 @@ public sealed class DrawList
     private int _len;
     private ulong[] _sort;
     private int _sortLen;
+    private DrawListOpcodeStats _opcodeStats;
 
     public DrawList(int capacity = 4096)
     {
@@ -178,8 +212,9 @@ public sealed class DrawList
     public ReadOnlySpan<byte> Bytes => _buf.AsSpan(0, _len);
     public ReadOnlySpan<ulong> SortKeys => _sort.AsSpan(0, _sortLen);
     public int CommandCount { get; private set; }
+    public DrawListOpcodeStats OpcodeStats => _opcodeStats;
 
-    public void Reset() { _len = 0; _sortLen = 0; CommandCount = 0; }
+    public void Reset() { _len = 0; _sortLen = 0; CommandCount = 0; _opcodeStats = default; }
 
     public void FillRoundRect(in RectF rect, in CornerRadius4 radii, in ColorF fill, in Affine2D transform, float opacity, ulong sortKey = 0)
     {
@@ -384,6 +419,7 @@ public sealed class DrawList
         MemoryMarshal.Write(_buf.AsSpan(_len), in v);
         _len += sizeof(int);
         CommandCount++;
+        _opcodeStats.Add(op);
     }
 
     private void WritePayload<T>(in T value) where T : unmanaged

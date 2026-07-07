@@ -789,12 +789,19 @@ public sealed class SceneStore : ISceneBackend
         _transformWrote.Clear();
     }
 
+    // Persistent registry of nodes carrying BoundsAnimated. Entries are appended on the 0→1 transition and compacted
+    // by the host's FLIP capture pass, so the empty/common case avoids a recursive full-tree search.
+    private readonly List<NodeHandle> _boundsAnimated = new();
+    internal List<NodeHandle> BoundsAnimatedNodes => _boundsAnimated;
+
     public void Mark(NodeHandle h, NodeFlags flags)
     {
         int idx = (int)h.Raw.Index;
-        if ((flags & NodeFlags.LayoutDirty) != 0 && (_flags[idx] & NodeFlags.LayoutDirty) == 0) _layoutDirty.Add(h);
-        if ((flags & NodeFlags.TransformDirty) != 0 && (_flags[idx] & NodeFlags.TransformDirty) == 0) _transformWrote.Add(h);
-        _flags[idx] |= flags;
+        NodeFlags old = _flags[idx];
+        if ((flags & NodeFlags.LayoutDirty) != 0 && (old & NodeFlags.LayoutDirty) == 0) _layoutDirty.Add(h);
+        if ((flags & NodeFlags.TransformDirty) != 0 && (old & NodeFlags.TransformDirty) == 0) _transformWrote.Add(h);
+        if ((flags & NodeFlags.BoundsAnimated) != 0 && (old & NodeFlags.BoundsAnimated) == 0) _boundsAnimated.Add(h);
+        _flags[idx] = old | flags;
     }
     public void Unmark(NodeHandle h, NodeFlags flags) => _flags[h.Raw.Index] &= ~flags;
 

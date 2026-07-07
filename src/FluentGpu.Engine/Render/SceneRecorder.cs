@@ -86,6 +86,33 @@ public static class SceneRecorder
         };
     }
 
+    private readonly struct InheritedState
+    {
+        public readonly float HoverT;
+        public readonly float PressT;
+        public readonly NodeFlags InteractiveFlags;
+        public readonly byte HasProgress;
+        public readonly byte Disabled;
+
+        public InheritedState(float hoverT, float pressT, NodeFlags interactiveFlags, byte hasProgress, byte disabled)
+        {
+            HoverT = hoverT;
+            PressT = pressT;
+            InteractiveFlags = interactiveFlags;
+            HasProgress = hasProgress;
+            Disabled = disabled;
+        }
+
+        public readonly InheritedState ForChild(NodeFlags flags, bool nodeInteractive, bool hasLocalProgress, float localHoverT, float localPressT)
+        {
+            NodeFlags interactiveFlags = nodeInteractive ? flags : InteractiveFlags;
+            byte disabled = Disabled != 0 || (flags & NodeFlags.Disabled) != 0 ? (byte)1 : (byte)0;
+            if (nodeInteractive && hasLocalProgress)
+                return new InheritedState(localHoverT, localPressT, interactiveFlags, 1, disabled);
+            return new InheritedState(HoverT, PressT, interactiveFlags, HasProgress, disabled);
+        }
+    }
+
     /// <param name="skipRoots">Subtree roots EXCLUDED from this record pass — out-of-bounds popup wrappers that render
     /// into their own popup window instead (E4 windowed popups; see <see cref="RecordSubtree"/>). The subtrees stay in
     /// the one SceneStore (layout/hit-test unchanged) — only their pixels move to the popup window's DrawList.</param>
@@ -120,7 +147,7 @@ public static class SceneRecorder
             if (scene.IsLive(ov)) skips[skipCount++] = ov;
         }
 
-        Walk(scene, dl, images, scene.Root, Affine2D.Identity, 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, holdSelfBlurForAnyUserScroll, skips[..skipCount], ref stats);
+        Walk(scene, dl, images, scene.Root, Affine2D.Identity, 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, holdSelfBlurForAnyUserScroll, default, skips[..skipCount], ref stats);
 
         // Exit orphans: nodes removed from the tree but kept alive for their exit animation. Draw each detached subtree
         // at its frozen parent-world origin, fading/sliding out via its own paint. Depth 0 (lowest key) so the painter
@@ -129,7 +156,7 @@ public static class SceneRecorder
         {
             var o = scene.OrphanAt(i, out float px, out float py);
             if ((scene.Flags(o) & NodeFlags.ConnectedOverlay) != 0) continue;   // an overlay-flagged orphan draws in the top band, not here
-            Walk(scene, dl, images, o, Affine2D.Translation(px, py), 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, holdSelfBlurForAnyUserScroll, skipRoots, ref stats);
+            Walk(scene, dl, images, o, Affine2D.Translation(px, py), 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, holdSelfBlurForAnyUserScroll, default, skipRoots, ref stats);
         }
 
         // E5 drag-ghost top band: walk the ghost subtree at its LIVE parent-world origin (scroll / animated ancestor
@@ -142,7 +169,7 @@ public static class SceneRecorder
             ref NodePaint gp = ref scene.Paint(ghost);
             Walk(scene, dl, images, ghost,
                  Affine2D.Translation(abs.X - gb.X - gp.LocalTransform.Dx, abs.Y - gb.Y - gp.LocalTransform.Dy),
-                 1f, 1 << 16, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, holdSelfBlurForAnyUserScroll, default, ref stats);
+                 1f, 1 << 16, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, holdSelfBlurForAnyUserScroll, default, default, ref stats);
         }
 
         // Connected-animation overlay band: flying shared-element (Hero) visuals. Each overlay draws in a top band ABOVE
@@ -160,7 +187,7 @@ public static class SceneRecorder
             ref NodePaint op = ref scene.Paint(ov);
             Walk(scene, dl, images, ov,
                  Affine2D.Translation(abs.X - ob.X - op.LocalTransform.Dx, abs.Y - ob.Y - op.LocalTransform.Dy),
-                 1f, (1 << 16) | 1, overlayClip, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, holdSelfBlurForAnyUserScroll, default, ref stats);
+                 1f, (1 << 16) | 1, overlayClip, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, holdSelfBlurForAnyUserScroll, default, default, ref stats);
         }
         return stats.ToStats();
     }
@@ -223,7 +250,7 @@ public static class SceneRecorder
         }
         var stats = new RecordAccumulator();
         Walk(scene, dl, images, root, Affine2D.Translation(pax - originDip.X, pay - originDip.Y), 1f, 0, RectF.Infinite,
-             in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, false, default, ref stats);
+             in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, false, default, default, ref stats);
         return stats.ToStats();
     }
 
@@ -246,7 +273,8 @@ public static class SceneRecorder
 
     private static void Walk(SceneStore scene, DrawList dl, ImageCache? images, NodeHandle node, Affine2D parentWorld, float parentOpacity,
                              int depth, RectF clip, in FocusVisualStyle focus, in TextEditStyle textEdit, ColorF scrollThumb, ColorF scrollTrack,
-                             float parentScaleX, float parentScaleY, bool parentInMotion, bool parentScrollInMotion, ReadOnlySpan<NodeHandle> skipRoots, ref RecordAccumulator stats)
+                             float parentScaleX, float parentScaleY, bool parentInMotion, bool parentScrollInMotion, InheritedState inherited,
+                             ReadOnlySpan<NodeHandle> skipRoots, ref RecordAccumulator stats)
     {
         if (!skipRoots.IsEmpty && ContainsNode(skipRoots, node)) return;   // subtree renders in its own popup window
         NodeFlags flags = scene.Flags(node);
@@ -254,6 +282,25 @@ public static class SceneRecorder
         stats.NodesVisited++;
         bool maybeSparsePaint = (flags & NodeFlags.SparsePaint) != 0;
         bool hasInteractionAnim = (flags & NodeFlags.InteractionAnim) != 0;
+        ref InteractionInfo interaction = ref scene.Interaction(node);
+        const int interactiveMask = InteractionInfo.ClickBit | InteractionInfo.PointerBit;
+        bool nodeInteractive = (interaction.HandlerMask & interactiveMask) != 0;
+        InteractionAnim localInteraction = default;
+        bool hasOwnInteraction = hasInteractionAnim && scene.TryGetInteract(node, out localInteraction);
+        float localHoverT = 0f, localPressT = 0f;
+        bool hasLocalProgress = false;
+        if (hasOwnInteraction)
+        {
+            localHoverT = (flags & NodeFlags.HoverWithin) != 0 ? 1f : localInteraction.HoverT;
+            localPressT = localInteraction.PressT;
+            hasLocalProgress = true;
+        }
+        else if ((flags & NodeFlags.HoverWithin) != 0)
+        {
+            localHoverT = 1f;
+            hasLocalProgress = true;
+        }
+
         // Motion gate for glyph snapping: a transform write this frame (scroll/fling/drag/FLIP/sticky — every motion
         // writer marks TransformDirty; the host clears the bits right after record) means this subtree is mid-motion.
         // Its glyph runs skip the device-grid baseline snap and ride sub-pixel WITH their plates (no 1px shear against
@@ -290,20 +337,20 @@ public static class SceneRecorder
         ref NodePaint p = ref scene.Paint(node);
 
         // node-local → device: parent ∘ translate(node pos) ∘ (local transform about the node's transform-origin)
-        Affine2D world = parentWorld.Multiply(Affine2D.Translation(b.X, b.Y));
+        Affine2D world = parentWorld.Translate(b.X, b.Y);
         float ox = b.W * p.OriginX, oy = b.H * p.OriginY;   // transform origin (default centre; e.g. top edge for a menu unfold)
         if (!p.LocalTransform.IsIdentity)
-            world = world.Multiply(Affine2D.Translation(ox, oy)).Multiply(p.LocalTransform).Multiply(Affine2D.Translation(-ox, -oy));
+            world = world.Translate(ox, oy).Multiply(p.LocalTransform).Translate(-ox, -oy);
         // Interaction-driven composited scale (thumb hover-grow): scale about the node centre by the eased hover/press.
         // The progress comes from the node's own row if it is interactive, else from the nearest interactive ancestor
         // (a slider/scrollbar thumb is non-interactive — drag stays on the track — but grows when the control is used).
-        if (hasInteractionAnim && scene.TryGetInteract(node, out var iaScale) && (iaScale.HoverScale != 1f || iaScale.PressScale != 1f))
+        if (hasOwnInteraction && (localInteraction.HoverScale != 1f || localInteraction.PressScale != 1f))
         {
-            TryResolveInteractionProgress(scene, node, flags, out float useH, out float useP);
-            float hs = 1f + (iaScale.HoverScale - 1f) * useH;
-            float isc = hs + (iaScale.PressScale - hs) * useP;
+            TryResolveInteractionProgress(in inherited, nodeInteractive, hasLocalProgress, localHoverT, localPressT, out float useH, out float useP);
+            float hs = 1f + (localInteraction.HoverScale - 1f) * useH;
+            float isc = hs + (localInteraction.PressScale - hs) * useP;
             if (MathF.Abs(isc - 1f) > 0.0008f)
-                world = world.Multiply(Affine2D.Translation(ox, oy)).Multiply(Affine2D.Scale(isc, isc)).Multiply(Affine2D.Translation(-ox, -oy));
+                world = world.Translate(ox, oy).Multiply(Affine2D.Scale(isc, isc)).Translate(-ox, -oy);
         }
         // ScaleCorrect counter-scale: a child that opted out of an ancestor's animated scale applies the inverse (about
         // its centre) so it stays undistorted, and passes an un-scaled factor to ITS children (Framer-Motion projection).
@@ -311,13 +358,13 @@ public static class SceneRecorder
         if ((flags & NodeFlags.CounterScaled) != 0 && (MathF.Abs(parentScaleX - 1f) > 1e-4f || MathF.Abs(parentScaleY - 1f) > 1e-4f))
         {
             float cx = b.W * 0.5f, cy = b.H * 0.5f;
-            world = world.Multiply(Affine2D.Translation(cx, cy)).Multiply(Affine2D.Scale(1f / parentScaleX, 1f / parentScaleY)).Multiply(Affine2D.Translation(-cx, -cy));
+            world = world.Translate(cx, cy).Multiply(Affine2D.Scale(1f / parentScaleX, 1f / parentScaleY)).Translate(-cx, -cy);
             netScaleX = 1f; netScaleY = 1f;
         }
         float childScaleX = netScaleX * p.LocalTransform.M11;   // the scale this node imposes on its children
         float childScaleY = netScaleY * p.LocalTransform.M22;
 
-        float opacity = parentOpacity * ResolveOpacity(scene, node, flags, in p);
+        float opacity = parentOpacity * ResolveOpacity(flags, in p, in inherited, nodeInteractive, hasLocalProgress, localHoverT, localPressT);
 
         // Presented extent (layout-transition "Reveal"): the node's own fill + its child clip are drawn at PresentedW/H
         // when set (which may exceed the model bounds during a shrink), while layout/hit-test keep the model Bounds.
@@ -431,7 +478,8 @@ public static class SceneRecorder
             childClip = childClip.Intersect(deviceBounds);
         if (!p.ClipRect.IsInfinite)
             childClip = childClip.Intersect(world.TransformBounds(p.ClipRect));
-        if (wantClip)
+        bool childClipEmpty = wantClip && childClip.IsEmpty;
+        if (wantClip && !childClipEmpty)
         {
             // Tier-2 rounded clip (E9): a clipping node WITH rounded corners (an Expander/CommandBarFlyout surface
             // running an AnimChannel.ClipL/T/R/B reveal, or a plain rounded ClipsToBounds) clips RoundRect-pipeline
@@ -487,7 +535,7 @@ public static class SceneRecorder
                                      || p.ValidationBorder.A > 0f
                                      || hasNodeGradient:
             {
-                ResolveSurface(scene, node, flags, in p, out ColorF fill, out ColorF border);
+                ResolveSurface(scene, node, flags, in p, in inherited, nodeInteractive, hasLocalProgress, localHoverT, localPressT, out ColorF fill, out ColorF border);
                 bool hasGradFill = hasNodeGradient;
                 GradientSpec g = nodeGradient;
                 GradientSpec bb = default;
@@ -501,7 +549,7 @@ public static class SceneRecorder
                 bool hasPBB = hasGradBorder && scene.TryGetPressedBorderBrush(node, out pbb) && pbb.Stops is { Length: > 0 };
                 float gHoverT = 0f, gPressT = 0f;
                 if (hasHG || hasPG || hasHBB || hasPBB)
-                    TryResolveInteractionProgress(scene, node, flags, out gHoverT, out gPressT);
+                    TryResolveInteractionProgress(in inherited, nodeInteractive, hasLocalProgress, localHoverT, localPressT, out gHoverT, out gPressT);
 
                 // ── fill ── the interior is always filled at its FULL geometry; the border is a hollow SDF ring drawn
                 // ON TOP of the fill edge (below). We must NOT fill the whole box with the border colour and overlay an
@@ -543,7 +591,7 @@ public static class SceneRecorder
             }
             case VisualKind.TabShape:
             {
-                ResolveSurface(scene, node, flags, in p, out ColorF fill, out _);
+                ResolveSurface(scene, node, flags, in p, in inherited, nodeInteractive, hasLocalProgress, localHoverT, localPressT, out ColorF fill, out _);
                 if (fill.A > 0f)
                     dl.TabShape(local, p.Corners.TopLeft, p.TabFlareRadius, fill, world, opacity, key);
                 break;
@@ -551,7 +599,7 @@ public static class SceneRecorder
             case VisualKind.Text:
             {
                 ref var li = ref scene.Layout(node);
-                ColorF textColor = ResolveTextColor(scene, node, flags, in p);
+                ColorF textColor = ResolveTextColor(scene, node, flags, in p, in inherited, nodeInteractive, hasLocalProgress, localHoverT, localPressT);
                 // Auto-fit: the measure pass may have shrunk the font (TextEl.MinSize) and recorded the chosen size on
                 // the cache. Shape at it so the glyphs match the box the layout sized. 0 ⇒ no fit (authored size).
                 ref TextMeasureCache mc = ref scene.MeasureCacheRef(node);
@@ -712,20 +760,23 @@ public static class SceneRecorder
         // fill/border/clip stay put — the content's end edge tracks the animated layout edge under the already-pushed
         // clip (the Expander slide-from-under-the-header). Zero at rest; compositor-composed, no per-child knowledge.
         Affine2D childWorld = p.ChildShiftX != 0f || p.ChildShiftY != 0f
-            ? world.Multiply(Affine2D.Translation(p.ChildShiftX, p.ChildShiftY))
+            ? world.Translate(p.ChildShiftX, p.ChildShiftY)
             : world;
+        InheritedState childState = inherited.ForChild(flags, nodeInteractive, hasLocalProgress, localHoverT, localPressT);
         // Sticky pin paint order: a PINNED child (position:sticky engaged) is emitted AFTER its siblings so the
         // content scrolling beneath it paints underneath — CSS sticky's implicit stacking. Unpinned = normal order.
-        bool anyPinned = false;
-        for (var c = scene.FirstChild(node); !c.IsNull; c = scene.NextSibling(c))
         {
-            if ((scene.Flags(c) & NodeFlags.StickyPinned) != 0) { anyPinned = true; continue; }
-            Walk(scene, dl, images, c, childWorld, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack, childScaleX, childScaleY, inMotion, scrollInMotion, skipRoots, ref stats);
-        }
-        if (anyPinned)
+            bool anyPinned = false;
             for (var c = scene.FirstChild(node); !c.IsNull; c = scene.NextSibling(c))
-                if ((scene.Flags(c) & NodeFlags.StickyPinned) != 0)
-                    Walk(scene, dl, images, c, childWorld, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack, childScaleX, childScaleY, inMotion, scrollInMotion, skipRoots, ref stats);
+            {
+                if ((scene.Flags(c) & NodeFlags.StickyPinned) != 0) { anyPinned = true; continue; }
+                Walk(scene, dl, images, c, childWorld, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack, childScaleX, childScaleY, inMotion, scrollInMotion, childState, skipRoots, ref stats);
+            }
+            if (anyPinned)
+                for (var c = scene.FirstChild(node); !c.IsNull; c = scene.NextSibling(c))
+                    if ((scene.Flags(c) & NodeFlags.StickyPinned) != 0)
+                        Walk(scene, dl, images, c, childWorld, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack, childScaleX, childScaleY, inMotion, scrollInMotion, childState, skipRoots, ref stats);
+        }
 
         // Box border chrome paints after descendants. A control border must remain visible over filled child regions
         // (dialog command rows, split-button halves, presenter bodies) instead of forcing every control to fake a
@@ -746,7 +797,7 @@ public static class SceneRecorder
         // node's own clip pops — the WinUI ring lives OUTSIDE the bounds (FocusVisualMargin −3), so a ClipsToBounds
         // control (a TextBox field) must not scissor its own ring away. Ancestor clips still apply (correct).
         if (focus.Enabled && (flags & NodeFlags.FocusVisual) != 0 && overlapsClip)
-            EmitFocusRing(dl, b, p.Corners, scene.Interaction(node).FocusVisualMargin, world, opacity, in focus, key | 0x10);
+            EmitFocusRing(dl, b, p.Corners, interaction.FocusVisualMargin, world, opacity, in focus, key | 0x10);
 
         // Auto-hiding scrollbar overlay: draw after popping the viewport's content clip so the expanded gutter/thumb
         // are not chopped at the viewport edge, while still positioning them inside the viewport bounds. EmitScrollbar
@@ -782,52 +833,37 @@ public static class SceneRecorder
 
     /// <summary>Resolve the surface fill/border for this frame: eased hover/press if an interaction row exists,
     /// else the instantaneous flag behaviour (first frame / no animator).</summary>
-    private static bool TryResolveInteractionProgress(SceneStore scene, NodeHandle node, NodeFlags flags, out float hoverT, out float pressT)
+    private static bool TryResolveInteractionProgress(in InheritedState inherited, bool nodeInteractive, bool hasLocalProgress,
+                                                      float localHoverT, float localPressT, out float hoverT, out float pressT)
     {
-        hoverT = 0f;
-        pressT = 0f;
-
-        int interactive = InteractionInfo.ClickBit | InteractionInfo.PointerBit;
-        bool nodeInteractive = (scene.Interaction(node).HandlerMask & interactive) != 0;
-        InteractionAnim own = default;
-        bool hasOwn = (flags & NodeFlags.InteractionAnim) != 0 && scene.TryGetInteract(node, out own);
-        if (hasOwn)
+        if (hasLocalProgress)
         {
-            // HoverWithin (set on a container whose subtree holds the hovered leaf) pins hover FULL, so the container's
-            // HoverFill stays steady as the pointer crosses its interactive children; else the eased own progress.
-            hoverT = (flags & NodeFlags.HoverWithin) != 0 ? 1f : own.HoverT;
-            pressT = own.PressT;
+            hoverT = localHoverT;
+            pressT = localPressT;
             return true;
         }
-        // No own anim yet (e.g. the pointer entered straight onto a child) — a HoverWithin container still reads hovered.
-        if ((flags & NodeFlags.HoverWithin) != 0) { hoverT = 1f; return true; }
-
-        if (!nodeInteractive)
+        // Non-interactive visuals inherit progress from the nearest interactive ancestor carried by the walk.
+        if (!nodeInteractive && inherited.HasProgress != 0)
         {
-            for (var anc = scene.Parent(node); !anc.IsNull; anc = scene.Parent(anc))
-            {
-                if ((scene.Interaction(anc).HandlerMask & interactive) == 0) continue;
-                NodeFlags ancFlags = scene.Flags(anc);
-                if ((ancFlags & NodeFlags.HoverWithin) != 0) { hoverT = 1f; pressT = 0f; return true; }
-                if ((ancFlags & NodeFlags.InteractionAnim) == 0) continue;
-                if (!scene.TryGetInteract(anc, out var parent)) continue;
-                hoverT = parent.HoverT;
-                pressT = parent.PressT;
-                return true;
-            }
+            hoverT = inherited.HoverT;
+            pressT = inherited.PressT;
+            return true;
         }
 
-        return hasOwn;
+        hoverT = 0f;
+        pressT = 0f;
+        return false;
     }
 
-    private static float ResolveOpacity(SceneStore scene, NodeHandle node, NodeFlags flags, in NodePaint p)
+    private static float ResolveOpacity(NodeFlags flags, in NodePaint p, in InheritedState inherited, bool nodeInteractive,
+                                        bool hasLocalProgress, float localHoverT, float localPressT)
     {
         bool hasHover = !float.IsNaN(p.HoverOpacity);
         bool hasPress = !float.IsNaN(p.PressedOpacity);
         if (!hasHover && !hasPress) return p.Opacity;
 
         float opacity = p.Opacity;
-        if (TryResolveInteractionProgress(scene, node, flags, out float hoverT, out float pressT))
+        if (TryResolveInteractionProgress(in inherited, nodeInteractive, hasLocalProgress, localHoverT, localPressT, out float hoverT, out float pressT))
         {
             if (hasHover)
                 opacity += (p.HoverOpacity - opacity) * hoverT;
@@ -841,10 +877,13 @@ public static class SceneRecorder
         return opacity;
     }
 
-    private static void ResolveSurface(SceneStore scene, NodeHandle node, NodeFlags flags, in NodePaint p, out ColorF fill, out ColorF border)
+    private static void ResolveSurface(SceneStore scene, NodeHandle node, NodeFlags flags, in NodePaint p, in InheritedState inherited,
+                                       bool nodeInteractive, bool hasLocalProgress, float localHoverT, float localPressT,
+                                       out ColorF fill, out ColorF border)
     {
         fill = p.Fill; border = p.BorderColor;
-        if (TryResolveInteractionProgress(scene, node, flags, out float hoverT, out float pressT) && (hoverT > 0.001f || pressT > 0.001f))
+        if (TryResolveInteractionProgress(in inherited, nodeInteractive, hasLocalProgress, localHoverT, localPressT, out float hoverT, out float pressT)
+            && (hoverT > 0.001f || pressT > 0.001f))
         {
             ColorF hov = p.HoverFill.A > 0f ? p.HoverFill : Lighten(p.Fill, 0.08f);
             ColorF prs = p.PressedFill.A > 0f ? p.PressedFill : Darken(p.Fill, 0.12f);
@@ -886,29 +925,32 @@ public static class SceneRecorder
     /// Otherwise: Disabled wins as a step (self-or-ancestor input-disabled), then Hover/Pressed ease with the nearest
     /// interactive ancestor's progress (falling back to an instant flag-step when that ancestor has no anim row, exactly
     /// like <see cref="ResolveSurface"/> does for the box fill), then Focused as a step, else the resting color.</summary>
-    private static ColorF ResolveTextColor(SceneStore scene, NodeHandle node, NodeFlags flags, in NodePaint p)
+    private static ColorF ResolveTextColor(SceneStore scene, NodeHandle node, NodeFlags flags, in NodePaint p, in InheritedState inherited,
+                                           bool nodeInteractive, bool hasLocalProgress, float localHoverT, float localPressT)
     {
-        ColorF resolved = ResolveTextColorCore(scene, node, flags, in p);
+        ColorF resolved = ResolveTextColorCore(flags, in p, in inherited, nodeInteractive, hasLocalProgress, localHoverT, localPressT);
         // Implicit BrushTransition on the foreground (logical state flip): cross-fade from the previously-displayed color.
         if (scene.TryGetBrushAnim(node, out var ba) && (ba.Channels & BrushAnim.TextBit) != 0)
             resolved = ColorF.LerpLinear(ba.TextFrom, resolved, ba.T);
         return resolved;
     }
 
-    private static ColorF ResolveTextColorCore(SceneStore scene, NodeHandle node, NodeFlags flags, in NodePaint p)
+    private static ColorF ResolveTextColorCore(NodeFlags flags, in NodePaint p, in InheritedState inherited, bool nodeInteractive,
+                                               bool hasLocalProgress, float localHoverT, float localPressT)
     {
         // Fast path: the overwhelming majority of text has no state ramps (A==0 on every axis).
         if (p.TextHoverColor.A == 0f && p.TextPressedColor.A == 0f && p.TextDisabledColor.A == 0f && p.TextFocusedColor.A == 0f)
             return p.TextColor;
 
-        if (p.TextDisabledColor.A > 0f && IsDisabledSelfOrAncestor(scene, node))
+        if (p.TextDisabledColor.A > 0f && (inherited.Disabled != 0 || (flags & NodeFlags.Disabled) != 0))
             return p.TextDisabledColor;
 
         bool hasHover = p.TextHoverColor.A > 0f;
         bool hasPress = p.TextPressedColor.A > 0f;
         if (hasHover || hasPress)
         {
-            if (TryResolveInteractionProgress(scene, node, flags, out float hoverT, out float pressT) && (hoverT > 0.001f || pressT > 0.001f))
+            if (TryResolveInteractionProgress(in inherited, nodeInteractive, hasLocalProgress, localHoverT, localPressT, out float hoverT, out float pressT)
+                && (hoverT > 0.001f || pressT > 0.001f))
             {
                 ColorF c = p.TextColor;
                 if (hasHover) c = ColorF.LerpLinear(c, p.TextHoverColor, hoverT);   // linear-light cross-fade (color canon)
@@ -916,7 +958,7 @@ public static class SceneRecorder
                 return c;
             }
             // No progress row on the interactive ancestor → instant step from its hover/press flags.
-            NodeFlags istate = NearestInteractiveStateFlags(scene, node);
+            NodeFlags istate = nodeInteractive ? flags : inherited.InteractiveFlags;
             if (hasPress && (istate & NodeFlags.Pressed) != 0) return p.TextPressedColor;
             if (hasHover && (istate & NodeFlags.Hovered) != 0) return p.TextHoverColor;
         }
@@ -925,13 +967,6 @@ public static class SceneRecorder
             return p.TextFocusedColor;
 
         return p.TextColor;
-    }
-
-    private static bool IsDisabledSelfOrAncestor(SceneStore scene, NodeHandle node)
-    {
-        for (var n = node; !n.IsNull; n = scene.Parent(n))
-            if ((scene.Flags(n) & NodeFlags.Disabled) != 0) return true;
-        return false;
     }
 
     /// <summary>Map a decoded source (<paramref name="srcW"/>×<paramref name="srcH"/> px) into <paramref name="box"/>
@@ -974,14 +1009,6 @@ public static class SceneRecorder
                 break;
         }
         return (drawRect, uv);
-    }
-
-    private static NodeFlags NearestInteractiveStateFlags(SceneStore scene, NodeHandle node)
-    {
-        const int interactive = InteractionInfo.ClickBit | InteractionInfo.PointerBit;
-        for (var n = node; !n.IsNull; n = scene.Parent(n))
-            if ((scene.Interaction(n).HandlerMask & interactive) != 0) return scene.Flags(n);
-        return NodeFlags.None;
     }
 
     // A centerline-based SDF stroke insets the rect by bw/2; to keep the band CONCENTRIC with the box's rounded corner
@@ -1393,7 +1420,7 @@ public static class SceneRecorder
         const float thickness = 1.15f;
         var center = new Point2((a.X + b.X) * 0.5f, (a.Y + b.Y) * 0.5f);
         var line = new RectF(-len * 0.5f, -thickness * 0.5f, len, thickness);
-        var transform = world.Multiply(Affine2D.Translation(center.X, center.Y))
+        var transform = world.Translate(center.X, center.Y)
                              .Multiply(Affine2D.Rotation(MathF.Atan2(dy, dx)));
         dl.FillRoundRect(line, CornerRadius4.All(thickness * 0.5f), color, transform, opacity, key);
     }

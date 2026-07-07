@@ -178,7 +178,8 @@ sealed class LyricsView : Component
             style: new SkeletonStyle(Tok.FillSubtleSecondary, RowGap: _large ? 18f : 14f, BarRadius: 6f, TextRatio: 0.86f),
             smoothResize: false);
 
-        Element? ticker = open ? Embed.Comp(() => new LyricsTicker { Owner = this }) : null;
+        bool timedLyrics = doc is { Lines.Count: > 0 } d && IsTimed(d);
+        Element? ticker = open && timedLyrics ? Embed.Comp(() => new LyricsTicker { Owner = this }) : null;
         var stack = new BoxEl
         {
             Grow = 1f, MinHeight = 0f, ClipToBounds = true, Direction = 1,
@@ -317,7 +318,16 @@ sealed class LyricsView : Component
         for (int i = 0; i < _glowAlpha.Length; i++) _glowAlpha[i] = new FloatSignal(0f);
         _glowInLine = -1; _glowOutLine = -1;
         _resumeAtWallMs = 0L;
-        _activeLine.Value = ResolveLine(doc.Lines, posMs);
+        if (IsTimed(doc))
+        {
+            _activeLine.Value = ResolveLine(doc.Lines, posMs);
+        }
+        else
+        {
+            _activeLine.Value = -1;
+            _voiceLine.Value = -1;
+            _interlude.Value = false;
+        }
         _nowMs.Value = posMs;
         _scrollSnapped = false;
         ResetWipeThrottle();
@@ -339,6 +349,8 @@ sealed class LyricsView : Component
         _glowInLine = -1; _glowOutLine = -1;
         _resumeAtWallMs = 0L;
         _activeLine.Value = -1;
+        _voiceLine.Value = -1;
+        _interlude.Value = false;
         _nowMs.Value = 0f;
         _scrollSnapped = false;
         ResetWipeThrottle();
@@ -413,6 +425,8 @@ sealed class LyricsView : Component
 
     Element LyricsContent(LyricsDocument doc)
     {
+        if (!IsTimed(doc)) return UnsyncedLyricsContent(doc);
+
         var lines = doc.Lines;
         // Bigger type (rail 20 -> 26) and a tighter rhythm. Rows are CONTENT-FIT (variable height) via the measured
         // layout below, so a one-line lyric is short and a two-line lyric is tall — no dead space, no mid-word clipping.
@@ -448,6 +462,55 @@ sealed class LyricsView : Component
             AutoEdgeFade = true,
             SuppressScrollBar = true,
             OnRealized = h => _viewportNode = h,
+        };
+    }
+
+    Element UnsyncedLyricsContent(LyricsDocument doc)
+    {
+        float fontSz = _large ? 34f : 24f;
+        float lineHt = _large ? 44f : 32f;
+        float rowPad = _large ? 8f : 6f;
+        float sidePad = _large ? 48f : 22f;
+        bool centered = _large;
+        var rows = new Element[doc.Lines.Count];
+
+        for (int i = 0; i < rows.Length; i++)
+        {
+            rows[i] = new BoxEl
+            {
+                Direction = 1,
+                Shrink = 0f,
+                Padding = new Edges4(sidePad, rowPad, sidePad, rowPad),
+                AlignItems = centered ? FlexAlign.Center : FlexAlign.Stretch,
+                Children =
+                [
+                    new TextEl(doc.Lines[i].Text)
+                    {
+                        Size = fontSz,
+                        Weight = 700,
+                        Wrap = centered ? TextWrap.NoWrap : TextWrap.Wrap,
+                        LineHeight = lineHt,
+                        Color = Tok.TextPrimary with { A = 0.88f },
+                        MaxLines = centered ? 1 : 0,
+                        Trim = centered ? TextTrim.CharacterEllipsis : TextTrim.None,
+                    },
+                ],
+            };
+        }
+
+        return new ScrollEl
+        {
+            Grow = 1f,
+            MinHeight = 0f,
+            AutoEdgeFade = true,
+            SuppressScrollBar = true,
+            ScrollKey = "lyrics:unsynced:" + doc.TrackId,
+            Content = new BoxEl
+            {
+                Direction = 1,
+                Padding = new Edges4(0f, _large ? 44f : 26f, 0f, _large ? 44f : 26f),
+                Children = rows,
+            },
         };
     }
 
@@ -509,6 +572,7 @@ sealed class LyricsView : Component
     {
         var b = _b; var doc = _doc;
         if (b is null || doc is null || doc.Lines.Count == 0) return;
+        if (!IsTimed(doc)) return;
 
         // Dejittered media clock. The authoritative IPC PositionMs is itself a coarse ~1 Hz extrapolation; the old code
         // HARD re-anchored on every snapshot, so a delayed/corrected one snapped nowMs — and since BOTH the active-line
@@ -863,6 +927,8 @@ sealed class LyricsView : Component
         return ans;
     }
 
+    static bool IsTimed(LyricsDocument doc) => doc.Sync is LyricsSyncKind.Line or LyricsSyncKind.Syllable;
+
     static Element Message(string msg) => new BoxEl
     {
         Grow = 1f, MinHeight = 0f, Direction = 1, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
@@ -992,7 +1058,7 @@ sealed class LyricLineView : Component
         UseSpring(AnimChannel.BlurSigma, blur, trail, key);
 
         var wrap = _centered ? TextWrap.NoWrap : TextWrap.Wrap;
-        int maxLines = _centered ? 1 : 2;
+        int maxLines = _centered ? 1 : 0;
         Element textEl;
 
         // The karaoke wipe sub-tree renders on the active line AND the voice line — during the ~140 ms lead the voice line

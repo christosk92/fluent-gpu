@@ -200,6 +200,8 @@ internal sealed unsafe class GlyphRenderer : IDisposable
     private const int MaxGlyphs = 8192;
     private int _cursor;
     private int _active;
+    private ulong _activeGva;
+    private int _dropped;
 
     // Sub-glyph gradient-wipe path: a second PSO (per-pixel before→after fill) with its own instance buffers. Only the
     // active lyric line + its glow feed it (~tens of glyphs), so a small cap; normal text never touches it.
@@ -208,6 +210,7 @@ internal sealed unsafe class GlyphRenderer : IDisposable
     private readonly ID3D12Resource*[] _gradInstances = new ID3D12Resource*[FrameCount];
     private readonly GradGlyphInstance*[] _mappedGrad = new GradGlyphInstance*[FrameCount];
     private int _gradCursor;
+    private ulong _activeGradGva;
 
     private const string Hlsl = """
 struct G { float2 dst; float2 size; float2 uv0; float2 uv1; float4 color; float4 m; float2 t; float opacity; float pad; };
@@ -281,6 +284,7 @@ float4 PSMain(VSOutG i) : SV_Target
     public int CachedRuns => _runCache.Count;
     public int RunsCached => _runsCached;
     public int RunsShaped => _runsShaped;
+    public int DroppedInstances => _dropped;
     public long AtlasNonZero => _atlasNonZero;
 
     // ── MemCensus accessors (O(1), or a tiny fixed-bucket sum) ────────────────────────────────────
@@ -1120,8 +1124,11 @@ float4 PSMain(VSOutG i) : SV_Target
     public void BeginFrame(int frameIndex)
     {
         _active = ((frameIndex % FrameCount) + FrameCount) % FrameCount;   // this frame's instance buffer — already fenced, so no CPU↔GPU race
+        _activeGva = _instances[_active]->GetGPUVirtualAddress();
+        _activeGradGva = _gradInstances[_active]->GetGPUVirtualAddress();
         _cursor = 0;
         _gradCursor = 0;
+        _dropped = 0;
         _frame++;
         _runsCached = 0;
         _runsShaped = 0;
@@ -1138,7 +1145,8 @@ float4 PSMain(VSOutG i) : SV_Target
     {
         int start = _cursor;
         int count = Math.Min(instances.Count, MaxGlyphs - start);
-        if (count <= 0) return false;
+        if (count <= 0) { _dropped += instances.Count; return false; }
+        _dropped += instances.Count - count;
         for (int i = 0; i < count; i++) _mapped[_active][start + i] = instances[i];
         _cursor += count;
 
@@ -1154,7 +1162,7 @@ float4 PSMain(VSOutG i) : SV_Target
             cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
             fixed (D3D12_VERTEX_BUFFER_VIEW* qv = &_quadView) cmd->IASetVertexBuffers(0, 1, qv);
         }
-        cmd->SetGraphicsRootShaderResourceView(2, _instances[_active]->GetGPUVirtualAddress() + (ulong)(start * sizeof(GlyphInstance)));
+        cmd->SetGraphicsRootShaderResourceView(2, _activeGva + (ulong)(start * sizeof(GlyphInstance)));
         cmd->DrawInstanced(4, (uint)count, 0, 0);
         return true;
     }
@@ -1166,7 +1174,8 @@ float4 PSMain(VSOutG i) : SV_Target
     {
         int start = _gradCursor;
         int count = Math.Min(instances.Count, MaxGradGlyphs - start);
-        if (count <= 0) return false;
+        if (count <= 0) { _dropped += instances.Count; return false; }
+        _dropped += instances.Count - count;
         for (int i = 0; i < count; i++) _mappedGrad[_active][start + i] = instances[i];
         _gradCursor += count;
 
@@ -1182,7 +1191,7 @@ float4 PSMain(VSOutG i) : SV_Target
             cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
             fixed (D3D12_VERTEX_BUFFER_VIEW* qv = &_quadView) cmd->IASetVertexBuffers(0, 1, qv);
         }
-        cmd->SetGraphicsRootShaderResourceView(2, _gradInstances[_active]->GetGPUVirtualAddress() + (ulong)(start * sizeof(GradGlyphInstance)));
+        cmd->SetGraphicsRootShaderResourceView(2, _activeGradGva + (ulong)(start * sizeof(GradGlyphInstance)));
         cmd->DrawInstanced(4, (uint)count, 0, 0);
         return true;
     }

@@ -72,6 +72,12 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         public D3D12_RESOURCE_STATES State;
     }
 
+    private struct UploadTransition
+    {
+        public ID3D12Resource* Resource;
+        public D3D12_RESOURCE_STATES Before;
+    }
+
     private ID3D12Device* _device;
     private ID3D12DescriptorHeap* _srvHeap;
     private D3D12_CPU_DESCRIPTOR_HANDLE _srvCpu0;
@@ -82,6 +88,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
     private readonly List<int> _pendingCopies = new(32);
     private readonly Stack<int> _freeSlots = new();
     private readonly List<Retire> _retired = new();
+    private readonly List<UploadTransition> _uploadTransitions = new(32);
     private readonly List<AtlasPage> _pages = new();
     private readonly Dictionary<int, Stack<Pooled>> _pool = new();   // bucket → free textures
     // Per-bucket FREE-pool cap (audit mem-02): without it the free stacks ratchet to the session-peak in-flight count
@@ -304,6 +311,17 @@ internal sealed unsafe class ImageTextureStore : IDisposable
             _retired.RemoveAt(i);
         }
 
+        _uploadTransitions.Clear();
+        for (int i = 0; i < _pendingCopies.Count; i++)
+        {
+            int id = _pendingCopies[i];
+            if (!_byId.TryGetValue(id, out var t) || !t.NeedsCopy) continue;
+            ID3D12Resource* destTex = t.Atlas ? _pages[t.Page].Tex : t.Resource;
+            if (destTex == null) continue;
+            AddUploadTransition(destTex, t.Atlas ? _pages[t.Page].State : t.State);
+        }
+        EmitUploadTransitions(cmd, toCopyDest: true);
+
         for (int i = 0; i < _pendingCopies.Count; i++)
         {
             int id = _pendingCopies[i];
@@ -311,9 +329,6 @@ internal sealed unsafe class ImageTextureStore : IDisposable
 
             ID3D12Resource* destTex = t.Atlas ? _pages[t.Page].Tex : t.Resource;
             if (destTex == null) continue;
-            D3D12_RESOURCE_STATES state = t.Atlas ? _pages[t.Page].State : t.State;
-            if (state != D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST)
-                Transition(cmd, destTex, state, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST);
 
             D3D12_TEXTURE_COPY_LOCATION dst = default;
             dst.pResource = destTex; dst.Type = D3D12_TEXTURE_COPY_TYPE.D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX; dst.Anonymous.SubresourceIndex = 0;
@@ -326,7 +341,6 @@ internal sealed unsafe class ImageTextureStore : IDisposable
             srcLoc.Anonymous.PlacedFootprint.Footprint.RowPitch = (uint)t.RowPitch;
             cmd->CopyTextureRegion(&dst, (uint)t.Ox, (uint)t.Oy, 0, &srcLoc, null);
 
-            Transition(cmd, destTex, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             t.NeedsCopy = false; t.Live = true;
             if (t.Atlas)
             {
@@ -341,6 +355,8 @@ internal sealed unsafe class ImageTextureStore : IDisposable
             }
             _byId[id] = t;
         }
+        EmitUploadTransitions(cmd, toCopyDest: false);
+        _uploadTransitions.Clear();
         _pendingCopies.Clear();
     }
 
@@ -488,6 +504,36 @@ internal sealed unsafe class ImageTextureStore : IDisposable
             D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_GENERIC_READ, null, __uuidof<ID3D12Resource>(), (void**)&res), "Image.CreateUpload");
         D3D12MemoryDiagnostics.Track(res, name, bytes);
         return res;
+    }
+
+    private void AddUploadTransition(ID3D12Resource* resource, D3D12_RESOURCE_STATES before)
+    {
+        for (int i = 0; i < _uploadTransitions.Count; i++)
+            if (_uploadTransitions[i].Resource == resource) return;
+        _uploadTransitions.Add(new UploadTransition { Resource = resource, Before = before });
+    }
+
+    private void EmitUploadTransitions(ID3D12GraphicsCommandList* cmd, bool toCopyDest)
+    {
+        const int Chunk = 32;
+        D3D12_RESOURCE_BARRIER* barriers = stackalloc D3D12_RESOURCE_BARRIER[Chunk];
+        int n = 0;
+        for (int i = 0; i < _uploadTransitions.Count; i++)
+        {
+            var t = _uploadTransitions[i];
+            D3D12_RESOURCE_STATES before = toCopyDest ? t.Before : D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST;
+            D3D12_RESOURCE_STATES after = toCopyDest ? D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST : D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            if (before == after) continue;
+            barriers[n] = default;
+            barriers[n].Type = D3D12_RESOURCE_BARRIER_TYPE.D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            barriers[n].Anonymous.Transition.pResource = t.Resource;
+            barriers[n].Anonymous.Transition.StateBefore = before;
+            barriers[n].Anonymous.Transition.StateAfter = after;
+            barriers[n].Anonymous.Transition.Subresource = 0xFFFFFFFF;
+            n++;
+            if (n == Chunk) { cmd->ResourceBarrier((uint)n, barriers); n = 0; }
+        }
+        if (n > 0) cmd->ResourceBarrier((uint)n, barriers);
     }
 
     private static void Transition(ID3D12GraphicsCommandList* cmd, ID3D12Resource* res, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after)

@@ -24,6 +24,7 @@ public sealed class SpotifyAudioStream : Stream, IAsyncDisposable, IAudioReadStr
     readonly Action<string>? _log;
     readonly byte[] _head;
     readonly int _headLen;
+    readonly AudioBodyDiskCache? _bodyDisk;
     readonly object _stateGate = new();
 
     byte[] _key = [];
@@ -35,11 +36,13 @@ public sealed class SpotifyAudioStream : Stream, IAsyncDisposable, IAudioReadStr
     bool _disposed;
     Exception? _error;
 
-    SpotifyAudioStream(HttpClient http, ReadOnlyMemory<byte> head, int headBoundary, string name = "", Action<string>? log = null)
+    SpotifyAudioStream(HttpClient http, ReadOnlyMemory<byte> head, int headBoundary, string name = "", Action<string>? log = null,
+        AudioBodyDiskCache? bodyDisk = null)
     {
         _http = http ?? throw new ArgumentNullException(nameof(http));
         _name = string.IsNullOrWhiteSpace(name) ? "unknown" : name;
         _log = log;
+        _bodyDisk = bodyDisk;
         _head = MemoryMarshal.TryGetArray(head, out var segment)
             && segment.Offset == 0
             && segment.Count == segment.Array!.Length
@@ -49,8 +52,9 @@ public sealed class SpotifyAudioStream : Stream, IAsyncDisposable, IAudioReadStr
     }
 
     /// <summary>Create a stream that can serve clear head bytes immediately. Call <see cref="AttachBodyAsync"/> later.</summary>
-    public static SpotifyAudioStream CreateHeadOnly(HttpClient http, ReadOnlyMemory<byte> head, int headBoundary, string name = "", Action<string>? log = null) =>
-        new(http, head, headBoundary, name, log);
+    public static SpotifyAudioStream CreateHeadOnly(HttpClient http, ReadOnlyMemory<byte> head, int headBoundary, string name = "", Action<string>? log = null,
+        AudioBodyDiskCache? bodyDisk = null) =>
+        new(http, head, headBoundary, name, log, bodyDisk);
 
     /// <summary>Create and attach the ranged CDN body before returning. Kept for the non-fast/full-load path and tests.</summary>
     public static async Task<SpotifyAudioStream> CreateAsync(
@@ -104,7 +108,7 @@ public sealed class SpotifyAudioStream : Stream, IAsyncDisposable, IAudioReadStr
             if (_bodyAttached) return;
             _key = key;
             _decryptor = decryptor;
-            ranged = new RangedHttpSource(_http, _name, _log, _headLen, WakeReaders);
+            ranged = new RangedHttpSource(_http, _name, _log, _headLen, WakeReaders, disk: _bodyDisk);
             try { ranged.Configure(cdnUrls, knownSize); }   // throws on empty/invalid mirrors or bad size — before we mark attached
             catch { ranged.Dispose(); throw; }
             _ranged = ranged;
@@ -133,6 +137,12 @@ public sealed class SpotifyAudioStream : Stream, IAsyncDisposable, IAudioReadStr
     public bool IsBodyAttached
     {
         get { lock (_stateGate) return _bodyAttached; }
+    }
+
+    public void InvalidateBodyCache()
+    {
+        _ranged?.InvalidateDiskCache();
+        _bodyDisk?.Invalidate(_name);
     }
 
     public long CurrentOffset => Volatile.Read(ref _pos);

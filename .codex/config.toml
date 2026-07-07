@@ -10,6 +10,11 @@
 
 default_permissions = "fluentgpu"
 
+# Caps pre-expansion of deny-read `**` globs on Windows/Linux/WSL (required by Codex
+# sandboxing; macOS supports unbounded `**` natively). 8 covers nested native/runtime trees.
+[permissions.fluentgpu.filesystem]
+glob_scan_max_depth = 8
+
 [permissions.fluentgpu.filesystem.":workspace_roots"]
 "." = "write"
 

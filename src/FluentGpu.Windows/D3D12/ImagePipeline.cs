@@ -40,6 +40,10 @@ internal sealed unsafe class ImagePipeline : IDisposable
     private D3D12_VERTEX_BUFFER_VIEW _quadView;
     private int _cursor;
     private int _active;
+    private ulong _activeGva;
+    private int _dropped;
+
+    public int DroppedInstances => _dropped;
 
     private const string Hlsl = """
 struct Inst { float2 pos; float2 size; float4 radii; float4 m; float2 t; float opacity; float crossFade; float4 ph; float4 atlasUv; };
@@ -200,7 +204,7 @@ float4 PSMain(VSOut i) : SV_Target
 
     /// <summary>Select this frame's instance buffer (by back-buffer index) and reset the cursor. The chosen buffer was
     /// last written FrameCount frames ago, whose GPU work the device has already fenced — so no CPU↔GPU race.</summary>
-    public void BeginFrame(int frameIndex) { _active = ((frameIndex % FrameCount) + FrameCount) % FrameCount; _cursor = 0; }
+    public void BeginFrame(int frameIndex) { _active = ((frameIndex % FrameCount) + FrameCount) % FrameCount; _activeGva = _instances[_active]->GetGPUVirtualAddress(); _cursor = 0; _dropped = 0; }
 
     /// <summary>Bind the shared image-pass state ONCE (descriptor heap, root sig, PSO, viewport, topology, quad VB) — so
     /// the per-image draws don't re-bind the descriptor heap N times (the per-image churn that the acrylic scroll path
@@ -219,12 +223,27 @@ float4 PSMain(VSOut i) : SV_Target
     /// <summary>Draw one image: bind its per-image SRV (descriptor table) + its instance, then the quad.</summary>
     public void Draw(ID3D12GraphicsCommandList* cmd, D3D12_GPU_DESCRIPTOR_HANDLE srv, in ImageInstance inst)
     {
-        if (_cursor >= MaxDraws) return;
+        if (_cursor >= MaxDraws) { _dropped++; return; }
         int slot = _cursor++;
         _mapped[_active][slot] = inst;
         cmd->SetGraphicsRootDescriptorTable(1, srv);
-        cmd->SetGraphicsRootShaderResourceView(2, _instances[_active]->GetGPUVirtualAddress() + (ulong)(slot * sizeof(ImageInstance)));
+        cmd->SetGraphicsRootShaderResourceView(2, _activeGva + (ulong)(slot * sizeof(ImageInstance)));
         cmd->DrawInstanced(4, 1, 0, 0);
+    }
+
+    /// <summary>Draw a consecutive same-SRV image span with one descriptor bind and one instanced draw.</summary>
+    public int DrawRange(ID3D12GraphicsCommandList* cmd, D3D12_GPU_DESCRIPTOR_HANDLE srv, ReadOnlySpan<ImageInstance> instances)
+    {
+        int count = Math.Min(instances.Length, MaxDraws - _cursor);
+        if (count <= 0) { _dropped += instances.Length; return 0; }
+        _dropped += instances.Length - count;
+        int start = _cursor;
+        for (int i = 0; i < count; i++) _mapped[_active][start + i] = instances[i];
+        _cursor += count;
+        cmd->SetGraphicsRootDescriptorTable(1, srv);
+        cmd->SetGraphicsRootShaderResourceView(2, _activeGva + (ulong)(start * sizeof(ImageInstance)));
+        cmd->DrawInstanced(4, (uint)count, 0, 0);
+        return count;
     }
 
     public void Dispose()

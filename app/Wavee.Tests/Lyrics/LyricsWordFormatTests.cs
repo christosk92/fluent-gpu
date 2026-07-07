@@ -68,6 +68,21 @@ public class LyricsWordFormatTests
     }
 
     [Fact]
+    public void Richsync_FoldsWhitespaceTokens_IntoPreviousVisibleSyllable()
+    {
+        var doc = LyricsWordFormats.ParseRichsync(
+            "[{\"ts\":1.0,\"te\":3.0,\"x\":\"Hello world\",\"l\":[{\"c\":\"Hello\",\"o\":0.0},{\"c\":\" \",\"o\":0.5},{\"c\":\"world\",\"o\":0.8}]}]", "t");
+
+        var line = doc.Lines[0];
+        Assert.Equal(2, line.Syllables.Count);
+        Assert.Equal("Hello ", line.Syllables[0].Text);
+        Assert.Equal(1000, line.Syllables[0].StartMs);
+        Assert.Equal(1800, line.Syllables[0].EndMs);
+        Assert.Equal("world", line.Syllables[1].Text);
+        Assert.DoesNotContain(line.Syllables, s => string.IsNullOrWhiteSpace(s.Text));
+    }
+
+    [Fact]
     public void Krc_DecryptRoundTrip()
     {
         const string payload = "X[1000,2000]<0,500,0>Hi";   // the leading char is dropped by the decrypter

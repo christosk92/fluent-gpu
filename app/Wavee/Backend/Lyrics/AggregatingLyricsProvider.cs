@@ -14,6 +14,7 @@ namespace Wavee.Backend.Lyrics;
 /// and never fails the aggregate. Winners are cached by track id; the decision is logged for explainability.</summary>
 public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
 {
+    const int UnsyncedFirstHitGraceMs = 6000;
     readonly IReadOnlyList<ILyricCandidateSource> _sources;
     readonly Func<string, CancellationToken, Task<LyricsRequest?>> _resolve;
     readonly LyricsOptions _opt;
@@ -81,6 +82,7 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
 
         var pending = started.ToList();
         Task? grace = null;
+        bool graceFromUnsynced = false;
         bool goldCollected = false;
         while (pending.Count > 0)
         {
@@ -98,7 +100,15 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
             var pr = await entry.Task.ConfigureAwait(false);   // FetchOne never throws
             collected[entry.Source.Id] = pr;
             if (grace is null && pr.Cand is not null)
+            {
+                graceFromUnsynced = pr.Cand.Sync == LyricsSyncKind.Unsynced;
+                grace = Task.Delay(InitialGraceMs(pr.Cand));
+            }
+            else if (graceFromUnsynced && pr.Cand is { Sync: not LyricsSyncKind.Unsynced })
+            {
+                graceFromUnsynced = false;
                 grace = Task.Delay(Math.Clamp(_opt.FirstHitGraceMs, 0, int.MaxValue));
+            }
             if (IsGold(pr.Cand)) goldCollected = true;
             if (goldCollected && (collected.ContainsKey(_referenceSourceId) || !pending.Any(p => p.Source.Id == _referenceSourceId)))
                 break;   // gold is unbeatable, but keep the Spotify reference when it is already nearly here
@@ -137,6 +147,7 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
         LyricsDiagnostics.Publish(new LyricsSearchReport(
             trackId, req.Title, req.ArtistsJoined, req.Album, req.DurationMs, req.Isrc,
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), summary, traces));
+        LogReport(trackId, req, summary, traces);
 
         if (ranked.Best is { } b)
             _log?.Invoke($"track={trackId} winner={b.ProviderId} sync={b.Sync} score={b.Score:F3} text={b.TextAgreement:F2} " +
@@ -152,6 +163,14 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
             srcCts.Dispose();
         }
         return winner;
+    }
+
+    int InitialGraceMs(LyricsCandidate candidate)
+    {
+        int normal = Math.Clamp(_opt.FirstHitGraceMs, 0, int.MaxValue);
+        return candidate.Sync == LyricsSyncKind.Unsynced
+            ? Math.Max(normal, UnsyncedFirstHitGraceMs)
+            : normal;
     }
 
     async Task ContinueForUpgradeAsync(
@@ -263,7 +282,24 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
         LyricsDiagnostics.Publish(new LyricsSearchReport(
             trackId, req.Title, req.ArtistsJoined, req.Album, req.DurationMs, req.Isrc,
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), summary, traces));
+        LogReport(trackId, req, summary, traces);
     }
+
+    void LogReport(string trackId, LyricsRequest req, string summary, IReadOnlyList<LyricsSourceTrace> traces)
+    {
+        if (_log is null) return;
+
+        _log($"search track={trackId} title=\"{LogValue(req.Title)}\" artist=\"{LogValue(req.ArtistsJoined)}\" " +
+            $"album=\"{LogValue(req.Album)}\" duration={req.DurationMs}ms isrc={LogValue(req.Isrc ?? "-")} summary=\"{LogValue(summary)}\"");
+        foreach (var t in traces)
+        {
+            _log($"source track={trackId} id={t.SourceId} outcome={t.Outcome} elapsed={t.ElapsedMs}ms sync={t.Sync} " +
+                $"lines={t.LineCount} score={t.Score:F3} winner={t.Winner} detail=\"{LogValue(t.Detail)}\" rerank=\"{LogValue(t.RerankReason)}\"");
+        }
+    }
+
+    static string LogValue(string s)
+        => s.Replace('\r', ' ').Replace('\n', ' ').Replace('"', '\'');
 
     void LogDecision(string trackId, RankedLyrics ranked, IReadOnlyList<LyricsCandidate> candidates)
     {
@@ -307,6 +343,7 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(_opt.PerSourceTimeoutMs);
+        _log?.Invoke($"source track={req.TrackId} id={source.Id} started");
         try
         {
             var c = await source.FetchAsync(req, cts.Token).ConfigureAwait(false);

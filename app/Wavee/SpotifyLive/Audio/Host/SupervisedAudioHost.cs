@@ -45,13 +45,14 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
     public SupervisedAudioHost(
         Func<IPlayPlayKeyDeriver?> fallbackDeriver,
         Func<IPlayPlayCdnDecryptorFactory?> fallbackDecryptors,
-        Action<string>? log = null)
+        Action<string>? log = null,
+        AudioBodyDiskCache? bodyDisk = null)
     {
         _fallbackDeriver = fallbackDeriver;
         _log = log;
         _preferRemote = Environment.GetEnvironmentVariable("WAVEE_AUDIO_INPROC") != "1" &&
                         Environment.GetEnvironmentVariable("WAVEE_AUDIO_OOP") != "0";
-        _fallback = new InProcessAudioHost(fallbackDecryptors, log);
+        _fallback = new InProcessAudioHost(fallbackDecryptors, log, bodyDisk);
         _fallbackSub = _fallback.Signals.Subscribe(new SignalObserver(OnFallbackSignal));
         _process = new AudioHostProcess(log);
         _process.Notification += OnNotification;

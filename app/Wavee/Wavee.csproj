@@ -28,11 +28,13 @@
     <ProjectReference Include="..\vendor\NVorbis\NVorbis\NVorbis.csproj" />
   </ItemGroup>
 
-  <PropertyGroup Condition="Exists('..\Wavee.PlayPlay\Wavee.PlayPlay.csproj')">
+  <!-- Gate on the client deriver, not just the sibling csproj: a partial PlayPlay junction (csproj only, no Client/)
+       must not flip WAVEE_PLAYPLAY_LOCAL or AudioPlaybackStack references a type that never compiles. -->
+  <PropertyGroup Condition="Exists('..\Wavee.PlayPlay\Client\InProcessPlayPlayKeyDeriver.cs')">
     <DefineConstants>$(DefineConstants);WAVEE_PLAYPLAY_LOCAL</DefineConstants>
   </PropertyGroup>
 
-  <ItemGroup Condition="Exists('..\Wavee.PlayPlay\Wavee.PlayPlay.csproj')">
+  <ItemGroup Condition="Exists('..\Wavee.PlayPlay\Client\InProcessPlayPlayKeyDeriver.cs')">
     <Compile Include="..\Wavee.PlayPlay\**\*.cs" Exclude="..\Wavee.PlayPlay\**\bin\**;..\Wavee.PlayPlay\**\obj\**;..\Wavee.PlayPlay\Tests\**" Link="Wavee.PlayPlay\%(RecursiveDir)%(Filename)%(Extension)" />
     <Protobuf Include="..\Wavee.PlayPlay\Protos\playplay.proto" GrpcServices="None" ProtoRoot="..\Wavee.PlayPlay\Protos" Condition="Exists('..\Wavee.PlayPlay\Protos\playplay.proto')" />
   </ItemGroup>

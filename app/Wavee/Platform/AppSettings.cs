@@ -51,6 +51,10 @@ static class WaveeSettings
     public static readonly SettingKey<int> CrossfadeMs = new("playback.crossfade.ms", 5000);
     public static readonly SettingKey<bool> AutoplayEnabled = new("playback.autoplay", true);
     public static readonly SettingKey<long> GaboGlobalSequence = new("telemetry.gabo.globalSequence", 0L);
+    // On-disk playback caches (Phase 6): encrypted CDN bodies + DPAPI-wrapped PlayPlay license payloads.
+    public static readonly SettingKey<bool> AudioBodyCacheEnabled = new("audio.cache.body.enabled", true);
+    public static readonly SettingKey<bool> AudioKeyCacheEnabled = new("audio.cache.keys.enabled", true);
+    public static readonly SettingKey<long> AudioBodyCacheBudgetBytes = new("audio.cache.body.budgetBytes", 4L << 30);   // 4 GB
 }
 
 // IAppSettings backed by the engine's AppDataStore (HKCU registry, unpackaged). Every access is DEFENSIVE — a storage

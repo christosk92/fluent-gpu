@@ -104,9 +104,7 @@ public readonly record struct AcrylicSpec(ColorF Tint, float TintOpacity, float 
     // NOTE: Flyout/FlyoutLight are the per-theme RAW recipes — controls should read the theme-aware
     // `Tok.AcrylicFlyout` (FluentGpu.Dsl Tokens.cs) instead of hard-binding the dark constant.
     public static AcrylicSpec Flyout => InAppDefault;
-    // Luminosity 0.96 (matching InAppDefault's proven dark value, not WinUI's 0.85): at 0.85 the near-white plate
-    // dissolves into the pale Mica-lit pages beneath it — the flyout must read as a solid surface with faint bleed.
-    public static AcrylicSpec FlyoutLight => new(ColorF.FromRgba(0xFC, 0xFC, 0xFC), 0.05f, 30f, 0.02f, 0.96f, ColorF.FromRgba(0xF9, 0xF9, 0xF9));
+    public static AcrylicSpec FlyoutLight => new(ColorF.FromRgba(0xFC, 0xFC, 0xFC), 0.0f, 30f, 0.02f, 0.85f, ColorF.FromRgba(0xF9, 0xF9, 0xF9));
 }
 
 /// <summary>Renderer policy for a per-node self-blur layer.</summary>

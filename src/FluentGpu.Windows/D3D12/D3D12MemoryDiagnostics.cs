@@ -17,11 +17,31 @@ internal static unsafe class D3D12MemoryDiagnostics
     private static int _resizeCount;
     private static readonly bool LogEnabled = Diag.EnvFlag("FG_D3D_MEM") || Diag.EnvFlag("FG_DIAG");
 
-    public static void Track(ID3D12Resource* resource, string name, ulong bytes) => TrackPtr((nuint)(void*)resource, name, bytes);
+    public static void Track(ID3D12Resource* resource, string name, ulong bytes)
+    {
+        SetName(resource, name);
+        TrackPtr((nuint)(void*)resource, name, bytes);
+    }
 
     /// <summary>Track a descriptor heap (audit gpu mem-01: descriptor heaps were a [d3d-mem]/DiagResourceTotals blind
     /// spot). Same running tally as resources — keyed on the COM pointer, which is unique across all D3D12 objects.</summary>
-    public static void Track(ID3D12DescriptorHeap* heap, string name, ulong bytes) => TrackPtr((nuint)(void*)heap, name, bytes);
+    public static void Track(ID3D12DescriptorHeap* heap, string name, ulong bytes)
+    {
+        SetName(heap, name);
+        TrackPtr((nuint)(void*)heap, name, bytes);
+    }
+
+    private static void SetName(ID3D12Resource* resource, string name)
+    {
+        if (resource == null) return;
+        fixed (char* p = name) _ = resource->SetName(p);
+    }
+
+    private static void SetName(ID3D12DescriptorHeap* heap, string name)
+    {
+        if (heap == null) return;
+        fixed (char* p = name) _ = heap->SetName(p);
+    }
 
     private static void TrackPtr(nuint key, string name, ulong bytes)
     {

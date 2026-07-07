@@ -11,10 +11,11 @@
     <!-- CA1416: source-includes the cross-platform Backend, whose portability is guarded by TerraFX-freedom, not this
          analyzer. xUnit1051: the v3 "pass TestContext.Current.CancellationToken" nag is noise for these deterministic,
          non-cancellable unit tests. -->
+    <DefineConstants>$(DefineConstants);WAVEE_TESTS</DefineConstants>
     <NoWarn>$(NoWarn);CA1416;xUnit1051</NoWarn>
   </PropertyGroup>
 
-  <PropertyGroup Condition="Exists('..\Wavee.PlayPlay\Wavee.PlayPlay.csproj')">
+  <PropertyGroup Condition="Exists('..\Wavee.PlayPlay\Client\InProcessPlayPlayKeyDeriver.cs')">
     <DefineConstants>$(DefineConstants);WAVEE_PLAYPLAY_LOCAL</DefineConstants>
   </PropertyGroup>
 
@@ -56,11 +57,13 @@
     <Protobuf Include="..\Wavee\SpotifyLive\Protos\media.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
     <Protobuf Include="..\Wavee\SpotifyLive\Protos\player.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
     <Protobuf Include="..\Wavee\SpotifyLive\Protos\connect.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
+    <Protobuf Include="..\Wavee\SpotifyLive\Protos\autoplay.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
 
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Wavee.Core\Wavee.Core.csproj" />
+    <ProjectReference Include="..\..\src\FluentGpu.WindowsApi\FluentGpu.WindowsApi.csproj" />
     <!-- the vendored Ogg/Vorbis fork — OggContainerSeekTests drive its container-level seek paths directly -->
     <ProjectReference Include="..\vendor\NVorbis\NVorbis\NVorbis.csproj" />
     <Compile Include="..\Wavee\Diagnostics\*.cs" />
@@ -81,18 +84,21 @@
     <Compile Include="..\Wavee\SpotifyLive\Audio\ILicenseClient.cs" />
     <Compile Include="..\Wavee\SpotifyLive\Audio\IPlayPlayKeyDeriver.cs" />
     <Compile Include="..\Wavee\SpotifyLive\Audio\AudioRuntimeStatusService.cs" />
+    <Compile Include="..\Wavee\SpotifyLive\Audio\LicenseKeyDiskCache.cs" />
     <Compile Include="..\Wavee\SpotifyLive\Audio\AudioKeyResolver.cs" />
+    <Compile Include="..\Wavee\SpotifyLive\Audio\HeadFileClient.cs" />
     <Compile Include="..\Wavee\SpotifyLive\Audio\IPlayPlayProvisioner.cs" />
     <Compile Include="..\Wavee\SpotifyLive\Audio\AudioFormatProbe.cs" />
     <Compile Include="..\Wavee\SpotifyLive\Audio\Host\Dsp\*.cs" />
     <Compile Include="..\Wavee\SpotifyLive\Audio\Runtime\*.cs" />
     <!-- the track resolver (extended-metadata file discovery + Ogg/FLAC selection) — LiveTrackResolverTests drive it -->
     <Compile Include="..\Wavee\SpotifyLive\LiveTrackResolver.cs" />
+    <Compile Include="..\Wavee\SpotifyLive\LiveContextResolver.cs" />
     <Compile Include="..\Wavee\SpotifyLive\SpotifyClientIdentity.cs" />
     <Compile Include="..\Wavee\SpotifyLive\ConnectStateBuilder.cs" />
   </ItemGroup>
 
-  <ItemGroup Condition="Exists('..\Wavee.PlayPlay\Wavee.PlayPlay.csproj')">
+  <ItemGroup Condition="Exists('..\Wavee.PlayPlay\Client\InProcessPlayPlayKeyDeriver.cs')">
     <!-- The test assembly source-includes only the PlayPlay pieces the PlayPlay*Tests exercise; the CLI probe
          (app-only AppDataSettings dep) and the in-process native adapter are app-composition-only, excluded here. -->
     <!-- The test assembly source-includes the PlayPlay pieces the PlayPlay*Tests exercise; the CLI probe

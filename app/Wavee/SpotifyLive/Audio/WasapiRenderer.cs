@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.Marshalling;
+using Wavee.Backend.Audio;
 
 namespace Wavee.SpotifyLive.Audio;
 
@@ -117,7 +118,7 @@ internal sealed unsafe partial class WasapiRenderer : IDisposable
         }
     }
 
-    public void SetVolume(float v) => _volume = Math.Clamp(v, 0f, 1f);
+    public void SetVolume(float v) => _volume = VolumeTaper.Amplitude(v);
 
     /// <summary>Approximate frames actually played (released minus what's still buffered).</summary>
     public long PlayedFrames

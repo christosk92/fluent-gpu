@@ -27,6 +27,8 @@ namespace Wavee.SpotifyLive;
 // on the wire — their sort/filter rides on context.url's query, which we forward verbatim.
 public sealed class LiveContextResolver : IContextResolver
 {
+    sealed record ArtistContextWire(List<QueuedRef> Refs, Dictionary<string, string> Metadata);
+
     // Eager-load at most this many pages on resolve; the rest are lazy via LoadMoreAsync (Phase B wires the queue refill).
     const int MaxEagerPages = 8;
 
@@ -34,13 +36,18 @@ public sealed class LiveContextResolver : IContextResolver
     readonly MetadataService _metadata;
     readonly IStore _store;
     readonly Action<string>? _log;
+    readonly Resource<string, ArtistContextWire> _artistCache;
 
-    public LiveContextResolver(ITransport transport, MetadataService metadata, IStore store, Action<string>? log = null)
+    public LiveContextResolver(ITransport transport, MetadataService metadata, IStore store,
+        Func<SessionContext> ctx, Action<string>? log = null)
     {
         _transport = transport;
         _metadata = metadata;
         _store = store;
         _log = log;
+        _artistCache = new Resource<string, ArtistContextWire>(FetchArtistWireAsync,
+            new FreshnessPolicy.Etag(TimeSpan.FromMinutes(15)), ctx, maxEntries: 16, name: "connect.context.artist",
+            debugLog: log);
     }
 
     public async Task<ResolvedContext> ResolveAsync(ContextSpec spec, CancellationToken ct = default)
@@ -216,43 +223,47 @@ public sealed class LiveContextResolver : IContextResolver
     async Task<ResolvedContext> ResolveArtistAsync(ContextSpec spec, CancellationToken ct)
     {
         string id = spec.Uri["spotify:artist:".Length..];
-        var path = "/playlist/v2/list/popular-release-segments-main-roles/artist_" + id;
-        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["Accept"] = "application/protobuf" };
-        var resp = await _transport.Request(Channel.Spclient, path, default, ct, headers: headers).ConfigureAwait(false);
-        if (!resp.Ok || resp.Body is null || resp.Body.Length == 0)
+        var loaded = await _artistCache.GetAsync(id, ct).ConfigureAwait(false);
+        if (!loaded.IsReady)
         {
-            _log?.Invoke($"artist context-resolve failed ({resp.Status}): {spec.Uri}");
+            _log?.Invoke($"artist context-resolve failed: {loaded.Error ?? "unknown"} ({spec.Uri})");
             return ResolvedContext.Empty;
         }
+        var wire = loaded.Value!;
+        var tracks = await HydrateAsync(wire.Refs, ct).ConfigureAwait(false);
+        int start = ContextResolve.FindStartIndex(tracks, spec.SkipToTrackUri, spec.SkipToTrackUid, spec.SkipToIndex);
+        return new ResolvedContext(tracks, start, null, null, false, wire.Metadata, null);
+    }
+
+    async Task<ArtistContextWire> FetchArtistWireAsync(string id, SessionContext ctx)
+    {
+        var path = "/playlist/v2/list/popular-release-segments-main-roles/artist_" + id;
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["Accept"] = "application/protobuf" };
+        var resp = await _transport.Request(Channel.Spclient, path, default, CancellationToken.None, headers: headers).ConfigureAwait(false);
+        if (!resp.Ok || resp.Body is null || resp.Body.Length == 0)
+            throw new InvalidOperationException($"artist context-resolve failed ({resp.Status})");
 
         Pl.SelectedListContent slc;
         try { slc = Pl.SelectedListContent.Parser.ParseFrom(SpotifyZstd.MaybeDecompressZstd(resp.Body)); }
-        catch (Exception ex)
-        {
-            _log?.Invoke($"artist context-resolve parse failed for {spec.Uri}: {ex.Message}");
-            return ResolvedContext.Empty;
-        }
+        catch (Exception ex) { throw new InvalidOperationException("artist context-resolve parse failed: " + ex.Message, ex); }
 
         var (members, _) = PlaylistWireMapper.ParseContents(slc);
-        if (members.Count == 0) { _log?.Invoke("artist context-resolve: 0 tracks for " + spec.Uri); return ResolvedContext.Empty; }
+        if (members.Count == 0) throw new InvalidOperationException("artist context-resolve: 0 tracks");
 
         var refs = new List<QueuedRef>(members.Count);
         foreach (var m in members) refs.Add(new QueuedRef(m.ItemUri, m.ItemId));   // uid = hex item_id (§6.1)
 
-        var tracks = await HydrateAsync(refs, ct).ConfigureAwait(false);
-        int start = ContextResolve.FindStartIndex(tracks, spec.SkipToTrackUri, spec.SkipToTrackUid, spec.SkipToIndex);
-
         var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["format_list_type"] = "popular-release-segments-main-roles",
-            ["reporting.uri"] = spec.Uri,
-            ["total_number_of_tracks"] = (slc.HasLength ? slc.Length : tracks.Count).ToString(CultureInfo.InvariantCulture),
+            ["reporting.uri"] = "spotify:artist:" + id,
+            ["total_number_of_tracks"] = (slc.HasLength ? slc.Length : members.Count).ToString(CultureInfo.InvariantCulture),
         };
         if (slc.Attributes is { } attr)
             foreach (var fa in attr.FormatAttributes)
-                if (!string.IsNullOrEmpty(fa.Key)) metadata[fa.Key] = fa.Value ?? "";   // e.g. play_count, if the server sends it
+                if (!string.IsNullOrEmpty(fa.Key)) metadata[fa.Key] = fa.Value ?? "";
 
-        return new ResolvedContext(tracks, start, null, null, false, metadata, null);
+        return new ArtistContextWire(refs, metadata);
     }
 
     // Pull display + duration metadata for the resolved order (cache-aware, batched, gzipped). The expensive work lives

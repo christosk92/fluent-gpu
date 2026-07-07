@@ -21,6 +21,7 @@ internal sealed class AudioPlayEngine : IDisposable
     readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(30) };
     readonly Action<string> _log;
     readonly Func<string, byte[], CdnDecryptor?> _nativeDecryptorFactory;
+    readonly AudioBodyDiskCache? _bodyDisk;
     readonly WasapiRenderer _renderer = new();
     readonly EqualizerProcessor _equalizer = new();
     readonly Limiter _limiter = new();
@@ -48,10 +49,12 @@ internal sealed class AudioPlayEngine : IDisposable
     public event Action<AudioHostSignal>? State;
     public event Action? TrackFinished;
 
-    public AudioPlayEngine(Action<string> log, Func<string, byte[], CdnDecryptor?>? nativeDecryptorFactory = null)
+    public AudioPlayEngine(Action<string> log, Func<string, byte[], CdnDecryptor?>? nativeDecryptorFactory = null,
+        AudioBodyDiskCache? bodyDisk = null)
     {
         _log = log;
         _nativeDecryptorFactory = nativeDecryptorFactory ?? ((_, _) => null);
+        _bodyDisk = bodyDisk;
         _tick = new Timer(_ => { if (_playing) RaiseState(); }, null, 1000, 1000);
     }
 
@@ -69,7 +72,7 @@ internal sealed class AudioPlayEngine : IDisposable
         _buffering = _pendingHead.Length == 0;
         _log($"load-fast-start {cmd.FileIdHex}: head={_pendingHead.Length}B fmt={_format} dur={_durationMs}ms gain={cmd.NormalizationGainDb:0.0}dB");
         _seekBaseMs = 0;
-        var stream = SpotifyAudioStream.CreateHeadOnly(_http, _pendingHead, _pendingHead.Length, cmd.FileIdHex, _log);
+        var stream = SpotifyAudioStream.CreateHeadOnly(_http, _pendingHead, _pendingHead.Length, cmd.FileIdHex, _log, _bodyDisk);
         if (_pendingHead.Length > 0)
             StartDecode(stream, cmd.FileIdHex, _pendingHead, _format);
         else
@@ -143,7 +146,7 @@ internal sealed class AudioPlayEngine : IDisposable
                 stream = _stream as SpotifyAudioStream;   // Spotify-only path (external returned above); recover the head-only stream
                 if (stream is null)
                 {
-                    stream = SpotifyAudioStream.CreateHeadOnly(_http, _pendingHead, cmd.HeadBoundary, cmd.FileIdHex, _log);
+                    stream = SpotifyAudioStream.CreateHeadOnly(_http, _pendingHead, cmd.HeadBoundary, cmd.FileIdHex, _log, _bodyDisk);
                 }
                 startDecode = _decodeThread is null || !_decodeThread.IsAlive;
             }
@@ -279,6 +282,7 @@ internal sealed class AudioPlayEngine : IDisposable
         }
 
         _log($"KEY CHECK FAILED {fileIdHex}: format={_format} head={_pendingHead.Length}B key={keyBytes}B nativeSeed={nativeSeedBytes}B detail={keyDetail}");
+        if (stream is SpotifyAudioStream sas) sas.InvalidateBodyCache();
         throw new InvalidOperationException("audio key validation failed: " + keyDetail);
     }
 
