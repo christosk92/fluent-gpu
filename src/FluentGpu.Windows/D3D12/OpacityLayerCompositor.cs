@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Text;
+using FluentGpu.Foundation;
 using TerraFX.Interop.DirectX;
 using TerraFX.Interop.Windows;
 using static TerraFX.Interop.DirectX.DirectX;
@@ -611,10 +612,12 @@ float4 PSMain(V i) : SV_Target
     /// group RT is canvas-sized + 1:1, so the layer's device rect lives in the same space as <c>SV_Position</c>.</summary>
     public void EdgeFadeComposite(ID3D12GraphicsCommandList* cmd, int slot, in PushLayerCmd L, float scale, RECT clip)
     {
-        int left = Math.Clamp((int)MathF.Floor(L.DeviceRect.X * scale), 0, (int)_w);
-        int top = Math.Clamp((int)MathF.Floor(L.DeviceRect.Y * scale), 0, (int)_h);
-        int right = Math.Clamp((int)MathF.Ceiling((L.DeviceRect.X + L.DeviceRect.W) * scale), left, (int)_w);
-        int bottom = Math.Clamp((int)MathF.Ceiling((L.DeviceRect.Y + L.DeviceRect.H) * scale), top, (int)_h);
+        RectF cr = L.CompositeClip;
+        if (cr.W <= 0f || cr.H <= 0f) return;
+        int left = Math.Clamp((int)MathF.Floor(cr.X * scale), 0, (int)_w);
+        int top = Math.Clamp((int)MathF.Floor(cr.Y * scale), 0, (int)_h);
+        int right = Math.Clamp((int)MathF.Ceiling((cr.X + cr.W) * scale), left, (int)_w);
+        int bottom = Math.Clamp((int)MathF.Ceiling((cr.Y + cr.H) * scale), top, (int)_h);
         RECT box = new()
         {
             left = Math.Max(left, clip.left),

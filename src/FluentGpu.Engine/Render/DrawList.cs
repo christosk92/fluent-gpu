@@ -51,6 +51,49 @@ public struct DrawListOpcodeStats
         }
     }
 
+    public void Add(in DrawListOpcodeStats other)
+    {
+        FillRoundRect += other.FillRoundRect;
+        DrawGlyphRun += other.DrawGlyphRun;
+        PushClip += other.PushClip;
+        PopClip += other.PopClip;
+        DrawImage += other.DrawImage;
+        DrawRoundRectStroke += other.DrawRoundRectStroke;
+        DrawShadow += other.DrawShadow;
+        DrawGradientRect += other.DrawGradientRect;
+        PushLayer += other.PushLayer;
+        PopLayer += other.PopLayer;
+        DrawGradientStroke += other.DrawGradientStroke;
+        DrawArc += other.DrawArc;
+        DrawPolylineStroke += other.DrawPolylineStroke;
+        DrawTabShape += other.DrawTabShape;
+        DrawGlyphRunGradient += other.DrawGlyphRunGradient;
+    }
+
+    public readonly bool CanTranslateCopiedSpan
+        => DrawGlyphRun == 0 && DrawGlyphRunGradient == 0
+           && PushClip == 0 && PopClip == 0
+           && PushLayer == 0 && PopLayer == 0;
+
+    public readonly DrawListOpcodeStats Minus(in DrawListOpcodeStats other) => new()
+    {
+        FillRoundRect = FillRoundRect - other.FillRoundRect,
+        DrawGlyphRun = DrawGlyphRun - other.DrawGlyphRun,
+        PushClip = PushClip - other.PushClip,
+        PopClip = PopClip - other.PopClip,
+        DrawImage = DrawImage - other.DrawImage,
+        DrawRoundRectStroke = DrawRoundRectStroke - other.DrawRoundRectStroke,
+        DrawShadow = DrawShadow - other.DrawShadow,
+        DrawGradientRect = DrawGradientRect - other.DrawGradientRect,
+        PushLayer = PushLayer - other.PushLayer,
+        PopLayer = PopLayer - other.PopLayer,
+        DrawGradientStroke = DrawGradientStroke - other.DrawGradientStroke,
+        DrawArc = DrawArc - other.DrawArc,
+        DrawPolylineStroke = DrawPolylineStroke - other.DrawPolylineStroke,
+        DrawTabShape = DrawTabShape - other.DrawTabShape,
+        DrawGlyphRunGradient = DrawGlyphRunGradient - other.DrawGlyphRunGradient,
+    };
+
     public override readonly string ToString()
         => $"fill={FillRoundRect} glyph={DrawGlyphRun} glyphGrad={DrawGlyphRunGradient} clip={PushClip}/{PopClip} img={DrawImage} stroke={DrawRoundRectStroke} shadow={DrawShadow} grad={DrawGradientRect}/{DrawGradientStroke} layer={PushLayer}/{PopLayer} arc={DrawArc} poly={DrawPolylineStroke} tab={DrawTabShape}";
 }
@@ -162,8 +205,10 @@ public readonly record struct DrawGradientStrokeCmd(RectF Rect, CornerRadius4 Ra
 public readonly record struct PushLayerCmd(RectF DeviceRect, CornerRadius4 Radii, ColorF Tint, ColorF Fallback, float TintOpacity, float BlurSigma, float NoiseOpacity, float LuminosityOpacity,
     int Kind = 0, float GroupAlpha = 1f,
     // EdgeFade-only (Kind == 3): per-edge feather band depth in DEVICE px (0 = edge disabled), falloff curve, fade
-    // intensity, and the enabled-edge bit mask. The rounded-corner radii come from Radii (the feather follows them).
+    // intensity, enabled-edge bit mask, and the exact device-space clip used when compositing the offscreen layer.
+    // The rounded-corner radii come from Radii (the feather follows them).
     float FadeBandL = 0f, float FadeBandT = 0f, float FadeBandR = 0f, float FadeBandB = 0f, int FadeFalloff = 0, float FadeIntensity = 1f, int FadeEdges = 0,
+    RectF CompositeClip = default,
     // Acrylic-only: a STABLE per-overlay id (the scene node handle, packed index|gen) keying the compositor's retained
     // blurred-backdrop cache across frames, so a stationary acrylic surface REUSES its blur instead of re-blurring every
     // frame (design/subsystems/backdrop-effects-animation.md §2.3). 0 ⇒ no caching (re-blur every frame — prior behavior).
@@ -201,20 +246,102 @@ public sealed class DrawList
     private int _len;
     private ulong[] _sort;
     private int _sortLen;
+    private byte[] _priorBuf;
+    private int _priorLen;
+    private ulong[] _priorSort;
+    private int _priorSortLen;
     private DrawListOpcodeStats _opcodeStats;
 
     public DrawList(int capacity = 4096)
     {
         _buf = GC.AllocateUninitializedArray<byte>(capacity, pinned: false);
         _sort = new ulong[256];
+        _priorBuf = GC.AllocateUninitializedArray<byte>(capacity, pinned: false);
+        _priorSort = new ulong[256];
     }
 
     public ReadOnlySpan<byte> Bytes => _buf.AsSpan(0, _len);
     public ReadOnlySpan<ulong> SortKeys => _sort.AsSpan(0, _sortLen);
     public int CommandCount { get; private set; }
     public DrawListOpcodeStats OpcodeStats => _opcodeStats;
+    public int BytePosition => _len;
+    public int SortPosition => _sortLen;
+    public int PriorByteLength => _priorLen;
+    public int PriorSortLength => _priorSortLen;
 
     public void Reset() { _len = 0; _sortLen = 0; CommandCount = 0; _opcodeStats = default; }
+
+    /// <summary>Start a record pass while preserving the previous command/sort arenas for clean-span copies.</summary>
+    public void SwapAndReset()
+    {
+        (_buf, _priorBuf) = (_priorBuf, _buf);
+        (_sort, _priorSort) = (_priorSort, _sort);
+        _priorLen = _len;
+        _priorSortLen = _sortLen;
+        Reset();
+    }
+
+    public bool CanCopyPriorSpan(int byteStart, int byteLength, int sortStart, int sortCount)
+        => byteStart >= 0 && byteLength >= 0 && byteStart + byteLength <= _priorLen
+           && sortStart >= 0 && sortCount >= 0 && sortStart + sortCount <= _priorSortLen;
+
+    public void CopySpanFromPrior(int byteStart, int byteLength, int sortStart, int sortCount,
+                                  int commandCount, in DrawListOpcodeStats opcodeStats)
+    {
+        if (byteLength > 0)
+        {
+            Ensure(byteLength);
+            Array.Copy(_priorBuf, byteStart, _buf, _len, byteLength);
+            _len += byteLength;
+        }
+        if (sortCount > 0)
+        {
+            EnsureSort(sortCount);
+            Array.Copy(_priorSort, sortStart, _sort, _sortLen, sortCount);
+            _sortLen += sortCount;
+        }
+        CommandCount += commandCount;
+        _opcodeStats.Add(in opcodeStats);
+    }
+
+    public bool CopySpanFromPriorTranslated(int byteStart, int byteLength, int sortStart, int sortCount,
+                                            int commandCount, in DrawListOpcodeStats opcodeStats,
+                                            float dx, float dy)
+    {
+        if (!opcodeStats.CanTranslateCopiedSpan || !CanCopyPriorSpan(byteStart, byteLength, sortStart, sortCount))
+            return false;
+
+        int byteDst = _len;
+        int sortDst = _sortLen;
+        int cmdBefore = CommandCount;
+        var statsBefore = _opcodeStats;
+
+        if (byteLength > 0)
+        {
+            Ensure(byteLength);
+            Array.Copy(_priorBuf, byteStart, _buf, _len, byteLength);
+            _len += byteLength;
+        }
+        if (sortCount > 0)
+        {
+            EnsureSort(sortCount);
+            Array.Copy(_priorSort, sortStart, _sort, _sortLen, sortCount);
+            _sortLen += sortCount;
+        }
+
+        if (!TranslateCopiedSpan(byteDst, byteLength, dx, dy))
+        {
+            _len = byteDst;
+            _sortLen = sortDst;
+            CommandCount = cmdBefore;
+            _opcodeStats = statsBefore;
+            return false;
+        }
+
+        CommandCount += commandCount;
+        _opcodeStats.Add(in opcodeStats);
+        return true;
+    }
 
     public void FillRoundRect(in RectF rect, in CornerRadius4 radii, in ColorF fill, in Affine2D transform, float opacity, ulong sortKey = 0)
     {
@@ -366,14 +493,14 @@ public sealed class DrawList
     /// behind. The feather follows the rounded corners in <paramref name="radii"/> (the curve). Bands are DEVICE px (the
     /// recorder scales the DIP spec by the world scale); <paramref name="blurSigma"/> &gt; 0 Gaussian-blurs the RT before
     /// the feather. Subtree commands record at opacity relative to 1.</summary>
-    public void PushEdgeFadeLayer(in RectF deviceRect, in CornerRadius4 radii, float groupAlpha,
+    public void PushEdgeFadeLayer(in RectF deviceRect, in RectF compositeClip, in CornerRadius4 radii, float groupAlpha,
         int edges, float bandL, float bandT, float bandR, float bandB, int falloff, float intensity, float blurSigma = 0f, ulong sortKey = 0)
     {
         WriteOp(DrawOp.PushLayer);
         WritePayload(new PushLayerCmd(deviceRect, radii, default, default, 0f, MathF.Max(0f, blurSigma), 0f, 0f,
             (int)LayerKind.EdgeFade, Math.Clamp(groupAlpha, 0f, 1f),
             MathF.Max(0f, bandL), MathF.Max(0f, bandT), MathF.Max(0f, bandR), MathF.Max(0f, bandB),
-            falloff, Math.Clamp(intensity, 0f, 1f), edges));
+            falloff, Math.Clamp(intensity, 0f, 1f), edges, compositeClip));
         PushSort(sortKey);
     }
 
@@ -432,8 +559,16 @@ public sealed class DrawList
 
     private void PushSort(ulong key)
     {
-        if (_sortLen == _sort.Length) Array.Resize(ref _sort, _sort.Length * 2);
+        EnsureSort(1);
         _sort[_sortLen++] = key;
+    }
+
+    private void EnsureSort(int extra)
+    {
+        if (_sortLen + extra <= _sort.Length) return;
+        int n = _sort.Length * 2;
+        while (n < _sortLen + extra) n *= 2;
+        Array.Resize(ref _sort, n);
     }
 
     private void Ensure(int extra)
@@ -445,4 +580,67 @@ public sealed class DrawList
         Array.Copy(_buf, nb, _len);
         _buf = nb;
     }
+
+    private bool TranslateCopiedSpan(int start, int length, float dx, float dy)
+    {
+        if (dx == 0f && dy == 0f) return true;
+        int p = start;
+        int end = start + length;
+        while (p < end)
+        {
+            if (end - p < sizeof(int)) return false;
+            var op = (DrawOp)MemoryMarshal.Read<int>(_buf.AsSpan(p, sizeof(int)));
+            p += sizeof(int);
+            switch (op)
+            {
+                case DrawOp.FillRoundRect:
+                    if (!TranslatePayload<FillRoundRectCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
+                    break;
+                case DrawOp.DrawImage:
+                    if (!TranslatePayload<DrawImageCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
+                    break;
+                case DrawOp.DrawRoundRectStroke:
+                    if (!TranslatePayload<DrawRoundRectStrokeCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
+                    break;
+                case DrawOp.DrawShadow:
+                    if (!TranslatePayload<DrawShadowCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
+                    break;
+                case DrawOp.DrawGradientRect:
+                    if (!TranslatePayload<DrawGradientRectCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
+                    break;
+                case DrawOp.DrawGradientStroke:
+                    if (!TranslatePayload<DrawGradientStrokeCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
+                    break;
+                case DrawOp.DrawArc:
+                    if (!TranslatePayload<DrawArcCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
+                    break;
+                case DrawOp.DrawPolylineStroke:
+                    if (!TranslatePayload<DrawPolylineStrokeCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
+                    break;
+                case DrawOp.DrawTabShape:
+                    if (!TranslatePayload<DrawTabShapeCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
+                    break;
+                default:
+                    return false;
+            }
+        }
+        return p == end;
+    }
+
+    private delegate T TranslatePayloadFunc<T>(T value, float dx, float dy) where T : unmanaged;
+
+    private bool TranslatePayload<T>(ref int p, int end, float dx, float dy, TranslatePayloadFunc<T> translate) where T : unmanaged
+    {
+        int size = Unsafe.SizeOf<T>();
+        if (p + size > end) return false;
+        var span = _buf.AsSpan(p, size);
+        T cmd = MemoryMarshal.Read<T>(span);
+        cmd = translate(cmd, dx, dy);
+        MemoryMarshal.Write(span, in cmd);
+        p += size;
+        return true;
+    }
+
+    private static Affine2D Translate(in Affine2D t, float dx, float dy)
+        => new(t.M11, t.M12, t.M21, t.M22, t.Dx + dx, t.Dy + dy);
 }

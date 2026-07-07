@@ -50,9 +50,6 @@ sealed class DetailShell : Component
     readonly Signal<int> _mode = new(0);  // adaptive layout mode (0 widest), written by OnBoundsChanged
     float _measuredW;                     // last measured page width — replayed once when the rail layout-lock clears (Task C)
     bool _modeInitialized;                // first measurement uses the nominal breakpoints; later vertical crosses hysteresis
-    string? _listReadyRoute;              // route whose Ready track list has already been shown at least once
-    bool _readyListShownForRoute;
-    bool _staggerFirstReadyMount = true;  // read by TrackList through a delegate so reused instances see the latest route state
     readonly Signal<bool> _verticalHeaderPinned = new(false);   // vertical detail header scrolled past the top -> compact pill
     readonly Signal<TrackSort> _sort = new(TrackSort.Default);   // track-list sort, persisted per context (loaded per route)
     readonly Signal<string> _query = new("");                    // filter search query (transient — clears on navigation)
@@ -87,8 +84,6 @@ sealed class DetailShell : Component
         return nominal == Vertical ? 2 : nominal;
     }
     static float RailW(int mode, DetailConfig cfg) => mode switch { 0 => cfg.RailWidth, 1 => 224f, _ => 188f };
-    bool StaggerFirstReadyMount() => _staggerFirstReadyMount;
-
     public override Element Render()
     {
         var svc = UseContext(Services.Slot);
@@ -104,18 +99,10 @@ sealed class DetailShell : Component
         var route = _route.Value;                      // subscribe → re-derive kind/cfg/morphKey on a detail-route swap (reused slot)
         var (kind, id) = DetailPage.ParseDetail(route);
         string? morphKey = MorphKeys.For(kind, id);
-        if (_listReadyRoute != route.Name)
-        {
-            _listReadyRoute = route.Name;
-            _readyListShownForRoute = false;
-        }
-
         var raw = _model.Value.Value;                  // subscribe → re-render preview→full (header updates in place)
         _cfg = DetailPage.ResolveConfig(kind, raw);    // release-kind-dependent (album→single); a reused slot re-derives it
         _ctxUri = raw.ContextUri;                      // the per-context sort key, refreshed as the model loads
         _defaultSort = kind == DetailKind.Liked ? new TrackSort(SortColumn.DateAdded, Descending: true) : TrackSort.Default;
-        _staggerFirstReadyMount = !_readyListShownForRoute;
-        if (_model.IsReady) _readyListShownForRoute = true;
         // Keep the flown-in cover if the loaded model resolved a null one — a fly must land on real art, never a bare
         // placeholder (defensive: the fake catalog is already consistent for a uri; a real backend may not be).
         var m = raw with { MorphKey = morphKey, Cover = raw.Cover ?? _fallbackCover };
@@ -259,7 +246,7 @@ sealed class DetailShell : Component
 
         // Single-column fallback: just the track table, full width, no rail / no wash.
         if (!_cfg.TwoColumn)
-            return Embed.Comp(() => new TrackList(_route, _model, bridge, handlers, staggerFirstReadyMount: StaggerFirstReadyMount));
+            return Embed.Comp(() => new TrackList(_route, _model, bridge, handlers));
 
         // Adaptive two-column / vertical: measure the page width → mode. Value-gated → re-render only on a breakpoint cross.
         void Measure(RectF r)
@@ -300,7 +287,6 @@ sealed class DetailShell : Component
                 Children =
                 [
                     Embed.Comp(() => new TrackList(_route, _model, bridge, handlers, showToolbar,
-                        staggerFirstReadyMount: StaggerFirstReadyMount,
                         verticalHeader: verticalTracks,
                         verticalHeaderPinned: _verticalHeaderPinned)) with { Key = verticalTracks ? "tracks:vertical" : "tracks:standard" },
                 ],

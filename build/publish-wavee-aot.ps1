@@ -35,12 +35,13 @@ New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 $env:TEMP = $tmp
 $env:TMP  = $tmp
 
-Step "Publishing Wavee NativeAOT ($rid, $Configuration)"
-& dotnet publish $csproj -c $Configuration -r $rid /p:NuGetAudit=false --nologo
+Step "Publishing Wavee NativeAOT ($rid, $Configuration, OptimizationPreference=Speed)"
+& dotnet publish $csproj -c $Configuration -r $rid /p:NuGetAudit=false /p:OptimizationPreference=Speed --nologo
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed ($LASTEXITCODE)." }
 
 if (-not (Test-Path $exe)) { throw "Expected output not found: $exe" }
 $info = Get-Item $exe
 Write-Host ""
+$ver = (Select-String -Path $csproj -Pattern '<InformationalVersion>([^<]+)</InformationalVersion>').Matches[0].Groups[1].Value
 Write-Host "Done: $($info.FullName)" -ForegroundColor Green
-Write-Host "      $([math]::Round($info.Length / 1MB, 2)) MB"
+Write-Host "      v$ver  $([math]::Round($info.Length / 1MB, 2)) MB"

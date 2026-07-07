@@ -27,6 +27,11 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     public int BlurSuppressedByScrollCount { get; init; }
     public int BlurHoldCandidateCount { get; init; }
     public int EdgeFadeGroupCount { get; init; }
+    public int SpansReused { get; init; }
+    public int SpansRebased { get; init; }
+    public int SpansReRecorded { get; init; }
+    public int SpanBytesCopied { get; init; }
+    public SpanReuseDisabledReason SpanReuseDisabledReasons { get; init; }
     public double Fps { get; init; }
     public double FrameMs { get; init; }
     public int ComponentsRendered { get; init; }
@@ -115,6 +120,9 @@ public sealed class AppHost : IDisposable
     private readonly FlexLayout _layout;
     private readonly LayoutInvalidator _invalidator;
     private readonly DrawList _drawList = new();
+    private readonly SpanTable _spanTable = new();
+    private int _recordedImageContentEpoch;
+    private bool _imageCrossfadeWasActive;
     // Render-thread seam (Cut A, submit-only; docs/plans/render-thread-seam-landing-plan.md · design/subsystems/threading-render-seam.md).
     // STEP 1 — single-thread pass-through: the UI records into _drawList, copies it into a render-readable arena, then
     // PUBLISHes + ACQUIREs it on THIS (UI) thread and submits from the acquired arena — byte-identical to a direct
@@ -1591,10 +1599,23 @@ public sealed class AppHost : IDisposable
             for (int i = 0; i < _popupWindows.Count; i++)
                 if (!_popupWindows[i].Root.IsNull && _scene.IsLive(_popupWindows[i].Root))
                     _popupSkipRoots.Add(_popupWindows[i].Root);
+            SpanReuseDisabledReason spanDisable = SpanReuseDisabledReason.None;
+            if (reconciled) spanDisable |= SpanReuseDisabledReason.SceneChanged;
+            if (layoutNeeded) spanDisable |= SpanReuseDisabledReason.Layout;
+            if (resized) spanDisable |= SpanReuseDisabledReason.Resize;
+            if (keepAlive) spanDisable |= SpanReuseDisabledReason.ModalPaint;
+            if (_popupWindows.Count != 0) spanDisable |= SpanReuseDisabledReason.PopupWindows;
+            if (_connected.Detached.Count != 0) spanDisable |= SpanReuseDisabledReason.Detached;
+            bool imageFadeActive = _images.HasActiveCrossfades;
+            if (_images.ContentEpoch != _recordedImageContentEpoch || imageFadeActive || _imageCrossfadeWasActive)
+                spanDisable |= SpanReuseDisabledReason.ImageContent;
             var recordStats = SceneRecorder.Record(_scene, _drawList, _images, in focus, Tok.ScrollThumb, Tok.AcrylicFlyout.Fallback, in textEdit,
-                CollectionsMarshal.AsSpan(_popupSkipRoots), holdSelfBlurForAnyUserScroll: holdSelfBlurForScroll); // 8 record
+                CollectionsMarshal.AsSpan(_popupSkipRoots), holdSelfBlurForAnyUserScroll: holdSelfBlurForScroll || _scrollAnim.AnyOffsetWroteThisFrame,
+                spans: _spanTable, spanReuseDisabled: spanDisable); // 8 record
             SceneRecorder.RecordDetached(_scene, _drawList, _images, _connected.Detached, _scene.OverlayClip);   // 8 detached fly snapshots (flag-gated rebuild; no-op when none)
             RecordPopupWindows(in focus, in textEdit);         // 8b record each popup window's subtree DrawList
+            _recordedImageContentEpoch = _images.ContentEpoch;
+            _imageCrossfadeWasActive = imageFadeActive;
             // 8b′ probe capture (WAVEE_LYRICS_ADVANCE_PROBE): snapshot the designated viewports' scroll state HERE — before
             // the ClearTransformDirty below wipes the content-node TransformDirty bit that drove this frame's DoF defer.
             CaptureProbeScroll(ProbeLyricsViewport, out int probeLyMode, out bool probeLyUser, out bool probeLyDirty);
@@ -1603,6 +1624,7 @@ public sealed class AppHost : IDisposable
             // settle frame: the last moved frame recorded its text unsnapped, so the trailing static record re-snaps crisp.
             bool transformWrote = _scene.AnyTransformWrote;
             if (transformWrote) { _frameAfterPaint = true; _scene.ClearTransformDirty(); }
+            _scene.ClearRecordDirty();
             long tRecord = Stopwatch.GetTimestamp();
             if (s_allocDiag) { db = Probe(SegRecord, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
             // Modal-loop repaint: present at SyncInterval 0 so Present is a cheap, tear-free hand-off (the composited DComp
@@ -1691,6 +1713,11 @@ public sealed class AppHost : IDisposable
                 BlurSuppressedByScrollCount = recordStats.BlurSuppressedByScrollCount,
                 BlurHoldCandidateCount = recordStats.BlurHoldCandidateCount,
                 EdgeFadeGroupCount = recordStats.EdgeFadeGroupCount,
+                SpansReused = recordStats.SpansReused,
+                SpansRebased = recordStats.SpansRebased,
+                SpansReRecorded = recordStats.SpansReRecorded,
+                SpanBytesCopied = recordStats.SpanBytesCopied,
+                SpanReuseDisabledReasons = recordStats.SpanReuseDisabledReasons,
                 Fps = _fps,
                 FrameMs = _frameMs,
                 ComponentsRendered = componentsRendered,

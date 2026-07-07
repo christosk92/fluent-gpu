@@ -59,6 +59,9 @@ static class Program
             e.SetObserved();
         };
 
+        if (Array.IndexOf(args, "--perf-bench") >= 0)
+            Environment.SetEnvironmentVariable("WAVEE_PERF_BENCH", "1");
+
         if (Array.IndexOf(args, "--audio-host") >= 0)
             Environment.Exit(Wavee.SpotifyLive.Audio.Host.AudioHostChild.Run(args));
 
@@ -219,7 +222,7 @@ static class Program
         {
             // Diagnostic harness chain (each gated by its own env flag; all return false in a normal run): the nav/scroll
             // FPS stress probe (WAVEE_NAV_PROBE) first, then the resize probe (WAVEE_RESIZE_PROBE).
-            FluentApp.DiagnosticRun = (h, w, d) => WaveeNavProbe.TryRun(h, w, d) || WaveeResizeProbe.TryRun(h, w, d) || WaveeMemSoak.TryRun(h, w, d);
+            FluentApp.DiagnosticRun = (h, w, d) => WaveePerfBench.TryRun(h, w, d) || WaveeNavProbe.TryRun(h, w, d) || WaveeResizeProbe.TryRun(h, w, d) || WaveeMemSoak.TryRun(h, w, d);
             // customFrame:true → the in-app TitleBar (WaveeShell) draws the Mica-extended caption buttons + drag region.
             // micaAlt:true → Mica BaseAlt (the flatter File-Explorer tint), matching WaveeMusic's MicaBackdrop Kind="BaseAlt".
             // ambientFps: pace PERPETUAL ambient motion (the always-playing seek playhead, the now-playing equalizer,

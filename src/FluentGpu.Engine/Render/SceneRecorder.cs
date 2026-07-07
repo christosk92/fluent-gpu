@@ -25,6 +25,11 @@ public readonly record struct SceneRecordStats(int NodesVisited, int DrawnNodeCo
     public int BlurSuppressedByScrollCount { get; init; }
     public int BlurHoldCandidateCount { get; init; }
     public int EdgeFadeGroupCount { get; init; }
+    public int SpansReused { get; init; }
+    public int SpansRebased { get; init; }
+    public int SpansReRecorded { get; init; }
+    public int SpanBytesCopied { get; init; }
+    public SpanReuseDisabledReason SpanReuseDisabledReasons { get; init; }
 }
 
 /// <summary>
@@ -63,6 +68,11 @@ public static class SceneRecorder
         public int BlurGroupCount;
         public int BlurHoldCandidateCount;
         public int EdgeFadeGroupCount;
+        public int SpansReused;
+        public int SpansRebased;
+        public int SpansReRecorded;
+        public int SpanBytesCopied;
+        public SpanReuseDisabledReason SpanReuseDisabledReasons;
         public RectF Damage;       // union of this frame's changed-node device bounds → the acrylic backdrop-cache damage region
         public bool HasDamage;
 
@@ -83,6 +93,11 @@ public static class SceneRecorder
             BlurSuppressedByScrollCount = 0,
             BlurHoldCandidateCount = this.BlurHoldCandidateCount,
             EdgeFadeGroupCount = this.EdgeFadeGroupCount,
+            SpansReused = this.SpansReused,
+            SpansRebased = this.SpansRebased,
+            SpansReRecorded = this.SpansReRecorded,
+            SpanBytesCopied = this.SpanBytesCopied,
+            SpanReuseDisabledReasons = this.SpanReuseDisabledReasons,
         };
     }
 
@@ -118,13 +133,20 @@ public static class SceneRecorder
     /// the one SceneStore (layout/hit-test unchanged) — only their pixels move to the popup window's DrawList.</param>
     public static SceneRecordStats Record(SceneStore scene, DrawList dl, ImageCache? images = null, in FocusVisualStyle focus = default,
                                           ColorF scrollThumb = default, ColorF scrollTrack = default, in TextEditStyle textEdit = default,
-                                          ReadOnlySpan<NodeHandle> skipRoots = default, bool holdSelfBlurForAnyUserScroll = false)
+                                          ReadOnlySpan<NodeHandle> skipRoots = default, bool holdSelfBlurForAnyUserScroll = false,
+                                          SpanTable? spans = null,
+                                          SpanReuseDisabledReason spanReuseDisabled = SpanReuseDisabledReason.None)
     {
-        dl.Reset();
+        if (spans is null) dl.Reset();
+        else dl.SwapAndReset();
         if (scene.Root.IsNull) return default;
 
         _scrollLogFrame++;
         var stats = new RecordAccumulator();
+        uint spanFrame = spans?.BeginFrame(scene.Capacity) ?? 0;
+        SpanReuseDisabledReason disabledReasons = spanReuseDisabled;
+        if (spans is not null && !spans.HasPrior) disabledReasons |= SpanReuseDisabledReason.FirstRecord;
+        if (!skipRoots.IsEmpty) disabledReasons |= SpanReuseDisabledReason.PopupWindows;
 
         // E5 drag ghost: the lifted drag visual (SceneStore.DragGhost, set by Input.DragController at promotion; the
         // node also carries NodeFlags.DragGhost) is EXCLUDED from the clipped main pass and re-walked below in an
@@ -134,6 +156,12 @@ public static class SceneRecorder
         var ghost = scene.DragGhost;
         bool hasGhost = !ghost.IsNull && scene.IsLive(ghost) && !UnderAnySkipRoot(scene, skipRoots, ghost);
         int overlayCount = scene.OverlayCount;
+        if (hasGhost) disabledReasons |= SpanReuseDisabledReason.DragGhost;
+        if (overlayCount != 0) disabledReasons |= SpanReuseDisabledReason.Overlays;
+        if (scene.OrphanCount != 0) disabledReasons |= SpanReuseDisabledReason.Orphans;
+        bool spanReuseOff = spans is null || disabledReasons != SpanReuseDisabledReason.None;
+        bool spanStoreOn = spans is not null && (disabledReasons & (SpanReuseDisabledReason.PopupWindows | SpanReuseDisabledReason.DragGhost | SpanReuseDisabledReason.Overlays | SpanReuseDisabledReason.Orphans | SpanReuseDisabledReason.Detached)) == 0;
+        stats.SpanReuseDisabledReasons = disabledReasons;
         Span<NodeHandle> skips = stackalloc NodeHandle[skipRoots.Length + 1 + overlayCount];
         skipRoots.CopyTo(skips);
         int skipCount = skipRoots.Length;
@@ -147,7 +175,8 @@ public static class SceneRecorder
             if (scene.IsLive(ov)) skips[skipCount++] = ov;
         }
 
-        Walk(scene, dl, images, scene.Root, Affine2D.Identity, 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, holdSelfBlurForAnyUserScroll, default, skips[..skipCount], ref stats);
+        Walk(scene, dl, images, scene.Root, Affine2D.Identity, 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack,
+            1f, 1f, false, holdSelfBlurForAnyUserScroll, default, skips[..skipCount], spans, spanFrame, spanReuseOff, spanStoreOn, ref stats);
 
         // Exit orphans: nodes removed from the tree but kept alive for their exit animation. Draw each detached subtree
         // at its frozen parent-world origin, fading/sliding out via its own paint. Depth 0 (lowest key) so the painter
@@ -156,7 +185,8 @@ public static class SceneRecorder
         {
             var o = scene.OrphanAt(i, out float px, out float py);
             if ((scene.Flags(o) & NodeFlags.ConnectedOverlay) != 0) continue;   // an overlay-flagged orphan draws in the top band, not here
-            Walk(scene, dl, images, o, Affine2D.Translation(px, py), 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, holdSelfBlurForAnyUserScroll, default, skipRoots, ref stats);
+            Walk(scene, dl, images, o, Affine2D.Translation(px, py), 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack,
+                1f, 1f, false, holdSelfBlurForAnyUserScroll, default, skipRoots, null, 0, true, false, ref stats);
         }
 
         // E5 drag-ghost top band: walk the ghost subtree at its LIVE parent-world origin (scroll / animated ancestor
@@ -169,7 +199,8 @@ public static class SceneRecorder
             ref NodePaint gp = ref scene.Paint(ghost);
             Walk(scene, dl, images, ghost,
                  Affine2D.Translation(abs.X - gb.X - gp.LocalTransform.Dx, abs.Y - gb.Y - gp.LocalTransform.Dy),
-                 1f, 1 << 16, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, holdSelfBlurForAnyUserScroll, default, default, ref stats);
+                 1f, 1 << 16, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack,
+                 1f, 1f, false, holdSelfBlurForAnyUserScroll, default, default, null, 0, true, false, ref stats);
         }
 
         // Connected-animation overlay band: flying shared-element (Hero) visuals. Each overlay draws in a top band ABOVE
@@ -187,7 +218,8 @@ public static class SceneRecorder
             ref NodePaint op = ref scene.Paint(ov);
             Walk(scene, dl, images, ov,
                  Affine2D.Translation(abs.X - ob.X - op.LocalTransform.Dx, abs.Y - ob.Y - op.LocalTransform.Dy),
-                 1f, (1 << 16) | 1, overlayClip, in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, holdSelfBlurForAnyUserScroll, default, default, ref stats);
+                 1f, (1 << 16) | 1, overlayClip, in focus, in textEdit, scrollThumb, scrollTrack,
+                 1f, 1f, false, holdSelfBlurForAnyUserScroll, default, default, null, 0, true, false, ref stats);
         }
         return stats.ToStats();
     }
@@ -250,7 +282,7 @@ public static class SceneRecorder
         }
         var stats = new RecordAccumulator();
         Walk(scene, dl, images, root, Affine2D.Translation(pax - originDip.X, pay - originDip.Y), 1f, 0, RectF.Infinite,
-             in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, false, default, default, ref stats);
+             in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, false, default, default, null, 0, true, false, ref stats);
         return stats.ToStats();
     }
 
@@ -274,7 +306,8 @@ public static class SceneRecorder
     private static void Walk(SceneStore scene, DrawList dl, ImageCache? images, NodeHandle node, Affine2D parentWorld, float parentOpacity,
                              int depth, RectF clip, in FocusVisualStyle focus, in TextEditStyle textEdit, ColorF scrollThumb, ColorF scrollTrack,
                              float parentScaleX, float parentScaleY, bool parentInMotion, bool parentScrollInMotion, InheritedState inherited,
-                             ReadOnlySpan<NodeHandle> skipRoots, ref RecordAccumulator stats)
+                             ReadOnlySpan<NodeHandle> skipRoots, SpanTable? spans, uint spanFrame, bool spanReuseDisabled, bool spanStoreEnabled,
+                             ref RecordAccumulator stats)
     {
         if (!skipRoots.IsEmpty && ContainsNode(skipRoots, node)) return;   // subtree renders in its own popup window
         NodeFlags flags = scene.Flags(node);
@@ -325,11 +358,18 @@ public static class SceneRecorder
         if (!scrollInMotion && (flags & NodeFlags.Scrollable) != 0 && scene.HasScroll(node))
         {
             ref var scrollState = ref scene.ScrollRef(node);
-            if (scrollState.UserScrollActive)   // only a real user scroll (wheel/fling/drag/band) defers — never a programmatic auto-scroll, its settle, or a relayout
+            var scrollContent = scrollState.ContentNode;
+            if (!scrollContent.IsNull && scene.IsLive(scrollContent)
+                && (scene.Flags(scrollContent) & NodeFlags.TransformDirty) != 0)
             {
-                var scrollContent = scrollState.ContentNode;
-                if (!scrollContent.IsNull && scene.IsLive(scrollContent) && (scene.Flags(scrollContent) & NodeFlags.TransformDirty) != 0)
-                    scrollInMotion = true;
+                // Content translated this frame — descendants must re-record. UserScrollActive still gates blur-hold
+                // (holdBlur below); span reuse is blocked for ANY offset write (wheel, fling, programmatic bring-into-view).
+                scrollInMotion = true;
+            }
+            else if (scrollState.UserScrollActive)
+            {
+                // Offset unchanged but still coasting — keep blur-hold without forcing a full re-record.
+                scrollInMotion = true;
             }
         }
 
@@ -376,6 +416,75 @@ public static class SceneRecorder
         var local = new RectF(0f, 0f, pw, ph);
         var deviceBounds = world.TransformBounds(local);
         bool overlapsClip = deviceBounds.Overlaps(clip);
+
+        ulong spanInputSig = 0;
+        ulong spanMoveSig = 0;
+        int spanByteStart = 0, spanSortStart = 0, spanCommandStart = 0;
+        DrawListOpcodeStats spanOpcodeStart = default;
+        bool spanTracking = spans is not null && spanStoreEnabled;
+        if (spans is not null)
+        {
+            spanInputSig = ComputeSpanInputSig(node, flags, depth, in clip, in world, opacity,
+                parentScaleX, parentScaleY, childScaleX, childScaleY, inMotion, scrollInMotion,
+                inherited, in focus, in textEdit, scrollThumb, scrollTrack);
+            spanMoveSig = ComputeSpanMoveSig(node, flags, depth, in clip, in world, opacity,
+                parentScaleX, parentScaleY, childScaleX, childScaleY,
+                inherited, in focus, in textEdit, scrollThumb, scrollTrack);
+            byte recordDirtyBits = scene.RecordDirtyBits(node);
+            // Span reuse copies a prior frame's recorded subtree byte-for-byte. While a scroll viewport's content
+            // node is translating, the viewport itself stays record-clean — reusing its span would freeze children at
+            // the old offset (the scroll-flicker / clipped-rows regression). scrollInMotion propagates to descendants.
+            bool allowSpanReuse = !spanReuseDisabled && !scrollInMotion;
+            if (allowSpanReuse && recordDirtyBits == 0
+                && spans.TryGet((int)node.Raw.Index, node.Raw.Gen, spanFrame, spanInputSig, out var span)
+                && dl.CanCopyPriorSpan(span.ByteStart, span.ByteLength, span.SortStart, span.SortCount))
+            {
+                int copiedByteStart = dl.BytePosition;
+                int copiedSortStart = dl.SortPosition;
+                var copiedStats = span.OpcodeStats;
+                dl.CopySpanFromPrior(span.ByteStart, span.ByteLength, span.SortStart, span.SortCount,
+                    span.CommandCount, in copiedStats);
+                var currentSpan = span with { ByteStart = copiedByteStart, SortStart = copiedSortStart, World = world };
+                spans.Store((int)node.Raw.Index, node.Raw.Gen, spanFrame, spanInputSig, spanMoveSig, in currentSpan);
+                stats.SpansReused++;
+                stats.SpanBytesCopied += span.ByteLength;
+                return;
+            }
+            if (allowSpanReuse
+                && (recordDirtyBits & SceneStore.RecordDirtyContent) == 0
+                && spans.TryGetTranslated((int)node.Raw.Index, node.Raw.Gen, spanFrame, spanMoveSig, out span))
+            {
+                var priorWorld = span.World;
+                var copiedStats = span.OpcodeStats;
+                int copiedByteStart = dl.BytePosition;
+                int copiedSortStart = dl.SortPosition;
+                if (TryTranslationDelta(in priorWorld, in world, out float dx, out float dy)
+                    && dl.CopySpanFromPriorTranslated(span.ByteStart, span.ByteLength, span.SortStart, span.SortCount,
+                        span.CommandCount, in copiedStats, dx, dy))
+                {
+                    var currentSpan = span with { ByteStart = copiedByteStart, SortStart = copiedSortStart, World = world };
+                    spans.Store((int)node.Raw.Index, node.Raw.Gen, spanFrame, spanInputSig, spanMoveSig, in currentSpan);
+                    if ((flags & NodeFlags.TransformDirty) != 0)
+                    {
+                        var dmgParent = scene.Parent(node);
+                        if (dmgParent.IsNull || (scene.Flags(dmgParent) & NodeFlags.Scrollable) == 0)
+                            stats.AddDamage(deviceBounds);
+                    }
+                    stats.SpansReused++;
+                    stats.SpansRebased++;
+                    stats.SpanBytesCopied += span.ByteLength;
+                    return;
+                }
+            }
+
+            if (spanTracking)
+            {
+                spanByteStart = dl.BytePosition;
+                spanSortStart = dl.SortPosition;
+                spanCommandStart = dl.CommandCount;
+                spanOpcodeStart = dl.OpcodeStats;
+            }
+        }
 
         // Backdrop damage (region-aware acrylic cache): a node whose TRANSFORM moved this frame changes what an acrylic
         // layer would blur, so union its device bounds into the frame damage — EXCEPT a scroll viewport's own content
@@ -428,7 +537,10 @@ public static class SceneRecorder
             float efsx = b.W > 0.01f ? deviceBounds.W / b.W : 1f;
             float efsy = b.H > 0.01f ? deviceBounds.H / b.H : 1f;
             var efc = new CornerRadius4(p.Corners.TopLeft * efsx, p.Corners.TopRight * efsx, p.Corners.BottomRight * efsx, p.Corners.BottomLeft * efsx);
-            dl.PushEdgeFadeLayer(deviceBounds, efc, opacity, (int)edgeFade.Edges,
+            RectF edgeCompositeClip = deviceBounds.Intersect(clip);
+            if (!p.ClipRect.IsInfinite)
+                edgeCompositeClip = edgeCompositeClip.Intersect(world.TransformBounds(p.ClipRect));
+            dl.PushEdgeFadeLayer(deviceBounds, edgeCompositeClip, efc, opacity, (int)edgeFade.Edges,
                 (edgeFade.Edges & EdgeMask.Left) != 0 ? edgeFade.BandLeft * efsx : 0f,
                 (edgeFade.Edges & EdgeMask.Top) != 0 ? edgeFade.BandTop * efsy : 0f,
                 (edgeFade.Edges & EdgeMask.Right) != 0 ? edgeFade.BandRight * efsx : 0f,
@@ -770,12 +882,14 @@ public static class SceneRecorder
             for (var c = scene.FirstChild(node); !c.IsNull; c = scene.NextSibling(c))
             {
                 if ((scene.Flags(c) & NodeFlags.StickyPinned) != 0) { anyPinned = true; continue; }
-                Walk(scene, dl, images, c, childWorld, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack, childScaleX, childScaleY, inMotion, scrollInMotion, childState, skipRoots, ref stats);
+                Walk(scene, dl, images, c, childWorld, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack,
+                    childScaleX, childScaleY, inMotion, scrollInMotion, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
             }
             if (anyPinned)
                 for (var c = scene.FirstChild(node); !c.IsNull; c = scene.NextSibling(c))
                     if ((scene.Flags(c) & NodeFlags.StickyPinned) != 0)
-                        Walk(scene, dl, images, c, childWorld, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack, childScaleX, childScaleY, inMotion, scrollInMotion, childState, skipRoots, ref stats);
+                        Walk(scene, dl, images, c, childWorld, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack,
+                            childScaleX, childScaleY, inMotion, scrollInMotion, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
         }
 
         // Box border chrome paints after descendants. A control border must remain visible over filled child regions
@@ -829,6 +943,141 @@ public static class SceneRecorder
         if (isEdgeFade) dl.PopLayer(deviceBounds, key);
         if (isOpacityGroup) dl.PopLayer(deviceBounds, key);
         if (isBlurGroup) dl.PopLayer(deviceBounds, key);
+
+        if (spanTracking)
+        {
+            var span = new DrawSpan(
+                spanByteStart,
+                dl.BytePosition - spanByteStart,
+                spanSortStart,
+                dl.SortPosition - spanSortStart,
+                dl.CommandCount - spanCommandStart,
+                dl.OpcodeStats.Minus(in spanOpcodeStart),
+                world);
+            spans!.Store((int)node.Raw.Index, node.Raw.Gen, spanFrame, spanInputSig, spanMoveSig, in span);
+            stats.SpansReRecorded++;
+        }
+    }
+
+    private static ulong ComputeSpanInputSig(NodeHandle node, NodeFlags flags, int depth, in RectF clip, in Affine2D world,
+                                             float opacity, float parentScaleX, float parentScaleY, float childScaleX, float childScaleY,
+                                             bool inMotion, bool scrollInMotion, in InheritedState inherited,
+                                             in FocusVisualStyle focus, in TextEditStyle textEdit, ColorF scrollThumb, ColorF scrollTrack)
+    {
+        ulong h = 14695981039346656037UL;
+        Mix(ref h, node.Raw.Gen);
+        Mix(ref h, (uint)flags);
+        Mix(ref h, (uint)depth);
+        MixRect(ref h, in clip);
+        MixAffine(ref h, in world);
+        MixFloat(ref h, opacity);
+        MixFloat(ref h, parentScaleX);
+        MixFloat(ref h, parentScaleY);
+        MixFloat(ref h, childScaleX);
+        MixFloat(ref h, childScaleY);
+        Mix(ref h, inMotion ? 1u : 0u);
+        Mix(ref h, scrollInMotion ? 1u : 0u);
+        MixFloat(ref h, inherited.HoverT);
+        MixFloat(ref h, inherited.PressT);
+        Mix(ref h, (uint)inherited.InteractiveFlags);
+        Mix(ref h, inherited.HasProgress);
+        Mix(ref h, inherited.Disabled);
+        MixColor(ref h, focus.Outer);
+        MixColor(ref h, focus.Inner);
+        MixFloat(ref h, focus.Thickness);
+        MixColor(ref h, textEdit.SelectionFill);
+        MixColor(ref h, textEdit.SelectedText);
+        MixColor(ref h, textEdit.CaretColor);
+        MixColor(ref h, scrollThumb);
+        MixColor(ref h, scrollTrack);
+        return h;
+    }
+
+    private static ulong ComputeSpanMoveSig(NodeHandle node, NodeFlags flags, int depth, in RectF clip, in Affine2D world,
+                                            float opacity, float parentScaleX, float parentScaleY, float childScaleX, float childScaleY,
+                                            in InheritedState inherited,
+                                            in FocusVisualStyle focus, in TextEditStyle textEdit, ColorF scrollThumb, ColorF scrollTrack)
+    {
+        ulong h = 14695981039346656037UL;
+        Mix(ref h, node.Raw.Gen);
+        Mix(ref h, (uint)(flags & ~NodeFlags.TransformDirty));
+        Mix(ref h, (uint)depth);
+        MixRect(ref h, in clip);
+        MixAffineLinear(ref h, in world);
+        MixFloat(ref h, opacity);
+        MixFloat(ref h, parentScaleX);
+        MixFloat(ref h, parentScaleY);
+        MixFloat(ref h, childScaleX);
+        MixFloat(ref h, childScaleY);
+        MixFloat(ref h, inherited.HoverT);
+        MixFloat(ref h, inherited.PressT);
+        Mix(ref h, (uint)inherited.InteractiveFlags);
+        Mix(ref h, inherited.HasProgress);
+        Mix(ref h, inherited.Disabled);
+        MixColor(ref h, focus.Outer);
+        MixColor(ref h, focus.Inner);
+        MixFloat(ref h, focus.Thickness);
+        MixColor(ref h, textEdit.SelectionFill);
+        MixColor(ref h, textEdit.SelectedText);
+        MixColor(ref h, textEdit.CaretColor);
+        MixColor(ref h, scrollThumb);
+        MixColor(ref h, scrollTrack);
+        return h;
+    }
+
+    private static bool TryTranslationDelta(in Affine2D from, in Affine2D to, out float dx, out float dy)
+    {
+        dx = dy = 0f;
+        if (!Nearly(from.M11, to.M11) || !Nearly(from.M12, to.M12)
+            || !Nearly(from.M21, to.M21) || !Nearly(from.M22, to.M22))
+            return false;
+        dx = to.Dx - from.Dx;
+        dy = to.Dy - from.Dy;
+        return true;
+    }
+
+    private static bool Nearly(float a, float b) => MathF.Abs(a - b) <= 0.0001f;
+
+    private static void MixRect(ref ulong h, in RectF r)
+    {
+        MixFloat(ref h, r.X);
+        MixFloat(ref h, r.Y);
+        MixFloat(ref h, r.W);
+        MixFloat(ref h, r.H);
+    }
+
+    private static void MixAffine(ref ulong h, in Affine2D a)
+    {
+        MixFloat(ref h, a.M11);
+        MixFloat(ref h, a.M12);
+        MixFloat(ref h, a.M21);
+        MixFloat(ref h, a.M22);
+        MixFloat(ref h, a.Dx);
+        MixFloat(ref h, a.Dy);
+    }
+
+    private static void MixAffineLinear(ref ulong h, in Affine2D a)
+    {
+        MixFloat(ref h, a.M11);
+        MixFloat(ref h, a.M12);
+        MixFloat(ref h, a.M21);
+        MixFloat(ref h, a.M22);
+    }
+
+    private static void MixColor(ref ulong h, ColorF c)
+    {
+        MixFloat(ref h, c.R);
+        MixFloat(ref h, c.G);
+        MixFloat(ref h, c.B);
+        MixFloat(ref h, c.A);
+    }
+
+    private static void MixFloat(ref ulong h, float v) => Mix(ref h, BitConverter.SingleToUInt32Bits(v));
+
+    private static void Mix(ref ulong h, uint v)
+    {
+        h ^= v;
+        h *= 1099511628211UL;
     }
 
     /// <summary>Resolve the surface fill/border for this frame: eased hover/press if an interaction row exists,

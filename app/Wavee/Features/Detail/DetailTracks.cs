@@ -24,8 +24,6 @@ namespace Wavee;
 // Rows are PLAIN/recyclable (no binds, no Components) → a steady scroll is zero-alloc.
 sealed class TrackList : Component
 {
-    static readonly Func<bool> AlwaysStaggerFirstReadyMount = () => true;
-
     // Row geometry + the cell builders themselves now live in the shared TrackRow (Components/TrackRow.cs) so the detail
     // list, the library pane, artist "Popular" and search all render ONE identical cell. These re-export the shared
     // constants by name so the chrome/header code below is unchanged (the header must stay aligned to the row columns).
@@ -41,6 +39,7 @@ sealed class TrackList : Component
     const float VerticalHeaderFallbackHeight = 260f;
     const float VerticalPillTopInset = 40f;
     const float VerticalScrollBucket = 2f;
+    const int TrackOverscanItems = 16;
 
     // The detail model is a Loadable: the HEADER bits (HasVideo, columns) read reactively from its current value
     // (preview → full), and the TRACK ROWS stream in via Skel.Region — which derives the shimmer from the REAL Row
@@ -56,7 +55,6 @@ sealed class TrackList : Component
     readonly bool _embedded;                                   // true when hosted inside a compact pane (Library master-detail): the
                                                                // SAME virtualized list + cell, but no album trailing (About/Fans/More-by)
                                                                // so the rows ARE the scroller — the tier system still drops columns to fit.
-    readonly Func<bool> _staggerFirstReadyMount;                // live read from DetailShell; a frozen ctor bool would be stale on route reuse
     readonly bool _verticalHeader;                              // narrow detail mode: hero + chrome are measured rows in this list's scroller
     readonly Signal<bool>? _verticalHeaderPinned;                // flipped from scroll offset so DetailShell can show the shy pill
     readonly Signal<float> _verticalScrollOffset = new(0f);
@@ -87,12 +85,10 @@ sealed class TrackList : Component
     readonly Dictionary<int, (float from, float delayMs)> _fade = new(); // added display index → opacity ease-in + stagger
     Track[]? _lastDisplayed;                                   // displayed (view-ordered) snapshot — the keyed-diff baseline
     LibraryBridge? _lib;                                       // Mutations bridge → per-row heart saved-state + toggle (null when no Mutations source)
-    bool _listRealizedOnce;                                    // true after the first Ready-model list mount — tier/density/filter remounts skip cold stagger
 
-    public TrackList(Signal<Route> route, Loadable<DetailModel> full, PlaybackBridge? bridge, DetailHandlers h, bool showToolbar = true, bool embedded = false, Func<bool>? staggerFirstReadyMount = null, bool verticalHeader = false, Signal<bool>? verticalHeaderPinned = null)
+    public TrackList(Signal<Route> route, Loadable<DetailModel> full, PlaybackBridge? bridge, DetailHandlers h, bool showToolbar = true, bool embedded = false, bool verticalHeader = false, Signal<bool>? verticalHeaderPinned = null)
     {
         _route = route; _full = full; _bridge = bridge; _h = h; _showToolbar = showToolbar; _embedded = embedded;
-        _staggerFirstReadyMount = staggerFirstReadyMount ?? AlwaysStaggerFirstReadyMount;
         _verticalHeader = verticalHeader && !embedded;
         _verticalHeaderPinned = verticalHeaderPinned;
     }
@@ -227,7 +223,6 @@ sealed class TrackList : Component
             _viewKey = (new((SortColumn)(-1), false), "\0", TrackFilterFlags.None);
             _tracksByTier.Clear();
             _selection.ClearSelection();
-            _listRealizedOnce = false;   // navigation cold mount — skeleton masks the staggered first realize
             // §4.6 — navigation is not an edit: never choreograph across a context swap.
             _lastDisplayed = null;
             _flip.Clear(); _fade.Clear();
@@ -284,8 +279,9 @@ sealed class TrackList : Component
         }
         // Curated re-cut (reset epoch) remounts replay row mount-opacity; tier/density/filter remounts do not.
         bool narrateRemount = _resetEpoch.Peek() != resetEpochBefore;
-        bool staggerCold = _staggerFirstReadyMount() && !_listRealizedOnce;
-        if (_full.IsReady) _listRealizedOnce = true;
+        // The bound slots are cheap and persistent. Partial cold materialization leaves the track window visibly
+        // catching up during fast scroll, especially when this list is embedded in the trailing page scroller.
+        bool staggerCold = false;
         // Task C flush: when the rail layout-lock clears, apply the SETTLED tier once from the last measured width (the
         // intermediate reflow widths were skipped in OnBoundsChanged while locked, so the list Key never churned/remounted
         // mid-reflow). Keyed on railLocked → fires on the false-edge; the write converges (dep is the bool).
@@ -323,14 +319,14 @@ sealed class TrackList : Component
                 selection: _selection,                // external → selection survives the tier remount
                 isItemInvokedEnabled: true,
                 itemInvoked: i => PlayRow(i),   // DoubleTap / Enter → same as a row click (visible-order play + now-playing toggle)
+                overscan: TrackOverscanItems,
                 grow: _cfg.HasTrailing ? 0f : 1f,
                 // Alpha-mask edge fade: the page floats over a gradient wash (no opaque plate), so the surface-colour
                 // EdgeCues fade self-skips — this feathers the rows' own alpha at the overflowing top/bottom instead.
                 // Only when the ItemsView is itself the scroller (playlist/liked); the album path fades its outer scroll.
                 autoEdgeFade: !_cfg.HasTrailing,
-                // Cold-mount stagger: only the first Ready mount per detail context (skeleton-masked navigation).
-                // Tier/density/filter remounts replace a live list — realize their full window in the mount frame so
-                // resize breakpoint crosses stay visually atomic (detail-resize-flicker fix).
+                // Realize the full oversized row window immediately. Bound slots are persistent; exposing partial
+                // materialization during scroll reads as cut-off rows under the fixed chrome.
                 staggerColdRealize: staggerCold,
                 // Scroll-position restoration keyed by the detail content (route): navigate away from a 10k-track
                 // playlist and back and the viewport seeds the saved row BEFORE its first realize — no scroll-to-top
@@ -349,7 +345,7 @@ sealed class TrackList : Component
 
         // The tracks stream in via the engine's skeleton boundary: while the model is Pending it shows shimmer rows the
         // engine DERIVES from the real Row(EmptyTrack) template (ONE definition — no hand-written shimmer, no drift); on
-        // Ready it reveals the real virtualized list with a staggered row reveal.
+        // Ready it reveals the real virtualized list.
         // SkelReveal.None: the ItemsView owns its entrance (per-row ItemCollectionTransition adds); the engine lingers
         // the shimmer across that entrance so the gray rows cross-dissolve INTO the real rows at the same positions —
         // no shimmer→empty→rows gap, and no exit-timing to hand-tune here.
@@ -424,6 +420,7 @@ sealed class TrackList : Component
             itemInvoked: i => { int d = DisplayOf(i); if ((uint)d < (uint)View().Length) PlayRow(d); },
             itemText: i => { int d = DisplayOf(i); return d >= 0 ? BoundTrackAt(d).Title : ""; },
             isItemEnabled: i => { int d = DisplayOf(i); return d >= 0 && d < View().Length; },
+            overscan: TrackOverscanItems,
             grow: _cfg.HasTrailing ? 0f : 1f,
             autoEdgeFade: !_cfg.HasTrailing,
             staggerColdRealize: staggerCold,

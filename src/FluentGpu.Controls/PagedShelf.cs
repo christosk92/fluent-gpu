@@ -275,13 +275,14 @@ internal sealed class PagedShelfCore : Component
         // ItemsView is an Embed.Comp → its template closure FREEZES at first mount (when width was 0 ⇒ cardW=min). Read
         // the layout's LIVE fitted width at realize time (the engine sets it via SetViewport every arrange) so the card
         // always matches its cell — otherwise cards stay min-width inside full-width cells (huge gaps + short cards).
+        int shelfOverscan = Math.Max(_overscan, perPageItems);
         Element items = ItemsView.Create(
             _count,
             i => _cardAt(i, layout.CardW),
             RepeatLayout.Custom(layout, horizontal: true),
             selectionMode: ItemsSelectionMode.None,
             controller: _ctl,
-            overscan: _overscan,
+            overscan: shelfOverscan,
             keyOf: _keyOf,
             grow: 1f,
             suppressScrollBar: true,   // paged: navigate by the chevron/pips pager, not a draggable scrollbar

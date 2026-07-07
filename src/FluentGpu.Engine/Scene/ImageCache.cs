@@ -195,6 +195,7 @@ public sealed class ImageCache
     public long UsedBytes { get; private set; }
     public int Count => _byId.Count;
     public int ReadyCount { get { int n = 0; foreach (var e in _byId.Values) if (e.State == ImageState.Ready) n++; return n; } }
+    public int ContentEpoch { get; private set; }
     /// <summary>Entries still decoding (State==Pending) — O(1) maintained counter (was a per-call scan, wake-04).</summary>
     public int PendingCount => _pendingCount;
 
@@ -376,6 +377,7 @@ public sealed class ImageCache
         e.TextureMs = float.NaN;
         _pendingCount++;
         _totalRequested++;
+        ContentEpoch++;
         Diag.Set("media", "requested", _totalRequested);
         if (!_decoder.Begin(id, e.Key.Source, e.Key.W, e.Key.H, priority))
         {
@@ -416,6 +418,7 @@ public sealed class ImageCache
             e.Failure = r.Result == ImageUploadResult.ResourceExhausted ? ImageFailureKind.GpuResourceExhausted : ImageFailureKind.GpuUpload;
             if (wasActiveDeadline) RecomputeCrossfadeDeadline();
             _totalFailed++;
+            ContentEpoch++;
             Diag.Set("media", "failed", _totalFailed);
             ImageStatusChanged?.Invoke(r.Id, e.State, e.Failure, e.Attempts);
         }
@@ -472,6 +475,7 @@ public sealed class ImageCache
         e.Bytes = ok ? (long)w * h * 4 : 0;
         UsedBytes += e.Bytes;
         _pumpCompleted++;
+        ContentEpoch++;
 
         if (ok) _totalReady++; else _totalFailed++;
         if (attempts > 1) _totalRetried++;

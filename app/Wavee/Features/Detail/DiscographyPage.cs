@@ -120,6 +120,7 @@ sealed class DiscographyPage : Component
         var scroll = ScrollView(content) with
         {
             Grow = 1f, ScrollKey = route.Name,
+            AutoEdgeFade = true,
             OnScrollGeometryChanged = (g => (long)(g.OffsetY / 24f), g => pageScroll.Value = g.OffsetY),
         };
         return Ctx.Provide(LazyScroll.Slot, (IReadSignal<float>)pageScroll, scroll);

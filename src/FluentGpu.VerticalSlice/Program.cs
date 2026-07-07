@@ -4893,6 +4893,8 @@ static class Slice
             bool atTop = v0.FirstRow == 0 && v0.LastRow == 4 && Near(v0.TopPad, 0f, 0.5f) && Near(Extent(v0, 0f), 20000f, 0.5f);
             var v1 = LazyGridMath.Compute(1000f, vh, rowH, total, over, -1, 0f);           // scrolled to row 5
             bool mid = v1.FirstRow == 3 && v1.LastRow == 9 && Near(v1.TopPad, 600f, 0.5f) && Near(Extent(v1, 0f), 20000f, 0.5f);
+            var vAhead = LazyGridMath.Compute(1000f, vh, rowH, total, 4, -1, 0f);           // media grids prefetch farther ahead/behind
+            bool largerOverscan = vAhead.FirstRow == 1 && vAhead.LastRow == 11 && Near(Extent(vAhead, 0f), 20000f, 0.5f);
             var v2 = LazyGridMath.Compute(1000f, vh, rowH, total, over, 5, 300f);          // drawer inside the window
             bool drawerIn = v2.DrawerVisible && Near(Extent(v2, 300f), 20300f, 0.5f);
             var v3 = LazyGridMath.Compute(4000f, vh, rowH, total, over, 5, 300f);          // drawer scrolled ABOVE the window
@@ -4904,8 +4906,8 @@ static class Slice
             bool bring = Near(shortTarget, 1072f, 0.5f) && Near(tallTarget, shortTarget, 0.01f);
 
             Check("lazy-grid: window covers the viewport and spacers reserve the exact extent (incl. inline drawer in/above window)",
-                atTop && mid && drawerIn && drawerAbove && atEnd && bring,
-                $"top=({v0.FirstRow},{v0.LastRow},pad{v0.TopPad:0}) mid=({v1.FirstRow},{v1.LastRow}) drawerAboveTopPad={v3.TopPad:0} endLast={vEnd.LastRow} bring={shortTarget:0}/{tallTarget:0}");
+                atTop && mid && largerOverscan && drawerIn && drawerAbove && atEnd && bring,
+                $"top=({v0.FirstRow},{v0.LastRow},pad{v0.TopPad:0}) mid=({v1.FirstRow},{v1.LastRow}) ahead=({vAhead.FirstRow},{vAhead.LastRow}) drawerAboveTopPad={v3.TopPad:0} endLast={vEnd.LastRow} bring={shortTarget:0}/{tallTarget:0}");
         }
 
         // 23t — SizeMode.Relayout restores the DECLARED LayoutInput at settle (auto height stays auto).
@@ -5387,6 +5389,34 @@ static class Slice
         bool parentOk = Near(parent.Transform.Dx, 20) && Near(parent.Transform.Dy, 30) && Near(parent.Opacity, 0.5f);
         bool childOk = Near(child.Opacity, 0.25f) && child.Transform.Dx >= 20f;   // opacity composes 0.5*0.5; inherits parent offset
         Check("30. compositor: transform + cumulative opacity", parentOk && childOk, $"pOffset=({parent.Transform.Dx:0.#},{parent.Transform.Dy:0.#}) childOpacity={child.Opacity:0.00}");
+
+        var edgeScene = new SceneStore();
+        new TreeReconciler(edgeScene, strings).ReconcileRoot(new BoxEl
+        {
+            Width = 200, Height = 80, ClipToBounds = true,
+            Children =
+            [
+                new BoxEl
+                {
+                    Width = 200, Height = 160, Fill = ColorF.FromRgba(20, 20, 20),
+                    EdgeFade = new EdgeFadeSpec(EdgeMask.Bottom, 32f),
+                    Children = [new BoxEl { Width = 200, Height = 160, Fill = ColorF.FromRgba(255, 255, 255) }],
+                },
+            ],
+        }, null);
+        new FlexLayout(edgeScene, new HeadlessFontSystem(strings)).Run(edgeScene.Root);
+        var edgeDl = new DrawList();
+        SceneRecorder.Record(edgeScene, edgeDl);
+        var edgeDev = new HeadlessGpuDevice();
+        edgeDev.SubmitDrawList(edgeDl.Bytes, edgeDl.SortKeys, new FrameInfo(new Size2(400, 300), 1f, ColorF.Transparent));
+        PushLayerCmd edgeLayer = default;
+        foreach (var l in edgeDev.LastLayers) if (l.Kind == (int)LayerKind.EdgeFade) { edgeLayer = l; break; }
+        bool edgeClipOk = edgeLayer.Kind == (int)LayerKind.EdgeFade
+            && Near(edgeLayer.DeviceRect.H, 160f)
+            && Near(edgeLayer.CompositeClip.H, 80f)
+            && Near(edgeLayer.CompositeClip.W, 200f);
+        Check("30a. edge-fade layer carries effective composite clip",
+            edgeClipOk, $"deviceH={edgeLayer.DeviceRect.H:0.#} clip=({edgeLayer.CompositeClip.W:0.#}x{edgeLayer.CompositeClip.H:0.#})");
     }
 
     // Phase 2 — the generic runtime: keyframes, composite (add), springs, and scroll-driven timelines.
@@ -20424,6 +20454,97 @@ static class Slice
         return best;
     }
 
+    static void CleanSpanReuseChecks()
+    {
+        var scene = new SceneStore();
+        var root = scene.CreateNode(1);
+        var a = scene.CreateNode(1);
+        var b = scene.CreateNode(1);
+        scene.Root = root;
+        scene.AppendChild(root, a);
+        scene.AppendChild(root, b);
+
+        ref var rb = ref scene.Bounds(root);
+        rb = new RectF(0, 0, 120, 40);
+        ref var ab = ref scene.Bounds(a);
+        ab = new RectF(0, 0, 50, 30);
+        ref var bb = ref scene.Bounds(b);
+        bb = new RectF(60, 0, 50, 30);
+
+        ref var ap = ref scene.Paint(a);
+        ap = NodePaint.Default;
+        ap.VisualKind = VisualKind.Box;
+        ap.Fill = ColorF.FromRgba(0x20, 0x80, 0xE0);
+        ref var bp = ref scene.Paint(b);
+        bp = NodePaint.Default;
+        bp.VisualKind = VisualKind.Box;
+        bp.Fill = ColorF.FromRgba(0xE0, 0x80, 0x20);
+
+        var dl = new DrawList();
+        var spans = new SpanTable();
+        var first = SceneRecorder.Record(scene, dl, spans: spans);
+        scene.ClearRecordDirty();
+
+        ap.Fill = ColorF.FromRgba(0x40, 0xC0, 0x70);
+        scene.Mark(a, NodeFlags.PaintDirty);
+        var dirty = SceneRecorder.Record(scene, dl, spans: spans);
+        bool dirtyBranch = dirty.SpanReuseDisabledReasons == SpanReuseDisabledReason.None
+            && dirty.SpansReused >= 1
+            && dirty.SpansReRecorded >= 2
+            && dirty.SpanBytesCopied > 0;
+        scene.ClearRecordDirty();
+
+        byte[] dirtyBytes = dl.Bytes.ToArray();
+        ulong[] dirtySort = dl.SortKeys.ToArray();
+        int dirtyCommands = dl.CommandCount;
+        var steady = SceneRecorder.Record(scene, dl, spans: spans);
+        bool steadyCopy = steady.SpanReuseDisabledReasons == SpanReuseDisabledReason.None
+            && steady.SpansReused == 1
+            && steady.SpansReRecorded == 0
+            && steady.SpanBytesCopied == dirtyBytes.Length
+            && dl.CommandCount == dirtyCommands
+            && dl.Bytes.SequenceEqual(dirtyBytes)
+            && dl.SortKeys.SequenceEqual(dirtySort);
+
+        float steadyFirstDx = FirstFillDx(dl.Bytes);
+        ref var rp = ref scene.Paint(root);
+        rp.LocalTransform = Affine2D.Translation(25f, 7f);
+        scene.Mark(root, NodeFlags.TransformDirty);
+        var moved = SceneRecorder.Record(scene, dl, spans: spans);
+        float movedFirstDx = FirstFillDx(dl.Bytes);
+        bool transformRebase = moved.SpanReuseDisabledReasons == SpanReuseDisabledReason.None
+            && moved.SpansRebased == 1
+            && moved.SpansReused == 1
+            && moved.SpansReRecorded == 0
+            && moved.SpanBytesCopied == dirtyBytes.Length
+            && dl.CommandCount == dirtyCommands
+            && Near(movedFirstDx, steadyFirstDx + 25f);
+
+        Check("P6.clean-span first record populates spans under the normal recorder path",
+            (first.SpanReuseDisabledReasons & SpanReuseDisabledReason.FirstRecord) != 0 && first.SpansReRecorded >= 3,
+            $"firstReason={first.SpanReuseDisabledReasons} recorded={first.SpansReRecorded}");
+        Check("P6.clean-span dirty child re-records ancestors while reusing a clean sibling",
+            dirtyBranch, $"reused={dirty.SpansReused} recorded={dirty.SpansReRecorded} copied={dirty.SpanBytesCopied}");
+        Check("P6.clean-span steady frame copies the root span byte-identically",
+            steadyCopy, $"reused={steady.SpansReused} recorded={steady.SpansReRecorded} copied={steady.SpanBytesCopied}/{dirtyBytes.Length}");
+        Check("P6.v2 transform-only dirty root reuses by translating the prior span, not by re-recording",
+            transformRebase, $"reused={moved.SpansReused} rebased={moved.SpansRebased} recorded={moved.SpansReRecorded} copied={moved.SpanBytesCopied}/{dirtyBytes.Length} firstDx={steadyFirstDx:0.##}->{movedFirstDx:0.##}");
+
+        static float FirstFillDx(ReadOnlySpan<byte> bytes)
+        {
+            int pos = 0;
+            while (pos + sizeof(int) <= bytes.Length)
+            {
+                var op = (DrawOp)MemoryMarshal.Read<int>(bytes.Slice(pos, sizeof(int)));
+                pos += sizeof(int);
+                if (op == DrawOp.FillRoundRect)
+                    return MemoryMarshal.Read<FillRoundRectCmd>(bytes.Slice(pos, Unsafe.SizeOf<FillRoundRectCmd>())).Transform.Dx;
+                pos += DrawPayloadSize(op);
+            }
+            return float.NaN;
+        }
+    }
+
     static int Main()
     {
         // FG_PROBE=ranged-tooltip — isolated repro driver for the live "ranged slider hover → tooltip → freeze"
@@ -20511,6 +20632,7 @@ static class Slice
         WrapGrowChecks(strings);
         ConstrainedWrapChecks(strings);
         CompositorChecks(strings);
+        CleanSpanReuseChecks();
         AnimEngineChecks(strings);
         AnimHookChecks(strings);
         MarqueeChecks(strings);

@@ -408,6 +408,11 @@ sealed class DiscoGrid : Component
         Enter: new EnterExit(Dy: -8f, Opacity: 0f, Active: true),
         Exit: new EnterExit(Dy: -8f, Opacity: 0f, Active: true),
         ExitDynamics: TransitionDynamics.Spring(0.24f, 1f));
+    static readonly LayoutTransition CardMaterialize = new(
+        TransitionChannels.Opacity,
+        TransitionDynamics.Tween(110f, Easing.SmoothOut),
+        Enter: new EnterExit(Opacity: 0f, Active: true),
+        Exit: new EnterExit(Opacity: 0f, Active: true));
 
     public DiscoGrid(VirtualCollection<Album> vc, Services svc, Action<string, string?> go, Action<string> play, int cap, int initialIndex = 0, ColorF? accent = null)
     { _vc = vc; _svc = svc; _go = go; _play = play; _cap = cap; _initialIndex = initialIndex; _accent = accent ?? Tok.AccentDefault; }
@@ -417,7 +422,7 @@ sealed class DiscoGrid : Component
         count: () => { _ = _vc.Version.Value; int t = _vc.CountOr0; return _cap > 0 ? Math.Min(_cap, t) : t; },
         cell: Cell,
         ensureRange: (f, l) => _vc.EnsureRange(f, l - 1),
-        minColWidth: MinCol, gap: Gap, rowExtra: CardChrome + RowGap, overscanRows: 2,
+        minColWidth: MinCol, gap: Gap, rowExtra: CardChrome + RowGap, overscanRows: 4,
         expanded: _expanded,
         drawer: DrawerFor,
         drawerHeight: DrawerHeight,
@@ -436,7 +441,7 @@ sealed class DiscoGrid : Component
         if (card is BoxEl b)
         {
             // Force ONE height (square cover + chrome) so every card is uniform → the drawer's hug spacing is exact.
-            b = b with { Height = cardW + CardChrome };
+            b = b with { Key = "album:" + al.Uri, Height = cardW + CardChrome, Animate = Motion.ReducedMotion ? null : CardMaterialize };
             // Highlight the expanded card (accent border + brighter fill) so it's unmistakably the drawer's owner —
             // pairs with the connector bar at the drawer's top edge.
             if (_expanded.Peek() == idx)
@@ -450,7 +455,9 @@ sealed class DiscoGrid : Component
     // itself via AspectRatio — no hardcoded width, so it tracks the real card exactly. The bars stretch to the cell width.
     static Element Placeholder(float cardW) => new BoxEl
     {
+        Key = "album:placeholder",
         Direction = 1, Gap = WaveeSpace.S, Height = cardW + CardChrome,
+        Animate = Motion.ReducedMotion ? null : CardMaterialize,
         Padding = new Edges4(WaveeSpace.S, WaveeSpace.S, WaveeSpace.S, WaveeSpace.M),
         Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardSecondary,
         BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,

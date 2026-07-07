@@ -13,9 +13,11 @@
     <NoWarn>$(NoWarn);CA1416;NU1701</NoWarn>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <!-- The app version (Settings → About reads InformationalVersion via assembly metadata). -->
-    <Version>0.1.0</Version>
-    <InformationalVersion>0.1.0-dev</InformationalVersion>
+    <Version>0.1.1</Version>
+    <InformationalVersion>0.1.1-dev</InformationalVersion>
   </PropertyGroup>
+
+  <Import Project="Wavee.Publish.props" />
 
   <!-- Composition root: the Windows backend (D3D12 / Win32 / DirectWrite / WIC) wired into the
        portable engine + control kit, plus the framework-neutral Wavee.Core backend seam. -->

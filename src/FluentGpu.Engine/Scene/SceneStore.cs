@@ -74,6 +74,9 @@ public sealed class SceneStore : ISceneBackend
     private int _dynamicTextCount;
     private InteractionInfo[] _interaction;
     private NodeFlags[] _flags;
+    private byte[] _recordDirty;
+    private int[] _recordDirtyWrote;
+    private int _recordDirtyWroteCount;
     private Action?[] _click;         // managed edge payload (GC ref at the edge only)
     private Action<RectF>?[] _boundsChanged;   // post-layout arranged-bounds callback
     private RectF[] _boundsDelivered;   // last arranged rect actually delivered to _boundsChanged: the edge baseline for
@@ -186,6 +189,8 @@ public sealed class SceneStore : ISceneBackend
         _dynamicText = new DynamicTextKind[capacity];
         _interaction = new InteractionInfo[capacity];
         _flags = new NodeFlags[capacity];
+        _recordDirty = new byte[capacity];
+        _recordDirtyWrote = new int[capacity];
         _click = new Action?[capacity];
         _boundsChanged = new Action<RectF>?[capacity];
         _boundsDelivered = new RectF[capacity];
@@ -233,6 +238,8 @@ public sealed class SceneStore : ISceneBackend
         ClearDynamicText(idx);
         _interaction[idx] = default;
         _flags[idx] = NodeFlags.Visible | NodeFlags.HitTestVisible | NodeFlags.NewThisFrame;
+        _recordDirty[idx] = 0;
+        MarkRecordDirty(idx);
         _click[idx] = null;
         _boundsChanged[idx] = null;
         _boundsDelivered[idx] = default;
@@ -333,6 +340,7 @@ public sealed class SceneStore : ISceneBackend
         if (DragGhost == node) DragGhost = NodeHandle.Null;   // a freed ghost must not linger in the recorder's top band
         if ((flags & NodeFlags.ConnectedOverlay) != 0) RemoveOverlay(node);   // a freed overlay must not linger in the band
         OnFreeIndex?.Invoke(idx);   // symmetric teardown of INDEX-keyed external side-tables (AnimEngine transitions / ScrollIntegrator timers)
+        _recordDirty[idx] = 0;
         _gen[idx]++;
         if (_gen[idx] == 0) _gen[idx] = 1;
         _nextFree[idx] = _freeHead;
@@ -351,6 +359,7 @@ public sealed class SceneStore : ISceneBackend
         else _firstChild[p] = c;
         _lastChild[p] = c;
         _childCount[p]++;
+        MarkRecordDirty(c);
     }
 
     /// <summary>Unlink a child from its parent without freeing it (used by keyed reconcile to reorder).</summary>
@@ -363,6 +372,7 @@ public sealed class SceneStore : ISceneBackend
     {
         int p = _parent[c];
         if (p == 0) return;
+        MarkRecordDirty(c);
         if (_prevSib[c] != 0) _nextSib[_prevSib[c]] = _nextSib[c]; else _firstChild[p] = _nextSib[c];
         if (_nextSib[c] != 0) _prevSib[_nextSib[c]] = _prevSib[c]; else _lastChild[p] = _prevSib[c];
         _childCount[p]--;
@@ -531,6 +541,7 @@ public sealed class SceneStore : ISceneBackend
         int idx = (int)h.Raw.Index;
         _flags[idx] |= NodeFlags.SparsePaint;
         _brushAnims.GetOrAdd(idx) = ba;
+        MarkRecordDirty(idx);
     }
     public bool TryGetBrushAnim(NodeHandle h, out BrushAnim ba) => _brushAnims.TryGet((int)h.Raw.Index, out ba);
 
@@ -541,7 +552,11 @@ public sealed class SceneStore : ISceneBackend
     public void MarkAllPaintDirty()
     {
         for (int i = 1; i < _high; i++)
-            if (_gen[i] != 0) _flags[i] |= NodeFlags.PaintDirty;
+            if (_gen[i] != 0)
+            {
+                _flags[i] |= NodeFlags.PaintDirty;
+                MarkRecordDirty(i);
+            }
     }
 
     /// <summary>Set the brush cross-fade progress, driven by the unified engine's <c>AnimChannel.BrushFade</c> track
@@ -553,6 +568,7 @@ public sealed class SceneStore : ISceneBackend
         if (_gen[idx] == 0) { _brushAnims.Remove(idx); return; }
         ba.T = t < 0f ? 0f : (t > 1f ? 1f : t);
         _flags[idx] |= NodeFlags.PaintDirty;
+        MarkRecordDirty(idx);
         if (ba.T >= 1f) _brushAnims.Remove(idx);
         else _brushAnims.GetOrAdd(idx) = ba;
     }
@@ -574,6 +590,7 @@ public sealed class SceneStore : ISceneBackend
         _textEdits.Remove(idx);
         _textEditSelRects.Remove(idx);
         _textEditUnderlineRects.Remove(idx);
+        MarkRecordDirty(idx);
     }
 
     /// <summary>Any editor currently focused with a blink-visible caret (cheap host gate; O(editors), usually 0–1).</summary>
@@ -598,6 +615,7 @@ public sealed class SceneStore : ISceneBackend
         int idx = (int)node.Raw.Index;
         StoreRects(_textEditSelRects, idx, selection);
         StoreRects(_textEditUnderlineRects, idx, compUnderlines);
+        MarkRecordDirty(idx);
     }
 
     /// <summary>The node's published selection-highlight rects (empty span when no selection).</summary>
@@ -631,6 +649,7 @@ public sealed class SceneStore : ISceneBackend
         int idx = (int)h.Raw.Index;
         if (w is null) _glyphWipes.Remove(idx);
         else _glyphWipes.GetOrAdd(idx) = w.Value;
+        MarkRecordDirty(idx);
     }
     public bool TryGetGlyphWipe(NodeHandle h, out GlyphWipe w) => _glyphWipes.TryGet((int)h.Raw.Index, out w);
 
@@ -648,7 +667,11 @@ public sealed class SceneStore : ISceneBackend
     /// <summary>The dispatcher-owned read-only selection range on a selectable text node (UTF-16 [start, end) of the
     /// node's paint text). Mirrors what the published selection rects show; consumers (Ctrl+C copy) read it back.</summary>
     public void SetTextSelection(NodeHandle node, int start, int end)
-        => _textSelection[(int)node.Raw.Index] = (start, end);
+    {
+        int idx = (int)node.Raw.Index;
+        _textSelection[idx] = (start, end);
+        MarkRecordDirty(idx);
+    }
 
     public bool TryGetTextSelection(NodeHandle h, out int start, out int end)
     {
@@ -657,7 +680,12 @@ public sealed class SceneStore : ISceneBackend
         return false;
     }
 
-    public void ClearTextSelection(NodeHandle h) => _textSelection.Remove((int)h.Raw.Index);
+    public void ClearTextSelection(NodeHandle h)
+    {
+        int idx = (int)h.Raw.Index;
+        _textSelection.Remove(idx);
+        MarkRecordDirty(idx);
+    }
 
     /// <summary>Per-node selection-highlight override (api-04, WinUI TextBlock.SelectionHighlightColor —
     /// TextBlock.cpp:266/330). A==0 clears back to the host theme brush (TextEditStyle.SelectionFill — the system
@@ -667,6 +695,7 @@ public sealed class SceneStore : ISceneBackend
         int idx = (int)node.Raw.Index;
         if (color.A <= 0f) _selectionHighlight.Remove(idx);
         else _selectionHighlight.GetOrAdd(idx) = color;
+        MarkRecordDirty(idx);
     }
 
     public bool TryGetSelectionHighlight(NodeHandle h, out ColorF color)
@@ -738,6 +767,7 @@ public sealed class SceneStore : ISceneBackend
         else if (old != DynamicTextKind.None && kind == DynamicTextKind.None) _dynamicTextCount--;
         _dynamicText[idx] = kind;
         DynamicTextEpoch++;
+        MarkRecordDirty(idx);
     }
 
     public void UpdateDynamicText(Func<DynamicTextKind, StringId> resolve)
@@ -751,6 +781,7 @@ public sealed class SceneStore : ISceneBackend
             if (next == _paint[i].Text) continue;
             if (Strings is { } st) { st.AddRef(next); st.Release(_paint[i].Text); }   // per-frame ids (FPS/ms) reclaim instead of accreting
             _paint[i].Text = next;
+            MarkRecordDirty(i);
         }
     }
 
@@ -763,6 +794,62 @@ public sealed class SceneStore : ISceneBackend
 
     // Arena-backed dirty worklist (layout.md §4.4): the nodes marked LayoutDirty this frame, so scoped relayout is
     // O(dirty) — the host walks each up to its layout boundary and re-solves just that subtree.
+    // Record-dirty is the recorder clean-span invalidation bit. It up-propagates because a parent span covers the
+    // parent's whole emitted command range, including descendants.
+    public const byte RecordDirtyTransform = 1;
+    public const byte RecordDirtyContent = 2;
+
+    public bool AnyRecordDirty => _recordDirtyWroteCount > 0;
+
+    public bool IsRecordDirty(NodeHandle h)
+    {
+        uint raw = h.Raw.Index;
+        return raw > 0 && raw < (uint)_high && _gen[raw] == h.Raw.Gen && _recordDirty[raw] != 0;
+    }
+
+    public byte RecordDirtyBits(NodeHandle h)
+    {
+        uint raw = h.Raw.Index;
+        return raw > 0 && raw < (uint)_high && _gen[raw] == h.Raw.Gen ? _recordDirty[raw] : (byte)0;
+    }
+
+    public bool IsRecordContentDirty(NodeHandle h)
+        => (RecordDirtyBits(h) & RecordDirtyContent) != 0;
+
+    public void ClearRecordDirty()
+    {
+        for (int i = 0; i < _recordDirtyWroteCount; i++)
+        {
+            int idx = _recordDirtyWrote[i];
+            if ((uint)idx < (uint)_recordDirty.Length) _recordDirty[idx] = 0;
+            _recordDirtyWrote[i] = 0;
+        }
+        _recordDirtyWroteCount = 0;
+    }
+
+    private void MarkRecordDirty(int idx) => MarkRecordDirty(idx, RecordDirtyContent);
+
+    private void MarkRecordDirty(int idx, byte bits)
+    {
+        if ((uint)idx >= (uint)_high || _gen[idx] == 0 || bits == 0) return;
+        for (int n = idx; n != 0; n = _parent[n])
+        {
+            byte old = _recordDirty[n];
+            byte nextBits = (byte)(old | bits);
+            if (nextBits == old) break;
+            _recordDirty[n] = nextBits;
+            if (old == 0)
+            {
+                if (_recordDirtyWroteCount == _recordDirtyWrote.Length)
+                {
+                    int next = Math.Max(_recordDirtyWrote.Length * 2, _gen.Length);
+                    Array.Resize(ref _recordDirtyWrote, next);
+                }
+                _recordDirtyWrote[_recordDirtyWroteCount++] = n;
+            }
+        }
+    }
+
     private readonly List<NodeHandle> _layoutDirty = new();
     /// <summary>Set once any node is marked <see cref="NodeFlags.LayoutDirty"/> this frame (cheap host gate for scoped relayout).</summary>
     public bool AnyLayoutDirty => _layoutDirty.Count > 0;
@@ -801,6 +888,10 @@ public sealed class SceneStore : ISceneBackend
         if ((flags & NodeFlags.LayoutDirty) != 0 && (old & NodeFlags.LayoutDirty) == 0) _layoutDirty.Add(h);
         if ((flags & NodeFlags.TransformDirty) != 0 && (old & NodeFlags.TransformDirty) == 0) _transformWrote.Add(h);
         if ((flags & NodeFlags.BoundsAnimated) != 0 && (old & NodeFlags.BoundsAnimated) == 0) _boundsAnimated.Add(h);
+        byte recordBits = 0;
+        if ((flags & NodeFlags.TransformDirty) != 0) recordBits |= RecordDirtyTransform;
+        if ((flags & (NodeFlags.LayoutDirty | NodeFlags.PaintDirty)) != 0) recordBits |= RecordDirtyContent;
+        if (recordBits != 0) MarkRecordDirty(idx, recordBits);
         _flags[idx] = old | flags;
     }
     public void Unmark(NodeHandle h, NodeFlags flags) => _flags[h.Raw.Index] &= ~flags;
@@ -811,7 +902,7 @@ public sealed class SceneStore : ISceneBackend
     {
         int idx = (int)h.Raw.Index;
         ref ScrollState s = ref _scroll.GetOrAdd(idx, out bool existed);
-        if (!existed) { s = ScrollState.Default; _flags[idx] |= NodeFlags.Scrollable; }
+        if (!existed) { s = ScrollState.Default; _flags[idx] |= NodeFlags.Scrollable; MarkRecordDirty(idx); }
         return ref s;
     }
     public bool HasScroll(NodeHandle h) => _scroll.Contains((int)h.Raw.Index);
@@ -882,7 +973,7 @@ public sealed class SceneStore : ISceneBackend
         int idx = (int)h.Raw.Index;
         _flags[idx] |= NodeFlags.InteractionAnim;
         ref InteractionAnim s = ref _interact.GetOrAdd(idx, out bool existed);
-        if (!existed) s = InteractionAnim.Default;
+        if (!existed) { s = InteractionAnim.Default; MarkRecordDirty(idx); }
         return ref s;
     }
     public bool TryGetInteract(NodeHandle h, out InteractionAnim s) => _interact.TryGet((int)h.Raw.Index, out s);
@@ -903,99 +994,110 @@ public sealed class SceneStore : ISceneBackend
         int idx = (int)h.Raw.Index;
         _flags[idx] |= NodeFlags.SparsePaint;
         _shadows.GetOrAdd(idx) = s;
+        MarkRecordDirty(idx);
     }
     public bool TryGetShadow(NodeHandle h, out ShadowSpec s) => _shadows.TryGet((int)h.Raw.Index, out s);
-    public void ClearShadow(NodeHandle h) => _shadows.Remove((int)h.Raw.Index);
+    public void ClearShadow(NodeHandle h) { int idx = (int)h.Raw.Index; _shadows.Remove(idx); MarkRecordDirty(idx); }
 
     public void SetArc(NodeHandle h, in ArcSpec a)
     {
         int idx = (int)h.Raw.Index;
         _flags[idx] |= NodeFlags.SparsePaint;
         _arcs.GetOrAdd(idx) = a;
+        MarkRecordDirty(idx);
     }
     public bool TryGetArc(NodeHandle h, out ArcSpec a) => _arcs.TryGet((int)h.Raw.Index, out a);
-    public void ClearArc(NodeHandle h) => _arcs.Remove((int)h.Raw.Index);
+    public void ClearArc(NodeHandle h) { int idx = (int)h.Raw.Index; _arcs.Remove(idx); MarkRecordDirty(idx); }
 
     public void SetPolylineStroke(NodeHandle h, in PolylineStrokeSpec p)
     {
         int idx = (int)h.Raw.Index;
         _flags[idx] |= NodeFlags.SparsePaint;
         _polylines.GetOrAdd(idx) = p;
+        MarkRecordDirty(idx);
     }
     public bool TryGetPolylineStroke(NodeHandle h, out PolylineStrokeSpec p) => _polylines.TryGet((int)h.Raw.Index, out p);
-    public void ClearPolylineStroke(NodeHandle h) => _polylines.Remove((int)h.Raw.Index);
+    public void ClearPolylineStroke(NodeHandle h) { int idx = (int)h.Raw.Index; _polylines.Remove(idx); MarkRecordDirty(idx); }
 
     public void SetGradient(NodeHandle h, in GradientSpec g)
     {
         int idx = (int)h.Raw.Index;
         _flags[idx] |= NodeFlags.SparsePaint;
         _gradients.GetOrAdd(idx) = g;
+        MarkRecordDirty(idx);
     }
     public bool TryGetGradient(NodeHandle h, out GradientSpec g) => _gradients.TryGet((int)h.Raw.Index, out g);
-    public void ClearGradient(NodeHandle h) => _gradients.Remove((int)h.Raw.Index);
+    public void ClearGradient(NodeHandle h) { int idx = (int)h.Raw.Index; _gradients.Remove(idx); MarkRecordDirty(idx); }
 
     public void SetBorderBrush(NodeHandle h, in GradientSpec g)
     {
         int idx = (int)h.Raw.Index;
         _flags[idx] |= NodeFlags.SparsePaint;
         _borderBrushes.GetOrAdd(idx) = g;
+        MarkRecordDirty(idx);
     }
     public bool TryGetBorderBrush(NodeHandle h, out GradientSpec g) => _borderBrushes.TryGet((int)h.Raw.Index, out g);
-    public void ClearBorderBrush(NodeHandle h) => _borderBrushes.Remove((int)h.Raw.Index);
+    public void ClearBorderBrush(NodeHandle h) { int idx = (int)h.Raw.Index; _borderBrushes.Remove(idx); MarkRecordDirty(idx); }
 
     public void SetHoverGradient(NodeHandle h, in GradientSpec g)
     {
         int idx = (int)h.Raw.Index;
         _flags[idx] |= NodeFlags.SparsePaint;
         _hoverGradients.GetOrAdd(idx) = g;
+        MarkRecordDirty(idx);
     }
     public bool TryGetHoverGradient(NodeHandle h, out GradientSpec g) => _hoverGradients.TryGet((int)h.Raw.Index, out g);
-    public void ClearHoverGradient(NodeHandle h) => _hoverGradients.Remove((int)h.Raw.Index);
+    public void ClearHoverGradient(NodeHandle h) { int idx = (int)h.Raw.Index; _hoverGradients.Remove(idx); MarkRecordDirty(idx); }
 
     public void SetPressedGradient(NodeHandle h, in GradientSpec g)
     {
         int idx = (int)h.Raw.Index;
         _flags[idx] |= NodeFlags.SparsePaint;
         _pressedGradients.GetOrAdd(idx) = g;
+        MarkRecordDirty(idx);
     }
     public bool TryGetPressedGradient(NodeHandle h, out GradientSpec g) => _pressedGradients.TryGet((int)h.Raw.Index, out g);
-    public void ClearPressedGradient(NodeHandle h) => _pressedGradients.Remove((int)h.Raw.Index);
+    public void ClearPressedGradient(NodeHandle h) { int idx = (int)h.Raw.Index; _pressedGradients.Remove(idx); MarkRecordDirty(idx); }
 
     public void SetHoverBorderBrush(NodeHandle h, in GradientSpec g)
     {
         int idx = (int)h.Raw.Index;
         _flags[idx] |= NodeFlags.SparsePaint;
         _hoverBorderBrushes.GetOrAdd(idx) = g;
+        MarkRecordDirty(idx);
     }
     public bool TryGetHoverBorderBrush(NodeHandle h, out GradientSpec g) => _hoverBorderBrushes.TryGet((int)h.Raw.Index, out g);
-    public void ClearHoverBorderBrush(NodeHandle h) => _hoverBorderBrushes.Remove((int)h.Raw.Index);
+    public void ClearHoverBorderBrush(NodeHandle h) { int idx = (int)h.Raw.Index; _hoverBorderBrushes.Remove(idx); MarkRecordDirty(idx); }
 
     public void SetPressedBorderBrush(NodeHandle h, in GradientSpec g)
     {
         int idx = (int)h.Raw.Index;
         _flags[idx] |= NodeFlags.SparsePaint;
         _pressedBorderBrushes.GetOrAdd(idx) = g;
+        MarkRecordDirty(idx);
     }
     public bool TryGetPressedBorderBrush(NodeHandle h, out GradientSpec g) => _pressedBorderBrushes.TryGet((int)h.Raw.Index, out g);
-    public void ClearPressedBorderBrush(NodeHandle h) => _pressedBorderBrushes.Remove((int)h.Raw.Index);
+    public void ClearPressedBorderBrush(NodeHandle h) { int idx = (int)h.Raw.Index; _pressedBorderBrushes.Remove(idx); MarkRecordDirty(idx); }
 
     public void SetAcrylic(NodeHandle h, in AcrylicSpec a)
     {
         int idx = (int)h.Raw.Index;
         _flags[idx] |= NodeFlags.SparsePaint;
         _acrylics.GetOrAdd(idx) = a;
+        MarkRecordDirty(idx);
     }
     public bool TryGetAcrylic(NodeHandle h, out AcrylicSpec a) => _acrylics.TryGet((int)h.Raw.Index, out a);
-    public void ClearAcrylic(NodeHandle h) => _acrylics.Remove((int)h.Raw.Index);
+    public void ClearAcrylic(NodeHandle h) { int idx = (int)h.Raw.Index; _acrylics.Remove(idx); MarkRecordDirty(idx); }
 
     public void SetEdgeFade(NodeHandle h, in EdgeFadeSpec e)
     {
         int idx = (int)h.Raw.Index;
         _flags[idx] |= NodeFlags.SparsePaint;
         _edgeFades.GetOrAdd(idx) = e;
+        MarkRecordDirty(idx);
     }
     public bool TryGetEdgeFade(NodeHandle h, out EdgeFadeSpec e) => _edgeFades.TryGet((int)h.Raw.Index, out e);
-    public void ClearEdgeFade(NodeHandle h) => _edgeFades.Remove((int)h.Raw.Index);
+    public void ClearEdgeFade(NodeHandle h) { int idx = (int)h.Raw.Index; _edgeFades.Remove(idx); MarkRecordDirty(idx); }
 
     // ── E5-L2 drag-drop columns (BoxEl.Draggable / BoxEl.DropTarget → Input.DragDropContext) ──────
     /// <summary>Set (or clear, null) the node's typed drag-source spec — the reconciler writes it from
@@ -1104,6 +1206,8 @@ public sealed class SceneStore : ISceneBackend
         Array.Resize(ref _prevSib, n); Array.Resize(ref _nextSib, n); Array.Resize(ref _childCount, n);
         Array.Resize(ref _elementTypeId, n); Array.Resize(ref _layout, n); Array.Resize(ref _bounds, n);
         Array.Resize(ref _paint, n); Array.Resize(ref _dynamicText, n); Array.Resize(ref _interaction, n); Array.Resize(ref _flags, n);
+        Array.Resize(ref _recordDirty, n); Array.Resize(ref _recordDirtyWrote, n);
+        if (_recordDirtyWroteCount > n) _recordDirtyWroteCount = n;
         Array.Resize(ref _click, n); Array.Resize(ref _boundsChanged, n); Array.Resize(ref _boundsDelivered, n); Array.Resize(ref _keyHandler, n); Array.Resize(ref _charHandler, n);
         Array.Resize(ref _pointerDown, n); Array.Resize(ref _drag, n); Array.Resize(ref _hoverMove, n); Array.Resize(ref _pointerExit, n);
         Array.Resize(ref _pointerPressed, n); Array.Resize(ref _pointerWheel, n); Array.Resize(ref _contextRequested, n);

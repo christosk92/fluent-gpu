@@ -2298,7 +2298,7 @@ public sealed class TreeReconciler
                 if (s.OnScrollGeometryChanged is { } obs) _scene.SetScrollObserver(node, obs.Project, obs.Action);
                 else _scene.ClearScrollObserver(node);
                 if (s.EdgeFade is { } sef) _scene.SetEdgeFade(node, sef); else _scene.ClearEdgeFade(node);
-                ss.AutoEdgeFade = s.AutoEdgeFade; ss.AutoEdgeFadeBand = s.AutoEdgeFade ? 24f : 0f;
+                ss.AutoEdgeFade = s.AutoEdgeFade; ss.AutoEdgeFadeBand = s.AutoEdgeFade ? 40f : 0f;
                 ss.AlwaysShowBar = s.AlwaysShowScrollbar;
                 ss.SuppressBar = s.SuppressScrollBar;
                 ApplyScrollKey(node, ref ss, s.ScrollKey, isMount);   // seed (mount) / save+seed (content change) the offset
@@ -2328,7 +2328,7 @@ public sealed class TreeReconciler
                 if (v.OnScrollGeometryChanged is { } obs) _scene.SetScrollObserver(node, obs.Project, obs.Action);
                 else _scene.ClearScrollObserver(node);
                 if (v.EdgeFade is { } vef) _scene.SetEdgeFade(node, vef); else _scene.ClearEdgeFade(node);
-                sc.AutoEdgeFade = v.AutoEdgeFade; sc.AutoEdgeFadeBand = v.AutoEdgeFade ? 24f : 0f;
+                sc.AutoEdgeFade = v.AutoEdgeFade; sc.AutoEdgeFadeBand = v.AutoEdgeFade ? 40f : 0f;
                 sc.SuppressBar = v.SuppressScrollBar;
                 ApplyScrollKey(node, ref sc, v.ScrollKey, isMount);   // seed BEFORE RealizeWindow → first window at saved row
                 break;
