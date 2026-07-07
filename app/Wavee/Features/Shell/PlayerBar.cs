@@ -755,8 +755,8 @@ sealed class PlayerBarContent : Component
     }
 }
 
-/// <summary>Cross-surface player-bar preference epoch: the Settings page bumps it after writing
-/// <see cref="WaveeSettings.PlayerBarShowRemaining"/> so a mounted <see cref="TimeText"/> re-seeds without a remount.</summary>
+/// <summary>Cross-surface player-bar preference epoch: bumped when <see cref="WaveeSettings.PlayerBarShowRemaining"/>
+/// changes from either the Settings toggle or the player-bar time label, so both surfaces stay in sync.</summary>
 static class PlayerBarPrefs
 {
     public static readonly Signal<int> Epoch = new(0);
@@ -774,7 +774,7 @@ sealed class TimeText : Component
     {
         var svc = UseContext(Services.Slot);
         var (showRemaining, setShowRemaining) = UseState(svc?.Settings.Get(WaveeSettings.PlayerBarShowRemaining) ?? true);
-        // The Settings page bumps the prefs epoch after writing the setting → re-seed the mounted label live.
+        // Either surface bumps PlayerBarPrefs after writing the setting → re-seed the mounted label live.
         int prefsEpoch = PlayerBarPrefs.Epoch.Value;
         UseEffect(() => setShowRemaining(svc?.Settings.Get(WaveeSettings.PlayerBarShowRemaining) ?? true), prefsEpoch);
         long pos = _b.PositionMs.Value;          // subscribe → 1 Hz tick
@@ -789,6 +789,7 @@ sealed class TimeText : Component
             bool next = !showRemaining;
             setShowRemaining(next);
             svc?.Settings.Set(WaveeSettings.PlayerBarShowRemaining, next);
+            PlayerBarPrefs.Bump();
         }
         return new BoxEl
         {

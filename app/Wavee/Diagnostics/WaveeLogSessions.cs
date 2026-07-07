@@ -111,6 +111,36 @@ static class WaveeLogSessions
         return list.ToArray();
     }
 
+    /// <summary>Read the raw log lines for a past session (same file walk as <see cref="LoadSession"/>).</summary>
+    public static List<string> ReadSessionRawLines(Info info)
+    {
+        var lines = new List<string>(Math.Max(info.EntryCount, 16));
+        try
+        {
+            for (int fi = info.FileStart; fi <= info.FileEnd && fi < info.Files.Length; fi++)
+            {
+                int from = fi == info.FileStart ? info.LineStart : 0;
+                int to = fi == info.FileEnd ? info.LineEnd : int.MaxValue;
+                int li = 0;
+                IEnumerable<string> fileLines;
+                try { fileLines = File.ReadLines(info.Files[fi]); }
+                catch { continue; }
+                foreach (var line in fileLines)
+                {
+                    if (li >= to) break;
+                    if (li >= from) lines.Add(line);
+                    li++;
+                }
+            }
+        }
+        catch { }
+        return lines;
+    }
+
+    /// <summary>Write a past session's raw log lines to disk.</summary>
+    public static void ExportSessionToFile(Info info, string path) =>
+        File.WriteAllLines(path, ReadSessionRawLines(info));
+
     // "[ISO-UTC ]seq=N tid=M [t=U] L [category] rest" → a lossy WaveeLogEntry (rest becomes Message verbatim).
     // Older builds prefixed every line with "yyyy-MM-dd HH:mm:ss.fffZ "; current builds carry t= (unix ms) instead —
     // both shapes yield a timestamp, and a line with neither parses with UnixMs = 0.

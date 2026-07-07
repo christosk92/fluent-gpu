@@ -16,11 +16,12 @@ public static partial class SettingsExpander
     public const string PartHeaderCard = "HeaderCard";
     public const string PartItems = "Items";
     public const string PartExpanderHeader = "ExpanderHeader";
+    public const string PartExpanderChevron = "ExpanderChevron";
     public const string PartExpanderContent = "ExpanderContent";
 
     public const float HeaderChevronWidth = 32f;
     public const float ItemMinHeight = 52f;
-    public static readonly Edges4 HeaderPadding = new(0f, 0f, 0f, 0f);
+    public static readonly Edges4 HeaderPadding = new(16f, 16f, 4f, 16f);
     public static readonly Edges4 ItemPadding = new(58f, 8f, 44f, 8f);
     public static readonly Edges4 ClickableItemPadding = new(58f, 8f, 16f, 8f);
 
@@ -42,6 +43,8 @@ public static partial class SettingsExpander
             Padding = ItemPadding,
             MinHeight = ItemMinHeight,
             CornerRadius = 0f,
+            WrapThreshold = 0f,
+            WrapNoIconThreshold = 0f,
         };
 
         public SettingsCard.Style ClickableItemCardStyle { get; init; } = SettingsCard.DefaultStyle with
@@ -49,6 +52,8 @@ public static partial class SettingsExpander
             Padding = ClickableItemPadding,
             MinHeight = ItemMinHeight,
             CornerRadius = 0f,
+            WrapThreshold = 0f,
+            WrapNoIconThreshold = 0f,
         };
     }
 
@@ -114,9 +119,14 @@ sealed class SettingsExpanderCore : Component
 
         headerCard = o.Parts.Apply(SettingsExpander.PartHeaderCard, headerCard);
 
-        var itemKids = new List<Element>(o.Items.Count + 2);
+        var itemKids = new List<Element>(o.Items.Count * 2 + 2);
         if (o.ItemsHeader is not null) itemKids.Add(o.ItemsHeader);
-        itemKids.AddRange(o.Items);
+        for (int i = 0; i < o.Items.Count; i++)
+        {
+            if (i > 0 || o.ItemsHeader is not null)
+                itemKids.Add(new BoxEl { Height = 1f, Fill = Tok.StrokeDividerDefault });
+            itemKids.Add(o.Items[i]);
+        }
         if (o.ItemsFooter is not null) itemKids.Add(o.ItemsFooter);
 
         var items = o.Parts.Apply(SettingsExpander.PartItems, new BoxEl
@@ -130,7 +140,21 @@ sealed class SettingsExpanderCore : Component
             [Expander.PartHeader] = h =>
             {
                 var styled = o.Parts.Apply(SettingsExpander.PartExpanderHeader, h);
-                return styled with { MinHeight = SettingsCard.MinHeight };
+                return styled with
+                {
+                    MinHeight = SettingsCard.MinHeight,
+                    Padding = Edges4.All(0f),
+                };
+            },
+            [Expander.PartChevron] = c =>
+            {
+                var styled = o.Parts.Apply(SettingsExpander.PartExpanderChevron, c);
+                return styled with
+                {
+                    Width = SettingsExpander.HeaderChevronWidth,
+                    Height = SettingsExpander.HeaderChevronWidth,
+                    Margin = new Edges4(0f, 0f, 8f, 0f),
+                };
             },
             [Expander.PartContent] = c =>
             {

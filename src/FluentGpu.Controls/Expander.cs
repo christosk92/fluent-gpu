@@ -184,7 +184,9 @@ public sealed class Expander : Component
             Role = AutomationRole.Expander,
             Children =
             [
-                HeaderContent ?? new TextEl(Header) { Size = 14f, Color = Tok.TextPrimary, Grow = 1 },
+                HeaderContent is { } hc
+                    ? new BoxEl { Grow = 1f, Basis = 0f, MinWidth = 0f, Children = [hc] }
+                    : new TextEl(Header) { Size = 14f, Color = Tok.TextPrimary, Grow = 1f },
                 chevron,
             ],
         };

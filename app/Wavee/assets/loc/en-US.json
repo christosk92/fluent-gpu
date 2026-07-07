@@ -233,7 +233,12 @@
       "paletteWarm": "Warm",
       "paletteSlate": "Slate",
       "paletteNeutral": "Neutral",
-      "paletteAccent": "Accent"
+      "paletteAccent": "Accent",
+      "densityPreview1": "Track title",
+      "densityPreview2": "Another row at this height",
+      "densityPreview3": "Third preview row",
+      "densityPreviewTitle": "Track list preview",
+      "densityPreviewSub": "{height}px row height · {label}"
     },
     "choice": {
       "system": "System",
@@ -252,6 +257,7 @@
       "runtimeNotSetUpSub": "Some tracks cannot play without the local runtime. Setup downloads and verifies it automatically.",
       "runtimeUnavailable": "The playback runtime is unavailable.",
       "audioTitle": "Audio",
+      "audioQuality": "Audio quality",
       "audioSub": "Streaming quality for local playback - applies from the next track",
       "qualityNormal": "Normal",
       "qualityNormalSub": "96 kbps - about 0.04 GB/hour",
@@ -284,6 +290,7 @@
       "crossfadeDuration": "Crossfade duration",
       "seconds": "{value} seconds",
       "reset": "Reset",
+      "resetCurve": "Reset curve to flat",
       "presets": {
         "flat": "Flat",
         "flatSub": "No processing - flat, transparent playback",
@@ -302,6 +309,12 @@
     "storage": {
       "onThisPc": "On this PC",
       "total": "total",
+      "reading": "Reading storage sizes…",
+      "readFailed": "Could not read storage sizes",
+      "usedOfBudget": "{used} of {budget} budget",
+      "deleteOldLogsBody": "Delete rolled log files? The live wavee.log file is kept.",
+      "clearAudioBody": "Remove all cached encrypted audio bodies from disk?",
+      "clearKeysBody": "Remove all saved license keys from disk?",
       "library": "Library database",
       "librarySub": "library.db - albums, artists, playlists, sync state",
       "runtime": "Playback runtime",
@@ -342,6 +355,39 @@
       "audioCacheCleared": "Cleared encrypted audio cache",
       "licenseKeysCleared": "Cleared saved license keys",
       "detailsReleased": "Released cached detail pages"
+    },
+    "about": {
+      "licenses": "Licenses",
+      "sendFeedback": "Send feedback",
+      "website": "Website",
+      "copyDiagnostics": "Copy diagnostics info",
+      "openDataFolder": "Open data folder",
+      "diagnosticsCopied": "Diagnostics info copied",
+      "version": "Version {version}",
+      "build": "Wavee {version}"
+    },
+    "diagnostics": {
+      "filterPlaceholder": "Filter logs",
+      "currentRun": "This session",
+      "pastSessionSub": "Read-only from log file",
+      "copyVisible": "Copy visible",
+      "newestFirst": "Newest first",
+      "groupRepeats": "Group repeats",
+      "category": "Category",
+      "exportSession": "Export session",
+      "openLogFolder": "Open log folder",
+      "refreshSessions": "Refresh sessions",
+      "clearRing": "Clear view",
+      "clearRingBody": "Clear the in-memory log ring for this session? The wavee.log file on disk is not affected.",
+      "footerLive": "Showing {shown} of {total} events · live ring",
+      "footerPast": "Showing {shown} of {total} events · log file",
+      "loadMore": "Load more",
+      "loadingSession": "Reading session from the log file…",
+      "emptyFilter": "No matching logs",
+      "sortNewestTip": "Newest first (on)",
+      "sortOldestTip": "Oldest first (off)",
+      "groupRepeatsTip": "Group repeated lines (on)",
+      "groupRepeatsOffTip": "Show every line (off)"
     },
     "common": {
       "ellipsis": "...",

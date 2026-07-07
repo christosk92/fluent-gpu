@@ -127,4 +127,26 @@ public class WaveeLogSessionsTests
         }
         finally { try { Directory.Delete(dir, recursive: true); } catch { } }
     }
+
+    [Fact]
+    public void ExportSessionToFile_LineCountMatchesEntryCount()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "wavee-log-tests-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            string live = WriteLog(dir, "wavee.log",
+                "seq=1 tid=2 t=1000 I [app] startup - Wavee starting pid=7 args=1",
+                "seq=2 tid=2 t=2000 I [connect] hello",
+                "seq=3 tid=2 t=3000 W [ui] warn");
+
+            var s = Assert.Single(WaveeLogSessions.ListPastSessions(live, currentPid: -1));
+            string outPath = Path.Combine(dir, "export.txt");
+            WaveeLogSessions.ExportSessionToFile(s, outPath);
+
+            var exported = File.ReadAllLines(outPath);
+            Assert.Equal(s.EntryCount, exported.Length);
+        }
+        finally { try { Directory.Delete(dir, recursive: true); } catch { } }
+    }
 }

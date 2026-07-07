@@ -62,6 +62,8 @@ public static partial class SettingsCard
         public float HeaderIconMarginRight { get; init; } = 20f;
         public float HeaderMarginRight { get; init; } = 24f;
         public float ActionIconMarginLeft { get; init; } = 14f;
+        public float WrapThreshold { get; init; } = SettingsCard.WrapThreshold;
+        public float WrapNoIconThreshold { get; init; } = SettingsCard.WrapNoIconThreshold;
         public float BorderWidth { get; init; } = 1f;
         public float HeaderFontSize { get; init; } = 14f;
         public float DescriptionFontSize { get; init; } = 12f;
@@ -121,10 +123,10 @@ public static partial class SettingsCard
             return Root(o, s, BuildLeftContent(o, s));
 
         bool hasContent = o.Content is not null;
-        bool wrap = width < WrapThreshold || o.Alignment == ContentAlignment.Vertical;
-        bool hideIcon = width < WrapNoIconThreshold && o.Alignment == ContentAlignment.Right;
+        bool wrap = width < s.WrapThreshold || o.Alignment == ContentAlignment.Vertical;
+        bool hideIcon = width < s.WrapNoIconThreshold && o.Alignment == ContentAlignment.Right;
 
-        Element header = BuildHeader(o, s, hideIcon);
+        Element header = BuildHeader(o, s, hideIcon, fillMain: !wrap);
         Element? content = hasContent ? BuildContent(o, wrap) : null;
 
         Element[] kids = wrap
@@ -142,7 +144,7 @@ public static partial class SettingsCard
         var root = new BoxEl
         {
             Direction = 1,
-            Grow = 1f,
+            AlignSelf = FlexAlign.Stretch,
             MinWidth = s.MinWidth,
             MinHeight = s.MinHeight,
             Padding = s.Padding,
@@ -177,18 +179,20 @@ public static partial class SettingsCard
         var kids = new List<Element>(3) { header };
         if (content is not null) kids.Add(content);
         if (ActionGlyph(o, s) is { } action) kids.Add(action);
-        return new BoxEl
+
+        var columns = new List<TrackSize>(kids.Count) { TrackSize.Star() };
+        if (content is not null) columns.Add(TrackSize.Auto);
+        if (kids.Count > columns.Count) columns.Add(TrackSize.Auto);
+
+        return new GridEl
         {
-            Direction = 0,
-            AlignItems = FlexAlign.Center,
-            Grow = 1f,
-            Basis = 0f,
-            MinWidth = 0f,
+            Columns = columns.ToArray(),
+            AlignSelf = FlexAlign.Stretch,
             Children = kids.ToArray(),
         };
     }
 
-    static Element BuildHeader(Options o, Style s, bool hideIcon)
+    static Element BuildHeader(Options o, Style s, bool hideIcon, bool fillMain)
     {
         var kids = new List<Element>(2);
         if (!hideIcon && o.HeaderIcon is { Length: > 0 } glyph)
@@ -250,8 +254,8 @@ public static partial class SettingsCard
         {
             Direction = 0,
             AlignItems = FlexAlign.Center,
-            Grow = 1f,
-            Basis = 0f,
+            Grow = fillMain ? 1f : 0f,
+            Basis = fillMain ? 0f : float.NaN,
             MinWidth = 0f,
             Children = kids.ToArray(),
         };
@@ -265,7 +269,7 @@ public static partial class SettingsCard
             AlignItems = FlexAlign.Center,
             Justify = wrap ? FlexJustify.Start : FlexJustify.End,
             MinWidth = ContentMinWidth,
-            Grow = wrap ? 1f : 0f,
+            Grow = 0f,
             Shrink = 0f,
             Children = o.Content is null ? [] : [o.Content],
         });
@@ -324,7 +328,7 @@ sealed class SettingsCardCore : Component
         return new BoxEl
         {
             Direction = 1,
-            Grow = 1f,
+            AlignSelf = FlexAlign.Stretch,
             OnBoundsChanged = r =>
             {
                 if (r.W > 0f && MathF.Abs(r.W - _w.Peek()) > 0.5f)

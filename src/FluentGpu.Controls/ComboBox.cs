@@ -89,6 +89,11 @@ public sealed class ComboBox : Component
     internal const float ItemLineHeight = 20f;
 
     public IReadOnlyList<string> Items = [];
+    /// <summary>Optional per-item description lines (WinUI ComboBoxItem content with a secondary TextBlock). When set,
+    /// dropdown rows render title + caption; the closed field still shows <see cref="Items"/> only.</summary>
+    public IReadOnlyList<string>? ItemDescriptions;
+    /// <summary>Optional per-item enabled flags. Disabled rows are greyed out and cannot be selected.</summary>
+    public IReadOnlyList<bool>? ItemEnabled;
     public Signal<int> SelectedIndex = new(-1);
     public bool Editable;
     public Signal<string>? Text;
@@ -129,14 +134,29 @@ public sealed class ComboBox : Component
                                  bool isEnabled = true, Action<int>? onSelectionChanged = null,
                                  Func<string, bool>? onTextSubmitted = null,
                                  string header = "", string description = "", string errorText = "",
-                                 bool touchInputMode = false, Field<int>? field = null)
+                                 bool touchInputMode = false, Field<int>? field = null,
+                                 IReadOnlyList<string>? itemDescriptions = null,
+                                 IReadOnlyList<bool>? itemEnabled = null)
         => Embed.Comp(() => new ComboBox
         {
-            Items = items, SelectedIndex = selectedIndex, Editable = editable, Text = text,
+            Items = items, ItemDescriptions = itemDescriptions, ItemEnabled = itemEnabled,
+            SelectedIndex = selectedIndex, Editable = editable, Text = text,
             Width = width, Placeholder = placeholder, IsEnabled = isEnabled, OnSelectionChanged = onSelectionChanged,
             OnTextSubmitted = onTextSubmitted,
             Header = header, Description = description, ErrorText = errorText, TouchInputMode = touchInputMode, Field = field,
         });
+
+    internal bool IsItemEnabled(int index)
+        => ItemEnabled is not { } flags || index < 0 || index >= flags.Count || flags[index];
+
+    internal static float ItemRowPitch(ComboBox owner, int index)
+    {
+        var p = owner.TouchInputMode ? ItemTouchPadding : ItemPadding;
+        float text = ItemLineHeight;
+        if (owner.ItemDescriptions is { } d && index >= 0 && index < d.Count && d[index] is { Length: > 0 } desc)
+            text += 2f + 16f;   // 2px gap + 12pt caption line
+        return p.Top + p.Bottom + text + 4f;   // + LayoutRoot margin 5,2,5,2
+    }
 
     private EditableText? _edit;
 
@@ -172,7 +192,7 @@ public sealed class ComboBox : Component
 
         void Commit(int i)
         {
-            if (i < 0 || i >= Items.Count) return;
+            if (i < 0 || i >= Items.Count || !IsItemEnabled(i)) return;
             // Selector semantics: writing the SAME index is a no-op — no SelectionChanged, no text rewrite (WinUI
             // put_SelectedIndex short-circuits unchanged values), so the popup-close CommitSearch never double-fires
             // after a row click already committed the index.
@@ -228,18 +248,15 @@ public sealed class ComboBox : Component
                 // field rect each placement pass and pre-shifts it up by the selected row's offset inside the popup
                 // (content inset 4 + row pitch × index + row top margin 2). Long lists clamp into the work area, so
                 // the alignment degrades gracefully at the edges (WinUI clamps identically).
-                float pitch = ItemRowPitch(TouchInputMode);
-                // SplitOpen/SplitClose seam (the WinUI DropDownStates Opened/Closed storyboards animate the clip from
-                // TemplateSettings.DropDownOffset — the selected item's offset from the popup centre): SeamOffsetY =
-                // the selected row's centre Y minus the popup's centre Y, popup-local. Popup height = the scroll
-                // viewport (rows + the inner column's 0,2,0,2 margins, capped at MaxDropDownHeight) + the
-                // FlyoutSurface's 0,2,0,2 presenter padding. No selection → null (host keeps the edge-reveal default).
-                float? seamY = null;
                 int selNow = SelectedIndex.Peek();
+                // SplitOpen/SplitClose seam: SeamOffsetY = selected row centre Y minus popup centre Y.
+                float? seamY = null;
                 if (selNow >= 0 && selNow < Items.Count)
                 {
-                    float popupH = MathF.Min(Items.Count * pitch + 4f, MaxDropDownHeight) + 4f;
-                    float rowCenter = DropdownContentInset + selNow * pitch + 2f + (pitch - 4f) * 0.5f;
+                    float rowsH = 0f;
+                    for (int i = 0; i < Items.Count; i++) rowsH += ComboBox.ItemRowPitch(this, i);
+                    float popupH = MathF.Min(rowsH + 4f, MaxDropDownHeight) + 4f;
+                    float rowCenter = SelectedRowOffset(selNow);
                     seamY = Math.Clamp(rowCenter, 0f, popupH) - popupH * 0.5f;
                 }
                 handle.Value = svc.OpenAt(
@@ -249,7 +266,9 @@ public sealed class ComboBox : Component
                         var node = anchor.Value;
                         RectF f = scene is not null && !node.IsNull && scene.IsLive(node) ? scene.AbsoluteRect(node) : default;
                         int s = Math.Max(0, SelectedIndex.Peek());
-                        float off = DropdownContentInset + s * pitch + 2f;   // row i top inside the popup
+                        float off = 0f;
+                        for (int i = 0; i < s; i++) off += ComboBox.ItemRowPitch(this, i);
+                        off += DropdownContentInset + 2f;
                         return new RectF(f.X, f.Y - off, f.W, f.H);
                     },
                     body, FlyoutPlacement.OverlapStretch,
@@ -280,11 +299,12 @@ public sealed class ComboBox : Component
             Toggle();
         }
 
-        // Row pitch (margins included) of one dropdown item — drives the over-field placement math.
-        static float ItemRowPitch(bool touch)
+        float SelectedRowOffset(int index)
         {
-            var p = touch ? ItemTouchPadding : ItemPadding;
-            return p.Top + p.Bottom + ItemLineHeight + 4f;   // + LayoutRoot margin 5,2,5,2 (2 top + 2 bottom)
+            float y = DropdownContentInset + 2f;
+            for (int i = 0; i < index; i++)
+                y += ComboBox.ItemRowPitch(this, i);
+            return y + ComboBox.ItemRowPitch(this, index) * 0.5f;
         }
 
         // ── Editable mode: search-as-you-type / arrow preview / commit-or-TextSubmitted / Escape revert ──────────
@@ -745,7 +765,27 @@ internal sealed class ComboBoxList : Component
         void Move(int next)
         {
             if (items.Count == 0) return;
-            Highlight.Value = Math.Clamp(next, 0, items.Count - 1);   // WinUI clamps (no wrap) inside an open list
+            int clamped = Math.Clamp(next, 0, items.Count - 1);
+            if (!Owner.IsItemEnabled(clamped))
+            {
+                int cur = Highlight.Peek();
+                if (cur < clamped)
+                {
+                    for (int i = clamped + 1; i < items.Count; i++)
+                        if (Owner.IsItemEnabled(i)) { Highlight.Value = i; return; }
+                    for (int i = clamped - 1; i >= 0; i--)
+                        if (Owner.IsItemEnabled(i)) { Highlight.Value = i; return; }
+                }
+                else
+                {
+                    for (int i = clamped - 1; i >= 0; i--)
+                        if (Owner.IsItemEnabled(i)) { Highlight.Value = i; return; }
+                    for (int i = clamped + 1; i < items.Count; i++)
+                        if (Owner.IsItemEnabled(i)) { Highlight.Value = i; return; }
+                }
+                return;
+            }
+            Highlight.Value = clamped;
         }
 
         void HandleKey(KeyEventArgs e)
@@ -758,7 +798,7 @@ internal sealed class ComboBoxList : Component
                 case Keys.Home: Move(0); e.Handled = true; break;
                 case Keys.End: Move(items.Count - 1); e.Handled = true; break;
                 case Keys.Enter or Keys.Space:
-                    if (cur >= 0) OnChoose(cur);
+                    if (cur >= 0 && Owner.IsItemEnabled(cur)) OnChoose(cur);
                     e.Handled = true; break;
             }
         }
@@ -769,21 +809,55 @@ internal sealed class ComboBoxList : Component
             int idx = i;
             bool selected = idx == sel;
             bool cursor = idx == hi;
+            bool enabled = Owner.IsItemEnabled(idx);
+            string? desc = Owner.ItemDescriptions is { } ds && idx < ds.Count ? ds[idx] : null;
 
-            var label = new TextEl(items[idx]) { Size = 14f, Color = Tok.TextPrimary, PressedColor = Tok.TextSecondary, Grow = 1f };
-            // ComboBoxItem template: Pill is a LayoutRoot child BEFORE the ContentPresenter
-            // (ComboBox_themeresources.xaml:759-764 — the Rectangle precedes the presenter :764, painting UNDER the
-            // content), FLUSH at the row edge (Style ComboBoxItemPill HorizontalAlignment=Left :350, NO margin in the
-            // ITEM template — the 1,0,0,0 margin belongs to the FIELD's pill :572) while text starts at
-            // ContentPresenter Margin=Padding 11,5,11,7. Tree order matters for paint order in a ZStack: pill FIRST,
-            // content on top — the WinUI structure.
+            Element labelCol;
+            if (desc is { Length: > 0 })
+            {
+                labelCol = new BoxEl
+                {
+                    Direction = 1,
+                    Gap = 2f,
+                    Grow = 1f,
+                    MinWidth = 0f,
+                    Children =
+                    [
+                        new TextEl(items[idx])
+                        {
+                            Size = 14f,
+                            Color = enabled ? Tok.TextPrimary : Tok.TextDisabled,
+                            PressedColor = Tok.TextSecondary,
+                            Grow = 1f,
+                        },
+                        new TextEl(desc)
+                        {
+                            Size = 12f,
+                            Color = enabled ? Tok.TextSecondary : Tok.TextDisabled,
+                            PressedColor = Tok.TextTertiary,
+                            Wrap = TextWrap.Wrap,
+                        },
+                    ],
+                };
+            }
+            else
+            {
+                labelCol = new TextEl(items[idx])
+                {
+                    Size = 14f,
+                    Color = enabled ? Tok.TextPrimary : Tok.TextDisabled,
+                    PressedColor = Tok.TextSecondary,
+                    Grow = 1f,
+                };
+            }
+
             var content = new BoxEl
             {
                 Direction = 0,
                 AlignItems = FlexAlign.Center,
                 Grow = 1f,
-                Padding = Owner.TouchInputMode ? ComboBox.ItemTouchPadding : ComboBox.ItemPadding,   // 11,5,11,7 / touch 11,11,11,13 (generic.xaml:131)
-                Children = [label],
+                Padding = Owner.TouchInputMode ? ComboBox.ItemTouchPadding : ComboBox.ItemPadding,
+                Children = [labelCol],
             };
             Element[] rowChildren = selected
                 ? [Owner.Parts.Apply(ComboBox.PartItemPill,
@@ -793,19 +867,23 @@ internal sealed class ComboBoxList : Component
             // Item state matrix (ComboBox_themeresources): unselected rest=Transparent, hover=SubtleSecondary,
             // press=SubtleTertiary; selected rest=SubtleSecondary, hover=SubtleTertiary, press=SubtleSecondary.
             // The keyboard cursor (Highlight) reads as the hover/selected fill so arrow nav is visible without a pointer.
-            ColorF rest = selected || cursor ? Tok.FillSubtleSecondary : ColorF.Transparent;
-            Action choose = () => OnChoose(idx);
+            ColorF rest = !enabled ? ColorF.Transparent
+                : selected || cursor ? Tok.FillSubtleSecondary : ColorF.Transparent;
+            Action choose = enabled ? () => OnChoose(idx) : static () => { };
             var row = new BoxEl
             {
                 ZStack = true,
-                Width = MathF.Max(0f, Width - 10f),   // LayoutRoot Margin 5,2,5,2 inside a width-matched popup
+                Width = MathF.Max(0f, Width - 10f),
                 AlignItems = FlexAlign.Stretch,
                 Margin = new Edges4(5, 2, 5, 2),
                 Corners = CornerRadius4.All(3f),
                 Role = AutomationRole.MenuItem,
                 Fill = rest,
-                HoverFill = selected ? Tok.FillSubtleTertiary : Tok.FillSubtleSecondary,
-                PressedFill = selected ? Tok.FillSubtleSecondary : Tok.FillSubtleTertiary,
+                HoverFill = !enabled ? ColorF.Transparent
+                    : selected ? Tok.FillSubtleTertiary : Tok.FillSubtleSecondary,
+                PressedFill = !enabled ? ColorF.Transparent
+                    : selected ? Tok.FillSubtleSecondary : Tok.FillSubtleTertiary,
+                IsEnabled = enabled,
                 OnClick = choose,
                 Children = rowChildren,
             };
