@@ -67,6 +67,14 @@ public sealed class DiskImageCache
                 if (r == 0) break;
                 got += r;
             }
+            if (!LooksLikeImage(buf.AsSpan(0, got)))
+            {
+                ArrayPool<byte>.Shared.Return(buf);
+                TryDelete(path);
+                Diag.Count("media", "diskReject");
+                return FetchResult.Fail(FluentGpu.Scene.ImageFailureKind.NotFound);
+            }
+
             Diag.Count("media", "diskHit");
             try { File.SetLastAccessTimeUtc(path, DateTime.UtcNow); } catch { }   // LRU recency
             return FetchResult.Pooled(buf, got);
@@ -118,4 +126,15 @@ public sealed class DiskImageCache
     }
 
     private static void TryDelete(string path) { try { if (File.Exists(path)) File.Delete(path); } catch { } }
+
+    /// <summary>True when <paramref name="data"/> begins with a known image container magic (JPEG/PNG/WebP/GIF).</summary>
+    internal static bool LooksLikeImage(ReadOnlySpan<byte> data)
+    {
+        if (data.Length < 12) return false;
+        if (data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF) return true;   // JPEG
+        if (data[0] == 0x89 && data[1] == (byte)'P' && data[2] == (byte)'N' && data[3] == (byte)'G') return true;   // PNG
+        if (data[0] == (byte)'G' && data[1] == (byte)'I' && data[2] == (byte)'F') return true;   // GIF
+        return data[0] == (byte)'R' && data[1] == (byte)'I' && data[2] == (byte)'F' && data[3] == (byte)'F'   // WebP
+            && data[8] == (byte)'W' && data[9] == (byte)'E' && data[10] == (byte)'B' && data[11] == (byte)'P';
+    }
 }

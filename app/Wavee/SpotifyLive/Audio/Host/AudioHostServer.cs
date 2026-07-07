@@ -22,6 +22,7 @@ internal sealed class AudioHostServer : IDisposable
     long _pendingPlayGeneration = -1;
     string _trackUri = "";
     string _fileIdHex = "";
+    CrossfadeSettings _crossfade = CrossfadeSettings.Off;
     bool _disposed;
 
 #if WAVEE_PLAYPLAY_LOCAL
@@ -90,12 +91,16 @@ internal sealed class AudioHostServer : IDisposable
                         }).ConfigureAwait(false);
                         break;
                     case IpcMessageTypes.SetCrossfade:
-                        await Notify(IpcMessageTypes.CrossfadeMissed, new DiagnosticMessage
-                        {
-                            Generation = GenerationFrom(payload),
-                            Kind = "not_active",
-                            Detail = "single-pipeline host has no prepared next track yet",
-                        }).ConfigureAwait(false);
+                        var crossfade = payload?.Deserialize(AudioIpcJsonContext.Default.SetCrossfadeCommand);
+                        if (crossfade is not null && IsCurrent(payload))
+                            _crossfade = crossfade.Settings;
+                        if (_crossfade.Enabled)
+                            await Notify(IpcMessageTypes.Diagnostic, new DiagnosticMessage
+                            {
+                                Generation = GenerationFrom(payload),
+                                Kind = "crossfade_configured",
+                                Detail = "crossfade settings received; overlap playback is not active because the host has no prepared next track pipeline yet",
+                            }).ConfigureAwait(false);
                         break;
                     case IpcMessageTypes.Ping:
                         var ping = payload?.Deserialize(AudioIpcJsonContext.Default.PingMessage) ?? new PingMessage();
@@ -149,6 +154,8 @@ internal sealed class AudioHostServer : IDisposable
         if (hello.Pack is not null)
             BindPack(hello.Pack.ToAsset());
 
+        _engine.SetEqualizer(hello.Equalizer);
+        _crossfade = hello.Crossfade;
         _engine.SetVolume(hello.Volume);
         await Ready(id, true, null).ConfigureAwait(false);
     }

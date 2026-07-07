@@ -95,7 +95,7 @@ public sealed class AudioPlaybackStack : IAsyncDisposable
 #endif
         var apKeys = new LiveAudioKeySource(apChannel);
         KeyResolver = new AudioKeyResolver(apKeys, deriver, runtime, license, Status, session, log, structuredLog, LicenseDiskCache);
-        HeadClient = new HeadFileClient(new HttpClientExchange(), session, log);
+        HeadClient = new HeadFileClient(new HttpClientExchange(HttpPools.Get(HttpPool.Cdn)), session, log);
         Func<string, CancellationToken, Task<ByteString?>> fetchTrackV4 = (uri, ct) => extendedMetadata.GetExtensionAsync(uri, Xm.ExtensionKind.TrackV4, ct);
         Func<string, CancellationToken, Task<ByteString?>> fetchAudioFilesV5 = (uri, ct) => extendedMetadata.GetExtensionAsync(uri, Xm.ExtensionKind.AudioFiles, ct);
         Func<string, CancellationToken, Task<ByteString?>> fetchEpisodeV4 = (uri, ct) => extendedMetadata.GetExtensionAsync(uri, Xm.ExtensionKind.EpisodeV4, ct);

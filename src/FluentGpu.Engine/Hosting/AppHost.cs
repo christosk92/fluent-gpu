@@ -235,6 +235,9 @@ public sealed class AppHost : IDisposable
     // One line per modal-loop tick to stderr — total/ensureSize/layout/submit+present ms — gated entirely so the normal
     // hot path and the zero-alloc gates are untouched (no work, no allocation, when the flag is off).
     private static readonly bool s_resizeDiag = Diag.EnvFlag("FG_RESIZE_DIAG");
+    // FG_LIVE_MODAL_RESIZE=1: per-step swapchain resize + relayout during an edge-drag (legacy; ~16–50 ms/WndProc step).
+    // Default OFF: defer GPU resize to WM_EXITSIZEMOVE so the modal loop stays butter-smooth on composited/Mica windows.
+    private static readonly bool s_liveModalResize = Diag.EnvFlag("FG_LIVE_MODAL_RESIZE");
     // Render-thread seam rollout gate (Step 4/5), default OFF: FG_RENDER_THREAD spawns the fgpu-render thread and routes
     // submit/present onto it (FORCE-SYNC in Step 4 — the UI still blocks). The engine ships the proven single-thread
     // inline path until the seam.race soak is green; this flag is the staged flip mechanism, not a user quality knob.
@@ -403,7 +406,7 @@ public sealed class AppHost : IDisposable
         if (_imageQueue is { } q) _device.DrainImageJobs(q);
         try
         {
-            if (rf.SuppressVsync) _device.SuppressVsyncOnce();
+            if (rf.SuppressVsync) { _device.SuppressVsyncOnce(); _device.SuppressLatencyWaitOnce(); }
             _device.SubmitDrawList(_renderSeam.Bytes(rf), _renderSeam.SortKeys(rf), in rf.Submit);
             _swapchain.Present();
         }
@@ -1338,7 +1341,7 @@ public sealed class AppHost : IDisposable
             bool diagTick = keepAlive && s_resizeDiag;
             double ensureMs = 0, layoutMs0 = 0;
             long segStart = diagTick ? Stopwatch.GetTimestamp() : 0;
-            bool resized = EnsureSize();
+            bool resized = EnsureSize(keepAlive);
             if (diagTick) { ensureMs = ElapsedMs(segStart); segStart = Stopwatch.GetTimestamp(); }
 
             // Modal-loop keep-alive idle skip. During a title-bar MOVE or edge RESIZE the OS runs its own modal
@@ -1369,7 +1372,7 @@ public sealed class AppHost : IDisposable
                     || (_window.InModalLoop && AnimIsAmbient() && OnlyAmbientWakeReasons(wakeReasons))))
                 return LastStats;
 
-            var layoutSize = ClientSizeDip();
+            var layoutSize = LayoutSizeForFrame(keepAlive);
             PublishViewport(layoutSize);
 
             // FLIP "First": capture presented rects of layout-animated nodes BEFORE the reconcile/relayout that moves them.
@@ -1587,6 +1590,8 @@ public sealed class AppHost : IDisposable
             // last position + no touch pan. Zero-alloc scalar walk through the existing hover chokepoints.
             if (_scrollAnim.AnyOffsetWroteThisFrame) _dispatcher.RefreshHoverAfterScroll();
 
+            ScrollBindEval.ApplyContinuousPass(_scene);        // 7.7 steady-frame scroll binds (collapsed hero / fade copy)
+
             var focus = new FocusVisualStyle(Tok.FocusOuter, Tok.FocusInner, Tok.FocusThickness);
             // WinUI text-edit decor brushes: selection = TextControlSelectionHighlightColor (= AccentFillColorSelectedTextBackgroundBrush),
             // selected glyphs = TextOnAccentFillColorSelectedTextBrush, caret = the text foreground.
@@ -1627,11 +1632,9 @@ public sealed class AppHost : IDisposable
             _scene.ClearRecordDirty();
             long tRecord = Stopwatch.GetTimestamp();
             if (s_allocDiag) { db = Probe(SegRecord, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
-            // Modal-loop repaint: present at SyncInterval 0 so Present is a cheap, tear-free hand-off (the composited DComp
-            // flip surface is still composited at vblank by DWM) instead of blocking the WndProc thread up to a vblank — the
-            // live-resize/move hitch. We KEEP the frame-latency waitable wait (do NOT SuppressLatencyWaitOnce here) as the
-            // pacing gate: with SetMaximumFrameLatency=1 it self-throttles the producer to one in-flight frame so interval-0
-            // presents can't back up the present queue and re-block in Present/back-buffer acquire (DXGI pacing review).
+            // Modal-loop repaint (WM_EXITSIZEMOVE settle): present at SyncInterval 0 + skip the latency waitable so the
+            // WndProc thread isn't blocked up to a vblank. Mid-drag resize is deferred (no keep-alive paints); this path
+            // runs once on mouse-up with the final client size.
             // Skip-submit gate (idle/slow-change power, finding #3a): when this frame mutated nothing the recorder reads
             // (no reconcile, no relayout, no transform write) AND the recorded command stream is byte-identical to the last
             // PRESENTED frame, the already-presented front buffer is still correct — elide the GPU submit + Present (the
@@ -1663,7 +1666,7 @@ public sealed class AppHost : IDisposable
                 // (FG_RENDER_THREAD): the fgpu-render thread submits/presents; the UI BLOCKS in DrainSync (force-sync).
                 // Step 5 (FG_RENDER_ASYNC): the UI WakeAsyncs and PROCEEDS — the render thread presents on its own
                 // timeline (the smoothness win: the GPU fence-wait no longer bounds back to the UI thread).
-                var submitInfo = new FrameInfo(_window.ClientSizePx, _window.Scale, Clear, recordStats.Damage);
+                var submitInfo = new FrameInfo(FrameSizePx(keepAlive), _window.Scale, Clear, recordStats.Damage);
                 _renderSeam.Publish(_drawList.Bytes, _drawList.SortKeys, in submitInfo, suppressVsync: keepAlive);
                 if (_renderThread is not null)
                 {
@@ -1673,7 +1676,7 @@ public sealed class AppHost : IDisposable
                 }
                 else
                 {
-                    if (keepAlive) _device.SuppressVsyncOnce();
+                    if (keepAlive) { _device.SuppressVsyncOnce(); _device.SuppressLatencyWaitOnce(); }
                     try
                     {
                         if (_renderSeam.TryAcquire(out var rf))
@@ -2216,10 +2219,29 @@ public sealed class AppHost : IDisposable
             DumpNode(c, depth + 1);
     }
 
+    /// <summary>True during a composited modal edge-drag when live per-step resize is off: HWND size advances but GPU
+    /// resize + relayout wait for mouse-up.</summary>
+    private bool DeferModalResize(bool keepAlive)
+        => !s_liveModalResize && keepAlive && _window.InModalLoop;
+
+    /// <summary>Layout/submit viewport in DIP while a modal resize is deferred — keep the last presented size until
+    /// WM_EXITSIZEMOVE.</summary>
+    private Size2 LayoutSizeForFrame(bool keepAlive)
+    {
+        if (DeferModalResize(keepAlive))
+        {
+            float scale = _lastScale <= 0f ? 1f : _lastScale;
+            return new Size2(_lastSize.Width / scale, _lastSize.Height / scale);
+        }
+        return ClientSizeDip();
+    }
+
+    private Size2 FrameSizePx(bool keepAlive) => DeferModalResize(keepAlive) ? _lastSize : _window.ClientSizePx;
+
     /// <summary>Resize the swapchain to match the window's client size; force a full re-layout on change.
     /// Returns true if the client size changed this frame (so the caller can SNAP layout — a window resize must not
     /// FLIP-animate content; the pre-resize rects are stale and projecting them shifts the content + reveals the backdrop).</summary>
-    private bool EnsureSize()
+    private bool EnsureSize(bool keepAlive = false)
     {
         // Scale participates too: a per-monitor DPI change (WM_DPICHANGED) re-scales the window — usually the px
         // size changes with the suggested rect, but even when it doesn't, the DIP viewport (px/scale) did, so the
@@ -2227,6 +2249,7 @@ public sealed class AppHost : IDisposable
         var s = _window.ClientSizePx;
         float scale = _window.Scale;
         if (s.Width == _lastSize.Width && s.Height == _lastSize.Height && scale == _lastScale) return false;
+        if (DeferModalResize(keepAlive)) return false;   // pending until WM_EXITSIZEMOVE (InModalLoop cleared before Paint)
         _lastSize = s;
         _lastScale = scale;
         // Step 2 (async resize rendezvous): D3D12Swapchain.Resize does a fenced WaitForGpu + releases the back buffers +

@@ -23,6 +23,9 @@ public readonly record struct LocalPlaybackSnapshot(
 
 public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
 {
+    const int MaxWirePrevTracks = 50;
+    const int MaxWireNextTracks = 50;
+
     readonly ITransport _transport;
     readonly string _deviceId;
     readonly IPlaybackState _state;
@@ -226,9 +229,24 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
         bool wirePaused = transportPaused;
         bool wirePlaying = _state.IsPlaying || wirePaused;
 
+        var wirePrev = CapPrev(prev);
+        var wireNext = CapNext(next);
+
         return new LocalPlaybackSnapshot(current, _state.ContextUri, _state.PositionMs, _state.DurationMs,
             wirePlaying, wirePaused, _state.IsShuffle, _state.Repeat,
-            prev, next, metadata, contextIndex, iid, page, rev, sid, pid, hasBeen, started, _state.Volume);
+            wirePrev, wireNext, metadata, contextIndex, iid, page, rev, sid, pid, hasBeen, started, _state.Volume);
+    }
+
+    static IReadOnlyList<SnapshotTrack> CapPrev(List<SnapshotTrack> tracks)
+    {
+        if (tracks.Count <= MaxWirePrevTracks) return tracks;
+        return tracks.GetRange(tracks.Count - MaxWirePrevTracks, MaxWirePrevTracks);
+    }
+
+    static IReadOnlyList<SnapshotTrack> CapNext(List<SnapshotTrack> tracks)
+    {
+        if (tracks.Count <= MaxWireNextTracks) return tracks;
+        return tracks.GetRange(0, MaxWireNextTracks);
     }
 
     static SnapshotTrack ToSnapshotTrack(QueueEntry entry, string provider, int viewIndex)

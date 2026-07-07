@@ -65,14 +65,30 @@ public interface ILyricHttp
     Task<string?> GetStringAsync(string url, IReadOnlyDictionary<string, string>? headers, CancellationToken ct);
 }
 
+public readonly record struct LyricHttpResult(int Status, string? Body)
+{
+    public bool IsSuccess => Status is >= 200 and < 300;
+}
+
+public interface ILyricHttpWithStatus : ILyricHttp
+{
+    Task<LyricHttpResult> GetAsync(string url, IReadOnlyDictionary<string, string>? headers, CancellationToken ct);
+}
+
 /// <summary>The real <see cref="ILyricHttp"/> over the process-shared HttpClient (pooled connections, AOT-clean). Returns
 /// null on any non-success / transport error so a source miss is a clean null, never a throw that aborts the fan-out.</summary>
-public sealed class SharedHttpLyricFetch : ILyricHttp
+public sealed class SharedHttpLyricFetch : ILyricHttpWithStatus
 {
     readonly string _userAgent;
     public SharedHttpLyricFetch(string userAgent = "Wavee/1.0 (https://github.com/christosk92/Wavee)") => _userAgent = userAgent;
 
     public async Task<string?> GetStringAsync(string url, IReadOnlyDictionary<string, string>? headers, CancellationToken ct)
+    {
+        var result = await GetAsync(url, headers, ct).ConfigureAwait(false);
+        return result.IsSuccess ? result.Body : null;
+    }
+
+    public async Task<LyricHttpResult> GetAsync(string url, IReadOnlyDictionary<string, string>? headers, CancellationToken ct)
     {
         try
         {
@@ -80,12 +96,12 @@ public sealed class SharedHttpLyricFetch : ILyricHttp
             req.Headers.TryAddWithoutValidation("User-Agent", _userAgent);
             if (headers is not null)
                 foreach (var (k, v) in headers) req.Headers.TryAddWithoutValidation(k, v);
-            using var resp = await Wavee.Backend.Spotify.SharedHttp.Client.SendAsync(req, ct).ConfigureAwait(false);
-            if (!resp.IsSuccessStatusCode) return null;
-            return await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            using var resp = await Wavee.Backend.Spotify.HttpPools.Get(Wavee.Backend.Spotify.HttpPool.ThirdParty).SendAsync(req, ct).ConfigureAwait(false);
+            var body = resp.IsSuccessStatusCode ? await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false) : null;
+            return new LyricHttpResult((int)resp.StatusCode, body);
         }
         catch (OperationCanceledException) { throw; }
-        catch { return null; }
+        catch { return new LyricHttpResult(0, null); }
     }
 }
 

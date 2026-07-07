@@ -2,7 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using Google.Protobuf;
+using Google.Protobuf.WellKnownTypes;
 using Wavee.Backend;
+using Xm = Wavee.Protocol.ExtendedMetadata;
 
 namespace Wavee.Backend.Metadata;
 
@@ -15,11 +18,14 @@ public sealed class MetadataService
     readonly IMetadataSource _source;
     readonly IStore _store;
     readonly Resource<string, long> _res;
+    readonly ExtensionEtagCache? _extensionCache;
 
-    public MetadataService(IMetadataSource source, IStore store, Func<SessionContext> ctx, TimeSpan? ttl = null)
+    public MetadataService(IMetadataSource source, IStore store, Func<SessionContext> ctx, TimeSpan? ttl = null,
+        ExtensionEtagCache? extensionCache = null)
     {
         _source = source;
         _store = store;
+        _extensionCache = extensionCache;
         _res = new Resource<string, long>(
             async (uri, _) => { await source.FetchAsync(new[] { EntityRef.Parse(uri) }, store, CancellationToken.None).ConfigureAwait(false); return store.Version(uri); },
             new FreshnessPolicy.Etag(ttl ?? TimeSpan.FromHours(1)),   // catalog facts: TTL (+ conditional refresh later)
@@ -44,7 +50,66 @@ public sealed class MetadataService
             misses.Add(EntityRef.Parse(uri));
         }
         if (misses.Count == 0) return;
-        await _source.FetchAsync(misses, _store, ct).ConfigureAwait(false);
+        if (_extensionCache is not null)
+            await SyncAllConditionalAsync(misses, ct).ConfigureAwait(false);
+        else
+            await _source.FetchAsync(misses, _store, ct).ConfigureAwait(false);
         foreach (var e in misses) _res.Seed(e.Uri, _store.Version(e.Uri));   // mark fetched → next sync skips them
     }
+
+    async Task SyncAllConditionalAsync(IReadOnlyList<EntityRef> misses, CancellationToken ct)
+    {
+        var extensionRequests = new List<(string Uri, Xm.ExtensionKind Kind)>(misses.Count);
+        var fallback = new List<EntityRef>();
+        foreach (var entity in misses)
+        {
+            var kind = KindFor(entity.Kind);
+            if (kind == Xm.ExtensionKind.UnknownExtension) fallback.Add(entity);
+            else extensionRequests.Add((entity.Uri, kind));
+        }
+
+        if (extensionRequests.Count > 0)
+        {
+            var cached = await _extensionCache!.GetAsync(extensionRequests, ct).ConfigureAwait(false);
+            ProjectCachedExtensions(cached, _store);
+        }
+
+        if (fallback.Count > 0)
+            await _source.FetchAsync(fallback, _store, ct).ConfigureAwait(false);
+    }
+
+    static void ProjectCachedExtensions(
+        IReadOnlyDictionary<(string Uri, Xm.ExtensionKind Kind), CachedExtension> cached, IStore store)
+    {
+        var arrays = new Dictionary<Xm.ExtensionKind, Xm.EntityExtensionDataArray>();
+        foreach (var ((uri, kind), ext) in cached)
+        {
+            if (ext.Missing || ext.Payload is null || ext.Payload.IsEmpty) continue;
+            if (!arrays.TryGetValue(kind, out var array))
+            {
+                array = new Xm.EntityExtensionDataArray { ExtensionKind = kind };
+                arrays[kind] = array;
+            }
+            array.ExtensionData.Add(new Xm.EntityExtensionData
+            {
+                EntityUri = uri,
+                ExtensionData = new Any { Value = ext.Payload },
+            });
+        }
+
+        if (arrays.Count == 0) return;
+        var resp = new Xm.BatchedExtensionResponse();
+        foreach (var array in arrays.Values) resp.ExtendedMetadata.Add(array);
+        ExtendedMetadataSource.ProjectResponse(resp.ToByteArray(), store);
+    }
+
+    static Xm.ExtensionKind KindFor(EntityKind kind) => kind switch
+    {
+        EntityKind.Track => Xm.ExtensionKind.TrackV4,
+        EntityKind.Album => Xm.ExtensionKind.AlbumV4,
+        EntityKind.Artist => Xm.ExtensionKind.ArtistV4,
+        EntityKind.Show => Xm.ExtensionKind.ShowV4,
+        EntityKind.Episode => Xm.ExtensionKind.EpisodeV4,
+        _ => Xm.ExtensionKind.UnknownExtension,
+    };
 }

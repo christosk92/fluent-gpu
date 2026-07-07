@@ -104,6 +104,28 @@ public class HttpMiddlewareTests
         Assert.False(captured!.Headers.ContainsKey("client-token"));   // null token → header omitted, not "Bearer null"
         Assert.Equal(SpotifyHeaders.AppPlatform, captured.Headers["App-Platform"]);
     }
+
+    [Fact]
+    public async Task PathfinderHeaders_AttachesWebPlayerIdentityAndClientToken()
+    {
+        var mw = new PathfinderHeadersMiddleware(_ => Task.FromResult<string?>("CT"));
+        HttpReq? captured = null;
+        var inner = new FakeExchange((req, _) => { captured = req; return Ok(); });
+        var req = new HttpReq("POST", "https://api-partner.spotify.com/pathfinder/v2/query",
+            new Dictionary<string, string>
+            {
+                [PathfinderHeadersMiddleware.PlatformHeader] = PathfinderHeadersMiddleware.WebPlayerPlatform,
+            },
+            []);
+
+        await new HttpPipeline(inner, mw).SendAsync(req, TestContext.Current.CancellationToken);
+
+        Assert.Equal("CT", captured!.Headers["client-token"]);
+        Assert.Equal("WebPlayer", captured.Headers["app-platform"]);
+        Assert.Contains("Chrome/147.0.0.0", captured.Headers["user-agent"]);
+        Assert.Equal("application/json", captured.Headers["content-type"]);
+        Assert.False(captured.Headers.ContainsKey(PathfinderHeadersMiddleware.PlatformHeader));
+    }
 }
 
 public class ApResolverTests

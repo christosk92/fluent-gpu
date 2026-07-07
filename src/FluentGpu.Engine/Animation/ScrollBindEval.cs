@@ -89,6 +89,25 @@ public static class ScrollBindEval
         }
     }
 
+    /// <summary>Re-apply continuous scroll-driven bindings (opacity / presented-height / parallax) at the current offset
+    /// for every scroller that owns binds. Layout and input already call <see cref="ApplyContinuous"/>; this pass runs
+    /// before record on steady frames (focus loss, theme chrome, skip-submit repaints) so collapsed heroes and faded copy
+    /// stay correct even when no relayout or offset write happened this frame.</summary>
+    public static void ApplyContinuousPass(SceneStore scene)
+    {
+        var table = scene.ScrollBinds;
+        if (!table.HasAny) return;
+        foreach (int vpIdx in table.ScrollerIndices)
+        {
+            int head = table.Head(vpIdx);
+            if (head < 0) continue;
+            NodeHandle vp = table.At(head).ScrollerHandle;
+            if (vp.IsNull || !scene.IsLive(vp)) continue;
+            ref ScrollState sc = ref scene.ScrollRef(vp);
+            ApplyContinuous(scene, vp, ref sc);
+        }
+    }
+
     static byte ComputeFlags(SceneStore scene, ref ScrollState sc, bool horiz, bool anyStuckTop)
     {
         float offset = horiz ? sc.OffsetX : sc.OffsetY;

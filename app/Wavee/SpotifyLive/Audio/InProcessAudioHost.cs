@@ -1,3 +1,4 @@
+using System;
 using Wavee.Backend;
 using Wavee.Backend.Audio;
 using Wavee.Core;
@@ -5,7 +6,7 @@ using Wavee.Core;
 namespace Wavee.SpotifyLive.Audio;
 
 /// <summary>In-process local audio host: CDN fetch/decrypt, decode, and WASAPI output without an IPC sidecar.</summary>
-public sealed class InProcessAudioHost : IAudioHost
+public sealed class InProcessAudioHost : IAudioHost, IAudioDspControl
 {
     readonly SimpleSubject<AudioHostSignal> _signals = new();
     readonly AudioPlayEngine _engine;
@@ -43,6 +44,14 @@ public sealed class InProcessAudioHost : IAudioHost
     public void Stop() { _playing = false; _engine.Stop(); }
     public void Seek(long positionMs) => _engine.Seek(positionMs);
     public void SetVolume(double volume01) => _engine.SetVolume(volume01);
+    public void SetEqualizer(bool enabled, ReadOnlySpan<float> gainsDb, float preampDb = 0f)
+    {
+        var gains = new float[10];
+        gainsDb[..Math.Min(gainsDb.Length, gains.Length)].CopyTo(gains);
+        _engine.SetEqualizer(new EqualizerSettings { Enabled = enabled, GainsDb = gains, PreampDb = preampDb });
+    }
+
+    public void SetCrossfade(bool enabled, int durationMs) { }
 
     void OnState(AudioHostSignal signal)
     {

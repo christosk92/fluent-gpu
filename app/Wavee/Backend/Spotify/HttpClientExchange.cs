@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
@@ -11,6 +13,13 @@ namespace Wavee.Backend.Spotify;
 // are pre-built bytes (e.g. a gzipped protobuf); Content-Type/Content-Encoding ride on the content headers.
 public sealed class HttpClientExchange : IHttpExchange
 {
+    readonly HttpClient _http;
+
+    public HttpClientExchange(HttpClient? http = null)
+    {
+        _http = http ?? HttpPools.Get(HttpPool.ControlPlane);
+    }
+
     public async Task<HttpResp> SendAsync(HttpReq req, CancellationToken ct)
     {
         using var msg = new HttpRequestMessage(new HttpMethod(req.Method), req.Url);
@@ -21,9 +30,10 @@ public sealed class HttpClientExchange : IHttpExchange
 
         // ResponseHeadersRead: status + headers are available WITHOUT buffering the body — we stream the (auto-decompressed)
         // body straight into the protobuf parser, so a multi-MB metadata batch never materializes as one LOH byte[].
-        var resp = await SharedHttp.Client.SendAsync(msg, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+        var resp = await _http.SendAsync(msg, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
         try
         {
+            LogProtocolOnce(resp);
             var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var h in resp.Headers) headers[h.Key] = string.Join(",", h.Value);
             foreach (var h in resp.Content.Headers) headers[h.Key] = string.Join(",", h.Value);
@@ -32,4 +42,18 @@ public sealed class HttpClientExchange : IHttpExchange
         }
         catch { resp.Dispose(); throw; }   // a throw before ownership transfers (e.g. ct cancels) must not leak the connection
     }
+
+    [Conditional("DEBUG")]
+    static void LogProtocolOnce(HttpResponseMessage resp)
+    {
+#if DEBUG
+        if (resp.RequestMessage?.RequestUri?.Host is not { Length: > 0 } host) return;
+        if (!ProtocolHosts.TryAdd(host, 0)) return;
+        Debug.WriteLine($"http {host} protocol={resp.Version}");
+#endif
+    }
+
+#if DEBUG
+    static readonly ConcurrentDictionary<string, byte> ProtocolHosts = new(StringComparer.OrdinalIgnoreCase);
+#endif
 }

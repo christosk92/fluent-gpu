@@ -75,6 +75,8 @@ public sealed class SceneStore : ISceneBackend
     private InteractionInfo[] _interaction;
     private NodeFlags[] _flags;
     private byte[] _recordDirty;
+    private byte[] _recordDirtySelf;
+    private byte[] _recordDirtyDescendant;
     private int[] _recordDirtyWrote;
     private int _recordDirtyWroteCount;
     private Action?[] _click;         // managed edge payload (GC ref at the edge only)
@@ -190,6 +192,8 @@ public sealed class SceneStore : ISceneBackend
         _interaction = new InteractionInfo[capacity];
         _flags = new NodeFlags[capacity];
         _recordDirty = new byte[capacity];
+        _recordDirtySelf = new byte[capacity];
+        _recordDirtyDescendant = new byte[capacity];
         _recordDirtyWrote = new int[capacity];
         _click = new Action?[capacity];
         _boundsChanged = new Action<RectF>?[capacity];
@@ -239,6 +243,8 @@ public sealed class SceneStore : ISceneBackend
         _interaction[idx] = default;
         _flags[idx] = NodeFlags.Visible | NodeFlags.HitTestVisible | NodeFlags.NewThisFrame;
         _recordDirty[idx] = 0;
+        _recordDirtySelf[idx] = 0;
+        _recordDirtyDescendant[idx] = 0;
         MarkRecordDirty(idx);
         _click[idx] = null;
         _boundsChanged[idx] = null;
@@ -341,6 +347,8 @@ public sealed class SceneStore : ISceneBackend
         if ((flags & NodeFlags.ConnectedOverlay) != 0) RemoveOverlay(node);   // a freed overlay must not linger in the band
         OnFreeIndex?.Invoke(idx);   // symmetric teardown of INDEX-keyed external side-tables (AnimEngine transitions / ScrollIntegrator timers)
         _recordDirty[idx] = 0;
+        _recordDirtySelf[idx] = 0;
+        _recordDirtyDescendant[idx] = 0;
         _gen[idx]++;
         if (_gen[idx] == 0) _gen[idx] = 1;
         _nextFree[idx] = _freeHead;
@@ -813,6 +821,18 @@ public sealed class SceneStore : ISceneBackend
         return raw > 0 && raw < (uint)_high && _gen[raw] == h.Raw.Gen ? _recordDirty[raw] : (byte)0;
     }
 
+    public byte RecordDirtySelfBits(NodeHandle h)
+    {
+        uint raw = h.Raw.Index;
+        return raw > 0 && raw < (uint)_high && _gen[raw] == h.Raw.Gen ? _recordDirtySelf[raw] : (byte)0;
+    }
+
+    public byte RecordDirtyDescendantBits(NodeHandle h)
+    {
+        uint raw = h.Raw.Index;
+        return raw > 0 && raw < (uint)_high && _gen[raw] == h.Raw.Gen ? _recordDirtyDescendant[raw] : (byte)0;
+    }
+
     public bool IsRecordContentDirty(NodeHandle h)
         => (RecordDirtyBits(h) & RecordDirtyContent) != 0;
 
@@ -821,7 +841,12 @@ public sealed class SceneStore : ISceneBackend
         for (int i = 0; i < _recordDirtyWroteCount; i++)
         {
             int idx = _recordDirtyWrote[i];
-            if ((uint)idx < (uint)_recordDirty.Length) _recordDirty[idx] = 0;
+            if ((uint)idx < (uint)_recordDirty.Length)
+            {
+                _recordDirty[idx] = 0;
+                _recordDirtySelf[idx] = 0;
+                _recordDirtyDescendant[idx] = 0;
+            }
             _recordDirtyWrote[i] = 0;
         }
         _recordDirtyWroteCount = 0;
@@ -834,11 +859,19 @@ public sealed class SceneStore : ISceneBackend
         if ((uint)idx >= (uint)_high || _gen[idx] == 0 || bits == 0) return;
         for (int n = idx; n != 0; n = _parent[n])
         {
-            byte old = _recordDirty[n];
-            byte nextBits = (byte)(old | bits);
-            if (nextBits == old) break;
-            _recordDirty[n] = nextBits;
-            if (old == 0)
+            byte oldAggregate = _recordDirty[n];
+            byte oldSelf = _recordDirtySelf[n];
+            byte oldDescendant = _recordDirtyDescendant[n];
+            byte nextAggregate = (byte)(oldAggregate | bits);
+            byte nextSelf = n == idx ? (byte)(oldSelf | bits) : oldSelf;
+            byte nextDescendant = n == idx ? oldDescendant : (byte)(oldDescendant | bits);
+            if (nextAggregate == oldAggregate && nextSelf == oldSelf && nextDescendant == oldDescendant)
+                continue;
+
+            _recordDirty[n] = nextAggregate;
+            _recordDirtySelf[n] = nextSelf;
+            _recordDirtyDescendant[n] = nextDescendant;
+            if (oldAggregate == 0 && oldSelf == 0 && oldDescendant == 0)
             {
                 if (_recordDirtyWroteCount == _recordDirtyWrote.Length)
                 {
@@ -1206,7 +1239,8 @@ public sealed class SceneStore : ISceneBackend
         Array.Resize(ref _prevSib, n); Array.Resize(ref _nextSib, n); Array.Resize(ref _childCount, n);
         Array.Resize(ref _elementTypeId, n); Array.Resize(ref _layout, n); Array.Resize(ref _bounds, n);
         Array.Resize(ref _paint, n); Array.Resize(ref _dynamicText, n); Array.Resize(ref _interaction, n); Array.Resize(ref _flags, n);
-        Array.Resize(ref _recordDirty, n); Array.Resize(ref _recordDirtyWrote, n);
+        Array.Resize(ref _recordDirty, n); Array.Resize(ref _recordDirtySelf, n); Array.Resize(ref _recordDirtyDescendant, n);
+        Array.Resize(ref _recordDirtyWrote, n);
         if (_recordDirtyWroteCount > n) _recordDirtyWroteCount = n;
         Array.Resize(ref _click, n); Array.Resize(ref _boundsChanged, n); Array.Resize(ref _boundsDelivered, n); Array.Resize(ref _keyHandler, n); Array.Resize(ref _charHandler, n);
         Array.Resize(ref _pointerDown, n); Array.Resize(ref _drag, n); Array.Resize(ref _hoverMove, n); Array.Resize(ref _pointerExit, n);

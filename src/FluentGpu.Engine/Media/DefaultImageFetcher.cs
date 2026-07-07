@@ -89,7 +89,8 @@ public sealed class DefaultImageFetcher : IImageFetcher, IDisposable
             using var body = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
             var fetched = await ReadAllPooled(body, resp.Content.Headers.ContentLength, ct).ConfigureAwait(false);
 
-            if (_disk is not null && fetched.Ok)
+            if (_disk is not null && fetched.Ok
+                && DiskImageCache.LooksLikeImage(fetched.Span))
                 await _disk.WriteAsync(source, new ReadOnlyMemory<byte>(fetched.Buffer, 0, fetched.Length), ct).ConfigureAwait(false);
             return fetched;
         }

@@ -16,6 +16,7 @@ namespace Wavee.SpotifyLive;
 sealed class SpotifyUserProfileService : IUserProfileService
 {
     readonly ExtendedMetadataSource _metadata;
+    readonly ExtensionEtagCache? _extensions;
     readonly IHttpExchange _http;
     readonly Func<string> _baseUrl;
     readonly Action<string>? _log;
@@ -23,15 +24,24 @@ sealed class SpotifyUserProfileService : IUserProfileService
     readonly ConcurrentDictionary<string, Task> _inflight = new(StringComparer.Ordinal);
     readonly SimpleEvent<string> _changed = new();
 
-    public SpotifyUserProfileService(ExtendedMetadataSource metadata, IHttpExchange http, Func<string> baseUrl, Action<string>? log = null)
+    public SpotifyUserProfileService(ExtendedMetadataSource metadata, IHttpExchange http, Func<string> baseUrl,
+        Action<string>? log = null, ExtensionEtagCache? extensions = null)
     {
         _metadata = metadata;
+        _extensions = extensions;
         _http = http;
         _baseUrl = baseUrl;
         _log = log;
     }
 
     public IObservable<string> Changed => _changed;
+
+    public void Seed(string userUriOrId, Owner? owner)
+    {
+        var key = UserProfileIds.Normalize(userUriOrId);
+        if (key is null) return;
+        Store(key, owner, emitValueChanges: false);
+    }
 
     public Owner? Get(string userUriOrId)
     {
@@ -64,7 +74,9 @@ sealed class SpotifyUserProfileService : IUserProfileService
             {
                 var requests = new (string Uri, Xm.ExtensionKind Kind)[userUris.Count];
                 for (int i = 0; i < userUris.Count; i++) requests[i] = (userUris[i], Xm.ExtensionKind.UserProfile);
-                var payloads = await _metadata.GetExtensionsAsync(requests, CancellationToken.None).ConfigureAwait(false);
+                IReadOnlyDictionary<(string Uri, Xm.ExtensionKind Kind), ByteString> payloads = _extensions is not null
+                    ? await _extensions.GetPayloadsAsync(requests, CancellationToken.None).ConfigureAwait(false)
+                    : await _metadata.GetExtensionsAsync(requests, CancellationToken.None).ConfigureAwait(false);
                 foreach (var uri in userUris)
                 {
                     if (!payloads.TryGetValue((uri, Xm.ExtensionKind.UserProfile), out var payload)) continue;
@@ -105,7 +117,7 @@ sealed class SpotifyUserProfileService : IUserProfileService
             using var resp = await _http.SendAsync(new HttpReq("GET", url, headers, null), CancellationToken.None).ConfigureAwait(false);
             if (resp.Status != 200)
             {
-                Store(userUri, null);
+                if (resp.Status == 404) Store(userUri, null);
                 return;
             }
             using var doc = await JsonDocument.ParseAsync(resp.Body).ConfigureAwait(false);
@@ -114,7 +126,6 @@ sealed class SpotifyUserProfileService : IUserProfileService
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log?.Invoke("user profile REST fetch: " + ex.Message);
-            Store(userUri, null);
         }
         finally
         {
@@ -122,13 +133,16 @@ sealed class SpotifyUserProfileService : IUserProfileService
         }
     }
 
-    void Store(string userUri, Owner? owner)
+    void Store(string userUri, Owner? owner, bool emitValueChanges = true)
     {
+        var key = UserProfileIds.Normalize(userUri);
+        if (key is null) return;
         var next = new Entry(owner);
-        bool changed = !_cache.TryGetValue(userUri, out var prior)
+        bool changed = !_cache.TryGetValue(key, out var prior)
             || !Same(prior.Profile, next.Profile);
-        _cache[userUri] = next;
-        if (changed && owner is not null) _changed.OnNext(userUri);
+        _cache[key] = next;
+        if (!changed || owner is null) return;
+        if (emitValueChanges || prior.Profile is null) _changed.OnNext(key);
     }
 
     static bool Same(Owner? a, Owner? b)
@@ -151,9 +165,9 @@ sealed class SpotifyUserProfileService : IUserProfileService
 
     static Owner? ParseJson(JsonElement root, string canonicalUri)
     {
-        string id = UserProfileIds.BareId(StringValue(root, "uri") ?? canonicalUri);
-        if (id.StartsWith(UserProfileIds.Prefix, StringComparison.Ordinal)) id = UserProfileIds.BareId(id);
-        if (string.IsNullOrWhiteSpace(id)) id = UserProfileIds.BareId(canonicalUri);
+        var canonical = UserProfileIds.Normalize(StringValue(root, "uri") ?? canonicalUri)
+            ?? UserProfileIds.Normalize(canonicalUri);
+        string id = canonical is not null ? UserProfileIds.BareId(canonical) : UserProfileIds.BareId(canonicalUri).ToLowerInvariant();
 
         string? name = StringValue(root, "name") ?? StringValue(root, "display_name");
         string? avatar = StringValue(root, "image_url") ?? FirstImage(root);

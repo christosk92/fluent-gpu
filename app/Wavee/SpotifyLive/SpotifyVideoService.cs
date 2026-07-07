@@ -24,13 +24,15 @@ sealed class SpotifyVideoService : IVideoService
     static readonly MessageParser<Xm.VideoAssociations> AssocParser = Xm.VideoAssociations.Parser.WithDiscardUnknownFields(true);
 
     readonly ExtendedMetadataSource _metadata;
+    readonly ExtensionEtagCache? _extensions;
     readonly IStore _store;
     readonly Action<string>? _log;
     readonly ConcurrentDictionary<string, Task<VideoAssociation?>> _inflight = new(StringComparer.Ordinal);
 
-    public SpotifyVideoService(ExtendedMetadataSource metadata, IStore store, Action<string>? log = null)
+    public SpotifyVideoService(ExtendedMetadataSource metadata, IStore store, Action<string>? log = null, ExtensionEtagCache? extensions = null)
     {
         _metadata = metadata;
+        _extensions = extensions;
         _store = store;
         _log = log;
     }
@@ -49,6 +51,24 @@ sealed class SpotifyVideoService : IVideoService
             reqs.Add((uri, Xm.ExtensionKind.VideoAssociations, cached?.Etag));
         }
         if (reqs.Count == 0) return;
+
+        if (_extensions is not null)
+        {
+            IReadOnlyDictionary<(string Uri, Xm.ExtensionKind Kind), CachedExtension> cached;
+            try
+            {
+                cached = await _extensions.GetAsync(
+                    reqs.ConvertAll(x => (x.Uri, x.Kind)),
+                    ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException) { _log?.Invoke("VIDEO_ASSOCIATIONS detect: " + ex.Message); return; }
+
+            using var bulkCached = _store.BeginBulk();
+            foreach (var (uri, _, _) in reqs)
+                if (cached.TryGetValue((uri, Xm.ExtensionKind.VideoAssociations), out var res))
+                    Apply(uri, res, now);
+            return;
+        }
 
         IReadOnlyDictionary<(string Uri, Xm.ExtensionKind Kind), ExtendedMetadataSource.ExtensionResult> results;
         try { results = await _metadata.GetExtensionsWithHeadersAsync(reqs, ct).ConfigureAwait(false); }
@@ -77,10 +97,19 @@ sealed class SpotifyVideoService : IVideoService
         var now = DateTimeOffset.UtcNow;
         try
         {
+            if (_extensions is not null)
+            {
+                var cached = await _extensions.GetAsync(new[] { (uri, Xm.ExtensionKind.VideoAssociations) }, ct)
+                    .ConfigureAwait(false);
+                if (cached.TryGetValue((uri, Xm.ExtensionKind.VideoAssociations), out var ext))
+                    Apply(uri, ext, now);
+                return _store.GetVideoAssociation(uri);
+            }
+
             var results = await _metadata.GetExtensionsWithHeadersAsync(
                 new[] { (uri, Xm.ExtensionKind.VideoAssociations, etag) }, ct).ConfigureAwait(false);
-            if (results.TryGetValue((uri, Xm.ExtensionKind.VideoAssociations), out var res))
-                Apply(uri, res, now);
+            if (results.TryGetValue((uri, Xm.ExtensionKind.VideoAssociations), out var wire))
+                Apply(uri, wire, now);
         }
         catch (Exception ex) when (ex is not OperationCanceledException) { _log?.Invoke("VIDEO_ASSOCIATIONS get: " + ex.Message); }
         return _store.GetVideoAssociation(uri);
@@ -96,6 +125,17 @@ sealed class SpotifyVideoService : IVideoService
         _store.UpsertVideoAssociation(projected);
         if (projected.HasVideo && _store.GetTrack(uri) is { HasVideo: false } t)
             _store.UpsertTrack(t with { HasVideo = true });   // merge ORs HasVideo → TrackRow movie icon
+    }
+
+    void Apply(string uri, CachedExtension res, DateTimeOffset now)
+    {
+        VideoAssociation? projected;
+        try { projected = Project(uri, res, now); }
+        catch (InvalidProtocolBufferException) { return; }
+        if (projected is null) return;
+        _store.UpsertVideoAssociation(projected);
+        if (projected.HasVideo && _store.GetTrack(uri) is { HasVideo: false } t)
+            _store.UpsertTrack(t with { HasVideo = true });
     }
 
     VideoAssociation? Project(string uri, ExtendedMetadataSource.ExtensionResult res, DateTimeOffset now)
@@ -116,6 +156,16 @@ sealed class SpotifyVideoService : IVideoService
             default:
                 return null;   // an error/odd status — leave any existing cache untouched
         }
+    }
+
+    VideoAssociation? Project(string uri, CachedExtension res, DateTimeOffset now)
+    {
+        if (res.Missing || res.Payload is null || res.Payload.IsEmpty)
+            return VideoAssociation.None(uri, res.Etag, now, res.OfflineTtlSeconds);
+
+        var (counterpart, files) = ParseAssoc(res.Payload);
+        bool has = files.Count > 0 || !string.IsNullOrEmpty(counterpart);
+        return new VideoAssociation(uri, has, counterpart, files, res.Etag, now, res.OfflineTtlSeconds);
     }
 
     static (string? Counterpart, IReadOnlyList<VideoFileRef> Files) ParseAssoc(ByteString payload)

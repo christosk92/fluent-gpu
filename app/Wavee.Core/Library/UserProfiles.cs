@@ -26,10 +26,10 @@ public static class UserProfileIds
         if (trimmed.StartsWith(Prefix, StringComparison.Ordinal))
         {
             var id = trimmed[Prefix.Length..];
-            return IsBareId(id) ? trimmed : null;
+            return IsBareId(id) ? Prefix + id.ToLowerInvariant() : null;
         }
 
-        return IsBareId(trimmed) ? Prefix + trimmed : null;
+        return IsBareId(trimmed) ? Prefix + trimmed.ToLowerInvariant() : null;
     }
 
     public static string BareId(string userUriOrId)

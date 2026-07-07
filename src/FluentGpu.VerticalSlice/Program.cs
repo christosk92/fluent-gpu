@@ -20530,6 +20530,82 @@ static class Slice
         Check("P6.v2 transform-only dirty root reuses by translating the prior span, not by re-recording",
             transformRebase, $"reused={moved.SpansReused} rebased={moved.SpansRebased} recorded={moved.SpansReRecorded} copied={moved.SpanBytesCopied}/{dirtyBytes.Length} firstDx={steadyFirstDx:0.##}->{movedFirstDx:0.##}");
 
+        var desc = new SceneStore();
+        var descRoot = desc.CreateNode(1);
+        var descChild = desc.CreateNode(1);
+        desc.Root = descRoot;
+        desc.AppendChild(descRoot, descChild);
+        desc.Bounds(descRoot) = new RectF(0, 0, 80, 40);
+        desc.Bounds(descChild) = new RectF(0, 0, 40, 30);
+        ref var descPaint = ref desc.Paint(descChild);
+        descPaint = NodePaint.Default;
+        descPaint.VisualKind = VisualKind.Box;
+        descPaint.Fill = ColorF.FromRgba(0x10, 0x90, 0xF0);
+        var descDl = new DrawList();
+        var descSpans = new SpanTable();
+        _ = SceneRecorder.Record(desc, descDl, spans: descSpans);
+        desc.ClearRecordDirty();
+        descPaint.LocalTransform = Affine2D.Translation(12f, 0f);
+        desc.Mark(descChild, NodeFlags.TransformDirty);
+        var descMoved = SceneRecorder.Record(desc, descDl, spans: descSpans);
+        float descMovedDx = FirstFillDx(descDl.Bytes);
+        Check("P6.v2 descendant transform re-records the ancestor span while rebasing the moving child",
+            descMoved.SpansReRecorded >= 1 && descMoved.SpansRebased >= 1 && Near(descMovedDx, 12f),
+            $"recorded={descMoved.SpansReRecorded} rebased={descMoved.SpansRebased} firstDx={descMovedDx:0.##}");
+
+        var scrollScene = new SceneStore();
+        var viewport = scrollScene.CreateNode(1);
+        var content = scrollScene.CreateNode(1);
+        var rowA = scrollScene.CreateNode(1);
+        var rowB = scrollScene.CreateNode(1);
+        scrollScene.Root = viewport;
+        scrollScene.AppendChild(viewport, content);
+        scrollScene.AppendChild(content, rowA);
+        scrollScene.AppendChild(content, rowB);
+        scrollScene.Flags(viewport) |= NodeFlags.ClipsToBounds;
+        ref var scroll = ref scrollScene.ScrollRef(viewport);
+        scroll.ContentNode = content;
+        scrollScene.Bounds(viewport) = new RectF(0, 0, 100, 100);
+        scrollScene.Bounds(content) = new RectF(0, 0, 100, 180);
+        scrollScene.Bounds(rowA) = new RectF(0, 0, 100, 30);
+        scrollScene.Bounds(rowB) = new RectF(0, 130, 100, 30);
+        ColorF rowAColor = ColorF.FromRgba(0x20, 0x80, 0xE0);
+        ColorF rowBColor = ColorF.FromRgba(0xE0, 0x80, 0x20);
+        ref var rowAPaint = ref scrollScene.Paint(rowA);
+        rowAPaint = NodePaint.Default;
+        rowAPaint.VisualKind = VisualKind.Box;
+        rowAPaint.Fill = rowAColor;
+        ref var rowBPaint = ref scrollScene.Paint(rowB);
+        rowBPaint = NodePaint.Default;
+        rowBPaint.VisualKind = VisualKind.Box;
+        rowBPaint.Fill = rowBColor;
+        var scrollDl = new DrawList();
+        var scrollSpans = new SpanTable();
+        _ = SceneRecorder.Record(scrollScene, scrollDl, spans: scrollSpans);
+        bool initialScrollColor = SameColor(FirstFillColor(scrollDl.Bytes), rowAColor);
+        scrollScene.ClearRecordDirty();
+
+        scrollScene.Paint(content).LocalTransform = Affine2D.Translation(0f, -70f);
+        scrollScene.Mark(content, NodeFlags.TransformDirty);
+        var scrollMoved = SceneRecorder.Record(scrollScene, scrollDl, spans: scrollSpans);
+        bool enteringRowRecorded = initialScrollColor
+            && SameColor(FirstFillColor(scrollDl.Bytes), rowBColor)
+            && scrollMoved.SpansReRecorded >= 1;
+        Check("P6.v2 moving scroll content re-walks entering rows instead of copying a stale viewport span",
+            enteringRowRecorded,
+            $"recorded={scrollMoved.SpansReRecorded} rebased={scrollMoved.SpansRebased} firstFill={FirstFillColor(scrollDl.Bytes)}");
+
+        scrollScene.ClearTransformDirty();
+        scrollScene.ClearRecordDirty();
+        scrollScene.Paint(content).LocalTransform = Affine2D.Translation(0f, -80f);
+        scrollScene.Mark(content, NodeFlags.TransformDirty);
+        var scrollMovedAgain = SceneRecorder.Record(scrollScene, scrollDl, spans: scrollSpans);
+        bool interiorRowRebased = SameColor(FirstFillColor(scrollDl.Bytes), rowBColor)
+            && scrollMovedAgain.SpansRebased >= 1;
+        Check("P6.v2 moving scroll still rebases fully visible interior row spans",
+            interiorRowRebased,
+            $"recorded={scrollMovedAgain.SpansReRecorded} rebased={scrollMovedAgain.SpansRebased} firstFill={FirstFillColor(scrollDl.Bytes)}");
+
         static float FirstFillDx(ReadOnlySpan<byte> bytes)
         {
             int pos = 0;
@@ -20543,6 +20619,23 @@ static class Slice
             }
             return float.NaN;
         }
+
+        static ColorF FirstFillColor(ReadOnlySpan<byte> bytes)
+        {
+            int pos = 0;
+            while (pos + sizeof(int) <= bytes.Length)
+            {
+                var op = (DrawOp)MemoryMarshal.Read<int>(bytes.Slice(pos, sizeof(int)));
+                pos += sizeof(int);
+                if (op == DrawOp.FillRoundRect)
+                    return MemoryMarshal.Read<FillRoundRectCmd>(bytes.Slice(pos, Unsafe.SizeOf<FillRoundRectCmd>())).Fill;
+                pos += DrawPayloadSize(op);
+            }
+            return default;
+        }
+
+        static bool SameColor(ColorF a, ColorF b)
+            => Near(a.R, b.R) && Near(a.G, b.G) && Near(a.B, b.B) && Near(a.A, b.A);
     }
 
     static int Main()

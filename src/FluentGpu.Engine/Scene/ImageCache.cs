@@ -28,7 +28,7 @@ public enum ImageFailureKind : byte
     ServerError = 3,  // transient: HTTP 5xx — retried
     NotFound = 4,     // permanent: HTTP 404/410 — not retried
     HttpError = 5,    // permanent: other 4xx — not retried
-    Decode = 6,       // permanent: bytes fetched but not a decodable image — not retried
+    Decode = 6,       // bytes fetched but not decodable — retried while visible (stale disk poison / CDN glitch)
     Canceled = 7,     // request was canceled (row recycled / unmounted) before completion
     GpuResourceExhausted = 8, // transient across a later remount: backend could not admit another resident texture/SRV
     GpuUpload = 9,    // permanent for this decode: backend rejected invalid pixels/dimensions
@@ -337,6 +337,8 @@ public sealed class ImageCache
         {
             if (e.Failure == ImageFailureKind.Canceled) return true;
             if (e.Failure == ImageFailureKind.GpuResourceExhausted && e.Refs == 0) return true;
+            if (e.Failure == ImageFailureKind.Decode && (e.Refs > 0 || priority == ImagePriority.Visible))
+                return true;   // stale disk poison / transient codec miss — backoff applied in RestartDecode
             if (IsTransientFailure(e.Failure) && (e.Refs > 0 || priority == ImagePriority.Visible))
                 return true;   // backoff applied in RestartDecode
         }
@@ -365,7 +367,7 @@ public sealed class ImageCache
     private void RestartDecode(int id, Entry e, ImagePriority priority)
     {
         if (e.State == ImageState.Pending) { _decoder.Prioritize(id, priority); return; }
-        if (e.State == ImageState.Failed && IsTransientFailure(e.Failure)
+        if (e.State == ImageState.Failed && (IsTransientFailure(e.Failure) || e.Failure == ImageFailureKind.Decode)
             && _clockMs - e.LastRestartMs < RestartBackoffMs)
             return;
         e.LastRestartMs = _clockMs;

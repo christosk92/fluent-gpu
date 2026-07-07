@@ -133,6 +133,38 @@ public sealed class ClientTokenMiddleware : IHttpMiddleware
     }
 }
 
+/// <summary>Attaches Pathfinder's client-token and platform-specific identity headers.</summary>
+public sealed class PathfinderHeadersMiddleware : IHttpMiddleware
+{
+    public const string PlatformHeader = "X-Wavee-Pathfinder-Platform";
+    public const string DesktopPlatform = "desktop";
+    public const string WebPlayerPlatform = "webplayer";
+
+    const string DesktopUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.7680.179 Spotify/1.2.88.483 Safari/537.36";
+    const string WebPlayerUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36";
+
+    readonly Func<CancellationToken, Task<string?>> _clientToken;
+
+    public PathfinderHeadersMiddleware(Func<CancellationToken, Task<string?>> clientToken) => _clientToken = clientToken;
+
+    public async Task<HttpResp> InvokeAsync(HttpReq req, Func<HttpReq, CancellationToken, Task<HttpResp>> next, CancellationToken ct)
+    {
+        var h = new Dictionary<string, string>(req.Headers, StringComparer.OrdinalIgnoreCase);
+        bool webPlayer = h.TryGetValue(PlatformHeader, out var platform)
+            && string.Equals(platform, WebPlayerPlatform, StringComparison.OrdinalIgnoreCase);
+        h.Remove(PlatformHeader);
+
+        h["accept"] = "application/json";
+        h["content-type"] = "application/json";
+        h["app-platform"] = webPlayer ? "WebPlayer" : "Win32_x86_64";
+        h["user-agent"] = webPlayer ? WebPlayerUa : DesktopUa;
+        if (await _clientToken(ct).ConfigureAwait(false) is { Length: > 0 } token)
+            h["client-token"] = token;
+
+        return await next(req with { Headers = h }, ct).ConfigureAwait(false);
+    }
+}
+
 /// <summary>Test seam: scripts responses by request, counts calls.</summary>
 public sealed class FakeExchange : IHttpExchange
 {

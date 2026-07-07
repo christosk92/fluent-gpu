@@ -244,8 +244,11 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
     {
         var gains = new float[10];
         gainsDb[..Math.Min(gainsDb.Length, gains.Length)].CopyTo(gains);
-        _equalizer = new EqualizerSettings { Enabled = enabled, GainsDb = gains, PreampDb = preampDb };
+        var next = new EqualizerSettings { Enabled = enabled, GainsDb = gains, PreampDb = preampDb };
+        if (SameEqualizer(_equalizer, next)) return;
+        _equalizer = next;
         ConfigureProcess();
+        _fallback.SetEqualizer(enabled, gains, preampDb);
         if (!RemoteAvailable) return;
 
         long generation = Interlocked.Read(ref _generation);
@@ -256,8 +259,11 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
 
     public void SetCrossfade(bool enabled, int durationMs)
     {
-        _crossfade = new CrossfadeSettings { Enabled = enabled, DurationMs = Math.Clamp(durationMs, 0, 12_000) };
+        var next = new CrossfadeSettings { Enabled = enabled, DurationMs = Math.Clamp(durationMs, 0, 12_000) };
+        if (SameCrossfade(_crossfade, next)) return;
+        _crossfade = next;
         ConfigureProcess();
+        _fallback.SetCrossfade(_crossfade.Enabled, _crossfade.DurationMs);
         if (!RemoteAvailable) return;
 
         long generation = Interlocked.Read(ref _generation);
@@ -562,6 +568,8 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
         if (start is { } s) _fallback.LoadFastStart(s);
         if (body is { } b) _fallback.SupplyBody(b);
         _fallback.SetVolume(_volume);
+        _fallback.SetEqualizer(_equalizer.Enabled, _equalizer.GainsDb, _equalizer.PreampDb);
+        _fallback.SetCrossfade(_crossfade.Enabled, _crossfade.DurationMs);
         if (position > 0) _fallback.Seek(position);
         if (wantPlaying) _fallback.Play();
     }
@@ -594,6 +602,24 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
             && string.Equals(a.PackId, b.PackId, StringComparison.Ordinal)
             && string.Equals(a.Config.Version, b.Config.Version, StringComparison.Ordinal);
     }
+
+    static bool SameEqualizer(EqualizerSettings a, EqualizerSettings b)
+    {
+        if (a.Enabled != b.Enabled || Math.Abs(a.PreampDb - b.PreampDb) > 0.0001f) return false;
+        var ag = a.GainsDb ?? Array.Empty<float>();
+        var bg = b.GainsDb ?? Array.Empty<float>();
+        for (int i = 0; i < 10; i++)
+        {
+            var av = i < ag.Length ? ag[i] : 0f;
+            var bv = i < bg.Length ? bg[i] : 0f;
+            if (Math.Abs(av - bv) > 0.0001f) return false;
+        }
+
+        return true;
+    }
+
+    static bool SameCrossfade(CrossfadeSettings a, CrossfadeSettings b) =>
+        a.Enabled == b.Enabled && a.DurationMs == b.DurationMs;
 
     static ReadOnlyMemory<byte> DecodeBase64Memory(string? value) =>
         string.IsNullOrEmpty(value) ? default : Convert.FromBase64String(value);

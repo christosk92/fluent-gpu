@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -17,6 +18,7 @@ public sealed class AmllTtmlDbSource : ILyricCandidateSource
 
     readonly ILyricHttp _http;
     readonly string _template;
+    readonly ConcurrentDictionary<string, byte> _misses = new(StringComparer.Ordinal);
 
     public AmllTtmlDbSource(ILyricHttp http, string? urlTemplate = null)
     {
@@ -31,12 +33,37 @@ public sealed class AmllTtmlDbSource : ILyricCandidateSource
     public async Task<LyricsCandidate?> FetchAsync(LyricsRequest req, CancellationToken ct)
     {
         if (string.IsNullOrEmpty(req.TrackId)) return null;
+        if (req.HasSpotifyLyrics == true) return null;
+        if (_misses.ContainsKey(req.TrackId)) return null;
         string url = string.Format(_template, req.TrackId);
-        string? ttml = await _http.GetStringAsync(url, null, ct).ConfigureAwait(false);
-        if (string.IsNullOrWhiteSpace(ttml)) return null;
+        string? ttml;
+        if (_http is ILyricHttpWithStatus statusHttp)
+        {
+            var result = await statusHttp.GetAsync(url, null, ct).ConfigureAwait(false);
+            if (result.Status == 404)
+            {
+                _misses.TryAdd(req.TrackId, 0);
+                return null;
+            }
+            if (!result.IsSuccess) return null;
+            ttml = result.Body;
+        }
+        else
+        {
+            ttml = await _http.GetStringAsync(url, null, ct).ConfigureAwait(false);
+        }
+        if (string.IsNullOrWhiteSpace(ttml))
+        {
+            _misses.TryAdd(req.TrackId, 0);
+            return null;
+        }
 
         var doc = LyricsText.ParseTtml(ttml!, req.TrackId, Id);
-        if (doc.Lines.Count == 0) return null;
+        if (doc.Lines.Count == 0)
+        {
+            _misses.TryAdd(req.TrackId, 0);
+            return null;
+        }
         return new LyricsCandidate(Id, Prior, MatchBasis.Identity, doc);
     }
 }

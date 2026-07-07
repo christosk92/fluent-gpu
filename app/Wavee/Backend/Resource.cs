@@ -268,8 +268,8 @@ public sealed class Resource<TKey, TValue> where TKey : notnull
         if (e.ExpiresAt is { } exp && DateTime.UtcNow >= exp) return true;
         return _fresh switch
         {
-            FreshnessPolicy.Etag et => DateTime.UtcNow - e.FetchedAt > et.Ttl,
-            FreshnessPolicy.PollWhole pw => DateTime.UtcNow - e.FetchedAt > pw.Ttl,
+            FreshnessPolicy.Etag et => e.NeedsRevalidate || DateTime.UtcNow - e.FetchedAt > et.Ttl,
+            FreshnessPolicy.PollWhole pw => e.NeedsRevalidate || DateTime.UtcNow - e.FetchedAt > pw.Ttl,
             FreshnessPolicy.Immutable => false,
             // Revision-gated: stale ONLY when the dealer route marked the key dirty (or it was never fetched). A resident,
             // un-pushed entry is served without a re-fetch — this is the bounded-work / anti-herd contract.

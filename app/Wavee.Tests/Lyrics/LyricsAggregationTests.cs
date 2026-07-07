@@ -37,9 +37,11 @@ public class LyricsAggregationTests
     sealed class FakeHttp : ILyricHttp
     {
         readonly List<(string Key, string? Body)> _map;
+        public int Calls;
         public FakeHttp(params (string, string?)[] map) => _map = map.ToList();
         public Task<string?> GetStringAsync(string url, IReadOnlyDictionary<string, string>? headers, CancellationToken ct)
         {
+            Interlocked.Increment(ref Calls);
             foreach (var (k, v) in _map) if (url.Contains(k, StringComparison.Ordinal)) return Task.FromResult(v);
             return Task.FromResult<string?>(null);
         }
@@ -201,6 +203,18 @@ public class LyricsAggregationTests
         Assert.Equal("amll", cand!.ProviderId);
         Assert.Equal(LyricsSyncKind.Syllable, cand.Sync);
         Assert.True(cand.Document.Lines[0].IsWordByWord);
+    }
+
+    [Fact]
+    public async Task AmllSource_NegativeCachesMissForSession()
+    {
+        var http = new FakeHttp(("spotify-lyrics/t1.ttml", null));
+        var src = new AmllTtmlDbSource(http);
+
+        Assert.Null(await src.FetchAsync(Req(), default));
+        Assert.Null(await src.FetchAsync(Req(), default));
+
+        Assert.Equal(1, http.Calls);
     }
 
     [Fact]

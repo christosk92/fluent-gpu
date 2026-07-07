@@ -453,6 +453,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private bool _inMoveSizeLoop; // WM_ENTERSIZEMOVE..WM_EXITSIZEMOVE modal loop
     private bool _sizedInMoveSizeLoop; // true once this modal loop has delivered WM_SIZE (edge resize, not pure titlebar move)
     private bool _sizePaintPosted; // a coalesced modal-resize paint is already queued
+    // FG_LIVE_MODAL_RESIZE=1: restore per-step coalesced WM_SIZE paints during an edge-drag (live relayout at ~16–50 ms/step).
+    // Default OFF: composited windows defer GPU resize + relayout to WM_EXITSIZEMOVE so the modal loop stays on the OS path.
+    private static readonly bool s_liveModalResize = Diag.EnvFlag("FG_LIVE_MODAL_RESIZE");
     private static readonly Point2 OffscreenDip = new(-10000f, -10000f);
 
     // ── single-instance activation redirect (WM_COPYDATA receiver) ──────────────────────────────────────────────────
@@ -994,6 +997,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 }
                 if (_composited && _inMoveSizeLoop)
                 {
+                    // Deferred modal resize (default): HWND geometry updates every step but we paint once on mouse-up.
+                    // DWM + the bound DComp flip surface track the HWND; swapchain relayout waits for WM_EXITSIZEMOVE.
+                    if (!s_liveModalResize) return true;
                     if (!_sizePaintPosted)
                     {
                         _sizePaintPosted = true;
@@ -1061,13 +1067,13 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
             case WM_TIMER:
                 if ((nuint)wParam == MoveLoopTimerId)
                 {
-                    // During a pure titlebar MOVE of a composited window, DWM already moves the bound DComp surface with
-                    // the HWND. Repainting on this low-priority timer because animations/playback are active only burns
-                    // WndProc time and makes the OS modal loop feel sticky. Keep timer paints for non-composited windows
-                    // and for resize loops; WM_SIZE is coalesced through WM_FG_COALESCED_SIZE_PAINT during edge-resize.
-                    if (_composited && _inMoveSizeLoop && !_sizedInMoveSizeLoop)
+                    // Composited modal loop: DWM relocates the DComp surface on move; deferred resize paints on mouse-up.
+                    // Timer keep-alives only burn WndProc time (the outer RunFrame loop is suspended mid-drag anyway).
+                    // FG_LIVE_MODAL_RESIZE=1 re-enables timer paints during edge-resize for live relayout.
+                    if (_composited && _inMoveSizeLoop && (!s_liveModalResize || !_sizedInMoveSizeLoop))
                     {
-                        if (Diag.EnvFlag("FG_MOVE_DIAG")) Console.Error.WriteLine($"[FG_MOVE_DIAG t={Environment.TickCount64}] timer skipped: pure composited move");
+                        if (Diag.EnvFlag("FG_MOVE_DIAG"))
+                            Console.Error.WriteLine($"[FG_MOVE_DIAG t={Environment.TickCount64}] timer skipped: composited modal {(s_liveModalResize ? "move" : "loop")}");
                         return true;
                     }
                     if (Diag.EnvFlag("FG_MOVE_DIAG")) Console.Error.WriteLine($"[FG_MOVE_DIAG t={Environment.TickCount64}] timer paint");

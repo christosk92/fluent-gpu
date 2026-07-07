@@ -101,6 +101,26 @@ public static class SceneRecorder
         };
     }
 
+    private struct SpanRecordResult
+    {
+        public bool HasBounds;
+        public RectF SubtreeBounds;
+
+        public void Include(in RectF bounds)
+        {
+            if (bounds.W <= 0f || bounds.H <= 0f) return;
+            if (!HasBounds) { SubtreeBounds = bounds; HasBounds = true; return; }
+            float x0 = MathF.Min(SubtreeBounds.X, bounds.X), y0 = MathF.Min(SubtreeBounds.Y, bounds.Y);
+            float x1 = MathF.Max(SubtreeBounds.Right, bounds.Right), y1 = MathF.Max(SubtreeBounds.Bottom, bounds.Bottom);
+            SubtreeBounds = new RectF(x0, y0, x1 - x0, y1 - y0);
+        }
+
+        public void Include(in SpanRecordResult other)
+        {
+            if (other.HasBounds) Include(other.SubtreeBounds);
+        }
+    }
+
     private readonly struct InheritedState
     {
         public readonly float HoverT;
@@ -303,15 +323,15 @@ public static class SceneRecorder
         return false;
     }
 
-    private static void Walk(SceneStore scene, DrawList dl, ImageCache? images, NodeHandle node, Affine2D parentWorld, float parentOpacity,
-                             int depth, RectF clip, in FocusVisualStyle focus, in TextEditStyle textEdit, ColorF scrollThumb, ColorF scrollTrack,
-                             float parentScaleX, float parentScaleY, bool parentInMotion, bool parentScrollInMotion, InheritedState inherited,
-                             ReadOnlySpan<NodeHandle> skipRoots, SpanTable? spans, uint spanFrame, bool spanReuseDisabled, bool spanStoreEnabled,
-                             ref RecordAccumulator stats)
+    private static SpanRecordResult Walk(SceneStore scene, DrawList dl, ImageCache? images, NodeHandle node, Affine2D parentWorld, float parentOpacity,
+                                         int depth, RectF clip, in FocusVisualStyle focus, in TextEditStyle textEdit, ColorF scrollThumb, ColorF scrollTrack,
+                                         float parentScaleX, float parentScaleY, bool parentInMotion, bool parentScrollInMotion, InheritedState inherited,
+                                         ReadOnlySpan<NodeHandle> skipRoots, SpanTable? spans, uint spanFrame, bool spanReuseDisabled, bool spanStoreEnabled,
+                                         ref RecordAccumulator stats)
     {
-        if (!skipRoots.IsEmpty && ContainsNode(skipRoots, node)) return;   // subtree renders in its own popup window
+        if (!skipRoots.IsEmpty && ContainsNode(skipRoots, node)) return default;   // subtree renders in its own popup window
         NodeFlags flags = scene.Flags(node);
-        if ((flags & NodeFlags.Visible) == 0) return;   // invisible subtree contributes nothing
+        if ((flags & NodeFlags.Visible) == 0) return default;   // invisible subtree contributes nothing
         stats.NodesVisited++;
         bool maybeSparsePaint = (flags & NodeFlags.SparsePaint) != 0;
         bool hasInteractionAnim = (flags & NodeFlags.InteractionAnim) != 0;
@@ -416,6 +436,8 @@ public static class SceneRecorder
         var local = new RectF(0f, 0f, pw, ph);
         var deviceBounds = world.TransformBounds(local);
         bool overlapsClip = deviceBounds.Overlaps(clip);
+        var result = new SpanRecordResult();
+        result.Include(deviceBounds);
 
         ulong spanInputSig = 0;
         ulong spanMoveSig = 0;
@@ -424,18 +446,19 @@ public static class SceneRecorder
         bool spanTracking = spans is not null && spanStoreEnabled;
         if (spans is not null)
         {
-            spanInputSig = ComputeSpanInputSig(node, flags, depth, in clip, in world, opacity,
+            spanInputSig = ComputeSpanInputSig(scene, node, flags, depth, in clip, in world, opacity,
                 parentScaleX, parentScaleY, childScaleX, childScaleY, inMotion, scrollInMotion,
                 inherited, in focus, in textEdit, scrollThumb, scrollTrack);
-            spanMoveSig = ComputeSpanMoveSig(node, flags, depth, in clip, in world, opacity,
+            spanMoveSig = ComputeSpanMoveSig(scene, node, flags, depth, in clip, in world, opacity,
                 parentScaleX, parentScaleY, childScaleX, childScaleY,
-                inherited, in focus, in textEdit, scrollThumb, scrollTrack);
+                scrollInMotion, inherited, in focus, in textEdit, scrollThumb, scrollTrack);
             byte recordDirtyBits = scene.RecordDirtyBits(node);
-            // Span reuse copies a prior frame's recorded subtree byte-for-byte. While a scroll viewport's content
-            // node is translating, the viewport itself stays record-clean — reusing its span would freeze children at
-            // the old offset (the scroll-flicker / clipped-rows regression). scrollInMotion propagates to descendants.
-            bool allowSpanReuse = !spanReuseDisabled && !scrollInMotion;
-            if (allowSpanReuse && recordDirtyBits == 0
+            byte descendantDirtyBits = scene.RecordDirtyDescendantBits(node);
+            bool directMovingScrollContent = IsDirectMovingScrollContent(scene, node, flags);
+            // Span reuse copies a prior frame's recorded subtree byte-for-byte. Exact copy needs a fully clean subtree.
+            // Translated copy is allowed only when no descendant is dirty and the old/current clip both contain the
+            // whole span, so a moving scroll-content boundary re-walks edge/entering rows instead of freezing them.
+            if (!spanReuseDisabled && !scrollInMotion && recordDirtyBits == 0
                 && spans.TryGet((int)node.Raw.Index, node.Raw.Gen, spanFrame, spanInputSig, out var span)
                 && dl.CanCopyPriorSpan(span.ByteStart, span.ByteLength, span.SortStart, span.SortCount))
             {
@@ -448,9 +471,13 @@ public static class SceneRecorder
                 spans.Store((int)node.Raw.Index, node.Raw.Gen, spanFrame, spanInputSig, spanMoveSig, in currentSpan);
                 stats.SpansReused++;
                 stats.SpanBytesCopied += span.ByteLength;
-                return;
+                var copiedResult = new SpanRecordResult();
+                copiedResult.Include(span.SubtreeBounds);
+                return copiedResult;
             }
-            if (allowSpanReuse
+            if (!spanReuseDisabled
+                && descendantDirtyBits == 0
+                && !directMovingScrollContent
                 && (recordDirtyBits & SceneStore.RecordDirtyContent) == 0
                 && spans.TryGetTranslated((int)node.Raw.Index, node.Raw.Gen, spanFrame, spanMoveSig, out span))
             {
@@ -459,10 +486,13 @@ public static class SceneRecorder
                 int copiedByteStart = dl.BytePosition;
                 int copiedSortStart = dl.SortPosition;
                 if (TryTranslationDelta(in priorWorld, in world, out float dx, out float dy)
+                    && span.ClipComplete
+                    && IsClipComplete(TranslateBounds(span.SubtreeBounds, dx, dy), in clip)
                     && dl.CopySpanFromPriorTranslated(span.ByteStart, span.ByteLength, span.SortStart, span.SortCount,
                         span.CommandCount, in copiedStats, dx, dy))
                 {
-                    var currentSpan = span with { ByteStart = copiedByteStart, SortStart = copiedSortStart, World = world };
+                    RectF translatedBounds = TranslateBounds(span.SubtreeBounds, dx, dy);
+                    var currentSpan = span with { ByteStart = copiedByteStart, SortStart = copiedSortStart, World = world, SubtreeBounds = translatedBounds, ClipComplete = true };
                     spans.Store((int)node.Raw.Index, node.Raw.Gen, spanFrame, spanInputSig, spanMoveSig, in currentSpan);
                     if ((flags & NodeFlags.TransformDirty) != 0)
                     {
@@ -473,7 +503,9 @@ public static class SceneRecorder
                     stats.SpansReused++;
                     stats.SpansRebased++;
                     stats.SpanBytesCopied += span.ByteLength;
-                    return;
+                    var translatedResult = new SpanRecordResult();
+                    translatedResult.Include(translatedBounds);
+                    return translatedResult;
                 }
             }
 
@@ -882,14 +914,18 @@ public static class SceneRecorder
             for (var c = scene.FirstChild(node); !c.IsNull; c = scene.NextSibling(c))
             {
                 if ((scene.Flags(c) & NodeFlags.StickyPinned) != 0) { anyPinned = true; continue; }
-                Walk(scene, dl, images, c, childWorld, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack,
+                var childResult = Walk(scene, dl, images, c, childWorld, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack,
                     childScaleX, childScaleY, inMotion, scrollInMotion, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
+                result.Include(childResult);
             }
             if (anyPinned)
                 for (var c = scene.FirstChild(node); !c.IsNull; c = scene.NextSibling(c))
                     if ((scene.Flags(c) & NodeFlags.StickyPinned) != 0)
-                        Walk(scene, dl, images, c, childWorld, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack,
+                    {
+                        var childResult = Walk(scene, dl, images, c, childWorld, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack,
                             childScaleX, childScaleY, inMotion, scrollInMotion, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
+                        result.Include(childResult);
+                    }
         }
 
         // Box border chrome paints after descendants. A control border must remain visible over filled child regions
@@ -953,13 +989,17 @@ public static class SceneRecorder
                 dl.SortPosition - spanSortStart,
                 dl.CommandCount - spanCommandStart,
                 dl.OpcodeStats.Minus(in spanOpcodeStart),
-                world);
+                world,
+                result.SubtreeBounds,
+                IsClipComplete(result.SubtreeBounds, in clip));
             spans!.Store((int)node.Raw.Index, node.Raw.Gen, spanFrame, spanInputSig, spanMoveSig, in span);
             stats.SpansReRecorded++;
         }
+
+        return result;
     }
 
-    private static ulong ComputeSpanInputSig(NodeHandle node, NodeFlags flags, int depth, in RectF clip, in Affine2D world,
+    private static ulong ComputeSpanInputSig(SceneStore scene, NodeHandle node, NodeFlags flags, int depth, in RectF clip, in Affine2D world,
                                              float opacity, float parentScaleX, float parentScaleY, float childScaleX, float childScaleY,
                                              bool inMotion, bool scrollInMotion, in InheritedState inherited,
                                              in FocusVisualStyle focus, in TextEditStyle textEdit, ColorF scrollThumb, ColorF scrollTrack)
@@ -977,6 +1017,7 @@ public static class SceneRecorder
         MixFloat(ref h, childScaleY);
         Mix(ref h, inMotion ? 1u : 0u);
         Mix(ref h, scrollInMotion ? 1u : 0u);
+        MixScrollViewport(scene, node, flags, ref h);
         MixFloat(ref h, inherited.HoverT);
         MixFloat(ref h, inherited.PressT);
         Mix(ref h, (uint)inherited.InteractiveFlags);
@@ -993,9 +1034,9 @@ public static class SceneRecorder
         return h;
     }
 
-    private static ulong ComputeSpanMoveSig(NodeHandle node, NodeFlags flags, int depth, in RectF clip, in Affine2D world,
+    private static ulong ComputeSpanMoveSig(SceneStore scene, NodeHandle node, NodeFlags flags, int depth, in RectF clip, in Affine2D world,
                                             float opacity, float parentScaleX, float parentScaleY, float childScaleX, float childScaleY,
-                                            in InheritedState inherited,
+                                            bool scrollInMotion, in InheritedState inherited,
                                             in FocusVisualStyle focus, in TextEditStyle textEdit, ColorF scrollThumb, ColorF scrollTrack)
     {
         ulong h = 14695981039346656037UL;
@@ -1009,6 +1050,8 @@ public static class SceneRecorder
         MixFloat(ref h, parentScaleY);
         MixFloat(ref h, childScaleX);
         MixFloat(ref h, childScaleY);
+        Mix(ref h, scrollInMotion ? 1u : 0u);
+        MixScrollViewport(scene, node, flags, ref h);
         MixFloat(ref h, inherited.HoverT);
         MixFloat(ref h, inherited.PressT);
         Mix(ref h, (uint)inherited.InteractiveFlags);
@@ -1023,6 +1066,35 @@ public static class SceneRecorder
         MixColor(ref h, scrollThumb);
         MixColor(ref h, scrollTrack);
         return h;
+    }
+
+    private static void MixScrollViewport(SceneStore scene, NodeHandle node, NodeFlags flags, ref ulong h)
+    {
+        if ((flags & NodeFlags.Scrollable) == 0 || !scene.HasScroll(node)) return;
+        ref var sc = ref scene.ScrollRef(node);
+        MixFloat(ref h, sc.OffsetX);
+        MixFloat(ref h, sc.OffsetY);
+        MixFloat(ref h, sc.OverscrollPx);
+    }
+
+    private static bool IsDirectMovingScrollContent(SceneStore scene, NodeHandle node, NodeFlags flags)
+    {
+        if ((flags & NodeFlags.TransformDirty) == 0) return false;
+        var parent = scene.Parent(node);
+        return !parent.IsNull && scene.HasScroll(parent) && scene.ScrollRef(parent).ContentNode == node;
+    }
+
+    private static RectF TranslateBounds(in RectF bounds, float dx, float dy)
+        => bounds.IsEmpty ? bounds : new RectF(bounds.X + dx, bounds.Y + dy, bounds.W, bounds.H);
+
+    private static bool IsClipComplete(in RectF bounds, in RectF clip)
+    {
+        if (bounds.IsEmpty || clip.IsInfinite) return true;
+        const float epsilon = 0.01f;
+        return bounds.X >= clip.X - epsilon
+            && bounds.Y >= clip.Y - epsilon
+            && bounds.Right <= clip.Right + epsilon
+            && bounds.Bottom <= clip.Bottom + epsilon;
     }
 
     private static bool TryTranslationDelta(in Affine2D from, in Affine2D to, out float dx, out float dy)

@@ -120,12 +120,14 @@ public sealed class LiveSessionHost : IAsyncDisposable
         // build it up front — over the SAME store the catalog reads — and hand the controller a unified context resolver.
         // (extendedMetadata + metadata are reused below for the on-open fetcher + now-playing enrichment → one cache.)
         Wavee.Backend.Metadata.ExtendedMetadataSource? extendedMetadata = null;
+        Wavee.Backend.Metadata.ExtensionEtagCache? extensionCache = null;
         Wavee.Backend.Metadata.MetadataService? metadata = null;
         IContextResolver? contexts = null;
         if (svc.RealStore is { } mdStore)
         {
             extendedMetadata = new Wavee.Backend.Metadata.ExtendedMetadataSource(live.Pipeline, () => live.BaseUrl, () => live.Session);
-            metadata = new Wavee.Backend.Metadata.MetadataService(extendedMetadata, mdStore, () => live.Session);
+            extensionCache = new Wavee.Backend.Metadata.ExtensionEtagCache(extendedMetadata, () => live.Session, log);
+            metadata = new Wavee.Backend.Metadata.MetadataService(extendedMetadata, mdStore, () => live.Session, extensionCache: extensionCache);
             contexts = new LiveContextResolver(transport, metadata, mdStore, () => live.Session, log);
         }
 
@@ -150,13 +152,10 @@ public sealed class LiveSessionHost : IAsyncDisposable
             initialVolume01: initialVolume, refreshTokens: live.TokenProvider);
         connect.Controller.AutoplayEnabled = () => svc.Settings.Get(WaveeSettings.AutoplayEnabled);
         transport.Start();
-        // Profile (name + avatar) and the account email fetched in PARALLEL before go-live, so CurrentUser is complete on
-        // the first render (no refresh hook). Both are best-effort — a failure just omits that field.
-        var profileTask = FetchProfileAsync(live.Pipeline, live.BaseUrl, live.Username, ct);
-        var emailTask = FetchEmailAsync(live.AccessToken, ct);
-        var (displayName, avatarUrl) = await profileTask.ConfigureAwait(false);
-        var email = await emailTask.ConfigureAwait(false);
-        var liveSession = new LiveSpotifySession(live.Username, displayName, avatarUrl, live.Session.Tier == Tier.Premium, email);
+        // Profile (name + avatar) fetched before go-live so CurrentUser is complete on the first render (no refresh hook).
+        // Best-effort — a failure just omits that field.
+        var (displayName, avatarUrl, profileFetched) = await FetchProfileAsync(live.Pipeline, live.BaseUrl, live.Username, ct).ConfigureAwait(false);
+        var liveSession = new LiveSpotifySession(live.Username, displayName, avatarUrl, live.Session.Tier == Tier.Premium);
 
         // Owned CTS — INDEPENDENT of the bootstrap ct (a racing-sibling cancel must not kill hydration); cancelled on logout.
         var cts = new CancellationTokenSource();
@@ -294,14 +293,28 @@ public sealed class LiveSessionHost : IAsyncDisposable
             if (svc.RealMutationSource is { } mutSrc) mutSrc.ScheduleDrain = () => sync.Enqueue(new Wavee.Backend.Sync.SyncCommand(Wavee.Backend.Sync.SyncKind.DrainWrites));
 
             // Pathfinder (GraphQL) for rich catalog reads with no protobuf equivalent — the artist overview, on open.
-            var pathfinder = new PathfinderClient(live.TokenProvider, _ => Task.FromResult(live.ClientToken), log);
-            var homeCache = new LiveHomeCache(pathfinder);
+            var pathfinderExchange = new HttpPipeline(
+                new HttpClientExchange(HttpPools.Get(HttpPool.ControlPlane)),
+                new AuthMiddleware((force, c) => force && live.ForceTokenProvider is { } refresh
+                    ? refresh(c)
+                    : live.TokenProvider(c)),
+                new RateLimitMiddleware(),
+                new PathfinderHeadersMiddleware(_ => Task.FromResult(live.ClientToken)));
+            var pathfinder = new PathfinderClient(pathfinderExchange, log);
+            var pathfinderResource = new PathfinderResource(pathfinder, () => live.Session, log);
+            var homeCache = new LiveHomeCache(pathfinderResource);
             // Below-the-fold album enrichment (about-artist / merch / similar via Pathfinder; recommended playlists via the
             // SAME extended-metadata source, kinds 151→205) — installed into the switchable service the album pages hold.
-            svc.AlbumEnrichment.SetInner(new SpotifyAlbumEnrichmentService(pathfinder, em, store, log));
+            svc.AlbumEnrichment.SetInner(new SpotifyAlbumEnrichmentService(pathfinderResource, em, store, log, extensionCache));
             // Music-video detection + the video↔audio file-id map over the SAME extended-metadata source (etag-cached).
-            svc.Video.SetInner(new SpotifyVideoService(em, store, log));
-            svc.UserProfiles.SetInner(new SpotifyUserProfileService(em, live.Pipeline, () => live.BaseUrl, log));
+            svc.Video.SetInner(new SpotifyVideoService(em, store, log, extensionCache));
+            var userProfiles = new SpotifyUserProfileService(em, live.Pipeline, () => live.BaseUrl, log, extensionCache);
+            if (profileFetched)
+                userProfiles.Seed(live.Username, new Owner(
+                    UserProfileIds.BareId(UserProfileIds.Normalize(live.Username) ?? live.Username),
+                    displayName,
+                    avatarUrl is { Length: > 0 } ? new Image(avatarUrl) : null));
+            svc.UserProfiles.SetInner(userProfiles);
             // Let the player bar reflect the now-playing track's (async-detected) video via the store change stream.
             svc.Playback.AttachStore(store);
             if (svc.RealLibrarySource is { } libSrc)
@@ -310,8 +323,8 @@ public sealed class LiveSessionHost : IAsyncDisposable
                 libSrc.OnDemandFetch = async (uri, c) =>
                 {
                     if (uri.StartsWith("spotify:playlist:", StringComparison.Ordinal)) await fetcher.FetchPlaylistAsync(uri, c).ConfigureAwait(false);
-                    else if (uri.StartsWith("spotify:album:", StringComparison.Ordinal)) await FetchAlbumAsync(pathfinder, store, uri, c).ConfigureAwait(false);
-                    else if (uri.StartsWith("spotify:artist:", StringComparison.Ordinal)) await FetchArtistAsync(pathfinder, store, uri, c).ConfigureAwait(false);
+                    else if (uri.StartsWith("spotify:album:", StringComparison.Ordinal)) await FetchAlbumAsync(pathfinderResource, store, uri, c).ConfigureAwait(false);
+                    else if (uri.StartsWith("spotify:artist:", StringComparison.Ordinal)) await FetchArtistAsync(pathfinderResource, store, uri, c).ConfigureAwait(false);
                     // Detect music videos for the just-hydrated tracklist (batch, off the critical path → the movie icons fill in).
                     DetectContainerVideos(svc.Video, store, uri, c);
                 };
@@ -328,7 +341,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
             {
                 if (!uri.StartsWith("spotify:track:", StringComparison.Ordinal)) return null;
                 _ = svc.Video.GetAsync(uri, c);   // warm the current track's video↔audio mapping (best-effort, fire-and-forget)
-                return await ResolveNowPlayingTrackAsync(uri, md, pathfinder, store, c).ConfigureAwait(false);
+                return await ResolveNowPlayingTrackAsync(uri, md, pathfinderResource, store, c).ConfigureAwait(false);
             };
 
             // (b) hydrate playlist HEADERS (name/cover) so the home + sidebar show names; for cover-less playlists also
@@ -510,7 +523,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
 
     // Fetch the rich artist overview via Pathfinder GraphQL → map (the export's artist-*.json IS this shape) → store.
     // Best-effort: a stale persisted-query hash or error leaves the identity-only artist in place.
-    static async Task FetchArtistAsync(PathfinderClient pf, IStore store, string uri, CancellationToken ct)
+    static async Task FetchArtistAsync(PathfinderResource pf, IStore store, string uri, CancellationToken ct)
     {
         using var doc = await pf.QueryAsync(PathfinderOps.QueryArtistOverview, PathfinderOps.QueryArtistOverviewHash,
             w => { w.WriteString("uri", uri); w.WriteString("locale", ""); w.WriteBoolean("preReleaseV2", false); },
@@ -713,7 +726,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
     // The signed-in user's profile (display name + avatar) via spclient user-profile-view — the cluster/login only give
     // the opaque username, so the account chip would otherwise show "31unjf…" with no photo. Best-effort: falls back to
     // the username on any failure. Fetched BEFORE go-live so CurrentUser is correct from the first render (no refresh hook).
-    static async Task<(string displayName, string? avatarUrl)> FetchProfileAsync(
+    static async Task<(string displayName, string? avatarUrl, bool fetched)> FetchProfileAsync(
         Wavee.Backend.Spotify.IHttpExchange http, string baseUrl, string username, CancellationToken ct)
     {
         try
@@ -721,35 +734,16 @@ public sealed class LiveSessionHost : IAsyncDisposable
             var url = baseUrl + "/user-profile-view/v3/profile/" + Uri.EscapeDataString(username) + "?market=from_token";
             var headers = new System.Collections.Generic.Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["Accept"] = "application/json" };
             using var resp = await http.SendAsync(new Wavee.Backend.Spotify.HttpReq("GET", url, headers, null), ct).ConfigureAwait(false);
-            if (resp.Status != 200) return (username, null);
+            if (resp.Status != 200) return (username, null, false);
             using var doc = await JsonDocument.ParseAsync(resp.Body, default, ct).ConfigureAwait(false);
             var root = doc.RootElement;
             string name = root.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(n.GetString())
                 ? n.GetString()! : username;
             string? avatar = root.TryGetProperty("image_url", out var im) && im.ValueKind == JsonValueKind.String && im.GetString() is { Length: > 0 } a
                 ? a : null;
-            return (name, avatar);
+            return (name, avatar, true);
         }
-        catch { return (username, null); }
-    }
-
-    // The account email via the Web API /v1/me (the user-read-email scope is requested). Best-effort: null on any failure
-    // (the account chip just omits the email line). Bearer = the login5 access token — the same token the spclient calls use.
-    static async Task<string?> FetchEmailAsync(string accessToken, CancellationToken ct)
-    {
-        if (string.IsNullOrEmpty(accessToken)) return null;
-        try
-        {
-            using var req = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Get, "https://api.spotify.com/v1/me");
-            req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
-            using var resp = await SharedHttp.Client.SendAsync(req, ct).ConfigureAwait(false);
-            if (!resp.IsSuccessStatusCode) return null;
-            using var s = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-            using var doc = await JsonDocument.ParseAsync(s, default, ct).ConfigureAwait(false);
-            return doc.RootElement.TryGetProperty("email", out var e) && e.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(e.GetString())
-                ? e.GetString() : null;
-        }
-        catch { return null; }
+        catch { return (username, null, false); }
     }
 
     // As-you-type omnibar suggestions via Pathfinder searchSuggestions (variable "query", not "searchTerm").
@@ -776,9 +770,9 @@ public sealed class LiveSessionHost : IAsyncDisposable
     }
 
     // The editorial/personalized home via Pathfinder → the existing composer (data.home.sectionContainer.sections).
-    static async Task<IReadOnlyList<HomeGroup>> FetchHomeAsync(PathfinderClient pf, CancellationToken ct)
+    static async Task<IReadOnlyList<HomeGroup>> FetchHomeAsync(PathfinderResource pf, CancellationToken ct)
     {
-        using var doc = await pf.QueryAsync(PathfinderOps.Home, PathfinderOps.HomeHash,
+        using var doc = await pf.UseQueryAsync(PathfinderOps.Home, PathfinderOps.HomeHash,
             w =>
             {
                 w.WriteString("homeEndUserIntegration", "INTEGRATION_WEB_PLAYER");
@@ -795,9 +789,9 @@ public sealed class LiveSessionHost : IAsyncDisposable
 
     // Fetch the album (metadata + tracklist) via Pathfinder getAlbum → map (data.albumUnion.tracksV2) → store. The
     // spclient extended-metadata path was unreliable for some albums; getAlbum returns the full tracklist consistently.
-    static async Task<IReadOnlyList<HomeCard>> FetchRecentsAsync(PathfinderClient pf, CancellationToken ct)
+    static async Task<IReadOnlyList<HomeCard>> FetchRecentsAsync(PathfinderResource pf, CancellationToken ct)
     {
-        using var doc = await pf.QueryAsync(PathfinderOps.Recents, PathfinderOps.RecentsHash,
+        using var doc = await pf.UseQueryAsync(PathfinderOps.Recents, PathfinderOps.RecentsHash,
             w =>
             {
                 w.WriteStartArray("uris");
@@ -811,18 +805,9 @@ public sealed class LiveSessionHost : IAsyncDisposable
 
     sealed class LiveHomeCache
     {
-        static readonly TimeSpan HomeTtl = TimeSpan.FromMinutes(15);
-        static readonly TimeSpan RecentsTtl = TimeSpan.FromSeconds(60);
+        readonly PathfinderResource _pf;
 
-        readonly PathfinderClient _pf;
-        readonly SemaphoreSlim _homeGate = new(1, 1);
-        readonly SemaphoreSlim _recentsGate = new(1, 1);
-        IReadOnlyList<HomeGroup> _home = System.Array.Empty<HomeGroup>();
-        IReadOnlyList<HomeCard> _recents = System.Array.Empty<HomeCard>();
-        DateTimeOffset _homeAt = DateTimeOffset.MinValue;
-        DateTimeOffset _recentsAt = DateTimeOffset.MinValue;
-
-        public LiveHomeCache(PathfinderClient pf) => _pf = pf;
+        public LiveHomeCache(PathfinderResource pf) => _pf = pf;
 
         public async Task<IReadOnlyList<HomeGroup>> GetAsync(CancellationToken ct)
         {
@@ -843,49 +828,13 @@ public sealed class LiveSessionHost : IAsyncDisposable
         }
 
         async Task<IReadOnlyList<HomeGroup>> GetHomeGroupsAsync(CancellationToken ct)
-        {
-            var now = DateTimeOffset.UtcNow;
-            if (_home.Count > 0 && now - _homeAt < HomeTtl) return _home;
-
-            await _homeGate.WaitAsync(ct).ConfigureAwait(false);
-            try
-            {
-                now = DateTimeOffset.UtcNow;
-                if (_home.Count > 0 && now - _homeAt < HomeTtl) return _home;
-                var fresh = await FetchHomeAsync(_pf, ct).ConfigureAwait(false);
-                if (fresh.Count > 0)
-                {
-                    _home = fresh;
-                    _homeAt = now;
-                }
-                return _home;
-            }
-            finally { _homeGate.Release(); }
-        }
+            => await FetchHomeAsync(_pf, ct).ConfigureAwait(false);
 
         async Task<IReadOnlyList<HomeCard>> GetRecentsAsync(CancellationToken ct)
-        {
-            var now = DateTimeOffset.UtcNow;
-            if (_recents.Count > 0 && now - _recentsAt < RecentsTtl) return _recents;
-
-            await _recentsGate.WaitAsync(ct).ConfigureAwait(false);
-            try
-            {
-                now = DateTimeOffset.UtcNow;
-                if (_recents.Count > 0 && now - _recentsAt < RecentsTtl) return _recents;
-                var fresh = await FetchRecentsAsync(_pf, ct).ConfigureAwait(false);
-                if (fresh.Count > 0)
-                {
-                    _recents = fresh;
-                    _recentsAt = now;
-                }
-                return _recents;
-            }
-            finally { _recentsGate.Release(); }
-        }
+            => await FetchRecentsAsync(_pf, ct).ConfigureAwait(false);
     }
 
-    static async Task FetchAlbumAsync(PathfinderClient pf, IStore store, string uri, CancellationToken ct)
+    static async Task FetchAlbumAsync(PathfinderResource pf, IStore store, string uri, CancellationToken ct)
     {
         using var doc = await pf.QueryAsync(PathfinderOps.GetAlbum, PathfinderOps.GetAlbumHash,
             w => { w.WriteString("uri", uri); w.WriteString("locale", ""); w.WriteNumber("offset", 0); w.WriteNumber("limit", 50); },
@@ -903,7 +852,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
     // Connect's player_state can be thin. Resolve the full TrackV4 through extended-metadata; TrackV4's album ref carries
     // cover_group, and StoreEntityMerge keeps that richer image if a later thin cluster/store write arrives.
     static async Task<Track?> ResolveNowPlayingTrackAsync(string uri, Wavee.Backend.Metadata.MetadataService metadata,
-        PathfinderClient pathfinder, IStore store, CancellationToken ct)
+        PathfinderResource pathfinder, IStore store, CancellationToken ct)
     {
         var track = store.GetTrack(uri);
         if (track?.Image is not null && track.Artists.Count > 0) return track;

@@ -26,6 +26,7 @@ public class ConnectPublisherTests
         public readonly SimpleSubject<string?> ConnId = new(null);
         public string? CurrentConnId;
         public readonly List<string> Built = new();
+        public LocalPlaybackSnapshot? LastSnapshot;
         public readonly DeviceStatePublisher Publisher;
 
         public Harness()
@@ -33,6 +34,7 @@ public class ConnectPublisherTests
             Publisher = new DeviceStatePublisher(Transport, "us", Proj, ConnId, () => CurrentConnId,
                 (reason, snap, mid, active) =>
                 {
+                    LastSnapshot = snap;
                     var s = reason + "|" + active + "|" + (snap?.Track.Uri ?? "-") + "|" + (snap?.SessionId ?? "");
                     Built.Add(s);
                     return Encoding.UTF8.GetBytes(s);
@@ -168,6 +170,32 @@ public class ConnectPublisherTests
         h.Emit(EvKind.QueueChanged);
         await Task.Delay(20);
         Assert.Equal(3, h.Transport.PublishCount);   // up-next changed → not deduped
+    }
+
+    [Fact]
+    public async Task QueueSnapshot_CapsWirePrevAndNextTracks()
+    {
+        var h = new Harness();
+        h.Connect("c1");
+        h.Play("spotify:track:now");
+        var queue = new List<QueueEntry>();
+        for (int i = 0; i < 55; i++)
+            queue.Add(new QueueEntry("h" + i, T("spotify:track:h" + i), QueueBucket.History, false, "uh" + i));
+        queue.Add(new QueueEntry("now", T("spotify:track:now"), QueueBucket.NowPlaying, false, "unow"));
+        for (int i = 0; i < 55; i++)
+            queue.Add(new QueueEntry("n" + i, T("spotify:track:n" + i), QueueBucket.NextUp, false, "un" + i));
+
+        h.SetQueue(queue.ToArray());
+        h.Emit(EvKind.QueueChanged);
+        await Task.Delay(20);
+
+        var snap = Assert.IsType<LocalPlaybackSnapshot>(h.LastSnapshot);
+        Assert.Equal(50, snap.PrevTracks.Count);
+        Assert.Equal("spotify:track:h5", snap.PrevTracks[0].Uri);
+        Assert.Equal("spotify:track:h54", snap.PrevTracks[49].Uri);
+        Assert.Equal(50, snap.NextTracks.Count);
+        Assert.Equal("spotify:track:n0", snap.NextTracks[0].Uri);
+        Assert.Equal("spotify:track:n49", snap.NextTracks[49].Uri);
     }
 
     [Fact]

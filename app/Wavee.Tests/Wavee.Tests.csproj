@@ -79,6 +79,9 @@
     <Compile Include="..\Wavee\Components\MembershipDiff.cs" />
     <!-- the live music-video data service (Backend-only deps), source-included so VideoAssociationTests can drive it -->
     <Compile Include="..\Wavee\SpotifyLive\SpotifyVideoService.cs" />
+    <Compile Include="..\Wavee\SpotifyLive\SpotifyUserProfileService.cs" />
+    <Compile Include="..\Wavee\SpotifyLive\PathfinderClient.cs" />
+    <Compile Include="..\Wavee\SpotifyLive\PathfinderResource.cs" />
     <!-- audio resilience surfaces (all protobuf-free) source-included so the key-resolver / provisioner / IPC-manager
          resilience + error paths are unit-tested without referencing the Windows Wavee assembly. -->
     <Compile Include="..\Wavee\SpotifyLive\Audio\ILicenseClient.cs" />

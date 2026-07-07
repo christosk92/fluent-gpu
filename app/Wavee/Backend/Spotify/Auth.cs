@@ -195,14 +195,7 @@ public sealed class DeviceCodeProvider : ICredentialProvider
 /// IHttpClientFactory does internally, minus the DI dependency — right for this lightweight, portable backend.</summary>
 public static class SharedHttp
 {
-    static readonly SocketsHttpHandler Handler = new()
-    {
-        PooledConnectionLifetime = TimeSpan.FromMinutes(2),     // recycle connections -> picks up DNS changes
-        PooledConnectionIdleTimeout = TimeSpan.FromMinutes(1),
-        AutomaticDecompression = System.Net.DecompressionMethods.All,
-    };
-
-    public static HttpClient Client { get; } = new(Handler) { Timeout = TimeSpan.FromSeconds(30) };
+    public static HttpClient Client => HttpPools.Get(HttpPool.ControlPlane);
 }
 
 /// <summary>Real IHttpPost over the shared HttpClient (the production seam). Tests substitute a fake (no socket).</summary>

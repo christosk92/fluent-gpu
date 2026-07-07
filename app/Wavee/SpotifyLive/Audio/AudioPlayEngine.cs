@@ -3,6 +3,7 @@ using System.Net.Http;
 using System.Runtime.InteropServices;
 using Wavee.Backend;
 using Wavee.Backend.Audio;
+using Wavee.Backend.Spotify;
 using Wavee.SpotifyLive.Audio.Host.Dsp;
 
 namespace Wavee.SpotifyLive.Audio;
@@ -18,7 +19,8 @@ internal sealed class AudioPlayEngine : IDisposable
     const int WriteStallWarnMs = 650;
     const int EndSeekGuardMs = 250;
 
-    readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(30) };
+    readonly HttpClient _http;
+    readonly bool _ownsHttp;
     readonly Action<string> _log;
     readonly Func<string, byte[], CdnDecryptor?> _nativeDecryptorFactory;
     readonly AudioBodyDiskCache? _bodyDisk;
@@ -50,8 +52,10 @@ internal sealed class AudioPlayEngine : IDisposable
     public event Action? TrackFinished;
 
     public AudioPlayEngine(Action<string> log, Func<string, byte[], CdnDecryptor?>? nativeDecryptorFactory = null,
-        AudioBodyDiskCache? bodyDisk = null)
+        AudioBodyDiskCache? bodyDisk = null, HttpClient? http = null, bool ownsHttp = false)
     {
+        _http = http ?? HttpPools.Get(HttpPool.Cdn);
+        _ownsHttp = ownsHttp;
         _log = log;
         _nativeDecryptorFactory = nativeDecryptorFactory ?? ((_, _) => null);
         _bodyDisk = bodyDisk;
@@ -638,7 +642,7 @@ internal sealed class AudioPlayEngine : IDisposable
         _tick.Dispose();
         StopDecode();
         _renderer.Dispose();
-        _http.Dispose();
+        if (_ownsHttp) _http.Dispose();
     }
 }
 

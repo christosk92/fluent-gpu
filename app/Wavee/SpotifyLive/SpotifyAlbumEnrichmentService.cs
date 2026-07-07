@@ -17,15 +17,18 @@ namespace Wavee.SpotifyLive;
 /// <see cref="ExtendedMetadataSource"/> (kinds 151 → 205) rather than a second metadata transport.</summary>
 sealed class SpotifyAlbumEnrichmentService : IAlbumEnrichmentService
 {
-    readonly PathfinderClient _pathfinder;
+    readonly PathfinderResource _pathfinder;
     readonly ExtendedMetadataSource _metadata;
+    readonly ExtensionEtagCache? _extensions;
     readonly IStore _store;
     readonly Action<string>? _log;
 
-    public SpotifyAlbumEnrichmentService(PathfinderClient pathfinder, ExtendedMetadataSource metadata, IStore store, Action<string>? log = null)
+    public SpotifyAlbumEnrichmentService(PathfinderResource pathfinder, ExtendedMetadataSource metadata, IStore store,
+        Action<string>? log = null, ExtensionEtagCache? extensions = null)
     {
         _pathfinder = pathfinder;
         _metadata = metadata;
+        _extensions = extensions;
         _store = store;
         _log = log;
     }
@@ -109,7 +112,12 @@ sealed class SpotifyAlbumEnrichmentService : IAlbumEnrichmentService
         if (albumUri.Length == 0) return Array.Empty<PlaylistSummary>();
 
         ByteString? refsPayload;
-        try { refsPayload = await _metadata.GetExtensionAsync(albumUri, Xm.ExtensionKind.RecommendedPlaylists, ct).ConfigureAwait(false); }
+        try
+        {
+            refsPayload = _extensions is not null
+                ? await _extensions.GetPayloadAsync(albumUri, Xm.ExtensionKind.RecommendedPlaylists, ct).ConfigureAwait(false)
+                : await _metadata.GetExtensionAsync(albumUri, Xm.ExtensionKind.RecommendedPlaylists, ct).ConfigureAwait(false);
+        }
         catch (Exception ex) when (ex is not OperationCanceledException) { _log?.Invoke("RECOMMENDED_PLAYLISTS fetch: " + ex.Message); return Array.Empty<PlaylistSummary>(); }
         if (refsPayload is null) return Array.Empty<PlaylistSummary>();
 
@@ -122,7 +130,13 @@ sealed class SpotifyAlbumEnrichmentService : IAlbumEnrichmentService
         if (uris.Length == 0) return Array.Empty<PlaylistSummary>();
 
         IReadOnlyDictionary<(string Uri, Xm.ExtensionKind Kind), ByteString> payloads;
-        try { payloads = await _metadata.GetExtensionsAsync(Array.ConvertAll(uris, u => (u, Xm.ExtensionKind.ListMetadataV2)), ct).ConfigureAwait(false); }
+        try
+        {
+            var requests = Array.ConvertAll(uris, u => (u, Xm.ExtensionKind.ListMetadataV2));
+            payloads = _extensions is not null
+                ? await _extensions.GetPayloadsAsync(requests, ct).ConfigureAwait(false)
+                : await _metadata.GetExtensionsAsync(requests, ct).ConfigureAwait(false);
+        }
         catch (Exception ex) when (ex is not OperationCanceledException) { _log?.Invoke("LIST_METADATA_V2 fetch: " + ex.Message); return Array.Empty<PlaylistSummary>(); }
 
         var result = new List<PlaylistSummary>(uris.Length);

@@ -26,7 +26,9 @@ public readonly record struct DrawSpan(
     int SortCount,
     int CommandCount,
     DrawListOpcodeStats OpcodeStats,
-    Affine2D World);
+    Affine2D World,
+    RectF SubtreeBounds,
+    bool ClipComplete);
 
 /// <summary>Per-node prior-frame DrawList span metadata. The DrawList owns the byte/sort arenas; this table owns only
 /// offsets and validation keys, so a clean subtree can memcpy its previous commands without re-walking descendants.</summary>
@@ -43,6 +45,8 @@ public sealed class SpanTable
     private int[] _sortCount;
     private int[] _commandCount;
     private DrawListOpcodeStats[] _opcodeStats;
+    private RectF[] _subtreeBounds;
+    private bool[] _clipComplete;
     private uint _frameId;
 
     public SpanTable(int capacity = 64)
@@ -59,6 +63,8 @@ public sealed class SpanTable
         _sortCount = new int[capacity];
         _commandCount = new int[capacity];
         _opcodeStats = new DrawListOpcodeStats[capacity];
+        _subtreeBounds = new RectF[capacity];
+        _clipComplete = new bool[capacity];
     }
 
     public bool HasPrior => _frameId > 1;
@@ -96,7 +102,9 @@ public sealed class SpanTable
             _sortCount[nodeIndex],
             _commandCount[nodeIndex],
             _opcodeStats[nodeIndex],
-            _world[nodeIndex]);
+            _world[nodeIndex],
+            _subtreeBounds[nodeIndex],
+            _clipComplete[nodeIndex]);
         return true;
     }
 
@@ -121,7 +129,9 @@ public sealed class SpanTable
             _sortCount[nodeIndex],
             _commandCount[nodeIndex],
             _opcodeStats[nodeIndex],
-            _world[nodeIndex]);
+            _world[nodeIndex],
+            _subtreeBounds[nodeIndex],
+            _clipComplete[nodeIndex]);
         return true;
     }
 
@@ -139,6 +149,8 @@ public sealed class SpanTable
         _sortCount[nodeIndex] = span.SortCount;
         _commandCount[nodeIndex] = span.CommandCount;
         _opcodeStats[nodeIndex] = span.OpcodeStats;
+        _subtreeBounds[nodeIndex] = span.SubtreeBounds;
+        _clipComplete[nodeIndex] = span.ClipComplete;
     }
 
     private void EnsureCapacity(int capacity)
@@ -157,5 +169,7 @@ public sealed class SpanTable
         Array.Resize(ref _sortCount, n);
         Array.Resize(ref _commandCount, n);
         Array.Resize(ref _opcodeStats, n);
+        Array.Resize(ref _subtreeBounds, n);
+        Array.Resize(ref _clipComplete, n);
     }
 }

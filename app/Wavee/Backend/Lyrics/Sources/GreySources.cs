@@ -27,7 +27,7 @@ static class GreyHttp
         {
             using var req = new HttpRequestMessage(HttpMethod.Get, url);
             Add(req, headers);
-            using var resp = await SharedHttp.Client.SendAsync(req, ct).ConfigureAwait(false);
+            using var resp = await HttpPools.Get(HttpPool.ThirdParty).SendAsync(req, ct).ConfigureAwait(false);
             return resp.IsSuccessStatusCode ? await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false) : null;
         }
         catch (OperationCanceledException) { throw; }
@@ -40,7 +40,7 @@ static class GreyHttp
         {
             using var req = new HttpRequestMessage(HttpMethod.Post, url) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
             Add(req, headers);
-            using var resp = await SharedHttp.Client.SendAsync(req, ct).ConfigureAwait(false);
+            using var resp = await HttpPools.Get(HttpPool.ThirdParty).SendAsync(req, ct).ConfigureAwait(false);
             return resp.IsSuccessStatusCode ? await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false) : null;
         }
         catch (OperationCanceledException) { throw; }
@@ -54,7 +54,7 @@ static class GreyHttp
             using var req = new HttpRequestMessage(HttpMethod.Post, url)
             { Content = new FormUrlEncodedContent(form.Select(f => new KeyValuePair<string, string>(f.Item1, f.Item2))) };
             Add(req, headers);
-            using var resp = await SharedHttp.Client.SendAsync(req, ct).ConfigureAwait(false);
+            using var resp = await HttpPools.Get(HttpPool.ThirdParty).SendAsync(req, ct).ConfigureAwait(false);
             return resp.IsSuccessStatusCode ? await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false) : null;
         }
         catch (OperationCanceledException) { throw; }

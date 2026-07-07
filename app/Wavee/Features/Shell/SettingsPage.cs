@@ -11,6 +11,7 @@ using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Localization;
 using FluentGpu.Signals;
 using Wavee.Backend.Audio;
 using Wavee.SpotifyLive.Audio;
@@ -25,11 +26,18 @@ namespace Wavee;
 sealed class SettingsPage : Component
 {
     const int TabGeneral = 0, TabPlayback = 1, TabStorage = 2, TabDiagnostics = 3, TabAbout = 4;
-    static readonly string[] s_tabs = ["General", "Playback", "Storage & cache", "Diagnostics", "About"];
     static readonly string[] s_tabKeys = ["general", "playback", "storage", "diagnostics", "about"];
-    static readonly string[] s_themeLabels = ["System", "Light", "Dark"];
-    static readonly string[] s_densityLabels = ["Compact", "Default", "Cozy", "Comfortable"];
     static readonly string[] s_eqBandLabels = ["31 Hz", "63 Hz", "125 Hz", "250 Hz", "500 Hz", "1 kHz", "2 kHz", "4 kHz", "8 kHz", "16 kHz"];
+    static readonly string[] s_eqPresetIds = ["flat", "bass", "treble", "vocal", "radio", "proof"];
+    static readonly float[][] s_eqPresetGains =
+    [
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [6, 5, 4, 2, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 1, 2, 3, 4, 5],
+        [-2, -1, 0, 2, 4, 4, 2, 0, -1, -2],
+        [0, 2, -2, 0, 0, 2, 4, 2, 2, 2],
+        [12, -12, 12, -12, 12, -12, 12, -12, 12, -12],
+    ];
 
     const int MaxVisibleRows = 500;
     static readonly string[] s_levelLabels = ["All", "Info+", "Warnings", "Errors"];
@@ -61,6 +69,7 @@ sealed class SettingsPage : Component
 
     // General state
     readonly Signal<int> _density = new(1);
+    readonly Signal<int> _eqPreset = new(0);
 
     static readonly string[] s_bodyBudgetLabels = ["512 MB", "1 GB", "2 GB", "4 GB", "8 GB"];
     static readonly long[] s_bodyBudgetBytes = [512L << 20, 1L << 30, 2L << 30, 4L << 30, 8L << 30];
@@ -76,6 +85,50 @@ sealed class SettingsPage : Component
     readonly Signal<int> _licOpen = new(-1);
 
     void Bump() => _uiEpoch.Value = _uiEpoch.Peek() + 1;
+
+    static string[] TabLabels() =>
+    [
+        Loc.Get(Strings.Settings.Tabs.General),
+        Loc.Get(Strings.Settings.Tabs.Playback),
+        Loc.Get(Strings.Settings.Tabs.Storage),
+        Loc.Get(Strings.Settings.Tabs.Diagnostics),
+        Loc.Get(Strings.Settings.Tabs.About),
+    ];
+
+    static string[] ThemeLabels() =>
+    [
+        Loc.Get(Strings.Settings.Choice.System),
+        Loc.Get(Strings.Settings.Choice.Light),
+        Loc.Get(Strings.Settings.Choice.Dark),
+    ];
+
+    static string[] DensityLabels() =>
+    [
+        Loc.Get(Strings.Settings.Choice.Compact),
+        Loc.Get(Strings.Settings.Choice.Default),
+        Loc.Get(Strings.Settings.Choice.Cozy),
+        Loc.Get(Strings.Settings.Choice.Comfortable),
+    ];
+
+    static string[] EqPresetLabels() =>
+    [
+        Loc.Get(Strings.Settings.Sound.Presets.Flat),
+        Loc.Get(Strings.Settings.Sound.Presets.Bass),
+        Loc.Get(Strings.Settings.Sound.Presets.Treble),
+        Loc.Get(Strings.Settings.Sound.Presets.Vocal),
+        Loc.Get(Strings.Settings.Sound.Presets.Radio),
+        Loc.Get(Strings.Settings.Sound.Presets.Proof),
+    ];
+
+    static string[] EqPresetDescriptions() =>
+    [
+        Loc.Get(Strings.Settings.Sound.Presets.FlatSub),
+        Loc.Get(Strings.Settings.Sound.Presets.BassSub),
+        Loc.Get(Strings.Settings.Sound.Presets.TrebleSub),
+        Loc.Get(Strings.Settings.Sound.Presets.VocalSub),
+        Loc.Get(Strings.Settings.Sound.Presets.RadioSub),
+        Loc.Get(Strings.Settings.Sound.Presets.ProofSub),
+    ];
 
     public override Element Render()
     {
@@ -93,6 +146,7 @@ sealed class SettingsPage : Component
             if (seeded.Value || svc is null) return;
             seeded.Value = true;
             _density.Value = svc.Settings.Get(WaveeSettings.RowDensity);
+            _eqPreset.Value = EqPresetIndex(svc.Settings.Get(WaveeSettings.EqualizerPreset));
         });
 
         // Live log polling — only while the Diagnostics tab is showing THE LIVE SESSION (a past session is a static
@@ -161,7 +215,7 @@ sealed class SettingsPage : Component
                     Direction = 1, Padding = new Edges4(WaveeSpace.L, 0f, WaveeSpace.L, 0f),
                     Children =
                     [
-                        SelectorBar.Create(s_tabs, tab, i => _tab.Value = i),
+                        SelectorBar.Create(TabLabels(), tab, i => _tab.Value = i),
                         new BoxEl { Height = 1f, Fill = Tok.StrokeDividerDefault },
                     ],
                 },
@@ -224,7 +278,7 @@ sealed class SettingsPage : Component
         Children =
         [
             Icon(Icons.Settings, 22f, Tok.TextPrimary),
-            WaveeType.PageHero("Settings") with { Grow = 1f },
+            WaveeType.PageHero(Loc.Get(Strings.Settings.Title)) with { Grow = 1f },
         ],
     };
 
@@ -242,10 +296,10 @@ sealed class SettingsPage : Component
     {
         var stack = new BoxEl
         {
-            Direction = 1, Gap = 2f, Grow = 1f, Basis = 0f,
+            Direction = 1, Gap = 2f, Grow = 1f, Basis = 0f, MinWidth = 0f,
             Children = caption is { Length: > 0 }
                 ? [new TextEl(title) { Size = 14f, Weight = 700, Color = Tok.TextPrimary },
-                   new TextEl(caption) { Size = 12f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap }]
+                   new TextEl(caption) { Size = 12f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, Trim = TextTrim.CharacterEllipsis }]
                 : [new TextEl(title) { Size = 14f, Weight = 700, Color = Tok.TextPrimary }],
         };
         return new BoxEl
@@ -258,6 +312,52 @@ sealed class SettingsPage : Component
 
     static Element RowDivider() => new BoxEl
     { Height = 1f, Margin = new Edges4(WaveeSpace.L, 0f, WaveeSpace.L, 0f), Fill = Tok.StrokeDividerDefault };
+
+    static Element Section(string title, string? caption, params Element[] cards)
+    {
+        var kids = new List<Element>(cards.Length + 1)
+        {
+            new BoxEl
+            {
+                Direction = 1,
+                Gap = 2f,
+                Padding = new Edges4(2f, 0f, 2f, 0f),
+                Children = caption is { Length: > 0 }
+                    ? [new TextEl(title) { Size = 20f, Weight = 650, Color = Tok.TextPrimary },
+                       new TextEl(caption) { Size = 12.5f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap }]
+                    : [new TextEl(title) { Size = 20f, Weight = 650, Color = Tok.TextPrimary }],
+            },
+        };
+        kids.AddRange(cards);
+        return new BoxEl { Direction = 1, Gap = 8f, Children = kids.ToArray() };
+    }
+
+    static Element SettingsRow(string label, string? sub, Element control, string? icon = null,
+                               SettingsCard.ContentAlignment align = SettingsCard.ContentAlignment.Right)
+        => SettingsCard.Create(new SettingsCard.Options
+        {
+            Header = label,
+            Description = sub,
+            HeaderIcon = icon,
+            Content = control,
+            Alignment = align,
+        });
+
+    static Element SettingsGroup(string title, string? caption, string? icon, params Element[] items)
+        => SettingsExpander.Create(new SettingsExpander.Options
+        {
+            Header = title,
+            Description = caption,
+            HeaderIcon = icon,
+            InitiallyExpanded = true,
+            Items = items,
+        });
+
+    static Element SettingsItem(string label, string? sub, Element? control = null,
+                                SettingsCard.ContentAlignment align = SettingsCard.ContentAlignment.Right,
+                                bool isEnabled = true, bool isClickEnabled = false, Action? onClick = null,
+                                string? icon = null)
+        => SettingsExpander.Item(label, sub, control, align, isEnabled, isClickEnabled, onClick, icon);
 
     static Element SettingRow(string label, string? sub, Element control) => new BoxEl
     {
@@ -340,17 +440,13 @@ sealed class SettingsPage : Component
             Bump();
         }
 
-        return Card(
-            CardHeader("Appearance", "Theme, color palette and list density"),
-            RowDivider(),
-            SettingRow("Theme", "System follows the Windows setting live",
-                SelectorBar.Create(s_themeLabels, themeMode, SetTheme)),
-            RowDivider(),
-            SettingRow("Palette", "Tints the shell surfaces and accent",
+        return SettingsGroup(Loc.Get(Strings.Settings.Appearance.Title), Loc.Get(Strings.Settings.Appearance.Subtitle), Icons.Brush,
+            SettingsItem(Loc.Get(Strings.Settings.Appearance.Theme), Loc.Get(Strings.Settings.Appearance.ThemeSub),
+                SelectorBar.Create(ThemeLabels(), themeMode, SetTheme)),
+            SettingsItem(Loc.Get(Strings.Settings.Appearance.Palette), Loc.Get(Strings.Settings.Appearance.PaletteSub),
                 PaletteRow(settings, requestTheme)),
-            RowDivider(),
-            SettingRow("Row density", "Height of rows in track lists",
-                ComboBox.Create(s_densityLabels, _density, width: 170f,
+            SettingsItem(Loc.Get(Strings.Settings.Appearance.RowDensity), Loc.Get(Strings.Settings.Appearance.RowDensitySub),
+                ComboBox.Create(DensityLabels(), _density, width: 170f,
                     onSelectionChanged: i => { settings?.Set(WaveeSettings.RowDensity, i); Bump(); })));
     }
 
@@ -381,13 +477,13 @@ sealed class SettingsPage : Component
 
         return new BoxEl
         {
-            Direction = 0, Gap = 10f, AlignItems = FlexAlign.Center,
+            Direction = 0, Gap = 10f, AlignItems = FlexAlign.Center, Wrap = true,
             Children =
             [
-                Swatch("warm", "Warm", WaveeColors.PresetSwatch(Tok.WarmPalette)),
-                Swatch("slate", "Slate", WaveeColors.PresetSwatch(Tok.SlatePalette)),
-                Swatch("neutral", "Neutral", WaveeColors.PresetSwatch(Tok.NeutralPalette)),
-                Swatch("accent", "Accent", WaveeColors.PresetSwatch(Tok.AccentTintedPalette)),
+                Swatch("warm", Loc.Get(Strings.Settings.Appearance.PaletteWarm), WaveeColors.PresetSwatch(Tok.WarmPalette)),
+                Swatch("slate", Loc.Get(Strings.Settings.Appearance.PaletteSlate), WaveeColors.PresetSwatch(Tok.SlatePalette)),
+                Swatch("neutral", Loc.Get(Strings.Settings.Appearance.PaletteNeutral), WaveeColors.PresetSwatch(Tok.NeutralPalette)),
+                Swatch("accent", Loc.Get(Strings.Settings.Appearance.PaletteAccent), WaveeColors.PresetSwatch(Tok.AccentTintedPalette)),
             ],
         };
     }
@@ -402,42 +498,36 @@ sealed class SettingsPage : Component
             Direction = 1, Gap = WaveeSpace.L,
             Children =
             [
-                RuntimeCard(svc),
-                Card(
-                    CardHeader("Audio", "Streaming quality for local playback — applies from the next track"),
-                    RowDivider(),
-                    QualityOption(svc, 0, "Normal", "96 kbps · about 0.04 GB/hour"),
-                    QualityOption(svc, 1, "High", "160 kbps · about 0.07 GB/hour"),
-                    QualityOption(svc, 2, "Very High", "320 kbps · about 0.14 GB/hour"),
-                    QualityComingSoon("Lossless", "Up to 24-bit/44.1 kHz · FLAC"),
-                    RowDivider(),
-                    SettingRow("Remember volume", "Restore the last volume level when Wavee starts",
+                RuntimeGroup(svc),
+                SettingsGroup(Loc.Get(Strings.Settings.Playback.AudioTitle), Loc.Get(Strings.Settings.Playback.AudioSub), Icons.MusicNote,
+                    QualityOption(svc, 0, Loc.Get(Strings.Settings.Playback.QualityNormal), Loc.Get(Strings.Settings.Playback.QualityNormalSub)),
+                    QualityOption(svc, 1, Loc.Get(Strings.Settings.Playback.QualityHigh), Loc.Get(Strings.Settings.Playback.QualityHighSub)),
+                    QualityOption(svc, 2, Loc.Get(Strings.Settings.Playback.QualityVeryHigh), Loc.Get(Strings.Settings.Playback.QualityVeryHighSub)),
+                    QualityComingSoon(Loc.Get(Strings.Settings.Playback.QualityLossless), Loc.Get(Strings.Settings.Playback.QualityLosslessSub)),
+                    SettingsItem(Loc.Get(Strings.Settings.Playback.RememberVolume), Loc.Get(Strings.Settings.Playback.RememberVolumeSub),
                         ToggleSwitch.Create(settings?.Get(WaveeSettings.RememberVolume) ?? true, () =>
                         {
                             if (settings is null) return;
                             settings.Set(WaveeSettings.RememberVolume, !settings.Get(WaveeSettings.RememberVolume));
                             Bump();
-                        })),
-                    RowDivider(),
-                    SettingRow("Autoplay", "Continue with similar songs when the current context ends",
+                        }, style: SettingsCard.CompactToggleStyle())),
+                    SettingsItem(Loc.Get(Strings.Settings.Playback.Autoplay), Loc.Get(Strings.Settings.Playback.AutoplaySub),
                         ToggleSwitch.Create(settings?.Get(WaveeSettings.AutoplayEnabled) ?? true, () =>
                         {
                             if (settings is null) return;
                             settings.Set(WaveeSettings.AutoplayEnabled, !settings.Get(WaveeSettings.AutoplayEnabled));
                             Bump();
-                        }))),
+                        }, style: SettingsCard.CompactToggleStyle()))),
                 DspCard(svc),
-                Card(
-                    CardHeader("Player bar", null),
-                    RowDivider(),
-                    SettingRow("Show remaining time", "Count down time left instead of showing the track duration (clicking the time in the bar toggles it too)",
+                SettingsGroup(Loc.Get(Strings.Settings.Playback.PlayerBar), null, Icons.Clock,
+                    SettingsItem(Loc.Get(Strings.Settings.Playback.ShowRemaining), Loc.Get(Strings.Settings.Playback.ShowRemainingSub),
                         ToggleSwitch.Create(settings?.Get(WaveeSettings.PlayerBarShowRemaining) ?? true, () =>
                         {
                             if (settings is null) return;
                             settings.Set(WaveeSettings.PlayerBarShowRemaining, !settings.Get(WaveeSettings.PlayerBarShowRemaining));
                             PlayerBarPrefs.Bump();
                             Bump();
-                        }))),
+                        }, style: SettingsCard.CompactToggleStyle()))),
             ],
         };
     }
@@ -450,43 +540,59 @@ sealed class SettingsPage : Component
         int crossMs = Math.Clamp(settings?.Get(WaveeSettings.CrossfadeMs) ?? 5000, 0, 30_000);
         float[] gains = ReadEqGains(settings);
 
-        var eqRows = new Element[10];
-        for (int i = 0; i < eqRows.Length; i++)
-            eqRows[i] = EqBandRow(svc, settings, gains, i);
+        int preset = Math.Clamp(_eqPreset.Value, 0, s_eqPresetIds.Length - 1);
+        string[] presetLabels = EqPresetLabels();
+        string[] presetDescriptions = EqPresetDescriptions();
 
-        return Card(
-            CardHeader("Sound", "Equalizer and transition controls for local playback"),
-            RowDivider(),
-            SettingRow("Equalizer", "10-band graphic EQ, +/-12 dB",
+        return SettingsGroup(Loc.Get(Strings.Settings.Sound.Title), Loc.Get(Strings.Settings.Sound.Subtitle), Icons.MusicNote,
+            SettingsItem(Loc.Get(Strings.Settings.Sound.Equalizer), Loc.Get(Strings.Settings.Sound.EqualizerSub),
                 ToggleSwitch.Create(eqOn, () =>
                 {
                     if (settings is null) return;
                     settings.Set(WaveeSettings.EqualizerEnabled, !settings.Get(WaveeSettings.EqualizerEnabled));
                     PushDsp(svc);
                     Bump();
-                })),
-            InnerPanel(eqRows),
-            RowDivider(),
-            SettingRow("Crossfade", "Natural transition at the end of a prepared track",
+                }, style: SettingsCard.CompactToggleStyle())),
+            SettingsItem(Loc.Get(Strings.Settings.Sound.Preset), presetDescriptions[preset],
+                new BoxEl
+                {
+                    Direction = 0,
+                    AlignItems = FlexAlign.Center,
+                    Gap = WaveeSpace.S,
+                    Wrap = true,
+                    Children =
+                    [
+                        ComboBox.Create(presetLabels, _eqPreset, width: 180f,
+                            isEnabled: settings is not null,
+                            onSelectionChanged: i => ApplyEqPreset(svc, settings, i)),
+                        Button.Standard(Loc.Get(Strings.Settings.Sound.Reset), () => ApplyEqPreset(svc, settings, 0), isEnabled: settings is not null),
+                    ],
+                }),
+            SettingsItem(Loc.Get(Strings.Settings.Sound.Curve),
+                eqOn ? Loc.Get(Strings.Settings.Sound.CurveOn) : Loc.Get(Strings.Settings.Sound.CurveOff),
+                WaveeEqualizerCurve.Create(gains, (band, gain) => SetEqBand(svc, settings, band, gain), eqOn && settings is not null),
+                SettingsCard.ContentAlignment.Vertical),
+            SettingsItem(Loc.Get(Strings.Settings.Sound.Crossfade), Loc.Get(Strings.Settings.Sound.CrossfadeSub),
                 ToggleSwitch.Create(crossOn, () =>
                 {
                     if (settings is null) return;
                     settings.Set(WaveeSettings.CrossfadeEnabled, !settings.Get(WaveeSettings.CrossfadeEnabled));
                     PushDsp(svc);
                     Bump();
-                })),
-            RowDivider(),
-            SettingRow("Crossfade duration", (crossMs / 1000.0).ToString("0.#", CultureInfo.InvariantCulture) + " seconds",
-                new BoxEl
-                {
-                    Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S,
-                    Children =
-                    [
-                        Button.Standard("-1s", () => UpdateCrossfadeDuration(svc, settings, -1000), isEnabled: settings is not null),
-                        new TextEl(crossMs.ToString(CultureInfo.InvariantCulture) + " ms") { Size = 12f, Color = Tok.TextSecondary, Width = 68f },
-                        Button.Standard("+1s", () => UpdateCrossfadeDuration(svc, settings, 1000), isEnabled: settings is not null),
-                    ],
-                }));
+                }, style: SettingsCard.CompactToggleStyle())),
+            SettingsItem(Loc.Get(Strings.Settings.Sound.CrossfadeDuration), Strings.Settings.Sound.Seconds((crossMs / 1000.0).ToString("0.#", CultureInfo.InvariantCulture)),
+                Slider.Ranged(crossMs / 1000f, seconds => SetCrossfadeDuration(svc, settings, (int)MathF.Round(seconds * 1000f)),
+                    new Slider.Options
+                    {
+                        Min = 0f,
+                        Max = 30f,
+                        Step = 0.5f,
+                        TickFrequency = 5f,
+                        IsThumbToolTipEnabled = true,
+                        ThumbToolTipValueConverter = v => v.ToString("0.#", CultureInfo.InvariantCulture) + " s",
+                    },
+                    length: 260f,
+                    isEnabled: settings is not null)));
     }
 
     Element EqBandRow(Services? svc, IAppSettings? settings, float[] gains, int band)
@@ -535,12 +641,53 @@ sealed class SettingsPage : Component
         return sb.ToString();
     }
 
+    static int EqPresetIndex(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return 0;
+        for (int i = 0; i < s_eqPresetIds.Length; i++)
+            if (string.Equals(name, s_eqPresetIds[i], StringComparison.OrdinalIgnoreCase))
+                return i;
+
+        // Compatibility with earlier builds that stored the English display label.
+        for (int i = 0; i < EqPresetLabels().Length; i++)
+            if (string.Equals(name, EqPresetLabels()[i], StringComparison.OrdinalIgnoreCase))
+                return i;
+        return 0;
+    }
+
+    void ApplyEqPreset(Services? svc, IAppSettings? settings, int index)
+    {
+        if (settings is null) return;
+        int idx = Math.Clamp(index, 0, s_eqPresetIds.Length - 1);
+        _eqPreset.Value = idx;
+        settings.Set(WaveeSettings.EqualizerPreset, s_eqPresetIds[idx]);
+        settings.Set(WaveeSettings.EqualizerGains, SerializeEqGains(s_eqPresetGains[idx]));
+        PushDsp(svc);
+        Bump();
+    }
+
+    void SetEqBand(Services? svc, IAppSettings? settings, int band, float gain)
+    {
+        if (settings is null || band < 0 || band >= 10) return;
+        var gains = ReadEqGains(settings);
+        gains[band] = Math.Clamp(gain, -12f, 12f);
+        settings.Set(WaveeSettings.EqualizerGains, SerializeEqGains(gains));
+        PushDsp(svc);
+        Bump();
+    }
+
     void UpdateEqBand(Services? svc, IAppSettings? settings, int band, float delta)
     {
         if (settings is null || band < 0 || band >= 10) return;
         var gains = ReadEqGains(settings);
-        gains[band] = Math.Clamp(gains[band] + delta, -12f, 12f);
-        settings.Set(WaveeSettings.EqualizerGains, SerializeEqGains(gains));
+        SetEqBand(svc, settings, band, gains[band] + delta);
+    }
+
+    void SetCrossfadeDuration(Services? svc, IAppSettings? settings, int ms)
+    {
+        if (settings is null) return;
+        int next = Math.Clamp(ms, 0, 30_000);
+        settings.Set(WaveeSettings.CrossfadeMs, next);
         PushDsp(svc);
         Bump();
     }
@@ -548,10 +695,7 @@ sealed class SettingsPage : Component
     void UpdateCrossfadeDuration(Services? svc, IAppSettings? settings, int deltaMs)
     {
         if (settings is null) return;
-        int next = Math.Clamp(settings.Get(WaveeSettings.CrossfadeMs) + deltaMs, 0, 30_000);
-        settings.Set(WaveeSettings.CrossfadeMs, next);
-        PushDsp(svc);
-        Bump();
+        SetCrossfadeDuration(svc, settings, settings.Get(WaveeSettings.CrossfadeMs) + deltaMs);
     }
 
     static void PushDsp(Services? svc)
@@ -565,6 +709,45 @@ sealed class SettingsPage : Component
             Math.Clamp(settings.Get(WaveeSettings.CrossfadeMs), 0, 30_000));
     }
 
+    Element RuntimeGroup(Services? svc)
+    {
+        var status = svc?.Playback.RuntimeStatus.Value ?? PlaybackRuntimeStatus.NotApplicable;
+
+        void OpenSetup()
+        {
+            if (svc is { } s) s.Playback.OpenPlaybackRuntimeSetup.Value = s.Playback.OpenPlaybackRuntimeSetup.Peek() + 1;
+        }
+
+        var items = new List<Element>();
+        if (status.IsReady)
+        {
+            items.Add(SettingsItem(Loc.Get(Strings.Settings.Common.Ready),
+                Loc.Get(Strings.Settings.Playback.RuntimeReadySub),
+                Button.Standard(Loc.Get(Strings.Settings.Common.Manage), OpenSetup)));
+            items.Add(RuntimeInfoItem(Loc.Get(Strings.Playback.Runtime.DetailVersion),
+                status.PackId is { Length: > 0 } pack ? status.SpotifyVersion + " (" + pack + ")" : status.SpotifyVersion));
+            items.Add(RuntimeInfoItem(Loc.Get(Strings.Playback.Runtime.DetailArch), status.Arch?.ToString()));
+            items.Add(RuntimeInfoItem(Loc.Get(Strings.Playback.Runtime.DetailSignature), SetupBody.SignatureSummary(status)));
+            items.Add(RuntimeInfoItem(Loc.Get(Strings.Playback.Runtime.DetailLocation), status.RuntimePath));
+        }
+        else if (status.Outcome == ProvisioningOutcome.NeverAttempted)
+        {
+            items.Add(SettingsItem(Loc.Get(Strings.Settings.Playback.RuntimeNotSetUp),
+                Loc.Get(Strings.Settings.Playback.RuntimeNotSetUpSub),
+                Button.Accent(Loc.Get(Strings.Playback.Runtime.SetUp), OpenSetup)));
+        }
+        else
+        {
+            string detail = svc?.Playback.RuntimeStatus.Value.Outcome.ToUserMessage()
+                ?? Loc.Get(Strings.Settings.Playback.RuntimeUnavailable);
+            items.Add(SettingsItem(Loc.Get(Strings.Settings.Common.Problem), detail,
+                Button.Accent(Loc.Get(Strings.Settings.Common.RetrySetup), OpenSetup)));
+        }
+
+        return SettingsGroup(Loc.Get(Strings.Settings.Playback.RuntimeTitle),
+            Loc.Get(Strings.Settings.Playback.RuntimeSub), Icons.Play, items.ToArray());
+    }
+
     Element RuntimeCard(Services? svc)
     {
         var status = svc?.Playback.RuntimeStatus.Value ?? PlaybackRuntimeStatus.NotApplicable;
@@ -574,12 +757,9 @@ sealed class SettingsPage : Component
             if (svc is { } s) s.Playback.OpenPlaybackRuntimeSetup.Value = s.Playback.OpenPlaybackRuntimeSetup.Peek() + 1;
         }
 
-        var kids = new List<Element>
-        {
-            CardHeader("Playback runtime", "Local audio decode and key-derivation runtime"),
-            RowDivider(),
-        };
+        return RuntimeCards(svc, status, OpenSetup);
 
+        /*
         if (status.IsReady)
         {
             kids.Add(new BoxEl
@@ -627,7 +807,69 @@ sealed class SettingsPage : Component
         }
 
         return Card(kids.ToArray());
+        */
     }
+
+    static Element RuntimeCards(Services? svc, PlaybackRuntimeStatus status, Action openSetup)
+    {
+        if (status.IsReady)
+        {
+            return new BoxEl
+            {
+                Direction = 1,
+                Gap = 8f,
+                Children =
+                [
+                    SettingsCard.Create(new SettingsCard.Options
+                    {
+                        Header = Loc.Get(Strings.Settings.Common.Ready),
+                        Description = Loc.Get(Strings.Settings.Playback.RuntimeReadySub),
+                        HeaderIcon = Icons.StatusSuccess,
+                        Content = Button.Standard(Loc.Get(Strings.Settings.Common.Manage), openSetup),
+                    }),
+                    RuntimeInfoRow(Loc.Get(Strings.Playback.Runtime.DetailVersion),
+                        status.PackId is { Length: > 0 } pack ? status.SpotifyVersion + " (" + pack + ")" : status.SpotifyVersion,
+                        Icons.Document),
+                    RuntimeInfoRow(Loc.Get(Strings.Playback.Runtime.DetailArch), status.Arch?.ToString(), Icons.Document),
+                    RuntimeInfoRow(Loc.Get(Strings.Playback.Runtime.DetailSignature), SetupBody.SignatureSummary(status), Icons.Tag),
+                    RuntimeInfoRow(Loc.Get(Strings.Playback.Runtime.DetailLocation), status.RuntimePath, Icons.Folder),
+                ],
+            };
+        }
+
+        if (status.Outcome == ProvisioningOutcome.NeverAttempted)
+        {
+            return SettingsCard.Create(new SettingsCard.Options
+            {
+                Header = Loc.Get(Strings.Settings.Playback.RuntimeNotSetUp),
+                Description = Loc.Get(Strings.Settings.Playback.RuntimeNotSetUpSub),
+                HeaderIcon = Icons.StatusInfo,
+                Content = Button.Accent(Loc.Get(Strings.Playback.Runtime.SetUp), openSetup),
+            });
+        }
+
+        string detail = svc?.Playback.RuntimeStatus.Value.Outcome.ToUserMessage()
+            ?? Loc.Get(Strings.Settings.Playback.RuntimeUnavailable);
+        return SettingsCard.Create(new SettingsCard.Options
+        {
+            Header = Loc.Get(Strings.Settings.Common.Problem),
+            Description = detail,
+            HeaderIcon = Icons.StatusError,
+            Content = Button.Accent(Loc.Get(Strings.Settings.Common.RetrySetup), openSetup),
+        });
+    }
+
+    static Element RuntimeInfoRow(string label, string? value, string icon) => SettingsCard.Create(new SettingsCard.Options
+    {
+        Header = label,
+        Description = string.IsNullOrWhiteSpace(value) ? null : value,
+        HeaderIcon = icon,
+        IsEnabled = !string.IsNullOrWhiteSpace(value),
+    });
+
+    static Element RuntimeInfoItem(string label, string? value) => SettingsItem(label,
+        string.IsNullOrWhiteSpace(value) ? null : value,
+        isEnabled: !string.IsNullOrWhiteSpace(value));
 
     static Element StatusRow(string glyph, ColorF glyphColor, string heading, string body, Element action) => new BoxEl
     {
@@ -654,54 +896,22 @@ sealed class SettingsPage : Component
         var settings = svc?.Settings;
         int selected = Math.Clamp(settings?.Get(WaveeSettings.PlaybackQuality) ?? 2, 0, 2);
         bool on = selected == value;
-        return new BoxEl
-        {
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
-            Padding = new Edges4(WaveeSpace.L, WaveeSpace.S, WaveeSpace.L, WaveeSpace.S),
-            HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
-            Role = AutomationRole.Button, Focusable = true,
-            OnClick = () => { settings?.Set(WaveeSettings.PlaybackQuality, value); Bump(); },
-            Children =
-            [
-                new BoxEl
-                {
-                    Direction = 1, Gap = 1f, Grow = 1f, Basis = 0f,
-                    Children =
-                    [
-                        new TextEl(title) { Size = 14f, Weight = 600, Color = Tok.TextPrimary },
-                        new TextEl(caption) { Size = 12f, Color = Tok.TextSecondary },
-                    ],
-                },
-                on
-                    ? new TextEl(Icons.Accept) { Size = 14f, FontFamily = Theme.IconFont, Color = Tok.AccentDefault, Shrink = 0f }
-                    : new BoxEl { Width = 14f },
-            ],
-        };
+        return SettingsItem(title, caption,
+            on
+                ? new TextEl(Icons.Accept) { Size = 14f, FontFamily = Theme.IconFont, Color = Tok.AccentDefault, Shrink = 0f }
+                : new BoxEl { Width = 14f },
+            isClickEnabled: settings is not null,
+            onClick: () => { settings?.Set(WaveeSettings.PlaybackQuality, value); Bump(); });
     }
 
-    static Element QualityComingSoon(string title, string caption) => new BoxEl
-    {
-        Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
-        Padding = new Edges4(WaveeSpace.L, WaveeSpace.S, WaveeSpace.L, WaveeSpace.S),
-        Children =
-        [
-            new BoxEl
-            {
-                Direction = 1, Gap = 1f, Grow = 1f, Basis = 0f,
-                Children =
-                [
-                    new TextEl(title) { Size = 14f, Weight = 600, Color = Tok.TextDisabled },
-                    new TextEl(caption) { Size = 12f, Color = Tok.TextDisabled },
-                ],
-            },
-            new BoxEl
-            {
-                Padding = new Edges4(8f, 2f, 8f, 3f), Corners = CornerRadius4.All(WaveeRadius.Pill),
-                Fill = Tok.AccentSubtle,
-                Children = [new TextEl("Coming soon") { Size = 11f, Weight = 600, Color = Tok.AccentDefault }],
-            },
-        ],
-    };
+    static Element QualityComingSoon(string title, string caption) => SettingsItem(title, caption,
+        new BoxEl
+        {
+            Padding = new Edges4(8f, 2f, 8f, 3f), Corners = CornerRadius4.All(WaveeRadius.Pill),
+            Fill = Tok.AccentSubtle,
+            Children = [new TextEl(Loc.Get(Strings.Settings.Playback.ComingSoon)) { Size = 11f, Weight = 600, Color = Tok.AccentDefault }],
+        },
+        isEnabled: false);
 
     // ── Storage & cache ───────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -798,6 +1008,22 @@ sealed class SettingsPage : Component
         };
     }
 
+    static Element StorageCard(string label, string sub, long? size, string folder, Element? extra = null)
+    {
+        var actions = new List<Element>
+        {
+            new TextEl(size is { } b ? FmtBytes(b) : "...") { Size = 13f, Color = Tok.TextSecondary, Shrink = 0f },
+            HyperlinkButton.Create(Loc.Get(Strings.Settings.Storage.OpenFolder), () => OpenFolder(folder)),
+        };
+        if (extra is not null) actions.Add(extra);
+        return SettingsItem(label, sub,
+            new BoxEl
+            {
+                Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, Wrap = true,
+                Children = actions.ToArray(),
+            });
+    }
+
     static int BodyBudgetIndex(long bytes)
     {
         int best = 3;
@@ -825,12 +1051,24 @@ sealed class SettingsPage : Component
             catch { }
             post(() =>
             {
-                Toasts.Show(deleted > 0 ? $"Deleted {deleted} old log file{(deleted == 1 ? "" : "s")}" : "No old log files to delete",
+                Toasts.Show(deleted > 0
+                    ? Loc.Format("settings.storage.oldLogsDeleted", ("count", deleted))
+                    : Loc.Get(Strings.Settings.Storage.NoOldLogsDeleted),
                     ToastSeverity.Success);
                 _storage = null;
                 RefreshStorage(post);
             });
         });
+    }
+
+    static string ResidentCacheDescription(Wavee.Backend.Persistence.CachedStore? cold)
+    {
+        if (cold is null) return Loc.Get(Strings.Settings.Storage.ResidentCacheSub);
+        return Loc.Format("settings.storage.residentCacheStats",
+            ("used", FmtBytes(cold.ResidentMembershipBytes)),
+            ("cap", FmtBytes(cold.MaxResidentBytes)),
+            ("count", cold.ResidentMembershipCount),
+            ("max", cold.MaxResidentPlaylists));
     }
 
     Element StorageTab(Services? svc, Action<Action> post)
@@ -840,40 +1078,33 @@ sealed class SettingsPage : Component
         string root = AppDataRoot;
 
         var cold = svc?.RealStore as Wavee.Backend.Persistence.CachedStore;
+        string residentCacheDescription = ResidentCacheDescription(cold);
 
         return new BoxEl
         {
             Direction = 1, Gap = WaveeSpace.L,
             Children =
             [
-                Card(
-                    CardHeader("On this PC", root,
-                        s is { } snap ? StatPill(FmtBytes(snap.Total), "total") : StatPill("…", "total")),
-                    RowDivider(),
-                    StorageRow("Library database", "library.db — albums, artists, playlists, sync state",
+                SettingsGroup(Loc.Get(Strings.Settings.Storage.OnThisPc), s is { } snap ? root + " - " + FmtBytes(snap.Total) + " " + Loc.Get(Strings.Settings.Storage.Total) : root, Icons.Folder,
+                    StorageCard(Loc.Get(Strings.Settings.Storage.Library), Loc.Get(Strings.Settings.Storage.LibrarySub),
                         s?.LibraryDb, root),
-                    RowDivider(),
-                    StorageRow("Playback runtime", "playplay\\runtimes — managed from the Playback tab",
+                    StorageCard(Loc.Get(Strings.Settings.Storage.Runtime), Loc.Get(Strings.Settings.Storage.RuntimeSub),
                         s?.Runtime, Path.Combine(root, "playplay")),
-                    RowDivider(),
-                    StorageRow("Logs", s is { } sn ? $"logs\\wavee.log — {sn.LogFiles} file{(sn.LogFiles == 1 ? "" : "s")}, rolled at 10 MB, 7 kept" : "logs\\wavee.log",
+                    StorageCard(Loc.Get(Strings.Settings.Storage.Logs), s is { } sn ? sn.LogFiles == 1 ? Loc.Get(Strings.Settings.Storage.LogsSubOne) : Loc.Format("settings.storage.logsSub", ("count", sn.LogFiles)) : Loc.Get(Strings.Settings.Storage.LogsSubEmpty),
                         s?.Logs, Path.Combine(root, "logs"),
-                        Button.Standard("Delete old logs", () => DeleteOldLogs(post))),
-                    RowDivider(),
-                    StorageRow("Local store & history", "store.json, navigation history",
+                        Button.Standard(Loc.Get(Strings.Settings.Storage.DeleteOldLogs), () => DeleteOldLogs(post))),
+                    StorageCard(Loc.Get(Strings.Settings.Storage.LocalStore), Loc.Get(Strings.Settings.Storage.LocalStoreSub),
                         s?.Store, root)),
                 PlaybackCacheCard(s, svc, post, settings: svc?.Settings),
-                Card(
-                    CardHeader("In memory", "Working-set caches, trimmed automatically under memory pressure"),
-                    RowDivider(),
-                    SettingRow("Resident library cache",
-                        cold is not null
+                SettingsGroup(Loc.Get(Strings.Settings.Storage.Memory), Loc.Get(Strings.Settings.Storage.MemorySub), Icons.List,
+                    SettingsItem(Loc.Get(Strings.Settings.Storage.ResidentCache),
+                        residentCacheDescription, /*
                             ? $"Playlists kept warm for instant navigation — {FmtBytes(cold.ResidentMembershipBytes)} of {FmtBytes(cold.MaxResidentBytes)} cap ({cold.ResidentMembershipCount} of {cold.MaxResidentPlaylists} playlists)"
-                            : "Playlists and detail pages kept warm for instant navigation",
-                        Button.Standard("Release now", () =>
+                            : Loc.Get(Strings.Settings.Storage.ResidentCacheSub), */
+                        Button.Standard(Loc.Get(Strings.Settings.Storage.ReleaseNow), () =>
                         {
                             svc?.LibraryStore.ShedDetails(keep: 16);
-                            Toasts.Show("Released cached detail pages", ToastSeverity.Success);
+                            Toasts.Show(Loc.Get(Strings.Settings.Storage.DetailsReleased), ToastSeverity.Success);
                             Bump();
                         }))),
             ],
@@ -887,6 +1118,10 @@ sealed class SettingsPage : Component
         var keyStats = svc?.AudioLicenseCache?.Stats();
         int budgetIdx = BodyBudgetIndex(settings?.Get(WaveeSettings.AudioBodyCacheBudgetBytes) ?? (4L << 30));
 
+        return PlaybackCacheSection(s, svc, post, settings, audioDir, licenseDb, keyStats, budgetIdx);
+    }
+
+    /*
         return Card(
             CardHeader("Playback cache", "Encrypted CDN bodies and saved license keys — survives restarts"),
             RowDivider(),
@@ -928,11 +1163,80 @@ sealed class SettingsPage : Component
                 Button.Standard("Clear saved keys", () => ClearLicenseKeys(svc, post))));
     }
 
+    */
+
+    Element PlaybackCacheSection(StorageSnapshot? s, Services? svc, Action<Action> post, IAppSettings? settings,
+                                 string audioDir, string licenseDb, (int Count, long Bytes)? keyStats, int budgetIdx)
+    {
+        string licenseSub = keyStats is { } ks
+            ? (ks.Count == 1
+                ? Loc.Get(Strings.Settings.Storage.LicenseKeysCountOne)
+                : Loc.Format("settings.storage.licenseKeysCount", ("count", ks.Count)))
+            : Loc.Get(Strings.Settings.Storage.LicenseKeysSub);
+
+        return SettingsGroup(Loc.Get(Strings.Settings.Storage.PlaybackCache), Loc.Get(Strings.Settings.Storage.PlaybackCacheSub), Icons.Download,
+            SettingsItem(Loc.Get(Strings.Settings.Storage.CacheAudio), Loc.Get(Strings.Settings.Storage.CacheAudioSub),
+                ToggleSwitch.Create(settings?.Get(WaveeSettings.AudioBodyCacheEnabled) ?? true, () =>
+                {
+                    if (settings is null) return;
+                    settings.Set(WaveeSettings.AudioBodyCacheEnabled, !settings.Get(WaveeSettings.AudioBodyCacheEnabled));
+                    Bump();
+                }, style: SettingsCard.CompactToggleStyle())),
+            SettingsItem(Loc.Get(Strings.Settings.Storage.CacheKeys), Loc.Get(Strings.Settings.Storage.CacheKeysSub),
+                ToggleSwitch.Create(settings?.Get(WaveeSettings.AudioKeyCacheEnabled) ?? true, () =>
+                {
+                    if (settings is null) return;
+                    settings.Set(WaveeSettings.AudioKeyCacheEnabled, !settings.Get(WaveeSettings.AudioKeyCacheEnabled));
+                    Bump();
+                }, style: SettingsCard.CompactToggleStyle())),
+            SettingsItem(Loc.Get(Strings.Settings.Storage.BodyBudget), Loc.Get(Strings.Settings.Storage.BodyBudgetSub),
+                new BoxEl
+                {
+                    Direction = 0,
+                    AlignItems = FlexAlign.Center,
+                    Gap = WaveeSpace.M,
+                    Wrap = true,
+                    Children =
+                    [
+                        new TextEl(Loc.Format("settings.storage.bodyBudgetValue", ("value", s_bodyBudgetLabels[budgetIdx])))
+                            { Size = 12f, Color = Tok.TextSecondary, Width = 104f },
+                        Slider.Ranged(budgetIdx, v => SetBodyBudgetIndex(svc, settings, (int)MathF.Round(v)),
+                            new Slider.Options
+                            {
+                                Min = 0f,
+                                Max = s_bodyBudgetLabels.Length - 1,
+                                Step = 1f,
+                                TickFrequency = 1f,
+                                IsThumbToolTipEnabled = true,
+                                ThumbToolTipValueConverter = v => s_bodyBudgetLabels[Math.Clamp((int)MathF.Round(v), 0, s_bodyBudgetLabels.Length - 1)],
+                            },
+                            length: 230f,
+                            isEnabled: settings is not null),
+                    ],
+                }),
+            StorageCard(Loc.Get(Strings.Settings.Storage.AudioBodies), Loc.Get(Strings.Settings.Storage.AudioBodiesSub),
+                s?.AudioBody, audioDir,
+                Button.Standard(Loc.Get(Strings.Settings.Storage.ClearAudio), () => ClearAudioBodyCache(svc, post))),
+            StorageCard(Loc.Get(Strings.Settings.Storage.LicenseKeys), licenseSub,
+                s?.LicenseDb, Path.GetDirectoryName(licenseDb) ?? audioDir,
+                Button.Standard(Loc.Get(Strings.Settings.Storage.ClearKeys), () => ClearLicenseKeys(svc, post))));
+    }
+
     void ShiftBodyBudget(Services? svc, IAppSettings? settings, int delta)
     {
         if (settings is null) return;
         int idx = BodyBudgetIndex(settings.Get(WaveeSettings.AudioBodyCacheBudgetBytes));
         idx = Math.Clamp(idx + delta, 0, s_bodyBudgetBytes.Length - 1);
+        long bytes = s_bodyBudgetBytes[idx];
+        settings.Set(WaveeSettings.AudioBodyCacheBudgetBytes, bytes);
+        svc?.AudioBodyCache?.SetBudget(bytes);
+        Bump();
+    }
+
+    void SetBodyBudgetIndex(Services? svc, IAppSettings? settings, int index)
+    {
+        if (settings is null) return;
+        int idx = Math.Clamp(index, 0, s_bodyBudgetBytes.Length - 1);
         long bytes = s_bodyBudgetBytes[idx];
         settings.Set(WaveeSettings.AudioBodyCacheBudgetBytes, bytes);
         svc?.AudioBodyCache?.SetBudget(bytes);
@@ -947,7 +1251,7 @@ sealed class SettingsPage : Component
             catch { try { if (Directory.Exists(AudioBodyDiskCache.DefaultDirectory())) foreach (var f in Directory.EnumerateFiles(AudioBodyDiskCache.DefaultDirectory())) File.Delete(f); } catch { } }
             post(() =>
             {
-                Toasts.Show("Cleared encrypted audio cache", ToastSeverity.Success);
+                Toasts.Show(Loc.Get(Strings.Settings.Storage.AudioCacheCleared), ToastSeverity.Success);
                 _storage = null;
                 RefreshStorage(post);
             });
@@ -962,7 +1266,7 @@ sealed class SettingsPage : Component
             catch { }
             post(() =>
             {
-                Toasts.Show("Cleared saved license keys", ToastSeverity.Success);
+                Toasts.Show(Loc.Get(Strings.Settings.Storage.LicenseKeysCleared), ToastSeverity.Success);
                 _storage = null;
                 RefreshStorage(post);
             });

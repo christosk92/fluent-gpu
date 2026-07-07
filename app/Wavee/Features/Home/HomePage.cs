@@ -390,7 +390,11 @@ static class HomeImageDiagnostics
             for (int i = 0; i < total; i++)
             {
                 var card = group.Cards[i];
-                if (card.Image is null) { missing++; LogMissing(group, gi, card, i, "image-null"); continue; }
+                if (card.Image is null)
+                {
+                    if (card.Kind != HomeCardKind.Liked) { missing++; LogMissing(group, gi, card, i, "image-null"); }
+                    continue;
+                }
                 if (card.Image.MosaicTiles is { Count: >= 4 }) { mosaic++; continue; }
                 if (card.Image.Url is not { Length: > 0 }) { emptyUrl++; LogMissing(group, gi, card, i, "url-empty"); continue; }
                 url++;
