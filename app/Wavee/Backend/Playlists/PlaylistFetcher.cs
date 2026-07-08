@@ -24,24 +24,27 @@ public sealed class PlaylistFetcher
 
     readonly IHttpExchange _http;
     readonly Func<string> _baseUrl;
+    readonly Func<string> _account;
     readonly IStore _store;
     readonly Func<IReadOnlyList<string>, CancellationToken, Task> _hydrate;
 
-    public PlaylistFetcher(IHttpExchange http, Func<string> baseUrl, IStore store, Func<IReadOnlyList<string>, CancellationToken, Task> hydrate)
+    public PlaylistFetcher(IHttpExchange http, Func<string> baseUrl, IStore store, Func<IReadOnlyList<string>, CancellationToken, Task> hydrate, Func<string> account)
     {
         _http = http;
         _baseUrl = baseUrl;
         _store = store;
         _hydrate = hydrate;
+        _account = account;
     }
 
     public async Task FetchPlaylistAsync(string playlistUri, CancellationToken ct = default)
     {
         var slc = await GetAsync(playlistUri, ct).ConfigureAwait(false);
         var (members, rev) = PlaylistWireMapper.ParseContents(slc);
-        if (slc.Attributes is { } attr) _store.UpsertPlaylist(HeaderOf(playlistUri, attr, slc));   // thin header (no tracklist baked)
+        if (slc.Attributes is { } attr) _store.UpsertPlaylist(HeaderOf(playlistUri, attr, slc));
         _store.SetMembership(playlistUri, members, rev);
         await HydrateAsync(members, ct).ConfigureAwait(false);
+        _store.Bump(playlistUri);
     }
 
     /// <summary>Fetch + store ONLY a playlist's header (name / cover / owner / count) — no membership, no track hydration.
@@ -108,10 +111,11 @@ public sealed class PlaylistFetcher
 
         if (slc.Diff is { } diff)
         {
+            var mappedOps = PlaylistWireMapper.MapOps(diff.Ops);
             var list = new List<PlaylistMember>(baseline);
             var before = new HashSet<string>(StringComparer.Ordinal);
             for (int i = 0; i < baseline.Count; i++) before.Add(baseline[i].ItemUri);
-            try { PlaylistDiffApplier.Apply(list, PlaylistWireMapper.MapOps(diff.Ops)); }
+            try { PlaylistDiffApplier.Apply(list, mappedOps); }
             catch (ArgumentOutOfRangeException)   // torn apply — the resident baseline drifted → full re-fetch converges
             {
                 await FetchPlaylistAsync(playlistUri, ct).ConfigureAwait(false);
@@ -120,7 +124,13 @@ public sealed class PlaylistFetcher
             _store.SetMembership(playlistUri, list, diff.HasToRevision ? diff.ToRevision.ToByteArray() : rev);
             var added = new List<string>();
             for (int i = 0; i < list.Count; i++) { var u = list[i].ItemUri; if (!before.Contains(u)) added.Add(u); }
-            if (added.Count > 0) await HydrateUrisAsync(added, ct).ConfigureAwait(false);
+            if (added.Count > 0) { await HydrateUrisAsync(added, ct).ConfigureAwait(false); _store.Bump(playlistUri); }
+            if (ContainsUpdateList(mappedOps))
+            {
+                try { await FetchPlaylistHeaderAsync(playlistUri, ct).ConfigureAwait(false); }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch { }
+            }
             return DiffOutcome.Applied;
         }
 
@@ -130,6 +140,7 @@ public sealed class PlaylistFetcher
             if (slc.Attributes is { } attr) _store.UpsertPlaylist(HeaderOf(playlistUri, attr, slc));
             _store.SetMembership(playlistUri, members, newRev ?? rev);
             await HydrateAsync(members, ct).ConfigureAwait(false);
+            _store.Bump(playlistUri);
             return DiffOutcome.FellBackToFull;
         }
 
@@ -174,28 +185,44 @@ public sealed class PlaylistFetcher
         if (uris.Count > 0) await _hydrate(uris, ct).ConfigureAwait(false);
     }
 
+    static bool ContainsUpdateList(IReadOnlyList<PlaylistOp> ops)
+    {
+        for (int i = 0; i < ops.Count; i++)
+            if (ops[i].Kind == PlaylistOpKind.UpdateList) return true;
+        return false;
+    }
+
     // "spotify:playlist:abc" → "playlist/abc"; "spotify:user:bob:rootlist" → "user/bob/rootlist".
     static string PathOf(string uri) => uri.StartsWith("spotify:", StringComparison.Ordinal) ? uri.Substring(8).Replace(':', '/') : uri.Replace(':', '/');
 
-    static Playlist HeaderOf(string uri, Pl.ListAttributes attr, Pl.SelectedListContent slc)
+    Playlist HeaderOf(string uri, Pl.ListAttributes attr, Pl.SelectedListContent slc)
     {
         string name = attr.HasName ? attr.Name : "";
         string? desc = attr.HasDescription ? attr.Description : null;
         string owner = slc.HasOwnerUsername ? slc.OwnerUsername : "";
         int len = slc.HasLength ? slc.Length : 0;
         return new Playlist(IdOf(uri), uri, name, desc, owner, CoverOf(attr), len,
-            Capabilities: CapabilitiesOf(attr, slc));   // Tracks defaults null → thin
+            Capabilities: CapabilitiesOf(attr, slc, owner));
     }
 
-    static PlaylistCapabilities CapabilitiesOf(Pl.ListAttributes attr, Pl.SelectedListContent slc)
+    PlaylistCapabilities CapabilitiesOf(Pl.ListAttributes attr, Pl.SelectedListContent slc, string ownerUsername)
     {
         var cap = slc.Capabilities;
+        string account = _account();
+        // Compare bare ids: either side may arrive as "spotify:user:<id>" or the bare canonical username.
+        bool isOwner = ownerUsername.Length > 0 && account.Length > 0 && string.Equals(
+            Wavee.Core.UserProfileIds.BareId(ownerUsername), Wavee.Core.UserProfileIds.BareId(account),
+            StringComparison.OrdinalIgnoreCase);
+        bool canAdmin = cap?.CanAdministratePermissions ?? false;
+        // Server admin flag is authoritative; username match is the fallback when the decorate payload omits it.
+        bool effectiveOwner = isOwner || canAdmin;
         return new PlaylistCapabilities(
             CanView: cap?.CanView ?? false,
             CanEditItems: cap?.CanEditItems ?? false,
             CanEditMetadata: cap?.CanEditMetadata ?? false,
             IsCollaborative: attr.HasCollaborative && attr.Collaborative,
-            IsOwner: false);
+            IsOwner: effectiveOwner,
+            CanAdministratePermissions: canAdmin || isOwner);
     }
 
     // The playlist cover: the server's pre-sized URLs first (largest), else the raw picture file id → the image CDN.

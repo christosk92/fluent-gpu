@@ -129,6 +129,11 @@ public sealed class ComboBox : Component
     /// <see cref="TemplateParts"/> for the contract.</summary>
     public TemplateParts? Parts;
 
+    /// <summary>LIVE enabled flag (provider idiom): <see cref="IsEnabled"/> is a plain field, so via <c>Embed.Comp</c>
+    /// it freezes at mount — toggling a setting that enables/disables a dropdown would be silently dropped. <see cref="Create"/>
+    /// routes it through this provider so the field re-renders reactively; the frozen field is the fallback.</summary>
+    internal static readonly Context<bool?> EnabledChannel = new(null);
+
     public static Element Create(IReadOnlyList<string> items, Signal<int> selectedIndex, bool editable = false,
                                  Signal<string>? text = null, float width = 220f, string placeholder = "",
                                  bool isEnabled = true, Action<int>? onSelectionChanged = null,
@@ -137,14 +142,14 @@ public sealed class ComboBox : Component
                                  bool touchInputMode = false, Field<int>? field = null,
                                  IReadOnlyList<string>? itemDescriptions = null,
                                  IReadOnlyList<bool>? itemEnabled = null)
-        => Embed.Comp(() => new ComboBox
+        => Ctx.Provide(EnabledChannel, isEnabled, Embed.Comp(() => new ComboBox
         {
             Items = items, ItemDescriptions = itemDescriptions, ItemEnabled = itemEnabled,
             SelectedIndex = selectedIndex, Editable = editable, Text = text,
             Width = width, Placeholder = placeholder, IsEnabled = isEnabled, OnSelectionChanged = onSelectionChanged,
             OnTextSubmitted = onTextSubmitted,
             Header = header, Description = description, ErrorText = errorText, TouchInputMode = touchInputMode, Field = field,
-        });
+        }));
 
     internal bool IsItemEnabled(int index)
         => ItemEnabled is not { } flags || index < 0 || index >= flags.Count || flags[index];
@@ -162,6 +167,10 @@ public sealed class ComboBox : Component
 
     public override Element Render()
     {
+        // Read the enabled flag reactively: the provider (Create) wins over the frozen field. A shadowing local named
+        // IsEnabled so every downstream read in this method — the field chrome, OpenPopup gate, key/click handlers —
+        // sees the live value with no further edits. `this.IsEnabled` is the mount-time fallback for direct callers.
+        bool IsEnabled = UseContext(EnabledChannel) ?? this.IsEnabled;
         var anchor = UseRef<NodeHandle>(default);
         var handle = UseRef<OverlayHandle?>(null);
         var fallbackText = UseSignal("");

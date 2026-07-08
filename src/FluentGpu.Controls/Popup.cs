@@ -24,6 +24,16 @@ public sealed class Popup : Component
     public static Element Create(string triggerLabel, string text)
         => Embed.Comp(() => new Popup { TriggerLabel = triggerLabel, Text = text });
 
+    // Frozen-props tripwire (ReuseGuard): TriggerLabel/Text freeze at mount. A reused instance whose text changed is
+    // the frozen-props bug — deliver it reactively or remount with a Key.
+    public override bool ChecksReuse => ReuseGuard.CompiledIn;
+    public override void DebugCheckReuse(Component next)
+    {
+        if (next is not Popup n) return;
+        if (n.TriggerLabel != TriggerLabel) ReuseGuard.ScalarChanged(this, nameof(TriggerLabel));
+        else if (n.Text != Text) ReuseGuard.ScalarChanged(this, nameof(Text));
+    }
+
     public override Element Render()
     {
         var anchor = UseRef<NodeHandle>(default);

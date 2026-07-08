@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Channels = System.Threading.Channels;   // alias: 'Channel' alone collides with Wavee.Backend.Channel (transport enum)
 using Wavee.Backend.Collections;
 using Wavee.Backend.Playlists;
+using Wavee.Core;
 using Col = Wavee.Protocol.Collection;
 
 namespace Wavee.Backend.Sync;
@@ -296,9 +297,15 @@ public sealed class LibrarySync : IAsyncDisposable
                 for (int i = 0; i < list.Count; i++) { var u = list[i].ItemUri; if (!before.Contains(u)) added.Add(u); }
                 if (added.Count > 0)
                 {
-                    try { await _playlists.HydrateUrisAsync(added, _ct).ConfigureAwait(false); Interlocked.Increment(ref HydrateRuns); }
+                    try { await _playlists.HydrateUrisAsync(added, _ct).ConfigureAwait(false); Interlocked.Increment(ref HydrateRuns); _store.Bump(uri); }
                     catch (OperationCanceledException) when (_ct.IsCancellationRequested) { throw; }
                     catch (Exception ex) { _log("sync: hydrate added uris failed: " + ex.Message); }
+                }
+                if (ContainsUpdateList(ops))
+                {
+                    try { await _playlists.FetchPlaylistHeaderAsync(uri, _ct).ConfigureAwait(false); }
+                    catch (OperationCanceledException) when (_ct.IsCancellationRequested) { throw; }
+                    catch (Exception ex) { _log("sync: playlist header refresh failed: " + ex.Message); }
                 }
                 ClearDirty(uri);
                 Interlocked.Increment(ref PushApplied);
@@ -347,6 +354,7 @@ public sealed class LibrarySync : IAsyncDisposable
     async Task DirectApplyPushAsync(string wireSet, Col.PubSubUpdate upd)
     {
         var added = new List<string>();
+        var firstAddedBySet = new Dictionary<string, string>(StringComparer.Ordinal);
         using (_store.BeginBulk())
         {
             foreach (var it in upd.Items)
@@ -355,17 +363,44 @@ public sealed class LibrarySync : IAsyncDisposable
                 if (logical is null) continue;                          // not attributable to a known logical set
                 if (_mutations.HasPending(logical, it.Uri)) continue;   // §7.2 — a local intent shields this (set, uri)
                 _store.SetSaved(logical, it.Uri, !it.IsRemoved, SyncState.Confirmed);
-                if (!it.IsRemoved && it.Uri.StartsWith("spotify:", StringComparison.Ordinal)) added.Add(it.Uri);
+                if (!it.IsRemoved && it.Uri.StartsWith("spotify:", StringComparison.Ordinal))
+                {
+                    added.Add(it.Uri);
+                    if (!firstAddedBySet.ContainsKey(logical)) firstAddedBySet[logical] = it.Uri;
+                }
             }
         }
         if (added.Count > 0)
         {
-            try { await _playlists.HydrateUrisAsync(added, _ct).ConfigureAwait(false); Interlocked.Increment(ref HydrateRuns); }
+            try
+            {
+                await _playlists.HydrateUrisAsync(added, _ct).ConfigureAwait(false);
+                Interlocked.Increment(ref HydrateRuns);
+                foreach (var kv in firstAddedBySet)
+                    if (KindForLogicalSet(kv.Key) is { } kind) _store.Bump(kv.Value, kind);
+            }
             catch (OperationCanceledException) when (_ct.IsCancellationRequested) { throw; }
             catch (Exception ex) { _log("sync: direct-apply hydrate failed: " + ex.Message); }
         }
         Interlocked.Increment(ref PushDirectApplied);
     }
+
+    static bool ContainsUpdateList(IReadOnlyList<PlaylistOp> ops)
+    {
+        for (int i = 0; i < ops.Count; i++)
+            if (ops[i].Kind == PlaylistOpKind.UpdateList) return true;
+        return false;
+    }
+
+    static CollectionKind? KindForLogicalSet(string setId) => setId switch
+    {
+        "albums" => CollectionKind.Albums,
+        "artists" => CollectionKind.Artists,
+        "shows" or "episodes" => CollectionKind.Shows,
+        "playlists" => CollectionKind.Playlists,
+        "liked" => CollectionKind.Liked,
+        _ => null,
+    };
 
     // A payload direct-applies (bypassing the settle) iff it parses to a PubSubUpdate that carries items OR is an echo of one
     // of our accepted writes (a cuid in the ring). Parsing is pure + off-loop-safe; the handler re-parses to do the work.
@@ -400,6 +435,15 @@ public sealed class LibrarySync : IAsyncDisposable
                 await _playlists.FetchPlaylistAsync(uri, _ct).ConfigureAwait(false);   // first open — the skeleton path
                 MarkRevalidated(uri); ClearDirty(uri);
                 return;
+            }
+            // Heal headers stripped or capability-stale after a partial LIST_METADATA_V2 upsert (membership stayed resident).
+            var header = _store.GetPlaylist(uri);
+            if (header is not null && (header.Capabilities == default
+                || (header.Capabilities.CanEditMetadata && !header.Capabilities.CanAdministratePermissions)))
+            {
+                try { await _playlists.FetchPlaylistHeaderAsync(uri, _ct).ConfigureAwait(false); }
+                catch (OperationCanceledException) when (_ct.IsCancellationRequested) { throw; }
+                catch { }
             }
             bool dirty = IsDirty(uri);
             bool stale = !TryGetLastRevalidated(uri, out var last) || (DateTime.UtcNow - last) > OpenRevalidateWindow;

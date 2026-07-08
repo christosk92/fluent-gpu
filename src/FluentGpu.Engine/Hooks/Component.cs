@@ -133,6 +133,18 @@ public abstract class Component
 
     /// <summary>Called by the reconciler when this component leaves the tree — run effect cleanups.</summary>
     public void Unmount() => Context.RunAllCleanups();
+
+    /// <summary>DEBUG-only (<see cref="ReuseGuard"/>): opt into the frozen-props tripwire. A control that carries
+    /// caller data in scalar fields (count / label / IsEnabled …) returns <c>true</c> so the reconciler builds the
+    /// would-be replacement and calls <see cref="DebugCheckReuse"/> on reuse. Default <c>false</c> (no probe alloc).</summary>
+    public virtual bool ChecksReuse => false;
+
+    /// <summary>DEBUG-only (<see cref="ReuseGuard"/>): the reconciler passes <paramref name="next"/> — a throwaway
+    /// instance built by the NEW (discarded) factory — when it REUSES <c>this</c>. Compare the frozen field(s) that
+    /// carry caller data; call <see cref="ReuseGuard.Violation"/> when one changed (it was frozen at mount and the new
+    /// value is being silently dropped). Only invoked when <see cref="ChecksReuse"/> is true and the guard is enabled;
+    /// never called in release. Deliver such data reactively (Signal / Ctx.Provide) or remount with a Key instead.</summary>
+    public virtual void DebugCheckReuse(Component next) { }
 }
 
 /// <summary>

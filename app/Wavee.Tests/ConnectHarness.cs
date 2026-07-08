@@ -107,7 +107,7 @@ public sealed class FakeContextResolver : IContextResolver
                 arr[i] = new QueuedTrack(Trk(pages[i].Uri), pages[i].Uid, pages[i].Provider, pages[i].Metadata);
             tracks = arr;
         }
-        int start = ContextResolve.FindStartIndex(tracks, spec.SkipToTrackUri, spec.SkipToTrackUid, spec.SkipToIndex);
+        int start = ContextResolve.ResolveStartIndex(tracks, spec);
         return Task.FromResult(new ResolvedContext(tracks, start, null, null, false));
     }
 

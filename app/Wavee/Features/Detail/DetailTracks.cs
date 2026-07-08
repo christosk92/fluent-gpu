@@ -9,6 +9,7 @@ using FluentGpu.Localization;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
 using Wavee.Core;
+using Wavee.Features.Detail;
 using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
@@ -62,6 +63,8 @@ sealed class TrackList : Component
     bool _hasDate;                                             // any track carries an AddedAt → the Date-added column exists
     bool _hasBy;                                               // collaborative (≥2 contributors) → the Added-by column exists
     readonly Signal<int> _tier = new(0);                       // width tier (0 = widest/full), written by OnBoundsChanged
+    readonly Signal<int> _visibleCount = new(0);
+    readonly Signal<int> _verticalItemCount = new(VerticalTrackStart + 1);
     float _lastRightW;                                         // last measured right-area width — replayed once when the rail layout-lock clears (Task C)
     readonly SelectionModel _selection = new();                // external → survives a tier remount
     readonly Dictionary<int, TrackSize[]> _tracksByTier = new();
@@ -177,8 +180,7 @@ sealed class TrackList : Component
 
     // Right-area-width breakpoints (sized off the widest column set), so the Star Title keeps a usable width at each
     // tier's minimum. Fewer-column contexts just cross the same widths with nothing to drop until a present column.
-    static int TierFor(float w) =>
-        w <= 0f ? 0 : w >= 860f ? 0 : w >= 720f ? 1 : w >= 560f ? 2 : w >= 440f ? 3 : w >= 340f ? 4 : 5;
+    static int TierFor(float w, int prev) => DetailLayoutBreakpoints.TierFor(w, prev);
 
     // The tier's column tracks (cached): [#, Title*, Album?, AddedBy?, DateAdded?, ♥?, Duration]. Dropped columns are
     // truly removed (a fresh mount per tier makes the varying count safe), so there is no wasted gap.
@@ -226,6 +228,7 @@ sealed class TrackList : Component
             // §4.6 — navigation is not an edit: never choreograph across a context swap.
             _lastDisplayed = null;
             _flip.Clear(); _fade.Clear();
+            _resetEpoch.Value = _resetEpoch.Peek() + 1;   // remount the virtual list — bound rows must not recycle A's cells under B's route
             if (_verticalHeader) ResetVerticalHeaderScroll();
         }
 
@@ -253,7 +256,7 @@ sealed class TrackList : Component
         // is stale (a stuck rail lock, a lost flush) a too-wide column set meets a too-narrow pane and the grid's
         // overflow guard crushes columns into overlapping glyphs; clamping here makes every render structurally safe
         // regardless of how the signal got stale. (Narrower-than-needed is fine — the next OnBoundsChanged widens it.)
-        if (_lastRightW > 0f && ui?.RailLockActive != true) { int fit = TierFor(_lastRightW); if (fit > tier) tier = fit; }
+        if (_lastRightW > 0f && ui?.RailLockActive != true) { int fit = TierFor(_lastRightW, tier); if (fit > tier) tier = fit; }
         var set = SetFor(tier);
         var tracks = TracksFor(tier);
         var sort = _h.Sort.Value;                // subscribe → re-render (header carets) on sort change
@@ -287,7 +290,7 @@ sealed class TrackList : Component
         // mid-reflow). Keyed on railLocked → fires on the false-edge; the write converges (dep is the bool).
         UseLayoutEffect(() =>
         {
-            if (!railLocked && _lastRightW > 0f) { int t = TierFor(_lastRightW); if (t != _tier.Peek()) _tier.Value = t; }
+            if (!railLocked && _lastRightW > 0f) { int t = TierFor(_lastRightW, _tier.Peek()); if (t != _tier.Peek()) _tier.Value = t; }
         }, railLocked);
         // Now-playing / sort / column re-skin is per-row now: each bound row subscribes to the bridge + _h.Sort inside
         // its own binds (BoundRowContent / BoundTitle), so a track change recolours and a sort change reorders the
@@ -298,10 +301,16 @@ sealed class TrackList : Component
         // mid-control. Icon-only + the tiered search width below always fit each tier's minimum.
         bool labeled = tier <= 1;
         Element chrome = Chrome(set, tracks, sort, labeled, tier);
+        int visible = View().Length;
+        UseLayoutEffect(() =>
+        {
+            if (_visibleCount.Peek() != visible) _visibleCount.Value = visible;
+            int verticalCount = VerticalTrackStart + Math.Max(visible, 1);
+            if (_verticalItemCount.Peek() != verticalCount) _verticalItemCount.Value = verticalCount;
+        }, visible);
 
         Element RealList()
         {
-            int visible = View().Length;
             if (_verticalHeader)
                 return VerticalList(visible, set, tracks, sort, labeled, tier, rowH, narrateRemount, staggerCold, verticalLayout);
             return visible == 0
@@ -340,7 +349,8 @@ sealed class TrackList : Component
                 itemDisplacement: static _ => (0f, 0f),
                 displacementVersion: _dispVer,
                 itemFlipFrom: i => _flip.TryGetValue(i, out var f) ? f : null,
-                itemFadeFrom: i => _fade.TryGetValue(i, out var f) ? f : null);
+                itemFadeFrom: i => _fade.TryGetValue(i, out var f) ? f : null,
+                itemCountSignal: _visibleCount);
         }
 
         // The tracks stream in via the engine's skeleton boundary: while the model is Pending it shows shimmer rows the
@@ -359,7 +369,7 @@ sealed class TrackList : Component
         float listGrow = _cfg.HasTrailing ? 0f : 1f;
         // The reset epoch folds into the key: a curated re-cut REMOUNTS the list — the slots' mount-opacity entrance
         // replays as the §4.6 "playlist was refreshed" crossfade (the truthful narration for an editorial re-cut).
-        Element listKeyed = new BoxEl { Key = "list:" + (_verticalHeader ? "vh:" : "") + "t" + tier + ":d" + density + ":q" + query + ":f" + (int)flags + ":r" + _resetEpoch.Value, Grow = listGrow, Direction = 1, Children = [list] };
+        Element listKeyed = new BoxEl { Key = "list:" + _route.Value.Name + ":" + (_verticalHeader ? "vh:" : "") + "t" + tier + ":d" + density + ":q" + query + ":f" + (int)flags + ":r" + _resetEpoch.Value, Grow = listGrow, Direction = 1, Children = [list] };
 
         Element rightBody = _cfg.HasTrailing ? TrailingBody(listKeyed) : listKeyed;
 
@@ -368,7 +378,7 @@ sealed class TrackList : Component
             Direction = 1, Grow = 1f,
             // Measure the right-area width → the active tier. Value-gated, so a re-render happens only on a breakpoint
             // cross (not every resize frame); the new tier itself never changes this box's width → no feedback loop.
-            OnBoundsChanged = r => { if (r.W <= 0f) return; _lastRightW = r.W; if (ui?.RailLockActive == true) return; int t = TierFor(r.W); if (t != _tier.Peek()) _tier.Value = t; },
+            OnBoundsChanged = r => { if (r.W <= 0f) return; _lastRightW = r.W; if (ui?.RailLockActive == true) return; int t = TierFor(r.W, _tier.Peek()); if (t != _tier.Peek()) _tier.Value = t; },
             Children = _verticalHeader ? [rightBody] : [chrome, rightBody],
         };
         // Float a multi-select command bar over the list (bottom-centre, above the player). The overlay layer is
@@ -430,7 +440,8 @@ sealed class TrackList : Component
             displacementVersion: _dispVer,
             itemFlipFrom: FlipFrom,
             itemFadeFrom: FadeFrom,
-            onScrollGeometryChanged: _cfg.HasTrailing ? null : VerticalScrollObserver());
+            onScrollGeometryChanged: _cfg.HasTrailing ? null : VerticalScrollObserver(),
+            itemCountSignal: _verticalItemCount);
     }
 
     // ── §4.6 — the choreography pass. Runs INSIDE the render that commits the new order (the ItemsView child renders
@@ -555,7 +566,7 @@ sealed class TrackList : Component
             OpacityGroup = true,
             Opacity = Prop.Of(VerticalHeaderOpacity),
             OnBoundsChanged = MeasureVerticalHeader,
-            Children = [DetailRail.BuildHeader(_model, _cfg, _h, includeReleasePanel: false)],
+            Children = [DetailRail.BuildHeader(_model, _cfg, _h, _full, includeReleasePanel: false)],
         };
         return new BoxEl
         {
@@ -823,6 +834,7 @@ sealed class TrackList : Component
 
         public override Element Render()
         {
+            _ = _o._full.Value.Value;                                    // subscribe → re-skin when the track set / context model changes (playlist nav, live /diff)
             int i = _scope.Index.Value;                                  // recycle → re-render
             int displayIndex = i - _trackStart;
             var t = _o.BoundTrackAt(displayIndex);                       // resolves the track; subscribes sort
@@ -856,6 +868,7 @@ sealed class TrackList : Component
 
         public override Element Render()
         {
+            _ = _o._full.Value.Value;   // same subscription as BoundRowContent — vertical slots must not show a prior context's rows
             int i = _scope.Index.Value;
             Element child;
             if (i == VerticalHeroIndex)
@@ -896,8 +909,10 @@ sealed class TrackList : Component
     }
 
     // Start THIS context at the given display row, sending the VISIBLE (sorted/filtered) order so a remote player mirrors
-    // the screen (PlayOrderedAsync). Collections stay URI-only (sort rides on context.url, server-side). The keyed async
-    // command drives the row's #-cell buffer spinner. Empty view (still loading / filtered out) → play the context top.
+    // the screen (PlayOrderedAsync). Collections stay URI-only on the wire (sort rides on context.url, server-side) — but
+    // still identity-first: the clicked track's uri+uid is carried, the index is only a diagnostic fallback (§7.3), so a
+    // divergent server order can never land on an unrelated row (the collection "always plays the first song" regression).
+    // The keyed async command drives the row's #-cell buffer spinner. Empty view (still loading / filtered out) → context top.
     void StartVisible(int displayPos)
     {
         var v = View();
@@ -907,13 +922,16 @@ sealed class TrackList : Component
         var track = _tracks[orig];
         if (_bridge is not null && _play is not null && _model.ContextUri is { } uri)
         {
-            if (!Wavee.Backend.ContextResolve.IsCollection(uri))
+            // Collection OR natural order → identity-first skip (uri+uid; index diagnostic only), URI-only on the wire (no
+            // embedded pages). Only a SORTED/FILTERED non-collection view embeds the visible order (the correct shape there).
+            if (Wavee.Backend.ContextResolve.IsCollection(uri) || IsNaturalContextOrder(v))
+                _play.Run(track.Id, ct => _bridge.Player.PlayContextTrackAsync(
+                    uri, new PlaybackContextTrack(track.Uri, track.ContextUid ?? string.Empty), orig, ct));
+            else
             {
                 var ordered = VisibleOrder(v);
                 _play.Run(track.Id, ct => _bridge.Player.PlayOrderedAsync(uri, ordered, displayPos, ct));
             }
-            else
-                _play.Run(track.Id, ct => _bridge.Player.PlayAsync(uri, orig, ct));
         }
         else
             _h.Play(orig);
@@ -926,6 +944,16 @@ sealed class TrackList : Component
         var ordered = new PlaybackContextTrack[v.Length];
         for (int k = 0; k < v.Length; k++) { var t = _tracks[v[k]]; ordered[k] = new PlaybackContextTrack(t.Uri, t.ContextUid ?? string.Empty); }
         return ordered;
+    }
+
+    bool IsNaturalContextOrder(int[] v)
+    {
+        if (_h.Sort.Peek() != TrackSort.Default) return false;
+        if (_h.Query.Peek().Trim().Length != 0 || _h.Flags.Peek() != TrackFilterFlags.None) return false;
+        if (v.Length != _tracks.Count) return false;
+        for (int i = 0; i < v.Length; i++)
+            if (v[i] != i) return false;
+        return true;
     }
 
     // ── row grid ─────────────────────────────────────────────────────────────────────────────────────────

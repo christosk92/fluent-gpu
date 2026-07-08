@@ -43,8 +43,8 @@ public class PlaybackStubsTests
         await p.SetVolumeAsync(0.5);
         await p.SetShuffleAsync(true);
         await p.SetRepeatAsync(RepeatMode.Context);
-        await p.MoveQueueAsync("q0", 1);
-        await p.RemoveFromQueueAsync("q0");
+        await p.MoveQueueItemAsync(new QueueItemId(1), 1);
+        await p.RemoveQueueItemAsync(new QueueItemId(1));
 
         Assert.Equal(0, rejects);   // no non-play verb triggers the toast
     }

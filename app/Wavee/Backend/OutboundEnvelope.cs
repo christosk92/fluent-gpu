@@ -3,6 +3,7 @@ using System.Buffers;
 using System.Collections.Generic;
 using System.Text;
 using System.Text.Json;
+using Wavee.Core;
 
 namespace Wavee.Backend;
 
@@ -181,6 +182,56 @@ public static class OutboundEnvelope
         }
         return Encoding.UTF8.GetString(buf.WrittenSpan);
     }
+
+    // next_track: a queue/history/autoplay ROW jump targeting the active device (FIXTURE-B). endpoint "next_track"; the
+    // options block carries the three false bools; command.track carries uri+uid+full metadata map PLUS top-level
+    // album_uri/artist_uri duplicates (the capture writes them outside metadata, mirroring the play/add_to_queue track
+    // shape). uid is identity (the active device minted it); an empty uid still forwards (the target falls back to uri).
+    public static string NextTrack(QueueEntry row, string fromDeviceId, string commandId, string intentId, long initiatedTimeMs)
+    {
+        string trackUri = row.Track.Uri;
+        string albumUri = MetaOr(row.Metadata, "album_uri", row.Track.Album.Uri);
+        string artistUri = MetaOr(row.Metadata, "artist_uri", row.Track.Artists.Count > 0 ? row.Track.Artists[0].Uri : "");
+        var buf = new ArrayBufferWriter<byte>(1024);
+        using (var w = new Utf8JsonWriter(buf))
+        {
+            w.WriteStartObject();
+            w.WriteStartObject("command");
+            w.WriteString("endpoint", "next_track");
+            w.WriteStartObject("options");
+            w.WriteBoolean("override_restrictions", false);
+            w.WriteBoolean("only_for_local_device", false);
+            w.WriteBoolean("system_initiated", false);
+            w.WriteEndObject();   // options
+            w.WriteStartObject("track");
+            w.WriteString("uri", trackUri);
+            w.WriteString("uid", row.Uid ?? "");           // always written, may be ""
+            w.WriteStartObject("metadata");
+            if (row.Metadata is { Count: > 0 })
+                foreach (var (k, v) in row.Metadata)
+                    if (!string.IsNullOrEmpty(k)) w.WriteString(k, v ?? "");
+            w.WriteEndObject();   // metadata
+            w.WriteString("album_uri", albumUri);     // ALWAYS written (may be "") — FIXTURE-B carries both keys unconditionally
+            w.WriteString("artist_uri", artistUri);
+            w.WriteEndObject();   // track
+            // logging_params carries command_received_time too (FIXTURE-B) — echoed = initiated (field-set parity).
+            w.WriteStartObject("logging_params");
+            w.WriteNumber("command_initiated_time", initiatedTimeMs);
+            w.WriteNumber("command_received_time", initiatedTimeMs);
+            w.WriteStartArray("page_instance_ids"); w.WriteEndArray();
+            w.WriteStartArray("interaction_ids"); w.WriteEndArray();
+            w.WriteString("device_identifier", fromDeviceId);
+            w.WriteString("command_id", commandId);
+            w.WriteEndObject();   // logging_params
+            w.WriteEndObject();   // command
+            WriteTail(w, intentId);
+            w.WriteEndObject();   // root
+        }
+        return Encoding.UTF8.GetString(buf.WrittenSpan);
+    }
+
+    static string MetaOr(IReadOnlyDictionary<string, string>? metadata, string key, string fallback) =>
+        metadata is not null && metadata.TryGetValue(key, out var v) && !string.IsNullOrEmpty(v) ? v : (fallback ?? "");
 
     static void WriteQueueEntry(Utf8JsonWriter w, in QueueWireEntry e)
     {

@@ -11,6 +11,7 @@ public sealed record AlbumTrackContext(bool HasVideo, IReadOnlyList<Artist> Rela
 /// the hero and track list must not wait for below-the-fold recommendations or commerce data.</summary>
 public interface IAlbumEnrichmentService
 {
+    Task<NowPlayingInfo?> GetNowPlayingInfoAsync(string artistUri, string trackUri, CancellationToken ct = default);
     Task<Artist?> GetAboutArtistAsync(string artistUri, string leadTrackUri, CancellationToken ct = default);
     Task<IReadOnlyList<Artist>> GetRelatedArtistsAsync(string artistUri, CancellationToken ct = default);
     Task<AlbumTrackContext?> GetTrackContextAsync(string trackUri, CancellationToken ct = default);
@@ -28,6 +29,8 @@ public sealed class SwitchableAlbumEnrichmentService : IAlbumEnrichmentService
         => System.Threading.Volatile.Write(ref _inner, inner ?? throw new ArgumentNullException(nameof(inner)));
 
     IAlbumEnrichmentService Current => System.Threading.Volatile.Read(ref _inner);
+    public Task<NowPlayingInfo?> GetNowPlayingInfoAsync(string artistUri, string trackUri, CancellationToken ct = default)
+        => Current.GetNowPlayingInfoAsync(artistUri, trackUri, ct);
     public Task<Artist?> GetAboutArtistAsync(string artistUri, string leadTrackUri, CancellationToken ct = default)
         => Current.GetAboutArtistAsync(artistUri, leadTrackUri, ct);
     public Task<IReadOnlyList<Artist>> GetRelatedArtistsAsync(string artistUri, CancellationToken ct = default)
@@ -47,6 +50,9 @@ public sealed class CatalogAlbumEnrichmentService : IAlbumEnrichmentService
 {
     readonly IMusicLibrary _library;
     public CatalogAlbumEnrichmentService(IMusicLibrary library) => _library = library;
+
+    public async Task<NowPlayingInfo?> GetNowPlayingInfoAsync(string artistUri, string trackUri, CancellationToken ct = default)
+        => new(string.IsNullOrEmpty(artistUri) ? null : await _library.GetArtistAsync(artistUri, ct).ConfigureAwait(false), null);
 
     public async Task<Artist?> GetAboutArtistAsync(string artistUri, string leadTrackUri, CancellationToken ct = default)
         => string.IsNullOrEmpty(artistUri) ? null : await _library.GetArtistAsync(artistUri, ct).ConfigureAwait(false);

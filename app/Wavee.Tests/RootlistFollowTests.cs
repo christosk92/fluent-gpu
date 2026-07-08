@@ -298,7 +298,7 @@ public class RootlistFollowTests
         {
             var store = new InMemoryStore();
             store.SetMembership("spotify:playlist:p", new[] { new PlaylistMember("old", "spotify:track:old", null, 0) }, new byte[] { 1 });
-            var strat = new OpRebaseStrategy(store);
+            var strat = new OpRebaseStrategy(store, () => "https://spclient.wg.spotify.com");
             var t = new RecTransport((route, method, b, n) => new Resp(true, body, 200));
             var op = new OutboxOp(1, "oprebase", "spotify:playlist:p", "spotify:playlist:p", false, 1, 0,
                 new[] { new PlaylistOp(PlaylistOpKind.Add, AddLast: true, Items: new[] { new PlaylistMember("", "spotify:track:new", null, 0) }) }, new byte[] { 1 });

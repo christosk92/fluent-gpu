@@ -47,6 +47,10 @@ numbering; phase 6.5 RATIFIED; setState-in-effect ⇒ N+1 (no synchronous re-loo
 > **Related (not one of the 15 core docs):** [window-backdrop-mica.md](./window-backdrop-mica.md) — the *host-window*
 > DWM system-backdrop (Mica/MicaAlt/DesktopAcrylic without WinRT); consumes `IBackdropSource` (pal-rhi.md) and the
 > transparent-root present contract. In-app Acrylic/effects live in backdrop-effects-animation.md.
+> [component-props-contract.md](./component-props-contract.md) — the **authoring contract** for how a `Component`
+> receives changing data (Signal / `Ctx.Provide` / re-key), built on the autonomous-component model owned by
+> `reconciler-hooks.md`; documents the `ReuseGuard` DEBUG tripwire (`Hooks/ReuseGuard.cs`) that catches frozen-props
+> misuse. Read it before passing data into `Embed.Comp`.
 > [`../archive/dsl-aot-toolchain.md`](../archive/dsl-aot-toolchain.md) is **superseded** by `dsl-aot.md` and has been **moved to `design/archive/`** (historical only — do not cite or implement from it; it contains a known-illegal `DepKey` layout).
 
 ---

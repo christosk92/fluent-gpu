@@ -103,7 +103,8 @@ public sealed class LiveOutboundControl : IOutboundControl
 
 public sealed class PlaybackController : IPlaybackPlayer, IDisposable
 {
-    readonly QueueCore _queue = new();
+    readonly PlaybackSession _session = new();
+    QueueSnapshot _snap;                   // the latest atomic snapshot (published via ApplyLocalSnapshot); the ONE truth
     readonly IAudioHost _host;
     readonly ITrackResolver _resolver;
     readonly IFastTrackResolver? _fast;   // when set, local play uses instant-start (head before key); else the plain resolve
@@ -132,6 +133,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     PlaybackIds? _currentIds;
     string? _idsSessionContext;
     string _reasonStart = "clickrow";
+    string? _lastControllerQueueDiagSig;
 
     public PlaybackController(IAudioHost host, ITrackResolver resolver, NowPlayingProjection projection,
         IContextResolver contexts,
@@ -139,6 +141,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         string? playFeatureVersion = null, IFastTrackResolver? fast = null)
     {
         _host = host;
+        _snap = _session.Snapshot();
         _resolver = resolver;
         _fast = fast;
         _projection = projection;
@@ -150,6 +153,11 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         _featureVersion = playFeatureVersion ?? OutboundEnvelope.DefaultFeatureVersion;
         _hostSub = host.Signals.Subscribe(Observers.From<AudioHostSignal>(OnHostSignal));
         _projSub = projection.Changes.Subscribe(Observers.From<IPlaybackState>(OnProjectionChanged));
+        PlaybackBucketDiagnostics.Startup("controller", "created",
+            WaveeLogField.Of("device", ourDeviceId),
+            WaveeLogField.Of("outbound", outbound is not null),
+            WaveeLogField.Of("fast", fast is not null),
+            WaveeLogField.Of("extraProjections", _extra.Count));
     }
 
     public IPlaybackState State => _projection;
@@ -207,7 +215,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
                 }
             }
 
-            var current = _queue.Current?.Uri ?? "";
+            var current = _session.Current?.Uri ?? "";
             if (string.Equals(current, expectedTrackUri, StringComparison.Ordinal))
             {
                 _log?.Invoke($"fast-start body ready track={expectedTrackUri} file={h.FileIdHex}; supplying to audio host");
@@ -224,7 +232,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         }
         catch (Exception ex)
         {
-            var current = _queue.Current?.Uri ?? "";
+            var current = _session.Current?.Uri ?? "";
             if (string.Equals(current, expectedTrackUri, StringComparison.Ordinal))
             {
                 _log?.Invoke($"fast-start body failed for active track={expectedTrackUri}; stopping audio host to unblock head stream: {ex.GetType().Name}: {ex.Message}");
@@ -245,7 +253,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     public async Task RetryCurrentAsync(CancellationToken ct = default)
     {
         await _lock.WaitAsync(ct).ConfigureAwait(false);
-        try { if (_queue.Current is not null) await LoadAndPlayCurrentAsync(EvKind.Started, ct).ConfigureAwait(false); }
+        try { if (_session.Current is not null) await LoadAndPlayCurrentAsync(EvKind.Started, ct).ConfigureAwait(false); }
         finally { _lock.Release(); }
     }
 
@@ -320,6 +328,16 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     public async Task PlayAsync(string contextUri, int startIndex = 0, CancellationToken ct = default)
     {
         await ExecutePlayAsync(PlayRequest.Default(contextUri, startIndex), ct).ConfigureAwait(false);
+    }
+
+    public async Task PlayContextTrackAsync(string contextUri, PlaybackContextTrack track, int fallbackIndex = 0, CancellationToken ct = default)
+    {
+        await ExecutePlayAsync(new PlayRequest(
+            contextUri,
+            Math.Max(0, fallbackIndex),
+            null,
+            string.IsNullOrEmpty(track.Uri) ? null : track.Uri,
+            string.IsNullOrEmpty(track.Uid) ? null : track.Uid), ct).ConfigureAwait(false);
     }
 
     public async Task PlayOrderedAsync(string contextUri, IReadOnlyList<PlaybackContextTrack> tracks, int startIndex = 0, CancellationToken ct = default)
@@ -402,12 +420,23 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         if (!r.Ok) _log?.Invoke($"outbound volume → {target}: failed ({r.Status})");
     }
 
-    public Task SetShuffleAsync(bool on, CancellationToken ct = default)
-        => RouteLocal() ? Local(() => { _queue.SetShuffle(on); PushOptions(); EmitState(EvKind.OptionsChanged); }) : Forward("set_shuffling_context", ct, ("value", on));
+    public async Task SetShuffleAsync(bool on, CancellationToken ct = default)
+    {
+        if (!RouteLocal()) { await Forward("set_shuffling_context", ct, ("value", on)).ConfigureAwait(false); return; }
+        await _lock.WaitAsync(ct).ConfigureAwait(false);   // SetShuffle rebuilds the context list — one lock per mutation
+        try { EmitSnap(_session.SetShuffle(on), EvKind.OptionsChanged); }
+        finally { _lock.Release(); }
+    }
 
     public async Task SetRepeatAsync(RepeatMode mode, CancellationToken ct = default)
     {
-        if (RouteLocal()) { _queue.SetRepeat(mode); PushOptions(); EmitState(EvKind.OptionsChanged); return; }
+        if (RouteLocal())
+        {
+            await _lock.WaitAsync(ct).ConfigureAwait(false);
+            try { EmitSnap(_session.SetRepeat(mode), EvKind.OptionsChanged); }
+            finally { _lock.Release(); }
+            return;
+        }
         // Remote: split + always send BOTH explicit modes so Track->Off / Track->Context can't leave the target stuck.
         await Forward("set_repeating_track", ct, ("value", mode == RepeatMode.Track)).ConfigureAwait(false);
         await Forward("set_repeating_context", ct, ("value", mode == RepeatMode.Context)).ConfigureAwait(false);
@@ -431,13 +460,13 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         await _lock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            if (_queue.Current is null)   // add-to-queue while idle → start playing it (rule §3)
+            if (_session.Current is null)   // add-to-queue while idle → start playing it (rule §3)
             {
                 if (RejectLocalPlay()) return;   // can't start local playback → toast + abort (don't seed a phantom local queue)
                 SetQueueContext(queued.Track.Uri, new[] { queued }, 0);
                 await LoadAndPlayCurrentAsync(EvKind.Started, ct).ConfigureAwait(false);
             }
-            else { _queue.EnqueueUser(queued); PushQueueAndPublish(); }
+            else EmitSnap(_session.EnqueueUser(new[] { queued }), EvKind.QueueChanged);   // active device mints the q-uid (§7.4)
             WarmFastTrack(queued.Track, "enqueue");
         }
         finally { _lock.Release(); }
@@ -457,9 +486,9 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             await _lock.WaitAsync(ct).ConfigureAwait(false);
             try
             {
-                for (int i = hydrated.Count - 1; i >= 0; i--) _queue.EnqueueNext(hydrated[i]);
+                var snap = _session.EnqueueNextUser(hydrated);
                 if (hydrated.Count > 0) WarmFastTrack(hydrated[0].Track, "play-next");
-                PushQueueAndPublish();
+                EmitSnap(snap, EvKind.QueueChanged);
             }
             finally { _lock.Release(); }
             return;
@@ -482,19 +511,65 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         if (!r2.Ok) _log?.Invoke($"outbound set_queue → {target}: failed ({r2.Status})");
     }
 
-    public async Task MoveQueueAsync(string entryId, int toIndex, CancellationToken ct = default)
+    // Skip-in-place to a queue/history row (§6). Active: session cursor move + fast-start (never a rebuild). Viewer: forward
+    // next_track with the target row (FIXTURE-B — uid-first, no play/skip_to). Idle: no-op (the id resolves to nothing).
+    public async Task SkipToQueueItemAsync(QueueItemId id, CancellationToken ct = default)
+    {
+        if (id.IsNone) return;
+        if (RouteLocal())
+        {
+            await _lock.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                _projection.NoteLocalCommand();
+                if (_session.SkipToItem(id) is { } snap)
+                {
+                    _snap = snap;
+                    await LoadAndPlayCurrentAsync(EvKind.TrackChanged, ct).ConfigureAwait(false);
+                }
+            }
+            finally { _lock.Release(); }
+            return;
+        }
+        var target = _projection.ActiveDeviceId;
+        if (_outbound is null || string.IsNullOrEmpty(target)) return;
+        if (!_projection.TryGetViewerRow(id, out var row)) { _log?.Invoke("skip-to: viewer row not found for id " + id.Value); return; }
+        var json = OutboundEnvelope.NextTrack(row, _ourDeviceId, NewId(), NewId(), Now());
+        var r = await _outbound.SendAsync(target, json, ct).ConfigureAwait(false);
+        if (!r.Ok) { _log?.Invoke($"outbound next_track → {target}: failed ({r.Status})"); OnRemoteCommandFailed?.Invoke(); }
+    }
+
+    public async Task MoveQueueItemAsync(QueueItemId id, int newPos, CancellationToken ct = default)
     {
         if (!RouteLocal()) { _log?.Invoke("queue move ignored — another device is active"); return; }   // the active device owns its queue
         await _lock.WaitAsync(ct).ConfigureAwait(false);
-        try { if (_queue.Move(entryId, toIndex)) PushQueueAndPublish(); }
+        try { if (_session.MoveUserItem(id, newPos) is { } snap) EmitSnap(snap, EvKind.QueueChanged); }
         finally { _lock.Release(); }
     }
 
-    public async Task RemoveFromQueueAsync(string entryId, CancellationToken ct = default)
+    public async Task RemoveQueueItemAsync(QueueItemId id, CancellationToken ct = default)
     {
         if (!RouteLocal()) { _log?.Invoke("queue remove ignored — another device is active"); return; }
         await _lock.WaitAsync(ct).ConfigureAwait(false);
-        try { if (_queue.Remove(entryId)) PushQueueAndPublish(); }
+        try { if (_session.RemoveItem(id) is { } snap) EmitSnap(snap, EvKind.QueueChanged); }
+        finally { _lock.Release(); }
+    }
+
+    // Clear the user queue / history (§10.1) — active-device local session ops (one revision bump, atomic publish). Viewer:
+    // no-op (no wire verb; the panel hides the button in viewer mode).
+    public async Task ClearQueueAsync(CancellationToken ct = default)
+    {
+        if (!RouteLocal()) { _log?.Invoke("queue clear ignored — another device is active"); return; }
+        await _lock.WaitAsync(ct).ConfigureAwait(false);
+        try { EmitSnap(_session.ClearUserQueue(), EvKind.QueueChanged); }
+        finally { _lock.Release(); }
+    }
+
+    public async Task ClearHistoryAsync(CancellationToken ct = default)
+    {
+        if (!RouteLocal()) { _log?.Invoke("history clear ignored — another device is active"); return; }
+        await _lock.WaitAsync(ct).ConfigureAwait(false);
+        try { EmitSnap(_session.ClearHistory(), EvKind.QueueChanged); }
         finally { _lock.Release(); }
     }
 
@@ -506,7 +581,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         {
             if (RejectLocalPlay()) return;   // transfer-to-this-device = local playback, which is unsupported → toast + abort
             await _lock.WaitAsync(ct).ConfigureAwait(false);
-            try { if (_queue.Current is not null) { _host.Play(); EmitState(EvKind.Resumed); } else await GhostResumeAsync(ct).ConfigureAwait(false); }
+            try { if (_session.Current is not null) { _host.Play(); EmitState(EvKind.Resumed); } else await GhostResumeAsync(ct).ConfigureAwait(false); }
             finally { _lock.Release(); }
             return;
         }
@@ -524,20 +599,44 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         {
             case ConnectCmd.Pause: _host.Pause(); EmitState(EvKind.Paused); break;
             case ConnectCmd.Resume: _ = LocalResumeAsync(); break;
-            case ConnectCmd.SkipNext: _ = LocalNextAsync(); break;
+            case ConnectCmd.SkipNext: _ = HandleInboundSkipNextAsync(cmd); break;   // next_track w/ a row payload → skip-to-uid; bare → advance one (F7)
             case ConnectCmd.SkipPrev: _ = LocalPrevAsync(); break;
             case ConnectCmd.SeekTo: EmitSeeked(cmd.SeekToMs); break;
-            case ConnectCmd.SetShufflingContext: _queue.SetShuffle(cmd.BoolArg); PushOptions(); EmitState(EvKind.OptionsChanged); break;
-            case ConnectCmd.SetRepeatingContext: _queue.SetRepeat(cmd.BoolArg ? RepeatMode.Context : RepeatMode.Off); PushOptions(); EmitState(EvKind.OptionsChanged); break;
-            case ConnectCmd.SetRepeatingTrack: _queue.SetRepeat(cmd.BoolArg ? RepeatMode.Track : RepeatMode.Off); PushOptions(); EmitState(EvKind.OptionsChanged); break;
+            // Session mutations off the dealer thread MUST take _lock (they rebuild the context list; a bare toggle would
+            // race a lock-holding local AutoAdvance) — route through the locked async helpers (F: one lock per mutation).
+            case ConnectCmd.SetShufflingContext: { bool on = cmd.BoolArg; _ = RemoteSetShuffleAsync(on); } break;
+            case ConnectCmd.SetRepeatingContext: { var m = cmd.BoolArg ? RepeatMode.Context : RepeatMode.Off; _ = RemoteSetRepeatAsync(m); } break;
+            case ConnectCmd.SetRepeatingTrack: { var m = cmd.BoolArg ? RepeatMode.Track : RepeatMode.Off; _ = RemoteSetRepeatAsync(m); } break;
             case ConnectCmd.Play:
             case ConnectCmd.Transfer: _ = HandleInboundPlayOrTransferAsync(cmd); break;
             case ConnectCmd.AddToQueue: _ = HandleAddToQueueAsync(cmd); break;
             case ConnectCmd.SetQueue: _ = HandleSetQueueAsync(cmd); break;
             case ConnectCmd.UpdateContext: _ = HandleUpdateContextAsync(cmd); break;
-            case ConnectCmd.SetOptions: HandleSetOptions(cmd); break;
+            case ConnectCmd.SetOptions: { var payload = cmd.Payload; _ = HandleSetOptionsAsync(payload); } break;
             default: _log?.Invoke("controller: unhandled remote command " + cmd.Kind); break;
         }
+    }
+
+    // Inbound next_track / skip_next (F7): a payload (command.track {uri,uid}) is a row-jump → skip-to-uid + play; a bare
+    // skip_next advances one exactly as before. skip_prev never carries a payload (unchanged).
+    async Task HandleInboundSkipNextAsync(ConnectCommand cmd)
+    {
+        if (string.IsNullOrEmpty(cmd.TrackUri) && string.IsNullOrEmpty(cmd.TrackUid)) { await LocalNextAsync().ConfigureAwait(false); return; }
+        await _lock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            _projection.NoteLocalCommand();
+            if (_session.SkipToUid(cmd.TrackUid, cmd.TrackUri) is { } snap)
+            {
+                _snap = snap;
+                await LoadAndPlayCurrentAsync(EvKind.TrackChanged, default).ConfigureAwait(false);
+                return;
+            }
+        }
+        finally { _lock.Release(); }
+        // identity miss (the target isn't in our resolved session) → fall back to a plain advance.
+        _log?.Invoke($"inbound next_track: row uid={cmd.TrackUid} uri={cmd.TrackUri} not found in session — advancing one");
+        await LocalNextAsync().ConfigureAwait(false);
     }
 
     async Task HandleInboundPlayOrTransferAsync(ConnectCommand cmd)
@@ -561,29 +660,31 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             await _lock.WaitAsync().ConfigureAwait(false);
             try
             {
-                if (_queue.Current is null)
+                if (_session.Current is null)
                 {
                     if (RejectLocalPlay()) return;   // inbound add-to-queue while idle would start local playback → toast + abort
                     SetQueueContext(hydrated[0].Uri, hydrated, 0);
                     await LoadAndPlayCurrentAsync(EvKind.Started, default).ConfigureAwait(false);
                 }
-                else { _queue.EnqueueUser(hydrated[0]); PushQueueAndPublish(); }
+                else EmitSnap(_session.EnqueueUser(hydrated), EvKind.QueueChanged);   // active device mints q-uids for uid:"" rows (§7.4)
             }
             finally { _lock.Release(); }
         }
         catch (Exception ex) { _log?.Invoke("controller add_to_queue error: " + ex.Message); }
     }
 
-    // set_queue: replace the up-next (the user queue) with the command's next_tracks.
+    // set_queue (F8): full reconcile of ALL of next_tracks (queue rows → user queue by uid, context rows → Upcoming, autoplay
+    // tail + delimiter/meta markers preserved). The current track is untouched (set_queue never changes what's playing).
     async Task HandleSetQueueAsync(ConnectCommand cmd)
     {
         try
         {
-            var refs = ParseQueueTracks(cmd.Payload, "next_tracks");
-            if (refs.Count == 0) return;
-            var hydrated = await _contexts.HydrateAsync(refs, default).ConfigureAwait(false);
+            var prev = ParseWireEntries(cmd.Payload, "prev_tracks");
+            var next = ParseWireEntries(cmd.Payload, "next_tracks");
+            if (next.Count == 0 && prev.Count == 0) return;
+            string revision = ParseQueueRevisionString(cmd.Payload);
             await _lock.WaitAsync().ConfigureAwait(false);
-            try { _queue.ReplaceNextUp(hydrated); PushQueueAndPublish(); }
+            try { EmitSnap(_session.ApplySetQueue(prev, next, revision), EvKind.QueueChanged); }
             finally { _lock.Release(); }
         }
         catch (Exception ex) { _log?.Invoke("controller set_queue error: " + ex.Message); }
@@ -601,11 +702,11 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             await _lock.WaitAsync().ConfigureAwait(false);
             try
             {
-                string? curUri = _queue.Current?.Uri;
+                string? curUri = _session.Current?.Uri;
                 int found = curUri is null ? -1 : IndexOfUri(resolved.Tracks, curUri);
                 SetQueueContext(resolved.ContextUri ?? spec.Uri, resolved.Tracks, found < 0 ? 0 : found,
                     resolved.NextPageUrl, resolved.IsInfinite, resolved.Metadata);
-                PushQueue();
+                EmitSnap(_snap, EvKind.QueueChanged);
             }
             finally { _lock.Release(); }
         }
@@ -613,46 +714,131 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     }
 
     // set_options: apply shuffle + repeat (the desktop sends explicit shuffling_context / repeating_context / repeating_track).
-    void HandleSetOptions(in ConnectCommand cmd)
+    // Parse off-lock (immutable JSON), then apply the session mutations under _lock (they rebuild the context list, F7).
+    async Task HandleSetOptionsAsync(byte[] payload)
     {
         try
         {
-            using var doc = JsonDocument.Parse(cmd.Payload);
-            if (!doc.RootElement.TryGetProperty("command", out var c)) return;
-            if (c.TryGetProperty("shuffling_context", out var sh) && sh.ValueKind is JsonValueKind.True or JsonValueKind.False)
-                _queue.SetShuffle(sh.GetBoolean());
-            bool hasRepTrack = c.TryGetProperty("repeating_track", out var rt);
-            bool hasRepCtx = c.TryGetProperty("repeating_context", out var rc);
-            if (hasRepTrack || hasRepCtx)
+            bool? shuffle = null; RepeatMode? repeat = null;
+            using (var doc = JsonDocument.Parse(payload))
             {
-                bool repTrack = hasRepTrack && rt.ValueKind == JsonValueKind.True;
-                bool repCtx = hasRepCtx && rc.ValueKind == JsonValueKind.True;
-                _queue.SetRepeat(repTrack ? RepeatMode.Track : repCtx ? RepeatMode.Context : RepeatMode.Off);
+                if (!doc.RootElement.TryGetProperty("command", out var c)) return;
+                if (c.TryGetProperty("shuffling_context", out var sh) && sh.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                    shuffle = sh.GetBoolean();
+                bool hasRepTrack = c.TryGetProperty("repeating_track", out var rt);
+                bool hasRepCtx = c.TryGetProperty("repeating_context", out var rc);
+                if (hasRepTrack || hasRepCtx)
+                {
+                    bool repTrack = hasRepTrack && rt.ValueKind == JsonValueKind.True;
+                    bool repCtx = hasRepCtx && rc.ValueKind == JsonValueKind.True;
+                    repeat = repTrack ? RepeatMode.Track : repCtx ? RepeatMode.Context : RepeatMode.Off;
+                }
             }
-            PushOptions(); EmitState(EvKind.OptionsChanged);
+            if (shuffle is null && repeat is null) return;
+            await _lock.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                QueueSnapshot snap = _snap;
+                if (shuffle is { } s) snap = _session.SetShuffle(s);
+                if (repeat is { } r) snap = _session.SetRepeat(r);
+                EmitSnap(snap, EvKind.OptionsChanged);
+            }
+            finally { _lock.Release(); }
         }
         catch (Exception ex) { _log?.Invoke("controller set_options error: " + ex.Message); }
     }
 
+    // Inbound shuffle/repeat off the dealer thread — take _lock (SetShuffle/SetRepeat rebuild the context list, F7).
+    async Task RemoteSetShuffleAsync(bool on)
+    {
+        await _lock.WaitAsync().ConfigureAwait(false);
+        try { EmitSnap(_session.SetShuffle(on), EvKind.OptionsChanged); }
+        finally { _lock.Release(); }
+    }
+
+    async Task RemoteSetRepeatAsync(RepeatMode mode)
+    {
+        await _lock.WaitAsync().ConfigureAwait(false);
+        try { EmitSnap(_session.SetRepeat(mode), EvKind.OptionsChanged); }
+        finally { _lock.Release(); }
+    }
+
     // ── local execution primitives (shared by the public verbs + inbound handling) ───────────────────────────────────
+    // Seed the session with a resolved context. keepUserQueue is always true (§4.7 — Spotify parity: a new context keeps the
+    // user queue). The context display metadata rides alongside via SetContextMetadata; the atomic publish happens at the
+    // caller's LoadAndPlayCurrent / EmitSnap, never here (F3: no split publish).
     void SetQueueContext(string uri, IReadOnlyList<QueuedTrack> tracks, int startIndex,
         string? nextPageUrl = null, bool isInfinite = false, IReadOnlyDictionary<string, string>? metadata = null)
     {
-        _queue.SetContext(uri, tracks, startIndex);
+        _snap = _session.SetContext(uri, tracks, startIndex);
         _nextPageUrl = string.IsNullOrEmpty(nextPageUrl) ? null : nextPageUrl;
         _contextIsInfinite = isInfinite || ContextResolve.IsInfinite(uri);
         _autoplayLatchedFor = null;
         _continuationFetch = null;
-        _projection.SetLocalContext(uri, metadata);
-        PushOptions();
+        _projection.SetContextMetadata(metadata);
+        DiagnoseQueue("controller.set-context");
     }
 
+    // §7.3: resolve, then honor an identity-strict skip target. ResolveAsync returns StartIndex = -1 on identity miss (the
+    // blind index fallback is gone, F2). While hunting the skip target we page deeper than MaxEagerPages (bounded); on a
+    // final miss (a regenerated dynamic context) we patch the clicked track in as current rather than play an unrelated row.
+    const int SkipHuntMaxPages = 40;
     async Task LocalPlaySpecAsync(ContextSpec spec, CancellationToken ct)
     {
         var resolved = await _contexts.ResolveAsync(spec, ct).ConfigureAwait(false);
         if (resolved.Count == 0) { _log?.Invoke("play: context resolved to 0 tracks: " + spec.Uri); return; }
-        await LocalPlayTracksAsync(resolved.ContextUri ?? spec.Uri, resolved.Tracks, resolved.StartIndex, ct,
-            resolved.NextPageUrl, resolved.IsInfinite, resolved.Metadata).ConfigureAwait(false);
+
+        IReadOnlyList<QueuedTrack> tracks = resolved.Tracks;
+        int start = resolved.StartIndex;
+        string? nextPage = resolved.NextPageUrl;
+        bool hasSkipTarget = !string.IsNullOrEmpty(spec.SkipToTrackUid) || !string.IsNullOrEmpty(spec.SkipToTrackUri);
+
+        if (start < 0 && hasSkipTarget && !resolved.IsInfinite && !string.IsNullOrEmpty(nextPage))
+        {
+            var acc = new List<QueuedTrack>(tracks);
+            int pages = 0;
+            while (start < 0 && !string.IsNullOrEmpty(nextPage) && pages < SkipHuntMaxPages)
+            {
+                var page = await _contexts.LoadMoreAsync(nextPage!, ct).ConfigureAwait(false);
+                if (page.Tracks.Count > 0)
+                {
+                    acc.AddRange(page.Tracks);
+                    start = ContextResolve.FindStartIndex(acc, spec.SkipToTrackUri, spec.SkipToTrackUid);
+                }
+                nextPage = page.NextPageUrl;
+                pages++;
+            }
+            tracks = acc;
+            if (start >= 0) _log?.Invoke($"skip target found after paging {pages} extra pages ({tracks.Count} tracks)");
+        }
+
+        if (start < 0 && hasSkipTarget)
+        {
+            // §7.3.2: identity miss — patch the clicked track as current (context_patched), never a blind index.
+            var patched = await BuildPatchedTrackAsync(spec, ct).ConfigureAwait(false);
+            var list = new List<QueuedTrack>(tracks.Count + 1) { patched };
+            list.AddRange(tracks);
+            tracks = list;
+            start = 0;
+            _log?.Invoke($"queue.skip-miss: patched {spec.SkipToTrackUri ?? spec.SkipToTrackUid} as current over {resolved.ContextUri ?? spec.Uri}");
+            PlaybackBucketDiagnostics.Continuation("queue.skip-miss", "skip target not resolved; patched clicked track as current",
+                WaveeLogField.Of("target", spec.SkipToTrackUri ?? spec.SkipToTrackUid ?? ""),
+                WaveeLogField.Of("ctx", resolved.ContextUri ?? spec.Uri));
+        }
+
+        if (start < 0) start = 0;   // no skip target at all → start at the top
+        await LocalPlayTracksAsync(resolved.ContextUri ?? spec.Uri, tracks, start, ct,
+            nextPage, resolved.IsInfinite, resolved.Metadata).ConfigureAwait(false);
+    }
+
+    // Build the clicked track as a context row patched in as current (§7.3.2): hydrate for display, tag context_patched.
+    async Task<QueuedTrack> BuildPatchedTrackAsync(ContextSpec spec, CancellationToken ct)
+    {
+        string uri = spec.SkipToTrackUri ?? "";
+        var meta = new Dictionary<string, string>(StringComparer.Ordinal) { ["context_patched"] = "true" };
+        if (string.IsNullOrEmpty(uri)) return new QueuedTrack(ContextResolve.Synthetic(spec.SkipToTrackUid ?? ""), spec.SkipToTrackUid ?? "", "context", meta);
+        var q = await HydrateOneAsync(uri, ct).ConfigureAwait(false);
+        return new QueuedTrack(q.Track, spec.SkipToTrackUid ?? "", "context", meta);
     }
 
     async Task LocalPlayTracksAsync(string contextUri, IReadOnlyList<QueuedTrack> tracks, int startIndex, CancellationToken ct,
@@ -684,7 +870,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         await _lock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            if (_queue.Current is not null) { if (RejectLocalPlay()) return; _host.Play(); EmitState(EvKind.Resumed); }   // we have a local context → normal resume
+            if (_session.Current is not null) { if (RejectLocalPlay()) return; _host.Play(); EmitState(EvKind.Resumed); }   // we have a local context → normal resume
             else await GhostResumeAsync(ct).ConfigureAwait(false);   // cold/ghost → seed from the cluster snapshot
         }
         finally { _lock.Release(); }
@@ -696,8 +882,8 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         try
         {
             _projection.NoteLocalCommand();
-            var t = _queue.Next();
-            if (t is not null) await LoadAndPlayCurrentAsync(EvKind.TrackChanged, ct).ConfigureAwait(false);
+            _snap = _session.Next();
+            if (_snap.Current is not null) await LoadAndPlayCurrentAsync(EvKind.TrackChanged, ct).ConfigureAwait(false);
             else if (await TryContinueContextAsync(ct).ConfigureAwait(false)) { }
             else { _host.Stop(); Emit(BuildEvent(EvKind.Ended, null, 0, reasonEnd: "endplay")); }   // end-of-context
         }
@@ -712,8 +898,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             _projection.NoteLocalCommand();
             // Desktop semantics: >3 s into the track, "previous" restarts the current track instead of stepping back.
             if (_host.PositionMs > 3000) { _host.Seek(0); return; }
-            _queue.Prev();
-            await LoadAndPlayCurrentAsync(EvKind.TrackChanged, ct).ConfigureAwait(false);
+            if (_session.Prev() is { } snap) { _snap = snap; await LoadAndPlayCurrentAsync(EvKind.TrackChanged, ct).ConfigureAwait(false); }
         }
         finally { _lock.Release(); }
     }
@@ -726,11 +911,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         var track = _projection.CurrentTrack;
         if (track is null) { _log?.Invoke("ghost resume: nothing in the cluster to resume"); return; }
         var ctxUri = _projection.ContextUri ?? track.Uri;
-        var tracks = new List<Track>(1 + _projection.Queue.Count) { track };
-        foreach (var qe in _projection.Queue) if (qe.Bucket == QueueBucket.NextUp) tracks.Add(qe.Track);
-        var queued = new QueuedTrack[tracks.Count];
-        for (int i = 0; i < tracks.Count; i++) queued[i] = new QueuedTrack(tracks[i], "");
-        SetQueueContext(ctxUri, queued, 0);
+        SeedSessionFromCluster(track, ctxUri);
         AudioStreamHandle handle;
         try { handle = await _resolver.ResolveAsync(track, ct).ConfigureAwait(false); }
         catch (OperationCanceledException) { throw; }
@@ -748,10 +929,28 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         }
         if (pos > 0) _host.Seek(pos);
         _host.Play();
-        PushQueue();                                              // queue first, so the published snapshot carries it
         MintCommand("playbtn");
         _currentIds = MintPlaybackIds(track);
-        Emit(BuildEvent(EvKind.Started, track, pos));
+        Emit(BuildEvent(EvKind.Started, track, pos));   // the atomic publish carries the session snapshot seeded above
+    }
+
+    // Full session recovery from the last cluster (§8, F9): replay the raw cluster rows through ReplaceFromCluster so the
+    // user queue is filed into _userQueue IN WIRE ORDER (drain-first preserved), the context continuation + autoplay tail
+    // land in Upcoming (AutoplayContextUri set), and prev_tracks restore History — NOT SetContext over _projection.Queue,
+    // which relabels queue rows as context, drops drain-first + the autoplay context, and (when we're the active device)
+    // reads an empty windowed queue. Falls back to a single-track context when no cluster has been folded. Caller holds _lock.
+    void SeedSessionFromCluster(Track current, string ctxUri)
+    {
+        if (_projection.LastCluster is { HasTrack: true } c)
+            _snap = _session.ReplaceFromCluster(c, current);
+        else
+            _snap = _session.SetContext(ctxUri, new[] { new QueuedTrack(current, "") }, 0);
+        _nextPageUrl = null;
+        _contextIsInfinite = ContextResolve.IsInfinite(_session.ContextUri ?? ctxUri);
+        _autoplayLatchedFor = null;
+        _continuationFetch = null;
+        _projection.SetContextMetadata(null);
+        DiagnoseQueue("controller.recover-from-cluster");
     }
 
     async Task MaybeSeekEpisodeResumeAsync(Track track, CancellationToken ct)
@@ -774,7 +973,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
 
     PlaybackIds MintPlaybackIds(Track track, byte[]? mediaId = null)
     {
-        var ctx = _queue.ContextUri;
+        var ctx = _session.ContextUri;
         if (ctx != _idsSessionContext)
         {
             _idsSessionContext = ctx;
@@ -786,13 +985,9 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         int bitrateKbps = 0, string audioFormat = "", long durationMs = 0, byte[]? fileId = null, string reasonEnd = "",
         long seekToMs = -1)
     {
-        var provider = _queue.CurrentUid.Length > 0 ? "context" : "context";
-        foreach (var qe in _queue.Snapshot())
-        {
-            if (qe.Bucket == QueueBucket.NowPlaying && !string.IsNullOrEmpty(qe.Provider))
-            { provider = qe.Provider; break; }
-        }
-        return new PlaybackEvent(kind, track, atMs, _currentIds, _reasonStart, reasonEnd, ParseContextKind(_queue.ContextUri),
+        // F6: read the provider straight off the atomic snapshot's current (the dead ternary + row scan are gone).
+        var provider = (_snap.Current?.Provider ?? QueueProvider.Context).ToWire();
+        return new PlaybackEvent(kind, track, atMs, _currentIds, _reasonStart, reasonEnd, ParseContextKind(_snap.ContextUri),
             mediaId, bitrateKbps, audioFormat, durationMs, fileId, provider, true, seekToMs);
     }
 
@@ -801,7 +996,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         _projection.NoteLocalCommand();
         long fromMs = _host.PositionMs;
         _host.Seek(targetMs);
-        Emit(BuildEvent(EvKind.Seeked, _queue.Current, fromMs, seekToMs: targetMs));
+        Emit(BuildEvent(EvKind.Seeked, _snap.Current?.Track, fromMs, seekToMs: targetMs));
     }
 
     static string ParseContextKind(string? contextUri)
@@ -814,7 +1009,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     async Task LoadAndPlayCurrentAsync(EvKind kind, CancellationToken ct)
     {
         if (RejectLocalPlay()) return;   // local audio unsupported → toast + abort (covers play / next / prev / enqueue-idle / inbound)
-        var cur = _queue.Current;
+        var cur = _session.Current;
         if (cur is null) { _host.Stop(); return; }
 
         byte[]? mediaId = null;
@@ -852,9 +1047,8 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             _host.LoadFastStart(plan.Start);
             _host.Play();
             await MaybeSeekEpisodeResumeAsync(cur, ct).ConfigureAwait(false);
-            PushQueue();
             WarmUpcomingFastTrack("after-start");
-            Emit(BuildEvent(kind, cur, 0, mediaId, bitrateKbps, audioFormat, durationMs, fileId));
+            Emit(BuildEvent(kind, cur, 0, mediaId, bitrateKbps, audioFormat, durationMs, fileId));   // atomic publish carries the queue
             MaybeStartContinuationFetch();
             _ = SupplyBodyWhenReadyAsync(plan.Body, cur.Uri, loadStartedTicks, plan.Start.HeadBytes.Length);
             return;
@@ -867,36 +1061,129 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         _host.Load(handle);
         _host.Play();
         await MaybeSeekEpisodeResumeAsync(cur, ct).ConfigureAwait(false);
-        PushQueue();                                              // queue first, so the published snapshot carries it
         WarmUpcomingFastTrack("after-start");
-        Emit(BuildEvent(kind, cur, 0, mediaId, bitrateKbps, audioFormat, durationMs, fileId));
+        Emit(BuildEvent(kind, cur, 0, mediaId, bitrateKbps, audioFormat, durationMs, fileId));   // atomic publish carries the queue
         MaybeStartContinuationFetch();
     }
 
     void MaybeStartContinuationFetch()
     {
-        if (_queue.Current is null || _queue.RemainingInContext > 5) return;
-        if (_continuationFetch is { } existing && !existing.IsCompleted) return;
-        if (_continuationFetch is { IsCompleted: true }) return;
-        _ = StartContinuationFetch(forceAutoplay: false);
+        if (_session.Current is null)
+        {
+            PlaybackBucketDiagnostics.Continuation("continuation.skip", "no current track");
+            return;
+        }
+        if (_session.RemainingInContext > 5)
+        {
+            PlaybackBucketDiagnostics.Continuation("continuation.skip", "context still has enough upcoming tracks",
+                WaveeLogField.Of("remainingContext", _session.RemainingInContext),
+                WaveeLogField.Of("ctx", _session.ContextUri ?? ""),
+                WaveeLogField.Of("current", _session.Current.Uri));
+            return;
+        }
+        if (_continuationFetch is { } existing && !existing.IsCompleted)
+        {
+            PlaybackBucketDiagnostics.Continuation("continuation.skip", "continuation fetch already running",
+                WaveeLogField.Of("remainingContext", _session.RemainingInContext),
+                WaveeLogField.Of("ctx", _session.ContextUri ?? ""),
+                WaveeLogField.Of("current", _session.Current.Uri));
+            return;
+        }
+        if (_continuationFetch is { IsCompleted: true })
+        {
+            PlaybackBucketDiagnostics.Continuation("continuation.skip", "completed continuation fetch waiting for track-end consumer",
+                WaveeLogField.Of("remainingContext", _session.RemainingInContext),
+                WaveeLogField.Of("ctx", _session.ContextUri ?? ""),
+                WaveeLogField.Of("current", _session.Current.Uri));
+            return;
+        }
+        var fetch = StartContinuationFetch(forceAutoplay: false);
+        if (fetch is not null) _ = EagerApplyContinuationAsync(fetch);
+    }
+
+    // Append the prefetched continuation (next context page / autoplay station) to the queue AS SOON AS it resolves —
+    // not deferred to track-end — so the up-next list shows the upcoming tracks while the current one still plays (the
+    // "Autoplaying similar music" preview). Append-only: the cursor doesn't move, so nothing changes what's playing.
+    // ReferenceEquals-guarded so it never double-applies with the track-end TryContinueContextAsync path.
+    async Task EagerApplyContinuationAsync(Task<ResolvedContext> fetch)
+    {
+        ResolvedContext result;
+        try { result = await fetch.ConfigureAwait(false); }
+        catch (Exception ex)
+        {
+            PlaybackBucketDiagnostics.Continuation("continuation.eager-fault", "eager continuation fetch faulted",
+                WaveeLogField.Of("error", ex.GetType().Name),
+                WaveeLogField.Of("detail", ex.Message));
+            return;   // a fault surfaces on the track-end path's own await instead
+        }
+
+        bool held = false;
+        try
+        {
+            await _lock.WaitAsync().ConfigureAwait(false);
+            held = true;
+            if (!ReferenceEquals(_continuationFetch, fetch))
+            {
+                PlaybackBucketDiagnostics.Continuation("continuation.eager-skip", "prefetch was already consumed or superseded",
+                    WaveeLogField.Of("resultCount", result.Count));
+                return;   // already consumed/superseded by track-end
+            }
+            _continuationFetch = null;
+            PlaybackBucketDiagnostics.Continuation("continuation.eager-apply", "applying prefetched continuation before track-end",
+                WaveeLogField.Of("resultCount", result.Count),
+                WaveeLogField.Of("resultContext", result.ContextUri ?? ""),
+                WaveeLogField.Of("nextPage", result.NextPageUrl ?? ""),
+                WaveeLogField.Of("isInfinite", result.IsInfinite));
+            ApplyContinuation(result);
+        }
+        catch (Exception ex)
+        {
+            PlaybackBucketDiagnostics.Continuation("continuation.eager-error", "eager continuation apply failed",
+                WaveeLogField.Of("error", ex.GetType().Name),
+                WaveeLogField.Of("detail", ex.Message));
+        }
+        finally { if (held) _lock.Release(); }
     }
 
     Task<ResolvedContext>? StartContinuationFetch(bool forceAutoplay)
     {
-        var ctx = _queue.ContextUri;
-        if (string.IsNullOrEmpty(ctx)) return null;
+        var ctx = _session.ContextUri;
+        if (string.IsNullOrEmpty(ctx))
+        {
+            PlaybackBucketDiagnostics.Continuation("continuation.none", "no context uri; cannot fetch continuation");
+            return null;
+        }
 
         if (!forceAutoplay && !string.IsNullOrEmpty(_nextPageUrl))
         {
             var page = _nextPageUrl!;
             _log?.Invoke("continuation: prefetching next context page " + page);
+            PlaybackBucketDiagnostics.Continuation("continuation.fetch-page", "prefetching next context page",
+                WaveeLogField.Of("ctx", ctx),
+                WaveeLogField.Of("page", page),
+                WaveeLogField.Of("remainingContext", _session.RemainingInContext),
+                WaveeLogField.Of("current", _session.Current?.Uri ?? ""));
             return _continuationFetch = FetchNextPageAsync(page, _contextIsInfinite);
         }
 
-        if (!CanAutoplay(ctx)) return null;
+        if (!CanAutoplay(ctx))
+        {
+            PlaybackBucketDiagnostics.Continuation("continuation.none", "autoplay not eligible",
+                WaveeLogField.Of("ctx", ctx),
+                WaveeLogField.Of("remainingContext", _session.RemainingInContext),
+                WaveeLogField.Of("isInfinite", _contextIsInfinite || ContextResolve.IsInfinite(ctx)),
+                WaveeLogField.Of("latchedFor", _autoplayLatchedFor ?? ""),
+                WaveeLogField.Of("enabled", AutoplayEnabled?.Invoke() ?? true));
+            return null;
+        }
         _autoplayLatchedFor = ctx;
-        var recent = _queue.RecentUris(5);
+        var recent = _session.RecentUris(5);
         _log?.Invoke("continuation: prefetching autoplay for " + ctx);
+        PlaybackBucketDiagnostics.Continuation("continuation.fetch-autoplay", "prefetching autoplay",
+            WaveeLogField.Of("ctx", ctx),
+            WaveeLogField.Of("remainingContext", _session.RemainingInContext),
+            WaveeLogField.Of("recent", string.Join(",", recent)),
+            WaveeLogField.Of("current", _session.Current?.Uri ?? ""));
         return _continuationFetch = FetchAutoplayAsync(ctx, recent);
     }
 
@@ -912,12 +1199,19 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         try
         {
             var page = await _contexts.LoadMoreAsync(nextPageUrl).ConfigureAwait(false);
+            PlaybackBucketDiagnostics.Continuation("continuation.page-result", "next context page resolved",
+                WaveeLogField.Of("count", page.Tracks.Count),
+                WaveeLogField.Of("nextPage", page.NextPageUrl ?? ""),
+                WaveeLogField.Of("isInfinite", isInfinite));
             return new ResolvedContext(page.Tracks, 0, null, page.NextPageUrl, isInfinite);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
             _log?.Invoke("continuation page fetch failed: " + ex.Message);
+            PlaybackBucketDiagnostics.Continuation("continuation.page-error", "next context page fetch failed",
+                WaveeLogField.Of("error", ex.GetType().Name),
+                WaveeLogField.Of("detail", ex.Message));
             return ResolvedContext.Empty;
         }
     }
@@ -928,12 +1222,21 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         {
             var result = await _contexts.ResolveAutoplayAsync(contextUri, recent).ConfigureAwait(false);
             if (result.Count == 0) _log?.Invoke("autoplay returned no tracks for " + contextUri);
+            PlaybackBucketDiagnostics.Continuation("continuation.autoplay-result", "autoplay resolved",
+                WaveeLogField.Of("ctx", contextUri),
+                WaveeLogField.Of("count", result.Count),
+                WaveeLogField.Of("resultContext", result.ContextUri ?? ""),
+                WaveeLogField.Of("nextPage", result.NextPageUrl ?? ""));
             return result;
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
             _log?.Invoke("autoplay fetch failed for " + contextUri + ": " + ex.Message);
+            PlaybackBucketDiagnostics.Continuation("continuation.autoplay-error", "autoplay fetch failed",
+                WaveeLogField.Of("ctx", contextUri),
+                WaveeLogField.Of("error", ex.GetType().Name),
+                WaveeLogField.Of("detail", ex.Message));
             return ResolvedContext.Empty;
         }
     }
@@ -942,22 +1245,37 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     {
         _nextPageUrl = string.IsNullOrEmpty(result.NextPageUrl) ? null : result.NextPageUrl;
         _contextIsInfinite = _contextIsInfinite || result.IsInfinite;
-        if (result.Count == 0) return false;
+        if (result.Count == 0)
+        {
+            PlaybackBucketDiagnostics.Continuation("continuation.apply-empty", "continuation result had no tracks",
+                WaveeLogField.Of("nextPage", _nextPageUrl ?? ""),
+                WaveeLogField.Of("isInfinite", _contextIsInfinite));
+            return false;
+        }
 
         bool autoplay = result.Tracks[0].Provider == "autoplay";
-        if (!string.IsNullOrEmpty(result.ContextUri) && result.ContextUri != _queue.ContextUri)
+        string? sourceContextUri = null;
+        if (!string.IsNullOrEmpty(result.ContextUri) && result.ContextUri != _session.ContextUri)
         {
-            _queue.RelabelContext(result.ContextUri);
-            _projection.SetLocalContext(result.ContextUri, result.Metadata);
+            _snap = _session.RelabelContext(result.ContextUri);
+            _projection.SetContextMetadata(result.Metadata);
+            sourceContextUri = result.ContextUri;
             autoplay = true;
         }
 
-        if (!autoplay && _queue.ContextUri is { } ctx && ContextResolve.IsInfinite(ctx)) autoplay = true;
-        _queue.AppendToContext(result.Tracks, autoplay ? "autoplay" : "context");
-        PushQueue();
+        if (!autoplay && _session.ContextUri is { } ctx && ContextResolve.IsInfinite(ctx)) autoplay = true;
+        var prov = autoplay ? QueueProvider.Autoplay : QueueProvider.Context;
+        _snap = _session.AppendContextPage(result.Tracks, prov, sourceContextUri ?? _session.ContextUri);
+        EmitSnap(_snap, EvKind.QueueChanged);
         _log?.Invoke("continuation: appended " + result.Count + " tracks"
             + (autoplay ? " (autoplay)" : "")
             + (_nextPageUrl is null ? "" : " with next page"));
+        PlaybackBucketDiagnostics.Continuation("continuation.applied", "continuation appended to queue core",
+            WaveeLogField.Of("count", result.Count),
+            WaveeLogField.Of("provider", autoplay ? "autoplay" : "context"),
+            WaveeLogField.Of("ctx", _session.ContextUri ?? ""),
+            WaveeLogField.Of("nextPage", _nextPageUrl ?? ""),
+            WaveeLogField.Of("remainingContext", _session.RemainingInContext));
         return true;
     }
 
@@ -966,7 +1284,14 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         for (int attempt = 0; attempt < 2; attempt++)
         {
             var fetch = _continuationFetch ?? StartContinuationFetch(forceAutoplay: attempt > 0);
-            if (fetch is null) return false;
+            if (fetch is null)
+            {
+                PlaybackBucketDiagnostics.Continuation("continuation.trackend-none", "no continuation available at track-end",
+                    WaveeLogField.Of("attempt", attempt),
+                    WaveeLogField.Of("ctx", _session.ContextUri ?? ""),
+                    WaveeLogField.Of("remainingContext", _session.RemainingInContext));
+                return false;
+            }
 
             Task completed;
             try
@@ -977,6 +1302,9 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             if (completed != fetch)
             {
                 _log?.Invoke("continuation: fetch exceeded 3s grace timeout");
+                PlaybackBucketDiagnostics.Continuation("continuation.trackend-timeout", "fetch exceeded track-end grace timeout",
+                    WaveeLogField.Of("attempt", attempt),
+                    WaveeLogField.Of("ctx", _session.ContextUri ?? ""));
                 return false;
             }
 
@@ -986,18 +1314,38 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             catch (Exception ex)
             {
                 _log?.Invoke("continuation: fetch faulted: " + ex.Message);
+                PlaybackBucketDiagnostics.Continuation("continuation.trackend-fault", "fetch faulted at track-end",
+                    WaveeLogField.Of("attempt", attempt),
+                    WaveeLogField.Of("error", ex.GetType().Name),
+                    WaveeLogField.Of("detail", ex.Message));
                 result = ResolvedContext.Empty;
             }
             _continuationFetch = null;
 
             if (!ApplyContinuation(result))
             {
-                if (attempt == 0 && string.IsNullOrEmpty(_nextPageUrl)) continue;
+                if (attempt == 0 && string.IsNullOrEmpty(_nextPageUrl))
+                {
+                    PlaybackBucketDiagnostics.Continuation("continuation.trackend-retry", "first continuation was empty; retrying forced autoplay",
+                        WaveeLogField.Of("attempt", attempt),
+                        WaveeLogField.Of("ctx", _session.ContextUri ?? ""));
+                    continue;
+                }
                 return false;
             }
 
-            var next = _queue.Next();
-            if (next is null) return false;
+            _snap = _session.Next();
+            var next = _snap.Current;
+            if (next is null)
+            {
+                PlaybackBucketDiagnostics.Continuation("continuation.trackend-no-next", "continuation appended but queue had no playable next track",
+                    WaveeLogField.Of("ctx", _session.ContextUri ?? ""));
+                return false;
+            }
+            PlaybackBucketDiagnostics.Continuation("continuation.trackend-next", "advancing into continuation track",
+                WaveeLogField.Of("track", next.Track.Uri),
+                WaveeLogField.Of("ctx", _session.ContextUri ?? ""),
+                WaveeLogField.Of("remainingContext", _session.RemainingInContext));
             await LoadAndPlayCurrentAsync(EvKind.TrackChanged, ct).ConfigureAwait(false);
             return true;
         }
@@ -1005,25 +1353,43 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         return false;
     }
 
-    // Fan the event log out to the now-playing projection + every extra projection (telemetry, the PutState publisher).
-    void Emit(in PlaybackEvent e)
+    // The ONE atomic publish (§5): the current snapshot + the event fold into the projection under a single lock / single
+    // FireChanges (ApplyLocalSnapshot), then the same event fans out to the extra projections (the PutState publisher) — the
+    // queue can never publish out of step with the track. Ownership is derived from the event kind, as before.
+    void Publish(QueueSnapshot snap, in PlaybackEvent e)
     {
+        _snap = snap;
         if (e.Kind is EvKind.Started or EvKind.Resumed or EvKind.TrackChanged && e.Track is not null) SetActiveOwner(true);
         else if (e.Kind is EvKind.Ended or EvKind.BecameInactive) SetActiveOwner(false);
-        _projection.OnEvent(e);
+        DiagnoseQueue("controller.publish." + e.Kind);
+        _projection.ApplyLocalSnapshot(snap, e);
         for (int i = 0; i < _extra.Count; i++) _extra[i].OnEvent(e);
     }
 
-    // Emit a state event carrying the current track + position (drives the projection slab + the PutState publish).
-    void EmitState(EvKind kind) => Emit(BuildEvent(kind, _queue.Current, _host.PositionMs));
+    void Emit(in PlaybackEvent e) => Publish(_snap, e);
 
-    // Surface QueueCore's snapshot to the projection so IPlaybackState.Queue (+ the PutState next-up) reflect our local
-    // queue while WE are the active device. Called after every local queue mutation.
-    void PushQueue() => _projection.SetLocalQueue(_queue.Snapshot());
+    // Publish a session snapshot with a state event carrying its current track (queue mutations + options changes).
+    void EmitSnap(QueueSnapshot snap, EvKind kind) { _snap = snap; Emit(BuildEvent(kind, snap.Current?.Track, _host.PositionMs)); }
+
+    // Emit a state event carrying the current track + position (drives the projection slab + the PutState publish). Reads
+    // the current off the immutable _snap (never the live _session) so it is safe on the unlocked inbound paths (F7).
+    void EmitState(EvKind kind) => Emit(BuildEvent(kind, _snap.Current?.Track, _host.PositionMs));
+
+    // queue.snapshot diagnostics for the current atomic snapshot (rev + itemId columns, §9). Dedup-guarded.
+    void DiagnoseQueue(string reason)
+    {
+        var rows = new List<QueueEntry>(1 + _snap.UserQueue.Length + _snap.Upcoming.Length + _snap.History.Length);
+        if (_snap.Current is { } c) rows.Add(c);
+        rows.AddRange(_snap.UserQueue);
+        rows.AddRange(_snap.Upcoming);
+        rows.AddRange(_snap.History);
+        PlaybackBucketDiagnostics.QueueIfChanged(ref _lastControllerQueueDiagSig, reason,
+            rows, _snap.ContextUri, _snap.Current?.Track.Uri, _snap.Upcoming.Length, _snap.Revision);   // _snap only (no live-session read) → safe off-lock (F7)
+    }
 
     void WarmUpcomingFastTrack(string reason)
     {
-        if (_queue.PeekNext() is { } next)
+        if (_session.PeekNext() is { } next)
             WarmFastTrack(next, reason);
     }
 
@@ -1033,12 +1399,6 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         try { warmer.Warm(track, reason); }
         catch (Exception ex) { _log?.Invoke($"fast-warm dispatch failed {track.Uri}: {ex.Message}"); }
     }
-
-    // Push the local shuffle/repeat to the projection (so PutState carries them while we're active).
-    void PushOptions() => _projection.SetLocalOptions(_queue.Shuffle, _queue.Repeat);
-
-    // A queue mutation: surface it to the projection AND publish (QueueChanged) so a controller sees the new up-next.
-    void PushQueueAndPublish() { PushQueue(); EmitState(EvKind.QueueChanged); }
 
     void OnHostSignal(AudioHostSignal s)
     {
@@ -1072,7 +1432,13 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             await LocalPlaySpecAsync(spec, ct).ConfigureAwait(false);
             return;
         }
-        await LocalPlaySpecAsync(ContextSpec.ForUri(request.ContextUri, request.StartIndex), ct).ConfigureAwait(false);
+        await LocalPlaySpecAsync(new ContextSpec(
+            request.ContextUri,
+            null,
+            null,
+            request.SkipTrackUri,
+            request.SkipTrackUid,
+            request.StartIndex), ct).ConfigureAwait(false);
     }
 
     async Task Forward(string endpoint, CancellationToken ct, params (string Key, object Value)[] args)
@@ -1094,7 +1460,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         string? skipUid = string.IsNullOrEmpty(request.SkipTrackUid) ? null : request.SkipTrackUid;
         var json = OutboundEnvelope.Play(_ourDeviceId, request.ContextUri, null,
             skipIndex, request.SkipTrackUri, skipUid, request.OrderedTracks,
-            _queue.Shuffle, FeatureOf(request.ContextUri), _featureVersion, NewId(), NewId(), Now());
+            _session.Shuffle, FeatureOf(request.ContextUri), _featureVersion, NewId(), NewId(), Now());
         var r = await _outbound.SendAsync(target, json, ct).ConfigureAwait(false);
         if (!r.Ok) { _log?.Invoke($"outbound play → {target}: failed ({r.Status})"); OnRemoteCommandFailed?.Invoke(); }
     }
@@ -1226,30 +1592,42 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         catch { return null; }
     }
 
-    // set_queue: the USER-QUEUE rows under command.next_tracks. Spotify's next_tracks is the user queue (provider:"queue")
-    // FOLLOWED BY the context continuation (provider:"context"); only the queue rows belong in up-next. Context rows and
-    // spotify:delimiter markers are dropped — the context continuation is served by the resident context, not the user
-    // queue. A missing provider is treated as "queue" (our own/legacy outbound and older payloads omit it).
-    static IReadOnlyList<QueuedRef> ParseQueueTracks(byte[] payload, string field)
+    // set_queue full reconcile (F8): parse ALL of command.{field} into wire entries, preserving EVERY row — queue rows,
+    // context continuation, autoplay tail AND the delimiter / meta:page markers (the session classifies them by uri/kind).
+    // IsQueued keys on provider:"queue" or metadata is_queued:"true" (a missing provider is treated as context).
+    static IReadOnlyList<QueueWireEntry> ParseWireEntries(byte[] payload, string field)
     {
         try
         {
             using var doc = JsonDocument.Parse(payload);
             if (!doc.RootElement.TryGetProperty("command", out var c) ||
                 !c.TryGetProperty(field, out var arr) || arr.ValueKind != JsonValueKind.Array)
-                return Array.Empty<QueuedRef>();
-            var list = new List<QueuedRef>(arr.GetArrayLength());
+                return Array.Empty<QueueWireEntry>();
+            var list = new List<QueueWireEntry>(arr.GetArrayLength());
             foreach (var t in arr.EnumerateArray())
             {
                 if (t.ValueKind != JsonValueKind.Object || !t.TryGetProperty("uri", out var u) || u.GetString() is not { Length: > 0 } uri) continue;
-                if (uri == "spotify:delimiter") continue;                                            // queue/context boundary marker
-                if (t.TryGetProperty("provider", out var p) && p.GetString() == "context") continue; // context continuation, not user queue
-                list.Add(new QueuedRef(uri, t.TryGetProperty("uid", out var d) ? d.GetString() ?? "" : "",
-                    TrackProvider(t, "queue"), TrackMetadata(t)));
+                var meta = TrackMetadata(t);
+                bool queued = string.Equals(TrackProvider(t, ""), "queue", StringComparison.Ordinal)
+                    || (meta is not null && meta.TryGetValue("is_queued", out var iq) && iq == "true");
+                list.Add(new QueueWireEntry(uri, t.TryGetProperty("uid", out var d) ? d.GetString() ?? "" : "", queued, meta));
             }
             return list;
         }
-        catch { return Array.Empty<QueuedRef>(); }
+        catch { return Array.Empty<QueueWireEntry>(); }
+    }
+
+    // command.queue_revision — a bare unsigned number that can exceed Int64; kept as a string (echoed on an outbound set_queue).
+    static string ParseQueueRevisionString(byte[] payload)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(payload);
+            if (doc.RootElement.TryGetProperty("command", out var c) && c.TryGetProperty("queue_revision", out var r))
+                return r.ValueKind == JsonValueKind.String ? r.GetString() ?? "" : r.GetRawText();
+            return "";
+        }
+        catch { return ""; }
     }
 
     static string TrackProvider(JsonElement track, string fallback) =>

@@ -78,6 +78,20 @@ sealed class HoverProbe : Component
     public override Element Render() => Button.Accent("hi", () => { });
 }
 
+// ReuseGuard probe: a control carrying caller data (Count) in a plain field that opts into the frozen-props tripwire.
+// A REUSED instance whose Count changed is a frozen-prop violation (the value was frozen at mount, new one dropped).
+sealed class FrozenPropProbe : Component
+{
+    public int Count;
+    public override bool ChecksReuse => true;
+    public override void DebugCheckReuse(Component next)
+    {
+        if (next is FrozenPropProbe n && n.Count != Count)
+            ReuseGuard.Violation(this, nameof(Count), $"probe count {Count}→{n.Count}");
+    }
+    public override Element Render() => new BoxEl { Width = 10, Height = 10 };
+}
+
 // E3 — implicit BrushTransition: a logical state flip (signal → re-render with a different Fill / text Color) must
 // CROSS-FADE the displayed color over BrushTransitionMs instead of snapping (WinUI BrushTransition, 83ms).
 sealed class BrushTransitionProbe : Component
@@ -441,6 +455,27 @@ sealed class BoundItemsViewProbe : Component
                     };
                     return SelectorVisualsBound.AccentPill(scope, content);
                 }, RepeatLayout.Stack(RowH), selectionMode: ItemsSelectionMode.Multiple, selection: Selection),
+            ],
+        };
+}
+
+sealed class BoundCountSignalProbe : Component
+{
+    public readonly Signal<int> Count = new(4);
+
+    public override Element Render()
+        => new BoxEl
+        {
+            Width = 240,
+            Height = 400,
+            Children =
+            [
+                ItemsView.CreateBound(4, scope => new BoxEl
+                {
+                    MinHeight = 40f,
+                    Fill = ColorF.FromRgba(30, 30, 30),
+                    Children = [new TextEl("") { Size = 12f, Text = Prop.Of(() => "row " + scope.Index.Value) }],
+                }, RepeatLayout.Stack(40f), itemCountSignal: Count),
             ],
         };
 }
@@ -2629,6 +2664,43 @@ sealed class RespResizeProbe : Component
     }
 }
 
+// Collapsed-hero scroll-bind re-bake probe. Mirrors the artist hero's direct sticky owner: a tall scroll-content child
+// owns both PinTop and PresentedHTrailing. Changing HeroHeight while already scrolled beyond the hero forces the bind rows
+// to re-bake; the node must keep its collapsed PresentedH until the frame's continuous scroll pass re-applies the offset.
+sealed class CollapsedHeroRebakeProbe : Component
+{
+    public readonly Signal<float> HeroHeight = new(200f);
+    public NodeHandle Hero;
+
+    public override Element Render() => Embed.Comp(() => new OverlayHost { Child = Build() });
+
+    Element Build()
+    {
+        float h = HeroHeight.Value;
+        var hero = new BoxEl
+        {
+            Height = h, ClipToBounds = true, Fill = ColorF.FromRgba(60, 80, 120),
+            OnRealized = n => Hero = n,
+            ScrollBinds =
+            [
+                new() { PinTop = 0f },
+                new() { From = ScrollChannel.Offset, To = BindSink.PresentedHTrailing, Range = ScrollRange.Px(0f, h), OutStart = h, OutEnd = 0f },
+            ],
+            Children = [new BoxEl { Height = 32f, Fill = ColorF.FromRgba(220, 200, 120) }],
+        };
+        var content = new BoxEl
+        {
+            Direction = 1,
+            Children =
+            [
+                hero,
+                new BoxEl { Height = 700f, Fill = ColorF.FromRgba(30, 30, 34) },
+            ],
+        };
+        return Ui.ScrollView(content) with { Grow = 1f };
+    }
+}
+
 // Sidebar drag-resize simulation probe. Mirrors WaveeShell's resizable sidebar: a width-BOUND pane (the width is a
 // live FloatSignal binding, like _sidebarWidth) holding a tall, NON-virtual ScrollView of wrapping text rows (the
 // playlist list), beside a Grow=1 content card — all under a frozen OverlayHost (WaveeShell builds the frame once).
@@ -3426,6 +3498,43 @@ static class Slice
     // Width signal exactly as the grip's OnMove does (cursor delta → width) over 20 frames and measures, PER FRAME, the
     // ACTUAL pane width vs the EXPECTED target — the empirical "resize delta vs mouse delta" comparison — plus the
     // per-frame relayout/record cost. A 1:1 resize tracks the target exactly every frame with bounded per-frame cost.
+    static void CollapsedHeroRebakeChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("collapse-rebake", new Size2(360, 240), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var probe = new CollapsedHeroRebakeProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, probe);
+
+        host.RunFrame();
+        var s = host.Scene;
+        var vp = PlainViewport(s, s.Root);
+        var content = s.ScrollRef(vp).ContentNode;
+        ref ScrollState st = ref s.ScrollRef(vp);
+        st.OffsetY = 260f;
+        st.TargetY = 260f;
+        s.Paint(content).LocalTransform = Affine2D.Translation(0f, -260f);
+        s.Mark(content, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+        ScrollBindEval.ApplyContinuous(s, vp, ref st);
+        float collapsedBefore = s.Paint(probe.Hero).PresentedH;
+
+        probe.HeroHeight.Value = 240f;
+        host.Reconciler.Runtime.Flush();
+        float afterRebake = s.Paint(probe.Hero).PresentedH;
+
+        host.Paint(0, keepAlive: true);
+        float afterFrame = s.Paint(probe.Hero).PresentedH;
+        float afterFrameShift = s.Paint(probe.Hero).ChildShiftY;
+
+        Check("RZ-HERO. collapsed PresentedHTrailing hero stays collapsed across bind re-bake",
+            Near(collapsedBefore, 0f, 0.5f)
+            && !float.IsNaN(afterRebake) && Near(afterRebake, 0f, 0.5f)
+            && Near(afterFrame, 0f, 0.5f) && Near(afterFrameShift, -240f, 0.5f),
+            $"before={collapsedBefore:0.#} rebake={afterRebake:0.#} frame={afterFrame:0.#}/{afterFrameShift:0.#}");
+    }
+
     static void SidebarResizeSimChecks(StringTable strings)
     {
         using var app = new HeadlessPlatformApp();
@@ -3640,6 +3749,65 @@ static class Slice
         for (var c = scene.FirstChild(scene.Root); !c.IsNull; c = scene.NextSibling(c)) count++;
         bool removed = count == 2 && Child(scene, scene.Root, 0) == hA && Child(scene, scene.Root, 1) == hB;
         Check("18. keyed reconcile removes only the dropped key", removed, "[c,a,b] → [a,b]");
+    }
+
+    // Frozen-props tripwire (ReuseGuard): the reconciler reuse early-return hands the live component the would-be
+    // replacement; a control comparing its frozen scalar catches the "changed value silently dropped" bug class.
+    static void ReuseGuardChecks(StringTable strings)
+    {
+        bool prevEnabled = ReuseGuard.Enabled;
+        bool prevThrow = ReuseGuard.ThrowOnViolation;
+        ReuseGuard.Enabled = true;             // gate turns the tripwire on regardless of the FG_REUSE_GUARD env
+        ReuseGuard.ThrowOnViolation = false;   // count, don't throw (until the strict-mode sub-check)
+        try
+        {
+            static Element Probe(int n) => new BoxEl { Children = [Embed.Comp(() => new FrozenPropProbe { Count = n })] };
+            static Element ProbeKeyed(int n) => new BoxEl { Children = [Embed.Comp(() => new FrozenPropProbe { Count = n }) with { Key = "probe:" + n }] };
+
+            // (1) Fires when a frozen scalar changed on a REUSED component (unkeyed positional child, same type).
+            ReuseGuard.Reset();
+            var scene1 = new SceneStore();
+            var recon1 = new TreeReconciler(scene1, strings);
+            var a1 = Probe(1); recon1.ReconcileRoot(a1, null);
+            var a2 = Probe(5); recon1.ReconcileRoot(a2, a1);
+            Check("gate.reuse.frozen-prop-tripwire fires when a reused component's frozen field carries a changed value",
+                ReuseGuard.Violations == 1, $"violations={ReuseGuard.Violations} last={ReuseGuard.LastViolation}");
+
+            // (2) Quiet when the value is unchanged, AND quiet when a changed Key REMOUNTS the child (the re-key fix idiom).
+            ReuseGuard.Reset();
+            var scene2 = new SceneStore();
+            var recon2 = new TreeReconciler(scene2, strings);
+            var b1 = Probe(3); recon2.ReconcileRoot(b1, null);
+            var b2 = Probe(3); recon2.ReconcileRoot(b2, b1);
+            bool quietOnSame = ReuseGuard.Violations == 0;
+            var c1 = ProbeKeyed(1); recon2.ReconcileRoot(c1, b2);
+            var c2 = ProbeKeyed(5); recon2.ReconcileRoot(c2, c1);
+            bool quietOnRekey = ReuseGuard.Violations == 0;
+            Check("gate.reuse.rekey-and-unchanged do NOT trip the tripwire (remount on Key change; equal value re-render)",
+                quietOnSame && quietOnRekey, $"sameQuiet={quietOnSame} rekeyQuiet={quietOnRekey} violations={ReuseGuard.Violations}");
+
+            // (3) Strict mode throws FrozenPropException so a hard-fail path exists for CI/dev.
+            ReuseGuard.Reset();
+            ReuseGuard.ThrowOnViolation = true;
+            bool threw = false;
+            var scene3 = new SceneStore();
+            var recon3 = new TreeReconciler(scene3, strings);
+            var d1 = Probe(1); recon3.ReconcileRoot(d1, null);
+            try { var d2 = Probe(9); recon3.ReconcileRoot(d2, d1); }
+            catch (FrozenPropException) { threw = true; }
+            Check("gate.reuse.strict-throws raises FrozenPropException when ThrowOnViolation is set", threw);
+
+            // (4) Const-gated identically to RenderBudget so the whole facility erases in release.
+            Check("gate.reuse.guard-erased ReuseGuard.CompiledIn tracks the DEBUG/FLUENTGPU_DIAG erasure switch (== RenderBudget.CompiledIn)",
+                ReuseGuard.CompiledIn == FluentGpu.Hosting.RenderBudget.CompiledIn,
+                $"reuse={ReuseGuard.CompiledIn} renderBudget={FluentGpu.Hosting.RenderBudget.CompiledIn}");
+        }
+        finally
+        {
+            ReuseGuard.Enabled = prevEnabled;
+            ReuseGuard.ThrowOnViolation = prevThrow;
+            ReuseGuard.Reset();
+        }
     }
 
     // Focus + keyboard routing: Tab cycles focus, Enter activates a clickable, keys bubble (Handled stops).
@@ -5778,7 +5946,7 @@ static class Slice
         // Fix 1 — tier remount without cold stagger fills the viewport window in the remount frame.
         {
             using var app = new HeadlessPlatformApp();
-            var window = new HeadlessWindow(new WindowDesc("tier-remount", new Size2(400, 320), 1f));
+            var window = new HeadlessWindow(new WindowDesc("tier-remount", new Size2(400, 320), 1f, Composited: true));
             window.Show();
             var device = new HeadlessGpuDevice();
             var fonts = new HeadlessFontSystem(strings);
@@ -5809,7 +5977,7 @@ static class Slice
         // Fix 2 — modal-loop keep-alive must not swallow warming virtual refill when ambient animation is live.
         {
             using var app = new HeadlessPlatformApp();
-            var window = new HeadlessWindow(new WindowDesc("modal-warm", new Size2(400, 320), 1f));
+            var window = new HeadlessWindow(new WindowDesc("modal-warm", new Size2(400, 320), 1f, Composited: true));
             window.Show();
             var device = new HeadlessGpuDevice();
             var fonts = new HeadlessFontSystem(strings);
@@ -5826,12 +5994,159 @@ static class Slice
                 [new Keyframe(0f, 0.5f, Easing.Linear), new Keyframe(1f, 1f, Easing.Linear)], 1000f, loop: true);
             bool ambient = host.CurrentWakeReasons.HasFlag(WakeReasons.Anim);
             window.InModalLoop = true;
+            window.SizedInModalLoop = false;   // titlebar move (not edge resize) — ambient ticks must still paint
             host.Paint(0, keepAlive: true);
             int slots1 = BoundSlotCount(host.Scene, host.Scene.Root);
             Check("RZ-MODAL. modal-loop keep-alive preserves/refills the visible virtual window under ambient-only animation wake",
                 ambient && slots0 >= windowRows0 && slots0 >= 8 && (warming ? slots1 > slots0 : slots1 >= slots0),
                 $"warming={warming} ambient={ambient} slots {slots0}→{slots1} window={windowRows0} wake={host.CurrentWakeReasons}");
         }
+    }
+
+    // Butter-smooth resize v2 — modal defer / live non-composited / throttle / move liveness (docs/plans/butter-smooth-resize-v2.md).
+    static void ButterSmoothResizeChecks(StringTable strings)
+    {
+        // RZ-DEFER — composited edge-resize defer: HWND grows but layout/swapchain stay at last size until modal exit.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("rz-defer", new Size2(400, 320), 1f, Composited: true));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            using var host = new AppHost(app, window, device, fonts, strings, new ResizeBoxProbe());
+
+            host.RunFrame();
+            float rootHBefore = host.Scene.AbsoluteRect(host.Scene.Root).H;
+
+            window.InModalLoop = true;
+            window.SizedInModalLoop = true;
+            window.ClientSizePx = new Size2(800, 640);
+            host.Paint(0, keepAlive: true);
+            float rootHDeferred = host.Scene.AbsoluteRect(host.Scene.Root).H;
+
+            window.InModalLoop = false;
+            window.SizedInModalLoop = false;
+            host.Paint(0, keepAlive: true);
+            float rootHSettled = host.Scene.AbsoluteRect(host.Scene.Root).H;
+
+            Check("RZ-DEFER. composited modal grow keeps viewport until exit, then applies final size",
+                Near(rootHBefore, 320f, 1f) && Near(rootHDeferred, rootHBefore, 1f) && Near(rootHSettled, 640f, 1f),
+                $"rootH {rootHBefore:0.#}→{rootHDeferred:0.#}→{rootHSettled:0.#} (want 320,320,640)");
+        }
+
+        // RZ-LIVE — non-composited modal resize applies the new client size on each keep-alive tick.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("rz-live", new Size2(400, 320), 1f, Composited: false));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            using var host = new AppHost(app, window, device, fonts, strings, new ResizeBoxProbe());
+
+            host.RunFrame();
+            window.InModalLoop = true;
+            window.SizedInModalLoop = true;
+            window.ClientSizePx = new Size2(800, 640);
+            host.Paint(0, keepAlive: true);
+            float rootH = host.Scene.AbsoluteRect(host.Scene.Root).H;
+
+            Check("RZ-LIVE. non-composited modal keep-alive applies the new client size",
+                Near(rootH, 640f, 1f), $"rootH={rootH:0.#} (want 640)");
+        }
+
+        // RZ-SETTLE — settle frame presents, disables span reuse for resize, hints DWM sync.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("rz-settle", new Size2(400, 320), 1f, Composited: true));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            using var host = new AppHost(app, window, device, fonts, strings, new ResizeBoxProbe());
+
+            host.RunFrame();
+            window.InModalLoop = true;
+            window.SizedInModalLoop = true;
+            window.ClientSizePx = new Size2(800, 640);
+            host.Paint(0, keepAlive: true);
+            window.InModalLoop = false;
+            window.SizedInModalLoop = false;
+            var stats = host.Paint(0, keepAlive: true);
+
+            Check("RZ-SETTLE. modal exit settle presents with span reuse disabled for resize + settle hint",
+                stats.Presented
+                && (stats.SpanReuseDisabledReasons & SpanReuseDisabledReason.Resize) != 0
+                && device.HintSettlePresentCount == 1,
+                $"presented={stats.Presented} spanDisable={stats.SpanReuseDisabledReasons} hint={device.HintSettlePresentCount}");
+        }
+
+        // RZ-THROTTLE — 30 Hz gate for non-composited modal edge-resize paints.
+        {
+            long last = 0;
+            int paints = 0;
+            for (int step = 0; step < 10; step++)
+            {
+                long now = step * 8;
+                if (!ModalPaintThrottle.ShouldSkip(now, ref last, sized: true, minIntervalMs: 33))
+                    paints++;
+            }
+            long gapLast = 0;
+            bool gapPaint = !ModalPaintThrottle.ShouldSkip(40, ref gapLast, sized: true, minIntervalMs: 33);
+            Check("RZ-THROTTLE. 10 steps @8ms yields ≤4 paints; 40ms gap allows paint",
+                paints <= 4 && gapPaint, $"paints={paints} gapPaint={gapPaint} last={gapLast}");
+        }
+
+        // RZ-MOVE — composited titlebar move: ambient animation ticks still submit; span reuse stays enabled.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("rz-move", new Size2(400, 320), 1f, Composited: true));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            using var host = new AppHost(app, window, device, fonts, strings, new ResizeBoxProbe());
+
+            host.RunFrame();
+            host.Animation.Keyframes(host.Scene.Root, AnimChannel.Opacity,
+                [new Keyframe(0f, 0.5f, Easing.Linear), new Keyframe(1f, 1f, Easing.Linear)], 1000f, loop: true);
+            int framesBefore = device.FrameCount;
+            window.InModalLoop = true;
+            window.SizedInModalLoop = false;
+            var stats = host.Paint(0, keepAlive: true);
+
+            Check("RZ-MOVE. composited move keeps ambient modal ticks + span reuse",
+                device.FrameCount > framesBefore && stats.Presented
+                && (stats.SpanReuseDisabledReasons & SpanReuseDisabledReason.ModalPaint) == 0,
+                $"frames {framesBefore}→{device.FrameCount} presented={stats.Presented} spanDisable={stats.SpanReuseDisabledReasons}");
+        }
+
+        // RZ-MOVE2 — composited edge resize: ambient-only ticks bail; span reuse disabled for modal paint.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("rz-move2", new Size2(400, 320), 1f, Composited: true));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            using var host = new AppHost(app, window, device, fonts, strings, new ResizeBoxProbe());
+
+            host.RunFrame();
+            host.Animation.Keyframes(host.Scene.Root, AnimChannel.Opacity,
+                [new Keyframe(0f, 0.5f, Easing.Linear), new Keyframe(1f, 1f, Easing.Linear)], 1000f, loop: true);
+            int framesBefore = device.FrameCount;
+            window.InModalLoop = true;
+            window.SizedInModalLoop = true;
+            var stats = host.Paint(0, keepAlive: true);
+
+            Check("RZ-MOVE2. composited edge resize bails ambient-only ticks + disables span reuse",
+                device.FrameCount == framesBefore,
+                $"frames {framesBefore}→{device.FrameCount} (idle-skip expected)");
+        }
+    }
+
+    sealed class ResizeBoxProbe : Component
+    {
+        public override Element Render() => Embed.Comp(() => new OverlayHost
+        {
+            Child = new BoxEl { Grow = 1f, Fill = ColorF.FromRgba(20, 20, 20) },
+        });
     }
 
     // ItemsView BOUND row path (CreateBound): selection / now-playing re-skin the persistent slots IN PLACE via binds —
@@ -5988,6 +6303,28 @@ static class Slice
         bool revealOffOutside = s3.TryGetInteract(revealLayer, out var raOff) && raOff.HoverTarget < 0.01f;
         Check("IV-bound 9. the # cell reveal stays driven while the pointer is on the play button, decays only off the row",
             revealOnCatcher && revealOffOutside, $"onCatcher={revealOnCatcher} offRow={revealOffOutside}");
+
+        using var app4 = new HeadlessPlatformApp();
+        var window4 = new HeadlessWindow(new WindowDesc("bound-iv-count-signal", new Size2(640, 480), 1f));
+        window4.Show();
+        var countProbe = new BoundCountSignalProbe();
+        using var host4 = new AppHost(app4, window4, new HeadlessGpuDevice(), fonts, strings, countProbe);
+        host4.RunFrame();
+        var s4 = host4.Scene;
+        var vp4 = FindScrollNode(s4, s4.Root);
+        s4.TryGetScroll(vp4, out var sc4a);
+        int slotsA = s4.ChildCount(sc4a.ContentNode);
+        countProbe.Count.Value = 6;
+        host4.RunFrame();
+        s4.TryGetScroll(vp4, out var sc4b);
+        int slotsB = s4.ChildCount(sc4b.ContentNode);
+        countProbe.Count.Value = 3;
+        host4.RunFrame();
+        s4.TryGetScroll(vp4, out var sc4c);
+        int slotsC = s4.ChildCount(sc4c.ContentNode);
+        Check("IV-bound 10. bound ItemCount can change through a signal without remounting the list wrapper",
+            sc4a.ItemCount == 4 && sc4b.ItemCount == 6 && sc4c.ItemCount == 3 && slotsA == 4 && slotsB == 6 && slotsC == 3,
+            $"counts {sc4a.ItemCount}->{sc4b.ItemCount}->{sc4c.ItemCount} slots {slotsA}->{slotsB}->{slotsC}");
     }
 
     static void VirtualChecks(StringTable strings)
@@ -20699,12 +21036,15 @@ static class Slice
         ShellDockChecks(strings);
         ShellResizeChecks(strings);
         DetailResizeFlickerChecks(strings);
+        ButterSmoothResizeChecks(strings);
         ResponsiveResizeChecks(strings);
+        CollapsedHeroRebakeChecks(strings);
         SidebarResizeSimChecks(strings);
         ShellSidebarScrollChecks(strings);
         HookChecks();
         ValidationChecks();
         KeyedChecks(strings);
+        ReuseGuardChecks(strings);
         KeyboardChecks(strings);
         AnimChecks();
         ExpressiveMotionChecks(strings);

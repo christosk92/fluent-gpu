@@ -33,31 +33,31 @@ sealed class SpotifyAlbumEnrichmentService : IAlbumEnrichmentService
         _log = log;
     }
 
-    public async Task<Artist?> GetAboutArtistAsync(string artistUri, string leadTrackUri, CancellationToken ct = default)
+    public async Task<NowPlayingInfo?> GetNowPlayingInfoAsync(string artistUri, string trackUri, CancellationToken ct = default)
     {
-        if (artistUri.Length == 0 || leadTrackUri.Length == 0) return _store.GetArtist(artistUri);
-        using var doc = await _pathfinder.QueryAsync(PathfinderOps.QueryNpvArtist, PathfinderOps.QueryNpvArtistHash,
+        if (artistUri.Length == 0 || trackUri.Length == 0)
+            return new NowPlayingInfo(_store.GetArtist(artistUri), null);
+
+        using var doc = await _pathfinder.UseQueryAsync(PathfinderOps.QueryNpvArtist, PathfinderOps.QueryNpvArtistHash,
             w =>
             {
                 w.WriteString("artistUri", artistUri);
-                w.WriteString("trackUri", leadTrackUri);
+                w.WriteString("trackUri", trackUri);
                 w.WriteNumber("contributorsLimit", 10);
                 w.WriteNumber("contributorsOffset", 0);
                 w.WriteBoolean("enableRelatedVideos", true);
                 w.WriteBoolean("enableRelatedAudioTracks", true);
             }, PathfinderClient.Platform.WebPlayer, ct).ConfigureAwait(false);
-        if (doc is null) return _store.GetArtist(artistUri);
+        if (doc is null) return new NowPlayingInfo(_store.GetArtist(artistUri), null);
 
         var mapped = SpotifyExportMapper.ArtistFromNpv(doc.RootElement);
-        if (mapped is null) return _store.GetArtist(artistUri);
-        // NPV is a thinner artist shape than the full overview — keep any richer facets we already cached.
-        mapped = mapped with
-        {
-            Bio = Excerpt(mapped.Bio),
-        };
-        _store.UpsertArtist(mapped);
-        return _store.GetArtist(artistUri) ?? mapped;
+        if (mapped is not null) _store.UpsertArtist(mapped);
+        var about = _store.GetArtist(artistUri) ?? mapped;
+        return new NowPlayingInfo(about, SpotifyExportMapper.TrackNpvFromResponse(doc.RootElement));
     }
+
+    public async Task<Artist?> GetAboutArtistAsync(string artistUri, string leadTrackUri, CancellationToken ct = default)
+        => (await GetNowPlayingInfoAsync(artistUri, leadTrackUri, ct).ConfigureAwait(false))?.About;
 
     public async Task<IReadOnlyList<Artist>> GetRelatedArtistsAsync(string artistUri, CancellationToken ct = default)
     {
@@ -151,8 +151,22 @@ sealed class SpotifyAlbumEnrichmentService : IAlbumEnrichmentService
                 string owner = meta.Source.Length > 0 ? TitleCase(meta.Source) : "Spotify";
                 result.Add(new PlaylistSummary(uri, meta.Name, owner, 0, cover));
                 // Project a partial playlist so clicking the card opens with an immediate hero (tracks hydrate on open).
-                _store.UpsertPlaylist(new Playlist(Id(uri), uri, meta.Name,
-                    SpotifyExportMapper.HtmlText(meta.Description) is { Length: > 0 } desc ? desc : null, owner, cover, 0, Source: "spotify"));
+                // Never clobber a resident header's capabilities/owner/membership — home cards only refresh display fields.
+                string? desc = SpotifyExportMapper.HtmlText(meta.Description) is { Length: > 0 } d ? d : null;
+                var existing = _store.GetPlaylist(uri);
+                if (existing is { } ex)
+                {
+                    _store.UpsertPlaylist(ex with
+                    {
+                        Name = meta.Name,
+                        Description = desc ?? ex.Description,
+                        Cover = cover ?? ex.Cover,
+                    });
+                }
+                else
+                {
+                    _store.UpsertPlaylist(new Playlist(Id(uri), uri, meta.Name, desc, owner, cover, 0, Source: "spotify"));
+                }
             }
             catch (InvalidProtocolBufferException ex) { _log?.Invoke("LIST_METADATA_V2 parse: " + ex.Message); }
         }

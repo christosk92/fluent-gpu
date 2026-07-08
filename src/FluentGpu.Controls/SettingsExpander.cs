@@ -168,13 +168,15 @@ sealed class SettingsExpanderCore : Component
             },
         };
 
-        return Embed.Comp(() => new Expander
-        {
-            HeaderContent = headerCard,
-            Content = items,
-            InitiallyExpanded = o.InitiallyExpanded,
-            IsExpanded = o.IsExpanded,
-            Parts = parts,
-        });
+        // Deliver the (freshly rebuilt) header/content/parts to the Expander through its slots context — NOT as
+        // constructor args. The Expander is an autonomous component whose factory is discarded on reuse, so field
+        // values are frozen at first mount; routing through the provider keeps dynamic content (e.g. a live equalizer
+        // curve) reactive across parent re-renders. Only the stable open-state stays on the (frozen) fields.
+        return Ctx.Provide(Expander.SlotsChannel, new Expander.ExpanderSlots(headerCard, items, parts),
+            Embed.Comp(() => new Expander
+            {
+                InitiallyExpanded = o.InitiallyExpanded,
+                IsExpanded = o.IsExpanded,
+            }));
     }
 }

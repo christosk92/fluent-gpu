@@ -49,13 +49,17 @@ public static class PlaylistWireMapper
                 case Pl.Op.Types.Kind.Rem when op.Rem is { } rem:
                     list.Add(rem.ItemsAsKey
                         ? new PlaylistOp(PlaylistOpKind.Remove, Items: ToMembers(rem.Items), ItemsAsKey: true)
-                        : new PlaylistOp(PlaylistOpKind.Remove, FromIndex: rem.FromIndex, Length: rem.Length));
+                        : new PlaylistOp(PlaylistOpKind.Remove, FromIndex: rem.FromIndex, Length: rem.Length,
+                            Items: rem.Items.Count > 0 ? ToMembers(rem.Items) : null));
                     break;
                 case Pl.Op.Types.Kind.Mov when op.Mov is { } mov:
                     list.Add(new PlaylistOp(PlaylistOpKind.Move, FromIndex: mov.FromIndex, Length: mov.Length, ToIndex: mov.ToIndex));
                     break;
                 case Pl.Op.Types.Kind.UpdateItemAttributes when op.UpdateItemAttributes is { } u:
                     list.Add(new PlaylistOp(PlaylistOpKind.UpdateItem, FromIndex: u.Index, Items: AttrMember(u.NewAttributes)));
+                    break;
+                case Pl.Op.Types.Kind.UpdateListAttributes when op.UpdateListAttributes is { } u:
+                    list.Add(new PlaylistOp(PlaylistOpKind.UpdateList, ListPatch: PatchOf(u.NewAttributes)));
                     break;
                 case Pl.Op.Types.Kind.UpdateListAttributes:
                     list.Add(new PlaylistOp(PlaylistOpKind.UpdateList));
@@ -72,6 +76,57 @@ public static class PlaylistWireMapper
         return list;
     }
 
+    static PlaylistListAttributePatch? PatchOf(Pl.ListAttributesPartialState? s)
+    {
+        if (s is null) return null;
+        string? name = null, desc = null;
+        byte[]? picture = null;
+        bool? collab = null;
+        bool clearPic = false, clearName = false, clearDesc = false;
+        if (s.Values is { } values)
+        {
+            if (values.HasName) name = values.Name;
+            if (values.HasDescription) desc = values.Description;
+            if (values.Picture.Length > 0) picture = values.Picture.ToByteArray();
+            if (values.HasCollaborative) collab = values.Collaborative;
+        }
+        foreach (var nv in s.NoValue)
+        {
+            switch (nv)
+            {
+                case Pl.ListAttributeKind.ListPicture: clearPic = true; break;
+                case Pl.ListAttributeKind.ListName: clearName = true; break;
+                case Pl.ListAttributeKind.ListDescription: clearDesc = true; break;
+                case Pl.ListAttributeKind.ListCollaborative: collab = false; break;
+            }
+        }
+        if (name is null && desc is null && picture is null && collab is null && !clearPic && !clearName && !clearDesc)
+            return new PlaylistListAttributePatch();
+        return new PlaylistListAttributePatch(name, desc, picture, clearPic, collab, clearName, clearDesc);
+    }
+
+    static Pl.ListAttributesPartialState PartialOf(PlaylistListAttributePatch patch)
+    {
+        var partial = new Pl.ListAttributesPartialState();
+        var hasValues = patch.Name is not null || patch.Description is not null || patch.PictureBytes is { Length: > 0 }
+            || patch.Collaborative is not null;
+        if (hasValues)
+        {
+            var v = new Pl.ListAttributes();
+            if (patch.Name is not null) v.Name = patch.Name;
+            if (patch.Description is not null) v.Description = patch.Description;
+            if (patch.PictureBytes is { Length: > 0 }) v.Picture = ByteString.CopyFrom(patch.PictureBytes);
+            if (patch.Collaborative is not null) v.Collaborative = patch.Collaborative.Value;
+            partial.Values = v;
+        }
+        if (patch.ClearPicture) partial.NoValue.Add(Pl.ListAttributeKind.ListPicture);
+        if (patch.ClearName) partial.NoValue.Add(Pl.ListAttributeKind.ListName);
+        if (patch.ClearDescription) partial.NoValue.Add(Pl.ListAttributeKind.ListDescription);
+        // Collaborative=false travels as values.collaborative=false (HasCollaborative round-trips it) — never ALSO as
+        // a no_value entry; emitting both made emit/parse asymmetric.
+        return partial;
+    }
+
     static IReadOnlyList<PlaylistMember> AttrMember(Pl.ItemAttributesPartialState s)
     {
         var a = s.Values;
@@ -83,9 +138,15 @@ public static class PlaylistWireMapper
     // ── write direction: domain ops → the ListChanges body POSTed to /playlist/v2/{path}/changes ──
     /// <summary>Serialize an edit (ops against a base revision) into the ListChanges wire body.</summary>
     public static byte[] BuildChanges(byte[]? baseRev, IReadOnlyList<PlaylistOp> ops)
+        => BuildChanges(baseRev, ops, "", 0);
+
+    /// <summary>Serialize a playlist edit with captured <see cref="Pl.ChangeInfo"/> and want-flags.</summary>
+    public static byte[] BuildChanges(byte[]? baseRev, IReadOnlyList<PlaylistOp> ops, string username, long nowMs)
     {
-        var changes = new Pl.ListChanges();
+        var changes = new Pl.ListChanges { WantResultingRevisions = true };
         var delta = new Pl.Delta();
+        if (!string.IsNullOrEmpty(username) || nowMs > 0)
+            delta.Info = new Pl.ChangeInfo { User = username, Timestamp = nowMs, Admin = true, Undo = true, Merge = true };
         if (baseRev is not null)
         {
             var rev = ByteString.CopyFrom(baseRev);
@@ -131,7 +192,13 @@ public static class PlaylistWireMapper
         PlaylistOpKind.Add => new Pl.Op { Kind = Pl.Op.Types.Kind.Add, Add = BuildAdd(op, rootlistPublic) },
         PlaylistOpKind.Remove => new Pl.Op { Kind = Pl.Op.Types.Kind.Rem, Rem = BuildRem(op) },
         PlaylistOpKind.Move => new Pl.Op { Kind = Pl.Op.Types.Kind.Mov, Mov = new Pl.Mov { FromIndex = op.FromIndex, Length = op.Length, ToIndex = op.ToIndex } },
-        PlaylistOpKind.UpdateList => new Pl.Op { Kind = Pl.Op.Types.Kind.UpdateListAttributes },
+        PlaylistOpKind.UpdateList => new Pl.Op
+        {
+            Kind = Pl.Op.Types.Kind.UpdateListAttributes,
+            UpdateListAttributes = op.ListPatch is { } patch
+                ? new Pl.UpdateListAttributes { NewAttributes = PartialOf(patch) }
+                : null,
+        },
         _ => new Pl.Op { Kind = Pl.Op.Types.Kind.Unknown },
     };
 
@@ -139,11 +206,23 @@ public static class PlaylistWireMapper
     // server resolves the row regardless of local position drift from the optimistic edit. Index REM stays the edit path.
     static Pl.Rem BuildRem(PlaylistOp op)
     {
-        if (!op.ItemsAsKey) return new Pl.Rem { FromIndex = op.FromIndex, Length = op.Length };
-        var rem = new Pl.Rem { ItemsAsKey = true };
-        if (op.Items is { } items)
-            for (int i = 0; i < items.Count; i++) rem.Items.Add(new Pl.Item { Uri = items[i].ItemUri });
-        return rem;
+        if (!op.ItemsAsKey)
+        {
+            var rem = new Pl.Rem { FromIndex = op.FromIndex, Length = op.Length };
+            if (op.Items is { Count: > 0 } items)
+                for (int i = 0; i < items.Count; i++)
+                    rem.Items.Add(new Pl.Item
+                    {
+                        Uri = items[i].ItemUri,
+                        Attributes = string.IsNullOrEmpty(items[i].ItemId) ? null
+                            : new Pl.ItemAttributes { ItemId = ByteString.CopyFrom(Convert.FromHexString(items[i].ItemId)) },
+                    });
+            return rem;
+        }
+        var keyed = new Pl.Rem { ItemsAsKey = true };
+        if (op.Items is { } keyedItems)
+            for (int i = 0; i < keyedItems.Count; i++) keyed.Items.Add(new Pl.Item { Uri = keyedItems[i].ItemUri });
+        return keyed;
     }
 
     // ADD items carry ItemAttributes when the member supplies add facts (timestamp/added_by) — the reference sends a

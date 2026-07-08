@@ -63,6 +63,17 @@ public sealed class SplitButton : Component
     public static Element Create(Element primaryContent, Action onInvoke, IReadOnlyList<MenuFlyoutItem> items, bool isEnabled = true)
         => Embed.Comp(() => new SplitButton { PrimaryContent = primaryContent, OnInvoke = onInvoke, Items = items, IsEnabled = isEnabled });
 
+    // Frozen-props tripwire (ReuseGuard): Label/Glyph/IsEnabled freeze at mount (PrimaryContent/Items are element/list
+    // slots — deliver those via a provider). A reused instance whose scalar caller-data changed is the frozen-props bug.
+    public override bool ChecksReuse => ReuseGuard.CompiledIn;
+    public override void DebugCheckReuse(Component next)
+    {
+        if (next is not SplitButton n) return;
+        if (n.Label != Label) ReuseGuard.ScalarChanged(this, nameof(Label));
+        else if (n.Glyph != Glyph) ReuseGuard.ScalarChanged(this, nameof(Glyph));
+        else if (n.IsEnabled != IsEnabled) ReuseGuard.ScalarChanged(this, nameof(IsEnabled));
+    }
+
     public override Element Render()
     {
         var anchor = UseRef<NodeHandle>(default);

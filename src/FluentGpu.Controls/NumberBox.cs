@@ -126,6 +126,11 @@ public sealed class NumberBox : Component
     // ── Factories ────────────────────────────────────────────────────────────────────────────────────────────────
     // The full factory leads with `Signal<double>? value` so it never collides with the legacy (double,double) overloads.
 
+    /// <summary>LIVE enabled flag (provider idiom): <see cref="IsEnabled"/> is a plain field that freezes at mount via
+    /// <c>Embed.Comp</c>, so a toggle enabling/disabling the box would be dropped. <see cref="Create"/> routes it
+    /// through this provider; the frozen field is the fallback for direct callers.</summary>
+    internal static readonly Context<bool?> EnabledChannel = new(null);
+
     /// <summary>Full WinUI-aligned factory.</summary>
     public static Element Create(
         Signal<double>? value = null, double initial = double.NaN,
@@ -138,7 +143,7 @@ public sealed class NumberBox : Component
         float width = 120f, Func<double, string>? formatter = null, Action<double, double>? onValueChanged = null,
         Signal<string>? text = null, Func<string, double?>? parser = null, bool isEnabled = true,
         Field<double>? field = null)
-        => Embed.Comp(() => new NumberBox
+        => Ctx.Provide(EnabledChannel, isEnabled, Embed.Comp(() => new NumberBox
         {
             Value = value, Initial = initial, Minimum = minimum, Maximum = maximum,
             SmallChange = smallChange, LargeChange = largeChange,
@@ -147,7 +152,7 @@ public sealed class NumberBox : Component
             PlaceholderText = placeholderText, Header = header, Description = description,
             Width = width, Formatter = formatter, OnValueChanged = onValueChanged,
             Text = text, Parser = parser, IsEnabled = isEnabled, Field = field,
-        });
+        }));
 
     /// <summary>Legacy: an editable numeric field with NO spin buttons (WinUI default). <paramref name="step"/> maps to SmallChange.</summary>
     public static Element Create(double initial = 0, double step = 1)
@@ -194,6 +199,8 @@ public sealed class NumberBox : Component
 
     public override Element Render()
     {
+        // Reactive enabled flag (provider wins over the frozen field); shadowing local so downstream reads are live.
+        bool IsEnabled = UseContext(EnabledChannel) ?? this.IsEnabled;
         var s = StyleOverride ?? DefaultStyle;
         var fallbackValue = UseSignal(Initial);
         var value = Value ?? fallbackValue;

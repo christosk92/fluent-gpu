@@ -34,9 +34,9 @@ public static class SpotifyLibrarySync
         var metadata = new MetadataService(new ExtendedMetadataSource(live.Pipeline, () => live.BaseUrl, () => live.Session), store, () => live.Session);
         Task Hydrate(IReadOnlyList<string> uris, CancellationToken c) => metadata.SyncAllAsync(uris, c);
 
-        var mutEngine = new MutationEngine(store, new IMutationStrategy[] { new SetReplayStrategy(), new OpRebaseStrategy(store), new RootlistFollowStrategy(store) }, cold);
+        var mutEngine = new MutationEngine(store, new IMutationStrategy[] { new SetReplayStrategy(), new OpRebaseStrategy(store, () => live.BaseUrl), new RootlistFollowStrategy(store) }, cold);
         var sessionHost = new SessionContextHost(new SessionContext(live.Username, "US", "premium", "en", Tier.Premium, false));
-        var playlistFetcher = new PlaylistFetcher(live.Pipeline, () => live.BaseUrl, store, Hydrate);
+        var playlistFetcher = new PlaylistFetcher(live.Pipeline, () => live.BaseUrl, store, Hydrate, () => live.Username);
         var collectionFetcher = new CollectionFetcher(live.Pipeline, () => live.BaseUrl, () => live.Username, store,
             s => cold.GetCollectionRevision(s), (s, r) => cold.SetCollectionRevision(s, r, DateTimeOffset.UtcNow.ToUnixTimeSeconds()), Hydrate,
             (s, u) => mutEngine.HasPending(s, u));

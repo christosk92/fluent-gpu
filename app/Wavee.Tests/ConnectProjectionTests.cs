@@ -207,4 +207,32 @@ public class ConnectProjectionTests
         Assert.False(p.CanSeek);
         Assert.Equal(0.25, p.Volume, 2);   // 16384/65535 ≈ 0.25 (the active device's volume)
     }
+
+    [Fact]
+    public void OnCluster_ViewerQueue_SplitsProviders_MapsHistory_AndDropsDelimiters()
+    {
+        var p = new NowPlayingProjection("us", () => 0);
+        p.OnCluster(Cluster("other", playing: true, Trk("spotify:track:now", "Now", 1000)) with
+        {
+            NextTracks = new[]
+            {
+                new RemoteTrack("spotify:track:uq", "Queued", "Artist", "spotify:artist:a", "Album", "spotify:album:al", null, 0, Uid: "u1", Provider: "queue"),
+                new RemoteTrack("spotify:delimiter", "", "", "", "", "", null, 0, Uid: "", Provider: "context"),
+                new RemoteTrack("spotify:track:cx", "Context", "Artist", "spotify:artist:a", "Album", "spotify:album:al", null, 0, Uid: "u2", Provider: "context"),
+                new RemoteTrack("spotify:track:ap", "Radio", "Artist", "spotify:artist:a", "Album", "spotify:album:al", null, 0, Uid: "u3", Provider: "autoplay"),
+            },
+            PrevTracks = new[]
+            {
+                new RemoteTrack("spotify:track:h1", "Old", "Artist", "spotify:artist:a", "Album", "spotify:album:al", null, 0, Uid: "u0", Provider: "context"),
+            },
+        });
+
+        Assert.Equal(QueueBucket.UserQueue, Assert.Single(p.Queue, e => e.Track.Uri == "spotify:track:uq").Bucket);
+        Assert.Equal(QueueBucket.NextUp, Assert.Single(p.Queue, e => e.Track.Uri == "spotify:track:cx").Bucket);
+        var autoplay = Assert.Single(p.Queue, e => e.Track.Uri == "spotify:track:ap");
+        Assert.Equal(QueueBucket.NextUp, autoplay.Bucket);
+        Assert.True(autoplay.IsAutoplay);
+        Assert.Equal(QueueBucket.History, Assert.Single(p.Queue, e => e.Track.Uri == "spotify:track:h1").Bucket);
+        Assert.DoesNotContain(p.Queue, e => e.Track.Uri == "spotify:delimiter");
+    }
 }

@@ -52,10 +52,14 @@ static class Program
 
         // ── Global crash net (the two process-level handlers; the UI-thread one lives in the engine loop) ─────────────
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+        {
             WaveeLog.Instance.Critical("crash", $"Unhandled exception (terminating={e.IsTerminating})", e.ExceptionObject as Exception);
+            WaveeLog.Instance.Flush();
+        };
         TaskScheduler.UnobservedTaskException += (_, e) =>
         {
             WaveeLog.Instance.Error("crash", "Unobserved task exception", e.Exception);
+            WaveeLog.Instance.Flush();
             e.SetObserved();
         };
 
@@ -194,6 +198,7 @@ static class Program
         // the live OS theme for a fresh install (mode == System). FluentApp.Run then applies the matching Mica material
         // and the in-app surfaces mount with the right tokens; the store is reused by the app so there's one instance.
         var settings = AppDataSettings.ForUnpackaged("Wavee", "Wavee");
+        CrashDumpProbe.LogPendingCrashDump(settings, WaveeLog.Instance);
         int themeMode = settings.Get(WaveeSettings.ThemeMode);
         var themeKind = themeMode switch { 1 => ThemeKind.Light, 2 => ThemeKind.Dark, _ => FluentApp.SystemUsesLightTheme() ? ThemeKind.Light : ThemeKind.Dark };
         Tok.Use(WaveeTheme.ResolvePalette(settings.Get(WaveeSettings.PaletteId)), themeKind);
@@ -239,6 +244,20 @@ static class Program
         catch (Exception ex)
         {
             WaveeLog.Instance.Critical("app", "Fatal error in the app loop", ex);
+            WaveeLog.Instance.Flush();
+            string reportPath = "";
+            try { reportPath = CrashReport.Write(ex, WaveeLog.Instance.FilePath); }
+            catch { }
+            try
+            {
+                var body = "Wavee crashed.\n\n"
+                         + (reportPath.Length > 0 ? "Crash report: " + reportPath + "\n" : "")
+                         + (WaveeLog.Instance.FilePath is { Length: > 0 } lp ? "Log: " + lp + "\n" : "")
+                         + "\nOpen the report folder now?";
+                if (StartupNotice.ErrorYesNo("Oops! Wavee crashed", body) && reportPath.Length > 0)
+                    ShellOpen.OpenFolderOf(reportPath);
+            }
+            catch { }
             throw;
         }
         WaveeLog.Instance.Info("app", "Wavee exiting");

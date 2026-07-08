@@ -47,6 +47,9 @@ public sealed class Services
     /// <summary>The engine-backed Mutations seam adapter (REAL backend only) — exposed so go-live can route its post-write
     /// drains through the sync loop (§6, <c>ScheduleDrain</c>) and GoOffline can reset them to inline.</summary>
     public Wavee.Backend.EngineMutationSource? RealMutationSource { get; private set; }
+    /// <summary>Spotify playlist item/metadata/cover edits (REAL backend only).</summary>
+    public Wavee.Backend.Playlists.PlaylistMutationSource? RealPlaylistMutations { get; private set; }
+    public Wavee.Backend.SpclientBaseUrlHolder? RealSpclientBaseUrl { get; private set; }
 
     /// <summary>The live Connect session host (REAL backend, after a successful login) — captured for logout teardown.
     /// Set via <see cref="AttachLive"/> BEFORE <see cref="GoLive"/> so a logout in the go-live window still tears down the
@@ -93,7 +96,7 @@ public sealed class Services
 
     Services(IWaveeLog log, ISpotifySession session, IMusicLibrary library,
              IPlaybackPlayer player, IConnectDevices devices, ILyricsProvider lyrics, IAppSettings settings, IMutationSource mutations,
-             UserPlaylistSource userPlaylists)
+             UserPlaylistSource userPlaylists, IPlaylistMutationSource playlistEdits)
     {
         Log = log;
         Session = session;
@@ -107,7 +110,7 @@ public sealed class Services
         UserProfiles = new SwitchableUserProfileService(new NullUserProfileService());
         Settings = settings;
         Playback = new PlaybackBridge(player, devices, session);
-        LibraryBridge = new LibraryBridge(mutations, userPlaylists);
+        LibraryBridge = new LibraryBridge(mutations, userPlaylists, playlistEdits);
         LibraryStore = new LibraryStore(library, mutations, userPlaylists, library as ICollectionEvents);
         // Wire the detail caches as a sheddable arena (priority 2 = shed under MODERATE+ pressure, so at-rest A→B→A stays
         // instant; the LRU insert-cap already bounds steady state). The entity-store "unpinned drop" (priority 3/4) is the
@@ -141,6 +144,7 @@ public sealed class Services
 
         // User-created playlists (the playlist-edit Mutations): a catalog source owning wavee:playlist:*.
         var userPlaylists = new UserPlaylistSource();
+        var playlistEdits = new LocalPlaylistMutationSource(userPlaylists);
 
         // The unified source registry (docs/architecture.md §4.3): every connected catalog source + the facets it declares.
         // Playback/Lyrics/Remote are NOT in-process sources anymore (local playback is unsupported; the roster is the live
@@ -156,7 +160,7 @@ public sealed class Services
             session,                           // Session (auth / account / market)
         });
         var library = new AggregateCatalog(registry);
-        var svc = new Services(WaveeLog.Instance, session, library, player, devices, new NoLyricsProvider(), settings, mutations, userPlaylists);
+        var svc = new Services(WaveeLog.Instance, session, library, player, devices, new NoLyricsProvider(), settings, mutations, userPlaylists, playlistEdits);
         player.OnPlayIntentRejected = () => svc.Playback.NotifyLocalPlaybackUnsupported();   // any play intent → the standard toast
         svc.Log.Info("app", "Services created (sources: spotify-export, local-files, user-playlists, podcasts, fake + session facet; playback remote-only; mutations: saved-state + playlists)");
         return svc;
@@ -184,9 +188,15 @@ public sealed class Services
         // The collection self-write echo registry (§7.1): the write strategy records accepted-write cuids; the sync loop
         // drops our own echoes. One instance shared between the write path and the read loop (wired below on go-live).
         var echoRing = new Wavee.Backend.Collections.CollectionEchoRing();
+        var spclientBaseUrl = new Wavee.Backend.SpclientBaseUrlHolder();
         // The durable, multi-set mutation engine (set saves + playlist OpRebase edits) behind the IMutationSource seam.
         var mutEngine = new Wavee.Backend.MutationEngine(store,
-            new Wavee.Backend.IMutationStrategy[] { new Wavee.Backend.SetReplayStrategy(echoRing), new Wavee.Backend.OpRebaseStrategy(store), new Wavee.Backend.RootlistFollowStrategy(store) }, cold);
+            new Wavee.Backend.IMutationStrategy[]
+            {
+                new Wavee.Backend.SetReplayStrategy(echoRing),
+                new Wavee.Backend.OpRebaseStrategy(store, () => spclientBaseUrl.Value),
+                new Wavee.Backend.RootlistFollowStrategy(store),
+            }, cold);
         // The mutation transport is SWITCHABLE (stub → live dealer on go-live, back to stub on logout) so writes made while
         // logged out queue durably and replay on next login (§2.1); the drain binds to this stable facade once.
         var mutTransport = new Wavee.Backend.SwitchableTransport(new Wavee.Backend.StubTransport());
@@ -198,6 +208,9 @@ public sealed class Services
         // and the user-created playlists source (owns wavee:playlist:*).
         var storeLibrary = new Wavee.Backend.Library.StoreLibrarySource(store);
         var userPlaylists = new UserPlaylistSource();
+        var playlistMutations = new Wavee.Backend.Playlists.PlaylistMutationSource(
+            mutEngine, mutTransport, new Wavee.Backend.Spotify.HttpClientExchange(), () => sessionHost.Current,
+            () => spclientBaseUrl.Value, userPlaylists);
 
         var registry = new SourceRegistry(new ISource[]
         {
@@ -214,7 +227,7 @@ public sealed class Services
         var swDevices = new Wavee.Backend.SwitchableDevices(devices);
         var swSession = new Wavee.Backend.SwitchableSession(session);
         var swLyrics = new Wavee.Backend.SwitchableLyrics(new NoLyricsProvider());   // swapped to the real AggregatingLyricsProvider on live login
-        var svc = new Services(WaveeLog.Instance, swSession, library, swPlayer, swDevices, swLyrics, settings, mutations, userPlaylists);
+        var svc = new Services(WaveeLog.Instance, swSession, library, swPlayer, swDevices, swLyrics, settings, mutations, userPlaylists, playlistMutations);
         player.OnPlayIntentRejected = () => svc.Playback.NotifyLocalPlaybackUnsupported();   // pre-go-live: play intents show the "choose a remote device" toast
         svc.RealStore = store;
         svc.RealLibrarySource = storeLibrary;
@@ -225,6 +238,8 @@ public sealed class Services
         svc.RealSessionHost = sessionHost;
         svc.EchoRing = echoRing;
         svc.RealMutationSource = mutations;
+        svc.RealPlaylistMutations = playlistMutations;
+        svc.RealSpclientBaseUrl = spclientBaseUrl;
         svc.Log.Info("app", "Services created (REAL backend: persistent Store + StoreLibrarySource + durable multi-set mutations; live session/fetch/dealer connect on bootstrap)");
         return svc;
     }
@@ -266,6 +281,12 @@ public sealed class Services
         UserProfiles.SetInner(new NullUserProfileService());
         MutTransport?.SetInner(new Wavee.Backend.StubTransport());   // writes return to the inert stub (queue in the durable outbox, replay on next login)
         if (RealMutationSource is { } mutSrc) mutSrc.ScheduleDrain = null;   // back to inline drains — the loop is torn down with the host
+        if (RealPlaylistMutations is { } pmSrc)
+        {
+            pmSrc.ScheduleDrain = null;
+            pmSrc.SetHttp(new Wavee.Backend.Spotify.HttpClientExchange());   // drop the live pipeline (session-bound auth) with the host
+        }
+        if (RealSpclientBaseUrl is { } baseUrl) baseUrl.Value = "";   // no spclient until the next go-live
         RealSync = null;
         LiveHost = null;
         CredStore = null;

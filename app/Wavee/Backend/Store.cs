@@ -144,7 +144,7 @@ static class StoreEntityMerge
             TopTracks = Has(incoming.TopTracks) ? incoming.TopTracks : current.TopTracks,
             AppearsOn = Has(incoming.AppearsOn) ? incoming.AppearsOn : current.AppearsOn,
             Pinned = incoming.Pinned ?? current.Pinned,
-            Extras = incoming.Extras ?? current.Extras,
+            Extras = MergeExtras(current.Extras, incoming.Extras),
             Palette = incoming.Palette ?? current.Palette,   // a thin write (no palette) must not drop a full-overview palette
             // Per-facet discography totals: a thin write (0 = unknown) must not drop a full-overview's real total.
             AlbumsTotal = incoming.AlbumsTotal > 0 ? incoming.AlbumsTotal : current.AlbumsTotal,
@@ -169,6 +169,22 @@ static class StoreEntityMerge
             merged.Add(Artist(prior, artist));
         }
         return merged;
+    }
+
+    static ArtistExtras? MergeExtras(ArtistExtras? current, ArtistExtras? incoming)
+    {
+        if (incoming is null) return current;
+        if (current is null) return incoming;
+        return new ArtistExtras(
+            Concerts: Has(incoming.Concerts) ? incoming.Concerts : current.Concerts,
+            Merch: Has(incoming.Merch) ? incoming.Merch : current.Merch,
+            Playlists: Has(incoming.Playlists) ? incoming.Playlists : current.Playlists,
+            MusicVideos: Has(incoming.MusicVideos) ? incoming.MusicVideos : current.MusicVideos,
+            TopCities: Has(incoming.TopCities) ? incoming.TopCities : current.TopCities,
+            ExternalLinks: Has(incoming.ExternalLinks) ? incoming.ExternalLinks : current.ExternalLinks,
+            Gallery: Has(incoming.Gallery) ? incoming.Gallery : current.Gallery,
+            Related: Has(incoming.Related) ? incoming.Related : current.Related,
+            Tour: incoming.Tour ?? current.Tour);
     }
 
     static AlbumRef MergeAlbumRef(AlbumRef current, AlbumRef incoming) => new(

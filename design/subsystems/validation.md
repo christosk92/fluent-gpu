@@ -1212,6 +1212,23 @@ row wall.
   half is **Windows-gated**; the relation-math + realization-trigger halves are portable (driven through the
   harness's `NavigateTo` against the real provider state machine).
 
+### 12.11bis Butter-smooth resize gates (`FluentGpu.VerticalSlice` — `ButterSmoothResizeChecks`)
+
+Headless PAL models Win32 modal policy (`Composited`, `SizedInModalLoop`, `InModalLoop`). Wavee breakpoint
+hysteresis is covered separately in `app/Wavee.Tests` (`DetailLayoutBreakpointTests`).
+
+| Gate | Assert |
+|---|---|
+| `RZ-DEFER.` | Composited + modal edge grow → viewport unchanged; exit modal → final size applied |
+| `RZ-LIVE.` | Non-composited + modal → keep-alive applies new client size (no defer bug) |
+| `RZ-SETTLE.` | Settle presents; span reuse disabled for `Resize`; `HintSettlePresent` honored |
+| `RZ-THROTTLE.` | `ModalPaintThrottle`: 10 steps @8 ms → ≤4 paints; 40 ms gap → paint |
+| `RZ-MOVE.` | Composited move (`SizedInModalLoop=false`) → ambient modal tick submits; no `ModalPaint` span disable |
+| `RZ-MOVE2.` | Composited edge resize (`SizedInModalLoop=true`) → ambient-only tick idle-skips |
+| `RZ-TIER.` / `RZ-MODAL.` | Detail resize flicker contract (tier remount + modal warming refill); composited move modeling |
+
+On-device: screen-record Wavee (composited) + gallery (non-composited) per `docs/plans/butter-smooth-resize-v2.md` §2.2.
+
 ### 12.12 Companion folded-gap gates (P5, P6, L8, L9, L10, L11, P8, P9)
 
 These folded gaps get gates too — leaner, but always-on:

@@ -132,6 +132,8 @@ public sealed class EditableText : Component
     public bool IsReadOnly;
     /// <summary>Multi-line: Enter inserts '\r' (Ctrl+Enter commits), Up/Down/Page navigate lines, text wraps.</summary>
     public bool AcceptsReturn;
+    /// <summary>On focus gain, place the caret at the document end (inline rename fields — shows the tail of long text).</summary>
+    public bool PlaceCaretAtEndOnFocus;
     /// <summary>Show the WinUI TextBox DeleteButton (✕, glyph E894) while focused ∧ non-empty (single-line, no Mask,
     /// not read-only, and only when no <see cref="RightAffix"/> occupies the lane). TextBox passes true.</summary>
     public bool ShowDeleteButton;
@@ -222,7 +224,8 @@ public sealed class EditableText : Component
     private Signal<int>? _epoch;             // display epoch: bumped on doc-only changes (IME provisional, sanitize)
     private Signal<int>? _affixEpoch;        // affix epoch: SetRightAffix re-renders the field (affix mount/unmount)
     private Signal<bool>? _empty;            // doc-empty flag; flips re-render (delete-button mount/unmount) only
-    private FluentGpu.Signals.FloatSignal? _scroll;   // caret-follow offset; TransformBind shifts the text wrapper by -value
+    private FluentGpu.Signals.FloatSignal? _scroll;   // horizontal caret-follow; TransformBind shifts the text wrapper by -value
+    private FluentGpu.Signals.FloatSignal? _scrollY;  // vertical caret-follow (AcceptsReturn only)
     private Action<bool> _setFocused = static _ => { };
     private bool _focusedNow;
     private string? _snapshot;               // text at focus-gain (the Escape revert target)
@@ -251,6 +254,8 @@ public sealed class EditableText : Component
         _ = affixEpoch.Value;   // subscribe: SetRightAffix on the live instance re-renders the affix lane
         var scroll = UseFloatSignal(0f);
         _scroll = scroll;
+        var scrollY = UseFloatSignal(0f);
+        _scrollY = scrollY;
         var (focused, setFocused) = UseState(false);
         _setFocused = setFocused;
         // Emptiness as a dedicated bool SIGNAL (maintained by the edit paths), NOT a memo over the text signal — a memo
@@ -293,21 +298,22 @@ public sealed class EditableText : Component
             Color = Prop.Of(BindColor),
         };
 
-        // lane (padded, clipping viewport) > scroller (carries the -ScrollX caret-follow transform) > text leaf.
+        // lane (padded, clipping viewport) > scroller (caret-follow transform) > text leaf.
+        var laneAlign = AcceptsReturn ? FlexAlign.Start : FlexAlign.Center;
         Action<NodeHandle> laneCapture = h => _laneNode = h;
         Element[] laneKids =
         [
             new BoxEl
             {
-                Direction = 0, AlignItems = FlexAlign.Center,
-                Transform = Prop.Of(() => Affine2D.Translation(-scroll.Value, 0f)),
+                Direction = 0, AlignItems = laneAlign,
+                Transform = Prop.Of(() => Affine2D.Translation(-scroll.Value, AcceptsReturn ? -scrollY.Value : 0f)),
                 OnRealized = h => _scrollerNode = h,
                 Children = [textEl],
             },
         ];
         var lane = new BoxEl
         {
-            Direction = 0, Grow = 1f, AlignItems = FlexAlign.Center,
+            Direction = 0, Grow = 1f, AlignItems = laneAlign,
             // WinUI TextBox content padding (10,5,6,6) unless the composer overrides it (the editable ComboBox passes
             // ComboBoxEditableTextPadding 11,5,38,6); the affix is a FULL-HEIGHT sibling outside this padding.
             Padding = LanePadding ?? new Edges4(10, 5, 6, 6),
@@ -509,6 +515,8 @@ public sealed class EditableText : Component
             if (!_rootNode.IsNull && Context.Scene is { } sc && sc.IsLive(_rootNode)
                 && (sc.Flags(_rootNode) & NodeFlags.FocusVisual) != 0)
                 _core.SelectAll();
+            else if (PlaceCaretAtEndOnFocus && _core.Doc.Length > 0)
+                _core.SetCaret(_core.Doc.Length, extend: false);
             SyncVisual();
         }
         else
@@ -652,14 +660,25 @@ public sealed class EditableText : Component
     // SyncVisual re-centres on it the next time it moves.
     private void HandleWheel(WheelEventArgs e)
     {
-        if (AcceptsReturn || _scroll is null) return;               // multi-line wraps — nothing to scroll horizontally
-        if (!TryHScrollExtent(out float maxScroll)) return;          // text fits → bubble to the page
-        float cur = _scroll.Peek();
-        float next = Math.Clamp(cur + e.Delta + e.DeltaX, 0f, maxScroll);   // +Delta = scroll toward the content end (right)
-        if (MathF.Abs(next - cur) < 0.01f) return;                  // at the limit in this direction → bubble
-        _scroll.Value = next;                                       // TransformBind applies the new -ScrollX next flush
+        if (AcceptsReturn)
+        {
+            if (_scrollY is null) return;
+            if (!TryVScrollExtent(out float maxScrollY)) return;
+            float curY = _scrollY.Peek();
+            float nextY = Math.Clamp(curY - e.Delta, 0f, maxScrollY);
+            if (MathF.Abs(nextY - curY) < 0.01f) return;
+            _scrollY.Value = nextY;
+            e.Handled = true;
+            return;
+        }
+        if (_scroll is null) return;
+        if (!TryHScrollExtent(out float maxScrollX)) return;          // text fits → bubble to the page
+        float curX = _scroll.Peek();
+        float nextX = Math.Clamp(curX + e.Delta + e.DeltaX, 0f, maxScrollX);   // +Delta = scroll toward the content end (right)
+        if (MathF.Abs(nextX - curX) < 0.01f) return;                  // at the limit in this direction → bubble
+        _scroll.Value = nextX;                                       // TransformBind applies the new -ScrollX next flush
         var tn = TextNode();
-        if (Context.Scene is { } sc && !tn.IsNull && sc.IsLive(tn)) sc.TextEditRef(tn).ScrollX = next;
+        if (Context.Scene is { } sc && !tn.IsNull && sc.IsLive(tn)) sc.TextEditRef(tn).ScrollX = nextX;
         e.Handled = true;
     }
 
@@ -680,6 +699,26 @@ public sealed class EditableText : Component
         if (vw <= 1f) return false;
         fonts.GetCaret(disp, style, maxW, disp.Length, out float endX, out _, out _, out _);
         maxScroll = MathF.Max(0f, endX + 2f - vw);
+        return maxScroll > 0.5f;
+    }
+
+    /// <summary>The vertical overflow extent of a multi-line field: the max <c>-ScrollY</c> that brings the last line
+    /// into view. False when the text fits (no scroll).</summary>
+    private bool TryVScrollExtent(out float maxScroll)
+    {
+        maxScroll = 0f;
+        var scene = Context.Scene;
+        var tn = TextNode();
+        if (!AcceptsReturn || scene is null || _hooks?.Fonts is not { } fonts || tn.IsNull || !scene.IsLive(tn)
+            || _laneNode.IsNull || !scene.IsLive(_laneNode)) return false;
+        string disp = DisplayText();
+        var style = scene.Layout(tn).TextStyle;
+        float maxW = QueryMaxWidth(scene, tn);
+        ref LayoutInput ll = ref scene.Layout(_laneNode);
+        float vh = scene.Bounds(_laneNode).H - ll.Padding.Top - ll.Padding.Bottom;
+        if (vh <= 1f) return false;
+        fonts.GetCaret(disp, style, maxW, disp.Length, out _, out float lastTop, out float lastLh, out _);
+        maxScroll = MathF.Max(0f, lastTop + lastLh - vh);
         return maxScroll > 0.5f;
     }
 
@@ -940,6 +979,7 @@ public sealed class EditableText : Component
 
         // Caret-follow (single-line): keep the caret inside [pad, viewport - pad] of the padded lane.
         float scrollX = _scroll?.Peek() ?? 0f;
+        float scrollY = _scrollY?.Peek() ?? 0f;
         if (!AcceptsReturn && !_laneNode.IsNull && scene.IsLive(_laneNode))
         {
             ref LayoutInput ll = ref scene.Layout(_laneNode);
@@ -954,9 +994,27 @@ public sealed class EditableText : Component
                 scrollX = Math.Clamp(scrollX, 0f, maxScroll);
             }
             else scrollX = 0f;
+            scrollY = 0f;
         }
-        else if (AcceptsReturn) scrollX = 0f;
-        if (_scroll is { } ss) ss.Value = scrollX;   // TransformBind applies -ScrollX at the next flush
+        else if (AcceptsReturn && !_laneNode.IsNull && scene.IsLive(_laneNode))
+        {
+            scrollX = 0f;
+            ref LayoutInput ll = ref scene.Layout(_laneNode);
+            float vh = scene.Bounds(_laneNode).H - ll.Padding.Top - ll.Padding.Bottom;
+            if (vh > 1f)
+            {
+                const float pad = 6f;
+                fonts.GetCaret(disp, style, maxW, disp.Length, out _, out float lastTop, out float lastLh, out _);
+                float maxScrollY = MathF.Max(0f, lastTop + lastLh - vh);
+                float caretBottom = top + lh;
+                if (caretBottom - scrollY > vh - pad) scrollY = caretBottom - (vh - pad);
+                if (top - scrollY < pad) scrollY = top - pad;
+                scrollY = Math.Clamp(scrollY, 0f, maxScrollY);
+            }
+            else scrollY = 0f;
+        }
+        if (_scroll is { } ss) ss.Value = scrollX;
+        if (_scrollY is { } sy) sy.Value = scrollY;
 
         ref TextEditState tes = ref scene.TextEditRef(tn);
         tes.CaretX = cx;
@@ -1016,7 +1074,8 @@ public sealed class EditableText : Component
         {
             var abs = scene.AbsoluteRect(tn);
             float appliedDx = scene.Paint(_scrollerNode).LocalTransform.Dx;
-            setRect(new RectF(abs.X - appliedDx - scrollX + cx, abs.Y + top, 1f, lh));
+            float appliedDy = scene.Paint(_scrollerNode).LocalTransform.Dy;
+            setRect(new RectF(abs.X - appliedDx - scrollX + cx, abs.Y - appliedDy - scrollY + top, 1f, lh));
         }
 
         // SelectionChanged (start, length) — fired on actual transitions only.

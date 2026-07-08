@@ -169,8 +169,6 @@ sealed class WaveeApp : Component
                 _ = _services.Session.ConnectAsync();
                 _services.Log.Info("app", "Demo backend; fake session started (playback remote-only)");
             }
-            // Diagnostic: open the full now-playing view on launch (for --screenshot visual diffing of that surface).
-            if (Diag.EnvFlag("WAVEE_NOWPLAYING_OPEN")) _services.Playback.Expanded.Value = true;
         });
 
         // (Re)start the takeover login on every Auth flip to not-authenticated: the real backend kicks the silent-resume →

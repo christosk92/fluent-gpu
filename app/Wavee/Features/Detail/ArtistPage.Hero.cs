@@ -10,6 +10,7 @@ using FluentGpu.Localization;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
 using Wavee.Core;
+using Wavee.Features.Detail;
 using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
@@ -18,6 +19,8 @@ namespace Wavee;
 // (name / bio / meta / actions), the eyebrow pills, the action affordances, and the optional wide "pinned promo" card.
 sealed partial class ArtistPage : Component
 {
+    readonly Signal<float> _heroWidth = new(ArtistHeroLayout.WideWidth);
+
     // ── hero banner ──────────────────────────────────────────────────────────────────────────────────────
     // Collapsing hero: pins at the viewport top and shrinks IN PLACE as you scroll (the WinUI/Spotify large-title
     // collapse), its presented height riding down to zero while the bottom-anchored copy dissolves and the track list
@@ -28,13 +31,14 @@ sealed partial class ArtistPage : Component
     Element Banner(Artist a, string uri, Action play, Action shuffle, Action radio,
         Action<string, string?> go)
     {
-        const float h = 420f;
+        float heroW = _heroWidth.Value;
+        float h = ArtistHeroLayout.HeroHeightFor(heroW);
         int albumCount = a.TopAlbums?.Count(al => al.Kind is AlbumKind.Album or AlbumKind.Compilation) ?? 0;
         int singleCount = a.TopAlbums?.Count(al => al.Kind is AlbumKind.Single or AlbumKind.EP) ?? 0;
         var bg = a.HeaderImage ?? a.Image;
 
         // The width-dependent hero body (photo + scrim + bottom-anchored copy). Built once the available width is known.
-        Element Inner(float w)
+        Element Inner(float w, float height)
         {
             bool wide = w >= 960f && a.Pinned is not null;
 
@@ -71,12 +75,12 @@ sealed partial class ArtistPage : Component
             // pill as the hero finishes collapsing, so they can leave with the rest of the copy here.
             var overlay = new BoxEl
             {
-                Width = w, Height = h, Direction = 0, AlignItems = FlexAlign.End, Gap = WaveeSpace.XL,
+                Width = w, Height = height, Direction = 0, AlignItems = FlexAlign.End, Gap = WaveeSpace.XL,
                 Padding = new Edges4(WaveeSpace.XL, WaveeSpace.XL, WaveeSpace.XL, WaveeSpace.XL),
                 OpacityGroup = true,
                 ScrollBinds =
                 [
-                    new() { From = ScrollChannel.Offset, To = BindSink.Opacity, Range = ScrollRange.Px(h * 0.16f, h * 0.66f), OutStart = 1f, OutEnd = 0f, Ease = Easing.Linear },
+                    new() { From = ScrollChannel.Offset, To = BindSink.Opacity, Range = ScrollRange.Px(height * 0.16f, height * 0.66f), OutStart = 1f, OutEnd = 0f, Ease = Easing.Linear },
                 ],
                 Children = wide ? [copy, PinnedCard(a.Pinned!, go)] : [copy],
             };
@@ -93,15 +97,15 @@ sealed partial class ArtistPage : Component
             // the large photo must be visually gone, not merely behind the content.
             ColorF heroWash = ColorF.Lerp(ColorF.FromRgba(0x14, 0x14, 0x16), _accent, 0.30f);
             Element heroArt = bg?.Url is { Length: > 0 } hu
-                ? Embed.Comp(() => new HeroArt(hu, w, h, bg.BlurHash, heroWash)) with { Key = "heroart:" + hu }
-                : new BoxEl { Width = w, Height = h, Fill = heroWash };
+                ? Embed.Comp(() => new HeroArt(hu, _heroWidth, bg.BlurHash, heroWash)) with { Key = "heroart:" + hu }
+                : new BoxEl { Width = w, Height = height, Fill = heroWash };
             var media = new BoxEl
             {
-                Width = w, Height = h, ZStack = true, ClipToBounds = true,
+                Width = w, Height = height, ZStack = true, ClipToBounds = true,
                 ScrollBinds =
                 [
                     new() { StretchFromTop = true }, // iOS/Spotify stretchy hero (generic scroll bind)
-                    new() { From = ScrollChannel.Offset, To = BindSink.Opacity, Range = ScrollRange.Px(h * 0.16f, h * 0.66f), OutStart = 1f, OutEnd = 0f, Ease = Easing.Linear },
+                    new() { From = ScrollChannel.Offset, To = BindSink.Opacity, Range = ScrollRange.Px(height * 0.16f, height * 0.66f), OutStart = 1f, OutEnd = 0f, Ease = Easing.Linear },
                 ],
                 TransformOriginX = 0.5f, TransformOriginY = 0f,
                 // Deeper bottom fade (was 200) so the soft zone still covers the collapse clip line even with the photo's
@@ -112,7 +116,7 @@ sealed partial class ArtistPage : Component
                     heroArt,
                     new BoxEl
                     {
-                        Width = w, Height = h,
+                        Width = w, Height = height,
                         Gradient = LinearGradient(180f,
                             new GradientStop(0f, Scrim(0f)),
                             new GradientStop(0.5f, Scrim(0.22f)),
@@ -126,35 +130,42 @@ sealed partial class ArtistPage : Component
             // ChildShiftY moves this layer up by `offset`; this +0.35·offset counter-translate is what makes it lag.
             var heroParallax = new BoxEl
             {
-                Width = w, Height = h, ZStack = true,
+                Width = w, Height = height, ZStack = true,
                 ScrollBinds =
                 [
-                    new() { From = ScrollChannel.Offset, To = BindSink.TransY, Range = ScrollRange.Px(0f, h), OutStart = 0f, OutEnd = h * 0.18f, Ease = Easing.Linear },
+                    new() { From = ScrollChannel.Offset, To = BindSink.TransY, Range = ScrollRange.Px(0f, height), OutStart = 0f, OutEnd = height * 0.18f, Ease = Easing.Linear },
                 ],
                 Children = [media],
             };
 
             return new BoxEl
             {
-                Width = w, Height = h, ZStack = true, ClipToBounds = true,
+                Width = w, Height = height, ZStack = true, ClipToBounds = true,
                 Children = [heroParallax, overlay],
             };
         }
 
+        void MeasureHero(RectF r)
+        {
+            if (r.W <= 0f) return;
+            if (MathF.Abs(r.W - _heroWidth.Peek()) > 0.5f) _heroWidth.Value = r.W;
+        }
+
         // The pinned collapse owner MUST be a direct child of the tall scroll content: the sticky pin's containing-block
         // clamp is the PARENT height, and a tight Responsive wrapper (== hero height) clamps the pin to 0 — the bug that
-        // left the empty band (the hero scrolled off while ChildShiftY double-counted). Owning the pin here, with the
-        // width-built Inner wrapped inside, gives it a tall containing block so the pin holds the hero at the top while
+        // left the empty band (the hero scrolled off while ChildShiftY double-counted). Owning the pin here and measuring
+        // this same node gives it a tall containing block so the pin holds the hero at the top while
         // PresentedHTrailing rides its height to zero.
         return new BoxEl
         {
             Direction = 1, Height = h, ClipToBounds = true,
+            OnBoundsChanged = MeasureHero,
             ScrollBinds =
             [
                 new() { PinTop = 0f },
                 new() { From = ScrollChannel.Offset, To = BindSink.PresentedHTrailing, Range = ScrollRange.Px(0f, h), OutStart = h, OutEnd = 0f },
             ],
-            Children = [ Responsive.Of(Inner, fallback: 900f) ],
+            Children = [ Inner(heroW, h) ],
         };
     }
 
@@ -361,14 +372,17 @@ sealed class HeroArt : Component
     static readonly Keyframe[] Rest = [new(0f, RestScale), new(1f, RestScale)];
 
     readonly string _url;
-    readonly float _w, _h;
+    readonly IReadSignal<float> _width;
     readonly string? _blurHash;
     readonly ColorF _wash;
-    public HeroArt(string url, float w, float h, string? blurHash, ColorF wash)
-    { _url = url; _w = w; _h = h; _blurHash = blurHash; _wash = wash; }
+    public HeroArt(string url, IReadSignal<float> width, string? blurHash, ColorF wash)
+    { _url = url; _width = width; _blurHash = blurHash; _wash = wash; }
 
     public override Element Render()
     {
+        float w = MathF.Max(1f, _width.Value);
+        float h = ArtistHeroLayout.HeroHeightFor(w);
+
         // Fire the zoom only once the photo is actually resident. Latch on the first Ready/Failed so the tile then stops
         // calling UseImage (unsubscribes from the image epoch → no steady-state re-render) and a later re-render can't
         // re-trigger the settle. UseImage consumes no hook cell, so the conditional call is safe (mirrors CoverShimmer).
@@ -376,7 +390,7 @@ sealed class HeroArt : Component
         var zoom = UseRef(false);
         if (!settled.Value)
         {
-            var state = UseImage(_url, (int)_w, (int)_h).State;   // SAME (src,w,h) as the displayed image → shared handle
+            var state = UseImage(_url, (int)w, (int)h).State;   // SAME (src,w,h) as the displayed image → shared handle
             if (state == ImageState.Ready) { settled.Value = true; zoom.Value = true; }
             else if (state == ImageState.Failed) settled.Value = true;   // no photo → no zoom, just stop probing
         }
@@ -392,7 +406,7 @@ sealed class HeroArt : Component
         // The zoom rides this BoxEl host (transform props live on BoxEl, not ImageEl). The host + photo are FLUID (a
         // ZStack fills a NaN-sized child to its box — FlexLayout.ArrangeZStack), so LAYOUT — not a frozen ctor width —
         // sizes them to the CURRENT responsive hero width every frame; the photo therefore always spans the full hero
-        // (a fixed-width child here left an empty band when the hero grew past the mount width). _w/_h are used ONLY as
+        // (a fixed-width child here left an empty band when the hero grew past the mount width). The measured w/h are used ONLY as
         // a frozen DECODE hint — decodePx + aspect resolve to the same (⌊w⌋,⌊h⌋) target the ready-probe shares — never as
         // a layout extent. Origin defaults to centre; the parent `media` box clips the 5% scale overscan, cover-fit crops.
         return new BoxEl
@@ -405,10 +419,10 @@ sealed class HeroArt : Component
                     ZStack = true,
                     ScaleX = FrameScale,
                     ScaleY = FrameScale,
-                    OffsetY = -_h * FrameLiftFrac,
+                    OffsetY = -h * FrameLiftFrac,
                     Children =
                     [
-                        Ui.Image(_url, ImageFit.Cover, aspect: _w / _h, decodePx: _w, corners: 0f,
+                        Ui.Image(_url, ImageFit.Cover, aspect: w / h, decodePx: w, corners: 0f,
                                 placeholder: _wash, blurHash: _blurHash, transition: ImageTransition.Fade(RevealFadeMs))
                             with { FocusY = 0.35f },
                     ],

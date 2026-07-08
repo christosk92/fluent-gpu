@@ -47,6 +47,7 @@ public static class Icons
     public const string Sort = "\uE8CB";      // Segoe Fluent "Sort" \u2014 list sort affordance
     public const string MusicNote = "\uEC4F";
     public const string Picture = "\uEB9F";
+    public const string Camera = "\uE722";           // Segoe Fluent "Camera" — cover-art replace affordance
     public const string Download = "\uE896";
     public const string Share = "\uE72D";
     public const string Folder = "\uE8B7";
@@ -60,6 +61,7 @@ public static class Icons
     public const string SignOut = "\uF3B1";          // log out \u2014 exit door + arrow (Segoe Fluent Icons)
     public const string Font = "\uE8D2";
     public const string Brush = "\uE790";
+    public const string Edit = "\uE70F";           // Segoe Fluent "Edit" — inline-edit pencil affordance
     public const string Movie = "\uE8B2";
     // -- Window chrome (Segoe Fluent Icons caption set \u2014 the Win11 system caption-button glyphs, drawn at 10px) ------
     public const string ChromeMinimize = "\uE921";   // Minimize \u2014

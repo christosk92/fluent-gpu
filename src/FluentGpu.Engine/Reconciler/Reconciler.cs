@@ -381,7 +381,17 @@ public sealed class TreeReconciler
             // the "page only half-resolves" bug. Force a fresh mount so the real build + cleared derive flag take hold.
             if (oldEl is ComponentEl oce && oce.ComponentType == nce.ComponentType && _comps.ContainsKey(node)
                 && oce.DeriveRenderedOutput == nce.DeriveRenderedOutput)
+            {
+                // DEBUG-only frozen-props tripwire: the factory we're about to discard may carry NEW caller data into
+                // a field that froze at mount. Let the live component compare (only if it opted in). The CompiledIn
+                // const folds this whole block away in release — zero cost, no probe allocation on the hot path.
+                if (ReuseGuard.CompiledIn && ReuseGuard.Enabled)
+                {
+                    var liveComp = _comps[node].Comp;
+                    if (liveComp.ChecksReuse) liveComp.DebugCheckReuse(nce.Factory());
+                }
                 return;
+            }
             ReplaceComponent(node, nce);
             return;
         }
@@ -1800,7 +1810,14 @@ public sealed class TreeReconciler
         var table = _scene.ScrollBinds;
         bool had = table.NodeHasBinds(nodeIdx);
         if ((dsls is null || dsls.Length == 0) && !had) return;   // nothing now, nothing before → skip
-        if (table.NodeOwnsSink(nodeIdx, FluentGpu.Animation.BindSink.PresentedHTrailing))
+        bool hadTrailing = table.NodeOwnsSink(nodeIdx, FluentGpu.Animation.BindSink.PresentedHTrailing);
+        bool willOwnTrailing = OwnsScrollSink(dsls, FluentGpu.Animation.BindSink.PresentedHTrailing);
+
+        NodeHandle scroller = NodeHandle.Null;
+        for (var p = _scene.Parent(node); !p.IsNull; p = _scene.Parent(p))
+            if ((_scene.Flags(p) & NodeFlags.Scrollable) != 0) { scroller = p; break; }
+
+        if (hadTrailing && (!willOwnTrailing || scroller.IsNull))
         {
             ref NodePaint p = ref _scene.Paint(node);
             p.PresentedH = float.NaN;
@@ -1809,11 +1826,6 @@ public sealed class TreeReconciler
         }
         table.ClearNode(nodeIdx);                                 // wholesale re-bake (slot reuse self-cleans)
         if (dsls is null || dsls.Length == 0) return;
-
-        // Resolve the enclosing scroll viewport once (the per-frame eval is then pure index arithmetic).
-        NodeHandle scroller = NodeHandle.Null;
-        for (var p = _scene.Parent(node); !p.IsNull; p = _scene.Parent(p))
-            if ((_scene.Flags(p) & NodeFlags.Scrollable) != 0) { scroller = p; break; }
 
         foreach (var d in dsls)
         {
@@ -1853,6 +1865,17 @@ public sealed class TreeReconciler
             }
             table.Add(nodeIdx, scroller, row);
         }
+    }
+
+    private static bool OwnsScrollSink(ScrollBindDsl[]? dsls, FluentGpu.Animation.BindSink sink)
+    {
+        if (dsls is null) return false;
+        for (int i = 0; i < dsls.Length; i++)
+        {
+            var d = dsls[i];
+            if (d.PinTop is null && !d.StretchFromTop && d.To == sink) return true;
+        }
+        return false;
     }
 
     private static bool IsGeometryAnchor(FluentGpu.Animation.ScrollBindAnchor a)

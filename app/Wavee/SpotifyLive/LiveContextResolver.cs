@@ -56,7 +56,7 @@ public sealed class LiveContextResolver : IContextResolver
         if (spec.EmbeddedPages is { Count: > 0 } embedded)
         {
             var hydratedEmbedded = await HydrateAsync(embedded, ct).ConfigureAwait(false);
-            int s = ContextResolve.FindStartIndex(hydratedEmbedded, spec.SkipToTrackUri, spec.SkipToTrackUid, spec.SkipToIndex);
+            int s = ContextResolve.ResolveStartIndex(hydratedEmbedded, spec);
             return new ResolvedContext(hydratedEmbedded, s, null, null, ContextResolve.IsInfinite(spec.Uri));
         }
 
@@ -91,7 +91,7 @@ public sealed class LiveContextResolver : IContextResolver
         if (refs.Count == 0) { _log?.Invoke("context-resolve: 0 tracks for " + spec.Uri); return ResolvedContext.Empty; }
 
         var tracks = await HydrateAsync(refs, ct).ConfigureAwait(false);
-        int start = ContextResolve.FindStartIndex(tracks, spec.SkipToTrackUri, spec.SkipToTrackUid, spec.SkipToIndex);
+        int start = ContextResolve.ResolveStartIndex(tracks, spec);
         return new ResolvedContext(tracks, start, sorting, nextPage, ContextResolve.IsInfinite(spec.Uri),
             jsonInfo.Metadata, string.IsNullOrEmpty(jsonInfo.ContextUri) ? null : jsonInfo.ContextUri);
     }
@@ -231,7 +231,7 @@ public sealed class LiveContextResolver : IContextResolver
         }
         var wire = loaded.Value!;
         var tracks = await HydrateAsync(wire.Refs, ct).ConfigureAwait(false);
-        int start = ContextResolve.FindStartIndex(tracks, spec.SkipToTrackUri, spec.SkipToTrackUid, spec.SkipToIndex);
+        int start = ContextResolve.ResolveStartIndex(tracks, spec);
         return new ResolvedContext(tracks, start, null, null, false, wire.Metadata, null);
     }
 

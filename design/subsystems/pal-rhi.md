@@ -167,10 +167,23 @@ re-raises its own `AppHost.ActivationRedirected` to app code at the top of `Pain
   in single-thread v1 (wakes on the present latency waitable **or** an incoming message — keeps the
   pump responsive). On the render-thread split the UI thread waits only on input + the snapshot-consume
   signal; the latency waitable migrates to the render thread's present loop.
-- **Modal loops:** during `WM_ENTERSIZEMOVE` the OS owns the pump; we render via a `WM_TIMER`/`WM_PAINT`
-  tick. Keep-alive paints skip redundant frames when only ambient animation is awake, but still run when
-  essential work is pending (layout, warming virtual lists, decode, drag dwell). `WM_EXITSIZEMOVE` triggers
-  the real resize (§5.3).
+- **Modal loops:** during `WM_ENTERSIZEMOVE` the OS owns the pump; we render via an 8 ms `WM_TIMER` tick
+  (and, for non-composited edge-resize, throttled `WM_SIZE` paints at ≤30 Hz). **`Composited` windows defer
+  GPU resize + relayout until `WM_EXITSIZEMOVE`** — DComp keeps the last-presented buffer pinned at the visual
+  top-left while the HWND grows (Mica void) or clips on shrink; **`SizedInModalLoop`** distinguishes pure
+  titlebar **move** (ambient playback/seek ticks may still paint at ≤30 Hz) from edge **resize** (ambient-only
+  ticks bail). Non-composited windows apply each throttled keep-alive tick live. Keep-alive paints skip redundant
+  frames when only ambient animation is awake during edge resize, but still run when essential work is pending
+  (layout, warming virtual lists, decode, drag dwell). `WM_EXITSIZEMOVE` triggers the settle resize (§5.3) with
+  `HintSettlePresent` (optional one-shot `DwmFlush` after present).
+
+  | Window | Move | Edge resize | Mouse-up |
+  |---|---|---|---|
+  | Composited | ≤30 Hz ambient ticks; no geometry resize | zero geometry paints; DComp pin-top-left | one settle paint |
+  | Non-composited | per-step paint (idle-skip when quiet) | ≤30 Hz live relayout | settle paint |
+
+  `IPlatformWindow` exposes `InModalLoop`, `SizedInModalLoop`, and `Composited` so `AppHost.DeferModalResize`
+  and span-reuse policy can key off the same PAL state Win32 derives from `WM_ENTERSIZEMOVE`/`WM_SIZE`.
 - **Flat C exports:** `[LibraryImport]` for `D3D12CreateDevice`, `CreateDXGIFactory2`,
   `DCompositionCreateDevice`, `DWriteCreateFactory`, `RegisterClassExW`, `CreateWindowExW`,
   `SetProcessDpiAwarenessContext`, `GetDpiForWindow` (blittable `nint`/`Guid*`/`void**` no-marshal

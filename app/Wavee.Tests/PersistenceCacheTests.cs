@@ -110,6 +110,29 @@ public class CachedStoreTests
     }
 
     [Fact]
+    public void ArtistMerge_PreservesExistingExtras_WhenThinNpvWriteAddsOneFacet()
+    {
+        var s = new InMemoryStore();
+        const string uri = "spotify:artist:ar";
+
+        s.UpsertArtist(new Artist("ar", uri, "The Artist", null, Extras: new ArtistExtras(
+            Merch: [new MerchItem("Tour Tee", "$25", null, null, "https://shop/tee")],
+            ExternalLinks: [new ExternalLink("Instagram", "https://instagram.com/a", ExternalLinkKind.Instagram)],
+            Gallery: [new Image("https://cdn/gallery")],
+            Related: [new RelatedArtist("rel", "spotify:artist:rel", "Related", null)])));
+
+        s.UpsertArtist(new Artist("ar", uri, "The Artist", null, Extras: new ArtistExtras(
+            TopCities: [new TopCity("Athens", "GR", 1200)])));
+
+        var merged = s.GetArtist(uri)!.Extras!;
+        Assert.Equal("Tour Tee", Assert.Single(merged.Merch!).Name);
+        Assert.Equal("Instagram", Assert.Single(merged.ExternalLinks!).Name);
+        Assert.Equal("https://cdn/gallery", Assert.Single(merged.Gallery!).Url);
+        Assert.Equal("Related", Assert.Single(merged.Related!).Name);
+        Assert.Equal("Athens", Assert.Single(merged.TopCities!).City);
+    }
+
+    [Fact]
     public void Playlist_PersistsThin_NotTheFatTrackBlob()
     {
         var cold = new MemCold();
@@ -226,7 +249,41 @@ public class SqliteColdStoreTests
             using var r = q.ExecuteReader();
             Assert.True(r.Read());
             Assert.Equal(0L, r.GetInt64(0));        // `saved` dropped
-            Assert.Equal("1", r.GetString(1));      // schema_version = 1
+            Assert.Equal("2", r.GetString(1));      // schema_version = 2 after the playlist-revision heal
+        }
+        finally { TryDelete(path); }
+    }
+
+    [Fact]
+    public void Migration_V1_ClearsPlaylistAndRootlistRevisions()
+    {
+        var path = TempDb();
+        try
+        {
+            using (var c = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path }.ToString()))
+            {
+                c.Open();
+                using var cmd = c.CreateCommand();
+                cmd.CommandText =
+                    "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);" +
+                    "CREATE TABLE playlists(uri TEXT PRIMARY KEY, base_rev BLOB);" +
+                    "INSERT INTO meta(key,value) VALUES('schema_version','1');" +
+                    "INSERT INTO meta(key,value) VALUES('rootlist_rev','010203');" +
+                    "INSERT INTO playlists(uri,base_rev) VALUES('spotify:playlist:p',X'01020304');";
+                cmd.ExecuteNonQuery();
+            }
+
+            using (var s = new SqliteColdStore(path))
+            {
+                Assert.Null(s.GetPlaylistRevision("spotify:playlist:p"));
+                Assert.Null(s.GetRootlistRevision());
+            }
+
+            using var verify = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path }.ToString());
+            verify.Open();
+            using var q = verify.CreateCommand();
+            q.CommandText = "SELECT value FROM meta WHERE key='schema_version';";
+            Assert.Equal("2", q.ExecuteScalar() as string);
         }
         finally { TryDelete(path); }
     }

@@ -65,6 +65,7 @@ public static class WaveeColors
 
     public static ColorF Toolbar => Active.Toolbar;
     public static ColorF Sidebar => Active.Sidebar;
+    public static ColorF RailOverlay => Tok.Theme == ThemeKind.Light ? ColorF.FromRgba(0xF7, 0xF7, 0xF9) : ColorF.FromRgba(0x1C, 0x1D, 0x20);
     public static ColorF PlayerBar => Active.PlayerBar;
     public static ColorF FileArea => Active.FileArea;
     public static ColorF Content => Active.Content;

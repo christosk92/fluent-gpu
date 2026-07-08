@@ -24,7 +24,7 @@ public class MutationOpRebaseTests
     }
 
     static PlaylistMember M(string id) => new(id, "spotify:track:" + id, null, 0);
-    static MutationEngine Engine(IStore store) => new(store, new IMutationStrategy[] { new SetReplayStrategy(), new OpRebaseStrategy(store) });
+    static MutationEngine Engine(IStore store) => new(store, new IMutationStrategy[] { new SetReplayStrategy(), new OpRebaseStrategy(store, () => "https://spclient.wg.spotify.com") });
 
     [Fact]
     public async Task Edit_AppliesOptimistically_AndDrainConfirms()
@@ -51,7 +51,7 @@ public class MutationOpRebaseTests
         var store = new InMemoryStore();
         store.SetMembership("spotify:playlist:p", new[] { M("a"), M("b") }, new byte[] { 1 });
         var clock = DateTime.UtcNow;
-        var eng = new MutationEngine(store, new IMutationStrategy[] { new SetReplayStrategy(), new OpRebaseStrategy(store) }, null, () => clock);
+        var eng = new MutationEngine(store, new IMutationStrategy[] { new SetReplayStrategy(), new OpRebaseStrategy(store, () => "https://spclient.wg.spotify.com") }, null, () => clock);
 
         eng.Edit("spotify:playlist:p", new[] { new PlaylistOp(PlaylistOpKind.Remove, FromIndex: 0, Length: 2) });   // remove all
         Assert.Empty(store.Membership("spotify:playlist:p"));

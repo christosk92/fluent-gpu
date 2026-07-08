@@ -178,6 +178,20 @@ public sealed record Track(
     // the lyrics search's exact-recording fast-path (Musixmatch track_isrc). Null when unknown (thin cluster / Pathfinder).
     string? Isrc = null);
 
+/// <summary>A per-track credit. <paramref name="RoleGroup"/> groups rows such as composition, production, or performers.</summary>
+public sealed record TrackCredit(string Name, string Role, string? RoleGroup = null,
+    string? ArtistUri = null, bool Linkable = false);
+
+/// <summary>The Spotify Canvas short looping cover video. Modelled ahead of video rendering.</summary>
+public sealed record TrackCanvas(string? FileId, string? Type, string? EntityUri, string? Url);
+
+/// <summary>The track half of the NPV payload. The raw response is TTL-cached by PathfinderResource; this is not persisted.</summary>
+public sealed record TrackNpvInfo(string TrackUri, IReadOnlyList<TrackCredit> Credits,
+    IReadOnlyList<string> CreditSources, TrackCanvas? Canvas, IReadOnlyList<MerchItem> Merch);
+
+/// <summary>Everything the Now Playing rail needs for one track: a merged artist plus track-scoped extras.</summary>
+public sealed record NowPlayingInfo(Artist? About, TrackNpvInfo? Track);
+
 /// <summary>How a track plays — streamed from a remote source (CDN) or decoded from a local file. The seam routes
 /// playback by this; default is Streamed (the synthetic catalog's shape).</summary>
 public enum TrackOrigin { Streamed, Local }
@@ -192,7 +206,14 @@ public sealed record Owner(string Id, string Name, Image? Avatar);
 /// <summary>What the current user may do to a playlist (mirrors Spotify's currentUserCapabilities). The UI gates its
 /// edit affordances on these — an editorial / not-owned playlist renders read-only. <c>default</c> = no rights.</summary>
 public readonly record struct PlaylistCapabilities(
-    bool CanView, bool CanEditItems, bool CanEditMetadata, bool IsCollaborative, bool IsOwner);
+    bool CanView, bool CanEditItems, bool CanEditMetadata, bool IsCollaborative, bool IsOwner,
+    bool CanAdministratePermissions = false);
+
+/// <summary>Stable playlist row identity for duplicate-safe remove/move commands.</summary>
+public readonly record struct PlaylistRowRef(int Index, string Uri, string ItemId);
+
+/// <summary>Playlist permission level for invite/base-level writes (mirrors playlist_permission.proto).</summary>
+public enum PlaylistPermissionLevel { Viewer = 2, Contributor = 3 }
 
 public sealed record Playlist(
     string Id, string Uri, string Name, string? Description, string OwnerName,
@@ -210,13 +231,46 @@ public sealed record Playlist(
 public sealed record Palette(uint BackgroundDark, uint TintedDark, uint Light, uint Accent);
 
 public enum QueueBucket { NowPlaying, UserQueue, NextUp, History }
+
+/// <summary>A session-stable queue-item identity: a monotonic <see cref="ulong"/> minted once at insertion (never
+/// index-derived, never reused, survives reorder/remove/continuation-append). <c>0</c> is the sentinel "no id".</summary>
+public readonly record struct QueueItemId(ulong Value)
+{
+    public bool IsNone => Value == 0;
+    public static readonly QueueItemId None = default;
+}
+
+/// <summary>The wire provider of a queue row — a context continuation, a user-queued item, or an autoplay-station tail row.</summary>
+public enum QueueProvider : byte { Context, Queue, Autoplay }
+
+/// <summary>Wire-token ↔ <see cref="QueueProvider"/> bridge (the Connect protocol carries "context"/"queue"/"autoplay").</summary>
+public static class QueueProviderExtensions
+{
+    public static string ToWire(this QueueProvider p) => p switch
+    {
+        QueueProvider.Queue => "queue",
+        QueueProvider.Autoplay => "autoplay",
+        _ => "context",
+    };
+
+    public static QueueProvider FromWire(string? wire) => wire switch
+    {
+        "queue" => QueueProvider.Queue,
+        "autoplay" => QueueProvider.Autoplay,
+        _ => QueueProvider.Context,
+    };
+}
+
+// QueueEntry carries the session-stable id + provider enum; EntryId is DERIVED ("i{ItemId}") for wire/diagnostics and is
+// never parsed for position (F5). IsAutoplay is redundant with Provider == Autoplay but kept for the display path.
 public sealed record QueueEntry(
+    QueueItemId ItemId,
     string EntryId,
     Track Track,
     QueueBucket Bucket,
+    QueueProvider Provider,
     bool IsAutoplay,
     string Uid = "",
-    string Provider = "",
     System.Collections.Generic.IReadOnlyDictionary<string, string>? Metadata = null);
 
 // ── Podcasts (docs/architecture.md §2 "Podcasts / shows / episodes") ──────────────────────────────────────────────────

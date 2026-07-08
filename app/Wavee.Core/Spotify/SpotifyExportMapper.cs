@@ -37,7 +37,16 @@ public static class SpotifyExportMapper
             MonthlyListeners: Long(au, "stats", "monthlyListeners"),
             Followers: Long(au, "stats", "followers"),
             Bio: HtmlText(Str(au, "profile", "biography", "text")),
-            Verified: verified);
+            Verified: verified,
+            WorldRank: (int)Long(au, "stats", "worldRank"),
+            HeaderImage: PickImage(Dig(au, "visuals", "headerImage", "sources"))
+                ?? PickImage(Dig(au, "headerImage", "data", "sources")),
+            Extras: new ArtistExtras(
+                Merch: MapMerch(Dig(au, "goods", "merch", "items")),
+                TopCities: MapTopCities(Dig(au, "stats", "topCities", "items")),
+                ExternalLinks: MapLinks(Dig(au, "profile", "externalLinks", "items")),
+                Gallery: MapGallery(Dig(au, "visuals", "gallery", "items"))),
+            Palette: ExtractPalette(Dig(au, "visualIdentity", "wideFullBleedImage")));
     }
 
     /// <summary>Map a LIVE Pathfinder <c>getAlbum</c> response (data.albumUnion) → the domain Album WITH its tracklist
@@ -193,13 +202,52 @@ public static class SpotifyExportMapper
         if (items.ValueKind != JsonValueKind.Array) return System.Array.Empty<MerchItem>();
         var result = new List<MerchItem>();
         foreach (var item in items.EnumerateArray())
-        {
-            string name = Str(item, "nameV2") ?? Str(item, "name") ?? "";
-            if (name.Length == 0) continue;
-            result.Add(new MerchItem(name, Str(item, "price") ?? "", HtmlText(Str(item, "description")),
-                PickImage(Dig(item, "image", "sources")), Str(item, "url")));
-        }
+            if (MerchFromItem(item) is { } mi) result.Add(mi);
         return result;
+    }
+
+    /// <summary>Map the track-scoped half of <c>queryNpvArtist</c>: credits, sources, Canvas, and track merch.</summary>
+    public static TrackNpvInfo? TrackNpvFromResponse(JsonElement responseRoot)
+    {
+        var tu = Dig(responseRoot, "data", "trackUnion");
+        if (tu.ValueKind != JsonValueKind.Object) return null;
+        string trackUri = Str(tu, "uri") ?? "";
+
+        var canvasEl = Dig(tu, "canvas");
+        TrackCanvas? canvas = canvasEl.ValueKind == JsonValueKind.Object
+            ? new TrackCanvas(Str(canvasEl, "fileId"), Str(canvasEl, "type"), Str(canvasEl, "uri"), Str(canvasEl, "url"))
+            : null;
+
+        var credits = new List<TrackCredit>();
+        foreach (var c in Arr(Dig(tu, "creditsTrait", "contributors", "items")))
+            if (Str(c, "name") is { Length: > 0 } n)
+                credits.Add(new TrackCredit(n, Str(c, "role") ?? "", Str(c, "roleGroup", "name"),
+                    Str(c, "uri"), Linkable: (Str(c, "uri") ?? "").Length > 0));
+
+        if (credits.Count == 0)
+            foreach (var c in Arr(Dig(tu, "credits")))
+                if (Str(c, "artistName") is { Length: > 0 } n)
+                    credits.Add(new TrackCredit(n, Str(c, "role") ?? "", null,
+                        Str(c, "artistUri"), BoolAt(c, false, "isArtistUriLinkable")));
+
+        var sources = new List<string>();
+        foreach (var s in Arr(Dig(tu, "creditsTrait", "sources", "items")))
+            if (Str(s, "name") is { Length: > 0 } sn) sources.Add(sn);
+
+        var merch = new List<MerchItem>();
+        foreach (var item in Arr(Dig(tu, "merch", "items")))
+            if (MerchFromItem(item) is { } mi) merch.Add(mi);
+
+        return new TrackNpvInfo(trackUri, credits, sources, canvas, merch);
+    }
+
+    static MerchItem? MerchFromItem(JsonElement item)
+    {
+        string name = Str(item, "nameV2") ?? Str(item, "name") ?? "";
+        if (name.Length == 0) return null;
+        return new MerchItem(name, Str(item, "price") ?? "", HtmlText(Str(item, "description")),
+            PickImage(Dig(item, "image", "sources")) ?? PickImage(Dig(item, "image", "data", "sources")),
+            Str(item, "url"));
     }
 
     /// <summary>Map a LIVE Pathfinder <c>getTrack</c> response → a playable track row with album cover art.</summary>

@@ -67,6 +67,83 @@ public class AlbumEnrichmentMapperTests
     }
 
     [Fact]
+    public void QueryNpvArtist_MapsArtistAndTrackExtras()
+    {
+        var root = Root("""
+        { "data": {
+          "artistUnion": {
+            "uri": "spotify:artist:A1",
+            "profile": {
+              "name": "The Artist",
+              "biography": { "text": "About &amp; bio" },
+              "externalLinks": { "items": [
+                { "name": "instagram", "url": "https://instagram.com/theartist" }
+              ] }
+            },
+            "onPlatformReputationTrait": { "verification": { "isVerified": true } },
+            "stats": {
+              "monthlyListeners": 123456,
+              "followers": 987,
+              "worldRank": 42,
+              "topCities": { "items": [
+                { "city": "Athens", "country": "GR", "numberOfListeners": 1200 }
+              ] }
+            },
+            "visuals": {
+              "avatarImage": { "sources": [ { "url": "https://cdn/avatar", "width": 160, "height": 160 } ] },
+              "headerImage": { "sources": [ { "url": "https://cdn/header", "width": 640, "height": 360 } ] },
+              "gallery": { "items": [
+                { "sources": [ { "url": "https://cdn/gallery", "width": 640, "height": 640 } ] }
+              ] }
+            },
+            "goods": { "merch": { "items": [
+              { "nameV2": "Artist Hoodie", "price": "$60", "url": "https://shop/hoodie",
+                "image": { "sources": [ { "url": "https://cdn/hoodie", "width": 300, "height": 300 } ] } }
+            ] } }
+          },
+          "trackUnion": {
+            "uri": "spotify:track:T1",
+            "canvas": { "fileId": "canvas-file", "type": "VIDEO", "uri": "spotify:canvas:C1", "url": "https://cdn/canvas.mp4" },
+            "creditsTrait": {
+              "contributors": { "items": [
+                { "name": "Lead Singer", "role": "Vocals", "roleGroup": { "name": "Performers" }, "uri": "spotify:artist:A1" },
+                { "name": "Studio Writer", "role": "Writer", "roleGroup": { "name": "Composition" } }
+              ] },
+              "sources": { "items": [ { "name": "Label copy" } ] }
+            },
+            "merch": { "items": [
+              { "name": "Track Tee", "price": "$25", "url": "https://shop/track",
+                "image": { "sources": [ { "url": "https://cdn/tracktee", "width": 300, "height": 300 } ] } },
+              { "name": "" }
+            ] }
+          }
+        } }
+        """);
+
+        var artist = SpotifyExportMapper.ArtistFromNpv(root);
+        Assert.NotNull(artist);
+        Assert.Equal("The Artist", artist!.Name);
+        Assert.True(artist.Verified);
+        Assert.Equal(42, artist.WorldRank);
+        Assert.Equal("https://cdn/header", artist.HeaderImage!.Url);
+        Assert.Equal("About & bio", artist.Bio);
+        Assert.Equal("Athens", Assert.Single(artist.Extras!.TopCities!).City);
+        Assert.Equal(ExternalLinkKind.Instagram, Assert.Single(artist.Extras!.ExternalLinks!).Kind);
+        Assert.Equal("https://cdn/gallery", Assert.Single(artist.Extras!.Gallery!).Url);
+        Assert.Equal("Artist Hoodie", Assert.Single(artist.Extras!.Merch!).Name);
+
+        var track = SpotifyExportMapper.TrackNpvFromResponse(root);
+        Assert.NotNull(track);
+        Assert.Equal("spotify:track:T1", track!.TrackUri);
+        Assert.Equal("https://cdn/canvas.mp4", track.Canvas!.Url);
+        Assert.Equal("Label copy", Assert.Single(track.CreditSources));
+        Assert.Equal(2, track.Credits.Count);
+        Assert.True(track.Credits[0].Linkable);
+        Assert.False(track.Credits[1].Linkable);
+        Assert.Equal("Track Tee", Assert.Single(track.Merch).Name);
+    }
+
+    [Fact]
     public void TrackContextFromUnion_ReadsVideoSignal_AndRelatedArtists()
     {
         var ctx = SpotifyExportMapper.TrackContextFromUnion(Root("""

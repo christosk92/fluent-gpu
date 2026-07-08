@@ -235,9 +235,6 @@ public sealed class AppHost : IDisposable
     // One line per modal-loop tick to stderr — total/ensureSize/layout/submit+present ms — gated entirely so the normal
     // hot path and the zero-alloc gates are untouched (no work, no allocation, when the flag is off).
     private static readonly bool s_resizeDiag = Diag.EnvFlag("FG_RESIZE_DIAG");
-    // FG_LIVE_MODAL_RESIZE=1: per-step swapchain resize + relayout during an edge-drag (legacy; ~16–50 ms/WndProc step).
-    // Default OFF: defer GPU resize to WM_EXITSIZEMOVE so the modal loop stays butter-smooth on composited/Mica windows.
-    private static readonly bool s_liveModalResize = Diag.EnvFlag("FG_LIVE_MODAL_RESIZE");
     // Render-thread seam rollout gate (Step 4/5), default OFF: FG_RENDER_THREAD spawns the fgpu-render thread and routes
     // submit/present onto it (FORCE-SYNC in Step 4 — the UI still blocks). The engine ships the proven single-thread
     // inline path until the seam.race soak is green; this flag is the staged flip mechanism, not a user quality knob.
@@ -1369,7 +1366,7 @@ public sealed class AppHost : IDisposable
             if (keepAlive && !resized && _everLaidOut && !_needFullLayout
                 && _uiPosts.IsEmpty && !_scene.AnyLayoutDirty
                 && (wakeReasons == WakeReasons.None
-                    || (_window.InModalLoop && AnimIsAmbient() && OnlyAmbientWakeReasons(wakeReasons))))
+                    || (_window.SizedInModalLoop && AnimIsAmbient() && OnlyAmbientWakeReasons(wakeReasons))))
                 return LastStats;
 
             var layoutSize = LayoutSizeForFrame(keepAlive);
@@ -1608,7 +1605,7 @@ public sealed class AppHost : IDisposable
             if (reconciled) spanDisable |= SpanReuseDisabledReason.SceneChanged;
             if (layoutNeeded) spanDisable |= SpanReuseDisabledReason.Layout;
             if (resized) spanDisable |= SpanReuseDisabledReason.Resize;
-            if (keepAlive) spanDisable |= SpanReuseDisabledReason.ModalPaint;
+            if (keepAlive && _window.SizedInModalLoop) spanDisable |= SpanReuseDisabledReason.ModalPaint;
             if (_popupWindows.Count != 0) spanDisable |= SpanReuseDisabledReason.PopupWindows;
             if (_connected.Detached.Count != 0) spanDisable |= SpanReuseDisabledReason.Detached;
             bool imageFadeActive = _images.HasActiveCrossfades;
@@ -1667,6 +1664,7 @@ public sealed class AppHost : IDisposable
                 // Step 5 (FG_RENDER_ASYNC): the UI WakeAsyncs and PROCEEDS — the render thread presents on its own
                 // timeline (the smoothness win: the GPU fence-wait no longer bounds back to the UI thread).
                 var submitInfo = new FrameInfo(FrameSizePx(keepAlive), _window.Scale, Clear, recordStats.Damage);
+                if (resized && keepAlive) _device.HintSettlePresent();
                 _renderSeam.Publish(_drawList.Bytes, _drawList.SortKeys, in submitInfo, suppressVsync: keepAlive);
                 if (_renderThread is not null)
                 {
@@ -2219,10 +2217,9 @@ public sealed class AppHost : IDisposable
             DumpNode(c, depth + 1);
     }
 
-    /// <summary>True during a composited modal edge-drag when live per-step resize is off: HWND size advances but GPU
-    /// resize + relayout wait for mouse-up.</summary>
+    /// <summary>True during a composited modal edge-drag: HWND size advances but GPU resize + relayout wait for mouse-up.</summary>
     private bool DeferModalResize(bool keepAlive)
-        => !s_liveModalResize && keepAlive && _window.InModalLoop;
+        => keepAlive && _window.InModalLoop && _window.Composited;
 
     /// <summary>Layout/submit viewport in DIP while a modal resize is deferred — keep the last presented size until
     /// WM_EXITSIZEMOVE.</summary>

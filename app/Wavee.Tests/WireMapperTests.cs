@@ -1,4 +1,5 @@
 using Google.Protobuf;
+using System.Linq;
 using Wavee.Backend.Collections;
 using Wavee.Backend.Playlists;
 using Xunit;
@@ -46,6 +47,23 @@ public class PlaylistWireMapperTests
         Assert.Equal(3, ops[1].Length);
         Assert.Equal(PlaylistOpKind.Move, ops[2].Kind);
         Assert.Equal(4, ops[2].ToIndex);
+    }
+
+    [Fact]
+    public void MapOps_IndexRem_CarriesItemsForVerification()
+    {
+        var rem = new Pl.Rem { FromIndex = 4, Length = 2 };
+        rem.Items.Add(new Pl.Item { Uri = "spotify:track:a", Attributes = new Pl.ItemAttributes { ItemId = ByteString.CopyFrom(0xA1) } });
+        rem.Items.Add(new Pl.Item { Uri = "spotify:track:b", Attributes = new Pl.ItemAttributes { ItemId = ByteString.CopyFrom(0xB2) } });
+
+        var op = Assert.Single(PlaylistWireMapper.MapOps(new[] { new Pl.Op { Kind = Pl.Op.Types.Kind.Rem, Rem = rem } }));
+
+        Assert.Equal(PlaylistOpKind.Remove, op.Kind);
+        Assert.False(op.ItemsAsKey);
+        Assert.Equal(4, op.FromIndex);
+        Assert.Equal(2, op.Length);
+        Assert.Equal(new[] { "spotify:track:a", "spotify:track:b" }, op.Items!.Select(i => i.ItemUri).ToArray());
+        Assert.Equal(new[] { "a1", "b2" }, op.Items!.Select(i => i.ItemId).ToArray());
     }
 
     [Fact]

@@ -124,6 +124,7 @@ public sealed class ItemsView : Component
     // ── full surface ──
     /// <summary>Item count when an <see cref="ItemTemplate"/> drives content (−1 ⇒ <see cref="Items"/>.Count).</summary>
     public int ItemCount = -1;
+    public IReadSignal<int>? ItemCountSignal;
     /// <summary>The item CONTENT template (wrapped in an <see cref="ItemContainer"/> per item).</summary>
     public Func<int, Element>? ItemTemplate;
     /// <summary>The SIGNALS-FIRST bound row template (<see cref="CreateBound"/>): the row is built ONCE per slot from a
@@ -313,10 +314,12 @@ public sealed class ItemsView : Component
                                       string? scrollKey = null,
                                       Func<int, (float dx, float dy)?>? itemFlipFrom = null,
                                       Func<int, (float from, float delayMs)?>? itemFadeFrom = null,
-                                      (Func<ScrollGeometry, long> Project, Action<ScrollGeometry> Action)? onScrollGeometryChanged = null)
+                                      (Func<ScrollGeometry, long> Project, Action<ScrollGeometry> Action)? onScrollGeometryChanged = null,
+                                      IReadSignal<int>? itemCountSignal = null)
         => Embed.Comp(() => new ItemsView
         {
             ItemCount = itemCount,
+            ItemCountSignal = itemCountSignal,
             RowTemplate = rowTemplate,
             BoundMode = true,
             StaggerColdRealize = staggerColdRealize,
@@ -396,6 +399,22 @@ public sealed class ItemsView : Component
                                float width = float.NaN, float height = float.NaN, float grow = 0f)
         => Embed.Comp(() => new ItemsViewGridPreset { ItemCount = itemCount, ItemTemplate = itemTemplate, Columns = columns, TileSize = tileHeight, SelectionMode = selectionMode, Selection = selection, OnItemClick = onItemClick, OnItemInvoked = onItemInvoked, OnSelectionChanged = onSelectionChanged, CanReorderItems = canReorderItems, OnReorder = onReorder, ItemText = itemText, IsItemEnabled = isItemEnabled, Controller = controller, KeyOf = keyOf, Width = width, Height = height, Grow = grow });
 
+    // DEBUG-only frozen-props tripwire (ReuseGuard): ItemCount/Items freeze at mount like any ComponentEl field. A
+    // reused ItemsView whose EFFECTIVE item count changed means the caller grew/refiltered the set without a remount
+    // Key or a reactive count — the DiagnosticsPanel bug class. Const-gated so it's compiled out of release entirely.
+    public override bool ChecksReuse => ReuseGuard.CompiledIn;
+    public override void DebugCheckReuse(Component next)
+    {
+        if (next is not ItemsView n) return;
+        if (ItemCountSignal is not null && n.ItemCountSignal is not null) return;
+        int a = ItemCount >= 0 ? ItemCount : Items.Count;
+        int b = n.ItemCount >= 0 ? n.ItemCount : n.Items.Count;
+        if (a != b)
+            ReuseGuard.Violation(this, nameof(ItemCount),
+                $"item count {a}→{b} on a reused list — re-key the list wrapper so a set change remounts it "
+              + "(scrollKey preserves the offset; the DetailTracks idiom), or drive the count reactively");
+    }
+
     public override Element Render()
     {
         var hooks = UseContext(InputHooks.Current);
@@ -409,7 +428,7 @@ public sealed class ItemsView : Component
         var lastTabStop = UseRef(-1);                      // bound mode: the index currently holding the roving tab stop
 
         var model = Selection ?? ownModel;
-        int count = ItemCount >= 0 ? ItemCount : Items.Count;
+        int count = ItemCountSignal is { } cs ? cs.Value : ItemCount >= 0 ? ItemCount : Items.Count;
         model.ItemCount = count;
         model.Mode = SelectionMode;
         // RenderItem mode re-skins selection by re-rendering this window (the container template reads IsSelected at

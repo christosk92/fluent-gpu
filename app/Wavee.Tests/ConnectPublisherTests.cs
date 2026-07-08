@@ -165,8 +165,8 @@ public class ConnectPublisherTests
     {
         var h = new Harness();
         h.Connect("c1"); h.Play("spotify:track:a");
-        h.SetQueue(new QueueEntry("now", T("spotify:track:a"), QueueBucket.NowPlaying, false, "u0"),
-                   new QueueEntry("q0", T("spotify:track:q"), QueueBucket.UserQueue, false, "uq"));
+        h.SetQueue(new QueueEntry(QueueItemId.None, "now", T("spotify:track:a"), QueueBucket.NowPlaying, QueueProvider.Context, false, "u0"),
+                   new QueueEntry(QueueItemId.None, "q0", T("spotify:track:q"), QueueBucket.UserQueue, QueueProvider.Queue, false, "uq"));
         h.Emit(EvKind.QueueChanged);
         await Task.Delay(20);
         Assert.Equal(3, h.Transport.PublishCount);   // up-next changed → not deduped
@@ -180,10 +180,10 @@ public class ConnectPublisherTests
         h.Play("spotify:track:now");
         var queue = new List<QueueEntry>();
         for (int i = 0; i < 55; i++)
-            queue.Add(new QueueEntry("h" + i, T("spotify:track:h" + i), QueueBucket.History, false, "uh" + i));
-        queue.Add(new QueueEntry("now", T("spotify:track:now"), QueueBucket.NowPlaying, false, "unow"));
+            queue.Add(new QueueEntry(QueueItemId.None, "h" + i, T("spotify:track:h" + i), QueueBucket.History, QueueProvider.Context, false, "uh" + i));
+        queue.Add(new QueueEntry(QueueItemId.None, "now", T("spotify:track:now"), QueueBucket.NowPlaying, QueueProvider.Context, false, "unow"));
         for (int i = 0; i < 55; i++)
-            queue.Add(new QueueEntry("n" + i, T("spotify:track:n" + i), QueueBucket.NextUp, false, "un" + i));
+            queue.Add(new QueueEntry(QueueItemId.None, "n" + i, T("spotify:track:n" + i), QueueBucket.NextUp, QueueProvider.Context, false, "un" + i));
 
         h.SetQueue(queue.ToArray());
         h.Emit(EvKind.QueueChanged);

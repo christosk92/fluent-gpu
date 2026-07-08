@@ -2,8 +2,10 @@ using System;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
+using System.Collections.Generic;
 using Wavee.Backend;
 using Wavee.Backend.Spotify;
+using Wavee.Core;
 using Xunit;
 
 namespace Wavee.Tests;
@@ -223,6 +225,72 @@ public class OutboundEnvelopeTests
         Assert.Contains("\"queue_revision\":10355548321371651421", json);   // unquoted bare number, > Int64.MaxValue
         using var doc = JsonDocument.Parse(json);
         Assert.Equal(10355548321371651421UL, doc.RootElement.GetProperty("command").GetProperty("queue_revision").GetUInt64());
+    }
+
+    [Fact]
+    public void NextTrack_QueueRow_MatchesFixtureBFieldSet()
+    {
+        // FIXTURE-B req1 (que.saz): clicking user-queue row uid "q2" targeting another device — endpoint "next_track",
+        // the three options bools, track.uri/uid + verbatim metadata + top-level album_uri/artist_uri, logging_params.
+        var meta = new Dictionary<string, string>
+        {
+            ["is_queued"] = "true",
+            ["album_uri"] = "spotify:album:4xi27YjXGPBNbrONMJBnfm",
+            ["artist_uri"] = "spotify:artist:7bWYN0sHvyH7yv1uefX07U",
+            ["title"] = "Fall In Love",
+        };
+        var track = new Track("13jOUAJE5tHgidRLrmSpO5", "spotify:track:13jOUAJE5tHgidRLrmSpO5", "Fall In Love",
+            new[] { new ArtistRef("7bWYN0sHvyH7yv1uefX07U", "spotify:artist:7bWYN0sHvyH7yv1uefX07U", "Jukjae") },
+            new AlbumRef("4xi27YjXGPBNbrONMJBnfm", "spotify:album:4xi27YjXGPBNbrONMJBnfm", "Nevertheless"), 240000, false, null);
+        var row = new QueueEntry(new QueueItemId(7), "i7", track, QueueBucket.UserQueue, QueueProvider.Queue, false, "q2", meta);
+
+        var json = OutboundEnvelope.NextTrack(row, "dev9", "cmd1", "intent1", 1783530967413);
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        Assert.Equal("wlan", root.GetProperty("connection_type").GetString());
+        Assert.Equal("intent1", root.GetProperty("intent_id").GetString());
+
+        var cmd = root.GetProperty("command");
+        Assert.Equal("next_track", cmd.GetProperty("endpoint").GetString());
+
+        var opts = cmd.GetProperty("options");
+        Assert.False(opts.GetProperty("override_restrictions").GetBoolean());
+        Assert.False(opts.GetProperty("only_for_local_device").GetBoolean());
+        Assert.False(opts.GetProperty("system_initiated").GetBoolean());
+
+        var t = cmd.GetProperty("track");
+        Assert.Equal("spotify:track:13jOUAJE5tHgidRLrmSpO5", t.GetProperty("uri").GetString());
+        Assert.Equal("q2", t.GetProperty("uid").GetString());                                    // uid-first identity
+        Assert.Equal("spotify:album:4xi27YjXGPBNbrONMJBnfm", t.GetProperty("album_uri").GetString());   // top-level, always present
+        Assert.Equal("spotify:artist:7bWYN0sHvyH7yv1uefX07U", t.GetProperty("artist_uri").GetString());
+        var md = t.GetProperty("metadata");
+        Assert.Equal("true", md.GetProperty("is_queued").GetString());                           // metadata passthrough verbatim
+        Assert.Equal("Fall In Love", md.GetProperty("title").GetString());
+
+        var log = cmd.GetProperty("logging_params");
+        Assert.Equal("cmd1", log.GetProperty("command_id").GetString());
+        Assert.Equal("dev9", log.GetProperty("device_identifier").GetString());
+        Assert.Equal(1783530967413, log.GetProperty("command_initiated_time").GetInt64());
+        Assert.Equal(1783530967413, log.GetProperty("command_received_time").GetInt64());        // FIXTURE-B carries both time keys
+    }
+
+    [Fact]
+    public void NextTrack_AutoplayRow_UsesHexUid_AndAlwaysWritesAlbumArtistKeys()
+    {
+        // FIXTURE-B req2: an autoplay-station row jump — uid is the 16-hex, autoplay metadata rides through, and the
+        // top-level album_uri/artist_uri keys are ALWAYS emitted (present in the capture even for autoplay rows).
+        var meta = new Dictionary<string, string> { ["autoplay.is_autoplay"] = "true" };
+        var track = new Track("37dkyQQNJLaqk09kkNr7In", "spotify:track:37dkyQQNJLaqk09kkNr7In", "Amazing You",
+            System.Array.Empty<ArtistRef>(), new AlbumRef("", "", ""), 297000, false, null);
+        var row = new QueueEntry(new QueueItemId(3), "i3", track, QueueBucket.NextUp, QueueProvider.Autoplay, true, "8e7f7ecb4ffb81fa", meta);
+
+        var json = OutboundEnvelope.NextTrack(row, "dev9", "c", "i", 1);
+        using var doc = JsonDocument.Parse(json);
+        var t = doc.RootElement.GetProperty("command").GetProperty("track");
+        Assert.Equal("8e7f7ecb4ffb81fa", t.GetProperty("uid").GetString());
+        Assert.Equal("true", t.GetProperty("metadata").GetProperty("autoplay.is_autoplay").GetString());
+        Assert.True(t.TryGetProperty("album_uri", out _));    // always present, even when the row carries no album/artist uri
+        Assert.True(t.TryGetProperty("artist_uri", out _));
     }
 
     [Fact]

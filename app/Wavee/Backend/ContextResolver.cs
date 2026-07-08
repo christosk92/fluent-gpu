@@ -87,14 +87,27 @@ public interface IContextResolver
 /// <summary>Pure helpers shared by every IContextResolver impl (proto-free, alloc-free, unit-testable).</summary>
 public static class ContextResolve
 {
-    /// <summary>Pick the start track in a resolved list: uid (handles sorted/filtered contexts) → uri → explicit index → 0.</summary>
-    public static int FindStartIndex(IReadOnlyList<QueuedTrack> tracks, string? trackUri, string? trackUid, int? fallbackIndex)
+    /// <summary>Identity-strict start index (F2, §7.3): uid → uri → NOT a blind index. No skip target specified ⇒ 0 (start
+    /// at the top). A target that ISN'T in the list ⇒ -1 (an identity miss — the caller pages deeper / patches the clicked
+    /// track in; it must NEVER play an unrelated index across two divergent orderings, which was the IU→FANCY bug).</summary>
+    public static int FindStartIndex(IReadOnlyList<QueuedTrack> tracks, string? trackUri, string? trackUid)
     {
         if (!string.IsNullOrEmpty(trackUid))
             for (int i = 0; i < tracks.Count; i++) if (tracks[i].Uid == trackUid) return i;
         if (!string.IsNullOrEmpty(trackUri))
             for (int i = 0; i < tracks.Count; i++) if (tracks[i].Track.Uri == trackUri) return i;
-        if (fallbackIndex is int fi && fi >= 0 && fi < tracks.Count) return fi;
+        return -1;   // identity miss — the blind index fallback is intentionally gone (F2)
+    }
+
+    /// <summary>Resolve the play start index from a <see cref="ContextSpec"/>: uid → uri → (index-only skip_to) → 0.
+    /// When uid/uri ARE specified but miss, returns -1 so the caller can page/patch — it never plays a blind index across
+    /// divergent orderings (F2). Inbound wire <c>track_index</c>-only skip_to and local <see cref="ContextSpec.ForUri"/>
+    /// start indices ride <see cref="ContextSpec.SkipToIndex"/>.</summary>
+    public static int ResolveStartIndex(IReadOnlyList<QueuedTrack> tracks, in ContextSpec spec)
+    {
+        if (!string.IsNullOrEmpty(spec.SkipToTrackUid) || !string.IsNullOrEmpty(spec.SkipToTrackUri))
+            return FindStartIndex(tracks, spec.SkipToTrackUri, spec.SkipToTrackUid);
+        if (spec.SkipToIndex is int idx && idx >= 0 && idx < tracks.Count) return idx;
         return 0;
     }
 

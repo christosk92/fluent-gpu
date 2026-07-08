@@ -210,7 +210,8 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
             next.Add(ToSnapshotTrack(qe, provider, viewIndex));
         }
 
-        var currentSource = nowEntry ?? new QueueEntry("now", t, QueueBucket.NowPlaying, nowAutoplay, trackUid);
+        var currentSource = nowEntry ?? new QueueEntry(QueueItemId.None, "now", t, QueueBucket.NowPlaying,
+            nowAutoplay ? QueueProvider.Autoplay : QueueProvider.Context, nowAutoplay, trackUid);
         var current = ToSnapshotTrack(currentSource, ProviderOf(currentSource), currentIndex);
         IReadOnlyDictionary<string, string> metadata = _state is NowPlayingProjection p
             ? p.ContextMetadata
@@ -260,7 +261,7 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
 
     static string ProviderOf(QueueEntry entry)
     {
-        if (!string.IsNullOrEmpty(entry.Provider)) return entry.Provider;
+        if (entry.Provider != QueueProvider.Context) return entry.Provider.ToWire();
         if (entry.IsAutoplay) return "autoplay";
         return entry.Bucket == QueueBucket.UserQueue ? "queue" : "context";
     }

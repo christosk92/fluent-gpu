@@ -26,6 +26,21 @@ public static class RichText
         };
     }
 
+    /// <summary>The FLEX twin of <see cref="Of"/>: same parsing/wrapping, but the paragraph GROWS into its flex row
+    /// (Grow/Basis=0, no fixed width) and wraps to the width the layout assigns — so siblings (icons, status chips)
+    /// take their intrinsic space and the text yields naturally, with NO hand-computed width reservations.</summary>
+    public static Element OfFlex(string? html, float size, ColorF color, ColorF linkColor, int maxLines, Action<string>? onNavUri = null)
+    {
+        if (string.IsNullOrWhiteSpace(html)) return new BoxEl();
+        var spans = Parse(html!, linkColor, onNavUri);
+        if (spans.Count == 0) return new BoxEl();
+        return new SpanTextEl(spans.ToArray())
+        {
+            Size = size, Color = color, LineHeight = size <= 12f ? 16f : float.NaN,
+            Grow = 1f, Basis = 0f, MaxLines = maxLines, Wrap = TextWrap.Wrap, Trim = TextTrim.CharacterEllipsis,
+        };
+    }
+
     /// <summary>A single-line, FLEX rich caption for a media ROW subtitle: same anchor→hyperlink parsing as <see cref="Of"/>,
     /// but it GROWS into the row's text column (Grow/Basis=0, no fixed width) and ellipsises ONE line. A span whose href
     /// <see cref="RouteForUri"/> can route is an accent hyperlink — so artist/album names are clickable on their own,

@@ -89,6 +89,9 @@ sealed class DiagnosticsPanel : Component
             Reactive.OnCleanup(() => { timer.Value?.Dispose(); timer.Value = null; });
         });
 
+        // Hoisted here (unconditional) so the hook order is stable — LogBody has early-out branches before the list.
+        var logLayout = UseMemo(() => new MeasuredStackVirtualLayout(estimatedExtent: 40f), Array.Empty<object>());
+
         _ = _refresh.Value;
         _ = _diagVersion.Value;
         _ = _expandedSeq.Value;
@@ -113,7 +116,7 @@ sealed class DiagnosticsPanel : Component
             [
                 Toolbar(hooks, entries, visible, liveSession, post),
                 Divider(),
-                LogBody(entries, visible),
+                LogBody(entries, visible, logLayout),
                 Divider(),
                 Footer(entries, visible, liveSession),
             ],
@@ -312,7 +315,7 @@ sealed class DiagnosticsPanel : Component
         catch { /* best-effort */ }
     }
 
-    Element LogBody(WaveeLogEntry[]? entries, List<LogRowData> visible)
+    Element LogBody(WaveeLogEntry[]? entries, List<LogRowData> visible, MeasuredStackVirtualLayout layout)
     {
         if (entries is null)
         {
@@ -341,12 +344,17 @@ sealed class DiagnosticsPanel : Component
             };
         }
 
-        var layout = UseMemo(() => new MeasuredStackVirtualLayout(estimatedExtent: 40f), Array.Empty<object>());
         int sort = _newestFirst.Value;
         int group = _groupRepeats.Value;
         string listKey = "settings:logs:" + _session.Value + ":" + sort + ":" + group + ":" + _visibleLimit.Value;
+        // ItemsView is an autonomous component: its ItemCount/ItemTemplate freeze at first mount. The filter level/
+        // category/search and the live-growing count are NOT carried reactively, so we REMOUNT the list whenever the
+        // visible SET changes (the DetailTracks re-key idiom). scrollKey (listKey) restores the offset across remounts.
+        string remountKey = listKey + ":L" + _level.Value + ":C" + _category.Value
+            + ":n" + visible.Count + ":q" + _search.Value.Length;
         return new BoxEl
         {
+            Key = "diaglist:" + remountKey,
             Grow = 1f, Shrink = 1f, MinHeight = 0f,
             Children =
             [

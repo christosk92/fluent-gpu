@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using FluentGpu.Foundation;
+using FluentGpu.Hosting;
 using FluentGpu.Hooks;
 using FluentGpu.Pal;
 using TerraFX.Interop.Windows;
@@ -166,7 +167,6 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
 
     private const nuint MoveLoopTimerId = 1;   // SetTimer id for the modal move/size loop keep-alive pump
     private const nuint LiftTimerId = 2;       // SetTimer id for the hi-res fallback silence-lift check (fires even when no frames pump)
-    private const uint WM_FG_COALESCED_SIZE_PAINT = 0x8000 + 0x4F; // WM_APP-range queued paint for modal live-resize coalescing
     // ── Pointer input (EnableMouseInPointer): the WM_MOUSE* client stream is retired — mouse, touch and pen all arrive
     //    here as WM_POINTER* (PT_MOUSE/PT_TOUCH/PT_PEN/PT_TOUCHPAD). One contact = one PointerId; implicit contact→window capture
     //    replaces the SetCapture refcount. WM_POINTERWHEEL/HWHEEL REPLACE WM_MOUSEWHEEL/HWHEEL once mouse-in-pointer is on.
@@ -452,10 +452,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private bool _wasZoomed;      // WM_SIZE edge-detect → InputKind.WindowStateChanged
     private bool _inMoveSizeLoop; // WM_ENTERSIZEMOVE..WM_EXITSIZEMOVE modal loop
     private bool _sizedInMoveSizeLoop; // true once this modal loop has delivered WM_SIZE (edge resize, not pure titlebar move)
-    private bool _sizePaintPosted; // a coalesced modal-resize paint is already queued
-    // FG_LIVE_MODAL_RESIZE=1: restore per-step coalesced WM_SIZE paints during an edge-drag (live relayout at ~16–50 ms/step).
-    // Default OFF: composited windows defer GPU resize + relayout to WM_EXITSIZEMOVE so the modal loop stays on the OS path.
-    private static readonly bool s_liveModalResize = Diag.EnvFlag("FG_LIVE_MODAL_RESIZE");
+    private long _lastModalPaintMs;
+    private const int ModalResizeMinIntervalMs = 33;   // ~30 Hz live relayout for redirection-bitmap windows / move ticks
     private static readonly Point2 OffscreenDip = new(-10000f, -10000f);
 
     // ── single-instance activation redirect (WM_COPYDATA receiver) ──────────────────────────────────────────────────
@@ -582,7 +580,17 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     public float Scale => _scale;
     public bool IsClosed => _closed;
     public bool InModalLoop => _inMoveSizeLoop;   // WM_ENTERSIZEMOVE..WM_EXITSIZEMOVE — host suppresses redundant keep-alive paints
+    public bool Composited => _composited;
+    public bool SizedInModalLoop => _sizedInMoveSizeLoop;
     public Action? PaintRequested { get; set; }
+
+    /// <summary>True = skip this modal WM_SIZE paint (non-composited edge-resize throttle).</summary>
+    private bool ThrottleModalResizePaint()
+        => ModalPaintThrottle.ShouldSkip(Environment.TickCount64, ref _lastModalPaintMs, _sizedInMoveSizeLoop, ModalResizeMinIntervalMs);
+
+    /// <summary>True = skip this modal WM_TIMER keep-alive (≤30 Hz during move or non-composited live resize).</summary>
+    private bool ThrottleModalTickPaint()
+        => ModalPaintThrottle.ShouldSkip(Environment.TickCount64, ref _lastModalPaintMs, true, ModalResizeMinIntervalMs);
 
     /// <summary>Screen position of client (0,0) in physical px (<c>ClientToScreen</c>) — the DIP→screen bridge for
     /// popup-window placement and per-monitor work-area queries.</summary>
@@ -995,25 +1003,12 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                         _queue.Enqueue(new InputEvent(InputKind.WindowStateChanged, default, 0, 0, TimestampMs: Now()));
                     }
                 }
-                if (_composited && _inMoveSizeLoop)
+                if (_inMoveSizeLoop)
                 {
-                    // Deferred modal resize (default): HWND geometry updates every step but we paint once on mouse-up.
-                    // DWM + the bound DComp flip surface track the HWND; swapchain relayout waits for WM_EXITSIZEMOVE.
-                    if (!s_liveModalResize) return true;
-                    if (!_sizePaintPosted)
-                    {
-                        _sizePaintPosted = true;
-                        PostMessageW(hWnd, WM_FG_COALESCED_SIZE_PAINT, 0, 0);
-                        if (Diag.EnvFlag("FG_MOVE_DIAG")) Console.Error.WriteLine("[FG_MOVE_DIAG] posted coalesced resize paint");
-                    }
+                    if (_composited) return true;
+                    if (!ThrottleModalResizePaint()) PaintRequested?.Invoke();
                     return true;
                 }
-                PaintRequested?.Invoke();   // keep the window live during the modal resize loop
-                return true;
-            case WM_FG_COALESCED_SIZE_PAINT:
-                if (!_sizePaintPosted) return true;   // stale queued paint; WM_EXITSIZEMOVE already painted the settle frame
-                _sizePaintPosted = false;
-                if (Diag.EnvFlag("FG_MOVE_DIAG")) Console.Error.WriteLine("[FG_MOVE_DIAG] coalesced resize paint");
                 PaintRequested?.Invoke();
                 return true;
             case 0x02E0:   // WM_DPICHANGED (WinUser.h — not surfaced by the TerraFX static-import set)
@@ -1051,6 +1046,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 // scroll settle) even when the user holds the window still mid-drag — WM_MOVE alone fires only on motion.
                 _inMoveSizeLoop = true;
                 _sizedInMoveSizeLoop = false;
+                _lastModalPaintMs = 0;
                 if (Diag.EnvFlag("FG_MOVE_DIAG"))
                     Console.Error.WriteLine("[FG_MOVE_DIAG] enter modal move/size");
                 SetTimer(hWnd, MoveLoopTimerId, 8, null);
@@ -1061,21 +1057,15 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                     Console.Error.WriteLine($"[FG_MOVE_DIAG] exit modal move/size sized={_sizedInMoveSizeLoop}");
                 _inMoveSizeLoop = false;
                 _sizedInMoveSizeLoop = false;
-                _sizePaintPosted = false;
                 PaintRequested?.Invoke();   // one settle frame at the final position
                 return true;
             case WM_TIMER:
                 if ((nuint)wParam == MoveLoopTimerId)
                 {
-                    // Composited modal loop: DWM relocates the DComp surface on move; deferred resize paints on mouse-up.
-                    // Timer keep-alives only burn WndProc time (the outer RunFrame loop is suspended mid-drag anyway).
-                    // FG_LIVE_MODAL_RESIZE=1 re-enables timer paints during edge-resize for live relayout.
-                    if (_composited && _inMoveSizeLoop && (!s_liveModalResize || !_sizedInMoveSizeLoop))
-                    {
-                        if (Diag.EnvFlag("FG_MOVE_DIAG"))
-                            Console.Error.WriteLine($"[FG_MOVE_DIAG t={Environment.TickCount64}] timer skipped: composited modal {(s_liveModalResize ? "move" : "loop")}");
-                        return true;
-                    }
+                    // Composited edge-resize: full defer (zero paints). Composited pure move + non-composited: throttled
+                    // keep-alives so ambient animation can advance without flooding the modal loop.
+                    if (_composited && _inMoveSizeLoop && _sizedInMoveSizeLoop) return true;
+                    if (_inMoveSizeLoop && ThrottleModalTickPaint()) return true;
                     if (Diag.EnvFlag("FG_MOVE_DIAG")) Console.Error.WriteLine($"[FG_MOVE_DIAG t={Environment.TickCount64}] timer paint");
                     PaintRequested?.Invoke();
                     return true;

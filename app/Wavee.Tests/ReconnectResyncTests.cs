@@ -73,7 +73,7 @@ public class ReconnectResyncTests
                 return new HttpResp(200, new Dictionary<string, string>(), Array.Empty<byte>());
             });
             Task Hydrate(IReadOnlyList<string> uris, CancellationToken c) => Task.CompletedTask;
-            var pf = new PlaylistFetcher(http, () => "https://x", Store, Hydrate);
+            var pf = new PlaylistFetcher(http, () => "https://x", Store, Hydrate, () => "");
             var revs = new Dictionary<string, string?>();
             var cf = new CollectionFetcher(http, () => "https://x", () => "bob", Store,
                 s => revs.TryGetValue(s, out var r) ? r : null, (s, r) => revs[s] = r, Hydrate);

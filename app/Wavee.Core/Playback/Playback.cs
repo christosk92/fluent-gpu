@@ -10,6 +10,7 @@ public readonly record struct PlaybackContextTrack(string Uri, string Uid = "");
 public interface IPlaybackPlayer
 {
     Task PlayAsync(string contextUri, int startIndex = 0, CancellationToken ct = default);
+    Task PlayContextTrackAsync(string contextUri, PlaybackContextTrack track, int fallbackIndex = 0, CancellationToken ct = default);
     Task PlayOrderedAsync(string contextUri, IReadOnlyList<PlaybackContextTrack> tracks, int startIndex = 0, CancellationToken ct = default);
     Task PlayTrackAsync(string trackUri, CancellationToken ct = default);
     Task PlayTrackAsync(Track track, CancellationToken ct = default);
@@ -21,8 +22,17 @@ public interface IPlaybackPlayer
     Task SetVolumeAsync(double volume01, CancellationToken ct = default);
     Task SetShuffleAsync(bool on, CancellationToken ct = default);
     Task SetRepeatAsync(RepeatMode mode, CancellationToken ct = default);
-    Task MoveQueueAsync(string entryId, int toIndex, CancellationToken ct = default);
-    Task RemoveFromQueueAsync(string entryId, CancellationToken ct = default);
+    /// <summary>Skip-in-place to a queue/history row by its stable session id — the queue-panel verb (Spotify parity: a
+    /// cursor move within the live session, never a rebuild). Active device: session cursor move + fast-start. Viewer:
+    /// forwards next_track with the target row. Idle: no-op.</summary>
+    Task SkipToQueueItemAsync(QueueItemId id, CancellationToken ct = default);
+    Task MoveQueueItemAsync(QueueItemId id, int newPos, CancellationToken ct = default);
+    Task RemoveQueueItemAsync(QueueItemId id, CancellationToken ct = default);
+    /// <summary>Drop the entire user queue (the queue panel's "Clear"). Active device: a local session op. Viewer: no-op
+    /// (Spotify has no clear verb — the UI hides the button while a remote device is active).</summary>
+    Task ClearQueueAsync(CancellationToken ct = default);
+    /// <summary>Drop the local play history (the History section's "Clear"). Active device: a local session op; viewer: no-op.</summary>
+    Task ClearHistoryAsync(CancellationToken ct = default);
     /// <summary>Append a track to the user-queue (the "Add to queue" affordance).</summary>
     Task EnqueueAsync(string trackUri, CancellationToken ct = default);
     /// <summary>Append a known track to the user-queue without discarding already-rendered metadata.</summary>

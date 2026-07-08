@@ -54,7 +54,7 @@ public class LibraryVerticalTests
                 // 1) FETCH a playlist (faked spclient) → thin header + membership + hydrated tracks
                 var http = new FakeExchange((req, _) => new HttpResp(200, new Dictionary<string, string>(),
                     CraftPlaylist(1, ("spotify:track:a", "alice"), ("spotify:track:b", "bob"))));
-                var fetcher = new PlaylistFetcher(http, () => "https://spclient.test", store, Hydrate);
+                var fetcher = new PlaylistFetcher(http, () => "https://spclient.test", store, Hydrate, () => "");
                 await fetcher.FetchPlaylistAsync("spotify:playlist:p", ct);
 
                 // 2) READ through the catalog bridge → joined read-model with membership facts stamped
@@ -66,7 +66,7 @@ public class LibraryVerticalTests
                 Assert.Equal("T-a", pl.Tracks[0].Title);
 
                 // 3) EDIT optimistically (remove the first track) → the read reflects it immediately
-                var eng = new MutationEngine(store, new IMutationStrategy[] { new SetReplayStrategy(), new OpRebaseStrategy(store) });
+                var eng = new MutationEngine(store, new IMutationStrategy[] { new SetReplayStrategy(), new OpRebaseStrategy(store, () => "https://spclient.wg.spotify.com") });
                 eng.Edit("spotify:playlist:p", new[] { new PlaylistOp(PlaylistOpKind.Remove, FromIndex: 0, Length: 1) }, store.PlaylistRevision("spotify:playlist:p"));
                 var edited = await src.GetPlaylistAsync("spotify:playlist:p");
                 Assert.Equal("spotify:track:b", Assert.Single(edited!.Tracks!).Uri);

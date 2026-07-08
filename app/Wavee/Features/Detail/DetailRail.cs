@@ -4,6 +4,7 @@ using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Signals;
 using FluentGpu.Localization;
 using Wavee.Core;
 using static FluentGpu.Dsl.Ui;
@@ -34,17 +35,18 @@ static class DetailRail
     // The side rail: the cover STRETCHES to fill the column width (a big hero — the image is NEVER shrunk for height).
     // The height fit comes from the TEXT — titleSize (the shell lowers it on a short rail; auto-fits down to 18px) and
     // the description's line cap (descMaxLines) — and only then the rail's own scrollbar (last resort).
-    public static Element Build(DetailModel m, DetailConfig cfg, DetailHandlers h, float railW, float titleSize, int descMaxLines)
+    public static Element Build(DetailModel m, DetailConfig cfg, DetailHandlers h, float railW, float titleSize, int descMaxLines, Loadable<DetailModel> modelSource)
     {
         float cover = CoverEdge(railW);
         var kids = new List<Element>(10);
 
-        // Cover (art with a graceful gradient fallback) — stretched to the full column width.
+        // Cover — click-to-change when metadata is editable; static art otherwise.
+        bool editable = m.Capabilities.CanEditMetadata && m.ContextUri is { Length: > 0 };
         kids.Add(new BoxEl
         {
             Width = cover, Height = cover, Corners = CornerRadius4.All(WaveeRadius.Card),
             Shadow = Elevation.Card, ClipToBounds = true,
-            Children = [HeroArtwork(m, cover)],
+            Children = [editable ? PlaylistInlineEdit.Cover(modelSource, cover) : HeroArtwork(m, cover)],
         });
 
         // Badges row.
@@ -64,11 +66,13 @@ static class DetailRail
         // Hero title — a heavy run that AUTO-FITS to the cover width in ≤2 LINES, from titleSize down to 18px. The shell
         // LOWERS titleSize on a SHORT rail so the TEXT gives (never the image). A short name stays big; a long one scales
         // to a compact 2-line block. Natural line height; ellipsis is the last resort.
-        kids.Add(WaveeType.PageHero(m.Title) with
-        {
-            Size = titleSize, MinSize = 18f, Weight = 900, Width = cover, LineHeight = float.NaN,   // font-NATURAL leading: tracks the auto-fit size (a pinned 36 gaps badly once the font shrinks)
-            Wrap = TextWrap.Wrap, MaxLines = 3, Trim = TextTrim.CharacterEllipsis,
-        });
+        kids.Add(editable
+            ? PlaylistInlineEdit.Title(modelSource, cover, titleSize)
+            : WaveeType.PageHero(m.Title) with
+            {
+                Size = titleSize, MinSize = 18f, Weight = 900, Width = cover, LineHeight = float.NaN,
+                Wrap = TextWrap.WrapWholeWords, MaxLines = 3, Trim = TextTrim.CharacterEllipsis,
+            });
 
         // Billed-artist row (album/single): a STACKED artist face-pile (overlapping avatars + "+N" of the distinct album
         // artists + the billed name) when the album carries artist avatars; else the plain clickable artist names.
@@ -108,14 +112,19 @@ static class DetailRail
         if (cfg.Content == DetailContent.Tracks)
             kids.Add(ContextActions(m, cfg, h));
 
+        if (editable)
+            kids.Add(PlaylistInlineEdit.Collaborative(modelSource, cover));
+
         if (cfg.Badges == BadgeStyle.TypeYear && AlbumTrailing.HasReleasePanel(m))
             kids.Add(AlbumTrailing.ReleasePanel(m, h, outerPadding: false));
 
         // Description / release blurb — an HTML fragment (links to artists/playlists, bold): parse → rich spans (links
         // accent + clickable via h.Go, bold rendered, entities decoded). Trimmed to descMaxLines (shell lowers it when short).
-        if (descMaxLines > 0 && m.Description is { Length: > 0 } desc)
-            kids.Add(RichText.Of(desc, 12f, Tok.TextSecondary, Tok.AccentTextPrimary, cover, descMaxLines,
-                u => { if (RichText.RouteForUri(u) is { } k) h.Go(k, null); }));
+        if (descMaxLines > 0 && (editable || m.Description is { Length: > 0 }))
+            kids.Add(editable
+                ? PlaylistInlineEdit.Description(modelSource, cover, descMaxLines, h)
+                : RichText.Of(m.Description!, 12f, Tok.TextSecondary, Tok.AccentTextPrimary, cover, descMaxLines,
+                    u => { if (RichText.RouteForUri(u) is { } k) h.Go(k, null); }));
 
         var rail = new BoxEl
         {
@@ -133,7 +142,7 @@ static class DetailRail
     // cluster + the context actions (copy-to-playlist / add-to-queue) stack full-width below. Center-aligned so the cover
     // and the text block balance (only a small symmetric gap, never a big wedge under the cover). The title wraps to
     // ≤3 lines (no truncation). The list's own command bar follows below (in the track list chrome). Drops the pills + description.
-    public static Element BuildHeader(DetailModel m, DetailConfig cfg, DetailHandlers h, bool includeReleasePanel = true)
+    public static Element BuildHeader(DetailModel m, DetailConfig cfg, DetailHandlers h, Loadable<DetailModel> modelSource, bool includeReleasePanel = true)
     {
         const float coverSz = 140f;
         var info = new List<Element>(4);
@@ -150,8 +159,12 @@ static class DetailRail
             info.Add(PlaylistOwnerBlock(m, 600f));
         }
 
+        bool editable = m.Capabilities.CanEditMetadata && m.ContextUri is { Length: > 0 };
+
         // Title cross-stretches to the info column's (Grow) width → wraps to it; ≤3 lines avoids truncation.
-        info.Add(WaveeType.PageHero(m.Title) with { Size = 28f, Weight = 900, Wrap = TextWrap.Wrap, MaxLines = 3, Trim = TextTrim.CharacterEllipsis });
+        info.Add(editable
+            ? PlaylistInlineEdit.Title(modelSource, 600f, 28f)
+            : WaveeType.PageHero(m.Title) with { Size = 28f, Weight = 900, Wrap = TextWrap.WrapWholeWords, MaxLines = 3, Trim = TextTrim.CharacterEllipsis });
         if (cfg.Badges == BadgeStyle.TypeYear && m.Artists.Count > 0)
             info.Add(Embed.Comp(() => new ArtistFacePile(m, 600f, h)));
         if (cfg.Badges != BadgeStyle.TypeYear && m.MetaLine is { Length: > 0 })
@@ -166,7 +179,7 @@ static class DetailRail
                 {
                     Width = coverSz, Height = coverSz, Corners = CornerRadius4.All(WaveeRadius.Card),
                     Shadow = Elevation.Card, ClipToBounds = true,
-                    Children = [HeroArtwork(m, coverSz)],
+                    Children = [editable ? PlaylistInlineEdit.Cover(modelSource, coverSz) : HeroArtwork(m, coverSz)],
                 },
                 new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Gap = WaveeSpace.XS, Children = info.ToArray() },
             ],

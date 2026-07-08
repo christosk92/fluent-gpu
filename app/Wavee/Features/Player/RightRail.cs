@@ -3,12 +3,13 @@ using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Localization;
 using FluentGpu.Signals;
 
 namespace Wavee;
 
-// The WaveeMusic-style right rail container: a header (panel title + close) over the active panel's content. Lyrics ships
-// first; Queue/Details are placeholders for now. Mounted by WaveeShell as the third child of the sidebar+content row; the
+// The WaveeMusic-style right rail container: a header (panel title + close) over the active panel's content. Mounted by
+// WaveeShell as the third child of the sidebar+content row; the
 // shell animates the rail's width (and thus visibility). Reads ShellUi for the active mode.
 sealed class RightRail : Component
 {
@@ -17,6 +18,7 @@ sealed class RightRail : Component
         var ui = UseContext(ShellUi.Slot);
         if (ui is null) return new BoxEl();
         var mode = ui.Mode.Value;   // subscribe → swap the panel on a mode change
+        bool floating = !ui.RailFits.Value;
 
         var header = new BoxEl
         {
@@ -36,12 +38,17 @@ sealed class RightRail : Component
         Element body = mode switch
         {
             RailMode.Lyrics => Embed.Comp(() => new LyricsView()),
-            _ => Placeholder(),
+            RailMode.Queue => Embed.Comp(() => new QueuePanel()),
+            _ => Embed.Comp(() => new NowPlayingPanel()),
         };
 
         return new BoxEl
         {
             Direction = 1, Grow = 1f, MinHeight = 0f, ClipToBounds = true,
+            Fill = floating ? WaveeColors.RailOverlay : ColorF.Transparent,
+            BorderColor = floating ? Tok.StrokeCardDefault : ColorF.Transparent,
+            BorderWidth = floating ? 1f : 0f,
+            Shadow = floating ? Elevation.Flyout : null,
             Children =
             [
                 header,
@@ -52,15 +59,9 @@ sealed class RightRail : Component
 
     static string Title(RailMode m) => m switch
     {
-        RailMode.Lyrics => "Lyrics",
-        RailMode.Queue => "Queue",
-        _ => "Now playing",
-    };
-
-    static Element Placeholder() => new BoxEl
-    {
-        Grow = 1f, Direction = 1, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Children = [new TextEl("Coming soon") { Size = 13f, Color = Tok.TextSecondary }],
+        RailMode.Lyrics => Loc.Get(Strings.Player.Lyrics),
+        RailMode.Queue => Loc.Get(Strings.Player.Queue),
+        _ => Loc.Get(Strings.Player.NowPlaying),
     };
 
     static Element CloseButton(Action onClick) => new BoxEl

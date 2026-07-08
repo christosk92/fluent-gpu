@@ -72,6 +72,17 @@ public sealed class Expander : Component
     public static Element Create(string header, Element content, bool initiallyExpanded = false)
         => Embed.Comp(() => new Expander { Header = header, Content = content, InitiallyExpanded = initiallyExpanded });
 
+    /// <summary>LIVE content slots delivered by a parent provider (the SelectorBar/RadioButtons pattern). An
+    /// <see cref="Expander"/> is an autonomous component: its <see cref="Content"/>/<see cref="HeaderContent"/>/
+    /// <see cref="Parts"/> FIELDS are frozen at first mount (a reused <c>ComponentEl</c> never re-runs its factory),
+    /// so dynamic content passed by value would go stale. A parent that rebuilds its content each render must instead
+    /// wrap the Expander in <c>Ctx.Provide(Expander.SlotsChannel, new ExpanderSlots(...), Embed.Comp(() =&gt; new
+    /// Expander { InitiallyExpanded = …, IsExpanded = … }))</c>; when present these slots WIN over the fields, and the
+    /// Expander re-renders reactively whenever the provided value changes (context is signal-backed).</summary>
+    public sealed record ExpanderSlots(Element? HeaderContent, Element Content, TemplateParts? Parts);
+
+    internal static readonly Context<ExpanderSlots?> SlotsChannel = new(null);
+
     // WinUI Expander durations/easings (Expander.xaml, ExpandDown ~62-77 / CollapseUp ~78-90), applied to the clip
     // wrapper's LAYOUT height (SizeMode.Reflow) instead of WinUI's content TranslateY-into-snapped-space:
     //   expand   = clip height 0 → ContentHeight over 333ms, KeySpline 0,0,0,1 (Easing.FluentPopOpen).
@@ -88,6 +99,13 @@ public sealed class Expander : Component
 
     public override Element Render()
     {
+        // Live content slots (SettingsExpander etc.) win over the frozen fields; reading the context subscribes this
+        // component so a parent that rebuilds its content re-renders us with it. Static callers provide no slots → fields.
+        var slots = UseContext(SlotsChannel);
+        Element? headerContent = slots?.HeaderContent ?? HeaderContent;
+        Element contentSlot = slots?.Content ?? Content;
+        TemplateParts? parts = slots?.Parts ?? Parts;
+
         var (localOpen, setLocalOpen) = UseState(InitiallyExpanded);
         // Controlled (IsExpanded signal) or local state — reading the signal subscribes this component, so external
         // writes (an "expand all" button) re-render and run the full open/close motion.
@@ -158,7 +176,7 @@ public sealed class Expander : Component
                 new TextEl(Icons.ChevronDown) { Size = 12f, Color = Tok.TextPrimary, FontFamily = Theme.IconFont },
             ],
         };
-        if (Parts is { } cp)
+        if (parts is { } cp)
         {
             var m = cp.Apply(PartChevron, chevron);
             chevron = m with { OnRealized = TemplateParts.Chain(chevronCapture, m.OnRealized) };
@@ -184,14 +202,14 @@ public sealed class Expander : Component
             Role = AutomationRole.Expander,
             Children =
             [
-                HeaderContent is { } hc
+                headerContent is { } hc
                     ? new BoxEl { Grow = 1f, Basis = 0f, MinWidth = 0f, Children = [hc] }
                     : new TextEl(Header) { Size = 14f, Color = Tok.TextPrimary, Grow = 1f },
                 chevron,
             ],
         };
         // Parts: restyle anything (sticky pin + :stuck fill swap, shadows, padding…); the toggle mechanics always win.
-        header = Parts.Apply(PartHeader, header) with { OnClick = toggle, Role = AutomationRole.Expander };
+        header = parts.Apply(PartHeader, header) with { OnClick = toggle, Role = AutomationRole.Expander };
 
         // ExpanderContent (Expander.xaml:114): the panel inside the reveal. It keeps its natural size; the clip
         // wrapper's animated layout height crops it, and the Trailing anchor slides it with the reveal edge.
@@ -208,9 +226,9 @@ public sealed class Expander : Component
             // crops exactly the top border row (the AutoSuggestBox −1 border-overlap idiom).
             Margin = new Edges4(0, -1f, 0, 0),
             Corners = new CornerRadius4(0f, 0f, Radii.Control, Radii.Control),   // BottomCornerRadiusFilterConverter (Expander.xaml:114)
-            Children = [Content],
+            Children = [contentSlot],
         };
-        content = Parts.Apply(PartContent, content) with { Children = content.Children };   // structure = the Content slot
+        content = parts.Apply(PartContent, content) with { Children = content.Children };   // structure = the Content slot
 
         // ExpanderContentClip (Expander.xaml:112-113, "The clip is a composition clip applied in code") — ALWAYS
         // MOUNTED, the engine transition's host node. The declared Height toggle 0 ↔ NaN(auto) IS the whole motion
@@ -227,7 +245,7 @@ public sealed class Expander : Component
             OnRealized = clipCapture,              // the collapse watcher polls this node's reflow track
             Children = clipKids,
         };
-        if (Parts is { } pp)
+        if (parts is { } pp)
         {
             var m = pp.Apply(PartClip, contentClip);
             contentClip = m with
@@ -251,7 +269,7 @@ public sealed class Expander : Component
             Direction = 1,
             Children = children,
         };
-        return Parts.Apply(PartRoot, root) with { Children = children };
+        return parts.Apply(PartRoot, root) with { Children = children };
     }
 }
 

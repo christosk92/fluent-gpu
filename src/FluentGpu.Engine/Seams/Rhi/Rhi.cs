@@ -128,6 +128,11 @@ public interface IGpuDevice : IDisposable
     /// blocked up to a vblank in Present — the live-resize/move hitch the latency-wait skip alone doesn't remove. Default
     /// no-op: only a backend that presents to a real swapchain (D3D12) honors it.</summary>
     void SuppressVsyncOnce() { }
+
+    /// <summary>Hint the backend to sync DWM composition once after the next present (self-resetting). The host calls
+    /// this on a modal-loop SETTLE frame (<c>resized &amp;&amp; keepAlive</c>) so Mica/backdrop snaps with the final
+    /// client size. Default no-op.</summary>
+    void HintSettlePresent() { }
 }
 
 /// <summary>Geometry + motion parameters for a desktop-acrylic windowed popup's composition chrome. All px, relative to

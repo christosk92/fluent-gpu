@@ -420,10 +420,13 @@ public class ConnectControllerTests
         await Task.Delay(20);
         Dispatch(c, "{\"command\":{\"endpoint\":\"add_to_queue\",\"track\":{\"uri\":\"spotify:track:old\"}}}");
         await Task.Delay(20);
-        Dispatch(c, "{\"command\":{\"endpoint\":\"set_queue\",\"next_tracks\":[{\"uri\":\"spotify:track:n1\",\"uid\":\"u1\"},{\"uri\":\"spotify:track:n2\",\"uid\":\"u2\"}]}}");
+        Dispatch(c, "{\"command\":{\"endpoint\":\"set_queue\",\"next_tracks\":[" +
+            "{\"uri\":\"spotify:track:n1\",\"uid\":\"u1\",\"provider\":\"queue\"}," +
+            "{\"uri\":\"spotify:track:n2\",\"uid\":\"u2\",\"provider\":\"queue\"}]}}");
         await Task.Delay(30);
         var uq = proj.Queue.Where(e => e.Bucket == QueueBucket.UserQueue).Select(e => e.Track.Uri).ToArray();
         Assert.Equal(new[] { "spotify:track:n1", "spotify:track:n2" }, uq);   // 'old' replaced
+        Assert.DoesNotContain(proj.Queue, e => e.Track.Uri == "spotify:track:old");
     }
 
     [Fact]
@@ -432,7 +435,8 @@ public class ConnectControllerTests
         using var c = Make(out _, out var proj, out _, ctx: new FakeContextResolver("spotify:track:a", "spotify:track:b"));
         Dispatch(c, PlayP);
         await Task.Delay(20);
-        // next_tracks = user queue (provider:queue) THEN context continuation (provider:context) — only the queue rows count.
+        // next_tracks = user queue (provider:queue) THEN context continuation (provider:context) — queue rows land in
+        // UserQueue; context continuation rows reconcile into Upcoming (§6 F8 full reconcile).
         Dispatch(c, "{\"command\":{\"endpoint\":\"set_queue\",\"next_tracks\":[" +
             "{\"uri\":\"spotify:track:n1\",\"uid\":\"q1\",\"provider\":\"queue\"}," +
             "{\"uri\":\"spotify:track:n2\",\"uid\":\"\",\"provider\":\"queue\"}," +
@@ -440,8 +444,9 @@ public class ConnectControllerTests
             "{\"uri\":\"spotify:track:cy\",\"uid\":\"h2\",\"provider\":\"context\"}]}}");
         await Task.Delay(30);
         var uq = proj.Queue.Where(e => e.Bucket == QueueBucket.UserQueue).Select(e => e.Track.Uri).ToArray();
-        Assert.Equal(new[] { "spotify:track:n1", "spotify:track:n2" }, uq);   // context continuation rows dropped
-        Assert.DoesNotContain(proj.Queue, e => e.Track.Uri is "spotify:track:cx" or "spotify:track:cy");
+        Assert.Equal(new[] { "spotify:track:n1", "spotify:track:n2" }, uq);
+        var up = proj.Queue.Where(e => e.Bucket == QueueBucket.NextUp).Select(e => e.Track.Uri).ToArray();
+        Assert.Equal(new[] { "spotify:track:cx", "spotify:track:cy" }, up);
     }
 
     [Fact]

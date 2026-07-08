@@ -17,6 +17,17 @@ namespace Wavee;
 // gallery, and the "fans also like" / related shelves.
 sealed partial class ArtistPage : Component
 {
+    static readonly TemplateParts ArtistRailEdgeFadeParts = BuildArtistRailEdgeFadeParts();
+
+    static TemplateParts BuildArtistRailEdgeFadeParts()
+    {
+        var parts = new TemplateParts();
+        var fade = new EdgeFadeSpec(EdgeMask.Horizontal, 36f);
+        parts.Set<ScrollEl>(PagedShelf.PartViewport, v => v with { EdgeFade = fade });
+        parts.Set<BoxEl>(PagedShelf.PartViewport, v => v with { EdgeFade = fade });
+        return parts;
+    }
+
     // ── on-tour banner ───────────────────────────────────────────────────────────────────────────────────
     Element TourBannerCard(TourBanner t, Action onClick) => new BoxEl
     {
@@ -144,7 +155,7 @@ sealed partial class ArtistPage : Component
                 photos.Count,
                 cardAt: (i, w) => new BoxEl { Width = w, Height = w, Corners = CornerRadius4.All(WaveeRadius.Card), ClipToBounds = true,
                     Children = [ Surfaces.Artwork(photos[i], i, w, w, WaveeRadius.Card, decodePx: 480) ] },
-                measured: true, header: AccentHeader(Loc.Get(Strings.Artist.Gallery))),
+                measured: true, header: AccentHeader(Loc.Get(Strings.Artist.Gallery)), parts: ArtistRailEdgeFadeParts),
         ],
     };
 
@@ -171,7 +182,7 @@ sealed partial class ArtistPage : Component
                 fans.Count,
                 cardAt: (i, w) => MediaCard.Shelf(fans[i].Image, fans[i].Name, Loc.Get(Strings.Search.TypeArtist), fans[i].Uri,
                     () => go("artist:" + fans[i].Uri, fans[i].Name), () => play(fans[i].Uri), w, circular: true),
-                measured: true, header: AccentHeader(Loc.Get(Strings.Detail.FansAlsoLike))),
+                measured: true, header: AccentHeader(Loc.Get(Strings.Detail.FansAlsoLike)), parts: ArtistRailEdgeFadeParts),
         ],
     };
 }

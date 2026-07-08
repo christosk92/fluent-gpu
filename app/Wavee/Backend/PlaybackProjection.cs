@@ -79,9 +79,17 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     }
     string? _resolvingUri;   // de-dupe: at most one in-flight resolve per uri (guarded by _gate)
     string? _contextUri;
+    long _localRevision;     // the session's monotonic revision (from the last ApplyLocalSnapshot) — for diagnostics / UI keying
+    // Viewer-row ids live in a DISJOINT high range (ViewerIdBase+seq) so they can NEVER collide with the local session's
+    // small monotonic ids (F5 — the "unified" guarantee is non-collision): a stale viewer id resolved against a live local
+    // session after a device-role flip finds no match (safe no-op) instead of hitting an unrelated track.
+    const ulong ViewerIdBase = 1UL << 62;
+    int _viewerIdSeq;        // mints per-row ids for the viewer queue so a viewer row-click can be targeted (F5)
+    readonly Dictionary<ulong, QueueEntry> _viewerRows = new();
     bool _hasLocalContext;
     IReadOnlyDictionary<string, string> _contextMetadata = new Dictionary<string, string>();
     string _activeDeviceId = "";
+    ClusterDelta? _lastCluster;   // the last folded cluster (raw next/prev with uid+provider+metadata) — the source the controller replays through PlaybackSession.ReplaceFromCluster on ghost-resume (§8)
     string _queueRevision = "";
     bool _isPlaying, _isBuffering, _isPrebuffering, _shuffle;
     public bool IsPrivateSession { get; set; }
@@ -91,6 +99,7 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     double _speed = 1.0;   // playback rate folded from the cluster (remote) / 1.0 (local); applied in Pos()
     Palette? _palette;
     IReadOnlyList<QueueEntry> _queue = Array.Empty<QueueEntry>();
+    string? _lastLocalQueueDiagSig, _lastViewerQueueDiagSig, _lastRemoteClusterDiagSig;
     // The active device's queue, verbatim from the last cluster (with uid+provider) — the source for a forwarded set_queue.
     IReadOnlyList<RemoteTrack> _clusterPrev = Array.Empty<RemoteTrack>(), _clusterNext = Array.Empty<RemoteTrack>();
     bool _canSkipNext = true, _canSkipPrev = true, _canSeek = true;   // from cluster restrictions (viewer); true when local
@@ -107,6 +116,9 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
         // Estimated server-clock "now" in Unix ms, used only to age remote snapshots at fold. Default returns 0 (the
         // "unsynced" sentinel) so the offset-dependent network term stays off until a server clock is wired in.
         _serverNow = serverNowUnixMs ?? (() => 0L);
+        PlaybackBucketDiagnostics.Startup("projection", "created",
+            WaveeLogField.Of("device", ourDeviceId),
+            WaveeLogField.Of("initialVolume", initialVolume01));
     }
 
     /// <summary>True when the cluster's active device is us (the controller's local-vs-remote branch keys on this).</summary>
@@ -119,7 +131,18 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     /// ClusterPrevTracks = history.</summary>
     public IReadOnlyList<RemoteTrack> ClusterNextTracks { get { lock (_gate) return _clusterNext; } }
     public IReadOnlyList<RemoteTrack> ClusterPrevTracks { get { lock (_gate) return _clusterPrev; } }
+    /// <summary>The most-recent folded cluster (full raw next/prev rows with uid+provider+metadata) — the controller replays
+    /// it through <see cref="PlaybackSession.ReplaceFromCluster"/> for full session recovery on ghost-resume (§8). Null until
+    /// the first cluster fold.</summary>
+    public ClusterDelta? LastCluster { get { lock (_gate) return _lastCluster; } }
     public IReadOnlyDictionary<string, string> ContextMetadata { get { lock (_gate) return _contextMetadata; } }
+    /// <summary>The session revision published by the last <see cref="ApplyLocalSnapshot"/> (0 until the first). Local only.</summary>
+    public long LocalRevision { get { lock (_gate) return _localRevision; } }
+
+    /// <summary>Resolve a viewer-queue row by the id minted in <see cref="MapQueue"/> — the viewer path of a queue-row click
+    /// (the controller forwards next_track for the row). Best-effort: the id is valid against the most-recent cluster push.</summary>
+    public bool TryGetViewerRow(QueueItemId id, out QueueEntry row)
+    { lock (_gate) return _viewerRows.TryGetValue(id.Value, out row!); }
 
     /// <summary>The controller calls this the instant it issues a local optimistic command, so a stale cluster echo
     /// arriving just after does not revert the optimistic play-state.</summary>
@@ -162,19 +185,104 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     /// <summary>The Connect controller pushes QueueCore's snapshot here after a local queue change, so IPlaybackState.Queue
     /// (and the PutState next-up) reflect OUR local queue while we're the active device. OnCluster won't overwrite it while
     /// we're active (local wins); a viewer's queue still comes from the cluster.</summary>
-    public void SetLocalQueue(IReadOnlyList<QueueEntry> queue) { lock (_gate) _queue = queue; FireChanges(); }
-
-    public void SetLocalContext(string? contextUri, IReadOnlyDictionary<string, string>? metadata = null)
+    public void SetLocalQueue(IReadOnlyList<QueueEntry> queue)
     {
+        string? ctx, current;
         lock (_gate)
         {
-            _contextUri = contextUri;
-            _hasLocalContext = !string.IsNullOrEmpty(contextUri);
+            _queue = queue;
+            ctx = _contextUri;
+            current = _track?.Uri;
+        }
+        PlaybackBucketDiagnostics.QueueIfChanged(ref _lastLocalQueueDiagSig, "projection.local.set", queue, ctx, current);
+        FireChanges();
+    }
+
+    /// <summary>Set the context display metadata (name/images the PutState publisher reads). Does NOT touch play-state /
+    /// the queue / _contextUri — those arrive atomically via <see cref="ApplyLocalSnapshot"/> (F3: the split setter that
+    /// let context and track publish at different times is gone). No FireChanges: the following ApplyLocalSnapshot fires.</summary>
+    public void SetContextMetadata(IReadOnlyDictionary<string, string>? metadata)
+    {
+        lock (_gate)
             _contextMetadata = metadata is { Count: > 0 }
                 ? new Dictionary<string, string>(metadata, StringComparer.Ordinal)
                 : new Dictionary<string, string>();
+    }
+
+    /// <summary>The ONE atomic local publish (F3/F4/F6, §5): while WE are the active device, the session's snapshot AND the
+    /// playback event fold under a single lock with a single FireChanges — the track, the display-windowed queue, the
+    /// context, the options and the revision can never self-contradict for a frame. <paramref name="ev"/> null = a pure
+    /// queue/options change (no play-state fold). Display windowing (history tail 16, next 50) lives here, never in the
+    /// session core. A DEBUG assert fires if the published NowPlaying row's uri diverges from the current track.</summary>
+    public void ApplyLocalSnapshot(QueueSnapshot snap, PlaybackEvent? ev = null)
+    {
+        IReadOnlyList<QueueEntry> windowed;
+        lock (_gate)
+        {
+            _track = snap.Current?.Track ?? ev?.Track;   // the single source of "current" while we're active
+            if (_track is { DurationMs: > 0 } t) _durMs = t.DurationMs;
+            if (ev is { } e)
+            {
+                switch (e.Kind)
+                {
+                    case EvKind.Started:
+                    case EvKind.Resumed:
+                    case EvKind.TrackChanged:
+                        _isPlaying = true; _isBuffering = false;
+                        _canSkipNext = _canSkipPrev = _canSeek = true;
+                        _speed = 1.0; _posMs = e.AtMs; _posAnchorWall = _now();
+                        break;
+                    case EvKind.Paused:
+                    case EvKind.Ended:
+                    case EvKind.BecameInactive:
+                        _isPlaying = false; _speed = 1.0; _posMs = e.AtMs; _posAnchorWall = _now();
+                        break;
+                    case EvKind.Seeked:
+                        _posMs = e.AtMs; _posAnchorWall = _now();
+                        break;
+                    // OptionsChanged / VolumeChanged / QueueChanged: no play-state fold — options ride in the snapshot below.
+                }
+            }
+            _contextUri = snap.ContextUri;
+            _hasLocalContext = !string.IsNullOrEmpty(snap.ContextUri);
+            _shuffle = snap.Shuffle;
+            _repeat = snap.Repeat;
+            _localRevision = snap.Revision;
+            windowed = _queue = WindowQueue(snap);
+            AssertCurrentMatchesNowPlaying();
         }
         FireChanges();
+        RestartTicker();
+        MaybeEnrichCurrent();
+    }
+
+    // Display windowing (§5): current, then the user queue (uncapped), the upcoming context/autoplay rows (≤50), then the
+    // history tail (≤16). The session core holds the FULL resolved state — the caps live only here.
+    static IReadOnlyList<QueueEntry> WindowQueue(in QueueSnapshot s)
+    {
+        const int NextCap = 50, HistoryTail = 16;
+        int nUp = Math.Min(s.Upcoming.Length, NextCap);
+        int firstH = Math.Max(0, s.History.Length - HistoryTail);
+        var list = new List<QueueEntry>(1 + s.UserQueue.Length + nUp + (s.History.Length - firstH));
+        if (s.Current is { } cur) list.Add(cur);
+        for (int i = 0; i < s.UserQueue.Length; i++) list.Add(s.UserQueue[i]);
+        for (int i = 0; i < nUp; i++) list.Add(s.Upcoming[i]);
+        for (int h = firstH; h < s.History.Length; h++) list.Add(s.History[h]);
+        return list;
+    }
+
+    // DEBUG tripwire (§5): the log contradiction (Queue[NowPlaying].uri ≠ CurrentTrack.uri) that motivated the rework is
+    // now structurally impossible — this proves it. [Conditional] → erased from the shipping AOT binary.
+    [System.Diagnostics.Conditional("DEBUG")]
+    void AssertCurrentMatchesNowPlaying()
+    {
+        for (int i = 0; i < _queue.Count; i++)
+        {
+            if (_queue[i].Bucket != QueueBucket.NowPlaying) continue;
+            if (!string.Equals(_queue[i].Track.Uri, _track?.Uri, StringComparison.Ordinal))
+                throw new InvalidOperationException(
+                    $"published state contradiction: NowPlaying row uri '{_queue[i].Track.Uri}' != CurrentTrack uri '{_track?.Uri}'");
+        }
     }
 
     /// <summary>Controller pushes the local shuffle/repeat after a change so IPlaybackState + PutState reflect them while
@@ -187,8 +295,12 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     // ── Remote (cluster) fold — viewer mode + reconciliation ─────────────────────────────────────────────────────────
     public void OnCluster(in ClusterDelta c)
     {
+        PlaybackBucketDiagnostics.RemoteClusterIfChanged(ref _lastRemoteClusterDiagSig, "projection.cluster.raw", c);
+        IReadOnlyList<QueueEntry>? viewerQueue = null;
+        string? ctxForLog = null, currentForLog = null;
         lock (_gate)
         {
+            _lastCluster = c;
             _activeDeviceId = c.ActiveDeviceId;
             _queueRevision = c.QueueRevision ?? "";
             _clusterPrev = c.PrevTracks ?? Array.Empty<RemoteTrack>();
@@ -200,7 +312,11 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
 
             // Detect track change BEFORE merging — a fresh track's Timestamp can lag the prior track, so we must not age it.
             bool isNewTrack = c.HasTrack && (_track is null || !string.Equals(_track.Uri, c.Track.Uri, StringComparison.Ordinal));
-            if (c.HasTrack) _track = MergeClusterTrack(_track, MapTrack(c.Track));
+            // F4: while WE are active WITH a live local session the local snapshot durably owns _track (the same gate the
+            // context uses just below) — a stale cluster echo must NOT overwrite the just-issued current, not merely inside
+            // the 2.5 s suppression window. Recovery (weActive but no local context yet) still takes the cluster's track.
+            bool localOwnsTrack = weActive && _hasLocalContext;
+            if (c.HasTrack && !suppressPlayState && !localOwnsTrack) _track = MergeClusterTrack(_track, MapTrack(c.Track));
             if (!weActive || !_hasLocalContext)
             {
                 _contextUri = c.ContextUri;
@@ -235,8 +351,18 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
             long age = !_isPlaying || (isNewTrack && c.PositionAsOfMs <= 1000) ? 0 : serverSideAge + networkAge;
             _posMs = c.PositionAsOfMs + (long)Math.Round(age * _speed);
             _posAnchorWall = _now();
-            if (!weActive) _queue = MapQueue(c.NextTracks);   // viewer: cluster queue. Active: keep the local queue (SetLocalQueue).
+            if (!weActive)
+            {
+                viewerQueue = MapQueue(c.NextTracks, c.PrevTracks);
+                _queue = viewerQueue;   // viewer: cluster queue. Active: keep the local queue (ApplyLocalSnapshot).
+            }
+            ctxForLog = _contextUri;
+            currentForLog = _track?.Uri;
+            if (weActive) AssertCurrentMatchesNowPlaying();   // the tripwire runs on the active cluster path too (F4) — local owns _track, so it can't diverge
         }
+        if (viewerQueue is not null)
+            PlaybackBucketDiagnostics.QueueIfChanged(ref _lastViewerQueueDiagSig, "projection.viewer.mapped",
+                viewerQueue, ctxForLog, currentForLog);
         FireChanges();
         RestartTicker();
         MaybeEnrichCurrent();   // the cluster track may be thin (no artist/art) → resolve + fold in the full metadata
@@ -392,17 +518,45 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
         string.IsNullOrEmpty(incoming.Uri) ? current.Uri : incoming.Uri,
         string.IsNullOrEmpty(incoming.Name) ? current.Name : incoming.Name);
 
-    static IReadOnlyList<QueueEntry> MapQueue(IReadOnlyList<RemoteTrack> next)
+    // Viewer-mode queue: the active device's next_tracks split by provider ("queue" rows are the user queue, the rest is
+    // the context continuation), plus its prev_tracks as History (capped to the same 16 the local Snapshot() keeps).
+    // spotify:delimiter boundary markers are dropped (the same rule as the inbound set_queue fold).
+    // Viewer-mode queue: the active device's next_tracks split by provider ("queue" rows are the user queue, the rest is
+    // the context continuation), plus its prev_tracks as History (capped to the same 16 the local window keeps).
+    // spotify:delimiter boundary markers are dropped. Each row gets a freshly-minted stable id (unified id scheme, F5) so a
+    // viewer row-click can target it — the id→row map is rebuilt each cluster and resolved by the controller's viewer path.
+    IReadOnlyList<QueueEntry> MapQueue(IReadOnlyList<RemoteTrack> next, IReadOnlyList<RemoteTrack>? prev)
     {
-        if (next.Count == 0) return Array.Empty<QueueEntry>();
-        var list = new List<QueueEntry>(next.Count);
+        _viewerRows.Clear();
+        int prevCount = prev?.Count ?? 0;
+        if (next.Count == 0 && prevCount == 0) return Array.Empty<QueueEntry>();
+        var list = new List<QueueEntry>(next.Count + Math.Min(prevCount, 16));
         for (int i = 0; i < next.Count; i++)
         {
+            if (next[i].Uri == "spotify:delimiter") continue;   // queue/context boundary marker
             string provider = string.IsNullOrEmpty(next[i].Provider) ? "context" : next[i].Provider;
-            list.Add(new QueueEntry("n" + i, MapTrack(next[i]), QueueBucket.NextUp,
-                provider == "autoplay", next[i].Uid, provider, next[i].Metadata));
+            list.Add(ViewerEntry(next[i], provider == "queue" ? QueueBucket.UserQueue : QueueBucket.NextUp, provider));
+        }
+        if (prev is { Count: > 0 })
+        {
+            int first = Math.Max(0, prev.Count - 16);
+            for (int h = first; h < prev.Count; h++)
+            {
+                if (prev[h].Uri == "spotify:delimiter") continue;
+                string provider = string.IsNullOrEmpty(prev[h].Provider) ? "context" : prev[h].Provider;
+                list.Add(ViewerEntry(prev[h], QueueBucket.History, provider));
+            }
         }
         return list;
+    }
+
+    QueueEntry ViewerEntry(in RemoteTrack r, QueueBucket bucket, string provider)
+    {
+        var id = new QueueItemId(ViewerIdBase + (ulong)(++_viewerIdSeq));
+        var entry = new QueueEntry(id, "i" + id.Value, MapTrack(r), bucket,
+            QueueProviderExtensions.FromWire(provider), provider == "autoplay", r.Uid, r.Metadata);
+        _viewerRows[id.Value] = entry;
+        return entry;
     }
 
     static bool HasVideoMetadata(in RemoteTrack r)

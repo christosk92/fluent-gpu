@@ -233,20 +233,20 @@ public sealed class QueueCore
         const int NextUpCap = 50;
         var list = new List<QueueEntry>();
         if (_cur is { } cur)
-            list.Add(new QueueEntry("now", cur.Track, QueueBucket.NowPlaying, cur.Provider == "autoplay", cur.Uid, cur.Provider, cur.Metadata));
+            list.Add(new QueueEntry(QueueItemId.None, "now", cur.Track, QueueBucket.NowPlaying, QueueProviderExtensions.FromWire(cur.Provider), cur.Provider == "autoplay", cur.Uid, cur.Metadata));
         int i = 0;
         foreach (var t in _userQueue)
-            list.Add(new QueueEntry($"q{i++}", t.Track, QueueBucket.UserQueue, t.Provider == "autoplay", t.Uid, t.Provider, t.Metadata));
+            list.Add(new QueueEntry(QueueItemId.None, $"q{i++}", t.Track, QueueBucket.UserQueue, QueueProviderExtensions.FromWire(t.Provider), t.Provider == "autoplay", t.Uid, t.Metadata));
         for (int c = _cursor + 1; c < _context.Count && list.Count <= NextUpCap; c++)
         {
             var t = _context[c];
-            list.Add(new QueueEntry($"c{c}", t.Track, QueueBucket.NextUp, t.Provider == "autoplay", t.Uid, t.Provider, t.Metadata));
+            list.Add(new QueueEntry(QueueItemId.None, $"c{c}", t.Track, QueueBucket.NextUp, QueueProviderExtensions.FromWire(t.Provider), t.Provider == "autoplay", t.Uid, t.Metadata));
         }
         int firstHistory = Math.Max(0, _history.Count - 16);
         for (int h = firstHistory; h < _history.Count; h++)
         {
             var t = _history[h];
-            list.Add(new QueueEntry($"h{h}", t.Track, QueueBucket.History, t.Provider == "autoplay", t.Uid, t.Provider, t.Metadata));
+            list.Add(new QueueEntry(QueueItemId.None, $"h{h}", t.Track, QueueBucket.History, QueueProviderExtensions.FromWire(t.Provider), t.Provider == "autoplay", t.Uid, t.Metadata));
         }
         return list;
     }

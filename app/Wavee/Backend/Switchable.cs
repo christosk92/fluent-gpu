@@ -78,6 +78,7 @@ public sealed class SwitchablePlayer : IPlaybackPlayer
 
     public IPlaybackState State => _state;
     public Task PlayAsync(string contextUri, int startIndex = 0, CancellationToken ct = default) => Cur.PlayAsync(contextUri, startIndex, ct);
+    public Task PlayContextTrackAsync(string contextUri, PlaybackContextTrack track, int fallbackIndex = 0, CancellationToken ct = default) => Cur.PlayContextTrackAsync(contextUri, track, fallbackIndex, ct);
     public Task PlayOrderedAsync(string contextUri, IReadOnlyList<PlaybackContextTrack> tracks, int startIndex = 0, CancellationToken ct = default) => Cur.PlayOrderedAsync(contextUri, tracks, startIndex, ct);
     public Task PlayTrackAsync(string trackUri, CancellationToken ct = default) => Cur.PlayTrackAsync(trackUri, ct);
     public Task PlayTrackAsync(Track track, CancellationToken ct = default) => Cur.PlayTrackAsync(track, ct);
@@ -89,8 +90,11 @@ public sealed class SwitchablePlayer : IPlaybackPlayer
     public Task SetVolumeAsync(double volume01, CancellationToken ct = default) => Cur.SetVolumeAsync(volume01, ct);
     public Task SetShuffleAsync(bool on, CancellationToken ct = default) => Cur.SetShuffleAsync(on, ct);
     public Task SetRepeatAsync(RepeatMode mode, CancellationToken ct = default) => Cur.SetRepeatAsync(mode, ct);
-    public Task MoveQueueAsync(string entryId, int toIndex, CancellationToken ct = default) => Cur.MoveQueueAsync(entryId, toIndex, ct);
-    public Task RemoveFromQueueAsync(string entryId, CancellationToken ct = default) => Cur.RemoveFromQueueAsync(entryId, ct);
+    public Task SkipToQueueItemAsync(QueueItemId id, CancellationToken ct = default) => Cur.SkipToQueueItemAsync(id, ct);
+    public Task MoveQueueItemAsync(QueueItemId id, int newPos, CancellationToken ct = default) => Cur.MoveQueueItemAsync(id, newPos, ct);
+    public Task RemoveQueueItemAsync(QueueItemId id, CancellationToken ct = default) => Cur.RemoveQueueItemAsync(id, ct);
+    public Task ClearQueueAsync(CancellationToken ct = default) => Cur.ClearQueueAsync(ct);
+    public Task ClearHistoryAsync(CancellationToken ct = default) => Cur.ClearHistoryAsync(ct);
     public Task EnqueueAsync(string trackUri, CancellationToken ct = default) => Cur.EnqueueAsync(trackUri, ct);
     public Task EnqueueAsync(Track track, CancellationToken ct = default) => Cur.EnqueueAsync(track, ct);
     public Task PlayNextAsync(IReadOnlyList<PlaybackContextTrack> tracks, CancellationToken ct = default) => Cur.PlayNextAsync(tracks, ct);

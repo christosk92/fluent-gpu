@@ -77,6 +77,10 @@
     <Compile Include="..\Wavee\Features\Auth\Qr.cs" />
     <!-- the pure keyed tracklist diff (Wavee.Core + BCL only) behind the §4.6 choreography — MembershipDiffTests -->
     <Compile Include="..\Wavee\Components\MembershipDiff.cs" />
+    <!-- detail layout breakpoint hysteresis (Wavee.Core + BCL only) — DetailLayoutBreakpointTests -->
+    <Compile Include="..\Wavee\Features\Detail\DetailLayoutBreakpoints.cs" />
+    <!-- artist hero height response (Wavee.Core + BCL only) — ArtistHeroLayoutTests -->
+    <Compile Include="..\Wavee\Features\Detail\ArtistHeroLayout.cs" />
     <!-- the live music-video data service (Backend-only deps), source-included so VideoAssociationTests can drive it -->
     <Compile Include="..\Wavee\SpotifyLive\SpotifyVideoService.cs" />
     <Compile Include="..\Wavee\SpotifyLive\SpotifyUserProfileService.cs" />

@@ -20,7 +20,7 @@ public static class SpotifyLibraryProbe
 
         var store = new InMemoryStore();
         var metadata = new MetadataService(new ExtendedMetadataSource(live.Pipeline, () => live.BaseUrl, () => live.Session), store, () => live.Session);
-        var fetcher = new PlaylistFetcher(live.Pipeline, () => live.BaseUrl, store, (uris, c) => metadata.SyncAllAsync(uris, c));
+        var fetcher = new PlaylistFetcher(live.Pipeline, () => live.BaseUrl, store, (uris, c) => metadata.SyncAllAsync(uris, c), () => live.Username);
 
         log("Fetching playlist " + uri + " ...");
         try { await fetcher.FetchPlaylistAsync(uri, ct).ConfigureAwait(false); }
@@ -48,7 +48,7 @@ public static class SpotifyLibraryProbe
         if (live is null) return 1;
 
         var store = new InMemoryStore();
-        var fetcher = new PlaylistFetcher(live.Pipeline, () => live.BaseUrl, store, (uris, c) => Task.CompletedTask);   // rootlist items are playlist uris
+        var fetcher = new PlaylistFetcher(live.Pipeline, () => live.BaseUrl, store, (uris, c) => Task.CompletedTask, () => live.Username);   // rootlist items are playlist uris
 
         string rootlistUri = "spotify:user:" + live.Username + ":rootlist";
         log("Fetching rootlist " + rootlistUri + " ...");

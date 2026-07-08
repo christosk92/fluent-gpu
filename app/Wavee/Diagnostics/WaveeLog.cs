@@ -112,6 +112,12 @@ public sealed class WaveeLog : IWaveeLog
         }
     }
 
+    /// <summary>Best-effort synchronous drain of queued file lines. Safe to call from crash paths.</summary>
+    public void Flush()
+    {
+        try { FlushForTests(); } catch { }
+    }
+
     /// <summary>An action to plug into the engine Diag sink. Engine noise remains Debug-gated by MinLevel.</summary>
     public static Action<string> DiagSink => static s => Instance.Log(WaveeLogLevel.Debug, "engine", s);
 

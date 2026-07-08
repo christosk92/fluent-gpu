@@ -24,18 +24,25 @@ public static class SpotifyHeaders
     // repeated defensively (the middleware overwrites them with the same values). Origin is intentionally omitted — it is
     // not part of the gateway's gating tuple, and the spclient base URL isn't available at this layer (the transport owns
     // URL composition).
-    public static Dictionary<string, string> PlaylistV2Mutation()
-        => new(StringComparer.OrdinalIgnoreCase)
+    public static Dictionary<string, string> PlaylistV2Mutation(string? spclientBaseUrl = null)
+        => new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["Content-Type"] = "application/x-www-form-urlencoded",
             ["App-Platform"] = AppPlatform,
             ["Spotify-App-Version"] = AppVersion,
             ["spotify-playlist-sync-reason"] = "CAk=",
+            ["spotify-apply-lenses"] = "auto",
             ["Accept-Language"] = "en",
             ["Cache-Control"] = "no-store",
             ["spotify-accept-geoblock"] = "dummy",
             ["spotify-dsa-mode-enabled"] = "false",
-        };
+        }.AlsoOrigin(spclientBaseUrl);
+
+    static Dictionary<string, string> AlsoOrigin(this Dictionary<string, string> h, string? baseUrl)
+    {
+        if (!string.IsNullOrEmpty(baseUrl)) h["Origin"] = baseUrl.TrimEnd('/');
+        return h;
+    }
 
     // ── PlayPlay Step A — POST /playplay/v1/key/{fileIdHex} ───────────────────────────────────────────────────────────
     // Same gateway quirk as playlist-v2 mutations: Content-Type MUST be x-www-form-urlencoded despite a protobuf body.

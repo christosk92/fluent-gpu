@@ -102,6 +102,15 @@ public sealed class CommandBarFlyout : Component
     /// <summary>WinUI V2 AlwaysExpanded: keep the overflow menu shown and hide the … More button. Forces
     /// <see cref="CommandBarFlyoutShowMode.Standard"/> (CommandBarFlyout.cpp:173-177).</summary>
     public bool AlwaysExpanded = false;
+
+    // Frozen-props tripwire (ReuseGuard): TriggerLabel freezes at mount (the command lists are slots — deliver those
+    // via a provider). A reused instance whose trigger label changed is the frozen-props bug.
+    public override bool ChecksReuse => ReuseGuard.CompiledIn;
+    public override void DebugCheckReuse(Component next)
+    {
+        if (next is CommandBarFlyout n && n.TriggerLabel != TriggerLabel)
+            ReuseGuard.ScalarChanged(this, nameof(TriggerLabel));
+    }
     /// <summary>Standard = open expanded (no transition) + focus the first command; Transient = open collapsed,
     /// no focus steal (CommandBarFlyout.cpp:162-201; CommandBarFlyoutCommandBar.cpp:29-71).</summary>
     public CommandBarFlyoutShowMode ShowMode = CommandBarFlyoutShowMode.Transient;

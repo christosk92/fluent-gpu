@@ -260,7 +260,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
             // (a) fetch playlist/album TRACKS the first time a detail page opens (the sync stored headers only). The real
             //     hydrator (MetadataService over the extended-metadata batch) replaces the no-op that left lists empty.
             //     em + md were built above for the context resolver — reuse them so the whole session shares one cache.
-            var fetcher = new PlaylistFetcher(live.Pipeline, () => live.BaseUrl, store, (uris, c) => md.SyncAllAsync(uris, c));
+            var fetcher = new PlaylistFetcher(live.Pipeline, () => live.BaseUrl, store, (uris, c) => md.SyncAllAsync(uris, c), () => live.Username);
 
             // The single library-sync writer loop (RC1): the collection fetcher (revision get/set → the SQLite cold tier,
             // mark-and-sweep shielded by the mutation outbox), the loop itself, and the dealer router that decode-and-enqueues
@@ -291,6 +291,12 @@ public sealed class LiveSessionHost : IAsyncDisposable
             // Post-write drains route through the loop (§6 hardening): replay/reconcile serializes with inbound diffs
             // instead of racing them from the caller's thread. GoOffline resets this to inline-drain.
             if (svc.RealMutationSource is { } mutSrc) mutSrc.ScheduleDrain = () => sync.Enqueue(new Wavee.Backend.Sync.SyncCommand(Wavee.Backend.Sync.SyncKind.DrainWrites));
+            if (svc.RealSpclientBaseUrl is { } baseUrl) baseUrl.Value = live.BaseUrl;
+            if (svc.RealPlaylistMutations is { } pmSrc)
+            {
+                pmSrc.SetHttp(live.Pipeline);
+                pmSrc.ScheduleDrain = () => sync.Enqueue(new Wavee.Backend.Sync.SyncCommand(Wavee.Backend.Sync.SyncKind.DrainWrites));
+            }
 
             // Pathfinder (GraphQL) for rich catalog reads with no protobuf equivalent — the artist overview, on open.
             var pathfinderExchange = new HttpPipeline(

@@ -68,3 +68,17 @@ public interface IMutationSource : ISource
     /// <summary>Set the saved/followed state of a uri (idempotent) — optimistic + persisted in the in-process source.</summary>
     Task SetSavedAsync(string uri, bool saved, CancellationToken ct = default);
 }
+
+/// <summary>First-party Spotify playlist editing: metadata, cover, item add/remove/move, permission level, contributor invites.
+/// Local <c>wavee:playlist:*</c> playlists are handled by <see cref="UserPlaylistSource"/> instead.</summary>
+public interface IPlaylistMutationSource
+{
+    Task AddTracksAsync(string playlistUri, IReadOnlyList<Track> tracks, CancellationToken ct = default);
+    Task RemoveRowsAsync(string playlistUri, IReadOnlyList<PlaylistRowRef> rows, CancellationToken ct = default);
+    Task MoveRowsAsync(string playlistUri, IReadOnlyList<PlaylistRowRef> rows, int toIndex, CancellationToken ct = default);
+    Task UpdateDetailsAsync(string playlistUri, string? name, string? description, bool? collaborative, CancellationToken ct = default);
+    Task SetCoverJpegAsync(string playlistUri, byte[] jpeg, CancellationToken ct = default);
+    Task ClearCoverAsync(string playlistUri, CancellationToken ct = default);
+    Task SetBasePermissionAsync(string playlistUri, PlaylistPermissionLevel level, CancellationToken ct = default);
+    Task<string> CreateContributorInviteAsync(string playlistUri, CancellationToken ct = default);
+}

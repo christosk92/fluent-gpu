@@ -8,6 +8,7 @@ using Wavee.Backend.Collections;
 using Wavee.Backend.Playlists;
 using Wavee.Backend.Spotify;
 using Wavee.Backend.Sync;
+using Wavee.Core;
 using Xunit;
 using Col = Wavee.Protocol.Collection;
 using Pl = Wavee.Protocol.Playlist;
@@ -30,7 +31,8 @@ sealed class SyncHarness : IAsyncDisposable
 
     public static HttpResp Ok(byte[] body) => new(200, new Dictionary<string, string>(), body);
 
-    public SyncHarness(Func<HttpReq, HttpResp> responder, Func<string, string, bool>? hasPending = null)
+    public SyncHarness(Func<HttpReq, HttpResp> responder, Func<string, string, bool>? hasPending = null,
+        Action<InMemoryStore, IReadOnlyList<string>>? onHydrate = null)
     {
         var http = new FakeExchange((req, _) =>
         {
@@ -39,11 +41,16 @@ sealed class SyncHarness : IAsyncDisposable
             else if (req.Url.Contains("/collection/v2/")) CollectionPosts++;
             return responder(req);
         });
-        Task Hydrate(IReadOnlyList<string> uris, CancellationToken c) { lock (Hydrated) Hydrated.AddRange(uris); return Task.CompletedTask; }
-        var pf = new PlaylistFetcher(http, () => "https://x", Store, Hydrate);
+        Task Hydrate(IReadOnlyList<string> uris, CancellationToken c)
+        {
+            lock (Hydrated) Hydrated.AddRange(uris);
+            onHydrate?.Invoke(Store, uris);
+            return Task.CompletedTask;
+        }
+        var pf = new PlaylistFetcher(http, () => "https://x", Store, Hydrate, () => "");
         var cf = new CollectionFetcher(http, () => "https://x", () => "bob", Store,
             s => Revs.TryGetValue(s, out var r) ? r : null, (s, r) => Revs[s] = r, Hydrate, hasPending);
-        Mut = new MutationEngine(Store, new IMutationStrategy[] { new SetReplayStrategy(Echo), new OpRebaseStrategy(Store), new RootlistFollowStrategy(Store) });
+        Mut = new MutationEngine(Store, new IMutationStrategy[] { new SetReplayStrategy(Echo), new OpRebaseStrategy(Store, () => "https://spclient.wg.spotify.com"), new RootlistFollowStrategy(Store) });
         Sync = new LibrarySync(Store, pf, cf, Mut, Dealer,
             () => new SessionContext("bob", "US", "premium", "en", Tier.Premium, false), () => "bob", _ => { }, _cts.Token, Echo);
     }
@@ -55,6 +62,13 @@ sealed class ChangeCollector : IObserver<StoreChange>
 {
     public readonly List<StoreChange> All = new();
     public void OnNext(StoreChange v) { lock (All) All.Add(v); }
+    public void OnCompleted() { }
+    public void OnError(Exception e) { }
+}
+
+sealed class ChangeObserver(Action<StoreChange> onChange) : IObserver<StoreChange>
+{
+    public void OnNext(StoreChange v) => onChange(v);
     public void OnCompleted() { }
     public void OnError(Exception e) { }
 }
@@ -74,6 +88,12 @@ sealed class FailTransport : ITransport
 public class LibrarySyncTests
 {
     static HttpResp Ok(byte[] body) => new(200, new Dictionary<string, string>(), body);
+    static PlaylistMember M(string id, string uri) => new(id, uri, null, 0);
+    static Track Trk(string uri, string title = "Hydrated")
+    {
+        var id = uri[(uri.LastIndexOf(':') + 1)..];
+        return new Track(id, uri, title, Array.Empty<ArtistRef>(), new AlbumRef("", "", ""), 1000, false, null);
+    }
 
     // Route the shared exchange by URL: rootlist GET, playlist GET, collection POST (set-appropriate items by wire set).
     static HttpResp HydrateResponder(HttpReq req)
@@ -205,6 +225,62 @@ public class LibrarySyncTests
 
         Assert.Equal(1, gets);                                              // one fetch, both awaiters
         Assert.Single(h.Store.Membership("spotify:playlist:p"));
+    }
+
+    [Fact]
+    public async Task PlaylistPush_AddHydratesThenEmitsPlaylistBump()
+    {
+        var uri = "spotify:playlist:p";
+        var added = "spotify:track:new";
+        var rev0 = new byte[] { 1 };
+        var rev1 = new byte[] { 2 };
+        await using var h = new SyncHarness(HydrateResponder, onHydrate: (store, uris) =>
+        {
+            foreach (var u in uris) store.UpsertTrack(Trk(u, "Hydrated " + u));
+        });
+        h.Store.SetMembership(uri, new[] { M("old", "spotify:track:old") }, rev0);
+
+        var playlistSignals = new List<bool>();
+        using var sub = h.Store.Changes.Subscribe(new ChangeObserver(c =>
+        {
+            if (c.Uri == uri) lock (playlistSignals) playlistSignals.Add(h.Store.GetTrack(added) is not null);
+        }));
+
+        var op = new PlaylistOp(PlaylistOpKind.Add, AddLast: true, Items: new[] { M("new", added) });
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.Sync.Enqueue(new SyncCommand(SyncKind.PlaylistPush, uri, ParentRev: rev0, NewRev: rev1, Ops: new[] { op }, Done: done));
+        await done.Task;
+
+        List<bool> snap; lock (playlistSignals) snap = new List<bool>(playlistSignals);
+        Assert.True(snap.Count >= 2);
+        Assert.False(snap[0]);                       // membership write before metadata hydration
+        Assert.Contains(true, snap);                  // post-hydration playlist bump wakes the joined detail read-model
+        Assert.NotNull(h.Store.GetTrack(added));
+    }
+
+    [Fact]
+    public async Task PlaylistPush_UpdateListAttributes_RefetchesHeader()
+    {
+        var uri = "spotify:playlist:p";
+        var rev0 = new byte[] { 1 };
+        var rev1 = new byte[] { 2 };
+        var header = new Pl.SelectedListContent { Length = 7, OwnerUsername = "bob" };
+        header.Attributes = new Pl.ListAttributes { Name = "Renamed", Description = "fresh" };
+        await using var h = new SyncHarness(req => req.Url.Contains("/playlist/v2/") ? Ok(header.ToByteArray()) : Ok(Array.Empty<byte>()));
+        h.Store.UpsertPlaylist(new Playlist("p", uri, "Old", null, "bob", null, 1));
+        h.Store.SetMembership(uri, new[] { M("old", "spotify:track:old") }, rev0);
+
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.Sync.Enqueue(new SyncCommand(SyncKind.PlaylistPush, uri, ParentRev: rev0, NewRev: rev1,
+            Ops: new[] { new PlaylistOp(PlaylistOpKind.UpdateList) }, Done: done));
+        await done.Task;
+
+        Assert.Equal(1, h.PlaylistGets);
+        var playlist = h.Store.GetPlaylist(uri);
+        Assert.NotNull(playlist);
+        Assert.Equal("Renamed", playlist.Name);
+        Assert.Equal("fresh", playlist.Description);
+        Assert.Equal(7, playlist.TrackCount);
     }
 
     [Fact]
@@ -350,6 +426,34 @@ public class LibrarySyncTests
         List<string> hyd; lock (h.Hydrated) hyd = new List<string>(h.Hydrated);
         Assert.Contains("spotify:track:t9", hyd);
         Assert.DoesNotContain("spotify:track:pending", hyd);               // shielded item never touched
+    }
+
+    [Fact]
+    public async Task CollectionPush_DirectApplyHydratesThenEmitsCollectionKindBump()
+    {
+        var added = "spotify:track:t9";
+        await using var h = new SyncHarness(HydrateResponder, onHydrate: (store, uris) =>
+        {
+            foreach (var u in uris) store.UpsertTrack(Trk(u, "Hydrated " + u));
+        });
+
+        var signals = new List<(StoreChange Change, bool TrackKnown)>();
+        using var sub = h.Store.Changes.Subscribe(new ChangeObserver(c =>
+        {
+            lock (signals) signals.Add((c, h.Store.GetTrack(added) is not null));
+        }));
+
+        var upd = new Col.PubSubUpdate { Set = "collection" };
+        upd.Items.Add(new Col.CollectionItem { Uri = added, IsRemoved = false, AddedAt = 5 });
+
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.Sync.Enqueue(new SyncCommand(SyncKind.CollectionPush, "collection", Payload: upd.ToByteArray(), Done: done));
+        await done.Task;
+
+        List<(StoreChange Change, bool TrackKnown)> snap; lock (signals) snap = new List<(StoreChange, bool)>(signals);
+        Assert.Contains(snap, s => s.Change.Uri == added && s.Change.Kind == CollectionKind.Liked && s.TrackKnown);
+        Assert.NotNull(h.Store.GetTrack(added));
+        Assert.Equal(0, h.CollectionPosts);
     }
 
     [Fact]

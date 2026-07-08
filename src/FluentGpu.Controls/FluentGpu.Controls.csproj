@@ -7,5 +7,10 @@
        platform code reaches controls only through the Engine's seam interfaces. -->
   <ItemGroup>
     <ProjectReference Include="..\FluentGpu.Engine\FluentGpu.Engine.csproj" />
+    <!-- The in-repo Roslyn analyzer (FluentGpu.SourceGen) as an analyzer — controls are AUTHORED here, so the
+         frozen-props lint (FGRP001, component-props-contract.md) must run in this compilation. Analyzer-only
+         (ReferenceOutputAssembly=false); netstandard2.0 + TerraFX-free, so the portable closure stays clean. -->
+    <ProjectReference Include="..\FluentGpu.SourceGen\FluentGpu.SourceGen.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
 </Project>

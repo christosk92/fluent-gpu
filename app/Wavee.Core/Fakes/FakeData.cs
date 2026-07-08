@@ -549,9 +549,9 @@ public static class FakeData
     public static QueueEntry[] DefaultQueue()
     {
         var q = new List<QueueEntry>();
-        q.Add(new QueueEntry("q0", Track(0), QueueBucket.NowPlaying, false));
-        for (int i = 1; i <= 3; i++) q.Add(new QueueEntry("q" + i, Track(i), QueueBucket.UserQueue, false));
-        for (int i = 4; i <= 11; i++) q.Add(new QueueEntry("q" + i, Track(i), QueueBucket.NextUp, i > 8));
+        q.Add(new QueueEntry(QueueItemId.None, "q0", Track(0), QueueBucket.NowPlaying, QueueProvider.Context, false));
+        for (int i = 1; i <= 3; i++) q.Add(new QueueEntry(QueueItemId.None, "q" + i, Track(i), QueueBucket.UserQueue, QueueProvider.Queue, false));
+        for (int i = 4; i <= 11; i++) q.Add(new QueueEntry(QueueItemId.None, "q" + i, Track(i), QueueBucket.NextUp, i > 8 ? QueueProvider.Autoplay : QueueProvider.Context, i > 8));
         return q.ToArray();
     }
 

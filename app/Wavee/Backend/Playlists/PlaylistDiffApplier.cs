@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Wavee.Core;
 
 namespace Wavee.Backend.Playlists;
 
@@ -12,6 +13,13 @@ namespace Wavee.Backend.Playlists;
 /// <see cref="ItemUri"/> (joined to the shared Store entity at read), and the per-membership add facts.</summary>
 public readonly record struct PlaylistMember(string ItemId, string ItemUri, string? AddedBy, long AddedAt);
 
+/// <summary>List-level attribute patch carried by <see cref="PlaylistOpKind.UpdateList"/> — name, description, cover,
+/// collaborative toggle, or per-field clears.</summary>
+public sealed record PlaylistListAttributePatch(
+    string? Name = null, string? Description = null,
+    byte[]? PictureBytes = null, bool ClearPicture = false, bool? Collaborative = null,
+    bool ClearName = false, bool ClearDescription = false);
+
 public enum PlaylistOpKind { Add, Remove, Move, UpdateItem, UpdateList }
 
 /// <summary>A single change to the ordered membership. Index fields are interpreted against the list state produced by
@@ -20,11 +28,12 @@ public sealed record PlaylistOp(
     PlaylistOpKind Kind,
     int FromIndex = 0,                          // ADD insertion index (when not add_first/add_last) / REM start / MOV source / UPDATE_ITEM index
     int Length = 0,                             // REM count / MOV count
-    int ToIndex = 0,                            // MOV destination (post-removal index)
+    int ToIndex = 0,                            // MOV destination: pre-removal wire index
     bool AddFirst = false,                      // ADD at head
     bool AddLast = false,                       // ADD at tail
     IReadOnlyList<PlaylistMember>? Items = null,    // ADD payload / UPDATE_ITEM attribute carrier / keyed-REM uris
-    bool ItemsAsKey = false);                   // REM by Items' uris instead of index (order-independent — the rootlist unfollow shape)
+    bool ItemsAsKey = false,                    // REM by Items' uris instead of index (order-independent — the rootlist unfollow shape)
+    PlaylistListAttributePatch? ListPatch = null);   // UPDATE_LIST metadata payload
 
 public static class PlaylistDiffApplier
 {
@@ -69,6 +78,12 @@ public static class PlaylistDiffApplier
         }
         if (op.FromIndex < 0 || op.Length < 0 || op.FromIndex + op.Length > list.Count)
             throw new ArgumentOutOfRangeException(nameof(op), $"REM [{op.FromIndex},+{op.Length}] out of range (count {list.Count})");
+        if (op.Items is { Count: > 0 } items && items.Count == op.Length)
+        {
+            for (int k = 0; k < items.Count; k++)
+                if (!SameMember(list[op.FromIndex + k], items[k]))
+                    throw new ArgumentOutOfRangeException(nameof(op), $"REM item mismatch at {op.FromIndex + k}");
+        }
         list.RemoveRange(op.FromIndex, op.Length);
     }
 
@@ -76,12 +91,20 @@ public static class PlaylistDiffApplier
     {
         if (op.FromIndex < 0 || op.Length < 0 || op.FromIndex + op.Length > list.Count)
             throw new ArgumentOutOfRangeException(nameof(op), $"MOV source [{op.FromIndex},+{op.Length}] out of range (count {list.Count})");
+        if (op.ToIndex < 0 || op.ToIndex > list.Count)
+            throw new ArgumentOutOfRangeException(nameof(op), $"MOV dest {op.ToIndex} out of range [0,{list.Count}]");
         var moved = list.GetRange(op.FromIndex, op.Length);
         list.RemoveRange(op.FromIndex, op.Length);
-        if (op.ToIndex < 0 || op.ToIndex > list.Count)   // to_index is the destination in the post-removal list
-            throw new ArgumentOutOfRangeException(nameof(op), $"MOV dest {op.ToIndex} out of range [0,{list.Count}]");
-        list.InsertRange(op.ToIndex, moved);
+        int at = op.ToIndex > op.FromIndex ? op.ToIndex - op.Length : op.ToIndex;
+        if (at < 0)
+            throw new ArgumentOutOfRangeException(nameof(op), $"MOV dest {op.ToIndex} inside moved range");
+        list.InsertRange(at, moved);
     }
+
+    static bool SameMember(PlaylistMember actual, PlaylistMember expected)
+        => !string.IsNullOrEmpty(actual.ItemId) && !string.IsNullOrEmpty(expected.ItemId)
+            ? string.Equals(actual.ItemId, expected.ItemId, StringComparison.Ordinal)
+            : string.Equals(actual.ItemUri, expected.ItemUri, StringComparison.Ordinal);
 
     static void ApplyUpdateItem(List<PlaylistMember> list, PlaylistOp op)
     {

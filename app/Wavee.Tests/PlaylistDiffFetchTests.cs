@@ -55,6 +55,13 @@ public class PlaylistDiffFetchTests
         return new Pl.Op { Kind = Pl.Op.Types.Kind.Add, Add = add };
     }
 
+    static Pl.Op UpdateListAttributes()
+        => new()
+        {
+            Kind = Pl.Op.Types.Kind.UpdateListAttributes,
+            UpdateListAttributes = new Pl.UpdateListAttributes(),
+        };
+
     static (PlaylistFetcher Fetcher, InMemoryStore Store, List<string> Hydrated, List<HttpReq> Reqs) Rig(Func<HttpReq, int, HttpResp> respond)
     {
         var store = new InMemoryStore();
@@ -62,7 +69,7 @@ public class PlaylistDiffFetchTests
         var reqs = new List<HttpReq>();
         var http = new FakeExchange((req, n) => { lock (reqs) reqs.Add(req); return respond(req, n); });
         Task Hydrate(IReadOnlyList<string> uris, CancellationToken c) { lock (hydrated) hydrated.AddRange(uris); return Task.CompletedTask; }
-        return (new PlaylistFetcher(http, () => "https://x", store, Hydrate), store, hydrated, reqs);
+        return (new PlaylistFetcher(http, () => "https://x", store, Hydrate, () => ""), store, hydrated, reqs);
     }
 
     static void Seed(IStore store, byte[] rev, params string[] uris)
@@ -104,6 +111,31 @@ public class PlaylistDiffFetchTests
     }
 
     // ── 304 and up_to_date both resolve UpToDate with the store untouched ─────────────────────────────────────────────
+    [Fact]
+    public async Task Diff_UpdateListAttributes_RefetchesHeader()
+    {
+        var from = Rev(1, 0xAA);
+        var to = Rev(2, 0xBB);
+        var header = new Pl.SelectedListContent { Length = 3, OwnerUsername = "bob" };
+        header.Attributes = new Pl.ListAttributes { Name = "Renamed", Description = "fresh" };
+        var (f, store, hydrated, reqs) = Rig((req, _) =>
+            req.Url.Contains("/diff?") ? Ok(DiffSlc(from, to, UpdateListAttributes())) : Ok(header.ToByteArray()));
+        Seed(store, from, "spotify:track:t1");
+
+        var outcome = await f.FetchPlaylistDiffAsync(Uri, Ct);
+
+        Assert.Equal(DiffOutcome.Applied, outcome);
+        Assert.Equal(2, reqs.Count);
+        Assert.Contains("/diff?", reqs[0].Url);
+        Assert.DoesNotContain("/diff?", reqs[1].Url);
+        Assert.Empty(hydrated);
+        var playlist = store.GetPlaylist(Uri);
+        Assert.NotNull(playlist);
+        Assert.Equal("Renamed", playlist.Name);
+        Assert.Equal("fresh", playlist.Description);
+        Assert.Equal(3, playlist.TrackCount);
+    }
+
     [Fact]
     public async Task Diff_304_And_UpToDate_LeaveStoreUntouched()
     {

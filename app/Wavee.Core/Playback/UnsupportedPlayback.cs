@@ -49,6 +49,7 @@ public sealed class UnsupportedPlaybackPlayer : IPlaybackPlayer, IPlaybackState
 
     // ── IPlaybackPlayer — play intents reject; everything else no-ops ───────────────────────────────────────────────
     public Task PlayAsync(string contextUri, int startIndex = 0, CancellationToken ct = default) => Reject();
+    public Task PlayContextTrackAsync(string contextUri, PlaybackContextTrack track, int fallbackIndex = 0, CancellationToken ct = default) => Reject();
     public Task PlayOrderedAsync(string contextUri, IReadOnlyList<PlaybackContextTrack> tracks, int startIndex = 0, CancellationToken ct = default) => Reject();
     public Task PlayTrackAsync(string trackUri, CancellationToken ct = default) => Reject();
     public Task PlayTrackAsync(Track track, CancellationToken ct = default) => Reject();
@@ -64,8 +65,11 @@ public sealed class UnsupportedPlaybackPlayer : IPlaybackPlayer, IPlaybackState
     public Task SetVolumeAsync(double volume01, CancellationToken ct = default) => Done;
     public Task SetShuffleAsync(bool on, CancellationToken ct = default) => Done;
     public Task SetRepeatAsync(RepeatMode mode, CancellationToken ct = default) => Done;
-    public Task MoveQueueAsync(string entryId, int toIndex, CancellationToken ct = default) => Done;
-    public Task RemoveFromQueueAsync(string entryId, CancellationToken ct = default) => Done;
+    public Task SkipToQueueItemAsync(QueueItemId id, CancellationToken ct = default) => Reject();
+    public Task MoveQueueItemAsync(QueueItemId id, int newPos, CancellationToken ct = default) => Done;
+    public Task RemoveQueueItemAsync(QueueItemId id, CancellationToken ct = default) => Done;
+    public Task ClearQueueAsync(CancellationToken ct = default) => Done;
+    public Task ClearHistoryAsync(CancellationToken ct = default) => Done;
 }
 
 /// <summary>The empty Connect roster (pre-login / logged out). Real devices arrive only from the live Connect cluster

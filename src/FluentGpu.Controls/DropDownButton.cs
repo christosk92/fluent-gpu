@@ -55,6 +55,17 @@ public sealed class DropDownButton : Component
     public static Element Create(string label, IReadOnlyList<MenuFlyoutItem> items, string? glyph = null, bool isEnabled = true)
         => Embed.Comp(() => new DropDownButton { Label = label, Items = items, Glyph = glyph, IsEnabled = isEnabled });
 
+    // Frozen-props tripwire (ReuseGuard): Label/Glyph/Items/IsEnabled are plain fields that freeze at mount. A reused
+    // instance whose scalar caller-data changed is the frozen-props bug — deliver it reactively or remount with a Key.
+    public override bool ChecksReuse => ReuseGuard.CompiledIn;
+    public override void DebugCheckReuse(Component next)
+    {
+        if (next is not DropDownButton n) return;
+        if (n.Label != Label) ReuseGuard.ScalarChanged(this, nameof(Label));
+        else if (n.Glyph != Glyph) ReuseGuard.ScalarChanged(this, nameof(Glyph));
+        else if (n.IsEnabled != IsEnabled) ReuseGuard.ScalarChanged(this, nameof(IsEnabled));
+    }
+
     public override Element Render()
     {
         var anchor = UseRef<NodeHandle>(default);

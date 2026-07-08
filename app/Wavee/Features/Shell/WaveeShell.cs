@@ -34,8 +34,8 @@ sealed class WaveeShell : Component
     // Mica. Owner-gated writes (ShellTintState) make A→B navigation race-free. Provided at the root via ShellTint.Slot.
     readonly Signal<ShellTintState> _shellTint = new(default);
 
-    // Right-rail (WaveeMusic-style lyrics / now-playing panel) UI state — created here, provided via ShellUi.Slot, and
-    // toggled from the player bar. Independent of bridge.Expanded (the fullscreen now-playing takeover).
+    // Right-rail (lyrics / queue / now-playing panels) UI state — created here, provided via ShellUi.Slot, and
+    // toggled from the player bar. The rail reserves inline width when it fits; otherwise it floats over the content.
     readonly ShellUi _shellUi = new();
 
     int _nextTabId = 1;
@@ -100,6 +100,7 @@ sealed class WaveeShell : Component
 
         // Inert probe (screenshot / UI iteration only): open the right rail to the Lyrics panel at startup.
         if (Diag.EnvFlag("WAVEE_LYRICS_OPEN") || Diag.EnvFlag("WAVEE_LIVE_LYRICS_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_ADVANCE_PROBE")) { _shellUi.RailOpen.Value = true; _shellUi.Mode.Value = RailMode.Lyrics; }
+        if (Diag.EnvFlag("WAVEE_NOWPLAYING_OPEN")) { _shellUi.RailOpen.Value = true; _shellUi.Mode.Value = RailMode.Details; }
 
         if (Diag.EnvFlag("WAVEE_NAV_PROBE") || Diag.EnvFlag("WAVEE_RESIZE_PROBE") || Diag.EnvFlag("WAVEE_CONN_STRESS") || Diag.EnvFlag("WAVEE_TRACKLIST_SHOT") || Diag.EnvFlag("WAVEE_HERO_SHOT") || Diag.EnvFlag("WAVEE_HOME_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_PROBE") || Diag.EnvFlag("WAVEE_LIVE_LYRICS_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_ADVANCE_PROBE") || Diag.EnvFlag("WAVEE_MEM_SOAK") || Diag.EnvFlag("WAVEE_PERF_BENCH"))
         {
@@ -213,15 +214,28 @@ sealed class WaveeShell : Component
         // Rail viewport-fit + layout-defer (off-render, auto-tracking effects — the render body stays subscription-free
         // so the shell isn't re-run on every resize pixel; only the rail band / pages re-solve from the signals below).
         var post = UsePost();
-        // (1) Maintain ShellUi.RailFits from the live viewport/sidebar/rail widths and AUTO-CLOSE the rail if it no longer
-        // fits (snap — no animation fight on shrink). Peek-guarded writes so this never re-triggers itself.
+        void ArmRailLockWithClear()
+        {
+            _shellUi.ArmRailLock();
+            int gen = ++_railLockGen;
+            _railLockTimer?.Dispose();
+            _railLockTimer = new System.Threading.Timer(
+                _ => post(() => { if (gen == _railLockGen) _shellUi.RailLayoutLocked.Value = false; }),
+                null, RailLockMs, System.Threading.Timeout.Infinite);
+        }
+        // (1) Maintain ShellUi.RailFits from the live viewport/sidebar/rail widths. The rail no longer auto-closes on a
+        // fits-flip — it switches between inline (spacer reserves width) and floating (overlay only); the flip animates
+        // the spacer, so arm the layout-defer lock while that reflow is in flight. Peek-guarded so this never re-triggers.
         UseSignalEffect(() =>
         {
             float vpW = vpSig.Value.Width;
             float sbW = _sidebarCompact.Value ? 56f : _sidebarWidth.Value;
             bool fits = ShellUi.CanFitRail(vpW, sbW, _shellUi.RailWidth.Value);
-            if (_shellUi.RailFits.Peek() != fits) _shellUi.RailFits.Value = fits;
-            if (!fits && _shellUi.RailOpen.Peek()) _shellUi.RailOpen.Value = false;
+            if (_shellUi.RailFits.Peek() != fits)
+            {
+                _shellUi.RailFits.Value = fits;
+                if (_shellUi.RailOpen.Peek()) ArmRailLockWithClear();
+            }
         });
         // (2) Arm the layout-defer lock on every rail toggle (open OR close); a one-shot Timer clears it after the
         // RailReflow spring settles. The _lastRailOpen change-guard avoids arming on an unrelated re-render; the
@@ -231,12 +245,7 @@ sealed class WaveeShell : Component
             bool open = _shellUi.RailOpen.Value;
             if (open == _lastRailOpen) return;
             _lastRailOpen = open;
-            _shellUi.ArmRailLock();   // stamps the arm time — the breakpoint gates read the time-bounded RailLockActive
-            int gen = ++_railLockGen;
-            _railLockTimer?.Dispose();
-            _railLockTimer = new System.Threading.Timer(
-                _ => post(() => { if (gen == _railLockGen) _shellUi.RailLayoutLocked.Value = false; }),
-                null, RailLockMs, System.Threading.Timeout.Infinite);
+            ArmRailLockWithClear();
         });
 
         var column = new BoxEl
@@ -332,10 +341,9 @@ sealed class WaveeShell : Component
                             // toggle (SidebarReflow) and ClipToBounds hides the content while collapsed.
                             new BoxEl
                             {
-                                Direction = 1, Shrink = 0f, ClipToBounds = true, Fill = Prop.Of(() => WaveeColors.Sidebar),
-                                Width = Prop.Of(() => _shellUi.RailOpen.Value ? _shellUi.RailWidth.Value : 0f),
+                                Shrink = 0f,
+                                Width = Prop.Of(() => _shellUi.RailOpen.Value && _shellUi.RailFits.Value ? _shellUi.RailWidth.Value : 0f),
                                 Animate = RailReflow,
-                                Children = [ Embed.Comp(() => new RightRail()) ],
                             },
                         ],
                     },
@@ -351,6 +359,21 @@ sealed class WaveeShell : Component
                             // The strip is entirely on the content side of the seam to avoid covering the sidebar's
                             // 12-DIP scrollbar lane; SidebarResizeGrip's root Grow=1 fills this definite-height column.
                             Embed.Comp(() => new SidebarResizeGrip(_sidebarCompact, _sidebarWidth, _sidebarDragging, _sidebarFade, SaveSidebar)),
+                        ],
+                    },
+                    new BoxEl
+                    {
+                        Grow = 1f, Direction = 0, Justify = FlexJustify.End, HitTestPassThrough = true,
+                        Children =
+                        [
+                            new BoxEl
+                            {
+                                Direction = 1, Shrink = 0f, ClipToBounds = true,
+                                Width = Prop.Of(() => _shellUi.RailOpen.Value ? _shellUi.RailWidth.Value : 0f),
+                                Animate = RailReflow,
+                                Fill = Prop.Of(() => WaveeColors.Sidebar),
+                                Children = [ Embed.Comp(() => new RightRail()) ],
+                            },
                         ],
                     }
                 // Bounded fill: Grow=1 takes the free space, Shrink=1 makes this the ONE region that yields when the
@@ -385,20 +408,10 @@ sealed class WaveeShell : Component
             Children = [column],
         };
 
-        // The full-screen now-playing view is a TOP layer over the whole shell (inside the OverlayHost so its own flyouts —
-        // the device picker, the volume popup — still render above it). Gated on bridge.Expanded; zero-cost when closed.
-        // CRITICAL: the layer MUST sit under a PLAIN pass-through positioner (a bare Embed.Comp wrapper node is
-        // mirrored-but-NOT-passthrough and would swallow every hit, silently killing scrolling — same trap as the FPS HUD).
-        // When the now-playing is open its own opaque fill captures hits; when closed the pass-through lets scroll through.
-        var nowPlayingLayer = new BoxEl
-        {
-            Grow = 1f, HitTestPassThrough = true,
-            Children = [ Embed.Comp(() => new NowPlayingLayer()) ],
-        };
-        // Transient toasts (ToastHost was previously never mounted anywhere): a full-bleed PASS-THROUGH positioner that pins
-        // the toast bottom-centre, just above the docked player bar. It sits ABOVE the now-playing layer so a toast is visible
-        // over the fullscreen now-playing view too. Same trap as the FPS HUD / now-playing layer: the positioner MUST be a
-        // plain BoxEl with HitTestPassThrough so empty space passes clicks through; the toast's own filled surface captures its.
+        // Transient toasts: a full-bleed PASS-THROUGH positioner that pins the toast bottom-centre, just above the docked
+        // player bar. CRITICAL: the positioner MUST be a plain BoxEl with HitTestPassThrough (a bare Embed.Comp wrapper
+        // node is mirrored-but-NOT-passthrough and would swallow every hit, silently killing scrolling — the FPS-HUD
+        // trap); the toast's own filled surface captures its clicks.
         var toastLayer = new BoxEl
         {
             Grow = 1f, HitTestPassThrough = true,
@@ -420,7 +433,7 @@ sealed class WaveeShell : Component
                 new BoxEl { MaxWidth = 560f, Children = [ Embed.Comp(() => new PlaybackRuntimeChrome(_settings)) ] },
             ],
         };
-        var shellWithNowPlaying = Ui.ZStack(tinted, nowPlayingLayer, runtimeBannerLayer, toastLayer) with { Grow = 1f };
+        var shellWithOverlays = Ui.ZStack(tinted, runtimeBannerLayer, toastLayer) with { Grow = 1f };
 
         return Ctx.Provide(ShellUi.Slot, _shellUi,
                Ctx.Provide(ShellTint.Slot, _shellTint,
@@ -428,7 +441,7 @@ sealed class WaveeShell : Component
                Ctx.Provide(HistoryStore.Slot, _historyStore,
                Ctx.Provide(NavPreviewStore.Slot, _navPreview,
                Ctx.Provide(SearchQuery.Slot, _searchText,
-               Embed.Comp(() => new OverlayHost { Child = shellWithNowPlaying })))))));
+               Embed.Comp(() => new OverlayHost { Child = shellWithOverlays })))))));
     }
 
     TabStrip BuildTabStrip() => new TabStrip

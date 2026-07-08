@@ -55,6 +55,13 @@ team maintained, not by the running app.
 > pass-through in `AppHost.Paint`; `Quarantine` logically 0). The `ThreadGuard`, quarantine-derivation (§5.1), publisher
 > ordering (§2.2), 3-slot rule (§2.3) and arena-ring rationale (§6) apply to both cuts unchanged.
 
+> **Modal move/size (butter-smooth resize v2).** Today **`WndProc == the presenting thread`**: keep-alive modal paints
+> (`WM_TIMER` / throttled `WM_SIZE`) call `AppHost.Paint` inline on that thread, including `Present()` and any
+> one-shot `HintSettlePresent`/`DwmFlush` on settle. The WndProc budget invariant therefore applies directly — modal
+> ticks must stay sub-ms on the UI thread. When `FG_RENDER_THREAD`/`FG_RENDER_ASYNC` are enabled, **DirectComposition
+> calls (`SetOffset`, `Commit`, `BindDComp`) remain confined to whichever thread presents**; a future async render thread
+> must not touch DComp from the WndProc without an explicit SPSC wake (see `pal-rhi.md` §1.2 modal table).
+
 ---
 
 ## 1. The 3-thread topology + single-writer confinement table

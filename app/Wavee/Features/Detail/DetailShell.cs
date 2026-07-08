@@ -7,6 +7,7 @@ using FluentGpu.Hooks;
 using FluentGpu.Localization;
 using FluentGpu.Signals;
 using Wavee.Core;
+using Wavee.Features.Detail;
 using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
@@ -70,19 +71,9 @@ sealed class DetailShell : Component
     // Adaptive layout by the page's own width: 0 Wide (full rail) · 1 Mid (rail 224) · 2 Narrow (rail 188, still
     // two-column) · 3 Vertical (rail collapses to a top header, list below). Sized so the right track area keeps a
     // usable width before the vertical switch.
-    const int Vertical = 3;
-    const float VerticalEnterW = 540f;
-    const float VerticalExitW = 580f;
-    static int NominalModeFor(float w) => w <= 0f ? 0 : w >= 820f ? 0 : w >= 660f ? 1 : w >= 560f ? 2 : Vertical;
+    const int Vertical = DetailLayoutBreakpoints.VerticalMode;
     static int ModeFor(float w, int currentMode, bool initialized)
-    {
-        if (w <= 0f) return currentMode;
-        if (!initialized) return NominalModeFor(w);
-        if (currentMode == Vertical) return w >= VerticalExitW ? NominalModeFor(w) : Vertical;
-        if (w < VerticalEnterW) return Vertical;
-        int nominal = NominalModeFor(w);
-        return nominal == Vertical ? 2 : nominal;
-    }
+        => DetailLayoutBreakpoints.ModeFor(w, currentMode, initialized);
     static float RailW(int mode, DetailConfig cfg) => mode switch { 0 => cfg.RailWidth, 1 => 224f, _ => 188f };
     public override Element Render()
     {
@@ -300,7 +291,7 @@ sealed class DetailShell : Component
             Element verticalContent = new BoxEl
             {
                 Direction = 1, Grow = 1f, ClipToBounds = true,
-                Children = verticalTracks ? [right] : [DetailRail.BuildHeader(m, _cfg, handlers), right],
+                Children = verticalTracks ? [right] : [DetailRail.BuildHeader(m, _cfg, handlers, _model), right],
             };
             Element verticalBody = verticalTracks
                 ? new BoxEl
@@ -360,7 +351,7 @@ sealed class DetailShell : Component
             // mid-glyph ("Plays"→"Pl") instead of the table reflowing to a tighter tier. `right` already shrinks (below);
             // the fix is to let its PARENT shrink so the reduced width actually reaches it.
             Direction = 0, Grow = 1f, Shrink = 1f, MinWidth = 0f, Basis = 0f, MaxWidth = 1600f,
-            Children = [DetailRail.Build(m, _cfg, handlers, railW, titleSize, descLines), right],
+            Children = [DetailRail.Build(m, _cfg, handlers, railW, titleSize, descLines, _model), right],
         };
         return new BoxEl
         {

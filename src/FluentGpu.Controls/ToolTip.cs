@@ -107,11 +107,23 @@ public sealed class ToolTip : Component
     /// the bubble closes once the pointer has been outside owner ∪ bubble for one full check interval.</summary>
     public const float SafeZoneCheckMs = 1000f;
 
+    /// <summary>LIVE target+text slots (the SelectorBar/RadioButtons provider idiom). <see cref="Target"/> and
+    /// <see cref="Text"/> are plain fields, so via <c>Embed.Comp</c> they freeze at first mount — a re-rendering
+    /// parent's new wrapped element or new tooltip text would be silently dropped (the toggle-tooltip staleness bug).
+    /// <see cref="Wrap"/> routes them through this provider instead; when present they WIN over the fields and the
+    /// ToolTip re-renders reactively (context is signal-backed).</summary>
+    public sealed record ToolTipSlots(Element Target, string Text);
+
+    internal static readonly Context<ToolTipSlots?> SlotsChannel = new(null);
+
     public static Element Wrap(Element target, string text)
-        => Embed.Comp(() => new ToolTip { Target = target, Text = text });
+        => Ctx.Provide(SlotsChannel, new ToolTipSlots(target, text), Embed.Comp(() => new ToolTip()));
 
     public override Element Render()
     {
+        var slots = UseContext(SlotsChannel);
+        Element target = slots?.Target ?? Target;
+        string text = slots?.Text ?? Text;
         var svc = UseContext(Overlay.Service);
         var hooks = UseContext(InputHooks.Current);
         var anchor = UseRef<NodeHandle>(default);
@@ -133,7 +145,7 @@ public sealed class ToolTip : Component
         var lastClosedAtMs = UseRef<long>(long.MinValue / 2);
         var placementMode = Placement;
 
-        Func<Element> bubbleContent = () => BubbleContent(OnBubbleEnter, OnBubbleLeave);
+        Func<Element> bubbleContent = () => BubbleContent(text, OnBubbleEnter, OnBubbleLeave);
 
         void OpenNow()
         {
@@ -315,7 +327,7 @@ public sealed class ToolTip : Component
             OnPointerExit = OnLeave,       // mouse-leave → cancel pending / close open
             OnPointerPressed = OnPressed,  // press over the target → dismiss (never survives an interaction)
             OnFocusChanged = OnFocus,      // keyboard focus in/out of the target subtree (a11y trigger)
-            Children = clock is null ? [Target] : [Target, clock],
+            Children = clock is null ? [target] : [target, clock],
         };
     }
 
@@ -327,7 +339,7 @@ public sealed class ToolTip : Component
     //   CornerRadius = ControlCornerRadius (4px), Padding = ToolTipBorderPadding 9,6,9,8
     //   FontSize = ToolTipContentThemeFontSize 12, Foreground = TextFillColorPrimary, MaxWidth = 320, TextWrapping = Wrap.
     //   Shadow = the light transient elevation class (Elevation.Tooltip) — tooltips sit on the lowest popup band.
-    Element BubbleContent(Action<Point2> onEnter, Action onLeave)
+    Element BubbleContent(string text, Action<Point2> onEnter, Action onLeave)
     {
         var bubble = new BoxEl
         {
@@ -345,7 +357,7 @@ public sealed class ToolTip : Component
             OnPointerExit = onLeave,
             Children =
             [
-                new TextEl(Text)
+                new TextEl(text)
                 {
                     Size = 12f,
                     Color = Tok.TextPrimary,

@@ -457,6 +457,13 @@ public interface IPlatformWindow : IDisposable
     /// felt as sluggish, low-fps resizing. Default false (standard frame / headless never enter the loop).</summary>
     bool InModalLoop => false;
 
+    /// <summary>True when the window's pixels are a DComp flip surface (WS_EX_NOREDIRECTIONBITMAP). Composited windows
+    /// defer GPU resize + relayout to mouse-up during a modal edge-drag; non-composited windows live-paint (throttled).</summary>
+    bool Composited => false;
+
+    /// <summary>True once the current modal loop has delivered WM_SIZE (edge resize, not pure titlebar move).</summary>
+    bool SizedInModalLoop => false;
+
     void SetCursor(CursorId id);                                   // L10 cursor seam
     void SetTitle(StringId title);
     void Show();

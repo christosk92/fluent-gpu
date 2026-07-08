@@ -33,6 +33,18 @@ public sealed class AppBarToggleButton : Component
             IsCompact = isCompact, OnToggled = onToggled,
         });
 
+    // Frozen-props tripwire (ReuseGuard): Glyph/Label/IsEnabled/IsCompact freeze at mount (InitialChecked is a genuine
+    // mount seed — not compared). A reused instance whose scalar caller-data changed is the frozen-props bug.
+    public override bool ChecksReuse => ReuseGuard.CompiledIn;
+    public override void DebugCheckReuse(Component next)
+    {
+        if (next is not AppBarToggleButton n) return;
+        if (n.Glyph != Glyph) ReuseGuard.ScalarChanged(this, nameof(Glyph));
+        else if (n.Label != Label) ReuseGuard.ScalarChanged(this, nameof(Label));
+        else if (n.IsEnabled != IsEnabled) ReuseGuard.ScalarChanged(this, nameof(IsEnabled));
+        else if (n.IsCompact != IsCompact) ReuseGuard.ScalarChanged(this, nameof(IsCompact));
+    }
+
     public override Element Render()
     {
         var (on, setOn) = UseState(InitialChecked);

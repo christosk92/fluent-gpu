@@ -18,7 +18,7 @@ namespace FluentGpu.Rhi.D3D12;
 /// DIRECT command queue + fence, a DXGI flip-model swapchain on the HWND, an RTV heap, and per-frame
 /// record→submit→present. Step 1 clears; the SDF rounded-rect pipeline and the DirectWrite glyph atlas layer on top.
 /// </summary>
-public sealed unsafe class D3D12Device : IGpuDevice
+public sealed unsafe partial class D3D12Device : IGpuDevice
 {
     // Back buffers == per-frame allocators == frames-in-flight. Canon (budgets.md): 2 (FLIP_DISCARD); configurable 2–3.
     // Every site below keys off this, so 3 (more CPU run-ahead slack, +1 frame latency, +VRAM) is a one-line change.
@@ -1699,6 +1699,7 @@ public sealed unsafe class D3D12Device : IGpuDevice
             if (_signalDeviceLostInsteadOfThrow) { System.Threading.Volatile.Write(ref _deviceLostReason, reason != 0u ? (int)reason : (int)(uint)pr); return; }
             throw new InvalidOperationException($"Present failed: 0x{(uint)pr:X8}" + (reason != 0u ? $" (device removed reason 0x{reason:X8})" : ""));
         }
+        if (_hintSettlePresent) { _hintSettlePresent = false; _ = DwmFlush(); }
         StoreActive();
     }
 
@@ -1739,6 +1740,12 @@ public sealed unsafe class D3D12Device : IGpuDevice
     private bool _skipVsyncOnce;     // set by SuppressVsyncOnce, consumed by the next Present (interval 0 — non-blocking modal-loop tick)
 
     public void SuppressVsyncOnce() => _skipVsyncOnce = true;
+
+    private bool _hintSettlePresent;
+    public void HintSettlePresent() => _hintSettlePresent = true;
+
+    [LibraryImport("dwmapi.dll")]
+    private static partial int DwmFlush();
 
     private bool CheckTearingSupport()
     {

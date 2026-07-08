@@ -83,7 +83,8 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox
         {
             string? ver;
             using (var c = _conn.CreateCommand()) { c.CommandText = "SELECT value FROM meta WHERE key='schema_version';"; ver = c.ExecuteScalar() as string; }
-            if (ver is not null) return;   // already migrated
+            if (ver is null)
+            {
 
             using var tx = _conn.BeginTransaction();
             // v0 → v1: fold a legacy `saved(setid,uri,sync)` table into collection_items, then drop it.
@@ -102,6 +103,17 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox
             }
             using (var c = _conn.CreateCommand()) { c.Transaction = tx; c.CommandText = "INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','1');"; c.ExecuteNonQuery(); }
             tx.Commit();
+            ver = "1";
+            }
+
+            if (ver == "1")
+            {
+                using var tx = _conn.BeginTransaction();
+                using (var c = _conn.CreateCommand()) { c.Transaction = tx; c.CommandText = "UPDATE playlists SET base_rev = NULL;"; c.ExecuteNonQuery(); }
+                using (var c = _conn.CreateCommand()) { c.Transaction = tx; c.CommandText = "DELETE FROM meta WHERE key='rootlist_rev';"; c.ExecuteNonQuery(); }
+                using (var c = _conn.CreateCommand()) { c.Transaction = tx; c.CommandText = "INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','2');"; c.ExecuteNonQuery(); }
+                tx.Commit();
+            }
         }
     }
 

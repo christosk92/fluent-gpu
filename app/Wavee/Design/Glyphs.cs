@@ -34,6 +34,7 @@ internal static class Mdl
     public static readonly string Sort = Of(0xE8CB);           // library sort/view dropdown trigger
     public static readonly string ViewList = Of(0xE14C);       // view-as list
     public static readonly string ViewGrid = Of(0xF0E2);       // view-as grid
+    public static readonly string GripperBar = Of(0xE76F);     // drag handle
     public static readonly string ChevronUp = Of(0xE70E);      // sort direction ascending
     public static readonly string ChevronDown = Of(0xE70D);    // sort direction descending
     public static readonly string FavoriteStarFill = Of(0xE735);   // album top-track star (the most-played row)

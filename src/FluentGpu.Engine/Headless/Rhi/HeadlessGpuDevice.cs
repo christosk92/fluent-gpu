@@ -87,6 +87,9 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     public IReadOnlyList<int> Evictions => _evictions;
     public void EvictImage(int imageId) { _resident.Remove(imageId); _evictions.Add(imageId); }
 
+    public int HintSettlePresentCount { get; private set; }
+    public void HintSettlePresent() => HintSettlePresentCount++;
+
     public void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx)
     {
         _rects.Clear();   // retains capacity → no alloc after warmup

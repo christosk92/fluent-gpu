@@ -33,7 +33,7 @@ public class PlaylistFetcherTests
         HttpReq? captured = null;
         var hydrated = new List<string>();
         var http = new FakeExchange((req, _) => { captured = req; return Ok(bytes); });
-        var fetcher = new PlaylistFetcher(http, () => "https://spclient.test", store, (uris, ct) => { hydrated.AddRange(uris); return Task.CompletedTask; });
+        var fetcher = new PlaylistFetcher(http, () => "https://spclient.test", store, (uris, ct) => { hydrated.AddRange(uris); return Task.CompletedTask; }, () => "");
 
         await fetcher.FetchPlaylistAsync("spotify:playlist:p", TestContext.Current.CancellationToken);
 
@@ -63,7 +63,7 @@ public class PlaylistFetcherTests
     public async Task FetchPlaylist_Throws_OnNon200()
     {
         var http = new FakeExchange((req, _) => new HttpResp(404, new Dictionary<string, string>(), Array.Empty<byte>()));
-        var fetcher = new PlaylistFetcher(http, () => "https://x", new InMemoryStore(), (u, c) => Task.CompletedTask);
+        var fetcher = new PlaylistFetcher(http, () => "https://x", new InMemoryStore(), (u, c) => Task.CompletedTask, () => "");
         await Assert.ThrowsAsync<InvalidOperationException>(() => fetcher.FetchPlaylistAsync("spotify:playlist:p", CancellationToken.None));
     }
 
@@ -81,7 +81,7 @@ public class PlaylistFetcherTests
 
         HttpReq? captured = null;
         var http = new FakeExchange((req, _) => { captured = req; return Ok(slc.ToByteArray()); });
-        var fetcher = new PlaylistFetcher(http, () => "https://x", store, (u, c) => Task.CompletedTask);
+        var fetcher = new PlaylistFetcher(http, () => "https://x", store, (u, c) => Task.CompletedTask, () => "");
 
         await fetcher.FetchRootlistAsync("spotify:user:bob:rootlist", TestContext.Current.CancellationToken);
 

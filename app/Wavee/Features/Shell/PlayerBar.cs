@@ -382,13 +382,13 @@ sealed class PlayerBarContent : Component
         }
         if (!showLike && active)
             overflowCommands.Add(new AppBarCommand(liked ? Mdl.HeartFill : Icons.Heart, Loc.Get(Strings.Player.Like), () => { if (track is { } lt) lib?.ToggleSaved(lt.Uri); }, AppBarCommandKind.ToggleButton, liked, true));
-        // In the small-window overflow, Queue / Devices / Now Playing all open the full now-playing view (where those
-        // controls live — the queue rail, the device picker, the big transport).
+        // In the small-window overflow, Queue / Now Playing open their right-rail panels (the rail floats over the
+        // content when it doesn't fit inline).
         if (!showQueue)
-            overflowCommands.Add(new AppBarCommand(Icons.Queue, Loc.Get(Strings.Player.Queue), () => { b.Expanded.Value = true; }, Enabled: canTransport));
+            overflowCommands.Add(new AppBarCommand(Icons.Queue, Loc.Get(Strings.Player.Queue), () => ui?.Toggle(RailMode.Queue), Enabled: ui is not null));
         // (Devices button is always visible now — no overflow fallback.)
         if (!showExpand)
-            overflowCommands.Add(new AppBarCommand(Icons.ChevronUp, Loc.Get(Strings.Player.NowPlaying), () => { b.Expanded.Value = true; }, Enabled: canTransport));
+            overflowCommands.Add(new AppBarCommand(Icons.ChevronUp, Loc.Get(Strings.Player.NowPlaying), () => ui?.Toggle(RailMode.Details), Enabled: ui is not null));
 
         var rightKids = new List<Element>(8);
         if (showShuffleRepeat)
@@ -415,7 +415,7 @@ sealed class PlayerBarContent : Component
             rightKids.Add(Slider.Bind(b.Volume, v => { _ = b.Player.SetVolumeAsync(v); }, 96f, 16f, RailStyle) with { Key = "volume-slider", Animate = ItemMotion });
         if (ui is not null && active)
             rightKids.Add(Transport(Mdl.Lyrics,
-                () => { if (ui.RailFits.Peek()) ui.Toggle(RailMode.Lyrics); else { b.ExpandedWithLyrics.Value = true; b.Expanded.Value = true; } },
+                () => ui.Toggle(RailMode.Lyrics),
                 true,
                 ui.RailOpen.Value && ui.Mode.Value == RailMode.Lyrics, accent, buttonBox, buttonGlyph)
                 with { Key = "lyrics", Animate = ItemMotion });
@@ -427,11 +427,14 @@ sealed class PlayerBarContent : Component
                 Loc.Get(preferVideo ? Strings.Player.SwitchToAudio : Strings.Player.SwitchToVideo))
                 with { Key = "video" });
         if (showQueue)
-            rightKids.Add(Embed.Comp(() => new QueueButton(b, buttonBox, buttonGlyph)) with { Key = "queue" });
+            rightKids.Add(Transport(Icons.Queue, () => ui?.Toggle(RailMode.Queue), ui is not null,
+                ui?.RailOpen.Value == true && ui.Mode.Value == RailMode.Queue, accent, buttonBox, buttonGlyph)
+                with { Key = "queue", Animate = ItemMotion });
         if (showDevices)
             rightKids.Add(Embed.Comp(() => new DevicesButton(b, buttonBox, buttonGlyph, DevicePickerScope.Bar)) with { Key = "devices" });
         if (showExpand)
-            rightKids.Add(Transport(Icons.ChevronUp, () => { b.Expanded.Value = true; }, canTransport, false, accent, buttonBox, buttonGlyph)
+            rightKids.Add(Transport(Icons.ChevronUp, () => ui?.Toggle(RailMode.Details), ui is not null,
+                ui?.RailOpen.Value == true && ui.Mode.Value == RailMode.Details, accent, buttonBox, buttonGlyph)
                 with { Key = "expand", Animate = ItemMotion });
         rightKids.Add(MoreButton(overflowCommands, buttonBox, buttonGlyph));
 
@@ -899,14 +902,14 @@ sealed class RemoteDeviceLine : Component
     }
 }
 
-// Which mounted DevicesButton instance responds to a bridge DevicePickerRequest (the "Choose device" toast action): the
-// player-bar one when the now-playing view is collapsed, the now-playing footer one when it's expanded. None = never auto-open.
-enum DevicePickerScope : byte { None, Bar, NowPlaying }
+// Which mounted DevicesButton instance responds to a bridge DevicePickerRequest (the "Choose device" toast action):
+// Bar = the player-bar button; None = never auto-open (embedded pickers).
+enum DevicePickerScope : byte { None, Bar }
 
 // The Connect device picker: opens a MenuFlyout of the live device roster (from the bridge) UPWARD out of the button.
 // Each row toggles active + transfers playback to that device on click. Re-renders when the roster / active device changes.
-// Also opens itself when the bridge's DevicePickerRequest is bumped (the critical "playback unsupported" toast's action),
-// but only the instance whose scope matches the current Expanded state — so the toast opens exactly one picker.
+// Also opens itself when the bridge's DevicePickerRequest is bumped (the critical "playback unsupported" toast's action) —
+// only the Bar-scoped instance responds, so the toast opens exactly one picker.
 sealed class DevicesButton : Component
 {
     // No accent ctor arg: ctor args freeze at mount (Embed.Comp preserves the instance across parent re-renders),
@@ -945,69 +948,12 @@ sealed class DevicesButton : Component
         // instances consume the request (each has its own lastReq), but only the scope matching Expanded actually opens it.
         UseEffect(() =>
         {
-            if (_scope == DevicePickerScope.None || req == lastReq.Value) return;
+            if (_scope != DevicePickerScope.Bar || req == lastReq.Value) return;
             lastReq.Value = req;
-            var want = _b.Expanded.Peek() ? DevicePickerScope.NowPlaying : DevicePickerScope.Bar;
-            if (_scope == want && handle.Value is not { IsOpen: true }) Toggle();
+            if (handle.Value is not { IsOpen: true }) Toggle();
         }, req);
 
-        ColorF accentNow = _scope == DevicePickerScope.NowPlaying && _b.TrackPalette.Value is { } pal
-            ? WaveePalette.Accent(pal) : Tok.AccentDefault;
-        return PlayerBarContent.Transport(Icons.Devices, Toggle, true, active, accentNow, _box, _glyph, h => anchor.Value = h);
-    }
-}
-
-// The up-next queue: opens a MenuFlyout peek of the live queue (now-playing checked, then "Next in queue" = user q#,
-// then "Next up" = the context tracks ahead). Clicking an up-next entry plays that track (best-effort; a true
-// skip-to-queue-item needs a seam addition). Re-renders when the queue changes.
-sealed class QueueButton : Component
-{
-    // No accent ctor arg for the same freeze-at-mount reason as DevicesButton above — read live in Render().
-    readonly PlaybackBridge _b; readonly float _box, _glyph;
-    public QueueButton(PlaybackBridge b, float box = 36f, float glyph = 16f)
-    {
-        _b = b; _box = box; _glyph = glyph;
-    }
-
-    public override Element Render()
-    {
-        var anchor = UseRef<NodeHandle>(default);
-        var handle = UseRef<OverlayHandle?>(null);
-        var svc = UseContext(Overlay.Service);
-        var queue = _b.Queue.Value;   // subscribe → re-render when the queue changes
-
-        void Toggle()
-        {
-            if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
-            var items = new List<MenuFlyoutItem>(Math.Max(1, queue.Count));
-            if (queue.Count == 0)
-                items.Add(new MenuFlyoutItem(Loc.Get(Strings.Player.Queue), null, false, () => { }));
-            else
-            {
-                QueueBucket? last = null;
-                foreach (var e in queue)
-                {
-                    var entry = e;
-                    if (entry.Bucket == QueueBucket.History) continue;
-                    if (entry.Bucket != QueueBucket.NowPlaying && entry.Bucket != last)
-                        items.Add(new MenuFlyoutItem(entry.Bucket == QueueBucket.UserQueue ? "Next in queue" : "Next up", null, false, () => { }));
-                    last = entry.Bucket;
-                    string label = entry.Track.Artists.Count > 0 ? entry.Track.Title + "  ·  " + entry.Track.Artists[0].Name : entry.Track.Title;
-                    if (entry.Bucket == QueueBucket.NowPlaying)
-                        items.Add(MenuFlyoutItem.Toggle(label, true, () => { }, Icons.Queue, enabled: false));
-                    else
-                        items.Add(new MenuFlyoutItem(label, null, true, () => { _ = _b.Player.PlayTrackAsync(entry.Track); }));
-                }
-            }
-            handle.Value = svc.Open(
-                () => anchor.Value,
-                () => MenuFlyout.Build(items, () => handle.Value?.Close()),
-                FlyoutPlacement.TopEdgeAlignedRight,
-                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
-            handle.Value.ClosedAction = () => handle.Value = null;
-        }
-
-        return PlayerBarContent.Transport(Icons.Queue, Toggle, true, false, Tok.AccentDefault, _box, _glyph, h => anchor.Value = h);
+        return PlayerBarContent.Transport(Icons.Devices, Toggle, true, active, Tok.AccentDefault, _box, _glyph, h => anchor.Value = h);
     }
 }
 

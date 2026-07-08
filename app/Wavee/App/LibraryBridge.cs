@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
 using FluentGpu.Hooks;
 using FluentGpu.Signals;
 using Wavee.Core;
@@ -20,6 +22,7 @@ public sealed class LibraryBridge
 
     readonly IMutationSource _mut;
     readonly UserPlaylistSource _playlists;
+    readonly IPlaylistMutationSource _playlistEdits;
     readonly List<IDisposable> _subs = [];
     bool _active;
 
@@ -28,10 +31,11 @@ public sealed class LibraryBridge
     /// <summary>Bumps whenever a user playlist is created / added-to — the sidebar keys its playlist read on it to refresh.</summary>
     public Signal<int> PlaylistsVersion { get; } = new(0);
 
-    public LibraryBridge(IMutationSource mut, UserPlaylistSource playlists)
+    public LibraryBridge(IMutationSource mut, UserPlaylistSource playlists, IPlaylistMutationSource playlistEdits)
     {
         _mut = mut;
         _playlists = playlists;
+        _playlistEdits = playlistEdits;
         Saved = new Signal<IReadOnlySet<string>>(mut.Saved);
     }
 
@@ -73,4 +77,23 @@ public sealed class LibraryBridge
         Saved.Value = next;                      // optimistic
         _ = _mut.SetSavedAsync(uri, saved);      // reconcile (re-emits the confirmed set via the bridge subscription)
     }
+
+    // ── Spotify playlist editing ─────────────────────────────────────────────────────────────────────────
+    public Task UpdatePlaylistDetailsAsync(string playlistUri, string? name, string? description, bool? collaborative, CancellationToken ct = default)
+        => _playlistEdits.UpdateDetailsAsync(playlistUri, name, description, collaborative, ct);
+
+    public Task SetPlaylistCoverJpegAsync(string playlistUri, byte[] jpeg, CancellationToken ct = default)
+        => _playlistEdits.SetCoverJpegAsync(playlistUri, jpeg, ct);
+
+    public Task ClearPlaylistCoverAsync(string playlistUri, CancellationToken ct = default)
+        => _playlistEdits.ClearCoverAsync(playlistUri, ct);
+
+    public Task RemovePlaylistRowsAsync(string playlistUri, IReadOnlyList<PlaylistRowRef> rows, CancellationToken ct = default)
+        => _playlistEdits.RemoveRowsAsync(playlistUri, rows, ct);
+
+    public Task MovePlaylistRowsAsync(string playlistUri, IReadOnlyList<PlaylistRowRef> rows, int toIndex, CancellationToken ct = default)
+        => _playlistEdits.MoveRowsAsync(playlistUri, rows, toIndex, ct);
+
+    public Task<string> CreateContributorInviteAsync(string playlistUri, CancellationToken ct = default)
+        => _playlistEdits.CreateContributorInviteAsync(playlistUri, ct);
 }

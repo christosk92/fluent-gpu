@@ -57,13 +57,14 @@ sealed partial class SettingsPage
         float[] gains = ReadEqGains(settings);
         int preset = Math.Clamp(_eqPreset.Value, 0, s_eqPresetIds.Length - 1);
 
-        Element Toggle(SettingKey<bool> key, bool pushDsp = false, bool bumpPlayerBar = false) =>
+        Element Toggle(SettingKey<bool> key, bool pushDsp = false, bool bumpPlayerBar = false, bool bumpPlayback = false) =>
             ToggleSwitch.Create(settings?.Get(key) ?? true, () =>
             {
                 if (settings is null) return;
                 settings.Set(key, !settings.Get(key));
                 if (pushDsp) PushDsp(svc);
                 if (bumpPlayerBar) PlayerBarPrefs.Bump();
+                if (bumpPlayback) PlaybackPrefs.Bump();
                 Bump();
             }, style: SettingsCard.CompactToggleStyle());
 
@@ -75,7 +76,7 @@ sealed partial class SettingsPage
             SettingsRow(Loc.Get(Strings.Settings.Playback.RememberVolume), Loc.Get(Strings.Settings.Playback.RememberVolumeSub),
                 Toggle(WaveeSettings.RememberVolume), Icons.Volume),
             SettingsRow(Loc.Get(Strings.Settings.Playback.Autoplay), Loc.Get(Strings.Settings.Playback.AutoplaySub),
-                Toggle(WaveeSettings.AutoplayEnabled), Icons.Play),
+                Toggle(WaveeSettings.AutoplayEnabled, bumpPlayback: true), Icons.Play),
             SettingsSectionHeader(Loc.Get(Strings.Settings.Sound.Title), Icons.Tag),
             EqualizerGroup(svc, settings, eqOn, gains, preset),
             CrossfadeGroup(svc, settings, crossOn),

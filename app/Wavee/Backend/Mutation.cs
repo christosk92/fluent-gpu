@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Wavee.Backend.Collections;
 using Wavee.Backend.Playlists;
 using Wavee.Backend.Spotify;
+using Wavee.Core;
 using Pl = Wavee.Protocol.Playlist;
 
 namespace Wavee.Backend;
@@ -88,17 +89,39 @@ public sealed class SetReplayStrategy : IMutationStrategy
 public sealed class OpRebaseStrategy : IMutationStrategy
 {
     readonly IStore _store;
-    public OpRebaseStrategy(IStore store) => _store = store;
+    readonly Func<string> _spclientBaseUrl;
+    public OpRebaseStrategy(IStore store, Func<string> spclientBaseUrl) => (_store, _spclientBaseUrl) = (store, spclientBaseUrl);
 
     public string Type => "oprebase";
     public bool OfflineQueueable => true;
 
     public void ApplyOptimistic(OutboxOp op, IStore store)
     {
+        var ops = op.Ops ?? Array.Empty<PlaylistOp>();
         var list = new List<PlaylistMember>(store.Membership(op.EntityKey));
-        try { PlaylistDiffApplier.Apply(list, op.Ops ?? Array.Empty<PlaylistOp>()); }
-        catch (ArgumentOutOfRangeException) { return; }   // can't apply against the local baseline → leave it; the server reconciles
+        try { PlaylistDiffApplier.Apply(list, ops); }
+        catch (ArgumentOutOfRangeException) { return; }
         store.SetMembership(op.EntityKey, list, store.PlaylistRevision(op.EntityKey));
+        ApplyHeaderPatch(store, op.EntityKey, ops);
+    }
+
+    internal static void ApplyHeaderPatch(IStore store, string uri, IReadOnlyList<PlaylistOp> ops)
+    {
+        PlaylistListAttributePatch? patch = null;
+        for (int i = 0; i < ops.Count; i++)
+            if (ops[i].Kind == PlaylistOpKind.UpdateList && ops[i].ListPatch is { } p) { patch = p; break; }
+        if (patch is null) return;
+        var header = store.GetPlaylist(uri);
+        if (header is null) return;
+        string? name = patch.ClearName ? "" : patch.Name ?? header.Name;
+        string? desc = patch.ClearDescription ? null : patch.Description ?? header.Description;
+        Image? cover = patch.ClearPicture ? null
+            : patch.PictureBytes is { Length: > 0 } pic
+                ? new Image("https://i.scdn.co/image/" + Convert.ToHexStringLower(pic))
+                : header.Cover;
+        bool collab = patch.Collaborative ?? header.Capabilities.IsCollaborative;
+        var caps = header.Capabilities with { IsCollaborative = collab };
+        store.UpsertPlaylist(header with { Name = name ?? header.Name, Description = desc, Cover = cover, Capabilities = caps });
     }
 
     // §2.7 — the /changes POST now (1) carries the first-party header set + an EXPLICIT POST method (a bare POST 200-OKs
@@ -109,8 +132,8 @@ public sealed class OpRebaseStrategy : IMutationStrategy
     {
         var path = op.EntityKey.StartsWith("spotify:", StringComparison.Ordinal) ? op.EntityKey.Substring(8).Replace(':', '/') : op.EntityKey;
         var baseRev = _store.PlaylistRevision(op.EntityKey) ?? op.BaseRev;   // rebase per attempt: freshest cached rev wins
-        var body = PlaylistWireMapper.BuildChanges(baseRev, op.Ops ?? Array.Empty<PlaylistOp>());
-        var headers = SpotifyHeaders.PlaylistV2Mutation();
+        var body = PlaylistWireMapper.BuildChanges(baseRev, op.Ops ?? Array.Empty<PlaylistOp>(), ctx.Account, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        var headers = SpotifyHeaders.PlaylistV2Mutation(_spclientBaseUrl());
         var r = await t.Request(Channel.Spclient, $"/playlist/v2/{path}/changes", body, ct, method: "POST", headers: headers).ConfigureAwait(false);
         if (r.Ok) { CaptureChangesResponse(op.EntityKey, r.Body); return true; }
         return false;   // a 409 (revision conflict) surfaces as !Ok → retry rebased against the fresher cached revision next drain
@@ -262,6 +285,8 @@ public sealed class RootlistFollowStrategy : IMutationStrategy
     }
 }
 
+public sealed record EditSnapshot(IReadOnlyList<PlaylistMember> Membership, Playlist? Header);
+
 public sealed class MutationEngine
 {
     const int MaxAttempts = 10;
@@ -273,7 +298,7 @@ public sealed class MutationEngine
     // "set" rows coalesce (one per (set, entity), latest end-state wins); "oprebase" rows append (keyed by unique id —
     // the server permits duplicate playlist items, so edits must NOT dedupe).
     readonly Dictionary<string, OutboxOp> _outbox = new();
-    readonly Dictionary<long, IReadOnlyList<PlaylistMember>> _editSnapshots = new();   // pre-edit membership, for OpRebase rollback
+    readonly Dictionary<long, EditSnapshot> _editSnapshots = new();   // pre-edit membership + header for OpRebase rollback
     // §8.3 — per-op replay backoff (in-memory only: after a restart, attempts reload from SQLite and the clock resets —
     // a restart is a natural retry moment). Drain skips ops whose next-attempt time hasn't come; cleared on success/dead-letter.
     readonly Dictionary<long, DateTime> _nextAttemptAt = new();
@@ -345,7 +370,7 @@ public sealed class MutationEngine
         if (!_strategies.TryGetValue("oprebase", out var s)) return;
         var id = Interlocked.Increment(ref _seq);
         var op = new OutboxOp(id, "oprebase", playlistUri, playlistUri, false, id, 0, ops, baseRev);
-        lock (_gate) { _outbox[KeyOf(op)] = op; _editSnapshots[id] = _store.Membership(playlistUri); }   // snapshot BEFORE apply
+        lock (_gate) { _outbox[KeyOf(op)] = op; _editSnapshots[id] = new EditSnapshot(_store.Membership(playlistUri), _store.GetPlaylist(playlistUri)); }
         _durable?.Save(op);
         s.ApplyOptimistic(op, _store);
     }
@@ -394,6 +419,7 @@ public sealed class MutationEngine
                 var bumped = op with { Attempts = op.Attempts + 1 };
                 bool deadLetter = false, bumpedDurable = false;
                 IReadOnlyList<PlaylistMember>? snapshot = null;
+                Playlist? headerSnapshot = null;
                 lock (_gate)
                 {
                     if (_outbox.TryGetValue(key, out var cur) && cur.Id == op.Id)   // only touch the row if it's still ours
@@ -402,7 +428,7 @@ public sealed class MutationEngine
                         {
                             _outbox.Remove(key); DeadLetter.Add(op); deadLetter = true;
                             _nextAttemptAt.Remove(op.Id);
-                            if (_editSnapshots.Remove(op.Id, out var snap)) snapshot = snap;
+                            if (_editSnapshots.Remove(op.Id, out var snap)) { snapshot = snap.Membership; headerSnapshot = snap.Header; }
                         }
                         else
                         {
@@ -418,7 +444,11 @@ public sealed class MutationEngine
                 {
                     _durable?.Remove(op.Id);
                     _durable?.DeadLetter(op, "max replay attempts exceeded");
-                    if (op.Type == "oprebase") { if (snapshot is not null) _store.SetMembership(op.EntityKey, snapshot, op.BaseRev); }
+                    if (op.Type == "oprebase")
+                    {
+                        if (snapshot is not null) _store.SetMembership(op.EntityKey, snapshot, op.BaseRev);
+                        if (headerSnapshot is not null) _store.UpsertPlaylist(headerSnapshot);
+                    }
                     else s.Rollback(op, _store);
                 }
             }

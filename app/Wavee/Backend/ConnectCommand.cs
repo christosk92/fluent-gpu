@@ -17,7 +17,10 @@ public enum ConnectCmd
 
 public readonly record struct ConnectCommand(
     ConnectCmd Kind, string Endpoint, string Key, int MessageId, string SenderDeviceId,
-    long SeekToMs, bool BoolArg, byte[] Payload)
+    long SeekToMs, bool BoolArg, byte[] Payload,
+    // The optional command.track payload a next_track / skip_next carries (F7): the row the sender is jumping to, uid-first
+    // identity + uri fallback. Empty for a bare skip_next (advance one). Trailing defaults so other constructions are unaffected.
+    string TrackUri = "", string TrackUid = "")
 {
     public static bool TryParse(in WireRequest req, out ConnectCommand cmd)
     {
@@ -47,6 +50,7 @@ public readonly record struct ConnectCommand(
             var kind = Map(endpoint);
             long seekMs = 0;
             bool boolArg = false;
+            string trackUri = "", trackUid = "";
             switch (kind)
             {
                 case ConnectCmd.SeekTo:
@@ -59,9 +63,17 @@ public readonly record struct ConnectCommand(
                     if (inner.TryGetProperty("value", out var bv) && bv.ValueKind is JsonValueKind.True or JsonValueKind.False)
                         boolArg = bv.GetBoolean();
                     break;
+                case ConnectCmd.SkipNext:
+                    // next_track (and, rarely, skip_next) carries command.track {uri,uid} — the row being jumped to (F7).
+                    if (inner.TryGetProperty("track", out var trk) && trk.ValueKind == JsonValueKind.Object)
+                    {
+                        if (trk.TryGetProperty("uri", out var tu)) trackUri = tu.GetString() ?? "";
+                        if (trk.TryGetProperty("uid", out var td)) trackUid = td.GetString() ?? "";
+                    }
+                    break;
             }
 
-            cmd = new ConnectCommand(kind, endpoint, req.RequestId, messageId, sender, seekMs, boolArg, req.Command);
+            cmd = new ConnectCommand(kind, endpoint, req.RequestId, messageId, sender, seekMs, boolArg, req.Command, trackUri, trackUid);
             return kind != ConnectCmd.Unknown;
         }
         catch { return false; }
@@ -74,6 +86,7 @@ public readonly record struct ConnectCommand(
         "resume" => ConnectCmd.Resume,
         "seek_to" => ConnectCmd.SeekTo,
         "skip_next" => ConnectCmd.SkipNext,
+        "next_track" => ConnectCmd.SkipNext,   // official desktop sends next_track (+ the target row) for a queue-row jump (F7)
         "skip_prev" => ConnectCmd.SkipPrev,
         "set_shuffling_context" => ConnectCmd.SetShufflingContext,
         "set_repeating_context" => ConnectCmd.SetRepeatingContext,

@@ -51,6 +51,7 @@ public sealed class HeadlessWindow : IPlatformWindow
         ClientSizePx = desc.SizePx;
         Scale = desc.Scale <= 0 ? 1f : desc.Scale;
         CustomFrame = desc.CustomFrame;
+        Composited = desc.Composited;
     }
 
     /// <summary>The <see cref="WindowDesc.CustomFrame"/> opt-in, recorded for assertions (no real NC concept headless).</summary>
@@ -66,6 +67,10 @@ public sealed class HeadlessWindow : IPlatformWindow
     public Action? PaintRequested { get; set; }   // unused headless (no modal resize loop)
     /// <inheritdoc cref="FluentGpu.Pal.IPlatformWindow.InModalLoop"/>
     public bool InModalLoop { get; set; }
+    /// <inheritdoc cref="FluentGpu.Pal.IPlatformWindow.SizedInModalLoop"/>
+    public bool SizedInModalLoop { get; set; }
+    /// <inheritdoc cref="FluentGpu.Pal.IPlatformWindow.Composited"/>
+    public bool Composited { get; set; }
     public CursorId LastCursor { get; private set; }
     public bool Shown { get; private set; }
 

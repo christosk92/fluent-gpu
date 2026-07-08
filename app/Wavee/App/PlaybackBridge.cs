@@ -30,6 +30,12 @@ public sealed class PlaybackBridge
     IStore? _store;
     Action<Action>? _post;
     bool _storeWired;
+    string? _lastQueueDiagSig;
+    // Queue-revision content fold (drives QueueRevision — see the signal). Bumps a monotonic counter only when the fold
+    // changes, so the queue panel remounts iff its visible set actually differs (no thrash on volume/position/metadata).
+    ulong _queueContentFold;
+    bool _haveQueueFold;
+    long _queueRev;
 
     // ── UI signals (read by components) ─────────────────────────────────────────────────────────────────────────────
     public Signal<Track?> CurrentTrack { get; } = new(null);
@@ -56,20 +62,17 @@ public sealed class PlaybackBridge
     public Signal<long> DurationMs { get; } = new(0L);
     public Signal<Palette?> TrackPalette { get; } = new(null);
     public Signal<IReadOnlyList<QueueEntry>> Queue { get; } = new(Array.Empty<QueueEntry>());
+    /// <summary>A monotonic queue revision — bumped only when the published queue's CONTENT changes (count/identity/bucket/
+    /// provider), not on metadata enrichment or unrelated state ticks. The queue-panel keys its bound-list remount on this
+    /// (replaces the old UI-side content-hash): one value that changes iff the visible SET must be rebuilt. Covers both the
+    /// active-session snapshot cadence and viewer-mode cluster folds.</summary>
+    public Signal<long> QueueRevision { get; } = new(0L);
     public Signal<IReadOnlyList<PlaybackDevice>> Devices { get; } = new(Array.Empty<PlaybackDevice>());
     public Signal<AuthStatus> Auth { get; } = new(AuthStatus.LoggedOut);
     public Signal<WaveeUser?> User { get; } = new(null);
     /// <summary>The rich login projection driving the full-screen login takeover (device-code / QR / phase). Fed by the
     /// live bootstrap through <see cref="Progress"/>; the coarse <see cref="Auth"/> still gates shell ↔ takeover.</summary>
     public Signal<LoginSnapshot> Login { get; } = new(new(LoginPhase.LoggedOut));
-
-    /// <summary>UI-only: the full now-playing view is open. The player-bar expand button toggles it; the shell renders the
-    /// panel as a top layer. Lives on the bridge so any component under the playback context can open/close it.</summary>
-    public Signal<bool> Expanded { get; } = new(false);
-
-    /// <summary>One-shot: the fullscreen now-playing was opened via the player-bar lyrics button when the rail didn't fit
-    /// — <c>NowPlayingView</c> seeds <c>showLyrics=true</c> on mount then clears this so a later normal reopen seeds false.</summary>
-    public Signal<bool> ExpandedWithLyrics { get; } = new(false);
 
     /// <summary>The now-playing track has an accompanying music video (the <c>VideoService</c> association, detected
     /// asynchronously after the track resolves). Drives the player-bar video button's visibility. Fed by the optional
@@ -80,7 +83,7 @@ public sealed class PlaybackBridge
     public Signal<bool> PreferVideo { get; } = new(false);
 
     /// <summary>Monotonic "open the device picker" request. The critical "playback unsupported" toast's <em>Choose device</em>
-    /// action bumps it; the player-bar / now-playing <c>DevicesButton</c> watch it and open their flyout.</summary>
+    /// action bumps it; the player-bar <c>DevicesButton</c> watches it and opens its flyout.</summary>
     public Signal<int> DevicePickerRequest { get; } = new(0);
 
     /// <summary>Monotonic "open playback runtime setup" request — banner/toast CTAs bump it; ProfileMenu Settings watches it.</summary>
@@ -117,6 +120,9 @@ public sealed class PlaybackBridge
             User.Value = _session.CurrentUser;            // profile chip (name/avatar) follows the session
         })));
         WireStore();   // if a store was attached before mount, start observing it now
+        PlaybackBucketDiagnostics.Startup("bridge", "activated");
+        PlaybackBucketDiagnostics.QueueIfChanged(ref _lastQueueDiagSig, "bridge.activate.initial",
+            _state.Queue, _state.ContextUri, _state.CurrentTrack?.Uri);
     }
 
     /// <summary>Surface the standard "local playback isn't supported yet — choose a remote device" notice: a critical toast
@@ -226,6 +232,9 @@ public sealed class PlaybackBridge
         DurationMs.Value = s.DurationMs;
         TrackPalette.Value = s.Palette;
         Queue.Value = s.Queue;
+        BumpQueueRevision(s.Queue);
+        PlaybackBucketDiagnostics.QueueIfChanged(ref _lastQueueDiagSig, "bridge.ui.push-state",
+            s.Queue, s.ContextUri, s.CurrentTrack?.Uri);
         IsLoading.Value = s.IsLoading;
         // A surfaced local-playback error (set via NotifyPlaybackError) is owned by the bridge, not the projection (whose
         // Error is inert). Don't clobber it on every structural tick — clear it only once a track is actually playing again.
@@ -235,6 +244,26 @@ public sealed class PlaybackBridge
         CanSeek.Value = s.CanSeek;
         ActiveDeviceId.Value = s.ActiveDeviceId;
         PushPosition(s.PositionMs);
+    }
+
+    // Fold the queue's SET identity (count + per-row id/bucket/provider) and bump the revision only on a real change.
+    void BumpQueueRevision(IReadOnlyList<QueueEntry> queue)
+    {
+        ulong fold = 1469598103934665603UL;   // FNV-ish, order-sensitive
+        fold = (fold ^ (ulong)queue.Count) * 1099511628211UL;
+        for (int i = 0; i < queue.Count; i++)
+        {
+            var e = queue[i];
+            fold = (fold ^ e.ItemId.Value) * 1099511628211UL;
+            fold = (fold ^ (uint)e.Bucket) * 1099511628211UL;
+            fold = (fold ^ (uint)e.Provider) * 1099511628211UL;
+            if (e.ItemId.IsNone)   // degenerate/fake ids collide → mix the derived EntryId so the set still distinguishes
+                fold = (fold ^ (ulong)(uint)e.EntryId.GetHashCode(StringComparison.Ordinal)) * 1099511628211UL;
+        }
+        if (_haveQueueFold && fold == _queueContentFold) return;
+        _haveQueueFold = true;
+        _queueContentFold = fold;
+        QueueRevision.Value = ++_queueRev;
     }
 
     void PushPosition(long ms)
