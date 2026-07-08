@@ -214,4 +214,15 @@ public class QueueSessionTests
 
         Assert.Null(s2.SkipToUid("missing-uid", "spotify:track:zzz"));      // identity miss → null (caller patches)
     }
+
+    // ── §7.3 ResolveStartIndex — index-only inbound skip_to; uid/uri identity-strict (no blind index) ──
+    [Fact]
+    public void ResolveStartIndex_IndexOnly_UsesIndex_UidMissDoesNotFallbackToIndex()
+    {
+        var tracks = new[] { Q("a", "uid0"), Q("b", "uid1"), Q("c", "uid2") };
+        Assert.Equal(1, ContextResolve.ResolveStartIndex(tracks, ContextSpec.ForUri("spotify:playlist:p", 1)));
+        Assert.Equal(-1, ContextResolve.ResolveStartIndex(tracks,
+            new ContextSpec("spotify:playlist:p", null, null, null, "missing-uid", null)));
+        Assert.Equal(-1, ContextResolve.FindStartIndex(tracks, null, "missing-uid"));
+    }
 }

@@ -3535,6 +3535,58 @@ static class Slice
             $"before={collapsedBefore:0.#} rebake={afterRebake:0.#} frame={afterFrame:0.#}/{afterFrameShift:0.#}");
     }
 
+    // Mica focus toggle (WindowBlur/WindowFocus) bumps Tok.Epoch and re-themes in place. The steady frame after regain
+    // must keep a collapsed hero clipped — span reuse cannot replay a subtree recorded at full PresentedH.
+    static void CollapsedHeroFocusChecks(StringTable strings)
+    {
+        var priorBg = Theme.WindowBackground;
+        Theme.WindowBackground = ColorF.Transparent;
+        try
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("collapse-focus", new Size2(360, 240), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var probe = new CollapsedHeroRebakeProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, probe);
+
+            host.RunFrame();
+            var s = host.Scene;
+            var vp = PlainViewport(s, s.Root);
+            var content = s.ScrollRef(vp).ContentNode;
+            ref ScrollState st = ref s.ScrollRef(vp);
+            st.OffsetY = 260f;
+            st.TargetY = 260f;
+            s.Paint(content).LocalTransform = Affine2D.Translation(0f, -260f);
+            s.Mark(content, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+            ScrollBindEval.ApplyContinuous(s, vp, ref st);
+            host.Paint(0, keepAlive: true);
+            float collapsed = s.Paint(probe.Hero).PresentedH;
+
+            window.IsActive = false;
+            var blurStats = host.Paint(0, keepAlive: true);
+            float afterBlur = s.Paint(probe.Hero).PresentedH;
+
+            window.IsActive = true;
+            var focusStats = host.Paint(0, keepAlive: true);
+            float afterFocus = s.Paint(probe.Hero).PresentedH;
+
+            var steadyStats = host.Paint(0, keepAlive: true);
+            float afterSteady = s.Paint(probe.Hero).PresentedH;
+            float afterSteadyShift = s.Paint(probe.Hero).ChildShiftY;
+
+            Check("RZ-HERO. collapsed hero survives window blur/focus (Mica re-theme) with PresentedHTrailing intact",
+                Near(collapsed, 0f, 0.5f)
+                && Near(afterBlur, 0f, 0.5f)
+                && Near(afterFocus, 0f, 0.5f)
+                && Near(afterSteady, 0f, 0.5f) && Near(afterSteadyShift, -200f, 0.5f),
+                $"collapsed={collapsed:0.#} blur={afterBlur:0.#} focus={afterFocus:0.#} steady={afterSteady:0.#}/{afterSteadyShift:0.#} "
+                + $"blurReuse={blurStats.SpansReused} focusReuse={focusStats.SpansReused} steadyReuse={steadyStats.SpansReused}");
+        }
+        finally { Theme.WindowBackground = priorBg; }
+    }
+
     static void SidebarResizeSimChecks(StringTable strings)
     {
         using var app = new HeadlessPlatformApp();
@@ -21039,6 +21091,7 @@ static class Slice
         ButterSmoothResizeChecks(strings);
         ResponsiveResizeChecks(strings);
         CollapsedHeroRebakeChecks(strings);
+        CollapsedHeroFocusChecks(strings);
         SidebarResizeSimChecks(strings);
         ShellSidebarScrollChecks(strings);
         HookChecks();

@@ -7,6 +7,7 @@ using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Localization;
 using FluentGpu.Signals;
+using Wavee.Core;
 
 namespace Wavee;
 
@@ -199,6 +200,8 @@ sealed class WaveeShell : Component
         // BOUND prop, not a stale literal — it re-fires on resize) so the column is exactly window-tall and its Shrink=1 /
         // MinHeight=0 content region yields instead of overflowing. UI-thread signal; the binding re-lays-out on resize.
         var vpSig = UseContextSignal(Viewport.Size);
+        var bridge = UseContext(PlaybackBridge.Slot);
+        Palette? railArt = bridge?.TrackPalette.Value;   // subscribe → shell rail underlay tracks the playing cover
         bool compact = _sidebarCompact.Value;    // subscribe → re-persist on a collapse/expand toggle (infrequent)
         bool dragging = _sidebarDragging.Value;  // subscribe → snap all layout transitions while resizing the sidebar
         // Persist the collapse toggle here; the grip's drag-end (OnReleased → SaveSidebar) persists the width. The
@@ -321,12 +324,13 @@ sealed class WaveeShell : Component
                                         // the column height and PUSHES THE FIXED PLAYER BAR off the bottom for a frame on
                                         // navigation — the "player bar animates away then back" glitch. With it the card
                                         // shrinks to the available space and clips/scrolls, so the player bar stays docked.
-                                        Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Margin = new Edges4(0f, 2f, 8f, 0f),
+                                        Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Margin = new Edges4(0f, 0f, 4f, 0f),
                                         // BOUND (not a static ColorF): this content "page" is a frozen literal inside the
                                         // OverlayHost.Child column (constructor args freeze at mount), so a re-render can't
                                         // re-read the token. As a bind it lives in the reconciler's _nodeBindings and the
                                         // host's live re-theme (RethemeAll) re-fires it → FillCardDefault follows the theme.
-                                        Fill = Prop.Of(() => WaveeColors.FileArea), Corners = CornerRadius4.All(WaveeRadius.Card),
+                                        Fill = Prop.Of(() => WaveeColors.FileArea),
+                                        Corners = new CornerRadius4(WaveeRadius.Card, WaveeRadius.Card, 0f, 0f),
                                         Shadow = Elevation.Card, ClipToBounds = true,
                                         // Layout firewall (#5): this card is Grow=1 (its size is the shell's content region,
                                         // parent-determined) and clips — so a re-render deep inside a page re-solves only this
@@ -342,6 +346,7 @@ sealed class WaveeShell : Component
                             new BoxEl
                             {
                                 Shrink = 0f,
+                                Fill = Prop.Of(() => WaveeColors.FileArea),
                                 Width = Prop.Of(() => _shellUi.RailOpen.Value && _shellUi.RailFits.Value ? _shellUi.RailWidth.Value : 0f),
                                 Animate = RailReflow,
                             },
@@ -368,11 +373,27 @@ sealed class WaveeShell : Component
                         [
                             new BoxEl
                             {
-                                Direction = 1, Shrink = 0f, ClipToBounds = true,
+                                Direction = 1, Shrink = 0f, ClipToBounds = true, ZStack = true,
                                 Width = Prop.Of(() => _shellUi.RailOpen.Value ? _shellUi.RailWidth.Value : 0f),
                                 Animate = RailReflow,
-                                Fill = Prop.Of(() => WaveeColors.Sidebar),
-                                Children = [ Embed.Comp(() => new RightRail()) ],
+                                Children =
+                                [
+                                    // Full-bleed opaque band — the overlay is pass-through; without this, page pixels show
+                                    // through the top seam and rounded-corner anti-alias wedges.
+                                    new BoxEl
+                                    {
+                                        Grow = 1f,
+                                        Fill = Prop.Of(() => _shellUi.RailOpen.Value
+                                            ? (_shellUi.RailFits.Value ? WaveeColors.FileArea : WaveeColors.RailOverlay)
+                                            : ColorF.Transparent),
+                                    },
+                                    new BoxEl
+                                    {
+                                        Direction = 1, Grow = 1f, MinHeight = 0f, ClipToBounds = true,
+                                        Corners = new CornerRadius4(WaveeRadius.Card, 0f, 0f, 0f),
+                                        Children = [ Embed.Comp(() => new RightRail()) ],
+                                    },
+                                ],
                             },
                         ],
                     }

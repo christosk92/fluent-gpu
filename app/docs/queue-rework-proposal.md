@@ -1,6 +1,6 @@
 # Queue system rework — canonical design (backend + UI)
 
-Status: **PROPOSAL — approved decisions locked, implementation not started.**
+Status: **IN PROGRESS** — backend + tests landed; UI motion/reconciliation rework landed in QueuePanel (2026-07-08).
 Date: 2026-07-08. Supersedes the ad-hoc skip_to work from the same session (partially reverted in
 `QueuePanel.cs`; the `DetailTracks.StartVisible` three-way branch survives but its controller
 semantics change per §7.3).

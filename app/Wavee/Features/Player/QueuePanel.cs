@@ -71,10 +71,10 @@ sealed class QueuePanel : Component
         var lastAnchor = UseRef(-1);
         var post = UsePost();
 
-        bool viewer = PlayerBarContent.RemoteDevice(b) is not null;
         UseSignalEffect(() =>
         {
             if (b is null) return;
+            bool viewer = PlayerBarContent.RemoteDevice(b) is not null;
             var rows = BuildRows(display.Value, b.CurrentContext.Value, ctxName.Value.Value, autoplay, viewer, out int anchor);
             rowsSig.Value = rows;
             rowCountSig.Value = rows.Count;

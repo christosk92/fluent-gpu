@@ -460,6 +460,8 @@ public static class SceneRecorder
             // whole span, so a moving scroll-content boundary re-walks edge/entering rows instead of freezing them.
             if (!spanReuseDisabled && !scrollInMotion && recordDirtyBits == 0
                 && spans.TryGet((int)node.Raw.Index, node.Raw.Gen, spanFrame, spanInputSig, out var span)
+                && span.ClipComplete
+                && IsClipComplete(span.SubtreeBounds, in clip)
                 && dl.CanCopyPriorSpan(span.ByteStart, span.ByteLength, span.SortStart, span.SortCount))
             {
                 int copiedByteStart = dl.BytePosition;
@@ -1018,6 +1020,7 @@ public static class SceneRecorder
         Mix(ref h, inMotion ? 1u : 0u);
         Mix(ref h, scrollInMotion ? 1u : 0u);
         MixScrollViewport(scene, node, flags, ref h);
+        MixPaintReveal(scene, node, ref h);
         MixFloat(ref h, inherited.HoverT);
         MixFloat(ref h, inherited.PressT);
         Mix(ref h, (uint)inherited.InteractiveFlags);
@@ -1052,6 +1055,7 @@ public static class SceneRecorder
         MixFloat(ref h, childScaleY);
         Mix(ref h, scrollInMotion ? 1u : 0u);
         MixScrollViewport(scene, node, flags, ref h);
+        MixPaintReveal(scene, node, ref h);
         MixFloat(ref h, inherited.HoverT);
         MixFloat(ref h, inherited.PressT);
         Mix(ref h, (uint)inherited.InteractiveFlags);
@@ -1066,6 +1070,19 @@ public static class SceneRecorder
         MixColor(ref h, scrollThumb);
         MixColor(ref h, scrollTrack);
         return h;
+    }
+
+    /// <summary>Fold presented-size / child-shift / authored clip into the span key so a collapsing hero (PresentedHTrailing)
+    /// cannot byte-copy a subtree recorded under a different reveal clip — the focus-regain / re-theme steady frame after
+    /// <see cref="FluentGpu.Animation.ScrollBindEval.ApplyContinuousPass"/> was the regression path.</summary>
+    private static void MixPaintReveal(SceneStore scene, NodeHandle node, ref ulong h)
+    {
+        ref NodePaint p = ref scene.Paint(node);
+        MixFloat(ref h, p.PresentedW);
+        MixFloat(ref h, p.PresentedH);
+        MixFloat(ref h, p.ChildShiftX);
+        MixFloat(ref h, p.ChildShiftY);
+        if (!p.ClipRect.IsInfinite) MixRect(ref h, in p.ClipRect);
     }
 
     private static void MixScrollViewport(SceneStore scene, NodeHandle node, NodeFlags flags, ref ulong h)

@@ -35,7 +35,8 @@ sealed class NowPlayingPanel : Component
         if (b is null) return new BoxEl { Grow = 1f };
         if (track is null) return Empty(Loc.Get(Strings.Player.NothingPlaying));
 
-        var sections = new List<Element>(8) { Hero(track, lib, go) };
+        Palette? pal = b.TrackPalette.Value;
+        var sections = new List<Element>(8);
         if (info?.About is { } about)
         {
             sections.Add(AboutArtist(about, go));
@@ -56,12 +57,22 @@ sealed class NowPlayingPanel : Component
         var next = NextUp(b.Queue.Value);
         if (next.Count > 0) sections.Add(NextUpSection(next, b, lib, go));
 
-        var body = new BoxEl
+        var scrollBody = new BoxEl
         {
-            Direction = 1, Gap = 16f, Padding = new Edges4(14f, 8f, 14f, 20f),
-            Children = sections.ToArray(),
+            Direction = 1,
+            Children =
+            [
+                Hero(track, lib, go, pal),
+                sections.Count == 0 ? new BoxEl()
+                    : new BoxEl
+                    {
+                        Direction = 1, Gap = 16f,
+                        Padding = new Edges4(WaveeSpace.M, 0f, WaveeSpace.M, WaveeSpace.M),
+                        Children = sections.ToArray(),
+                    },
+            ],
         };
-        return ScrollView(body) with { Grow = 1f, AutoEdgeFade = true };
+        return ScrollView(scrollBody) with { Grow = 1f, AutoEdgeFade = true };
     }
 
     static async Task<NowPlayingInfo?> LoadInfoAsync(Services? svc, string artistUri, string trackUri, CancellationToken ct)
@@ -72,14 +83,16 @@ sealed class NowPlayingPanel : Component
         catch { return null; }
     }
 
-    static Element Hero(Track track, LibraryBridge? lib, Action<string, string?>? go)
+    static Element Hero(Track track, LibraryBridge? lib, Action<string, string?>? go, Palette? palette)
     {
-        const float art = 292f;
+        ColorF accent = palette is { } p ? WaveePalette.Lift(WaveePalette.Accent(p)) : Tok.AccentDefault;
+        ColorF wash = ColorF.Lerp(Tok.FillCardSecondary, accent, Tok.Theme == ThemeKind.Dark ? 0.18f : 0.10f);
+
         var meta = new List<Element>(3);
         if (track.Artists.Count > 0)
             meta.Add(go is null
                 ? new TextEl(DetailFormat.ArtistNames(track.Artists)) { Size = 13f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis }
-                : TrackRow.ArtistLinks(track.Artists, go));
+                : HeroArtistLinks(track.Artists, go, Tok.TextSecondary));
         if (track.Album.Uri.Length > 0 && go is not null)
             meta.Add(new SpanTextEl([new TextSpan(track.Album.Name, OnClick: () => go("album:" + track.Album.Uri, track.Album.Name))])
             {
@@ -88,17 +101,26 @@ sealed class NowPlayingPanel : Component
         else if (track.Album.Name.Length > 0)
             meta.Add(new TextEl(track.Album.Name) { Size = 12f, Color = Tok.TextTertiary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
 
+        string? url = track.Image?.Url is { Length: > 0 } u ? ImageSource.Normalize(u) : null;
+        Element art = url is { Length: > 0 }
+            ? Ui.Image(url, ImageFit.Cover, 1f, 512, WaveeRadius.Card, wash, track.Image?.BlurHash) with { AlignSelf = FlexAlign.Stretch }
+            : new ImageEl
+            {
+                Source = "",
+                AspectRatio = 1f,
+                AlignSelf = FlexAlign.Stretch,
+                Corners = CornerRadius4.All(WaveeRadius.Card),
+                Placeholder = wash,
+            };
+
         return new BoxEl
         {
-            Direction = 1, Gap = 12f,
+            Direction = 1,
+            Padding = new Edges4(WaveeSpace.S, WaveeSpace.S, WaveeSpace.S, WaveeSpace.L),
+            Gap = WaveeSpace.M,
             Children =
             [
-                new BoxEl
-                {
-                    Width = art, Height = art, AlignSelf = FlexAlign.Center,
-                    Corners = CornerRadius4.All(WaveeRadius.Card), ClipToBounds = true, Shadow = Elevation.Card,
-                    Children = [Surfaces.Artwork(track.Image, track.Id.GetHashCode() & 0x7fffffff, art, art, WaveeRadius.Card, decodePx: 512)],
-                },
+                art,
                 new BoxEl
                 {
                     Direction = 0, Gap = 10f, AlignItems = FlexAlign.Start,
@@ -117,8 +139,6 @@ sealed class NowPlayingPanel : Component
                                 new BoxEl { Direction = 1, Gap = 2f, Children = meta.ToArray() },
                             ],
                         },
-                        // Keyed by uri: SaveButton freezes its ctor uri at mount, and this hero stays mounted across
-                        // track changes — without the key the heart would keep toggling the PREVIOUS track.
                         lib is null ? new BoxEl() : Embed.Comp(() => new SaveButton(track.Uri, 16f, 36f)) with { Key = "save:" + track.Uri },
                     ],
                 },
@@ -126,57 +146,93 @@ sealed class NowPlayingPanel : Component
         };
     }
 
+    static Element HeroArtistLinks(IReadOnlyList<ArtistRef> artists, Action<string, string?> go, ColorF color)
+    {
+        if (artists.Count == 0) return new BoxEl();
+        var spans = new TextSpan[artists.Count * 2 - 1];
+        int n = 0;
+        for (int i = 0; i < artists.Count; i++)
+        {
+            if (i > 0) spans[n++] = new TextSpan(", ");
+            var a = artists[i];
+            spans[n++] = new TextSpan(a.Name, OnClick: () => go("artist:" + a.Uri, a.Name));
+        }
+        return new SpanTextEl(spans)
+        {
+            Size = 13f, Color = color, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis, MaxLines = 1, MinWidth = 0f,
+        };
+    }
+
     static Element AboutArtist(Artist artist, Action<string, string?>? go)
     {
+        const float heroH = 132f;
+        static ColorF Scrim(float a) => ColorF.FromRgba(0, 0, 0) with { A = a };
+
         var facts = new List<Element>(3);
         if (artist.MonthlyListeners > 0) facts.Add(Fact(Count(artist.MonthlyListeners), Loc.Get(Strings.Artist.MetaMonthly)));
         if (artist.Followers > 0) facts.Add(Fact(Count(artist.Followers), Loc.Get(Strings.Artist.MetaFollowers)));
         if (artist.WorldRank > 0) facts.Add(Fact("#" + artist.WorldRank.ToString("N0"), Strings.Artist.WorldRank("").Trim()));
 
+        Image? hero = artist.HeaderImage ?? artist.Image;
+        string? heroUrl = hero?.Url is { Length: > 0 } u ? ImageSource.Normalize(u) : null;
+        Element heroBand = heroUrl is { Length: > 0 }
+            ? new BoxEl
+            {
+                Height = heroH, ZStack = true, ClipToBounds = true,
+                Corners = CornerRadius4.All(WaveeRadius.Card),
+                EdgeFade = new EdgeFadeSpec(EdgeMask.Bottom, 56f),
+                Children =
+                [
+                    Ui.Image(heroUrl, ImageFit.Cover, 2.6f, 320, WaveeRadius.Card, Tok.FillSubtleSecondary, hero?.BlurHash),
+                    new BoxEl
+                    {
+                        Height = heroH,
+                        Corners = CornerRadius4.All(WaveeRadius.Card),
+                        Gradient = LinearGradient(180f,
+                            new GradientStop(0f, Scrim(0f)),
+                            new GradientStop(0.55f, Scrim(0.12f)),
+                            new GradientStop(1f, Scrim(0.62f))),
+                    },
+                ],
+            }
+            : new BoxEl
+            {
+                Height = 72f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                Fill = Tok.FillSubtleSecondary,
+                Corners = CornerRadius4.All(WaveeRadius.Card),
+                ClipToBounds = true,
+                Children = [PersonPicture.Create("", 56f, displayName: artist.Name, imageSourcePath: artist.Image?.Url)],
+            };
+
+        var body = new List<Element>(5)
+        {
+            new BoxEl
+            {
+                Direction = 0, AlignItems = FlexAlign.Center, Gap = 6f,
+                Children =
+                [
+                    new TextEl(artist.Name) { Size = 18f, Weight = 800, Color = Tok.TextPrimary, Grow = 1f, Basis = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                    artist.Verified ? Icon(Mdl.Check, 12f, Tok.AccentTextPrimary) : new BoxEl(),
+                ],
+            },
+        };
+        if (facts.Count > 0) body.Add(new BoxEl { Direction = 0, Wrap = true, Gap = 6f, Children = facts.ToArray() });
+        if (!string.IsNullOrWhiteSpace(artist.Bio))
+            body.Add(new TextEl(artist.Bio!) { Size = 13f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, MaxLines = 5, Trim = TextTrim.CharacterEllipsis });
+        body.Add(new BoxEl { Direction = 0, Children = [Embed.Comp(() => new FollowButton(artist.Uri)) with { Key = "follow:" + artist.Uri }] });
+
         return Section(Loc.Get(Strings.Detail.AboutTheArtist), new BoxEl
         {
-            Direction = 1, Gap = 12f, Padding = Edges4.All(12f),
-            Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardSecondary,
+            Direction = 1, Gap = 0f,
+            Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardSecondary, ClipToBounds = true,
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             HoverFill = go is null ? Tok.FillCardSecondary : Tok.FillCardDefault,
             Cursor = go is null ? (CursorId?)null : CursorId.Hand,
             OnClick = go is null ? null : () => go("artist:" + artist.Uri, artist.Name),
             Children =
             [
-                new BoxEl
-                {
-                    Direction = 0, Gap = 12f, AlignItems = FlexAlign.Center,
-                    Children =
-                    [
-                        new BoxEl
-                        {
-                            Width = 64f, Height = 64f, Shrink = 0f, Corners = CornerRadius4.All(32f), ClipToBounds = true,
-                            Children = [PersonPicture.Create("", 64f, displayName: artist.Name, imageSourcePath: artist.Image?.Url)],
-                        },
-                        new BoxEl
-                        {
-                            Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = 4f,
-                            Children =
-                            [
-                                new BoxEl
-                                {
-                                    Direction = 0, AlignItems = FlexAlign.Center, Gap = 6f,
-                                    Children =
-                                    [
-                                        new TextEl(artist.Name) { Size = 18f, Weight = 800, Color = Tok.TextPrimary, Grow = 1f, Basis = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-                                        artist.Verified ? Icon(Mdl.Check, 12f, Tok.AccentTextPrimary) : new BoxEl(),
-                                    ],
-                                },
-                                facts.Count == 0 ? new BoxEl() : new BoxEl { Direction = 0, Wrap = true, Gap = 6f, Children = facts.ToArray() },
-                            ],
-                        },
-                    ],
-                },
-                string.IsNullOrWhiteSpace(artist.Bio)
-                    ? new BoxEl()
-                    : new TextEl(artist.Bio!) { Size = 13f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, MaxLines = 5, Trim = TextTrim.CharacterEllipsis },
-                // Keyed by uri (frozen ctor arg — the artist changes across tracks).
-                new BoxEl { Direction = 0, Children = [Embed.Comp(() => new FollowButton(artist.Uri)) with { Key = "follow:" + artist.Uri }] },
+                heroBand,
+                new BoxEl { Direction = 1, Gap = 12f, Padding = Edges4.All(12f), Children = body.ToArray() },
             ],
         });
     }

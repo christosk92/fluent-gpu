@@ -1,4 +1,4 @@
-using System;
+using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using Wavee.Core;
 
@@ -30,6 +30,15 @@ public static class WaveePalette
     public static ColorF Accent(Palette p) => ToColor(p.Accent);
     public static ColorF BackgroundDark(Palette p) => ToColor(p.BackgroundDark);
     public static ColorF TintedDark(Palette p) => ToColor(p.TintedDark);
+
+    /// <summary>Neutral card fill under <see cref="Surfaces.HeroWash"/> — same as the shell content card on detail pages.</summary>
+    public static ColorF HeroBase(Palette? art) => WaveeColors.FileArea;
+
+    /// <summary>Hero-wash accent — same derivation as <c>DetailShell</c> (lifted accent in light, <c>colorDark</c> in dark).</summary>
+    public static ColorF HeroWashColor(Palette? art) =>
+        Tok.Theme == ThemeKind.Light
+            ? (art is { } p ? Lift(Accent(p)) : Tok.AccentDefault)
+            : BackgroundDark(art ?? Neutral);
 
     /// <summary>The legible ink (near-black or white) for text/icons sitting ON a solid <paramref name="accent"/> fill,
     /// chosen by the fill's WCAG luminance — NOT the theme. A cover-extracted accent (after <see cref="Lift"/>) can land

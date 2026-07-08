@@ -105,6 +105,10 @@
     <Compile Include="..\Wavee\SpotifyLive\ConnectStateBuilder.cs" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="Fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <ItemGroup Condition="Exists('..\Wavee.PlayPlay\Client\InProcessPlayPlayKeyDeriver.cs')">
     <!-- The test assembly source-includes only the PlayPlay pieces the PlayPlay*Tests exercise; the CLI probe
          (app-only AppDataSettings dep) and the in-process native adapter are app-composition-only, excluded here. -->
