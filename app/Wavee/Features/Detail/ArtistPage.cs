@@ -35,7 +35,6 @@ sealed partial class ArtistPage : Component
         var route = _route.Value;                       // subscribe → reload on artist→artist nav (reused slot)
         string routeKey = route.Name;
         string uri = UriOf(route) ?? "";
-        this.UseSoftReveal(key: routeKey, dy: 0f, blur: 0f);
 
         // ContentHost keeps one ArtistPage alive for artist→artist hops. The data is cached per artist, while the
         // scroll/skeleton subtree below is keyed by route so pending/ready branches and child components remount cleanly.

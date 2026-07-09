@@ -35,11 +35,11 @@ public sealed class LiveContextResolver : IContextResolver
     readonly ITransport _transport;
     readonly MetadataService _metadata;
     readonly IStore _store;
-    readonly Action<string>? _log;
+    readonly WaveeLogger _log;
     readonly Resource<string, ArtistContextWire> _artistCache;
 
     public LiveContextResolver(ITransport transport, MetadataService metadata, IStore store,
-        Func<SessionContext> ctx, Action<string>? log = null)
+        Func<SessionContext> ctx, WaveeLogger log = default)
     {
         _transport = transport;
         _metadata = metadata;
@@ -72,7 +72,7 @@ public sealed class LiveContextResolver : IContextResolver
         var resp = await _transport.Request(Channel.Spclient, ResolvePath(spec), default, ct).ConfigureAwait(false);
         if (!resp.Ok || resp.Body is null || resp.Body.Length == 0)
         {
-            _log?.Invoke($"context-resolve failed ({resp.Status}): {spec.Uri}");
+            _log.Warn($"context-resolve failed ({resp.Status}): {spec.Uri}");
             return ResolvedContext.Empty;
         }
         ContextJson.Parse(resp.Body, refs, ref sorting, ref nextPage, out jsonInfo);
@@ -88,7 +88,7 @@ public sealed class LiveContextResolver : IContextResolver
             pages++;
         }
 
-        if (refs.Count == 0) { _log?.Invoke("context-resolve: 0 tracks for " + spec.Uri); return ResolvedContext.Empty; }
+        if (refs.Count == 0) { _log.Warn("context-resolve: 0 tracks for " + spec.Uri); return ResolvedContext.Empty; }
 
         var tracks = await HydrateAsync(refs, ct).ConfigureAwait(false);
         int start = ContextResolve.ResolveStartIndex(tracks, spec);
@@ -121,7 +121,7 @@ public sealed class LiveContextResolver : IContextResolver
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
-            _log?.Invoke("autoplay resolve failed for " + contextUri + ": " + ex.Message);
+            _log.Warn("autoplay resolve failed for " + contextUri + ": " + ex.Message, ex);
             return ResolvedContext.Empty;
         }
     }
@@ -143,7 +143,7 @@ public sealed class LiveContextResolver : IContextResolver
             request.ToByteArray(), ct, "POST", headers).ConfigureAwait(false);
         if (!resp.Ok || resp.Body is null || resp.Body.Length == 0)
         {
-            _log?.Invoke($"autopodcast failed ({resp.Status}): {contextUri}");
+            _log.Warn($"autopodcast failed ({resp.Status}): {contextUri}");
             return ResolvedContext.Empty;
         }
 
@@ -170,7 +170,7 @@ public sealed class LiveContextResolver : IContextResolver
             request.ToByteArray(), ct, "POST", headers).ConfigureAwait(false);
         if (!resp.Ok || resp.Body is null || resp.Body.Length == 0)
         {
-            _log?.Invoke($"autoplay endpoint failed ({resp.Status}): {contextUri}");
+            _log.Warn($"autoplay endpoint failed ({resp.Status}): {contextUri}");
             return ResolvedContext.Empty;
         }
 
@@ -202,7 +202,7 @@ public sealed class LiveContextResolver : IContextResolver
         var resp = await _transport.Request(Channel.Spclient, route, default, ct).ConfigureAwait(false);
         if (!resp.Ok || resp.Body is null || resp.Body.Length == 0)
         {
-            _log?.Invoke($"radio-apollo failed ({resp.Status}): {seedTrackUri}");
+            _log.Warn($"radio-apollo failed ({resp.Status}): {seedTrackUri}");
             return ResolvedContext.Empty;
         }
 
@@ -226,7 +226,7 @@ public sealed class LiveContextResolver : IContextResolver
         var loaded = await _artistCache.GetAsync(id, ct).ConfigureAwait(false);
         if (!loaded.IsReady)
         {
-            _log?.Invoke($"artist context-resolve failed: {loaded.Error ?? "unknown"} ({spec.Uri})");
+            _log.Error($"artist context-resolve failed: {loaded.Error ?? "unknown"} ({spec.Uri})");
             return ResolvedContext.Empty;
         }
         var wire = loaded.Value!;
@@ -274,7 +274,7 @@ public sealed class LiveContextResolver : IContextResolver
         var uris = new string[refs.Count];
         for (int i = 0; i < refs.Count; i++) uris[i] = refs[i].Uri;
         try { await _metadata.SyncAllAsync(uris, ct).ConfigureAwait(false); }
-        catch (Exception ex) { _log?.Invoke("context hydrate: " + ex.Message); }   // best-effort: placeholders below
+        catch (Exception ex) { _log.Warn("context hydrate: " + ex.Message, ex); }   // best-effort: placeholders below
 
         var tracks = new QueuedTrack[refs.Count];
         for (int i = 0; i < refs.Count; i++)

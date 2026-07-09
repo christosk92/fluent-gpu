@@ -480,6 +480,10 @@
       "new": "Nothing new from your artists",
       "activity": "No activity yet"
     },
+    "feed": {
+      "error": "Couldn't load these notifications.",
+      "offline": "Sign in to see notifications from Spotify."
+    },
     "update": {
       "availableTitle": "An update is available",
       "availableBody": "Version {version} is ready to download.",
@@ -508,6 +512,12 @@
     "activity": {
       "save": "Added to your library",
       "unsave": "Removed from your library",
+      "saveTrack": "Liked \"{name}\"",
+      "unsaveTrack": "Removed \"{name}\" from Liked Songs",
+      "saveAlbum": "Saved \"{name}\" to your library",
+      "unsaveAlbum": "Removed \"{name}\" from your library",
+      "follow": "Followed {name}",
+      "unfollow": "Unfollowed {name}",
       "addTracks": "Added {count} to {playlist}",
       "removeTracks": "Removed {count} from {playlist}",
       "moveTracks": "Reordered tracks in {playlist}",
@@ -522,7 +532,8 @@
       "genericTarget": "a playlist",
       "detail": {
         "tracks": "Tracks",
-        "renamedFrom": "{old}  →  {new}"
+        "renamedFrom": "{old}  →  {new}",
+        "open": "Open"
       }
     }
   },

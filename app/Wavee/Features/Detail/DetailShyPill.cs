@@ -77,7 +77,7 @@ sealed class DetailShyPill : Component
         };
 
         if (m.ContextUri is { Length: > 0 } uri && cfg.Heart != HeartMode.None)
-            children.Add(Embed.Comp(() => new SaveButton(uri, 16f, 36f)));
+            children.Add(Embed.Comp(() => new SaveButton(uri, 16f, 36f, m.Title)));
 
         return new BoxEl
         {

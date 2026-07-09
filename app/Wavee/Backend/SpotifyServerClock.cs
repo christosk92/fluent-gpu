@@ -28,7 +28,7 @@ public sealed class SpotifyServerClock : IDisposable
 
     readonly Func<CancellationToken, Task<long>> _fetchServerTimeMs;
     readonly Func<long> _localNow;                // local wall clock in Unix ms (injectable for deterministic tests)
-    readonly Action<string>? _log;
+    readonly WaveeLogger _log;
     readonly CancellationTokenSource _cts = new();
     readonly object _gate = new();
     Task? _loop;
@@ -38,7 +38,7 @@ public sealed class SpotifyServerClock : IDisposable
     bool _probed;          // an UNBIASED probe has succeeded — passive samples never overwrite this
     long _lastRttMs = long.MaxValue;
 
-    public SpotifyServerClock(Func<CancellationToken, Task<long>> fetchServerTimeMs, Action<string>? log = null,
+    public SpotifyServerClock(Func<CancellationToken, Task<long>> fetchServerTimeMs, WaveeLogger log = default,
         Func<long>? localNowUnixMs = null)
     {
         _fetchServerTimeMs = fetchServerTimeMs;
@@ -66,10 +66,10 @@ public sealed class SpotifyServerClock : IDisposable
         bool needEarlyProbe = false;
         lock (_gate)
         {
-            if (!_synced) { _offsetMs = passiveOffset; _synced = true; _log?.Invoke($"server-clock bootstrap offset={passiveOffset}ms (passive)"); }
+            if (!_synced) { _offsetMs = passiveOffset; _synced = true; _log.Info($"server-clock bootstrap offset={passiveOffset}ms (passive)"); }
             else if (_probed && Math.Abs(passiveOffset - _offsetMs) > DriftTriggerMs) needEarlyProbe = true;
         }
-        if (needEarlyProbe) { _log?.Invoke("server-clock drift detected → early re-probe"); _ = Task.Run(() => SyncAsync(_cts.Token)); }
+        if (needEarlyProbe) { _log.Info("server-clock drift detected → early re-probe"); _ = Task.Run(() => SyncAsync(_cts.Token)); }
     }
 
     /// <summary>One NTP-style round: N samples, keep the lowest-RTT offset (midpoint-corrected). No-op on total failure
@@ -91,12 +91,12 @@ public sealed class SpotifyServerClock : IDisposable
                 if (rtt < bestRtt) { bestRtt = rtt; bestOffset = offset; }
             }
             catch (OperationCanceledException) { throw; }
-            catch (Exception ex) { _log?.Invoke("server-clock probe failed: " + ex.Message); }
+            catch (Exception ex) { _log.Info("server-clock probe failed: " + ex.Message); }
         }
         if (bestRtt < long.MaxValue)
         {
             lock (_gate) { _offsetMs = bestOffset; _lastRttMs = bestRtt; _synced = true; _probed = true; }
-            _log?.Invoke($"server-clock synced offset={bestOffset}ms rtt={bestRtt}ms");
+            _log.Info($"server-clock synced offset={bestOffset}ms rtt={bestRtt}ms");
         }
     }
 
@@ -108,7 +108,7 @@ public sealed class SpotifyServerClock : IDisposable
         {
             try { await SyncAsync(ct).ConfigureAwait(false); }
             catch (OperationCanceledException) { return; }
-            catch (Exception ex) { _log?.Invoke("initial clock sync attempt failed: " + ex.Message); }
+            catch (Exception ex) { _log.Info("initial clock sync attempt failed: " + ex.Message); }
             if (IsProbed) break;
             try { await Task.Delay(TimeSpan.FromSeconds(5 * (attempt + 1)), ct).ConfigureAwait(false); }
             catch (OperationCanceledException) { return; }
@@ -121,7 +121,7 @@ public sealed class SpotifyServerClock : IDisposable
             {
                 try { await SyncAsync(ct).ConfigureAwait(false); }
                 catch (OperationCanceledException) { return; }
-                catch (Exception ex) { _log?.Invoke("periodic clock sync failed (keeping offset): " + ex.Message); }
+                catch (Exception ex) { _log.Info("periodic clock sync failed (keeping offset): " + ex.Message); }
             }
         }
         catch (OperationCanceledException) { }

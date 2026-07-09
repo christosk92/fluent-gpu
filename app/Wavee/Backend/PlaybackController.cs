@@ -114,7 +114,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     readonly IReadOnlyList<IPlaybackProjection> _extra;
     readonly string _ourDeviceId;
     readonly string _featureVersion;
-    readonly Action<string>? _log;
+    readonly WaveeLogger _log;
     readonly IDisposable _hostSub;
     readonly IDisposable _projSub;
     readonly SemaphoreSlim _lock = new(1, 1);
@@ -137,7 +137,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
 
     public PlaybackController(IAudioHost host, ITrackResolver resolver, NowPlayingProjection projection,
         IContextResolver contexts,
-        string ourDeviceId, IOutboundControl? outbound = null, IReadOnlyList<IPlaybackProjection>? extraProjections = null, Action<string>? log = null,
+        string ourDeviceId, IOutboundControl? outbound = null, IReadOnlyList<IPlaybackProjection>? extraProjections = null, WaveeLogger log = default,
         string? playFeatureVersion = null, IFastTrackResolver? fast = null)
     {
         _host = host;
@@ -174,7 +174,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     bool RejectLocalPlay()
     {
         if (OnLocalPlaybackRejected is not { } reject) return false;
-        _log?.Invoke("local playback unsupported — rejecting local play intent (choose a remote device)");
+        _log.Info("local playback unsupported — rejecting local play intent (choose a remote device)");
         reject();
         return true;
     }
@@ -193,7 +193,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         var reason = ex is AudioPlaybackException ape ? ape.Reason : AudioKeyFailureReason.None;
         string userMsg = reason != AudioKeyFailureReason.None ? reason.ToUserMessage() : "Couldn't play this track.";
         string detail = ex is AudioPlaybackException a ? (a.Message == reason.ToString() ? reason.ToString() : $"{reason}: {a.Message}") : ex.ToString();
-        _log?.Invoke("local playback error: " + detail);
+        _log.Info("local playback error: " + detail);
         OnPlaybackError?.Invoke(new PlaybackErrorInfo(reason, userMsg, detail));
     }
 
@@ -210,7 +210,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
                 if (elapsed < FastStartBodySupplyGrace)
                 {
                     var remaining = FastStartBodySupplyGrace - elapsed;
-                    _log?.Invoke($"fast-start body ready early track={expectedTrackUri} file={h.FileIdHex}; deferring supply {remaining.TotalMilliseconds:0}ms so clear-head decode can queue first PCM");
+                    _log.Info($"fast-start body ready early track={expectedTrackUri} file={h.FileIdHex}; deferring supply {remaining.TotalMilliseconds:0}ms so clear-head decode can queue first PCM");
                     await Task.Delay(remaining).ConfigureAwait(false);
                 }
             }
@@ -218,29 +218,29 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             var current = _session.Current?.Uri ?? "";
             if (string.Equals(current, expectedTrackUri, StringComparison.Ordinal))
             {
-                _log?.Invoke($"fast-start body ready track={expectedTrackUri} file={h.FileIdHex}; supplying to audio host");
+                _log.Info($"fast-start body ready track={expectedTrackUri} file={h.FileIdHex}; supplying to audio host");
                 _host.SupplyBody(h);
             }
             else
             {
-                _log?.Invoke($"fast-start body ignored as stale expected={expectedTrackUri} current={current} bodyTrack={h.TrackUri} file={h.FileIdHex}");
+                _log.Info($"fast-start body ignored as stale expected={expectedTrackUri} current={current} bodyTrack={h.TrackUri} file={h.FileIdHex}");
             }
         }
         catch (OperationCanceledException)
         {
-            _log?.Invoke($"fast-start body task canceled expected={expectedTrackUri}");
+            _log.Info($"fast-start body task canceled expected={expectedTrackUri}");
         }
         catch (Exception ex)
         {
             var current = _session.Current?.Uri ?? "";
             if (string.Equals(current, expectedTrackUri, StringComparison.Ordinal))
             {
-                _log?.Invoke($"fast-start body failed for active track={expectedTrackUri}; stopping audio host to unblock head stream: {ex.GetType().Name}: {ex.Message}");
+                _log.Info($"fast-start body failed for active track={expectedTrackUri}; stopping audio host to unblock head stream: {ex.GetType().Name}: {ex.Message}");
                 _host.Stop();
             }
             else
             {
-                _log?.Invoke($"fast-start body failed for stale track expected={expectedTrackUri} current={current}: {ex.GetType().Name}: {ex.Message}");
+                _log.Info($"fast-start body failed for stale track expected={expectedTrackUri} current={current}: {ex.GetType().Name}: {ex.Message}");
             }
             ReportPlaybackError(ex);
         }
@@ -297,7 +297,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     void StopStrayLocalHost(string message)
     {
         if (!_host.IsPlaying) return;
-        _log?.Invoke(message);
+        _log.Info(message);
         _host.Stop();
     }
 
@@ -315,7 +315,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         _lastActive = aid;
         if (aid != _ourDeviceId && (previousActive == _ourDeviceId || IsActiveOwner()))
         {
-            _log?.Invoke("another device became active — stopping local playback");
+            _log.Info("another device became active — stopping local playback");
             DeactivateIfActiveOwner();
         }
         else if (!string.IsNullOrEmpty(aid) && aid != _ourDeviceId)
@@ -417,7 +417,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     {
         int vol = (int)Math.Round(Math.Clamp(volume01, 0, 1) * 65535);
         var r = await _outbound!.SetVolumeAsync(target, vol, ct).ConfigureAwait(false);
-        if (!r.Ok) _log?.Invoke($"outbound volume → {target}: failed ({r.Status})");
+        if (!r.Ok) _log.Info($"outbound volume → {target}: failed ({r.Status})");
     }
 
     public async Task SetShuffleAsync(bool on, CancellationToken ct = default)
@@ -508,7 +508,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         foreach (var t in clusterNext) next.Add(new QueueWireEntry(t.Uri, t.Uid, t.Provider == "queue", t.Metadata));// the device's queue, verbatim
         var json = OutboundEnvelope.SetQueue(_ourDeviceId, ParseRevision(), prev, next, NewId(), NewId(), Now(), NewId());
         var r2 = await _outbound.SendAsync(target, json, ct).ConfigureAwait(false);
-        if (!r2.Ok) _log?.Invoke($"outbound set_queue → {target}: failed ({r2.Status})");
+        if (!r2.Ok) _log.Info($"outbound set_queue → {target}: failed ({r2.Status})");
     }
 
     // Skip-in-place to a queue/history row (§6). Active: session cursor move + fast-start (never a rebuild). Viewer: forward
@@ -533,15 +533,15 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         }
         var target = _projection.ActiveDeviceId;
         if (_outbound is null || string.IsNullOrEmpty(target)) return;
-        if (!_projection.TryGetViewerRow(id, out var row)) { _log?.Invoke("skip-to: viewer row not found for id " + id.Value); return; }
+        if (!_projection.TryGetViewerRow(id, out var row)) { _log.Info("skip-to: viewer row not found for id " + id.Value); return; }
         var json = OutboundEnvelope.NextTrack(row, _ourDeviceId, NewId(), NewId(), Now());
         var r = await _outbound.SendAsync(target, json, ct).ConfigureAwait(false);
-        if (!r.Ok) { _log?.Invoke($"outbound next_track → {target}: failed ({r.Status})"); OnRemoteCommandFailed?.Invoke(); }
+        if (!r.Ok) { _log.Info($"outbound next_track → {target}: failed ({r.Status})"); OnRemoteCommandFailed?.Invoke(); }
     }
 
     public async Task MoveQueueItemAsync(QueueItemId id, int newPos, CancellationToken ct = default)
     {
-        if (!RouteLocal()) { _log?.Invoke("queue move ignored — another device is active"); return; }   // the active device owns its queue
+        if (!RouteLocal()) { _log.Info("queue move ignored — another device is active"); return; }   // the active device owns its queue
         await _lock.WaitAsync(ct).ConfigureAwait(false);
         try { if (_session.MoveUserItem(id, newPos) is { } snap) EmitSnap(snap, EvKind.QueueChanged); }
         finally { _lock.Release(); }
@@ -549,7 +549,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
 
     public async Task RemoveQueueItemAsync(QueueItemId id, CancellationToken ct = default)
     {
-        if (!RouteLocal()) { _log?.Invoke("queue remove ignored — another device is active"); return; }
+        if (!RouteLocal()) { _log.Info("queue remove ignored — another device is active"); return; }
         await _lock.WaitAsync(ct).ConfigureAwait(false);
         try { if (_session.RemoveItem(id) is { } snap) EmitSnap(snap, EvKind.QueueChanged); }
         finally { _lock.Release(); }
@@ -559,7 +559,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     // no-op (no wire verb; the panel hides the button in viewer mode).
     public async Task ClearQueueAsync(CancellationToken ct = default)
     {
-        if (!RouteLocal()) { _log?.Invoke("queue clear ignored — another device is active"); return; }
+        if (!RouteLocal()) { _log.Info("queue clear ignored — another device is active"); return; }
         await _lock.WaitAsync(ct).ConfigureAwait(false);
         try { EmitSnap(_session.ClearUserQueue(), EvKind.QueueChanged); }
         finally { _lock.Release(); }
@@ -567,7 +567,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
 
     public async Task ClearHistoryAsync(CancellationToken ct = default)
     {
-        if (!RouteLocal()) { _log?.Invoke("history clear ignored — another device is active"); return; }
+        if (!RouteLocal()) { _log.Info("history clear ignored — another device is active"); return; }
         await _lock.WaitAsync(ct).ConfigureAwait(false);
         try { EmitSnap(_session.ClearHistory(), EvKind.QueueChanged); }
         finally { _lock.Release(); }
@@ -613,7 +613,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             case ConnectCmd.SetQueue: _ = HandleSetQueueAsync(cmd); break;
             case ConnectCmd.UpdateContext: _ = HandleUpdateContextAsync(cmd); break;
             case ConnectCmd.SetOptions: { var payload = cmd.Payload; _ = HandleSetOptionsAsync(payload); } break;
-            default: _log?.Invoke("controller: unhandled remote command " + cmd.Kind); break;
+            default: _log.Info("controller: unhandled remote command " + cmd.Kind); break;
         }
     }
 
@@ -635,7 +635,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         }
         finally { _lock.Release(); }
         // identity miss (the target isn't in our resolved session) → fall back to a plain advance.
-        _log?.Invoke($"inbound next_track: row uid={cmd.TrackUid} uri={cmd.TrackUri} not found in session — advancing one");
+        _log.Info($"inbound next_track: row uid={cmd.TrackUid} uri={cmd.TrackUri} not found in session — advancing one");
         await LocalNextAsync().ConfigureAwait(false);
     }
 
@@ -646,7 +646,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             if (ExtractPlaySpec(cmd.Payload) is { } spec) await LocalPlaySpecAsync(spec, default).ConfigureAwait(false);
             else await LocalResumeAsync(default).ConfigureAwait(false);   // bare transfer → ghost-resume the cluster state here
         }
-        catch (Exception ex) { _log?.Invoke("controller inbound play/transfer error: " + ex.Message); }
+        catch (Exception ex) { _log.Info("controller inbound play/transfer error: " + ex.Message); }
     }
 
     // add_to_queue: append one track to the user queue — or, if nothing is loaded, start playing it (the idle-start rule).
@@ -670,7 +670,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             }
             finally { _lock.Release(); }
         }
-        catch (Exception ex) { _log?.Invoke("controller add_to_queue error: " + ex.Message); }
+        catch (Exception ex) { _log.Info("controller add_to_queue error: " + ex.Message); }
     }
 
     // set_queue (F8): full reconcile of ALL of next_tracks (queue rows → user queue by uid, context rows → Upcoming, autoplay
@@ -687,7 +687,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             try { EmitSnap(_session.ApplySetQueue(prev, next, revision), EvKind.QueueChanged); }
             finally { _lock.Release(); }
         }
-        catch (Exception ex) { _log?.Invoke("controller set_queue error: " + ex.Message); }
+        catch (Exception ex) { _log.Info("controller set_queue error: " + ex.Message); }
     }
 
     // update_context: the context's tracks changed (e.g. the playlist was edited) — re-resolve and keep playing the same
@@ -710,7 +710,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             }
             finally { _lock.Release(); }
         }
-        catch (Exception ex) { _log?.Invoke("controller update_context error: " + ex.Message); }
+        catch (Exception ex) { _log.Info("controller update_context error: " + ex.Message); }
     }
 
     // set_options: apply shuffle + repeat (the desktop sends explicit shuffling_context / repeating_context / repeating_track).
@@ -745,7 +745,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             }
             finally { _lock.Release(); }
         }
-        catch (Exception ex) { _log?.Invoke("controller set_options error: " + ex.Message); }
+        catch (Exception ex) { _log.Info("controller set_options error: " + ex.Message); }
     }
 
     // Inbound shuffle/repeat off the dealer thread — take _lock (SetShuffle/SetRepeat rebuild the context list, F7).
@@ -786,7 +786,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     async Task LocalPlaySpecAsync(ContextSpec spec, CancellationToken ct)
     {
         var resolved = await _contexts.ResolveAsync(spec, ct).ConfigureAwait(false);
-        if (resolved.Count == 0) { _log?.Invoke("play: context resolved to 0 tracks: " + spec.Uri); return; }
+        if (resolved.Count == 0) { _log.Info("play: context resolved to 0 tracks: " + spec.Uri); return; }
 
         IReadOnlyList<QueuedTrack> tracks = resolved.Tracks;
         int start = resolved.StartIndex;
@@ -809,7 +809,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
                 pages++;
             }
             tracks = acc;
-            if (start >= 0) _log?.Invoke($"skip target found after paging {pages} extra pages ({tracks.Count} tracks)");
+            if (start >= 0) _log.Info($"skip target found after paging {pages} extra pages ({tracks.Count} tracks)");
         }
 
         if (start < 0 && hasSkipTarget)
@@ -820,7 +820,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             list.AddRange(tracks);
             tracks = list;
             start = 0;
-            _log?.Invoke($"queue.skip-miss: patched {spec.SkipToTrackUri ?? spec.SkipToTrackUid} as current over {resolved.ContextUri ?? spec.Uri}");
+            _log.Info($"queue.skip-miss: patched {spec.SkipToTrackUri ?? spec.SkipToTrackUid} as current over {resolved.ContextUri ?? spec.Uri}");
             PlaybackBucketDiagnostics.Continuation("queue.skip-miss", "skip target not resolved; patched clicked track as current",
                 WaveeLogField.Of("target", spec.SkipToTrackUri ?? spec.SkipToTrackUid ?? ""),
                 WaveeLogField.Of("ctx", resolved.ContextUri ?? spec.Uri));
@@ -861,7 +861,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             if (hydrated.Count > 0) return hydrated[0];
         }
         catch (OperationCanceledException) { throw; }
-        catch (Exception ex) { _log?.Invoke("track hydrate failed; falling back to uri placeholder: " + ex.Message); }
+        catch (Exception ex) { _log.Info("track hydrate failed; falling back to uri placeholder: " + ex.Message); }
         return new QueuedTrack(SyntheticTrack(uri), "");
     }
 
@@ -909,7 +909,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     {
         if (RejectLocalPlay()) return;   // local audio unsupported → toast + abort (covers cold resume / self-transfer / bare inbound transfer)
         var track = _projection.CurrentTrack;
-        if (track is null) { _log?.Invoke("ghost resume: nothing in the cluster to resume"); return; }
+        if (track is null) { _log.Info("ghost resume: nothing in the cluster to resume"); return; }
         var ctxUri = _projection.ContextUri ?? track.Uri;
         SeedSessionFromCluster(track, ctxUri);
         AudioStreamHandle handle;
@@ -925,7 +925,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
                 long micros = await resumeFn(track.Uri, ct).ConfigureAwait(false);
                 if (micros > 0) pos = micros / 1000;
             }
-            catch (Exception ex) { _log?.Invoke("episode resume lookup failed: " + ex.Message); }
+            catch (Exception ex) { _log.Info("episode resume lookup failed: " + ex.Message); }
         }
         if (pos > 0) _host.Seek(pos);
         _host.Play();
@@ -962,7 +962,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             long micros = await fn(track.Uri, ct).ConfigureAwait(false);
             if (micros > 0) _host.Seek(micros / 1000);
         }
-        catch (Exception ex) { _log?.Invoke("episode resume lookup failed: " + ex.Message); }
+        catch (Exception ex) { _log.Info("episode resume lookup failed: " + ex.Message); }
     }
 
     void MintCommand(string reasonStart = "clickrow")
@@ -1157,7 +1157,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         if (!forceAutoplay && !string.IsNullOrEmpty(_nextPageUrl))
         {
             var page = _nextPageUrl!;
-            _log?.Invoke("continuation: prefetching next context page " + page);
+            _log.Info("continuation: prefetching next context page " + page);
             PlaybackBucketDiagnostics.Continuation("continuation.fetch-page", "prefetching next context page",
                 WaveeLogField.Of("ctx", ctx),
                 WaveeLogField.Of("page", page),
@@ -1178,7 +1178,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         }
         _autoplayLatchedFor = ctx;
         var recent = _session.RecentUris(5);
-        _log?.Invoke("continuation: prefetching autoplay for " + ctx);
+        _log.Info("continuation: prefetching autoplay for " + ctx);
         PlaybackBucketDiagnostics.Continuation("continuation.fetch-autoplay", "prefetching autoplay",
             WaveeLogField.Of("ctx", ctx),
             WaveeLogField.Of("remainingContext", _session.RemainingInContext),
@@ -1208,7 +1208,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
-            _log?.Invoke("continuation page fetch failed: " + ex.Message);
+            _log.Info("continuation page fetch failed: " + ex.Message);
             PlaybackBucketDiagnostics.Continuation("continuation.page-error", "next context page fetch failed",
                 WaveeLogField.Of("error", ex.GetType().Name),
                 WaveeLogField.Of("detail", ex.Message));
@@ -1221,7 +1221,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         try
         {
             var result = await _contexts.ResolveAutoplayAsync(contextUri, recent).ConfigureAwait(false);
-            if (result.Count == 0) _log?.Invoke("autoplay returned no tracks for " + contextUri);
+            if (result.Count == 0) _log.Info("autoplay returned no tracks for " + contextUri);
             PlaybackBucketDiagnostics.Continuation("continuation.autoplay-result", "autoplay resolved",
                 WaveeLogField.Of("ctx", contextUri),
                 WaveeLogField.Of("count", result.Count),
@@ -1232,7 +1232,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
-            _log?.Invoke("autoplay fetch failed for " + contextUri + ": " + ex.Message);
+            _log.Info("autoplay fetch failed for " + contextUri + ": " + ex.Message);
             PlaybackBucketDiagnostics.Continuation("continuation.autoplay-error", "autoplay fetch failed",
                 WaveeLogField.Of("ctx", contextUri),
                 WaveeLogField.Of("error", ex.GetType().Name),
@@ -1267,7 +1267,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         var prov = autoplay ? QueueProvider.Autoplay : QueueProvider.Context;
         _snap = _session.AppendContextPage(result.Tracks, prov, sourceContextUri ?? _session.ContextUri);
         EmitSnap(_snap, EvKind.QueueChanged);
-        _log?.Invoke("continuation: appended " + result.Count + " tracks"
+        _log.Info("continuation: appended " + result.Count + " tracks"
             + (autoplay ? " (autoplay)" : "")
             + (_nextPageUrl is null ? "" : " with next page"));
         PlaybackBucketDiagnostics.Continuation("continuation.applied", "continuation appended to queue core",
@@ -1301,7 +1301,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             catch (OperationCanceledException) { throw; }
             if (completed != fetch)
             {
-                _log?.Invoke("continuation: fetch exceeded 3s grace timeout");
+                _log.Info("continuation: fetch exceeded 3s grace timeout");
                 PlaybackBucketDiagnostics.Continuation("continuation.trackend-timeout", "fetch exceeded track-end grace timeout",
                     WaveeLogField.Of("attempt", attempt),
                     WaveeLogField.Of("ctx", _session.ContextUri ?? ""));
@@ -1313,7 +1313,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
-                _log?.Invoke("continuation: fetch faulted: " + ex.Message);
+                _log.Info("continuation: fetch faulted: " + ex.Message);
                 PlaybackBucketDiagnostics.Continuation("continuation.trackend-fault", "fetch faulted at track-end",
                     WaveeLogField.Of("attempt", attempt),
                     WaveeLogField.Of("error", ex.GetType().Name),
@@ -1397,7 +1397,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     {
         if (_fast is not IFastTrackWarmer warmer) return;
         try { warmer.Warm(track, reason); }
-        catch (Exception ex) { _log?.Invoke($"fast-warm dispatch failed {track.Uri}: {ex.Message}"); }
+        catch (Exception ex) { _log.Info($"fast-warm dispatch failed {track.Uri}: {ex.Message}"); }
     }
 
     void OnHostSignal(AudioHostSignal s)
@@ -1407,7 +1407,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         else if (s.Kind == AudioHostSignalKind.Error) ReportPlaybackError(new AudioPlaybackException(AudioKeyFailureReason.EmulationFault, "host playback error"));
     }
 
-    async Task AutoAdvanceAsync() { try { await LocalNextAsync(default).ConfigureAwait(false); } catch (Exception ex) { _log?.Invoke("auto-advance error: " + ex.Message); } }
+    async Task AutoAdvanceAsync() { try { await LocalNextAsync(default).ConfigureAwait(false); } catch (Exception ex) { _log.Info("auto-advance error: " + ex.Message); } }
 
     // ── forwarding (we are the controller of another device) — the real desktop envelope; ack_id parsed, not block-waited ─
     static Task Done => Task.CompletedTask;
@@ -1447,7 +1447,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         if (_outbound is null || string.IsNullOrEmpty(target)) return;
         var json = OutboundEnvelope.Command(_ourDeviceId, endpoint, args, NewId(), NewId(), Now(), NewId());
         var r = await _outbound.SendAsync(target, json, ct).ConfigureAwait(false);
-        if (!r.Ok) _log?.Invoke($"outbound {endpoint} → {target}: failed ({r.Status})");
+        if (!r.Ok) _log.Info($"outbound {endpoint} → {target}: failed ({r.Status})");
     }
 
     async Task ForwardPlayAsync(PlayRequest request, CancellationToken ct)
@@ -1462,7 +1462,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             skipIndex, request.SkipTrackUri, skipUid, request.OrderedTracks,
             _session.Shuffle, FeatureOf(request.ContextUri), _featureVersion, NewId(), NewId(), Now());
         var r = await _outbound.SendAsync(target, json, ct).ConfigureAwait(false);
-        if (!r.Ok) { _log?.Invoke($"outbound play → {target}: failed ({r.Status})"); OnRemoteCommandFailed?.Invoke(); }
+        if (!r.Ok) { _log.Info($"outbound play → {target}: failed ({r.Status})"); OnRemoteCommandFailed?.Invoke(); }
     }
 
     // add_to_queue: a single track as command.track {uri,uid,metadata} + options — NOT the flat command.uri Forward verb.
@@ -1472,27 +1472,27 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         if (_outbound is null || string.IsNullOrEmpty(target)) return;
         var json = OutboundEnvelope.AddToQueue(_ourDeviceId, trackUri, "", false, false, false, NewId(), NewId(), Now(), NewId());
         var r = await _outbound.SendAsync(target, json, ct).ConfigureAwait(false);
-        if (!r.Ok) _log?.Invoke($"outbound add_to_queue → {target}: failed ({r.Status})");
+        if (!r.Ok) _log.Info($"outbound add_to_queue → {target}: failed ({r.Status})");
     }
 
     async Task<bool> TryForwardTransferAsync(string target, CancellationToken ct)
     {
-        if (_outbound is null) { _log?.Invoke($"transfer to {target} ignored - no outbound control"); return false; }
+        if (_outbound is null) { _log.Info($"transfer to {target} ignored - no outbound control"); return false; }
         var from = string.IsNullOrEmpty(_projection.ActiveDeviceId) ? _ourDeviceId : _projection.ActiveDeviceId;
         var r = await _outbound.TransferAsync(from, target, ct).ConfigureAwait(false);
-        if (r.Ok) { _log?.Invoke($"connect transfer {from} -> {target}: ok ({r.Status})"); return true; }
-        _log?.Invoke($"connect transfer {from} -> {target}: failed ({r.Status})");
+        if (r.Ok) { _log.Info($"connect transfer {from} -> {target}: ok ({r.Status})"); return true; }
+        _log.Info($"connect transfer {from} -> {target}: failed ({r.Status})");
         OnRemoteCommandFailed?.Invoke();
         return false;
     }
 
     async Task ForwardTransferAsync(string target, CancellationToken ct)
     {
-        if (_outbound is null) { _log?.Invoke($"transfer → {target} ignored — no outbound control"); return; }
+        if (_outbound is null) { _log.Info($"transfer → {target} ignored — no outbound control"); return; }
         var json = OutboundEnvelope.Command(_ourDeviceId, "transfer", Array.Empty<(string, object)>(), NewId(), NewId(), Now(), NewId());
         var r = await _outbound.SendAsync(target, json, ct).ConfigureAwait(false);
-        if (r.Ok) { _log?.Invoke($"outbound transfer → {target}: ok (ack {r.AckId})"); return; }
-        _log?.Invoke($"outbound transfer → {target}: failed ({r.Status})");   // parity with the other forwards (was silent)
+        if (r.Ok) { _log.Info($"outbound transfer → {target}: ok (ack {r.AckId})"); return; }
+        _log.Info($"outbound transfer → {target}: failed ({r.Status})");   // parity with the other forwards (was silent)
         OnRemoteCommandFailed?.Invoke();
     }
 

@@ -19,56 +19,87 @@ public sealed class WaveeLog : IWaveeLog
     const long DefaultMaxFileBytes = 10L * 1024L * 1024L;
     const int DefaultRetainedFiles = 7;
 
+    /// <summary>8 lowercase hex chars identifying THIS process run — stamped on every file line (sid=) so sessions
+    /// re-read from disk can be split by run without the fragile "Wavee starting" heuristic. Cached pid alongside.</summary>
+    public static readonly string SessionId = Guid.NewGuid().ToString("N")[..8];
+    static readonly int ProcessId = Environment.ProcessId;
+
     public static WaveeLog Instance { get; } = new();
 
     readonly object _ringGate = new();
-    readonly WaveeLogEntry[] _ring;
+    WaveeLogEntry[] _ring;
     int _head, _count;
     long _nextSequence, _version;
 
     readonly object _fileGate = new();
-    readonly Queue<string> _fileQueue = new();
+    readonly object _writeGate = new();
+    readonly Queue<WaveeLogEntry> _fileQueue = new();
     bool _drainScheduled;
     int _droppedFileLines;
+
+    // Persistent sink handle — touched only under _writeGate (drain thread + FlushForTests serialize on it).
+    FileStream? _fs;
+    StreamWriter? _sw;
+    bool _fileSinkFailed;
 
     string? _filePath;
     Action<string>? _echo;
     long _maxFileBytes = DefaultMaxFileBytes;
     int _retainedFiles = DefaultRetainedFiles;
 
+    /// <summary>Test-only: drain the file queue synchronously on enqueue (eliminates ThreadPool races in unit tests).</summary>
+    internal bool SyncFileDrainForTests { get; set; }
+
     public WaveeLogLevel MinLevel { get; set; } = WaveeLogLevel.Info;
+    /// <summary>Upward-only file filter: a line reaches the file when its level is >= both MinLevel (the master gate)
+    /// and FileMinLevel. Lowering it below MinLevel has no effect — MinLevel already dropped the entry.</summary>
     public WaveeLogLevel FileMinLevel { get; set; } = WaveeLogLevel.Info;
     public string? FilePath => _filePath;
     public long Version { get { lock (_ringGate) return _version; } }
+
+    /// <summary>True when the corresponding env override is set — the runtime level UI disables its box then.</summary>
+    public static bool EnvMinLevelSet => EnvLevel("WAVEE_LOG_LEVEL") is not null;
+    public static bool EnvFileMinLevelSet => EnvLevel("WAVEE_LOG_FILE_LEVEL") is not null;
 
     public WaveeLog(int ringCapacity = DefaultRingCapacity)
     {
         _ring = new WaveeLogEntry[Math.Max(1, ringCapacity)];
     }
 
-    /// <summary>Set the file path and optional dev echo sink. The legacy name is retained for existing callers.</summary>
+    public bool IsEnabled(WaveeLogLevel level) => level >= MinLevel;
+
+    /// <summary>Set the file path and optional dev echo sink. The legacy name is retained for existing callers.
+    /// Level precedence is env &gt; explicit arg (settings) &gt; default — the env vars now always win.</summary>
     public void Configure(string? crashLogPath = null, Action<string>? echo = null,
-        WaveeLogLevel? minLevel = null, WaveeLogLevel? fileMinLevel = null, long? maxFileBytes = null, int? retainedFiles = null)
+        WaveeLogLevel? minLevel = null, WaveeLogLevel? fileMinLevel = null, long? maxFileBytes = null,
+        int? retainedFiles = null, int? ringCapacity = null)
     {
+        if (!string.Equals(_filePath, crashLogPath, StringComparison.OrdinalIgnoreCase))
+        {
+            lock (_writeGate) CloseStream();   // path change → reopen on next batch
+        }
         _filePath = crashLogPath;
         _echo = echo;
-        MinLevel = minLevel ?? ResolveLevel(Environment.GetEnvironmentVariable("WAVEE_LOG_LEVEL"), WaveeLogLevel.Info);
-        FileMinLevel = fileMinLevel ?? ResolveLevel(Environment.GetEnvironmentVariable("WAVEE_LOG_FILE_LEVEL"), WaveeLogLevel.Info);
+        MinLevel = EnvLevel("WAVEE_LOG_LEVEL") ?? minLevel ?? WaveeLogLevel.Info;
+        FileMinLevel = EnvLevel("WAVEE_LOG_FILE_LEVEL") ?? fileMinLevel ?? WaveeLogLevel.Info;
         _maxFileBytes = maxFileBytes.GetValueOrDefault(DefaultMaxFileBytes);
         _retainedFiles = Math.Max(1, retainedFiles.GetValueOrDefault(DefaultRetainedFiles));
+
+        int? ringReq = EnvInt("WAVEE_LOG_RING") ?? ringCapacity;
+        if (ringReq is int rc) ReallocRing(rc);
 
         if (crashLogPath is not null)
         {
             try { Directory.CreateDirectory(Path.GetDirectoryName(crashLogPath)!); } catch { }
+            // Parent-side retention: keep the child-process logs bounded the same way the main file rolls. A child
+            // (its own file is audio-child-*.log) must NOT sweep its siblings, so only the parent does this.
+            if (!Path.GetFileName(crashLogPath).StartsWith("audio-child-", StringComparison.Ordinal))
+                SweepAudioChildLogs(Path.GetDirectoryName(crashLogPath));
         }
     }
 
-    public void Log(WaveeLogLevel level, string category, string message, Exception? ex = null)
-    {
-        if (category == "audio" && message.StartsWith("playback failed [", StringComparison.Ordinal))
-            return;
+    public void Log(WaveeLogLevel level, string category, string message, Exception? ex = null) =>
         Write(level, category, "", message, null, -1, null, ex);
-    }
 
     public void Event(WaveeLogLevel level, string category, string eventId, string message,
         string? operationId = null, long elapsedMs = -1, Exception? ex = null, params WaveeLogField[] fields) =>
@@ -88,34 +119,29 @@ public sealed class WaveeLog : IWaveeLog
     /// <summary>Snapshot of recent entries, oldest to newest.</summary>
     public WaveeLogEntry[] Snapshot()
     {
-        lock (_ringGate)
-        {
-            var outp = new WaveeLogEntry[_count];
-            int start = (_head - _count + _ring.Length) % _ring.Length;
-            for (int i = 0; i < _count; i++) outp[i] = _ring[(start + i) % _ring.Length];
-            return outp;
-        }
+        lock (_ringGate) return SnapshotLocked();
     }
 
-    /// <summary>Test hook: synchronously drains any queued file lines.</summary>
+    WaveeLogEntry[] SnapshotLocked()
+    {
+        var outp = new WaveeLogEntry[_count];
+        int start = (_head - _count + _ring.Length) % _ring.Length;
+        for (int i = 0; i < _count; i++) outp[i] = _ring[(start + i) % _ring.Length];
+        return outp;
+    }
+
+    /// <summary>Test hook: synchronously drains any queued file lines and releases the file handle so tests can
+    /// read the log file (the production path keeps the stream open across batches).</summary>
     public void FlushForTests()
     {
-        while (true)
-        {
-            string[] batch;
-            lock (_fileGate)
-            {
-                if (_fileQueue.Count == 0) { _drainScheduled = false; return; }
-                batch = DequeueBatchLocked();
-            }
-            WriteBatch(batch);
-        }
+        DrainFileQueue();
+        lock (_writeGate) CloseStream();
     }
 
     /// <summary>Best-effort synchronous drain of queued file lines. Safe to call from crash paths.</summary>
     public void Flush()
     {
-        try { FlushForTests(); } catch { }
+        try { DrainFileQueue(); } catch { }
     }
 
     /// <summary>An action to plug into the engine Diag sink. Engine noise remains Debug-gated by MinLevel.</summary>
@@ -140,6 +166,17 @@ public sealed class WaveeLog : IWaveeLog
             safeFields,
             ex?.ToString());
 
+        PushRing(entry);
+
+        // Lazy: format only for the dev/probe echo (no consumer → no formatted string).
+        if (_echo is { } e) { try { e(entry.Format()); } catch { } }
+
+        if (level >= FileMinLevel && _filePath is not null)
+            EnqueueFileEntry(entry);
+    }
+
+    void PushRing(WaveeLogEntry entry)
+    {
         lock (_ringGate)
         {
             _ring[_head] = entry;
@@ -147,12 +184,16 @@ public sealed class WaveeLog : IWaveeLog
             if (_count < _ring.Length) _count++;
             _version++;
         }
+    }
 
-        string line = entry.Format();
-        try { _echo?.Invoke(line); } catch { }
-
-        if (level >= FileMinLevel && _filePath is not null)
-            EnqueueFileLine(FormatFileLine(entry, line));
+    // A self-report entry ("log" category) pushed ring-only — never enqueued to the file (avoids failure recursion).
+    void PushInternalRingOnly(WaveeLogLevel level, string message)
+    {
+        var entry = new WaveeLogEntry(
+            Interlocked.Increment(ref _nextSequence), DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            level, "log", "", message, null, Environment.CurrentManagedThreadId, -1, null, null);
+        PushRing(entry);
+        if (_echo is { } e) { try { e(entry.Format()); } catch { } }
     }
 
     static WaveeLogField[] CopyFields(WaveeLogField[] fields)
@@ -163,16 +204,21 @@ public sealed class WaveeLog : IWaveeLog
         return copy;
     }
 
-    // t= (unix ms) lets the diagnostics page rebuild timestamps + session boundaries when re-reading the file;
-    // lines written by older builds simply lack it (the parser treats them as timestamp-less).
-    static string FormatFileLine(WaveeLogEntry e, string formatted)
+    // File-line prefix, carried before the formatted body:
+    //   seq=17 tid=4 t=1720512345678 sid=3f9c2a1b pid=31544 I [connect] session.start - started
+    // t= (unix ms), sid= (per-run id) and pid= let the diagnostics page rebuild timestamps, session boundaries and the
+    // owning process when re-reading; older builds omit these tokens and the parser treats them as absent.
+    static string FormatFileLine(WaveeLogEntry e)
         => "seq=" + e.Sequence.ToString(CultureInfo.InvariantCulture)
             + " tid=" + e.ThreadId.ToString(CultureInfo.InvariantCulture)
             + " t=" + e.UnixMs.ToString(CultureInfo.InvariantCulture)
-            + " " + formatted;
+            + " sid=" + SessionId
+            + " pid=" + ProcessId.ToString(CultureInfo.InvariantCulture)
+            + " " + e.Format();
 
-    void EnqueueFileLine(string line)
+    void EnqueueFileEntry(WaveeLogEntry entry)
     {
+        bool sync = SyncFileDrainForTests;
         lock (_fileGate)
         {
             if (_fileQueue.Count >= MaxQueueLines)
@@ -180,60 +226,96 @@ public sealed class WaveeLog : IWaveeLog
                 _fileQueue.Dequeue();
                 _droppedFileLines++;
             }
-            _fileQueue.Enqueue(line);
-            if (!_drainScheduled)
+            _fileQueue.Enqueue(entry);
+            if (sync)
+            {
+                _drainScheduled = true;
+            }
+            else if (!_drainScheduled)
             {
                 _drainScheduled = true;
                 ThreadPool.UnsafeQueueUserWorkItem(static s => s.DrainFileQueue(), this, preferLocal: false);
             }
         }
+        if (sync) DrainFileQueue();
     }
 
     void DrainFileQueue()
     {
         while (true)
         {
-            string[] batch;
+            WaveeLogEntry[] batch;
+            int dropped;
             lock (_fileGate)
             {
                 if (_fileQueue.Count == 0) { _drainScheduled = false; return; }
-                batch = DequeueBatchLocked();
+                (batch, dropped) = DequeueBatchLocked();
             }
-            WriteBatch(batch);
+            WriteBatch(batch, dropped);
         }
     }
 
-    string[] DequeueBatchLocked()
+    (WaveeLogEntry[] batch, int dropped) DequeueBatchLocked()
     {
-        int extra = _droppedFileLines > 0 ? 1 : 0;
+        int dropped = _droppedFileLines;
+        _droppedFileLines = 0;
         int n = Math.Min(512, _fileQueue.Count);
-        var batch = new string[n + extra];
-        int at = 0;
-        if (_droppedFileLines > 0)
-        {
-            batch[at++] = "W [log] file sink dropped queued lines count="
-                + _droppedFileLines.ToString(CultureInfo.InvariantCulture);
-            _droppedFileLines = 0;
-        }
-        for (int i = 0; i < n; i++) batch[at++] = _fileQueue.Dequeue();
-        return batch;
+        var batch = new WaveeLogEntry[n];
+        for (int i = 0; i < n; i++) batch[i] = _fileQueue.Dequeue();
+        return (batch, dropped);
     }
 
-    void WriteBatch(string[] lines)
+    void WriteBatch(WaveeLogEntry[] entries, int dropped)
     {
         var path = _filePath;
-        if (path is null || lines.Length == 0) return;
+        if (path is null || (entries.Length == 0 && dropped == 0)) return;
 
-        try
+        lock (_writeGate)
         {
-            string? dir = Path.GetDirectoryName(path);
-            if (dir is not null) Directory.CreateDirectory(dir);
-            RollIfNeeded(path, dir);
-            using var fs = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
-            using var sw = new StreamWriter(fs, new UTF8Encoding(false));
-            for (int i = 0; i < lines.Length; i++) sw.WriteLine(lines[i]);
+            try
+            {
+                EnsureStream(path);
+                if (dropped > 0)
+                    _sw!.WriteLine("W [log] file sink dropped queued lines count="
+                        + dropped.ToString(CultureInfo.InvariantCulture));
+                for (int i = 0; i < entries.Length; i++) _sw!.WriteLine(FormatFileLine(entries[i]));
+                _sw!.Flush();
+                if (_fileSinkFailed)
+                {
+                    _fileSinkFailed = false;
+                    PushInternalRingOnly(WaveeLogLevel.Info, "file sink recovered path=" + path);
+                }
+                if (_fs is { } fs && fs.Length >= _maxFileBytes) CloseStream();   // roll on next EnsureStream
+            }
+            catch
+            {
+                CloseStream();   // reopen next batch → feeds the recovery signal
+                if (!_fileSinkFailed)
+                {
+                    _fileSinkFailed = true;
+                    PushInternalRingOnly(WaveeLogLevel.Warning, "file sink write failed - dropping lines path=" + path);
+                }
+                // The lines in this batch are dropped; the next successful batch reports recovery.
+            }
         }
-        catch { }
+    }
+
+    void EnsureStream(string path)
+    {
+        if (_sw is not null) return;
+        string? dir = Path.GetDirectoryName(path);
+        if (dir is not null) Directory.CreateDirectory(dir);
+        RollIfNeeded(path, dir);
+        _fs = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
+        _sw = new StreamWriter(_fs, new UTF8Encoding(false));
+    }
+
+    void CloseStream()
+    {
+        try { _sw?.Flush(); } catch { }
+        try { _sw?.Dispose(); } catch { }   // disposes the underlying FileStream
+        _sw = null;
+        _fs = null;
     }
 
     void RollIfNeeded(string path, string? dir)
@@ -263,9 +345,48 @@ public sealed class WaveeLog : IWaveeLog
         catch { }
     }
 
-    static WaveeLogLevel ResolveLevel(string? raw, WaveeLogLevel fallback)
+    void SweepAudioChildLogs(string? dir)
     {
-        if (string.IsNullOrWhiteSpace(raw)) return fallback;
-        return Enum.TryParse<WaveeLogLevel>(raw.Trim(), ignoreCase: true, out var level) ? level : fallback;
+        if (dir is null) return;
+        try
+        {
+            var files = Directory.GetFiles(dir, "audio-child-*.log");
+            Array.Sort(files, static (a, b) => File.GetLastWriteTimeUtc(b).CompareTo(File.GetLastWriteTimeUtc(a)));
+            for (int i = _retainedFiles; i < files.Length; i++)
+                try { File.Delete(files[i]); } catch { }
+        }
+        catch { }
+    }
+
+    void ReallocRing(int capacity)
+    {
+        capacity = Math.Max(1, capacity);
+        lock (_ringGate)
+        {
+            if (capacity == _ring.Length) return;
+            var snapshot = SnapshotLocked();               // oldest → newest
+            var newRing = new WaveeLogEntry[capacity];
+            int keep = Math.Min(snapshot.Length, capacity);
+            int from = snapshot.Length - keep;             // preserve the newest `keep`
+            for (int i = 0; i < keep; i++) newRing[i] = snapshot[from + i];
+            _ring = newRing;
+            _head = keep % capacity;
+            _count = keep;
+            _version++;
+        }
+    }
+
+    static WaveeLogLevel? EnvLevel(string name)
+    {
+        var raw = Environment.GetEnvironmentVariable(name);
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        return Enum.TryParse<WaveeLogLevel>(raw.Trim(), ignoreCase: true, out var level) ? level : null;
+    }
+
+    static int? EnvInt(string name)
+    {
+        var raw = Environment.GetEnvironmentVariable(name);
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        return int.TryParse(raw.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int v) && v > 0 ? v : null;
     }
 }

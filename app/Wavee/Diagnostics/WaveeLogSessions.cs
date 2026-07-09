@@ -18,7 +18,7 @@ static class WaveeLogSessions
 {
     /// <summary>One past session: a [start, end) line range over the chronological file list.</summary>
     public sealed record Info(string[] Files, int FileStart, int LineStart, int FileEnd, int LineEnd,
-                              long StartUnixMs, int Pid, int EntryCount);
+                              long StartUnixMs, int Pid, int EntryCount, string SessionId);
 
     /// <summary>All completed sessions found on disk, NEWEST first. The trailing session belonging to
     /// <paramref name="currentPid"/> (this very run) is excluded — the live ring is the richer source for it.</summary>
@@ -42,13 +42,15 @@ static class WaveeLogSessions
             string[] files = fileList.ToArray();
 
             long prevSeq = long.MaxValue;
+            string prevSid = "";
             bool open = false;
             int curFile = 0, curLine = 0, curPid = 0, curCount = 0;
             long curStart = 0;
+            string curSid = "";
 
             void Close(int endFile, int endLine)
             {
-                if (open) sessions.Add(new Info(files, curFile, curLine, endFile, endLine, curStart, curPid, curCount));
+                if (open) sessions.Add(new Info(files, curFile, curLine, endFile, endLine, curStart, curPid, curCount, curSid));
                 open = false;
             }
 
@@ -60,15 +62,21 @@ static class WaveeLogSessions
                 catch { continue; }
                 foreach (var line in lines)
                 {
-                    if (TryParseLine(line, out var e, out bool isStart, out int pid))
+                    if (TryParseLine(line, out var e, out bool isStart, out int pid, out string sid))
                     {
-                        if (isStart || e.Sequence < prevSeq)
+                        // A session opens when the run identity changes: sid differs from the previous line (new build),
+                        // else the legacy heuristic (a "Wavee starting" marker or a seq reset) for sid-less lines.
+                        bool boundary = sid.Length > 0
+                            ? sid != prevSid
+                            : isStart || e.Sequence < prevSeq;
+                        if (boundary)
                         {
                             Close(fi, li);
                             open = true;
-                            curFile = fi; curLine = li; curStart = e.UnixMs; curPid = pid; curCount = 0;
+                            curFile = fi; curLine = li; curStart = e.UnixMs; curPid = pid; curCount = 0; curSid = sid;
                         }
                         prevSeq = e.Sequence;
+                        prevSid = sid;
                         if (open) curCount++;
                     }
                     li++;
@@ -77,7 +85,15 @@ static class WaveeLogSessions
             Close(files.Length - 1, int.MaxValue);
 
             // The trailing session is this very process (it appended its own startup line) — the ring shows it live.
-            if (sessions.Count > 0 && sessions[^1].Pid == currentPid) sessions.RemoveAt(sessions.Count - 1);
+            // Prefer the sid match (exact); fall back to pid for legacy sid-less files.
+            if (sessions.Count > 0)
+            {
+                var last = sessions[^1];
+                bool isCurrent = last.SessionId.Length > 0
+                    ? last.SessionId == WaveeLog.SessionId
+                    : last.Pid == currentPid;
+                if (isCurrent) sessions.RemoveAt(sessions.Count - 1);
+            }
             sessions.Reverse();   // newest first for the picker
         }
         catch { /* diagnostics must never throw into the UI */ }
@@ -101,7 +117,7 @@ static class WaveeLogSessions
                 foreach (var line in lines)
                 {
                     if (li >= to) break;
-                    if (li >= from && TryParseLine(line, out var e, out _, out _)) list.Add(e);
+                    if (li >= from && TryParseLine(line, out var e, out _, out _, out _)) list.Add(e);
                     li++;
                 }
             }
@@ -144,11 +160,12 @@ static class WaveeLogSessions
     // "[ISO-UTC ]seq=N tid=M [t=U] L [category] rest" → a lossy WaveeLogEntry (rest becomes Message verbatim).
     // Older builds prefixed every line with "yyyy-MM-dd HH:mm:ss.fffZ "; current builds carry t= (unix ms) instead —
     // both shapes yield a timestamp, and a line with neither parses with UnixMs = 0.
-    static bool TryParseLine(string line, out WaveeLogEntry entry, out bool isStartMarker, out int pid)
+    static bool TryParseLine(string line, out WaveeLogEntry entry, out bool isStartMarker, out int pid, out string sid)
     {
         entry = default;
         isStartMarker = false;
         pid = 0;
+        sid = "";
 
         int at = 0;
         long isoMs = 0;
@@ -165,6 +182,9 @@ static class WaveeLogSessions
         if (!Expect(line, ref at, " tid=") || !ReadLong(line, ref at, out long tid)) return false;
         long unixMs = isoMs;
         if (Expect(line, ref at, " t=") && !ReadLong(line, ref at, out unixMs)) return false;
+        // Optional sid= (8 hex) + pid= tokens (added later); absent in older files.
+        if (Expect(line, ref at, " sid=")) sid = ReadToken(line, ref at);
+        if (Expect(line, ref at, " pid=") && ReadLong(line, ref at, out long pidTok)) pid = (int)Math.Min(pidTok, int.MaxValue);
         if (at + 3 >= line.Length || line[at] != ' ') return false;
 
         WaveeLogLevel level;
@@ -191,12 +211,15 @@ static class WaveeLogSessions
         if (category == "app" && rest.StartsWith("startup - Wavee starting", StringComparison.Ordinal))
         {
             isStartMarker = true;
-            int p = rest.IndexOf(" pid=", StringComparison.Ordinal);
-            if (p >= 0)
+            if (pid == 0)   // no pid= prefix token (legacy line) → recover it from the message body
             {
-                long v = 0;
-                for (int q = p + 5; q < rest.Length && char.IsAsciiDigit(rest[q]); q++) v = v * 10 + (rest[q] - '0');
-                pid = (int)Math.Min(v, int.MaxValue);
+                int p = rest.IndexOf(" pid=", StringComparison.Ordinal);
+                if (p >= 0)
+                {
+                    long v = 0;
+                    for (int q = p + 5; q < rest.Length && char.IsAsciiDigit(rest[q]); q++) v = v * 10 + (rest[q] - '0');
+                    pid = (int)Math.Min(v, int.MaxValue);
+                }
             }
         }
 
@@ -212,6 +235,14 @@ static class WaveeLogSessions
             if (s[at + i] != token[i]) return false;
         at += token.Length;
         return true;
+    }
+
+    // Read a run of non-space chars from `at` (used for the sid= hex token). Advances past it.
+    static string ReadToken(string s, ref int at)
+    {
+        int start = at;
+        while (at < s.Length && s[at] != ' ') at++;
+        return s[start..at];
     }
 
     static bool ReadLong(string s, ref int at, out long value)

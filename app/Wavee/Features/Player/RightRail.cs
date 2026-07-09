@@ -1,4 +1,5 @@
 using System;
+using FluentGpu.Animation;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -14,13 +15,44 @@ namespace Wavee;
 // shell animates the rail's width (and thus visibility). Reads ShellUi for the active mode.
 sealed class RightRail : Component
 {
+    bool _motionSeeded;
+
     public override Element Render()
     {
         var ui = UseContext(ShellUi.Slot);
         if (ui is null) return new BoxEl();
+        bool open = ui.RailOpen.Value;
+        float railWidth = ui.RailWidth.Value;
         var mode = ui.Mode.Value;   // subscribe → swap the panel on a mode change
         bool floating = !ui.RailFits.Value;
         bool nowPlaying = mode == RailMode.Details;
+
+        // The shell keeps this panel at its final layout width. Animate the component host itself so open AND close retain
+        // the fully-laid-out subtree while it slides through the shell's fixed clip; no width/layout writes occur per tick.
+        // WAVEE_RAIL_BASELINE preserves the old wrapper-width Reflow path for the probe's same-build A/B.
+        bool baseline = Diag.EnvFlag("WAVEE_RAIL_BASELINE");
+        UseLayoutEffect(() =>
+        {
+            if (baseline || Context.Anim is not { } anim || Context.HostNode.IsNull) return;
+            float x = open ? 0f : railWidth;
+            if (!_motionSeeded)
+            {
+                _motionSeeded = true;
+                // Seed closed off-canvas (or open in-place) without a startup fly-in.
+                anim.Animate(Context.HostNode, AnimChannel.TranslateX, x, x, 1f, Easing.Linear);
+            }
+            else
+            {
+                // Same retained clip+translation choreography as WinUI SplitView. There is deliberately no opacity
+                // track: a fading full-height panel is the source of the faint "ghost rail" during unrelated motion.
+                // Sample the actually presented transform so a rapid reversal continues from the visible position.
+                float from = Context.Scene is { } scene
+                    ? scene.Paint(Context.HostNode).LocalTransform.Dx
+                    : (open ? railWidth : 0f);
+                anim.Animate(Context.HostNode, AnimChannel.TranslateX, from, x, 300f,
+                    EasingSpec.CubicBezier(0f, 0.35f, 0.15f, 1f));
+            }
+        }, open, railWidth, baseline);
         // Flat FileArea surface (the album-wash gradient read as a muddy smudge), TOP-LEFT rounded like the content
         // card's top-right — the two sit as sibling cards across the 4px chrome gap.
         var corners = new CornerRadius4(WaveeRadius.Card, 0f, 0f, 0f);
@@ -55,7 +87,7 @@ sealed class RightRail : Component
         {
             return new BoxEl
             {
-                Grow = 1f, MinHeight = 0f, ClipToBounds = true, ZStack = true,
+                Grow = 1f, MinHeight = 0f, ClipToBounds = true, ZStack = true, HitTestVisible = baseline || open,
                 Corners = corners,
                 BorderColor = floating ? Tok.StrokeCardDefault : ColorF.Transparent,
                 BorderWidth = floating ? 1f : 0f,
@@ -70,7 +102,7 @@ sealed class RightRail : Component
 
         return new BoxEl
         {
-            Direction = 1, Grow = 1f, MinHeight = 0f, ClipToBounds = true, ZStack = true,
+            Direction = 1, Grow = 1f, MinHeight = 0f, ClipToBounds = true, ZStack = true, HitTestVisible = baseline || open,
             Corners = corners,
             BorderColor = floating ? Tok.StrokeCardDefault : ColorF.Transparent,
             BorderWidth = floating ? 1f : 0f,

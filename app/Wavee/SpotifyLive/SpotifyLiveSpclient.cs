@@ -13,7 +13,7 @@ public static class SpotifyLiveSpclient
 {
     const string ClientId = "65b708073fc0480ea92a077233ca87bd";
 
-    public static async Task<LiveSpclient?> ConnectAsync(Action<string> log, CancellationToken ct, bool retainApChannel = false,
+    public static async Task<LiveSpclient?> ConnectAsync(WaveeLogger log, CancellationToken ct, bool retainApChannel = false,
         bool allowDeviceCode = true, IObserver<AuthState>? authObserver = null, Action? onCredentialAcquired = null,
         bool allowBrowser = false)
     {
@@ -26,20 +26,20 @@ public static class SpotifyLiveSpclient
         var deviceId = login.DeviceId;
 
         // 1. client-token (attestation) — required on spclient.
-        log("Fetching client-token (attestation)...");
+        log.Info("Fetching client-token (attestation)...");
         var clientToken = await new ClientTokenClient(ClientId, deviceId).GetAsync(ct).ConfigureAwait(false);
-        log(clientToken is null ? "  client-token: NONE (spclient will likely 403)." : "  client-token obtained.");
+        log.Info(clientToken is null ? "  client-token: NONE (spclient will likely 403)." : "  client-token obtained.");
 
         // 2. login5 -> the spclient access token (the device-code OAuth token is a Web-API audience, not spclient).
-        log("Minting an spclient access token via login5...");
+        log.Info("Minting an spclient access token via login5...");
         var login5 = new Login5Client(ClientId, deviceId);
         Login5Client.AccessToken access;
         try
         {
             access = await login5.GetAccessTokenAsync(welcome.Username, welcome.ReusableCredentials, clientToken, ct).ConfigureAwait(false);
         }
-        catch (Exception ex) { log("login5 failed: " + ex.Message); login.Channel?.Dispose(); return null; }
-        log("  access token obtained (expires " + access.ExpiresAt.ToString("u") + ").");
+        catch (Exception ex) { log.Info("login5 failed: " + ex.Message); login.Channel?.Dispose(); return null; }
+        log.Info("  access token obtained (expires " + access.ExpiresAt.ToString("u") + ").");
 
         // Re-minting access-token provider: login5 tokens expire (~1h), and a long-lived dealer/AP session re-invokes the
         // provider on every reconnect — refresh just before expiry (or on a forced 401 retry) instead of a stale constant.
@@ -60,9 +60,9 @@ public static class SpotifyLiveSpclient
         // 3. resolve an spclient host.
         var spJson = await SharedHttp.Client.GetStringAsync("https://apresolve.spotify.com/?type=spclient", ct).ConfigureAwait(false);
         var spHosts = ApResolver.ParseHosts(spJson, "spclient");
-        if (spHosts.Count == 0) { log("No spclient hosts returned."); login.Channel?.Dispose(); return null; }
+        if (spHosts.Count == 0) { log.Info("No spclient hosts returned."); login.Channel?.Dispose(); return null; }
         string baseUrl = "https://" + spHosts[0].Split(':')[0];
-        log("spclient: " + baseUrl);
+        log.Info("spclient: " + baseUrl);
 
         // 4. the middleware pipeline over the real exchange.
         string accessToken = access.Token;

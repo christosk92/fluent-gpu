@@ -271,6 +271,29 @@ sealed class ScrollHoverProbe : Component
     }
 }
 
+// A ToolTip.Wrap-shaped wrapper (OnHoverMove + OnPointerExit, no click) around an INTERACTIVE child that wins the hit
+// (OnClick ⇒ ClickBit ⇒ deepest leaf). Gates the subtree-scoped hover delivery (input-a11y: WinUI PointerEntered/Exited
+// parity): hovering the CHILD must fire the wrapper's enter; moving within the child fires nothing more; moving from the
+// wrapper's own padding onto the child must NOT fire the wrapper's exit; leaving the subtree fires exit exactly once.
+sealed class HoverSubtreeProbe : Component
+{
+    public int WrapperEnter, WrapperExit;
+    public override Element Render() => new BoxEl
+    {
+        Width = 300, Height = 300, Fill = ColorF.FromRgba(20, 20, 20), Padding = new Edges4(50f, 50f, 50f, 50f),
+        Children =
+        [
+            new BoxEl
+            {
+                Width = 100, Height = 100, Padding = new Edges4(20f, 20f, 20f, 20f), Fill = ColorF.FromRgba(30, 30, 30),
+                OnHoverMove = _ => WrapperEnter++,
+                OnPointerExit = () => WrapperExit++,
+                Children = [new BoxEl { Width = 60, Height = 60, Fill = ColorF.FromRgba(60, 60, 60), OnClick = static () => { } }],
+            },
+        ],
+    };
+}
+
 // The RECYCLED-SLOT variant of gate.scroll.hover-follows-content: a BOUND virtual list (Virtual.ListBound) recycles slot
 // HANDLES — a one-row boundary-crossing scroll keeps the SAME child handle under a fixed screen point but rebinds it to
 // the next item, and the reconciler's rebind Unmark clears that handle's Hovered flag. Because the handle is unchanged,
@@ -1506,6 +1529,35 @@ sealed class KeepAlivePresencePage : Component
                 Width = 120f, Height = 32f, Animate = Exit,
                 Children = [Text("presence-" + _key)],
             });
+    }
+}
+
+// Transparent-boundary input probe: the outer component does not subscribe to Live; only the nested component swaps
+// from a non-hit-testable placeholder to a real scroller. A transparent ancestor must remain traversable without
+// relying on the inner HitTestVisible bit being synchronously copied back through every component boundary.
+sealed class NestedHitVisibilityProbe : Component
+{
+    public readonly Signal<bool> Live = new(false);
+    public override Element Render() => Embed.Comp(() => new NestedHitVisibilityInner(Live));
+}
+
+sealed class NestedHitVisibilityInner : Component
+{
+    readonly Signal<bool> _live;
+    public NestedHitVisibilityInner(Signal<bool> live) { _live = live; }
+
+    public override Element Render()
+    {
+        if (!_live.Value)
+            return new BoxEl { Width = 220f, Height = 170f, HitTestVisible = false };
+
+        var rows = new Element[16];
+        for (int i = 0; i < rows.Length; i++) rows[i] = new BoxEl { Height = 28f, Children = [Text("nested-row-" + i)] };
+        return new ScrollEl
+        {
+            Width = 220f, Height = 170f,
+            Content = new BoxEl { Direction = 1, Children = rows },
+        };
     }
 }
 
@@ -2778,6 +2830,57 @@ sealed class ResizeSidebarProbe : Component
     }
 }
 
+// Faithful headless mirror of the WaveeShell projected collapse toggle (SidebarCollapseFlipChecks) — a component that
+// re-renders on the compact signal (like WaveeShell), a bound-width pane carrying the exact Reveal+Suppress transition,
+// a stable ROW frame (MorphId), and a Grow content card carrying the Position Reveal. Mode picks the card-FLIP anchor.
+sealed class CollapseToggleProbe : Component
+{
+    public readonly FluentGpu.Signals.Signal<bool> CompactSig = new(false);
+    public NodeHandle Pane, Card, Content;
+    public static int Mode = 0;   // 0=card(current bug) 1=region 2=card+RelativeTo(row)
+    static readonly EasingSpec Ease = EasingSpec.CubicBezier(0f, 0.35f, 0.15f, 1f);
+    static readonly LayoutTransition PaneAnim = new(
+        TransitionChannels.Size | TransitionChannels.Position,
+        TransitionDynamics.Tween(300f, Ease), SizeMode.Reveal,
+        ExitDynamics: TransitionDynamics.Tween(300f, Ease),
+        SuppressDescendantTransitions: true);
+    static readonly LayoutTransition CardAnim = new(
+        TransitionChannels.Position,
+        TransitionDynamics.Tween(300f, Ease), SizeMode.Reveal,
+        ExitDynamics: TransitionDynamics.Tween(300f, Ease),
+        SuppressDescendantTransitions: true);
+
+    public override Element Render()
+    {
+        _ = CompactSig.Value;   // subscribe → re-render on toggle (mirrors WaveeShell.cs:244)
+        return Embed.Comp(() => new OverlayHost { Child = BuildRow() });
+    }
+
+    Element BuildRow()
+    {
+        var rows = new Element[16];
+        for (int i = 0; i < rows.Length; i++) rows[i] = new BoxEl { Height = 40f, Fill = ColorF.FromRgba(30, 30, 30) };
+        var pane = new BoxEl
+        {
+            Direction = 1, Shrink = 0f, ClipToBounds = true, OnRealized = h => Pane = h,
+            Fill = ColorF.FromRgba(27, 32, 40),
+            Width = Prop.Of(() => CompactSig.Value ? 56f : 360f),
+            Animate = PaneAnim,
+            Children = [ new BoxEl { Direction = 1, Grow = 1f, Children = [ Ui.ScrollView(new BoxEl { Direction = 1, Children = rows }) with { Grow = 1f } ] } ],
+        };
+        var card = new BoxEl
+        {
+            Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, ClipToBounds = true, IsolateLayout = true, OnRealized = h => Card = h,
+            Fill = ColorF.FromRgba(57, 61, 69),
+            Animate = Mode == 1 ? null : CardAnim,
+            RelativeTo = Mode == 2 ? "shellrow" : null,
+            Children = [ new BoxEl { Grow = 1f } ],
+        };
+        var content = new BoxEl { Direction = 1, ZStack = true, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Basis = 0f, OnRealized = h => Content = h, Children = [ card ], Animate = Mode == 1 ? CardAnim : null };
+        return new BoxEl { Direction = 0, Grow = 1f, ClipToBounds = true, MorphId = "shellrow", Children = [ pane, content ] };
+    }
+}
+
 static class Slice
 {
     static int s_failures;
@@ -3631,6 +3734,63 @@ static class Slice
         finally { Theme.WindowBackground = priorBg; }
     }
 
+    // Sidebar collapse-toggle FLIP (the projected-motion migration). Repro for two defects that shared ONE root cause:
+    //  Bug A — the toggle SNAPPED: the content sheet jumped to its final X in one frame while only the (occluded) pane
+    //          reveal eased behind it, because the content card's Position FLIP was measured PARENT-relative and its
+    //          parent (the content region) absorbs the whole reserved-width shift ⇒ zero FLIP delta ⇒ no slide.
+    //  Bug B — a stale dark band was left where the pane USED to be, because a static (snapped) card never re-damages the
+    //          backdrop it covers, so the region-aware acrylic cache reused the pane's old pixels behind the translucent
+    //          card. Fixing A (card FLIPs relative to the stable ROW frame, not its moving parent) makes the card TRANSLATE
+    //          each frame, so its device bounds are damaged and — since the card's left edge tracks the pane's revealing
+    //          right edge EXACTLY — the swept region is damaged contiguously ⇒ no stale band. One fix, both bugs.
+    static void SidebarCollapseFlipChecks(StringTable strings)
+    {
+        // Mode 0 = the pre-fix wiring (FLIP on the card, parent-relative) — must SNAP (regression guard for the bug).
+        // Mode 2 = the fix (FLIP on the card, RelativeTo the row) — must SLIDE with pane↔card edge coherence.
+        (float toggleEdge, float minEdge, float maxAbsCoherence, float regionX) Run(int mode)
+        {
+            FluentGpu.Dsl.Motion.ReducedMotion = false;
+            CollapseToggleProbe.Mode = mode;
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("collapse", new Size2(1180, 760), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var probe = new CollapseToggleProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, probe);
+            for (int i = 0; i < 4; i++) host.RunFrame();
+            var s = host.Scene;
+            float CardEdge() => s.AbsoluteRect(probe.Card).X;
+            float PaneRight() { var b = s.Bounds(probe.Pane); float pw = s.Paint(probe.Pane).PresentedW; return b.X + (float.IsNaN(pw) ? b.W : pw); }
+            probe.CompactSig.Value = true;   // collapse 360 -> 56
+            host.RunFrame();
+            float toggleEdge = CardEdge();
+            float minEdge = toggleEdge, maxCoh = 0f;
+            for (int k = 0; k < 24; k++)
+            {
+                host.RunFrame();
+                minEdge = MathF.Min(minEdge, CardEdge());
+                maxCoh = MathF.Max(maxCoh, MathF.Abs(CardEdge() - PaneRight()));   // 0 ⇒ contiguous swept-band damage (Bug B)
+            }
+            return (toggleEdge, minEdge, maxCoh, s.Bounds(probe.Content).X);
+        }
+
+        var bug = Run(0);
+        var fix = Run(2);
+        FluentGpu.Dsl.Motion.ReducedMotion = false;
+        // Regression guard: the pre-fix (parent-relative card FLIP) SNAPS — the sheet jumps to 56 on the toggle frame.
+        Check("SBF0. pre-fix wiring SNAPS the content sheet (parent-relative card FLIP ⇒ zero delta) — the bug",
+            bug.toggleEdge < 100f, $"toggleEdge={bug.toggleEdge:0.#} (want ~56 snapped)");
+        // Bug A fixed: the sheet does NOT snap on the toggle frame (stays near its old 360 edge) and eases down to ~56.
+        Check("SBF1. fix: content sheet does not snap on the toggle frame (Bug A) — eases from ~360",
+            fix.toggleEdge > 300f && fix.minEdge < 60f, $"toggleEdge={fix.toggleEdge:0.#} (want >300) minEdge={fix.minEdge:0.#} (want <60)");
+        // Bug B fixed: the card's left edge tracks the pane's revealing right edge EXACTLY every frame ⇒ the swept region
+        // is damaged contiguously (no stale-backdrop band), and the static underlays stay put (regionX == final 56).
+        Check("SBF2. fix: pane↔card edge coherence every frame (contiguous swept damage, no ghost band — Bug B) + static underlays",
+            fix.maxAbsCoherence < 1.0f && System.MathF.Abs(fix.regionX - 56f) < 1f,
+            $"maxEdgeGap={fix.maxAbsCoherence:0.##}px (want <1) regionX={fix.regionX:0.#} (want 56 static)");
+    }
+
     static void SidebarResizeSimChecks(StringTable strings)
     {
         using var app = new HeadlessPlatformApp();
@@ -4219,6 +4379,79 @@ static class Slice
             float dxEnd = scene.Paint(node).LocalTransform.Dx;
             Check("EM.e Shake recipe swings to +distance then settles to 0", dxPeak > 3f && Near(dxEnd, 0f, 0.2f) && !engine.HasActive,
                 $"peak={dxPeak:0.0} end={dxEnd:0.00} active={engine.HasActive}");
+        }
+
+        // EM.f — transitions.dev state/page/refit terminals and the independent interactive-resize policy.
+        {
+            var text = MotionRecipes.TextSwap;
+            var forward = MotionRecipes.PageSlideForward;
+            var back = MotionRecipes.PageSlideBack;
+            var height = MotionRecipes.CardResizeHeight;
+            // Page slides are deliberately BLUR-FREE: a page-root BlurSigma makes the whole page a blur group
+            // (canvas-sized offscreen RT + 2-pass Gaussian per transition frame — the measured ~13ms-vs-7ms GPU
+            // regression). TextSwap keeps its blur (a tiny element, not a page).
+            bool recipes = text.Enter.Dy == 4f && text.Exit.Dy == -4f && text.Enter.Blur == 2f
+                && forward.Enter.Dx == 8f && forward.Exit.Dx == -8f && forward.Enter.Blur == 0f && forward.Exit.Blur == 0f
+                && back.Enter.Dx == -8f && back.Exit.Dx == 8f && back.Enter.Blur == 0f && back.Exit.Blur == 0f
+                && height.Axes == SizeAxes.Height && height.Size == SizeMode.Reflow;
+
+            Motion.SetLayoutTransitionsSuppressed(MotionSuppressionSource.WindowResize, true);
+            Motion.SetLayoutTransitionsSuppressed(MotionSuppressionSource.AppResize, true);
+            Motion.SetLayoutTransitionsSuppressed(MotionSuppressionSource.WindowResize, false);
+            bool independentlyOwned = Motion.LayoutTransitionsSuppressed;
+            Motion.SetLayoutTransitionsSuppressed(MotionSuppressionSource.AppResize, false);
+            bool cleared = !Motion.LayoutTransitionsSuppressed;
+            Check("EM.f text/page/refit recipes carry the authored terminals; resize suppression is independently owned",
+                recipes && independentlyOwned && cleared,
+                $"recipes={recipes} independentlyOwned={independentlyOwned} cleared={cleared}");
+        }
+
+        // EM.g — suppression gates STARTS: SnapStructuralToLayout (the branch ApplyProjections takes while
+        // Motion.LayoutTransitionsSuppressed) cancels an in-flight FLIP track and lands the node at its laid-out
+        // geometry immediately — no projection keeps running, no residual transform offset.
+        {
+            var scene = new SceneStore();
+            var n = scene.CreateNode(1); scene.Root = n;
+            ref RectF nb = ref scene.Bounds(n); nb = new RectF(0, 200, 50, 20);
+            var engine = new AnimEngine(scene);
+            var spring = new LayoutTransition(TransitionChannels.Position, TransitionDynamics.Spring(1.0f, 1.0f));
+            engine.AnimateBounds(n, new RectF(0, 100, 50, 20), new RectF(0, 200, 50, 20), spring);
+            for (int i = 0; i < 4; i++) engine.Tick(16f);
+            bool wasFlying = MathF.Abs(scene.Paint(n).LocalTransform.Dy) > 5f && engine.HasActive;
+            engine.SnapStructuralToLayout(n);                        // the suppressed-branch action
+            bool snapped = scene.Paint(n).LocalTransform.IsIdentity; // lands at final geometry (no residual offset)
+            bool noTrack = !engine.HasActive;
+            engine.Tick(16f);                                        // and none re-seeds next tick
+            bool stays = scene.Paint(n).LocalTransform.IsIdentity && !engine.HasActive;
+            Check("EM.g suppression snap cancels the in-flight projection and lands at final geometry (no residual offset)",
+                wasFlying && snapped && noTrack && stays,
+                $"wasFlying={wasFlying} snapped={snapped} noTrack={noTrack} stays={stays}");
+        }
+
+        // EM.h — a resize frame (CancelStructuralAll over the FLIP set) cancels an in-flight structural transition:
+        // SizeMode.Relayout li.Width/Height restore to the DECLARED value (NaN = auto here), PresentedW resets, the
+        // Relayouting flag clears, and the FLIP position offset is gone — bounds land clean, no poisoned layout input.
+        {
+            var scene = new SceneStore();
+            var n = scene.CreateNode(1); scene.Root = n;
+            ref LayoutInput li = ref scene.Layout(n); li.Width = float.NaN; li.Height = float.NaN;  // declared = auto
+            ref RectF nb = ref scene.Bounds(n); nb = new RectF(0, 0, 100, 200);
+            var engine = new AnimEngine(scene);
+            var refit = new LayoutTransition(TransitionChannels.Position | TransitionChannels.Size,
+                TransitionDynamics.Tween(300f, Easing.SmoothOut), Size: SizeMode.Relayout);
+            engine.AnimateBounds(n, new RectF(0, 100, 200, 200), new RectF(0, 0, 100, 200), refit);  // moved (Y 100→0) + width 200→100
+            for (int i = 0; i < 3; i++) engine.Tick(16f);
+            bool inFlight = engine.HasActive && !float.IsNaN(scene.Paint(n).PresentedW)
+                && (scene.Flags(n) & NodeFlags.Relayouting) != 0 && MathF.Abs(scene.Paint(n).LocalTransform.Dy) > 1f;
+            engine.CancelStructuralAll(new List<NodeHandle> { n });   // the resize-frame action
+            bool liRestored = float.IsNaN(scene.Layout(n).Width) && float.IsNaN(scene.Layout(n).Height);  // declared, not stale interp
+            bool presentedReset = float.IsNaN(scene.Paint(n).PresentedW);
+            bool relayoutCleared = (scene.Flags(n) & NodeFlags.Relayouting) == 0;
+            bool noOffset = scene.Paint(n).LocalTransform.IsIdentity;
+            bool noTrack = !engine.HasActive;
+            Check("EM.h resize-frame cancel restores declared LayoutInput (NaN), resets presented size + transform, clears Relayouting",
+                inFlight && liRestored && presentedReset && relayoutCleared && noOffset && noTrack,
+                $"inFlight={inFlight} li={liRestored} pres={presentedReset} relayout={relayoutCleared} offset={noOffset} track={noTrack}");
         }
     }
 
@@ -5389,6 +5622,53 @@ static class Slice
         Check("26. hover/pressed states track the pointer", hov && prs && released && unhov, "enter→hover, down→pressed, up→release, leave→unhover");
     }
 
+    // gate.input.hover-subtree-enter-exit: per-node OnHoverMove/OnPointerExit are SUBTREE-scoped (WinUI PointerEntered/
+    // PointerExited parity) — a ToolTip.Wrap-shaped wrapper around an INTERACTIVE child (which wins the deepest-leaf hit)
+    // still receives its enter when the pointer lands on the child, receives NO exit moving wrapper-padding→child, and
+    // exactly one exit when the pointer leaves the subtree. Pre-fix, leaf-only delivery starved every such wrapper —
+    // tooltips around buttons could never open.
+    static void HoverSubtreeChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("hover-subtree", new Size2(320, 320), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var probe = new HoverSubtreeProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, probe);
+        host.RunFrame();   // mount + layout
+
+        // Geometry: root pad 50 → wrapper at (50,50) 100×100; wrapper pad 20 → child at (70,70) 60×60.
+        var vp = host.Scene.AbsoluteRect(host.Scene.Root);
+        var ptOut = new Point2(vp.X + 10f, vp.Y + 10f);       // outside the wrapper subtree (root has no handlers)
+        var ptChild = new Point2(vp.X + 100f, vp.Y + 100f);   // inside the interactive child
+        var ptChild2 = new Point2(vp.X + 110f, vp.Y + 105f);  // still inside the child
+        var ptPad = new Point2(vp.X + 58f, vp.Y + 58f);       // the wrapper's own padding (the wrapper is the leaf here)
+
+        void Move(Point2 p) { window.QueueInput(new InputEvent(InputKind.PointerMove, p, 0, 0)); host.RunFrame(); }
+
+        Move(ptOut);
+        probe.WrapperEnter = 0; probe.WrapperExit = 0;
+
+        Move(ptChild);                                        // outside → child (the child is the deepest interactive leaf)
+        bool enterOnChild = probe.WrapperEnter == 1 && probe.WrapperExit == 0;
+        Move(ptChild2);                                       // move WITHIN the child — no re-enter, no exit
+        bool noRefire = probe.WrapperEnter == 1 && probe.WrapperExit == 0;
+        Move(ptOut);                                          // leave the subtree
+        bool exitOnce = probe.WrapperExit == 1;
+
+        probe.WrapperEnter = 0; probe.WrapperExit = 0;
+        Move(ptPad);                                          // onto the wrapper's own padding (wrapper = hovered leaf)
+        Move(ptChild);                                        // padding → child: still INSIDE the subtree → no exit
+        bool noSelfExit = probe.WrapperExit == 0;
+        Move(ptOut);
+        bool exitAfter = probe.WrapperExit == 1;
+
+        Check("gate.input.hover-subtree-enter-exit OnHoverMove/OnPointerExit are subtree-scoped for a wrapper around an interactive child (enter on child-hover, no re-fire within, no exit wrapper→child, one exit on leave)",
+            enterOnChild && noRefire && exitOnce && noSelfExit && exitAfter,
+            $"enterOnChild={enterOnChild} noRefire={noRefire} exitOnce={exitOnce} noSelfExit={noSelfExit} exitAfter={exitAfter} enter={probe.WrapperEnter} exit={probe.WrapperExit}");
+    }
+
     // gate.scroll.hover-follows-content (input-a11y.md §5.4/§15 "stuck hover"): wheel-scrolling a list under a STATIONARY
     // mouse cursor re-resolves hover — the row that slides under the point becomes Hovered and the row that left it is
     // cleared — WITHOUT a PointerMove, and the synthesized re-eval frame allocates 0 managed bytes (phases 6–13).
@@ -6499,6 +6779,24 @@ static class Slice
             && recycledCount == beforeNodes.Count && host.Scene.LiveCount == liveBeforeJump && rebound == "row 0";
         Check("40b. far-jump realize recycles the window's scene nodes (rebind, no mount/remove)",
             recycledOk, $"first={scTop.FirstRealized} recycled={recycledCount}/{beforeNodes.Count} live {liveBeforeJump}→{host.Scene.LiveCount} text='{rebound}'");
+
+        // 40b2 — theme correctness ON a recycled node: the default text color is a mount-time singleton-brush binding
+        // that PERSISTS across recycle (Update rewrites columns, never bindings — recyclability of the bound default
+        // rides that identity). A retheme AFTER the far-jump recycle must repaint the reused node via the re-fired
+        // binding — the recycled row follows the live theme, not the color it was mounted under.
+        {
+            ColorF darkPrimary = Tok.TextPrimary;
+            bool darkOk = host.Scene.Paint(firstRowText).TextColor == darkPrimary;
+            Tok.Use(ThemeKind.Light);
+            host.RunFrame();
+            ColorF lightPrimary = Tok.TextPrimary;
+            var t2 = host.Scene.FirstChild(host.Scene.FirstChild(content));
+            bool lightOk = lightPrimary != darkPrimary && host.Scene.Paint(t2).TextColor == lightPrimary;
+            Tok.Use(ThemeKind.Dark);
+            host.RunFrame();
+            Check("40b2. a recycled default-colored row follows a retheme (the persisted singleton-brush binding re-fires on the reused node)",
+                darkOk && lightOk, $"dark={darkOk} light={lightOk}");
+        }
 
         // Streaming thousands of unique row strings must NOT accrete in the interner: scrolled-out text releases its
         // ref, the map entry drops immediately, and the slot clears behind the reader quarantine (StringTable.Tick).
@@ -11184,6 +11482,27 @@ static class Slice
         Check("50a2. animated presence removal inside a parked KeepAlive page is hard-removed (no cross-route orphan)",
             presenceA && parkedExitHardRemoved,
             $"initial={presenceA} switched={parkedExitHardRemoved} orphans={presenceHost.Scene.OrphanCount}");
+
+        using var nestedApp = new HeadlessPlatformApp();
+        var nestedWindow = new HeadlessWindow(new WindowDesc("nested-hit-visibility", new Size2(260, 220), 1f));
+        nestedWindow.Show();
+        var nestedDevice = new HeadlessGpuDevice();
+        var nestedFonts = new HeadlessFontSystem(strings);
+        var nestedProbe = new NestedHitVisibilityProbe();
+        using var nestedHost = new AppHost(nestedApp, nestedWindow, nestedDevice, nestedFonts, strings, nestedProbe);
+        nestedHost.RunFrame();
+        nestedProbe.Live.Value = true;
+        nestedHost.RunFrame();
+        var nestedScroll = FindScrollable(nestedHost.Scene, nestedHost.Scene.Root);
+        var nestedRect = nestedHost.Scene.AbsoluteRect(nestedScroll);
+        var nestedPoint = new Point2(nestedRect.X + 30f, nestedRect.Y + 30f);
+        var nestedRouted = nestedHost.Input.ScrollableUnderForAxis(nestedPoint, wantHorizontal: false);
+        nestedWindow.QueueInput(new InputEvent(InputKind.Wheel, nestedPoint, 0, 0, 120f));
+        nestedHost.RunFrame();
+        nestedHost.Scene.TryGetScroll(nestedScroll, out var nestedState);
+        Check("50a3. nested transparent component boundaries remain input-traversable when an inner branch becomes hit-testable",
+            !nestedScroll.IsNull && nestedRouted == nestedScroll && nestedState.OffsetY > 1f,
+            $"scroll=n#{nestedScroll.Raw.Index} routed=n#{nestedRouted.Raw.Index} offset={nestedState.OffsetY:0.#}");
     }
 
     // Component activation lifecycle: UseActivation fires once per park/minimize transition (never at mount), and a
@@ -12628,18 +12947,21 @@ static class Slice
                 cancelExit && hovered && touchHoverCleared, $"exit={cancelExit} hover={hovered} lifted={touchHoverCleared}");
         }
 
-        // B.9 — TextEl's default Color resolves the LIVE theme's TextFillColorPrimary at construction
-        // (dark #FFFFFF / light #1F1E1B) — guards the Tok.TextPrimary default against a hardcoded revert. Light is Wavee's
-        // warm off-black (the light-mode warm-ramp retint), NOT WinUI's #E4000000; dark stays WinUI-faithful.
+        // B.9 — TextEl's default Color is the BOUND semantic brush (one shared singleton thunk, so text retained inside
+        // stateful controls follows a live re-theme instead of freezing a construction-resolved value, and the recycle
+        // path can identity-match it). The thunk resolves the LIVE theme's TextFillColorPrimary: dark #FFFFFF stays
+        // WinUI-faithful; light is Wavee's warm off-black #1F1E1B (the light-mode warm-ramp retint), NOT WinUI's
+        // #E4000000. Guards against both a hardcoded revert AND a per-element (non-singleton) thunk.
         {
-            var darkDefault = new TextEl("x").Color;
+            var a = new TextEl("x").Color;
+            var b = new TextEl("y").Color;
+            bool singleton = a.IsBound && b.IsBound && a.Thunk is not null && ReferenceEquals(a.Thunk, b.Thunk);
+            bool dark = a.Thunk!() == Tok.TextPrimary && a.Thunk() == ColorF.FromRgba(0xFF, 0xFF, 0xFF);
             Tok.Use(ThemeKind.Light);
-            var lightDefault = new TextEl("x").Color;
+            bool light = a.Thunk() == Tok.TextPrimary && a.Thunk() == ColorF.FromRgba(0x1F, 0x1E, 0x1B);
             Tok.Use(ThemeKind.Dark);
-            bool dark = darkDefault.Value == Tok.TextPrimary && darkDefault.Value == ColorF.FromRgba(0xFF, 0xFF, 0xFF);
-            bool light = lightDefault.Value == ColorF.FromRgba(0x1F, 0x1E, 0x1B);
-            Check("B.9 TextEl default color = theme TextFillColorPrimary (dark #FFFFFF / light #1F1E1B warm off-black)",
-                dark && light, $"dark={dark} light={light}");
+            Check("B.9 TextEl default color = the bound singleton theme brush resolving TextFillColorPrimary (dark #FFFFFF / light #1F1E1B warm off-black)",
+                singleton && dark && light, $"singleton={singleton} dark={dark} light={light}");
         }
 
         // B.10 — PersonPicture geometry contract: initials centered in the circle; the badge plate hangs 4px outside
@@ -21127,6 +21449,7 @@ static class Slice
         Check("8. steady frame does no work (memoized)", !steady.Rendered);
         Check("9. ZERO managed alloc on the paint half (phases 6–11)", steady.HotPhaseAllocBytes == 0, $"{steady.HotPhaseAllocBytes} bytes");
 
+        SidebarCollapseFlipChecks(strings);
         DeviceLostRecoveryChecks(strings);
         FlexChecks(strings);
         ShellDockChecks(strings);
@@ -21156,6 +21479,7 @@ static class Slice
         ContextChecks(strings);
         HoverChecks(strings);
         ScrollHoverChecks(strings);
+        HoverSubtreeChecks(strings);
         StyleChecks();
         AnimValueChecks();
         WrapChecks(strings);
@@ -21325,6 +21649,17 @@ static class Slice
         Check("palette.warm.calibration flattened shell + token anchors (toolbar, file area, card fill, tertiary text)",
             warmFrame && warmFile && warmCard && warmTert, $"frame={warmFrame} file={warmFile} card={warmCard} tertiary={warmTert}");
 
+        var neutral = Tok.NeutralPalette;
+        bool filesFileAreaRaw = PaletteBuilder.NearColor(neutral.LightShell.FileArea, PaletteBuilder.FilesLightFileArea);
+        bool filesFileAreaFlat = PaletteBuilder.NearColor(
+            ColorContrast.Flatten(neutral.LightShell.FileArea, MicaRef.LightDefault),
+            ColorContrast.Flatten(PaletteBuilder.FilesLightFileArea, MicaRef.LightDefault));
+        bool filesChrome = PaletteBuilder.NearColor(neutral.LightShell.Toolbar, ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xB3));
+        bool filesCard = PaletteBuilder.NearColor(neutral.Light.FillCardDefault, ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xB3));
+        Check("palette.files.filearea neutral shell matches Files #C0FCFCFC + LayerOnMica chrome + WinUI card fill",
+            filesFileAreaRaw && filesFileAreaFlat && filesChrome && filesCard,
+            $"raw={filesFileAreaRaw} flat={filesFileAreaFlat} chrome={filesChrome} card={filesCard}");
+
         ThemePalette[] all = [Tok.WarmPalette, Tok.SlatePalette, Tok.NeutralPalette, Tok.AccentTintedPalette];
         bool contrastOk = true;
         bool ladderOk = true;
@@ -21354,8 +21689,10 @@ static class Slice
                     ColorF fFrame = ColorContrast.Flatten(shell.Toolbar, MicaRef.LightDefault);
                     ColorF fRail = ColorContrast.Flatten(shell.Sidebar, MicaRef.LightDefault);
                     ColorF fPage = ColorContrast.Flatten(shell.FileArea, MicaRef.LightDefault);
-                    if (ColorContrast.LuminanceDelta(fFrame, fRail) < 0.05f) { ladderOk = false; detail.Append($" {p.Id}/frame-rail"); }
-                    if (ColorContrast.LuminanceDelta(fRail, fPage) < 0.05f) { ladderOk = false; detail.Append($" {p.Id}/rail-page"); }
+                    // Files-faithful neutral uses the same LayerOnMica token for toolbar + sidebar — skip frame≈rail.
+                    // Rail≈page is also intentionally flat (Files separates the file area via border + ThemeShadow, not luminance).
+                    if (p.Id != "neutral" && ColorContrast.LuminanceDelta(fFrame, fRail) < 0.05f) { ladderOk = false; detail.Append($" {p.Id}/frame-rail"); }
+                    if (p.Id != "neutral" && ColorContrast.LuminanceDelta(fRail, fPage) < 0.05f) { ladderOk = false; detail.Append($" {p.Id}/rail-page"); }
                     if (ColorContrast.LuminanceDelta(fPage, set.FillCardDefault) < 0.05f) { ladderOk = false; detail.Append($" {p.Id}/page-card"); }
                 }
             }

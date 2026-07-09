@@ -14,16 +14,16 @@ public sealed class PathfinderClient
     const string Endpoint = "https://api-partner.spotify.com/pathfinder/v2/query";
 
     readonly IHttpExchange _http;
-    readonly Action<string>? _log;
+    readonly WaveeLogger _log;
 
-    public PathfinderClient(IHttpExchange http, Action<string>? log = null)
+    public PathfinderClient(IHttpExchange http, WaveeLogger log = default)
     {
         _http = http;
         _log = log;
     }
 
     public PathfinderClient(Func<CancellationToken, Task<string>> bearer,
-        Func<CancellationToken, Task<string?>> clientToken, Action<string>? log = null)
+        Func<CancellationToken, Task<string?>> clientToken, WaveeLogger log = default)
         : this(new HttpPipeline(
             new HttpClientExchange(HttpPools.Get(HttpPool.ControlPlane)),
             new AuthMiddleware((_, c) => bearer(c)),
@@ -56,7 +56,7 @@ public sealed class PathfinderClient
             using var resp = await _http.SendAsync(new HttpReq("POST", Endpoint, headers, body), ct).ConfigureAwait(false);
             if (resp.Status is < 200 or >= 300)
             {
-                _log?.Invoke($"pathfinder {operationName} -> HTTP {resp.Status}{(resp.Status == 400 ? " (stale persisted-query hash - needs recapture)" : "")}");
+                _log.Info($"pathfinder {operationName} -> HTTP {resp.Status}{(resp.Status == 400 ? " (stale persisted-query hash - needs recapture)" : "")}");
                 return null;
             }
             using var ms = new MemoryStream();
@@ -64,7 +64,7 @@ public sealed class PathfinderClient
             return ms.ToArray();
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch (Exception ex) { _log?.Invoke("pathfinder " + operationName + " error: " + ex.Message); return null; }
+        catch (Exception ex) { _log.Info("pathfinder " + operationName + " error: " + ex.Message); return null; }
     }
 
     public static byte[] BuildBody(string operationName, string sha256Hash, Action<Utf8JsonWriter>? writeVariables)

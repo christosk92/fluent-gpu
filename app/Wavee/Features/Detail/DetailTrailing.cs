@@ -549,7 +549,7 @@ sealed class AlbumTrailing : Component
                             : new TextEl(artist.Bio!) { Size = 13f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.CharacterEllipsis },
                     ],
                 },
-                Embed.Comp(() => new FollowButton(artist.Uri)),
+                Embed.Comp(() => new FollowButton(artist.Uri, artist.Name)),
             ],
         };
     }

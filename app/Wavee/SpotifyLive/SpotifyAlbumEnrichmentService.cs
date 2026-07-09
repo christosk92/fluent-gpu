@@ -21,10 +21,10 @@ sealed class SpotifyAlbumEnrichmentService : IAlbumEnrichmentService
     readonly ExtendedMetadataSource _metadata;
     readonly ExtensionEtagCache? _extensions;
     readonly IStore _store;
-    readonly Action<string>? _log;
+    readonly WaveeLogger _log;
 
     public SpotifyAlbumEnrichmentService(PathfinderResource pathfinder, ExtendedMetadataSource metadata, IStore store,
-        Action<string>? log = null, ExtensionEtagCache? extensions = null)
+        WaveeLogger log = default, ExtensionEtagCache? extensions = null)
     {
         _pathfinder = pathfinder;
         _metadata = metadata;
@@ -118,7 +118,7 @@ sealed class SpotifyAlbumEnrichmentService : IAlbumEnrichmentService
                 ? await _extensions.GetPayloadAsync(albumUri, Xm.ExtensionKind.RecommendedPlaylists, ct).ConfigureAwait(false)
                 : await _metadata.GetExtensionAsync(albumUri, Xm.ExtensionKind.RecommendedPlaylists, ct).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException) { _log?.Invoke("RECOMMENDED_PLAYLISTS fetch: " + ex.Message); return Array.Empty<PlaylistSummary>(); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { _log.Info("RECOMMENDED_PLAYLISTS fetch: " + ex.Message); return Array.Empty<PlaylistSummary>(); }
         if (refsPayload is null) return Array.Empty<PlaylistSummary>();
 
         Xm.RecommendedPlaylists refs;
@@ -137,7 +137,7 @@ sealed class SpotifyAlbumEnrichmentService : IAlbumEnrichmentService
                 ? await _extensions.GetPayloadsAsync(requests, ct).ConfigureAwait(false)
                 : await _metadata.GetExtensionsAsync(requests, ct).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException) { _log?.Invoke("LIST_METADATA_V2 fetch: " + ex.Message); return Array.Empty<PlaylistSummary>(); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { _log.Info("LIST_METADATA_V2 fetch: " + ex.Message); return Array.Empty<PlaylistSummary>(); }
 
         var result = new List<PlaylistSummary>(uris.Length);
         foreach (var uri in uris)   // preserve the recommended order
@@ -168,7 +168,7 @@ sealed class SpotifyAlbumEnrichmentService : IAlbumEnrichmentService
                     _store.UpsertPlaylist(new Playlist(Id(uri), uri, meta.Name, desc, owner, cover, 0, Source: "spotify"));
                 }
             }
-            catch (InvalidProtocolBufferException ex) { _log?.Invoke("LIST_METADATA_V2 parse: " + ex.Message); }
+            catch (InvalidProtocolBufferException ex) { _log.Info("LIST_METADATA_V2 parse: " + ex.Message); }
         }
         return result;
     }

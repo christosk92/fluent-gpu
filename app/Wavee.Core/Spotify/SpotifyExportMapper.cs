@@ -844,7 +844,10 @@ public static class SpotifyExportMapper
                 return new HomeCard(uri, name, HtmlText(StrAt(data, "description")) ?? StrAt(data, "ownerV2", "data", "name"),
                     ImagesCover(data) ?? EntityImage(data), HomeCardKind.Playlist, Accent: ExtractedAccent(data));
             case "Artist":
-                return new HomeCard(uri, name, "Artist", ArtistAvatar(data) ?? EntityImage(data), HomeCardKind.Artist, Accent: ExtractedAccent(data));
+                // Artist entities expose their display name under profile.name (albums/playlists use top-level name).
+                // Reading only data.name produced photo-only cards whose sole caption was the generic "Artist" label.
+                var artistName = StrAt(data, "profile", "name") ?? name;
+                return new HomeCard(uri, artistName, "Artist", ArtistAvatar(data) ?? EntityImage(data), HomeCardKind.Artist, Accent: ExtractedAccent(data));
             default:
                 return null;
         }

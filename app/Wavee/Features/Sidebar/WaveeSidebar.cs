@@ -22,7 +22,8 @@ namespace Wavee;
 //               row's direct child, so the content column re-solves and tiles against it frame-by-frame — gap-free, no fill.
 //   • sections— Expander's reveal idiom: an always-mounted clip wrapper whose height eases 0↔auto (rows below reflow).
 //   • rows    — ItemReflowTransition: enter-fade on mount (skeleton→real) + slide to new Y on reorder.
-//   • body    — a keyed cross-fade between the compact rail and the expanded layout (two intentionally-different trees).
+//   • body    — compact and expanded layouts stay mounted at stable widths; the shell reveals the expanded tree through
+//               its animated pane clip. This mirrors WinUI SplitView and prevents remount/text-reflow flicker.
 //   • pill    — a single overlay accent pill that GLIDES to the selected row (NavIndicator), positioned by MEASURING
 //               the row's laid-out rect (robust to collapsible sections + async playlists — no hand-computed geometry).
 sealed class WaveeSidebar : Component
@@ -30,6 +31,7 @@ sealed class WaveeSidebar : Component
     readonly Signal<Route> _route;
     readonly Action<string, string?> _go;
     readonly Signal<bool> _compact;
+    readonly Signal<float> _expandedWidth;
     readonly Signal<bool> _pinnedOpen = new(true);
     readonly Signal<bool> _libOpen = new(true);
     readonly Signal<bool> _plOpen = new(true);
@@ -59,19 +61,15 @@ sealed class WaveeSidebar : Component
         TransitionChannels.Position, TransitionDynamics.Spring(0.18f, 1f), SizeMode.Reveal,
         Enter: new EnterExit(Dx: -8f, Opacity: 0f, Active: true),
         DelayMs: MathF.Min(visualIndex * 8f, 48f));
-    // Body cross-fade for the compact↔expanded swap (the two bodies are intentionally different layouts).
-    static readonly LayoutTransition BodyFade = new(
-        TransitionChannels.Opacity, TransitionDynamics.Spring(0.20f, 1f), SizeMode.Reveal,
-        Enter: new EnterExit(Opacity: 0f, Active: true));
     // Section open/close reveal: the body's layout height eases 0↔auto through real layout so rows below reflow,
     // riding the content's bottom edge (slide-out-from-under-the-header). Mirrors Expander.cs:83-87.
     static readonly LayoutTransition SectionReveal = new(
         TransitionChannels.Size, TransitionDynamics.Tween(220f, Easing.SmoothOut),
         Size: SizeMode.Reflow, Anchor: SizeAnchor.Trailing);
 
-    public WaveeSidebar(Signal<Route> route, Action<string, string?> go, Signal<bool> compact)
+    public WaveeSidebar(Signal<Route> route, Action<string, string?> go, Signal<bool> compact, Signal<float> expandedWidth)
     {
-        _route = route; _go = go; _compact = compact;
+        _route = route; _go = go; _compact = compact; _expandedWidth = expandedWidth;
     }
 
     public override Element Render()
@@ -96,44 +94,47 @@ sealed class WaveeSidebar : Component
         bool libOpen = _libOpen.Value;
         bool plOpen = _plOpen.Value;
 
-        Element body = compact ? CompactBody(sel, playlists) : ExpandedBody(stats, playlists, sel);
-        // Keyed cross-fade: the swap remounts a fresh wrapper (key flips), so the incoming body fades in via BodyFade.
-        BoxEl bodyWrapped = new BoxEl { Key = compact ? "rail" : "full", Animate = BodyFade, Children = [ body ] };
+        var pillState = ComputePillState(sel, pinnedOpen, libOpen, plOpen, playlists);
+        if (compact) pillState = pillState with { Visible = false };
+        Element expandedContent = ZStack(
+            new BoxEl { Key = "full", Direction = 1, Grow = 1f, Children = [ ExpandedBody(stats, playlists, sel) ] },
+            Ctx.Provide(Pill, pillState, Embed.Comp(() => new WaveeSelPill(_rowNodes, () => _contentNode)))
+        ) with { OnRealized = h => _contentNode = h };
 
-        Element content;
-        if (compact)
+        // Both variants remain mounted. The expanded branch always measures at the persisted OPEN width, even while the
+        // outer pane is compact, so its text never wraps at 56 DIP and never flashes through intermediate line breaks.
+        // Toggling only changes which retained branch is painted/hit-testable; the outer shell owns the visible clip.
+        Element expandedLayer = new BoxEl
         {
-            // Capture the root even when the first mount is compact. The compact root is reused when it updates into
-            // the expanded ZStack, and OnRealized is mount-only, so the expanded-only callback would never fire.
-            content = bodyWrapped with { OnRealized = h => _contentNode = h }; // compact rail = background-fill selection, no pill
-        }
-        else
+            Key = "expanded-layer", Direction = 1, Grow = 1f, Shrink = 0f,
+            Width = Prop.Of(() => _expandedWidth.Value), ClipToBounds = true,
+            Opacity = compact ? 0f : 1f, HitTestVisible = !compact,
+            Children = [ ScrollView(expandedContent) with { Grow = 1f, AutoEdgeFade = true } ],
+        };
+        Element compactLayer = new BoxEl
         {
-            var pillState = ComputePillState(sel, pinnedOpen, libOpen, plOpen, playlists);
-            content = ZStack(
-                bodyWrapped,
-                Ctx.Provide(Pill, pillState, Embed.Comp(() => new WaveeSelPill(_rowNodes, () => _contentNode)))
-            ) with { OnRealized = h => _contentNode = h };
-        }
+            Key = "compact-layer", Direction = 1, Grow = 1f, Shrink = 0f, Width = 56f,
+            Opacity = compact ? 1f : 0f, HitTestVisible = compact,
+            Children = [ ScrollView(CompactBody(sel, playlists)) with { Grow = 1f, AutoEdgeFade = true } ],
+        };
 
         return new BoxEl
         {
-            // We FILL the shell-wrapper "pane" (WaveeShell.cs), which owns the animated width (56↔300, SidebarStyles.xaml:45-47)
-            // and the SizeMode.Reflow that makes the content column track it. Cross-stretch sets our width = the pane's
-            // (animated) width; Grow=1f fills its height. We read `compact` only to pick the body (rail vs full).
+            // Fill the shell pane. Its model width commits directly to 56/open-width; SizeMode.Reveal animates only the
+            // presented clip, while the retained expanded layer above remains measured at its stable open width.
             Grow = 1f,
             // No corners: the sidebar is flush chrome anchored to the toolbar/title chrome — NOT a detached rounded card
             // (the WaveeMusic Sidebar.BackgroundBrush = LayerOnMicaBaseAlt pane, App.xaml:38, is part of the shell frame).
             // No Fill here: the SidebarPane (WaveeShell.cs) owns the chrome fill, so the resize content-fade dims the
             // CONTENT over a solid chrome backing instead of dissolving the chrome to the transparent root.
-            Direction = 1, ClipToBounds = true,
+            Direction = 1, ZStack = true, ClipToBounds = true,
             // AutoEdgeFade: the engine's opt-in premium edge-scroller — a TRUE alpha fade that feathers only the edge(s)
             // that currently overflow (top when scrolled down, bottom when more is below), ramped with the scroll offset,
             // so rows dissolve into the sidebar chrome as they leave the viewport. (The default surface-colour EdgeCues is
             // invisible on our translucent chrome, hence the explicit alpha fade.)
             // The scrollbar uses the standard auto-hide behavior; hover/wheel now reaches this ScrollView because the
             // shell resize overlay no longer covers the sidebar hit-test branch.
-            Children = [ ScrollView(content) with { Grow = 1f, AutoEdgeFade = true } ],
+            Children = [ expandedLayer, compactLayer ],
         };
     }
 

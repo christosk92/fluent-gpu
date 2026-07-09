@@ -79,7 +79,7 @@ public class ReconnectResyncTests
                 s => revs.TryGetValue(s, out var r) ? r : null, (s, r) => revs[s] = r, Hydrate);
             Mut = new MutationEngine(Store, new IMutationStrategy[] { new SetReplayStrategy() });
             Sync = new LibrarySync(Store, pf, cf, Mut, new SeqTransport(Seq),
-                () => Ctx, () => "bob", _ => { }, _cts.Token);
+                () => Ctx, () => "bob", default, _cts.Token);
         }
 
         public async ValueTask DisposeAsync() { await Sync.DisposeAsync(); _cts.Cancel(); _cts.Dispose(); }

@@ -24,13 +24,13 @@ public static class MediaCard
 
     static ColorF AccentCardFill(ColorF? accent) =>
         accent is { } a
-            ? ColorF.Lerp(Tok.FillCardSecondary, a, Tok.Theme == ThemeKind.Dark ? 0.35f : 0.22f)
-            : Tok.FillCardSecondary;
+            ? ColorF.Lerp(Tok.FillCardDefault, a, Tok.Theme == ThemeKind.Dark ? 0.12f : 0.08f)
+            : Tok.FillCardDefault;
 
     static ColorF AccentCardHoverFill(ColorF? accent) =>
         accent is { } a
-            ? ColorF.Lerp(Tok.FillCardDefault, a, Tok.Theme == ThemeKind.Dark ? 0.40f : 0.28f)
-            : Tok.FillCardDefault;
+            ? ColorF.Lerp(Tok.FillControlSecondary, a, Tok.Theme == ThemeKind.Dark ? 0.18f : 0.12f)
+            : Tok.FillControlSecondary;
 
     static Element ArtworkOrLiked(Image? cover, string uri, float width, float height, float radius, string? morphKey = null, int decodePx = 0, Element? diagnostics = null)
     {
@@ -57,20 +57,23 @@ public static class MediaCard
         float inner = MathF.Max(48f, cardW - 2f * Pad);          // cover edge = card width minus side padding
         float r = circular ? inner / 2f : WaveeRadius.Card;
 
-        var coverStack = ZStack(
-            // A neutral shimmer tile sits behind the art so a card is never an empty box — it breathes while the real
-            // art loads and settles once it lands (or fails: some Spotify covers live on an auth-gated host we can't
-            // fetch). Shares the decode handle with the Image below (ShelfDecodePx) so it reads the same load-state.
-            cover is null && LikedSongsArtwork.IsLikedUri(uri)
-                ? new BoxEl { Width = inner, Height = inner }
-                : Surfaces.Shimmer(cover?.Url, (int)ShelfDecodePx, (int)ShelfDecodePx, inner, inner, r),
-            // morphKey ⇒ this cover is a connected-animation (Hero) participant. Transparent placeholder so the gradient
-            // shows through until the image arrives. A cover-less playlist (MosaicTiles set) renders a 2×2 album mosaic.
-            (cover is null && LikedSongsArtwork.IsLikedUri(uri)
+        Element face = circular
+            // A missing artist photo must still be an intentional card, not a blank gray rectangle. PersonPicture gives
+            // us WinUI initials/contact fallback and the same circular crop when a real URL is present.
+            ? PersonPicture.Create("", inner, displayName: title, imageSourcePath: cover?.Url)
+            : cover is null && LikedSongsArtwork.IsLikedUri(uri)
                 ? LikedSongsArtwork.Cover(inner, r, morphKey)
                 : cover?.MosaicTiles is { Count: >= 4 } mtiles
-                ? Surfaces.Mosaic(mtiles, inner, inner, r)
-                : Image(cover?.Url ?? "", ImageFit.Cover, 1f, ShelfDecodePx, r, placeholder: ColorF.Transparent) with { MorphId = morphKey }),
+                    ? Surfaces.Mosaic(mtiles, inner, inner, r)
+                    : ZStack(
+                        // A neutral shimmer tile sits behind the art so a card is never an empty box — it breathes while
+                        // the real art loads and settles once it lands.
+                        Surfaces.Shimmer(cover?.Url, (int)ShelfDecodePx, (int)ShelfDecodePx, inner, inner, r),
+                        Image(cover?.Url ?? "", ImageFit.Cover, 1f, ShelfDecodePx, r, placeholder: ColorF.Transparent)
+                            with { MorphId = morphKey });
+
+        var coverStack = ZStack(
+            face,
             // The now-playing equalizer (bottom-left, when this card's context is playing) + the play/pause FAB
             // (bottom-right, REVEALED ON HOVER). Reactive: subscribes to the playback bridge. The container carries NO
             // OnClick, so the hit walks up to the card (its HoverScale fires + the FAB reveals off the card's hover);
@@ -88,8 +91,9 @@ public static class MediaCard
             Direction = 1, Gap = Pad, Grow = 1f,
             Padding = new Edges4(Pad, Pad, Pad, WaveeSpace.M),
             Corners = CornerRadius4.All(WaveeRadius.Card),
-            Fill = Tok.FillCardSecondary, HoverFill = Tok.FillCardDefault,
+            Fill = Tok.FillCardDefault, HoverFill = Tok.FillControlSecondary,
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
+            Shadow = Elevation.Card,
             HoverScale = 1.02f, PressScale = 0.99f, ClipToBounds = true,
             OnClick = onClick,
             Children =
@@ -104,8 +108,8 @@ public static class MediaCard
                         // tall a verbose card can grow (and thus the whole uniform row); short text renders fewer lines.
                         WaveeType.TrackTitle(title) with { Width = inner, Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.CharacterEllipsis },
                         // The description can be an HTML fragment (links to artists/playlists, bold) — parse → rich spans
-                        // (links accent + clickable via onNavUri, bold rendered, entities decoded), up to 3 lines.
-                        RichText.Of(subtitle, 12f, Tok.TextSecondary, Tok.AccentTextPrimary, inner, 3, onNavUri),
+                        // (links accent + clickable via onNavUri, bold rendered, entities decoded), capped at two lines.
+                        RichText.Of(subtitle, 12f, Tok.TextSecondary, Tok.AccentTextPrimary, inner, 2, onNavUri),
                     ],
                 },
             ],
@@ -137,6 +141,7 @@ public static class MediaCard
             Corners = CornerRadius4.All(WaveeRadius.Card),
             Fill = AccentCardFill(accent), HoverFill = AccentCardHoverFill(accent),
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
+            Shadow = Elevation.Card,
             HoverScale = 1.02f, PressScale = 0.99f, OnClick = onClick,
             Children =
             [
@@ -166,8 +171,9 @@ public static class MediaCard
             Direction = 1, Gap = WaveeSpace.S, Grow = 1f, ClipToBounds = true,
             Padding = new Edges4(Pad, Pad, Pad, WaveeSpace.M),
             Corners = CornerRadius4.All(WaveeRadius.Card),
-            Fill = Tok.FillCardSecondary, HoverFill = Tok.FillCardDefault,
+            Fill = Tok.FillCardDefault, HoverFill = Tok.FillControlSecondary,
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
+            Shadow = Elevation.Card,
             HoverScale = 1.02f, PressScale = 0.99f, OnClick = onClick,
             Children =
             [
@@ -195,6 +201,7 @@ public static class MediaCard
             Direction = 0, Height = QuickH, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
             Corners = CornerRadius4.All(WaveeRadius.Card), Fill = AccentCardFill(accent), HoverFill = AccentCardHoverFill(accent),
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault, ClipToBounds = true, OnClick = onClick,
+            Shadow = Elevation.Card,
             Children =
             [
                 // Surfaces.Artwork = a neutral shimmer/placeholder tile + the real art on top (graceful when the cover
@@ -312,7 +319,9 @@ public static class MediaCard
         Width = size, Height = size, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
         Corners = CornerRadius4.All(size / 2f),
         Fill = Tok.AccentDefault, HoverFill = Tok.AccentSecondary, PressedFill = Tok.AccentTertiary,
-        Shadow = Elevation.Card, HoverScale = 1.07f, PressScale = 0.92f,
+        // The FAB already lives inside a clipped cover. Scaling its rounded plate past its retained paint bounds caused
+        // the lower-right sector to be cut out (the visible "Pac-Man" wedge). Keep the plate geometry stable; color and
+        // the card's own press response still provide hover/press feedback.
         OnClick = onClick, Cursor = CursorId.Hand,
         Children = [ FabGlyph(glyph, size * 0.42f, Tok.TextOnAccentPrimary) ],
     };

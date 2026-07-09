@@ -901,6 +901,18 @@ phase 7  (animation): the tracks integrate toward identity; WorldTransform[] rec
 
 ### 5.9 Reduced motion
 
+Interactive resizing is a separate policy from accessibility reduced motion. `Motion.LayoutTransitionsSuppressed` is
+an owner-safe source bitmask used by the window move/size loop and app-owned resize grips. While set, layout projections
+are **not started**: a bounds change snaps the node onto its just-laid-out geometry — its in-flight structural tracks
+(the FLIP position/scale axes + the reveal/relayout/reflow size axes) are cancelled and its transform/presented-size
+overrides cleared through the settle/restore path (`SizeMode.Relayout`'s declared-`LayoutInput` restore runs), so
+geometry follows the pointer with no stale translate or overlap. A frame on which the window actually changed size
+widens this past the modal loop — every FLIP node is snapped the same way before layout — so maximize/restore/snap and
+programmatic resizes (which carry no modal loop) are covered too. Opacity/spinner feedback and the OS-derived
+`Motion.ReducedMotion` value are unchanged: reduced motion keeps its own 1 ms terminal-path snap (and still cross-fades
+opacity). `LayoutTransition.Axes` can restrict size projection to width or height, preventing an author-owned settling
+dimension from taking over a continuously parent-owned dimension.
+
 ```csharp
 public readonly struct ReducedMotionState { public readonly bool Enabled; public readonly uint Epoch; }
 ReducedMotionState UseReducedMotion();         // reads PAL (SPI_GETCLIENTAREAANIMATION); Epoch projects to DepKey

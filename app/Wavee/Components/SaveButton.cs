@@ -19,7 +19,8 @@ sealed class SaveButton : Component
     readonly string _uri;
     readonly float _glyph;
     readonly float _box;
-    public SaveButton(string uri, float glyph = 16f, float box = 40f) { _uri = uri; _glyph = glyph; _box = box; }
+    readonly string? _name;   // display-only: names the item in the notification-center activity entry
+    public SaveButton(string uri, float glyph = 16f, float box = 40f, string? name = null) { _uri = uri; _glyph = glyph; _box = box; _name = name; }
 
     public override Element Render()
     {
@@ -33,7 +34,7 @@ sealed class SaveButton : Component
             HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
             HoverScale = 1.06f, PressScale = 0.9f,
             Role = AutomationRole.Button,
-            OnClick = () => lib.ToggleSaved(_uri),
+            OnClick = () => lib.ToggleSaved(_uri, _name),
             Children = [Icon(saved ? Mdl.HeartFill : Icons.Heart, _glyph, saved ? Tok.AccentTextPrimary : Tok.TextSecondary)],
         };
     }
@@ -43,7 +44,8 @@ sealed class SaveButton : Component
 sealed class FollowButton : Component
 {
     readonly string _uri;
-    public FollowButton(string uri) { _uri = uri; }
+    readonly string? _name;   // display-only: names the profile in the notification-center activity entry
+    public FollowButton(string uri, string? name = null) { _uri = uri; _name = name; }
 
     public override Element Render()
     {
@@ -57,7 +59,7 @@ sealed class FollowButton : Component
             BorderWidth = 1.5f, BorderColor = following ? Tok.AccentDefault : Tok.StrokeControlDefault,
             HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
             Role = AutomationRole.Button, Cursor = CursorId.Hand,
-            OnClick = () => lib.ToggleSaved(_uri),
+            OnClick = () => lib.ToggleSaved(_uri, _name),
             Children =
             [
                 Icon(following ? Mdl.HeartFill : Icons.Heart, 14f, following ? Tok.AccentTextPrimary : Tok.TextPrimary),

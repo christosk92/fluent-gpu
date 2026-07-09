@@ -40,7 +40,7 @@ public sealed class Resource<TKey, TValue> where TKey : notnull
     readonly Func<TValue, TimeSpan?>? _ttlOf;
     readonly int _maxEntries;
     readonly string? _name;
-    readonly Action<string>? _debugLog;
+    readonly WaveeLogger _debugLog;
     readonly object _gate = new();
     readonly Dictionary<TKey, Entry> _cache = new();
     int _fetchCount;
@@ -63,7 +63,7 @@ public sealed class Resource<TKey, TValue> where TKey : notnull
     }
 
     public Resource(Func<TKey, SessionContext, Task<TValue>> fetch, FreshnessPolicy fresh, Func<SessionContext> ctx,
-        Func<TValue, TimeSpan?>? ttlOf = null, int maxEntries = 0, string? name = null, Action<string>? debugLog = null)
+        Func<TValue, TimeSpan?>? ttlOf = null, int maxEntries = 0, string? name = null, WaveeLogger debugLog = default)
     {
         _fetch = fetch;
         _fresh = fresh;
@@ -260,7 +260,7 @@ public sealed class Resource<TKey, TValue> where TKey : notnull
     void LogHitMiss(string kind)
     {
         if (_name is null) return;
-        _debugLog?.Invoke($"resource {_name}: {kind}");
+        _debugLog.Debug($"resource {_name}: {kind}");
     }
 
     bool IsStale(Entry e)

@@ -35,7 +35,7 @@ public sealed class ExtensionEtagCache
     readonly Resource<ExtensionKey, CachedExtension> _resource;
     readonly SemaphoreSlim _batchGate = new(1, 1);
 
-    public ExtensionEtagCache(ExtendedMetadataSource source, Func<SessionContext> ctx, Action<string>? log = null, int maxEntries = 2048)
+    public ExtensionEtagCache(ExtendedMetadataSource source, Func<SessionContext> ctx, WaveeLogger log = default, int maxEntries = 2048)
     {
         _source = source;
         _resource = new Resource<ExtensionKey, CachedExtension>(

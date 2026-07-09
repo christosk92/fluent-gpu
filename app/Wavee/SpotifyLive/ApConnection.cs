@@ -22,12 +22,12 @@ public sealed class ApConnection : IDisposable
     readonly IDuplexStream _stream;
     readonly ApCodec _codec;
     readonly AudioKeyDispatcher _keys = new();
-    readonly Action<string>? _log;
+    readonly WaveeLogger _log;
     readonly SemaphoreSlim _sendLock = new(1, 1);
     readonly CancellationTokenSource _cts = new();
     Task? _pump;
 
-    ApConnection(IDuplexStream stream, ApCodec codec, Action<string>? log)
+    ApConnection(IDuplexStream stream, ApCodec codec, WaveeLogger log)
     {
         _stream = stream;
         _codec = codec;
@@ -36,17 +36,17 @@ public sealed class ApConnection : IDisposable
 
     /// <summary>Adopt an already-handshaken AP socket + its negotiated codec (e.g. the login socket) as the persistent
     /// channel, and start the read-pump. The returned connection owns the socket lifetime.</summary>
-    public static ApConnection Adopt(IDuplexStream stream, ApCodec codec, Action<string>? log)
+    public static ApConnection Adopt(IDuplexStream stream, ApCodec codec, WaveeLogger log)
     {
         var c = new ApConnection(stream, codec, log);
         c._pump = Task.Run(() => c.PumpAsync(c._cts.Token));
-        log?.Invoke("AP channel adopted (login socket reused) — audio-key path ready");
+        log.Info("AP channel adopted (login socket reused) — audio-key path ready");
         return c;
     }
 
     /// <summary>Open a DEDICATED AP socket + handshake (used only when not reusing the login socket).</summary>
     public static async Task<ApConnection> ConnectAsync(string apHost, int apPort, Credential cred, string deviceId,
-        Action<string>? log, CancellationToken ct)
+        WaveeLogger log, CancellationToken ct)
     {
         var tcp = await TcpDuplexStream.ConnectAsync(apHost, apPort, ct, IdleReadTimeout).ConfigureAwait(false);
         try
@@ -92,7 +92,7 @@ public sealed class ApConnection : IDisposable
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { /* disposed */ }
         catch (Exception ex)
         {
-            _log?.Invoke("AP channel dropped: " + ex.Message);
+            _log.Info("AP channel dropped: " + ex.Message);
             _keys.FailAll(ex);   // pending key waiters fail → callers retry / fall back
         }
     }

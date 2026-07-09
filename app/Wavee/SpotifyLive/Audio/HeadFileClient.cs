@@ -16,11 +16,11 @@ public sealed class HeadFileClient
     const int MaxHeadBytes = 80 * 1024;   // keep below LOH; enough for container headers and early audio.
 
     readonly Resource<string, HeadBytes> _cache;
-    readonly Action<string>? _log;
+    readonly WaveeLogger _log;
 
     public sealed record HeadBytes(byte[] Data, float NormalizationGainDb);
 
-    public HeadFileClient(IHttpExchange http, Func<SessionContext> ctx, Action<string>? log = null)
+    public HeadFileClient(IHttpExchange http, Func<SessionContext> ctx, WaveeLogger log = default)
     {
         _log = log;
         _cache = new Resource<string, HeadBytes>(FetchAsync, new FreshnessPolicy.Immutable(), ctx,
@@ -42,7 +42,7 @@ public sealed class HeadFileClient
         // heads-fa-tls13.spotifycdn.com/head/{fileId} — plain GET, no auth, no Range
         var sw = Stopwatch.StartNew();
         var url = $"https://heads-fa-tls13.spotifycdn.com/head/{fileIdHex.ToLowerInvariant()}";
-        _log?.Invoke($"head {fileIdHex}: fetch start max={MaxHeadBytes}B");
+        _log.Info($"head {fileIdHex}: fetch start max={MaxHeadBytes}B");
         try
         {
             var resp = await _http.SendAsync(new HttpReq("GET", url, new Dictionary<string, string>()), CancellationToken.None).ConfigureAwait(false);
@@ -60,13 +60,13 @@ public sealed class HeadFileClient
                 }
                 var data = ms.ToArray();
                 float gain = data.Length > 148 ? BitConverter.ToSingle(data, 144) : 0f;
-                _log?.Invoke($"head {fileIdHex}: fetch ok bytes={data.Length} gain={gain:0.0}dB elapsed={sw.ElapsedMilliseconds}ms");
+                _log.Info($"head {fileIdHex}: fetch ok bytes={data.Length} gain={gain:0.0}dB elapsed={sw.ElapsedMilliseconds}ms");
                 return new HeadBytes(data, gain);
             }
         }
         catch (Exception ex)
         {
-            _log?.Invoke($"head {fileIdHex}: fetch failed elapsed={sw.ElapsedMilliseconds}ms {ex.GetType().Name}: {ex.Message}");
+            _log.Info($"head {fileIdHex}: fetch failed elapsed={sw.ElapsedMilliseconds}ms {ex.GetType().Name}: {ex.Message}");
             throw;
         }
     }

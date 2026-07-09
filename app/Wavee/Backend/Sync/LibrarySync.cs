@@ -56,7 +56,7 @@ public sealed class LibrarySync : IAsyncDisposable
     readonly CollectionEchoRing? _echoRing;   // §7.1 — drop our own accepted-write echoes before any store work
     readonly Func<SessionContext> _ctx;
     readonly Func<string> _username;
-    readonly Action<string> _log;
+    readonly WaveeLogger _log;
     readonly CancellationToken _ct;
     readonly Channels.Channel<SyncCommand> _queue = Channels.Channel.CreateUnbounded<SyncCommand>(new Channels.UnboundedChannelOptions { SingleReader = true });
     readonly Task _consumer;
@@ -81,7 +81,7 @@ public sealed class LibrarySync : IAsyncDisposable
     public int ReconnectResyncs, ReconnectResyncsRateLimited;                         // §6.2
 
     public LibrarySync(IStore store, PlaylistFetcher playlists, CollectionFetcher collections, MutationEngine mutations,
-        ITransport mutationTransport, Func<SessionContext> ctx, Func<string> username, Action<string> log, CancellationToken ct,
+        ITransport mutationTransport, Func<SessionContext> ctx, Func<string> username, WaveeLogger log, CancellationToken ct,
         CollectionEchoRing? echoRing = null)
     {
         _store = store;
@@ -177,12 +177,12 @@ public sealed class LibrarySync : IAsyncDisposable
                 {
                     try { await Dispatch(cmd).ConfigureAwait(false); }
                     catch (OperationCanceledException) when (_ct.IsCancellationRequested) { cmd.Done?.TrySetResult(); return; }
-                    catch (Exception ex) { _log("sync: " + cmd.Kind + " failed: " + ex.Message); }
+                    catch (Exception ex) { _log.Info("sync: " + cmd.Kind + " failed: " + ex.Message); }
                     finally { cmd.Done?.TrySetResult(); }
                 }
         }
         catch (OperationCanceledException) { /* cancelled (logout) — fall through to complete stragglers */ }
-        catch (Exception ex) { _log("sync: loop crashed: " + ex.Message); }
+        catch (Exception ex) { _log.Info("sync: loop crashed: " + ex.Message); }
         finally
         {
             while (reader.TryRead(out var leftover)) leftover.Done?.TrySetResult();
@@ -221,7 +221,7 @@ public sealed class LibrarySync : IAsyncDisposable
             rootCount = _store.Rootlist().Count(e => e.Kind == 0);
         }
         catch (OperationCanceledException) when (_ct.IsCancellationRequested) { throw; }
-        catch (Exception ex) { _log("sync: rootlist hydrate failed: " + ex.Message); }
+        catch (Exception ex) { _log.Info("sync: rootlist hydrate failed: " + ex.Message); }
 
         // (3) the 5 sets sequentially, per-set failures isolated (log + record); retry the failed ones once after 30s.
         var counts = new List<string>(Sets.Length);
@@ -231,12 +231,12 @@ public sealed class LibrarySync : IAsyncDisposable
             _ct.ThrowIfCancellationRequested();
             try { await FetchSetAsync(set).ConfigureAwait(false); counts.Add(set + "=" + _store.SavedUris(set).Count); }
             catch (OperationCanceledException) when (_ct.IsCancellationRequested) { throw; }
-            catch (Exception ex) { failed.Add(set); _log("sync: set '" + set + "' hydrate failed: " + ex.Message); }
+            catch (Exception ex) { failed.Add(set); _log.Info("sync: set '" + set + "' hydrate failed: " + ex.Message); }
         }
         if (failed.Count > 0) ScheduleSetRetry(failed);
 
         // (4) summary.
-        _log($"sync: initial hydrate — {rootCount} rootlist playlists; " + string.Join(", ", counts)
+        _log.Info($"sync: initial hydrate — {rootCount} rootlist playlists; " + string.Join(", ", counts)
             + (failed.Count > 0 ? " (failed: " + string.Join(",", failed) + ", retry in 30s)" : ""));
     }
 
@@ -299,13 +299,13 @@ public sealed class LibrarySync : IAsyncDisposable
                 {
                     try { await _playlists.HydrateUrisAsync(added, _ct).ConfigureAwait(false); Interlocked.Increment(ref HydrateRuns); _store.Bump(uri); }
                     catch (OperationCanceledException) when (_ct.IsCancellationRequested) { throw; }
-                    catch (Exception ex) { _log("sync: hydrate added uris failed: " + ex.Message); }
+                    catch (Exception ex) { _log.Info("sync: hydrate added uris failed: " + ex.Message); }
                 }
                 if (ContainsUpdateList(ops))
                 {
                     try { await _playlists.FetchPlaylistHeaderAsync(uri, _ct).ConfigureAwait(false); }
                     catch (OperationCanceledException) when (_ct.IsCancellationRequested) { throw; }
-                    catch (Exception ex) { _log("sync: playlist header refresh failed: " + ex.Message); }
+                    catch (Exception ex) { _log.Info("sync: playlist header refresh failed: " + ex.Message); }
                 }
                 ClearDirty(uri);
                 Interlocked.Increment(ref PushApplied);
@@ -380,7 +380,7 @@ public sealed class LibrarySync : IAsyncDisposable
                     if (KindForLogicalSet(kv.Key) is { } kind) _store.Bump(kv.Value, kind);
             }
             catch (OperationCanceledException) when (_ct.IsCancellationRequested) { throw; }
-            catch (Exception ex) { _log("sync: direct-apply hydrate failed: " + ex.Message); }
+            catch (Exception ex) { _log.Info("sync: direct-apply hydrate failed: " + ex.Message); }
         }
         Interlocked.Increment(ref PushDirectApplied);
     }
@@ -422,7 +422,7 @@ public sealed class LibrarySync : IAsyncDisposable
     void LogUnknownWireSetOnce(string wireSet)
     {
         bool first; lock (_gate) first = _loggedUnknownSets.Add(wireSet);
-        if (first) _log("sync: ignoring collection push for unknown wire set '" + wireSet + "'");
+        if (first) _log.Info("sync: ignoring collection push for unknown wire set '" + wireSet + "'");
     }
 
     async Task OpenPlaylistHandlerAsync(string uri)
@@ -508,14 +508,14 @@ public sealed class LibrarySync : IAsyncDisposable
             }
         }
         catch (OperationCanceledException) when (_ct.IsCancellationRequested) { throw; }
-        catch (Exception ex) { _log("sync: reconnect rootlist failed: " + ex.Message); }
+        catch (Exception ex) { _log.Info("sync: reconnect rootlist failed: " + ex.Message); }
 
         foreach (var set in Sets)                                                          // (3) token-gated deltas
         {
             _ct.ThrowIfCancellationRequested();
             try { await FetchSetAsync(set).ConfigureAwait(false); }
             catch (OperationCanceledException) when (_ct.IsCancellationRequested) { throw; }
-            catch (Exception ex) { _log("sync: reconnect set '" + set + "' failed: " + ex.Message); }
+            catch (Exception ex) { _log.Info("sync: reconnect set '" + set + "' failed: " + ex.Message); }
         }
 
         List<string> targets;                                                              // (4) open + dirty RESIDENT
@@ -531,11 +531,11 @@ public sealed class LibrarySync : IAsyncDisposable
             if (_store.Membership(uri).Count == 0) continue;   // cold stays lazy (revalidates on open)
             try { await PlaylistRevalidateAsync(uri).ConfigureAwait(false); }
             catch (OperationCanceledException) when (_ct.IsCancellationRequested) { throw; }
-            catch (Exception ex) { _log("sync: reconnect playlist '" + uri + "' failed: " + ex.Message); }
+            catch (Exception ex) { _log.Info("sync: reconnect playlist '" + uri + "' failed: " + ex.Message); }
         }
 
         Interlocked.Increment(ref ReconnectResyncs);
-        _log("sync: reconnect resync complete (" + targets.Count + " playlist revalidations)");
+        _log.Info("sync: reconnect resync complete (" + targets.Count + " playlist revalidations)");
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────────────────────────────────────────────

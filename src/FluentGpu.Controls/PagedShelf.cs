@@ -82,10 +82,15 @@ public static class PagedShelf
         TemplateParts? parts = null,
         Func<int, string>? keyOf = null,
         int overscan = 2,
-        bool measured = false)
+        bool measured = false,
+        // The card subtree derives its dimensions from its arranged cell (aspect ratio/stretch) and ignores cardAt's
+        // width hint. This keeps realized item components subscribed only to their data: a container resize re-fits the
+        // retained cells in layout without scheduling every card component through _cardW.
+        bool cardWidthAgnostic = false)
         => Embed.Comp(() => new PagedShelfCore(count, cardAt, cardHeight, title, header, pager, customPager,
                                                minCardW, maxCardW, gap, rows, perPageOverride, fixedCardW,
-                                               headerGap, edgeFade, prevGlyph, nextGlyph, parts, keyOf, overscan, measured))
+                                               headerGap, edgeFade, prevGlyph, nextGlyph, parts, keyOf, overscan, measured,
+                                               cardWidthAgnostic))
            // SkeletonProxy: the deriver can't see into this component, so hand it the header + a few real cards (at a
            // representative width) to derive — the shelf shimmers as real cards instead of one default bar.
            with { SkeletonProxy = () => ShelfProxy(count, cardAt, header, title, maxCardW, gap, headerGap) };
@@ -107,8 +112,18 @@ public static class PagedShelf
 /// <summary>The stateful core (self-measure → fit → virtualized strip + animated pager). See <see cref="PagedShelf"/>.</summary>
 internal sealed class PagedShelfCore : Component
 {
-    const int MeasuredSampleCap = 12;
-    const int MeasuredRealizeAllCapMin = 8;
+    const int MeasuredSampleCap = 24;
+    // `measured: true` promises that the row is exactly as tall as its tallest card. App shelves are deliberately
+    // bounded (Home 9–10, artist/detail sections ≤16), so realize that normal range in full. Sampling only the first
+    // 8/12 made a later card with a wrapped title taller than the lock and its bottom text was scissored by the viewport.
+    // Very large measured sets retain the virtual-probe fallback; callers with unbounded data should use cardHeight.
+    const int MeasuredRealizeAllCapMin = 24;
+    // Elevated cards paint a soft shadow (≈ OffsetY + Blur, ~6–10px) BELOW their layout box; a node's shadow draws
+    // outside its OWN clip but is scissored by ANCESTOR clips at EXACT layout bounds (no outset). The strip clips twice
+    // at the measured card height — the PartViewport box and the inner scroller viewport — so the clip chain needs
+    // cross-axis headroom below the card or the halo is shaved. The pad lives in the item container's BOTTOM padding so
+    // the card's own measure/height is unchanged (the shadow renders into the pad; both clip edges move below it).
+    const float ShadowClearance = 12f;
     static readonly bool ShelfLog = Environment.GetEnvironmentVariable("FG_SHELFLOG") == "1";
 
     readonly int _count;
@@ -126,31 +141,37 @@ internal sealed class PagedShelfCore : Component
     readonly TemplateParts? _parts;
     readonly Func<int, string>? _keyOf;
     readonly int _overscan;
+    readonly bool _cardWidthAgnostic;
 
     readonly Signal<float> _w = new(0f);              // self-measured available width (no app broker)
     readonly Signal<int> _page = new(0);              // current page (chevrons/pips; re-synced from the settled offset)
     readonly Signal<int> _pageNav = new(0);           // pager NAV intent — only chevron/pip navigation re-arms the glide,
                                                       // a free-scroll page re-sync must NOT snap the strip to the grid
     readonly Signal<float> _measuredH = new(0f);      // probe-locked card height (measured-virtual mode)
+    readonly Signal<float> _cardW = new(0f);          // fitted width consumed by the mounted ItemsView template
     readonly ItemsViewController _ctl = new();
     FillRowVirtualLayout? _layout;                    // stateful — hoisted once, reused across renders
     // SIGNAL (not a field): the re-probe completes by WRITING this — when the re-measured height happens to equal the
     // already-locked value, the equality-gated _measuredH write alone would never re-render us out of probe mode.
     readonly Signal<float> _measuredForCardW = new(float.NaN);
     readonly NodeHandle[] _probeNodes = new NodeHandle[MeasuredSampleCap];
+    NodeHandle _probeHostNode = NodeHandle.Null;   // the invisible probe layer's root — RECORD-culled when not probing
     int _probeSample;
+    int _lastMeasuredNav = -1;
+    int _lastVirtualNav = -1;
 
     public PagedShelfCore(int count, Func<int, float, Element> cardAt, Func<float, float>? cardHeight, string? title,
                           Element? header, ShelfPager pager, Func<ShelfPagerContext, Element>? customPager,
                           float minCardW, float maxCardW, float gap, int rows, int perPageOverride, float fixedCardW,
                           float headerGap, float edgeFade, string prevGlyph, string nextGlyph, TemplateParts? parts,
-                          Func<int, string>? keyOf, int overscan, bool measured)
+                          Func<int, string>? keyOf, int overscan, bool measured, bool cardWidthAgnostic)
     {
         _count = count; _cardAt = cardAt; _cardHeight = cardHeight; _measured = measured; _title = title; _header = header;
         _pager = pager; _customPager = customPager; _minCardW = minCardW; _maxCardW = maxCardW; _gap = gap;
         _rows = Math.Max(1, rows); _perPageOverride = perPageOverride; _fixedCardW = fixedCardW;
         _headerGap = headerGap; _edgeFade = edgeFade; _prevGlyph = prevGlyph; _nextGlyph = nextGlyph;
         _parts = parts; _keyOf = keyOf; _overscan = overscan;
+        _cardWidthAgnostic = cardWidthAgnostic;
     }
 
     public override Element Render()
@@ -160,6 +181,10 @@ internal sealed class PagedShelfCore : Component
 
         // Compute the fit the layout will land at (count-independent), to size the strip + page math.
         var (perPageColumns, cardW) = FillRowVirtualLayout.Fit(w, _minCardW, _maxCardW, _gap, _perPageOverride, _fixedCardW);
+        UseLayoutEffect(() =>
+        {
+            if (!_cardWidthAgnostic && MathF.Abs(_cardW.Peek() - cardW) > 0.25f) _cardW.Value = cardW;
+        }, cardW);
         int perPageItems = Math.Max(1, perPageColumns * (_measured ? 1 : _rows));
         int pageCount = Math.Max(1, (_count + perPageItems - 1) / perPageItems);
         int maxPage = pageCount - 1;
@@ -182,7 +207,8 @@ internal sealed class PagedShelfCore : Component
 
         // Stable hook surface — MeasuredBody (UseRef+effect) vs MeasuredVirtualBody (probe + bring-into-view) used to
         // branch on count, which reordered hook cells → InvalidCastException (EffectCell vs RefHolderCell).
-        bool measuredRealizeAll = _measured && _count <= Math.Max(MeasuredRealizeAllCapMin, perPageColumns * 2);
+        // Pick the structural mode from stable data only. A breakpoint must never replace an ItemsView with a flex strip.
+        bool measuredRealizeAll = _measured && _count <= MeasuredRealizeAllCapMin;
         if (ShelfLog)
             Console.Error.WriteLine($"[shelf] count={_count} w={w:0} cardW={cardW:0} cols={perPageColumns} measured={_measured} realizeAll={measuredRealizeAll} mH={_measuredH.Peek():0.#} mFor={_measuredForCardW.Peek():0.#} sample={_probeSample}");
         // SUBSCRIBED reads (not Peek): the probe effect's height/for-width lock writes are what re-render us out of
@@ -197,7 +223,9 @@ internal sealed class PagedShelfCore : Component
         UseLayoutEffect(() =>
         {
             if (!measuredRealizeAll) return;
-            ScrollMeasuredViewport(viewport.Value, _page.Peek(), perPageColumns, cardW);
+            bool animate = nav != _lastMeasuredNav;
+            _lastMeasuredNav = nav;
+            ScrollMeasuredViewport(viewport.Value, _page.Peek(), perPageColumns, cardW, animate);
         }, nav, perPageColumns, cardW, _count);
 
         UseLayoutEffect(() =>
@@ -221,11 +249,28 @@ internal sealed class PagedShelfCore : Component
             }
         }, cardW, _probeSample);
 
+        // RECORD-cull the permanently-mounted probe layer when it isn't measuring. Opacity=0 alone does NOT stop the
+        // recorder walking the subtree (SceneRecorder early-outs only on a cleared NodeFlags.Visible), so a settled
+        // shelf would record its dozen phantom cards every frame. Clearing Visible skips the walk; layout still runs
+        // (it ignores the flag), so a re-probe measures without a remount. The layer stays MOUNTED (see the probe-cell
+        // contract below) — only its record-visibility toggles. Every needProbe transition coincides with this effect's
+        // dep, and the only structural remount (measuredH crossing 0) flips needProbe too, so _probeHostNode is current.
+        UseLayoutEffect(() =>
+        {
+            if (Context.Scene is not { } scene) return;
+            var host = _probeHostNode;
+            if (host.IsNull || !scene.IsLive(host)) return;
+            if (needProbe) scene.Mark(host, NodeFlags.Visible);
+            else { scene.Unmark(host, NodeFlags.Visible); scene.Mark(host, NodeFlags.PaintDirty); }
+        }, needProbe);
+
         UseLayoutEffect(() =>
         {
             if (measuredRealizeAll || needProbe) return;
-            if (w > 1f) _ctl.StartBringItemIntoView(_page.Peek() * perPageItems, 0f, animate: true);
-        }, nav, w);
+            bool animate = nav != _lastVirtualNav;
+            _lastVirtualNav = nav;
+            if (w > 1f) _ctl.StartBringItemIntoView(_page.Peek() * perPageItems, 0f, animate);
+        }, nav, needProbe);
 
         Element body = _measured
             ? (measuredRealizeAll
@@ -283,7 +328,31 @@ internal sealed class PagedShelfCore : Component
     // ── Measured-virtual body: sample-measure a bounded card set, lock height, then virtualize the strip. ──
     Element MeasuredVirtualBody(int perPageItems, float cardW, bool fade, bool needProbe)
     {
-        if (needProbe)
+        var layout = _layout ??= new FillRowVirtualLayout(_minCardW, _maxCardW, _gap, 1, _perPageOverride, _fixedCardW);
+        int shelfOverscan = Math.Max(_overscan, perPageItems);
+        float measuredH = _measuredH.Value;
+        Element liveItems = ItemsView.Create(
+            _count,
+            i => _cardAt(i, _cardWidthAgnostic
+                ? _maxCardW
+                : (_cardW.Value > 0f ? _cardW.Value : layout.CardW)),
+            RepeatLayout.Custom(layout, horizontal: true),
+            selectionMode: ItemsSelectionMode.None,
+            controller: _ctl,
+            overscan: shelfOverscan,
+            keyOf: _keyOf,
+            grow: 1f,
+            suppressScrollBar: true,
+            autoEdgeFade: fade,
+            onScrollGeometryChanged: PageScrollSync(),
+            // Bottom padding absorbs the shadow clearance: FillRowVirtualLayout stretches this container to the full
+            // viewport cross size (measuredH + clearance), and the card's Grow=1 fills the container's CONTENT box — so
+            // the card stays measuredH tall and its shadow renders into the pad below both clip edges.
+            containerFactory: (i, content, state, onInteraction, onFocusChanged) =>
+                new BoxEl { Direction = 1, Padding = new Edges4(0f, 0f, 0f, ShadowClearance), Children = [content] });
+
+        // Keep this bounded probe layer mounted for the lifetime of a measured-virtual shelf. That makes a width
+        // re-probe a pure update: the live ItemsView remains the same sibling and never flashes out of the tree.
         {
             // Do NOT clear _probeNodes on a RE-probe (cardW changed): the sample cells are KEYED, so the reconciler
             // reuses the realized nodes in place and OnRealized never re-fires — cleared handles would stay null, the
@@ -301,32 +370,36 @@ internal sealed class PagedShelfCore : Component
                     Children = [ _cardAt(idx, cardW) ],
                 };
             }
-            Element probeHost = new BoxEl { Opacity = 0f, Children = sampleCells };
-            return _parts.Apply(PagedShelf.PartViewport, new BoxEl { Direction = 1, Children = [ probeHost ] });
+            Element probeHost = new BoxEl
+            {
+                Opacity = 0f, HitTestVisible = false,
+                // Unpadded measuredH — the probe host is invisible (its own clip cuts nothing on screen) and its cells
+                // measure PURE card height; the shadow-clearance pad lives only on the live strip's container/viewport.
+                Height = measuredH > 0f ? measuredH : float.NaN,
+                ClipToBounds = measuredH > 0f,
+                OnRealized = h => _probeHostNode = h,   // handle for the record-cull toggle (see the needProbe effect)
+                Children = sampleCells,
+            };
+            // On re-probe keep the last good strip visible and interactive. The invisible sample overlays it and the
+            // height lock is replaced only after layout reports a complete new measurement. Constrain the overlay to
+            // the measured shelf width: the probe row's intrinsic width is N×cardW, and letting that width size this
+            // ZStack makes the INNER ScrollEl believe the off-screen strip is its viewport. The outer page then clips
+            // first, paging clamps after ~one click, and the scroller's right edge-fade is emitted off-screen.
+            float viewportW = _w.Value;
+            Element probing = measuredH > 0f
+                ? ZStack(liveItems, probeHost) with { Width = viewportW > 0.5f ? viewportW : float.NaN }
+                : probeHost;
+            return _parts.Apply(PagedShelf.PartViewport, new BoxEl
+            {
+                // + ShadowClearance: the viewport (and the inner scroller it hosts) both clip at this height; the extra
+                // headroom below the card lets the card's soft shadow paint (the pad is inside each item container).
+                Width = viewportW > 0.5f ? viewportW : float.NaN,
+                Height = measuredH > 0f ? measuredH + ShadowClearance : float.NaN,
+                ClipToBounds = true,
+                Animate = MotionRecipes.CardResizeHeight,
+                Children = [ probing ],
+            });
         }
-
-        var layout = _layout ??= new FillRowVirtualLayout(_minCardW, _maxCardW, _gap, 1, _perPageOverride, _fixedCardW);
-        int shelfOverscan = Math.Max(_overscan, perPageItems);
-        float measuredH = _measuredH.Value;
-        Element items = ItemsView.Create(
-            _count,
-            i => _cardAt(i, layout.CardW),
-            RepeatLayout.Custom(layout, horizontal: true),
-            selectionMode: ItemsSelectionMode.None,
-            controller: _ctl,
-            overscan: shelfOverscan,
-            keyOf: _keyOf,
-            grow: 1f,
-            suppressScrollBar: true,
-            autoEdgeFade: fade,
-            onScrollGeometryChanged: PageScrollSync(),
-            containerFactory: (i, content, state, onInteraction, onFocusChanged) => new BoxEl { Direction = 1, Children = [content] });
-        return _parts.Apply(PagedShelf.PartViewport, new BoxEl
-        {
-            Height = measuredH > 0f ? measuredH : float.NaN,
-            ClipToBounds = true,
-            Children = [ items ],
-        });
     }
 
     // ── Measured body (auto-height): NOT virtualized. Lays ALL cards in one flex row; the engine measures each card's
@@ -344,7 +417,9 @@ internal sealed class PagedShelfCore : Component
             // row's width — and the card cross-stretches to cardW. Mirrors the virtualized cell, minus the recycler.
             cells[i] = new BoxEl { Direction = 1, Width = cardW, Children = [ _cardAt(idx, cardW) ] };
         }
-        Element strip = new BoxEl { Direction = 0, Gap = _gap, Children = cells };
+        // Bottom padding sits the content ScrollEl's clip edge below the card shadow; it is OUTSIDE the row's cross
+        // stretch, so cells still stretch to the tallest CARD (the pad does not inflate card height).
+        Element strip = new BoxEl { Direction = 0, Gap = _gap, Padding = new Edges4(0f, 0f, 0f, ShadowClearance), Children = cells };
         return _parts.Apply(PagedShelf.PartViewport, new ScrollEl
         {
             Horizontal = true,
@@ -357,7 +432,7 @@ internal sealed class PagedShelfCore : Component
         });
     }
 
-    void ScrollMeasuredViewport(NodeHandle vp, int page, int perPageColumns, float cardW)
+    void ScrollMeasuredViewport(NodeHandle vp, int page, int perPageColumns, float cardW, bool animate)
     {
         if (Context.Scene is not { } scene || vp.IsNull || !scene.IsLive(vp) || !scene.HasScroll(vp)) return;
 
@@ -370,7 +445,7 @@ internal sealed class PagedShelfCore : Component
         if ((!float.IsNaN(pendCur) && MathF.Abs(pendCur - target) < 0.5f) ||
             (float.IsNaN(pendCur) && MathF.Abs(sc.OffsetX - target) < 0.5f)) return;
 
-        if (Motion.ReducedMotion)
+        if (Motion.ReducedMotion || !animate)
         {
             sc.OffsetX = sc.TargetX = target;
             NodeHandle content = sc.ContentNode;
@@ -408,7 +483,9 @@ internal sealed class PagedShelfCore : Component
         int shelfOverscan = Math.Max(_overscan, perPageItems);
         Element items = ItemsView.Create(
             _count,
-            i => _cardAt(i, layout.CardW),
+            i => _cardAt(i, _cardWidthAgnostic
+                ? _maxCardW
+                : (_cardW.Value > 0f ? _cardW.Value : layout.CardW)),
             RepeatLayout.Custom(layout, horizontal: true),
             selectionMode: ItemsSelectionMode.None,
             controller: _ctl,
@@ -419,12 +496,16 @@ internal sealed class PagedShelfCore : Component
             autoEdgeFade: fade,
             onScrollGeometryChanged: PageScrollSync(),
             // bare passthrough cell, COLUMN so the card cross-stretches to the cell's live width (fills it even mid-resize);
-            // the card carries its own visuals (no ItemContainer selection chrome around it).
-            containerFactory: (i, content, state, onInteraction, onFocusChanged) => new BoxEl { Direction = 1, Children = [content] });
+            // the card carries its own visuals (no ItemContainer selection chrome around it). Single-row only: a bottom
+            // pad absorbs the card's shadow clearance (card stays shelfH, halo paints into the pad below the clip).
+            // Multi-row keeps the old clip — RowHeight(cross) would spread the pad across rows and distort every card,
+            // and interior rows occlude their own shadows against the row below anyway.
+            containerFactory: (i, content, state, onInteraction, onFocusChanged) =>
+                new BoxEl { Direction = 1, Padding = _rows == 1 ? new Edges4(0f, 0f, 0f, ShadowClearance) : default, Children = [content] });
 
         return _parts.Apply(PagedShelf.PartViewport, new BoxEl
         {
-            Height = shelfH > 0f ? shelfH : float.NaN,
+            Height = shelfH > 0f ? (_rows == 1 ? shelfH + ShadowClearance : shelfH) : float.NaN,
             ClipToBounds = true,
             Children = [ items ],
         });

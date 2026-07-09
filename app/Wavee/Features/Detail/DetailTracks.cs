@@ -287,11 +287,14 @@ sealed class TrackList : Component
         _checksVisible = UseComputed(() =>
         {
             if (_h.MultiSelect?.Value == true) return true;
+            // Auto-show only for a MULTI-selection (2+): a plain single click selects a row constantly during normal
+            // browsing and must not flip the whole list into checkbox mode.
             _ = _selection.Version.Value;
-            for (int i = 0; i < _selection.ItemCount; i++)
+            int n = 0;
+            for (int i = 0; i < _selection.ItemCount && n < 2; i++)
                 if (_selection.IsSelected(i) && DisplayTrack(i, _verticalHeader ? VerticalTrackStart : 0) is not null)
-                    return true;
-            return false;
+                    n++;
+            return n >= 2;
         });
         _checksVisibleRead = () => _checksVisible.Value;
         bool checkInset = _checksVisible.Value;
@@ -444,28 +447,30 @@ sealed class TrackList : Component
         // recsOn folds into the key: the ItemsView template + count-signal freeze at mount, so a gate flip (preview→full
         // model load turns CanEditItems on) must REMOUNT the list to swap in the recommendations template. Constant once
         // the full model has landed, so this is a one-time remount, not per-render churn.
-        Element listKeyed = new BoxEl { Key = "list:" + _route.Value.Name + ":" + (_verticalHeader ? "vh:" : "") + "t" + tier + ":d" + density + ":q" + query + ":f" + (int)flags + ":r" + _resetEpoch.Value + (recsOn ? ":rec" : ""), Grow = listGrow, Direction = 1, Children = [list] };
+        Element listKeyed = new BoxEl { Key = "list:" + _route.Value.Name + ":" + (_verticalHeader ? "vh:" : "") + "t" + tier + ":d" + density + ":q" + query + ":f" + (int)flags + ":r" + _resetEpoch.Value + (recsOn ? ":rec" : ""), Grow = listGrow, Shrink = 1f, MinHeight = 0f, Direction = 1, Children = [list] };
 
         Element rightBody = _cfg.HasTrailing ? TrailingBody(listKeyed) : listKeyed;
 
         var column = new BoxEl
         {
-            Direction = 1, Grow = 1f,
+            Direction = 1, Grow = 1f, Shrink = 1f, MinHeight = 0f,
             // Measure the right-area width → the active tier. Value-gated, so a re-render happens only on a breakpoint
             // cross (not every resize frame); the new tier itself never changes this box's width → no feedback loop.
             OnBoundsChanged = r => { if (r.W <= 0f) return; _lastRightW = r.W; if (ui?.RailLockActive == true) return; int t = TierFor(r.W, _tier.Peek()); if (t != _tier.Peek()) _tier.Value = t; },
             Children = _verticalHeader ? [rightBody] : [chrome, rightBody],
         };
-        // Float a multi-select command bar over the list (bottom-centre, above the player). The overlay layer is
-        // hit-test transparent so it never steals events from the list — only the bar itself is interactive.
+        // A component anchor does not mirror HitTestPassThrough from its rendered child. Keep a PLAIN full-bleed
+        // pass-through positioner as the ZStack child so wheel/pointer input reaches the ItemsView below. Stretching the
+        // component inside that positioner still gives SelectionCommandBar the real pane width for its responsive fit.
         int selectionTrackStart = _verticalHeader ? VerticalTrackStart : 0;
-        Element overlay = new BoxEl
+        Element selectionOverlay = new BoxEl
         {
-            Direction = 1, Grow = 1f, HitTestPassThrough = true,
-            AlignItems = FlexAlign.Center, Justify = FlexJustify.End,
+            Direction = 1, Grow = 1f, Shrink = 1f, MinHeight = 0f,
+            HitTestPassThrough = true,
+            AlignItems = FlexAlign.Stretch, Justify = FlexJustify.End,
             Children = [Embed.Comp(() => new SelectionCommandBar(_selection, i => DisplayTrack(i, selectionTrackStart)))],
         };
-        return ZStack(column, overlay) with { Grow = 1f };
+        return ZStack(column, selectionOverlay) with { Grow = 1f, Shrink = 1f, MinHeight = 0f };
     }
 
     // Resolve a display row index (what the SelectionModel stores) → the track, through the current filtered+sorted view.
@@ -910,6 +915,7 @@ sealed class TrackList : Component
 
         public override Element Render()
         {
+            var likePrev = UseRef(((string?)null, false));               // hook FIRST (stable order) — per-slot like-edge memory
             _ = _o._full.Value.Value;                                    // subscribe → re-skin when the track set / context model changes (playlist nav, live /diff)
             int i = _scope.Index.Value;                                  // recycle → re-render
             int displayIndex = i - _trackStart;
@@ -919,12 +925,14 @@ sealed class TrackList : Component
             // Buffering = this track's PlayAsync command is in flight (the Task-driven start spinner), OR the now-playing
             // track is mid-playback re-buffering (the bridge signal). Reading _play.IsRunning subscribes this row so the
             // spinner appears/clears as the command starts/finishes.
+            bool likePop = TrackRow.LikeEdge(likePrev, t.Uri, st.Saved);   // pop only on the SAME-uri unsaved→saved edge
 
             // Marquee only for the now-playing row; every other row is a cheap plain ellipsis title (see BoundTitlePlain).
             Element title = st.IsNow ? _o.BoundTitle(_scope.Index, _trackStart) : _o.BoundTitlePlain(_scope.Index, _trackStart);
             return _o.RowGrid(t, displayIndex, st.IsNow, st.IsPlaying, st.IsBuffering, st.IsTop, title, _set, _tracks, _rowH,
                               onPlay: () => _o.PlayRow(displayIndex),
-                              saved: st.Saved, onLike: t.Uri.Length > 0 ? (Action)(() => _o._lib?.ToggleSaved(t.Uri)) : null);
+                              saved: st.Saved, onLike: t.Uri.Length > 0 ? (Action)(() => _o._lib?.ToggleSaved(t.Uri, t.Title)) : null,
+                              likePop: likePop);
         }
     }
 
@@ -1205,9 +1213,10 @@ sealed class TrackList : Component
     // column set + the navigation handler through; the bound title element (plain vs marquee) is decided by the caller
     // (BoundRowContent), and the skeleton passes a static title. Plain/diffable → a BoundRowContent re-render patches in place.
     Element RowGrid(Track t, int displayIndex, bool isNow, bool isPlaying, bool isBuffering, bool isTop, Element title,
-                    ColumnSet set, TrackSize[] tracks, float rowH, Action? onPlay = null, bool saved = false, Action? onLike = null)
+                    ColumnSet set, TrackSize[] tracks, float rowH, Action? onPlay = null, bool saved = false, Action? onLike = null,
+                    bool likePop = false)
         => TrackRow.Grid(t, displayIndex, new TrackRow.State(isNow, isPlaying, isBuffering, isTop, saved),
-                         set, tracks, rowH, title, _cfg.ShowTrackArtist, _h.Go, onPlay, onLike, AddedByProfile(t));
+                         set, tracks, rowH, title, _cfg.ShowTrackArtist, _h.Go, onPlay, onLike, AddedByProfile(t), likePop);
 
     Owner? AddedByProfile(Track t)
     {
@@ -1254,13 +1263,17 @@ sealed class TrackList : Component
             Focusable = false,                       // the ItemsView roving effect owns the single tab stop
             Role = AutomationRole.Button,
             // Double-click invokes (plays), single click selects. DoubleTap is a POINTER trigger, so the ItemsView lands
-            // focus + scrolls the row into view on it (EnterKey would skip that).
-            OnPointerPressed = args => onInteraction(
-                args.ClickCount >= 2 ? ItemContainerTrigger.DoubleTap : ItemContainerTrigger.Tap, args.Mods),
+            // focus + scrolls the row into view on it (EnterKey would skip that). While the check lane is visible a
+            // plain tap/space TOGGLES the row into the selection (synthesized Ctrl) — WinUI multi-select semantics.
+            OnPointerPressed = args =>
+            {
+                if (args.ClickCount >= 2) onInteraction(ItemContainerTrigger.DoubleTap, args.Mods);
+                else onInteraction(ItemContainerTrigger.Tap, SelectorVisualsBound.MultiSelectMods(_checksVisibleRead(), args.Mods));
+            },
             OnKeyDown = args =>
             {
                 if (args.KeyCode == Keys.Enter) { onInteraction(ItemContainerTrigger.EnterKey, args.Mods); args.Handled = true; }
-                else if (args.KeyCode == Keys.Space && !args.IsRepeat) { onInteraction(ItemContainerTrigger.SpaceKey, args.Mods); args.Handled = true; }
+                else if (args.KeyCode == Keys.Space && !args.IsRepeat) { onInteraction(ItemContainerTrigger.SpaceKey, SelectorVisualsBound.MultiSelectMods(_checksVisibleRead(), args.Mods)); args.Handled = true; }
             },
             OnFocusChanged = onFocusChanged,
             // A no-op pointer-exit registers PointerBit so the row counts as the "interactive ancestor" whose hover

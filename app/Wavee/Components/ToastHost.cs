@@ -1,21 +1,25 @@
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
+using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Signals;
 
 namespace Wavee;
 
 public enum ToastSeverity { Info, Success, Caution, Critical }
-public readonly record struct ToastModel(string Message, ToastSeverity Severity, string? ActionLabel, Action? OnAction);
+// Seq gives each toast an identity: the host keys the rendered toast on it (enter/exit animate per toast, and a
+// replacement reads as a swap), and the auto-dismiss timer dep re-arms even for identical consecutive messages.
+public readonly record struct ToastModel(string Message, ToastSeverity Severity, string? ActionLabel, Action? OnAction, int Seq = 0);
 
 /// <summary>Transient-notification service (one at a time). Supports the optimistic "Undo" affordance: show a toast with
 /// an action that reverses the optimistic write. Mount <see cref="ToastHost"/> once at the app root to render it.</summary>
 public static class Toasts
 {
     public static readonly Signal<ToastModel?> Current = new(null);
+    static int _seq;
 
     public static void Show(string message, ToastSeverity severity = ToastSeverity.Info, string? actionLabel = null, Action? onAction = null)
-        => Current.Value = new ToastModel(message, severity, actionLabel, onAction);
+        => Current.Value = new ToastModel(message, severity, actionLabel, onAction, ++_seq);
 
     public static void Dismiss() => Current.Value = null;
 }
@@ -25,6 +29,15 @@ public static class Toasts
 public sealed class ToastHost : Component
 {
     const int AutoDismissMs = 6000;
+
+    // transitions.dev panel-reveal in (rise from below + fade + blur, ~400ms) / quick blurred fade out (~150ms).
+    // The host sits above the player bar (bottom-anchored), so the enter rises FROM below (+Dy).
+    static readonly LayoutTransition ToastMotion = new(
+        TransitionChannels.Opacity,
+        TransitionDynamics.Tween(Expressive.Slow, Easing.SmoothOut),
+        Enter: new EnterExit(Dy: Expressive.DistLarge, Opacity: 0f, Active: true, Blur: Expressive.BlurSmall),
+        Exit: new EnterExit(Opacity: 0f, Active: true, Blur: Expressive.BlurSmall),
+        ExitDynamics: TransitionDynamics.Tween(Expressive.Quick, Easing.SmoothOut));
 
     public override Element Render()
     {
@@ -46,7 +59,10 @@ public sealed class ToastHost : Component
                 null, AutoDismissMs, System.Threading.Timeout.Infinite);
         }, toastOpt);
 
-        if (toastOpt is not { } toast) return new BoxEl { Height = 0 };
+        // The root is ALWAYS a plain BoxEl (stable single-child diff); the toast itself is a KEYED child — keys are
+        // honored only in child arrays, and the keyed remount is what plays Enter on show and the Exit orphan fade on
+        // dismiss/replace (a new Seq exits the old toast while the new one rises — reads as a swap).
+        if (toastOpt is not { } toast) return new BoxEl();
 
         var severity = toast.Severity switch
         {
@@ -62,7 +78,18 @@ public sealed class ToastHost : Component
             ? Button.Standard(label, () => { act(); Toasts.Dismiss(); })
             : null;
 
-        return InfoBar.Create(severity, title: string.Empty, message: toast.Message,
-            onClose: Toasts.Dismiss, actionButton: action);
+        return new BoxEl
+        {
+            Children =
+            [
+                new BoxEl
+                {
+                    Key = "toast:" + toast.Seq,
+                    Animate = ToastMotion,
+                    Children = [InfoBar.Create(severity, title: string.Empty, message: toast.Message,
+                                               onClose: Toasts.Dismiss, actionButton: action)],
+                },
+            ],
+        };
     }
 }

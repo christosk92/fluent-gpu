@@ -20,7 +20,21 @@ public sealed class FlexLayout
     // regression guard for the measure-call explosion this memo cures: a healthy pass keeps measure≈O(nodes); a runaway
     // measure≫arrange flags a redundant-measure blow-up. Gated to a single bool check (zero work/alloc) when off.
     private static readonly bool s_layoutDiag = Diag.EnvFlag("FG_LAYOUT_DIAG");
+    // These are per-FRAME accumulators now (not per-Run): the standalone Run() print below snapshots deltas so its
+    // per-call semantics are unchanged, while the host resets them once per frame (ResetFrameDiagCounters) and reads
+    // them into FrameStats — so a probe sees the whole frame's measure/arrange/text-reshape cost across the full layout
+    // + scoped relayout + phase-7 reflow re-solves. Gated on s_layoutDiag ⇒ zero work/alloc when the flag is off.
     private int _dMeasure, _dTextHit, _dTextMiss, _dArrange;
+
+    /// <summary>Per-frame layout-cost counters (valid only when FG_LAYOUT_DIAG=1; else 0). Surfaced into FrameStats.</summary>
+    public int DiagMeasure => _dMeasure;
+    public int DiagArrange => _dArrange;
+    public int DiagTextHit => _dTextHit;
+    public int DiagTextMiss => _dTextMiss;
+
+    /// <summary>Host-driven per-frame reset: zero the diag counters at the top of a frame so DiagMeasure/Arrange/TextMiss
+    /// read that frame's total after all layout (full + scoped + phase-7 reflow) has run. Cheap; no-op meaning when off.</summary>
+    public void ResetFrameDiagCounters() { _dMeasure = _dTextHit = _dTextMiss = _dArrange = 0; }
 
     // Within-pass Measure memo. Measure(node, availW) is a PURE function of the node's subtree content + availW within
     // ONE layout solve (it has no external mutable input; its only side effect is writing the node's Bounds W/H). But the
@@ -68,14 +82,15 @@ public sealed class FlexLayout
     public void Run(NodeHandle root, Size2 window)
     {
         if (root.IsNull) return;
-        if (s_layoutDiag) { _dMeasure = _dTextHit = _dTextMiss = _dArrange = 0; }
+        // Snapshot so the per-Run print stays per-call even though the counters are now frame accumulators (host-reset).
+        int m0 = _dMeasure, th0 = _dTextHit, tm0 = _dTextMiss, a0 = _dArrange;
         BeginMeasurePass();
         Measure(root, window.Width);
         ref LayoutInput li = ref _scene.Layout(root);
         float w = float.IsNaN(li.Width) ? window.Width : li.Width;
         float h = float.IsNaN(li.Height) ? window.Height : li.Height;
         Arrange(root, 0f, 0f, w, h);
-        if (s_layoutDiag) Console.Error.WriteLine($"[FG_LAYOUT_DIAG] measure={_dMeasure} arrange={_dArrange} textHit={_dTextHit} textMiss={_dTextMiss}");
+        if (s_layoutDiag) Console.Error.WriteLine($"[FG_LAYOUT_DIAG] measure={_dMeasure - m0} arrange={_dArrange - a0} textHit={_dTextHit - th0} textMiss={_dTextMiss - tm0}");
     }
 
     /// <summary>Re-solve ONLY the subtree rooted at <paramref name="node"/> against its current Bounds (or its
@@ -558,8 +573,14 @@ public sealed class FlexLayout
 
         // Publish ContentSize + viewport extent (Layout-owned fields) via a fresh ref (post-recursion).
         ref ScrollState sc = ref _scene.ScrollRef(node);
+        bool viewportPaintChanged = sc.ContentW != contentW || sc.ContentH != contentH
+            || sc.ViewportW != innerW || sc.ViewportH != innerH;
         sc.ContentW = contentW; sc.ContentH = contentH;
         sc.ViewportW = innerW; sc.ViewportH = innerH;
+        // Scrollbar geometry and auto edge masks are emitted by the viewport span itself. A scoped layout can update
+        // these ScrollState fields after normal reconciliation, so explicitly invalidate the viewport/ancestor span
+        // instead of relying on an unrelated child dirty bit to defeat retained-subtree reuse.
+        if (viewportPaintChanged) _scene.Mark(node, NodeFlags.PaintDirty);
 
         // Re-clamp the scroll position to the (possibly changed) content on resize/relayout, and reflect it in the
         // content's -offset transform, so a smaller content / wrapped reflow doesn't leave the view scrolled past the end.

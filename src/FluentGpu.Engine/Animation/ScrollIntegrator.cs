@@ -211,7 +211,33 @@ public sealed class ScrollIntegrator
 
     public void Arm(NodeHandle n)
     {
-        if (!n.IsNull && _scene.IsLive(n) && _member.Add((int)n.Raw.Index)) _active.Add(n);
+        if (n.IsNull || !_scene.IsLive(n)) return;
+        int idx = (int)n.Raw.Index;
+
+        // Membership used to be index-only while the active list retained generation-checked handles. If a scroll node
+        // was freed and its slot reused before the next animation tick, the stale index rejected Arm for the new
+        // viewport: its wheel target changed, but no continuation frame was requested, so scrolling appeared permanently
+        // dead after an async branch/page replacement. Prune that stale generation synchronously at the input edge.
+        if (_member.Contains(idx))
+        {
+            for (int i = _active.Count - 1; i >= 0; i--)
+            {
+                var active = _active[i];
+                if ((int)active.Raw.Index != idx) continue;
+                if (active == n) return;                  // already armed for this exact generation
+                _active.RemoveAt(i);                      // stale generation occupying the reused slot
+            }
+            _member.Remove(idx);
+            _parkedActive.Remove(idx);
+        }
+
+        if (_member.Add(idx))
+        {
+            _active.Add(n);
+            // A hover/focus re-entry may be the only OS input message after an idle window. Request the continuation
+            // frame explicitly so FadeT can advance past its first sample even when no further pointer message arrives.
+            RequestRerender();
+        }
     }
 
     /// <summary>Cancel any coast/animation on <paramref name="n"/> (scroll-feel-rework-v2 §2.2): zero motion,
@@ -728,8 +754,15 @@ public sealed class ScrollIntegrator
 
     /// <summary>Symmetric teardown when a scene slot is FREED (wired to <see cref="SceneStore.OnFreeIndex"/>): drop the
     /// index-keyed conscious-bar timer row so a freed viewport leaves no dormant state the NEXT viewport reusing that
-    /// slot would inherit. The armed-set lists (<c>_active</c>/<c>_member</c>) hold gen-checked handles and self-prune at
-    /// the next Tick's IsLive guard, so only the index-keyed <c>_state</c> needs clearing here. 0-alloc; a no-op when the
-    /// slot had no row.</summary>
-    public void ClearForIndex(int index) => _state.Remove(index);
+    /// slot would inherit. Remove the slot from every membership structure synchronously: <c>_member</c> is keyed only
+    /// by index, so waiting for the generation-checked active handle to self-prune can suppress arming the replacement
+    /// viewport in the same frame. 0-alloc; a no-op when the slot had no row.</summary>
+    public void ClearForIndex(int index)
+    {
+        _state.Remove(index);
+        _member.Remove(index);
+        _parkedActive.Remove(index);
+        for (int i = _active.Count - 1; i >= 0; i--)
+            if ((int)_active[i].Raw.Index == index) _active.RemoveAt(i);
+    }
 }

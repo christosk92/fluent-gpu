@@ -15,7 +15,7 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
     readonly InProcessAudioHost _fallback;
     readonly Func<IPlayPlayKeyDeriver?> _fallbackDeriver;
     readonly SimpleSubject<AudioHostSignal> _signals = new();
-    readonly Action<string>? _log;
+    readonly WaveeLogger _log;
     readonly object _gate = new();
     readonly Queue<long> _faults = new();
     readonly Timer _heartbeat;
@@ -45,7 +45,7 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
     public SupervisedAudioHost(
         Func<IPlayPlayKeyDeriver?> fallbackDeriver,
         Func<IPlayPlayCdnDecryptorFactory?> fallbackDecryptors,
-        Action<string>? log = null,
+        WaveeLogger log = default,
         AudioBodyDiskCache? bodyDisk = null)
     {
         _fallbackDeriver = fallbackDeriver;
@@ -147,7 +147,7 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
         {
             if (_activeFileIdHex.Length > 0 && !string.Equals(_activeFileIdHex, b.FileIdHex, StringComparison.OrdinalIgnoreCase))
             {
-                _log?.Invoke("remote audio stale body ignored file=" + b.FileIdHex + " active=" + _activeFileIdHex);
+                _log.Info("remote audio stale body ignored file=" + b.FileIdHex + " active=" + _activeFileIdHex);
                 return;
             }
 
@@ -179,7 +179,7 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
         long generation = Interlocked.Read(ref _generation);
         _ = RunRemoteAsync(async () =>
         {
-            _log?.Invoke($"audio host send play generation={generation} file={_activeFileIdHex}");
+            _log.Info($"audio host send play generation={generation} file={_activeFileIdHex}");
             await _process.SendAsync(IpcMessageTypes.Play, new EmptyPayload { Generation = generation }, CancellationToken.None).ConfigureAwait(false);
         }, () => _fallback.Play());
     }
@@ -353,10 +353,10 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
             NormalizationGainDb = start.NormalizationGainDb,
             HeadBytesBase64 = Convert.ToBase64String(start.HeadBytes.Span),
         };
-        _log?.Invoke($"audio host send load_fast_start generation={generation} track={start.TrackUri} file={start.FileIdHex} fmt={start.Format} head={start.HeadBytes.Length}B dur={start.DurationMs}ms");
+        _log.Info($"audio host send load_fast_start generation={generation} track={start.TrackUri} file={start.FileIdHex} fmt={start.Format} head={start.HeadBytes.Length}B dur={start.DurationMs}ms");
         await _process.RequestAsync(IpcMessageTypes.LoadFastStart, cmd, ParseCommandResult,
             TimeSpan.FromSeconds(30), CancellationToken.None).ConfigureAwait(false);
-        _log?.Invoke($"audio host ack load_fast_start generation={generation} file={start.FileIdHex}");
+        _log.Info($"audio host ack load_fast_start generation={generation} file={start.FileIdHex}");
     }
 
     async Task SendSupplyBodyAsync(AudioStreamHandle body, long generation)
@@ -378,10 +378,10 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
             HeadBoundary = body.HeadBoundary,
             SourceKind = (int)body.SourceKind,
         };
-        _log?.Invoke($"audio host send supply_body generation={generation} track={body.TrackUri} file={body.FileIdHex} fmt={body.Format} urls={urls.Length} headBoundary={body.HeadBoundary}B key={body.Key.Length}B nativeSeed={body.NativeCdnSeed.Length}B");
+        _log.Info($"audio host send supply_body generation={generation} track={body.TrackUri} file={body.FileIdHex} fmt={body.Format} urls={urls.Length} headBoundary={body.HeadBoundary}B key={body.Key.Length}B nativeSeed={body.NativeCdnSeed.Length}B");
         await _process.RequestAsync(IpcMessageTypes.SupplyBody, cmd, ParseCommandResult,
             TimeSpan.FromSeconds(60), CancellationToken.None).ConfigureAwait(false);
-        _log?.Invoke($"audio host ack supply_body generation={generation} file={body.FileIdHex}");
+        _log.Info($"audio host ack supply_body generation={generation} file={body.FileIdHex}");
     }
 
     static CommandResultMessage ParseCommandResult(JsonElement? payload)
@@ -455,13 +455,13 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
                 case IpcMessageTypes.EqualizerApplied:
                 case IpcMessageTypes.CrossfadeMissed:
                     var diag = payload?.Deserialize(AudioIpcJsonContext.Default.DiagnosticMessage);
-                    if (diag is not null) _log?.Invoke("audio host " + type + ": " + diag.Detail);
+                    if (diag is not null) _log.Info("audio host " + type + ": " + diag.Detail);
                     break;
             }
         }
         catch (Exception ex)
         {
-            _log?.Invoke("audio host notification parse failed: " + ex.Message);
+            _log.Info("audio host notification parse failed: " + ex.Message);
         }
     }
 
@@ -536,11 +536,11 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
             breakCircuit = _faults.Count >= CrashLimit;
         }
 
-        _log?.Invoke("audio host fault: " + ex);
+        _log.Info("audio host fault: " + ex);
         if (breakCircuit)
         {
             _remoteDisabled = true;
-            _log?.Invoke("audio host circuit breaker tripped; switching to in-process audio");
+            _log.Info("audio host circuit breaker tripped; switching to in-process audio");
             if (!_circuitRaised)
             {
                 _circuitRaised = true;

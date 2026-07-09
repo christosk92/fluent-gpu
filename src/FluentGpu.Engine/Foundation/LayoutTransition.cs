@@ -38,6 +38,11 @@ public enum SizeMode : byte
 /// as a child-group offset — compositor-composed, no per-child knowledge.</summary>
 public enum SizeAnchor : byte { Leading, Trailing }
 
+/// <summary>Axes affected by a size transition. Useful when one dimension is author-owned while the other is
+/// continuously parent-owned (for example a measured shelf whose height settles while its width tracks the window).</summary>
+[Flags]
+public enum SizeAxes : byte { None = 0, Width = 1, Height = 2, Both = Width | Height }
+
 /// <summary>Spring (velocity-carrying, interruptible — the default) or an eased fixed-duration tween.</summary>
 public enum DynamicsKind : byte { Spring, Tween }
 
@@ -93,7 +98,13 @@ public readonly record struct LayoutTransition(
     float DelayMs = 0f,
     // Content anchoring while a Reflow size animation runs (see SizeAnchor). Leading = wipe; Trailing = the content's
     // end edge rides the animated edge (the Expander slide-from-under-the-header). Ignored by the other size modes.
-    SizeAnchor Anchor = SizeAnchor.Leading)
+    SizeAnchor Anchor = SizeAnchor.Leading,
+    SizeAxes Axes = SizeAxes.Both,
+    // A projected container owns the visual response to this geometry commit. Bounds-animated descendants still receive
+    // their FINAL layout, but their structural tracks are snapped instead of starting a second wave of Relayout/Reflow
+    // work inside the already-projecting surface. This is scoped to the changed container subtree (unlike the global
+    // interactive-resize suppression gate), so sibling panels and unrelated motion keep running.
+    bool SuppressDescendantTransitions = false)
 {
     /// <summary>Translate-only reflow (the default for reordered / moved items). Springs.</summary>
     public static LayoutTransition Slide => new(TransitionChannels.Position, TransitionDynamics.Default);

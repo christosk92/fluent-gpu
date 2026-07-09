@@ -10,7 +10,7 @@ static class WaveeTheme
         "slate" => Tok.SlatePalette,
         "neutral" => Tok.NeutralPalette,
         "accent" => Tok.AccentTintedPalette,
-        _ => Tok.WarmPalette,
+        _ => Tok.NeutralPalette,
     };
 
     public static void ApplyPalette(string id, IAppSettings? settings = null)

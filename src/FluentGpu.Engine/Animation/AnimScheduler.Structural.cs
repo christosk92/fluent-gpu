@@ -20,7 +20,6 @@ namespace FluentGpu.Animation;
 
 public sealed partial class AnimEngine
 {
-    // Default named curve for tween dynamics until the EasingSpec→LUT bake lands (springs are unaffected).
     private const Easing TweenDefault = Easing.FluentDecelerate;
 
     // ── declarative-token seeding (the authoring bake target; Reconciler/AnimBake calls these) ──────────
@@ -112,7 +111,7 @@ public sealed partial class AnimEngine
         if (dyn.Kind == DynamicsKind.Spring)
             Spring(node, ch, to, SpringParams.FromResponse(dyn.Response, dyn.DampingRatio), initial, delayMs: delayMs);
         else
-            Animate(node, ch, initial ?? CurrentValue(node, ch), to, dyn.DurationMs, TweenDefault, delayMs: delayMs);
+            Animate(node, ch, initial ?? CurrentValue(node, ch), to, dyn.DurationMs, dyn.Easing, delayMs: delayMs);
     }
 
     /// <summary>FLIP a moved node from its captured rect to its new laid-out rect, seeding/retargeting the requested
@@ -120,7 +119,9 @@ public sealed partial class AnimEngine
     /// Relayout re-solves the subtree each tick (live re-wrap); Reflow runs through the host's boundary worklist.</summary>
     public void AnimateBounds(NodeHandle node, in RectF fromAbs, in RectF toAbs, in LayoutTransition spec)
     {
-        TransitionDynamics dyn = Normalize(spec.Dynamics);
+        bool contracts = ((spec.Axes & SizeAxes.Width) != 0 && toAbs.W < fromAbs.W - 0.5f)
+                      || ((spec.Axes & SizeAxes.Height) != 0 && toAbs.H < fromAbs.H - 0.5f);
+        TransitionDynamics dyn = Normalize(contracts && spec.ExitDynamics is { } exit ? exit : spec.Dynamics);
         if ((spec.Channels & TransitionChannels.Position) != 0)
         {
             ReframePosition(node, AnimChannel.TranslateX, fromAbs.X - toAbs.X, dyn, spec.DelayMs);
@@ -128,27 +129,35 @@ public sealed partial class AnimEngine
         }
         if ((spec.Channels & TransitionChannels.Size) != 0)
         {
+            bool width = (spec.Axes & SizeAxes.Width) != 0;
+            bool height = (spec.Axes & SizeAxes.Height) != 0;
             SizeMode mode = spec.Size == SizeMode.Auto ? SizeMode.Reveal : spec.Size;
             switch (mode)
             {
                 case SizeMode.Reveal:
-                    RevealSize(node, AnimChannel.SizeW, fromAbs.W, toAbs.W, dyn, spec.DelayMs);
-                    RevealSize(node, AnimChannel.SizeH, fromAbs.H, toAbs.H, dyn, spec.DelayMs);
+                    if (width) RevealSize(node, AnimChannel.SizeW, fromAbs.W, toAbs.W, dyn, spec.DelayMs);
+                    if (height) RevealSize(node, AnimChannel.SizeH, fromAbs.H, toAbs.H, dyn, spec.DelayMs);
                     break;
                 case SizeMode.Relayout:   // re-solve the subtree at the interpolated size each tick (live re-wrap)
-                    RevealSize(node, AnimChannel.SizeW, fromAbs.W, toAbs.W, dyn, spec.DelayMs);
-                    RevealSize(node, AnimChannel.SizeH, fromAbs.H, toAbs.H, dyn, spec.DelayMs);
-                    MarkRestoreLayout(node, AnimChannel.SizeW, _scene.Layout(node).Width);
-                    MarkRestoreLayout(node, AnimChannel.SizeH, _scene.Layout(node).Height);
+                    if (width)
+                    {
+                        RevealSize(node, AnimChannel.SizeW, fromAbs.W, toAbs.W, dyn, spec.DelayMs);
+                        MarkRestoreLayout(node, AnimChannel.SizeW, _scene.Layout(node).Width);
+                    }
+                    if (height)
+                    {
+                        RevealSize(node, AnimChannel.SizeH, fromAbs.H, toAbs.H, dyn, spec.DelayMs);
+                        MarkRestoreLayout(node, AnimChannel.SizeH, _scene.Layout(node).Height);
+                    }
                     _scene.Mark(node, NodeFlags.Relayouting);
                     break;
                 case SizeMode.ScaleCorrect:
-                    if (toAbs.W > 0.5f) ScaleReveal(node, AnimChannel.ScaleX, fromAbs.W / toAbs.W, dyn, spec.DelayMs);
-                    if (toAbs.H > 0.5f) ScaleReveal(node, AnimChannel.ScaleY, fromAbs.H / toAbs.H, dyn, spec.DelayMs);
+                    if (width && toAbs.W > 0.5f) ScaleReveal(node, AnimChannel.ScaleX, fromAbs.W / toAbs.W, dyn, spec.DelayMs);
+                    if (height && toAbs.H > 0.5f) ScaleReveal(node, AnimChannel.ScaleY, fromAbs.H / toAbs.H, dyn, spec.DelayMs);
                     break;
                 case SizeMode.Reflow:
-                    ReflowSize(node, AnimChannel.LayoutW, fromAbs.W, toAbs.W, spec);
-                    ReflowSize(node, AnimChannel.LayoutH, fromAbs.H, toAbs.H, spec);
+                    if (width) ReflowSize(node, AnimChannel.LayoutW, fromAbs.W, toAbs.W, spec);
+                    if (height) ReflowSize(node, AnimChannel.LayoutH, fromAbs.H, toAbs.H, spec);
                     break;
             }
         }
@@ -176,7 +185,7 @@ public sealed partial class AnimEngine
         else
         {
             float cur = CurrentValue(node, ch);
-            Animate(node, ch, cur + delta, 0f, dyn.DurationMs, TweenDefault, delayMs: delayMs);
+            Animate(node, ch, cur + delta, 0f, dyn.DurationMs, dyn.Easing, delayMs: delayMs);
         }
     }
 
@@ -187,7 +196,7 @@ public sealed partial class AnimEngine
         if (dyn.Kind == DynamicsKind.Spring)
             Spring(node, ch, toSize, SpringParams.FromResponse(dyn.Response, dyn.DampingRatio), initial: fromSize, delayMs: delayMs);
         else
-            Animate(node, ch, fromSize, toSize, dyn.DurationMs, TweenDefault, delayMs: delayMs);
+            Animate(node, ch, fromSize, toSize, dyn.DurationMs, dyn.Easing, delayMs: delayMs);
     }
 
     // ScaleCorrect: spring a scale channel old/new → 1 (recorder composites about centre; opted-in children counter-scale).
@@ -197,7 +206,7 @@ public sealed partial class AnimEngine
         if (dyn.Kind == DynamicsKind.Spring)
             Spring(node, ch, 1f, SpringParams.FromResponse(dyn.Response, dyn.DampingRatio), initial: fromRatio, delayMs: delayMs);
         else
-            Animate(node, ch, fromRatio, 1f, dyn.DurationMs, TweenDefault, delayMs: delayMs);
+            Animate(node, ch, fromRatio, 1f, dyn.DurationMs, dyn.Easing, delayMs: delayMs);
     }
 
     /// <summary>Fill default dynamics (matches AnimEngine.Normalize): a spring with no response → the standard
@@ -206,6 +215,10 @@ public sealed partial class AnimEngine
     {
         return d.Kind == DynamicsKind.Spring
             ? (d.Response > 0f ? (d.DampingRatio > 0f ? d : d with { DampingRatio = 0.85f }) : TransitionDynamics.Default)
-            : (d.DurationMs > 0f ? d : TransitionDynamics.Tween(200f, d.Easing));
+            : d with
+            {
+                DurationMs = d.DurationMs > 0f ? d.DurationMs : 200f,
+                Easing = d.Easing.IsDefault ? TweenDefault : d.Easing,
+            };
     }
 }

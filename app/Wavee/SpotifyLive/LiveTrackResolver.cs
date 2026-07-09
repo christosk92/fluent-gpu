@@ -33,7 +33,7 @@ public sealed class LiveTrackResolver : ITrackResolver
     readonly bool _preferLossless;
     readonly Func<AudioQualityPreference>? _quality;
     readonly AudioFormatProbe? _probe;
-    readonly Action<string>? _log;
+    readonly WaveeLogger _log;
     readonly ConcurrentDictionary<string, Task<TrackMeta>> _metaCache = new();
     readonly Resource<string, CdnResolve> _cdnCache;
 
@@ -44,7 +44,7 @@ public sealed class LiveTrackResolver : ITrackResolver
         Func<string, CancellationToken, Task<ByteString?>>? fetchAudioFilesV5 = null,
         Func<string, CancellationToken, Task<ByteString?>>? fetchEpisodeV4 = null,
         bool preferLossless = false,
-        Action<string>? log = null,
+        WaveeLogger log = default,
         AudioFormatProbe? probe = null,
         Func<AudioQualityPreference>? quality = null,
         Func<SessionContext>? ctx = null)
@@ -112,7 +112,7 @@ public sealed class LiveTrackResolver : ITrackResolver
                 var flacPayload = await fetchFlac(audioUri, CancellationToken.None).ConfigureAwait(false);
                 if (flacPayload is not null) audioFiles = Af.AudioFilesExtensionResponse.Parser.ParseFrom(flacPayload);
             }
-            catch (Exception ex) { _log?.Invoke($"resolve {track.Uri}: AUDIO_FILES fetch failed ({ex.Message}) — Ogg only"); }
+            catch (Exception ex) { _log.Warn($"resolve {track.Uri}: AUDIO_FILES fetch failed ({ex.Message}) — Ogg only"); }
         }
 
         StartFormatProbe(track.Uri, t, audioFiles);
@@ -125,14 +125,14 @@ public sealed class LiveTrackResolver : ITrackResolver
         {
             var gain = NormalizationGain(audioFiles!);
             var hex = Convert.ToHexStringLower(fl.fileId);
-            _log?.Invoke($"resolve {track.Uri}: selected {fl.fmt} (lossless) file {hex} gain={gain:0.0}dB");
+            _log.Info($"resolve {track.Uri}: selected {fl.fmt} (lossless) file {hex} gain={gain:0.0}dB");
             return new TrackMeta(fl.fileId, hex, t.Gid.ToByteArray(), fl.fmt,   // FLAC AP-key uses the track's gid
                 t.HasDuration ? t.Duration : track.DurationMs, track.Uri, gain);
         }
         if (ogg is { } og)
         {
             var hex = Convert.ToHexStringLower(og.fileId);
-            _log?.Invoke($"resolve {track.Uri}: selected {og.fmt} file {hex}");
+            _log.Info($"resolve {track.Uri}: selected {og.fmt} file {hex}");
             return new TrackMeta(og.fileId, hex, og.gid, og.fmt, og.durMs > 0 ? og.durMs : track.DurationMs, track.Uri, 0f);
         }
         throw new AudioPlaybackException(AudioKeyFailureReason.Restricted, "no playable file (Ogg or FLAC, incl. alternatives)");
@@ -149,7 +149,7 @@ public sealed class LiveTrackResolver : ITrackResolver
 
         if (ep.HasExternalUrl && ep.ExternalUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase))
         {
-            _log?.Invoke($"resolve {track.Uri}: external MP3 {ep.ExternalUrl}");
+            _log.Info($"resolve {track.Uri}: external MP3 host={WaveeLogRedaction.UrlHost(ep.ExternalUrl)}");
             // Real gid-derived FileIdHex (not the "external" sentinel) so the host's stale-file guard has a stable key.
             var extGid = ep.Gid.ToByteArray();
             return new TrackMeta(extGid, Convert.ToHexStringLower(extGid), extGid, AudioFormat.Mp3, dur, track.Uri, 0f, ep.ExternalUrl);
@@ -160,7 +160,7 @@ public sealed class LiveTrackResolver : ITrackResolver
         if (pick is null)
             throw new AudioPlaybackException(AudioKeyFailureReason.Restricted, "no playable audio for episode " + track.Uri);
         var hex = Convert.ToHexStringLower(pick.Value.fileId);
-        _log?.Invoke($"resolve {track.Uri}: episode {pick.Value.fmt} file {hex}");
+        _log.Info($"resolve {track.Uri}: episode {pick.Value.fmt} file {hex}");
         return new TrackMeta(pick.Value.fileId, hex, ep.Gid.ToByteArray(), pick.Value.fmt, dur, track.Uri, 0f);
     }
 
@@ -198,7 +198,7 @@ public sealed class LiveTrackResolver : ITrackResolver
         _ = Task.Run(async () =>
         {
             try { await probe.ProbeAsync(uri, track, audioFiles, CancellationToken.None).ConfigureAwait(false); }
-            catch (Exception ex) { _log?.Invoke($"probe {uri}: failed ({ex.Message})"); }
+            catch (Exception ex) { _log.Warn($"probe {uri}: failed ({ex.Message})"); }
         });
     }
 
@@ -220,7 +220,7 @@ public sealed class LiveTrackResolver : ITrackResolver
         var cdnUrls = cdnLoaded.Value!.Urls;
         var cdn = cdnUrls[0];
 
-        _log?.Invoke($"storage-resolve {m.FileIdHex}: {cdnUrls.Length} cdn url(s); fetching key");
+        _log.Info($"storage-resolve {m.FileIdHex}: {cdnUrls.Length} cdn url(s); fetching key");
         var key = await _keys.GetKeyAsync(m.FileId, m.FileGid, ct).ConfigureAwait(false);   // typed throw on AP+PlayPlay failure
         var nativeSeed = _keys is IPlayPlayNativeSeedSource seedSource
             ? seedSource.GetNativeCdnSeed(m.FileIdHex)
@@ -256,7 +256,7 @@ public sealed class LiveTrackResolver : ITrackResolver
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
-            _log?.Invoke("resolve failed for " + track.Uri + ": " + ex.Message);
+            _log.Error("resolve failed for " + track.Uri + ": " + ex.Message, ex);
             throw new AudioPlaybackException(AudioKeyFailureReason.Network, ex.Message);
         }
     }

@@ -109,6 +109,12 @@ contracts owned elsewhere:
   `IPlatformWindow.State`). Notify-only by design (the engine can't know which work is the developer's); focus/blur and
   same-screen occlusion are not inputs. As-built: `RenderContext.cs`, `Reconciler.cs`, `Hosting/AppHost.cs`,
   `Animation/{AnimEngine,ScrollAnimator}.cs`, `Foundation/NodeFlags.cs`.
+- **Transition-aware retained pages.** `KeepAliveOptions.TransitionFor(oldToken, newToken)` may return a
+  `LayoutTransition`. The boundary becomes an overlay during the swap: the old root stops hit testing immediately and
+  runs its finite exit while the new/reactivated root enters. Once the root track settles, the reconciler uses the normal
+  park/resource-release path rather than unmounting it. Each boundary permits one outgoing root; a rapid navigation
+  parks the older outgoing root before starting the next transition, and revisiting an exiting key cancels its exit and
+  reuses the retained subtree. Reduced motion bypasses the overlap and parks immediately.
 
 ---
 

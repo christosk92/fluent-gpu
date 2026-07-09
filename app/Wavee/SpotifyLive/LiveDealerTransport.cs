@@ -25,7 +25,7 @@ public sealed class LiveDealerTransport : ITransport, IDisposable
     readonly Func<CancellationToken, Task<string>>? _forceRefreshToken;   // G6 — force-mint after a failed wss handshake
     readonly IHttpExchange _spclient;
     readonly Func<string> _spclientBaseUrl;
-    readonly Action<string>? _log;
+    readonly WaveeLogger _log;
     readonly Connectivity? _conn;
     readonly SimpleSubject<WireEvent> _events = new();
     readonly SimpleSubject<WireRequest> _requests = new();
@@ -42,7 +42,7 @@ public sealed class LiveDealerTransport : ITransport, IDisposable
     const int DeadAfterMs = 70_000;
 
     public LiveDealerTransport(IReadOnlyList<string> dealerHosts, Func<CancellationToken, Task<string>> accessToken,
-        IHttpExchange spclient, Func<string> spclientBaseUrl, Action<string>? log = null, Connectivity? connectivity = null,
+        IHttpExchange spclient, Func<string> spclientBaseUrl, WaveeLogger log = default, Connectivity? connectivity = null,
         Func<CancellationToken, Task<string>>? forceRefreshToken = null)
     {
         _dealerHosts = dealerHosts;
@@ -153,12 +153,12 @@ public sealed class LiveDealerTransport : ITransport, IDisposable
                 attempt = 0;   // a clean connect resets the backoff ladder + host rotation
                 System.Threading.Volatile.Write(ref _lastRecvTick, Environment.TickCount64);
                 _conn?.Set(ConnectionStatus.Online);
-                _log?.Invoke("dealer connected (" + host + ")");
+                _log.Info("dealer connected (" + host + ")");
                 using var keepalive = StartKeepalive(ws, ct);
                 await ReceiveLoop(ws, ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
-            catch (Exception ex) { _log?.Invoke("dealer disconnected: " + ex.Message); }
+            catch (Exception ex) { _log.Warn("dealer disconnected: " + ex.Message, ex); }
             if (ct.IsCancellationRequested) break;
             _conn?.Set(ConnectionStatus.Reconnecting);
             // exponential backoff: 3, 6, 12, 24 → cap 30s (a fresh token is minted on the next loop via _accessToken).
@@ -224,7 +224,7 @@ public sealed class LiveDealerTransport : ITransport, IDisposable
                     // dead-but-not-closed. Abort it → the blocked ReceiveAsync throws → RunAsync reconnects (Reconnecting).
                     if (Environment.TickCount64 - System.Threading.Volatile.Read(ref _lastRecvTick) > DeadAfterMs)
                     {
-                        _log?.Invoke("dealer half-open (no traffic) — forcing reconnect");
+                        _log.Warn("dealer half-open (no traffic) — forcing reconnect");
                         try { ws.Abort(); } catch { }
                         return;
                     }

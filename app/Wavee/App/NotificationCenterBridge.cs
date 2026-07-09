@@ -39,6 +39,10 @@ public sealed class NotificationCenterBridge
     public Signal<NotificationCategory?> Filter { get; } = new(null);
     /// <summary>Bumped by the panel's 30-second tick while open so relative times recompute per render.</summary>
     public Signal<long> NowTick { get; } = new(0);
+    /// <summary>The gander feed's coarse state — lets the panel tell "failed/offline/loading" apart from genuinely empty.</summary>
+    public Signal<NotificationFeedState> SocialState { get; } = new(NotificationFeedState.Idle);
+    /// <summary>The what's-new feed's coarse state (same purpose as <see cref="SocialState"/>).</summary>
+    public Signal<NotificationFeedState> WhatsNewState { get; } = new(NotificationFeedState.Idle);
 
     public NotificationCenterBridge(ActivityLog log, ISpotifyNotificationsService social, IWhatsNewService whatsNew,
         IAppUpdateService update, IAppSettings settings, ActivityUndoExecutor undo)
@@ -123,5 +127,7 @@ public sealed class NotificationCenterBridge
 
         Items.Value = items;
         UnreadCount.Value = unread;
+        SocialState.Value = _social.State;
+        WhatsNewState.Value = _whatsNew.State;
     }
 }

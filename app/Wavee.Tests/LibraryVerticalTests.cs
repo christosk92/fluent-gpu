@@ -76,7 +76,7 @@ public class LibraryVerticalTests
                 var collections = new Wavee.Backend.Collections.CollectionFetcher(http, () => "https://spclient.test", () => "bob", store,
                     _ => null, (_, _) => { }, Hydrate);
                 await using var sync = new Wavee.Backend.Sync.LibrarySync(store, fetcher, collections, eng, transport,
-                    () => new SessionContext("bob", "US", "premium", "en", Tier.Premium, false), () => "bob", _ => { }, ct);
+                    () => new SessionContext("bob", "US", "premium", "en", Tier.Premium, false), () => "bob", default, ct);
                 using var router = new DealerRouter(transport, sync);
                 var mod = new Pl.PlaylistModificationInfo { Uri = ByteString.CopyFromUtf8("spotify:playlist:p"), ParentRevision = store.PlaylistRevision("spotify:playlist:p") is { } r ? ByteString.CopyFrom(r) : ByteString.Empty, NewRevision = ByteString.CopyFrom((byte)9) };
                 var add = new Pl.Add { AddLast = true };

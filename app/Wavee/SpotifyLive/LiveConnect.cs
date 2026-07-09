@@ -41,12 +41,14 @@ public sealed class LiveConnect : IDisposable
     readonly GaboBatcher? _gaboBatcher;
 
     public LiveConnect(ITransport transport, string deviceId, ApConnection? apChannel,
-        IContextResolver? contexts = null, Action<string>? log = null,
+        IContextResolver? contexts = null, WaveeLogger log = default,
         AudioPlaybackStack? audio = null, double initialVolume01 = 0.7,
         Func<CancellationToken, Task<string>>? refreshTokens = null, IAppSettings? settings = null)
     {
         _apChannel = apChannel;
         _audio = audio;
+        var playbackLog = log.With("playback");
+        var telemetryLog = log.With("telemetry");
 
         // Server-clock estimator: probes GET /melody/v1/time over the authenticated spclient pipeline; its corrected
         // "server now" feeds the projection's remote-position aging (the offset-dependent transit term).
@@ -67,20 +69,20 @@ public sealed class LiveConnect : IDisposable
         var resolver = audio?.TrackResolver ?? (ITrackResolver)new StubTrackResolver();
         // Instant-start: when the local-audio stack is present, resolve head+key in parallel and start on the clear head.
         var fast = audio is not null
-            ? new FastTrackPlayback(audio.TrackResolver, audio.HeadClient, log, audio.TrackResolver.InvalidateCdn)
+            ? new FastTrackPlayback(audio.TrackResolver, audio.HeadClient, playbackLog, audio.TrackResolver.InvalidateCdn)
             : null;
         var outbound = new LiveOutboundControl(transport, deviceId, () => _connect.CurrentConnectionId);
         var gaboCtx = GaboContextFactory.Create();
         settings ??= AppDataSettings.ForUnpackaged("Wavee", "Wavee");
         var gaboSeq = settings.Get(WaveeSettings.GaboGlobalSequence);
         _gaboBatcher = new GaboBatcher(transport, gaboCtx, initialSequenceNumber: gaboSeq, refreshTokens: refreshTokens,
-            persistSequence: seq => settings.Set(WaveeSettings.GaboGlobalSequence, seq), log: log);
-        _gabo = new RawCoreStreamProjection(_gaboBatcher, () => Projection.ContextUri, () => true, log);
-        var herodotus = new HerodotusClient(transport, log);
-        _resume = new ResumePointProjection(herodotus, () => Projection.IsPrivateSession, log);
+            persistSequence: seq => settings.Set(WaveeSettings.GaboGlobalSequence, seq), log: telemetryLog);
+        _gabo = new RawCoreStreamProjection(_gaboBatcher, () => Projection.ContextUri, () => true, log: telemetryLog);
+        var herodotus = new HerodotusClient(transport, telemetryLog);
+        _resume = new ResumePointProjection(herodotus, () => Projection.IsPrivateSession, telemetryLog);
         Controller = new PlaybackController(_host, resolver, Projection,
             contexts ?? EmptyContextResolver.Instance,
-            deviceId, outbound, new IPlaybackProjection[] { _gabo, _resume, _publisher }, log,
+            deviceId, outbound, new IPlaybackProjection[] { _gabo, _resume, _publisher }, playbackLog,
             SpotifyClientIdentity.XpuiSnapshotVersion,   // play_origin.feature_version
             fast: fast);
         Controller.EpisodeResumeMicros = (uri, ct) => herodotus.TryGetEpisodeResumeMicrosAsync(uri, ct);

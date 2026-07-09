@@ -32,7 +32,8 @@ public class GanderNotificationsServiceTests
         var a = svc.Snapshot[0];
         Assert.Equal("ntf-1001", a.Id);
         Assert.Equal("fakeuser42 started following you", a.Title);
-        Assert.Equal(1699990000000, a.Timestamp);
+        // ISO-8601 wire timestamp ("2026-07-09T16:02:24.011Z") parsed to epoch ms.
+        Assert.Equal(DateTimeOffset.Parse("2026-07-09T16:02:24.011Z").ToUnixTimeMilliseconds(), a.Timestamp);
         Assert.Equal(SocialActionType.Navigate, a.ActionType);
         Assert.Equal("spotify:user:fakeuser42", a.ActionUri);
         Assert.Equal("https://i.example/img/fakeuser42.jpg", a.ImageUrl);
@@ -75,7 +76,7 @@ public class GanderNotificationsServiceTests
     {
         long now = 1_000_000;
         var http = new ScriptExchange((_, _) => Task.FromResult(Ok(Fixture())));
-        using var svc = new SpotifyNotificationsService(http, () => BaseUrl, log: null, clock: () => Volatile.Read(ref now));
+        using var svc = new SpotifyNotificationsService(http, () => BaseUrl, log: default, clock: () => Volatile.Read(ref now));
         WaitUntil(() => svc.State == NotificationFeedState.Populated);
         Assert.Equal(1, http.Calls);
 

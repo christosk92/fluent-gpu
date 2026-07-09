@@ -29,7 +29,7 @@ public class RangedHttpSourceDiskCacheTests
         };
         using var http = new HttpClient(handler);
 
-        using (var src1 = new RangedHttpSource(http, fileId, null, 0, null, disk: disk))
+        using (var src1 = new RangedHttpSource(http, fileId, default, 0, null, disk: disk))
         {
             src1.Configure(["http://cdn.test/track"], size);
             src1.EnsureRange(0, AudioBodyDiskCache.ChunkBytes);
@@ -38,7 +38,7 @@ public class RangedHttpSourceDiskCacheTests
         int afterFirst = Volatile.Read(ref calls);
         Assert.True(afterFirst > 0);
 
-        using (var src2 = new RangedHttpSource(http, fileId, null, 0, null, disk: disk))
+        using (var src2 = new RangedHttpSource(http, fileId, default, 0, null, disk: disk))
         {
             src2.Configure(["http://cdn.test/track"], size);
             src2.EnsureRange(0, AudioBodyDiskCache.ChunkBytes);
@@ -68,7 +68,7 @@ public class RangedHttpSourceDiskCacheTests
         };
         using var http = new HttpClient(handler);
 
-        using (var src1 = new RangedHttpSource(http, fileId, null, 0, null, disk: disk))
+        using (var src1 = new RangedHttpSource(http, fileId, default, 0, null, disk: disk))
         {
             src1.Configure(["http://cdn.test/track"], size);
             src1.EnsureRange(AudioBodyDiskCache.ChunkBytes, AudioBodyDiskCache.ChunkBytes);
@@ -77,7 +77,7 @@ public class RangedHttpSourceDiskCacheTests
         int afterPartial = Volatile.Read(ref calls);
         Assert.True(afterPartial > 0);
 
-        using (var src2 = new RangedHttpSource(http, fileId, null, 0, null, disk: disk))
+        using (var src2 = new RangedHttpSource(http, fileId, default, 0, null, disk: disk))
         {
             src2.Configure(["http://cdn.test/track"], size);
             src2.EnsureRange(0, AudioBodyDiskCache.ChunkBytes * 3);

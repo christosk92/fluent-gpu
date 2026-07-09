@@ -59,7 +59,9 @@ public static class SelectorVisualsBound
         => BuildListRow(in s, content, fullRow: false, showCheckbox);
 
     /// <summary>Animated multi-select checkbox lane (WinUI ListView inline check): slides in from −28px over 333ms
-    /// FluentDecelerate when <paramref name="visible"/> is true. Checkbox click synthesizes Ctrl+Tap on the row scope.</summary>
+    /// FluentDecelerate when <paramref name="visible"/> is true. The check itself is the REAL <see cref="CheckBox"/>
+    /// control (WinUI draw-on checkmark), hosted in a per-slot component so its checked VALUE re-renders reactively —
+    /// a bound row never rebuilds, so the value can't be baked into the template. Click synthesizes Ctrl+Tap.</summary>
     public static Element BoundCheckLane(Func<bool> visible, Func<bool> isChecked,
                                          Action<ItemContainerTrigger, KeyModifiers> interact,
                                          float leftMargin = 14f)
@@ -79,55 +81,19 @@ public static class SelectorVisualsBound
                 TransitionDynamics.Tween(MultiSelectAnimMs, Easing.FluentDecelerate),
                 Enter: new EnterExit(Dx: -CheckboxContentOffset, Opacity: 0f, Active: true),
                 Exit: new EnterExit(Dx: -CheckboxContentOffset, Opacity: 0f, Active: true)),
-            Children = [BoundCheckPlate(chk, onInteract)],
+            Children = [Embed.Comp(() => new BoundRowCheckBox(chk, onInteract))],
         };
         return Flow.Show(vis, lane);
     }
 
-    static BoxEl BoundCheckPlate(Func<bool> isChecked, Action<ItemContainerTrigger, KeyModifiers> interact)
-        => new()
-        {
-            Width = CheckboxSize,
-            Height = CheckboxSize,
-            AlignItems = FlexAlign.Center,
-            Justify = FlexJustify.Center,
-            Role = AutomationRole.Button,
-            Cursor = CursorId.Hand,
-            OnClick = () => interact(ItemContainerTrigger.Tap, KeyModifiers.Ctrl),
-            Children =
-            [
-                new BoxEl
-                {
-                    Width = CheckboxSize, Height = CheckboxSize, Corners = CornerRadius4.All(3f),
-                    BorderWidth = 1f, BorderColor = Tok.StrokeControlStrongDefault,
-                    Fill = Tok.FillControlAltSecondary,
-                    Opacity = Prop.Of(() => isChecked() ? 0f : 1f),
-                },
-                new BoxEl
-                {
-                    Width = CheckboxSize, Height = CheckboxSize, Corners = CornerRadius4.All(3f),
-                    Fill = Tok.AccentDefault, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                    Opacity = Prop.Of(() => isChecked() ? 1f : 0f),
-                    Children =
-                    [
-                        new PolylineStrokeEl
-                        {
-                            Width = 14f, Height = 14f,
-                            P0 = new Point2(0.18f * 14f, 0.50f * 14f),
-                            P1 = new Point2(0.42f * 14f, 0.72f * 14f),
-                            P2 = new Point2(0.80f * 14f, 0.26f * 14f),
-                            PointCount = 3,
-                            Color = Tok.TextOnAccentPrimary,
-                            Thickness = 1.8f,
-                            RoundCaps = true,
-                        },
-                    ],
-                },
-            ],
-        };
-
     /// <summary>The full-bleed selected-backplate superset (no left pill — the bound plate fill IS the cue).</summary>
     public static BoxEl FullRow(in RowScope s, Element content) => BuildListRow(in s, content, fullRow: true);
+
+    /// <summary>WinUI multi-select tap semantics: while the check lane is visible, a PLAIN tap/space toggles the row
+    /// into the selection (synthesized Ctrl) instead of replacing it — Ctrl/Shift taps keep their Extended meaning.
+    /// Apply to Tap/SpaceKey only (DoubleTap/Enter still invoke).</summary>
+    public static KeyModifiers MultiSelectMods(bool checksVisible, KeyModifiers mods)
+        => checksVisible && (mods & (KeyModifiers.Ctrl | KeyModifiers.Shift)) == 0 ? mods | KeyModifiers.Ctrl : mods;
 
     private static BoxEl BuildListRow(in RowScope s, Element content, bool fullRow, Func<bool>? showCheckbox = null)
     {
@@ -179,12 +145,15 @@ public static class SelectorVisualsBound
             Focusable = false,                              // the ItemsView roving effect owns the single tab stop
             FocusVisualMargin = Edges4.All(1f),
             Role = AutomationRole.Button,
-            OnPointerPressed = args => interact(
-                args.ClickCount >= 2 ? ItemContainerTrigger.DoubleTap : ItemContainerTrigger.Tap, args.Mods),
+            OnPointerPressed = args =>
+            {
+                if (args.ClickCount >= 2) interact(ItemContainerTrigger.DoubleTap, args.Mods);
+                else interact(ItemContainerTrigger.Tap, MultiSelectMods(showChecks?.Invoke() ?? false, args.Mods));
+            },
             OnKeyDown = args =>
             {
                 if (args.KeyCode == Keys.Enter) { interact(ItemContainerTrigger.EnterKey, args.Mods); args.Handled = true; }
-                else if (args.KeyCode == Keys.Space && !args.IsRepeat) { interact(ItemContainerTrigger.SpaceKey, args.Mods); args.Handled = true; }
+                else if (args.KeyCode == Keys.Space && !args.IsRepeat) { interact(ItemContainerTrigger.SpaceKey, MultiSelectMods(showChecks?.Invoke() ?? false, args.Mods)); args.Handled = true; }
             },
             OnFocusChanged = focusChanged,
             Children = children,
@@ -214,5 +183,32 @@ public static class SelectorVisualsBound
             OnFocusChanged = focusChanged,
             Children = [new BoxEl { Children = [content] }],
         };
+    }
+}
+
+/// <summary>The inline multi-select check cell: hosts the REAL <see cref="CheckBox"/> control (the WinUI draw-on
+/// checkmark timeline) in a per-slot component so its checked VALUE re-renders reactively off the
+/// <see cref="RowScope.IsSelected"/> predicate — a bound row template is built once and never rebuilt, so a checked
+/// state baked as a value would freeze. Clicking synthesizes Ctrl+Tap (toggle-into-selection). Not focusable: the
+/// ItemsView owns the roving tab stop.</summary>
+internal sealed class BoundRowCheckBox : Component
+{
+    static readonly TemplateParts NotFocusable = new() { [CheckBox.PartRoot] = b => b with { Focusable = false } };
+
+    readonly Func<bool> _isChecked;
+    readonly Action<ItemContainerTrigger, KeyModifiers> _interact;
+
+    public BoundRowCheckBox(Func<bool> isChecked, Action<ItemContainerTrigger, KeyModifiers> interact)
+    { _isChecked = isChecked; _interact = interact; }
+
+    public override Element Render()
+    {
+        bool on = _isChecked();   // reads SelectionModel.Version + the slot Index signal → re-renders on both
+        var style = CheckBox.DefaultStyle with
+        {
+            MinWidth = 0f, MinHeight = 20f, ContentGap = 0f,   // compact: a bare 20px box, no label lane
+            FocusVisualMargin = Edges4.All(1f),                // the labeled control's −7,−3 halo would spill the row
+        };
+        return CheckBox.Create("", on, () => _interact(ItemContainerTrigger.Tap, KeyModifiers.Ctrl), style, parts: NotFocusable);
     }
 }

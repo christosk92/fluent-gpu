@@ -1,4 +1,5 @@
 using FluentGpu.Dsl;
+using FluentGpu.Foundation;
 
 namespace FluentGpu.Hooks;
 
@@ -27,7 +28,11 @@ public sealed record ForEl(Func<int> Count, Func<int, Element> ItemAt, Func<int,
 /// the live scene tree; resource-heavy residency (currently image pins) is released unless
 /// <see cref="ReleaseInactiveResources"/> is disabled.
 /// </summary>
-public sealed record KeepAliveOptions(int MaxEntries = 5, bool ReleaseInactiveResources = true, Func<object, bool>? ShouldCache = null)
+public sealed record KeepAliveOptions(
+    int MaxEntries = 5,
+    bool ReleaseInactiveResources = true,
+    Func<object, bool>? ShouldCache = null,
+    Func<object, object, LayoutTransition?>? TransitionFor = null)
 {
     public static KeepAliveOptions Default { get; } = new();
 }

@@ -28,7 +28,6 @@ sealed class HomePage : Component
         var svc    = UseContext(Services.Slot);
         var go     = UseContext(HistoryStore.NavCtx);
         var bridge = UseContext(PlaybackBridge.Slot);
-        var morph  = UseContext(SharedTransition.Begin);   // connected-animation: snapshot the clicked cover before nav
         var preview = UseContext(NavPreviewStore.Slot);    // pre-load: stash the card's known cover/title for the detail page
         if (svc is null) return new BoxEl { Grow = 1f };
 
@@ -68,7 +67,7 @@ sealed class HomePage : Component
                 {
                     string key = "album:" + c.Uri;
                     preview?.Set(key, DetailPreview.FromAlbum(new Album(Id(c.Uri), c.Uri, c.Title, c.Image, Array.Empty<ArtistRef>(), 0, 0)));
-                    morph?.Invoke(key); go(key, c.Title);
+                    go(key, c.Title);
                     break;
                 }
                 case HomeCardKind.Artist:
@@ -78,7 +77,7 @@ sealed class HomePage : Component
                 {
                     string key = "pl:" + c.Uri;
                     preview?.Set(key, DetailPreview.FromPlaylist(new PlaylistSummary(c.Uri, c.Title, c.Subtitle ?? "", 0, c.Image)));
-                    morph?.Invoke(key); go(key, c.Title);
+                    go(key, c.Title);
                     break;
                 }
             }
@@ -93,11 +92,12 @@ sealed class HomePage : Component
         Element Tile(HomeCard c, string section = "", int index = -1)
         {
             string? url = HomeImageDiagnostics.NormalizedUrl(c.Image);
-            return MediaCard.QuickPick(c.Image, c.Title, c.Uri, () => NavCard(c), () => PlayCard(c),
+            Element tile = MediaCard.QuickPick(c.Image, c.Title, c.Uri, () => NavCard(c), () => PlayCard(c),
                 accent: c.Accent is { } a ? WaveePalette.Lift(WaveePalette.ToColor(a)) : null,
                 diagnostics: url is { Length: > 0 }
                     ? Embed.Comp(() => new HomeQuickImageProbe(url, c.Uri, c.Title, section, index)).Skeletonized(false)
                     : null);
+            return tile is BoxEl box ? box with { Key = "home-quick:" + c.Uri, Animate = MotionRecipes.CardRefit } : tile;
         }
 
         IEnumerable<Element> QuickTiles(IReadOnlyList<HomeCard> cards, string section, int max)
@@ -111,8 +111,13 @@ sealed class HomePage : Component
             cardAt: (i, w) =>
             {
                 var c = g.Cards[i];
-                return MediaCard.Shelf(c.Image, c.Title, c.Subtitle ?? "", c.Uri, () => NavCard(c), () => PlayCard(c), w,
-                    circular: c.Kind == HomeCardKind.Artist, morphKey: MorphKeyFor(c), onNavUri: NavUri);
+                // Home descriptions are Spotify HTML fragments. Shelf is the width-aware card path that preserves the
+                // 3-line RichText parser, link navigation, circular artist fallback, and explicit cover geometry. The
+                // width-agnostic GridCard shortcut regressed all four (literal <a href>, one line, blank artists, and a
+                // poorly constrained hover overlay).
+                return MediaCard.Shelf(c.Image, c.Title, c.Subtitle ?? "", c.Uri,
+                    () => NavCard(c), () => PlayCard(c), w,
+                    circular: c.Kind == HomeCardKind.Artist, onNavUri: NavUri);
             },
             measured: true,   // engine measures each card → row is exactly as tall as the tallest card (no reserved height)
             header: g.Title is { } t ? Surfaces.AccentHeader(t, GroupAccent(g)) : new BoxEl());
@@ -262,13 +267,6 @@ sealed class HomePage : Component
     }
 
     static string Id(string uri) { int i = uri.LastIndexOf(':'); return i >= 0 ? uri[(i + 1)..] : uri; }
-    static string? MorphKeyFor(HomeCard c) => c.Kind switch
-    {
-        HomeCardKind.Album => "album:" + c.Uri,
-        HomeCardKind.Playlist => "pl:" + c.Uri,
-        _ => null,
-    };
-
     // The group's lifted accent (renderer color): the composer-assigned tint (cover-extracted or semantic), or a
     // per-kind fallback for groups with none (the offline/library home). Lift keeps a near-black cover color legible.
     static ColorF GroupAccent(HomeGroup g) => WaveePalette.Lift(WaveePalette.ToColor(

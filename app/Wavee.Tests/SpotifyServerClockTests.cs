@@ -18,7 +18,7 @@ public class SpotifyServerClockTests
         // The fetch advances the local clock by this sample's RTT, then stamps server time at the response instant.
         Task<long> Fetch(CancellationToken _) { now += rtts.Dequeue(); return Task.FromResult(now + trueOffset); }
 
-        var clock = new SpotifyServerClock(Fetch, log: null, localNowUnixMs: () => now);
+        var clock = new SpotifyServerClock(Fetch, log: default, localNowUnixMs: () => now);
         await clock.SyncAsync(default);
 
         // sample 2: t1=1100, t2=1140, mid=1120, server=5140 → offset=4020 (true 4000 + half of the 40ms RTT)
@@ -31,7 +31,7 @@ public class SpotifyServerClockTests
     [Fact]
     public void ServerNowUnixMs_BeforeSync_ReturnsUnsyncedSentinel()
     {
-        var clock = new SpotifyServerClock(_ => Task.FromResult(5000L), log: null, localNowUnixMs: () => 1000);
+        var clock = new SpotifyServerClock(_ => Task.FromResult(5000L), log: default, localNowUnixMs: () => 1000);
         Assert.False(clock.IsSynced);
         Assert.Equal(0, clock.ServerNowUnixMs());   // 0 ⇒ projection skips the offset-dependent term
     }
@@ -42,7 +42,7 @@ public class SpotifyServerClockTests
         long now = 1000;
         var rtts = new Queue<long>(new long[] { 50, 50, 50 });
         Task<long> Fetch(CancellationToken _) { now += rtts.Dequeue(); return Task.FromResult(now + 4000); }
-        var clock = new SpotifyServerClock(Fetch, log: null, localNowUnixMs: () => now);
+        var clock = new SpotifyServerClock(Fetch, log: default, localNowUnixMs: () => now);
         await clock.SyncAsync(default);
         long offset = clock.OffsetMs;
 
@@ -54,7 +54,7 @@ public class SpotifyServerClockTests
     public void ObservePassive_BootstrapsOffset_WhenUnsynced()
     {
         long now = 2000;
-        var clock = new SpotifyServerClock(_ => Task.FromResult(0L), log: null, localNowUnixMs: () => now);
+        var clock = new SpotifyServerClock(_ => Task.FromResult(0L), log: default, localNowUnixMs: () => now);
         clock.ObservePassive(6000);   // passiveOffset = 6000 - 2000 = 4000
 
         Assert.True(clock.IsSynced);
@@ -68,7 +68,7 @@ public class SpotifyServerClockTests
         long now = 1000;
         var rtts = new Queue<long>(new long[] { 20, 20, 20 });
         Task<long> Fetch(CancellationToken _) { now += rtts.Dequeue(); return Task.FromResult(now + 4000); }
-        var clock = new SpotifyServerClock(Fetch, log: null, localNowUnixMs: () => now);
+        var clock = new SpotifyServerClock(Fetch, log: default, localNowUnixMs: () => now);
         await clock.SyncAsync(default);
         long probed = clock.OffsetMs;
 

@@ -40,7 +40,7 @@ public static class AudioHostChild
                 PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
             server.WaitForConnection();
             using var transport = IpcPipeTransport.FromServerStream(server);
-            var host = new AudioHostServer(transport, token, WaveeLog.Instance.ToAction("audio"));
+            var host = new AudioHostServer(transport, token, new WaveeLogger(WaveeLog.Instance, "audio"));
             host.RunAsync().GetAwaiter().GetResult();
             return 0;
         }

@@ -1003,7 +1003,13 @@ public static class SceneRecorder
             Console.Error.WriteLine(
                 $"[scroll] gate n#{node.Raw.Index} bounds={b.W:0}x{b.H:0} dev=({deviceBounds.X:0},{deviceBounds.Y:0} {deviceBounds.W:0}x{deviceBounds.H:0}) " +
                 $"clip=({clip.X:0},{clip.Y:0} {clip.W:0}x{clip.H:0}) overlapClip={overlapsClip} thumbA={scrollThumb.A:0.00} " +
-                $"hasState={hs} contentH={(hs ? d.ContentH : 0):0} viewportH={(hs ? d.ViewportH : 0):0} offY={(hs ? d.OffsetY : 0):0} fadeT={(hs ? d.FadeT : 0):0.00} orient={(hs ? d.Orientation : 0)}");
+                $"hasState={hs} content={(hs ? d.ContentW : 0):0}x{(hs ? d.ContentH : 0):0} viewport={(hs ? d.ViewportW : 0):0}x{(hs ? d.ViewportH : 0):0} " +
+                $"offset={(hs ? d.OffsetX : 0):0},{(hs ? d.OffsetY : 0):0} fadeT={(hs ? d.FadeT : 0):0.00} orient={(hs ? d.Orientation : 0)} " +
+                $"autoEdge={(hs && d.AutoEdgeFade)} band={(hs ? d.AutoEdgeFadeBand : 0):0} " +
+                $"edgeResolved={isEdgeFade} edges={(isEdgeFade ? edgeFade.Edges : EdgeMask.None)} " +
+                $"edgeBands={(isEdgeFade ? edgeFade.BandLeft : 0):0.0},{(isEdgeFade ? edgeFade.BandTop : 0):0.0}," +
+                $"{(isEdgeFade ? edgeFade.BandRight : 0):0.0},{(isEdgeFade ? edgeFade.BandBottom : 0):0.0} " +
+                $"loadingSuppressors={(hs ? d.LoadingBarSuppressors : 0)}");
         }
         // Scroll-edge cues (controls.md §8.3): a surface-colour fade at any overflowing edge so a clipped list reads as
         // scrollable. Drawn BEFORE the scrollbar (under the thumb) and NOT gated on FadeT — the fade is always-on while
@@ -1134,9 +1140,26 @@ public static class SceneRecorder
     {
         if ((flags & NodeFlags.Scrollable) == 0 || !scene.HasScroll(node)) return;
         ref var sc = ref scene.ScrollRef(node);
+        // ScrollState is partly layout-/animation-owned rather than reconciler-owned. These values can therefore change
+        // without changing the element or node bounds. They all affect commands emitted by this viewport (edge mask,
+        // edge cues, thumb geometry/alpha, or whether the thumb exists), so they must participate in both exact-copy and
+        // translated-copy keys. Omitting them let a clean retained span resurrect a no-fade/no-scrollbar frame forever.
+        MixFloat(ref h, sc.ContentW);
+        MixFloat(ref h, sc.ContentH);
+        MixFloat(ref h, sc.ViewportW);
+        MixFloat(ref h, sc.ViewportH);
         MixFloat(ref h, sc.OffsetX);
         MixFloat(ref h, sc.OffsetY);
         MixFloat(ref h, sc.OverscrollPx);
+        MixFloat(ref h, sc.FadeT);
+        MixFloat(ref h, sc.ExpandT);
+        MixFloat(ref h, sc.AutoEdgeFadeBand);
+        Mix(ref h, sc.Orientation);
+        Mix(ref h, sc.EdgeCueConfig);
+        Mix(ref h, sc.AutoEdgeFade ? 1u : 0u);
+        Mix(ref h, sc.AlwaysShowBar ? 1u : 0u);
+        Mix(ref h, sc.SuppressBar ? 1u : 0u);
+        Mix(ref h, (uint)sc.LoadingBarSuppressors);
     }
 
     private static bool IsDirectMovingScrollContent(SceneStore scene, NodeHandle node, NodeFlags flags)
@@ -1547,7 +1570,7 @@ public static class SceneRecorder
     /// <summary>An auto-hiding scrollbar thumb sized from the viewport's content/offset, faded by <c>FadeT</c>, expanded on lane hover.</summary>
     private static void EmitScrollbar(DrawList dl, in RectF b, in ScrollState sc, in Affine2D world, float opacity, ulong key, ColorF thumb, ColorF track)
     {
-        if (sc.SuppressBar || sc.SuppressBarLoading) return;   // pager-driven shelf, or a descendant skeleton is loading — no rail
+        if (sc.SuppressBar || sc.LoadingBarSuppressors > 0) return;   // pager-driven shelf, or a descendant skeleton is loading — no rail
         bool horizontal = sc.Orientation == 1;
         float content = horizontal ? sc.ContentW : sc.ContentH;
         float viewport = horizontal ? sc.ViewportW : sc.ViewportH;

@@ -32,7 +32,7 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
     readonly Func<string?> _connectionId;
     readonly Func<PutStateReasonKind, LocalPlaybackSnapshot?, uint, bool, byte[]> _build;
     readonly Action<byte[]>? _onCluster;
-    readonly Action<string>? _log;
+    readonly WaveeLogger _log;
     readonly Func<long> _now;
     readonly IDisposable _connSub;
     readonly object _gate = new();
@@ -53,7 +53,7 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
         ITransport transport, string deviceId, IPlaybackState state,
         IObservable<string?> connectionId, Func<string?> currentConnectionId,
         Func<PutStateReasonKind, LocalPlaybackSnapshot?, uint, bool, byte[]> build,
-        Action<byte[]>? onCluster = null, Action<string>? log = null, Func<long>? clock = null,
+        Action<byte[]>? onCluster = null, WaveeLogger log = default, Func<long>? clock = null,
         int volumePublishWindowMs = 400, Func<int, CancellationToken, Task>? delay = null)
     {
         _transport = transport;
@@ -148,12 +148,12 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
             var resp = await _transport.Publish(_deviceId, connId!, bytes).ConfigureAwait(false);
             if (resp.Ok)
             {
-                _log?.Invoke($"put-state ({reason}, active={isActive}, track={snap?.Track.Uri ?? "-"})");
+                _log.Info($"put-state ({reason}, active={isActive}, track={snap?.Track.Uri ?? "-"})");
                 if (resp.Body.Length > 0) _onCluster?.Invoke(resp.Body);
             }
             else
             {
-                _log?.Invoke($"put-state failed ({resp.Status})");
+                _log.Info($"put-state failed ({resp.Status})");
                 WaveeLog.Instance.Warn("connect", "put-state.rejected", "connect-state PUT rejected by server",
                     WaveeLogField.Of("status", resp.Status),
                     WaveeLogField.Of("reason", reason.ToString()),
@@ -164,7 +164,7 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
         {
             // Structured + full exception (type + stack) so a future null/serialization fault in the builder is
             // diagnosable at a glance — the bare ex.Message alone made the Restrictions NRE cryptic.
-            _log?.Invoke("put-state error: " + ex.Message);
+            _log.Info("put-state error: " + ex.Message);
             WaveeLog.Instance.Error("connect", "put-state.error", "connect-state PUT threw while building/publishing", ex,
                 WaveeLogField.Of("reason", reason.ToString()),
                 WaveeLogField.Of("active", isActive),

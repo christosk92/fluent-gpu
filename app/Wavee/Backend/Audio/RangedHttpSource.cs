@@ -22,7 +22,7 @@ internal sealed class RangedHttpSource : IDisposable
 
     readonly HttpClient _http;
     readonly string _name;
-    readonly Action<string>? _log;
+    readonly WaveeLogger _log;
     readonly int _headFloor;                 // read-ahead never dips below this (the caller's clear-head length)
     readonly Action? _onRangeAvailable;      // wake the caller's readers after a fetch / resume (caller pulses its gate)
     readonly bool _requireRange;             // false = tolerate a 200 (server ignored Range) by buffering the whole body
@@ -44,7 +44,7 @@ internal sealed class RangedHttpSource : IDisposable
     volatile bool _stopped;
     Task? _readAheadTask;
 
-    public RangedHttpSource(HttpClient http, string name, Action<string>? log, int headFloor,
+    public RangedHttpSource(HttpClient http, string name, WaveeLogger log, int headFloor,
         Action? onRangeAvailable, bool requireRange = true, int maxRetries = 3, int baseBackoffMs = 150,
         AudioBodyDiskCache? disk = null)
     {
@@ -135,9 +135,9 @@ internal sealed class RangedHttpSource : IDisposable
         if (_ranges.ContainsRange(start, end)) return;
 
         var sw = Stopwatch.StartNew();
-        if (RangeTrace) _log?.Invoke($"stream {_name}: prefetch boundary start range=[{start},{end})");
+        if (RangeTrace) _log.Info($"stream {_name}: prefetch boundary start range=[{start},{end})");
         await FetchRangeAsync(start, end, ct).ConfigureAwait(false);
-        if (RangeTrace) _log?.Invoke($"stream {_name}: prefetch boundary ok bytes={end - start} elapsed={sw.ElapsedMilliseconds}ms");
+        if (RangeTrace) _log.Info($"stream {_name}: prefetch boundary ok bytes={end - start} elapsed={sw.ElapsedMilliseconds}ms");
     }
 
     async Task ReadAheadLoopAsync()
@@ -178,9 +178,9 @@ internal sealed class RangedHttpSource : IDisposable
         if (start >= end) return;
         if (_ranges.ContainsRange(start, end)) return;
         var sw = Stopwatch.StartNew();
-        if (RangeTrace) _log?.Invoke($"stream {_name}: decode range miss range=[{start},{end}) requested={length}B");
+        if (RangeTrace) _log.Info($"stream {_name}: decode range miss range=[{start},{end}) requested={length}B");
         FetchRangeAsync(start, end, _disposeCts.Token).GetAwaiter().GetResult();
-        if (RangeTrace) _log?.Invoke($"stream {_name}: decode range ready range=[{start},{end}) elapsed={sw.ElapsedMilliseconds}ms");
+        if (RangeTrace) _log.Info($"stream {_name}: decode range ready range=[{start},{end}) elapsed={sw.ElapsedMilliseconds}ms");
     }
 
     async Task FetchRangeAsync(long start, long end, CancellationToken ct)
@@ -230,7 +230,7 @@ internal sealed class RangedHttpSource : IDisposable
         Exception? last = null;
         var urls = _cdnUrls;
         var sw = Stopwatch.StartNew();
-        if (RangeTrace) _log?.Invoke($"stream {_name}: range fetch start range=[{start},{end}) bytes={end - start}");
+        if (RangeTrace) _log.Info($"stream {_name}: range fetch start range=[{start},{end}) bytes={end - start}");
 
         foreach (var url in urls)
         {
@@ -248,7 +248,7 @@ internal sealed class RangedHttpSource : IDisposable
                         // Range-optional (plain-HTTP server ignored Range): buffer the whole body once and serve all reads from it.
                         await BufferFullBodyAsync(resp, ct).ConfigureAwait(false);
                         _onRangeAvailable?.Invoke();
-                        if (RangeTrace) _log?.Invoke($"stream {_name}: full-body fetch ok (range ignored) size={Volatile.Read(ref _size)} elapsed={sw.ElapsedMilliseconds}ms");
+                        if (RangeTrace) _log.Info($"stream {_name}: full-body fetch ok (range ignored) size={Volatile.Read(ref _size)} elapsed={sw.ElapsedMilliseconds}ms");
                         return;
                     }
                     if (resp.StatusCode != HttpStatusCode.PartialContent)
@@ -289,7 +289,7 @@ internal sealed class RangedHttpSource : IDisposable
                     WriteCdnBytes(start, buf, read);
                     _ranges.AddRange(start, start + read);
                     _onRangeAvailable?.Invoke();
-                    if (RangeTrace) _log?.Invoke($"stream {_name}: range fetch ok range=[{start},{start + read}) bytes={read} elapsed={sw.ElapsedMilliseconds}ms");
+                    if (RangeTrace) _log.Info($"stream {_name}: range fetch ok range=[{start},{start + read}) bytes={read} elapsed={sw.ElapsedMilliseconds}ms");
                     return;
                 }
                 catch (Exception ex) when (ex is HttpRequestException or IOException or TaskCanceledException)
@@ -301,7 +301,7 @@ internal sealed class RangedHttpSource : IDisposable
             }
         }
 
-        _log?.Invoke($"stream {_name}: range fetch failed range=[{start},{end}) elapsed={sw.ElapsedMilliseconds}ms error={last?.GetType().Name}: {last?.Message}");
+        _log.Info($"stream {_name}: range fetch failed range=[{start},{end}) elapsed={sw.ElapsedMilliseconds}ms error={last?.GetType().Name}: {last?.Message}");
         throw last ?? new IOException($"all CDN mirrors failed for range [{start},{end})");
     }
 

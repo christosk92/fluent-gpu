@@ -26,10 +26,10 @@ sealed class SpotifyVideoService : IVideoService
     readonly ExtendedMetadataSource _metadata;
     readonly ExtensionEtagCache? _extensions;
     readonly IStore _store;
-    readonly Action<string>? _log;
+    readonly WaveeLogger _log;
     readonly ConcurrentDictionary<string, Task<VideoAssociation?>> _inflight = new(StringComparer.Ordinal);
 
-    public SpotifyVideoService(ExtendedMetadataSource metadata, IStore store, Action<string>? log = null, ExtensionEtagCache? extensions = null)
+    public SpotifyVideoService(ExtendedMetadataSource metadata, IStore store, WaveeLogger log = default, ExtensionEtagCache? extensions = null)
     {
         _metadata = metadata;
         _extensions = extensions;
@@ -61,7 +61,7 @@ sealed class SpotifyVideoService : IVideoService
                     reqs.ConvertAll(x => (x.Uri, x.Kind)),
                     ct).ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException) { _log?.Invoke("VIDEO_ASSOCIATIONS detect: " + ex.Message); return; }
+            catch (Exception ex) when (ex is not OperationCanceledException) { _log.Info("VIDEO_ASSOCIATIONS detect: " + ex.Message); return; }
 
             using var bulkCached = _store.BeginBulk();
             foreach (var (uri, _, _) in reqs)
@@ -72,7 +72,7 @@ sealed class SpotifyVideoService : IVideoService
 
         IReadOnlyDictionary<(string Uri, Xm.ExtensionKind Kind), ExtendedMetadataSource.ExtensionResult> results;
         try { results = await _metadata.GetExtensionsWithHeadersAsync(reqs, ct).ConfigureAwait(false); }
-        catch (Exception ex) when (ex is not OperationCanceledException) { _log?.Invoke("VIDEO_ASSOCIATIONS detect: " + ex.Message); return; }
+        catch (Exception ex) when (ex is not OperationCanceledException) { _log.Info("VIDEO_ASSOCIATIONS detect: " + ex.Message); return; }
 
         using var bulk = _store.BeginBulk();   // coalesce the per-track HasVideo bumps into one change signal
         foreach (var (uri, _, _) in reqs)
@@ -111,7 +111,7 @@ sealed class SpotifyVideoService : IVideoService
             if (results.TryGetValue((uri, Xm.ExtensionKind.VideoAssociations), out var wire))
                 Apply(uri, wire, now);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException) { _log?.Invoke("VIDEO_ASSOCIATIONS get: " + ex.Message); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { _log.Info("VIDEO_ASSOCIATIONS get: " + ex.Message); }
         return _store.GetVideoAssociation(uri);
     }
 

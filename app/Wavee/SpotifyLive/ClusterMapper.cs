@@ -98,12 +98,12 @@ public sealed class ClusterIngest : IDisposable
     readonly NowPlayingProjection _projection;
     readonly LiveConnectDevices _devices;
     readonly string _ourDeviceId;
-    readonly Action<string>? _log;
+    readonly WaveeLogger _log;
     readonly Action<long>? _onServerTimestamp;   // feeds the server-clock estimator a free passive sample per cluster
     readonly IDisposable _sub;
 
     public ClusterIngest(ITransport transport, NowPlayingProjection projection, LiveConnectDevices devices,
-        string ourDeviceId, Action<string>? log = null, Action<long>? onServerTimestamp = null)
+        string ourDeviceId, WaveeLogger log = default, Action<long>? onServerTimestamp = null)
     {
         _projection = projection;
         _devices = devices;
@@ -121,7 +121,7 @@ public sealed class ClusterIngest : IDisposable
             var update = P.ClusterUpdate.Parser.ParseFrom(e.Payload);
             if (update.Cluster is not null) Apply(update.Cluster);
         }
-        catch (Exception ex) { _log?.Invoke("cluster parse failed: " + ex.Message); }
+        catch (Exception ex) { _log.Info("cluster parse failed: " + ex.Message); }
     }
 
     /// <summary>The PUT-state announce RESPONSE body is a Cluster (not a ClusterUpdate) — re-injected here so the
@@ -129,7 +129,7 @@ public sealed class ClusterIngest : IDisposable
     public void OnAnnounceResponse(byte[] clusterBytes)
     {
         try { Apply(P.Cluster.Parser.ParseFrom(clusterBytes)); }
-        catch (Exception ex) { _log?.Invoke("announce-response cluster parse failed: " + ex.Message); }
+        catch (Exception ex) { _log.Info("announce-response cluster parse failed: " + ex.Message); }
     }
 
     void Apply(P.Cluster cluster)

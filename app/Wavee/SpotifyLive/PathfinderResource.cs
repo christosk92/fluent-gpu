@@ -22,7 +22,7 @@ public sealed class PathfinderResource
 
     readonly record struct CachedJson(byte[] Bytes, TimeSpan Ttl);
 
-    public PathfinderResource(PathfinderClient client, Func<SessionContext> ctx, Action<string>? log = null, int maxEntries = 128)
+    public PathfinderResource(PathfinderClient client, Func<SessionContext> ctx, WaveeLogger log = default, int maxEntries = 128)
     {
         _client = client;
         _resource = new Resource<PathfinderKey, CachedJson>(

@@ -14,7 +14,7 @@ namespace Wavee;
 // ── The authenticated account chip + dropdown + logout confirm ────────────────────────────────────────────────────────
 // WinUI-desktop parity: the avatar top-right opens a flyout (account / settings / log out). Reuses the shell's already-
 // mounted Overlay.Service (no new host). "Log out" opens a modal confirm → Services.LogoutAsync, which flips the gate back
-// to the takeover with NO process restart. The avatar carries MorphId="account:me" for the success/logout morph.
+// to the takeover with NO process restart.
 sealed class ProfileMenu : Component
 {
     static readonly ColorF Gold = ColorF.FromRgba(0xE6, 0xC2, 0x6C);
@@ -38,7 +38,7 @@ sealed class ProfileMenu : Component
         bool premium = user?.IsPremium ?? false;
         string avatar = user?.AvatarUrl ?? "";
         string? email = user?.Email;
-        var pic = PersonPicture.Create(avatar, 24f, displayName: name) with { MorphId = "account:me" };
+        var pic = PersonPicture.Create(avatar, 24f, displayName: name);
 
         void Close() => handle.Value?.Close();
 

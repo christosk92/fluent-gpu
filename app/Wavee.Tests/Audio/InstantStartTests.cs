@@ -1,6 +1,7 @@
 using System;
-using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
+using Wavee;
 using Wavee.Backend;
 using Wavee.Backend.Audio;
 using Xunit;
@@ -61,8 +62,9 @@ public class InstantStartTests
         var bodyTcs = new TaskCompletionSource<AudioStreamHandle>(TaskCreationOptions.RunContinuationsAsynchronously);
         var start = new AudioFastStart("spotify:track:x", "fid", AudioFormat.OggVorbis320, 1000, 0f, new byte[10]);
         var fast = new FakeFastResolver(new FastStartPlan(start, bodyTcs.Task));
-        var logs = new List<string>();
-        var controller = new PlaybackController(host, new StubTrackResolver(), proj, EmptyContextResolver.Instance, "dev", log: logs.Add, fast: fast);
+        var sink = new CapturingWaveeLog();
+        var log = new WaveeLogger(sink, "test");
+        var controller = new PlaybackController(host, new StubTrackResolver(), proj, EmptyContextResolver.Instance, "dev", log: log, fast: fast);
         PlaybackErrorInfo? err = null;
         var errorSignaled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         controller.OnPlaybackError = e => { err = e; errorSignaled.TrySetResult(); };
@@ -75,8 +77,8 @@ public class InstantStartTests
 
         Assert.True(host.StopCalled);
         Assert.Equal(AudioKeyFailureReason.Network, err?.Reason);
-        Assert.Contains(logs, l => l.Contains("fast-start body failed for active track=spotify:track:x", StringComparison.Ordinal));
-        Assert.Contains(logs, l => l.Contains("stopping audio host to unblock head stream", StringComparison.Ordinal));
+        Assert.Contains(sink.Entries, e => e.Message.Contains("fast-start body failed for active track=spotify:track:x", StringComparison.Ordinal));
+        Assert.Contains(sink.Entries, e => e.Message.Contains("stopping audio host to unblock head stream", StringComparison.Ordinal));
         controller.Dispose();
     }
 
@@ -89,15 +91,16 @@ public class InstantStartTests
         var body = Task.FromResult(new AudioStreamHandle("spotify:track:x", "fid", "https://cdn", new byte[16],
             AudioFormat.OggVorbis320, 1000, 0f, new[] { "https://cdn" }, 10));
         var fast = new FakeFastResolver(new FastStartPlan(start, body));
-        var logs = new List<string>();
-        var controller = new PlaybackController(host, new StubTrackResolver(), proj, EmptyContextResolver.Instance, "dev", log: logs.Add, fast: fast);
+        var sink = new CapturingWaveeLog();
+        var log = new WaveeLogger(sink, "test");
+        var controller = new PlaybackController(host, new StubTrackResolver(), proj, EmptyContextResolver.Instance, "dev", log: log, fast: fast);
 
         await controller.PlayTrackAsync("spotify:track:x");
 
         Assert.True(host.LoadFastStartCalled);
         Assert.True(host.PlayCalled);
         Assert.False(host.SupplyBodyCalled);
-        Assert.Contains(logs, l => l.Contains("deferring supply", StringComparison.Ordinal));
+        Assert.Contains(sink.Entries, e => e.Message.Contains("deferring supply", StringComparison.Ordinal));
 
         await host.SupplyBodySignaled.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.True(host.SupplyBodyCalled);

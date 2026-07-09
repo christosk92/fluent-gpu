@@ -8,7 +8,7 @@ namespace Wavee.SpotifyLive.Audio.Host;
 /// <summary>Owns the audio-child channel: one demuxing read loop, request correlation, hello/version gate and recycle.</summary>
 internal sealed class AudioHostProcess : IAsyncDisposable
 {
-    readonly Action<string>? _log;
+    readonly WaveeLogger _log;
     readonly Func<string, CancellationToken, Task<IIpcChannel>> _connect;
     readonly SemaphoreSlim _startGate = new(1, 1);
     readonly ConcurrentDictionary<long, TaskCompletionSource<JsonElement?>> _pending = new();
@@ -26,10 +26,10 @@ internal sealed class AudioHostProcess : IAsyncDisposable
     public event Action<string, JsonElement?>? Notification;
     public event Action<Exception>? Faulted;
 
-    public AudioHostProcess(Action<string>? log = null)
+    public AudioHostProcess(WaveeLogger log = default)
         : this(log, (token, ct) => ProcessIpcChannel.SpawnAsync(token, log, ct)) { }
 
-    public AudioHostProcess(Action<string>? log, Func<string, CancellationToken, Task<IIpcChannel>> connect)
+    public AudioHostProcess(WaveeLogger log, Func<string, CancellationToken, Task<IIpcChannel>> connect)
     {
         _log = log;
         _connect = connect;
@@ -89,7 +89,7 @@ internal sealed class AudioHostProcess : IAsyncDisposable
                 throw new InvalidOperationException("audio host contract mismatch: host=" + ready.ContractVersion +
                     " app=" + AudioIpcContract.Version + " detail=" + (ready.Detail ?? ""));
 
-            _log?.Invoke("audio host ready pid=" + ready.Pid + " contract=" + ready.ContractVersion);
+            _log.Info("audio host ready pid=" + ready.Pid + " contract=" + ready.ContractVersion);
         }
         catch
         {
@@ -114,7 +114,7 @@ internal sealed class AudioHostProcess : IAsyncDisposable
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            _log?.Invoke("audio host read loop ended: " + ex.Message);
+            _log.Info("audio host read loop ended: " + ex.Message);
             await RecycleAsync(channel, ex).ConfigureAwait(false);
         }
     }
@@ -188,13 +188,13 @@ internal sealed class AudioHostProcess : IAsyncDisposable
             catch (OperationCanceledException) { throw; }
             catch (TimeoutException ex) when (attempt == 0)
             {
-                _log?.Invoke("'" + type + "' timed out after " + timeout.TotalSeconds.ToString("0") + "s; recycling audio host");
+                _log.Info("'" + type + "' timed out after " + timeout.TotalSeconds.ToString("0") + "s; recycling audio host");
                 last = ex;
                 await RecycleAsync(channel, ex).ConfigureAwait(false);
             }
             catch (Exception ex) when (attempt == 0)
             {
-                _log?.Invoke("'" + type + "' failed (" + ex.Message + "); recycling audio host");
+                _log.Info("'" + type + "' failed (" + ex.Message + "); recycling audio host");
                 last = ex;
                 await RecycleAsync(channel, ex).ConfigureAwait(false);
             }

@@ -129,6 +129,51 @@ public class WaveeLogSessionsTests
     }
 
     [Fact]
+    public void ListPastSessions_KeysOnSidChange_AndExcludesCurrentBySid()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "wavee-log-tests-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            // session A (sid aaaa1111) then a trailing session whose sid IS this run → excluded by sid, not pid.
+            string live = WriteLog(dir, "wavee.log",
+                "seq=1 tid=2 t=1000 sid=aaaa1111 pid=11 I [app] startup - Wavee starting",
+                "seq=2 tid=2 t=2000 sid=aaaa1111 pid=11 I [connect] hi",
+                $"seq=1 tid=2 t=3000 sid={WaveeLog.SessionId} pid=22 I [app] startup - Wavee starting");
+
+            var s = Assert.Single(WaveeLogSessions.ListPastSessions(live, currentPid: -1));
+            Assert.Equal("aaaa1111", s.SessionId);
+            Assert.Equal(11, s.Pid);
+            Assert.Equal(2, s.EntryCount);
+        }
+        finally { try { Directory.Delete(dir, recursive: true); } catch { } }
+    }
+
+    [Fact]
+    public void ListPastSessions_MixedLegacyAndSidLines()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "wavee-log-tests-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            string live = WriteLog(dir, "wavee.log",
+                "seq=1 tid=2 t=1000 I [app] startup - Wavee starting pid=1 args=1",   // legacy (no sid)
+                "seq=2 tid=2 t=2000 I [connect] a",
+                "seq=1 tid=2 t=5000 sid=bbbb2222 pid=2 I [app] startup - Wavee starting",
+                "seq=2 tid=2 t=6000 sid=bbbb2222 pid=2 I [connect] b");
+
+            var sessions = WaveeLogSessions.ListPastSessions(live, currentPid: -1);
+
+            Assert.Equal(2, sessions.Count);
+            Assert.Equal("bbbb2222", sessions[0].SessionId);   // newest first
+            Assert.Equal(2, sessions[0].Pid);
+            Assert.Equal("", sessions[1].SessionId);           // legacy carries no sid
+            Assert.Equal(1, sessions[1].Pid);
+        }
+        finally { try { Directory.Delete(dir, recursive: true); } catch { } }
+    }
+
+    [Fact]
     public void ExportSessionToFile_LineCountMatchesEntryCount()
     {
         string dir = Path.Combine(Path.GetTempPath(), "wavee-log-tests-" + Guid.NewGuid().ToString("N"));

@@ -68,7 +68,6 @@ sealed class DiscographyPage : Component
         var route = _route.Value;                    // subscribe → serve successive facet routes in place
         var (kind, uri) = DiscographyRoute.Parse(route.Name);
         string artistName = string.IsNullOrEmpty(route.Arg) ? "Artist" : route.Arg!;
-        this.UseSoftReveal(dy: 0f, blur: 0f);
 
         var post = UsePost();
         if (_vc is null || _key != route.Name)

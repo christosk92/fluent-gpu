@@ -70,7 +70,7 @@ sealed class SidebarResizeGrip : Component
         if (scene is null || _self.IsNull || !scene.IsLive(_self)) return;
         // The first drag move can be batched with pointer-down in the same frame. Set the snap gate synchronously here
         // so ApplyProjections never sees the collapse spring for live width writes.
-        Motion.ReducedMotion = true;
+        Motion.SetLayoutTransitionsSuppressed(MotionSuppressionSource.AppResize, true);
         _dragging.Value = true;
         _startedCompact = _compact.Peek();
         _startW = _startedCompact ? CompactWidth : _width.Peek();
@@ -119,6 +119,8 @@ sealed class SidebarResizeGrip : Component
 
     void OnReleased()
     {
+        // Release geometry suppression before the discrete detent clamp so the final settle can use its authored recipe.
+        Motion.SetLayoutTransitionsSuppressed(MotionSuppressionSource.AppResize, false);
         // A release inside the resist zone (didn't force-push to collapse) settles to the min expanded width rather than
         // persisting the slightly-sub-min sticky value.
         if (!_compact.Peek()) _width.Value = Math.Clamp(_width.Peek(), MinWidth, MaxWidth);
@@ -129,6 +131,7 @@ sealed class SidebarResizeGrip : Component
 
     void OnCanceled()
     {
+        Motion.SetLayoutTransitionsSuppressed(MotionSuppressionSource.AppResize, false);
         _fade.Value = 1f;
         _dragging.Value = false;
     }

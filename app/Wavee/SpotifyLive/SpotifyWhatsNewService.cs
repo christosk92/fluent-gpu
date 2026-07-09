@@ -15,7 +15,7 @@ namespace Wavee.SpotifyLive;
 sealed class SpotifyWhatsNewService : IWhatsNewService, IDisposable
 {
     readonly PathfinderResource _pathfinder;
-    readonly Action<string>? _log;
+    readonly WaveeLogger _log;
 
     readonly SimpleEvent<int> _changed = new();
     readonly object _gate = new();
@@ -26,7 +26,7 @@ sealed class SpotifyWhatsNewService : IWhatsNewService, IDisposable
     bool _disposed;
     int _rev;
 
-    public SpotifyWhatsNewService(PathfinderResource pathfinder, Action<string>? log = null)
+    public SpotifyWhatsNewService(PathfinderResource pathfinder, WaveeLogger log = default)
     {
         _pathfinder = pathfinder;
         _log = log;
@@ -78,7 +78,6 @@ sealed class SpotifyWhatsNewService : IWhatsNewService, IDisposable
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            _log?.Invoke("what's-new: " + ex.Message);
             ApplyFailure(ex.Message);
         }
         finally
@@ -98,8 +97,9 @@ sealed class SpotifyWhatsNewService : IWhatsNewService, IDisposable
         Fire();
     }
 
-    void ApplyFailure(string _)
+    void ApplyFailure(string reason)
     {
+        _log.Info("what's-new: " + reason);   // non-exception failures (stale hash, bad payload) must be visible too
         bool changed = false;
         lock (_gate)
         {

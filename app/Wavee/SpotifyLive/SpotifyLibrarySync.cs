@@ -20,7 +20,7 @@ public static class SpotifyLibrarySync
 {
     static readonly string[] Sets = { "liked", "albums", "artists", "shows", "episodes" };
 
-    public static async Task<int> RunAsync(Action<string> log, CancellationToken ct)
+    public static async Task<int> RunAsync(WaveeLogger log, CancellationToken ct)
     {
         var live = await SpotifyLiveSpclient.ConnectAsync(log, ct, retainApChannel: true).ConfigureAwait(false);
         if (live is null) return 1;
@@ -54,19 +54,19 @@ public static class SpotifyLibrarySync
             () => sessionHost.Current, () => live.Username, log, ct);
         using var router = new DealerRouter(transport, sync);
 
-        log("Syncing library (rootlist + collection sets, via LibrarySync.InitialHydrate)...");
+        log.Info("Syncing library (rootlist + collection sets, via LibrarySync.InitialHydrate)...");
         var hydrated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         sync.Enqueue(new SyncCommand(SyncKind.InitialHydrate, Done: hydrated));
         await hydrated.Task.WaitAsync(ct).ConfigureAwait(false);
 
         var rootlist = store.Rootlist();
-        log("  " + rootlist.Count(e => e.Kind == 0) + " playlists, " + rootlist.Count(e => e.Kind == 1) + " folders.");
-        foreach (var set in Sets) log("  " + set + ": " + store.SavedUris(set).Count + " items.");
+        log.Info("  " + rootlist.Count(e => e.Kind == 0) + " playlists, " + rootlist.Count(e => e.Kind == 1) + " folders.");
+        foreach (var set in Sets) log.Info("  " + set + ": " + store.SavedUris(set).Count + " items.");
         store.Flush();
-        log("Library synced + persisted to " + dbPath);
+        log.Info("Library synced + persisted to " + dbPath);
 
         // 2) the hm:// firehose: pushes decode-and-enqueue into the SAME loop (parent-rev in-place apply / dirty / delta).
-        if (dealerHosts.Count == 0) { log("No dealer host — skipping the real-time listen."); return 0; }
+        if (dealerHosts.Count == 0) { log.Info("No dealer host — skipping the real-time listen."); return 0; }
         // Stage B — register this device on Spotify Connect: ConnectService captures the dealer connection_id (the pusher
         // hello header) and PUTs /connect-state/v1/devices/{id}, so the device APPEARS in the Connect picker. Created BEFORE
         // Start() so the first connection_id hello isn't missed. Later stages add inbound command handling + the projection.
@@ -77,14 +77,14 @@ public static class SpotifyLibrarySync
         using var npSub = liveConnect.Projection.Changes.Subscribe(Observers.From<Wavee.Core.IPlaybackState>(s =>
         {
             if (s.CurrentTrack is { } tk)
-                log("  now-playing: " + tk.Title + " — " + (s.IsPlaying ? "playing" : "paused") + " (active=" + liveConnect.Projection.ActiveDeviceId + ")");
+                log.Info("  now-playing: " + tk.Title + " — " + (s.IsPlaying ? "playing" : "paused") + " (active=" + liveConnect.Projection.ActiveDeviceId + ")");
         }));
         transport.Start();
 
-        log("Dealer firehose open + Connect device announced; listening for live updates for 20s...");
+        log.Info("Dealer firehose open + Connect device announced; listening for live updates for 20s...");
         try { await Task.Delay(TimeSpan.FromSeconds(20), ct).ConfigureAwait(false); } catch { }
         store.Flush();
-        log("Sync counters: pushApplied=" + sync.PushApplied + " dirty=" + sync.PushMarkedDirty + " directApplied=" + sync.PushDirectApplied
+        log.Info("Sync counters: pushApplied=" + sync.PushApplied + " dirty=" + sync.PushMarkedDirty + " directApplied=" + sync.PushDirectApplied
             + " echoDropped=" + sync.EchoDropped + " setFetches=" + sync.SetFetches
             + " diff(applied/upToDate/full)=" + sync.DiffApplied + "/" + sync.DiffUpToDate + "/" + sync.DiffFellBack);
         return 0;

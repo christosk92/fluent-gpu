@@ -94,6 +94,9 @@ public sealed class LazyGrid : Component
     NodeHandle _node;                                // captured at realize; for content-space position via the scene
     readonly int _initialIndex;                      // >0 ⇒ on first valid layout, scroll the page so this item is at the top
     bool _didInitialScroll;
+    int _lastCols;
+    float _lastRowH;
+    float _lastSectionTop;
 
     static long PackKey(in LazyGridMath.View v)
         => ((long)(uint)(v.FirstRow + 1) << 40) ^ ((long)(uint)(v.LastRow + 1) << 8) ^ (v.DrawerVisible ? 1L : 0L);
@@ -155,6 +158,19 @@ public sealed class LazyGrid : Component
 
         var view = LazyGridMath.Compute(scrollOffset - sectionTop, viewportH, rowH, totalRows, _overscanRows, expandedRow, drawerH);
 
+        int oldCols = _lastCols;
+        float oldRowH = _lastRowH;
+        float oldSectionTop = _lastSectionTop;
+        UseLayoutEffect(() =>
+        {
+            float newTop = Geometry().sectionTop;
+            if (expandedIndex < 0 && oldCols > 0 && oldCols != cols)
+                PreserveColumnAnchor(oldCols, oldRowH, oldSectionTop, cols, rowH, newTop);
+            _lastCols = cols;
+            _lastRowH = rowH;
+            _lastSectionTop = newTop;
+        }, cols, rowH);
+
         // Opening is one coordinated interaction: after final geometry is known, minimally reveal the selected row and
         // drawer through the engine-owned smooth-scroll path. Closing deliberately leaves the viewport alone.
         UseLayoutEffect(() =>
@@ -176,15 +192,21 @@ public sealed class LazyGrid : Component
         // Page the data in for the realized window (+ overscan already folded into first/last).
         _ensureRange(view.FirstRow * cols, Math.Min(count, (view.LastRow + 1) * cols));
 
-        var children = new List<Element>((view.LastRow - view.FirstRow + 1) + 3);
+        var children = new List<Element>(5);
         if (view.TopPad > 0.5f) children.Add(new BoxEl { Key = "lazy-top", Height = view.TopPad });
-        for (int r = view.FirstRow; r <= view.LastRow; r++)
+        if (!view.DrawerVisible)
+            children.Add(GridSlice(view.FirstRow, view.LastRow, cols, cellW, rowH, count, isBelow: false));
+        else
         {
-            children.Add(Row(r, cols, cellW, rowH, count));
-            if (r == expandedRow && view.DrawerVisible && _drawer is { } d)
+            if (_drawer is { } drawer)
             {
-                int col = expandedIndex - expandedRow * cols;       // expanded card's column → drawer connects to it
-                children.Add(d(expandedIndex, new GridDrawerInfo(cols, col, cellW, _gap, col * (cellW + _gap))));
+                // Two GridEl siblings need distinct keys that DON'T track the scrolled window, else the drawer-open
+                // reconcile collides (both "lazy-grid") and the below-slice remounts every render.
+                children.Add(GridSlice(view.FirstRow, expandedRow, cols, cellW, rowH, count, isBelow: false));
+                int expandedCol = expandedIndex - expandedRow * cols;
+                children.Add(drawer(expandedIndex, new GridDrawerInfo(cols, expandedCol, cellW, _gap, expandedCol * (cellW + _gap))));
+                if (expandedRow < view.LastRow)
+                    children.Add(GridSlice(expandedRow + 1, view.LastRow, cols, cellW, rowH, count, isBelow: true));
             }
         }
         if (view.BottomPad > 0.5f) children.Add(new BoxEl { Key = "lazy-bottom", Height = view.BottomPad });
@@ -200,27 +222,59 @@ public sealed class LazyGrid : Component
         Children = [inner],
     };
 
-    Element Row(int row, int cols, float cellW, float rowH, int count)
+    Element GridSlice(int firstRow, int lastRow, int cols, float cellW, float rowH, int count, bool isBelow)
     {
-        int start = row * cols;
-        var cells = new Element[cols];
-        for (int c = 0; c < cols; c++)
+        int start = firstRow * cols;
+        int end = Math.Min(count, (lastRow + 1) * cols);
+        var cells = new Element[Math.Max(0, end - start)];
+        for (int idx = start; idx < end; idx++)
         {
-            int idx = start + c;
-            // 1fr cells: the ENGINE distributes the row width equally (like AutoGrid / CSS-grid `1fr`) — NO hand-set card
-            // widths; the card's cover self-sizes (aspect-ratio) into whatever width flex gives it. Content-height +
-            // top-aligned, so the leftover (rowH − cardHeight) is real vertical breathing room, not a stretched card.
-            cells[c] = idx < count
-                ? new BoxEl { Grow = 1f, Basis = 0f, Direction = 1, Children = [_cell(idx, cellW)] }
-                : new BoxEl { Grow = 1f, Basis = 0f };   // empty track keeps the column widths uniform on the last row
+            cells[idx - start] = new BoxEl
+            {
+                Key = "lazy-cell:" + idx,
+                Direction = 1,
+                Animate = MotionRecipes.CardRefit,
+                Children = [_cell(idx, cellW)],
+            };
         }
-        // Fixed row height keeps the windowing math exact; AlignItems=Start stops cards from stretching to fill it.
-        // (cellW is the engine's own per-column result — passed to the cell only as a sizing HINT, never to set a width.)
-        return new BoxEl
+        var tracks = new TrackSize[cols];
+        Array.Fill(tracks, TrackSize.Star());
+        return new GridEl
         {
-            Key = "lazy-row:" + row,
-            Direction = 0, Gap = _gap, Height = rowH, AlignItems = FlexAlign.Start, Children = cells,
+            Key = isBelow ? "lazy-grid:below" : "lazy-grid",
+            Columns = tracks,
+            ColGap = _gap,
+            RowGap = 0f,
+            RowHeight = rowH,
+            Children = cells,
         };
+    }
+
+    void PreserveColumnAnchor(int oldCols, float oldRowH, float oldTop, int cols, float rowH, float sectionTop)
+    {
+        var scene = Context.Scene;
+        if (scene is null || _node.IsNull || !scene.IsLive(_node) || oldRowH <= 0f) return;
+        var vp = _node;
+        for (vp = scene.Parent(vp); !vp.IsNull && !scene.HasScroll(vp); vp = scene.Parent(vp)) { }
+        if (vp.IsNull) return;
+        ref ScrollState sc = ref scene.ScrollRef(vp);
+        float rel = sc.OffsetY - oldTop;
+        if (rel <= 0f) return;
+        int oldRow = Math.Max(0, (int)MathF.Floor(rel / oldRowH));
+        int anchorIndex = oldRow * oldCols;
+        float within = rel - oldRow * oldRowH;
+        float target = sectionTop + (anchorIndex / Math.Max(1, cols)) * rowH + within * (rowH / oldRowH);
+        target = Math.Clamp(target, 0f, MathF.Max(0f, sc.ContentH - sc.ViewportH));
+        sc.OffsetY = sc.TargetY = target;
+        sc.PendingTargetY = float.NaN;
+        sc.Phase = ScrollIntegrator.Idle;
+        var content = sc.ContentNode;
+        if (!content.IsNull && scene.IsLive(content))
+        {
+            scene.Paint(content).LocalTransform = Affine2D.Translation(0f, -target);
+            scene.Mark(content, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+        }
+        scene.Mark(vp, NodeFlags.PaintDirty);
     }
 
     // This grid's top within the page scroll's CONTENT space (stable across scroll: my abs Y and the content's abs Y both

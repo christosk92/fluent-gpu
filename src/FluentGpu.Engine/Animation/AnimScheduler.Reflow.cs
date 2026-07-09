@@ -143,4 +143,61 @@ public sealed partial class AnimEngine
         else p.ClipRect = RectF.Infinite;
         _scene.Mark(node, NodeFlags.PaintDirty);
     }
+
+    /// <summary>The STRUCTURAL / bounds channels a resize or a suppressed projection must snap: the FLIP position +
+    /// ScaleCorrect scale axes and the Reveal/Relayout/Reflow size axes. Excludes the gesture/brush side-table fades
+    /// (Hover/Press/Brush), opacity, blur, rotation, stroke-trim, and clip — those keep running through a resize (a
+    /// card's hover/press/enter fade is not stale just because the window changed size).</summary>
+    private static bool IsStructuralChannel(AnimChannel ch)
+        => ch is AnimChannel.TranslateX or AnimChannel.TranslateY
+              or AnimChannel.ScaleX or AnimChannel.ScaleY
+              or AnimChannel.SizeW or AnimChannel.SizeH
+              or AnimChannel.LayoutW or AnimChannel.LayoutH;
+
+    /// <summary>Cancel a node's in-flight STRUCTURAL rows and land its presented state on the just-solved geometry —
+    /// the shared snap for (a) a suppressed projection (an interactive/edge/maximize resize owns geometry, so a bounds
+    /// change must NOT start a projection) and (b) a real-resize frame (an in-flight track is guaranteed-stale). Each
+    /// size/reflow row settle-restores FIRST (declared LayoutInput back — usually NaN — plus PresentedW/H → NaN, the
+    /// Relayouting flag cleared, child-shift zeroed) so SizeMode.Relayout leaves no li.Width/Height poisoned with a
+    /// stale PresentedW; the FLIP position/scale rows drop and the composited transform resets to identity so no stale
+    /// translate/scale survives to draw the node at slot+staleOffset. Interaction/brush/opacity/blur rows are left
+    /// running. Zero-alloc POD-slab walk (no LINQ/enumerator); the caller runs it BEFORE layout so bounds land clean.</summary>
+    public void SnapStructuralToLayout(NodeHandle node)
+    {
+        int idx = (int)node.Raw.Index;
+        bool live = _scene.IsLive(node);
+        bool resetTransform = false;
+        int s = _slab.HeadOnNode(idx);
+        while (s >= 0)
+        {
+            int next = _slab.At(s).NextOnNode;   // read the link BEFORE FreeSlot unlinks the row
+            AnimChannel ch = _slab.At(s).Channel;
+            if (IsStructuralChannel(ch))
+            {
+                if (ch is AnimChannel.TranslateX or AnimChannel.TranslateY or AnimChannel.ScaleX or AnimChannel.ScaleY)
+                    resetTransform = true;
+                SettleRestore(s);   // size/reflow: restore declared LayoutInput + sentinels; transform channels: no-op
+                FreeSlot(s);
+            }
+            s = next;
+        }
+        // The freed FLIP rows no longer re-compose, so the last-written translate/scale would persist in NodePaint —
+        // reset to identity (rotation, if any live row still drives it, re-folds from FromPaint next tick).
+        if (resetTransform && live)
+        {
+            ref NodePaint p = ref _scene.Paint(node);
+            p.LocalTransform = Affine2D.Identity;
+            _scene.Mark(node, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+        }
+    }
+
+    /// <summary>Resize-frame bulk snap: cancel every FLIP node's in-flight structural rows and land it on the geometry
+    /// the imminent (re)layout solves (<see cref="SnapStructuralToLayout"/> per node). Zero-alloc — walks the caller's
+    /// FLIP-node registry (SceneStore.BoundsAnimatedNodes) and, per node, the POD row chain. Freeing anim rows never
+    /// mutates the passed list (it indexes SceneStore nodes, not slab slots), so the walk is stable across the frees.</summary>
+    public void CancelStructuralAll(List<NodeHandle> flipNodes)
+    {
+        for (int i = 0; i < flipNodes.Count; i++)
+            SnapStructuralToLayout(flipNodes[i]);
+    }
 }

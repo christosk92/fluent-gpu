@@ -40,12 +40,12 @@ sealed class DetailPage : Component
         var route = _route.Value;                          // subscribe → re-render when navigation swaps the detail route in place
         var (kind, id) = ParseDetail(route);
 
-        // Connected-animation (Hero) key for the cover == the route key the Home card navigated with. Threaded into BOTH
-        // the skeleton's reserved cover slot AND the real cover, so the flying art lands whichever is laid out first.
-        string? morphKey = MorphKeys.For(kind, id);
+        // Preview identity is route-scoped so a card's already-known header data can appear immediately while the full
+        // model loads. It is deliberately not used as a shared-element/connected-animation key.
+        string previewKey = route.Name;
 
         // The PARTIAL model the Home card already had (cover/title/artist) — optional: deep links / search have none.
-        var preview = UseMemo(() => morphKey is null ? null : navPreview?.Take(morphKey), morphKey ?? "");
+        var preview = UseMemo(() => navPreview?.Take(previewKey), previewKey);
         // Dep-keyed on the route: when navigation swaps the detail route on a REUSED instance, cancel the prior load and
         // refetch for the new id (resetting to the new preview/skeleton). Fires once at mount when nothing is reused.
         // Stable per-instance loadable, re-driven by the route dep key — DetailShell freezes the model at construction,
@@ -117,7 +117,7 @@ sealed class DetailPage : Component
         // Pre-loaded: render the shell straight away from the preview (header live), tracks stream in via Skel.Region.
         // Thread the preview's cover as the fallback so a loaded null cover never drops the flown-in art to a placeholder.
         if (preview is not null)
-            return Embed.Comp(() => new DetailShell(_route, model, preview.Cover));
+            return Embed.Comp(() => new DetailShell(_route, model, preview.Cover, svc.Settings));
 
         // No data at click (deep link): the full-page skeleton until the model lands, then the loadable-driven shell.
         // The content is wrapped in a plain Grow=1 BoxEl (NOT a bare component): the SkelRegion boundary mirrors its active
@@ -126,12 +126,12 @@ sealed class DetailPage : Component
         // and detail pages whose virtualized list has little intrinsic height would collapse to 0 rows.
         return Skel.Region(
             model,
-            shimmerSource: () => DetailSkeleton.Build(SkeletonConfig(kind), morphKey),
+            shimmerSource: () => DetailSkeleton.Build(SkeletonConfig(kind)),
             onFailed: () => ErrorState.Build(model.Error),
             // Pass the SHARED loadable (Ready when content runs), not a fresh Loadable.Ready(m): the shell is REUSED
             // across detail routes, so it must read the one re-driven loadable — a per-render wrapper would leave the
             // reused shell pinned to the first album's value.
-            content: _ => new BoxEl { Grow = 1f, Direction = 0, Children = [ Embed.Comp(() => new DetailShell(_route, model)) ] },
+            content: _ => new BoxEl { Grow = 1f, Direction = 0, Children = [ Embed.Comp(() => new DetailShell(_route, model, settings: svc.Settings)) ] },
             smoothResize: false);
     }
 
@@ -315,7 +315,7 @@ sealed class DetailPage : Component
 // The loading skeleton, matched to the real layout (rail block + N row bars) so the reveal doesn't jump.
 static class DetailSkeleton
 {
-    public static Element Build(DetailConfig cfg, string? morphKey = null)
+    public static Element Build(DetailConfig cfg)
     {
         var rows = new Element[8];
         for (int i = 0; i < rows.Length; i++) rows[i] = RowBar();
@@ -338,7 +338,7 @@ static class DetailSkeleton
             [
                 // The reserved cover slot doubles as the connected-animation dest while the album loads — the flying card
                 // art lands here immediately (no wait for the fetch); the real cover cross-fades in underneath when ready.
-                new BoxEl { Width = cover, Height = cover, Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardDefault, MorphId = morphKey },
+                new BoxEl { Width = cover, Height = cover, Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardDefault },
                 Bar(cover * 0.5f, 12f), Bar(cover * 0.85f, 30f), Bar(cover * 0.6f, 13f),
                 new BoxEl { Height = WaveeSpace.S },
                 Bar(120f, 40f),

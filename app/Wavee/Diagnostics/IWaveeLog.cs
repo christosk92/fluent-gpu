@@ -99,6 +99,9 @@ public interface IWaveeLog
     void Log(WaveeLogLevel level, string category, string message, Exception? ex = null);
     void Event(WaveeLogLevel level, string category, string eventId, string message,
         string? operationId = null, long elapsedMs = -1, Exception? ex = null, params WaveeLogField[] fields);
+    // The master level gate the WaveeLogger facade consults before building any message. Default true so existing test
+    // fakes keep compiling; WaveeLog returns level >= MinLevel (its Write() short-circuit).
+    bool IsEnabled(WaveeLogLevel level) => true;
 }
 
 public static class WaveeLogExtensions

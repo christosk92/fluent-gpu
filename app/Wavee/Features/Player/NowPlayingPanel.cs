@@ -139,7 +139,7 @@ sealed class NowPlayingPanel : Component
                                 new BoxEl { Direction = 1, Gap = 2f, Children = meta.ToArray() },
                             ],
                         },
-                        lib is null ? new BoxEl() : Embed.Comp(() => new SaveButton(track.Uri, 16f, 36f)) with { Key = "save:" + track.Uri },
+                        lib is null ? new BoxEl() : Embed.Comp(() => new SaveButton(track.Uri, 16f, 36f, track.Title)) with { Key = "save:" + track.Uri },
                     ],
                 },
             ],
@@ -219,7 +219,7 @@ sealed class NowPlayingPanel : Component
         if (facts.Count > 0) body.Add(new BoxEl { Direction = 0, Wrap = true, Gap = 6f, Children = facts.ToArray() });
         if (!string.IsNullOrWhiteSpace(artist.Bio))
             body.Add(new TextEl(artist.Bio!) { Size = 13f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, MaxLines = 5, Trim = TextTrim.CharacterEllipsis });
-        body.Add(new BoxEl { Direction = 0, Children = [Embed.Comp(() => new FollowButton(artist.Uri)) with { Key = "follow:" + artist.Uri }] });
+        body.Add(new BoxEl { Direction = 0, Children = [Embed.Comp(() => new FollowButton(artist.Uri, artist.Name)) with { Key = "follow:" + artist.Uri }] });
 
         return Section(Loc.Get(Strings.Detail.AboutTheArtist), new BoxEl
         {

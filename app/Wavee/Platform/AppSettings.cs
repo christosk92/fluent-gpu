@@ -25,9 +25,14 @@ static class WaveeSettings
     // Theme preference: 0 = System (follow the OS live), 1 = Light, 2 = Dark. Default System so a fresh install matches
     // the OS; an explicit in-app toggle pins Light/Dark and stops following the OS. Seeded at startup before the first frame.
     public static readonly SettingKey<int> ThemeMode = new("theme.mode", 0);
-    // Color palette preset: warm (default) | slate | neutral | accent (OS-accent-tinted neutrals).
-    public static readonly SettingKey<string> PaletteId = new("theme.palette", "warm");
+    // Color palette preset: neutral (default) | warm | slate | accent (OS-accent-tinted neutrals).
+    public static readonly SettingKey<string> PaletteId = new("theme.palette", "neutral");
     public static readonly SettingKey<int> RowDensity = new("detail.rowdensity", 1);   // 0 Compact · 1 Default · 2 Cozy · 3 Comfortable
+    // Wide two-column detail pages: user-resizable left metadata rail. Album-like and playlist-like surfaces keep
+    // separate widths because their authored defaults differ (280 vs 240 DIP). Responsive mid/narrow modes ignore these
+    // values and retain their breakpoint widths; the saved width returns when the page is wide again.
+    public static readonly SettingKey<float> DetailAlbumRailWidth = new("detail.rail.album.width", WaveeSize.RailAlbum);
+    public static readonly SettingKey<float> DetailPlaylistRailWidth = new("detail.rail.playlist.width", WaveeSize.RailPlaylist);
     // The saved / liked / followed library set (Mutations facet) — a newline-joined list of uris. The single in-process
     // outbox: every optimistic save/follow rewrites it. (A real source would reconcile server-side + revision conflicts.)
     public static readonly SettingKey<string> SavedLibrary = new("library.saved", "");
@@ -63,6 +68,10 @@ static class WaveeSettings
     // Local-only read-state for the gander + what's-new feeds (no server mark-read endpoint). Works on both backends.
     public static readonly SettingKey<long> NotificationsGanderLastSeenMs = new("notifications.gander.lastSeenMs", 0L);
     public static readonly SettingKey<long> NotificationsWhatsNewLastSeenMs = new("notifications.whatsnew.lastSeenMs", 0L);
+    // Runtime log-level overrides for the Diagnostics panel (WaveeLogLevel as int; -1 = build default). The env vars
+    // WAVEE_LOG_LEVEL / WAVEE_LOG_FILE_LEVEL still win over these (resolved inside WaveeLog.Configure).
+    public static readonly SettingKey<int> LogMinLevel = new("diagnostics.log.minLevel", -1);
+    public static readonly SettingKey<int> LogFileMinLevel = new("diagnostics.log.fileMinLevel", -1);
 }
 
 // The LibraryPage's per-kind persisted state (the "Your Library" master–detail: albums/artists/podcasts). Keys are built

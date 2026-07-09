@@ -23,6 +23,7 @@ sealed class WaveeShell : Component
     private sealed record OpenTab(int Id, string Key, string Label, string Glyph, string? Arg);
 
     readonly Signal<Route> _route = new(new Route("home"));
+    readonly Signal<NavTransitionKind> _navMotion = new(NavTransitionKind.Forward);
     readonly Signal<bool> _canBack = new(false);
     readonly Signal<bool> _canForward = new(false);
     const int MaxBackStack = 200;   // bound the in-memory back/forward stacks over a long session (the persisted HistoryStore keeps its own 500-entry cap)
@@ -53,28 +54,68 @@ sealed class WaveeShell : Component
     readonly Signal<bool> _sidebarDragging = new(false);       // ON during a seam drag → snaps all layout transitions (1:1 resize)
     readonly Signal<float> _sidebarFade = new(1f);             // content-opacity cue as a resize nears the collapse detent
     Action<float>? _requestTheme;                              // ambient ThemeControl.Request: live animated re-theme (captured in Render)
-    Action<string>? _morphBegin;                               // ambient SharedTransition.Begin: capture the leaving cover for the Back/Forward fly
-    readonly bool _reducedMotionOS = Motion.ReducedMotion;     // OS reduced-motion setting; restored after a drag
 
-    // Rail layout-defer lock (Task C): while the RailReflow spring re-solves content width the responsive breakpoints
-    // (track-list tier, detail mode) are gated so intermediate widths don't churn multiple remounts (the open/close
-    // flash). Armed on every rail toggle; a one-shot Timer clears it after the spring settles. RailLockMs must EXCEED
-    // the RailReflow settle (Spring(0.22f,1f) ≈ 220ms) so the lock never clears mid-flight → an extra remount.
+    // Rail layout-defer lock (Task C): while the RailReveal spring plays out (and the fits-flip settles) the responsive
+    // breakpoints (track-list tier, detail mode) are gated so a transient width state doesn't churn multiple remounts
+    // (the open/close flash). Armed on every rail toggle; a one-shot Timer clears it after the spring settles. RailLockMs
+    // must EXCEED the RailReveal settle (Spring(0.22f,1f) ≈ 220ms) so the lock never clears mid-flight → an extra remount.
     bool _lastRailOpen;
     int _railLockGen;
     System.Threading.Timer? _railLockTimer;
     const int RailLockMs = 300;
+    // Interactive grip drag owns geometry and therefore suppresses projection globally while the pointer is down. Rail
+    // and collapse toggles must NOT use this gate: doing so cancels their own Reveal/FLIP tracks. Those commits use the
+    // scoped SuppressDescendantTransitions contract on the projected shell containers instead.
+    void SyncDragSuppression()
+        => Motion.SetLayoutTransitionsSuppressed(MotionSuppressionSource.AppResize, _sidebarDragging.Peek());
 
-    // The pane's collapse-toggle animation (56↔expanded width eases). Snapped during a drag via Motion.ReducedMotion.
-    static readonly LayoutTransition SidebarReflow = new(
-        TransitionChannels.Size, TransitionDynamics.Tween(Motion.ControlFast, Easing.SmoothOut), SizeMode.Reflow);
+    // Projected motion (see docs/plans/…prancy-otter). WAVEE_RAIL_BASELINE=1 is the A/B escape hatch: it selects the OLD
+    // SizeMode.Reflow width-per-tick tracks (real layout every tick — the slow 16–45 ms path) so the rail probe can
+    // measure the pre-fix baseline from the SAME build. Default (unset) = the projected Reveal path below.
+    static readonly bool s_railBaseline = Diag.EnvFlag("WAVEE_RAIL_BASELINE");
+    // WinUI SplitView's compact-inline pane spline (generic.xaml, ClosedCompactLeft <-> OpenInlineLeft). Wavee gives
+    // the retained motion 300 ms rather than WinUI's 200 ms because the heavier media surface can otherwise consume
+    // most of the authored duration in its commit frames and visually read as a snap.
+    static readonly EasingSpec SplitViewPaneEase = EasingSpec.CubicBezier(0f, 0.35f, 0.15f, 1f);
+    const float SplitViewPaneDurationMs = 300f;
+    // Stable-frame anchor key for the content card's FLIP (see the row's MorphId + the card's RelativeTo). Not a Hero
+    // participant key — the row never unmounts, so it never matches a mounting node and never triggers a connected fly.
+    const string ContentRowMorphId = "shell.content-row";
 
-    // The right-rail open/close reflow. A critically-damped spring (damping 1.0 ⇒ NO overshoot, so the content never
-    // over-shrinks) instead of the front-loaded ControlFast ease: the content column re-solves along a smooth, evenly-
-    // paced trajectory, so the reflow reads as ONE unified motion rather than the per-frame text re-wraps / card resizes
-    // bunching into the fast early phase (the "steppy" feel).
-    static readonly LayoutTransition RailReflow = new(
-        TransitionChannels.Size, TransitionDynamics.Spring(0.22f, 1f), SizeMode.Reflow);
+    // The sidebar collapse (56↔expanded) AND the content card's FLIP share ONE transition, so the pane's animating edge
+    // and the card's left edge ease on identical dynamics (edge coherence). Reveal lays the subtree out at its FINAL size
+    // immediately and eases only a clip window + a translate (compositor-only) — NO per-tick boundary relayout /
+    // DirectWrite text re-shape (what made Reflow slow). Snapped 1:1 during a grip drag through the suppression arbiter
+    // (ApplyProjections → SnapStructuralToLayout).
+    static readonly LayoutTransition SidebarPaneAnim = s_railBaseline
+        ? new(TransitionChannels.Size, TransitionDynamics.Tween(Motion.ControlFast, Easing.SmoothOut), SizeMode.Reflow)
+        : new(TransitionChannels.Size | TransitionChannels.Position,
+            TransitionDynamics.Tween(SplitViewPaneDurationMs, SplitViewPaneEase), SizeMode.Reveal,
+            ExitDynamics: TransitionDynamics.Tween(SplitViewPaneDurationMs, SplitViewPaneEase),
+            SuppressDescendantTransitions: true);
+
+    // The content card FLIPs (Position|Size Reveal, SAME dynamics as the pane) so it absorbs the reserved-width shift when
+    // the pane / rail spacer commit a new width. In the Reflow baseline the card carried NO transition (it re-tiled via
+    // real layout every tick), so this is null there.
+    static readonly LayoutTransition? ContentCardAnim = s_railBaseline ? null : new(
+        TransitionChannels.Position,
+        TransitionDynamics.Tween(SplitViewPaneDurationMs, SplitViewPaneEase),
+        SizeMode.Reveal,
+        ExitDynamics: TransitionDynamics.Tween(SplitViewPaneDurationMs, SplitViewPaneEase),
+        SuppressDescendantTransitions: true);
+
+    // The right-rail open/close. Projected: a Reveal slide (FLIP TranslateX + presented-width) on the rail OVERLAY, so the
+    // panel slide-reveals under its own clip; the reservation spacer snaps its width 0↔RailWidth at commit (NO transition)
+    // and the content card's FLIP absorbs the reserved shift. Baseline: BOTH the spacer and the overlay animated REAL
+    // width via a critically-damped Reflow spring (the old double width track). Spring damping 1.0 ⇒ no overshoot.
+    static readonly LayoutTransition? RailOverlayAnim = s_railBaseline
+        ? new(TransitionChannels.Size, TransitionDynamics.Spring(0.22f, 1f), SizeMode.Reflow)
+        : null;
+
+    // The reservation spacer: animated (Reflow) in the baseline, SNAP (null) in the projected path.
+    static readonly LayoutTransition? RailSpacerAnim = s_railBaseline
+        ? new(TransitionChannels.Size, TransitionDynamics.Spring(0.22f, 1f), SizeMode.Reflow)
+        : (LayoutTransition?)null;
 
     // The shell receives its persisted settings through the IAppSettings interface (provided by the composition root,
     // Services). It never sees the concrete store — no "ForUnpackaged"/registry/publisher detail leaks in here.
@@ -86,6 +127,7 @@ sealed class WaveeShell : Component
     // the same signals the chrome writes — no synthetic input, no reaching into private state. Inert in normal runs.
     internal static Action<string, string?>? ProbeNav;
     internal static Action<int>? ProbeRail;   // open the right rail in a given RailMode (screenshot probes)
+    internal static Action<bool>? ProbeRailOpen;   // open/close the right rail (WAVEE_RAIL_PROBE perf probe)
     internal static Action? ProbeBack, ProbeForward, ProbeTheme;
     internal static Action<string>? ProbeOpenTab;
     internal static Action<string, string?, bool>? ProbeCardNav;   // replicate a Home-card click: (key, arg, doMorph=Hero fly)
@@ -104,22 +146,22 @@ sealed class WaveeShell : Component
         if (Diag.EnvFlag("WAVEE_LYRICS_OPEN") || Diag.EnvFlag("WAVEE_LIVE_LYRICS_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_ADVANCE_PROBE")) { _shellUi.RailOpen.Value = true; _shellUi.Mode.Value = RailMode.Lyrics; }
         if (Diag.EnvFlag("WAVEE_NOWPLAYING_OPEN")) { _shellUi.RailOpen.Value = true; _shellUi.Mode.Value = RailMode.Details; }
 
-        if (Diag.EnvFlag("WAVEE_NAV_PROBE") || Diag.EnvFlag("WAVEE_RESIZE_PROBE") || Diag.EnvFlag("WAVEE_CONN_STRESS") || Diag.EnvFlag("WAVEE_TRACKLIST_SHOT") || Diag.EnvFlag("WAVEE_HERO_SHOT") || Diag.EnvFlag("WAVEE_SHELF_SHOT") || Diag.EnvFlag("WAVEE_RAIL_SHOT") || Diag.EnvFlag("WAVEE_HOME_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_PROBE") || Diag.EnvFlag("WAVEE_LIVE_LYRICS_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_ADVANCE_PROBE") || Diag.EnvFlag("WAVEE_MEM_SOAK") || Diag.EnvFlag("WAVEE_PERF_BENCH"))
+        if (Diag.EnvFlag("WAVEE_NAV_PROBE") || Diag.EnvFlag("WAVEE_RESIZE_PROBE") || Diag.EnvFlag("WAVEE_CONN_STRESS") || Diag.EnvFlag("WAVEE_TRACKLIST_SHOT") || Diag.EnvFlag("WAVEE_HERO_SHOT") || Diag.EnvFlag("WAVEE_SHELF_SHOT") || Diag.EnvFlag("WAVEE_RAIL_SHOT") || Diag.EnvFlag("WAVEE_HOME_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_RAIL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_PROBE") || Diag.EnvFlag("WAVEE_LIVE_LYRICS_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_ADVANCE_PROBE") || Diag.EnvFlag("WAVEE_MEM_SOAK") || Diag.EnvFlag("WAVEE_PERF_BENCH"))
         {
             ProbeNav = GoNav; ProbeBack = Back; ProbeForward = Forward; ProbeTheme = ToggleTheme; ProbeOpenTab = OpenNewTab;
             ProbeRail = m => { _shellUi.RailOpen.Value = true; _shellUi.Mode.Value = (RailMode)m; };
+            ProbeRailOpen = open => { _shellUi.RailOpen.Value = open; };
             // Exactly the Home-card path: stash a preview (→ DetailShell mounts the PREVIEW path, not the skeleton path the
             // sidebar nav hits) + fire the Hero-fly morph, then navigate — so the probe can reproduce the card-click transition.
             ProbeCardNav = (key, arg, doMorph) =>
             {
                 if (!Diag.EnvFlag("WAVEE_PB_NOPREVIEW") && key.StartsWith("pl:", System.StringComparison.Ordinal))
                     _navPreview.Set(key, DetailPreview.FromPlaylist(new Wavee.Core.PlaylistSummary(key.Substring(3), arg ?? "Playlist", "", 0, null)));
-                if (doMorph && !Diag.EnvFlag("WAVEE_PB_NOMORPH")) _morphBegin?.Invoke(key);   // the Hero cover fly
                 GoNav(key, arg);
             };
             // The EXACT related-album-card path (DetailTrailing → h.OpenAlbum → DetailNav.OpenAlbum): stash the card's
             // partial model + fire the fly, then nav. Lets the probe measure album→album on the post-fix (in-place) path.
-            ProbeOpenAlbum = a => DetailNav.OpenAlbum(_navPreview, _morphBegin, GoNav, a);
+            ProbeOpenAlbum = a => DetailNav.OpenAlbum(_navPreview, GoNav, a);
             ProbeSidebarCompact = compact =>
             {
                 _sidebarCompact.Value = compact;
@@ -128,8 +170,8 @@ sealed class WaveeShell : Component
             };
             ProbeSidebarDragBegin = () =>
             {
-                Motion.ReducedMotion = true;   // mirror SidebarResizeGrip.OnDown: snap reflow on the first move frame
                 _sidebarDragging.Value = true;
+                SyncDragSuppression();
             };
             ProbeSidebarDragWidth = width =>
             {
@@ -142,6 +184,7 @@ sealed class WaveeShell : Component
                 _sidebarFade.Value = 1f;
                 SaveSidebar();
                 _sidebarDragging.Value = false;
+                SyncDragSuppression();
             };
         }
 
@@ -194,7 +237,6 @@ sealed class WaveeShell : Component
     public override Element Render()
     {
         _requestTheme = UseContext(ThemeControl.Request);   // host's live re-theme trigger (animated in-place; no remount)
-        _morphBegin = UseContext(SharedTransition.Begin);   // connected-animation: Back/Forward capture the leaving cover before the route flips
         // The shell's content lives in the OverlayHost ZStack, which deliberately lets its child OVERFLOW (a tall popup must
         // not be clipped to the window). For the page CONTENT that means a tall page (a Detail rail is ~600px and does not
         // scroll) sizes the whole column to its content (~827px) and overflows the 760px window — shoving the fixed player
@@ -208,11 +250,9 @@ sealed class WaveeShell : Component
         // initial values are seeded at field construction (below) so the first layout already uses the saved width
         // (no startup animation). Defensive: storage failures never touch the UI.
         UseEffect(() => SaveSidebar(), compact);
-        // 1:1 resize: while dragging the seam, flip the GLOBAL reduced-motion gate ON so every layout transition SNAPS
-        // (ApplyProjections rewrites each to a 1ms tween) — this pane's collapse spring AND the sidebar sections'
-        // SizeMode.Reflow stop easing the per-frame width change, so the content tracks the cursor exactly. Restored to
-        // the OS setting on release so the collapse toggle animates normally. (A resize drag never overlaps a collapse.)
-        UseEffect(() => Motion.ReducedMotion = dragging || _reducedMotionOS, dragging);
+        // Keep an owner-safe suppression edge in the reactive lifecycle as cleanup insurance. This snaps geometry only;
+        // the user's reduced-motion preference and non-layout feedback remain untouched.
+        UseEffect(() => SyncDragSuppression(), dragging);
 
         // Rail viewport-fit + layout-defer (off-render, auto-tracking effects — the render body stays subscription-free
         // so the shell isn't re-run on every resize pixel; only the rail band / pages re-solve from the signals below).
@@ -223,7 +263,11 @@ sealed class WaveeShell : Component
             int gen = ++_railLockGen;
             _railLockTimer?.Dispose();
             _railLockTimer = new System.Threading.Timer(
-                _ => post(() => { if (gen == _railLockGen) _shellUi.RailLayoutLocked.Value = false; }),
+                _ => post(() =>
+                {
+                    if (gen != _railLockGen) return;
+                    _shellUi.RailLayoutLocked.Value = false;
+                }),
                 null, RailLockMs, System.Threading.Timeout.Infinite);
         }
         // (1) Maintain ShellUi.RailFits from the live viewport/sidebar/rail widths. The rail no longer auto-closes on a
@@ -241,7 +285,7 @@ sealed class WaveeShell : Component
             }
         });
         // (2) Arm the layout-defer lock on every rail toggle (open OR close); a one-shot Timer clears it after the
-        // RailReflow spring settles. The _lastRailOpen change-guard avoids arming on an unrelated re-render; the
+        // RailReveal spring settles. The _lastRailOpen change-guard avoids arming on an unrelated re-render; the
         // generation guard lets a rapid re-toggle cancel a stale clear. Cleared via post() (UI thread), like LyricsTicker.
         UseSignalEffect(() =>
         {
@@ -272,8 +316,12 @@ sealed class WaveeShell : Component
                     new BoxEl
                     {
                         // ClipToBounds (Task B5): a settle-frame safety net so a page's content can never paint past the
-                        // content card into the fixed rail band during the RailReflow. The card + page wrappers already
+                        // content card into the fixed rail band during the rail reveal. The card + page wrappers already
                         // clip; this bounds the row itself while the flex-shrink chain re-solves.
+                        // MorphId (stable-frame anchor for the content card's FLIP): the row never moves on a sidebar
+                        // toggle, so the content card FLIPs its slide RELATIVE to this frame (Element.RelativeTo below)
+                        // instead of its own parent (which absorbs the reserved-width shift → a zero delta → the snap).
+                        MorphId = ContentRowMorphId,
                         Direction = 0, Grow = 1f, ClipToBounds = true,
                         Children =
                         [
@@ -285,10 +333,10 @@ sealed class WaveeShell : Component
                         {
                             Direction = 1, Shrink = 0f, ClipToBounds = true, Fill = Prop.Of(() => WaveeColors.Sidebar),
                             Width = Prop.Of(() => _sidebarCompact.Value ? 56f : _sidebarWidth.Value),
-                            // SidebarReflow eases the COLLAPSE toggle (56↔expanded). During a drag the same spring would
-                            // lag the cursor, so the dragging effect (above) flips Motion.ReducedMotion ON for the drag —
-                            // that snaps every layout transition (this pane AND the sidebar sections) to 1:1.
-                            Animate = SidebarReflow,
+                            // SidebarPaneAnim eases the COLLAPSE toggle (56↔expanded) as a clip+translate reveal — the pane
+                            // is ClipToBounds so the reveal scissors its content. During a drag the suppression arbiter
+                            // snaps every layout transition (this pane AND the sidebar sections) to the laid-out width 1:1.
+                            Animate = SidebarPaneAnim,
                             Children =
                             [
                                 // Content fades (compositor-only) toward the collapse detent; the chrome fill stays solid.
@@ -297,7 +345,7 @@ sealed class WaveeShell : Component
                                 {
                                     Direction = 1, Grow = 1f,
                                     Opacity = Prop.Of(() => _sidebarFade.Value),
-                                    Children = [ Embed.Comp(() => new WaveeSidebar(_route, GoNav, _sidebarCompact)) ],
+                                    Children = [ Embed.Comp(() => new WaveeSidebar(_route, GoNav, _sidebarCompact, _sidebarWidth)) ],
                                 },
                             ],
                         },
@@ -313,9 +361,23 @@ sealed class WaveeShell : Component
                                 // is clipped by a per-page amount (wide pages push it further ⇒ the "rail changes size / gets
                                 // cut off depending on the page" instability). With them the content page is the ONE region
                                 // that gives (it clips/scrolls), so the rail keeps its full RailWidth on every page.
-                                Direction = 1, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Basis = 0f, Fill = Prop.Of(() => WaveeColors.Toolbar),
+                                Direction = 1, ZStack = true, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Basis = 0f,
                                 Children =
                                 [
+                                    // The page's cut-away top-left corner must reveal the sidebar material, not raw
+                                    // backdrop. The full backing handles the trailing gap; the narrow strip makes the
+                                    // rail visually continue underneath the sheet's left curve.
+                                    new BoxEl { Grow = 1f, Fill = Prop.Of(() => WaveeColors.Toolbar) },
+                                    // Static final-geometry underlay. WinUI translates ContentRoot but does not animate
+                                    // its width; while that translated card moves, this matching surface prevents the
+                                    // trailing side from exposing toolbar chrome (the false "right rail ghost").
+                                    new BoxEl
+                                    {
+                                        Grow = 1f, Margin = new Edges4(0f, 0f, WaveeSpace.S, 0f),
+                                        Fill = Prop.Of(() => WaveeColors.FileArea),
+                                        Corners = new CornerRadius4(WaveeRadius.Card, WaveeRadius.Card, 0f, 0f),
+                                    },
+                                    new BoxEl { Width = WaveeRadius.Card, Grow = 1f, Fill = Prop.Of(() => WaveeColors.Sidebar) },
                                     new BoxEl
                                     {
                                         // MinHeight=0 (the flex `min-height:0` override): this card CLIPS its content, so it
@@ -324,32 +386,52 @@ sealed class WaveeShell : Component
                                         // the column height and PUSHES THE FIXED PLAYER BAR off the bottom for a frame on
                                         // navigation — the "player bar animates away then back" glitch. With it the card
                                         // shrinks to the available space and clips/scrolls, so the player bar stays docked.
-                                        Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Margin = new Edges4(0f, 0f, 4f, 0f),
+                                        Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f,
+                                        // Flush against the navigation pane and player dock; only the trailing edge is inset.
+                                        Margin = new Edges4(0f, 0f, WaveeSpace.S, 0f),
                                         // BOUND (not a static ColorF): this content "page" is a frozen literal inside the
                                         // OverlayHost.Child column (constructor args freeze at mount), so a re-render can't
                                         // re-read the token. As a bind it lives in the reconciler's _nodeBindings and the
                                         // host's live re-theme (RethemeAll) re-fires it → FillCardDefault follows the theme.
                                         Fill = Prop.Of(() => WaveeColors.FileArea),
+                                        BorderWidth = 1f,
+                                        BorderColor = Tok.StrokeCardDefault,
                                         Corners = new CornerRadius4(WaveeRadius.Card, WaveeRadius.Card, 0f, 0f),
-                                        Shadow = Elevation.Card, ClipToBounds = true,
+                                        ClipToBounds = true,
                                         // Layout firewall (#5): this card is Grow=1 (its size is the shell's content region,
                                         // parent-determined) and clips — so a re-render deep inside a page re-solves only this
                                         // subtree (RunSubtree) instead of a full-tree layout from the root on every nav.
                                         IsolateLayout = true,
-                                        Children = [ Embed.Comp(() => new ContentHost(_route, ActiveTabId, _settings)) ],
+                                        // Projected motion: the card carries a Position Reveal so that when the sidebar pane
+                                        // commits a new width, the card FLIP-translates from its OLD left edge to the new one
+                                        // (CaptureProjections/ApplyProjections), sliding the content sheet in lock-step with the
+                                        // pane's revealing edge. Same dynamics as the pane (edge coherence).
+                                        // RelativeTo (CRITICAL): FLIP against the stable ROW frame, NOT the card's layout parent.
+                                        // The card fills the content region, and that region absorbs the ENTIRE reserved-width
+                                        // shift — so the card's PARENT-relative rect never changes (zero delta) and the default
+                                        // FLIP would produce no slide: the sheet SNAPS to its final X while only the (occluded)
+                                        // pane reveal eases behind it. Anchoring the FLIP to the row (which does not move on a
+                                        // toggle) restores the real delta, so the card slides while the static L1/L2/L3 underlays
+                                        // stay put to fill the trailing gap (the WinUI ContentTransform.TranslateX choreography).
+                                        // Grow=1 ⇒ the final rect is layout-driven. Null in the Reflow baseline (real-layout tile).
+                                        Animate = ContentCardAnim,
+                                        RelativeTo = s_railBaseline ? null : ContentRowMorphId,
+                                        Children = [ Embed.Comp(() => new ContentHost(_route, _navMotion, ActiveTabId, _settings)) ],
                                     },
                                 ],
                             },
-                            // Right rail — the WaveeMusic-style lyrics / now-playing panel. A literal row child (Shrink=0,
-                            // bound width) so the content card re-tiles against it; the width animates 0<->RailWidth on
-                            // toggle (SidebarReflow) and ClipToBounds hides the content while collapsed.
+                            // Right rail RESERVATION spacer — the WaveeMusic-style lyrics / now-playing band. A literal row
+                            // child (Shrink=0, bound width) so the content card re-tiles against it. Projected motion: this
+                            // width flips 0<->RailWidth at commit with NO Animate — it SNAPS to the reserved extent, and the
+                            // content card's FLIP (SidebarReveal) absorbs the shift while the rail overlay slide-reveals into
+                            // the reserved band. (Animating both the spacer AND the overlay was the old double width track.)
                             new BoxEl
                             {
                                 Shrink = 0f,
                                 // CHROME backing: the rail's rounded top-left wedge (overlay above) reads against this.
                                 Fill = Prop.Of(() => WaveeColors.Toolbar),
                                 Width = Prop.Of(() => _shellUi.RailOpen.Value && _shellUi.RailFits.Value ? _shellUi.RailWidth.Value : 0f),
-                                Animate = RailReflow,
+                                Animate = RailSpacerAnim,   // null (snap) in the projected path; Reflow spring in the baseline
                             },
                         ],
                     },
@@ -374,9 +456,19 @@ sealed class WaveeShell : Component
                         [
                             new BoxEl
                             {
+                                // The rail overlay hosts RightRail. Projected motion: its width flips 0<->RailWidth as the
+                                // single commit; RailReveal (Position|Size Reveal) slide-reveals it (FLIP TranslateX +
+                                // presented-width) under its own ClipToBounds instead of animating REAL layout width per
+                                // tick. Floating mode (!RailFits) has no spacer, so this overlays the content without
+                                // resizing it — the reveal is purely the panel sliding in.
                                 Direction = 1, Shrink = 0f, ClipToBounds = true, ZStack = true,
-                                Width = Prop.Of(() => _shellUi.RailOpen.Value ? _shellUi.RailWidth.Value : 0f),
-                                Animate = RailReflow,
+                                // Projected path: the overlay keeps its final width and RightRail translates its retained
+                                // subtree through this clip. The baseline retains the old animated 0↔width layout path.
+                                Width = Prop.Of(() => s_railBaseline
+                                    ? (_shellUi.RailOpen.Value ? _shellUi.RailWidth.Value : 0f)
+                                    : _shellUi.RailWidth.Value),
+                                Animate = RailOverlayAnim,
+                                HitTestPassThrough = true,
                                 Children =
                                 [
                                     // Opaque backing band for the FLOATING overlay only. Docked stays transparent: the
@@ -384,13 +476,18 @@ sealed class WaveeShell : Component
                                     // card's rounded top-right on the other side of the gap.
                                     new BoxEl
                                     {
-                                        Grow = 1f,
+                                        // Paint-only closed-rail backing: never become the deepest hit in this retained
+                                        // overlay. The interactive RightRail subtree above owns input while open.
+                                        Grow = 1f, HitTestPassThrough = true,
                                         Fill = Prop.Of(() => _shellUi.RailOpen.Value && !_shellUi.RailFits.Value
                                             ? WaveeColors.RailOverlay : ColorF.Transparent),
                                     },
                                     new BoxEl
                                     {
-                                        Direction = 1, Grow = 1f, MinHeight = 0f, ClipToBounds = true,
+                                        // The panel stays mounted at its final width so close can translate it out without
+                                        // relayout. When RightRail marks its root non-hit-testable, this wrapper must also
+                                        // yield or the invisible retained 340-DIP strip covers the page scrollbar.
+                                        Direction = 1, Grow = 1f, MinHeight = 0f, ClipToBounds = true, HitTestPassThrough = true,
                                         Corners = new CornerRadius4(WaveeRadius.Card, 0f, 0f, 0f),
                                         Children = [ Embed.Comp(() => new RightRail()) ],
                                     },
@@ -471,13 +568,12 @@ sealed class WaveeShell : Component
         ItemsSource = BuildTabItems,
         ItemsVersion = () => _tabsVersion.Value,
         SelectedIndex = _selectedTab,
-        OnSelectionChanged = i => { if ((uint)i < (uint)_open.Count) Go(_open[i].Key, _open[i].Arg); },
+        OnSelectionChanged = i => { if ((uint)i < (uint)_open.Count) Go(_open[i].Key, _open[i].Arg, NavTransitionKind.Neutral); },
         OnTabCloseRequested = CloseTab,
         OnAddTabButtonClick = () => { OpenNewTab("home"); return null; },
         IsAddTabButtonVisible = true,
-        // The selected tab uses the SAME chrome material as the toolbar (WaveeMusic TabViewItemHeaderBackgroundSelected
-        // = LayerOnMicaBaseAlt, App.xaml:47) so it fuses into the toolbar, and is sized to a compact WaveeMusic tab.
-        SelectedFill = Prop.Of(() => WaveeColors.Toolbar), TabWidth = 200f, MinTabWidth = 120f, MaxTabWidth = 240f,
+        // Files uses LayerOnMicaBaseAlt for the selected tab independently of its toolbar material.
+        SelectedFill = Prop.Of(() => WaveeColors.SelectedTab), TabWidth = 200f, MinTabWidth = 120f, MaxTabWidth = 240f,
     };
 
     int TitleBarTabsVersion()
@@ -503,12 +599,13 @@ sealed class WaveeShell : Component
     }
 
     // ── navigation (the single source of truth the chrome reads) ─────────────────────────────────
-    void Go(string key, string? arg)
+    void Go(string key, string? arg, NavTransitionKind motion = NavTransitionKind.Forward)
     {
         _history.Add(_route.Peek());
         if (_history.Count > MaxBackStack) _history.RemoveAt(0);   // bound the in-memory back-stack
         _forwardHistory.Clear();
         _canForward.Value = false;
+        _navMotion.Value = motion;
         _route.Value = new Route(key, arg);
         _canBack.Value = _history.Count > 0;
         _historyStore.Add(_route.Peek());
@@ -518,10 +615,10 @@ sealed class WaveeShell : Component
     void Back()
     {
         if (_history.Count == 0) return;
-        _morphBegin?.Invoke(_route.Peek().Name);   // reverse fly: snapshot the leaving page's cover; the like-tagged dest on the previous route flies it back
         _forwardHistory.Add(_route.Peek());
         if (_forwardHistory.Count > MaxBackStack) _forwardHistory.RemoveAt(0);
         _canForward.Value = true;
+        _navMotion.Value = NavTransitionKind.Back;
         _route.Value = _history[^1];
         _history.RemoveAt(_history.Count - 1);
         _canBack.Value = _history.Count > 0;
@@ -532,9 +629,9 @@ sealed class WaveeShell : Component
     void Forward()
     {
         if (_forwardHistory.Count == 0) return;
-        _morphBegin?.Invoke(_route.Peek().Name);   // same as Back: fly the leaving cover into the like-tagged dest on the route we redo to
         _history.Add(_route.Peek());
         _canBack.Value = true;
+        _navMotion.Value = NavTransitionKind.Forward;
         _route.Value = _forwardHistory[^1];
         _forwardHistory.RemoveAt(_forwardHistory.Count - 1);
         _canForward.Value = _forwardHistory.Count > 0;
@@ -569,7 +666,7 @@ sealed class WaveeShell : Component
         _open.Add(new OpenTab(_nextTabId++, key, title, glyph, null));
         _selectedTab.Value = _open.Count - 1;
         _tabsVersion.Value = _tabsVersion.Peek() + 1;
-        Go(key, null);
+        Go(key, null, NavTransitionKind.Neutral);
     }
 
     void CloseTab(int i)
@@ -583,7 +680,7 @@ sealed class WaveeShell : Component
         _selectedTab.Value = sel;
         _tabsVersion.Value = _tabsVersion.Peek() + 1;
         var t = _open[sel];
-        Go(t.Key, t.Arg);
+        Go(t.Key, t.Arg, NavTransitionKind.Neutral);
     }
 
     void ToggleTheme()

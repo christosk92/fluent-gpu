@@ -111,10 +111,10 @@ public sealed class ConnectCommandRouter : IDisposable
 {
     readonly ITransport _transport;
     readonly Action<ConnectCommand> _dispatch;
-    readonly Action<string>? _log;
+    readonly WaveeLogger _log;
     readonly IDisposable _sub;
 
-    public ConnectCommandRouter(ITransport transport, Action<ConnectCommand> dispatch, Action<string>? log = null)
+    public ConnectCommandRouter(ITransport transport, Action<ConnectCommand> dispatch, WaveeLogger log = default)
     {
         _transport = transport;
         _dispatch = dispatch;
@@ -127,13 +127,13 @@ public sealed class ConnectCommandRouter : IDisposable
         RequestResult result;
         if (ConnectCommand.TryParse(req, out var cmd))
         {
-            try { _dispatch(cmd); result = RequestResult.Success; _log?.Invoke("connect command: " + cmd.Kind); }
-            catch (Exception ex) { result = RequestResult.ContextPlayerError; _log?.Invoke("connect command dispatch error: " + ex.Message); }
+            try { _dispatch(cmd); result = RequestResult.Success; _log.Info("connect command: " + cmd.Kind); }
+            catch (Exception ex) { result = RequestResult.ContextPlayerError; _log.Info("connect command dispatch error: " + ex.Message); }
         }
         else
         {
             result = RequestResult.DeviceDoesNotSupportCommand;
-            _log?.Invoke("connect command unsupported: " + req.MessageIdent);
+            _log.Info("connect command unsupported: " + req.MessageIdent);
         }
         // Always reply (sync ack-on-dispatch trivially meets the 10 s SLA; a parse/dispatch failure still acks a code).
         _ = _transport.Reply(req.RequestId, result);

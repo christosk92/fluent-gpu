@@ -21,7 +21,7 @@ public sealed class SpotifyAudioStream : Stream, IAsyncDisposable, IAudioReadStr
 
     readonly HttpClient _http;
     readonly string _name;
-    readonly Action<string>? _log;
+    readonly WaveeLogger _log;
     readonly byte[] _head;
     readonly int _headLen;
     readonly AudioBodyDiskCache? _bodyDisk;
@@ -36,7 +36,7 @@ public sealed class SpotifyAudioStream : Stream, IAsyncDisposable, IAudioReadStr
     bool _disposed;
     Exception? _error;
 
-    SpotifyAudioStream(HttpClient http, ReadOnlyMemory<byte> head, int headBoundary, string name = "", Action<string>? log = null,
+    SpotifyAudioStream(HttpClient http, ReadOnlyMemory<byte> head, int headBoundary, string name = "", WaveeLogger log = default,
         AudioBodyDiskCache? bodyDisk = null)
     {
         _http = http ?? throw new ArgumentNullException(nameof(http));
@@ -52,7 +52,7 @@ public sealed class SpotifyAudioStream : Stream, IAsyncDisposable, IAudioReadStr
     }
 
     /// <summary>Create a stream that can serve clear head bytes immediately. Call <see cref="AttachBodyAsync"/> later.</summary>
-    public static SpotifyAudioStream CreateHeadOnly(HttpClient http, ReadOnlyMemory<byte> head, int headBoundary, string name = "", Action<string>? log = null,
+    public static SpotifyAudioStream CreateHeadOnly(HttpClient http, ReadOnlyMemory<byte> head, int headBoundary, string name = "", WaveeLogger log = default,
         AudioBodyDiskCache? bodyDisk = null) =>
         new(http, head, headBoundary, name, log, bodyDisk);
 
@@ -115,14 +115,14 @@ public sealed class SpotifyAudioStream : Stream, IAsyncDisposable, IAudioReadStr
             _bodyAttached = true;
             Monitor.PulseAll(_stateGate);
         }
-        _log?.Invoke($"stream {_name}: body attach accepted headBoundary={_headLen}B knownSize={(knownSize ?? 0)} mirrors={cdnUrls.Length} mode={(eagerFetch ? "eager" : "lazy")}");
+        _log.Info($"stream {_name}: body attach accepted headBoundary={_headLen}B knownSize={(knownSize ?? 0)} mirrors={cdnUrls.Length} mode={(eagerFetch ? "eager" : "lazy")}");
 
         try
         {
             ranged.StartReadAhead();
             if (!eagerFetch)
             {
-                _log?.Invoke($"stream {_name}: lazy body attached; decoder can continue on clear head while read-ahead runs");
+                _log.Info($"stream {_name}: lazy body attached; decoder can continue on clear head while read-ahead runs");
                 return;
             }
             await ranged.PrimeAsync(ct).ConfigureAwait(false);

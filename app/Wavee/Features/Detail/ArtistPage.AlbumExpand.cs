@@ -271,7 +271,7 @@ sealed class AlbumDrawerPanel : Component
     public AlbumDrawerPanel(Services svc, Album thin, float panelH, Action<string> play, Action<string, string?> go, ColorF accent)
     {
         _svc = svc; _thin = thin; _panelH = panelH; _play = play; _go = go; _accent = accent;
-        _showChecks = () => { _ = _sel.Version.Value; return _sel.SelectedCount > 0; };
+        _showChecks = () => { _ = _sel.Version.Value; return _sel.SelectedCount > 1; };   // 2+ only (a plain click must not summon checkboxes)
     }
 
     static readonly ColumnSet DrawerCols = new(Album: false, By: false, Date: false, Video: false, Plays: false, Heart: true, Thumb: false);
@@ -366,7 +366,7 @@ sealed class AlbumDrawerPanel : Component
             };
             return TrackRow.Grid(t, i, st, DrawerCols, DrawerColumns, DrawerRowContentH, title, showTrackArtist: false, _o._go,
                 onPlay: () => TrackRow.Invoke(_bridge, t, () => _ = _o._svc.Player.PlayAsync(_o._thin.Uri, i)),
-                onLike: t.Uri.Length > 0 ? () => _lib?.ToggleSaved(t.Uri) : null);
+                onLike: t.Uri.Length > 0 ? () => _lib?.ToggleSaved(t.Uri, t.Title) : null);
         }
     }
 
@@ -422,11 +422,6 @@ sealed class DiscoGrid : Component
         Enter: new EnterExit(Dy: -8f, Opacity: 0f, Active: true),
         Exit: new EnterExit(Dy: -8f, Opacity: 0f, Active: true),
         ExitDynamics: TransitionDynamics.Spring(0.24f, 1f));
-    static readonly LayoutTransition CardMaterialize = new(
-        TransitionChannels.Opacity,
-        TransitionDynamics.Tween(110f, Easing.SmoothOut),
-        Enter: new EnterExit(Opacity: 0f, Active: true),
-        Exit: new EnterExit(Opacity: 0f, Active: true));
 
     public DiscoGrid(VirtualCollection<Album> vc, Services svc, Action<string, string?> go, Action<string> play, int cap, int initialIndex = 0, ColorF? accent = null)
     { _vc = vc; _svc = svc; _go = go; _play = play; _cap = cap; _initialIndex = initialIndex; _accent = accent ?? Tok.AccentDefault; }
@@ -455,7 +450,7 @@ sealed class DiscoGrid : Component
         if (card is BoxEl b)
         {
             // Force ONE height (square cover + chrome) so every card is uniform → the drawer's hug spacing is exact.
-            b = b with { Key = "album:" + al.Uri, Height = cardW + CardChrome, Animate = Motion.ReducedMotion ? null : CardMaterialize };
+            b = b with { Key = "album:" + al.Uri, Height = cardW + CardChrome };
             // Highlight the expanded card (accent border + brighter fill) so it's unmistakably the drawer's owner —
             // pairs with the connector bar at the drawer's top edge.
             if (_expanded.Peek() == idx)
@@ -471,7 +466,6 @@ sealed class DiscoGrid : Component
     {
         Key = "album:placeholder",
         Direction = 1, Gap = WaveeSpace.S, Height = cardW + CardChrome,
-        Animate = Motion.ReducedMotion ? null : CardMaterialize,
         Padding = new Edges4(WaveeSpace.S, WaveeSpace.S, WaveeSpace.S, WaveeSpace.M),
         Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardSecondary,
         BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,

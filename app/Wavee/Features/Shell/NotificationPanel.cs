@@ -36,7 +36,7 @@ sealed class NotificationBell : Component
             if (handle.Value is { IsOpen: true } h) { h.Close(); return; }
             handle.Value = overlay.Open(
                 () => anchor.Value,
-                () => Embed.Comp(() => new NotificationPanel()),
+                () => Embed.Comp(() => new NotificationPanel(() => handle.Value?.Close())),
                 FlyoutPlacement.BottomEdgeAlignedRight,
                 new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss, Chrome: PopupChrome.Popup)
                 {
@@ -72,8 +72,11 @@ sealed class NotificationPanel : Component
     const float Width = 380f;
     const int TickMs = 30_000;
 
+    readonly Action? _close;   // dismiss the flyout when a click navigates away (a floating panel over a new page reads as stuck)
     Timer? _timer;
     int _timerGeneration;
+
+    public NotificationPanel(Action? close = null) => _close = close;
 
     public override Element Render()
     {
@@ -105,6 +108,8 @@ sealed class NotificationPanel : Component
 
         var all = nc.Items.Value;               // subscribe → re-render on any push/rebuild
         var filter = nc.Filter.Value;           // subscribe → re-render on filter change
+        var socialState = nc.SocialState.Value; // subscribe → empty view distinguishes loading/error/offline
+        var whatsNewState = nc.WhatsNewState.Value;
         _ = nc.NowTick.Value;                   // subscribe → relative times advance
         long expandedId = expanded.Value;
         long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -113,7 +118,7 @@ sealed class NotificationPanel : Component
         foreach (var n in all)
         {
             if (filter is { } f && n.Category != f) continue;
-            rows.Add(RowFor(n, now, nc, go, svc, expanded, expandedId));
+            rows.Add(RowFor(n, now, nc, go, svc, expanded, expandedId, _close));
         }
 
         Element body = rows.Count > 0
@@ -122,7 +127,7 @@ sealed class NotificationPanel : Component
                 MaxHeight = 460f, ContentSized = true, AutoEdgeFade = true, ScrollKey = "notifications",
                 Content = new BoxEl { Direction = 1, Width = Width, Padding = new Edges4(6f, 4f, 6f, 8f), Gap = 2f, Children = rows.ToArray() },
             }
-            : EmptyState(filter);
+            : EmptyState(filter, socialState, whatsNewState);
 
         return new BoxEl
         {
@@ -181,12 +186,12 @@ sealed class NotificationPanel : Component
 
     // ── row dispatch ─────────────────────────────────────────────────────────────────────────────────────────────────
     static Element RowFor(WaveeNotification n, long now, NotificationCenterBridge nc, Action<string, string?>? go,
-        Services? svc, Signal<long> expanded, long expandedId) => n switch
+        Services? svc, Signal<long> expanded, long expandedId, Action? close) => n switch
     {
         AppUpdateNotification u => Card("ntf:" + u.Id, UpdateRow(u, svc), n.IsUnread, null),
-        SocialNotification s    => Card("ntf:" + s.Id, SocialRow(s, now, go), n.IsUnread, () => ClickSocial(s, go)),
-        NewReleaseNotification r => Card("ntf:" + r.Id, NewReleaseRow(r), n.IsUnread, () => ClickRelease(r, go)),
-        ActivityNotification a  => ActivityCard(a, now, nc, expanded, expandedId),
+        SocialNotification s    => Card("ntf:" + s.Id, SocialRow(s, now, go), n.IsUnread, () => ClickSocial(s, go, close)),
+        NewReleaseNotification r => Card("ntf:" + r.Id, NewReleaseRow(r), n.IsUnread, () => ClickRelease(r, go, close)),
+        ActivityNotification a  => ActivityCard(a, now, nc, expanded, expandedId, go, close),
         _ => new BoxEl(),
     };
 
@@ -293,16 +298,17 @@ sealed class NotificationPanel : Component
         };
     }
 
-    static void ClickSocial(SocialNotification s, Action<string, string?>? go)
+    static void ClickSocial(SocialNotification s, Action<string, string?>? go, Action? close)
     {
         if (s.ActionType == SocialActionType.Navigate && s.ActionUri is { } uri && RichText.RouteForUri(uri) is { } route)
         {
             go?.Invoke(route, null);
+            close?.Invoke();
             return;
         }
         // NAVIGATE_WEBVIEW or an unroutable uri (user / concert) → open the web page.
         string? web = WebUrlFor(s.ActionUri);
-        if (web is not null) LoginView.OpenUrl(web);
+        if (web is not null) { LoginView.OpenUrl(web); close?.Invoke(); }
     }
 
     // ── new release ──────────────────────────────────────────────────────────────────────────────────────────────────
@@ -333,12 +339,12 @@ sealed class NotificationPanel : Component
         };
     }
 
-    static void ClickRelease(NewReleaseNotification r, Action<string, string?>? go)
+    static void ClickRelease(NewReleaseNotification r, Action<string, string?>? go, Action? close)
     {
-        if (r.Kind == NewReleaseKind.Album && RichText.RouteForUri(r.Uri) is { } route) { go?.Invoke(route, r.Name); return; }
+        if (r.Kind == NewReleaseKind.Album && RichText.RouteForUri(r.Uri) is { } route) { go?.Invoke(route, r.Name); close?.Invoke(); return; }
         // Episodes have no dedicated detail route yet (open decision) → open the web player as a safe fallback.
         string? web = WebUrlFor(r.Uri);
-        if (web is not null) LoginView.OpenUrl(web);
+        if (web is not null) { LoginView.OpenUrl(web); close?.Invoke(); }
     }
 
     static string ReleaseLabel(NewReleaseNotification r)
@@ -354,7 +360,8 @@ sealed class NotificationPanel : Component
     }
 
     // ── activity ─────────────────────────────────────────────────────────────────────────────────────────────────────
-    static Element ActivityCard(ActivityNotification a, long now, NotificationCenterBridge nc, Signal<long> expanded, long expandedId)
+    static Element ActivityCard(ActivityNotification a, long now, NotificationCenterBridge nc, Signal<long> expanded, long expandedId,
+        Action<string, string?>? go, Action? close)
     {
         var e = a.Entry;
         bool isExpanded = expandedId == e.Id;
@@ -409,13 +416,30 @@ sealed class NotificationPanel : Component
         return new BoxEl
         {
             Key = "ntf:actwrap:" + e.Id, Direction = 1, Gap = 2f,
-            Children = [ card, ActivityDetail(e) ],
+            Children = [ card, ActivityDetail(e, go, close) ],
         };
     }
 
-    static Element ActivityDetail(ActivityEntry e)
+    static Element ActivityDetail(ActivityEntry e, Action<string, string?>? go, Action? close)
     {
-        var kids = new List<Element>(4);
+        var kids = new List<Element>(5);
+
+        // Target line — what the action applied to (full name, or the raw uri for pre-name entries), with an Open jump
+        // when the uri routes to a page. Always present so expanding is never a visual no-op.
+        string target = e.TargetName is { Length: > 0 } tn ? tn : e.TargetUri;
+        string? route = RichText.RouteForUri(e.TargetUri);
+        kids.Add(new BoxEl
+        {
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = 8f,
+            Children =
+            [
+                new TextEl(target) { Size = 12f, Weight = 600, Color = Tok.TextSecondary, Grow = 1f, Basis = 0f, MaxLines = 2, Wrap = TextWrap.Wrap },
+                route is not null && go is not null
+                    ? PillButton(Loc.Get(Strings.Notifications.Activity.Detail.Open), () => { go(route, e.TargetName); close?.Invoke(); }, accent: false)
+                    : new BoxEl(),
+            ],
+        });
+
         var p = e.Payload;
         if (p?.OldName is { } oldName && p.NewName is { } newName)
             kids.Add(new TextEl(Strings.Notifications.Activity.Detail.RenamedFrom(oldName, newName)) { Size = 12f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap });
@@ -429,7 +453,6 @@ sealed class NotificationPanel : Component
                 if (++shown >= 8) break;
             }
         }
-        if (kids.Count == 0) return new BoxEl();
         return new BoxEl
         {
             Direction = 1, Gap = 3f, Margin = new Edges4(46f, 0f, 12f, 6f),
@@ -443,8 +466,8 @@ sealed class NotificationPanel : Component
         string count = Strings.Detail.SongCount(e.Payload?.Tracks?.Count ?? 0);
         return e.Kind switch
         {
-            ActivityKind.Save => Loc.Get(Strings.Notifications.Activity.Save),
-            ActivityKind.Unsave => Loc.Get(Strings.Notifications.Activity.Unsave),
+            ActivityKind.Save => SavedSummary(e, saved: true),
+            ActivityKind.Unsave => SavedSummary(e, saved: false),
             ActivityKind.PlaylistAddTracks => Strings.Notifications.Activity.AddTracks(count, playlist),
             ActivityKind.PlaylistRemoveTracks => Strings.Notifications.Activity.RemoveTracks(count, playlist),
             ActivityKind.PlaylistMoveTracks => Strings.Notifications.Activity.MoveTracks(playlist),
@@ -459,6 +482,21 @@ sealed class NotificationPanel : Component
             ActivityKind.ContributorInvite => Strings.Notifications.Activity.Invite(playlist),
             _ => "",
         };
+    }
+
+    // Save/Unsave covers every library entity; the phrasing follows the uri kind (like a song / save an album / follow a
+    // profile), naming the item when the call site captured it. Nameless (older) entries fall back to the generic line.
+    static string SavedSummary(ActivityEntry e, bool saved)
+    {
+        if (e.TargetName is not { Length: > 0 } name)
+            return Loc.Get(saved ? Strings.Notifications.Activity.Save : Strings.Notifications.Activity.Unsave);
+        string uri = e.TargetUri;
+        if (uri.Contains(":track:", StringComparison.Ordinal) || uri.StartsWith("spotify:local:", StringComparison.Ordinal))
+            return saved ? Strings.Notifications.Activity.SaveTrack(name) : Strings.Notifications.Activity.UnsaveTrack(name);
+        if (uri.Contains(":album:", StringComparison.Ordinal))
+            return saved ? Strings.Notifications.Activity.SaveAlbum(name) : Strings.Notifications.Activity.UnsaveAlbum(name);
+        // artists, playlists, shows — the save verb is follow
+        return saved ? Strings.Notifications.Activity.Follow(name) : Strings.Notifications.Activity.Unfollow(name);
     }
 
     static string ActivityGlyph(ActivityKind kind) => kind switch
@@ -518,15 +556,26 @@ sealed class NotificationPanel : Component
         Children = [ new TextEl(label) { Size = 12f, Weight = 600, Color = Tok.AccentTextPrimary } ],
     };
 
-    static Element EmptyState(NotificationCategory? filter)
+    static Element EmptyState(NotificationCategory? filter, NotificationFeedState social, NotificationFeedState whatsNew)
     {
+        // A remote category with zero rows is only "empty" when the feed actually loaded — a failed or offline fetch
+        // must say so instead of masquerading as "no notifications".
+        static string? RemoteMsg(NotificationFeedState s) => s switch
+        {
+            NotificationFeedState.Idle or NotificationFeedState.Loading => Loc.Get(Strings.Notifications.Loading),
+            NotificationFeedState.Error => Loc.Get(Strings.Notifications.Feed.Error),
+            NotificationFeedState.Offline => Loc.Get(Strings.Notifications.Feed.Offline),
+            _ => null,
+        };
         string msg = filter switch
         {
             NotificationCategory.AppUpdate => Loc.Get(Strings.Notifications.Empty.Updates),
-            NotificationCategory.Social => Loc.Get(Strings.Notifications.Empty.Spotify),
-            NotificationCategory.NewRelease => Loc.Get(Strings.Notifications.Empty.New),
+            NotificationCategory.Social => RemoteMsg(social) ?? Loc.Get(Strings.Notifications.Empty.Spotify),
+            NotificationCategory.NewRelease => RemoteMsg(whatsNew) ?? Loc.Get(Strings.Notifications.Empty.New),
             NotificationCategory.Activity => Loc.Get(Strings.Notifications.Empty.Activity),
-            _ => Loc.Get(Strings.Notifications.Empty.All),
+            _ => social is NotificationFeedState.Idle or NotificationFeedState.Loading || whatsNew is NotificationFeedState.Idle or NotificationFeedState.Loading
+                ? Loc.Get(Strings.Notifications.Loading)
+                : Loc.Get(Strings.Notifications.Empty.All),
         };
         return new BoxEl
         {

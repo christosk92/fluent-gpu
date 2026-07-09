@@ -25,7 +25,7 @@ public sealed class PlainHttpAudioStream : Stream, IAsyncDisposable, IAudioReadS
     public IDisposable PauseReadAhead() => _source.PauseReadAhead();
     public void ResumeReadAheadAtCurrentOffset() => _source.ResumeReadAheadAt(Volatile.Read(ref _pos));
 
-    PlainHttpAudioStream(HttpClient http, string url, long knownSize, string? contentType, Action<string>? log)
+    PlainHttpAudioStream(HttpClient http, string url, long knownSize, string? contentType, WaveeLogger log)
     {
         _headHintSize = knownSize;
         ContentType = contentType;
@@ -37,7 +37,7 @@ public sealed class PlainHttpAudioStream : Stream, IAsyncDisposable, IAudioReadS
 
     /// <summary>Open the stream, priming the length from a HEAD when the server offers one (optional — the size is also
     /// discovered from the first ranged/200 response).</summary>
-    public static async Task<PlainHttpAudioStream> OpenAsync(HttpClient http, string url, Action<string>? log = null, CancellationToken ct = default)
+    public static async Task<PlainHttpAudioStream> OpenAsync(HttpClient http, string url, WaveeLogger log = default, CancellationToken ct = default)
     {
         long size = -1;
         string? contentType = null;
@@ -50,7 +50,7 @@ public sealed class PlainHttpAudioStream : Stream, IAsyncDisposable, IAudioReadS
                 size = resp.Content.Headers.ContentLength ?? -1;
                 contentType = resp.Content.Headers.ContentType?.MediaType;
             }
-            log?.Invoke($"external audio HEAD {url}: len={size} type={contentType ?? "?"}");
+            log.Info($"external audio HEAD {url}: len={size} type={contentType ?? "?"}");
         }
         catch { /* HEAD optional */ }
         return new PlainHttpAudioStream(http, url, size, contentType, log);

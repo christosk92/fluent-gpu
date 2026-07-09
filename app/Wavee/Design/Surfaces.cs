@@ -16,15 +16,15 @@ namespace Wavee;
 // hole. Used by cards, rows, the rail cover and the bar.
 public static class Surfaces
 {
-    // Artwork is opaque content. Dark FillCardDefault is translucent white, so forcing only its alpha to 1 turns a
-    // failed/loading cover pure white. Use an explicit neutral in dark mode and the already-opaque card fill in light.
+    // Artwork is opaque content. Theme card brushes are intentionally translucent, so placeholders use explicit opaque
+    // neutrals instead of allowing the Mica/chrome below to wash through the image slot.
     internal static ColorF ArtworkPlaceholder =>
-        Tok.Theme == ThemeKind.Dark ? ColorF.FromRgba(0x2A, 0x2A, 0x2A) : Tok.FillCardDefault;
+        Tok.Theme == ThemeKind.Dark ? ColorF.FromRgba(0x2A, 0x2A, 0x2A) : ColorF.FromRgba(0xF2, 0xF2, 0xF2);
 
     /// <summary>A top-anchored accent → transparent wash for a page header, over Mica.</summary>
     public static GradientSpec HeroWash(ColorF accent) => new(
         GradientShape.Linear, 90f,
-        [new GradientStop(0f, accent with { A = 0.22f }), new GradientStop(1f, accent with { A = 0f })]);
+        [new GradientStop(0f, accent with { A = Tok.Theme == ThemeKind.Light ? 0.12f : 0.16f }), new GradientStop(1f, accent with { A = 0f })]);
 
     /// <summary>A neutral album-art placeholder: the app's skeleton tile (<see cref="Tok.FillCardDefault"/>) that
     /// BREATHES while the art at <paramref name="url"/> is still loading and settles to a calm static tile once it is
@@ -141,22 +141,22 @@ public static class Surfaces
     }
 
     /// <summary>A "section band" as a Fluent MATERIAL surface (the WinUI grouped-content look), not a painted color
-    /// region: a neutral rounded card (<see cref="Tok.FillCardSecondary"/> fill + hairline border + soft elevation) with
+    /// region: a neutral rounded card (<see cref="Tok.FillCardDefault"/> fill + hairline border) with
     /// the accent layered as a soft glow that KISSES the top edge under the header and fades into the material by ~45%
     /// down. So the color reads as a content-derived spark over material, the material leads, and it sits naturally next
     /// to the rest of the Fluent surfaces. One opaque top→bottom gradient (no overlay) keeps it a single, cheap node.</summary>
     public static BoxEl SectionBand(Element content, ColorF accent)
     {
-        ColorF card = Tok.FillCardSecondary;
+        ColorF card = Tok.FillCardDefault;
         // Kiss the card fill toward the accent at the very top (heavier in dark, where a faint tint would vanish), but
         // hold the card's own alpha so the surface's translucency stays uniform — only the HUE shifts at the top.
-        ColorF top = ColorF.Lerp(card, accent, Tok.Theme == ThemeKind.Dark ? 0.17f : 0.10f) with { A = card.A };
+        ColorF top = ColorF.Lerp(card, accent, Tok.Theme == ThemeKind.Dark ? 0.10f : 0.06f) with { A = card.A };
         return new BoxEl
         {
             Direction = 1, Gap = WaveeSpace.M,
             Padding = new Edges4(WaveeSpace.L, WaveeSpace.L, WaveeSpace.L, WaveeSpace.L),
             Corners = CornerRadius4.All(WaveeRadius.Card),
-            BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault, Shadow = Elevation.Card,
+            BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             Gradient = LinearGradient(90f,   // 90° = top→bottom
                 new GradientStop(0f, top),
                 new GradientStop(0.45f, card),

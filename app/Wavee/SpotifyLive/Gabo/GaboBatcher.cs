@@ -22,8 +22,7 @@ public sealed class GaboBatcher : IAsyncDisposable
     readonly ITransport _transport;
     readonly GaboContext _ctx;
     readonly Func<CancellationToken, Task<string>>? _refreshTokens;
-    readonly Action<string>? _log;
-    readonly IWaveeLog _structuredLog;
+    readonly WaveeLogger _log;
     readonly byte[] _batchSequenceId = RandomNumberGenerator.GetBytes(20);
     readonly System.Threading.Channels.Channel<GaboWorkItem> _channel;
     readonly Task _worker;
@@ -35,7 +34,7 @@ public sealed class GaboBatcher : IAsyncDisposable
     Timer? _heartbeat;
 
     public GaboBatcher(ITransport transport, GaboContext ctx, long initialSequenceNumber = 0,
-        Func<CancellationToken, Task<string>>? refreshTokens = null, Action<long>? persistSequence = null, Action<string>? log = null,
+        Func<CancellationToken, Task<string>>? refreshTokens = null, Action<long>? persistSequence = null, WaveeLogger log = default,
         IWaveeLog? structuredLog = null)
     {
         _transport = transport;
@@ -43,7 +42,6 @@ public sealed class GaboBatcher : IAsyncDisposable
         _refreshTokens = refreshTokens;
         _persistSequence = persistSequence;
         _log = log;
-        _structuredLog = structuredLog ?? WaveeLog.Instance;
         _globalSequence = initialSequenceNumber;
         _channel = System.Threading.Channels.Channel.CreateBounded<GaboWorkItem>(new BoundedChannelOptions(512)
         {
@@ -85,7 +83,7 @@ public sealed class GaboBatcher : IAsyncDisposable
             }
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { _log?.Invoke("gabo worker fault: " + ex.Message); }
+        catch (Exception ex) { _log.Info("gabo worker fault: " + ex.Message); }
         finally { try { await FlushAsync().ConfigureAwait(false); } catch { } }
     }
 
@@ -113,29 +111,28 @@ public sealed class GaboBatcher : IAsyncDisposable
             {
                 _pending.Clear();
                 _pendingBytes = 0;
-                _structuredLog.Debug("connect", "gabo.flush.ok", "play-registration events flushed",
-                    WaveeLogField.Of("events", req.Event.Count));
-                _log?.Invoke($"gabo flush ok ({req.Event.Count} events)");
+                _log.Event(WaveeLogLevel.Debug, "gabo.flush.ok", "play-registration events flushed",
+                    fields: [WaveeLogField.Of("events", req.Event.Count)]);
+                _log.Info($"gabo flush ok ({req.Event.Count} events)");
                 return;
             }
-            _log?.Invoke($"gabo flush failed status={resp.Status} attempt={attempt + 1}");
+            _log.Warn($"gabo flush failed status={resp.Status} attempt={attempt + 1}");
         }
 
         // All 3 attempts failed: retain for the next flush trigger, but bound the backlog so a persistent outage can't
         // grow it unbounded. Drop the OLDEST events (least valuable) and log exactly how many — never silently.
-        _structuredLog.Warn("connect", "gabo.flush.failed", "play-registration flush exhausted retries; events retained",
-            WaveeLogField.Of("retained", _pending.Count));
+        _log.Event(WaveeLogLevel.Warning, "gabo.flush.failed", "play-registration flush exhausted retries; events retained",
+            fields: [WaveeLogField.Of("retained", _pending.Count)]);
         if (_pending.Count > MaxRetainedEvents)
         {
             int drop = _pending.Count - MaxRetainedEvents;
             _pending.RemoveRange(0, drop);
             _pendingBytes = 0;
             for (int i = 0; i < _pending.Count; i++) _pendingBytes += _pending[i].CalculateSize();
-            _structuredLog.Error("connect", "gabo.flush.overflow", "play-registration backlog capped; oldest events dropped",
-                WaveeLogField.Of("dropped", drop),
-                WaveeLogField.Of("cap", MaxRetainedEvents));
+            _log.Event(WaveeLogLevel.Error, "gabo.flush.overflow", "play-registration backlog capped; oldest events dropped",
+                fields: [WaveeLogField.Of("dropped", drop), WaveeLogField.Of("cap", MaxRetainedEvents)]);
         }
-        _log?.Invoke($"gabo flush exhausted retries — {_pending.Count} event(s) retained for retry");
+        _log.Warn($"gabo flush exhausted retries — {_pending.Count} event(s) retained for retry");
     }
 
     public async ValueTask DisposeAsync()

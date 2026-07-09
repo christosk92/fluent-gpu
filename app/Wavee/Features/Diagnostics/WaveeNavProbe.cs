@@ -53,11 +53,12 @@ internal static class WaveeNavProbe
         bool heroShot = Diag.EnvFlag("WAVEE_HERO_SHOT");
         bool shelfShot = Diag.EnvFlag("WAVEE_SHELF_SHOT");
         bool railShot = Diag.EnvFlag("WAVEE_RAIL_SHOT");
+        bool railProbe = Diag.EnvFlag("WAVEE_RAIL_PROBE");
         bool homeScroll = Diag.EnvFlag("WAVEE_HOME_SCROLL_PROBE");
         bool lyricsProbe = Diag.EnvFlag("WAVEE_LYRICS_PROBE");
         bool liveLyricsScroll = Diag.EnvFlag("WAVEE_LIVE_LYRICS_SCROLL_PROBE");
         bool advanceProbe = Diag.EnvFlag("WAVEE_LYRICS_ADVANCE_PROBE");
-        if (!Diag.EnvFlag("WAVEE_NAV_PROBE") && !connStress && !trackShot && !heroShot && !shelfShot && !railShot && !homeScroll && !lyricsProbe && !liveLyricsScroll && !advanceProbe) return false;
+        if (!Diag.EnvFlag("WAVEE_NAV_PROBE") && !connStress && !trackShot && !heroShot && !shelfShot && !railShot && !railProbe && !homeScroll && !lyricsProbe && !liveLyricsScroll && !advanceProbe) return false;
         if (window is not Win32Window w || device is not D3D12Device gpu)
         {
             Console.Error.WriteLine("[wavee-nav-probe] unavailable: requires Win32Window + D3D12Device");
@@ -87,6 +88,7 @@ internal static class WaveeNavProbe
             return true;
         }
         if (heroShot) RunHeroCollapseShot(host, w, gpu);
+        else if (railProbe) RunRailProbe(host, w, gpu);
         else if (railShot) RunRailShot(host, w, gpu);
         else if (shelfShot) RunShelfFadeShot(host, w, gpu);
         else if (trackShot) RunTrackListShot(host, w, gpu);
@@ -118,13 +120,87 @@ internal static class WaveeNavProbe
         Nav("home", null); Settle(40); System.Threading.Thread.Sleep(700); Settle(20);   // home live + card covers decode
 
         // 1) Detail playlist (the canonical full list — must be unchanged by the cell extraction).
-        Nav("pl:spotify:playlist:pl0", "Playlist 0"); Settle(40); System.Threading.Thread.Sleep(700); Settle(60); Shot("detail");
-        // 2) Library albums → the pane auto-selects the first album → its tracks render via the embedded TrackList.
+        Nav("pl:spotify:playlist:pl0", "Playlist 0"); Settle(40); System.Threading.Thread.Sleep(700); Settle(60);
+        var detailVp = FindLargestScrollViewport(host.Scene);
+        if (!detailVp.IsNull && host.Scene.TryGetScroll(detailVp, out var detailBefore))
+        {
+            var rr = host.Scene.AbsoluteRect(detailVp);
+            var pt = new Point2(rr.X + rr.W * 0.5f, rr.Y + rr.H * 0.5f);
+            var routed = host.Input.ScrollableUnderForAxis(pt, wantHorizontal: false);
+            var hit = host.Input.DiagHitTest(pt);
+            window.QueueInput(new InputEvent(InputKind.PointerMove, pt, 0, 0));
+            window.QueueInput(new InputEvent(InputKind.Wheel, pt, 0, 0, 240f));
+            Settle(30);
+            host.Scene.TryGetScroll(detailVp, out var detailAfter);
+            Console.Error.WriteLine($"[tracklist-shot] detail-scroll expected=n#{detailVp.Raw.Index} hit=n#{hit.Raw.Index} routed=n#{routed.Raw.Index} " +
+                $"rect=({rr.X:0},{rr.Y:0} {rr.W:0}x{rr.H:0}) view={detailBefore.ViewportH:0} content={detailBefore.ContentH:0} " +
+                $"offset={detailBefore.OffsetY:0}->{detailAfter.OffsetY:0} phase={detailAfter.Phase} pending={detailAfter.PendingTargetY:0} " +
+                $"result={(MathF.Abs(detailAfter.OffsetY - detailBefore.OffsetY) > 1f ? "PASS" : "FAIL")}");
+            if (routed.IsNull)
+            {
+                Console.Error.WriteLine("[tracklist-shot]   expected-chain:");
+                for (var n = detailVp; !n.IsNull; n = host.Scene.Parent(n))
+                {
+                    var nr = host.Scene.AbsoluteRect(n);
+                    var nf = host.Scene.Flags(n);
+                    Console.Error.WriteLine($"[tracklist-shot]     n#{n.Raw.Index} type={host.Scene.ElementTypeId(n)} " +
+                        $"rect=({nr.X:0},{nr.Y:0} {nr.W:0}x{nr.H:0}) flags={nf} scroll={host.Scene.HasScroll(n)}");
+                }
+                Console.Error.WriteLine("[tracklist-shot]   hit-chain:");
+                for (var n = hit; !n.IsNull; n = host.Scene.Parent(n))
+                {
+                    var nr = host.Scene.AbsoluteRect(n);
+                    var nf = host.Scene.Flags(n);
+                    Console.Error.WriteLine($"[tracklist-shot]   hit-chain n#{n.Raw.Index} type={host.Scene.ElementTypeId(n)} " +
+                        $"rect=({nr.X:0},{nr.Y:0} {nr.W:0}x{nr.H:0}) flags={nf} scroll={host.Scene.HasScroll(n)}");
+                }
+            }
+        }
+        else Console.Error.WriteLine("[tracklist-shot] detail-scroll MISSING");
+        Shot("detail");
+
+        // 2) Album detail uses an OUTER scroll viewport around its eager track rows + trailing shelves. Probe the exact
+        // wheel route twice (including focus loss/reactivation): an inactive full-bleed selection overlay used to win
+        // HitTestAny here even though ordinary row clicks still worked.
+        var probeAlbum = Wavee.Core.FakeData.Album(120);
+        Nav("album:" + probeAlbum.Uri, probeAlbum.Name); Settle(50); System.Threading.Thread.Sleep(800); Settle(80);
+        var albumVp = FindLargestScrollViewport(host.Scene);
+        if (!albumVp.IsNull && host.Scene.TryGetScroll(albumVp, out var albumBefore))
+        {
+            var rr = host.Scene.AbsoluteRect(albumVp);
+            var pt = new Point2(rr.X + rr.W * 0.5f, rr.Y + MathF.Min(rr.H, albumBefore.ViewportH) * 0.5f);
+            var routed = host.Input.ScrollableUnderForAxis(pt, wantHorizontal: false);
+            window.QueueInput(new InputEvent(InputKind.PointerMove, pt, 0, 0));
+            window.QueueInput(new InputEvent(InputKind.Wheel, pt, 0, 0, 240f));
+            Settle(30);
+            host.Scene.TryGetScroll(albumVp, out var albumAfter);
+
+            window.QueueInput(new InputEvent(InputKind.WindowBlur, default, 0, 0)); Settle(2);
+            window.QueueInput(new InputEvent(InputKind.WindowFocus, default, 0, 0));
+            window.QueueInput(new InputEvent(InputKind.PointerMove, pt, 0, 0));
+            float beforeFocusWheel = albumAfter.OffsetY;
+            window.QueueInput(new InputEvent(InputKind.Wheel, pt, 0, 0, 240f));
+            Settle(30);
+            host.Scene.TryGetScroll(albumVp, out var albumFocused);
+            var routedFocused = host.Input.ScrollableUnderForAxis(pt, wantHorizontal: false);
+            Console.Error.WriteLine($"[tracklist-shot] album-scroll expected=n#{albumVp.Raw.Index} routed=n#{routed.Raw.Index}/n#{routedFocused.Raw.Index} " +
+                $"rect=({rr.X:0},{rr.Y:0} {rr.W:0}x{rr.H:0}) view={albumBefore.ViewportH:0} content={albumBefore.ContentH:0} " +
+                $"offset={albumBefore.OffsetY:0}->{albumAfter.OffsetY:0}->{albumFocused.OffsetY:0} " +
+                $"initial={(MathF.Abs(albumAfter.OffsetY - albumBefore.OffsetY) > 1f ? "PASS" : "FAIL")} " +
+                $"reactivate={(MathF.Abs(albumFocused.OffsetY - beforeFocusWheel) > 1f ? "PASS" : "FAIL")}");
+        }
+        else Console.Error.WriteLine("[tracklist-shot] album-scroll MISSING");
+        Shot("album");
+
+        // Bundled Spotify collection art + the intentional no-layer exception on the Liked Songs rail.
+        Nav("liked", null); Settle(40); System.Threading.Thread.Sleep(500); Settle(50); Shot("liked");
+
+        // 3) Library albums → the pane auto-selects the first album → its tracks render via the embedded TrackList.
         Nav("albums", null); Settle(50); System.Threading.Thread.Sleep(800); Settle(80); Shot("library");
-        // 3) Artist page → "Popular" top-tracks (synthesized for any artist uri).
+        // 4) Artist page → "Popular" top-tracks (synthesized for any artist uri).
         Nav("artist:spotify:artist:ar0", "Artist"); Settle(50); System.Threading.Thread.Sleep(700); Settle(60); Shot("artist");
         Nav("artist:spotify:artist:04gDigrS5kc9YWfZHwBETP", "Maroon 5"); Settle(60); System.Threading.Thread.Sleep(2500); Settle(120); Shot("artist_maroon5");
-        // 4) Search → the "Songs" rows in the All view.
+        // 5) Search → the "Songs" rows in the All view.
         Nav("search", "the"); Settle(50); System.Threading.Thread.Sleep(700); Settle(60); Shot("search");
 
         Console.Error.WriteLine("[tracklist-shot] done");
@@ -161,86 +237,80 @@ internal static class WaveeNavProbe
     // edge, and the left chevron must re-enable (the page state re-syncs from the settled offset). Output → C:\tmp\shelf_*.png.
     static void RunShelfFadeShot(AppHost host, Win32Window window, D3D12Device gpu)
     {
-        try { System.IO.Directory.CreateDirectory(@"C:\tmp"); } catch { }
+        string shotDir = Path.Combine(Environment.CurrentDirectory, ".tmp", "shelf-shot-" + Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+        try { Directory.CreateDirectory(shotDir); } catch { }
         window.SetClientSize(1280, 900);
-        void Frame() { if (!window.IsClosed) { gpu.SuppressLatencyWaitOnce(); gpu.SuppressVsyncOnce(); host.RunFrame(); } }
+        FrameStats lastFrame = default;
+        int maxEdgeFadeGroups = 0;
+        void Frame()
+        {
+            if (window.IsClosed) return;
+            gpu.SuppressLatencyWaitOnce(); gpu.SuppressVsyncOnce();
+            lastFrame = host.RunFrame();
+            maxEdgeFadeGroups = Math.Max(maxEdgeFadeGroups, lastFrame.EdgeFadeGroupCount);
+        }
         void Settle(int n) { for (int i = 0; i < n && !window.IsClosed; i++) Frame(); }
         void Shot(string name)
         {
             var px = gpu.CaptureBgra(out int cw, out int ch);
-            PngWriter.WriteBgra($@"C:\tmp\shelf_{name}.png", px, cw, ch);
-            Console.Error.WriteLine($"[shelf-shot] wrote shelf_{name}.png ({cw}x{ch})");
+            string path = Path.Combine(shotDir, $"shelf_{name}.png");
+            PngWriter.WriteBgra(path, px, cw, ch);
+            Console.Error.WriteLine($"[shelf-shot] wrote {path} ({cw}x{ch}); edgeFadeGroups={lastFrame.EdgeFadeGroupCount}");
         }
 
         WaveeShell.ProbeNav!("home", null); Settle(60); System.Threading.Thread.Sleep(1500); Settle(60);
         WaveeShell.ProbeNav!("home", null); Settle(60); System.Threading.Thread.Sleep(2000); Settle(120);
 
-        // Find the horizontal shelf strips (Orientation==1 with overflow) — the home "Your ..." PagedShelves.
         var scene = host.Scene;
-        var shelves = new List<NodeHandle>();
+        // Drive the REAL input/integrator path. The old diagnostic mutated ScrollState directly, bypassed the dispatcher
+        // transform writer, and captured a stale back buffer — it could claim the offset moved while the shelf stayed
+        // off-screen. First wheel the Home viewport until a shelf is actually visible.
+        var homeVp = FindScrollViewportByKey(scene, "home");
+        if (homeVp.IsNull || !scene.TryGetScroll(homeVp, out var homeBefore))
+        { Console.Error.WriteLine("[shelf-shot] Home viewport missing — aborting"); return; }
+        var homeRect = scene.AbsoluteRect(homeVp);
+        var pagePoint = new Point2(homeRect.X + homeRect.W * 0.5f, homeRect.Y + homeBefore.ViewportH * 0.5f);
+        window.QueueInput(new InputEvent(InputKind.PointerMove, pagePoint, 0, 0));
+        window.QueueInput(new InputEvent(InputKind.Wheel, pagePoint, 0, 0, 520f));
+        for (int i = 0; i < 90 && !window.IsClosed; i++) { System.Threading.Thread.Sleep(4); Frame(); }
+        scene.TryGetScroll(homeVp, out var homeAfter);
+        Console.Error.WriteLine($"[shelf-shot] Home offset {homeBefore.OffsetY:0}->{homeAfter.OffsetY:0}");
+
+        NodeHandle shelfVp = NodeHandle.Null;
+        float bestVisibleY = float.MaxValue;
         var st = new Stack<NodeHandle>(); if (!scene.Root.IsNull) st.Push(scene.Root);
         while (st.Count > 0)
         {
             var n = st.Pop();
             if (n.IsNull || !scene.IsLive(n)) continue;
-            if (scene.HasScroll(n) && scene.TryGetScroll(n, out var s) && s.Orientation == 1 && s.ContentW > s.ViewportW + 40f)
+            if (scene.HasScroll(n) && scene.TryGetScroll(n, out var s) && s.Orientation == 1
+                && s.ContentW > s.ViewportW + 40f && s.AutoEdgeFade)
             {
                 var r = scene.AbsoluteRect(n);
-                Console.Error.WriteLine($"[shelf-shot]   h-scroller rect=({r.X:0},{r.Y:0} {r.W:0}x{r.H:0}) viewW={s.ViewportW:0} contentW={s.ContentW:0} offX={s.OffsetX:0}");
-                if (r.Y > 60f && r.Y < 800f && r.W > 400f) shelves.Add(n);
+                bool visible = r.Bottom > homeRect.Y + 20f && r.Y < homeRect.Bottom - 20f && r.W > 400f;
+                Console.Error.WriteLine($"[shelf-shot]   h-scroller rect=({r.X:0},{r.Y:0} {r.W:0}x{r.H:0}) viewW={s.ViewportW:0} contentW={s.ContentW:0} offX={s.OffsetX:0} visible={visible}");
+                if (visible && MathF.Abs(r.Y - (homeRect.Y + 180f)) < bestVisibleY)
+                { bestVisibleY = MathF.Abs(r.Y - (homeRect.Y + 180f)); shelfVp = n; }
             }
             for (var c = scene.FirstChild(n); !c.IsNull; c = scene.NextSibling(c)) st.Push(c);
         }
-        if (shelves.Count == 0) { Console.Error.WriteLine("[shelf-shot] no horizontal shelf found — aborting"); return; }
+        if (shelfVp.IsNull || !scene.TryGetScroll(shelfVp, out var shelfBefore))
+        { Console.Error.WriteLine("[shelf-shot] no visible horizontal shelf found — aborting"); return; }
 
-        Shot("before");
-        foreach (var vp in shelves)
-        {
-            // Land at a MID-PAGE offset, exactly like a touchpad free-pan settle: offset ≈ 0.6 × viewport width.
-            ref FluentGpu.Scene.ScrollState sc = ref scene.ScrollRef(vp);
-            float target = MathF.Min(sc.ViewportW * 0.6f, MathF.Max(0f, sc.ContentW - sc.ViewportW));
-            sc.OffsetX = target; sc.TargetX = target;
-            NodeHandle content = sc.ContentNode;
-            if (!content.IsNull && scene.IsLive(content))
-            {
-                scene.Paint(content).LocalTransform = FluentGpu.Foundation.Affine2D.Translation(-target, 0f);
-                scene.Mark(content, FluentGpu.Foundation.NodeFlags.TransformDirty | FluentGpu.Foundation.NodeFlags.PaintDirty);
-            }
-        }
-        Settle(30);
-        foreach (var vp in shelves)
-        {
-            scene.TryGetScroll(vp, out var s);
-            Console.Error.WriteLine($"[shelf-shot]   after: offX={s.OffsetX:0} flags={s.ScrollFlags}");
-        }
-        // Bring the first shelf into view: scroll the PAGE so the mid-scrolled strip (and its left fade) is on-screen.
-        {
-            NodeHandle pageV = NodeHandle.Null; float bestCv = 0f;
-            var stp = new Stack<NodeHandle>(); if (!scene.Root.IsNull) stp.Push(scene.Root);
-            while (stp.Count > 0)
-            {
-                var n = stp.Pop();
-                if (n.IsNull || !scene.IsLive(n)) continue;
-                if (scene.HasScroll(n) && scene.TryGetScroll(n, out var s) && s.Orientation != 1 && s.ContentH > s.ViewportH + 1f && s.ContentH > bestCv)
-                { bestCv = s.ContentH; pageV = n; }
-                for (var c = scene.FirstChild(n); !c.IsNull; c = scene.NextSibling(c)) stp.Push(c);
-            }
-            if (!pageV.IsNull && shelves.Count > 0)
-            {
-                float shelfY = scene.AbsoluteRect(shelves[0]).Y;
-                ref FluentGpu.Scene.ScrollState sc = ref scene.ScrollRef(pageV);
-                float t = Math.Clamp(sc.OffsetY + shelfY - 260f, 0f, MathF.Max(0f, sc.ContentH - sc.ViewportH));
-                sc.OffsetY = t; sc.TargetY = t;
-                NodeHandle content = sc.ContentNode;
-                if (!content.IsNull && scene.IsLive(content))
-                {
-                    scene.Paint(content).LocalTransform = FluentGpu.Foundation.Affine2D.Translation(0f, -t);
-                    scene.Mark(content, FluentGpu.Foundation.NodeFlags.TransformDirty | FluentGpu.Foundation.NodeFlags.PaintDirty);
-                }
-                Settle(30);
-            }
-        }
-        Shot("after");
+        var shelfRect = scene.AbsoluteRect(shelfVp);
+        var shelfPoint = new Point2(shelfRect.X + shelfRect.W * 0.5f, shelfRect.Y + MathF.Min(shelfRect.H, shelfBefore.ViewportH) * 0.5f);
+        var routedBefore = host.Input.ScrollableUnderForAxis(shelfPoint, wantHorizontal: true);
+        Shot("before");                         // start edge: right fade only
+        maxEdgeFadeGroups = 0;
+        window.QueueInput(new InputEvent(InputKind.PointerMove, shelfPoint, 0, 0));
+        window.QueueInput(new InputEvent(InputKind.Wheel, shelfPoint, 0, 0, ScrollDeltaX: MathF.Min(300f, shelfBefore.ContentW - shelfBefore.ViewportW)));
+        for (int i = 0; i < 90 && !window.IsClosed; i++) { System.Threading.Thread.Sleep(4); Frame(); }
+        scene.TryGetScroll(shelfVp, out var shelfAfter);
+        var routedAfter = host.Input.ScrollableUnderForAxis(shelfPoint, wantHorizontal: true);
+        Shot("after");                          // mid strip: left + right fades
+        Console.Error.WriteLine($"[shelf-shot] shelf expected=n#{shelfVp.Raw.Index} routed=n#{routedBefore.Raw.Index}/n#{routedAfter.Raw.Index} " +
+            $"offX={shelfBefore.OffsetX:0}->{shelfAfter.OffsetX:0} maxEdgeFadeGroups={maxEdgeFadeGroups} " +
+            $"result={(shelfAfter.OffsetX > shelfBefore.OffsetX + 1f && maxEdgeFadeGroups > 0 ? "PASS" : "FAIL")}");
 
         // Artist page: the measured-virtual shelves ("Appears on" / "Fans also like" / concerts / merch / gallery) —
         // the probe-stuck regression left them as blank reserved bands. Scroll deep and capture the shelf zone.
@@ -605,7 +675,9 @@ internal static class WaveeNavProbe
             for (int f = 0; f < 12 && !window.IsClosed; f++) Measure(sidebar, "drag-end");
         }
 
-        var viewport = FindLargestScrollViewport(host.Scene);
+        // Select the actual Home ScrollEl, not merely the largest vertical extent. The latter can select a nested or
+        // retained viewport and produced a false PASS for the real page-scroll regression.
+        var viewport = FindScrollViewportByKey(host.Scene, "home");
         if (viewport.IsNull)
         {
             Console.Error.WriteLine("[home-scroll-probe] no Home scroll viewport found");
@@ -615,10 +687,15 @@ internal static class WaveeNavProbe
             var vr = host.Scene.AbsoluteRect(viewport);
             host.Scene.TryGetScroll(viewport, out var s0);
             float vh = s0.ViewportH > 20f ? s0.ViewportH : (vr.H > 20f ? vr.H : 400f);
-            var pos = new Point2(vr.X + vr.W * 0.5f, vr.Y + vh * 0.5f);
+            // Reproduce the reported dead strip exactly: point at the collapsed 2-DIP thumb on the trailing edge. The
+            // retained closed-right-rail overlay used to win HitAny here even though the page remained clickable to its
+            // left, so a centre-point probe gave a false PASS.
+            var pos = new Point2(vr.X + vr.W - 2f, vr.Y + vh * 0.5f);
             window.QueueInput(new InputEvent(InputKind.PointerMove, pos, 0, 0));
             Settle(2);
-            Console.Error.WriteLine($"[home-scroll-probe] wheel @ ({pos.X:0},{pos.Y:0}) viewport x={vr.X:0} w={vr.W:0} content {s0.ContentH:0} viewH {s0.ViewportH:0}");
+            var routed0 = host.Input.ScrollableUnderForAxis(pos, wantHorizontal: false);
+            Console.Error.WriteLine($"[home-scroll-probe] wheel @ ({pos.X:0},{pos.Y:0}) home=n#{viewport.Raw.Index} routed=n#{routed0.Raw.Index} " +
+                $"viewport x={vr.X:0} w={vr.W:0} content {s0.ContentH:0} viewH {s0.ViewportH:0} suppressors={s0.LoadingBarSuppressors}");
 
             for (int i = 0; i < 180 && !window.IsClosed; i++)
             {
@@ -633,6 +710,39 @@ internal static class WaveeNavProbe
             host.Scene.TryGetScroll(viewport, out var s1);
             bool moved = MathF.Abs(s1.OffsetY - s0.OffsetY) > 1f;
             Console.Error.WriteLine($"[home-scroll-probe] endOff {s1.OffsetY:0} - wheel input {(moved ? "took effect" : "did not move")}");
+
+            // Exact regression: a working scrollbar auto-hides, the window deactivates/reactivates, then BOTH wheel
+            // routing and the conscious indicator must restart on the same viewport. Real-time idle frames are used so
+            // the 2s WinUI contract delay actually expires (tight diagnostic frames have near-zero dt).
+            window.QueueInput(new InputEvent(InputKind.WindowBlur, default, 0, 0));
+            host.RunFrame();
+            for (int i = 0; i < 145 && !window.IsClosed; i++)
+            {
+                System.Threading.Thread.Sleep(16);
+                host.RunFrame();
+            }
+            host.Scene.TryGetScroll(viewport, out var hidden);
+            Console.Error.WriteLine($"[home-scroll-reactivate] hidden fade={hidden.FadeT:0.00} pointerOver={hidden.PointerOver} off={hidden.OffsetY:0}");
+
+            window.QueueInput(new InputEvent(InputKind.WindowFocus, default, 0, 0));
+            window.QueueInput(new InputEvent(InputKind.PointerMove, pos, 0, 0));
+            for (int i = 0; i < 8 && !window.IsClosed; i++) { System.Threading.Thread.Sleep(16); host.RunFrame(); }
+            host.Scene.TryGetScroll(viewport, out var focused);
+            var routedAfterFocus = host.Input.ScrollableUnderForAxis(pos, wantHorizontal: false);
+            float beforeReactivatedWheel = focused.OffsetY;
+            float maxReactivated = MathF.Max(0f, focused.ContentH - focused.ViewportH);
+            float reactivatedDelta = beforeReactivatedWheel > maxReactivated * 0.5f ? -60f : 60f;
+            for (int i = 0; i < 24 && !window.IsClosed; i++)
+            {
+                window.QueueInput(new InputEvent(InputKind.Wheel, pos, 0, 0, reactivatedDelta));
+                System.Threading.Thread.Sleep(8);
+                host.RunFrame();
+            }
+            host.Scene.TryGetScroll(viewport, out var reactivated);
+            bool reactivatedMoved = MathF.Abs(reactivated.OffsetY - beforeReactivatedWheel) > 1f;
+            bool reactivatedBar = reactivated.FadeT > 0.5f;
+            Console.Error.WriteLine($"[home-scroll-reactivate] home=n#{viewport.Raw.Index} routed=n#{routedAfterFocus.Raw.Index} fade={reactivated.FadeT:0.00} pointerOver={reactivated.PointerOver} " +
+                $"off={beforeReactivatedWheel:0}->{reactivated.OffsetY:0} wheel={(reactivatedMoved ? "PASS" : "FAIL")} bar={(reactivatedBar ? "PASS" : "FAIL")}");
 
             // Real app-loop cadence: present at vsync and ask RecommendedWaitMs before each frame so accidental ambient
             // throttling during scroll shows up as wait>0.
@@ -694,6 +804,217 @@ internal static class WaveeNavProbe
         Console.Error.Write(report);
         if (csvPath is not null) WriteProbeFile(csvPath, csv.ToString(), "home-scroll-probe");
         if (summaryPath is not null) WriteProbeFile(summaryPath, report, "home-scroll-probe");
+    }
+
+    // WAVEE_RAIL_PROBE=1 (projected-motion P0): the dedicated rail/sidebar transition perf harness. Wide-window (rail
+    // DOCKS) scenario driving (a) rail open→settle→close→settle ×3, (b) rapid rail reversal (toggle mid-flight), (c)
+    // sidebar compact toggle ×3, (d) a synthesized sidebar-grip drag sweep. Per-frame CSV rows carry the segment ms PLUS
+    // the FlexLayout measure/arrange/text-reshape counters (need FG_LAYOUT_DIAG=1 to be non-zero) and span
+    // reused/rebased/re-recorded from FrameStats — so a Reflow-per-tick regression shows up as non-zero measure/arrange on
+    // every animation tick, and the projected (Reveal/FLIP) fix as ~0 on ticks (only the commit frame is large).
+    // WAVEE_RAIL_BASELINE=1 selects the pre-fix Reflow path from the same build for an A/B. Output → C:\tmp\projected-motion
+    // (override with WAVEE_PROBE_OUT); writes wavee-rail-probe.csv + -summary.txt + rail_*.png first/mid/final captures.
+    static void RunRailProbe(AppHost host, Win32Window window, D3D12Device gpu)
+    {
+        string outDir = Environment.GetEnvironmentVariable("WAVEE_PROBE_OUT") ?? "";
+        if (string.IsNullOrWhiteSpace(outDir)) outDir = @"C:\tmp\projected-motion";
+        try { Directory.CreateDirectory(outDir); } catch { }
+        string csvPath = Path.Combine(outDir, "wavee-rail-probe.csv");
+        string summaryPath = Path.Combine(outDir, "wavee-rail-probe-summary.txt");
+        bool baseline = Diag.EnvFlag("WAVEE_RAIL_BASELINE");
+        bool keepVsync = Diag.EnvFlag("WAVEE_PROBE_VSYNC");
+        var csv = new StringBuilder(1 << 16);
+        csv.AppendLine("phase,frame,label,frameMs,flushMs,layoutMs,animMs,recordMs,submitMs,measure,arrange,textMiss,spansReused,spansRebased,spansRerec,gen0,comps,nodes,draws,overBudget");
+
+        window.SetClientSize(1700, 950);   // wide → the rail DOCKS (RailFits) — inline reserved width, the reported mode
+
+        FrameStats Measure(Phase phase, string label)
+        {
+            int g0 = GC.CollectionCount(0);
+            if (!keepVsync) { gpu.SuppressLatencyWaitOnce(); gpu.SuppressVsyncOnce(); }
+            var s = host.RunFrame();
+            int dg0 = GC.CollectionCount(0) - g0;
+            if (s.Rendered || s.DrawCommandCount > 0)
+            {
+                phase.Ms.Add(s.FrameMs);
+                bool over = s.FrameMs > BudgetMs;
+                if (over) { phase.OverBudget++; if (dg0 > 0) phase.OverBudgetGc++; }
+                static string F(double v) => v.ToString("0.00", CultureInfo.InvariantCulture);
+                csv.Append(phase.Name).Append(',').Append(phase.Ms.Count.ToString(CultureInfo.InvariantCulture)).Append(',')
+                   .Append(label).Append(',')
+                   .Append(s.FrameMs.ToString("0.000", CultureInfo.InvariantCulture)).Append(',')
+                   .Append(F(s.FlushMs)).Append(',').Append(F(s.LayoutMs)).Append(',').Append(F(s.AnimMs)).Append(',')
+                   .Append(F(s.RecordMs)).Append(',').Append(F(s.SubmitMs)).Append(',')
+                   .Append(s.MeasureCount).Append(',').Append(s.ArrangeCount).Append(',').Append(s.TextShapeMisses).Append(',')
+                   .Append(s.SpansReused).Append(',').Append(s.SpansRebased).Append(',').Append(s.SpansReRecorded).Append(',')
+                   .Append(dg0).Append(',').Append(s.ComponentsRendered).Append(',').Append(s.NodesVisited).Append(',').Append(s.DrawCommandCount).Append(',')
+                   .Append(over ? '1' : '0').AppendLine();
+            }
+            return s;
+        }
+
+        void Nav(string k, string? a) => WaveeShell.ProbeNav!(k, a);
+        void Settle(int n) { for (int i = 0; i < n && !window.IsClosed; i++) host.RunFrame(); }
+        void Shot(string name)
+        {
+            var px = gpu.CaptureBgra(out int cw, out int ch);
+            PngWriter.WriteBgra(Path.Combine(outDir, $"rail_{name}.png"), px, cw, ch);
+            Console.Error.WriteLine($"[rail-probe] wrote rail_{name}.png ({cw}x{ch})");
+        }
+
+        Console.Error.WriteLine($"[rail-probe] {(baseline ? "BASELINE (SizeMode.Reflow)" : "P1 (Reveal/FLIP)")} out={outDir}");
+        for (int i = 0; i < 80 && !window.IsClosed; i++) { gpu.SuppressLatencyWaitOnce(); gpu.SuppressVsyncOnce(); host.RunFrame(); }
+        Nav("home", null); Settle(40); System.Threading.Thread.Sleep(700); Settle(30);
+        GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
+
+        if (WaveeShell.ProbeRailOpen is null || WaveeShell.ProbeSidebarCompact is null)
+        {
+            Console.Error.WriteLine("[rail-probe] rail/sidebar hooks not wired — aborting");
+            return;
+        }
+
+        var railOC = new Phase("rail-open-close");
+        var railRev = new Phase("rail-reversal");
+        var sbToggle = new Phase("sidebar-toggle");
+        var sbDrag = new Phase("sidebar-drag");
+
+        // (a) rail open→settle→close→settle ×3 (first cycle captures first/mid/final PNGs of both legs).
+        Console.Error.WriteLine("[rail-probe] (a) rail open/close x3");
+        for (int rep = 0; rep < 3 && !window.IsClosed; rep++)
+        {
+            WaveeShell.ProbeRailOpen!(true);
+            for (int f = 0; f < 40 && !window.IsClosed; f++)
+            {
+                Measure(railOC, "open");
+                if (rep == 0 && f == 1) Shot("open_first");
+                if (rep == 0 && f == 8) Shot("open_mid");
+            }
+            if (rep == 0) Shot("open_final");
+            WaveeShell.ProbeRailOpen!(false);
+            for (int f = 0; f < 40 && !window.IsClosed; f++)
+            {
+                Measure(railOC, "close");
+                if (rep == 0 && f == 8) Shot("close_mid");
+            }
+            if (rep == 0) Shot("close_final");
+        }
+
+        // (b) rapid reversal — flip the target every 6 frames so each toggle interrupts an in-flight transition.
+        Console.Error.WriteLine("[rail-probe] (b) rapid rail reversal");
+        bool open = false;
+        for (int i = 0; i < 120 && !window.IsClosed; i++)
+        {
+            if (i % 6 == 0) { open = !open; WaveeShell.ProbeRailOpen!(open); }
+            Measure(railRev, open ? "toward-open" : "toward-close");
+        }
+        WaveeShell.ProbeRailOpen!(false); Settle(40);
+
+        // (c) sidebar compact toggle ×3 (56↔expanded).
+        Console.Error.WriteLine("[rail-probe] (c) sidebar compact toggle x3");
+        for (int rep = 0; rep < 3 && !window.IsClosed; rep++)
+        {
+            WaveeShell.ProbeSidebarCompact!(true);
+            for (int f = 0; f < 30 && !window.IsClosed; f++)
+            {
+                Measure(sbToggle, "compact");
+                if (rep == 0 && f == 1) Shot("sb_compact_first");
+                if (rep == 0 && f == 8) Shot("sb_compact_mid");
+            }
+            if (rep == 0) Shot("sb_compact_final");
+            WaveeShell.ProbeSidebarCompact!(false);
+            for (int f = 0; f < 30 && !window.IsClosed; f++)
+            {
+                Measure(sbToggle, "expand");
+                if (rep == 0 && f == 1) Shot("sb_expand_first");
+                if (rep == 0 && f == 8) Shot("sb_expand_mid");
+            }
+            if (rep == 0) Shot("sb_expand_final");
+        }
+
+        // (d) sidebar-grip drag sweep — synthesize a pointer drag across ~40 steps (out to 460 and back to 240). This
+        // exercises the suppressed path (SnapStructuralToLayout): with Reveal transitions the drag must still track 1:1.
+        if (WaveeShell.ProbeSidebarDragBegin is not null && WaveeShell.ProbeSidebarDragWidth is not null && WaveeShell.ProbeSidebarDragEnd is not null)
+        {
+            Console.Error.WriteLine("[rail-probe] (d) sidebar drag sweep");
+            WaveeShell.ProbeSidebarDragBegin!();
+            for (int i = 0; i < 40 && !window.IsClosed; i++)
+            {
+                float t = i / 39f;
+                float w = 240f + (460f - 240f) * (0.5f - 0.5f * MathF.Cos(t * MathF.PI * 2f));   // ease out to max and back
+                WaveeShell.ProbeSidebarDragWidth!(w);
+                Measure(sbDrag, "drag");
+            }
+            WaveeShell.ProbeSidebarDragEnd!();
+            for (int f = 0; f < 12 && !window.IsClosed; f++) Measure(sbDrag, "drag-end");
+        }
+
+        // ── report ──
+        var phases = new[] { railOC, railRev, sbToggle, sbDrag };
+        var all = new Phase("ALL");
+        foreach (var p in phases) { all.Ms.AddRange(p.Ms); all.OverBudget += p.OverBudget; all.OverBudgetGc += p.OverBudgetGc; }
+
+        var sb = new StringBuilder(8192);
+        sb.AppendLine();
+        sb.AppendLine($"=== WAVEE RAIL PROBE — projected-motion {(baseline ? "BASELINE (SizeMode.Reflow)" : "P1 (Reveal/FLIP)")} — per-frame ms; target < 8.33 ms at 120 Hz ===");
+        sb.AppendLine(keepVsync ? "(WAVEE_PROBE_VSYNC: vblank-paced)" : "(vsync/latency throttle removed → pure work cost)");
+        sb.AppendLine();
+        sb.AppendLine($"{"phase",-16} {"n",5} {"p50",6} {"p90",6} {"p99",7} {"p99.9",7} {"max",8}   {"over8.3ms",10} {"(ofwhich GC)",12}");
+        foreach (var p in phases) sb.AppendLine(Format(p));
+        sb.AppendLine(new string('-', 98));
+        sb.AppendLine(Format(all));
+
+        // Per-phase layout-cost aggregate (the projected-motion headline): on a Reveal/FLIP toggle only the COMMIT frame
+        // should carry measure/arrange; every anim tick must be ~0. Baseline (Reflow) re-measures on EVERY tick.
+        var perPhase = new Dictionary<string, (int frames, int nonZeroMeasure, long sumMeasure, int maxMeasure, int maxArrange, int maxTextMiss)>();
+        long anyMeasure = 0;
+        foreach (var line in csv.ToString().Split('\n'))
+        {
+            var c = line.Split(',');
+            if (c.Length < 20 || c[0] == "phase") continue;
+            int.TryParse(c[9], out int meas); int.TryParse(c[10], out int arr); int.TryParse(c[11], out int tmiss);
+            anyMeasure += meas;
+            perPhase.TryGetValue(c[0], out var agg);
+            agg.frames++;
+            if (meas > 0) agg.nonZeroMeasure++;
+            agg.sumMeasure += meas;
+            if (meas > agg.maxMeasure) agg.maxMeasure = meas;
+            if (arr > agg.maxArrange) agg.maxArrange = arr;
+            if (tmiss > agg.maxTextMiss) agg.maxTextMiss = tmiss;
+            perPhase[c[0]] = agg;
+        }
+        sb.AppendLine();
+        sb.AppendLine("layout cost per phase (FG_LAYOUT_DIAG): frames with measure>0 / total, avg measure/frame, max measure/arrange/textMiss");
+        foreach (var p in phases)
+        {
+            if (!perPhase.TryGetValue(p.Name, out var a) || a.frames == 0) continue;
+            sb.AppendLine($"  {p.Name,-16} measureFrames={a.nonZeroMeasure}/{a.frames}  avgMeasure={(double)a.sumMeasure / a.frames:0.0}  maxMeasure={a.maxMeasure}  maxArrange={a.maxArrange}  maxTextMiss={a.maxTextMiss}");
+        }
+        if (anyMeasure == 0)
+            sb.AppendLine("  NOTE: all measure counts are 0 — re-run with FG_LAYOUT_DIAG=1 to populate the layout-cost columns.");
+
+        // Worst 12 frames overall, segment-broken-down.
+        var rows = new List<(string Tag, double Ms, double Flush, double Layout, double Anim, double Record, double Submit, int Meas, int Arr, int G0)>();
+        foreach (var line in csv.ToString().Split('\n'))
+        {
+            var c = line.Split(',');
+            if (c.Length < 20 || c[0] == "phase") continue;
+            double D(int i) => double.TryParse(c[i], NumberStyles.Float, CultureInfo.InvariantCulture, out double v) ? v : 0;
+            int.TryParse(c[9], out int meas); int.TryParse(c[10], out int arr); int.TryParse(c[15], out int g0);
+            rows.Add((c[0] + ":" + c[2], D(3), D(4), D(5), D(6), D(7), D(8), meas, arr, g0));
+        }
+        rows.Sort((a, b) => b.Ms.CompareTo(a.Ms));
+        sb.AppendLine();
+        sb.AppendLine($"Worst 12 frames — {"total",7} = {"flush",6} + {"layout",6} + {"anim",5} + {"record",6} + {"submit",6}  (meas/arr, gc)  transition");
+        for (int i = 0; i < Math.Min(12, rows.Count); i++)
+        {
+            var r = rows[i];
+            sb.AppendLine($"  {r.Ms,7:0.00} = {r.Flush,6:0.00} + {r.Layout,6:0.00} + {r.Anim,5:0.00} + {r.Record,6:0.00} + {r.Submit,6:0.00}  (m={r.Meas} a={r.Arr}, gc={r.G0})  {r.Tag}");
+        }
+
+        string report = sb.ToString();
+        Console.Error.Write(report);
+        WriteProbeFile(csvPath, csv.ToString(), "rail-probe");
+        WriteProbeFile(summaryPath, report, "rail-probe");
     }
 
     // WAVEE_LIVE_LYRICS_SCROLL_PROBE=1: REAL-backend, long-duration repro for "the rest of the app scrolls poorly while
@@ -1686,7 +2007,7 @@ internal static class WaveeNavProbe
             Measure(hammer, key);
         }
 
-        // ── Phase 3: BACK / FORWARD (KeepAlive swap + connected-animation cover fly). ──
+        // ── Phase 3: BACK / FORWARD (KeepAlive page transition; connected cover animation is disabled in Wavee). ──
         var backfwd = new Phase("back-forward");
         for (int i = 0; i < HeavyRoutes.Length && !window.IsClosed; i++) { var (k, a) = HeavyRoutes[i]; Nav(k, a); Settle(3); }
         Console.Error.WriteLine("[wavee-nav-probe] back-forward (240 frames)");
@@ -1927,5 +2248,21 @@ internal static class WaveeNavProbe
             for (var c = scene.FirstChild(n); !c.IsNull; c = scene.NextSibling(c)) stack.Push(c);
         }
         return best;
+    }
+
+    static NodeHandle FindScrollViewportByKey(FluentGpu.Scene.SceneStore scene, string key)
+    {
+        var stack = new Stack<NodeHandle>();
+        if (!scene.Root.IsNull) stack.Push(scene.Root);
+        while (stack.Count > 0)
+        {
+            var n = stack.Pop();
+            if (n.IsNull || !scene.IsLive(n)) continue;
+            if (scene.HasScroll(n) && scene.TryGetScroll(n, out var sc)
+                && string.Equals(sc.ScrollKey, key, StringComparison.Ordinal))
+                return n;
+            for (var c = scene.FirstChild(n); !c.IsNull; c = scene.NextSibling(c)) stack.Push(c);
+        }
+        return NodeHandle.Null;
     }
 }

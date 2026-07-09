@@ -19,7 +19,7 @@ public sealed class RawCoreStreamProjection : IPlaybackProjection, IAsyncDisposa
     readonly GaboBatcher _batcher;
     readonly Func<string?> _contextUri;
     readonly Func<bool> _isPremium;
-    readonly Action<string>? _log;
+    readonly WaveeLogger _log;
 
     PlaybackIds? _ids;
     string _contentUri = "";
@@ -41,7 +41,7 @@ public sealed class RawCoreStreamProjection : IPlaybackProjection, IAsyncDisposa
     long _durationMs;
 
     public RawCoreStreamProjection(GaboBatcher batcher, Func<string?>? contextUri = null,
-        Func<bool>? isPremium = null, Action<string>? log = null)
+        Func<bool>? isPremium = null, WaveeLogger log = default)
     {
         _batcher = batcher;
         _contextUri = contextUri ?? (() => null);

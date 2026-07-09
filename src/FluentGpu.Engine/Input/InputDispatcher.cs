@@ -1131,6 +1131,12 @@ public sealed class InputDispatcher
                     EndScrollGesture(springBand: true);   // a live gesture dies with activation; its band springs home
                     CancelKeyArm(fire: false);
                     SetState(ref _hovered, NodeHandle.Null, NodeFlags.Hovered);
+                    // Scroll hover is a separate retained target from normal element hover. Leaving it latched across
+                    // deactivation strands ScrollState.PointerOver/_scrollHovered on opposite sides of the lifecycle;
+                    // after the bar auto-hides, reactivation can then fail to produce a fresh reveal edge. Explicitly
+                    // leave and clear it so the first post-focus pointer move always re-arms the viewport consciously.
+                    if (!_scrollHovered.IsNull && _scene.IsLive(_scrollHovered)) OnScrollLeave?.Invoke(_scrollHovered);
+                    _scrollHovered = NodeHandle.Null;
                     _lastPointerValid = false;   // §5.4: the cursor left the client area — no stationary point to re-resolve hover at
                     _accessKeyMode = false; _altPending = false;
                     OnWindowBlur?.Invoke();
@@ -3355,6 +3361,9 @@ public sealed class InputDispatcher
     // (a list row, a card) reads as hovered while the pointer is anywhere inside it — over its interactive children
     // (links, buttons) included. Diff prev's ancestor chain vs next's: clear the ancestors that left the chain, set the
     // ones that entered; both loops break at the first SHARED ancestor, so a move WITHIN a row dirties only the row.
+    // Per-node OnHoverMove/OnPointerExit handlers are delivered on the SUBTREE edges here (WinUI PointerEntered/Exited
+    // are subtree-scoped) — a wrapper whose interactive CHILD wins the hit (ToolTip.Wrap around a button) still gets
+    // its enter/exit; without this the deepest-leaf-only delivery starved every such wrapper.
     private void UpdateHoverWithin(NodeHandle prev, NodeHandle next)
     {
         const int interactive = InteractionInfo.PointerBit | InteractionInfo.ClickBit | InteractionInfo.PressedBit;
@@ -3367,6 +3376,9 @@ public sealed class InputDispatcher
                 // The container left the hover scope (pointer exited its subtree) → let its reveal-on-hover descendants
                 // decay (it is no longer Hovered nor HoverWithin, so SetHover resolves to off).
                 OnHoverChanged?.Invoke(n, false);
+                // Subtree-exit → the node's own exit handler. n == next means the pointer moved from a child UP ONTO
+                // this node itself — still inside, no exit (its HoverWithin→Hovered flag handoff is paint-only).
+                if (n != next) _scene.GetPointerExit(n)?.Invoke();
             }
         }
         for (var n = next.IsNull ? NodeHandle.Null : _scene.Parent(next); !n.IsNull && _scene.IsLive(n); n = _scene.Parent(n))
@@ -3378,6 +3390,9 @@ public sealed class InputDispatcher
                 // The pointer entered this container's subtree (possibly straight onto an interactive child) → keep its
                 // reveal-on-hover descendants driven, so the affordance does not require the leaf to be the row itself.
                 OnHoverChanged?.Invoke(n, true);
+                // Subtree-enter → the node's own bare-hover handler (the ToolTip.Wrap trigger). n == prev means the
+                // pointer moved from this node DOWN onto a child — it was already hovered, no re-enter.
+                if (n != prev) _scene.GetHoverMove(n)?.Invoke(LocalPos(n, _lastPointerPx));
             }
         }
     }
@@ -3389,7 +3404,10 @@ public sealed class InputDispatcher
         if (flag == NodeFlags.Hovered)
         {
             OnHoverChanged?.Invoke(node, on);
-            if (!on && _scene.IsLive(node)) _scene.GetPointerExit(node)?.Invoke();   // pointer left → reset hover preview
+            // Pointer left the leaf → its exit handler, UNLESS the new leaf is inside this node's own subtree (moving
+            // from a wrapper's padding onto its interactive child is NOT an exit — WinUI PointerExited is subtree-
+            // scoped; firing here would instantly cancel a pending tooltip on its own target).
+            if (!on && _scene.IsLive(node) && !IsSelfOrAncestorOf(node, _hovered)) _scene.GetPointerExit(node)?.Invoke();
         }
         else if (flag == NodeFlags.Pressed) OnPressChanged?.Invoke(node, on);
     }

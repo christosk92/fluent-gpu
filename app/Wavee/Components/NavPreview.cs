@@ -7,8 +7,8 @@ using Wavee.Core;
 namespace Wavee;
 
 // Click→detail handoff: a Home card already knows the cover, title, artist/owner and year, so it stashes a PARTIAL
-// DetailModel keyed by the route key. The detail page renders its HEADER from this immediately (paired with the
-// connected-animation cover fly) and only the track list streams in via the engine's Skel.Region — instead of the whole
+// DetailModel keyed by the route key. The detail page renders its HEADER from this immediately while only the track list
+// streams in via the engine's Skel.Region — instead of the whole
 // page sitting on a bare skeleton. One-shot: the detail page Takes it on mount.
 sealed class NavPreviewStore
 {
@@ -20,22 +20,20 @@ sealed class NavPreviewStore
 }
 
 // Builds the partial DetailModel from the data a card carries at click time (header only — empty Tracks; the full model
-// loads behind it). MorphKey is set so the cover is a connected-animation participant.
+// loads behind it). No connected-animation identity is assigned.
 static class DetailPreview
 {
     public static DetailModel FromAlbum(Album a) => new(
         Title: a.Name, Cover: a.Cover, ContextUri: a.Uri,
         BadgeType: AlbumBadge(a.Kind), Year: a.Year > 0 ? a.Year.ToString() : null, OwnerName: null, OwnerImage: null,
         Artists: a.Artists, Description: null, MetaLine: Strings.Detail.SongCount(a.TrackCount),
-        Tracks: Array.Empty<Track>(), AboutArtist: null, Palette: null, ReleaseKind: a.Kind)
-    { MorphKey = "album:" + a.Uri };
+        Tracks: Array.Empty<Track>(), AboutArtist: null, Palette: null, ReleaseKind: a.Kind);
 
     public static DetailModel FromPlaylist(PlaylistSummary p) => new(
         Title: p.Name, Cover: p.Cover, ContextUri: p.Uri,
         BadgeType: null, Year: null, OwnerName: p.OwnerName, OwnerImage: null,
         Artists: Array.Empty<ArtistRef>(), Description: null, MetaLine: Strings.Detail.SongCount(p.TrackCount),
-        Tracks: Array.Empty<Track>(), AboutArtist: null, Palette: null)
-    { MorphKey = "pl:" + p.Uri };
+        Tracks: Array.Empty<Track>(), AboutArtist: null, Palette: null);
 
     static string AlbumBadge(AlbumKind k) => k switch
     {
@@ -47,25 +45,23 @@ static class DetailPreview
 }
 
 // Open a detail target the way a Home card does: stash the PARTIAL model the card already carries (cover/title/artist),
-// fire the connected-animation cover fly, then navigate. The stashed preview is the load-bearing bit — DetailPage.Take
+// then navigate. The stashed preview is the load-bearing bit — DetailPage.Take
 // finds it and reconciles the existing shell IN PLACE (the fast path) instead of mounting a throwaway full-page skeleton
 // and then the real shell (two mounts + a signal-graph teardown/rebuild). Any in-app card holding an Album/PlaylistSummary
-// should open through here so it gets the same cheap nav Home already does. `preview`/`morph` may be null (no-op then).
+// should open through here so it gets the same cheap nav Home already does. `preview` may be null (a no-op then).
 static class DetailNav
 {
-    public static void OpenAlbum(NavPreviewStore? preview, Action<string>? morph, Action<string, string?> go, Album a)
+    public static void OpenAlbum(NavPreviewStore? preview, Action<string, string?> go, Album a)
     {
         string key = "album:" + a.Uri;
         preview?.Set(key, DetailPreview.FromAlbum(a));
-        morph?.Invoke(key);
         go(key, a.Name);
     }
 
-    public static void OpenPlaylist(NavPreviewStore? preview, Action<string>? morph, Action<string, string?> go, PlaylistSummary p)
+    public static void OpenPlaylist(NavPreviewStore? preview, Action<string, string?> go, PlaylistSummary p)
     {
         string key = "pl:" + p.Uri;
         preview?.Set(key, DetailPreview.FromPlaylist(p));
-        morph?.Invoke(key);
         go(key, p.Name);
     }
 }

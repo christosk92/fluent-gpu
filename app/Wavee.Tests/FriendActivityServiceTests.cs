@@ -379,7 +379,7 @@ public class FriendActivityServiceTests
     static SpotifyFriendActivityService Make(
         IHttpExchange http, StubTransport t, SimpleSubject<string?> conn,
         Func<long>? clock = null, TimeSpan? watchdog = null)
-        => new(t, http, () => BaseUrl, conn, () => conn.Current, log: null, clock: clock, watchdogInterval: watchdog);
+        => new(t, http, () => BaseUrl, conn, () => conn.Current, log: default, clock: clock, watchdogInterval: watchdog);
 
     static WireEvent Presence(string userId) => new("hm://presence2/user/" + userId, Array.Empty<byte>());
 

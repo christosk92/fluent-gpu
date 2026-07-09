@@ -12,11 +12,11 @@ namespace Wavee;
 // issue (resolution/anti-aliasing), not the bitstream. Behind a CLI flag; no NuGet (PNG via the BCL ZLibStream + a tiny CRC32).
 static class QrDump
 {
-    public static int Run(string text, string path, Action<string> log)
+    public static int Run(string text, string path, WaveeLogger log)
     {
         bool[,] m;
         try { m = Qr.Encode(text, Qr.Ecc.M); }
-        catch (Exception ex) { log("QR encode failed: " + ex.Message); return 1; }
+        catch (Exception ex) { log.Info("QR encode failed: " + ex.Message); return 1; }
         int n = m.GetLength(0);
 
         // ASCII structure (dark = two full blocks → roughly square in a terminal), 2-module margin.
@@ -37,7 +37,7 @@ static class QrDump
             return (uint)mx < (uint)n && (uint)my < (uint)n && m[mx, my] ? (byte)0 : (byte)255;
         }
         WritePng(path, px, Gray);
-        log($"QR for \"{text}\": {n}x{n} modules -> {px}x{px}px PNG at {Path.GetFullPath(path)}");
+        log.Info($"QR for \"{text}\": {n}x{n} modules -> {px}x{px}px PNG at {Path.GetFullPath(path)}");
         return 0;
     }
 

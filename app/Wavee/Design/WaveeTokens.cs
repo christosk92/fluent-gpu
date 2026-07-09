@@ -37,10 +37,9 @@ public static class PlayerDock
     public const float Reserve = BarH;
 }
 
-/// <summary>Wavee app shell colors. Derived from the active <see cref="Tok.Palette"/> shell ramp (seed-built per preset).
-/// BOTH themes are Mica-first: the chrome is translucent seed-tinted layers over the DWM backdrop (light mirrors dark's
-/// proven LayerOnMicaBaseAlt stack; the seed's luminance anchors are solved as flattened-over-reference-Mica targets in
-/// PaletteBuilder, so the tonal ladder holds across wallpapers and never inverts).</summary>
+/// <summary>Wavee app shell colors. Derived from the active <see cref="Tok.Palette"/> shell ramp. The window itself is
+/// transparent to DWM Mica; chrome and content are translucent semantic layers composited over it. This is the WinUI
+/// two-layer model: Mica remains the foundation while low-alpha fills establish navigation and content hierarchy.</summary>
 public static class WaveeColors
 {
     /// <summary>One theme's shell surfaces (the values that aren't simply a plain engine token).</summary>
@@ -63,13 +62,20 @@ public static class WaveeColors
     public static ColorF Window => ColorF.Transparent;
     public static ColorF TitleBar => ColorF.Transparent;
 
-    public static ColorF Toolbar => Active.Toolbar;
-    public static ColorF Sidebar => Active.Sidebar;
-    public static ColorF RailOverlay => Tok.Theme == ThemeKind.Light ? ColorF.FromRgba(0xF7, 0xF7, 0xF9) : ColorF.FromRgba(0x1C, 0x1D, 0x20);
-    public static ColorF PlayerBar => Active.PlayerBar;
-    public static ColorF FileArea => Active.FileArea;
-    public static ColorF Content => Active.Content;
-    public static ColorF ContentAlt => Active.ContentAlt;
+    // WinUI's stock LayerOnMica brush is intentionally conservative. Wavee uses thinner light composites so the Mica
+    // color remains perceptible across its large, persistent shell regions; RGB still comes from the selected palette.
+    static ColorF LightComposite(ColorF color, float alpha) => Tok.Theme == ThemeKind.Light ? color with { A = alpha } : color;
+
+    public static ColorF Toolbar => LightComposite(Active.Toolbar, 0.46f);
+    public static ColorF Sidebar => LightComposite(Active.Sidebar, 0.38f);
+    public static ColorF SelectedTab => LightComposite(Tok.LayerOnMicaBaseAlt, 0.58f);
+    public static ColorF RailOverlay => Tok.Theme == ThemeKind.Light
+        ? Active.ContentAlt with { A = 0.58f }
+        : ColorF.FromRgba(0x1C, 0x1D, 0x20);
+    public static ColorF PlayerBar => LightComposite(Active.PlayerBar, 0.42f);
+    public static ColorF FileArea => LightComposite(Active.FileArea, 0.62f);
+    public static ColorF Content => LightComposite(Active.Content, 0.62f);
+    public static ColorF ContentAlt => LightComposite(Active.ContentAlt, 0.40f);
     public static ColorF PremiumText => Active.PremiumText;
 
     public static ColorF RowZebra => Active.RowZebra;

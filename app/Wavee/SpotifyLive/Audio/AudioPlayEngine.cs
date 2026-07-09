@@ -21,7 +21,7 @@ internal sealed class AudioPlayEngine : IDisposable
 
     readonly HttpClient _http;
     readonly bool _ownsHttp;
-    readonly Action<string> _log;
+    readonly WaveeLogger _log;
     readonly Func<string, byte[], CdnDecryptor?> _nativeDecryptorFactory;
     readonly AudioBodyDiskCache? _bodyDisk;
     readonly WasapiRenderer _renderer = new();
@@ -51,7 +51,7 @@ internal sealed class AudioPlayEngine : IDisposable
     public event Action<AudioHostSignal>? State;
     public event Action? TrackFinished;
 
-    public AudioPlayEngine(Action<string> log, Func<string, byte[], CdnDecryptor?>? nativeDecryptorFactory = null,
+    public AudioPlayEngine(WaveeLogger log, Func<string, byte[], CdnDecryptor?>? nativeDecryptorFactory = null,
         AudioBodyDiskCache? bodyDisk = null, HttpClient? http = null, bool ownsHttp = false)
     {
         _http = http ?? HttpPools.Get(HttpPool.Cdn);
@@ -74,14 +74,14 @@ internal sealed class AudioPlayEngine : IDisposable
         _rendererPrimed = false;
         _prebuffering = _pendingHead.Length > 0;
         _buffering = _pendingHead.Length == 0;
-        _log($"load-fast-start {cmd.FileIdHex}: head={_pendingHead.Length}B fmt={_format} dur={_durationMs}ms gain={cmd.NormalizationGainDb:0.0}dB");
+        _log.Info($"load-fast-start {cmd.FileIdHex}: head={_pendingHead.Length}B fmt={_format} dur={_durationMs}ms gain={cmd.NormalizationGainDb:0.0}dB");
         _seekBaseMs = 0;
         var stream = SpotifyAudioStream.CreateHeadOnly(_http, _pendingHead, _pendingHead.Length, cmd.FileIdHex, _log, _bodyDisk);
         if (_pendingHead.Length > 0)
             StartDecode(stream, cmd.FileIdHex, _pendingHead, _format);
         else
         {
-            _log($"load-fast-start {cmd.FileIdHex}: no clear head available; waiting for CDN body before decoder construction");
+            _log.Info($"load-fast-start {cmd.FileIdHex}: no clear head available; waiting for CDN body before decoder construction");
             lock (_gate)
             {
                 _stream = stream;
@@ -107,7 +107,7 @@ internal sealed class AudioPlayEngine : IDisposable
             {
                 if (_fileIdHex.Length != 0 && !string.Equals(_fileIdHex, cmd.FileIdHex, StringComparison.OrdinalIgnoreCase))
                 {
-                    _log($"supply-body {cmd.FileIdHex}: ignored stale body for active file {_fileIdHex}");
+                    _log.Info($"supply-body {cmd.FileIdHex}: ignored stale body for active file {_fileIdHex}");
                     return;
                 }
             }
@@ -125,25 +125,25 @@ internal sealed class AudioPlayEngine : IDisposable
             var nativeDecryptor = nativeSeed.Length == 0 ? null : _nativeDecryptorFactory(cmd.FileIdHex, nativeSeed);
             if (nativeSeed.Length > 0 && nativeDecryptor is null)
             {
-                _log($"supply-body {cmd.FileIdHex}: native seed present ({nativeSeed.Length}B) but no native CDN decryptor is available");
+                _log.Info($"supply-body {cmd.FileIdHex}: native seed present ({nativeSeed.Length}B) but no native CDN decryptor is available");
                 throw new InvalidOperationException("native PlayPlay CDN seed was supplied, but no matching native decryptor is available");
             }
             cdnUrls = cmd.CdnUrls ?? Array.Empty<string>();
             bool headDecodeActive;
             lock (_gate) headDecodeActive = _pendingHead.Length > 0 && _decodeThread is { IsAlive: true };
             if (headDecodeActive)
-                _log($"supply-body {cmd.FileIdHex}: attaching body while head decode is active; keeping head playback state");
+                _log.Info($"supply-body {cmd.FileIdHex}: attaching body while head decode is active; keeping head playback state");
             else
             {
                 _buffering = true; _prebuffering = false; RaiseState();
             }
-            _log($"supply-body {cmd.FileIdHex}: mirrors={cdnUrls.Length} headBoundary={cmd.HeadBoundary}B key={key.Length}B nativeSeed={nativeSeed.Length}B");
+            _log.Info($"supply-body {cmd.FileIdHex}: mirrors={cdnUrls.Length} headBoundary={cmd.HeadBoundary}B key={key.Length}B nativeSeed={nativeSeed.Length}B");
 
             lock (_gate)
             {
                 if (_fileIdHex.Length != 0 && !string.Equals(_fileIdHex, cmd.FileIdHex, StringComparison.OrdinalIgnoreCase))
                 {
-                    _log($"supply-body {cmd.FileIdHex}: ignored stale body for active file {_fileIdHex}");
+                    _log.Info($"supply-body {cmd.FileIdHex}: ignored stale body for active file {_fileIdHex}");
                     return;
                 }
 
@@ -155,7 +155,7 @@ internal sealed class AudioPlayEngine : IDisposable
                 startDecode = _decodeThread is null || !_decodeThread.IsAlive;
             }
             if (startDecode)
-                _log($"supply-body {cmd.FileIdHex}: decoder is waiting for body; will start after attach+key-check");
+                _log.Info($"supply-body {cmd.FileIdHex}: decoder is waiting for body; will start after attach+key-check");
 
             var lazyAttach = !startDecode && _pendingHead.Length > 0;
             if (nativeDecryptor is null)
@@ -174,7 +174,7 @@ internal sealed class AudioPlayEngine : IDisposable
             }
 
             var knownSize = stream.KnownSize;
-            _log($"body stream attached: cdn size={(knownSize > 0 ? knownSize + "B" : "pending")} (clear head={cmd.HeadBoundary}B; ranged CDN; mode={(lazyAttach ? "lazy" : "eager")})");
+            _log.Info($"body stream attached: cdn size={(knownSize > 0 ? knownSize + "B" : "pending")} (clear head={cmd.HeadBoundary}B; ranged CDN; mode={(lazyAttach ? "lazy" : "eager")})");
 
             if (lazyAttach)
                 StartLazyKeyCheck(stream, cmd.FileIdHex, keyBytes, nativeSeedBytes);
@@ -183,7 +183,7 @@ internal sealed class AudioPlayEngine : IDisposable
 
             if (startDecode)
             {
-                _log($"supply-body {cmd.FileIdHex}: starting decoder after body attach");
+                _log.Info($"supply-body {cmd.FileIdHex}: starting decoder after body attach");
                 StartDecode(stream, cmd.FileIdHex, _pendingHead, _format);
             }
         }
@@ -200,7 +200,7 @@ internal sealed class AudioPlayEngine : IDisposable
             try { stream?.AbortBody(ex); } catch { }
             string active;
             lock (_gate) active = _fileIdHex;
-            _log($"supply body failed file={cmd.FileIdHex} active={active} head={_pendingHead.Length}B mirrors={cdnUrls.Length} key={keyBytes}B nativeSeed={nativeSeedBytes}B startDecode={startDecode}: {ex.GetType().Name}: {ex.Message}");
+            _log.Info($"supply body failed file={cmd.FileIdHex} active={active} head={_pendingHead.Length}B mirrors={cdnUrls.Length} key={keyBytes}B nativeSeed={nativeSeedBytes}B startDecode={startDecode}: {ex.GetType().Name}: {ex.Message}");
         }
     }
 
@@ -220,13 +220,13 @@ internal sealed class AudioPlayEngine : IDisposable
         _prebuffering = false;
         _buffering = true;
         _seekBaseMs = 0;
-        _log($"supply-body external MP3 {cmd.CdnUrl} dur={cmd.DurationMs}ms");
+        _log.Info($"supply-body external MP3 host={WaveeLogRedaction.UrlHost(cmd.CdnUrl)} dur={cmd.DurationMs}ms");
         RaiseState();
         var httpStream = await ExternalMp3Stream.OpenAsync(_http, cmd.CdnUrl, _log).ConfigureAwait(false);
         var kind = PickExternalDecoderKind(httpStream.ContentType) ?? SniffMagicKind(httpStream);
         if (kind is null)
         {
-            _log($"external audio {cmd.CdnUrl}: unsupported codec (content-type={httpStream.ContentType ?? "?"}) — no vendored decoder (Vorbis/MP3/FLAC only)");
+            _log.Warn($"external audio host={WaveeLogRedaction.UrlHost(cmd.CdnUrl)}: unsupported codec (content-type={httpStream.ContentType ?? "?"}) — no vendored decoder (Vorbis/MP3/FLAC only)");
             try { httpStream.Dispose(); } catch { }
             _buffering = false; RaiseState();
             return;
@@ -249,7 +249,7 @@ internal sealed class AudioPlayEngine : IDisposable
         var probe = new byte[16];
         int n;
         try { n = stream.Read(probe, 0, probe.Length); }
-        catch (Exception ex) { _log($"external audio magic sniff read failed: {ex.Message}"); return null; }
+        catch (Exception ex) { _log.Info($"external audio magic sniff read failed: {ex.Message}"); return null; }
         try { stream.Seek(0, SeekOrigin.Begin); } catch { }
         if (n < 4) return null;
         if (probe[0] == (byte)'I' && probe[1] == (byte)'D' && probe[2] == (byte)'3') return DecoderKind.Mp3;   // ID3v2
@@ -270,7 +270,7 @@ internal sealed class AudioPlayEngine : IDisposable
             catch (Exception ex)
             {
                 try { stream.AbortBody(ex); } catch { }
-                _log($"lazy key check failed {fileIdHex}: {ex.GetType().Name}: {ex.Message}");
+                _log.Info($"lazy key check failed {fileIdHex}: {ex.GetType().Name}: {ex.Message}");
             }
         });
     }
@@ -281,11 +281,11 @@ internal sealed class AudioPlayEngine : IDisposable
         // oracle here; match WaveeMusic by validating decrypted container magic at byte 0 or after the 0xa7 header.
         if (stream.TryValidateKey(_format, out var keyDetail))
         {
-            _log($"key check {fileIdHex}: OK - {keyDetail}");
+            _log.Info($"key check {fileIdHex}: OK - {keyDetail}");
             return;
         }
 
-        _log($"KEY CHECK FAILED {fileIdHex}: format={_format} head={_pendingHead.Length}B key={keyBytes}B nativeSeed={nativeSeedBytes}B detail={keyDetail}");
+        _log.Info($"KEY CHECK FAILED {fileIdHex}: format={_format} head={_pendingHead.Length}B key={keyBytes}B nativeSeed={nativeSeedBytes}B detail={keyDetail}");
         if (stream is SpotifyAudioStream sas) sas.InvalidateBodyCache();
         throw new InvalidOperationException("audio key validation failed: " + keyDetail);
     }
@@ -294,7 +294,7 @@ internal sealed class AudioPlayEngine : IDisposable
     {
         _playing = true;
         if (_rendererPrimed) _renderer.Start();
-        else _log($"play intent accepted for {_fileIdHex}: waiting for first PCM buffer before starting renderer");
+        else _log.Info($"play intent accepted for {_fileIdHex}: waiting for first PCM buffer before starting renderer");
         RaiseState();
     }
     public void Pause() { _playing = false; _renderer.Pause(); RaiseState(); }
@@ -360,15 +360,15 @@ internal sealed class AudioPlayEngine : IDisposable
             // the external MP3 path passes skipOffset 0, so the SkipStream is a harmless passthrough there.
             var skip = new SkipStream(stream.AsStream(), skipOffset);
             reader = CreateDecoder(skip, kind);
-            _log($"decode: {kind} -> {reader.SampleRate}Hz {reader.Channels}ch skip={skipOffset}B");
+            _log.Info($"decode: {kind} -> {reader.SampleRate}Hz {reader.Channels}ch skip={skipOffset}B");
             _renderer.Init(reader.SampleRate, reader.Channels, RendererBufferMs);
-            _log($"decode {fileIdHex}: renderer initialized buffer={RendererBufferMs}ms startPrebuffer={StartPrebufferMs}ms");
+            _log.Info($"decode {fileIdHex}: renderer initialized buffer={RendererBufferMs}ms startPrebuffer={StartPrebufferMs}ms");
 
             lock (_gate)
             {
                 if (!ReferenceEquals(_stream, stream) || !ReferenceEquals(_cts, cts))
                 {
-                    _log($"decode setup superseded {fileIdHex}: active stream changed before renderer init completed");
+                    _log.Info($"decode setup superseded {fileIdHex}: active stream changed before renderer init completed");
                     try { reader.Dispose(); } catch { }
                     return;
                 }
@@ -377,16 +377,16 @@ internal sealed class AudioPlayEngine : IDisposable
             }
 
             if (_playing)
-                _log($"decode {fileIdHex}: renderer start deferred until {StartPrebufferMs}ms PCM is queued");
+                _log.Info($"decode {fileIdHex}: renderer start deferred until {StartPrebufferMs}ms PCM is queued");
             DecodeLoop(reader, stream, fileIdHex, cts.Token);
         }
         catch (OperationCanceledException) { }
-        catch (ObjectDisposedException) { if (!cts.IsCancellationRequested) _log($"decode setup interrupted {fileIdHex}: stream disposed"); }
+        catch (ObjectDisposedException) { if (!cts.IsCancellationRequested) _log.Info($"decode setup interrupted {fileIdHex}: stream disposed"); }
         catch (Exception ex)
         {
             try { reader?.Dispose(); } catch { }
             if (!cts.IsCancellationRequested)
-                _log($"decode setup failed {fileIdHex}: " + ex.Message);
+                _log.Info($"decode setup failed {fileIdHex}: " + ex.Message);
         }
     }
 
@@ -415,7 +415,7 @@ internal sealed class AudioPlayEngine : IDisposable
                         Interlocked.CompareExchange(ref _pendingSeekMs, seek, -1);
                         if (!loggedSeekWaitingForBody)
                         {
-                            _log($"seek deferred target={seek}ms: waiting for CDN body length bodyAttached={stream.IsBodyAttached} knownSize={stream.KnownSize}B head={stream.ClearHeadLength}B");
+                            _log.Info($"seek deferred target={seek}ms: waiting for CDN body length bodyAttached={stream.IsBodyAttached} knownSize={stream.KnownSize}B head={stream.ClearHeadLength}B");
                             loggedSeekWaitingForBody = true;
                         }
                     }
@@ -432,7 +432,7 @@ internal sealed class AudioPlayEngine : IDisposable
                             stream.ResumeReadAheadAtCurrentOffset();
                             seekOk = true;
                         }
-                        catch (Exception ex) { seekOk = false; _log($"seek failed target={seek}ms: {ex.GetType().Name}: {ex.Message}"); }
+                        catch (Exception ex) { seekOk = false; _log.Info($"seek failed target={seek}ms: {ex.GetType().Name}: {ex.Message}"); }
                         if (seekOk)
                         {
                             _renderer.Reset();
@@ -441,7 +441,7 @@ internal sealed class AudioPlayEngine : IDisposable
                             preStartFrames = 0;
                             lastWriteTicks = 0;
                             _seekBaseMs = seek;
-                            _log($"head-check {fileIdHex}: seek applied target={seek}ms; renderer will restart after {StartPrebufferMs}ms PCM is queued");
+                            _log.Info($"head-check {fileIdHex}: seek applied target={seek}ms; renderer will restart after {StartPrebufferMs}ms PCM is queued");
                         }
                         else
                         {
@@ -462,7 +462,7 @@ internal sealed class AudioPlayEngine : IDisposable
                         long preStartMs = reader.SampleRate > 0 ? preStartFrames * 1000L / reader.SampleRate : 0;
                         _renderer.Start();
                         rendererStartedAfterBuffer = true;
-                        _log($"head-check {fileIdHex}: renderer started with short prebuffer={preStartMs}ms before EOF elapsed={ElapsedSinceLoadMs()}ms");
+                        _log.Info($"head-check {fileIdHex}: renderer started with short prebuffer={preStartMs}ms before EOF elapsed={ElapsedSinceLoadMs()}ms");
                     }
                     break;
                 }
@@ -487,7 +487,7 @@ internal sealed class AudioPlayEngine : IDisposable
                         var gen0 = GC.CollectionCount(0);
                         var gen1 = GC.CollectionCount(1);
                         var gen2 = GC.CollectionCount(2);
-                        _log($"audio starvation {fileIdHex}: writeGap={writeGapMs}ms source={DescribeReadSource(stream, beforeOffset, afterOffset)} offset={beforeOffset} queuedFrames={_renderer.ReleasedFrames} gen0+={gen0 - lastGen0} gen1+={gen1 - lastGen1} gen2+={gen2 - lastGen2}");
+                        _log.Info($"audio starvation {fileIdHex}: writeGap={writeGapMs}ms source={DescribeReadSource(stream, beforeOffset, afterOffset)} offset={beforeOffset} queuedFrames={_renderer.ReleasedFrames} gen0+={gen0 - lastGen0} gen1+={gen1 - lastGen1} gen2+={gen2 - lastGen2}");
                         lastGen0 = gen0;
                         lastGen1 = gen1;
                         lastGen2 = gen2;
@@ -499,12 +499,12 @@ internal sealed class AudioPlayEngine : IDisposable
                 {
                     loggedFirstPcm = true;
                     long queuedMs = reader.SampleRate > 0 && reader.Channels > 0 ? got / reader.Channels * 1000L / reader.SampleRate : 0;
-                    _log($"head-check {fileIdHex}: first PCM queued from={DescribeReadSource(stream, beforeOffset, afterOffset)} samples={got} approx={queuedMs}ms bodyAttachedBeforeRead={bodyAttachedBeforeRead} bodyAttachedNow={stream.IsBodyAttached} elapsed={ElapsedSinceLoadMs()}ms");
+                    _log.Info($"head-check {fileIdHex}: first PCM queued from={DescribeReadSource(stream, beforeOffset, afterOffset)} samples={got} approx={queuedMs}ms bodyAttachedBeforeRead={bodyAttachedBeforeRead} bodyAttachedNow={stream.IsBodyAttached} elapsed={ElapsedSinceLoadMs()}ms");
                 }
                 if (!loggedBodyPcm && beforeOffset >= stream.ClearHeadLength)
                 {
                     loggedBodyPcm = true;
-                    _log($"head-check {fileIdHex}: PCM reads are now using attached body/ranged CDN offset={beforeOffset} elapsed={ElapsedSinceLoadMs()}ms");
+                    _log.Info($"head-check {fileIdHex}: PCM reads are now using attached body/ranged CDN offset={beforeOffset} elapsed={ElapsedSinceLoadMs()}ms");
                 }
 
                 if (_playing && !rendererStartedAfterBuffer)
@@ -514,7 +514,7 @@ internal sealed class AudioPlayEngine : IDisposable
                     {
                         _renderer.Start();
                         rendererStartedAfterBuffer = true;
-                        _log($"head-check {fileIdHex}: renderer started after queued PCM prebuffer={preStartMs}ms elapsed={ElapsedSinceLoadMs()}ms");
+                        _log.Info($"head-check {fileIdHex}: renderer started after queued PCM prebuffer={preStartMs}ms elapsed={ElapsedSinceLoadMs()}ms");
                     }
                 }
                 RaiseState();
@@ -526,15 +526,15 @@ internal sealed class AudioPlayEngine : IDisposable
                 // failure (no CDN body, wrong key → garbage past the head, or an early-EOF stream) masquerading as complete.
                 long ms = reader.SampleRate > 0 && reader.Channels > 0 ? totalSamples / reader.Channels * 1000L / reader.SampleRate : 0;
                 long pct = _durationMs > 0 ? ms * 100 / _durationMs : 0;
-                _log($"decode ended naturally at ~{ms}ms" + (_durationMs > 0 ? $" of {_durationMs}ms ({pct}%){(pct < 25 ? " ⚠ HEAD-ONLY: body never decoded (check CDN/key above)" : "")}" : ""));
+                _log.Info($"decode ended naturally at ~{ms}ms" + (_durationMs > 0 ? $" of {_durationMs}ms ({pct}%){(pct < 25 ? " ⚠ HEAD-ONLY: body never decoded (check CDN/key above)" : "")}" : ""));
                 while (!ct.IsCancellationRequested && _renderer.PlayedFrames < _renderer.ReleasedFrames) Thread.Sleep(20);
                 _playing = false; RaiseState();
                 TrackFinished?.Invoke();
             }
         }
         catch (OperationCanceledException) { }
-        catch (ObjectDisposedException) { if (!ct.IsCancellationRequested) _log("decode loop interrupted: stream disposed"); }
-        catch (Exception ex) { _log("decode loop error: " + ex.Message); }
+        catch (ObjectDisposedException) { if (!ct.IsCancellationRequested) _log.Info("decode loop interrupted: stream disposed"); }
+        catch (Exception ex) { _log.Info("decode loop error: " + ex.Message); }
     }
 
     void StopDecode()
@@ -558,7 +558,7 @@ internal sealed class AudioPlayEngine : IDisposable
             try
             {
                 if (!thread.Join(120))
-                    _log("decode stop timed out after 120ms; continuing with stream disposed");
+                    _log.Info("decode stop timed out after 120ms; continuing with stream disposed");
             }
             catch { }
         }
@@ -648,18 +648,18 @@ internal sealed class AudioPlayEngine : IDisposable
 
 sealed class AudioThreadPriority : IDisposable
 {
-    readonly Action<string> _log;
+    readonly WaveeLogger _log;
     readonly string _fileIdHex;
     IntPtr _handle;
 
-    AudioThreadPriority(Action<string> log, string fileIdHex, IntPtr handle)
+    AudioThreadPriority(WaveeLogger log, string fileIdHex, IntPtr handle)
     {
         _log = log;
         _fileIdHex = fileIdHex;
         _handle = handle;
     }
 
-    public static AudioThreadPriority? TryEnter(Action<string> log, string fileIdHex)
+    public static AudioThreadPriority? TryEnter(WaveeLogger log, string fileIdHex)
     {
         try
         {
@@ -676,21 +676,21 @@ sealed class AudioThreadPriority : IDisposable
                 task = "Audio";
                 if (handle == IntPtr.Zero)
                 {
-                    log($"audio thread priority {fileIdHex}: MMCSS registration failed proAudioError={firstError} audioError={Marshal.GetLastWin32Error()} managedPriority={Thread.CurrentThread.Priority}");
+                    log.Info($"audio thread priority {fileIdHex}: MMCSS registration failed proAudioError={firstError} audioError={Marshal.GetLastWin32Error()} managedPriority={Thread.CurrentThread.Priority}");
                     return null;
                 }
             }
 
             if (!AvSetMmThreadPriority(handle, 1))
-                log($"audio thread priority {fileIdHex}: MMCSS task={task} registered but priority raise failed error={Marshal.GetLastWin32Error()} managedPriority={Thread.CurrentThread.Priority}");
+                log.Info($"audio thread priority {fileIdHex}: MMCSS task={task} registered but priority raise failed error={Marshal.GetLastWin32Error()} managedPriority={Thread.CurrentThread.Priority}");
             else
-                log($"audio thread priority {fileIdHex}: MMCSS task={task} priority=High managedPriority={Thread.CurrentThread.Priority}");
+                log.Info($"audio thread priority {fileIdHex}: MMCSS task={task} priority=High managedPriority={Thread.CurrentThread.Priority}");
 
             return new AudioThreadPriority(log, fileIdHex, handle);
         }
         catch (Exception ex)
         {
-            log($"audio thread priority {fileIdHex}: setup failed {ex.GetType().Name}: {ex.Message}");
+            log.Info($"audio thread priority {fileIdHex}: setup failed {ex.GetType().Name}: {ex.Message}");
             return null;
         }
     }
@@ -703,7 +703,7 @@ sealed class AudioThreadPriority : IDisposable
         try
         {
             if (!AvRevertMmThreadCharacteristics(handle))
-                _log($"audio thread priority {_fileIdHex}: MMCSS revert failed error={Marshal.GetLastWin32Error()}");
+                _log.Info($"audio thread priority {_fileIdHex}: MMCSS revert failed error={Marshal.GetLastWin32Error()}");
         }
         catch { }
     }

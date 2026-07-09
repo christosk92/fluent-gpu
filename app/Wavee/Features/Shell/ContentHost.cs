@@ -9,23 +9,53 @@ using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
 
+enum NavTransitionKind : byte { Forward, Back, Neutral }
+
 // The content-card body opts routes into FluentGpu keep-alive caching. Route changes swap inside the boundary, scoped
 // by the active browser tab, so same-route tabs never share page state.
 sealed class ContentHost : Component
 {
-    readonly record struct PageSlot(int TabId, Route Route);
+    readonly record struct PageSlot(int TabId, Route Route, NavTransitionKind Motion);
 
     readonly Signal<Route> _route;
+    readonly Signal<NavTransitionKind> _motion;
     readonly Func<int> _activeTabId;
     readonly IAppSettings? _settings;   // seeds LibraryPage's persisted per-kind state (widths/sort/view/selection)
-    public ContentHost(Signal<Route> route, Func<int> activeTabId, IAppSettings? settings = null) { _route = route; _activeTabId = activeTabId; _settings = settings; }
+    public ContentHost(Signal<Route> route, Signal<NavTransitionKind> motion, Func<int> activeTabId, IAppSettings? settings = null)
+    { _route = route; _motion = motion; _activeTabId = activeTabId; _settings = settings; }
 
     public override Element Render()
-        => Flow.KeepAlive(() => new PageSlot(_activeTabId(), _route.Value), SlotKey, s => PageFor(s.Route), new KeepAliveOptions(MaxEntries: 8));
+        => Flow.KeepAlive(
+            () => new PageSlot(_activeTabId(), _route.Value, _motion.Value),
+            SlotKey,
+            s => PageFor(s.Route),
+            new KeepAliveOptions(MaxEntries: 8, TransitionFor: PageTransition));
 
-    // Detail routes collapse to ONE slot per tab (identity = tab × page-class; the route is content) so album→album
-    // reconciles the mounted shell instead of cold-remounting. TabId stays in the key → tabs never share a detail slot.
-    static string SlotKey(PageSlot s) => IsDetail(s.Route) ? s.TabId.ToString() + "\\u001Fdetail" : IsArtist(s.Route) ? s.TabId.ToString() + "\\u001Fartist" : s.Route.Name == "search" ? s.TabId.ToString() + "\\u001Fsearch" : s.TabId.ToString() + "\u001F" + s.Route.Name + "\u001F" + (s.Route.Arg ?? "");
+    // Detail and artist routes each collapse to ONE slot per tab (identity = tab × page-class; the route is content) so
+    // album→album / artist→artist reconciles the mounted shell instead of cold-remounting. TabId stays in the key → tabs
+    // never share a slot. Everything else (incl. discography) keys per name+arg for a fresh slot.
+    static string SlotKey(PageSlot s)
+    {
+        if (IsDetail(s.Route)) return s.TabId + "\u001Fdetail";
+        if (IsArtist(s.Route)) return s.TabId + "\u001Fartist";
+        if (s.Route.Name == "search") return s.TabId + "\u001Fsearch";
+        return s.TabId + "\u001F" + s.Route.Name + "\u001F" + (s.Route.Arg ?? "");
+    }
+
+    static LayoutTransition? PageTransition(object oldToken, object newToken)
+    {
+        if (newToken is not PageSlot next) return null;
+        var enter = next.Motion switch
+            {
+                NavTransitionKind.Back => MotionRecipes.PageSlideBack,
+                NavTransitionKind.Neutral => MotionRecipes.PageFade,
+                _ => MotionRecipes.PageSlideForward,
+            };
+        // KeepAlive pages are stateful, independently responsive layout roots. Overlapping the outgoing root makes both
+        // participate in measurement during a window resize and destabilizes grids/scrollers. Park it immediately and
+        // animate only the incoming page from the correct direction inside the already-bounded content card.
+        return enter with { Exit = default };
+    }
 
     // The shared detail page (album / playlist / single / liked) reads the route reactively (via _route) and derives its
     // own kind/id, so ONE DetailPage instance serves successive detail routes in place. The Key is route-INDEPENDENT
@@ -77,7 +107,7 @@ sealed class ContentHost : Component
 
         if (DiscographyRoute.Is(r.Name))
             return new BoxEl { Key = "page:disco", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
-                Children = [ Embed.Comp(() => new DiscographyPage(_route)) ] };
+                Children = [ Embed.Comp(() => new DiscographyPage(new Signal<Route>(r))) ] };
 
         if (IsArtist(r)) return ArtistHost();
         if (IsDetail(r)) return DetailHost();

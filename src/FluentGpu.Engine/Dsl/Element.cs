@@ -443,10 +443,11 @@ public sealed record TextEl(Prop<string> Text) : Element
     /// the measured line box to cap-height..baseline so vertical centering is optical (PersonPicture initials).</summary>
     public TextLineBounds LineBounds { get; init; } = TextLineBounds.Full;
     /// <summary>Defaults to the live theme's <c>TextFillColorPrimary</c> (WinUI TextBlock default foreground —
-    /// dark #FFFFFF / light #E4000000), resolved at element CONSTRUCTION. NOTE: a runtime <c>Tok.Use</c> switch does
-    /// not itself re-render — the theme is set at startup today; a live theme switcher must force a full re-render
-    /// or every construction-resolved color (this default, control Style records) goes stale.</summary>
-    public Prop<ColorF> Color { get; init; } = Tok.TextPrimary;
+    /// dark #FFFFFF / light #E4000000). The semantic brush is bound so text retained inside a stateful control still
+    /// follows <c>Tok.Epoch</c> re-themes instead of freezing the construction-time color. This bound default stays
+    /// virtualization-recyclable via the shared-singleton identity carve-out (<c>Ui.IsThemeTextBrush</c> / the
+    /// reconciler's <c>IsRecyclable</c>), so default-colored list rows recycle rather than mount/remove.</summary>
+    public Prop<ColorF> Color { get; init; } = Ui.PrimaryTextBrush;
     // Stateful foreground ramps (WinUI dims/recolors label & glyph foreground on hover/press/disabled/focus). A==0 ⇒
     // "no state color" → the recorder leaves Color/ColorBind untouched. Hover/Pressed ease with the nearest interactive
     // ancestor's progress (the same eased HoverT/PressT that cross-fades the box fill — no per-control animator).

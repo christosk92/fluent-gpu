@@ -3,7 +3,7 @@
   "notifications": [
     {
       "id": "ntf-1001",
-      "createdTimestamp": 1699990000000,
+      "createdTimestamp": "2026-07-09T16:02:24.011Z",
       "title": "fakeuser42 started following you",
       "isNew": true,
       "storageId": "stor-aaa",
@@ -15,7 +15,7 @@
     },
     {
       "id": "ntf-1002",
-      "createdTimestamp": 1699980000000,
+      "createdTimestamp": "2026-06-28T08:07:43.660Z",
       "title": "Your followed artist has a concert near you",
       "isNew": false,
       "storageId": "stor-bbb",
@@ -26,7 +26,7 @@
     },
     {
       "id": "ntf-1003",
-      "createdTimestamp": 1699970000000,
+      "createdTimestamp": "2026-06-27T14:07:38.344Z",
       "title": "Announcement with no image or action",
       "isNew": true
     }

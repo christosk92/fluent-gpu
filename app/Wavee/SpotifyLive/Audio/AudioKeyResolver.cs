@@ -20,8 +20,7 @@ public sealed class AudioKeyResolver : IAudioKeySource, IPlayPlayNativeSeedSourc
     readonly ConcurrentDictionary<string, byte[]> _nativeCdnSeeds = new(StringComparer.OrdinalIgnoreCase);
     readonly ConcurrentDictionary<string, LatchState> _latch = new();
     readonly LicenseKeyDiskCache? _licenseDisk;
-    readonly Action<string>? _log;
-    readonly IWaveeLog? _structuredLog;
+    readonly WaveeLogger _log;
     volatile bool _apDisabled;   // AP audio-key is account-wide: one failure means it won't serve any track this session
 
     sealed record CachedKey(byte[] Key);
@@ -35,8 +34,7 @@ public sealed class AudioKeyResolver : IAudioKeySource, IPlayPlayNativeSeedSourc
         ILicenseClient? license,
         AudioRuntimeStatusService status,
         Func<SessionContext> ctx,
-        Action<string>? log = null,
-        IWaveeLog? structuredLog = null,
+        WaveeLogger log = default,
         LicenseKeyDiskCache? licenseDisk = null)
     {
         _ap = ap;
@@ -45,7 +43,6 @@ public sealed class AudioKeyResolver : IAudioKeySource, IPlayPlayNativeSeedSourc
         _license = license;
         _status = status;
         _log = log;
-        _structuredLog = structuredLog;
         _licenseDisk = licenseDisk;
         _cache = new Resource<string, CachedKey>(FetchKeyAsync, new FreshnessPolicy.Immutable(), ctx,
             name: "audio.key", debugLog: log);
@@ -114,20 +111,20 @@ public sealed class AudioKeyResolver : IAudioKeySource, IPlayPlayNativeSeedSourc
                 var key = await _ap.GetKeyAsync(fileId, trackGid, CancellationToken.None).ConfigureAwait(false);
                 if (!key.IsEmpty)
                 {
-                    _log?.Invoke($"key {fileHex}: AP path OK");
+                    _log.Info($"key {fileHex}: AP path OK");
                     Event(WaveeLogLevel.Info, "key.ap.ok", "AP audio-key path returned a key",
                         WaveeLogField.Of("file", WaveeLogRedaction.HashLike(fileHex)),
                         WaveeLogField.Of("keyBytes", key.Length));
                     _status.ClearKeyFailure();
                     return new CachedKey(key.ToArray());
                 }
-                _log?.Invoke($"key {fileHex}: AP returned empty → AP disabled for this session; PlayPlay from now on");
+                _log.Info($"key {fileHex}: AP returned empty → AP disabled for this session; PlayPlay from now on");
                 Event(WaveeLogLevel.Warning, "key.ap.empty", "AP audio-key path returned empty; disabling AP for this session",
                     WaveeLogField.Of("file", WaveeLogRedaction.HashLike(fileHex)));
             }
             catch (Exception ex)
             {
-                _log?.Invoke($"key {fileHex}: AP failed ({ex.Message}) → AP disabled for this session; PlayPlay from now on");
+                _log.Info($"key {fileHex}: AP failed ({ex.Message}) → AP disabled for this session; PlayPlay from now on");
                 Event(WaveeLogLevel.Warning, "key.ap.failed", "AP audio-key path failed; disabling AP for this session",
                     WaveeLogField.Of("file", WaveeLogRedaction.HashLike(fileHex)),
                     WaveeLogField.Of("error", ex.GetType().Name),
@@ -141,7 +138,7 @@ public sealed class AudioKeyResolver : IAudioKeySource, IPlayPlayNativeSeedSourc
         if (asset is null || deriver is null || _license is null)
         {
             var r = deriver is null ? AudioKeyFailureReason.NeverProvisioned : AudioKeyFailureReason.ProvisioningUnavailable;
-            _log?.Invoke($"key {fileHex}: PlayPlay unavailable → {r} (pack={(asset is not null)}, deriver={(deriver is not null)}, license={(_license is not null)})");
+            _log.Info($"key {fileHex}: PlayPlay unavailable → {r} (pack={(asset is not null)}, deriver={(deriver is not null)}, license={(_license is not null)})");
             Event(WaveeLogLevel.Error, "key.playplay.unavailable", "PlayPlay cannot derive this key because a dependency is missing",
                 WaveeLogField.Of("file", WaveeLogRedaction.HashLike(fileHex)),
                 WaveeLogField.Of("reason", r.ToString()),
@@ -156,7 +153,7 @@ public sealed class AudioKeyResolver : IAudioKeySource, IPlayPlayNativeSeedSourc
         if (!ShouldRetryPlayPlay(fileHex))
         {
             var last = _latch.TryGetValue(fileHex, out var s0) ? s0.LastReason : AudioKeyFailureReason.Network;
-            _log?.Invoke($"key {fileHex}: PlayPlay backing off (recent failure) → {last}");
+            _log.Info($"key {fileHex}: PlayPlay backing off (recent failure) → {last}");
             Event(WaveeLogLevel.Warning, "key.playplay.backoff", "PlayPlay key derivation is backing off for this file",
                 WaveeLogField.Of("file", WaveeLogRedaction.HashLike(fileHex)),
                 WaveeLogField.Of("reason", last.ToString()));
@@ -165,12 +162,12 @@ public sealed class AudioKeyResolver : IAudioKeySource, IPlayPlayNativeSeedSourc
 
         if (_licenseDisk?.TryLoad(fileHex, out var diskLic) == true)
         {
-            _log?.Invoke($"key {fileHex}: license disk hit — derive without network");
+            _log.Info($"key {fileHex}: license disk hit — derive without network");
             try { return await DeriveFromLicenseAsync(fileHex, fileId, diskLic, asset, deriver).ConfigureAwait(false); }
             catch { _licenseDisk.Invalidate(fileHex); }
         }
 
-        _log?.Invoke($"key {fileHex}: PlayPlay step A — fetching obfuscated key from spclient");
+        _log.Info($"key {fileHex}: PlayPlay step A — fetching obfuscated key from spclient");
         Event(WaveeLogLevel.Info, "key.playplay.license.start", "Fetching PlayPlay license",
             WaveeLogField.Of("file", WaveeLogRedaction.HashLike(fileHex)),
             WaveeLogField.Of("pack", asset.PackId),
@@ -178,7 +175,7 @@ public sealed class AudioKeyResolver : IAudioKeySource, IPlayPlayNativeSeedSourc
         var lic = await _license.FetchLicenseAsync(fileHex, asset.Config, CancellationToken.None).ConfigureAwait(false);
         if (lic.Reason != AudioKeyFailureReason.None)
         {
-            _log?.Invoke($"key {fileHex}: obfuscated-key fetch FAILED → {lic.Reason}");
+            _log.Info($"key {fileHex}: obfuscated-key fetch FAILED → {lic.Reason}");
             Event(WaveeLogLevel.Error, "key.playplay.license.failed", "PlayPlay license fetch failed",
                 WaveeLogField.Of("file", WaveeLogRedaction.HashLike(fileHex)),
                 WaveeLogField.Of("reason", lic.Reason.ToString()));
@@ -194,7 +191,7 @@ public sealed class AudioKeyResolver : IAudioKeySource, IPlayPlayNativeSeedSourc
     {
         var contentId = fileId.AsSpan(0, Math.Min(16, fileId.Length)).ToArray();
         var auxHex = lic.Auxiliary.IsEmpty ? "" : $" aux={lic.Auxiliary.Length}B";
-        _log?.Invoke($"key {fileHex}: PlayPlay step B — deriving in native host ({asset.Config.Arch}){auxHex}");
+        _log.Info($"key {fileHex}: PlayPlay step B — deriving in native host ({asset.Config.Arch}){auxHex}");
         Event(WaveeLogLevel.Info, "key.playplay.derive.start", "Deriving PlayPlay AES key",
             WaveeLogField.Of("file", WaveeLogRedaction.HashLike(fileHex)),
             WaveeLogField.Of("obf", lic.Key.Length),
@@ -204,7 +201,7 @@ public sealed class AudioKeyResolver : IAudioKeySource, IPlayPlayNativeSeedSourc
             correlationId: fileHex, lic.Auxiliary, lic.RawBody, lic.RequestBody, CancellationToken.None).ConfigureAwait(false);
         if (!derive.Ok)
         {
-            _log?.Invoke($"key {fileHex}: derive FAILED → {derive.Reason} {derive.Detail}");
+            _log.Info($"key {fileHex}: derive FAILED → {derive.Reason} {derive.Detail}");
             Event(WaveeLogLevel.Error, "key.playplay.derive.failed", "PlayPlay AES derivation failed",
                 WaveeLogField.Of("file", WaveeLogRedaction.HashLike(fileHex)),
                 WaveeLogField.Of("reason", derive.Reason.ToString()),
@@ -215,7 +212,7 @@ public sealed class AudioKeyResolver : IAudioKeySource, IPlayPlayNativeSeedSourc
         if (!derive.NativeCdnSeed.IsEmpty)
             _nativeCdnSeeds[fileHex] = derive.NativeCdnSeed.ToArray();
 
-        _log?.Invoke($"key {fileHex}: PlayPlay path OK (aes={derive.Key.Length}B redacted, nativeSeed={derive.NativeCdnSeed.Length}B)");
+        _log.Info($"key {fileHex}: PlayPlay path OK (aes={derive.Key.Length}B redacted, nativeSeed={derive.NativeCdnSeed.Length}B)");
         Event(WaveeLogLevel.Info, "key.playplay.ok", "PlayPlay produced an AES key",
             WaveeLogField.Of("file", WaveeLogRedaction.HashLike(fileHex)),
             WaveeLogField.Of("keyBytes", derive.Key.Length),
@@ -244,5 +241,5 @@ public sealed class AudioKeyResolver : IAudioKeySource, IPlayPlayNativeSeedSourc
     }
 
     void Event(WaveeLogLevel level, string eventId, string message, params WaveeLogField[] fields) =>
-        _structuredLog?.Event(level, "audio", eventId, message, fields: fields);
+        _log.Event(level, eventId, message, fields: fields);
 }

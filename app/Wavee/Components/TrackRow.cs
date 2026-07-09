@@ -77,7 +77,8 @@ internal static class TrackRow
     // index-signal-bound (detail BoundRowContent) title. Plain/diffable — no Animate — so a re-render patches cells in place.
     internal static Element Grid(Track t, int displayIndex, in State st, ColumnSet set, TrackSize[] tracks, float rowH,
                                  Element title, bool showTrackArtist, Action<string, string?> go,
-                                 Action? onPlay = null, Action? onLike = null, Owner? addedByProfile = null)
+                                 Action? onPlay = null, Action? onLike = null, Owner? addedByProfile = null,
+                                 bool likePop = false)
     {
         float thumb = ThumbSize;   // fixed art size → a stable dedicated art column
 
@@ -87,7 +88,7 @@ internal static class TrackRow
         cells.Add(NumberCell(displayIndex, st.IsNow, st.IsPlaying, st.IsBuffering, st.IsTop, onPlay));
 
         // ♥ — in the left cluster (between # and the art thumb). Filled when saved; click toggles via the caller's bridge.
-        if (set.Heart) cells.Add(CenterCell(Heart(st.Saved, onLike)));
+        if (set.Heart) cells.Add(CenterCell(Heart(st.Saved, onLike, likePop)));
 
         // Art thumb (playlist/liked) gets its OWN column before Title — so the "Title" header aligns over the title TEXT,
         // not the artwork (the WaveeMusic RowArtColDef pattern). Then the title + artist subline (subline hidden on
@@ -165,7 +166,7 @@ internal static class TrackRow
                                     Action onPlay, Action? onLike = null, float art = 48f,
                                     bool showArtists = true, bool explicitBadge = false,
                                     bool showDuration = true, ArtCardKind kind = ArtCardKind.Rail,
-                                    Action? onAdd = null)
+                                    Action? onAdd = null, bool likePop = false)
     {
         float radius = kind == ArtCardKind.Grid ? 4f : 5f;
         float fab = Math.Clamp(art * 0.62f, 28f, 36f);
@@ -204,7 +205,7 @@ internal static class TrackRow
 
         var trailing = new List<Element>(3);
         if (onAdd is not null) trailing.Add(AddButton(onAdd));   // recommendation rows: the "+" add-to-playlist button leads the trailing cluster
-        if (set.Heart) trailing.Add(Heart(st.Saved, onLike));
+        if (set.Heart) trailing.Add(Heart(st.Saved, onLike, likePop));
         if (showDuration)
             trailing.Add(new BoxEl
             {
@@ -281,12 +282,15 @@ internal static class TrackRow
             Focusable = false,
             FocusVisualMargin = Edges4.All(1f),
             Role = AutomationRole.Button,
-            OnPointerPressed = args => interact(
-                args.ClickCount >= 2 ? ItemContainerTrigger.DoubleTap : ItemContainerTrigger.Tap, args.Mods),
+            OnPointerPressed = args =>
+            {
+                if (args.ClickCount >= 2) interact(ItemContainerTrigger.DoubleTap, args.Mods);
+                else interact(ItemContainerTrigger.Tap, SelectorVisualsBound.MultiSelectMods(showCheckbox?.Invoke() ?? false, args.Mods));
+            },
             OnKeyDown = args =>
             {
                 if (args.KeyCode == Keys.Enter) { interact(ItemContainerTrigger.EnterKey, args.Mods); args.Handled = true; }
-                else if (args.KeyCode == Keys.Space && !args.IsRepeat) { interact(ItemContainerTrigger.SpaceKey, args.Mods); args.Handled = true; }
+                else if (args.KeyCode == Keys.Space && !args.IsRepeat) { interact(ItemContainerTrigger.SpaceKey, SelectorVisualsBound.MultiSelectMods(showCheckbox?.Invoke() ?? false, args.Mods)); args.Handled = true; }
             },
             OnFocusChanged = focusChanged,
             OnPointerExit = static () => { },
@@ -354,14 +358,41 @@ internal static class TrackRow
         };
     }
 
+    // transitions.dev heart pop: Enter-only overshoot (spring dynamics survive the reduced-motion/easing policy in
+    // SeedTerminal; tween easings on Enter legs don't). Exit stays inactive — a scrolling list must never spawn
+    // exit orphans for recycled glyphs.
+    static readonly LayoutTransition HeartPopIn = new(
+        TransitionChannels.Opacity,
+        TransitionDynamics.Spring(0.30f, 0.55f),   // low damping → the overshoot pop (BadgePop's spring)
+        Enter: new EnterExit(Sx: 0.25f, Sy: 0.25f, Opacity: 0f, Active: true, Blur: Expressive.BlurSmall));
+
+    /// <summary>Per-slot like-edge detector: true only when the SAME uri flipped unsaved→saved since this slot's last
+    /// render — a recycle re-binds to a different uri, so scrolling never reports an edge (no pop replay).</summary>
+    internal static bool LikeEdge(Ref<(string? Uri, bool Saved)> prev, string uri, bool saved)
+    {
+        bool edge = saved && !prev.Value.Saved && string.Equals(prev.Value.Uri, uri, StringComparison.Ordinal);
+        prev.Value = (uri, saved);
+        return edge;
+    }
+
     // The per-row like heart: filled (accent) when the track is in the saved-set, outline otherwise; click toggles it
     // through the caller's LibraryBridge (optimistic). Null onLike (skeleton / overscan rows) → a static, non-interactive heart.
-    internal static Element Heart(bool saved, Action? onLike) => new BoxEl
+    // `pop` (a caller-detected like EDGE, see LikeEdge) attaches the overshoot Enter to the keyed glyph for that ONE
+    // render; any other render — recycling included — mounts the (possibly key-changed) glyph with Animate = null → snap.
+    internal static Element Heart(bool saved, Action? onLike, bool pop = false) => new BoxEl
     {
         Width = 28f, Height = 28f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
         Corners = CornerRadius4.All(14f), HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
         Cursor = onLike is null ? (CursorId?)null : CursorId.Hand, OnClick = onLike,
-        Children = [Icon(saved ? Mdl.HeartFill : Icons.Heart, 14f, saved ? Tok.AccentTextPrimary : Tok.TextTertiary)],
+        Children =
+        [
+            new BoxEl
+            {
+                Key = saved ? "hg:on" : "hg:off",              // keyed CHILD of the stable circle (keys live in child arrays)
+                Animate = pop && saved ? HeartPopIn : null,
+                Children = [Icon(saved ? Mdl.HeartFill : Icons.Heart, 14f, saved ? Tok.AccentTextPrimary : Tok.TextTertiary)],
+            },
+        ],
     };
 
     // The recommendation-row "add to this playlist" button (Spotify's playlist-extender "+"): a bordered round button that

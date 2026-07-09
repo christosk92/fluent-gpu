@@ -19,13 +19,13 @@ sealed class SpotifyUserProfileService : IUserProfileService
     readonly ExtensionEtagCache? _extensions;
     readonly IHttpExchange _http;
     readonly Func<string> _baseUrl;
-    readonly Action<string>? _log;
+    readonly WaveeLogger _log;
     readonly ConcurrentDictionary<string, Entry> _cache = new(StringComparer.Ordinal);
     readonly ConcurrentDictionary<string, Task> _inflight = new(StringComparer.Ordinal);
     readonly SimpleEvent<string> _changed = new();
 
     public SpotifyUserProfileService(ExtendedMetadataSource metadata, IHttpExchange http, Func<string> baseUrl,
-        Action<string>? log = null, ExtensionEtagCache? extensions = null)
+        WaveeLogger log = default, ExtensionEtagCache? extensions = null)
     {
         _metadata = metadata;
         _extensions = extensions;
@@ -88,7 +88,7 @@ sealed class SpotifyUserProfileService : IUserProfileService
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _log?.Invoke("USER_PROFILE extended-metadata fetch: " + ex.Message);
+                _log.Info("USER_PROFILE extended-metadata fetch: " + ex.Message);
             }
 
             if (unresolved.Count > 0)
@@ -125,7 +125,7 @@ sealed class SpotifyUserProfileService : IUserProfileService
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _log?.Invoke("user profile REST fetch: " + ex.Message);
+            _log.Info("user profile REST fetch: " + ex.Message);
         }
         finally
         {

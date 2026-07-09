@@ -11,6 +11,7 @@ namespace Wavee;
 // Mica + the real OS accent, DirectWrite, and the full image pipeline + smooth scroll.
 static class Program
 {
+    static WaveeLogger CliLog(string category) => new(WaveeLog.Instance, category);
     [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
     [System.Runtime.Versioning.SupportedOSPlatform("windows")]
     static extern bool AttachConsole(int dwProcessId);
@@ -34,14 +35,21 @@ static class Program
         if (args.Length > 0 && OperatingSystem.IsWindows()) AttachParentConsole();
 
         // ── Observability ───────────────────────────────────────────────────────────────────────────────────────────
+        // Settings are hoisted above Configure so the persisted log-level overrides seed it (env still wins inside
+        // Configure). One instance, reused for theme/backend below.
+        var settings = AppDataSettings.ForUnpackaged("Wavee", "Wavee");
         string logDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Wavee", "logs");
         string logPath = Path.Combine(logDir, "wavee.log");
-        WaveeLog.Instance.Configure(crashLogPath: logPath, echo: DebugEcho(),
 #if DEBUG
-            minLevel: WaveeLogLevel.Debug, fileMinLevel: WaveeLogLevel.Debug);
+        WaveeLogLevel defaultLevel = WaveeLogLevel.Debug;
 #else
-            minLevel: WaveeLogLevel.Info, fileMinLevel: WaveeLogLevel.Info);
+        WaveeLogLevel defaultLevel = WaveeLogLevel.Info;
 #endif
+        int minSetting = settings.Get(WaveeSettings.LogMinLevel);
+        int fileSetting = settings.Get(WaveeSettings.LogFileMinLevel);
+        WaveeLog.Instance.Configure(crashLogPath: logPath, echo: DebugEcho(),
+            minLevel: minSetting >= 0 ? (WaveeLogLevel)minSetting : defaultLevel,
+            fileMinLevel: fileSetting >= 0 ? (WaveeLogLevel)fileSetting : defaultLevel);
         Diag.Sink = WaveeLog.DiagSink;                 // fold engine diagnostics (FG_DIAG) into the app log stream
         WaveeLog.Instance.Info("app", "startup", "Wavee starting",
             WaveeLogField.Of("pid", Environment.ProcessId),
@@ -80,7 +88,7 @@ static class Program
         // Headless backend-engine self-test (no window): exercises the five backend engines and exits 0 (pass) / 1 (fail).
         if (Array.IndexOf(args, "--backend-selftest") >= 0)
         {
-            int code = Wavee.Backend.BackendSelfTest.Run(Console.Error.WriteLine);
+            int code = Wavee.Backend.BackendSelfTest.Run(CliLog("probe"));
             Environment.Exit(code);
         }
 
@@ -91,14 +99,14 @@ static class Program
         {
             string qtext = qrIdx + 1 < args.Length && !args[qrIdx + 1].StartsWith("--") ? args[qrIdx + 1] : "https://spotify.com/pair";
             string qpath = qrIdx + 2 < args.Length && !args[qrIdx + 2].StartsWith("--") ? args[qrIdx + 2] : "qr.png";
-            Environment.Exit(QrDump.Run(qtext, qpath, Console.Error.WriteLine));
+            Environment.Exit(QrDump.Run(qtext, qpath, CliLog("probe")));
         }
 
         // Headless LIVE Spotify login (real network): OAuth device-code → AP handshake + login → APWelcome.
         if (Array.IndexOf(args, "--spotify-login") >= 0)
         {
             using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(8));
-            int code = Wavee.SpotifyLive.SpotifyLiveLogin.RunAsync(Console.Error.WriteLine, cts.Token).GetAwaiter().GetResult();
+            int code = Wavee.SpotifyLive.SpotifyLiveLogin.RunAsync(CliLog("auth"), cts.Token).GetAwaiter().GetResult();
             Environment.Exit(code);
         }
 
@@ -111,7 +119,7 @@ static class Program
                 ? args[metaIdx + 1]
                 : "spotify:track:4uLU6hMCjMI75M1A2tKUQC";
             using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(8));
-            int code = Wavee.SpotifyLive.SpotifyMetadataProbe.RunAsync(uri, Console.Error.WriteLine, cts.Token).GetAwaiter().GetResult();
+            int code = Wavee.SpotifyLive.SpotifyMetadataProbe.RunAsync(uri, CliLog("probe"), cts.Token).GetAwaiter().GetResult();
             Environment.Exit(code);
         }
 
@@ -123,7 +131,7 @@ static class Program
             string uri = plIdx + 1 < args.Length && !args[plIdx + 1].StartsWith("--") ? args[plIdx + 1] : "";
             if (uri.Length == 0) { Console.Error.WriteLine("usage: --spotify-playlist spotify:playlist:<id>"); Environment.Exit(2); }
             using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(8));
-            int code = Wavee.SpotifyLive.SpotifyLibraryProbe.RunPlaylistAsync(uri, Console.Error.WriteLine, cts.Token).GetAwaiter().GetResult();
+            int code = Wavee.SpotifyLive.SpotifyLibraryProbe.RunPlaylistAsync(uri, CliLog("probe"), cts.Token).GetAwaiter().GetResult();
             Environment.Exit(code);
         }
 
@@ -131,7 +139,7 @@ static class Program
         if (Array.IndexOf(args, "--spotify-rootlist") >= 0)
         {
             using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(8));
-            int code = Wavee.SpotifyLive.SpotifyLibraryProbe.RunRootlistAsync(Console.Error.WriteLine, cts.Token).GetAwaiter().GetResult();
+            int code = Wavee.SpotifyLive.SpotifyLibraryProbe.RunRootlistAsync(CliLog("probe"), cts.Token).GetAwaiter().GetResult();
             Environment.Exit(code);
         }
 
@@ -142,7 +150,7 @@ static class Program
         {
             string setId = colIdx + 1 < args.Length && !args[colIdx + 1].StartsWith("--") ? args[colIdx + 1] : "liked";
             using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(8));
-            int code = Wavee.SpotifyLive.SpotifyLibraryProbe.RunCollectionAsync(setId, Console.Error.WriteLine, cts.Token).GetAwaiter().GetResult();
+            int code = Wavee.SpotifyLive.SpotifyLibraryProbe.RunCollectionAsync(setId, CliLog("probe"), cts.Token).GetAwaiter().GetResult();
             Environment.Exit(code);
         }
 
@@ -151,14 +159,14 @@ static class Program
         if (Array.IndexOf(args, "--spotify-sync") >= 0)
         {
             using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(10));
-            int code = Wavee.SpotifyLive.SpotifyLibrarySync.RunAsync(Console.Error.WriteLine, cts.Token).GetAwaiter().GetResult();
+            int code = Wavee.SpotifyLive.SpotifyLibrarySync.RunAsync(CliLog("sync"), cts.Token).GetAwaiter().GetResult();
             Environment.Exit(code);
         }
 
 #if WAVEE_PLAYPLAY_LOCAL
         if (Array.IndexOf(args, "--playplay-runtime-status") >= 0)
         {
-            int code = Wavee.SpotifyLive.PlayPlayRuntimeProbe.RunStatus(args, Console.Error.WriteLine);
+            int code = Wavee.SpotifyLive.PlayPlayRuntimeProbe.RunStatus(args, CliLog("audio"));
             Environment.Exit(code);
         }
 
@@ -167,13 +175,13 @@ static class Program
         {
             string dir = regIdx + 1 < args.Length && !args[regIdx + 1].StartsWith("--") ? args[regIdx + 1] : "";
             if (dir.Length == 0) { Console.Error.WriteLine("usage: --playplay-runtime-register <dir>"); Environment.Exit(2); }
-            int code = Wavee.SpotifyLive.PlayPlayRuntimeProbe.RunRegister(dir, Console.Error.WriteLine);
+            int code = Wavee.SpotifyLive.PlayPlayRuntimeProbe.RunRegister(dir, CliLog("audio"));
             Environment.Exit(code);
         }
 
         if (Array.IndexOf(args, "--playplay-runtime-check") >= 0)
         {
-            int code = Wavee.SpotifyLive.PlayPlayRuntimeProbe.RunCheck(args, Console.Error.WriteLine);
+            int code = Wavee.SpotifyLive.PlayPlayRuntimeProbe.RunCheck(args, CliLog("audio"));
             Environment.Exit(code);
         }
 #endif
@@ -183,7 +191,7 @@ static class Program
         if (Array.IndexOf(args, "--connect-live") >= 0)
         {
             using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(3));
-            int code = Wavee.SpotifyLive.LiveSessionHost.RunAsync(Console.Error.WriteLine, cts.Token).GetAwaiter().GetResult();
+            int code = Wavee.SpotifyLive.LiveSessionHost.RunAsync(CliLog("connect"), cts.Token).GetAwaiter().GetResult();
             Environment.Exit(code);
         }
 
@@ -197,7 +205,6 @@ static class Program
         // Seed the theme BEFORE the window comes up (no startup flash): honor the persisted preference, falling back to
         // the live OS theme for a fresh install (mode == System). FluentApp.Run then applies the matching Mica material
         // and the in-app surfaces mount with the right tokens; the store is reused by the app so there's one instance.
-        var settings = AppDataSettings.ForUnpackaged("Wavee", "Wavee");
         CrashDumpProbe.LogPendingCrashDump(settings, WaveeLog.Instance);
         int themeMode = settings.Get(WaveeSettings.ThemeMode);
         var themeKind = themeMode switch { 1 => ThemeKind.Light, 2 => ThemeKind.Dark, _ => FluentApp.SystemUsesLightTheme() ? ThemeKind.Light : ThemeKind.Dark };
@@ -261,6 +268,7 @@ static class Program
             throw;
         }
         WaveeLog.Instance.Info("app", "Wavee exiting");
+        WaveeLog.Instance.Flush();
     }
 
     // For now there is no real login, so the account tier defaults to Premium (the app launches normally). The refusal

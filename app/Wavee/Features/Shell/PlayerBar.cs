@@ -221,6 +221,22 @@ sealed class PlayerBarContent : Component
         bool showShuffleRepeat = L.ShowShuffleRepeat;
         bool showLike = L.ShowLikeSlot && active;
         bool showVolumeButton = L.ShowVolumeButton;
+
+        // Heart pop (transitions.dev icon swap) on the SAME-track unsaved→saved edge only: a track change flips
+        // `liked` but also the uri (no pop); unlike stays a plain swap. Imperative seed on the captured button node —
+        // a keyed remount of the focusable Transport button would reset its hover/focus state mid-toggle. (Hooks here
+        // sit after the `b is null` early return, matching this component's existing practice — the bridge is
+        // provided at the shell root and never goes null in a live session.)
+        var likeNode = UseRef<NodeHandle>(default);
+        var likePrev = UseRef(((string?)null, false));
+        UseLayoutEffect(() =>
+        {
+            var (pUri, pLiked) = likePrev.Value;
+            bool edge = liked && !pLiked && pUri == track?.Uri;
+            likePrev.Value = (track?.Uri, liked);
+            if (edge && showLike && !likeNode.Value.IsNull && Context.Anim is { } a)
+                a.IconSwapIn(likeNode.Value);   // kit recipe — honors Motion.ReducedMotion internally
+        }, (track?.Uri ?? "") + (liked ? "|1" : "|0"));
         bool showTimesRemaining = true;            // duration is a priority; keep it before secondary controls
         bool showTimesElapsed = L.ShowTimesElapsed;
         bool showPrevNext = L.ShowPrevNext;
@@ -316,7 +332,8 @@ sealed class PlayerBarContent : Component
             });
         leftKids.Add(metaCol);
         if (showLike)
-            leftKids.Add(Transport(liked ? Mdl.HeartFill : Icons.Heart, () => { if (track is { } lt) lib?.ToggleSaved(lt.Uri); }, true, liked, accent, MathF.Min(30f, buttonBox), 15f)
+            leftKids.Add(Transport(liked ? Mdl.HeartFill : Icons.Heart, () => { if (track is { } lt) lib?.ToggleSaved(lt.Uri, lt.Title); }, true, liked, accent, MathF.Min(30f, buttonBox), 15f,
+                    onRealized: h => likeNode.Value = h)
                 with { Key = "like", Animate = ItemMotion });
 
         var left = new BoxEl
@@ -381,7 +398,7 @@ sealed class PlayerBarContent : Component
             overflowCommands.Add(new AppBarCommand(repeat == RepeatMode.Track ? Icons.RepeatOne : Icons.RepeatAll, Loc.Get(Strings.Player.Repeat), () => CycleRepeat(b), AppBarCommandKind.ToggleButton, repeat != RepeatMode.Off, canTransport));
         }
         if (!showLike && active)
-            overflowCommands.Add(new AppBarCommand(liked ? Mdl.HeartFill : Icons.Heart, Loc.Get(Strings.Player.Like), () => { if (track is { } lt) lib?.ToggleSaved(lt.Uri); }, AppBarCommandKind.ToggleButton, liked, true));
+            overflowCommands.Add(new AppBarCommand(liked ? Mdl.HeartFill : Icons.Heart, Loc.Get(Strings.Player.Like), () => { if (track is { } lt) lib?.ToggleSaved(lt.Uri, lt.Title); }, AppBarCommandKind.ToggleButton, liked, true));
         // In the small-window overflow, Queue / Now Playing open their right-rail panels (the rail floats over the
         // content when it doesn't fit inline).
         if (!showQueue)

@@ -40,8 +40,13 @@ public static class PaletteBuilder
 
     public static ThemePalette BuildAccentTinted(ColorF accent) => Build(AccentTinted(ColorRamp.HueDegrees(accent)));
 
+    /// <summary>Files / WaveeMusic light file-area brush (<c>App.Theme.FileArea.BackgroundBrush</c> = <c>#C0FCFCFC</c>).</summary>
+    public static readonly ColorF FilesLightFileArea = ColorF.FromRgba(0xFC, 0xFC, 0xFC, 0xC0);
+
     static ShellPalette BuildLightShell(PaletteSeed seed)
     {
+        if (seed.Id == "neutral")
+            return BuildFilesLightShell();
         // Mica-first light chrome: translucent seed-tinted layers over the DWM backdrop — the light analogue of the
         // dark #3A3A3A@0x73 stack. The seed's luminance anchors are FLATTENED targets: each tint's lightness is
         // solved so compositing at its alpha over the reference light Mica lands on the anchor
@@ -61,11 +66,25 @@ public static class PaletteBuilder
         // Rows are neutral overlays (mirrors dark's white-alpha rows): the preset tint comes from the translucent
         // page beneath, so row states are preset-independent by construction.
         return new(frame, rail, dock, page, page, inset,
-            RowZebra:        ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x3D),
-            RowHover:        ColorF.FromRgba(0x00, 0x00, 0x00, 0x12),
-            RowHoverZebra:   ColorF.FromRgba(0x00, 0x00, 0x00, 0x17),
-            RowPressed:      ColorF.FromRgba(0x00, 0x00, 0x00, 0x17),
-            RowPressedZebra: ColorF.FromRgba(0x00, 0x00, 0x00, 0x1C));
+            RowZebra:        ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x32),
+            RowHover:        ColorF.FromRgba(0x00, 0x00, 0x00, 0x09),
+            RowHoverZebra:   ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x20),
+            RowPressed:      ColorF.FromRgba(0x00, 0x00, 0x00, 0x0C),
+            RowPressedZebra: ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x16));
+    }
+
+    /// <summary>Files-faithful light shell (see <c>C:\WAVEE\Files\src\Files.App\App.xaml</c> Light theme dict).</summary>
+    static ShellPalette BuildFilesLightShell()
+    {
+        var onMica = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xB3);   // LayerOnMicaBaseAltFillColorDefault
+        var cardSecondary = ColorF.FromRgba(0xF6, 0xF6, 0xF6, 0x80); // CardBackgroundFillColorSecondary
+        var fileArea = FilesLightFileArea;
+        return new(onMica, onMica, cardSecondary, fileArea, fileArea, cardSecondary,
+            RowZebra:        ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x32),
+            RowHover:        ColorF.FromRgba(0x00, 0x00, 0x00, 0x09),
+            RowHoverZebra:   ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x20),
+            RowPressed:      ColorF.FromRgba(0x00, 0x00, 0x00, 0x0C),
+            RowPressedZebra: ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x16));
     }
 
     static ShellPalette BuildDarkShell(PaletteSeed seed)
@@ -90,6 +109,8 @@ public static class PaletteBuilder
 
     static TokenSet BuildLight(PaletteSeed seed)
     {
+        if (seed.Id == "neutral")
+            return BuildWinUILight();
         if (seed.Id == "warm")
             return BuildWarmLight();
 
@@ -297,6 +318,103 @@ public static class PaletteBuilder
         for (int i = 0; i < 12 && !ColorContrast.MeetsAaText(c, lightestHostingBg); i++)
             c = ColorRamp.Darken(c, 0.06f);
         return c;
+    }
+
+    /// <summary>WinUI-faithful neutral light tokens (Files / WaveeMusic default palette baseline).</summary>
+    static TokenSet BuildWinUILight()
+    {
+        var shell = BuildFilesLightShell();
+        var card = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xB3);       // CardBackgroundFillColorDefault
+        var card2 = ColorF.FromRgba(0xF6, 0xF6, 0xF6, 0x80);      // CardBackgroundFillColorSecondary
+        var controlHover = ColorF.FromRgba(0xF9, 0xF9, 0xF9, 0x80);
+        var controlPress = ColorF.FromRgba(0xF9, 0xF9, 0xF9, 0x4D);
+        var solidBase = ColorF.FromRgba(0xF3, 0xF3, 0xF3);
+        var fileFlat = ColorContrast.Flatten(shell.FileArea, MicaRef.LightBright);
+        var zebraHost = ColorContrast.Flatten(shell.RowZebra, fileFlat);
+        var lightestHost = ColorContrast.RelativeLuminance(card) >= ColorContrast.RelativeLuminance(zebraHost) ? card : zebraHost;
+        var textTertiary = SolveTertiaryText(lightestHost, ColorF.FromRgba(0x00, 0x00, 0x00, 0x72));
+
+        return new TokenSet
+        {
+            FillControlDefault   = card,
+            FillControlSecondary = controlHover,
+            FillControlTertiary  = controlPress,
+            FillControlDisabled  = ColorF.FromRgba(0xF9, 0xF9, 0xF9, 0x4D),
+            FillControlStrong         = ColorF.FromRgba(0x00, 0x00, 0x00, 0x72),
+            FillControlStrongDisabled = ColorF.FromRgba(0x00, 0x00, 0x00, 0x51),
+            FillControlSolid          = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
+            FillControlOnImage   = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xC9),
+            FillSubtleTransparent= ColorF.Transparent,
+            FillSubtleSecondary  = ColorF.FromRgba(0x00, 0x00, 0x00, 0x09),
+            FillSubtleTertiary   = ColorF.FromRgba(0x00, 0x00, 0x00, 0x06),
+            FillCardDefault      = card,
+            FillCardSecondary    = card2,
+            FillLayerDefault     = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x80),
+            FillLayerAlt         = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
+            LayerOnMicaBaseAlt   = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xB3),
+            FillSolidBase        = solidBase,
+            FillSolidBaseAlt     = ColorF.FromRgba(0xDA, 0xDA, 0xDA),
+            FillSolidSecondary   = ColorF.FromRgba(0xEE, 0xEE, 0xEE),
+            FillSolidTertiary    = ColorF.FromRgba(0xF9, 0xF9, 0xF9),
+            FillSmoke            = ColorF.FromRgba(0x00, 0x00, 0x00, 0x4D),
+            StrokeControlDefault = ColorF.FromRgba(0x00, 0x00, 0x00, 0x17),
+            StrokeControlSecondary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x29),
+            StrokeCardDefault    = ColorF.FromRgba(0x00, 0x00, 0x00, 0x0F),
+            StrokeDividerDefault = ColorF.FromRgba(0x00, 0x00, 0x00, 0x0F),
+            StrokeSurfaceDefault = ColorF.FromRgba(0x75, 0x75, 0x75, 0x66),
+            StrokeFlyoutDefault = ColorF.FromRgba(0x00, 0x00, 0x00, 0x17),
+            StrokeControlOnAccentDefault = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x14),
+            StrokeControlOnAccentSecondary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x66),
+            StrokeControlOnAccentTertiary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x37),
+            TextPrimary   = ColorF.FromRgba(0x00, 0x00, 0x00, 0xE4),
+            TextSecondary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x9E),
+            TextTertiary  = textTertiary,
+            TextDisabled  = ColorF.FromRgba(0x00, 0x00, 0x00, 0x5C),
+            TextOnAccentPrimary   = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
+            TextOnAccentSecondary = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xB3),
+            TextOnAccentDisabled  = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
+            TextOnAccentSelectedText = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
+            CaptionCloseHover   = ColorF.FromRgba(0xC4, 0x2B, 0x1C),
+            CaptionClosePressed = ColorF.FromRgba(0xC4, 0x2B, 0x1C, 0xE6),
+            AccentDefault = ColorF.FromRgba(0x00, 0x5F, 0xB8),
+            AccentSecondary = ColorF.FromRgba(0x00, 0x5F, 0xB8, 0xE6),
+            AccentTertiary  = ColorF.FromRgba(0x00, 0x5F, 0xB8, 0xCC),
+            AccentTextPrimary   = ColorF.FromRgba(0x00, 0x42, 0x75),
+            AccentTextSecondary = ColorF.FromRgba(0x00, 0x26, 0x42),
+            AccentTextTertiary  = ColorF.FromRgba(0x00, 0x5F, 0xB8),
+            AccentDisabled  = ColorF.FromRgba(0x00, 0x00, 0x00, 0x37),
+            AccentSubtle    = ColorF.FromRgba(0x00, 0x5F, 0xB8, 0x24),
+            AccentSelectedTextBackground = ColorF.FromRgba(0x00, 0x78, 0xD4),
+            FocusOuter = ColorF.FromRgba(0x00, 0x00, 0x00, 0xE4),
+            FocusInner = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xB3),
+            ScrollThumb = ColorF.FromRgba(0x00, 0x00, 0x00, 0x72),
+            AcrylicTint = ColorF.FromRgba(0xFC, 0xFC, 0xFC, 0xD9),
+            AcrylicBase = ColorF.FromRgba(0xF3, 0xF3, 0xF3, 0xE6),
+            AcrylicFlyout = AcrylicSpec.FlyoutLight,
+            HeroGradientTop = ColorF.FromRgba(0x7A, 0xB6, 0xE6, 0xB3),
+            HeroGradientBottom = ColorF.FromRgba(0xF3, 0xF3, 0xF3, 0x00),
+            FillControlAltSecondary  = ColorF.FromRgba(0x00, 0x00, 0x00, 0x06),
+            FillControlAltTertiary   = ColorF.FromRgba(0x00, 0x00, 0x00, 0x0F),
+            FillControlAltQuaternary = ColorF.FromRgba(0x00, 0x00, 0x00, 0x18),
+            FillControlAltDisabled   = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x00),
+            StrokeControlStrongDefault  = ColorF.FromRgba(0x00, 0x00, 0x00, 0x72),
+            StrokeControlStrongDisabled = ColorF.FromRgba(0x00, 0x00, 0x00, 0x37),
+            FillControlInputActive   = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
+            TextControlHeaderForeground         = ColorF.FromRgba(0x00, 0x00, 0x00),
+            TextControlHeaderForegroundDisabled = ColorF.FromRgba(0x00, 0x00, 0x00, 0x66),
+            TextControlDescriptionForeground    = ColorF.FromRgba(0x00, 0x00, 0x00, 0x99),
+            TextControlForegroundDisabled       = ColorF.FromRgba(0x01, 0x01, 0x01, 0x5C),
+            SystemFillCritical = ColorF.FromRgba(0xC4, 0x2B, 0x1C),
+            SystemFillCaution  = ColorF.FromRgba(0x9D, 0x5D, 0x00),
+            SystemFillSuccess  = ColorF.FromRgba(0x0C, 0x6B, 0x0C),
+            SystemFillCriticalBackground  = ColorF.FromRgba(0xFD, 0xE7, 0xE9),
+            SystemFillCautionBackground   = ColorF.FromRgba(0xFF, 0xF4, 0xCE),
+            SystemFillSuccessBackground   = ColorF.FromRgba(0xDF, 0xF6, 0xDD),
+            SystemFillAttentionBackground = ColorF.FromRgba(0xF6, 0xF6, 0xF6, 0x80),
+            SystemFillSolidNeutral = ColorF.FromRgba(0x8A, 0x8A, 0x8A),
+            TextInverse = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
+            WindowBackground = solidBase,
+        };
     }
 
     /// <summary>Phase A calibrated Warm light tokens (the regression anchor for seed derivation).</summary>

@@ -177,7 +177,7 @@ sealed class QueuePanel : Component
     static Element NowPlayingCard(PlaybackBridge b, LibraryBridge? lib, Track t, Action<string, string?>? go)
     {
         var st = TrackRow.StateOf(b, lib, t);
-        Action? like = t.Uri.Length > 0 && lib is not null ? () => lib.ToggleSaved(t.Uri) : null;
+        Action? like = t.Uri.Length > 0 && lib is not null ? () => lib.ToggleSaved(t.Uri, t.Title) : null;
         return new BoxEl
         {
             Key = "np:" + t.Uri,
@@ -303,7 +303,7 @@ sealed class QueuePanel : Component
     {
         var t = entry.Track;
         var st = TrackRow.StateOf(b, lib, t);
-        Action? like = t.Uri.Length > 0 && lib is not null ? () => lib.ToggleSaved(t.Uri) : null;
+        Action? like = t.Uri.Length > 0 && lib is not null ? () => lib.ToggleSaved(t.Uri, t.Title) : null;
 
         void Remove()
         {

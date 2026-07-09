@@ -69,6 +69,9 @@ public sealed class TreeReconciler
     private readonly Dictionary<int, SkelRegionEl> _skelEl = new();
     private readonly Dictionary<int, Effect> _skelEffect = new();
     private readonly HashSet<int> _skelForce = new();
+    // Loading-scrollbar suppression is node-owned. Remember the exact viewport each pending region incremented so an
+    // unmount, branch replacement, or independent sibling completion releases precisely its own claim.
+    private readonly Dictionary<int, NodeHandle> _skelScrollSuppression = new();
     // KeepAlive boundaries retain inactive page subtrees detached from the live child chain. Entries are node-owned so
     // unmounting the boundary releases every parked component/effect/resource deterministically.
     private sealed class KeepAliveEntry
@@ -86,6 +89,9 @@ public sealed class TreeReconciler
     {
         public readonly Dictionary<string, KeepAliveEntry> Entries = new();
         public string? ActiveKey;
+        public string? ExitingKey;
+        public KeepAliveOptions? Options;
+        public NodeHandle Boundary;
         public long Clock;
         public int TransientSeq;
     }
@@ -609,6 +615,15 @@ public sealed class TreeReconciler
         a.FlexGrow = c.FlexGrow; a.FlexShrink = c.FlexShrink; a.FlexBasis = c.FlexBasis; a.AlignSelf = c.AlignSelf;
         a.Width = c.Width; a.Height = c.Height;
         a.MinW = c.MinW; a.MinH = c.MinH; a.MaxW = c.MaxW; a.MaxH = c.MaxH;
+        // Transparent boundaries are NEVER input targets of their own. Keep the anchor traversable and make it yield
+        // when none of its rendered descendants hit: a child with HitTestVisible=false is then skipped naturally and
+        // input reaches the sibling behind it (closed retained rail), while a later live child is immediately reachable
+        // without requiring visibility to propagate synchronously back through every nested component/Skel/KeepAlive
+        // boundary. Copying the child's bit here was racy: DetailPage → SkelRegion → DetailShell could temporarily copy
+        // false during a branch swap and leave an outer component anchor permanently blocking descent even after the
+        // inner branch became hit-testable. Child hits still win because pass-through is consulted only after descent.
+        _scene.Mark(anchor, NodeFlags.HitTestVisible);
+        _scene.SetHitTestPassThrough(anchor, anchor);
     }
 
     private void ReplaceComponent(NodeHandle node, ComponentEl ce)
@@ -795,7 +810,7 @@ public sealed class TreeReconciler
     private void MountKeepAlive(NodeHandle node, KeepAliveEl ka)
     {
         int idx = (int)node.Raw.Index;
-        var state = new KeepAliveState();
+        var state = new KeepAliveState { Boundary = node };
         _keepAliveState[idx] = state;
 
         var eff = new Effect(Runtime, () =>
@@ -815,11 +830,21 @@ public sealed class TreeReconciler
     private void ReconcileKeepAlive(NodeHandle node, KeepAliveState state, KeepAliveOptions options, string key, object token, Element desired, bool cacheable)
     {
         state.Clock++;
+        state.Options = options;
+
+        LayoutTransition? transition = null;
 
         if (state.ActiveKey is { } oldKey && oldKey != key && state.Entries.TryGetValue(oldKey, out var oldActive))
         {
-            DeactivateKeepAliveEntry(oldActive, options);
-            if (!oldActive.Cacheable) state.Entries.Remove(oldKey);
+            transition = options.TransitionFor?.Invoke(oldActive.Token, token);
+            if (transition is { } spec && spec.Exit.Active && Anim is not null && !Motion.ReducedMotion)
+                BeginKeepAliveExit(state, oldActive, options, spec);
+            else
+            {
+                FinishKeepAliveExit(state, options);
+                DeactivateKeepAliveEntry(oldActive, options);
+                if (!oldActive.Cacheable) state.Entries.Remove(oldKey);
+            }
         }
 
         if (!state.Entries.TryGetValue(key, out var entry))
@@ -849,6 +874,12 @@ public sealed class TreeReconciler
             entry.LastUsed = state.Clock;
             if (!entry.Attached)
                 ReactivateKeepAliveEntry(node, entry, options);
+            else if (state.ExitingKey == key)
+            {
+                Anim?.CancelAll(entry.Root);
+                state.ExitingKey = null;
+                _scene.Mark(entry.Root, NodeFlags.HitTestVisible);
+            }
 
             if (entry.El.ElementTypeId == desired.ElementTypeId)
             {
@@ -863,7 +894,55 @@ public sealed class TreeReconciler
 
         state.ActiveKey = key;
         MirrorParticipation(node, entry.Root);
+        if (transition is { } enter && enter.Enter.Active && Anim is { } anim && !Motion.ReducedMotion)
+        {
+            anim.CancelAll(entry.Root);
+            anim.SeedEnter(entry.Root, enter.Enter, enter);
+        }
         EvictInactiveKeepAliveEntries(state, options);
+    }
+
+    private void BeginKeepAliveExit(KeepAliveState state, KeepAliveEntry entry, KeepAliveOptions options, in LayoutTransition spec)
+    {
+        // Bound every boundary to one outgoing root. A rapid second navigation parks the older outgoing page now, then
+        // reversals can reclaim the newly outgoing page without accumulating visible/active retained trees.
+        FinishKeepAliveExit(state, options);
+        if (!_scene.IsLive(entry.Root)) return;
+        // Overlay only for the brief two-root interval. Returning to the normal single-child transparent boundary after
+        // settle preserves the page's original flex/scroll measurement semantics.
+        if (_scene.IsLive(state.Boundary)) _scene.Mark(state.Boundary, NodeFlags.ZStack);
+        OnSubtreeDeactivated?.Invoke(entry.Root);
+        _scene.Unmark(entry.Root, NodeFlags.HitTestVisible);
+        Anim!.CancelAll(entry.Root);
+        Anim.SeedExit(entry.Root, spec.Exit, spec);
+        state.ExitingKey = entry.Key;
+    }
+
+    private void FinishKeepAliveExit(KeepAliveState state, KeepAliveOptions options)
+    {
+        if (state.ExitingKey is not { } key) return;
+        state.ExitingKey = null;
+        if (!state.Entries.TryGetValue(key, out var entry))
+        {
+            if (_scene.IsLive(state.Boundary)) _scene.Unmark(state.Boundary, NodeFlags.ZStack);
+            return;
+        }
+        Anim?.CancelAll(entry.Root);
+        DeactivateKeepAliveEntry(entry, options);
+        if (!entry.Cacheable) state.Entries.Remove(key);
+        if (_scene.IsLive(state.Boundary)) _scene.Unmark(state.Boundary, NodeFlags.ZStack);
+    }
+
+    /// <summary>Park retained outgoing pages once their finite exit track settles. Called by the host after animation
+    /// ticking; no allocations and no scan unless a KeepAlive boundary exists.</summary>
+    public void FinalizeKeepAliveTransitions()
+    {
+        foreach (var state in _keepAliveState.Values)
+        {
+            if (state.ExitingKey is not { } key || !state.Entries.TryGetValue(key, out var entry)) continue;
+            if (Anim is not null && Anim.HasTracks(entry.Root)) continue;
+            FinishKeepAliveExit(state, state.Options ?? KeepAliveOptions.Default);
+        }
     }
 
     private void ReactivateKeepAliveEntry(NodeHandle parent, KeepAliveEntry entry, KeepAliveOptions options)
@@ -878,6 +957,7 @@ public sealed class TreeReconciler
             entry.ResourcesActive = true;
         }
         SetSubtreeParked(entry.Root, parked: false);   // re-attached → un-park + replay any render owed while parked
+        _scene.Mark(entry.Root, NodeFlags.HitTestVisible);
         _scene.Mark(parent, NodeFlags.LayoutDirty);
     }
 
@@ -1258,11 +1338,40 @@ public sealed class TreeReconciler
     }
 
     /// <summary>While a <see cref="SkelRegionEl"/> is loading, hide its enclosing viewport's scrollbar (the nearest scroll
-    /// ancestor): the short skeleton → tall real-content swap would otherwise pop the rail. Cleared on Ready/Failed.</summary>
+    /// ancestor): the short skeleton → tall real-content swap would otherwise pop the rail. Claims are counted and
+    /// node-owned because a pending region can unmount without ever reconciling a Ready/Failed branch.</summary>
     private void SetSkeletonScrollbarSuppression(NodeHandle node, bool loading)
     {
+        int owner = (int)node.Raw.Index;
+        if (!loading)
+        {
+            ReleaseSkeletonScrollbarSuppression(owner);
+            return;
+        }
+
+        NodeHandle viewport = NodeHandle.Null;
         for (var n = _scene.Parent(node); !n.IsNull; n = _scene.Parent(n))
-            if (_scene.HasScroll(n)) { _scene.ScrollRef(n).SuppressBarLoading = loading; _scene.Mark(n, NodeFlags.PaintDirty); return; }
+            if (_scene.HasScroll(n)) { viewport = n; break; }
+        if (viewport.IsNull) { ReleaseSkeletonScrollbarSuppression(owner); return; }
+
+        if (_skelScrollSuppression.TryGetValue(owner, out var prior))
+        {
+            if (prior == viewport && _scene.IsLive(prior)) return;   // this region already owns one claim
+            ReleaseSkeletonScrollbarSuppression(owner);             // rare reparent: move the claim atomically
+        }
+
+        _skelScrollSuppression[owner] = viewport;
+        ref ScrollState sc = ref _scene.ScrollRef(viewport);
+        sc.LoadingBarSuppressors++;
+        _scene.Mark(viewport, NodeFlags.PaintDirty);
+    }
+
+    private void ReleaseSkeletonScrollbarSuppression(int owner)
+    {
+        if (!_skelScrollSuppression.Remove(owner, out var viewport) || !_scene.IsLive(viewport) || !_scene.HasScroll(viewport)) return;
+        ref ScrollState sc = ref _scene.ScrollRef(viewport);
+        if (sc.LoadingBarSuppressors > 0) sc.LoadingBarSuppressors--;
+        _scene.Mark(viewport, NodeFlags.PaintDirty);
     }
 
     private void MountVirtual(NodeHandle node, VirtualListEl ve)
@@ -1541,13 +1650,16 @@ public sealed class TreeReconciler
 
     /// <summary>True if the subtree is a PLAIN visual tree (box/grid/text/image/polyline, no reactive binds, no
     /// OnRealized): safe to rebind onto a recycled node. Components/flow/providers/scrollers and bound elements capture
-    /// identity at mount — they must mount fresh.</summary>
+    /// identity at mount — they must mount fresh. EXCEPTION: the shared theme-text brushes (<see cref="Ui.IsThemeTextBrush"/>,
+    /// e.g. every default-colored TextEl) are recyclable — their persisted mount-time binding re-fires on RethemeAll for
+    /// the SAME singleton thunk, so the recycled node needs no rewrite (the pairing's thunk stability is DEBUG-asserted in
+    /// <see cref="ShapeCompatible"/>).</summary>
     private static bool IsRecyclable(Element el)
     {
         switch (el)
         {
             case TextEl t:
-                return !t.Text.IsBound && !t.Color.IsBound && t.OnRealized is null;
+                return !t.Text.IsBound && (!t.Color.IsBound || Ui.IsThemeTextBrush(t.Color)) && t.OnRealized is null;
             case SpanTextEl:
                 return true;   // plain leaf — WriteColumns rewrites every column incl. the span run/handlers
             case ImageEl im:
@@ -1596,6 +1708,14 @@ public sealed class TreeReconciler
     private static bool ShapeCompatible(Element a, Element b)
     {
         if (a.ElementTypeId != b.ElementTypeId) return false;
+        // Text color-BIND CLASS is structure-adjacent under recycle: Update never re-registers bindings, so a recycled
+        // node keeps its MOUNT-TIME color binding. A default theme-brush node is only correct when the paired element
+        // binds the SAME singleton thunk (same tier) — an unbound↔bound flip or a different tier would strand the
+        // persisted binding on the wrong color after RethemeAll. Unbound explicit colors are free to differ (WriteColumns
+        // rewrites them every recycle) so their VALUE is ignored — only the bind class + thunk identity is checked.
+        if (a is TextEl ta && b is TextEl tb
+            && (ta.Color.IsBound != tb.Color.IsBound
+                || (ta.Color.IsBound && !ReferenceEquals(ta.Color.Thunk, tb.Color.Thunk)))) return false;
         Element[]? ac = a switch { BoxEl x => x.Children, GridEl x => x.Children, _ => null };
         Element[]? bc = b switch { BoxEl x => x.Children, GridEl x => x.Children, _ => null };
         if (ac is null || bc is null) return true;   // leaf type matched (no child structure to compare)
@@ -1775,6 +1895,7 @@ public sealed class TreeReconciler
         _skelEl.Remove(idx);
         _skelEffect.Remove(idx);
         _skelForce.Remove(idx);
+        ReleaseSkeletonScrollbarSuppression(idx);
         if (_skelState.Remove(idx, out var sk) && sk.Group is { } skg) SkelGroupCoordinator.Unregister(skg, idx);
         if (_comps.Remove(node, out var e)) { e.Effect?.Dispose(); e.Comp.Unmount(); _live.Remove(e.Comp); _anchorOf.Remove(e.Comp); }
         if (_virtuals.Remove(node, out var v))

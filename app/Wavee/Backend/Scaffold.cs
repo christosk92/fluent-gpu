@@ -31,16 +31,16 @@ public sealed class BackendScaffold
 // ── Headless self-test: exercises every engine and returns 0 (all passed) / 1 (any failed) ───────────────────────────
 public static class BackendSelfTest
 {
-    public static int Run(Action<string> log)
+    public static int Run(WaveeLogger log)
     {
         int pass = 0, fail = 0;
         void Check(string name, bool ok)
         {
-            if (ok) { pass++; log("  PASS  " + name); }
-            else { fail++; log("  FAIL  " + name); }
+            if (ok) { pass++; log.Info("  PASS  " + name); }
+            else { fail++; log.Info("  FAIL  " + name); }
         }
 
-        log("Wavee backend self-test - the five engines over a queryable store");
+        log.Info("Wavee backend self-test - the five engines over a queryable store");
         var sc = new BackendScaffold();
 
         // ── store (queryable spine) ──
@@ -136,7 +136,7 @@ public static class BackendSelfTest
         bool freeConnected = freeSess.ConnectAsync().GetAwaiter().GetResult();
         Check("gate: a Free account is refused at connect (no launch)", !freeConnected && freeSess.Status == AuthStatus.Error);
 
-        log($"backend self-test: {pass} passed, {fail} failed");
+        log.Info($"backend self-test: {pass} passed, {fail} failed");
         return fail == 0 ? 0 : 1;
     }
 

@@ -101,7 +101,7 @@ static class DetailRail
                     [
                         // Shuffle now lives in the track-list command bar; the rail keeps just the hero Play + save/share.
                         m.ContextUri is { Length: > 0 } saveUri
-                            ? Embed.Comp(() => new SaveButton(saveUri, 16f, FabSize))
+                            ? Embed.Comp(() => new SaveButton(saveUri, 16f, FabSize, m.Title))
                             : Fab(Icons.Heart, () => { }),
                         PlaylistInlineEdit.ShareButton(modelSource),
                         PlaylistInlineEdit.OwnerMenu(modelSource, h),
@@ -132,7 +132,20 @@ static class DetailRail
         };
         // Own vertical scroller (hidden bar by default) — the LAST resort once the TEXT has shrunk and it still overflows
         // (the image stays full-width; the text gave first).
-        return ScrollView(rail) with { Grow = 0f, Shrink = 0f, Width = railW };
+        if (LikedSongsArtwork.IsLikedUri(m.ContextUri))
+            return ScrollView(rail) with { Grow = 0f, Shrink = 0f, Width = railW };
+
+        // Match LibraryPage.NavPanel exactly: the contextual left column recedes on FillLayerDefault while the detail
+        // rows remain on the base content surface. Liked Songs intentionally keeps its established unlayered treatment.
+        return new BoxEl
+        {
+            Direction = 1, Width = railW, Shrink = 0f,
+            ClipToBounds = true, Fill = Tok.FillLayerDefault,
+            Children =
+            [
+                ScrollView(rail) with { Grow = 1f, Shrink = 1f, MinHeight = 0f, Width = railW },
+            ],
+        };
     }
 
     // The header for the VERTICAL (narrow) layout, fixed above the scrolling track list. The cover sits on the LEFT with
@@ -207,7 +220,7 @@ static class DetailRail
             PlayPill(h.Accent, h.PlayAll),
             // Shuffle lives in the track-list command bar now (see DetailTracks.Toolbar).
             m.ContextUri is { Length: > 0 } saveUri
-                ? Embed.Comp(() => new SaveButton(saveUri, 16f, FabSize))
+                ? Embed.Comp(() => new SaveButton(saveUri, 16f, FabSize, m.Title))
                 : Fab(Icons.Heart, () => { }),
             Fab(Icons.Share, () => { if (m.ShareUrl is { Length: > 0 } url) InputHooks.Current.Default.OpenUri?.Invoke(url); }),
         ],

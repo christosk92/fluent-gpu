@@ -22,7 +22,7 @@ public static class SpotifyLiveLogin
     public sealed record LoginResult(SpotifyWelcome Welcome, string DeviceId, LocalCredentialStore CredStore, string Scheme,
         ApConnection? Channel = null);
 
-    public static async Task<int> RunAsync(Action<string> log, CancellationToken ct)
+    public static async Task<int> RunAsync(WaveeLogger log, CancellationToken ct)
     {
         var login = await LoginAsync(log, ct).ConfigureAwait(false);
         if (login is null) return 1;
@@ -34,17 +34,17 @@ public static class SpotifyLiveLogin
         var tier = w.Product?.IsPremium == true ? Tier.Premium : Tier.Free;
         if (!SessionGate.IsAllowed(tier))
         {
-            log(SessionGate.WarningTitle + " - the signed-in account is not Premium. Refusing (no launch).");
+            log.Info(SessionGate.WarningTitle + " - the signed-in account is not Premium. Refusing (no launch).");
             return 2;
         }
-        log("Logged in [" + login.Scheme + "]; next launch skips device-code.");
+        log.Info("Logged in [" + login.Scheme + "]; next launch skips device-code.");
         return 0;
     }
 
     /// <summary>The credential chain (stored reusable creds → device-code) → AP handshake/login (with AP failover) → APWelcome,
     /// persisting the fresh reusable credentials. Returns null on any failure (already logged). Reused by RunAsync (the
     /// premium gate) and by the metadata probe (which continues to login5 + spclient).</summary>
-    public static async Task<LoginResult?> LoginAsync(Action<string> log, CancellationToken ct, bool retainChannel = false,
+    public static async Task<LoginResult?> LoginAsync(WaveeLogger log, CancellationToken ct, bool retainChannel = false,
         bool allowDeviceCode = true, IObserver<AuthState>? authObserver = null, Action? onCredentialAcquired = null,
         bool allowBrowser = false)
     {
@@ -62,17 +62,17 @@ public static class SpotifyLiveLogin
             using var challengeSub = flow.State.Subscribe(new ChallengeLogger(log));
             // The in-app UI observer rides the SAME reactive state (device-code challenge / QR / expiry); null for the CLI.
             using var uiSub = authObserver is null ? (IDisposable?)null : flow.State.Subscribe(authObserver);
-            log("Authenticating (stored credentials first" + (allowDeviceCode ? ", else device-code)..." : ", silent)..."));
+            log.Info("Authenticating (stored credentials first" + (allowDeviceCode ? ", else device-code)..." : ", silent)..."));
             var cred = await flow.AcquireAsync(ct).ConfigureAwait(false);
-            if (cred is null) { log("No credential obtained."); return null; }
+            if (cred is null) { log.Info("No credential obtained."); return null; }
             onCredentialAcquired?.Invoke();   // credential-acquired boundary → the bootstrap reports Finalizing (AP/login5/dealer ahead)
             bool usedStored = cred.Kind == CredentialKind.ReusableBlob;
-            log(usedStored ? "Using stored credentials (no re-auth)." : "Authorized via device-code.");
+            log.Info(usedStored ? "Using stored credentials (no re-auth)." : "Authorized via device-code.");
 
-            log("Resolving Spotify access points...");
+            log.Info("Resolving Spotify access points...");
             var json = await SharedHttp.Client.GetStringAsync("https://apresolve.spotify.com/?type=accesspoint", ct).ConfigureAwait(false);
             var aps = ApResolver.ParseAccessPoints(json);
-            if (aps.Count == 0) { log("No access points returned."); return null; }
+            if (aps.Count == 0) { log.Info("No access points returned."); return null; }
             // :4070 endpoints first, then the rest — FAIL OVER to the next AP on a connection error / timeout / TryAnotherAP.
             var ordered = aps.Where(a => a.EndsWith(":4070")).Concat(aps.Where(a => !a.EndsWith(":4070"))).ToList();
 
@@ -83,7 +83,7 @@ public static class SpotifyLiveLogin
                 var parts = apHostPort.Split(':');
                 string host = parts[0];
                 int port = int.Parse(parts[1]);
-                log("Connecting to " + host + ":" + port + "...");
+                log.Info("Connecting to " + host + ":" + port + "...");
                 TcpDuplexStream? tcp = null;
                 bool keep = false;
                 try
@@ -107,25 +107,25 @@ public static class SpotifyLiveLogin
                 catch (SpotifyAuthRejectedException ex)
                 {
                     // A genuine credential rejection is FINAL (don't try other APs). Clear stored creds → a re-run re-auths.
-                    if (usedStored) { credStore.Clear(); log("Stored credentials were rejected - cleared them. Re-run to authorize fresh."); }
-                    else log("Login rejected by Spotify: " + ex.Message);
+                    if (usedStored) { credStore.Clear(); log.Info("Stored credentials were rejected - cleared them. Re-run to authorize fresh."); }
+                    else log.Info("Login rejected by Spotify: " + ex.Message);
                     return null;
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }   // user cancel → stop
-                catch (Exception ex) { log("  " + host + " failed (" + ex.Message + ") - trying the next access point."); }   // TryAnotherAP / connection / timeout
+                catch (Exception ex) { log.Info("  " + host + " failed (" + ex.Message + ") - trying the next access point."); }   // TryAnotherAP / connection / timeout
                 finally { if (!keep) tcp?.Dispose(); }   // dispose on failure / non-retain (matches the old `using`)
             }
-            if (welcome is null) { log("All access points failed."); return null; }
+            if (welcome is null) { log.Info("All access points failed."); return null; }
 
-            log("Logged in to Spotify (user " + Redact(welcome.Username) + ", product " + (welcome.Product?.Type ?? "unknown") + ", country " + (welcome.Country ?? "?") + ").");
+            log.Info("Logged in to Spotify (user " + Redact(welcome.Username) + ", product " + (welcome.Product?.Type ?? "unknown") + ", country " + (welcome.Country ?? "?") + ").");
 
             // Persist the fresh reusable credentials (bytes never logged, only the count) — login5 + the next launch use them.
             credStore.Save(new Credential(CredentialKind.ReusableBlob, welcome.Username, Convert.ToBase64String(welcome.ReusableCredentials)));
-            log("Saved " + welcome.ReusableCredentials.Length + "-byte reusable credentials [" + credStore.Scheme + "].");
+            log.Info("Saved " + welcome.ReusableCredentials.Length + "-byte reusable credentials [" + credStore.Scheme + "].");
             return new LoginResult(welcome, deviceId, credStore, credStore.Scheme, channel);
         }
-        catch (OperationCanceledException) { log("Live login timed out / cancelled."); return null; }
-        catch (Exception ex) { log("Live login failed: " + ex.Message); return null; }
+        catch (OperationCanceledException) { log.Info("Live login timed out / cancelled."); return null; }
+        catch (Exception ex) { log.Info("Live login failed: " + ex.Message); return null; }
     }
 
     static string GetOrCreateDeviceId(ILocalStore store)
@@ -166,20 +166,20 @@ public static class SpotifyLiveLogin
     // Redact an account identifier before it reaches a log (keep a short hint, hide the rest).
     static string Redact(string s) => string.IsNullOrEmpty(s) ? "(none)" : s.Length <= 6 ? "***" : s[..3] + "***" + s[^2..];
 
-    sealed class ChallengeLogger(Action<string> log) : IObserver<AuthState>
+    sealed class ChallengeLogger(WaveeLogger log) : IObserver<AuthState>
     {
         bool _shown;
         public void OnCompleted() { }
         public void OnError(Exception e) { }
         public void OnNext(AuthState s)
         {
-            if (s.Phase == AuthPhase.ChallengeExpired) { log("The device code expired before approval. Re-run to get a fresh code."); return; }
+            if (s.Phase == AuthPhase.ChallengeExpired) { log.Info("The device code expired before approval. Re-run to get a fresh code."); return; }
             if (_shown || s.Phase != AuthPhase.AwaitingUser || s.Challenge is not { } c) return;
             _shown = true;
-            log("Authorize Wavee on Spotify (Premium account):");
-            log("  Open: " + (c.VerificationUriComplete ?? c.VerificationUri));
-            log("  or visit " + c.VerificationUri + " and enter code: " + c.UserCode);
-            log("Waiting for approval...");
+            log.Info("Authorize Wavee on Spotify (Premium account):");
+            log.Info("  Open: " + (c.VerificationUriComplete ?? c.VerificationUri));
+            log.Info("  or visit " + c.VerificationUri + " and enter code: " + c.UserCode);
+            log.Info("Waiting for approval...");
         }
     }
 }

@@ -92,28 +92,30 @@ static class PlaylistInlineEdit
         }
     }
 
-    static async Task ApplyCoverJpegAsync(LibraryBridge lib, string uri, byte[] jpeg)
+    static async Task<bool> ApplyCoverJpegAsync(LibraryBridge lib, string uri, byte[] jpeg)
     {
         try
         {
             await lib.SetPlaylistCoverJpegAsync(uri, jpeg).ConfigureAwait(false);
+            return true;
         }
         catch (Exception ex)
         {
             PlaylistEditErrors.Toast(ex);
+            return false;
         }
     }
 
-    static async Task TryCoverPathAsync(LibraryBridge lib, string uri, string path)
+    static async Task<bool> TryCoverPathAsync(LibraryBridge lib, string uri, string path)
     {
-        if (path is not { Length: > 0 } || !File.Exists(path)) return;
+        if (path is not { Length: > 0 } || !File.Exists(path)) return false;
         string ext = Path.GetExtension(path);
         if (!ext.Equals(".jpg", StringComparison.OrdinalIgnoreCase) && !ext.Equals(".jpeg", StringComparison.OrdinalIgnoreCase))
         {
             Toasts.Show(Loc.Get(Strings.Detail.Edit.PickCover), ToastSeverity.Caution);
-            return;
+            return false;
         }
-        await ApplyCoverJpegAsync(lib, uri, await File.ReadAllBytesAsync(path).ConfigureAwait(false)).ConfigureAwait(false);
+        return await ApplyCoverJpegAsync(lib, uri, await File.ReadAllBytesAsync(path).ConfigureAwait(false)).ConfigureAwait(false);
     }
 
     // ── shared visuals ───────────────────────────────────────────────────────────────────────────────────────────
@@ -125,20 +127,30 @@ static class PlaylistInlineEdit
         Direction = 0, AlignItems = FlexAlign.Center, Gap = 6f, Shrink = 0f,
         Padding = new Edges4(8f, 3f, 10f, 3f), Corners = CornerRadius4.All(12f),
         Fill = Tok.FillSubtleSecondary,
-        Enter = new EnterExit(Dx: -6f, Opacity: 0f, Active: true),
-        Exit = new EnterExit(Opacity: 0f, Active: true),
-        Key = "pl-edit-status:" + status,
-        Children = status == StatusSaving
-            ?
-            [
-                ProgressRing.Indeterminate(16f, true, Tok.TextSecondary),
-                new TextEl(Loc.Get(Strings.Detail.Edit.Saving)) { Size = 11f, Weight = 600, Color = Tok.TextSecondary },
-            ]
-            :
-            [
-                Ui.Icon(Icons.Accept, 12f, Tok.AccentTextPrimary),
-                new TextEl(Loc.Get(Strings.Detail.Edit.Saved)) { Size = 11f, Weight = 600, Color = Tok.TextSecondary },
-            ],
+        Key = "pl-edit-status",
+        Animate = MotionRecipes.TextSwap,
+        Children =
+        [
+            ZStack(new BoxEl
+            {
+                Key = "pl-status-icon:" + status,
+                Width = 16f, Height = 16f,
+                AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                Animate = MotionRecipes.IconSwap,
+                Children = [status == StatusSaving
+                    ? ProgressRing.Indeterminate(16f, true, Tok.TextSecondary)
+                    : Ui.Icon(Icons.Accept, 12f, Tok.AccentTextPrimary)],
+            }),
+            ZStack(new BoxEl
+            {
+                Key = "pl-status-text:" + status,
+                Animate = MotionRecipes.TextSwap,
+                Children = [new TextEl(status == StatusSaving
+                    ? Loc.Get(Strings.Detail.Edit.Saving)
+                    : Loc.Get(Strings.Detail.Edit.Saved))
+                { Size = 11f, Weight = 600, Color = Tok.TextSecondary }],
+            }),
+        ],
     };
 
     /// <summary>A labeled save/cancel pill (no enter-fade — must be visible the instant edit mode mounts).</summary>
@@ -278,8 +290,9 @@ static class PlaylistInlineEdit
         readonly float _size;
         readonly Signal<bool> _hovered = new(false);
         readonly Signal<bool> _dropOver = new(false);
-        readonly Signal<bool> _busy = new(false);
+        readonly Signal<int> _status = new(StatusIdle);
         readonly Ref<DropTargetSpec?> _dropSpec = new(null);
+        int _saveEpoch;
 
         public EditableCover(Loadable<DetailModel> full, float size) { _full = full; _size = size; }
 
@@ -334,13 +347,12 @@ static class PlaylistInlineEdit
                 Fill = ColorF.FromRgba(0, 0, 0) with { A = dropActive ? scrimDropA : scrimA },
                 AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Gap = 6f,
                 HitTestVisible = false,
-                Opacity = Prop.Of(() => _busy.Value || _hovered.Value || _dropOver.Value || dropActive ? 1f : 0f),
+                Opacity = Prop.Of(() => _status.Value != StatusIdle || _hovered.Value || _dropOver.Value || dropActive ? 1f : 0f),
                 Transition = MotionTok.ControlNormal,
-                Children = _busy.Value
+                Children = _status.Value != StatusIdle
                     ?
                     [
-                        ProgressRing.Indeterminate(28f, true, onImage),
-                        new TextEl(Loc.Get(Strings.Detail.Edit.Saving)) { Size = 13f, Weight = 600, Color = onImage },
+                        StatusChip(_status.Peek()),
                     ]
                     :
                     [
@@ -358,9 +370,9 @@ static class PlaylistInlineEdit
 
         async Task ApplyPathAsync(LibraryBridge lib, string uri, string path)
         {
-            _busy.Value = true;
-            try { await TryCoverPathAsync(lib, uri, path).ConfigureAwait(false); }
-            finally { _busy.Value = false; }
+            await RunSaveAsync(
+                () => TryCoverPathAsync(lib, uri, path),
+                _status, () => ++_saveEpoch, () => _saveEpoch).ConfigureAwait(false);
         }
 
         async Task PickCoverAsync(LibraryBridge lib, string uri)
@@ -432,7 +444,7 @@ static class PlaylistInlineEdit
             string title = string.IsNullOrWhiteSpace(m.Title) ? Loc.Get(Strings.Detail.Edit.NamePlaceholder) : m.Title;
             // The hover pill: padding + compensating negative margin keep the hero text at its resting x/y; the fill
             // and hairline border ease in engine-side (HoverFade channel — no re-render), cursor is always I-beam.
-            return AnimatedSwap(_width, new BoxEl
+            Element titleRow = new BoxEl
             {
                 Direction = 0, Width = _width + 16f, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center,
                 Margin = new Edges4(-8f, -4f, -8f, -4f), Padding = new Edges4(8f, 4f, 8f, 4f),
@@ -460,7 +472,21 @@ static class PlaylistInlineEdit
                         Transition = MotionTok.ControlFast,
                         Children = [Ui.Icon(Icons.Edit, MathF.Max(14f, _titleSize * 0.4f), Tok.TextSecondary)],
                     },
-                    status != StatusIdle ? StatusChip(status) : new BoxEl { Width = 0f },
+                ],
+            };
+            // The transient status must never participate in the hero title's horizontal measure. Putting the Saved
+            // chip in titleRow stole width for 1.8 s and forced a live wrap exactly as the editor branch was being
+            // replaced; the retained old glyph run and the newly-wrapped last character then painted together. A stable
+            // column keeps the title width invariant and gives status its own trailing row.
+            return AnimatedSwap(_width, new BoxEl
+            {
+                Direction = 1, Width = _width, Gap = status == StatusIdle ? 0f : 4f,
+                Children =
+                [
+                    titleRow,
+                    status != StatusIdle
+                        ? new BoxEl { Direction = 0, Width = _width, Justify = FlexJustify.End, Children = [StatusChip(status)] }
+                        : new BoxEl { Width = _width, Height = 0f },
                 ],
             });
         }
@@ -534,7 +560,7 @@ static class PlaylistInlineEdit
             }
 
             int status = _status.Value;
-            return AnimatedSwap(_width, new BoxEl
+            Element descriptionRow = new BoxEl
             {
                 Direction = 0, Width = _width + 16f, Gap = WaveeSpace.S, AlignItems = FlexAlign.Start,
                 Margin = new Edges4(-8f, -4f, -8f, -4f), Padding = new Edges4(8f, 4f, 8f, 4f),
@@ -571,7 +597,19 @@ static class PlaylistInlineEdit
                         Transition = MotionTok.ControlFast,
                         Children = [Ui.Icon(Icons.Edit, 13f, Tok.TextSecondary)],
                     },
-                    status != StatusIdle ? StatusChip(status) : new BoxEl { Width = 0f },
+                ],
+            };
+            // Same invariant as the title editor: status feedback is vertical chrome, never an inline sibling that
+            // changes the wrapping width of live rich text during the save transition.
+            return AnimatedSwap(_width, new BoxEl
+            {
+                Direction = 1, Width = _width, Gap = status == StatusIdle ? 0f : 4f,
+                Children =
+                [
+                    descriptionRow,
+                    status != StatusIdle
+                        ? new BoxEl { Direction = 0, Width = _width, Justify = FlexJustify.End, Children = [StatusChip(status)] }
+                        : new BoxEl { Width = _width, Height = 0f },
                 ],
             });
         }
@@ -622,66 +660,102 @@ static class PlaylistInlineEdit
     sealed class PlaylistShareButton : Component
     {
         readonly Loadable<DetailModel> _full;
+        readonly Signal<bool> _copied = new(false);
+        System.Threading.Timer? _timer;
+        int _copyEpoch;
         public PlaylistShareButton(Loadable<DetailModel> full) => _full = full;
 
         public override Element Render()
         {
-            var lib = UseContext(LibraryBridge.Slot);
+            var post = UsePost();
+            UseSignalEffect(() => Reactive.OnCleanup(() => _timer?.Dispose()));
             var m = _full.Value.Value;
+            bool copied = _copied.Value;
             return new BoxEl
             {
-                Width = 40f, Height = 40f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                Corners = CornerRadius4.All(20f),
-                HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
-                HoverScale = 1.06f, PressScale = 0.94f,
-                OnClick = () => _ = ShareAsync(lib, m),
-                Children = [Icon(Icons.Share, 16f, Tok.TextSecondary)],
+                Width = 40f, Height = 40f,
+                Children =
+                [
+                    new BoxEl
+                    {
+                        Width = 40f, Height = 40f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                        Corners = CornerRadius4.All(20f),
+                        HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+                        HoverScale = 1.06f, PressScale = 0.94f,
+                        Cursor = CursorId.Hand, Focusable = true, Role = AutomationRole.Button,
+                        OnClick = () => Share(m, post),
+                        Children = [new BoxEl
+                        {
+                            Key = copied ? "share-check" : "share-link",
+                            Animate = MotionRecipes.IconSwap,
+                            Children = [Icon(copied ? Icons.Accept : Icons.Share, 16f,
+                                copied ? Tok.AccentTextPrimary : Tok.TextSecondary)],
+                        }],
+                    },
+                ],
             };
         }
 
-        static async Task ShareAsync(LibraryBridge? lib, DetailModel m)
+        void Share(DetailModel m, Action<Action> post)
         {
             if (m.ContextUri is not { } uri) return;
             var url = m.ShareUrl ?? DetailPage.SpotifyPlaylistWebUrl(uri);
             if (InputHooks.Current.Default.Clipboard is { } clip)
             {
-                clip.SetText(url);
-                Toasts.Show(Loc.Get(Strings.Detail.Edit.LinkCopied), ToastSeverity.Success);
+                try { clip.SetText(url); }
+                catch (Exception ex) { PlaylistEditErrors.Toast(ex); return; }
+                InputHooks.Current.Default.Announce?.Invoke(Loc.Get(Strings.Auth.Copied), false);
+                _copied.Value = true;
+                int epoch = ++_copyEpoch;
+                _timer?.Dispose();
+                _timer = new System.Threading.Timer(_ => post(() =>
+                {
+                    if (epoch == _copyEpoch) _copied.Value = false;
+                }), null, 1600, System.Threading.Timeout.Infinite);
             }
             else InputHooks.Current.Default.OpenUri?.Invoke(url);
         }
     }
 
-    internal static async Task CopyContributorInviteAsync(LibraryBridge lib, DetailModel m, Loadable<DetailModel>? full = null, Services? svc = null)
+    internal static async Task<bool> CopyContributorInviteAsync(LibraryBridge lib, DetailModel m, Loadable<DetailModel>? full = null, Services? svc = null)
     {
-        if (m.ContextUri is not { } uri) return;
+        if (m.ContextUri is not { } uri) return false;
         try
         {
             var token = await lib.CreateContributorInviteAsync(uri).ConfigureAwait(false);
             var url = $"{m.ShareUrl ?? DetailPage.SpotifyPlaylistWebUrl(uri)}?pt={token}";
-            InputHooks.Current.Default.Clipboard?.SetText(url);
-            Toasts.Show(Loc.Get(Strings.Detail.Edit.InviteCopied), ToastSeverity.Success);
+            var clip = InputHooks.Current.Default.Clipboard;
+            bool copied = clip is not null;
+            if (clip is not null)
+            {
+                clip.SetText(url);
+                InputHooks.Current.Default.Announce?.Invoke(Loc.Get(Strings.Auth.Copied), false);
+            }
+            else InputHooks.Current.Default.OpenUri?.Invoke(url);
             if (full is not null) await RefreshPlaylistDetailAsync(svc, full, uri).ConfigureAwait(false);
+            return copied;
         }
-        catch (Exception ex) { PlaylistEditErrors.Toast(ex); }
+        catch (Exception ex) { PlaylistEditErrors.Toast(ex); return false; }
     }
 
-    static async Task SetCollaborativeAsync(LibraryBridge lib, Loadable<DetailModel> full, Services? svc, string uri, bool collaborative)
+    static async Task<bool> SetCollaborativeAsync(LibraryBridge lib, Loadable<DetailModel> full, Services? svc, string uri, bool collaborative)
     {
-        if (!await SaveDetailsAsync(lib, uri, null, null, collaborative).ConfigureAwait(false)) return;
+        if (!await SaveDetailsAsync(lib, uri, null, null, collaborative).ConfigureAwait(false)) return false;
         PatchDetail(full, m => m with { Capabilities = m.Capabilities with { IsCollaborative = collaborative } });
         await RefreshPlaylistDetailAsync(svc, full, uri).ConfigureAwait(false);
+        return true;
     }
 
-    static async Task SetVisibilityAsync(LibraryBridge lib, Loadable<DetailModel> full, Services? svc, string uri, bool isPublic)
+    static async Task<bool> SetVisibilityAsync(LibraryBridge lib, Loadable<DetailModel> full, Services? svc, string uri, bool isPublic)
     {
         try
         {
             await lib.SetPlaylistVisibilityAsync(uri, isPublic).ConfigureAwait(false);
             PatchDetail(full, m => m with { IsPublic = isPublic });
             await RefreshPlaylistDetailAsync(svc, full, uri).ConfigureAwait(false);
+            return true;
         }
-        catch (Exception ex) { PlaylistEditErrors.Toast(ex); }
+        catch (Exception ex) { PlaylistEditErrors.Toast(ex); return false; }
     }
 
     // ── invite affordance + access flyout ────────────────────────────────────────────────────────────────────────
@@ -765,6 +839,10 @@ static class PlaylistInlineEdit
         readonly Loadable<DetailModel> _full;
         readonly LibraryBridge _lib;
         readonly Services? _svc;
+        readonly Signal<int> _inviteStatus = new(StatusIdle);
+        readonly Signal<int> _collaborativeStatus = new(StatusIdle);
+        readonly Signal<int> _publicStatus = new(StatusIdle);
+        int _inviteEpoch, _collaborativeEpoch, _publicEpoch;
 
         public PlaylistAccessFlyout(Loadable<DetailModel> full, LibraryBridge lib, Services? svc)
         { _full = full; _lib = lib; _svc = svc; }
@@ -774,6 +852,9 @@ static class PlaylistInlineEdit
             var m = _full.Value.Value;              // live — re-renders on PatchDetail (controlled toggles)
             var caps = m.Capabilities;
             string? uri = m.ContextUri;
+            int inviteStatus = _inviteStatus.Value;
+            int collaborativeStatus = _collaborativeStatus.Value;
+            int publicStatus = _publicStatus.Value;
 
             var content = new List<Element>(5)
             {
@@ -789,19 +870,31 @@ static class PlaylistInlineEdit
             };
 
             if (caps.CanAdministratePermissions && uri is not null)
-                content.Add(CopyInviteCta());
+                content.Add(CopyInviteCta(inviteStatus));
 
             if (caps.CanEditMetadata && caps.CanAdministratePermissions && uri is { } u)
             {
                 content.Add(new BoxEl { Height = 1f, Fill = Tok.StrokeDividerDefault, Margin = new Edges4(0f, 2f, 0f, 2f) });
                 content.Add(ToggleRow(
                     Loc.Get(Strings.Detail.Edit.Collaborative), Loc.Get(Strings.Detail.Edit.CollaborativeHint),
-                    caps.IsCollaborative,
-                    () => { var c = _full.Value.Peek(); _ = SetCollaborativeAsync(_lib, _full, _svc, u, !c.Capabilities.IsCollaborative); }));
+                    caps.IsCollaborative, collaborativeStatus,
+                    () =>
+                    {
+                        var c = _full.Value.Peek();
+                        _ = RunSaveAsync(
+                            () => SetCollaborativeAsync(_lib, _full, _svc, u, !c.Capabilities.IsCollaborative),
+                            _collaborativeStatus, () => ++_collaborativeEpoch, () => _collaborativeEpoch);
+                    }));
                 content.Add(ToggleRow(
                     Loc.Get(Strings.Detail.Edit.PublicPlaylist), Loc.Get(Strings.Detail.Edit.PublicHint),
-                    m.IsPublic,
-                    () => { var c = _full.Value.Peek(); _ = SetVisibilityAsync(_lib, _full, _svc, u, !c.IsPublic); }));
+                    m.IsPublic, publicStatus,
+                    () =>
+                    {
+                        var c = _full.Value.Peek();
+                        _ = RunSaveAsync(
+                            () => SetVisibilityAsync(_lib, _full, _svc, u, !c.IsPublic),
+                            _publicStatus, () => ++_publicEpoch, () => _publicEpoch);
+                    }));
             }
 
             return new BoxEl
@@ -813,7 +906,7 @@ static class PlaylistInlineEdit
             };
         }
 
-        Element CopyInviteCta()
+        Element CopyInviteCta(int status)
         {
             var accent = Tok.AccentDefault;
             var ink = WaveePalette.OnAccent(accent);
@@ -824,16 +917,34 @@ static class PlaylistInlineEdit
                 HoverFill = Tok.AccentSecondary, PressedFill = Tok.AccentTertiary,
                 HoverScale = 1.02f, PressScale = 0.98f,
                 Cursor = CursorId.Hand, Focusable = true, Role = AutomationRole.Button,
-                OnClick = () => _ = CopyContributorInviteAsync(_lib, _full.Value.Peek(), _full, _svc),
+                IsEnabled = status != StatusSaving,
+                OnClick = status == StatusSaving ? null : () => _ = RunSaveAsync(
+                    () => CopyContributorInviteAsync(_lib, _full.Value.Peek(), _full, _svc),
+                    _inviteStatus, () => ++_inviteEpoch, () => _inviteEpoch),
                 Children =
                 [
-                    Icon(Mdl.Link, 14f, ink),
-                    new TextEl(Loc.Get(Strings.Detail.Edit.CopyInviteLink)) { Size = 13f, Weight = 600, Color = ink },
+                    new BoxEl
+                    {
+                        Key = "invite-icon:" + status,
+                        Animate = MotionRecipes.IconSwap,
+                        Children = [status == StatusSaving
+                            ? ProgressRing.Indeterminate(14f, true, ink)
+                            : Icon(status == StatusSaved ? Icons.Accept : Mdl.Link, 14f, ink)],
+                    },
+                    new BoxEl
+                    {
+                        Key = "invite-text:" + status,
+                        Animate = MotionRecipes.TextSwap,
+                        Children = [new TextEl(status == StatusSaved
+                            ? Loc.Get(Strings.Auth.Copied)
+                            : Loc.Get(Strings.Detail.Edit.CopyInviteLink))
+                        { Size = 13f, Weight = 600, Color = ink }],
+                    },
                 ],
             };
         }
 
-        static Element ToggleRow(string label, string caption, bool isOn, Action onToggle) => new BoxEl
+        static Element ToggleRow(string label, string caption, bool isOn, int status, Action onToggle) => new BoxEl
         {
             Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
             Children =
@@ -847,7 +958,8 @@ static class PlaylistInlineEdit
                         new TextEl(caption) { Size = 11.5f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, MaxLines = 2 },
                     ],
                 },
-                ToggleSwitch.Create(isOn, onToggle, style: SettingsCard.CompactToggleStyle()),
+                status != StatusIdle ? StatusChip(status) : new BoxEl { Width = 0f },
+                ToggleSwitch.Create(isOn, onToggle, isEnabled: status != StatusSaving, style: SettingsCard.CompactToggleStyle()),
             ],
         };
     }

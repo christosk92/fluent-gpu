@@ -101,7 +101,9 @@ public class CollectionFetcherTests
     public async Task FetchSet_Delta_WhenPriorTokenPresent_AddsAndRemoves()
     {
         var store = new InMemoryStore();
-        store.SetSaved("liked", "spotify:track:old", true, SyncState.Confirmed);
+        // Non-zero addedAt — otherwise AllTimestampless() clears the sync token and the fetcher falls through to
+        // paging; this test's fake only returns a DeltaResponse, so paging would spin forever.
+        store.SetSaved("liked", "spotify:track:old", true, SyncState.Confirmed, addedAtMs: 1_700_000_000_000);
         var delta = new Col.DeltaResponse { DeltaUpdatePossible = true, SyncToken = "tok-2" };
         delta.Items.Add(new Col.CollectionItem { Uri = "spotify:track:new", AddedAt = 9 });
         delta.Items.Add(new Col.CollectionItem { Uri = "spotify:track:old", IsRemoved = true });

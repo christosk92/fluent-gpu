@@ -97,10 +97,11 @@ public sealed class LibraryBridge : IUndoTarget
     public bool IsSaved(string uri) => Saved.Value.Contains(uri);
 
     /// <summary>Toggle saved-state with an OPTIMISTIC local flip (the heart updates this frame), then reconcile through
-    /// the source (which re-emits the confirmed set). Called from a click handler, so the reads here don't subscribe.</summary>
-    public void ToggleSaved(string uri) => SetSaved(uri, !Saved.Peek().Contains(uri));
+    /// the source (which re-emits the confirmed set). Called from a click handler, so the reads here don't subscribe.
+    /// <paramref name="name"/> is display-only: it names the item in the notification-center activity entry.</summary>
+    public void ToggleSaved(string uri, string? name = null) => SetSaved(uri, !Saved.Peek().Contains(uri), name);
 
-    public void SetSaved(string uri, bool saved)
+    public void SetSaved(string uri, bool saved, string? name = null)
     {
         var cur = Saved.Peek();
         if (cur.Contains(uri) == saved) return;
@@ -108,10 +109,12 @@ public sealed class LibraryBridge : IUndoTarget
         if (saved) next.Add(uri); else next.Remove(uri);
         Saved.Value = next;                      // optimistic
         // Record BEFORE the async reconcile so the entry exists to flip Failed if the write faults immediately.
-        long id = _activity.IsSuppressed ? -1 : _activity.Record(saved ? ActivityKind.Save : ActivityKind.Unsave, uri);
+        long id = _activity.IsSuppressed ? -1 : _activity.Record(saved ? ActivityKind.Save : ActivityKind.Unsave, uri, name);
         var task = _mut.SetSavedAsync(uri, saved);   // reconcile (re-emits the confirmed set via the bridge subscription)
         if (id >= 0) _ = task.ContinueWith(t => { if (t.IsFaulted) _activity.MarkFailed(id); }, TaskScheduler.Default);
     }
+
+    void IUndoTarget.SetSaved(string uri, bool saved) => SetSaved(uri, saved);
 
     // ── Spotify playlist editing ─────────────────────────────────────────────────────────────────────────
     /// <summary><paramref name="previousName"/> lets the rename be recorded (and undone) when the name actually changes;

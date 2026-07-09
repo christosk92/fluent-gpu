@@ -36,8 +36,6 @@ sealed class SearchPage : Component
         var go = UseContext(HistoryStore.NavCtx);
         var querySig = UseContext(SearchQuery.Slot);
         if (svc is null) return new BoxEl { Grow = 1f };
-        this.UseSoftReveal(dy: 0f, blur: 0f);
-
         string q = (querySig?.Value ?? "").Trim();          // subscribe → re-render + re-search as the user types
         int chip = _chip.Value;                             // subscribe
         UseEffect(() => _songsSel.ClearSelection(), q + ":" + chip);
@@ -53,8 +51,11 @@ sealed class SearchPage : Component
         {
             Direction = 1, Gap = WaveeSpace.L,
             Padding = new Edges4(WaveeSpace.L, WaveeSpace.S, WaveeSpace.L, PlayerDock.Reserve + WaveeSpace.XXL),
+            // Songs (chip 1) is a BOUND virtualized list — its slots realize AFTER the skel-reveal walk runs, so the
+            // block-level StaggerRows would fade the whole list as one; the per-slot RowRise entrance in SearchSongs
+            // owns the stagger there instead (mirrors the detail list's entrance-vs-reveal split).
             Children = [Skel.Region(results, SearchShimmer, r => ResultsFor(r, chip, q, svc, go),
-                reveal: SkelReveal.StaggerRows,
+                reveal: chip == 1 ? SkelReveal.None : SkelReveal.StaggerRows,
                 onFailed: () => ErrorState.Build(results.Error))],
         };
 
@@ -321,6 +322,15 @@ sealed class SearchSongs : Component
     const float RowContentH = 56f;
     const float RowExtent = 60f;
 
+    // transitions.dev texts-reveal for the bound Songs list: per-slot mount Enter (rise + fade + blur) with a baked
+    // per-index delay. Only the first viewport staggers; slots realized later by scrolling mount unanimated (the
+    // detail list's accepted behavior for virtualized entrances).
+    static readonly LayoutTransition RowRise = new(
+        TransitionChannels.Opacity,
+        TransitionDynamics.Tween(Expressive.Slow, Easing.SmoothOut),
+        Enter: new EnterExit(Dy: 8f, Opacity: 0f, Active: true, Blur: Expressive.BlurSmall));
+    const int StaggerRowCap = 12;
+
     public override Element Render()
     {
         var model = UseContext(Props);
@@ -332,12 +342,28 @@ sealed class SearchSongs : Component
         if (n <= 0) return new BoxEl();
         Func<bool> showChecks = () =>
         {
+            // 2+ only: a plain single click must not flip the list into checkbox mode.
             _ = model.Selection.Version.Value;
-            return model.Selection.SelectedCount > 0;
+            return model.Selection.SelectedCount > 1;
         };
         return ItemsView.CreateBound(
             n,
-            scope => SelectorVisualsBound.AccentPill(scope, Embed.Comp(() => new SearchSongRow(model, scope, bridge, lib)), showChecks),
+            // transitions.dev texts-reveal for the Songs tab: every committed query remounts this whole subtree (the
+            // Skel branch replace), so each realized slot's Enter plays ONCE with a per-index stagger delay; scroll
+            // recycling re-binds slots without remounting → no replay mid-scroll. A WRAPPER carries the Enter (not
+            // `AccentPill with { Animate }` — its root has a bound Opacity that would fight an Enter opacity track).
+            scope =>
+            {
+                int slot0 = scope.Index.Peek();   // the slot's initial item index at realize
+                return new BoxEl
+                {
+                    Direction = 1,
+                    Animate = slot0 < StaggerRowCap && !Motion.ReducedMotion
+                        ? RowRise with { DelayMs = slot0 * Expressive.Stagger }
+                        : (LayoutTransition?)null,
+                    Children = [SelectorVisualsBound.AccentPill(scope, Embed.Comp(() => new SearchSongRow(model, scope, bridge, lib)), showChecks)],
+                };
+            },
             RepeatLayout.Stack(RowExtent),
             selectionMode: ItemsSelectionMode.Extended,
             selection: model.Selection,
@@ -363,11 +389,13 @@ sealed class SearchSongs : Component
 
         public override Element Render()
         {
+            var likePrev = UseRef(((string?)null, false));   // hook BEFORE the early return (stable order) — like-edge memory
             int i = _scope.Index.Value;
             int n = Math.Min(_model.Max, _model.Tracks.Count);
             if ((uint)i >= (uint)n) return new BoxEl();
             var t = _model.Tracks[i];
             var st = TrackRow.StateOf(_bridge, _lib, t);
+            bool likePop = TrackRow.LikeEdge(likePrev, t.Uri, st.Saved);   // pop only on the SAME-uri unsaved→saved edge
             Element title = new TextEl(t.Title)
             {
                 Size = 14f,
@@ -380,7 +408,8 @@ sealed class SearchSongs : Component
             };
             return TrackRow.Grid(t, i, st, Cols, Columns, RowContentH, title, showTrackArtist: true, _model.Go,
                 onPlay: () => TrackRow.Invoke(_bridge, t, () => _model.PlayTrack(t)),
-                onLike: t.Uri.Length > 0 ? () => _lib?.ToggleSaved(t.Uri) : null);
+                onLike: t.Uri.Length > 0 ? () => _lib?.ToggleSaved(t.Uri, t.Title) : null,
+                likePop: likePop);
         }
     }
 
@@ -463,8 +492,8 @@ sealed class SearchAllList : Component
     {
         bool isTrack = h.Kind == SearchHitKind.Track;
         Element? trailing =
-            h.Followable ? FollowButton(lib?.IsSaved(h.Uri) ?? false, () => lib?.ToggleSaved(h.Uri))
-            : isTrack ? SaveButton(lib?.IsSaved(h.Uri) ?? false, () => { if (h.Uri.Length > 0) lib?.ToggleSaved(h.Uri); })
+            h.Followable ? FollowButton(lib?.IsSaved(h.Uri) ?? false, () => lib?.ToggleSaved(h.Uri, h.Name))
+            : isTrack ? SaveButton(lib?.IsSaved(h.Uri) ?? false, () => { if (h.Uri.Length > 0) lib?.ToggleSaved(h.Uri, h.Name); })
             : null;
         Action play = isTrack ? () => model.PlayTrack(h.Uri) : () => model.PlayContext(h.Uri);
         Action open = isTrack ? play : OpenFor(model, h.Kind, h.Uri, h.Name);
@@ -516,13 +545,13 @@ sealed class SearchAllList : Component
     static Element TrackRowFb(Track t, LibraryBridge? lib, Model model) => MediaCard.Row(
         t.Image, t.Title, (t.HasVideo ? "Music video" : "Song") + " • " + Names(t.Artists), t.Uri, false,
         () => model.PlayKnownTrack(t), () => model.PlayKnownTrack(t), typeChip: "Song",
-        trailing: SaveButton(t.Uri.Length > 0 && (lib?.IsSaved(t.Uri) ?? false), () => { if (t.Uri.Length > 0) lib?.ToggleSaved(t.Uri); }));
+        trailing: SaveButton(t.Uri.Length > 0 && (lib?.IsSaved(t.Uri) ?? false), () => { if (t.Uri.Length > 0) lib?.ToggleSaved(t.Uri, t.Title); }));
 
     static Element ArtistRow(Artist a, LibraryBridge? lib, Model model, bool large) => MediaCard.Row(
         a.Image, a.Name, Loc.Get(Strings.Search.TypeArtist), a.Uri, true,
         () => model.Go("artist:" + a.Uri, a.Name), () => model.PlayContext(a.Uri),
         typeChip: large ? null : Loc.Get(Strings.Search.TypeArtist),
-        trailing: FollowButton(lib?.IsSaved(a.Uri) ?? false, () => lib?.ToggleSaved(a.Uri)), large: large);
+        trailing: FollowButton(lib?.IsSaved(a.Uri) ?? false, () => lib?.ToggleSaved(a.Uri, a.Name)), large: large);
 
     static Element AlbumRow(Album a, Model model, bool large) => MediaCard.Row(
         a.Cover, a.Name, Loc.Get(Strings.Search.TypeAlbum) + (a.Artists.Count > 0 ? " • " + a.Artists[0].Name : ""), a.Uri, false,

@@ -23,7 +23,7 @@ sealed class SpotifyFriendActivityService : IFriendActivityService, IDisposable
     readonly IHttpExchange _http;
     readonly Func<string> _baseUrl;
     readonly Func<string?> _currentConnectionId;
-    readonly Action<string>? _log;
+    readonly WaveeLogger _log;
     readonly Func<long> _clock;
     readonly long _watchdogMs;
 
@@ -50,7 +50,7 @@ sealed class SpotifyFriendActivityService : IFriendActivityService, IDisposable
     public SpotifyFriendActivityService(
         ITransport transport, IHttpExchange http, Func<string> baseUrl,
         IObservable<string?> connectionId, Func<string?> currentConnectionId,
-        Action<string>? log = null, Func<long>? clock = null, TimeSpan? watchdogInterval = null)
+        WaveeLogger log = default, Func<long>? clock = null, TimeSpan? watchdogInterval = null)
     {
         _http = http;
         _baseUrl = baseUrl;
@@ -134,7 +134,7 @@ sealed class SpotifyFriendActivityService : IFriendActivityService, IDisposable
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            _log?.Invoke("presence seed: " + ex.Message);
+            _log.Info("presence seed: " + ex.Message);
             if (IsStaleSeed(connId)) return;
             ApplySeedFailure(ex.Message);
         }
@@ -161,7 +161,7 @@ sealed class SpotifyFriendActivityService : IFriendActivityService, IDisposable
             var url = _baseUrl() + "/presence-view/v1/user/" + Uri.EscapeDataString(userId);
             using var resp = await _http.SendAsync(new HttpReq("GET", url, JsonHeaders(), null), token).ConfigureAwait(false);
             if (resp.Status is 404 or 403) { RemoveUser(userId); return; }   // friend no longer visible → drop the row
-            if (resp.Status != 200) { _log?.Invoke("presence user HTTP " + resp.Status); return; }
+            if (resp.Status != 200) { _log.Info("presence user HTTP " + resp.Status); return; }
 
             using var doc = await JsonDocument.ParseAsync(resp.Body, default, token).ConfigureAwait(false);
             var friend = ParseFriend(doc.RootElement);
@@ -169,7 +169,7 @@ sealed class SpotifyFriendActivityService : IFriendActivityService, IDisposable
             UpsertUser(friend);
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { _log?.Invoke("presence user fetch: " + ex.Message); }
+        catch (Exception ex) { _log.Info("presence user fetch: " + ex.Message); }
         finally
         {
             _userCts.TryRemove(new KeyValuePair<string, CancellationTokenSource>(userId, cts));   // remove only if still ours

@@ -262,8 +262,10 @@ public struct ScrollState
     // gate at record time (hover still expands it). Set by the reconciler from ScrollEl.AlwaysShowScrollbar.
     public bool  AlwaysShowBar;
     public bool  SuppressBar;             // never draw the conscious scrollbar (paged shelves nav by pager, not the bar)
-    public bool  SuppressBarLoading;      // transient: a descendant skeleton region is loading → hide the rail until it
-                                          // resolves (kept separate from SuppressBar so a re-reconcile can't clobber it)
+    public int   LoadingBarSuppressors;   // number of live descendant skeleton regions currently loading. This is
+                                          // ownership-counted: a region may unmount while pending, and sibling regions
+                                          // may resolve independently. A plain bool can therefore latch forever or clear
+                                          // too early. Recorder suppression is LoadingBarSuppressors > 0.
     public float IdleMs;                  // time since the last scroll movement / hover (drives the auto-hide)
     public bool PointerOver;              // pointer is inside this scroll viewport
     public bool PointerOverScrollbar;     // pointer is inside this viewport's scrollbar gutter

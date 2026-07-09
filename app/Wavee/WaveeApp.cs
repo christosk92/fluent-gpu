@@ -72,7 +72,7 @@ sealed class WaveeApp : Component
             {
                 try
                 {
-                    var host = await Wavee.SpotifyLive.LiveSessionHost.StartAsync(_services, m => _services.Log.Info("connect", m), cts.Token, bridge.Progress(post), uiPost: post, interactive: true, useBrowser: false).ConfigureAwait(false);
+                    var host = await Wavee.SpotifyLive.LiveSessionHost.StartAsync(_services, new WaveeLogger(_services.Log, "connect"), cts.Token, bridge.Progress(post), uiPost: post, interactive: true, useBrowser: false).ConfigureAwait(false);
                     if (host is not null) { post(() => { if (loginSession.Value == cts) loginSession.Value = null; }); cts.Cancel(); }   // success → stop the browser sibling
                 }
                 catch (OperationCanceledException) { }   // superseded by a newer attempt
@@ -94,7 +94,7 @@ sealed class WaveeApp : Component
             {
                 try
                 {
-                    var host = await Wavee.SpotifyLive.LiveSessionHost.StartAsync(_services, m => _services.Log.Info("connect", m), cts.Token, bridge.Progress(post), uiPost: post, interactive: true, useBrowser: true, quietPhases: true).ConfigureAwait(false);
+                    var host = await Wavee.SpotifyLive.LiveSessionHost.StartAsync(_services, new WaveeLogger(_services.Log, "connect"), cts.Token, bridge.Progress(post), uiPost: post, interactive: true, useBrowser: true, quietPhases: true).ConfigureAwait(false);
                     if (host is not null) { post(() => { if (loginSession.Value == cts) loginSession.Value = null; }); cts.Cancel(); }
                 }
                 catch { }   // a browser failure is silent — the device-code two-pane keeps going

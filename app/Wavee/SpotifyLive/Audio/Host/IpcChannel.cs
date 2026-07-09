@@ -24,7 +24,7 @@ public sealed class ProcessIpcChannel : IIpcChannel
         _job = job;
     }
 
-    public static async Task<IIpcChannel> SpawnAsync(string launchToken, Action<string>? log, CancellationToken ct)
+    public static async Task<IIpcChannel> SpawnAsync(string launchToken, WaveeLogger log, CancellationToken ct)
     {
         string pipeName = "WaveeAudio_" + Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture) +
             "_" + Guid.NewGuid().ToString("N");
@@ -53,7 +53,7 @@ public sealed class ProcessIpcChannel : IIpcChannel
         {
             job = AudioHostJobObject.TryAssign(process, log);
             var ipc = await IpcPipeTransport.ConnectClientAsync(pipeName, ct).ConfigureAwait(false);
-            log?.Invoke("Audio host self-relaunch started pid=" + process.Id + " exe=" + exePath);
+            log.Info("Audio host self-relaunch started pid=" + process.Id + " exe=" + exePath);
             return new ProcessIpcChannel(process, ipc, job);
         }
         catch
@@ -89,14 +89,14 @@ sealed class AudioHostJobObject : IDisposable
 
     AudioHostJobObject(IntPtr handle) => _handle = handle;
 
-    public static AudioHostJobObject? TryAssign(Process process, Action<string>? log)
+    public static AudioHostJobObject? TryAssign(Process process, WaveeLogger log)
     {
         if (!OperatingSystem.IsWindows()) return null;
 
         IntPtr job = CreateJobObjectW(IntPtr.Zero, null);
         if (job == IntPtr.Zero)
         {
-            log?.Invoke("audio host job object create failed win32=" + Marshal.GetLastWin32Error());
+            log.Info("audio host job object create failed win32=" + Marshal.GetLastWin32Error());
             return null;
         }
 
@@ -105,19 +105,19 @@ sealed class AudioHostJobObject : IDisposable
         int length = Marshal.SizeOf<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>();
         if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, ref info, (uint)length))
         {
-            log?.Invoke("audio host job object configure failed win32=" + Marshal.GetLastWin32Error());
+            log.Info("audio host job object configure failed win32=" + Marshal.GetLastWin32Error());
             CloseHandle(job);
             return null;
         }
 
         if (!AssignProcessToJobObject(job, process.Handle))
         {
-            log?.Invoke("audio host job object assign failed win32=" + Marshal.GetLastWin32Error());
+            log.Info("audio host job object assign failed win32=" + Marshal.GetLastWin32Error());
             CloseHandle(job);
             return null;
         }
 
-        log?.Invoke("audio host job object assigned pid=" + process.Id);
+        log.Info("audio host job object assigned pid=" + process.Id);
         return new AudioHostJobObject(job);
     }
 

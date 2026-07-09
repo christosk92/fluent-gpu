@@ -22,4 +22,26 @@ public static class Motion
 
     /// <summary>Host-set from SPI_GETCLIENTAREAANIMATION; motion helpers no-op the entrance when true.</summary>
     public static bool ReducedMotion;
+
+    private static int _layoutSuppressionSources;
+
+    /// <summary>True while an interactive resize owns geometry. Layout projections snap so bounds track the pointer,
+    /// without conflating that transient interaction with the user's reduced-motion accessibility preference.</summary>
+    public static bool LayoutTransitionsSuppressed => _layoutSuppressionSources != 0;
+
+    /// <summary>Set or clear one independently-owned layout-transition suppression source.</summary>
+    public static void SetLayoutTransitionsSuppressed(MotionSuppressionSource source, bool suppressed)
+    {
+        int bit = (int)source;
+        if (suppressed) System.Threading.Interlocked.Or(ref _layoutSuppressionSources, bit);
+        else System.Threading.Interlocked.And(ref _layoutSuppressionSources, ~bit);
+    }
+}
+
+[System.Flags]
+public enum MotionSuppressionSource : byte
+{
+    None = 0,
+    WindowResize = 1,
+    AppResize = 2,
 }

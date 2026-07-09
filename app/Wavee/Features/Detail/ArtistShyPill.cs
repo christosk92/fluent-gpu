@@ -86,7 +86,7 @@ sealed class ArtistShyPillSurface : Component
                     OnClick = () => _ = _svc.Player.PlayAsync(_uri, 0),
                     Children = [ Icon(Icons.Play, 14f, WaveePalette.OnAccent(accent)), new TextEl(Loc.Get(Strings.Artist.Play)) { Size = 13f, Weight = 700, Color = WaveePalette.OnAccent(accent) } ],
                 },
-                Embed.Comp(() => new FollowButton(_uri)),
+                Embed.Comp(() => new FollowButton(_uri, a.Name)),
             ],
         };
     }

@@ -33,6 +33,13 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     public int SpanBytesCopied { get; init; }
     public int NodesCulled { get; init; }
     public SpanReuseDisabledReason SpanReuseDisabledReasons { get; init; }
+    // Per-frame layout-cost counters (FlexLayout diag; valid only when FG_LAYOUT_DIAG=1, else 0). MeasureCount/ArrangeCount
+    // are total node visits across the frame's full + scoped + phase-7 reflow layout passes; TextShapeMisses is DirectWrite
+    // re-shapes (measure-cache misses). A projected (Reveal/FLIP) size animation must keep these ~0 on every anim tick —
+    // only the commit frame is large. The reflow-per-tick defect (backdrop-effects-animation §5.8) is exactly a nonzero here.
+    public int MeasureCount { get; init; }
+    public int ArrangeCount { get; init; }
+    public int TextShapeMisses { get; init; }
     public double Fps { get; init; }
     public double FrameMs { get; init; }
     public int ComponentsRendered { get; init; }
@@ -165,6 +172,7 @@ public sealed class AppHost : IDisposable
     private readonly CaretBlinker _caretBlinker;
     private readonly ImageCache _images;
     private readonly Dictionary<NodeHandle, ProjCapture> _projectBefore = new();   // captured presented rects of BoundsAnimated nodes (FLIP "First")
+    private readonly List<NodeHandle> _projectionSuppressionRoots = new();          // changed projected containers that own descendant motion this commit
     private readonly List<RenderContext> _pendingLayoutEffectContexts = new();
     private readonly List<RenderContext> _pendingPassiveEffectContexts = new();
 
@@ -1334,6 +1342,7 @@ public sealed class AppHost : IDisposable
             }
 
             long frameStart = Stopwatch.GetTimestamp();
+            Motion.SetLayoutTransitionsSuppressed(MotionSuppressionSource.WindowResize, _window.InModalLoop);
             // FG_RESIZE_DIAG: per-tick segment timing of the modal-loop keep-alive paint. Captured only when both the flag
             // is on AND this is a keep-alive tick — zero work / zero alloc otherwise (the normal hot path is untouched).
             bool diagTick = keepAlive && s_resizeDiag;
@@ -1390,6 +1399,19 @@ public sealed class AppHost : IDisposable
                 CaptureProjections();
                 capturedProjections = _projectBefore.Count > 0;
             }
+            else if (resized && _everLaidOut && !_scene.Root.IsNull)
+            {
+                // The window actually changed size this frame. Any in-flight FLIP/structural track still holds a
+                // PRE-resize translate + presented size: the (re)layout below re-lays each cell to a new slot, but the
+                // stale LocalTransform would draw it at newSlot+staleOffset (the overlap) and a SizeMode.Relayout track
+                // would keep forcing li.Width/Height to a stale interpolated size every tick (the detached labels + the
+                // per-cell subtree relayout that collapses FPS). Cancel them and snap each FLIP node onto the geometry
+                // the (re)layout is about to solve — bounds land clean. This is the WindowResize suppression widened past
+                // the modal loop: maximize / restore / snap / programmatic resizes arrive as a plain WM_SIZE with no
+                // InModalLoop, so gating the cancel on `resized` (not just _window.InModalLoop) covers them too. Capture
+                // is already skipped on a resize (above), so no NEW projection starts this frame either.
+                _anim.CancelStructuralAll(_scene.BoundsAnimatedNodes);
+            }
             if (s_allocDiag) { db = Probe(SegFlip, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
             long before = GC.GetAllocatedBytesForCurrentThread();
@@ -1432,6 +1454,7 @@ public sealed class AppHost : IDisposable
 
             bool layoutNeeded = _needFullLayout || reconciled || _scene.AnyLayoutDirty;
             string layoutPath = "none";
+            _layout.ResetFrameDiagCounters();   // frame start for the measure/arrange/text-miss counters read into FrameStats
             if (layoutNeeded && !_scene.Root.IsNull)
             {
                 if (_needFullLayout || !_everLaidOut)
@@ -1529,6 +1552,7 @@ public sealed class AppHost : IDisposable
             }
             float dtMs = _frameTime.NextDeltaMs();
             _anim.Tick(dtMs);                                  // 7 animation (transform/opacity/presented-size — never relayout)
+            _reconciler.FinalizeKeepAliveTransitions();         // 7 park retained outgoing pages after their exit settles
             _inputHooks.RunAfterAnimations();                  // 7.1 tree lifecycle finalizers (overlays) before record/present
             RunIncrementalLayout();                            // 7 scoped subtree relayout for SizeMode.Relayout
             RunReflowLayout(layoutSize);                       // 7 boundary-scoped re-solve for SizeMode.Reflow (smooth reflow)
@@ -1722,6 +1746,9 @@ public sealed class AppHost : IDisposable
                 SpansReRecorded = recordStats.SpansReRecorded,
                 SpanBytesCopied = recordStats.SpanBytesCopied,
                 SpanReuseDisabledReasons = recordStats.SpanReuseDisabledReasons,
+                MeasureCount = _layout.DiagMeasure,
+                ArrangeCount = _layout.DiagArrange,
+                TextShapeMisses = _layout.DiagTextMiss,
                 Fps = _fps,
                 FrameMs = _frameMs,
                 ComponentsRendered = componentsRendered,
@@ -1966,27 +1993,77 @@ public sealed class AppHost : IDisposable
         // which is exactly the "knob lags its own track during a reveal" desync. In-flight tracks keep running.
         const float PosEps = 0.05f;
         const float SizeEps = 0.5f;   // matches RevealSize's no-change deadband (AnimEngine)
+        // Two DISTINCT axes, not one "reduced" flag:
+        //  • Suppression (an interactive/edge/maximize resize owns geometry) does NOT merely shorten the tween — it must
+        //    NOT START a projection AND must cancel any in-flight structural track, snapping the node onto the geometry
+        //    just laid out so bounds track the pointer with no stale translate/overlap.
+        //  • ReducedMotion is a separate ACCESSIBILITY preference (gate-covered): it keeps its 1ms-tween snap and still
+        //    lets opacity/etc. animate — behaviour left exactly as before.
+        bool suppressed = Motion.LayoutTransitionsSuppressed;
         bool reduced = Motion.ReducedMotion;
+
+        // Discover changed containers that explicitly own the visual projection for their subtree. A shell/card width
+        // commit commonly changes dozens of descendant card/shelf bounds; allowing every descendant's authored
+        // CardRefit/CardResize recipe to start here recreates per-frame Relayout/Reflow under the projected root. Keep
+        // the semantic final layout, but let the container be the sole geometry animator for this commit.
+        _projectionSuppressionRoots.Clear();
+        if (!suppressed)
+        {
+            foreach (var kv in _projectBefore)
+            {
+                NodeHandle n = kv.Key;
+                if (!_scene.IsLive(n) || (_scene.Flags(n) & NodeFlags.BoundsAnimated) == 0) continue;
+                if (!_anim.TryGetTransition(n, out var spec) || !spec.SuppressDescendantTransitions) continue;
+                if (TryProjectionRects(n, kv.Value, PosEps, SizeEps, out _, out _))
+                    _projectionSuppressionRoots.Add(n);
+            }
+        }
+
         foreach (var kv in _projectBefore)
         {
             var n = kv.Key;
             if (n == _dispatcher.Drag.ActiveNode) continue;   // E5: the pointer owns the dragged node's transform
             if (!_scene.IsLive(n) || (_scene.Flags(n) & NodeFlags.BoundsAnimated) == 0) continue;
-            // The captured "frame" is the parent OR (for a relativeTarget) the shared-layout anchor; re-resolve it now.
-            NodeHandle anchor = _reconciler.ResolveRelativeTarget(n);
-            NodeHandle frameNow = anchor.IsNull ? _scene.Parent(n) : anchor;
-            if (frameNow != kv.Value.Parent) continue;   // reparented / anchor changed: rel frames incomparable — snap
-            RectF from = kv.Value.Rel, to = anchor.IsNull ? RelRect(n) : RelRectIn(n, anchor);
-            if (MathF.Abs(from.X - to.X) < PosEps && MathF.Abs(from.Y - to.Y) < PosEps
-                && MathF.Abs(from.W - to.W) < SizeEps && MathF.Abs(from.H - to.H) < SizeEps)
-                continue;                                     // no LOCAL change ⇒ ancestor-driven move only
+            if (suppressed) { _anim.SnapStructuralToLayout(n); continue; }   // skip-start + cancel-in-flight → snap to laid-out bounds
+            if (IsBelowProjectionSuppressionRoot(n))
+            {
+                _anim.SnapStructuralToLayout(n);
+                continue;
+            }
+            if (!TryProjectionRects(n, kv.Value, PosEps, SizeEps, out RectF from, out RectF to)) continue;
             if (!_anim.TryGetTransition(n, out var spec)) continue;
             if (reduced) spec = spec with { Dynamics = TransitionDynamics.Tween(1f, Easing.Linear) };
             // AnimateBounds consumes only deltas, so parent-relative rects feed it directly; for a purely local
             // move this is bit-identical to the old absolute pair (the ancestor sum cancels).
             _anim.AnimateBounds(n, from, to, spec);
         }
+        _projectionSuppressionRoots.Clear();
         _projectBefore.Clear();
+    }
+
+    private bool TryProjectionRects(NodeHandle n, in ProjCapture captured, float posEps, float sizeEps,
+                                    out RectF from, out RectF to)
+    {
+        from = captured.Rel;
+        NodeHandle anchor = _reconciler.ResolveRelativeTarget(n);
+        NodeHandle frameNow = anchor.IsNull ? _scene.Parent(n) : anchor;
+        if (frameNow != captured.Parent)
+        {
+            to = default;
+            return false;   // reparented / anchor changed: the relative frames are incomparable
+        }
+        to = anchor.IsNull ? RelRect(n) : RelRectIn(n, anchor);
+        return MathF.Abs(from.X - to.X) >= posEps || MathF.Abs(from.Y - to.Y) >= posEps
+            || MathF.Abs(from.W - to.W) >= sizeEps || MathF.Abs(from.H - to.H) >= sizeEps;
+    }
+
+    private bool IsBelowProjectionSuppressionRoot(NodeHandle node)
+    {
+        if (_projectionSuppressionRoots.Count == 0) return false;
+        for (NodeHandle p = _scene.Parent(node); !p.IsNull && _scene.IsLive(p); p = _scene.Parent(p))
+            for (int i = 0; i < _projectionSuppressionRoots.Count; i++)
+                if (p == _projectionSuppressionRoots[i]) return true;
+        return false;
     }
 
     private void RunIncrementalLayout()

@@ -15,11 +15,11 @@ public sealed class InProcessAudioHost : IAudioHost, IAudioDspControl
 
     Func<IPlayPlayCdnDecryptorFactory?> _decryptors;
 
-    public InProcessAudioHost(Func<IPlayPlayCdnDecryptorFactory?> decryptors, Action<string>? log = null,
+    public InProcessAudioHost(Func<IPlayPlayCdnDecryptorFactory?> decryptors, WaveeLogger log = default,
         AudioBodyDiskCache? bodyDisk = null)
     {
         _decryptors = decryptors;
-        _engine = new AudioPlayEngine(log ?? (_ => { }), (_, seed) => _decryptors()?.CreateCdnDecryptor(seed), bodyDisk);
+        _engine = new AudioPlayEngine(log, (_, seed) => _decryptors()?.CreateCdnDecryptor(seed), bodyDisk);
         _engine.State += OnState;
         _engine.TrackFinished += OnTrackFinished;
     }

@@ -80,8 +80,6 @@ sealed class LibraryPage : Component
         var bridge = UseContext(PlaybackBridge.Slot);
         var ui = UseContext(ShellUi.Slot);   // rail state (Task B4): the 3-column artist layout tightens its mid pane when the rail is open
         if (svc is null || store is null) return new BoxEl { Grow = 1f };
-        this.UseSoftReveal(dy: 0f, blur: 0f);
-
         var shown = Filtered(Project(store));
         // Warm the collection cover art at the kind-matched decode size the moment the list lands, so a first scroll
         // reveals resident textures instead of decoding+uploading on the UI thread mid-scroll (the first-pass jank).
@@ -417,7 +415,7 @@ sealed class LibraryDetailPane : Component
         return new BoxEl
         {
             Direction = 1, Grow = 1f, ClipToBounds = true,
-            Children = [Hero(m), Actions(uri, Play, Shuffle), body],
+            Children = [Hero(m), Actions(uri, m.Title, Play, Shuffle), body],
         };
     }
 
@@ -455,7 +453,7 @@ sealed class LibraryDetailPane : Component
             PlayNext, AddToQueue, AddToPlaylist,
             // The embedded TrackList has no trailing shelves, so these are never invoked here; route through DetailNav
             // (no preview/morph store) so behaviour stays a plain nav if that ever changes.
-            a => DetailNav.OpenAlbum(null, null, go, a), p => DetailNav.OpenPlaylist(null, null, go, p));
+            a => DetailNav.OpenAlbum(null, go, a), p => DetailNav.OpenPlaylist(null, go, p));
     }
 
     Element Hero(DetailModel m) => new BoxEl
@@ -477,7 +475,7 @@ sealed class LibraryDetailPane : Component
         ],
     };
 
-    Element Actions(string uri, Action play, Action shuffle) => new BoxEl
+    Element Actions(string uri, string? name, Action play, Action shuffle) => new BoxEl
     {
         Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
         Padding = new Edges4(WaveeSpace.XL, 0f, WaveeSpace.XL, WaveeSpace.M),
@@ -487,7 +485,7 @@ sealed class LibraryDetailPane : Component
                 Fill = Tok.AccentDefault, HoverScale = 1.04f, PressScale = 0.97f, Shadow = Elevation.Card, OnClick = play,
                 Children = [Icon(Icons.Play, 14f, Tok.TextOnAccentPrimary), new TextEl(Loc.Get(Strings.Detail.Play)) { Size = 14f, Weight = 700, Color = Tok.TextOnAccentPrimary }] },
             Fab(Icons.Shuffle, shuffle),
-            _show ? Embed.Comp(() => new FollowButton(uri)) : Embed.Comp(() => new SaveButton(uri)),
+            _show ? Embed.Comp(() => new FollowButton(uri, name)) : Embed.Comp(() => new SaveButton(uri, name: name)),
         ],
     };
 

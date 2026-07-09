@@ -62,7 +62,7 @@ sealed partial class ArtistPage : Component
                         Children =
                         [
                             PlayPill(play), Fab(Icons.Shuffle, shuffle),
-                            Embed.Comp(() => new FollowButton(uri)) with { SkeletonProxy = FollowButton.SkeletonShape },
+                            Embed.Comp(() => new FollowButton(uri, a.Name)) with { SkeletonProxy = FollowButton.SkeletonShape },
                             ArtistRadioPill(radio)
                         ],
                     },
@@ -95,7 +95,9 @@ sealed partial class ArtistPage : Component
             // decode the photo reveals via HeroArt's WaveeMusic-matched pop-in (320ms FluentDecelerate fade + 1.0→1.05 zoom).
             // The media also dissolves on the same scroll interval as the copy; once the compact pill owns the header,
             // the large photo must be visually gone, not merely behind the content.
-            ColorF heroWash = ColorF.Lerp(ColorF.FromRgba(0x14, 0x14, 0x16), _accent, 0.30f);
+            ColorF heroWash = Tok.Theme == ThemeKind.Light
+                ? ColorF.Lerp(WaveeColors.FileArea, _accent, 0.12f)
+                : ColorF.Lerp(ColorF.FromRgba(0x14, 0x14, 0x16), _accent, 0.30f);
             Element heroArt = bg?.Url is { Length: > 0 } hu
                 ? Embed.Comp(() => new HeroArt(hu, _heroWidth, bg.BlurHash, heroWash)) with { Key = "heroart:" + hu }
                 : new BoxEl { Width = w, Height = height, Fill = heroWash };

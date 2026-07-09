@@ -20,7 +20,7 @@ sealed class SpotifyNotificationsService : ISpotifyNotificationsService, IDispos
 
     readonly IHttpExchange _http;
     readonly Func<string> _baseUrl;
-    readonly Action<string>? _log;
+    readonly WaveeLogger _log;
     readonly Func<long> _clock;
 
     readonly SimpleEvent<int> _changed = new();
@@ -33,7 +33,7 @@ sealed class SpotifyNotificationsService : ISpotifyNotificationsService, IDispos
     bool _disposed;
     int _rev;
 
-    public SpotifyNotificationsService(IHttpExchange http, Func<string> baseUrl, Action<string>? log = null, Func<long>? clock = null)
+    public SpotifyNotificationsService(IHttpExchange http, Func<string> baseUrl, WaveeLogger log = default, Func<long>? clock = null)
     {
         _http = http;
         _baseUrl = baseUrl;
@@ -72,7 +72,7 @@ sealed class SpotifyNotificationsService : ISpotifyNotificationsService, IDispos
 
         try
         {
-            var url = _baseUrl() + "/gander/v2/GetNotifications?locale=en&limit=20";
+            var url = _baseUrl() + "/gander/v2/GetNotifications?locale=&limit=20";   // empty locale = the captured official-client shape
             using var resp = await _http.SendAsync(new HttpReq("GET", url, JsonHeaders(), null), token).ConfigureAwait(false);
             if (token.IsCancellationRequested) return;
             if (resp.Status != 200) { ApplyFailure("gander HTTP " + resp.Status); return; }
@@ -85,7 +85,6 @@ sealed class SpotifyNotificationsService : ISpotifyNotificationsService, IDispos
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            _log?.Invoke("gander notifications: " + ex.Message);
             ApplyFailure(ex.Message);
         }
         finally
@@ -106,8 +105,9 @@ sealed class SpotifyNotificationsService : ISpotifyNotificationsService, IDispos
         Fire();
     }
 
-    void ApplyFailure(string _)
+    void ApplyFailure(string reason)
     {
+        _log.Info("gander notifications: " + reason);   // HTTP-status failures must be visible, not just exceptions
         bool changed = false;
         lock (_gate)
         {
@@ -145,11 +145,17 @@ sealed class SpotifyNotificationsService : ISpotifyNotificationsService, IDispos
         string? title = Str(el, "title");
         if (id is null || title is null) return null;   // skip malformed
 
+        // createdTimestamp is an ISO-8601 string on the wire ("2026-07-09T16:02:24.011Z"); tolerate epoch-ms too.
         long ts = 0;
         if (el.TryGetProperty("createdTimestamp", out var t))
         {
             if (t.ValueKind == JsonValueKind.Number && t.TryGetInt64(out var ms)) ts = ms;
-            else if (t.ValueKind == JsonValueKind.String && long.TryParse(t.GetString(), out var ms2)) ts = ms2;
+            else if (t.ValueKind == JsonValueKind.String && t.GetString() is { Length: > 0 } raw)
+            {
+                if (DateTimeOffset.TryParse(raw, System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.AdjustToUniversal, out var dto)) ts = dto.ToUnixTimeMilliseconds();
+                else if (long.TryParse(raw, out var ms2)) ts = ms2;
+            }
         }
 
         string? actionUri = null;

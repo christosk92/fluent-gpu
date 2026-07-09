@@ -13,7 +13,7 @@ internal sealed class AudioHostServer : IDisposable
 {
     readonly IpcPipeTransport _ipc;
     readonly string? _launchToken;
-    readonly Action<string> _log;
+    readonly WaveeLogger _log;
     readonly AudioPlayEngine _engine;
     readonly SemaphoreSlim _deriveGate = new(1, 1);
     readonly object _runtimeGate = new();
@@ -30,12 +30,12 @@ internal sealed class AudioHostServer : IDisposable
     PlayPlayRuntime? _runtime;
 #endif
 
-    public AudioHostServer(IpcPipeTransport ipc, string? launchToken, Action<string> log)
+    public AudioHostServer(IpcPipeTransport ipc, string? launchToken, WaveeLogger log)
     {
         _ipc = ipc;
         _launchToken = launchToken;
         _log = log;
-        _engine = new AudioPlayEngine(LogAndNotify, (_, seed) => CreateCdnDecryptor(seed),
+        _engine = new AudioPlayEngine(_log, (_, seed) => CreateCdnDecryptor(seed),
             AudioBodyDiskCache.FromSettings(AppDataSettings.ForUnpackaged("Wavee", "Wavee")));
         _engine.State += OnEngineState;
         _engine.TrackFinished += OnTrackFinished;
@@ -117,7 +117,7 @@ internal sealed class AudioHostServer : IDisposable
             }
             catch (Exception ex)
             {
-                _log("audio host command failed type=" + type + " detail=" + ex.Message);
+                _log.Info("audio host command failed type=" + type + " detail=" + ex.Message);
                 if (id != 0)
                     await _ipc.SendAsync(IpcMessageTypes.CommandResult, id, new CommandResultMessage
                     {
@@ -391,9 +391,9 @@ internal sealed class AudioHostServer : IDisposable
             _runtime = null;
             _asset = asset;
             if (!PlayPlayRuntime.TryCreate(asset, out _runtime, _log) || _runtime is null)
-                _log("audio host failed to bind PlayPlay runtime pack=" + asset.PackId);
+                _log.Info("audio host failed to bind PlayPlay runtime pack=" + asset.PackId);
             else
-                _log("audio host bound PlayPlay runtime pack=" + asset.PackId + " arch=" + asset.Config.Arch);
+                _log.Info("audio host bound PlayPlay runtime pack=" + asset.PackId + " arch=" + asset.Config.Arch);
         }
     }
 
@@ -455,7 +455,7 @@ internal sealed class AudioHostServer : IDisposable
 
     void LogAndNotify(string message)
     {
-        _log(message);
+        _log.Info(message);
         try
         {
             var task = Notify(IpcMessageTypes.Diagnostic, new DiagnosticMessage

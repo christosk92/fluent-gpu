@@ -40,12 +40,11 @@ sealed class DetailShell : Component
 {
     // The model is a Loadable: the HEADER (cover/title/artist) renders immediately from its current value (the partial
     // preview the Home card had, or the loaded model on a deep link) and updates in place when the full model arrives;
-    // the TRACK LIST streams in via the engine's Skel.Region inside TrackList. MorphKey is applied to the header each
-    // render so the cover stays a connected-animation participant.
+    // the TRACK LIST streams in via the engine's Skel.Region inside TrackList. Connected cover animation is intentionally
+    // disabled here so it cannot compete with the route-level page transition.
     readonly Signal<Route> _route;        // read reactively → ONE shell serves successive detail routes (kind/cfg/morphKey re-derived)
     readonly Loadable<DetailModel> _model;
-    readonly Image? _fallbackCover;       // the cover the Home card flew in: kept if the loaded model resolves a null
-                                          // cover, so a connected-animation fly never lands on a bare placeholder
+    readonly Image? _fallbackCover;       // preview cover retained if the loaded model resolves a null cover
     string? _ctxUri;                      // the loaded context uri — the per-context sort key; refreshed each render
     DetailConfig _cfg = DetailConfig.Album;   // derived from route kind + loaded ReleaseKind each render (reused slot re-derives)
     readonly object _tintOwner = new();   // identity for race-free last-writer-wins on ShellTint (see ShellTintState)
@@ -58,9 +57,16 @@ sealed class DetailShell : Component
     readonly Signal<TrackFilterFlags> _filterFlags = new(TrackFilterFlags.None);   // quick-filter toggles (transient)
     readonly Signal<int> _density = new(1);                      // row density 0..3 (app-wide, persisted)
     readonly Signal<bool> _multiSelect = new(false);             // ephemeral multi-select mode (clears on navigation)
+    readonly IAppSettings? _settings;
+    readonly Signal<float> _albumRailW;
+    readonly Signal<float> _playlistRailW;
 
-    public DetailShell(Signal<Route> route, Loadable<DetailModel> model, Image? fallbackCover = null)
-    { _route = route; _model = model; _fallbackCover = fallbackCover; }
+    public DetailShell(Signal<Route> route, Loadable<DetailModel> model, Image? fallbackCover = null, IAppSettings? settings = null)
+    {
+        _route = route; _model = model; _fallbackCover = fallbackCover; _settings = settings;
+        _albumRailW = new(settings?.Get(WaveeSettings.DetailAlbumRailWidth) ?? WaveeSettings.DetailAlbumRailWidth.Default);
+        _playlistRailW = new(settings?.Get(WaveeSettings.DetailPlaylistRailWidth) ?? WaveeSettings.DetailPlaylistRailWidth.Default);
+    }
 
     // Per-context persisted-sort keys (each album/playlist remembers its own sort). Keyed by the context uri so two
     // different lists never share a sort; falls back to the kind when a context has no uri. The column default is a −1
@@ -85,30 +91,21 @@ sealed class DetailShell : Component
         var go = UseContext(HistoryStore.NavCtx);
         var shellTint = UseContext(ShellTint.Slot);
         var navPreview = UseContext(NavPreviewStore.Slot);   // in-app card nav stashes a preview → destination reconciles in place
-        var morph = UseContext(SharedTransition.Begin);      // connected-animation cover fly, same as a Home card
         var shellUi = UseContext(ShellUi.Slot);              // rail layout-defer lock (Task C): gate mode churn during a rail reflow
         bool railLocked = shellUi?.RailLayoutLocked.Value ?? false;   // subscribe → flush the settled mode when the lock clears
 
         var route = _route.Value;                      // subscribe → re-derive kind/cfg/morphKey on a detail-route swap (reused slot)
         var (kind, id) = DetailPage.ParseDetail(route);
-        string? morphKey = MorphKeys.For(kind, id);
         var raw = _model.Value.Value;                  // subscribe → re-render preview→full (header updates in place)
         _cfg = DetailPage.ResolveConfig(kind, raw);    // release-kind-dependent (album→single); a reused slot re-derives it
         _ctxUri = raw.ContextUri;                      // the per-context sort key, refreshed as the model loads
         _defaultSort = kind == DetailKind.Liked ? new TrackSort(SortColumn.DateAdded, Descending: true) : TrackSort.Default;
         // Keep the flown-in cover if the loaded model resolved a null one — a fly must land on real art, never a bare
         // placeholder (defensive: the fake catalog is already consistent for a uri; a real backend may not be).
-        var m = raw with { MorphKey = morphKey, Cover = raw.Cover ?? _fallbackCover };
+        var m = raw with { MorphKey = null, Cover = raw.Cover ?? _fallbackCover };
 
-        // Page entrance: a soft focus-in (opacity only, NO translate/scale — a geometric transform would shift the cover's
-        // laid-out rect that the connected-animation fly targets). blur:0 is deliberate and load-bearing for smoothness: a
-        // full-page BlurSigma reveal is a render-to-texture + separable-blur pass over the WHOLE page every frame, which on
-        // a FRESH mount (covers still decoding/uploading, skeleton cross-dissolving) pushes the GPU render past one 120Hz
-        // vblank → the page entered at ~60fps for ~250ms. A cached KeepAlive revisit re-activates without re-mounting so it
-        // never paid this — which is exactly why fresh nav dropped to 60 while revisits stayed 120 (measured: 13ms vs 7ms
-        // GPU submit). The opacity fade alone gives the same "resolves in" read at compositor cost, and the cover still
-        // flies in on top — fresh nav now holds 120fps. Do not re-add a full-page blur here.
-        this.UseSoftReveal(dy: 0f, blur: 0f);
+        // ContentHost exclusively owns route-level entrance motion. Keep this shell free of a second full-page reveal so
+        // cold mounts and cached KeepAlive revisits use the same duration and easing.
 
         // "Is THIS context the one currently playing?" — a cheap O(1) test against a mount-time id set, so the wash /
         // tint use the live-track palette only when the playing track belongs to this page (else neutral / no tint).
@@ -139,7 +136,9 @@ sealed class DetailShell : Component
             : WaveePalette.BackgroundDark(art ?? WaveePalette.Neutral);
         // The Mica scrim colour: the art's tinted-dark tone at a low alpha so Mica keeps reading as Mica (≈0.14). Null
         // when there is no real palette ⇒ plain Mica.
-        ColorF? micaTint = (art is null || !_cfg.TwoColumn) ? null : (WaveePalette.TintedDark(art) with { A = 0.14f });
+        ColorF? micaTint = (art is null || !_cfg.TwoColumn) ? null : Tok.Theme == ThemeKind.Light
+            ? WaveePalette.Lift(WaveePalette.ToColor(art.Light)) with { A = 0.05f }
+            : WaveePalette.TintedDark(art) with { A = 0.14f };
 
         // ── page-scoped Mica tint via the activation lifecycle (reconciler-hooks §0bis) ──
         // SET on mount + colour change (UseEffect) and on REACTIVATION (UseActivation.onActivated — a cached page does
@@ -191,7 +190,7 @@ sealed class DetailShell : Component
         }
         // ── persisted per-context sort: load once at mount, save on every change (must be assigned BEFORE handlers
         // captures SetSort, which closes over `settings`) ──
-        var settings = svc?.Settings;
+        var settings = _settings ?? svc?.Settings;
         UseEffect(() =>
         {
             // Re-keyed per context: on a detail-route swap (reused slot) load THIS page's persisted sort + density and
@@ -217,8 +216,8 @@ sealed class DetailShell : Component
         var handlers = new DetailHandlers(Play, () => { var ov = playAllOverride[0]; if (ov is not null) ov(); else Play(0); },
             Shuffle, PlayContext, go, accent, _sort, SetSort,
             _query, _filterFlags, f => _filterFlags.Value = f, _density, SetDensity, PlayNext, AddToQueue, AddToPlaylist,
-            a => DetailNav.OpenAlbum(navPreview, morph, go, a),
-            p => DetailNav.OpenPlaylist(navPreview, morph, go, p),
+            a => DetailNav.OpenAlbum(navPreview, go, a),
+            p => DetailNav.OpenPlaylist(navPreview, go, p),
             playAllOverride,
             MultiSelect: _multiSelect, SetMultiSelect: v => _multiSelect.Value = v);
 
@@ -282,7 +281,7 @@ sealed class DetailShell : Component
             ? new BoxEl { Key = "right:eps", Grow = 1f, Shrink = 1f, MinWidth = 300f, Direction = 1, Children = [Embed.Comp(() => new EpisodeList(_route, _model, bridge, handlers, showToolbar))] }
             : new BoxEl
             {
-                Key = "right:tracks", Grow = 1f, Shrink = 1f, MinWidth = 300f, Direction = 1,
+                Key = "right:tracks", Grow = 1f, Shrink = 1f, MinWidth = 300f, MinHeight = 0f, Direction = 1,
                 Children =
                 [
                     Embed.Comp(() => new TrackList(_route, _model, bridge, handlers, showToolbar,
@@ -344,7 +343,9 @@ sealed class DetailShell : Component
         // scales CONTINUOUSLY with the window height, and the description's line cap drops on a short window. Keyed on the
         // WINDOW height (known at mount + identical across navigation), NOT a post-layout measurement — so the title never
         // jumps/flickers on a nav and resizes smoothly. The rail's scrollbar stays the last resort.
-        float railW = RailW(mode, _cfg);
+        bool resizableRail = mode == 0 && (kind == DetailKind.Album || kind == DetailKind.Playlist);
+        Signal<float> railWidthSignal = kind == DetailKind.Playlist ? _playlistRailW : _albumRailW;
+        float railW = mode == 0 && resizableRail ? railWidthSignal.Value : RailW(mode, _cfg);
         float winH = viewportSig.Value.Height;   // subscribe (only here) → re-fit smoothly on resize (stable per page → no nav jump)
         float titleSize = Math.Clamp(24f + (winH - 620f) * 0.05f, 24f, 38f);   // 620px window → 24px … 900px → 38px
         int descLines = winH < 760f ? 3 : 6;
@@ -358,12 +359,18 @@ sealed class DetailShell : Component
             // intrinsic width — overflowing the narrowed content card, whose ClipToBounds then hard-cut the right columns
             // mid-glyph ("Plays"→"Pl") instead of the table reflowing to a tighter tier. `right` already shrinks (below);
             // the fix is to let its PARENT shrink so the reduced width actually reaches it.
-            Direction = 0, Grow = 1f, Shrink = 1f, MinWidth = 0f, Basis = 0f, MaxWidth = 1600f,
-            Children = [DetailRail.Build(m, _cfg, handlers, railW, titleSize, descLines, _model), right],
+            Direction = 0, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Basis = 0f, MaxWidth = 1600f,
+            Children = resizableRail
+                ? [
+                    DetailRail.Build(m, _cfg, handlers, railW, titleSize, descLines, _model),
+                    DetailRailGrip(railWidthSignal, kind, settings),
+                    right,
+                  ]
+                : [DetailRail.Build(m, _cfg, handlers, railW, titleSize, descLines, _model), right],
         };
         return new BoxEl
         {
-            Direction = 1, Grow = 1f,
+            Direction = 1, Grow = 1f, Shrink = 1f, MinHeight = 0f,
             Gradient = Surfaces.HeroWash(washColor), OnBoundsChanged = Measure,
             ClipToBounds = true,
             Children =
@@ -371,11 +378,31 @@ sealed class DetailShell : Component
                 new BoxEl
                 {
                     Key = "detail:two-column",
-                    Direction = 0, Grow = 1f, Justify = FlexJustify.Center,
+                    Direction = 0, Grow = 1f, Shrink = 1f, MinHeight = 0f, Justify = FlexJustify.Center,
                     ClipToBounds = true,
                     Children = [row],
                 },
             ],
         };
     }
+
+    // Same persisted splitter implementation as LibraryPage's artist columns. It owns a 7-DIP hit strip around a
+    // persistent 1px seam; width writes are direct during drag and committed to settings only on release.
+    static Element DetailRailGrip(Signal<float> width, DetailKind kind, IAppSettings? settings) => new BoxEl
+    {
+        Width = 7f, Shrink = 0f, Direction = 1, AlignItems = FlexAlign.Stretch,
+        Children =
+        [
+            Embed.Comp(() => new ColumnGrip(width, 220f, 480f, () =>
+                {
+                    var key = kind == DetailKind.Playlist
+                        ? WaveeSettings.DetailPlaylistRailWidth
+                        : WaveeSettings.DetailAlbumRailWidth;
+                    settings?.Set(key, width.Peek());
+                }))
+                // DetailShell is reused album↔playlist. Component ctor arguments are mount-stable, so key by width family
+                // to remount the grip with the correct signal + persistence key on a cross-kind route.
+                with { Key = "detail-rail-grip:" + kind },
+        ],
+    };
 }

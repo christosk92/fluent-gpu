@@ -28,13 +28,13 @@ public sealed class AudioFormatProbe
     readonly ITransport _transport;
     readonly IHttpExchange _http;
     readonly Func<string, Xm.ExtensionKind, CancellationToken, Task<ByteString?>> _fetchExtension;
-    readonly Action<string>? _log;
+    readonly WaveeLogger _log;
 
     public AudioFormatProbe(
         ITransport transport,
         IHttpExchange http,
         Func<string, Xm.ExtensionKind, CancellationToken, Task<ByteString?>> fetchExtension,
-        Action<string>? log = null)
+        WaveeLogger log = default)
     {
         _transport = transport;
         _http = http;
@@ -46,7 +46,7 @@ public sealed class AudioFormatProbe
         ITransport transport,
         IHttpExchange http,
         Func<string, Xm.ExtensionKind, CancellationToken, Task<ByteString?>> fetchExtension,
-        Action<string>? log = null)
+        WaveeLogger log = default)
     {
         var flag = Environment.GetEnvironmentVariable("WAVEE_AUDIO_FORMAT_PROBE");
         if (!string.Equals(flag, "1", StringComparison.OrdinalIgnoreCase)
@@ -61,22 +61,22 @@ public sealed class AudioFormatProbe
 
     public async Task ProbeAsync(string trackUri, M.Track track, Af.AudioFilesExtensionResponse? audioFiles, CancellationToken ct)
     {
-        _log?.Invoke($"probe {trackUri}: starting audio-format/CDN/DRM probe");
+        _log.Info($"probe {trackUri}: starting audio-format/CDN/DRM probe");
         var candidates = CollectAudioCandidates(track, audioFiles);
         if (candidates.Count == 0)
         {
-            _log?.Invoke($"probe {trackUri}: no audio file candidates in TRACK_V4/AUDIO_FILES");
+            _log.Info($"probe {trackUri}: no audio file candidates in TRACK_V4/AUDIO_FILES");
         }
         else
         {
-            _log?.Invoke($"probe {trackUri}: candidates {DescribeCandidates(candidates)}");
+            _log.Info($"probe {trackUri}: candidates {DescribeCandidates(candidates)}");
             foreach (var c in candidates)
                 await ProbeAudioCandidateAsync(c, ct).ConfigureAwait(false);
         }
 
         await ProbePreviewsAsync(track, ct).ConfigureAwait(false);
         await ProbeVideoDrmAsync(trackUri, track, ct).ConfigureAwait(false);
-        _log?.Invoke($"probe {trackUri}: done");
+        _log.Info($"probe {trackUri}: done");
     }
 
     async Task ProbeAudioCandidateAsync(AudioCandidate c, CancellationToken ct)
@@ -90,13 +90,13 @@ public sealed class AudioFormatProbe
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _log?.Invoke($"probe audio {c.Label}: storage-resolve threw {ex.Message}");
+            _log.Info($"probe audio {c.Label}: storage-resolve threw {ex.Message}");
             return;
         }
 
         if (!sr.Ok)
         {
-            _log?.Invoke($"probe audio {c.Label}: storage-resolve status={sr.Status}");
+            _log.Info($"probe audio {c.Label}: storage-resolve status={sr.Status}");
             return;
         }
 
@@ -104,25 +104,25 @@ public sealed class AudioFormatProbe
         try { parsed = S.StorageResolveResponse.Parser.ParseFrom(sr.Body); }
         catch (Exception ex)
         {
-            _log?.Invoke($"probe audio {c.Label}: storage-resolve parse failed ({ex.Message})");
+            _log.Info($"probe audio {c.Label}: storage-resolve parse failed ({ex.Message})");
             return;
         }
 
         if (parsed.Result == S.StorageResolveResponse.Types.Result.Restricted)
         {
-            _log?.Invoke($"probe audio {c.Label}: storage-resolve RESTRICTED");
+            _log.Info($"probe audio {c.Label}: storage-resolve RESTRICTED");
             return;
         }
         if (parsed.Cdnurl.Count == 0)
         {
-            _log?.Invoke($"probe audio {c.Label}: storage-resolve returned no CDN URLs");
+            _log.Info($"probe audio {c.Label}: storage-resolve returned no CDN URLs");
             return;
         }
 
         var first = parsed.Cdnurl[0];
         var prefix = await FetchPrefixAsync(first, ct).ConfigureAwait(false);
         var sniff = DescribePrefix(prefix);
-        _log?.Invoke($"probe audio {c.Label}: cdn={parsed.Cdnurl.Count} prefix={sniff} first={HexPrefix(prefix, 24)}");
+        _log.Info($"probe audio {c.Label}: cdn={parsed.Cdnurl.Count} prefix={sniff} first={HexPrefix(prefix, 24)}");
     }
 
     async Task ProbePreviewsAsync(M.Track track, CancellationToken ct)
@@ -134,7 +134,7 @@ public sealed class AudioFormatProbe
             var id = Convert.ToHexStringLower(p.FileId.Span);
             var url = "https://p.scdn.co/mp3-preview/" + id;
             var prefix = await FetchPrefixAsync(url, ct).ConfigureAwait(false);
-            _log?.Invoke($"probe preview {id} {p.Format}: prefix={DescribePrefix(prefix)} first={HexPrefix(prefix, 24)}");
+            _log.Info($"probe preview {id} {p.Format}: prefix={DescribePrefix(prefix)} first={HexPrefix(prefix, 24)}");
         }
     }
 
@@ -151,7 +151,7 @@ public sealed class AudioFormatProbe
                 var assoc = Xm.VideoAssociations.Parser.ParseFrom(assocPayload);
                 var linked = assoc.Association?.AssociatedUri;
                 var files = assoc.Association?.Files?.File.Count ?? 0;
-                _log?.Invoke($"probe video {trackUri}: VIDEO_ASSOCIATIONS linked={linked ?? "<none>"} files={files}");
+                _log.Info($"probe video {trackUri}: VIDEO_ASSOCIATIONS linked={linked ?? "<none>"} files={files}");
 
                 if (!string.IsNullOrWhiteSpace(linked))
                 {
@@ -166,12 +166,12 @@ public sealed class AudioFormatProbe
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _log?.Invoke($"probe video {trackUri}: VIDEO_ASSOCIATIONS probe failed ({ex.Message})");
+            _log.Info($"probe video {trackUri}: VIDEO_ASSOCIATIONS probe failed ({ex.Message})");
         }
 
         if (manifestIds.Count == 0)
         {
-            _log?.Invoke($"probe video {trackUri}: no music-video manifest id discovered");
+            _log.Info($"probe video {trackUri}: no music-video manifest id discovered");
             return;
         }
 
@@ -196,18 +196,18 @@ public sealed class AudioFormatProbe
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _log?.Invoke($"probe video manifest {manifestId}: GET threw {ex.Message}");
+            _log.Info($"probe video manifest {manifestId}: GET threw {ex.Message}");
             return;
         }
 
         if (!resp.Ok)
         {
-            _log?.Invoke($"probe video manifest {manifestId}: status={resp.Status}");
+            _log.Info($"probe video manifest {manifestId}: status={resp.Status}");
             return;
         }
 
         var json = Encoding.UTF8.GetString(resp.Body);
-        _log?.Invoke($"probe video manifest {manifestId}: {DescribeVideoManifest(json)}");
+        _log.Info($"probe video manifest {manifestId}: {DescribeVideoManifest(json)}");
     }
 
     async Task<byte[]> FetchPrefixAsync(string url, CancellationToken ct)

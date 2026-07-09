@@ -63,4 +63,20 @@ public class HomeAccentTests
         Assert.NotNull(card);
         Assert.Null(card!.Accent);
     }
+
+    [Fact]
+    public void CardFromEntity_ArtistReadsProfileName()
+    {
+        var card = SpotifyExportMapper.CardFromEntity(Root("""
+        { "__typename": "Artist", "uri": "spotify:artist:A",
+          "profile": { "name": "Royal Blood" },
+          "visuals": { "avatarImage": { "sources": [
+            { "url": "https://cdn/artist", "width": 640, "height": 640 }
+          ] } } }
+        """));
+
+        Assert.NotNull(card);
+        Assert.Equal("Royal Blood", card!.Title);
+        Assert.Equal(HomeCardKind.Artist, card.Kind);
+    }
 }

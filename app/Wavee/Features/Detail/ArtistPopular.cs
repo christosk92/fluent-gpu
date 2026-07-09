@@ -32,7 +32,7 @@ sealed class ArtistPopular : Component
     public ArtistPopular(IReadOnlyList<Track> tracks, string ctx, PlaybackBridge? bridge, Services svc, string title, ColorF accent)
     {
         _tracks = tracks; _ctx = ctx; _bridge = bridge; _svc = svc; _title = title; _accent = accent;
-        _showChecks = () => { _ = _sel.Version.Value; return _sel.SelectedCount > 0; };
+        _showChecks = () => { _ = _sel.Version.Value; return _sel.SelectedCount > 1; };   // 2+ only (a plain click must not summon checkboxes)
     }
 
     const int Rows = 4;          // WinUI ColumnsFirstGridLayout MaxRows
@@ -204,7 +204,7 @@ sealed class ArtistPopular : Component
             return TrackRow.ArtCard(
                 t, st, TopCols, _go,
                 onPlay: () => TrackRow.Invoke(_o._bridge, t, () => _ = _o._svc.Player.PlayAsync(_o._ctx, i)),
-                onLike: t.Uri.Length > 0 ? () => _lib?.ToggleSaved(t.Uri) : null,
+                onLike: t.Uri.Length > 0 ? () => _lib?.ToggleSaved(t.Uri, t.Title) : null,
                 art: 48f,
                 showArtists: true,
                 explicitBadge: true,

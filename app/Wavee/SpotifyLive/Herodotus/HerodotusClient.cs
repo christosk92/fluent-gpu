@@ -17,14 +17,12 @@ public sealed class HerodotusClient
     const string BatchRoute = "/herodotus/spotify.resumption.v1.ResumePointRevisionService/BatchCreateResumePointRevisions";
 
     readonly ITransport _transport;
-    readonly Action<string>? _log;
-    readonly IWaveeLog _structuredLog;
+    readonly WaveeLogger _log;
 
-    public HerodotusClient(ITransport transport, Action<string>? log = null, IWaveeLog? structuredLog = null)
+    public HerodotusClient(ITransport transport, WaveeLogger log = default)
     {
         _transport = transport;
         _log = log;
-        _structuredLog = structuredLog ?? WaveeLog.Instance;
     }
 
     /// <summary>Writes one or more revisions. A single play-history head uses <c>CreateResumePointRevision</c> (capture
@@ -76,10 +74,9 @@ public sealed class HerodotusClient
             .ConfigureAwait(false);
         if (!resp.Ok)
         {
-            _log?.Invoke($"herodotus {route} failed status={resp.Status}");
-            _structuredLog.Warn("connect", "herodotus.request.failed", "herodotus request rejected",
-                WaveeLogField.Of("route", ShortRoute(route)),
-                WaveeLogField.Of("status", resp.Status));
+            _log.Warn($"herodotus {route} failed status={resp.Status}");
+            _log.Event(WaveeLogLevel.Warning, "herodotus.request.failed", "herodotus request rejected",
+                fields: [WaveeLogField.Of("route", ShortRoute(route)), WaveeLogField.Of("status", resp.Status)]);
         }
         return resp;
     }
@@ -128,8 +125,7 @@ public sealed class ResumePointProjection : IPlaybackProjection
 
     readonly HerodotusClient _client;
     readonly Func<bool> _suppressPlayHistory;
-    readonly Action<string>? _log;
-    readonly IWaveeLog _structuredLog;
+    readonly WaveeLogger _log;
     readonly object _gate = new();
     readonly List<CreateResumePointRevisionRequest> _pending = new();
     string? _currentUri;
@@ -138,13 +134,11 @@ public sealed class ResumePointProjection : IPlaybackProjection
     int _flushing;
     Timer? _flushTimer;
 
-    public ResumePointProjection(HerodotusClient client, Func<bool>? suppressPlayHistory = null, Action<string>? log = null,
-        IWaveeLog? structuredLog = null)
+    public ResumePointProjection(HerodotusClient client, Func<bool>? suppressPlayHistory = null, WaveeLogger log = default)
     {
         _client = client;
         _suppressPlayHistory = suppressPlayHistory ?? (() => false);
         _log = log;
-        _structuredLog = structuredLog ?? WaveeLog.Instance;
         _flushTimer = new Timer(_ => _ = FlushAsync(), null, 2000, 2000);
     }
 
@@ -180,9 +174,8 @@ public sealed class ResumePointProjection : IPlaybackProjection
     void QueueEpisodeLeave(string episodeUri, long positionMs, long createTimeMs)
     {
         long micros = Math.Max(0, positionMs) * 1000L;
-        _structuredLog.Debug("connect", "herodotus.episode.leave", "queueing episode resume-point on leave",
-            WaveeLogField.Of("episode", WaveeLogRedaction.HashLike(episodeUri)),
-            WaveeLogField.Of("positionMs", positionMs));
+        _log.Event(WaveeLogLevel.Debug, "herodotus.episode.leave", "queueing episode resume-point on leave",
+            fields: [WaveeLogField.Of("episode", WaveeLogRedaction.HashLike(episodeUri)), WaveeLogField.Of("positionMs", positionMs)]);
         Enqueue(HerodotusClient.EpisodeResumePoint(episodeUri, micros, createTimeMs));
         if (!_suppressPlayHistory())
             Enqueue(HerodotusClient.PlayHistoryHead(episodeUri, createTimeMs));
@@ -220,9 +213,9 @@ public sealed class ResumePointProjection : IPlaybackProjection
             if (ok)
             {
                 lock (_gate) _failStreak = 0;
-                _structuredLog.Info("connect", "herodotus.write.ok", "resume-point revisions written",
-                    WaveeLogField.Of("count", batch.Length));
-                _log?.Invoke($"herodotus wrote {batch.Length} revision(s)");
+                _log.Event(WaveeLogLevel.Info, "herodotus.write.ok", "resume-point revisions written",
+                    fields: [WaveeLogField.Of("count", batch.Length)]);
+                _log.Info($"herodotus wrote {batch.Length} revision(s)");
                 return;
             }
 
@@ -246,20 +239,24 @@ public sealed class ResumePointProjection : IPlaybackProjection
         }
 
         if (giveUp)
-            _structuredLog.Error("connect", "herodotus.write.give_up",
+            _log.Event(WaveeLogLevel.Error, "herodotus.write.give_up",
                 "resume-point write failed repeatedly; dropping batch",
+                fields:
+                [
                 WaveeLogField.Of("count", batch.Length),
                 WaveeLogField.Of("attempts", attempt),
-                WaveeLogField.Of("reason", reason));
+                WaveeLogField.Of("reason", reason)]);
         else
-            _structuredLog.Warn("connect", "herodotus.write.retry",
+            _log.Event(WaveeLogLevel.Warning, "herodotus.write.retry",
                 "resume-point write failed; requeued for retry",
+                fields:
+                [
                 WaveeLogField.Of("count", batch.Length),
                 WaveeLogField.Of("attempt", attempt),
                 WaveeLogField.Of("max", MaxFlushAttempts),
-                WaveeLogField.Of("reason", reason));
+                WaveeLogField.Of("reason", reason)]);
 
-        if (ex is not null) _log?.Invoke("herodotus flush error: " + ex.Message);
+        if (ex is not null) _log.Warn("herodotus flush error: " + ex.Message, ex);
     }
 
     static bool IsEpisode(string? uri) =>

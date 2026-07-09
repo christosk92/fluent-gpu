@@ -52,7 +52,7 @@ sealed class SyncHarness : IAsyncDisposable
             s => Revs.TryGetValue(s, out var r) ? r : null, (s, r) => Revs[s] = r, Hydrate, hasPending);
         Mut = new MutationEngine(Store, new IMutationStrategy[] { new SetReplayStrategy(Echo), new OpRebaseStrategy(Store, () => "https://spclient.wg.spotify.com"), new RootlistFollowStrategy(Store) });
         Sync = new LibrarySync(Store, pf, cf, Mut, Dealer,
-            () => new SessionContext("bob", "US", "premium", "en", Tier.Premium, false), () => "bob", _ => { }, _cts.Token, Echo);
+            () => new SessionContext("bob", "US", "premium", "en", Tier.Premium, false), () => "bob", default, _cts.Token, Echo);
     }
 
     public async ValueTask DisposeAsync() { await Sync.DisposeAsync(); _cts.Cancel(); _cts.Dispose(); }

@@ -174,16 +174,63 @@ public static class MotionRecipes
     /// <summary>transitions.dev "page side-by-side": slide between two pages (list ↔ detail, step 1 ↔ step 2) with a
     /// blurred cross-fade. Inserted page enters from +X, removed page exits to −X; opacity cross-fades. (Blur on the
     /// page nodes themselves via <see cref="SoftReveal"/> if you want the cross-blur too.)</summary>
-    public static LayoutTransition PageSlide => new(
+    public static LayoutTransition PageSlide => PageSlideForward;
+
+    // NB: no page-root Blur on Enter/Exit. A BlurSigma on a page root makes the WHOLE page a blur group — a
+    // canvas-sized offscreen RT + a 2-pass Gaussian every frame of the transition (measured ~13ms vs ~7ms GPU submit
+    // when this was last removed). The Dx slide + opacity cross-fade carry the motion; per-element swaps (TextSwap /
+    // IconSwap) keep their tiny blur.
+    public static LayoutTransition PageSlideForward => new(
         TransitionChannels.Position | TransitionChannels.Opacity,
         TransitionDynamics.Tween(Expressive.Fast, Easing.SmoothOut),
         Enter: new EnterExit(Dx: Expressive.DistBase, Opacity: 0f, Active: true),
         Exit: new EnterExit(Dx: -Expressive.DistBase, Opacity: 0f, Active: true));
 
+    public static LayoutTransition PageSlideBack => new(
+        TransitionChannels.Position | TransitionChannels.Opacity,
+        TransitionDynamics.Tween(Expressive.Fast, Easing.SmoothOut),
+        Enter: new EnterExit(Dx: -Expressive.DistBase, Opacity: 0f, Active: true),
+        Exit: new EnterExit(Dx: Expressive.DistBase, Opacity: 0f, Active: true));
+
+    public static LayoutTransition PageFade => new(
+        TransitionChannels.Opacity,
+        TransitionDynamics.Tween(Expressive.Fast, Easing.SmoothOut),
+        Enter: new EnterExit(Opacity: 0f, Active: true),
+        Exit: new EnterExit(Opacity: 0f, Active: true));
+
+    /// <summary>transitions.dev text-state swap: old text rises and blurs; replacement enters from below.</summary>
+    public static LayoutTransition TextSwap => new(
+        TransitionChannels.Opacity,
+        TransitionDynamics.Tween(150f, Easing.EaseInOut),
+        Enter: new EnterExit(Dy: 4f, Opacity: 0f, Active: true, Blur: 2f),
+        Exit: new EnterExit(Dy: -4f, Opacity: 0f, Active: true, Blur: 2f));
+
+    public static LayoutTransition IconSwap => new(
+        TransitionChannels.Opacity,
+        TransitionDynamics.Tween(Expressive.Fast, Easing.EaseInOut),
+        Enter: new EnterExit(Sx: 0.25f, Sy: 0.25f, Opacity: 0f, Active: true, Blur: Expressive.BlurSmall),
+        Exit: new EnterExit(Sx: 0.25f, Sy: 0.25f, Opacity: 0f, Active: true, Blur: Expressive.BlurSmall));
+
     /// <summary>transitions.dev "card resize": smoothly tween a container's size change through real layout (neighbours
     /// reflow) on the expressive <see cref="Easing.SmoothOut"/> curve, 300ms.</summary>
     public static LayoutTransition CardResize => new(
         TransitionChannels.Size, TransitionDynamics.Tween(300f, Easing.SmoothOut), Size: SizeMode.Reflow);
+
+    public static LayoutTransition CardResizeHeight => new(
+        TransitionChannels.Size, TransitionDynamics.Tween(300f, Easing.SmoothOut), Size: SizeMode.Reflow,
+        Axes: SizeAxes.Height);
+
+    public static LayoutTransition CardResizeWidth => new(
+        TransitionChannels.Size, TransitionDynamics.Tween(300f, Easing.SmoothOut), Size: SizeMode.Reflow,
+        Axes: SizeAxes.Width);
+
+    /// <summary>Responsive grid/card refit. The parent owns final bounds; children keep identity and project into them.
+    /// Size is COMPOSITOR-ONLY (<see cref="SizeMode.ScaleCorrect"/>): the cell GPU-scales from its old extent to 1 over
+    /// the brief flight — it does NOT re-solve its subtree per tick, so content stretches slightly in-flight rather than
+    /// re-wrapping (the deliberate trade for no per-cell Measure+Arrange every frame during a window/panel resize).</summary>
+    public static LayoutTransition CardRefit => new(
+        TransitionChannels.Position | TransitionChannels.Size,
+        TransitionDynamics.Tween(300f, Easing.SmoothOut), Size: SizeMode.ScaleCorrect);
 
     /// <summary>transitions.dev "panel reveal": slide a panel into a region (translate + opacity) with the slower open /
     /// quicker close asymmetry (open 400ms, close 350ms). Add Blur on the panel node for the cross-blur.</summary>

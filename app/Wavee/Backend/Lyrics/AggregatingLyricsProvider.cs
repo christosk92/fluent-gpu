@@ -19,7 +19,7 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
     readonly Func<string, CancellationToken, Task<LyricsRequest?>> _resolve;
     readonly LyricsOptions _opt;
     readonly string _referenceSourceId;
-    readonly Action<string>? _log;
+    readonly WaveeLogger _log;
     readonly Dictionary<string, LyricsDocument> _cache = new();
     readonly SimpleEvent<LyricsDocument> _upgrades = new();
     readonly object _gate = new();
@@ -36,7 +36,7 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
         Func<string, CancellationToken, Task<LyricsRequest?>> resolveRequest,
         LyricsOptions? options = null,
         string referenceSourceId = "spotify",
-        Action<string>? log = null)
+        WaveeLogger log = default)
     {
         _sources = sources.Where(s => s.Enabled).ToList();
         _resolve = resolveRequest;
@@ -150,7 +150,7 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
         LogReport(trackId, req, summary, traces);
 
         if (ranked.Best is { } b)
-            _log?.Invoke($"track={trackId} winner={b.ProviderId} sync={b.Sync} score={b.Score:F3} text={b.TextAgreement:F2} " +
+            _log.Info($"track={trackId} winner={b.ProviderId} sync={b.Sync} score={b.Score:F3} text={b.TextAgreement:F2} " +
                 $"timing={b.TimingScore:F2} offset={b.AppliedOffsetMs}ms candidates=[{string.Join(",", candidates.Select(c => c.ProviderId))}] ({b.Reason})");
 
         var winner = ranked.Winner;
@@ -239,7 +239,7 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
         catch (OperationCanceledException) { }
         catch (Exception e)
         {
-            _log?.Invoke($"background lyrics upgrade failed for {trackId}: {e.GetType().Name}");
+            _log.Info($"background lyrics upgrade failed for {trackId}: {e.GetType().Name}");
         }
         finally
         {
@@ -287,13 +287,13 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
 
     void LogReport(string trackId, LyricsRequest req, string summary, IReadOnlyList<LyricsSourceTrace> traces)
     {
-        if (_log is null) return;
+        if (!_log.IsEnabled(WaveeLogLevel.Info)) return;
 
-        _log($"search track={trackId} title=\"{LogValue(req.Title)}\" artist=\"{LogValue(req.ArtistsJoined)}\" " +
+        _log.Info($"search track={trackId} title=\"{LogValue(req.Title)}\" artist=\"{LogValue(req.ArtistsJoined)}\" " +
             $"album=\"{LogValue(req.Album)}\" duration={req.DurationMs}ms isrc={LogValue(req.Isrc ?? "-")} summary=\"{LogValue(summary)}\"");
         foreach (var t in traces)
         {
-            _log($"source track={trackId} id={t.SourceId} outcome={t.Outcome} elapsed={t.ElapsedMs}ms sync={t.Sync} " +
+            _log.Info($"source track={trackId} id={t.SourceId} outcome={t.Outcome} elapsed={t.ElapsedMs}ms sync={t.Sync} " +
                 $"lines={t.LineCount} score={t.Score:F3} winner={t.Winner} detail=\"{LogValue(t.Detail)}\" rerank=\"{LogValue(t.RerankReason)}\"");
         }
     }
@@ -304,7 +304,7 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
     void LogDecision(string trackId, RankedLyrics ranked, IReadOnlyList<LyricsCandidate> candidates)
     {
         if (ranked.Best is { } b)
-            _log?.Invoke($"track={trackId} winner={b.ProviderId} sync={b.Sync} score={b.Score:F3} text={b.TextAgreement:F2} " +
+            _log.Info($"track={trackId} winner={b.ProviderId} sync={b.Sync} score={b.Score:F3} text={b.TextAgreement:F2} " +
                 $"timing={b.TimingScore:F2} offset={b.AppliedOffsetMs}ms candidates=[{string.Join(",", candidates.Select(c => c.ProviderId))}] ({b.Reason})");
     }
 
@@ -343,7 +343,7 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(_opt.PerSourceTimeoutMs);
-        _log?.Invoke($"source track={req.TrackId} id={source.Id} started");
+        _log.Info($"source track={req.TrackId} id={source.Id} started");
         try
         {
             var c = await source.FetchAsync(req, cts.Token).ConfigureAwait(false);
@@ -359,7 +359,7 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
         }
         catch (Exception e)
         {
-            _log?.Invoke($"source {source.Id} failed for {req.TrackId}: {e.GetType().Name}");
+            _log.Info($"source {source.Id} failed for {req.TrackId}: {e.GetType().Name}");
             return new Probed(null, LyricsOutcome.Error, Ms(), With($"{e.GetType().Name}: {e.Message}"));
         }
     }
