@@ -213,9 +213,8 @@ float4 PSMain(VSOut i) : SV_Target
         _cursor += count;
         if (bindSharedState)
         {
-            float* vp = stackalloc float[2] { vpW, vpH };
             cmd->SetGraphicsRootSignature(_shared.RootSignature);
-            cmd->SetGraphicsRoot32BitConstants(0, 2, vp, 0);
+            _shared.SetViewportConstants(cmd, vpW, vpH);
             cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
             var qv = _shared.QuadView;
             cmd->IASetVertexBuffers(0, 1, &qv);

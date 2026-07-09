@@ -83,7 +83,7 @@ public static class OutboundEnvelope
             w.WriteString("trigger", "immediately");
             w.WriteEndObject();
 
-            WriteLoggingParams(w, fromDeviceId, commandId, initiatedTimeMs);
+            WriteLoggingParams(w, fromDeviceId, commandId, initiatedTimeMs, "");
             w.WriteEndObject();   // command
             WriteTail(w, intentId);
             w.WriteEndObject();   // root
@@ -93,7 +93,7 @@ public static class OutboundEnvelope
 
     // A non-play command (pause/resume/seek_to/skip_*/set_*/transfer): the same envelope with the verb's args + logging_params.
     public static string Command(string fromDeviceId, string endpoint, (string Key, object Value)[] args,
-                                 string commandId, string intentId, long initiatedTimeMs)
+                                 string commandId, string intentId, long initiatedTimeMs, string interactionId = "")
     {
         var buf = new ArrayBufferWriter<byte>(256);
         using (var w = new Utf8JsonWriter(buf))
@@ -111,7 +111,7 @@ public static class OutboundEnvelope
                     default: w.WriteString(k, v?.ToString() ?? ""); break;
                 }
             }
-            WriteLoggingParams(w, fromDeviceId, commandId, initiatedTimeMs);
+            WriteLoggingParams(w, fromDeviceId, commandId, initiatedTimeMs, interactionId);
             w.WriteEndObject();   // command
             WriteTail(w, intentId);
             w.WriteEndObject();   // root
@@ -124,7 +124,7 @@ public static class OutboundEnvelope
     // sends uid:"" + metadata:{} for a fresh add. Replaces the legacy flat command.uri form.
     public static string AddToQueue(string fromDeviceId, string trackUri, string trackUid,
         bool overrideRestrictions, bool onlyForLocalDevice, bool systemInitiated,
-        string commandId, string intentId, long initiatedTimeMs)
+        string commandId, string intentId, long initiatedTimeMs, string interactionId = "")
     {
         var buf = new ArrayBufferWriter<byte>(256);
         using (var w = new Utf8JsonWriter(buf))
@@ -142,7 +142,7 @@ public static class OutboundEnvelope
             w.WriteBoolean("only_for_local_device", onlyForLocalDevice);
             w.WriteBoolean("system_initiated", systemInitiated);
             w.WriteEndObject();   // options
-            WriteLoggingParams(w, fromDeviceId, commandId, initiatedTimeMs);
+            WriteLoggingParams(w, fromDeviceId, commandId, initiatedTimeMs, interactionId);
             w.WriteEndObject();   // command
             WriteTail(w, intentId);
             w.WriteEndObject();   // root
@@ -155,7 +155,7 @@ public static class OutboundEnvelope
     // is implicit (in neither array). queue_revision is a bare UNSIGNED number that can EXCEED Int64 (ulong, never long).
     public static string SetQueue(string fromDeviceId, ulong queueRevision,
         IReadOnlyList<QueueWireEntry> prevTracks, IReadOnlyList<QueueWireEntry> nextTracks,
-        string commandId, string intentId, long initiatedTimeMs)
+        string commandId, string intentId, long initiatedTimeMs, string interactionId = "")
     {
         var buf = new ArrayBufferWriter<byte>(4096);
         using (var w = new Utf8JsonWriter(buf))
@@ -175,7 +175,7 @@ public static class OutboundEnvelope
             w.WriteBoolean("only_for_local_device", false);
             w.WriteBoolean("system_initiated", false);
             w.WriteEndObject();
-            WriteLoggingParams(w, fromDeviceId, commandId, initiatedTimeMs);
+            WriteLoggingParams(w, fromDeviceId, commandId, initiatedTimeMs, interactionId);
             w.WriteEndObject();   // command
             WriteTail(w, intentId);
             w.WriteEndObject();   // root
@@ -270,12 +270,18 @@ public static class OutboundEnvelope
         "disallow_removing_from_context_tracks_reasons", "disallow_updating_context_reasons",
     };
 
-    static void WriteLoggingParams(Utf8JsonWriter w, string deviceId, string commandId, long initiatedTimeMs)
+    // logging_params carries command_received_time (echoed = initiated, field-set parity with the desktop capture) and a
+    // non-empty interaction_ids when the caller supplies an interaction id (add_to_queue / set_queue / player commands).
+    // interactionId "" ⇒ interaction_ids stays [] (the play envelope + any caller that doesn't mint one).
+    static void WriteLoggingParams(Utf8JsonWriter w, string deviceId, string commandId, long initiatedTimeMs, string interactionId)
     {
         w.WriteStartObject("logging_params");
         w.WriteNumber("command_initiated_time", initiatedTimeMs);
+        w.WriteNumber("command_received_time", initiatedTimeMs);
         w.WriteStartArray("page_instance_ids"); w.WriteEndArray();
-        w.WriteStartArray("interaction_ids"); w.WriteEndArray();
+        w.WriteStartArray("interaction_ids");
+        if (!string.IsNullOrEmpty(interactionId)) w.WriteStringValue(interactionId);
+        w.WriteEndArray();
         w.WriteString("device_identifier", deviceId);
         w.WriteString("command_id", commandId);
         w.WriteEndObject();

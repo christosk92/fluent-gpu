@@ -15,6 +15,18 @@ internal sealed unsafe class SdfSharedResources : IDisposable
     public ID3D12RootSignature* RootSignature => _rootSig;
     public D3D12_VERTEX_BUFFER_VIEW QuadView => _quadView;
 
+    // Reused viewport constants — Record() runs inside SubmitWithLayers' FlushSegment loop; stackalloc there
+    // inlines into the loop and trips /GS (0xC0000409) under NativeAOT.
+    private readonly float[] _vpConstants = new float[2];
+
+    public void SetViewportConstants(ID3D12GraphicsCommandList* cmd, float vpW, float vpH)
+    {
+        _vpConstants[0] = vpW;
+        _vpConstants[1] = vpH;
+        fixed (float* vp = _vpConstants)
+            cmd->SetGraphicsRoot32BitConstants(0, 2, vp, 0);
+    }
+
     public void Init(ID3D12Device* device)
     {
         BuildRootSignature(device);

@@ -18,17 +18,6 @@ namespace Wavee;
 // fades in as a whole. Individual enrichment calls still fail soft inside the aggregate and simply omit their section.
 sealed class AlbumTrailing : Component
 {
-    static readonly TemplateParts ShelfEdgeFadeParts = BuildShelfEdgeFadeParts();
-
-    static TemplateParts BuildShelfEdgeFadeParts()
-    {
-        var parts = new TemplateParts();
-        var fade = new EdgeFadeSpec(EdgeMask.Horizontal, 36f);
-        parts.Set<ScrollEl>(PagedShelf.PartViewport, v => v with { EdgeFade = fade });
-        parts.Set<BoxEl>(PagedShelf.PartViewport, v => v with { EdgeFade = fade });
-        return parts;
-    }
-
     readonly Loadable<DetailModel> _full;   // read reactively → loaders re-fire when the full album lands / the route swaps
     readonly Signal<Route> _route;
     readonly DetailHandlers _h;
@@ -433,8 +422,7 @@ sealed class AlbumTrailing : Component
                 cardAt: (i, w) => MediaCard.Shelf(pls[i].Cover, pls[i].Name, pls[i].OwnerName, pls[i].Uri,
                     () => h.OpenPlaylist(pls[i]), () => h.PlayContext(pls[i].Uri), w),
                 measured: true,
-                header: WaveeType.RailHeader(Loc.Get(Strings.Detail.FeaturedOn)),
-                parts: ShelfEdgeFadeParts),
+                header: WaveeType.RailHeader(Loc.Get(Strings.Detail.FeaturedOn))),
         ],
     };
 
@@ -452,8 +440,7 @@ sealed class AlbumTrailing : Component
                 cardAt: (i, w) => MediaCard.Shelf(albums[i].Cover, albums[i].Name, AlbumSubtitle(albums[i]), albums[i].Uri,
                     () => h.OpenAlbum(albums[i]), () => h.PlayContext(albums[i].Uri), w),
                 measured: true,
-                header: WaveeType.RailHeader(header),
-                parts: ShelfEdgeFadeParts),
+                header: WaveeType.RailHeader(header)),
         ],
     };
 
@@ -476,8 +463,7 @@ sealed class AlbumTrailing : Component
                 merch.Count,
                 cardAt: (i, w) => MerchCard(merch[i], w),
                 measured: true,
-                header: WaveeType.RailHeader(Loc.Get(Strings.Artist.Merch)),
-                parts: ShelfEdgeFadeParts),
+                header: WaveeType.RailHeader(Loc.Get(Strings.Artist.Merch))),
         ],
     };
 

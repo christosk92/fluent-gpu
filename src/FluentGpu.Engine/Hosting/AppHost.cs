@@ -31,6 +31,7 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     public int SpansRebased { get; init; }
     public int SpansReRecorded { get; init; }
     public int SpanBytesCopied { get; init; }
+    public int NodesCulled { get; init; }
     public SpanReuseDisabledReason SpanReuseDisabledReasons { get; init; }
     public double Fps { get; init; }
     public double FrameMs { get; init; }
@@ -121,7 +122,7 @@ public sealed class AppHost : IDisposable
     private readonly LayoutInvalidator _invalidator;
     private readonly DrawList _drawList = new();
     private readonly SpanTable _spanTable = new();
-    private int _recordedImageContentEpoch;
+    private int _recordedImageContentEpoch;   // retained for diagnostics only (global ImageContent kill removed)
     private bool _imageCrossfadeWasActive;
     // Render-thread seam (Cut A, submit-only; docs/plans/render-thread-seam-landing-plan.md · design/subsystems/threading-render-seam.md).
     // STEP 1 — single-thread pass-through: the UI records into _drawList, copies it into a render-readable arena, then
@@ -1552,6 +1553,8 @@ public sealed class AppHost : IDisposable
                 _mainScrollHoldUntil = scrollHoldNow + MainScrollHoldTicks;
             }
             bool holdSelfBlurForScroll = scrollHoldNow < _selfBlurHoldUntil;
+            bool scrollActive = holdSelfBlurForScroll || _scrollAnim.AnyOffsetWroteThisFrame;
+            _images.SuppressReveals = scrollActive;
             ScrollBindEval.ApplyPinAndFlagPass(_scene);       // 7 generic scroll-bind pins + the predicate-flag channel (sticky etc.)
             ScrollBindEval.RunObservers(_scene);              // 7 change-only scroll-geometry observers (pull-to-refresh / analytics)
             _repeat.Tick(dtMs);                                // 7 RepeatButton auto-repeat (held → re-fire click)
@@ -1602,22 +1605,19 @@ public sealed class AppHost : IDisposable
                 if (!_popupWindows[i].Root.IsNull && _scene.IsLive(_popupWindows[i].Root))
                     _popupSkipRoots.Add(_popupWindows[i].Root);
             SpanReuseDisabledReason spanDisable = SpanReuseDisabledReason.None;
-            if (reconciled) spanDisable |= SpanReuseDisabledReason.SceneChanged;
-            if (layoutNeeded) spanDisable |= SpanReuseDisabledReason.Layout;
+            // Per-node record-dirty carries reconcile/layout/image invalidation — no window-global SceneChanged/Layout/ImageContent kills.
             if (resized) spanDisable |= SpanReuseDisabledReason.Resize;
             if (keepAlive && _window.SizedInModalLoop) spanDisable |= SpanReuseDisabledReason.ModalPaint;
             if (_popupWindows.Count != 0) spanDisable |= SpanReuseDisabledReason.PopupWindows;
             if (_connected.Detached.Count != 0) spanDisable |= SpanReuseDisabledReason.Detached;
             bool imageFadeActive = _images.HasActiveCrossfades;
-            if (_images.ContentEpoch != _recordedImageContentEpoch || imageFadeActive || _imageCrossfadeWasActive)
-                spanDisable |= SpanReuseDisabledReason.ImageContent;
+            _imageCrossfadeWasActive = imageFadeActive;
             var recordStats = SceneRecorder.Record(_scene, _drawList, _images, in focus, Tok.ScrollThumb, Tok.AcrylicFlyout.Fallback, in textEdit,
-                CollectionsMarshal.AsSpan(_popupSkipRoots), holdSelfBlurForAnyUserScroll: holdSelfBlurForScroll || _scrollAnim.AnyOffsetWroteThisFrame,
+                CollectionsMarshal.AsSpan(_popupSkipRoots), holdSelfBlurForAnyUserScroll: scrollActive || _scrollAnim.AnyOffsetWroteThisFrame,
                 spans: _spanTable, spanReuseDisabled: spanDisable); // 8 record
             SceneRecorder.RecordDetached(_scene, _drawList, _images, _connected.Detached, _scene.OverlayClip);   // 8 detached fly snapshots (flag-gated rebuild; no-op when none)
             RecordPopupWindows(in focus, in textEdit);         // 8b record each popup window's subtree DrawList
             _recordedImageContentEpoch = _images.ContentEpoch;
-            _imageCrossfadeWasActive = imageFadeActive;
             // 8b′ probe capture (WAVEE_LYRICS_ADVANCE_PROBE): snapshot the designated viewports' scroll state HERE — before
             // the ClearTransformDirty below wipes the content-node TransformDirty bit that drove this frame's DoF defer.
             CaptureProbeScroll(ProbeLyricsViewport, out int probeLyMode, out bool probeLyUser, out bool probeLyDirty);
@@ -1639,9 +1639,11 @@ public sealed class AppHost : IDisposable
             // confirms byte-identity for paint-channel / image-state changes that set no flag. Conservative: steady main
             // window only (presented before, no resize, not a modal keep-alive, no interleaving popup windows). A playback
             // playhead quantized to whole pixels (SeekBar) lands on the same stream most frames, so this fires during play.
+            // Active image reveals resolve at replay time — defeat skip-submit while fades are live.
             bool maybeUnchanged = _everLaidOut && !resized && !keepAlive && _popupWindows.Count == 0
                 && !reconciled && !layoutNeeded && !transformWrote
-                && !_device.HasPendingUploads;   // a staged texture upload is flushed INSIDE submit — skipping would leave it white
+                && !_device.HasPendingUploads
+                && !_images.HasActiveCrossfades;
             ulong dlHash = maybeUnchanged ? DrawListHash(_drawList.Bytes, _drawList.SortKeys) : 0UL;
             bool skipSubmit = maybeUnchanged && dlHash == _lastPresentedDrawListHash;
             RememberDeviceLostFrame(clicks, keepAlive, resized, reconciled, layoutNeeded, transformWrote,
@@ -1663,7 +1665,7 @@ public sealed class AppHost : IDisposable
                 // (FG_RENDER_THREAD): the fgpu-render thread submits/presents; the UI BLOCKS in DrainSync (force-sync).
                 // Step 5 (FG_RENDER_ASYNC): the UI WakeAsyncs and PROCEEDS — the render thread presents on its own
                 // timeline (the smoothness win: the GPU fence-wait no longer bounds back to the UI thread).
-                var submitInfo = new FrameInfo(FrameSizePx(keepAlive), _window.Scale, Clear, recordStats.Damage);
+                var submitInfo = new FrameInfo(FrameSizePx(keepAlive), _window.Scale, Clear, recordStats.Damage, _images.ClockMs);
                 if (resized && keepAlive) _device.HintSettlePresent();
                 _renderSeam.Publish(_drawList.Bytes, _drawList.SortKeys, in submitInfo, suppressVsync: keepAlive);
                 if (_renderThread is not null)
@@ -1707,6 +1709,7 @@ public sealed class AppHost : IDisposable
             LastStats = new FrameStats(_drawList.CommandCount, clicks, hotAlloc, reconciled || layoutNeeded)
             {
                 NodesVisited = recordStats.NodesVisited,
+                NodesCulled = recordStats.NodesCulled,
                 DrawNodeCount = recordStats.DrawnNodeCount,
                 CulledNodeCount = recordStats.CulledNodeCount,
                 BlurCandidateCount = recordStats.BlurCandidateCount,

@@ -49,6 +49,9 @@ public sealed class Services
     public Wavee.Backend.EngineMutationSource? RealMutationSource { get; private set; }
     /// <summary>Spotify playlist item/metadata/cover edits (REAL backend only).</summary>
     public Wavee.Backend.Playlists.PlaylistMutationSource? RealPlaylistMutations { get; private set; }
+    /// <summary>Spotify "recommended songs" playlist extender (REAL backend only). Bound to the SAME switchable mutation
+    /// transport, so it follows the go-live/logout lifecycle. Null when fake / logged out → the UI gates on it.</summary>
+    public Wavee.Backend.Playlists.PlaylistExtenderClient? RealExtender { get; private set; }
     public Wavee.Backend.SpclientBaseUrlHolder? RealSpclientBaseUrl { get; private set; }
 
     /// <summary>The live Connect session host (REAL backend, after a successful login) — captured for logout teardown.
@@ -81,9 +84,14 @@ public sealed class Services
     /// <summary>Spotify user profile cache for playlist owners and added-by contributors. Stable wrapper; offline/fake
     /// returns null so raw ids remain visible until a live resolver is installed.</summary>
     public SwitchableUserProfileService UserProfiles { get; }
+    /// <summary>Spotify friend-activity (presence) feed — what friends are listening to. Stable wrapper; the live provider
+    /// is installed after login, offline/fake it is the permanently-offline <see cref="NullFriendActivityService"/>.</summary>
+    public SwitchableFriendActivityService Friends { get; }
     public PlaybackBridge Playback { get; }
     /// <summary>The Mutations facet bridge (saved/liked/followed → engine Signal). Read via <see cref="LibraryBridge.Slot"/>.</summary>
     public LibraryBridge LibraryBridge { get; }
+    /// <summary>The friends-feed facet bridge (presence snapshot → engine Signals). Read via <see cref="FriendsBridge.Slot"/>.</summary>
+    public FriendsBridge FriendsBridge { get; }
     /// <summary>The root library cache (collections + per-entity detail caches) for instant, off-page-fresh navigation.</summary>
     public LibraryStore LibraryStore { get; }
     /// <summary>Persisted app settings (sidebar width, etc.) — read/written through the interface + typed keys, never the
@@ -108,9 +116,11 @@ public sealed class Services
         AlbumEnrichment = new SwitchableAlbumEnrichmentService(new CatalogAlbumEnrichmentService(library));
         Video = new SwitchableVideoService(new NoVideoService());
         UserProfiles = new SwitchableUserProfileService(new NullUserProfileService());
+        Friends = new SwitchableFriendActivityService(new NullFriendActivityService());
         Settings = settings;
         Playback = new PlaybackBridge(player, devices, session);
         LibraryBridge = new LibraryBridge(mutations, userPlaylists, playlistEdits);
+        FriendsBridge = new FriendsBridge(Friends);
         LibraryStore = new LibraryStore(library, mutations, userPlaylists, library as ICollectionEvents);
         // Wire the detail caches as a sheddable arena (priority 2 = shed under MODERATE+ pressure, so at-rest A→B→A stays
         // instant; the LRU insert-cap already bounds steady state). The entity-store "unpinned drop" (priority 3/4) is the
@@ -210,7 +220,9 @@ public sealed class Services
         var userPlaylists = new UserPlaylistSource();
         var playlistMutations = new Wavee.Backend.Playlists.PlaylistMutationSource(
             mutEngine, mutTransport, new Wavee.Backend.Spotify.HttpClientExchange(), () => sessionHost.Current,
-            () => spclientBaseUrl.Value, userPlaylists);
+            () => spclientBaseUrl.Value, userPlaylists, store);
+        // The "recommended songs" extender rides the SAME switchable transport (stub → live dealer on go-live, back on logout).
+        var extender = new Wavee.Backend.Playlists.PlaylistExtenderClient(mutTransport);
 
         var registry = new SourceRegistry(new ISource[]
         {
@@ -239,6 +251,7 @@ public sealed class Services
         svc.EchoRing = echoRing;
         svc.RealMutationSource = mutations;
         svc.RealPlaylistMutations = playlistMutations;
+        svc.RealExtender = extender;
         svc.RealSpclientBaseUrl = spclientBaseUrl;
         svc.Log.Info("app", "Services created (REAL backend: persistent Store + StoreLibrarySource + durable multi-set mutations; live session/fetch/dealer connect on bootstrap)");
         return svc;
@@ -279,6 +292,7 @@ public sealed class Services
         (Connectivity as Wavee.Backend.SwitchableConnectivity)?.SetInner(new Wavee.Backend.Connectivity());
         (Lyrics as Wavee.Backend.SwitchableLyrics)?.SetInner(new NoLyricsProvider());   // no lyrics until the next live login
         UserProfiles.SetInner(new NullUserProfileService());
+        Friends.SetInner(new NullFriendActivityService());   // presence feed back offline until the next live login
         MutTransport?.SetInner(new Wavee.Backend.StubTransport());   // writes return to the inert stub (queue in the durable outbox, replay on next login)
         if (RealMutationSource is { } mutSrc) mutSrc.ScheduleDrain = null;   // back to inline drains — the loop is torn down with the host
         if (RealPlaylistMutations is { } pmSrc)

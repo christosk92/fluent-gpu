@@ -173,7 +173,7 @@ public class ConnectPublisherTests
     }
 
     [Fact]
-    public async Task QueueSnapshot_CapsWirePrevAndNextTracks()
+    public async Task QueueSnapshot_CapsWireNextTracks_LocalHistoryNotPublished()
     {
         var h = new Harness();
         h.Connect("c1");
@@ -190,9 +190,7 @@ public class ConnectPublisherTests
         await Task.Delay(20);
 
         var snap = Assert.IsType<LocalPlaybackSnapshot>(h.LastSnapshot);
-        Assert.Equal(50, snap.PrevTracks.Count);
-        Assert.Equal("spotify:track:h5", snap.PrevTracks[0].Uri);
-        Assert.Equal("spotify:track:h54", snap.PrevTracks[49].Uri);
+        Assert.Empty(snap.PrevTracks);   // local history stays client-side until server-driven history lands
         Assert.Equal(50, snap.NextTracks.Count);
         Assert.Equal("spotify:track:n0", snap.NextTracks[0].Uri);
         Assert.Equal("spotify:track:n49", snap.NextTracks[49].Uri);

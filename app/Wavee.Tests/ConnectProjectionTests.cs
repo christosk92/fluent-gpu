@@ -209,7 +209,7 @@ public class ConnectProjectionTests
     }
 
     [Fact]
-    public void OnCluster_ViewerQueue_SplitsProviders_MapsHistory_AndDropsDelimiters()
+    public void OnCluster_ViewerQueue_SplitsProviders_AndDropsDelimiters()
     {
         var p = new NowPlayingProjection("us", () => 0);
         p.OnCluster(Cluster("other", playing: true, Trk("spotify:track:now", "Now", 1000)) with
@@ -227,12 +227,13 @@ public class ConnectProjectionTests
             },
         });
 
+        Assert.Equal(QueueBucket.NowPlaying, Assert.Single(p.Queue, e => e.Track.Uri == "spotify:track:now").Bucket);
         Assert.Equal(QueueBucket.UserQueue, Assert.Single(p.Queue, e => e.Track.Uri == "spotify:track:uq").Bucket);
         Assert.Equal(QueueBucket.NextUp, Assert.Single(p.Queue, e => e.Track.Uri == "spotify:track:cx").Bucket);
         var autoplay = Assert.Single(p.Queue, e => e.Track.Uri == "spotify:track:ap");
         Assert.Equal(QueueBucket.NextUp, autoplay.Bucket);
         Assert.True(autoplay.IsAutoplay);
-        Assert.Equal(QueueBucket.History, Assert.Single(p.Queue, e => e.Track.Uri == "spotify:track:h1").Bucket);
+        Assert.DoesNotContain(p.Queue, e => e.Track.Uri == "spotify:track:h1");   // prev_tracks not surfaced
         Assert.DoesNotContain(p.Queue, e => e.Track.Uri == "spotify:delimiter");
     }
 }

@@ -64,7 +64,7 @@ public sealed class UserPlaylistSource : ICatalogSource
 
     public Task<IReadOnlyList<PlaylistSummary>> GetPlaylistsAsync(CancellationToken ct = default)
     {
-        var list = _playlists.Select(kv => new PlaylistSummary(kv.Key, kv.Value.Name, "You", kv.Value.Tracks.Count, null)).ToList();
+        var list = _playlists.Select(kv => new PlaylistSummary(kv.Key, kv.Value.Name, "You", kv.Value.Tracks.Count, null, CanEdit: true, IsOwner: true)).ToList();
         return Task.FromResult<IReadOnlyList<PlaylistSummary>>(list);
     }
 

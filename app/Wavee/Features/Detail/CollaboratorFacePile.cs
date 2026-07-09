@@ -4,6 +4,7 @@ using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Signals;
 using Wavee.Core;
 using static FluentGpu.Dsl.Ui;
 
@@ -15,15 +16,17 @@ sealed class CollaboratorFacePile : Component
     readonly IReadOnlyList<Owner> _members;
     readonly bool _isCollaborative;
     readonly float _maxWidth;
+    readonly Loadable<DetailModel>? _full;
 
     const float Avatar = 28f, Ring = 2f, Outer = Avatar + Ring * 2f, Overlap = 12f;
     const int MaxVisible = 4;
 
-    public CollaboratorFacePile(DetailModel m, float maxWidth)
+    public CollaboratorFacePile(DetailModel m, float maxWidth, Loadable<DetailModel>? full = null)
     {
         _members = m.Collaborators ?? Array.Empty<Owner>();
         _isCollaborative = m.Capabilities.IsCollaborative;
         _maxWidth = maxWidth;
+        _full = full;
     }
 
     public override Element Render()
@@ -36,13 +39,13 @@ sealed class CollaboratorFacePile : Component
 
         var anchor = UseRef<NodeHandle>(default);
         var handle = UseRef<OverlayHandle?>(null);
-        var svc = UseContext(Overlay.Service);
+        var overlay = UseContext(Overlay.Service);
 
         void Toggle()
         {
-            if (svc is null) return;
+            if (overlay is null) return;
             if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
-            handle.Value = svc.Open(
+            handle.Value = overlay.Open(
                 () => anchor.Value,
                 () => Flyout(() => handle.Value?.Close()),
                 FlyoutPlacement.BottomEdgeAlignedLeft,
@@ -74,14 +77,19 @@ sealed class CollaboratorFacePile : Component
             ],
         };
 
+        var rowKids = new List<Element>(3)
+        {
+            ToolTip.Wrap(button, "View collaborators"),
+            new TextEl(label) { Size = 14f, Weight = 700, Color = Tok.AccentTextPrimary, Grow = 1f, Basis = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+        };
+        // Shared adaptive invite affordance — self-gates (empty when the viewer can't administer permissions) and opens
+        // the Invite & access flyout instead of insta-copying, replacing the old duplicated gray pill.
+        if (_full is not null) rowKids.Add(PlaylistInlineEdit.InviteButton(_full, _maxWidth));
+
         return new BoxEl
         {
             Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S, MaxWidth = _maxWidth,
-            Children =
-            [
-                ToolTip.Wrap(button, "View collaborators"),
-                new TextEl(label) { Size = 14f, Weight = 700, Color = Tok.AccentTextPrimary, Grow = 1f, Basis = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-            ],
+            Children = rowKids.ToArray(),
         };
     }
 

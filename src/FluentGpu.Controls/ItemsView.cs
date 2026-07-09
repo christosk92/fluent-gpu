@@ -256,7 +256,8 @@ public sealed class ItemsView : Component
                                  Func<int, ItemChromeState, PartDelta>? partDelta = null,
                                  bool suppressScrollBar = false,
                                  bool autoEdgeFade = false,
-                                 string? scrollKey = null)
+                                 string? scrollKey = null,
+                                 (Func<ScrollGeometry, long> Project, Action<ScrollGeometry> Action)? onScrollGeometryChanged = null)
         => Embed.Comp(() => new ItemsView
         {
             ItemCount = itemCount,
@@ -284,6 +285,7 @@ public sealed class ItemsView : Component
             DisplacementVersion = displacementVersion,
             DraggedSlot = draggedSlot,
             PartDelta = partDelta,
+            OnScrollGeometryChanged = onScrollGeometryChanged,
         });
 
     /// <summary>The SIGNALS-FIRST bound factory: the same WinUI ItemsView substrate (selection model, keyboard nav,

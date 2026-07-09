@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
 using FluentGpu;
@@ -32,8 +33,37 @@ static class PlaylistInlineEdit
     internal static Element Description(Loadable<DetailModel> full, float width, int maxLines, DetailHandlers h)
         => Embed.Comp(() => new EditableDescription(full, width, maxLines, h)) with { Key = $"pl-edit-desc:{(int)width}:{maxLines}" };
 
-    internal static Element Collaborative(Loadable<DetailModel> full, float width)
-        => Embed.Comp(() => new CollaborativeToggle(full, width)) with { Key = $"pl-edit-collab:{(int)width}" };
+    internal static Element OwnerRow(Loadable<DetailModel> full, float width)
+        => Embed.Comp(() => new PlaylistOwnerRow(full, width)) with { Key = $"pl-owner-row:{(int)width}" };
+
+    internal static Element OwnerMenu(Loadable<DetailModel> full, DetailHandlers h)
+        => Embed.Comp(() => new OwnerOverflowMenu(full, h)) with { Key = "pl-owner-menu" };
+
+    internal static Element ShareButton(Loadable<DetailModel> full)
+        => Embed.Comp(() => new PlaylistShareButton(full)) with { Key = "pl-share" };
+
+    /// <summary>The shared adaptive invite affordance (owner row + collaborator pile): a labeled pill when the row is
+    /// wide, a round icon button + tooltip when narrow. Clicking opens the Invite &amp; access flyout anchored to it.
+    /// Self-gated (returns an empty box when the caller can't administer permissions), so both call sites just embed it.</summary>
+    internal static Element InviteButton(Loadable<DetailModel> full, float availableWidth)
+        => Embed.Comp(() => new PlaylistInviteControl(full, availableWidth)) with { Key = $"pl-invite:{(int)availableWidth}" };
+
+    /// <summary>Live Spotify playlist owner mutations (permission, delete, invite) — false when fake backend or logged out.</summary>
+    internal static bool SpotifyEditsLive(Services? svc)
+        => svc?.RealPlaylistMutations is not null && svc.Session.Status == AuthStatus.Authenticated;
+
+    static void PatchDetail(Loadable<DetailModel> full, Func<DetailModel, DetailModel> patch)
+    {
+        if ((LoadState)full.State.Peek() != LoadState.Ready) return;
+        full.SetReady(patch(full.Value.Peek()));
+    }
+
+    static async Task RefreshPlaylistDetailAsync(Services? svc, Loadable<DetailModel> full, string uri, CancellationToken ct = default)
+    {
+        if (svc is null || !SpotifyEditsLive(svc)) return;
+        var fresh = await DetailPage.ReloadPlaylistDetailAsync(svc, uri, ct).ConfigureAwait(false);
+        if (fresh is not null) full.SetReady(fresh);
+    }
 
     // ── save plumbing ────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -57,7 +87,7 @@ static class PlaylistInlineEdit
         }
         catch (Exception ex)
         {
-            Toasts.Show(ex.Message, ToastSeverity.Critical);
+            PlaylistEditErrors.Toast(ex);
             return false;
         }
     }
@@ -70,7 +100,7 @@ static class PlaylistInlineEdit
         }
         catch (Exception ex)
         {
-            Toasts.Show(ex.Message, ToastSeverity.Critical);
+            PlaylistEditErrors.Toast(ex);
         }
     }
 
@@ -559,48 +589,339 @@ static class PlaylistInlineEdit
         }
     }
 
-    // ── collaborative ────────────────────────────────────────────────────────────────────────────────────────────
+    // ── owner row + invite ───────────────────────────────────────────────────────────────────────────────────────
 
-    sealed class CollaborativeToggle : Component
+    sealed class PlaylistOwnerRow : Component
     {
         readonly Loadable<DetailModel> _full;
         readonly float _width;
-        readonly Signal<bool> _on = new(false);
 
-        public CollaborativeToggle(Loadable<DetailModel> full, float width) { _full = full; _width = width; }
+        public PlaylistOwnerRow(Loadable<DetailModel> full, float width) { _full = full; _width = width; }
+
+        public override Element Render()
+        {
+            var m = _full.Value.Value;
+            string owner = m.OwnerName ?? "";
+            // Flex row: avatar + invite are Shrink=0, the name Grows/trims into whatever is left — nothing ever clips at
+            // rail width (the old hand-computed MaxWidth = _width - 120f under-reserved for the pill and clipped).
+            return new BoxEl
+            {
+                Direction = 0, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center, MaxWidth = _width,
+                Children =
+                [
+                    PersonPicture.Create("", 24f, displayName: owner, imageSourcePath: m.OwnerImage?.Url),
+                    WaveeType.TrackTitle(owner) with { Grow = 1f, Basis = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                    InviteButton(_full, _width),
+                ],
+            };
+        }
+    }
+
+    // ── share ────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    sealed class PlaylistShareButton : Component
+    {
+        readonly Loadable<DetailModel> _full;
+        public PlaylistShareButton(Loadable<DetailModel> full) => _full = full;
 
         public override Element Render()
         {
             var lib = UseContext(LibraryBridge.Slot);
             var m = _full.Value.Value;
-            string? uri = m.ContextUri;
-            UseLayoutEffect(() => _on.Value = m.Capabilities.IsCollaborative, uri ?? "", m.Capabilities.IsCollaborative);
+            return new BoxEl
+            {
+                Width = 40f, Height = 40f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                Corners = CornerRadius4.All(20f),
+                HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+                HoverScale = 1.06f, PressScale = 0.94f,
+                OnClick = () => _ = ShareAsync(lib, m),
+                Children = [Icon(Icons.Share, 16f, Tok.TextSecondary)],
+            };
+        }
 
-            if (lib is null || !m.Capabilities.CanEditMetadata || uri is null
-                || !m.Capabilities.CanAdministratePermissions)
-                return new BoxEl();
+        static async Task ShareAsync(LibraryBridge? lib, DetailModel m)
+        {
+            if (m.ContextUri is not { } uri) return;
+            var url = m.ShareUrl ?? DetailPage.SpotifyPlaylistWebUrl(uri);
+            if (InputHooks.Current.Default.Clipboard is { } clip)
+            {
+                clip.SetText(url);
+                Toasts.Show(Loc.Get(Strings.Detail.Edit.LinkCopied), ToastSeverity.Success);
+            }
+            else InputHooks.Current.Default.OpenUri?.Invoke(url);
+        }
+    }
+
+    internal static async Task CopyContributorInviteAsync(LibraryBridge lib, DetailModel m, Loadable<DetailModel>? full = null, Services? svc = null)
+    {
+        if (m.ContextUri is not { } uri) return;
+        try
+        {
+            var token = await lib.CreateContributorInviteAsync(uri).ConfigureAwait(false);
+            var url = $"{m.ShareUrl ?? DetailPage.SpotifyPlaylistWebUrl(uri)}?pt={token}";
+            InputHooks.Current.Default.Clipboard?.SetText(url);
+            Toasts.Show(Loc.Get(Strings.Detail.Edit.InviteCopied), ToastSeverity.Success);
+            if (full is not null) await RefreshPlaylistDetailAsync(svc, full, uri).ConfigureAwait(false);
+        }
+        catch (Exception ex) { PlaylistEditErrors.Toast(ex); }
+    }
+
+    static async Task SetCollaborativeAsync(LibraryBridge lib, Loadable<DetailModel> full, Services? svc, string uri, bool collaborative)
+    {
+        if (!await SaveDetailsAsync(lib, uri, null, null, collaborative).ConfigureAwait(false)) return;
+        PatchDetail(full, m => m with { Capabilities = m.Capabilities with { IsCollaborative = collaborative } });
+        await RefreshPlaylistDetailAsync(svc, full, uri).ConfigureAwait(false);
+    }
+
+    static async Task SetVisibilityAsync(LibraryBridge lib, Loadable<DetailModel> full, Services? svc, string uri, bool isPublic)
+    {
+        try
+        {
+            await lib.SetPlaylistVisibilityAsync(uri, isPublic).ConfigureAwait(false);
+            PatchDetail(full, m => m with { IsPublic = isPublic });
+            await RefreshPlaylistDetailAsync(svc, full, uri).ConfigureAwait(false);
+        }
+        catch (Exception ex) { PlaylistEditErrors.Toast(ex); }
+    }
+
+    // ── invite affordance + access flyout ────────────────────────────────────────────────────────────────────────
+
+    /// <summary>Open (or toggle) the Invite &amp; access flyout anchored to <paramref name="anchor"/>. Raw acrylic card,
+    /// focus-trapped, light-dismiss — the CollaboratorFacePile flyout template.</summary>
+    static void OpenAccessFlyout(IOverlayService? overlay, LibraryBridge lib, Services? svc, Loadable<DetailModel> full,
+        Func<NodeHandle> anchor, Ref<OverlayHandle?> handle, FlyoutPlacement placement)
+    {
+        if (overlay is null) return;
+        if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
+        handle.Value = overlay.Open(
+            anchor,
+            () => Embed.Comp(() => new PlaylistAccessFlyout(full, lib, svc)),
+            placement,
+            new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss, Chrome: PopupChrome.Raw) { ConstrainToRootBounds = false });
+        handle.Value.ClosedAction = () => handle.Value = null;
+    }
+
+    /// <summary>The shared adaptive invite affordance. Wide rows get a bordered pill (glyph + label); narrow rows get a
+    /// 28px round icon button + tooltip, so the owner name always keeps room. Both open the access flyout on click.</summary>
+    sealed class PlaylistInviteControl : Component
+    {
+        readonly Loadable<DetailModel> _full;
+        readonly float _availableWidth;
+
+        public PlaylistInviteControl(Loadable<DetailModel> full, float availableWidth)
+        { _full = full; _availableWidth = availableWidth; }
+
+        public override Element Render()
+        {
+            var lib = UseContext(LibraryBridge.Slot);
+            var svc = UseContext(Services.Slot);
+            var overlay = UseContext(Overlay.Service);
+            var m = _full.Value.Value;
+            if (lib is null || !SpotifyEditsLive(svc) || !m.Capabilities.CanAdministratePermissions || m.ContextUri is null)
+                return new BoxEl { Shrink = 0f };
+
+            var anchor = UseRef<NodeHandle>(default);
+            var handle = UseRef<OverlayHandle?>(null);
+            void Toggle() => OpenAccessFlyout(overlay, lib, svc, _full, () => anchor.Value, handle, FlyoutPlacement.BottomEdgeAlignedLeft);
+
+            // Below ~260px a full pill would starve the owner name → collapse to a round icon (still readable via tooltip).
+            bool compact = _availableWidth < 260f;
+            if (compact)
+                return ToolTip.Wrap(new BoxEl
+                {
+                    Width = 28f, Height = 28f, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                    Corners = CornerRadius4.All(14f), Fill = ColorF.Transparent,
+                    HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+                    HoverScale = 1.06f, PressScale = 0.94f,
+                    Cursor = CursorId.Hand, Focusable = true, Role = AutomationRole.Button,
+                    OnClick = Toggle, OnRealized = h => anchor.Value = h,
+                    Children = [Icon(Mdl.Friends, 14f, Tok.TextSecondary)],
+                }, Loc.Get(Strings.Detail.Edit.InviteCollaborators));
 
             return new BoxEl
             {
-                Width = _width,
+                Direction = 0, Shrink = 0f, Height = 28f, Gap = WaveeSpace.XS, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                Padding = new Edges4(10f, 0f, 12f, 0f), Corners = CornerRadius4.All(14f),
+                Fill = ColorF.Transparent, BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault,
+                HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+                HoverScale = 1.03f, PressScale = 0.97f,
+                Cursor = CursorId.Hand, Focusable = true, Role = AutomationRole.Button,
+                OnClick = Toggle, OnRealized = h => anchor.Value = h,
                 Children =
                 [
-                    CheckBox.Create(Loc.Get(Strings.Detail.Edit.Collaborative), _on.Value, () =>
-                    {
-                        bool next = !_on.Peek();
-                        _on.Value = next;
-                        _ = ToggleAsync(lib, next);
-                    }),
+                    Icon(Mdl.Friends, 12f, Tok.TextPrimary),
+                    new TextEl(Loc.Get(Strings.Detail.Edit.InviteCollaborators)) { Size = 12f, Weight = 600, Color = Tok.TextPrimary },
+                ],
+            };
+        }
+    }
+
+    /// <summary>The "Invite &amp; access" flyout body: copy-invite CTA + collaborative/public toggles. A Component that
+    /// reads live state from the <see cref="Loadable{T}"/> (component props freeze at mount), so the controlled toggles
+    /// re-render when the optimistic <c>PatchDetail</c> lands. <paramref name="lib"/>/<paramref name="svc"/> are stable
+    /// service instances — safe to capture at mount.</summary>
+    sealed class PlaylistAccessFlyout : Component
+    {
+        readonly Loadable<DetailModel> _full;
+        readonly LibraryBridge _lib;
+        readonly Services? _svc;
+
+        public PlaylistAccessFlyout(Loadable<DetailModel> full, LibraryBridge lib, Services? svc)
+        { _full = full; _lib = lib; _svc = svc; }
+
+        public override Element Render()
+        {
+            var m = _full.Value.Value;              // live — re-renders on PatchDetail (controlled toggles)
+            var caps = m.Capabilities;
+            string? uri = m.ContextUri;
+
+            var content = new List<Element>(5)
+            {
+                new BoxEl
+                {
+                    Direction = 1, Gap = 4f,
+                    Children =
+                    [
+                        new TextEl(Loc.Get(Strings.Detail.Edit.InviteCollaborators)) { Size = 14f, Weight = 700, Color = Tok.TextPrimary },
+                        new TextEl(Loc.Get(Strings.Detail.Edit.InviteHint)) { Size = 12f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, MaxLines = 3 },
+                    ],
+                },
+            };
+
+            if (caps.CanAdministratePermissions && uri is not null)
+                content.Add(CopyInviteCta());
+
+            if (caps.CanEditMetadata && caps.CanAdministratePermissions && uri is { } u)
+            {
+                content.Add(new BoxEl { Height = 1f, Fill = Tok.StrokeDividerDefault, Margin = new Edges4(0f, 2f, 0f, 2f) });
+                content.Add(ToggleRow(
+                    Loc.Get(Strings.Detail.Edit.Collaborative), Loc.Get(Strings.Detail.Edit.CollaborativeHint),
+                    caps.IsCollaborative,
+                    () => { var c = _full.Value.Peek(); _ = SetCollaborativeAsync(_lib, _full, _svc, u, !c.Capabilities.IsCollaborative); }));
+                content.Add(ToggleRow(
+                    Loc.Get(Strings.Detail.Edit.PublicPlaylist), Loc.Get(Strings.Detail.Edit.PublicHint),
+                    m.IsPublic,
+                    () => { var c = _full.Value.Peek(); _ = SetVisibilityAsync(_lib, _full, _svc, u, !c.IsPublic); }));
+            }
+
+            return new BoxEl
+            {
+                Direction = 1, Width = 300f, Gap = 12f, Padding = Edges4.All(16f),
+                Corners = CornerRadius4.All(WaveeRadius.Card), ClipToBounds = true, Shadow = Elevation.Flyout,
+                Acrylic = Tok.AcrylicFlyout, BorderWidth = 1f, BorderColor = Tok.StrokeFlyoutDefault,
+                Children = content.ToArray(),
+            };
+        }
+
+        Element CopyInviteCta()
+        {
+            var accent = Tok.AccentDefault;
+            var ink = WaveePalette.OnAccent(accent);
+            return new BoxEl
+            {
+                Direction = 0, Height = 34f, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                Corners = CornerRadius4.All(17f), Fill = accent,
+                HoverFill = Tok.AccentSecondary, PressedFill = Tok.AccentTertiary,
+                HoverScale = 1.02f, PressScale = 0.98f,
+                Cursor = CursorId.Hand, Focusable = true, Role = AutomationRole.Button,
+                OnClick = () => _ = CopyContributorInviteAsync(_lib, _full.Value.Peek(), _full, _svc),
+                Children =
+                [
+                    Icon(Mdl.Link, 14f, ink),
+                    new TextEl(Loc.Get(Strings.Detail.Edit.CopyInviteLink)) { Size = 13f, Weight = 600, Color = ink },
                 ],
             };
         }
 
-        async Task ToggleAsync(LibraryBridge lib, bool next)
+        static Element ToggleRow(string label, string caption, bool isOn, Action onToggle) => new BoxEl
         {
-            var cur = _full.Value.Peek();
-            if (cur.ContextUri is not { } uri) { _on.Value = !next; return; }
-            if (!await SaveDetailsAsync(lib, uri, null, null, next).ConfigureAwait(false))
-                _on.Value = !next;
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
+            Children =
+            [
+                new BoxEl
+                {
+                    Direction = 1, Grow = 1f, Basis = 0f, Gap = 2f,
+                    Children =
+                    [
+                        new TextEl(label) { Size = 13f, Weight = 600, Color = Tok.TextPrimary },
+                        new TextEl(caption) { Size = 11.5f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, MaxLines = 2 },
+                    ],
+                },
+                ToggleSwitch.Create(isOn, onToggle, style: SettingsCard.CompactToggleStyle()),
+            ],
+        };
+    }
+
+    // ── owner overflow (invite / delete) ─────────────────────────────────────────────────────────────────────────
+
+    sealed class OwnerOverflowMenu : Component
+    {
+        readonly Loadable<DetailModel> _full;
+        readonly DetailHandlers _h;
+
+        public OwnerOverflowMenu(Loadable<DetailModel> full, DetailHandlers h) { _full = full; _h = h; }
+
+        public override Element Render()
+        {
+            var lib = UseContext(LibraryBridge.Slot);
+            var svc = UseContext(Services.Slot);
+            var overlay = UseContext(Overlay.Service);
+            var m = _full.Value.Value;
+            if (lib is null || !SpotifyEditsLive(svc) || m.ContextUri is not { } uri || !m.Capabilities.IsOwner)
+                return new BoxEl();
+
+            var anchor = UseRef<NodeHandle>(default);
+            var handle = UseRef<OverlayHandle?>(null);
+            var accessHandle = UseRef<OverlayHandle?>(null);
+
+            void Toggle()
+            {
+                if (overlay is null) return;
+                if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
+                var cur = _full.Value.Peek();
+                var items = new List<MenuFlyoutItem>();
+                // Every row carries a glyph so the menu's icon column stays consistent (no double-empty indent). The
+                // collaborative/public toggles now live in the access flyout, reached via "Invite collaborators".
+                if (cur.Capabilities.CanAdministratePermissions)
+                {
+                    items.Add(new MenuFlyoutItem(Loc.Get(Strings.Detail.Edit.InviteCollaborators), Mdl.Friends,
+                        Invoke: () => OpenAccessFlyout(overlay, lib, svc, _full, () => anchor.Value, accessHandle, FlyoutPlacement.BottomEdgeAlignedRight)));
+                    items.Add(MenuFlyoutItem.Separator);
+                }
+                items.Add(new MenuFlyoutItem(Loc.Get(Strings.Detail.Edit.DeletePlaylist), Mdl.Delete,
+                    Invoke: () => SettingsShared.Confirm(overlay,
+                        Loc.Get(Strings.Detail.Edit.DeletePlaylist),
+                        Loc.Get(Strings.Detail.Edit.DeletePlaylistConfirm),
+                        Loc.Get(Strings.Detail.Edit.DeletePlaylist),
+                        () => _ = DeleteAsync(lib, uri))));
+                handle.Value = overlay.Open(
+                    () => anchor.Value,
+                    () => MenuFlyout.Build(items, () => handle.Value?.Close()),
+                    FlyoutPlacement.BottomEdgeAlignedRight,
+                    new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
+                handle.Value.ClosedAction = () => handle.Value = null;
+            }
+
+            return new BoxEl
+            {
+                Width = 40f, Height = 40f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                Corners = CornerRadius4.All(20f),
+                HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+                HoverScale = 1.06f, PressScale = 0.94f,
+                OnClick = Toggle,
+                OnRealized = h => anchor.Value = h,
+                Children = [Icon(Icons.More, 16f, Tok.TextSecondary)],
+            };
+        }
+
+        async Task DeleteAsync(LibraryBridge lib, string uri)
+        {
+            try
+            {
+                await lib.DeletePlaylistAsync(uri).ConfigureAwait(false);
+                _h.Go("home", null);
+            }
+            catch (Exception ex) { PlaylistEditErrors.Toast(ex); }
         }
     }
 

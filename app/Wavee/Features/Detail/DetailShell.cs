@@ -168,11 +168,15 @@ sealed class DetailShell : Component
         // Add-to-queue / add-to-playlist act on THIS context's tracks (capped batch); each confirms with a toast.
         void AddToQueue()
         {
+            // Queueing is remote-only (local playback is unsupported). No active device ⇒ prompt to choose one (the toast
+            // opens the player-bar device picker) instead of the old silent no-op.
+            if (string.IsNullOrEmpty(bridge.ActiveDeviceId.Peek())) { bridge.NotifyLocalPlaybackUnsupported(); return; }
             int n = DetailQueueActions.AddToEnd(svc?.Player, m.Tracks);
             if (n > 0) Toasts.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), ToastSeverity.Success);
         }
         void PlayNext()
         {
+            if (string.IsNullOrEmpty(bridge.ActiveDeviceId.Peek())) { bridge.NotifyLocalPlaybackUnsupported(); return; }
             int n = DetailQueueActions.PlayNext(svc?.Player, m.Tracks);
             if (n > 0) Toasts.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), ToastSeverity.Success);
         }

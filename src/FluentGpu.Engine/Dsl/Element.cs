@@ -98,7 +98,9 @@ public sealed record BoxEl : Element
     /// The "drop zone" look (and the <c>DropZone</c> control) uses this.</summary>
     public float BorderDashOn { get; init; }
     public float BorderDashOff { get; init; }
-    public CornerRadius4 Corners { get; init; }
+    // Bindable (like Fill/Opacity): the shell content card squares its rail-side corners while the docked right rail is
+    // open — a re-render can't reach it (frozen literal inside OverlayHost.Child), so the corner set must be a bind.
+    public Prop<CornerRadius4> Corners { get; init; }
     /// <summary>Form-validation visual state (form-validation.md). Bind it to a field's error memo
     /// (<c>Validation = Prop.Of(() =&gt; field.Error.Value.IsValid ? ValidationState.None : ValidationState.Error)</c>):
     /// on <see cref="ValidationState.Error"/> the reconciler resolves the theme critical color and the recorder swaps

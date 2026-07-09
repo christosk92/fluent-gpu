@@ -84,6 +84,8 @@
     <!-- the live music-video data service (Backend-only deps), source-included so VideoAssociationTests can drive it -->
     <Compile Include="..\Wavee\SpotifyLive\SpotifyVideoService.cs" />
     <Compile Include="..\Wavee\SpotifyLive\SpotifyUserProfileService.cs" />
+    <!-- the live presence/friend-activity feed (Backend + Wavee.Core deps only) — FriendActivityServiceTests drive it -->
+    <Compile Include="..\Wavee\SpotifyLive\SpotifyFriendActivityService.cs" />
     <Compile Include="..\Wavee\SpotifyLive\PathfinderClient.cs" />
     <Compile Include="..\Wavee\SpotifyLive\PathfinderResource.cs" />
     <!-- audio resilience surfaces (all protobuf-free) source-included so the key-resolver / provisioner / IPC-manager

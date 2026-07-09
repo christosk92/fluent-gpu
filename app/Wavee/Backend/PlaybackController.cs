@@ -506,7 +506,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         var next = new List<QueueWireEntry>(refs.Length + clusterNext.Count);
         foreach (var r in refs)        next.Add(new QueueWireEntry(r.Uri, r.Uid, true, r.Metadata));                 // inserted play-next → queue
         foreach (var t in clusterNext) next.Add(new QueueWireEntry(t.Uri, t.Uid, t.Provider == "queue", t.Metadata));// the device's queue, verbatim
-        var json = OutboundEnvelope.SetQueue(_ourDeviceId, ParseRevision(), prev, next, NewId(), NewId(), Now());
+        var json = OutboundEnvelope.SetQueue(_ourDeviceId, ParseRevision(), prev, next, NewId(), NewId(), Now(), NewId());
         var r2 = await _outbound.SendAsync(target, json, ct).ConfigureAwait(false);
         if (!r2.Ok) _log?.Invoke($"outbound set_queue → {target}: failed ({r2.Status})");
     }
@@ -1445,7 +1445,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     {
         var target = _projection.ActiveDeviceId;
         if (_outbound is null || string.IsNullOrEmpty(target)) return;
-        var json = OutboundEnvelope.Command(_ourDeviceId, endpoint, args, NewId(), NewId(), Now());
+        var json = OutboundEnvelope.Command(_ourDeviceId, endpoint, args, NewId(), NewId(), Now(), NewId());
         var r = await _outbound.SendAsync(target, json, ct).ConfigureAwait(false);
         if (!r.Ok) _log?.Invoke($"outbound {endpoint} → {target}: failed ({r.Status})");
     }
@@ -1470,7 +1470,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     {
         var target = _projection.ActiveDeviceId;
         if (_outbound is null || string.IsNullOrEmpty(target)) return;
-        var json = OutboundEnvelope.AddToQueue(_ourDeviceId, trackUri, "", false, false, false, NewId(), NewId(), Now());
+        var json = OutboundEnvelope.AddToQueue(_ourDeviceId, trackUri, "", false, false, false, NewId(), NewId(), Now(), NewId());
         var r = await _outbound.SendAsync(target, json, ct).ConfigureAwait(false);
         if (!r.Ok) _log?.Invoke($"outbound add_to_queue → {target}: failed ({r.Status})");
     }
@@ -1489,7 +1489,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     async Task ForwardTransferAsync(string target, CancellationToken ct)
     {
         if (_outbound is null) { _log?.Invoke($"transfer → {target} ignored — no outbound control"); return; }
-        var json = OutboundEnvelope.Command(_ourDeviceId, "transfer", Array.Empty<(string, object)>(), NewId(), NewId(), Now());
+        var json = OutboundEnvelope.Command(_ourDeviceId, "transfer", Array.Empty<(string, object)>(), NewId(), NewId(), Now(), NewId());
         var r = await _outbound.SendAsync(target, json, ct).ConfigureAwait(false);
         if (r.Ok) { _log?.Invoke($"outbound transfer → {target}: ok (ack {r.AckId})"); return; }
         _log?.Invoke($"outbound transfer → {target}: failed ({r.Status})");   // parity with the other forwards (was silent)
@@ -1504,7 +1504,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     static QueuedRef[] ToQueuedRefs(IReadOnlyList<PlaybackContextTrack> tracks)
     {
         var refs = new QueuedRef[tracks.Count];
-        for (int i = 0; i < tracks.Count; i++) refs[i] = new QueuedRef(tracks[i].Uri, tracks[i].Uid ?? "");
+        for (int i = 0; i < tracks.Count; i++) refs[i] = new QueuedRef(tracks[i].Uri, tracks[i].Uid ?? "", Metadata: tracks[i].Metadata);
         return refs;
     }
 

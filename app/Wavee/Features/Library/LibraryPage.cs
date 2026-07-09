@@ -25,23 +25,46 @@ sealed class LibraryPage : Component
 {
     readonly string _kind;   // "albums" | "artists" | "podcasts"
 
-    readonly Signal<string> _selectedKey = new("");   // selected item route key (album:/artist:/show: + uri)
-    readonly Signal<string> _albumKey = new("");       // artists only: the release picked in the discography (3rd column)
-    readonly Signal<int> _view = new(1);               // 0 CompactList · 1 List · 2 CompactGrid · 3 Grid
-    readonly Signal<int> _sort = new(0);               // 0 Recents · 1 Recently added · 2 Alphabetical · 3 Creator · 4 Release date
-    readonly Signal<bool> _desc = new(false);
-    readonly Signal<int> _size = new(1);               // grid card size: 0 S · 1 M · 2 L
-    readonly Signal<string> _filter = new("");
+    readonly IAppSettings? _settings;                  // per-kind persisted state (seed in ctor, save on change)
+    readonly Signal<string> _selectedKey;              // selected item route key (album:/artist:/show: + uri)
+    readonly Signal<string> _albumKey;                 // artists only: the release picked in the discography (3rd column)
+    readonly Signal<int> _view;                        // 0 CompactList · 1 List · 2 CompactGrid · 3 Grid
+    readonly Signal<int> _sort;                        // 0 Recents · 1 Recently added · 2 Alphabetical · 3 Creator · 4 Release date
+    readonly Signal<bool> _desc;
+    readonly Signal<int> _size;                        // grid card size: 0 S · 1 M · 2 L
+    readonly Signal<string> _filter = new("");         // NOT persisted — the search filter starts empty each launch
     readonly Signal<float> _leftW, _midW;              // resizable column widths
+    // Artists column-2 (discography) controls, mirrored from the left picker's set: sort/direction/view-type/grid-size.
+    readonly Signal<int> _aSort, _aView, _aSize;
+    readonly Signal<bool> _aDesc;
+    readonly Signal<string> _aFilter = new("");        // NOT persisted
     readonly SelectionModel _navSel = new();           // master list/grid single-selection (the WinUI ItemsView selection)
 
     static readonly string[] NoSuggest = Array.Empty<string>();
 
-    public LibraryPage(string kind)
+    // Seed every persisted signal from settings in the ctor (like the sidebar width) so the FIRST frame already uses the
+    // saved widths/sort/view/selection — no default→saved flash. A null store (or a missing key) falls back to the key's
+    // default. Filter signals are created empty above and never persisted.
+    public LibraryPage(string kind, IAppSettings? settings = null)
     {
-        _kind = kind;
-        _leftW = new(kind == "artists" ? 280f : 340f);
-        _midW = new(440f);
+        _kind = kind; _settings = settings;
+        float Gf(SettingKey<float> k) => settings is null ? k.Default : settings.Get(k);
+        int Gi(SettingKey<int> k) => settings is null ? k.Default : settings.Get(k);
+        bool Gb(SettingKey<bool> k) => settings is null ? k.Default : settings.Get(k);
+        string Gs(SettingKey<string> k) => settings is null ? k.Default : settings.Get(k);
+
+        _leftW = new(Gf(LibraryStateKeys.LeftW(kind)));
+        _midW = new(Gf(LibraryStateKeys.MidW(kind)));
+        _sort = new(Gi(LibraryStateKeys.Sort(kind)));
+        _desc = new(Gb(LibraryStateKeys.Desc(kind)));
+        _view = new(Gi(LibraryStateKeys.View(kind)));
+        _size = new(Gi(LibraryStateKeys.Size(kind)));
+        _selectedKey = new(Gs(LibraryStateKeys.Selected(kind)));
+        _albumKey = new(Gs(LibraryStateKeys.AlbumKey(kind)));
+        _aSort = new(Gi(LibraryStateKeys.AlbumSort(kind)));
+        _aDesc = new(Gb(LibraryStateKeys.AlbumDesc(kind)));
+        _aView = new(Gi(LibraryStateKeys.AlbumView(kind)));
+        _aSize = new(Gi(LibraryStateKeys.AlbumSize(kind)));
     }
 
     readonly record struct NavItem(Image? Cover, string Title, string Subtitle, string Uri, bool Circular, string RouteKey, int Year);
@@ -69,6 +92,9 @@ sealed class LibraryPage : Component
             if (it.Cover?.Url is { Length: > 0 } warmUrl) PrefetchImage(warmUrl, warmPx);
         // Keep the ItemsView SelectionModel pointed at the selected item across load/filter/sort/view + auto-select first.
         UseEffect(() => SyncNav(shown), NavHash(shown) + "|" + _selectedKey.Value);
+        // Persist per-kind page state (column widths persist on drag-end via the grips, NOT here). Keyed on a composite of
+        // every persisted signal so it writes only on discrete user actions — never per-frame. Filter is excluded on purpose.
+        UseEffect(SaveState, $"{_sort.Value}|{_desc.Value}|{_view.Value}|{_size.Value}|{_selectedKey.Value}|{_albumKey.Value}|{_aSort.Value}|{_aDesc.Value}|{_aView.Value}|{_aSize.Value}");
 
         string sel = _selectedKey.Value;   // subscribe
         bool artists = IsArtists;
@@ -89,7 +115,7 @@ sealed class LibraryPage : Component
         return new BoxEl
         {
             Direction = 0, Grow = 1f, AlignItems = FlexAlign.Stretch,
-            Children = [LeftColumn(shown), Grip(_leftW, 240f, 560f), right],
+            Children = [LeftColumn(shown), Grip(_leftW, 240f, 560f, () => _settings?.Set(LibraryStateKeys.LeftW(_kind), _leftW.Peek())), right],
         };
     }
 
@@ -104,6 +130,26 @@ sealed class LibraryPage : Component
     {
         _selectedKey.Value = it.RouteKey;
         if (IsArtists) _albumKey.Value = "";   // a new artist resets the 3rd-column release selection
+    }
+
+    // Persist the current per-kind page state (invoked by the composite-keyed effect on any change). Widths are handled
+    // separately (drag-end). Album-side keys only apply to the artists (3-column) view.
+    void SaveState()
+    {
+        if (_settings is null) return;
+        _settings.Set(LibraryStateKeys.Sort(_kind), _sort.Peek());
+        _settings.Set(LibraryStateKeys.Desc(_kind), _desc.Peek());
+        _settings.Set(LibraryStateKeys.View(_kind), _view.Peek());
+        _settings.Set(LibraryStateKeys.Size(_kind), _size.Peek());
+        _settings.Set(LibraryStateKeys.Selected(_kind), _selectedKey.Peek());
+        if (IsArtists)
+        {
+            _settings.Set(LibraryStateKeys.AlbumKey(_kind), _albumKey.Peek());
+            _settings.Set(LibraryStateKeys.AlbumSort(_kind), _aSort.Peek());
+            _settings.Set(LibraryStateKeys.AlbumDesc(_kind), _aDesc.Peek());
+            _settings.Set(LibraryStateKeys.AlbumView(_kind), _aView.Peek());
+            _settings.Set(LibraryStateKeys.AlbumSize(_kind), _aSize.Peek());
+        }
     }
 
     // ── data ──
@@ -255,7 +301,7 @@ sealed class LibraryPage : Component
             // (Shrink=0 + fixed Width let the viewport outgrow the flex slot → discography tiles under the tracks pane).
             // When the rail is open the 3-column sum-of-minimums must fit a narrower content region → drop this floor 300→220.
             Basis = _midW.Value, MinWidth = railOpen ? 220f : 300f, MaxWidth = _midW.Value, Shrink = 1f, Grow = 0f,
-            Children = [Embed.Comp(() => new LibraryArtistPane(artist, _albumKey))],
+            Children = [Embed.Comp(() => new LibraryArtistPane(artist, _albumKey, _aSort, _aDesc, _aView, _aSize, _aFilter))],
         };
         Element tracksPane = _albumKey.Value.Length > 0
             ? Pane with { Key = "lib:tracks", Grow = 1f, Basis = 0f, MinWidth = 220f, Shrink = 1f,
@@ -266,7 +312,7 @@ sealed class LibraryPage : Component
         return new BoxEl
         {
             Direction = 0, Grow = 1f, Basis = 0f, MinWidth = 0f, AlignItems = FlexAlign.Stretch, ClipToBounds = true,
-            Children = [artistPane, Grip(_midW, 300f, 620f), tracksPane],
+            Children = [artistPane, Grip(_midW, 300f, 620f, () => _settings?.Set(LibraryStateKeys.MidW(_kind), _midW.Peek())), tracksPane],
         };
     }
 
@@ -278,10 +324,10 @@ sealed class LibraryPage : Component
 
     // The grip's ColumnGrip carries Grow=1 to fill the column HEIGHT — so it must be boxed in a fixed Width=10 / Shrink=0
     // wrapper, else that Grow leaks into the horizontal row and the grip eats half the leftover width (the empty-gap bug).
-    static Element Grip(Signal<float> w, float min, float max) => new BoxEl
+    static Element Grip(Signal<float> w, float min, float max, Action onCommit) => new BoxEl
     {
         Width = 7f, Shrink = 0f, Direction = 1, AlignItems = FlexAlign.Stretch,
-        Children = [Embed.Comp(() => new ColumnGrip(w, min, max))],
+        Children = [Embed.Comp(() => new ColumnGrip(w, min, max, onCommit))],
     };
 }
 
@@ -291,9 +337,10 @@ sealed class ColumnGrip : Component
 {
     readonly Signal<float> _width;
     readonly float _min, _max;
+    readonly Action _onCommit;
     NodeHandle _self;
     float _startW, _startPx;
-    public ColumnGrip(Signal<float> width, float min, float max) { _width = width; _min = min; _max = max; }
+    public ColumnGrip(Signal<float> width, float min, float max, Action onCommit) { _width = width; _min = min; _max = max; _onCommit = onCommit; }
 
     public override Element Render() => new BoxEl
     {
@@ -302,6 +349,7 @@ sealed class ColumnGrip : Component
         Grow = 1f, Shrink = 0f, Direction = 1, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
         Cursor = CursorId.SizeWE,
         OnRealized = h => _self = h, OnPointerDown = OnDown, OnDrag = OnMove,
+        OnClick = _onCommit,   // for an OnDrag node, OnClick IS the release/commit edge (drag-end) — persist the chosen width
         Children = [new BoxEl { Width = 1f, Grow = 1f, Fill = Tok.StrokeDividerDefault, HoverFill = Tok.TextTertiary }],
     };
 
@@ -363,7 +411,7 @@ sealed class LibraryDetailPane : Component
         // above). So the rows get the identical cell: number↔play/pause on hover, the now-playing equalizer, the per-row
         // heart, art/columns the tier system fits to the pane width, and multi-select — image #2 now matches image #3.
         Element body = _show
-            ? ScrollView(CompactEpisodes(m.Episodes ?? Array.Empty<Episode>(), i => { if (uri.Length > 0) _ = _svc.Player.PlayAsync(uri, i); })) with { Grow = 1f, AutoEdgeFade = true }
+            ? ScrollView(CompactEpisodes(m.Episodes ?? Array.Empty<Episode>(), i => { if (uri.Length > 0) _ = _svc.Player.PlayAsync(uri, i); })) with { Grow = 1f }
             : Embed.Comp(() => new TrackList(_trackRoute, _model, _bridge, TrackHandlers(go, lib), showToolbar: false, embedded: true));
 
         return new BoxEl
@@ -496,9 +544,15 @@ sealed class LibraryArtistPane : Component
 {
     readonly Loadable<Artist> _artist;
     readonly Signal<string> _albumKey;
+    readonly Signal<int> _aSort, _aView, _aSize;
+    readonly Signal<bool> _aDesc;
+    readonly Signal<string> _aFilter;
     readonly SelectionModel _discoSel = new();   // discography grid single-selection (drives the 3rd column)
-    public LibraryArtistPane(Loadable<Artist> artist, Signal<string> albumKey)
-    { _artist = artist; _albumKey = albumKey; }
+    static readonly string[] NoSuggest = Array.Empty<string>();
+
+    public LibraryArtistPane(Loadable<Artist> artist, Signal<string> albumKey,
+        Signal<int> aSort, Signal<bool> aDesc, Signal<int> aView, Signal<int> aSize, Signal<string> aFilter)
+    { _artist = artist; _albumKey = albumKey; _aSort = aSort; _aDesc = aDesc; _aView = aView; _aSize = aSize; _aFilter = aFilter; }
 
     public override Element Render()
     {
@@ -506,57 +560,105 @@ sealed class LibraryArtistPane : Component
         var st = (LoadState)_artist.State.Value;   // subscribe
         var a = _artist.Value.Value;               // subscribe
         var albums = a?.TopAlbums ?? Array.Empty<Album>();
+        var shown = FilterSortAlbums(albums, _aFilter.Value, _aSort.Value, _aDesc.Value);   // subscribe (filter/sort/direction)
         // Keep the discography selection synced to the chosen release — UNCONDITIONAL hook, BEFORE any early return (else
-        // the effect-slot count changes when the artist flips Pending→Ready → an out-of-range hook crash).
-        UseEffect(() => SyncDisco(albums), _albumKey.Value + "|" + albums.Count + "|" + (albums.Count > 0 ? albums[0].Uri : ""));
+        // the effect-slot count changes when the artist flips Pending→Ready → an out-of-range hook crash). Driven off the
+        // SHOWN (filtered/sorted) list so the selection index matches the rendered ItemsView.
+        UseEffect(() => SyncDisco(shown), _albumKey.Value + "|" + shown.Length + "|" + (shown.Length > 0 ? shown[0].Uri : ""));
 
-        if (st != LoadState.Ready || a is null || a.Name.Length == 0) return Skeleton();
-        if (go is null) return Discography(albums);
-
+        // The toolbar (album sort/view controls + Filter + "Go to artist") renders even while the artist loads; only the
+        // body swaps skeleton→grid/list. So the controls never flash in/out and stay put across a selection change.
+        Element body = (st != LoadState.Ready || a is null || a.Name.Length == 0) ? Skeleton() : Body(shown);
         return new BoxEl
         {
             Direction = 1, Grow = 1f, ClipToBounds = true,
-            Children = [ArtistNav(a, go), Discography(albums)],
+            Children = [Toolbar(a, go), body],
         };
     }
 
-    static Element ArtistNav(Artist a, Action<string, string?> go) => new BoxEl
+    // The discography toolbar — the SAME controls as the left picker (LibrarySortView pill + Filter box), but over the
+    // artist's releases: hasCreator:false (a single artist), hasRelease:true (Release-date sort applies). "Go to artist"
+    // stays top-right (shown once the artist is loaded).
+    Element Toolbar(Artist? a, Action<string, string?>? go) => new BoxEl
     {
-        Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.End,
-        Padding = new Edges4(WaveeSpace.M, WaveeSpace.M, WaveeSpace.S, WaveeSpace.M),
+        Direction = 1, Gap = WaveeSpace.S, Padding = new Edges4(WaveeSpace.M, WaveeSpace.M, WaveeSpace.M, WaveeSpace.S),
         Children =
         [
-            new BoxEl
-            {
-                Direction = 0, Gap = WaveeSpace.XS, AlignItems = FlexAlign.Center,
-                Corners = CornerRadius4.All(16f), Padding = new Edges4(WaveeSpace.M, WaveeSpace.XS, WaveeSpace.M, WaveeSpace.XS),
-                HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary, HoverScale = 1.02f, PressScale = 0.98f,
-                OnClick = () => go("artist:" + a.Uri, a.Name),
-                Children =
-                [
-                    new TextEl(Loc.Get(Strings.Detail.GoToArtist)) { Size = 12f, Weight = 600, Color = Tok.TextSecondary, HoverColor = Tok.TextPrimary },
-                    Icon(Icons.OpenInNewWindow, 14f, Tok.TextSecondary),
-                ],
-            },
+            new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S, Children =
+            [
+                Embed.Comp(() => new LibrarySortView(_aSort, _aDesc, _aView, _aSize, hasCreator: false, hasRelease: true)),
+                new BoxEl { Grow = 1f },
+                a is not null && go is not null ? GoToArtist(a, go) : new BoxEl(),
+            ] },
+            AutoSuggestBox.Create(NoSuggest, Loc.Get(Strings.Library.Filter), text: _aFilter, queryIcon: Icons.Search, grow: 1f, maxFillWidth: 9999f, minHeight: 32f, cornerRadius: 8f),
         ],
     };
 
-    // A GRID of release cards (WaveeMusic's artist discography is a grid, not a list). Tapping a card selects it for the
-    // 3rd column (its tracks).
-    // A GRID of release cards (WaveeMusic's artist discography is a grid, not a list) — responsive: cards size to fill the
-    // pane width exactly and to their own content height (no clip). Tapping a card selects it for the 3rd column.
-    // The discography is an ItemsView grid (proper WinUI selection chrome) — single-select drives the 3rd column. Keyed by
-    // the album set so an artist change remounts it; responsive cols via Responsive.Of; it self-scrolls (no outer ScrollView).
-    Element Discography(IReadOnlyList<Album> albums) => new BoxEl
+    // The "Go to artist" pill — extracted verbatim from the former ArtistNav so it can sit inline in the toolbar row.
+    static Element GoToArtist(Artist a, Action<string, string?> go) => new BoxEl
     {
-        Key = "disco:" + albums.Count + ":" + (albums.Count > 0 ? albums[0].Uri : ""),
-        Grow = 1f, Basis = 0f, MinHeight = 0f, Direction = 1, ClipToBounds = true,
-        Padding = new Edges4(WaveeSpace.M, 0f, WaveeSpace.M, 0f),
-        Children = [ItemsView.Create(albums.Count, i => DiscoCardContent(albums[i]), RepeatLayout.GridFit(124f, 8f),
-            selectionMode: ItemsSelectionMode.Single, selection: _discoSel, selector: SelectorVisual.Border,
-            selectionChanged: () => { int i = _discoSel.FirstSelectedIndex; if (i >= 0 && i < albums.Count) _albumKey.Value = "album:" + albums[i].Uri; },
-            grow: 1f)],
+        Direction = 0, Gap = WaveeSpace.XS, AlignItems = FlexAlign.Center,
+        Corners = CornerRadius4.All(16f), Padding = new Edges4(WaveeSpace.M, WaveeSpace.XS, WaveeSpace.M, WaveeSpace.XS),
+        HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary, HoverScale = 1.02f, PressScale = 0.98f,
+        OnClick = () => go("artist:" + a.Uri, a.Name),
+        Children =
+        [
+            new TextEl(Loc.Get(Strings.Detail.GoToArtist)) { Size = 12f, Weight = 600, Color = Tok.TextSecondary, HoverColor = Tok.TextPrimary },
+            Icon(Icons.OpenInNewWindow, 14f, Tok.TextSecondary),
+        ],
     };
+
+    // Filter (title contains) + sort over the artist's releases. Sort codes mirror the picker: 0 = as returned by the API
+    // (≈ release-date desc), 1 = reversed, 2 = Alphabetical, 4 = Release date (by Year). Direction flips the sorted forms.
+    static Album[] FilterSortAlbums(IReadOnlyList<Album> albums, string filter, int sort, bool desc)
+    {
+        string q = filter.Trim();
+        var arr = (q.Length == 0 ? albums : albums.Where(al => al.Name.Contains(q, StringComparison.OrdinalIgnoreCase))).ToArray();
+        Comparison<Album>? cmp = sort switch
+        {
+            2 => (x, y) => string.Compare(x.Name, y.Name, StringComparison.OrdinalIgnoreCase),
+            4 => (x, y) => x.Year.CompareTo(y.Year),
+            _ => null,
+        };
+        if (cmp is not null) Array.Sort(arr, cmp);
+        else if (sort == 1) Array.Reverse(arr);
+        if (desc && cmp is not null) Array.Reverse(arr);
+        return arr;
+    }
+
+    // Grid (view>=2) vs list, grid-size S/M/L — the SAME view-type semantics as the left picker's ListBody. Keyed by
+    // view/size/set so a view change remounts with the right slots; the external _discoSel keeps the selection. Picking a
+    // release sets _albumKey → 3rd column. size=1 non-compact grid → 124px min width (matches the previous fixed grid).
+    Element Body(IReadOnlyList<Album> albums)
+    {
+        if (albums.Count == 0)
+            return new BoxEl { Padding = new Edges4(WaveeSpace.M, WaveeSpace.XL, WaveeSpace.M, WaveeSpace.XL),
+                Children = [new TextEl(_aFilter.Peek().Length > 0 ? Loc.Get(Strings.Library.NoMatch) : "…") { Size = 13f, Color = Tok.TextTertiary }] };
+
+        int view = _aView.Value, size = _aSize.Value;   // subscribe
+        bool grid = view >= 2, compact = view == 0 || view == 2;
+        string key = "disco:" + view + ":" + size + ":" + albums.Count + ":" + albums[0].Uri;
+        void Pick(int i) { if (i >= 0 && i < albums.Count) _albumKey.Value = "album:" + albums[i].Uri; }
+
+        if (grid)
+            return new BoxEl
+            {
+                Key = key, Grow = 1f, Basis = 0f, MinHeight = 0f, Direction = 1, ClipToBounds = true,
+                Padding = new Edges4(WaveeSpace.M, 0f, WaveeSpace.M, 0f),
+                Children = [ItemsView.Create(albums.Count, i => DiscoCardContent(albums[i], compact),
+                    RepeatLayout.GridFit((compact ? 84f : 100f) + size * (compact ? 16f : 24f), 8f),
+                    selectionMode: ItemsSelectionMode.Single, selection: _discoSel, selector: SelectorVisual.Border,
+                    selectionChanged: () => Pick(_discoSel.FirstSelectedIndex), grow: 1f)],
+            };
+
+        return new BoxEl
+        {
+            Key = key, Grow = 1f, Basis = 0f, MinHeight = 0f, Direction = 1,
+            Children = [ItemsView.List(albums.Count, i => DiscoRowContent(albums[i], compact),
+                selectionMode: ItemsSelectionMode.Single, selection: _discoSel,
+                onSelectionIndexChanged: Pick, itemExtent: compact ? 44f : 60f, grow: 1f)],
+        };
+    }
 
     void SyncDisco(IReadOnlyList<Album> albums)
     {
@@ -568,16 +670,34 @@ sealed class LibraryArtistPane : Component
         else if (_discoSel.FirstSelectedIndex != idx) _discoSel.Select(idx);
     }
 
-    static Element DiscoCardContent(Album al) => new BoxEl
+    // Grid card: cover + title, plus a "year · KIND" subtitle in non-compact grids (compact drops it, like the picker).
+    static Element DiscoCardContent(Album al, bool compact)
     {
-        Direction = 1, Gap = WaveeSpace.XS, ClipToBounds = true, Padding = new Edges4(WaveeSpace.XS, WaveeSpace.XS, WaveeSpace.XS, WaveeSpace.XS),
-        Children =
-        [
+        var children = new List<Element>(3)
+        {
             Surfaces.ArtworkFill(al.Cover, 6f),
             new TextEl(al.Name) { Size = 12f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-            new TextEl((al.Year > 0 ? al.Year + " · " : "") + KindLabel(al.Kind)) { Size = 11f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-        ],
-    };
+        };
+        if (!compact)
+            children.Add(new TextEl((al.Year > 0 ? al.Year + " · " : "") + KindLabel(al.Kind)) { Size = 11f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
+        return new BoxEl { Direction = 1, Gap = WaveeSpace.XS, ClipToBounds = true, Padding = new Edges4(WaveeSpace.XS, WaveeSpace.XS, WaveeSpace.XS, WaveeSpace.XS), Children = children.ToArray() };
+    }
+
+    // List row: 40px cover (dropped when compact) + title + "year · KIND" subtitle — mirrors the left picker's NavRowContent.
+    static Element DiscoRowContent(Album al, bool compact)
+    {
+        var children = new List<Element>(2);
+        if (!compact)
+            children.Add(new BoxEl { Width = 40f, Height = 40f, Shrink = 0f, Corners = CornerRadius4.All(5f), ClipToBounds = true,
+                Children = [Surfaces.Artwork(al.Cover, al.Uri.GetHashCode() & 0x7fffffff, 40f, 40f, 5f)] });
+        children.Add(new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Gap = 1f,
+            Children =
+            [
+                new TextEl(al.Name) { Size = compact ? 13f : 14f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                compact ? new BoxEl() : new TextEl((al.Year > 0 ? al.Year + " · " : "") + KindLabel(al.Kind)) { Size = 12f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+            ] });
+        return new BoxEl { Direction = 0, Grow = 1f, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, Padding = new Edges4(WaveeSpace.S, 0f, WaveeSpace.S, 0f), Children = children.ToArray() };
+    }
 
     static string KindLabel(AlbumKind k) => k switch
     {

@@ -72,13 +72,15 @@ public sealed class ConnectedAnimation
 
     private const int MaxPendingAge = 30;   // frames a snapshot waits for its dest before expiring (~0.5s — the detail
                                             // page's skeleton reserves a tagged cover slot immediately, so the dest mounts fast)
-    private const float RevealMs = 130f;    // dest cross-fade-in once the overlay lands
-    private const float FadeInMs = 110f;    // overlay materialize-in: the cover eases in instead of hard-popping at the source rect
+    private const float RevealMs = 180f;    // dest cross-fade-in once the overlay lands (stretched to match the calm fly)
+    private const float FadeInMs = 220f;    // overlay materialize-in — paced to the ~0.7s spring so the cover breathes in
 
     /// <summary>The fly motion (a tunable "motion token" the theme/app can set) — a SPRING or an EASED curve with a
-    /// custom <see cref="EasingSpec"/> + duration. Defaults to the WinUI shared-element DECELERATE curve (fast launch,
-    /// smooth no-overshoot landing). Set <c>FlyMotion = ConnectedMotion.Springy(...)</c> or another <c>Eased(...)</c>.</summary>
-    public ConnectedMotion FlyMotion { get; set; } = ConnectedMotion.Eased(Easing.FluentDecelerate, 300f);
+    /// custom <see cref="EasingSpec"/> + duration. Default: the CALM glide — an emphasized-decelerate bézier over
+    /// 520 ms: a brisk (but not snappy) launch that covers most of the distance early, then a LONG soft ease-out so the
+    /// cover settles gently into place. No bounce, no sluggish spring wind-up, no 300 ms mechanical snap.
+    /// Set <c>FlyMotion = ConnectedMotion.Springy(...)</c> / <c>Eased(...)</c> to retune.</summary>
+    public ConnectedMotion FlyMotion { get; set; } = ConnectedMotion.Eased(EasingSpec.CubicBezier(0.30f, 0.00f, 0.12f, 1.00f), 520f);
 
     /// <summary>OS / theme reduced-motion gate: when true, capture + fly are skipped (instant swap), per §5.9.</summary>
     public bool ReducedMotion { get; set; }
@@ -423,16 +425,28 @@ public sealed class ConnectedAnimation
         {
             var f = _flights[i];
             f.Age++;
-            // The page SCROLLED out from under an in-flight fly (its dest moved from the seeded target): the overlay lives
-            // in the fixed window-space band, so it would float at the stale spot. Retire NOW and SNAP the dest in at its
-            // CURRENT position — an interrupted connected-anim lands on the real target, never chases a ghost.
-            if (DestMoved(in f))
+            // The dest re-laid or moved under an in-flight fly — the page settling (the cover slot's early/estimated
+            // size fixing up, a Responsive re-fit) or a scroll. RETARGET the flight at the live rect: re-base the
+            // overlay so THIS frame's pixels don't move, re-aim the springs at the new identity — the fly bends to the
+            // true target instead of landing on the stale rect and snap-jumping in ("arrives bigger, then jumps, with
+            // a flash"). Only a HUGE displacement (the page scrolled far away) still retires and snaps — chasing a
+            // target across the whole window reads worse than a cut.
+            if (_scene.IsLive(f.Dest) && OnLiveTree(f.Dest))
             {
-                SetTaggedVisible(f.Key, true); SetTaggedOpacity(f.Key, 1f, fade: false);
-                _images.Unpin(new ImageHandle(f.ImageId));
-                FreeFlight(in f);
-                _flights.RemoveAt(i);
-                continue;
+                RectF cur = _scene.AbsoluteRect(f.Dest);
+                if (cur.W > 1f && cur.H > 1f && RectDiffers(in cur, in f.DestRect, 1f))
+                {
+                    if (RectDiffers(in cur, in f.DestRect, BigJumpPx))
+                    {
+                        SetTaggedVisible(f.Key, true); SetTaggedOpacity(f.Key, 1f, fade: false);
+                        _images.Unpin(new ImageHandle(f.ImageId));
+                        FreeFlight(in f);
+                        _flights.RemoveAt(i);
+                        continue;
+                    }
+                    RetargetFlight(ref f, in cur);
+                    _flights[i] = f;
+                }
             }
             bool overlayDead = !_scene.IsLive(f.Overlay);
             bool wedged = f.Age >= MaxFlightFrames;   // defensive backstop so an overlay can never get stuck
@@ -520,11 +534,62 @@ public sealed class ConnectedAnimation
     // True once the dest has MOVED appreciably from the rect the overlay was seeded to chase (the page SCROLLED while the
     // fly is in flight). The overlay band is fixed window-space, so a moved dest means the overlay is heading to a ghost
     // position — the caller retires the fly and snaps the dest in where it ACTUALLY is now.
-    private bool DestMoved(in Flight f)
+    // Retarget threshold: a dest displaced beyond this (a far scroll) retires-and-snaps instead of chasing.
+    private const float BigJumpPx = 240f;
+
+    private static bool RectDiffers(in RectF a, in RectF b, float eps) =>
+        MathF.Abs(a.X - b.X) > eps || MathF.Abs(a.Y - b.Y) > eps ||
+        MathF.Abs(a.W - b.W) > eps || MathF.Abs(a.H - b.H) > eps;
+
+    /// <summary>Re-aim an in-flight fly at the dest's LIVE rect: re-base the overlay's model box on the new rect and
+    /// recompute the transform so the CURRENT visual rect is unchanged this frame (no visible discontinuity), then
+    /// re-seed the motion toward the new identity. The corner morph's progress is preserved across the re-basing.</summary>
+    private void RetargetFlight(ref Flight f, in RectF newDest)
     {
-        if (!_scene.IsLive(f.Dest) || !OnLiveTree(f.Dest)) return false;
-        RectF cur = _scene.AbsoluteRect(f.Dest);
-        return MathF.Abs(cur.X - f.DestRect.X) > 8f || MathF.Abs(cur.Y - f.DestRect.Y) > 8f;
+        if (!_scene.IsLive(f.Overlay)) { f.DestRect = newDest; return; }
+        ref NodePaint p = ref _scene.Paint(f.Overlay);
+        ref RectF b = ref _scene.Bounds(f.Overlay);
+
+        // Current corner-morph progress in the OLD basis (MorphCorners tracks M11 from Sx0 → 1).
+        var t = p.LocalTransform;
+        float span = 1f - f.Sx0;
+        float prog = MathF.Abs(span) < 0.001f ? 1f : Math.Clamp((t.M11 - f.Sx0) / span, 0f, 1f);
+
+        // The visual rect the overlay occupies THIS frame (recorder composes T(bounds) ∘ about-centre(local)).
+        float vw = b.W * t.M11, vh = b.H * t.M22;
+        float vcx = b.X + b.W * 0.5f + t.Dx, vcy = b.Y + b.H * 0.5f + t.Dy;
+
+        // Re-base: model box = the live dest rect; transform re-derived so the visual rect is bit-identical this frame.
+        b = newDest;
+        float sx = vw / newDest.W, sy = vh / newDest.H;
+        float tx = vcx - (newDest.X + newDest.W * 0.5f), ty = vcy - (newDest.Y + newDest.H * 0.5f);
+        p.LocalTransform = Affine2D.Translation(tx, ty).Multiply(Affine2D.Scale(sx, sy));
+        _scene.Mark(f.Overlay, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+
+        // Re-seed the motion from the re-based state toward the new identity (== exactly covering the live dest).
+        var motion = FlyMotion;
+        if (motion.IsSpring)
+        {
+            _anim.Spring(f.Overlay, AnimChannel.ScaleX, 1f, motion.Spring, initial: sx);
+            _anim.Spring(f.Overlay, AnimChannel.ScaleY, 1f, motion.Spring, initial: sy);
+            _anim.Spring(f.Overlay, AnimChannel.TranslateX, 0f, motion.Spring, initial: tx);
+            _anim.Spring(f.Overlay, AnimChannel.TranslateY, 0f, motion.Spring, initial: ty);
+        }
+        else
+        {
+            float dur = motion.DurationMs;
+            _anim.Animate(f.Overlay, AnimChannel.ScaleX, sx, 1f, dur, motion.Easing);
+            _anim.Animate(f.Overlay, AnimChannel.ScaleY, sy, 1f, dur, motion.Easing);
+            _anim.Animate(f.Overlay, AnimChannel.TranslateX, tx, 0f, dur, motion.Easing);
+            _anim.Animate(f.Overlay, AnimChannel.TranslateY, ty, 0f, dur, motion.Easing);
+        }
+
+        // Corner morph continuity: keep the eased progress across the basis change (MorphCorners reads (M11-Sx0)/(1-Sx0)).
+        if (prog >= 0.99f) f.SrcCorners = f.DestCorners;
+        f.Sx0 = prog < 0.99f ? (sx - prog) / (1f - prog) : sx;
+        f.DestCorners = _scene.IsLive(f.Dest) ? _scene.Paint(f.Dest).Corners : f.DestCorners;
+        f.DestRect = newDest;
+        f.HasLast = false;   // the settle detector's last-frame samples are in the old basis — re-prime
     }
 
     // Set the opacity of every live node tagged with `key` (the real cover, the skeleton slot, the parked source). Used

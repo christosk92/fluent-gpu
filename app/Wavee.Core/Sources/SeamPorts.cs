@@ -80,5 +80,8 @@ public interface IPlaylistMutationSource
     Task SetCoverJpegAsync(string playlistUri, byte[] jpeg, CancellationToken ct = default);
     Task ClearCoverAsync(string playlistUri, CancellationToken ct = default);
     Task SetBasePermissionAsync(string playlistUri, PlaylistPermissionLevel level, CancellationToken ct = default);
+    Task<PlaylistBasePermission?> GetBasePermissionAsync(string playlistUri, CancellationToken ct = default);
+    Task SetPlaylistVisibilityAsync(string playlistUri, bool isPublic, CancellationToken ct = default);
+    Task DeletePlaylistAsync(string playlistUri, CancellationToken ct = default);
     Task<string> CreateContributorInviteAsync(string playlistUri, CancellationToken ct = default);
 }

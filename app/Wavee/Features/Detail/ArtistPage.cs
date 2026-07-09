@@ -66,8 +66,7 @@ sealed partial class ArtistPage : Component
                 // Scroll-position restoration keyed by the artist (route). One ScrollView serves successive artists in place,
                 // so without a key artist B would inherit A's scroll; with it, B starts at the top and a revisit to A restores it.
                 Key = "artist-scroll:" + routeKey, Grow = 1f, ScrollKey = routeKey,
-                AutoEdgeFade = true,
-                // Publish the live offset (coarse, ~per-row) so the LazyGrid discography sections window against the page scroll.
+                // Publish the live offset (24px write-throttle floor; LazyGrid windowing is per-row inside the control).
                 OnScrollGeometryChanged = (g => (long)(g.OffsetY / 24f), g => pageScroll.Value = g.OffsetY),
             };
 

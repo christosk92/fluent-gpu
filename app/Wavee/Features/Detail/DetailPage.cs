@@ -160,11 +160,31 @@ sealed class DetailPage : Component
 
     internal static async Task<DetailModel> LoadAsync(Services svc, DetailKind kind, string? id, CancellationToken ct) => kind switch
     {
-        DetailKind.Playlist => MapPlaylist(await svc.Library.GetPlaylistAsync(id ?? "", ct)),
+        DetailKind.Playlist => MapPlaylist(await LoadPlaylistAsync(svc, id ?? "", ct)),
         DetailKind.Liked => MapLiked(await svc.Library.GetLikedSongsAsync(ct)),
         DetailKind.Show => MapShow(await svc.Library.GetShowAsync(id ?? "", ct)),
         _ => MapAlbum(await svc.Library.GetAlbumAsync(id ?? "", ct)),
     };
+
+    static async Task<Playlist?> LoadPlaylistAsync(Services svc, string uri, CancellationToken ct)
+    {
+        var p = await svc.Library.GetPlaylistAsync(uri, ct).ConfigureAwait(false);
+        if (p is null || !p.Capabilities.IsOwner || svc.RealPlaylistMutations is null) return p;
+        try
+        {
+            var perm = await svc.RealPlaylistMutations.GetBasePermissionAsync(p.Uri, ct).ConfigureAwait(false);
+            if (perm is { } bp)
+                return p with { IsPublic = bp.IsPublic, BasePermissionRevision = bp.Revision };
+        }
+        catch { /* offline / transient — keep default visibility */ }
+        return p;
+    }
+
+    internal static async Task<DetailModel?> ReloadPlaylistDetailAsync(Services svc, string uri, CancellationToken ct = default)
+    {
+        var p = await LoadPlaylistAsync(svc, uri, ct).ConfigureAwait(false);
+        return p is null ? null : MapPlaylist(p);
+    }
 
     // A podcast show folds onto the shared detail surface: rail = cover + PODCAST pill + publisher/episode-count meta +
     // description + Play/Follow; the right column renders Episodes (DetailConfig.Show.Content == Episodes → EpisodeList).
@@ -203,7 +223,10 @@ sealed class DetailPage : Component
             HasDateAdded: hasDate, HasAddedBy: contributors.Count >= 2, HasVideo: hasVideo,
             Capabilities: p.Capabilities,
             Collaborators: p.Collaborators,
-            UserProfilesById: UserProfileMap(p));
+            UserProfilesById: UserProfileMap(p),
+            IsPublic: p.IsPublic,
+            BasePermissionRevision: p.BasePermissionRevision,
+            ShareUrl: SpotifyPlaylistWebUrl(p.Uri));
     }
 
     static IReadOnlyDictionary<string, Owner>? UserProfileMap(Playlist p)
@@ -279,6 +302,13 @@ sealed class DetailPage : Component
             "MONTH" => d.ToString("MMMM yyyy", System.Globalization.CultureInfo.InvariantCulture),
             _ => d.ToString("MMMM d, yyyy", System.Globalization.CultureInfo.InvariantCulture),
         };
+    }
+
+    internal static string SpotifyPlaylistWebUrl(string uri)
+    {
+        const string prefix = "spotify:playlist:";
+        var id = uri.StartsWith(prefix, StringComparison.Ordinal) ? uri[prefix.Length..] : uri;
+        return $"https://open.spotify.com/playlist/{id}";
     }
 }
 

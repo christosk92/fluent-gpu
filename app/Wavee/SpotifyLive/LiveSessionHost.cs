@@ -29,6 +29,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
     Wavee.Backend.Realtime.DealerRouter? _router;
     Wavee.Backend.Sync.LibrarySync? _sync;
     IDisposable? _connSub;
+    SpotifyFriendActivityService? _friends;
 
     LiveSessionHost(LiveDealerTransport transport, LiveConnect connect, CancellationTokenSource cts)
     { _transport = transport; _connect = connect; _cts = cts; }
@@ -37,6 +38,10 @@ public sealed class LiveSessionHost : IAsyncDisposable
     /// BEFORE the transport so the loop stops recording against a torn-down socket.</summary>
     internal void AttachSync(Wavee.Backend.Realtime.DealerRouter router, Wavee.Backend.Sync.LibrarySync sync, IDisposable? connSub)
     { _router = router; _sync = sync; _connSub = connSub; }
+
+    /// <summary>Register the session-scoped friend-activity (presence) feed, disposed on logout so its dealer/HTTP
+    /// subscriptions + watchdog stop with the transport.</summary>
+    internal void AttachFriends(SpotifyFriendActivityService friends) => _friends = friends;
 
     public LiveConnect Connect => _connect;
 
@@ -355,6 +360,14 @@ public sealed class LiveSessionHost : IAsyncDisposable
             _ = Task.Run(() => HydratePlaylistHeadersAsync(fetcher, store, log, cts.Token));
         }
 
+        // Friend-activity (presence) feed — session-scoped, display-only (never touches the Store). Seeds on the dealer
+        // connection id + applies hm://presence2/user/ deltas; installed into the switchable service the friends panel
+        // binds to (go-live → live provider; logout → back to the Null service via GoOffline).
+        var friends = new SpotifyFriendActivityService(transport, live.Pipeline, () => live.BaseUrl,
+            connect.ConnectionId, () => connect.CurrentConnectionId, log);
+        svc.Friends.SetInner(friends);
+        host.AttachFriends(friends);
+
         return host;
     }
 
@@ -362,6 +375,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
     {
         _cts.Cancel();           // stop background hydration / in-flight fetches before tearing the transport down
         _connSub?.Dispose();     // stop reconnect-resync triggers
+        _friends?.Dispose();     // stop presence seed/deltas + watchdog
         _router?.Dispose();      // stop decoding pushes
         if (_sync is not null) await _sync.DisposeAsync().ConfigureAwait(false);   // drain the loop to a stop before the transport
         _connect.Dispose();

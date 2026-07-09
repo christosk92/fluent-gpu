@@ -47,6 +47,7 @@ public sealed class SpanTable
     private DrawListOpcodeStats[] _opcodeStats;
     private RectF[] _subtreeBounds;
     private bool[] _clipComplete;
+    private bool[] _culled;
     private uint _frameId;
 
     public SpanTable(int capacity = 64)
@@ -65,6 +66,7 @@ public sealed class SpanTable
         _opcodeStats = new DrawListOpcodeStats[capacity];
         _subtreeBounds = new RectF[capacity];
         _clipComplete = new bool[capacity];
+        _culled = new bool[capacity];
     }
 
     public bool HasPrior => _frameId > 1;
@@ -89,7 +91,7 @@ public sealed class SpanTable
             return false;
         }
 
-        if (_gen[nodeIndex] != gen || _frame[nodeIndex] != frameId - 1 || _inputSig[nodeIndex] != inputSig)
+        if (_culled[nodeIndex] || _gen[nodeIndex] != gen || _frame[nodeIndex] != frameId - 1 || _inputSig[nodeIndex] != inputSig)
         {
             span = default;
             return false;
@@ -116,7 +118,7 @@ public sealed class SpanTable
             return false;
         }
 
-        if (_gen[nodeIndex] != gen || _frame[nodeIndex] != frameId - 1 || _moveSig[nodeIndex] != moveSig)
+        if (_culled[nodeIndex] || _gen[nodeIndex] != gen || _frame[nodeIndex] != frameId - 1 || _moveSig[nodeIndex] != moveSig)
         {
             span = default;
             return false;
@@ -132,6 +134,21 @@ public sealed class SpanTable
             _world[nodeIndex],
             _subtreeBounds[nodeIndex],
             _clipComplete[nodeIndex]);
+        return true;
+    }
+
+    public bool TryGetSubtree(int nodeIndex, uint gen, uint frameId, out Affine2D world, out RectF subtreeBounds)
+    {
+        if ((uint)nodeIndex >= (uint)_gen.Length || frameId <= 1
+            || _gen[nodeIndex] != gen || _frame[nodeIndex] != frameId - 1)
+        {
+            world = default;
+            subtreeBounds = default;
+            return false;
+        }
+
+        world = _world[nodeIndex];
+        subtreeBounds = _subtreeBounds[nodeIndex];
         return true;
     }
 
@@ -151,6 +168,17 @@ public sealed class SpanTable
         _opcodeStats[nodeIndex] = span.OpcodeStats;
         _subtreeBounds[nodeIndex] = span.SubtreeBounds;
         _clipComplete[nodeIndex] = span.ClipComplete;
+        _culled[nodeIndex] = false;
+    }
+
+    public void StoreCulled(int nodeIndex, uint gen, uint frameId, in Affine2D world, in RectF subtreeBounds)
+    {
+        EnsureCapacity(nodeIndex + 1);
+        _gen[nodeIndex] = gen;
+        _frame[nodeIndex] = frameId;
+        _world[nodeIndex] = world;
+        _subtreeBounds[nodeIndex] = subtreeBounds;
+        _culled[nodeIndex] = true;
     }
 
     private void EnsureCapacity(int capacity)
@@ -171,5 +199,6 @@ public sealed class SpanTable
         Array.Resize(ref _opcodeStats, n);
         Array.Resize(ref _subtreeBounds, n);
         Array.Resize(ref _clipComplete, n);
+        Array.Resize(ref _culled, n);
     }
 }

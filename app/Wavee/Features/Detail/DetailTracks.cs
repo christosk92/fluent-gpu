@@ -89,6 +89,20 @@ sealed class TrackList : Component
     Track[]? _lastDisplayed;                                   // displayed (view-ordered) snapshot — the keyed-diff baseline
     LibraryBridge? _lib;                                       // Mutations bridge → per-row heart saved-state + toggle (null when no Mutations source)
 
+    // ── "Recommended songs" (playlist extender) — appended into the SAME bound list, after the track rows ──────────────
+    // Owned/collaborative playlists only (gated in Render). The list carries: track rows · one "Recommended" header row ·
+    // N recommendation rows. The header's mount is the lazy first-fetch trigger; Refresh + Add re-fetch with the ACCUMULATED
+    // skip set so every batch is fresh. State is signals-first so a batch landing / an optimistic add re-skins in place.
+    const int RecBatch = 20;                                   // one extender page (matches the HAR capture)
+    static readonly ColumnSet RecColumns = new(Album: false, By: false, Date: false, Video: false, Plays: false, Heart: false, Thumb: false);
+    readonly Signal<IReadOnlyList<Track>> _recs = new(Array.Empty<Track>());
+    readonly Signal<int> _recState = new(0);                   // 0 idle · 1 loading · 2 loaded
+    readonly HashSet<string> _recShown = new(StringComparer.Ordinal);   // every id ever shown → the accumulated skip set (non-repeating batches)
+    readonly System.Threading.CancellationTokenSource _recCts = new();
+    readonly Signal<int> _listCount = new(0);                  // ItemsView TOTAL (track rows + rec rows); _visibleCount stays the track count for §4.6
+    Services? _svc;                                            // cached in Render → the header/add handlers reach the extender + the post seam
+    Action<Action>? _post;
+
     public TrackList(Signal<Route> route, Loadable<DetailModel> full, PlaybackBridge? bridge, DetailHandlers h, bool showToolbar = true, bool embedded = false, bool verticalHeader = false, Signal<bool>? verticalHeaderPinned = null)
     {
         _route = route; _full = full; _bridge = bridge; _h = h; _showToolbar = showToolbar; _embedded = embedded;
@@ -207,6 +221,9 @@ sealed class TrackList : Component
     {
         _play = UseAsyncCommands<string>();      // keyed by track id; a row's #-cell shows the buffer spinner while its PlayAsync runs (same instance each render)
         _lib = UseContext(LibraryBridge.Slot);   // Mutations bridge for the per-row heart (saved-state + toggle)
+        var svc = UseContext(Services.Slot);     // extender client (recommended songs) + gate on live edits
+        _svc = svc; _post = UsePost();           // cached so the rec fetch/add handlers reach the extender + marshal results back to the UI thread
+        Context.UseSignalEffect(() => Reactive.OnCleanup(() => { try { _recCts.Cancel(); _recCts.Dispose(); } catch { } }));   // cancel in-flight rec fetches on unmount
         var ui = UseContext(ShellUi.Slot);       // rail layout-defer lock (Task C): gate tier churn during a rail reflow
         bool railLocked = ui?.RailLayoutLocked.Value ?? false;   // subscribe → flush the settled tier when the lock clears
         var model = _full.Value.Value;           // subscribe → re-render preview→full (chrome columns + trailing update on load)
@@ -302,17 +319,59 @@ sealed class TrackList : Component
         bool labeled = tier <= 1;
         Element chrome = Chrome(set, tracks, sort, labeled, tier);
         int visible = View().Length;
+        // "Recommended songs": owned/collaborative playlists only, non-embedded, non-vertical, live edits available. When
+        // ON, the header (+ rec rows) are appended AFTER the track rows in the SAME bound list — the list TOTAL is a
+        // SEPARATE signal (_listCount) so _visibleCount stays the track count the §4.6 choreography seeds are keyed to.
+        bool recsOn =
+            _cfg.Recommendations && !_embedded && !_verticalHeader
+            && svc?.RealExtender is not null
+            && PlaylistInlineEdit.SpotifyEditsLive(svc)
+            && model.Capabilities.CanEditItems
+            && model.ContextUri is { Length: > 0 };
+        int recCount = recsOn ? _recs.Value.Count : 0;   // subscribe (only when ON) → the list re-sizes when a batch lands / an add removes one
+        int listTotal = recsOn ? visible + 1 + recCount : visible;   // +1 = the always-present "Recommended" header row
         UseLayoutEffect(() =>
         {
             if (_visibleCount.Peek() != visible) _visibleCount.Value = visible;
+            if (_listCount.Peek() != listTotal) _listCount.Value = listTotal;
             int verticalCount = VerticalTrackStart + Math.Max(visible, 1);
             if (_verticalItemCount.Peek() != verticalCount) _verticalItemCount.Value = verticalCount;
-        }, visible);
+        }, visible, listTotal);
 
         Element RealList()
         {
             if (_verticalHeader)
                 return VerticalList(visible, set, tracks, sort, labeled, tier, rowH, narrateRemount, staggerCold, verticalLayout);
+            if (recsOn)
+            {
+                // A search/filter that matched nothing still shows the no-match message (recs browse the whole list, not
+                // the filtered slice); an EMPTY owned playlist still renders — the header at index 0 fetches immediately.
+                if (visible == 0 && _tracks.Count > 0) return FilterEmpty(noTracks: false);
+                // The bound slots branch on the recycled index (RowOrRecContent): track rows keep the selection skin;
+                // the "Recommended" header + rec rows render their OWN content, so they never join the track multi-select
+                // (exactly like the vertical hero/chrome rows). The out-of-range guards (PlayRow / DisplayTrack / the
+                // SelectionBar null-track skip) already reject the appended indices.
+                return ItemsView.CreateBound(
+                    listTotal,
+                    scope => Embed.Comp(() => new RowOrRecContent(this, scope, set, tracks, rowH, narrateRemount)),
+                    RepeatLayout.Stack(rowH),
+                    selectionMode: _cfg.Selection,
+                    selection: _selection,
+                    isItemInvokedEnabled: true,
+                    itemInvoked: i => PlayRow(i),
+                    isItemEnabled: i => i < View().Length,   // only track rows are roving-focus / selection targets
+                    overscan: TrackOverscanItems,
+                    grow: _cfg.HasTrailing ? 0f : 1f,
+                    autoEdgeFade: !_cfg.HasTrailing,
+                    staggerColdRealize: staggerCold,
+                    scrollKey: _route.Value.Name + ":r" + _resetEpoch.Value,
+                    controller: _listCtl,
+                    itemDisplacement: static _ => (0f, 0f),
+                    displacementVersion: _dispVer,
+                    itemFlipFrom: i => _flip.TryGetValue(i, out var f) ? f : null,
+                    itemFadeFrom: i => _fade.TryGetValue(i, out var f) ? f : null,
+                    itemCountSignal: _listCount);
+            }
             return visible == 0
             ? FilterEmpty(_tracks.Count == 0)     // empty playlist, or a filter that matched nothing
             // Bound rows (signals-first): each slot mounts ONCE and recycles by an index-signal write. Selection flips a
@@ -369,7 +428,10 @@ sealed class TrackList : Component
         float listGrow = _cfg.HasTrailing ? 0f : 1f;
         // The reset epoch folds into the key: a curated re-cut REMOUNTS the list — the slots' mount-opacity entrance
         // replays as the §4.6 "playlist was refreshed" crossfade (the truthful narration for an editorial re-cut).
-        Element listKeyed = new BoxEl { Key = "list:" + _route.Value.Name + ":" + (_verticalHeader ? "vh:" : "") + "t" + tier + ":d" + density + ":q" + query + ":f" + (int)flags + ":r" + _resetEpoch.Value, Grow = listGrow, Direction = 1, Children = [list] };
+        // recsOn folds into the key: the ItemsView template + count-signal freeze at mount, so a gate flip (preview→full
+        // model load turns CanEditItems on) must REMOUNT the list to swap in the recommendations template. Constant once
+        // the full model has landed, so this is a one-time remount, not per-render churn.
+        Element listKeyed = new BoxEl { Key = "list:" + _route.Value.Name + ":" + (_verticalHeader ? "vh:" : "") + "t" + tier + ":d" + density + ":q" + query + ":f" + (int)flags + ":r" + _resetEpoch.Value + (recsOn ? ":rec" : ""), Grow = listGrow, Direction = 1, Children = [list] };
 
         Element rightBody = _cfg.HasTrailing ? TrailingBody(listKeyed) : listKeyed;
 
@@ -594,7 +656,6 @@ sealed class TrackList : Component
         }) with
         {
             Grow = 1f,
-            AutoEdgeFade = true,
             OnScrollGeometryChanged = _verticalHeader ? VerticalScrollObserver() : null,
         };
     }
@@ -894,6 +955,173 @@ sealed class TrackList : Component
                 Children = [child],
             };
         }
+    }
+
+    // ── "Recommended songs" — the appended header + rec rows (playlist extender) ──────────────────────────────────────
+    // The bound-slot content when recommendations are ON: ONE bound list carries the track rows, then the "Recommended"
+    // header, then the recommendation rows — branching on the recycled slot index (mirrors VerticalItemContent). Track
+    // rows use the normal bound selection skin (multi-select); the header + rec rows render their OWN content, so they
+    // never join the track selection (exactly like the vertical hero/chrome rows).
+    sealed class RowOrRecContent : Component
+    {
+        readonly TrackList _o;
+        readonly RowScope _scope;
+        readonly ColumnSet _set;
+        readonly TrackSize[] _tracks;
+        readonly float _rowH;
+        readonly bool _entrance;
+        public RowOrRecContent(TrackList o, RowScope scope, ColumnSet set, TrackSize[] tracks, float rowH, bool entrance)
+        { _o = o; _scope = scope; _set = set; _tracks = tracks; _rowH = rowH; _entrance = entrance; }
+
+        public override Element Render()
+        {
+            _ = _o._full.Value.Value;              // re-skin on context / track-set change (same subscription as BoundRowContent)
+            int i = _scope.Index.Value;            // recycle → re-render
+            int visible = _o.View().Length;
+            Element child;
+            if (i < visible)
+                child = _o.BoundRowSkin(_scope, _o.BoundRow(_scope, _set, _tracks, _rowH, 0), _rowH, _entrance, 0) with { Key = "rec:track" };
+            else if (i == visible)
+                child = Embed.Comp(() => new RecHeader(_o, _rowH)) with { Key = "rec:header" };
+            else
+            {
+                int k = i - visible - 1;
+                var recs = _o._recs.Value;         // subscribe → rec rows re-render when the batch changes
+                child = k >= 0 && k < recs.Count
+                    ? _o.RecRow(recs[k], _rowH)    // keyed by track id inside RecRow → a recycled slot remounts for the new track
+                    : new BoxEl { Key = "rec:empty" };
+            }
+            return new BoxEl { Direction = 1, Children = [child] };
+        }
+    }
+
+    // The always-present "Recommended songs" header row (the first appended slot). Its MOUNT is the lazy first-fetch
+    // trigger — it realizes only once the user scrolls to the bottom — and it hosts the Refresh control plus the
+    // loading spinner / empty note. Self-subscribing so those track the fetch state without re-rendering the whole list.
+    sealed class RecHeader : Component
+    {
+        readonly TrackList _o;
+        readonly float _rowH;
+        public RecHeader(TrackList o, float rowH) { _o = o; _rowH = rowH; }
+
+        public override Element Render()
+        {
+            var svc = UseContext(Services.Slot);
+            var post = UsePost();
+            int state = _o._recState.Value;        // subscribe → spinner ↔ refresh, empty note
+            int count = _o._recs.Value.Count;      // subscribe → "no suggestions" only once loaded-empty
+
+            // Lazy first fetch when THIS header realizes (scrolled to bottom). Constant dep ⇒ runs once per mount;
+            // FetchRecs(force:false) no-ops unless idle, so a recycle remount never re-fetches.
+            UseEffect(() =>
+            {
+                if (svc?.RealExtender is not null && _o._model.ContextUri is { Length: > 0 } uri)
+                    _o.FetchRecs(svc, post, uri, force: false);
+            }, "rec-header-once");
+
+            void Refresh()
+            {
+                if (svc?.RealExtender is not null && _o._model.ContextUri is { Length: > 0 } uri)
+                    _o.FetchRecs(svc, post, uri, force: true);
+            }
+
+            var trailing = new List<Element>(2);
+            if (state == 2 && count == 0)
+                trailing.Add(new TextEl("No suggestions right now") { Size = 12f, Color = Tok.TextTertiary });
+            trailing.Add(state == 1
+                ? new BoxEl { Width = 32f, Height = 32f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Children = [TrackRow.Spinner()] }
+                : RefreshButton(Refresh));
+
+            return new BoxEl
+            {
+                Key = "rec:header-row",
+                Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, MinHeight = _rowH,
+                Padding = new Edges4(TrackRow.PadX, 0f, TrackRow.PadX, 0f),
+                Children =
+                [
+                    new TextEl("Recommended songs")
+                    {
+                        Size = 15f, Weight = 700, Color = Tok.TextPrimary,
+                        Grow = 1f, Basis = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
+                    },
+                    .. trailing,
+                ],
+            };
+        }
+
+        static Element RefreshButton(Action onClick) => new BoxEl
+        {
+            Width = 32f, Height = 32f, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Corners = CornerRadius4.All(16f),
+            HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+            HoverScale = 1.06f, PressScale = 0.94f, Cursor = CursorId.Hand,
+            Role = AutomationRole.Button, OnClick = onClick,
+            Children = [Icon(Icons.Refresh, 14f, Tok.TextSecondary)],
+        };
+    }
+
+    // One recommendation row: the shared art-forward ArtCard with a "+" Add button. Keyed by track id so a recycled slot
+    // remounts cleanly for the new track (the NowPlayingOverlay inside ArtCard freezes its uri at mount). Renders its OWN
+    // content (no bound selection skin) → it never joins the track multi-select.
+    Element RecRow(Track t, float rowH) => new BoxEl
+    {
+        Key = "rec:" + t.Id,
+        // Pin to the uniform stride (RepeatLayout.Stack): the ArtCard's own min-height (~52) would otherwise overflow the
+        // 48px default row and overlap its neighbour — cap + clip keeps the 40px art (centred) fully visible.
+        Direction = 0, AlignItems = FlexAlign.Center, MinHeight = rowH, MaxHeight = rowH, ClipToBounds = true,
+        Padding = new Edges4(TrackRow.PadX - TrackRow.RowInset, 0f, TrackRow.PadX - TrackRow.RowInset, 0f),
+        Children =
+        [
+            TrackRow.ArtCard(
+                t, TrackRow.StateOf(_bridge, _lib, t), RecColumns, _h.Go,
+                onPlay: () => { _ = _bridge?.Player.PlayAsync(t.Uri, 0); },
+                art: 40f, showArtists: true, explicitBadge: true, showDuration: true,
+                onAdd: () => AddRec(t)),
+        ],
+    };
+
+    // Fetch a fresh, non-repeating batch. force:false = the lazy trigger (fires only from idle); force:true = Refresh /
+    // auto-refill. The skip set carries every id ever shown, so the server never repeats. Marshalled back to the UI thread.
+    void FetchRecs(Services svc, Action<Action> post, string uri, bool force)
+    {
+        if (svc.RealExtender is not { } extender) return;
+        if (_recState.Peek() == 1) return;                     // already loading
+        if (!force && _recState.Peek() != 0) return;           // the lazy trigger fires only once (idle → loading)
+        _recState.Value = 1;
+        string[] skip = _recShown.Count == 0 ? Array.Empty<string>() : new string[_recShown.Count];
+        if (skip.Length > 0) _recShown.CopyTo(skip);
+        var ct = _recCts.Token;
+        _ = Run();
+
+        async System.Threading.Tasks.Task Run()
+        {
+            IReadOnlyList<Track> batch;
+            try { batch = await extender.ExtendAsync(uri, skip, RecBatch, ct).ConfigureAwait(false); }
+            catch { batch = Array.Empty<Track>(); }
+            post(() =>
+            {
+                for (int i = 0; i < batch.Count; i++) { var id = batch[i].Id; if (id.Length > 0) _recShown.Add(id); }
+                _recs.Value = batch;
+                _recState.Value = 2;
+            });
+        }
+    }
+
+    // Add a recommendation to THIS playlist (reuses the existing LibraryBridge.AddTracksAsync → PlaylistOpKind.Add). The
+    // optimistic add flows back into the open list via the live store refresh; here we optimistically DROP it from the rec
+    // list (keeping its id in the skip set so it's never re-suggested), toast, and auto-refill when the batch empties.
+    void AddRec(Track t)
+    {
+        if (_lib is null || _model.ContextUri is not { Length: > 0 } uri) return;
+        _ = _lib.AddTracksAsync(uri, new[] { t });
+        if (t.Id.Length > 0) _recShown.Add(t.Id);
+        var cur = _recs.Peek();
+        var next = new List<Track>(Math.Max(0, cur.Count - 1));
+        for (int i = 0; i < cur.Count; i++) { var o = cur[i]; if (!ReferenceEquals(o, t) && o.Id != t.Id) next.Add(o); }
+        _recs.Value = next;
+        Toasts.Show(Strings.Detail.AddedToPlaylist(_model.Title), ToastSeverity.Success);
+        if (next.Count == 0 && _svc is not null && _post is not null)
+            FetchRecs(_svc, _post, uri, force: true);
     }
 
     // The # cell's play affordance: single-click PLAYS this track, or PAUSES/RESUMES it when it is already the

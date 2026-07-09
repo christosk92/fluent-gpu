@@ -75,6 +75,9 @@ internal sealed unsafe class AcrylicCompositor : IDisposable
                                               // descriptor the in-flight frame N−1 references
     private uint _rtvInc, _srvInc;
     private int _parity;                      // this frame's SRV bank (frameIndex & 1), set by BeginCanvas
+    private readonly float[] _scratch4 = new float[4];
+    private readonly float[] _scratch8 = new float[8];
+    private readonly float[] _scratch28 = new float[28];
 
     private ID3D12RootSignature* _copyRoot;   // copy/blur: 8 root consts + 1 SRV table + static linear-clamp sampler
     private ID3D12PipelineState* _copyPso, _blurPso;
@@ -573,16 +576,14 @@ float4 PSMain(V i) : SV_Target
         cmd->OMSetRenderTargets(1, &targetRtv, BOOL.FALSE, null); SetViewport(cmd, _w, _h);
         cmd->SetGraphicsRootSignature(_compRoot);
         cmd->SetPipelineState(_compPso);
-        Span<float> cc = stackalloc float[28]
-        {
-            L.DeviceRect.X, L.DeviceRect.Y, L.DeviceRect.W, L.DeviceRect.H,
-            lw, lh, rx, ry,                                  // logical viewport (VS NDC) + region origin (PS phys px)
-            rw, rh, dw / aw, dh / ah,                        // region size (phys px) + used-uv fraction of pool ia
-            L.Tint.R, L.Tint.G, L.Tint.B, L.Tint.A,
-            L.Fallback.R, L.Fallback.G, L.Fallback.B, L.Fallback.A,
-            L.Radii.TopLeft, L.TintOpacity, L.LuminosityOpacity, L.NoiseOpacity,
-            1f / aw, 1f / ah, 0f, 0f,                        // pool-ia texel size (half-texel edge clamp)
-        };
+        Span<float> cc = _scratch28;
+        cc[0] = L.DeviceRect.X; cc[1] = L.DeviceRect.Y; cc[2] = L.DeviceRect.W; cc[3] = L.DeviceRect.H;
+        cc[4] = lw; cc[5] = lh; cc[6] = rx; cc[7] = ry;
+        cc[8] = rw; cc[9] = rh; cc[10] = dw / aw; cc[11] = dh / ah;
+        cc[12] = L.Tint.R; cc[13] = L.Tint.G; cc[14] = L.Tint.B; cc[15] = L.Tint.A;
+        cc[16] = L.Fallback.R; cc[17] = L.Fallback.G; cc[18] = L.Fallback.B; cc[19] = L.Fallback.A;
+        cc[20] = L.Radii.TopLeft; cc[21] = L.TintOpacity; cc[22] = L.LuminosityOpacity; cc[23] = L.NoiseOpacity;
+        cc[24] = 1f / aw; cc[25] = 1f / ah; cc[26] = 0f; cc[27] = 0f;
         fixed (float* c = cc) cmd->SetGraphicsRoot32BitConstants(0, 28, c, 0);
         cmd->SetGraphicsRootDescriptorTable(1, SrvGpu(PoolSrvSlot(ia)));
         cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
@@ -601,8 +602,9 @@ float4 PSMain(V i) : SV_Target
         Barrier(cmd, _canvas, ref _canvasState, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
         var rtv = Rtv(0);
         cmd->OMSetRenderTargets(1, &rtv, BOOL.FALSE, null);
-        float* c = stackalloc float[4] { clear.R, clear.G, clear.B, clear.A };
-        cmd->ClearRenderTargetView(rtv, c, 0, null);
+        _scratch4[0] = clear.R; _scratch4[1] = clear.G; _scratch4[2] = clear.B; _scratch4[3] = clear.A;
+        fixed (float* c = _scratch4)
+            cmd->ClearRenderTargetView(rtv, c, 0, null);
         SetViewport(cmd, _w, _h);
     }
 
@@ -680,22 +682,40 @@ float4 PSMain(V i) : SV_Target
         Barrier(cmd, _canvas, ref _canvasState, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         Barrier(cmd, _pool[ia].Res, ref _pool[ia].State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
         var rt = Rtv(1 + ia); cmd->OMSetRenderTargets(1, &rt, BOOL.FALSE, null); SetViewport(cmd, (uint)dw, (uint)dh);
-        FullScreen(cmd, _copyPso, 0, stackalloc float[4] { (float)rx / _w, (float)ry / _h, (float)rw / _w, (float)rh / _h });
+        _scratch4[0] = (float)rx / _w;
+        _scratch4[1] = (float)ry / _h;
+        _scratch4[2] = (float)rw / _w;
+        _scratch4[3] = (float)rh / _h;
+        FullScreen(cmd, _copyPso, 0, _scratch4);
 
         // pass B: blur H, ia → ib (fixed σ=KernelSigma kernel in snapshot texels ⇒ effective σ = BlurSigma DIP full-res)
         float aw = _pool[ia].W, ah = _pool[ia].H, bw = _pool[ib].W, bh = _pool[ib].H;
         Barrier(cmd, _pool[ia].Res, ref _pool[ia].State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         Barrier(cmd, _pool[ib].Res, ref _pool[ib].State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
         rt = Rtv(1 + ib); cmd->OMSetRenderTargets(1, &rt, BOOL.FALSE, null); SetViewport(cmd, (uint)dw, (uint)dh);
-        FullScreen(cmd, _blurPso, PoolSrvSlot(ia), stackalloc float[8]
-            { 1f / aw, 1f / ah, 1f, 0f, dw / aw, dh / ah, (dw - 0.5f) / aw, (dh - 0.5f) / ah });
+        _scratch8[0] = 1f / aw;
+        _scratch8[1] = 1f / ah;
+        _scratch8[2] = 1f;
+        _scratch8[3] = 0f;
+        _scratch8[4] = dw / aw;
+        _scratch8[5] = dh / ah;
+        _scratch8[6] = (dw - 0.5f) / aw;
+        _scratch8[7] = (dh - 0.5f) / ah;
+        FullScreen(cmd, _blurPso, PoolSrvSlot(ia), _scratch8);
 
         // pass C: blur V, ib → ia (the final blurred snapshot lands back in ia)
         Barrier(cmd, _pool[ib].Res, ref _pool[ib].State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         Barrier(cmd, _pool[ia].Res, ref _pool[ia].State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
         rt = Rtv(1 + ia); cmd->OMSetRenderTargets(1, &rt, BOOL.FALSE, null); SetViewport(cmd, (uint)dw, (uint)dh);
-        FullScreen(cmd, _blurPso, PoolSrvSlot(ib), stackalloc float[8]
-            { 1f / bw, 1f / bh, 0f, 1f, dw / bw, dh / bh, (dw - 0.5f) / bw, (dh - 0.5f) / bh });
+        _scratch8[0] = 1f / bw;
+        _scratch8[1] = 1f / bh;
+        _scratch8[2] = 0f;
+        _scratch8[3] = 1f;
+        _scratch8[4] = dw / bw;
+        _scratch8[5] = dh / bh;
+        _scratch8[6] = (dw - 0.5f) / bw;
+        _scratch8[7] = (dh - 0.5f) / bh;
+        FullScreen(cmd, _blurPso, PoolSrvSlot(ib), _scratch8);
 
         // pass D: composite the acrylic recipe onto the target — the canvas, or the back buffer on directBB (samples blurred ia)
         Composite(cmd, in L, lw, lh, rx, ry, rw, rh, ia, dw, dh, compTarget, !direct);
@@ -715,7 +735,11 @@ float4 PSMain(V i) : SV_Target
         Barrier(cmd, _canvas, ref _canvasState, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         cmd->OMSetRenderTargets(1, &backRtv, BOOL.FALSE, null);
         SetViewport(cmd, _w, _h);
-        FullScreen(cmd, _copyPso, 0, stackalloc float[4] { 0f, 0f, 1f, 1f });
+        _scratch4[0] = 0f;
+        _scratch4[1] = 0f;
+        _scratch4[2] = 1f;
+        _scratch4[3] = 1f;
+        FullScreen(cmd, _copyPso, 0, _scratch4);
     }
 
     /// <summary>directBB acrylic: copy the back-buffer region [rx,ry → +rw,+rh] into the canvas at the SAME coords so the

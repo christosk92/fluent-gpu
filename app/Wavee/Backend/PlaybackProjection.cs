@@ -256,18 +256,18 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
         MaybeEnrichCurrent();
     }
 
-    // Display windowing (§5): current, then the user queue (uncapped), the upcoming context/autoplay rows (≤50), then the
-    // history tail (≤16). The session core holds the FULL resolved state — the caps live only here.
+    // Display windowing (§5): history tail (≤16), current, user queue (uncapped), upcoming (≤50). History is local-only
+    // and listed first so any consumer walking the flat queue sees buckets in panel order.
     static IReadOnlyList<QueueEntry> WindowQueue(in QueueSnapshot s)
     {
         const int NextCap = 50, HistoryTail = 16;
         int nUp = Math.Min(s.Upcoming.Length, NextCap);
         int firstH = Math.Max(0, s.History.Length - HistoryTail);
-        var list = new List<QueueEntry>(1 + s.UserQueue.Length + nUp + (s.History.Length - firstH));
+        var list = new List<QueueEntry>((s.History.Length - firstH) + 1 + s.UserQueue.Length + nUp);
+        for (int h = firstH; h < s.History.Length; h++) list.Add(s.History[h]);
         if (s.Current is { } cur) list.Add(cur);
         for (int i = 0; i < s.UserQueue.Length; i++) list.Add(s.UserQueue[i]);
         for (int i = 0; i < nUp; i++) list.Add(s.Upcoming[i]);
-        for (int h = firstH; h < s.History.Length; h++) list.Add(s.History[h]);
         return list;
     }
 
@@ -353,7 +353,7 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
             _posAnchorWall = _now();
             if (!weActive)
             {
-                viewerQueue = MapQueue(c.NextTracks, c.PrevTracks);
+                viewerQueue = MapQueue(c.NextTracks, c.PrevTracks, c.HasTrack ? c.Track : null);
                 _queue = viewerQueue;   // viewer: cluster queue. Active: keep the local queue (ApplyLocalSnapshot).
             }
             ctxForLog = _contextUri;
@@ -518,34 +518,24 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
         string.IsNullOrEmpty(incoming.Uri) ? current.Uri : incoming.Uri,
         string.IsNullOrEmpty(incoming.Name) ? current.Name : incoming.Name);
 
-    // Viewer-mode queue: the active device's next_tracks split by provider ("queue" rows are the user queue, the rest is
-    // the context continuation), plus its prev_tracks as History (capped to the same 16 the local Snapshot() keeps).
-    // spotify:delimiter boundary markers are dropped (the same rule as the inbound set_queue fold).
-    // Viewer-mode queue: the active device's next_tracks split by provider ("queue" rows are the user queue, the rest is
-    // the context continuation), plus its prev_tracks as History (capped to the same 16 the local window keeps).
-    // spotify:delimiter boundary markers are dropped. Each row gets a freshly-minted stable id (unified id scheme, F5) so a
-    // viewer row-click can target it — the id→row map is rebuilt each cluster and resolved by the controller's viewer path.
-    IReadOnlyList<QueueEntry> MapQueue(IReadOnlyList<RemoteTrack> next, IReadOnlyList<RemoteTrack>? prev)
+    // Viewer-mode queue: the active device's next_tracks split by provider. History is local-only on the active device;
+    // viewer mode does not surface cluster prev_tracks (server-driven history is a follow-up).
+    IReadOnlyList<QueueEntry> MapQueue(IReadOnlyList<RemoteTrack> next, IReadOnlyList<RemoteTrack>? prev, RemoteTrack? current = null)
     {
+        _ = prev;
         _viewerRows.Clear();
-        int prevCount = prev?.Count ?? 0;
-        if (next.Count == 0 && prevCount == 0) return Array.Empty<QueueEntry>();
-        var list = new List<QueueEntry>(next.Count + Math.Min(prevCount, 16));
+        if (next.Count == 0 && current is null) return Array.Empty<QueueEntry>();
+        var list = new List<QueueEntry>(1 + next.Count);
+        if (current is { Uri: { Length: > 0 } uri } cur && uri != "spotify:delimiter")
+        {
+            string provider = string.IsNullOrEmpty(cur.Provider) ? "context" : cur.Provider;
+            list.Add(ViewerEntry(cur, QueueBucket.NowPlaying, provider));
+        }
         for (int i = 0; i < next.Count; i++)
         {
             if (next[i].Uri == "spotify:delimiter") continue;   // queue/context boundary marker
             string provider = string.IsNullOrEmpty(next[i].Provider) ? "context" : next[i].Provider;
             list.Add(ViewerEntry(next[i], provider == "queue" ? QueueBucket.UserQueue : QueueBucket.NextUp, provider));
-        }
-        if (prev is { Count: > 0 })
-        {
-            int first = Math.Max(0, prev.Count - 16);
-            for (int h = first; h < prev.Count; h++)
-            {
-                if (prev[h].Uri == "spotify:delimiter") continue;
-                string provider = string.IsNullOrEmpty(prev[h].Provider) ? "context" : prev[h].Provider;
-                list.Add(ViewerEntry(prev[h], QueueBucket.History, provider));
-            }
         }
         return list;
     }

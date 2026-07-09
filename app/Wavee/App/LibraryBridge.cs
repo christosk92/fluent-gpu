@@ -52,6 +52,12 @@ public sealed class LibraryBridge
     public string CreatePlaylist(string name) => _playlists.CreatePlaylist(name);
     public void AddToPlaylist(string playlistUri, Track track) => _playlists.AddTrack(playlistUri, track);
 
+    /// <summary>Add tracks to ANY editable playlist by uri — the "Copy to playlist" picker's target. The mutation seam
+    /// routes <c>wavee:playlist:*</c> to the local source and <c>spotify:playlist:*</c> to the real Spotify path; it
+    /// fails loud (never silently no-ops) if a real backend isn't wired, which is intended.</summary>
+    public Task AddTracksAsync(string playlistUri, IReadOnlyList<Track> tracks, CancellationToken ct = default)
+        => _playlistEdits.AddTracksAsync(playlistUri, tracks, ct);
+
     /// <summary>Add tracks to the user's default playlist (creating one if none) — the no-picker "Add to playlist".
     /// Returns the target (uri, name) for a confirmation toast.</summary>
     public (string Uri, string Name) AddToDefaultPlaylist(IEnumerable<Track> tracks)
@@ -96,4 +102,13 @@ public sealed class LibraryBridge
 
     public Task<string> CreateContributorInviteAsync(string playlistUri, CancellationToken ct = default)
         => _playlistEdits.CreateContributorInviteAsync(playlistUri, ct);
+
+    public Task<PlaylistBasePermission?> GetPlaylistBasePermissionAsync(string playlistUri, CancellationToken ct = default)
+        => _playlistEdits.GetBasePermissionAsync(playlistUri, ct);
+
+    public Task SetPlaylistVisibilityAsync(string playlistUri, bool isPublic, CancellationToken ct = default)
+        => _playlistEdits.SetPlaylistVisibilityAsync(playlistUri, isPublic, ct);
+
+    public Task DeletePlaylistAsync(string playlistUri, CancellationToken ct = default)
+        => _playlistEdits.DeletePlaylistAsync(playlistUri, ct);
 }

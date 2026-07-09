@@ -71,7 +71,7 @@ sealed class EpisodeList : Component
             Padding = new Edges4(WaveeSpace.L, WaveeSpace.M, WaveeSpace.L, PlayerDock.Reserve + WaveeSpace.XXL),
             Children = children.ToArray(),
         };
-        return ScrollView(body) with { Grow = 1f, AutoEdgeFade = true };
+        return ScrollView(body) with { Grow = 1f };
     }
 
     Element Toolbar(int status, int order) => new BoxEl

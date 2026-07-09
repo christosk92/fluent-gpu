@@ -90,9 +90,13 @@ public sealed class LazyGrid : Component
     readonly Func<int, float>? _drawerHeight;        // (index) → the drawer's exact height (so the extent is exact)
 
     readonly Signal<float> _w = new(0f);             // own measured width → column count
+    readonly Signal<long> _win = new(long.MinValue); // coarse row-window key — re-render only when (first,last) changes
     NodeHandle _node;                                // captured at realize; for content-space position via the scene
     readonly int _initialIndex;                      // >0 ⇒ on first valid layout, scroll the page so this item is at the top
     bool _didInitialScroll;
+
+    static long PackKey(in LazyGridMath.View v)
+        => ((long)(uint)(v.FirstRow + 1) << 40) ^ ((long)(uint)(v.LastRow + 1) << 8) ^ (v.DrawerVisible ? 1L : 0L);
 
     public LazyGrid(Func<int> count, Func<int, float, Element> cell, Action<int, int> ensureRange,
                     float minColWidth = 180f, float gap = 12f, float rowExtra = 56f, int overscanRows = 2,
@@ -108,10 +112,35 @@ public sealed class LazyGrid : Component
     public override Element Render()
     {
         int count = _count();                                  // subscribe → re-render when the total / a page lands
-        float w = _w.Value;                                    // subscribe → re-render on resize
+        float w = _w.Value;                                      // subscribe → re-render on resize
         var scrollSig = UseContext(LazyScroll.Slot);
-        float scrollOffset = scrollSig?.Value ?? 0f;           // subscribe → re-render as the page scrolls
-        int expandedIndex = _expanded?.Value ?? -1;            // subscribe → re-render on expand/collapse
+        float scrollOffset = scrollSig?.Peek() ?? 0f;            // hot offset — subscribed only by the bridge effect below
+        _ = _win.Value;                                          // subscribe → re-render when the row window changes
+        int expandedIndex = _expanded?.Value ?? -1;              // subscribe → re-render on expand/collapse
+
+        // Bridge: the page-scroll offset (24px-throttled) → a value-gated row-window key (~per rowH, not per 24px).
+        UseSignalEffect(() =>
+        {
+            float off = scrollSig?.Value ?? 0f;
+            Reactive.Untrack(() =>
+            {
+                int c = _count();
+                float ww = _w.Peek();
+                float eff = ww > 1f ? ww : 900f;
+                int cols = Math.Max(1, (int)((eff + _gap) / (_minColW + _gap)));
+                float cellW = MathF.Max(_minColW * 0.5f, (eff - (cols - 1) * _gap) / cols);
+                float rowH = cellW + _rowExtra;
+                int totalRows = c <= 0 ? 0 : (c + cols - 1) / cols;
+                int expIdx = _expanded?.Peek() ?? -1;
+                int expRow = expIdx >= 0 ? expIdx / cols : -1;
+                float drawerH = expIdx >= 0 && _drawerHeight is { } dh ? dh(expIdx) : 0f;
+                (float sectionTop, float viewportH) = Geometry();
+                var v = LazyGridMath.Compute(off - sectionTop, viewportH, rowH, totalRows, _overscanRows, expRow, drawerH);
+                _win.Value = PackKey(v);
+            });
+        });
+
+        System.Diagnostics.Debug.Assert(_overscanRows >= 1, "LazyGrid overscanRows must be >= 1 for the 24px offset floor");
 
         float eff = w > 1f ? w : 900f;
         int cols = Math.Max(1, (int)((eff + _gap) / (_minColW + _gap)));

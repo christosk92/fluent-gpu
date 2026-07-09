@@ -17,7 +17,8 @@ sealed class ContentHost : Component
 
     readonly Signal<Route> _route;
     readonly Func<int> _activeTabId;
-    public ContentHost(Signal<Route> route, Func<int> activeTabId) { _route = route; _activeTabId = activeTabId; }
+    readonly IAppSettings? _settings;   // seeds LibraryPage's persisted per-kind state (widths/sort/view/selection)
+    public ContentHost(Signal<Route> route, Func<int> activeTabId, IAppSettings? settings = null) { _route = route; _activeTabId = activeTabId; _settings = settings; }
 
     public override Element Render()
         => Flow.KeepAlive(() => new PageSlot(_activeTabId(), _route.Value), SlotKey, s => PageFor(s.Route), new KeepAliveOptions(MaxEntries: 8));
@@ -72,7 +73,7 @@ sealed class ContentHost : Component
 
         if (r.Name == "albums" || r.Name == "artists" || r.Name == "podcasts")
             return new BoxEl { Key = "page:" + r.Name, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
-                Children = [ Embed.Comp(() => new LibraryPage(r.Name)) ] };
+                Children = [ Embed.Comp(() => new LibraryPage(r.Name, _settings)) ] };
 
         if (DiscographyRoute.Is(r.Name))
             return new BoxEl { Key = "page:disco", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,

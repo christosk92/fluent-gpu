@@ -33,6 +33,7 @@ internal sealed unsafe class ImagePipeline : IDisposable
     private const int FrameCount = 2;   // double-buffered per frame-in-flight so frame N's CPU writes never race frame N-1's GPU reads
 
     private ID3D12RootSignature* _rootSig;
+    private readonly float[] _vpConstants = new float[2];
     private ID3D12PipelineState* _pso;
     private ID3D12Resource* _quad;
     private readonly ID3D12Resource*[] _instances = new ID3D12Resource*[FrameCount];
@@ -214,8 +215,10 @@ float4 PSMain(VSOut i) : SV_Target
         cmd->SetDescriptorHeaps(1, &heap);
         cmd->SetGraphicsRootSignature(_rootSig);
         cmd->SetPipelineState(_pso);
-        float* vp = stackalloc float[2] { vpW, vpH };
-        cmd->SetGraphicsRoot32BitConstants(0, 2, vp, 0);
+        _vpConstants[0] = vpW;
+        _vpConstants[1] = vpH;
+        fixed (float* vp = _vpConstants)
+            cmd->SetGraphicsRoot32BitConstants(0, 2, vp, 0);
         cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
         fixed (D3D12_VERTEX_BUFFER_VIEW* qv = &_quadView) cmd->IASetVertexBuffers(0, 1, qv);
     }

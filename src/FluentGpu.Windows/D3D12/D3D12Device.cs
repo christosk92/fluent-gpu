@@ -119,6 +119,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private readonly List<GlyphInstance> _glyphInsts = new();
     private readonly List<GradGlyphInstance> _gradGlyphInsts = new();   // sub-glyph karaoke wipe (active lyric line + glow)
     private float _frameScale = 1f;
+    private float _imageClockMs;
     private int _frameRectCount;
     private int _frameGlyphInstanceCount;
     // ── Cross-segment command-list state cache ──
@@ -145,6 +146,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private int _frameClipOps, _frameLayerOps;                // Push/PopClip and Push/PopLayer ops decoded
     private readonly StringTable _strings;
     private readonly bool _composited;
+    private readonly float[] _clearScratch4 = new float[4];
 
     private void InvalidateCmdState() { _boundPipe = BoundPipe.None; _sharedSdfStateBound = false; _scissorValid = false; }
 
@@ -698,6 +700,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // DPI: render at native resolution but map DIP coordinates via a LOGICAL viewport (= physical / scale),
         // while glyphs are rasterized at physical px → crisp + correctly sized at high DPI.
         _frameScale = ctx.Scale <= 0f ? 1f : ctx.Scale;
+        _imageClockMs = ctx.ImageClockMs;
         _frameRectCount = 0;
         _frameGlyphInstanceCount = 0;
         _frameImageCount = 0;
@@ -751,8 +754,10 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             _acrylic?.TickIdle(global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence));   // age/trim layer RT pools
             _opacity?.TickIdle(global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence));
             _cmdList->OMSetRenderTargets(1, &rtv, BOOL.FALSE, null);
-            float* clear = stackalloc float[4] { ctx.Clear.R, ctx.Clear.G, ctx.Clear.B, ctx.Clear.A };
-            _cmdList->ClearRenderTargetView(rtv, clear, 0, null);
+            _clearScratch4[0] = ctx.Clear.R; _clearScratch4[1] = ctx.Clear.G;
+            _clearScratch4[2] = ctx.Clear.B; _clearScratch4[3] = ctx.Clear.A;
+            fixed (float* clear = _clearScratch4)
+                _cmdList->ClearRenderTargetView(rtv, clear, 0, null);
             SetFullViewport();
             SubmitStreaming(drawList, lw, lh);
         }
@@ -1063,15 +1068,15 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // fade (M4) just drives CrossFade 0→1 — the shader already lerps placeholder→sampled in premultiplied space.
     private void AddReadyImage(in DrawImageCmd im)
     {
+        float crossFade = ImageCache.ResolveFade(_imageClockMs, im.FadeStartMs, im.FadeDurationMs, im.FadeEasing);
         _imageDraws.Add((new ImageInstance
         {
             PosX = im.Rect.X, PosY = im.Rect.Y, W = im.Rect.W, H = im.Rect.H,
             RTL = im.Radii.TopLeft, RTR = im.Radii.TopRight, RBR = im.Radii.BottomRight, RBL = im.Radii.BottomLeft,
             M11 = im.Transform.M11, M12 = im.Transform.M12, M21 = im.Transform.M21, M22 = im.Transform.M22,
             Dx = im.Transform.Dx, Dy = im.Transform.Dy,
-            Opacity = im.Opacity, CrossFade = im.CrossFade,
+            Opacity = im.Opacity, CrossFade = crossFade,
             PR = im.Placeholder.R, PG = im.Placeholder.G, PB = im.Placeholder.B, PA = im.Placeholder.A,
-            // Content-fit sub-rect (ImageFit.Cover etc.) in 0..1 source space; composed with the atlas cell at draw time.
             UvX = im.UvRect.X, UvY = im.UvRect.Y, UvW = im.UvRect.W, UvH = im.UvRect.H,
         }, im.ImageId));
         _frameImageCount++;
@@ -1372,8 +1377,10 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             // full-window canvas clear, so a stationary acrylic's retained-backdrop cache stays parity-correct.
             _acrylic!.BeginFrameDirect(completed, (int)(_frameIndex & 1));
             _cmdList->OMSetRenderTargets(1, &backRtv, BOOL.FALSE, null);
-            float* clr = stackalloc float[4] { ctx.Clear.R, ctx.Clear.G, ctx.Clear.B, ctx.Clear.A };
-            _cmdList->ClearRenderTargetView(backRtv, clr, 0, null);
+            _clearScratch4[0] = ctx.Clear.R; _clearScratch4[1] = ctx.Clear.G;
+            _clearScratch4[2] = ctx.Clear.B; _clearScratch4[3] = ctx.Clear.A;
+            fixed (float* clr = _clearScratch4)
+                _cmdList->ClearRenderTargetView(backRtv, clr, 0, null);
             SetFullViewport();
         }
         else _acrylic!.BeginCanvas(_cmdList, ctx.Clear, completed, (int)(_frameIndex & 1));
@@ -1385,6 +1392,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         ResetDesiredScissor();
         _layerKinds.Clear();
         _opacityGroups.Clear();
+        // One scratch RECT for edge-fade partial clears — MUST NOT stackalloc inside the draw-list loop (cookie overrun).
+        RECT* edgeFadeClearRect = stackalloc RECT[1];
         int pos = 0;
         while (pos + sizeof(int) <= drawList.Length)
         {
@@ -1482,7 +1491,18 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     // Lease + clear + bind the group RT; scissor state carries over so the subtree clips identically. A
                     // Blur (or edge-fade-with-blur) group carries its σ — the RT is gaussian-blurred on pop before the
                     // composite; an edge-fade carries the per-edge bands + corners, applied in EdgeFadeComposite on pop.
-                    int slot = _opacity.Acquire(_cmdList, _fenceValue + 1);
+                    RECT* clearRect = null;
+                    if (L.Kind == (int)LayerKind.EdgeFade)
+                    {
+                        EdgeFadeLayerClear.Compute(in L, _frameScale, (int)_w, (int)_h, out int cl, out int ct, out int cr, out int cb, out bool fullCanvas);
+                        if (!fullCanvas)
+                        {
+                            edgeFadeClearRect[0] = new RECT { left = cl, top = ct, right = cr, bottom = cb };
+                            clearRect = edgeFadeClearRect;
+                            Diag.Set("d3d12", "edgeFadeClearPx", EdgeFadeLayerClear.ClearAreaPx(cl, ct, cr, cb));
+                        }
+                    }
+                    int slot = _opacity.Acquire(_cmdList, _fenceValue + 1, clearRect);
                     _opacityGroups.Add((slot, L, 0UL));
                     _layerKinds.Add(L.Kind);
                 }

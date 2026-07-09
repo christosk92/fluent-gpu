@@ -242,8 +242,7 @@ public sealed class ImageCache
         {
             if (UploadPixels(id, _blurScratch.AsSpan(0, BlurW * BlurH * 4), BlurW, BlurH) == ImageUploadResult.Accepted)
             {
-                entry.TextureMs = _clockMs;
-                NoteCrossfadeDeadline(entry);
+                BeginReveal(entry);
                 Diag.Count("media", "blurhash");
             }
         }
@@ -280,6 +279,53 @@ public sealed class ImageCache
 
     /// <summary>Advance the cross-fade clock by <paramref name="dtMs"/> (call once per painted frame, before record).</summary>
     public void Tick(float dtMs) => _clockMs += dtMs;
+
+    /// <summary>Monotonic reveal clock (ms) — passed to the GPU replay path to resolve fade params baked into DrawImageCmd.</summary>
+    public float ClockMs => _clockMs;
+
+    /// <summary>While true, newly arriving textures skip the reveal animation (instant CrossFade=1) — used during scroll.</summary>
+    public bool SuppressReveals { get; set; }
+
+    /// <summary>Bake-time fade params for <see cref="DrawImageCmd"/>. False when no texture has landed yet.</summary>
+    public bool FadeParamsOf(ImageHandle h, out float startMs, out float durationMs, out int easing)
+    {
+        if (!_byId.TryGetValue(h.Id, out var e) || float.IsNaN(e.TextureMs))
+        {
+            startMs = float.NaN;
+            durationMs = 0f;
+            easing = 0;
+            return false;
+        }
+        startMs = e.TextureMs;
+        durationMs = e.Transition.DurationMs;
+        easing = (int)e.Transition.Easing;
+        return true;
+    }
+
+    /// <summary>Resolve a baked fade to 0..1 at replay time (shared by D3D12 + headless).</summary>
+    public static float ResolveFade(float imageClockMs, float fadeStartMs, float fadeDurationMs, int fadeEasing)
+    {
+        if (fadeDurationMs <= 0f || float.IsNaN(fadeStartMs)) return 1f;
+        float elapsed = imageClockMs - fadeStartMs;
+        if (elapsed <= 0f) return 0f;
+        float t = elapsed / fadeDurationMs;
+        if (t >= 1f) return 1f;
+        return Easings.Ease((Easing)fadeEasing, t);
+    }
+
+    void BeginReveal(Entry e)
+    {
+        if (!e.Transition.Enabled)
+        {
+            e.TextureMs = float.NaN;
+            return;
+        }
+        if (SuppressReveals)
+            e.TextureMs = _clockMs - e.Transition.DurationMs;
+        else
+            e.TextureMs = _clockMs;
+        NoteCrossfadeDeadline(e);
+    }
 
     /// <summary>Placeholder→image reveal progress 0..1, eased by the image's <see cref="ImageTransition"/> from when its
     /// first texture appeared (the BlurHash LQIP, or the full-res decode). 1 once settled, instantly if the transition
@@ -472,7 +518,7 @@ public sealed class ImageCache
         e.State = ok ? ImageState.Ready : ImageState.Failed;
         e.Failure = ok ? ImageFailureKind.None : failure;
         e.Attempts = attempts;
-        if (ok && float.IsNaN(e.TextureMs)) { e.TextureMs = _clockMs; NoteCrossfadeDeadline(e); }   // no LQIP → the reveal fade starts when the full-res lands
+        if (ok && float.IsNaN(e.TextureMs)) BeginReveal(e);
         e.W = w; e.H = h;
         e.Bytes = ok ? (long)w * h * 4 : 0;
         UsedBytes += e.Bytes;

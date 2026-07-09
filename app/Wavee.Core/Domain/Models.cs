@@ -213,7 +213,13 @@ public readonly record struct PlaylistCapabilities(
 public readonly record struct PlaylistRowRef(int Index, string Uri, string ItemId);
 
 /// <summary>Playlist permission level for invite/base-level writes (mirrors playlist_permission.proto).</summary>
-public enum PlaylistPermissionLevel { Viewer = 2, Contributor = 3 }
+public enum PlaylistPermissionLevel { Blocked = 1, Viewer = 2, Contributor = 3 }
+
+/// <summary>Base permission state from GET/POST <c>/permission/base</c>.</summary>
+public readonly record struct PlaylistBasePermission(PlaylistPermissionLevel Level, string Revision)
+{
+    public bool IsPublic => Level != PlaylistPermissionLevel.Blocked;
+}
 
 public sealed record Playlist(
     string Id, string Uri, string Name, string? Description, string OwnerName,
@@ -224,7 +230,9 @@ public sealed record Playlist(
     // Cover-extracted page accent (ARGB; null = none). Drives the playlist page wash + Play button + section bars.
     Palette? Palette = null,
     // Playlist-context user overlay, projected at read time from owner + added_by values. The store wire rows keep raw ids.
-    IReadOnlyList<Owner>? Collaborators = null);
+    IReadOnlyList<Owner>? Collaborators = null,
+    // Owner visibility from permission/base (authoritative; default true until fetched).
+    bool IsPublic = true, string? BasePermissionRevision = null);
 
 /// <summary>Album-art-derived palette. Plain ARGB <see cref="uint"/> channels keep Core
 /// framework-neutral; the app maps each to its renderer color (ColorF) at the UI boundary.</summary>

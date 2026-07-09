@@ -60,6 +60,15 @@ internal static class PlaybackBucketDiagnostics
             WaveeLogField.Of("current", currentUri ?? ""));
     }
 
+    /// <summary>Free-form UI-side event on the same category (queue PANEL row builds etc.) — change-gate at the caller
+    /// via <paramref name="lastSignature"/> so steady re-renders log nothing.</summary>
+    public static void UiIfChanged(ref string? lastSignature, string eventId, string message)
+    {
+        if (string.Equals(message, lastSignature, StringComparison.Ordinal)) return;
+        lastSignature = message;
+        WaveeLog.Instance.Info(Category, eventId, message);
+    }
+
     public static void RemoteClusterIfChanged(ref string? lastSignature, string reason, in ClusterDelta c)
     {
         string sig = RemoteSignature(c);

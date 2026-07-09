@@ -33,7 +33,8 @@ public sealed record PlaylistOp(
     bool AddLast = false,                       // ADD at tail
     IReadOnlyList<PlaylistMember>? Items = null,    // ADD payload / UPDATE_ITEM attribute carrier / keyed-REM uris
     bool ItemsAsKey = false,                    // REM by Items' uris instead of index (order-independent — the rootlist unfollow shape)
-    PlaylistListAttributePatch? ListPatch = null);   // UPDATE_LIST metadata payload
+    PlaylistListAttributePatch? ListPatch = null,   // UPDATE_LIST metadata payload
+    bool? ItemPublic = null);                   // UPDATE_ITEM: rootlist public flag
 
 public static class PlaylistDiffApplier
 {

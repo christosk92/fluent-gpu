@@ -2671,33 +2671,53 @@ sealed class CollapsedHeroRebakeProbe : Component
 {
     public readonly Signal<float> HeroHeight = new(200f);
     public NodeHandle Hero;
+    public NodeHandle Media;   // scroll-bound Opacity (the hero photo proxy) — must stay 0 across a re-bake/re-theme
 
-    public override Element Render() => Embed.Comp(() => new OverlayHost { Child = Build() });
+    // OverlayHost freezes its Child at mount (Embed.Comp contract) — the signal-reactive body must be its OWN component
+    // inside, or HeroHeight changes silently never re-render (and the "re-bake" this probe exists to exercise never runs).
+    public override Element Render() => Embed.Comp(() => new OverlayHost { Child = Embed.Comp(() => new Body(this)) });
 
-    Element Build()
+    sealed class Body(CollapsedHeroRebakeProbe owner) : Component
     {
-        float h = HeroHeight.Value;
-        var hero = new BoxEl
+        public override Element Render()
         {
-            Height = h, ClipToBounds = true, Fill = ColorF.FromRgba(60, 80, 120),
-            OnRealized = n => Hero = n,
-            ScrollBinds =
-            [
-                new() { PinTop = 0f },
-                new() { From = ScrollChannel.Offset, To = BindSink.PresentedHTrailing, Range = ScrollRange.Px(0f, h), OutStart = h, OutEnd = 0f },
-            ],
-            Children = [new BoxEl { Height = 32f, Fill = ColorF.FromRgba(220, 200, 120) }],
-        };
-        var content = new BoxEl
-        {
-            Direction = 1,
-            Children =
-            [
-                hero,
-                new BoxEl { Height = 700f, Fill = ColorF.FromRgba(30, 30, 34) },
-            ],
-        };
-        return Ui.ScrollView(content) with { Grow = 1f };
+            float h = owner.HeroHeight.Value;
+            var hero = new BoxEl
+            {
+                Height = h, ClipToBounds = true, Fill = ColorF.FromRgba(60, 80, 120),
+                OnRealized = n => owner.Hero = n,
+                ScrollBinds =
+                [
+                    new() { PinTop = 0f },
+                    new() { From = ScrollChannel.Offset, To = BindSink.PresentedHTrailing, Range = ScrollRange.Px(0f, h), OutStart = h, OutEnd = 0f },
+                ],
+                Children =
+                [
+                    new BoxEl
+                    {
+                        Height = 32f, Fill = ColorF.FromRgba(220, 200, 120),
+                        OnRealized = n => owner.Media = n,
+                        // The artist-page hero photo's dissolve: opacity rides the collapse to 0. A re-theme re-render
+                        // re-bakes this row; the fresh row's first eval must RE-WRITE the 0 (LastWritten seeds NaN) or
+                        // the reconciled literal (1) pops the photo back over the collapsed band.
+                        ScrollBinds =
+                        [
+                            new() { From = ScrollChannel.Offset, To = BindSink.Opacity, Range = ScrollRange.Px(h * 0.16f, h * 0.66f), OutStart = 1f, OutEnd = 0f, Ease = Easing.Linear },
+                        ],
+                    },
+                ],
+            };
+            var content = new BoxEl
+            {
+                Direction = 1,
+                Children =
+                [
+                    hero,
+                    new BoxEl { Height = 700f, Fill = ColorF.FromRgba(30, 30, 34) },
+                ],
+            };
+            return Ui.ScrollView(content) with { Grow = 1f };
+        }
     }
 }
 
@@ -3520,6 +3540,8 @@ static class Slice
         ScrollBindEval.ApplyContinuous(s, vp, ref st);
         float collapsedBefore = s.Paint(probe.Hero).PresentedH;
 
+        float mediaBefore = s.Paint(probe.Media).Opacity;
+
         probe.HeroHeight.Value = 240f;
         host.Reconciler.Runtime.Flush();
         float afterRebake = s.Paint(probe.Hero).PresentedH;
@@ -3527,12 +3549,20 @@ static class Slice
         host.Paint(0, keepAlive: true);
         float afterFrame = s.Paint(probe.Hero).PresentedH;
         float afterFrameShift = s.Paint(probe.Hero).ChildShiftY;
+        float mediaAfter = s.Paint(probe.Media).Opacity;
 
         Check("RZ-HERO. collapsed PresentedHTrailing hero stays collapsed across bind re-bake",
             Near(collapsedBefore, 0f, 0.5f)
             && !float.IsNaN(afterRebake) && Near(afterRebake, 0f, 0.5f)
             && Near(afterFrame, 0f, 0.5f) && Near(afterFrameShift, -240f, 0.5f),
             $"before={collapsedBefore:0.#} rebake={afterRebake:0.#} frame={afterFrame:0.#}/{afterFrameShift:0.#}");
+
+        // The photo proxy's scroll-bound dissolve must survive the re-bake: the re-render just RESET paint.Opacity to
+        // the element literal (1), and the fresh bind row's FIRST eval must write the corrective 0 — a LastWritten
+        // seeded 0 change-gates it away (the hero photo popping back over the collapsed band on a re-theme/focus regain).
+        Check("RZ-HERO. scroll-bound media opacity re-writes 0 across a bind re-bake (first-write not change-gated)",
+            Near(mediaBefore, 0f, 0.01f) && Near(mediaAfter, 0f, 0.01f),
+            $"before={mediaBefore:0.##} after={mediaAfter:0.##}");
     }
 
     // Mica focus toggle (WindowBlur/WindowFocus) bumps Tok.Epoch and re-themes in place. The steady frame after regain
@@ -3563,18 +3593,22 @@ static class Slice
             ScrollBindEval.ApplyContinuous(s, vp, ref st);
             host.Paint(0, keepAlive: true);
             float collapsed = s.Paint(probe.Hero).PresentedH;
+            float mediaCollapsed = s.Paint(probe.Media).Opacity;
 
             window.IsActive = false;
             var blurStats = host.Paint(0, keepAlive: true);
             float afterBlur = s.Paint(probe.Hero).PresentedH;
+            float mediaBlur = s.Paint(probe.Media).Opacity;
 
             window.IsActive = true;
             var focusStats = host.Paint(0, keepAlive: true);
             float afterFocus = s.Paint(probe.Hero).PresentedH;
+            float mediaFocus = s.Paint(probe.Media).Opacity;
 
             var steadyStats = host.Paint(0, keepAlive: true);
             float afterSteady = s.Paint(probe.Hero).PresentedH;
             float afterSteadyShift = s.Paint(probe.Hero).ChildShiftY;
+            float mediaSteady = s.Paint(probe.Media).Opacity;
 
             Check("RZ-HERO. collapsed hero survives window blur/focus (Mica re-theme) with PresentedHTrailing intact",
                 Near(collapsed, 0f, 0.5f)
@@ -3583,6 +3617,16 @@ static class Slice
                 && Near(afterSteady, 0f, 0.5f) && Near(afterSteadyShift, -200f, 0.5f),
                 $"collapsed={collapsed:0.#} blur={afterBlur:0.#} focus={afterFocus:0.#} steady={afterSteady:0.#}/{afterSteadyShift:0.#} "
                 + $"blurReuse={blurStats.SpansReused} focusReuse={focusStats.SpansReused} steadyReuse={steadyStats.SpansReused}");
+
+            // The hero PHOTO's scroll-bound dissolve (Opacity → 0) must ALSO survive the re-theme re-bake: a fresh bind
+            // row change-gating its first write away leaves the reconciled literal (1) — the photo band popping back
+            // over the collapsed hero on focus regain (the user-visible regression this guards).
+            Check("RZ-HERO. scroll-bound media opacity stays 0 across window blur/focus (re-bake first-write)",
+                Near(mediaCollapsed, 0f, 0.01f)
+                && Near(mediaBlur, 0f, 0.01f)
+                && Near(mediaFocus, 0f, 0.01f)
+                && Near(mediaSteady, 0f, 0.01f),
+                $"collapsed={mediaCollapsed:0.##} blur={mediaBlur:0.##} focus={mediaFocus:0.##} steady={mediaSteady:0.##}");
         }
         finally { Theme.WindowBackground = priorBg; }
     }
@@ -5455,11 +5499,11 @@ static class Slice
         var btn = Button.Accent("x", () => { }, s);
         bool styled = btn.Fill.Value == s.Background
             && btn.HoverFill == s.HoverBackground
-            && Near(btn.Corners.TopLeft, 8f)
+            && Near(btn.Corners.Value.TopLeft, 8f)
             && btn.Children[0] is TextEl t && t.Color.Value == s.Foreground;
 
         var modded = Button.Accent("y", () => { }).Background(ColorF.FromRgba(1, 2, 3)).Rounded(12f);
-        bool overridden = modded.Fill.Value == ColorF.FromRgba(1, 2, 3) && Near(modded.Corners.TopLeft, 12f);
+        bool overridden = modded.Fill.Value == ColorF.FromRgba(1, 2, 3) && Near(modded.Corners.Value.TopLeft, 12f);
 
         // Wave-1 parity: WinUI Button storyboards swap brushes ONLY (Button_themeresources.xaml:176-229 — no scale),
         // so the default Button must have NO press scale; IconButton (engine media-transport control) keeps its

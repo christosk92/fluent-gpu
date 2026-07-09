@@ -61,6 +61,28 @@ static class WaveeSettings
     public static readonly SettingKey<long> LastSeenCrashDumpTicksUtc = new("diagnostics.crash.lastDumpTicksUtc", 0L);
 }
 
+// The LibraryPage's per-kind persisted state (the "Your Library" master–detail: albums/artists/podcasts). Keys are built
+// per kind at runtime — plain record construction, AOT-clean — so the three kinds keep independent last-used state, and
+// each key carries its own default so a missing key (or no store) degrades to it. Scope is per-page-global: multiple open
+// tabs of one kind stay independent while live, then seed from the same saved values on a fresh launch. Filter text is
+// intentionally NOT persisted (it starts empty each launch), so there is no key for it here.
+static class LibraryStateKeys
+{
+    public static SettingKey<float> LeftW(string k) => new($"library.{k}.leftw", k == "artists" ? 280f : 340f);
+    public static SettingKey<float> MidW(string k) => new($"library.{k}.midw", 440f);
+    public static SettingKey<int> Sort(string k) => new($"library.{k}.sort", 0);
+    public static SettingKey<bool> Desc(string k) => new($"library.{k}.desc", false);
+    public static SettingKey<int> View(string k) => new($"library.{k}.view", 1);
+    public static SettingKey<int> Size(string k) => new($"library.{k}.size", 1);
+    public static SettingKey<string> Selected(string k) => new($"library.{k}.selected", "");
+    // Artists-only: the discography (column 2) controls + the picked release (column 3).
+    public static SettingKey<string> AlbumKey(string k) => new($"library.{k}.albumkey", "");
+    public static SettingKey<int> AlbumSort(string k) => new($"library.{k}.album.sort", 0);
+    public static SettingKey<bool> AlbumDesc(string k) => new($"library.{k}.album.desc", false);
+    public static SettingKey<int> AlbumView(string k) => new($"library.{k}.album.view", 3);   // Grid — matches today's fixed grid
+    public static SettingKey<int> AlbumSize(string k) => new($"library.{k}.album.size", 1);
+}
+
 // IAppSettings backed by the engine's AppDataStore (HKCU registry, unpackaged). Every access is DEFENSIVE — a storage
 // failure (or no store at all) falls back to the key's default and never throws into the UI. Type dispatch is a closed
 // switch over AppDataStore's supported scalars — AOT-clean (no reflection); unsupported T's fall back to the default.

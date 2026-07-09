@@ -252,6 +252,12 @@ public struct ScrollState
     // the scroll offset. Set by the reconciler from ScrollEl/VirtualListEl.AutoEdgeFade. Band 0 = off.
     public bool  AutoEdgeFade;
     public float AutoEdgeFadeBand;        // DIP
+    // Per-viewport PROGRAMMATIC bring-into-view spring override (both 0 = the default critically-damped 95 ms-halflife
+    // chase). Zeta in (0,1) + Omega (rad/s) select the UNDERDAMPED closed form in the ScrollIntegrator's Programmatic
+    // WheelAnimating branch — the Apple-Music lyric follow (soft ~0.65 s settle, a whisper of overshoot) needs ζ<1,
+    // which the fixed ζ=1 exponential cannot express. Velocity-continuous retargets work identically in both forms.
+    public float ProgrammaticZeta;        // damping ratio; 0 (default) ⇒ legacy critically-damped chase
+    public float ProgrammaticOmega;       // natural frequency ω0 rad/s; settle ≈ 4/(ζ·ω0)
     // Persistent scrollbar: keep the bar visible (thin rail) whenever content overflows, bypassing the auto-hide FadeT
     // gate at record time (hover still expands it). Set by the reconciler from ScrollEl.AlwaysShowScrollbar.
     public bool  AlwaysShowBar;

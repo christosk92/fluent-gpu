@@ -26,6 +26,9 @@ public readonly record struct MenuFlyoutItem(string Label, string? Glyph = null,
     public bool IsChecked { get; init; }
     /// <summary>Trailing right-aligned keyboard-accelerator text (WinUI KeyboardAcceleratorTextOverride), e.g. "Ctrl+S".</summary>
     public string? AcceleratorText { get; init; }
+    /// <summary>Override font family for this row's leading <see cref="Glyph"/> (a custom icon font's "path#family").
+    /// Null ⇒ the shared <c>Theme.IconFont</c>. Lets an app ship glyphs the stock icon font doesn't carry.</summary>
+    public string? GlyphFont { get; init; }
     /// <summary>Nested items (Kind == <see cref="MenuItemKind.SubMenu"/> only) — the cascading sub-menu's rows.</summary>
     public IReadOnlyList<MenuFlyoutItem>? SubItems { get; init; }
 
@@ -142,7 +145,7 @@ public static class MenuFlyout
         if (iconColumn)
         {
             Element icon = it.Glyph is { Length: > 0 } g
-                ? new TextEl(g) { Size = IconGlyphSize, Color = fg, FontFamily = Theme.IconFont }
+                ? new TextEl(g) { Size = IconGlyphSize, Color = fg, FontFamily = it.GlyphFont ?? Theme.IconFont }
                 : new BoxEl();
             children.Add(new BoxEl { Width = PlaceholderWidth, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start, Children = [icon] });
         }

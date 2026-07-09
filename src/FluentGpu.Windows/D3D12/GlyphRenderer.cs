@@ -167,6 +167,7 @@ internal sealed unsafe class GlyphRenderer : IDisposable
     private readonly List<ShapedGlyph> _scratch = new(256);   // reused miss-path shaping buffer
     private readonly List<ColorF> _colorScratch = new(256);   // reused span-run per-quad color buffer (miss path)
     private readonly List<RunKey> _evictScratch = new();      // reused eviction sweep buffer (off the hot path)
+    private readonly float[] _vpConstants = new float[2];
     // Renderer-owned quad-array free-list (bucketed by pow2 size). A virtualization storm shapes thousands of fresh
     // runs whose arrays the cache holds for many frames — the SHARED ArrayPool drains and falls back to allocating;
     // this list retains returned arrays (up to a per-bucket cap), so steady-state churn reuses instead of allocating.
@@ -1156,8 +1157,10 @@ float4 PSMain(VSOutG i) : SV_Target
             cmd->SetDescriptorHeaps(1, &heap);
             cmd->SetGraphicsRootSignature(_rootSig);
             cmd->SetPipelineState(_pso);
-            float* vp = stackalloc float[2] { vpW, vpH };
-            cmd->SetGraphicsRoot32BitConstants(0, 2, vp, 0);
+            _vpConstants[0] = vpW;
+            _vpConstants[1] = vpH;
+            fixed (float* vp = _vpConstants)
+                cmd->SetGraphicsRoot32BitConstants(0, 2, vp, 0);
             cmd->SetGraphicsRootDescriptorTable(1, _srvGpu);
             cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
             fixed (D3D12_VERTEX_BUFFER_VIEW* qv = &_quadView) cmd->IASetVertexBuffers(0, 1, qv);
@@ -1185,8 +1188,10 @@ float4 PSMain(VSOutG i) : SV_Target
             cmd->SetDescriptorHeaps(1, &heap);
             cmd->SetGraphicsRootSignature(_rootSig);
             cmd->SetPipelineState(_psoGrad);
-            float* vp = stackalloc float[2] { vpW, vpH };
-            cmd->SetGraphicsRoot32BitConstants(0, 2, vp, 0);
+            _vpConstants[0] = vpW;
+            _vpConstants[1] = vpH;
+            fixed (float* vp = _vpConstants)
+                cmd->SetGraphicsRoot32BitConstants(0, 2, vp, 0);
             cmd->SetGraphicsRootDescriptorTable(1, _srvGpu);
             cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
             fixed (D3D12_VERTEX_BUFFER_VIEW* qv = &_quadView) cmd->IASetVertexBuffers(0, 1, qv);

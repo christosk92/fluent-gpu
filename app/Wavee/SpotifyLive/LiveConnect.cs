@@ -24,6 +24,10 @@ public sealed class LiveConnect : IDisposable
     public LiveConnectDevices Devices { get; }
     public PlaybackController Controller { get; }
     public AudioPlaybackStack? Audio => _audio;
+    /// <summary>The dealer connection id (null until the first pusher hello / after a reconnect drop). Replays last value.</summary>
+    public IObservable<string?> ConnectionId => _connect.ConnectionId;
+    /// <summary>The current dealer connection id, or null if none has been captured yet.</summary>
+    public string? CurrentConnectionId => _connect.CurrentConnectionId;
     readonly ConnectService _connect;
     readonly DeviceStatePublisher _publisher;
     readonly ClusterIngest _ingest;

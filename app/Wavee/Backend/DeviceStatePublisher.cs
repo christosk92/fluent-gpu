@@ -182,7 +182,6 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
         string trackUid = "";
         bool nowAutoplay = false;
         QueueEntry? nowEntry = null;
-        int contextIndex = 0;
 
         foreach (var qe in _state.Queue)
         {
@@ -192,15 +191,9 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
                 nowAutoplay = qe.IsAutoplay;
                 nowEntry = qe;
             }
-            else if (qe.Bucket == QueueBucket.History)
-            {
-                string provider = ProviderOf(qe);
-                int viewIndex = IsContextProvider(provider) ? contextIndex++ : -1;
-                prev.Add(ToSnapshotTrack(qe, provider, viewIndex));
-            }
         }
 
-        int currentIndex = contextIndex;
+        int currentIndex = 0;
         int nextContextIndex = currentIndex + 1;
         foreach (var qe in _state.Queue)
         {
@@ -235,7 +228,7 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
 
         return new LocalPlaybackSnapshot(current, _state.ContextUri, _state.PositionMs, _state.DurationMs,
             wirePlaying, wirePaused, _state.IsShuffle, _state.Repeat,
-            wirePrev, wireNext, metadata, contextIndex, iid, page, rev, sid, pid, hasBeen, started, _state.Volume);
+            wirePrev, wireNext, metadata, currentIndex, iid, page, rev, sid, pid, hasBeen, started, _state.Volume);
     }
 
     static IReadOnlyList<SnapshotTrack> CapPrev(List<SnapshotTrack> tracks)

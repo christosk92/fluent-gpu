@@ -425,15 +425,35 @@ public sealed class ScrollIntegrator
                 else
                 {
                     bool programmatic = (sc.PhaseFlags & ScrollState.PhaseProgrammatic) != 0;
-                    float halflifeMs = programmatic ? ProgrammaticSpringHalflifeMs : ScrollTuning.WheelChaseHalflifeMs;
-                    float y = 1.3862944f / (halflifeMs * 0.001f);   // 2·ln2 / halflife(s) — critically-damped (ζ=1)
-                    float vel = sc.FlingVelocity;
-                    float j0 = off - pending;
-                    float j1 = vel + j0 * y;
-                    float e = MathF.Exp(-y * dtS);
-                    float newOff = e * (j0 + j1 * dtS) + pending;
-                    vel = e * (vel - j1 * y * dtS);
-                    sc.FlingVelocity = vel;
+                    float newOff, vel;
+                    if (programmatic && sc.ProgrammaticZeta > 0f && sc.ProgrammaticZeta < 0.999f && sc.ProgrammaticOmega > 0f)
+                    {
+                        // UNDERDAMPED closed form (ζ<1) — the per-viewport override (ScrollState.ProgrammaticZeta/Omega):
+                        // exact per-tick step (dt-deterministic like the ζ=1 branch), velocity-continuous across retargets.
+                        float z = sc.ProgrammaticZeta, w0 = sc.ProgrammaticOmega;
+                        float wd = w0 * MathF.Sqrt(1f - z * z);
+                        float j0 = off - pending;
+                        float v0 = sc.FlingVelocity;
+                        float e = MathF.Exp(-z * w0 * dtS);
+                        float cosD = MathF.Cos(wd * dtS), sinD = MathF.Sin(wd * dtS);
+                        float a = (v0 + z * w0 * j0) / wd;
+                        float x = e * (j0 * cosD + a * sinD);
+                        vel = -z * w0 * x + e * wd * (a * cosD - j0 * sinD);
+                        newOff = pending + x;
+                        sc.FlingVelocity = vel;
+                    }
+                    else
+                    {
+                        float halflifeMs = programmatic ? ProgrammaticSpringHalflifeMs : ScrollTuning.WheelChaseHalflifeMs;
+                        float y = 1.3862944f / (halflifeMs * 0.001f);   // 2·ln2 / halflife(s) — critically-damped (ζ=1)
+                        vel = sc.FlingVelocity;
+                        float j0 = off - pending;
+                        float j1 = vel + j0 * y;
+                        float e = MathF.Exp(-y * dtS);
+                        newOff = e * (j0 + j1 * dtS) + pending;
+                        vel = e * (vel - j1 * y * dtS);
+                        sc.FlingVelocity = vel;
+                    }
 
                     if (MathF.Abs(newOff - pending) < 0.5f && MathF.Abs(vel) < WheelSettleVelPxPerS)
                     {

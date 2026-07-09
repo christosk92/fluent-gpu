@@ -1,4 +1,3 @@
-using Google.Protobuf;
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -7,7 +6,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Wavee.Backend.Spotify;
 using Wavee.Core;
-using Perm = Wavee.Protocol.Playlist;
 
 namespace Wavee.Backend.Playlists;
 
@@ -16,6 +14,8 @@ public sealed class PlaylistMutationSource : IPlaylistMutationSource
 {
     readonly MutationEngine _mut;
     readonly ITransport _transport;
+    readonly IStore? _store;
+    readonly PlaylistPermissionClient _permissions;
     IHttpExchange _http;
     readonly Func<SessionContext> _ctx;
     readonly Func<string> _spclientBaseUrl;
@@ -26,9 +26,9 @@ public sealed class PlaylistMutationSource : IPlaylistMutationSource
 
     public PlaylistMutationSource(
         MutationEngine mut, ITransport transport, IHttpExchange http, Func<SessionContext> ctx,
-        Func<string> spclientBaseUrl, UserPlaylistSource local)
-        => (_mut, _transport, _http, _ctx, _spclientBaseUrl, _local) =
-            (mut, transport, http, ctx, spclientBaseUrl, local);
+        Func<string> spclientBaseUrl, UserPlaylistSource local, IStore? store = null)
+        => (_mut, _transport, _http, _ctx, _spclientBaseUrl, _local, _store, _permissions) =
+            (mut, transport, http, ctx, spclientBaseUrl, local, store, new PlaylistPermissionClient(transport));
 
     public void SetHttp(IHttpExchange http) => _http = http;
 
@@ -47,7 +47,7 @@ public sealed class PlaylistMutationSource : IPlaylistMutationSource
     {
         if (IsLocal(playlistUri)) throw new NotSupportedException($"Local playlist row removal is not implemented (uri={playlistUri}).");
         var ops = new List<PlaylistOp>(rows.Count);
-        for (int i = rows.Count - 1; i >= 0; i--)   // remove from tail to keep indices stable within batch
+        for (int i = rows.Count - 1; i >= 0; i--)
         {
             var r = rows[i];
             ops.Add(new PlaylistOp(PlaylistOpKind.Remove, FromIndex: r.Index, Length: 1,
@@ -82,12 +82,9 @@ public sealed class PlaylistMutationSource : IPlaylistMutationSource
         }
         if (toIndex < 0) throw new ArgumentOutOfRangeException(nameof(toIndex));
 
-        // Virtual prefix [0, L): every touched index lives inside it; rows at >= L are unaffected by the emitted ops.
         int maxSel = 0; foreach (int i in selected) maxSel = Math.Max(maxSel, i);
         int len = Math.Max(maxSel + 1, toIndex);
 
-        // Desired final order: unselected rows keep relative order; the selected block lands before the row
-        // that originally sat at toIndex (equivalently after the last unselected row preceding it).
         var final = new int[len];
         int w = 0;
         for (int i = 0; i < len && w < len; i++)
@@ -96,8 +93,6 @@ public sealed class PlaylistMutationSource : IPlaylistMutationSource
         for (int i = 0; i < len && w < len; i++)
             if (!selected.Contains(i) && i >= toIndex) final[w++] = i;
 
-        // First-mismatch simulation: at each settled prefix position, pull the needed run forward. Every emitted op
-        // has ToIndex < FromIndex, so the applier's pre-removal ToIndex equals the post-move position directly.
         var sim = new List<int>(len);
         for (int i = 0; i < len; i++) sim.Add(i);
         var ops = new List<PlaylistOp>();
@@ -166,32 +161,107 @@ public sealed class PlaylistMutationSource : IPlaylistMutationSource
     public async Task SetBasePermissionAsync(string playlistUri, PlaylistPermissionLevel level, CancellationToken ct = default)
     {
         if (IsLocal(playlistUri)) throw new NotSupportedException($"Local playlists have no permissions (uri={playlistUri}).");
-        var id = IdOf(playlistUri);
-        var req = new Perm.SetPermissionLevelRequest { PermissionLevel = (Perm.PermissionLevel)(int)level };
-        var body = req.ToByteArray();
-        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        await _permissions.SetBasePermissionAsync(playlistUri, level, revision: null, ct).ConfigureAwait(false);
+    }
+
+    public Task<PlaylistBasePermission?> GetBasePermissionAsync(string playlistUri, CancellationToken ct = default)
+    {
+        if (IsLocal(playlistUri)) return Task.FromResult<PlaylistBasePermission?>(null);
+        return _permissions.GetBasePermissionAsync(playlistUri, ct);
+    }
+
+    public async Task SetPlaylistVisibilityAsync(string playlistUri, bool isPublic, CancellationToken ct = default)
+    {
+        if (IsLocal(playlistUri)) throw new NotSupportedException($"Local playlists have no visibility (uri={playlistUri}).");
+        RequireStore();
+        var level = isPublic ? PlaylistPermissionLevel.Viewer : PlaylistPermissionLevel.Blocked;
+        var resulting = await _permissions.SetBasePermissionAsync(playlistUri, level, revision: null, ct).ConfigureAwait(false);
+        PatchPlaylistVisibility(playlistUri, isPublic, resulting.Revision);
+        try { await TryRootlistPublicFlagAsync(playlistUri, isPublic, ct).ConfigureAwait(false); }
+        catch { /* best-effort — permission already committed */ }
+    }
+
+    public async Task DeletePlaylistAsync(string playlistUri, CancellationToken ct = default)
+    {
+        if (IsLocal(playlistUri)) throw new NotSupportedException($"Local playlist delete is not implemented (uri={playlistUri}).");
+        RequireStore();
+        var store = _store!;
+        var ctx = _ctx();
+        int index = RootlistOps.FindPlaylistIndex(store.Rootlist(), playlistUri);
+        if (index < 0)
         {
-            ["Content-Type"] = "application/x-protobuf",
-            ["Accept"] = "application/x-protobuf",
-        };
-        var r = await _transport.Request(Channel.Spclient, $"/playlist-permission/v1/playlist/{id}/permission/base/level", body, ct, "POST", headers).ConfigureAwait(false);
-        if (!r.Ok) throw new InvalidOperationException($"permission base-level failed ({r.Status})");
+            await RootlistOps.BootstrapRootlistAsync(store, _transport, ctx, ct).ConfigureAwait(false);
+            index = RootlistOps.FindPlaylistIndex(store.Rootlist(), playlistUri);
+        }
+        if (index < 0) throw new InvalidOperationException($"Playlist '{playlistUri}' is not in the user's rootlist.");
+        var rem = new PlaylistOp(PlaylistOpKind.Remove, FromIndex: index, Length: 1);
+        try
+        {
+            await RootlistOps.PostRootlistOpsAsync(store, _transport, _spclientBaseUrl, ctx, new[] { rem }, ct, playlistUri)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            PlaylistMutationDiagnostics.DeleteFailed(playlistUri, ex);
+            throw;
+        }
+        store.SetSaved("playlists", playlistUri, false, SyncState.Confirmed);
+        store.Bump("rootlist", CollectionKind.Playlists);
     }
 
     public async Task<string> CreateContributorInviteAsync(string playlistUri, CancellationToken ct = default)
     {
         if (IsLocal(playlistUri)) throw new NotSupportedException($"Local playlists have no invites (uri={playlistUri}).");
+        await EnsureCollaborativeForInviteAsync(playlistUri, ct).ConfigureAwait(false);
         var id = IdOf(playlistUri);
-        var json = Encoding.UTF8.GetBytes("{\"permissionLevel\":\"CONTRIBUTOR\",\"ttlMs\":604800000}");
+        // permission-grant wants permissionLevel NESTED under "permission" (not flat) — a flat body is rejected 400 (empty).
+        var json = Encoding.UTF8.GetBytes("{\"permission\":{\"permissionLevel\":\"CONTRIBUTOR\"},\"ttlMs\":604800000}");
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["Content-Type"] = "application/json",
             ["Accept"] = "application/json",
         };
         var r = await _transport.Request(Channel.Spclient, $"/playlist-permission/v1/playlist/{id}/permission-grant", json, ct, "POST", headers).ConfigureAwait(false);
-        if (!r.Ok) throw new InvalidOperationException($"permission grant failed ({r.Status})");
+        if (!r.Ok)
+        {
+            PlaylistMutationDiagnostics.PermissionGrantFailed(playlistUri, r.Status);
+            throw new InvalidOperationException($"permission grant failed ({r.Status})");
+        }
         var doc = JsonDocument.Parse(r.Body);
         return doc.RootElement.GetProperty("token").GetString() ?? "";
+    }
+
+    async Task EnsureCollaborativeForInviteAsync(string playlistUri, CancellationToken ct)
+    {
+        bool needsCollab = _store?.GetPlaylist(playlistUri) is not { Capabilities.IsCollaborative: true };
+        if (!needsCollab) return;
+        await UpdateDetailsAsync(playlistUri, null, null, true, ct).ConfigureAwait(false);
+    }
+
+    void PatchPlaylistVisibility(string playlistUri, bool isPublic, string revision)
+    {
+        if (_store?.GetPlaylist(playlistUri) is not { } header) return;
+        _store.UpsertPlaylist(header with { IsPublic = isPublic, BasePermissionRevision = revision });
+    }
+
+    async Task TryRootlistPublicFlagAsync(string playlistUri, bool isPublic, CancellationToken ct)
+    {
+        var store = _store!;
+        var ctx = _ctx();
+        int index = RootlistOps.FindPlaylistIndex(store.Rootlist(), playlistUri);
+        if (index < 0)
+        {
+            await RootlistOps.BootstrapRootlistAsync(store, _transport, ctx, ct).ConfigureAwait(false);
+            index = RootlistOps.FindPlaylistIndex(store.Rootlist(), playlistUri);
+        }
+        if (index < 0) return;
+        var op = new PlaylistOp(PlaylistOpKind.UpdateItem, FromIndex: index, ItemPublic: isPublic);
+        await RootlistOps.PostRootlistOpsAsync(store, _transport, _spclientBaseUrl, ctx, new[] { op }, ct, playlistUri).ConfigureAwait(false);
+    }
+
+    void RequireStore()
+    {
+        if (_store is null) throw new InvalidOperationException("Playlist visibility/delete requires the persistent store.");
     }
 
     void EnqueueEdit(string playlistUri, params PlaylistOp[] ops) => _mut.Edit(playlistUri, ops);

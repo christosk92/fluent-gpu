@@ -198,6 +198,10 @@ public class ConnectControllerTests
         Assert.Equal("add_to_queue", cmd.GetProperty("endpoint").GetString());
         Assert.Equal("spotify:track:x", cmd.GetProperty("track").GetProperty("uri").GetString());
         Assert.False(cmd.TryGetProperty("uri", out _));   // NOT the legacy flat command.uri
+        var log = cmd.GetProperty("logging_params");
+        Assert.Equal(1, log.GetProperty("interaction_ids").GetArrayLength());   // controller mints a real interaction id
+        Assert.False(string.IsNullOrEmpty(log.GetProperty("interaction_ids")[0].GetString()));
+        Assert.True(log.TryGetProperty("command_received_time", out _));        // capture-faithful logging_params
         Assert.Equal("other-device", outbound.LastTarget);
     }
 
@@ -499,6 +503,9 @@ public class ConnectControllerTests
         Assert.Equal("queue", next[0].GetProperty("provider").GetString());
         Assert.Equal("spotify:track:t2", next[1].GetProperty("uri").GetString());
         Assert.Equal("queue", next[1].GetProperty("provider").GetString());
+        var log = cmd.GetProperty("logging_params");
+        Assert.Equal(1, log.GetProperty("interaction_ids").GetArrayLength());   // controller-driven set_queue carries an interaction id
+        Assert.False(string.IsNullOrEmpty(log.GetProperty("interaction_ids")[0].GetString()));
         Assert.Equal("other-device", outbound.LastTarget);
     }
 

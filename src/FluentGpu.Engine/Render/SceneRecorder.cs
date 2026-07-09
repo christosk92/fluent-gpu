@@ -20,6 +20,7 @@ public readonly record struct TextEditStyle(ColorF SelectionFill, ColorF Selecte
 
 public readonly record struct SceneRecordStats(int NodesVisited, int DrawnNodeCount, int CulledNodeCount, RectF Damage = default)
 {
+    public int NodesCulled { get; init; }
     public int BlurCandidateCount { get; init; }
     public int BlurGroupCount { get; init; }
     public int BlurSuppressedByScrollCount { get; init; }
@@ -40,6 +41,8 @@ public readonly record struct SceneRecordStats(int NodesVisited, int DrawnNodeCo
 /// </summary>
 public static class SceneRecorder
 {
+    private const bool EnableSubtreeCull = true;
+
     // Opt-in scroll diagnostics: set FG_SCROLLLOG=1, run, scroll, copy the [scroll] lines.
     private static readonly bool ScrollLog = Environment.GetEnvironmentVariable("FG_SCROLLLOG") == "1";
     private static int _scrollLogFrame;
@@ -64,6 +67,7 @@ public static class SceneRecorder
         public int NodesVisited;
         public int DrawnNodeCount;
         public int CulledNodeCount;
+        public int NodesCulled;
         public int BlurCandidateCount;
         public int BlurGroupCount;
         public int BlurHoldCandidateCount;
@@ -88,6 +92,7 @@ public static class SceneRecorder
 
         public readonly SceneRecordStats ToStats() => new(NodesVisited, DrawnNodeCount, CulledNodeCount, HasDamage ? Damage : default)
         {
+            NodesCulled = this.NodesCulled,
             BlurCandidateCount = this.BlurCandidateCount,
             BlurGroupCount = this.BlurGroupCount,
             BlurSuppressedByScrollCount = 0,
@@ -262,7 +267,9 @@ public static class SceneRecorder
             if (!d.InUse || (VisualKind)d.Kind != VisualKind.Image || d.ImageId == 0) continue;
             var ih = new ImageHandle(d.ImageId);
             bool ready = images is not null && images.StateOf(ih) == ImageState.Ready;
-            float crossFade = images is not null ? images.CrossFadeOf(ih) : 1f;
+            float fadeStart = float.NaN, fadeDur = 0f;
+            int fadeEase = 0;
+            if (images is not null && images.FadeParamsOf(ih, out fadeStart, out fadeDur, out fadeEase)) { }
             RectF local = new RectF(0f, 0f, d.Bounds.W, d.Bounds.H);
             RectF drawRect = local;
             RectF uv = new RectF(0f, 0f, 1f, 1f);
@@ -271,8 +278,8 @@ public static class SceneRecorder
                 var (srcW, srcH) = images.SizeOf(ih);
                 (drawRect, uv) = ImageContentFit((ImageFit)d.Fit, in local, srcW, srcH);
             }
-            ulong key = (ulong)((1 << 16) | 1) << 32;   // top band — above the drag ghost, matching the old overlay-band depth
-            dl.DrawImage(drawRect, d.Corners, d.ImageId, ready, d.Fill, d.WorldTransform, d.Opacity, uv, crossFade, key);
+            ulong key = (ulong)((1 << 16) | 1) << 32;
+            dl.DrawImage(drawRect, d.Corners, d.ImageId, ready, d.Fill, d.WorldTransform, d.Opacity, uv, fadeStart, fadeDur, fadeEase, key);
         }
         if (clipped) dl.PopClip();
     }
@@ -446,15 +453,39 @@ public static class SceneRecorder
         bool spanTracking = spans is not null && spanStoreEnabled;
         if (spans is not null)
         {
-            spanInputSig = ComputeSpanInputSig(scene, node, flags, depth, in clip, in world, opacity,
-                parentScaleX, parentScaleY, childScaleX, childScaleY, inMotion, scrollInMotion,
-                inherited, in focus, in textEdit, scrollThumb, scrollTrack);
-            spanMoveSig = ComputeSpanMoveSig(scene, node, flags, depth, in clip, in world, opacity,
-                parentScaleX, parentScaleY, childScaleX, childScaleY,
-                scrollInMotion, inherited, in focus, in textEdit, scrollThumb, scrollTrack);
             byte recordDirtyBits = scene.RecordDirtyBits(node);
             byte descendantDirtyBits = scene.RecordDirtyDescendantBits(node);
             bool directMovingScrollContent = IsDirectMovingScrollContent(scene, node, flags);
+
+            // Off-screen clean-subtree cull — valid under any spanReuseDisabled reason.
+            // GUARD: the prior subtree bounds are trusted only when the node's CURRENT device box is ALSO out of view —
+            // a reveal/reflow animation (the right rail opening) re-lays a subtree without record-dirty bits, so the
+            // stored bounds go stale; culling on them alone blanks the freshly-revealed content for several frames
+            // (the "rail background only shows a couple frames later" report).
+            if (EnableSubtreeCull && spanStoreEnabled
+                && recordDirtyBits == 0 && descendantDirtyBits == 0
+                && !deviceBounds.Overlaps(clip)
+                && spans.TryGetSubtree((int)node.Raw.Index, node.Raw.Gen, spanFrame, out var priorWorldC, out var priorSubtreeC)
+                && TryTranslationDelta(in priorWorldC, in world, out float cdx, out float cdy))
+            {
+                RectF curSubtree = TranslateBounds(priorSubtreeC, cdx, cdy);
+                if (!curSubtree.Overlaps(clip))
+                {
+                    spans.StoreCulled((int)node.Raw.Index, node.Raw.Gen, spanFrame, world, curSubtree);
+                    stats.NodesCulled++;
+                    var culled = new SpanRecordResult();
+                    culled.Include(curSubtree);
+                    return culled;
+                }
+            }
+
+            spanInputSig = ComputeSpanInputSig(scene, node, flags, depth, in clip, in world, opacity,
+                parentScaleX, parentScaleY, childScaleX, childScaleY, pw, ph,
+                inMotion, scrollInMotion,
+                inherited, in focus, in textEdit, scrollThumb, scrollTrack);
+            spanMoveSig = ComputeSpanMoveSig(scene, node, flags, depth, in clip, in world, opacity,
+                parentScaleX, parentScaleY, childScaleX, childScaleY, pw, ph,
+                scrollInMotion, inherited, in focus, in textEdit, scrollThumb, scrollTrack);
             // Span reuse copies a prior frame's recorded subtree byte-for-byte. Exact copy needs a fully clean subtree.
             // Translated copy is allowed only when no descendant is dirty and the old/current clip both contain the
             // whole span, so a moving scroll-content boundary re-walks edge/entering rows instead of freezing them.
@@ -637,7 +668,20 @@ public static class SceneRecorder
             // glyphs/images/gradients/arcs/polylines still clip by scissor only.
             float clipRadius = p.Corners.TopLeft;
             if (clipRadius > 0f)
-                dl.PushClipRounded(childClip, deviceBounds, clipRadius * MathF.Abs(world.M11 != 0f ? world.M11 : 1f), key);
+            {
+                float rDev = clipRadius * MathF.Abs(world.M11 != 0f ? world.M11 : 1f);
+                // The rounded-clip SDF carries ONE radius, but a side whose corners are BOTH square must clip STRAIGHT —
+                // the shell content card (rounded top, square bottom) was getting its CONTENT rounded away at the
+                // bottom too. Extend the SDF box past the scissor on fully-square sides so that side's rounding falls
+                // outside the visible clip; the rectangular scissor still bounds the true edge.
+                RectF sdfBox = deviceBounds;
+                var c4 = p.Corners;
+                if (c4.BottomLeft <= 0f && c4.BottomRight <= 0f) sdfBox = new RectF(sdfBox.X, sdfBox.Y, sdfBox.W, sdfBox.H + rDev);
+                if (c4.TopLeft <= 0f && c4.TopRight <= 0f) sdfBox = new RectF(sdfBox.X, sdfBox.Y - rDev, sdfBox.W, sdfBox.H + rDev);
+                if (c4.TopRight <= 0f && c4.BottomRight <= 0f) sdfBox = new RectF(sdfBox.X, sdfBox.Y, sdfBox.W + rDev, sdfBox.H);
+                if (c4.TopLeft <= 0f && c4.BottomLeft <= 0f) sdfBox = new RectF(sdfBox.X - rDev, sdfBox.Y, sdfBox.W + rDev, sdfBox.H);
+                dl.PushClipRounded(childClip, sdfBox, rDev, key);
+            }
             else
                 dl.PushClip(childClip, key);
             pushedClip = true;
@@ -870,11 +914,10 @@ public static class SceneRecorder
             {
                 var ih = new ImageHandle(p.ImageId);
                 bool ready = images is not null && images.StateOf(ih) == ImageState.Ready;
-                float crossFade = images is not null ? images.CrossFadeOf(ih) : 1f;
+                float fadeStart = float.NaN, fadeDur = 0f;
+                int fadeEase = 0;
+                if (images is not null && images.FadeParamsOf(ih, out fadeStart, out fadeDur, out fadeEase)) { }
 
-                // Content fit (CSS object-fit): map the decoded source into the layout box per ImageFit. Only meaningful
-                // when ready and the source dimensions are known (the placeholder is a flat fill that already covers the
-                // box). While loading, draw the whole box (UV 0,0,1,1) — fit doesn't matter for a flat tint.
                 RectF drawRect = local;
                 RectF uv = new RectF(0f, 0f, 1f, 1f);
                 if (ready && images is not null)
@@ -883,7 +926,7 @@ public static class SceneRecorder
                     (drawRect, uv) = ImageContentFit((ImageFit)p.ImageFit, in local, srcW, srcH, p.ImageFocusX, p.ImageFocusY);
                 }
 
-                dl.DrawImage(drawRect, p.Corners, p.ImageId, ready, p.Fill, world, opacity, uv, crossFade, key);
+                dl.DrawImage(drawRect, p.Corners, p.ImageId, ready, p.Fill, world, opacity, uv, fadeStart, fadeDur, fadeEase, key);
                 break;
             }
             case VisualKind.PolylineStroke:
@@ -1003,7 +1046,7 @@ public static class SceneRecorder
 
     private static ulong ComputeSpanInputSig(SceneStore scene, NodeHandle node, NodeFlags flags, int depth, in RectF clip, in Affine2D world,
                                              float opacity, float parentScaleX, float parentScaleY, float childScaleX, float childScaleY,
-                                             bool inMotion, bool scrollInMotion, in InheritedState inherited,
+                                             float pw, float ph, bool inMotion, bool scrollInMotion, in InheritedState inherited,
                                              in FocusVisualStyle focus, in TextEditStyle textEdit, ColorF scrollThumb, ColorF scrollTrack)
     {
         ulong h = 14695981039346656037UL;
@@ -1017,6 +1060,8 @@ public static class SceneRecorder
         MixFloat(ref h, parentScaleY);
         MixFloat(ref h, childScaleX);
         MixFloat(ref h, childScaleY);
+        MixFloat(ref h, pw);
+        MixFloat(ref h, ph);
         Mix(ref h, inMotion ? 1u : 0u);
         Mix(ref h, scrollInMotion ? 1u : 0u);
         MixScrollViewport(scene, node, flags, ref h);
@@ -1039,7 +1084,7 @@ public static class SceneRecorder
 
     private static ulong ComputeSpanMoveSig(SceneStore scene, NodeHandle node, NodeFlags flags, int depth, in RectF clip, in Affine2D world,
                                             float opacity, float parentScaleX, float parentScaleY, float childScaleX, float childScaleY,
-                                            bool scrollInMotion, in InheritedState inherited,
+                                            float pw, float ph, bool scrollInMotion, in InheritedState inherited,
                                             in FocusVisualStyle focus, in TextEditStyle textEdit, ColorF scrollThumb, ColorF scrollTrack)
     {
         ulong h = 14695981039346656037UL;
@@ -1053,6 +1098,8 @@ public static class SceneRecorder
         MixFloat(ref h, parentScaleY);
         MixFloat(ref h, childScaleX);
         MixFloat(ref h, childScaleY);
+        MixFloat(ref h, pw);
+        MixFloat(ref h, ph);
         Mix(ref h, scrollInMotion ? 1u : 0u);
         MixScrollViewport(scene, node, flags, ref h);
         MixPaintReveal(scene, node, ref h);
@@ -1078,8 +1125,6 @@ public static class SceneRecorder
     private static void MixPaintReveal(SceneStore scene, NodeHandle node, ref ulong h)
     {
         ref NodePaint p = ref scene.Paint(node);
-        MixFloat(ref h, p.PresentedW);
-        MixFloat(ref h, p.PresentedH);
         MixFloat(ref h, p.ChildShiftX);
         MixFloat(ref h, p.ChildShiftY);
         if (!p.ClipRect.IsInfinite) MixRect(ref h, in p.ClipRect);

@@ -85,6 +85,7 @@ sealed class WaveeShell : Component
     // Stress-probe nav seam (WAVEE_NAV_PROBE only): lets the WaveeNavProbe drive REAL navigation/theme/tab churn through
     // the same signals the chrome writes — no synthetic input, no reaching into private state. Inert in normal runs.
     internal static Action<string, string?>? ProbeNav;
+    internal static Action<int>? ProbeRail;   // open the right rail in a given RailMode (screenshot probes)
     internal static Action? ProbeBack, ProbeForward, ProbeTheme;
     internal static Action<string>? ProbeOpenTab;
     internal static Action<string, string?, bool>? ProbeCardNav;   // replicate a Home-card click: (key, arg, doMorph=Hero fly)
@@ -103,9 +104,10 @@ sealed class WaveeShell : Component
         if (Diag.EnvFlag("WAVEE_LYRICS_OPEN") || Diag.EnvFlag("WAVEE_LIVE_LYRICS_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_ADVANCE_PROBE")) { _shellUi.RailOpen.Value = true; _shellUi.Mode.Value = RailMode.Lyrics; }
         if (Diag.EnvFlag("WAVEE_NOWPLAYING_OPEN")) { _shellUi.RailOpen.Value = true; _shellUi.Mode.Value = RailMode.Details; }
 
-        if (Diag.EnvFlag("WAVEE_NAV_PROBE") || Diag.EnvFlag("WAVEE_RESIZE_PROBE") || Diag.EnvFlag("WAVEE_CONN_STRESS") || Diag.EnvFlag("WAVEE_TRACKLIST_SHOT") || Diag.EnvFlag("WAVEE_HERO_SHOT") || Diag.EnvFlag("WAVEE_HOME_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_PROBE") || Diag.EnvFlag("WAVEE_LIVE_LYRICS_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_ADVANCE_PROBE") || Diag.EnvFlag("WAVEE_MEM_SOAK") || Diag.EnvFlag("WAVEE_PERF_BENCH"))
+        if (Diag.EnvFlag("WAVEE_NAV_PROBE") || Diag.EnvFlag("WAVEE_RESIZE_PROBE") || Diag.EnvFlag("WAVEE_CONN_STRESS") || Diag.EnvFlag("WAVEE_TRACKLIST_SHOT") || Diag.EnvFlag("WAVEE_HERO_SHOT") || Diag.EnvFlag("WAVEE_SHELF_SHOT") || Diag.EnvFlag("WAVEE_RAIL_SHOT") || Diag.EnvFlag("WAVEE_HOME_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_PROBE") || Diag.EnvFlag("WAVEE_LIVE_LYRICS_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_ADVANCE_PROBE") || Diag.EnvFlag("WAVEE_MEM_SOAK") || Diag.EnvFlag("WAVEE_PERF_BENCH"))
         {
             ProbeNav = GoNav; ProbeBack = Back; ProbeForward = Forward; ProbeTheme = ToggleTheme; ProbeOpenTab = OpenNewTab;
+            ProbeRail = m => { _shellUi.RailOpen.Value = true; _shellUi.Mode.Value = (RailMode)m; };
             // Exactly the Home-card path: stash a preview (→ DetailShell mounts the PREVIEW path, not the skeleton path the
             // sidebar nav hits) + fire the Hero-fly morph, then navigate — so the probe can reproduce the card-click transition.
             ProbeCardNav = (key, arg, doMorph) =>
@@ -200,8 +202,6 @@ sealed class WaveeShell : Component
         // BOUND prop, not a stale literal — it re-fires on resize) so the column is exactly window-tall and its Shrink=1 /
         // MinHeight=0 content region yields instead of overflowing. UI-thread signal; the binding re-lays-out on resize.
         var vpSig = UseContextSignal(Viewport.Size);
-        var bridge = UseContext(PlaybackBridge.Slot);
-        Palette? railArt = bridge?.TrackPalette.Value;   // subscribe → shell rail underlay tracks the playing cover
         bool compact = _sidebarCompact.Value;    // subscribe → re-persist on a collapse/expand toggle (infrequent)
         bool dragging = _sidebarDragging.Value;  // subscribe → snap all layout transitions while resizing the sidebar
         // Persist the collapse toggle here; the grip's drag-end (OnReleased → SaveSidebar) persists the width. The
@@ -336,7 +336,7 @@ sealed class WaveeShell : Component
                                         // parent-determined) and clips — so a re-render deep inside a page re-solves only this
                                         // subtree (RunSubtree) instead of a full-tree layout from the root on every nav.
                                         IsolateLayout = true,
-                                        Children = [ Embed.Comp(() => new ContentHost(_route, ActiveTabId)) ],
+                                        Children = [ Embed.Comp(() => new ContentHost(_route, ActiveTabId, _settings)) ],
                                     },
                                 ],
                             },
@@ -346,7 +346,8 @@ sealed class WaveeShell : Component
                             new BoxEl
                             {
                                 Shrink = 0f,
-                                Fill = Prop.Of(() => WaveeColors.FileArea),
+                                // CHROME backing: the rail's rounded top-left wedge (overlay above) reads against this.
+                                Fill = Prop.Of(() => WaveeColors.Toolbar),
                                 Width = Prop.Of(() => _shellUi.RailOpen.Value && _shellUi.RailFits.Value ? _shellUi.RailWidth.Value : 0f),
                                 Animate = RailReflow,
                             },
@@ -378,14 +379,14 @@ sealed class WaveeShell : Component
                                 Animate = RailReflow,
                                 Children =
                                 [
-                                    // Full-bleed opaque band — the overlay is pass-through; without this, page pixels show
-                                    // through the top seam and rounded-corner anti-alias wedges.
+                                    // Opaque backing band for the FLOATING overlay only. Docked stays transparent: the
+                                    // rail's rounded top-left wedge must show the chrome behind it, exactly like the
+                                    // card's rounded top-right on the other side of the gap.
                                     new BoxEl
                                     {
                                         Grow = 1f,
-                                        Fill = Prop.Of(() => _shellUi.RailOpen.Value
-                                            ? (_shellUi.RailFits.Value ? WaveeColors.FileArea : WaveeColors.RailOverlay)
-                                            : ColorF.Transparent),
+                                        Fill = Prop.Of(() => _shellUi.RailOpen.Value && !_shellUi.RailFits.Value
+                                            ? WaveeColors.RailOverlay : ColorF.Transparent),
                                     },
                                     new BoxEl
                                     {

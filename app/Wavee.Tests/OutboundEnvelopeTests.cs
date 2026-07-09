@@ -56,6 +56,9 @@ public class OutboundEnvelopeTests
         Assert.Equal("cmd1", log.GetProperty("command_id").GetString());
         Assert.Equal("dev1", log.GetProperty("device_identifier").GetString());
         Assert.Equal(123, log.GetProperty("command_initiated_time").GetInt64());
+        Assert.Equal(123, log.GetProperty("command_received_time").GetInt64());   // echoed = initiated (field-set parity)
+        Assert.Empty(log.GetProperty("interaction_ids").EnumerateArray());        // play mints no interaction id → []
+        Assert.Empty(log.GetProperty("page_instance_ids").EnumerateArray());
     }
 
     [Fact]
@@ -150,7 +153,12 @@ public class OutboundEnvelopeTests
         Assert.False(opts.GetProperty("only_for_local_device").GetBoolean());
         Assert.False(opts.GetProperty("system_initiated").GetBoolean());
 
-        Assert.Equal("us", cmd.GetProperty("logging_params").GetProperty("device_identifier").GetString());
+        var log = cmd.GetProperty("logging_params");
+        Assert.Equal("us", log.GetProperty("device_identifier").GetString());
+        Assert.Equal(7, log.GetProperty("command_initiated_time").GetInt64());
+        Assert.Equal(7, log.GetProperty("command_received_time").GetInt64());   // echoed = initiated (FIXTURE add-to-queue-remote)
+        Assert.Empty(log.GetProperty("interaction_ids").EnumerateArray());      // default interactionId "" → []
+        Assert.Empty(log.GetProperty("page_instance_ids").EnumerateArray());
     }
 
     [Fact]
@@ -162,17 +170,29 @@ public class OutboundEnvelopeTests
     }
 
     [Fact]
+    public void AddToQueue_InteractionId_PopulatesInteractionIdsArray()
+    {
+        var json = OutboundEnvelope.AddToQueue("us", "spotify:track:x", "", false, false, false, "c", "i", 1,
+            interactionId: "ee0a6a80-8b55-410c-8916-6e056238fce6");
+        using var doc = JsonDocument.Parse(json);
+        var ids = doc.RootElement.GetProperty("command").GetProperty("logging_params").GetProperty("interaction_ids");
+        Assert.Equal(1, ids.GetArrayLength());
+        Assert.Equal("ee0a6a80-8b55-410c-8916-6e056238fce6", ids[0].GetString());   // caller-supplied id rides in interaction_ids
+    }
+
+    [Fact]
     public void SetQueue_EmitsFullSnapshotShape()
     {
         var json = OutboundEnvelope.SetQueue("us", 2487768622004702740UL,
             prevTracks: Array.Empty<QueueWireEntry>(),
             nextTracks: new[]
             {
-                new QueueWireEntry("spotify:track:n1", "q1", true),
+                new QueueWireEntry("spotify:track:n1", "q1", true,
+                    new Dictionary<string, string> { ["title"] = "Nice", ["is_explicit"] = "false" }),
                 new QueueWireEntry("spotify:track:n2", "", true),
                 new QueueWireEntry("spotify:track:cx", "hex", false),
             },
-            commandId: "c", intentId: "i", initiatedTimeMs: 5);
+            commandId: "c", intentId: "i", initiatedTimeMs: 5, interactionId: "iact-9");
 
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
@@ -193,6 +213,8 @@ public class OutboundEnvelopeTests
         var md0 = next[0].GetProperty("metadata").GetProperty("is_queued");
         Assert.Equal(JsonValueKind.String, md0.ValueKind);
         Assert.Equal("true", md0.GetString());
+        Assert.Equal("Nice", next[0].GetProperty("metadata").GetProperty("title").GetString());          // supplied entry metadata rides through
+        Assert.Equal("false", next[0].GetProperty("metadata").GetProperty("is_explicit").GetString());
         Assert.Equal("q1", next[0].GetProperty("uid").GetString());
         Assert.Equal("", next[1].GetProperty("uid").GetString());                          // uid always written, may be ""
 
@@ -214,7 +236,13 @@ public class OutboundEnvelopeTests
         Assert.False(opts.GetProperty("override_restrictions").GetBoolean());
         Assert.False(opts.GetProperty("only_for_local_device").GetBoolean());
         Assert.False(opts.GetProperty("system_initiated").GetBoolean());
-        Assert.Equal("us", cmd.GetProperty("logging_params").GetProperty("device_identifier").GetString());
+        var log = cmd.GetProperty("logging_params");
+        Assert.Equal("us", log.GetProperty("device_identifier").GetString());
+        Assert.Equal(5, log.GetProperty("command_initiated_time").GetInt64());
+        Assert.Equal(5, log.GetProperty("command_received_time").GetInt64());     // echoed = initiated (FIXTURE set-queue-*)
+        var ids = log.GetProperty("interaction_ids");
+        Assert.Equal(1, ids.GetArrayLength());
+        Assert.Equal("iact-9", ids[0].GetString());                              // caller-supplied interaction id
     }
 
     [Fact]
@@ -296,12 +324,24 @@ public class OutboundEnvelopeTests
     [Fact]
     public void Command_WrapsEnvelope_WithLoggingParams()
     {
-        var json = OutboundEnvelope.Command("dev1", "pause", Array.Empty<(string, object)>(), "c", "i", 5);
+        var json = OutboundEnvelope.Command("dev1", "pause", Array.Empty<(string, object)>(), "c", "i", 5, interactionId: "iact-cmd");
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
         Assert.Equal("wlan", root.GetProperty("connection_type").GetString());
         Assert.Equal("pause", root.GetProperty("command").GetProperty("endpoint").GetString());
-        Assert.Equal("dev1", root.GetProperty("command").GetProperty("logging_params").GetProperty("device_identifier").GetString());
+        var log = root.GetProperty("command").GetProperty("logging_params");
+        Assert.Equal("dev1", log.GetProperty("device_identifier").GetString());
+        Assert.Equal(5, log.GetProperty("command_initiated_time").GetInt64());
+        Assert.Equal(5, log.GetProperty("command_received_time").GetInt64());
+        Assert.Equal("iact-cmd", log.GetProperty("interaction_ids")[0].GetString());
+    }
+
+    [Fact]
+    public void Command_DefaultInteractionId_LeavesInteractionIdsEmpty()
+    {
+        var json = OutboundEnvelope.Command("dev1", "pause", Array.Empty<(string, object)>(), "c", "i", 5);
+        using var doc = JsonDocument.Parse(json);
+        Assert.Empty(doc.RootElement.GetProperty("command").GetProperty("logging_params").GetProperty("interaction_ids").EnumerateArray());
     }
 
     [Fact]

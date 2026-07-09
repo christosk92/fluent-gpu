@@ -45,4 +45,19 @@ internal static class Mdl
     public static readonly string Play = Of(0xE768);           // play (hero/pinned/radio actions)
     public static readonly string MapPin = Of(0xE707);         // concert location
     public static readonly string Globe = Of(0xE774);          // world rank ("#N in the world")
+    public static readonly string Delete = Of(0xE74D);         // delete (trash can)
+}
+
+// The custom WaveeIcons font (app/Wavee/assets/fonts/wavee-icons.otf, built by build-wavee-icons.py) — Spotify's real
+// "Play next" / "Add to queue" marks the Segoe Fluent set doesn't carry. Same ASCII-safe Of(0x____) convention as Mdl.
+internal static class WaveeIcons
+{
+    static string Of(int cp) => ((char)cp).ToString();
+
+    public static readonly string PlayNext = Of(0xE900);       // play-on-top mark (front of queue)
+    public static readonly string PlayAfter = Of(0xE901);      // play-on-bottom / add-to-queue mark (end of queue)
+
+    // Absolute path + #family (the engine loads by PATH; the #suffix is a stable cache key only).
+    public static readonly string Font =
+        System.IO.Path.Combine(System.AppContext.BaseDirectory, "assets", "fonts", "wavee-icons.otf") + "#WaveeIcons";
 }

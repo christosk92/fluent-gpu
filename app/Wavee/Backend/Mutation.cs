@@ -194,7 +194,7 @@ public sealed class RootlistFollowStrategy : IMutationStrategy
 
         // (1) base revision — one-time bootstrap of the rootlist if we don't have it.
         var rev = _store.RootlistRevision();
-        if (rev is null) rev = await BootstrapRootlistAsync(t, ctx, ct).ConfigureAwait(false);
+        if (rev is null) rev = await RootlistOps.BootstrapRootlistAsync(_store, t, ctx, ct).ConfigureAwait(false);
 
         // (2) the op: follow → ADD at index 0 with item attributes (timestamp ms + public); unfollow → keyed REM
         // (items_as_key: remove by uri, order-independent). NEVER index-based and never skipped-on-local-absence — the
@@ -204,16 +204,9 @@ public sealed class RootlistFollowStrategy : IMutationStrategy
             ? new PlaylistOp(PlaylistOpKind.Add, FromIndex: 0, Items: new[] { new PlaylistMember("", uri, null, nowMs) })
             : new PlaylistOp(PlaylistOpKind.Remove, Items: new[] { new PlaylistMember("", uri, null, 0) }, ItemsAsKey: true);
 
-        // (3) body — the rootlist ListChanges shape (Delta.Info + want-flags + a nonce + ADD item attributes).
-        var body = PlaylistWireMapper.BuildRootlistChanges(rev, new[] { plop }, ctx.Account, nowMs);
-
-        // (4) POST with the first-party header set + explicit method.
-        var route = $"/playlist/v2/user/{ctx.Account}/rootlist/changes";
-        var r = await t.Request(Channel.Spclient, route, body, ct, method: "POST", headers: SpotifyHeaders.PlaylistV2Mutation()).ConfigureAwait(false);
-
-        // (5) 200 → capture the fresh rootlist/revision; 409 → refetch base (revision moved) + retry next drain; else fail.
-        if (r.Ok) { ApplyRootlistResponse(r.Body); return true; }
-        if (r.Status == 409) { await BootstrapRootlistAsync(t, ctx, ct).ConfigureAwait(false); return false; }
+        // (3–5) POST rootlist changes — shared with visibility/delete (409 → rebase, return false for retry).
+        if (await RootlistOps.TryPostRootlistOpsAsync(_store, t, ctx, new[] { plop }, uri, ct).ConfigureAwait(false))
+            return true;
         return false;
     }
 
@@ -225,37 +218,6 @@ public sealed class RootlistFollowStrategy : IMutationStrategy
         store.SetSaved("playlists", uri, !follow, SyncState.Confirmed);
         var next = follow ? RemoveFollow(store.Rootlist(), uri) : InsertFollow(store.Rootlist(), uri);
         if (next is not null) store.SetRootlist(next);
-    }
-
-    // GET the rootlist revision (+ contents if present); returns the resulting revision. Non-2xx → keep whatever's stored.
-    async Task<byte[]?> BootstrapRootlistAsync(ITransport t, SessionContext ctx, CancellationToken ct)
-    {
-        var route = $"/playlist/v2/user/{ctx.Account}/rootlist?decorate=revision";
-        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["Accept"] = "application/protobuf" };
-        var r = await t.Request(Channel.Spclient, route, ReadOnlyMemory<byte>.Empty, ct, method: "GET", headers: headers).ConfigureAwait(false);
-        if (!r.Ok) return _store.RootlistRevision();
-        return ApplyRootlistResponse(r.Body);
-    }
-
-    // Fold a rootlist SelectedListContent (bootstrap GET or /changes POST) into the store: full contents → rebuild entries +
-    // revision; rev-only → advance just the revision (entries preserved). Zstd-guarded (§2.7). Returns the resulting revision.
-    byte[]? ApplyRootlistResponse(byte[] body)
-    {
-        var bytes = SpotifyZstd.MaybeDecompressZstd(body);
-        if (bytes.Length == 0) return _store.RootlistRevision();
-        Pl.SelectedListContent slc;
-        try { slc = Pl.SelectedListContent.Parser.ParseFrom(bytes); }
-        catch { return _store.RootlistRevision(); }
-        var rev = PlaylistWireMapper.ResultingRevision(slc);
-        if (slc.Contents is { } contents && contents.Items.Count > 0)
-        {
-            var uris = new List<string>(contents.Items.Count);
-            foreach (var it in contents.Items) uris.Add(it.Uri);
-            _store.SetRootlist(RootlistTreeBuilder.EntriesFromUris(uris), rev);
-        }
-        else if (rev is not null)
-            _store.SetRootlist(_store.Rootlist(), rev);   // rev-only: keep current entries, advance the revision
-        return rev ?? _store.RootlistRevision();
     }
 
     // insert a followed playlist at position 0 (skip if already present); returns null on no-op.

@@ -13,7 +13,7 @@ using static FluentGpu.Dsl.Ui;
 namespace Wavee;
 
 // Row 1 — the WaveeMusic navigation toolbar (NavigationToolbar.xaml): a 48px row with sidebar-toggle + back/forward/home
-// on the left, the omnibar in the centre, and the account/friends/bell/theme/right-panel cluster on the right. Reads the
+// on the left, the omnibar in the centre, and the account/friends/bell/theme cluster on the right. Reads the
 // shell route signals (home pill, back/forward-enabled) and PlaybackBridge (auth/user) so it reacts to navigation and login.
 //
 // RESPONSIVE (mirrors PlayerBar): the right cluster collapses at width thresholds (band-gated via the Viewport signal so
@@ -48,6 +48,7 @@ sealed class ShellToolbar : ReactiveComponent
     public override Element Setup()
     {
         var b = UseContext(PlaybackBridge.Slot);
+        var ui = UseContext(ShellUi.Slot);   // the right-rail chrome state — the Friends button toggles the Friends panel
         var viewport = UseContextSignal(Viewport.Size);
         var layout = UseSignal(ToolbarLayout.FromWidth(viewport.Peek().Width));
         // Band-gate: recompute on every viewport move but only push a new value (→ re-render) when a threshold flips.
@@ -56,10 +57,10 @@ sealed class ShellToolbar : ReactiveComponent
             var next = ToolbarLayout.FromWidth(viewport.Value.Width);
             if (!next.Equals(layout.Peek())) layout.Value = next;
         });
-        return Embed.Comp(() => new ShellToolbarContent(this, layout, b));
+        return Embed.Comp(() => new ShellToolbarContent(this, layout, b, ui));
     }
 
-    internal Element Bar(ToolbarLayout L, PlaybackBridge? b)
+    internal Element Bar(ToolbarLayout L, PlaybackBridge? b, ShellUi? ui)
     {
         bool onHome = _route.Value.Name == "home";        // subscribe (home pill)
         var nav = IconButton.DefaultStyle with { Size = 36f, Height = 32f };
@@ -89,10 +90,10 @@ sealed class ShellToolbar : ReactiveComponent
                 ],
             },
 
-            // ── right: account · friends · bell · theme · right-panel (collapses by threshold) ──
+            // ── right: account · friends · bell · theme (collapses by threshold) ──
             ProfileChip(b, L.ShowProfileName),
         };
-        if (L.ShowFriends) kids.Add(IconButton.Create(Mdl.Friends, () => { }, nav));
+        if (L.ShowFriends) kids.Add(IconButton.Create(Mdl.Friends, () => ui?.Toggle(RailMode.Friends), nav));
         if (L.ShowBell) kids.Add(BellButton(nav));
         if (L.ShowThemeToggle)
         {
@@ -102,9 +103,8 @@ sealed class ShellToolbar : ReactiveComponent
         // Overflow: whatever dropped off the bar folds into a "⋯" MenuFlyout so it stays reachable. A plain MenuFlyout
         // (not CommandBarFlyout) gets the clean OverlayHost clip-reveal open — CommandBarFlyout layers its own
         // overflow-expand clip on top, which made the menu pop the empty chrome then fill in (two out-of-sync clips).
-        var overflow = OverflowItems(L);
+        var overflow = OverflowItems(L, ui);
         if (overflow.Count > 0) kids.Add(Embed.Comp(() => new OverflowMenu(overflow, nav)));
-        kids.Add(IconButton.Create(Mdl.SplitView, () => { }, nav));   // always — the right-panel toggle
 
         return new BoxEl
         {
@@ -137,10 +137,10 @@ sealed class ShellToolbar : ReactiveComponent
     }
 
     // The items currently dropped from the bar (by threshold), as plain MenuFlyout items. They stay reachable here.
-    List<MenuFlyoutItem> OverflowItems(ToolbarLayout L)
+    List<MenuFlyoutItem> OverflowItems(ToolbarLayout L, ShellUi? ui)
     {
         var items = new List<MenuFlyoutItem>(3);
-        if (!L.ShowFriends) items.Add(new MenuFlyoutItem(Loc.Get(Strings.Shell.Friends), Mdl.Friends, Invoke: () => { }));
+        if (!L.ShowFriends) items.Add(new MenuFlyoutItem(Loc.Get(Strings.Shell.Friends), Mdl.Friends, Invoke: () => ui?.Toggle(RailMode.Friends)));
         if (!L.ShowBell) items.Add(new MenuFlyoutItem(Loc.Get(Strings.Shell.Notifications), Mdl.Bell, Invoke: () => { }));
         if (!L.ShowThemeToggle) items.Add(new MenuFlyoutItem(Theme.Dark ? Loc.Get(Strings.Shell.LightTheme) : Loc.Get(Strings.Shell.DarkTheme), Theme.Dark ? Mdl.Sun : Mdl.Moon, Invoke: _toggleTheme));
         return items;
@@ -170,13 +170,14 @@ sealed class ShellToolbarContent : Component
     readonly ShellToolbar _owner;
     readonly IReadSignal<ToolbarLayout> _layout;
     readonly PlaybackBridge? _b;
-    public ShellToolbarContent(ShellToolbar owner, IReadSignal<ToolbarLayout> layout, PlaybackBridge? b)
-    { _owner = owner; _layout = layout; _b = b; }
-    public override Element Render() => _owner.Bar(_layout.Value, _b);
+    readonly ShellUi? _ui;
+    public ShellToolbarContent(ShellToolbar owner, IReadSignal<ToolbarLayout> layout, PlaybackBridge? b, ShellUi? ui)
+    { _owner = owner; _layout = layout; _b = b; _ui = ui; }
+    public override Element Render() => _owner.Bar(_layout.Value, _b, _ui);
 }
 
 // Width thresholds for the right cluster (DIP). Drop least-essential first as the window narrows, so the omnibar keeps
-// usable room: friends → profile name → bell → theme. Avatar + the right-panel toggle always stay. Equality-comparable
+// usable room: friends → profile name → bell → theme. Avatar always stays. Equality-comparable
 // (record struct) so the band-gate only re-renders on a real threshold flip.
 readonly record struct ToolbarLayout(bool ShowFriends, bool ShowProfileName, bool ShowBell, bool ShowThemeToggle)
 {

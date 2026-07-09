@@ -60,7 +60,7 @@ static class DetailRail
         }
         else if (cfg.Badges == BadgeStyle.OwnerRow && m.OwnerName is { Length: > 0 })
         {
-            kids.Add(PlaylistOwnerBlock(m, cover));
+            kids.Add(PlaylistOwnerBlock(m, cover, modelSource));
         }
 
         // Hero title — a heavy run that AUTO-FITS to the cover width in ≤2 LINES, from titleSize down to 18px. The shell
@@ -103,7 +103,8 @@ static class DetailRail
                         m.ContextUri is { Length: > 0 } saveUri
                             ? Embed.Comp(() => new SaveButton(saveUri, 16f, FabSize))
                             : Fab(Icons.Heart, () => { }),
-                        Fab(Icons.Share, () => Share(m)),
+                        PlaylistInlineEdit.ShareButton(modelSource),
+                        PlaylistInlineEdit.OwnerMenu(modelSource, h),
                     ],
                 },
             ],
@@ -111,9 +112,6 @@ static class DetailRail
 
         if (cfg.Content == DetailContent.Tracks)
             kids.Add(ContextActions(m, cfg, h));
-
-        if (editable)
-            kids.Add(PlaylistInlineEdit.Collaborative(modelSource, cover));
 
         if (cfg.Badges == BadgeStyle.TypeYear && AlbumTrailing.HasReleasePanel(m))
             kids.Add(AlbumTrailing.ReleasePanel(m, h, outerPadding: false));
@@ -156,7 +154,7 @@ static class DetailRail
         }
         else if (cfg.Badges == BadgeStyle.OwnerRow && m.OwnerName is { Length: > 0 })
         {
-            info.Add(PlaylistOwnerBlock(m, 600f));
+            info.Add(PlaylistOwnerBlock(m, 600f, modelSource));
         }
 
         bool editable = m.Capabilities.CanEditMetadata && m.ContextUri is { Length: > 0 };
@@ -211,7 +209,7 @@ static class DetailRail
             m.ContextUri is { Length: > 0 } saveUri
                 ? Embed.Comp(() => new SaveButton(saveUri, 16f, FabSize))
                 : Fab(Icons.Heart, () => { }),
-            Fab(Icons.Share, () => Share(m)),
+            Fab(Icons.Share, () => { if (m.ShareUrl is { Length: > 0 } url) InputHooks.Current.Default.OpenUri?.Invoke(url); }),
         ],
     };
 
@@ -228,21 +226,18 @@ static class DetailRail
             Margin = new Edges4(0f, 2f, 0f, 0f),
             Children =
             [
-                Button.Standard(addLabel, h.AddToPlaylist),
+                // The "Copy/Add to playlist" trigger opens the searchable playlist picker (owned + collaborator +
+                // "New playlist"). Keyed per context so GetTracks freezes fresh for THIS page (component-props rule).
+                Embed.Comp(() => new PlaylistPickerButton { Label = addLabel, GetTracks = () => m.Tracks }) with { Key = "plpick:" + m.ContextUri },
                 SplitButton.Create(
                     Loc.Get(Strings.Detail.AddToQueue),
-                    h.AddToQueue,   // primary (main-body) click → append to the end of the queue (= Play after)
+                    h.AddToQueue,
                     [
-                        new MenuFlyoutItem(Loc.Get(Strings.Detail.PlayNext), Icons.Next, Invoke: h.PlayNext),
-                        new MenuFlyoutItem(Loc.Get(Strings.Detail.PlayAfter), Icons.Queue, Invoke: h.AddToQueue),
+                        new MenuFlyoutItem(Loc.Get(Strings.Detail.PlayNext), WaveeIcons.PlayNext, Invoke: h.PlayNext) { GlyphFont = WaveeIcons.Font },
+                        new MenuFlyoutItem(Loc.Get(Strings.Detail.PlayAfter), WaveeIcons.PlayAfter, Invoke: h.AddToQueue) { GlyphFont = WaveeIcons.Font },
                     ]),
             ],
         };
-    }
-
-    static void Share(DetailModel m)
-    {
-        if (m.ShareUrl is { Length: > 0 } url) InputHooks.Current.Default.OpenUri?.Invoke(url);
     }
 
     // The billed-artist control: a stacked face-pile (the album's primary artists' avatars, overlapping, capped at 3) +
@@ -303,23 +298,13 @@ static class DetailRail
         };
     }
 
-    static Element PlaylistOwnerBlock(DetailModel m, float cover)
+    static Element PlaylistOwnerBlock(DetailModel m, float cover, Loadable<DetailModel> full)
         => ShowCollaborators(m)
-            ? Embed.Comp(() => new CollaboratorFacePile(m, cover))
-            : OwnerRow(m.OwnerName ?? "", m.OwnerImage, cover);
+            ? Embed.Comp(() => new CollaboratorFacePile(m, cover, full))
+            : PlaylistInlineEdit.OwnerRow(full, cover);
 
     static bool ShowCollaborators(DetailModel m)
         => m.Collaborators is { Count: > 0 } members && (m.Capabilities.IsCollaborative || members.Count >= 2);
-
-    static Element OwnerRow(string owner, Image? avatar, float cover) => new BoxEl
-    {
-        Direction = 0, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center,
-        Children =
-        [
-            PersonPicture.Create("", 24f, displayName: owner, imageSourcePath: avatar?.Url),
-            WaveeType.TrackTitle(owner) with { MaxWidth = cover - 32f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-        ],
-    };
 
     static Element BadgePill(string text) => new BoxEl
     {

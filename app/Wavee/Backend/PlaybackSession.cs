@@ -282,9 +282,9 @@ public sealed class PlaybackSession
     // ── inbound / recovery ───────────────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>Rebuild the whole session from a cluster (startup recovery / becoming active) — Current from player_state
-    /// (provider-aware), History from prev_tracks, UserQueue from provider:"queue" rows IN WIRE ORDER, Upcoming from the
-    /// context+autoplay rows (markers kept as non-surfaced Kind rows). Cursor sits before Upcoming (=-1) so the current
-    /// stands alone. Options + the cluster revision are carried (§8).</summary>
+    /// (provider-aware), UserQueue from provider:"queue" rows IN WIRE ORDER, Upcoming from the context+autoplay rows
+    /// (markers kept as non-surfaced Kind rows). History is local-only (<see cref="PushHistory"/>); cluster prev_tracks
+    /// are ignored until server-driven history lands. Cursor sits before Upcoming (=-1) so the current stands alone.</summary>
     public QueueSnapshot ReplaceFromCluster(ClusterDelta c, Track? hydratedCurrent)
     {
         _naturalOrder.Clear();
@@ -294,14 +294,6 @@ public sealed class PlaybackSession
         _autoplayContextUri = null;
         _contextUri = c.ContextUri;
         _nextQueueUid = 0;
-
-        foreach (var p in c.PrevTracks ?? Array.Empty<RemoteTrack>())
-        {
-            if (RowKindOfUri(p.Uri) != QueueRowKind.Playable) continue;   // markers are not history
-            _history.Add(new SessionItem(MintId(), TrackFromRemote(p), p.Uid,
-                QueueProviderExtensions.FromWire(p.Provider), QueueRowKind.Playable, c.ContextUri, p.Metadata));
-        }
-        if (_history.Count > HistoryCap) _history.RemoveRange(0, _history.Count - HistoryCap);
 
         foreach (var n in c.NextTracks)
         {
@@ -338,9 +330,8 @@ public sealed class PlaybackSession
     }
 
     /// <summary>Apply an inbound set_queue: replace the user queue (provider:"queue" rows, uid-preserving; uid:"" mints)
-    /// and the upcoming context/autoplay/marker rows; History replaced from prev_tracks. Current is untouched (set_queue
-    /// never changes the playing track). Bodies may be huge — no caps here (§9). NOTE: QueueWireEntry carries no rich
-    /// track metadata, so rows resolve to synthetic uri-only tracks pending a hydration pass in a later stage.</summary>
+    /// and the upcoming context/autoplay/marker rows. Local history is untouched (not driven by wire prev_tracks).
+    /// Current is untouched (set_queue never changes the playing track).</summary>
     public QueueSnapshot ApplySetQueue(IReadOnlyList<QueueWireEntry> prev, IReadOnlyList<QueueWireEntry> next, string revision)
     {
         _clusterRevision = revision ?? "";
@@ -370,14 +361,6 @@ public sealed class PlaybackSession
                 _context.Add(it);
             }
         }
-        _history.Clear();
-        foreach (var e in prev)
-        {
-            if (RowKindOfUri(e.Uri) != QueueRowKind.Playable) continue;
-            _history.Add(new SessionItem(MintId(), ContextResolve.Synthetic(e.Uri), e.Uid,
-                e.IsQueued ? QueueProvider.Queue : QueueProvider.Context, QueueRowKind.Playable, _contextUri, e.Metadata));
-        }
-        if (_history.Count > HistoryCap) _history.RemoveRange(0, _history.Count - HistoryCap);
         _cursor = -1;
         return Bump();
     }

@@ -147,6 +147,11 @@ public sealed class ScrollBindTable
     {
         int s = Alloc();
         _binds[s] = seed;
+        // A fresh row must always take its FIRST write: a re-bake (re-theme / re-render) may just have re-applied the
+        // element's literal paint (Opacity=1 etc.) over a bind-written value, and a default LastWritten of 0 would
+        // change-gate the corrective write away whenever the bound value IS 0 — the collapsed-hero photo popping back
+        // at full opacity on a focus-regain re-theme. NaN compares unequal to every v, so the first eval writes.
+        _binds[s].LastWritten = float.NaN;
         int scrollerIndex = scroller.IsNull ? -1 : (int)scroller.Raw.Index;
         _binds[s].Scroller = scrollerIndex;
         _binds[s].ScrollerHandle = scroller;

@@ -386,9 +386,13 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         int count = _store.Membership(uri).Count;
         var tiles = h?.Cover is null ? MosaicTilesOf(uri) : null;   // no custom cover → a 2×2 mosaic (or single) from the tracks
         Image? cover = h?.Cover ?? MosaicCover(tiles);
+        // Editability flags (feed the "Copy to playlist" picker): a playlist is editable when the user can edit items or
+        // owns it; the h-is-null branch defaults both to false (PlaylistSummary defaults).
+        bool canEdit = h is not null && (h.Capabilities.CanEditItems || h.Capabilities.IsOwner);
+        bool isOwner = h is not null && h.Capabilities.IsOwner;
         return h is null
             ? new PlaylistSummary(uri, uri, "", count, cover, tiles)
-            : new PlaylistSummary(uri, h.Name, OwnerDisplayName(uri, h, collectionDependency: true), count > 0 ? count : h.TrackCount, cover, tiles);
+            : new PlaylistSummary(uri, h.Name, OwnerDisplayName(uri, h, collectionDependency: true), count > 0 ? count : h.TrackCount, cover, tiles, CanEdit: canEdit, IsOwner: isOwner);
     }
 
     // Up to 4 DISTINCT album covers from the playlist's resident tracks — the mosaic source for a cover-less playlist.

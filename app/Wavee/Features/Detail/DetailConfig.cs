@@ -74,7 +74,8 @@ public sealed record DetailModel(
     string? CourtesyLine = null, string? ReleaseDatePrecision = null, int DiscCount = 1,
     string? ShareUrl = null, bool IsPreRelease = false, DateTimeOffset? PreReleaseEnd = null,
     // Playlist-only read model: resolved collaborators plus a lookup used by Added-by cells. Tracks keep the raw wire id.
-    IReadOnlyList<Owner>? Collaborators = null, IReadOnlyDictionary<string, Owner>? UserProfilesById = null)
+    IReadOnlyList<Owner>? Collaborators = null, IReadOnlyDictionary<string, Owner>? UserProfilesById = null,
+    bool IsPublic = true, string? BasePermissionRevision = null)
 {
     /// <summary>Shared-element (connected-animation) key for the cover art — set by <c>DetailPage</c> from the route
     /// ("album:"+uri / "pl:"+uri) so the cover flies to/from the like-tagged Home card. Null = no Hero.</summary>
@@ -104,7 +105,8 @@ public readonly record struct DetailConfig(
     HeartMode Heart,
     bool ShowPlays = false,         // album/single/EP/compilation: a Plays column + per-row video indicator + top-track star
     bool ShowTrackArtist = false,   // show the per-track artist subline (playlist/liked, and compilations — various artists)
-    DetailContent Content = DetailContent.Tracks)   // tracks (music) vs episodes (podcast show) for the right column
+    DetailContent Content = DetailContent.Tracks,   // tracks (music) vs episodes (podcast show) for the right column
+    bool Recommendations = false)   // owned/collaborative playlist: append the "Recommended songs" extender at the list bottom
 {
     // Column track sets. Two shared instances → the header and rows are reference-equal (the alignment invariant).
     // playlist/liked: [ #, TITLE(+thumb+artist), ALBUM, ♥, DUR ]   album/single: [ #, TITLE(+artist), ♥, DUR ]
@@ -117,7 +119,8 @@ public readonly record struct DetailConfig(
     public static DetailConfig Playlist => new(
         TwoColumn: true, RailWidth: WaveeSize.RailPlaylist, Badges: BadgeStyle.OwnerRow,
         ShowArtThumb: true, ShowAlbumColumn: true, Columns: ListColumns, CapTitle: true,
-        Selection: ItemsSelectionMode.Extended, HasTrailing: false, Heart: HeartMode.Follow, ShowTrackArtist: true);
+        Selection: ItemsSelectionMode.Extended, HasTrailing: false, Heart: HeartMode.Follow, ShowTrackArtist: true,
+        Recommendations: true);
 
     public static DetailConfig Album => new(
         TwoColumn: true, RailWidth: WaveeSize.RailAlbum, Badges: BadgeStyle.TypeYear,

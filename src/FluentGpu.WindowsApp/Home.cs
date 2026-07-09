@@ -92,7 +92,7 @@ sealed class HomeHero : Component
             Gradient = LinearGradient(118f, new GradientStop(0f, Tok.HeroGradientTop), new GradientStop(1f, Tok.HeroGradientBottom)),
             // The full-bleed hero sits at the NavigationView content's rounded top-left corner; gradients aren't rounded-
             // clipped by the content frame, so round the fill itself to match (Radii.Overlay = ContentLeftTopCorner).
-            Corners = new(Radii.Overlay, 0f, 0f, 0f),
+            Corners = new CornerRadius4(Radii.Overlay, 0f, 0f, 0f),
             Children =
             [
                 Caption("WinUI-style capability gallery").Secondary(),

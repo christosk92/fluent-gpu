@@ -56,7 +56,8 @@ public static class PlaylistWireMapper
                     list.Add(new PlaylistOp(PlaylistOpKind.Move, FromIndex: mov.FromIndex, Length: mov.Length, ToIndex: mov.ToIndex));
                     break;
                 case Pl.Op.Types.Kind.UpdateItemAttributes when op.UpdateItemAttributes is { } u:
-                    list.Add(new PlaylistOp(PlaylistOpKind.UpdateItem, FromIndex: u.Index, Items: AttrMember(u.NewAttributes)));
+                    list.Add(new PlaylistOp(PlaylistOpKind.UpdateItem, FromIndex: u.Index,
+                        ItemPublic: u.NewAttributes?.Values is { HasPublic: true } v ? v.Public : null));
                     break;
                 case Pl.Op.Types.Kind.UpdateListAttributes when op.UpdateListAttributes is { } u:
                     list.Add(new PlaylistOp(PlaylistOpKind.UpdateList, ListPatch: PatchOf(u.NewAttributes)));
@@ -198,6 +199,18 @@ public static class PlaylistWireMapper
             UpdateListAttributes = op.ListPatch is { } patch
                 ? new Pl.UpdateListAttributes { NewAttributes = PartialOf(patch) }
                 : null,
+        },
+        PlaylistOpKind.UpdateItem => new Pl.Op
+        {
+            Kind = Pl.Op.Types.Kind.UpdateItemAttributes,
+            UpdateItemAttributes = new Pl.UpdateItemAttributes
+            {
+                Index = op.FromIndex,
+                NewAttributes = new Pl.ItemAttributesPartialState
+                {
+                    Values = new Pl.ItemAttributes { Public = op.ItemPublic ?? false },
+                },
+            },
         },
         _ => new Pl.Op { Kind = Pl.Op.Types.Kind.Unknown },
     };

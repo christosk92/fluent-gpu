@@ -26,6 +26,9 @@ internal static class WaveeNavProbe
 {
     const double BudgetMs = 1000.0 / 120.0;   // one 120 Hz vblank — the smoothness bar
 
+    [System.Runtime.InteropServices.DllImport("user32", ExactSpelling = true)]
+    static extern nint SendMessageW(nint hWnd, uint msg, nint wParam, nint lParam);
+
     // Heavy pages: HomePage (image cards), Liked (big track list), real playlists (40 tracks + cover). Cheap: placeholders.
     static readonly (string Key, string? Arg)[] HeavyRoutes =
     [
@@ -48,11 +51,13 @@ internal static class WaveeNavProbe
         bool connStress = Diag.EnvFlag("WAVEE_CONN_STRESS");
         bool trackShot = Diag.EnvFlag("WAVEE_TRACKLIST_SHOT");
         bool heroShot = Diag.EnvFlag("WAVEE_HERO_SHOT");
+        bool shelfShot = Diag.EnvFlag("WAVEE_SHELF_SHOT");
+        bool railShot = Diag.EnvFlag("WAVEE_RAIL_SHOT");
         bool homeScroll = Diag.EnvFlag("WAVEE_HOME_SCROLL_PROBE");
         bool lyricsProbe = Diag.EnvFlag("WAVEE_LYRICS_PROBE");
         bool liveLyricsScroll = Diag.EnvFlag("WAVEE_LIVE_LYRICS_SCROLL_PROBE");
         bool advanceProbe = Diag.EnvFlag("WAVEE_LYRICS_ADVANCE_PROBE");
-        if (!Diag.EnvFlag("WAVEE_NAV_PROBE") && !connStress && !trackShot && !heroShot && !homeScroll && !lyricsProbe && !liveLyricsScroll && !advanceProbe) return false;
+        if (!Diag.EnvFlag("WAVEE_NAV_PROBE") && !connStress && !trackShot && !heroShot && !shelfShot && !railShot && !homeScroll && !lyricsProbe && !liveLyricsScroll && !advanceProbe) return false;
         if (window is not Win32Window w || device is not D3D12Device gpu)
         {
             Console.Error.WriteLine("[wavee-nav-probe] unavailable: requires Win32Window + D3D12Device");
@@ -61,10 +66,10 @@ internal static class WaveeNavProbe
         // DiagnosticRun fires straight after window.Show(), BEFORE the first frame — so WaveeShell hasn't mounted yet
         // and ProbeNav is still null. Pump warmup frames until the shell wires its nav hook (fixes the mount race that
         // made earlier shot runs flakily report "nav hook not wired").
-        int hookFrames = (liveLyricsScroll || advanceProbe) ? Math.Max(240, EnvInt("WAVEE_PROBE_AUTH_FRAMES", 7200, 240, 36000)) : 240;
+        int hookFrames = (liveLyricsScroll || advanceProbe || heroShot || shelfShot || railShot) ? Math.Max(240, EnvInt("WAVEE_PROBE_AUTH_FRAMES", 7200, 240, 36000)) : 240;
         for (int i = 0; i < hookFrames && WaveeShell.ProbeNav is null && !w.IsClosed; i++)
         {
-            if (liveLyricsScroll || advanceProbe)
+            if (liveLyricsScroll || advanceProbe || heroShot || shelfShot || railShot)
             {
                 host.RunFrame();
                 w.WaitForWork(Math.Min(host.RecommendedWaitMs(), 16));
@@ -82,6 +87,8 @@ internal static class WaveeNavProbe
             return true;
         }
         if (heroShot) RunHeroCollapseShot(host, w, gpu);
+        else if (railShot) RunRailShot(host, w, gpu);
+        else if (shelfShot) RunShelfFadeShot(host, w, gpu);
         else if (trackShot) RunTrackListShot(host, w, gpu);
         else if (connStress) RunConnStress(host, w, gpu);
         else if (homeScroll) RunHomeScrollProbe(host, w, gpu);
@@ -121,6 +128,152 @@ internal static class WaveeNavProbe
         Nav("search", "the"); Settle(50); System.Threading.Thread.Sleep(700); Settle(60); Shot("search");
 
         Console.Error.WriteLine("[tracklist-shot] done");
+    }
+
+    // WAVEE_RAIL_SHOT=1: open the right rail in each mode (Details / Lyrics / Queue) and capture PNGs — the rail
+    // background, the content↔rail seam, and the bottom corner treatment. Output → C:\tmp\rail_*.png.
+    static void RunRailShot(AppHost host, Win32Window window, D3D12Device gpu)
+    {
+        try { System.IO.Directory.CreateDirectory(@"C:\tmp"); } catch { }
+        window.SetClientSize(1700, 950);   // wide → the rail DOCKS (RailFits) — the mode the reports are about
+        void Frame() { if (!window.IsClosed) { gpu.SuppressLatencyWaitOnce(); gpu.SuppressVsyncOnce(); host.RunFrame(); } }
+        void Settle(int n) { for (int i = 0; i < n && !window.IsClosed; i++) Frame(); }
+        void Shot(string name)
+        {
+            var px = gpu.CaptureBgra(out int cw, out int ch);
+            PngWriter.WriteBgra($@"C:\tmp\rail_{name}.png", px, cw, ch);
+            Console.Error.WriteLine($"[rail-shot] wrote rail_{name}.png ({cw}x{ch})");
+        }
+
+        WaveeShell.ProbeNav!("home", null); Settle(60); System.Threading.Thread.Sleep(2500); Settle(120);
+        // Open-transition frames: the "background only shows a couple frames later" report — capture the first frames
+        // of the width animation, then steady.
+        WaveeShell.ProbeRail!(2 /*Details*/);
+        for (int f = 2; f <= 12; f += 2) { Settle(2); Shot($"details_open{f:D2}"); }
+        Settle(48); System.Threading.Thread.Sleep(800); Settle(60); Shot("details");
+        WaveeShell.ProbeRail!(0 /*Lyrics*/); Settle(60); System.Threading.Thread.Sleep(800); Settle(60); Shot("lyrics");
+        WaveeShell.ProbeRail!(1 /*Queue*/); Settle(60); System.Threading.Thread.Sleep(500); Settle(60); Shot("queue");
+        Console.Error.WriteLine("[rail-shot] done");
+    }
+
+    // WAVEE_SHELF_SHOT=1: navigate home and force a horizontal PagedShelf strip to a MID-PAGE offset (what a touchpad
+    // free-pan leaves behind), then capture PNGs — the LEFT edge fade must appear once content extends past the left
+    // edge, and the left chevron must re-enable (the page state re-syncs from the settled offset). Output → C:\tmp\shelf_*.png.
+    static void RunShelfFadeShot(AppHost host, Win32Window window, D3D12Device gpu)
+    {
+        try { System.IO.Directory.CreateDirectory(@"C:\tmp"); } catch { }
+        window.SetClientSize(1280, 900);
+        void Frame() { if (!window.IsClosed) { gpu.SuppressLatencyWaitOnce(); gpu.SuppressVsyncOnce(); host.RunFrame(); } }
+        void Settle(int n) { for (int i = 0; i < n && !window.IsClosed; i++) Frame(); }
+        void Shot(string name)
+        {
+            var px = gpu.CaptureBgra(out int cw, out int ch);
+            PngWriter.WriteBgra($@"C:\tmp\shelf_{name}.png", px, cw, ch);
+            Console.Error.WriteLine($"[shelf-shot] wrote shelf_{name}.png ({cw}x{ch})");
+        }
+
+        WaveeShell.ProbeNav!("home", null); Settle(60); System.Threading.Thread.Sleep(1500); Settle(60);
+        WaveeShell.ProbeNav!("home", null); Settle(60); System.Threading.Thread.Sleep(2000); Settle(120);
+
+        // Find the horizontal shelf strips (Orientation==1 with overflow) — the home "Your ..." PagedShelves.
+        var scene = host.Scene;
+        var shelves = new List<NodeHandle>();
+        var st = new Stack<NodeHandle>(); if (!scene.Root.IsNull) st.Push(scene.Root);
+        while (st.Count > 0)
+        {
+            var n = st.Pop();
+            if (n.IsNull || !scene.IsLive(n)) continue;
+            if (scene.HasScroll(n) && scene.TryGetScroll(n, out var s) && s.Orientation == 1 && s.ContentW > s.ViewportW + 40f)
+            {
+                var r = scene.AbsoluteRect(n);
+                Console.Error.WriteLine($"[shelf-shot]   h-scroller rect=({r.X:0},{r.Y:0} {r.W:0}x{r.H:0}) viewW={s.ViewportW:0} contentW={s.ContentW:0} offX={s.OffsetX:0}");
+                if (r.Y > 60f && r.Y < 800f && r.W > 400f) shelves.Add(n);
+            }
+            for (var c = scene.FirstChild(n); !c.IsNull; c = scene.NextSibling(c)) st.Push(c);
+        }
+        if (shelves.Count == 0) { Console.Error.WriteLine("[shelf-shot] no horizontal shelf found — aborting"); return; }
+
+        Shot("before");
+        foreach (var vp in shelves)
+        {
+            // Land at a MID-PAGE offset, exactly like a touchpad free-pan settle: offset ≈ 0.6 × viewport width.
+            ref FluentGpu.Scene.ScrollState sc = ref scene.ScrollRef(vp);
+            float target = MathF.Min(sc.ViewportW * 0.6f, MathF.Max(0f, sc.ContentW - sc.ViewportW));
+            sc.OffsetX = target; sc.TargetX = target;
+            NodeHandle content = sc.ContentNode;
+            if (!content.IsNull && scene.IsLive(content))
+            {
+                scene.Paint(content).LocalTransform = FluentGpu.Foundation.Affine2D.Translation(-target, 0f);
+                scene.Mark(content, FluentGpu.Foundation.NodeFlags.TransformDirty | FluentGpu.Foundation.NodeFlags.PaintDirty);
+            }
+        }
+        Settle(30);
+        foreach (var vp in shelves)
+        {
+            scene.TryGetScroll(vp, out var s);
+            Console.Error.WriteLine($"[shelf-shot]   after: offX={s.OffsetX:0} flags={s.ScrollFlags}");
+        }
+        // Bring the first shelf into view: scroll the PAGE so the mid-scrolled strip (and its left fade) is on-screen.
+        {
+            NodeHandle pageV = NodeHandle.Null; float bestCv = 0f;
+            var stp = new Stack<NodeHandle>(); if (!scene.Root.IsNull) stp.Push(scene.Root);
+            while (stp.Count > 0)
+            {
+                var n = stp.Pop();
+                if (n.IsNull || !scene.IsLive(n)) continue;
+                if (scene.HasScroll(n) && scene.TryGetScroll(n, out var s) && s.Orientation != 1 && s.ContentH > s.ViewportH + 1f && s.ContentH > bestCv)
+                { bestCv = s.ContentH; pageV = n; }
+                for (var c = scene.FirstChild(n); !c.IsNull; c = scene.NextSibling(c)) stp.Push(c);
+            }
+            if (!pageV.IsNull && shelves.Count > 0)
+            {
+                float shelfY = scene.AbsoluteRect(shelves[0]).Y;
+                ref FluentGpu.Scene.ScrollState sc = ref scene.ScrollRef(pageV);
+                float t = Math.Clamp(sc.OffsetY + shelfY - 260f, 0f, MathF.Max(0f, sc.ContentH - sc.ViewportH));
+                sc.OffsetY = t; sc.TargetY = t;
+                NodeHandle content = sc.ContentNode;
+                if (!content.IsNull && scene.IsLive(content))
+                {
+                    scene.Paint(content).LocalTransform = FluentGpu.Foundation.Affine2D.Translation(0f, -t);
+                    scene.Mark(content, FluentGpu.Foundation.NodeFlags.TransformDirty | FluentGpu.Foundation.NodeFlags.PaintDirty);
+                }
+                Settle(30);
+            }
+        }
+        Shot("after");
+
+        // Artist page: the measured-virtual shelves ("Appears on" / "Fans also like" / concerts / merch / gallery) —
+        // the probe-stuck regression left them as blank reserved bands. Scroll deep and capture the shelf zone.
+        WaveeShell.ProbeNav!("artist:spotify:artist:04gDigrS5kc9YWfZHwBETP", "Maroon 5");
+        Settle(60); System.Threading.Thread.Sleep(2500); Settle(120);
+        NodeHandle pageVp = NodeHandle.Null; float bestC = 0f;
+        var st2 = new Stack<NodeHandle>(); if (!scene.Root.IsNull) st2.Push(scene.Root);
+        while (st2.Count > 0)
+        {
+            var n = st2.Pop();
+            if (n.IsNull || !scene.IsLive(n)) continue;
+            if (scene.HasScroll(n) && scene.TryGetScroll(n, out var s) && s.Orientation != 1 && s.ContentH > s.ViewportH + 1f && s.ContentH > bestC)
+            { bestC = s.ContentH; pageVp = n; }
+            for (var c = scene.FirstChild(n); !c.IsNull; c = scene.NextSibling(c)) st2.Push(c);
+        }
+        if (!pageVp.IsNull)
+        {
+            for (float frac = 0.30f; frac < 1.01f; frac += 0.10f)
+            {
+                ref FluentGpu.Scene.ScrollState sc = ref scene.ScrollRef(pageVp);
+                float t = MathF.Max(0f, (sc.ContentH - sc.ViewportH) * frac);
+                sc.OffsetY = t; sc.TargetY = t;
+                NodeHandle content = sc.ContentNode;
+                if (!content.IsNull && scene.IsLive(content))
+                {
+                    scene.Paint(content).LocalTransform = FluentGpu.Foundation.Affine2D.Translation(0f, -t);
+                    scene.Mark(content, FluentGpu.Foundation.NodeFlags.TransformDirty | FluentGpu.Foundation.NodeFlags.PaintDirty);
+                }
+                Settle(30);
+                Shot($"artist_{(int)(frac * 100):D2}");
+            }
+        }
+        Console.Error.WriteLine("[shelf-shot] done");
     }
 
     // WAVEE_HERO_SHOT=1: navigate to an artist page and capture the collapsing hero at several scroll offsets, dumping the
@@ -185,6 +338,26 @@ internal static class WaveeNavProbe
             DumpCollapse(host.Scene, vp, stNow.OffsetY);
             Shot((int)stNow.OffsetY);
         }
+
+        // Focus-regain regression (user report): with the hero fully collapsed, send REAL WM_ACTIVATE deactivate →
+        // reactivate through the wndproc (flips Win32Window._active → the Mica re-theme + chrome epoch path) and
+        // capture the steady frames after each — the collapsed hero band must NOT re-appear.
+        host.Scene.TryGetScroll(vp, out var stC);
+        DumpCollapse(host.Scene, vp, stC.OffsetY);
+        Shot(900);   // baseline: collapsed, focused
+        nint hwnd = window.Handle.Value;
+        SendMessageW(hwnd, 0x0006 /*WM_ACTIVATE*/, 0 /*WA_INACTIVE*/, 0);
+        Settle(20);
+        host.Scene.TryGetScroll(vp, out var stB);
+        DumpCollapse(host.Scene, vp, stB.OffsetY);
+        Shot(901);   // blurred steady
+        SendMessageW(hwnd, 0x0006 /*WM_ACTIVATE*/, 1 /*WA_ACTIVE*/, 0);
+        Settle(3);
+        Shot(902);   // regain +3 frames
+        Settle(20);
+        host.Scene.TryGetScroll(vp, out var stF);
+        DumpCollapse(host.Scene, vp, stF.OffsetY);
+        Shot(903);   // regain steady
         Console.Error.WriteLine("[hero-shot] done");
     }
 

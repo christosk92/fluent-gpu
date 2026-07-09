@@ -4,7 +4,7 @@ using FluentGpu.Signals;
 namespace Wavee;
 
 /// <summary>Which panel the right rail is showing.</summary>
-public enum RailMode { Lyrics, Queue, Details }
+public enum RailMode { Lyrics, Queue, Details, Friends }
 
 /// <summary>
 /// UI-only chrome state for the WaveeMusic-style right rail. Kept off <see cref="PlaybackBridge"/> so the bridge stays

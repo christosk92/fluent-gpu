@@ -95,9 +95,7 @@ public class QueueRecoveryTests
         Assert.Equal(new[] { "q3", "q1", "q4", "q5", "q2" },
             snap.UserQueue.Select(e => e.Uid).ToArray());
 
-        Assert.Equal(2, snap.History.Length);
-        Assert.Equal("spotify:track:7ePpQepOptZ1M9jRRydHsZ", snap.History[0].Track.Uri);
-        Assert.Equal("spotify:track:3VDPbD7IKpKDJJYb2HAOyc", snap.History[1].Track.Uri);
+        Assert.Empty(snap.History);   // local-only: cluster prev_tracks are not imported
 
         var upUris = snap.Upcoming.Where(e => e.Provider == QueueProvider.Context).Select(e => e.Track.Uri).ToArray();
         Assert.Equal(new[]

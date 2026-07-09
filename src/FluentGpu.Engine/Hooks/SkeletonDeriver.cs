@@ -68,7 +68,7 @@ internal static class SkeletonDeriver
                 // Childless box (avatar/chip/cover/swatch): a shimmer bar of its declared size + corners + grow.
                 // Preserve MorphId so a connected-animation cover slot stays a Hero participant THROUGH the skeleton
                 // (the art flies into the reserved slot immediately, without waiting for the async content to land).
-                return Bar(s, w, h, b.Grow, b.Corners, b.Margin, b.AlignSelf, b.MorphId);
+                return Bar(s, w, h, b.Grow, b.Corners.ValueOr(default), b.Margin, b.AlignSelf, b.MorphId);
             }
 
             case TextEl t:

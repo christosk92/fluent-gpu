@@ -121,6 +121,16 @@ float SdRoundBox(float2 p, float2 b, float r)
     return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;   // signed distance to the rounded-box edge
 }
 
+// Per-corner rounded box: pick the quadrant's radius (radii = TL,TR,BR,BL; local origin at centre, -y = top).
+// The shell content card declares (r, r, 0, 0) — a uniform-radius SDF silently rounded its BOTTOM corners too.
+float SdRoundBox4(float2 p, float2 b, float4 radii)
+{
+    float rr = (p.x < 0.0) ? ((p.y < 0.0) ? radii.x : radii.w) : ((p.y < 0.0) ? radii.y : radii.z);
+    rr = min(rr, min(b.x, b.y));
+    float2 q = abs(p) - (b - rr);
+    return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - rr;
+}
+
 float4 PSMain(VSOut i) : SV_Target
 {
     float kind = i.misc.z;
@@ -151,7 +161,7 @@ float4 PSMain(VSOut i) : SV_Target
     }
     else
     {
-        d = SdRoundBox(i.local, i.halfSize, i.radii.x);
+        d = SdRoundBox4(i.local, i.halfSize, i.radii);
     }
     float fw = max(fwidth(d), 1e-4);
     float cov;
@@ -346,9 +356,8 @@ float4 PSMain(VSOut i) : SV_Target
 
         if (bindSharedState)
         {
-            float* vp = stackalloc float[2] { vpW, vpH };
             cmd->SetGraphicsRootSignature(_shared.RootSignature);
-            cmd->SetGraphicsRoot32BitConstants(0, 2, vp, 0);
+            _shared.SetViewportConstants(cmd, vpW, vpH);
             cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
             var qv = _shared.QuadView;
             cmd->IASetVertexBuffers(0, 1, &qv);

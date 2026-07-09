@@ -70,8 +70,10 @@ sealed class LyricsView : Component
     // over GlowFadeMs; at rest no signal is written, so settled frames stay byte-identical (skip-submit intact).
     const float GlowFadeMs = 240f;
     const float GlowOutMs = 320f;           // end-of-line melt window (BetterLyrics ≈350 ms; clamped to line end on media clock)
-    const float GlowBloomTaperStart = 0.75f;// wipe fraction where mid-line bloom starts tapering before retire
-    const float GlowBloomTaperK = 1.4f;     // tuned so halo reads ~65 % at split→1 (dial to 0 to disable taper)
+    // Held-note glow (WaveeMusic LyricsAnimator "辉光（长音节）" / BetterLyrics): the halo blooms ONLY while a syllable of
+    // at least this duration is being sung — a whole-line wash reads as noise; a swell on the held note reads as voice.
+    const float HeldGlowMinMs = 700f;       // WaveeMusic LyricsGlowEffectLongSyllableDuration default
+    const float HeldGlowRampMaxMs = 500f;   // swell-in cap; short-ish holds swell across half the note instead
     const float ResumeDelayMs = 1500f;        // auto-follow resumes this long after the user stops scrolling the list
     FloatSignal[] _glowAlpha = Array.Empty<FloatSignal>();
     int _glowInLine = -1; long _glowInStart; float _glowInFrom;
@@ -455,7 +457,10 @@ sealed class LyricsView : Component
                     ReportLineNode, ReportGlowNode, () => SeekToLine(idx))) with { Key = "ll" + idx };
             },
             keyOf: i => "ll" + i,
-            overscan: _large ? 5 : 4) with
+            // Realize the WHOLE document (a lyrics doc is at most a few hundred cheap rows): with a 4-5 row overscan,
+            // lines cold-mounted mid-auto-scroll — text shaping + DoF layer popping in as the spring passed them (the
+            // "future lines flicker in" report). Realized-but-offscreen lines cost nothing per frame (clip-culled).
+            overscan: Math.Min(lines.Count, 400)) with
         {
             Grow = 1f,
             MinHeight = 0f,
@@ -658,9 +663,12 @@ sealed class LyricsView : Component
             return;
         }
 
-        // Main-content scroll tightens the shared GPU budget — defer lyrics glow/wipe only (Core lane never gated).
+        // Main-content scroll tightens the shared GPU budget — defer the lyrics GLOW only (its per-frame σ/split writes
+        // invalidate the scroll blur-pin and force re-Gaussians). The READABLE karaoke wipe is a cheap single-line
+        // gradient write and keeps tracking the voice: freezing it visibly desynced the fill during any page scroll,
+        // then lurched it forward on scroll end. (Core lane below is never gated.)
         bool deferHeavy = Context.PeekMainScrollBusy?.Invoke() == true;
-        bool runVisual = !deferHeavy || activeChanged || voiceChanged || forceVisual;
+        bool runGlow = !deferHeavy || activeChanged || voiceChanged || forceVisual;
 
         var scene = Context.Scene;
         if (scene is null) return;
@@ -680,18 +688,19 @@ sealed class LyricsView : Component
         }
         LastFrameDiagnostics = new(nowMs, auth, active, voiceLine, activeChanged, voiceChanged, _scrollSnapped, playing, doc.Lines.Count);
 
-        // ── Visual lane (budget-deferred): glow cross-fade + karaoke wipe ──
-        if (!runVisual) return;
-
-        // Voice handoff: CROSS-FADE the halos (incoming line ramps in, outgoing ramps out) instead of a hard clear — the
-        // old instant σ/content toggle popped the glow on and off in one frame at every line change.
-        if (voiceChanged) BeginGlowFades(scene, prevVoiceLine, voiceLine, wallMs);
-        DriveGlowFades(scene, wallMs);
-        // Voice-line glow envelope (FIX B): monotone min(inFade, outFade) on the media clock — no hard gate against the
-        // in-cross-fade, so short chorus lines compress to a smooth triangle instead of snapping. Authoritative for the
-        // live voice row; the cross-fade above only handles the OUTGOING line (and seek handoffs routed through ease()).
-        if (voiceLine >= 0 && (uint)voiceLine < (uint)doc.Lines.Count)
-            ApplyVoiceGlowEnvelope(scene, doc, voiceLine, nowMs);
+        // ── Visual lane: glow cross-fade (budget-deferred during a main scroll) + karaoke wipe (never deferred) ──
+        if (runGlow)
+        {
+            // Voice handoff: CROSS-FADE the halos (incoming line ramps in, outgoing ramps out) instead of a hard clear —
+            // the old instant σ/content toggle popped the glow on and off in one frame at every line change.
+            if (voiceChanged) BeginGlowFades(scene, prevVoiceLine, voiceLine, wallMs);
+            DriveGlowFades(scene, wallMs);
+            // Voice-line glow envelope (FIX B): monotone min(inFade, outFade) on the media clock — no hard gate against the
+            // in-cross-fade, so short chorus lines compress to a smooth triangle instead of snapping. Authoritative for the
+            // live voice row; the cross-fade above only handles the OUTGOING line (and seek handoffs routed through ease()).
+            if (voiceLine >= 0 && (uint)voiceLine < (uint)doc.Lines.Count)
+                ApplyVoiceGlowEnvelope(scene, doc, voiceLine, nowMs);
+        }
 
         // The karaoke wipe/glow live on the VOICE line (true time), trailing the emphasis line during the lead window. Drive
         // the READABLE main text wipe (the visible reveal) as the primary; the glow wipe (sung-only bloom) rides the same
@@ -723,8 +732,10 @@ sealed class LyricsView : Component
                 scene.Mark(mainNode, NodeFlags.PaintDirty);
             }
 
-            // Glow bloom — same split; σ co-decays with the bound glow alpha (FIX B melt) so the halo tightens as it dims.
-            if (!glowNode.IsNull && scene.IsLive(glowNode) && scene.TryGetGlyphWipe(glowNode, out var w))
+            // Glow bloom — same split; σ co-decays with the bound glow alpha (FIX B melt) so the halo tightens as it
+            // dims. Deferred with the glow lane during a main scroll: a per-frame split/σ write here would invalidate
+            // the scroll blur-pin every frame — the halo holds its last frame instead (barely visible under the fill).
+            if (runGlow && !glowNode.IsNull && scene.IsLive(glowNode) && scene.TryGetGlyphWipe(glowNode, out var w))
             {
                 bool glowDirty = MathF.Abs(split - w.Split) > 0.0008f;
                 if (glowDirty) scene.SetGlyphWipe(glowNode, w with { Split = split });
@@ -774,19 +785,46 @@ sealed class LyricsView : Component
         long lineStart = line.StartMs;
         long lineEnd = line.IsWordByWord && line.Syllables.Count > 0 ? line.Syllables[^1].EndMs
             : line.EndMs ?? (voiceLine + 1 < doc.Lines.Count ? doc.Lines[voiceLine + 1].StartMs : long.MaxValue);
-        float inFade = EaseOutSine(Math.Clamp((nowMs - lineStart) / GlowFadeMs, 0f, 1f));
         float alphaOut = EaseOutSine(Math.Clamp((lineEnd - nowMs) / GlowOutMs, 0f, 1f));
-        float alpha = MathF.Min(inFade, alphaOut);
-        if (GlowBloomTaperK > 0f && line.IsWordByWord && line.Syllables.Count > 0)
+        float alpha;
+        if (line.IsWordByWord && line.Syllables.Count > 0)
         {
-            float split = ComputeSplit(line, nowMs);
-            if (split > GlowBloomTaperStart)
-                alpha *= 1f - GlowBloomTaperK * (split - GlowBloomTaperStart);
+            // WaveeMusic/BetterLyrics rule (LyricsAnimator "辉光（长音节）", scope = LongDurationSyllable): the halo
+            // blooms ONLY while a ≥ HeldGlowMinMs syllable is being HELD — swell in across the hold, melt out into its
+            // end. Short syllables get no glow at all; the old whole-line wash is gone.
+            alpha = MathF.Min(HeldSyllableGlow(line, nowMs), alphaOut);
+        }
+        else
+        {
+            // Line-synced (no syllable timing): keep the gentle whole-line envelope — there is no "held note" signal.
+            float inFade = EaseOutSine(Math.Clamp((nowMs - lineStart) / GlowFadeMs, 0f, 1f));
+            alpha = MathF.Min(inFade, alphaOut);
         }
         alpha = MathF.Max(0f, alpha);
         SetGlowAlpha(voiceLine, alpha);
         // Envelope owns the live voice row — retire any redundant in-cross-fade arm.
         if (_glowInLine == voiceLine) _glowInLine = -1;
+    }
+
+    // The held-note bloom: 0 unless nowMs sits inside a syllable of at least HeldGlowMinMs; inside one, swell in over
+    // min(HeldGlowRampMaxMs, half the note) and melt over GlowOutMs into the note's end — min(up, down) is the same
+    // monotone triangle form the line envelope used, so a short-held note compresses smoothly instead of snapping.
+    static float HeldSyllableGlow(LyricLine line, long nowMs)
+    {
+        var syls = line.Syllables;
+        for (int i = 0; i < syls.Count; i++)
+        {
+            var s = syls[i];
+            if (nowMs < s.StartMs) break;        // syllables are time-ordered — nothing later can contain nowMs
+            if (nowMs >= s.EndMs) continue;
+            long dur = s.EndMs - s.StartMs;
+            if (dur < HeldGlowMinMs) return 0f;  // short syllable: never glows
+            float rampIn = MathF.Min(HeldGlowRampMaxMs, dur * 0.5f);
+            float up = EaseOutSine(Math.Clamp((nowMs - s.StartMs) / rampIn, 0f, 1f));
+            float down = EaseOutSine(Math.Clamp((s.EndMs - nowMs) / GlowOutMs, 0f, 1f));
+            return MathF.Min(up, down);
+        }
+        return 0f;
     }
 
     static float EaseOutSine(float t) => MathF.Sin(t * MathF.PI * 0.5f);
@@ -876,6 +914,11 @@ sealed class LyricsView : Component
         // velocity so the engine spring chains smoothly to the new target instead of restarting a decelerating chase (the
         // "list trails the song" defect). The engine ScrollIntegrator integrates the critically-damped spring (no overshoot).
         bool alreadyProgrammatic = sc.Phase == ScrollIntegrator.WheelAnimating && (sc.PhaseFlags & ScrollState.PhaseProgrammatic) != 0;
+        // Apple-Music line follow: an UNDERDAMPED spring (ζ 0.85, ω0 7.2 ⇒ ~650 ms settle with a whisper of overshoot)
+        // instead of the default critically-damped 95 ms chase — the line advance breathes instead of easing flatly.
+        // Velocity-continuous retargets keep dense sections (lines ~200-300 ms apart) fluid rather than trailing.
+        sc.ProgrammaticZeta = 0.85f;
+        sc.ProgrammaticOmega = 7.2f;
         if (!alreadyProgrammatic)
         {
             sc.Phase = ScrollIntegrator.WheelAnimating;

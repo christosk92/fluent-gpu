@@ -1086,6 +1086,11 @@ public sealed class TreeReconciler
                 var pfb = b.PressedFill.Thunk; var pfs = b.PressedFill.Signal;
                 AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).PressedFill = pfb is not null ? pfb() : pfs!.Value; _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
             }
+            if (b.Corners.IsBound)
+            {
+                var crb = b.Corners.Thunk; var crs = b.Corners.Signal;
+                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).Corners = crb is not null ? crb() : crs!.Value; _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
+            }
             if (b.Validation.IsBound)
             {
                 // form-validation.md: resolve the semantic state → theme critical color on the UI thread (the recorder
@@ -2018,7 +2023,8 @@ public sealed class TreeReconciler
                 paint.BorderDashOn = b.BorderDashOn;
                 paint.BorderDashOff = b.BorderDashOff;
                 paint.TabFlareRadius = b.TabFlareRadius <= 0f ? 4f : b.TabFlareRadius;
-                paint.Corners = b.Corners;
+                // Like Fill/Opacity: a bound corner set is owned by its bind effect — the static write must not clobber it.
+                if (!b.Corners.IsBound) paint.Corners = b.Corners.Value;
 
                 if (b.Shadow is { } sh) _scene.SetShadow(node, sh); else _scene.ClearShadow(node);
                 if (b.Arc is { } arcSpec) _scene.SetArc(node, arcSpec); else _scene.ClearArc(node);

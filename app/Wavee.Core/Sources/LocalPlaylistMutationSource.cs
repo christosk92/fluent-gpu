@@ -52,6 +52,15 @@ public sealed class LocalPlaylistMutationSource : IPlaylistMutationSource
     public Task SetBasePermissionAsync(string playlistUri, PlaylistPermissionLevel level, CancellationToken ct = default)
         => throw SpotifyOnly(playlistUri);
 
+    public Task<PlaylistBasePermission?> GetBasePermissionAsync(string playlistUri, CancellationToken ct = default)
+        => Task.FromResult<PlaylistBasePermission?>(null);
+
+    public Task SetPlaylistVisibilityAsync(string playlistUri, bool isPublic, CancellationToken ct = default)
+        => throw SpotifyOnly(playlistUri);
+
+    public Task DeletePlaylistAsync(string playlistUri, CancellationToken ct = default)
+        => throw SpotifyOnly(playlistUri);
+
     public Task<string> CreateContributorInviteAsync(string playlistUri, CancellationToken ct = default)
         => throw SpotifyOnly(playlistUri);
 

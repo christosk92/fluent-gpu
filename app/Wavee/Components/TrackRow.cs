@@ -163,7 +163,8 @@ internal static class TrackRow
     internal static Element ArtCard(Track t, in State st, ColumnSet set, Action<string, string?>? go,
                                     Action onPlay, Action? onLike = null, float art = 48f,
                                     bool showArtists = true, bool explicitBadge = false,
-                                    bool showDuration = true, ArtCardKind kind = ArtCardKind.Rail)
+                                    bool showDuration = true, ArtCardKind kind = ArtCardKind.Rail,
+                                    Action? onAdd = null)
     {
         float radius = kind == ArtCardKind.Grid ? 4f : 5f;
         float fab = Math.Clamp(art * 0.62f, 28f, 36f);
@@ -200,7 +201,8 @@ internal static class TrackRow
         if (set.Plays)
             textKids.Add(new TextEl($"{t.PlayCount:N0} plays") { Size = 10f, Color = Tok.TextTertiary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
 
-        var trailing = new List<Element>(2);
+        var trailing = new List<Element>(3);
+        if (onAdd is not null) trailing.Add(AddButton(onAdd));   // recommendation rows: the "+" add-to-playlist button leads the trailing cluster
         if (set.Heart) trailing.Add(Heart(st.Saved, onLike));
         if (showDuration)
             trailing.Add(new BoxEl
@@ -342,6 +344,18 @@ internal static class TrackRow
         Corners = CornerRadius4.All(14f), HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
         Cursor = onLike is null ? (CursorId?)null : CursorId.Hand, OnClick = onLike,
         Children = [Icon(saved ? Mdl.HeartFill : Icons.Heart, 14f, saved ? Tok.AccentTextPrimary : Tok.TextTertiary)],
+    };
+
+    // The recommendation-row "add to this playlist" button (Spotify's playlist-extender "+"): a bordered round button that
+    // leads the trailing cluster, before the duration. Mirrors Heart — a null onAdd yields a non-interactive button.
+    internal static Element AddButton(Action? onAdd) => new BoxEl
+    {
+        Width = 28f, Height = 28f, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+        Corners = CornerRadius4.All(14f), BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault,
+        HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+        HoverScale = 1.06f, PressScale = 0.94f,
+        Cursor = onAdd is null ? (CursorId?)null : CursorId.Hand, OnClick = onAdd,
+        Children = [Icon(Icons.Add, 15f, Tok.TextPrimary)],
     };
 
     // The # cell — a small state machine over the playback of THIS track, with the transport button revealed on row hover:

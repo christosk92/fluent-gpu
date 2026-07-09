@@ -17,24 +17,15 @@ sealed class RightRail : Component
     public override Element Render()
     {
         var ui = UseContext(ShellUi.Slot);
-        var bridge = UseContext(PlaybackBridge.Slot);
         if (ui is null) return new BoxEl();
         var mode = ui.Mode.Value;   // subscribe → swap the panel on a mode change
         bool floating = !ui.RailFits.Value;
         bool nowPlaying = mode == RailMode.Details;
-        var corners = new CornerRadius4(WaveeRadius.Card, 0f, 0f, 0f);   // TL only — the seam with the content card
+        // Flat FileArea surface (the album-wash gradient read as a muddy smudge), TOP-LEFT rounded like the content
+        // card's top-right — the two sit as sibling cards across the 4px chrome gap.
+        var corners = new CornerRadius4(WaveeRadius.Card, 0f, 0f, 0f);
 
-        Palette? art = bridge?.TrackPalette.Value;
-        ColorF washColor = WaveePalette.HeroWashColor(art);
-        Element surface = new BoxEl
-        {
-            Grow = 1f, ZStack = true, ClipToBounds = true, Corners = corners,
-            Children =
-            [
-                new BoxEl { Grow = 1f, Fill = Prop.Of(() => WaveeColors.FileArea), Corners = corners, ClipToBounds = true },
-                new BoxEl { Grow = 1f, Gradient = Surfaces.HeroWash(washColor), Corners = corners, ClipToBounds = true, HitTestPassThrough = true },
-            ],
-        };
+        Element surface = new BoxEl { Grow = 1f, Fill = Prop.Of(() => WaveeColors.FileArea), Corners = corners, ClipToBounds = true };
 
         var header = new BoxEl
         {
@@ -55,6 +46,7 @@ sealed class RightRail : Component
         {
             RailMode.Lyrics => Embed.Comp(() => new LyricsView()),
             RailMode.Queue => Embed.Comp(() => new QueuePanel()),
+            RailMode.Friends => Embed.Comp(() => new FriendsPanel()),
             _ => Embed.Comp(() => new NowPlayingPanel()),
         };
 
@@ -99,6 +91,7 @@ sealed class RightRail : Component
     {
         RailMode.Lyrics => Loc.Get(Strings.Player.Lyrics),
         RailMode.Queue => Loc.Get(Strings.Player.Queue),
+        RailMode.Friends => Loc.Get(Strings.Friends.Title),
         _ => Loc.Get(Strings.Player.NowPlaying),
     };
 

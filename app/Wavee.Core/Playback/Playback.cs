@@ -2,7 +2,7 @@ namespace Wavee.Core;
 
 public enum RepeatMode { Off, Context, Track }
 
-public readonly record struct PlaybackContextTrack(string Uri, string Uid = "");
+public readonly record struct PlaybackContextTrack(string Uri, string Uid = "", IReadOnlyDictionary<string, string>? Metadata = null);
 
 /// <summary>Playback command surface. The real implementation marshals these to the out-of-process
 /// x64 AudioHost over a named pipe; the fake implementation is in-process. State is observed via

@@ -78,6 +78,10 @@ internal sealed unsafe class OpacityLayerCompositor : IDisposable
     private ID3D12DescriptorHeap* _srvHeap;   // 2·MaxPool shader-visible SRVs, parity-banked (parity·MaxPool + i)
     private uint _rtvInc, _srvInc;
     private int _parity;
+    // Heap-backed constant scratch — safe when NativeAOT inlines these callees into SubmitWithLayers' draw-list loop.
+    private readonly float[] _scratch4 = new float[4];
+    private readonly float[] _scratch8 = new float[8];
+    private readonly float[] _scratch16 = new float[16];
 
     private ID3D12RootSignature* _root;       // 1 root const (alpha) + 1 SRV table + static linear-clamp sampler
     private ID3D12PipelineState* _pso;        // fullscreen triangle, src = RT × alpha, blend ONE/INV_SRC_ALPHA
@@ -526,7 +530,7 @@ float4 PSMain(V i) : SV_Target
     /// scissor/viewport state is untouched — the subtree keeps clipping identically). Returns the slot index for the
     /// matching <see cref="BeginRead"/>/<see cref="Composite"/>/<see cref="Release"/>. Steady state reuses the free
     /// list with zero resource creation.</summary>
-    public int Acquire(ID3D12GraphicsCommandList* cmd, ulong frameFence)
+    public int Acquire(ID3D12GraphicsCommandList* cmd, ulong frameFence, RECT* clearRect = null)
     {
         int best = -1;
         for (int i = 0; i < MaxPool; i++)
@@ -571,8 +575,9 @@ float4 PSMain(V i) : SV_Target
         Barrier(cmd, entry.Res, ref entry.State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
         var rtv = Rtv(best);
         cmd->OMSetRenderTargets(1, &rtv, BOOL.FALSE, null);
-        float* clear = stackalloc float[4] { 0f, 0f, 0f, 0f };   // transparent — only the subtree's pixels composite
-        cmd->ClearRenderTargetView(rtv, clear, 0, null);          // clears the whole RT regardless of scissor
+        _scratch4[0] = _scratch4[1] = _scratch4[2] = _scratch4[3] = 0f;   // transparent — only the subtree's pixels composite
+        fixed (float* clear = _scratch4)
+            cmd->ClearRenderTargetView(rtv, clear, clearRect is null ? 0u : 1u, clearRect);
         return best;
     }
 
@@ -599,11 +604,15 @@ float4 PSMain(V i) : SV_Target
         cmd->SetDescriptorHeaps(1, &h);
         cmd->SetGraphicsRootSignature(_root);
         cmd->SetPipelineState(_pso);
-        float* c = stackalloc float[4] { Math.Clamp(alpha, 0f, 1f), 0f, 0f, 0f };
-        cmd->SetGraphicsRoot32BitConstants(0, 4, c, 0);
-        cmd->SetGraphicsRootDescriptorTable(1, SrvGpu(PoolSrvSlot(slot)));
-        cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        cmd->DrawInstanced(3, 1, 0, 0);
+        _scratch4[0] = Math.Clamp(alpha, 0f, 1f);
+        _scratch4[1] = _scratch4[2] = _scratch4[3] = 0f;
+        fixed (float* c = _scratch4)
+        {
+            cmd->SetGraphicsRoot32BitConstants(0, 4, c, 0);
+            cmd->SetGraphicsRootDescriptorTable(1, SrvGpu(PoolSrvSlot(slot)));
+            cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            cmd->DrawInstanced(3, 1, 0, 0);
+        }
         GroupsThisFrame++;
     }
 
@@ -634,17 +643,29 @@ float4 PSMain(V i) : SV_Target
         cmd->SetPipelineState(_edgePso);
         // DeviceRect / bands / corners arrive in LOGICAL (DIP) device space; SV_Position is PHYSICAL px — scale by the
         // frame DPI factor (the acrylic composite does the same, AcrylicCompositor.SnapshotRegion).
-        float* c = stackalloc float[16]
+        _scratch16[0] = L.DeviceRect.X * scale;
+        _scratch16[1] = L.DeviceRect.Y * scale;
+        _scratch16[2] = (L.DeviceRect.X + L.DeviceRect.W) * scale;
+        _scratch16[3] = (L.DeviceRect.Y + L.DeviceRect.H) * scale;
+        _scratch16[4] = L.FadeBandL * scale;
+        _scratch16[5] = L.FadeBandT * scale;
+        _scratch16[6] = L.FadeBandR * scale;
+        _scratch16[7] = L.FadeBandB * scale;
+        _scratch16[8] = L.Radii.TopLeft * scale;
+        _scratch16[9] = L.Radii.TopRight * scale;
+        _scratch16[10] = L.Radii.BottomRight * scale;
+        _scratch16[11] = L.Radii.BottomLeft * scale;
+        _scratch16[12] = L.FadeFalloff;
+        _scratch16[13] = Math.Clamp(L.FadeIntensity, 0f, 1f);
+        _scratch16[14] = Math.Clamp(L.GroupAlpha, 0f, 1f);
+        _scratch16[15] = L.FadeEdges;
+        fixed (float* c = _scratch16)
         {
-            L.DeviceRect.X * scale, L.DeviceRect.Y * scale, (L.DeviceRect.X + L.DeviceRect.W) * scale, (L.DeviceRect.Y + L.DeviceRect.H) * scale,
-            L.FadeBandL * scale, L.FadeBandT * scale, L.FadeBandR * scale, L.FadeBandB * scale,
-            L.Radii.TopLeft * scale, L.Radii.TopRight * scale, L.Radii.BottomRight * scale, L.Radii.BottomLeft * scale,
-            L.FadeFalloff, Math.Clamp(L.FadeIntensity, 0f, 1f), Math.Clamp(L.GroupAlpha, 0f, 1f), L.FadeEdges,
-        };
-        cmd->SetGraphicsRoot32BitConstants(0, 16, c, 0);
-        cmd->SetGraphicsRootDescriptorTable(1, SrvGpu(PoolSrvSlot(slot)));
-        cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        cmd->DrawInstanced(3, 1, 0, 0);
+            cmd->SetGraphicsRoot32BitConstants(0, 16, c, 0);
+            cmd->SetGraphicsRootDescriptorTable(1, SrvGpu(PoolSrvSlot(slot)));
+            cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            cmd->DrawInstanced(3, 1, 0, 0);
+        }
         GroupsThisFrame++;
     }
 
@@ -885,11 +906,19 @@ float4 PSMain(V i) : SV_Target
         cmd->SetDescriptorHeaps(1, &h);
         cmd->SetGraphicsRootSignature(_blurRoot);
         cmd->SetPipelineState(_blurPso);
-        float* c = stackalloc float[8] { 1f / _w, 1f / _h, dirX, dirY, sigma, 0f, 0f, 0f };
-        cmd->SetGraphicsRoot32BitConstants(0, 8, c, 0);
-        cmd->SetGraphicsRootDescriptorTable(1, SrvGpu(PoolSrvSlot(srcSlot)));
-        cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        cmd->DrawInstanced(3, 1, 0, 0);
+        _scratch8[0] = 1f / _w;
+        _scratch8[1] = 1f / _h;
+        _scratch8[2] = dirX;
+        _scratch8[3] = dirY;
+        _scratch8[4] = sigma;
+        _scratch8[5] = _scratch8[6] = _scratch8[7] = 0f;
+        fixed (float* c = _scratch8)
+        {
+            cmd->SetGraphicsRoot32BitConstants(0, 8, c, 0);
+            cmd->SetGraphicsRootDescriptorTable(1, SrvGpu(PoolSrvSlot(srcSlot)));
+            cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            cmd->DrawInstanced(3, 1, 0, 0);
+        }
     }
 
     private void SetViewport(ID3D12GraphicsCommandList* cmd, uint w, uint h)
