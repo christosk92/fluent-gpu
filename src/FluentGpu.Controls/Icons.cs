@@ -42,6 +42,7 @@ public static class Icons
     public const string Heart = "\uEB51";
     public const string Star = "\uE734";
     public const string List = "\uEA37";
+    public const string MultiSelect = "\uE762";
     public const string Grid = "\uE80A";
     public const string Filter = "\uE71C";   // Segoe Fluent "Filter" \u2014 list/grid filter affordance
     public const string Sort = "\uE8CB";      // Segoe Fluent "Sort" \u2014 list sort affordance

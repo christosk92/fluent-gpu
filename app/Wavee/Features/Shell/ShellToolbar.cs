@@ -94,7 +94,7 @@ sealed class ShellToolbar : ReactiveComponent
             ProfileChip(b, L.ShowProfileName),
         };
         if (L.ShowFriends) kids.Add(IconButton.Create(Mdl.Friends, () => ui?.Toggle(RailMode.Friends), nav));
-        if (L.ShowBell) kids.Add(BellButton(nav));
+        if (L.ShowBell) kids.Add(Embed.Comp(() => new NotificationBell(nav)));
         if (L.ShowThemeToggle)
         {
             kids.Add(new BoxEl { Width = 1f, Height = 20f, Fill = Tok.StrokeDividerDefault, Margin = new Edges4(4f, 0f, 4f, 0f) });
@@ -104,7 +104,8 @@ sealed class ShellToolbar : ReactiveComponent
         // (not CommandBarFlyout) gets the clean OverlayHost clip-reveal open — CommandBarFlyout layers its own
         // overflow-expand clip on top, which made the menu pop the empty chrome then fill in (two out-of-sync clips).
         var overflow = OverflowItems(L, ui);
-        if (overflow.Count > 0) kids.Add(Embed.Comp(() => new OverflowMenu(overflow, nav)));
+        bool overflowBell = !L.ShowBell;   // when the bell collapses, the notification center folds into the ⋯ menu
+        if (overflow.Count > 0 || overflowBell) kids.Add(Embed.Comp(() => new OverflowMenu(overflow, nav, overflowBell)));
 
         return new BoxEl
         {
@@ -141,25 +142,10 @@ sealed class ShellToolbar : ReactiveComponent
     {
         var items = new List<MenuFlyoutItem>(3);
         if (!L.ShowFriends) items.Add(new MenuFlyoutItem(Loc.Get(Strings.Shell.Friends), Mdl.Friends, Invoke: () => ui?.Toggle(RailMode.Friends)));
-        if (!L.ShowBell) items.Add(new MenuFlyoutItem(Loc.Get(Strings.Shell.Notifications), Mdl.Bell, Invoke: () => { }));
+        // Notifications, when collapsed, are handled by OverflowMenu (it anchors the panel to the ⋯ button) — not a plain item.
         if (!L.ShowThemeToggle) items.Add(new MenuFlyoutItem(Theme.Dark ? Loc.Get(Strings.Shell.LightTheme) : Loc.Get(Strings.Shell.DarkTheme), Theme.Dark ? Mdl.Sun : Mdl.Moon, Invoke: _toggleTheme));
         return items;
     }
-
-    Element BellButton(IconButton.Style nav) => new BoxEl
-    {
-        ZStack = true, Width = 36f, Height = 32f,
-        Children =
-        [
-            IconButton.Create(Mdl.Bell, () => { }, nav),
-            // full-size overlay so the unread pill floats at the top-right of the button
-            new BoxEl
-            {
-                Width = 36f, Height = 32f, Direction = 1, Justify = FlexJustify.Start, HitTestVisible = false,
-                Children = [ new BoxEl { Direction = 0, Justify = FlexJustify.End, Children = [ InfoBadge.Count(1) ] } ],
-            },
-        ],
-    };
 }
 
 // The reactive body: re-renders when the band-gated layout (or route/auth/back signals read in Bar) changes — but NOT
@@ -254,20 +240,50 @@ sealed class OverflowMenu : Component
 {
     readonly IReadOnlyList<MenuFlyoutItem> _items;
     readonly IconButton.Style _style;
-    public OverflowMenu(IReadOnlyList<MenuFlyoutItem> items, IconButton.Style style) { _items = items; _style = style; }
+    readonly bool _showNotifications;
+    public OverflowMenu(IReadOnlyList<MenuFlyoutItem> items, IconButton.Style style, bool showNotifications = false)
+    { _items = items; _style = style; _showNotifications = showNotifications; }
 
     public override Element Render()
     {
         var anchor = UseRef<NodeHandle>(default);
         var handle = UseRef<OverlayHandle?>(null);
+        var notifyHandle = UseRef<OverlayHandle?>(null);
         var svc = UseContext(Overlay.Service);
+        var nc = UseContext(NotificationCenterBridge.Slot);
+
+        // When the bell collapses into the overflow, its panel opens anchored to THIS ⋯ button (the same NotificationPanel).
+        void OpenNotifications()
+        {
+            if (nc is null) return;
+            notifyHandle.Value = svc.Open(
+                () => anchor.Value,
+                () => Embed.Comp(() => new NotificationPanel()),
+                FlyoutPlacement.BottomEdgeAlignedRight,
+                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss, Chrome: PopupChrome.Popup) { ConstrainToRootBounds = false });
+            notifyHandle.Value.ClosedAction = () => notifyHandle.Value = null;
+            nc.OnPanelOpened();
+        }
+
+        List<MenuFlyoutItem> BuildItems()
+        {
+            var list = new List<MenuFlyoutItem>(_items.Count + 1);
+            if (_showNotifications)
+            {
+                int unread = nc?.UnreadCount.Peek() ?? 0;
+                string label = unread > 0 ? Strings.Notifications.OverflowTitle(unread) : Loc.Get(Strings.Notifications.Title);
+                list.Add(new MenuFlyoutItem(label, Mdl.Bell, Invoke: OpenNotifications));
+            }
+            list.AddRange(_items);
+            return list;
+        }
 
         void Toggle()
         {
             if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
             handle.Value = svc.Open(
                 () => anchor.Value,
-                () => MenuFlyout.Build(_items, () => handle.Value?.Close()),
+                () => MenuFlyout.Build(BuildItems(), () => handle.Value?.Close()),
                 FlyoutPlacement.BottomEdgeAlignedRight,
                 new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
             handle.Value.ClosedAction = () => handle.Value = null;

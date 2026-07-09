@@ -102,6 +102,8 @@ sealed class TrackList : Component
     readonly Signal<int> _listCount = new(0);                  // ItemsView TOTAL (track rows + rec rows); _visibleCount stays the track count for §4.6
     Services? _svc;                                            // cached in Render → the header/add handlers reach the extender + the post seam
     Action<Action>? _post;
+    Memo<bool>? _checksVisible;                                 // equality-gated: checkbox lane visible (toggle OR selection)
+    Func<bool> _checksVisibleRead = static () => false;        // stable thunk for bound row lanes (repointed each render)
 
     public TrackList(Signal<Route> route, Loadable<DetailModel> full, PlaybackBridge? bridge, DetailHandlers h, bool showToolbar = true, bool embedded = false, bool verticalHeader = false, Signal<bool>? verticalHeaderPinned = null)
     {
@@ -282,6 +284,17 @@ sealed class TrackList : Component
         var flags = _h.Flags.Value;              // subscribe → remount on a quick-filter toggle
         float rowH = TrackRow.RowHeightFor(density);
         var verticalLayout = UseMemo(() => new MeasuredStackVirtualLayout(rowH), rowH);
+        _checksVisible = UseComputed(() =>
+        {
+            if (_h.MultiSelect?.Value == true) return true;
+            _ = _selection.Version.Value;
+            for (int i = 0; i < _selection.ItemCount; i++)
+                if (_selection.IsSelected(i) && DisplayTrack(i, _verticalHeader ? VerticalTrackStart : 0) is not null)
+                    return true;
+            return false;
+        });
+        _checksVisibleRead = () => _checksVisible.Value;
+        bool checkInset = _checksVisible.Value;
 
         // §4.6 — a same-context in-place track-set swap (a live push / /diff / a background refresh landing via SetReady)
         // narrates itself. Everything happens HERE, in the render that commits the new order, so the anchor adjust and
@@ -317,7 +330,7 @@ sealed class TrackList : Component
         // it needs ~630px — at the old tier-3 threshold (440px) the bar overflowed and the card clip cut the search box
         // mid-control. Icon-only + the tiered search width below always fit each tier's minimum.
         bool labeled = tier <= 1;
-        Element chrome = Chrome(set, tracks, sort, labeled, tier);
+        Element chrome = Chrome(set, tracks, sort, labeled, tier, checkInset);
         int visible = View().Length;
         // "Recommended songs": owned/collaborative playlists only, non-embedded, non-vertical, live edits available. When
         // ON, the header (+ rec rows) are appended AFTER the track rows in the SAME bound list — the list TOTAL is a
@@ -448,12 +461,9 @@ sealed class TrackList : Component
         int selectionTrackStart = _verticalHeader ? VerticalTrackStart : 0;
         Element overlay = new BoxEl
         {
-            // Passthrough (not HitTestVisible=false, which would kill the bar too): clicks in the empty area fall
-            // through to the list; only the bar itself is interactive.
             Direction = 1, Grow = 1f, HitTestPassThrough = true,
             AlignItems = FlexAlign.Center, Justify = FlexJustify.End,
-            Padding = new Edges4(WaveeSpace.L, 0f, WaveeSpace.L, WaveeSpace.XL),
-            Children = [Embed.Comp(() => new SelectionBar(_selection, _h, i => DisplayTrack(i, selectionTrackStart)))],
+            Children = [Embed.Comp(() => new SelectionCommandBar(_selection, i => DisplayTrack(i, selectionTrackStart)))],
         };
         return ZStack(column, overlay) with { Grow = 1f };
     }
@@ -669,11 +679,10 @@ sealed class TrackList : Component
     // dynamic-overflow behavior, in Wavee's own 32px pill styling. The rail owns Add-to-queue / Copy-to-playlist, so the
     // bar doesn't carry them. Keyed by the labeled state so a tier cross rebuilds cleanly. (Composed from ToolFx, not the
     // CommandBar control, which only does the classic labels-on-open mode.)
-    Element Chrome(ColumnSet set, TrackSize[] tracks, TrackSort sort, bool labeled, int tier) => new BoxEl
+    Element Chrome(ColumnSet set, TrackSize[] tracks, TrackSort sort, bool labeled, int tier, bool checkInset) => new BoxEl
     {
         Key = "chrome", Direction = 1, Padding = new Edges4(PadX, WaveeSpace.S, PadX, 0f),
-        // The command bar (filter/sort/row-size) sits above the column header; the rail owns the context actions.
-        Children = _showToolbar ? [Toolbar(labeled, tier), Header(set, tracks, sort)] : [Header(set, tracks, sort)],
+        Children = _showToolbar ? [Toolbar(labeled, tier), Header(set, tracks, sort, checkInset)] : [Header(set, tracks, sort, checkInset)],
     };
 
     Element Toolbar(bool labeled, int tier)
@@ -695,6 +704,9 @@ sealed class TrackList : Component
                 // The Sort button opens the "sort by" flyout — the only way to sort by Artist (no column of its own).
                 Embed.Comp(() => new SortMenuButton(_h.Sort, _h.SetSort, _cfg.ShowAlbumColumn, _hasDate, labeled)),
                 Embed.Comp(() => new ListButton(_h.Density, _h.SetDensity, labeled)),
+                _h.MultiSelect is not null && _h.SetMultiSelect is not null
+                    ? Embed.Comp(() => new MultiSelectButton(_h.MultiSelect!, _h.SetMultiSelect!, _selection, labeled))
+                    : new BoxEl(),
             ],
         };
         // The "Find" box, docked alone on the right — a plain search field (no suggestions flyout), two-way bound to the
@@ -729,20 +741,19 @@ sealed class TrackList : Component
         Children = [Icon(glyph, 14f, Tok.TextSecondary)],
     };
 
-    Element Header(ColumnSet set, TrackSize[] tracks, TrackSort sort)
+    Element Header(ColumnSet set, TrackSize[] tracks, TrackSort sort, bool checkInset)
     {
         var cells = new List<Element>(tracks.Length)
         {
-            new BoxEl(),   // # column: no header label (the row numbers below need none) — declutters the left header slot
+            new BoxEl(),   // # column: no header label
         };
-        if (set.Heart) cells.Add(new BoxEl());   // ♥ header (blank, not sortable) — left cluster, between # and art
-        if (set.Thumb) cells.Add(new BoxEl());   // art column header (blank) — keeps the Title header aligned over the title text
-        // The Title header owns a Title→Artist cycle; SortLabel reads "Artist" while artist-sorting and cross-fades the word on the flip.
+        if (set.Heart) cells.Add(new BoxEl());
+        if (set.Thumb) cells.Add(new BoxEl());
         cells.Add(SortCell(Embed.Comp(() => new SortLabel(_h.Sort)), SortColumn.Title, sort, FlexJustify.Start));
         if (set.Album) cells.Add(SortCell(HLabel(Loc.Get(Strings.Detail.Column.Album), SortColumn.Album, sort), SortColumn.Album, sort, FlexJustify.Start));
-        if (set.By) cells.Add(PlainHeader(Loc.Get(Strings.Detail.Column.AddedBy)));   // not sortable (matches the reference)
+        if (set.By) cells.Add(PlainHeader(Loc.Get(Strings.Detail.Column.AddedBy)));
         if (set.Date) cells.Add(SortCell(HLabel(Loc.Get(Strings.Detail.Column.DateAdded), SortColumn.DateAdded, sort), SortColumn.DateAdded, sort, FlexJustify.Start));
-        if (set.Video) cells.Add(new BoxEl());   // video header (blank — the per-row indicator stands alone)
+        if (set.Video) cells.Add(new BoxEl());
         if (set.Plays) cells.Add(SortCell(HLabel(Loc.Get(Strings.Detail.Column.Plays), SortColumn.Plays, sort), SortColumn.Plays, sort, FlexJustify.End));
         cells.Add(SortCell(Icon(Icons.Clock, 14f, sort.Column == SortColumn.Duration ? Tok.TextSecondary : Tok.TextTertiary),
                            SortColumn.Duration, sort, FlexJustify.End));
@@ -752,11 +763,15 @@ sealed class TrackList : Component
             Columns = tracks, ColGap = ColGap, RowHeight = HeaderHeight,
             Children = cells.ToArray(),
         };
-        return new BoxEl
+        var headerGrid = new BoxEl
         {
-            Direction = 1, ClipToBounds = true,   // safety net: clip any residual cell overflow (engine also shrink-fits)
+            Direction = 1, ClipToBounds = true,
+            Padding = new Edges4(checkInset ? 28f : 0f, 0f, 0f, 0f),
+            Animate = new LayoutTransition(TransitionChannels.Position,
+                TransitionDynamics.Tween(333f, Easing.FluentDecelerate)),
             Children = [grid, new BoxEl { Height = 1f, Fill = Tok.StrokeDividerDefault }],
         };
+        return headerGrid;
     }
 
     // The sort-direction caret (Segoe Fluent CaretSolid — chosen over the chevrons).
@@ -938,7 +953,7 @@ sealed class TrackList : Component
             }
             else if (i == VerticalChromeIndex)
             {
-                child = _o.Chrome(_set, _tracks, _o._h.Sort.Value, _labeled, _tier) with { Key = "vitem:chrome" };
+                child = _o.Chrome(_set, _tracks, _o._h.Sort.Value, _labeled, _tier, _o._checksVisible?.Value ?? false) with { Key = "vitem:chrome" };
             }
             else
             {
@@ -1257,13 +1272,23 @@ sealed class TrackList : Component
             // remounts, so selection is a compositor-only re-skin); press still shrinks it (10/16).
             Children =
             [
-                new BoxEl { Direction = 0, Grow = 1f, AlignItems = FlexAlign.Center, Children = [content] },
+                new BoxEl
+                {
+                    Direction = 0, Grow = 1f, AlignItems = FlexAlign.Center,
+                    Animate = new LayoutTransition(TransitionChannels.Position,
+                        TransitionDynamics.Tween(333f, Easing.FluentDecelerate)),
+                    Children =
+                    [
+                        SelectorVisualsBound.BoundCheckLane(_checksVisibleRead, isSel, onInteraction, leftMargin: 4f),
+                        content,
+                    ],
+                },
                 new BoxEl
                 {
                     Key = "row-pill", Width = 3f, Height = 16f, Margin = new Edges4(2f, 0f, 0f, 0f),
                     Corners = CornerRadius4.All(1.5f), Fill = _h.Accent, AlignSelf = FlexAlign.Center,
                     HitTestVisible = false, PressScale = 10f / 16f,
-                    Opacity = Prop.Of(() => isSel() ? 1f : 0f),
+                    Opacity = Prop.Of(() => isSel() && !_checksVisibleRead() ? 1f : 0f),
                 },
             ],
         };
@@ -1273,117 +1298,30 @@ sealed class TrackList : Component
     // artist/album links and the cell wrappers all live in the shared TrackRow now — see Components/TrackRow.cs.)
 }
 
-
-// The floating multi-select command bar: appears over the track list when ≥1 row is selected — overlapping "stacked"
-// album thumbnails + "N selected" + quick actions (Add to playlist / Queue) + Clear. Self-subscribes to the
-// SelectionModel (re-renders on every select/deselect) and slides in/out.
-sealed class SelectionBar : Component
+// The multi-select toggle: shows/hides row checkboxes; turning OFF also clears the current selection.
+sealed class MultiSelectButton : Component
 {
-    readonly SelectionModel _sel;
-    readonly DetailHandlers _h;
-    readonly Func<int, Track?> _trackAt;
-    public SelectionBar(SelectionModel sel, DetailHandlers h, Func<int, Track?> trackAt) { _sel = sel; _h = h; _trackAt = trackAt; }
+    readonly IReadSignal<bool> _mode;
+    readonly Action<bool> _setMode;
+    readonly SelectionModel _selection;
+    readonly bool _labeled;
+    public MultiSelectButton(IReadSignal<bool> mode, Action<bool> setMode, SelectionModel selection, bool labeled)
+    { _mode = mode; _setMode = setMode; _selection = selection; _labeled = labeled; }
 
     public override Element Render()
     {
-        var svc = UseContext(Services.Slot);
-        var lib = UseContext(LibraryBridge.Slot);
-        _ = _sel.Version.Value;          // subscribe → re-render on every selection change
-        int count = SelectedTrackCount();
-        this.UseSoftReveal(key: count >= 2, dy: 14f, blur: 2f);   // slide + fade when the bar appears/dismisses
-        // Only for a MULTI-selection (2+) — a single selected row needs no batch bar (matches WaveeMusic).
-        if (count < 2) return new BoxEl();
-
-        // First few selected tracks (by display order) → overlapping thumbnails. Cheap: stops after 4 (no full materialize).
-        var thumbs = new List<Element>(4);
-        for (int i = 0; i < _sel.ItemCount && thumbs.Count < 4; i++)
-            if (_sel.IsSelected(i) && _trackAt(i) is { } t) thumbs.Add(Thumb(t, thumbs.Count));
-
-        return new BoxEl
+        bool on = _mode.Value;
+        void Toggle()
         {
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
-            Padding = new Edges4(WaveeSpace.M, WaveeSpace.S, WaveeSpace.S, WaveeSpace.S),
-            Corners = CornerRadius4.All(WaveeRadius.Card), Shadow = Elevation.Flyout, ClipToBounds = true,
-            // Frosted in-app acrylic backdrop (WaveeMusic's AcrylicInAppFill) — opaque enough that the rows don't bleed through.
-            Acrylic = Tok.AcrylicFlyout, BorderWidth = 1f, BorderColor = Tok.StrokeFlyoutDefault,
-            Children =
-            [
-                new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Children = thumbs.ToArray() },
-                new TextEl(Strings.Detail.SelectedCount(count)) { Size = 13f, Weight = 600, Color = Tok.TextPrimary },
-                Divider(),
-                ActionBtn(Icons.Play, Loc.Get(Strings.Detail.Play), () => { var s = Sel(); if (svc is not null && s.Count > 0) { _ = svc.Player.PlayTrackAsync(s[0]); for (int i = 1; i < s.Count; i++) _ = svc.Player.EnqueueAsync(s[i]); _sel.DeselectAll(); } }),
-                ActionBtn(Icons.Next, Loc.Get(Strings.Detail.PlayNext), () =>
-                {
-                    var s = Sel();
-                    if (svc is not null && s.Count > 0)
-                    {
-                        int n = DetailQueueActions.PlayNext(svc.Player, s, s.Count);
-                        if (n > 0) Toasts.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), ToastSeverity.Success);
-                        _sel.DeselectAll();
-                    }
-                }),
-                ActionBtn(Icons.Queue, Loc.Get(Strings.Detail.AddToEndOfQueue), () => { var s = Sel(); if (svc is not null && s.Count > 0) { int n = DetailQueueActions.AddToEnd(svc.Player, s, s.Count); if (n > 0) Toasts.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), ToastSeverity.Success); _sel.DeselectAll(); } }),
-                ActionBtn(Icons.Add, Loc.Get(Strings.Detail.AddToPlaylist), () => { var s = Sel(); if (lib is not null && s.Count > 0) { var (uri, name) = lib.AddToDefaultPlaylist(s); Toasts.Show(Strings.Detail.AddedToPlaylist(name), ToastSeverity.Success); _sel.DeselectAll(); } }),
-                Divider(),
-                ActionBtn(Icons.Accept, Loc.Get(Strings.Detail.SelectAll), SelectAllTracks),
-                RoundBtn(Icons.Cancel, () => _sel.DeselectAll()),   // Clear selection
-            ],
-        };
-    }
-
-    // The currently-selected tracks (display order), resolved through the row→track map — for the batch actions.
-    int SelectedTrackCount()
-    {
-        int count = 0;
-        for (int i = 0; i < _sel.ItemCount; i++) if (_sel.IsSelected(i) && _trackAt(i) is not null) count++;
-        return count;
-    }
-
-    void SelectAllTracks()
-    {
-        int first = -1, last = -1;
-        for (int i = 0; i < _sel.ItemCount; i++)
-        {
-            if (_trackAt(i) is null) continue;
-            if (first < 0) first = i;
-            last = i;
+            bool next = !on;
+            if (!next) _selection.ClearSelection();
+            _setMode(next);
         }
-        if (first < 0) return;
-        _sel.DeselectAll();
-        _sel.SelectRange(first, last);
+        string label = Loc.Get(Strings.Detail.Select);
+        return _labeled
+            ? ToolFx.LabeledButton(Icons.MultiSelect, label, on, Toggle, static _ => { })
+            : ToolTip.Wrap(ToolFx.Button(Icons.MultiSelect, on, Toggle, static _ => { }), label);
     }
-
-    List<Track> Sel()
-    {
-        var list = new List<Track>();
-        for (int i = 0; i < _sel.ItemCount; i++) if (_sel.IsSelected(i) && _trackAt(i) is { } t) list.Add(t);
-        return list;
-    }
-
-    static Element Thumb(Track t, int i) => new BoxEl
-    {
-        Width = 32f, Height = 32f, Shrink = 0f, Corners = CornerRadius4.All(6f), ClipToBounds = true,
-        Margin = new Edges4(i == 0 ? 0f : -14f, 0f, 0f, 0f),       // overlap → stacked
-        BorderWidth = 2f, BorderColor = Tok.FillCardSecondary,     // a ring in the bar's own colour separates the stack
-        Children = [Surfaces.Artwork(t.Image, t.Id.GetHashCode() & 0x7fffffff, 32f, 32f, 6f)],
-    };
-
-    static Element Divider() => new BoxEl { Width = 1f, Height = 22f, Fill = Tok.StrokeDividerDefault, Margin = new Edges4(WaveeSpace.XS, 0f, WaveeSpace.XS, 0f) };
-
-    static Element ActionBtn(string glyph, string label, Action onClick) => new BoxEl
-    {
-        Direction = 0, Height = 36f, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S,
-        Padding = new Edges4(WaveeSpace.M, 0f, WaveeSpace.M, 0f), Corners = CornerRadius4.All(18f),
-        HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary, OnClick = onClick,
-        Children = [Icon(glyph, 14f, Tok.TextSecondary), new TextEl(label) { Size = 13f, Weight = 600, Color = Tok.TextSecondary }],
-    };
-
-    static Element RoundBtn(string glyph, Action onClick) => new BoxEl
-    {
-        Width = 36f, Height = 36f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Corners = CornerRadius4.All(18f),
-        HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary, OnClick = onClick,
-        Children = [Icon(glyph, 13f, Tok.TextSecondary)],
-    };
 }
 
 // The sort-direction caret: pops in (scale + fade) when its column becomes the active sort, and springs its rotation

@@ -79,6 +79,8 @@
     <Compile Include="..\Wavee\Components\MembershipDiff.cs" />
     <!-- detail layout breakpoint hysteresis (Wavee.Core + BCL only) — DetailLayoutBreakpointTests -->
     <Compile Include="..\Wavee\Features\Detail\DetailLayoutBreakpoints.cs" />
+    <!-- the activity-undo executor (engine-free: IUndoTarget + IMusicLibrary + ActivityLog) — ActivityUndoTests drive it -->
+    <Compile Include="..\Wavee\App\ActivityUndo.cs" />
     <!-- artist hero height response (Wavee.Core + BCL only) — ArtistHeroLayoutTests -->
     <Compile Include="..\Wavee\Features\Detail\ArtistHeroLayout.cs" />
     <!-- the live music-video data service (Backend-only deps), source-included so VideoAssociationTests can drive it -->
@@ -86,6 +88,9 @@
     <Compile Include="..\Wavee\SpotifyLive\SpotifyUserProfileService.cs" />
     <!-- the live presence/friend-activity feed (Backend + Wavee.Core deps only) — FriendActivityServiceTests drive it -->
     <Compile Include="..\Wavee\SpotifyLive\SpotifyFriendActivityService.cs" />
+    <!-- the live notification feeds (gander + what's-new) — Gander/WhatsNew tests drive them -->
+    <Compile Include="..\Wavee\SpotifyLive\SpotifyNotificationsService.cs" />
+    <Compile Include="..\Wavee\SpotifyLive\SpotifyWhatsNewService.cs" />
     <Compile Include="..\Wavee\SpotifyLive\PathfinderClient.cs" />
     <Compile Include="..\Wavee\SpotifyLive\PathfinderResource.cs" />
     <!-- audio resilience surfaces (all protobuf-free) source-included so the key-resolver / provisioner / IPC-manager

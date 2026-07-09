@@ -133,4 +133,7 @@ public static class PathfinderOps
     public const string SimilarAlbumsBasedOnThisTrackHash = "1d1f93a737498adca2c892c73af87fc0b052afe4e1a33c989540c32413dfae17";
     public const string GetTrack = "getTrack";
     public const string GetTrackHash = "612585ae06ba435ad26369870deaae23b5c8800a256cd8a57e08eddc25a37294";
+
+    public const string QueryWhatsNewFeed = "queryWhatsNewFeed";
+    public const string QueryWhatsNewFeedHash = "d889c8c936ab192af8ced595427f5ba2acdf63478fdc0a181c8d477f8322630e";
 }

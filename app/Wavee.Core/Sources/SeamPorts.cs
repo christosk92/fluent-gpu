@@ -73,6 +73,7 @@ public interface IMutationSource : ISource
 /// Local <c>wavee:playlist:*</c> playlists are handled by <see cref="UserPlaylistSource"/> instead.</summary>
 public interface IPlaylistMutationSource
 {
+    Task<string> CreatePlaylistAsync(string name, CancellationToken ct = default);
     Task AddTracksAsync(string playlistUri, IReadOnlyList<Track> tracks, CancellationToken ct = default);
     Task RemoveRowsAsync(string playlistUri, IReadOnlyList<PlaylistRowRef> rows, CancellationToken ct = default);
     Task MoveRowsAsync(string playlistUri, IReadOnlyList<PlaylistRowRef> rows, int toIndex, CancellationToken ct = default);

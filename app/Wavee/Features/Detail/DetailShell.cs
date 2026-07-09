@@ -30,7 +30,8 @@ readonly record struct DetailHandlers(
     // A 1-element cell the TrackList fills with "play the VISIBLE (sorted/filtered) order from the top"; the rail's big
     // Play late-binds through it (null until the list mounts → falls back to Play(0)). Optional so other constructions
     // (LibraryPage) compile unchanged.
-    Action?[]? PlayAllOverride = null);
+    Action?[]? PlayAllOverride = null,
+    IReadSignal<bool>? MultiSelect = null, Action<bool>? SetMultiSelect = null);
 
 // The two-column detail scaffold (mounted only once data is Ready, so its lifecycle = the loaded page's lifecycle).
 // Owns: the art-derived backdrop wash + accent, the page-scoped Mica tint (set/cleared through the activation
@@ -56,6 +57,7 @@ sealed class DetailShell : Component
     readonly Signal<string> _query = new("");                    // filter search query (transient — clears on navigation)
     readonly Signal<TrackFilterFlags> _filterFlags = new(TrackFilterFlags.None);   // quick-filter toggles (transient)
     readonly Signal<int> _density = new(1);                      // row density 0..3 (app-wide, persisted)
+    readonly Signal<bool> _multiSelect = new(false);             // ephemeral multi-select mode (clears on navigation)
 
     public DetailShell(Signal<Route> route, Loadable<DetailModel> model, Image? fallbackCover = null)
     { _route = route; _model = model; _fallbackCover = fallbackCover; }
@@ -196,6 +198,7 @@ sealed class DetailShell : Component
             // clear the transient search/quick-filters so they never bleed across pages.
             _query.Value = "";
             _filterFlags.Value = TrackFilterFlags.None;
+            _multiSelect.Value = false;
             if (settings is null) { _sort.Value = _defaultSort; return; }
             int col = settings.Get(SortColKey());   // −1 sentinel = never chosen → the per-kind default (Liked: DateAdded desc)
             _sort.Value = col < 0 ? _defaultSort : new TrackSort((SortColumn)col, settings.Get(SortDescKey()));
@@ -216,7 +219,8 @@ sealed class DetailShell : Component
             _query, _filterFlags, f => _filterFlags.Value = f, _density, SetDensity, PlayNext, AddToQueue, AddToPlaylist,
             a => DetailNav.OpenAlbum(navPreview, morph, go, a),
             p => DetailNav.OpenPlaylist(navPreview, morph, go, p),
-            playAllOverride);
+            playAllOverride,
+            MultiSelect: _multiSelect, SetMultiSelect: v => _multiSelect.Value = v);
 
         // Viewport-size context signal — resolved UNCONDITIONALLY here (rules of hooks): the positional-hook cursor must
         // see the SAME hook sequence on every render, but the branches below differ (single-column / vertical / two-column),

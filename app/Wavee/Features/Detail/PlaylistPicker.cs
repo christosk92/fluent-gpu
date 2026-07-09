@@ -12,10 +12,9 @@ using static FluentGpu.Dsl.Ui;
 namespace Wavee;
 
 // The "Copy to playlist" / "Add to playlist" affordance: a standard button that opens an anchored, light-dismissable
-// flyout with a search box + cover thumbnails, listing the user's EDITABLE playlists (owned + collaborator) plus a
-// "New playlist" entry. Picking one adds THIS context's tracks and confirms with the existing success toast. Replaces
-// the old silent "dump into a default My Playlist" path. Modelled on WaveeSidebar.SidebarCreateButton (the anchored
-// Overlay.Service flyout) + FlyoutButton's standard-button chrome.
+// flyout with a search box + cover thumbnails, listing the user's EDITABLE Spotify playlists (owned + collaborator) plus a
+// "New playlist" entry that creates a REAL playlist over the wire. Modelled on WaveeSidebar.SidebarCreateButton (the
+// anchored Overlay.Service flyout) + FlyoutButton's standard-button chrome.
 
 /// <summary>The anchored trigger button. Opens <see cref="PlaylistPickerPanel"/> below-left via the shared overlay
 /// service; re-click / Escape / click-outside dismiss. Remount per context (a <c>Key</c> at the call site) so
@@ -43,8 +42,6 @@ public sealed class PlaylistPickerButton : Component
             handle.Value.ClosedAction = () => handle.Value = null;
         }
 
-        // Standard-button chrome (1:1 with FlyoutButton / Button.Standard: ControlAll corners, elevation border, the
-        // three control fills, 11,5,11,6 padding, 32 min height).
         return new BoxEl
         {
             Direction = 0,
@@ -67,8 +64,7 @@ public sealed class PlaylistPickerButton : Component
 }
 
 /// <summary>The flyout content: a live search field + a "New playlist" row + the scrollable list of editable playlists.
-/// Runs inside the open thunk, so it mounts fresh each open (always the current list). Picking a row (or "New playlist")
-/// adds the tracks, dismisses, and shows the success toast with an "Open" action that navigates to the playlist.</summary>
+/// Runs inside the open thunk, so it mounts fresh each open (always the current list).</summary>
 public sealed class PlaylistPickerPanel : Component
 {
     public required Func<IReadOnlyList<Track>> GetTracks;
@@ -82,12 +78,11 @@ public sealed class PlaylistPickerPanel : Component
         store?.EnsurePlaylists();
 
         var query = UseSignal("");
-        string q = query.Value;                                                          // subscribe → re-filter on each keystroke
-        var pls = store?.Playlists.Value.Value ?? Array.Empty<PlaylistSummary>();        // subscribe → the live playlist list
+        string q = query.Value;
+        var pls = store?.Playlists.Value.Value ?? Array.Empty<PlaylistSummary>();
         var getTracks = GetTracks;
         var close = Close;
 
-        // Add THIS context's tracks to an existing editable playlist, then confirm + dismiss.
         void AddTo(string uri, string name)
         {
             if (lib is null) return;
@@ -97,24 +92,33 @@ public sealed class PlaylistPickerPanel : Component
                 actionLabel: Loc.Get(Strings.Detail.GoToPlaylist), onAction: () => go?.Invoke("pl:" + uri, name));
         }
 
-        // Create a new playlist, add the tracks, then confirm + dismiss.
         void CreateAndAdd()
         {
             if (lib is null) return;
             string name = Loc.Get(Strings.Detail.NewPlaylist);
-            string uri = lib.CreatePlaylist(name);
-            _ = lib.AddTracksAsync(uri, getTracks());
-            close();
-            Toasts.Show(Strings.Detail.AddedToPlaylist(name), ToastSeverity.Success,
-                actionLabel: Loc.Get(Strings.Detail.GoToPlaylist), onAction: () => go?.Invoke("pl:" + uri, name));
+            _ = Run();
+            async System.Threading.Tasks.Task Run()
+            {
+                try
+                {
+                    string uri = await lib.CreatePlaylistAsync(name).ConfigureAwait(false);
+                    await lib.AddTracksAsync(uri, getTracks()).ConfigureAwait(false);
+                    close();
+                    Toasts.Show(Strings.Detail.AddedToPlaylist(name), ToastSeverity.Success,
+                        actionLabel: Loc.Get(Strings.Detail.GoToPlaylist), onAction: () => go?.Invoke("pl:" + uri, name));
+                }
+                catch (Exception ex)
+                {
+                    Toasts.Show(ex.Message, ToastSeverity.Critical);
+                }
+            }
         }
 
-        // Editable playlists only (owned + collaborator), filtered by the case-insensitive query.
         var rows = new List<Element>(pls.Count);
         for (int i = 0; i < pls.Count; i++)
         {
             var p = pls[i];
-            if (!p.CanEdit) continue;
+            if (!IsRealPlaylist(p.Uri) || !p.CanEdit) continue;
             if (q.Length > 0 && p.Name.IndexOf(q, StringComparison.OrdinalIgnoreCase) < 0) continue;
             rows.Add(PlaylistRow(p, () => AddTo(p.Uri, p.Name)));
         }
@@ -147,7 +151,23 @@ public sealed class PlaylistPickerPanel : Component
         };
     }
 
-    // A "New playlist" row: a ＋ tile (matching the 40px cover thumbnails) + label. Creates + adds on click.
+    static bool IsRealPlaylist(string uri) => uri.StartsWith("spotify:playlist:", StringComparison.Ordinal);
+
+    static Image? CoverOf(PlaylistSummary p)
+    {
+        if (p.Cover is { } c) return c;
+        if (p.MosaicTiles is { Count: > 0 } tiles)
+            return tiles.Count >= 4 ? new Image("", MosaicTiles: tiles) : new Image(tiles[0]);
+        return null;
+    }
+
+    static int SeedFrom(string uri)
+    {
+        int h = 17;
+        for (int i = 0; i < uri.Length; i++) h = h * 31 + uri[i];
+        return h & 0x7fffffff;
+    }
+
     static Element NewPlaylistRow(Action onClick) => new BoxEl
     {
         Direction = 0, Height = 44f, AlignItems = FlexAlign.Center, Gap = 10f,
@@ -166,7 +186,6 @@ public sealed class PlaylistPickerPanel : Component
         ],
     };
 
-    // One playlist row: cover thumbnail + name (+ "Collaborator" caption when the user can edit but doesn't own it).
     static Element PlaylistRow(PlaylistSummary p, Action onClick) => new BoxEl
     {
         Key = p.Uri,
@@ -176,7 +195,7 @@ public sealed class PlaylistPickerPanel : Component
         Role = AutomationRole.Button, OnClick = onClick,
         Children =
         [
-            Surfaces.Artwork(p.Cover, 0, 40f, 40f, 6f),
+            Surfaces.Artwork(CoverOf(p), SeedFrom(p.Uri), 40f, 40f, 6f, decodePx: 80),
             new BoxEl { Direction = 1, Grow = 1f, Gap = 1f, Children = NameColumn(p) },
         ],
     };

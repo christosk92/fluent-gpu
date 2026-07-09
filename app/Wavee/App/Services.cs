@@ -92,6 +92,17 @@ public sealed class Services
     public LibraryBridge LibraryBridge { get; }
     /// <summary>The friends-feed facet bridge (presence snapshot → engine Signals). Read via <see cref="FriendsBridge.Slot"/>.</summary>
     public FriendsBridge FriendsBridge { get; }
+    /// <summary>The local activity log (library-mutation history + Undo source). Durable (SQLite) on real, in-memory on fake.</summary>
+    public ActivityLog Activity { get; }
+    /// <summary>Spotify social notifications (gander). Stable wrapper; the live provider is installed after login, offline/fake
+    /// it is the permanently-offline <see cref="NullSpotifyNotificationsService"/>.</summary>
+    public SwitchableSpotifyNotificationsService SpotifyNotifications { get; }
+    /// <summary>"What's New" (new releases/episodes from followed artists). Stable wrapper; live provider installed after login.</summary>
+    public SwitchableWhatsNewService WhatsNew { get; }
+    /// <summary>The app-update seam. App-scoped → no switchable; the Null stub is permanent until a real updater ships.</summary>
+    public IAppUpdateService AppUpdate { get; }
+    /// <summary>The notification-center bridge (four categories → one aggregated feed + bell badge). Read via <see cref="NotificationCenterBridge.Slot"/>.</summary>
+    public NotificationCenterBridge Notifications { get; }
     /// <summary>The root library cache (collections + per-entity detail caches) for instant, off-page-fresh navigation.</summary>
     public LibraryStore LibraryStore { get; }
     /// <summary>Persisted app settings (sidebar width, etc.) — read/written through the interface + typed keys, never the
@@ -104,7 +115,7 @@ public sealed class Services
 
     Services(IWaveeLog log, ISpotifySession session, IMusicLibrary library,
              IPlaybackPlayer player, IConnectDevices devices, ILyricsProvider lyrics, IAppSettings settings, IMutationSource mutations,
-             UserPlaylistSource userPlaylists, IPlaylistMutationSource playlistEdits)
+             UserPlaylistSource userPlaylists, IPlaylistMutationSource playlistEdits, IActivityStore activityStore)
     {
         Log = log;
         Session = session;
@@ -119,8 +130,15 @@ public sealed class Services
         Friends = new SwitchableFriendActivityService(new NullFriendActivityService());
         Settings = settings;
         Playback = new PlaybackBridge(player, devices, session);
-        LibraryBridge = new LibraryBridge(mutations, userPlaylists, playlistEdits);
+        Activity = new ActivityLog(activityStore);
+        LibraryBridge = new LibraryBridge(mutations, userPlaylists, playlistEdits, Activity);
         FriendsBridge = new FriendsBridge(Friends);
+        // Notification center: the four category sources + the aggregation bridge (the friend-activity seam pattern).
+        SpotifyNotifications = new SwitchableSpotifyNotificationsService(new NullSpotifyNotificationsService());
+        WhatsNew = new SwitchableWhatsNewService(new NullWhatsNewService());
+        AppUpdate = new NullAppUpdateService();
+        Notifications = new NotificationCenterBridge(Activity, SpotifyNotifications, WhatsNew, AppUpdate, settings,
+            new ActivityUndoExecutor(LibraryBridge, library, Activity));
         LibraryStore = new LibraryStore(library, mutations, userPlaylists, library as ICollectionEvents);
         // Wire the detail caches as a sheddable arena (priority 2 = shed under MODERATE+ pressure, so at-rest A→B→A stays
         // instant; the LRU insert-cap already bounds steady state). The entity-store "unpinned drop" (priority 3/4) is the
@@ -170,7 +188,7 @@ public sealed class Services
             session,                           // Session (auth / account / market)
         });
         var library = new AggregateCatalog(registry);
-        var svc = new Services(WaveeLog.Instance, session, library, player, devices, new NoLyricsProvider(), settings, mutations, userPlaylists, playlistEdits);
+        var svc = new Services(WaveeLog.Instance, session, library, player, devices, new NoLyricsProvider(), settings, mutations, userPlaylists, playlistEdits, new InMemoryActivityStore());
         player.OnPlayIntentRejected = () => svc.Playback.NotifyLocalPlaybackUnsupported();   // any play intent → the standard toast
         svc.Log.Info("app", "Services created (sources: spotify-export, local-files, user-playlists, podcasts, fake + session facet; playback remote-only; mutations: saved-state + playlists)");
         return svc;
@@ -218,6 +236,7 @@ public sealed class Services
         // and the user-created playlists source (owns wavee:playlist:*).
         var storeLibrary = new Wavee.Backend.Library.StoreLibrarySource(store);
         var userPlaylists = new UserPlaylistSource();
+        userPlaylists.ExposeInCatalog = false;
         var playlistMutations = new Wavee.Backend.Playlists.PlaylistMutationSource(
             mutEngine, mutTransport, new Wavee.Backend.Spotify.HttpClientExchange(), () => sessionHost.Current,
             () => spclientBaseUrl.Value, userPlaylists, store);
@@ -239,7 +258,7 @@ public sealed class Services
         var swDevices = new Wavee.Backend.SwitchableDevices(devices);
         var swSession = new Wavee.Backend.SwitchableSession(session);
         var swLyrics = new Wavee.Backend.SwitchableLyrics(new NoLyricsProvider());   // swapped to the real AggregatingLyricsProvider on live login
-        var svc = new Services(WaveeLog.Instance, swSession, library, swPlayer, swDevices, swLyrics, settings, mutations, userPlaylists, playlistMutations);
+        var svc = new Services(WaveeLog.Instance, swSession, library, swPlayer, swDevices, swLyrics, settings, mutations, userPlaylists, playlistMutations, new Wavee.Backend.Persistence.SqliteActivityStore(accountDbPath));
         player.OnPlayIntentRejected = () => svc.Playback.NotifyLocalPlaybackUnsupported();   // pre-go-live: play intents show the "choose a remote device" toast
         svc.RealStore = store;
         svc.RealLibrarySource = storeLibrary;
@@ -293,6 +312,8 @@ public sealed class Services
         (Lyrics as Wavee.Backend.SwitchableLyrics)?.SetInner(new NoLyricsProvider());   // no lyrics until the next live login
         UserProfiles.SetInner(new NullUserProfileService());
         Friends.SetInner(new NullFriendActivityService());   // presence feed back offline until the next live login
+        SpotifyNotifications.SetInner(new NullSpotifyNotificationsService());   // gander + what's-new feeds back offline
+        WhatsNew.SetInner(new NullWhatsNewService());
         MutTransport?.SetInner(new Wavee.Backend.StubTransport());   // writes return to the inert stub (queue in the durable outbox, replay on next login)
         if (RealMutationSource is { } mutSrc) mutSrc.ScheduleDrain = null;   // back to inline drains — the loop is torn down with the host
         if (RealPlaylistMutations is { } pmSrc)

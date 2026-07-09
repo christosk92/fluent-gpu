@@ -1,0 +1,560 @@
+using System;
+using System.Collections.Generic;
+using System.Threading;
+using FluentGpu.Controls;
+using FluentGpu.Dsl;
+using FluentGpu.Foundation;
+using FluentGpu.Hooks;
+using FluentGpu.Localization;
+using FluentGpu.Scene;
+using FluentGpu.Signals;
+using Wavee.Core;
+using static FluentGpu.Dsl.Ui;
+
+namespace Wavee;
+
+// ── The toolbar bell → notification center ────────────────────────────────────────────────────────────────────────────
+// Replaces the dead BellButton: an unread badge over the bell, opening an anchored flyout (ProfileMenu / NavHistoryButton
+// pattern) with the four-category notification panel. Reads NotificationCenterBridge for the reactive snapshot + badge.
+sealed class NotificationBell : Component
+{
+    readonly IconButton.Style _style;
+    public NotificationBell(IconButton.Style style) => _style = style;
+
+    public override Element Render()
+    {
+        var nc = UseContext(NotificationCenterBridge.Slot);
+        var overlay = UseContext(Overlay.Service);
+        var anchor = UseRef<NodeHandle>(default);
+        var handle = UseRef<OverlayHandle?>(null);
+
+        int unread = nc?.UnreadCount.Value ?? 0;   // subscribe → badge tracks the count
+
+        void Open()
+        {
+            if (nc is null) return;
+            if (handle.Value is { IsOpen: true } h) { h.Close(); return; }
+            handle.Value = overlay.Open(
+                () => anchor.Value,
+                () => Embed.Comp(() => new NotificationPanel()),
+                FlyoutPlacement.BottomEdgeAlignedRight,
+                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss, Chrome: PopupChrome.Popup)
+                {
+                    ConstrainToRootBounds = false,
+                });
+            handle.Value.ClosedAction = () => handle.Value = null;
+            nc.OnPanelOpened();
+        }
+
+        var button = IconButton.Create(Mdl.Bell, Open, _style) with { OnRealized = h => anchor.Value = h };
+        if (unread <= 0) return button;
+
+        return new BoxEl
+        {
+            ZStack = true, Width = 36f, Height = 32f,
+            Children =
+            [
+                button,
+                // full-size overlay so the unread pill floats at the top-right of the button (the original shape)
+                new BoxEl
+                {
+                    Width = 36f, Height = 32f, Direction = 1, Justify = FlexJustify.Start, HitTestVisible = false,
+                    Children = [ new BoxEl { Direction = 0, Justify = FlexJustify.End, Children = [ InfoBadge.Count(unread) ] } ],
+                },
+            ],
+        };
+    }
+}
+
+// ── The panel content (flyout body) ──────────────────────────────────────────────────────────────────────────────────
+sealed class NotificationPanel : Component
+{
+    const float Width = 380f;
+    const int TickMs = 30_000;
+
+    Timer? _timer;
+    int _timerGeneration;
+
+    public override Element Render()
+    {
+        var nc = UseContext(NotificationCenterBridge.Slot);
+        var go = UseContext(HistoryStore.NavCtx);
+        var svc = UseContext(Services.Slot);
+        var post = UsePost();
+        var expanded = UseSignal<long>(-1);
+
+        // 30-second ticker so relative times advance while the panel is open (FriendsPanel / LyricsTicker pattern).
+        UseSignalEffect(() =>
+        {
+            if (nc is null) return;
+            int generation = Interlocked.Increment(ref _timerGeneration);
+            var timer = new Timer(_ => post(() =>
+            {
+                if (Volatile.Read(ref _timerGeneration) == generation) nc.NowTick.Value = nc.NowTick.Peek() + 1;
+            }), null, TickMs, TickMs);
+            _timer = timer;
+            Reactive.OnCleanup(() =>
+            {
+                Interlocked.Increment(ref _timerGeneration);
+                if (ReferenceEquals(_timer, timer)) _timer = null;
+                timer.Dispose();
+            });
+        });
+
+        if (nc is null) return new BoxEl { Width = Width };
+
+        var all = nc.Items.Value;               // subscribe → re-render on any push/rebuild
+        var filter = nc.Filter.Value;           // subscribe → re-render on filter change
+        _ = nc.NowTick.Value;                   // subscribe → relative times advance
+        long expandedId = expanded.Value;
+        long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        var rows = new List<Element>(all.Count);
+        foreach (var n in all)
+        {
+            if (filter is { } f && n.Category != f) continue;
+            rows.Add(RowFor(n, now, nc, go, svc, expanded, expandedId));
+        }
+
+        Element body = rows.Count > 0
+            ? new ScrollEl
+            {
+                MaxHeight = 460f, ContentSized = true, AutoEdgeFade = true, ScrollKey = "notifications",
+                Content = new BoxEl { Direction = 1, Width = Width, Padding = new Edges4(6f, 4f, 6f, 8f), Gap = 2f, Children = rows.ToArray() },
+            }
+            : EmptyState(filter);
+
+        return new BoxEl
+        {
+            Direction = 1, Width = Width, MinWidth = Width, MaxHeight = 520f,
+            Children = [ Header(nc, filter), FilterPills(nc, filter), body ],
+        };
+    }
+
+    // ── header ───────────────────────────────────────────────────────────────────────────────────────────────────────
+    static Element Header(NotificationCenterBridge nc, NotificationCategory? filter)
+    {
+        var actions = new List<Element>(2)
+        {
+            LinkButton(Loc.Get(Strings.Notifications.MarkAllRead), nc.MarkAllRead),
+        };
+        if (filter == NotificationCategory.Activity)
+            actions.Add(LinkButton(Loc.Get(Strings.Notifications.Clear), nc.ClearActivity));
+
+        return new BoxEl
+        {
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = 8f, Padding = new Edges4(14f, 12f, 8f, 8f),
+            Children =
+            [
+                new TextEl(Loc.Get(Strings.Notifications.Title)) { Size = 15f, Weight = 700, Color = Tok.TextPrimary, Grow = 1f },
+                ..actions,
+            ],
+        };
+    }
+
+    static Element FilterPills(NotificationCenterBridge nc, NotificationCategory? filter)
+    {
+        Element Pill(string label, NotificationCategory? cat) => new BoxEl
+        {
+            Shrink = 0f, MinHeight = 26f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Padding = new Edges4(11f, 3f, 11f, 3f), Corners = CornerRadius4.All(13f),
+            Fill = filter == cat ? Tok.AccentDefault : Tok.FillSubtleSecondary,
+            HoverFill = filter == cat ? Tok.AccentSecondary : WaveeColors.RowHover,
+            Role = AutomationRole.Button, Cursor = CursorId.Hand, Focusable = true,
+            OnClick = () => nc.SetFilter(cat),
+            Children = [ new TextEl(label) { Size = 12f, Weight = 600, Color = filter == cat ? Tok.TextOnAccentPrimary : Tok.TextSecondary } ],
+        };
+
+        return new BoxEl
+        {
+            Direction = 0, Gap = 6f, Padding = new Edges4(12f, 2f, 12f, 8f),
+            Children =
+            [
+                Pill(Loc.Get(Strings.Notifications.Filter.All), null),
+                Pill(Loc.Get(Strings.Notifications.Filter.Updates), NotificationCategory.AppUpdate),
+                Pill(Loc.Get(Strings.Notifications.Filter.Spotify), NotificationCategory.Social),
+                Pill(Loc.Get(Strings.Notifications.Filter.New), NotificationCategory.NewRelease),
+                Pill(Loc.Get(Strings.Notifications.Filter.Activity), NotificationCategory.Activity),
+            ],
+        };
+    }
+
+    // ── row dispatch ─────────────────────────────────────────────────────────────────────────────────────────────────
+    static Element RowFor(WaveeNotification n, long now, NotificationCenterBridge nc, Action<string, string?>? go,
+        Services? svc, Signal<long> expanded, long expandedId) => n switch
+    {
+        AppUpdateNotification u => Card("ntf:" + u.Id, UpdateRow(u, svc), n.IsUnread, null),
+        SocialNotification s    => Card("ntf:" + s.Id, SocialRow(s, now, go), n.IsUnread, () => ClickSocial(s, go)),
+        NewReleaseNotification r => Card("ntf:" + r.Id, NewReleaseRow(r), n.IsUnread, () => ClickRelease(r, go)),
+        ActivityNotification a  => ActivityCard(a, now, nc, expanded, expandedId),
+        _ => new BoxEl(),
+    };
+
+    // A generic clickable row frame with an optional unread dot.
+    static Element Card(string key, Element content, bool unread, Action? onClick) => new BoxEl
+    {
+        Key = key,
+        Direction = 0, AlignItems = FlexAlign.Center, Gap = 10f, MinHeight = 56f,
+        Padding = new Edges4(10f, 8f, 10f, 8f), Corners = CornerRadius4.All(8f),
+        HoverFill = onClick is not null ? WaveeColors.RowHover : ColorF.Transparent,
+        PressedFill = onClick is not null ? WaveeColors.RowPressed : ColorF.Transparent,
+        Role = onClick is not null ? AutomationRole.Button : AutomationRole.None,
+        Cursor = onClick is not null ? CursorId.Hand : CursorId.Arrow,
+        Focusable = onClick is not null,
+        OnClick = onClick,
+        Enter = new EnterExit(Dy: 6f, Opacity: 0f, Active: true),
+        Exit = new EnterExit(Dy: -4f, Opacity: 0f, Active: true),
+        Layout = LayoutTransition.Slide,
+        Children = [ content, UnreadDot(unread) ],
+    };
+
+    static Element UnreadDot(bool unread) => unread
+        ? new BoxEl { Width = 8f, Height = 8f, Shrink = 0f, Corners = CornerRadius4.All(4f), Fill = Tok.AccentDefault }
+        : new BoxEl { Width = 8f, Shrink = 0f };
+
+    // ── app update ───────────────────────────────────────────────────────────────────────────────────────────────────
+    static Element UpdateRow(AppUpdateNotification u, Services? svc)
+    {
+        var (glyph, tint, title, body) = u.State switch
+        {
+            AppUpdateState.Available  => (Icons.Download, Tok.AccentDefault, Loc.Get(Strings.Notifications.Update.AvailableTitle), Strings.Notifications.Update.AvailableBody(u.Version ?? "")),
+            AppUpdateState.Downloaded => (Icons.Refresh, Tok.AccentDefault, Loc.Get(Strings.Notifications.Update.DownloadedTitle), Loc.Get(Strings.Notifications.Update.DownloadedBody)),
+            AppUpdateState.Completed  => (Icons.StatusSuccess, Tok.SystemFillSuccess, Loc.Get(Strings.Notifications.Update.CompletedTitle), Strings.Notifications.Update.CompletedBody(u.Version ?? "")),
+            AppUpdateState.Failed     => (Icons.StatusError, Tok.SystemFillCritical, Loc.Get(Strings.Notifications.Update.FailedTitle), u.Error ?? ""),
+            _ => (Icons.StatusInfo, Tok.TextSecondary, "", ""),
+        };
+
+        var actions = new List<Element>(2);
+        var up = svc?.AppUpdate;
+        switch (u.State)
+        {
+            case AppUpdateState.Available:
+                actions.Add(PillButton(Loc.Get(Strings.Notifications.Update.Download), () => { if (up is not null) _ = up.DownloadAsync(CancellationToken.None); }, accent: true));
+                break;
+            case AppUpdateState.Downloaded:
+                actions.Add(PillButton(Loc.Get(Strings.Notifications.Update.Restart), () => up?.RestartToApply(), accent: true));
+                break;
+            case AppUpdateState.Completed:
+                actions.Add(PillButton(Loc.Get(Strings.Notifications.Update.SeeWhatsNew), () =>
+                {
+                    if (u.ReleaseNotesUrl is { Length: > 0 } url) LoginView.OpenUrl(url);
+                    up?.Acknowledge();
+                }, accent: true));
+                actions.Add(PillButton(Loc.Get(Strings.Notifications.Update.Dismiss), () => up?.Acknowledge(), accent: false));
+                break;
+            case AppUpdateState.Failed:
+                actions.Add(PillButton(Loc.Get(Strings.Notifications.Update.Retry), () => { if (up is not null) _ = up.CheckAsync(CancellationToken.None); }, accent: true));
+                actions.Add(PillButton(Loc.Get(Strings.Notifications.Update.Dismiss), () => up?.Acknowledge(), accent: false));
+                break;
+        }
+
+        return new BoxEl
+        {
+            Direction = 0, Grow = 1f, Basis = 0f, Gap = 10f, AlignItems = FlexAlign.Start,
+            Children =
+            [
+                GlyphChip(glyph, tint),
+                new BoxEl
+                {
+                    Direction = 1, Grow = 1f, Basis = 0f, Gap = 3f,
+                    Children =
+                    [
+                        new TextEl(title) { Size = 13.5f, Weight = 700, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                        body.Length > 0 ? new TextEl(body) { Size = 12f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, MaxLines = 3 } : new BoxEl(),
+                        actions.Count > 0 ? new BoxEl { Direction = 0, Gap = 6f, Margin = new Edges4(0f, 4f, 0f, 0f), Children = actions.ToArray() } : new BoxEl(),
+                    ],
+                },
+            ],
+        };
+    }
+
+    // ── social ───────────────────────────────────────────────────────────────────────────────────────────────────────
+    static Element SocialRow(SocialNotification s, long now, Action<string, string?>? go)
+    {
+        var textKids = new List<Element>(2)
+        {
+            new TextEl(s.Title) { Size = 13f, Color = Tok.TextPrimary, Wrap = TextWrap.Wrap, MaxLines = 2 },
+        };
+        if (s.Timestamp > 0)
+            textKids.Add(new TextEl(RelTime(now - s.Timestamp)) { Size = 11f, Weight = 600, Color = Tok.TextTertiary });
+
+        return new BoxEl
+        {
+            Direction = 0, Grow = 1f, Basis = 0f, Gap = 10f, AlignItems = FlexAlign.Center,
+            Children =
+            [
+                new BoxEl
+                {
+                    Width = 40f, Height = 40f, Shrink = 0f, Corners = CornerRadius4.All(20f), ClipToBounds = true,
+                    Children = [ Surfaces.Artwork(ImageOf(s.ImageUrl), (s.Id.GetHashCode() & 0x7fffffff), 40f, 40f, 20f) ],
+                },
+                new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Gap = 2f, Children = textKids.ToArray() },
+            ],
+        };
+    }
+
+    static void ClickSocial(SocialNotification s, Action<string, string?>? go)
+    {
+        if (s.ActionType == SocialActionType.Navigate && s.ActionUri is { } uri && RichText.RouteForUri(uri) is { } route)
+        {
+            go?.Invoke(route, null);
+            return;
+        }
+        // NAVIGATE_WEBVIEW or an unroutable uri (user / concert) → open the web page.
+        string? web = WebUrlFor(s.ActionUri);
+        if (web is not null) LoginView.OpenUrl(web);
+    }
+
+    // ── new release ──────────────────────────────────────────────────────────────────────────────────────────────────
+    static Element NewReleaseRow(NewReleaseNotification r)
+    {
+        bool circular = false;
+        return new BoxEl
+        {
+            Direction = 0, Grow = 1f, Basis = 0f, Gap = 10f, AlignItems = FlexAlign.Center,
+            Children =
+            [
+                new BoxEl
+                {
+                    Width = 44f, Height = 44f, Shrink = 0f, Corners = CornerRadius4.All(circular ? 22f : 5f), ClipToBounds = true,
+                    Children = [ Surfaces.Artwork(ImageOf(r.ImageUrl), (r.Uri.GetHashCode() & 0x7fffffff), 44f, 44f, circular ? 22f : 5f) ],
+                },
+                new BoxEl
+                {
+                    Direction = 1, Grow = 1f, Basis = 0f, Gap = 2f,
+                    Children =
+                    [
+                        new TextEl(r.Name) { Size = 13.5f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                        new TextEl(r.CreatorName) { Size = 12f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                    ],
+                },
+                TypePill(ReleaseLabel(r)),
+            ],
+        };
+    }
+
+    static void ClickRelease(NewReleaseNotification r, Action<string, string?>? go)
+    {
+        if (r.Kind == NewReleaseKind.Album && RichText.RouteForUri(r.Uri) is { } route) { go?.Invoke(route, r.Name); return; }
+        // Episodes have no dedicated detail route yet (open decision) → open the web player as a safe fallback.
+        string? web = WebUrlFor(r.Uri);
+        if (web is not null) LoginView.OpenUrl(web);
+    }
+
+    static string ReleaseLabel(NewReleaseNotification r)
+    {
+        if (r.Kind == NewReleaseKind.Episode) return Loc.Get(Strings.Notifications.Release.Episode);
+        return (r.AlbumType ?? "").ToUpperInvariant() switch
+        {
+            "SINGLE" => Loc.Get(Strings.Notifications.Release.Single),
+            "EP" => Loc.Get(Strings.Notifications.Release.Ep),
+            "COMPILATION" => Loc.Get(Strings.Notifications.Release.Compilation),
+            _ => Loc.Get(Strings.Notifications.Release.Album),
+        };
+    }
+
+    // ── activity ─────────────────────────────────────────────────────────────────────────────────────────────────────
+    static Element ActivityCard(ActivityNotification a, long now, NotificationCenterBridge nc, Signal<long> expanded, long expandedId)
+    {
+        var e = a.Entry;
+        bool isExpanded = expandedId == e.Id;
+        bool undone = e.Status == ActivityStatus.Undone;
+
+        var titleKids = new List<Element>(3)
+        {
+            new TextEl(ActivitySummary(e))
+            {
+                Size = 13f, Grow = 1f, Basis = 0f, MaxLines = 2, Wrap = TextWrap.Wrap,
+                Color = undone ? Tok.TextTertiary : Tok.TextPrimary,
+                Strikethrough = undone,
+            },
+        };
+        if (e.Status == ActivityStatus.Failed) titleKids.Add(StatusChip(Loc.Get(Strings.Notifications.Status.Failed), Tok.SystemFillCritical));
+        else if (undone) titleKids.Add(StatusChip(Loc.Get(Strings.Notifications.Status.Undone), Tok.TextTertiary));
+
+        var rightKids = new List<Element>(2)
+        {
+            new TextEl(RelTime(now - e.TimestampMs)) { Size = 11f, Weight = 600, Color = Tok.TextTertiary, Shrink = 0f },
+        };
+        if (e.IsUndoable)
+            rightKids.Add(PillButton(Loc.Get(Strings.Notifications.Undo), () => _ = nc.UndoAsync(e), accent: false));
+
+        var main = new BoxEl
+        {
+            Direction = 0, Grow = 1f, Basis = 0f, Gap = 10f, AlignItems = FlexAlign.Center,
+            Children =
+            [
+                GlyphChip(ActivityGlyph(e.Kind), undone ? Tok.TextTertiary : Tok.TextSecondary),
+                new BoxEl { Direction = 0, Grow = 1f, Basis = 0f, Gap = 6f, AlignItems = FlexAlign.Center, Children = titleKids.ToArray() },
+                new BoxEl { Direction = 1, Shrink = 0f, AlignItems = FlexAlign.End, Gap = 4f, Children = rightKids.ToArray() },
+            ],
+        };
+
+        var kids = new List<Element>(3) { main, UnreadDot(!e.Read) };
+        var card = new BoxEl
+        {
+            Key = "ntf:act:" + e.Id,
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = 10f, MinHeight = 56f,
+            Padding = new Edges4(10f, 8f, 10f, 8f), Corners = CornerRadius4.All(8f),
+            HoverFill = WaveeColors.RowHover, PressedFill = WaveeColors.RowPressed,
+            Role = AutomationRole.Button, Cursor = CursorId.Hand, Focusable = true,
+            OnClick = () => expanded.Value = isExpanded ? -1 : e.Id,
+            Enter = new EnterExit(Dy: 6f, Opacity: 0f, Active: true),
+            Exit = new EnterExit(Dy: -4f, Opacity: 0f, Active: true),
+            Layout = LayoutTransition.Slide,
+            Children = kids.ToArray(),
+        };
+
+        if (!isExpanded) return card;
+        return new BoxEl
+        {
+            Key = "ntf:actwrap:" + e.Id, Direction = 1, Gap = 2f,
+            Children = [ card, ActivityDetail(e) ],
+        };
+    }
+
+    static Element ActivityDetail(ActivityEntry e)
+    {
+        var kids = new List<Element>(4);
+        var p = e.Payload;
+        if (p?.OldName is { } oldName && p.NewName is { } newName)
+            kids.Add(new TextEl(Strings.Notifications.Activity.Detail.RenamedFrom(oldName, newName)) { Size = 12f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap });
+        if (p?.Tracks is { Count: > 0 } tracks)
+        {
+            kids.Add(new TextEl(Loc.Get(Strings.Notifications.Activity.Detail.Tracks)) { Size = 11f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 30f });
+            int shown = 0;
+            foreach (var t in tracks)
+            {
+                kids.Add(new TextEl("•  " + (t.Name is { Length: > 0 } nm ? nm : t.Uri)) { Size = 12f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
+                if (++shown >= 8) break;
+            }
+        }
+        if (kids.Count == 0) return new BoxEl();
+        return new BoxEl
+        {
+            Direction = 1, Gap = 3f, Margin = new Edges4(46f, 0f, 12f, 6f),
+            Children = kids.ToArray(),
+        };
+    }
+
+    static string ActivitySummary(ActivityEntry e)
+    {
+        string playlist = e.TargetName is { Length: > 0 } n ? n : Loc.Get(Strings.Notifications.Activity.GenericTarget);
+        string count = Strings.Detail.SongCount(e.Payload?.Tracks?.Count ?? 0);
+        return e.Kind switch
+        {
+            ActivityKind.Save => Loc.Get(Strings.Notifications.Activity.Save),
+            ActivityKind.Unsave => Loc.Get(Strings.Notifications.Activity.Unsave),
+            ActivityKind.PlaylistAddTracks => Strings.Notifications.Activity.AddTracks(count, playlist),
+            ActivityKind.PlaylistRemoveTracks => Strings.Notifications.Activity.RemoveTracks(count, playlist),
+            ActivityKind.PlaylistMoveTracks => Strings.Notifications.Activity.MoveTracks(playlist),
+            ActivityKind.PlaylistRename => Strings.Notifications.Activity.Rename(e.Payload?.NewName ?? playlist),
+            ActivityKind.PlaylistVisibility => (e.Payload?.NewIsPublic ?? false)
+                ? Strings.Notifications.Activity.MadePublic(playlist)
+                : Strings.Notifications.Activity.MadePrivate(playlist),
+            ActivityKind.PlaylistCreate => Strings.Notifications.Activity.Create(playlist),
+            ActivityKind.PlaylistDelete => Strings.Notifications.Activity.Delete(playlist),
+            ActivityKind.PlaylistCoverSet => Strings.Notifications.Activity.CoverSet(playlist),
+            ActivityKind.PlaylistCoverClear => Strings.Notifications.Activity.CoverClear(playlist),
+            ActivityKind.ContributorInvite => Strings.Notifications.Activity.Invite(playlist),
+            _ => "",
+        };
+    }
+
+    static string ActivityGlyph(ActivityKind kind) => kind switch
+    {
+        ActivityKind.Save or ActivityKind.Unsave => Icons.Heart,
+        ActivityKind.PlaylistAddTracks => Icons.Add,
+        ActivityKind.PlaylistRemoveTracks => Icons.Remove,
+        ActivityKind.PlaylistMoveTracks => Icons.Sort,
+        ActivityKind.PlaylistRename => Icons.Edit,
+        ActivityKind.PlaylistVisibility => Icons.Globe,
+        ActivityKind.PlaylistCreate => Icons.Add,
+        ActivityKind.PlaylistDelete => Icons.Remove,
+        ActivityKind.PlaylistCoverSet or ActivityKind.PlaylistCoverClear => Icons.Picture,
+        ActivityKind.ContributorInvite => Icons.Link,
+        _ => Icons.StatusInfo,
+    };
+
+    // ── shared bits ──────────────────────────────────────────────────────────────────────────────────────────────────
+    static Element GlyphChip(string glyph, ColorF tint) => new BoxEl
+    {
+        Width = 36f, Height = 36f, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+        Corners = CornerRadius4.All(18f), Fill = Tok.FillSubtleSecondary,
+        Children = [ new TextEl(glyph) { Size = 16f, FontFamily = Theme.IconFont, Color = tint } ],
+    };
+
+    static Element StatusChip(string label, ColorF tint) => new BoxEl
+    {
+        Shrink = 0f, Padding = new Edges4(7f, 1f, 7f, 1f), Corners = CornerRadius4.All(8f), Fill = Tok.FillSubtleSecondary,
+        Children = [ new TextEl(label) { Size = 10f, Weight = 700, Color = tint, CharSpacing = 20f } ],
+    };
+
+    static Element TypePill(string type) => new BoxEl
+    {
+        Shrink = 0f, Padding = new Edges4(9f, 2f, 9f, 2f), Corners = CornerRadius4.All(10f), Fill = Tok.FillSubtleSecondary,
+        Children = [ new TextEl(type) { Size = 10f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 40f } ],
+    };
+
+    static Element PillButton(string label, Action onClick, bool accent) => new BoxEl
+    {
+        Shrink = 0f, MinHeight = 28f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+        Padding = new Edges4(12f, 4f, 12f, 4f), Corners = CornerRadius4.All(14f),
+        Fill = accent ? Tok.AccentDefault : Tok.FillControlDefault,
+        HoverFill = accent ? Tok.AccentSecondary : Tok.FillControlSecondary,
+        PressedFill = accent ? Tok.AccentTertiary : Tok.FillControlTertiary,
+        BorderWidth = accent ? 0f : 1f, BorderColor = Tok.StrokeControlDefault,
+        Role = AutomationRole.Button, Cursor = CursorId.Hand, Focusable = true,
+        OnClick = onClick,
+        Children = [ new TextEl(label) { Size = 12f, Weight = 600, Color = accent ? Tok.TextOnAccentPrimary : Tok.TextPrimary } ],
+    };
+
+    static Element LinkButton(string label, Action onClick) => new BoxEl
+    {
+        Shrink = 0f, MinHeight = 28f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+        Padding = new Edges4(8f, 3f, 8f, 3f), Corners = CornerRadius4.All(6f),
+        HoverFill = WaveeColors.RowHover, PressedFill = WaveeColors.RowPressed,
+        Role = AutomationRole.Button, Cursor = CursorId.Hand, Focusable = true, OnClick = onClick,
+        Children = [ new TextEl(label) { Size = 12f, Weight = 600, Color = Tok.AccentTextPrimary } ],
+    };
+
+    static Element EmptyState(NotificationCategory? filter)
+    {
+        string msg = filter switch
+        {
+            NotificationCategory.AppUpdate => Loc.Get(Strings.Notifications.Empty.Updates),
+            NotificationCategory.Social => Loc.Get(Strings.Notifications.Empty.Spotify),
+            NotificationCategory.NewRelease => Loc.Get(Strings.Notifications.Empty.New),
+            NotificationCategory.Activity => Loc.Get(Strings.Notifications.Empty.Activity),
+            _ => Loc.Get(Strings.Notifications.Empty.All),
+        };
+        return new BoxEl
+        {
+            Direction = 1, Width = Width, MinHeight = 120f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Padding = Edges4.All(24f),
+            Children = [ new TextEl(msg) { Size = 13f, Weight = 600, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, MaxWidth = 300f } ],
+        };
+    }
+
+    static Image? ImageOf(string? url) => url is { Length: > 0 } u ? new Image(u) : null;
+
+    static string? WebUrlFor(string? uri)
+    {
+        if (string.IsNullOrEmpty(uri)) return null;
+        if (uri.StartsWith("http", StringComparison.OrdinalIgnoreCase)) return uri;
+        if (uri.StartsWith("spotify:", StringComparison.Ordinal))
+            return "https://open.spotify.com/" + uri.Substring("spotify:".Length).Replace(':', '/');
+        return null;
+    }
+
+    static string RelTime(long ageMs)
+    {
+        if (ageMs < 0) ageMs = 0;
+        long min = ageMs / 60_000;
+        if (min < 1) return Loc.Get(Strings.Friends.Now);
+        if (min < 60) return Strings.Friends.MinAgo(min);
+        long hr = min / 60;
+        if (hr < 24) return Strings.Friends.HrAgo(hr);
+        return Strings.Friends.DAgo(hr / 24);
+    }
+}

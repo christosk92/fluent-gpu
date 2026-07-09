@@ -25,6 +25,7 @@ sealed class WaveeApp : Component
         var bridge = _services.Playback;
         var libBridge = _services.LibraryBridge;
         var friendsBridge = _services.FriendsBridge;
+        var notifications = _services.Notifications;
         var store = _services.LibraryStore;
         if (Diag.EnvFlag("WAVEE_LIVE_LYRICS_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_PROBE") || Diag.EnvFlag("WAVEE_HOME_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_NAV_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_ADVANCE_PROBE"))
         {
@@ -122,6 +123,7 @@ sealed class WaveeApp : Component
             bridge.Activate(post);
             libBridge.Activate(post);
             friendsBridge.Activate(post);
+            notifications.Activate(post);
             store.Activate(post);
 
             // Persist volume changes (local intents AND remote echoes both land on bridge.Volume) with a coarse poll —
@@ -207,8 +209,9 @@ sealed class WaveeApp : Component
             Ctx.Provide(PlaybackBridge.Slot, bridge,
             Ctx.Provide(LibraryBridge.Slot, libBridge,
             Ctx.Provide(FriendsBridge.Slot, friendsBridge,
+            Ctx.Provide(NotificationCenterBridge.Slot, notifications,
             Ctx.Provide(LibraryStore.Slot, store,
-                leaf)))));
+                leaf))))));
 
         // Debug-build FPS HUD on top (const-folds out of Release; subscribes to the host's per-frame stats). The HUD pill is
         // pinned top-right by a full-bleed PASS-THROUGH positioner (a PLAIN BoxEl — its HitTestPassThrough IS honoured, unlike

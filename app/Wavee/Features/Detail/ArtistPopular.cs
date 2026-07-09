@@ -24,11 +24,16 @@ sealed class ArtistPopular : Component
     readonly Services _svc;
     readonly ColorF _accent;
     readonly ItemsViewController _ctl = new();
+    readonly SelectionModel _sel = new();
+    readonly Func<bool> _showChecks;
     FillRowVirtualLayout? _layout;
     int _touchpadSnapPage = -1;
     int _programmaticPage = -1;
     public ArtistPopular(IReadOnlyList<Track> tracks, string ctx, PlaybackBridge? bridge, Services svc, string title, ColorF accent)
-    { _tracks = tracks; _ctx = ctx; _bridge = bridge; _svc = svc; _title = title; _accent = accent; }
+    {
+        _tracks = tracks; _ctx = ctx; _bridge = bridge; _svc = svc; _title = title; _accent = accent;
+        _showChecks = () => { _ = _sel.Version.Value; return _sel.SelectedCount > 0; };
+    }
 
     const int Rows = 4;          // WinUI ColumnsFirstGridLayout MaxRows
     const int MaxTracks = 10;
@@ -141,7 +146,7 @@ sealed class ArtistPopular : Component
 
         var strip = ItemsView.CreateBound(
             total,
-            scope => TrackRow.ArtCardSelectSkin(scope, Embed.Comp(() => new TopTrackSlot(this, scope, go, lib)), TrackRow.ArtCardKind.Grid)
+            scope => TrackRow.ArtCardSelectSkin(scope, Embed.Comp(() => new TopTrackSlot(this, scope, go, lib)), TrackRow.ArtCardKind.Grid, _showChecks)
                 with
                 {
                     // Enroll this horizontal ItemsView in the engine's scroll-flag pass. The bind writes identity, but
@@ -149,7 +154,8 @@ sealed class ArtistPopular : Component
                     ScrollBinds = [new ScrollBindDsl { From = ScrollChannel.Offset, To = BindSink.TransX, OutStart = 0f, OutEnd = 0f }],
                 },
             RepeatLayout.Custom(layout, horizontal: true),
-            selectionMode: ItemsSelectionMode.Single,
+            selectionMode: ItemsSelectionMode.Extended,
+            selection: _sel,
             isItemInvokedEnabled: true,
             itemInvoked: i =>
             {
@@ -164,11 +170,18 @@ sealed class ArtistPopular : Component
             suppressScrollBar: true,
             onScrollGeometryChanged: (ScrollKey, OnScrollSettled));
 
+        var stripHost = new BoxEl { Height = Rows * ItemHeight + (Rows - 1) * ItemGap, ClipToBounds = true, Children = [strip] };
         return new BoxEl
         {
             Direction = 1, Gap = 20f,
             OnBoundsChanged = r => { if (r.W > 0f && MathF.Abs(r.W - width.Peek()) > 0.5f) width.Value = r.W; },
-            Children = [ header, new BoxEl { Height = Rows * ItemHeight + (Rows - 1) * ItemGap, ClipToBounds = true, Children = [strip] } ],
+            Children =
+            [
+                header,
+                ZStack(stripHost, Embed.Comp(() => new SelectionCommandBar(_sel,
+                    i => (uint)i < (uint)Math.Min(_tracks.Count, MaxTracks) ? _tracks[i] : null,
+                    bottomPadding: WaveeSpace.S))),
+            ],
         };
     }
 

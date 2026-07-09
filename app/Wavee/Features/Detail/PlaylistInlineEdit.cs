@@ -78,11 +78,11 @@ static class PlaylistInlineEdit
         Children = [body],
     };
 
-    static async Task<bool> SaveDetailsAsync(LibraryBridge lib, string uri, string? name, string? description, bool? collaborative)
+    static async Task<bool> SaveDetailsAsync(LibraryBridge lib, string uri, string? name, string? description, bool? collaborative, string? previousName = null)
     {
         try
         {
-            await lib.UpdatePlaylistDetailsAsync(uri, name, description, collaborative).ConfigureAwait(false);
+            await lib.UpdatePlaylistDetailsAsync(uri, name, description, collaborative, previousName).ConfigureAwait(false);
             return true;
         }
         catch (Exception ex)
@@ -474,7 +474,7 @@ static class PlaylistInlineEdit
             if (cur.ContextUri is not { } uri) return;
             string next = _draft.Peek().Trim();
             if (next.Length == 0 || next == cur.Title) { _draft.Value = cur.Title; return; }
-            _ = RunSaveAsync(() => SaveDetailsAsync(lib, uri, next, null, null), _status, () => ++_saveEpoch, () => _saveEpoch);
+            _ = RunSaveAsync(() => SaveDetailsAsync(lib, uri, next, null, null, cur.Title), _status, () => ++_saveEpoch, () => _saveEpoch);
         }
     }
 

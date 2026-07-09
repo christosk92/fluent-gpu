@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Wavee.Backend.Spotify;
 using Wavee.Core;
+using Pl = Wavee.Protocol.Playlist;
 
 namespace Wavee.Backend.Playlists;
 
@@ -31,6 +32,36 @@ public sealed class PlaylistMutationSource : IPlaylistMutationSource
             (mut, transport, http, ctx, spclientBaseUrl, local, store, new PlaylistPermissionClient(transport));
 
     public void SetHttp(IHttpExchange http) => _http = http;
+
+    public async Task<string> CreatePlaylistAsync(string name, CancellationToken ct = default)
+    {
+        RequireStore();
+        var store = _store!;
+        var ctx = _ctx();
+        string trimmed = string.IsNullOrWhiteSpace(name) ? "New Playlist" : name.Trim();
+        long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var body = PlaylistWireMapper.BuildCreateListRequest(trimmed, ctx.Account, nowMs);
+        var headers = SpotifyHeaders.PlaylistV2Mutation(_spclientBaseUrl());
+        var r = await _transport.Request(Channel.Spclient, "/playlist/v2/playlist", body, ct, "POST", headers).ConfigureAwait(false);
+        if (!r.Ok) throw new InvalidOperationException($"create playlist failed ({r.Status})");
+        var bytes = SpotifyZstd.MaybeDecompressZstd(r.Body);
+        var reply = Pl.CreateListReply.Parser.ParseFrom(bytes);
+        if (string.IsNullOrEmpty(reply.Uri)) throw new InvalidOperationException("create playlist returned no uri");
+        string uri = reply.Uri;
+        byte[]? rev = reply.HasRevision ? reply.Revision.ToByteArray() : null;
+
+        var addOp = new PlaylistOp(PlaylistOpKind.Add, FromIndex: 0, Items: new[] { new PlaylistMember("", uri, null, nowMs) });
+        await RootlistOps.PostRootlistOpsAsync(store, _transport, _spclientBaseUrl, ctx, new[] { addOp }, ct, uri).ConfigureAwait(false);
+
+        store.UpsertPlaylist(new Playlist(
+            IdOf(uri), uri, trimmed, null, ctx.Account, null, 0, System.Array.Empty<Track>(),
+            Owner: new Owner(ctx.Account, ctx.Account, null),
+            Capabilities: new PlaylistCapabilities(true, true, true, false, true)));
+        store.SetMembership(uri, System.Array.Empty<PlaylistMember>(), rev);
+        store.SetSaved("playlists", uri, true, SyncState.Confirmed, nowMs);
+        store.Bump("rootlist", CollectionKind.Playlists);
+        return uri;
+    }
 
     public Task AddTracksAsync(string playlistUri, IReadOnlyList<Track> tracks, CancellationToken ct = default)
     {

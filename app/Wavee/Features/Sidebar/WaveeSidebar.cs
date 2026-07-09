@@ -398,9 +398,21 @@ sealed class WaveeSidebar : Component
         Width = 24f, Height = 1f, Margin = new Edges4(0f, 4f, 0f, 4f), Fill = Tok.TextTertiary with { A = 0.3f },
     };
 
-    // Create-affordance handlers. The library is read-only (fake-data-first, no mutation API yet), so these are the
-    // entry points the create flow will hook into — intentional no-ops for now; the button + menu are the shipped UI.
-    void CreatePlaylist() { if (_lib is { } lib) _go("pl:" + lib.CreatePlaylist(Loc.Get(Strings.Sidebar.NewPlaylist)), null); }
+    // Create-affordance handlers — POST a real empty playlist, then navigate to it.
+    void CreatePlaylist()
+    {
+        if (_lib is not { } lib) return;
+        _ = Run();
+        async System.Threading.Tasks.Task Run()
+        {
+            try
+            {
+                string uri = await lib.CreatePlaylistAsync(Loc.Get(Strings.Sidebar.NewPlaylist)).ConfigureAwait(false);
+                _go("pl:" + uri, null);
+            }
+            catch (Exception ex) { Toasts.Show(ex.Message, ToastSeverity.Critical); }
+        }
+    }
     void CreateFolder() { }
 
     // A playlist as its cover art only (the rail's compact analogue of the expanded PlaylistRow); accent ring when selected.

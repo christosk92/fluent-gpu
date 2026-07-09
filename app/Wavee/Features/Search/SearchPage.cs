@@ -26,6 +26,8 @@ static class SearchQuery
 sealed class SearchPage : Component
 {
     readonly Signal<int> _chip = new(0);   // 0 All · 1 Songs · 2 Artists · 3 Albums · 4 Playlists
+    readonly SelectionModel _songsSel = new();
+    IReadOnlyList<Track> _songsTracks = Array.Empty<Track>();
     const int SearchPageSize = 50;
 
     public override Element Render()
@@ -38,6 +40,7 @@ sealed class SearchPage : Component
 
         string q = (querySig?.Value ?? "").Trim();          // subscribe → re-render + re-search as the user types
         int chip = _chip.Value;                             // subscribe
+        UseEffect(() => _songsSel.ClearSelection(), q + ":" + chip);
         var facet = RequestFacetFor(chip);
         var results = UseAsyncResource(ct => svc.Library.SearchAsync(q, facet, 0, SearchPageSize, ct), SearchResults.Empty, q, chip);   // selected tab drives the live facet op
 
@@ -68,7 +71,12 @@ sealed class SearchPage : Component
                     Padding = new Edges4(WaveeSpace.L, WaveeSpace.M, WaveeSpace.L, WaveeSpace.S),
                     Children = [ChipBar(chip)],
                 },
-                ScrollView(resultBody) with { Grow = 1f, MinHeight = 0f, ScrollKey = "search:" + q + ":" + chip },
+                chip == 1
+                    ? ZStack(
+                        ScrollView(resultBody) with { Grow = 1f, MinHeight = 0f, ScrollKey = "search:" + q + ":" + chip },
+                        Embed.Comp(() => new SelectionCommandBar(_songsSel, i => (uint)i < (uint)_songsTracks.Count ? _songsTracks[i] : null)))
+                        with { Grow = 1f, MinHeight = 0f }
+                    : ScrollView(resultBody) with { Grow = 1f, MinHeight = 0f, ScrollKey = "search:" + q + ":" + chip },
             ],
         };
     }
@@ -150,9 +158,12 @@ sealed class SearchPage : Component
         => Ctx.Provide(SearchAllList.Props, new SearchAllList.Model(r, go, playTrack, play, playKnownTrack, include, emptyTitle),
             Embed.Comp(() => new SearchAllList()));
 
-    static Element SongsList(IReadOnlyList<Track> tracks, Action<Track> playTrack, Action<string, string?> go, int max)
-        => Ctx.Provide(SearchSongs.Props, new SearchSongs.Model(tracks, playTrack, go, max),
+    Element SongsList(IReadOnlyList<Track> tracks, Action<Track> playTrack, Action<string, string?> go, int max)
+    {
+        _songsTracks = tracks;
+        return Ctx.Provide(SearchSongs.Props, new SearchSongs.Model(tracks, playTrack, go, max, _songsSel),
             Embed.Comp(() => new SearchSongs()) with { SkeletonProxy = () => SearchSongs.SkeletonShape(tracks, max) });
+    }
 
     // ── flat unified results list (per chip) ──
     static Element FlatList(IEnumerable<Element> rows) => new BoxEl { Direction = 1, Gap = 2f, Children = rows.ToArray() };
@@ -267,7 +278,12 @@ sealed class SearchPage : Component
     static Element SongsSection(IReadOnlyList<Track> tracks, Action<Track> playTrack, Action<string, string?> go) => new BoxEl
     {
         Direction = 1, Gap = WaveeSpace.S,
-        Children = [WaveeType.RailHeader(Loc.Get(Strings.Search.Songs)), SongsList(tracks, playTrack, go, 4)],
+        Children =
+        [
+            WaveeType.RailHeader(Loc.Get(Strings.Search.Songs)),
+            Ctx.Provide(SearchSongs.Props, new SearchSongs.Model(tracks, playTrack, go, 4, new SelectionModel()),
+                Embed.Comp(() => new SearchSongs()) with { SkeletonProxy = () => SearchSongs.SkeletonShape(tracks, 4) }),
+        ],
     };
 
     // ── shelves & states ─────────────────────────────────────────────────────────────────────────────────
@@ -296,7 +312,7 @@ sealed class SearchPage : Component
 // single-click-to-play, since search lists are short. Columns: [#↔play, ♥, art, title+artist, duration].
 sealed class SearchSongs : Component
 {
-    internal sealed record Model(IReadOnlyList<Track> Tracks, Action<Track> PlayTrack, Action<string, string?> Go, int Max);
+    internal sealed record Model(IReadOnlyList<Track> Tracks, Action<Track> PlayTrack, Action<string, string?> Go, int Max, SelectionModel Selection);
     internal static readonly Context<Model?> Props = new(null);
 
     static readonly ColumnSet Cols = new(Album: false, By: false, Date: false, Video: false, Plays: false, Heart: true, Thumb: true);
@@ -314,11 +330,17 @@ sealed class SearchSongs : Component
         var tracks = model.Tracks;
         int n = Math.Min(model.Max, tracks.Count);
         if (n <= 0) return new BoxEl();
+        Func<bool> showChecks = () =>
+        {
+            _ = model.Selection.Version.Value;
+            return model.Selection.SelectedCount > 0;
+        };
         return ItemsView.CreateBound(
             n,
-            scope => SelectorVisualsBound.AccentPill(scope, Embed.Comp(() => new SearchSongRow(model, scope, bridge, lib))),
+            scope => SelectorVisualsBound.AccentPill(scope, Embed.Comp(() => new SearchSongRow(model, scope, bridge, lib)), showChecks),
             RepeatLayout.Stack(RowExtent),
-            selectionMode: ItemsSelectionMode.Single,
+            selectionMode: ItemsSelectionMode.Extended,
+            selection: model.Selection,
             isItemInvokedEnabled: true,
             itemInvoked: i =>
             {

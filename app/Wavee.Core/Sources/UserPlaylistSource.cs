@@ -20,6 +20,10 @@ public sealed class UserPlaylistSource : ICatalogSource
     public bool Owns(string uri) => uri.StartsWith("wavee:playlist:", System.StringComparison.Ordinal);
     public SourceCapabilities Capabilities => SourceCapabilities.Catalog | SourceCapabilities.Mutations;
 
+    /// <summary>When false, <see cref="GetPlaylistsAsync"/> returns empty — the real backend lists only synced
+    /// <c>spotify:playlist:*</c> rows; session-only <c>wavee:playlist:*</c> stubs must not appear in pickers/sidebar.</summary>
+    public bool ExposeInCatalog { get; set; } = true;
+
     /// <summary>Bumps on every create / add — the bridge mirrors it so the sidebar re-reads the playlist list.</summary>
     public IObservable<int> PlaylistsChanged => _changed;
 
@@ -64,6 +68,7 @@ public sealed class UserPlaylistSource : ICatalogSource
 
     public Task<IReadOnlyList<PlaylistSummary>> GetPlaylistsAsync(CancellationToken ct = default)
     {
+        if (!ExposeInCatalog) return Task.FromResult<IReadOnlyList<PlaylistSummary>>(System.Array.Empty<PlaylistSummary>());
         var list = _playlists.Select(kv => new PlaylistSummary(kv.Key, kv.Value.Name, "You", kv.Value.Tracks.Count, null, CanEdit: true, IsOwner: true)).ToList();
         return Task.FromResult<IReadOnlyList<PlaylistSummary>>(list);
     }

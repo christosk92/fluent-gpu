@@ -59,6 +59,10 @@ static class WaveeSettings
     // Crash observability: the newest Windows Error Reporting dump we've already surfaced into wavee.log / Diagnostics.
     public static readonly SettingKey<string> LastSeenCrashDumpPath = new("diagnostics.crash.lastDumpPath", "");
     public static readonly SettingKey<long> LastSeenCrashDumpTicksUtc = new("diagnostics.crash.lastDumpTicksUtc", 0L);
+    // Notification center: the unix-ms watermark past which a remote-feed item counts as "new" (advanced on panel open).
+    // Local-only read-state for the gander + what's-new feeds (no server mark-read endpoint). Works on both backends.
+    public static readonly SettingKey<long> NotificationsGanderLastSeenMs = new("notifications.gander.lastSeenMs", 0L);
+    public static readonly SettingKey<long> NotificationsWhatsNewLastSeenMs = new("notifications.whatsnew.lastSeenMs", 0L);
 }
 
 // The LibraryPage's per-kind persisted state (the "Your Library" master–detail: albums/artists/podcasts). Keys are built

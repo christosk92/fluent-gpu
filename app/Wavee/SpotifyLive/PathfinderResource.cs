@@ -115,6 +115,7 @@ public sealed class PathfinderResource
         PathfinderOps.QueryAlbumMerch => TimeSpan.FromHours(1),
         PathfinderOps.QueryNpvArtist => TimeSpan.FromMinutes(30),
         PathfinderOps.QueryArtistOverview => TimeSpan.FromMinutes(30),
+        PathfinderOps.QueryWhatsNewFeed => TimeSpan.FromMinutes(5),
         _ when operationName.StartsWith("search", StringComparison.OrdinalIgnoreCase) => TimeSpan.Zero,
         _ => TimeSpan.FromMinutes(10),
     };

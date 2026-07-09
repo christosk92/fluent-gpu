@@ -19,6 +19,8 @@
     "collaborator": "Collaborator",
     "noPlaylists": "No playlists found",
     "selectAll": "Select all",
+    "select": "Select",
+    "clearSelection": "Clear selection",
     "goToArtist": "Go to artist",
     "share": "Share",
     "follow": "Follow",
@@ -454,6 +456,75 @@
     "minAgo": "{count} min",
     "hrAgo": "{count} hr",
     "dAgo": "{count} d"
+  },
+
+  "notifications": {
+    "title": "Notifications",
+    "overflowTitle": "Notifications ({count})",
+    "markAllRead": "Mark all read",
+    "clear": "Clear",
+    "undo": "Undo",
+    "undoFailed": "Couldn't undo that change — your library may have changed since.",
+    "loading": "Loading…",
+    "filter": {
+      "all": "All",
+      "updates": "Updates",
+      "spotify": "Spotify",
+      "new": "New",
+      "activity": "Activity"
+    },
+    "empty": {
+      "all": "You're all caught up",
+      "updates": "No app updates",
+      "spotify": "No Spotify notifications",
+      "new": "Nothing new from your artists",
+      "activity": "No activity yet"
+    },
+    "update": {
+      "availableTitle": "An update is available",
+      "availableBody": "Version {version} is ready to download.",
+      "downloadedTitle": "Update ready to install",
+      "downloadedBody": "Restart Wavee to finish updating.",
+      "completedTitle": "Wavee was updated",
+      "completedBody": "Now running version {version}.",
+      "failedTitle": "Update failed",
+      "download": "Download",
+      "restart": "Restart to update",
+      "seeWhatsNew": "See what's new",
+      "retry": "Retry",
+      "dismiss": "Dismiss"
+    },
+    "status": {
+      "failed": "Failed",
+      "undone": "Undone"
+    },
+    "release": {
+      "album": "ALBUM",
+      "single": "SINGLE",
+      "ep": "EP",
+      "compilation": "COMPILATION",
+      "episode": "EPISODE"
+    },
+    "activity": {
+      "save": "Added to your library",
+      "unsave": "Removed from your library",
+      "addTracks": "Added {count} to {playlist}",
+      "removeTracks": "Removed {count} from {playlist}",
+      "moveTracks": "Reordered tracks in {playlist}",
+      "rename": "Renamed a playlist to {name}",
+      "madePublic": "Made {playlist} public",
+      "madePrivate": "Made {playlist} private",
+      "create": "Created {name}",
+      "delete": "Deleted {name}",
+      "coverSet": "Changed the cover of {playlist}",
+      "coverClear": "Removed the cover of {playlist}",
+      "invite": "Created an invite link for {playlist}",
+      "genericTarget": "a playlist",
+      "detail": {
+        "tracks": "Tracks",
+        "renamedFrom": "{old}  →  {new}"
+      }
+    }
   },
 
   "auth": {

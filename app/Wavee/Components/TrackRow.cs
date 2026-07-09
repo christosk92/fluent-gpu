@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using FluentGpu.Animation;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -247,11 +248,18 @@ internal static class TrackRow
         };
     }
 
-    internal static BoxEl ArtCardSelectSkin(in RowScope s, Element content, ArtCardKind kind)
+    internal static BoxEl ArtCardSelectSkin(in RowScope s, Element content, ArtCardKind kind, Func<bool>? showCheckbox = null)
     {
         Func<bool> isSel = s.IsSelected, isEn = s.IsEnabled;
         var interact = s.OnInteraction;
         Action<bool> focusChanged = s.OnFocusChanged;
+        Element[] kids = showCheckbox is null
+            ? [content]
+            :
+            [
+                SelectorVisualsBound.BoundCheckLane(showCheckbox, isSel, interact, leftMargin: 4f),
+                content,
+            ];
         return new BoxEl
         {
             Direction = 1,
@@ -282,7 +290,17 @@ internal static class TrackRow
             },
             OnFocusChanged = focusChanged,
             OnPointerExit = static () => { },
-            Children = [content],
+            Children =
+            [
+                new BoxEl
+                {
+                    Direction = 0, Grow = 1f, AlignItems = FlexAlign.Center,
+                    Animate = showCheckbox is null ? null : new LayoutTransition(
+                        TransitionChannels.Position,
+                        TransitionDynamics.Tween(333f, Easing.FluentDecelerate)),
+                    Children = kids,
+                },
+            ],
         };
     }
 

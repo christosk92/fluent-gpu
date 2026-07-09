@@ -12,6 +12,12 @@ public sealed class LocalPlaylistMutationSource : IPlaylistMutationSource
 
     public LocalPlaylistMutationSource(UserPlaylistSource local) => _local = local;
 
+    public Task<string> CreatePlaylistAsync(string name, CancellationToken ct = default)
+    {
+        string uri = _local.CreatePlaylist(name);
+        return Task.FromResult(uri);
+    }
+
     public Task AddTracksAsync(string playlistUri, IReadOnlyList<Track> tracks, CancellationToken ct = default)
     {
         RequireLocal(playlistUri);

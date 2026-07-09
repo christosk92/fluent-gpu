@@ -265,8 +265,14 @@ sealed class AlbumDrawerPanel : Component
     readonly Services _svc; readonly Album _thin; readonly float _panelH;
     readonly Action<string> _play; readonly Action<string, string?> _go;
     readonly ColorF _accent;
+    readonly SelectionModel _sel = new();
+    readonly Func<bool> _showChecks;
+    IReadOnlyList<Track> _rows = Array.Empty<Track>();
     public AlbumDrawerPanel(Services svc, Album thin, float panelH, Action<string> play, Action<string, string?> go, ColorF accent)
-    { _svc = svc; _thin = thin; _panelH = panelH; _play = play; _go = go; _accent = accent; }
+    {
+        _svc = svc; _thin = thin; _panelH = panelH; _play = play; _go = go; _accent = accent;
+        _showChecks = () => { _ = _sel.Version.Value; return _sel.SelectedCount > 0; };
+    }
 
     static readonly ColumnSet DrawerCols = new(Album: false, By: false, Date: false, Video: false, Plays: false, Heart: true, Thumb: false);
     static readonly TrackSize[] DrawerColumns =
@@ -279,6 +285,7 @@ sealed class AlbumDrawerPanel : Component
         var lib = UseContext(LibraryBridge.Slot);
         var full = UseAsyncResource(ct => _svc.Library.GetAlbumAsync(_thin.Uri, ct), (Album?)null, _thin.Uri);
         var tracks = (full.Value.Value?.Tracks ?? _thin.Tracks) ?? System.Array.Empty<Track>();
+        _rows = tracks;
         bool loading = tracks.Count == 0 && full.State.Value == (byte)LoadState.Pending;
         int n = loading ? Math.Clamp(_thin.TrackCount, 1, 10) : Math.Min(tracks.Count, 10);
 
@@ -290,7 +297,13 @@ sealed class AlbumDrawerPanel : Component
             Padding = new Edges4(WaveeSpace.L, WaveeSpace.S, WaveeSpace.L, WaveeSpace.S),
             Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardSecondary,
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
-            Children = [ Head(), body ],
+            Children =
+            [
+                Head(),
+                ZStack(body, Embed.Comp(() => new SelectionCommandBar(_sel,
+                    i => (uint)i < (uint)Math.Min(_rows.Count, 10) ? _rows[i] : null,
+                    bottomPadding: WaveeSpace.S))),
+            ],
         };
     }
 
@@ -311,9 +324,10 @@ sealed class AlbumDrawerPanel : Component
     Element Rows(IReadOnlyList<Track> tracks, int n, PlaybackBridge? bridge, LibraryBridge? lib)
         => ItemsView.CreateBound(
             n,
-            scope => SelectorVisualsBound.AccentPill(scope, Embed.Comp(() => new DrawerTrackRow(this, scope, tracks, n, bridge, lib))),
+            scope => SelectorVisualsBound.AccentPill(scope, Embed.Comp(() => new DrawerTrackRow(this, scope, tracks, n, bridge, lib)), _showChecks),
             RepeatLayout.Stack(TrackRow.CompactListItemExtent),
-            selectionMode: ItemsSelectionMode.Single,
+            selectionMode: ItemsSelectionMode.Extended,
+            selection: _sel,
             isItemInvokedEnabled: true,
             itemInvoked: i =>
             {

@@ -136,6 +136,17 @@ public static class PlaylistWireMapper
         return new[] { new PlaylistMember("", "", addedBy, addedAt) };   // carries only the changed attributes for UPDATE_ITEM
     }
 
+    /// <summary>Serialize a create-empty-playlist body for POST <c>/playlist/v2/playlist</c>.</summary>
+    public static byte[] BuildCreateListRequest(string name, string username, long nowMs)
+    {
+        var req = new Pl.ListUpdateRequest
+        {
+            Attributes = new Pl.ListAttributes { Name = name },
+            Info = new Pl.ChangeInfo { User = username, Timestamp = nowMs },
+        };
+        return req.ToByteArray();
+    }
+
     // ── write direction: domain ops → the ListChanges body POSTed to /playlist/v2/{path}/changes ──
     /// <summary>Serialize an edit (ops against a base revision) into the ListChanges wire body.</summary>
     public static byte[] BuildChanges(byte[]? baseRev, IReadOnlyList<PlaylistOp> ops)

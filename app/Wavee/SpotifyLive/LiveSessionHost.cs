@@ -30,6 +30,8 @@ public sealed class LiveSessionHost : IAsyncDisposable
     Wavee.Backend.Sync.LibrarySync? _sync;
     IDisposable? _connSub;
     SpotifyFriendActivityService? _friends;
+    SpotifyNotificationsService? _notifications;
+    SpotifyWhatsNewService? _whatsNew;
 
     LiveSessionHost(LiveDealerTransport transport, LiveConnect connect, CancellationTokenSource cts)
     { _transport = transport; _connect = connect; _cts = cts; }
@@ -42,6 +44,11 @@ public sealed class LiveSessionHost : IAsyncDisposable
     /// <summary>Register the session-scoped friend-activity (presence) feed, disposed on logout so its dealer/HTTP
     /// subscriptions + watchdog stop with the transport.</summary>
     internal void AttachFriends(SpotifyFriendActivityService friends) => _friends = friends;
+
+    /// <summary>Register the session-scoped notification feeds (gander social + what's-new), disposed on logout so their
+    /// in-flight fetches stop with the transport.</summary>
+    internal void AttachNotifications(SpotifyNotificationsService notifications) => _notifications = notifications;
+    internal void AttachWhatsNew(SpotifyWhatsNewService whatsNew) => _whatsNew = whatsNew;
 
     public LiveConnect Connect => _connect;
 
@@ -314,6 +321,12 @@ public sealed class LiveSessionHost : IAsyncDisposable
             var pathfinder = new PathfinderClient(pathfinderExchange, log);
             var pathfinderResource = new PathfinderResource(pathfinder, () => live.Session, log);
             var homeCache = new LiveHomeCache(pathfinderResource);
+            // "What's New" feed (queryWhatsNewFeed) — display-only, rides the PathfinderResource TTL. Seeded now so the
+            // notification bell badge is correct before the first open; installed into the switchable the panel binds to.
+            var whatsNew = new SpotifyWhatsNewService(pathfinderResource, log);
+            svc.WhatsNew.SetInner(whatsNew);
+            host.AttachWhatsNew(whatsNew);
+            whatsNew.EnsureFresh();
             // Below-the-fold album enrichment (about-artist / merch / similar via Pathfinder; recommended playlists via the
             // SAME extended-metadata source, kinds 151→205) — installed into the switchable service the album pages hold.
             svc.AlbumEnrichment.SetInner(new SpotifyAlbumEnrichmentService(pathfinderResource, em, store, log, extensionCache));
@@ -368,6 +381,12 @@ public sealed class LiveSessionHost : IAsyncDisposable
         svc.Friends.SetInner(friends);
         host.AttachFriends(friends);
 
+        // Social notifications (gander) — session-scoped, display-only. One authed GET; seeds itself at construction so the
+        // bell badge is right before the first open. Installed into the switchable the notification panel binds to.
+        var notifications = new SpotifyNotificationsService(live.Pipeline, () => live.BaseUrl, log);
+        svc.SpotifyNotifications.SetInner(notifications);
+        host.AttachNotifications(notifications);
+
         return host;
     }
 
@@ -376,6 +395,8 @@ public sealed class LiveSessionHost : IAsyncDisposable
         _cts.Cancel();           // stop background hydration / in-flight fetches before tearing the transport down
         _connSub?.Dispose();     // stop reconnect-resync triggers
         _friends?.Dispose();     // stop presence seed/deltas + watchdog
+        _notifications?.Dispose();   // stop the gander in-flight fetch
+        _whatsNew?.Dispose();        // stop the what's-new in-flight fetch
         _router?.Dispose();      // stop decoding pushes
         if (_sync is not null) await _sync.DisposeAsync().ConfigureAwait(false);   // drain the loop to a stop before the transport
         _connect.Dispose();
