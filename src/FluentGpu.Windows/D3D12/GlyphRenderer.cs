@@ -156,6 +156,10 @@ internal sealed unsafe class GlyphRenderer : IDisposable
     private int _shelfX = 1, _shelfY = 1, _shelfH;
 
     private readonly Dictionary<GlyphKey, GlyphEntry> _cache = new();
+    // ThemedIcon coverage masks packed into the SAME R8 atlas as glyphs, keyed by (interned PathId, device px). A
+    // SEPARATE dictionary from _cache so an icon entry can never alias a GlyphKey (structurally disjoint — the design's
+    // "reserved key space", realized as its own map). Dropped on a generational atlas reset like _cache/_runCache.
+    private readonly Dictionary<(int PathId, int W, int H), GlyphEntry> _iconCache = new();
     // Itemize→shape→wrap layout (shared logic with the measure path, so render and measure layout identically).
     private TextLayoutEngine _engine = null!;
     private readonly Dictionary<nint, int> _faceIds = new();   // IDWriteFontFace* → small int for the glyph-cache key
@@ -507,12 +511,43 @@ float4 PSMain(VSOutG i) : SV_Target
 
     private int _atlasEpoch;
 
+    /// <summary>Look up a packed icon mask's atlas UVs. Returns true on a HIT (a present entry, even an empty 0×0 mask —
+    /// so the caller doesn't re-rasterize nothing); <paramref name="u1"/>&gt;<paramref name="u0"/> means it has pixels.</summary>
+    internal bool TryGetIconUv(int pathId, int w, int h, out float u0, out float v0, out float u1, out float v1)
+    {
+        if (_iconCache.TryGetValue((pathId, w, h), out var e)) { IconUv(in e, out u0, out v0, out u1, out v1); return true; }
+        u0 = v0 = u1 = v1 = 0f;
+        return false;
+    }
+
+    /// <summary>Shelf-pack an icon's R8 coverage mask (<paramref name="src"/>, row-major, ≥ w×h) into the glyph atlas
+    /// (generational-reset-safe via <see cref="PackOrReset"/>) and cache it under (pathId, w, h); returns its atlas UVs.
+    /// Backend-side, on an atlas miss — off the frame hot phases (the accepted rasterize-at-replay posture).</summary>
+    internal void PackIconMask(int pathId, int w, int h, byte[] src, out float u0, out float v0, out float u1, out float v1)
+    {
+        var e = new GlyphEntry { W = w, H = h };
+        if (w > 0 && h > 0)
+        {
+            PackOrReset(ref e, src, w, h);   // may trigger a generational reset (which clears _iconCache) — we add AFTER
+            _atlasDirty = true;
+        }
+        _iconCache[(pathId, w, h)] = e;
+        IconUv(in e, out u0, out v0, out u1, out v1);
+    }
+
+    private static void IconUv(in GlyphEntry e, out float u0, out float v0, out float u1, out float v1)
+    {
+        u0 = e.X / (float)ATLAS; v0 = e.Y / (float)ATLAS;
+        u1 = (e.X + e.W) / (float)ATLAS; v1 = (e.Y + e.H) / (float)ATLAS;
+    }
+
     private void ResetAtlas()
     {
         Array.Clear(_cpu);
         _shelfX = 1; _shelfY = 1; _shelfH = 0;
         _atlasNonZero = 0;
         _cache.Clear();
+        _iconCache.Clear();
         foreach (var kv in _runCache) ReturnQuads(kv.Value.Glyphs);
         _runCache.Clear();
         _atlasEpoch++;

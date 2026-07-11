@@ -130,6 +130,16 @@ subsystem owns the T0 token tier; the `Tok.*` table itself is built in the DSL (
 | `FillControlStrongDisabled` | `ControlStrongFillColorDisabled` | `#51000000` | `#3FFFFFFF` | disabled rail/thumb |
 | `FillControlSolid` | `ControlSolidFillColorDefault` | `#FFFFFF` | `#454545` | Slider thumb ring |
 | `StrokeControlOnAccentSecondary` | `ControlStrokeColorOnAccentSecondary` | `#66000000` | `#23000000` | on-accent control stroke (lower stop) |
+| `IconBase` | Files ThemedIcon Base | `#DB161616` | `#DBF0F0F0` | ThemedIcon Base layer (neutral icon body) |
+| `IconAlt` | Files ThemedIcon Alt | `#66F0F0F0` | `#66161616` | ThemedIcon Alt layer (translucent secondary body) |
+
+**ThemedIcon layer role → token table (controls.md ThemedIcon; SHIPPED).** A layered vector icon's per-layer
+`IconRole` resolves to a T0 token in a bound `Tint` thunk (so a theme/accent swap live-recolors with NO mask
+re-raster — the mask is colorless, the tint rides `DrawIconMask`): `Base → Tok.IconBase` (`TextOnAccentPrimary`
+when on-accent), `Alt → Tok.IconAlt`, `Accent → Tok.AccentDefault` (or the `SystemFillCritical/Caution/Success`
+severity fill under an `IconColorType` status recolor), `AccentContrast → TextOnAccentPrimary`. A disabled layer
+resolves to `Tok.TextDisabled` regardless of role. These are leaf values, not a SPEC-INDEX §2 contract; the
+ThemedIcon mask *primitive* (the opcode/table split) is the §2 row owned by gpu-renderer/scene-memory.
 
 **Corrections folded in:**
 - `StrokeControlOnAccentDefault` corrected to `#14FFFFFF` (**both themes** — was a mixed value).
@@ -142,6 +152,25 @@ and `Tok.AccentControlElevationBorder` — 2-stop vertical gradients (= WinUI `C
 stops). They produce a `GradientSpec` consumed by the `BoxEl.BorderBrush` field that the new
 `DrawGradientStroke` opcode renders (scene-memory.md §4.1 / gpu-renderer.md §3.1a) — the gradient *fill* path is
 unchanged; only the gradient-as-stroke raster is new (owned by gpu-renderer.md).
+
+**Accent ramp — theme-aware accent fills/text (SHIPPED; `Dsl/Tokens.cs` `AccentRamp` + `Tok` getters).** A live
+accent override is a seven-shade `AccentRamp` (`Base` + `Light1..3` + `Dark1..3`), not one flat color. The host
+reads the exact OS ramp via `IUISettings3.GetColorValue` (`FluentApp.SystemAccentRamp()` → `Tok.SetAccent(in ramp)`);
+a custom/album accent supplies only a `Base`, so `AccentRamp.Derive(base)` synthesizes the ramp with WinUI's
+"alpha-blend over black/white" approximation (`Dark{1,2,3}` = base × `{0.75, 0.55, 0.315}`; `Light{1,2,3}` = base
+blended toward white by `{0.26, 0.48, 0.68}` — the DARK ramp is exact for `#0078D4`, the LIGHT ramp approximate).
+The `Tok` accent getters then resolve **theme-aware** (mirrors WinUI `Common_themeresources_any.xaml`):
+
+| Getter | WinUI key | Light theme | Dark theme |
+|---|---|---|---|
+| `AccentDefault` (+ `Secondary`/`Tertiary`/`Subtle` at α 0.90/0.80/0.16) | `AccentFillColorDefault`… | `Dark1` (opaque) | `Light2` (opaque) |
+| `AccentTextPrimary` / `Secondary` / `Tertiary` | `AccentTextFillColor*` | `Dark2` / `Dark3` / `Dark1` | `Light3` / `Light3` / `Light2` |
+| `AccentSelectedTextBackground` | `AccentFillColorSelectedTextBackground` | `Base` | `Base` |
+| `AccentDisabled` | `AccentFillColorDisabled` | `#37000000` (fixed) | `#28FFFFFF` (fixed) |
+
+The bug this fixes: the old override stored one flat color and every accent FILL getter returned it raw in both
+themes, so light theme showed the washed-out dark-theme shade (strip icons, progress bar, sliders). Gate:
+`gate.theme.accent-ramp`.
 
 ### 2.2bis T0 multi-palette axis (SHIPPED — `ThemePalette` + `PaletteSeed`, Mica-first both themes)
 

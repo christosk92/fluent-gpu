@@ -377,7 +377,11 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
         lock (_gate)
         {
             if (_track is not { } t) return;
-            bool thin = !ImageSource.IsUsable(t.Image) || t.Artists.Count == 0 || string.IsNullOrEmpty(t.Artists[0].Name);
+            // Album identity is UI-critical too: Connect can provide usable art + artist while omitting Album.Uri.
+            // Without this term the player-bar title looks complete but can never become an album hyperlink.
+            bool thin = !ImageSource.IsUsable(t.Image)
+                || t.Artists.Count == 0 || string.IsNullOrEmpty(t.Artists[0].Name)
+                || string.IsNullOrEmpty(t.Album.Uri);
             if (!thin || t.Uri.Length == 0 || _resolvingUri == t.Uri) return;
             _resolvingUri = uri = t.Uri;
         }

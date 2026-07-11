@@ -95,7 +95,25 @@ public sealed class InputHooks
     /// <summary>Set by the overlay host: the window lost activation → close every light-dismiss overlay
     /// (WinUI window-deactivation dismiss). Invoked from the dispatcher's WindowBlur via the host wiring.</summary>
     public Action? WindowBlurred;
-    public void NotifyWindowBlur() => WindowBlurred?.Invoke();
+    public event Action? WindowBlurObserved;
+    public event Action<Point2>? PointerDownObserved;
+    public event Action? ScrollStartedObserved;
+    public void NotifyWindowBlur() { WindowBlurred?.Invoke(); WindowBlurObserved?.Invoke(); }
+    public void NotifyPointerDown(Point2 point) => PointerDownObserved?.Invoke(point);
+    public void NotifyScrollStarted() => ScrollStartedObserved?.Invoke();
+
+    /// <summary>The last mouse/pen pointer position in window DIP, or null when there is none to trust (cursor outside
+    /// the client area / window blurred). Host-wired to <c>InputDispatcher.PointerPosition</c>. The ToolTip safe-zone
+    /// poll reads it (WinUI IsToolTipInSafeZone's global pointer test) so the tooltip bubble itself stays
+    /// hit-test-invisible — a real tooltip never intercepts pointer or wheel input.</summary>
+    public Func<Point2?>? GetPointerPosition;
+
+    /// <summary>The OverlayHost scrim's dismiss-and-reopen seam (host-wired to <c>InputDispatcher.RequestContextAt</c>):
+    /// a right-click on the light-dismiss scrim closes the top overlay AND re-fires the context request at the same
+    /// window point so the node underneath opens its own context menu in ONE gesture (WinUI outside-right-click). The
+    /// scrim unmarks its HitTestVisible synchronously first so this hit-tests THROUGH the dying scrim. Null in a
+    /// host-less tree ⇒ no redispatch.</summary>
+    public Action<Point2>? RedispatchContextAt;
 
     // ── custom-titlebar chrome seam (host-wired in the AppHost ctor; consumed by the TitleBar control) ───────────────
     /// <summary>Pull the window placement (drives the max↔restore caption glyph). Null = standard frame (Normal).</summary>

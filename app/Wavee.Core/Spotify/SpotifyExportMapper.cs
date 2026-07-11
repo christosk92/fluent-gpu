@@ -1001,6 +1001,17 @@ public static class SpotifyExportMapper
     }
 
     // ── cover-extracted page palette (ALBUM / ARTIST / PLAYLIST detail accent) ───────────────────────────────
+    /// <summary>Parse a <c>fetchExtractedColors</c> Pathfinder response → a Palette from the FIRST image's dark tone.
+    /// The response shape is <c>data.extractedColors[]</c>, each element carrying <c>colorDark/colorLight/colorRaw</c>
+    /// with <c>hex</c> + <c>isFallback</c> — i.e. each element IS an <c>extractedColors</c> node, so it feeds the same
+    /// <see cref="PaletteFromColorDark"/> the album path uses. Null (empty / fallback / malformed) ⇒ no tint.</summary>
+    public static Palette? PaletteFromExtractedColorsResponse(JsonElement root)
+    {
+        var arr = Dig(Dig(root, "data"), "extractedColors");
+        if (arr.ValueKind != JsonValueKind.Array || arr.GetArrayLength() == 0) return null;
+        return PaletteFromColorDark(arr[0]);
+    }
+
     /// <summary>A cover's single dark extracted color (<c>extractedColors.colorDark</c>) → a Palette whose slots all
     /// carry that dark tone (the VIEW lifts Accent for legibility). Null when the node is absent, a generic fallback
     /// (<c>isFallback</c>), or malformed — never a wrong colour.</summary>
@@ -1145,6 +1156,13 @@ public static class SpotifyExportMapper
         var uri = Str(r, "uri");
         if (uri is null) return null;
         int tracks = (int)Long(r, "tracks", "totalCount");
+        var date = Dig(r, "date");
+        int year = (int)Long(date, "year");
+        int month = (int)Long(date, "month");
+        int day = (int)Long(date, "day");
+        string? releasePrecision = Str(date, "precision")
+            ?? (day > 0 ? "DAY" : month > 0 ? "MONTH" : year > 0 ? "YEAR" : null);
+        string? releaseDate = ReleaseDateIso(date, year, releasePrecision);
         var kind = (Str(r, "type") ?? "ALBUM").ToUpperInvariant() switch
         {
             "SINGLE" => tracks >= 4 ? AlbumKind.EP : AlbumKind.Single,
@@ -1153,9 +1171,26 @@ public static class SpotifyExportMapper
             _ => AlbumKind.Album,
         };
         return new Album(IdFromUri(uri), uri, Str(r, "name") ?? "", CoverArt(r) ?? EntityImage(r),
-            System.Array.Empty<ArtistRef>(), (int)Long(r, "date", "year"), tracks, null, kind,
+            System.Array.Empty<ArtistRef>(), year, tracks, null, kind,
+            ReleaseDate: releaseDate, ReleaseDatePrecision: releasePrecision,
             Palette: ExtractPalette(Dig(r, "coverArt"))
                 ?? ExtractPalette(Dig(r, "visualIdentityTrait", "squareCoverImage")));
+    }
+
+    // Discography release dates arrive as discrete { year, month, day, precision } fields rather than the getAlbum
+    // envelope's date.isoString. Preserve the same ISO + precision domain contract so every UI can format it consistently.
+    static string? ReleaseDateIso(JsonElement date, int year, string? precision)
+    {
+        if (year is < 1 or > 9999) return null;
+        int month = (int)Long(date, "month");
+        int day = (int)Long(date, "day");
+        return (precision ?? "").ToUpperInvariant() switch
+        {
+            "DAY" when month is >= 1 and <= 12 && day >= 1 && day <= DateTime.DaysInMonth(year, month)
+                => $"{year:D4}-{month:D2}-{day:D2}",
+            "MONTH" when month is >= 1 and <= 12 => $"{year:D4}-{month:D2}-01",
+            _ => $"{year:D4}-01-01",
+        };
     }
 
     // topTracks[].track shape: { name, uri, playcount(string), duration.totalMilliseconds, albumOfTrack.{uri,coverArt}, artists.items[] }

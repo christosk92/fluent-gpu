@@ -7,6 +7,35 @@ using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
 
+/// <summary>Visual chrome variants for <see cref="AutoSuggestBox"/>.</summary>
+public enum AutoSuggestBoxChrome
+{
+    /// <summary>The WinUI control-default field surface.</summary>
+    Standard,
+    /// <summary>A Files-style elevated pill: circle-elevation stroke at rest and a two-DIP accent focus ring.</summary>
+    ElevatedPill,
+}
+
+/// <summary>
+/// State supplied to a custom AutoSuggestBox popup presenter. The box continues to own the anchor, popup lifetime,
+/// text editor, keyboard dismissal and query submission; the presenter owns only the popup's content.
+/// </summary>
+public sealed record AutoSuggestBoxPresenterContext(
+    Signal<string> Text,
+    IReadSignal<float> Width,
+    Action<string> Submit,
+    Action Close);
+
+/// <summary>
+/// Optional rich-suggestion presenter. This is deliberately narrower than templating the whole control: consumers can
+/// render artwork and typed result models without replacing the FluentGpu AutoSuggestBox field or overlay mechanics.
+/// </summary>
+public sealed record AutoSuggestBoxPresenter(
+    Func<AutoSuggestBoxPresenterContext, Element> Build,
+    Action<int>? MoveSelection = null,
+    Func<bool>? SubmitSelection = null,
+    Action? ResetSelection = null);
+
 /// <summary>
 /// A WinUI AutoSuggestBox: an <see cref="EditableText"/> field whose filtered suggestions are hosted in a light-dismiss
 /// <b>popup</b> (an anchored overlay), not inline — so the list floats over content instead of reflowing the page and
@@ -144,6 +173,10 @@ public sealed class AutoSuggestBox : Component
     public bool BoldMatch;
     /// <summary>Optional leading glyph per suggestion row (e.g. <see cref="Icons.Search"/>), like Spotify's dropdown.</summary>
     public string? ItemGlyph;
+    /// <summary>Optional rich popup content. When null, the built-in string suggestion list is used.</summary>
+    public AutoSuggestBoxPresenter? Presenter;
+    /// <summary>The field's visual chrome. Interaction and popup behavior are identical across variants.</summary>
+    public AutoSuggestBoxChrome Chrome;
 
     public static Element Create(
         IReadOnlyList<string> suggestions,
@@ -168,7 +201,9 @@ public sealed class AutoSuggestBox : Component
         bool boldMatch = false,
         string? itemGlyph = null,
         IReadSignal<IReadOnlyList<string>>? suggestionsSignal = null,
-        IReadSignal<bool>? loadingSignal = null)
+        IReadSignal<bool>? loadingSignal = null,
+        AutoSuggestBoxPresenter? presenter = null,
+        AutoSuggestBoxChrome chrome = AutoSuggestBoxChrome.Standard)
         => Embed.Comp(() => new AutoSuggestBox
         {
             Suggestions = suggestions, SuggestionsSignal = suggestionsSignal, LoadingSignal = loadingSignal,
@@ -178,6 +213,7 @@ public sealed class AutoSuggestBox : Component
             OnQuerySubmitted = onQuerySubmitted, QueryIcon = queryIcon, MaxHeight = maxPopupHeight, DebounceMs = debounceMs,
             TextChanged = textChanged, UpdateTextOnSelect = updateTextOnSelect, Parts = parts, Field = field,
             FieldMinHeight = minHeight, FieldRadius = cornerRadius, BoldMatch = boldMatch, ItemGlyph = itemGlyph,
+            Presenter = presenter, Chrome = chrome,
         });
 
     // The rendered width — what sizes the inner editor and the popup. Reading it inside a Render subscribes THAT
@@ -215,7 +251,9 @@ public sealed class AutoSuggestBox : Component
         var userTyped = UseSignal("");                 // m_userTypedText, restored on arrow-out / Escape
         var highlight = UseSignal(-1);                 // keyboard-cursor index into the live match set
         var open = UseSignal(false);                   // IsSuggestionListOpen — drives the field corner-squaring
+        var focused = UseSignal(false);
         var svc = UseContext(Overlay.Service);
+        var popupWidth = UseComputed(() => EffectiveWidth);
 
         // The reason of an ASB-initiated write (arrow preview = SuggestionChosen, restore = ProgrammaticChange) —
         // consumed by the post-commit effect. Null → the change came through EditableText (read ITS LastChangeReason:
@@ -243,7 +281,16 @@ public sealed class AutoSuggestBox : Component
             handle.Value?.Close();
             handle.Value = null;
             highlight.Value = -1;
+            Presenter?.ResetSelection?.Invoke();
             open.Value = false;
+        }
+
+        void SubmitPresented(string text)
+        {
+            SetTextWithReason(text, TextChangeReason.SuggestionChosen);
+            OnSuggestionChosen?.Invoke(text);
+            OnQuerySubmitted?.Invoke(text);
+            Close();
         }
 
         void OpenPopup()
@@ -253,10 +300,12 @@ public sealed class AutoSuggestBox : Component
             handle.Value = svc.Open(
                 () => anchor.Value,
                 // The list renders against the USER-TYPED query signal: arrow previews must not re-filter the rows.
-                () => Embed.Comp(() => new SuggestionsList
-                {
-                    Owner = this, Query = userTyped, Highlight = highlight, OnChoose = ChooseAndSubmit,
-                }),
+                () => Presenter is { } presenter
+                    ? presenter.Build(new AutoSuggestBoxPresenterContext(query, popupWidth, SubmitPresented, Close))
+                    : Embed.Comp(() => new SuggestionsList
+                    {
+                        Owner = this, Query = userTyped, Highlight = highlight, OnChoose = ChooseAndSubmit,
+                    }),
                 FlyoutPlacement.BottomStretch,
                 // Chrome=Static: the WinUI SuggestionsPopup is a bare Popup with NO transitions (the AutoSuggestBox
                 // template, generic.xaml — no TransitionCollection; AutoSuggestBox_Partial.cpp attaches none): the
@@ -268,6 +317,7 @@ public sealed class AutoSuggestBox : Component
             {
                 handle.Value = null;
                 highlight.Value = -1;
+                Presenter?.ResetSelection?.Invoke();
                 open.Value = false;
             };
         }
@@ -302,6 +352,7 @@ public sealed class AutoSuggestBox : Component
 
             if (reason == TextChangeReason.UserInput)
             {
+                Presenter?.ResetSelection?.Invoke();
                 userTyped.Value = q;                    // m_userTypedText = strQueryText (only on _UserInput, cpp:479)
                 highlight.Value = -1;                   // a fresh user edit resets the keyboard cursor (cpp:484–496)
                 if (q.Length > 0) OpenPopup();          // keep the attached popup open for no-results
@@ -348,7 +399,11 @@ public sealed class AutoSuggestBox : Component
 
         // Enter (cpp:1149–1160): submit with the highlighted item as ChosenSuggestion — the field text was already
         // previewed by the selection change; SuggestionChosen is NOT re-raised here.
-        void OnEnter(string _) => SubmitQuery();
+        void OnEnter(string _)
+        {
+            if (Presenter?.SubmitSelection?.Invoke() == true) { Close(); return; }
+            SubmitQuery();
+        }
 
         void OnEscape()
         {
@@ -367,6 +422,13 @@ public sealed class AutoSuggestBox : Component
             if (handle.Value is not { IsOpen: true })
             {
                 if (e.KeyCode == Keys.Down && q.Length > 0) { OpenPopup(); e.Handled = true; }
+                return;
+            }
+
+            if (Presenter?.MoveSelection is { } moveSelection)
+            {
+                moveSelection(e.KeyCode == Keys.Down ? 1 : -1);
+                e.Handled = true;
                 return;
             }
 
@@ -416,10 +478,16 @@ public sealed class AutoSuggestBox : Component
         {
             var e = new EditableText
             {
-                Text = query, Width = width - iconCol, WidthSignal = innerWidth, Height = 32f, Placeholder = Placeholder,
+                Text = query, Width = width - iconCol, WidthSignal = innerWidth,
+                Height = Chrome == AutoSuggestBoxChrome.ElevatedPill ? MathF.Max(32f, FieldMinHeight - 4f) : 32f,
+                Placeholder = Placeholder,
                 Chromeless = true,
                 OnCommit = OnEnter, OnCancel = OnEscape,
-                OnFocusChanged = f => { if (!f) Field?.MarkTouched(); },   // form-validation.md: arm the OnTouched gate on blur
+                OnFocusChanged = f =>
+                {
+                    focused.Value = f;
+                    if (!f) Field?.MarkTouched();
+                },
             };
             _edit = e;
             return e;
@@ -451,7 +519,10 @@ public sealed class AutoSuggestBox : Component
             {
                 Grow = 1f, Margin = new Edges4(1, 3, 1, 3),
                 AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                Corners = Radii.ControlAll, Role = AutomationRole.Button,
+                Corners = Chrome == AutoSuggestBoxChrome.ElevatedPill
+                    ? CornerRadius4.All(MathF.Max(0f, (FieldRadius > 0f ? FieldRadius : Radii.Control) - 2f))
+                    : Radii.ControlAll,
+                Role = AutomationRole.Button,
                 HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
                 OnClick = SubmitQuery,
                 Children = [Parts.Apply(PartQueryIcon, new TextEl(QueryIcon!)
@@ -483,9 +554,11 @@ public sealed class AutoSuggestBox : Component
         // KeepInteriorCornersSquare: while the list is open (open-down), square the field's BOTTOM corners so it joins the
         // popup; full radius (ControlCornerRadius, or the caller's pill radius) otherwise.
         float fieldR = FieldRadius > 0f ? FieldRadius : Radii.Control;
-        var fieldCorners = open.Value
+        bool elevated = Chrome == AutoSuggestBoxChrome.ElevatedPill;
+        var fieldCorners = !elevated && open.Value
             ? new CornerRadius4(fieldR, fieldR, 0f, 0f)
             : CornerRadius4.All(fieldR);
+        bool hasFocus = focused.Value;
 
         Action<NodeHandle> anchorCapture = h => { anchor.Value = h; if (Field is { } fn) fn.Node.Value = h; };
         Element[] rootKids = children.ToArray();
@@ -510,11 +583,21 @@ public sealed class AutoSuggestBox : Component
             MaxWidth = Grow > 0f && MaxFillWidth > 0f ? MaxFillWidth : float.NaN,
             MaxHeight = Grow > 0f ? FieldMinHeight : float.NaN,
             MinHeight = FieldMinHeight, AlignItems = FlexAlign.Center,
-            Corners = fieldCorners, BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault, Fill = Tok.FillControlDefault,
+            Corners = fieldCorners,
+            BorderWidth = elevated && hasFocus ? 2f : 1f,
+            BorderColor = elevated ? ColorF.Transparent : Tok.StrokeControlDefault,
+            BorderBrush = elevated
+                ? (hasFocus ? GradientSpec.Solid(Tok.AccentDefault) : Tok.CircleElevationBorder)
+                : null,
+            HoverBorderBrush = elevated && !hasFocus ? Tok.CircleElevationBorder : null,
+            PressedBorderBrush = elevated && !hasFocus ? Tok.CircleElevationBorder : null,
+            Fill = elevated && hasFocus ? Tok.FillControlInputActive : Tok.FillControlDefault,
             // The field surface (WinUI TextBox BorderElement) owns the PointerOver fill at the field's CORNER RADIUS, and
             // CLIPS — so the inner Chromeless editor's square hover fill follows the (possibly pill) corners instead of
             // bleeding past them as a rectangle (the squaring is intentional per EditableText: "the composer rounds + clips").
-            HoverFill = Tok.FillControlSecondary, ClipToBounds = true,
+            HoverFill = elevated && hasFocus ? Tok.FillControlInputActive : Tok.FillControlSecondary,
+            PressedFill = elevated && hasFocus ? Tok.FillControlInputActive : Tok.FillControlTertiary,
+            ClipToBounds = true,
             // form-validation.md: the field chrome owns the invalid border (the inner editor is borderless inside it).
             Validation = Field is { } fb ? Prop.Of(() => fb.Error.Value.IsValid ? ValidationState.None : ValidationState.Error) : default,
             Role = AutomationRole.ComboBox,

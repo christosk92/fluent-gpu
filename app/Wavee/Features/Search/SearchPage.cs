@@ -318,9 +318,10 @@ sealed class SearchSongs : Component
 
     static readonly ColumnSet Cols = new(Album: false, By: false, Date: false, Video: false, Plays: false, Heart: true, Thumb: true);
     static readonly TrackSize[] Columns =
-        [TrackSize.Px(36f), TrackSize.Px(40f), TrackSize.Px(TrackRow.ThumbSize), TrackSize.Star(), TrackSize.Px(64f)];
+        [TrackSize.Px(36f), TrackSize.Px(40f), TrackSize.Px(TrackRow.ThumbSize), TrackSize.Star(), TrackSize.Px(64f), TrackSize.Px(40f)];   // trailing 40px = the "…" overflow lane
     const float RowContentH = 56f;
     const float RowExtent = 60f;
+    readonly SwipeGroup _swipeGroup = new();
 
     // transitions.dev texts-reveal for the bound Songs list: per-slot mount Enter (rise + fade + blur) with a baked
     // per-index delay. Only the first viewport staggers; slots realized later by scrolling mount unanimated (the
@@ -337,6 +338,8 @@ sealed class SearchSongs : Component
         if (model is null) return new BoxEl();
         var bridge = UseContext(PlaybackBridge.Slot);
         var lib = UseContext(LibraryBridge.Slot);
+        var acts = UseContext(ActionServices.Slot);      // row context menus (selection-aware TrackContextMenu)
+        var menuOverlay = UseContext(Overlay.Service);
         var tracks = model.Tracks;
         int n = Math.Min(model.Max, tracks.Count);
         if (n <= 0) return new BoxEl();
@@ -355,7 +358,7 @@ sealed class SearchSongs : Component
             scope =>
             {
                 int slot0 = scope.Index.Peek();   // the slot's initial item index at realize
-                return new BoxEl
+                var wrapper = new BoxEl
                 {
                     Direction = 1,
                     Animate = slot0 < StaggerRowCap && !Motion.ReducedMotion
@@ -363,6 +366,24 @@ sealed class SearchSongs : Component
                         : (LayoutTransition?)null,
                     Children = [SelectorVisualsBound.AccentPill(scope, Embed.Comp(() => new SearchSongRow(model, scope, bridge, lib)), showChecks)],
                 };
+                // Right-click / long-press: the selection-aware track menu (Explorer semantics — inside a multi-
+                // selection acts on all of it; outside collapses to the clicked row). No playlist host here.
+                var row = wrapper;
+                if (acts is { } a)
+                    row = row.WithContextMenu(menuOverlay, () => TrackContextMenu.Build(
+                        a, model.Selection, i => (uint)i < (uint)Math.Min(model.Max, model.Tracks.Count) ? model.Tracks[i] : null,
+                        scope.Index.Peek(), static () => null));
+                Element result = row;
+                if (acts is { } swipeActs)
+                    result = RowSwipe.WrapBound(result, () =>
+                    {
+                        int i = scope.Index.Peek();
+                        int count = Math.Min(model.Max, model.Tracks.Count);
+                        return (uint)i < (uint)count
+                            ? new ActionContext(ActionTarget.ForTracks(new[] { model.Tracks[i] }), swipeActs)
+                            : null;
+                    }, _swipeGroup, TrackActions.ToggleLike, TrackActions.AddToQueue, scope.Index);
+                return result;
             },
             RepeatLayout.Stack(RowExtent),
             selectionMode: ItemsSelectionMode.Extended,
@@ -375,6 +396,7 @@ sealed class SearchSongs : Component
                 TrackRow.Invoke(bridge, t, () => model.PlayTrack(t));
             },
             itemText: i => (uint)i < (uint)n ? tracks[i].Title : "",
+            onScrollGeometryChanged: (g => BitConverter.SingleToInt32Bits(g.OffsetY), _ => _swipeGroup.Close()),
             grow: 0f);
     }
 
@@ -409,7 +431,9 @@ sealed class SearchSongs : Component
             return TrackRow.Grid(t, i, st, Cols, Columns, RowContentH, title, showTrackArtist: true, _model.Go,
                 onPlay: () => TrackRow.Invoke(_bridge, t, () => _model.PlayTrack(t)),
                 onLike: t.Uri.Length > 0 ? () => _lib?.ToggleSaved(t.Uri, t.Title) : null,
-                likePop: likePop);
+                likePop: likePop,
+                // Trailing "…" opens the row's context menu (the .WithContextMenu wrapper at the slot) via ClickRequestsContext.
+                actionsCell: TrackRow.MoreButton(true));
         }
     }
 
@@ -422,7 +446,8 @@ sealed class SearchSongs : Component
         for (int i = 0; i < n; i++)
             rows[i] = TrackRow.Row(tracks[i], i, new TrackRow.State(false, false, false, IsTop: false, Saved: false),
                                    Cols, Columns, RowContentH, showTrackArtist: true, static (_, _) => { },
-                                   onPlay: static () => { }, onLike: null);
+                                   onPlay: static () => { }, onLike: null,
+                                   actionsCell: TrackRow.MoreButton(false));   // reserve the "…" lane so the shimmer matches the live rows
         return new BoxEl { Direction = 1, Children = rows };
     }
 }
@@ -447,12 +472,23 @@ sealed class SearchAllList : Component
         var model = UseContext(Props);
         if (model is null) return new BoxEl();
         var lib = UseContext(LibraryBridge.Slot);
+        var acts = UseContext(ActionServices.Slot);      // row context menus (Menus.Card / Menus.TrackAttach)
+        var menuOverlay = UseContext(Overlay.Service);
         return model.Filter is { } filter
-            ? BuildFiltered(model.Results, lib, model, filter, model.EmptyTitle ?? Loc.Get(Strings.Search.NoResults))
-            : Build(model.Results, lib, model);
+            ? BuildFiltered(model.Results, lib, model, filter, model.EmptyTitle ?? Loc.Get(Strings.Search.NoResults), acts, menuOverlay)
+            : Build(model.Results, lib, model, acts, menuOverlay);
     }
 
-    internal static Element Build(SearchResults r, LibraryBridge? lib, Model model)
+    // A uri-only card menu (top hits carry uri + name, no domain object); null when the action system isn't provided.
+    static MenuAttach? CardMenu(ActionServices? acts, IOverlayService? overlay, string uri, string name)
+        => acts is null || overlay is null ? null : Menus.CardAttach(acts, overlay, uri, name);
+
+    // A full-track menu (fallback rows DO carry the Track — album/artist rows included).
+    static MenuAttach? TrackMenu(ActionServices? acts, IOverlayService? overlay, Track t)
+        => acts is null || overlay is null ? null : Menus.TrackAttach(acts, overlay, t);
+
+    internal static Element Build(SearchResults r, LibraryBridge? lib, Model model,
+                                  ActionServices? acts = null, IOverlayService? menuOverlay = null)
     {
 
         // Spotify's unified "All" tab: render topResultsV2.itemsV2 IN ORDER — the FIRST item is the Top Result (the `large`
@@ -463,12 +499,12 @@ sealed class SearchAllList : Component
         if (hits is { Count: > 0 })
         {
             var rows = new List<Element>(hits.Count);
-            rows.Add(HitRow(hits[0], lib, model, large: true));
-            for (int i = 1; i < hits.Count; i++) rows.Add(HitRow(hits[i], lib, model, large: false));
+            rows.Add(HitRow(hits[0], lib, model, large: true, acts, menuOverlay));
+            for (int i = 1; i < hits.Count; i++) rows.Add(HitRow(hits[i], lib, model, large: false, acts, menuOverlay));
             return new BoxEl { Direction = 1, Gap = WaveeSpace.S, Children = rows.ToArray() };
         }
 
-        var fallback = FallbackRows(r, lib, model);
+        var fallback = FallbackRows(r, lib, model, acts, menuOverlay);
         if (fallback.Count > 0)
             return new BoxEl { Direction = 1, Gap = WaveeSpace.S, Children = fallback.ToArray() };
 
@@ -476,19 +512,21 @@ sealed class SearchAllList : Component
         return EmptyState.Build(Loc.Get(Strings.Search.NoResults), glyph: Icons.Search);
     }
 
-    internal static Element BuildFiltered(SearchResults r, LibraryBridge? lib, Model model, Func<SearchTopHit, bool> include, string emptyTitle)
+    internal static Element BuildFiltered(SearchResults r, LibraryBridge? lib, Model model, Func<SearchTopHit, bool> include, string emptyTitle,
+                                          ActionServices? acts = null, IOverlayService? menuOverlay = null)
     {
         var hits = r.TopHits?.Where(include).ToArray() ?? Array.Empty<SearchTopHit>();
         if (hits.Length == 0) return EmptyState.Build(emptyTitle, glyph: Icons.Search);
 
         var rows = new Element[hits.Length];
         for (int i = 0; i < hits.Length; i++)
-            rows[i] = HitRow(hits[i], lib, model, large: false);
+            rows[i] = HitRow(hits[i], lib, model, large: false, acts, menuOverlay);
         return new BoxEl { Direction = 1, Gap = WaveeSpace.S, Children = rows };
     }
 
     // ── every row is MediaCard.Row (the shared factory); these supply the per-kind data + actions only ───────────────────
-    static Element HitRow(SearchTopHit h, LibraryBridge? lib, Model model, bool large)
+    static Element HitRow(SearchTopHit h, LibraryBridge? lib, Model model, bool large,
+                          ActionServices? acts = null, IOverlayService? menuOverlay = null)
     {
         bool isTrack = h.Kind == SearchHitKind.Track;
         Element? trailing =
@@ -504,10 +542,12 @@ sealed class SearchAllList : Component
             eyebrowColor: isPremiumEyebrow ? WaveeColors.PremiumText : Tok.AccentTextPrimary,
             typeChip: large ? null : h.TypeLabel, detail: large ? null : h.Detail, trailing: trailing, large: large,
             meta: large ? null : h.Meta, detailBelowArt: h.Kind == SearchHitKind.Audiobook,
-            onSubtitleNav: key => model.Go(key, null));   // artist/album names in the subtitle are individually clickable
+            onSubtitleNav: key => model.Go(key, null),   // artist/album names in the subtitle are individually clickable
+            menu: CardMenu(acts, menuOverlay, h.Uri, h.Name));
     }
 
-    static List<Element> FallbackRows(SearchResults r, LibraryBridge? lib, Model model)
+    static List<Element> FallbackRows(SearchResults r, LibraryBridge? lib, Model model,
+                                      ActionServices? acts = null, IOverlayService? menuOverlay = null)
     {
         var rows = new List<Element>(Math.Min(r.Tracks.Count + r.Artists.Count + r.Albums.Count + r.Playlists.Count, 18));
 
@@ -515,53 +555,61 @@ sealed class SearchAllList : Component
         bool topIsAlbum = !topIsArtist && r.Albums.Count > 0;
         bool topIsPlaylist = !topIsArtist && !topIsAlbum && r.Playlists.Count > 0;
 
-        if (topIsArtist) rows.Add(ArtistRow(r.Artists[0], lib, model, large: true));
-        else if (topIsAlbum) rows.Add(AlbumRow(r.Albums[0], model, large: true));
-        else if (topIsPlaylist) rows.Add(PlaylistRow(r.Playlists[0], model, large: true));
+        if (topIsArtist) rows.Add(ArtistRow(r.Artists[0], lib, model, large: true, acts, menuOverlay));
+        else if (topIsAlbum) rows.Add(AlbumRow(r.Albums[0], model, large: true, acts, menuOverlay));
+        else if (topIsPlaylist) rows.Add(PlaylistRow(r.Playlists[0], model, large: true, acts, menuOverlay));
 
         int artistIndex = topIsArtist ? 1 : 0;
         int trackCount = Math.Min(r.Tracks.Count, 8);
         for (int i = 0; i < trackCount; i++)
         {
-            rows.Add(TrackRowFb(r.Tracks[i], lib, model));
+            rows.Add(TrackRowFb(r.Tracks[i], lib, model, acts, menuOverlay));
             if ((i == 2 || i == 5) && artistIndex < r.Artists.Count)
-                rows.Add(ArtistRow(r.Artists[artistIndex++], lib, model, large: false));
+                rows.Add(ArtistRow(r.Artists[artistIndex++], lib, model, large: false, acts, menuOverlay));
         }
 
         while (artistIndex < r.Artists.Count && rows.Count < 14)
-            rows.Add(ArtistRow(r.Artists[artistIndex++], lib, model, large: false));
+            rows.Add(ArtistRow(r.Artists[artistIndex++], lib, model, large: false, acts, menuOverlay));
 
         int albumStart = topIsAlbum ? 1 : 0;
         for (int i = albumStart; i < r.Albums.Count && i < albumStart + 4; i++)
-            rows.Add(AlbumRow(r.Albums[i], model, large: false));
+            rows.Add(AlbumRow(r.Albums[i], model, large: false, acts, menuOverlay));
 
         int playlistStart = topIsPlaylist ? 1 : 0;
         for (int i = playlistStart; i < r.Playlists.Count && i < playlistStart + 4; i++)
-            rows.Add(PlaylistRow(r.Playlists[i], model, large: false));
+            rows.Add(PlaylistRow(r.Playlists[i], model, large: false, acts, menuOverlay));
 
         return rows;
     }
 
-    static Element TrackRowFb(Track t, LibraryBridge? lib, Model model) => MediaCard.Row(
+    static Element TrackRowFb(Track t, LibraryBridge? lib, Model model,
+                              ActionServices? acts = null, IOverlayService? menuOverlay = null) => MediaCard.Row(
         t.Image, t.Title, (t.HasVideo ? "Music video" : "Song") + " • " + Names(t.Artists), t.Uri, false,
         () => model.PlayKnownTrack(t), () => model.PlayKnownTrack(t), typeChip: "Song",
-        trailing: SaveButton(t.Uri.Length > 0 && (lib?.IsSaved(t.Uri) ?? false), () => { if (t.Uri.Length > 0) lib?.ToggleSaved(t.Uri, t.Title); }));
+        trailing: SaveButton(t.Uri.Length > 0 && (lib?.IsSaved(t.Uri) ?? false), () => { if (t.Uri.Length > 0) lib?.ToggleSaved(t.Uri, t.Title); }),
+        menu: TrackMenu(acts, menuOverlay, t));
 
-    static Element ArtistRow(Artist a, LibraryBridge? lib, Model model, bool large) => MediaCard.Row(
+    static Element ArtistRow(Artist a, LibraryBridge? lib, Model model, bool large,
+                             ActionServices? acts = null, IOverlayService? menuOverlay = null) => MediaCard.Row(
         a.Image, a.Name, Loc.Get(Strings.Search.TypeArtist), a.Uri, true,
         () => model.Go("artist:" + a.Uri, a.Name), () => model.PlayContext(a.Uri),
         typeChip: large ? null : Loc.Get(Strings.Search.TypeArtist),
-        trailing: FollowButton(lib?.IsSaved(a.Uri) ?? false, () => lib?.ToggleSaved(a.Uri, a.Name)), large: large);
+        trailing: FollowButton(lib?.IsSaved(a.Uri) ?? false, () => lib?.ToggleSaved(a.Uri, a.Name)), large: large,
+        menu: CardMenu(acts, menuOverlay, a.Uri, a.Name));
 
-    static Element AlbumRow(Album a, Model model, bool large) => MediaCard.Row(
+    static Element AlbumRow(Album a, Model model, bool large,
+                            ActionServices? acts = null, IOverlayService? menuOverlay = null) => MediaCard.Row(
         a.Cover, a.Name, Loc.Get(Strings.Search.TypeAlbum) + (a.Artists.Count > 0 ? " • " + a.Artists[0].Name : ""), a.Uri, false,
         () => model.Go("album:" + a.Uri, a.Name), () => model.PlayContext(a.Uri),
-        typeChip: large ? null : Loc.Get(Strings.Search.TypeAlbum), large: large);
+        typeChip: large ? null : Loc.Get(Strings.Search.TypeAlbum), large: large,
+        menu: CardMenu(acts, menuOverlay, a.Uri, a.Name));
 
-    static Element PlaylistRow(Playlist p, Model model, bool large) => MediaCard.Row(
+    static Element PlaylistRow(Playlist p, Model model, bool large,
+                               ActionServices? acts = null, IOverlayService? menuOverlay = null) => MediaCard.Row(
         p.Cover, p.Name, Loc.Get(Strings.Search.TypePlaylist), p.Uri, false,
         () => model.Go("pl:" + p.Uri, p.Name), () => model.PlayContext(p.Uri),
-        typeChip: large ? null : Loc.Get(Strings.Search.TypePlaylist), large: large);
+        typeChip: large ? null : Loc.Get(Strings.Search.TypePlaylist), large: large,
+        menu: CardMenu(acts, menuOverlay, p.Uri, p.Name));
 
     static Action OpenFor(Model model, SearchHitKind kind, string uri, string name) => kind switch
     {

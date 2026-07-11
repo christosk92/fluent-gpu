@@ -123,10 +123,6 @@ public static class WaveeLogExtensions
         l.Event(WaveeLogLevel.Error, cat, eventId, msg, fields: fields);
     public static void Error(this IWaveeLog l, string cat, string eventId, string msg, Exception? ex, params WaveeLogField[] fields) =>
         l.Event(WaveeLogLevel.Error, cat, eventId, msg, ex: ex, fields: fields);
-    public static Action<string> ToAction(this IWaveeLog l, string category, string? operationId = null) =>
-        operationId is { Length: > 0 }
-            ? message => l.Event(WaveeLogLevel.Info, category, "", message, operationId)
-            : message => l.Log(WaveeLogLevel.Info, category, message);
 }
 
 /// <summary>A PII wrapper whose <see cref="ToString"/> never reveals the value (tokens, credentials). Call

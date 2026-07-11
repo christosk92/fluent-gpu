@@ -24,6 +24,8 @@ namespace Wavee;
 // split into WORK spikes vs GC spikes (a Gen0+ collection fired on that frame), because the two need different fixes.
 internal static class WaveeNavProbe
 {
+    static readonly WaveeLogger Log = new(WaveeLog.Instance, "probe");
+
     const double BudgetMs = 1000.0 / 120.0;   // one 120 Hz vblank — the smoothness bar
 
     [System.Runtime.InteropServices.DllImport("user32", ExactSpelling = true)]
@@ -59,9 +61,10 @@ internal static class WaveeNavProbe
         bool liveLyricsScroll = Diag.EnvFlag("WAVEE_LIVE_LYRICS_SCROLL_PROBE");
         bool advanceProbe = Diag.EnvFlag("WAVEE_LYRICS_ADVANCE_PROBE");
         if (!Diag.EnvFlag("WAVEE_NAV_PROBE") && !connStress && !trackShot && !heroShot && !shelfShot && !railShot && !railProbe && !homeScroll && !lyricsProbe && !liveLyricsScroll && !advanceProbe) return false;
+        WaveeLog.Instance.SetEcho(Console.Error.WriteLine);   // env-gated run only: mirror probe progress to the terminal
         if (window is not Win32Window w || device is not D3D12Device gpu)
         {
-            Console.Error.WriteLine("[wavee-nav-probe] unavailable: requires Win32Window + D3D12Device");
+            Log.Warn("[wavee-nav-probe] unavailable: requires Win32Window + D3D12Device");
             return true;
         }
         // DiagnosticRun fires straight after window.Show(), BEFORE the first frame — so WaveeShell hasn't mounted yet
@@ -84,7 +87,7 @@ internal static class WaveeNavProbe
         }
         if (WaveeShell.ProbeNav is null)
         {
-            Console.Error.WriteLine("[wavee-nav-probe] nav hook not wired (WaveeShell not mounted?)");
+            Log.Warn("[wavee-nav-probe] nav hook not wired (WaveeShell not mounted?)");
             return true;
         }
         if (heroShot) RunHeroCollapseShot(host, w, gpu);
@@ -103,18 +106,18 @@ internal static class WaveeNavProbe
 
     // WAVEE_TRACKLIST_SHOT=1: navigate to each surface that shows tracks and capture a PNG, so the unified track row (the
     // shared TrackRow cell) can be eyeballed for 1:1 parity — a detail playlist, the Library albums pane, an artist page
-    // ("Popular"), and search results ("Songs"). Output → C:\tmp\tl_*.png.
+    // ("Popular"), and search results ("Songs"). Output → <logs>\artifacts\tl_*.png.
     static void RunTrackListShot(AppHost host, Win32Window window, D3D12Device gpu)
     {
-        try { System.IO.Directory.CreateDirectory(@"C:\tmp"); } catch { }
+        try { System.IO.Directory.CreateDirectory(ProbeArtifacts.Dir); } catch { }
         void Frame() { if (!window.IsClosed) { gpu.SuppressLatencyWaitOnce(); gpu.SuppressVsyncOnce(); host.RunFrame(); } }
         void Nav(string k, string? a) => WaveeShell.ProbeNav!(k, a);
         void Settle(int n) { for (int i = 0; i < n && !window.IsClosed; i++) Frame(); }
         void Shot(string name)
         {
             var px = gpu.CaptureBgra(out int cw, out int ch);
-            PngWriter.WriteBgra($@"C:\tmp\tl_{name}.png", px, cw, ch);
-            Console.Error.WriteLine($"[tracklist-shot] wrote tl_{name}.png ({cw}x{ch})");
+            PngWriter.WriteBgra(ProbeArtifacts.PathFor($"tl_{name}.png"), px, cw, ch);
+            Log.Info($"[tracklist-shot] wrote tl_{name}.png ({cw}x{ch})");
         }
 
         Nav("home", null); Settle(40); System.Threading.Thread.Sleep(700); Settle(20);   // home live + card covers decode
@@ -132,31 +135,31 @@ internal static class WaveeNavProbe
             window.QueueInput(new InputEvent(InputKind.Wheel, pt, 0, 0, 240f));
             Settle(30);
             host.Scene.TryGetScroll(detailVp, out var detailAfter);
-            Console.Error.WriteLine($"[tracklist-shot] detail-scroll expected=n#{detailVp.Raw.Index} hit=n#{hit.Raw.Index} routed=n#{routed.Raw.Index} " +
+            Log.Info($"[tracklist-shot] detail-scroll expected=n#{detailVp.Raw.Index} hit=n#{hit.Raw.Index} routed=n#{routed.Raw.Index} " +
                 $"rect=({rr.X:0},{rr.Y:0} {rr.W:0}x{rr.H:0}) view={detailBefore.ViewportH:0} content={detailBefore.ContentH:0} " +
                 $"offset={detailBefore.OffsetY:0}->{detailAfter.OffsetY:0} phase={detailAfter.Phase} pending={detailAfter.PendingTargetY:0} " +
                 $"result={(MathF.Abs(detailAfter.OffsetY - detailBefore.OffsetY) > 1f ? "PASS" : "FAIL")}");
             if (routed.IsNull)
             {
-                Console.Error.WriteLine("[tracklist-shot]   expected-chain:");
+                Log.Info("[tracklist-shot]   expected-chain:");
                 for (var n = detailVp; !n.IsNull; n = host.Scene.Parent(n))
                 {
                     var nr = host.Scene.AbsoluteRect(n);
                     var nf = host.Scene.Flags(n);
-                    Console.Error.WriteLine($"[tracklist-shot]     n#{n.Raw.Index} type={host.Scene.ElementTypeId(n)} " +
+                    Log.Info($"[tracklist-shot]     n#{n.Raw.Index} type={host.Scene.ElementTypeId(n)} " +
                         $"rect=({nr.X:0},{nr.Y:0} {nr.W:0}x{nr.H:0}) flags={nf} scroll={host.Scene.HasScroll(n)}");
                 }
-                Console.Error.WriteLine("[tracklist-shot]   hit-chain:");
+                Log.Info("[tracklist-shot]   hit-chain:");
                 for (var n = hit; !n.IsNull; n = host.Scene.Parent(n))
                 {
                     var nr = host.Scene.AbsoluteRect(n);
                     var nf = host.Scene.Flags(n);
-                    Console.Error.WriteLine($"[tracklist-shot]   hit-chain n#{n.Raw.Index} type={host.Scene.ElementTypeId(n)} " +
+                    Log.Info($"[tracklist-shot]   hit-chain n#{n.Raw.Index} type={host.Scene.ElementTypeId(n)} " +
                         $"rect=({nr.X:0},{nr.Y:0} {nr.W:0}x{nr.H:0}) flags={nf} scroll={host.Scene.HasScroll(n)}");
                 }
             }
         }
-        else Console.Error.WriteLine("[tracklist-shot] detail-scroll MISSING");
+        else Log.Info("[tracklist-shot] detail-scroll MISSING");
         Shot("detail");
 
         // 2) Album detail uses an OUTER scroll viewport around its eager track rows + trailing shelves. Probe the exact
@@ -183,13 +186,13 @@ internal static class WaveeNavProbe
             Settle(30);
             host.Scene.TryGetScroll(albumVp, out var albumFocused);
             var routedFocused = host.Input.ScrollableUnderForAxis(pt, wantHorizontal: false);
-            Console.Error.WriteLine($"[tracklist-shot] album-scroll expected=n#{albumVp.Raw.Index} routed=n#{routed.Raw.Index}/n#{routedFocused.Raw.Index} " +
+            Log.Info($"[tracklist-shot] album-scroll expected=n#{albumVp.Raw.Index} routed=n#{routed.Raw.Index}/n#{routedFocused.Raw.Index} " +
                 $"rect=({rr.X:0},{rr.Y:0} {rr.W:0}x{rr.H:0}) view={albumBefore.ViewportH:0} content={albumBefore.ContentH:0} " +
                 $"offset={albumBefore.OffsetY:0}->{albumAfter.OffsetY:0}->{albumFocused.OffsetY:0} " +
                 $"initial={(MathF.Abs(albumAfter.OffsetY - albumBefore.OffsetY) > 1f ? "PASS" : "FAIL")} " +
                 $"reactivate={(MathF.Abs(albumFocused.OffsetY - beforeFocusWheel) > 1f ? "PASS" : "FAIL")}");
         }
-        else Console.Error.WriteLine("[tracklist-shot] album-scroll MISSING");
+        else Log.Info("[tracklist-shot] album-scroll MISSING");
         Shot("album");
 
         // Bundled Spotify collection art + the intentional no-layer exception on the Liked Songs rail.
@@ -203,22 +206,22 @@ internal static class WaveeNavProbe
         // 5) Search → the "Songs" rows in the All view.
         Nav("search", "the"); Settle(50); System.Threading.Thread.Sleep(700); Settle(60); Shot("search");
 
-        Console.Error.WriteLine("[tracklist-shot] done");
+        Log.Info("[tracklist-shot] done");
     }
 
     // WAVEE_RAIL_SHOT=1: open the right rail in each mode (Details / Lyrics / Queue) and capture PNGs — the rail
-    // background, the content↔rail seam, and the bottom corner treatment. Output → C:\tmp\rail_*.png.
+    // background, the content↔rail seam, and the bottom corner treatment. Output → <logs>\artifacts\rail_*.png.
     static void RunRailShot(AppHost host, Win32Window window, D3D12Device gpu)
     {
-        try { System.IO.Directory.CreateDirectory(@"C:\tmp"); } catch { }
+        try { System.IO.Directory.CreateDirectory(ProbeArtifacts.Dir); } catch { }
         window.SetClientSize(1700, 950);   // wide → the rail DOCKS (RailFits) — the mode the reports are about
         void Frame() { if (!window.IsClosed) { gpu.SuppressLatencyWaitOnce(); gpu.SuppressVsyncOnce(); host.RunFrame(); } }
         void Settle(int n) { for (int i = 0; i < n && !window.IsClosed; i++) Frame(); }
         void Shot(string name)
         {
             var px = gpu.CaptureBgra(out int cw, out int ch);
-            PngWriter.WriteBgra($@"C:\tmp\rail_{name}.png", px, cw, ch);
-            Console.Error.WriteLine($"[rail-shot] wrote rail_{name}.png ({cw}x{ch})");
+            PngWriter.WriteBgra(ProbeArtifacts.PathFor($"rail_{name}.png"), px, cw, ch);
+            Log.Info($"[rail-shot] wrote rail_{name}.png ({cw}x{ch})");
         }
 
         WaveeShell.ProbeNav!("home", null); Settle(60); System.Threading.Thread.Sleep(2500); Settle(120);
@@ -229,12 +232,12 @@ internal static class WaveeNavProbe
         Settle(48); System.Threading.Thread.Sleep(800); Settle(60); Shot("details");
         WaveeShell.ProbeRail!(0 /*Lyrics*/); Settle(60); System.Threading.Thread.Sleep(800); Settle(60); Shot("lyrics");
         WaveeShell.ProbeRail!(1 /*Queue*/); Settle(60); System.Threading.Thread.Sleep(500); Settle(60); Shot("queue");
-        Console.Error.WriteLine("[rail-shot] done");
+        Log.Info("[rail-shot] done");
     }
 
     // WAVEE_SHELF_SHOT=1: navigate home and force a horizontal PagedShelf strip to a MID-PAGE offset (what a touchpad
     // free-pan leaves behind), then capture PNGs — the LEFT edge fade must appear once content extends past the left
-    // edge, and the left chevron must re-enable (the page state re-syncs from the settled offset). Output → C:\tmp\shelf_*.png.
+    // edge, and the left chevron must re-enable (the page state re-syncs from the settled offset). Output → <logs>\artifacts\shelf_*.png.
     static void RunShelfFadeShot(AppHost host, Win32Window window, D3D12Device gpu)
     {
         string shotDir = Path.Combine(Environment.CurrentDirectory, ".tmp", "shelf-shot-" + Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
@@ -255,7 +258,7 @@ internal static class WaveeNavProbe
             var px = gpu.CaptureBgra(out int cw, out int ch);
             string path = Path.Combine(shotDir, $"shelf_{name}.png");
             PngWriter.WriteBgra(path, px, cw, ch);
-            Console.Error.WriteLine($"[shelf-shot] wrote {path} ({cw}x{ch}); edgeFadeGroups={lastFrame.EdgeFadeGroupCount}");
+            Log.Info($"[shelf-shot] wrote {path} ({cw}x{ch}); edgeFadeGroups={lastFrame.EdgeFadeGroupCount}");
         }
 
         WaveeShell.ProbeNav!("home", null); Settle(60); System.Threading.Thread.Sleep(1500); Settle(60);
@@ -267,14 +270,14 @@ internal static class WaveeNavProbe
         // off-screen. First wheel the Home viewport until a shelf is actually visible.
         var homeVp = FindScrollViewportByKey(scene, "home");
         if (homeVp.IsNull || !scene.TryGetScroll(homeVp, out var homeBefore))
-        { Console.Error.WriteLine("[shelf-shot] Home viewport missing — aborting"); return; }
+        { Log.Warn("[shelf-shot] Home viewport missing — aborting"); return; }
         var homeRect = scene.AbsoluteRect(homeVp);
         var pagePoint = new Point2(homeRect.X + homeRect.W * 0.5f, homeRect.Y + homeBefore.ViewportH * 0.5f);
         window.QueueInput(new InputEvent(InputKind.PointerMove, pagePoint, 0, 0));
         window.QueueInput(new InputEvent(InputKind.Wheel, pagePoint, 0, 0, 520f));
         for (int i = 0; i < 90 && !window.IsClosed; i++) { System.Threading.Thread.Sleep(4); Frame(); }
         scene.TryGetScroll(homeVp, out var homeAfter);
-        Console.Error.WriteLine($"[shelf-shot] Home offset {homeBefore.OffsetY:0}->{homeAfter.OffsetY:0}");
+        Log.Info($"[shelf-shot] Home offset {homeBefore.OffsetY:0}->{homeAfter.OffsetY:0}");
 
         NodeHandle shelfVp = NodeHandle.Null;
         float bestVisibleY = float.MaxValue;
@@ -288,14 +291,14 @@ internal static class WaveeNavProbe
             {
                 var r = scene.AbsoluteRect(n);
                 bool visible = r.Bottom > homeRect.Y + 20f && r.Y < homeRect.Bottom - 20f && r.W > 400f;
-                Console.Error.WriteLine($"[shelf-shot]   h-scroller rect=({r.X:0},{r.Y:0} {r.W:0}x{r.H:0}) viewW={s.ViewportW:0} contentW={s.ContentW:0} offX={s.OffsetX:0} visible={visible}");
+                Log.Info($"[shelf-shot]   h-scroller rect=({r.X:0},{r.Y:0} {r.W:0}x{r.H:0}) viewW={s.ViewportW:0} contentW={s.ContentW:0} offX={s.OffsetX:0} visible={visible}");
                 if (visible && MathF.Abs(r.Y - (homeRect.Y + 180f)) < bestVisibleY)
                 { bestVisibleY = MathF.Abs(r.Y - (homeRect.Y + 180f)); shelfVp = n; }
             }
             for (var c = scene.FirstChild(n); !c.IsNull; c = scene.NextSibling(c)) st.Push(c);
         }
         if (shelfVp.IsNull || !scene.TryGetScroll(shelfVp, out var shelfBefore))
-        { Console.Error.WriteLine("[shelf-shot] no visible horizontal shelf found — aborting"); return; }
+        { Log.Warn("[shelf-shot] no visible horizontal shelf found — aborting"); return; }
 
         var shelfRect = scene.AbsoluteRect(shelfVp);
         var shelfPoint = new Point2(shelfRect.X + shelfRect.W * 0.5f, shelfRect.Y + MathF.Min(shelfRect.H, shelfBefore.ViewportH) * 0.5f);
@@ -308,7 +311,7 @@ internal static class WaveeNavProbe
         scene.TryGetScroll(shelfVp, out var shelfAfter);
         var routedAfter = host.Input.ScrollableUnderForAxis(shelfPoint, wantHorizontal: true);
         Shot("after");                          // mid strip: left + right fades
-        Console.Error.WriteLine($"[shelf-shot] shelf expected=n#{shelfVp.Raw.Index} routed=n#{routedBefore.Raw.Index}/n#{routedAfter.Raw.Index} " +
+        Log.Info($"[shelf-shot] shelf expected=n#{shelfVp.Raw.Index} routed=n#{routedBefore.Raw.Index}/n#{routedAfter.Raw.Index} " +
             $"offX={shelfBefore.OffsetX:0}->{shelfAfter.OffsetX:0} maxEdgeFadeGroups={maxEdgeFadeGroups} " +
             $"result={(shelfAfter.OffsetX > shelfBefore.OffsetX + 1f && maxEdgeFadeGroups > 0 ? "PASS" : "FAIL")}");
 
@@ -343,23 +346,23 @@ internal static class WaveeNavProbe
                 Shot($"artist_{(int)(frac * 100):D2}");
             }
         }
-        Console.Error.WriteLine("[shelf-shot] done");
+        Log.Info("[shelf-shot] done");
     }
 
     // WAVEE_HERO_SHOT=1: navigate to an artist page and capture the collapsing hero at several scroll offsets, dumping the
     // collapse geometry (pin shift / presented height / child shift / parent height) so it can be verified numerically.
-    // Output → C:\tmp\hero_{offset}.png + a stderr [hero-geom] dump.
+    // Output → <logs>\artifacts\hero_{offset}.png + a stderr [hero-geom] dump.
     static void RunHeroCollapseShot(AppHost host, Win32Window window, D3D12Device gpu)
     {
-        try { System.IO.Directory.CreateDirectory(@"C:\tmp"); } catch { }
+        try { System.IO.Directory.CreateDirectory(ProbeArtifacts.Dir); } catch { }
         window.SetClientSize(1280, 900);
         void Frame() { if (!window.IsClosed) { gpu.SuppressLatencyWaitOnce(); gpu.SuppressVsyncOnce(); host.RunFrame(); } }
         void Settle(int n) { for (int i = 0; i < n && !window.IsClosed; i++) Frame(); }
         void Shot(int off)
         {
             var px = gpu.CaptureBgra(out int cw, out int ch);
-            PngWriter.WriteBgra($@"C:\tmp\hero_{off:D3}.png", px, cw, ch);
-            Console.Error.WriteLine($"[hero-shot] wrote hero_{off:D3}.png ({cw}x{ch})");
+            PngWriter.WriteBgra(ProbeArtifacts.PathFor($"hero_{off:D3}.png"), px, cw, ch);
+            Log.Info($"[hero-shot] wrote hero_{off:D3}.png ({cw}x{ch})");
         }
 
         WaveeShell.ProbeNav!("home", null); Settle(40); System.Threading.Thread.Sleep(700); Settle(20);
@@ -377,20 +380,20 @@ internal static class WaveeNavProbe
                 if (host.Scene.HasScroll(n) && host.Scene.TryGetScroll(n, out var s))
                 {
                     var r = host.Scene.AbsoluteRect(n);
-                    Console.Error.WriteLine($"[hero-shot]   scroller rect=({r.X:0},{r.Y:0} {r.W:0}x{r.H:0}) viewH={s.ViewportH:0} contentH={s.ContentH:0}");
+                    Log.Info($"[hero-shot]   scroller rect=({r.X:0},{r.Y:0} {r.W:0}x{r.H:0}) viewH={s.ViewportH:0} contentH={s.ContentH:0}");
                     if (s.ContentH > s.ViewportH + 1f && s.ContentH > bestContent) { bestContent = s.ContentH; vp = n; }
                 }
                 for (var c = host.Scene.FirstChild(n); !c.IsNull; c = host.Scene.NextSibling(c)) st.Push(c);
             }
         }
-        if (vp.IsNull) { Console.Error.WriteLine("[hero-shot] no scroll viewport — aborting"); return; }
+        if (vp.IsNull) { Log.Warn("[hero-shot] no scroll viewport — aborting"); return; }
         var vr = host.Scene.AbsoluteRect(vp);
         host.Scene.TryGetScroll(vp, out var s0);
         float vh = s0.ViewportH > 20f ? s0.ViewportH : vr.H;
         var pos = new Point2(vr.X + vr.W * 0.5f, vr.Y + vh * 0.5f);
         window.QueueInput(new InputEvent(InputKind.PointerMove, pos, 0, 0));
         Settle(2);
-        Console.Error.WriteLine($"[hero-shot] viewport content {s0.ContentH:0} viewH {s0.ViewportH:0} @ ({pos.X:0},{pos.Y:0})");
+        Log.Info($"[hero-shot] viewport content {s0.ContentH:0} viewH {s0.ViewportH:0} @ ({pos.X:0},{pos.Y:0})");
 
         foreach (int target in new[] { 0, 90, 150, 210, 300, 410 })
         {
@@ -428,7 +431,7 @@ internal static class WaveeNavProbe
         host.Scene.TryGetScroll(vp, out var stF);
         DumpCollapse(host.Scene, vp, stF.OffsetY);
         Shot(903);   // regain steady
-        Console.Error.WriteLine("[hero-shot] done");
+        Log.Info("[hero-shot] done");
     }
 
     // Walk the scene under the scroll content and print any node carrying collapse state (a PresentedH override or a
@@ -450,12 +453,12 @@ internal static class WaveeNavProbe
             if (!float.IsNaN(p.PresentedH) || MathF.Abs(p.ChildShiftY) > 0.01f) { collapse = n; break; }
             for (var c = scene.FirstChild(n); !c.IsNull; c = scene.NextSibling(c)) stack.Push(c);
         }
-        if (collapse.IsNull) { Console.Error.WriteLine($"[hero-geom] off={offset:0}: no collapse node (scroll-away mode)"); return; }
+        if (collapse.IsNull) { Log.Info($"[hero-geom] off={offset:0}: no collapse node (scroll-away mode)"); return; }
         ref var cp = ref scene.Paint(collapse);
         var cr = scene.AbsoluteRect(collapse);
         var par = scene.Parent(collapse);
         float parH = par.IsNull ? -1f : scene.Bounds(par).H;
-        Console.Error.WriteLine(
+        Log.Info(
             $"[hero-geom] off={offset:0}: collapse node rectY={cr.Y:0} boundsH={scene.Bounds(collapse).H:0} " +
             $"presentedH={cp.PresentedH:0} childShiftY={cp.ChildShiftY:0} pinShift(Dy)={cp.LocalTransform.Dy:0} " +
             $"| parentH={parH:0} (==boundsH ⇒ pin clamp=0)");
@@ -463,7 +466,7 @@ internal static class WaveeNavProbe
             for (var c = scene.FirstChild(par); !c.IsNull; c = scene.NextSibling(c))
             {
                 var rc = scene.AbsoluteRect(c);
-                Console.Error.WriteLine($"           sibling rectY={rc.Y:0} H={scene.Bounds(c).H:0} bottom={rc.Bottom:0}");
+                Log.Info($"           sibling rectY={rc.Y:0} H={scene.Bounds(c).H:0} bottom={rc.Bottom:0}");
             }
     }
 
@@ -486,8 +489,8 @@ internal static class WaveeNavProbe
     {
         int N = int.TryParse(Environment.GetEnvironmentVariable("WAVEE_STRESS_N"), out var nn) && nn > 0 ? nn : 100;
         bool realPace = !Diag.EnvFlag("WAVEE_STRESS_NOPACE");
-        if (WaveeShell.ProbeCardNav is null) { Console.Error.WriteLine("[conn-stress] ProbeCardNav not wired — aborting"); return; }
-        Console.Error.WriteLine($"[conn-stress] {N} cycles (click->settle->back->settle); realistic pacing={realPace}");
+        if (WaveeShell.ProbeCardNav is null) { Log.Warn("[conn-stress] ProbeCardNav not wired — aborting"); return; }
+        Log.Info($"[conn-stress] {N} cycles (click->settle->back->settle); realistic pacing={realPace}");
 
         void Spin(int frames) { for (int f = 0; f < frames && !window.IsClosed; f++) { gpu.SuppressLatencyWaitOnce(); gpu.SuppressVsyncOnce(); host.RunFrame(); } }
 
@@ -498,8 +501,8 @@ internal static class WaveeNavProbe
         GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
 
         var keys = new List<string>(); host.CollectMorphKeys(keys);
-        if (keys.Count == 0) { Console.Error.WriteLine("[conn-stress] no home-card morph keys — aborting"); return; }
-        Console.Error.WriteLine($"[conn-stress] {keys.Count} distinct home-card keys (cycles 1..{keys.Count} are COLD/uncached)");
+        if (keys.Count == 0) { Log.Warn("[conn-stress] no home-card morph keys — aborting"); return; }
+        Log.Info($"[conn-stress] {keys.Count} distinct home-card keys (cycles 1..{keys.Count} are COLD/uncached)");
 
         // Drive one navigation to rest: capture per-frame RecommendedWaitMs (the perceived cadence) + pure WORK (vsync
         // removed). "Settled" = the transient fly+mount stops driving display-rate frames (4 consecutive non-display frames).
@@ -542,7 +545,7 @@ internal static class WaveeNavProbe
             fwd.Add(Drive());
             WaveeShell.ProbeBack?.Invoke();                                        // BACK -> reverse fly
             back.Add(Drive());
-            if ((i + 1) % 10 == 0) Console.Error.WriteLine($"[conn-stress] {i + 1}/{N}");
+            if ((i + 1) % 10 == 0) Log.Info($"[conn-stress] {i + 1}/{N}");
         }
 
         var sb = new StringBuilder(8192);
@@ -553,8 +556,8 @@ internal static class WaveeNavProbe
         ReportSeg(sb, "FORWARD click->detail", fwd, keys.Count);
         ReportSeg(sb, "BACK    ->home", back, keys.Count);
         string rep = sb.ToString();
-        Console.Error.Write(rep);
-        try { Directory.CreateDirectory(@"C:\tmp"); File.WriteAllText(@"C:\tmp\wavee-conn-stress.txt", rep); Console.Error.WriteLine("[conn-stress] wrote C:\\tmp\\wavee-conn-stress.txt"); } catch { }
+        Log.Info(rep);
+        try { Directory.CreateDirectory(ProbeArtifacts.Dir); File.WriteAllText(ProbeArtifacts.PathFor("wavee-conn-stress.txt"), rep); Log.Info("[conn-stress] wrote " + ProbeArtifacts.PathFor("wavee-conn-stress.txt")); } catch { }
     }
 
     static void ReportSeg(StringBuilder sb, string title, List<Seg> segs, int coldCount)
@@ -640,7 +643,7 @@ internal static class WaveeNavProbe
         void Nav(string key, string? arg) => WaveeShell.ProbeNav!(key, arg);
         void Settle(int n) { for (int i = 0; i < n && !window.IsClosed; i++) host.RunFrame(); }
 
-        Console.Error.WriteLine("[home-scroll-probe] warmup");
+        Log.Info("[home-scroll-probe] warmup");
         for (int i = 0; i < 80 && !window.IsClosed; i++) { gpu.SuppressLatencyWaitOnce(); gpu.SuppressVsyncOnce(); host.RunFrame(); }
         GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
 
@@ -655,11 +658,11 @@ internal static class WaveeNavProbe
         if (WaveeShell.ProbeSidebarCompact is null || WaveeShell.ProbeSidebarDragBegin is null ||
             WaveeShell.ProbeSidebarDragWidth is null || WaveeShell.ProbeSidebarDragEnd is null)
         {
-            Console.Error.WriteLine("[home-scroll-probe] sidebar hooks unavailable; skipping sidebar state phase");
+            Log.Warn("[home-scroll-probe] sidebar hooks unavailable; skipping sidebar state phase");
         }
         else
         {
-            Console.Error.WriteLine("[home-scroll-probe] sidebar compact -> expanded -> drag-resize");
+            Log.Info("[home-scroll-probe] sidebar compact -> expanded -> drag-resize");
             WaveeShell.ProbeSidebarCompact(true);
             for (int f = 0; f < 18 && !window.IsClosed; f++) Measure(sidebar, "compact");
             WaveeShell.ProbeSidebarCompact(false);
@@ -680,7 +683,7 @@ internal static class WaveeNavProbe
         var viewport = FindScrollViewportByKey(host.Scene, "home");
         if (viewport.IsNull)
         {
-            Console.Error.WriteLine("[home-scroll-probe] no Home scroll viewport found");
+            Log.Info("[home-scroll-probe] no Home scroll viewport found");
         }
         else
         {
@@ -694,7 +697,7 @@ internal static class WaveeNavProbe
             window.QueueInput(new InputEvent(InputKind.PointerMove, pos, 0, 0));
             Settle(2);
             var routed0 = host.Input.ScrollableUnderForAxis(pos, wantHorizontal: false);
-            Console.Error.WriteLine($"[home-scroll-probe] wheel @ ({pos.X:0},{pos.Y:0}) home=n#{viewport.Raw.Index} routed=n#{routed0.Raw.Index} " +
+            Log.Info($"[home-scroll-probe] wheel @ ({pos.X:0},{pos.Y:0}) home=n#{viewport.Raw.Index} routed=n#{routed0.Raw.Index} " +
                 $"viewport x={vr.X:0} w={vr.W:0} content {s0.ContentH:0} viewH {s0.ViewportH:0} suppressors={s0.LoadingBarSuppressors}");
 
             for (int i = 0; i < 180 && !window.IsClosed; i++)
@@ -709,7 +712,7 @@ internal static class WaveeNavProbe
             }
             host.Scene.TryGetScroll(viewport, out var s1);
             bool moved = MathF.Abs(s1.OffsetY - s0.OffsetY) > 1f;
-            Console.Error.WriteLine($"[home-scroll-probe] endOff {s1.OffsetY:0} - wheel input {(moved ? "took effect" : "did not move")}");
+            Log.Info($"[home-scroll-probe] endOff {s1.OffsetY:0} - wheel input {(moved ? "took effect" : "did not move")}");
 
             // Exact regression: a working scrollbar auto-hides, the window deactivates/reactivates, then BOTH wheel
             // routing and the conscious indicator must restart on the same viewport. Real-time idle frames are used so
@@ -722,7 +725,7 @@ internal static class WaveeNavProbe
                 host.RunFrame();
             }
             host.Scene.TryGetScroll(viewport, out var hidden);
-            Console.Error.WriteLine($"[home-scroll-reactivate] hidden fade={hidden.FadeT:0.00} pointerOver={hidden.PointerOver} off={hidden.OffsetY:0}");
+            Log.Info($"[home-scroll-reactivate] hidden fade={hidden.FadeT:0.00} pointerOver={hidden.PointerOver} off={hidden.OffsetY:0}");
 
             window.QueueInput(new InputEvent(InputKind.WindowFocus, default, 0, 0));
             window.QueueInput(new InputEvent(InputKind.PointerMove, pos, 0, 0));
@@ -741,7 +744,7 @@ internal static class WaveeNavProbe
             host.Scene.TryGetScroll(viewport, out var reactivated);
             bool reactivatedMoved = MathF.Abs(reactivated.OffsetY - beforeReactivatedWheel) > 1f;
             bool reactivatedBar = reactivated.FadeT > 0.5f;
-            Console.Error.WriteLine($"[home-scroll-reactivate] home=n#{viewport.Raw.Index} routed=n#{routedAfterFocus.Raw.Index} fade={reactivated.FadeT:0.00} pointerOver={reactivated.PointerOver} " +
+            Log.Info($"[home-scroll-reactivate] home=n#{viewport.Raw.Index} routed=n#{routedAfterFocus.Raw.Index} fade={reactivated.FadeT:0.00} pointerOver={reactivated.PointerOver} " +
                 $"off={beforeReactivatedWheel:0}->{reactivated.OffsetY:0} wheel={(reactivatedMoved ? "PASS" : "FAIL")} bar={(reactivatedBar ? "PASS" : "FAIL")}");
 
             // Real app-loop cadence: present at vsync and ask RecommendedWaitMs before each frame so accidental ambient
@@ -765,7 +768,7 @@ internal static class WaveeNavProbe
             double mean = a.Length > 0 ? tot / a.Length : 0;
             int o16 = 0;
             foreach (var v in a) if (v > 16.7) o16++;
-            Console.Error.WriteLine($"[home-scroll-fps] REAL app-loop wheel scroll: {a.Length} frames mean {mean:0.0}ms ({(mean > 0 ? 1000.0 / mean : 0):0} fps) worst {worst:0.0}ms ({(worst > 0 ? 1000.0 / worst : 0):0} fps) >16.7ms(<60fps)={o16} throttledWaitFrames={throttled} maxWait={maxWait}ms");
+            Log.Info($"[home-scroll-fps] REAL app-loop wheel scroll: {a.Length} frames mean {mean:0.0}ms ({(mean > 0 ? 1000.0 / mean : 0):0} fps) worst {worst:0.0}ms ({(worst > 0 ? 1000.0 / worst : 0):0} fps) >16.7ms(<60fps)={o16} throttledWaitFrames={throttled} maxWait={maxWait}ms");
         }
 
         var phases = new[] { sidebar, scroll };
@@ -801,7 +804,7 @@ internal static class WaveeNavProbe
         }
 
         string report = sb.ToString();
-        Console.Error.Write(report);
+        Log.Info(report);
         if (csvPath is not null) WriteProbeFile(csvPath, csv.ToString(), "home-scroll-probe");
         if (summaryPath is not null) WriteProbeFile(summaryPath, report, "home-scroll-probe");
     }
@@ -812,12 +815,12 @@ internal static class WaveeNavProbe
     // the FlexLayout measure/arrange/text-reshape counters (need FG_LAYOUT_DIAG=1 to be non-zero) and span
     // reused/rebased/re-recorded from FrameStats — so a Reflow-per-tick regression shows up as non-zero measure/arrange on
     // every animation tick, and the projected (Reveal/FLIP) fix as ~0 on ticks (only the commit frame is large).
-    // WAVEE_RAIL_BASELINE=1 selects the pre-fix Reflow path from the same build for an A/B. Output → C:\tmp\projected-motion
+    // WAVEE_RAIL_BASELINE=1 selects the pre-fix Reflow path from the same build for an A/B. Output → <logs>\artifacts\projected-motion
     // (override with WAVEE_PROBE_OUT); writes wavee-rail-probe.csv + -summary.txt + rail_*.png first/mid/final captures.
     static void RunRailProbe(AppHost host, Win32Window window, D3D12Device gpu)
     {
         string outDir = Environment.GetEnvironmentVariable("WAVEE_PROBE_OUT") ?? "";
-        if (string.IsNullOrWhiteSpace(outDir)) outDir = @"C:\tmp\projected-motion";
+        if (string.IsNullOrWhiteSpace(outDir)) outDir = ProbeArtifacts.PathFor("projected-motion");
         try { Directory.CreateDirectory(outDir); } catch { }
         string csvPath = Path.Combine(outDir, "wavee-rail-probe.csv");
         string summaryPath = Path.Combine(outDir, "wavee-rail-probe-summary.txt");
@@ -859,17 +862,17 @@ internal static class WaveeNavProbe
         {
             var px = gpu.CaptureBgra(out int cw, out int ch);
             PngWriter.WriteBgra(Path.Combine(outDir, $"rail_{name}.png"), px, cw, ch);
-            Console.Error.WriteLine($"[rail-probe] wrote rail_{name}.png ({cw}x{ch})");
+            Log.Info($"[rail-probe] wrote rail_{name}.png ({cw}x{ch})");
         }
 
-        Console.Error.WriteLine($"[rail-probe] {(baseline ? "BASELINE (SizeMode.Reflow)" : "P1 (Reveal/FLIP)")} out={outDir}");
+        Log.Info($"[rail-probe] {(baseline ? "BASELINE (SizeMode.Reflow)" : "P1 (Reveal/FLIP)")} out={outDir}");
         for (int i = 0; i < 80 && !window.IsClosed; i++) { gpu.SuppressLatencyWaitOnce(); gpu.SuppressVsyncOnce(); host.RunFrame(); }
         Nav("home", null); Settle(40); System.Threading.Thread.Sleep(700); Settle(30);
         GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
 
         if (WaveeShell.ProbeRailOpen is null || WaveeShell.ProbeSidebarCompact is null)
         {
-            Console.Error.WriteLine("[rail-probe] rail/sidebar hooks not wired — aborting");
+            Log.Warn("[rail-probe] rail/sidebar hooks not wired — aborting");
             return;
         }
 
@@ -879,7 +882,7 @@ internal static class WaveeNavProbe
         var sbDrag = new Phase("sidebar-drag");
 
         // (a) rail open→settle→close→settle ×3 (first cycle captures first/mid/final PNGs of both legs).
-        Console.Error.WriteLine("[rail-probe] (a) rail open/close x3");
+        Log.Info("[rail-probe] (a) rail open/close x3");
         for (int rep = 0; rep < 3 && !window.IsClosed; rep++)
         {
             WaveeShell.ProbeRailOpen!(true);
@@ -900,7 +903,7 @@ internal static class WaveeNavProbe
         }
 
         // (b) rapid reversal — flip the target every 6 frames so each toggle interrupts an in-flight transition.
-        Console.Error.WriteLine("[rail-probe] (b) rapid rail reversal");
+        Log.Info("[rail-probe] (b) rapid rail reversal");
         bool open = false;
         for (int i = 0; i < 120 && !window.IsClosed; i++)
         {
@@ -910,7 +913,7 @@ internal static class WaveeNavProbe
         WaveeShell.ProbeRailOpen!(false); Settle(40);
 
         // (c) sidebar compact toggle ×3 (56↔expanded).
-        Console.Error.WriteLine("[rail-probe] (c) sidebar compact toggle x3");
+        Log.Info("[rail-probe] (c) sidebar compact toggle x3");
         for (int rep = 0; rep < 3 && !window.IsClosed; rep++)
         {
             WaveeShell.ProbeSidebarCompact!(true);
@@ -931,11 +934,57 @@ internal static class WaveeNavProbe
             if (rep == 0) Shot("sb_expand_final");
         }
 
+        // (c2) sidebar-toggle-via-synthetic-click — the DISCRIMINATION leg. Section (c) flips the compact signal DIRECTLY
+        // (WaveeShell.ProbeSidebarCompact) and the pane/content transition ANIMATES. This leg instead injects a REAL pointer
+        // click on the hamburger through the SAME queue the WndProc feeds (Win32Window.QueueInput → PumpInto → dispatcher
+        // hit-test → the IconButton's click → `_sidebarCompact.Value = !…`), so the toggle travels the exact production
+        // click→reconcile path a mouse press takes — NOT a signal bypass. If THIS snaps while (c) animates, the cause lives
+        // in the click/reconcile ORDERING (e.g. the click's flush vs CaptureProjections), not the animation seed. It runs
+        // with REAL vsync pacing (no latency/vsync suppression) so it reproduces the exact frame cadence the snap surfaced
+        // under. Captures every frame → sbclick_a_NN.png (collapse) + sbclick_b_NN.png (expand) for a frame-by-frame diff.
+        {
+            // Hamburger client-DIP position: first icon in the toolbar row (ShellToolbar), which sits below the titlebar
+            // tab row — approx (36, 108) DIP. QueueInput consumes DIP DIRECTLY (the WndProc converts screen-px→DIP before it
+            // enqueues), so NO DIP→px scale conversion is needed here. Both coords are env-overridable for robustness.
+            float clickX = float.TryParse(Environment.GetEnvironmentVariable("WAVEE_CLICK_X"), NumberStyles.Float, CultureInfo.InvariantCulture, out var cx) ? cx : 36f;
+            float clickY = float.TryParse(Environment.GetEnvironmentVariable("WAVEE_CLICK_Y"), NumberStyles.Float, CultureInfo.InvariantCulture, out var cy) ? cy : 108f;
+            var clickPt = new Point2(clickX, clickY);
+            uint clickTime = 1;   // monotonically increasing stamp so the two toggles never read as a double-click
+
+            void SynthClick()
+            {
+                // Down+Up in sequence onto the same queue the OS message pump uses — the dispatcher drains both this frame
+                // (press then release→click). Mirrors the VerticalSlice input gates (window.QueueInput(PointerDown/Up)).
+                window.QueueInput(new InputEvent(InputKind.PointerDown, clickPt, 0, 0, Pointer: PointerKind.Mouse, TimestampMs: clickTime++));
+                window.QueueInput(new InputEvent(InputKind.PointerUp,   clickPt, 0, 0, Pointer: PointerKind.Mouse, TimestampMs: clickTime++));
+            }
+
+            void ClickLeg(char tag)
+            {
+                for (int f = 0; f < 45 && !window.IsClosed; f++)
+                {
+                    var s = host.RunFrame();
+                    window.WaitForWork(Math.Min(host.RecommendedWaitMs(), 16));   // REAL pacing (mirrors the warmup loop): present at vsync, wait the loop's interval
+                    Log.Info($"[sbclick] {tag} frame={f:00} frameMs={s.FrameMs:0.00} rendered={s.Rendered}");
+                    var px = gpu.CaptureBgra(out int cw, out int chh);
+                    PngWriter.WriteBgra(Path.Combine(outDir, $"sbclick_{tag}_{f:00}.png"), px, cw, chh);
+                }
+            }
+
+            Log.Info($"[rail-probe] (c2) sidebar-toggle-via-synthetic-click at ({clickX:0},{clickY:0}) DIP");
+            WaveeShell.ProbeSidebarCompact!(false); Settle(40);   // ensure EXPANDED before the collapsing click
+            SynthClick();                                          // real click → toggle to COMPACT
+            ClickLeg('a');
+            Settle(40);                                            // settle before the reverse click
+            SynthClick();                                          // real click → toggle back to EXPANDED
+            ClickLeg('b');
+        }
+
         // (d) sidebar-grip drag sweep — synthesize a pointer drag across ~40 steps (out to 460 and back to 240). This
         // exercises the suppressed path (SnapStructuralToLayout): with Reveal transitions the drag must still track 1:1.
         if (WaveeShell.ProbeSidebarDragBegin is not null && WaveeShell.ProbeSidebarDragWidth is not null && WaveeShell.ProbeSidebarDragEnd is not null)
         {
-            Console.Error.WriteLine("[rail-probe] (d) sidebar drag sweep");
+            Log.Info("[rail-probe] (d) sidebar drag sweep");
             WaveeShell.ProbeSidebarDragBegin!();
             for (int i = 0; i < 40 && !window.IsClosed; i++)
             {
@@ -1012,7 +1061,7 @@ internal static class WaveeNavProbe
         }
 
         string report = sb.ToString();
-        Console.Error.Write(report);
+        Log.Info(report);
         WriteProbeFile(csvPath, csv.ToString(), "rail-probe");
         WriteProbeFile(summaryPath, report, "rail-probe");
     }
@@ -1051,18 +1100,18 @@ internal static class WaveeNavProbe
                 if (ready()) return true;
                 FrameLive();
             }
-            Console.Error.WriteLine($"[live-lyrics-scroll] timed out waiting for {label}");
+            Log.Info($"[live-lyrics-scroll] timed out waiting for {label}");
             return false;
         }
 
         if (!Services.UseRealBackend)
         {
-            Console.Error.WriteLine("[live-lyrics-scroll] refusing to run: app is using --fake; run without --fake / with --real-backend");
+            Log.Info("[live-lyrics-scroll] refusing to run: app is using --fake; run without --fake / with --real-backend");
             return;
         }
         if (WaveeApp.ProbePlayback is null)
         {
-            Console.Error.WriteLine("[live-lyrics-scroll] no playback bridge exposed; shell/app did not mount");
+            Log.Info("[live-lyrics-scroll] no playback bridge exposed; shell/app did not mount");
             return;
         }
 
@@ -1081,15 +1130,15 @@ internal static class WaveeNavProbe
                 && advances >= 2;
         }
 
-        Console.Error.WriteLine("[live-lyrics-scroll] waiting for REAL authenticated playback with advancing position");
+        Log.Info("[live-lyrics-scroll] waiting for REAL authenticated playback with advancing position");
         if (!WaitFor("live playing track", playbackFrames, PlaybackReady))
         {
             var b = WaveeApp.ProbePlayback;
-            Console.Error.WriteLine($"[live-lyrics-scroll] playback state: auth={b?.Auth.Peek()} playing={b?.IsPlaying.Peek()} track={TrackLabel(b)} pos={b?.PositionMs.Peek() ?? 0}");
+            Log.Info($"[live-lyrics-scroll] playback state: auth={b?.Auth.Peek()} playing={b?.IsPlaying.Peek()} track={TrackLabel(b)} pos={b?.PositionMs.Peek() ?? 0}");
             return;
         }
 
-        Console.Error.WriteLine($"[live-lyrics-scroll] track: {TrackLabel(WaveeApp.ProbePlayback)}");
+        Log.Info($"[live-lyrics-scroll] track: {TrackLabel(WaveeApp.ProbePlayback)}");
         NodeHandle lyrics = default;
         bool LyricsReady()
         {
@@ -1100,7 +1149,7 @@ internal static class WaveeNavProbe
             return root.W <= 0f || lr.X >= root.W * 0.55f;
         }
 
-        Console.Error.WriteLine("[live-lyrics-scroll] waiting for lyrics viewport");
+        Log.Info("[live-lyrics-scroll] waiting for lyrics viewport");
         if (!WaitFor("lyrics viewport", lyricsFrames, LyricsReady))
         {
             DumpScrollers(host.Scene);
@@ -1133,7 +1182,7 @@ internal static class WaveeNavProbe
                 routes.Add(new ProbeRoute(key, null, SafeRouteLabel(label)));
                 added++;
             }
-            Console.Error.WriteLine($"[live-lyrics-scroll] added {added} home playlist/album routes");
+            Log.Info($"[live-lyrics-scroll] added {added} home playlist/album routes");
         }
         int perRouteRealFrames = EnvInt("WAVEE_PROBE_ROUTE_FRAMES", Math.Max(60, realFrames / Math.Max(1, routes.Count)), 0, 20000);
         int perRouteWorkFrames = EnvInt("WAVEE_PROBE_WORK_ROUTE_FRAMES", workFrames / Math.Max(1, routes.Count), 0, 20000);
@@ -1148,14 +1197,14 @@ internal static class WaveeNavProbe
         foreach (var route in routes)
         {
             if (window.IsClosed) break;
-            Console.Error.WriteLine($"[live-lyrics-scroll] route {route.Label}: {route.Key}" + (route.Arg is null ? "" : $" ({route.Arg})"));
+            Log.Info($"[live-lyrics-scroll] route {route.Label}: {route.Key}" + (route.Arg is null ? "" : $" ({route.Arg})"));
             Nav(route.Key, route.Arg);
             SettleLive(routeSettleFrames);
 
             lyrics = FindLyricsViewport(host.Scene);
             if (lyrics.IsNull)
             {
-                Console.Error.WriteLine($"[live-lyrics-scroll] route {route.Label}: lyrics viewport missing after navigation");
+                Log.Info($"[live-lyrics-scroll] route {route.Label}: lyrics viewport missing after navigation");
                 skippedRoutes++;
                 continue;
             }
@@ -1163,7 +1212,7 @@ internal static class WaveeNavProbe
             NodeHandle main = FindMainScrollViewport(host.Scene, lyrics);
             if (main.IsNull)
             {
-                Console.Error.WriteLine($"[live-lyrics-scroll] route {route.Label}: no main page scroller; skipped");
+                Log.Info($"[live-lyrics-scroll] route {route.Label}: no main page scroller; skipped");
                 skippedRoutes++;
                 continue;
             }
@@ -1190,7 +1239,7 @@ internal static class WaveeNavProbe
             var posPt = new Point2(mainRect.X + mainRect.W * 0.5f, mainRect.Y + vh * 0.5f);
             window.QueueInput(new InputEvent(InputKind.PointerMove, posPt, 0, 0));
             SettleLive(4);
-            Console.Error.WriteLine($"[live-lyrics-scroll] route {route.Label}: wheel @ ({posPt.X:0},{posPt.Y:0}) main content={mainScroll0.ContentH:0} viewH={mainScroll0.ViewportH:0}; lyrics content={lyricsScroll0.ContentH:0} viewH={lyricsScroll0.ViewportH:0}");
+            Log.Info($"[live-lyrics-scroll] route {route.Label}: wheel @ ({posPt.X:0},{posPt.Y:0}) main content={mainScroll0.ContentH:0} viewH={mainScroll0.ViewportH:0}; lyrics content={lyricsScroll0.ContentH:0} viewH={lyricsScroll0.ViewportH:0}");
 
             var routeIntervals = new List<double>(perRouteRealFrames);
             var realPhase = new Phase("real:" + route.Label);
@@ -1279,7 +1328,7 @@ internal static class WaveeNavProbe
 
         if (measuredRoutes == 0)
         {
-            Console.Error.WriteLine("[live-lyrics-scroll] no routes with usable main scrollers found");
+            Log.Info("[live-lyrics-scroll] no routes with usable main scrollers found");
             DumpScrollers(host.Scene);
             return;
         }
@@ -1299,7 +1348,7 @@ internal static class WaveeNavProbe
         sb.AppendLine("CSV columns include playback, LyricsView active/voice line diagnostics, recorder blur counts, D3D blur cache counts, and main/lyrics scroll state per frame.");
 
         string report = sb.ToString();
-        Console.Error.Write(report);
+        Log.Info(report);
         if (csvPath is not null) WriteProbeFile(csvPath, csv.ToString(), "live-lyrics-scroll");
         if (summaryPath is not null) WriteProbeFile(summaryPath, report, "live-lyrics-scroll");
     }
@@ -1328,12 +1377,12 @@ internal static class WaveeNavProbe
         bool WaitFor(string label, int frames, Func<bool> ready)
         {
             for (int i = 0; i < frames && !window.IsClosed; i++) { if (ready()) return true; FrameLive(); }
-            Console.Error.WriteLine($"[lyrics-advance] timed out waiting for {label}");
+            Log.Info($"[lyrics-advance] timed out waiting for {label}");
             return false;
         }
 
-        if (!Services.UseRealBackend) { Console.Error.WriteLine("[lyrics-advance] refusing to run under --fake; launch the real backend, log in, and play a word-synced track"); return; }
-        if (WaveeApp.ProbePlayback is null) { Console.Error.WriteLine("[lyrics-advance] no playback bridge exposed"); return; }
+        if (!Services.UseRealBackend) { Log.Info("[lyrics-advance] refusing to run under --fake; launch the real backend, log in, and play a word-synced track"); return; }
+        if (WaveeApp.ProbePlayback is null) { Log.Info("[lyrics-advance] no playback bridge exposed"); return; }
 
         long lastPos = -1; int adv = 0;
         bool PlaybackReady()
@@ -1343,7 +1392,7 @@ internal static class WaveeNavProbe
             return b.Auth.Peek() == AuthStatus.Authenticated && b.CurrentTrack.Peek() is not null;
         }
         int playbackFrames = EnvInt("WAVEE_PROBE_PLAYBACK_FRAMES", 5400, 120, 36000);
-        Console.Error.WriteLine("[lyrics-advance] waiting for REAL authenticated playback");
+        Log.Info("[lyrics-advance] waiting for REAL authenticated playback");
         if (!WaitFor("authenticated track", playbackFrames, PlaybackReady)) return;
 
         int lyricsFrames = EnvInt("WAVEE_PROBE_LYRICS_FRAMES", 3600, 60, 36000);
@@ -1354,7 +1403,7 @@ internal static class WaveeNavProbe
             lyricsVp = lv.ProbeViewport;
             return !lyricsVp.IsNull && host.Scene.IsLive(lyricsVp) && lv.ProbeLineCount >= 3;
         }
-        Console.Error.WriteLine("[lyrics-advance] waiting for the lyrics view + viewport + a >=3-line synced doc");
+        Log.Info("[lyrics-advance] waiting for the lyrics view + viewport + a >=3-line synced doc");
         if (!WaitFor("lyrics view/viewport/doc", lyricsFrames, LyricsReady)) { DumpScrollers(host.Scene); return; }
 
         var view = LyricsView.ProbeActive!;
@@ -1362,7 +1411,7 @@ internal static class WaveeNavProbe
         host.ProbeLyricsViewport = lyricsVp;
         NodeHandle mainVp = FindMainScrollViewport(host.Scene, lyricsVp);
         host.ProbeMainViewport = mainVp;
-        Console.Error.WriteLine($"[lyrics-advance] track: {TrackLabel(WaveeApp.ProbePlayback)}; lines={lineCount}; sync-driving (ticker silenced)");
+        Log.Info($"[lyrics-advance] track: {TrackLabel(WaveeApp.ProbePlayback)}; lines={lineCount}; sync-driving (ticker silenced)");
 
         // Pre-settle onto line 0 so the ONE-TIME instant-jump latch fires there, then force snapped so every measured
         // advance takes the ProgrammaticMode spring (whose SETTLE frame is where BUG1 dropped the blur).
@@ -1510,7 +1559,7 @@ internal static class WaveeNavProbe
         sb.AppendLine("CSV per-frame columns: lyMode/lyPrevMode/lyUserScroll/lyContentDirty (record-time DoF-defer inputs), blurCandidates/blurGroups/blurSuppressed, presented, per-phase timing.");
 
         string report = sb.ToString();
-        Console.Error.Write(report);
+        Log.Info(report);
         if (csvPath is not null) WriteProbeFile(csvPath, csv.ToString(), "lyrics-advance");
         if (summaryPath is not null) WriteProbeFile(summaryPath, report, "lyrics-advance");
     }
@@ -1741,7 +1790,7 @@ internal static class WaveeNavProbe
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[home-scroll-probe] file output disabled: cannot create {dir}: {ex.Message}");
+            Log.Info($"[home-scroll-probe] file output disabled: cannot create {dir}: {ex.Message}");
             return null;
         }
     }
@@ -1751,11 +1800,11 @@ internal static class WaveeNavProbe
         try
         {
             File.WriteAllText(path, text);
-            Console.Error.WriteLine($"[{tag}] wrote {path}");
+            Log.Info($"[{tag}] wrote {path}");
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[{tag}] failed to write {path}: {ex.Message}");
+            Log.Info($"[{tag}] failed to write {path}: {ex.Message}");
         }
     }
 
@@ -1772,9 +1821,9 @@ internal static class WaveeNavProbe
         // so a high-DPI / large window is where the lyrics blur actually drops frames — reproduce it here.
         int pw = int.TryParse(Environment.GetEnvironmentVariable("WAVEE_PROBE_W"), out var w0) ? w0 : 0;
         int ph = int.TryParse(Environment.GetEnvironmentVariable("WAVEE_PROBE_H"), out var h0) ? h0 : 0;
-        if (pw > 200 && ph > 200) { window.SetClientSize(pw, ph); Console.Error.WriteLine($"[lyrics-probe] window -> {pw}x{ph}"); }
+        if (pw > 200 && ph > 200) { window.SetClientSize(pw, ph); Log.Info($"[lyrics-probe] window -> {pw}x{ph}"); }
 
-        Console.Error.WriteLine("[lyrics-probe] warmup (rail opens via WAVEE_LYRICS_OPEN; lyrics doc loads)");
+        Log.Info("[lyrics-probe] warmup (rail opens via WAVEE_LYRICS_OPEN; lyrics doc loads)");
         Settle(60);
         System.Threading.Thread.Sleep(500);     // FakeData.GetLyricsAsync Task.Delay(150) + paint settle
         Settle(80);
@@ -1783,13 +1832,13 @@ internal static class WaveeNavProbe
         var vp = FindLyricsViewport(host.Scene);
         if (vp.IsNull)
         {
-            Console.Error.WriteLine("[lyrics-probe] NO lyrics viewport found (rail not open / no current track / doc empty). Scrollers seen:");
+            Log.Info("[lyrics-probe] NO lyrics viewport found (rail not open / no current track / doc empty). Scrollers seen:");
             DumpScrollers(host.Scene);
             return;
         }
         var vr = host.Scene.AbsoluteRect(vp);
         host.Scene.TryGetScroll(vp, out var s0);
-        Console.Error.WriteLine($"[lyrics-probe] lyrics viewport rect=({vr.X:0},{vr.Y:0} {vr.W:0}x{vr.H:0}) content={s0.ContentH:0} viewH={s0.ViewportH:0}");
+        Log.Info($"[lyrics-probe] lyrics viewport rect=({vr.X:0},{vr.Y:0} {vr.W:0}x{vr.H:0}) content={s0.ContentH:0} viewH={s0.ViewportH:0}");
 
         MeasureLyrics("IDLE  ", host, window, gpu, null);
 
@@ -1799,7 +1848,7 @@ internal static class WaveeNavProbe
         Settle(2);
         MeasureLyrics("SCROLL", host, window, gpu, i => window.QueueInput(new InputEvent(InputKind.Wheel, pos, 0, 0, ((i / 18) & 1) == 0 ? +50f : -50f)));
 
-        Console.Error.WriteLine("[lyrics-probe] done");
+        Log.Info("[lyrics-probe] done");
     }
 
     static void MeasureLyrics(string tag, AppHost host, Win32Window window, D3D12Device gpu, Action<int>? inject)
@@ -1836,8 +1885,8 @@ internal static class WaveeNavProbe
         int dg0 = GC.CollectionCount(0) - g0;
         int den = Math.Max(1, rendered);
         double allocKb = (GC.GetAllocatedBytesForCurrentThread() - alloc0) / 1024.0 / den;
-        Console.Error.WriteLine($"[lyrics-fps] {tag} perceived(vsync): {a.Length}f mean {mean:0.0}ms ({(mean > 0 ? 1000.0 / mean : 0):0}fps) worst {worst:0.0}ms | <60fps={o16} <30fps={o33}");
-        Console.Error.WriteLine($"             work(no-vsync): rendered {rendered}/{total} | frame {sFrame / den:0.00}ms (worst {wWorst:0.00}) = flush {sFlush / den:0.00} + layout {sLayout / den:0.00} + anim {sAnim / den:0.00} + record {sRecord / den:0.00} + submit {sSubmit / den:0.00} | alloc {allocKb:0.0}KB/f gen0={dg0}");
+        Log.Info($"[lyrics-fps] {tag} perceived(vsync): {a.Length}f mean {mean:0.0}ms ({(mean > 0 ? 1000.0 / mean : 0):0}fps) worst {worst:0.0}ms | <60fps={o16} <30fps={o33}");
+        Log.Info($"             work(no-vsync): rendered {rendered}/{total} | frame {sFrame / den:0.00}ms (worst {wWorst:0.00}) = flush {sFlush / den:0.00} + layout {sLayout / den:0.00} + anim {sAnim / den:0.00} + record {sRecord / den:0.00} + submit {sSubmit / den:0.00} | alloc {allocKb:0.0}KB/f gen0={dg0}");
     }
 
     static NodeHandle FindLyricsViewport(FluentGpu.Scene.SceneStore scene)
@@ -1864,14 +1913,14 @@ internal static class WaveeNavProbe
         {
             var n = stack.Pop(); if (n.IsNull || !scene.IsLive(n)) continue;
             if (scene.HasScroll(n) && scene.TryGetScroll(n, out var sc))
-            { var r = scene.AbsoluteRect(n); Console.Error.WriteLine($"  scroller rect=({r.X:0},{r.Y:0} {r.W:0}x{r.H:0}) viewH={sc.ViewportH:0} contentH={sc.ContentH:0}"); }
+            { var r = scene.AbsoluteRect(n); Log.Info($"  scroller rect=({r.X:0},{r.Y:0} {r.W:0}x{r.H:0}) viewH={sc.ViewportH:0} contentH={sc.ContentH:0}"); }
             for (var c = scene.FirstChild(n); !c.IsNull; c = scene.NextSibling(c)) stack.Push(c);
         }
     }
 
     static void Run(AppHost host, Win32Window window, D3D12Device gpu)
     {
-        Directory.CreateDirectory(@"C:\tmp");
+        Directory.CreateDirectory(ProbeArtifacts.Dir);
         var csv = new StringBuilder(1 << 16);
         csv.AppendLine("phase,frame,label,frameMs,flushMs,layoutMs,animMs,recordMs,submitMs,gen0,gen1,comps,nodes,draws,overBudget");
         bool keepVsync = Diag.EnvFlag("WAVEE_PROBE_VSYNC");
@@ -1906,33 +1955,33 @@ internal static class WaveeNavProbe
         void Settle(int n) { for (int i = 0; i < n && !window.IsClosed; i++) host.RunFrame(); }
 
         // ── Warmup (not measured); collect once so the baseline starts from a known GC state. ──
-        Console.Error.WriteLine("[wavee-nav-probe] warmup");
+        Log.Info("[wavee-nav-probe] warmup");
         for (int i = 0; i < 80 && !window.IsClosed; i++) { gpu.SuppressLatencyWaitOnce(); gpu.SuppressVsyncOnce(); host.RunFrame(); }
         GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
 
         // ── Phase 0: HOME ↔ DETAIL (the named case). Bounce home → a fresh playlist → home → next playlist …, holding a
         //    few settle frames each so the cold-mount transition frame AND its settle are captured + labelled by route. ──
         var homeDetail = new Phase("home<->detail");
-        Console.Error.WriteLine("[wavee-nav-probe] home<->detail (the named case)");
+        Log.Info("[wavee-nav-probe] home<->detail (the named case)");
         bool capture = Diag.EnvFlag("WAVEE_PB_CAPTURE");   // dump the first home→detail transition frame-by-frame to PNG
 
         // Player-bar-glitch repro: the EXACT Home-card click path (preview → DetailShell preview-path mount + Hero fly),
         // which the sidebar-style ProbeNav never exercises. Home must be mounted first (the fly's source card).
         if (capture && WaveeShell.ProbeCardNav is not null)
         {
-            Console.Error.WriteLine("[wavee-nav-probe] card-click capture (home→detail via preview + Hero fly)");
+            Log.Info("[wavee-nav-probe] card-click capture (home→detail via preview + Hero fly)");
             Nav("home", null);
             for (int f = 0; f < 40 && !window.IsClosed; f++) host.RunFrame();
             System.Threading.Thread.Sleep(700);                         // let card covers decode (async) so the fly has an image source
             for (int f = 0; f < 20 && !window.IsClosed; f++) host.RunFrame();
             string? flyKey = host.FirstMorphKey;                        // a REAL home-card key → the morph actually FLIES
-            Console.Error.WriteLine($"[wavee-nav-probe] fly key = {flyKey ?? "(none found)"}");
+            Log.Info($"[wavee-nav-probe] fly key = {flyKey ?? "(none found)"}");
             WaveeShell.ProbeCardNav(flyKey ?? "pl:spotify:playlist:pl0", null, true);
             for (int f = 0; f < 12 && !window.IsClosed; f++)
             {
                 gpu.SuppressLatencyWaitOnce(); gpu.SuppressVsyncOnce();
                 host.RunFrame();
-                var px = gpu.CaptureBgra(out int cw, out int ch); PngWriter.WriteBgra($@"C:\tmp\card_{f:D2}.png", px, cw, ch);
+                var px = gpu.CaptureBgra(out int cw, out int ch); PngWriter.WriteBgra(ProbeArtifacts.PathFor($"card_{f:D2}.png"), px, cw, ch);
             }
         }
         for (int rep = 0; rep < 6 && !window.IsClosed; rep++)
@@ -1944,7 +1993,7 @@ internal static class WaveeNavProbe
             for (int f = 0; f < 8 && !window.IsClosed; f++)
             {
                 Measure(homeDetail, k);
-                if (capture && rep == 0) { var px = gpu.CaptureBgra(out int cw, out int ch); PngWriter.WriteBgra($@"C:\tmp\pb_{f:D2}.png", px, cw, ch); }
+                if (capture && rep == 0) { var px = gpu.CaptureBgra(out int cw, out int ch); PngWriter.WriteBgra(ProbeArtifacts.PathFor($"pb_{f:D2}.png"), px, cw, ch); }
             }
         }
 
@@ -1962,7 +2011,7 @@ internal static class WaveeNavProbe
             var skelAlbums = new List<Wavee.Core.Album>(8);
             var prevAlbums = new List<Wavee.Core.Album>(8);
             for (int i = 0; i < 8; i++) { skelAlbums.Add(Wavee.Core.FakeData.Album(120 + i)); prevAlbums.Add(Wavee.Core.FakeData.Album(140 + i)); }
-            Console.Error.WriteLine("[wavee-nav-probe] album→album (skeleton vs preview, 8 hops each)");
+            Log.Info("[wavee-nav-probe] album→album (skeleton vs preview, 8 hops each)");
 
             // OLD path: enter album land, then hop album→album via BARE nav (no preview) — skeleton remount each hop.
             Nav("home", null); Settle(10);
@@ -1988,7 +2037,7 @@ internal static class WaveeNavProbe
         const int SettleFrames = 14;
         var sweep = new List<(string, string?)>();
         for (int s = 0; s < HeavyRoutes.Length; s++) { sweep.Add(HeavyRoutes[s]); if (s < CheapRoutes.Length) sweep.Add(CheapRoutes[s]); }
-        Console.Error.WriteLine($"[wavee-nav-probe] nav-settle ({sweep.Count} routes x 2 sweeps)");
+        Log.Info($"[wavee-nav-probe] nav-settle ({sweep.Count} routes x 2 sweeps)");
         for (int rep = 0; rep < 2 && !window.IsClosed; rep++)
             foreach (var (key, arg) in sweep)
             {
@@ -1999,7 +2048,7 @@ internal static class WaveeNavProbe
 
         // ── Phase 2: NAV-HAMMER (route swap every frame — worst-case churn). ──
         var hammer = new Phase("nav-hammer");
-        Console.Error.WriteLine("[wavee-nav-probe] nav-hammer (400 frames)");
+        Log.Info("[wavee-nav-probe] nav-hammer (400 frames)");
         for (int i = 0; i < 400 && !window.IsClosed; i++)
         {
             var (key, arg) = HeavyRoutes[i % HeavyRoutes.Length];
@@ -2010,13 +2059,13 @@ internal static class WaveeNavProbe
         // ── Phase 3: BACK / FORWARD (KeepAlive page transition; connected cover animation is disabled in Wavee). ──
         var backfwd = new Phase("back-forward");
         for (int i = 0; i < HeavyRoutes.Length && !window.IsClosed; i++) { var (k, a) = HeavyRoutes[i]; Nav(k, a); Settle(3); }
-        Console.Error.WriteLine("[wavee-nav-probe] back-forward (240 frames)");
+        Log.Info("[wavee-nav-probe] back-forward (240 frames)");
         for (int i = 0; i < 240 && !window.IsClosed; i++)
         {
             if ((i / 8) % 2 == 0) WaveeShell.ProbeBack?.Invoke(); else WaveeShell.ProbeForward?.Invoke();
             Measure(backfwd, "nav");
             // Capture the FIRST back/forward transition (the connected-animation Hero-fly path) frame-by-frame.
-            if (capture && i < 16) { var px = gpu.CaptureBgra(out int cw, out int ch); PngWriter.WriteBgra($@"C:\tmp\bf_{i:D2}.png", px, cw, ch); }
+            if (capture && i < 16) { var px = gpu.CaptureBgra(out int cw, out int ch); PngWriter.WriteBgra(ProbeArtifacts.PathFor($"bf_{i:D2}.png"), px, cw, ch); }
         }
 
         // ── Phase 4: SCROLL via REAL mouse-wheel INPUT. NOT WriteScrollOffset (that bypasses input): here every notch is an
@@ -2025,7 +2074,7 @@ internal static class WaveeNavProbe
         //    the ScrollIntegrator (inertia). So this measures the full real path a mouse drives: hit-test + wheel routing + the
         //    eased per-frame re-layout / virtualization re-realize / re-record, including the inertial COAST after a flick. ──
         var scroll = new Phase("scroll (real wheel)");
-        if (Diag.EnvFlag("WAVEE_LIKED_SHOT")) { window.SetClientSize(1456, 820); Settle(12); Nav("liked", null); Settle(50); var px0 = gpu.CaptureBgra(out int cw0, out int ch0); PngWriter.WriteBgra(@"C:\tmp\liked_header.png", px0, cw0, ch0); }
+        if (Diag.EnvFlag("WAVEE_LIKED_SHOT")) { window.SetClientSize(1456, 820); Settle(12); Nav("liked", null); Settle(50); var px0 = gpu.CaptureBgra(out int cw0, out int ch0); PngWriter.WriteBgra(ProbeArtifacts.PathFor("liked_header.png"), px0, cw0, ch0); }
         // Navigate to a TWO-COLUMN playlist: its track list cross-stretches to the rail height → a real non-zero viewport that
         // renders rows the wheel can hit-test. (The single-column Liked list measures a 0-height viewport — a pre-existing bug
         // that leaves it empty + un-hit-testable; not what we want to audit scroll feel on.)
@@ -2035,7 +2084,7 @@ internal static class WaveeNavProbe
         var skeys = new List<string>(); host.CollectMorphKeys(skeys);
         Nav(skeys.Count > 0 ? skeys[0] : "pl:local:1", null); Settle(40);
         var viewport = FindLargestScrollViewport(host.Scene);
-        if (viewport.IsNull) Console.Error.WriteLine("[wavee-nav-probe] scroll: no scroll viewport — skipped");
+        if (viewport.IsNull) Log.Info("[wavee-nav-probe] scroll: no scroll viewport — skipped");
         else
         {
             var vr = host.Scene.AbsoluteRect(viewport);
@@ -2046,7 +2095,7 @@ internal static class WaveeNavProbe
             var pos = new Point2(vr.X + vr.W * 0.5f, vr.Y + vh * 0.5f);
             window.QueueInput(new InputEvent(InputKind.PointerMove, pos, 0, 0));   // a real mouse hovers first → routes the wheel here + reveals the auto-hide scrollbar
             Settle(2);
-            Console.Error.WriteLine($"[wavee-nav-probe] scroll: REAL wheel @ ({pos.X:0},{pos.Y:0}) viewport content {s0.ContentH:0} viewH {s0.ViewportH:0}");
+            Log.Info($"[wavee-nav-probe] scroll: REAL wheel @ ({pos.X:0},{pos.Y:0}) viewport content {s0.ContentH:0} viewH {s0.ViewportH:0}");
 
             // Brisk continuous spin — ~1 notch/frame DOWN then UP. The offset crosses item boundaries continuously, so the
             // virtualized list recycles/re-realizes rows every frame (the heaviest steady-scroll case). Inject + measure each frame.
@@ -2064,7 +2113,7 @@ internal static class WaveeNavProbe
             }
             host.Scene.TryGetScroll(viewport, out var s1);
             bool moved = Math.Abs(s1.OffsetY - s0.OffsetY) > 1f;
-            Console.Error.WriteLine($"[wavee-nav-probe] scroll: endOff {s1.OffsetY:0} — wheel input {(moved ? "TOOK EFFECT (offset moved by dispatch+ease)" : "NO-OP — routing FAILED")}");
+            Log.Info($"[wavee-nav-probe] scroll: endOff {s1.OffsetY:0} — wheel input {(moved ? "TOOK EFFECT (offset moved by dispatch+ease)" : "NO-OP — routing FAILED")}");
 
             // REAL-vsync wheel-scroll FPS: drive notches at TRUE present cadence (no vsync suppression) and time the wall-clock
             // frame interval — the FPS a user actually perceives while spinning the wheel. Oscillate so the list never sits clamped.
@@ -2078,13 +2127,13 @@ internal static class WaveeNavProbe
             }
             var a = iv.ToArray(); double tot = 0, worst = 0; foreach (var v in a) { tot += v; if (v > worst) worst = v; }
             double mean = a.Length > 0 ? tot / a.Length : 0; int o16 = 0; foreach (var v in a) if (v > 16.7) o16++;
-            Console.Error.WriteLine($"[scroll-fps] REAL wheel scroll at vsync: {a.Length} frames mean {mean:0.0}ms ({(mean > 0 ? 1000.0 / mean : 0):0} fps) worst {worst:0.0}ms ({(worst > 0 ? 1000.0 / worst : 0):0} fps) >16.7ms(<60fps)={o16}");
+            Log.Info($"[scroll-fps] REAL wheel scroll at vsync: {a.Length} frames mean {mean:0.0}ms ({(mean > 0 ? 1000.0 / mean : 0):0} fps) worst {worst:0.0}ms ({(worst > 0 ? 1000.0 / worst : 0):0} fps) >16.7ms(<60fps)={o16}");
         }
 
         // ── Phase 5: THEME TOGGLE (RethemeAll re-renders every component + arms the cross-fade). ──
         var theme = new Phase("theme-toggle");
         Nav("home", null); Settle(6);
-        Console.Error.WriteLine("[wavee-nav-probe] theme-toggle (240 frames)");
+        Log.Info("[wavee-nav-probe] theme-toggle (240 frames)");
         for (int i = 0; i < 240 && !window.IsClosed; i++)
         {
             if (i % 20 == 0) WaveeShell.ProbeTheme?.Invoke();
@@ -2094,7 +2143,7 @@ internal static class WaveeNavProbe
         // ── Phase 6: IDLE (steady-state floor). ──
         var idle = new Phase("idle");
         Nav("home", null); Settle(10);
-        Console.Error.WriteLine("[wavee-nav-probe] idle (180 frames)");
+        Log.Info("[wavee-nav-probe] idle (180 frames)");
         for (int i = 0; i < 180 && !window.IsClosed; i++) Measure(idle, "idle");
 
         // ── Phase: CONNECTED ANIMATION (Hero cover fly) cost. Trigger REAL flies (home→detail→back) and measure the
@@ -2109,7 +2158,7 @@ internal static class WaveeNavProbe
             System.Threading.Thread.Sleep(800);                        // let card covers decode (the fly needs an image source)
             for (int f = 0; f < 20 && !window.IsClosed; f++) host.RunFrame();
             string? flyKey = host.FirstMorphKey;
-            Console.Error.WriteLine($"[wavee-nav-probe] conn-anim fly key = {flyKey ?? "(none)"}");
+            Log.Info($"[wavee-nav-probe] conn-anim fly key = {flyKey ?? "(none)"}");
             if (flyKey is not null)
             {
                 var keys = new List<string>(); host.CollectMorphKeys(keys);
@@ -2134,7 +2183,7 @@ internal static class WaveeNavProbe
                 //    the WALL-CLOCK frame interval click→settle, so this is the FPS actually perceived during the fly. Fly to
                 //    DISTINCT home-card pages so each is a FRESH (uncached) cold mount + fly — the realistic worst case. ──
                 host.CollectMorphKeys(keys);   // reuse the list collected above
-                Console.Error.WriteLine($"[fly-fps] complete connected animations at REAL vsync cadence — {keys.Count} fresh home-card keys (interval ms / fps):");
+                Log.Info($"[fly-fps] complete connected animations at REAL vsync cadence — {keys.Count} fresh home-card keys (interval ms / fps):");
                 for (int fly = 0; fly < keys.Count && fly < 6 && !window.IsClosed; fly++)
                 {
                     Nav("home", null);
@@ -2155,11 +2204,11 @@ internal static class WaveeNavProbe
                     double tot = 0, worst = 0; foreach (var v in arr) { tot += v; if (v > worst) worst = v; }
                     double mean = tot / arr.Length;
                     int over16 = 0, over33 = 0; foreach (var v in arr) { if (v > 16.7) over16++; if (v > 33.3) over33++; }
-                    Console.Error.WriteLine($"[fly-fps] fresh fly#{fly}: {arr.Length} frames {tot:0}ms | mean {mean:0.0}ms ({1000.0/mean:0} fps) | worst {worst:0.0}ms ({1000.0/worst:0} fps) | >16.7ms(<60fps)={over16} >33ms(<30fps)={over33}");
-                    if (sN > 0) Console.Error.WriteLine($"           REAL-vsync segs(first {sN}): flush {sFlush/sN:0.0} layout {sLayout/sN:0.0} anim {sAnim/sN:0.0} record {sRecord/sN:0.0} submit {sSubmit/sN:0.0}");
+                    Log.Info($"[fly-fps] fresh fly#{fly}: {arr.Length} frames {tot:0}ms | mean {mean:0.0}ms ({1000.0/mean:0} fps) | worst {worst:0.0}ms ({1000.0/worst:0} fps) | >16.7ms(<60fps)={over16} >33ms(<30fps)={over33}");
+                    if (sN > 0) Log.Info($"           REAL-vsync segs(first {sN}): flush {sFlush/sN:0.0} layout {sLayout/sN:0.0} anim {sAnim/sN:0.0} record {sRecord/sN:0.0} submit {sSubmit/sN:0.0}");
                     var head = new StringBuilder("           first 18 intervals(ms):");
                     for (int i = 0; i < Math.Min(18, arr.Length); i++) head.Append(' ').Append(arr[i].ToString("0", CultureInfo.InvariantCulture));
-                    Console.Error.WriteLine(head.ToString());
+                    Log.Info(head.ToString());
                 }
             }
         }
@@ -2201,10 +2250,10 @@ internal static class WaveeNavProbe
         }
 
         string report = sb.ToString();
-        Console.Error.Write(report);
-        File.WriteAllText(@"C:\tmp\wavee-nav-probe.csv", csv.ToString());
-        File.WriteAllText(@"C:\tmp\wavee-nav-probe-summary.txt", report);
-        Console.Error.WriteLine("[wavee-nav-probe] wrote C:\\tmp\\wavee-nav-probe.csv + -summary.txt");
+        Log.Info(report);
+        File.WriteAllText(ProbeArtifacts.PathFor("wavee-nav-probe.csv"), csv.ToString());
+        File.WriteAllText(ProbeArtifacts.PathFor("wavee-nav-probe-summary.txt"), report);
+        Log.Info("[wavee-nav-probe] wrote " + ProbeArtifacts.PathFor("wavee-nav-probe.csv") + " + -summary.txt");
     }
 
     static string Format(Phase p)

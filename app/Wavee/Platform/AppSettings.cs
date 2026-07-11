@@ -28,6 +28,9 @@ static class WaveeSettings
     // Color palette preset: neutral (default) | warm | slate | accent (OS-accent-tinted neutrals).
     public static readonly SettingKey<string> PaletteId = new("theme.palette", "neutral");
     public static readonly SettingKey<int> RowDensity = new("detail.rowdensity", 1);   // 0 Compact · 1 Default · 2 Cozy · 3 Comfortable
+    // Track-detail page layout: 0 Automatic (metadata rail on wide windows, stacked hero on narrow) · 1 Stacked (the
+    // hero composition at every width — the rail is never composed for track pages; podcasts keep the automatic layout).
+    public static readonly SettingKey<int> DetailPageLayout = new("detail.page.layout", 0);
     // Wide two-column detail pages: user-resizable left metadata rail. Album-like and playlist-like surfaces keep
     // separate widths because their authored defaults differ (280 vs 240 DIP). Responsive mid/narrow modes ignore these
     // values and retain their breakpoint widths; the saved width returns when the page is wide again.
@@ -50,6 +53,10 @@ static class WaveeSettings
     // (debounced) as the user adjusts it.
     public static readonly SettingKey<bool> RememberVolume = new("playback.volume.remember", true);
     public static readonly SettingKey<float> SavedVolume = new("playback.volume", 0.7f);
+    // Output-device persistence (Phase A): the chosen WASAPI endpoint id (empty = system default) + its friendly name
+    // (used in the reconnect toast while the device is absent). AppDataSettings cannot round-trip null → empty means unset.
+    public static readonly SettingKey<string> OutputDeviceId = new("playback.output.deviceId", "");
+    public static readonly SettingKey<string> OutputDeviceName = new("playback.output.deviceName", "");
     public static readonly SettingKey<bool> EqualizerEnabled = new("playback.eq.enabled", false);
     public static readonly SettingKey<string> EqualizerPreset = new("playback.eq.preset", "flat");
     public static readonly SettingKey<string> EqualizerGains = new("playback.eq.gains", "0,0,0,0,0,0,0,0,0,0");

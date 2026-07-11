@@ -19,7 +19,7 @@ internal static class PlaybackBucketDiagnostics
         => WaveeLog.Instance.Info(Category, "startup", source + " - " + message, fields);
 
     public static void Continuation(string eventId, string message, params WaveeLogField[] fields)
-        => WaveeLog.Instance.Info(Category, eventId, message, fields);
+        => WaveeLog.Instance.Debug(Category, eventId, message, fields);
 
     public static void QueueIfChanged(ref string? lastSignature, string reason, IReadOnlyList<QueueEntry> queue,
         string? contextUri = null, string? currentUri = null, int remainingInContext = -1, long revision = -1)
@@ -35,7 +35,9 @@ internal static class PlaybackBucketDiagnostics
     {
         CountEntries(queue, out int now, out int user, out int nextContext, out int nextAutoplay, out int history);
         string rows = Rows(queue);
-        WaveeLog.Instance.Info(Category, "queue.snapshot",
+        // Trace: embeds the full per-row queue dump (~3 KB) — far too voluminous for the Info file. The compact reason/counts
+        // ride along in the same line, so the whole snapshot drops together.
+        WaveeLog.Instance.Event(WaveeLogLevel.Trace, Category, "queue.snapshot",
             "reason=" + reason
             + " rev=" + revision.ToString(CultureInfo.InvariantCulture)
             + " total=" + queue.Count.ToString(CultureInfo.InvariantCulture)
@@ -48,16 +50,19 @@ internal static class PlaybackBucketDiagnostics
             + " ctx=" + Safe(contextUri)
             + " current=" + Safe(currentUri)
             + " rows=[" + rows + "]",
-            WaveeLogField.Of("reason", reason),
-            WaveeLogField.Of("rev", revision),
-            WaveeLogField.Of("total", queue.Count),
-            WaveeLogField.Of("now", now),
-            WaveeLogField.Of("user", user),
-            WaveeLogField.Of("nextContext", nextContext),
-            WaveeLogField.Of("nextAutoplay", nextAutoplay),
-            WaveeLogField.Of("history", history),
-            WaveeLogField.Of("ctx", contextUri ?? ""),
-            WaveeLogField.Of("current", currentUri ?? ""));
+            fields:
+            [
+                WaveeLogField.Of("reason", reason),
+                WaveeLogField.Of("rev", revision),
+                WaveeLogField.Of("total", queue.Count),
+                WaveeLogField.Of("now", now),
+                WaveeLogField.Of("user", user),
+                WaveeLogField.Of("nextContext", nextContext),
+                WaveeLogField.Of("nextAutoplay", nextAutoplay),
+                WaveeLogField.Of("history", history),
+                WaveeLogField.Of("ctx", contextUri ?? ""),
+                WaveeLogField.Of("current", currentUri ?? ""),
+            ]);
     }
 
     /// <summary>Free-form UI-side event on the same category (queue PANEL row builds etc.) — change-gate at the caller
@@ -66,7 +71,8 @@ internal static class PlaybackBucketDiagnostics
     {
         if (string.Equals(message, lastSignature, StringComparison.Ordinal)) return;
         lastSignature = message;
-        WaveeLog.Instance.Info(Category, eventId, message);
+        // Trace: the caller (queue panel) passes a full per-row dump here.
+        WaveeLog.Instance.Event(WaveeLogLevel.Trace, Category, eventId, message);
     }
 
     public static void RemoteClusterIfChanged(ref string? lastSignature, string reason, in ClusterDelta c)
@@ -77,7 +83,8 @@ internal static class PlaybackBucketDiagnostics
 
         CountRemote(c.NextTracks, out int nextQueue, out int nextContext, out int nextAutoplay, out int nextDelimiter);
         CountRemote(c.PrevTracks ?? Array.Empty<RemoteTrack>(), out int prevQueue, out int prevContext, out int prevAutoplay, out int prevDelimiter);
-        WaveeLog.Instance.Info(Category, "remote.cluster",
+        // Trace: embeds the full next.rows/prev.rows dumps.
+        WaveeLog.Instance.Event(WaveeLogLevel.Trace, Category, "remote.cluster",
             "reason=" + reason
             + " active=" + Safe(c.ActiveDeviceId)
             + " ctx=" + Safe(c.ContextUri)
@@ -95,13 +102,16 @@ internal static class PlaybackBucketDiagnostics
             + " prev.delimiter=" + prevDelimiter.ToString(CultureInfo.InvariantCulture)
             + " next.rows=[" + RemoteRows(c.NextTracks) + "]"
             + " prev.rows=[" + RemoteRows(c.PrevTracks ?? Array.Empty<RemoteTrack>()) + "]",
-            WaveeLogField.Of("reason", reason),
-            WaveeLogField.Of("active", c.ActiveDeviceId),
-            WaveeLogField.Of("ctx", c.ContextUri ?? ""),
-            WaveeLogField.Of("track", c.HasTrack ? c.Track.Uri : ""),
-            WaveeLogField.Of("revision", c.QueueRevision ?? ""),
-            WaveeLogField.Of("next", c.NextTracks.Count),
-            WaveeLogField.Of("prev", c.PrevTracks?.Count ?? 0));
+            fields:
+            [
+                WaveeLogField.Of("reason", reason),
+                WaveeLogField.Of("active", c.ActiveDeviceId),
+                WaveeLogField.Of("ctx", c.ContextUri ?? ""),
+                WaveeLogField.Of("track", c.HasTrack ? c.Track.Uri : ""),
+                WaveeLogField.Of("revision", c.QueueRevision ?? ""),
+                WaveeLogField.Of("next", c.NextTracks.Count),
+                WaveeLogField.Of("prev", c.PrevTracks?.Count ?? 0),
+            ]);
     }
 
     static string QueueSignature(IReadOnlyList<QueueEntry> queue, string? contextUri, string? currentUri, int remainingInContext, long revision)

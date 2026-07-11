@@ -58,7 +58,8 @@ public sealed class GaboBatcher : IAsyncDisposable
     public void Enqueue(string eventName, byte[] payload)
     {
         var seq = Interlocked.Increment(ref _globalSequence);
-        try { _persistSequence?.Invoke(seq); } catch { }
+        try { _persistSequence?.Invoke(seq); }
+        catch (Exception ex) { _log.Warn("gabo persist sequence failed: " + ex.Message, ex); }
         var env = GaboEnvelopeFactory.Build(eventName, payload, _ctx, _batchSequenceId, seq);
         _channel.Writer.TryWrite(new GaboWorkItem(env, payload.Length));
     }
@@ -83,8 +84,8 @@ public sealed class GaboBatcher : IAsyncDisposable
             }
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { _log.Info("gabo worker fault: " + ex.Message); }
-        finally { try { await FlushAsync().ConfigureAwait(false); } catch { } }
+        catch (Exception ex) { _log.Warn("gabo worker fault: " + ex.Message, ex); }
+        finally { try { await FlushAsync().ConfigureAwait(false); } catch (Exception ex) { _log.Warn("gabo final flush failed: " + ex.Message, ex); } }
     }
 
     async Task FlushAsync()
@@ -104,7 +105,8 @@ public sealed class GaboBatcher : IAsyncDisposable
                 method: "POST", headers: headers).ConfigureAwait(false);
             if (resp.Status == 401 && _refreshTokens is not null)
             {
-                try { await _refreshTokens(_cts.Token).ConfigureAwait(false); } catch { }
+                try { await _refreshTokens(_cts.Token).ConfigureAwait(false); }
+                catch (Exception ex) { _log.Warn("gabo token refresh failed: " + ex.Message, ex); }
                 continue;
             }
             if (resp.Ok)

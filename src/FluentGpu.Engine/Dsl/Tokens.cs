@@ -5,6 +5,37 @@ namespace FluentGpu.Dsl;
 public enum ThemeKind : byte { Light = 0, Dark = 1 }   // HighContrast reserved for the full FluentGpu.Theme subsystem
 
 /// <summary>
+/// The seven OS-authored accent shades WinUI keys every accent brush off (<c>SystemAccentColor</c> + <c>Light1..3</c> +
+/// <c>Dark1..3</c>). The live system accent supplies these EXACTLY (<c>IUISettings3.GetColorValue</c>, host-read); a
+/// custom / album-extracted accent has only a <see cref="Base"/>, so <see cref="Derive"/> synthesizes the ramp with
+/// WinUI's own commented "alpha-blend over black / white" approximation:
+/// <list type="bullet">
+/// <item><c>Dark{1,2,3}</c> = <see cref="Base"/> multiplied per channel by <c>{0.75, 0.55, 0.315}</c> (blend toward BLACK).</item>
+/// <item><c>Light{1,2,3}</c> = <see cref="Base"/> blended toward WHITE by <c>{0.26, 0.48, 0.68}</c>.</item>
+/// </list>
+/// Calibration against the WinUI default accent <c>#0078D4</c> (its <c>SystemThemingInterop.cpp</c> test fallback):
+/// derived <c>Dark1 #005A9F · Dark2 #004275 · Dark3 #002643 · Light1 #429BDF · Light2 #7AB9E9 · Light3 #ADD4F1</c>
+/// vs WinUI <c>Dark1 #005A9E · Dark2 #004275 · Dark3 #002642 · Light1 #429CE3 · Light2 #76B9ED · Light3 #A6D8FF</c> —
+/// the DARK ramp reproduces WinUI's within a rounding LSB; the LIGHT ramp is the documented approximation (a few LSBs
+/// off, and irrelevant for custom colors, which have no OS-authored ramp at all). Every shade is opaque (A = 1); the
+/// alpha-reduced fills (<c>AccentSecondary/Tertiary/Subtle</c>) apply their alpha at read time in <see cref="Tok"/>.
+/// </summary>
+public readonly record struct AccentRamp(
+    ColorF Base, ColorF Light1, ColorF Light2, ColorF Light3, ColorF Dark1, ColorF Dark2, ColorF Dark3)
+{
+    /// <summary>Synthesize the full ramp from a single base color (see the type remarks for the WinUI approximation).</summary>
+    public static AccentRamp Derive(ColorF @base)
+    {
+        var b = @base with { A = 1f };
+        static ColorF Darker(ColorF c, float f) => new(c.R * f, c.G * f, c.B * f, 1f);                 // blend toward black
+        static ColorF Lighter(ColorF c, float f) => new(c.R + (1f - c.R) * f, c.G + (1f - c.G) * f, c.B + (1f - c.B) * f, 1f); // toward white
+        return new AccentRamp(b,
+            Light1: Lighter(b, 0.26f), Light2: Lighter(b, 0.48f), Light3: Lighter(b, 0.68f),
+            Dark1:  Darker(b, 0.75f),  Dark2:  Darker(b, 0.55f),  Dark3:  Darker(b, 0.315f));
+    }
+}
+
+/// <summary>
 /// An immutable, baked palette of every semantic Fluent brush for one theme (mirrors WinUI's *_themeresources). Built
 /// once per theme; never mutated. Read through <see cref="Tok"/>, which swaps the active set with a single pointer write.
 /// </summary>
@@ -184,7 +215,9 @@ public static class Tok
     /// redundant set (e.g. toggling to the already-active theme, re-injecting the same OS accent) doesn't churn a frame.</summary>
     public static int Epoch { get; private set; }
 
-    private static ColorF? _accent;       // live OS accent override (folds into AccentDefault/Secondary/Tertiary/Subtle)
+    // Live OS/developer accent override — the FULL ramp, so accent FILL/TEXT resolve THEME-AWARE (WinUI Dark1 in light,
+    // Light2 in dark), not one flat color reused in both themes. Null = revert to the baked per-theme TokenSet accents.
+    private static AccentRamp? _accentRamp;
     private static ColorF? _windowBg;     // Mica → Transparent override
 
     public static void Use(ThemeKind kind) => Use(_palette, kind);
@@ -207,23 +240,29 @@ public static class Tok
         _ => null,
     };
 
-    /// <summary>Inject the OS accent (host startup) or a developer global override; all accent tokens (fill + text +
-    /// subtle + hero + attention) recompute from it. Pass <c>null</c> to clear the override and revert to the theme default.</summary>
+    /// <summary>Inject the OS accent (host startup) or a developer/album global override from a single base color; all
+    /// accent tokens (fill + text + subtle + hero + attention) recompute from the <see cref="AccentRamp.Derive"/>d ramp,
+    /// THEME-AWARE. Pass <c>null</c> to clear the override and revert to the baked per-theme accents.</summary>
     public static void SetAccent(ColorF? c)
     {
-        if (c == _accent) return;
-        _accent = c;
-        if (c is { } ac)
+        if (c is { } cc) { var ramp = AccentRamp.Derive(cc); SetAccent(in ramp); }
+        else if (_accentRamp is not null) { _accentRamp = null; Epoch++; }
+    }
+
+    /// <summary>Inject the EXACT OS-authored accent ramp (host startup via <c>IUISettings3.GetColorValue</c>) — the
+    /// seven system shades, no approximation. Same effect as <see cref="SetAccent(ColorF?)"/> otherwise.</summary>
+    public static void SetAccent(in AccentRamp ramp)
+    {
+        if (_accentRamp is { } cur && cur == ramp) return;
+        _accentRamp = ramp;
+        AccentTintedPalette = PaletteBuilder.BuildAccentTinted(ramp.Base);
+        if (_palette.Id == "accent")
         {
-            AccentTintedPalette = PaletteBuilder.BuildAccentTinted(ac);
-            if (_palette.Id == "accent")
-            {
-                // Re-point the ACTIVE palette too, not just T — Tok.Palette feeds the app-shell chrome (WaveeColors
-                // reads Palette.LightShell/DarkShell), which otherwise keeps serving the stale pre-injection accent
-                // palette until the next Tok.Use happens to re-resolve it.
-                _palette = AccentTintedPalette;
-                T = Theme == ThemeKind.Light ? AccentTintedPalette.Light : AccentTintedPalette.Dark;
-            }
+            // Re-point the ACTIVE palette too, not just T — Tok.Palette feeds the app-shell chrome (WaveeColors
+            // reads Palette.LightShell/DarkShell), which otherwise keeps serving the stale pre-injection accent
+            // palette until the next Tok.Use happens to re-resolve it.
+            _palette = AccentTintedPalette;
+            T = Theme == ThemeKind.Light ? AccentTintedPalette.Light : AccentTintedPalette.Dark;
         }
         Epoch++;
     }
@@ -335,36 +374,44 @@ public static class Tok
     public static ColorF TextOnAccentDisabled => T.TextOnAccentDisabled;
     public static ColorF TextOnAccentSelectedText => T.TextOnAccentSelectedText;
 
+    // ThemedIcon layer roles (Files-app ThemedIcon theme brushes, MIT): the neutral Base fill and the translucent Alt
+    // fill for layered vector icons. Theme-keyed constants (Files' exact values), resolved against the active Theme —
+    // a bound icon Tint thunk reads these and re-fires on RethemeAll (Tok.Epoch bump), so an icon live-recolors with a
+    // theme swap exactly like every token, with NO mask re-raster (the masks are colorless). NOT TokenSet fields: they
+    // are fixed cross-palette values, and adding `required` props would ripple through every PaletteBuilder construction.
+    /// <summary>ThemedIcon Base layer: dark #DBF0F0F0 (near-white @ .86) / light #DB161616 (near-black @ .86).</summary>
+    public static ColorF IconBase => Theme == ThemeKind.Light
+        ? new ColorF(0x16 / 255f, 0x16 / 255f, 0x16 / 255f, 0xDB / 255f)
+        : new ColorF(0xF0 / 255f, 0xF0 / 255f, 0xF0 / 255f, 0xDB / 255f);
+    /// <summary>ThemedIcon Alt layer: dark #66161616 (near-black @ .40) / light #66F0F0F0 (near-white @ .40).</summary>
+    public static ColorF IconAlt => Theme == ThemeKind.Light
+        ? new ColorF(0xF0 / 255f, 0xF0 / 255f, 0xF0 / 255f, 0x66 / 255f)
+        : new ColorF(0x16 / 255f, 0x16 / 255f, 0x16 / 255f, 0x66 / 255f);
+
     // Custom-titlebar caption buttons (Win11 shell close-red; theme-invariant)
     public static ColorF CaptionCloseHover => T.CaptionCloseHover;
     public static ColorF CaptionClosePressed => T.CaptionClosePressed;
 
-    // Accent (override-aware)
-    public static ColorF AccentDefault => _accent ?? T.AccentDefault;
-    public static ColorF AccentSecondary => _accent is { } a ? a with { A = 0.90f } : T.AccentSecondary;
-    public static ColorF AccentTertiary => _accent is { } a ? a with { A = 0.80f } : T.AccentTertiary;
-    public static ColorF AccentDisabled => T.AccentDisabled;
-    public static ColorF AccentSubtle => _accent is { } a ? a with { A = 0.16f } : T.AccentSubtle;
-    // Accent TEXT shades. With a live accent override (OS accent or Tok.SetAccent) these recompute from the base by
-    // SHADING (lighten in dark / darken in light) toward the WinUI AccentTextFillColor ramp — NOT alpha-reduction, which
-    // would make link text translucent. With no override, the exact WinUI default values baked in the TokenSet are used.
-    public static ColorF AccentTextPrimary   => _accent is { } a ? AccentTextShade(a, 0) : T.AccentTextPrimary;
-    public static ColorF AccentTextSecondary => _accent is { } a ? AccentTextShade(a, 1) : T.AccentTextSecondary;
-    public static ColorF AccentTextTertiary  => _accent is { } a ? AccentTextShade(a, 2) : T.AccentTextTertiary;
-    // Selection plate = the accent base itself (WinUI binds it to SystemAccentColor), so a live accent override
-    // substitutes it directly — the AccentDefault pattern.
-    public static ColorF AccentSelectedTextBackground => _accent ?? T.AccentSelectedTextBackground;
-
-    // level 0=Primary 1=Secondary 2=Tertiary. Dark lightens (→ Light3/Light3/Light2); light darkens (→ Dark2/Dark3/Dark1).
-    // Mix factors tuned to the #0078D4 default anchors; the default (no-override) path uses the exact baked values above.
-    private static ColorF AccentTextShade(ColorF accent, int level)
-    {
-        bool light = Theme == ThemeKind.Light;
-        float t = light ? level switch { 0 => 0.45f, 1 => 0.66f, _ => 0.22f }
-                        : level switch { 0 => 0.55f, 1 => 0.55f, _ => 0.28f };
-        var target = light ? ColorF.FromRgba(0x00, 0x00, 0x00) : ColorF.FromRgba(0xFF, 0xFF, 0xFF);
-        return new ColorF(accent.R + (target.R - accent.R) * t, accent.G + (target.G - accent.G) * t, accent.B + (target.B - accent.B) * t, 1f);
-    }
+    // Accent (override-aware, THEME-AWARE). WinUI AccentFillColorDefault = SystemAccentColorDark1 (LIGHT theme) /
+    // SystemAccentColorLight2 (DARK theme), opaque — the shade that fixes the light-theme accent bug (one flat color was
+    // returned raw in both themes). Secondary/Tertiary/Subtle are the SAME shade at 0.90/0.80/0.16 alpha.
+    private static ColorF AccentFillShade(in AccentRamp r) => Theme == ThemeKind.Light ? r.Dark1 : r.Light2;
+    public static ColorF AccentDefault => _accentRamp is { } r ? AccentFillShade(r) : T.AccentDefault;
+    public static ColorF AccentSecondary => _accentRamp is { } r ? AccentFillShade(r) with { A = 0.90f } : T.AccentSecondary;
+    public static ColorF AccentTertiary => _accentRamp is { } r ? AccentFillShade(r) with { A = 0.80f } : T.AccentTertiary;
+    public static ColorF AccentDisabled => T.AccentDisabled;   // fixed #37000000 (light) / #28FFFFFF (dark), never accent-derived
+    // Accent SUBTLE (nav selection / info card): the theme fill shade at low alpha — matching the baked TokenSet, which
+    // keys subtle off the same shade as AccentDefault (light #005FB8·, dark #60CDFF·), NOT the raw base.
+    public static ColorF AccentSubtle => _accentRamp is { } r ? AccentFillShade(r) with { A = 0.16f } : T.AccentSubtle;
+    // Accent TEXT shades (link text / accent labels): WinUI AccentTextFillColor{Primary,Secondary,Tertiary} =
+    // Dark2/Dark3/Dark1 (LIGHT) and Light3/Light3/Light2 (DARK). Opaque (never alpha-reduced — that would make link text
+    // translucent). With no override, the exact WinUI default values baked in the TokenSet are used.
+    public static ColorF AccentTextPrimary   => _accentRamp is { } r ? (Theme == ThemeKind.Light ? r.Dark2 : r.Light3) : T.AccentTextPrimary;
+    public static ColorF AccentTextSecondary => _accentRamp is { } r ? (Theme == ThemeKind.Light ? r.Dark3 : r.Light3) : T.AccentTextSecondary;
+    public static ColorF AccentTextTertiary  => _accentRamp is { } r ? (Theme == ThemeKind.Light ? r.Dark1 : r.Light2) : T.AccentTextTertiary;
+    // Selection plate = the accent BASE itself (WinUI binds it to SystemAccentColor) in BOTH themes, so a live override
+    // substitutes the ramp base directly.
+    public static ColorF AccentSelectedTextBackground => _accentRamp is { } r ? r.Base : T.AccentSelectedTextBackground;
 
     // Focus
     public static ColorF FocusOuter => T.FocusOuter;
@@ -377,7 +424,7 @@ public static class Tok
     public static ColorF AcrylicBase => T.AcrylicBase;
     /// <summary>Theme-aware default flyout acrylic (see <see cref="TokenSet.AcrylicFlyout"/> for the WinUI sources).</summary>
     public static AcrylicSpec AcrylicFlyout => T.AcrylicFlyout;
-    public static ColorF HeroGradientTop => _accent is { } a ? a with { A = 0.55f } : T.HeroGradientTop;
+    public static ColorF HeroGradientTop => _accentRamp is { } r ? r.Base with { A = 0.55f } : T.HeroGradientTop;
     public static ColorF HeroGradientBottom => T.HeroGradientBottom;
 
     // Control-alt fill

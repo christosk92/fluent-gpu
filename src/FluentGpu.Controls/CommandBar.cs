@@ -157,7 +157,7 @@ public sealed class CommandBar : Component
             {
                 if (c.Kind == AppBarCommandKind.Separator) continue;
                 if (c.Kind == AppBarCommandKind.ToggleButton) hasToggles = true;
-                if (c.Glyph is { Length: > 0 }) hasIcons = true;
+                if (c.Icon.HasContent) hasIcons = true;
             }
             var rows = new List<Element>(SecondaryCommands.Count);
             foreach (var cmd in SecondaryCommands)
@@ -200,10 +200,12 @@ public sealed class CommandBar : Component
                 var c = cmd;
                 if (c.Kind == AppBarCommandKind.Separator) { children.Add(AppBarSeparator.Create()); continue; }
                 bool labeled = isOpen && LabelsOnOpen;
+                // The top-level CommandBar strip uses the glyph-font buttons; a themed name falls back to its glyph here
+                // (themed layered icons are the flyout/overflow path — CommandBarFlyout + the overflow rows above).
                 children.Add(c.Kind == AppBarCommandKind.ToggleButton
-                    ? AppBarToggleButton.Create(c.Glyph, c.Label, c.IsChecked, c.Enabled, isCompact: !labeled,
+                    ? AppBarToggleButton.Create(c.Icon.Glyph ?? "", c.Label, c.IsChecked, c.Enabled, isCompact: !labeled,
                         onToggled: _ => c.Invoke?.Invoke())
-                    : AppBarButton.Create(c.Glyph, c.Label, () => c.Invoke?.Invoke(), c.Enabled, isCompact: !labeled,
+                    : AppBarButton.Create(c.Icon.Glyph ?? "", c.Label, () => c.Invoke?.Invoke(), c.Enabled, isCompact: !labeled,
                         accelerator: c.Accelerator));
             }
         }

@@ -6,7 +6,7 @@ using Wavee.Core;
 namespace Wavee.SpotifyLive.Audio.Host;
 
 /// <summary>Parent-side audio host: self-relaunches Wavee.exe --audio-host, caches state, respawns, then breaks to in-proc.</summary>
-public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPlayKeyDeriver
+public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IAudioOutputDeviceControl, IPreparedAudioHost, IPlayPlayKeyDeriver
 {
     const int CrashLimit = 3;
     static readonly TimeSpan CrashWindow = TimeSpan.FromSeconds(60);
@@ -15,11 +15,13 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
     readonly InProcessAudioHost _fallback;
     readonly Func<IPlayPlayKeyDeriver?> _fallbackDeriver;
     readonly SimpleSubject<AudioHostSignal> _signals = new();
+    readonly SimpleSubject<AudioTransitionSignal> _transitions = new();
     readonly WaveeLogger _log;
     readonly object _gate = new();
     readonly Queue<long> _faults = new();
     readonly Timer _heartbeat;
     readonly IDisposable _fallbackSub;
+    readonly IDisposable _fallbackTransitionSub;
     readonly bool _preferRemote;
 
     RuntimeAsset? _asset;
@@ -27,6 +29,8 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
     CrossfadeSettings _crossfade = CrossfadeSettings.Off;
     AudioFastStart? _lastStart;
     AudioStreamHandle? _lastBody;
+    AudioPrepareRequest? _preparedRequest;
+    AudioStreamHandle? _preparedBody;
     string _activeFileIdHex = "";
     long _generation;
     long _positionMs;
@@ -39,8 +43,11 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
     bool _disposed;
     bool _circuitRaised;
     double _volume = 1.0;
+    string? _outputDeviceId;
 
     public event Action? CircuitBroken;
+    public event Action<OutputDeviceNotice>? OutputDeviceNotice;
+    public event Action<double, bool>? ExternalVolumeChanged;
 
     public SupervisedAudioHost(
         Func<IPlayPlayKeyDeriver?> fallbackDeriver,
@@ -54,6 +61,10 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
                         Environment.GetEnvironmentVariable("WAVEE_AUDIO_OOP") != "0";
         _fallback = new InProcessAudioHost(fallbackDecryptors, log, bodyDisk);
         _fallbackSub = _fallback.Signals.Subscribe(new SignalObserver(OnFallbackSignal));
+        _fallbackTransitionSub = _fallback.Transitions.Subscribe(new TransitionObserver(OnFallbackTransition));
+        // Forward the in-proc fallback's device/volume events when we are actually on the fallback (OOP parity).
+        _fallback.OutputDeviceNotice += n => { if (_usingFallback) OutputDeviceNotice?.Invoke(n); };
+        _fallback.ExternalVolumeChanged += (v, muted) => { if (_usingFallback) ExternalVolumeChanged?.Invoke(v, muted); };
         _process = new AudioHostProcess(log);
         _process.Notification += OnNotification;
         _process.Faulted += OnFaulted;
@@ -65,6 +76,7 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
     public bool IsPlaying => _usingFallback ? _fallback.IsPlaying : _playing;
     public bool IsBuffering => _usingFallback ? _fallback.IsBuffering : (_buffering || _prebuffering);
     public IObservable<AudioHostSignal> Signals => _signals;
+    public IObservable<AudioTransitionSignal> Transitions => _transitions;
 
     bool RemoteAvailable => _preferRemote && !_remoteDisabled;
 
@@ -240,6 +252,30 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
             () => { });
     }
 
+    public void SetOutputDevice(string? deviceId)
+    {
+        _outputDeviceId = string.IsNullOrEmpty(deviceId) ? null : deviceId;
+        ConfigureProcess();
+        _fallback.SetOutputDevice(_outputDeviceId);
+        if (!RemoteAvailable) return;
+
+        long generation = Interlocked.Read(ref _generation);
+        _ = RunRemoteAsync(() => _process.SendAsync(IpcMessageTypes.SetOutputDevice,
+            new SetOutputDeviceCommand { Generation = generation, DeviceId = _outputDeviceId }, CancellationToken.None),
+            () => _fallback.SetOutputDevice(_outputDeviceId));
+    }
+
+    public void SetOutputMuted(bool muted)
+    {
+        _fallback.SetOutputMuted(muted);
+        if (!RemoteAvailable) return;
+
+        long generation = Interlocked.Read(ref _generation);
+        _ = RunRemoteAsync(() => _process.SendAsync(IpcMessageTypes.SetMute,
+            new MuteCommand { Generation = generation, Muted = muted }, CancellationToken.None),
+            () => _fallback.SetOutputMuted(muted));
+    }
+
     public void SetEqualizer(bool enabled, ReadOnlySpan<float> gainsDb, float preampDb = 0f)
     {
         var gains = new float[10];
@@ -270,6 +306,126 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
         _ = RunRemoteAsync(() => _process.SendAsync(IpcMessageTypes.SetCrossfade,
             new SetCrossfadeCommand { Generation = generation, Settings = _crossfade }, CancellationToken.None),
             () => { });
+    }
+
+    public async Task PrepareNextAsync(AudioPrepareRequest request, CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            _preparedRequest = request;
+            _preparedBody = null;
+        }
+
+        if (!RemoteAvailable)
+        {
+            UseFallback();
+            await _fallback.PrepareNextAsync(request, ct).ConfigureAwait(false);
+            return;
+        }
+
+        try
+        {
+            ConfigureProcess();
+            long generation = Interlocked.Read(ref _generation);
+            var start = request.Start;
+            var cmd = new PrepareNextCommand
+            {
+                Generation = generation,
+                CorrelationId = Guid.NewGuid().ToString("N"),
+                Token = request.Token,
+                TrackUri = start.TrackUri,
+                FileIdHex = start.FileIdHex,
+                Format = start.Format.ToString(),
+                DurationMs = start.DurationMs,
+                NormalizationGainDb = start.NormalizationGainDb,
+                HeadBytesBase64 = Convert.ToBase64String(start.HeadBytes.Span),
+                AllowOverlap = request.AllowOverlap,
+            };
+            await _process.RequestAsync(IpcMessageTypes.PrepareNext, cmd, ParseCommandResult,
+                TimeSpan.FromSeconds(30), ct).ConfigureAwait(false);
+            _usingFallback = false;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            RegisterFault(ex);
+            SwitchToFallback();
+            await _fallback.PrepareNextAsync(request, ct).ConfigureAwait(false);
+        }
+    }
+
+    public async Task SupplyNextBodyAsync(string token, AudioStreamHandle body, CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            if (_preparedRequest is not { } request || !string.Equals(request.Token, token, StringComparison.Ordinal)) return;
+            _preparedBody = body;
+        }
+
+        if (!RemoteAvailable || _usingFallback)
+        {
+            UseFallback();
+            await _fallback.SupplyNextBodyAsync(token, body, ct).ConfigureAwait(false);
+            return;
+        }
+
+        try
+        {
+            ConfigureProcess();
+            long generation = Interlocked.Read(ref _generation);
+            var cmd = new SupplyNextBodyCommand
+            {
+                Generation = generation,
+                CorrelationId = Guid.NewGuid().ToString("N"),
+                Token = token,
+                Body = BuildSupplyBodyCommand(body, generation),
+            };
+            await _process.RequestAsync(IpcMessageTypes.SupplyNextBody, cmd, ParseCommandResult,
+                TimeSpan.FromSeconds(60), ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            RegisterFault(ex);
+            SwitchToFallback();
+            await _fallback.SupplyNextBodyAsync(token, body, ct).ConfigureAwait(false);
+        }
+    }
+
+    public async Task<AudioPrepareCancelResult> CancelPreparedAsync(string token, CancellationToken ct = default)
+    {
+        lock (_gate)
+        {
+            if (_preparedRequest is { } request && string.Equals(request.Token, token, StringComparison.Ordinal))
+            {
+                _preparedRequest = null;
+                _preparedBody = null;
+            }
+        }
+
+        if (!RemoteAvailable || _usingFallback)
+            return await _fallback.CancelPreparedAsync(token, ct).ConfigureAwait(false);
+
+        try
+        {
+            ConfigureProcess();
+            var cmd = new CancelPreparedCommand
+            {
+                Generation = Interlocked.Read(ref _generation),
+                CorrelationId = Guid.NewGuid().ToString("N"),
+                Token = token,
+            };
+            var result = await _process.RequestAsync(IpcMessageTypes.CancelPrepared, cmd, ParseCommandResultAllowDetail,
+                TimeSpan.FromSeconds(10), ct).ConfigureAwait(false);
+            return Enum.TryParse<AudioPrepareCancelResult>(result.Detail, out var parsed)
+                ? parsed : AudioPrepareCancelResult.NotFound;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            RegisterFault(ex);
+            return await _fallback.CancelPreparedAsync(token, ct).ConfigureAwait(false);
+        }
     }
 
     public Task<PlayPlayDeriveResult> DeriveAsync(ReadOnlyMemory<byte> obfuscatedKey, ReadOnlyMemory<byte> contentId,
@@ -362,8 +518,18 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
     async Task SendSupplyBodyAsync(AudioStreamHandle body, long generation)
     {
         ConfigureProcess();
+        var cmd = BuildSupplyBodyCommand(body, generation);
+        var urls = cmd.CdnUrls;
+        _log.Info($"audio host send supply_body generation={generation} track={body.TrackUri} file={body.FileIdHex} fmt={body.Format} urls={urls.Length} headBoundary={body.HeadBoundary}B key={body.Key.Length}B nativeSeed={body.NativeCdnSeed.Length}B");
+        await _process.RequestAsync(IpcMessageTypes.SupplyBody, cmd, ParseCommandResult,
+            TimeSpan.FromSeconds(60), CancellationToken.None).ConfigureAwait(false);
+        _log.Info($"audio host ack supply_body generation={generation} file={body.FileIdHex}");
+    }
+
+    static SupplyBodyCommand BuildSupplyBodyCommand(AudioStreamHandle body, long generation)
+    {
         var urls = body.CdnUrls ?? (string.IsNullOrEmpty(body.CdnUrl) ? Array.Empty<string>() : [body.CdnUrl]);
-        var cmd = new SupplyBodyCommand
+        return new SupplyBodyCommand
         {
             Generation = generation,
             CorrelationId = Guid.NewGuid().ToString("N"),
@@ -378,13 +544,17 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
             HeadBoundary = body.HeadBoundary,
             SourceKind = (int)body.SourceKind,
         };
-        _log.Info($"audio host send supply_body generation={generation} track={body.TrackUri} file={body.FileIdHex} fmt={body.Format} urls={urls.Length} headBoundary={body.HeadBoundary}B key={body.Key.Length}B nativeSeed={body.NativeCdnSeed.Length}B");
-        await _process.RequestAsync(IpcMessageTypes.SupplyBody, cmd, ParseCommandResult,
-            TimeSpan.FromSeconds(60), CancellationToken.None).ConfigureAwait(false);
-        _log.Info($"audio host ack supply_body generation={generation} file={body.FileIdHex}");
     }
 
     static CommandResultMessage ParseCommandResult(JsonElement? payload)
+    {
+        var result = payload?.Deserialize(AudioIpcJsonContext.Default.CommandResultMessage);
+        if (result is null) throw new InvalidOperationException("bad command reply");
+        if (!result.Ok) throw new InvalidOperationException(result.Detail ?? result.Reason?.ToString() ?? "audio command failed");
+        return result;
+    }
+
+    static CommandResultMessage ParseCommandResultAllowDetail(JsonElement? payload)
     {
         var result = payload?.Deserialize(AudioIpcJsonContext.Default.CommandResultMessage);
         if (result is null) throw new InvalidOperationException("bad command reply");
@@ -407,7 +577,7 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
         }
     }
 
-    void ConfigureProcess() => _process.Configure(_asset, _equalizer, _crossfade, _volume);
+    void ConfigureProcess() => _process.Configure(_asset, _equalizer, _crossfade, _volume, _outputDeviceId);
 
     long NextGeneration(string fileIdHex)
     {
@@ -417,6 +587,8 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
             _playing = false;
             _buffering = true;
             _prebuffering = false;
+            _preparedRequest = null;
+            _preparedBody = null;
             _generation++;
             return _generation;
         }
@@ -451,9 +623,32 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
                     _wantPlaying = false;
                     _signals.OnNext(new AudioHostSignal(AudioHostSignalKind.Ended, PositionMs));
                     break;
+                case IpcMessageTypes.CrossfadeStarted:
+                case IpcMessageTypes.CrossfadeCompleted:
+                case IpcMessageTypes.CrossfadeMissed:
+                    var transition = payload?.Deserialize(AudioIpcJsonContext.Default.PreparedTransitionMessage);
+                    if (transition is null || transition.Generation != Interlocked.Read(ref _generation)) return;
+                    var transitionSignal = new AudioTransitionSignal((AudioTransitionKind)transition.Kind,
+                        transition.Token, transition.TrackUri, transition.PositionMs,
+                        transition.EffectiveFadeMs, transition.Reason);
+                    PromotePreparedState(transitionSignal);
+                    _transitions.OnNext(transitionSignal);
+                    break;
+                case IpcMessageTypes.DeviceEvent:
+                    // Device events are GLOBAL (no generation gating) — routing is process-wide, like volume.
+                    var dev = payload?.Deserialize(AudioIpcJsonContext.Default.DeviceEventMessage);
+                    if (dev is not null)
+                        OutputDeviceNotice?.Invoke(new OutputDeviceNotice((OutputDeviceNoticeKind)dev.Kind, dev.DeviceId ?? "", dev.DeviceName ?? "", dev.WasExplicit));
+                    break;
+                case IpcMessageTypes.SessionVolume:
+                    var sv = payload?.Deserialize(AudioIpcJsonContext.Default.SessionVolumeMessage);
+                    if (sv is not null) ExternalVolumeChanged?.Invoke(sv.Volume01, sv.Muted);   // no generation gate
+                    break;
+                case IpcMessageTypes.Error:
+                    _signals.OnNext(new AudioHostSignal(AudioHostSignalKind.Error, PositionMs));
+                    break;
                 case IpcMessageTypes.Diagnostic:
                 case IpcMessageTypes.EqualizerApplied:
-                case IpcMessageTypes.CrossfadeMissed:
                     var diag = payload?.Deserialize(AudioIpcJsonContext.Default.DiagnosticMessage);
                     if (diag is not null) _log.Info("audio host " + type + ": " + diag.Detail);
                     break;
@@ -473,6 +668,34 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
         _buffering = signal.Kind == AudioHostSignalKind.Buffering;
         _prebuffering = signal.Kind == AudioHostSignalKind.Prebuffering;
         _signals.OnNext(signal);
+    }
+
+    void OnFallbackTransition(AudioTransitionSignal signal)
+    {
+        if (!_usingFallback) return;
+        PromotePreparedState(signal);
+        _transitions.OnNext(signal);
+    }
+
+    void PromotePreparedState(AudioTransitionSignal signal)
+    {
+        lock (_gate)
+        {
+            if (_preparedRequest is not { } request || !string.Equals(request.Token, signal.Token, StringComparison.Ordinal)) return;
+            if (signal.Kind == AudioTransitionKind.Started)
+            {
+                _lastStart = request.Start;
+                _lastBody = _preparedBody;
+                _activeFileIdHex = request.Start.FileIdHex;
+                _positionMs = Math.Max(0, signal.PositionMs);
+                _wantPlaying = true;
+            }
+            if (signal.Kind is AudioTransitionKind.Started or AudioTransitionKind.Missed)
+            {
+                _preparedRequest = null;
+                _preparedBody = null;
+            }
+        }
     }
 
     void OnFaulted(Exception ex)
@@ -505,6 +728,8 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
         bool wantPlaying;
         long position;
         long generation;
+        AudioPrepareRequest? preparedRequest;
+        AudioStreamHandle? preparedBody;
         lock (_gate)
         {
             start = _lastStart;
@@ -512,6 +737,8 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
             wantPlaying = _wantPlaying;
             position = _positionMs;
             generation = _generation;
+            preparedRequest = _preparedRequest;
+            preparedBody = _preparedBody;
         }
 
         if (start is { } s) await SendLoadFastStartAsync(s, generation).ConfigureAwait(false);
@@ -521,6 +748,12 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
         if (wantPlaying)
             await _process.SendAsync(IpcMessageTypes.Play, new EmptyPayload { Generation = generation }, CancellationToken.None).ConfigureAwait(false);
         _usingFallback = false;
+        if (preparedRequest is { } request)
+        {
+            await PrepareNextAsync(request, CancellationToken.None).ConfigureAwait(false);
+            if (preparedBody is { } nextBody)
+                await SupplyNextBodyAsync(request.Token, nextBody, CancellationToken.None).ConfigureAwait(false);
+        }
     }
 
     void RegisterFault(Exception ex)
@@ -557,12 +790,16 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
         AudioStreamHandle? body;
         bool wantPlaying;
         long position;
+        AudioPrepareRequest? preparedRequest;
+        AudioStreamHandle? preparedBody;
         lock (_gate)
         {
             start = _lastStart;
             body = _lastBody;
             wantPlaying = _wantPlaying;
             position = _positionMs;
+            preparedRequest = _preparedRequest;
+            preparedBody = _preparedBody;
         }
 
         if (start is { } s) _fallback.LoadFastStart(s);
@@ -571,6 +808,12 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
         _fallback.SetEqualizer(_equalizer.Enabled, _equalizer.GainsDb, _equalizer.PreampDb);
         _fallback.SetCrossfade(_crossfade.Enabled, _crossfade.DurationMs);
         if (position > 0) _fallback.Seek(position);
+        if (preparedRequest is { } request)
+        {
+            _fallback.PrepareNextAsync(request).GetAwaiter().GetResult();
+            if (preparedBody is { } nextBody)
+                _fallback.SupplyNextBodyAsync(request.Token, nextBody).GetAwaiter().GetResult();
+        }
         if (wantPlaying) _fallback.Play();
     }
 
@@ -629,6 +872,7 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
         _disposed = true;
         _heartbeat.Dispose();
         _fallbackSub.Dispose();
+        _fallbackTransitionSub.Dispose();
         _process.Notification -= OnNotification;
         _process.Faulted -= OnFaulted;
         await _process.DisposeAsync().ConfigureAwait(false);
@@ -638,6 +882,13 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IPlayPla
     sealed class SignalObserver(Action<AudioHostSignal> onNext) : IObserver<AudioHostSignal>
     {
         public void OnNext(AudioHostSignal value) => onNext(value);
+        public void OnError(Exception error) { }
+        public void OnCompleted() { }
+    }
+
+    sealed class TransitionObserver(Action<AudioTransitionSignal> onNext) : IObserver<AudioTransitionSignal>
+    {
+        public void OnNext(AudioTransitionSignal value) => onNext(value);
         public void OnError(Exception error) { }
         public void OnCompleted() { }
     }

@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Wavee.Backend;
+using Wavee.Backend.Audio;
 using Wavee.Core;
 using Xunit;
 
@@ -20,7 +21,7 @@ public class ConnectControllerTests
 
     static IContextResolver Ctx(params string[] uris) => new FakeContextResolver(uris);
 
-    sealed class RecordingAudioHost : IAudioHost
+    sealed class RecordingAudioHost : IAudioHost, IAudioOutputDeviceControl
     {
         public readonly List<string> Calls = new();
         readonly SimpleSubject<AudioHostSignal> _sig = new();
@@ -38,6 +39,24 @@ public class ConnectControllerTests
         public void SetVolume(double v) { Calls.Add("vol"); }
         public void Emit(AudioHostSignal s) => _sig.OnNext(s);
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        // IAudioOutputDeviceControl (Phase A/B)
+        public event Action<OutputDeviceNotice>? OutputDeviceNotice;
+        public event Action<double, bool>? ExternalVolumeChanged;
+        public void SetOutputDevice(string? deviceId) { Calls.Add("setoutput:" + (deviceId ?? "(default)")); }
+        public void SetOutputMuted(bool muted) { Calls.Add("mute:" + muted); }
+        public void RaiseDeviceNotice(OutputDeviceNotice n) => OutputDeviceNotice?.Invoke(n);
+        public void RaiseExternalVolume(double v, bool muted) => ExternalVolumeChanged?.Invoke(v, muted);
+    }
+
+    sealed class FakeDeviceMonitor : Wavee.SpotifyLive.Audio.IAudioDeviceMonitor
+    {
+        public event Action<Wavee.SpotifyLive.Audio.AudioDeviceEvent>? Changed;
+        public IReadOnlyList<Wavee.SpotifyLive.Audio.AudioEndpointInfo> EnumerateRenderEndpoints() =>
+            System.Array.Empty<Wavee.SpotifyLive.Audio.AudioEndpointInfo>();
+        public string? GetDefaultRenderId() => null;
+        public string? GetFriendlyName(string deviceId) => null;
+        public void Dispose() { }
     }
 
     sealed class RecordingOutbound : IOutboundControl
@@ -154,6 +173,55 @@ public class ConnectControllerTests
         host.Emit(new AudioHostSignal(AudioHostSignalKind.Ended, 60000));
         await Task.Delay(60);
         Assert.Contains("load:spotify:track:b", host.Calls);
+    }
+
+    // ── radio "Start radio" (radio-inspiredby-mix-design §5.3) ───────────────────────────────────────────────────────
+    [Fact]
+    public async Task StartRadio_NothingPlaying_PlaysRadioPlaylistImmediately()
+    {
+        var ctx = new FakeContextResolver("spotify:track:a", "spotify:track:b") { RadioSeedResult = "spotify:playlist:radio" };
+        using var c = Make(out var host, out _, out _, ctx: ctx);
+
+        var uri = await c.StartRadioAsync("spotify:track:seed", "Seed");
+
+        Assert.Equal("spotify:playlist:radio", uri);
+        Assert.Contains("load:spotify:track:a", host.Calls);   // radio playlist played from the top
+        Assert.Contains("play", host.Calls);
+    }
+
+    [Fact]
+    public async Task StartRadio_WhilePlaying_ParksAfterCurrent_NoReload_ThenFlowsIn()
+    {
+        var ctx = new FakeContextResolver("spotify:track:a", "spotify:track:b", "spotify:track:c")
+        { RadioSeedResult = "spotify:playlist:radio" };
+        using var c = Make(out var host, out _, out var outbound, ctx: ctx);
+        await c.PlayAsync("spotify:playlist:p");               // playing "a"
+        host.Calls.Clear();
+
+        var uri = await c.StartRadioAsync("spotify:track:a", "A");
+
+        Assert.Equal("spotify:playlist:radio", uri);
+        Assert.DoesNotContain(host.Calls, x => x.StartsWith("load:", StringComparison.Ordinal));   // current track NOT reloaded
+        Assert.Empty(outbound.Sent);                          // local op, nothing forwarded
+
+        // Track-end flows into the radio via the existing Ended → AutoAdvance path, skipping the duplicate seed "a".
+        host.Emit(new AudioHostSignal(AudioHostSignalKind.Ended, 60000));
+        await Task.Delay(60);
+        Assert.Contains("load:spotify:track:b", host.Calls);
+    }
+
+    [Fact]
+    public async Task StartRadio_NoPlaylist_ReturnsNull_NoContextChange()
+    {
+        var ctx = new FakeContextResolver("spotify:track:a", "spotify:track:b") { RadioSeedResult = null };
+        using var c = Make(out var host, out _, out _, ctx: ctx);
+        await c.PlayAsync("spotify:playlist:p");               // playing "a"
+        host.Calls.Clear();
+
+        var uri = await c.StartRadioAsync("spotify:track:seed");
+
+        Assert.Null(uri);
+        Assert.Empty(host.Calls);                              // nothing loaded / no context change
     }
 
     [Fact]
@@ -671,5 +739,36 @@ public class ConnectControllerTests
         Assert.Equal(0, rejects);                                                        // remote routing never trips the local hook
         Assert.Contains(outbound.Sent, s => s.Json.Contains("\"endpoint\":\"play\""));   // forwarded to the remote device
         Assert.DoesNotContain(host.Calls, x => x == "play");                             // nothing played locally
+    }
+
+    // ── Phase A/C: host Error surfaces + one-click transfer+route ─────────────────────────────────────────────────────
+    [Fact]
+    public async Task HostErrorSignal_FiresOnPlaybackError()
+    {
+        using var c = Make(out var host, out _, out _);
+        PlaybackErrorInfo? err = null;
+        c.OnPlaybackError = e => err = e;
+        host.Emit(new AudioHostSignal(AudioHostSignalKind.Error, 0));
+        await Task.Delay(20);
+        Assert.NotNull(err);   // decode/output-loop deaths now surface (were silent)
+    }
+
+    [Fact]
+    public async Task SelectLocalOutput_WhileRemoteActive_RoutesFirstThenTransfersHome()
+    {
+        var host = new RecordingAudioHost();
+        var svc = new LocalAudioDeviceService(
+            new FakeDeviceMonitor(),
+            host,                                         // IAudioOutputDeviceControl — records set-output ids
+            (id, ct) => { host.Calls.Add("transfer:" + id); return Task.CompletedTask; },
+            "us",
+            () => "other-device",                         // a remote device owns playback
+            (_, _) => { });
+
+        await svc.SelectAsync("dev-1");
+
+        Assert.Contains("setoutput:dev-1", host.Calls);
+        Assert.Contains("transfer:us", host.Calls);
+        Assert.True(host.Calls.IndexOf("setoutput:dev-1") < host.Calls.IndexOf("transfer:us"));   // route FIRST, then transfer home
     }
 }

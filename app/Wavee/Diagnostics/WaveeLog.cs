@@ -98,6 +98,10 @@ public sealed class WaveeLog : IWaveeLog
         }
     }
 
+    /// <summary>Point the dev/probe echo at a sink (e.g. Console.Error.WriteLine) without disturbing the file path,
+    /// levels, or rotation config. The env-gated diagnostic probes use this so their progress still reaches the terminal.</summary>
+    public void SetEcho(Action<string>? echo) => _echo = echo;
+
     public void Log(WaveeLogLevel level, string category, string message, Exception? ex = null) =>
         Write(level, category, "", message, null, -1, null, ex);
 

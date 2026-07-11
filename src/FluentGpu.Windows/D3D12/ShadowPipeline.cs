@@ -43,7 +43,19 @@ internal sealed unsafe class ShadowPipeline : IDisposable
 struct Inst { float2 pos; float2 size; float4 color; float4 m; float2 t; float radius; float opacity; float blur; float spread; float2 offset; };
 StructuredBuffer<Inst> gInst : register(t0);
 cbuffer Root : register(b0) { float2 gViewport; };
-struct VSOut { float4 pos : SV_Position; float2 local : TEXCOORD0; float2 halfSize : TEXCOORD1; float sigma : TEXCOORD2; float corner : TEXCOORD3; float4 color : TEXCOORD4; float opacity : TEXCOORD5; };
+struct VSOut
+{
+    float4 pos : SV_Position;
+    float2 local : TEXCOORD0;
+    float2 halfSize : TEXCOORD1;
+    float sigma : TEXCOORD2;
+    float corner : TEXCOORD3;
+    float4 color : TEXCOORD4;
+    float opacity : TEXCOORD5;
+    float2 casterLocal : TEXCOORD6;
+    float2 casterHalfSize : TEXCOORD7;
+    float casterCorner : TEXCOORD8;
+};
 
 VSOut VSMain(float2 corner : POSITION, uint iid : SV_InstanceID)
 {
@@ -65,6 +77,12 @@ VSOut VSMain(float2 corner : POSITION, uint iid : SV_InstanceID)
     o.corner = min(it.radius + it.spread, min(halfSize.x, halfSize.y));
     o.color = it.color;
     o.opacity = it.opacity;
+    // `rel` is relative to the OFFSET shadow centre. Shift it back to the element centre so the pixel shader can
+    // subtract the actual rounded shadow caster (without spread) from the blurred footprint. A translucent card fill
+    // then reveals the backdrop/material beneath it, never its own black shadow.
+    o.casterLocal = rel + it.offset;
+    o.casterHalfSize = it.size * 0.5;
+    o.casterCorner = min(it.radius, min(o.casterHalfSize.x, o.casterHalfSize.y));
     return o;
 }
 
@@ -86,6 +104,14 @@ float shadowX(float x, float y, float sigma, float corner, float2 halfSize)
     return integral.y - integral.x;
 }
 
+float roundedBoxCoverage(float2 p, float2 halfSize, float corner)
+{
+    float2 q = abs(p) - (halfSize - corner);
+    float distance = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - corner;
+    float aa = max(fwidth(distance), 0.5);
+    return 1.0 - smoothstep(-aa, aa, distance);
+}
+
 float4 PSMain(VSOut i) : SV_Target
 {
     float low = i.local.y - i.halfSize.y;
@@ -100,7 +126,11 @@ float4 PSMain(VSOut i) : SV_Target
         value += shadowX(i.local.x, i.local.y - y, i.sigma, i.corner, i.halfSize) * gaussian(y, i.sigma) * step;
         y += step;
     }
-    float aOut = i.color.a * saturate(value) * i.opacity;
+    // A drop shadow is cast BEHIND its source surface. Remove the source rounded rectangle from the analytic gaussian
+    // instead of relying on the following fill to cover it: Fluent card fills are intentionally translucent, so the
+    // old full-box shadow remained visible through them and darkened the complete card interior.
+    float caster = roundedBoxCoverage(i.casterLocal, i.casterHalfSize, i.casterCorner);
+    float aOut = i.color.a * saturate(value) * (1.0 - caster) * i.opacity;
     return float4(i.color.rgb * aOut, aOut);   // premultiplied
 }
 """;

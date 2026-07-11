@@ -148,12 +148,12 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
             var resp = await _transport.Publish(_deviceId, connId!, bytes).ConfigureAwait(false);
             if (resp.Ok)
             {
-                _log.Info($"put-state ({reason}, active={isActive}, track={snap?.Track.Uri ?? "-"})");
+                _log.Debug($"put-state ({reason}, active={isActive}, track={snap?.Track.Uri ?? "-"})");
                 if (resp.Body.Length > 0) _onCluster?.Invoke(resp.Body);
             }
             else
             {
-                _log.Info($"put-state failed ({resp.Status})");
+                _log.Warn($"put-state failed ({resp.Status})");
                 WaveeLog.Instance.Warn("connect", "put-state.rejected", "connect-state PUT rejected by server",
                     WaveeLogField.Of("status", resp.Status),
                     WaveeLogField.Of("reason", reason.ToString()),

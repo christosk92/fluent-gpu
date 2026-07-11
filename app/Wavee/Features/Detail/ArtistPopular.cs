@@ -50,6 +50,8 @@ sealed class ArtistPopular : Component
     {
         var go = UseContext(HistoryStore.NavCtx);
         var lib = UseContext(LibraryBridge.Slot);
+        var acts = UseContext(ActionServices.Slot);      // row context menus (selection-aware TrackContextMenu)
+        var menuOverlay = UseContext(Overlay.Service);
         var width = UseSignal(600f);                     // self-measured → responsive column count
         var page = UseSignal(0);
         int total = Math.Min(_tracks.Count, MaxTracks);
@@ -146,13 +148,23 @@ sealed class ArtistPopular : Component
 
         var strip = ItemsView.CreateBound(
             total,
-            scope => TrackRow.ArtCardSelectSkin(scope, Embed.Comp(() => new TopTrackSlot(this, scope, go, lib)), TrackRow.ArtCardKind.Grid, _showChecks)
-                with
-                {
-                    // Enroll this horizontal ItemsView in the engine's scroll-flag pass. The bind writes identity, but
-                    // lets ScrollGeometry.Flags carry MovingNowBit so snap alignment waits for touchpad/touch release.
-                    ScrollBinds = [new ScrollBindDsl { From = ScrollChannel.Offset, To = BindSink.TransX, OutStart = 0f, OutEnd = 0f }],
-                },
+            scope =>
+            {
+                var skin = TrackRow.ArtCardSelectSkin(scope, Embed.Comp(() => new TopTrackSlot(this, scope, go, lib)), TrackRow.ArtCardKind.Grid, _showChecks)
+                    with
+                    {
+                        // Enroll this horizontal ItemsView in the engine's scroll-flag pass. The bind writes identity, but
+                        // lets ScrollGeometry.Flags carry MovingNowBit so snap alignment waits for touchpad/touch release.
+                        ScrollBinds = [new ScrollBindDsl { From = ScrollChannel.Offset, To = BindSink.TransX, OutStart = 0f, OutEnd = 0f }],
+                    };
+                // Right-click / long-press: the selection-aware track menu (multi-selection acts on all of it). Host
+                // null — Popular is an artist context, not an editable playlist.
+                if (acts is { } a)
+                    return skin.WithContextMenu(menuOverlay, () => TrackContextMenu.Build(
+                        a, _sel, i => (uint)i < (uint)Math.Min(_tracks.Count, MaxTracks) ? _tracks[i] : null,
+                        scope.Index.Peek(), static () => null));
+                return skin;
+            },
             RepeatLayout.Custom(layout, horizontal: true),
             selectionMode: ItemsSelectionMode.Extended,
             selection: _sel,
@@ -209,7 +221,8 @@ sealed class ArtistPopular : Component
                 showArtists: true,
                 explicitBadge: true,
                 showDuration: true,
-                kind: TrackRow.ArtCardKind.Grid);
+                kind: TrackRow.ArtCardKind.Grid,
+                showMore: true);   // trailing "…" opens the selection-aware track menu (the .WithContextMenu wrapper at the slot)
         }
     }
 

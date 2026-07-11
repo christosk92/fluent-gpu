@@ -27,6 +27,16 @@ public class StoreMembershipTests
     }
 
     [Fact]
+    public void InMemory_KnownEmptyMembership_IsDistinctFromMissing()
+    {
+        var s = new InMemoryStore();
+        Assert.False(s.HasMembership("spotify:playlist:missing"));
+        s.SetMembership("spotify:playlist:empty", Array.Empty<PlaylistMember>(), null);
+        Assert.True(s.HasMembership("spotify:playlist:empty"));
+        Assert.Empty(s.Membership("spotify:playlist:empty"));
+    }
+
+    [Fact]
     public void InMemory_Rootlist_RoundTrips()
     {
         var s = new InMemoryStore();

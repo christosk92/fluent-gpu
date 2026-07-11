@@ -55,6 +55,8 @@ public interface IStore
     IReadOnlyList<SavedItem> SavedItems(string setId);
     // ordered playlist membership + the rootlist (the queryable lists the catalog joins onto the shared entities at read)
     void SetMembership(string playlistUri, IReadOnlyList<PlaylistMember> rows, byte[]? baseRev);
+    /// <summary>True when a playlist has a known membership baseline, including a valid empty playlist.</summary>
+    bool HasMembership(string playlistUri);
     IReadOnlyList<PlaylistMember> Membership(string playlistUri);
     byte[]? PlaylistRevision(string playlistUri);
     void SetRootlist(IReadOnlyList<RootlistEntry> entries);
@@ -382,6 +384,11 @@ public sealed class InMemoryStore : IStore
     public IReadOnlyList<PlaylistMember> Membership(string playlistUri)
     {
         lock (_gate) return _membership.TryGetValue(playlistUri, out var m) ? m.Rows : Array.Empty<PlaylistMember>();
+    }
+
+    public bool HasMembership(string playlistUri)
+    {
+        lock (_gate) return _membership.ContainsKey(playlistUri);
     }
 
     /// <summary>Drop a resident membership baseline (the WARM-tier evictor calls this); the cold tier keeps it, so the

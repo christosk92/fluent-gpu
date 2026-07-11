@@ -341,12 +341,22 @@ public enum VisualKind : byte {
     Container, RoundRect, Text, Path, Image, Backdrop,
     ComponentAnchor,   // Passthrough zero-cost identity node (reconciler-hooks §5.2)
     Video,             // hole-punch (media-pipeline)
+    IconLayer,         // one ThemedIcon vector layer (controls.md): a colorless coverage mask tinted per-instance.
+                       //   REUSES the Image payload slot as the interned `IconGeometryTable.Shared` pathId, and `Fill`
+                       //   as the theme-live layer tint — no new NodePaint field (the 64B cache line holds). Recorded
+                       //   as DrawIconMask (payload: gpu-renderer.md). Framework-owned column doubling; see the note below.
 }
 ```
 
 `Identity.PayloadRef` is a tagged index: `Text→GlyphRunHandle`, `Path→PathHandle`, `Image→ImageHandle`,
 `Backdrop→BackdropRef`, else `Null`. The realization *content* lives in the relevant retained table; the node
 holds only the handle so a content-epoch bump invalidates clean spans without touching the node row.
+
+> **`VisualKind.IconLayer` reuses the Image payload slot** (the `ImageId` column doubles as the interned
+> `IconGeometryTable.Shared` pathId; `Fill` doubles as the resolved, theme-live layer tint) so no new `NodePaint`
+> field is added — the 64-byte cache line is preserved. The masks are colorless, so a retheme recolors via the bound
+> `Fill` thunk with NO re-raster. `controls.md`/`gpu-renderer.md` own the ThemedIcon semantics + the mask payload;
+> this doc owns only the enum entry + the column-doubling rule.
 
 ### 2.5 Interning / realization tables (Scene-adjacent slabs, content-hash dedup)
 
@@ -593,6 +603,11 @@ public enum DrawOp : byte {
                           //   driven by the `BoxEl.BorderBrush` (`GradientSpec?`) DSL field + `.BorderBrush(spec,width)`.
     // content (payloads: text.md / media-pipeline.md)
     DrawGlyphRun, DrawImage, DrawVideo,
+    DrawIconMask,         // a ThemedIcon vector-layer mask (controls.md; shape+raster: gpu-renderer.md DrawIconMaskCmd):
+                          //   a CPU-rasterized colorless R8 coverage mask (interned geometry in IconGeometryTable.Shared,
+                          //   keyed by PathId), tinted per-instance and drawn through the EXISTING glyph atlas/PSO — no
+                          //   new shader/PSO/texture/RHI method. Deliberately NOT the FillPath/StrokePath tessellation
+                          //   lane (same non-tessellation-sibling posture as DrawTabShape). Same POD-registration contract.
     // paths (payloads: gpu-renderer.md)
     FillPath, StrokePath,
     // clip / layer / transform stack (payloads: gpu-renderer.md; PushLayer{Effect}: backdrop)

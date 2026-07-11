@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using FluentGpu.Animation;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -38,6 +39,13 @@ readonly record struct DetailHandlers(
 // lifecycle), and the now-playing re-skin epoch. Delegates the rail / track list / trailing to the static builders.
 sealed class DetailShell : Component
 {
+    static readonly LayoutTransition PaletteWashTransition = new(
+        TransitionChannels.Opacity,
+        TransitionDynamics.Tween(420f, Easing.SmoothOut),
+        Enter: new EnterExit(Opacity: 0f, Active: true),
+        Exit: new EnterExit(Opacity: 0f, Active: true),
+        ExitDynamics: TransitionDynamics.Tween(320f, Easing.SmoothOut));
+
     // The model is a Loadable: the HEADER (cover/title/artist) renders immediately from its current value (the partial
     // preview the Home card had, or the loaded model on a deep link) and updates in place when the full model arrives;
     // the TRACK LIST streams in via the engine's Skel.Region inside TrackList. Connected cover animation is intentionally
@@ -51,7 +59,7 @@ sealed class DetailShell : Component
     readonly Signal<int> _mode = new(0);  // adaptive layout mode (0 widest), written by OnBoundsChanged
     float _measuredW;                     // last measured page width — replayed once when the rail layout-lock clears (Task C)
     bool _modeInitialized;                // first measurement uses the nominal breakpoints; later vertical crosses hysteresis
-    readonly Signal<bool> _verticalHeaderPinned = new(false);   // vertical detail header scrolled past the top -> compact pill
+    readonly Signal<bool> _verticalHeaderPinned = new(false);   // vertical detail header scrolled past the top -> pinned chrome bar
     readonly Signal<TrackSort> _sort = new(TrackSort.Default);   // track-list sort, persisted per context (loaded per route)
     readonly Signal<string> _query = new("");                    // filter search query (transient — clears on navigation)
     readonly Signal<TrackFilterFlags> _filterFlags = new(TrackFilterFlags.None);   // quick-filter toggles (transient)
@@ -261,6 +269,14 @@ sealed class DetailShell : Component
         // width supports — a stale mode signal (stuck rail lock / lost flush) would keep the two-column layout at a
         // width where its rail + tracks cannot coexist. Narrower-than-needed is fine; the next Measure widens it.
         if (_measuredW > 0f && shellUi?.RailLockActive != true) { int fit = ModeFor(_measuredW, mode, _modeInitialized); if (fit > mode) mode = fit; }
+        // Page-layout preference: "Stacked" forces the vertical hero SYSTEM at every width for track pages — the
+        // metadata rail is never composed; Automatic keeps the responsive rail↔hero behavior. The override is applied
+        // at render time only (the _mode signal keeps tracking the real width, so flipping the setting back reverts
+        // instantly). Epoch-subscribed → the Settings toggle re-renders any mounted (incl. KeepAlive-parked) page live.
+        _ = DetailHeroPrefs.Epoch.Value;
+        if (_cfg.Content == DetailContent.Tracks
+            && (settings?.Get(WaveeSettings.DetailPageLayout) ?? DetailVerticalLayout.PageAuto) == DetailVerticalLayout.PageHero)
+            mode = Vertical;
         bool verticalTracks = mode == Vertical && _cfg.Content == DetailContent.Tracks;
         if (!verticalTracks && _verticalHeaderPinned.Peek()) _verticalHeaderPinned.Value = false;
 
@@ -300,39 +316,27 @@ sealed class DetailShell : Component
                 Direction = 1, Grow = 1f, ClipToBounds = true,
                 Children = verticalTracks ? [right] : [DetailRail.BuildHeader(m, _cfg, handlers, _model), right],
             };
-            Element verticalBody = verticalTracks
-                ? new BoxEl
-                {
-                    ZStack = true, Grow = 1f, ClipToBounds = true,
-                    Children =
-                    [
-                        verticalContent,
-                        new BoxEl
-                        {
-                            Grow = 1f, HitTestPassThrough = true, Direction = 1,
-                            AlignItems = FlexAlign.Center, Justify = FlexJustify.Start,
-                            Padding = new Edges4(0f, WaveeSpace.M, 0f, 0f),
-                            Children =
-                            [
-                                Embed.Comp(() => new DetailShyPill(_model, _cfg, handlers, _verticalHeaderPinned))
-                                    with { Key = "detail-pill:" + route.Name + ":" + _model.State.Value },
-                            ],
-                        },
-                    ],
-                }
-                : verticalContent;
+            // The pinned chrome bar now lives INSIDE TrackList's ZStack overlay so it floats over the list AND the album
+            // trailing scroller and never remounts when a query/filter remounts the list.
+            Element verticalBody = verticalContent;
+            var verticalPage = new BoxEl
+            {
+                Key = "detail:vertical",
+                Direction = 1, Grow = 1f, ClipToBounds = true,
+                Children = [verticalBody],
+            };
             return new BoxEl
             {
-                Direction = 1, Grow = 1f, Gradient = Surfaces.HeroWash(washColor), OnBoundsChanged = Measure,
-                ClipToBounds = true,
+                ZStack = true, Grow = 1f, OnBoundsChanged = Measure, ClipToBounds = true,
                 Children =
                 [
                     new BoxEl
                     {
-                        Key = "detail:vertical",
-                        Direction = 1, Grow = 1f, ClipToBounds = true,
-                        Children = [verticalBody],
+                        Key = "detail-wash:" + (art?.GetHashCode() ?? 0) + ":" + Tok.Theme,
+                        ZStack = true, Grow = 1f, HitTestVisible = false,
+                        Gradient = Surfaces.HeroWash(washColor), Animate = PaletteWashTransition,
                     },
+                    verticalPage,
                 ],
             };
         }
@@ -368,20 +372,26 @@ sealed class DetailShell : Component
                   ]
                 : [DetailRail.Build(m, _cfg, handlers, railW, titleSize, descLines, _model), right],
         };
+        var twoColumnPage = new BoxEl
+        {
+            Key = "detail:two-column",
+            Direction = 0, Grow = 1f, Shrink = 1f, MinHeight = 0f, Justify = FlexJustify.Center,
+            ClipToBounds = true,
+            Children = [row],
+        };
         return new BoxEl
         {
-            Direction = 1, Grow = 1f, Shrink = 1f, MinHeight = 0f,
-            Gradient = Surfaces.HeroWash(washColor), OnBoundsChanged = Measure,
-            ClipToBounds = true,
+            ZStack = true, Grow = 1f, Shrink = 1f, MinHeight = 0f,
+            OnBoundsChanged = Measure, ClipToBounds = true,
             Children =
             [
                 new BoxEl
                 {
-                    Key = "detail:two-column",
-                    Direction = 0, Grow = 1f, Shrink = 1f, MinHeight = 0f, Justify = FlexJustify.Center,
-                    ClipToBounds = true,
-                    Children = [row],
+                    Key = "detail-wash:" + (art?.GetHashCode() ?? 0) + ":" + Tok.Theme,
+                    ZStack = true, Grow = 1f, HitTestVisible = false,
+                    Gradient = Surfaces.HeroWash(washColor), Animate = PaletteWashTransition,
                 },
+                twoColumnPage,
             ],
         };
     }

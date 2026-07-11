@@ -37,6 +37,7 @@ sealed class QueuePanel : Component
     readonly Signal<int> _queuePages = new(1);
     readonly Signal<int> _upPages = new(1);
     readonly Signal<int> _autoPages = new(1);
+    readonly SwipeGroup _swipeGroup = new();
 
     public override Element Render()
     {
@@ -44,6 +45,8 @@ sealed class QueuePanel : Component
         var lib = UseContext(LibraryBridge.Slot);
         var svc = UseContext(Services.Slot);
         var go = UseContext(HistoryStore.NavCtx);
+        var acts = UseContext(ActionServices.Slot);     // queue-row context menus (Menus.QueueEntry)
+        var menuOverlay = UseContext(Overlay.Service);
 
         var serverQueue = b?.Queue.Value ?? Array.Empty<QueueEntry>();
         var display = UseSignal<IReadOnlyList<QueueEntry>>(serverQueue);
@@ -109,17 +112,17 @@ sealed class QueuePanel : Component
         {
             content.Add(SectionHeader(Loc.Get(Strings.Player.NextInQueue), userQueue.Count,
                 viewer ? null : () => ClearUserQueue(b, display)));
-            content.Add(Rows("q", userQueue, b, lib, go, display, removable: !viewer, dim: false, _queuePages));
+            content.Add(Rows("q", userQueue, b, lib, go, display, removable: !viewer, dim: false, _queuePages, acts, menuOverlay, _swipeGroup));
         }
         if (ctxUp.Count > 0)
         {
             content.Add(SectionHeader(Loc.Get(Strings.Player.NextUp), ctxUp.Count, null));
-            content.Add(Rows("u", ctxUp, b, lib, go, display, removable: !viewer, dim: false, _upPages));
+            content.Add(Rows("u", ctxUp, b, lib, go, display, removable: !viewer, dim: false, _upPages, acts, menuOverlay, _swipeGroup));
         }
         if (autoplay && autoUp.Count > 0)
         {
             content.Add(SectionHeader(Loc.Get(Strings.Player.Autoplay), autoUp.Count, null, sub: Loc.Get(Strings.Player.AutoplayHint)));
-            content.Add(Rows("a", autoUp, b, lib, go, display, removable: false, dim: true, _autoPages));
+            content.Add(Rows("a", autoUp, b, lib, go, display, removable: false, dim: true, _autoPages, acts, menuOverlay, _swipeGroup));
         }
         if (track is null && userQueue.Count == 0 && ctxUp.Count == 0)
             content.Add(new BoxEl
@@ -140,6 +143,7 @@ sealed class QueuePanel : Component
                     Grow = 1f, MinHeight = 0f,
                     AutoEdgeFade = true,
                     ScrollKey = "queuepanel",
+                    OnScrollGeometryChanged = (g => BitConverter.SingleToInt32Bits(g.OffsetY), _ => _swipeGroup.Close()),
                     Content = new BoxEl
                     {
                         Direction = 1, MinHeight = 0f,
@@ -267,12 +271,13 @@ sealed class QueuePanel : Component
     // Visual pagination only: PageSize rows per revealed page, then an explicit full-width "Show more (N left)" row —
     // the UNDERLYING queue is untouched; every hidden track is one click away and the remaining count is always visible. ──
     static Element Rows(string sectionTag, List<QueueEntry> entries, PlaybackBridge b, LibraryBridge? lib,
-        Action<string, string?>? go, Signal<IReadOnlyList<QueueEntry>> display, bool removable, bool dim, Signal<int> pages)
+        Action<string, string?>? go, Signal<IReadOnlyList<QueueEntry>> display, bool removable, bool dim, Signal<int> pages,
+        ActionServices? acts = null, IOverlayService? menuOverlay = null, SwipeGroup? swipeGroup = null)
     {
         int n = Math.Min(entries.Count, Math.Max(1, pages.Value) * PageSize);
         var kids = new List<Element>(n + 1);
         for (int i = 0; i < n; i++)
-            kids.Add(QueueRow(b, lib, go, display, entries[i], zebra: (i & 1) != 0, removable, dim));
+            kids.Add(QueueRow(b, lib, go, display, entries[i], zebra: (i & 1) != 0, removable, dim, acts, menuOverlay, swipeGroup));
         if (entries.Count > n)
             kids.Add(ShowMore(sectionTag, Math.Min(PageSize, entries.Count - n), entries.Count - n,
                 () => pages.Value = pages.Peek() + 1));
@@ -299,7 +304,8 @@ sealed class QueuePanel : Component
     };
 
     static Element QueueRow(PlaybackBridge b, LibraryBridge? lib, Action<string, string?>? go,
-        Signal<IReadOnlyList<QueueEntry>> display, QueueEntry entry, bool zebra, bool removable, bool dim)
+        Signal<IReadOnlyList<QueueEntry>> display, QueueEntry entry, bool zebra, bool removable, bool dim,
+        ActionServices? acts = null, IOverlayService? menuOverlay = null, SwipeGroup? swipeGroup = null)
     {
         var t = entry.Track;
         var st = TrackRow.StateOf(b, lib, t);
@@ -313,7 +319,7 @@ sealed class QueuePanel : Component
             display.Value = cur;
         }
 
-        return new BoxEl
+        var row = new BoxEl
         {
             Key = RowKey(entry),
             Direction = 0, AlignItems = FlexAlign.Center, Gap = 8f, MinHeight = 44f,
@@ -358,6 +364,28 @@ sealed class QueuePanel : Component
                             : TrackRow.ArtistLinks(t.Artists, (r, n) => go(r, n)),
                     ],
                 },
+                // Hover-revealed "…" overflow beside the ✕ (kept): opens the SAME queue-entry menu the row shows on
+                // right-click, anchored at the button — the engine's ClickRequestsContext re-enters the context-request
+                // funnel here and the walk finds the row's OnContextRequested (the WithContextMenu attach below). Only
+                // rendered when a menu is actually attachable; sized to the queue's 26px action density.
+                acts is not null && menuOverlay is not null
+                    ? new BoxEl
+                    {
+                        Opacity = 0f, HoverOpacity = 1f, Shrink = 0f,
+                        Children =
+                        [
+                            new BoxEl
+                            {
+                                Width = 26f, Height = 26f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                                Corners = CornerRadius4.All(13f),
+                                HoverFill = WaveeColors.RowPressed,
+                                Role = AutomationRole.Button, Cursor = CursorId.Hand,
+                                ClickRequestsContext = true,
+                                Children = [new TextEl(Mdl.More) { Size = 14f, FontFamily = Theme.IconFont, Color = Tok.TextTertiary, HoverColor = Tok.TextPrimary }],
+                            },
+                        ],
+                    }
+                    : new BoxEl { Width = 0f, Shrink = 0f },
                 removable && !entry.ItemId.IsNone
                     ? new BoxEl
                     {
@@ -371,6 +399,27 @@ sealed class QueuePanel : Component
                     : new BoxEl { Width = 26f, Shrink = 0f },
             ],
         };
+        bool canRemove = removable && !entry.ItemId.IsNone;
+        // Right-click / long-press: the queue-entry menu. "Play now" = the row's own skip-in-place; "Remove from
+        // queue" reuses the exact Remove() closure above (player call + optimistic display update) — a viewer (remote
+        // device) gets it disabled, mirroring the hidden inline ✕.
+        Element rowEl = row;
+        if (acts is { } a && menuOverlay is { } menuSvc)
+            rowEl = row.WithContextMenu(menuSvc, () => Menus.QueueEntry(
+                a, entry, canRemove ? (Action)Remove : null, () => PlayQueueEntry(b, entry)));
+        // Touch swipe-to-action (Phase D): swipe LEFT to remove (destructive red, reusing the Remove() closure via the
+        // action target), swipe RIGHT to like. Eager KEYED rows ⇒ no resetKey (each entry mounts its own control; a
+        // queue edit remounts by RowKey). The context menu is attached to the row BENEATH the wrapper, so the touch
+        // long-press still finds the row's ContextBit ancestor.
+        if (acts is { } sa)
+        {
+            var ctx = new ActionContext(ActionTarget.ForQueueEntry(entry, canRemove ? (Action)Remove : null), sa);
+            rowEl = RowSwipe.Wrap(rowEl, ctx,
+                group: swipeGroup,
+                leading: TrackActions.ToggleLike,
+                trailing: canRemove ? TrackActions.RemoveFromQueue : null);
+        }
+        return rowEl;
     }
 
     static string RowKey(in QueueEntry e) => e.ItemId.IsNone ? "e" + e.EntryId : "i" + e.ItemId.Value;

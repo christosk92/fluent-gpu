@@ -32,6 +32,35 @@ public static class MediaCard
             ? ColorF.Lerp(Tok.FillControlSecondary, a, Tok.Theme == ThemeKind.Dark ? 0.18f : 0.12f)
             : Tok.FillControlSecondary;
 
+    // Hover-revealed corner "…" (top-right of the cover — the FAB's opposite corner): opens the card's attached context
+    // menu (the WithMenu at the card root) anchored at the button — the engine's ClickRequestsContext re-enters the
+    // context-request funnel here and the walk finds the card's OnContextRequested. Same dark-glass chrome as
+    // CoverActionFab; hover-revealed like the play FAB. Rendered only when the card actually carries a menu.
+    // Skeletonized(false): a hover-only affordance is not skeleton content (the NowPlayingOverlay rule).
+    static Element MoreCorner(bool show) => show
+        ? new BoxEl
+        {
+            Grow = 1f, Direction = 1, AlignItems = FlexAlign.End,
+            Padding = new Edges4(0f, FabInset, FabInset, 0f),
+            Opacity = 0f, HoverOpacity = 1f, HoverDurationMs = 180f, HoverEasing = Easing.FluentDecelerate,
+            Children =
+            [
+                new BoxEl
+                {
+                    Width = 30f, Height = 30f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                    Corners = CornerRadius4.All(15f),
+                    Fill = ColorF.FromRgba(0, 0, 0, 185),
+                    HoverFill = ColorF.FromRgba(20, 20, 20, 225),
+                    PressedFill = ColorF.FromRgba(0, 0, 0, 245),
+                    BorderWidth = 1f, BorderColor = ColorF.FromRgba(255, 255, 255, 70),
+                    Shadow = Elevation.Card, HoverScale = 1.07f, PressScale = 0.92f,
+                    ClickRequestsContext = true, Cursor = CursorId.Hand, Role = AutomationRole.Button,
+                    Children = [ FabGlyph(Mdl.More, 13f, ColorF.FromRgba(255, 255, 255)) ],
+                },
+            ],
+        }.Skeletonized(false)
+        : new BoxEl();
+
     static Element ArtworkOrLiked(Image? cover, string uri, float width, float height, float radius, string? morphKey = null, int decodePx = 0, Element? diagnostics = null)
     {
         var art = cover is null && LikedSongsArtwork.IsLikedUri(uri) && MathF.Abs(width - height) < 0.5f
@@ -50,9 +79,11 @@ public static class MediaCard
     }
 
     // ── Shelf card: square (album/playlist) or circular (artist) cover, sized to fill `cardW`. ───────────
+    // `menu` (all five factories): an optional attached context menu (right-click / Menu key / long-press) — the
+    // calling component resolves the overlay service + builds the lazy model (Menus.CardAttach); null = no menu.
     public static Element Shelf(Image? cover, string title, string subtitle, string uri,
                                 Action onClick, Action onPlay, float cardW, bool circular = false, string? morphKey = null,
-                                Action<string>? onNavUri = null)
+                                Action<string>? onNavUri = null, MenuAttach? menu = null)
     {
         float inner = MathF.Max(48f, cardW - 2f * Pad);          // cover edge = card width minus side padding
         float r = circular ? inner / 2f : WaveeRadius.Card;
@@ -80,9 +111,10 @@ public static class MediaCard
             // only the FAB itself is a hit target.
             // Skeletonized(false): a hover-only affordance is not skeleton content — without this the deriver maps the
             // opaque overlay to its default bar, leaving a stray stripe across the top-left of every loading cover.
-            Embed.Comp(() => new NowPlayingOverlay(uri, onPlay, FabSize, cover: true, inner)).Skeletonized(false));
+            Embed.Comp(() => new NowPlayingOverlay(uri, onPlay, FabSize, cover: true, inner)).Skeletonized(false),
+            MoreCorner(menu is not null));
 
-        return new BoxEl
+        var card = new BoxEl
         {
             // No explicit Width: the shelf cell (a column container) cross-stretches the card to the cell's LIVE width.
             // Grow=1 fills the cell's HEIGHT too: in a measured shelf the engine sizes the cell to the TALLEST card's
@@ -114,6 +146,7 @@ public static class MediaCard
                 },
             ],
         };
+        return card.WithMenu(menu);
     }
 
     // ── Grid card: fills the grid cell width (no cardW), square or circular cover. For AutoGrid/UniformGrid cells. ──
@@ -122,7 +155,7 @@ public static class MediaCard
     // responsive grid whose track width isn't known at template time.
     public static Element GridCard(Image? cover, string title, string subtitle, string uri,
                                    Action onClick, Action onPlay, bool circular = false, Action? onNavigate = null,
-                                   ColorF? accent = null)
+                                   ColorF? accent = null, MenuAttach? menu = null)
     {
         float r = circular ? 9999f : WaveeRadius.Card;
         var coverStack = new BoxEl
@@ -132,11 +165,15 @@ public static class MediaCard
             [
                 Surfaces.ArtworkFill(cover, r),
                 Embed.Comp(() => new NowPlayingOverlay(uri, onPlay, FabSize, cover: true, 0f, onNavigate)).Skeletonized(false),
+                MoreCorner(menu is not null),
             ],
         };
-        return new BoxEl
+        var card = new BoxEl
         {
-            Direction = 1, Gap = Pad, Grow = 1f, ClipToBounds = true,
+            // A grid row may reserve trailing space as its vertical gutter. Do not flex-grow into that space: doing so
+            // stretches the card past its square-cover + two-label geometry, creates a dead footer, and consumes the
+            // intended gap before the next row.
+            Direction = 1, Gap = Pad, ClipToBounds = true,
             Padding = new Edges4(Pad, Pad, Pad, WaveeSpace.M),
             Corners = CornerRadius4.All(WaveeRadius.Card),
             Fill = AccentCardFill(accent), HoverFill = AccentCardHoverFill(accent),
@@ -151,22 +188,23 @@ public static class MediaCard
                     Direction = 1, Gap = 2f, AlignItems = circular ? FlexAlign.Center : FlexAlign.Start,
                     Children =
                     [
-                        WaveeType.TrackTitle(title) with { Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.CharacterEllipsis },
+                        WaveeType.TrackTitle(title) with { Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                         subtitle.Length == 0 ? new BoxEl()
                             : WaveeType.TrackMeta(subtitle) with { Wrap = TextWrap.Wrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                     ],
                 },
             ],
         };
+        return card.WithMenu(menu);
     }
 
     // ── 16:9 video card (sized to a supplied cardW from a measured shelf): wide thumbnail + title + duration. ──
     public static Element VideoCard(Image? thumb, string title, string duration, string uri,
-                                    Action onClick, Action onPlay, float cardW)
+                                    Action onClick, Action onPlay, float cardW, MenuAttach? menu = null)
     {
         float inner = MathF.Max(64f, cardW - 2f * Pad);
         float ar = inner * 9f / 16f;
-        return new BoxEl
+        var card = new BoxEl
         {
             Direction = 1, Gap = WaveeSpace.S, Grow = 1f, ClipToBounds = true,
             Padding = new Edges4(Pad, Pad, Pad, WaveeSpace.M),
@@ -184,6 +222,7 @@ public static class MediaCard
                     [
                         Surfaces.Artwork(thumb, Seed(uri), inner, ar, WaveeRadius.Control, decodePx: 480),
                         Embed.Comp(() => new NowPlayingOverlay(uri, onPlay, FabSize, cover: true, 0f)).Skeletonized(false),
+                        MoreCorner(menu is not null),
                     ],
                 },
                 WaveeType.TrackTitle(title) with { Width = inner, Wrap = TextWrap.Wrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
@@ -191,12 +230,13 @@ public static class MediaCard
                     : WaveeType.TrackMeta(duration) with { Width = inner, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
             ],
         };
+        return card.WithMenu(menu);
     }
 
     // ── Wide "jump back in" tile: cover + title (fills, ellipsised) + trailing now-playing/play overlay ───
-    public static Element QuickPick(Image? cover, string title, string uri, Action onClick, Action onPlay, ColorF? accent = null, Element? diagnostics = null)
+    public static Element QuickPick(Image? cover, string title, string uri, Action onClick, Action onPlay, ColorF? accent = null, Element? diagnostics = null, MenuAttach? menu = null)
     {
-        return new BoxEl
+        var card = new BoxEl
         {
             Direction = 0, Height = QuickH, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
             Corners = CornerRadius4.All(WaveeRadius.Card), Fill = AccentCardFill(accent), HoverFill = AccentCardHoverFill(accent),
@@ -217,6 +257,7 @@ public static class MediaCard
                 },
             ],
         };
+        return card.WithMenu(menu);
     }
 
     // ── List row: a HORIZONTAL media row (search / "All" lists). The SAME factory + the SAME now-playing/play affordance
@@ -226,7 +267,8 @@ public static class MediaCard
     public static Element Row(Image? cover, string title, string subtitle, string uri, bool circular,
                               Action onClick, Action onPlay,
                               string? eyebrow = null, ColorF? eyebrowColor = null, string? typeChip = null, Element? trailing = null, bool large = false,
-                              string? detail = null, Action<string>? onSubtitleNav = null, string? meta = null, bool detailBelowArt = false)
+                              string? detail = null, Action<string>? onSubtitleNav = null, string? meta = null, bool detailBelowArt = false,
+                              MenuAttach? menu = null)
     {
         float art = large ? 84f : 48f;
         float r = circular ? art / 2f : (large ? WaveeRadius.Card : 6f);
@@ -280,7 +322,7 @@ public static class MediaCard
                     new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, Children = kids.ToArray() },
                     new BoxEl { Direction = 1, Gap = 2f, Children = belowKids.ToArray() },
                 ],
-            };
+            }.WithMenu(menu);
         }
 
         return new BoxEl
@@ -301,7 +343,7 @@ public static class MediaCard
             // resolves off ROW hover — identical to the card behavior.
             Role = AutomationRole.Button, OnClick = onClick, OnPointerExit = static () => { },
             Children = kids.ToArray(),
-        };
+        }.WithMenu(menu);
     }
 
     static Element RowChip(string text) => new BoxEl

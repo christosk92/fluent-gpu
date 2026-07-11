@@ -222,6 +222,16 @@ public struct DrawVideoCmd {               // sortkey PassClass below chrome
     public ClipHandle Clip;
 }
 public struct FillPathCmd { public PathRef Path; public BrushHandle Fill; public ClipHandle Clip; public byte FillRule; }
+// AUTHORITY (this doc owns the SHAPE + raster posture). `DrawIconMask` = a ThemedIcon vector-layer mask (controls.md).
+// A CPU-rasterized COLORLESS R8 coverage mask — geometry interned in `IconGeometryTable.Shared` (a `.Shared` side-table
+// crossing the render seam by int id, `SpanRunTable` precedent), keyed by `PathId` — tinted PER-INSTANCE by `Tint` and
+// drawn through the EXISTING glyph atlas + glyph PSO/instance pipeline (§11): the backend rasterizes lazily on a
+// (PathId, device-px) atlas MISS and appends ONE tinted GlyphInstance, so it batches in the glyph pass (text-like z
+// within a layer scope). No new shader/PSO/texture/RHI method. `Tint` rides the command (colorless mask) so a retheme
+// recolors with NO re-raster. **Deliberately NOT the §5 FillPath/StrokePath tessellation lane** — icons are tiny,
+// static, glyph-shaped workloads that ride the R8 atlas exactly like text (the same non-tessellation-sibling posture as
+// DrawTabShape), which keeps the §5 tessellation-fraction tripwire honest.
+public struct DrawIconMaskCmd { public RectF Rect; public ColorF Tint; public int PathId; public Affine2D Transform; public float Opacity; }
 public struct PushLayerCmd { public RectF DeviceBounds; public float Opacity; public BlendPreset Blend;
                              public EffectHandle Effect; public ClipHandle Clip; }
 // AUTHORITY (this doc owns the SHAPE + raster). `DrawGradientStroke` = a gradient-tinted SDF OUTLINE — the WinUI
@@ -888,6 +898,17 @@ is now decided):
 
 The canvas RT is also the natural sample source for in-app Acrylic (§7.2). Animated transforms dirty only
 old∪new bounds → a spinner repaints a tiny region.
+
+**Structural-track cancellation damages the last-presented extent.** A layout transition (FLIP translate/scale,
+or a `SizeMode.Reveal` presented-size) draws a node at a translated / size-inflated extent that lies OUTSIDE its
+model bounds. When such an in-flight track is CANCELLED rather than allowed to settle — a drag-suppression snap or a
+window-resize snap collapses it straight to final bounds (`AnimEngine.SnapStructuralToLayout` / `CancelStructuralAll`)
+— the node stops covering the band it drew last frame, and, unlike natural completion (which ends AT the target, so
+the settle is continuous), nothing re-touches that vacated band. The damage accumulator must therefore be seeded with
+each cancelled node's **last-presented absolute rect** (its `AbsoluteRect` origin — which already folds in the node's
+own composited translate — at its presented `PresentedW/H` extent, +AA pad) so the vacated region repaints; otherwise
+the region-aware canvas/Acrylic cache freezes last frame's pixels there (a persistent "ghost" band). Cancellation is
+the only discontinuous path that needs this — natural settles do not, and must not blanket-damage.
 
 ---
 

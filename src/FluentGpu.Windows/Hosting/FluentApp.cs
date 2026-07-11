@@ -57,6 +57,13 @@ public static class FluentApp
          : Win32Theme.Accent() is { } b ? ColorF.FromRgba(b.R, b.G, b.B)
          : null;
 
+    /// <summary>The FULL OS accent ramp (<c>SystemAccentColor</c> + <c>Light1..3</c> + <c>Dark1..3</c>) read via
+    /// <c>IUISettings3.GetColorValue</c>, so accent brushes resolve THEME-AWARE (the WinUI Dark1 shade in light, Light2
+    /// in dark) instead of one flat color reused in both themes. Null when unreadable — callers then fall back to
+    /// <see cref="SystemAccent"/> + <c>Tok.SetAccent</c> (which derives an approximate ramp). App-layer facade over the
+    /// Win32/WinRT reader.</summary>
+    public static AccentRamp? SystemAccentRamp() => Win32Theme.ReadAccentRamp();
+
     /// <summary>
     /// Optional diagnostic-harness hook. When it is set and returns <see langword="true"/>, it has taken over the run
     /// (e.g. a soak / stress longevity probe) and the normal interactive frame loop below is skipped. Kept as a generic
@@ -95,7 +102,9 @@ public static class FluentApp
         // it as their explicit nint hwnd — the host accessor, not an Engine-seam invention. Cleared when the run ends.
         WindowHandle = window.Handle.Value;
 
-        if (Win32Theme.AccentLight2() is { } a) Theme.Accent = ColorF.FromRgba(a.R, a.G, a.B);
+        // Prefer the exact OS ramp (theme-aware accent fills); fall back to the base accent (Tok.SetAccent derives a ramp).
+        if (Win32Theme.ReadAccentRamp() is { } ramp) Tok.SetAccent(in ramp);
+        else if (Win32Theme.AccentLight2() is { } a) Theme.Accent = ColorF.FromRgba(a.R, a.G, a.B);
         else if (Win32Theme.Accent() is { } b) Theme.Accent = ColorF.FromRgba(b.R, b.G, b.B);
         Win32Theme.ApplyWindowMaterial(window.Handle.Value, Theme.Dark, mica, customFrame, micaAlt);
         if (mica) Theme.WindowBackground = ColorF.Transparent;

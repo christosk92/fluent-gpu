@@ -21,14 +21,16 @@ public enum AppBarCommandKind : byte { Button, ToggleButton, Separator }
 public enum CommandBarFlyoutShowMode : byte { Transient, Standard }
 
 /// <summary>A single command in a <see cref="CommandBarFlyout"/>/<see cref="CommandBar"/> — the engine analog of
-/// WinUI's <c>ICommandBarElement</c> (AppBarButton / AppBarToggleButton / AppBarSeparator). A <see cref="Glyph"/> +
-/// <see cref="Label"/> + optional <see cref="Invoke"/> callback. Use <see cref="Separator"/> for a divider in the
+/// WinUI's <c>ICommandBarElement</c> (AppBarButton / AppBarToggleButton / AppBarSeparator). An <see cref="Icon"/> +
+/// <see cref="Label"/> + optional <see cref="Invoke"/> callback. The <see cref="Icon"/> is a polymorphic
+/// <see cref="IconRef"/>: a plain glyph string converts implicitly (existing call sites unchanged), or
+/// <c>IconRef.Themed("Name")</c> renders a layered vector icon. Use <see cref="Separator"/> for a divider in the
 /// overflow menu. Optional extras: <see cref="AcceleratorText"/> (the right-aligned KeyboardAcceleratorTextOverride
 /// hint), <see cref="Accelerator"/> (a REAL engine chord that invokes the command from anywhere), and
 /// <see cref="Flyout"/> (a cascading sub-menu — the secondary row shows the E76C chevron and clicking it opens the
 /// sub-menu WITHOUT closing the parent flyout, CommandBarFlyout.cpp:95-108).</summary>
 public sealed record AppBarCommand(
-    string Glyph,
+    IconRef Icon,
     string Label,
     Action? Invoke = null,
     AppBarCommandKind Kind = AppBarCommandKind.Button,
@@ -42,9 +44,13 @@ public sealed record AppBarCommand(
     /// <summary>Cascading sub-menu items (secondary commands only): the row gains the E76C SubItemChevron
     /// (CommandBarFlyout_themeresources.xaml:303) and clicking it opens the sub-menu, keeping the parent open.</summary>
     public IReadOnlyList<MenuFlyoutItem>? Flyout { get; init; }
+    /// <summary>Icon shown when this toggle is CHECKED in the LABELED primary strip (the Explorer context-menu shape):
+    /// rendered accent-tinted on a transparent plate — NO accent pill. Falls back to <see cref="Icon"/>. Ignored by the
+    /// standalone <see cref="CommandBarFlyout"/> parity control (which keeps the WinUI accent-pill checked look).</summary>
+    public IconRef? CheckedIcon { get; init; }
 
     /// <summary>A divider row for the secondary (overflow) menu (mirrors <c>MenuFlyoutItem.Separator</c>).</summary>
-    public static AppBarCommand Separator => new("", "", Kind: AppBarCommandKind.Separator);
+    public static AppBarCommand Separator => new(default, "", Kind: AppBarCommandKind.Separator);
 }
 
 /// <summary>A WinUI CommandBarFlyout: a trigger button that opens a contextual command toolbar anchored below it.
@@ -140,6 +146,37 @@ public sealed class CommandBarFlyout : Component
     /// existing call sites (and the gallery) keep compiling.</summary>
     public static Element Create(string triggerLabel = "Commands") => Create(triggerLabel, DefaultPrimary, DefaultSecondary);
 
+    /// <summary>Build the CommandBarFlyout BODY (no trigger button) as standalone overlay content — the Win11 Explorer
+    /// context menu shape: a primary icon strip over the secondary rows. Used by <c>ContextMenu</c> to open the
+    /// command-bar body at a point. <paramref name="alwaysExpanded"/> (default true) shows the overflow immediately and
+    /// hides the … button; the body opens in Standard mode (WinUI initial focus on the first command). Pass
+    /// <paramref name="fadeCloseSlot"/> so a tracker-forced close rides the 83ms ClosingOpacityStoryboard;
+    /// <paramref name="touchInputMode"/> for the roomier touch metrics (a Hold-triggered open);
+    /// <paramref name="overflowMinWidth"/> to widen the overflow to the Explorer ~250 feel.</summary>
+    public static Element BuildBody(
+        IReadOnlyList<AppBarCommand> primary,
+        IReadOnlyList<AppBarCommand> secondary,
+        Action close,
+        Ref<Action?>? fadeCloseSlot = null,
+        TemplateParts? parts = null,
+        bool alwaysExpanded = true,
+        float overflowMinWidth = 136f,
+        bool touchInputMode = false,
+        bool labeledPrimary = false)
+        => Embed.Comp(() => new CommandBarFlyoutBody
+        {
+            Primary = primary,
+            Secondary = secondary,
+            AlwaysExpanded = alwaysExpanded,
+            StandardMode = true,   // Explorer shape: overflow expanded + initial focus (CommandBarFlyout.cpp:29-71)
+            Close = close,
+            FadeCloseSlot = fadeCloseSlot,
+            Parts = parts,
+            TouchInputMode = touchInputMode,
+            OverflowMinWidth = overflowMinWidth,
+            LabeledPrimary = labeledPrimary,
+        });
+
     static readonly AppBarCommand[] DefaultPrimary =
     [
         new(Icons.Accept, "Accept"),
@@ -194,10 +231,10 @@ public sealed class CommandBarFlyout : Component
                 Placement,
                 // ShouldConstrainToRootBounds=False + AreOpenCloseAnimationsEnabled=False (CommandBarFlyout.cpp:43-44):
                 // the popup must NOT play the menu clip-unfold — WinUI's open/close are the 83ms opacity storyboards
-                // (themeresources:655-662). PopupChrome.Static = a bare popup with no host transitions; the body
-                // seeds the 83ms open fade itself and replays the close fade for command/toggle closes (light-dismiss
-                // closes hide instantly — the one residual deviation from WinUI's closing fade).
-                new PopupOptions(Chrome: PopupChrome.Static) { ConstrainToRootBounds = false });
+                // (themeresources:655-662). PopupChrome.CommandBar = windowed transient-acrylic chrome with NO host
+                // open motion (the body seeds its own 83ms fade) and the 83ms host close fade — so light-dismiss
+                // closes fade exactly like command/toggle closes (the old Static chrome hid those instantly).
+                new PopupOptions(Chrome: PopupChrome.CommandBar) { ConstrainToRootBounds = false });
         }
 
         Action<NodeHandle> anchorCapture = x => anchor.Value = x;
@@ -257,12 +294,21 @@ internal sealed class CommandBarFlyoutBody : Component
     /// <summary>WinUI TouchInputMode/GameControllerInputMode: OverflowTextLabel.Padding 0,9,0,11 + check glyph margin
     /// 12,10,12,10 (CommandBarFlyout_themeresources.xaml:464-465) instead of the pointer metrics.</summary>
     public bool TouchInputMode;
+    /// <summary>Explorer shell-menu shape (set by <c>ContextMenu</c>): the primary strip renders an icon-OVER-label
+    /// stack per button (20px icon + a Caption-size label, min-width 64, taller row), and a checked toggle drops the
+    /// WinUI accent pill for an accent-tinted glyph on a transparent plate. Off = the WinUI icon-only parity control.</summary>
+    public bool LabeledPrimary;
 
     // Dim constants from CommandBarFlyout_themeresources.xaml.
     const float PrimaryRowHeight = 40f;        // PrimaryItemsControl Height (:1043)
+    const float LabeledPrimaryRowHeight = 70f; // Explorer icon-over-label strip: ~20px icon + Caption label + padding
+                                               // (row 70 + primaryRow Margin T3+B3 = 76px total strip — Explorer parity)
+    const float LabeledPrimaryBtnMinWidth = 64f;
     const float AppBarBtnMinWidth = 40f;       // CommandBarFlyoutAppBarButton ContentRoot MinWidth (:285 MinWidth=40)
     const float MoreButtonWidth = 44f;         // EllipsisButton Width (:568)
-    const float OverflowMinWidth = 136f;       // CommandBarOverflowPresenter MinWidth (:530)
+    /// <summary>CommandBarOverflowPresenter MinWidth (:530). Overridable via <see cref="CommandBarFlyout.BuildBody"/>
+    /// so a context menu can widen the overflow to the Win11 Explorer ~250 feel (<c>ContextMenuOptions.MinWidth</c>).</summary>
+    public float OverflowMinWidth = 136f;
     const float OverflowMaxWidth = 440f;       // CommandBarOverflowPresenter MaxWidth (:531)
     const float OverflowMaxHeight = 480f;      // CommandBarOverflowPresenter MaxHeight (:532) — scrolls past it (:533-536)
     const float FlyoutMaxWidth = 440f;         // CommandBarFlyoutCommandBar MaxWidth (:639)
@@ -301,6 +347,21 @@ internal sealed class CommandBarFlyoutBody : Component
 
         if (_primaryNodes.Length != Primary.Count) _primaryNodes = new NodeHandle[Primary.Count];
         if (_secondaryNodes.Length != Secondary.Count) _secondaryNodes = new NodeHandle[Secondary.Count];
+
+        // ── Labeled-strip minimum width (Explorer parity) ──────────────────────────────────────────────────────────
+        // The LabeledPrimary columns carry Basis 0 (contribute 0 natural width) but clamp to LabeledPrimaryBtnMinWidth,
+        // so N columns need N × (MinWidth + 4px inner margin) + (N−1) dividers + the row's left margin. When that
+        // exceeds the overflow MinWidth (e.g. a 4-button track strip: 4×68 + 3 + 3 = 278 > 250), the clamped columns
+        // overflow the ClipToBounds root and the last label clips ("Sav…"). Force the root wide enough to fit the strip
+        // (and keep the overflow region flush via the column-stretch). Icon-only mode keeps its natural width (NaN).
+        float rootMinWidth = float.NaN;
+        if (LabeledPrimary && Primary.Count > 0)
+        {
+            float stripMin = Primary.Count * (LabeledPrimaryBtnMinWidth + 4f)  // MinWidth + InnerBorderMargin L2+R2
+                           + (Primary.Count - 1) * 1f                          // LabeledStripDivider width
+                           + 3f;                                               // primaryRow Margin L3 (R0)
+            rootMinWidth = stripMin > OverflowMinWidth ? stripMin : OverflowMinWidth;
+        }
 
         // ── ExpandedUp (shouldExpandUp, CommandBarFlyoutCommandBar.cpp:609-657): WinUI expands the overflow UPWARD
         // when there's no room below the bar but room above. Engine analog: the positioner bottom-anchors the popup
@@ -569,21 +630,37 @@ internal sealed class CommandBarFlyoutBody : Component
         }
 
         // ── PrimaryItemsRoot: horizontal row of icon buttons + trailing ellipsis ──────────────────────────────
-        var primaryChildren = new List<Element>(Primary.Count + 2);
-        for (int i = 0; i < Primary.Count; i++)
+        var primaryChildren = new List<Element>(Primary.Count * 2 + 2);
+        if (LabeledPrimary)
         {
-            int idx = i;
-            primaryChildren.Add(PrimaryButton(Primary[i], idx, OnBarKey));
+            // Explorer strip: equal-width columns filling the row (PrimaryButton carries Basis 0 + Grow 1), with a
+            // 1px vertical divider BETWEEN adjacent buttons — never at the ends, never around the … More button
+            // (which isn't shown in labeled mode). The row width is driven by the overflow's MinWidth, not by any
+            // one label, so a long "Save to Liked Songs" can't balloon its column and stretch the whole menu.
+            for (int i = 0; i < Primary.Count; i++)
+            {
+                if (i > 0) primaryChildren.Add(LabeledStripDivider());
+                int idx = i;
+                primaryChildren.Add(PrimaryButton(Primary[i], idx, OnBarKey));
+            }
         }
-        primaryChildren.Add(new BoxEl { Grow = 1f });   // spacer pins the … button to the right edge
-        if (showMore)
-            primaryChildren.Add(MoreButton(ExpandToggle, OnBarKey));
+        else
+        {
+            for (int i = 0; i < Primary.Count; i++)
+            {
+                int idx = i;
+                primaryChildren.Add(PrimaryButton(Primary[i], idx, OnBarKey));
+            }
+            primaryChildren.Add(new BoxEl { Grow = 1f });   // spacer pins the … button to the right edge
+            if (showMore)
+                primaryChildren.Add(MoreButton(ExpandToggle, OnBarKey));
+        }
 
         var primaryRow = new BoxEl
         {
             Direction = 0,
             AlignItems = FlexAlign.Center,
-            Height = PrimaryRowHeight,
+            Height = LabeledPrimary ? LabeledPrimaryRowHeight : PrimaryRowHeight,
             Margin = new Edges4(3, 3, 0, 3),
             // The corner joint flattens against the overflow on the joined side: ExpandedDown keeps the row's TOP
             // corners (TopCornerRadiusFilterConverter, themeresources:978-979), ExpandedUp keeps the BOTTOM corners
@@ -604,6 +681,7 @@ internal sealed class CommandBarFlyoutBody : Component
                 Direction = 1,
                 AlignSelf = FlexAlign.Start,
                 MaxWidth = FlyoutMaxWidth,
+                MinWidth = rootMinWidth,   // widen to fit the labeled strip's clamped columns (NaN = natural, icon-only)
                 OnRealized = rootCapture,
                 Children = collapsedChildren.ToArray(),
             };
@@ -637,6 +715,7 @@ internal sealed class CommandBarFlyoutBody : Component
             Direction = 1,
             AlignSelf = FlexAlign.Start,
             MaxWidth = FlyoutMaxWidth,
+            MinWidth = rootMinWidth,   // widen to fit the labeled strip's clamped columns (NaN = natural, icon-only)
             ClipToBounds = true,   // the expand clips must never paint past the popup's rounded corners
             OnRealized = rootCapture,
             Children = children.ToArray(),
@@ -655,46 +734,100 @@ internal sealed class CommandBarFlyoutBody : Component
     {
         bool enabled = cmd.Enabled;
         bool isToggle = cmd.Kind == AppBarCommandKind.ToggleButton;
-        bool accent = isToggle && cmd.IsChecked && enabled;   // CheckedDisabled drops the pill (:407-416)
-        var fg = !enabled ? Tok.TextDisabled : accent ? Tok.TextOnAccentPrimary : Tok.TextPrimary;
+        bool checkedOn = isToggle && cmd.IsChecked && enabled;   // CheckedDisabled drops the pill/state (:407-416)
+        // WinUI parity control (icon-only): a checked toggle paints the accent PILL. The Explorer shell-menu shape
+        // (LabeledPrimary): NO pill — the checked glyph is tinted AccentDefault on a transparent plate (the app's toggle
+        // language, e.g. the player-bar Like: a filled heart tinted accent), and every button shows a caption label.
+        bool pill = checkedOn && !LabeledPrimary;
+        var fg = !enabled ? Tok.TextDisabled
+               : pill ? Tok.TextOnAccentPrimary
+               : checkedOn ? Tok.AccentDefault   // labeled + checked: accent-tinted glyph, no pill
+               : Tok.TextPrimary;
+        IconRef iconRef = checkedOn ? (cmd.CheckedIcon ?? cmd.Icon) : cmd.Icon;
+        float iconSize = LabeledPrimary ? 20f : 16f;
+
+        // Single IconRef render path: layered-vector when the themed name is registered, else the glyph.
+        // ForegroundCheckedPressed = TextOnAccentFillColorSecondary (:30); plain pressed = TextSecondary (:14).
+        // The Explorer strip renders the layered TWO-TONE themed icon uniformly (glyph only when no themed name is
+        // registered). A themed icon carries its own Accent layer (rendered as-is — no double-tint); a glyph
+        // fallback picks up the fg tint (neutral TextPrimary, or AccentDefault when checkedOn e.g. the filled heart).
+        Element iconEl = IconView.Render(iconRef, iconSize, glyphColor: fg,
+            pressedColor: !enabled ? fg : pill ? Tok.TextOnAccentSecondary : checkedOn ? Tok.AccentDefault : Tok.TextSecondary,
+            disabledColor: Tok.TextDisabled, enabled: () => enabled, onAccent: pill);
+
+        Element[] content = LabeledPrimary
+            ? new Element[]
+              {
+                  // FIXED 20px icon box so a layered themed stack and a font glyph occupy the same footprint — no
+                  // optical size drift between icons in the strip (the accent Play triangle no longer reads larger
+                  // than the heart glyph next to it).
+                  new BoxEl { Width = 20f, Height = 20f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Children = [iconEl] },
+                  // Single-line Caption label centred under the icon; a long label ellipsizes inside its equal
+                  // column (Shrink=1 + CharacterEllipsis, clipped) rather than widening the button/menu.
+                  new BoxEl
+                  {
+                      AlignSelf = FlexAlign.Stretch, Direction = 0, Justify = FlexJustify.Center,
+                      ClipToBounds = true, Margin = new Edges4(0, 4, 0, 0),
+                      Children =
+                      [
+                          new TextEl(cmd.Label)
+                          {
+                              Size = 12f, Trim = TextTrim.CharacterEllipsis, Shrink = 1f,
+                              Color = enabled ? Tok.TextSecondary : Tok.TextDisabled,
+                          },
+                      ],
+                  },
+              }
+            : new Element[] { iconEl };
+
         return new BoxEl
         {
             Direction = 1,
             AlignItems = FlexAlign.Center,
             Justify = FlexJustify.Center,
-            MinWidth = AppBarBtnMinWidth,
-            MinHeight = PrimaryRowHeight,
+            MinWidth = LabeledPrimary ? LabeledPrimaryBtnMinWidth : AppBarBtnMinWidth,
+            MinHeight = LabeledPrimary ? LabeledPrimaryRowHeight - 6f : PrimaryRowHeight,
+            // Equal-width columns (Explorer parity): flex basis 0 + grow 1 so every strip button gets an identical
+            // slice of the row, capped by MinWidth 64. Basis 0 means a button contributes 0 to the row's NATURAL
+            // width, so one long label can't widen the strip — the menu width stays max(overflow content, MinWidth).
+            Basis = LabeledPrimary ? 0f : float.NaN,
+            Grow = LabeledPrimary ? 1f : 0f,
+            ClipToBounds = LabeledPrimary,
+            Padding = LabeledPrimary ? new Edges4(4, 4, 4, 4) : default,
             Margin = new Edges4(2, 2, 2, 2),    // CommandBarFlyoutAppBarButtonInnerBorderMargin (:107)
             Corners = Radii.ControlAll,
-            Fill = accent ? Tok.AccentDefault : ColorF.Transparent,
-            HoverFill = !enabled ? ColorF.Transparent : accent ? Tok.AccentSecondary : Tok.FillSubtleSecondary,
-            PressedFill = !enabled ? ColorF.Transparent : accent ? Tok.AccentTertiary : Tok.FillSubtleTertiary,
+            Fill = pill ? Tok.AccentDefault : ColorF.Transparent,
+            HoverFill = !enabled ? ColorF.Transparent : pill ? Tok.AccentSecondary : Tok.FillSubtleSecondary,
+            PressedFill = !enabled ? ColorF.Transparent : pill ? Tok.AccentTertiary : Tok.FillSubtleTertiary,
             // AppBarButtonInnerBorder BackgroundTransition = BrushTransition Duration 0:0:0.083 (:282).
             HoverDurationMs = Motion.ControlFaster, PressDurationMs = Motion.ControlFaster,
             HoverEasing = Easing.FluentPopOpen, PressEasing = Easing.FluentPopOpen,
             BrushTransitionMs = Motion.ControlFaster,
             Accelerator = cmd.Accelerator,
-            // Primary commands do NOT auto-close the flyout — WinUI hooks closeFlyoutFunc only on SecondaryCommands
-            // (CommandBarFlyout.cpp:67-74, :398-422).
-            OnClick = enabled ? () => cmd.Invoke?.Invoke() : null,
+            // Standalone CommandBarFlyout primary commands stay open (WinUI closeFlyoutFunc is secondary-only,
+            // CommandBarFlyout.cpp:67-74). The Explorer context-menu shape (LabeledPrimary) dismisses on every tap.
+            OnClick = enabled ? () => { cmd.Invoke?.Invoke(); if (LabeledPrimary) _requestClose?.Invoke(); } : null,
             OnKeyDown = enabled ? a => onKey(idx, a) : null,
             HitTestVisible = enabled,
             IsEnabled = enabled,
             Focusable = enabled,
             OnRealized = h => { if ((uint)idx < (uint)_primaryNodes.Length) _primaryNodes[idx] = h; },
             Role = isToggle ? AutomationRole.ToggleButton : AutomationRole.Button,
-            Children =
-            [
-                new TextEl(cmd.Glyph)
-                {
-                    Size = 16f, Color = fg,
-                    // ForegroundCheckedPressed = TextOnAccentFillColorSecondary (:30); plain pressed = TextSecondary (:14).
-                    PressedColor = !enabled ? fg : accent ? Tok.TextOnAccentSecondary : Tok.TextSecondary,
-                    DisabledColor = Tok.TextDisabled, FontFamily = Theme.IconFont,
-                },
-            ],
+            Children = content,
         };
     }
+
+    // ── A 1px vertical divider between adjacent LabeledPrimary strip buttons (Explorer's Cut|Copy|Rename|Share
+    //    dividers). DividerStrokeColorDefault, inset ~12px top/bottom so it spans the icon+label height without
+    //    touching the row edges (the AppBarSeparator vertical idiom: 1px wide, stretch, 0.5 corner radius). ───────
+    static BoxEl LabeledStripDivider() => new BoxEl
+    {
+        Width = 1f,
+        Fill = Tok.StrokeDividerDefault,           // AppBarSeparatorForeground = DividerStrokeColorDefaultBrush
+        Margin = new Edges4(0, 12, 0, 12),         // ~12px top/bottom inset (Explorer icon+label span)
+        AlignSelf = FlexAlign.Stretch,
+        Corners = CornerRadius4.All(0.5f),         // AppBarSeparatorCornerRadius
+    };
 
     // ── The trailing … ellipsis toggle (EllipsisButton: Width 44, glyph E712 @16, inner margin 2,2,6,2 —
     //    CommandBarFlyout_themeresources.xaml:563-624, :108). The width-expansion storyboard glides this node's
@@ -746,7 +879,7 @@ internal sealed class CommandBarFlyoutBody : Component
             var c = Secondary[i];
             if (c.Kind == AppBarCommandKind.Separator) continue;
             if (c.Kind == AppBarCommandKind.ToggleButton) hasCheckColumn = true;
-            if (c.Glyph is { Length: > 0 }) hasIconColumn = true;
+            if (c.Icon.HasContent) hasIconColumn = true;
         }
 
         var rows = new List<Element>(Secondary.Count);
@@ -830,9 +963,9 @@ internal sealed class CommandBarFlyoutBody : Component
         // column (Margin 39,0,12,0 → text lead 67, :177/:180); plate-local −2 on the outer edges.
         if (hasIconColumn)
         {
-            Element icon = cmd.Glyph is { Length: > 0 } g
-                ? new TextEl(g) { Size = 16f, Color = fg, PressedColor = pressedFg, DisabledColor = Tok.TextDisabled, FontFamily = Theme.IconFont }
-                : new BoxEl();
+            bool iconEnabled = cmd.Enabled;
+            Element icon = IconView.Render(cmd.Icon, 16f, glyphColor: fg, pressedColor: pressedFg,
+                disabledColor: Tok.TextDisabled, enabled: () => iconEnabled);
             children.Add(new BoxEl
             {
                 Width = 16f, Height = 16f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, AlignSelf = FlexAlign.Center,

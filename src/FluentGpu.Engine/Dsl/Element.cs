@@ -145,9 +145,31 @@ public sealed record BoxEl : Element
     /// <summary>Position-aware press carrying click count (double/triple-click), modifier chord, button and device kind —
     /// the text-selection / list-interaction press handler. Fires alongside <see cref="OnPointerDown"/> on left press.</summary>
     public Action<PointerEventArgs>? OnPointerPressed { get; init; }
-    /// <summary>Context-menu request (WinUI ContextRequested): right-click release over this node, or the Menu key /
-    /// Shift+F10 while it has focus. Local coords (keyboard invocations pass the node's centre).</summary>
-    public Action<Point2>? OnContextRequested { get; init; }
+    /// <summary>Typed clean-release edge. Fires only when the primary pointer releases over its original press target;
+    /// pan, drag, hold, capture loss, cancellation, and release outside suppress it.</summary>
+    public Action<PointerEventArgs>? OnPointerReleased { get; init; }
+    /// <summary>Context-menu request (WinUI ContextRequested): right-click release over this node, the Menu key /
+    /// Shift+F10 while it has focus, or a touch long-press. The <see cref="ContextRequestEventArgs"/> carries the
+    /// node-LOCAL position (keyboard invocations pass the node's centre) and the <see cref="ContextRequestTrigger"/>
+    /// so a handler can open AT the pointer/contact but anchor to the element rect for a keyboard invocation.</summary>
+    public Action<ContextRequestEventArgs>? OnContextRequested { get; init; }
+    /// <summary>Declares this node a CONTEXT-INVOKER (input-a11y.md §6.5.1): a left-click / touch-tap / Space-Enter
+    /// activation on it re-enters the context-request funnel STARTING AT this node — the dispatcher walks ancestors for
+    /// the nearest <see cref="OnContextRequested"/> and raises it exactly as a right-click would, so the same menu,
+    /// selection semantics, and light-dismiss result by construction. It is the declarative "this button opens the
+    /// row's context menu" affordance (a track row's "…" button), replacing the app-side OnRealized-capture +
+    /// RedispatchContextAt pattern that went stale on re-render.
+    ///
+    /// The activation is dispatched with <see cref="ContextRequestTrigger.Invoke"/> (pointer-originated ⇒ menu does NOT
+    /// focus its first item; rect-anchored on this node — the button — via <see cref="ContextRequestEventArgs.Source"/>),
+    /// EXCEPT a Space/Enter keyboard activation, which dispatches <see cref="ContextRequestTrigger.Keyboard"/> so the
+    /// first item IS focused. If no ancestor handles the request, nothing opens.
+    ///
+    /// IMPLIES <see cref="OnClick"/>'s hit-test / press / hover / focusable footprint (it presses, hovers and takes
+    /// focus like a button) — declare <c>Cursor = CursorId.Hand</c> yourself if you want the hand. MUTUALLY EXCLUSIVE
+    /// with <see cref="OnClick"/> (a node is a click target OR a context-invoker, not both; this prop wins and a DEBUG
+    /// assert fires if both are set). Disabled (<see cref="IsEnabled"/> = false) suppresses it like any activation.</summary>
+    public bool ClickRequestsContext { get; init; }
     /// <summary>Keyboard-accelerator chord (WinUI KeyboardAccelerator): invokes <see cref="OnClick"/> from anywhere once
     /// focused routing leaves the chord unhandled (e.g. Ctrl+W close-tab).</summary>
     public KeyAccelerator? Accelerator { get; init; }
@@ -608,6 +630,26 @@ public sealed record ImageEl : Element
     /// <summary>Override the placeholder→image reveal transition (duration + easing). Null ⇒ <see cref="ImageTransition.Default"/>;
     /// pass <see cref="ImageTransition.None"/> to disable the fade (instant).</summary>
     public ImageTransition? Transition { get; init; }
+    public Edges4 Margin { get; init; }
+    public FlexAlign AlignSelf { get; init; } = FlexAlign.Auto;
+}
+
+/// <summary>A single ThemedIcon vector layer (leaf): a colorless coverage mask (interned in
+/// <c>IconGeometryTable.Shared</c> as <see cref="PathId"/>) painted at <see cref="Tint"/>. A layered icon is a
+/// <c>ZStack</c> of these (built by <c>ThemedIcon.Create</c>). <see cref="Tint"/> is always a BOUND <c>Prop</c>
+/// (a role→color thunk reading <c>Tok</c>) so <c>RethemeAll</c> live-recolors it with no re-raster — never a frozen
+/// ctor color (component-props-contract.md). Reconciled onto <c>VisualKind.IconLayer</c> where <c>ImageId</c> doubles
+/// as the PathId; the recorder emits <c>DrawIconMask</c>.</summary>
+public sealed record IconLayerEl : Element
+{
+    public override ushort ElementTypeId => 15;
+
+    /// <summary>Interned geometry id (<c>IconGeometryTable.Shared.Register</c>). 0 = nothing to draw.</summary>
+    public int PathId { get; init; }
+    /// <summary>Square icon box (DIP). The mask rasterizes at <c>Size × frameScale</c> device px on the atlas miss.</summary>
+    public float Size { get; init; } = 16f;
+    /// <summary>The theme-resolved layer color — bind it (role thunk reading <c>Tok</c>) for live recolor.</summary>
+    public Prop<ColorF> Tint { get; init; } = ColorF.Transparent;
     public Edges4 Margin { get; init; }
     public FlexAlign AlignSelf { get; init; } = FlexAlign.Auto;
 }

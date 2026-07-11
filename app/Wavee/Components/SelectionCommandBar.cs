@@ -7,7 +7,6 @@ using FluentGpu.Hooks;
 using FluentGpu.Localization;
 using FluentGpu.Signals;
 using Wavee.Core;
-using Wavee.Features.Detail;
 using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
@@ -17,20 +16,25 @@ namespace Wavee;
 // DIRECT ZStack child so it fills the pane) and measures THAT layer's width — the pane, not the bar — to collapse
 // responsively: detailed (thumbs + labeled buttons) → icon-only buttons with tooltips → count + Play + an ellipsis
 // flyout holding the remaining actions. Never clips at the window edges.
+//
+// The buttons and the "…" overflow are PROJECTIONS of the same AppAction singletons the right-click menu composes
+// (Actions/TrackActions + Menus.TrackRows) — the bar and the context menu provably share definitions. Enablement /
+// the Like glyph are LIVE: the predicates read signals inside this render. SelectAll/Clear stay bar-local.
 sealed class SelectionCommandBar : Component
 {
     readonly SelectionModel _sel;
     readonly Func<int, Track?> _trackAt;
+    readonly Func<PlaylistHost?>? _host;    // the hosting playlist (editable detail lists) → Remove-from-playlist in the overflow
     readonly float _bottomPadding;
     readonly Signal<int> _fit = new(0);
 
-    public SelectionCommandBar(SelectionModel sel, Func<int, Track?> trackAt, float bottomPadding = WaveeSpace.XL)
-    { _sel = sel; _trackAt = trackAt; _bottomPadding = bottomPadding; }
+    public SelectionCommandBar(SelectionModel sel, Func<int, Track?> trackAt, float bottomPadding = WaveeSpace.XL,
+                               Func<PlaylistHost?>? host = null)
+    { _sel = sel; _trackAt = trackAt; _bottomPadding = bottomPadding; _host = host; }
 
     public override Element Render()
     {
-        var svc = UseContext(Services.Slot);
-        var lib = UseContext(LibraryBridge.Slot);
+        var acts = UseContext(ActionServices.Slot);
         var overlaySvc = UseContext(Overlay.Service);
         var menuAnchor = UseRef<NodeHandle>(default);
         var menuHandle = UseRef<OverlayHandle?>(null);
@@ -47,7 +51,7 @@ sealed class SelectionCommandBar : Component
         int fit = _fit.Value;
 
         Element bar = count >= 2
-            ? BuildBar(svc, lib, overlaySvc, menuAnchor, menuHandle, count, fit, barWasVisible)
+            ? BuildBar(acts, overlaySvc, menuAnchor, menuHandle, count, fit, barWasVisible)
             : new BoxEl();
 
         return new BoxEl
@@ -91,7 +95,11 @@ sealed class SelectionCommandBar : Component
     // inside the failsafe instead of collapsing.
     static int FitFor(float w) => w >= 1080f ? 0 : w >= 520f ? 1 : 2;
 
-    Element BuildBar(Services? svc, LibraryBridge? lib, IOverlayService overlaySvc,
+    // The action context for THIS render's selection: evaluated in-render, so every predicate an AppAction reads
+    // (saved-state, clipboard, caps) subscribes → the bar re-skins live.
+    ActionContext SelectionCtx(ActionServices acts) => new(ActionTarget.ForTracks(Sel(), _host?.Invoke()), acts);
+
+    Element BuildBar(ActionServices? acts, IOverlayService overlaySvc,
                      Ref<NodeHandle> menuAnchor, Ref<OverlayHandle?> menuHandle, int count, int fit, bool barWasVisible)
     {
         var kids = new List<Element>(12);
@@ -111,20 +119,22 @@ sealed class SelectionCommandBar : Component
             Children = [new TextEl(Strings.Detail.SelectedCount(count)) { Size = 13f, Weight = 600, Color = Tok.TextPrimary }],
         });
         kids.Add(Divider());
-        kids.Add(Action(Icons.Play, Loc.Get(Strings.Detail.Play), fit, () => PlaySelected(svc)));
-        if (fit <= 1)
+        if (acts is not null)
         {
-            kids.Add(Action(Icons.Next, Loc.Get(Strings.Detail.PlayNext), fit, () => PlayNextSelected(svc)));
-            kids.Add(Action(Icons.Queue, Loc.Get(Strings.Detail.AddToEndOfQueue), fit, () => QueueSelected(svc)));
-            kids.Add(Action(Icons.Add, Loc.Get(Strings.Detail.AddToPlaylist), fit, () => AddSelectedToPlaylist(lib)));
-            kids.Add(Divider());
-            kids.Add(Action(Icons.Accept, Loc.Get(Strings.Detail.SelectAll), fit, SelectAllTracks));
-        }
-        else
-        {
-            // The remaining actions live behind "…" (WinUI CommandBar overflow) — the bar stays a fixed handful wide.
+            var ctx = SelectionCtx(acts);
+            kids.Add(ActionButton(TrackActions.Play, in ctx, fit));
+            if (fit <= 1)
+            {
+                kids.Add(ActionButton(TrackActions.PlayNext, in ctx, fit));
+                kids.Add(ActionButton(TrackActions.AddToQueue, in ctx, fit));
+                kids.Add(ActionButton(TrackActions.ToggleLike, in ctx, fit));
+                kids.Add(Divider());
+                kids.Add(Action(Icons.Accept, Loc.Get(Strings.Detail.SelectAll), fit, SelectAllTracks));
+            }
+            // The remaining actions live behind "…" at EVERY fit now — the same rows the right-click menu composes
+            // (Add to playlist ▸, Copy links, Remove from this playlist, …), plus the collapsed primaries at fit 2.
             kids.Add(ToolTip.Wrap(
-                RoundBtn(Icons.More, () => ToggleMenu(svc, lib, overlaySvc, menuAnchor, menuHandle),
+                RoundBtn(Icons.More, () => ToggleMenu(acts, overlaySvc, menuAnchor, menuHandle, fit),
                          realized: h => menuAnchor.Value = h),
                 Loc.Get(Strings.Common.More)));
         }
@@ -139,18 +149,38 @@ sealed class SelectionCommandBar : Component
         };
     }
 
-    void ToggleMenu(Services? svc, LibraryBridge? lib, IOverlayService overlaySvc,
-                    Ref<NodeHandle> menuAnchor, Ref<OverlayHandle?> menuHandle)
+    // ONE AppAction → a bar button in the existing chrome (labeled at fit 0, icon+tooltip at fit 1). Executes then
+    // clears the selection (the batch bar contract).
+    Element ActionButton(AppAction a, in ActionContext ctx, int fit)
+    {
+        var c = ctx;
+        bool enabled = a.EnabledFor(c);
+        var icon = ActionIcons.Resolve(a.IconKey, a.IsChecked?.Invoke(c) ?? false);
+        System.Action onClick = enabled ? () => { a.Execute(c); _sel.DeselectAll(); } : static () => { };
+        // The batch bar is glyph-only chrome; carry the icon font so custom-font marks (e.g. WaveeIcons Play next /
+        // Play after) render in their own face rather than tofu in Segoe.
+        return Action(icon.Glyph ?? "", a.Label(c), fit, onClick, icon.Font);
+    }
+
+    void ToggleMenu(ActionServices acts, IOverlayService overlaySvc,
+                    Ref<NodeHandle> menuAnchor, Ref<OverlayHandle?> menuHandle, int fit)
     {
         if (menuHandle.Value is { IsOpen: true } open) { open.Close(); return; }
-        MenuFlyoutItem[] items =
-        [
-            new(Loc.Get(Strings.Detail.PlayNext), Icons.Next, true, () => PlayNextSelected(svc)),
-            new(Loc.Get(Strings.Detail.AddToEndOfQueue), Icons.Queue, true, () => QueueSelected(svc)),
-            new(Loc.Get(Strings.Detail.AddToPlaylist), Icons.Add, true, () => AddSelectedToPlaylist(lib)),
-            MenuFlyoutItem.Separator,
-            new(Loc.Get(Strings.Detail.SelectAll), Icons.Accept, true, SelectAllTracks),
-        ];
+        var ctx = SelectionCtx(acts);   // open-time snapshot (menus close on invoke — one-shot is correct)
+        var items = new List<MenuFlyoutItem>(12);
+        if (fit >= 2)
+        {
+            // The primaries hidden at the narrowest fit stay one tap away.
+            items.Add(WithDeselect(TrackActions.PlayNext.ToMenuItem(ctx)));
+            items.Add(WithDeselect(TrackActions.AddToQueue.ToMenuItem(ctx)));
+            items.Add(WithDeselect(TrackActions.ToggleLike.ToMenuItem(ctx)));
+            items.Add(MenuFlyoutItem.Separator);
+        }
+        // The SAME rows the right-click track menu composes (Add to playlist ▸, Copy links, Remove from this playlist…).
+        foreach (var row in Menus.TrackRows(in ctx, showGoToAlbum: false))
+            items.Add(WithDeselect(row));
+        items.Add(MenuFlyoutItem.Separator);
+        items.Add(new MenuFlyoutItem(Loc.Get(Strings.Detail.SelectAll), Icons.Accept, true, SelectAllTracks));
         menuHandle.Value = overlaySvc.Open(
             () => menuAnchor.Value,
             () => MenuFlyout.Build(items, () => menuHandle.Value?.Close()),
@@ -158,42 +188,13 @@ sealed class SelectionCommandBar : Component
         menuHandle.Value.ClosedAction = () => menuHandle.Value = null;
     }
 
-    // ── The batch actions (shared by the labeled/icon buttons and the overflow menu) ────────────────────────────────
-
-    void PlaySelected(Services? svc)
+    // Batch-bar contract: a top-level command/toggle clears the selection after it runs. SubMenu rows keep their
+    // nested invokes untouched (an add-to-playlist keeps the selection — the toast confirms the action instead).
+    MenuFlyoutItem WithDeselect(MenuFlyoutItem item)
     {
-        var s = Sel();
-        if (svc is null || s.Count == 0) return;
-        _ = svc.Player.PlayTrackAsync(s[0]);
-        for (int i = 1; i < s.Count; i++) _ = svc.Player.EnqueueAsync(s[i]);
-        _sel.DeselectAll();
-    }
-
-    void PlayNextSelected(Services? svc)
-    {
-        var s = Sel();
-        if (svc is null || s.Count == 0) return;
-        int n = DetailQueueActions.PlayNext(svc.Player, s, s.Count);
-        if (n > 0) Toasts.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), ToastSeverity.Success);
-        _sel.DeselectAll();
-    }
-
-    void QueueSelected(Services? svc)
-    {
-        var s = Sel();
-        if (svc is null || s.Count == 0) return;
-        int n = DetailQueueActions.AddToEnd(svc.Player, s, s.Count);
-        if (n > 0) Toasts.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), ToastSeverity.Success);
-        _sel.DeselectAll();
-    }
-
-    void AddSelectedToPlaylist(LibraryBridge? lib)
-    {
-        var s = Sel();
-        if (lib is null || s.Count == 0) return;
-        var (_, name) = lib.AddToDefaultPlaylist(s);
-        Toasts.Show(Strings.Detail.AddedToPlaylist(name), ToastSeverity.Success);
-        _sel.DeselectAll();
+        if (item.Kind is MenuItemKind.Separator or MenuItemKind.SubMenu || item.Invoke is null) return item;
+        var inner = item.Invoke;
+        return item with { Invoke = () => { inner(); _sel.DeselectAll(); } };
     }
 
     Element[] BuildThumbs()
@@ -252,25 +253,25 @@ sealed class SelectionCommandBar : Component
         Margin = new Edges4(WaveeSpace.XS, 0f, WaveeSpace.XS, 0f),
     };
 
-    Element Action(string glyph, string label, int fit, Action onClick) => fit == 0
-        ? ActionBtn(glyph, label, onClick)
-        : ToolTip.Wrap(RoundBtn(glyph, onClick), label);
+    Element Action(string glyph, string label, int fit, Action onClick, string? font = null) => fit == 0
+        ? ActionBtn(glyph, label, onClick, font)
+        : ToolTip.Wrap(RoundBtn(glyph, onClick, font: font), label);
 
-    static Element ActionBtn(string glyph, string label, Action onClick) => new BoxEl
+    static Element ActionBtn(string glyph, string label, Action onClick, string? font = null) => new BoxEl
     {
         Direction = 0, Height = 36f, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S,
         Padding = new Edges4(WaveeSpace.M, 0f, WaveeSpace.M, 0f), Corners = CornerRadius4.All(18f),
         HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary, OnClick = onClick,
-        Children = [Icon(glyph, 14f, Tok.TextSecondary), new TextEl(label) { Size = 13f, Weight = 600, Color = Tok.TextSecondary }],
+        Children = [Icon(glyph, 14f, Tok.TextSecondary, family: font), new TextEl(label) { Size = 13f, Weight = 600, Color = Tok.TextSecondary }],
     };
 
-    static Element RoundBtn(string glyph, Action onClick, Action<NodeHandle>? realized = null) => new BoxEl
+    static Element RoundBtn(string glyph, Action onClick, Action<NodeHandle>? realized = null, string? font = null) => new BoxEl
     {
         Width = 36f, Height = 36f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
         Corners = CornerRadius4.All(18f),
         HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary, OnClick = onClick,
         OnRealized = realized,
-        Children = [Icon(glyph, 13f, Tok.TextSecondary)],
+        Children = [Icon(glyph, 13f, Tok.TextSecondary, family: font)],
     };
 
     Element ClearBtn() => ToolTip.Wrap(RoundBtn(Icons.Cancel, () => _sel.DeselectAll()), Loc.Get(Strings.Detail.ClearSelection));

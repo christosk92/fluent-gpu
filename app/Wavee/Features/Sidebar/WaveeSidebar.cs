@@ -41,6 +41,8 @@ sealed class WaveeSidebar : Component
     readonly Dictionary<string, NodeHandle> _rowNodes = new();
     NodeHandle _contentNode;
     LibraryBridge? _lib;   // Mutations: create-playlist + the playlist-list refresh version (set each render)
+    ActionServices? _acts;           // the action system behind the playlist-row context menus (set each render)
+    IOverlayService? _menuOverlay;   // the overlay service those menus open through (set each render)
 
     // ── overlay selection-pill geometry ──────────────────────────────────────────────────────────
     internal const float PillH = 16f;        // SelectionIndicator height (WinUI 3×16)
@@ -76,6 +78,8 @@ sealed class WaveeSidebar : Component
     {
         var store = UseContext(LibraryStore.Slot);
         _lib = UseContext(LibraryBridge.Slot);
+        _acts = UseContext(ActionServices.Slot);        // playlist-row context menus (Menus.SidebarPlaylist)
+        _menuOverlay = UseContext(Overlay.Service);
         store?.EnsureStats();
         store?.EnsurePlaylists();
         // Cached + off-page-fresh: the Your-Library counts (Liked etc.) update live when you like a song on another page.
@@ -115,7 +119,13 @@ sealed class WaveeSidebar : Component
         {
             Key = "compact-layer", Direction = 1, Grow = 1f, Shrink = 0f, Width = 56f,
             Opacity = compact ? 1f : 0f, HitTestVisible = compact,
-            Children = [ ScrollView(CompactBody(sel, playlists)) with { Grow = 1f, AutoEdgeFade = true } ],
+            // The compact rail is only 56 DIP wide. Its standard overlay scrollbar occupies the same visual gutter as
+            // the shell resize affordance and reads as a tall, page-spanning border. Keep wheel/touch scrolling, but do
+            // not paint a scrollbar in compact mode (the expanded library keeps the normal auto-hide scrollbar).
+            Children = [ ScrollView(CompactBody(sel, playlists)) with
+            {
+                Grow = 1f, AutoEdgeFade = true, SuppressScrollBar = true,
+            } ],
         };
 
         return new BoxEl
@@ -301,7 +311,7 @@ sealed class WaveeSidebar : Component
     {
         string key = "pl:" + p.Uri;
         bool selected = sel == key;
-        return new BoxEl
+        var row = new BoxEl
         {
             Key = key,
             Animate = ItemReflowTransition(index),
@@ -324,8 +334,34 @@ sealed class WaveeSidebar : Component
                         Caption(Strings.Sidebar.SongCount(p.TrackCount)).Secondary(),
                     ],
                 },
+                // Hover-revealed trailing "…": opens the SAME sidebar playlist menu the row shows on right-click,
+                // anchored at the button — ClickRequestsContext re-enters the context-request funnel here and the walk
+                // finds the row's OnContextRequested (the WithContextMenu attach below). Zero-width when no menu system.
+                _acts is not null && _menuOverlay is not null
+                    ? new BoxEl
+                    {
+                        Opacity = 0f, HoverOpacity = 1f, Shrink = 0f,
+                        Children =
+                        [
+                            new BoxEl
+                            {
+                                Width = 26f, Height = 26f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                                Corners = CornerRadius4.All(13f),
+                                HoverFill = Tok.FillSubtleTertiary,
+                                Role = AutomationRole.Button, Cursor = CursorId.Hand,
+                                ClickRequestsContext = true,
+                                Children = [Icon(Mdl.More, 14f, Tok.TextSecondary)],
+                            },
+                        ],
+                    }
+                    : new BoxEl(),
             ],
         };
+        // Right-click / Menu key / long-press: the sidebar playlist menu (Play · Open · owner management · Copy link ·
+        // Delete). Attach chains onto the row's existing OnRealized (the pill measurement capture) — never clobbers.
+        if (_acts is { } acts && _menuOverlay is { } menuSvc)
+            return row.WithContextMenu(menuSvc, () => Menus.SidebarPlaylist(acts, p));
+        return row;
     }
 
     // The 3px reserve where the selection accent sits — the moving pill is the overlay WaveeSelPill (so it can glide

@@ -587,13 +587,12 @@ sealed class NotificationPanel : Component
 
     static Image? ImageOf(string? url) => url is { Length: > 0 } u ? new Image(u) : null;
 
+    // Already-web urls pass through; spotify uris resolve through the ONE consolidated converter (Actions/SpotifyLink.cs).
     static string? WebUrlFor(string? uri)
     {
         if (string.IsNullOrEmpty(uri)) return null;
         if (uri.StartsWith("http", StringComparison.OrdinalIgnoreCase)) return uri;
-        if (uri.StartsWith("spotify:", StringComparison.Ordinal))
-            return "https://open.spotify.com/" + uri.Substring("spotify:".Length).Replace(':', '/');
-        return null;
+        return SpotifyLink.WebUrl(uri);
     }
 
     static string RelTime(long ageMs)

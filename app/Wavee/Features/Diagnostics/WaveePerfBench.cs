@@ -51,12 +51,15 @@ internal static class WaveePerfBench
         public int SceneLivePeak;
     }
 
+    static readonly WaveeLogger Log = new(WaveeLog.Instance, "probe");
+
     public static bool TryRun(AppHost host, IPlatformWindow window, IGpuDevice device)
     {
         if (!Diag.EnvFlag("WAVEE_PERF_BENCH")) return false;
+        WaveeLog.Instance.SetEcho(Console.Error.WriteLine);   // env-gated run only: mirror probe progress to the terminal
         if (window is not Win32Window w || device is not D3D12Device gpu)
         {
-            Console.Error.WriteLine("[perf-bench] unavailable: requires Win32Window + D3D12Device");
+            Log.Warn("[perf-bench] unavailable: requires Win32Window + D3D12Device");
             return true;
         }
 
@@ -68,7 +71,7 @@ internal static class WaveePerfBench
         }
         if (WaveeShell.ProbeNav is null)
         {
-            Console.Error.WriteLine("[perf-bench] nav hook not wired (WaveeShell not mounted?)");
+            Log.Warn("[perf-bench] nav hook not wired (WaveeShell not mounted?)");
             return true;
         }
 
@@ -114,11 +117,11 @@ internal static class WaveePerfBench
               .Append(r.FrameMsMax.ToString("0.00", CultureInfo.InvariantCulture).PadLeft(9)).AppendLine();
         }
         string report = sb.ToString();
-        Console.Error.Write(report);
+        Log.Info(report);
         File.WriteAllText(Path.Combine(outDir, "wavee-perf-latest.txt"), report);
-        Console.Error.WriteLine("=== PERF-BENCH JSON BEGIN ===");
-        Console.Error.Write(json);
-        Console.Error.WriteLine("=== PERF-BENCH JSON END ===");
+        Log.Info("=== PERF-BENCH JSON BEGIN ===");
+        Log.Info(json);
+        Log.Info("=== PERF-BENCH JSON END ===");
         return true;
     }
 

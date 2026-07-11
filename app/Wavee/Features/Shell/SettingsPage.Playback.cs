@@ -190,7 +190,7 @@ sealed partial class SettingsPage
         void Commit(double seconds)
         {
             if (settings is null) return;
-            int ms = (int)MathF.Round((float)Math.Clamp(seconds, 0, 30) * 1000f);
+            int ms = (int)MathF.Round((float)Math.Clamp(seconds, 0, 12) * 1000f);
             settings.Set(WaveeSettings.CrossfadeMs, ms);
             _crossSecs.Value = ms / 1000.0;
             PushDsp(svc);
@@ -199,17 +199,20 @@ sealed partial class SettingsPage
 
         var durationRow = new BoxEl
         {
+            // NumberBox is a mounted component whose constructor fields intentionally freeze. Remount this small row when
+            // the toggle flips so its enabled state follows crossfade immediately instead of staying at its first value.
+            Key = crossOn ? "crossfade-duration-on" : "crossfade-duration-off",
             Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
             Children =
             [
                 Slider.Ranged((float)_crossSecs.Value, v => Commit(v),
                     new Slider.Options
                     {
-                        Min = 0f, Max = 30f, Step = 0.5f, TickFrequency = 5f, IsThumbToolTipEnabled = true,
+                        Min = 0f, Max = 12f, Step = 0.5f, TickFrequency = 2f, IsThumbToolTipEnabled = true,
                         ThumbToolTipValueConverter = v => v.ToString("0.#", CultureInfo.InvariantCulture) + " s",
                     },
                     length: 220f, isEnabled: crossOn && settings is not null),
-                NumberBox.Create(value: _crossSecs, minimum: 0, maximum: 30, smallChange: 0.5,
+                NumberBox.Create(value: _crossSecs, minimum: 0, maximum: 12, smallChange: 0.5,
                     spinButtonPlacementMode: NumberBoxSpinButtonPlacementMode.Compact, width: 96f,
                     formatter: v => v.ToString("0.#", CultureInfo.InvariantCulture) + " s",
                     onValueChanged: (_, v) => Commit(v), isEnabled: crossOn && settings is not null),
@@ -340,6 +343,6 @@ sealed partial class SettingsPage
         var settings = svc.Settings;
         dsp.SetEqualizer(settings.Get(WaveeSettings.EqualizerEnabled), ReadEqGains(settings));
         dsp.SetCrossfade(settings.Get(WaveeSettings.CrossfadeEnabled),
-            Math.Clamp(settings.Get(WaveeSettings.CrossfadeMs), 0, 30_000));
+            Math.Clamp(settings.Get(WaveeSettings.CrossfadeMs), 0, 12_000));
     }
 }

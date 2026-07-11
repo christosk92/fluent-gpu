@@ -56,8 +56,9 @@ public sealed class ProcessIpcChannel : IIpcChannel
             log.Info("Audio host self-relaunch started pid=" + process.Id + " exe=" + exePath);
             return new ProcessIpcChannel(process, ipc, job);
         }
-        catch
+        catch (Exception ex)
         {
+            log.Warn("audio host spawn/connect failed: " + ex.Message, ex);
             try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch { }
             try { job?.Dispose(); } catch { }
             process.Dispose();

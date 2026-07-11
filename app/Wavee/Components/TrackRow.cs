@@ -12,8 +12,8 @@ using static FluentGpu.Dsl.Ui;
 namespace Wavee;
 
 // Which optional columns a track row shows. #, Title and Duration are always present. Cell build order (and the matching
-// track widths) is: # · ♥ · (thumb) · Title · Album · AddedBy · DateAdded · Video · Plays · Duration. SHARED by the
-// detail TrackList header + every row builder, so the header and the rows stay column-aligned by construction.
+// track widths) is: # · ♥ · (thumb) · Title · Album · AddedBy · DateAdded · Video · Plays · Duration. SHARED by the detail
+// TrackList header + every row builder, so the header and the rows stay column-aligned by construction.
 internal readonly record struct ColumnSet(bool Album, bool By, bool Date, bool Video, bool Plays, bool Heart, bool Thumb);
 
 // ── the ONE track-row cell, used EVERYWHERE a track is shown (detail list, library pane, artist "Popular", search) ──
@@ -78,7 +78,7 @@ internal static class TrackRow
     internal static Element Grid(Track t, int displayIndex, in State st, ColumnSet set, TrackSize[] tracks, float rowH,
                                  Element title, bool showTrackArtist, Action<string, string?> go,
                                  Action? onPlay = null, Action? onLike = null, Owner? addedByProfile = null,
-                                 bool likePop = false)
+                                 bool likePop = false, Element? actionsCell = null)
     {
         float thumb = ThumbSize;   // fixed art size → a stable dedicated art column
 
@@ -98,6 +98,7 @@ internal static class TrackRow
         var titleCol = new BoxEl
         {
             Direction = 1, Grow = 1f, Basis = 0f, Gap = 1f,
+            // Subline artist(s) — per config (playlists/Liked/compilations show them; single-artist albums/singles/EPs don't).
             Children = showTrackArtist
                 ? [title, ArtistLinks(t.Artists, go)]
                 : [title],
@@ -116,6 +117,11 @@ internal static class TrackRow
             cells.Add(EndCell(new TextEl(PlaysLabel(t.PlayCount)) { Size = 13f, Color = Tok.TextTertiary }));
         cells.Add(EndCell(new TextEl(DetailFormat.TrackTime(t.DurationMs)) { Size = 13f, Color = Tok.TextSecondary }));
 
+        // Trailing "..." overflow lane (Apple Music style) — a fixed column AFTER Duration. Present only when the caller
+        // reserved its width in `tracks` (the detail list; eager/preview rows pass null → no extra cell). Kept in cell
+        // build order so the header's matching empty cell and the row stay column-aligned.
+        if (actionsCell is not null) cells.Add(actionsCell);
+
         return new GridEl
         {
             Columns = tracks, ColGap = ColGap, RowHeight = rowH, Grow = 1f,   // fill the row skin's content lane
@@ -131,7 +137,8 @@ internal static class TrackRow
     // virtualization + multi-select are dropped (these are short previews). Single-click plays (no multi-select here). The
     // title is a plain now-playing-coloured ellipsis (the marquee is reserved for the full lists' now-playing row).
     internal static Element Row(Track t, int displayIndex, in State st, ColumnSet set, TrackSize[] tracks, float rowH,
-                                bool showTrackArtist, Action<string, string?> go, Action onPlay, Action? onLike = null, bool zebra = false)
+                                bool showTrackArtist, Action<string, string?> go, Action onPlay, Action? onLike = null, bool zebra = false,
+                                Element? actionsCell = null)
     {
         bool oddZebra = zebra && displayIndex % 2 != 0;
         Element title = new TextEl(t.Title)
@@ -153,7 +160,7 @@ internal static class TrackRow
             // No-op pointer-exit → registers PointerBit so this row is the "interactive ancestor" whose hover progress the
             // # cell inherits (SceneRecorder.TryResolveInteractionProgress) — that's what reveals play/pause on row hover.
             OnPointerExit = static () => { },
-            Children = [Grid(t, displayIndex, st, set, tracks, rowH, title, showTrackArtist, go, onPlay, onLike)],
+            Children = [Grid(t, displayIndex, st, set, tracks, rowH, title, showTrackArtist, go, onPlay, onLike, actionsCell: actionsCell)],
         };
     }
 
@@ -166,7 +173,7 @@ internal static class TrackRow
                                     Action onPlay, Action? onLike = null, float art = 48f,
                                     bool showArtists = true, bool explicitBadge = false,
                                     bool showDuration = true, ArtCardKind kind = ArtCardKind.Rail,
-                                    Action? onAdd = null, bool likePop = false)
+                                    Action? onAdd = null, bool likePop = false, bool showMore = false)
     {
         float radius = kind == ArtCardKind.Grid ? 4f : 5f;
         float fab = Math.Clamp(art * 0.62f, 28f, 36f);
@@ -214,6 +221,9 @@ internal static class TrackRow
                 Justify = FlexJustify.Center,
                 Children = [new TextEl(DetailFormat.TrackTime(t.DurationMs)) { Size = 12f, Color = Tok.TextSecondary }],
             });
+        // Trailing "…" overflow — opens the card's ancestor context menu on click (ClickRequestsContext), revealed on
+        // card hover exactly like a track row. The card must carry a .WithContextMenu ancestor (ArtistPopular does).
+        if (showMore) trailing.Add(MoreButton(true));
 
         return new BoxEl
         {
@@ -282,7 +292,7 @@ internal static class TrackRow
             Focusable = false,
             FocusVisualMargin = Edges4.All(1f),
             Role = AutomationRole.Button,
-            OnPointerPressed = args =>
+            OnPointerReleased = args =>
             {
                 if (args.ClickCount >= 2) interact(ItemContainerTrigger.DoubleTap, args.Mods);
                 else interact(ItemContainerTrigger.Tap, SelectorVisualsBound.MultiSelectMods(showCheckbox?.Invoke() ?? false, args.Mods));
@@ -394,6 +404,33 @@ internal static class TrackRow
             },
         ],
     };
+
+    // The trailing row "..." overflow button (Apple Music / Spotify): revealed on ROW hover — the same interactive-ancestor
+    // reveal the # cell's play/pause transport uses (the recorder drives the fade off the nearest interactive ancestor, the
+    // row). A click opens the SAME context menu the row shows on right-click, anchored at the button — the engine's
+    // declarative BoxEl.ClickRequestsContext (input-a11y §6.5.1): a left-click / tap / Space-Enter on the button re-enters
+    // the context-request funnel here, so the ancestor row's OnContextRequested opens byte-identically to a right-click,
+    // with no OnRealized node capture, no InputHooks, no re-hit-test. `enabled: false` → a static, non-interactive, hidden
+    // placeholder (skeleton / overscan) so the shimmer derives the identical reserved lane.
+    internal static Element MoreButton(bool enabled)
+    {
+        var btn = new BoxEl
+        {
+            Width = 28f, Height = 28f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Corners = CornerRadius4.All(14f), HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+            HoverScale = 1.06f, PressScale = 0.94f,
+            Cursor = enabled ? CursorId.Hand : (CursorId?)null, ClickRequestsContext = enabled,
+            Role = AutomationRole.Button,
+            Children = [Icon(Mdl.More, 16f, Tok.TextSecondary)],
+        };
+        // Hidden at rest; fades in on row hover (Opacity 0 → HoverOpacity 1, inherited from the row's hover progress).
+        return new BoxEl
+        {
+            Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Opacity = 0f, HoverOpacity = enabled ? 1f : 0f,
+            Children = [btn],
+        };
+    }
 
     // The recommendation-row "add to this playlist" button (Spotify's playlist-extender "+"): a bordered round button that
     // leads the trailing cluster, before the duration. Mirrors Heart — a null onAdd yields a non-interactive button.

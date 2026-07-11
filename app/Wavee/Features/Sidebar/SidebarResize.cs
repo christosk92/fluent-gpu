@@ -44,24 +44,20 @@ sealed class SidebarResizeGrip : Component
 
     public override Element Render() => new BoxEl
     {
-        // Wide (touch-friendly) hit area straddling the seam; the visible cue is a faint full-height hairline so the
-        // grip is discoverable WITHOUT a hover cursor (which touch has none of). Cursor is the mouse ↔ (ignored on touch).
+        // Wide (touch-friendly) hit area extending into the content side. It is deliberately PAINT-FREE: discovery is
+        // via the SizeWE cursor, while the invisible lane can never show as a page-height strip over home/detail content.
+        // Touch needs no visual hover affordance.
         // Grow=1f fills the parent's (literal column wrapper in WaveeShell) vertical main axis — an Embed.Comp host node
         // is a column that does NOT cross-stretch its child's HEIGHT, so without this the grip arranges to 0px tall and
         // is never hit-tested (no hover/cursor/drag). The wrapper's fixed Width=16 contains this Grow to the Y axis.
-        Width = 16f, Grow = 1f, Direction = 1, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+        Width = 16f, Grow = 1f, Direction = 1,
         Cursor = CursorId.SizeWE,
-        // The seam line is hidden at rest and fades in only while the grip is hovered (eased by the InteractionAnimator).
-        // Opacity is composited-only — it never affects hit-testing, so the grip stays fully draggable while invisible,
-        // and during a drag the grip tracks the cursor so it stays lit. Touch has no hover, but the seam is still drag-
-        // able (the cursor/line are mouse affordances).
-        Opacity = 0f, HoverOpacity = 1f,
         OnRealized = h => _self = h,
         OnPointerDown = OnDown,
         OnDrag = OnMove,
         OnClick = OnReleased,                 // an OnDrag node's click handler IS its release/commit edge (the drag-end)
         OnDragCanceled = OnCanceled,
-        Children = [ new BoxEl { Width = 1f, Grow = 1f, Fill = Tok.TextTertiary with { A = 0.5f } } ],
+        Children = [],
     };
 
     void OnDown(Point2 local)

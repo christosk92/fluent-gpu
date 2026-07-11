@@ -75,12 +75,39 @@ public sealed class PlaybackSession
 
     /// <summary>The next playable track that would surface on advance (user queue head → context row after cursor) — for
     /// fast-track warm-up. Null at the end of the resolved session.</summary>
-    public Track? PeekNext()
+    public QueueEntry? PreviewNext()
     {
-        for (int i = 0; i < _userQueue.Count; i++) if (_userQueue[i].Kind == QueueRowKind.Playable) return _userQueue[i].Track;
-        for (int i = _cursor + 1; i < _context.Count; i++) if (_context[i].Kind == QueueRowKind.Playable) return _context[i].Track;
+        if (_repeat == RepeatMode.Track && _current is { Kind: QueueRowKind.Playable } repeated)
+            return ToEntry(repeated, QueueBucket.NextUp);
+
+        for (int i = 0; i < _userQueue.Count; i++)
+            if (_userQueue[i].Kind == QueueRowKind.Playable)
+                return ToEntry(_userQueue[i], QueueBucket.UserQueue);
+
+        for (int i = _cursor + 1; i < _context.Count; i++)
+        {
+            var item = _context[i];
+            if (item.Kind == QueueRowKind.Delimiter)
+            {
+                if (IsPauseDelimiter(item.Metadata)) return null;
+                continue;
+            }
+            if (item.Kind == QueueRowKind.Playable) return ToEntry(item, QueueBucket.NextUp);
+        }
+
+        if (_repeat == RepeatMode.Context)
+        {
+            for (int i = 0; i < _context.Count; i++)
+            {
+                var item = _context[i];
+                if (item.Kind == QueueRowKind.Delimiter) break;
+                if (item.Kind == QueueRowKind.Playable) return ToEntry(item, QueueBucket.NextUp);
+            }
+        }
         return null;
     }
+
+    public Track? PeekNext() => PreviewNext()?.Track;
 
     /// <summary>The current track's uri + the most-recently-played uris (newest first), for the autoplay seed request.</summary>
     public IReadOnlyList<string> RecentUris(int max)
@@ -133,6 +160,54 @@ public sealed class PlaybackSession
             _context.Add(it);
         }
         if (provider == QueueProvider.Autoplay && !string.IsNullOrEmpty(sourceContextUri)) _autoplayContextUri = sourceContextUri;
+        return Bump();
+    }
+
+    /// <summary>Apple-Music-style "start radio after current" (radio-inspiredby-mix-design §5.4): park a resolved radio
+    /// context so the CURRENTLY-PLAYING track finishes first, then playback flows into the radio on track-end — WITHOUT
+    /// reloading the audio host. The current track's identity is preserved so no reload happens; only ContextUri + the
+    /// up-next change. Two cases (both keep the "cursor points at current" invariant a raw -1 park cannot express):
+    /// <list type="bullet">
+    /// <item>current track IS a radio row (the classic song-radio case — the seed sits at radio[k]) → context = radio,
+    /// cursor = k; the next advance lands on radio[k+1], skipping the duplicate seed;</item>
+    /// <item>current track is absent from the radio (artist radio / a station that doesn't lead with the seed) → the
+    /// current track is prepended and context = [current] ++ radio, cursor = 0; the next advance yields radio[0].</item>
+    /// </list>
+    /// Called only while a track is playing locally (the idle case plays the radio immediately instead).</summary>
+    public QueueSnapshot SwitchContextAfterCurrent(string uri, IReadOnlyList<QueuedTrack> radioTracks)
+    {
+        var current = _current;
+        _naturalOrder.Clear();
+        _context.Clear();
+        _history.Clear();
+        _autoplayContextUri = null;
+        _contextUri = uri;
+
+        // Does the still-playing track sit inside the radio list? Match by uri (the seed identity) — uid-agnostic.
+        int k = -1;
+        if (current is { } cur && !string.IsNullOrEmpty(cur.Track.Uri))
+            for (int i = 0; i < radioTracks.Count; i++)
+                if (radioTracks[i].Uri == cur.Track.Uri) { k = i; break; }
+
+        // current NOT in radio → prepend it (identity preserved) so it plays out, then radio[0] on the next advance.
+        if (k < 0 && current is { } keep)
+        {
+            _naturalOrder.Add(keep);
+            _context.Add(keep);
+        }
+        foreach (var q in radioTracks)
+        {
+            var it = new SessionItem(MintId(), q.Track, q.Uid, QueueProviderExtensions.FromWire(q.Provider),
+                q.RowKind, uri, q.Metadata);
+            _naturalOrder.Add(it);
+            _context.Add(it);
+        }
+
+        _cursor = _context.Count == 0 ? -1 : (k >= 0 ? k : 0);
+        // _current becomes the resident row at the cursor (a radio row whose uri == the playing track in the in-radio
+        // case, or the prepended current itself). Its uri is unchanged in BOTH cases → the controller never reloads audio.
+        _current = _cursor >= 0 && _cursor < _context.Count ? _context[_cursor] : current;
+        if (_shuffle) ReshuffleAnchoringCurrent();
         return Bump();
     }
 

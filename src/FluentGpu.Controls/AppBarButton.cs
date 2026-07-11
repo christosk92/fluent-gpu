@@ -152,9 +152,9 @@ public static class AppBarButton
         // already supplies the 38 lead, so the icon cell keeps its own 12 inset relative to it).
         if (hasIcons)
         {
-            Element icon = cmd.Glyph is { Length: > 0 } g
-                ? new TextEl(g) { Size = 16f, Color = fg, PressedColor = enabled ? s.PressedForeground : fg, DisabledColor = s.DisabledForeground, FontFamily = Theme.IconFont }
-                : new BoxEl();
+            Element icon = IconView.Render(cmd.Icon, 16f, glyphColor: fg,
+                pressedColor: enabled ? s.PressedForeground : fg, disabledColor: s.DisabledForeground,
+                enabled: () => enabled);
             children.Add(new BoxEl
             {
                 Width = 16f, Height = 16f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,

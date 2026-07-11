@@ -549,6 +549,18 @@ popup itself. Opening/closing reveals via a phase-7 `AnimTrack` (flyout fade/sca
   `A11yRaw` (decorative, input-a11y §11.3).
 - **Motion/cursor/RTL:** submenu reveal motion-token; cursor `Arrow`; submenu-open-delay + close-delay timers run in
   the overlay manager's `OnFrameEnd` (input-a11y §4 tooltip/hover-delay timers).
+- **Icons (`IconRef` + ThemedIcon):** a menu/command icon slot is a polymorphic `IconRef` value (NativeAOT-true — no
+  interface/boxing/reflection): a PUA `Glyph` string (implicit conversion — existing glyph call-sites unchanged) with an
+  optional icon-font `Font` override (absorbs the former per-row glyph-font field), OR a layered-vector `ThemedName`
+  (`ThemedIconRegistry` key, wins when registered). One internal render path (`IconView.Render`) routes both:
+  `MenuFlyoutItem.Icon`, `AppBarCommand.Icon`, and the CommandBarFlyout primary/overflow slots. `ThemedIcon.Create(name,
+  size, color, mode, enabled, onAccent)` builds a fixed-size `ZStack` of `IconLayerEl` leaves (one per `IconRole` layer),
+  each with a **bound** `Tint` role-thunk (theming.md role→token table) so a theme/accent swap live-recolors with NO mask
+  re-raster. The masks are CPU-rasterized colorless R8 coverage rendered as `DrawIconMask` on the glyph atlas (NOT the §5
+  tessellation lane); geometry interned in `IconGeometryTable.Shared`. `AppBarCommand.CheckedIcon` + the CommandBar body's
+  `LabeledPrimary` flag give the Win11 Explorer context-menu shape (icon-over-label strip; a checked toggle is
+  accent-tinted on a transparent plate — no accent pill — matching the app's toggle language). The standalone
+  CommandBarFlyout parity control keeps the WinUI icon-only + accent-pill defaults.
 
 ### 6.3 Dialog / Flyout / Popup
 

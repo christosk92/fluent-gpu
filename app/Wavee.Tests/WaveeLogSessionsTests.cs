@@ -174,6 +174,40 @@ public class WaveeLogSessionsTests
     }
 
     [Fact]
+    public void ListPastSessions_WhileWriterHoldsLiveFileOpen()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "wavee-log-tests-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            string live = WriteLog(dir, "wavee.log",
+                "seq=1 tid=2 t=1000 sid=aaaa1111 pid=11 I [app] startup - Wavee starting",
+                "seq=2 tid=2 t=2000 sid=aaaa1111 pid=11 I [connect] a",
+                "seq=1 tid=2 t=9000 sid=bbbb2222 pid=22 I [app] startup - Wavee starting",
+                "seq=2 tid=2 t=9500 sid=bbbb2222 pid=22 I [connect] b");
+
+            // WaveeLog's persistent sink keeps the live file open for append with FileShare.ReadWrite | Delete. Enumerating
+            // it with File.ReadLines (default FileShare.Read) would throw a sharing violation and discard the whole list;
+            // the session walk must still find every past session while that writer handle is held.
+            using var writer = new FileStream(live, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
+
+            var sessions = WaveeLogSessions.ListPastSessions(live, currentPid: -1);
+
+            Assert.Equal(2, sessions.Count);
+            Assert.Equal("bbbb2222", sessions[0].SessionId);   // newest first
+            Assert.Equal(22, sessions[0].Pid);
+            Assert.Equal("aaaa1111", sessions[1].SessionId);
+            Assert.Equal(11, sessions[1].Pid);
+
+            // The session that spans the still-open live file loads its entries too (the read loop, not just the listing).
+            var entries = WaveeLogSessions.LoadSession(sessions[0]);
+            Assert.Equal(2, entries.Length);
+            Assert.Equal("b", entries[^1].Message);
+        }
+        finally { try { Directory.Delete(dir, recursive: true); } catch { } }
+    }
+
+    [Fact]
     public void ExportSessionToFile_LineCountMatchesEntryCount()
     {
         string dir = Path.Combine(Path.GetTempPath(), "wavee-log-tests-" + Guid.NewGuid().ToString("N"));

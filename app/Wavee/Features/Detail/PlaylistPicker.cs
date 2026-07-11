@@ -31,16 +31,7 @@ public sealed class PlaylistPickerButton : Component
         var svc = UseContext(Overlay.Service);
         var getTracks = GetTracks;
 
-        void Toggle()
-        {
-            if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
-            handle.Value = svc.Open(
-                () => anchor.Value,
-                () => Embed.Comp(() => new PlaylistPickerPanel { GetTracks = getTracks, Close = () => handle.Value?.Close() }),
-                FlyoutPlacement.BottomLeft,
-                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
-            handle.Value.ClosedAction = () => handle.Value = null;
-        }
+        void Toggle() => PlaylistPickerLauncher.OpenFlyout(svc, () => anchor.Value, getTracks, handle);
 
         return new BoxEl
         {
@@ -60,6 +51,24 @@ public sealed class PlaylistPickerButton : Component
             OnClick = Toggle,
             Children = [new TextEl(Label) { Size = 14f, Color = Tok.TextPrimary }],
         };
+    }
+}
+
+/// <summary>Shared launcher for the anchored playlist-picker flyout: opens (or toggles) <see cref="PlaylistPickerPanel"/>
+/// below <paramref name="anchor"/> through the overlay service. Used by the rail's <see cref="PlaylistPickerButton"/>
+/// and the vertical hero's More menu — one open path so both stay behavior-identical.</summary>
+internal static class PlaylistPickerLauncher
+{
+    public static void OpenFlyout(IOverlayService svc, Func<NodeHandle> anchor, Func<IReadOnlyList<Track>> getTracks,
+        Ref<OverlayHandle?> handle, FlyoutPlacement placement = FlyoutPlacement.BottomLeft)
+    {
+        if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
+        handle.Value = svc.Open(
+            anchor,
+            () => Embed.Comp(() => new PlaylistPickerPanel { GetTracks = getTracks, Close = () => handle.Value?.Close() }),
+            placement,
+            new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
+        handle.Value.ClosedAction = () => handle.Value = null;
     }
 }
 

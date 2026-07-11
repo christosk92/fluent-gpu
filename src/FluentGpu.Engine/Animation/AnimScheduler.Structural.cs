@@ -122,6 +122,8 @@ public sealed partial class AnimEngine
         bool contracts = ((spec.Axes & SizeAxes.Width) != 0 && toAbs.W < fromAbs.W - 0.5f)
                       || ((spec.Axes & SizeAxes.Height) != 0 && toAbs.H < fromAbs.H - 0.5f);
         TransitionDynamics dyn = Normalize(contracts && spec.ExitDynamics is { } exit ? exit : spec.Dynamics);
+        if (s_motionDiag)
+            Console.Error.WriteLine($"[motion-diag] AnimateBounds node={node.Raw.Index} channels={spec.Channels} size={spec.Size} contracts={contracts} dyn={dyn.Kind}/{dyn.DurationMs:0}ms from=({fromAbs.X:0.0},{fromAbs.Y:0.0},{fromAbs.W:0.0},{fromAbs.H:0.0}) to=({toAbs.X:0.0},{toAbs.Y:0.0},{toAbs.W:0.0},{toAbs.H:0.0})");
         if ((spec.Channels & TransitionChannels.Position) != 0)
         {
             ReframePosition(node, AnimChannel.TranslateX, fromAbs.X - toAbs.X, dyn, spec.DelayMs);
@@ -167,6 +169,7 @@ public sealed partial class AnimEngine
     // or start a fresh spring at +delta springing to 0. Tween: restart from current+delta → 0.
     private void ReframePosition(NodeHandle node, AnimChannel ch, float delta, in TransitionDynamics dyn, float delayMs = 0f)
     {
+        if (s_motionDiag) Console.Error.WriteLine($"[motion-diag]   Reframe node={node.Raw.Index} ch={ch} delta={delta:0.0} found={Find(node, ch) >= 0}");
         if (MathF.Abs(delta) < 0.01f && Find(node, ch) < 0) return;
         if (dyn.Kind == DynamicsKind.Spring)
         {
@@ -192,6 +195,7 @@ public sealed partial class AnimEngine
     // Presented-extent reveal: spring/tween the recorder's drawn size old→new (works for grow and shrink).
     private void RevealSize(NodeHandle node, AnimChannel ch, float fromSize, float toSize, in TransitionDynamics dyn, float delayMs = 0f)
     {
+        if (s_motionDiag) Console.Error.WriteLine($"[motion-diag]   Reveal node={node.Raw.Index} ch={ch} from={fromSize:0.0} to={toSize:0.0} found={Find(node, ch) >= 0}");
         if (MathF.Abs(fromSize - toSize) < 0.5f && Find(node, ch) < 0) return;
         if (dyn.Kind == DynamicsKind.Spring)
             Spring(node, ch, toSize, SpringParams.FromResponse(dyn.Response, dyn.DampingRatio), initial: fromSize, delayMs: delayMs);

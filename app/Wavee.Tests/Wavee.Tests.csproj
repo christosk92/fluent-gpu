@@ -79,8 +79,21 @@
     <Compile Include="..\Wavee\Components\MembershipDiff.cs" />
     <!-- detail layout breakpoint hysteresis (Wavee.Core + BCL only) — DetailLayoutBreakpointTests -->
     <Compile Include="..\Wavee\Features\Detail\DetailLayoutBreakpoints.cs" />
+    <!-- vertical track-detail hero layout resolver (BCL only) — DetailVerticalLayoutTests -->
+    <Compile Include="..\Wavee\Features\Detail\DetailVerticalLayout.cs" />
     <!-- the activity-undo executor (engine-free: IUndoTarget + IMusicLibrary + ActivityLog) — ActivityUndoTests drive it -->
     <Compile Include="..\Wavee\App\ActivityUndo.cs" />
+    <!-- The engine-free core of the context-menu action system (Wavee.Core + BCL only) — Actions/*Tests drive the
+         selection semantics, link building, and enablement rules. SelectionModel (portable, Signals-only) rides the
+         same VirtualCollectionSignalShim; TrackTargetResolver is the one file that consumes it. -->
+    <Compile Include="..\Wavee\Actions\ActionId.cs" />
+    <Compile Include="..\Wavee\Actions\ActionTarget.cs" />
+    <Compile Include="..\Wavee\Actions\ActionRules.cs" />
+    <Compile Include="..\Wavee\Actions\SpotifyLink.cs" />
+    <Compile Include="..\Wavee\Actions\TrackTargetResolver.cs" />
+    <Compile Include="..\..\src\FluentGpu.Controls\SelectionModel.cs" />
+    <!-- the device-gated queue verbs (Wavee.Core + BCL only) — the PlayNext/AddToEnd no-device regression tests -->
+    <Compile Include="..\Wavee\Features\Detail\DetailQueueActions.cs" />
     <!-- artist hero height response (Wavee.Core + BCL only) — ArtistHeroLayoutTests -->
     <Compile Include="..\Wavee\Features\Detail\ArtistHeroLayout.cs" />
     <!-- the live music-video data service (Backend-only deps), source-included so VideoAssociationTests can drive it -->
@@ -93,6 +106,7 @@
     <Compile Include="..\Wavee\SpotifyLive\SpotifyWhatsNewService.cs" />
     <Compile Include="..\Wavee\SpotifyLive\PathfinderClient.cs" />
     <Compile Include="..\Wavee\SpotifyLive\PathfinderResource.cs" />
+    <Compile Include="..\Wavee\SpotifyLive\ExtractedColorCache.cs" />
     <!-- audio resilience surfaces (all protobuf-free) source-included so the key-resolver / provisioner / IPC-manager
          resilience + error paths are unit-tested without referencing the Windows Wavee assembly. -->
     <Compile Include="..\Wavee\SpotifyLive\Audio\ILicenseClient.cs" />
@@ -106,6 +120,13 @@
     <Compile Include="..\Wavee\SpotifyLive\Audio\Host\Dsp\*.cs" />
     <Compile Include="..\Wavee\SpotifyLive\Audio\Runtime\*.cs" />
     <!-- the track resolver (extended-metadata file discovery + Ogg/FLAC selection) — LiveTrackResolverTests drive it -->
+    <!-- Audio output-device state machine + its COM-free contract, and the picker service/model (all engine-independent)
+         source-included so OutputDeviceRouterTests / SessionVolumeSyncTests / DevicePickerItemsTests / ConnectControllerTests
+         drive them without the WASAPI COM interop or the FluentGpu.Engine reference. -->
+    <Compile Include="..\Wavee\SpotifyLive\Audio\AudioDeviceMonitor.cs" />
+    <Compile Include="..\Wavee\SpotifyLive\Audio\OutputDeviceRouter.cs" />
+    <Compile Include="..\Wavee\App\LocalAudioDeviceService.cs" />
+    <Compile Include="..\Wavee\App\DevicePickerModel.cs" />
     <Compile Include="..\Wavee\SpotifyLive\LiveTrackResolver.cs" />
     <Compile Include="..\Wavee\SpotifyLive\LiveContextResolver.cs" />
     <Compile Include="..\Wavee\SpotifyLive\SpotifyClientIdentity.cs" />

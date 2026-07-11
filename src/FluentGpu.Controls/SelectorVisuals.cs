@@ -106,7 +106,7 @@ public static class SelectorVisuals
             Role = AutomationRole.Button,
             Opacity = delta.Opacity ?? (enabled ? 1f : ItemContainer.DisabledOpacity),
             IsEnabled = enabled,
-            OnPointerPressed = args => onInteraction(
+            OnPointerReleased = args => onInteraction(
                 args.ClickCount >= 2 ? ItemContainerTrigger.DoubleTap : ItemContainerTrigger.Tap, args.Mods),
             OnKeyDown = args =>
             {
@@ -228,8 +228,7 @@ public static class SelectorVisuals
             Focusable = true,                              // UseSystemFocusVisuals (:247)
             FocusVisualMargin = Edges4.All(1f),            // FocusVisualMargin = 1 (:248)
             Role = AutomationRole.Button,
-            // Press-edge selection with the modifier chord + Enter/Space kept distinct (the ItemContainer idiom).
-            OnPointerPressed = args => onInteraction(
+            OnPointerReleased = args => onInteraction(
                 args.ClickCount >= 2 ? ItemContainerTrigger.DoubleTap : ItemContainerTrigger.Tap, args.Mods),
             OnKeyDown = args =>
             {
@@ -349,7 +348,7 @@ public static class SelectorVisuals
             Focusable = true,
             FocusVisualMargin = Edges4.All(-3f),              // FocusVisualMargin −3 (:149)
             Role = AutomationRole.Button,
-            OnPointerPressed = args => onInteraction(
+            OnPointerReleased = args => onInteraction(
                 args.ClickCount >= 2 ? ItemContainerTrigger.DoubleTap : ItemContainerTrigger.Tap, args.Mods),
             OnKeyDown = args =>
             {

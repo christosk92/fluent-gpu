@@ -86,6 +86,46 @@ public sealed class PlaybackBridge
     /// action bumps it; the player-bar <c>DevicesButton</c> watches it and opens its flyout.</summary>
     public Signal<int> DevicePickerRequest { get; } = new(0);
 
+    /// <summary>Local (this-computer) audio outputs — the picker's "This computer" section. Null on fake/pre-login backends
+    /// that genuinely have no local audio stack (the UI hides the section, never fakes success). Wired via
+    /// <see cref="AttachLocalOutputs"/> (the AttachStore precedent).</summary>
+    public LocalAudioDeviceService? LocalOutputs { get; private set; }
+    /// <summary>Whether local playback is actually supported (an audio stack is wired) — flips the picker's local rows from
+    /// the stale unconditional "Unavailable" to truthful/enabled.</summary>
+    public Signal<bool> LocalPlaybackSupported { get; } = new(false);
+    /// <summary>The Windows session mute state (Phase B) — drives the volume-button mute glyph.</summary>
+    public Signal<bool> OutputMuted { get; } = new(false);
+
+    /// <summary>Attach the local-output picker service (live bootstrap only; null on fake backends).</summary>
+    public void AttachLocalOutputs(LocalAudioDeviceService service) => LocalOutputs = service;
+
+    /// <summary>A device-topology notice (loss / fallback / auto-return / output-failed) → a caution toast whose action
+    /// opens the device picker. Marshalled to the UI thread; no-op before <see cref="Activate"/>.</summary>
+    public void NotifyOutputDeviceNotice(OutputDeviceNotice n)
+    {
+        if (_post is not { } post) return;
+        post(() =>
+        {
+            string name = string.IsNullOrEmpty(n.DeviceName) ? Loc.Get(Strings.Player.SystemDefault) : n.DeviceName;
+            string msg = n.Kind switch
+            {
+                OutputDeviceNoticeKind.DeviceLost => Strings.Player.DeviceLost(name),
+                OutputDeviceNoticeKind.SwitchedToDefault => Strings.Player.DeviceSwitched(name),
+                OutputDeviceNoticeKind.DeviceRestored => Strings.Player.DeviceRestored(name),
+                _ => Loc.Get(Strings.Player.OutputFailed),
+            };
+            Toasts.Show(msg, ToastSeverity.Caution, Loc.Get(Strings.Player.ChooseDevice),
+                () => DevicePickerRequest.Value = DevicePickerRequest.Peek() + 1);
+        });
+    }
+
+    /// <summary>Reflect the Windows session mute state (Phase B4). Marshalled to the UI thread; no-op before Activate.</summary>
+    public void NotifyOutputMuted(bool muted)
+    {
+        if (_post is not { } post) { OutputMuted.Value = muted; return; }
+        post(() => OutputMuted.Value = muted);
+    }
+
     /// <summary>Monotonic "open playback runtime setup" request — banner/toast CTAs bump it; ProfileMenu Settings watches it.</summary>
     public Signal<int> OpenPlaybackRuntimeSetup { get; } = new(0);
 

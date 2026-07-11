@@ -21,6 +21,43 @@ public class QueueSessionTests
 
     static bool IsTrack(QueueEntry e, string id) => e.Track.Uri == "spotify:track:" + id;
 
+    // ── radio "switch after current" (radio-inspiredby-mix-design §5.4) — park keeps cursor==current; no reload ────────
+    [Fact]
+    public void SwitchContextAfterCurrent_CurrentInRadio_KeepsCurrent_AndSkipsDuplicateOnAdvance()
+    {
+        var s = new PlaybackSession();
+        s.SetContext("spotify:playlist:p", Ctx("a", "b"), 0);   // playing "a"
+        var before = s.Current;
+
+        var radio = Ctx("a", "x", "y");                          // the seed "a" leads the radio (classic song-radio)
+        var snap = s.SwitchContextAfterCurrent("spotify:playlist:radio", radio);
+
+        Assert.Equal("spotify:playlist:radio", snap.ContextUri);
+        Assert.True(IsTrack(snap.Current!, "a"));                // still "a" → its uri is unchanged, so no audio reload
+        Assert.Equal(before!.Uri, s.Current!.Uri);
+        Assert.True(IsTrack(snap.Upcoming[0], "x"));             // up-next is the radio tail, NOT the duplicate seed
+
+        var next = s.Next();                                     // track-end flow
+        Assert.True(IsTrack(next!.Current!, "x"));               // duplicate "a" skipped
+    }
+
+    [Fact]
+    public void SwitchContextAfterCurrent_CurrentNotInRadio_PrependsCurrent_FlowsToRadioZero()
+    {
+        var s = new PlaybackSession();
+        s.SetContext("spotify:playlist:p", Ctx("a", "b"), 0);   // playing "a"
+
+        var radio = Ctx("x", "y");                               // artist radio: "a" not present
+        var snap = s.SwitchContextAfterCurrent("spotify:playlist:radio", radio);
+
+        Assert.True(IsTrack(snap.Current!, "a"));                // current preserved (no reload)
+        Assert.Equal("spotify:playlist:radio", snap.ContextUri);
+        Assert.True(IsTrack(snap.Upcoming[0], "x"));             // radio[0] is up next
+
+        var next = s.Next();
+        Assert.True(IsTrack(next!.Current!, "x"));               // flows into radio[0] on track-end
+    }
+
     // ── §4.3 — skip-to-upcoming keeps the user queue; previous current → history; skipped rows do NOT enter history ──
     [Fact]
     public void SkipToUpcoming_KeepsUserQueue_AndDoesNotHistorizeSkipped()
@@ -224,5 +261,48 @@ public class QueueSessionTests
         Assert.Equal(-1, ContextResolve.ResolveStartIndex(tracks,
             new ContextSpec("spotify:playlist:p", null, null, null, "missing-uid", null)));
         Assert.Equal(-1, ContextResolve.FindStartIndex(tracks, null, "missing-uid"));
+    }
+
+    [Fact]
+    public void PreviewNext_IsNonMutating_AndMatchesNextIdentity()
+    {
+        var s = new PlaybackSession();
+        s.SetContext("spotify:playlist:p", Ctx("a", "b", "c"), 0);
+        s.EnqueueUser(new[] { Q("q1") });
+        long revision = s.Snapshot().Revision;
+
+        var preview = s.PreviewNext();
+
+        Assert.NotNull(preview);
+        Assert.True(IsTrack(preview!, "q1"));
+        Assert.Equal(revision, s.Snapshot().Revision);
+        Assert.Equal(preview.ItemId, s.Next()!.Current!.ItemId);
+    }
+
+    [Fact]
+    public void PreviewNext_MirrorsRepeatTrack_RepeatContext_AndPauseDelimiter()
+    {
+        var repeatTrack = new PlaybackSession();
+        repeatTrack.SetContext("spotify:playlist:p", Ctx("a", "b"), 0);
+        repeatTrack.SetRepeat(RepeatMode.Track);
+        Assert.Equal(repeatTrack.Snapshot().Current!.ItemId, repeatTrack.PreviewNext()!.ItemId);
+        Assert.Equal(repeatTrack.PreviewNext()!.ItemId, repeatTrack.Next()!.Current!.ItemId);
+
+        var repeatContext = new PlaybackSession();
+        repeatContext.SetContext("spotify:playlist:p", Ctx("a", "b"), 1);
+        repeatContext.SetRepeat(RepeatMode.Context);
+        Assert.True(IsTrack(repeatContext.PreviewNext()!, "a"));
+        Assert.Equal(repeatContext.PreviewNext()!.ItemId, repeatContext.Next()!.Current!.ItemId);
+
+        var stopped = new PlaybackSession();
+        stopped.SetContext("spotify:playlist:p", Ctx("a"), 0);
+        stopped.AppendContextPage(new[]
+        {
+            new QueuedTrack(T("delimiter"), "", "context",
+                new Dictionary<string, string> { ["advancing_past_track"] = "pause" }, QueueRowKind.Delimiter),
+            Q("hidden"),
+        }, QueueProvider.Context, null);
+        Assert.Null(stopped.PreviewNext());
+        Assert.Null(stopped.Next()!.Current);
     }
 }

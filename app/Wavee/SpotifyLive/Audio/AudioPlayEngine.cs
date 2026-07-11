@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net.Http;
 using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.Marshalling;
 using Wavee.Backend;
 using Wavee.Backend.Audio;
 using Wavee.Backend.Spotify;
@@ -9,9 +10,11 @@ using Wavee.SpotifyLive.Audio.Host.Dsp;
 namespace Wavee.SpotifyLive.Audio;
 
 /// <summary>Host-side play engine: fetch → AES-CTR decrypt → decode (Vorbis via vendored NVorbis, FLAC via FlacBox) →
-/// WASAPI. Minimal first cut (whole-file body); true instant-start-from-head and progressive/.enc caching are follow-ups.
-/// Single decode thread paced by the blocking WASAPI Write; control (Play/Pause/Seek/Volume) is thread-safe through the
-/// renderer's lock.</summary>
+/// WASAPI. Owns ONE WASAPI renderer + EQ/limiter/session-COM and drives one or two <see cref="DecodePipeline"/>s from a
+/// single output thread. A crossfade decodes both sources and equal-power mixes them PER SAMPLE in the output loop
+/// (sample-accurate, pause-aware), so there is no second WASAPI stream and no cross-thread COM churn. The fade envelope
+/// is baked at Write time in the queued (<see cref="WasapiRenderer.ReleasedFrames"/>) domain — a block written now is
+/// heard ~one buffer later, and ReleasedFrames stalls while paused, making the fade inherently pause-aware.</summary>
 internal sealed class AudioPlayEngine : IDisposable
 {
     const int RendererBufferMs = 800;
@@ -30,29 +33,66 @@ internal sealed class AudioPlayEngine : IDisposable
     readonly object _gate = new();
     readonly Timer _tick;
 
-    ISampleSource? _reader;
-    IAudioReadStream? _stream;   // the decode stream (Spotify encrypted OR plain-HTTP external); disposed by StopDecode
-    Thread? _decodeThread;
-    CancellationTokenSource? _cts;
+    // ── output-device routing + Windows session volume (Phase A/B) ────────────────────────────────────────────────────
+    static readonly Guid WaveeVolumeContext = Guid.NewGuid();   // per-process; our own session sets carry it so the sink filters echoes
+    static readonly Guid IID_IAudioSessionEvents = new("24918ACC-64B3-37C1-8CA9-74A66E9957A8");
+    static readonly StrategyBasedComWrappers SessionComWrappers = new();
+    readonly IAudioDeviceMonitor _monitor;
+    readonly OutputDeviceRouter _router;
+    readonly AudioSessionEventsSink _sessionSink;
+    readonly IntPtr _sessionSinkPtr;
+    double _volumeSlider = 1.0;
 
-    ReadOnlyMemory<byte> _pendingHead;
-    string _fileIdHex = "";
-    string _format = "OggVorbis320";   // AudioFormat name string (over IPC); remembered from LoadFastStart (SupplyBody carries none)
-    float _gainLinear = 1f;
-    long _durationMs;                  // expected track length — lets the natural-EOF log flag a head-only early finish
+    sealed record PendingReroute(string? DeviceId, bool PauseFirst);
+    PendingReroute? _pendingReroute;   // consumed via Interlocked.Exchange at output-loop top
+
+    // ── the two decode pipelines + the single output thread ───────────────────────────────────────────────────────────
+    DecodePipeline? _current;
+    DecodePipeline? _incoming;
+    Thread? _outputThread;
+    CancellationTokenSource? _outputCts;
+
+    long _renderBaseFrames;        // ReleasedFrames value at which the CURRENT track's frame 0 sits (re-based on promotion)
+    long _overlapReleasedBase;     // ReleasedFrames captured when an active fade began (frame 0 of the fade)
+    long _overlapFadeFrames;       // fadeMs·rate/1000 — the fade length in queued frames
+    bool _overlapActive;           // a per-sample crossfade is in flight
+
+    // The pipeline being faded IN. Held here (not in _incoming) once an overlap starts so the _incoming slot is free for
+    // the controller to prepare the FOLLOWING track during the fade (it schedules that as soon as it sees Started).
+    DecodePipeline? _overlapIncoming;
+    string _overlapToken = "";
+    string _overlapTrackUri = "";
+    int _overlapFadeMs;
+
+    // Incoming metadata (mirrors the old prepared-slot fields; the engine now originates the Transition events).
+    string _incomingToken = "";
+    string _incomingTrackUri = "";
+    long _incomingDurationMs;
+    int _incomingFadeMs;
+    volatile bool _incomingBodySupplied;
+
+    string _fileIdHex = "";        // active file (for logging / MMCSS naming)
     long _loadStartTicks;
-    long _seekBaseMs;
-    long _pendingSeekMs = -1;
+    long _pendingSeekMs = -1;      // engine-level: applies to whatever pipeline is current when consumed
     volatile bool _playing;
     volatile bool _prebuffering;
     volatile bool _buffering;
     volatile bool _rendererPrimed;
+    volatile bool _disposed;
 
     public event Action<AudioHostSignal>? State;
+    /// <summary>The active track ended and there was nothing to promote (→ host emits Ended).</summary>
     public event Action? TrackFinished;
+    /// <summary>Crossfade/gapless hand-off notices (Started/Completed/Missed) — the engine originates these now.</summary>
+    public event Action<AudioTransitionSignal>? Transition;
+    /// <summary>Device loss / fallback / auto-return / output-failed notices (fires even while idle).</summary>
+    public event Action<OutputDeviceNotice>? DeviceNotice;
+    /// <summary>An EXTERNAL Windows session-volume change (slider01, muted) to reflect in the UI (Phase B).</summary>
+    public event Action<double, bool>? SessionVolumeChanged;
 
     public AudioPlayEngine(WaveeLogger log, Func<string, byte[], CdnDecryptor?>? nativeDecryptorFactory = null,
-        AudioBodyDiskCache? bodyDisk = null, HttpClient? http = null, bool ownsHttp = false)
+        AudioBodyDiskCache? bodyDisk = null, HttpClient? http = null, bool ownsHttp = false,
+        IAudioDeviceMonitor? monitor = null)
     {
         _http = http ?? HttpPools.Get(HttpPool.Cdn);
         _ownsHttp = ownsHttp;
@@ -60,236 +100,151 @@ internal sealed class AudioPlayEngine : IDisposable
         _nativeDecryptorFactory = nativeDecryptorFactory ?? ((_, _) => null);
         _bodyDisk = bodyDisk;
         _tick = new Timer(_ => { if (_playing) RaiseState(); }, null, 1000, 1000);
-    }
 
-    public void LoadFastStart(in AudioFastStart cmd)
-    {
-        StopDecode();
-        _pendingHead = cmd.HeadBytes;
-        _fileIdHex = cmd.FileIdHex;
-        _format = cmd.Format.ToString();
-        _gainLinear = DbToLinear(cmd.NormalizationGainDb);
-        Volatile.Write(ref _durationMs, cmd.DurationMs);   // read by Seek() from other threads (the clamp)
-        _loadStartTicks = Stopwatch.GetTimestamp();
-        _rendererPrimed = false;
-        _prebuffering = _pendingHead.Length > 0;
-        _buffering = _pendingHead.Length == 0;
-        _log.Info($"load-fast-start {cmd.FileIdHex}: head={_pendingHead.Length}B fmt={_format} dur={_durationMs}ms gain={cmd.NormalizationGainDb:0.0}dB");
-        _seekBaseMs = 0;
-        var stream = SpotifyAudioStream.CreateHeadOnly(_http, _pendingHead, _pendingHead.Length, cmd.FileIdHex, _log, _bodyDisk);
-        if (_pendingHead.Length > 0)
-            StartDecode(stream, cmd.FileIdHex, _pendingHead, _format);
-        else
+        _monitor = monitor ?? new WasapiAudioDeviceMonitor(log);
+        _router = new OutputDeviceRouter(_monitor, log, () => Environment.TickCount64);
+        _router.RouteInvalidated += r =>
         {
-            _log.Info($"load-fast-start {cmd.FileIdHex}: no clear head available; waiting for CDN body before decoder construction");
-            lock (_gate)
-            {
-                _stream = stream;
-                _reader = null;
-                _seekBaseMs = 0;
-            }
-        }
-        RaiseState();
-    }
+            _log.Info($"audio.device reroute reason={r.Reason} target={r.TargetDeviceId ?? "(default)"} pauseFirst={r.PauseFirst}");
+            Interlocked.Exchange(ref _pendingReroute, new PendingReroute(r.TargetDeviceId, r.PauseFirst));
+        };
+        _router.Notice += n => { try { DeviceNotice?.Invoke(n); } catch (Exception ex) { _log.Info("audio.device notice dispatch failed: " + ex.Message); } };
 
-    public void SupplyBody(in AudioStreamHandle cmd) => _ = StartBodyAsync(cmd);
-
-    async Task StartBodyAsync(AudioStreamHandle cmd)
-    {
-        SpotifyAudioStream? stream = null;
-        var cdnUrls = Array.Empty<string>();
-        var keyBytes = 0;
-        var nativeSeedBytes = 0;
-        var startDecode = false;
+        // The per-session events sink (Phase B). Its CCW is registered on every renderer session (re-registered per Init).
+        _sessionSink = new AudioSessionEventsSink(WaveeVolumeContext, OnExternalSessionVolume, OnSessionDisconnected);
         try
         {
-            lock (_gate)
-            {
-                if (_fileIdHex.Length != 0 && !string.Equals(_fileIdHex, cmd.FileIdHex, StringComparison.OrdinalIgnoreCase))
-                {
-                    _log.Info($"supply-body {cmd.FileIdHex}: ignored stale body for active file {_fileIdHex}");
-                    return;
-                }
-            }
-
-            if (IsExternalMp3(cmd))
-            {
-                await StartExternalMp3Async(cmd).ConfigureAwait(false);
-                return;
-            }
-
-            var key = cmd.Key.ToArray();
-            var nativeSeed = cmd.NativeCdnSeed.ToArray();
-            keyBytes = key.Length;
-            nativeSeedBytes = nativeSeed.Length;
-            var nativeDecryptor = nativeSeed.Length == 0 ? null : _nativeDecryptorFactory(cmd.FileIdHex, nativeSeed);
-            if (nativeSeed.Length > 0 && nativeDecryptor is null)
-            {
-                _log.Info($"supply-body {cmd.FileIdHex}: native seed present ({nativeSeed.Length}B) but no native CDN decryptor is available");
-                throw new InvalidOperationException("native PlayPlay CDN seed was supplied, but no matching native decryptor is available");
-            }
-            cdnUrls = cmd.CdnUrls ?? Array.Empty<string>();
-            bool headDecodeActive;
-            lock (_gate) headDecodeActive = _pendingHead.Length > 0 && _decodeThread is { IsAlive: true };
-            if (headDecodeActive)
-                _log.Info($"supply-body {cmd.FileIdHex}: attaching body while head decode is active; keeping head playback state");
-            else
-            {
-                _buffering = true; _prebuffering = false; RaiseState();
-            }
-            _log.Info($"supply-body {cmd.FileIdHex}: mirrors={cdnUrls.Length} headBoundary={cmd.HeadBoundary}B key={key.Length}B nativeSeed={nativeSeed.Length}B");
-
-            lock (_gate)
-            {
-                if (_fileIdHex.Length != 0 && !string.Equals(_fileIdHex, cmd.FileIdHex, StringComparison.OrdinalIgnoreCase))
-                {
-                    _log.Info($"supply-body {cmd.FileIdHex}: ignored stale body for active file {_fileIdHex}");
-                    return;
-                }
-
-                stream = _stream as SpotifyAudioStream;   // Spotify-only path (external returned above); recover the head-only stream
-                if (stream is null)
-                {
-                    stream = SpotifyAudioStream.CreateHeadOnly(_http, _pendingHead, cmd.HeadBoundary, cmd.FileIdHex, _log, _bodyDisk);
-                }
-                startDecode = _decodeThread is null || !_decodeThread.IsAlive;
-            }
-            if (startDecode)
-                _log.Info($"supply-body {cmd.FileIdHex}: decoder is waiting for body; will start after attach+key-check");
-
-            var lazyAttach = !startDecode && _pendingHead.Length > 0;
-            if (nativeDecryptor is null)
-            {
-                if (lazyAttach)
-                    await stream.AttachBodyLazyAsync(key, cdnUrls, null, CancellationToken.None).ConfigureAwait(false);
-                else
-                    await stream.AttachBodyAsync(key, cdnUrls, null, CancellationToken.None).ConfigureAwait(false);
-            }
-            else
-            {
-                if (lazyAttach)
-                    await stream.AttachBodyWithNativeDecryptorLazyAsync(nativeDecryptor, cdnUrls, null, CancellationToken.None).ConfigureAwait(false);
-                else
-                    await stream.AttachBodyWithNativeDecryptorAsync(nativeDecryptor, cdnUrls, null, CancellationToken.None).ConfigureAwait(false);
-            }
-
-            var knownSize = stream.KnownSize;
-            _log.Info($"body stream attached: cdn size={(knownSize > 0 ? knownSize + "B" : "pending")} (clear head={cmd.HeadBoundary}B; ranged CDN; mode={(lazyAttach ? "lazy" : "eager")})");
-
-            if (lazyAttach)
-                StartLazyKeyCheck(stream, cmd.FileIdHex, keyBytes, nativeSeedBytes);
-            else
-                ValidateKeyOrThrow(stream, cmd.FileIdHex, keyBytes, nativeSeedBytes);
-
-            if (startDecode)
-            {
-                _log.Info($"supply-body {cmd.FileIdHex}: starting decoder after body attach");
-                StartDecode(stream, cmd.FileIdHex, _pendingHead, _format);
-            }
-        }
-        catch (Exception ex)
-        {
-            if (stream is null)
-            {
-                lock (_gate)
-                {
-                    if (_fileIdHex.Length == 0 || string.Equals(_fileIdHex, cmd.FileIdHex, StringComparison.OrdinalIgnoreCase))
-                        stream = _stream as SpotifyAudioStream;
-                }
-            }
-            try { stream?.AbortBody(ex); } catch { }
-            string active;
-            lock (_gate) active = _fileIdHex;
-            _log.Info($"supply body failed file={cmd.FileIdHex} active={active} head={_pendingHead.Length}B mirrors={cdnUrls.Length} key={keyBytes}B nativeSeed={nativeSeedBytes}B startDecode={startDecode}: {ex.GetType().Name}: {ex.Message}");
-        }
-    }
-
-    static bool IsExternalMp3(in AudioStreamHandle cmd) =>
-        cmd.SourceKind == AudioSourceKind.ExternalPlain && cmd.Format == AudioFormat.Mp3
-        && cmd.CdnUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase);
-
-    async Task StartExternalMp3Async(AudioStreamHandle cmd)
-    {
-        StopDecode();
-        _fileIdHex = cmd.FileIdHex;
-        _format = "Mp3";
-        _gainLinear = 1f;
-        Volatile.Write(ref _durationMs, cmd.DurationMs);
-        _loadStartTicks = Stopwatch.GetTimestamp();
-        _rendererPrimed = false;
-        _prebuffering = false;
-        _buffering = true;
-        _seekBaseMs = 0;
-        _log.Info($"supply-body external MP3 host={WaveeLogRedaction.UrlHost(cmd.CdnUrl)} dur={cmd.DurationMs}ms");
-        RaiseState();
-        var httpStream = await ExternalMp3Stream.OpenAsync(_http, cmd.CdnUrl, _log).ConfigureAwait(false);
-        var kind = PickExternalDecoderKind(httpStream.ContentType) ?? SniffMagicKind(httpStream);
-        if (kind is null)
-        {
-            _log.Warn($"external audio host={WaveeLogRedaction.UrlHost(cmd.CdnUrl)}: unsupported codec (content-type={httpStream.ContentType ?? "?"}) — no vendored decoder (Vorbis/MP3/FLAC only)");
-            try { httpStream.Dispose(); } catch { }
-            _buffering = false; RaiseState();
-            return;
-        }
-        StartDecodeThread(httpStream, cmd.FileIdHex, kind.Value, skipOffset: 0);   // unified decode path (no head, no decrypt)
-    }
-
-    static DecoderKind? PickExternalDecoderKind(string? contentType)
-    {
-        if (string.IsNullOrEmpty(contentType)) return null;
-        var ct = contentType.ToLowerInvariant();
-        if (ct.Contains("mpeg") || ct.Contains("mp3")) return DecoderKind.Mp3;
-        if (ct.Contains("ogg") || ct.Contains("vorbis")) return DecoderKind.Vorbis;
-        if (ct.Contains("flac")) return DecoderKind.Flac;
-        return null;   // aac / mp4 / x-m4a / unknown → try magic bytes, else fail cleanly (no AAC decoder vendored)
-    }
-
-    DecoderKind? SniffMagicKind(PlainHttpAudioStream stream)
-    {
-        var probe = new byte[16];
-        int n;
-        try { n = stream.Read(probe, 0, probe.Length); }
-        catch (Exception ex) { _log.Info($"external audio magic sniff read failed: {ex.Message}"); return null; }
-        try { stream.Seek(0, SeekOrigin.Begin); } catch { }
-        if (n < 4) return null;
-        if (probe[0] == (byte)'I' && probe[1] == (byte)'D' && probe[2] == (byte)'3') return DecoderKind.Mp3;   // ID3v2
-        if (probe[0] == 0xFF && (probe[1] & 0xE0) == 0xE0) return DecoderKind.Mp3;                              // MPEG frame sync
-        if (probe[0] == (byte)'O' && probe[1] == (byte)'g' && probe[2] == (byte)'g' && probe[3] == (byte)'S') return DecoderKind.Vorbis;
-        if (probe[0] == (byte)'f' && probe[1] == (byte)'L' && probe[2] == (byte)'a' && probe[3] == (byte)'C') return DecoderKind.Flac;
-        return null;
-    }
-
-    void StartLazyKeyCheck(SpotifyAudioStream stream, string fileIdHex, int keyBytes, int nativeSeedBytes)
-    {
-        _ = Task.Run(() =>
-        {
+            IntPtr unknown = SessionComWrappers.GetOrCreateComInterfaceForObject(_sessionSink, CreateComInterfaceFlags.None);
             try
             {
-                ValidateKeyOrThrow(stream, fileIdHex, keyBytes, nativeSeedBytes);
+                Guid iid = IID_IAudioSessionEvents;
+                int hr = Marshal.QueryInterface(unknown, in iid, out IntPtr sessionEvents);
+                if (hr < 0 || sessionEvents == IntPtr.Zero)
+                    Marshal.ThrowExceptionForHR(hr < 0 ? hr : unchecked((int)0x80004002));
+                _sessionSinkPtr = sessionEvents;
             }
-            catch (Exception ex)
-            {
-                try { stream.AbortBody(ex); } catch { }
-                _log.Info($"lazy key check failed {fileIdHex}: {ex.GetType().Name}: {ex.Message}");
-            }
-        });
-    }
-
-    void ValidateKeyOrThrow(SpotifyAudioStream stream, string fileIdHex, int keyBytes, int nativeSeedBytes)
-    {
-        // Prove the key decrypts the body before the decoder reaches CDN bytes. The clear head is not used as the
-        // oracle here; match WaveeMusic by validating decrypted container magic at byte 0 or after the 0xa7 header.
-        if (stream.TryValidateKey(_format, out var keyDetail))
-        {
-            _log.Info($"key check {fileIdHex}: OK - {keyDetail}");
-            return;
+            finally { Marshal.Release(unknown); }
+            _renderer.RegisterSessionEvents(_sessionSinkPtr);
         }
-
-        _log.Info($"KEY CHECK FAILED {fileIdHex}: format={_format} head={_pendingHead.Length}B key={keyBytes}B nativeSeed={nativeSeedBytes}B detail={keyDetail}");
-        if (stream is SpotifyAudioStream sas) sas.InvalidateBodyCache();
-        throw new InvalidOperationException("audio key validation failed: " + keyDetail);
+        catch (Exception ex) { _log.Info("audio.device session-events registration failed: " + ex.Message); }
     }
 
+    void OnExternalSessionVolume(double slider01, bool muted)
+    {
+        _volumeSlider = slider01;   // keep the cache in sync so a later re-init re-applies the right value
+        try { SessionVolumeChanged?.Invoke(slider01, muted); } catch (Exception ex) { _log.Info("audio.device external-volume dispatch failed: " + ex.Message); }
+    }
+
+    void OnSessionDisconnected() => _router.ReportDeviceInvalidated();   // belt-and-braces beside IMMNotificationClient
+
+    /// <summary>Choose the output endpoint (null/empty = system default). Callable while idle — the next Init resolves via
+    /// the router; while playing, the router posts a re-route to the output thread.</summary>
+    public void SetOutputDevice(string? deviceId) => _router.SetDesired(string.IsNullOrEmpty(deviceId) ? null : deviceId);
+
+    public void SetOutputMuted(bool muted) => _renderer.SetSessionMute(muted, in WaveeVolumeContext);
+
+    void ApplyPostInitSession()
+    {
+        // Re-apply the cached slider through the session boundary (a new session per Init); events are re-registered by
+        // the renderer. Session scalar = slider cubed (VolumeTaper.Amplitude) — acoustically identical to the old
+        // per-sample multiply, now bijective for two-way sync.
+        try { _renderer.SetSessionVolume(VolumeTaper.Amplitude((float)_volumeSlider), in WaveeVolumeContext); } catch { }
+    }
+
+    // ── active-track lifecycle ────────────────────────────────────────────────────────────────────────────────────────
+    public void LoadFastStart(in AudioFastStart cmd)
+    {
+        ReportSupersededOverlap("active load superseded prepared next");
+        StopOutput();
+        var pipeline = new DecodePipeline(_log, _nativeDecryptorFactory, _bodyDisk, _http);
+        pipeline.Load(cmd);
+        _fileIdHex = cmd.FileIdHex;
+        _loadStartTicks = Stopwatch.GetTimestamp();
+        _rendererPrimed = false;
+        bool hasHead = cmd.HeadBytes.Length > 0;
+        _prebuffering = hasHead;
+        _buffering = !hasHead;
+        var cts = new CancellationTokenSource();
+        var thread = new Thread(() => OutputThreadMain(cts.Token))
+        {
+            IsBackground = true,
+            Name = "wavee-output",
+            Priority = ThreadPriority.AboveNormal,
+        };
+        lock (_gate)
+        {
+            _current = pipeline;
+            _incoming = null;
+            _overlapActive = false;
+            _renderBaseFrames = 0;
+            _pendingSeekMs = -1;
+            _outputCts = cts;
+            _outputThread = thread;
+        }
+        thread.Start();
+        RaiseState();
+    }
+
+    public void SupplyBody(in AudioStreamHandle cmd)
+    {
+        var current = _current;
+        if (current is null) return;
+        var handle = cmd;
+        _ = current.SupplyBodyAsync(handle);
+    }
+
+    // ── prepared-next (incoming) lifecycle ────────────────────────────────────────────────────────────────────────────
+    public void PrepareIncoming(in AudioPrepareRequest request, int fadeMs)
+    {
+        var pipeline = new DecodePipeline(_log, _nativeDecryptorFactory, _bodyDisk, _http);
+        try { pipeline.Load(request.Start); }   // head load only; NO decoder build, NO renderer touch
+        catch { pipeline.Dispose(); throw; }
+        DecodePipeline? replaced;
+        lock (_gate)
+        {
+            replaced = _incoming;
+            _incoming = pipeline;
+            _incomingBodySupplied = false;
+            _incomingToken = request.Token;
+            _incomingTrackUri = request.Start.TrackUri;
+            _incomingDurationMs = request.Start.DurationMs;
+            _incomingFadeMs = Math.Max(0, fadeMs);
+        }
+        replaced?.Dispose();
+        _log.Info($"audio prepared-next token={request.Token} track={request.Start.TrackUri} overlap={request.AllowOverlap} fade={_incomingFadeMs}ms");
+    }
+
+    public void SupplyIncomingBody(string token, in AudioStreamHandle body)
+    {
+        DecodePipeline? pipeline;
+        lock (_gate)
+        {
+            pipeline = _incoming;
+            if (pipeline is null || !string.Equals(_incomingToken, token, StringComparison.Ordinal)) return;
+            _incomingBodySupplied = true;
+        }
+        var handle = body;
+        _ = pipeline.SupplyBodyAsync(handle);
+    }
+
+    public AudioPrepareCancelResult CancelIncoming(string token)
+    {
+        DecodePipeline? cancelled;
+        lock (_gate)
+        {
+            if (_overlapActive && string.Equals(_overlapToken, token, StringComparison.Ordinal))
+                return AudioPrepareCancelResult.AlreadyStarted;   // the hand-off is already committed
+            if (_incoming is null || !string.Equals(_incomingToken, token, StringComparison.Ordinal))
+                return AudioPrepareCancelResult.NotFound;
+            cancelled = _incoming;
+            _incoming = null;
+            ClearIncomingMetadataLocked();
+        }
+        cancelled?.Dispose();
+        return AudioPrepareCancelResult.Cancelled;
+    }
+
+    // ── transport ─────────────────────────────────────────────────────────────────────────────────────────────────────
     public void Play()
     {
         _playing = true;
@@ -297,103 +252,127 @@ internal sealed class AudioPlayEngine : IDisposable
         else _log.Info($"play intent accepted for {_fileIdHex}: waiting for first PCM buffer before starting renderer");
         RaiseState();
     }
+
     public void Pause() { _playing = false; _renderer.Pause(); RaiseState(); }
-    public void Stop() { _playing = false; StopDecode(); _seekBaseMs = 0; RaiseState(); }
+
+    public void Stop()
+    {
+        _playing = false;
+        ReportSupersededOverlap("stop");
+        StopOutput();
+        RaiseState();
+    }
+
+    // Mirror the old CancelSecondary rule: a manual load/stop reports Missed ONLY for an IN-FLIGHT fade (an already-
+    // committed hand-off), never for a merely-prepared-not-started incoming (that one is dropped silently).
+    void ReportSupersededOverlap(string reason)
+    {
+        string? token = null, uri = null; long pos = 0;
+        lock (_gate)
+        {
+            if (_overlapActive && _overlapIncoming is not null) { token = _overlapToken; uri = _overlapTrackUri; pos = PositionMs; }
+        }
+        if (token is not null) EmitTransition(new AudioTransitionSignal(AudioTransitionKind.Missed, token, uri!, pos, 0, reason));
+    }
+
     public void Seek(long ms)
     {
-        // Clamp into the track. A target at/past the end (a stale-duration UI, a race with a track change) would make
-        // the decoder bisect to EOF and fail the seek; landing just shy of the end still finishes the track naturally.
-        var dur = Volatile.Read(ref _durationMs);
+        // Clamp into the current track. A target at/past the end would make the decoder bisect to EOF and fail the seek;
+        // landing just shy of the end still finishes the track naturally.
+        var current = _current;
+        var dur = current?.DurationMs ?? 0;
         if (dur > 0 && ms > dur - EndSeekGuardMs) ms = dur - EndSeekGuardMs;
         Interlocked.Exchange(ref _pendingSeekMs, Math.Max(0, ms));
     }
-    public void SetVolume(double v) => _renderer.SetVolume((float)v);
+
+    public void SetVolume(double v)
+    {
+        _volumeSlider = Math.Clamp(v, 0, 1);
+        _renderer.SetSessionVolume(VolumeTaper.Amplitude((float)_volumeSlider), in WaveeVolumeContext);
+    }
+
     public void SetEqualizer(EqualizerSettings settings) => _equalizer.Configure(settings);
 
-    // Spotify entry: compute the 0xa7-header skip + codec from the clear head, then start the shared decode thread.
-    void StartDecode(SpotifyAudioStream stream, string fileIdHex, ReadOnlyMemory<byte> head, string format)
-    {
-        int skipOffset = DetectSkipOffset(head.Span, format);   // 0 or the 167-byte Spotify header
-        var kind = format is "Flac" or "Flac24" ? DecoderKind.Flac : DecoderKind.Vorbis;
-        StartDecodeThread(stream, fileIdHex, kind, skipOffset);
-    }
+    /// <summary>True while a Seek() target has been posted but not yet consumed by the output loop.</summary>
+    public bool HasPendingSeek => Volatile.Read(ref _pendingSeekMs) >= 0;
 
-    enum DecoderKind { Vorbis, Flac, Mp3 }
-
-    static ISampleSource CreateDecoder(Stream skip, DecoderKind kind) => kind switch
+    public long PositionMs
     {
-        DecoderKind.Flac => new FlacSampleSource(skip),
-        DecoderKind.Mp3 => new Mp3SampleSource(skip),
-        _ => new VorbisSampleSource(skip),
-    };
-
-    // The single decode entry for BOTH sources — Spotify encrypted CDN and plain-HTTP external.
-    void StartDecodeThread(IAudioReadStream stream, string fileIdHex, DecoderKind kind, int skipOffset)
-    {
-        var cts = new CancellationTokenSource();
-        var thread = new Thread(() => DecodeThreadMain(stream, fileIdHex, kind, skipOffset, cts))
+        get
         {
-            IsBackground = true,
-            Name = "wavee-decode",
-            Priority = ThreadPriority.AboveNormal,
-        };
-
-        lock (_gate)
-        {
-            _stream = stream;
-            _reader = null;
-            _seekBaseMs = 0;
-            _cts = cts;
-            _decodeThread = thread;
+            var current = _current;
+            if (current is null) return 0;
+            int rate = _renderer.SampleRate;
+            long frames = _renderer.PlayedFrames - Interlocked.Read(ref _renderBaseFrames);
+            long ms = rate > 0 ? frames * 1000 / rate : 0;
+            return Math.Max(0, current.SeekBaseMs + ms);
         }
-
-        thread.Start();
     }
 
-    void DecodeThreadMain(IAudioReadStream stream, string fileIdHex, DecoderKind kind, int skipOffset, CancellationTokenSource cts)
+    long ReleasedPositionMs(DecodePipeline current)
     {
-        ISampleSource? reader = null;
-        using var audioThread = AudioThreadPriority.TryEnter(_log, fileIdHex);
+        int rate = _renderer.SampleRate;
+        long frames = _renderer.ReleasedFrames - Interlocked.Read(ref _renderBaseFrames);
+        long ms = rate > 0 ? frames * 1000 / rate : 0;
+        return Math.Max(0, current.SeekBaseMs + ms);
+    }
+
+    // ── the single output thread ──────────────────────────────────────────────────────────────────────────────────────
+    void OutputThreadMain(CancellationToken ct)
+    {
+        var current = _current;
+        if (current is null) return;
+        using var audioThread = AudioThreadPriority.TryEnter(_log, current.FileIdHex);
         try
         {
-            // Spotify prepends a 0xa7 (167-byte) header before the OggS/fLaC bitstream on some files (skipOffset strips it);
-            // the external MP3 path passes skipOffset 0, so the SkipStream is a harmless passthrough there.
-            var skip = new SkipStream(stream.AsStream(), skipOffset);
-            reader = CreateDecoder(skip, kind);
-            _log.Info($"decode: {kind} -> {reader.SampleRate}Hz {reader.Channels}ch skip={skipOffset}B");
-            _renderer.Init(reader.SampleRate, reader.Channels, RendererBufferMs);
-            _log.Info($"decode {fileIdHex}: renderer initialized buffer={RendererBufferMs}ms startPrebuffer={StartPrebufferMs}ms");
-
-            lock (_gate)
+            // Wait until the current source can build its decoder (clear head present, or body attached / external open).
+            while (!ct.IsCancellationRequested && !current.CanBuildDecoder)
             {
-                if (!ReferenceEquals(_stream, stream) || !ReferenceEquals(_cts, cts))
-                {
-                    _log.Info($"decode setup superseded {fileIdHex}: active stream changed before renderer init completed");
-                    try { reader.Dispose(); } catch { }
-                    return;
-                }
-
-                _reader = reader;
+                if (current.Faulted) { _log.Info($"decode setup aborted {current.FileIdHex}: source faulted before decoder build"); State?.Invoke(new AudioHostSignal(AudioHostSignalKind.Error, PositionMs)); return; }
+                Thread.Sleep(10);
             }
+            if (ct.IsCancellationRequested) return;
 
-            if (_playing)
-                _log.Info($"decode {fileIdHex}: renderer start deferred until {StartPrebufferMs}ms PCM is queued");
-            DecodeLoop(reader, stream, fileIdHex, cts.Token);
+            current.BuildDecoder();
+            InitRenderer(current);
+            _renderBaseFrames = 0;
+            _log.Info($"decode {current.FileIdHex}: renderer initialized device={_renderer.OpenedDeviceId ?? "(default)"} fallback={_renderer.OpenedAsFallback} buffer={RendererBufferMs}ms startPrebuffer={StartPrebufferMs}ms");
+            if (_playing) _log.Info($"decode {current.FileIdHex}: renderer start deferred until {StartPrebufferMs}ms PCM is queued");
+            OutputLoop(ct);
         }
         catch (OperationCanceledException) { }
-        catch (ObjectDisposedException) { if (!cts.IsCancellationRequested) _log.Info($"decode setup interrupted {fileIdHex}: stream disposed"); }
+        catch (ObjectDisposedException) { if (!ct.IsCancellationRequested) _log.Info($"decode setup interrupted {current.FileIdHex}: stream disposed"); }
+        catch (AudioDeviceInvalidatedException ex)
+        {
+            if (!ct.IsCancellationRequested)
+            {
+                _log.Info($"decode setup device-open failed {current.FileIdHex}: 0x{ex.Hr:X8}");
+                _router.ReportOpenFailed(ex.Hr);
+            }
+        }
         catch (Exception ex)
         {
-            try { reader?.Dispose(); } catch { }
-            if (!cts.IsCancellationRequested)
-                _log.Info($"decode setup failed {fileIdHex}: " + ex.Message);
+            if (!ct.IsCancellationRequested)
+            {
+                _log.Info($"decode setup failed {current.FileIdHex}: " + ex.Message);
+                State?.Invoke(new AudioHostSignal(AudioHostSignalKind.Error, PositionMs));
+            }
         }
     }
 
-    void DecodeLoop(ISampleSource reader, IAudioReadStream stream, string fileIdHex, CancellationToken ct)
+    void InitRenderer(DecodePipeline p)
     {
-        var buf = new float[16384];
-        long totalSamples = 0;
+        string? initTarget = _router.ResolveTarget();
+        _renderer.Init(p.SampleRate, p.Channels, RendererBufferMs, initTarget);
+        _router.NotifyOpened(_renderer.OpenedDeviceId, _renderer.OpenedAsFallback);
+        ApplyPostInitSession();
+    }
+
+    void OutputLoop(CancellationToken ct)
+    {
+        var bufCur = new float[16384];
+        var bufInc = new float[16384];
+        var bufMix = new float[16384];
         bool rendererStartedAfterBuffer = false;
         bool loggedFirstPcm = false;
         bool loggedBodyPcm = false;
@@ -403,172 +382,456 @@ internal sealed class AudioPlayEngine : IDisposable
         int lastGen1 = GC.CollectionCount(1);
         int lastGen2 = GC.CollectionCount(2);
         bool loggedSeekWaitingForBody = false;
-        try
+
+        while (!ct.IsCancellationRequested)
         {
-            while (!ct.IsCancellationRequested)
+            var current = _current;
+            if (current is null) break;
+
+            // 1. Device re-route: poll retry deadlines, latch renderer faults, then re-open on THIS thread. If a fade is
+            //    in flight, complete it forward first (§2.6) so we only ever reroute a single promoted stream.
+            _router.Tick(Environment.TickCount64);
+            if (_renderer.Faulted) _router.ReportDeviceInvalidated();
+            var reroute = Interlocked.Exchange(ref _pendingReroute, null);
+            if (reroute is not null)
             {
-                long seek = Interlocked.Exchange(ref _pendingSeekMs, -1);
-                if (seek >= 0)
+                if (_overlapActive) { PromoteOverlap(); current = _current; if (current is null) break; }
+                ApplyReroute(reroute, current);
+                rendererStartedAfterBuffer = false;
+                preStartFrames = 0;
+                lastWriteTicks = 0;
+            }
+
+            // 2. Seek consume — a seek cuts an in-flight fade FORWARD first, then seeks the promoted current.
+            long seek = Interlocked.Exchange(ref _pendingSeekMs, -1);
+            if (seek >= 0)
+            {
+                if (_overlapActive) { PromoteOverlap(); current = _current; if (current is null) break; }
+                if (!current.SeekReady)
                 {
-                    if (!stream.IsBodyAttached || stream.KnownSize <= 0)
+                    Interlocked.CompareExchange(ref _pendingSeekMs, seek, -1);
+                    if (!loggedSeekWaitingForBody)
                     {
-                        Interlocked.CompareExchange(ref _pendingSeekMs, seek, -1);
-                        if (!loggedSeekWaitingForBody)
-                        {
-                            _log.Info($"seek deferred target={seek}ms: waiting for CDN body length bodyAttached={stream.IsBodyAttached} knownSize={stream.KnownSize}B head={stream.ClearHeadLength}B");
-                            loggedSeekWaitingForBody = true;
-                        }
+                        _log.Info($"seek deferred target={seek}ms: waiting for CDN body length");
+                        loggedSeekWaitingForBody = true;
+                    }
+                }
+                else
+                {
+                    loggedSeekWaitingForBody = false;
+                    var outcome = current.SeekTo(seek);
+                    if (outcome == DecodePipeline.SeekOutcome.Applied)
+                    {
+                        _renderer.Reset();
+                        _renderBaseFrames = 0;
+                        _rendererPrimed = false;
+                        rendererStartedAfterBuffer = false;
+                        preStartFrames = 0;
+                        lastWriteTicks = 0;
+                        _log.Info($"head-check {current.FileIdHex}: seek applied target={seek}ms; renderer will restart after {StartPrebufferMs}ms PCM is queued");
+                    }
+                    else if (outcome == DecodePipeline.SeekOutcome.Failed)
+                    {
+                        RaiseState();
                     }
                     else
                     {
-                        loggedSeekWaitingForBody = false;
-                        bool seekOk;
-                        try
-                        {
-                            using (stream.PauseReadAhead())
-                            {
-                                reader.SeekTo(TimeSpan.FromMilliseconds(seek));
-                            }
-                            stream.ResumeReadAheadAtCurrentOffset();
-                            seekOk = true;
-                        }
-                        catch (Exception ex) { seekOk = false; _log.Info($"seek failed target={seek}ms: {ex.GetType().Name}: {ex.Message}"); }
-                        if (seekOk)
-                        {
-                            _renderer.Reset();
-                            _rendererPrimed = false;
-                            rendererStartedAfterBuffer = false;
-                            preStartFrames = 0;
-                            lastWriteTicks = 0;
-                            _seekBaseMs = seek;
-                            _log.Info($"head-check {fileIdHex}: seek applied target={seek}ms; renderer will restart after {StartPrebufferMs}ms PCM is queued");
-                        }
-                        else
-                        {
-                            // The decoder is still at its old position — applying _seekBaseMs anyway would desync the
-                            // reported position from the audio for the rest of the track. Snap the UI back instead.
-                            RaiseState();
-                        }
+                        Interlocked.CompareExchange(ref _pendingSeekMs, seek, -1);
                     }
                 }
+            }
 
-                long beforeOffset = stream.CurrentOffset;
-                bool bodyAttachedBeforeRead = stream.IsBodyAttached;
-                int got = reader.ReadSamples(buf, 0, buf.Length);
+            // 3. Boundary detection — start a crossfade when the current track is within fadeMs of its end (queued domain).
+            if (!_overlapActive) TryStartOverlap(current);
+
+            int channels = current.Channels;
+            int rate = current.SampleRate;
+
+            // 4. Read current + (if overlapping) incoming, mix per-sample, EQ+limiter ONCE on the sum, write.
+            long beforeOffset = current.CurrentOffset;
+            bool bodyAttachedBeforeRead = current.IsBodyAttached;
+            int got = current.Read(bufCur, 0, bufCur.Length);
+
+            int block;
+            float[] writeBuf;
+            if (_overlapActive)
+            {
+                long startFrame = _renderer.ReleasedFrames - _overlapReleasedBase;
+                var inc = _overlapIncoming;
+                if (inc is null) { PromoteOverlap(); continue; }
+                if (got > 0)
+                {
+                    block = got;
+                    Array.Clear(bufInc, 0, block);
+                    inc.Fill(bufInc, 0, block);
+                    CrossfadeMixer.MixEqualPower(bufCur.AsSpan(0, block), bufInc.AsSpan(0, block), bufMix.AsSpan(0, block), startFrame, _overlapFadeFrames, channels);
+                    writeBuf = bufMix;
+                }
+                else
+                {
+                    // Current reached its end mid/late fade — drive the tail of the fade from incoming alone (outgoing = 0).
+                    int gotInc = inc.Read(bufInc, 0, bufInc.Length);
+                    if (gotInc <= 0) { PromoteOverlap(); continue; }
+                    block = gotInc;
+                    channels = inc.Channels;
+                    rate = inc.SampleRate;
+                    Array.Clear(bufCur, 0, block);
+                    CrossfadeMixer.MixEqualPower(bufCur.AsSpan(0, block), bufInc.AsSpan(0, block), bufMix.AsSpan(0, block), startFrame, _overlapFadeFrames, channels);
+                    writeBuf = bufMix;
+                }
+            }
+            else
+            {
                 if (got <= 0)
                 {
                     if (_playing && !rendererStartedAfterBuffer && preStartFrames > 0)
                     {
-                        long preStartMs = reader.SampleRate > 0 ? preStartFrames * 1000L / reader.SampleRate : 0;
+                        long preStartMs = rate > 0 ? preStartFrames * 1000L / rate : 0;
                         _renderer.Start();
                         rendererStartedAfterBuffer = true;
-                        _log.Info($"head-check {fileIdHex}: renderer started with short prebuffer={preStartMs}ms before EOF elapsed={ElapsedSinceLoadMs()}ms");
+                        _log.Info($"head-check {current.FileIdHex}: renderer started with short prebuffer={preStartMs}ms before EOF elapsed={current.ElapsedSinceLoadMs}ms");
+                    }
+                    if (HandleCurrentEof(current, ct))
+                    {
+                        // gapless promotion happened — reset per-track prebuffer state and continue with the new current
+                        rendererStartedAfterBuffer = false;
+                        preStartFrames = 0;
+                        lastWriteTicks = 0;
+                        continue;
                     }
                     break;
                 }
-                long afterOffset = stream.CurrentOffset;
-                totalSamples += got;
-                if (_gainLinear != 1f) for (int i = 0; i < got; i++) buf[i] *= _gainLinear;
-                _equalizer.Process(buf.AsSpan(0, got), reader.SampleRate, reader.Channels);
-                _limiter.Process(buf.AsSpan(0, got));
-                _prebuffering = false; _buffering = false;
-                var writeStartTicks = Stopwatch.GetTimestamp();
-                _renderer.Write(buf.AsSpan(0, got), ct);
-                var writeEndTicks = Stopwatch.GetTimestamp();
-                _rendererPrimed = true;
-                var wroteFrames = reader.Channels > 0 ? got / reader.Channels : got;
-                if (!rendererStartedAfterBuffer) preStartFrames += wroteFrames;
-
-                if (lastWriteTicks != 0)
-                {
-                    var writeGapMs = TicksToMs(writeEndTicks - lastWriteTicks);
-                    if (writeGapMs >= WriteStallWarnMs)
-                    {
-                        var gen0 = GC.CollectionCount(0);
-                        var gen1 = GC.CollectionCount(1);
-                        var gen2 = GC.CollectionCount(2);
-                        _log.Info($"audio starvation {fileIdHex}: writeGap={writeGapMs}ms source={DescribeReadSource(stream, beforeOffset, afterOffset)} offset={beforeOffset} queuedFrames={_renderer.ReleasedFrames} gen0+={gen0 - lastGen0} gen1+={gen1 - lastGen1} gen2+={gen2 - lastGen2}");
-                        lastGen0 = gen0;
-                        lastGen1 = gen1;
-                        lastGen2 = gen2;
-                    }
-                }
-                lastWriteTicks = writeEndTicks;
-
-                if (!loggedFirstPcm)
-                {
-                    loggedFirstPcm = true;
-                    long queuedMs = reader.SampleRate > 0 && reader.Channels > 0 ? got / reader.Channels * 1000L / reader.SampleRate : 0;
-                    _log.Info($"head-check {fileIdHex}: first PCM queued from={DescribeReadSource(stream, beforeOffset, afterOffset)} samples={got} approx={queuedMs}ms bodyAttachedBeforeRead={bodyAttachedBeforeRead} bodyAttachedNow={stream.IsBodyAttached} elapsed={ElapsedSinceLoadMs()}ms");
-                }
-                if (!loggedBodyPcm && beforeOffset >= stream.ClearHeadLength)
-                {
-                    loggedBodyPcm = true;
-                    _log.Info($"head-check {fileIdHex}: PCM reads are now using attached body/ranged CDN offset={beforeOffset} elapsed={ElapsedSinceLoadMs()}ms");
-                }
-
-                if (_playing && !rendererStartedAfterBuffer)
-                {
-                    long preStartMs = reader.SampleRate > 0 ? preStartFrames * 1000L / reader.SampleRate : 0;
-                    if (preStartMs >= StartPrebufferMs)
-                    {
-                        _renderer.Start();
-                        rendererStartedAfterBuffer = true;
-                        _log.Info($"head-check {fileIdHex}: renderer started after queued PCM prebuffer={preStartMs}ms elapsed={ElapsedSinceLoadMs()}ms");
-                    }
-                }
-                RaiseState();
+                block = got;
+                writeBuf = bufCur;
             }
 
-            if (!ct.IsCancellationRequested)   // natural EOF → drain, then report finished
+            long afterOffset = current.CurrentOffset;
+            _equalizer.Process(writeBuf.AsSpan(0, block), rate, channels);
+            _limiter.Process(writeBuf.AsSpan(0, block));
+            _prebuffering = false; _buffering = false;
+
+            var writeStartTicks = Stopwatch.GetTimestamp();
+            try { _renderer.Write(writeBuf.AsSpan(0, block), ct); }
+            catch (AudioDeviceInvalidatedException ex)
             {
-                // Sanity line: a decode that "finishes" at ~the head length (a few %) is NOT a real track end — it's a body
-                // failure (no CDN body, wrong key → garbage past the head, or an early-EOF stream) masquerading as complete.
-                long ms = reader.SampleRate > 0 && reader.Channels > 0 ? totalSamples / reader.Channels * 1000L / reader.SampleRate : 0;
-                long pct = _durationMs > 0 ? ms * 100 / _durationMs : 0;
-                _log.Info($"decode ended naturally at ~{ms}ms" + (_durationMs > 0 ? $" of {_durationMs}ms ({pct}%){(pct < 25 ? " ⚠ HEAD-ONLY: body never decoded (check CDN/key above)" : "")}" : ""));
-                while (!ct.IsCancellationRequested && _renderer.PlayedFrames < _renderer.ReleasedFrames) Thread.Sleep(20);
-                _playing = false; RaiseState();
-                TrackFinished?.Invoke();
+                _log.Info($"audio.device write fault 0x{ex.Hr:X8} — routing re-init");
+                _router.ReportDeviceInvalidated();
+                continue;
             }
+            var writeEndTicks = Stopwatch.GetTimestamp();
+            _rendererPrimed = true;
+            var wroteFrames = channels > 0 ? block / channels : block;
+            if (!rendererStartedAfterBuffer) preStartFrames += wroteFrames;
+
+            if (lastWriteTicks != 0)
+            {
+                var writeGapMs = TicksToMs(writeEndTicks - lastWriteTicks);
+                if (writeGapMs >= WriteStallWarnMs)
+                {
+                    var gen0 = GC.CollectionCount(0);
+                    var gen1 = GC.CollectionCount(1);
+                    var gen2 = GC.CollectionCount(2);
+                    _log.Info($"audio starvation {current.FileIdHex}: writeGap={writeGapMs}ms source={current.DescribeReadSource(beforeOffset, afterOffset)} offset={beforeOffset} queuedFrames={_renderer.ReleasedFrames} overlap={_overlapActive} gen0+={gen0 - lastGen0} gen1+={gen1 - lastGen1} gen2+={gen2 - lastGen2}");
+                    lastGen0 = gen0;
+                    lastGen1 = gen1;
+                    lastGen2 = gen2;
+                }
+            }
+            lastWriteTicks = writeEndTicks;
+
+            if (!loggedFirstPcm)
+            {
+                loggedFirstPcm = true;
+                long queuedMs = rate > 0 && channels > 0 ? block / channels * 1000L / rate : 0;
+                _log.Info($"head-check {current.FileIdHex}: first PCM queued from={current.DescribeReadSource(beforeOffset, afterOffset)} samples={block} approx={queuedMs}ms bodyAttachedBeforeRead={bodyAttachedBeforeRead} bodyAttachedNow={current.IsBodyAttached} elapsed={current.ElapsedSinceLoadMs}ms");
+            }
+            if (!loggedBodyPcm && beforeOffset >= current.ClearHeadLength && current.ClearHeadLength > 0)
+            {
+                loggedBodyPcm = true;
+                _log.Info($"head-check {current.FileIdHex}: PCM reads are now using attached body/ranged CDN offset={beforeOffset} elapsed={current.ElapsedSinceLoadMs}ms");
+            }
+
+            if (_playing && !rendererStartedAfterBuffer)
+            {
+                long preStartMs = rate > 0 ? preStartFrames * 1000L / rate : 0;
+                if (preStartMs >= StartPrebufferMs)
+                {
+                    _renderer.Start();
+                    rendererStartedAfterBuffer = true;
+                    _log.Info($"head-check {current.FileIdHex}: renderer started after queued PCM prebuffer={preStartMs}ms elapsed={current.ElapsedSinceLoadMs}ms");
+                }
+            }
+
+            // 5. Fade completion — once fadeFrames have been queued since the overlap began, promote incoming → current.
+            if (_overlapActive)
+            {
+                long done = _renderer.ReleasedFrames - _overlapReleasedBase;
+                if (done >= _overlapFadeFrames)
+                {
+                    PromoteOverlap();
+                    rendererStartedAfterBuffer = true;   // the fade already had the renderer running
+                    preStartFrames = 0;
+                }
+            }
+
+            RaiseState();
         }
-        catch (OperationCanceledException) { }
-        catch (ObjectDisposedException) { if (!ct.IsCancellationRequested) _log.Info("decode loop interrupted: stream disposed"); }
-        catch (Exception ex) { _log.Info("decode loop error: " + ex.Message); }
     }
 
-    void StopDecode()
+    // Boundary: begin a crossfade if an overlap-eligible incoming source is ready and the current track is within fadeMs
+    // of its end (measured in the QUEUED/ReleasedFrames domain so the fade lines up with what will be heard). BuildDecoder
+    // blocks on the head read — safe here (this is the output thread). Format mismatch ⇒ skip overlap; §2.4 EOF hand-off.
+    void TryStartOverlap(DecodePipeline current)
     {
-        CancellationTokenSource? cts; Thread? thread; ISampleSource? reader; IAudioReadStream? stream;
+        var inc = _incoming;
+        if (inc is null || _incomingFadeMs <= 0 || !_incomingBodySupplied) return;
+        if (!inc.CanBuildDecoder) return;
+        long dur = current.DurationMs;
+        if (dur <= 0) return;
+        if (HasPendingSeek) return;   // position is stale until the seek is applied
+        int rate = _renderer.SampleRate;
+        if (rate <= 0) return;
+        long pos = ReleasedPositionMs(current);
+        if (dur - pos > _incomingFadeMs) return;
+
+        try
+        {
+            if (!inc.DecoderBuilt) inc.BuildDecoder();
+        }
+        catch (Exception ex)
+        {
+            _log.Info($"crossfade incoming decoder build failed token={_incomingToken}: {ex.Message}");
+            return;
+        }
+
+        if (inc.SampleRate != current.SampleRate || inc.Channels != current.Channels)
+        {
+            // §2.3: different sample-rate/channel layout — do NOT overlap; run current to EOF and gapless-promote (with a
+            // renderer re-init) at the boundary, identical to a normal non-crossfade track change. (Music→music matches.)
+            return;
+        }
+
+        // Commit the overlap under the gate. Move the fading-in pipeline OUT of _incoming into _overlapIncoming so the
+        // _incoming slot is free for the controller to prepare the FOLLOWING track during the fade, and so a concurrent
+        // CancelIncoming for this token now returns AlreadyStarted (it can no longer dispose the pipeline mid-mix).
+        string token, uri; int fade;
         lock (_gate)
         {
-            cts = _cts;
-            thread = _decodeThread;
-            reader = _reader;
-            stream = _stream;
-            _cts = null;
-            _decodeThread = null;
-            _reader = null;
-            _stream = null;
+            if (!ReferenceEquals(_incoming, inc)) return;   // cancelled/replaced while we built the decoder
+            _overlapReleasedBase = _renderer.ReleasedFrames;
+            _overlapFadeFrames = Math.Max(1, (long)_incomingFadeMs * rate / 1000);
+            _overlapIncoming = inc;
+            _overlapToken = _incomingToken; _overlapTrackUri = _incomingTrackUri; _overlapFadeMs = _incomingFadeMs;
+            _incoming = null;
+            ClearIncomingMetadataLocked();
+            _overlapActive = true;
+            token = _overlapToken; uri = _overlapTrackUri; fade = _overlapFadeMs;
+        }
+        _log.Info($"crossfade started token={token} track={uri} fade={fade}ms fadeFrames={_overlapFadeFrames} at={pos}ms/{dur}ms");
+        EmitTransition(new AudioTransitionSignal(AudioTransitionKind.Started, token, uri, 0, fade));
+    }
+
+    // Promote the incoming pipeline to current with NO gap: the incoming samples have been mixed into the same ~800ms-
+    // queued renderer since _overlapReleasedBase, so re-base position there (no renderer.Reset — Reset would drop the
+    // queued tail). Used for a completed fade AND for a fade cut forward by a seek/reroute (§2.6).
+    void PromoteOverlap()
+    {
+        DecodePipeline? old;
+        string token; string uri; int fade;
+        lock (_gate)
+        {
+            if (!_overlapActive || _overlapIncoming is null)
+            {
+                _overlapActive = false;
+                return;
+            }
+            old = _current;
+            _current = _overlapIncoming;
+            _overlapIncoming = null;
+            _overlapActive = false;
+            _renderBaseFrames = _overlapReleasedBase;
+            _fileIdHex = _current.FileIdHex;
+            token = _overlapToken; uri = _overlapTrackUri; fade = _overlapFadeMs;
+            _overlapToken = ""; _overlapTrackUri = ""; _overlapFadeMs = 0;
+        }
+        old?.Dispose();
+        _log.Info($"crossfade completed token={token} track={uri}");
+        EmitTransition(new AudioTransitionSignal(AudioTransitionKind.Completed, token, uri, PositionMs, fade));
+    }
+
+    // Current reached natural EOF WITHOUT an active fade. If an incoming source is ready, hand off gaplessly (§2.4):
+    // same format → keep feeding the one renderer (no gap); different format → drain the tail, re-init, one small gap
+    // (identical to today's non-crossfade change). Otherwise report Missed (if an incoming was expected) then TrackFinished.
+    bool HandleCurrentEof(DecodePipeline current, CancellationToken ct)
+    {
+        int rate = _renderer.SampleRate;
+        long trackFrames = _renderer.ReleasedFrames - Interlocked.Read(ref _renderBaseFrames);
+        long ms = rate > 0 && current.Channels > 0 ? trackFrames * 1000L / rate : 0;
+        long dur = current.DurationMs;
+        long pct = dur > 0 ? ms * 100 / dur : 0;
+
+        // Claim the incoming out of the field under the gate so a concurrent CancelIncoming can no longer dispose it out
+        // from under the hand-off (it sees _incoming == null → NotFound, harmless).
+        DecodePipeline? inc; string token, uri; bool bodySupplied;
+        lock (_gate)
+        {
+            inc = _incoming; token = _incomingToken; uri = _incomingTrackUri; bodySupplied = _incomingBodySupplied;
+            _incoming = null;
+            ClearIncomingMetadataLocked();
+        }
+
+        if (inc is not null && bodySupplied && inc.CanBuildDecoder && !inc.Faulted)
+        {
+            try
+            {
+                if (!inc.DecoderBuilt) inc.BuildDecoder();
+                GaplessPromote(current, inc, token, uri, ct);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _log.Info($"gapless promote failed token={token}: {ex.Message}");
+                try { inc.Dispose(); } catch { }
+                // fall through to the natural-finish path (a Missed was not the pre-existing behavior on promote failure)
+            }
+        }
+
+        _log.Info($"decode ended naturally at ~{ms}ms" + (dur > 0 ? $" of {dur}ms ({pct}%){(pct < 25 ? " ⚠ HEAD-ONLY: body never decoded (check CDN/key above)" : "")}" : ""));
+        while (!ct.IsCancellationRequested && _renderer.PlayedFrames < _renderer.ReleasedFrames) Thread.Sleep(20);
+
+        if (inc is not null)
+        {
+            string reason = bodySupplied ? "next decoder not prebuffered" : "next body not supplied";
+            try { inc.Dispose(); } catch { }
+            EmitTransition(new AudioTransitionSignal(AudioTransitionKind.Missed, token, uri, PositionMs, 0, reason));
+        }
+
+        _playing = false;
+        RaiseState();
+        TrackFinished?.Invoke();
+        return false;
+    }
+
+    // The claimed incoming is owned locally (already removed from _incoming) so no other thread can touch it here.
+    void GaplessPromote(DecodePipeline current, DecodePipeline inc, string token, string uri, CancellationToken ct)
+    {
+        bool sameFormat = inc.SampleRate == current.SampleRate && inc.Channels == current.Channels;
+        EmitTransition(new AudioTransitionSignal(AudioTransitionKind.Started, token, uri, 0, 0));
+
+        if (sameFormat)
+        {
+            // Keep the same ~800ms-queued renderer running; the incoming decoder simply starts feeding the next frames.
+            long baseFrames = _renderer.ReleasedFrames;
+            DecodePipeline? old;
+            lock (_gate)
+            {
+                old = _current;
+                _current = inc;
+                _renderBaseFrames = baseFrames;
+                _fileIdHex = inc.FileIdHex;
+            }
+            old?.Dispose();
+            _log.Info($"gapless hand-off (same format) token={token} track={uri}");
+        }
+        else
+        {
+            // Drain the queued tail so nothing is dropped, then re-open the renderer at the incoming format (one small
+            // gap, exactly like a normal track change).
+            while (!ct.IsCancellationRequested && _renderer.PlayedFrames < _renderer.ReleasedFrames) Thread.Sleep(20);
+            InitRenderer(inc);
+            DecodePipeline? old;
+            lock (_gate)
+            {
+                old = _current;
+                _current = inc;
+                _renderBaseFrames = 0;
+                _fileIdHex = inc.FileIdHex;
+            }
+            _rendererPrimed = false;
+            if (_playing) _renderer.Start();
+            old?.Dispose();
+            _log.Info($"gapless hand-off (format change) token={token} track={uri}");
+        }
+        EmitTransition(new AudioTransitionSignal(AudioTransitionKind.Completed, token, uri, PositionMs, 0));
+    }
+
+    void ClearIncomingMetadataLocked()
+    {
+        _incomingToken = "";
+        _incomingTrackUri = "";
+        _incomingDurationMs = 0;
+        _incomingFadeMs = 0;
+        _incomingBodySupplied = false;
+    }
+
+    // Re-open the output on the output thread (plan §A5). Position is preserved via the seek machinery (re-open + internal
+    // seek-to-last-heard) so up-to-800ms of queued-but-unheard PCM isn't skipped.
+    void ApplyReroute(PendingReroute reroute, DecodePipeline current)
+    {
+        if (reroute.PauseFirst) { _playing = false; _renderer.Pause(); RaiseState(); }
+        long lastHeardMs = PositionMs;
+        try
+        {
+            _renderer.Init(current.SampleRate, current.Channels, RendererBufferMs, reroute.DeviceId);
+            _router.NotifyOpened(_renderer.OpenedDeviceId, _renderer.OpenedAsFallback);
+            ApplyPostInitSession();
+            _renderBaseFrames = 0;
+            Interlocked.Exchange(ref _pendingSeekMs, lastHeardMs);   // restart-after-prebuffer at the last heard position
+            _rendererPrimed = false;
+            _log.Info($"audio.device re-init device={_renderer.OpenedDeviceId ?? "(default)"} fallback={_renderer.OpenedAsFallback} resumeAt={lastHeardMs}ms");
+        }
+        catch (AudioDeviceInvalidatedException ex) { _log.Info($"audio.device re-init failed 0x{ex.Hr:X8}"); _router.ReportOpenFailed(ex.Hr); }
+        catch (Exception ex) { _log.Info("audio.device re-init failed: " + ex.Message); _router.ReportOpenFailed(-1); }
+    }
+
+    void StopOutput(bool waitFully = false)
+    {
+        CancellationTokenSource? cts; Thread? thread; DecodePipeline? current; DecodePipeline? incoming; DecodePipeline? overlap;
+        lock (_gate)
+        {
+            cts = _outputCts;
+            thread = _outputThread;
+            current = _current;
+            incoming = _incoming;
+            overlap = _overlapIncoming;
+            _outputCts = null;
+            _outputThread = null;
+            _current = null;
+            _incoming = null;
+            _overlapIncoming = null;
+            _overlapActive = false;
+            _overlapToken = ""; _overlapTrackUri = ""; _overlapFadeMs = 0;
+            _pendingSeekMs = -1;
+            ClearIncomingMetadataLocked();
         }
         try { cts?.Cancel(); } catch { }
-        try { stream?.Dispose(); } catch { }
+        try { current?.Dispose(); } catch { }   // dispose the streams to unblock any in-flight blocking read
+        try { incoming?.Dispose(); } catch { }
+        try { overlap?.Dispose(); } catch { }
         if (thread is not null && thread.IsAlive && thread != Thread.CurrentThread)
         {
             try
             {
-                if (!thread.Join(120))
-                    _log.Info("decode stop timed out after 120ms; continuing with stream disposed");
+                if (waitFully)
+                {
+                    if (!thread.Join(2000))
+                        _log.Info("output stop timed out after 2000ms during disposal; proceeding with renderer/CCW teardown");
+                }
+                else if (!thread.Join(120))
+                    _log.Info("output stop timed out after 120ms; continuing with streams disposed");
             }
             catch { }
         }
         try { _renderer.Reset(); } catch { }
         _rendererPrimed = false;
-        try { reader?.Dispose(); } catch { }
         cts?.Dispose();
     }
 
-    public long PositionMs => _seekBaseMs + _renderer.PositionMs;
+    void EmitTransition(AudioTransitionSignal signal)
+    {
+        try { Transition?.Invoke(signal); }
+        catch (Exception ex) { _log.Info("audio transition dispatch failed: " + ex.Message); }
+    }
 
     void RaiseState()
     {
@@ -579,69 +842,20 @@ internal sealed class AudioPlayEngine : IDisposable
         State?.Invoke(new AudioHostSignal(kind, PositionMs));
     }
 
-    static float DbToLinear(float db) => db == 0f ? 1f : (float)Math.Pow(10, db / 20.0);
-
-    long ElapsedSinceLoadMs()
-    {
-        var start = Interlocked.Read(ref _loadStartTicks);
-        return start == 0 ? 0 : (long)((Stopwatch.GetTimestamp() - start) * 1000.0 / Stopwatch.Frequency);
-    }
-
     static long TicksToMs(long ticks) => (long)(ticks * 1000.0 / Stopwatch.Frequency);
-
-    static string DescribeReadSource(IAudioReadStream stream, long beforeOffset, long afterOffset)
-    {
-        int headLen = stream.ClearHeadLength;
-        if (headLen <= 0) return "body/ranged-cdn";
-        if (beforeOffset < headLen && afterOffset <= headLen) return "clear-head";
-        if (beforeOffset < headLen) return "clear-head+body";
-        return "body/ranged-cdn";
-    }
-
-    // Where the real bitstream starts inside the decrypted audio: Vorbis ("OggS" + first packet 0x01 "vorbis") / FLAC
-    // ("fLaC") at offset 0 or after the 0xa7 Spotify header. Inspected from the clear head; defaults to 167 when there's
-    // no head to look at. Mirrors WaveeMusic's VorbisDecoder.TryFindVorbisStartOffset instead of trusting a bare OggS.
-    static int DetectSkipOffset(ReadOnlySpan<byte> clearHead, string format)
-    {
-        if (format is "Flac" or "Flac24")
-        {
-            ReadOnlySpan<byte> flac = "fLaC"u8;
-            if (clearHead.Length >= flac.Length && clearHead[..flac.Length].SequenceEqual(flac)) return 0;
-            int flacHdr = SpotifyAesCtr.SpotifyHeaderSize;
-            if (clearHead.Length >= flacHdr + flac.Length && clearHead.Slice(flacHdr, flac.Length).SequenceEqual(flac)) return flacHdr;
-            return flacHdr;
-        }
-
-        if (HasVorbisHeaderAt(clearHead, 0)) return 0;
-        int hdr = SpotifyAesCtr.SpotifyHeaderSize;
-        if (HasVorbisHeaderAt(clearHead, hdr)) return hdr;
-        return hdr;   // no clear head to inspect → assume the standard 167-byte Spotify header
-    }
-
-    static bool HasVorbisHeaderAt(ReadOnlySpan<byte> bytes, int offset)
-    {
-        if (offset < 0 || bytes.Length < offset + 27) return false;
-        var page = bytes[offset..];
-        if (!page[..4].SequenceEqual(SpotifyAesCtr.OggMagic)) return false;
-        int segments = page[26];
-        if (page.Length < 27 + segments) return false;
-        var lacing = page.Slice(27, segments);
-        int packetLength = 0;
-        for (int i = 0; i < lacing.Length; i++)
-        {
-            packetLength += lacing[i];
-            if (lacing[i] < 255) break;
-        }
-        if (packetLength < 7 || page.Length < 27 + segments + 7) return false;
-        return page[27 + segments] == 1
-            && page.Slice(28 + segments, 6).SequenceEqual("vorbis"u8);
-    }
 
     public void Dispose()
     {
+        if (_disposed) return;
+        _disposed = true;
         _tick.Dispose();
-        StopDecode();
+        try { _router.Dispose(); } catch { }
+        try { _monitor.Dispose(); } catch { }
+        StopOutput(waitFully: true);
+        try { _renderer.UnregisterSessionEvents(); } catch { }
         _renderer.Dispose();
+        if (_sessionSinkPtr != IntPtr.Zero) { try { Marshal.Release(_sessionSinkPtr); } catch { } }
+        GC.KeepAlive(_sessionSink);
         if (_ownsHttp) _http.Dispose();
     }
 }

@@ -33,6 +33,10 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
     /// rootlist + collection sync stores headers only). Null offline/in tests → reads stay pure store lookups.</summary>
     public Func<string, CancellationToken, Task>? OnDemandFetch { get; set; }
 
+    /// <summary>Best-effort cover-palette hydration for playlist reads. Unlike <see cref="OnDemandFetch"/>, this runs
+    /// for warm/resident playlists too; the live implementation is fire-and-forget safe and publishes through Store.</summary>
+    public Func<string, CancellationToken, Task>? EnsurePlaylistPalette { get; set; }
+
     /// <summary>Set by the go-live block: the single library-sync loop. When present, playlist opens route through it (SWR —
     /// blocking first fetch / background revalidate); null offline/in tests → the OnDemandFetch path (album/artist unchanged).</summary>
     public Wavee.Backend.Sync.LibrarySync? Sync { get; set; }
@@ -86,6 +90,11 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
     public async Task<Playlist?> GetPlaylistAsync(string uri, CancellationToken ct = default)
     {
         await EnsureFetchedAsync(uri, ct).ConfigureAwait(false);
+        // Palette hydration is independent of membership freshness. The old placement inside OnDemandFetch never ran
+        // when LibrarySync served a warm playlist, which is why no fetchExtractedColors request appeared at all.
+        // This enrichment outlives the foreground read. A route/read token is commonly cancelled as soon as the
+        // ready model is published; forwarding it could abort Pathfinder before fetchExtractedColors reaches the wire.
+        if (EnsurePlaylistPalette is { } ensurePalette) _ = ensurePalette(uri, CancellationToken.None);
         var header = _store.GetPlaylist(uri);
         if (header is null) return null;
         var members = _store.Membership(uri);
@@ -174,12 +183,13 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
     // metadata; a track-only extended-metadata album is not allowed to strand the page without artist art/releases.
     async Task EnsureFetchedAsync(string uri, CancellationToken ct)
     {
-        // Playlist on-open routing through the sync loop (SWR, §2.6): empty membership → blocking first fetch (today's
-        // skeleton path); else fire-and-forget revalidate (5-min window / dirty-gated in the loop) and serve cache now —
-        // no await, no flicker. Null Sync (offline/tests) → the OnDemandFetch path below (album/artist unchanged).
+        // Playlist on-open routing through the sync loop (SWR, §2.6): a MISSING membership baseline → blocking first
+        // fetch; a KNOWN baseline (including a valid empty, newly-created playlist) → fire-and-forget revalidate and
+        // serve cache now. Count==0 cannot distinguish those states and used to let an early fetch overwrite optimistic
+        // title/description/cover edits on new empty playlists.
         if (Sync is { } sync && uri.StartsWith("spotify:playlist:", StringComparison.Ordinal))
         {
-            if (_store.Membership(uri).Count == 0) await sync.OpenPlaylistAsync(uri, ct).ConfigureAwait(false);
+            if (!_store.HasMembership(uri)) await sync.OpenPlaylistAsync(uri, ct).ConfigureAwait(false);
             else sync.Enqueue(new Wavee.Backend.Sync.SyncCommand(Wavee.Backend.Sync.SyncKind.OpenPlaylist, uri));
             return;
         }
@@ -188,7 +198,7 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         if (fetch is null) return;
         bool need = false;
         if (uri.StartsWith("spotify:playlist:", StringComparison.Ordinal))
-            need = _store.Membership(uri).Count == 0;
+            need = !_store.HasMembership(uri);
         else if (uri.StartsWith("spotify:album:", StringComparison.Ordinal))
         {
             var album = _store.GetAlbum(uri);

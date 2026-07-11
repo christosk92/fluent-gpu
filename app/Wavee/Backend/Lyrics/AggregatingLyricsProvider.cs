@@ -287,13 +287,15 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
 
     void LogReport(string trackId, LyricsRequest req, string summary, IReadOnlyList<LyricsSourceTrace> traces)
     {
-        if (!_log.IsEnabled(WaveeLogLevel.Info)) return;
+        // Debug: the per-search + per-source trace lines are the bulk of the [lyrics] file volume (one search line plus one
+        // per candidate source, per track). The single final-winner line stays Info (LogDecision / the caller).
+        if (!_log.IsEnabled(WaveeLogLevel.Debug)) return;
 
-        _log.Info($"search track={trackId} title=\"{LogValue(req.Title)}\" artist=\"{LogValue(req.ArtistsJoined)}\" " +
+        _log.Debug($"search track={trackId} title=\"{LogValue(req.Title)}\" artist=\"{LogValue(req.ArtistsJoined)}\" " +
             $"album=\"{LogValue(req.Album)}\" duration={req.DurationMs}ms isrc={LogValue(req.Isrc ?? "-")} summary=\"{LogValue(summary)}\"");
         foreach (var t in traces)
         {
-            _log.Info($"source track={trackId} id={t.SourceId} outcome={t.Outcome} elapsed={t.ElapsedMs}ms sync={t.Sync} " +
+            _log.Debug($"source track={trackId} id={t.SourceId} outcome={t.Outcome} elapsed={t.ElapsedMs}ms sync={t.Sync} " +
                 $"lines={t.LineCount} score={t.Score:F3} winner={t.Winner} detail=\"{LogValue(t.Detail)}\" rerank=\"{LogValue(t.RerankReason)}\"");
         }
     }
@@ -343,7 +345,7 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(_opt.PerSourceTimeoutMs);
-        _log.Info($"source track={req.TrackId} id={source.Id} started");
+        _log.Debug($"source track={req.TrackId} id={source.Id} started");
         try
         {
             var c = await source.FetchAsync(req, cts.Token).ConfigureAwait(false);
@@ -359,7 +361,7 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
         }
         catch (Exception e)
         {
-            _log.Info($"source {source.Id} failed for {req.TrackId}: {e.GetType().Name}");
+            _log.Debug($"source {source.Id} failed for {req.TrackId}: {e.GetType().Name}");
             return new Probed(null, LyricsOutcome.Error, Ms(), With($"{e.GetType().Name}: {e.Message}"));
         }
     }

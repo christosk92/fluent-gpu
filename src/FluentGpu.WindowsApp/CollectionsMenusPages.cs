@@ -273,3 +273,123 @@ sealed class MenusOverviewPage : Component
             GalleryPage.CategoryGrid("Menus & toolbars", navigate));
     }
 }
+
+// Context menus attached with ContextMenu.Attach / .WithContextMenu — the one-liner over any element. Right-click, the
+// Menu key / Shift+F10 on a focused row, or a touch long-press all open it. A non-empty Primary strip yields the
+// Explorer command-bar shape; an empty Primary yields a plain vertical menu; a null / all-disabled model opens nothing.
+sealed class ContextMenuPage : Component
+{
+    static readonly string[] Tracks = { "Bohemian Rhapsody", "Stairway to Heaven", "Hotel California", "Imagine" };
+
+    public override Element Render()
+    {
+        var svc = UseContext(Overlay.Service);
+        var (last, setLast) = UseState("—");
+        var (liked, setLiked) = UseState(false);
+
+        // 1) Track list — plain MENU style (empty Primary). The factory is lazy: it captures the row's title and the
+        //    current Liked state and runs only at open, so each row's menu reflects live state.
+        var rows = new Element[Tracks.Length];
+        for (int i = 0; i < Tracks.Length; i++)
+        {
+            string title = Tracks[i];
+            rows[i] = new BoxEl
+            {
+                Height = 36, Direction = 0, AlignItems = FlexAlign.Center, Padding = new Edges4(12, 0, 12, 0),
+                Corners = Radii.ControlAll, HoverFill = Tok.FillSubtleSecondary, Role = AutomationRole.Button,
+                OnClick = () => setLast($"Played “{title}”"),
+                Children = [new TextEl(title) { Size = 14f, Color = Tok.TextPrimary, Grow = 1f }],
+            }.WithContextMenu(svc, () => new ContextMenuModel(new[]
+            {
+                new MenuFlyoutItem("Play", IconRef.Themed("Play"), Invoke: () => setLast($"Play “{title}”")),
+                new MenuFlyoutItem("Add to queue", IconRef.Themed("AddToQueue"), Invoke: () => setLast($"Queued “{title}”")),
+                MenuFlyoutItem.Toggle("Save to Liked Songs", liked, () => setLiked(!liked), IconRef.Themed("Like")),
+                MenuFlyoutItem.SubMenu("Add to playlist", new[]
+                {
+                    new MenuFlyoutItem("New playlist", IconRef.Themed("Add"), Invoke: () => setLast("New playlist")),
+                    new MenuFlyoutItem("Chill Vibes", Invoke: () => setLast("→ Chill Vibes")),
+                    new MenuFlyoutItem("Focus", Invoke: () => setLast("→ Focus")),
+                }, IconRef.Themed("Folder")),
+                MenuFlyoutItem.Separator,
+                new MenuFlyoutItem("Go to album", IconRef.Themed("GoTo"), Invoke: () => setLast("Go to album")),
+                new MenuFlyoutItem("Copy link", IconRef.Themed("Link"), Invoke: () => setLast("Copied link")) { AcceleratorText = "Ctrl+C" },
+            }));
+        }
+        var trackList = new BoxEl
+        {
+            Direction = 1, Width = 320, Corners = Radii.OverlayAll, Fill = Tok.FillCardDefault,
+            BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f, Padding = new Edges4(4, 4, 4, 4),
+            Children = rows,
+        };
+
+        // 2) Rich target — COMMAND-BAR style (non-empty Primary): a horizontal quick-action strip over the labeled rows.
+        var card = new BoxEl
+        {
+            Width = 200, Height = 120, Corners = Radii.OverlayAll, Fill = Tok.FillCardDefault,
+            BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Children = [new TextEl("Album card") { Size = 14f, Color = Tok.TextSecondary }],
+        }.WithContextMenu(svc, () => new ContextMenuModel(
+            new AppBarCommand[]
+            {
+                new(IconRef.Themed("Play"), "Play", () => setLast("Play")),
+                new(IconRef.Themed("AddToQueue"), "Queue", () => setLast("Queue")),
+                new(IconRef.Themed("Share"), "Share", () => setLast("Share")),
+                new(IconRef.Themed("Like"), "Like", () => setLiked(!liked), Kind: AppBarCommandKind.ToggleButton, IsChecked: liked),
+            },
+            new MenuFlyoutItem[]
+            {
+                new("Go to album", IconRef.Themed("GoTo"), Invoke: () => setLast("Go to album")),
+                new("Go to artist", IconRef.Themed("GoTo"), Invoke: () => setLast("Go to artist")),
+                MenuFlyoutItem.Separator,
+                new("Copy link", IconRef.Themed("Link"), Invoke: () => setLast("Copied link")) { AcceleratorText = "Ctrl+C" },
+            }));
+
+        // 3) Disabled / empty — an all-disabled model opens nothing (the right-click is inert).
+        var emptyCard = new BoxEl
+        {
+            Width = 200, Height = 80, Corners = Radii.OverlayAll, Fill = Tok.FillCardDefault,
+            BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Children = [new TextEl("No actions") { Size = 14f, Color = Tok.TextSecondary }],
+        }.WithContextMenu(svc, () => new ContextMenuModel(new[] { new MenuFlyoutItem("Unavailable", Enabled: false) }));
+
+        return GalleryPage.Shell("Context menu",
+            "Attach a Win11-style context menu to any element in one line with ContextMenu.Attach / .WithContextMenu — "
+            + "right-click, the Menu key (or Shift+F10) on a focused row, or a touch long-press all open it.",
+            ControlExample.Build("Track rows (menu style)", trackList,
+                description: "Right-click a track (or focus it and press the Menu key / Shift+F10). Items build lazily at open time, so the "
+                + "toggle reflects the current “Liked” state; right-clicking another row opens its menu in one gesture; Esc or an outside click dismisses.",
+                output: BodyStrong($"Last: {last}"),
+                code: """
+                row.WithContextMenu(svc, () => new ContextMenuModel(new[]
+                {
+                    new MenuFlyoutItem("Play", Icons.Play, Invoke: () => Play(track)),
+                    MenuFlyoutItem.Toggle("Save to Liked Songs", liked, () => ToggleLike(), Icons.Accept),
+                    MenuFlyoutItem.SubMenu("Add to playlist", playlistItems, Icons.Folder),
+                    MenuFlyoutItem.Separator,
+                    new MenuFlyoutItem("Copy link", Icons.Link) { AcceleratorText = "Ctrl+C" },
+                }))
+                """),
+            ControlExample.Build("Rich target (command-bar style)", card,
+                description: "A non-empty Primary strip switches the body to the Explorer command-bar shape — a horizontal quick-action row over the labeled rows.",
+                output: BodyStrong($"Last: {last}"),
+                code: """
+                card.WithContextMenu(svc, () => new ContextMenuModel(
+                    Primary: new AppBarCommand[]
+                    {
+                        new(Icons.Play, "Play", Play),
+                        new(Icons.Accept, "Like", ToggleLike, Kind: AppBarCommandKind.ToggleButton, IsChecked: liked),
+                    },
+                    Rows: new MenuFlyoutItem[]
+                    {
+                        new("Go to album", Icons.OpenInNewWindow, Invoke: GoToAlbum),
+                        new("Copy link", Icons.Link) { AcceleratorText = "Ctrl+C" },
+                    }))
+                """),
+            ControlExample.Build("Disabled / empty", emptyCard,
+                description: "A null factory result, or a model whose entries are all disabled/separators, opens nothing — the right-click is inert.",
+                code: """
+                card.WithContextMenu(svc, () => new ContextMenuModel(
+                    new[] { new MenuFlyoutItem("Unavailable", Enabled: false) }))
+                """));
+    }
+}

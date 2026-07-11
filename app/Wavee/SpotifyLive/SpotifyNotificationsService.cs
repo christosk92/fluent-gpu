@@ -107,7 +107,7 @@ sealed class SpotifyNotificationsService : ISpotifyNotificationsService, IDispos
 
     void ApplyFailure(string reason)
     {
-        _log.Info("gander notifications: " + reason);   // HTTP-status failures must be visible, not just exceptions
+        _log.Warn("gander notifications: " + reason);   // HTTP-status failures must be visible, not just exceptions
         bool changed = false;
         lock (_gate)
         {

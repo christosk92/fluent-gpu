@@ -28,6 +28,7 @@ internal static class Mdl
     public static readonly string Speakers = Of(0xE7F5);       // device picker: Speaker / AVR / cast audio
     public static readonly string TvMonitor = Of(0xE7F4);      // device picker: TV / console / cast video
     public static readonly string ThisPc = Of(0xE977);         // device picker: This PC / Computer
+    public static readonly string Headphones = Of(0xE7F6);     // device picker: headphones / headset (Segoe MDL2 "Headphone")
     public static readonly string Pin = Of(0xE718);            // pin / unpin a sidebar row
     public static readonly string FolderOpen = Of(0xE838);     // expanded playlist folder
     public static readonly string HeartFill = Of(0xEB52);      // saved/liked (filled heart) — the Mutations on-state
@@ -46,6 +47,7 @@ internal static class Mdl
     public static readonly string MapPin = Of(0xE707);         // concert location
     public static readonly string Globe = Of(0xE774);          // world rank ("#N in the world")
     public static readonly string Delete = Of(0xE74D);         // delete (trash can)
+    public static readonly string More = Of(0xE712);           // track-row overflow "..." (opens the row context menu)
 }
 
 // The custom WaveeIcons font (app/Wavee/assets/fonts/wavee-icons.otf, built by build-wavee-icons.py) — Spotify's real

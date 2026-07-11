@@ -98,6 +98,7 @@ public sealed class SwitchablePlayer : IPlaybackPlayer
     public Task EnqueueAsync(string trackUri, CancellationToken ct = default) => Cur.EnqueueAsync(trackUri, ct);
     public Task EnqueueAsync(Track track, CancellationToken ct = default) => Cur.EnqueueAsync(track, ct);
     public Task PlayNextAsync(IReadOnlyList<PlaybackContextTrack> tracks, CancellationToken ct = default) => Cur.PlayNextAsync(tracks, ct);
+    public Task<string?> StartRadioAsync(string seedUri, string? displayName = null, CancellationToken ct = default) => Cur.StartRadioAsync(seedUri, displayName, ct);
 }
 
 public sealed class SwitchableDevices : IConnectDevices, IDisposable

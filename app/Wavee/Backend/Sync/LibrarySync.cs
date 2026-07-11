@@ -157,6 +157,16 @@ public sealed class LibrarySync : IAsyncDisposable
         return ct.CanBeCanceled ? tcs.Task.WaitAsync(ct) : tcs.Task;
     }
 
+    /// <summary>Enqueue a mutation-outbox drain on the single-writer loop and await that command's completion. User-facing
+    /// playlist actions use this barrier so they never report a queued write as a confirmed server mutation.</summary>
+    public Task DrainWritesAsync(CancellationToken ct)
+    {
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!_queue.Writer.TryWrite(new SyncCommand(SyncKind.DrainWrites, Done: tcs)))
+            return Task.FromException(new InvalidOperationException("The library sync loop is not available."));
+        return ct.CanBeCanceled ? tcs.Task.WaitAsync(ct) : tcs.Task;
+    }
+
     /// <summary>Test/probe barrier: a no-op that completes only after all previously-queued commands are processed
     /// (the channel is FIFO single-reader). A PlaylistRevalidate with an empty uri is the idle sentinel.</summary>
     public Task WaitForIdleAsync()

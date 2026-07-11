@@ -35,6 +35,9 @@ public sealed partial class AnimEngine
 
     public AnimEngine(SceneStore scene) => _scene = scene;
 
+    // FG_MOTION_DIAG=1: projected-motion discrimination trace (structural seed/snap/tick). Gated — nothing when off.
+    private static readonly bool s_motionDiag = Diag.EnvFlag("FG_MOTION_DIAG");
+
     /// <summary>Live, non-parked rows drive the loop — a parked subtree's looping animation can't defeat the idle stop.</summary>
     public bool HasActive => _slab.Count - _parked > 0;
 
@@ -99,6 +102,8 @@ public sealed partial class AnimEngine
                     r.Position = AdvanceTimeline(s, ref r);   // Eased two-point / Keyframes / Driven (uses _keysBySlot + Clocks)
                 }
                 if (IsSideTableChannel(r.Channel)) WriteSideTable(r.Channel, r.Node, r.Position);   // brush/hover/press → side-table (not NodePaint)
+                if (s_motionDiag && IsStructuralChannel(r.Channel))   // once per frame per animated structural row (SizeW/H/LayoutW/H/TranslateX/Y/ScaleX/Y)
+                    System.Console.Error.WriteLine($"[motion-diag]   tick node={r.Node.Raw.Index} ch={r.Channel} val={r.Position:0.0}");
                 if (r.Has(AnimFlags.Done)) _settledScratch.Add(s);   // #14: collect the just-settled live row now (PASS3 frees it without re-walking every node)
             }
         }
@@ -267,9 +272,12 @@ public sealed partial class AnimEngine
     }
 
     /// <summary>Spring toward <paramref name="to"/>. If a spring already runs on this node+channel it RETARGETS by
-    /// rebase (read current value+velocity, reset ElapsedMs, re-bake A/B) — velocity-continuous, no snap (plan §6.7).</summary>
+    /// rebase (read current value+velocity, reset ElapsedMs, re-bake A/B) — velocity-continuous, no snap (plan §6.7).
+    /// <paramref name="initialVelocity"/> seeds v0 on the FRESH-seed path only (a gesture release injecting its lift
+    /// speed into the settle spring); a retarget already carries the live row's velocity and ignores it.</summary>
     public void Spring(NodeHandle node, AnimChannel channel, float to, in SpringParams spring,
-                       float? initial = null, CompositeOp composite = CompositeOp.Replace, float delayMs = 0f)
+                       float? initial = null, float initialVelocity = 0f,
+                       CompositeOp composite = CompositeOp.Replace, float delayMs = 0f)
     {
         int existing = Find(node, channel);
         if (existing >= 0 && _slab.At(existing).Kind == GenKind.Spring)
@@ -286,8 +294,8 @@ public sealed partial class AnimEngine
         ref AnimValue r = ref _slab.At(s);
         float start = initial ?? CurrentValue(node, channel);
         r.Kind = GenKind.Spring;
-        r.To = to; r.Position = start; r.Velocity = 0f; r.ElapsedMs = 0f;
-        r.Gen = Generators.BakeSpring(in spring, x0: start - to, v0: 0f);
+        r.To = to; r.Position = start; r.Velocity = initialVelocity; r.ElapsedMs = 0f;
+        r.Gen = Generators.BakeSpring(in spring, x0: start - to, v0: initialVelocity);
         r.DelayRemainingMs = MathF.Max(0f, delayMs);
         r.Flags = (r.Flags & ~(AnimFlags.Done | AnimFlags.Loop)) | AnimFlags.JustSeeded;
     }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
@@ -266,6 +267,7 @@ sealed class AlbumDrawerPanel : Component
     readonly Action<string> _play; readonly Action<string, string?> _go;
     readonly ColorF _accent;
     readonly SelectionModel _sel = new();
+    readonly SwipeGroup _swipeGroup = new();
     readonly Func<bool> _showChecks;
     IReadOnlyList<Track> _rows = Array.Empty<Track>();
     public AlbumDrawerPanel(Services svc, Album thin, float panelH, Action<string> play, Action<string, string?> go, ColorF accent)
@@ -276,20 +278,22 @@ sealed class AlbumDrawerPanel : Component
 
     static readonly ColumnSet DrawerCols = new(Album: false, By: false, Date: false, Video: false, Plays: false, Heart: true, Thumb: false);
     static readonly TrackSize[] DrawerColumns =
-        [TrackSize.Px(30f), TrackSize.Px(40f), TrackSize.Star(), TrackSize.Px(52f)];
+        [TrackSize.Px(30f), TrackSize.Px(40f), TrackSize.Star(), TrackSize.Px(52f), TrackSize.Px(40f)];   // trailing "…" lane
     const float DrawerRowContentH = 40f;
 
     public override Element Render()
     {
         var bridge = UseContext(PlaybackBridge.Slot);
         var lib = UseContext(LibraryBridge.Slot);
+        var acts = UseContext(ActionServices.Slot);
+        var menuOverlay = UseContext(Overlay.Service);   // row context menus (right-click / long-press / the "…" cell)
         var full = UseAsyncResource(ct => _svc.Library.GetAlbumAsync(_thin.Uri, ct), (Album?)null, _thin.Uri);
         var tracks = (full.Value.Value?.Tracks ?? _thin.Tracks) ?? System.Array.Empty<Track>();
         _rows = tracks;
         bool loading = tracks.Count == 0 && full.State.Value == (byte)LoadState.Pending;
         int n = loading ? Math.Clamp(_thin.TrackCount, 1, 10) : Math.Min(tracks.Count, 10);
 
-        Element body = loading ? ShimmerRows(n) : Rows(tracks, n, bridge, lib);
+        Element body = loading ? ShimmerRows(n) : Rows(tracks, n, bridge, lib, acts, menuOverlay);
 
         return new BoxEl
         {
@@ -321,10 +325,28 @@ sealed class AlbumDrawerPanel : Component
         ],
     };
 
-    Element Rows(IReadOnlyList<Track> tracks, int n, PlaybackBridge? bridge, LibraryBridge? lib)
+    Element Rows(IReadOnlyList<Track> tracks, int n, PlaybackBridge? bridge, LibraryBridge? lib, ActionServices? acts, IOverlayService? menuOverlay)
         => ItemsView.CreateBound(
             n,
-            scope => SelectorVisualsBound.AccentPill(scope, Embed.Comp(() => new DrawerTrackRow(this, scope, tracks, n, bridge, lib)), _showChecks),
+            scope =>
+            {
+                Element row = SelectorVisualsBound.AccentPill(scope, Embed.Comp(() => new DrawerTrackRow(this, scope, tracks, n, bridge, lib)), _showChecks);
+                // Right-click / long-press / the row's "…" cell: the selection-aware track menu (Explorer semantics —
+                // inside a multi-selection acts on all of it). Attached on a wrapper (the SearchPage songs pattern:
+                // AccentPill's root carries bound visuals, so the menu chains on a plain BoxEl above it).
+                if (acts is { } a && menuOverlay is { } ov)
+                    row = new BoxEl { Direction = 1, Children = [row] }.WithContextMenu(ov, () => TrackContextMenu.Build(
+                        a, _sel, i => (uint)i < (uint)n ? tracks[i] : null,
+                        scope.Index.Peek(), static () => null));
+                if (acts is null) return row;
+                return RowSwipe.WrapBound(row, () =>
+                {
+                    int i = scope.Index.Peek();
+                    return (uint)i < (uint)n
+                        ? new ActionContext(ActionTarget.ForTracks(new[] { tracks[i] }), acts)
+                        : null;
+                }, _swipeGroup, TrackActions.ToggleLike, TrackActions.AddToQueue, scope.Index);
+            },
             RepeatLayout.Stack(TrackRow.CompactListItemExtent),
             selectionMode: ItemsSelectionMode.Extended,
             selection: _sel,
@@ -336,6 +358,7 @@ sealed class AlbumDrawerPanel : Component
                 TrackRow.Invoke(bridge, t, () => _ = _svc.Player.PlayAsync(_thin.Uri, i));
             },
             itemText: i => (uint)i < (uint)n ? tracks[i].Title : "",
+            onScrollGeometryChanged: (g => BitConverter.SingleToInt32Bits(g.OffsetY), _ => _swipeGroup.Close()),
             grow: 0f);
 
     sealed class DrawerTrackRow : Component
@@ -366,7 +389,8 @@ sealed class AlbumDrawerPanel : Component
             };
             return TrackRow.Grid(t, i, st, DrawerCols, DrawerColumns, DrawerRowContentH, title, showTrackArtist: false, _o._go,
                 onPlay: () => TrackRow.Invoke(_bridge, t, () => _ = _o._svc.Player.PlayAsync(_o._thin.Uri, i)),
-                onLike: t.Uri.Length > 0 ? () => _lib?.ToggleSaved(t.Uri, t.Title) : null);
+                onLike: t.Uri.Length > 0 ? () => _lib?.ToggleSaved(t.Uri, t.Title) : null,
+                actionsCell: TrackRow.MoreButton(true));   // "…" raises the row's context request (ClickRequestsContext)
         }
     }
 
@@ -385,6 +409,7 @@ sealed class AlbumDrawerPanel : Component
             new BoxEl { Width = 16f, Height = 11f, Corners = CornerRadius4.All(4f), Fill = Tok.FillSubtleSecondary },
             new BoxEl { Grow = 1f, Basis = 0f, Height = 11f, MaxWidth = 240f, Corners = CornerRadius4.All(4f), Fill = Tok.FillSubtleSecondary },
             new BoxEl { Width = 30f, Height = 11f, Corners = CornerRadius4.All(4f), Fill = Tok.FillSubtleSecondary },
+            new BoxEl { Width = 40f },   // the reserved "…" lane (matches DrawerColumns' trailing 40px)
         ],
     };
 }
@@ -399,19 +424,19 @@ sealed class DiscoGrid : Component
     readonly int _initialIndex;
     readonly ColorF _accent;
     readonly Signal<int> _expanded = new(-1);
+    ActionServices? _acts;            // card context menus (Menus.CardAttach) — resolved in Render, read by Cell
+    IOverlayService? _menuOverlay;
 
     const float MinCol = 180f;
     static readonly float Gap = WaveeSpace.L;          // column gap (the vertical row gap is RowGap, folded into rowExtra)
 
-    // Uniform-card geometry → predictable drawer spacing. Cards are forced to ONE height (square cover + chrome) so every
-    // row has the SAME slack; the drawer can then hug the clicked card with a known gap above it and breathe below.
-    const float CardChrome = 70f;       // a GridCard's height ABOVE the square cover (2-line title + paddings)
+    // Uniform-card geometry → predictable drawer spacing. GridCard's cover is cardW-16; adding 20px vertical padding,
+    // an 8px card gap, and 38px for one title + one metadata line yields an exact cardW+50 card. Keeping this separate
+    // from RowGap leaves an actual gutter instead of flex-growing the card through it.
+    const float CardChrome = 50f;
     const float RowGap     = 20f;       // vertical gap between card rows  (rowExtra = CardChrome + RowGap)
-    const float TopGap     = 8f;        // expanded card → drawer (hug it)
     const float BottomGap  = 30f;       // drawer → next row (breathing room below it)
     const float DrawerHeaderH = 56f;
-    const float DrawerLift = RowGap - TopGap;              // paint pull-up: the drawer rises into the row slack to hug the card
-    const float SlotExtra  = TopGap + BottomGap - RowGap;  // reserved drawer slot beyond the panel → becomes the bottom room
 
     // The inline drawer's open/close + switch motion. Opacity+Position animate the enter (drop-in) / exit (lift-out);
     // Size=Reflow eases the height when switching to an album with a different track count (the rows below reflow).
@@ -426,7 +451,11 @@ sealed class DiscoGrid : Component
     public DiscoGrid(VirtualCollection<Album> vc, Services svc, Action<string, string?> go, Action<string> play, int cap, int initialIndex = 0, ColorF? accent = null)
     { _vc = vc; _svc = svc; _go = go; _play = play; _cap = cap; _initialIndex = initialIndex; _accent = accent ?? Tok.AccentDefault; }
 
-    public override Element Render() => Embed.Comp(() => new LazyGrid(
+    public override Element Render()
+    {
+        _acts = UseContext(ActionServices.Slot);
+        _menuOverlay = UseContext(Overlay.Service);
+        return Embed.Comp(() => new LazyGrid(
         // Capped to _cap when >0 (the artist page); cap 0 → the full facet. The count delegate reads the live total.
         count: () => { _ = _vc.Version.Value; int t = _vc.CountOr0; return _cap > 0 ? Math.Min(_cap, t) : t; },
         cell: Cell,
@@ -436,17 +465,24 @@ sealed class DiscoGrid : Component
         drawer: DrawerFor,
         drawerHeight: DrawerHeight,
         initialIndex: _initialIndex));
+    }
 
     Element Cell(int idx, float cardW)
     {
         var al = _vc![idx];
         if (al is null) return Placeholder(cardW);
-        string subtitle = al.Year > 0 ? al.Year + "  " + ArtistPage.KindLabel(al.Kind) : ArtistPage.KindLabel(al.Kind);
+        string date = ReleaseDateLabel(al);
+        string subtitle = al.TrackCount > 0
+            ? date.Length > 0
+                ? Strings.Artist.ReleaseMeta(date, Strings.Artist.TrackCount(al.TrackCount))
+                : Strings.Artist.TrackCount(al.TrackCount)
+            : date;
         Element card = MediaCard.GridCard(al.Cover, al.Name, subtitle, al.Uri,
             onClick: () => _expanded.Value = _expanded.Peek() == idx ? -1 : idx,
             onPlay: () => _play(al.Uri),
             onNavigate: () => _go("album:" + al.Uri, al.Name),
-            accent: al.Palette is { } p ? WaveePalette.Lift(WaveePalette.Accent(p)) : null);
+            accent: al.Palette is { } p ? WaveePalette.Lift(WaveePalette.Accent(p)) : null,
+            menu: _menuOverlay is { } ov ? Menus.CardAttach(_acts, ov, al.Uri, al.Name) : null);
         if (card is BoxEl b)
         {
             // Force ONE height (square cover + chrome) so every card is uniform → the drawer's hug spacing is exact.
@@ -458,6 +494,22 @@ sealed class DiscoGrid : Component
             card = b;
         }
         return card;
+    }
+
+    static string ReleaseDateLabel(Album album)
+    {
+        if (album.ReleaseDate is not { Length: > 0 } iso ||
+            !DateTimeOffset.TryParse(iso, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var date))
+            return album.Year > 0 ? album.Year.ToString(CultureInfo.InvariantCulture) : "";
+        CultureInfo culture;
+        try { culture = CultureInfo.GetCultureInfo(Loc.CurrentCulture); }
+        catch (CultureNotFoundException) { culture = CultureInfo.InvariantCulture; }
+        return (album.ReleaseDatePrecision ?? "").ToUpperInvariant() switch
+        {
+            "YEAR" => date.ToString("yyyy", culture),
+            "MONTH" => date.ToString("MMM yyyy", culture),
+            _ => date.ToString("MMM d, yyyy", culture),
+        };
     }
 
     // A self-sizing shimmer cell, SAME height as a real card: the cover fills the (engine-laid-out) cell width and squares
@@ -480,9 +532,9 @@ sealed class DiscoGrid : Component
     };
 
     float PanelHeight(int idx) { int n = Math.Min(_vc?[idx]?.TrackCount ?? 0, 10); return DrawerHeaderH + n * TrackRow.CompactListItemExtent; }
-    // Reserved slot the windowing math accounts for = panel + the bottom breathing room (the panel is pulled UP by
-    // DrawerLift to hug the card, so the slack falls BELOW it as BottomGap).
-    float DrawerHeight(int idx) => PanelHeight(idx) + SlotExtra;
+    // The preceding grid row already includes RowGap, so the drawer starts beyond the card's shadow halo. Its own slot
+    // only needs to reserve the panel plus the breathing room before the following row.
+    float DrawerHeight(int idx) => PanelHeight(idx) + BottomGap;
 
     Element DrawerFor(int idx, GridDrawerInfo info)
     {
@@ -504,18 +556,13 @@ sealed class DiscoGrid : Component
             ],
         };
 
-        // The OUTER slot owns the transition because its height participates in parent layout. Its negative top margin
-        // moves the clipping box into the row's spare gap while preserving the exact reserved contribution:
-        // (panel + BottomGap) - DrawerLift == panel + SlotExtra. The stable key keeps ONE node across
-        // A→B switches (Position/Size-reflow); a true open/close runs the enter/exit channels.
+        // The OUTER slot owns the transition because its height participates in parent layout. The stable key keeps ONE
+        // node across A→B switches (Position/Size-reflow); a true open/close runs the enter/exit channels.
         var inner = new BoxEl { ZStack = true, Children = [ panel, connector ] };
         return new BoxEl
         {
-            // MinHeight neutralizes the negative margin at the zero-size start. The panel begins fully clipped, while
-            // following rows start collapsed and move as SizeMode.Reflow grows the real layout slot.
             Key = "disco-drawer", Direction = 1,
-            Height = PanelHeight(idx) + BottomGap, MinHeight = DrawerLift,
-            Margin = new Edges4(0f, -DrawerLift, 0f, 0f),
+            Height = DrawerHeight(idx),
             ClipToBounds = true, Animate = DrawerReveal,
             Children = [ inner ],
         };

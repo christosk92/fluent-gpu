@@ -105,4 +105,27 @@ public class PlaybackArtworkTests
         Assert.Same(changed.Task, done);
         Assert.Equal(resolved.Url, p.CurrentTrack!.Image!.Url);
     }
+
+    [Fact]
+    public async Task NowPlayingProjection_EnrichesMissingAlbumIdentity_EvenWhenArtAndArtistArePresent()
+    {
+        var p = new NowPlayingProjection("us", () => 0);
+        var resolved = new TaskCompletionSource<Track?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var sub = p.Changes.Subscribe(Observers.From<IPlaybackState>(s =>
+        {
+            if (s.CurrentTrack?.Album.Uri == Album.Uri) resolved.TrySetResult(s.CurrentTrack);
+        }));
+        p.TrackResolver = (uri, _) => Task.FromResult<Track?>(new Track(
+            "tr", uri, "Broken Angel", [Artist], Album, 180000, false, Cover));
+
+        // This snapshot used to skip enrichment: artist and HTTP artwork are already usable, but AlbumUri is absent.
+        p.OnCluster(new ClusterDelta("other", true,
+            new RemoteTrack("spotify:track:tr", "Broken Angel", Artist.Name, Artist.Uri, "SUPERMAN", "", Cover.Url, 180000),
+            "spotify:album:al", true, false, false, 0, 0, 0, 180000, false, RepeatMode.Off,
+            Array.Empty<ConnectDeviceRow>(), Array.Empty<RemoteTrack>()));
+
+        var done = await Task.WhenAny(resolved.Task, Task.Delay(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken));
+        Assert.Same(resolved.Task, done);
+        Assert.Equal(Album.Uri, (await resolved.Task)!.Album.Uri);
+    }
 }

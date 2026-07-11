@@ -139,10 +139,12 @@ polylines still clip by scissor. That caveat is real; don't paper over it when y
 10. **Scrollbar overlay** — after the content clip pops, so the expanded gutter/thumb aren't chopped at the viewport edge.
 11. **Pop opacity group** (last).
 
-`Record` also handles three things outside the main walk: **exit orphans** (removed subtrees kept alive for their exit
-animation, drawn behind the live tree at their frozen parent origin), the **drag ghost** (re-walked last in an *infinite*
-clip so a row dragged out of a clipped list keeps drawing above everything), and **windowed-popup skip-roots** (`RecordSubtree`
-re-origins one subtree into its own popup swapchain's DrawList; the subtree stays in the one `SceneStore`).
+Removed subtrees kept alive for an exit animation are replayed **inside their former parent's walk**, before its live
+children. That preserves ancestor clips, acrylic/opacity layers, painter order, and the correct windowed-popup DrawList;
+only a defensive rootless orphan uses the outer fallback pass. `Record` also handles the **drag ghost** (re-walked last
+in an *infinite* clip so a row dragged out of a clipped list keeps drawing above everything) and **windowed-popup
+skip-roots** (`RecordSubtree` re-origins one subtree into its own popup swapchain's DrawList; the subtree stays in the one
+`SceneStore`).
 
 ---
 

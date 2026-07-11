@@ -20,6 +20,11 @@ public enum DrawOp : int
     DrawGlyphRunGradient = 15, // a glyph run filled per-glyph by a karaoke WIPE (played/unplayed split along the run-local
                                // x-axis). Reuses the glyph PSO (per-instance color); the per-glyph colors are computed at
                                // REPLAY from the split, so the cache key (shaping) is unchanged. Decoded only when emitted.
+    DrawIconMask = 16,         // a ThemedIcon vector-layer mask: a CPU-rasterized colorless R8 coverage mask (interned
+                               // path geometry in IconGeometryTable.Shared, keyed by PathId) tinted per-instance and drawn
+                               // through the EXISTING glyph atlas/PSO — no new shader/PSO/texture/RHI method. Deliberately
+                               // NOT the gpu-renderer.md §5 tessellation lane (same non-tessellation-sibling posture as
+                               // DrawTabShape) — icons are tiny glyph-shaped workloads that ride the R8 atlas like text.
 }
 
 /// <summary>Per-opcode command counts for the current <see cref="DrawList"/>. Stored as scalar fields so the host can
@@ -28,6 +33,7 @@ public struct DrawListOpcodeStats
 {
     public int FillRoundRect, DrawGlyphRun, PushClip, PopClip, DrawImage, DrawRoundRectStroke, DrawShadow;
     public int DrawGradientRect, PushLayer, PopLayer, DrawGradientStroke, DrawArc, DrawPolylineStroke, DrawTabShape, DrawGlyphRunGradient;
+    public int DrawIconMask;
 
     public void Add(DrawOp op)
     {
@@ -48,6 +54,7 @@ public struct DrawListOpcodeStats
             case DrawOp.DrawPolylineStroke: DrawPolylineStroke++; break;
             case DrawOp.DrawTabShape: DrawTabShape++; break;
             case DrawOp.DrawGlyphRunGradient: DrawGlyphRunGradient++; break;
+            case DrawOp.DrawIconMask: DrawIconMask++; break;
         }
     }
 
@@ -68,6 +75,7 @@ public struct DrawListOpcodeStats
         DrawPolylineStroke += other.DrawPolylineStroke;
         DrawTabShape += other.DrawTabShape;
         DrawGlyphRunGradient += other.DrawGlyphRunGradient;
+        DrawIconMask += other.DrawIconMask;
     }
 
     public readonly bool CanTranslateCopiedSpan
@@ -92,10 +100,11 @@ public struct DrawListOpcodeStats
         DrawPolylineStroke = DrawPolylineStroke - other.DrawPolylineStroke,
         DrawTabShape = DrawTabShape - other.DrawTabShape,
         DrawGlyphRunGradient = DrawGlyphRunGradient - other.DrawGlyphRunGradient,
+        DrawIconMask = DrawIconMask - other.DrawIconMask,
     };
 
     public override readonly string ToString()
-        => $"fill={FillRoundRect} glyph={DrawGlyphRun} glyphGrad={DrawGlyphRunGradient} clip={PushClip}/{PopClip} img={DrawImage} stroke={DrawRoundRectStroke} shadow={DrawShadow} grad={DrawGradientRect}/{DrawGradientStroke} layer={PushLayer}/{PopLayer} arc={DrawArc} poly={DrawPolylineStroke} tab={DrawTabShape}";
+        => $"fill={FillRoundRect} glyph={DrawGlyphRun} glyphGrad={DrawGlyphRunGradient} clip={PushClip}/{PopClip} img={DrawImage} stroke={DrawRoundRectStroke} shadow={DrawShadow} grad={DrawGradientRect}/{DrawGradientStroke} layer={PushLayer}/{PopLayer} arc={DrawArc} poly={DrawPolylineStroke} tab={DrawTabShape} icon={DrawIconMask}";
 }
 
 /// <summary>How a <see cref="FillRoundRectCmd"/> fills its interior.</summary>
@@ -235,6 +244,12 @@ public readonly record struct DrawPolylineStrokeCmd(RectF Rect, ColorF Color, fl
 // FlareRadius above the bottom — the inverted-fillet base the tab "grows" out of. Drawn as a RoundRect-pipeline SDF
 // variant — deliberately NOT a general path tessellator (BUILD-ROADMAP row-27 scope).
 public readonly record struct DrawTabShapeCmd(RectF Rect, float TopRadius, float FlareRadius, ColorF Fill, Affine2D Transform, float Opacity);
+// A ThemedIcon vector-layer mask (see DrawOp.DrawIconMask). <see cref="Rect"/> is the node-local (DIP) icon box;
+// <see cref="PathId"/> is the interned IconGeometryTable.Shared geometry; <see cref="Tint"/> is the per-instance,
+// theme-resolved layer color (bound → re-fires on RethemeAll with NO re-raster — the mask is colorless). The backend
+// rasterizes the mask lazily on a (PathId, device-px) atlas miss and appends ONE glyph instance tinted by Tint, so it
+// batches in the glyph pass (text-like z within a layer scope). NOT the §5 tessellation lane (see the opcode note).
+public readonly record struct DrawIconMaskCmd(RectF Rect, ColorF Tint, int PathId, Affine2D Transform, float Opacity);
 
 /// <summary>
 /// Flat POD command stream consumed by the RHI (<c>SubmitDrawList</c>). The slice grows a single contiguous buffer;
@@ -539,6 +554,16 @@ public sealed class DrawList
         PushSort(sortKey);
     }
 
+    /// <summary>A ThemedIcon vector-layer mask (see <see cref="DrawIconMaskCmd"/>): the colorless coverage mask interned
+    /// as <paramref name="pathId"/> in <c>IconGeometryTable.Shared</c>, tinted by <paramref name="tint"/> per instance and
+    /// drawn through the glyph atlas/PSO. No new shader/PSO/texture — icons ride the R8 glyph pipeline like text.</summary>
+    public void DrawIconMask(in RectF rect, in ColorF tint, int pathId, in Affine2D transform, float opacity, ulong sortKey = 0)
+    {
+        WriteOp(DrawOp.DrawIconMask);
+        WritePayload(new DrawIconMaskCmd(rect, tint, pathId, transform, opacity));
+        PushSort(sortKey);
+    }
+
     private void WriteOp(DrawOp op)
     {
         Ensure(sizeof(int));
@@ -619,6 +644,9 @@ public sealed class DrawList
                     break;
                 case DrawOp.DrawTabShape:
                     if (!TranslatePayload<DrawTabShapeCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
+                    break;
+                case DrawOp.DrawIconMask:
+                    if (!TranslatePayload<DrawIconMaskCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
                     break;
                 default:
                     return false;

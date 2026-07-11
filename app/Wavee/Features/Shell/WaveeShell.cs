@@ -40,6 +40,11 @@ sealed class WaveeShell : Component
     // toggled from the player bar. The rail reserves inline width when it fits; otherwise it floats over the content.
     readonly ShellUi _shellUi = new();
 
+    // The signals-first action system's ambient service bag (Actions/ActionServices.cs): ONE reference-stable instance
+    // provided at the root next to NavCtx; fields are refreshed each render, Overlay is bound inside the OverlayHost
+    // subtree (ActionServicesOverlayBinder). Context, not ctor args — the component-props-freeze contract.
+    readonly ActionServices _actions = new();
+
     int _nextTabId = 1;
     readonly List<OpenTab> _open = new() { new OpenTab(0, "home", Loc.Get(Strings.Nav.Home), Icons.Home, null) };
     readonly Signal<int> _tabsVersion = new(0);
@@ -98,7 +103,7 @@ sealed class WaveeShell : Component
     // the pane / rail spacer commit a new width. In the Reflow baseline the card carried NO transition (it re-tiled via
     // real layout every tick), so this is null there.
     static readonly LayoutTransition? ContentCardAnim = s_railBaseline ? null : new(
-        TransitionChannels.Position,
+        TransitionChannels.Position | TransitionChannels.Size,
         TransitionDynamics.Tween(SplitViewPaneDurationMs, SplitViewPaneEase),
         SizeMode.Reveal,
         ExitDynamics: TransitionDynamics.Tween(SplitViewPaneDurationMs, SplitViewPaneEase),
@@ -257,6 +262,17 @@ sealed class WaveeShell : Component
         // Rail viewport-fit + layout-defer (off-render, auto-tracking effects — the render body stays subscription-free
         // so the shell isn't re-run on every resize pixel; only the rail band / pages re-solve from the signals below).
         var post = UsePost();
+
+        // Refresh the (reference-stable) ActionServices bag — plain field writes on the same instance, so the
+        // Ctx.Provide below never churns its consumers. Overlay is bound by ActionServicesOverlayBinder (inside the
+        // OverlayHost subtree, where the REAL service lives).
+        _actions.Playback = UseContext(PlaybackBridge.Slot);
+        _actions.Library = UseContext(LibraryBridge.Slot);
+        _actions.Svc = UseContext(Services.Slot);
+        _actions.Store = UseContext(LibraryStore.Slot);
+        _actions.Clipboard = UseContext(InputHooks.Current).Clipboard;
+        _actions.Go = GoNav;
+        _actions.Post = post;
         void ArmRailLockWithClear()
         {
             _shellUi.ArmRailLock();
@@ -402,10 +418,13 @@ sealed class WaveeShell : Component
                                         // parent-determined) and clips — so a re-render deep inside a page re-solves only this
                                         // subtree (RunSubtree) instead of a full-tree layout from the root on every nav.
                                         IsolateLayout = true,
-                                        // Projected motion: the card carries a Position Reveal so that when the sidebar pane
-                                        // commits a new width, the card FLIP-translates from its OLD left edge to the new one
-                                        // (CaptureProjections/ApplyProjections), sliding the content sheet in lock-step with the
-                                        // pane's revealing edge. Same dynamics as the pane (edge coherence).
+                                        // Projected motion: the card carries a Position|Size Reveal so that when the sidebar
+                                        // pane commits a new width, the card FLIP-translates from its OLD left edge to the new
+                                        // one AND presented-size-reveals its width from old→new (CaptureProjections/ApplyProjections),
+                                        // sliding the content sheet in lock-step with the pane's revealing edge. Size is required
+                                        // alongside Position: Grow=1 makes the card's final width layout-driven, so a Position-only
+                                        // FLIP would snap the width to final on frame 1 while only the left edge eased (the visible
+                                        // "card width snaps" tear). Same dynamics as the pane (edge coherence); mirrors SidebarPaneAnim.
                                         // RelativeTo (CRITICAL): FLIP against the stable ROW frame, NOT the card's layout parent.
                                         // The card fills the content region, and that region absorbs the ENTIRE reserved-width
                                         // shift — so the card's PARENT-relative rect never changes (zero delta) and the default
@@ -552,7 +571,10 @@ sealed class WaveeShell : Component
                 new BoxEl { MaxWidth = 560f, Children = [ Embed.Comp(() => new PlaybackRuntimeChrome(_settings)) ] },
             ],
         };
-        var shellWithOverlays = Ui.ZStack(tinted, runtimeBannerLayer, toastLayer) with { Grow = 1f };
+        // The zero-size binder leaf lives INSIDE the OverlayHost subtree so it can capture the real overlay service
+        // into the stable ActionServices bag (invoke-time dialogs: confirm / rename / add-to-playlist picker).
+        var shellWithOverlays = Ui.ZStack(tinted, runtimeBannerLayer, toastLayer,
+            Embed.Comp(() => new ActionServicesOverlayBinder(_actions))) with { Grow = 1f };
 
         return Ctx.Provide(ShellUi.Slot, _shellUi,
                Ctx.Provide(ShellTint.Slot, _shellTint,
@@ -560,7 +582,8 @@ sealed class WaveeShell : Component
                Ctx.Provide(HistoryStore.Slot, _historyStore,
                Ctx.Provide(NavPreviewStore.Slot, _navPreview,
                Ctx.Provide(SearchQuery.Slot, _searchText,
-               Embed.Comp(() => new OverlayHost { Child = shellWithOverlays })))))));
+               Ctx.Provide(ActionServices.Slot, _actions,
+               Embed.Comp(() => new OverlayHost { Child = shellWithOverlays }))))))));
     }
 
     TabStrip BuildTabStrip() => new TabStrip

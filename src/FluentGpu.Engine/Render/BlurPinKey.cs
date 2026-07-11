@@ -108,13 +108,12 @@ public static class BlurPinKey
 
     // Fold the raw bytes of one POD command payload. All *Cmd payloads are PAD-FREE (every field is a 4-byte
     // float/int/StringId, naturally aligned), so re-serializing the struct is byte-deterministic frame-to-frame; a
-    // future cmd with a non-4-byte field would need field-wise folding instead. The stackalloc frees on return (a
-    // per-op call, not a growing loop-local), so this stays allocation-free.
+    // future cmd with a non-4-byte field would need field-wise folding instead. No stackalloc — NativeAOT can inline
+    // this into TryCompute's op-walk loop and trip /GS (0xC0000409) when many subtree ops are folded per frame.
     private static void FoldStruct<T>(ref ulong h, in T v) where T : unmanaged
     {
-        Span<T> s = stackalloc T[1];
-        s[0] = v;
-        ReadOnlySpan<byte> b = MemoryMarshal.AsBytes(s);
+        T local = v;
+        ReadOnlySpan<byte> b = MemoryMarshal.AsBytes(MemoryMarshal.CreateSpan(ref local, 1));
         for (int i = 0; i < b.Length; i++) { h ^= b[i]; h *= Prime; }
     }
 

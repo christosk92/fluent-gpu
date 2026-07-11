@@ -155,7 +155,10 @@ public static class PlaylistWireMapper
     /// <summary>Serialize a playlist edit with captured <see cref="Pl.ChangeInfo"/> and want-flags.</summary>
     public static byte[] BuildChanges(byte[]? baseRev, IReadOnlyList<PlaylistOp> ops, string username, long nowMs)
     {
-        var changes = new Pl.ListChanges { WantResultingRevisions = true };
+        // Match the desktop client's /changes envelope: both result flags plus a positive request nonce. The sync result
+        // makes the accepted edit authoritative on the response path; the nonce prevents a replayed request from being
+        // applied twice by Spotify's playlist service.
+        var changes = new Pl.ListChanges { WantResultingRevisions = true, WantSyncResult = true };
         var delta = new Pl.Delta();
         if (!string.IsNullOrEmpty(username) || nowMs > 0)
             delta.Info = new Pl.ChangeInfo { User = username, Timestamp = nowMs, Admin = true, Undo = true, Merge = true };
@@ -167,6 +170,7 @@ public static class PlaylistWireMapper
         }
         for (int i = 0; i < ops.Count; i++) delta.Ops.Add(ToWireOp(ops[i]));
         changes.Deltas.Add(delta);
+        changes.Nonces.Add(System.Random.Shared.NextInt64(1, int.MaxValue));
         return changes.ToByteArray();
     }
 

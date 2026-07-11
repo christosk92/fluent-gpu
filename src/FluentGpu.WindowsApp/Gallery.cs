@@ -182,6 +182,7 @@ sealed class GalleryApp : Component
                 new("CommandBar", Icons.More, "CommandBar"),
                 new("AppBarSeparator", Icons.More, "AppBarSeparator"),
                 new("CommandBarFlyout", Icons.More, "CommandBarFlyout"),
+                new("Context menu", Icons.More, "ContextMenu"),
                 new("SwipeControl", Icons.More, "SwipeControl"),
             ],
         },
@@ -216,7 +217,7 @@ sealed class GalleryApp : Component
         ("Media", ["Image", "PersonPicture", "MediaPlayerElement"]),
         ("Collections", ["ItemsView", "FlipView", "TreeView"]),
         ("Menus & toolbars", ["MenuBar", "AppBarButton", "AppBarToggleButton", "CommandBar", "AppBarSeparator",
-                              "CommandBarFlyout", "SwipeControl"]),
+                              "CommandBarFlyout", "ContextMenu", "SwipeControl"]),
         ("Date & time", ["CalendarView", "CalendarDatePicker", "DatePicker", "TimePicker"]),
     };
 
@@ -414,6 +415,7 @@ sealed class GalleryApp : Component
         "Canvas" => Embed.Comp(() => new CanvasPage()),
         "ToolTip" => Embed.Comp(() => new ToolTipPage()),
         "CommandBarFlyout" => Embed.Comp(() => new CommandBarFlyoutPage()),
+        "ContextMenu" => Embed.Comp(() => new ContextMenuPage()),
         "ProgressRing" => Embed.Comp(() => new ProgressRingPage()),
         "RelativePanel" => Embed.Comp(() => new RelativePanelPage()),
         "VariableSizedWrapGrid" => Embed.Comp(() => new VariableSizedWrapGridPage()),

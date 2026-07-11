@@ -71,16 +71,15 @@ public sealed class ScrollIntegrator
     public const float MinBarOverflowPx = 4f;
 
     /// <summary>Touch/trackpad-fling friction: the per-second exponential SURVIVAL factor applied to the velocity each
-    /// tick (v *= FlingDecayPerS^dt_s). Tuned to iOS UIScrollView's <c>.normal</c> deceleration (decelerationRate
-    /// 0.998/ms ⇒ 0.998^1000 ≈ 0.135 survival per SECOND). The v2 fling advances the offset by the EXACT closed-form
-    /// integral <see cref="OverscrollPhysics.CoastStep"/> (Δpos = v·(1−decay^dt)/k, k = −ln(FlingDecayPerS) ≈ 2.0/s),
+    /// tick (v *= FlingDecayPerS^dt_s). Calibrated to WinUI ScrollPresenter's InteractionTracker inertia: its shipping
+    /// decay setting corresponds to about 5% velocity survival per SECOND. The fling advances the offset by the EXACT
+    /// closed-form integral <see cref="OverscrollPhysics.CoastStep"/> (Δpos = v·(1−decay^dt)/k,
+    /// k = −ln(FlingDecayPerS) ≈ 3.0/s),
     /// never a <c>v·dt</c> Riemann step — so a flick coasts the same distance (v0/k) at 60 Hz and 120 Hz. THIS IS THE
     /// FEEL KNOB: tune on-device. The snap-retarget integral below derives k from this value, so it stays consistent
     /// when only this constant changes.</summary>
-    public const float FlingDecayPerS = 0.135f;   // per-second velocity survival (k ≈ 2.0/s) — iOS UIScrollView .normal deceleration
-    /// <summary>Below this speed the fling has settled (px/s): it ends with zero velocity. Paired with the softer
-    /// iOS-normal <see cref="FlingDecayPerS"/> so the long tail fades closer to rest (scroll-feel-rework-v2 §4.6:
-    /// FlingSettleVelPxPerS = 13).</summary>
+    public const float FlingDecayPerS = 0.05f;   // per-second velocity survival (k ≈ 3.0/s) — WinUI-like inertia
+    /// <summary>Below this speed the fling has settled (px/s): it ends with zero velocity.</summary>
     public const float FlingMinVelocityPxPerS = 13f;
     /// <summary>A snap fling's landing tolerance (px): once this tick's advance would reach/pass the snap value, the
     /// integrator writes the exact snap offset and ends (so a snap fling lands ON the snap rather than v_min/k short).</summary>
@@ -102,7 +101,7 @@ public sealed class ScrollIntegrator
     /// rubber-band <see cref="SnapBack"/> bounce (WinUI/iOS) instead of stopping dead; below it a slow drift-into-edge
     /// just settles. TOUCH-descended states only — a WheelAnimating notch hard-clamps at the edge with NO band (§2.2
     /// extent asymmetry).</summary>
-    public const float FlingBounceMinPxPerS = 50f;
+    public const float FlingBounceMinPxPerS = FlingMinVelocityPxPerS;
 
     /// <summary>Compile-time seed clamp for a coast velocity (px/s) — Android max-fling (scroll-feel-rework-v2 §4.3/§4.6
     /// FlingMaxVelocityPxPerS). The seed writer (AppHost.SeedScrollFling) clamps to ±this.</summary>

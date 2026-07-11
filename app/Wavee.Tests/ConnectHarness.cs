@@ -91,6 +91,10 @@ public sealed class FakeContextResolver : IContextResolver
 {
     readonly QueuedTrack[] _tracks;
 
+    /// <summary>What <see cref="ResolveRadioSeedAsync"/> returns (the resolved radio playlist uri) — null = no radio.
+    /// Set by the StartRadioAsync controller tests.</summary>
+    public string? RadioSeedResult;
+
     public FakeContextResolver(params string[] uris)
     {
         _tracks = new QueuedTrack[uris.Length];
@@ -118,6 +122,8 @@ public sealed class FakeContextResolver : IContextResolver
 
     public Task<ResolvedContext> ResolveAutopodcastAsync(string contextUri, IReadOnlyList<string> recentEpisodeUris, CancellationToken ct = default)
         => Task.FromResult(ResolvedContext.Empty);
+
+    public Task<string?> ResolveRadioSeedAsync(string seedUri, CancellationToken ct = default) => Task.FromResult(RadioSeedResult);
 
     public Task<IReadOnlyList<QueuedTrack>> HydrateAsync(IReadOnlyList<QueuedRef> refs, CancellationToken ct = default)
     {

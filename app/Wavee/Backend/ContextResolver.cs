@@ -80,6 +80,11 @@ public interface IContextResolver
     Task<ContextPage> LoadMoreAsync(string nextPageUrl, CancellationToken ct = default);
     Task<ResolvedContext> ResolveAutoplayAsync(string contextUri, IReadOnlyList<string> recentTrackUris, CancellationToken ct = default);
     Task<ResolvedContext> ResolveAutopodcastAsync(string contextUri, IReadOnlyList<string> recentEpisodeUris, CancellationToken ct = default);
+    /// <summary>Resolve a radio seed (a <c>spotify:track:</c> / <c>spotify:artist:</c> uri) to a concrete radio PLAYLIST
+    /// uri via <c>inspiredby-mix/v2/seed_to_playlist</c>. Returns <c>spotify:playlist:{id}</c> or <c>null</c> (no radio /
+    /// offline). The resolved playlist is then a NORMAL playlist context (no <c>:station:</c> special-casing at the start
+    /// boundary — its natural end still triggers the existing autoplay tail).</summary>
+    Task<string?> ResolveRadioSeedAsync(string seedUri, CancellationToken ct = default);
     /// <summary>Hydrate loose track refs (add_to_queue / set_queue items) into queued tracks with display + duration metadata.</summary>
     Task<IReadOnlyList<QueuedTrack>> HydrateAsync(IReadOnlyList<QueuedRef> refs, CancellationToken ct = default);
 }
@@ -141,6 +146,7 @@ public sealed class EmptyContextResolver : IContextResolver
         => Task.FromResult(ResolvedContext.Empty);
     public Task<ResolvedContext> ResolveAutopodcastAsync(string contextUri, IReadOnlyList<string> recentEpisodeUris, CancellationToken ct = default)
         => Task.FromResult(ResolvedContext.Empty);
+    public Task<string?> ResolveRadioSeedAsync(string seedUri, CancellationToken ct = default) => Task.FromResult<string?>(null);
     public Task<IReadOnlyList<QueuedTrack>> HydrateAsync(IReadOnlyList<QueuedRef> refs, CancellationToken ct = default)
     {
         var arr = new QueuedTrack[refs.Count];

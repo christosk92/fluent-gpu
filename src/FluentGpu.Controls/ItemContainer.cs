@@ -38,11 +38,9 @@ public enum ItemContainerTrigger : byte { Tap, DoubleTap, EnterKey, SpaceKey }
 ///   Tok.FillControlOnImage, #B31C1C1C dark / #C9FFFFFF light), stroke = CheckBoxCheckBackgroundStrokeUnchecked
 ///   (→ Tok.StrokeControlStrongDefault); Multiple mode fades it in over ControlFastAnimationDuration (xaml:93-99).
 ///
-/// Interaction mapping (engine-deliberate): selection fires at the PRESS edge via <c>OnPointerPressed</c> — the one
-/// pointer callback carrying the modifier chord/click count (WinUI processes selection at PointerReleased; the visual
-/// outcome is identical and Win32 lists select on button-down). The container takes NO OnClick so Enter and Space
-/// reach <c>OnKeyDown</c> distinctly (the dispatcher's Enter/Space activation would otherwise collapse them), giving
-/// WinUI's EnterKey-vs-SpaceKey invoke split (ItemsView.cpp:423-426).
+/// Interaction mapping: <c>OnPointerReleased</c> receives the modifier chord/click count only after release-over-same.
+/// Pan, drag, hold, capture loss, and release outside therefore cancel selection like WinUI's pending-tap path. Enter
+/// and Space stay on <c>OnKeyDown</c>, preserving WinUI's EnterKey-vs-SpaceKey invoke split (ItemsView.cpp:423-426).
 /// </summary>
 public static class ItemContainer
 {
@@ -189,12 +187,8 @@ public static class ItemContainer
             FocusVisualMargin = Edges4.All(0f),      // template default margin (no FocusVisualMargin setter in the style)
             Role = AutomationRole.Button,            // ItemContainerAutomationPeer: SelectionItem + Invoke provider
             ClipToBounds = false,
-            OnPointerPressed = onInteraction is null ? null : args =>
-            {
-                // Press-edge selection (see class remarks): click-count 2 = DoubleTap (ItemsView raises ItemInvoked
-                // for it when a selection mode is active, ItemsView.cpp:425), else Tap.
-                onInteraction(args.ClickCount >= 2 ? ItemContainerTrigger.DoubleTap : ItemContainerTrigger.Tap, args.Mods);
-            },
+            OnPointerReleased = onInteraction is null ? null : args => onInteraction(
+                args.ClickCount >= 2 ? ItemContainerTrigger.DoubleTap : ItemContainerTrigger.Tap, args.Mods),
             OnKeyDown = onInteraction is null ? null : args =>
             {
                 if (args.KeyCode == Keys.Enter) { onInteraction(ItemContainerTrigger.EnterKey, args.Mods); args.Handled = true; }

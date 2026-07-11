@@ -156,8 +156,8 @@ sealed class PlayerBarContent : Component
 
     // A soft critical red for the Error state's title (app-local; the chrome stays WinUI-faithful elsewhere).
     static readonly ColorF Critical = new(0.93f, 0.42f, 0.45f, 1f);
-    // Shared marquee cadence for the now-playing title: a FIXED one-way travel time (vs constant speed) so sibling lines
-    // can stay phase-locked when they share a CycleMs. PingPong holds at the tail before bouncing back.
+    // Shared marquee cadence for the now-playing title: a capped one-way travel time keeps long sibling lines aligned,
+    // while Marquee.Speed prevents a barely-overflowing title from creeping invisibly. PingPong holds at the tail.
     const float MarqueeCycleMs = 10000f;
     const float MarqueeEndPauseMs = 2500f;
     // Dark glyph for the WHITE primary play/pause face (the musa/Spotify treatment — a white circle, dark icon).
@@ -174,6 +174,8 @@ sealed class PlayerBarContent : Component
         var lib = UseContext(LibraryBridge.Slot);    // Mutations: the now-playing like reflects + toggles the saved-set
         var go = UseContext(HistoryStore.NavCtx);    // navigate to the now-playing album / artist on click
         var ui = UseContext(ShellUi.Slot);           // right-rail (lyrics) toggle state
+        var acts = UseContext(ActionServices.Slot);  // now-playing cluster context menu (Menus.NowPlaying)
+        var menuOverlay = UseContext(Overlay.Service);
         var titleHover = UseSignal(false);           // hover the now-playing text → BOTH lines scroll together (synced); idle = static + edge fade
         var L = _layout.Value;                       // coarse breakpoint signal; does NOT change for every resize pixel
         if (DiagEnabled)
@@ -264,7 +266,13 @@ sealed class PlayerBarContent : Component
         // Now-playing is clickable: art + title → the album; artists are per-name links inside a scrolling row.
         var npAlbum = track?.Album;
         bool albumNav = npAlbum is { Uri.Length: > 0 };
-        void NavAlbum() { if (albumNav) go?.Invoke("album:" + npAlbum!.Uri, npAlbum.Name); }
+        void NavAlbum()
+        {
+            // Resolve at invoke time: the mounted click target survives track/metadata changes, so never navigate with
+            // the render-time album capture (which can be the pre-hydration empty AlbumRef).
+            if (b.CurrentTrack.Peek()?.Album is { Uri.Length: > 0 } album)
+                go?.Invoke("album:" + album.Uri, album.Name);
+        }
 
         var titleLinkHover = UseSignal(false);
         bool titleHot = albumNav && titleLinkHover.Value;
@@ -273,14 +281,13 @@ sealed class PlayerBarContent : Component
             {
                 FontSize = 14f, Weight = 700,
                 Foreground = Prop.Of(() => titleHot ? Tok.AccentTextPrimary : NowPlaying(b).Color),
-                CycleMs = MarqueeCycleMs, EndPauseMs = MarqueeEndPauseMs,
+                Speed = 18f, CycleMs = MarqueeCycleMs, EndPauseMs = MarqueeEndPauseMs,
                 Mode = Marquee.ScrollMode.PingPong, Trigger = Marquee.TriggerMode.PauseOnHover,
             },
             scrollWhen: titleHover);
-        if (albumNav)   // the title opens the album (click); hover pauses the marquee (the metaCol drives titleHover)
-            titleEl = new BoxEl
+        if (albumNav)   // make the marquee VIEWPORT itself the stable click target; no wrapper/input-boundary ambiguity
+            titleEl = ((BoxEl)titleEl) with
             {
-                MinWidth = 0f, Grow = 1f, Shrink = 1f, AlignSelf = FlexAlign.Stretch, ClipToBounds = true,
                 Cursor = CursorId.Hand, OnClick = NavAlbum,
                 OnHoverMove = _ =>
                 {
@@ -289,7 +296,6 @@ sealed class PlayerBarContent : Component
                 },
                 OnPointerExit = () => { if (titleLinkHover.Peek()) titleLinkHover.Value = false; },
                 Role = AutomationRole.Hyperlink, Focusable = true,
-                Children = [titleEl],
             };
 
         var metaKids = new List<Element>(remoteDevice is null ? 2 : 3);
@@ -305,7 +311,7 @@ sealed class PlayerBarContent : Component
             metaKids.Add(Marquee.Content(() => new NowPlayingArtistLinks(),
                 new Marquee.Style
                 {
-                    CycleMs = MarqueeCycleMs, EndPauseMs = MarqueeEndPauseMs,
+                    Speed = 18f, CycleMs = MarqueeCycleMs, EndPauseMs = MarqueeEndPauseMs,
                     Mode = Marquee.ScrollMode.PingPong, Trigger = Marquee.TriggerMode.PauseOnHover,
                 },
                 scrollWhen: titleHover));
@@ -341,6 +347,11 @@ sealed class PlayerBarContent : Component
             Key = "left", Width = leftW, Shrink = 0f, MinWidth = 0f, Animate = MoveMotion,
             Direction = 0, AlignItems = FlexAlign.Center, Gap = L.LeftGap, ClipToBounds = true, Children = leftKids.ToArray(),
         };
+        // Right-click / Menu key / long-press on the now-playing cluster: the track menu (Host = null → no Remove
+        // rows). The factory Peeks the CURRENT track at open — never the render-time capture.
+        if (acts is { } nowActs && menuOverlay is { } menuSvc)
+            left = left.WithContextMenu(menuSvc, () =>
+                b.CurrentTrack.Peek() is { } nowTrack ? Menus.NowPlaying(nowActs, nowTrack) : (ContextMenuModel?)null);
 
         // ── CENTRE — transport group + seek (the SeekBar Grows to fill the remaining center width) ───
         var transport = new List<Element>(3);
@@ -549,28 +560,53 @@ sealed class PlayerBarContent : Component
         return active is { Kind: not DeviceKind.ThisDevice } ? active : null;
     }
 
-    internal static List<MenuFlyoutItem> DeviceMenuItems(PlaybackBridge b, IReadOnlyList<PlaybackDevice> devices, string? activeId)
+    // Two-section device picker (plan §C2): "This computer" (System default + local endpoints) + "Spotify Connect" (the
+    // roster, ThisDevice filtered — this PC is section 1). The pure composition lives in DevicePickerModel (unit-tested);
+    // this maps its rows to MenuFlyoutItems and wires the intents. Disabled Command rows stand in as section headers
+    // (MenuFlyout has no header kind — risk 9.1; WinUI itself has no MenuFlyoutHeader).
+    internal static List<MenuFlyoutItem> DevicePickerItems(PlaybackBridge b)
     {
-        var items = new List<MenuFlyoutItem>(Math.Max(2, devices.Count));
-        if (devices.Count == 0)
-        {
-            // Empty state: pre-login, or no other Spotify client is online for this account.
-            items.Add(new MenuFlyoutItem(Loc.Get(Strings.Player.NoDevices), Icons.Devices, false, () => { }));
-            items.Add(new MenuFlyoutItem(Loc.Get(Strings.Player.NoDevicesHint), null, false, () => { }));
-            return items;
-        }
+        var connect = b.Devices.Value;
+        string? activeId = b.ActiveDeviceId.Value;
+        var lo = b.LocalOutputs;
+        IReadOnlyList<LocalAudioDevice> local = lo?.Devices.Value ?? Array.Empty<LocalAudioDevice>();
+        string? selectedLocal = lo?.SelectedOutputId.Value;
+        bool supported = b.LocalPlaybackSupported.Value;
+        bool weAreActiveOutput = RemoteDevice(b) is null;   // no remote Connect device active ⇒ we are the output
 
-        foreach (var d in devices)
-        {
-            var dev = d;
-            bool isActive = dev.Id == activeId || dev.IsActive;
-            bool isThis = dev.Kind == DeviceKind.ThisDevice;   // local playback unsupported → not a valid transfer target
-            items.Add(MenuFlyoutItem.Toggle(dev.Name, isActive,
-                    isThis ? null : () => { _ = b.DeviceControl.TransferAsync(dev.Id); }, DeviceGlyph(dev.Kind), enabled: !isThis)
-                with { AcceleratorText = isThis ? Loc.Get(Strings.Player.Unavailable) : null });
-        }
+        var rows = DevicePickerModel.Build(local, selectedLocal, supported, weAreActiveOutput, connect, activeId,
+            Loc.Get(Strings.Player.ThisComputer), Loc.Get(Strings.Player.SystemDefault), Loc.Get(Strings.Player.SpotifyConnect),
+            Loc.Get(Strings.Player.Unavailable), Loc.Get(Strings.Player.NoDevices), Loc.Get(Strings.Player.NoDevicesHint));
+
+        var items = new List<MenuFlyoutItem>(rows.Count);
+        foreach (var r in rows) items.Add(MapRow(b, r));
         return items;
     }
+
+    static MenuFlyoutItem MapRow(PlaybackBridge b, DevicePickerRow r) => r.Kind switch
+    {
+        DevicePickerRowKind.Separator => MenuFlyoutItem.Separator,
+        DevicePickerRowKind.Header => new MenuFlyoutItem(r.Label, default, false, () => { }),
+        DevicePickerRowKind.Empty => new MenuFlyoutItem(r.Label, default, false, () => { }),
+        DevicePickerRowKind.LocalDefault => MenuFlyoutItem.RadioItem(r.Label, r.IsChecked,
+            r.Enabled ? () => { _ = b.LocalOutputs?.SelectAsync(null); } : null, Mdl.ThisPc, enabled: r.Enabled)
+            with { AcceleratorText = r.Accelerator },
+        DevicePickerRowKind.LocalDevice => MenuFlyoutItem.RadioItem(r.Label, r.IsChecked,
+            r.Enabled ? () => { var id = r.DeviceId; _ = b.LocalOutputs?.SelectAsync(id); } : null, LocalGlyph(r.LocalKind), enabled: r.Enabled)
+            with { AcceleratorText = r.Accelerator },
+        DevicePickerRowKind.ConnectDevice => MenuFlyoutItem.RadioItem(r.Label, r.IsChecked,
+            () => { var id = r.DeviceId; if (id is not null) _ = b.DeviceControl.TransferAsync(id); }, DeviceGlyph(r.ConnectKind)),
+        _ => new MenuFlyoutItem(r.Label, default, false, () => { }),
+    };
+
+    // Segoe Fluent glyph for a local (this-computer) output form factor.
+    static string LocalGlyph(LocalAudioDeviceKind k) => k switch
+    {
+        LocalAudioDeviceKind.Speakers => Mdl.Speakers,
+        LocalAudioDeviceKind.Headphones or LocalAudioDeviceKind.Headset => Mdl.Headphones,
+        LocalAudioDeviceKind.Hdmi => Mdl.TvMonitor,
+        _ => Mdl.ThisPc,
+    };
 
     // Segoe Fluent glyph per Connect device kind (app-local Mdl set; the engine Icons.* set doesn't carry these).
     static string DeviceGlyph(DeviceKind k) => k switch
@@ -697,11 +733,11 @@ sealed class PlayerBarContent : Component
         {
             var c = commands[i];
             items.Add(c.Kind == AppBarCommandKind.ToggleButton
-                ? MenuFlyoutItem.Toggle(c.Label, c.IsChecked, c.Invoke, c.Glyph, c.Enabled)
-                : new MenuFlyoutItem(c.Label, c.Glyph, c.Enabled, c.Invoke));
+                ? MenuFlyoutItem.Toggle(c.Label, c.IsChecked, c.Invoke, c.Icon, c.Enabled)
+                : new MenuFlyoutItem(c.Label, c.Icon, c.Enabled, c.Invoke));
             // Cheap, alloc-light version: the command SET only changes at breakpoint crossings / toggle flips (not per
             // resize pixel), so fold a hash so the menu component re-mounts with fresh rows when the set actually changes.
-            vh = vh * 31 + (c.Glyph?.GetHashCode() ?? 0);
+            vh = vh * 31 + c.Icon.GetHashCode();
             vh = vh * 31 + (c.Label?.GetHashCode() ?? 0);
             if (c.IsChecked) vh ^= 0x55555555;
             if (c.Enabled) vh ^= 0x0F0F0F0F;
@@ -828,6 +864,15 @@ sealed class TimeText : Component
 
 /// <summary>The volume / mute glyph. Its OWN component so the glyph swap (volume crossing 0) doesn't re-render the bar
 /// during a volume drag (the slider beside it is compositor-only).</summary>
+// The live two-section device-picker flyout body. Reads the bridge signals in Render so the roster updates WHILE the
+// flyout is open (roster/selection/active-device/supported all fall out of signals), unlike a frozen open-time snapshot.
+sealed class DevicePickerMenu : Component
+{
+    readonly PlaybackBridge _b; readonly Action _close;
+    public DevicePickerMenu(PlaybackBridge b, Action close) { _b = b; _close = close; }
+    public override Element Render() => MenuFlyout.Build(PlayerBarContent.DevicePickerItems(_b), _close);
+}
+
 sealed class VolumeButton : Component
 {
     readonly PlaybackBridge _b; readonly bool _popup; readonly float _box; readonly float _glyphSize;
@@ -839,10 +884,11 @@ sealed class VolumeButton : Component
     public override Element Render()
     {
         float v = _b.Volume.Value;               // subscribe → swap Mute/Volume glyph at the 0 boundary
+        bool muted = _b.OutputMuted.Value;       // subscribe → external/session mute drives the glyph too (Phase B4)
         var svc = UseContext(Overlay.Service);
         var anchor = UseRef<NodeHandle>(default);
         var handle = UseRef<OverlayHandle?>(null);
-        string g = v <= 0.001f ? Icons.Mute : Icons.Volume;
+        string g = (muted || v <= 0.001f) ? Icons.Mute : Icons.Volume;
         void TogglePopup()
         {
             if (!_popup) { ToggleMute(); return; }
@@ -857,6 +903,16 @@ sealed class VolumeButton : Component
 
     void ToggleMute()
     {
+        // With a real output-device control (local audio wired) mute the Windows session directly (Phase B4); our own
+        // session set is filtered by the engine's context guard, so update the optimistic UI here. Otherwise (fake
+        // backend) keep today's software 0 ⇄ 0.7 toggle.
+        if (_b.LocalOutputs is { } lo)
+        {
+            bool nowMuted = !_b.OutputMuted.Peek();
+            _b.OutputMuted.Value = nowMuted;
+            lo.SetMuted(nowMuted);
+            return;
+        }
         float v = _b.Volume.Peek();
         float nv = v > 0.001f ? 0f : 0.7f;       // mute ⇄ restore (a fuller mute-with-memory is the device-panel pass)
         _b.Volume.Value = nv; _ = _b.Player.SetVolumeAsync(nv);
@@ -874,18 +930,15 @@ sealed class RemoteDeviceLine : Component
         var anchor = UseRef<NodeHandle>(default);
         var handle = UseRef<OverlayHandle?>(null);
         var svc = UseContext(Overlay.Service);
-        var devices = _b.Devices.Value;
-        string? activeId = _b.ActiveDeviceId.Value;
-        var remote = PlayerBarContent.RemoteDevice(_b);
+        var remote = PlayerBarContent.RemoteDevice(_b);   // reads Devices + ActiveDeviceId → subscribes for re-render
         if (remote is null) return new BoxEl { Height = 0f, HitTestVisible = false };
 
         void Toggle()
         {
             if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
-            var items = PlayerBarContent.DeviceMenuItems(_b, devices, activeId);
             handle.Value = svc.Open(
                 () => anchor.Value,
-                () => MenuFlyout.Build(items, () => handle.Value?.Close()),
+                () => Embed.Comp(() => new DevicePickerMenu(_b, () => handle.Value?.Close())),
                 FlyoutPlacement.TopEdgeAlignedRight,
                 new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
             handle.Value.ClosedAction = () => handle.Value = null;
@@ -943,7 +996,7 @@ sealed class DevicesButton : Component
         var anchor = UseRef<NodeHandle>(default);
         var handle = UseRef<OverlayHandle?>(null);
         var svc = UseContext(Overlay.Service);
-        var devices = _b.Devices.Value;               // subscribe → re-render on roster change
+        _ = _b.Devices.Value;                         // subscribe → re-render on roster change (flyout content reads its own)
         string? activeId = _b.ActiveDeviceId.Value;   // subscribe → the active row shows a check + the glyph highlights
         bool active = !string.IsNullOrEmpty(activeId);
         int req = _b.DevicePickerRequest.Value;       // subscribe → re-render (and re-run the effect) on a toast "Choose device" click
@@ -952,10 +1005,9 @@ sealed class DevicesButton : Component
         void Toggle()
         {
             if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
-            var items = PlayerBarContent.DeviceMenuItems(_b, devices, activeId);
             handle.Value = svc.Open(
                 () => anchor.Value,
-                () => MenuFlyout.Build(items, () => handle.Value?.Close()),
+                () => Embed.Comp(() => new DevicePickerMenu(_b, () => handle.Value?.Close())),
                 FlyoutPlacement.TopEdgeAlignedRight,
                 new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
             handle.Value.ClosedAction = () => handle.Value = null;

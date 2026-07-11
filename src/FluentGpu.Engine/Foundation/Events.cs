@@ -158,6 +158,53 @@ public sealed class DragEventArgs
     public PointerKind Kind;
 }
 
+/// <summary>How a context-menu request was raised (WinUI ContextRequestedEventArgs — the moral equivalent of
+/// <c>TryGetPosition</c>): a <see cref="Pointer"/>/<see cref="Hold"/> request carries a real point (open at it), a
+/// <see cref="Keyboard"/> request does NOT (WinUI TryGetPosition == false) so it anchors to the element rect instead.</summary>
+public enum ContextRequestTrigger : byte
+{
+    /// <summary>Mouse right-click release over the node.</summary>
+    Pointer,
+    /// <summary>Menu key (VK_APPS) / Shift+F10 while the node has focus — position is the node centre, not a pointer.</summary>
+    Keyboard,
+    /// <summary>Touch long-press (gesture-arena Hold win) at the contact point.</summary>
+    Hold,
+    /// <summary>A left-click / touch-tap ACTIVATION of a <c>BoxEl.ClickRequestsContext</c> node re-entered the
+    /// context-request funnel (input-a11y.md §6.5.1). Like <see cref="Keyboard"/> it carries NO pointer point — anchor
+    /// to the SOURCE node's rect (the Keyboard rule generalized) — but it is pointer-originated, so the menu does NOT
+    /// focus its first item. (Space/Enter key-activation of such a node dispatches <see cref="Keyboard"/> instead, so a
+    /// keyboard invocation still focuses the first item.) Appended after <see cref="Hold"/> — the wire values of the
+    /// existing triggers do NOT change.</summary>
+    Invoke,
+}
+
+/// <summary>
+/// Context-menu request payload for <c>OnContextRequested</c> (WinUI ContextRequested): the <see cref="Position"/> in
+/// node-LOCAL coords plus the <see cref="Trigger"/> that raised it (so a menu opens AT the pointer/contact but anchors
+/// to the element rect for a keyboard invocation). ONE instance is reused on the dispatcher (0 steady-state alloc — it
+/// is filled before each invocation); a handler copies what it keeps, never holds the reference. <see cref="Source"/>
+/// records the node the request ORIGINATED at (the button, for a <see cref="ContextRequestTrigger.Invoke"/>), distinct
+/// from <see cref="Node"/> (the ContextBit owner the walk stopped at) — a rect-anchored open uses <see cref="Source"/>.
+/// </summary>
+public sealed class ContextRequestEventArgs
+{
+    /// <summary>Request position in node-LOCAL coords (pointer/hold: the contact; keyboard: the node centre).</summary>
+    public Point2 Position;
+    /// <summary>What raised the request (pointer / keyboard / touch long-press / click-activation Invoke).</summary>
+    public ContextRequestTrigger Trigger;
+    /// <summary>The node whose handler is being invoked (the ContextBit owner the dispatch walk stopped at) —
+    /// <see cref="Position"/> is local to THIS node. This is the anchor a context menu opens against: reading it from
+    /// the event is render- and recycle-proof, unlike an OnRealized capture (which goes stale the first time the
+    /// element re-renders — realization callbacks fire at mount, not per diff). Value-copy it; the args instance is reused.</summary>
+    public NodeHandle Node;
+    /// <summary>The node the request ORIGINATED at — the <c>ClickRequestsContext</c> button for an
+    /// <see cref="ContextRequestTrigger.Invoke"/>, the right-clicked/focused node otherwise. For Pointer/Keyboard/Hold
+    /// the dispatcher sets <c>Source == Node</c>; for Invoke it is the activated button (below <see cref="Node"/> in
+    /// the tree). A rect-anchored open (keyboard / invoke) anchors on <see cref="Source"/> so an Invoke opens against
+    /// the button, not the row. Same reused-instance contract as <see cref="Node"/>: value-copy it, never hold the reference.</summary>
+    public NodeHandle Source;
+}
+
 /// <summary>A keyboard accelerator chord (WinUI KeyboardAccelerator): <see cref="Key"/> + <see cref="Mods"/> invoke the
 /// owning node's click handler from anywhere (dispatched after focused routing leaves the key unhandled).</summary>
 public readonly record struct KeyAccelerator(int Key, KeyModifiers Mods);

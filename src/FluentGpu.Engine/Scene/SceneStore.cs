@@ -38,10 +38,12 @@ public sealed class SceneStore : ISceneBackend
     private int _high = 1;     // index 0 reserved = null
 
     // Exit-animation orphans: nodes removed from the logical tree but kept LIVE (drawing) until their exit animation
-    // settles, then reclaimed. Detached from their parent (so reconcile + layout skip them) and drawn by a separate
-    // recorder pass at their FROZEN parent-world origin. Bounded by MaxOrphans (overflow instant-frees the oldest).
-    private struct OrphanEntry { public NodeHandle Node; public float Px, Py; public long EnqueuedTicks; }
+    // settles, then reclaimed. They are detached from topology (so reconcile + layout/input skip them) but indexed by
+    // their former VISUAL parent so the recorder can replay them inside that parent's transform/clip/layer context.
+    // Bounded by MaxOrphans (overflow instant-frees the oldest).
+    private struct OrphanEntry { public NodeHandle Node, VisualParent; public float Px, Py; public long EnqueuedTicks; }
     private readonly List<OrphanEntry> _orphans = new();
+    private readonly Dictionary<NodeHandle, List<NodeHandle>> _orphansByParent = new();
     private const int MaxOrphans = 64;
 
     // Connected-animation overlays: standalone flying shared-element (Hero) nodes that are NOT in the logical tree but
@@ -92,8 +94,9 @@ public sealed class SceneStore : ISceneBackend
     private Action<Point2>?[] _hoverMove;     // position-aware bare-hover move (no press) — RatingControl preview, etc.
     private Action?[] _pointerExit;           // fired when the pointer leaves the node (hover lost) — reset hover preview
     private Action<PointerEventArgs>?[] _pointerPressed;   // press w/ click-count + modifiers (double/triple-click, drag-select)
+    private Action<PointerEventArgs>?[] _pointerReleased;  // clean release-over-press target (tap commit)
     private Action<WheelEventArgs>?[] _pointerWheel;        // element-level wheel hook (pre-viewport-scroll; NumberBox)
-    private Action<Point2>?[] _contextRequested;           // right-click / Menu-key context request (local coords)
+    private Action<ContextRequestEventArgs>?[] _contextRequested;  // right-click / Menu-key / long-press context request (local coords + trigger)
     private Action<bool>?[] _focusChanged;                 // dispatcher focus moved onto (true) / off (false) this node (GotFocus/LostFocus)
     // Drag-reorder lifecycle (E5): fired by Input.DragController once a CanDrag press crosses the drag threshold.
     private Action<DragEventArgs>?[] _dragStarted;         // threshold crossed → the gesture is a drag (WinUI DragStarting)
@@ -205,8 +208,9 @@ public sealed class SceneStore : ISceneBackend
         _hoverMove = new Action<Point2>?[capacity];
         _pointerExit = new Action?[capacity];
         _pointerPressed = new Action<PointerEventArgs>?[capacity];
+        _pointerReleased = new Action<PointerEventArgs>?[capacity];
         _pointerWheel = new Action<WheelEventArgs>?[capacity];
-        _contextRequested = new Action<Point2>?[capacity];
+        _contextRequested = new Action<ContextRequestEventArgs>?[capacity];
         _focusChanged = new Action<bool>?[capacity];
         _dragStarted = new Action<DragEventArgs>?[capacity];
         _dragDelta = new Action<DragEventArgs>?[capacity];
@@ -256,6 +260,7 @@ public sealed class SceneStore : ISceneBackend
         _hoverMove[idx] = null;
         _pointerExit[idx] = null;
         _pointerPressed[idx] = null;
+        _pointerReleased[idx] = null;
         _pointerWheel[idx] = null;
         _contextRequested[idx] = null;
         _focusChanged[idx] = null;
@@ -270,6 +275,9 @@ public sealed class SceneStore : ISceneBackend
     public void FreeSubtree(NodeHandle node)
     {
         if (!IsLive(node)) return;
+        // Logically-detached exiting children are absent from the topology walk below. Retire them with a hard-freed
+        // visual parent instead of letting them escape into a root-level render band.
+        ReclaimOrphanChildren(node);
         int idx = (int)node.Raw.Index;
         // free children first
         int c = _firstChild[idx];
@@ -296,6 +304,7 @@ public sealed class SceneStore : ISceneBackend
         _hoverMove[idx] = null;
         _pointerExit[idx] = null;
         _pointerPressed[idx] = null;
+        _pointerReleased[idx] = null;
         _pointerWheel[idx] = null;
         _contextRequested[idx] = null;
         _focusChanged[idx] = null;
@@ -389,26 +398,74 @@ public sealed class SceneStore : ISceneBackend
 
     // ── exit-animation orphans ────────────────────────────────────────────────────────────────────
     /// <summary>Remove a node from the logical tree but keep it LIVE and drawing: detach from its parent (so reconcile +
-    /// layout no longer see it), freeze its parent-world origin, flag it Exiting. The recorder draws it via the orphan
-    /// pass at that frozen origin while its opacity/transform animate out; <see cref="ReclaimOrphan"/> frees it on settle.</summary>
+    /// layout no longer see it), retain its former visual parent, and flag it Exiting. The recorder replays it inside that
+    /// parent's active transform/clip/layer/popup context; <see cref="ReclaimOrphan"/> frees it on settle. The frozen origin
+    /// remains only as a defensive fallback for an already-rootless orphan.</summary>
     public void Orphan(NodeHandle node)
     {
         if (!IsLive(node)) return;
-        if (_orphans.Count >= MaxOrphans) { var o = _orphans[0]; _orphans.RemoveAt(0); FreeSubtree(o.Node); }  // budget: instant-free oldest
+        if (_orphans.Count >= MaxOrphans) DropOrphanAt(0);   // budget: instant-free oldest
         RectF abs = AbsoluteRect(node);
         int idx = (int)node.Raw.Index;
+        NodeHandle visualParent = Parent(node);
         float px = abs.X - _bounds[idx].X, py = abs.Y - _bounds[idx].Y;   // frozen parent-world origin
         DetachFromParent(idx);
         _flags[idx] |= NodeFlags.Exiting;
-        _orphans.Add(new OrphanEntry { Node = node, Px = px, Py = py, EnqueuedTicks = Stopwatch.GetTimestamp() });
+        _orphans.Add(new OrphanEntry { Node = node, VisualParent = visualParent, Px = px, Py = py, EnqueuedTicks = Stopwatch.GetTimestamp() });
+        if (!visualParent.IsNull)
+        {
+            if (!_orphansByParent.TryGetValue(visualParent, out var children))
+                _orphansByParent.Add(visualParent, children = new List<NodeHandle>(2));
+            children.Add(node);
+        }
     }
 
     /// <summary>Free a settled exit orphan (the deferred <see cref="FreeSubtree"/> — gen bump → handle dead).</summary>
     public void ReclaimOrphan(NodeHandle node)
     {
         for (int i = _orphans.Count - 1; i >= 0; i--)
-            if (_orphans[i].Node == node) { _orphans.RemoveAt(i); break; }
+            if (_orphans[i].Node == node)
+            {
+                var entry = _orphans[i];
+                UnindexOrphan(in entry);
+                _orphans.RemoveAt(i);
+                break;
+            }
         FreeSubtree(node);
+    }
+
+    /// <summary>Exiting children formerly owned by <paramref name="visualParent"/>, in removal order. Internal recorder
+    /// seam: the list is stable during a record pass because reconcile/reclaim run outside phase 8.</summary>
+    internal List<NodeHandle>? OrphanChildrenOf(NodeHandle visualParent)
+        => _orphansByParent.TryGetValue(visualParent, out var children) ? children : null;
+
+    private void UnindexOrphan(in OrphanEntry entry)
+    {
+        if (entry.VisualParent.IsNull || !_orphansByParent.TryGetValue(entry.VisualParent, out var children)) return;
+        children.Remove(entry.Node);
+        if (children.Count == 0) _orphansByParent.Remove(entry.VisualParent);
+    }
+
+    private void DropOrphanAt(int index)
+    {
+        var entry = _orphans[index];
+        UnindexOrphan(in entry);
+        _orphans.RemoveAt(index);
+        FreeSubtree(entry.Node);
+    }
+
+    private void ReclaimOrphanChildren(NodeHandle visualParent)
+    {
+        if (!_orphansByParent.Remove(visualParent, out var children)) return;
+        // Remove the global lifecycle rows before freeing. FreeSubtree(child) recursively handles exits whose visual
+        // parent is itself this exiting child.
+        for (int i = children.Count - 1; i >= 0; i--)
+        {
+            NodeHandle child = children[i];
+            for (int j = _orphans.Count - 1; j >= 0; j--)
+                if (_orphans[j].Node == child) { _orphans.RemoveAt(j); break; }
+            FreeSubtree(child);
+        }
     }
 
     public bool IsOrphan(NodeHandle node)
@@ -420,11 +477,14 @@ public sealed class SceneStore : ISceneBackend
     /// <summary>Count of exit orphans currently animating out (the host keeps painting while &gt; 0).</summary>
     public int OrphanCount => _orphans.Count;
 
-    /// <summary>The i-th orphan node + its frozen parent-world origin (for the recorder's orphan draw pass).</summary>
+    /// <summary>The i-th orphan node + its frozen parent-world origin (used only by the rootless fallback draw pass).</summary>
     public NodeHandle OrphanAt(int i, out float px, out float py)
     {
         var e = _orphans[i]; px = e.Px; py = e.Py; return e.Node;
     }
+
+    /// <summary>The former visual parent that owns the orphan's render context. Null is the defensive rootless fallback.</summary>
+    internal NodeHandle OrphanVisualParentAt(int i) => _orphans[i].VisualParent;
 
     /// <summary><see cref="Stopwatch.GetTimestamp"/> when the i-th orphan was enqueued — the host's settle-timeout
     /// backstop force-reclaims an orphan whose exit track wedged (a never-settling animation) so it can't pin the wake
@@ -526,10 +586,12 @@ public sealed class SceneStore : ISceneBackend
     public Action? GetPointerExit(NodeHandle h) => _pointerExit[LiveIndexOrZero(h)];
     public void SetPointerPressed(NodeHandle h, Action<PointerEventArgs>? handler) => _pointerPressed[LiveIndex(h)] = handler;
     public Action<PointerEventArgs>? GetPointerPressed(NodeHandle h) => _pointerPressed[LiveIndexOrZero(h)];
+    public void SetPointerReleased(NodeHandle h, Action<PointerEventArgs>? handler) => _pointerReleased[LiveIndex(h)] = handler;
+    public Action<PointerEventArgs>? GetPointerReleased(NodeHandle h) => _pointerReleased[LiveIndexOrZero(h)];
     public void SetPointerWheel(NodeHandle h, Action<WheelEventArgs>? handler) => _pointerWheel[LiveIndex(h)] = handler;
     public Action<WheelEventArgs>? GetPointerWheel(NodeHandle h) => _pointerWheel[LiveIndexOrZero(h)];
-    public void SetContextRequested(NodeHandle h, Action<Point2>? handler) => _contextRequested[LiveIndex(h)] = handler;
-    public Action<Point2>? GetContextRequested(NodeHandle h) => _contextRequested[LiveIndexOrZero(h)];
+    public void SetContextRequested(NodeHandle h, Action<ContextRequestEventArgs>? handler) => _contextRequested[LiveIndex(h)] = handler;
+    public Action<ContextRequestEventArgs>? GetContextRequested(NodeHandle h) => _contextRequested[LiveIndexOrZero(h)];
     public void SetFocusChanged(NodeHandle h, Action<bool>? handler) => _focusChanged[LiveIndex(h)] = handler;
     public Action<bool>? GetFocusChanged(NodeHandle h) => _focusChanged[LiveIndexOrZero(h)];
     // Drag-reorder lifecycle columns (E5) — set by the reconciler from BoxEl.CanDrag, read by Input.DragController.
@@ -1184,7 +1246,7 @@ public sealed class SceneStore : ISceneBackend
         // Maintain GestureBit so the node hit-tests (a UseGesture-only node is otherwise non-interactive): set while any
         // handler is installed, cleared when the last one goes (Input opens a gesture arena only over a hit node).
         if (s.HasAny) _interaction[idx].HandlerMask |= InteractionInfo.GestureBit;
-        else { _interaction[idx].HandlerMask &= unchecked((ushort)~InteractionInfo.GestureBit); _gestureSubs.Remove(idx); }
+        else { _interaction[idx].HandlerMask &= ~(uint)InteractionInfo.GestureBit; _gestureSubs.Remove(idx); }
     }
 
     /// <summary>True iff the node declared a <c>UseGesture</c> for <paramref name="kind"/> (the dispatcher enrolls a
@@ -1244,7 +1306,7 @@ public sealed class SceneStore : ISceneBackend
         if (_recordDirtyWroteCount > n) _recordDirtyWroteCount = n;
         Array.Resize(ref _click, n); Array.Resize(ref _boundsChanged, n); Array.Resize(ref _boundsDelivered, n); Array.Resize(ref _keyHandler, n); Array.Resize(ref _charHandler, n);
         Array.Resize(ref _pointerDown, n); Array.Resize(ref _drag, n); Array.Resize(ref _hoverMove, n); Array.Resize(ref _pointerExit, n);
-        Array.Resize(ref _pointerPressed, n); Array.Resize(ref _pointerWheel, n); Array.Resize(ref _contextRequested, n);
+        Array.Resize(ref _pointerPressed, n); Array.Resize(ref _pointerReleased, n); Array.Resize(ref _pointerWheel, n); Array.Resize(ref _contextRequested, n);
         Array.Resize(ref _focusChanged, n);
         Array.Resize(ref _dragStarted, n); Array.Resize(ref _dragDelta, n);
         Array.Resize(ref _dragCompleted, n); Array.Resize(ref _dragCanceled, n);

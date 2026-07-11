@@ -244,6 +244,10 @@ public sealed class AppHost : IDisposable
     // One line per modal-loop tick to stderr — total/ensureSize/layout/submit+present ms — gated entirely so the normal
     // hot path and the zero-alloc gates are untouched (no work, no allocation, when the flag is off).
     private static readonly bool s_resizeDiag = Diag.EnvFlag("FG_RESIZE_DIAG");
+    // ── FG_MOTION_DIAG=1: projected-motion (Reveal/FLIP) discrimination trace (why a structural transition snapped vs animated). ──
+    // One [motion-diag] line per reconciling frame (capture summary) + one per captured node in ApplyProjections (branch OUTCOME)
+    // + AnimEngine seed/snap lines + per-frame structural tick values. Entirely gated — no work, no allocation, when the flag is off.
+    private static readonly bool s_motionDiag = Diag.EnvFlag("FG_MOTION_DIAG");
     // Render-thread seam rollout gate (Step 4/5), default OFF: FG_RENDER_THREAD spawns the fgpu-render thread and routes
     // submit/present onto it (FORCE-SYNC in Step 4 — the UI still blocks). The engine ships the proven single-thread
     // inline path until the seam.race soak is green; this flag is the staged flip mechanism, not a user quality knob.
@@ -535,7 +539,7 @@ public sealed class AppHost : IDisposable
     private static int ReadAmbientFps() => int.TryParse(Environment.GetEnvironmentVariable("FG_ANIM_FPS"), out var v) && v >= 0 ? v : 30;
     private const WakeReasons LatencySensitiveWake =
         WakeReasons.Interact | WakeReasons.ScrollAnim | WakeReasons.Repeat |
-        WakeReasons.DragActive | WakeReasons.DragDropWork | WakeReasons.GestureHold |
+        WakeReasons.DragActive | WakeReasons.DragDropWork | WakeReasons.GestureHold | WakeReasons.TouchPress |
         // Album-art reveals (decode → crossfade) fire DURING and right after a homepage scroll, and they are transient,
         // user-visible motion — keep them at the display rate instead of letting the ambient cap drop the reveal to 30 Hz
         // the instant the fling settles (a driver of the "scroll feels 24 fps then 120 fps" inconsistency). Both bits
@@ -546,7 +550,7 @@ public sealed class AppHost : IDisposable
     // lists mid-drag (detail-resize-flicker fix).
     private const WakeReasons ModalLoopEssentialWake =
         WakeReasons.FrameNeeded | WakeReasons.RuntimePending | WakeReasons.ScrollAnim |
-        WakeReasons.DragDropWork | WakeReasons.DragActive | WakeReasons.GestureHold |
+        WakeReasons.DragDropWork | WakeReasons.DragActive | WakeReasons.GestureHold | WakeReasons.TouchPress |
         WakeReasons.PopupAnim | WakeReasons.ImagesPending | WakeReasons.ImageCrossfades | WakeReasons.Orphans;
     private static bool OnlyAmbientWakeReasons(WakeReasons reasons) => (reasons & ModalLoopEssentialWake) == 0;
     // Dynamic-text (HUD) intern-on-change cache, indexed by (int)DynamicTextKind (None..FrameMs = 0..5). Each slot
@@ -725,6 +729,7 @@ public sealed class AppHost : IDisposable
         if (_dispatcher.Drag.HasActiveWork || _dispatcher.DragDrop.HasActiveWork) r |= WakeReasons.DragDropWork;   // E5: ghost spring easing / edge auto-scroll
         if (_dispatcher.Drag.IsActive) r |= WakeReasons.DragActive;   // E5 reorder dwell keep-alive: a live drag keeps frames coming so the 200/300ms FrameClock dwell tickers advance even on a motionless pointer (DragController.cs:118)
         if (_dispatcher.HasArmedHold) r |= WakeReasons.GestureHold;   // §7A touch long-press: a STATIONARY held finger emits no input, so keep frames coming until TickGestureArenas fires the ~500ms Hold (then this clears and the loop idles)
+        if (_dispatcher.HasPendingTouchPress) r |= WakeReasons.TouchPress;
         // A windowed popup's desktop-acrylic open reveal is driven per-frame on Present (CompositionBackdrop.TickAnimation),
         // so it needs the loop to keep presenting until it settles — otherwise (no engine animation active for windowed
         // menus) the loop idle-skips and the reveal freezes at its seed. O(popups) ≈ O(1) (typically 0–1 menus open).
@@ -850,6 +855,7 @@ public sealed class AppHost : IDisposable
         _dispatcher.OnRepeatResumed = _repeat.Resume;   // re-entered → fresh initial delay, no immediate re-fire
         _dispatcher.OnKeyPreview = _inputHooks.Preview;   // an open overlay/flyout can intercept Escape (registered via the InputHooks ambient)
         _inputHooks.PointerVelocity = () => _dispatcher.PointerVelocity;        // cross-axis swipe controls snap on real flick speed
+        _inputHooks.GetPointerPosition = () => _dispatcher.PointerPosition;     // ToolTip safe-zone poll (bubble stays hit-test-invisible)
         _inputHooks.GetFocus = () => _dispatcher.Focused;                       // an opening overlay captures focus to restore on close
         _inputHooks.RestoreFocus = h => _dispatcher.SetFocus(h, visual: false);
         _inputHooks.FocusNode = (h, visual) => _dispatcher.SetFocus(h, visual);
@@ -859,6 +865,9 @@ public sealed class AppHost : IDisposable
         _inputHooks.FirstFocusableIn = _dispatcher.FirstFocusableIn; // focus-trap initial focus (first tab stop / default button)
         _dispatcher.OnCursorChanged = _window.SetCursor;                        // hover-resolved cursor (hand/I-beam/resize)
         _dispatcher.OnWindowBlur = _inputHooks.NotifyWindowBlur;                // deactivation → light-dismiss overlays close
+        _dispatcher.OnPointerDownObserved = _inputHooks.NotifyPointerDown;
+        _dispatcher.OnScrollStartedObserved = _inputHooks.NotifyScrollStarted;
+        _inputHooks.RedispatchContextAt = _dispatcher.RequestContextAt;         // scrim right-click → close top + reopen the node's menu (one gesture)
 
         // Custom-titlebar chrome seam (WindowDesc.CustomFrame): pull-state + caption commands to the window, the
         // region push (relayout-only), and an epoch signal bumped on activation/placement changes so the TitleBar
@@ -1414,6 +1423,10 @@ public sealed class AppHost : IDisposable
             }
             if (s_allocDiag) { db = Probe(SegFlip, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
+            if (s_motionDiag && (willReconcile || capturedProjections))
+                System.Console.Error.WriteLine(
+                    $"[motion-diag] frame={_frameOrdinal} keepAlive={keepAlive} resized={resized} hasPending={_runtime.HasPending} needFullLayout={_needFullLayout} capture={_projectBefore.Count} suppressed={Motion.LayoutTransitionsSuppressed}");
+
             long before = GC.GetAllocatedBytesForCurrentThread();
 
             // Drain cross-thread UI posts so their signal writes land in THIS flush. RunFrame already drained them before
@@ -1607,12 +1620,26 @@ public sealed class AppHost : IDisposable
                 _scene.ClearLayoutDirty();
             }
 
-            // Stuck-hover fix (input-a11y.md §5.4/§15): a phase-7 offset write above moved content under a possibly
-            // stationary mouse/pen cursor. Re-resolve hover NOW — AFTER the re-realize catch-up, so the hit-test sees the
-            // finalized realized/transformed rows and a rebound virtual slot's Unmark (Reconciler) can't clobber the
-            // refreshed hover. Gated on an ACTUAL offset write this frame; the dispatcher self-gates mouse/pen + a valid
-            // last position + no touch pan. Zero-alloc scalar walk through the existing hover chokepoints.
+            // Stuck-hover fix (input-a11y.md §5.4/§15 — "hover re-resolves when content moves under a stationary pointer,
+            // not just layout commits"): a scroll offset write OR a reconcile/relayout this frame moved content under a
+            // possibly stationary mouse/pen cursor, and a hit-test only rides real PointerMoves — so a STATIONARY cursor
+            // has no other refresh hook. The offset-write case is the fling/smooth-scroll leg; the layoutNeeded case is
+            // any commit that TRANSLATES bounds out from under the cursor with no move to re-resolve it (the sidebar
+            // collapse snapping its 240→56 rail + the drag-grip overlay it carries is the canonical instance — the grip
+            // keeps NodeFlags.Hovered, so its hover-only seam hairline stays lit until the next real move). Re-resolve
+            // NOW — AFTER the re-realize catch-up, so the hit-test sees the finalized realized/transformed rows and a
+            // rebound virtual slot's Unmark (Reconciler) can't clobber the refreshed hover. Gated like the scroll path —
+            // only on frames that actually wrote offsets OR relaid out (`layoutNeeded` = full/scoped layout ran; steady
+            // idle/paint-only frames never enter), never per-idle-frame. The dispatcher self-gates mouse/pen + a valid
+            // last position + no touch pan/item-drag. One hit-test; zero-alloc scalar walk through the hover chokepoints.
             if (_scrollAnim.AnyOffsetWroteThisFrame) _dispatcher.RefreshHoverAfterScroll();
+            // Layout-move stuck-hover (input-a11y.md §5.4/§15): a reconcile/relayout this frame — NOT a scroll write — can
+            // TRANSLATE a node out from under a STATIONARY mouse/pen cursor with no PointerMove to re-resolve it (the sidebar
+            // collapse snapping its 240→56 rail carries its hover-only resize grip away, leaving the grip's seam hairline lit
+            // until the next real move). Gated on a frame that actually relaid out (`layoutNeeded` = full/scoped layout ran;
+            // steady idle/paint-only frames never enter) — but NOT when a scroll write already refreshed above. The dispatcher
+            // self-gates mouse/pen + a valid position + no touch pan/item-drag, and no-ops unless the hit actually CHANGED.
+            else if (layoutNeeded) _dispatcher.RefreshHoverAfterLayoutMove();
 
             ScrollBindEval.ApplyContinuousPass(_scene);        // 7.7 steady-frame scroll binds (collapsed hero / fade copy)
 
@@ -1638,7 +1665,11 @@ public sealed class AppHost : IDisposable
             _imageCrossfadeWasActive = imageFadeActive;
             var recordStats = SceneRecorder.Record(_scene, _drawList, _images, in focus, Tok.ScrollThumb, Tok.AcrylicFlyout.Fallback, in textEdit,
                 CollectionsMarshal.AsSpan(_popupSkipRoots), holdSelfBlurForAnyUserScroll: scrollActive || _scrollAnim.AnyOffsetWroteThisFrame,
-                spans: _spanTable, spanReuseDisabled: spanDisable); // 8 record
+                spans: _spanTable, spanReuseDisabled: spanDisable,
+                // Damage the band any structural-track cancel (drag-suppression snap @ ApplyProjections, resize snap @
+                // CancelStructuralAll above) vacated this frame — else the ghost rail persists. AsSpan is alloc-free.
+                pendingStructuralDamage: CollectionsMarshal.AsSpan(_anim.PendingStructuralDamage)); // 8 record
+            _anim.PendingStructuralDamage.Clear();   // retains capacity → no steady-state alloc
             SceneRecorder.RecordDetached(_scene, _drawList, _images, _connected.Detached, _scene.OverlayClip);   // 8 detached fly snapshots (flag-gated rebuild; no-op when none)
             RecordPopupWindows(in focus, in textEdit);         // 8b record each popup window's subtree DrawList
             _recordedImageContentEpoch = _images.ContentEpoch;
@@ -1985,6 +2016,12 @@ public sealed class AppHost : IDisposable
         if (w < nodes.Count) nodes.RemoveRange(w, nodes.Count - w);
     }
 
+    // FG_MOTION_DIAG per-node line (one word of OUTCOME + the captured/live rects). Static → zero capture, and only ever
+    // reached under the s_motionDiag guard, so the off-path stays allocation-free.
+    private static void LogMotionNode(uint idx, string outcome, in RectF f, in RectF t)
+        => System.Console.Error.WriteLine(
+            $"[motion-diag]   node={idx} {outcome} from=({f.X:0.0},{f.Y:0.0},{f.W:0.0},{f.H:0.0}) to=({t.X:0.0},{t.Y:0.0},{t.W:0.0},{t.H:0.0})");
+
     private void ApplyProjections()
     {
         // Deadbands: below these the commit didn't move/resize the node WITHIN ITS PARENT, so it must ride any
@@ -2022,17 +2059,37 @@ public sealed class AppHost : IDisposable
         foreach (var kv in _projectBefore)
         {
             var n = kv.Key;
-            if (n == _dispatcher.Drag.ActiveNode) continue;   // E5: the pointer owns the dragged node's transform
-            if (!_scene.IsLive(n) || (_scene.Flags(n) & NodeFlags.BoundsAnimated) == 0) continue;
-            if (suppressed) { _anim.SnapStructuralToLayout(n); continue; }   // skip-start + cancel-in-flight → snap to laid-out bounds
+            // Diag-only best-effort from/to for the pre-TryProjectionRects branches (the real parent-relative pair is only
+            // computed by TryProjectionRects; here `to` is the live parent-relative rect, absent for a non-live node).
+            RectF fLog = default, tLog = default;
+            if (s_motionDiag) { fLog = kv.Value.Rel; tLog = _scene.IsLive(n) ? RelRect(n) : default; }
+            if (n == _dispatcher.Drag.ActiveNode) { if (s_motionDiag) LogMotionNode(n.Raw.Index, "drag-skip", fLog, tLog); continue; }   // E5: the pointer owns the dragged node's transform
+            if (!_scene.IsLive(n) || (_scene.Flags(n) & NodeFlags.BoundsAnimated) == 0) { if (s_motionDiag) LogMotionNode(n.Raw.Index, "dead-node", fLog, tLog); continue; }
+            if (suppressed) { if (s_motionDiag) LogMotionNode(n.Raw.Index, "suppressed-snap", fLog, tLog); _anim.SnapStructuralToLayout(n); continue; }   // skip-start + cancel-in-flight → snap to laid-out bounds
             if (IsBelowProjectionSuppressionRoot(n))
             {
+                if (s_motionDiag) LogMotionNode(n.Raw.Index, "below-root-snap", fLog, tLog);
                 _anim.SnapStructuralToLayout(n);
                 continue;
             }
-            if (!TryProjectionRects(n, kv.Value, PosEps, SizeEps, out RectF from, out RectF to)) continue;
-            if (!_anim.TryGetTransition(n, out var spec)) continue;
+            if (!TryProjectionRects(n, kv.Value, PosEps, SizeEps, out RectF from, out RectF to))
+            {
+                if (s_motionDiag)
+                {
+                    // TryProjectionRects returns false for TWO distinct reasons: (a) the reference frame changed
+                    // (frameNow != captured.Parent — a reparent OR a RelativeTo anchor that now resolves elsewhere, so the
+                    // relative rects are incomparable and it bails BEFORE the delta check), or (b) a genuine sub-deadband
+                    // move. Mirror its exact frame comparison to label each accurately — conflating (a) as "deadband" made a
+                    // 240px reference-frame delta read as a no-op. Reads scene state only; no behaviour change.
+                    NodeHandle anchorNow = _reconciler.ResolveRelativeTarget(n);
+                    NodeHandle frameNow = anchorNow.IsNull ? _scene.Parent(n) : anchorNow;
+                    LogMotionNode(n.Raw.Index, frameNow != kv.Value.Parent ? "frame-mismatch" : "deadband", fLog, tLog);
+                }
+                continue;
+            }
+            if (!_anim.TryGetTransition(n, out var spec)) { if (s_motionDiag) LogMotionNode(n.Raw.Index, "no-transition", from, to); continue; }
             if (reduced) spec = spec with { Dynamics = TransitionDynamics.Tween(1f, Easing.Linear) };
+            if (s_motionDiag) LogMotionNode(n.Raw.Index, "animate", from, to);
             // AnimateBounds consumes only deltas, so parent-relative rects feed it directly; for a purely local
             // move this is bit-identical to the old absolute pair (the ancestor sum cancels).
             _anim.AnimateBounds(n, from, to, spec);
@@ -2123,16 +2180,27 @@ public sealed class AppHost : IDisposable
     private void ReclaimSettledOrphans()
     {
         long nowTicks = _scene.OrphanCount > 0 ? Stopwatch.GetTimestamp() : 0;
-        for (int i = _scene.OrphanCount - 1; i >= 0; i--)
+        for (int i = _scene.OrphanCount - 1; i >= 0;)
         {
+            // Reclaiming an exiting parent may cascade-reclaim its earlier-indexed exiting children. Rebase the cursor
+            // after every removal so a shrunken orphan list can never leave i pointing past its new end.
+            if (i >= _scene.OrphanCount) { i = _scene.OrphanCount - 1; continue; }
             var o = _scene.OrphanAt(i, out _, out _);
-            if (!_anim.HasTracks(o)) { _scene.ReclaimOrphan(o); continue; }
+            if (!_anim.HasTracks(o))
+            {
+                _scene.ReclaimOrphan(o);
+                i = Math.Min(i - 1, _scene.OrphanCount - 1);
+                continue;
+            }
             double ageMs = (nowTicks - _scene.OrphanEnqueuedTicks(i)) * 1000.0 / Stopwatch.Frequency;
             if (ageMs >= OrphanSettleTimeoutMs)
             {
                 Diag.Event("scene", $"orphan-backstop force-reclaim age={ageMs:0}ms (wedged exit track)");
                 _scene.ReclaimOrphan(o);
+                i = Math.Min(i - 1, _scene.OrphanCount - 1);
+                continue;
             }
+            i--;
         }
     }
 

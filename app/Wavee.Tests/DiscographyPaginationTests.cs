@@ -89,6 +89,29 @@ public class DiscographyMapperTests
     }
 
     [Fact]
+    public void DiscographyPageFromResponse_CarriesPreciseReleaseDateAndTrackCount()
+    {
+        var page = SpotifyExportMapper.DiscographyPageFromResponse(Root("""
+        { "data": { "artistUnion": { "discography": { "albums": {
+            "totalCount": 1,
+            "items": [ { "releases": { "items": [ {
+                "uri": "spotify:album:3QITXlmmt93E176jzVqKUb",
+                "name": "Nurture",
+                "type": "ALBUM",
+                "date": { "day": 23, "month": 4, "precision": "DAY", "year": 2021 },
+                "tracks": { "totalCount": 14 }
+            } ] } } ]
+        } } } } }
+        """), DiscographyKind.Albums);
+
+        var album = Assert.Single(page.Items);
+        Assert.Equal(14, album.TrackCount);
+        Assert.Equal(2021, album.Year);
+        Assert.Equal("2021-04-23", album.ReleaseDate);
+        Assert.Equal("DAY", album.ReleaseDatePrecision);
+    }
+
+    [Fact]
     public void DiscographyPageFromResponse_SmallerTotalCount_ClampsUpToItemCount()
     {
         var page = SpotifyExportMapper.DiscographyPageFromResponse(Root("""

@@ -1,5 +1,6 @@
 using System.Linq;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using Wavee.Backend;
 using Wavee.Backend.Library;
@@ -67,6 +68,54 @@ public class StoreLibrarySourceTests
         Assert.NotNull(pl.Tracks[0].AddedAt);
         Assert.Null(pl.Tracks[1].AddedAt);               // added_at 0 → unknown → null
         Assert.Equal(2, pl.TrackCount);
+    }
+
+    [Fact]
+    public async Task GetPlaylist_KnownEmptyBaseline_DoesNotRefetchAsMissing()
+    {
+        const string uri = "spotify:playlist:empty";
+        var store = new InMemoryStore();
+        store.UpsertPlaylist(new Playlist("empty", uri, "New playlist", null, "Me", null, 0));
+        store.SetMembership(uri, Array.Empty<PlaylistMember>(), null);
+        int fetches = 0;
+        var src = new StoreLibrarySource(store)
+        {
+            OnDemandFetch = (_, _) => { fetches++; return Task.CompletedTask; },
+        };
+
+        var playlist = await src.GetPlaylistAsync(uri);
+
+        Assert.NotNull(playlist);
+        Assert.Empty(playlist!.Tracks!);
+        Assert.Equal(0, fetches);
+    }
+
+    [Fact]
+    public async Task GetPlaylist_WarmBaseline_StillSchedulesPaletteHydration()
+    {
+        const string uri = "spotify:playlist:warm";
+        var store = new InMemoryStore();
+        store.UpsertPlaylist(new Playlist("warm", uri, "Warm mix", null, "Spotify", new Image("https://img/cover"), 0));
+        store.SetMembership(uri, System.Array.Empty<PlaylistMember>(), null);
+        int paletteCalls = 0;
+        CancellationToken paletteToken = new(canceled: true);
+        var src = new StoreLibrarySource(store)
+        {
+            OnDemandFetch = (_, _) => throw new Xunit.Sdk.XunitException("warm membership must not refetch"),
+            EnsurePlaylistPalette = (got, token) =>
+            {
+                Assert.Equal(uri, got);
+                paletteToken = token;
+                paletteCalls++;
+                return Task.CompletedTask;
+            },
+        };
+
+        using var read = new CancellationTokenSource();
+        read.Cancel();
+        Assert.NotNull(await src.GetPlaylistAsync(uri, read.Token));
+        Assert.Equal(1, paletteCalls);
+        Assert.False(paletteToken.CanBeCanceled);
     }
 
     [Fact]

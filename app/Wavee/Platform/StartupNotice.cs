@@ -16,11 +16,23 @@ static class StartupNotice
     const uint MB_ICONERROR = 0x10;
     const int IDYES = 6;
 
-    public static void Warning(string title, string body) => Show(title, body, MB_ICONWARNING);
+    public static void Warning(string title, string body)
+    {
+        WaveeLog.Instance.Warn("app", title + ": " + body);
+        Show(title, body, MB_ICONWARNING);
+    }
 
-    public static void Error(string title, string body) => Show(title, body, MB_ICONERROR);
+    public static void Error(string title, string body)
+    {
+        WaveeLog.Instance.Error("app", title + ": " + body);
+        Show(title, body, MB_ICONERROR);
+    }
 
-    public static bool ErrorYesNo(string title, string body) => ShowYesNo(title, body, MB_ICONERROR);
+    public static bool ErrorYesNo(string title, string body)
+    {
+        WaveeLog.Instance.Error("app", title + ": " + body);
+        return ShowYesNo(title, body, MB_ICONERROR);
+    }
 
     static void Show(string title, string body, uint icon)
     {

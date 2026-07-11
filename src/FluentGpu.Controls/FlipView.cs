@@ -73,7 +73,7 @@ internal sealed class FlipViewCore : Component
     const float PanSlopPx = 4f;               // the engine drag-box convention (ListViewBaseItem_Partial.cpp:1864-1878)
     // Fling-distance projection divisor for the MandatorySingle commit. A release of speed v (px/s) coasts an extra
     // v / FlickProjectK px in the snap-settle window before resting; the projected offset is then snapped to the nearest
-    // index. Derived from the engine scroller decay (ScrollIntegrator.FlingDecayPerS = 0.95/s) over the ControlNormal settle
+    // index. Derived from the engine scroller decay (ScrollIntegrator.FlingDecayPerS = 0.05/s survival) over the ControlNormal settle
     // window T: coast = v·(1−decay^T)/−ln(decay), so the divisor is −ln(decay)/(1−decay^T). A BOUNDED window (not the full
     // infinite scroll coast) is the right model for a page snap — a slow under-50% drag springs back, a flick navigates. ≈ 4.0.
     static readonly float FlickProjectK = ProjectDivisor(ScrollIntegrator.FlingDecayPerS, Motion.ControlNormal / 1000f);

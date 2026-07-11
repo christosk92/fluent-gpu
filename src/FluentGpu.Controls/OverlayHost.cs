@@ -50,7 +50,7 @@ public enum OverlayCloseCause : byte { Programmatic, LightDismiss, Escape }
 /// <item><see cref="Static"/> — a bare WinUI <c>Popup</c> with no transitions (the AutoSuggestBox SuggestionsPopup,
 /// generic.xaml AutoSuggestBox template — no TransitionCollection and AutoSuggestBox_Partial.cpp adds none): instant.</item>
 /// </list></summary>
-public enum PopupChrome : byte { Flyout, Raw, Modal, TeachingTip, Popup, Dropdown, Static }
+public enum PopupChrome : byte { Flyout, Raw, Modal, TeachingTip, Popup, Dropdown, Static, CommandBar }
 
 /// <summary>Optional popup behavior. <see cref="FocusTrap"/> keeps Tab/Shift-Tab inside the overlay subtree (modal-style).</summary>
 public readonly record struct PopupOptions(
@@ -105,6 +105,13 @@ public interface IOverlayService
     /// logical owner node, used only to resolve the nested-overlay parent chain for cascade close.</summary>
     OverlayHandle OpenAt(Func<RectF> anchorRect, Func<Element> content, FlyoutPlacement placement, PopupOptions options = default, Func<NodeHandle>? owner = null);
 
+    /// <summary>Open at a node-LOCAL point (a right-tap / context-menu point): builds the window-DIP anchor rect from
+    /// the <paramref name="owner"/> node's absolute rect + <paramref name="local"/>, minus the positioner's
+    /// <c>FlyoutMargin</c> so the presenter top-left lands ON the point (the ToolTip PlacementMode.Mouse precedent).
+    /// <paramref name="owner"/> also feeds the nested-overlay parent chain (a context menu ON a flyout cascade-closes
+    /// with it).</summary>
+    OverlayHandle OpenAtLocal(Func<NodeHandle> owner, Point2 local, Func<Element> content, FlyoutPlacement placement = FlyoutPlacement.BottomEdgeAlignedLeft, PopupOptions options = default);
+
     void CloseTop();
     void CloseAll();
     bool AnyOpen { get; }
@@ -130,6 +137,7 @@ internal sealed class NullOverlayService : IOverlayService
     public OverlayHandle Open(Func<NodeHandle> a, Func<Element> c, FlyoutPlacement p) => new();
     public OverlayHandle Open(Func<NodeHandle> a, Func<Element> c, FlyoutPlacement p, PopupOptions o) => new();
     public OverlayHandle OpenAt(Func<RectF> r, Func<Element> c, FlyoutPlacement p, PopupOptions o = default, Func<NodeHandle>? owner = null) => new();
+    public OverlayHandle OpenAtLocal(Func<NodeHandle> owner, Point2 local, Func<Element> c, FlyoutPlacement p = FlyoutPlacement.BottomEdgeAlignedLeft, PopupOptions o = default) => new();
     public void CloseTop() { }
     public void CloseAll() { }
     public bool AnyOpen => false;
@@ -196,6 +204,7 @@ internal sealed class OverlayServiceImpl : IOverlayService
     public OverlayServiceImpl(Signal<int> version) => _version = version;
 
     public bool AnyOpen { get { foreach (var e in Entries) if (e.Phase != OverlayPhase.Closing) return true; return false; } }
+    public bool AnyInputBlocking { get { foreach (var e in Entries) if (e.Phase != OverlayPhase.Closing && e.DismissBehavior != DismissBehavior.None) return true; return false; } }
     public bool AnyClosing { get { foreach (var e in Entries) if (e.Phase == OverlayPhase.Closing) return true; return false; } }
     public bool AnyModal { get { foreach (var e in Entries) if (e.Phase != OverlayPhase.Closing && e.DismissBehavior == DismissBehavior.Modal) return true; return false; } }
     public bool AnyModalVisual { get { foreach (var e in Entries) if (e.DismissBehavior == DismissBehavior.Modal) return true; return false; } }
@@ -204,7 +213,8 @@ internal sealed class OverlayServiceImpl : IOverlayService
         get
         {
             for (int i = Entries.Count - 1; i >= 0; i--)
-                if (Entries[i].Phase != OverlayPhase.Closing) return Entries[i].DismissBehavior == DismissBehavior.LightDismiss;
+                if (Entries[i].Phase != OverlayPhase.Closing && Entries[i].DismissBehavior != DismissBehavior.None)
+                    return Entries[i].DismissBehavior == DismissBehavior.LightDismiss;
             return false;
         }
     }
@@ -217,6 +227,20 @@ internal sealed class OverlayServiceImpl : IOverlayService
 
     public OverlayHandle OpenAt(Func<RectF> anchorRect, Func<Element> content, FlyoutPlacement placement, PopupOptions options = default, Func<NodeHandle>? owner = null)
         => OpenCore(owner ?? (static () => NodeHandle.Null), anchorRect, content, placement, options);
+
+    public OverlayHandle OpenAtLocal(Func<NodeHandle> owner, Point2 local, Func<Element> content,
+        FlyoutPlacement placement = FlyoutPlacement.BottomEdgeAlignedLeft, PopupOptions options = default)
+        => OpenAt(
+            () =>
+            {
+                var scene = Scene;
+                var o = owner();
+                RectF abs = scene is not null && !o.IsNull && scene.IsLive(o) ? scene.AbsoluteRect(o) : default;
+                // −FlyoutMargin compensates the positioner's below-anchor gap so the presenter top-left lands ON the
+                // point (the ToolTip.cs:171 PlacementMode.Mouse precedent). Zero-size rect ⇒ pure point placement.
+                return new RectF(abs.X + local.X, abs.Y + local.Y - FlyoutPositioner.FlyoutMargin, 0f, 0f);
+            },
+            content, placement, options, owner);
 
     private OverlayHandle OpenCore(Func<NodeHandle> anchor, Func<RectF>? anchorRect, Func<Element> content, FlyoutPlacement placement, PopupOptions options)
     {
@@ -262,6 +286,13 @@ internal sealed class OverlayServiceImpl : IOverlayService
     {
         for (int i = Entries.Count - 1; i >= 0; i--)
             if (Entries[i].Phase != OverlayPhase.Closing) { BeginClose(Entries[i], cause); return; }
+    }
+
+    internal void CloseTopInputBlocking(OverlayCloseCause cause)
+    {
+        for (int i = Entries.Count - 1; i >= 0; i--)
+            if (Entries[i].Phase != OverlayPhase.Closing && Entries[i].DismissBehavior != DismissBehavior.None)
+            { BeginClose(Entries[i], cause); return; }
     }
 
     public void CloseAll()
@@ -323,6 +354,17 @@ internal sealed class OverlayServiceImpl : IOverlayService
                 for (var n = cur; !n.IsNull; n = sc.Parent(n))
                     if (n == e.WrapperNode) { inside = true; break; }
             if (inside && sc.IsLive(e.SavedFocus)) RestoreFocus(e.SavedFocus);
+        }
+
+        // Dismiss-and-reopen seam (context menus): once no non-closing entry remains, the scrim must stop hit-testing
+        // SYNCHRONOUSLY so a right-click redispatch (InputHooks.RedispatchContextAt, fired right after CloseTop on the
+        // scrim's own OnContextRequested) hit-tests THROUGH the dying scrim to the node beneath in the same gesture.
+        // The next OverlayHost render re-derives HitTestVisible from AnyOpen (now false) — this applies that value a
+        // beat early; it never contradicts it (the scrim stays present + visible while the last popup fades).
+        if (!AnyInputBlocking && Scene is { } scrimScene && !ScrimNode.IsNull && scrimScene.IsLive(ScrimNode))
+        {
+            scrimScene.Unmark(ScrimNode, NodeFlags.HitTestVisible);
+            scrimScene.Mark(ScrimNode, NodeFlags.PaintDirty);
         }
 
         SeedCloseIfNeeded(e);
@@ -542,7 +584,7 @@ internal sealed class OverlayServiceImpl : IOverlayService
     /// <summary>Pre-focus key preview wired into the dispatcher via the InputHooks ambient: Escape closes the top overlay.</summary>
     public bool PreviewKey(int key)
     {
-        if (key == Keys.Escape && AnyOpen) { CloseTop(OverlayCloseCause.Escape); return true; }
+        if (key == Keys.Escape && AnyInputBlocking) { CloseTopInputBlocking(OverlayCloseCause.Escape); return true; }
         return false;
     }
 
@@ -571,7 +613,7 @@ public sealed class OverlayHost : Component
     // corners + system shadow (native Windows 11 menu). Only PopupChrome.Flyout opts into that today; other chromes
     // stay in-window with the engine acrylic compositor (no regression).
     private static PopupWindowMaterial WindowMaterialFor(OverlayEntry e)
-        => e.Chrome == PopupChrome.Flyout ? PopupWindowMaterial.TransientAcrylic : PopupWindowMaterial.None;
+        => e.Chrome is PopupChrome.Flyout or PopupChrome.CommandBar ? PopupWindowMaterial.TransientAcrylic : PopupWindowMaterial.None;
 
     /// <summary>Reconcile the menu presenter plate to its placement: an OS-backed windowed flyout (a popup HWND was
     /// leased) renders TRANSPARENT over DWM acrylic — clear the engine acrylic AND the engine drop shadow (the
@@ -580,25 +622,49 @@ public sealed class OverlayHost : Component
     /// Idempotent: only mutates + marks paint-dirty when the state actually changes (no per-frame repaint churn).</summary>
     internal static void SyncWindowedMenuBackdrop(SceneStore scene, OverlayEntry e)
     {
-        if (e.Chrome != PopupChrome.Flyout || e.PlateNode.IsNull || !scene.IsLive(e.PlateNode)) return;
+        // Menu chrome carries the visuals on its stretch PLATE; the CommandBar chrome is a single-card surface
+        // (FlyoutSurface non-menu branch), so its acrylic/shadow live on the SURFACE node itself.
+        var target = e.Chrome switch
+        {
+            PopupChrome.Flyout => e.PlateNode,
+            PopupChrome.CommandBar => e.SurfaceNode,
+            _ => NodeHandle.Null,
+        };
+        if (target.IsNull || !scene.IsLive(target)) return;
         bool osBacked = e.PopupWindowToken >= 0;
-        bool hasAcrylic = scene.TryGetAcrylic(e.PlateNode, out _);
-        bool hasShadow = scene.TryGetShadow(e.PlateNode, out _);
+        bool hasAcrylic = scene.TryGetAcrylic(target, out _);
+        bool hasShadow = scene.TryGetShadow(target, out _);
         bool changed = false;
+        ColorF desiredFill;
         if (osBacked)
         {
-            if (hasAcrylic) { scene.ClearAcrylic(e.PlateNode); changed = true; }
-            if (hasShadow) { scene.ClearShadow(e.PlateNode); changed = true; }
+            if (hasAcrylic) { scene.ClearAcrylic(target); changed = true; }
+            if (hasShadow) { scene.ClearShadow(target); changed = true; }
+            // DWM supplies the BLUR (DWMSBT_TRANSIENTWINDOW), but its system tint alone is far too weak — in light
+            // theme the app content bleeds straight through the menu. Paint the WinUI acrylic recipe's TINT over the
+            // DWM blur as a single flat fill: the tint COLOR at the coverage the in-app compositor's luminosity+tint
+            // layers apply over the blurred backdrop = 1 − (1−LuminosityOpacity)·(1−TintOpacity) (the fraction of the
+            // result that is NOT see-through backdrop). Light FlyoutLight (Lum .85 / Tint 0) ⇒ #FCFCFC @ .85 (Explorer
+            // near-opaque, kills the bleed-through); dark InAppDefault (Lum .96 / Tint .15) ⇒ #2C2C2C @ ~.97 (stays a
+            // dark, faintly-translucent card — close to the DWM-only look it replaces). Matches the in-window acrylic,
+            // so a windowed and a constrained (fallback) menu read the same.
+            var a = Tok.AcrylicFlyout;
+            float coverage = 1f - (1f - a.LuminosityOpacity) * (1f - a.TintOpacity);
+            desiredFill = a.Tint with { A = coverage };
         }
         else
         {
-            if (!hasAcrylic) { scene.SetAcrylic(e.PlateNode, Tok.AcrylicFlyout); changed = true; }
-            if (!hasShadow) { scene.SetShadow(e.PlateNode, Elevation.Flyout); changed = true; }
+            if (!hasAcrylic) { scene.SetAcrylic(target, Tok.AcrylicFlyout); changed = true; }
+            if (!hasShadow) { scene.SetShadow(target, Elevation.Flyout); changed = true; }
+            desiredFill = ColorF.Transparent;   // bg comes from the engine acrylic
         }
-        if (changed)
+        // Idempotent: only write + mark dirty when the acrylic/shadow state flipped OR the fill actually differs
+        // (the method runs per placement frame — no per-frame repaint churn).
+        ref NodePaint tp = ref scene.Paint(target);
+        if (changed || !tp.Fill.Equals(desiredFill))
         {
-            scene.Paint(e.PlateNode).Fill = ColorF.Transparent;   // bg comes from acrylic (in-window) or DWM (OS-backed)
-            scene.Mark(e.PlateNode, NodeFlags.PaintDirty);
+            tp.Fill = desiredFill;
+            scene.Mark(target, NodeFlags.PaintDirty);
         }
     }
 
@@ -702,8 +768,12 @@ public sealed class OverlayHost : Component
                             if (e.PopupWindowToken < 0)
                                 e.PopupWindowToken = svc.Hooks!.OpenPopupWindow!(e.WrapperNode, WindowMaterialFor(e));
                             if (e.PopupWindowToken >= 0)
+                                // closedRatio drives the composition open-slide: menus 0.5, cascaded sub-menus 0.67
+                                // (MenuFlyout_Partial.cpp:253 / MenuFlyoutSubItem_Partial.cpp:741); the CommandBar
+                                // chrome passes 0 = NO slide (WinUI CommandBarFlyout opens with its own 83ms body
+                                // fade only — OpeningOpacityStoryboard, CommandBarFlyout_themeresources.xaml:655-658).
                                 svc.Hooks!.SetPopupWindowBounds?.Invoke(e.PopupWindowToken, new RectF(place.X, place.Y, pRect.W, pRect.H), place.OpensUp,
-                                    e.ParentId >= 0 ? 0.67f : 0.5f);
+                                    e.Chrome == PopupChrome.CommandBar ? 0f : (e.ParentId >= 0 ? 0.67f : 0.5f));
                             else
                                 place = ApplyAnchorOffsetX(
                                     FlyoutPositioner.Place(in aRect, in popupSize, in vpRect, e.Placement, isWindowed: false),
@@ -790,6 +860,17 @@ public sealed class OverlayHost : Component
                 else if (!e.OpenSeeded && e.Chrome == PopupChrome.Static)
                 {
                     // A bare WinUI Popup (AutoSuggestBox SuggestionsPopup): no open transition — appears instantly.
+                    e.OpenSeeded = true;
+                    e.Phase = OverlayPhase.Open;
+                }
+                else if (!e.OpenSeeded && e.Chrome == PopupChrome.CommandBar)
+                {
+                    // WinUI CommandBarFlyout: the flyout kills the default popup transition
+                    // (AreOpenCloseAnimationsEnabled(false), CommandBarFlyout.cpp:43-44) and the BODY plays its own
+                    // OpeningOpacityStoryboard — LayoutRoot+OverflowPopup Opacity 0→1 over 83ms
+                    // (CommandBarFlyout_themeresources.xaml:655-658; kind probe CommandBarFlyoutCommandBar.cpp:208-224).
+                    // No slide, no clip reveal on open. The host seeds nothing; the composition chrome gets
+                    // closedRatio 0 (no open slide) and the CommandBarFlyoutBody drives the 83ms fade itself.
                     e.OpenSeeded = true;
                     e.Phase = OverlayPhase.Open;
                 }
@@ -918,19 +999,31 @@ public sealed class OverlayHost : Component
                 PressedFill = scrimFill,
                 Opacity = 1f,
                 OnRealized = h => svc.ScrimNode = h,
-                HitTestVisible = svc.AnyOpen,
+                HitTestVisible = svc.AnyInputBlocking,
                 TabStop = false,   // WinUI: the light-dismiss layer is never a tab stop (focus restore depends on it)
                 // Outside-press dismiss lives ENTIRELY on this scrim node (a Controls/OverlayHost concern reached through the
                 // dispatcher's hit-test → click/press delegates — there is no in-dispatcher overlay registry; input-a11y §4).
                 // The full-bleed scrim is the topmost hit-test target while a popup is open, so the press lands on IT, never
-                // the content beneath: a light-dismiss scrim's OnClick closes the top overlay (and the click is consumed by
-                // the scrim — no click-through), a modal scrim's OnPointerDown is a no-op that simply eats the press (modal
-                // blocks the gesture). This is device-agnostic: a TOUCH tap routes through the SAME GetClickHandler the mouse
-                // click does (the Phase-1 single-recognizer tap path), so touch light-dismiss is correct by construction with
-                // no touch-specific branch — the dismissing touch is consumed exactly like the mouse (WinUI
-                // CPopupRoot::OnPointerPressed sets Handled = didCloseAPopup for both, popup.cpp:5206).
-                OnClick = lightDismiss ? () => svc.CloseTop(OverlayCloseCause.LightDismiss) : (svc.AnyOpen ? () => { } : null),
-                OnPointerDown = svc.AnyOpen && !lightDismiss ? _ => { } : null,
+                // the content beneath. WinUI closes on the POINTER DOWN, not the click: ShouldEventCloseFlyout returns true
+                // solely for XCP_POINTERDOWN (PointerInputProcessor.cpp:1028-1033) — so a light-dismiss scrim closes the top
+                // overlay in OnPointerDown (mouse press and touch down both route here), and the eventual release/click is
+                // consumed by the no-op OnClick (no click-through — WinUI CPopupRoot::OnPointerPressed sets
+                // Handled = didCloseAPopup, popup.cpp:5206). A modal scrim's OnPointerDown is a no-op that simply eats the
+                // press (modal blocks the gesture). Right-button presses never reach OnPointerDown (the dispatcher tracks
+                // them for context only), so the outside-right-click path below stays release-timed.
+                OnClick = svc.AnyInputBlocking ? () => { } : null,
+                OnPointerDown = svc.AnyInputBlocking
+                    ? (lightDismiss ? _ => svc.CloseTopInputBlocking(OverlayCloseCause.LightDismiss) : _ => { })
+                    : null,
+                // Right-click on the light-dismiss scrim = WinUI outside-right-click: close the top overlay AND re-fire
+                // the context request at the same point so the node underneath opens its own menu in ONE gesture. The
+                // scrim is full-bleed at origin, so args.Position (scrim-local) IS the window-DIP point. CloseTop first
+                // (BeginClose synchronously unmarks the scrim's HitTestVisible when no non-closing entry remains) so
+                // RedispatchContextAt hit-tests THROUGH the dying scrim. A modal scrim has no context handler (it eats
+                // the press via OnPointerDown). Empty area under the point ⇒ dismiss only (no ContextBit found there).
+                OnContextRequested = lightDismiss
+                    ? args => { svc.CloseTopInputBlocking(OverlayCloseCause.LightDismiss); hooks.RedispatchContextAt?.Invoke(args.Position); }
+                    : null,
             });
             foreach (var e in svc.Entries)
                 layers.Add(Positioned(e) with { Key = "overlay:" + e.Id });
@@ -966,6 +1059,7 @@ public sealed class OverlayHost : Component
         Width = float.NaN,
         Height = float.NaN,
         Grow = 1,
+        HitTestVisible = e.Phase != OverlayPhase.Closing,
         Direction = 1,
         AlignItems = FlexAlign.Center,
         Justify = FlexJustify.Center,
@@ -985,6 +1079,7 @@ public sealed class OverlayHost : Component
     static BoxEl PositionedAnchored(OverlayEntry e) => new BoxEl
     {
         Grow = 1,
+        HitTestVisible = e.Phase != OverlayPhase.Closing,
         Direction = 1,
         AlignItems = FlexAlign.Start,
         Justify = FlexJustify.Start,

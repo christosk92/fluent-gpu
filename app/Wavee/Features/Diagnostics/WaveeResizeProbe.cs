@@ -14,6 +14,8 @@ namespace Wavee;
 
 internal static partial class WaveeResizeProbe
 {
+    static readonly WaveeLogger Log = new(WaveeLog.Instance, "probe");
+
     const int Height = 760;
     const uint WM_ENTERSIZEMOVE = 0x0231;
     const uint WM_EXITSIZEMOVE = 0x0232;
@@ -33,9 +35,10 @@ internal static partial class WaveeResizeProbe
     public static bool TryRun(AppHost host, IPlatformWindow window, IGpuDevice device)
     {
         if (!Diag.EnvFlag("WAVEE_RESIZE_PROBE")) return false;
+        WaveeLog.Instance.SetEcho(Console.Error.WriteLine);   // env-gated run only: mirror probe progress to the terminal
         if (window is not Win32Window w || device is not D3D12Device gpu)
         {
-            Console.Error.WriteLine("[wavee-resize-probe] unavailable: requires Win32Window + D3D12Device");
+            Log.Warn("[wavee-resize-probe] unavailable: requires Win32Window + D3D12Device");
             return true;
         }
 
@@ -45,9 +48,9 @@ internal static partial class WaveeResizeProbe
 
     static void Run(AppHost host, Win32Window window, D3D12Device gpu)
     {
-        Directory.CreateDirectory(@"C:\tmp");
-        string csvPath = @"C:\tmp\wavee-resize-probe.csv";
-        string summaryPath = @"C:\tmp\wavee-resize-probe-summary.txt";
+        Directory.CreateDirectory(ProbeArtifacts.Dir);
+        string csvPath = ProbeArtifacts.PathFor("wavee-resize-probe.csv");
+        string summaryPath = ProbeArtifacts.PathFor("wavee-resize-probe-summary.txt");
         float scale = window.Scale <= 0f ? 1f : window.Scale;
         int heightPx = Px(Height, scale);
         int[] widths = DipToPx(scale,
@@ -60,7 +63,7 @@ internal static partial class WaveeResizeProbe
         ]);
         int[] screenshots = DipToPx(scale, [1500, 1180, 1010, 760, 680, 585, 580, 579, 561, 560, 559, 541, 540, 539, 535, 440, 360]);
 
-        Console.Error.WriteLine($"[wavee-resize-probe] scale={scale:0.00} heightPx={heightPx}");
+        Log.Info($"[wavee-resize-probe] scale={scale:0.00} heightPx={heightPx}");
         WarmupAndNavigateDetail(host, window);
 
         RunBandAnimCapture(host, window, gpu, heightPx);
@@ -92,10 +95,10 @@ internal static partial class WaveeResizeProbe
             if (!Diag.EnvFlag("FG_RENDER_ASYNC") && Contains(screenshots, width))
             {
                 host.RunFrame();
-                string png = $@"C:\tmp\wavee-resize-{width}.png";
+                string png = ProbeArtifacts.PathFor($"wavee-resize-{width}.png");
                 var px = gpu.CaptureBgra(out int cw, out int ch);
                 PngWriter.WriteBgra(png, px, cw, ch);
-                Console.Error.WriteLine($"[wavee-resize-probe] screenshot {png} ({cw}x{ch})");
+                Log.Info($"[wavee-resize-probe] screenshot {png} ({cw}x{ch})");
             }
         }
 
@@ -108,8 +111,8 @@ internal static partial class WaveeResizeProbe
             $"rows={resizeRows}, avgResizeMs={(resizeRows == 0 ? 0 : sumResize / resizeRows).ToString("0.00", CultureInfo.InvariantCulture)}, " +
             $"maxResizeMs={maxResize.ToString("0.00", CultureInfo.InvariantCulture)} at width={maxResizeWidth}";
         File.WriteAllText(summaryPath, summary + Environment.NewLine);
-        Console.Error.WriteLine($"[wavee-resize-probe] wrote {csvPath}");
-        Console.Error.WriteLine($"[wavee-resize-probe] {summary}");
+        Log.Info($"[wavee-resize-probe] wrote {csvPath}");
+        Log.Info($"[wavee-resize-probe] {summary}");
     }
 
     static void WarmupAndNavigateDetail(AppHost host, Win32Window window)
@@ -117,7 +120,7 @@ internal static partial class WaveeResizeProbe
         for (int i = 0; i < 240 && WaveeShell.ProbeNav is null && !window.IsClosed; i++) host.RunFrame();
         if (WaveeShell.ProbeNav is null)
         {
-            Console.Error.WriteLine("[wavee-resize-probe] ProbeNav not wired; running on the current page");
+            Log.Warn("[wavee-resize-probe] ProbeNav not wired; running on the current page");
             return;
         }
 
@@ -126,7 +129,7 @@ internal static partial class WaveeResizeProbe
         string? arg = Environment.GetEnvironmentVariable("WAVEE_RESIZE_ARG");
         if (string.IsNullOrWhiteSpace(arg)) arg = null;
 
-        Console.Error.WriteLine($"[wavee-resize-probe] route={route}");
+        Log.Info($"[wavee-resize-probe] route={route}");
         WaveeShell.ProbeNav(route, arg);
         for (int i = 0; i < 50 && !window.IsClosed; i++) host.RunFrame();
         System.Threading.Thread.Sleep(350);
@@ -138,7 +141,7 @@ internal static partial class WaveeResizeProbe
     static void RunWithinBandProbe(AppHost host, Win32Window window, StringBuilder csv, float scale, int heightPx)
     {
         int[] widths = DipToPx(scale, [1480, 1300, 1481, 1301, 1482, 1302, 1483, 1303, 1484, 1304, 1485, 1305]);
-        Console.Error.WriteLine("[wavee-resize-probe] within-band start (expect comps=0)");
+        Log.Info("[wavee-resize-probe] within-band start (expect comps=0)");
         for (int i = 0; i < widths.Length && !window.IsClosed; i++)
         {
             long start = Stopwatch.GetTimestamp();
@@ -146,7 +149,7 @@ internal static partial class WaveeResizeProbe
             AddRow(csv, i, widths[i], "within-band", ElapsedMs(start), host.LastStats);
             host.RunFrame();   // drain settle
         }
-        Console.Error.WriteLine("[wavee-resize-probe] within-band done");
+        Log.Info("[wavee-resize-probe] within-band done");
     }
 
     // WAVEE_ANIM_CAP=1: capture the Devices-button Enter (cross 1180 upward) then Exit (cross back) frame-by-frame from
@@ -159,34 +162,34 @@ internal static partial class WaveeResizeProbe
         float scale = window.Scale <= 0f ? 1f : window.Scale;
         int belowPx = Px(1160, scale);   // 1160 DIP — Devices hidden
         int abovePx = Px(1240, scale);   // 1240 DIP — Devices (1180) AND Expand-edge clear; well past the band
-        Console.Error.WriteLine($"[anim-cap] scale={scale:0.00} belowPx={belowPx} abovePx={abovePx}");
-        Console.Error.WriteLine("[anim-cap] enter: cross 1180 upward (Devices appears)");
+        Log.Info($"[anim-cap] scale={scale:0.00} belowPx={belowPx} abovePx={abovePx}");
+        Log.Info("[anim-cap] enter: cross 1180 upward (Devices appears)");
         window.SetClientSize(belowPx, heightPx); for (int i = 0; i < 5 && !window.IsClosed; i++) host.RunFrame();
         window.SetClientSize(abovePx, heightPx);  // crosses 1180 → Devices mounts → SeedEnter
         for (int k = 0; k < 16 && !window.IsClosed; k++)
         {
             host.RunFrame();
             var px = gpu.CaptureBgra(out int cw, out int ch);
-            PngWriter.WriteBgra($@"C:\tmp\anim_enter_{k:D2}.png", px, cw, ch);
+            PngWriter.WriteBgra(ProbeArtifacts.PathFor($"anim_enter_{k:D2}.png"), px, cw, ch);
             System.Threading.Thread.Sleep(8);
         }
-        Console.Error.WriteLine("[anim-cap] exit: cross 1180 downward (Devices disappears)");
+        Log.Info("[anim-cap] exit: cross 1180 downward (Devices disappears)");
         window.SetClientSize(belowPx, heightPx);  // crosses 1180 → Devices unmounts → SeedExit (orphan fades)
         for (int k = 0; k < 10 && !window.IsClosed; k++)
         {
             host.RunFrame();
             var px = gpu.CaptureBgra(out int cw, out int ch);
-            PngWriter.WriteBgra($@"C:\tmp\anim_exit_{k:D2}.png", px, cw, ch);
+            PngWriter.WriteBgra(ProbeArtifacts.PathFor($"anim_exit_{k:D2}.png"), px, cw, ch);
             System.Threading.Thread.Sleep(22);
         }
-        Console.Error.WriteLine("[anim-cap] done");
+        Log.Info("[anim-cap] done");
     }
 
     static void RunMoveProbe(AppHost host, Win32Window window, StringBuilder csv)
     {
         nint hwnd = window.Handle.Value;
         var origin = window.ClientOriginPx;
-        Console.Error.WriteLine("[wavee-resize-probe] modal-move start");
+        Log.Info("[wavee-resize-probe] modal-move start");
         SendMessageW(hwnd, WM_ENTERSIZEMOVE, 0, 0);
         for (int i = 0; i < 20 && !window.IsClosed; i++)
         {
@@ -201,14 +204,14 @@ internal static partial class WaveeResizeProbe
             AddRow(csv, i, -1, "move-timer", ElapsedMs(start), host.LastStats);
         }
         SendMessageW(hwnd, WM_EXITSIZEMOVE, 0, 0);
-        Console.Error.WriteLine("[wavee-resize-probe] modal-move done");
+        Log.Info("[wavee-resize-probe] modal-move done");
     }
 
     static void RunModalResizeProbe(AppHost host, Win32Window window, StringBuilder csv, float scale, int heightPx)
     {
         nint hwnd = window.Handle.Value;
         int[] burst = DipToPx(scale, [1480, 1460, 1440, 1420, 1400, 1380, 1360, 1340, 1320, 1300, 1280, 1260, 1240, 1220, 1200, 1180]);
-        Console.Error.WriteLine("[wavee-resize-probe] modal-resize burst start");
+        Log.Info("[wavee-resize-probe] modal-resize burst start");
         SendMessageW(hwnd, WM_ENTERSIZEMOVE, 0, 0);
         for (int i = 0; i < burst.Length && !window.IsClosed; i++)
         {
@@ -226,7 +229,7 @@ internal static partial class WaveeResizeProbe
         AddRow(csv, 0, burst[^1], "modal-size-exit", ElapsedMs(exitStart), host.LastStats);
 
         int[] thresholdBurst = DipToPx(scale, [590, 585, 580, 575, 570, 565, 561, 560, 559, 555, 550, 545, 541, 540, 539, 535, 530]);
-        Console.Error.WriteLine("[wavee-resize-probe] detail-threshold modal-resize burst start");
+        Log.Info("[wavee-resize-probe] detail-threshold modal-resize burst start");
         SendMessageW(hwnd, WM_ENTERSIZEMOVE, 0, 0);
         for (int i = 0; i < thresholdBurst.Length && !window.IsClosed; i++)
         {
@@ -242,7 +245,7 @@ internal static partial class WaveeResizeProbe
         exitStart = Stopwatch.GetTimestamp();
         SendMessageW(hwnd, WM_EXITSIZEMOVE, 0, 0);
         AddRow(csv, 0, thresholdBurst[^1], "detail-modal-size-exit", ElapsedMs(exitStart), host.LastStats);
-        Console.Error.WriteLine("[wavee-resize-probe] modal-resize burst done");
+        Log.Info("[wavee-resize-probe] modal-resize burst done");
     }
 
     static void AddRow(StringBuilder csv, int step, int width, string kind, double elapsedMs, FrameStats s)

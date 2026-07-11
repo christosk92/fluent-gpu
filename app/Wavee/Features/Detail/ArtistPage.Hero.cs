@@ -322,17 +322,8 @@ sealed partial class ArtistPage : Component
     };
 
     // ── action affordances ───────────────────────────────────────────────────────────────────────────────
-    Element PlayPill(Action onPlay) => new BoxEl
-    {
-        Direction = 0, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center,
-        Corners = CornerRadius4.All(24f), Padding = new Edges4(22f, 12f, 22f, 12f),
-        Fill = _accent, HoverScale = 1.04f, PressScale = 0.97f, Shadow = Elevation.Card, OnClick = onPlay,
-        Children =
-        [
-            Icon(Icons.Play, 16f, WaveePalette.OnAccent(_accent)),
-            new TextEl(Loc.Get(Strings.Artist.Play)) { Size = 15f, Weight = 700, Color = WaveePalette.OnAccent(_accent) }
-        ],
-    };
+    Element PlayPill(Action onPlay)
+        => HeroCta.Pill(Icons.Play, Loc.Get(Strings.Artist.Play), _accent, WaveePalette.OnAccent(_accent), onPlay);
 
     static Element Fab(string glyph, Action onClick) => new BoxEl
     {

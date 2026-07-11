@@ -12,7 +12,7 @@ public sealed class IpcEnvelope
 
 public static class AudioIpcContract
 {
-    public const int Version = 3;   // v3: SupplyBodyCommand.sourceKind (explicit Spotify-encrypted vs external-plain)
+    public const int Version = 5;   // v5: tokenized prepared-next/gapless/crossfade hand-off; preserves v4 device/session-volume messages
 }
 
 public static class IpcMessageTypes
@@ -21,6 +21,8 @@ public static class IpcMessageTypes
     public const string Ready = "ready";
     public const string PlayTrack = "play_track";
     public const string PrepareNext = "prepare_next";
+    public const string SupplyNextBody = "supply_next_body";
+    public const string CancelPrepared = "cancel_prepared";
     public const string DerivePlayPlayKey = "derive_playplay_key";
     public const string LoadFastStart = "load_fast_start";
     public const string SupplyBody = "supply_body";
@@ -29,6 +31,10 @@ public static class IpcMessageTypes
     public const string Stop = "stop";
     public const string Seek = "seek";
     public const string SetVolume = "set_volume";
+    public const string SetOutputDevice = "set_output_device";
+    public const string SetMute = "set_mute";
+    public const string DeviceEvent = "device_event";
+    public const string SessionVolume = "session_volume";
     public const string SetEqualizer = "set_equalizer";
     public const string SetCrossfade = "set_crossfade";
     public const string Shutdown = "shutdown";
@@ -93,6 +99,7 @@ public sealed class HelloCommand
     [JsonPropertyName("equalizer")] public EqualizerSettings Equalizer { get; init; } = EqualizerSettings.Flat;
     [JsonPropertyName("crossfade")] public CrossfadeSettings Crossfade { get; init; } = CrossfadeSettings.Off;
     [JsonPropertyName("volume")] public double Volume { get; init; } = 1.0;
+    [JsonPropertyName("outputDeviceId")] public string? OutputDeviceId { get; init; }
 }
 
 public sealed class ReadyMessage
@@ -123,6 +130,38 @@ public sealed class VolumeCommand
 {
     [JsonPropertyName("generation")] public long Generation { get; init; }
     [JsonPropertyName("volume")] public double Volume { get; init; }
+}
+
+/// <summary>UI -> host: choose the WASAPI output endpoint. Generation is informational only — device routing is global
+/// (the HandleVolume precedent); applied unconditionally.</summary>
+public sealed class SetOutputDeviceCommand
+{
+    [JsonPropertyName("generation")] public long Generation { get; init; }
+    [JsonPropertyName("deviceId")] public string? DeviceId { get; init; }
+}
+
+/// <summary>UI -> host: mute/unmute the Windows session (Phase B).</summary>
+public sealed class MuteCommand
+{
+    [JsonPropertyName("generation")] public long Generation { get; init; }
+    [JsonPropertyName("muted")] public bool Muted { get; init; }
+}
+
+/// <summary>host -> UI: a device-topology notice (loss / fallback / auto-return / output-failed). Global — no generation gate.</summary>
+public sealed class DeviceEventMessage
+{
+    [JsonPropertyName("generation")] public long Generation { get; init; }
+    [JsonPropertyName("kind")] public int Kind { get; init; }
+    [JsonPropertyName("deviceId")] public string? DeviceId { get; init; }
+    [JsonPropertyName("deviceName")] public string? DeviceName { get; init; }
+    [JsonPropertyName("wasExplicit")] public bool WasExplicit { get; init; }
+}
+
+/// <summary>host -> UI: an EXTERNAL Windows session-volume change (SndVol / another app) to reflect in the UI (Phase B).</summary>
+public sealed class SessionVolumeMessage
+{
+    [JsonPropertyName("volume01")] public double Volume01 { get; init; }
+    [JsonPropertyName("muted")] public bool Muted { get; init; }
 }
 
 public sealed class SetEqualizerCommand
@@ -192,6 +231,49 @@ public sealed class SupplyBodyCommand
     [JsonPropertyName("headBoundary")] public int HeadBoundary { get; init; }
     [JsonPropertyName("sizeBytes")] public long? SizeBytes { get; init; }
     [JsonPropertyName("sourceKind")] public int SourceKind { get; init; }   // 0 = SpotifyEncrypted (default), 1 = ExternalPlain
+}
+
+/// <summary>UI -> host: create an independently decoded next stream without changing the active generation.</summary>
+public sealed class PrepareNextCommand
+{
+    [JsonPropertyName("generation")] public long Generation { get; init; }
+    [JsonPropertyName("correlationId")] public required string CorrelationId { get; init; }
+    [JsonPropertyName("token")] public required string Token { get; init; }
+    [JsonPropertyName("trackUri")] public required string TrackUri { get; init; }
+    [JsonPropertyName("fileIdHex")] public required string FileIdHex { get; init; }
+    [JsonPropertyName("format")] public required string Format { get; init; }
+    [JsonPropertyName("durationMs")] public long DurationMs { get; init; }
+    [JsonPropertyName("normalizationGainDb")] public float NormalizationGainDb { get; init; }
+    [JsonPropertyName("headBytesBase64")] public required string HeadBytesBase64 { get; init; }
+    [JsonPropertyName("allowOverlap")] public bool AllowOverlap { get; init; }
+}
+
+/// <summary>UI -> host: attach the resolved body to a tokenized prepared stream.</summary>
+public sealed class SupplyNextBodyCommand
+{
+    [JsonPropertyName("generation")] public long Generation { get; init; }
+    [JsonPropertyName("correlationId")] public required string CorrelationId { get; init; }
+    [JsonPropertyName("token")] public required string Token { get; init; }
+    [JsonPropertyName("body")] public required SupplyBodyCommand Body { get; init; }
+}
+
+public sealed class CancelPreparedCommand
+{
+    [JsonPropertyName("generation")] public long Generation { get; init; }
+    [JsonPropertyName("correlationId")] public required string CorrelationId { get; init; }
+    [JsonPropertyName("token")] public required string Token { get; init; }
+}
+
+/// <summary>Host -> UI: the prepared token started, completed, or missed its natural boundary.</summary>
+public sealed class PreparedTransitionMessage
+{
+    [JsonPropertyName("generation")] public long Generation { get; init; }
+    [JsonPropertyName("kind")] public int Kind { get; init; }
+    [JsonPropertyName("token")] public required string Token { get; init; }
+    [JsonPropertyName("trackUri")] public required string TrackUri { get; init; }
+    [JsonPropertyName("positionMs")] public long PositionMs { get; init; }
+    [JsonPropertyName("effectiveFadeMs")] public int EffectiveFadeMs { get; init; }
+    [JsonPropertyName("reason")] public string? Reason { get; init; }
 }
 
 public sealed class CommandResultMessage
@@ -269,6 +351,10 @@ public sealed class AuthLeaseReply
 [JsonSerializable(typeof(DerivePlayPlayKeyResult))]
 [JsonSerializable(typeof(LoadFastStartCommand))]
 [JsonSerializable(typeof(SupplyBodyCommand))]
+[JsonSerializable(typeof(PrepareNextCommand))]
+[JsonSerializable(typeof(SupplyNextBodyCommand))]
+[JsonSerializable(typeof(CancelPreparedCommand))]
+[JsonSerializable(typeof(PreparedTransitionMessage))]
 [JsonSerializable(typeof(CommandResultMessage))]
 [JsonSerializable(typeof(HostStateUpdate))]
 [JsonSerializable(typeof(TrackFinishedMessage))]
@@ -283,6 +369,10 @@ public sealed class AuthLeaseReply
 [JsonSerializable(typeof(VolumeCommand))]
 [JsonSerializable(typeof(SetEqualizerCommand))]
 [JsonSerializable(typeof(SetCrossfadeCommand))]
+[JsonSerializable(typeof(SetOutputDeviceCommand))]
+[JsonSerializable(typeof(MuteCommand))]
+[JsonSerializable(typeof(DeviceEventMessage))]
+[JsonSerializable(typeof(SessionVolumeMessage))]
 [JsonSerializable(typeof(PlayPlayConfig))]
 [JsonSerializable(typeof(AesKeyExtraction.TriggerRipBreakpoint))]
 [JsonSerializable(typeof(AesKeyExtraction.OutputBufferSlice))]

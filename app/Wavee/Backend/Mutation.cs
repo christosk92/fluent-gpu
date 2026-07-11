@@ -327,14 +327,22 @@ public sealed class MutationEngine
     /// <summary>Edit a playlist's ordered membership (add/remove/reorder). Each edit is a DISTINCT outbox row — appended,
     /// never coalesced. Optimistic: the membership reflects it immediately; a pre-edit snapshot is captured so a terminal
     /// replay failure rolls the membership back.</summary>
-    public void Edit(string playlistUri, IReadOnlyList<PlaylistOp> ops, byte[]? baseRev = null)
+    public long Edit(string playlistUri, IReadOnlyList<PlaylistOp> ops, byte[]? baseRev = null)
     {
-        if (!_strategies.TryGetValue("oprebase", out var s)) return;
+        if (!_strategies.TryGetValue("oprebase", out var s)) return 0;
         var id = Interlocked.Increment(ref _seq);
         var op = new OutboxOp(id, "oprebase", playlistUri, playlistUri, false, id, 0, ops, baseRev);
         lock (_gate) { _outbox[KeyOf(op)] = op; _editSnapshots[id] = new EditSnapshot(_store.Membership(playlistUri), _store.GetPlaylist(playlistUri)); }
         _durable?.Save(op);
         s.ApplyOptimistic(op, _store);
+        return id;
+    }
+
+    /// <summary>Whether one specific playlist edit is still queued after a drain attempt.</summary>
+    public bool IsEditPending(long id)
+    {
+        if (id <= 0) return false;
+        lock (_gate) return _outbox.ContainsKey($"oprebase|{id}");
     }
 
     /// <summary>Reconnect drain: replay each op; on success reconcile (Confirmed); on terminal failure rollback + dead-letter.</summary>

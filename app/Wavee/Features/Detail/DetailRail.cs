@@ -246,8 +246,8 @@ static class DetailRail
                     Loc.Get(Strings.Detail.AddToQueue),
                     h.AddToQueue,
                     [
-                        new MenuFlyoutItem(Loc.Get(Strings.Detail.PlayNext), WaveeIcons.PlayNext, Invoke: h.PlayNext) { GlyphFont = WaveeIcons.Font },
-                        new MenuFlyoutItem(Loc.Get(Strings.Detail.PlayAfter), WaveeIcons.PlayAfter, Invoke: h.AddToQueue) { GlyphFont = WaveeIcons.Font },
+                        new MenuFlyoutItem(Loc.Get(Strings.Detail.PlayNext), new IconRef { Glyph = WaveeIcons.PlayNext, Font = WaveeIcons.Font }, Invoke: h.PlayNext),
+                        new MenuFlyoutItem(Loc.Get(Strings.Detail.PlayAfter), new IconRef { Glyph = WaveeIcons.PlayAfter, Font = WaveeIcons.Font }, Invoke: h.AddToQueue),
                     ]),
             ],
         };
@@ -311,7 +311,7 @@ static class DetailRail
         };
     }
 
-    static Element PlaylistOwnerBlock(DetailModel m, float cover, Loadable<DetailModel> full)
+    internal static Element PlaylistOwnerBlock(DetailModel m, float cover, Loadable<DetailModel> full)
         => ShowCollaborators(m)
             ? Embed.Comp(() => new CollaboratorFacePile(m, cover, full))
             : PlaylistInlineEdit.OwnerRow(full, cover);
@@ -319,24 +319,15 @@ static class DetailRail
     static bool ShowCollaborators(DetailModel m)
         => m.Collaborators is { Count: > 0 } members && (m.Capabilities.IsCollaborative || members.Count >= 2);
 
-    static Element BadgePill(string text) => new BoxEl
+    internal static Element BadgePill(string text) => new BoxEl
     {
         Corners = CornerRadius4.All(14f), Padding = new Edges4(10f, 3f, 10f, 5f),
         Fill = Tok.FillSubtleSecondary, BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault,
         Children = [new TextEl(text) { Size = 11f, Weight = 600, Color = Tok.TextSecondary, CharSpacing = 40f }],
     };
 
-    static Element PlayPill(ColorF accent, Action onPlay) => new BoxEl
-    {
-        Direction = 0, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center,
-        Corners = CornerRadius4.All(20f), Padding = new Edges4(18f, 10f, 18f, 10f),
-        Fill = accent, HoverScale = 1.04f, PressScale = 0.97f, Shadow = Elevation.Card, OnClick = onPlay,
-        Children =
-        [
-            Icon(Icons.Play, 14f, WaveePalette.OnAccent(accent)),
-            new TextEl(Loc.Get(Strings.Detail.Play)) { Size = 14f, Weight = 700, Color = WaveePalette.OnAccent(accent) },
-        ],
-    };
+    static Element PlayPill(ColorF accent, Action onPlay)
+        => HeroCta.Pill(Icons.Play, Loc.Get(Strings.Detail.Play), accent, WaveePalette.OnAccent(accent), onPlay);
 
     static Element Fab(string glyph, Action onClick) => new BoxEl
     {

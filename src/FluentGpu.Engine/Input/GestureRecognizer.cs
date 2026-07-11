@@ -286,7 +286,10 @@ internal struct PointerFsm
     }
 
     private static bool Near(Point2 a, Point2 b, float slop)
-        => MathF.Abs(a.X - b.X) <= slop && MathF.Abs(a.Y - b.Y) <= slop;
+    {
+        float dx = a.X - b.X, dy = a.Y - b.Y;
+        return dx * dx + dy * dy <= slop * slop;
+    }
 
     /// <summary>Microseconds → the millisecond clock the <see cref="VelocitySampler"/> ring uses (the platform stamp on
     /// the InputEvent is ms; the FSM keeps µs for the long-press resolution, so the sampler gets the ms projection).</summary>

@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using FluentGpu.Foundation;
@@ -1036,6 +1037,39 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     PushRun(PrimKind.Gradient);
                     break;
                 }
+                case DrawOp.DrawIconMask:
+                {
+                    var ic = MemoryMarshal.Read<DrawIconMaskCmd>(cmds.Slice(pos));
+                    pos += Unsafe.SizeOf<DrawIconMaskCmd>();
+                    if (ic.PathId != 0 && ic.Tint.A > 0f && ic.Rect.W > 0f && ic.Rect.H > 0f)
+                    {
+                        // Device px like glyphs (size × dpi). Miss ⇒ rasterize now (colorless R8) + shelf-pack into the
+                        // glyph atlas; then append ONE tinted glyph instance so it batches in the glyph pass.
+                        int wPx = Math.Max(1, (int)MathF.Round(ic.Rect.W * _frameScale));
+                        int hPx = Math.Max(1, (int)MathF.Round(ic.Rect.H * _frameScale));
+                        if (!_glyphs!.TryGetIconUv(ic.PathId, wPx, hPx, out float u0, out float v0, out float u1, out float v1))
+                        {
+                            int need = wPx * hPx;
+                            byte[] buf = ArrayPool<byte>.Shared.Rent(need);
+                            IconGeometryTable.Shared.Rasterize(ic.PathId, wPx, hPx, buf.AsSpan(0, need));
+                            _glyphs.PackIconMask(ic.PathId, wPx, hPx, buf, out u0, out v0, out u1, out v1);
+                            ArrayPool<byte>.Shared.Return(buf);
+                        }
+                        if (u1 > u0 && v1 > v0)
+                        {
+                            _glyphInsts.Add(new GlyphInstance
+                            {
+                                DstX = ic.Rect.X, DstY = ic.Rect.Y, DstW = ic.Rect.W, DstH = ic.Rect.H,
+                                U0 = u0, V0 = v0, U1 = u1, V1 = v1,
+                                R = ic.Tint.R, G = ic.Tint.G, B = ic.Tint.B, A = ic.Tint.A,
+                                M11 = ic.Transform.M11, M12 = ic.Transform.M12, M21 = ic.Transform.M21, M22 = ic.Transform.M22,
+                                Dx = ic.Transform.Dx, Dy = ic.Transform.Dy, Opacity = ic.Opacity,
+                            });
+                            _frameGlyphInstanceCount++;
+                        }
+                    }
+                    break;
+                }
                 case DrawOp.PushLayer:
                     pos += Unsafe.SizeOf<PushLayerCmd>();         // wired to the backdrop subsystem (phase 5)
                     break;
@@ -1625,6 +1659,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 case DrawOp.DrawGradientRect: pos += Unsafe.SizeOf<DrawGradientRectCmd>(); break;
                 case DrawOp.DrawGradientStroke: pos += Unsafe.SizeOf<DrawGradientStrokeCmd>(); break;
                 case DrawOp.DrawTabShape: pos += Unsafe.SizeOf<DrawTabShapeCmd>(); break;
+                case DrawOp.DrawIconMask: pos += Unsafe.SizeOf<DrawIconMaskCmd>(); break;
                 case DrawOp.PushLayer:
                     var L = MemoryMarshal.Read<PushLayerCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<PushLayerCmd>();
@@ -1665,6 +1700,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 case DrawOp.DrawGradientRect: pos += Unsafe.SizeOf<DrawGradientRectCmd>(); break;
                 case DrawOp.DrawGradientStroke: pos += Unsafe.SizeOf<DrawGradientStrokeCmd>(); break;
                 case DrawOp.DrawTabShape: pos += Unsafe.SizeOf<DrawTabShapeCmd>(); break;
+                case DrawOp.DrawIconMask: pos += Unsafe.SizeOf<DrawIconMaskCmd>(); break;
                 case DrawOp.PushLayer: pos += Unsafe.SizeOf<PushLayerCmd>(); depth++; break;
                 case DrawOp.PopLayer:
                     pos += Unsafe.SizeOf<PopLayerCmd>();

@@ -19,7 +19,13 @@ sealed partial class ArtistPage : Component
 {
     readonly Signal<Route> _route;
     ColorF _accent = Tok.AccentDefault;   // cover-extracted page accent (lifted); set per-render in Body, read by the hero + section-bar helpers
+    ActionServices? _acts;                // shelf-card context menus — resolved per-render, read by the shelf builders
+    IOverlayService? _menuOverlay;
     public ArtistPage(Signal<Route> route) { _route = route; }
+
+    /// <summary>The lazy card-menu attach for this page's shelves (albums / playlists / artists / video tracks — the
+    /// model is inferred from the uri by Menus.Card). Null when the action system / overlay isn't provided (fake shell).</summary>
+    MenuAttach? CardMenu(string uri, string name) => _menuOverlay is { } ov ? Menus.CardAttach(_acts, ov, uri, name) : null;
 
     internal static string? UriOf(Route r) =>
         r.Name.StartsWith("artist:", StringComparison.Ordinal) ? r.Name["artist:".Length..] : null;
@@ -30,6 +36,8 @@ sealed partial class ArtistPage : Component
         var go = UseContext(HistoryStore.NavCtx);
         var bridge = UseContext(PlaybackBridge.Slot);
         var store = UseContext(LibraryStore.Slot);
+        _acts = UseContext(ActionServices.Slot);          // shelf-card context menus (Menus.CardAttach)
+        _menuOverlay = UseContext(Overlay.Service);
         if (svc is null || store is null) return new BoxEl { Grow = 1f };
 
         var route = _route.Value;                       // subscribe → reload on artist→artist nav (reused slot)
@@ -176,6 +184,9 @@ sealed partial class ArtistPage : Component
         void Play() => _ = svc.Player.PlayAsync(uri, 0);
         void Shuffle() { _ = svc.Player.SetShuffleAsync(true); _ = svc.Player.PlayAsync(uri, 0); }
         void PlayContext(string u) => _ = svc.Player.PlayAsync(u, 0);
+        // The hero "Artist Radio" pill: seed a real radio off the artist (Apple-Music-style, never interrupting) + toast
+        // — NOT a plain replay of the artist context (the previous bug passed Play as the radio callback).
+        void Radio() => RadioLaunch.Start(svc.Player, uri, a.Name, go);
 
         var sections = new List<Element>(14);
         if (popular.Count > 0) sections.Add(TopBand(popular, uri, bridge, svc, albumsAll, go, PlayContext));
@@ -212,7 +223,7 @@ sealed partial class ArtistPage : Component
             Direction = 1, Gradient = Surfaces.HeroWash(wash),
             Children =
             [
-                Banner(a, uri, Play, Shuffle, Play, go),
+                Banner(a, uri, Play, Shuffle, Radio, go),
                 sentinel,
                 inner,
             ],

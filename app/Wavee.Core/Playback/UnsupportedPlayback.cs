@@ -58,6 +58,11 @@ public sealed class UnsupportedPlaybackPlayer : IPlaybackPlayer, IPlaybackState
     public Task EnqueueAsync(Track track, CancellationToken ct = default) => Reject();
     public Task PlayNextAsync(IReadOnlyList<PlaybackContextTrack> tracks, CancellationToken ct = default) => Reject();
 
+    // Radio is a play intent → fire the "choose a remote device" prompt and report "no radio" (null) so the caller shows
+    // the graceful "couldn't start radio" affordance rather than a phantom "Radio started".
+    public Task<string?> StartRadioAsync(string seedUri, string? displayName = null, CancellationToken ct = default)
+    { OnPlayIntentRejected?.Invoke(); return Task.FromResult<string?>(null); }
+
     public Task PauseAsync(CancellationToken ct = default) => Done;
     public Task NextAsync(CancellationToken ct = default) => Done;
     public Task PreviousAsync(CancellationToken ct = default) => Done;

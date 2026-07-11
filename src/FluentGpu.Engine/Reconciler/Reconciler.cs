@@ -490,6 +490,7 @@ public sealed class TreeReconciler
         TextEl x => b is not TextEl y || TextElDiff.AnyChanged(x, y),
         GridEl x => b is not GridEl y || GridElDiff.AnyChanged(x, y),
         ImageEl x => b is not ImageEl y || ImageElDiff.AnyChanged(x, y),
+        IconLayerEl x => b is not IconLayerEl y || IconLayerElDiff.AnyChanged(x, y),
         SpanTextEl x => b is not SpanTextEl y || SpanTextElDiff.AnyChanged(x, y),
         PolylineStrokeEl x => b is not PolylineStrokeEl y || PolylineStrokeElDiff.AnyChanged(x, y),
         _ => true,
@@ -1251,6 +1252,16 @@ public sealed class TreeReconciler
                 AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).Fill = pbind is not null ? pbind() : psig!.Value; _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
             }
         }
+        else if (el is IconLayerEl ile)
+        {
+            // The layer TINT rides NodePaint.Fill (VisualKind.IconLayer). A bound Tint (the ThemedIcon role thunk reads
+            // Tok) re-fires on RethemeAll → repaints the node with the new ColorF, NO re-raster (the mask is colorless).
+            if (ile.Tint.IsBound)
+            {
+                var tbind = ile.Tint.Thunk; var tsig = ile.Tint.Signal;
+                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).Fill = tbind is not null ? tbind() : tsig!.Value; _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
+            }
+        }
     }
 
     // Decode-target px for an image: explicit Width/Height drive it; otherwise the DecodePx hint (a fluid/aspect image's
@@ -1664,6 +1675,8 @@ public sealed class TreeReconciler
                 return true;   // plain leaf — WriteColumns rewrites every column incl. the span run/handlers
             case ImageEl im:
                 return !im.Source.IsBound && !im.Placeholder.IsBound;
+            case IconLayerEl il:
+                return !il.Tint.IsBound;   // ThemedIcon always binds Tint (theme-live), so an icon layer mounts fresh (like a bound image)
             case PolylineStrokeEl:
                 return true;
             case BoxEl b:
@@ -2266,35 +2279,44 @@ public sealed class TreeReconciler
 
                 ref InteractionInfo ii = ref _scene.Interaction(node);
                 ii.Role = b.Role;
-                if (b.OnClick is not null)
+                // ClickRequestsContext (input-a11y §6.5.1) IMPLIES ClickBit — the node hit-tests / presses / hovers /
+                // focuses exactly like an OnClick target — but the click-handler column stays NULL: the bit-16
+                // discriminator redirects an activation into the context-request funnel (RequestContextFrom) instead of
+                // firing a click. The two are mutually exclusive (a node is either a click target OR a context-invoker);
+                // the prop wins if both are somehow set.
+                System.Diagnostics.Debug.Assert(!(b.OnClick is not null && b.ClickRequestsContext),
+                    "BoxEl: OnClick and ClickRequestsContext are mutually exclusive (ClickRequestsContext wins).");
+                if (b.OnClick is not null || b.ClickRequestsContext)
                 {
                     ii.HandlerMask |= InteractionInfo.ClickBit;
-                    _scene.SetClickHandler(node, b.OnClick);
+                    _scene.SetClickHandler(node, b.ClickRequestsContext ? null : b.OnClick);
                     _scene.Mark(node, NodeFlags.WantsPointer);
                 }
                 else
                 {
-                    ii.HandlerMask &= unchecked((ushort)~InteractionInfo.ClickBit);
+                    ii.HandlerMask &= ~(uint)InteractionInfo.ClickBit;
                     _scene.SetClickHandler(node, null);
                 }
+                if (b.ClickRequestsContext) ii.HandlerMask |= InteractionInfo.ClickRequestsContextBit;
+                else ii.HandlerMask &= ~InteractionInfo.ClickRequestsContextBit;
 
                 if (b.OnKeyDown is not null) { ii.HandlerMask |= InteractionInfo.KeyBit; _scene.SetKeyHandler(node, b.OnKeyDown); }
-                else { ii.HandlerMask &= unchecked((ushort)~InteractionInfo.KeyBit); _scene.SetKeyHandler(node, null); }
+                else { ii.HandlerMask &= ~(uint)InteractionInfo.KeyBit; _scene.SetKeyHandler(node, null); }
 
                 if (b.OnCharInput is not null) { ii.HandlerMask |= InteractionInfo.CharBit; _scene.SetCharHandler(node, b.OnCharInput); }
-                else { ii.HandlerMask &= unchecked((ushort)~InteractionInfo.CharBit); _scene.SetCharHandler(node, null); }
+                else { ii.HandlerMask &= ~(uint)InteractionInfo.CharBit; _scene.SetCharHandler(node, null); }
 
                 if (b.Repeats) ii.HandlerMask |= InteractionInfo.RepeatBit;
-                else ii.HandlerMask &= unchecked((ushort)~InteractionInfo.RepeatBit);
+                else ii.HandlerMask &= ~(uint)InteractionInfo.RepeatBit;
                 ii.RepeatDelayMs = b.RepeatDelayMs;       // NaN = WinUI DP defaults (500/33) — the ticker resolves
                 ii.RepeatIntervalMs = b.RepeatIntervalMs;
 
                 // WinUI KeyPress::Button bAcceptsReturn=false (CheckBox/RadioButton/ToggleSwitch): Space-only activation.
                 if (!b.ActivateOnEnter) ii.HandlerMask |= InteractionInfo.NoEnterActivateBit;
-                else ii.HandlerMask &= unchecked((ushort)~InteractionInfo.NoEnterActivateBit);
+                else ii.HandlerMask &= ~(uint)InteractionInfo.NoEnterActivateBit;
                 // WinUI AllowFocusOnInteraction=False: a press never moves focus to (or past) this node.
                 if (!b.AllowFocusOnInteraction) ii.HandlerMask |= InteractionInfo.NoPointerFocusBit;
-                else ii.HandlerMask &= unchecked((ushort)~InteractionInfo.NoPointerFocusBit);
+                else ii.HandlerMask &= ~(uint)InteractionInfo.NoPointerFocusBit;
 
                 if (b.OnPointerWheel is not null)
                 {
@@ -2303,7 +2325,7 @@ public sealed class TreeReconciler
                 }
                 else
                 {
-                    ii.HandlerMask &= unchecked((ushort)~InteractionInfo.WheelBit);
+                    ii.HandlerMask &= ~(uint)InteractionInfo.WheelBit;
                     _scene.SetPointerWheel(node, null);
                 }
 
@@ -2323,7 +2345,7 @@ public sealed class TreeReconciler
                 }
                 else
                 {
-                    ii.HandlerMask &= unchecked((ushort)~InteractionInfo.PointerBit);
+                    ii.HandlerMask &= ~(uint)InteractionInfo.PointerBit;
                     _scene.SetPointerDown(node, null);
                     _scene.SetDrag(node, null);
                     _scene.SetHoverMove(node, null);
@@ -2331,16 +2353,18 @@ public sealed class TreeReconciler
                     _scene.Unmark(node, NodeFlags.DragYieldsToPan);
                 }
 
-                if (b.OnPointerPressed is not null)
+                if (b.OnPointerPressed is not null || b.OnPointerReleased is not null)
                 {
                     ii.HandlerMask |= InteractionInfo.PressedBit;
                     _scene.SetPointerPressed(node, b.OnPointerPressed);
+                    _scene.SetPointerReleased(node, b.OnPointerReleased);
                     _scene.Mark(node, NodeFlags.WantsPointer);
                 }
                 else
                 {
-                    ii.HandlerMask &= unchecked((ushort)~InteractionInfo.PressedBit);
+                    ii.HandlerMask &= ~(uint)InteractionInfo.PressedBit;
                     _scene.SetPointerPressed(node, null);
+                    _scene.SetPointerReleased(node, null);
                 }
 
                 // Drag-reorder promotion (WinUI CanDragItems/CanReorderItems): the DragBit makes the node hit-testable
@@ -2359,7 +2383,7 @@ public sealed class TreeReconciler
                 }
                 else
                 {
-                    ii.HandlerMask &= unchecked((ushort)~InteractionInfo.DragBit);
+                    ii.HandlerMask &= ~(uint)InteractionInfo.DragBit;
                     _scene.SetDragStarted(node, null);
                     _scene.SetDragDelta(node, null);
                     _scene.SetDragCompleted(node, null);
@@ -2379,7 +2403,7 @@ public sealed class TreeReconciler
                 }
                 else
                 {
-                    ii.HandlerMask &= unchecked((ushort)~InteractionInfo.ContextBit);
+                    ii.HandlerMask &= ~(uint)InteractionInfo.ContextBit;
                     _scene.SetContextRequested(node, null);
                 }
 
@@ -2392,7 +2416,7 @@ public sealed class TreeReconciler
                 }
                 else
                 {
-                    ii.HandlerMask &= unchecked((ushort)~InteractionInfo.FocusBit);
+                    ii.HandlerMask &= ~(uint)InteractionInfo.FocusBit;
                     _scene.SetFocusChanged(node, null);
                 }
 
@@ -2404,12 +2428,12 @@ public sealed class TreeReconciler
                 // dispatcher's hover walk via CursorBit, so a TextBox delete button (Arrow) masks the field's I-beam
                 // exactly like WinUI's forced SetCursor(MouseCursorArrow) (TextBox_Partial.cpp:884).
                 if (b.Cursor is { } cursor) { ii.Cursor = cursor; ii.HandlerMask |= InteractionInfo.CursorBit; }
-                else { ii.Cursor = CursorId.Arrow; ii.HandlerMask &= unchecked((ushort)~InteractionInfo.CursorBit); }
+                else { ii.Cursor = CursorId.Arrow; ii.HandlerMask &= ~(uint)InteractionInfo.CursorBit; }
 
                 // WinUI Control.IsTabStop: an explicit TabStop beats the clickable⇒focusable auto-derive (the overlay
                 // light-dismiss catcher is clickable but must never enter the tab order — WinUI's dismiss layer is
                 // not a tab stop, so Tab from a flyout's invoker reaches the flyout content, not the catcher).
-                ii.Focusable = b.TabStop ?? (b.Focusable || b.OnClick is not null);
+                ii.Focusable = b.TabStop ?? (b.Focusable || b.OnClick is not null || b.ClickRequestsContext);
                 ii.TabIndex = b.TabIndex;
                 ii.FocusVisualMargin = b.FocusVisualMargin ?? Edges4.All(-3f);   // the WinUI template default
                 // Keep the NodeFlags mirror in sync on REUSE too: a roving tab stop (RadioButtons, RadioButtons.xaml:5-6)
@@ -2563,6 +2587,18 @@ public sealed class TreeReconciler
                 li.Margin = im.Margin; li.AlignSelf = im.AlignSelf;
                 break;
             }
+            case IconLayerEl il:
+            {
+                ref NodePaint paint = ref _scene.Paint(node);
+                paint.VisualKind = VisualKind.IconLayer;
+                paint.ImageId = il.PathId;                       // ImageId column DOUBLES as the geometry PathId
+                if (!il.Tint.IsBound) paint.Fill = il.Tint.Value;   // bound tint recolors via the effect (theme-live)
+
+                ref LayoutInput li = ref _scene.Layout(node);
+                li.Width = il.Size; li.Height = il.Size;
+                li.Margin = il.Margin; li.AlignSelf = il.AlignSelf;
+                break;
+            }
             case TextEl t:
             {
                 ref NodePaint paint = ref _scene.Paint(node);
@@ -2698,7 +2734,7 @@ public sealed class TreeReconciler
                     ii.HandlerMask |= InteractionInfo.SpanLinksBit;
                     _scene.Mark(node, NodeFlags.WantsPointer);
                 }
-                else ii.HandlerMask &= unchecked((ushort)~InteractionInfo.SpanLinksBit);
+                else ii.HandlerMask &= ~(uint)InteractionInfo.SpanLinksBit;
 
                 WriteTextSelection(node, st.IsTextSelectionEnabled, st.SelectionHighlightColor);
                 break;
@@ -2729,7 +2765,7 @@ public sealed class TreeReconciler
         {
             // A recycled/re-rendered leaf that LOST selection: clear exactly what selection set (text leaves carry no
             // other focus/cursor source), including any live selection state.
-            ii.HandlerMask &= unchecked((ushort)~(InteractionInfo.SelectableTextBit | InteractionInfo.CursorBit));
+            ii.HandlerMask &= ~(uint)(InteractionInfo.SelectableTextBit | InteractionInfo.CursorBit);
             ii.Cursor = CursorId.Arrow;
             ii.Focusable = false;
             _scene.Flags(node) &= ~NodeFlags.Focusable;

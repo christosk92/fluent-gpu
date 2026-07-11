@@ -57,30 +57,34 @@ static class WaveeLogSessions
             for (int fi = 0; fi < files.Length; fi++)
             {
                 int li = 0;
-                IEnumerable<string> lines;
-                try { lines = File.ReadLines(files[fi]); }
-                catch { continue; }
-                foreach (var line in lines)
+                // One unreadable/mid-read-faulting file skips only that file: the walk continues to the next, and the
+                // open-session state machine (prevSeq/prevSid/open + the current-session cursor) carries across the gap
+                // unchanged — the boundary logic tolerates a partially-read file.
+                try
                 {
-                    if (TryParseLine(line, out var e, out bool isStart, out int pid, out string sid))
+                    foreach (var line in ReadSharedLines(files[fi]))
                     {
-                        // A session opens when the run identity changes: sid differs from the previous line (new build),
-                        // else the legacy heuristic (a "Wavee starting" marker or a seq reset) for sid-less lines.
-                        bool boundary = sid.Length > 0
-                            ? sid != prevSid
-                            : isStart || e.Sequence < prevSeq;
-                        if (boundary)
+                        if (TryParseLine(line, out var e, out bool isStart, out int pid, out string sid))
                         {
-                            Close(fi, li);
-                            open = true;
-                            curFile = fi; curLine = li; curStart = e.UnixMs; curPid = pid; curCount = 0; curSid = sid;
+                            // A session opens when the run identity changes: sid differs from the previous line (new build),
+                            // else the legacy heuristic (a "Wavee starting" marker or a seq reset) for sid-less lines.
+                            bool boundary = sid.Length > 0
+                                ? sid != prevSid
+                                : isStart || e.Sequence < prevSeq;
+                            if (boundary)
+                            {
+                                Close(fi, li);
+                                open = true;
+                                curFile = fi; curLine = li; curStart = e.UnixMs; curPid = pid; curCount = 0; curSid = sid;
+                            }
+                            prevSeq = e.Sequence;
+                            prevSid = sid;
+                            if (open) curCount++;
                         }
-                        prevSeq = e.Sequence;
-                        prevSid = sid;
-                        if (open) curCount++;
+                        li++;
                     }
-                    li++;
                 }
+                catch { continue; }
             }
             Close(files.Length - 1, int.MaxValue);
 
@@ -111,15 +115,16 @@ static class WaveeLogSessions
                 int from = fi == info.FileStart ? info.LineStart : 0;
                 int to = fi == info.FileEnd ? info.LineEnd : int.MaxValue;
                 int li = 0;
-                IEnumerable<string> lines;
-                try { lines = File.ReadLines(info.Files[fi]); }
-                catch { continue; }
-                foreach (var line in lines)
+                try
                 {
-                    if (li >= to) break;
-                    if (li >= from && TryParseLine(line, out var e, out _, out _, out _)) list.Add(e);
-                    li++;
+                    foreach (var line in ReadSharedLines(info.Files[fi]))
+                    {
+                        if (li >= to) break;
+                        if (li >= from && TryParseLine(line, out var e, out _, out _, out _)) list.Add(e);
+                        li++;
+                    }
                 }
+                catch { continue; }
             }
         }
         catch { }
@@ -138,15 +143,16 @@ static class WaveeLogSessions
                 int from = fi == info.FileStart ? info.LineStart : 0;
                 int to = fi == info.FileEnd ? info.LineEnd : int.MaxValue;
                 int li = 0;
-                IEnumerable<string> fileLines;
-                try { fileLines = File.ReadLines(info.Files[fi]); }
-                catch { continue; }
-                foreach (var line in fileLines)
+                try
                 {
-                    if (li >= to) break;
-                    if (li >= from) lines.Add(line);
-                    li++;
+                    foreach (var line in ReadSharedLines(info.Files[fi]))
+                    {
+                        if (li >= to) break;
+                        if (li >= from) lines.Add(line);
+                        li++;
+                    }
                 }
+                catch { continue; }
             }
         }
         catch { }
@@ -225,6 +231,20 @@ static class WaveeLogSessions
 
         entry = new WaveeLogEntry(seq, unixMs, level, category, "", rest, null, (int)tid, -1, null, null);
         return true;
+    }
+
+    // Read a (possibly still-being-written) log file line-by-line with a share mode matching WaveeLog's persistent append
+    // sink (FileShare.ReadWrite | Delete). File.ReadLines opens with the default FileShare.Read, which throws a sharing
+    // violation against the LIVE file the writer holds open — the fault that discarded the whole session list. Like
+    // File.ReadLines this is lazy (the open happens on the first MoveNext, INSIDE the caller's foreach), so every caller
+    // wraps the enumeration in try/catch to cover both the open and the read loop.
+    static IEnumerable<string> ReadSharedLines(string path)
+    {
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(fs);
+        string? line;
+        while ((line = reader.ReadLine()) is not null)
+            yield return line;
     }
 
     // Match a literal at `at`: advance past it and return true, or leave `at` untouched and return false.

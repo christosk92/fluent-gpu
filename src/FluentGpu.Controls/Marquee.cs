@@ -32,13 +32,12 @@ public static class Marquee
         /// repaints reactively without re-rendering the marquee.</summary>
         public Prop<ColorF> Foreground { get; init; } = Tok.TextPrimary;
         public string? FontFamily { get; init; }
-        public float Speed { get; init; } = 9f;           // pixels per second — a calm reading pace (constant velocity:
-                                                          // longer text scrolls for longer, never faster). Used only when CycleMs == 0.
-        // Fixed scroll-cycle duration (ms) for ONE traversal, OVERRIDING Speed when > 0. Constant velocity (Speed) makes
-        // a line's duration depend on its width, so two lines of different widths drift out of phase. Giving sibling
-        // marquees the SAME CycleMs locks their cadence: both pause at the start together, advance through the same
-        // FRACTION of their own text together, and reset together — i.e. visually synced (each still covers its own
-        // distance, so wider text moves faster). 0 ⇒ derive the duration from Speed (a standalone, constant-pace line).
+        public float Speed { get; init; } = 9f;           // minimum pixels per second — keeps a barely-overflowing line
+                                                          // visibly moving instead of taking CycleMs to travel one glyph.
+        // Maximum scroll-cycle duration (ms) for ONE traversal. Constant velocity alone makes a line's duration depend
+        // on its width, so two long sibling marquees drift out of phase; CycleMs caps them to the same cadence. Speed is
+        // still a FLOOR: a short tail finishes sooner instead of creeping sub-pixel-slow for the full fixed cycle.
+        // 0 ⇒ derive the duration entirely from Speed (a standalone, constant-pace line).
         public float CycleMs { get; init; } = 0f;
         public float Gap { get; init; } = 48f;           // space between the two copies in Loop mode
         public float FadeBand { get; init; } = 24f;      // edge fade width in px
@@ -244,13 +243,19 @@ internal sealed class MarqueeScroller : Component
             return ([new Keyframe(0f, 0f), new Keyframe(1f, 0f)], 200f, false);
 
         float speed = MathF.Max(1f, Sty.Speed);
-        // A fixed CycleMs (when set) makes the traversal time width-INDEPENDENT, so sibling lines with the same CycleMs
-        // share one cadence (synced); otherwise the time is loopDist/speed for a constant velocity.
+        // CycleMs caps long traversals to a shared cadence; Speed remains the minimum visible pace for short tails.
+        // Thus long sibling lines stay synced without making a one-glyph overflow look stationary.
         bool fixedCycle = Sty.CycleMs > 0f;
+
+        float TravelMs(float distance)
+        {
+            float atMinSpeed = MathF.Max(0f, distance) / speed * 1000f;
+            return fixedCycle ? MathF.Min(Sty.CycleMs, atMinSpeed) : atMinSpeed;
+        }
 
         if (loop)
         {
-            float travel = fixedCycle ? Sty.CycleMs : loopDist / speed * 1000f;
+            float travel = TravelMs(loopDist);
             float dur = MathF.Max(1f, travel + Sty.StartDelayMs);
             float delayFrac = Sty.StartDelayMs / dur;
             return (
@@ -264,7 +269,7 @@ internal sealed class MarqueeScroller : Component
         // PingPong: pause at start, scroll out, hold at tail, bounce back.
         float startPause = Sty.StartDelayMs;
         float endPause = Sty.EndPauseMs;
-        float travelP = fixedCycle ? Sty.CycleMs : tailDist / speed * 1000f;
+        float travelP = TravelMs(tailDist);
         float total = MathF.Max(1f, startPause + endPause + 2f * travelP);
         float f1 = startPause / total;
         float f2 = f1 + travelP / total;

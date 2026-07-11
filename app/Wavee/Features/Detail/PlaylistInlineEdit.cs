@@ -299,6 +299,7 @@ static class PlaylistInlineEdit
         public override Element Render()
         {
             var lib = UseContext(LibraryBridge.Slot);
+            var svc = UseContext(Services.Slot);
             var m = _full.Value.Value;
             if (lib is null || !m.Capabilities.CanEditMetadata || m.ContextUri is not { } uri)
                 return DetailRail.HeroArtwork(m, _size);
@@ -315,7 +316,7 @@ static class PlaylistInlineEdit
                 {
                     _dropOver.Value = false;
                     if (s.Payload is FileDropData { Count: > 0 } files)
-                        _ = ApplyPathAsync(lib, uri, files.Paths[0]);
+                        _ = ApplyPathAsync(lib, svc, uri, files.Paths[0]);
                 });
 
             return new BoxEl
@@ -326,7 +327,7 @@ static class PlaylistInlineEdit
                 DropTarget = _dropSpec.Value,
                 OnHoverMove = _ => { if (!_hovered.Peek()) _hovered.Value = true; },
                 OnPointerExit = () => { if (_hovered.Peek()) _hovered.Value = false; },
-                OnClick = () => _ = PickCoverAsync(lib, uri),
+                OnClick = () => _ = PickCoverAsync(lib, svc, uri),
                 Children =
                 [
                     DetailRail.HeroArtwork(m, _size),
@@ -368,19 +369,25 @@ static class PlaylistInlineEdit
             };
         }
 
-        async Task ApplyPathAsync(LibraryBridge lib, string uri, string path)
+        async Task ApplyPathAsync(LibraryBridge lib, Services? svc, string uri, string path)
         {
             await RunSaveAsync(
-                () => TryCoverPathAsync(lib, uri, path),
+                async () =>
+                {
+                    bool saved = await TryCoverPathAsync(lib, uri, path).ConfigureAwait(false);
+                    if (saved && svc?.RealStore?.GetPlaylist(uri) is { } header)
+                        PatchDetail(_full, m => m with { Cover = header.Cover });
+                    return saved;
+                },
                 _status, () => ++_saveEpoch, () => _saveEpoch).ConfigureAwait(false);
         }
 
-        async Task PickCoverAsync(LibraryBridge lib, string uri)
+        async Task PickCoverAsync(LibraryBridge lib, Services? svc, string uri)
         {
             string? path = FilePicker.OpenFile(FluentApp.WindowHandle, Loc.Get(Strings.Detail.Edit.PickCover),
                 new[] { ("JPEG", "*.jpg;*.jpeg") });
             if (path is null) return;
-            await ApplyPathAsync(lib, uri, path).ConfigureAwait(false);
+            await ApplyPathAsync(lib, svc, uri, path).ConfigureAwait(false);
         }
     }
 
@@ -500,7 +507,12 @@ static class PlaylistInlineEdit
             if (cur.ContextUri is not { } uri) return;
             string next = _draft.Peek().Trim();
             if (next.Length == 0 || next == cur.Title) { _draft.Value = cur.Title; return; }
-            _ = RunSaveAsync(() => SaveDetailsAsync(lib, uri, next, null, null, cur.Title), _status, () => ++_saveEpoch, () => _saveEpoch);
+            _ = RunSaveAsync(async () =>
+            {
+                bool saved = await SaveDetailsAsync(lib, uri, next, null, null, cur.Title).ConfigureAwait(false);
+                if (saved) PatchDetail(_full, m => m with { Title = next });
+                return saved;
+            }, _status, () => ++_saveEpoch, () => _saveEpoch);
         }
     }
 
@@ -623,7 +635,12 @@ static class PlaylistInlineEdit
             if (cur.ContextUri is not { } uri) return;
             string next = _draft.Peek().Trim();
             if (next == (cur.Description ?? "")) return;
-            _ = RunSaveAsync(() => SaveDetailsAsync(lib, uri, null, next, null), _status, () => ++_saveEpoch, () => _saveEpoch);
+            _ = RunSaveAsync(async () =>
+            {
+                bool saved = await SaveDetailsAsync(lib, uri, null, next, null).ConfigureAwait(false);
+                if (saved) PatchDetail(_full, m => m with { Description = next.Length == 0 ? null : next });
+                return saved;
+            }, _status, () => ++_saveEpoch, () => _saveEpoch);
         }
     }
 
@@ -790,12 +807,13 @@ static class PlaylistInlineEdit
             var lib = UseContext(LibraryBridge.Slot);
             var svc = UseContext(Services.Slot);
             var overlay = UseContext(Overlay.Service);
+            var anchor = UseRef<NodeHandle>(default);
+            var handle = UseRef<OverlayHandle?>(null);
+
             var m = _full.Value.Value;
             if (lib is null || !SpotifyEditsLive(svc) || !m.Capabilities.CanAdministratePermissions || m.ContextUri is null)
                 return new BoxEl { Shrink = 0f };
 
-            var anchor = UseRef<NodeHandle>(default);
-            var handle = UseRef<OverlayHandle?>(null);
             void Toggle() => OpenAccessFlyout(overlay, lib, svc, _full, () => anchor.Value, handle, FlyoutPlacement.BottomEdgeAlignedLeft);
 
             // Below ~260px a full pill would starve the owner name → collapse to a round icon (still readable via tooltip).
@@ -978,34 +996,21 @@ static class PlaylistInlineEdit
             var lib = UseContext(LibraryBridge.Slot);
             var svc = UseContext(Services.Slot);
             var overlay = UseContext(Overlay.Service);
-            var m = _full.Value.Value;
-            if (lib is null || !SpotifyEditsLive(svc) || m.ContextUri is not { } uri || !m.Capabilities.IsOwner)
-                return new BoxEl();
-
             var anchor = UseRef<NodeHandle>(default);
             var handle = UseRef<OverlayHandle?>(null);
             var accessHandle = UseRef<OverlayHandle?>(null);
+
+            var m = _full.Value.Value;
+            if (lib is null || !SpotifyEditsLive(svc) || m.ContextUri is not { } uri || !m.Capabilities.IsOwner)
+                return new BoxEl();
 
             void Toggle()
             {
                 if (overlay is null) return;
                 if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
-                var cur = _full.Value.Peek();
                 var items = new List<MenuFlyoutItem>();
-                // Every row carries a glyph so the menu's icon column stays consistent (no double-empty indent). The
-                // collaborative/public toggles now live in the access flyout, reached via "Invite collaborators".
-                if (cur.Capabilities.CanAdministratePermissions)
-                {
-                    items.Add(new MenuFlyoutItem(Loc.Get(Strings.Detail.Edit.InviteCollaborators), Mdl.Friends,
-                        Invoke: () => OpenAccessFlyout(overlay, lib, svc, _full, () => anchor.Value, accessHandle, FlyoutPlacement.BottomEdgeAlignedRight)));
-                    items.Add(MenuFlyoutItem.Separator);
-                }
-                items.Add(new MenuFlyoutItem(Loc.Get(Strings.Detail.Edit.DeletePlaylist), Mdl.Delete,
-                    Invoke: () => SettingsShared.Confirm(overlay,
-                        Loc.Get(Strings.Detail.Edit.DeletePlaylist),
-                        Loc.Get(Strings.Detail.Edit.DeletePlaylistConfirm),
-                        Loc.Get(Strings.Detail.Edit.DeletePlaylist),
-                        () => _ = DeleteAsync(lib, uri))));
+                AppendOwnerItems(items, overlay, lib, svc, _full, _h, () => anchor.Value, accessHandle);
+                if (items.Count == 0) return;
                 handle.Value = overlay.Open(
                     () => anchor.Value,
                     () => MenuFlyout.Build(items, () => handle.Value?.Close()),
@@ -1025,16 +1030,40 @@ static class PlaylistInlineEdit
                 Children = [Icon(Icons.More, 16f, Tok.TextSecondary)],
             };
         }
+    }
 
-        async Task DeleteAsync(LibraryBridge lib, string uri)
+    /// <summary>Append the playlist-owner overflow items (Invite collaborators · Delete playlist) to <paramref name="items"/>.
+    /// Fully capability-gated (SpotifyEditsLive ∧ IsOwner), so both the rail's owner ⋯ menu and the vertical hero's More
+    /// menu call it unconditionally and get identical rows. Invite reuses the shared access flyout; delete confirms then
+    /// navigates home via <paramref name="h"/>. Every row carries a glyph so the menu's icon column stays consistent.</summary>
+    internal static void AppendOwnerItems(List<MenuFlyoutItem> items, IOverlayService? overlay, LibraryBridge? lib,
+        Services? svc, Loadable<DetailModel> full, DetailHandlers h, Func<NodeHandle> anchor, Ref<OverlayHandle?> accessHandle)
+    {
+        var m = full.Value.Peek();
+        if (overlay is null || lib is null || !SpotifyEditsLive(svc) || m.ContextUri is not { } uri || !m.Capabilities.IsOwner)
+            return;
+        if (m.Capabilities.CanAdministratePermissions)
         {
-            try
-            {
-                await lib.DeletePlaylistAsync(uri).ConfigureAwait(false);
-                _h.Go("home", null);
-            }
-            catch (Exception ex) { PlaylistEditErrors.Toast(ex); }
+            items.Add(new MenuFlyoutItem(Loc.Get(Strings.Detail.Edit.InviteCollaborators), Mdl.Friends,
+                Invoke: () => OpenAccessFlyout(overlay, lib, svc, full, anchor, accessHandle, FlyoutPlacement.BottomEdgeAlignedRight)));
+            items.Add(MenuFlyoutItem.Separator);
         }
+        items.Add(new MenuFlyoutItem(Loc.Get(Strings.Detail.Edit.DeletePlaylist), Mdl.Delete,
+            Invoke: () => SettingsShared.Confirm(overlay,
+                Loc.Get(Strings.Detail.Edit.DeletePlaylist),
+                Loc.Get(Strings.Detail.Edit.DeletePlaylistConfirm),
+                Loc.Get(Strings.Detail.Edit.DeletePlaylist),
+                () => _ = DeletePlaylistAsync(lib, h, uri))));
+    }
+
+    static async Task DeletePlaylistAsync(LibraryBridge lib, DetailHandlers h, string uri)
+    {
+        try
+        {
+            await lib.DeletePlaylistAsync(uri).ConfigureAwait(false);
+            h.Go("home", null);
+        }
+        catch (Exception ex) { PlaylistEditErrors.Toast(ex); }
     }
 
     // ── shared hooks/plumbing ────────────────────────────────────────────────────────────────────────────────────

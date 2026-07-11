@@ -25,6 +25,7 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     private readonly List<DrawGradientStrokeCmd> _gradientStrokes = new(16);
     private readonly List<PushLayerCmd> _layers = new(8);
     private readonly List<DrawTabShapeCmd> _tabShapes = new(8);
+    private readonly List<DrawIconMaskCmd> _iconMasks = new(16);
     private readonly List<(int id, int w, int h)> _uploads = new(32);
     private readonly Dictionary<int, (int w, int h)> _resident = new(32);
     private readonly List<int> _evictions = new(16);
@@ -64,6 +65,8 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     public IReadOnlyList<PushLayerCmd> LastLayers => _layers;
     /// <summary>WinUI selected-tab shapes drawn this frame (DrawTabShape — rounded-top + inverted bottom flares).</summary>
     public IReadOnlyList<DrawTabShapeCmd> LastTabShapes => _tabShapes;
+    /// <summary>ThemedIcon vector-layer masks drawn this frame (DrawIconMask — PathId + per-instance tint).</summary>
+    public IReadOnlyList<DrawIconMaskCmd> LastIconMasks => _iconMasks;
     /// <summary>Push/pop balance check — must be 0 at end of a well-formed frame. Rounded (tier-2) clips are visible
     /// on <see cref="LastClips"/> entries via <see cref="ClipCmd.CornerRadius"/>/<c>RoundedRect</c>.</summary>
     public int ClipBalance { get; private set; }
@@ -106,6 +109,7 @@ public sealed class HeadlessGpuDevice : IGpuDevice
         _gradientStrokes.Clear();
         _layers.Clear();
         _tabShapes.Clear();
+        _iconMasks.Clear();
         LastClear = ctx.Clear;
         FrameCount++;
         int balance = 0;
@@ -179,6 +183,10 @@ public sealed class HeadlessGpuDevice : IGpuDevice
                 case DrawOp.DrawTabShape:
                     _tabShapes.Add(MemoryMarshal.Read<DrawTabShapeCmd>(drawList.Slice(pos)));
                     pos += Unsafe.SizeOf<DrawTabShapeCmd>();
+                    break;
+                case DrawOp.DrawIconMask:
+                    _iconMasks.Add(MemoryMarshal.Read<DrawIconMaskCmd>(drawList.Slice(pos)));
+                    pos += Unsafe.SizeOf<DrawIconMaskCmd>();
                     break;
                 default:
                     return; // unknown opcode — stop (corrupt stream guard)

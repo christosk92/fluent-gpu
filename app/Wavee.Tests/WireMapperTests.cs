@@ -79,6 +79,9 @@ public class PlaylistWireMapperTests
         var changes = Pl.ListChanges.Parser.ParseFrom(bytes);
 
         Assert.Equal(new byte[] { 5, 6 }, changes.BaseRevision.ToByteArray());
+        Assert.True(changes.WantResultingRevisions);
+        Assert.True(changes.WantSyncResult);
+        Assert.InRange(Assert.Single(changes.Nonces), 1, int.MaxValue - 1L);
         var delta = Assert.Single(changes.Deltas);
         Assert.Equal(3, delta.Ops.Count);
         Assert.Equal(Pl.Op.Types.Kind.Add, delta.Ops[0].Kind);

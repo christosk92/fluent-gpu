@@ -160,7 +160,8 @@ public static class SceneRecorder
                                           ColorF scrollThumb = default, ColorF scrollTrack = default, in TextEditStyle textEdit = default,
                                           ReadOnlySpan<NodeHandle> skipRoots = default, bool holdSelfBlurForAnyUserScroll = false,
                                           SpanTable? spans = null,
-                                          SpanReuseDisabledReason spanReuseDisabled = SpanReuseDisabledReason.None)
+                                          SpanReuseDisabledReason spanReuseDisabled = SpanReuseDisabledReason.None,
+                                          ReadOnlySpan<RectF> pendingStructuralDamage = default)
     {
         if (spans is null) dl.Reset();
         else dl.SwapAndReset();
@@ -168,6 +169,13 @@ public static class SceneRecorder
 
         _scrollLogFrame++;
         var stats = new RecordAccumulator();
+        // Seed the frame damage with any band a structural-track CANCEL vacated this frame (AnimEngine.PendingStructuralDamage):
+        // when a suppressed/resized FLIP or Reveal is snapped to its final bounds, the node stops covering the extent it drew
+        // at last frame, but no node re-touches that band — so the region-aware acrylic/backdrop cache would freeze last
+        // frame's pixels there (the "ghost rail"). Unioning the last-presented rects into the damage forces a repaint of the
+        // vacated region. AddDamage handles the first-rect/empty case; the host drains the list after this record.
+        for (int i = 0; i < pendingStructuralDamage.Length; i++)
+            stats.AddDamage(pendingStructuralDamage[i]);
         uint spanFrame = spans?.BeginFrame(scene.Capacity) ?? 0;
         SpanReuseDisabledReason disabledReasons = spanReuseDisabled;
         if (spans is not null && !spans.HasPrior) disabledReasons |= SpanReuseDisabledReason.FirstRecord;
@@ -203,11 +211,11 @@ public static class SceneRecorder
         Walk(scene, dl, images, scene.Root, Affine2D.Identity, 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack,
             1f, 1f, false, holdSelfBlurForAnyUserScroll, default, skips[..skipCount], spans, spanFrame, spanReuseOff, spanStoreOn, ref stats);
 
-        // Exit orphans: nodes removed from the tree but kept alive for their exit animation. Draw each detached subtree
-        // at its frozen parent-world origin, fading/sliding out via its own paint. Depth 0 (lowest key) so the painter
-        // sort places them BEHIND the live tree — the incoming/sliding content draws over them instead of under them.
+        // Defensive rootless-orphan fallback. Normal exits replay inside their former parent's Walk (preserving ancestor
+        // clips/layers, painter order, and popup-window routing); only nodes that genuinely had no visual parent land here.
         for (int i = 0; i < scene.OrphanCount; i++)
         {
+            if (!scene.OrphanVisualParentAt(i).IsNull) continue;   // replayed inside the former parent's Walk
             var o = scene.OrphanAt(i, out float px, out float py);
             if ((scene.Flags(o) & NodeFlags.ConnectedOverlay) != 0) continue;   // an overlay-flagged orphan draws in the top band, not here
             Walk(scene, dl, images, o, Affine2D.Translation(px, py), 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack,
@@ -290,7 +298,8 @@ public static class SceneRecorder
     /// single SceneStore; the host presents this list on the popup window's own swapchain). <paramref name="originDip"/>
     /// is the subtree's window-DIP top-left (= the popup's placed position): the walk starts at the subtree root with
     /// a parent-world translation of (parentAbs − origin), so every node's own bounds/transform chain composes exactly
-    /// as in the main pass, shifted into popup-window space. No orphan pass — exit orphans belong to the main window.
+    /// as in the main pass, shifted into popup-window space. Parent-scoped exit orphans are replayed by this same Walk,
+    /// so an exiting popup row stays in the popup swapchain rather than leaking into the main window.
     /// </summary>
     public static SceneRecordStats RecordSubtree(SceneStore scene, DrawList dl, ImageCache? images, in FocusVisualStyle focus,
                                                  ColorF scrollThumb, ColorF scrollTrack, in TextEditStyle textEdit,
@@ -929,6 +938,18 @@ public static class SceneRecorder
                 dl.DrawImage(drawRect, p.Corners, p.ImageId, ready, p.Fill, world, opacity, uv, fadeStart, fadeDur, fadeEase, key);
                 break;
             }
+            case VisualKind.IconLayer:
+            {
+                // ThemedIcon layer: ImageId doubles as the IconGeometryTable PathId; Fill carries the resolved,
+                // theme-live layer tint (bound thunk). The tint rides the command (colorless mask), so a retheme
+                // recolors with no re-raster. Cross-fade rides the SAME BrushAnim(Fill) path as every surface tint.
+                ColorF tint = p.Fill;
+                if (maybeSparsePaint && scene.TryGetBrushAnim(node, out var iba) && (iba.Channels & BrushAnim.FillBit) != 0)
+                    tint = ColorF.LerpLinear(iba.FillFrom, tint, iba.T);
+                if (p.ImageId != 0 && tint.A > 0f)
+                    dl.DrawIconMask(local, tint, p.ImageId, world, opacity, key);
+                break;
+            }
             case VisualKind.PolylineStroke:
             {
                 if (maybeSparsePaint && scene.TryGetPolylineStroke(node, out var pl))
@@ -952,6 +973,18 @@ public static class SceneRecorder
             ? world.Translate(p.ChildShiftX, p.ChildShiftY)
             : world;
         InheritedState childState = inherited.ForChild(flags, nodeInteractive, hasLocalProgress, localHoverT, localPressT);
+        // Logically-detached exits remain visually owned by this node. Emit them before live children so incoming
+        // content paints over them while this parent's transform, opacity/layers, clip, and popup target stay active.
+        var exitingChildren = scene.OrphanChildrenOf(node);
+        if (exitingChildren is not null)
+            for (int i = 0; i < exitingChildren.Count; i++)
+            {
+                var exiting = exitingChildren[i];
+                if (!scene.IsLive(exiting)) continue;
+                var exitResult = Walk(scene, dl, images, exiting, childWorld, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack,
+                    childScaleX, childScaleY, inMotion, scrollInMotion, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
+                result.Include(exitResult);
+            }
         // Sticky pin paint order: a PINNED child (position:sticky engaged) is emitted AFTER its siblings so the
         // content scrolling beneath it paints underneath — CSS sticky's implicit stacking. Unpinned = normal order.
         {

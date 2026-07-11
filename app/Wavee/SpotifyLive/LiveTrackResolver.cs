@@ -125,14 +125,14 @@ public sealed class LiveTrackResolver : ITrackResolver
         {
             var gain = NormalizationGain(audioFiles!);
             var hex = Convert.ToHexStringLower(fl.fileId);
-            _log.Info($"resolve {track.Uri}: selected {fl.fmt} (lossless) file {hex} gain={gain:0.0}dB");
+            _log.Debug($"resolve {track.Uri}: selected {fl.fmt} (lossless) file {hex} gain={gain:0.0}dB");
             return new TrackMeta(fl.fileId, hex, t.Gid.ToByteArray(), fl.fmt,   // FLAC AP-key uses the track's gid
                 t.HasDuration ? t.Duration : track.DurationMs, track.Uri, gain);
         }
         if (ogg is { } og)
         {
             var hex = Convert.ToHexStringLower(og.fileId);
-            _log.Info($"resolve {track.Uri}: selected {og.fmt} file {hex}");
+            _log.Debug($"resolve {track.Uri}: selected {og.fmt} file {hex}");
             return new TrackMeta(og.fileId, hex, og.gid, og.fmt, og.durMs > 0 ? og.durMs : track.DurationMs, track.Uri, 0f);
         }
         throw new AudioPlaybackException(AudioKeyFailureReason.Restricted, "no playable file (Ogg or FLAC, incl. alternatives)");
@@ -149,7 +149,7 @@ public sealed class LiveTrackResolver : ITrackResolver
 
         if (ep.HasExternalUrl && ep.ExternalUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase))
         {
-            _log.Info($"resolve {track.Uri}: external MP3 host={WaveeLogRedaction.UrlHost(ep.ExternalUrl)}");
+            _log.Debug($"resolve {track.Uri}: external MP3 host={WaveeLogRedaction.UrlHost(ep.ExternalUrl)}");
             // Real gid-derived FileIdHex (not the "external" sentinel) so the host's stale-file guard has a stable key.
             var extGid = ep.Gid.ToByteArray();
             return new TrackMeta(extGid, Convert.ToHexStringLower(extGid), extGid, AudioFormat.Mp3, dur, track.Uri, 0f, ep.ExternalUrl);
@@ -160,7 +160,7 @@ public sealed class LiveTrackResolver : ITrackResolver
         if (pick is null)
             throw new AudioPlaybackException(AudioKeyFailureReason.Restricted, "no playable audio for episode " + track.Uri);
         var hex = Convert.ToHexStringLower(pick.Value.fileId);
-        _log.Info($"resolve {track.Uri}: episode {pick.Value.fmt} file {hex}");
+        _log.Debug($"resolve {track.Uri}: episode {pick.Value.fmt} file {hex}");
         return new TrackMeta(pick.Value.fileId, hex, ep.Gid.ToByteArray(), pick.Value.fmt, dur, track.Uri, 0f);
     }
 
@@ -220,7 +220,7 @@ public sealed class LiveTrackResolver : ITrackResolver
         var cdnUrls = cdnLoaded.Value!.Urls;
         var cdn = cdnUrls[0];
 
-        _log.Info($"storage-resolve {m.FileIdHex}: {cdnUrls.Length} cdn url(s); fetching key");
+        _log.Debug($"storage-resolve {m.FileIdHex}: {cdnUrls.Length} cdn url(s); fetching key");
         var key = await _keys.GetKeyAsync(m.FileId, m.FileGid, ct).ConfigureAwait(false);   // typed throw on AP+PlayPlay failure
         var nativeSeed = _keys is IPlayPlayNativeSeedSource seedSource
             ? seedSource.GetNativeCdnSeed(m.FileIdHex)

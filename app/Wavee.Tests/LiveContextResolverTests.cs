@@ -51,9 +51,66 @@ public class LiveContextResolverTests
         Assert.Equal(2, r2.StartIndex);
     }
 
+    // ── inspiredby-mix/v2/seed_to_playlist (explicit "Start radio" seed → radio playlist uri) ─────────────────────────
+    static LiveContextResolver MakeResolver(ITransport transport)
+    {
+        var store = new InMemoryStore();
+        var metadata = new MetadataService(new NullMetadataSource(), store, () => SessionContext.LoggedOut);
+        return new LiveContextResolver(transport, metadata, store, () => SessionContext.LoggedOut);
+    }
+
+    [Fact]
+    public async Task ResolveRadioSeed_ReturnsFirstMediaItemUri_AndSendsLiteralColonRoute()
+    {
+        var transport = new RouteTransport((route, _) =>
+            route.Contains("inspiredby-mix/v2/seed_to_playlist", StringComparison.Ordinal)
+                ? new Resp(true, System.Text.Encoding.UTF8.GetBytes(
+                    "{\"total\":1,\"mediaItems\":[{\"uri\":\"spotify:playlist:37i9dQZF1E8abc\"}]}"), 200)
+                : new Resp(false, Array.Empty<byte>(), 404));
+        var resolver = MakeResolver(transport);
+
+        var uri = await resolver.ResolveRadioSeedAsync("spotify:track:seed1");
+
+        Assert.Equal("spotify:playlist:37i9dQZF1E8abc", uri);
+        // Seed rides the path segment with literal colons (RFC 3986), not percent-escaped.
+        Assert.Contains("/inspiredby-mix/v2/seed_to_playlist/spotify:track:seed1", transport.LastRoute);
+        Assert.Contains("response-format=json", transport.LastRoute);
+    }
+
+    [Fact]
+    public async Task ResolveRadioSeed_404_ReturnsNull()
+    {
+        var resolver = MakeResolver(new RouteTransport((_, _) => new Resp(false, Array.Empty<byte>(), 404)));
+        Assert.Null(await resolver.ResolveRadioSeedAsync("spotify:track:seed1"));
+    }
+
+    [Fact]
+    public async Task ResolveRadioSeed_EmptyMediaItems_ReturnsNull()
+    {
+        var resolver = MakeResolver(new RouteTransport((_, _) =>
+            new Resp(true, System.Text.Encoding.UTF8.GetBytes("{\"total\":0,\"mediaItems\":[]}"), 200)));
+        Assert.Null(await resolver.ResolveRadioSeedAsync("spotify:artist:seed2"));
+    }
+
     sealed class NullMetadataSource : IMetadataSource
     {
         public Task FetchAsync(IReadOnlyList<EntityRef> entities, IStore store, CancellationToken ct) => Task.CompletedTask;
+    }
+
+    sealed class RouteTransport(Func<string, string, Resp> respond) : ITransport
+    {
+        public string LastRoute { get; private set; } = "";
+        public Task<Resp> Request(Channel ch, string route, ReadOnlyMemory<byte> body, CancellationToken ct = default,
+            string? method = null, IReadOnlyDictionary<string, string>? headers = null)
+        {
+            LastRoute = route;
+            return Task.FromResult(respond(route, method ?? (body.IsEmpty ? "GET" : "POST")));
+        }
+        public IObservable<WireEvent> Events(string topicPrefix) => new SimpleSubject<WireEvent>();
+        public IObservable<WireRequest> Requests(string identPrefix) => new SimpleSubject<WireRequest>();
+        public Task Reply(string requestId, RequestResult result) => Task.CompletedTask;
+        public Task<Resp> Publish(string deviceId, string connectionId, ReadOnlyMemory<byte> putState, CancellationToken ct = default)
+            => Task.FromResult(new Resp(true, Array.Empty<byte>(), 200));
     }
 
     sealed class ArtistCountingTransport(Func<Resp> respond) : ITransport

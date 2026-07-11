@@ -201,6 +201,51 @@ sealed class MarqueeAutostartProbe : Component
     }
 }
 
+// Production-shaped player-bar marquee: fixed left cluster, artwork + bounded metadata + like button, clickable title
+// wrapper, PauseOnHover with the shared metadata hover signal, and a title that arrives after the idle 0->0 track has
+// already settled. This catches lifecycle bugs hidden by the simpler Always/direct-column M2 probe.
+sealed class PlayerBarMarqueeProbe : Component
+{
+    public readonly Signal<string> Title = new("");
+    public readonly Signal<bool> Hovered = new(false);
+    public NodeHandle TitleNode;
+    public int Clicks;
+
+    public override Element Render()
+    {
+        var title = (BoxEl)Marquee.Of(Prop.Of(() => Title.Value),
+            new Marquee.Style
+            {
+                FontSize = 14f, Weight = 700, Speed = 18f,
+                CycleMs = 10000f, EndPauseMs = 2500f,
+                Mode = Marquee.ScrollMode.PingPong, Trigger = Marquee.TriggerMode.PauseOnHover,
+            }, Hovered);
+        title = title with
+        {
+            OnClick = () => Clicks++, Cursor = CursorId.Hand,
+            Role = AutomationRole.Hyperlink, Focusable = true,
+            OnRealized = h => TitleNode = h,
+        };
+        var meta = new BoxEl
+        {
+            Direction = 1, Grow = 1f, Shrink = 1f, Gap = 2f,
+            Justify = FlexJustify.Center, ClipToBounds = true,
+            Children = [title],
+        };
+        return new BoxEl
+        {
+            Width = 260f, Height = 56f, Direction = 0, AlignItems = FlexAlign.Center, Gap = 8f,
+            OnContextRequested = static _ => { }, // mirrors the player cluster's attached context-menu ancestor
+            Children =
+            [
+                new BoxEl { Width = 56f, Height = 56f },
+                meta,
+                new BoxEl { Width = 30f, Height = 30f },
+            ],
+        };
+    }
+}
+
 // Probe component for the expanded hooks.
 sealed class HookProbe : Component
 {
@@ -898,6 +943,61 @@ sealed class SwipeInScrollerProbe : Component
         }) with { Width = 360f, Height = 300f };
 }
 
+// A SwipeControl wrapping a CLICKABLE inner row (OnClick, NO drag handler of its own) at the top of a vertical scroller
+// — the Phase-D §7A.1 route-walk case: the hit row advertises no OnDrag, so the dispatcher must WALK to the wrapper's
+// DragYieldsToPan Drag member for a swipe to arm at all. touchOnly ⇒ a mouse never pans. Exposes the inner row's click
+// count so the gate proves a horizontal swipe does NOT click the row while a below-slop tap DOES.
+sealed class SwipeWrappedRowProbe : Component
+{
+    public int RowClicks;
+    public override Element Render()
+        => Ui.ScrollView(new BoxEl
+        {
+            Direction = 1,
+            Children =
+            [
+                SwipeControl.Create(
+                    new BoxEl
+                    {
+                        MinWidth = 320f, MinHeight = 56f, Padding = new Edges4(16, 14, 16, 14),
+                        Fill = ColorF.FromRgba(40, 40, 40), AlignItems = FlexAlign.Center,
+                        Role = AutomationRole.Button, OnClick = () => RowClicks++,
+                        Children = [new TextEl("Quarterly report.docx") { Size = 14f, Color = ColorF.FromRgba(230, 230, 230) }],
+                    },
+                    rightActions: new[] { new SwipeAction(Icons.Cancel, "Delete", ColorF.FromRgba(0xC4, 0x2B, 0x1C)) },
+                    rightMode: SwipeMode.Reveal,
+                    touchOnly: true),
+                new BoxEl { Width = 300, Height = 1600f, Fill = ColorF.FromRgba(28, 28, 28) },   // tall filler ⇒ vertical overflow
+            ],
+        }) with { Width = 360f, Height = 300f };
+}
+
+// A SwipeControl fed a ResetKey signal — the bound-slot RECYCLE contract: bumping the key must snap the (open) row
+// closed with no animation, exactly as a scrolled-off slot rebinds to a new track and must present it closed.
+sealed class SwipeResetProbe : Component
+{
+    public readonly Signal<int> ResetKey = new(0);
+    public override Element Render()
+        => Ui.ScrollView(new BoxEl
+        {
+            Direction = 1,
+            Children =
+            [
+                SwipeControl.Create(
+                    new BoxEl
+                    {
+                        MinWidth = 320f, MinHeight = 56f, Padding = new Edges4(16, 14, 16, 14),
+                        Fill = ColorF.FromRgba(40, 40, 40), AlignItems = FlexAlign.Center,
+                        Role = AutomationRole.Button, OnClick = static () => { },
+                        Children = [new TextEl("Quarterly report.docx") { Size = 14f, Color = ColorF.FromRgba(230, 230, 230) }],
+                    },
+                    rightActions: new[] { new SwipeAction(Icons.Cancel, "Delete", ColorF.FromRgba(0xC4, 0x2B, 0x1C)) },
+                    rightMode: SwipeMode.Reveal, resetKey: ResetKey, touchOnly: true),
+                new BoxEl { Width = 300, Height = 1600f, Fill = ColorF.FromRgba(28, 28, 28) },
+            ],
+        }) with { Width = 360f, Height = 300f };
+}
+
 // A FlipView (UseTouchAnimationsForAllNavigation default true) over three string pages — exposes the live selected index
 // so the gate can drive a touch flick / slow drag and assert the velocity-aware MandatorySingle commit (a flick navigates
 // even short of 50%; a slow drag under 50% springs back to the same page).
@@ -938,6 +1038,118 @@ sealed class TouchHoldContextProbe : Component
                OnContextRequested = i == 0 ? _ => Contexts++ : null,
            }, keyOf: i => "h" + i)
            with { Width = 300, Height = 300 };
+}
+
+// ContextMenu attach-layer probe (gate.ctx.*): an OverlayHost over two context-menu-attached rows (A near the top, B
+// lower) plus inert background. Each row's factory is lazy (invoked at open) and the build counters prove it. ReturnNull
+// / AllDisabled flip row A's factory to the no-open cases. Row B always yields a real menu (the dismiss-reopen target).
+sealed class ContextMenuProbe : Component
+{
+    public IOverlayService? Service;
+    public NodeHandle RowA, RowB;
+    /// <summary>Row B's "…" ClickRequestsContext button (+ a disabled twin) — the gate.ctx.invoke-* targets: a left
+    /// click on it must re-enter the context-request funnel and open row B's menu anchored at the BUTTON rect.</summary>
+    public NodeHandle MoreB, MoreBDisabled;
+    public int BuildsA, BuildsB;
+    public bool ReturnNull, AllDisabled;
+    /// <summary>Value-copied from the last ContextRequestEventArgs row B's own handler saw (the attach chains the
+    /// element handler FIRST) — gate.ctx.invoke-source-field asserts Trigger/Node/Source per trigger kind.</summary>
+    public ContextRequestTrigger LastTrigger;
+    public NodeHandle LastNode, LastSource;
+    /// <summary>Bump to force ContextMenuProbeInner to re-render (it reads this). Used by gate.ctx.re-render-anchor to
+    /// prove the menu anchors from the live <c>ContextRequestEventArgs.Node</c>, not a stale OnRealized capture.</summary>
+    public readonly Signal<int> Rev = new(0);
+    public override Element Render() => Embed.Comp(() => new OverlayHost { Child = Embed.Comp(() => new ContextMenuProbeInner(this)) });
+}
+
+sealed class ContextMenuProbeInner : Component
+{
+    readonly ContextMenuProbe _p;
+    public ContextMenuProbeInner(ContextMenuProbe p) => _p = p;
+
+    ContextMenuModel? BuildA()
+    {
+        _p.BuildsA++;
+        if (_p.ReturnNull) return null;
+        if (_p.AllDisabled)
+            return new ContextMenuModel(new[] { new MenuFlyoutItem("Disabled", Enabled: false), MenuFlyoutItem.Separator });
+        return new ContextMenuModel(new[] { new MenuFlyoutItem("A1", Invoke: () => { }), new MenuFlyoutItem("A2", Invoke: () => { }) });
+    }
+    ContextMenuModel? BuildB()
+    {
+        _p.BuildsB++;
+        return new ContextMenuModel(new[] { new MenuFlyoutItem("B1", Invoke: () => { }), new MenuFlyoutItem("B2", Invoke: () => { }) });
+    }
+
+    public override Element Render()
+    {
+        _p.Service = UseContext(Overlay.Service);
+        _ = _p.Rev.Value;   // SUBSCRIBE: bumping Rev re-renders this inner (rebuilds rowA + its context-menu attach)
+        var svc = _p.Service!;
+        var rowA = new BoxEl
+        {
+            Width = 120, Height = 32, Role = AutomationRole.Button, OnClick = () => { },
+            OnRealized = h => _p.RowA = h, Children = [Text("A")],
+        }.WithContextMenu(svc, BuildA);
+        var rowB = new BoxEl
+        {
+            Width = 120, Height = 32, Direction = 0, AlignItems = FlexAlign.Center, Gap = 8f,
+            Role = AutomationRole.Button, OnClick = () => { },
+            OnRealized = h => _p.RowB = h,
+            // Value-copy the reused args (gate.ctx.invoke-source-field): the attach chains this handler FIRST.
+            OnContextRequested = e => { _p.LastTrigger = e.Trigger; _p.LastNode = e.Node; _p.LastSource = e.Source; },
+            Children =
+            [
+                Text("B"),
+                // The "…" context-invoker (gate.ctx.invoke-*): a left click / Space-Enter on it re-enters the
+                // context-request funnel here — the walk finds row B's OnContextRequested (the attach below).
+                new BoxEl { Width = 20, Height = 20, Role = AutomationRole.Button, ClickRequestsContext = true, OnRealized = h => _p.MoreB = h },
+                // Its disabled twin (gate.ctx.invoke-disabled): disabled nodes don't hit-test, so a click opens nothing.
+                new BoxEl { Width = 20, Height = 20, Role = AutomationRole.Button, ClickRequestsContext = true, IsEnabled = false, OnRealized = h => _p.MoreBDisabled = h },
+            ],
+        }.WithContextMenu(svc, BuildB);
+        return new BoxEl { Width = 480, Height = 400, Direction = 1, Padding = Edges4.All(20), Gap = 200f, Children = [rowA, rowB] };
+    }
+}
+
+// ThemedIcon probe (gate.icon.record/retheme/alloc): a root component that mounts one layered ThemedIcon so the
+// reconciler realizes VisualKind.IconLayer nodes and the recorder emits DrawIconMask into the headless device.
+sealed class IconProbe : Component
+{
+    public string Name = "Copy";
+    public FluentGpu.Controls.IconMode Mode = FluentGpu.Controls.IconMode.Layered;
+    public override Element Render()
+        => new BoxEl { Width = 200, Height = 200, Children = [ThemedIcon.Create(Name, 16f, mode: Mode)] };
+}
+
+// Wheel-blocking probe (gate.ctx.scrim-blocks-wheel): a scroller with overflowing content, a context-menu row above it.
+// With a menu open the full-bleed scrim is the topmost hit → the ancestor-only wheel walk finds no scrollable → the list
+// stays put; with the menu closed the same wheel scrolls it (proving the wheel is real and the scrim was blocking).
+sealed class ContextWheelProbe : Component
+{
+    public IOverlayService? Service;
+    public NodeHandle Row;
+    public override Element Render() => Embed.Comp(() => new OverlayHost { Child = Embed.Comp(() => new ContextWheelInner(this)) });
+}
+
+sealed class ContextWheelInner : Component
+{
+    readonly ContextWheelProbe _p;
+    public ContextWheelInner(ContextWheelProbe p) => _p = p;
+    ContextMenuModel? Build() => new ContextMenuModel(new[] { new MenuFlyoutItem("W1", Invoke: () => { }), new MenuFlyoutItem("W2", Invoke: () => { }) });
+    public override Element Render()
+    {
+        _p.Service = UseContext(Overlay.Service);
+        var svc = _p.Service!;
+        var row = new BoxEl
+        {
+            Width = 120, Height = 32, Role = AutomationRole.Button, OnClick = () => { },
+            OnRealized = h => _p.Row = h, Children = [Text("wrow")],
+        }.WithContextMenu(svc, Build);
+        var list = Virtual.List(400, 40f, i => new BoxEl { Height = 40, Fill = ColorF.FromRgba(30, 30, 30) }, keyOf: i => "w" + i)
+            with { Width = 300, Height = 300 };
+        return new BoxEl { Width = 480, Height = 400, Direction = 1, Children = [row, list] };
+    }
 }
 
 // A 5-star interactive RatingControl (gate.touch4.rating-tap): a touch tap on the 4th star sets the rating to 4 (the
@@ -2033,6 +2245,7 @@ sealed class OverlayProbe : Component
     public IOverlayService? Service;
     public NodeHandle Anchor;
     public int Selected = -1;
+    public int BackgroundClicks;
     public override Element Render() => Embed.Comp(() => new OverlayHost { Child = Embed.Comp(() => new OverlayProbeInner(this)) });
 }
 
@@ -2045,7 +2258,8 @@ sealed class OverlayProbeInner : Component
         _p.Service = UseContext(Overlay.Service);
         return new BoxEl
         {
-            Width = 200, Height = 120, Padding = Edges4.All(20),
+            Width = 200, Height = 120, Padding = Edges4.All(20), TabStop = false,
+            OnClick = () => _p.BackgroundClicks++,
             Children =
             [
                 new BoxEl
@@ -2053,6 +2267,36 @@ sealed class OverlayProbeInner : Component
                     Width = 120, Height = 32, Role = AutomationRole.Button, OnClick = () => { },
                     OnRealized = h => _p.Anchor = h,
                     Children = [Text("anchor")],
+                },
+            ],
+        };
+    }
+}
+
+// Windowed-popup exit-routing probe: swapping the keyed child keeps the outgoing text alive for one frame. Its orphan
+// must be recorded by the popup subtree at the former parent (not by the main window's global fallback pass).
+sealed class PopupExitProbeBody : Component
+{
+    static readonly LayoutTransition SwapTransition = new(
+        TransitionChannels.Opacity,
+        TransitionDynamics.Tween(300f, Easing.Linear),
+        Exit: new EnterExit(Opacity: 0f, Active: true));
+
+    public readonly Signal<bool> Swap = new(false);
+
+    public override Element Render()
+    {
+        bool next = Swap.Value;
+        return new BoxEl
+        {
+            Width = 180, Height = 80, ClipToBounds = true,
+            Children =
+            [
+                new BoxEl
+                {
+                    Key = next ? "popup-exit-new" : "popup-exit-old",
+                    Animate = SwapTransition,
+                    Children = [new TextEl(next ? "popup-exit-new" : "popup-exit-old") { Size = 12f }],
                 },
             ],
         };
@@ -3207,6 +3451,29 @@ static class Slice
         DrawOp.DrawTabShape => Unsafe.SizeOf<DrawTabShapeCmd>(),
         _ => 0,
     };
+
+    // Locate a uniquely-coloured rectangle in command-stream order and report the active clip depth at its draw.
+    // Used by the exit-orphan containment gate: the old global pass emitted the outgoing rect last at depth 0.
+    static (int Order, int ClipDepth) FindFillCommand(DrawList dl, ColorF fill)
+    {
+        ReadOnlySpan<byte> bytes = dl.Bytes;
+        int pos = 0, order = 0, clipDepth = 0;
+        while (pos + sizeof(int) <= bytes.Length)
+        {
+            var op = (DrawOp)MemoryMarshal.Read<int>(bytes.Slice(pos, sizeof(int)));
+            pos += sizeof(int);
+            if (op == DrawOp.FillRoundRect)
+            {
+                var cmd = MemoryMarshal.Read<FillRoundRectCmd>(bytes.Slice(pos, Unsafe.SizeOf<FillRoundRectCmd>()));
+                if (cmd.Fill.Equals(fill)) return (order, clipDepth);
+            }
+            if (op == DrawOp.PushClip) clipDepth++;
+            else if (op == DrawOp.PopClip) clipDepth--;
+            pos += DrawPayloadSize(op);
+            order++;
+        }
+        return (-1, -1);
+    }
 
     static void ClickNode(AppHost host, HeadlessWindow window, NodeHandle n)
     {
@@ -4890,6 +5157,74 @@ static class Slice
             bool reclaimed = settledAt >= 0 && !scene.IsLive(child);     // deferred free → handle dead
             Check("23e. exit orphan stays live while fading, then reclaims (deferred free)",
                 mountedLive && orphaned && reclaimed, $"settled@{settledAt}");
+        }
+
+        // 23e2: an exit inside a rounded flyout + rectangular scroller must replay at its former parent, not in the
+        // global un-clipped band. Outgoing paints first (behind the incoming row), under both active ancestor clips.
+        // Hard-removing the containing surface then cascade-reclaims the still-running exit.
+        {
+            var scene = new SceneStore();
+            var engine = new AnimEngine(scene);
+            var recon = new TreeReconciler(scene, strings) { Anim = engine };
+            var fonts = new HeadlessFontSystem(strings);
+            var exit = new LayoutTransition(TransitionChannels.Opacity, TransitionDynamics.Tween(300f, Easing.Linear),
+                Exit: new EnterExit(Dy: -4f, Opacity: 0f, Active: true));
+            ColorF outgoingColor = ColorF.FromRgba(211, 47, 47);
+            ColorF incomingColor = ColorF.FromRgba(33, 150, 243);
+
+            Element Tree(bool incoming, bool surface = true) => new BoxEl
+            {
+                Width = 180, Height = 140,
+                Children = surface
+                    ?
+                    [
+                        new BoxEl
+                        {
+                            Width = 120, Height = 80, ClipToBounds = true, Corners = CornerRadius4.All(8f),
+                            Children =
+                            [
+                                new BoxEl
+                                {
+                                    Width = 100, Height = 40, Margin = Edges4.All(10f), ClipToBounds = true,
+                                    Children =
+                                    [
+                                        new BoxEl
+                                        {
+                                            Key = incoming ? "incoming" : "outgoing",
+                                            Width = 100, Height = 80,
+                                            Fill = incoming ? incomingColor : outgoingColor,
+                                            Animate = exit,
+                                        },
+                                    ],
+                                },
+                            ],
+                        },
+                    ]
+                    : [],
+            };
+
+            var old = Tree(incoming: false);
+            recon.ReconcileRoot(old, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var outgoing = Child(scene, Child(scene, Child(scene, scene.Root, 0), 0), 0);
+
+            var next = Tree(incoming: true);
+            recon.ReconcileRoot(next, old);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var dl = new DrawList();
+            SceneRecorder.Record(scene, dl);
+            var outCmd = FindFillCommand(dl, outgoingColor);
+            var inCmd = FindFillCommand(dl, incomingColor);
+            bool contained = scene.IsOrphan(outgoing) && outCmd.Order >= 0 && inCmd.Order >= 0
+                             && outCmd.Order < inCmd.Order && outCmd.ClipDepth == 2 && inCmd.ClipDepth == 2;
+
+            var empty = Tree(incoming: true, surface: false);
+            recon.ReconcileRoot(empty, next);
+            engine.Tick(0f);   // freed-handle rows self-prune on the animation slab's next gen-check
+            bool cascaded = scene.OrphanCount == 0 && !scene.IsLive(outgoing) && !engine.HasTracks(outgoing);
+            Check("23e2. exits replay inside former parent clip/order and cascade-reclaim when that parent is removed",
+                contained && cascaded,
+                $"out={outCmd.Order}@clip{outCmd.ClipDepth} in={inCmd.Order}@clip{inCmd.ClipDepth} cascaded={cascaded}");
         }
 
         // 23f — enter: a mounted node with Enter.Active starts at the enter terminal (opacity 0) and springs to 1.
@@ -6952,9 +7287,9 @@ static class Slice
 
         // gate.touch.flick-decay-settle: a touch flick UP over a bound virtual list seeds a friction-decay fling that
         // moves the offset monotonically for many frames, re-realizes the virtual window (FirstRealized advances), then
-        // settles at a BOUNDED natural rest — coast ≈ v0/k under the iOS-normal friction (FlingDecayPerS=0.135,
-        // k≈2.0/s), so it stops SHORT of the far 2800px content-end clamp (NOT a near-frictionless drift to the
-        // end), and within a bounded number of frames (~<3.7s, not the tens of seconds the old 0.95/s curve took).
+        // settles at a BOUNDED natural rest — coast ≈ v0/k under WinUI-like friction (FlingDecayPerS=0.05,
+        // k≈3.0/s), so it stops SHORT of the far 2800px content-end clamp (NOT a floaty drift to the end),
+        // and within a bounded number of frames.
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("touch-fling", new Size2(360, 460), 1f)); window.Show();
@@ -6984,12 +7319,10 @@ static class Slice
             host.Scene.TryGetScroll(vp, out var settled);
             float maxOff = MathF.Max(0f, settled.ContentH - settled.ViewportH);
             bool reRealized = settled.FirstRealized != firstAfterUp && decayRendered;
-            // Corrected friction: the fling coasts a BOUNDED distance forward and settles SHORT of the far clamp (it does
-            // not drift to the content end), within ~<2.5s. The old near-frictionless 0.95/s curve instead coasted to the
-            // 2800px clamp over tens of seconds — this is the exact behavior change the scroll fix makes.
+            // Windows-like friction: the fling coasts a BOUNDED distance forward and settles SHORT of the far clamp.
             bool coastedForward = settled.OffsetY > afterUp.OffsetY + 20f;
             bool boundedShortOfClamp = settled.OffsetY < maxOff - 100f;
-            bool settledFast = settledAt >= 0 && settledAt < 220;   // iOS-normal k≈2.0/s settles slower than the old k≈3.0 — re-baselined budget (still bounded; the 0.95/s drift took thousands)
+            bool settledFast = settledAt >= 0 && settledAt < 160;   // comfortably below 2.7s at the fixed 60Hz clock
             Check("gate.touch.flick-decay-settle a touch flick decays monotonically (≥10 frames), re-realizes the window, then settles at a BOUNDED rest SHORT of the far clamp (WinUI-like friction, not a near-frictionless coast to the end)",
                 maxRun >= 10 && settledFast && reRealized && coastedForward && boundedShortOfClamp,
                 $"maxRun={maxRun} settledAt={settledAt} offset={afterUp.OffsetY:0}->{settled.OffsetY:0} (clamp={maxOff:0}) reRealized={reRealized}");
@@ -7014,7 +7347,7 @@ static class Slice
             host.Scene.TryGetScroll(vp, out var scA);
             // The up frame's phase-7 tick already decayed the fresh seed once (16 ms of FlingDecayPerS) — fold that
             // into the expectation so the gate asserts the ESTIMATOR exactly, not the estimator minus one tick.
-            float decay1 = MathF.Exp(MathF.Log(0.135f) * 16f / 1000f);
+            float decay1 = MathF.Exp(MathF.Log(ScrollIntegrator.FlingDecayPerS) * 16f / 1000f);
             float vConst = MathF.Abs(scA.FlingVelocity);
             bool constExact = MathF.Abs(vConst - 2000f * decay1) <= 2000f * decay1 * 0.02f && scA.Phase == ScrollIntegrator.Fling;   // ±2%
             for (int i = 0; i < 400; i++) { host.RunFrame(); host.Scene.TryGetScroll(vp, out var s); if (s.Phase == 0) break; }
@@ -7148,6 +7481,32 @@ static class Slice
             }
             Check("gate.scroll.flick-into-edge-bounce a touch flick whose fling reaches the clamp bounces (overscroll excursion > 1px) then springs back to ~0 (not a dead stop)",
                 flung && maxBand > 1f && settledAt >= 0, $"startOff={startOff:0} flung={flung} maxBand={maxBand:0.0} settledAt={settledAt}");
+
+            // A low residual speed is still live inertia, so crossing the clamp must hand it to the elastic spring too.
+            // This catches the old 50 px/s bounce gate, which made a 25 px/s edge arrival stop perfectly flat.
+            window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(150, 200), 0, 0, ScrollDelta: 2f, TimestampMs: t));
+            for (int i = 0; i < 60; i++) host.RunFrame();
+            ref var slow = ref host.Scene.ScrollRef(vp);
+            // Put the viewport within one 60 Hz coast step of the leading clamp. The preceding wheel is only a
+            // convenient way to leave the completed bounce path in a valid scroll state; its device-scale mapping is
+            // deliberately not part of this physics gate.
+            slow.OffsetY = 0.1f;
+            slow.FlingVelocity = -25f;
+            slow.Phase = ScrollIntegrator.Fling;
+            slow.PhaseFlags = 0;
+            slow.FlingRetargeted = false;
+            slow.FlingSnapTarget = float.NaN;
+            slow.FlingFromOffset = slow.OffsetY;
+            host.ScrollIntegratorForTest.Arm(vp);
+            float slowBand = 0f;
+            for (int i = 0; i < 60; i++)
+            {
+                host.RunFrame();
+                host.Scene.TryGetScroll(vp, out var s);
+                slowBand = MathF.Max(slowBand, MathF.Abs(s.OverscrollPx));
+            }
+            Check("gate.scroll.slow-fling-into-edge-elastic a still-live 25 px/s fling crossing the clamp produces a subtle elastic handoff instead of stopping dead",
+                slowBand > 0.01f, $"maxBand={slowBand:0.000}px bounceGate={ScrollIntegrator.FlingBounceMinPxPerS:0}px/s");
         }
 
         // gate.scroll.touch-overpan-bounce: the surviving rubber band lives on the genuine TOUCH path. A finger pan that
@@ -7332,13 +7691,31 @@ static class Slice
             uint t = s_touchClockMs;
             window.QueueInput(Touch(InputKind.PointerDown, rowCenter, t, 2));
             host.RunFrame();
-            window.QueueInput(Touch(InputKind.PointerUp, rowCenter, t + 16, 2));
+            bool listPressInitiallyDelayed = (host.Scene.Flags(row0) & NodeFlags.Pressed) == 0;
+            for (int i = 0; i < 7; i++) host.RunFrame();
+            bool listPressAppearedAfterDelay = (host.Scene.Flags(row0) & NodeFlags.Pressed) != 0;
+            window.QueueInput(Touch(InputKind.PointerUp, rowCenter, t + 128, 2));
             host.RunFrame();
             s_touchClockMs = t + 1000;
             int clicksAfterTap = probe.Row0Clicked;
             int pressedAfterTap = probe.Row0Pressed;
             host.Scene.TryGetScroll(vp, out var afterTap);
             bool tapDidNotScroll = Near(afterTap.OffsetY, 0f);
+
+            // TAP-TO-STOP: a contact landing while the viewport is coasting belongs to the viewport. It arrests the
+            // inertia but must not enter the row's press/click pipeline when lifted without moving.
+            ref var stopping = ref host.Scene.ScrollRef(vp);
+            stopping.Phase = ScrollIntegrator.Fling;
+            stopping.FlingVelocity = 900f;
+            window.QueueInput(Touch(InputKind.PointerDown, rowCenter, t + 160, 2)); host.RunFrame();
+            window.QueueInput(Touch(InputKind.PointerUp, rowCenter, t + 176, 2)); host.RunFrame();
+            bool stopTapSwallowed = probe.Row0Clicked == clicksAfterTap && probe.Row0Pressed == pressedAfterTap
+                                    && host.Scene.ScrollRef(vp).Phase != ScrollIntegrator.Fling;
+
+            window.QueueInput(Touch(InputKind.PointerDown, rowCenter, t + 240, 3)); host.RunFrame();
+            window.QueueInput(Touch(InputKind.PointerMove, new Point2(rowCenter.X, rowCenter.Y - 20f), t + 256, 3)); host.RunFrame();
+            bool panBeforeDelayNeverPressed = (host.Scene.Flags(row0) & NodeFlags.Pressed) == 0;
+            window.QueueInput(Touch(InputKind.PointerUp, new Point2(rowCenter.X, rowCenter.Y - 20f), t + 272, 3)); host.RunFrame();
 
             // PAN: a drag starting on row 0 that crosses slop. The press is delivered on down then cancelled at the claim.
             TouchGesture(window, host, new Point2(rowCenter.X, rowCenter.Y), new Point2(rowCenter.X, rowCenter.Y - 180f), 12, pointerId: 2, msPerStep: 16f);
@@ -7350,8 +7727,8 @@ static class Slice
             bool tapOk = clicksAfterTap == 1 && tapDidNotScroll;
             bool panOk = clicksAfterPan == clicksAfterTap && panScrolled;   // NO additional click from the pan
             Check("gate.touch.tap-vs-pan a below-slop touch tap fires OnClick; a touch pan over the same row scrolls and never clicks",
-                tapOk && panOk,
-                $"tapClicks={clicksAfterTap} (scroll={afterTap.OffsetY:0}) panClicks={clicksAfterPan} (scroll={afterPan.OffsetY:0}) pressedDelivered={pressedAfterPan}");
+                tapOk && listPressInitiallyDelayed && listPressAppearedAfterDelay && panBeforeDelayNeverPressed && stopTapSwallowed && panOk,
+                $"tapClicks={clicksAfterTap} delayed={listPressInitiallyDelayed}->{listPressAppearedAfterDelay} panNoFlash={panBeforeDelayNeverPressed} stopSwallowed={stopTapSwallowed} panClicks={clicksAfterPan} (scroll={afterPan.OffsetY:0}) pressedDelivered={pressedAfterPan}");
 
             // gate.touch.pan-cancels-press: the down chain SAW the press (OnPointerPressed fired on down) but the pan claim
             // delivered the cancel — so no click ever fired through the pan. (Pressed delivered ≥ 1, click count unchanged
@@ -8059,7 +8436,7 @@ static class Slice
     static void ScrollV2ValidationChecks(StringTable strings)
     {
         var fonts = new HeadlessFontSystem(strings);
-        const float k = 2.0025317f;                 // −ln(FlingDecayPerS 0.135) — the exact coast decay rate (1/s)
+        float k = -MathF.Log(ScrollIntegrator.FlingDecayPerS);   // exact coast decay rate (1/s)
         var center = new Point2(150, 200);
 
         // gate.scroll.single-writer (§8.1, pins R1): a full contact-track + fling + top-overpan + snap-back + wheel-chase
@@ -8251,7 +8628,7 @@ static class Slice
         // ⇒ no stale-direction (positive) coast. decay1 folds the single End-frame tick that decays the fresh seed once.
         {
             const byte Fb = (byte)ScrollDeviceClass.WheelHiResFallback;
-            float decay1 = MathF.Exp(MathF.Log(0.135f) * 16f / 1000f);   // ≈0.9685
+            float decay1 = MathF.Exp(MathF.Log(ScrollIntegrator.FlingDecayPerS) * 16f / 1000f);
             (float v, byte phase) Drive(float[] deltas, uint packetGap, uint liftGap)
             {
                 using var app = new HeadlessPlatformApp();
@@ -8772,8 +9149,8 @@ static class Slice
 
         // gate.scroll.decay-kernel-distance: seed a coast at v0 = 1000 px/s and integrate OverscrollPhysics.CoastStep at a
         // fixed 60 Hz dt until the speed drops below the production settle cutoff (FlingMinVelocityPxPerS = 13 px/s). The
-        // total coast = ~493 px (the v→0 asymptote is v0/−ln(0.135) = 499.4 px; the 13 px/s cutoff stops it ~6 px short).
-        // This locks the reusable decay kernel to FlingDecayPerS = 0.135 (iOS-normal) — a wrong decay moves it outside ±2.
+        // total coast = ~330 px (the v→0 asymptote is v0/−ln(0.05) = 333.8 px; the 13 px/s cutoff stops it ~4 px short).
+        // This explicitly locks the reusable kernel to the Windows-like feel and its roughly 1.5s 1000 px/s tail.
         {
             const float v0 = 1000f, dtMs = 1000f / 60f;
             float settle = ScrollIntegrator.FlingMinVelocityPxPerS;   // tracks the production settle cutoff (13 px/s) so the gate stays honest
@@ -8784,9 +9161,11 @@ static class Slice
                 frames++;
                 if (MathF.Abs(v) < settle) break;
             }
-            bool ok = Near(coast, 493f, 2f);
-            Check("gate.scroll.decay-kernel-distance a v0=1000 px/s coast at fixed 60 Hz integrated by the exact closed-form CoastStep settles at ~493 px (locks FlingDecayPerS=0.135 + the 13 px/s settle; v0/k asymptote 499.4 px, the cutoff stops it ~6 px short)",
-                ok, $"coast={coast:0.##}px (expect ~493 ±2) frames={frames} k={-MathF.Log(ScrollIntegrator.FlingDecayPerS):0.###}");
+            bool ok = Near(ScrollIntegrator.FlingDecayPerS, 0.05f, 0.0001f)
+                   && Near(coast, 330f, 2f)
+                   && frames >= 85 && frames <= 92;
+            Check("gate.scroll.decay-kernel-distance a v0=1000 px/s coast at fixed 60 Hz settles at ~330 px in ~1.5s (locks WinUI-like FlingDecayPerS=0.05 + the 13 px/s settle)",
+                ok, $"decay={ScrollIntegrator.FlingDecayPerS:0.###} coast={coast:0.##}px (expect ~330 ±2) frames={frames} (expect 85..92) k={-MathF.Log(ScrollIntegrator.FlingDecayPerS):0.###}");
         }
 
         // gate.scroll.decay-kernel-frame-rate-independence: the SAME v0=1000 px/s coast integrated at dt = 1000/60, 1000/120, 1000/144
@@ -8857,7 +9236,7 @@ static class Slice
             var vp = host.Scene.Root;
             var pos = new Point2(150, 200);
             const byte Fb = (byte)ScrollDeviceClass.WheelHiResFallback;
-            float decay1 = MathF.Exp(MathF.Log(0.135f) * 16f / 1000f);   // the End frame's phase-7 tick decays the fresh seed once
+            float decay1 = MathF.Exp(MathF.Log(ScrollIntegrator.FlingDecayPerS) * 16f / 1000f);   // the End frame's phase-7 tick decays the fresh seed once
 
             // (a) 1000 px/s hand speed: ScrollBegin + 16 ScrollUpdates of 8 DIP at 8 ms stamps, TWO per frame.
             uint t = 5000;
@@ -9244,8 +9623,9 @@ static class Slice
             h1.RunFrame();
             // Hold idle for 600ms (=38 fixed 16ms frames > the 500ms HoldUs) so the timer promotes the Hold → context.
             // The press visual is still HELD through the fire (the finger has not lifted).
+            for (int i = 0; i < 7; i++) h1.RunFrame();
             bool pressedDuringHold = (h1.Scene.Flags(p1.Row0) & NodeFlags.Pressed) != 0;
-            for (int i = 0; i < 38; i++) h1.RunFrame();
+            for (int i = 0; i < 31; i++) h1.RunFrame();
             bool firedHeldStillPressed = p1.Contexts == 1 && (h1.Scene.Flags(p1.Row0) & NodeFlags.Pressed) != 0;
             w1.QueueInput(Touch(InputKind.PointerUp, pt1, t1 + 620, 91));
             h1.RunFrame();
@@ -9291,9 +9671,24 @@ static class Slice
             s_touchClockMs = t3 + 2000;
             bool movePansNoContext = p3.Contexts == 0 && p3.Clicks == 0 && sc3after.OffsetY > sc3before.OffsetY + 4f;
 
+            using var app4 = new HeadlessPlatformApp();
+            var w4 = new HeadlessWindow(new WindowDesc("hold-radial-cancel", new Size2(360, 360), 1f)); w4.Show();
+            var p4 = new TouchHoldContextProbe();
+            using var h4 = new AppHost(app4, w4, new HeadlessGpuDevice(), fonts, strings, p4);
+            h4.RunFrame();
+            var pt4 = CenterOf(h4.Scene, p4.Row0);
+            uint t4 = s_touchClockMs;
+            w4.QueueInput(Touch(InputKind.PointerDown, pt4, t4, 94)); h4.RunFrame();
+            var cross = new Point2(pt4.X + InputDispatcher.TouchSlopPx + 4f, pt4.Y);
+            w4.QueueInput(Touch(InputKind.PointerMove, cross, t4 + 16, 94)); h4.RunFrame();
+            for (int i = 0; i < 38; i++) h4.RunFrame();
+            w4.QueueInput(Touch(InputKind.PointerUp, cross, t4 + 700, 94)); h4.RunFrame();
+            bool radialMoveCancelsBoth = p4.Contexts == 0 && p4.Clicks == 0;
+            s_touchClockMs = t4 + 2000;
+
             Check("gate.touch4.hold-fires-context a stationary ≥500ms touch press on a clickable+context row opens its context flyout (press held through the fire); a sub-500ms release fires the click not the context; a move-past-slop claims the scroller pan (scrolls) and fires neither context nor click",
-                stationaryFiresContext && quickReleaseClicks && movePansNoContext,
-                $"stationary(ctx={p1.Contexts} clk={p1.Clicks} heldPress={firedHeldStillPressed})={stationaryFiresContext} quick(clk={p2.Clicks} ctx={p2.Contexts})={quickReleaseClicks} pan(ctx={p3.Contexts} clk={p3.Clicks} dOff={sc3after.OffsetY - sc3before.OffsetY:0.#})={movePansNoContext}");
+                stationaryFiresContext && quickReleaseClicks && movePansNoContext && radialMoveCancelsBoth,
+                $"stationary(ctx={p1.Contexts} clk={p1.Clicks} heldPress={firedHeldStillPressed})={stationaryFiresContext} quick(clk={p2.Clicks} ctx={p2.Contexts})={quickReleaseClicks} pan(ctx={p3.Contexts} clk={p3.Clicks} dOff={sc3after.OffsetY - sc3before.OffsetY:0.#})={movePansNoContext} radial={radialMoveCancelsBoth}");
         }
 
         // gate.touch4.hold-wake: a STATIONARY hold with NO further input still resolves — the GestureHold wake bit keeps
@@ -9360,6 +9755,491 @@ static class Slice
             float rated = probe.Val?.Value ?? -1f;
             Check("gate.touch4.rating-tap a touch tap on the 4th star of a 5-star RatingControl rates it 4 (OnPointerDown=Sweep preview + OnClick=Commit on release — touch tap-to-rate via the eager OnDrag single-recognizer capture)",
                 Near(rated, 4f, 0.01f), $"rated={rated} (expected 4) starRowX={sr.X:0.#} tapX={tapPt.X:0.#}");
+        }
+    }
+
+    // ── ContextMenu attach layer (gate.ctx.*): drives real right-click / Menu-key / touch long-press through the AppHost
+    //    onto ContextMenu.Attach-wired rows over an OverlayHost, asserting the open/place/dismiss/redispatch contract.
+    static void ContextMenuChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+
+        static void Right(HeadlessWindow w, Point2 p)
+        {
+            w.QueueInput(new InputEvent(InputKind.PointerDown, p, 1, 0));   // button 1 = right
+            w.QueueInput(new InputEvent(InputKind.PointerUp, p, 1, 0));
+        }
+        static void Left(HeadlessWindow w, Point2 p)
+        {
+            w.QueueInput(new InputEvent(InputKind.PointerDown, p, 0, 0));
+            w.QueueInput(new InputEvent(InputKind.PointerUp, p, 0, 0));
+        }
+        static void RunN(AppHost h, int n) { for (int i = 0; i < n; i++) h.RunFrame(); }
+        static NodeHandle FindScroll(SceneStore s, NodeHandle n)
+        {
+            if (n.IsNull) return NodeHandle.Null;
+            if (s.TryGetScroll(n, out _)) return n;
+            for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c))
+            { var r = FindScroll(s, c); if (!r.IsNull) return r; }
+            return NodeHandle.Null;
+        }
+
+        // gate.ctx.open-at-pointer — a right press+release on an attached row opens ONE menu whose first row lands ON the
+        // right-tap point (OpenAtLocal: owner rect + local − FlyoutMargin ⇒ presenter top-left at the point), light-dismiss.
+        {
+            using var app = new HeadlessPlatformApp();
+            var w = new HeadlessWindow(new WindowDesc("ctx-open", new Size2(480, 400), 1f)); w.Show();
+            var probe = new ContextMenuProbe();
+            using var host = new AppHost(app, w, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var pt = CenterOf(host.Scene, probe.RowA);
+            Right(w, pt); RunN(host, 3);
+            var mi = FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem);
+            var r = mi.IsNull ? default : host.Scene.AbsoluteRect(mi);
+            bool opened = probe.Service!.AnyOpen && !mi.IsNull;
+            bool atPoint = !mi.IsNull && Near(r.X, pt.X, 30f) && r.Y >= pt.Y - 2f && r.Y <= pt.Y + 30f;
+            Check("gate.ctx.open-at-pointer right-click on an attached row opens one menu at the tap point (presenter top-left on the point, light-dismiss)",
+                opened && atPoint, $"open={opened} first=({r.X:0.#},{r.Y:0.#}) pt=({pt.X:0.#},{pt.Y:0.#})");
+        }
+
+        // gate.ctx.lazy-items — the factory is NOT invoked at render (a re-render leaves the count at 0); it runs exactly
+        // once, AT OPEN, so a bound row reads current state at open time (RowScope.Index.Peek()).
+        {
+            using var app = new HeadlessPlatformApp();
+            var w = new HeadlessWindow(new WindowDesc("ctx-lazy", new Size2(480, 400), 1f)); w.Show();
+            var probe = new ContextMenuProbe();
+            using var host = new AppHost(app, w, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame(); host.RunFrame();   // mount + a re-render
+            bool notAtRender = probe.BuildsA == 0;
+            Right(w, CenterOf(host.Scene, probe.RowA)); RunN(host, 3);
+            bool builtAtOpen = probe.BuildsA == 1 && probe.Service!.AnyOpen;
+            Check("gate.ctx.lazy-items the items factory runs at OPEN time, not render (count 0 across renders, 1 after the right-click)",
+                notAtRender && builtAtOpen, $"atRender={probe.BuildsA} (want 0 pre-open) open={probe.Service!.AnyOpen}");
+        }
+
+        // gate.ctx.empty-menu-no-open — a null factory result opens nothing (the factory still ran).
+        {
+            using var app = new HeadlessPlatformApp();
+            var w = new HeadlessWindow(new WindowDesc("ctx-empty", new Size2(480, 400), 1f)); w.Show();
+            var probe = new ContextMenuProbe { ReturnNull = true };
+            using var host = new AppHost(app, w, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            Right(w, CenterOf(host.Scene, probe.RowA)); RunN(host, 3);
+            bool noOpen = !probe.Service!.AnyOpen && FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem).IsNull;
+            Check("gate.ctx.empty-menu-no-open a null/empty model opens nothing (factory ran, no overlay)",
+                noOpen && probe.BuildsA == 1, $"anyOpen={probe.Service!.AnyOpen} builds={probe.BuildsA}");
+        }
+
+        // gate.ctx.disabled-rows — a model of only disabled/separator rows opens nothing.
+        {
+            using var app = new HeadlessPlatformApp();
+            var w = new HeadlessWindow(new WindowDesc("ctx-disabled", new Size2(480, 400), 1f)); w.Show();
+            var probe = new ContextMenuProbe { AllDisabled = true };
+            using var host = new AppHost(app, w, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            Right(w, CenterOf(host.Scene, probe.RowA)); RunN(host, 3);
+            bool noOpen = !probe.Service!.AnyOpen && FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem).IsNull;
+            Check("gate.ctx.disabled-rows an all-disabled model opens nothing",
+                noOpen, $"anyOpen={probe.Service!.AnyOpen}");
+        }
+
+        // gate.ctx.keyboard-at-node — focus a row, VK_APPS ⇒ the menu anchors to the row RECT (not a point), the first
+        // row takes focus, and Esc restores focus to the row (SavedFocus).
+        {
+            using var app = new HeadlessPlatformApp();
+            var w = new HeadlessWindow(new WindowDesc("ctx-kbd", new Size2(480, 400), 1f)); w.Show();
+            var probe = new ContextMenuProbe();
+            using var host = new AppHost(app, w, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var rowRect = host.Scene.AbsoluteRect(probe.RowA);
+            Left(w, CenterOf(host.Scene, probe.RowA)); RunN(host, 2);   // focus the row (pointer focus)
+            w.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Apps)); RunN(host, 4);
+            var mi = FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem);
+            var r = mi.IsNull ? default : host.Scene.AbsoluteRect(mi);
+            bool nodeAnchored = !mi.IsNull && Near(r.X, rowRect.X, 30f) && r.Y >= rowRect.Bottom - 2f;   // below the ROW, not at a point
+            bool firstFocused = !mi.IsNull && host.Input.Focused == mi;
+            w.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Escape)); RunN(host, 45);
+            bool restored = host.Input.Focused == probe.RowA && !probe.Service!.AnyOpen;
+            Check("gate.ctx.keyboard-at-node VK_APPS anchors the menu to the row rect + focuses the first item; Esc restores focus to the row",
+                nodeAnchored && firstFocused && restored,
+                $"nodeAnchored={nodeAnchored} firstFocused={firstFocused}(focus={host.Input.Focused.Raw.Index} first={mi.Raw.Index}) restored={restored}");
+        }
+
+        // gate.ctx.dismiss-reopen-one-gesture — THE pitfall: a menu open on row A; ONE right-click on row B closes A AND
+        // opens B's menu at the B point (the scrim's OnContextRequested → CloseTop + RedispatchContextAt through the
+        // synchronously-unmarked scrim).
+        {
+            using var app = new HeadlessPlatformApp();
+            var w = new HeadlessWindow(new WindowDesc("ctx-reopen", new Size2(480, 400), 1f)); w.Show();
+            var probe = new ContextMenuProbe();
+            using var host = new AppHost(app, w, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            Right(w, CenterOf(host.Scene, probe.RowA)); RunN(host, 3);
+            bool aOpen = probe.Service!.AnyOpen && probe.BuildsA == 1;
+            var ptB = CenterOf(host.Scene, probe.RowB);
+            Right(w, ptB); RunN(host, 45);   // one gesture on B: dismiss A + reopen at B, then settle A away
+            var mi = FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem);
+            var r = mi.IsNull ? default : host.Scene.AbsoluteRect(mi);
+            bool reopenedAtB = probe.Service!.AnyOpen && probe.BuildsB == 1 && !mi.IsNull
+                               && Near(r.X, ptB.X, 30f) && r.Y >= ptB.Y - 2f && r.Y <= ptB.Y + 30f;
+            Check("gate.ctx.dismiss-reopen-one-gesture a right-click on B while A's menu is open dismisses A AND opens B's menu at the B point (scrim redispatch)",
+                aOpen && reopenedAtB, $"aOpen={aOpen} reopenB={reopenedAtB} buildsB={probe.BuildsB} first=({r.X:0.#},{r.Y:0.#}) ptB=({ptB.X:0.#},{ptB.Y:0.#})");
+        }
+
+        // gate.ctx.dismiss-only-on-empty-area — a right-click on inert background while a menu is open dismisses it and
+        // opens nothing (the redispatch finds no ContextBit under the point).
+        {
+            using var app = new HeadlessPlatformApp();
+            var w = new HeadlessWindow(new WindowDesc("ctx-empty-area", new Size2(480, 400), 1f)); w.Show();
+            var probe = new ContextMenuProbe();
+            using var host = new AppHost(app, w, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            Right(w, CenterOf(host.Scene, probe.RowA)); RunN(host, 3);
+            bool aOpen = probe.Service!.AnyOpen;
+            Right(w, new Point2(430f, 380f)); RunN(host, 45);   // inert corner (no attached row there)
+            bool dismissedOnly = !probe.Service!.AnyOpen && FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem).IsNull;
+            Check("gate.ctx.dismiss-only-on-empty-area a right-click on inert background dismisses the open menu and opens nothing",
+                aOpen && dismissedOnly, $"aOpen={aOpen} dismissedOnly={dismissedOnly}");
+        }
+
+        // gate.ctx.race-open-close-open — a rapid supersede (open A, then reopen via B before A settles) leaves exactly
+        // one live windowed popup after settle (no leaked PopupWindowToken).
+        {
+            using var app = new HeadlessPlatformApp();
+            var w = new HeadlessWindow(new WindowDesc("ctx-race", new Size2(480, 400), 1f)); w.Show();
+            var probe = new ContextMenuProbe();
+            using var host = new AppHost(app, w, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            Right(w, CenterOf(host.Scene, probe.RowA)); RunN(host, 2);   // rapid: reopen before A's open settles
+            Right(w, CenterOf(host.Scene, probe.RowB)); RunN(host, 45);
+            // <=1 (not ==1): catches a leaked token (would be ≥2) while tolerating a constrained (non-windowed) fallback (0).
+            bool oneLive = probe.Service!.AnyOpen && host.PopupWindows.Count <= 1;
+            Check("gate.ctx.race-open-close-open a rapid open→close→open leaves at most one live windowed popup (no leaked token) with a menu still open",
+                oneLive, $"anyOpen={probe.Service!.AnyOpen} popupWindows={host.PopupWindows.Count}");
+        }
+
+        // gate.ctx.scrim-blocks-wheel — with a menu open the light-dismiss scrim is the topmost hit, so a wheel over the
+        // covered list scrolls NOTHING (the ancestor-only wheel walk finds no scrollable); once closed, the same wheel
+        // scrolls the list (proving the wheel is real and the scrim was blocking it).
+        {
+            using var app = new HeadlessPlatformApp();
+            var w = new HeadlessWindow(new WindowDesc("ctx-wheel", new Size2(480, 400), 1f)); w.Show();
+            var probe = new ContextWheelProbe();
+            using var host = new AppHost(app, w, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var scroller = FindScroll(host.Scene, host.Scene.Root);
+            host.Scene.TryGetScroll(scroller, out var before);
+            Right(w, CenterOf(host.Scene, probe.Row)); RunN(host, 3);
+            bool opened = probe.Service!.AnyOpen;
+            var listPt = new Point2(150f, 250f);   // over the list, under the scrim
+            w.QueueInput(new InputEvent(InputKind.Wheel, listPt, 0, 0, 240f)); RunN(host, 2);
+            host.Scene.TryGetScroll(scroller, out var afterBlocked);
+            bool blocked = Near(afterBlocked.OffsetY, before.OffsetY, 0.5f);
+            probe.Service!.CloseAll(); RunN(host, 45);
+            w.QueueInput(new InputEvent(InputKind.Wheel, listPt, 0, 0, 240f)); RunN(host, 3);
+            host.Scene.TryGetScroll(scroller, out var afterFree);
+            bool scrolls = afterFree.OffsetY > before.OffsetY + 4f;
+            Check("gate.ctx.scrim-blocks-wheel a wheel over the covered list does not scroll while a menu is open; the same wheel scrolls it once closed",
+                !scroller.IsNull && opened && blocked && scrolls,
+                $"opened={opened} blocked={blocked}(off={afterBlocked.OffsetY:0.#}) scrolls={scrolls}(off={afterFree.OffsetY:0.#})");
+        }
+
+        // gate.ctx.touch-hold-opens — a synthetic touch down + a >500ms stationary hold fires the context request
+        // (Trigger.Hold) and opens the menu at the contact point (the pressed visual is held through the fire).
+        {
+            using var app = new HeadlessPlatformApp();
+            var w = new HeadlessWindow(new WindowDesc("ctx-hold", new Size2(480, 400), 1f)); w.Show();
+            var probe = new ContextMenuProbe();
+            using var host = new AppHost(app, w, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var pt = CenterOf(host.Scene, probe.RowA);
+            uint t = s_touchClockMs;
+            w.QueueInput(Touch(InputKind.PointerDown, pt, t, 97));
+            host.RunFrame();
+            bool pressedDuringHold = (host.Scene.Flags(probe.RowA) & NodeFlags.Pressed) != 0;
+            for (int i = 0; i < 38; i++) host.RunFrame();   // > 500ms hold → Hold win fires the context request
+            var mi = FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem);
+            var r = mi.IsNull ? default : host.Scene.AbsoluteRect(mi);
+            bool opened = probe.Service!.AnyOpen && !mi.IsNull && Near(r.X, pt.X, 30f) && r.Y >= pt.Y - 2f && r.Y <= pt.Y + 30f;
+            w.QueueInput(Touch(InputKind.PointerUp, pt, t + 620, 97)); host.RunFrame();
+            s_touchClockMs = t + 2000;
+            Check("gate.ctx.touch-hold-opens a >500ms stationary touch long-press opens the menu at the contact (press held through the fire)",
+                pressedDuringHold && opened, $"pressedDuringHold={pressedDuringHold} opened={opened} first=({r.X:0.#},{r.Y:0.#}) pt=({pt.X:0.#},{pt.Y:0.#})");
+        }
+
+        // gate.ctx.re-render-anchor — the regression the ContextRequestEventArgs.Node carry fixed: after row A RE-RENDERS
+        // (a plain OnRealized capture would have gone stale → menu at the window origin), a right-click still opens the
+        // menu AT the tap point because ContextMenu.Attach anchors from args.Node (the live ContextBit owner), not a
+        // captured handle. Mirror gate.ctx.open-at-pointer, but bump the probe's Rev between frames to force the re-render.
+        {
+            using var app = new HeadlessPlatformApp();
+            var w = new HeadlessWindow(new WindowDesc("ctx-rerender", new Size2(480, 400), 1f)); w.Show();
+            var probe = new ContextMenuProbe();
+            using var host = new AppHost(app, w, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            probe.Rev.Value = 1; RunN(host, 2);   // re-render row A (would stale a captured anchor)
+            probe.Rev.Value = 2; RunN(host, 2);
+            var pt = CenterOf(host.Scene, probe.RowA);
+            Right(w, pt); RunN(host, 3);
+            var mi = FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem);
+            var r = mi.IsNull ? default : host.Scene.AbsoluteRect(mi);
+            bool opened = probe.Service!.AnyOpen && !mi.IsNull;
+            bool atPoint = !mi.IsNull && Near(r.X, pt.X, 30f) && r.Y >= pt.Y - 2f && r.Y <= pt.Y + 30f;
+            Check("gate.ctx.re-render-anchor after row A re-renders, a right-click still opens the menu at the tap point (anchors from args.Node, not a stale OnRealized capture)",
+                opened && atPoint, $"open={opened} first=({r.X:0.#},{r.Y:0.#}) pt=({pt.X:0.#},{pt.Y:0.#})");
+        }
+
+        // gate.ctx.invoke-anchors-source — a LEFT click on row B's "…" (ClickRequestsContext) opens ONE menu anchored
+        // at the BUTTON rect (ContextRequestTrigger.Invoke → rect-anchored on args.Source, the Keyboard rule
+        // generalized), and the first item is NOT focused (pointer-originated).
+        {
+            using var app = new HeadlessPlatformApp();
+            var w = new HeadlessWindow(new WindowDesc("ctx-invoke", new Size2(480, 400), 1f)); w.Show();
+            var probe = new ContextMenuProbe();
+            using var host = new AppHost(app, w, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var btn = host.Scene.AbsoluteRect(probe.MoreB);
+            Left(w, CenterOf(host.Scene, probe.MoreB)); RunN(host, 3);
+            var mi = FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem);
+            var r = mi.IsNull ? default : host.Scene.AbsoluteRect(mi);
+            bool opened = probe.Service!.AnyOpen && probe.BuildsB == 1 && !mi.IsNull;
+            bool atButton = !mi.IsNull && Near(r.X, btn.X, 30f) && r.Y >= btn.Bottom - 2f && r.Y <= btn.Bottom + 30f;
+            bool firstNotFocused = !mi.IsNull && host.Input.Focused != mi;
+            Check("gate.ctx.invoke-anchors-source a left click on the \"…\" opens one menu anchored at the BUTTON rect, first item NOT focused",
+                opened && atButton && firstNotFocused,
+                $"open={opened} first=({r.X:0.#},{r.Y:0.#}) btn=({btn.X:0.#},{btn.Bottom:0.#}) notFocused={firstNotFocused}");
+        }
+
+        // gate.ctx.invoke-source-field — the args carry: right-click ⇒ Source == Node (== row B, the ContextBit owner);
+        // "…" click ⇒ Trigger=Invoke, Source == the button, Node == the row (the funnel re-entered at the button, the
+        // walk stopped at the row).
+        {
+            using var app = new HeadlessPlatformApp();
+            var w = new HeadlessWindow(new WindowDesc("ctx-invoke-src", new Size2(480, 400), 1f)); w.Show();
+            var probe = new ContextMenuProbe();
+            using var host = new AppHost(app, w, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            Right(w, CenterOf(host.Scene, probe.RowB)); RunN(host, 3);
+            bool rightSourceIsNode = probe.LastTrigger == ContextRequestTrigger.Pointer
+                                  && probe.LastNode == probe.RowB && probe.LastSource == probe.RowB;
+            probe.Service!.CloseAll(); RunN(host, 45);
+            Left(w, CenterOf(host.Scene, probe.MoreB)); RunN(host, 3);
+            bool invokeFields = probe.LastTrigger == ContextRequestTrigger.Invoke
+                             && probe.LastNode == probe.RowB && probe.LastSource == probe.MoreB;
+            Check("gate.ctx.invoke-source-field right-click: Source==Node==row; \"…\" click: Trigger=Invoke, Source=button, Node=row",
+                rightSourceIsNode && invokeFields,
+                $"right={rightSourceIsNode} invoke={invokeFields} trig={probe.LastTrigger} node={probe.LastNode.Raw.Index} src={probe.LastSource.Raw.Index}");
+        }
+
+        // gate.ctx.invoke-keyboard-focuses-first — Space on the FOCUSED "…" dispatches a Keyboard-trigger request
+        // (key-activation keeps WinUI TryGetPosition-false semantics), so the menu anchors to the button rect AND
+        // focuses its first item — unlike the pointer Invoke above.
+        {
+            using var app = new HeadlessPlatformApp();
+            var w = new HeadlessWindow(new WindowDesc("ctx-invoke-kbd", new Size2(480, 400), 1f)); w.Show();
+            var probe = new ContextMenuProbe();
+            using var host = new AppHost(app, w, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var btn = host.Scene.AbsoluteRect(probe.MoreB);
+            host.Input.SetFocus(probe.MoreB);
+            w.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Space));
+            w.QueueInput(new InputEvent(InputKind.KeyUp, default, 0, Keys.Space));
+            RunN(host, 4);
+            var mi = FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem);
+            var r = mi.IsNull ? default : host.Scene.AbsoluteRect(mi);
+            bool opened = probe.Service!.AnyOpen && !mi.IsNull && probe.LastTrigger == ContextRequestTrigger.Keyboard;
+            bool atButton = !mi.IsNull && Near(r.X, btn.X, 30f) && r.Y >= btn.Bottom - 2f;
+            bool firstFocused = !mi.IsNull && host.Input.Focused == mi;
+            Check("gate.ctx.invoke-keyboard-focuses-first Space on the focused \"…\" opens a Keyboard-trigger menu at the button rect, first item focused",
+                opened && atButton && firstFocused,
+                $"open={opened} trig={probe.LastTrigger} atButton={atButton} firstFocused={firstFocused}");
+        }
+
+        // gate.ctx.invoke-re-render-anchor — the stale-capture bug the prop kills: bump the probe Rev (row B re-renders,
+        // an OnRealized capture would have gone stale) then click the "…" — the menu anchors to the LIVE button rect
+        // (RequestContextFrom reads AbsoluteRect(source) at dispatch time; no captured node, no captured rect).
+        {
+            using var app = new HeadlessPlatformApp();
+            var w = new HeadlessWindow(new WindowDesc("ctx-invoke-rerender", new Size2(480, 400), 1f)); w.Show();
+            var probe = new ContextMenuProbe();
+            using var host = new AppHost(app, w, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            probe.Rev.Value = 1; RunN(host, 2);   // re-render row B (would stale a captured anchor)
+            probe.Rev.Value = 2; RunN(host, 2);
+            var btn = host.Scene.AbsoluteRect(probe.MoreB);
+            Left(w, CenterOf(host.Scene, probe.MoreB)); RunN(host, 3);
+            var mi = FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem);
+            var r = mi.IsNull ? default : host.Scene.AbsoluteRect(mi);
+            bool opened = probe.Service!.AnyOpen && probe.BuildsB == 1 && !mi.IsNull;
+            bool atButton = !mi.IsNull && Near(r.X, btn.X, 30f) && r.Y >= btn.Bottom - 2f && r.Y <= btn.Bottom + 30f;
+            Check("gate.ctx.invoke-re-render-anchor after row B re-renders, the \"…\" click still anchors the menu to the LIVE button rect",
+                opened && atButton, $"open={opened} first=({r.X:0.#},{r.Y:0.#}) btn=({btn.X:0.#},{btn.Bottom:0.#})");
+        }
+
+        // gate.ctx.invoke-disabled — the DISABLED "…" opens nothing: disabled nodes don't hit-test, so the click never
+        // reaches the ClickRequestsContext bit (and the fall-through row click is a plain click, not a context request).
+        {
+            using var app = new HeadlessPlatformApp();
+            var w = new HeadlessWindow(new WindowDesc("ctx-invoke-disabled", new Size2(480, 400), 1f)); w.Show();
+            var probe = new ContextMenuProbe();
+            using var host = new AppHost(app, w, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            Left(w, CenterOf(host.Scene, probe.MoreBDisabled)); RunN(host, 3);
+            bool noOpen = !probe.Service!.AnyOpen && probe.BuildsB == 0
+                       && FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem).IsNull;
+            Check("gate.ctx.invoke-disabled a disabled \"…\" opens nothing",
+                noOpen, $"anyOpen={probe.Service!.AnyOpen} buildsB={probe.BuildsB}");
+        }
+    }
+
+    // ── ThemedIcon layered vector icons (gate.icon.*): the SVG parser/rasterizer/geometry table (pure, portable), the
+    //    IconLayerEl→DrawIconMask record path, theme-live recolor with NO re-raster, 0-alloc phases 6–13, and the
+    //    mode/state (outline/disabled) role resolution. Everything here is Engine + Controls — TerraFX-free by construction.
+    static void IconChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+        static bool SameRgb(ColorF a, ColorF b) => Near(a.R, b.R, 0.02f) && Near(a.G, b.G, 0.02f) && Near(a.B, b.B, 0.02f);
+
+        // gate.icon.parse — the SVG path parser + geometry table: a straight-line polygon interns as an exact contour
+        // (1 contour / 3 points / view-box-normalized bounds); a cubic flattens to many points in one contour; malformed
+        // input never throws (clamp-not-crash, validation.md). Uses a LOCAL table so the shared RasterCount stays clean.
+        {
+            var tbl = new IconGeometryTable();
+            int tri = tbl.Register("M4 3 L13 8 L4 13 Z", 16f, 16f, evenOdd: false);
+            var (triC, triP) = tbl.ShapeOf(tri);
+            var tb = tbl.BoundsOf(tri);
+            bool triOk = triC == 1 && triP == 3
+                && Near(tb.MinX, 4f / 16f, 0.01f) && Near(tb.MaxX, 13f / 16f, 0.01f)
+                && Near(tb.MinY, 3f / 16f, 0.01f) && Near(tb.MaxY, 13f / 16f, 0.01f);
+
+            int cur = tbl.Register("M2 8 C2 2 14 2 14 8 Z", 16f, 16f, evenOdd: false);
+            var (curC, curP) = tbl.ShapeOf(cur);
+            var cb = tbl.BoundsOf(cur);
+            bool curveOk = curC == 1 && curP > 6 && cb.MinX >= 0f && cb.MaxX <= 1.001f && cb.MinY >= 0f && cb.MaxY <= 1.001f;
+
+            bool noThrow = true;
+            try { tbl.Register("M q z 9-.,,", 16f, 16f); tbl.Register("!!!garbage###", 16f, 16f); tbl.Register("A5 5 0 0", 16f, 16f); }
+            catch { noThrow = false; }
+
+            Check("gate.icon.parse polygon interns exact (1/3 + bounds), a cubic flattens to one many-point contour, malformed input never throws",
+                triOk && curveOk && noThrow, $"tri=({triC}/{triP}) curve=({curC}/{curP}) bounds=({tb.MinX:0.00}..{tb.MaxX:0.00}) noThrow={noThrow}");
+        }
+
+        // gate.icon.raster — the scanline fill: a full 0..1 square covers the whole buffer (center 255); two same-wound
+        // overlapping squares DIVERGE by fill rule — even-odd punches a hole (center ~0), nonzero keeps it filled (~255).
+        {
+            var sq = new float[] { 0f, 0f, 1f, 0f, 1f, 1f, 0f, 1f };
+            var starts1 = new[] { 0 }; var counts1 = new[] { 4 };
+            var full = new byte[16 * 16];
+            IconRaster.Rasterize(sq, starts1, counts1, evenOdd: false, 16, 16, full);
+            byte center = full[8 * 16 + 8];
+
+            // outer 0..1 + inner 0.25..0.75, IDENTICAL vertex order (same winding).
+            var two = new float[] { 0f, 0f, 1f, 0f, 1f, 1f, 0f, 1f,   0.25f, 0.25f, 0.75f, 0.25f, 0.75f, 0.75f, 0.25f, 0.75f };
+            var starts2 = new[] { 0, 4 }; var counts2 = new[] { 4, 4 };
+            var eo = new byte[16 * 16]; var nz = new byte[16 * 16];
+            IconRaster.Rasterize(two, starts2, counts2, evenOdd: true, 16, 16, eo);
+            IconRaster.Rasterize(two, starts2, counts2, evenOdd: false, 16, 16, nz);
+            byte eoCenter = eo[8 * 16 + 8]; byte nzCenter = nz[8 * 16 + 8];
+
+            Check("gate.icon.raster a 0..1 square fills solid (center 255); even-odd holes the overlap (center ~0) while nonzero fills it (~255)",
+                center == 255 && eoCenter < 40 && nzCenter > 200, $"full={center} eoCenter={eoCenter} nzCenter={nzCenter}");
+        }
+
+        // gate.icon.record — mounting a layered ThemedIcon ("Copy" = 4 role layers) emits 4 DrawIconMask ops, each with a
+        // live PathId and an opaque tint; the neutral Base + the accent highlight are present with their resolved tints.
+        {
+            using var app = new HeadlessPlatformApp();
+            var w = new HeadlessWindow(new WindowDesc("icon-record", new Size2(240, 240), 1f)); w.Show();
+            var dev = new HeadlessGpuDevice();
+            using var host = new AppHost(app, w, dev, fonts, strings, new IconProbe { Name = "Copy" });
+            host.RunFrame();
+            int n = dev.LastIconMasks.Count;
+            bool allLive = n > 0; bool base_ = false, accent = false;
+            foreach (var m in dev.LastIconMasks)
+            {
+                if (m.PathId == 0 || m.Tint.A <= 0f) allLive = false;
+                if (SameRgb(m.Tint, Tok.IconBase)) base_ = true;
+                if (SameRgb(m.Tint, Tok.AccentDefault)) accent = true;
+            }
+            Check("gate.icon.record a layered ThemedIcon emits one DrawIconMask per role layer with live PathIds + resolved Base/Accent tints",
+                n == 4 && allLive && base_ && accent, $"masks={n} allLive={allLive} base={base_} accent={accent}");
+        }
+
+        // gate.icon.retheme — an accent swap re-fires the bound Tint thunk → the accent layer's DrawIconMask tint changes
+        // in the stream, WITHOUT any re-raster (masks are colorless: IconGeometryTable.Shared.RasterCount is unchanged).
+        {
+            using var app = new HeadlessPlatformApp();
+            var w = new HeadlessWindow(new WindowDesc("icon-retheme", new Size2(240, 240), 1f)); w.Show();
+            var dev = new HeadlessGpuDevice();
+            using var host = new AppHost(app, w, dev, fonts, strings, new IconProbe { Name = "Play" });   // single accent layer
+            host.RunFrame();
+            ColorF tint0 = dev.LastIconMasks.Count > 0 ? dev.LastIconMasks[0].Tint : default;
+            long rc0 = IconGeometryTable.Shared.RasterCount;
+            try
+            {
+                Tok.SetAccent(ColorF.FromRgba(0xE0, 0x40, 0x40));   // red override
+                host.Reconciler.RethemeAll();
+                host.RunFrame();
+                ColorF tint1 = dev.LastIconMasks.Count > 0 ? dev.LastIconMasks[0].Tint : default;
+                long rc1 = IconGeometryTable.Shared.RasterCount;
+                bool changed = !SameRgb(tint0, tint1) && tint1.R > tint1.B + 0.1f;   // now reddish
+                bool noReRaster = rc1 == rc0;
+                Check("gate.icon.retheme an accent swap recolors the icon's DrawIconMask tint with NO re-raster (RasterCount unchanged)",
+                    changed && noReRaster, $"tint0=({tint0.R:0.00},{tint0.G:0.00},{tint0.B:0.00}) tint1=({tint1.R:0.00},{tint1.G:0.00},{tint1.B:0.00}) raster {rc0}->{rc1}");
+            }
+            finally { Tok.SetAccent(null); host.Reconciler.RethemeAll(); }   // restore global accent for later gates
+        }
+
+        // gate.theme.accent-ramp — an accent override resolves the accent FILL THEME-AWARE: AccentDefault is the WinUI
+        // Dark1 shade in LIGHT and the Light2 shade in DARK (the fix for the light-theme accent bug, where one flat color
+        // was reused in both themes). The exact shades come from AccentRamp.Derive. Restores theme + accent in finally.
+        {
+            var savedTheme = Tok.Theme;
+            try
+            {
+                var baseC = ColorF.FromRgba(0x00, 0x78, 0xD4);   // the WinUI default accent
+                var ramp = AccentRamp.Derive(baseC);
+                Tok.SetAccent(baseC);
+                Tok.Use(ThemeKind.Light); var light = Tok.AccentDefault;
+                Tok.Use(ThemeKind.Dark);  var dark  = Tok.AccentDefault;
+                bool lightIsDark1 = SameRgb(light, ramp.Dark1);
+                bool darkIsLight2 = SameRgb(dark, ramp.Light2);
+                bool differ = !SameRgb(light, dark);
+                Check("gate.theme.accent-ramp an accent override resolves AccentDefault theme-aware (Dark1 in light, Light2 in dark, distinct)",
+                    lightIsDark1 && darkIsLight2 && differ,
+                    $"light=({light.R:0.00},{light.G:0.00},{light.B:0.00}) dark=({dark.R:0.00},{dark.G:0.00},{dark.B:0.00}) dark1=({ramp.Dark1.R:0.00},{ramp.Dark1.G:0.00},{ramp.Dark1.B:0.00}) light2=({ramp.Light2.R:0.00},{ramp.Light2.G:0.00},{ramp.Light2.B:0.00})");
+            }
+            finally { Tok.SetAccent(null); Tok.Use(savedTheme); }
+        }
+
+        // gate.icon.alloc — icons on screen record as pure POD: 0 managed bytes in phases 6–13 across steady frames
+        // (warm frames skipped for JIT, per the flaky-alloc note).
+        {
+            using var app = new HeadlessPlatformApp();
+            var w = new HeadlessWindow(new WindowDesc("icon-alloc", new Size2(240, 240), 1f)); w.Show();
+            var dev = new HeadlessGpuDevice();
+            using var host = new AppHost(app, w, dev, fonts, strings, new IconProbe { Name = "Copy" });
+            long worst = 0;
+            for (int i = 0; i < 12; i++) { var f = host.RunFrame(); if (i >= 3 && f.HotPhaseAllocBytes > worst) worst = f.HotPhaseAllocBytes; }
+            Check("gate.icon.alloc icons on screen record with 0 managed alloc in phases 6–13 (steady frames)",
+                worst == 0, $"worstHotAlloc={worst}B");
+        }
+
+        // gate.icon.outline / gate.icon.disabled — the role resolution: Outline mode paints the Base (foreground) role
+        // and returns a single leaf; a disabled layer resolves to TextDisabled regardless of role, and a status recolor
+        // routes the Accent layer to the severity fill.
+        {
+            ColorF baseOn = ThemedIcon.ResolveRole(IconRole.Base, IconColorType.Normal, enabled: true, onAccent: false, 1f);
+            ColorF accOn = ThemedIcon.ResolveRole(IconRole.Accent, IconColorType.Normal, enabled: true, onAccent: false, 1f);
+            ColorF accOff = ThemedIcon.ResolveRole(IconRole.Accent, IconColorType.Normal, enabled: false, onAccent: false, 1f);
+            ColorF critical = ThemedIcon.ResolveRole(IconRole.Accent, IconColorType.Critical, enabled: true, onAccent: false, 1f);
+            var outline = ThemedIcon.Create("Folder", 16f, mode: IconMode.Outline);   // Folder ships a single Outline path
+            bool outlineOk = outline is IconLayerEl && SameRgb(baseOn, Tok.IconBase);
+            bool disabledOk = SameRgb(accOff, Tok.TextDisabled) && !SameRgb(accOn, accOff) && SameRgb(accOn, Tok.AccentDefault);
+            bool statusOk = SameRgb(critical, Tok.SystemFillCritical);
+            Check("gate.icon.outline/disabled Outline paints Base + returns a leaf; a disabled layer is TextDisabled; a status recolor routes Accent to the severity fill",
+                outlineOk && disabledOk && statusOk, $"outline={outline.GetType().Name} baseOk={SameRgb(baseOn, Tok.IconBase)} disabled={disabledOk} status={statusOk}");
         }
     }
 
@@ -10204,6 +11084,42 @@ static class Slice
                 $"taps={probe.Taps} pos=({probe.LastPos.X:0.#},{probe.LastPos.Y:0.#}) expected=({tapPt.X:0.#},{tapPt.Y:0.#}) subs={host.Scene.HasGestureSubs}");
         }
 
+        // gate.arena.swipe-phone-settle: the iOS-model swipe resolution statics. Signed velocity projection opens a
+        // fast short flick and a reversed flick cancels; the fresh-open threshold sits at 0.6×cluster; an open row
+        // holds positional wobble but closes on a deliberate >=31px/s inward flick; a FullSwipe (Execute) side tracks
+        // 1:1 to the full control width (no rubber band — the full-swipe zone needs the travel) while a Reveal side
+        // keeps the bounded elastic; the full-swipe arm threshold is CLUSTER-TIED (cluster + 80..140 slack, ceilinged
+        // by 0.5×controlW — ≈0.5×width on a phone-width row, no dead band past a small cluster on a desktop-width
+        // row) and the release commit uses the PROJECTED rest against the same threshold (a reversed flick cancels
+        // a positional arm).
+        {
+            float resisted = SwipeControlCore.ResistPastExtent(-168f, -68f, 68f);
+            bool boundedGive = resisted < -68f && resisted > -81.6f;   // give, but below the 20%-extent asymptote
+            bool fastShortOpens = SwipeControlCore.ShouldRestOpen(false, 30f, 68f, 600f);
+            bool reversedCancels = !SwipeControlCore.ShouldRestOpen(false, 80f, 68f, -600f);
+            bool freshAtSixTenths = SwipeControlCore.ShouldRestOpen(false, 41f, 68f, 0f)      // 0.6×68 = 40.8
+                                 && !SwipeControlCore.ShouldRestOpen(false, 40f, 68f, 0f);
+            bool openWobbleHolds = SwipeControlCore.ShouldRestOpen(true, 60f, 68f, 0f);
+            bool inwardFlickCloses = !SwipeControlCore.ShouldRestOpen(true, 60f, 68f, -40f);
+            bool halfwayCloses = !SwipeControlCore.ShouldRestOpen(true, 20f, 68f, 0f);
+            bool executeFreeTravel = SwipeControlCore.DragOffset(-290f, 0f, 76f, false, true, 300f) == -290f   // 1:1 past the cluster…
+                                  && SwipeControlCore.DragOffset(-400f, 0f, 76f, false, true, 300f) == -300f;  // …hard stop at controlW
+            float revealResist = SwipeControlCore.DragOffset(-168f, 0f, 68f, false, false, 300f);
+            bool revealBands = revealResist < -68f && revealResist > -81.6f;                   // Reveal keeps the elastic
+            float armPhone = SwipeControlCore.ArmThreshold(300f, 68f);     // 68 + clamp(150−68, 80, 140) = 150 ⇒ 0.5×W where the cluster is near half-width
+            float armDesktop = SwipeControlCore.ArmThreshold(900f, 90f);   // 90 + 140 slack cap = 230 ⇒ no dead band past a small cluster on a wide row
+            float armCramped = SwipeControlCore.ArmThreshold(300f, 160f);  // 160 + 80 slack floor = 240 ⇒ arming stays a distinct step past resting open
+            bool armThresholdTiers = armPhone == 150f && armDesktop == 230f && armCramped == 240f;
+            bool armFlips = !SwipeControlCore.IsArmed(149f, armPhone) && SwipeControlCore.IsArmed(150f, armPhone);
+            bool commitProjects = SwipeControlCore.ShouldCommit(SwipeControlCore.ProjectedDistance(80f, 600f), armPhone)
+                               && !SwipeControlCore.ShouldCommit(SwipeControlCore.ProjectedDistance(80f, -600f), armPhone);
+            float livePlate = SwipeControlCore.ExpandedPrimaryWidth(450f, 52f, 0f);
+            bool plateFollowsReveal = livePlate == 430f && livePlate < 900f;   // 20px insets; never jumps to row width
+            Check("gate.arena.swipe-phone-settle swipe resolution statics: signed flick projection (fast short opens, reversed cancels), 0.6x-cluster fresh-open threshold, halfway open-state hysteresis with the 31px/s inward-close floor, FullSwipe 1:1 travel to controlW vs Reveal bounded elastic, cluster-tied arm threshold (0.5xW phone / cluster+140 desktop / cluster+80 floor), projected-velocity commit, and armed primary width follows the live reveal",
+                boundedGive && fastShortOpens && reversedCancels && freshAtSixTenths && openWobbleHolds && inwardFlickCloses && halfwayCloses && executeFreeTravel && revealBands && armThresholdTiers && armFlips && commitProjects && plateFollowsReveal,
+                $"resisted={resisted:0.0} fastOpen={fastShortOpens} reverseCancel={reversedCancels} fresh0.6={freshAtSixTenths} wobble={openWobbleHolds} inwardClose={inwardFlickCloses} halfwayClose={halfwayCloses} execFree={executeFreeTravel} revealBand={revealResist:0.0} armTiers=({armPhone:0}/{armDesktop:0}/{armCramped:0}) armFlip={armFlips} commit={commitProjects} livePlate={livePlate:0}");
+        }
+
         // gate.arena.swipe-in-scroller: a SwipeControl row (right reveal actions, a DragYieldsToPan cross-axis Drag) at the
         // top of a VERTICAL scroller — the canonical §7A race. A HORIZONTAL touch swipe along the row reveals the actions
         // (the swipe's X-axis Drag eager-wins the arena; the scroller does NOT scroll), while a VERTICAL drag on the SAME
@@ -10248,6 +11164,136 @@ static class Slice
             Check("gate.arena.swipe-in-scroller a horizontal touch swipe on a SwipeControl row inside a vertical scroller reveals the row's actions (the cross-axis Drag eager-wins; the list holds) while a vertical drag on the same row scrolls the list (the scroll-axis Pan eager-wins) — deterministic via the axis-locked Drag-vs-Pan votes (DragYieldsToPan)",
                 swipeOpened && listHeld && listScrolled,
                 $"swipe(revealX={revealedX:0.#} listOffset={afterSwipe.OffsetY:0}->was {scrollBefore:0}) pan(offset={afterPan.OffsetY:0}->was {scrollBeforeV:0})");
+        }
+
+        // gate.arena.swipe-wrapped-interactive-row: the Phase-D §7A.1 route-walk composition. A SwipeControl wraps a
+        // CLICKABLE row (OnClick, no drag handler of its OWN) inside a vertical scroller — so the dispatcher must WALK
+        // from the hit row to the wrapper's DragYieldsToPan Drag member for the swipe to arm. (a) a horizontal touch
+        // swipe reveals the actions WITHOUT clicking the row; (b) a vertical drag scrolls the list; (c) a below-slop tap
+        // still clicks the row (the Tap wins the up-sweep — the enrolled swipe Drag never crossed slop); (d) a MOUSE
+        // press+horizontal-move never pans (mouse OnDrag is hit-node-only, the walk is touch-only, and the TouchOnly belt
+        // no-ops PanMove). This is the exact composition RowSwipe ships on queue/eager rows.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("swipe-wrapped", new Size2(380, 340), 1f)); window.Show();
+            var probe = new SwipeWrappedRowProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var scene = host.Scene;
+            var scroller = FindScrollable(scene, scene.Root);
+            scene.TryGetScroll(scroller, out var sc0);
+            var row = Child(scene, sc0.ContentNode, 0);
+            var rowCenter = CenterOf(scene, row);
+
+            // (c) below-slop tap ⇒ the inner ROW clicks (the walk enrolls a swipe Drag member, but below slop nothing
+            // eager-wins → the up-sweep resolves the row's Tap → OnClick). Done first, while the row is closed.
+            uint tt = s_touchClockMs;
+            window.QueueInput(Touch(InputKind.PointerDown, rowCenter, tt, 81));
+            host.RunFrame();
+            window.QueueInput(Touch(InputKind.PointerUp, new Point2(rowCenter.X + 2f, rowCenter.Y), tt + 16, 81));
+            host.RunFrame();
+            s_touchClockMs = tt + 1000;
+            bool tapClicked = probe.RowClicks == 1;
+
+            // (a) horizontal swipe (−X toward the right reveal) ⇒ the walk-found wrapper Drag eager-wins: content slides,
+            // the row does NOT click, the list holds. 150px of X travel >> the 4px slop and the 100px open threshold.
+            int clicksBeforeSwipe = probe.RowClicks;
+            float scrollBefore = sc0.OffsetY;
+            var swStart = new Point2(rowCenter.X + 120f, rowCenter.Y);
+            TouchGesture(window, host, swStart, new Point2(swStart.X - 150f, swStart.Y), 12, pointerId: 82, msPerStep: 16f);
+            for (int i = 0; i < 4; i++) host.RunFrame();   // let the open glide seed/advance
+            scene.TryGetScroll(scroller, out var afterSwipe);
+            float revealedX = MaxAbsTrackX(host, scroller);
+            bool swipeRevealed = revealedX > 1f;
+            bool noClickOnSwipe = probe.RowClicks == clicksBeforeSwipe;
+            bool listHeld = Near(afterSwipe.OffsetY, scrollBefore);
+
+            // A press elsewhere in the list dismisses the open row through the host-level pointer observer.
+            var outside = new Point2(20f, 300f);
+            window.QueueInput(new InputEvent(InputKind.PointerDown, outside, 0, 0));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, outside, 0, 0));
+            host.RunFrame();
+            for (int i = 0; i < 12; i++) host.RunFrame();
+            bool outsidePressClosed = MaxAbsTrackX(host, scroller) < 1f;
+
+            TouchGesture(window, host, swStart, new Point2(swStart.X - 150f, swStart.Y), 12, pointerId: 84, msPerStep: 16f);
+            for (int i = 0; i < 4; i++) host.RunFrame();
+
+            // Routed focus leaving the SwipeControl subtree closes it; no translated row may remain stranded after
+            // the user tabs/clicks elsewhere.
+            host.Input.SetFocus(NodeHandle.Null);
+            for (int i = 0; i < 12; i++) host.RunFrame();
+            bool focusLossClosed = MaxAbsTrackX(host, scroller) < 1f;
+
+            TouchGesture(window, host, swStart, new Point2(swStart.X - 150f, swStart.Y), 12, pointerId: 85, msPerStep: 16f);
+            for (int i = 0; i < 4; i++) host.RunFrame();
+            window.IsActive = false; host.RunFrame();
+            for (int i = 0; i < 12; i++) host.RunFrame();
+            bool windowBlurClosed = MaxAbsTrackX(host, scroller) < 1f;
+            window.IsActive = true; host.RunFrame();
+
+            // (b) fresh contact: a vertical drag scrolls the list (the scroll-axis Pan eager-wins; the open-row tap shield
+            // carries no drag handler, so the press still route-walks to the wrapper and the Pan competes normally).
+            var v2 = CenterOf(scene, Child(scene, sc0.ContentNode, 0));
+            float scrollBeforeV = afterSwipe.OffsetY;
+            TouchGesture(window, host, v2, new Point2(v2.X, v2.Y - 180f), 12, pointerId: 83, msPerStep: 16f);
+            scene.TryGetScroll(scroller, out var afterPan);
+            bool listScrolled = afterPan.OffsetY > scrollBeforeV + 100f;
+
+            // (d) MOUSE press + horizontal move on a FRESH host ⇒ NO pan: the content must not translate.
+            using var appM = new HeadlessPlatformApp();
+            var windowM = new HeadlessWindow(new WindowDesc("swipe-wrapped-mouse", new Size2(380, 340), 1f)); windowM.Show();
+            var probeM = new SwipeWrappedRowProbe();
+            using var hostM = new AppHost(appM, windowM, new HeadlessGpuDevice(), fonts, strings, probeM);
+            hostM.RunFrame();
+            var sceneM = hostM.Scene;
+            var scrollerM = FindScrollable(sceneM, sceneM.Root);
+            sceneM.TryGetScroll(scrollerM, out var scM);
+            var rcM = CenterOf(sceneM, Child(sceneM, scM.ContentNode, 0));
+            windowM.QueueInput(new InputEvent(InputKind.PointerDown, new Point2(rcM.X + 120f, rcM.Y), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 5_000));
+            hostM.RunFrame();
+            for (int i = 1; i <= 12; i++)
+            {
+                windowM.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(rcM.X + 120f - i * 12f, rcM.Y), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 5_000 + (uint)i * 16));
+                hostM.RunFrame();
+            }
+            windowM.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(rcM.X - 30f, rcM.Y), 0, 0, 0f, KeyModifiers.None, PointerKind.Mouse, false, 5_000 + 13 * 16));
+            hostM.RunFrame();
+            float mouseTrackX = MaxAbsTrackX(hostM, scrollerM);
+            bool mouseNoSwipe = mouseTrackX < 1f;
+
+            Check("gate.arena.swipe-wrapped-interactive-row a SwipeControl wrapping a CLICKABLE row (no drag handler of its own) inside a vertical scroller route-walks to the wrapper's Drag member: a horizontal touch swipe reveals the actions without clicking the row, a vertical drag scrolls, a below-slop tap still clicks the row, and a mouse press+move never pans (touch-only arena + the TouchOnly belt)",
+                tapClicked && swipeRevealed && noClickOnSwipe && listHeld && outsidePressClosed && focusLossClosed && windowBlurClosed && listScrolled && mouseNoSwipe,
+                $"tap(click={probe.RowClicks}) swipe(revealX={revealedX:0.#} click+={probe.RowClicks - clicksBeforeSwipe} listHeld={listHeld} outside={outsidePressClosed} focus={focusLossClosed} blur={windowBlurClosed}) pan(off={afterPan.OffsetY:0}->was {scrollBeforeV:0}) mouseTrackX={mouseTrackX:0.##}");
+        }
+
+        // gate.arena.swipe-recycle-reset: the bound-slot RECYCLE contract. An OPEN SwipeControl row snap-closes
+        // (TranslateX → 0, NO glide) when its ResetKey signal bumps — a scrolled-off slot rebinding to a new track must
+        // present it CLOSED the same frame. Open the row by a horizontal swipe, bump the key, assert the pan zeroed.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("swipe-reset", new Size2(380, 340), 1f)); window.Show();
+            var probe = new SwipeResetProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var scene = host.Scene;
+            var scroller = FindScrollable(scene, scene.Root);
+            scene.TryGetScroll(scroller, out var sc0);
+            var rc = CenterOf(scene, Child(scene, sc0.ContentNode, 0));
+            var swStart = new Point2(rc.X + 120f, rc.Y);
+            TouchGesture(window, host, swStart, new Point2(swStart.X - 150f, swStart.Y), 12, pointerId: 84, msPerStep: 16f);
+            for (int i = 0; i < 4; i++) host.RunFrame();
+            float openX = MaxAbsTrackX(host, scroller);
+            bool opened = openX > 1f;
+
+            probe.ResetKey.Value = probe.ResetKey.Peek() + 1;   // recycle bump → the snap-close effect fires
+            for (int i = 0; i < 4; i++) host.RunFrame();
+            float afterReset = MaxAbsTrackX(host, scroller);
+            bool snappedClosed = afterReset < 1f;
+
+            Check("gate.arena.swipe-recycle-reset an open SwipeControl row snap-closes (TranslateX → 0, no glide) when its ResetKey signal bumps — the bound-slot recycle contract (a reused slot presents the new track closed the same frame)",
+                opened && snappedClosed,
+                $"openX={openX:0.#} afterResetBump={afterReset:0.##}");
         }
 
         // gate.arena.flipview-flick-velocity: a FlipView (UseTouchAnimationsForAllNavigation) commits on REAL release
@@ -10332,7 +11378,10 @@ static class Slice
             // Offsets may differ per dt — assert at least one pair DIFFERS so the sweep is genuinely varying the integrator
             // (a degenerate "all equal" would make the trace-identity vacuous). All three landing identically would still
             // pass trace-identity, but the differing-offset assertion proves the integrator actually ran at three rates.
-            bool offsetsVary = !Near(off833, off333, 0.5f) || !Near(off833, off1667, 0.5f);
+            // The exact coast integral is intentionally almost frame-rate invariant; only the discrete settle cutoff
+            // leaves a small timestep-dependent remainder. With the faster WinUI-like decay that remainder is subpixel,
+            // so use a diagnostic epsilon rather than a visible-distance tolerance.
+            bool offsetsVary = !Near(off833, off333, 0.01f) || !Near(off833, off1667, 0.01f);
             if (!traceIdentical) Console.WriteLine($"    [dt-sweep diff]\n8.33:\n{res833}16.67:\n{res1667}33.3:\n{res333}");
             Check("gate.arena.determinism.integrator-sweep the same pan+fling target replayed at dt ∈ {8.33,16.67,33.3}ms produces an IDENTICAL arena resolution trace (winner + sweep order) while the fling settles at dt-dependent offsets — the validation.md:1145 integrator-determinism sweep (arbitration is on the event clock, not the animation clock)",
                 traceIdentical && nonEmptyTrace && offsetsVary,
@@ -12595,9 +13644,13 @@ static class Slice
         // on the focused node at its centre.
         {
             var scene = new SceneStore();
-            int ctx = 0; Point2 ctxAt = default;
+            int ctx = 0; Point2 ctxAt = default; ContextRequestTrigger ctxTrigger = default;
             new TreeReconciler(scene, strings).ReconcileRoot(
-                new BoxEl { Width = 60, Height = 30, OnClick = () => { }, OnContextRequested = p => { ctx++; ctxAt = p; } }, null);
+                new BoxEl
+                {
+                    Width = 60, Height = 30, OnClick = () => { },
+                    OnContextRequested = e => { ctx++; ctxAt = e.Position; ctxTrigger = e.Trigger; },
+                }, null);
             new FlexLayout(scene, fonts).Run(scene.Root);
             var disp = new InputDispatcher(scene);
             var p = new Point2(20, 10);
@@ -12606,13 +13659,77 @@ static class Slice
             bool leftSilent = ctx == 0;
             disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, p, 1, 0) });
             disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, p, 1, 0) });
-            bool rightFired = ctx == 1 && Near(ctxAt.X, 20) && Near(ctxAt.Y, 10);
+            bool rightFired = ctx == 1 && ctxTrigger == ContextRequestTrigger.Pointer
+                && Near(ctxAt.X, 20) && Near(ctxAt.Y, 10);
             disp.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Apps) });   // focused by the left click
-            bool appsFired = ctx == 2 && Near(ctxAt.X, 30) && Near(ctxAt.Y, 15);             // node centre
+            bool appsFired = ctx == 2 && ctxTrigger == ContextRequestTrigger.Keyboard
+                && Near(ctxAt.X, 30) && Near(ctxAt.Y, 15);                                  // node centre
             Check("E2.f right-click release fires OnContextRequested (left stays silent)", leftSilent && rightFired,
                 $"left={leftSilent} right={rightFired} at=({ctxAt.X:0.#},{ctxAt.Y:0.#})");
             Check("E2.g VK_APPS requests the context menu at the focused node's centre", appsFired,
                 $"ctx={ctx} at=({ctxAt.X:0.#},{ctxAt.Y:0.#})");
+        }
+
+        // E2.m — BoxEl.ClickRequestsContext (input-a11y §6.5.1): the declarative "this button opens the ancestor's
+        // context menu". (a) the prop reconciles to ClickBit|ClickRequestsContextBit with a NULL click-handler column
+        // (+ the focusable implication); (b) a left click on the button fires the NEAREST OnContextRequested as an
+        // Invoke request (Source = the button, Node = the row) and fires NO click; (c) toggling the prop off clears
+        // bit 16 without stomping neighbor bits — the R1 regression guard for the HandlerMask ushort→uint widening
+        // (every no-handler clear-site runs AFTER the bit is set in the same reconcile, so a single surviving
+        // ushort-truncated `&=` would stomp bit 16 before (a) ever reads it).
+        {
+            var scene = new SceneStore();
+            var recon = new TreeReconciler(scene, strings);
+            int ctx = 0, keys = 0;
+            Point2 ctxAt = default; ContextRequestTrigger ctxTrigger = default;
+            NodeHandle ctxNode = default, ctxSource = default;
+            BoxEl Tree(bool crc) => new BoxEl
+            {
+                Key = "row", Width = 100, Height = 30, Direction = 0,
+                OnContextRequested = e => { ctx++; ctxAt = e.Position; ctxTrigger = e.Trigger; ctxNode = e.Node; ctxSource = e.Source; },
+                Children =
+                [
+                    new BoxEl { Key = "spacer", Width = 40, Height = 30 },
+                    // OnKeyDown + Cursor ride along as NEIGHBOR bits (KeyBit, CursorBit) for the (c) stomp check.
+                    new BoxEl { Key = "more", Width = 20, Height = 20, OnKeyDown = _ => keys++, Cursor = CursorId.Hand, ClickRequestsContext = crc },
+                ],
+            };
+            var t1 = Tree(true);
+            recon.ReconcileRoot(t1, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var row = scene.Root;
+            var more = Child(scene, row, 1);
+            ref readonly var ii1 = ref scene.Interaction(more);
+            bool bitsSet = (ii1.HandlerMask & InteractionInfo.ClickBit) != 0
+                        && (ii1.HandlerMask & InteractionInfo.ClickRequestsContextBit) != 0;
+            bool nullClick = scene.GetClickHandler(more) is null;
+            bool focusable = ii1.Focusable;
+            Check("E2.m.a ClickRequestsContext reconciles to ClickBit|ClickRequestsContextBit with a null click handler (+ focusable)",
+                bitsSet && nullClick && focusable, $"mask={ii1.HandlerMask:x} nullClick={nullClick} focusable={focusable}");
+
+            var disp = new InputDispatcher(scene);
+            var br = scene.AbsoluteRect(more);
+            var pt = new Point2(br.X + br.W / 2f, br.Y + br.H / 2f);
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, pt, 0, 0) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, pt, 0, 0) });
+            bool invoked = ctx == 1 && ctxTrigger == ContextRequestTrigger.Invoke
+                        && ctxNode == row && ctxSource == more
+                        && Near(ctxAt.X, pt.X) && Near(ctxAt.Y, pt.Y);   // the button centre, row-local (row at origin)
+            Check("E2.m.b a left click on the button raises the nearest OnContextRequested as Invoke (Source=button, Node=row), no click",
+                invoked, $"ctx={ctx} trig={ctxTrigger} node={ctxNode.Raw.Index}/{row.Raw.Index} src={ctxSource.Raw.Index}/{more.Raw.Index} at=({ctxAt.X:0.#},{ctxAt.Y:0.#})");
+
+            var t2 = Tree(false);
+            recon.ReconcileRoot(t2, t1);
+            ref readonly var ii2 = ref scene.Interaction(more);
+            bool bit16Cleared = (ii2.HandlerMask & InteractionInfo.ClickRequestsContextBit) == 0
+                             && (ii2.HandlerMask & InteractionInfo.ClickBit) == 0;   // no OnClick either → ClickBit clears too
+            bool neighborsIntact = (ii2.HandlerMask & InteractionInfo.KeyBit) != 0
+                                && (ii2.HandlerMask & InteractionInfo.CursorBit) != 0;
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, pt, 0, 0) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, pt, 0, 0) });
+            bool inert = ctx == 1;   // the prop off → the click no longer re-enters the context funnel
+            Check("E2.m.c toggling the prop off clears bit 16 without stomping neighbor bits (the uint HandlerMask R1 guard)",
+                bit16Cleared && neighborsIntact && inert, $"mask={ii2.HandlerMask:x} inert={inert}");
         }
 
         // E2.h/i — a Ctrl+K accelerator and an Alt+S access-key chord invoke their owner from anywhere.
@@ -15254,9 +16371,38 @@ static class Slice
         Settle();
         bool invoked = root.Selected == 7 && FindRole(host.Scene, host.Scene.Root, AutomationRole.MenuItem).IsNull;
 
+        // Caller-owned overlays (ToolTip) must not create an input-blocking scrim. The click reaches the page beneath
+        // while the bubble stays open; a light-dismiss flyout still uses the blocking path above.
+        int bg0 = root.BackgroundClicks;
+        var passive = svc.Open(() => root.Anchor,
+            () => new BoxEl { Width = 64, Height = 28, Fill = Tok.FillCardDefault, Children = [Ui.Text("tip")] },
+            FlyoutPlacement.BottomLeft,
+            new PopupOptions(DismissBehavior: DismissBehavior.None, Chrome: PopupChrome.Raw));
+        host.RunFrame();
+        var blank = new Point2(190, 110);
+        window.QueueInput(new InputEvent(InputKind.PointerDown, blank, 0, 0));
+        window.QueueInput(new InputEvent(InputKind.PointerUp, blank, 0, 0));
+        host.RunFrame();
+        bool passiveDoesNotBlock = passive.IsOpen && root.BackgroundClicks == bg0 + 1;
+        passive.Close(); Settle();
+
+        // Global focus exit: unhandled Escape clears keyboard focus, and a non-focusable page click clears it too.
+        var ac = CenterOf(host.Scene, root.Anchor);
+        window.QueueInput(new InputEvent(InputKind.PointerDown, ac, 0, 0));
+        window.QueueInput(new InputEvent(InputKind.PointerUp, ac, 0, 0));
+        host.RunFrame();
+        bool focused = host.Input.Focused == root.Anchor;
+        window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Escape)); host.RunFrame();
+        bool escapeClears = host.Input.Focused.IsNull;
+        window.QueueInput(new InputEvent(InputKind.PointerDown, ac, 0, 0));
+        window.QueueInput(new InputEvent(InputKind.PointerUp, ac, 0, 0)); host.RunFrame();
+        window.QueueInput(new InputEvent(InputKind.PointerDown, blank, 0, 0));
+        window.QueueInput(new InputEvent(InputKind.PointerUp, blank, 0, 0)); host.RunFrame();
+        bool clickAwayClears = host.Input.Focused.IsNull;
+
         Check("64. overlay: anchored flyout opens, Escape + light-dismiss close, item invokes",
-            opened && escClosed && lightDismissed && invoked,
-            $"open={opened} esc={escClosed} dismiss={lightDismissed} invoke={invoked}");
+            opened && escClosed && lightDismissed && invoked && passiveDoesNotBlock && focused && escapeClears && clickAwayClears,
+            $"open={opened} esc={escClosed} dismiss={lightDismissed} invoke={invoked} passiveInput={passiveDoesNotBlock} focus={focused} escBlur={escapeClears} clickBlur={clickAwayClears}");
     }
 
     static void OverlayAnimationChecks(StringTable strings)
@@ -15722,8 +16868,9 @@ static class Slice
             var svc = root.Service!;
             var anchorRect = host.Scene.AbsoluteRect(root.Anchor);
 
+            var popupBody = new PopupExitProbeBody();
             var hWin = svc.Open(() => root.Anchor,
-                () => new BoxEl { Width = 180, Height = 80, Children = [new TextEl("popup-window-body") { Size = 12f }] },
+                () => Embed.Comp(() => popupBody),
                 FlyoutPlacement.BottomLeft, new PopupOptions { ConstrainToRootBounds = false });
             host.RunFrame();
 
@@ -15750,16 +16897,27 @@ static class Slice
             if (slot is not null)
                 scratch.SubmitDrawList(slot.DrawList.Bytes, slot.DrawList.SortKeys,
                     new FrameInfo(new Size2(slot.BoundsDip.W, slot.BoundsDip.H), 1f, default));
-            bool routed = HasGlyph(scratch, strings, "popup-window-body");
+            bool routed = HasGlyph(scratch, strings, "popup-exit-old");
             bool noEngineAcrylic = scratch.LastLayers.Count == 0;   // OS-backed menu acrylic: no in-engine PushLayer blur.
             bool reorigined = false;
             foreach (var g in scratch.LastGlyphs)
-                if (strings.Resolve(g.Text) == "popup-window-body")
+                if (strings.Resolve(g.Text) == "popup-exit-old")
                     reorigined = slot is not null && g.Bounds.X >= -1f && g.Bounds.Y >= -1f
                         && g.Bounds.Right <= slot.BoundsDip.W + 1f && g.Bounds.Bottom <= slot.BoundsDip.H + 1f;
-            bool mainSkips = !HasGlyph(device, strings, "popup-window-body") && HasGlyph(device, strings, "anchor")
-                && !FindTextNode(host.Scene, strings, host.Scene.Root, "popup-window-body").IsNull;   // scene keeps it (hit-test)
+            bool mainSkips = !HasGlyph(device, strings, "popup-exit-old") && HasGlyph(device, strings, "anchor")
+                && !FindTextNode(host.Scene, strings, host.Scene.Root, "popup-exit-old").IsNull;   // scene keeps it (hit-test)
             bool presented = slot?.Swapchain is HeadlessSwapchain sc && sc.PresentCount >= 1;
+
+            // Swap a keyed row while it is hosted in the popup window. The old row is now an exit orphan: it must remain
+            // in this popup DrawList (behind the incoming row) and must not leak into the main-window DrawList.
+            popupBody.Swap.Value = true;
+            host.RunFrame();
+            if (slot is not null)
+                scratch.SubmitDrawList(slot.DrawList.Bytes, slot.DrawList.SortKeys,
+                    new FrameInfo(new Size2(slot.BoundsDip.W, slot.BoundsDip.H), 1f, default));
+            bool popupExitRouted = HasGlyph(scratch, strings, "popup-exit-old")
+                && HasGlyph(scratch, strings, "popup-exit-new")
+                && !HasGlyph(device, strings, "popup-exit-old");
 
             // Default (ConstrainToRootBounds = true): in-window popup — no window lease, content in the MAIN DrawList.
             var hIn = svc.Open(() => root.Anchor,
@@ -15789,8 +16947,8 @@ static class Slice
 
             Check("e4popup.3 windowed popup: PAL lease + own DrawList/swapchain, main record skips the subtree; default + disabled stay in-window",
                 leased && shown && placed && osBackdrop && routed && noEngineAcrylic && reorigined && mainSkips && presented
-                && defaultInWindow && keptWhileFading && released && fallback,
-                $"leased={leased} shown={shown} placed={placed} os={osBackdrop} routed={routed} noAcrylic={noEngineAcrylic} reorig={reorigined} skip={mainSkips} present={presented} def={defaultInWindow} kept={keptWhileFading} rel={released} fb={fallback}");
+                && popupExitRouted && defaultInWindow && keptWhileFading && released && fallback,
+                $"leased={leased} shown={shown} placed={placed} os={osBackdrop} routed={routed} noAcrylic={noEngineAcrylic} reorig={reorigined} skip={mainSkips} exitRoute={popupExitRouted} present={presented} def={defaultInWindow} kept={keptWhileFading} rel={released} fb={fallback}");
         }
 
         // e4popup.4 — the GetWorkArea seam through the host: the work-area query lands at the anchor's centre in
@@ -18328,12 +19486,14 @@ static class Slice
             var c1 = CenterOf(host.Scene, r1);
             window.QueueInput(new InputEvent(InputKind.PointerDown, c1, 0, 0));
             host.RunFrame();
+            bool dragPressDeferred = !model.IsSelected(1) && clickCount == 0;
             window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(c1.X, c1.Y - 50f), 0, 0));   // >4px up → promote, cross row-0 mid
             host.RunFrame();
             bool active = host.HasActiveWork;
             window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(c1.X, c1.Y - 50f), 0, 0));
             host.RunFrame();
             bool dragReordered = reorderFrom == 1 && reorderTo == 0;  // the drag committed a move, not a tap-invoke
+            bool dragDidNotInvoke = !model.IsSelected(1) && clickCount == 0;
 
             // (b) PLAIN click on row 2 (no threshold cross): ItemClick fires + the row selects (press-edge), NO reorder.
             int reorders0From = reorderFrom;
@@ -18341,12 +19501,14 @@ static class Slice
             var c2 = CenterOf(host.Scene, r2);
             int clicks1 = clickCount;
             window.QueueInput(new InputEvent(InputKind.PointerDown, c2, 0, 0));
+            host.RunFrame();
+            bool clickPressDeferred = !model.IsSelected(2) && clickCount == clicks1;
             window.QueueInput(new InputEvent(InputKind.PointerUp, c2, 0, 0));
             host.RunFrame();
             bool plainClicks = clickCount == clicks1 + 1 && clicked == 2 && model.IsSelected(2) && reorderFrom == reorders0From;
-            Check("cp2.invokerelease a promoted drag commits a reorder (drag gesture); a plain release selects + raises ItemClick + no reorder (press-edge select divergence noted)",
-                active && dragReordered && plainClicks,
-                $"active={active} dragReorder=({reorderFrom}->{reorderTo}) plain={plainClicks} clicked={clicked} sel2={model.IsSelected(2)}");
+            Check("cp2.invokerelease pointer-down defers selection; a promoted drag never selects/invokes; only a clean release selects + raises ItemClick",
+                dragPressDeferred && dragDidNotInvoke && clickPressDeferred && active && dragReordered && plainClicks,
+                $"dragDeferred={dragPressDeferred} dragSilent={dragDidNotInvoke} clickDeferred={clickPressDeferred} active={active} dragReorder=({reorderFrom}->{reorderTo}) plain={plainClicks} clicked={clicked} sel2={model.IsSelected(2)}");
         }
 
         // ── C5 — cp2.scrollslot: under a SCROLLED viewport (FirstRealized>0) the displacement seed lands on the
@@ -21173,6 +22335,27 @@ static class Slice
         Check("M2. marquee scrolls when its reactive title grows AFTER mount (OnBoundsChanged edge-triggers on the real arranged-rect change, not the Measure-corrupted Bounds delta)",
               maxTrack2 > 1f, $"maxAbsTrackX={maxTrack2:0.##}");
 
+        // M2b: the real player-bar shape sits idle before metadata arrives and uses an external PauseOnHover gate. The
+        // settled idle track must not strand the later overflowing title at x=0; it must seed a fresh looping track
+        // without needing a window/layout change.
+        var probe2b = new PlayerBarMarqueeProbe();
+        var window2b = new HeadlessWindow(new WindowDesc("marquee-playerbar", new Size2(480, 120), 1f)); window2b.Show();
+        using var host2b = new AppHost(app, window2b, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe2b);
+        for (int i = 0; i < 30; i++) host2b.RunFrame(); // >200ms: let the initial non-looping 0->0 track settle and retire
+        probe2b.Title.Value = "EYES CLOSED (with ZAYN)";
+        float maxTrack2b = 0f;
+        int wakeFrames2b = 0;
+        while (wakeFrames2b++ < 60 && host2b.HasActiveWork)
+        {
+            host2b.RunFrame();
+            maxTrack2b = MathF.Max(maxTrack2b, MaxAbsTrackX(host2b, host2b.Scene.Root));
+        }
+        ClickNode(host2b, window2b, probe2b.TitleNode);
+        host2b.RunFrame();
+        Check("M2b. a production marquee moves perceptibly and its title root stays clickable under a context-menu ancestor",
+              maxTrack2b > 8f && probe2b.Clicks == 1,
+              $"maxAbsTrackX={maxTrack2b:0.##} wakeFrames={wakeFrames2b - 1} clicks={probe2b.Clicks}");
+
         // M3: scroll-aware edge fade — at translateX=0 fade right only; mid-scroll left band appears; scrollX must track motion.
         const float fadeCw = 150f, fadeTw = 485f, fadeBand = 24f;
         var fadeStyle = new Marquee.Style { FontSize = 14f, StartDelayMs = 0f, Speed = 200f, Mode = Marquee.ScrollMode.PingPong, Trigger = Marquee.TriggerMode.Always };
@@ -21512,6 +22695,8 @@ static class Slice
         TouchpadFeelChecks(strings);   // Touchpad scroll feel: OS-tail packet drive (no duplicate inertia), softened band, deterministic settle, zero alloc, ownership/deadzone gates
         Touch4SipChecks(strings);      // Phase 4 SIP (gate.touch4.sip.*): touch focus shows the touch keyboard once (mouse focus doesn't), focus loss hides, a Showing OccludedRect reflows the caret into view, 0-alloc steady
         Touch4HoldWakeChecks(strings); // Phase 4 Hold EXECUTION + stationary-hold wake (gate.touch4.*): touch long-press fires the context flyout, the GestureHold wake bit keeps frames coming for a motionless held finger then clears, RatingControl touch tap-to-rate
+        ContextMenuChecks(strings);    // ContextMenu attach layer (gate.ctx.*): open-at-pointer, lazy items, empty/disabled no-open, keyboard-at-node + Esc focus restore, dismiss-reopen-one-gesture (the scrim redispatch), dismiss-only-on-empty, race open/close/open, scrim blocks wheel, touch long-press, re-render-anchor + the ClickRequestsContext invoke set (gate.ctx.invoke-*): anchors-source, source-field, keyboard-focuses-first, re-render-anchor, disabled
+        IconChecks(strings);           // ThemedIcon layered vector icons (gate.icon.*): parse, raster (even-odd vs nonzero), record (IconLayerEl→DrawIconMask), retheme (recolor, no re-raster), 0-alloc phases 6–13, outline/disabled/status role resolution
         ImageCacheChecks();
         ImageElChecks(strings);
         ImageFitChecks(strings);

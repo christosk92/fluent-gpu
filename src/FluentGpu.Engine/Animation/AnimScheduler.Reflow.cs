@@ -26,6 +26,16 @@ public sealed partial class AnimEngine
     /// <summary>Containers whose SizeMode.Reflow child orphaned this frame — the host eases them to the without-child size.</summary>
     public List<(NodeHandle node, float fromW, float fromH, LayoutTransition spec)> PendingExitReflow { get; } = new();
 
+    /// <summary>Absolute (world/DIP) rects a structural-track CANCEL vacated this frame — the LAST-PRESENTED extent of a
+    /// node whose in-flight FLIP/Reveal was snapped away (SnapStructuralToLayout / CancelStructuralAll). A cancel resets
+    /// LocalTransform→identity and PresentedW/H→NaN, so the node next draws at its FINAL bounds only; the band it vacated
+    /// (last-presented rect minus final bounds) is never re-touched by any node, so the region-aware acrylic/backdrop
+    /// damage cache would keep last frame's pixels there — a persistent dark "ghost rail" beside the content card. The
+    /// recorder unions these into the frame damage (SceneRecorder.Record) so the vacated band repaints, then the host
+    /// drains this list. Pre-sized + drained per recorded frame ⇒ no steady-state alloc; a cancel is rare (drag/resize)
+    /// so even the Add is off the zero-alloc hot phases (6–13).</summary>
+    public List<RectF> PendingStructuralDamage { get; } = new(64);
+
     private bool _reflowWrote;
     /// <summary>True if any reflow track wrote LayoutInput this tick (advance or settle restore) — the host runs a
     /// boundary-scoped re-solve before record. Self-clearing.</summary>
@@ -167,6 +177,8 @@ public sealed partial class AnimEngine
         int idx = (int)node.Raw.Index;
         bool live = _scene.IsLive(node);
         bool resetTransform = false;
+        bool damaged = false;
+        int freed = 0;
         int s = _slab.HeadOnNode(idx);
         while (s >= 0)
         {
@@ -174,13 +186,21 @@ public sealed partial class AnimEngine
             AnimChannel ch = _slab.At(s).Channel;
             if (IsStructuralChannel(ch))
             {
+                // Ghost-band damage (Fix 1): the FIRST structural row we're about to cancel means this node was drawing
+                // at a translated/reveal-inflated extent LAST frame. Snapshot that last-presented rect NOW — before the
+                // SettleRestore below wipes PresentedW/H→NaN and before the LocalTransform→identity reset at the tail —
+                // so the next record damages (and repaints) the band the node vacates. Without this the damage-driven
+                // acrylic/backdrop cache keeps last frame's pixels in the vacated band → a persistent dark ghost rail.
+                if (live && !damaged) { CaptureLastPresentedDamage(node); damaged = true; }
                 if (ch is AnimChannel.TranslateX or AnimChannel.TranslateY or AnimChannel.ScaleX or AnimChannel.ScaleY)
                     resetTransform = true;
                 SettleRestore(s);   // size/reflow: restore declared LayoutInput + sentinels; transform channels: no-op
                 FreeSlot(s);
+                freed++;
             }
             s = next;
         }
+        if (s_motionDiag) Console.Error.WriteLine($"[motion-diag]   SnapStructuralToLayout node={idx} freedStructuralRows={freed} live={live}");
         // The freed FLIP rows no longer re-compose, so the last-written translate/scale would persist in NodePaint —
         // reset to identity (rotation, if any live row still drives it, re-folds from FromPaint next tick).
         if (resetTransform && live)
@@ -191,12 +211,31 @@ public sealed partial class AnimEngine
         }
     }
 
+    /// <summary>Queue the node's LAST-PRESENTED absolute rect as pending frame damage (see
+    /// <see cref="PendingStructuralDamage"/>). Must be called BEFORE the row's SettleRestore/transform-reset, while the
+    /// paint still holds the mid-anim state. <see cref="SceneStore.AbsoluteRect"/> already sums the node's OWN
+    /// LocalTransform.Dx/Dy up the chain (it is the same origin SceneRecorder draws the node at — the ghost-band walk
+    /// subtracts it back out), so we take it directly and do NOT re-add the translate; only the presented EXTENT
+    /// (PresentedW/H, which may exceed model bounds mid-shrink) is substituted, matching the recorder's presented rect.
+    /// Space matches the recorder's world-space float damage (walk starts at identity; DPI is applied at the RHI leaf),
+    /// so no DIP→device conversion is needed here.</summary>
+    private void CaptureLastPresentedDamage(NodeHandle node)
+    {
+        RectF abs = _scene.AbsoluteRect(node);   // presented absolute top-left (own LocalTransform already folded in)
+        ref readonly NodePaint p = ref _scene.Paint(node);
+        float pw = float.IsNaN(p.PresentedW) ? abs.W : p.PresentedW;
+        float ph = float.IsNaN(p.PresentedH) ? abs.H : p.PresentedH;
+        const float pad = 1.5f;   // AA/subpixel halo (the shrinking edge is not pixel-snapped mid-anim)
+        PendingStructuralDamage.Add(new RectF(abs.X - pad, abs.Y - pad, pw + 2f * pad, ph + 2f * pad));
+    }
+
     /// <summary>Resize-frame bulk snap: cancel every FLIP node's in-flight structural rows and land it on the geometry
     /// the imminent (re)layout solves (<see cref="SnapStructuralToLayout"/> per node). Zero-alloc — walks the caller's
     /// FLIP-node registry (SceneStore.BoundsAnimatedNodes) and, per node, the POD row chain. Freeing anim rows never
     /// mutates the passed list (it indexes SceneStore nodes, not slab slots), so the walk is stable across the frees.</summary>
     public void CancelStructuralAll(List<NodeHandle> flipNodes)
     {
+        if (s_motionDiag) Console.Error.WriteLine($"[motion-diag] CancelStructuralAll flipNodes={flipNodes.Count}");
         for (int i = 0; i < flipNodes.Count; i++)
             SnapStructuralToLayout(flipNodes[i]);
     }

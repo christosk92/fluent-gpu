@@ -29,6 +29,8 @@ sealed class HomePage : Component
         var go     = UseContext(HistoryStore.NavCtx);
         var bridge = UseContext(PlaybackBridge.Slot);
         var preview = UseContext(NavPreviewStore.Slot);    // pre-load: stash the card's known cover/title for the detail page
+        var acts = UseContext(ActionServices.Slot);        // card context menus (Menus.Card via CardAttach)
+        var menuOverlay = UseContext(Overlay.Service);
         if (svc is null) return new BoxEl { Grow = 1f };
 
         // Re-fetch the home when the library changes (e.g. the live-session playlist-header hydration lands) so playlist
@@ -96,7 +98,8 @@ sealed class HomePage : Component
                 accent: c.Accent is { } a ? WaveePalette.Lift(WaveePalette.ToColor(a)) : null,
                 diagnostics: url is { Length: > 0 }
                     ? Embed.Comp(() => new HomeQuickImageProbe(url, c.Uri, c.Title, section, index)).Skeletonized(false)
-                    : null);
+                    : null,
+                menu: Menus.CardAttach(acts, menuOverlay, c.Uri, c.Title));
             return tile is BoxEl box ? box with { Key = "home-quick:" + c.Uri, Animate = MotionRecipes.CardRefit } : tile;
         }
 
@@ -117,7 +120,8 @@ sealed class HomePage : Component
                 // poorly constrained hover overlay).
                 return MediaCard.Shelf(c.Image, c.Title, c.Subtitle ?? "", c.Uri,
                     () => NavCard(c), () => PlayCard(c), w,
-                    circular: c.Kind == HomeCardKind.Artist, onNavUri: NavUri);
+                    circular: c.Kind == HomeCardKind.Artist, onNavUri: NavUri,
+                    menu: Menus.CardAttach(acts, menuOverlay, c.Uri, c.Title));
             },
             measured: true,   // engine measures each card → row is exactly as tall as the tallest card (no reserved height)
             header: g.Title is { } t ? Surfaces.AccentHeader(t, GroupAccent(g)) : new BoxEl());

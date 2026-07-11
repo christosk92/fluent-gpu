@@ -3,7 +3,7 @@ using FluentGpu.Text;
 
 namespace FluentGpu.Scene;
 
-public enum VisualKind : byte { None = 0, Box = 1, Text = 2, Image = 3, PolylineStroke = 4, TabShape = 5 }
+public enum VisualKind : byte { None = 0, Box = 1, Text = 2, Image = 3, PolylineStroke = 4, TabShape = 5, IconLayer = 6 }
 
 /// <summary>Per-text-node measure cache (layout.md §2.3): a pure-function cache of (text, style, availWidth) → size, so a
 /// scoped relayout skips re-shaping a text leaf whose inputs are unchanged. Self-invalidating — any input change makes
@@ -137,7 +137,9 @@ public struct NodePaint
     /// offscreen and composite ONCE at the group alpha, so overlapping children don't double-blend. Default false =
     /// plain multiplied opacity (WinUI Visual.Opacity's per-visual behavior, the engine default).</summary>
     public bool OpacityGroup;
-    public int ImageId;           // VisualKind.Image: handle into the ImageCache (Fill doubles as the placeholder tint)
+    public int ImageId;           // VisualKind.Image: handle into the ImageCache (Fill doubles as the placeholder tint).
+                                  // VisualKind.IconLayer: DOUBLES as the IconGeometryTable.Shared PathId (Fill doubles as
+                                  // the resolved, theme-live layer tint) — no new NodePaint field, so the 64B cache line holds.
     public byte ImageFit;         // VisualKind.Image: (ImageFit) content-fit mode; 0 = Cover (default). Read by the recorder
     public float ImageFocusX, ImageFocusY;
     public VisualKind VisualKind;
@@ -547,9 +549,12 @@ public struct TextEditState
 /// <summary>Hit-test / input column.</summary>
 public struct InteractionInfo
 {
-    public ushort HandlerMask;    // bit0 click, bit1 key, bit2 pointer, bit3 char, bit4 repeat, bit5 pressed, bit6 context,
+    public uint HandlerMask;      // bit0 click, bit1 key, bit2 pointer, bit3 char, bit4 repeat, bit5 pressed, bit6 context,
                                   // bit7 focus, bit8 drag, bit9 explicit cursor, bit10 no-Enter-activate,
-                                  // bit11 no-pointer-focus, bit12 wheel
+                                  // bit11 no-pointer-focus, bit12 wheel, bit13 selectable-text, bit14 span-links,
+                                  // bit15 gesture, bit16 click-requests-context (widened ushort→uint for bit 16 —
+                                  // input-a11y §6.5.1; every clear-site masks with the uint complement ~(uint)Bit —
+                                  // a ushort-truncated complement would stomp bit 16)
     /// <summary>Meaningful only while <see cref="CursorBit"/> is set (an element-declared cursor); without the bit the
     /// dispatcher's hover walk skips this node and falls through to the system arrow — there is no clickable⇒hand default.</summary>
     public CursorId Cursor;
@@ -596,6 +601,14 @@ public struct InteractionInfo
     public const ushort GestureBit = 32768;         // the node declared a UseGesture handler (§13): hit-testable so a
                                                     // tap/hold/pan over it opens a gesture arena even when the node is
                                                     // not otherwise clickable; set/cleared by SceneStore.SetGestureHandler
+    public const uint ClickRequestsContextBit = 1u << 16;  // BoxEl.ClickRequestsContext (input-a11y §6.5.1): a
+                                                    // commit-time DISCRIMINATOR only — a left-click / touch-tap /
+                                                    // Space-Enter activation of this node re-enters the context-request
+                                                    // funnel at it (RequestContextFrom) instead of firing a click
+                                                    // handler. Deliberately NOT in AnyInteractiveMask or the hit-test
+                                                    // self-hit mask: the implied ClickBit already covers hit-test /
+                                                    // press / hover / press-target. This is the ONE bit above 15 —
+                                                    // hence HandlerMask is uint; clear it as `~(uint)ClickRequestsContextBit`.
 
     /// <summary>Any handler bit that makes a node a PRESS TARGET (interactive, though not necessarily focusable). A press
     /// on such a node is NOT an inert "background" press — the light-dismiss/modal scrim (Click/Pressed), an OnDrag/OnPointer

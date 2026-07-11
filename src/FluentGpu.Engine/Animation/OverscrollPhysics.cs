@@ -129,6 +129,10 @@ public static class OverscrollPhysics
         float targetPx = 0f)
     {
         if (posPx == targetPx && velPxPerS == 0f) return true;
+        // A velocity-only edge handoff starts exactly at the target. Even a small live inertia seed must be allowed to
+        // produce its first elastic displacement; applying the generic subpixel settle test in this same tick would
+        // erase speeds whose coupled spring velocity falls below 8 px/s before they ever become visible.
+        bool justSeededAtTarget = posPx == targetPx && velPxPerS != 0f;
         float w = omegaRadPerS > 0f ? omegaRadPerS : SnapBackOmega;
         float z = SpringDampingRatio;
         if (dtMs > 0f && MathF.Abs(z - 1f) <= 0.0001f)
@@ -155,7 +159,7 @@ public static class OverscrollPhysics
 
         // Snap home once the bounce is visually done (≤0.5 DIP, ≤8 px/s) instead of crawling sub-pixel for ~100ms more —
         // that invisible tail read as a slow/lingering settle. (Always lands exactly on 0, so gates that assert final==0 hold.)
-        if (MathF.Abs(posPx - targetPx) <= 0.5f && MathF.Abs(velPxPerS) <= 8f)
+        if (!justSeededAtTarget && MathF.Abs(posPx - targetPx) <= 0.5f && MathF.Abs(velPxPerS) <= 8f)
         {
             posPx = targetPx;
             velPxPerS = 0f;

@@ -48,7 +48,9 @@
       "album": "Album",
       "addedBy": "Added by",
       "dateAdded": "Date added",
-      "plays": "Plays"
+      "plays": "Plays",
+      "song": "Song",
+      "time": "Time"
     },
     "sort": {
       "customOrder": "Custom order",
@@ -150,6 +152,8 @@
     "metaFollowers": "followers",
     "metaAlbums": "albums",
     "metaSingles": "singles",
+    "trackCount": "{count, plural, one {# track} other {# tracks}}",
+    "releaseMeta": "{date} · {count}",
     "stat": {
       "monthly": "Monthly listeners",
       "followers": "Followers",
@@ -266,6 +270,8 @@
       "paletteSub": "Tints the shell surfaces and accent",
       "rowDensity": "Row density",
       "rowDensitySub": "Height of rows in track lists",
+      "pageLayout": "Track page layout",
+      "pageLayoutSub": "Side rail on wide windows, or the stacked header at every size",
       "paletteWarm": "Warm",
       "paletteSlate": "Slate",
       "paletteNeutral": "Neutral",
@@ -283,7 +289,9 @@
       "compact": "Compact",
       "default": "Default",
       "cozy": "Cozy",
-      "comfortable": "Comfortable"
+      "comfortable": "Comfortable",
+      "automatic": "Automatic",
+      "stacked": "Stacked"
     },
     "playback": {
       "runtimeTitle": "Playback runtime",
@@ -423,7 +431,13 @@
       "sortNewestTip": "Newest first (on)",
       "sortOldestTip": "Oldest first (off)",
       "groupRepeatsTip": "Group repeated lines (on)",
-      "groupRepeatsOffTip": "Show every line (off)"
+      "groupRepeatsOffTip": "Show every line (off)",
+      "captureLevel": "Capture level",
+      "captureLevelSub": "Minimum level kept in the session ring",
+      "fileLevel": "File log level",
+      "fileLevelSub": "Minimum level written to wavee.log",
+      "levelOverriddenMin": "Overridden by WAVEE_LOG_LEVEL",
+      "levelOverriddenFile": "Overridden by WAVEE_LOG_FILE_LEVEL"
     },
     "common": {
       "ellipsis": "...",
@@ -632,7 +646,14 @@
     "noDevices": "No devices found",
     "noDevicesHint": "Open Spotify on another device",
     "unavailable": "Unavailable",
-    "remoteCommandFailed": "Couldn’t reach that device — make sure it’s online and try again"
+    "remoteCommandFailed": "Couldn’t reach that device — make sure it’s online and try again",
+    "thisComputer": "This computer",
+    "spotifyConnect": "Spotify Connect",
+    "systemDefault": "System default",
+    "deviceLost": "{device} disconnected — playback paused",
+    "deviceSwitched": "Audio moved to {device}",
+    "deviceRestored": "Reconnected to {device}",
+    "outputFailed": "Couldn’t open an audio output"
   },
 
   "playback": {
@@ -772,5 +793,45 @@
     "emptySubtitle": "When there's something to show, it'll appear here.",
     "errorTitle": "Something went wrong.",
     "errorSubtitle": "Check your connection and try again."
+  },
+
+  "menu": {
+    "playNextN": "Play {count} next",
+    "addToQueueN": "Add {count} to queue",
+    "save": "Save",
+    "saved": "Saved",
+    "saveToLiked": "Save to Liked Songs",
+    "removeFromLiked": "Remove from Liked Songs",
+    "morePlaylists": "More playlists…",
+    "goToAlbum": "Go to album",
+    "goToArtists": "Go to artists",
+    "copyLink": "Copy link",
+    "copyLinks": "Copy links ({count})",
+    "linkCopied": "Link copied",
+    "removeFromThisPlaylist": "Remove from this playlist",
+    "removeFromQueue": "Remove from queue",
+    "playNow": "Play now",
+    "open": "Open",
+    "saveToLibrary": "Save to Your Library",
+    "removeFromLibrary": "Remove from Your Library",
+    "follow": "Follow",
+    "unfollow": "Unfollow",
+    "renamePlaylist": "Rename playlist",
+    "rename": "Rename",
+    "visibility": "Visibility",
+    "makePublic": "Make public",
+    "makePrivate": "Make private",
+    "viewCredits": "View credits",
+    "noCredits": "No credits available",
+    "share": "Share",
+    "copySpotifyUri": "Copy Spotify URI",
+    "uriCopied": "URI copied",
+    "openInSpotifyWeb": "Open in Spotify Web",
+    "goToSongRadio": "Go to song radio",
+    "goToArtistRadio": "Go to artist radio",
+    "radioStarted": "Radio started",
+    "openRadioPlaylist": "Open playlist",
+    "radioUnavailable": "Couldn't start radio",
+    "radio": "Radio"
   }
 }

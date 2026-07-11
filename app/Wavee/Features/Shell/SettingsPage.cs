@@ -62,7 +62,7 @@ sealed partial class SettingsPage : Component
             _density.Value = svc.Settings.Get(WaveeSettings.RowDensity);
             _quality.Value = Math.Clamp(svc.Settings.Get(WaveeSettings.PlaybackQuality), 0, 2);
             _eqPreset.Value = EqPresetIndex(svc.Settings.Get(WaveeSettings.EqualizerPreset));
-            int crossMs = Math.Clamp(svc.Settings.Get(WaveeSettings.CrossfadeMs), 0, 30_000);
+            int crossMs = Math.Clamp(svc.Settings.Get(WaveeSettings.CrossfadeMs), 0, 12_000);
             _crossSecs.Value = crossMs / 1000.0;
         });
 
@@ -83,7 +83,7 @@ sealed partial class SettingsPage : Component
             TabDiagnostics => new BoxEl
             {
                 Grow = 1f, Shrink = 1f, MinHeight = 0f,
-                Children = [Embed.Comp(() => new DiagnosticsPanel())],
+                Children = [Embed.Comp(() => new DiagnosticsPanel(svc?.Settings))],
             },
             TabAbout => AboutTab(svc, hooks),
             _ => GeneralTab(svc, requestTheme),

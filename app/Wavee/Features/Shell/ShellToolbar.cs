@@ -69,7 +69,13 @@ sealed class ShellToolbar : ReactiveComponent
         {
             // ── left: sidebar toggle · back · forward · home ────────────────────────────
             // Back/forward use NavHistoryButton so they also support right-click/hold history flyouts.
-            IconButton.Create(Icons.Menu, () => _sidebarCompact.Value = !_sidebarCompact.Peek(), nav),
+            // The compact rail is centred at x=28 while the toolbar's 6-DIP inset put this 36-DIP button at x=24.
+            // Shift only the hamburger's painted slot four DIPs; the negative trailing margin keeps every later item
+            // (back/forward/home/search) at its existing position.
+            IconButton.Create(Icons.Menu, () => _sidebarCompact.Value = !_sidebarCompact.Peek(), nav) with
+            {
+                Margin = new Edges4(4f, 0f, -4f, 0f),
+            },
             Embed.Comp(() => new NavHistoryButton(Icons.Back,    _back,    _canBack,    _backHistory,    _go, nav)),
             Embed.Comp(() => new NavHistoryButton(Icons.Forward, _forward, _canForward, _forwardHistory, _go, nav)),
             HomeButton(nav, onHome),
@@ -86,7 +92,7 @@ sealed class ShellToolbar : ReactiveComponent
                 [
                     // Fills the omnibar slot, capped at 720 (shrinks below that on a narrow window). Live as-you-type
                     // suggestions come from the Omnibar component (online searchSuggestions).
-                    Embed.Comp(() => new RichOmnibar(_searchText, _go)),
+                    Embed.Comp(() => new FluentRichOmnibar(_searchText, _go)),
                 ],
             },
 
@@ -200,7 +206,7 @@ sealed class NavHistoryButton : Component
         var handle = UseRef<OverlayHandle?>(null);
         var svc = UseContext(Overlay.Service);
 
-        void OpenFlyout(Point2 _)
+        void OpenFlyout(ContextRequestEventArgs _)
         {
             if (handle.Value is { IsOpen: true } h) { h.Close(); return; }
             if (_history.Count == 0) return;
@@ -337,6 +343,103 @@ sealed class Omnibar : Component
     }
 }
 
+// Wavee's rich search content hosted by the reusable FluentGpu AutoSuggestBox. The field remains a real control (focus,
+// editing, accessibility and popup lifetime); this component supplies only artwork-aware suggestion rows.
+sealed class FluentRichOmnibar : Component
+{
+    readonly Signal<string> _text;
+    readonly Action<string, string?> _go;
+    readonly Signal<SearchSuggestions> _suggestions = new(SearchSuggestions.Empty);
+    readonly Signal<bool> _loading = new(false);
+    readonly Signal<int> _highlight = new(-1);
+
+    public FluentRichOmnibar(Signal<string> text, Action<string, string?> go) { _text = text; _go = go; }
+
+    public override Element Render()
+    {
+        var svc = UseContext(Services.Slot);
+        var post = UsePost();
+        string text = _text.Value.Trim();
+        UseEffect(() => StartFetch(svc, post, text), text);
+
+        void Submit(string q)
+        {
+            var trimmed = q.Trim();
+            _go("search", trimmed.Length == 0 ? null : trimmed);
+        }
+
+        bool InvokeSelection(int selection)
+        {
+            var suggestions = _suggestions.Peek();
+            int queryCount = Math.Min(6, suggestions.Queries.Count);
+            int itemCount = Math.Min(10, suggestions.Items.Count);
+            if (selection < 0 || selection >= queryCount + itemCount) return false;
+
+            if (selection < queryCount)
+            {
+                string query = suggestions.Queries[selection];
+                _text.Value = query;
+                _go("search", query);
+                return true;
+            }
+
+            var item = suggestions.Items[selection - queryCount];
+            switch (item.Kind)
+            {
+                case SearchSuggestionKind.Track:
+                    if (svc is not null) _ = svc.Player.PlayTrackAsync(item.Uri);
+                    break;
+                case SearchSuggestionKind.Artist: _go("artist:" + item.Uri, item.Title); break;
+                case SearchSuggestionKind.Album: _go("album:" + item.Uri, item.Title); break;
+                case SearchSuggestionKind.Playlist: _go("pl:" + item.Uri, item.Title); break;
+            }
+            return true;
+        }
+
+        void MoveSelection(int delta)
+        {
+            var suggestions = _suggestions.Peek();
+            int count = Math.Min(6, suggestions.Queries.Count) + Math.Min(10, suggestions.Items.Count);
+            if (count == 0) { _highlight.Value = -1; return; }
+            int current = _highlight.Peek();
+            _highlight.Value = delta > 0
+                ? (current + 1 >= count ? -1 : current + 1)
+                : (current < 0 ? count - 1 : current - 1);
+        }
+
+        var presenter = new AutoSuggestBoxPresenter(
+            Build: context => Embed.Comp(() => new OmnibarSuggestionsPopup(
+                _text, _suggestions, _loading, context.Width, _highlight,
+                selection => { if (InvokeSelection(selection)) context.Close(); })),
+            MoveSelection: MoveSelection,
+            SubmitSelection: () => InvokeSelection(_highlight.Peek()),
+            ResetSelection: () => _highlight.Value = -1);
+
+        return AutoSuggestBox.Create(Array.Empty<string>(), Loc.Get(Strings.Shell.SearchPlaceholder),
+            grow: 1f, maxFillWidth: 720f, text: _text, onQuerySubmitted: Submit,
+            minHeight: 38f, cornerRadius: 19f, presenter: presenter,
+            chrome: AutoSuggestBoxChrome.ElevatedPill);
+    }
+
+    void StartFetch(Services? svc, Action<Action> post, string q)
+    {
+        if (q.Length == 0 || svc is null) { _suggestions.Value = SearchSuggestions.Empty; _loading.Value = false; return; }
+        _loading.Value = true;
+        _ = Run();
+
+        async System.Threading.Tasks.Task Run()
+        {
+            try
+            {
+                var s = await svc.Library.SuggestRichAsync(q).ConfigureAwait(false);
+                post(() => { if (_text.Peek().Trim() == q) { _suggestions.Value = s; _loading.Value = false; } });
+            }
+            catch { post(() => { if (_text.Peek().Trim() == q) _loading.Value = false; }); }
+        }
+    }
+}
+
+// Retained for source compatibility with old snapshots; the live toolbar above uses FluentRichOmnibar.
 sealed class RichOmnibar : Component
 {
     readonly Signal<string> _text;
@@ -485,8 +588,10 @@ sealed class OmnibarSuggestionsPopup : Component
     readonly IReadSignal<bool> _loading;
     readonly IReadSignal<float> _width;
     readonly Services? _svc;
-    readonly Action<string, string?> _go;
-    readonly Action _close;
+    readonly Action<string, string?>? _go;
+    readonly Action? _close;
+    readonly IReadSignal<int>? _highlight;
+    readonly Action<int>? _choose;
 
     public OmnibarSuggestionsPopup(Signal<string> text, IReadSignal<SearchSuggestions> suggestions, IReadSignal<bool> loading,
         IReadSignal<float> width, Services? svc, Action<string, string?> go, Action close)
@@ -494,20 +599,30 @@ sealed class OmnibarSuggestionsPopup : Component
         _text = text; _suggestions = suggestions; _loading = loading; _width = width; _svc = svc; _go = go; _close = close;
     }
 
+    public OmnibarSuggestionsPopup(Signal<string> text, IReadSignal<SearchSuggestions> suggestions, IReadSignal<bool> loading,
+        IReadSignal<float> width, IReadSignal<int> highlight, Action<int> choose)
+    {
+        _text = text; _suggestions = suggestions; _loading = loading; _width = width;
+        _highlight = highlight; _choose = choose;
+    }
+
     public override Element Render()
     {
         string q = _text.Value.Trim();
         var s = _suggestions.Value;
         bool loading = _loading.Value;
+        int highlighted = _highlight?.Value ?? -1;
         float width = _width.Value > 0f ? _width.Value : 720f;
 
         // No client-side re-filter: the server's fuzzy matching (apostrophes, word order) is authoritative;
         // a literal Contains() check would drop most of its hits. Staleness is handled at publish time.
         var rows = new List<Element>();
+        int selectionIndex = 0;
         int queryCount = 0;
         foreach (var query in s.Queries)
         {
-            rows.Add(QueryRow(query, q));
+            rows.Add(QueryRow(query, q, selectionIndex, highlighted == selectionIndex));
+            selectionIndex++;
             if (++queryCount >= 6) break;
         }
 
@@ -515,7 +630,8 @@ sealed class OmnibarSuggestionsPopup : Component
         foreach (var item in s.Items)
         {
             if (richCount == 0 && rows.Count > 0) rows.Add(Divider());
-            rows.Add(RichRow(item));
+            rows.Add(RichRow(item, selectionIndex, highlighted == selectionIndex));
+            selectionIndex++;
             if (++richCount >= 10) break;
         }
 
@@ -560,7 +676,7 @@ sealed class OmnibarSuggestionsPopup : Component
         };
     }
 
-    Element QueryRow(string query, string typed) => new BoxEl
+    Element QueryRow(string query, string typed, int selectionIndex, bool selected) => new BoxEl
     {
         MinHeight = AutoSuggestBox.ItemMinHeight,
         AlignItems = FlexAlign.Center,
@@ -568,18 +684,20 @@ sealed class OmnibarSuggestionsPopup : Component
         Margin = new Edges4(4, 2, 4, 2),
         Corners = Radii.ControlAll,
         Role = AutomationRole.MenuItem,
+        Fill = selected ? Tok.FillSubtleSecondary : ColorF.Transparent,
         HoverFill = Tok.FillSubtleSecondary,
         PressedFill = Tok.FillSubtleTertiary,
         OnClick = () =>
         {
+            if (_choose is not null) { _choose(selectionIndex); return; }
             _text.Value = query;
-            _go("search", query);
-            _close();
+            _go?.Invoke("search", query);
+            _close?.Invoke();
         },
         Children = QueryContent(query, typed),
     };
 
-    Element RichRow(SearchSuggestionItem item)
+    Element RichRow(SearchSuggestionItem item, int selectionIndex, bool selected)
     {
         bool circular = item.Kind == SearchSuggestionKind.Artist;
         float radius = circular ? 22f : 5f;
@@ -593,9 +711,14 @@ sealed class OmnibarSuggestionsPopup : Component
             Margin = new Edges4(4, 2, 4, 2),
             Corners = Radii.ControlAll,
             Role = AutomationRole.MenuItem,
+            Fill = selected ? Tok.FillSubtleSecondary : ColorF.Transparent,
             HoverFill = Tok.FillSubtleSecondary,
             PressedFill = Tok.FillSubtleTertiary,
-            OnClick = () => Invoke(item),
+            OnClick = () =>
+            {
+                if (_choose is not null) { _choose(selectionIndex); return; }
+                Invoke(item);
+            },
             Children =
             [
                 new BoxEl
@@ -626,16 +749,16 @@ sealed class OmnibarSuggestionsPopup : Component
                 if (_svc is not null) _ = _svc.Player.PlayTrackAsync(item.Uri);
                 break;
             case SearchSuggestionKind.Artist:
-                _go("artist:" + item.Uri, item.Title);
+                _go?.Invoke("artist:" + item.Uri, item.Title);
                 break;
             case SearchSuggestionKind.Album:
-                _go("album:" + item.Uri, item.Title);
+                _go?.Invoke("album:" + item.Uri, item.Title);
                 break;
             case SearchSuggestionKind.Playlist:
-                _go("pl:" + item.Uri, item.Title);
+                _go?.Invoke("pl:" + item.Uri, item.Title);
                 break;
         }
-        _close();
+        _close?.Invoke();
     }
 
     static Element Divider() => new BoxEl

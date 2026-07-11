@@ -246,6 +246,38 @@ public sealed class LiveSessionHost : IAsyncDisposable
                     () => { audio?.StartProvisioning(cts.Token); _ = connect.Controller.RetryCurrentAsync(); });
             }
         };
+        // Output-device control + local-output picker (Phase A/B/C). Only when the audio stack is wired (local playback is
+        // real): seed the persisted output BEFORE first play, surface device notices as toasts, reflect Windows session
+        // volume/mute, and stand up the main-process picker service (its own device monitor, separate from the child's).
+        if (audio is not null && audio.Host is IAudioOutputDeviceControl odc)
+        {
+            var persistedId = svc.Settings.Get(WaveeSettings.OutputDeviceId);
+            string? seedId = string.IsNullOrEmpty(persistedId) ? null : persistedId;
+            odc.SetOutputDevice(seedId);   // seed the selected endpoint before the first play (Hello carries it OOP)
+            odc.OutputDeviceNotice += n => svc.Playback.NotifyOutputDeviceNotice(n);
+            odc.ExternalVolumeChanged += (v, muted) =>
+            {
+                connect.Controller.OnExternalVolumeChanged(v);
+                svc.Playback.NotifyOutputMuted(muted);
+            };
+            var localOutputs = new LocalAudioDeviceService(
+                new Wavee.SpotifyLive.Audio.WasapiAudioDeviceMonitor(audioLog),
+                odc,
+                (id, ct) => connect.Controller.TransferToAsync(id, ct),
+                live.DeviceId,
+                () => connect.Controller.State.ActiveDeviceId,
+                (id, name) =>
+                {
+                    svc.Settings.Set(WaveeSettings.OutputDeviceId, id ?? "");
+                    svc.Settings.Set(WaveeSettings.OutputDeviceName, name ?? "");
+                },
+                seedId);
+            svc.Playback.AttachLocalOutputs(localOutputs);
+            localOutputs.Activate(uiPost);
+        }
+        // The picker's local rows are truthful/enabled iff local playback is actually supported (an audio stack exists) —
+        // fixes the stale unconditional "Unavailable" (OnLocalPlaybackRejected is only wired when audio is null).
+        uiPost(() => svc.Playback.LocalPlaybackSupported.Value = audio is not null);
         svc.GoLive(connect.Controller, connect.Devices, liveSession, connectivity, lyrics);
         // Diagnostic one-shot: WAVEE_PLAYPLAY_PROBE=1 (or a file-id hex) fetches that file's PlayPlay obf+aes on the LIVE
         // session and compares to the reference ogg-vorbis-160 golden vector — isolates "is our live obf the vector's value".
@@ -313,7 +345,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
             if (svc.RealPlaylistMutations is { } pmSrc)
             {
                 pmSrc.SetHttp(live.Pipeline);
-                pmSrc.ScheduleDrain = () => sync.Enqueue(new Wavee.Backend.Sync.SyncCommand(Wavee.Backend.Sync.SyncKind.DrainWrites));
+                pmSrc.ScheduleDrain = ct => sync.DrainWritesAsync(ct);
             }
 
             // Pathfinder (GraphQL) for rich catalog reads with no protobuf equivalent — the artist overview, on open.
@@ -326,6 +358,10 @@ public sealed class LiveSessionHost : IAsyncDisposable
                 new PathfinderHeadersMiddleware(_ => Task.FromResult(live.ClientToken)));
             var pathfinder = new PathfinderClient(pathfinderExchange, spclientLog);
             var pathfinderResource = new PathfinderResource(pathfinder, () => live.Session, spclientLog);
+            // Playlist page tint parity with albums: albums carry cover colors inline (getAlbum); playlists come over the
+            // Mercury proto with none, so resolve them via fetchExtractedColors on the cover, cached persistently (colors
+            // are immutable per image → ~half-year), and merged into the resident header.
+            var playlistPalette = new PlaylistPaletteEnricher(pathfinderResource, store, new ExtractedColorCache(), spclientLog);
             var homeCache = new LiveHomeCache(pathfinderResource);
             // "What's New" feed (queryWhatsNewFeed) — display-only, rides the PathfinderResource TTL. Seeded now so the
             // notification bell badge is correct before the first open; installed into the switchable the panel binds to.
@@ -350,9 +386,13 @@ public sealed class LiveSessionHost : IAsyncDisposable
             if (svc.RealLibrarySource is { } libSrc)
             {
                 libSrc.Sync = sync;   // on-open SWR: playlists route through the loop (blocking first fetch / background revalidate)
+                libSrc.EnsurePlaylistPalette = playlistPalette.EnsureAsync;
                 libSrc.OnDemandFetch = async (uri, c) =>
                 {
-                    if (uri.StartsWith("spotify:playlist:", StringComparison.Ordinal)) await fetcher.FetchPlaylistAsync(uri, c).ConfigureAwait(false);
+                    if (uri.StartsWith("spotify:playlist:", StringComparison.Ordinal))
+                    {
+                        await fetcher.FetchPlaylistAsync(uri, c).ConfigureAwait(false);
+                    }
                     else if (uri.StartsWith("spotify:album:", StringComparison.Ordinal)) await FetchAlbumAsync(pathfinderResource, store, uri, c).ConfigureAwait(false);
                     else if (uri.StartsWith("spotify:artist:", StringComparison.Ordinal)) await FetchArtistAsync(pathfinderResource, store, uri, c).ConfigureAwait(false);
                     // Detect music videos for the just-hydrated tracklist (batch, off the critical path → the movie icons fill in).

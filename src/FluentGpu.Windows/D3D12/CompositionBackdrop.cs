@@ -250,7 +250,10 @@ internal sealed unsafe class CompositionBackdrop : IDisposable
     public void ConfigureChrome(RectF contentPx, bool opensUp, float closedRatio, float cornerRadiusPx)
     {
         _opensUp = opensUp;
-        _closedRatio = closedRatio > 0f ? closedRatio : 0.5f;
+        // closedRatio 0 is a CONTRACT value: no open slide at all (the CommandBar chrome — WinUI CommandBarFlyout
+        // suppresses the popup transition and fades its own body over 83ms, CommandBarFlyout.cpp:43-44 +
+        // CommandBarFlyout_themeresources.xaml:655-658). Negative = unset → the menu default 0.5.
+        _closedRatio = closedRatio >= 0f ? closedRatio : 0.5f;
         _contentHPx = contentPx.H;
         _cornerRadiusPx = cornerRadiusPx;
         Check(_roundGeo->put_Offset(new Vector2(contentPx.X, contentPx.Y)), "round put_Offset");
@@ -285,6 +288,7 @@ internal sealed unsafe class CompositionBackdrop : IDisposable
     {
         if (_opened || _contentHPx <= 0f) return;
         _opened = true;
+        if (_closedRatio <= 0f) return;   // no-slide chrome (CommandBar): appear in place, the body fades itself
         _motionStartTick = Environment.TickCount64;
 
         float slide = _contentHPx * _closedRatio;

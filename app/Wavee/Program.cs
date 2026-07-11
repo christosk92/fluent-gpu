@@ -41,15 +41,20 @@ static class Program
         string logDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Wavee", "logs");
         string logPath = Path.Combine(logDir, "wavee.log");
 #if DEBUG
+        // Dev default: the in-memory ring keeps full Debug detail for the in-app viewer, but the FILE defaults to Info so a
+        // dev run doesn't bloat wavee.log with the demoted verbose flow. The settings-backed level UI (or WAVEE_LOG_FILE_LEVEL)
+        // can raise the file level to Debug/Trace on demand.
         WaveeLogLevel defaultLevel = WaveeLogLevel.Debug;
+        WaveeLogLevel defaultFileLevel = WaveeLogLevel.Info;
 #else
         WaveeLogLevel defaultLevel = WaveeLogLevel.Info;
+        WaveeLogLevel defaultFileLevel = WaveeLogLevel.Info;
 #endif
         int minSetting = settings.Get(WaveeSettings.LogMinLevel);
         int fileSetting = settings.Get(WaveeSettings.LogFileMinLevel);
         WaveeLog.Instance.Configure(crashLogPath: logPath, echo: DebugEcho(),
             minLevel: minSetting >= 0 ? (WaveeLogLevel)minSetting : defaultLevel,
-            fileMinLevel: fileSetting >= 0 ? (WaveeLogLevel)fileSetting : defaultLevel);
+            fileMinLevel: fileSetting >= 0 ? (WaveeLogLevel)fileSetting : defaultFileLevel);
         Diag.Sink = WaveeLog.DiagSink;                 // fold engine diagnostics (FG_DIAG) into the app log stream
         WaveeLog.Instance.Info("app", "startup", "Wavee starting",
             WaveeLogField.Of("pid", Environment.ProcessId),

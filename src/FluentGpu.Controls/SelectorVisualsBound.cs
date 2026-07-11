@@ -145,7 +145,7 @@ public static class SelectorVisualsBound
             Focusable = false,                              // the ItemsView roving effect owns the single tab stop
             FocusVisualMargin = Edges4.All(1f),
             Role = AutomationRole.Button,
-            OnPointerPressed = args =>
+            OnPointerReleased = args =>
             {
                 if (args.ClickCount >= 2) interact(ItemContainerTrigger.DoubleTap, args.Mods);
                 else interact(ItemContainerTrigger.Tap, MultiSelectMods(showChecks?.Invoke() ?? false, args.Mods));
@@ -173,7 +173,7 @@ public static class SelectorVisualsBound
             Focusable = false,
             Role = AutomationRole.Button,
             Opacity = Prop.Of(() => isEn() ? 1f : ItemContainer.DisabledOpacity),
-            OnPointerPressed = args => interact(
+            OnPointerReleased = args => interact(
                 args.ClickCount >= 2 ? ItemContainerTrigger.DoubleTap : ItemContainerTrigger.Tap, args.Mods),
             OnKeyDown = args =>
             {

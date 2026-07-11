@@ -121,6 +121,13 @@ public sealed class CachedStore : IStore, IDisposable
         TouchResident(playlistUri, rows.Count);
         return rows;
     }
+    public bool HasMembership(string playlistUri)
+    {
+        if (_hot.HasMembership(playlistUri)) return true;
+        // A persisted revision proves that ReplaceMembership ran even when the valid list is empty. Older/null-revision
+        // rows can still be detected by their contents; newly-created empty playlists remain exact in the hot mirror.
+        return _cold.GetPlaylistRevision(playlistUri) is not null || _cold.LoadMembership(playlistUri).Count > 0;
+    }
     public byte[]? PlaylistRevision(string playlistUri) => _hot.PlaylistRevision(playlistUri) ?? _cold.GetPlaylistRevision(playlistUri);
     public void SetRootlist(IReadOnlyList<RootlistEntry> entries)
     {

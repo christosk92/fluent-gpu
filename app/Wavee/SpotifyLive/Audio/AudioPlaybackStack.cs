@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
 using Google.Protobuf;
@@ -79,6 +80,16 @@ public sealed class AudioPlaybackStack : IAsyncDisposable
                 log,
                 BodyDiskCache);
         }
+        if (Host is IAudioDspControl dsp)
+        {
+            // Apply persisted DSP before the first load/Hello. Older builds exposed 30 seconds while every host clamped
+            // to 12; migrate those values once so UI, parent and child all report the same effective duration.
+            int storedCrossfadeMs = settings.Get(WaveeSettings.CrossfadeMs);
+            int crossfadeMs = Math.Clamp(storedCrossfadeMs, 0, 12_000);
+            if (storedCrossfadeMs != crossfadeMs) settings.Set(WaveeSettings.CrossfadeMs, crossfadeMs);
+            dsp.SetEqualizer(settings.Get(WaveeSettings.EqualizerEnabled), ReadEqualizerGains(settings));
+            dsp.SetCrossfade(settings.Get(WaveeSettings.CrossfadeEnabled), crossfadeMs);
+        }
 #if WAVEE_PLAYPLAY_LOCAL
         Func<IPlayPlayKeyDeriver?> deriver = () => _supervisedHost is not null ? _supervisedHost : _playPlay;
 #else
@@ -110,6 +121,16 @@ public sealed class AudioPlaybackStack : IAsyncDisposable
             WaveeLogField.Of("playplayLocal", PlayPlayLocalCompiled),
             WaveeLogField.Of("formatProbe", formatProbe is not null),
             WaveeLogField.Of("oop", _useOutOfProcessHost));
+    }
+
+    static float[] ReadEqualizerGains(IAppSettings settings)
+    {
+        var result = new float[10];
+        var parts = (settings.Get(WaveeSettings.EqualizerGains) ?? "").Split(',');
+        for (int i = 0; i < result.Length && i < parts.Length; i++)
+            if (float.TryParse(parts[i], NumberStyles.Float, CultureInfo.InvariantCulture, out float gain))
+                result[i] = Math.Clamp(gain, -12f, 12f);
+        return result;
     }
 
     /// <summary>Background provision — off the startup path.</summary>
@@ -284,15 +305,15 @@ public sealed class FastTrackPlayback : IFastTrackResolver, IFastTrackWarmer
     {
         MarkWarmQuietWindow();
         var sw = Stopwatch.StartNew();
-        _log.Info($"fast-resolve {track.Uri}: meta start");
+        _log.Debug($"fast-resolve {track.Uri}: meta start");
         var meta = await _resolver.ResolveMetaAsync(track, ct).ConfigureAwait(false);
-        _log.Info($"fast-resolve {track.Uri}: meta ok file={meta.FileIdHex} fmt={meta.Fmt} elapsed={sw.ElapsedMilliseconds}ms");
+        _log.Debug($"fast-resolve {track.Uri}: meta ok file={meta.FileIdHex} fmt={meta.Fmt} elapsed={sw.ElapsedMilliseconds}ms");
 
         if (!string.IsNullOrEmpty(meta.ExternalUrl))
         {
             var extBody = await _resolver.ResolveBodyAsync(meta, ct).ConfigureAwait(false);
             var extStart = new AudioFastStart(track.Uri, meta.FileIdHex, AudioFormat.Mp3, meta.DurMs, 0f, default);
-            _log.Info($"fast-resolve {track.Uri}: external MP3 — no head fetch");
+            _log.Debug($"fast-resolve {track.Uri}: external MP3 — no head fetch");
             return new FastStartPlan(extStart, Task.FromResult(extBody));
         }
 
@@ -301,10 +322,10 @@ public sealed class FastTrackPlayback : IFastTrackResolver, IFastTrackWarmer
         var rawBodyTask = _resolver.ResolveBodyAsync(meta, ct);
 
         var head = await headTask.ConfigureAwait(false);
-        _log.Info($"fast-resolve {track.Uri}: head ok file={meta.FileIdHex} bytes={head.Data.Length} elapsed={headSw.ElapsedMilliseconds}ms total={sw.ElapsedMilliseconds}ms");
+        _log.Debug($"fast-resolve {track.Uri}: head ok file={meta.FileIdHex} bytes={head.Data.Length} elapsed={headSw.ElapsedMilliseconds}ms total={sw.ElapsedMilliseconds}ms");
         var start = new AudioFastStart(track.Uri, meta.FileIdHex, meta.Fmt, meta.DurMs, head.NormalizationGainDb, head.Data);
         var bodyTask = FinishBodyAsync(rawBodyTask, head.Data.Length, head.NormalizationGainDb, _log, track.Uri, meta.FileIdHex, sw.ElapsedMilliseconds, _invalidateCdn);
-        _log.Info($"fast-resolve {track.Uri}: plan ready file={meta.FileIdHex} head={head.Data.Length}B bodyCompleted={rawBodyTask.IsCompleted} total={sw.ElapsedMilliseconds}ms");
+        _log.Debug($"fast-resolve {track.Uri}: plan ready file={meta.FileIdHex} head={head.Data.Length}B bodyCompleted={rawBodyTask.IsCompleted} total={sw.ElapsedMilliseconds}ms");
         return new FastStartPlan(start, bodyTask);
     }
 
@@ -312,7 +333,7 @@ public sealed class FastTrackPlayback : IFastTrackResolver, IFastTrackWarmer
     {
         if (!_warmInFlight.TryAdd(track.Uri, 0))
         {
-            _log.Info($"fast-warm {track.Uri}: skipped duplicate reason={reason}");
+            _log.Debug($"fast-warm {track.Uri}: skipped duplicate reason={reason}");
             return;
         }
 
@@ -327,28 +348,28 @@ public sealed class FastTrackPlayback : IFastTrackResolver, IFastTrackWarmer
         {
             if (delay > TimeSpan.Zero)
             {
-                _log.Info($"fast-warm {track.Uri}: scheduled reason={reason} delay={delay.TotalMilliseconds:0}ms");
+                _log.Debug($"fast-warm {track.Uri}: scheduled reason={reason} delay={delay.TotalMilliseconds:0}ms");
                 await Task.Delay(delay).ConfigureAwait(false);
             }
             while (WarmQuietRemaining() is { } quiet && quiet > TimeSpan.Zero)
             {
-                _log.Info($"fast-warm {track.Uri}: deferred reason={reason} foregroundQuiet={quiet.TotalMilliseconds:0}ms");
+                _log.Debug($"fast-warm {track.Uri}: deferred reason={reason} foregroundQuiet={quiet.TotalMilliseconds:0}ms");
                 await Task.Delay(quiet).ConfigureAwait(false);
             }
             sw.Restart();
-            _log.Info($"fast-warm {track.Uri}: start reason={reason}");
+            _log.Debug($"fast-warm {track.Uri}: start reason={reason}");
             var meta = await _resolver.ResolveMetaAsync(track, CancellationToken.None).ConfigureAwait(false);
             var head = await _heads.GetAsync(meta.FileIdHex, CancellationToken.None).ConfigureAwait(false);
             if (string.IsNullOrEmpty(meta.ExternalUrl))
             {
                 var h = await _resolver.ResolveBodyAsync(meta, CancellationToken.None).ConfigureAwait(false);
-                _log.Info($"fast-warm {track.Uri}: body ok cdn={h.CdnUrls?.Length ?? 0}");
+                _log.Debug($"fast-warm {track.Uri}: body ok cdn={h.CdnUrls?.Length ?? 0}");
             }
-            _log.Info($"fast-warm {track.Uri}: ok file={meta.FileIdHex} head={head.Data.Length}B elapsed={sw.ElapsedMilliseconds}ms");
+            _log.Debug($"fast-warm {track.Uri}: ok file={meta.FileIdHex} head={head.Data.Length}B elapsed={sw.ElapsedMilliseconds}ms");
         }
         catch (Exception ex)
         {
-            _log.Info($"fast-warm {track.Uri}: failed elapsed={sw.ElapsedMilliseconds}ms {ex.GetType().Name}: {ex.Message}");
+            _log.Warn($"fast-warm {track.Uri}: failed elapsed={sw.ElapsedMilliseconds}ms {ex.GetType().Name}: {ex.Message}");
         }
         finally
         {
@@ -377,18 +398,18 @@ public sealed class FastTrackPlayback : IFastTrackResolver, IFastTrackWarmer
         try
         {
             var h = await raw.ConfigureAwait(false);
-            log.Info($"fast-resolve {trackUri}: body ok file={fileIdHex} elapsed={sw.ElapsedMilliseconds}ms sinceStart={startedAtMs + sw.ElapsedMilliseconds}ms cdn={h.CdnUrls?.Length ?? 0}");
+            log.Debug($"fast-resolve {trackUri}: body ok file={fileIdHex} elapsed={sw.ElapsedMilliseconds}ms sinceStart={startedAtMs + sw.ElapsedMilliseconds}ms cdn={h.CdnUrls?.Length ?? 0}");
             return h with { HeadBoundary = headBoundary, NormalizationGainDb = gainDb };
         }
         catch (AudioPlaybackException ex) when (ex.Reason == AudioKeyFailureReason.Network)
         {
             invalidateCdn?.Invoke(fileIdHex);
-            log.Info($"fast-resolve {trackUri}: body failed file={fileIdHex} elapsed={sw.ElapsedMilliseconds}ms sinceStart={startedAtMs + sw.ElapsedMilliseconds}ms {ex.GetType().Name}: {ex.Message} (cdn cache invalidated)");
+            log.Warn($"fast-resolve {trackUri}: body failed file={fileIdHex} elapsed={sw.ElapsedMilliseconds}ms sinceStart={startedAtMs + sw.ElapsedMilliseconds}ms {ex.GetType().Name}: {ex.Message} (cdn cache invalidated)");
             throw;
         }
         catch (Exception ex)
         {
-            log.Info($"fast-resolve {trackUri}: body failed file={fileIdHex} elapsed={sw.ElapsedMilliseconds}ms sinceStart={startedAtMs + sw.ElapsedMilliseconds}ms {ex.GetType().Name}: {ex.Message}");
+            log.Warn($"fast-resolve {trackUri}: body failed file={fileIdHex} elapsed={sw.ElapsedMilliseconds}ms sinceStart={startedAtMs + sw.ElapsedMilliseconds}ms {ex.GetType().Name}: {ex.Message}");
             throw;
         }
     }

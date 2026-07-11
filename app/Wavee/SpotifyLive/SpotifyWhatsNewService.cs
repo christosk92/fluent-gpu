@@ -99,7 +99,7 @@ sealed class SpotifyWhatsNewService : IWhatsNewService, IDisposable
 
     void ApplyFailure(string reason)
     {
-        _log.Info("what's-new: " + reason);   // non-exception failures (stale hash, bad payload) must be visible too
+        _log.Warn("what's-new: " + reason);   // non-exception failures (stale hash, bad payload) must be visible too
         bool changed = false;
         lock (_gate)
         {

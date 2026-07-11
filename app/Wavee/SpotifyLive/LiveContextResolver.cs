@@ -214,6 +214,69 @@ public sealed class LiveContextResolver : IContextResolver
         return new ResolvedContext(tracks, 0, null, nextPage, true, null, "spotify:station:track:" + seedId);
     }
 
+    // Explicit "Start radio" (song/artist radio): resolve a seed uri → a concrete radio PLAYLIST uri via
+    // GET /inspiredby-mix/v2/seed_to_playlist/{seedUri}?response-format=json. Distinct from ResolveRadioApolloAsync (the
+    // autoplay-TAIL continuation): this is the user-visible "make me a radio" boundary. The seed rides the path segment
+    // with literal colons (RFC 3986 allows ':' in a segment — same as the radio-apollo route). Bearer + Accept: JSON.
+    // Response: { "total": N, "mediaItems": [ { "uri": "spotify:playlist:…" } ] } → the first non-empty mediaItems[].uri.
+    // 404 / empty mediaItems → null (no radio available); the resolved playlist is then a normal /context-resolve context.
+    public async Task<string?> ResolveRadioSeedAsync(string seedUri, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(seedUri)) return null;
+        var route = "/inspiredby-mix/v2/seed_to_playlist/" + seedUri + "?response-format=json";
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["Accept"] = "application/json" };
+        Resp resp;
+        try { resp = await _transport.Request(Channel.Spclient, route, default, ct, headers: headers).ConfigureAwait(false); }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) { _log.Warn("inspiredby-mix request failed for " + seedUri + ": " + ex.Message, ex); return null; }
+        if (!resp.Ok || resp.Body is null || resp.Body.Length == 0)
+        {
+            _log.Warn($"inspiredby-mix failed ({resp.Status}): {seedUri}");   // 404 / server error → no radio
+            return null;
+        }
+
+        var playlistUri = ParseFirstMediaItemUri(resp.Body);
+        if (string.IsNullOrEmpty(playlistUri)) { _log.Warn("inspiredby-mix: no mediaItems for " + seedUri); return null; }
+        return playlistUri;
+    }
+
+    // Streaming Utf8JsonReader (proto-free, no full-doc alloc — the ContextJson.Parse house style): find the "mediaItems"
+    // array and return the first non-empty "uri" string inside it (matches WaveeMusic's FirstOrDefault(m => m.Uri != "")).
+    static string? ParseFirstMediaItemUri(ReadOnlySpan<byte> json)
+    {
+        var reader = new Utf8JsonReader(json);
+        bool inMediaItems = false;
+        int arrayDepth = 0;
+        while (reader.Read())
+        {
+            switch (reader.TokenType)
+            {
+                case JsonTokenType.PropertyName:
+                    if (!inMediaItems && reader.ValueTextEquals("mediaItems"))
+                    {
+                        if (reader.Read() && reader.TokenType == JsonTokenType.StartArray)
+                        {
+                            inMediaItems = true;
+                            arrayDepth = reader.CurrentDepth;   // StartArray + its matching EndArray share this depth
+                        }
+                    }
+                    else if (inMediaItems && reader.ValueTextEquals("uri"))
+                    {
+                        if (reader.Read() && reader.TokenType == JsonTokenType.String)
+                        {
+                            var s = reader.GetString();
+                            if (!string.IsNullOrEmpty(s)) return s;
+                        }
+                    }
+                    break;
+                case JsonTokenType.EndArray:
+                    if (inMediaItems && reader.CurrentDepth == arrayDepth) return null;   // mediaItems closed with no uri
+                    break;
+            }
+        }
+        return null;
+    }
+
     static bool IsArtistUri(string uri) => uri.StartsWith("spotify:artist:", StringComparison.Ordinal);
 
     // Artist play: GET /playlist/v2/list/popular-release-segments-main-roles/artist_<id> → a zstd SelectedListContent

@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
@@ -43,17 +42,12 @@ public sealed class HttpClientExchange : IHttpExchange
         catch { resp.Dispose(); throw; }   // a throw before ownership transfers (e.g. ct cancels) must not leak the connection
     }
 
-    [Conditional("DEBUG")]
     static void LogProtocolOnce(HttpResponseMessage resp)
     {
-#if DEBUG
         if (resp.RequestMessage?.RequestUri?.Host is not { Length: > 0 } host) return;
-        if (!ProtocolHosts.TryAdd(host, 0)) return;
-        Debug.WriteLine($"http {host} protocol={resp.Version}");
-#endif
+        if (!ProtocolHosts.TryAdd(host, 0)) return;   // once per host — the log level gates whether it surfaces
+        WaveeLog.Instance.Debug("spclient", $"http {host} protocol={resp.Version}");
     }
 
-#if DEBUG
     static readonly ConcurrentDictionary<string, byte> ProtocolHosts = new(StringComparer.OrdinalIgnoreCase);
-#endif
 }

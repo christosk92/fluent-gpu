@@ -39,6 +39,12 @@ public interface IPlaybackPlayer
     Task EnqueueAsync(Track track, CancellationToken ct = default);
     /// <summary>Insert tracks at the FRONT of the user-queue ("play next" — before already-queued items).</summary>
     Task PlayNextAsync(IReadOnlyList<PlaybackContextTrack> tracks, CancellationToken ct = default);
+    /// <summary>Start a radio seeded by a track/artist uri (Apple-Music-style): resolve the seed → a concrete radio
+    /// playlist (<c>inspiredby-mix/v2/seed_to_playlist</c>), then either play it immediately (nothing playing) or PARK it
+    /// as the new context so the currently-playing track finishes first and playback flows into the radio on track-end
+    /// (the seed track is skipped if it leads the radio). Returns the resolved radio playlist uri (for the "Open playlist"
+    /// toast), or <c>null</c> when no radio is available. Never interrupts the current track.</summary>
+    Task<string?> StartRadioAsync(string seedUri, string? displayName = null, CancellationToken ct = default);
     IPlaybackState State { get; }
 }
 

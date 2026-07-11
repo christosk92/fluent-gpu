@@ -14,7 +14,9 @@ internal sealed class AudioHostServer : IDisposable
     readonly IpcPipeTransport _ipc;
     readonly string? _launchToken;
     readonly WaveeLogger _log;
-    readonly AudioPlayEngine _engine;
+    readonly InProcessAudioHost _host;
+    readonly IDisposable _hostSub;
+    readonly IDisposable _transitionSub;
     readonly SemaphoreSlim _deriveGate = new(1, 1);
     readonly object _runtimeGate = new();
 
@@ -35,10 +37,12 @@ internal sealed class AudioHostServer : IDisposable
         _ipc = ipc;
         _launchToken = launchToken;
         _log = log;
-        _engine = new AudioPlayEngine(_log, (_, seed) => CreateCdnDecryptor(seed),
+        _host = new InProcessAudioHost((_, seed) => CreateCdnDecryptor(seed), _log,
             AudioBodyDiskCache.FromSettings(AppDataSettings.ForUnpackaged("Wavee", "Wavee")));
-        _engine.State += OnEngineState;
-        _engine.TrackFinished += OnTrackFinished;
+        _hostSub = _host.Signals.Subscribe(Observers.From<AudioHostSignal>(OnEngineState));
+        _transitionSub = _host.Transitions.Subscribe(Observers.From<AudioTransitionSignal>(OnTransition));
+        _host.OutputDeviceNotice += OnDeviceNotice;
+        _host.ExternalVolumeChanged += OnSessionVolumeChanged;
     }
 
     public async Task RunAsync()
@@ -64,6 +68,17 @@ internal sealed class AudioHostServer : IDisposable
                         HandleSupplyBody(payload);
                         await ReplyOk(id, GenerationFrom(payload), CorrelationFrom(payload)).ConfigureAwait(false);
                         break;
+                    case IpcMessageTypes.PrepareNext:
+                        await HandlePrepareNextAsync(payload).ConfigureAwait(false);
+                        await ReplyOk(id, GenerationFrom(payload), CorrelationFrom(payload)).ConfigureAwait(false);
+                        break;
+                    case IpcMessageTypes.SupplyNextBody:
+                        await HandleSupplyNextBodyAsync(payload).ConfigureAwait(false);
+                        await ReplyOk(id, GenerationFrom(payload), CorrelationFrom(payload)).ConfigureAwait(false);
+                        break;
+                    case IpcMessageTypes.CancelPrepared:
+                        await HandleCancelPreparedAsync(id, payload).ConfigureAwait(false);
+                        break;
                     case IpcMessageTypes.Play:
                         HandlePlay(payload);
                         break;
@@ -79,10 +94,16 @@ internal sealed class AudioHostServer : IDisposable
                     case IpcMessageTypes.SetVolume:
                         HandleVolume(payload);
                         break;
+                    case IpcMessageTypes.SetOutputDevice:
+                        HandleSetOutputDevice(payload);
+                        break;
+                    case IpcMessageTypes.SetMute:
+                        HandleSetMute(payload);
+                        break;
                     case IpcMessageTypes.SetEqualizer:
                         var eq = payload?.Deserialize(AudioIpcJsonContext.Default.SetEqualizerCommand);
                         if (eq is not null && IsCurrent(payload))
-                            _engine.SetEqualizer(eq.Settings);
+                            ApplyEqualizer(eq.Settings);
                         await Notify(IpcMessageTypes.EqualizerApplied, new DiagnosticMessage
                         {
                             Generation = GenerationFrom(payload),
@@ -93,14 +114,10 @@ internal sealed class AudioHostServer : IDisposable
                     case IpcMessageTypes.SetCrossfade:
                         var crossfade = payload?.Deserialize(AudioIpcJsonContext.Default.SetCrossfadeCommand);
                         if (crossfade is not null && IsCurrent(payload))
+                        {
                             _crossfade = crossfade.Settings;
-                        if (_crossfade.Enabled)
-                            await Notify(IpcMessageTypes.Diagnostic, new DiagnosticMessage
-                            {
-                                Generation = GenerationFrom(payload),
-                                Kind = "crossfade_configured",
-                                Detail = "crossfade settings received; overlap playback is not active because the host has no prepared next track pipeline yet",
-                            }).ConfigureAwait(false);
+                            _host.SetCrossfade(_crossfade.Enabled, _crossfade.DurationMs);
+                        }
                         break;
                     case IpcMessageTypes.Ping:
                         var ping = payload?.Deserialize(AudioIpcJsonContext.Default.PingMessage) ?? new PingMessage();
@@ -154,9 +171,11 @@ internal sealed class AudioHostServer : IDisposable
         if (hello.Pack is not null)
             BindPack(hello.Pack.ToAsset());
 
-        _engine.SetEqualizer(hello.Equalizer);
+        ApplyEqualizer(hello.Equalizer);
         _crossfade = hello.Crossfade;
-        _engine.SetVolume(hello.Volume);
+        _host.SetCrossfade(_crossfade.Enabled, _crossfade.DurationMs);
+        _host.SetOutputDevice(hello.OutputDeviceId);   // seed the persisted/selected output before volume + first play
+        _host.SetVolume(hello.Volume);
         await Ready(id, true, null).ConfigureAwait(false);
     }
 
@@ -187,11 +206,11 @@ internal sealed class AudioHostServer : IDisposable
         var head = DecodeBase64(cmd.HeadBytesBase64);
         LogAndNotify($"load-fast-start received generation={cmd.Generation} track={cmd.TrackUri} file={cmd.FileIdHex} fmt={cmd.Format} head={head.Length}B dur={cmd.DurationMs}ms");
         var start = new AudioFastStart(cmd.TrackUri, cmd.FileIdHex, format, cmd.DurationMs, cmd.NormalizationGainDb, head);
-        _engine.LoadFastStart(start);
+        _host.LoadFastStart(start);
         if (Interlocked.CompareExchange(ref _pendingPlayGeneration, -1, cmd.Generation) == cmd.Generation)
         {
             LogAndNotify($"applying queued play generation={cmd.Generation} file={cmd.FileIdHex}");
-            _engine.Play();
+            _host.Play();
         }
     }
 
@@ -228,8 +247,70 @@ internal sealed class AudioHostServer : IDisposable
             cmd.HeadBoundary,
             nativeSeed,
             (AudioSourceKind)cmd.SourceKind);
-        _engine.SupplyBody(body);
+        _host.SupplyBody(body);
     }
+
+    async Task HandlePrepareNextAsync(JsonElement? payload)
+    {
+        var cmd = payload?.Deserialize(AudioIpcJsonContext.Default.PrepareNextCommand)
+                  ?? throw new InvalidOperationException("bad prepare_next payload");
+        if (cmd.Generation != Interlocked.Read(ref _generation))
+            throw new InvalidOperationException($"stale prepare generation {cmd.Generation}; active={Interlocked.Read(ref _generation)}");
+        if (!Enum.TryParse<AudioFormat>(cmd.Format, out var format))
+            throw new InvalidOperationException("unknown audio format " + cmd.Format);
+
+        var start = new AudioFastStart(cmd.TrackUri, cmd.FileIdHex, format, cmd.DurationMs,
+            cmd.NormalizationGainDb, DecodeBase64(cmd.HeadBytesBase64));
+        await _host.PrepareNextAsync(new AudioPrepareRequest(cmd.Token, start, cmd.AllowOverlap)).ConfigureAwait(false);
+        LogAndNotify($"prepare-next received generation={cmd.Generation} token={cmd.Token} track={cmd.TrackUri} overlap={cmd.AllowOverlap}");
+    }
+
+    async Task HandleSupplyNextBodyAsync(JsonElement? payload)
+    {
+        var cmd = payload?.Deserialize(AudioIpcJsonContext.Default.SupplyNextBodyCommand)
+                  ?? throw new InvalidOperationException("bad supply_next_body payload");
+        if (cmd.Generation != Interlocked.Read(ref _generation))
+            throw new InvalidOperationException($"stale prepared body generation {cmd.Generation}; active={Interlocked.Read(ref _generation)}");
+        await _host.SupplyNextBodyAsync(cmd.Token, ToAudioBody(cmd.Body)).ConfigureAwait(false);
+    }
+
+    async Task HandleCancelPreparedAsync(long id, JsonElement? payload)
+    {
+        var cmd = payload?.Deserialize(AudioIpcJsonContext.Default.CancelPreparedCommand)
+                  ?? throw new InvalidOperationException("bad cancel_prepared payload");
+        var result = await _host.CancelPreparedAsync(cmd.Token).ConfigureAwait(false);
+        if (id != 0)
+            await _ipc.SendAsync(IpcMessageTypes.CommandResult, id, new CommandResultMessage
+            {
+                Generation = cmd.Generation,
+                CorrelationId = cmd.CorrelationId,
+                Ok = true,
+                Detail = result.ToString(),
+            }, CancellationToken.None).ConfigureAwait(false);
+    }
+
+    static AudioStreamHandle ToAudioBody(SupplyBodyCommand cmd)
+    {
+        if (!Enum.TryParse<AudioFormat>(cmd.Format, out var format))
+            throw new InvalidOperationException("unknown audio format " + cmd.Format);
+        var key = Convert.FromHexString(cmd.AesKeyHex);
+        var nativeSeed = DecodeBase64(cmd.NativeCdnSeedBase64);
+        return new AudioStreamHandle(
+            cmd.TrackUri,
+            cmd.FileIdHex,
+            cmd.CdnUrls.Length > 0 ? cmd.CdnUrls[0] : "",
+            key,
+            format,
+            cmd.DurationMs,
+            cmd.NormalizationGainDb,
+            cmd.CdnUrls,
+            cmd.HeadBoundary,
+            nativeSeed,
+            (AudioSourceKind)cmd.SourceKind);
+    }
+
+    void ApplyEqualizer(EqualizerSettings settings) =>
+        _host.SetEqualizer(settings.Enabled, settings.GainsDb ?? Array.Empty<float>(), settings.PreampDb);
 
     void HandlePlay(JsonElement? payload)
     {
@@ -238,7 +319,7 @@ internal sealed class AudioHostServer : IDisposable
         if (generation == 0 || generation == current)
         {
             LogAndNotify("play received generation=" + generation + " file=" + _fileIdHex);
-            _engine.Play();
+            _host.Play();
             return;
         }
 
@@ -265,7 +346,7 @@ internal sealed class AudioHostServer : IDisposable
         if (generation != 0 && generation != current) return;
         Interlocked.Exchange(ref _pendingPlayGeneration, -1);
         LogAndNotify("pause received generation=" + generation + " file=" + _fileIdHex);
-        _engine.Pause();
+        _host.Pause();
     }
 
     void HandleStop(JsonElement? payload)
@@ -281,7 +362,7 @@ internal sealed class AudioHostServer : IDisposable
         if (generation != 0 && generation != current) return;
         Interlocked.Exchange(ref _pendingPlayGeneration, -1);
         LogAndNotify("stop received generation=" + generation + " file=" + _fileIdHex);
-        _engine.Stop();
+        _host.Stop();
     }
 
     void HandleSeek(JsonElement? payload)
@@ -289,14 +370,30 @@ internal sealed class AudioHostServer : IDisposable
         var cmd = payload?.Deserialize(AudioIpcJsonContext.Default.SeekCommand);
         if (cmd is null || cmd.Generation != Interlocked.Read(ref _generation)) return;
         LogAndNotify($"seek received generation={cmd.Generation} position={cmd.PositionMs}ms file={_fileIdHex}");
-        _engine.Seek(cmd.PositionMs);
+        _host.Seek(cmd.PositionMs);
     }
 
     void HandleVolume(JsonElement? payload)
     {
         var cmd = payload?.Deserialize(AudioIpcJsonContext.Default.VolumeCommand);
         if (cmd is null) return;
-        _engine.SetVolume(cmd.Volume);
+        _host.SetVolume(cmd.Volume);
+    }
+
+    // Device routing is GLOBAL (the HandleVolume precedent) — applied unconditionally, no generation drop.
+    void HandleSetOutputDevice(JsonElement? payload)
+    {
+        var cmd = payload?.Deserialize(AudioIpcJsonContext.Default.SetOutputDeviceCommand);
+        if (cmd is null) return;
+        LogAndNotify($"set-output-device received deviceId={cmd.DeviceId ?? "(default)"}");
+        _host.SetOutputDevice(cmd.DeviceId);
+    }
+
+    void HandleSetMute(JsonElement? payload)
+    {
+        var cmd = payload?.Deserialize(AudioIpcJsonContext.Default.MuteCommand);
+        if (cmd is null) return;
+        _host.SetOutputMuted(cmd.Muted);
     }
 
     bool AcceptGeneration(long generation)
@@ -430,6 +527,21 @@ internal sealed class AudioHostServer : IDisposable
 
     void OnEngineState(AudioHostSignal signal)
     {
+        if (signal.Kind == AudioHostSignalKind.Ended)
+        {
+            OnTrackFinished();
+            return;
+        }
+        if (signal.Kind == AudioHostSignalKind.Error)
+        {
+            // The previously-unused "error" IPC type goes live — decode/output failures surface instead of dying silently.
+            _ = Notify(IpcMessageTypes.Error, new DiagnosticMessage
+            {
+                Generation = Interlocked.Read(ref _generation),
+                Kind = "engine-error",
+                Detail = "audio engine reported a playback error",
+            });
+        }
         var update = new HostStateUpdate
         {
             Generation = Interlocked.Read(ref _generation),
@@ -440,6 +552,42 @@ internal sealed class AudioHostServer : IDisposable
         };
         _ = Notify(IpcMessageTypes.StateUpdate, update);
     }
+
+    void OnTransition(AudioTransitionSignal signal)
+    {
+        if (signal.Kind == AudioTransitionKind.Started) _trackUri = signal.TrackUri;
+        string type = signal.Kind switch
+        {
+            AudioTransitionKind.Started => IpcMessageTypes.CrossfadeStarted,
+            AudioTransitionKind.Completed => IpcMessageTypes.CrossfadeCompleted,
+            _ => IpcMessageTypes.CrossfadeMissed,
+        };
+        _ = Notify(type, new PreparedTransitionMessage
+        {
+            Generation = Interlocked.Read(ref _generation),
+            Kind = (int)signal.Kind,
+            Token = signal.Token,
+            TrackUri = signal.TrackUri,
+            PositionMs = signal.PositionMs,
+            EffectiveFadeMs = signal.EffectiveFadeMs,
+            Reason = signal.Reason,
+        });
+    }
+
+    void OnDeviceNotice(OutputDeviceNotice n) => _ = Notify(IpcMessageTypes.DeviceEvent, new DeviceEventMessage
+    {
+        Generation = Interlocked.Read(ref _generation),
+        Kind = (int)n.Kind,
+        DeviceId = n.DeviceId,
+        DeviceName = n.DeviceName,
+        WasExplicit = n.WasExplicit,
+    });
+
+    void OnSessionVolumeChanged(double slider01, bool muted) => _ = Notify(IpcMessageTypes.SessionVolume, new SessionVolumeMessage
+    {
+        Volume01 = slider01,
+        Muted = muted,
+    });
 
     void OnTrackFinished()
     {
@@ -491,9 +639,11 @@ internal sealed class AudioHostServer : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        _engine.State -= OnEngineState;
-        _engine.TrackFinished -= OnTrackFinished;
-        _engine.Dispose();
+        _transitionSub.Dispose();
+        _hostSub.Dispose();
+        _host.OutputDeviceNotice -= OnDeviceNotice;
+        _host.ExternalVolumeChanged -= OnSessionVolumeChanged;
+        _host.DisposeAsync().AsTask().GetAwaiter().GetResult();
         _deriveGate.Dispose();
 #if WAVEE_PLAYPLAY_LOCAL
         lock (_runtimeGate)

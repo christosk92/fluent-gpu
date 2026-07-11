@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Build-time converter: Files Icons.*.xaml → ThemedIconData.g.cs (name → IconDef with role layers + monochrome
+    fallbacks). NEVER runs at app runtime and is intentionally NOT part of src/FluentGpu.slnx (so the canonical build /
+    VerticalSlice gates never depend on it). Run it by hand to regenerate the harvested icon set:
+
+        dotnet run --project tools/themed-icon-import -- <FilesIconsStylesDir> <outputThemedIconData.g.cs>
+
+    e.g. dotnet run --project tools/themed-icon-import -- \
+         C:\WAVEE\Files\src\Files.App.Controls\ThemedIcon\Styles \
+         src\FluentGpu.Controls\ThemedIconData.g.cs
+
+    The harvested path data is MIT-licensed (Files Community) — the emitted file carries the attribution header and the
+    THIRD-PARTY-NOTICES entry must be kept in sync.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>FluentGpu.Tools.ThemedIconImport</RootNamespace>
+    <!-- Standalone helper — excluded from any solution-wide pack/publish. -->
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+</Project>

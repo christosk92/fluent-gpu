@@ -46,7 +46,8 @@ sealed class WaveeApp : Component
                 if (_services.Settings.Get(WaveeSettings.ThemeMode) != 0) return;
                 var kind = FluentApp.SystemUsesLightTheme() ? ThemeKind.Light : ThemeKind.Dark;
                 Tok.Use(WaveeTheme.ResolvePalette(_services.Settings.Get(WaveeSettings.PaletteId)), kind);
-                if (FluentApp.SystemAccent() is { } a) Tok.SetAccent(a);
+                if (FluentApp.SystemAccentRamp() is { } ramp) Tok.SetAccent(in ramp);
+                else if (FluentApp.SystemAccent() is { } a) Tok.SetAccent(a);
                 requestTheme?.Invoke(250f);
             };
         });

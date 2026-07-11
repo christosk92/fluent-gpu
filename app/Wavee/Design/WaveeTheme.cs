@@ -30,7 +30,12 @@ static class WaveeTheme
             _ => FluentGpu.FluentApp.SystemUsesLightTheme() ? ThemeKind.Light : ThemeKind.Dark,
         };
         Tok.Use(ResolvePalette(settings?.Get(WaveeSettings.PaletteId) ?? Tok.Palette.Id), kind);
-        if (mode == 0 && FluentGpu.FluentApp.SystemAccent() is { } a) Tok.SetAccent(a);
+        if (mode == 0)
+        {
+            // Prefer the exact OS accent ramp (theme-aware fills); else the base accent (SetAccent derives a ramp).
+            if (FluentGpu.FluentApp.SystemAccentRamp() is { } ramp) Tok.SetAccent(in ramp);
+            else if (FluentGpu.FluentApp.SystemAccent() is { } a) Tok.SetAccent(a);
+        }
         settings?.Set(WaveeSettings.ThemeMode, mode);
     }
 }

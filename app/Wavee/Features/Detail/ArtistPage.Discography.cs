@@ -27,7 +27,8 @@ sealed partial class ArtistPage : Component
                 albums.Count,
                 cardAt: (i, w) => MediaCard.Shelf(albums[i].Cover, albums[i].Name,
                     albums[i].Year > 0 ? albums[i].Year.ToString() : KindLabel(albums[i].Kind), albums[i].Uri,
-                    () => go("album:" + albums[i].Uri, albums[i].Name), () => play(albums[i].Uri), w),
+                    () => go("album:" + albums[i].Uri, albums[i].Name), () => play(albums[i].Uri), w,
+                    menu: CardMenu(albums[i].Uri, albums[i].Name)),
                 measured: true, header: AccentHeader(Loc.Get(Strings.Artist.AppearsOn))),
         ],
     };

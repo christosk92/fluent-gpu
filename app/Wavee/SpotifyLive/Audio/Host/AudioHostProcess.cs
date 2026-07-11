@@ -20,6 +20,7 @@ internal sealed class AudioHostProcess : IAsyncDisposable
     EqualizerSettings _equalizer = EqualizerSettings.Flat;
     CrossfadeSettings _crossfade = CrossfadeSettings.Off;
     double _volume = 1.0;
+    string? _outputDeviceId;
     long _msgId;
     bool _disposed;
 
@@ -37,12 +38,14 @@ internal sealed class AudioHostProcess : IAsyncDisposable
 
     public bool IsRunning => _channel is not null;
 
-    public void Configure(RuntimeAsset? asset, EqualizerSettings equalizer, CrossfadeSettings crossfade, double volume)
+    public void Configure(RuntimeAsset? asset, EqualizerSettings equalizer, CrossfadeSettings crossfade, double volume,
+        string? outputDeviceId = null)
     {
         _pack = asset is null ? null : RuntimeAssetDescriptor.FromAsset(asset);
         _equalizer = equalizer;
         _crossfade = crossfade;
         _volume = volume;
+        _outputDeviceId = outputDeviceId;
     }
 
     public async Task EnsureStartedAsync(CancellationToken ct)
@@ -79,6 +82,7 @@ internal sealed class AudioHostProcess : IAsyncDisposable
                 Equalizer = _equalizer,
                 Crossfade = _crossfade,
                 Volume = _volume,
+                OutputDeviceId = _outputDeviceId,
             }, p => p is null
                 ? new ReadyMessage { Ok = false, ContractVersion = 0, Detail = "missing ready", Pid = 0 }
                 : p.Value.Deserialize(AudioIpcJsonContext.Default.ReadyMessage)
@@ -91,8 +95,9 @@ internal sealed class AudioHostProcess : IAsyncDisposable
 
             _log.Info("audio host ready pid=" + ready.Pid + " contract=" + ready.ContractVersion);
         }
-        catch
+        catch (Exception ex)
         {
+            _log.Warn("audio host hello/spawn failed: " + ex.Message, ex);
             TeardownLocked(new IOException("audio host failed during hello"), notifyFault: true);
             throw;
         }

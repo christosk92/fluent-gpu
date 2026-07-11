@@ -82,6 +82,55 @@ public interface IAudioDspControl
     void SetCrossfade(bool enabled, int durationMs);
 }
 
+/// <summary>A stable, controller-minted description of the exact session item prepared after the active track.</summary>
+public readonly record struct AudioPrepareRequest(
+    string Token,
+    AudioFastStart Start,
+    bool AllowOverlap);
+
+public enum AudioTransitionKind { Started, Completed, Missed }
+
+/// <summary>Host-to-controller hand-off notification. Tokens make stale async resolves harmless after queue edits.</summary>
+public readonly record struct AudioTransitionSignal(
+    AudioTransitionKind Kind,
+    string Token,
+    string TrackUri,
+    long PositionMs,
+    int EffectiveFadeMs = 0,
+    string? Reason = null);
+
+public enum AudioPrepareCancelResult { Cancelled, AlreadyStarted, NotFound }
+
+/// <summary>
+/// Optional prepared-next capability. Manual next/row-click continues to use the active load API and stays immediate;
+/// this seam is consumed only for a natural-end hand-off.
+/// </summary>
+public interface IPreparedAudioHost
+{
+    Task PrepareNextAsync(AudioPrepareRequest request, CancellationToken ct = default);
+    Task SupplyNextBodyAsync(string token, AudioStreamHandle body, CancellationToken ct = default);
+    Task<AudioPrepareCancelResult> CancelPreparedAsync(string token, CancellationToken ct = default);
+    IObservable<AudioTransitionSignal> Transitions { get; }
+}
+
+// ── Output-device control (Phase A/B) — an OPTIONAL host capability discovered by interface (the IAudioDspControl
+//    precedent): implemented by both real hosts, NOT by SilentAudioHost. Keeps the core IAudioHost seam untouched. ──────
+public enum OutputDeviceNoticeKind { DeviceLost, SwitchedToDefault, DeviceRestored, OutputFailed }
+
+/// <summary>A user-facing device event (toast). <see cref="DeviceName"/> is best-effort (the device may be gone).</summary>
+public readonly record struct OutputDeviceNotice(OutputDeviceNoticeKind Kind, string DeviceId, string DeviceName, bool WasExplicit);
+
+/// <summary>Optional host capability: choose the WASAPI output endpoint + reflect Windows session volume/mute. The audio
+/// stack routes/persists/toasts through this; hosts without it (SilentAudioHost / fake backends) simply don't expose it,
+/// and the UI hides the affordances.</summary>
+public interface IAudioOutputDeviceControl
+{
+    void SetOutputDevice(string? deviceId);              // null or empty = system default
+    void SetOutputMuted(bool muted);                     // Phase B
+    event Action<OutputDeviceNotice>? OutputDeviceNotice;
+    event Action<double, bool>? ExternalVolumeChanged;   // Phase B (slider01, muted)
+}
+
 /// <summary>The default in-scope host: a SILENT renderer that reports synthetic position/Ended with zero decrypt/decode/
 /// output, so the whole control-plane → resolve → host → projection → UI pipeline runs and is testable headlessly today.
 /// Position uses the same wall-clock anchor math the UI seekbar uses (AnchorPos + (now − AnchorWall)). Ticks fire only

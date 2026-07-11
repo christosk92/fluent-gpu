@@ -105,6 +105,11 @@ public static class PathfinderOps
     public const string GetAlbum = "getAlbum";
     public const string GetAlbumHash = "b9bfabef66ed756e5e13f68a942deb60bd4125ec1f1be8cc42769dc0259b4b10";
 
+    // Generic image-color extraction: variables { imageUris:[url…] } → data.extractedColors[].{colorDark,colorLight,colorRaw}.hex.
+    // Used to tint the playlist page from its cover (albums carry colors inline in getAlbum). Persistent cache is authoritative.
+    public const string FetchExtractedColors = "fetchExtractedColors";
+    public const string FetchExtractedColorsHash = "36e90fcaea00d47c695fce31874efeb2519b97d4cd0ee1abfb4f8dc9348596ea";
+
     public const string Home = "home";
     public const string HomeHash = "40c1423fc26ea0d68cd8f212e79ca47df7968fc40d83d184e756af54fd043143";
     public const string Recents = "recents";

@@ -12,6 +12,36 @@ public class PaletteExtractionTests
 {
     static JsonElement Root(string json) => JsonDocument.Parse(json).RootElement;
 
+    // ── PLAYLIST cover via fetchExtractedColors (data.extractedColors[].colorDark) ────────────────────────
+    [Fact]
+    public void PaletteFromExtractedColorsResponse_ReadsFirstImageColorDark()
+    {
+        var p = SpotifyExportMapper.PaletteFromExtractedColorsResponse(Root("""
+        { "data": { "extractedColors": [
+            { "colorDark": { "hex": "#3B82F6", "isFallback": false },
+              "colorLight": { "hex": "#FFFFFF", "isFallback": false },
+              "colorRaw": { "hex": "#123456", "isFallback": false } }
+        ] } }
+        """));
+
+        Assert.NotNull(p);
+        Assert.Equal(0xFF3B82F6u, p!.Accent);
+        Assert.Equal(0xFF3B82F6u, p.BackgroundDark);
+        Assert.Equal(0xFF3B82F6u, p.TintedDark);
+        Assert.Equal(0xFFFFFFFFu, p.Light);
+    }
+
+    [Fact]
+    public void PaletteFromExtractedColorsResponse_NullOnFallbackEmptyOrMalformed()
+    {
+        Assert.Null(SpotifyExportMapper.PaletteFromExtractedColorsResponse(Root(
+            """{ "data": { "extractedColors": [ { "colorDark": { "hex": "#3B82F6", "isFallback": true } } ] } }""")));
+        Assert.Null(SpotifyExportMapper.PaletteFromExtractedColorsResponse(Root(
+            """{ "data": { "extractedColors": [] } }""")));
+        Assert.Null(SpotifyExportMapper.PaletteFromExtractedColorsResponse(Root("""{ "data": {} }""")));
+        Assert.Null(SpotifyExportMapper.PaletteFromExtractedColorsResponse(Root("""{}""")));
+    }
+
     // ── ALBUM (data.albumUnion.coverArt.extractedColors.colorDark) ───────────────────────────────────────
     [Fact]
     public void AlbumFromUnion_ReadsCoverColorDark()

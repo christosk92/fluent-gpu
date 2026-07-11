@@ -28,9 +28,12 @@ public enum ToolTipPlacementMode : byte { Top, Mouse }
 /// <item>Safe zone — an open bubble does NOT close the instant the pointer leaves the target: WinUI keeps it while the
 ///   pointer is inside owner ∪ tooltip (∪ their convex hull) and a 1s check timer closes it once outside
 ///   (ToolTipService_Partial.cpp:1433-1453 owner-exit only records the owner; cpp:349-381 OnSafeZoneCheck;
-///   cpp:1060-1098 IsToolTipInSafeZone; .h:22 <c>s_safeZoneCheckTimerDuration</c> = 1s). The engine surfaces no global
-///   pointer position, so the hull is approximated by the same 1s cadence: leaving owner ∪ bubble arms a
-///   <see cref="SafeZoneCheckMs"/> grace; re-entering either cancels it; the grace elapsing closes the bubble.</item>
+///   cpp:1060-1098 IsToolTipInSafeZone; .h:22 <c>s_safeZoneCheckTimerDuration</c> = 1s). Implemented against the REAL
+///   pointer (<c>InputHooks.GetPointerPosition</c>): owner-exit arms the 1s <see cref="SafeZoneCheckMs"/> poll, and each
+///   elapse geometry-tests the live pointer against owner ∪ bubble — inside keeps polling, one full interval outside
+///   closes. The bubble itself is hit-test-INVISIBLE (a real tooltip never intercepts pointer or wheel input — the
+///   hover-handler approximation this replaces made the bubble swallow wheel scrolling under it), so bubble-hover is
+///   detected by geometry, never by events. The 5s dwell stays authoritative while parked on the bubble.</item>
 /// <item>Keyboard trigger — KEYBOARD focus landing inside the target opens the bubble after 800ms (×2, normal AND
 ///   reshow: ToolTipService_Partial.cpp:1777-1779), exactly WinUI's OnOwnerGotFocus gate
 ///   (ToolTipService_Partial.cpp:1648-1664: only <c>FocusState::Keyboard</c> shows the tooltip — pointer focus does
@@ -59,8 +62,8 @@ public sealed class ToolTip : Component
     // modifier — a Parts customization cannot win those). The hover/focus/press trigger wrapper around Target is NOT
     // a part — its handlers ARE the ToolTipService mechanics.
     /// <summary>The text bubble surface (the control-built chrome inside the raw overlay host — acrylic fill, flyout
-    /// stroke, 4px corners, tooltip elevation, 9,6,9,8 padding). Owned: Children (the <see cref="Text"/> content) and
-    /// the hover handlers (safe-zone tracking).</summary>
+    /// stroke, 4px corners, tooltip elevation, 9,6,9,8 padding). Owned: Children (the <see cref="Text"/> content),
+    /// hit-test invisibility (a tooltip never intercepts input), and the realized-node capture (safe-zone geometry).</summary>
     public const string PartBubble = "Bubble";
 
     public Element Target = new BoxEl();
@@ -131,9 +134,9 @@ public sealed class ToolTip : Component
         var autoOpened = UseRef(false);
         var lastPointerLocal = UseRef<Point2>(default);   // last hover position (wrapper-local) → Mouse placement
         var dismissedUntilLeave = UseRef(false);          // press- or timeout-dismissed: no re-open until leave + re-enter
-        var overOwner = UseRef(false);                    // pointer inside the target wrapper (safe-zone half 1)
-        var overBubble = UseRef(false);                   // pointer inside the open bubble (safe-zone half 2)
+        var bubbleNode = UseRef<NodeHandle>(default);     // the open bubble's realized node → its rect joins the safe zone
         var openedAtMs = UseRef<long>(0);                 // monotonic ms at open → the 5s dwell survives 2↔3 phase flips
+        var safePoll = UseSignal(0);                      // bumped per in-zone safe-zone elapse → remounts the 1s poll clock
 
         // Timer phase: 0 = idle, 1 = show-delay counting down (open after it), 2 = bubble open (auto-dismiss counting
         // down), 3 = bubble open + pointer outside owner ∪ bubble (the 1s safe-zone grace counting down).
@@ -145,7 +148,7 @@ public sealed class ToolTip : Component
         var lastClosedAtMs = UseRef<long>(long.MinValue / 2);
         var placementMode = Placement;
 
-        Func<Element> bubbleContent = () => BubbleContent(text, OnBubbleEnter, OnBubbleLeave);
+        Func<Element> bubbleContent = () => BubbleContent(text, x => bubbleNode.Value = x);
 
         void OpenNow()
         {
@@ -205,7 +208,7 @@ public sealed class ToolTip : Component
             bool wasOpen = phase.Peek() is 2 or 3;
             if (h.Value is { IsOpen: true } o) o.Close();
             h.Value = null;
-            overBubble.Value = false;   // the bubble unmounts without delivering its own pointer-exit
+            bubbleNode.Value = default;   // the bubble unmounts — its rect leaves the safe zone
             if (wasOpen) lastClosedAtMs.Value = Environment.TickCount64;   // mark close start for the re-show window
             keyboardMode.Value = false;
             phase.Value = 0;
@@ -221,7 +224,6 @@ public sealed class ToolTip : Component
         void OnEnter(Point2 local)
         {
             lastPointerLocal.Value = local;   // tracked even while open — WinUI re-reads the current point at placement
-            overOwner.Value = true;
             if (phase.Peek() == 3) { phase.Value = 2; return; }   // back inside the safe zone → cancel the 1s grace
             if (dismissedUntilLeave.Value) return;   // dismissed: moves while still hovering must NOT re-arm (the WinUI
                                                      // owner stays out of m_nestedOwners until a real leave + re-enter)
@@ -236,28 +238,28 @@ public sealed class ToolTip : Component
         // cpp:349-381 + .h:22). A leave also lifts the press/timeout dismiss latch (the next enter may show again).
         void OnLeave()
         {
-            overOwner.Value = false;
             dismissedUntilLeave.Value = false;
-            if (phase.Peek() == 2)
-            {
-                if (!overBubble.Value) phase.Value = 3;   // arm the safe-zone grace; bubble hover keeps it open
-                return;
-            }
+            if (phase.Peek() == 2) { phase.Value = 3; return; }   // arm the 1s safe-zone poll (the bubble rect keeps it open via geometry)
             if (phase.Peek() != 3) CloseNow();   // pending open → cancel
         }
 
-        // Pointer over the open bubble: the tooltip's own bounds are part of the safe zone
-        // (ToolTipService_Partial.cpp:1060-1077 IsToolTipInSafeZone tests the tooltip rect too).
-        void OnBubbleEnter(Point2 _)
+        // The 1s safe-zone poll elapsed (phase 3): WinUI OnSafeZoneCheck / IsToolTipInSafeZone against the GLOBAL
+        // pointer — the bubble is hit-test-invisible (a real tooltip never intercepts input), so bubble-hover is
+        // detected by geometry, never by events. Owner re-entry is event-driven (OnEnter flips 3→2) but the owner
+        // rect is tested too (WinUI tests owner ∪ tooltip). The 5s dwell stays authoritative while parked in-zone.
+        void SafeZoneCheck()
         {
-            overBubble.Value = true;
-            if (phase.Peek() == 3) phase.Value = 2;
-        }
-
-        void OnBubbleLeave()
-        {
-            overBubble.Value = false;
-            if (phase.Peek() == 2 && !overOwner.Value) phase.Value = 3;
+            if (Environment.TickCount64 - openedAtMs.Value >= (long)ShowDurationMs) { AutoDismiss(); return; }
+            var scene = Context.Scene;
+            if (scene is not null && hooks.GetPointerPosition?.Invoke() is { } pt)
+            {
+                var on = anchor.Value;
+                var bn = bubbleNode.Value;
+                bool inside = (!on.IsNull && scene.IsLive(on) && InRect(scene.AbsoluteRect(on), pt))
+                           || (!bn.IsNull && scene.IsLive(bn) && InRect(scene.AbsoluteRect(bn), pt));
+                if (inside) { safePoll.Value = safePoll.Peek() + 1; return; }   // stay open — remount the poll clock (keyed by safePoll)
+            }
+            CloseNow();   // outside owner ∪ bubble for one full interval (or no trustworthy pointer) → close
         }
 
         // Keyboard focus entering the target subtree (the dispatcher routes focus-changed to ancestors on subtree
@@ -297,6 +299,7 @@ public sealed class ToolTip : Component
         }, OpenOnMount);
 
         int ph = phase.Value;   // subscribe → re-render when the timer phase changes (mount/unmount the clock)
+        int poll = safePoll.Value;   // subscribe → an in-zone safe-zone elapse remounts a fresh 1s poll clock
         // GetInitialShowDelay: Mouse ×2 normal / ×1 reshow (truncated 1.5 — see MouseReshowDelayMs); Keyboard ×2 always.
         bool isReshow = Environment.TickCount64 - lastClosedAtMs.Value < (long)BetweenShowDelayMs;
         float delay = keyboardMode.Value ? KeyboardShowDelayMs : (isReshow ? MouseReshowDelayMs : MouseShowDelayMs);
@@ -315,9 +318,9 @@ public sealed class ToolTip : Component
         Element? clock = ph == 0 ? null : Embed.Comp(() => new ToolTipClock
         {
             DurationMs = ph == 1 ? delay : ph == 2 ? dwellLeft : SafeZoneCheckMs,
-            OnElapsed = ph == 1 ? OpenNow : ph == 2 ? AutoDismiss : CloseNow,
+            OnElapsed = ph == 1 ? OpenNow : ph == 2 ? AutoDismiss : SafeZoneCheck,
         }) with
-        { Key = ph == 1 ? "tt-open-timer" : ph == 2 ? "tt-close-timer" : "tt-safezone-timer" };
+        { Key = ph == 1 ? "tt-open-timer" : ph == 2 ? "tt-close-timer" : "tt-safezone-timer:" + poll };
 
         return new BoxEl
         {
@@ -339,7 +342,7 @@ public sealed class ToolTip : Component
     //   CornerRadius = ControlCornerRadius (4px), Padding = ToolTipBorderPadding 9,6,9,8
     //   FontSize = ToolTipContentThemeFontSize 12, Foreground = TextFillColorPrimary, MaxWidth = 320, TextWrapping = Wrap.
     //   Shadow = the light transient elevation class (Elevation.Tooltip) — tooltips sit on the lowest popup band.
-    Element BubbleContent(string text, Action<Point2> onEnter, Action onLeave)
+    Element BubbleContent(string text, Action<NodeHandle> onRealized)
     {
         var bubble = new BoxEl
         {
@@ -351,10 +354,11 @@ public sealed class ToolTip : Component
             Shadow = Elevation.Tooltip,
             MaxWidth = 320f,
             Padding = new Edges4(9, 6, 9, 8),
-            // Safe-zone tracking: the bubble's own bounds keep the tooltip open
-            // (ToolTipService_Partial.cpp:1060-1077 IsToolTipInSafeZone includes the tooltip rect).
-            OnHoverMove = onEnter,
-            OnPointerExit = onLeave,
+            // A tooltip never intercepts input (WinUI tooltips are hit-test-transparent): the bubble must not swallow
+            // wheel/press under the pointer — scrolling continues through it. Its bounds still join the safe zone,
+            // tested by GEOMETRY against the real pointer (SafeZoneCheck), not by hover events.
+            HitTestVisible = false,
+            OnRealized = onRealized,   // fresh mount per open → the capture cannot go stale (unlike a recycled row)
             Children =
             [
                 new TextEl(text)
@@ -366,10 +370,13 @@ public sealed class ToolTip : Component
                 },
             ],
         };
-        // Parts: restyle the bubble chrome (acrylic, stroke, elevation, padding…); the Text content and the
-        // safe-zone hover tracking always win.
-        return Parts.Apply(PartBubble, bubble) with { Children = bubble.Children, OnHoverMove = onEnter, OnPointerExit = onLeave };
+        // Parts: restyle the bubble chrome (acrylic, stroke, elevation, padding…); the Text content, the input
+        // transparency, and the safe-zone node capture always win.
+        return Parts.Apply(PartBubble, bubble) with { Children = bubble.Children, HitTestVisible = false, OnRealized = onRealized };
     }
+
+    static bool InRect(in RectF r, Point2 p)
+        => p.X >= r.X && p.Y >= r.Y && p.X <= r.X + r.W && p.Y <= r.Y + r.H;
 }
 
 /// <summary>

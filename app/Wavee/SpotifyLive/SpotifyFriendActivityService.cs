@@ -134,7 +134,7 @@ sealed class SpotifyFriendActivityService : IFriendActivityService, IDisposable
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            _log.Info("presence seed: " + ex.Message);
+            _log.Warn("presence seed: " + ex.Message, ex);   // once per seed cycle (per-user deltas stay quieter)
             if (IsStaleSeed(connId)) return;
             ApplySeedFailure(ex.Message);
         }

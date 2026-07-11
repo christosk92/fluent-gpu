@@ -23,7 +23,7 @@ public sealed class PlaylistMutationSource : IPlaylistMutationSource
     readonly UserPlaylistSource _local;
 
     /// <summary>Set at go-live (§6): routes post-write drains through LibrarySync (same as <see cref="EngineMutationSource.ScheduleDrain"/>).</summary>
-    public Action? ScheduleDrain { get; set; }
+    public Func<CancellationToken, Task>? ScheduleDrain { get; set; }
 
     public PlaylistMutationSource(
         MutationEngine mut, ITransport transport, IHttpExchange http, Func<SessionContext> ctx,
@@ -66,12 +66,18 @@ public sealed class PlaylistMutationSource : IPlaylistMutationSource
     public Task AddTracksAsync(string playlistUri, IReadOnlyList<Track> tracks, CancellationToken ct = default)
     {
         if (IsLocal(playlistUri)) { foreach (var t in tracks) _local.AddTrack(playlistUri, t); return Task.CompletedTask; }
+        RequireStore();
+        // Membership is intentionally thin (URI + row facts). Recommended/search results are not guaranteed to have
+        // passed through metadata hydration, so persist the supplied entities before the optimistic membership edit;
+        // otherwise JoinMembership drops the new row and the add appears to work only for previously-cached tracks.
+        for (int i = 0; i < tracks.Count; i++) _store!.UpsertTrack(tracks[i]);
         long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var members = new List<PlaylistMember>(tracks.Count);
+        string account = _ctx().Account;
         for (int i = 0; i < tracks.Count; i++)
-            members.Add(new PlaylistMember("", tracks[i].Uri, _ctx().Account, now));
-        EnqueueEdit(playlistUri, new PlaylistOp(PlaylistOpKind.Add, AddLast: true, Items: members));
-        return DrainAsync(ct);
+            members.Add(new PlaylistMember("", tracks[i].Uri, account, now));
+        long edit = EnqueueEdit(playlistUri, new PlaylistOp(PlaylistOpKind.Add, AddLast: true, Items: members));
+        return DrainAsync(edit, ct);
     }
 
     public Task RemoveRowsAsync(string playlistUri, IReadOnlyList<PlaylistRowRef> rows, CancellationToken ct = default)
@@ -84,8 +90,8 @@ public sealed class PlaylistMutationSource : IPlaylistMutationSource
             ops.Add(new PlaylistOp(PlaylistOpKind.Remove, FromIndex: r.Index, Length: 1,
                 Items: new[] { new PlaylistMember(r.ItemId, r.Uri, null, 0) }));
         }
-        EnqueueEdit(playlistUri, ops.ToArray());
-        return DrainAsync(ct);
+        long edit = EnqueueEdit(playlistUri, ops.ToArray());
+        return DrainAsync(edit, ct);
     }
 
     public Task MoveRowsAsync(string playlistUri, IReadOnlyList<PlaylistRowRef> rows, int toIndex, CancellationToken ct = default)
@@ -94,8 +100,8 @@ public sealed class PlaylistMutationSource : IPlaylistMutationSource
         if (rows.Count == 0) return Task.CompletedTask;
         var ops = BuildMoveOps(rows, toIndex);
         if (ops.Count == 0) return Task.CompletedTask;
-        EnqueueEdit(playlistUri, ops);
-        return DrainAsync(ct);
+        long edit = EnqueueEdit(playlistUri, ops);
+        return DrainAsync(edit, ct);
     }
 
     /// <summary>Decomposes a (possibly non-contiguous) selection move into sequential MOV ops (one per contiguous run),
@@ -145,8 +151,8 @@ public sealed class PlaylistMutationSource : IPlaylistMutationSource
     {
         if (IsLocal(playlistUri)) throw new NotSupportedException($"Local playlist metadata editing is not implemented (uri={playlistUri}).");
         var patch = new PlaylistListAttributePatch(Name: name, Description: description, Collaborative: collaborative);
-        EnqueueEdit(playlistUri, new PlaylistOp(PlaylistOpKind.UpdateList, ListPatch: patch));
-        return DrainAsync(ct);
+        long edit = EnqueueEdit(playlistUri, new PlaylistOp(PlaylistOpKind.UpdateList, ListPatch: patch));
+        return DrainAsync(edit, ct);
     }
 
     public async Task SetCoverJpegAsync(string playlistUri, byte[] jpeg, CancellationToken ct = default)
@@ -178,15 +184,15 @@ public sealed class PlaylistMutationSource : IPlaylistMutationSource
         var regJson = JsonDocument.Parse(reg.Body);
         var pictureB64 = regJson.RootElement.GetProperty("picture").GetString() ?? "";
         var pictureBytes = Convert.FromBase64String(pictureB64);
-        EnqueueEdit(playlistUri, new PlaylistOp(PlaylistOpKind.UpdateList, ListPatch: new PlaylistListAttributePatch(PictureBytes: pictureBytes)));
-        await DrainAsync(ct).ConfigureAwait(false);
+        long edit = EnqueueEdit(playlistUri, new PlaylistOp(PlaylistOpKind.UpdateList, ListPatch: new PlaylistListAttributePatch(PictureBytes: pictureBytes)));
+        await DrainAsync(edit, ct).ConfigureAwait(false);
     }
 
     public Task ClearCoverAsync(string playlistUri, CancellationToken ct = default)
     {
         if (IsLocal(playlistUri)) throw new NotSupportedException($"Local playlist covers are not implemented (uri={playlistUri}).");
-        EnqueueEdit(playlistUri, new PlaylistOp(PlaylistOpKind.UpdateList, ListPatch: new PlaylistListAttributePatch(ClearPicture: true)));
-        return DrainAsync(ct);
+        long edit = EnqueueEdit(playlistUri, new PlaylistOp(PlaylistOpKind.UpdateList, ListPatch: new PlaylistListAttributePatch(ClearPicture: true)));
+        return DrainAsync(edit, ct);
     }
 
     public async Task SetBasePermissionAsync(string playlistUri, PlaylistPermissionLevel level, CancellationToken ct = default)
@@ -295,14 +301,18 @@ public sealed class PlaylistMutationSource : IPlaylistMutationSource
         if (_store is null) throw new InvalidOperationException("Playlist visibility/delete requires the persistent store.");
     }
 
-    void EnqueueEdit(string playlistUri, params PlaylistOp[] ops) => _mut.Edit(playlistUri, ops);
-    void EnqueueEdit(string playlistUri, IReadOnlyList<PlaylistOp> ops) => _mut.Edit(playlistUri, ops);
+    long EnqueueEdit(string playlistUri, params PlaylistOp[] ops) => RequireEdit(_mut.Edit(playlistUri, ops));
+    long EnqueueEdit(string playlistUri, IReadOnlyList<PlaylistOp> ops) => RequireEdit(_mut.Edit(playlistUri, ops));
 
-    async Task DrainAsync(CancellationToken ct)
+    async Task DrainAsync(long edit, CancellationToken ct)
     {
-        if (ScheduleDrain is { } viaLoop) { viaLoop(); return; }
-        await _mut.Drain(_transport, _ctx(), ct).ConfigureAwait(false);
+        if (ScheduleDrain is { } viaLoop) await viaLoop(ct).ConfigureAwait(false);
+        else await _mut.Drain(_transport, _ctx(), ct).ConfigureAwait(false);
+        if (_mut.IsEditPending(edit))
+            throw new InvalidOperationException("The playlist change could not be confirmed and remains queued for retry.");
     }
+
+    static long RequireEdit(long id) => id > 0 ? id : throw new InvalidOperationException("Playlist editing is not available.");
 
     static bool IsLocal(string uri) => uri.StartsWith("wavee:playlist:", StringComparison.Ordinal);
     static string IdOf(string uri) { int i = uri.LastIndexOf(':'); return i >= 0 ? uri[(i + 1)..] : uri; }

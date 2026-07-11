@@ -37,4 +37,15 @@ public class VolumeTaperTests
         Assert.Equal(0f, VolumeTaper.Amplitude(-0.5f));
         Assert.Equal(1f, VolumeTaper.Amplitude(1.5f));
     }
+
+    [Fact]
+    public void OsMaster_AppSession_AndTransitionGain_AreIndependentMultipliers()
+    {
+        // Keyboard/endpoint volume at 50% does not rewrite Wavee's 100% per-app slider.
+        Assert.Equal(0.5f, OutputGain.EffectiveAmplitude(0.5f, 1f, 1f), precision: 6);
+        // A transition stream at 50% is an additional private scalar; neither visible slider changes.
+        Assert.Equal(0.25f, OutputGain.EffectiveAmplitude(0.5f, 1f, 0.5f), precision: 6);
+        // Wavee's slider retains its cubic taper independently of the OS master.
+        Assert.Equal(0.0625f, OutputGain.EffectiveAmplitude(0.5f, 0.5f, 1f), precision: 6);
+    }
 }

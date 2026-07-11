@@ -116,6 +116,8 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     readonly string _featureVersion;
     readonly WaveeLogger _log;
     readonly IDisposable _hostSub;
+    readonly IPreparedAudioHost? _preparedHost;
+    readonly IDisposable? _transitionSub;
     readonly IDisposable _projSub;
     readonly SemaphoreSlim _lock = new(1, 1);
     readonly object _ownershipGate = new();
@@ -134,6 +136,12 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     string? _idsSessionContext;
     string _reasonStart = "clickrow";
     string? _lastControllerQueueDiagSig;
+    readonly object _prepareGate = new();
+    CancellationTokenSource? _prepareCts;
+    string? _preparedToken;
+    string? _preparedSignature;
+    QueueItemId _preparedItemId;
+    long _prepareSequence;
 
     public PlaybackController(IAudioHost host, ITrackResolver resolver, NowPlayingProjection projection,
         IContextResolver contexts,
@@ -152,6 +160,8 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         _log = log;
         _featureVersion = playFeatureVersion ?? OutboundEnvelope.DefaultFeatureVersion;
         _hostSub = host.Signals.Subscribe(Observers.From<AudioHostSignal>(OnHostSignal));
+        _preparedHost = host as IPreparedAudioHost;
+        _transitionSub = _preparedHost?.Transitions.Subscribe(Observers.From<AudioTransitionSignal>(OnAudioTransition));
         _projSub = projection.Changes.Subscribe(Observers.From<IPlaybackState>(OnProjectionChanged));
         PlaybackBucketDiagnostics.Startup("controller", "created",
             WaveeLogField.Of("device", ourDeviceId),
@@ -372,6 +382,48 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         return LocalPlayTracksAsync(track.Uri, new[] { new QueuedTrack(track, "") }, 0, ct);
     }
 
+    // Apple-Music-style "Start radio" (radio-inspiredby-mix-design §5.3): resolve the seed → a radio playlist, then park
+    // it as the new context so the current track finishes first (playback flows into the radio via the existing Ended →
+    // AutoAdvance → Next() path — no new end-of-track logic). Nothing playing (or a remote device is active) → play the
+    // radio playlist through the normal routed play path instead. Returns the radio playlist uri (for the "Open playlist"
+    // toast at the caller — this controller is UI-free), or null when no radio is available / nothing changed.
+    public async Task<string?> StartRadioAsync(string seedUri, string? displayName = null, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(seedUri)) return null;
+        var playlistUri = await _contexts.ResolveRadioSeedAsync(seedUri, ct).ConfigureAwait(false);
+        if (string.IsNullOrEmpty(playlistUri)) { _log.Info("radio: seed resolved to no playlist: " + seedUri); return null; }
+
+        // Idle here, or a remote device owns playback → play the radio playlist via the normal routed play path (which
+        // forwards to the active device / honors the local-unsupported reject). "Park after current" is a LOCAL-session op
+        // that only applies when WE are the active local player with a track already playing.
+        if (!RouteLocal() || _session.Current is null)
+        {
+            await PlayAsync(playlistUri!, 0, ct).ConfigureAwait(false);
+            return playlistUri;
+        }
+
+        // A track is playing locally → resolve the radio playlist and park it WITHOUT touching the audio host (§5.4).
+        var resolved = await _contexts.ResolveAsync(ContextSpec.ForUri(playlistUri!), ct).ConfigureAwait(false);
+        if (resolved.Count == 0) { _log.Info("radio: playlist resolved to 0 tracks: " + playlistUri); return null; }
+
+        await _lock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var snap = _session.SwitchContextAfterCurrent(resolved.ContextUri ?? playlistUri!, resolved.Tracks);
+            // Re-point the controller's continuation tracking at the radio context. A stale in-flight prefetch for the OLD
+            // context is dropped by the ReferenceEquals guard in EagerApplyContinuationAsync once _continuationFetch is nulled.
+            _nextPageUrl = string.IsNullOrEmpty(resolved.NextPageUrl) ? null : resolved.NextPageUrl;
+            _contextIsInfinite = resolved.IsInfinite || ContextResolve.IsInfinite(resolved.ContextUri ?? playlistUri!);
+            _autoplayLatchedFor = null;
+            _continuationFetch = null;
+            _projection.SetContextMetadata(resolved.Metadata);          // "Playing from …" line (mirrors SetQueueContext)
+            EmitSnap(snap, EvKind.QueueChanged);                        // publish the parked up-next; current track untouched
+        }
+        finally { _lock.Release(); }
+        _log.Info($"radio: parked {playlistUri} after current ({resolved.Count} tracks)");
+        return playlistUri;
+    }
+
     public Task PauseAsync(CancellationToken ct = default)
         => RouteLocal() ? Local(() => { _host.Pause(); EmitState(EvKind.Paused); }) : Forward("pause", ct);
 
@@ -418,6 +470,20 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         int vol = (int)Math.Round(Math.Clamp(volume01, 0, 1) * 65535);
         var r = await _outbound!.SetVolumeAsync(target, vol, ct).ConfigureAwait(false);
         if (!r.Ok) _log.Info($"outbound volume → {target}: failed ({r.Status})");
+    }
+
+    /// <summary>An EXTERNAL Windows session-volume change (SndVol / another app) reflected onto OUR device (Phase B3). We
+    /// are the active output, so this only ANNOUNCES the new volume (coalesced PutState via DeviceStatePublisher) — it is
+    /// NOT forwarded as a Connect volume PUT (that path controls a REMOTE device). Two independent echo-guards keep it from
+    /// looping: the OnProjectionChanged epsilon guard (we set _lastVolume first) and the engine's context-GUID sink filter.</summary>
+    public void OnExternalVolumeChanged(double slider01)
+    {
+        slider01 = Math.Clamp(slider01, 0, 1);
+        _lastVolume = slider01;                  // suppress the OnProjectionChanged echo-down to the host
+        _lastIntentVolume = slider01;
+        _projection.NoteLocalCommand();          // a stale cluster echo must not snap the slider back (LocalCmdWindow)
+        _projection.SetLocalVolume(slider01);    // move the bridge slider (Volume signal via PushState)
+        EmitState(EvKind.VolumeChanged);         // announce our device volume (coalesced PutState) — no outbound PUT
     }
 
     public async Task SetShuffleAsync(bool on, CancellationToken ct = default)
@@ -1049,6 +1115,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             await MaybeSeekEpisodeResumeAsync(cur, ct).ConfigureAwait(false);
             WarmUpcomingFastTrack("after-start");
             Emit(BuildEvent(kind, cur, 0, mediaId, bitrateKbps, audioFormat, durationMs, fileId));   // atomic publish carries the queue
+            SchedulePreparedNext("after-start");
             MaybeStartContinuationFetch();
             _ = SupplyBodyWhenReadyAsync(plan.Body, cur.Uri, loadStartedTicks, plan.Start.HeadBytes.Length);
             return;
@@ -1063,6 +1130,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         await MaybeSeekEpisodeResumeAsync(cur, ct).ConfigureAwait(false);
         WarmUpcomingFastTrack("after-start");
         Emit(BuildEvent(kind, cur, 0, mediaId, bitrateKbps, audioFormat, durationMs, fileId));   // atomic publish carries the queue
+        SchedulePreparedNext("after-start");
         MaybeStartContinuationFetch();
     }
 
@@ -1369,7 +1437,12 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     void Emit(in PlaybackEvent e) => Publish(_snap, e);
 
     // Publish a session snapshot with a state event carrying its current track (queue mutations + options changes).
-    void EmitSnap(QueueSnapshot snap, EvKind kind) { _snap = snap; Emit(BuildEvent(kind, snap.Current?.Track, _host.PositionMs)); }
+    void EmitSnap(QueueSnapshot snap, EvKind kind)
+    {
+        _snap = snap;
+        Emit(BuildEvent(kind, snap.Current?.Track, _host.PositionMs));
+        SchedulePreparedNext("session-changed");
+    }
 
     // Emit a state event carrying the current track + position (drives the projection slab + the PutState publish). Reads
     // the current off the immutable _snap (never the live _session) so it is safe on the unlocked inbound paths (F7).
@@ -1398,6 +1471,200 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         if (_fast is not IFastTrackWarmer warmer) return;
         try { warmer.Warm(track, reason); }
         catch (Exception ex) { _log.Info($"fast-warm dispatch failed {track.Uri}: {ex.Message}"); }
+    }
+
+    void SchedulePreparedNext(string reason)
+    {
+        if (_preparedHost is null) return;
+
+        var current = _snap.Current;
+        var next = current is null ? null : _session.PreviewNext();
+        bool allowOverlap = current is not null && next is not null && _snap.Repeat != RepeatMode.Track
+            && IsMusic(current.Track) && IsMusic(next.Track);
+        string? signature = next is null ? null
+            : $"{current!.ItemId.Value:x}:{next.ItemId.Value:x}:{(allowOverlap ? 1 : 0)}";
+
+        CancellationTokenSource? priorCts;
+        string? priorToken;
+        string? token = null;
+        CancellationTokenSource? cts = null;
+        lock (_prepareGate)
+        {
+            if (signature is not null && string.Equals(signature, _preparedSignature, StringComparison.Ordinal)) return;
+            priorCts = _prepareCts;
+            priorToken = _preparedToken;
+            _prepareCts = null;
+            _preparedToken = null;
+            _preparedSignature = null;
+            _preparedItemId = QueueItemId.None;
+
+            if (next is not null)
+            {
+                token = $"p{Interlocked.Increment(ref _prepareSequence):x}-{next.ItemId.Value:x}";
+                cts = new CancellationTokenSource();
+                _prepareCts = cts;
+                _preparedToken = token;
+                _preparedSignature = signature;
+                _preparedItemId = next.ItemId;
+            }
+        }
+
+        try { priorCts?.Cancel(); } catch { }
+        priorCts?.Dispose();
+        if (!string.IsNullOrEmpty(priorToken))
+            _ = _preparedHost.CancelPreparedAsync(priorToken, CancellationToken.None);
+
+        if (next is not null && token is not null && cts is not null)
+        {
+            _log.Info($"audio prepare scheduled token={token} item={next.ItemId.Value} track={next.Track.Uri} overlap={allowOverlap} reason={reason}");
+            _ = ResolvePreparedNextAsync(next, token, allowOverlap, cts.Token);
+        }
+    }
+
+    async Task ResolvePreparedNextAsync(QueueEntry next, string token, bool allowOverlap, CancellationToken ct)
+    {
+        try
+        {
+            AudioFastStart start;
+            Task<AudioStreamHandle>? pendingBody = null;
+            AudioStreamHandle resolvedBody = default;
+            if (_fast is not null)
+            {
+                var plan = await _fast.ResolveFastAsync(next.Track, ct).ConfigureAwait(false);
+                start = plan.Start;
+                pendingBody = plan.Body;
+            }
+            else
+            {
+                resolvedBody = await _resolver.ResolveAsync(next.Track, ct).ConfigureAwait(false);
+                start = new AudioFastStart(resolvedBody.TrackUri, resolvedBody.FileIdHex, resolvedBody.Format,
+                    resolvedBody.DurationMs, resolvedBody.NormalizationGainDb, default);
+            }
+
+            if (!IsPreparedTokenCurrent(token)) return;
+            await _preparedHost!.PrepareNextAsync(new AudioPrepareRequest(token, start, allowOverlap), ct).ConfigureAwait(false);
+            if (!IsPreparedTokenCurrent(token))
+            {
+                await _preparedHost.CancelPreparedAsync(token, CancellationToken.None).ConfigureAwait(false);
+                return;
+            }
+
+            var body = pendingBody is null ? resolvedBody : await pendingBody.ConfigureAwait(false);
+            if (!IsPreparedTokenCurrent(token))
+            {
+                await _preparedHost.CancelPreparedAsync(token, CancellationToken.None).ConfigureAwait(false);
+                return;
+            }
+            await _preparedHost.SupplyNextBodyAsync(token, body, ct).ConfigureAwait(false);
+            _log.Info($"audio prepare ready token={token} item={next.ItemId.Value} track={next.Track.Uri}");
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (Exception ex)
+        {
+            _log.Info($"audio prepare failed token={token} item={next.ItemId.Value} track={next.Track.Uri}: {ex.GetType().Name}: {ex.Message}");
+            ClearPreparedToken(token);
+            try { await _preparedHost!.CancelPreparedAsync(token, CancellationToken.None).ConfigureAwait(false); } catch { }
+        }
+    }
+
+    bool IsPreparedTokenCurrent(string token)
+    {
+        lock (_prepareGate) return string.Equals(_preparedToken, token, StringComparison.Ordinal);
+    }
+
+    void ClearPreparedToken(string token)
+    {
+        CancellationTokenSource? cts = null;
+        lock (_prepareGate)
+        {
+            if (!string.Equals(_preparedToken, token, StringComparison.Ordinal)) return;
+            cts = _prepareCts;
+            _prepareCts = null;
+            _preparedToken = null;
+            _preparedSignature = null;
+            _preparedItemId = QueueItemId.None;
+        }
+        cts?.Dispose();
+    }
+
+    static bool IsMusic(Track track)
+    {
+        if (track.Uri.StartsWith("spotify:episode:", StringComparison.OrdinalIgnoreCase)
+            || track.Uri.Contains(":episode:", StringComparison.OrdinalIgnoreCase)
+            || track.Uri.Contains(":podcast:", StringComparison.OrdinalIgnoreCase)) return false;
+        return track.Source?.Contains("podcast", StringComparison.OrdinalIgnoreCase) != true;
+    }
+
+    void OnAudioTransition(AudioTransitionSignal signal)
+    {
+        if (signal.Kind == AudioTransitionKind.Started)
+            _ = CommitPreparedTransitionAsync(signal);
+        else if (signal.Kind == AudioTransitionKind.Missed)
+        {
+            ClearPreparedToken(signal.Token);
+            _log.Info($"audio transition missed token={signal.Token} track={signal.TrackUri} reason={signal.Reason ?? "unknown"}");
+            // A miss while the current track is still playing (a recycled OOP host lost the prepared stream, or its
+            // decoder wasn't prebuffered in time) leaves the upcoming hand-off unprepared. Re-resolve so a fresh prepare
+            // is attempted for the same next item instead of silently degrading that one boundary to a hard cut. If the
+            // track already ended, the Ended fallback advances first and this just previews the following item.
+            SchedulePreparedNext("transition-missed");
+        }
+        else
+            _log.Info($"audio transition completed token={signal.Token} track={signal.TrackUri} fade={signal.EffectiveFadeMs}ms");
+    }
+
+    async Task CommitPreparedTransitionAsync(AudioTransitionSignal signal)
+    {
+        await _lock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            QueueItemId expectedItem;
+            lock (_prepareGate)
+            {
+                if (!string.Equals(_preparedToken, signal.Token, StringComparison.Ordinal))
+                {
+                    _log.Info($"audio transition rejected stale token={signal.Token} track={signal.TrackUri}");
+                    return;
+                }
+                expectedItem = _preparedItemId;
+            }
+
+            var preview = _session.PreviewNext();
+            if (preview is null || preview.ItemId != expectedItem
+                || !string.Equals(preview.Track.Uri, signal.TrackUri, StringComparison.Ordinal))
+            {
+                _log.Info($"audio transition identity mismatch token={signal.Token} expectedItem={expectedItem.Value} " +
+                    $"previewItem={preview?.ItemId.Value ?? 0} hostTrack={signal.TrackUri} previewTrack={preview?.Track.Uri ?? "(none)"}; reloading current");
+                ClearPreparedToken(signal.Token);
+                await LoadAndPlayCurrentAsync(EvKind.TrackChanged, CancellationToken.None).ConfigureAwait(false);
+                return;
+            }
+
+            var advanced = _session.Next();
+            if (advanced?.Current is not { } current || current.ItemId != expectedItem)
+            {
+                _log.Info($"audio transition advance mismatch token={signal.Token} expectedItem={expectedItem.Value}");
+                ClearPreparedToken(signal.Token);
+                await LoadAndPlayCurrentAsync(EvKind.TrackChanged, CancellationToken.None).ConfigureAwait(false);
+                return;
+            }
+
+            _snap = advanced;
+            ClearPreparedToken(signal.Token);
+            _projection.NoteLocalCommand();
+            MintCommand("trackdone");
+            _currentIds = MintPlaybackIds(current.Track);
+            Emit(BuildEvent(EvKind.TrackChanged, current.Track, Math.Max(0, signal.PositionMs),
+                durationMs: current.Track.DurationMs));
+            WarmUpcomingFastTrack("after-handoff");
+            SchedulePreparedNext("after-handoff");
+            MaybeStartContinuationFetch();
+        }
+        catch (Exception ex)
+        {
+            _log.Info("audio transition commit failed: " + ex.Message);
+        }
+        finally { _lock.Release(); }
     }
 
     void OnHostSignal(AudioHostSignal s)
@@ -1659,5 +1926,25 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         return new Track(id, uri, uri, Array.Empty<ArtistRef>(), new AlbumRef("", "", ""), 0, false, null);
     }
 
-    public void Dispose() { _remoteVolumeTx.Dispose(); _hostSub.Dispose(); _projSub.Dispose(); _lock.Dispose(); }
+    public void Dispose()
+    {
+        CancellationTokenSource? prepareCts;
+        string? preparedToken;
+        lock (_prepareGate)
+        {
+            prepareCts = _prepareCts;
+            preparedToken = _preparedToken;
+            _prepareCts = null;
+            _preparedToken = null;
+        }
+        try { prepareCts?.Cancel(); } catch { }
+        prepareCts?.Dispose();
+        if (_preparedHost is not null && preparedToken is not null)
+            _ = _preparedHost.CancelPreparedAsync(preparedToken, CancellationToken.None);
+        _remoteVolumeTx.Dispose();
+        _transitionSub?.Dispose();
+        _hostSub.Dispose();
+        _projSub.Dispose();
+        _lock.Dispose();
+    }
 }

@@ -14,21 +14,20 @@ public enum CheckState : byte { Unchecked = 0, Checked = 1, Indeterminate = 2 }
 /// cascading <c>MenuFlyoutSubItem</c> (E974 chevron + nested popup).</summary>
 public enum MenuItemKind : byte { Command = 0, Separator = 1, Toggle = 2, Radio = 3, SubMenu = 4 }
 
-/// <summary>A single row in a <see cref="MenuFlyout"/>: a label, an optional leading glyph (icon column), an enabled
-/// flag, the action to run when chosen, and an optional trailing keyboard-accelerator hint (e.g. "Ctrl+S"). Use
-/// <see cref="Separator"/> for a divider, <see cref="Toggle"/> for a checkable item (E73E check column),
-/// <see cref="RadioItem"/> for a mutually-exclusive choice (E915 bullet), or <see cref="SubMenu"/> for a cascading
-/// sub-menu (E974 chevron column, hover/Right-arrow opens the nested popup). All non-Command extras are optional so
-/// the primary <c>(Label, Glyph, Enabled, Invoke)</c> constructor call-sites are unchanged.</summary>
-public readonly record struct MenuFlyoutItem(string Label, string? Glyph = null, bool Enabled = true, Action? Invoke = null)
+/// <summary>A single row in a <see cref="MenuFlyout"/>: a label, an optional leading <see cref="Icon"/> (icon column), an
+/// enabled flag, the action to run when chosen, and an optional trailing keyboard-accelerator hint (e.g. "Ctrl+S"). The
+/// <see cref="Icon"/> is a polymorphic <see cref="IconRef"/> — a plain glyph string converts implicitly (existing call
+/// sites unchanged), or <c>IconRef.Themed("Name")</c> renders a layered vector icon. Use <see cref="Separator"/> for a
+/// divider, <see cref="Toggle"/> for a checkable item (E73E check column), <see cref="RadioItem"/> for a
+/// mutually-exclusive choice (E915 bullet), or <see cref="SubMenu"/> for a cascading sub-menu (E974 chevron column,
+/// hover/Right-arrow opens the nested popup). All non-Command extras are optional so the primary
+/// <c>(Label, Icon, Enabled, Invoke)</c> constructor call-sites are unchanged.</summary>
+public readonly record struct MenuFlyoutItem(string Label, IconRef Icon = default, bool Enabled = true, Action? Invoke = null)
 {
     public MenuItemKind Kind { get; init; }
     public bool IsChecked { get; init; }
     /// <summary>Trailing right-aligned keyboard-accelerator text (WinUI KeyboardAcceleratorTextOverride), e.g. "Ctrl+S".</summary>
     public string? AcceleratorText { get; init; }
-    /// <summary>Override font family for this row's leading <see cref="Glyph"/> (a custom icon font's "path#family").
-    /// Null ⇒ the shared <c>Theme.IconFont</c>. Lets an app ship glyphs the stock icon font doesn't carry.</summary>
-    public string? GlyphFont { get; init; }
     /// <summary>Nested items (Kind == <see cref="MenuItemKind.SubMenu"/> only) — the cascading sub-menu's rows.</summary>
     public IReadOnlyList<MenuFlyoutItem>? SubItems { get; init; }
 
@@ -36,18 +35,18 @@ public readonly record struct MenuFlyoutItem(string Label, string? Glyph = null,
     public static MenuFlyoutItem Separator => new("") { Kind = MenuItemKind.Separator };
 
     /// <summary>A checkable command (WinUI ToggleMenuFlyoutItem): an E73E check column whose glyph paints only when on.</summary>
-    public static MenuFlyoutItem Toggle(string label, bool isChecked, Action? invoke = null, string? glyph = null, bool enabled = true)
-        => new(label, glyph, enabled, invoke) { Kind = MenuItemKind.Toggle, IsChecked = isChecked };
+    public static MenuFlyoutItem Toggle(string label, bool isChecked, Action? invoke = null, IconRef icon = default, bool enabled = true)
+        => new(label, icon, enabled, invoke) { Kind = MenuItemKind.Toggle, IsChecked = isChecked };
 
     /// <summary>A mutually-exclusive command (WinUI RadioMenuFlyoutItem): an E915 bullet column whose glyph paints when selected.</summary>
-    public static MenuFlyoutItem RadioItem(string label, bool isChecked, Action? invoke = null, string? glyph = null, bool enabled = true)
-        => new(label, glyph, enabled, invoke) { Kind = MenuItemKind.Radio, IsChecked = isChecked };
+    public static MenuFlyoutItem RadioItem(string label, bool isChecked, Action? invoke = null, IconRef icon = default, bool enabled = true)
+        => new(label, icon, enabled, invoke) { Kind = MenuItemKind.Radio, IsChecked = isChecked };
 
     /// <summary>A cascading sub-menu (WinUI MenuFlyoutSubItem): an E974 chevron in the trailing column
     /// (MenuFlyout_themeresources.xaml:720 SubItemChevron); hovering the row for MenuShowDelay (400ms default,
     /// MenuFlyout_Partial.h:13), clicking it, or Right-arrow opens the nested menu to the right.</summary>
-    public static MenuFlyoutItem SubMenu(string label, IReadOnlyList<MenuFlyoutItem> items, string? glyph = null, bool enabled = true)
-        => new(label, glyph, enabled) { Kind = MenuItemKind.SubMenu, SubItems = items };
+    public static MenuFlyoutItem SubMenu(string label, IReadOnlyList<MenuFlyoutItem> items, IconRef icon = default, bool enabled = true)
+        => new(label, icon, enabled) { Kind = MenuItemKind.SubMenu, SubItems = items };
 }
 
 /// <summary>Builds the popup body for a dropdown menu — a vertical list of command rows (each <c>Role = MenuItem</c>).
@@ -93,16 +92,18 @@ public static class MenuFlyout
     /// <summary>A separator row (pure chrome — no owned props).</summary>
     public const string PartSeparator = "Separator";
 
+    /// <summary><paramref name="focusFirst"/>: put the keyboard cursor + focus on the first selectable row after mount
+    /// (WinUI keyboard-invoked menu / context menu opened via Menu key — <see cref="MenuFlyoutPresenter.FocusFirstOnMount"/>).</summary>
     public static Element Build(IReadOnlyList<MenuFlyoutItem> items, Action close, float minWidth = ThemeMinWidth,
-        TemplateParts? parts = null)
-        => Build(items, close, minWidth, onNavigate: null, parts);
+        TemplateParts? parts = null, bool focusFirst = false)
+        => Build(items, close, minWidth, onNavigate: null, parts, focusFirst);
 
     /// <summary><paramref name="onNavigate"/>: Left(-1)/Right(+1) pressed while the menu is open and the focused row is
     /// not a sub-menu boundary — MenuBar uses it to move between adjacent open menus (MenuBarItem.cpp:205-228
-    /// OnPresenterKeyDown → OpenFlyoutFrom).</summary>
+    /// OnPresenterKeyDown → OpenFlyoutFrom). <paramref name="focusFirst"/> focuses the first row on mount (keyboard open).</summary>
     public static Element Build(IReadOnlyList<MenuFlyoutItem> items, Action close, float minWidth, Action<int>? onNavigate,
-        TemplateParts? parts = null)
-        => Embed.Comp(() => new MenuFlyoutPresenter { Items = items, Close = close, MinWidth = minWidth, OnNavigate = onNavigate, Parts = parts });
+        TemplateParts? parts = null, bool focusFirst = false)
+        => Embed.Comp(() => new MenuFlyoutPresenter { Items = items, Close = close, MinWidth = minWidth, OnNavigate = onNavigate, Parts = parts, FocusFirstOnMount = focusFirst });
 
     // ── Separator: a 1px DividerStrokeColorDefault line; SeparatorThemePadding -4,1,-4,1 bleeds it past the item
     //    inset to full presenter width (we model the -4 bleed with a negative horizontal margin on the line). ────────
@@ -141,12 +142,13 @@ public static class MenuFlyout
             children.Add(new BoxEl { Width = PlaceholderWidth, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start, Children = [glyph] });
         }
 
-        // Column 1: 16×16 icon (IconRoot Viewbox), painted when this row carries a glyph.
+        // Column 1: 16×16 icon (IconRoot Viewbox), painted when this row carries an icon. Glyph vs layered-vector is
+        // decided by IconView (the single IconRef render path); disabled dimming rides `fg` for glyphs, the enabled
+        // thunk for themed layers.
         if (iconColumn)
         {
-            Element icon = it.Glyph is { Length: > 0 } g
-                ? new TextEl(g) { Size = IconGlyphSize, Color = fg, FontFamily = it.GlyphFont ?? Theme.IconFont }
-                : new BoxEl();
+            bool rowEnabled = enabled;
+            Element icon = IconView.Render(it.Icon, IconGlyphSize, glyphColor: fg, enabled: () => rowEnabled);
             children.Add(new BoxEl { Width = PlaceholderWidth, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start, Children = [icon] });
         }
 
@@ -281,7 +283,7 @@ internal sealed class MenuFlyoutPresenter : Component
             var it = Items[i];
             if (it.IsSeparator) continue;
             if (it.Kind is MenuItemKind.Toggle or MenuItemKind.Radio) checkColumn = true;
-            if (it.Glyph is { Length: > 0 }) iconColumn = true;
+            if (it.Icon.HasContent) iconColumn = true;
         }
 
         bool IsSelectable(int i) => i >= 0 && i < Items.Count && !Items[i].IsSeparator && Items[i].Enabled;

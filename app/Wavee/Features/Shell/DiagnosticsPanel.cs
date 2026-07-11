@@ -20,14 +20,17 @@ using static FluentGpu.Dsl.Ui;
 namespace Wavee;
 
 /// <summary>Settings → Diagnostics: session log viewer with accordion rows and a two-row toolbar.</summary>
-sealed class DiagnosticsPanel : Component
+sealed class DiagnosticsPanel(IAppSettings? settings = null) : Component
 {
     const int MaxVisibleRows = 2000;
     static readonly string[] s_levelLabels = ["All", "Info+", "Warnings", "Errors"];
+    // The runtime log-level dropdown items (Trace..Error). Index == (int)WaveeLogLevel; Critical is not user-selectable.
+    static readonly string[] s_logLevels = ["Trace", "Debug", "Info", "Warning", "Error"];
     static readonly string[] s_categories =
     [
-        "All", "app", "auth", "connect", "dealer", "spclient", "sync", "mutation",
-        "metadata", "playback", "audio", "lyrics", "ui", "engine", "crash", "log",
+        "All", "app", "audio", "auth", "connect", "crash", "dealer", "engine", "log", "lyrics",
+        "metadata", "mutation", "notifications", "playback", "probe", "social", "spclient", "sync",
+        "telemetry", "ui",
     ];
 
     readonly Signal<string> _search = new("");
@@ -40,6 +43,9 @@ sealed class DiagnosticsPanel : Component
     readonly Signal<long> _expandedSeq = new(-1);
     readonly Signal<int> _session = new(0);
     readonly Signal<int> _diagVersion = new(0);
+    // Runtime log-level dropdowns — seeded from the live logger, clamped to the selectable Trace..Error range.
+    readonly Signal<int> _minLevel = new(Math.Clamp((int)WaveeLog.Instance.MinLevel, 0, 4));
+    readonly Signal<int> _fileLevel = new(Math.Clamp((int)WaveeLog.Instance.FileMinLevel, 0, 4));
 
     List<WaveeLogSessions.Info>? _sessions;
     bool _sessionsBusy;
@@ -249,10 +255,40 @@ sealed class DiagnosticsPanel : Component
                             Loc.Get(Strings.Settings.Diagnostics.GroupRepeatsTip),
                             Loc.Get(Strings.Settings.Diagnostics.GroupRepeatsOffTip),
                             () => _expandedSeq.Value = -1)),
+                        LevelCombo(isFile: false),
+                        LevelCombo(isFile: true),
                     ],
                 },
             ],
         };
+    }
+
+    // A live log-level dropdown: writes the WaveeLog gate immediately and persists the choice. When the matching env var
+    // overrides the level (WaveeLog.Configure applied it at startup) the box is disabled with an "overridden by env" note.
+    Element LevelCombo(bool isFile)
+    {
+        bool envSet = isFile ? WaveeLog.EnvFileMinLevelSet : WaveeLog.EnvMinLevelSet;
+        string desc = envSet
+            ? Loc.Get(isFile ? Strings.Settings.Diagnostics.LevelOverriddenFile : Strings.Settings.Diagnostics.LevelOverriddenMin)
+            : Loc.Get(isFile ? Strings.Settings.Diagnostics.FileLevelSub : Strings.Settings.Diagnostics.CaptureLevelSub);
+        return ComboBox.Create(s_logLevels, isFile ? _fileLevel : _minLevel, width: 132f,
+            header: Loc.Get(isFile ? Strings.Settings.Diagnostics.FileLevel : Strings.Settings.Diagnostics.CaptureLevel),
+            description: desc,
+            isEnabled: !envSet,
+            onSelectionChanged: i =>
+            {
+                var lvl = (WaveeLogLevel)Math.Clamp(i, 0, 4);
+                if (isFile)
+                {
+                    WaveeLog.Instance.FileMinLevel = lvl;
+                    settings?.Set(WaveeSettings.LogFileMinLevel, i);
+                }
+                else
+                {
+                    WaveeLog.Instance.MinLevel = lvl;
+                    settings?.Set(WaveeSettings.LogMinLevel, i);
+                }
+            });
     }
 
     static Element ClickableBadge(BoxEl badge, Action onClick) =>
