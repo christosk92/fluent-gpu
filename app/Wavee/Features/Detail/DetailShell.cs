@@ -52,6 +52,7 @@ sealed class DetailShell : Component
     // disabled here so it cannot compete with the route-level page transition.
     readonly Signal<Route> _route;        // read reactively → ONE shell serves successive detail routes (kind/cfg/morphKey re-derived)
     readonly Loadable<DetailModel> _model;
+    readonly Signal<DetailHandlers?> _liveHandlers = new(null);   // reactive parent→TrackList props; never freeze accent/actions
     readonly Image? _fallbackCover;       // preview cover retained if the loaded model resolves a null cover
     string? _ctxUri;                      // the loaded context uri — the per-context sort key; refreshed each render
     DetailConfig _cfg = DetailConfig.Album;   // derived from route kind + loaded ReleaseKind each render (reused slot re-derives)
@@ -228,6 +229,9 @@ sealed class DetailShell : Component
             p => DetailNav.OpenPlaylist(navPreview, go, p),
             playAllOverride,
             MultiSelect: _multiSelect, SetMultiSelect: v => _multiSelect.Value = v);
+        // TrackList is retained across preview→palette hydration and route reuse. Publish after render so its accent and
+        // context-closing actions update through the supported signal path instead of frozen constructor arguments.
+        UseEffect(() => _liveHandlers.Value = handlers, handlers);
 
         // Viewport-size context signal — resolved UNCONDITIONALLY here (rules of hooks): the positional-hook cursor must
         // see the SAME hook sequence on every render, but the branches below differ (single-column / vertical / two-column),
@@ -252,7 +256,7 @@ sealed class DetailShell : Component
 
         // Single-column fallback: just the track table, full width, no rail / no wash.
         if (!_cfg.TwoColumn)
-            return Embed.Comp(() => new TrackList(_route, _model, bridge, handlers));
+            return Embed.Comp(() => new TrackList(_route, _model, bridge, handlers, liveHandlers: _liveHandlers));
 
         // Adaptive two-column / vertical: measure the page width → mode. Value-gated → re-render only on a breakpoint cross.
         void Measure(RectF r)
@@ -302,7 +306,8 @@ sealed class DetailShell : Component
                 [
                     Embed.Comp(() => new TrackList(_route, _model, bridge, handlers, showToolbar,
                         verticalHeader: verticalTracks,
-                        verticalHeaderPinned: _verticalHeaderPinned)) with { Key = verticalTracks ? "tracks:vertical" : "tracks:standard" },
+                        verticalHeaderPinned: _verticalHeaderPinned,
+                        liveHandlers: _liveHandlers)) with { Key = verticalTracks ? "tracks:vertical" : "tracks:standard" },
                 ],
             };
 

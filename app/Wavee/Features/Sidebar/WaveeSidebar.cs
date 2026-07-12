@@ -204,6 +204,7 @@ sealed class WaveeSidebar : Component
                 onFailed: () => ErrorState.Build(playlists.Error),
                 isEmpty: arr => arr is null || arr.Count == 0, onEmpty: () => EmptyState.Default()),
                 action: Embed.Comp(() => new SidebarCreateButton(CreatePlaylist, CreateFolder))),
+            DevToolsRow(sel),
         ],
     };
 
@@ -291,6 +292,8 @@ sealed class WaveeSidebar : Component
             ],
         };
     }
+
+    Element DevToolsRow(string sel) => LibRow("api-console", Icons.Code, "API Console", sel, 0, new BoxEl());
 
     Element PinnedDropZone() => new BoxEl
     {
@@ -401,6 +404,7 @@ sealed class WaveeSidebar : Component
             CompactIcon("local",    Icons.Folder,   sel),
             CompactDivider(),
             Embed.Comp(() => new SidebarCreateButton(CreatePlaylist, CreateFolder, 40f, 16f)),
+            CompactIcon("api-console", Icons.Code, sel),
         };
         if (st == LoadState.Ready) foreach (var p in arr) kids.Add(CompactArt(p, sel));
         else for (int i = 0; i < 4; i++) kids.Add(CompactSkeleton());

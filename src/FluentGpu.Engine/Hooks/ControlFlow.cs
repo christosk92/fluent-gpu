@@ -6,7 +6,9 @@ namespace FluentGpu.Hooks;
 /// <summary>
 /// Reactive conditional (the Solid <c>&lt;Show&gt;</c>). <see cref="When"/> reads signals; the reconciler runs it inside a
 /// boundary effect and mounts <see cref="Then"/> / <see cref="Else"/> as the condition flips — structural change only,
-/// no parent re-render.
+/// no parent re-render required to toggle. A parent re-render, when it happens, replaces the stored element and
+/// reschedules the boundary effect, so the latest <see cref="Then"/> / <see cref="Else"/> children and <see cref="When"/>
+/// thunk are reconciled in place (children built from live render state stay fresh — no freeze at first mount).
 /// </summary>
 public sealed record ShowEl(Func<bool> When, Element Then, Element? Else = null) : Element
 {

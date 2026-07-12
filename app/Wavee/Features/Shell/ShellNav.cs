@@ -25,6 +25,7 @@ static class ShellNav
             "local"    => (Loc.Get(Strings.Nav.LocalFiles), Icons.Folder),
             "history"  => (Loc.Get(Strings.Nav.History.Title), Icons.Clock),
             "settings" => ("Settings", Icons.Settings),
+            "api-console" => ("API Console", Icons.Code),
             _          => (Loc.Get(Strings.Nav.YourLibrary), Icons.MusicNote),
         };
     }

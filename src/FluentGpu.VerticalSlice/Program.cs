@@ -1645,6 +1645,32 @@ sealed class FlowReorderProbe : Component
     }
 }
 
+// A Show boundary whose branch element is built from PARENT render state (the label is read in Render, so a change
+// re-renders the parent). The parent re-render must refresh the branch IN PLACE — new text, same scene node — instead
+// of freezing the child captured at first mount (the shy-header frozen-accent bug).
+sealed class FlowShowRefreshProbe : Component
+{
+    public static int Renders;
+    public Signal<bool>? Show;
+    public Signal<string>? Label;
+    public override Element Render()
+    {
+        Renders++;
+        var show = UseSignal(true);
+        var label = UseSignal("alpha");
+        Show = show; Label = label;
+        string text = label.Value;   // read in the PARENT: a change re-renders the parent and rebuilds the Show child
+        return new BoxEl
+        {
+            Direction = 1,
+            Children =
+            [
+                Flow.Show(() => show.Value, new BoxEl { Width = 40, Height = 12, Children = [Text(text)] }),
+            ],
+        };
+    }
+}
+
 // ── Basic-input infrastructure probes (overlay / text input / repeat) ─────────────
 sealed class KeepAliveProbe : Component
 {
@@ -13309,6 +13335,41 @@ static class Slice
             $"rowA ({b0.X:0},{b0.Y:0})→({b1.X:0},{b1.Y:0}) lastIsA={lastIsA} parentRenders+{FlowReorderProbe.Renders - r0}");
     }
 
+    // A Show branch built from PARENT render state must refresh IN PLACE on a parent re-render — the new children take
+    // hold (new text, old glyphs gone) while the branch scene node keeps its handle (no remount, no Enter replay), and
+    // toggling the condition afterwards still hides the branch. This is the shy-header frozen-accent engine fix.
+    static void FlowShowRefreshChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("flowshowrefresh", new Size2(320, 480), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        FlowShowRefreshProbe.Renders = 0;
+        var root = new FlowShowRefreshProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+        host.RunFrame();
+
+        var showHost = Child(host.Scene, host.Scene.Root, 0);      // the Show boundary node
+        var branch0 = Child(host.Scene, showHost, 0);              // the active branch box — identity must survive the refresh
+        bool init = HasGlyph(device, strings, "alpha") && !branch0.IsNull;
+
+        root.Label!.Value = "beta";                               // mutate parent-read state → parent re-renders
+        host.RunFrame();
+        var branch1 = Child(host.Scene, showHost, 0);
+        bool refreshed = HasGlyph(device, strings, "beta") && !HasGlyph(device, strings, "alpha");   // new text, old gone
+        bool reRendered = FlowShowRefreshProbe.Renders > 1;       // the parent actually re-rendered (not a Show-internal toggle)
+        bool sameNode = branch1 == branch0 && !branch1.IsNull;    // in-place Update, NOT a remount
+
+        root.Show!.Value = false;                                 // the condition still hides the branch afterwards
+        host.RunFrame();
+        bool hidden = !HasGlyph(device, strings, "beta") && Child(host.Scene, showHost, 0).IsNull;
+
+        Check("61c. parent re-render refreshes a Show boundary's branch in place (new children, same node, still hides)",
+            init && refreshed && reRendered && sameNode && hidden,
+            $"init={init} refreshed={refreshed} reRendered={reRendered} sameNode={sameNode} hidden={hidden} parentRenders={FlowShowRefreshProbe.Renders}");
+    }
+
     static void RepeatButtonChecks(StringTable strings)
     {
         using var app = new HeadlessPlatformApp();
@@ -22732,6 +22793,7 @@ static class Slice
         SliderSignalChecks(strings);
         FlowChecks(strings);
         FlowReorderChecks(strings);
+        FlowShowRefreshChecks(strings);
 
         // Wave 1 engine primitives (control-parity foundation). P1 — disabled gate; P2 — stateful text ramps;
         // P4b — stateful gradient transitions; P4a — authored clip-rect channel; P6 — focus/keyboard nav.

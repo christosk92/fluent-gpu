@@ -51,7 +51,9 @@ sealed class TrackList : Component
     readonly Signal<Route> _route;                             // read reactively → cfg re-derived so ONE list serves successive detail routes
     DetailConfig _cfg = DetailConfig.Album;                     // derived from route kind + loaded ReleaseKind at the top of Render
     readonly PlaybackBridge? _bridge;
-    readonly DetailHandlers _h;                                // carries the per-context sort signal + SetSort (set by DetailShell)
+    readonly DetailHandlers _initialH;                         // first-frame fallback before DetailShell publishes live handlers
+    DetailHandlers _h;                                         // refreshed from _liveHandlers at the top of every render
+    readonly IReadSignal<DetailHandlers?>? _liveHandlers;       // signal parent→child path: accent/actions must not freeze
     readonly bool _showToolbar;                                // false in the vertical layout (the header owns the toolbar)
     readonly bool _embedded;                                   // true when hosted inside a compact pane (Library master-detail): the
                                                                // SAME virtualized list + cell, but no album trailing (About/Fans/More-by)
@@ -109,9 +111,12 @@ sealed class TrackList : Component
     Memo<bool>? _checksVisible;                                 // equality-gated: checkbox lane visible (toggle OR selection)
     Func<bool> _checksVisibleRead = static () => false;        // stable thunk for bound row lanes (repointed each render)
 
-    public TrackList(Signal<Route> route, Loadable<DetailModel> full, PlaybackBridge? bridge, DetailHandlers h, bool showToolbar = true, bool embedded = false, bool verticalHeader = false, Signal<bool>? verticalHeaderPinned = null)
+    public TrackList(Signal<Route> route, Loadable<DetailModel> full, PlaybackBridge? bridge, DetailHandlers h,
+                     bool showToolbar = true, bool embedded = false, bool verticalHeader = false,
+                     Signal<bool>? verticalHeaderPinned = null, IReadSignal<DetailHandlers?>? liveHandlers = null)
     {
-        _route = route; _full = full; _bridge = bridge; _h = h; _showToolbar = showToolbar; _embedded = embedded;
+        _route = route; _full = full; _bridge = bridge; _initialH = _h = h; _liveHandlers = liveHandlers;
+        _showToolbar = showToolbar; _embedded = embedded;
         _verticalHeader = verticalHeader && !embedded;
         _verticalHeaderPinned = verticalHeaderPinned;
     }
@@ -233,6 +238,7 @@ sealed class TrackList : Component
 
     public override Element Render()
     {
+        _h = _liveHandlers?.Value ?? _initialH;   // subscribe: palette/context publication re-renders only this list
         _play = UseAsyncCommands<string>();      // keyed by track id; a row's #-cell shows the buffer spinner while its PlayAsync runs (same instance each render)
         _lib = UseContext(LibraryBridge.Slot);   // Mutations bridge for the per-row heart (saved-state + toggle)
         _acts = UseContext(ActionServices.Slot); // the action system behind the row context menus + the batch bar
@@ -487,42 +493,39 @@ sealed class TrackList : Component
             Children = [Embed.Comp(() => new SelectionCommandBar(_selection, i => DisplayTrack(i, selectionTrackStart), host: HostInfo))],
         };
         // Vertical/hero mode: the chrome (toolbar + column header) is a scrolling list row, so once the hero scrolls
-        // past, PIN a copy to the top of the page so the Sort/search/column controls stay reachable. Lives as a ZStack
-        // sibling of `column` — OUTSIDE listKeyed — so a query/filter remount of the list never remounts the pinned bar
-        // (focus stays in the pinned search box while typing filters the list), and it floats above BOTH the list and
-        // TrailingBody's album scroller.
+        // past, PIN a slim copy to the top of the page — identity (Play + artwork + title) + search + the column headers.
+        // Sort/density/select drop from the pinned state (still reached by scrolling up; column-header click-to-sort keeps
+        // sorting reachable while pinned). Lives as a ZStack sibling of `column` — OUTSIDE listKeyed — so a query/filter
+        // remount of the list never remounts the pinned bar (focus stays in the pinned search box while typing filters the
+        // list), and it sits above BOTH the list and TrailingBody's album scroller.
         if (_verticalHeader && _verticalHeaderPinned is not null)
         {
             // A SEPARATE pinned chrome (the in-list/non-vertical `chrome` above stays plain): the sticky bar carries the
-            // Spotify-style context identity (accent Play circle + title + heart) as its left-cluster `lead`, so the
-            // identity lives INSIDE the bar — there is no floating pill. The surface wrapper gives it the floating-bar
-            // plate + a subtle top-anchored slide/fade presence.
-            const float pinnedMarginX = 8f;
+            // Spotify-style context identity (accent Play circle + artwork + title) as its left-cluster `lead`, so the
+            // identity lives INSIDE the bar — there is no floating pill. It is an EDGE-TO-EDGE lighter-glass strip (no
+            // border, shadow, corners, or floating margins): the frosted identity stays, the box chrome is gone.
             Element pinnedChrome = Chrome(set, tracks, sort, labeled, tier, checkInset,
-                                          lead: PinnedIdentity(), padX: PadX - pinnedMarginX);
+                                          lead: PinnedIdentity(), pinned: true);   // default padX: header columns align with the rows, no compensation
             float tintMix = Tok.Theme == ThemeKind.Dark ? 0.30f : 0.18f;
             ColorF glassTint = ColorF.Lerp(Tok.FillSolidBaseAlt, _h.Accent, tintMix) with { A = 1f };
             var glass = new AcrylicSpec(
                 Tint: glassTint,
-                TintOpacity: Tok.Theme == ThemeKind.Dark ? 0.88f : 0.90f,
-                BlurSigma: 22f,
+                TintOpacity: Tok.Theme == ThemeKind.Dark ? 0.70f : 0.78f,   // was 0.88/0.90 — lighter so rows stay faintly visible
+                BlurSigma: 14f,                                             // was 22
                 NoiseOpacity: 0.012f,
-                LuminosityOpacity: Tok.Theme == ThemeKind.Dark ? 0.28f : 0.48f,
+                LuminosityOpacity: Tok.Theme == ThemeKind.Dark ? 0.34f : 0.55f,
                 Fallback: glassTint);
             Element bar = new BoxEl
             {
                 Key = $"pinned-chrome:{(int)sort.Column}:{sort.Descending}",
                 Direction = 1,
-                // Dense page-accent smoked glass: enough tint coverage to read as a card instead of a transparent gray
-                // veil, while blur/noise retain depth and the lower luminosity keeps moving rows from shining through.
+                // Lighter page-accent glass, edge-to-edge: enough tint to read as frosted chrome while rows stay faintly
+                // visible through it. No box chrome — Header's trailing 1px divider doubles as the bar's bottom edge.
                 Acrylic = glass, Fill = ColorF.Transparent,
-                BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
-                // Float the card 8px from each side, then compensate inside Chrome (PadX−8): the grid's effective
-                // content width/start remain identical to the rows, so fixed Album/Time columns do not drift.
-                Corners = CornerRadius4.All(10f), Margin = new Edges4(pinnedMarginX, 6f, pinnedMarginX, 0f),
-                Shadow = Elevation.Card, ClipToBounds = true,
+                ClipToBounds = true,
                 Animate = PinnedChromePresence, TransformOriginY = 0f,
                 Children = [pinnedChrome],
+                // gone: BorderWidth/BorderColor, Corners(10), Margin(8,6,16,0), Shadow — the bar spans the full width.
             };
             Element pinnedOverlay = new BoxEl
             {
@@ -731,6 +734,9 @@ sealed class TrackList : Component
 
     Element VerticalHero()
     {
+        // This method runs inside VerticalItemContent's OWN render computation. Read the live signal here as well as in
+        // TrackList.Render so palette hydration invalidates the virtual hero slot itself, not only its retained parent.
+        var h = _liveHandlers?.Value ?? _h;
         // The width subscription lands HERE (VerticalItemContent's hero-slot render), so a width change re-renders only
         // the hero slot — never the whole list. First frame uses the 540 fallback and corrects on the first bounds pass.
         // Composition is purely width-driven (stacks below 440); the page-layout preference lives in DetailShell.
@@ -744,7 +750,7 @@ sealed class TrackList : Component
             OpacityGroup = true,
             Opacity = Prop.Of(VerticalHeaderOpacity),
             OnBoundsChanged = MeasureVerticalHeader,
-            Children = [DetailVerticalHero.Build(_model, _cfg, _h, _full, orientation, artSize, availW)],
+            Children = [DetailVerticalHero.Build(_model, _cfg, h, _full, orientation, artSize, availW)],
         };
         return new BoxEl
         {
@@ -786,15 +792,15 @@ sealed class TrackList : Component
     // bar doesn't carry them. Keyed by the labeled state so a tier cross rebuilds cleanly. (Composed from ToolFx, not the
     // CommandBar control, which only does the classic labels-on-open mode.)
     Element Chrome(ColumnSet set, TrackSize[] tracks, TrackSort sort, bool labeled, int tier, bool checkInset,
-                   Element? lead = null, float padX = PadX) => new BoxEl
+                   Element? lead = null, float padX = PadX, float? padRight = null, bool pinned = false) => new BoxEl
     {
-        Key = "chrome", Direction = 1, Padding = new Edges4(padX, WaveeSpace.S, padX, 0f),
-        Children = _showToolbar ? [Toolbar(labeled, tier, lead), Header(set, tracks, sort, checkInset)] : [Header(set, tracks, sort, checkInset)],
+        Key = "chrome", Direction = 1, Padding = new Edges4(padX, WaveeSpace.S, padRight ?? padX, 0f),
+        Children = _showToolbar ? [Toolbar(labeled, tier, lead, pinned), Header(set, tracks, sort, checkInset)] : [Header(set, tracks, sort, checkInset)],
     };
 
-    // The Spotify-style sticky-bar identity: an accent Play circle + the context title (+ heart), built from live render
+    // The Spotify-style sticky-bar identity: an accent Play circle + artwork + the context title, built from live render
     // state (_model / _h) and fed into the PINNED toolbar's left cluster. The floating pill is gone — the identity rides
-    // the bar. The title shrinks/ellipsizes so the whole cluster fits a ~350-DIP page beside the view controls + search.
+    // the bar. The title shrinks/ellipsizes so the whole cluster fits a ~350-DIP page beside the search box.
     Element PinnedIdentity()
     {
         var kids = new List<Element>(4)
@@ -816,9 +822,8 @@ sealed class TrackList : Component
                 MaxWidth = 220f, Shrink = 1f, MinWidth = 0f,
             },
         };
-        // Keyed: the TrackList persists across detail routes, so an unkeyed Embed.Comp would freeze the first route's uri.
-        if (_model.ContextUri is { Length: > 0 } uri && _cfg.Heart != HeartMode.None)
-            kids.Add(Embed.Comp(() => new SaveButton(uri, 14f, 32f, _model.Title)) with { Key = "pinbar-save:" + _model.ContextUri });
+        // The pinned bar keeps identity + search only; the heart drops from the sticky state (it stays in the in-list
+        // chrome reached by scrolling up).
         return new BoxEl
         {
             Direction = 0, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center, Shrink = 1f, MinWidth = 0f,
@@ -826,7 +831,7 @@ sealed class TrackList : Component
         };
     }
 
-    Element Toolbar(bool labeled, int tier, Element? lead = null)
+    Element Toolbar(bool labeled, int tier, Element? lead = null, bool pinned = false)
     {
         // Play / Shuffle: labeled (icon + text) at wide tiers, icon-only when the list narrows — the same collapse as the
         // view controls. Plain action buttons (no flyout) so they take the no-op NoAnchor.
@@ -842,7 +847,7 @@ sealed class TrackList : Component
         if (lead is not null)
         {
             leftKids.Add(lead);
-            leftKids.Add(ToolFx.Separator());
+            if (!pinned) leftKids.Add(ToolFx.Separator());   // nothing follows the identity in the pinned bar
         }
         if (!_verticalHeader)
         {
@@ -850,11 +855,16 @@ sealed class TrackList : Component
             leftKids.Add(Cmd(Icons.Shuffle, Loc.Get(Strings.Detail.Shuffle), _h.Shuffle));
             leftKids.Add(ToolFx.Separator());
         }
-        // The Sort button opens the "sort by" flyout — the only way to sort by Artist (no column of its own).
-        leftKids.Add(Embed.Comp(() => new SortMenuButton(_h.Sort, _h.SetSort, _cfg.ShowAlbumColumn, _hasDate, labeled)));
-        leftKids.Add(Embed.Comp(() => new ListButton(_h.Density, _h.SetDensity, labeled)));
-        if (_h.MultiSelect is not null && _h.SetMultiSelect is not null)
-            leftKids.Add(Embed.Comp(() => new MultiSelectButton(_h.MultiSelect!, _h.SetMultiSelect!, _selection, labeled)));
+        // The pinned bar drops the view controls (Sort · density · multi-select) — they stay in the in-list chrome
+        // reached by scrolling up (column-header click-to-sort keeps sorting reachable while pinned).
+        if (!pinned)
+        {
+            // The Sort button opens the "sort by" flyout — the only way to sort by Artist (no column of its own).
+            leftKids.Add(Embed.Comp(() => new SortMenuButton(_h.Sort, _h.SetSort, _cfg.ShowAlbumColumn, _hasDate, labeled)));
+            leftKids.Add(Embed.Comp(() => new ListButton(_h.Density, _h.SetDensity, labeled)));
+            if (_h.MultiSelect is not null && _h.SetMultiSelect is not null)
+                leftKids.Add(Embed.Comp(() => new MultiSelectButton(_h.MultiSelect!, _h.SetMultiSelect!, _selection, labeled)));
+        }
         var left = new BoxEl
         {
             Direction = 0, AlignItems = FlexAlign.Center, Gap = 2f,

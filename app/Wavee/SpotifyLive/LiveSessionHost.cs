@@ -198,6 +198,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
         // GoLive so a logout fired in the go-live window still tears the host down (not a no-op).
         if (ct.IsCancellationRequested) { await host.DisposeAsync().ConfigureAwait(false); return null; }
         svc.AttachLive(host, live.CredStore!);
+        svc.LiveHttp = live.Pipeline;
         // Point the switchable mutation transport at the live dealer BEFORE go-live so a write in the go-live window networks;
         // set the real username into the ambient session so write bodies carry a valid account (§3).
         svc.MutTransport?.SetInner(transport);

@@ -97,6 +97,10 @@ sealed class ContentHost : Component
             return new BoxEl { Key = "page:settings", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
                 Children = [ Embed.Comp(() => new SettingsPage()) ] };
 
+        if (r.Name == "api-console")
+            return new BoxEl { Key = "page:api-console", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
+                Children = [ Embed.Comp(() => new ApiConsolePage()) ] };
+
         if (r.Name == "search")
             return new BoxEl { Key = "page:search", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
                 Children = [ Embed.Comp(() => new SearchPage()) ] };

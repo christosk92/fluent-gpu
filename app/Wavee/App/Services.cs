@@ -54,6 +54,10 @@ public sealed class Services
     public Wavee.Backend.Playlists.PlaylistExtenderClient? RealExtender { get; private set; }
     public Wavee.Backend.SpclientBaseUrlHolder? RealSpclientBaseUrl { get; private set; }
 
+    /// <summary>Authenticated spclient HTTP pipeline (REAL backend, after go-live). Used by the API Console page for
+    /// arbitrary requests with the same auth/client-token middleware as production fetchers.</summary>
+    public Wavee.Backend.Spotify.IHttpExchange? LiveHttp { get; internal set; }
+
     /// <summary>The live Connect session host (REAL backend, after a successful login) — captured for logout teardown.
     /// Set via <see cref="AttachLive"/> BEFORE <see cref="GoLive"/> so a logout in the go-live window still tears down the
     /// live transport + dealer cleanly (not a no-op).</summary>
@@ -322,6 +326,7 @@ public sealed class Services
             pmSrc.SetHttp(new Wavee.Backend.Spotify.HttpClientExchange());   // drop the live pipeline (session-bound auth) with the host
         }
         if (RealSpclientBaseUrl is { } baseUrl) baseUrl.Value = "";   // no spclient until the next go-live
+        LiveHttp = null;
         RealSync = null;
         LiveHost = null;
         CredStore = null;

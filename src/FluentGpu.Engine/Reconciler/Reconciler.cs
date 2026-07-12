@@ -58,6 +58,8 @@ public sealed class TreeReconciler
     // Per-node reactive bindings + control-flow effects, disposed when the node is unmounted.
     private readonly Dictionary<int, List<Computation>> _nodeBindings = new();
     private readonly Dictionary<int, Element?> _showState = new();             // last-mounted branch per ShowEl node
+    private readonly Dictionary<int, ShowEl> _showEl = new();                  // latest ShowEl per boundary node (parent re-renders replace it — see UpdateShow)
+    private readonly Dictionary<int, Effect> _showEffect = new();              // the Show boundary effect, rescheduled by UpdateShow
     private readonly Dictionary<int, (Element[] Prev, int Len)> _forState = new();   // last realized children per ForEl node
     private readonly Dictionary<int, float> _childStagger = new();                   // node → per-child Enter stagger (ms): a parent's Element.Stagger, read by SynthesizeDeclarative
     private readonly Dictionary<string, NodeHandle> _keyNode = new();                 // MorphId → node: the shared-layout anchor a RelativeTo follower FLIPs against
@@ -437,7 +439,9 @@ public sealed class TreeReconciler
 
         if (newEl is ShowEl nsh)
         {
-            // The boundary effect manages its own child reactively; nothing to do on a parent re-render.
+            // Parent re-renders replace the stored ShowEl and reschedule the boundary effect (mirrors
+            // UpdateSkeletonRegion), so the new Then/Else children — and the new When thunk's deps — take hold.
+            UpdateShow(node, nsh);
             return;
         }
 
@@ -641,18 +645,32 @@ public sealed class TreeReconciler
     private void MountShow(NodeHandle node, ShowEl se)
     {
         // The boundary node is a layout-transparent container; an effect mounts/updates the active branch reactively.
-        _showState[(int)node.Raw.Index] = null;
+        // The effect reads the LATEST stored ShowEl (not its mount-time capture): parent re-renders replace the stored
+        // element and reschedule this effect (UpdateShow), like the skeleton boundary.
+        int mountIdx = (int)node.Raw.Index;
+        _showState[mountIdx] = null;
+        _showEl[mountIdx] = se;
         var eff = new Effect(Runtime, () =>
         {
             if (!_scene.IsLive(node)) return;
-            Element? desired = se.When() ? se.Then : se.Else;
             int idx = (int)node.Raw.Index;
+            if (!_showEl.TryGetValue(idx, out var cur)) return;
+            Element? desired = cur.When() ? cur.Then : cur.Else;
             _showState.TryGetValue(idx, out var last);
             ReconcileSingleChild(node, desired, last);
             _showState[idx] = desired;
             MirrorParticipation(node, _scene.FirstChild(node));
-        }, owner: null, runNow: true);
+        }, owner: null, runNow: false);
+        _showEffect[mountIdx] = eff;
         AddBinding(node, eff);
+        eff.RunNow();
+    }
+
+    private void UpdateShow(NodeHandle node, ShowEl next)
+    {
+        int idx = (int)node.Raw.Index;
+        _showEl[idx] = next;
+        if (_showEffect.TryGetValue(idx, out var eff)) eff.Schedule();
     }
 
     // Native skeleton-loading boundary (modelled on MountShow): a reconcile effect reads the current loadable's state,
@@ -1900,6 +1918,8 @@ public sealed class TreeReconciler
         if (_nodeBindings.Remove(idx, out var binds)) for (int i = 0; i < binds.Count; i++) binds[i].Dispose();
         _providerSig.Remove(idx);
         _showState.Remove(idx);
+        _showEl.Remove(idx);
+        _showEffect.Remove(idx);
         if (_forState.Remove(idx, out var fs) && fs.Prev.Length > 0)   // return the pooled For buffer (finding #6)
         {
             Array.Clear(fs.Prev, 0, fs.Len);
