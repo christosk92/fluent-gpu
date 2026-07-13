@@ -358,7 +358,7 @@ sealed class AlbumDrawerPanel : Component
                 TrackRow.Invoke(bridge, t, () => _ = _svc.Player.PlayAsync(_thin.Uri, i));
             },
             itemText: i => (uint)i < (uint)n ? tracks[i].Title : "",
-            onScrollGeometryChanged: (g => BitConverter.SingleToInt32Bits(g.OffsetY), _ => _swipeGroup.Close()),
+            onScrollGeometryChanged: (g => _swipeGroup.AnyOpen ? BitConverter.SingleToInt32Bits(g.OffsetY) : 0L, _ => _swipeGroup.Close()),
             grow: 0f);
 
     sealed class DrawerTrackRow : Component

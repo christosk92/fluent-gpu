@@ -120,6 +120,7 @@ public sealed class AppHost : IDisposable
     // E4 windowed out-of-bounds popups: one slot per leased popup window (see PopupWindowSlot).
     private readonly List<PopupWindowSlot> _popupWindows = new(2);
     private readonly List<NodeHandle> _popupSkipRoots = new(2);
+    private readonly List<NodeHandle> _reuseBlockRoots = new(4);   // W5: connected-anim fly anchors whose span-reuse ancestor chains the recorder blocks (spatial scoping)
     private int _popupTokenSeq;
 
     private readonly SceneStore _scene = new();
@@ -175,6 +176,10 @@ public sealed class AppHost : IDisposable
     private readonly List<NodeHandle> _projectionSuppressionRoots = new();          // changed projected containers that own descendant motion this commit
     private readonly List<RenderContext> _pendingLayoutEffectContexts = new();
     private readonly List<RenderContext> _pendingPassiveEffectContexts = new();
+    // Nonzero monotonic per-record epoch (§2.3/E9): baked into each freshly-walked cached-acrylic PushLayerCmd and carried
+    // in FrameInfo.FrameEpoch, so the compositor trusts a layer's own-subtree damage carve-out only for THIS frame's data
+    // (a span-copied layer keeps a stale epoch ⇒ safe fallback to the whole-frame damage union).
+    private ulong _damageEpoch;
 
     /// <summary>FLIP "First" snapshot of a BoundsAnimated node, in PARENT-RELATIVE presented space (its own layout
     /// origin + in-flight LocalTransform). Parent-relative is what makes projections respond only to LOCAL movement:
@@ -528,8 +533,14 @@ public sealed class AppHost : IDisposable
     private int _lastWaitMs;
     // Post-scroll grace window: keep display-rate pacing for a short tail after the last scroll-active frame so the eased
     // settle + any in-flight art reveal finish smoothly instead of snapping to the 30 Hz ambient cadence mid-motion.
+    // 0.25s (was 0.15): a slow wheel-notch cadence (~1 notch / 300-500ms) over an ambient loop (skeleton shimmer) kept
+    // falling out of the shorter grace between notches — a 30Hz↔display-rate oscillation felt as a per-notch lurch.
     private long _scrollGraceUntil;
-    private static readonly long ScrollGraceTicks = (long)(0.15 * Stopwatch.Frequency);
+    private static readonly long ScrollGraceTicks = (long)(0.25 * Stopwatch.Frequency);
+    // One-bit latch: did ANY viewport's scroll offset actually advance LAST frame (ScrollIntegrator.AnyOffsetWroteThisFrame,
+    // captured right after the phase-7 scroll tick)? Read at the TOP of the next Paint — before FLIP capture — to gate the
+    // MotionSuppressionSource.Scroll layout-transition suppression on REAL offset motion, not merely the hold window.
+    private bool _anyOffsetWroteLastFrame;
     private long _selfBlurHoldUntil;
     private static readonly long SelfBlurHoldAfterScrollTicks = (long)(0.12 * Stopwatch.Frequency);
     private long _mainScrollHoldUntil;   // any-viewport user scroll — apps peek via Reconciler.PeekMainScrollBusy
@@ -620,12 +631,18 @@ public sealed class AppHost : IDisposable
         if (r == WakeReasons.DynamicText) return 100;   // HUD-only: 10 Hz readout, ~0% idle CPU
         // A live scroll arms a short display-rate grace so the eased settle + any in-flight art reveal finish at the
         // display rate instead of snapping back to the 30 Hz ambient cadence the instant the fling drops below cutoff.
-        if ((r & WakeReasons.ScrollAnim) != 0) _scrollGraceUntil = Stopwatch.GetTimestamp() + ScrollGraceTicks;
+        long now = Stopwatch.GetTimestamp();
+        if ((r & WakeReasons.ScrollAnim) != 0) _scrollGraceUntil = now + ScrollGraceTicks;
         // Ambient-only animation (no latency-sensitive interaction live, and any AnimEngine activity is loop-only — a
         // spinner/shimmer, NOT a one-shot transition mid-flight): pace to AmbientAnimationFps instead of the full
         // display refresh. A real input/post still wakes WaitForWork early, so this paces only the autonomous tick.
+        // The cap ALSO defers through the 0.45s post-scroll hold (_mainScrollHoldUntil, refreshed at the phase-7 scroll
+        // tick): slow wheel-notch scrolling over an ambient loop (skeleton shimmer) settles between notches, and without
+        // the hold each notch stepped 30Hz→display-rate→30Hz — the step-up Resync at ApplyProjections' frame-clock guard
+        // then dropped a stale ~34ms delta per notch, felt as a cadence lurch. Holding display rate through the whole
+        // interaction keeps the clock monotonic; the cap resumes ~0.45s after the last real user-scroll frame.
         if (AmbientAnimationFps > 0 && (r & LatencySensitiveWake) == 0 && AnimIsAmbient()
-            && Stopwatch.GetTimestamp() >= _scrollGraceUntil)
+            && now >= _scrollGraceUntil && now >= _mainScrollHoldUntil)
         {
             MaybeTrimOnIdle();   // #10: playback/ambient never reaches WakeReasons.None, so trim the slab tail here too (30s-cadence-gated)
             return AmbientFrameWaitMs();
@@ -715,6 +732,9 @@ public sealed class AppHost : IDisposable
         // A bound virtual list spreading its initial window across frames (cold-realize stagger) needs frames to keep
         // coming until it finishes — it's neither a re-render nor an animation, so fold it into FrameNeeded.
         if (_reconciler.HasWarmingVirtuals) r |= WakeReasons.FrameNeeded;
+        // A viewport whose overscan the steady-scroll row budget (or a nested-rail mount) only partially realized needs
+        // frames to keep coming until the halo catches up — the visible band is already fully realized (never a stall).
+        if (_reconciler.HasBudgetDeferredVirtuals) r |= WakeReasons.FrameNeeded;
         if (_runtime.HasPending) r |= WakeReasons.RuntimePending;
         if (_scene.HasDynamicText) r |= WakeReasons.DynamicText;
         if (_anim.HasActive || _connected.HasActive) r |= WakeReasons.Anim;   // connected fly / snapshot awaiting dest; hover/press fades are now _anim tracks too
@@ -757,6 +777,11 @@ public sealed class AppHost : IDisposable
     /// tick). Not exposed publicly; VerticalSlice has InternalsVisibleTo.</summary>
     internal ScrollIntegrator ScrollIntegratorForTest => _scrollAnim;
     internal int DeviceLostRecoveryCountForTest => _deviceLostRecoveryCount;
+    /// <summary>Test-only (wake.scrollHoldSuppressesAmbientCap): read/force the 0.45s post-scroll hold so the gate can
+    /// pin the hold live/expired deterministically instead of sleeping wall-clock. Stopwatch-tick deadline.</summary>
+    internal long MainScrollHoldUntilForTest { get => _mainScrollHoldUntil; set => _mainScrollHoldUntil = value; }
+    /// <summary>Test-only companion: force the post-scroll display-rate grace expired so the gate isolates the HOLD term.</summary>
+    internal void SetScrollGraceForTest(long until) => _scrollGraceUntil = until;
 
     /// <summary>The frame loop's current wake-reason mask — why <see cref="HasActiveWork"/> would keep running this
     /// instant (for tests / census). An O(1) recompute of the same terms.</summary>
@@ -1352,6 +1377,14 @@ public sealed class AppHost : IDisposable
 
             long frameStart = Stopwatch.GetTimestamp();
             Motion.SetLayoutTransitionsSuppressed(MotionSuppressionSource.WindowResize, _window.InModalLoop);
+            // Scroll-coincident reconcile → snap, don't FLIP (perf plan W2-P2.2): while a user scroll is actually moving
+            // content (an offset REALLY advanced last frame — the latch below the phase-7 scroll tick — AND the 0.45s
+            // post-scroll hold is live), a reconcile that lands this frame must not seed FLIP projections: rows/cards
+            // flying to their new slots through a scrolling viewport reads as jank and burns structural tracks per frame.
+            // Set BEFORE CaptureProjections so ApplyProjections takes its suppressed-snap branch. Gating on the offset
+            // latch (not the hold alone) keeps a click-triggered expand right after scrolling FLIPping normally.
+            Motion.SetLayoutTransitionsSuppressed(MotionSuppressionSource.Scroll,
+                _anyOffsetWroteLastFrame && frameStart < _mainScrollHoldUntil);
             // FG_RESIZE_DIAG: per-tick segment timing of the modal-loop keep-alive paint. Captured only when both the flag
             // is on AND this is a keep-alive tick — zero work / zero alloc otherwise (the normal hot path is untouched).
             bool diagTick = keepAlive && s_resizeDiag;
@@ -1589,6 +1622,10 @@ public sealed class AppHost : IDisposable
                 _selfBlurHoldUntil = scrollHoldNow + SelfBlurHoldAfterScrollTicks;
                 _mainScrollHoldUntil = scrollHoldNow + MainScrollHoldTicks;
             }
+            // Latch for NEXT frame's MotionSuppressionSource.Scroll decision (set at the top of Paint, before FLIP
+            // capture): did any viewport's offset actually advance THIS frame? Captured here — right at the scroll-apply
+            // site — so the next Paint reads last frame's real motion, not the whole hold window.
+            _anyOffsetWroteLastFrame = _scrollAnim.AnyOffsetWroteThisFrame;
             bool holdSelfBlurForScroll = scrollHoldNow < _selfBlurHoldUntil;
             bool scrollActive = holdSelfBlurForScroll || _scrollAnim.AnyOffsetWroteThisFrame;
             _images.SuppressReveals = scrollActive;
@@ -1657,18 +1694,23 @@ public sealed class AppHost : IDisposable
                     _popupSkipRoots.Add(_popupWindows[i].Root);
             SpanReuseDisabledReason spanDisable = SpanReuseDisabledReason.None;
             // Per-node record-dirty carries reconcile/layout/image invalidation — no window-global SceneChanged/Layout/ImageContent kills.
+            // W5 spatial scoping: PopupWindows (skipRoots) + Detached (connected-anim fly anchors) NO LONGER kill span reuse
+            // globally — the recorder blocks only their ancestor chains (skipRoots it already sees; the fly anchors arrive via
+            // reuseBlockRoots below). Only whole-canvas events (Resize/ModalPaint) stay global here.
             if (resized) spanDisable |= SpanReuseDisabledReason.Resize;
             if (keepAlive && _window.SizedInModalLoop) spanDisable |= SpanReuseDisabledReason.ModalPaint;
-            if (_popupWindows.Count != 0) spanDisable |= SpanReuseDisabledReason.PopupWindows;
-            if (_connected.Detached.Count != 0) spanDisable |= SpanReuseDisabledReason.Detached;
+            _connected.CollectReuseBlockRoots(_reuseBlockRoots);
             bool imageFadeActive = _images.HasActiveCrossfades;
             _imageCrossfadeWasActive = imageFadeActive;
+            if (++_damageEpoch == 0) _damageEpoch = 1;   // nonzero (0 = "no carve-out info" sentinel for the compositor)
             var recordStats = SceneRecorder.Record(_scene, _drawList, _images, in focus, Tok.ScrollThumb, Tok.AcrylicFlyout.Fallback, in textEdit,
                 CollectionsMarshal.AsSpan(_popupSkipRoots), holdSelfBlurForAnyUserScroll: scrollActive || _scrollAnim.AnyOffsetWroteThisFrame,
                 spans: _spanTable, spanReuseDisabled: spanDisable,
                 // Damage the band any structural-track cancel (drag-suppression snap @ ApplyProjections, resize snap @
                 // CancelStructuralAll above) vacated this frame — else the ghost rail persists. AsSpan is alloc-free.
-                pendingStructuralDamage: CollectionsMarshal.AsSpan(_anim.PendingStructuralDamage)); // 8 record
+                pendingStructuralDamage: CollectionsMarshal.AsSpan(_anim.PendingStructuralDamage), // 8 record
+                damageEpoch: _damageEpoch, // §2.3/E9 own-subtree carve-out epoch
+                reuseBlockRoots: CollectionsMarshal.AsSpan(_reuseBlockRoots)); // W5 spatial scoping: connected-anim fly anchor chains to block
             _anim.PendingStructuralDamage.Clear();   // retains capacity → no steady-state alloc
             SceneRecorder.RecordDetached(_scene, _drawList, _images, _connected.Detached, _scene.OverlayClip);   // 8 detached fly snapshots (flag-gated rebuild; no-op when none)
             RecordPopupWindows(in focus, in textEdit);         // 8b record each popup window's subtree DrawList
@@ -1720,7 +1762,7 @@ public sealed class AppHost : IDisposable
                 // (FG_RENDER_THREAD): the fgpu-render thread submits/presents; the UI BLOCKS in DrainSync (force-sync).
                 // Step 5 (FG_RENDER_ASYNC): the UI WakeAsyncs and PROCEEDS — the render thread presents on its own
                 // timeline (the smoothness win: the GPU fence-wait no longer bounds back to the UI thread).
-                var submitInfo = new FrameInfo(FrameSizePx(keepAlive), _window.Scale, Clear, recordStats.Damage, _images.ClockMs);
+                var submitInfo = new FrameInfo(FrameSizePx(keepAlive), _window.Scale, Clear, recordStats.Damage, _images.ClockMs, _damageEpoch);
                 if (resized && keepAlive) _device.HintSettlePresent();
                 _renderSeam.Publish(_drawList.Bytes, _drawList.SortKeys, in submitInfo, suppressVsync: keepAlive);
                 if (_renderThread is not null)

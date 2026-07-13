@@ -86,6 +86,19 @@ sealed class LyricsView : Component
     readonly Signal<bool> _interlude = new(false);// active line sung out into a long instrumental gap — recede it
     readonly FloatSignal _nowMs = new(0f);
 
+    // Per-line PACKED emphasis (bucket 0..6 in bits 0-2, interlude flag in bit 3). One VALUE-GATED Signal per line: the
+    // reactive core propagates staleness eagerly (a Memo does NOT gate downstream re-renders by value), so the ONLY way a
+    // line re-renders solely on ITS OWN emphasis change is a per-line signal whose setter no-ops when the packed value is
+    // unchanged. As `_activeLine` sweeps, PushEmphasis rewrites all lines but only the ~dozen crossing a bucket boundary
+    // actually notify — the rest (already at bucket 6) are no-op writes. Sized in PrepareDocument alongside `_glowAlpha`.
+    Signal<int>[] _lineEmphasis = Array.Empty<Signal<int>>();
+    readonly Signal<int> _emphasisFallback = new(6);   // bucket 6 (fully dim) — only used during a transient array-resize gap
+
+    bool _docWordByWord;   // any line word-timed with syllables ⇒ the karaoke wipe needs 60 Hz; line-synced docs pace at 30 Hz
+    // The lyrics ticker cadence: word-by-word karaoke needs the 16 ms (~60 Hz) sweep; line-synced docs (no per-frame wipe)
+    // pace at 33 ms (~30 Hz) — the 240 ms glow fade still gets 7+ steps and the wipe block no-ops for them.
+    internal long WipeIntervalMs => _docWordByWord ? 16 : 33;
+
     NodeHandle _viewportNode = NodeHandle.Null;
     NodeHandle[] _lineNodes = Array.Empty<NodeHandle>();
     NodeHandle[] _glowNodes = Array.Empty<NodeHandle>();
@@ -318,6 +331,9 @@ sealed class LyricsView : Component
         _glowNodes = new NodeHandle[doc.Lines.Count];
         _glowAlpha = new FloatSignal[doc.Lines.Count];
         for (int i = 0; i < _glowAlpha.Length; i++) _glowAlpha[i] = new FloatSignal(0f);
+        _lineEmphasis = new Signal<int>[doc.Lines.Count];
+        for (int i = 0; i < _lineEmphasis.Length; i++) _lineEmphasis[i] = new Signal<int>(6);   // seed = fully dim
+        _docWordByWord = IsWordByWordDoc(doc);
         _glowInLine = -1; _glowOutLine = -1;
         _resumeAtWallMs = 0L;
         if (IsTimed(doc))
@@ -330,10 +346,41 @@ sealed class LyricsView : Component
             _voiceLine.Value = -1;
             _interlude.Value = false;
         }
+        PushEmphasis();   // seed per-line emphasis for the freshly loaded doc (before OnFrame drives it)
         _nowMs.Value = posMs;
         _scrollSnapped = false;
         ResetWipeThrottle();
         RebaseClock(posMs);   // seed the dejittered clock anchor for the freshly loaded doc
+    }
+
+    static bool IsWordByWordDoc(LyricsDocument doc)
+    {
+        foreach (var l in doc.Lines)
+            if (l.IsWordByWord && l.Syllables.Count > 0)
+                return true;
+        return false;
+    }
+
+    // Packed per-line emphasis: bucket (distance from active, clamped 0..6) in bits 0-2, interlude flag in bit 3. Clamp 6
+    // is exact for the look — the DoF falloff saturates at dist/5 and the glyph-mount `near` threshold is dist ≤ 2, so any
+    // line ≥6 away is visually identical; clamping lets far lines share bucket 6 and skip the re-render as active sweeps.
+    static int PackEmphasis(int index, int active, bool interlude)
+    {
+        int bucket = active < 0 ? 6 : Math.Min(Math.Abs(index - active), 6);
+        int e = bucket;
+        if (interlude && index == active) e |= 8;   // interlude recede applies only to the active line itself
+        return e;
+    }
+
+    // Rewrite every line's emphasis signal from the current active/interlude. Value-gated: only lines that actually change
+    // bucket notify their subscriber, so a boundary re-renders ~a dozen rows instead of the whole realized document.
+    void PushEmphasis()
+    {
+        var em = _lineEmphasis;
+        if (em.Length == 0) return;
+        int active = _activeLine.Peek();
+        bool interlude = _interlude.Peek();
+        for (int i = 0; i < em.Length; i++) em[i].Value = PackEmphasis(i, active, interlude);
     }
 
     void ClearDocument()
@@ -348,6 +395,7 @@ sealed class LyricsView : Component
         _lineNodes = Array.Empty<NodeHandle>();
         _glowNodes = Array.Empty<NodeHandle>();
         _glowAlpha = Array.Empty<FloatSignal>();
+        _lineEmphasis = Array.Empty<Signal<int>>();
         _glowInLine = -1; _glowOutLine = -1;
         _resumeAtWallMs = 0L;
         _activeLine.Value = -1;
@@ -451,7 +499,8 @@ sealed class LyricsView : Component
             {
                 var idx = i;
                 return Embed.Comp(() => new LyricLineView(
-                    idx, lines[idx], _activeLine, _voiceLine, _interlude, _nowMs,
+                    idx, lines[idx],
+                    (uint)idx < (uint)_lineEmphasis.Length ? _lineEmphasis[idx] : _emphasisFallback, _nowMs,
                     idx < _glowAlpha.Length ? _glowAlpha[idx] : null,
                     fontSz, lineHt, rowPad, sidePad, centered,
                     ReportLineNode, ReportGlowNode, () => SeekToLine(idx))) with { Key = "ll" + idx };
@@ -653,6 +702,7 @@ sealed class LyricsView : Component
         }
         bool activeChanged = active != _activeLine.Peek();
         if (activeChanged) _activeLine.Value = active;
+        bool emphasisChanged = activeChanged;
         int prevVoiceLine = _voiceLine.Peek();
         bool voiceChanged = voiceLine != prevVoiceLine;
         if (voiceChanged) _voiceLine.Value = voiceLine;
@@ -681,11 +731,12 @@ sealed class LyricsView : Component
             long sungOutPoint = wordTimed ? al.Syllables[^1].EndMs : 0L;
             long nextStartMs = active + 1 < doc.Lines.Count ? doc.Lines[active + 1].StartMs : long.MaxValue;
             bool interlude = wordTimed && nowMs >= sungOutPoint && (nextStartMs - sungOutPoint) >= 4000;
-            if (interlude != _interlude.Peek()) _interlude.Value = interlude;
+            if (interlude != _interlude.Peek()) { _interlude.Value = interlude; emphasisChanged = true; }
 
             if (!_scrollSnapped || activeChanged || forceVisual)
                 ScrollActiveIntoView(scene, active, wallMs);
         }
+        if (emphasisChanged) PushEmphasis();
         LastFrameDiagnostics = new(nowMs, auth, active, voiceLine, activeChanged, voiceChanged, _scrollSnapped, playing, doc.Lines.Count);
 
         // ── Visual lane: glow cross-fade (budget-deferred during a main scroll) + karaoke wipe (never deferred) ──
@@ -1042,9 +1093,7 @@ sealed class LyricLineView : Component
 {
     readonly int _index;
     readonly LyricLine _line;
-    readonly Signal<int> _activeLine;
-    readonly Signal<int> _voiceLine;
-    readonly Signal<bool> _interlude;
+    readonly Signal<int> _emphasis;   // packed per-line emphasis (bucket + interlude bit) — value-gated by LyricsView
     readonly FloatSignal _nowMs;
     readonly FloatSignal? _glowFade;   // per-line halo alpha (owned + ramped by LyricsView); bound as the glow wrapper's Opacity
     readonly float _fontSz;
@@ -1056,11 +1105,11 @@ sealed class LyricLineView : Component
     readonly Action<int, NodeHandle> _reportGlow;
     readonly Action _onSeek;
 
-    public LyricLineView(int index, LyricLine line, Signal<int> activeLine, Signal<int> voiceLine, Signal<bool> interlude, FloatSignal nowMs,
+    public LyricLineView(int index, LyricLine line, Signal<int> emphasis, FloatSignal nowMs,
         FloatSignal? glowFade,
         float fontSz, float lineHt, float rowPad, float sidePad, bool centered, Action<int, NodeHandle> reportNode, Action<int, NodeHandle> reportGlow, Action onSeek)
     {
-        _index = index; _line = line; _activeLine = activeLine; _voiceLine = voiceLine; _interlude = interlude; _nowMs = nowMs;
+        _index = index; _line = line; _emphasis = emphasis; _nowMs = nowMs;
         _glowFade = glowFade;
         _fontSz = fontSz; _lineHt = lineHt; _rowPad = rowPad; _sidePad = sidePad; _centered = centered;
         _reportNode = reportNode; _reportGlow = reportGlow; _onSeek = onSeek;
@@ -1073,11 +1122,12 @@ sealed class LyricLineView : Component
 
     public override Element Render()
     {
-        int active = _activeLine.Value;
-        int voice = _voiceLine.Value;
-        bool isActive = _index == active;
-        bool interlude = isActive && _interlude.Value;   // active line sung out into a long instrumental gap — recede it
-        int dist = active < 0 ? 6 : Math.Abs(_index - active);
+        // Read ONLY this line's packed emphasis — a value-gated signal LyricsView rewrites as the active line moves, so
+        // reading `.Value` here re-renders the row solely when ITS OWN bucket/interlude changes (not on every boundary).
+        int e = _emphasis.Value;
+        int dist = e & 7;                        // bucket 0..6 (clamped distance from the active line)
+        bool interlude = (e & 8) != 0;           // active line sung out into a long instrumental gap — recede it
+        bool isActive = dist == 0;               // bucket 0 ⇔ this is the active line
 
         float f = MathF.Min(dist / 5f, 1f);
         // Emphasis targets. Active line: full focus (scale 1 / opacity 1 / crisp). During an instrumental interlude the
@@ -1294,7 +1344,7 @@ sealed class LyricsTicker : ReactiveComponent
         _timer = new Timer(_ => post(() =>
         {
             if (Volatile.Read(ref _timerGeneration) == generation) Owner.OnFrame();
-        }), null, 0, LyricsView.KaraokeWipeIntervalMs);
+        }), null, 0, Owner.WipeIntervalMs);
     }
 
     void StopTimer()

@@ -234,6 +234,10 @@ public struct FillPathCmd { public PathRef Path; public BrushHandle Fill; public
 public struct DrawIconMaskCmd { public RectF Rect; public ColorF Tint; public int PathId; public Affine2D Transform; public float Opacity; }
 public struct PushLayerCmd { public RectF DeviceBounds; public float Opacity; public BlendPreset Blend;
                              public EffectHandle Effect; public ClipHandle Clip; }
+// SPEC form (above) — the as-built acrylic path carries additional POD fields (LayerId, tint/fallback/sigma recipe,
+// FeatherFrac, and the retained-backdrop-cache own-damage payload `OwnDmg{X,Y,W,H}` + `DamageEpoch`). Those acrylic-
+// cache fields are OWNED by backdrop-effects-animation.md §2.3 (the region-aware reuse / own-subtree carve-out contract);
+// this doc owns only the base layer-boundary shape. Adding an acrylic-cache field ⇒ update §2.3, not this struct.
 // AUTHORITY (this doc owns the SHAPE + raster). `DrawGradientStroke` = a gradient-tinted SDF OUTLINE — the WinUI
 // (Accent)ControlElevationBorder. Payload = the gradient-rect command + a stroke width; the gradient SPEC comes from
 // the sparse `_borderBrushes` side-table (scene-memory.md, mirrors `_gradients`), keyed by the `BoxEl.BorderBrush`
@@ -828,6 +832,15 @@ A memcpy'd clean DrawList span is **valid IFF**:
 
 `TransformDirty`-only nodes reuse their span; the **batcher re-applies the new `WorldTransform[node]` to the
 cached instanced quads at submit (no re-record)** — composition-style independent animation.
+
+**Walk-gate scoping (spatial reuse-blocking).** Beyond the per-span IFF above, the Walk's reuse gates carry a
+second, spatial guard: a node on the **ancestor chain of a special-cased visual** (popup skipRoot, connected-anim
+fly anchor, overlay/drag-ghost, or exit orphan's visual parent) is BLOCKED from reuse **and** stores no span this
+frame (`&& !spans.IsBlocked(nodeIndex, frame)` on both the exact and translated copy gates; the store + culled-store
+sites skip blocked nodes). This replaces the old whole-tree `SpanReuseDisabledReason` kill for those four reasons
+with a scoped ancestor-chain block, so an open flyout / in-flight fly / exit no longer forces an O(scene) re-record.
+The mechanism + the containment/not-store-while-blocked safety argument are owned by **scene-memory.md §4.3a**;
+`FirstRecord`/`Resize`/`ModalPaint`/`DragGhost` stay global.
 
 ---
 

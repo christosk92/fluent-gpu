@@ -143,7 +143,7 @@ sealed class QueuePanel : Component
                     Grow = 1f, MinHeight = 0f,
                     AutoEdgeFade = true,
                     ScrollKey = "queuepanel",
-                    OnScrollGeometryChanged = (g => BitConverter.SingleToInt32Bits(g.OffsetY), _ => _swipeGroup.Close()),
+                    OnScrollGeometryChanged = (g => _swipeGroup.AnyOpen ? BitConverter.SingleToInt32Bits(g.OffsetY) : 0L, _ => _swipeGroup.Close()),
                     Content = new BoxEl
                     {
                         Direction = 1, MinHeight = 0f,

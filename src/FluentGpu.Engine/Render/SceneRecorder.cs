@@ -31,6 +31,9 @@ public readonly record struct SceneRecordStats(int NodesVisited, int DrawnNodeCo
     public int SpansReRecorded { get; init; }
     public int SpanBytesCopied { get; init; }
     public SpanReuseDisabledReason SpanReuseDisabledReasons { get; init; }
+    /// <summary>Spatial reuse-scoping (scene-memory.md): how many ancestor-chain nodes were span-reuse-BLOCKED this
+    /// frame (popup/overlay/orphan/fly chains). &gt; 0 means a scoped block was active WITHOUT the old whole-tree kill.</summary>
+    public int ScopedBlocks { get; init; }
 }
 
 /// <summary>
@@ -62,6 +65,50 @@ public static class SceneRecorder
         _sbArrowGlyphsSet = true;
     }
 
+    // ── Per-frame damage ENTRY pool (design §2.3 / E9 own-subtree carve-out) ────────────────────────────────────────
+    // The single frame-damage UNION (RecordAccumulator.Damage) is AUGMENTED with an ordered list of individual damage
+    // entries so a cached acrylic layer can exclude the damage its OWN subtree emitted (drawn ON TOP of its snapshot, so
+    // it can never invalidate it). Entries append in Walk emission order; a layer's own-subtree entries are the
+    // contiguous range [entryCountAtPush, entryCountAtPop). Fixed capacity (no growth in the record hot phase); overflow
+    // ⇒ the compositor falls back to the whole-frame union (no carve-out, the prior safe behavior). UI-thread-only static
+    // scratch (record is single-threaded); reset at the top of Record, consumed by PatchDamageRanges before Record returns.
+    private const int DamageEntryCap = 32;
+    private static readonly RectF[] _dmgEntries = new RectF[DamageEntryCap];
+    private static int _dmgEntryCount;
+    private static bool _dmgOverflow;
+
+    private struct AcrylicDamageRange { public int PushByteOffset; public int Start; public int End; }
+    private const int AcrylicRangeCap = 32;
+    private static readonly AcrylicDamageRange[] _acrylicRanges = new AcrylicDamageRange[AcrylicRangeCap];
+    private static int _acrylicRangeCount;
+
+    private static void ResetDamageEntries()
+    {
+        _dmgEntryCount = 0; _dmgOverflow = false; _acrylicRangeCount = 0;
+    }
+
+    // Register a freshly-walked cached-acrylic layer's PushLayer byte offset + its own-subtree entry-range start.
+    // Returns the range slot index (or -1 on range-pool overflow ⇒ this layer is left unpatched ⇒ union fallback).
+    private static int OpenAcrylicRange(int pushByteOffset, int start)
+    {
+        if (_acrylicRangeCount >= AcrylicRangeCap) return -1;
+        int idx = _acrylicRangeCount++;
+        _acrylicRanges[idx] = new AcrylicDamageRange { PushByteOffset = pushByteOffset, Start = start, End = start };
+        return idx;
+    }
+
+    // Post-walk: bake each tracked cached-acrylic layer's EXTERNAL damage rect (union of entries OUTSIDE its own subtree)
+    // + the frame epoch into its PushLayerCmd, so the compositor tests only genuine behind-the-layer damage (§2.3/E9).
+    private static void PatchDamageRanges(DrawList dl, in RectF fullUnion, ulong damageEpoch)
+    {
+        for (int i = 0; i < _acrylicRangeCount; i++)
+        {
+            ref var r = ref _acrylicRanges[i];
+            RectF external = AcrylicBackdropMath.ExternalDamageUnion(_dmgEntries, _dmgEntryCount, r.Start, r.End, _dmgOverflow, in fullUnion);
+            dl.PatchLayerExternalDamage(r.PushByteOffset, in external, damageEpoch);
+        }
+    }
+
     private struct RecordAccumulator
     {
         public int NodesVisited;
@@ -76,6 +123,7 @@ public static class SceneRecorder
         public int SpansRebased;
         public int SpansReRecorded;
         public int SpanBytesCopied;
+        public int ScopedBlocks;
         public SpanReuseDisabledReason SpanReuseDisabledReasons;
         public RectF Damage;       // union of this frame's changed-node device bounds → the acrylic backdrop-cache damage region
         public bool HasDamage;
@@ -84,6 +132,9 @@ public static class SceneRecorder
         public void AddDamage(in RectF r)
         {
             if (r.W <= 0f || r.H <= 0f) return;
+            // Record the individual entry (own-subtree carve-out, §2.3/E9) as well as unioning it into the frame damage.
+            if (_dmgEntryCount < DamageEntryCap) _dmgEntries[_dmgEntryCount++] = r;
+            else _dmgOverflow = true;
             if (!HasDamage) { Damage = r; HasDamage = true; return; }
             float x0 = MathF.Min(Damage.X, r.X), y0 = MathF.Min(Damage.Y, r.Y);
             float x1 = MathF.Max(Damage.X + Damage.W, r.X + r.W), y1 = MathF.Max(Damage.Y + Damage.H, r.Y + r.H);
@@ -102,6 +153,7 @@ public static class SceneRecorder
             SpansRebased = this.SpansRebased,
             SpansReRecorded = this.SpansReRecorded,
             SpanBytesCopied = this.SpanBytesCopied,
+            ScopedBlocks = this.ScopedBlocks,
             SpanReuseDisabledReasons = this.SpanReuseDisabledReasons,
         };
     }
@@ -161,13 +213,16 @@ public static class SceneRecorder
                                           ReadOnlySpan<NodeHandle> skipRoots = default, bool holdSelfBlurForAnyUserScroll = false,
                                           SpanTable? spans = null,
                                           SpanReuseDisabledReason spanReuseDisabled = SpanReuseDisabledReason.None,
-                                          ReadOnlySpan<RectF> pendingStructuralDamage = default)
+                                          ReadOnlySpan<RectF> pendingStructuralDamage = default,
+                                          ulong damageEpoch = 0,
+                                          ReadOnlySpan<NodeHandle> reuseBlockRoots = default)
     {
         if (spans is null) dl.Reset();
         else dl.SwapAndReset();
         if (scene.Root.IsNull) return default;
 
         _scrollLogFrame++;
+        ResetDamageEntries();
         var stats = new RecordAccumulator();
         // Seed the frame damage with any band a structural-track CANCEL vacated this frame (AnimEngine.PendingStructuralDamage):
         // when a suppressed/resized FLIP or Reveal is snapped to its final bounds, the node stops covering the extent it drew
@@ -179,6 +234,11 @@ public static class SceneRecorder
         uint spanFrame = spans?.BeginFrame(scene.Capacity) ?? 0;
         SpanReuseDisabledReason disabledReasons = spanReuseDisabled;
         if (spans is not null && !spans.HasPrior) disabledReasons |= SpanReuseDisabledReason.FirstRecord;
+        // PopupWindows/Overlays/Orphans/Detached are now SPATIALLY SCOPED (scene-memory.md): rather than killing span reuse
+        // + the off-screen cull for the WHOLE tree while a flyout/fly/exit is in flight, we block ONLY the ancestor chains
+        // of each special-cased visual (BlockSpecials below). The bits are still recorded for diagnostics; they no longer
+        // force the global off (see GlobalReuseKill). Containment argument: a stored span's bytes are wrong only if the
+        // special-cased visual lives INSIDE that subtree, so exactly its ancestor chains can hold a stale span.
         if (!skipRoots.IsEmpty) disabledReasons |= SpanReuseDisabledReason.PopupWindows;
 
         // E5 drag ghost: the lifted drag visual (SceneStore.DragGhost, set by Input.DragController at promotion; the
@@ -189,11 +249,19 @@ public static class SceneRecorder
         var ghost = scene.DragGhost;
         bool hasGhost = !ghost.IsNull && scene.IsLive(ghost) && !UnderAnySkipRoot(scene, skipRoots, ghost);
         int overlayCount = scene.OverlayCount;
-        if (hasGhost) disabledReasons |= SpanReuseDisabledReason.DragGhost;
+        if (hasGhost) disabledReasons |= SpanReuseDisabledReason.DragGhost;   // DragGhost stays GLOBAL this wave (drags are rare; scope later)
         if (overlayCount != 0) disabledReasons |= SpanReuseDisabledReason.Overlays;
         if (scene.OrphanCount != 0) disabledReasons |= SpanReuseDisabledReason.Orphans;
-        bool spanReuseOff = spans is null || disabledReasons != SpanReuseDisabledReason.None;
-        bool spanStoreOn = spans is not null && (disabledReasons & (SpanReuseDisabledReason.PopupWindows | SpanReuseDisabledReason.DragGhost | SpanReuseDisabledReason.Overlays | SpanReuseDisabledReason.Orphans | SpanReuseDisabledReason.Detached)) == 0;
+        if (!reuseBlockRoots.IsEmpty) disabledReasons |= SpanReuseDisabledReason.Detached;
+        // Only these force the WHOLE-canvas reuse off; the scoped reasons above are handled per-chain by BlockSpecials.
+        const SpanReuseDisabledReason GlobalReuseKill =
+            SpanReuseDisabledReason.FirstRecord | SpanReuseDisabledReason.SceneChanged | SpanReuseDisabledReason.Layout |
+            SpanReuseDisabledReason.Resize | SpanReuseDisabledReason.ModalPaint | SpanReuseDisabledReason.DragGhost |
+            SpanReuseDisabledReason.ImageContent;
+        bool spanReuseOff = spans is null || (disabledReasons & GlobalReuseKill) != 0;
+        // The span STORE stays alive under every scoped reason (blocked nodes self-gate via IsBlocked, so the off-screen
+        // cull survives for the unblocked rest of the tree); only DragGhost (still global) suppresses the store wholesale.
+        bool spanStoreOn = spans is not null && (disabledReasons & SpanReuseDisabledReason.DragGhost) == 0;
         stats.SpanReuseDisabledReasons = disabledReasons;
         Span<NodeHandle> skips = stackalloc NodeHandle[skipRoots.Length + 1 + overlayCount];
         skipRoots.CopyTo(skips);
@@ -207,6 +275,13 @@ public static class SceneRecorder
             var ov = scene.OverlayAt(i);
             if (scene.IsLive(ov)) skips[skipCount++] = ov;
         }
+
+        // Spatial reuse-blocking (scene-memory.md): stamp the ancestor chains whose stored spans could go stale because a
+        // special-cased visual lives (or lived last frame) inside them — each popup skipRoot, each live overlay, each exit
+        // orphan's visual parent, and each connected-anim fly anchor (reuseBlockRoots). Only meaningful while span reuse is
+        // globally alive (a global kill already re-records everything). O(specials × depth), alloc-free.
+        if (spans is not null && !spanReuseOff && spanStoreOn)
+            BlockSpecials(scene, spans, spanFrame, skipRoots, overlayCount, reuseBlockRoots, ref stats);
 
         Walk(scene, dl, images, scene.Root, Affine2D.Identity, 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack,
             1f, 1f, false, holdSelfBlurForAnyUserScroll, default, skips[..skipCount], spans, spanFrame, spanReuseOff, spanStoreOn, ref stats);
@@ -254,6 +329,9 @@ public static class SceneRecorder
                  1f, (1 << 16) | 1, overlayClip, in focus, in textEdit, scrollThumb, scrollTrack,
                  1f, 1f, false, holdSelfBlurForAnyUserScroll, default, default, null, 0, true, false, ref stats);
         }
+        // E9 own-subtree carve-out: now that every entry + every cached-acrylic own-subtree range is known, bake each
+        // layer's EXTERNAL damage rect + this frame's epoch into its PushLayerCmd (before the DrawList is published).
+        PatchDamageRanges(dl, stats.HasDamage ? stats.Damage : default, damageEpoch);
         return stats.ToStats();
     }
 
@@ -337,6 +415,37 @@ public static class SceneRecorder
         for (var n = node; !n.IsNull; n = scene.Parent(n))
             if (ContainsNode(roots, n)) return true;
         return false;
+    }
+
+    /// <summary>Spatial reuse-scoping (scene-memory.md): stamp the ancestor chains of every special-cased visual so their
+    /// possibly-stale spans are neither reused nor stored this frame, while the rest of the tree keeps reusing/culling.
+    /// The set: popup skipRoots + live overlays (both excluded from the main pass via <c>skips</c>, and the skip set can
+    /// change without a record-dirty mark) + each exit orphan's visual parent (orphans replay INSIDE that parent's Walk)
+    /// + each connected-anim fly anchor (source/dest nodes pinned/hidden by <see cref="FluentGpu.Animation.ConnectedAnimation"/>).</summary>
+    private static void BlockSpecials(SceneStore scene, SpanTable spans, uint frame,
+        ReadOnlySpan<NodeHandle> skipRoots, int overlayCount, ReadOnlySpan<NodeHandle> reuseBlockRoots, ref RecordAccumulator stats)
+    {
+        for (int i = 0; i < skipRoots.Length; i++) BlockChain(scene, spans, frame, skipRoots[i], ref stats);
+        for (int i = 0; i < overlayCount; i++)
+        {
+            var ov = scene.OverlayAt(i);
+            if (scene.IsLive(ov)) BlockChain(scene, spans, frame, ov, ref stats);
+        }
+        for (int i = 0; i < scene.OrphanCount; i++) BlockChain(scene, spans, frame, scene.OrphanVisualParentAt(i), ref stats);
+        for (int i = 0; i < reuseBlockRoots.Length; i++) BlockChain(scene, spans, frame, reuseBlockRoots[i], ref stats);
+    }
+
+    // Walk start→root stamping each node blocked; early-out at the first already-stamped node (chains share prefixes, so
+    // if a node is stamped every ancestor above it already is). A null start (a rootless orphan's visual parent) is a no-op.
+    private static void BlockChain(SceneStore scene, SpanTable spans, uint frame, NodeHandle start, ref RecordAccumulator stats)
+    {
+        for (var n = start; !n.IsNull; n = scene.Parent(n))
+        {
+            int idx = (int)n.Raw.Index;
+            if (spans.IsBlocked(idx, frame)) break;
+            spans.MarkBlocked(idx, frame);
+            stats.ScopedBlocks++;
+        }
     }
 
     private static SpanRecordResult Walk(SceneStore scene, DrawList dl, ImageCache? images, NodeHandle node, Affine2D parentWorld, float parentOpacity,
@@ -460,19 +569,24 @@ public static class SceneRecorder
         ulong spanMoveSig = 0;
         int spanByteStart = 0, spanSortStart = 0, spanCommandStart = 0;
         DrawListOpcodeStats spanOpcodeStart = default;
-        bool spanTracking = spans is not null && spanStoreEnabled;
+        // Spatial reuse-scoping: this node is on the ancestor chain of a special-cased visual (popup/overlay/orphan/fly),
+        // so its stored bytes could be stale. Deny reuse AND skip the store (the not-store-while-blocked safety property) —
+        // its children that are NOT on a blocked chain still reuse/store normally, so only the chain re-records.
+        bool blocked = spans is not null && spans.IsBlocked((int)node.Raw.Index, spanFrame);
+        bool spanTracking = spans is not null && spanStoreEnabled && !blocked;
         if (spans is not null)
         {
             byte recordDirtyBits = scene.RecordDirtyBits(node);
             byte descendantDirtyBits = scene.RecordDirtyDescendantBits(node);
             bool directMovingScrollContent = IsDirectMovingScrollContent(scene, node, flags);
 
-            // Off-screen clean-subtree cull — valid under any spanReuseDisabled reason.
+            // Off-screen clean-subtree cull — valid under any spanReuseDisabled reason, but NOT while blocked (StoreCulled
+            // would poison a chain node's future frame with a span that omits the special).
             // GUARD: the prior subtree bounds are trusted only when the node's CURRENT device box is ALSO out of view —
             // a reveal/reflow animation (the right rail opening) re-lays a subtree without record-dirty bits, so the
             // stored bounds go stale; culling on them alone blanks the freshly-revealed content for several frames
             // (the "rail background only shows a couple frames later" report).
-            if (EnableSubtreeCull && spanStoreEnabled
+            if (EnableSubtreeCull && spanStoreEnabled && !blocked
                 && recordDirtyBits == 0 && descendantDirtyBits == 0
                 && !deviceBounds.Overlaps(clip)
                 && spans.TryGetSubtree((int)node.Raw.Index, node.Raw.Gen, spanFrame, out var priorWorldC, out var priorSubtreeC)
@@ -499,7 +613,7 @@ public static class SceneRecorder
             // Span reuse copies a prior frame's recorded subtree byte-for-byte. Exact copy needs a fully clean subtree.
             // Translated copy is allowed only when no descendant is dirty and the old/current clip both contain the
             // whole span, so a moving scroll-content boundary re-walks edge/entering rows instead of freezing them.
-            if (!spanReuseDisabled && !scrollInMotion && recordDirtyBits == 0
+            if (!spanReuseDisabled && !blocked && !scrollInMotion && recordDirtyBits == 0
                 && spans.TryGet((int)node.Raw.Index, node.Raw.Gen, spanFrame, spanInputSig, out var span)
                 && span.ClipComplete
                 && IsClipComplete(span.SubtreeBounds, in clip)
@@ -518,7 +632,7 @@ public static class SceneRecorder
                 copiedResult.Include(span.SubtreeBounds);
                 return copiedResult;
             }
-            if (!spanReuseDisabled
+            if (!spanReuseDisabled && !blocked
                 && descendantDirtyBits == 0
                 && !directMovingScrollContent
                 && (recordDirtyBits & SceneStore.RecordDirtyContent) == 0
@@ -700,11 +814,18 @@ public static class SceneRecorder
         // ── acrylic: snapshot + blur the backdrop drawn so far, composite the frosted surface, then content draws on top ──
         AcrylicSpec ac = default;
         bool isAcrylic = maybeSparsePaint && overlapsClip && scene.TryGetAcrylic(node, out ac);
+        int acrylicRangeIdx = -1;   // E9: own-subtree damage-entry range slot for this layer (−1 = not a cached acrylic)
         if (isAcrylic)
+        {
             // layerId = the stable node handle (index|gen) → keys the compositor's retained blurred-backdrop cache, so a
             // stationary acrylic surface reuses its blur across frames (scrolling inside it no longer re-blurs).
+            // Capture the PushLayer byte offset + open the own-subtree entry range BEFORE emitting, so PatchDamageRanges
+            // can bake this layer's external damage (union of entries NOT in [start,end)) + the frame epoch post-walk.
+            int pushByteOffset = dl.BytePosition;
+            acrylicRangeIdx = OpenAcrylicRange(pushByteOffset, _dmgEntryCount);
             dl.PushLayer(deviceBounds, p.Corners, ac.Tint, ac.Fallback, ac.TintOpacity, ac.BlurSigma, ac.NoiseOpacity, ac.LuminosityOpacity, key,
                 ((ulong)node.Raw.Index << 32) | node.Raw.Gen, Math.Clamp(ac.FeatherTop, 0f, 1f));
+        }
 
         // Cull this node's OWN draw if it falls entirely outside the active clip (offscreen virtualized/overscan rows).
         bool hasOwnVisual = p.VisualKind != VisualKind.None;
@@ -1017,7 +1138,12 @@ public static class SceneRecorder
         else if (pendingSolidBorder)
             EmitBorderRing(dl, local, pb, p.Corners, p.BorderWidth, pendingBorder, p.BorderDashOn, p.BorderDashOff, world, opacity, key);
 
-        if (isAcrylic) dl.PopLayer(deviceBounds, key);
+        if (isAcrylic)
+        {
+            // Close this layer's own-subtree entry range: [start, entryCountNow) is exactly what its subtree emitted.
+            if (acrylicRangeIdx >= 0) _acrylicRanges[acrylicRangeIdx].End = _dmgEntryCount;
+            dl.PopLayer(deviceBounds, key);
+        }
 
         // ── auto-hiding scrollbar thumb (overlay; over content, within the viewport bounds) ──
         if (pushedClip) dl.PopClip(key);

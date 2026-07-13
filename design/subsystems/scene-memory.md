@@ -689,6 +689,44 @@ per-span epoch recorded into the render thread's own back arena — zero cross-t
 cached instanced quads at submit (no re-record) — composition-style independent animation. This doc owns the two
 mechanisms that make (2)+(3) enforceable: the `Mutate()` chokepoint and the `CleanSpanWitness` (§4.4).
 
+### 4.3a Spatial reuse-BLOCKING — the scoped ancestor-chain gate (special-cased visuals)
+
+The rule above validates a span against its OWN content signals, but some visuals live *outside* the normal
+Walk/dirty flow: a **windowed popup skipRoot** (drawn into its own swapchain), a **connected-animation /
+detached fly** (drawn from a snapshot in a top band, hiding/pinning its source+dest anchors), an **overlay /
+drag-ghost** (excluded via the skip set and drawn in a top band), and an **exit orphan** (replayed *inside* its
+former visual parent's Walk via the side list, without propagating `RecordDirty` up the chain). Each of these can
+change what an ancestor's stored span *should* contain **without** a handle/epoch/geometry change on that ancestor
+— the skip set or the orphan side-list changes silently. Historically any one of them set a **global**
+`SpanReuseDisabledReason` bit that killed span reuse **and** the off-screen subtree cull for the *whole* tree, so
+a single open flyout or in-flight Hero fly forced an O(scene) re-record every frame.
+
+The fix is a **containment** argument: a stored span's bytes are wrong only if a special-cased visual lives (or
+lived last frame) INSIDE that subtree — so exactly the **ancestor chains** of those special nodes hold spans that
+can go stale. The recorder blocks precisely those chains and nothing else:
+
+- Block roots = each popup skipRoot ∪ each live overlay ∪ each exit orphan's **visual parent**
+  (`OrphanVisualParentAt`) ∪ each connected-anim fly anchor (`ConnectedAnimation.CollectReuseBlockRoots` →
+  source+dest anchors of live flies + pending-snapshot sources). For each, walk `Parent` → root stamping a
+  per-node **block stamp** (`SpanTable._blockStamp`, `stamp == currentFrame ⇒ blocked`; no clear needed, mirrors
+  the `_frame` epoch). Chains share prefixes, so the walk early-outs at the first already-stamped node —
+  O(specials × depth), alloc-free.
+- A **blocked** node is denied span reuse (both the exact and translated gates) **and never STORES a span this
+  frame** (skips the re-record store AND the culled-subtree store). This **not-store-while-blocked** property is
+  the whole safety argument: after the special dies, the ancestor chain simply re-records once — a stale span can
+  never be *resurrected* from a frame when the special was present. **A wrong (over-broad) block therefore costs
+  one extra re-record, never a stale frame** — so the scoping is safe by construction with no kill-switch.
+- Crucially, a blocked node's **unblocked children/siblings keep reusing and culling** — only the chain
+  re-records. The off-screen subtree cull (which requires the span store) thus stays **alive** for the rest of
+  the tree; blocked nodes self-gate (they hold no stored entry, so they simply can't be culled).
+
+**Which reasons stay GLOBAL** (whole-canvas, still kill reuse for the whole tree): `FirstRecord` (no prior),
+`Resize` and `ModalPaint` (every device rect moved), and **`DragGhost`** (drags are rare — scoped in a later
+wave). `PopupWindows`, `Overlays`, `Orphans`, and `Detached` are now **scoped** — their enum bits remain in the
+stats for diagnostics (plus a `ScopedBlocks` count) but no longer force the global off. Verified by
+`validation.md` gates `span.popupOpenKeepsMainReuse` / `span.orphanBlocksOnlyChain` / `span.blockedNodeNeverStores`
+/ `span.detachedFlyScoped`.
+
 ### 4.4 `Mutate()` epoch chokepoint + DEBUG `CleanSpanWitness`
 
 **MADE: every write that changes the pixels or geometry of an in-place-mutated realization goes through a single

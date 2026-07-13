@@ -479,6 +479,39 @@ sealed class BoundVirtualProbe : Component
            with { Width = 300, Height = 400 };
 }
 
+// Wave 4 (E4/E5/E6) budget probes. FIVE stacked uniform virtual lists — used to prove the scene-owned dirty queue
+// realizes ONLY the marked viewports (no _virtuals dictionary scan).
+sealed class MultiVirtualProbe : Component
+{
+    public const int Lists = 5;
+    public override Element Render()
+    {
+        var lists = new Element[Lists];
+        for (int k = 0; k < Lists; k++)
+        {
+            int kk = k;
+            lists[k] = Virtual.List(200, 40f, i => new BoxEl { Height = 40f, Fill = ColorF.FromRgba(30, 30, 30) }, keyOf: i => $"l{kk}r{i}")
+                       with { Width = 300, Height = 120 };
+        }
+        return VStack(0, lists) with { Width = 320, Height = 640 };
+    }
+}
+
+// A HORIZONTAL virtual rail whose presence toggles on a signal — mounting it (as a nested rail scrolls into view does)
+// must realize the VISIBLE cards only, then trickle the overscan halo in over subsequent frames via the row budget.
+sealed class NestedRailProbe : Component
+{
+    public readonly Signal<bool> Show = new(false);
+    public override Element Render()
+    {
+        Element rail = Show.Value
+            ? Virtual.List(400, 60f, i => new BoxEl { Width = 60f, Height = 100f, Fill = ColorF.FromRgba(40, 40, 40) }, keyOf: i => "c" + i)
+                  with { Horizontal = true, Width = 300, Height = 120, Overscan = 6 }
+            : new BoxEl { Width = 300, Height = 120 };
+        return new BoxEl { Width = 320, Height = 140, Children = [rail] };
+    }
+}
+
 // The ItemsView BOUND row path (CreateBound): rows are persistent slots, so selection flips a bound pill OPACITY and
 // Generic async-command primitive: a SINGLE fire-on-demand command. The probe exposes the AsyncCommand so the test can
 // drive a TaskCompletionSource-backed op and assert the IsRunning lifecycle / re-entry guard / cancel.
@@ -746,6 +779,40 @@ sealed class SnapFlingProbe : Component
                Fill = Prop.Of(() => ColorF.FromRgba(30, 30, (byte)(idx.Value % 2 == 0 ? 30 : 50))),
            })
            with { Width = 300, Height = 400 };
+}
+
+// Perf plan W2-P2.2 (MotionSuppressionSource.Scroll) probe: a wheel-scrollable viewport NEXT TO a FLIP-animated box
+// whose slot a signal-driven reconcile moves (the spacer above it flips 20↔150px). The gate drives a real wheel notch
+// through the dispatcher, then reconciles on the post-offset-write frame (scroll-coincident ⇒ snap) vs a still frame
+// (⇒ the structural FLIP track seeds normally).
+sealed class ScrollFlipProbe : Component
+{
+    public readonly FluentGpu.Signals.Signal<bool> Moved = new(false);
+    public NodeHandle Box;
+    static readonly LayoutTransition Slide = new(TransitionChannels.Position, TransitionDynamics.Spring(1.0f, 1.0f));
+    public override Element Render()
+    {
+        bool moved = Moved.Value;   // subscribe → re-render on the flip
+        var rows = new Element[20];   // 20 × 40 = 800px content in a 300px viewport ⇒ wheel-scrollable
+        for (int i = 0; i < rows.Length; i++) rows[i] = new BoxEl { Height = 40f, Fill = ColorF.FromRgba(30, 30, (byte)(i % 2 == 0 ? 30 : 60)) };
+        return new BoxEl
+        {
+            Direction = 0, Grow = 1f,
+            Children =
+            [
+                Ui.ScrollView(new BoxEl { Direction = 1, Children = rows }) with { Width = 200, Height = 300 },
+                new BoxEl
+                {
+                    Direction = 1, Width = 120f,
+                    Children =
+                    [
+                        new BoxEl { Width = 50f, Height = moved ? 150f : 20f },                     // the slot-moving spacer
+                        new BoxEl { Width = 50f, Height = 20f, Fill = ColorF.FromRgba(200, 80, 40), Animate = Slide, OnRealized = h => Box = h },
+                    ],
+                },
+            ],
+        };
+    }
 }
 
 // scroll-feel-rework-v2 §8 HeadlessScrollProducer: scripts all six input kinds (contact begin/update/end, OS momentum,
@@ -7409,6 +7476,168 @@ static class Slice
         Check("43. variable scroll anchors on the visible item (in-band, clamped)", anchored, $"anchor={anchor} off={sc2.OffsetY:0} content={sc2.ContentH:0} first={sc2.FirstRealized}");
     }
 
+    static void CollectScrollNodes(SceneStore s, NodeHandle n, List<NodeHandle> into)
+    {
+        if (n.IsNull) return;
+        if (s.HasScroll(n)) into.Add(n);
+        for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c)) CollectScrollNodes(s, c, into);
+    }
+
+    // Wave 4 (scroll-perf remediation) — E5 velocity overscan, E4 steady-scroll realize budget + nested-rail mount
+    // deferral, E6 scene-owned virtual-dirty queue. The load-bearing safety invariant: the VISIBLE range (+1 guard
+    // row/side) is realized on EVERY recorded frame, budget-exempt — the budget clips only the overscan halo, so it can
+    // never reintroduce the scroll-flicker blank-row bug phase 7.6 exists to prevent.
+    static void VirtualBudgetChecks(StringTable strings)
+    {
+        // ── gate.virt.velocityOverscanDirectional — the halo skews ahead of the scroll direction; NeedsRealize fires
+        // before the visible edge exits the realized window at speed (it would not at rest). ────────────────────────────
+        {
+            VirtualWindowing.DirectionalOverscan(4, +3000f, 40f, out int loF, out int hiF);   // forward ⇒ ahead = high edge (7), behind (1)
+            VirtualWindowing.DirectionalOverscan(4, -3000f, 40f, out int loB, out int hiB);   // backward ⇒ ahead = low edge
+            VirtualWindowing.DirectionalOverscan(4, 0.4f, 40f, out int loR, out int hiR);      // below threshold ⇒ symmetric
+            bool skewFwd = hiF > loF && hiF > 4 && (loF + hiF) == 8;   // ahead buffered, behind trimmed, SUM constant (0-alloc invariant)
+            bool skewBack = loB > hiB && loB > 4 && (loB + hiB) == 8;  // mirror in the other direction, same fixed sum
+            bool symAtRest = loR == 4 && hiR == 4;                     // no fling ⇒ pre-E5 symmetric window (existing gates unchanged)
+
+            var sc = ScrollState.Default;
+            sc.ItemCount = 1000; sc.Overscan = 4; sc.Orientation = 0; sc.ContentH = 40000f;   // avgExtent = 40
+            sc.FirstRealized = 100; sc.LastRealized = 120;                                     // visible band [104,118] — 2 rows inside the leading edge
+            sc.FlingVelocity = 0f;
+            bool restNoRealize = !VirtualWindowing.NeedsRealize(in sc, 104, 118);              // rest guard 2 ⇒ distance 2 does NOT fire
+            sc.FlingVelocity = 3000f;                                                          // ahead skewed to 7 ⇒ guard 3 ⇒ 118 > 120−3 ⇒ fires early
+            bool flingRealize = VirtualWindowing.NeedsRealize(in sc, 104, 118);
+
+            Check("gate.virt.velocityOverscanDirectional the realize halo skews ahead of the fling (fixed-sum: ahead grows, behind shrinks, total constant), collapses to symmetric at rest, and NeedsRealize fires earlier on the scroll-direction edge at speed",
+                skewFwd && skewBack && symAtRest && restNoRealize && flingRealize,
+                $"fwd(lo={loF},hi={hiF}) back(lo={loB},hi={hiB}) rest(lo={loR},hi={hiR}) restNoRealize={restNoRealize} flingRealize={flingRealize}");
+        }
+
+        // ── gate.virt.budgetNeverBlanksVisible — a fast fling advancing several windows/frame with a TINY budget still
+        // realizes the full visible band [visibleFirst,visibleLast] on EVERY frame (the anti-flicker invariant). ────────
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("virt-budget-blank", new Size2(640, 480), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, new VirtualProbe());
+            host.SmoothScroll = true;
+            host.Reconciler.SteadyRealizeBudgetForTest = 2;   // 2 rows/frame ≪ the per-frame fling travel
+            host.RunFrame();
+            var vp = host.Scene.Root; host.Scene.TryGetScroll(vp, out var sc0); var content = sc0.ContentNode;
+            var ptr = new Point2(150, 200);
+            int blanks = 0, frames = 0;
+            for (int sflk = 0; sflk < 80; sflk++)
+            {
+                window.QueueInput(new InputEvent(InputKind.Wheel, ptr, 0, 0, 6000f));
+                host.RunFrame();
+                host.Scene.TryGetScroll(vp, out var sc);
+                float drawn = -host.Scene.Paint(content).LocalTransform.Dy;
+                int vFirst = (int)MathF.Floor(drawn / 40f);
+                int vLast = Math.Min(VirtualProbe.N, (int)MathF.Ceiling((drawn + sc.ViewportH) / 40f));
+                if (!(sc.FirstRealized <= vFirst && sc.LastRealized >= vLast)) blanks++;
+                frames++;
+            }
+            Check("gate.virt.budgetNeverBlanksVisible a fling with a 2-row budget realizes the visible band (FirstRealized ≤ visibleFirst ∧ LastRealized ≥ visibleLast) on every recorded frame — the budget never blanks a visible row",
+                blanks == 0, $"blanks={blanks}/{frames}");
+        }
+
+        // ── gate.virt.budgetSpreadsOverscan — steady scroll with budget < overscan: the overscan halo completes across
+        // ≥2 subsequent frames, VirtualRangeDirty persists then clears, and the host stays awake until caught up. ────────
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("virt-budget-spread", new Size2(640, 480), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, new VirtualProbe());
+            host.RunFrame();
+            for (int i = 0; i < 6 && host.HasActiveWork; i++) host.RunFrame();   // settle the mount-deferred overscan at full budget
+            var vp = host.Scene.Root;
+            host.Reconciler.SteadyRealizeBudgetForTest = 1;                       // throttle: 1 overscan row/frame
+            var ptr = new Point2(150, 200);
+            window.QueueInput(new InputEvent(InputKind.Wheel, ptr, 0, 0, 400f));  // cross a 10-row boundary
+
+            int dirtyFrames = 0, growthFrames = 0, prevWidth = -1, finalWidth = 0;
+            bool everAwakeWhileDirty = false, invariantHeld = true;
+            for (int f = 0; f < 25; f++)
+            {
+                host.RunFrame();
+                host.Scene.TryGetScroll(vp, out var sc);
+                bool dirty = (host.Scene.Flags(vp) & NodeFlags.VirtualRangeDirty) != 0;
+                int width = sc.LastRealized - sc.FirstRealized;
+                int vFirst = (int)MathF.Floor(sc.OffsetY / 40f);
+                if (!(sc.FirstRealized <= vFirst)) invariantHeld = false;
+                if (dirty) { dirtyFrames++; if (host.Reconciler.HasBudgetDeferredVirtuals && host.HasActiveWork) everAwakeWhileDirty = true; }
+                if (prevWidth >= 0 && width > prevWidth) growthFrames++;
+                prevWidth = width; finalWidth = width;
+            }
+            bool finalClean = (host.Scene.Flags(vp) & NodeFlags.VirtualRangeDirty) == 0;
+            bool spread = dirtyFrames >= 2 && growthFrames >= 2 && everAwakeWhileDirty && finalClean && finalWidth >= 16 && invariantHeld;
+            Check("gate.virt.budgetSpreadsOverscan a budget<overscan steady scroll fills the overscan halo across ≥2 frames (VirtualRangeDirty persists, host awake via HasBudgetDeferredVirtuals) then clears; the visible band stays covered throughout",
+                spread, $"dirtyFrames={dirtyFrames} growthFrames={growthFrames} awake={everAwakeWhileDirty} finalClean={finalClean} finalWidth={finalWidth} invariant={invariantHeld}");
+        }
+
+        // ── gate.virt.nestedRailDefersInner — mounting a virtual rail realizes the visible cards only; the overscan
+        // halo fills over subsequent frames (the nested-rail-into-view spike flattener). ─────────────────────────────────
+        {
+            var probe = new NestedRailProbe();
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("virt-nested-rail", new Size2(400, 200), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe);
+            host.Reconciler.SteadyRealizeBudgetForTest = 2;   // throttle so the mount deferral is observable
+            host.RunFrame();
+            probe.Show.Value = true;
+            host.RunFrame();   // mount frame
+            var rail = FindScrollNode(host.Scene, host.Scene.Root);
+            host.Scene.TryGetScroll(rail, out var scMount);
+            int mountWidth = scMount.LastRealized - scMount.FirstRealized;
+
+            int settleFrames = 0;
+            for (; settleFrames < 30 && host.HasActiveWork; settleFrames++) host.RunFrame();
+            host.Scene.TryGetScroll(rail, out var scFull);
+            int fullWidth = scFull.LastRealized - scFull.FirstRealized;
+            // Visible = 300/60 = 5 cards; at offset 0 the behind overscan clamps, so the settled window is visible + the
+            // ahead overscan (≈ 11). The mount frame realizes only ≈ visible+guard+one budget slice — strictly narrower.
+            bool defers = !rail.IsNull && mountWidth < fullWidth && (fullWidth - mountWidth) >= 2 && mountWidth <= 10 && settleFrames >= 1;
+            Check("gate.virt.nestedRailDefersInner a freshly-mounted virtual rail realizes the visible cards only (overscan 0 at mount), then fills its overscan window over a few frames via the row budget",
+                defers, $"mountWidth={mountWidth} fullWidth={fullWidth} settleFrames={settleFrames} rail={(rail.IsNull ? "null" : "ok")}");
+        }
+
+        // ── gate.virt.dirtyQueueMatchesScan — marking 2 of 5 virtual lists dirty realizes exactly those two; the steady
+        // path iterates the scene-owned queue (scan == dirty count), never the _virtuals dictionary (which has 5). ───────
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("virt-dirty-queue", new Size2(360, 680), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, new MultiVirtualProbe());
+            host.RunFrame();
+            // Drain the mount-deferred overscan on all five until a frame does NO realize work (queue empty) — so the marks
+            // below are the only dirty entries and the flags aren't already set.
+            int drained = 0;
+            for (int i = 0; i < 25; i++) { host.RunFrame(); if (host.Reconciler.LastReRealizeScan == 0) { drained = i; break; } }
+            var vps = new List<NodeHandle>();
+            CollectScrollNodes(host.Scene, host.Scene.Root, vps);
+            bool five = vps.Count == MultiVirtualProbe.Lists;
+
+            int scan = -1, realized = -1;
+            bool firstRealizedUnchanged = true;
+            if (five)
+            {
+                // Capture the untouched lists' realized windows, then mark exactly two dirty and run the reconciler's
+                // realize pass directly (bump FrameEpoch for a clean per-frame accumulator read). Only the two marked
+                // viewports are queued ⇒ scan == 2 (the scene-owned queue), never the 5-entry _virtuals dictionary.
+                var before = new int[5];
+                for (int k = 0; k < 5; k++) { host.Scene.TryGetScroll(vps[k], out var s); before[k] = s.FirstRealized * 1000 + s.LastRealized; }
+                host.Scene.Mark(vps[1], NodeFlags.VirtualRangeDirty);
+                host.Scene.Mark(vps[3], NodeFlags.VirtualRangeDirty);
+                host.Reconciler.FrameEpoch++;                 // reset the scan accumulator for this direct pass
+                host.Reconciler.ReRealizeVirtuals();
+                scan = host.Reconciler.LastReRealizeScan;
+                realized = host.Reconciler.LastReRealizeRealized;
+                // The three UNMARKED lists must be untouched (proves the realize was scoped to the dirty queue, not a
+                // dictionary-wide re-realize). The two marked lists legitimately re-realize.
+                for (int k = 0; k < 5; k++) { if (k == 1 || k == 3) continue; host.Scene.TryGetScroll(vps[k], out var s); if (before[k] != s.FirstRealized * 1000 + s.LastRealized) firstRealizedUnchanged = false; }
+            }
+            bool onlyTwo = scan == 2 && realized == 2;
+            Check("gate.virt.dirtyQueueMatchesScan marking 2 of 5 virtual lists VirtualRangeDirty realizes exactly those two; ReRealizeVirtuals iterates the scene-owned dirty queue (== 2), never the 5-entry _virtuals dictionary",
+                five && onlyTwo && firstRealizedUnchanged, $"lists={vps.Count} scan={scan} realized={realized} windowsStable={firstRealizedUnchanged} drainedAt={drained}");
+        }
+    }
+
     // The central virtualization claim: an in-window (sub-extent) scroll is a transform-only frame with ZERO managed
     // allocation on the paint half (no realize, no reconcile, no relayout — just re-record the shifted window).
     static void ZeroAllocScrollChecks(StringTable strings)
@@ -8440,6 +8669,144 @@ static class Slice
             s_touchClockMs = t + 2000;
             Check("gate.touch4.dispatch-alloc-zero the per-event pinch path itself — TryOpenPinch (OnSecondContact + arena sweep) + UpdatePinch (scale + SetScrollOffset transform) per coalesced move + the pinch-end commit/continuation, measured by a delta wrapped DIRECTLY around host.Input.Dispatch — allocates 0 managed bytes across a full pinch",
                 delta == 0, $"dispatchDelta={delta}B (direct phase-2 dispatch delta over a 40-move pinch)");
+        }
+    }
+
+    // ── Scroll-perf remediation gates (plan W2: ambient-cap post-scroll hold + scroll FLIP suppression; W6: the anim
+    //    slab's active-node chain). Headless, deterministic (the hold/grace are pinned via the internal test seams
+    //    rather than wall-clock sleeps; the chain fuzz is seeded).
+    static void ScrollPerfWaveChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+
+        // gate.wake.scrollHoldSuppressesAmbientCap (W2-P2.1): the RecommendedWaitMs ambient-FPS cap must defer through
+        // the 0.45s post-scroll hold, not just the display-rate grace — otherwise slow wheel-notch scrolling over an
+        // ambient loop (skeleton shimmer) oscillates 30Hz↔display-rate per notch (the step-up Resync cadence lurch).
+        // AmbientAnimationFps=1 makes the branches unambiguous: ambient wait ≈ 1000ms, display-rate pacing is 0/7ms.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("scrollhold-cap", new Size2(360, 460), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe());
+            host.AmbientAnimationFps = 1;
+            host.RunFrame();
+            var vp = host.Scene.Root;
+            host.Animation.Keyframes(vp, AnimChannel.Opacity,
+                new[] { new Keyframe(0f, 0.4f, Easing.Linear), new Keyframe(1f, 1f, Easing.Linear) }, 800f, loop: true);
+            host.RunFrame();
+            int wIdle = host.RecommendedWaitMs();                 // loop-only motion, no scroll ever → the ambient cap paces
+            bool ambientBaseline = wIdle > 300;
+
+            long now = System.Diagnostics.Stopwatch.GetTimestamp();
+            host.MainScrollHoldUntilForTest = now + System.Diagnostics.Stopwatch.Frequency;   // hold LIVE (~1s)
+            host.SetScrollGraceForTest(0);                                                    // grace EXPIRED — isolates the hold term
+            int wHold = host.RecommendedWaitMs();
+            bool holdSuppresses = wHold <= 7;                     // display-rate pacing (0 sync / 7 pace floor), NOT AmbientFrameWaitMs
+
+            host.MainScrollHoldUntilForTest = 0;                  // hold EXPIRED
+            host.SetScrollGraceForTest(0);
+            int wAfter = host.RecommendedWaitMs();
+            bool capReturns = wAfter > 300;
+
+            // And the production arming path: a REAL wheel notch through the dispatcher re-arms the hold at the
+            // phase-7 scroll tick (the sync wheel write pulses ScrollMoved → UserScrollActive on the next ticked frame).
+            window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(150, 200), 0, 0, WheelNotch: 1f));
+            host.RunFrame(); host.RunFrame(); host.RunFrame();
+            bool holdArmed = host.MainScrollHoldUntilForTest > System.Diagnostics.Stopwatch.GetTimestamp();
+            Check("gate.wake.scrollHoldSuppressesAmbientCap the ambient FPS cap defers through the post-scroll hold: loop-only motion paces at the cap; hold live (grace expired) ⇒ display-rate pacing, NOT AmbientFrameWaitMs; hold expired ⇒ the cap returns; a real wheel notch arms the hold",
+                ambientBaseline && holdSuppresses && capReturns && holdArmed,
+                $"wIdle={wIdle} (want >300) wHold={wHold} (want <=7) wAfter={wAfter} (want >300) holdArmed={holdArmed}");
+        }
+
+        // gate.motion.scrollSuppressionSnapsFlip (W2-P2.2): a reconcile landing on the frame right after a scroll
+        // offset actually wrote SNAPS the moved BoundsAnimated node (no structural FLIP track seeded — cards must not
+        // fly through a scrolling viewport); the same move on a still frame FLIPs — both before any scroll AND after
+        // one while the 0.45s hold is still live but no offset moved (a click-triggered expand right after scrolling).
+        {
+            FluentGpu.Dsl.Motion.ReducedMotion = false;
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("scrollflip", new Size2(500, 400), 1f)); window.Show();
+            var probe = new ScrollFlipProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            for (int i = 0; i < 4; i++) host.RunFrame();
+
+            // Control: a reconcile move on a STILL frame (no scroll motion ever) seeds the structural FLIP track.
+            probe.Moved.Value = true;                             // spacer 20→150 ⇒ box slot moves down 130px
+            host.RunFrame();
+            float dyFlip = host.Scene.Paint(probe.Box).LocalTransform.Dy;
+            bool flipSeeds = host.Animation.HasTracks(probe.Box) && dyFlip < -50f;   // departs from the OLD slot
+            host.Animation.SnapStructuralToLayout(probe.Box);     // settle instantly (bounded, deterministic)
+            host.RunFrame();
+
+            // Scroll-coincident: a wheel notch writes the offset THIS frame (sync path) → the latch arms for the NEXT
+            // frame, where the reconcile lands → ApplyProjections must take its suppressed-snap branch.
+            window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(100, 150), 0, 0, WheelNotch: 1f));
+            host.RunFrame();
+            bool offsetWrote = host.ScrollIntegratorForTest.AnyOffsetWroteThisFrame;   // proof the scroll really moved
+            probe.Moved.Value = false;                            // move back 150→20 on the post-write frame
+            host.RunFrame();
+            float dySnap = host.Scene.Paint(probe.Box).LocalTransform.Dy;
+            bool snapped = !host.Animation.HasTracks(probe.Box) && MathF.Abs(dySnap) < 0.01f;
+
+            // Hold still LIVE but no offset motion since ⇒ the very next click-triggered move must STILL FLIP
+            // (the suppression gates on actual motion last frame, never on the bare hold window).
+            host.RunFrame(); host.RunFrame();                     // idle frames: the offset-wrote latch clears
+            bool holdLive = host.MainScrollHoldUntilForTest > System.Diagnostics.Stopwatch.GetTimestamp();
+            bool latchClear = !host.ScrollIntegratorForTest.AnyOffsetWroteThisFrame;
+            probe.Moved.Value = true;
+            host.RunFrame();
+            float dyAfter = host.Scene.Paint(probe.Box).LocalTransform.Dy;
+            bool flipsAgain = host.Animation.HasTracks(probe.Box) && dyAfter < -50f;
+            FluentGpu.Dsl.Motion.SetLayoutTransitionsSuppressed(FluentGpu.Dsl.MotionSuppressionSource.Scroll, false);   // never leak the static bit to later gates
+            Check("gate.motion.scrollSuppressionSnapsFlip a reconcile landing right after a scroll-offset write SNAPS the moved node (no FLIP track); the same move with no scroll motion FLIPs — both before any scroll and (hold still live, latch clear) right after one",
+                flipSeeds && offsetWrote && snapped && holdLive && latchClear && flipsAgain,
+                $"flipSeeds={flipSeeds}(dy={dyFlip:0.#}) offsetWrote={offsetWrote} snapped={snapped}(dy={dySnap:0.##}) holdLive={holdLive} latchClear={latchClear} flipsAgain={flipsAgain}(dy={dyAfter:0.#})");
+        }
+
+        // gate.anim.activeChainMatchesDictionary (W6/E12): the slab's intrusive active-node chain (what PASS1/PASS2 and
+        // the census scans iterate) stays set-equal to the node→head Dictionary (the lookup) through a seeded randomized
+        // add / free-one-row / clear-node sequence — at EVERY step, with no duplicate and no cycle — and mutations bump
+        // the census-memo Version.
+        {
+            var scene = new SceneStore();
+            var nodes = new NodeHandle[24];
+            for (int i = 0; i < nodes.Length; i++) nodes[i] = scene.CreateNode(1);
+            var slab = new AnimValueSlab();
+            var rng = new Random(0xF6E12);
+            var slots = new System.Collections.Generic.List<int>[nodes.Length];
+            for (int i = 0; i < slots.Length; i++) slots[i] = new System.Collections.Generic.List<int>();
+            var chainSet = new System.Collections.Generic.HashSet<int>();
+            var dictSet = new System.Collections.Generic.HashSet<int>();
+            bool ok = true; string detail = "";
+            int startVersion = slab.Version;
+            for (int step = 0; step < 800 && ok; step++)
+            {
+                int pick = rng.Next(nodes.Length);
+                int nodeIndex = (int)nodes[pick].Raw.Index;
+                int op = rng.Next(10);
+                if (op < 5)
+                    slots[pick].Add(slab.Add(nodeIndex, new AnimValue { Node = nodes[pick], Channel = AnimChannel.Opacity }));
+                else if (op < 8)
+                {
+                    if (slots[pick].Count > 0) { int k = rng.Next(slots[pick].Count); slab.Free(slots[pick][k]); slots[pick].RemoveAt(k); }
+                }
+                else { slab.ClearNode(nodeIndex); slots[pick].Clear(); }
+
+                chainSet.Clear(); dictSet.Clear();
+                foreach (int n in slab.NodeIndices) dictSet.Add(n);
+                int guard = 0; bool dupOrCycle = false;
+                for (int n = slab.FirstActiveNode; n >= 0; n = slab.NextActiveNode(n))
+                {
+                    if (!chainSet.Add(n) || ++guard > 1000) { dupOrCycle = true; break; }
+                }
+                if (dupOrCycle || !chainSet.SetEquals(dictSet))
+                {
+                    ok = false;
+                    detail = $"step={step} dupOrCycle={dupOrCycle} chain={chainSet.Count} dict={dictSet.Count}";
+                }
+            }
+            bool versioned = slab.Version > startVersion;
+            Check("gate.anim.activeChainMatchesDictionary 800 seeded randomized add/free/clear steps keep the slab's active-node chain set-equal to the node→head dictionary at every step (no dup, no cycle), and mutations bump the census-memo Version",
+                ok && versioned, ok ? $"800 steps, final live rows={slab.Count}, version={slab.Version}" : detail);
         }
     }
 
@@ -17600,6 +17967,52 @@ static class Slice
         Check("64n5. acrylic retained-backdrop cache invalidates on geometry, damage, source-target, or clip changes",
             reuseNone && reuseFar && reblurHit && reblurGeo && reblurSource && reblurClip,
             $"reuse(none)={reuseNone} reuse(far)={reuseFar} hit={reblurHit} geo={reblurGeo} source={reblurSource} clip={reblurClip}");
+
+        // gate.acrylic.stampSubPixelJitterHits (E7): the stamp rect + scale are QUANTIZED into the cache key, so a
+        // presence-spring settle's sub-pixel rect wobble (<0.5 device px) + a 1-ULP fractional-DPI scale wobble land in
+        // the SAME grid cell/scale bucket ⇒ the stamps compare equal ⇒ the cached blur is reused (no permanent per-frame
+        // re-blur). Composite position stays exact (it reads L.DeviceRect, not the stamp).
+        var jA = AcrylicBackdropMath.Stamp(new RectF(100f, 80f, 300f, 200f), 30f, 1f, 1920, 1080);
+        var jB = AcrylicBackdropMath.Stamp(new RectF(100.3f, 80.2f, 300.1f, 199.9f), 30f, 1f + 1e-6f, 1920, 1080);
+        var jC = AcrylicBackdropMath.Stamp(new RectF(99.7f, 79.8f, 300.3f, 200.4f), 30f, 1f - 1e-6f, 1920, 1080);
+        bool jitterHits = jA.Equals(jB) && jA.Equals(jC)
+            && AcrylicBackdropMath.BackdropReusable(jA, jB, new RectF(0, 0, 100, 100), default);
+        Check("gate.acrylic.stampSubPixelJitterHits: sub-0.5px rect wobble + 1-ULP scale wobble quantize to the same stamp (reusable)",
+            jitterHits, $"AB={jA.Equals(jB)} AC={jA.Equals(jC)}");
+
+        // gate.acrylic.stampWholePixelMisses (E7): a ≥1 device-px move crosses a grid cell ⇒ the stamps differ ⇒ re-blur.
+        // Verified at 100% DPI (1 DIP = 1 device px) AND at 200% DPI (0.6 DIP = 1.2 device px) — a fractional-DPI-safe move.
+        var wA = AcrylicBackdropMath.Stamp(new RectF(100f, 80f, 300f, 200f), 30f, 1f, 1920, 1080);
+        var wB = AcrylicBackdropMath.Stamp(new RectF(101.6f, 80f, 300f, 200f), 30f, 1f, 1920, 1080);   // +1.6 device px
+        var wC0 = AcrylicBackdropMath.Stamp(new RectF(100f, 80f, 300f, 200f), 30f, 2f, 3840, 2160);
+        var wC1 = AcrylicBackdropMath.Stamp(new RectF(100.6f, 80f, 300f, 200f), 30f, 2f, 3840, 2160); // +1.2 device px @2x
+        bool wholeMisses = !wA.Equals(wB) && !wC0.Equals(wC1);
+        Check("gate.acrylic.stampWholePixelMisses: a >=1 device-px move changes the quantized stamp (re-blur) at 100% and 200% DPI",
+            wholeMisses, $"move1x={!wA.Equals(wB)} move2x={!wC0.Equals(wC1)}");
+
+        // gate.acrylic.tightDamageRegion (E8): reuse tests damage against the TIGHT rect+8, not the kernel-inflated
+        // snapshot region. A damage rect inside the ±KernelRadius·down halo but outside rect+8 ⇒ reusable; one overlapping
+        // the rect ⇒ re-blur. Layer rect (200,160,200,120): tight = (192,152,216,136); inflated pad @/4 = 88 ⇒ 112..488.
+        var tStamp = AcrylicBackdropMath.Stamp(new RectF(200f, 160f, 200f, 120f), 30f, 1f, 1920, 1080);
+        AcrylicBackdropMath.SnapshotRegionTight(new RectF(200f, 160f, 200f, 120f), 1f, 1920, 1080, out int ttx, out int tty, out int ttw, out int tth);
+        var tightR = new RectF(ttx, tty, ttw, tth);
+        bool haloReuse = AcrylicBackdropMath.BackdropReusable(tStamp, tStamp, tightR, new RectF(130f, 160f, 20f, 20f)); // in halo (112..), left of tight 192 → reuse
+        bool rectReblur = !AcrylicBackdropMath.BackdropReusable(tStamp, tStamp, tightR, new RectF(210f, 170f, 20f, 20f)); // inside rect → re-blur
+        bool tightBox = ttx == 192 && tty == 152 && ttw == 216 && tth == 136;
+        Check("gate.acrylic.tightDamageRegion: damage in the blur halo but outside rect+8 reuses; damage on the rect re-blurs",
+            haloReuse && rectReblur && tightBox, $"halo={haloReuse} rect={rectReblur} tight=({ttx},{tty},{ttw},{tth})");
+
+        // gate.acrylic.ownSubtreeDamageCarvedOut (E9): damage entries emitted by the layer's OWN subtree (the contiguous
+        // range [push,pop)) draw ON TOP of its snapshot ⇒ can never invalidate it ⇒ excluded from the reuse test; an entry
+        // OUTSIDE the range that overlaps the tight region still forces a re-blur; DamageOverflow ⇒ the whole-frame union
+        // is used (no carve-out — the safe fallback).
+        ReadOnlySpan<RectF> ownOnly = new[] { new RectF(1500f, 900f, 50f, 50f), new RectF(210f, 170f, 20f, 20f), new RectF(230f, 190f, 20f, 20f) };
+        bool ownCarved = AcrylicBackdropMath.OwnSubtreeReusable(tStamp, tStamp, tightR, ownOnly, 3, 1, 3, false, default); // idx1,2 own (inside tight) carved; idx0 far → reuse
+        ReadOnlySpan<RectF> withExternal = new[] { new RectF(210f, 170f, 20f, 20f), new RectF(300f, 200f, 10f, 10f) };
+        bool externalBlocks = !AcrylicBackdropMath.OwnSubtreeReusable(tStamp, tStamp, tightR, withExternal, 2, 1, 2, false, default); // idx0 external inside tight → re-blur
+        bool overflowUnion = !AcrylicBackdropMath.OwnSubtreeReusable(tStamp, tStamp, tightR, ownOnly, 3, 0, 3, true, new RectF(210f, 170f, 20f, 20f)); // overflow → union inside tight → re-blur
+        Check("gate.acrylic.ownSubtreeDamageCarvedOut: own-subtree entries excluded; an external entry on the tight region re-blurs; overflow falls back to the union",
+            ownCarved && externalBlocks && overflowUnion, $"carved={ownCarved} external={externalBlocks} overflow={overflowUnion}");
     }
 
     static void ContentDialogChromeChecks(StringTable strings)
@@ -22827,6 +23240,113 @@ static class Slice
             => Near(a.R, b.R) && Near(a.G, b.G) && Near(a.B, b.B) && Near(a.A, b.A);
     }
 
+    // W5 spatial span-reuse scoping (scene-memory.md): a popup/orphan/fly no longer kills reuse for the WHOLE tree —
+    // only the ancestor CHAIN of each special-cased visual is blocked (denied reuse + never stored), so unrelated
+    // subtrees keep reusing/culling. These gates pin that scoping + the not-store-while-blocked safety property.
+    static void SpanReuseScopingChecks()
+    {
+        // gate.span.popupOpenKeepsMainReuse — a popup skipRoot open ⇒ the steady main frame STILL reuses a clean sibling
+        // AND culls an off-screen sibling (cull alive); only the popup's chain (popup + root) re-records.
+        {
+            var s = new SceneStore();
+            var root = s.CreateNode(1); s.Root = root;
+            s.Bounds(root) = new RectF(0, 0, 200, 200);
+            s.Flags(root) |= NodeFlags.ClipsToBounds;
+            _ = SB(s, root, new RectF(0, 0, 100, 40), ColorF.FromRgba(0x20, 0x80, 0xE0));   // visible sibling → reuses
+            _ = SB(s, root, new RectF(0, 600, 100, 40), ColorF.FromRgba(0xE0, 0x80, 0x20)); // off-screen sibling → culls
+            var popup = SB(s, root, new RectF(0, 0, 60, 60), ColorF.FromRgba(0x40, 0xC0, 0x70));
+
+            var dl = new DrawList();
+            var spans = new SpanTable();
+            Span<NodeHandle> skip = stackalloc NodeHandle[1]; skip[0] = popup;
+            _ = SceneRecorder.Record(s, dl, spans: spans, skipRoots: skip);
+            s.ClearRecordDirty();
+            var steady = SceneRecorder.Record(s, dl, spans: spans, skipRoots: skip);
+            Check("gate.span.popupOpenKeepsMainReuse",
+                steady.SpansReused > 0 && steady.NodesCulled > 0 && steady.ScopedBlocks > 0
+                && (steady.SpanReuseDisabledReasons & SpanReuseDisabledReason.PopupWindows) != 0,
+                $"reused={steady.SpansReused} culled={steady.NodesCulled} blocks={steady.ScopedBlocks} reasons={steady.SpanReuseDisabledReasons}");
+        }
+
+        // gate.span.orphanBlocksOnlyChain + gate.span.blockedNodeNeverStores — an exit orphan under branch A blocks A's
+        // chain (A + root); branch B keeps reusing; the orphan's per-frame fade repaints (byte-diff across two ticks);
+        // and the blocked chain STORES nothing (not-store-while-blocked).
+        {
+            var s = new SceneStore();
+            var root = s.CreateNode(1); s.Root = root;
+            s.Bounds(root) = new RectF(0, 0, 240, 120);
+            var branchA = SB(s, root, new RectF(0, 0, 120, 120), ColorF.FromRgba(0x10, 0x30, 0x50));
+            var branchB = SB(s, root, new RectF(120, 0, 120, 120), ColorF.FromRgba(0x50, 0x30, 0x10));
+            var leafA = SB(s, branchA, new RectF(10, 10, 80, 20), ColorF.FromRgba(0x90, 0x90, 0x90));
+            _ = SB(s, branchB, new RectF(10, 10, 80, 20), ColorF.FromRgba(0x30, 0x30, 0x30));
+
+            var dl = new DrawList();
+            var spans = new SpanTable();
+            _ = SceneRecorder.Record(s, dl, spans: spans);
+            s.ClearRecordDirty();
+
+            // Exit branch A's leaf → an orphan whose VisualParent is branch A ⇒ block A's chain only.
+            s.Orphan(leafA);
+            s.Paint(leafA).Opacity = 0.5f; s.Mark(leafA, NodeFlags.PaintDirty);
+            var f2 = SceneRecorder.Record(s, dl, spans: spans);
+            byte[] fadeA = dl.Bytes.ToArray();
+            uint frame2 = spans.CurrentFrameId;
+            bool storedA = spans.StoredAtFrame((int)branchA.Raw.Index, frame2);
+            bool storedRoot = spans.StoredAtFrame((int)root.Raw.Index, frame2);
+            bool storedB = spans.StoredAtFrame((int)branchB.Raw.Index, frame2);
+
+            // Advance the orphan fade a tick: branch B STILL reuses; branch A re-walks so the orphan repaints (bytes differ).
+            s.ClearRecordDirty();
+            s.Paint(leafA).Opacity = 0.2f; s.Mark(leafA, NodeFlags.PaintDirty);
+            var f3 = SceneRecorder.Record(s, dl, spans: spans);
+            byte[] fadeB = dl.Bytes.ToArray();
+            bool fadeChanged = !fadeA.AsSpan().SequenceEqual(fadeB);
+
+            Check("gate.span.orphanBlocksOnlyChain",
+                f2.SpansReused > 0 && f3.SpansReused > 0 && f2.ScopedBlocks >= 2
+                && (f2.SpanReuseDisabledReasons & SpanReuseDisabledReason.Orphans) != 0 && fadeChanged,
+                $"f2reused={f2.SpansReused} f3reused={f3.SpansReused} blocks={f2.ScopedBlocks} reasons={f2.SpanReuseDisabledReasons} fadeChanged={fadeChanged}");
+            Check("gate.span.blockedNodeNeverStores",
+                !storedA && !storedRoot && storedB,
+                $"storedA={storedA} storedRoot={storedRoot} storedB={storedB} frame={frame2}");
+        }
+
+        // gate.span.detachedFlyScoped — a connected-anim fly reports its anchors via CollectReuseBlockRoots → the
+        // recorder's reuseBlockRoots seam; the anchor's chain blocks but an unrelated subtree keeps reusing.
+        {
+            var s = new SceneStore();
+            var root = s.CreateNode(1); s.Root = root;
+            s.Bounds(root) = new RectF(0, 0, 240, 120);
+            var branchA = SB(s, root, new RectF(0, 0, 120, 120), ColorF.FromRgba(0x10, 0x30, 0x50));
+            var branchB = SB(s, root, new RectF(120, 0, 120, 120), ColorF.FromRgba(0x50, 0x30, 0x10));
+            var anchor = SB(s, branchA, new RectF(10, 10, 80, 80), ColorF.FromRgba(0x90, 0x90, 0x90));
+
+            var dl = new DrawList();
+            var spans = new SpanTable();
+            _ = SceneRecorder.Record(s, dl, spans: spans);
+            s.ClearRecordDirty();
+
+            Span<NodeHandle> flyRoots = stackalloc NodeHandle[1]; flyRoots[0] = anchor;
+            var steady = SceneRecorder.Record(s, dl, spans: spans, reuseBlockRoots: flyRoots);
+            uint frame = spans.CurrentFrameId;
+            Check("gate.span.detachedFlyScoped",
+                steady.SpansReused > 0 && steady.ScopedBlocks >= 3
+                && (steady.SpanReuseDisabledReasons & SpanReuseDisabledReason.Detached) != 0
+                && !spans.StoredAtFrame((int)branchA.Raw.Index, frame)
+                && spans.StoredAtFrame((int)branchB.Raw.Index, frame),
+                $"reused={steady.SpansReused} blocks={steady.ScopedBlocks} reasons={steady.SpanReuseDisabledReasons}");
+        }
+
+        static NodeHandle SB(SceneStore s, NodeHandle parent, RectF r, ColorF fill)
+        {
+            var n = s.CreateNode(1);
+            s.AppendChild(parent, n);
+            s.Bounds(n) = r;
+            ref var p = ref s.Paint(n); p = NodePaint.Default; p.VisualKind = VisualKind.Box; p.Fill = fill;
+            return n;
+        }
+    }
+
     static int Main()
     {
         // FG_PROBE=ranged-tooltip — isolated repro driver for the live "ranged slider hover → tooltip → freeze"
@@ -22921,6 +23441,7 @@ static class Slice
         ConstrainedWrapChecks(strings);
         CompositorChecks(strings);
         CleanSpanReuseChecks();
+        SpanReuseScopingChecks();
         AnimEngineChecks(strings);
         AnimHookChecks(strings);
         MarqueeChecks(strings);
@@ -22929,6 +23450,7 @@ static class Slice
         ScrollCrossAxisChecks(strings);
         ScrollOverlayChecks(strings);
         VirtualChecks(strings);
+        VirtualBudgetChecks(strings);    // Wave 4 (scroll-perf): E5 velocity overscan, E4 steady-scroll realize budget + nested-rail mount deferral, E6 scene-owned virtual-dirty queue
         BoundItemsViewChecks(strings);   // ItemsView CreateBound: bound-slot re-skin (no rebuild on select/now-playing = no flash), roving tab stop
         AsyncCommandChecks(strings);     // UseAsyncCommand(s): in-progress state tracks the Task, re-fire blocked, cancel, keyed independence, idle 0-alloc
         ExtentTableChecks();
@@ -22942,6 +23464,7 @@ static class Slice
         PinchZoomChecks(strings);      // Phase 4 pinch-zoom (gate.touch4.*): second-contact → Pinch sweeps Pan, scale-about-midpoint transform (no relayout), clamp 0.1..10.0, per-id cancel, pan continuation, 0-alloc
         TouchSnapOverscrollChecks(strings); // Phase 4 snap + overscroll (gate.touch4.*): fling-snap lands on a snap point (dt-invariant), touch-pan rubber-band + spring-back (offset never leaves clamp), wheel hard-clamps, 0-alloc
         ScrollParityChecks(strings);   // WinUI-parity scroll: content-relative wheel distance, windowed velocity sampler, engine-owned integrator (single portable scroll source)
+        ScrollPerfWaveChecks(strings); // scroll-perf plan W2/W6: ambient-cap post-scroll hold, scroll-coincident FLIP suppression, anim-slab active-node chain
         ScrollV2ValidationChecks(strings);   // scroll-feel-rework-v2 §8: the twelve headless gates (single-writer, dt-invariance, resample-cadence, contact-1to1, coast-distance, impulse-velocity, overscroll-rational, pointerdown-cancels, wheel-lines, subpixel-stability, transition-matrix, alloc-zero)
         TouchpadFeelChecks(strings);   // Touchpad scroll feel: OS-tail packet drive (no duplicate inertia), softened band, deterministic settle, zero alloc, ownership/deadzone gates
         Touch4SipChecks(strings);      // Phase 4 SIP (gate.touch4.sip.*): touch focus shows the touch keyboard once (mouse focus doesn't), focus loss hides, a Showing OccludedRect reflows the caret into view, 0-alloc steady

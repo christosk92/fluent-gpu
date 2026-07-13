@@ -665,12 +665,16 @@ float4 PSMain(V i) : SV_Target
         // a popup (the backdrop behind it is static) composites the cached blur with passes A/B/C skipped. ──
         var nowStamp = AcrylicBackdropMath.Stamp(L.DeviceRect, L.BlurSigma, scale, (int)_w, (int)_h,
             backdropSourceId, compositeScissor.left, compositeScissor.top, compositeScissor.right, compositeScissor.bottom);
-        var regionPhys = new RectF(rx, ry, rw, rh);
+        // Damage-test against the TIGHT (un-inflated) rect+margin, NOT the kernel-inflated snapshot region (§2.3/E8): a
+        // node animating in the ±KernelRadius·down halo but outside rect+8 no longer forces a re-blur every frame. A MISS
+        // still snapshots/blurs the inflated region [rx,ry,rw,rh] below, so edge fidelity is unchanged.
+        AcrylicBackdropMath.SnapshotRegionTight(L.DeviceRect, scale, (int)_w, (int)_h, out int tx, out int ty, out int tw, out int th);
+        var tightPhys = new RectF(tx, ty, tw, th);
         var damagePhys = new RectF(dmgX, dmgY, dmgW, dmgH);
         if (L.LayerId != 0)
         {
             int pin = FindPinned(L.LayerId);
-            if (pin >= 0 && AcrylicBackdropMath.BackdropReusable(_pool[pin].Stamp, nowStamp, regionPhys, damagePhys))
+            if (pin >= 0 && AcrylicBackdropMath.BackdropReusable(_pool[pin].Stamp, nowStamp, tightPhys, damagePhys))
             {
                 ref var hit = ref _pool[pin];
                 hit.InUse = true; hit.IdleFrames = 0; hit.LastUseFence = frameFence;

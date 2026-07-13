@@ -229,7 +229,14 @@ public readonly record struct PushLayerCmd(RectF DeviceRect, CornerRadius4 Radii
     // when a HIT would otherwise composite a pin captured at a different position (settle exactness for non-glyph subtrees).
     int InMotion = 0,
     // Acrylic-only: feather the frost in from the TOP over this FRACTION of the layer height (0 = hard edge). See AcrylicSpec.FeatherTop.
-    float FeatherFrac = 0f);
+    float FeatherFrac = 0f,
+    // Acrylic retained-backdrop cache (design §2.3 / E9 own-subtree damage carve-out): the EXTERNAL damage rect for THIS
+    // layer this frame — the union of the frame's damage entries NOT emitted by the layer's own subtree, in the same DIP
+    // space as FrameInfo.Damage — plus the frame's DamageEpoch. The recorder patches both post-walk (PatchLayerExternalDamage)
+    // for every FRESHLY-WALKED cached acrylic; a span-COPIED layer keeps a STALE epoch (mismatches FrameInfo.FrameEpoch),
+    // so the compositor falls back to the whole-frame FrameInfo.Damage union (never a stale carve-out). Epoch 0 (default,
+    // popups / uncached) also means "use the union". See AcrylicBackdropMath.ExternalDamageUnion.
+    float OwnDmgX = 0f, float OwnDmgY = 0f, float OwnDmgW = 0f, float OwnDmgH = 0f, ulong DamageEpoch = 0);
 public readonly record struct PopLayerCmd(RectF DeviceRect);
 // A circular-arc stroke (ProgressRing). The arc is centred in <see cref="Rect"/> with radius (min(W,H)-Thickness)/2, a
 // <see cref="Thickness"/>-wide stroke, swept from <see cref="StartDeg"/> for <see cref="SweepDeg"/> degrees (0° = 12 o'clock,
@@ -528,6 +535,20 @@ public sealed class DrawList
         WriteOp(DrawOp.PopLayer);
         WritePayload(new PopLayerCmd(deviceRect));
         PushSort(sortKey);
+    }
+
+    /// <summary>Patch an already-emitted acrylic <see cref="PushLayerCmd"/> (at the byte offset captured before the
+    /// <see cref="PushLayer"/> call — i.e. the offset of its op code) with this frame's EXTERNAL damage rect + epoch
+    /// (design §2.3 / E9). The external rect is known only after the layer's whole subtree — and every later sibling —
+    /// has been walked, so it is written back post-walk over the payload in place. Alloc-free: reads the POD payload,
+    /// rewrites two fields, writes it back over the same span.</summary>
+    public void PatchLayerExternalDamage(int pushLayerByteStart, in RectF externalDmgDip, ulong damageEpoch)
+    {
+        int payloadOff = pushLayerByteStart + sizeof(int);   // skip the op code int
+        var span = _buf.AsSpan(payloadOff, Unsafe.SizeOf<PushLayerCmd>());
+        var cmd = MemoryMarshal.Read<PushLayerCmd>(span);
+        cmd = cmd with { OwnDmgX = externalDmgDip.X, OwnDmgY = externalDmgDip.Y, OwnDmgW = externalDmgDip.W, OwnDmgH = externalDmgDip.H, DamageEpoch = damageEpoch };
+        MemoryMarshal.Write(span, in cmd);
     }
 
     public void Arc(in RectF rect, in ColorF color, float thickness, float startDeg, float sweepDeg, bool roundCaps, in Affine2D transform, float opacity, ulong sortKey = 0)

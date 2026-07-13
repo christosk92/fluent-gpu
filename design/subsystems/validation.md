@@ -466,6 +466,25 @@ content hash) — CI-caught only probabilistically, and named as such ([hardened
 This gate also injects the `ImageRef` content-epoch path ([waveemusic §5](../app-requirements-waveemusic.md))
 since the clean-span invariant was amended to cover `GlyphRunRef` AND `ImageRef`.
 
+### 3.6a Spatial span-reuse scoping gates (`FluentGpu.VerticalSlice` — `SpanReuseScopingChecks`)
+
+The scoped ancestor-chain block ([scene-memory.md §4.3a](./scene-memory.md), [gpu-renderer.md §11.1](./gpu-renderer.md))
+replaces the old whole-tree reuse kill for popup/overlay/orphan/fly with a per-chain block, de-risked by the
+**not-store-while-blocked** safety property. Four always-on gates pin the scoping + that property:
+
+| Gate | Assert |
+|---|---|
+| `span.popupOpenKeepsMainReuse` | a popup skipRoot open ⇒ the steady main frame still reports `SpansReused > 0` **and** `NodesCulled > 0` (the off-screen cull stays alive); the popup's chain re-records (`ScopedBlocks > 0`, `PopupWindows` in the diagnostic reasons) |
+| `span.orphanBlocksOnlyChain` | an exit orphan under branch A ⇒ branch B still reuses; A's chain (A + root) re-records (`ScopedBlocks ≥ 2`, `Orphans` in reasons); the orphan's per-frame fade repaints (draw bytes differ across two ticks) |
+| `span.blockedNodeNeverStores` | while blocked, the chain nodes STORE no span this frame (`SpanTable.StoredAtFrame` false for A + root, true for the unblocked sibling) — the not-store-while-blocked property |
+| `span.detachedFlyScoped` | a live connected-anim fly anchor (via `CollectReuseBlockRoots` → the recorder's `reuseBlockRoots` seam) ⇒ an unrelated subtree still reuses; the anchor's chain blocks + stores nothing (`Detached` in reasons) |
+
+`FirstRecord`/`Resize`/`ModalPaint`/`DragGhost` stay global (whole-canvas), verified by the existing `P6.clean-span`
+family + `RZ-SETTLE`. The viewport-edge translated-reuse extension (E3) was evaluated and **dropped** — the
+translated copy path forbids spans containing clip commands (`DrawListOpcodeStats.CanTranslateCopiedSpan` requires
+`PushClip == 0`) and the D3D12 raster does not re-intersect a pushed clip with the enclosing stack (it trusts the
+recorder's record-time intersection), so the rounded-clip pixel-correctness precondition does not hold.
+
 ### 3.7 Data-race gate
 
 The per-PR companion to the `seam.race` *spike* (§2.4). The spike is the long soak that gates the build-order

@@ -62,8 +62,10 @@ public sealed partial class AnimEngine
         _doneScratch.Clear();
         _settledScratch.Clear();
 
-        // PASS 1 — advance every live, non-parked row to its value at absolute ElapsedMs.
-        foreach (int nodeIndex in _slab.NodeIndices)
+        // PASS 1 — advance every live, non-parked row to its value at absolute ElapsedMs. Iterates the slab's ACTIVE
+        // NODE chain (W6/E12) — O(active nodes), not the Dictionary's O(high-water) entry-array enumeration. Per-node
+        // work is order-independent (each row/fold touches only its own node), so chain order carries no semantics.
+        for (int nodeIndex = _slab.FirstActiveNode; nodeIndex >= 0; nodeIndex = _slab.NextActiveNode(nodeIndex))
         {
             for (int s = _slab.HeadOnNode(nodeIndex); s >= 0; s = _slab.At(s).NextOnNode)
             {
@@ -110,7 +112,8 @@ public sealed partial class AnimEngine
 
         // PASS 2 — per node: fold its live rows over the node's CURRENT paint (FromPaint preserves un-animated
         // channels — proven; the plan's seed-Default belongs to the Fork-1 compose pass), compose, mark dirty.
-        foreach (int nodeIndex in _slab.NodeIndices)
+        // Same active-node chain as PASS1 (frees are deferred to PASS3, so the chain is stable across both walks).
+        for (int nodeIndex = _slab.FirstActiveNode; nodeIndex >= 0; nodeIndex = _slab.NextActiveNode(nodeIndex))
         {
             int head = _slab.HeadOnNode(nodeIndex);
             if (head < 0) continue;
@@ -236,6 +239,7 @@ public sealed partial class AnimEngine
         r.Flags &= ~(AnimFlags.Done | AnimFlags.Driven | AnimFlags.Loop | AnimFlags.JustSeeded);
         r.DrivenSrc = AnimValue.WallClock;
         ClearKeys(s);   // ensure no stale Keyframe[] → AdvanceTimeline takes the 0-alloc two-point branch
+        _slab.BumpVersion();   // a retarget can rewrite Loop in place (no slab call) — keep the census memo honest
     }
 
     /// <summary>Channels that drive a side-table (BrushAnim.T / InteractionAnim.HoverT/PressT) rather than NodePaint —
@@ -261,7 +265,7 @@ public sealed partial class AnimEngine
         get
         {
             int n = 0;
-            foreach (int nodeIndex in _slab.NodeIndices)
+            for (int nodeIndex = _slab.FirstActiveNode; nodeIndex >= 0; nodeIndex = _slab.NextActiveNode(nodeIndex))
                 for (int s = _slab.HeadOnNode(nodeIndex); s >= 0; s = _slab.At(s).NextOnNode)
                 {
                     AnimChannel c = _slab.At(s).Channel;
@@ -288,6 +292,7 @@ public sealed partial class AnimEngine
             e.Gen = Generators.BakeSpring(in spring, x0: curV - to, v0: curVel);
             e.ElapsedMs = 0f; e.DelayRemainingMs = 0f;        // retarget keeps moving (no first-frame hold)
             e.Flags &= ~(AnimFlags.Done | AnimFlags.JustSeeded);
+            _slab.BumpVersion();   // in-place flag rewrite — keep the census memo honest
             return;
         }
         int s = Get(node, channel, composite != CompositeOp.Replace);
@@ -298,6 +303,7 @@ public sealed partial class AnimEngine
         r.Gen = Generators.BakeSpring(in spring, x0: start - to, v0: initialVelocity);
         r.DelayRemainingMs = MathF.Max(0f, delayMs);
         r.Flags = (r.Flags & ~(AnimFlags.Done | AnimFlags.Loop)) | AnimFlags.JustSeeded;
+        _slab.BumpVersion();   // Get may retarget an existing slot in place (no slab call) — keep the census memo honest
     }
 
     public void Cancel(NodeHandle node, AnimChannel channel)

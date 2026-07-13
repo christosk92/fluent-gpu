@@ -48,6 +48,10 @@ public sealed class SpanTable
     private RectF[] _subtreeBounds;
     private bool[] _clipComplete;
     private bool[] _culled;
+    // Spatial span-reuse scoping (scene-memory.md): per-node BLOCK stamp. stamp == the current record frame ⇒ this node's
+    // stored span could go stale (a special-cased visual lives inside its subtree) ⇒ deny reuse AND skip the store. Stale
+    // stamps from prior frames read as unblocked, so no per-frame clear is needed (the _frame/_frameId pattern).
+    private uint[] _blockStamp;
     private uint _frameId;
 
     public SpanTable(int capacity = 64)
@@ -67,6 +71,7 @@ public sealed class SpanTable
         _subtreeBounds = new RectF[capacity];
         _clipComplete = new bool[capacity];
         _culled = new bool[capacity];
+        _blockStamp = new uint[capacity];
     }
 
     public bool HasPrior => _frameId > 1;
@@ -78,6 +83,7 @@ public sealed class SpanTable
         if (_frameId == 0)
         {
             Array.Clear(_frame);
+            Array.Clear(_blockStamp);   // wrap: a stale stamp must never falsely equal the reset frame id (1)
             _frameId = 1;
         }
         return _frameId;
@@ -181,6 +187,31 @@ public sealed class SpanTable
         _culled[nodeIndex] = true;
     }
 
+    /// <summary>Spatial span-reuse scoping (scene-memory.md): stamp <paramref name="nodeIndex"/> as blocked for
+    /// <paramref name="frame"/> — an ancestor of a special-cased visual (popup skipRoot, overlay, exit orphan's visual
+    /// parent, connected-anim fly anchor) whose stored bytes could go stale. A blocked node is denied span REUSE and,
+    /// crucially, never STORES a span this frame (the not-store-while-blocked safety property): after the special dies
+    /// its ancestors simply re-record once — no stale-span resurrection, so a wrong block costs one extra re-record,
+    /// never a stale frame.</summary>
+    public void MarkBlocked(int nodeIndex, uint frame)
+    {
+        if ((uint)nodeIndex < (uint)_blockStamp.Length) _blockStamp[nodeIndex] = frame;
+    }
+
+    /// <summary>True iff <paramref name="nodeIndex"/> was stamped blocked for <paramref name="frame"/> (== the current
+    /// record frame). Stale stamps from prior frames read as unblocked, so no per-frame clear is needed.</summary>
+    public bool IsBlocked(int nodeIndex, uint frame)
+        => (uint)nodeIndex < (uint)_blockStamp.Length && _blockStamp[nodeIndex] == frame;
+
+    /// <summary>The just-recorded frame id (diagnostics/tests). Pairs with <see cref="StoredAtFrame"/>.</summary>
+    public uint CurrentFrameId => _frameId;
+
+    /// <summary>Diagnostics/tests: did <paramref name="nodeIndex"/> get a span STORED (reused, re-recorded, or culled) on
+    /// frame <paramref name="frameId"/>? A span-reuse-blocked node stores nothing, so this returns false for it — the
+    /// harness assertion behind the not-store-while-blocked property.</summary>
+    public bool StoredAtFrame(int nodeIndex, uint frameId)
+        => (uint)nodeIndex < (uint)_frame.Length && _frame[nodeIndex] == frameId;
+
     private void EnsureCapacity(int capacity)
     {
         if (capacity <= _gen.Length) return;
@@ -200,5 +231,6 @@ public sealed class SpanTable
         Array.Resize(ref _subtreeBounds, n);
         Array.Resize(ref _clipComplete, n);
         Array.Resize(ref _culled, n);
+        Array.Resize(ref _blockStamp, n);
     }
 }

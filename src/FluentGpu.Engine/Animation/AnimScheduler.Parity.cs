@@ -22,30 +22,38 @@ public sealed partial class AnimEngine
     // ── census (read by the MemCensus sampler / wake diagnostics) ─────────────────────────────────
     /// <summary>Active rows, all channels — O(1).</summary>
     public int TrackCount => _slab.Count;
-    /// <summary>Looping rows (the Loop flag) — a walk over active rows (O(active); read by the census / wake sampler).</summary>
-    public int LoopTrackCount
+    // Census memo (perf plan W6/E12): LoopTrackCount/DisplayRateActive feed AnimIsAmbient, which the host evaluates
+    // inside ComputeWakeReasons — SEVERAL times per frame (RecommendedWaitMs, Paint's keep-alive gate, the Resync
+    // step-up guard, HasActiveWork). Each read re-walked every row. Both are pure functions of the slab's rows, so one
+    // walk per slab-mutation Version (Add/Free/ClearNode + BumpVersion at the Loop/DisplayRate-rewriting seeds)
+    // serves every read until the slab actually changes. -1 sentinel forces the first compute (Version starts at 0).
+    private int _censusVersion = -1;
+    private int _censusLoopCount;
+    private bool _censusDisplayRate;
+
+    private void RefreshCensus()
     {
-        get
-        {
-            int n = 0;
-            foreach (int nodeIndex in _slab.NodeIndices)
-                for (int s = _slab.HeadOnNode(nodeIndex); s >= 0; s = _slab.At(s).NextOnNode)
-                    if (_slab.At(s).Has(AnimFlags.Loop)) n++;
-            return n;
-        }
+        if (_censusVersion == _slab.Version) return;
+        _censusVersion = _slab.Version;
+        int loops = 0; bool displayRate = false;
+        for (int nodeIndex = _slab.FirstActiveNode; nodeIndex >= 0; nodeIndex = _slab.NextActiveNode(nodeIndex))
+            for (int s = _slab.HeadOnNode(nodeIndex); s >= 0; s = _slab.At(s).NextOnNode)
+            {
+                AnimFlags f = _slab.At(s).Flags;
+                if ((f & AnimFlags.Loop) != 0) loops++;
+                if ((f & AnimFlags.DisplayRate) != 0) displayRate = true;
+            }
+        _censusLoopCount = loops;
+        _censusDisplayRate = displayRate;
     }
+
+    /// <summary>Looping rows (the Loop flag) — memoized per slab-mutation version (see <see cref="RefreshCensus"/>);
+    /// read by the census / wake sampler / the host's ambient-cap decision.</summary>
+    public int LoopTrackCount { get { RefreshCensus(); return _censusLoopCount; } }
     /// <summary>True if any active row is a DISPLAY-RATE loop — a transient loop (e.g. an indeterminate progress bar)
-    /// that opts out of the ambient frame-rate cap so it runs at the panel refresh. Read by the host's cap decision.</summary>
-    public bool DisplayRateActive
-    {
-        get
-        {
-            foreach (int nodeIndex in _slab.NodeIndices)
-                for (int s = _slab.HeadOnNode(nodeIndex); s >= 0; s = _slab.At(s).NextOnNode)
-                    if (_slab.At(s).Has(AnimFlags.DisplayRate)) return true;
-            return false;
-        }
-    }
+    /// that opts out of the ambient frame-rate cap so it runs at the panel refresh. Read by the host's cap decision;
+    /// memoized per slab-mutation version alongside <see cref="LoopTrackCount"/>.</summary>
+    public bool DisplayRateActive { get { RefreshCensus(); return _censusDisplayRate; } }
     /// <summary>Live per-node layout-transition specs — O(1).</summary>
     public int TransitionCount => _transitions.Count;
 

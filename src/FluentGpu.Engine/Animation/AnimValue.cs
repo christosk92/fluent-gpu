@@ -102,7 +102,8 @@ public struct AnimValue
     public AnimFlags Flags;            //  2
     public ushort DrivenSrc;           //  2 — index into the SignalSource table; 0xFFFF = wall-clock
     public int NextOnNode;             //  4 — next row on the SAME node (teardown + per-node fold) ; -1 = tail
-    public int NextActive;             //  4 — next active row in the scheduler's dense walk (Phase 2) ; -1 = tail
+    public int NextActive;             //  4 — reserved for a future row-dense walk; the LANDED active walk is the slab's
+                                       //      NODE-level doubly-linked chain (AnimValueSlab.FirstActiveNode/NextActiveNode)
 
     public const ushort WallClock = 0xFFFF;
 
@@ -136,6 +137,62 @@ public sealed class AnimValueSlab
     private readonly Stack<int> _free = new(64);                     // recycled slots (free-list, not GC)
     private readonly Dictionary<int, int> _headByNode = new(64);     // node INDEX → head of its NextOnNode chain
 
+    // ── ACTIVE-NODE chain (perf plan W6/E12): an intrusive doubly-linked list of the node indices that currently own
+    // rows, threaded through two parallel int[] keyed by NODE INDEX. The per-tick PASS1/PASS2 walks and the census
+    // scans iterate THIS chain — O(active nodes) — instead of enumerating _headByNode.Keys, whose entry-array walk
+    // costs O(high-water concurrent animated nodes) even when few are active (Dictionary.Remove leaves tombstoned
+    // entries the enumerator still visits). The Dictionary REMAINS the node→head lookup; the chain is membership only.
+    // Arrays are sized by the highest node index seen and grow ONLY in Add (a reconcile/input-edge seed — the same
+    // sites where _rows itself grows), never in frame phases 6–13. Entries are only read while a node is linked, so
+    // resize garbage needs no initialization. Enumeration order is link order (most-recently-linked first) — the tick
+    // passes are per-node independent, so order carries no semantics (Dictionary order was already arbitrary).
+    private int[] _nextActiveNode = new int[64];
+    private int[] _prevActiveNode = new int[64];
+    private int _firstActiveNode = -1;
+
+    // Slab-mutation version (perf plan W6/E12): bumped on every Add/Free/ClearNode (and by BumpVersion at the engine's
+    // flag-retarget seeds, which rewrite Loop/DisplayRate through At() refs without a slab call). The engine memoizes
+    // its LoopTrackCount/DisplayRateActive census against this — ComputeWakeReasons runs several times per frame and
+    // was re-scanning every row each call.
+    private int _version;
+
+    /// <summary>Monotonic slab-mutation version — see the field remarks. Never reset.</summary>
+    public int Version => _version;
+    /// <summary>Bump <see cref="Version"/> for a census-visible row mutation done through an <see cref="At"/> ref
+    /// (the engine's seed/retarget paths rewrite AnimFlags.Loop/DisplayRate in place, which no slab call sees).</summary>
+    public void BumpVersion() => _version++;
+
+    /// <summary>Head of the active-node chain (a node index that currently owns rows); -1 = slab empty.
+    /// Iterate: <c>for (int n = FirstActiveNode; n >= 0; n = NextActiveNode(n))</c>. Do not Add/Free while iterating.</summary>
+    public int FirstActiveNode => _firstActiveNode;
+    /// <summary>Next node index on the active chain after <paramref name="nodeIndex"/> (which must be linked); -1 = tail.</summary>
+    public int NextActiveNode(int nodeIndex) => _nextActiveNode[nodeIndex];
+
+    private void EnsureActiveCapacity(int nodeIndex)
+    {
+        if (nodeIndex < _nextActiveNode.Length) return;
+        int cap = _nextActiveNode.Length == 0 ? 64 : _nextActiveNode.Length;
+        while (cap <= nodeIndex) cap *= 2;
+        System.Array.Resize(ref _nextActiveNode, cap);
+        System.Array.Resize(ref _prevActiveNode, cap);
+    }
+
+    private void LinkActive(int nodeIndex)   // node gained its FIRST row
+    {
+        EnsureActiveCapacity(nodeIndex);
+        _prevActiveNode[nodeIndex] = -1;
+        _nextActiveNode[nodeIndex] = _firstActiveNode;
+        if (_firstActiveNode >= 0) _prevActiveNode[_firstActiveNode] = nodeIndex;
+        _firstActiveNode = nodeIndex;
+    }
+
+    private void UnlinkActive(int nodeIndex)   // node's LAST row freed — O(1) via the prev link
+    {
+        int prev = _prevActiveNode[nodeIndex], next = _nextActiveNode[nodeIndex];
+        if (prev >= 0) _nextActiveNode[prev] = next; else _firstActiveNode = next;
+        if (next >= 0) _prevActiveNode[next] = prev;
+    }
+
     /// <summary>Live row count (census; excludes recycled free-list slots).</summary>
     public int Count => _count - _free.Count;
 
@@ -149,9 +206,10 @@ public sealed class AnimValueSlab
     /// <summary>Head slot of <paramref name="nodeIndex"/>'s chain (walk <see cref="AnimValue.NextOnNode"/>); -1 = none.</summary>
     public int HeadOnNode(int nodeIndex) => _headByNode.TryGetValue(nodeIndex, out int h) ? h : -1;
 
-    /// <summary>The node indices that currently own rows — the scheduler tick iterates these (struct enumerator,
-    /// alloc-free) and walks each node's <see cref="AnimValue.NextOnNode"/> chain. Do not Add/Free while enumerating;
-    /// the tick collects settled slots and frees them after the walk.</summary>
+    /// <summary>The node indices that currently own rows (diagnostic/verification view — e.g. the
+    /// anim.activeChainMatchesDictionary gate cross-checks the active chain against it). The scheduler tick and the
+    /// census scans iterate <see cref="FirstActiveNode"/>/<see cref="NextActiveNode"/> instead: a Dictionary key
+    /// enumeration walks the entries array to its high-water even when few nodes are active.</summary>
     public Dictionary<int, int>.KeyCollection NodeIndices => _headByNode.Keys;
 
     /// <summary>True when <paramref name="nodeIndex"/> owns at least one row.</summary>
@@ -180,11 +238,13 @@ public sealed class AnimValueSlab
     public int Add(int nodeIndex, in AnimValue seed)
     {
         int s = Alloc();
-        int next = _headByNode.TryGetValue(nodeIndex, out int nh) ? nh : -1;
+        bool hadRows = _headByNode.TryGetValue(nodeIndex, out int nh);
         _rows[s] = seed;
-        _rows[s].NextOnNode = next;
+        _rows[s].NextOnNode = hadRows ? nh : -1;
         _rows[s].NextActive = -1;
         _headByNode[nodeIndex] = s;
+        if (!hadRows) LinkActive(nodeIndex);   // first row → the node joins the active chain
+        _version++;
         return s;
     }
 
@@ -194,6 +254,8 @@ public sealed class AnimValueSlab
     {
         if (!_headByNode.TryGetValue(nodeIndex, out int s)) return;
         _headByNode.Remove(nodeIndex);
+        UnlinkActive(nodeIndex);
+        _version++;
         while (s >= 0)
         {
             int next = _rows[s].NextOnNode;
@@ -213,7 +275,7 @@ public sealed class AnimValueSlab
             if (head == slot)
             {
                 int next = _rows[slot].NextOnNode;
-                if (next < 0) _headByNode.Remove(nodeIndex);
+                if (next < 0) { _headByNode.Remove(nodeIndex); UnlinkActive(nodeIndex); }   // last row → node leaves the active chain
                 else _headByNode[nodeIndex] = next;
             }
             else
@@ -226,5 +288,6 @@ public sealed class AnimValueSlab
         }
         _rows[slot] = default;
         _free.Push(slot);
+        _version++;
     }
 }

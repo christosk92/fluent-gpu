@@ -701,12 +701,28 @@ sealed class TrackList : Component
     // the pinned copy takes over seamlessly from the row that just left.
     float VerticalPinnedThreshold() => MathF.Max(96f, VerticalHeaderHeight());
 
+    // Pin hysteresis deadband: pin at >= threshold, unpin only below threshold - deadband, so scroll jitter right on the
+    // pin line (touch, settle bounce) can't flicker the pinned chrome on and off every frame.
+    const float VerticalPinDeadbandPx = 32f;
+
     long VerticalScrollKey(ScrollGeometry g)
     {
         float offset = MathF.Max(0f, g.OffsetY);
+        float threshold = VerticalPinnedThreshold();
         long bucket = (long)MathF.Floor(offset / VerticalScrollBucket);
-        long pinned = offset >= VerticalPinnedThreshold() ? 1L : 0L;
-        return (bucket << 1) | pinned;
+        // BOTH hysteresis edges as key bits — the observer must dispatch at the pin edge AND the unpin edge (the action
+        // resolves which one applies from the current pinned state).
+        long pinEdge = offset >= threshold ? 1L : 0L;
+        long unpinEdge = offset >= threshold - VerticalPinDeadbandPx ? 1L : 0L;
+        return (bucket << 2) | (pinEdge << 1) | unpinEdge;
+    }
+
+    void ApplyVerticalPin(float offset)
+    {
+        float threshold = VerticalPinnedThreshold();
+        if (offset >= threshold) SetVerticalPinned(true);
+        else if (offset < threshold - VerticalPinDeadbandPx) SetVerticalPinned(false);
+        // inside the deadband: hold the current state
     }
 
     void OnVerticalScroll(ScrollGeometry g)
@@ -714,14 +730,14 @@ sealed class TrackList : Component
         _swipeGroup.Close();
         float offset = MathF.Max(0f, g.OffsetY);
         if (MathF.Abs(_verticalScrollOffset.Peek() - offset) > 0.5f) _verticalScrollOffset.Value = offset;
-        SetVerticalPinned(offset >= VerticalPinnedThreshold());
+        ApplyVerticalPin(offset);
     }
 
     (Func<ScrollGeometry, long> Project, Action<ScrollGeometry> Action)? VerticalScrollObserver()
         => _verticalHeader ? (VerticalScrollKey, OnVerticalScroll) : null;
 
     (Func<ScrollGeometry, long> Project, Action<ScrollGeometry> Action) SwipeCloseObserver()
-        => (g => BitConverter.SingleToInt32Bits(g.OffsetY), _ => _swipeGroup.Close());
+        => (g => _swipeGroup.AnyOpen ? BitConverter.SingleToInt32Bits(g.OffsetY) : 0L, _ => _swipeGroup.Close());
 
     float VerticalHeaderOpacity()
     {
@@ -739,7 +755,7 @@ sealed class TrackList : Component
         if (r.H <= 1f) return;
         if (MathF.Abs(_verticalHeaderHeight.Peek() - r.H) <= 1f) return;
         _verticalHeaderHeight.Value = r.H;
-        SetVerticalPinned(_verticalScrollOffset.Peek() >= VerticalPinnedThreshold());
+        ApplyVerticalPin(_verticalScrollOffset.Peek());
     }
 
     Element VerticalHero()

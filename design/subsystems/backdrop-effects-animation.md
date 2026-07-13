@@ -294,15 +294,44 @@ public readonly struct AcrylicParams        // packed into EffectChain payload (
   pins the blurred RT keyed by `PushLayerCmd.LayerId` (the scene node handle, packed index|gen). A frame reuses
   the cached blur (passes A/B/C skipped) unless **(a)** the layer's geometry changed (rect/sigma/scale/canvas —
   the `AcrylicBackdropMath.BackdropStamp`) or **(b)** this frame's **damage region** intersects the layer's
-  snapshot region. The damage region (`SceneRecorder` → `FrameInfo.Damage`) is the union of the device bounds of
+  damage-test region. The damage region (`SceneRecorder` → `FrameInfo.Damage`) is the union of the device bounds of
   nodes whose **transform** moved this frame, EXCLUDING a scroll viewport's own content (it draws *over* the
   backdrop) — so scrolling INSIDE a stationary overlay reuses its backdrop (the fix for low-FPS in-popup scroll),
   while a top overlay correctly ignores the bottom player-bar's ambient motion (region-aware). The decision is
-  `AcrylicBackdropMath.BackdropReusable` (headless-gated, VerticalSlice 64n5). **Honest limitation (paint stays
-  "v1 at rest"):** paint-only / layout-only changes *directly behind* a stationary overlay are NOT in the damage
-  set (`PaintDirty` is sticky and `LayoutDirty` clears pre-record in the current single-thread engine), so they
-  refresh on the next motion / re-open — barely perceptible through frosted glass. Scroll-velocity Acrylic over
-  simultaneously-moving video still wants the render-thread seam (`hardened-v1-plan.md` §6) — the named v2 item.
+  `AcrylicBackdropMath.BackdropReusable` (headless-gated, VerticalSlice 64n5).
+- **Region-aware reuse contract — three correctness refinements (LANDED, gates `gate.acrylic.*`):**
+  - **Quantized stamp (E7).** The `BackdropStamp` rect + scale are snapped to the integer **device grid** (the
+    biased `BlurPinKey.RoundGrid`, +1/512, whose 1-ULP-straddle rationale applies verbatim) and the scale bucketed
+    to 1/1024 in the **cache key only** — the composite still positions from the exact `L.DeviceRect`. Without this,
+    a presence-spring settle's sub-pixel jitter or a fractional-DPI 1-ULP wobble tripped the bit-exact stamp compare
+    and re-blurred **every** frame permanently. Any real ≥1-device-px move / resize / sigma / source / clip change
+    still trips it. Cached stamps are stored post-quantize so compares are homogeneous.
+  - **Tight damage-test region (E8).** Reuse tests damage against the **un-inflated** rect + `DamageTestMarginPx`
+    (`AcrylicBackdropMath.SnapshotRegionTight`), **not** the ±`KernelRadius·down` snapshot region a MISS still
+    snapshots/blurs. So a node animating anywhere in the ~44–88 px blur halo but outside rect+8 no longer forces a
+    re-blur. **Honest scope:** sub-halo motion *outside* rect+8 but *inside* the σ-support can leave invisible edge
+    staleness under σ≥14 (the blurred fringe samples last frame's backdrop) — imperceptible through frosted glass,
+    the same "v1 at rest" tradeoff as the paint-only case below.
+  - **Own-subtree damage carve-out (E9).** Damage emitted by an acrylic layer's **own subtree** (itself + every
+    descendant, i.e. everything between its `PushLayer` and `PopLayer`) is drawn *on top of* its snapshot — which was
+    captured *before* its `PushLayer` — so it can **never** invalidate that snapshot and is always ignorable for that
+    layer's reuse test. This fixes presence fades self-damaging (`AnimEngine.Compose` marks `TransformDirty` even for
+    opacity-only channels) and animating content inside an acrylic pill forcing a per-frame re-blur; genuine ≥1 px
+    moves/resizes of the layer are still caught by the quantized stamp. **Mechanism:** `SceneRecorder` augments the
+    single frame-damage union with a pooled, fixed-capacity ordered **damage-entry array** (append in Walk emission
+    order; overflow ⇒ fall back to the union, no carve-out — the safe prior behavior). A layer's own-subtree entries
+    are the contiguous range `[entryCountAtPush, entryCountAtPop)`, recorded per cached acrylic; post-walk the
+    recorder bakes that layer's **external** damage rect (`AcrylicBackdropMath.ExternalDamageUnion` — union of entries
+    *outside* the range) **plus a nonzero frame epoch** into its `PushLayerCmd` (`OwnDmg*` + `DamageEpoch`). The
+    compositor uses that per-layer rect only when the baked epoch matches `FrameInfo.FrameEpoch`; a **span-copied**
+    (reused-subtree) layer carries a stale epoch and safely falls back to the whole-frame `FrameInfo.Damage` union, so
+    a copied `PushLayerCmd` can never apply a stale carve-out. `pendingStructuralDamage` seeds land before any layer's
+    push ⇒ they are outside every own-range ⇒ never carved (global), as intended.
+- **Honest limitation (paint stays "v1 at rest"):** paint-only / layout-only changes *directly behind* a stationary
+  overlay are NOT in the damage set (`PaintDirty` is sticky and `LayoutDirty` clears pre-record in the current
+  single-thread engine), so they refresh on the next motion / re-open — barely perceptible through frosted glass.
+  Scroll-velocity Acrylic over simultaneously-moving video still wants the render-thread seam (`hardened-v1-plan.md`
+  §6) — the named v2 item.
 - `VisualKind.Backdrop` + `DrawBackdropCmd` (already stubs in `architecture-spec.md` §4.5) carry the live
   case; this subsystem fills in the two-pass schedule, not a new opcode.
 
@@ -472,6 +501,29 @@ passes; a HIT is a single region composite. The pin lives in `OpacityLayerCompos
 ## 5. Connected / implicit / driven animation — the phase-7 `AnimTrack`
 
 > **🔄 DECIDED REWORK (landing in phases) — read before editing §5.** This section is the **canon owner** of the animation engine and describes the **current as-built model** (`AnimTrack`/`AnimEngine`, `IntegrationMode` Eased/Spring sub-stepped Euler, `DrivenClockTable`, `InteractionAnimator`, `ConnectedAnimation`, the `BrushTransition`/`BrushAnim` ticker, the N phase-7 tickers). The engine is being reworked to a **signals-first** model — one POD **`AnimValue`** slab keyed `(node, channel)` `{value, velocity, target, generator}` (interpolates-from-current + auto-retargets on signal change); one **`AnimScheduler`** (per-source `CadenceClass`, `min(next-due)` wake); the **analytical closed-form spring** sampled at absolute `t` (replaces the sub-stepped Euler); **owner-column → single fold-and-write-once compose pass** (one write per node×channel); a declarative orchestration layer (`Transition`/`While*`/`Enter`/`Exit`/`Stagger`/`Layout` + `UseSpringValue`/`UseAnimatedValue`); one **`MotionTok`** registry; **reduced-motion as a value**. Full design + the §5-section-by-section migration map: [`../../docs/plans/animation-engine-rework-design.md`](../../docs/plans/animation-engine-rework-design.md) (research: [`…research-dossier.md`](../../docs/plans/animation-engine-research-dossier.md)). **§5 below stays canon until each rework phase lands and reconciles its subsection** (the per-phase `check-canon.ps1` supersession rules retire the named tokens only at that point — the current model is still in force). Registered as a §2 row in [`SPEC-INDEX.md`](../SPEC-INDEX.md).
+
+**As-built (scroll-perf W2/E11): the ambient-FPS cap defers through the post-scroll hold.** `AppHost.RecommendedWaitMsCore`
+paces loop-only motion (`AnimIsAmbient`: no connected fly, and every active slab row is a `Loop` with no `DisplayRate`
+opt-out) at `AmbientAnimationFps` — but only once BOTH post-scroll windows have expired: the display-rate grace
+(`_scrollGraceUntil`, 0.25 s re-armed on every ScrollAnim-awake pace query) AND the 0.45 s any-viewport hold
+(`_mainScrollHoldUntil`, refreshed at the phase-7 scroll tick while a user scroll is actually active). Without the hold
+term, slow wheel-notch scrolling over a perpetual loop (skeleton shimmer) fell back to the ambient cadence between
+notches and stepped back up on the next one; each step-up ran the frame-clock `Resync`, so the interaction lurched once
+per notch. Relatedly, `MotionSuppressionSource.Scroll` (set in `AppHost.Paint` before FLIP capture) suppresses layout
+transitions on a frame where a scroll offset REALLY advanced last frame while the hold is live — scroll-coincident
+reconciles snap instead of seeding structural FLIP tracks; because it gates on actual motion (a one-bit latch off
+`ScrollIntegrator.AnyOffsetWroteThisFrame`), a click-triggered expand right after scrolling still FLIPs. Gates:
+`wake.scrollHoldSuppressesAmbientCap`, `motion.scrollSuppressionSnapsFlip`.
+
+**As-built (scroll-perf W6/E12): the slab's active-node chain + census memo.** `AnimValueSlab` threads the node indices
+that currently own rows on an intrusive doubly-linked chain (parallel `_nextActiveNode`/`_prevActiveNode` `int[]` keyed
+by node index, grown only inside `Add` — reconcile/input-edge seeds, never frame phases 6–13; a node links on its first
+row, unlinks O(1) on its last free). The tick's PASS1/PASS2 walks and the `LoopTrackCount`/`DisplayRateActive` census
+iterate this chain — O(active nodes) — instead of enumerating the `_headByNode` Dictionary keys, whose entry-array
+enumeration costs O(high-water concurrent animated nodes); the Dictionary remains the node→head lookup. The two census
+reads are further memoized against a slab-mutation `Version` (bumped on `Add`/`Free`/`ClearNode` and, via `BumpVersion`,
+at the seed paths that rewrite `Loop`/`DisplayRate` in place), since the host's `ComputeWakeReasons` evaluates them
+several times per frame. Gate: `anim.activeChainMatchesDictionary`.
 
 ### 5.1 `AnimTrack` and the engine (owned here)
 

@@ -44,4 +44,9 @@ public enum MotionSuppressionSource : byte
     None = 0,
     WindowResize = 1,
     AppResize = 2,
+    /// <summary>A user scroll actually moved content LAST frame and the post-scroll hold is still live (AppHost.Paint
+    /// sets this before FLIP capture): a reconcile landing mid-scroll snaps its layout moves instead of seeding FLIP
+    /// projections — flying cards through a scrolling viewport reads as jank, not motion. Gated on REAL offset motion,
+    /// not merely the hold window, so a click-triggered expand right after scrolling still FLIPs.</summary>
+    Scroll = 4,
 }

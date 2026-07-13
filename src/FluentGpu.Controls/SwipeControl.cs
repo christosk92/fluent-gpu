@@ -50,6 +50,14 @@ public sealed record SwipeSide(IReadOnlyList<SwipeAction> Actions)
 public sealed class SwipeGroup
 {
     internal Action? CloseLast;
+    object? _openToken;
+    /// <summary>True while a member row is currently open (settled-open or fling-committed). A list's scroll observer
+    /// gates its per-frame OffsetY projection on this so nothing is dispatched while every row is shut — the observer
+    /// only exists to close the open row on scroll. Single-open by design, so one token (the open row's stable
+    /// group-close delegate identity) tracks which member is the open one.</summary>
+    public bool AnyOpen => _openToken is not null;
+    internal void MarkOpen(object token) => _openToken = token;
+    internal void MarkClosed(object token) { if (ReferenceEquals(_openToken, token)) _openToken = null; }
     /// <summary>Close the currently open member, if any (list scroll/focus-loss integration).</summary>
     public void Close() => CloseLast?.Invoke();
 }
@@ -594,6 +602,20 @@ internal sealed class SwipeControlCore : Component
                 hooks.WindowBlurObserved -= windowBlur.Value;
                 hooks.ScrollStartedObserved -= scrollStarted.Value;
             });
+        });
+
+        // Reflect this row's open state into the group so a list's scroll observer can gate its per-frame OffsetY
+        // dispatch on SwipeGroup.AnyOpen — nothing needs closing (or even observing) while every row is shut. Reads
+        // isOpen reactively (re-runs on each open/close toggle, an interaction-time event, never a per-frame one); the
+        // token is this row's stable group-close delegate identity so the group tracks the single open member.
+        Context.UseSignalEffect(() =>
+        {
+            bool o = isOpen.Value;
+            if (p?.Group is { } g && groupCloseAction.Value is { } token)
+            {
+                if (o) g.MarkOpen(token); else g.MarkClosed(token);
+                Reactive.OnCleanup(() => g.MarkClosed(token));
+            }
         });
 
         void InvokeItem(SwipeAction a)

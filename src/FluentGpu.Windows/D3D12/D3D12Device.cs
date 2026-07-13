@@ -1570,8 +1570,14 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                         acrylicRtv = backRtv;
                     }
 
+                    // §2.3/E9 own-subtree carve-out: a freshly-walked cached acrylic (epoch matches this frame) tests only
+                    // its EXTERNAL damage — the union of moved nodes NOT in its own subtree (its own content draws on top
+                    // of the snapshot, so it can never invalidate it). A stale/uncached layer falls back to ctx.Damage.
+                    bool carve = L.DamageEpoch != 0 && L.DamageEpoch == ctx.FrameEpoch;
+                    float dmgX = carve ? L.OwnDmgX : ctx.Damage.X, dmgY = carve ? L.OwnDmgY : ctx.Damage.Y;
+                    float dmgW = carve ? L.OwnDmgW : ctx.Damage.W, dmgH = carve ? L.OwnDmgH : ctx.Damage.H;
                     _acrylic.BlurAndComposite(_cmdList, L, lw, lh, _frameScale, _fenceValue + 1,
-                        ctx.Damage.X * _frameScale, ctx.Damage.Y * _frameScale, ctx.Damage.W * _frameScale, ctx.Damage.H * _frameScale,
+                        dmgX * _frameScale, dmgY * _frameScale, dmgW * _frameScale, dmgH * _frameScale,
                         acrylicClip, backdropSourceId, acrylicTarget, acrylicRtv);
                     InvalidateCmdState();   // the acrylic passes bound their own PSOs/heap + viewport/scissor
                     if (_opacityGroups.Count > 0) _opacity.Bind(_cmdList, _opacityGroups[^1].Slot);   // back to the open group RT

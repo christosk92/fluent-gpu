@@ -6,7 +6,10 @@ namespace FluentGpu.Rhi;
 /// <summary>Per-frame context handed to the device at submit. POD.</summary>
 // Damage = the union (device/DIP px) of nodes whose transform moved this frame — the region-aware invalidation set for
 // the in-app acrylic backdrop cache (default empty ⇒ nothing moved ⇒ reuse every cached blur). See AcrylicBackdropMath.
-public readonly record struct FrameInfo(Size2 SizePx, float Scale, ColorF Clear, RectF Damage = default, float ImageClockMs = 0f);
+// FrameEpoch = a nonzero monotonic frame counter (0 = none) matched against PushLayerCmd.DamageEpoch: a cached acrylic
+// layer whose baked epoch equals FrameEpoch uses its own EXTERNAL damage rect (own-subtree carve-out, §2.3/E9); a stale
+// (span-copied) or unpatched (popup/uncached) layer mismatches and falls back to the whole-frame Damage union.
+public readonly record struct FrameInfo(Size2 SizePx, float Scale, ColorF Clear, RectF Damage = default, float ImageClockMs = 0f, ulong FrameEpoch = 0);
 
 /// <summary><paramref name="DesktopAcrylic"/> = back this composited popup with a true desktop-sampling acrylic
 /// (Windows.UI.Composition host backdrop) tinted by <paramref name="AcrylicTint"/> — the WinUI MenuFlyout material,

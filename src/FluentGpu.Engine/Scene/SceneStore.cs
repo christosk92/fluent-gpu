@@ -976,6 +976,16 @@ public sealed class SceneStore : ISceneBackend
     private readonly List<NodeHandle> _boundsAnimated = new();
     internal List<NodeHandle> BoundsAnimatedNodes => _boundsAnimated;
 
+    // Scene-owned VirtualRangeDirty worklist (E6): mirrors _layoutDirty — appended on the 0→1 edge so the reconciler's
+    // ReRealizeVirtuals iterates ONLY the dirty viewports instead of scanning the whole _virtuals dictionary every frame.
+    // NOT cleared per-frame like _layoutDirty: the reconciler swap-removes an entry once its window fully realizes (the
+    // flag clears); a budget-deferred / mid-warm entry stays queued (still flagged) until it catches up. Duplicate-free by
+    // construction — the flag stays set while queued, so no fresh 0→1 edge re-adds it.
+    private readonly List<NodeHandle> _virtualRangeDirty = new();
+    /// <summary>The queued VirtualRangeDirty viewports (the reconciler's realize worklist). Mutable: the reconciler
+    /// swap-removes consumed entries in place (same-assembly, mirrors how the host consumes _layoutDirty).</summary>
+    internal List<NodeHandle> VirtualRangeDirtyNodes => _virtualRangeDirty;
+
     public void Mark(NodeHandle h, NodeFlags flags)
     {
         int idx = (int)h.Raw.Index;
@@ -983,6 +993,7 @@ public sealed class SceneStore : ISceneBackend
         if ((flags & NodeFlags.LayoutDirty) != 0 && (old & NodeFlags.LayoutDirty) == 0) _layoutDirty.Add(h);
         if ((flags & NodeFlags.TransformDirty) != 0 && (old & NodeFlags.TransformDirty) == 0) _transformWrote.Add(h);
         if ((flags & NodeFlags.BoundsAnimated) != 0 && (old & NodeFlags.BoundsAnimated) == 0) _boundsAnimated.Add(h);
+        if ((flags & NodeFlags.VirtualRangeDirty) != 0 && (old & NodeFlags.VirtualRangeDirty) == 0) _virtualRangeDirty.Add(h);
         byte recordBits = 0;
         if ((flags & NodeFlags.TransformDirty) != 0) recordBits |= RecordDirtyTransform;
         if ((flags & (NodeFlags.LayoutDirty | NodeFlags.PaintDirty)) != 0) recordBits |= RecordDirtyContent;

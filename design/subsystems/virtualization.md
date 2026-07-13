@@ -397,6 +397,44 @@ takes.
 > a fixed, density-derived constant the app supplies; it must never be the late-arriving image `NaturalSize`**
 > (see §6.3). A list that genuinely needs intrinsic per-row height opts into the variable path explicitly.
 
+### 6.1a Steady-scroll realize budget, velocity overscan, mount deferral (scroll-perf E4/E5/E6)
+
+Three cooperating policies flatten the realize-cost spikes a fast fling / a shelf-of-rails scrolling into view
+would otherwise cause, **subordinate to one hard safety invariant**:
+
+> **VISIBLE-EXEMPTION INVARIANT (binding — prevents the scroll-flicker blank-row regression):** on EVERY recorded
+> frame the **visible range plus one guard row per side** (the *mandatory band*) is realized —
+> `FirstRealized ≤ visibleFirst ∧ LastRealized ≥ visibleLast`. The budget and the velocity skew below may only
+> ever govern the OVERSCAN halo *beyond* the mandatory band; they can never clip a visible row. This is what makes
+> the post-Tick re-realize catch-up (`threading-render-seam` phase 7.6) sufficient by construction.
+
+- **E5 — velocity-proportional directional overscan (FIXED-SUM skew).** `VirtualWindowing.DirectionalOverscan`
+  redistributes the fixed `2·Overscan` row budget toward the scroll direction: ahead = `Overscan + k`, behind =
+  `Overscan − k`, where `k = clamp(⌈|FlingVelocity|·0.12 / avgExtent⌉, 0, Overscan−1)` (`avgExtent = ContentExtent /
+  ItemCount`, O(1)). The two halves **always sum to `2·Overscan`**, so the realized WINDOW WIDTH is
+  velocity-independent — the load-bearing property that keeps the persistent-slot bound path (§5) zero-alloc (a
+  width that grew/shrank with velocity would churn slots in frame phases 6–13). At rest (`|v| ≤ 1 px/s`) both halves
+  are `Overscan` — byte-identical to the pre-E5 symmetric window. `NeedsRealize`'s per-side guard is half the skewed
+  overscan on that side, so a fling requests the re-realize earlier on the ahead edge (and later on the receding
+  edge) — the hard coverage check (`visible ⊄ realized ⇒ realize`) remains as the net beneath it.
+  <!-- canon-allow: fixed-sum skew is the zero-alloc-preserving realization of the design's "velocity overscan" -->
+- **E4 — steady-scroll realize budget.** A per-frame row pool (`SteadyRealizeRowsPerFrame = 12`), shared across
+  every realize call in a Paint (pre-layout, the D1 after-layout loop, the phase-7.6 catch-up) and reset on the
+  `FrameEpoch` tick. The mandatory band is realized unconditionally (budget-exempt); the budget clips only the
+  overscan refill, extending toward the desired window on the velocity side first. On a deficit the viewport stays
+  `VirtualRangeDirty` (the remainder trickles in over subsequent frames) and an O(1) census
+  (`HasBudgetDeferredVirtuals`) keeps the host awake until it catches up. Because the fixed-sum window width is
+  constant under steady scroll, a single list at the default budget never deficits (it realizes its whole window
+  each cross); the budget bites when many viewports compete or a large window must be (re)built.
+- **E6 — scene-owned virtual-dirty queue.** `SceneStore` appends a viewport to a pre-sized `_virtualRangeDirty` list
+  on the `VirtualRangeDirty` 0→1 edge (mirrors the `_layoutDirty` idiom). `ReRealizeVirtuals` iterates THAT queue —
+  never a full scan of the `_virtuals` dictionary — swap-removing an entry once its window fully realizes; a
+  budget-/warm-deferred entry stays queued. It returns "made structural progress" (a re-check that moves no window
+  returns false) so the two-pass post-layout loops don't burn a pass on a purely budget-deferred viewport.
+- **Nested-rail mount deferral.** `MountVirtual` realizes with overscan 0 (the visible cards + guard only) and marks
+  `VirtualRangeDirty`, so a rail scrolling into view lands its visible content in the mount frame and trickles its
+  overscan halo in over later frames via the same budget — flattening the all-rails-mount-at-once spike.
+
 ### 6.2 Variable-height path — `MeasureItems=true`, anchoring
 
 Forced whenever `ItemExtent==0` **or** `GroupHeaderTypeId != 0` (headers are variable — image-bearing Liked

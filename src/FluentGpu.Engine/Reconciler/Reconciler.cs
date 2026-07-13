@@ -38,6 +38,10 @@ public sealed class TreeReconciler
         // ONE batch per frame (the host calls realize up to ~5x/frame: pre-layout + the 2-pass post-layout loop + the
         // 2-pass scroll catch-up) so the spread is per-FRAME, not per-call.
         public bool Warming; public int LastGrowEpoch = -1;
+        // E4 steady-scroll realize budget: true while this viewport's overscan is only PARTIALLY realized because the
+        // per-frame row budget was exhausted (or a nested-rail mount deferred its overscan). The window's VISIBLE band is
+        // always fully realized; only the overscan halo is spread across frames. Tracked so the host stays awake until caught up.
+        public bool RealizeDeferred;
     }
     private readonly Dictionary<NodeHandle, VirtualEntry> _virtuals = new();
 
@@ -49,6 +53,30 @@ public sealed class TreeReconciler
     /// <summary>True while any bound virtual list is still spreading its initial window across frames — the host ORs this
     /// into its wake mask so the loop keeps running until the cold realize completes (it isn't a re-render or anim).</summary>
     public bool HasWarmingVirtuals => _warmingCount > 0;
+
+    // ── E4 steady-scroll realize budget ────────────────────────────────────────────────────────────────────────────
+    // The per-FRAME row pool shared across every realize call in a Paint (pre-layout ReRealizeVirtuals + the D1 loop + the
+    // phase-7.6 scroll catch-up). The VISIBLE range (+1 guard row/side, the "mandatory band") is ALWAYS realized, exempt
+    // from the budget — so a recorded frame can never blank a visible row (the invariant phase 7.6 exists to guarantee).
+    // The budget clips ONLY the overscan refill: it extends the realized window toward the desired directional-overscan
+    // window on the velocity side first, stops when exhausted, and leaves the viewport VirtualRangeDirty so the remainder
+    // trickles in over subsequent frames. Reset when FrameEpoch changes (host bumps it once per Paint).
+    private const int SteadyRealizeRowsPerFrame = 12;
+    internal int? SteadyRealizeBudgetForTest;   // VerticalSlice-only override (InternalsVisibleTo); null ⇒ the const
+    private int SteadyRealizeBudget => SteadyRealizeBudgetForTest ?? SteadyRealizeRowsPerFrame;
+    private int _frameRealizeBudgetUsed;
+    private int _budgetFrameEpoch = -1;
+    private int _budgetDeferredCount;   // O(1) census of viewports whose overscan is mid-spread (mirrors _warmingCount)
+    /// <summary>True while any viewport's overscan is only partially realized (budget-deferred or nested-rail mount
+    /// deferral) — the host ORs this into its wake mask so frames keep coming until every window catches up.</summary>
+    public bool HasBudgetDeferredVirtuals => _budgetDeferredCount > 0;
+    private bool _realizeProgress;   // set by RealizeWindow when the realized window actually changed (drives the 2-pass loops)
+    // Probe seams (VerticalSlice gate.virt.*): dirty-queue entries examined / realized, SUMMED across every ReRealizeVirtuals
+    // call in a Paint (there are up to three) and reset on the FrameEpoch tick — proves the steady path iterates the
+    // scene-owned queue (== the dirty count), never scans the _virtuals dictionary.
+    internal int LastReRealizeScan;
+    internal int LastReRealizeRealized;
+    private int _scanFrameEpoch = -1;
 
     // Context provider value signals, keyed by provider node index (a consumer resolves by walking ancestors).
     private readonly Dictionary<int, (object Channel, Signal<object?> Sig)> _providerSig = new();
@@ -126,7 +154,6 @@ public sealed class TreeReconciler
     private readonly ScrollMemory _scrollMem = new();
     private readonly HashSet<int> _imagePinnedNodes = new();
     private readonly Dictionary<int, List<NodeHandle>> _imageNodes = new();   // imageId → nodes that pinned it (for status→dirty)
-    private readonly List<NodeHandle> _dirtyVirtualScratch = new();
 
     private Component? _root;
     private Element? _oldRoot;
@@ -305,17 +332,35 @@ public sealed class TreeReconciler
     /// crossing) — granular, no component re-render. Called by the host each frame.</summary>
     public bool ReRealizeVirtuals()
     {
-        if (_virtuals.Count == 0) return false;
-        _dirtyVirtualScratch.Clear();
-        foreach (var kv in _virtuals)
-            if (_scene.IsLive(kv.Key) && (_scene.Flags(kv.Key) & NodeFlags.VirtualRangeDirty) != 0 && kv.Value.El is not null)
-                _dirtyVirtualScratch.Add(kv.Key);
-        for (int i = 0; i < _dirtyVirtualScratch.Count; i++)
+        var dirty = _scene.VirtualRangeDirtyNodes;   // E6: the scene-owned queue — NO _virtuals dictionary scan
+        if (_scanFrameEpoch != FrameEpoch) { _scanFrameEpoch = FrameEpoch; LastReRealizeScan = 0; LastReRealizeRealized = 0; }
+        LastReRealizeScan += dirty.Count;
+        _realizeProgress = false;
+        // Reverse-iterate so a swap-remove (moving the tail entry into the freed slot) never skips an unprocessed entry.
+        for (int i = dirty.Count - 1; i >= 0; i--)
         {
-            var node = _dirtyVirtualScratch[i];
-            if (_virtuals.TryGetValue(node, out var e) && e.El is { } el) RealizeWindow(node, el, reuseOverlap: true);
+            var node = dirty[i];
+            bool alive = _scene.IsLive(node)
+                         && (_scene.Flags(node) & NodeFlags.VirtualRangeDirty) != 0
+                         && _virtuals.TryGetValue(node, out var e) && e.El is not null;
+            if (!alive) { SwapRemoveDirty(dirty, i); continue; }
+            _virtuals.TryGetValue(node, out var entry);
+            RealizeWindow(node, entry!.El!, reuseOverlap: true);
+            LastReRealizeRealized++;
+            // Fully realized (flag cleared) ⇒ drop from the queue; still flagged (budget/warm deficit) ⇒ leave it queued.
+            if ((_scene.Flags(node) & NodeFlags.VirtualRangeDirty) == 0) SwapRemoveDirty(dirty, i);
         }
-        return _dirtyVirtualScratch.Count > 0;
+        // "Made structural progress": the realized window of at least one viewport actually changed. A queue left dirty
+        // PURELY by budget exhaustion (visible already covered, window unchanged) returns false, so the AppHost 2-pass
+        // loops don't burn a pass re-checking it — the budget catch-up rides subsequent frames (HasBudgetDeferredVirtuals).
+        return _realizeProgress;
+
+        static void SwapRemoveDirty(List<NodeHandle> list, int i)
+        {
+            int last = list.Count - 1;
+            list[i] = list[last];
+            list.RemoveAt(last);
+        }
     }
 
     private void InjectContext(RenderContext ctx, NodeHandle anchor)
@@ -1410,17 +1455,19 @@ public sealed class TreeReconciler
         _scene.AppendChild(node, content);
         _scene.ScrollRef(node).ContentNode = content;
         _virtuals[node] = new VirtualEntry { El = ve };
-        RealizeWindow(node, ve);
+        RealizeWindow(node, ve, mount: true);   // E4: mount realizes the VISIBLE band only; overscan trickles via the budget
         ve.OnRealized?.Invoke(node);   // E11: viewport-handle escape hatch (ItemsView StartBringItemIntoView / sticky pinning)
     }
 
-    private void RealizeWindow(NodeHandle node, VirtualListEl ve, bool reuseOverlap = false)
+    private void RealizeWindow(NodeHandle node, VirtualListEl ve, bool reuseOverlap = false, bool mount = false)
     {
+        if (_budgetFrameEpoch != FrameEpoch) { _budgetFrameEpoch = FrameEpoch; _frameRealizeBudgetUsed = 0; }
         if (!_virtuals.TryGetValue(node, out var entry)) { entry = new VirtualEntry(); _virtuals[node] = entry; }
         entry.El = ve;
         _scene.TryGetScroll(node, out var sc);
         var content = sc.ContentNode;
         if (content.IsNull) return;
+        int prevFirstR = sc.FirstRealized, prevLastR = sc.LastRealized;   // window-change (progress) detection
 
         bool horizontal = ve.Horizontal;
         float offset = horizontal ? sc.OffsetX : sc.OffsetY;
@@ -1428,57 +1475,123 @@ public sealed class TreeReconciler
         if (viewport <= 0f) viewport = horizontal ? Hint(ve.Width) : Hint(ve.Height);
 
         int count = ve.ItemCount;
-        int first, last, visibleFirst, visibleLast;
+        // E5 directional overscan: buffer ahead ∝ fling speed, trim the receding edge. A nested-rail MOUNT defers overscan
+        // entirely (overscan 0) so only the visible cards land this frame; the halo trickles in via the budget on later frames.
+        float contentExt = horizontal ? sc.ContentW : sc.ContentH;
+        float avgExtent = count > 0 && contentExt > 0f ? contentExt / count : (ve.EstimatedExtent > 0f ? ve.EstimatedExtent : 1f);
+        int effOverscan = mount ? 0 : ve.Overscan;
+        VirtualWindowing.DirectionalOverscan(effOverscan, sc.FlingVelocity, avgExtent, out int lowOv, out int highOv);
+
+        int first, last, visibleFirst, visibleLast, mandFirst, mandLast;
         if (ve.Layout is not null)
         {
             float cross = horizontal ? (sc.ViewportH > 0f ? sc.ViewportH : Hint(ve.Height))
                                      : (sc.ViewportW > 0f ? sc.ViewportW : Hint(ve.Width));
-            ve.Layout.Window(count, cross, viewport, offset, ve.Overscan, out first, out last);
             ve.Layout.Window(count, cross, viewport, offset, 0, out visibleFirst, out visibleLast);
+            ve.Layout.Window(count, cross, viewport, offset, 1, out mandFirst, out mandLast);   // +1 GUARD ROW each side — row-aligned mandatory band
+            ve.Layout.Window(count, cross, viewport, offset, lowOv, out first, out _);           // splice: low edge from the behind/low overscan
+            ve.Layout.Window(count, cross, viewport, offset, highOv, out _, out last);           //        high edge from the ahead/high overscan
         }
         else
         {
             var table = _scene.ExtentTableFor(node, count, ve.EstimatedExtent);
-            first = Math.Max(0, table.IndexAt(offset) - ve.Overscan);
-            last = Math.Min(count, table.IndexAt(offset + viewport) + 1 + ve.Overscan);
             visibleFirst = table.IndexAt(offset);
             visibleLast = Math.Min(count, table.IndexAt(offset + viewport) + 1);
+            mandFirst = Math.Max(0, visibleFirst - 1);
+            mandLast = Math.Min(count, visibleLast + 1);
+            first = Math.Max(0, table.IndexAt(offset) - lowOv);
+            last = Math.Min(count, table.IndexAt(offset + viewport) + 1 + highOv);
         }
+        if (visibleLast < visibleFirst) visibleLast = visibleFirst;
+        // The mandatory band (visible +1 guard row/side) must bound the desired window; clamp defensively after the layout math.
+        mandFirst = Math.Clamp(mandFirst, 0, visibleFirst);
+        mandLast = Math.Clamp(mandLast, visibleLast, count);
+        if (first > mandFirst) first = mandFirst;
+        if (last < mandLast) last = mandLast;
+
+        // E4 budget: the mandatory band is realized unconditionally; the overscan halo is clipped to the per-frame row pool.
+        bool budgetDeficit = ClipRealizeBudget(in sc, mandFirst, mandLast, ref first, ref last);
+        bool stayDirty = budgetDeficit || mount;
         if (last < first) last = first;
         int w = last - first;
-        if (visibleLast < visibleFirst) visibleLast = visibleFirst;
         int visibleSlots = Math.Clamp(visibleLast - first, 0, w);
 
         if (ve.RowBind is not null)
         {
-            RealizeBoundWindow(node, content, entry, ve, first, last, w, visibleSlots);
-            return;
+            RealizeBoundWindow(node, content, entry, ve, first, last, w, visibleSlots, stayDirty);
         }
-
-        int oldFirst = entry.PrevFirst, oldLast = entry.PrevFirst + entry.PrevLen;   // E11 lifecycle window delta
-
-        var prev = reuseOverlap ? entry.Prev : null;
-        int prevFirst = entry.PrevFirst;
-        var cur = ArrayPool<Element>.Shared.Rent(Math.Max(1, w));
-        for (int i = 0; i < w; i++)
+        else
         {
-            int idx = first + i;
-            int oldSlot = idx - prevFirst;
-            Element? el = prev is not null && (uint)oldSlot < (uint)entry.PrevLen ? prev[oldSlot] : null;
-            cur[i] = el ?? ve.RenderItem(idx);   // overlap reuses the element OBJECT — no keys, no `with` clone
+            int oldFirst = entry.PrevFirst, oldLast = entry.PrevFirst + entry.PrevLen;   // E11 lifecycle window delta
+
+            var prev = reuseOverlap ? entry.Prev : null;
+            int prevFirst = entry.PrevFirst;
+            var cur = ArrayPool<Element>.Shared.Rent(Math.Max(1, w));
+            for (int i = 0; i < w; i++)
+            {
+                int idx = first + i;
+                int oldSlot = idx - prevFirst;
+                Element? el = prev is not null && (uint)oldSlot < (uint)entry.PrevLen ? prev[oldSlot] : null;
+                cur[i] = el ?? ve.RenderItem(idx);   // overlap reuses the element OBJECT — no keys, no `with` clone
+            }
+
+            ReconcileWindow(content, cur.AsSpan(0, w),
+                entry.Prev is null ? default : entry.Prev.AsSpan(0, entry.PrevLen), first - prevFirst);
+
+            if (entry.Prev is not null) { Array.Clear(entry.Prev, 0, entry.PrevLen); ArrayPool<Element>.Shared.Return(entry.Prev); }
+            entry.Prev = cur; entry.PrevLen = w; entry.PrevFirst = first;
+
+            ref ScrollState scw = ref _scene.ScrollRef(node);
+            scw.FirstRealized = first; scw.LastRealized = last;
+            if (stayDirty) _scene.Mark(node, NodeFlags.VirtualRangeDirty);   // overscan owed → re-realize next frame (budget/mount)
+            else _scene.Unmark(node, NodeFlags.VirtualRangeDirty);
+
+            FireWindowLifecycle(ve, oldFirst, oldLast, first, last);   // E11: Prepared/Clearing/VisibleRange (cold realize edge)
         }
 
-        ReconcileWindow(content, cur.AsSpan(0, w),
-            entry.Prev is null ? default : entry.Prev.AsSpan(0, entry.PrevLen), first - prevFirst);
+        // Progress = the realized window of this viewport actually changed (drives the AppHost 2-pass loops; a purely
+        // budget-deferred re-check that moves nothing returns false so a pass isn't burned). Census = overscan still owed.
+        _scene.TryGetScroll(node, out var scPost);
+        if (scPost.FirstRealized != prevFirstR || scPost.LastRealized != prevLastR) _realizeProgress = true;
+        bool deferred = (scPost.LastRealized - scPost.FirstRealized) > 0 && (_scene.Flags(node) & NodeFlags.VirtualRangeDirty) != 0;
+        if (deferred && !entry.RealizeDeferred) { entry.RealizeDeferred = true; _budgetDeferredCount++; }
+        else if (!deferred && entry.RealizeDeferred) { entry.RealizeDeferred = false; _budgetDeferredCount--; }
+    }
 
-        if (entry.Prev is not null) { Array.Clear(entry.Prev, 0, entry.PrevLen); ArrayPool<Element>.Shared.Return(entry.Prev); }
-        entry.Prev = cur; entry.PrevLen = w; entry.PrevFirst = first;
-
-        ref ScrollState scw = ref _scene.ScrollRef(node);
-        scw.FirstRealized = first; scw.LastRealized = last;
-        _scene.Unmark(node, NodeFlags.VirtualRangeDirty);
-
-        FireWindowLifecycle(ve, oldFirst, oldLast, first, last);   // E11: Prepared/Clearing/VisibleRange (cold realize edge)
+    /// <summary>E4 realize budget clip: the mandatory band <c>[mandFirst,mandLast)</c> (visible +1 guard/side) is exempt
+    /// and already covered by <paramref name="first"/>/<paramref name="last"/>; extend the overscan halo toward the desired
+    /// window on the velocity side first, charging the shared per-frame row pool. Already-realized rows still inside the
+    /// desired window are kept for free (never contracted by budget), so the charge is only the NEW extension and the pass
+    /// is idempotent. Returns true when budget ran out before the desired window was reached (overscan still owed).</summary>
+    private bool ClipRealizeBudget(in ScrollState sc, int mandFirst, int mandLast, ref int first, ref int last)
+    {
+        int df = first, dl = last;   // desired directional-overscan window (already ⊇ mandatory)
+        // "Have" = rows already realized this scroll episode, clamped into [desired, mandatory] — so the mandatory band
+        // reads as already-covered and stale rows outside the desired window are dropped.
+        int haveFirst = mandFirst, haveLast = mandLast;
+        if (sc.LastRealized > sc.FirstRealized)
+        {
+            haveFirst = Math.Clamp(sc.FirstRealized, df, mandFirst);
+            haveLast = Math.Clamp(sc.LastRealized, mandLast, dl);
+        }
+        int budget = Math.Max(0, SteadyRealizeBudget - _frameRealizeBudgetUsed);
+        int lowWant = haveFirst - df;    // overscan rows still owed below
+        int highWant = dl - haveLast;    // overscan rows still owed above
+        bool forward = sc.FlingVelocity >= 0f;   // velocity side = ahead: fill it first
+        int newFirst = haveFirst, newLast = haveLast;
+        if (forward)
+        {
+            int t = Math.Min(highWant, budget); newLast = haveLast + t; budget -= t;
+            int t2 = Math.Min(lowWant, budget); newFirst = haveFirst - t2; budget -= t2;
+        }
+        else
+        {
+            int t = Math.Min(lowWant, budget); newFirst = haveFirst - t; budget -= t;
+            int t2 = Math.Min(highWant, budget); newLast = haveLast + t2; budget -= t2;
+        }
+        _frameRealizeBudgetUsed += (haveFirst - newFirst) + (newLast - haveLast);
+        first = newFirst; last = newLast;
+        return newFirst > df || newLast < dl;   // desired not fully reached ⇒ overscan owed
     }
 
     /// <summary>E11 lifecycle: Clearing for indices that left [oldFirst,oldLast), Prepared for indices that entered
@@ -1506,7 +1619,7 @@ public sealed class TreeReconciler
     /// runtime again after re-realize so the rebinds land in the SAME frame.
     /// </summary>
     private void RealizeBoundWindow(NodeHandle node, NodeHandle content, VirtualEntry entry,
-                                    VirtualListEl ve, int first, int last, int w, int visibleSlots)
+                                    VirtualListEl ve, int first, int last, int w, int visibleSlots, bool stayDirty)
     {
         var rowBind = ve.RowBind!;
         var slots = entry.Slots ??= new List<(Signal<int>, Element)>(Math.Max(4, w));
@@ -1580,8 +1693,9 @@ public sealed class TreeReconciler
 
         ref ScrollState scw = ref _scene.ScrollRef(node);
         scw.FirstRealized = first; scw.LastRealized = first + mat;
-        if (entry.Warming && mat < w)
-            _scene.Mark(node, NodeFlags.VirtualRangeDirty);   // stay dirty → next frame realizes the next batch
+        bool warmingIncomplete = entry.Warming && mat < w;
+        if (warmingIncomplete || stayDirty)
+            _scene.Mark(node, NodeFlags.VirtualRangeDirty);   // stay dirty → next frame realizes the next batch (warm) / owed overscan (budget/mount)
         else
         {
             if (entry.Warming) { entry.Warming = false; _warmingCount--; }
@@ -1934,6 +2048,7 @@ public sealed class TreeReconciler
         if (_virtuals.Remove(node, out var v))
         {
             if (v.Warming) _warmingCount--;   // a bound list unmounted mid-warm → keep the warming census exact
+            if (v.RealizeDeferred) _budgetDeferredCount--;   // …and the budget-deferred census exact (E4)
             if (v.Prev is not null)
             {
                 Array.Clear(v.Prev, 0, v.PrevLen);

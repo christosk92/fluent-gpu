@@ -68,6 +68,38 @@ public interface IViewportVirtualLayout : IVirtualLayout
 /// <summary>Decides whether a scroll offset needs a virtual-window refresh, using the realized overscan as a guard band.</summary>
 public static class VirtualWindowing
 {
+    /// <summary>Fling speed (px/s along the scroll axis) below which the directional overscan collapses to the historical
+    /// symmetric guard — so an at-rest / slow-wheel realize computes exactly the pre-E5 window (existing gates unchanged);
+    /// the velocity skew engages only under a real fling.</summary>
+    public const float FlingGuardThreshold = 1f;
+    /// <summary>E5: ahead-guard grows by <c>ceil(|FlingVelocity|·<see cref="VelocityOverscanFactor"/> / avgExtent)</c> rows —
+    /// ~120ms of travel pre-buffered on the scroll-direction edge.</summary>
+    public const float VelocityOverscanFactor = 0.12f;
+
+    /// <summary>E5 velocity-proportional DIRECTIONAL overscan — a FIXED-SUM skew. The two overscan halves always sum to
+    /// <c>2·Overscan</c> (the pre-E5 total), so the realized WINDOW WIDTH is velocity-independent — critical for the
+    /// zero-alloc bound-list path, whose persistent slots would otherwise grow/shrink (allocate) as velocity varied. Under
+    /// a fling the fixed budget is redistributed toward the scroll direction: ahead = <c>Overscan + k</c>, behind =
+    /// <c>Overscan − k</c> (k ∝ speed, clamped to <c>Overscan−1</c> so behind ≥ 1). At rest / below
+    /// <see cref="FlingGuardThreshold"/> both are <paramref name="overscan"/> (symmetric — identical to the pre-E5 window).
+    /// Pure integer arithmetic, allocation-free. <paramref name="flingVelocity"/> is signed in offset space (≥0 ⇒ scrolling
+    /// toward higher indices ⇒ the high-index edge is ahead).</summary>
+    public static void DirectionalOverscan(int overscan, float flingVelocity, float avgExtent, out int lowOverscan, out int highOverscan)
+    {
+        bool flinging = MathF.Abs(flingVelocity) > FlingGuardThreshold;
+        int aheadOv = overscan, behindOv = overscan;
+        if (flinging && overscan > 0)
+        {
+            float avg = avgExtent > 0f ? avgExtent : 1f;
+            int k = Math.Clamp((int)MathF.Ceiling(MathF.Abs(flingVelocity) * VelocityOverscanFactor / avg), 0, overscan - 1);
+            aheadOv = overscan + k;   // sum stays 2·overscan ⇒ constant window width ⇒ no bound-slot churn
+            behindOv = overscan - k;
+        }
+        bool forward = flingVelocity >= 0f;                 // offset increasing ⇒ high-index edge is ahead
+        lowOverscan = forward ? behindOv : aheadOv;
+        highOverscan = forward ? aheadOv : behindOv;
+    }
+
     public static bool NeedsRealize(in ScrollState sc, int visibleFirst, int visibleLast)
     {
         if (sc.ItemCount <= 0) return false;
@@ -75,11 +107,19 @@ public static class VirtualWindowing
         visibleLast = Math.Clamp(visibleLast, visibleFirst, sc.ItemCount);
 
         if (sc.LastRealized <= sc.FirstRealized) return true;
-        if (visibleFirst < sc.FirstRealized || visibleLast > sc.LastRealized) return true;
+        if (visibleFirst < sc.FirstRealized || visibleLast > sc.LastRealized) return true;   // hard coverage net (never removed)
 
-        int guard = Math.Max(1, sc.Overscan / 2);
-        if (sc.FirstRealized > 0 && visibleFirst < sc.FirstRealized + guard) return true;
-        if (sc.LastRealized < sc.ItemCount && visibleLast > sc.LastRealized - guard) return true;
+        // E5 directional guard band: the per-side guard is HALF the (skewed) overscan on that side, so under a fling the
+        // ahead edge is guarded MORE (re-realize fires earlier as the fixed budget shifts ahead) and the receding edge
+        // less. At rest DirectionalOverscan is symmetric ⇒ both guards are max(1, Overscan/2) — byte-identical to pre-E5.
+        float contentExt = sc.Orientation == 1 ? sc.ContentW : sc.ContentH;
+        float avg = sc.ItemCount > 0 && contentExt > 0f ? contentExt / sc.ItemCount : 1f;
+        DirectionalOverscan(sc.Overscan, sc.FlingVelocity, avg, out int lowOv, out int highOv);
+        int guardLow = Math.Max(1, lowOv / 2);
+        int guardHigh = Math.Max(1, highOv / 2);
+
+        if (sc.FirstRealized > 0 && visibleFirst < sc.FirstRealized + guardLow) return true;
+        if (sc.LastRealized < sc.ItemCount && visibleLast > sc.LastRealized - guardHigh) return true;
         return false;
     }
 }

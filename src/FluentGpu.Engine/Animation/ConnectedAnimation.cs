@@ -116,6 +116,26 @@ public sealed class ConnectedAnimation
         }
     }
 
+    /// <summary>Spatial span-reuse scoping (scene-memory.md): collect the scene nodes whose ancestor-chain spans could go
+    /// stale while a connected-animation fly or a pending capture is live. A fly HIDES/REVEALS its dest anchor (toggling
+    /// <see cref="NodeFlags.Visible"/>) and PINS its source, so exactly those anchors' ancestor chains must be blocked from
+    /// span reuse — the recorder then keeps the rest of the tree reusing while a Hero fly is in flight (no whole-canvas
+    /// re-record). Clears <paramref name="into"/> first; alloc-free in steady state (no flights / no pending).</summary>
+    public void CollectReuseBlockRoots(List<NodeHandle> into)
+    {
+        into.Clear();
+        for (int i = 0; i < _flights.Count; i++)
+        {
+            var d = _flights[i].Dest;
+            if (!d.IsNull && _scene.IsLive(d)) into.Add(d);
+        }
+        foreach (var kv in _pending)
+        {
+            var s = kv.Value.Source;
+            if (!s.IsNull && _scene.IsLive(s)) into.Add(s);
+        }
+    }
+
     /// <summary>Probe/diagnostic only: collect the distinct live <c>pl:</c> shared-element keys (the home cards), so a
     /// harness can fly to several DIFFERENT (uncached) detail pages to measure the cold-mount-plus-fly cost.</summary>
     public void CollectTaggedKeys(System.Collections.Generic.List<string> into)

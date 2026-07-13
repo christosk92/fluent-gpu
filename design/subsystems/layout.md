@@ -543,6 +543,13 @@ the dev's `RenderItem(i)` **only** for the window, and hands those to the **exis
 WinUI's `ElementPool` COM-detach pain). **This subsystem provides the layout half:** the extent model, the visible-
 range computation, and the two-pass arrange.
 
+> **Directional realize guard (scroll-perf E5).** `VirtualWindowing.NeedsRealize` — the "does this offset need a
+> window refresh" test the arrange pass and the input/scroll paths share — computes its per-side guard band from
+> `VirtualWindowing.DirectionalOverscan` (half the skewed overscan on each side). Under a fling the guard grows on
+> the scroll-direction edge and shrinks on the receding edge; at rest it is the symmetric `max(1, Overscan/2)`
+> (unchanged from pre-E5). The realize-window MATH and the visible-exemption invariant are owned by
+> `virtualization.md §6.1a`; this doc just consumes `[first,last)`.
+
 ### 8.2 `VirtualState` — the slab-backed column
 
 ```csharp

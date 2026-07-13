@@ -26,6 +26,12 @@ public static class MediaCard
     internal const float FabInset = 8f;
     const float Pad      = WaveeSpace.S;
 
+    /// <summary>Wide Home destination used by the concert feature. It keeps one responsive layered tree and avoids the
+    /// stateful portrait editorial card's image zoom, acrylic, and shelf-specific clipping behavior.</summary>
+    public static Element WideEditorialDestination(Image? artwork, string eyebrow, string title, string subtitle,
+        string actionLabel, Action onClick, float fallbackWidth = 1000f) =>
+        ConcertUi.WideEditorialDestination(artwork, eyebrow, title, subtitle, actionLabel, onClick, fallbackWidth);
+
     static ColorF AccentCardFill(ColorF? accent) =>
         accent is { } a
             ? ColorF.Lerp(Tok.FillCardDefault, a, Tok.Theme == ThemeKind.Dark ? 0.12f : 0.08f)
@@ -325,19 +331,6 @@ public static class MediaCard
             float textW = MathF.Max(32f, cardW - 2f * inset);
             const float radius = 14f;
 
-            // WinUI AcrylicBrush recipe with a TOP FEATHER (FeatherTop): the frost dissolves continuously into the crisp
-            // artwork over the top ~three-quarters of the band instead of a hard blur line (Apple editorial card). The
-            // copy sits in the fully-frosted lower zone (featherPad reserves the ramp space above it). Rounding all four
-            // corners is safe — the top corners fade out under the feather — so the band's bottom corners match the card.
-            var imageGlass = new AcrylicSpec(
-                Tint: ColorF.FromRgba(8, 8, 10),
-                TintOpacity: 0.24f,
-                BlurSigma: 26f,
-                NoiseOpacity: 0.005f,
-                LuminosityOpacity: 0.28f,
-                Fallback: ColorF.FromRgba(18, 18, 20),
-                FeatherTop: 0.75f);
-
             var copy = new List<Element>(4);
             // Eyebrow row also hosts the countdown ring (trailing) so the sweep reads as part of the copy header.
             if (eyebrow is { Length: > 0 } || counting)
@@ -399,6 +392,14 @@ public static class MediaCard
                     // Bottom-pinned frosted copy band, cross-stretched to the full card width; it auto-sizes to the copy
                     // plus the feather ramp space (featherPad), so the frost covers the text zone and fades up into the
                     // art. Height changes (line expand / peek swap) tween through real layout (CardResizeHeight).
+                    //
+                    // The frost is a CACHED SELF-BLUR of the artwork itself, not an Acrylic backdrop stamp: a backdrop
+                    // stamp is keyed on the card's canvas position, so a shelf scroll could never HIT its cache — one
+                    // Gaussian per card per frame. The self-blur duplicates the SAME artwork (same URL/decode params ⇒
+                    // shared ImageCache handle) bottom-anchored inside the band, blurs it once (the blur pin rebases to
+                    // the layer origin, so it survives scroll translation — re-run only on art change/resize), feathers
+                    // its top edge (the old FeatherTop 0.75 dissolve, here the featherPad ramp zone), and lays the
+                    // tint/luminosity feel over it as a plain translucent fill.
                     new BoxEl
                     {
                         Height = artH, Direction = 1, Justify = FlexJustify.End, AlignItems = FlexAlign.Stretch,
@@ -407,12 +408,42 @@ public static class MediaCard
                         [
                             new BoxEl
                             {
-                                Direction = 1, Gap = 3f, HitTestPassThrough = true,
-                                Acrylic = imageGlass, Fill = ColorF.Transparent,
+                                ZStack = true, ClipToBounds = true, HitTestPassThrough = true,
                                 Corners = CornerRadius4.All(radius),
-                                Padding = new Edges4(inset, featherPad, inset, inset),
                                 Animate = MotionRecipes.CardResizeHeight,
-                                Children = copy.ToArray(),
+                                Children =
+                                [
+                                    // Frost: blurred artwork copy + tint, feathered in from the top so it dissolves
+                                    // into the crisp art above (the corner-following EdgeFade keeps the band's rounded
+                                    // bottom corners clean while the top corners fade out under the ramp).
+                                    new BoxEl
+                                    {
+                                        ZStack = true, HitTestVisible = false,
+                                        Corners = CornerRadius4.All(radius),
+                                        EdgeFade = new EdgeFadeSpec(EdgeMask.Top, featherPad),
+                                        Children =
+                                        [
+                                            new BoxEl
+                                            {
+                                                Direction = 1, Justify = FlexJustify.End, ClipToBounds = true,
+                                                Blur = 26f,
+                                                // Same call shape as the cover above: the duplicate resolves to the
+                                                // full card size (width-stretched, aspect-derived height = artH),
+                                                // bottom-justified so the band shows exactly the art region behind it.
+                                                Children = [Ui.Image(cover?.Url ?? "", ImageFit.Cover, aspect, 512, radius, Tok.FillCardDefault, cover?.BlurHash)],
+                                            },
+                                            // Tint + luminosity feel of the old recipe (Tint rgba(8,8,10)@0.24 over a
+                                            // 0.28 luminosity wash) folded into one translucent fill.
+                                            new BoxEl { Fill = ColorF.FromRgba(8, 8, 10) with { A = 0.42f }, Corners = CornerRadius4.All(radius) },
+                                        ],
+                                    },
+                                    new BoxEl
+                                    {
+                                        Direction = 1, Gap = 3f, HitTestPassThrough = true,
+                                        Padding = new Edges4(inset, featherPad, inset, inset),
+                                        Children = copy.ToArray(),
+                                    },
+                                ],
                             },
                         ],
                     },
