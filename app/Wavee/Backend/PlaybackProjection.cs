@@ -92,6 +92,7 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     ClusterDelta? _lastCluster;   // the last folded cluster (raw next/prev with uid+provider+metadata) — the source the controller replays through PlaybackSession.ReplaceFromCluster on ghost-resume (§8)
     string _queueRevision = "";
     bool _isPlaying, _isBuffering, _isPrebuffering, _shuffle;
+    PlaybackRecoveryKind _recoveryKind;
     public bool IsPrivateSession { get; set; }
     RepeatMode _repeat;
     double _volume = 0.7;
@@ -156,6 +157,7 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     // indeterminate edge shows during the instant-start window without a new interface member.
     public bool IsBuffering { get { lock (_gate) return _isBuffering || _isPrebuffering; } }
     public bool IsPrebuffering { get { lock (_gate) return _isPrebuffering; } }
+    public PlaybackRecoveryKind RecoveryKind { get { lock (_gate) return _recoveryKind; } }
     public long PositionMs { get { lock (_gate) return Pos(); } }
     public long DurationMs { get { lock (_gate) return _durMs; } }
     public double Volume { get { lock (_gate) return _volume; } }
@@ -174,7 +176,9 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
     static readonly System.ComponentModel.PropertyChangedEventArgs AllChanged = new(null);
 
-    long Pos() => _isPlaying ? Math.Clamp(_posMs + (long)((_now() - _posAnchorWall) * _speed), 0, _durMs <= 0 ? long.MaxValue : _durMs) : _posMs;
+    long Pos() => _isPlaying && !_isBuffering && !_isPrebuffering
+        ? Math.Clamp(_posMs + (long)((_now() - _posAnchorWall) * _speed), 0, _durMs <= 0 ? long.MaxValue : _durMs)
+        : _posMs;
 
     // Clamp a content playback rate to Spotify's spoken-word range; invalid/zero ⇒ normal speed.
     static double NormalizeSpeed(double v) => v <= 0 || double.IsNaN(v) || double.IsInfinity(v) ? 1.0 : Math.Clamp(v, 0.5, 3.5);
@@ -457,14 +461,26 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
         bool structural = s.Kind != AudioHostSignalKind.PositionTick;
         lock (_gate)
         {
-            switch (s.Kind)
+            if (s.Kind == AudioHostSignalKind.Ended)
             {
-                case AudioHostSignalKind.Playing: _isPlaying = true; _isBuffering = false; _isPrebuffering = false; break;
-                case AudioHostSignalKind.Paused: _isPlaying = false; break;
-                case AudioHostSignalKind.Buffering: _isBuffering = true; break;
-                case AudioHostSignalKind.Prebuffering: _isPrebuffering = true; _isBuffering = false; break;
-                case AudioHostSignalKind.Ended: _isPlaying = false; break;
-                case AudioHostSignalKind.Error: _isPlaying = false; _isBuffering = false; _isPrebuffering = false; break;
+                _isPlaying = false;
+                _isBuffering = false;
+                _isPrebuffering = false;
+                _recoveryKind = PlaybackRecoveryKind.None;
+            }
+            else if (s.Kind == AudioHostSignalKind.Error)
+            {
+                _isPlaying = false;
+                _isBuffering = false;
+                _isPrebuffering = false;
+                _recoveryKind = PlaybackRecoveryKind.None;
+            }
+            else
+            {
+                _isPlaying = s.IsPlaying;
+                _isBuffering = s.IsBuffering;
+                _isPrebuffering = s.IsPrebuffering;
+                _recoveryKind = s.RecoveryKind;
             }
             _speed = 1.0; _posMs = s.PositionMs; _posAnchorWall = _now();
         }
@@ -477,14 +493,14 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     // A 1 Hz tick re-anchors the UI position WHILE PLAYING only (zero ticks when paused — the guardrail).
     void RestartTicker()
     {
-        bool playing; lock (_gate) playing = _isPlaying;
+        bool playing; lock (_gate) playing = _isPlaying && !_isBuffering && !_isPrebuffering;
         if (playing) { _ticker ??= new Timer(_ => Tick(), null, 1000, 1000); }
         else { _ticker?.Dispose(); _ticker = null; }
     }
 
     void Tick()
     {
-        long pos; bool playing; lock (_gate) { pos = Pos(); playing = _isPlaying; }
+        long pos; bool playing; lock (_gate) { pos = Pos(); playing = _isPlaying && !_isBuffering && !_isPrebuffering; }
         if (playing) _positionTicks.OnNext(pos);
     }
 

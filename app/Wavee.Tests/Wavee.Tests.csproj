@@ -79,6 +79,8 @@
     <Compile Include="..\Wavee\Components\MembershipDiff.cs" />
     <!-- detail layout breakpoint hysteresis (Wavee.Core + BCL only) — DetailLayoutBreakpointTests -->
     <Compile Include="..\Wavee\Features\Detail\DetailLayoutBreakpoints.cs" />
+    <!-- concert schedule/detail hysteresis + wide-editorial metrics (BCL only) -->
+    <Compile Include="..\Wavee\Features\Concerts\ConcertLayout.cs" />
     <!-- library collapse breakpoint hysteresis (BCL only) — LibraryLayoutBreakpointTests -->
     <Compile Include="..\Wavee\Features\Library\LibraryLayoutBreakpoints.cs" />
     <!-- vertical track-detail hero layout resolver (BCL only) — DetailVerticalLayoutTests -->

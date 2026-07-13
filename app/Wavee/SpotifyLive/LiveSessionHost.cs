@@ -239,8 +239,12 @@ public sealed class LiveSessionHost : IAsyncDisposable
             }
             else
             {
-                svc.Playback.NotifyPlaybackError(e.UserMessage, "Retry",
-                    () => { audio?.StartProvisioning(cts.Token); _ = connect.Controller.RetryCurrentAsync(); });
+                svc.Playback.NotifyPlaybackError(e.UserMessage, Loc.Get(Strings.Common.Retry),
+                    () =>
+                    {
+                        if (e.Reason != AudioKeyFailureReason.Network) audio?.StartProvisioning(cts.Token);
+                        _ = connect.Controller.RetryCurrentAsync();
+                    });
             }
         };
         // Output-device control + local-output picker (Phase A/B/C). Only when the audio stack is wired (local playback is

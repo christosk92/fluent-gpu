@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using Wavee.Backend.Audio;
 using Wavee.Core;
 
 namespace Wavee.Backend;
@@ -52,11 +53,51 @@ public interface IFastTrackWarmer
     void Warm(Track track, string reason = "");
 }
 
-public enum AudioHostSignalKind { PositionTick, Ended, Buffering, Prebuffering, Playing, Paused, Error }
+public enum AudioHostSignalKind { PositionTick, Ended, Buffering, Prebuffering, Playing, Paused, Recovering, Error }
 
-/// <summary>The boxing-free, coalesced report channel from the host. <see cref="AudioHostSignalKind.PositionTick"/> (~1 Hz
-/// while playing) is the Driven wake; <see cref="AudioHostSignalKind.Ended"/> drives auto-advance.</summary>
-public readonly record struct AudioHostSignal(AudioHostSignalKind Kind, long PositionMs, int ErrorCode = 0);
+/// <summary>The boxing-free, coalesced report channel from the host. State flags are explicit so play intent can remain
+/// true while buffering, and a network-recovery state can coexist with either audible queued audio or a drained output.
+/// The two-argument constructor preserves the old inferred-state call sites used by simple hosts and tests.</summary>
+public readonly record struct AudioHostSignal
+{
+    public AudioHostSignalKind Kind { get; init; }
+    public long PositionMs { get; init; }
+    public bool IsPlaying { get; init; }
+    public bool IsBuffering { get; init; }
+    public bool IsPrebuffering { get; init; }
+    public PlaybackRecoveryKind RecoveryKind { get; init; }
+    public AudioKeyFailureReason FailureReason { get; init; }
+    public string? Detail { get; init; }
+
+    public AudioHostSignal(AudioHostSignalKind kind, long positionMs)
+    {
+        Kind = kind;
+        PositionMs = positionMs;
+        IsPlaying = kind is AudioHostSignalKind.Playing or AudioHostSignalKind.PositionTick or AudioHostSignalKind.Recovering;
+        IsBuffering = kind == AudioHostSignalKind.Buffering;
+        IsPrebuffering = kind == AudioHostSignalKind.Prebuffering;
+        RecoveryKind = kind == AudioHostSignalKind.Recovering ? PlaybackRecoveryKind.Network : PlaybackRecoveryKind.None;
+        FailureReason = AudioKeyFailureReason.None;
+        Detail = null;
+    }
+
+    public AudioHostSignal(AudioHostSignalKind kind, long positionMs, bool isPlaying, bool isBuffering,
+        bool isPrebuffering, PlaybackRecoveryKind recoveryKind = PlaybackRecoveryKind.None,
+        AudioKeyFailureReason failureReason = AudioKeyFailureReason.None, string? detail = null)
+    {
+        Kind = kind;
+        PositionMs = positionMs;
+        IsPlaying = isPlaying;
+        IsBuffering = isBuffering;
+        IsPrebuffering = isPrebuffering;
+        RecoveryKind = recoveryKind;
+        FailureReason = failureReason;
+        Detail = detail;
+    }
+
+    public static AudioHostSignal Fault(long positionMs, AudioKeyFailureReason reason, string? detail = null) =>
+        new(AudioHostSignalKind.Error, positionMs, false, false, false, PlaybackRecoveryKind.None, reason, detail);
+}
 
 /// <summary>The reshaped audio seam (replaces the old <c>IAudioEngine</c> in Stage E). Takes a resolved handle, not a
 /// bare Track — resolution lives in front of the seam (the controller), in scope.</summary>

@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Wavee.Core;
 
 namespace Wavee.Backend.Audio;
 
@@ -12,7 +13,7 @@ public sealed class IpcEnvelope
 
 public static class AudioIpcContract
 {
-    public const int Version = 5;   // v5: tokenized prepared-next/gapless/crossfade hand-off; preserves v4 device/session-volume messages
+    public const int Version = 6;   // v6: explicit recovery-aware host snapshots + typed playback failures
 }
 
 public static class IpcMessageTypes
@@ -288,10 +289,20 @@ public sealed class CommandResultMessage
 public sealed class HostStateUpdate
 {
     [JsonPropertyName("generation")] public long Generation { get; init; }
+    [JsonPropertyName("kind")] public int Kind { get; init; }
     [JsonPropertyName("isPlaying")] public bool IsPlaying { get; init; }
     [JsonPropertyName("isBuffering")] public bool IsBuffering { get; init; }
     [JsonPropertyName("isPrebuffering")] public bool IsPrebuffering { get; init; }
+    [JsonPropertyName("recoveryKind")] public PlaybackRecoveryKind RecoveryKind { get; init; }
     [JsonPropertyName("positionMs")] public long PositionMs { get; init; }
+}
+
+public sealed class PlaybackFailureMessage
+{
+    [JsonPropertyName("generation")] public long Generation { get; init; }
+    [JsonPropertyName("positionMs")] public long PositionMs { get; init; }
+    [JsonPropertyName("reason")] public AudioKeyFailureReason Reason { get; init; }
+    [JsonPropertyName("detail")] public string? Detail { get; init; }
 }
 
 public sealed class TrackFinishedMessage
@@ -357,6 +368,7 @@ public sealed class AuthLeaseReply
 [JsonSerializable(typeof(PreparedTransitionMessage))]
 [JsonSerializable(typeof(CommandResultMessage))]
 [JsonSerializable(typeof(HostStateUpdate))]
+[JsonSerializable(typeof(PlaybackFailureMessage))]
 [JsonSerializable(typeof(TrackFinishedMessage))]
 [JsonSerializable(typeof(DiagnosticMessage))]
 [JsonSerializable(typeof(PingMessage))]

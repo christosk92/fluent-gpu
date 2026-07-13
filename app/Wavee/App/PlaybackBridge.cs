@@ -36,6 +36,8 @@ public sealed class PlaybackBridge
     ulong _queueContentFold;
     bool _haveQueueFold;
     long _queueRev;
+    Action? _playbackErrorAction;
+    long _playbackErrorActionToken;
 
     // ── UI signals (read by components) ─────────────────────────────────────────────────────────────────────────────
     public Signal<Track?> CurrentTrack { get; } = new(null);
@@ -44,11 +46,13 @@ public sealed class PlaybackBridge
     public Signal<string?> CurrentContext { get; } = new(null);
     public Signal<bool> IsPlaying { get; } = new(false);
     public Signal<bool> IsBuffering { get; } = new(false);
+    public Signal<PlaybackRecoveryKind> RecoveryKind { get; } = new(PlaybackRecoveryKind.None);
     // Player-bar display states the IPlaybackState snapshot doesn't carry yet (the real provider drives these; default
     // off, so the fake/in-process path is unchanged). Loading = the initial track resolve before audio; Error = a
     // non-null user-facing message (the bar shows it + offers retry on the primary). See PlayerBar.PlayerState.
     public Signal<bool> IsLoading { get; } = new(false);
     public Signal<string?> Error { get; } = new(null);
+    public Signal<bool> HasPlaybackErrorAction { get; } = new(false);
     // Stage G — skip gating + the active Connect device (drives the prev/next enable state + the "playing on X" label).
     public Signal<bool> CanSkipNext { get; } = new(true);
     public Signal<bool> CanSkipPrev { get; } = new(true);
@@ -198,15 +202,38 @@ public sealed class PlaybackBridge
         {
             Error.Value = message;      // → PlayerBar PlayerState.Error (primary becomes Play/retry)
             IsLoading.Value = false;
-            Toasts.Show(message, ToastSeverity.Critical, retryLabel, retry);
+            var token = ++_playbackErrorActionToken;
+            _playbackErrorAction = retry;
+            HasPlaybackErrorAction.Value = retry is not null;
+            Toasts.Show(message, ToastSeverity.Critical, retryLabel,
+                retry is null ? null : () => InvokePlaybackErrorAction(token));
         });
+    }
+
+    public void InvokePlaybackErrorAction() => InvokePlaybackErrorAction(_playbackErrorActionToken);
+
+    void InvokePlaybackErrorAction(long token)
+    {
+        if (token != _playbackErrorActionToken || _playbackErrorAction is not { } action) return;
+        _playbackErrorAction = null;
+        HasPlaybackErrorAction.Value = false;
+        _playbackErrorActionToken++;
+        Error.Value = null;
+        IsLoading.Value = true;
+        action();
     }
 
     /// <summary>Clear a surfaced playback error (e.g. the user picked a working device / a retry succeeded).</summary>
     public void ClearPlaybackError()
     {
         if (_post is not { } post) return;
-        post(() => Error.Value = null);
+        post(() =>
+        {
+            Error.Value = null;
+            _playbackErrorAction = null;
+            HasPlaybackErrorAction.Value = false;
+            _playbackErrorActionToken++;
+        });
     }
 
     /// <summary>Push runtime provisioning status onto the UI thread (no-op before <see cref="Activate"/>).</summary>
@@ -266,6 +293,7 @@ public sealed class PlaybackBridge
         CurrentContext.Value = s.ContextUri;
         IsPlaying.Value = s.IsPlaying;
         IsBuffering.Value = s.IsBuffering;
+        RecoveryKind.Value = s.RecoveryKind;
         IsShuffle.Value = s.IsShuffle;
         Repeat.Value = s.Repeat;
         Volume.Value = (float)s.Volume;
@@ -278,10 +306,15 @@ public sealed class PlaybackBridge
         IsLoading.Value = s.IsLoading;
         // A surfaced local-playback error (set via NotifyPlaybackError) is owned by the bridge, not the projection (whose
         // Error is inert). Don't clobber it on every structural tick — clear it only once a track is actually playing again.
-        if (s.IsPlaying && s.CurrentTrack is not null) Error.Value = null;
+        if (s.IsPlaying && !s.IsBuffering && s.RecoveryKind == PlaybackRecoveryKind.None && s.CurrentTrack is not null)
+        {
+            Error.Value = null;
+            _playbackErrorAction = null;
+            HasPlaybackErrorAction.Value = false;
+        }
         CanSkipNext.Value = s.CanSkipNext;
         CanSkipPrev.Value = s.CanSkipPrev;
-        CanSeek.Value = s.CanSeek;
+        CanSeek.Value = s.CanSeek && s.RecoveryKind == PlaybackRecoveryKind.None;
         ActiveDeviceId.Value = s.ActiveDeviceId;
         PushPosition(s.PositionMs);
     }

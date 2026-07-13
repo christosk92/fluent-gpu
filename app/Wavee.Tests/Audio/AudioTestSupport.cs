@@ -123,23 +123,37 @@ sealed class FakeDeriver : IPlayPlayKeyDeriver
 sealed class RecordingAudioHost : IAudioHost
 {
     public bool LoadFastStartCalled, PlayCalled, SupplyBodyCalled, StopCalled;
+    public int LoadCalls;
+    public readonly List<long> Seeks = [];
     public readonly TaskCompletionSource SupplyBodySignaled = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public readonly TaskCompletionSource StopSignaled = new(TaskCreationOptions.RunContinuationsAsynchronously);
     readonly Wavee.Core.SimpleSubject<AudioHostSignal> _sig = new();
 
-    public void Load(in AudioStreamHandle s) { }
+    public void Load(in AudioStreamHandle s) { LoadCalls++; }
     public void LoadFastStart(in AudioFastStart s) => LoadFastStartCalled = true;
     public void SupplyBody(in AudioStreamHandle b) { SupplyBodyCalled = true; SupplyBodySignaled.TrySetResult(); }
     public void Play() => PlayCalled = true;
     public void Pause() { }
     public void Stop() { StopCalled = true; PlayCalled = false; StopSignaled.TrySetResult(); }
-    public void Seek(long ms) { }
+    public void Seek(long ms) { PositionMs = ms; Seeks.Add(ms); }
     public void SetVolume(double v) { }
-    public long PositionMs => 0;
+    public long PositionMs { get; set; }
     public bool IsPlaying => PlayCalled;
     public bool IsBuffering => false;
     public IObservable<AudioHostSignal> Signals => _sig;
+    public void Emit(AudioHostSignal signal) => _sig.OnNext(signal);
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+}
+
+sealed class SuccessfulResolver : ITrackResolver
+{
+    public int Calls;
+    public Task<AudioStreamHandle> ResolveAsync(Track track, CancellationToken ct = default)
+    {
+        Interlocked.Increment(ref Calls);
+        return Task.FromResult(new AudioStreamHandle(track.Uri, "file", "https://cdn.test/audio", A.Key16(1),
+            AudioFormat.OggVorbis160, track.DurationMs, 0));
+    }
 }
 
 sealed class FakeFastResolver : IFastTrackResolver

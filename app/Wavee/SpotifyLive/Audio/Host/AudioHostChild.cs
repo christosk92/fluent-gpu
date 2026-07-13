@@ -44,6 +44,14 @@ public static class AudioHostChild
             host.RunAsync().GetAwaiter().GetResult();
             return 0;
         }
+        catch (Exception ex) when (ex is EndOfStreamException or IOException)
+        {
+            // The parent closes the pipe for runtime rebinding, app shutdown, and supervised recycle. That ends this
+            // child normally; it is not an audio-engine crash and should not pollute incident logs as Critical.
+            WaveeLog.Instance.Info("audio", "audio.host.pipe_closed", "Audio host parent pipe closed",
+                WaveeLogField.Of("error", ex.GetType().Name), WaveeLogField.Of("detail", ex.Message));
+            return 0;
+        }
         catch (Exception ex)
         {
             WaveeLog.Instance.Critical("audio", "Audio host child crashed", ex);

@@ -13,7 +13,7 @@ public delegate void CdnDecryptor(Span<byte> buffer, long streamOffset);
 /// boundary come from the clear head; reads at/after the boundary fetch encrypted ranges (via the source) and decrypt at
 /// the absolute file offset on copy-out.
 /// </summary>
-public sealed class SpotifyAudioStream : Stream, IAsyncDisposable, IAudioReadStream
+public sealed class SpotifyAudioStream : Stream, IAsyncDisposable, IAudioReadStream, IAudioNetworkRecoverySource
 {
     const int ProbeBytes = 0xc0;
 
@@ -25,6 +25,7 @@ public sealed class SpotifyAudioStream : Stream, IAsyncDisposable, IAudioReadStr
     readonly byte[] _head;
     readonly int _headLen;
     readonly AudioBodyDiskCache? _bodyDisk;
+    readonly RangedHttpRecoveryPolicy? _recoveryPolicy;
     readonly object _stateGate = new();
 
     byte[] _key = [];
@@ -37,14 +38,22 @@ public sealed class SpotifyAudioStream : Stream, IAsyncDisposable, IAudioReadStr
     Exception? _error;
     int _readAheadPauseCount;
     IDisposable? _attachedReadAheadPause;
+    event Action<AudioNetworkRecoveryEvent>? NetworkRecovery;
+
+    event Action<AudioNetworkRecoveryEvent>? IAudioNetworkRecoverySource.NetworkRecovery
+    {
+        add => NetworkRecovery += value;
+        remove => NetworkRecovery -= value;
+    }
 
     SpotifyAudioStream(HttpClient http, ReadOnlyMemory<byte> head, int headBoundary, string name = "", WaveeLogger log = default,
-        AudioBodyDiskCache? bodyDisk = null)
+        AudioBodyDiskCache? bodyDisk = null, RangedHttpRecoveryPolicy? recoveryPolicy = null)
     {
         _http = http ?? throw new ArgumentNullException(nameof(http));
         _name = string.IsNullOrWhiteSpace(name) ? "unknown" : name;
         _log = log;
         _bodyDisk = bodyDisk;
+        _recoveryPolicy = recoveryPolicy;
         _head = MemoryMarshal.TryGetArray(head, out var segment)
             && segment.Offset == 0
             && segment.Count == segment.Array!.Length
@@ -63,6 +72,16 @@ public sealed class SpotifyAudioStream : Stream, IAsyncDisposable, IAudioReadStr
         HttpClient http, ReadOnlyMemory<byte> head, int headBoundary, byte[] key, string[] cdnUrls, long? knownSize, CancellationToken ct)
     {
         var stream = CreateHeadOnly(http, head, headBoundary);
+        await stream.AttachBodyAsync(key, cdnUrls, knownSize, ct).ConfigureAwait(false);
+        return stream;
+    }
+
+    // Keeps production callers on the standard 90-second policy while allowing deterministic retry-budget tests.
+    internal static async Task<SpotifyAudioStream> CreateAsync(
+        HttpClient http, ReadOnlyMemory<byte> head, int headBoundary, byte[] key, string[] cdnUrls, long? knownSize,
+        CancellationToken ct, RangedHttpRecoveryPolicy recoveryPolicy)
+    {
+        var stream = new SpotifyAudioStream(http, head, headBoundary, recoveryPolicy: recoveryPolicy);
         await stream.AttachBodyAsync(key, cdnUrls, knownSize, ct).ConfigureAwait(false);
         return stream;
     }
@@ -110,7 +129,8 @@ public sealed class SpotifyAudioStream : Stream, IAsyncDisposable, IAudioReadStr
             if (_bodyAttached) return;
             _key = key;
             _decryptor = decryptor;
-            ranged = new RangedHttpSource(_http, _name, _log, _headLen, WakeReaders, disk: _bodyDisk);
+            ranged = new RangedHttpSource(_http, _name, _log, _headLen, WakeReaders, disk: _bodyDisk,
+                onRecovery: e => NetworkRecovery?.Invoke(e), recoveryPolicy: _recoveryPolicy);
             try { ranged.Configure(cdnUrls, knownSize); }   // throws on empty/invalid mirrors or bad size — before we mark attached
             catch { ranged.Dispose(); throw; }
             _ranged = ranged;

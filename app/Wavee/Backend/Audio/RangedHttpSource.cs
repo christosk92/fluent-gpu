@@ -5,6 +5,56 @@ using System.Diagnostics;
 
 namespace Wavee.Backend.Audio;
 
+internal enum AudioNetworkRecoveryStage { Started, Attempt, Recovered, Exhausted, Cancelled }
+
+internal readonly record struct AudioNetworkRecoveryEvent(
+    AudioNetworkRecoveryStage Stage,
+    string SourceId,
+    string Host,
+    long RangeStart,
+    long RangeEnd,
+    int Attempt,
+    long ElapsedMs,
+    Exception? Error = null);
+
+internal sealed class AudioRangeFetchException : IOException
+{
+    public AudioKeyFailureReason Reason { get; }
+    public string SourceId { get; }
+    public long RangeStart { get; }
+    public long RangeEnd { get; }
+    public int Attempts { get; }
+    public long ElapsedMs { get; }
+
+    public AudioRangeFetchException(AudioKeyFailureReason reason, string sourceId, long rangeStart, long rangeEnd,
+        int attempts, long elapsedMs, Exception? inner)
+        : base($"audio range recovery exhausted after {elapsedMs}ms ({attempts} attempts): {inner?.Message}", inner)
+    {
+        Reason = reason;
+        SourceId = sourceId;
+        RangeStart = rangeStart;
+        RangeEnd = rangeEnd;
+        Attempts = attempts;
+        ElapsedMs = elapsedMs;
+    }
+}
+
+internal sealed class CdnPermanentException : IOException
+{
+    public AudioKeyFailureReason Reason { get; }
+    public CdnPermanentException(string message, AudioKeyFailureReason reason = AudioKeyFailureReason.EmulationFault)
+        : base(message) => Reason = reason;
+}
+
+internal sealed record RangedHttpRecoveryPolicy(
+    int VisibilityMs = 500,
+    int BudgetMs = 90_000,
+    int AttemptTimeoutMs = 8_000,
+    Func<int, int>? Jitter = null)
+{
+    public static RangedHttpRecoveryPolicy Default { get; } = new();
+}
+
 /// <summary>
 /// Decrypt-agnostic ranged-HTTP byte source: HTTP Range GETs with mirror failover, a background read-ahead, and a
 /// buffered raw-chunk store tracked by a <see cref="RangeSet"/>. It stores RAW (untransformed) bytes only — any decrypt
@@ -25,6 +75,7 @@ internal sealed class RangedHttpSource : IDisposable
     readonly WaveeLogger _log;
     readonly int _headFloor;                 // read-ahead never dips below this (the caller's clear-head length)
     readonly Action? _onRangeAvailable;      // wake the caller's readers after a fetch / resume (caller pulses its gate)
+    readonly Action<AudioNetworkRecoveryEvent>? _onRecovery;
     readonly bool _requireRange;             // false = tolerate a 200 (server ignored Range) by buffering the whole body
     readonly int _maxRetries;                // per-mirror attempts for transient 5xx / network faults
     readonly int _baseBackoffMs;             // exponential backoff base: _baseBackoffMs << attempt
@@ -35,6 +86,9 @@ internal sealed class RangedHttpSource : IDisposable
     readonly object _dataGate = new();
     readonly Dictionary<int, byte[]> _cdnChunks = new();
     readonly AudioBodyDiskCache? _disk;
+    readonly RangedHttpRecoveryPolicy _recoveryPolicy;
+    int _foregroundFetches;
+    int _mirrorCursor = -1;
 
     string[] _cdnUrls = [];
     long _size;
@@ -45,18 +99,21 @@ internal sealed class RangedHttpSource : IDisposable
     Task? _readAheadTask;
 
     public RangedHttpSource(HttpClient http, string name, WaveeLogger log, int headFloor,
-        Action? onRangeAvailable, bool requireRange = true, int maxRetries = 3, int baseBackoffMs = 150,
-        AudioBodyDiskCache? disk = null)
+        Action? onRangeAvailable, bool requireRange = true, int maxRetries = 1, int baseBackoffMs = 150,
+        AudioBodyDiskCache? disk = null, Action<AudioNetworkRecoveryEvent>? onRecovery = null,
+        RangedHttpRecoveryPolicy? recoveryPolicy = null)
     {
         _http = http ?? throw new ArgumentNullException(nameof(http));
         _name = string.IsNullOrWhiteSpace(name) ? "unknown" : name;
         _log = log;
         _headFloor = Math.Max(0, headFloor);
         _onRangeAvailable = onRangeAvailable;
+        _onRecovery = onRecovery;
         _requireRange = requireRange;
         _maxRetries = Math.Max(1, maxRetries);
         _baseBackoffMs = Math.Max(0, baseBackoffMs);
         _disk = disk;
+        _recoveryPolicy = recoveryPolicy ?? RangedHttpRecoveryPolicy.Default;
     }
 
     public long KnownSize => Volatile.Read(ref _size);
@@ -82,12 +139,16 @@ internal sealed class RangedHttpSource : IDisposable
     {
         var size = Volatile.Read(ref _size);
         var initialEnd = Math.Min(size > 0 ? size : MinFetchBytes, MinFetchBytes);
-        await FetchRangeAsync(0, initialEnd, ct).ConfigureAwait(false);
-        await PrefetchHeadBoundaryAsync(ct).ConfigureAwait(false);
+        await FetchRangeWithRecoveryAsync(0, initialEnd, ct).ConfigureAwait(false);
+        await PrefetchHeadBoundaryAsync(ct, recover: true).ConfigureAwait(false);
     }
 
     /// <summary>Stop read-ahead (the caller failed). Idempotent; the loop exits at its next check.</summary>
-    public void Stop() => _stopped = true;
+    public void Stop()
+    {
+        _stopped = true;
+        try { _disposeCts.Cancel(); } catch (ObjectDisposedException) { }
+    }
 
     public void StartReadAhead()
     {
@@ -123,7 +184,7 @@ internal sealed class RangedHttpSource : IDisposable
         _onRangeAvailable?.Invoke();
     }
 
-    async Task PrefetchHeadBoundaryAsync(CancellationToken ct)
+    async Task PrefetchHeadBoundaryAsync(CancellationToken ct, bool recover = false)
     {
         var size = Volatile.Read(ref _size);
         if (_headFloor <= 0 || (size > 0 && _headFloor >= size)) return;
@@ -136,7 +197,8 @@ internal sealed class RangedHttpSource : IDisposable
 
         var sw = Stopwatch.StartNew();
         if (RangeTrace) _log.Info($"stream {_name}: prefetch boundary start range=[{start},{end})");
-        await FetchRangeAsync(start, end, ct).ConfigureAwait(false);
+        if (recover) await FetchRangeWithRecoveryAsync(start, end, ct).ConfigureAwait(false);
+        else await FetchRangeAsync(start, end, ct).ConfigureAwait(false);
         if (RangeTrace) _log.Info($"stream {_name}: prefetch boundary ok bytes={end - start} elapsed={sw.ElapsedMilliseconds}ms");
     }
 
@@ -148,6 +210,12 @@ internal sealed class RangedHttpSource : IDisposable
             {
                 if (_stopped) break;
                 var size = Volatile.Read(ref _size);
+
+                if (Volatile.Read(ref _foregroundFetches) > 0)
+                {
+                    await Task.Delay(50, _disposeCts.Token).ConfigureAwait(false);
+                    continue;
+                }
 
                 if (Volatile.Read(ref _readAheadPauseCount) > 0)
                 {
@@ -165,7 +233,11 @@ internal sealed class RangedHttpSource : IDisposable
             }
             catch (OperationCanceledException) { break; }
             catch (ObjectDisposedException) { break; }
-            catch { await Task.Delay(250).ConfigureAwait(false); }
+            catch
+            {
+                try { await Task.Delay(250, _disposeCts.Token).ConfigureAwait(false); }
+                catch (OperationCanceledException) { break; }
+            }
         }
     }
 
@@ -179,8 +251,102 @@ internal sealed class RangedHttpSource : IDisposable
         if (_ranges.ContainsRange(start, end)) return;
         var sw = Stopwatch.StartNew();
         if (RangeTrace) _log.Info($"stream {_name}: decode range miss range=[{start},{end}) requested={length}B");
-        FetchRangeAsync(start, end, _disposeCts.Token).GetAwaiter().GetResult();
+        FetchRangeWithRecoveryAsync(start, end, _disposeCts.Token).GetAwaiter().GetResult();
         if (RangeTrace) _log.Info($"stream {_name}: decode range ready range=[{start},{end}) elapsed={sw.ElapsedMilliseconds}ms");
+    }
+
+    async Task FetchRangeWithRecoveryAsync(long start, long end, CancellationToken ct)
+    {
+        Interlocked.Increment(ref _foregroundFetches);
+        try { await FetchRangeWithRecoveryCoreAsync(start, end, ct).ConfigureAwait(false); }
+        finally { Interlocked.Decrement(ref _foregroundFetches); }
+    }
+
+    async Task FetchRangeWithRecoveryCoreAsync(long start, long end, CancellationToken ct)
+    {
+        var sw = Stopwatch.StartNew();
+        int round = 0;
+        bool announced = false;
+        Exception? last = null;
+        string host = FirstHost();
+
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (_stopped) throw new IOException("ranged source stopped");
+            var remaining = _recoveryPolicy.BudgetMs - (int)Math.Min(int.MaxValue, sw.ElapsedMilliseconds);
+            if (remaining <= 0) break;
+
+            round++;
+            using var attemptCts = CancellationTokenSource.CreateLinkedTokenSource(ct, _disposeCts.Token);
+            attemptCts.CancelAfter(Math.Min(_recoveryPolicy.AttemptTimeoutMs, remaining));
+            var fetch = FetchRangeAsync(start, end, attemptCts.Token);
+
+            if (!announced)
+            {
+                var visible = Task.Delay(Math.Min(_recoveryPolicy.VisibilityMs, remaining), ct);
+                if (await Task.WhenAny(fetch, visible).ConfigureAwait(false) == visible && !fetch.IsCompleted)
+                {
+                    announced = true;
+                    PublishRecovery(AudioNetworkRecoveryStage.Started, host, start, end, round, sw.ElapsedMilliseconds, null);
+                }
+            }
+
+            try
+            {
+                await fetch.ConfigureAwait(false);
+                if (announced)
+                    PublishRecovery(AudioNetworkRecoveryStage.Recovered, host, start, end, round, sw.ElapsedMilliseconds, null);
+                return;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested || _disposeCts.IsCancellationRequested)
+            {
+                if (announced)
+                    PublishRecovery(AudioNetworkRecoveryStage.Cancelled, host, start, end, round, sw.ElapsedMilliseconds, null);
+                throw;
+            }
+            catch (Exception ex) when (ex is HttpRequestException or IOException or TaskCanceledException)
+            {
+                last = ex;
+                if (!announced)
+                {
+                    announced = true;
+                    PublishRecovery(AudioNetworkRecoveryStage.Started, host, start, end, round, sw.ElapsedMilliseconds, ex);
+                }
+                PublishRecovery(AudioNetworkRecoveryStage.Attempt, host, start, end, round, sw.ElapsedMilliseconds, ex);
+                if (ex is CdnPermanentException) throw;
+            }
+
+            remaining = _recoveryPolicy.BudgetMs - (int)Math.Min(int.MaxValue, sw.ElapsedMilliseconds);
+            if (remaining <= 0) break;
+            int ladder = round switch { 1 => 250, 2 => 500, 3 => 1000, 4 => 2000, 5 => 4000, _ => 5000 };
+            int jitter = _recoveryPolicy.Jitter?.Invoke(ladder)
+                ?? Random.Shared.Next(-(ladder / 5), ladder / 5 + 1);
+            await Task.Delay(Math.Min(remaining, Math.Max(0, ladder + jitter)), ct).ConfigureAwait(false);
+        }
+
+        var terminal = new AudioRangeFetchException(AudioKeyFailureReason.Network, _name, start, end,
+            round, sw.ElapsedMilliseconds, last);
+        PublishRecovery(AudioNetworkRecoveryStage.Exhausted, host, start, end, round, sw.ElapsedMilliseconds, terminal);
+        throw terminal;
+    }
+
+    string FirstHost()
+    {
+        foreach (var raw in _cdnUrls)
+            if (Uri.TryCreate(raw, UriKind.Absolute, out var uri)) return uri.Host;
+        return "unknown";
+    }
+
+    void PublishRecovery(AudioNetworkRecoveryStage stage, string host, long start, long end, int attempt,
+        long elapsedMs, Exception? error)
+    {
+        try { _onRecovery?.Invoke(new(stage, _name, host, start, end, attempt, elapsedMs, error)); } catch { }
+        if (stage is AudioNetworkRecoveryStage.Started or AudioNetworkRecoveryStage.Recovered
+            or AudioNetworkRecoveryStage.Exhausted or AudioNetworkRecoveryStage.Cancelled)
+            _log.Info($"audio.network_recovery.{stage.ToString().ToLowerInvariant()} source={_name} host={host} range=[{start},{end}) attempt={attempt} elapsed={elapsedMs}ms error={error?.GetType().Name}: {error?.Message}");
+        else if (RangeTrace)
+            _log.Info($"audio.network_recovery.attempt source={_name} host={host} range=[{start},{end}) attempt={attempt} elapsed={elapsedMs}ms error={error?.GetType().Name}: {error?.Message}");
     }
 
     async Task FetchRangeAsync(long start, long end, CancellationToken ct)
@@ -222,11 +388,13 @@ internal sealed class RangedHttpSource : IDisposable
     {
         Exception? last = null;
         var urls = _cdnUrls;
+        int firstMirror = urls.Length == 0 ? 0 : (int)((uint)Interlocked.Increment(ref _mirrorCursor) % (uint)urls.Length);
         var sw = Stopwatch.StartNew();
         if (RangeTrace) _log.Info($"stream {_name}: range fetch start range=[{start},{end}) bytes={end - start}");
 
-        foreach (var url in urls)
+        for (int mirrorOffset = 0; mirrorOffset < urls.Length; mirrorOffset++)
         {
+            var url = urls[(firstMirror + mirrorOffset) % urls.Length];
             for (int attempt = 0; ; attempt++)
             {
                 try
@@ -237,7 +405,7 @@ internal sealed class RangedHttpSource : IDisposable
 
                     if (resp.StatusCode == HttpStatusCode.OK)
                     {
-                        if (_requireRange) { last = new HttpRequestException("CDN ignored Range request"); break; }
+                        if (_requireRange) { last = new CdnPermanentException("CDN ignored Range request"); break; }
                         // Range-optional (plain-HTTP server ignored Range): buffer the whole body once and serve all reads from it.
                         await BufferFullBodyAsync(resp, ct).ConfigureAwait(false);
                         _onRangeAvailable?.Invoke();
@@ -246,8 +414,16 @@ internal sealed class RangedHttpSource : IDisposable
                     }
                     if (resp.StatusCode != HttpStatusCode.PartialContent)
                     {
-                        last = new HttpRequestException($"CDN {(int)resp.StatusCode}");
-                        if ((int)resp.StatusCode >= 500 && attempt + 1 < _maxRetries)
+                        bool transientStatus = resp.StatusCode is HttpStatusCode.RequestTimeout
+                            or HttpStatusCode.TooManyRequests || (int)resp.StatusCode >= 500;
+                        var statusReason = resp.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden
+                            or HttpStatusCode.NotFound or HttpStatusCode.RequestedRangeNotSatisfiable
+                            ? AudioKeyFailureReason.Restricted
+                            : AudioKeyFailureReason.EmulationFault;
+                        last = transientStatus
+                            ? new HttpRequestException($"CDN {(int)resp.StatusCode}")
+                            : new CdnPermanentException($"CDN {(int)resp.StatusCode}", statusReason);
+                        if (transientStatus && attempt + 1 < _maxRetries)
                         {
                             await Task.Delay(_baseBackoffMs << Math.Min(attempt, 5), ct).ConfigureAwait(false);   // transient 5xx: retry same mirror
                             continue;
@@ -257,14 +433,14 @@ internal sealed class RangedHttpSource : IDisposable
 
                     var contentRange = resp.Content.Headers.ContentRange;
                     if (contentRange?.From is long from && from != start)
-                        throw new HttpRequestException($"CDN returned unexpected range start {from}, expected {start}");
+                        throw new CdnPermanentException($"CDN returned unexpected range start {from}, expected {start}");
                     long total = contentRange?.Length ?? Volatile.Read(ref _size);
-                    if (total <= 0) throw new HttpRequestException("CDN range response missing total length");
+                    if (total <= 0) throw new CdnPermanentException("CDN range response missing total length");
                     SetSize(total);
                     long requestedEnd = Math.Min(end, total);
                     long expectedEnd = contentRange?.To is long to ? to + 1 : requestedEnd;
                     if (expectedEnd <= start || expectedEnd > requestedEnd)
-                        throw new HttpRequestException($"CDN returned unexpected range end {expectedEnd}, requested through {requestedEnd}");
+                        throw new CdnPermanentException($"CDN returned unexpected range end {expectedEnd}, requested through {requestedEnd}");
 
                     var expectedBytes = checked((int)(expectedEnd - start));
                     var buf = new byte[expectedBytes];
@@ -291,13 +467,15 @@ internal sealed class RangedHttpSource : IDisposable
                 catch (Exception ex) when (ex is HttpRequestException or IOException or TaskCanceledException)
                 {
                     last = ex;
+                    if (ex is CdnPermanentException) break;
                     if (attempt + 1 >= _maxRetries) break;   // exhausted this mirror's retries → next mirror
                     await Task.Delay(_baseBackoffMs << Math.Min(attempt, 5), ct).ConfigureAwait(false);   // transient network fault: backoff + retry (ct cancels)
                 }
             }
         }
 
-        _log.Info($"stream {_name}: range fetch failed range=[{start},{end}) elapsed={sw.ElapsedMilliseconds}ms error={last?.GetType().Name}: {last?.Message}");
+        if (RangeTrace)
+            _log.Info($"stream {_name}: range fetch failed range=[{start},{end}) elapsed={sw.ElapsedMilliseconds}ms error={last?.GetType().Name}: {last?.Message}");
         throw last ?? new IOException($"all CDN mirrors failed for range [{start},{end})");
     }
 
@@ -410,7 +588,8 @@ internal sealed class RangedHttpSource : IDisposable
             if (size <= 0) return;
             if (size > int.MaxValue) throw new NotSupportedException("audio files larger than 2GB are not supported");
             if (_size == size) return;
-            if (_size > 0 && _size != size) throw new IOException($"CDN size changed from {_size} to {size}");
+            if (_size > 0 && _size != size)
+                throw new CdnPermanentException($"CDN size changed from {_size} to {size}");
             _size = size;
         }
         _disk?.SetSize(_name, size);
@@ -420,8 +599,7 @@ internal sealed class RangedHttpSource : IDisposable
 
     public void Dispose()
     {
-        _stopped = true;
-        _disposeCts.Cancel();
+        Stop();
         var readAhead = _readAheadTask;
         if (readAhead is { IsCompleted: false })
         {

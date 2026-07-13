@@ -142,6 +142,9 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     string? _preparedSignature;
     QueueItemId _preparedItemId;
     long _prepareSequence;
+    PlaybackFailureCheckpoint? _failureCheckpoint;
+
+    readonly record struct PlaybackFailureCheckpoint(string TrackUri, long PositionMs);
 
     public PlaybackController(IAudioHost host, ITrackResolver resolver, NowPlayingProjection projection,
         IContextResolver contexts,
@@ -263,7 +266,18 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     public async Task RetryCurrentAsync(CancellationToken ct = default)
     {
         await _lock.WaitAsync(ct).ConfigureAwait(false);
-        try { if (_session.Current is not null) await LoadAndPlayCurrentAsync(EvKind.Started, ct).ConfigureAwait(false); }
+        try
+        {
+            if (_session.Current is { } current)
+            {
+                long resume = _failureCheckpoint is { } checkpoint
+                    && string.Equals(checkpoint.TrackUri, current.Uri, StringComparison.Ordinal)
+                    ? checkpoint.PositionMs
+                    : -1;
+                await LoadAndPlayCurrentAsync(EvKind.Started, ct, resume).ConfigureAwait(false);
+                _failureCheckpoint = null;
+            }
+        }
         finally { _lock.Release(); }
     }
 
@@ -1072,7 +1086,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         return parts.Length >= 3 ? parts[1] : "playlist";
     }
 
-    async Task LoadAndPlayCurrentAsync(EvKind kind, CancellationToken ct)
+    async Task LoadAndPlayCurrentAsync(EvKind kind, CancellationToken ct, long resumePositionMs = -1)
     {
         if (RejectLocalPlay()) return;   // local audio unsupported → toast + abort (covers play / next / prev / enqueue-idle / inbound)
         var cur = _session.Current;
@@ -1112,9 +1126,10 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             var loadStartedTicks = Stopwatch.GetTimestamp();
             _host.LoadFastStart(plan.Start);
             _host.Play();
-            await MaybeSeekEpisodeResumeAsync(cur, ct).ConfigureAwait(false);
+            if (resumePositionMs > 0) _host.Seek(resumePositionMs);
+            else await MaybeSeekEpisodeResumeAsync(cur, ct).ConfigureAwait(false);
             WarmUpcomingFastTrack("after-start");
-            Emit(BuildEvent(kind, cur, 0, mediaId, bitrateKbps, audioFormat, durationMs, fileId));   // atomic publish carries the queue
+            Emit(BuildEvent(kind, cur, Math.Max(0, resumePositionMs), mediaId, bitrateKbps, audioFormat, durationMs, fileId));
             SchedulePreparedNext("after-start");
             MaybeStartContinuationFetch();
             _ = SupplyBodyWhenReadyAsync(plan.Body, cur.Uri, loadStartedTicks, plan.Start.HeadBytes.Length);
@@ -1127,9 +1142,10 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         catch (Exception ex) { ReportPlaybackError(ex); return; }   // no silent drop — surface a typed reason
         _host.Load(handle);
         _host.Play();
-        await MaybeSeekEpisodeResumeAsync(cur, ct).ConfigureAwait(false);
+        if (resumePositionMs > 0) _host.Seek(resumePositionMs);
+        else await MaybeSeekEpisodeResumeAsync(cur, ct).ConfigureAwait(false);
         WarmUpcomingFastTrack("after-start");
-        Emit(BuildEvent(kind, cur, 0, mediaId, bitrateKbps, audioFormat, durationMs, fileId));   // atomic publish carries the queue
+        Emit(BuildEvent(kind, cur, Math.Max(0, resumePositionMs), mediaId, bitrateKbps, audioFormat, durationMs, fileId));
         SchedulePreparedNext("after-start");
         MaybeStartContinuationFetch();
     }
@@ -1670,8 +1686,20 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     void OnHostSignal(AudioHostSignal s)
     {
         _projection.OnHostSignal(s);
-        if (s.Kind == AudioHostSignalKind.Ended) _ = AutoAdvanceAsync();
-        else if (s.Kind == AudioHostSignalKind.Error) ReportPlaybackError(new AudioPlaybackException(AudioKeyFailureReason.EmulationFault, "host playback error"));
+        if (s.Kind == AudioHostSignalKind.Ended)
+        {
+            _failureCheckpoint = null;
+            _ = AutoAdvanceAsync();
+        }
+        else if (s.Kind == AudioHostSignalKind.Error)
+        {
+            var reason = s.FailureReason == AudioKeyFailureReason.None
+                ? AudioKeyFailureReason.EmulationFault
+                : s.FailureReason;
+            if (reason == AudioKeyFailureReason.Network && _session.Current is { } current)
+                _failureCheckpoint = new PlaybackFailureCheckpoint(current.Uri, Math.Max(0, s.PositionMs));
+            ReportPlaybackError(new AudioPlaybackException(reason, s.Detail ?? "audio host playback error"));
+        }
     }
 
     async Task AutoAdvanceAsync() { try { await LocalNextAsync(default).ConfigureAwait(false); } catch (Exception ex) { _log.Info("auto-advance error: " + ex.Message); } }

@@ -635,6 +635,8 @@
     "nothingPlaying": "Nothing playing",
     "loading": "Loading…",
     "cannotPlay": "Can’t play this track",
+    "reconnecting": "Connection lost — reconnecting…",
+    "networkFailed": "Connection lost. Check your internet connection and try again.",
     "previous": "Previous",
     "next": "Next",
     "shuffle": "Shuffle",

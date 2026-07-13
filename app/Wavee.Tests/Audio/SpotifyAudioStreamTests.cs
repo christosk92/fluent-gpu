@@ -101,9 +101,14 @@ public class SpotifyAudioStreamTests
     public async Task AllMirrorsFail_Throws()
     {
         var http = new HttpClient(new RangeCdnHandler(Array.Empty<byte>(), _ => true));
+        var policy = new RangedHttpRecoveryPolicy(VisibilityMs: 0, BudgetMs: 100,
+            AttemptTimeoutMs: 25, Jitter: _ => 0);
 
-        await Assert.ThrowsAnyAsync<Exception>(() => SpotifyAudioStream.CreateAsync(
-            http, ReadOnlyMemory<byte>.Empty, 0, A.Key16(1), new[] { "https://cdn/a", "https://cdn/b" }, null, CancellationToken.None));
+        var error = await Assert.ThrowsAsync<AudioRangeFetchException>(() => SpotifyAudioStream.CreateAsync(
+            http, ReadOnlyMemory<byte>.Empty, 0, A.Key16(1), new[] { "https://cdn/a", "https://cdn/b" }, null,
+            CancellationToken.None, policy));
+
+        Assert.Equal(AudioKeyFailureReason.Network, error.Reason);
     }
 
     [Fact]
@@ -114,7 +119,7 @@ public class SpotifyAudioStreamTests
         var cdn = SpotifyAesCtr.Decrypt(plaintext, key, 0);
         var http = new HttpClient(new RangeCdnHandler(cdn) { IgnoreRangeAndReturnOk = true });
 
-        await Assert.ThrowsAnyAsync<HttpRequestException>(() => SpotifyAudioStream.CreateAsync(
+        await Assert.ThrowsAsync<CdnPermanentException>(() => SpotifyAudioStream.CreateAsync(
             http, ReadOnlyMemory<byte>.Empty, 0, key, new[] { "https://cdn/a" }, cdn.Length, CancellationToken.None));
     }
 
@@ -378,7 +383,7 @@ public class SpotifyAudioStreamTests
         var cdn = SpotifyAesCtr.Decrypt(plaintext, key, 0);
         var http = new HttpClient(new RangeCdnHandler(cdn) { OmitContentRangeLength = true });
 
-        await Assert.ThrowsAsync<HttpRequestException>(() => SpotifyAudioStream.CreateAsync(
+        await Assert.ThrowsAsync<CdnPermanentException>(() => SpotifyAudioStream.CreateAsync(
             http, ReadOnlyMemory<byte>.Empty, 0, key, new[] { "https://cdn/a" }, null, CancellationToken.None));
     }
 
@@ -404,7 +409,7 @@ public class SpotifyAudioStreamTests
         var cdn = SpotifyAesCtr.Decrypt(plaintext, key, 0);
         var http = new HttpClient(new RangeCdnHandler(cdn) { OmitContentRange = true });
 
-        await Assert.ThrowsAsync<HttpRequestException>(() => SpotifyAudioStream.CreateAsync(
+        await Assert.ThrowsAsync<CdnPermanentException>(() => SpotifyAudioStream.CreateAsync(
             http, ReadOnlyMemory<byte>.Empty, 0, key, new[] { "https://cdn/a" }, null, CancellationToken.None));
     }
 
@@ -416,7 +421,7 @@ public class SpotifyAudioStreamTests
         var cdn = SpotifyAesCtr.Decrypt(plaintext, key, 0);
         var http = new HttpClient(new RangeCdnHandler(cdn) { RangeStartDelta = 1 });
 
-        await Assert.ThrowsAsync<HttpRequestException>(() => SpotifyAudioStream.CreateAsync(
+        await Assert.ThrowsAsync<CdnPermanentException>(() => SpotifyAudioStream.CreateAsync(
             http, ReadOnlyMemory<byte>.Empty, 0, key, new[] { "https://cdn/a" }, cdn.Length, CancellationToken.None));
     }
 
@@ -428,7 +433,7 @@ public class SpotifyAudioStreamTests
         var cdn = SpotifyAesCtr.Decrypt(plaintext, key, 0);
         var http = new HttpClient(new RangeCdnHandler(cdn) { TotalLengthDelta = 1 });
 
-        await Assert.ThrowsAsync<IOException>(() => SpotifyAudioStream.CreateAsync(
+        await Assert.ThrowsAsync<CdnPermanentException>(() => SpotifyAudioStream.CreateAsync(
             http, ReadOnlyMemory<byte>.Empty, 0, key, new[] { "https://cdn/a" }, cdn.Length, CancellationToken.None));
     }
 

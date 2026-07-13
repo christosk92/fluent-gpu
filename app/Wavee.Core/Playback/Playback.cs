@@ -2,6 +2,10 @@ namespace Wavee.Core;
 
 public enum RepeatMode { Off, Context, Track }
 
+/// <summary>A recoverable interruption affecting the active playback stream. This is intentionally coarse: byte-range
+/// and retry details stay in diagnostics while playback surfaces only a user-meaningful state.</summary>
+public enum PlaybackRecoveryKind { None, Network }
+
 public readonly record struct PlaybackContextTrack(string Uri, string Uid = "", IReadOnlyDictionary<string, string>? Metadata = null);
 
 /// <summary>Playback command surface. The real implementation marshals these to the out-of-process
@@ -58,6 +62,8 @@ public interface IPlaybackState : System.ComponentModel.INotifyPropertyChanged
     string? ContextUri { get; }
     bool IsPlaying { get; }
     bool IsBuffering { get; }
+    /// <summary>A recoverable interruption currently being handled automatically by the local audio host.</summary>
+    PlaybackRecoveryKind RecoveryKind => PlaybackRecoveryKind.None;
     long PositionMs { get; }
     long DurationMs { get; }
     double Volume { get; }

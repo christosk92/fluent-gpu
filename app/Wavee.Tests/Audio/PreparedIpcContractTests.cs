@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Wavee.Backend;
 using Wavee.Backend.Audio;
+using Wavee.Core;
 using Xunit;
 
 namespace Wavee.Tests.Audio;
@@ -8,9 +9,9 @@ namespace Wavee.Tests.Audio;
 public class PreparedIpcContractTests
 {
     [Fact]
-    public void ContractV5_PrepareAndTransition_RoundTripTokensAndEligibility()
+    public void ContractV6_PrepareTransitionAndRecovery_RoundTrip()
     {
-        Assert.Equal(5, AudioIpcContract.Version);
+        Assert.Equal(6, AudioIpcContract.Version);
         var command = new PrepareNextCommand
         {
             Generation = 42,
@@ -46,5 +47,32 @@ public class PreparedIpcContractTests
         var parsedTransition = JsonSerializer.Deserialize(transitionJson, AudioIpcJsonContext.Default.PreparedTransitionMessage);
         Assert.Equal(command.Token, parsedTransition!.Token);
         Assert.Equal(5000, parsedTransition.EffectiveFadeMs);
+
+        var state = new HostStateUpdate
+        {
+            Generation = 42,
+            Kind = (int)AudioHostSignalKind.Buffering,
+            IsPlaying = true,
+            IsBuffering = true,
+            RecoveryKind = PlaybackRecoveryKind.Network,
+            PositionMs = 12_345,
+        };
+        string stateJson = JsonSerializer.Serialize(state, AudioIpcJsonContext.Default.HostStateUpdate);
+        var parsedState = JsonSerializer.Deserialize(stateJson, AudioIpcJsonContext.Default.HostStateUpdate);
+        Assert.Equal(PlaybackRecoveryKind.Network, parsedState!.RecoveryKind);
+        Assert.True(parsedState.IsPlaying);
+        Assert.True(parsedState.IsBuffering);
+
+        var failure = new PlaybackFailureMessage
+        {
+            Generation = 42,
+            PositionMs = 12_345,
+            Reason = AudioKeyFailureReason.Network,
+            Detail = "dns failed",
+        };
+        string failureJson = JsonSerializer.Serialize(failure, AudioIpcJsonContext.Default.PlaybackFailureMessage);
+        var parsedFailure = JsonSerializer.Deserialize(failureJson, AudioIpcJsonContext.Default.PlaybackFailureMessage);
+        Assert.Equal(AudioKeyFailureReason.Network, parsedFailure!.Reason);
+        Assert.Equal(12_345, parsedFailure.PositionMs);
     }
 }

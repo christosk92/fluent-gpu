@@ -16,3 +16,9 @@ internal interface IAudioReadStream : IDisposable
     IDisposable PauseReadAhead();
     void ResumeReadAheadAtCurrentOffset();
 }
+
+/// <summary>Optional recovery telemetry exposed by ranged streams to the decode pipeline.</summary>
+internal interface IAudioNetworkRecoverySource
+{
+    event Action<AudioNetworkRecoveryEvent>? NetworkRecovery;
+}

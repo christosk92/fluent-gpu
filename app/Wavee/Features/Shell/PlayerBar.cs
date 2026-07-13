@@ -22,7 +22,7 @@ namespace Wavee;
 // buffering/error/viewport) so it re-renders only on those. The HOT values never re-render the bar — the SEEK is a
 // bespoke compositor-bound SeekBar sub-component (smooth interpolated playhead + scrub-gate), the VOLUME is Slider.Bind
 // (compositor-only), and the time labels + volume glyph are isolated sub-components that re-render at ~1 Hz.
-enum PlayerState : byte { NoTrack, Loading, Error, Active }
+enum PlayerState : byte { NoTrack, Loading, Reconnecting, Error, Active }
 
 readonly record struct PlayerBarLayout(
     int Band,
@@ -198,6 +198,7 @@ sealed class PlayerBarContent : Component
         string? err = b.Error.Value;
         bool loading = b.IsLoading.Value;
         bool buffering = b.IsBuffering.Value;
+        bool reconnecting = b.RecoveryKind.Value == PlaybackRecoveryKind.Network;
         bool playing = b.IsPlaying.Value;
         bool shuffle = b.IsShuffle.Value;
         var repeat = b.Repeat.Value;
@@ -209,9 +210,10 @@ sealed class PlayerBarContent : Component
             err is not null ? PlayerState.Error :
             track is null ? PlayerState.NoTrack :
             loading ? PlayerState.Loading :
+            reconnecting ? PlayerState.Reconnecting :
                             PlayerState.Active;
         bool active = st == PlayerState.Active;
-        bool canTransport = active || buffering;     // buffering still lets you pause / skip
+        bool canTransport = active || buffering || reconnecting;
         var remoteDevice = active ? RemoteDevice(b) : null;
         // Primary is live for Active/Buffering and for Error (a retry); dead only for NoTrack/Loading.
         bool primaryEnabled = st != PlayerState.NoTrack && st != PlayerState.Loading;
@@ -491,7 +493,7 @@ sealed class PlayerBarContent : Component
         };
 
         // ── assemble: top activity edge + the single centered row ───────────────────────────────────
-        Element topEdge = (loading || buffering)
+        Element topEdge = (loading || buffering || reconnecting)
             ? ProgressBar.Indeterminate(L.TopEdgeWidth)
             : new BoxEl { Height = 1f, Fill = Tok.StrokeCardDefault };
 
@@ -530,7 +532,7 @@ sealed class PlayerBarContent : Component
 
     static void PrimaryClick(PlaybackBridge b, PlayerState st)
     {
-        if (st == PlayerState.Error) { b.Error.Value = null; _ = b.Player.ResumeAsync(); return; }
+        if (st == PlayerState.Error) { b.InvokePlaybackErrorAction(); return; }
         if (st is PlayerState.NoTrack or PlayerState.Loading) return;
         bool p = b.IsPlaying.Peek();
         b.IsPlaying.Value = !p;
@@ -545,9 +547,11 @@ sealed class PlayerBarContent : Component
         var track = b.CurrentTrack.Value;
         string? err = b.Error.Value;
         bool loading = b.IsLoading.Value;
+        bool reconnecting = b.RecoveryKind.Value == PlaybackRecoveryKind.Network;
         PlayerState st = err is not null ? PlayerState.Error
                        : track is null ? PlayerState.NoTrack
                        : loading ? PlayerState.Loading
+                       : reconnecting ? PlayerState.Reconnecting
                        : PlayerState.Active;
         // A placeholder track seeds Title=Uri before metadata resolves; never surface the raw URI to the user.
         string title = track is { } t && !string.IsNullOrEmpty(t.Title) && t.Title != t.Uri ? t.Title : "";
@@ -555,6 +559,7 @@ sealed class PlayerBarContent : Component
         {
             PlayerState.NoTrack => (Loc.Get(Strings.Player.NothingPlaying), Tok.TextSecondary),
             PlayerState.Loading => (title.Length > 0 ? title : Loc.Get(Strings.Player.Loading), Tok.TextPrimary),
+            PlayerState.Reconnecting => (Loc.Get(Strings.Player.Reconnecting), Tok.TextSecondary),
             PlayerState.Error   => (err ?? Loc.Get(Strings.Player.CannotPlay), Critical),
             _                   => (title, Tok.TextPrimary),
         };

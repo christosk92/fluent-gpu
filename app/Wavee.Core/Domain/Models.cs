@@ -106,8 +106,21 @@ public sealed record ArtistExtras(
 /// <summary>A music video on the artist page (16:9 thumbnail + duration). <paramref name="TrackUri"/> plays it.</summary>
 public sealed record MusicVideo(string TrackUri, string Title, Image? Thumbnail, long DurationMs, bool IsExplicit = false);
 
-/// <summary>An upcoming concert/tour date. <paramref name="Venue"/> is the venue name; <paramref name="City"/> the city.</summary>
-public sealed record Concert(string Uri, string? Title, string Venue, string City, DateTimeOffset Date, bool IsFestival = false, bool IsNearUser = false);
+/// <summary>An upcoming concert/tour date. <paramref name="Venue"/> is the venue name; <paramref name="City"/> the city.
+/// The additive location/lineup fields keep the existing compact artist-overview contract source-compatible while
+/// allowing the dedicated ArtistConcerts and concertFeed responses to retain their richer summary data.</summary>
+public sealed record Concert(
+    string Uri,
+    string? Title,
+    string Venue,
+    string City,
+    DateTimeOffset Date,
+    bool IsFestival = false,
+    bool IsNearUser = false,
+    string? Region = null,
+    string? Country = null,
+    IReadOnlyList<ConcertArtist>? Artists = null,
+    Image? Image = null);
 
 /// <summary>A merch product (image + name + display price). <paramref name="ShopUrl"/> opens the external shop.</summary>
 public sealed record MerchItem(string Name, string Price, string? Description, Image? Image, string? ShopUrl);

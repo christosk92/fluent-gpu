@@ -37,6 +37,7 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IAudioOu
     bool _playing;
     bool _buffering;
     bool _prebuffering;
+    PlaybackRecoveryKind _recoveryKind;
     bool _wantPlaying;
     bool _remoteDisabled;
     bool _usingFallback;
@@ -587,6 +588,7 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IAudioOu
             _playing = false;
             _buffering = true;
             _prebuffering = false;
+            _recoveryKind = PlaybackRecoveryKind.None;
             _preparedRequest = null;
             _preparedBody = null;
             _generation++;
@@ -606,15 +608,26 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IAudioOu
                     _usingFallback = false;
                     var wasPlaying = _playing;
                     var wasBuffering = _buffering || _prebuffering;
+                    var wasRecovery = _recoveryKind;
                     _playing = st.IsPlaying;
                     _buffering = st.IsBuffering;
                     _prebuffering = st.IsPrebuffering;
+                    _recoveryKind = st.RecoveryKind;
+                    if (wasRecovery != st.RecoveryKind)
+                        _log.Info($"audio.network_recovery.parent state={st.RecoveryKind} generation={st.Generation} position={st.PositionMs}ms buffering={st.IsBuffering}");
                     Interlocked.Exchange(ref _positionMs, st.PositionMs);
-                    var kind = st.IsPrebuffering ? AudioHostSignalKind.Prebuffering
+                    var incomingKind = Enum.IsDefined(typeof(AudioHostSignalKind), st.Kind)
+                        ? (AudioHostSignalKind)st.Kind
+                        : st.IsPrebuffering ? AudioHostSignalKind.Prebuffering
                         : st.IsBuffering ? AudioHostSignalKind.Buffering
-                        : st.IsPlaying ? (wasPlaying && !wasBuffering ? AudioHostSignalKind.PositionTick : AudioHostSignalKind.Playing)
+                        : st.IsPlaying ? AudioHostSignalKind.Playing
                         : AudioHostSignalKind.Paused;
-                    _signals.OnNext(new AudioHostSignal(kind, st.PositionMs));
+                    var kind = incomingKind == AudioHostSignalKind.Playing && wasPlaying && !wasBuffering
+                        && st.RecoveryKind == PlaybackRecoveryKind.None
+                        ? AudioHostSignalKind.PositionTick
+                        : incomingKind;
+                    _signals.OnNext(new AudioHostSignal(kind, st.PositionMs, st.IsPlaying, st.IsBuffering,
+                        st.IsPrebuffering, st.RecoveryKind));
                     break;
                 case IpcMessageTypes.TrackFinished:
                     var fin = payload?.Deserialize(AudioIpcJsonContext.Default.TrackFinishedMessage);
@@ -645,7 +658,15 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IAudioOu
                     if (sv is not null) ExternalVolumeChanged?.Invoke(sv.Volume01, sv.Muted);   // no generation gate
                     break;
                 case IpcMessageTypes.Error:
-                    _signals.OnNext(new AudioHostSignal(AudioHostSignalKind.Error, PositionMs));
+                    var failure = payload?.Deserialize(AudioIpcJsonContext.Default.PlaybackFailureMessage);
+                    if (failure is null || failure.Generation != Interlocked.Read(ref _generation)) return;
+                    _playing = false;
+                    _buffering = false;
+                    _prebuffering = false;
+                    _recoveryKind = PlaybackRecoveryKind.None;
+                    Interlocked.Exchange(ref _positionMs, failure.PositionMs);
+                    _log.Info($"audio.output.failure generation={failure.Generation} reason={failure.Reason} position={failure.PositionMs}ms detail={failure.Detail}");
+                    _signals.OnNext(AudioHostSignal.Fault(failure.PositionMs, failure.Reason, failure.Detail));
                     break;
                 case IpcMessageTypes.Diagnostic:
                 case IpcMessageTypes.EqualizerApplied:
@@ -664,9 +685,10 @@ public sealed class SupervisedAudioHost : IAudioHost, IAudioDspControl, IAudioOu
     {
         if (!_usingFallback) return;
         Interlocked.Exchange(ref _positionMs, signal.PositionMs);
-        _playing = signal.Kind is AudioHostSignalKind.Playing or AudioHostSignalKind.PositionTick;
-        _buffering = signal.Kind == AudioHostSignalKind.Buffering;
-        _prebuffering = signal.Kind == AudioHostSignalKind.Prebuffering;
+        _playing = signal.IsPlaying;
+        _buffering = signal.IsBuffering;
+        _prebuffering = signal.IsPrebuffering;
+        _recoveryKind = signal.RecoveryKind;
         _signals.OnNext(signal);
     }
 

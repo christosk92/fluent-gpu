@@ -5,12 +5,19 @@ namespace Wavee.Backend.Audio;
 /// <summary>Seekable plain-HTTP audio stream (external RSS/podcast episodes) — no Spotify decrypt, no clear head. Built on
 /// the shared <see cref="RangedHttpSource"/> so it gets the same read-ahead, retry/backoff, and (for servers that ignore
 /// Range) a one-shot full-body fallback that the bespoke single-buffer version lacked.</summary>
-public sealed class PlainHttpAudioStream : Stream, IAsyncDisposable, IAudioReadStream
+public sealed class PlainHttpAudioStream : Stream, IAsyncDisposable, IAudioReadStream, IAudioNetworkRecoverySource
 {
     readonly RangedHttpSource _source;
     readonly long _headHintSize;   // from the opening HEAD; the source refines it from the first response
     long _pos;
     bool _disposed;
+    event Action<AudioNetworkRecoveryEvent>? NetworkRecovery;
+
+    event Action<AudioNetworkRecoveryEvent>? IAudioNetworkRecoverySource.NetworkRecovery
+    {
+        add => NetworkRecovery += value;
+        remove => NetworkRecovery -= value;
+    }
 
     /// <summary>The <c>Content-Type</c> media type from the opening HEAD (e.g. "audio/mpeg"), or null. Used to pick the
     /// decoder without assuming MP3.</summary>
@@ -30,7 +37,8 @@ public sealed class PlainHttpAudioStream : Stream, IAsyncDisposable, IAudioReadS
         _headHintSize = knownSize;
         ContentType = contentType;
         // requireRange:false → tolerate a 200 (server ignored Range) by buffering the whole body once.
-        _source = new RangedHttpSource(http, url, log, headFloor: 0, onRangeAvailable: null, requireRange: false);
+        _source = new RangedHttpSource(http, url, log, headFloor: 0, onRangeAvailable: null, requireRange: false,
+            onRecovery: e => NetworkRecovery?.Invoke(e));
         _source.Configure([url], knownSize > 0 ? knownSize : null);
         _source.StartReadAhead();
     }

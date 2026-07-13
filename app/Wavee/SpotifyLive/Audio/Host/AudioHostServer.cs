@@ -535,19 +535,25 @@ internal sealed class AudioHostServer : IDisposable
         if (signal.Kind == AudioHostSignalKind.Error)
         {
             // The previously-unused "error" IPC type goes live — decode/output failures surface instead of dying silently.
-            _ = Notify(IpcMessageTypes.Error, new DiagnosticMessage
+            _ = Notify(IpcMessageTypes.Error, new PlaybackFailureMessage
             {
                 Generation = Interlocked.Read(ref _generation),
-                Kind = "engine-error",
-                Detail = "audio engine reported a playback error",
+                PositionMs = signal.PositionMs,
+                Reason = signal.FailureReason == AudioKeyFailureReason.None
+                    ? AudioKeyFailureReason.EmulationFault
+                    : signal.FailureReason,
+                Detail = signal.Detail,
             });
+            return;
         }
         var update = new HostStateUpdate
         {
             Generation = Interlocked.Read(ref _generation),
-            IsPlaying = signal.Kind is AudioHostSignalKind.Playing or AudioHostSignalKind.PositionTick,
-            IsBuffering = signal.Kind == AudioHostSignalKind.Buffering,
-            IsPrebuffering = signal.Kind == AudioHostSignalKind.Prebuffering,
+            Kind = (int)signal.Kind,
+            IsPlaying = signal.IsPlaying,
+            IsBuffering = signal.IsBuffering,
+            IsPrebuffering = signal.IsPrebuffering,
+            RecoveryKind = signal.RecoveryKind,
             PositionMs = signal.PositionMs,
         };
         _ = Notify(IpcMessageTypes.StateUpdate, update);

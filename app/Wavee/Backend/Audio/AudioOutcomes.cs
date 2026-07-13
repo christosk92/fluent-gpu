@@ -72,7 +72,7 @@ public static class AudioFailureText
         AudioKeyFailureReason.ArchUnsupported => "This track can't be played on this device.",
         AudioKeyFailureReason.SecurityBlocked or AudioKeyFailureReason.EmulationFault
             => "Couldn't start secure playback for this track.",
-        AudioKeyFailureReason.Network => "Network problem — couldn't reach Spotify.",
+        AudioKeyFailureReason.Network => "Connection lost. Check your internet connection and try again.",
         AudioKeyFailureReason.ApTimeout => "Timed out reaching Spotify — try again.",
         AudioKeyFailureReason.ApPermanent or AudioKeyFailureReason.Restricted => "This track isn't available to play right now.",
         _ => "Couldn't play this track.",

@@ -170,8 +170,8 @@ public sealed class InProcessAudioHost : IAudioHost, IAudioDspControl, IAudioOut
     {
         lock (_gate)
         {
-            _playing = signal.Kind is AudioHostSignalKind.Playing or AudioHostSignalKind.PositionTick;
-            _buffering = signal.Kind is AudioHostSignalKind.Buffering or AudioHostSignalKind.Prebuffering;
+            _playing = signal.IsPlaying;
+            _buffering = signal.IsBuffering || signal.IsPrebuffering;
         }
         _signals.OnNext(signal);
     }

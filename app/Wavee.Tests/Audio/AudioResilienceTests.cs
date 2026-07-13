@@ -63,6 +63,54 @@ public class ProjectionPrebufferingTests
         Assert.True(proj.IsPlaying);
         proj.Dispose();
     }
+
+    [Fact]
+    public void Buffering_FreezesProjectedPosition_UntilPlayingReturns()
+    {
+        long now = 0;
+        var proj = new NowPlayingProjection("dev", () => now);
+
+        proj.OnHostSignal(new AudioHostSignal(AudioHostSignalKind.Playing, 1_000, true, false, false));
+        now = 500;
+        Assert.Equal(1_500, proj.PositionMs);
+
+        proj.OnHostSignal(new AudioHostSignal(AudioHostSignalKind.Buffering, 1_500, true, true, false,
+            PlaybackRecoveryKind.Network));
+        now = 5_000;
+        Assert.Equal(1_500, proj.PositionMs);
+        Assert.True(proj.IsPlaying);
+        Assert.True(proj.IsBuffering);
+        Assert.Equal(PlaybackRecoveryKind.Network, proj.RecoveryKind);
+
+        proj.OnHostSignal(new AudioHostSignal(AudioHostSignalKind.Playing, 1_500, true, false, false));
+        now = 5_250;
+        Assert.Equal(1_750, proj.PositionMs);
+        proj.Dispose();
+    }
+}
+
+public class NetworkFailureControllerTests
+{
+    [Fact]
+    public async Task TypedNetworkFailure_RetryReloadsAndSeeksLastAudiblePosition()
+    {
+        var host = new RecordingAudioHost();
+        var resolver = new SuccessfulResolver();
+        var proj = new NowPlayingProjection("dev", () => 0);
+        using var controller = new PlaybackController(host, resolver, proj, EmptyContextResolver.Instance, "dev");
+        PlaybackErrorInfo? surfaced = null;
+        controller.OnPlaybackError = e => surfaced = e;
+
+        await controller.PlayTrackAsync("spotify:track:abc");
+        host.Emit(AudioHostSignal.Fault(4_321, AudioKeyFailureReason.Network, "dns failed"));
+
+        Assert.Equal(AudioKeyFailureReason.Network, surfaced?.Reason);
+        await controller.RetryCurrentAsync();
+
+        Assert.Equal(2, resolver.Calls);
+        Assert.Equal(2, host.LoadCalls);
+        Assert.Contains(4_321, host.Seeks);
+    }
 }
 
 public class StatusServiceTests

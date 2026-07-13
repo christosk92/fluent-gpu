@@ -56,7 +56,7 @@ sealed class SeekBar : Component
     internal void Recompute()
     {
         if (_scrubbing.Peek()) { _displayFrac.Value = _scrubFrac.Peek(); return; }   // scrub gate: ignore PositionFrac
-        if (_b.IsPlaying.Peek())
+        if (_b.IsPlaying.Peek() && !_b.IsBuffering.Peek())
         {
             long dur = _b.DurationMs.Peek();
             if (dur <= 0L) { _displayFrac.Value = 0f; return; }
@@ -87,6 +87,7 @@ sealed class SeekBar : Component
 
         // Subscribe to the LOW-frequency signals that change the bar's STRUCTURE (mount/unmount the ticker) only.
         bool playing = b.IsPlaying.Value;
+        bool buffering = b.IsBuffering.Value;
         long posTick = b.PositionMs.Value;   // subscribe → re-anchor the interpolation each ~1 Hz tick
         if (DiagEnabled)
             WaveeLog.Instance.Event(WaveeLogLevel.Debug, "ui", "seekbar.render", "Seek bar rendered",
@@ -187,7 +188,9 @@ sealed class SeekBar : Component
 
         // While playing, mount the per-frame ticker (a FrameClock consumer that advances _displayFrac each frame); it
         // unmounts when paused/stopped so the frame loop idles. The ticker NEVER re-renders this component.
-        Element? ticker = (enabled && playing) ? Embed.Comp(() => new SeekTicker { Owner = this }) : null;
+        bool canAdvance = b.CurrentTrack.Peek() is not null && b.Error.Peek() is null && !b.IsLoading.Peek()
+            && playing && !buffering;
+        Element? ticker = canAdvance ? Embed.Comp(() => new SeekTicker { Owner = this }) : null;
 
         // The interactive row. Click-anywhere + drag scrub; OnClick is the drag-END commit edge (single SeekAsync).
         return new BoxEl

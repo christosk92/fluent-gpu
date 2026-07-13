@@ -5,6 +5,7 @@ using System.Runtime.InteropServices.Marshalling;
 using Wavee.Backend;
 using Wavee.Backend.Audio;
 using Wavee.Backend.Spotify;
+using Wavee.Core;
 using Wavee.SpotifyLive.Audio.Host.Dsp;
 
 namespace Wavee.SpotifyLive.Audio;
@@ -79,6 +80,13 @@ internal sealed class AudioPlayEngine : IDisposable
     volatile bool _buffering;
     volatile bool _rendererPrimed;
     volatile bool _disposed;
+    volatile PlaybackRecoveryKind _recoveryKind;
+    volatile bool _networkRecoveryDrained;
+    volatile bool _networkDataAvailable;
+    long _networkRecoveryQueuedFrames;
+    DecodePipeline? _recoveryPipeline;
+    Timer? _recoveryMonitor;
+    int _terminalFaultEmitted;
 
     public event Action<AudioHostSignal>? State;
     /// <summary>The active track ended and there was nothing to promote (→ host emits Ended).</summary>
@@ -156,11 +164,13 @@ internal sealed class AudioPlayEngine : IDisposable
     {
         ReportSupersededOverlap("active load superseded prepared next");
         StopOutput();
-        var pipeline = new DecodePipeline(_log, _nativeDecryptorFactory, _bodyDisk, _http);
+        var pipeline = CreatePipeline();
         pipeline.Load(cmd);
         _fileIdHex = cmd.FileIdHex;
         _loadStartTicks = Stopwatch.GetTimestamp();
         _rendererPrimed = false;
+        Interlocked.Exchange(ref _terminalFaultEmitted, 0);
+        ClearNetworkRecovery(raiseState: false);
         bool hasHead = cmd.HeadBytes.Length > 0;
         _prebuffering = hasHead;
         _buffering = !hasHead;
@@ -196,7 +206,7 @@ internal sealed class AudioPlayEngine : IDisposable
     // ── prepared-next (incoming) lifecycle ────────────────────────────────────────────────────────────────────────────
     public void PrepareIncoming(in AudioPrepareRequest request, int fadeMs)
     {
-        var pipeline = new DecodePipeline(_log, _nativeDecryptorFactory, _bodyDisk, _http);
+        var pipeline = CreatePipeline();
         try { pipeline.Load(request.Start); }   // head load only; NO decoder build, NO renderer touch
         catch { pipeline.Dispose(); throw; }
         DecodePipeline? replaced;
@@ -339,7 +349,12 @@ internal sealed class AudioPlayEngine : IDisposable
             // Wait until the current source can build its decoder (clear head present, or body attached / external open).
             while (!ct.IsCancellationRequested && !current.CanBuildDecoder)
             {
-                if (current.Faulted) { _log.Info($"decode setup aborted {current.FileIdHex}: source faulted before decoder build"); State?.Invoke(new AudioHostSignal(AudioHostSignalKind.Error, PositionMs)); return; }
+                if (current.Faulted)
+                {
+                    _log.Info($"decode setup aborted {current.FileIdHex}: source faulted before decoder build");
+                    EmitTerminalFailure(current.Failure ?? new IOException("audio source faulted before decoder build"), current);
+                    return;
+                }
                 Thread.Sleep(10);
             }
             if (ct.IsCancellationRequested) return;
@@ -365,8 +380,10 @@ internal sealed class AudioPlayEngine : IDisposable
         {
             if (!ct.IsCancellationRequested)
             {
-                _log.Info($"decode setup failed {current.FileIdHex}: " + ex.Message);
-                State?.Invoke(new AudioHostSignal(AudioHostSignalKind.Error, PositionMs));
+                DecodePipeline? failed;
+                lock (_gate) failed = _overlapActive && _overlapIncoming is not null ? _overlapIncoming : _current;
+                _log.Info($"audio.output.failed file={failed?.FileIdHex ?? current.FileIdHex}: {ex.GetType().Name}: {ex.Message}");
+                EmitTerminalFailure(ex, failed ?? current);
             }
         }
     }
@@ -519,7 +536,9 @@ internal sealed class AudioPlayEngine : IDisposable
             long afterOffset = current.CurrentOffset;
             _equalizer.Process(writeBuf.AsSpan(0, block), rate, channels);
             _limiter.Process(writeBuf.AsSpan(0, block));
-            _prebuffering = false; _buffering = false;
+            _prebuffering = false;
+            if (_recoveryKind != PlaybackRecoveryKind.Network || !_networkRecoveryDrained)
+                _buffering = false;
 
             var writeStartTicks = Stopwatch.GetTimestamp();
             try { _renderer.Write(writeBuf.AsSpan(0, block), ct); }
@@ -532,6 +551,23 @@ internal sealed class AudioPlayEngine : IDisposable
             var writeEndTicks = Stopwatch.GetTimestamp();
             _rendererPrimed = true;
             var wroteFrames = channels > 0 ? block / channels : block;
+            if (_recoveryKind == PlaybackRecoveryKind.Network)
+            {
+                if (_networkRecoveryDrained)
+                {
+                    _networkRecoveryQueuedFrames += wroteFrames;
+                    long recoveryQueuedMs = rate > 0 ? _networkRecoveryQueuedFrames * 1000L / rate : 0;
+                    if (_networkDataAvailable && recoveryQueuedMs >= StartPrebufferMs)
+                    {
+                        if (_playing) _renderer.Start();
+                        CompleteNetworkRecovery();
+                    }
+                }
+                else if (_networkDataAvailable)
+                {
+                    CompleteNetworkRecovery();
+                }
+            }
             if (!rendererStartedAfterBuffer) preStartFrames += wroteFrames;
 
             if (lastWriteTicks != 0)
@@ -835,6 +871,7 @@ internal sealed class AudioPlayEngine : IDisposable
         }
         try { _renderer.Reset(); } catch { }
         _rendererPrimed = false;
+        ClearNetworkRecovery(raiseState: false);
         cts?.Dispose();
     }
 
@@ -848,9 +885,127 @@ internal sealed class AudioPlayEngine : IDisposable
     {
         var kind = _prebuffering ? AudioHostSignalKind.Prebuffering
             : _buffering ? AudioHostSignalKind.Buffering
+            : _recoveryKind != PlaybackRecoveryKind.None ? AudioHostSignalKind.Recovering
             : _playing ? AudioHostSignalKind.Playing
             : AudioHostSignalKind.Paused;
-        State?.Invoke(new AudioHostSignal(kind, PositionMs));
+        State?.Invoke(new AudioHostSignal(kind, PositionMs, _playing, _buffering, _prebuffering, _recoveryKind));
+    }
+
+    DecodePipeline CreatePipeline()
+    {
+        var pipeline = new DecodePipeline(_log, _nativeDecryptorFactory, _bodyDisk, _http);
+        pipeline.NetworkRecovery += OnPipelineNetworkRecovery;
+        return pipeline;
+    }
+
+    void OnPipelineNetworkRecovery(DecodePipeline pipeline, AudioNetworkRecoveryEvent e)
+    {
+        bool audible;
+        lock (_gate) audible = ReferenceEquals(pipeline, _current) || (_overlapActive && ReferenceEquals(pipeline, _overlapIncoming));
+        if (!audible) return;
+
+        switch (e.Stage)
+        {
+            case AudioNetworkRecoveryStage.Started:
+                _recoveryPipeline = pipeline;
+                _recoveryKind = PlaybackRecoveryKind.Network;
+                _networkDataAvailable = false;
+                _networkRecoveryQueuedFrames = 0;
+                _networkRecoveryDrained = _buffering || (!_rendererPrimed && _prebuffering);
+                StartRecoveryMonitor();
+                _log.Info($"audio.network_recovery.visible file={pipeline.FileIdHex} position={PositionMs}ms queued={Math.Max(0, _renderer.ReleasedFrames - _renderer.PlayedFrames)}frames");
+                RaiseState();
+                break;
+            case AudioNetworkRecoveryStage.Recovered:
+                if (ReferenceEquals(_recoveryPipeline, pipeline))
+                {
+                    _networkDataAvailable = true;
+                    if (!_playing) CompleteNetworkRecovery();
+                }
+                break;
+            case AudioNetworkRecoveryStage.Exhausted:
+                // The typed exception is about to leave the blocking read and is surfaced by OutputThreadMain.
+                break;
+            case AudioNetworkRecoveryStage.Cancelled:
+                if (ReferenceEquals(_recoveryPipeline, pipeline)) ClearNetworkRecovery(raiseState: false);
+                break;
+        }
+    }
+
+    void StartRecoveryMonitor()
+    {
+        lock (_gate)
+        {
+            _recoveryMonitor ??= new Timer(_ => MonitorRecoveryDrain(), null, 0, 50);
+        }
+    }
+
+    void MonitorRecoveryDrain()
+    {
+        if (_disposed || _recoveryKind != PlaybackRecoveryKind.Network || _networkRecoveryDrained || !_playing || !_rendererPrimed)
+            return;
+        long released = _renderer.ReleasedFrames;
+        if (_renderer.PlayedFrames < released) return;
+        _networkRecoveryDrained = true;
+        _networkRecoveryQueuedFrames = 0;
+        _buffering = true;
+        try { _renderer.Pause(); } catch { }
+        _log.Info($"audio.network_recovery.buffer_drained file={_recoveryPipeline?.FileIdHex ?? _fileIdHex} position={PositionMs}ms");
+        RaiseState();
+    }
+
+    void CompleteNetworkRecovery()
+    {
+        var file = _recoveryPipeline?.FileIdHex ?? _fileIdHex;
+        ClearNetworkRecovery(raiseState: false);
+        _buffering = false;
+        _log.Info($"audio.network_recovery.playback_resumed file={file} position={PositionMs}ms playing={_playing}");
+        RaiseState();
+    }
+
+    void ClearNetworkRecovery(bool raiseState)
+    {
+        _recoveryKind = PlaybackRecoveryKind.None;
+        _networkRecoveryDrained = false;
+        _networkDataAvailable = false;
+        _networkRecoveryQueuedFrames = 0;
+        _recoveryPipeline = null;
+        Timer? monitor;
+        lock (_gate) { monitor = _recoveryMonitor; _recoveryMonitor = null; }
+        try { monitor?.Dispose(); } catch { }
+        if (raiseState) RaiseState();
+    }
+
+    void EmitTerminalFailure(Exception ex, DecodePipeline? pipeline)
+    {
+        if (Interlocked.Exchange(ref _terminalFaultEmitted, 1) != 0) return;
+        _playing = false;
+        _buffering = false;
+        _prebuffering = false;
+        ClearNetworkRecovery(raiseState: false);
+        try { _renderer.Pause(); } catch { }
+
+        var range = FindRangeFailure(ex);
+        var reason = range?.Reason
+            ?? (ex is AudioPlaybackException playback ? playback.Reason
+                : ex is CdnPermanentException permanent ? permanent.Reason
+                : ex is HttpRequestException or TaskCanceledException ? AudioKeyFailureReason.Network
+                : AudioKeyFailureReason.EmulationFault);
+        string detail = ex.Message;
+        long terminalPosition = PositionMs;
+        _log.Info($"audio.output.terminal file={pipeline?.FileIdHex ?? _fileIdHex} reason={reason} position={terminalPosition}ms detail={detail}");
+        try { pipeline?.Dispose(); } catch { }
+        State?.Invoke(AudioHostSignal.Fault(terminalPosition, reason, detail));
+    }
+
+    static AudioRangeFetchException? FindRangeFailure(Exception? ex)
+    {
+        while (ex is not null)
+        {
+            if (ex is AudioRangeFetchException range) return range;
+            ex = ex.InnerException;
+        }
+        return null;
     }
 
     static long TicksToMs(long ticks) => (long)(ticks * 1000.0 / Stopwatch.Frequency);
@@ -860,6 +1015,7 @@ internal sealed class AudioPlayEngine : IDisposable
         if (_disposed) return;
         _disposed = true;
         _tick.Dispose();
+        ClearNetworkRecovery(raiseState: false);
         try { _router.Dispose(); } catch { }
         try { _monitor.Dispose(); } catch { }
         StopOutput(waitFully: true);

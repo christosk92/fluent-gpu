@@ -21,6 +21,7 @@ internal sealed class DecodePipeline : IDisposable
 
     ISampleSource? _reader;
     IAudioReadStream? _stream;
+    IAudioNetworkRecoverySource? _recoverySource;
     ReadOnlyMemory<byte> _pendingHead;
     string _fileIdHex = "";
     string _format = "OggVorbis320";
@@ -35,6 +36,9 @@ internal sealed class DecodePipeline : IDisposable
     volatile bool _decoderBuilt;
     volatile bool _eof;
     volatile bool _faulted;
+    Exception? _failure;
+
+    public event Action<DecodePipeline, AudioNetworkRecoveryEvent>? NetworkRecovery;
 
     public DecodePipeline(WaveeLogger log, Func<string, byte[], CdnDecryptor?> nativeDecryptorFactory,
         AudioBodyDiskCache? bodyDisk, HttpClient http)
@@ -53,6 +57,7 @@ internal sealed class DecodePipeline : IDisposable
     public bool DecoderBuilt => _decoderBuilt;
     public bool Eof => _eof;
     public bool Faulted => _faulted;
+    public Exception? Failure => _failure;
     public bool BodySupplied => _bodySupplied;
     /// <summary>Enough is loaded to construct + read the decoder (a clear head is present, the body is attached, or an
     /// external plain-HTTP source is open). The engine gates <see cref="BuildDecoder"/> on this.</summary>
@@ -81,7 +86,7 @@ internal sealed class DecodePipeline : IDisposable
         _skipOffset = DetectSkipOffset(_pendingHead.Span, _format);
         _loadStartTicks = Stopwatch.GetTimestamp();
         var stream = SpotifyAudioStream.CreateHeadOnly(_http, _pendingHead, _pendingHead.Length, cmd.FileIdHex, _log, _bodyDisk);
-        lock (_gate) _stream = stream;
+        SetStream(stream);
         _log.Info($"pipeline load {cmd.FileIdHex}: head={_pendingHead.Length}B fmt={_format} dur={_durationMs}ms gain={cmd.NormalizationGainDb:0.0}dB");
     }
 
@@ -128,7 +133,7 @@ internal sealed class DecodePipeline : IDisposable
                 if (stream is null)
                 {
                     stream = SpotifyAudioStream.CreateHeadOnly(_http, _pendingHead, cmd.HeadBoundary, cmd.FileIdHex, _log, _bodyDisk);
-                    _stream = stream;
+                    SetStreamLocked(stream);
                 }
             }
 
@@ -165,6 +170,7 @@ internal sealed class DecodePipeline : IDisposable
             if (stream is null) { lock (_gate) stream = _stream as SpotifyAudioStream; }
             try { stream?.AbortBody(ex); } catch { }
             _faulted = true;
+            _failure = ex;
             _log.Info($"supply body failed file={cmd.FileIdHex} head={_pendingHead.Length}B mirrors={cdnUrls.Length} key={keyBytes}B nativeSeed={nativeSeedBytes}B: {ex.GetType().Name}: {ex.Message}");
         }
     }
@@ -193,7 +199,7 @@ internal sealed class DecodePipeline : IDisposable
             return;
         }
         _kind = kind.Value;
-        lock (_gate) _stream = httpStream;
+        SetStream(httpStream);
         _bodyAttached = true;
     }
 
@@ -306,10 +312,30 @@ internal sealed class DecodePipeline : IDisposable
     public void Dispose()
     {
         ISampleSource? reader; IAudioReadStream? stream;
-        lock (_gate) { reader = _reader; stream = _stream; _reader = null; _stream = null; }
+        lock (_gate)
+        {
+            reader = _reader; stream = _stream; _reader = null; _stream = null;
+            if (_recoverySource is not null) _recoverySource.NetworkRecovery -= OnNetworkRecovery;
+            _recoverySource = null;
+        }
         try { stream?.Dispose(); } catch { }
         try { reader?.Dispose(); } catch { }
     }
+
+    void SetStream(IAudioReadStream stream)
+    {
+        lock (_gate) SetStreamLocked(stream);
+    }
+
+    void SetStreamLocked(IAudioReadStream stream)
+    {
+        if (_recoverySource is not null) _recoverySource.NetworkRecovery -= OnNetworkRecovery;
+        _stream = stream;
+        _recoverySource = stream as IAudioNetworkRecoverySource;
+        if (_recoverySource is not null) _recoverySource.NetworkRecovery += OnNetworkRecovery;
+    }
+
+    void OnNetworkRecovery(AudioNetworkRecoveryEvent e) => NetworkRecovery?.Invoke(this, e);
 
     // ── static helpers (moved verbatim from AudioPlayEngine — single-source concerns) ─────────────────────────────────
     enum DecoderKind { Vorbis, Flac, Mp3 }
