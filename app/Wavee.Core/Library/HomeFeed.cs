@@ -5,9 +5,10 @@ namespace Wavee.Core;
 // vertical stack of horizontal rows is an "endless seam". The composer groups them into a small set of typed groups,
 // and the aggregate merges contributions across sources. The UI renders groups by kind with existing components.
 
-/// <summary>How a home group is laid out: a featured Hero band, a compact 2-col QuickGrid (recents/jump-back-in), a
-/// horizontally-paged Shelf (a real shelf), or a CollapsedGrid (many one-item recommendations folded into one grid).</summary>
-public enum HomeGroupKind { Hero, QuickGrid, Shelf, CollapsedGrid }
+/// <summary>How a home group is laid out: a featured Hero band, a compact QuickGrid, a finite horizontally paged
+/// Shelf, a compatibility CollapsedGrid, or a Featured editorial break. Home alternates shelves with editorial breaks
+/// so the vertical feed has rhythm instead of repeating one module forever.</summary>
+public enum HomeGroupKind { Hero, QuickGrid, Shelf, CollapsedGrid, Featured }
 
 /// <summary>What a home card points at — drives the nav route (pl: / album: / artist: / liked) and the card shape.</summary>
 public enum HomeCardKind { Playlist, Album, Artist, Track, Liked }
@@ -19,11 +20,18 @@ public sealed record HomeCard(string Uri, string Title, string? Subtitle, Image?
     System.Collections.Generic.IReadOnlyList<string>? MosaicTiles = null,
     // The cover's extracted dominant color (ARGB; null = none). Drives the section accent bar / tinted band. uint keeps
     // Core framework-neutral (mapped to the renderer's ColorF at the UI boundary, like Palette).
-    uint? Accent = null);
+    uint? Accent = null,
+    // Optional eyebrow — the section context shown ABOVE the title on a Featured card (e.g. "For fans of IU",
+    // "More like GFRIEND"). Carried from the baseline section's title, which the old composer discarded.
+    string? Eyebrow = null);
 
 /// <summary>A titled group of home cards laid out per <see cref="HomeGroupKind"/>. <paramref name="Accent"/> (ARGB; null
 /// = none) is the group's section tint — the first card's extracted color, else a semantic per-kind fallback.</summary>
 public sealed record HomeGroup(HomeGroupKind Kind, string? Title, IReadOnlyList<HomeCard> Cards, uint? Accent = null);
+
+/// <summary>One preview track of a home recommendation (the hover peek on a Featured editorial card): display name,
+/// cover art, and an optional 30s MP3 preview URL. Source-neutral — Spotify fills it from feedBaselineLookup.</summary>
+public sealed record HomePreviewTrack(string Uri, string Name, Image? Cover, string? PreviewUrl = null);
 
 /// <summary>One source's contribution to the home feed (its groups), with a priority for ordering when merged across
 /// sources by the aggregate (lower sorts first).</summary>

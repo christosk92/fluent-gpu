@@ -13,19 +13,17 @@ using Xunit;
 
 namespace Wavee.Tests;
 
-// ── Artist discography pagination (docs/discography-pagination-fix-proposal.md) ─────────────────────────────────────
-// Coverage for the data-layer fix that made the artist page shimmer-and-fill to the TRUE facet total instead of the
-// ~10-item overview slice. Split across the boundaries it touches:
-//   • the JSON ACL (SpotifyExportMapper) — MapArtist now carries discography.<facet>.totalCount, and the new
-//     DiscographyPageFromResponse flattens a live paged response;
-//   • the source seam (AggregateCatalog routing + ICatalogSource DIM probe semantics + StoreLibrarySource's deliverable
-//     total / no-clamp / fast-path / live-failure rules); and
-//   • the virtualization primitive (VirtualCollection<T>'s provisional-seed reconciliation — the Phase-2 regression).
+// ── Artist discography pagination ───────────────────────────────────────────────────────────────────────────────────
+// Coverage for the data layer that serves the artist page's discography. Since the move OFF the queryArtistDiscography*
+// GraphQL onto the extended-metadata (V4) pipeline, the whole discography lives in Artist.TopAlbums and paging is a pure
+// in-memory slice. Split across the boundaries it touches:
+//   • the JSON ACL (SpotifyExportMapper) — MapArtist still carries discography.<facet>.totalCount from the overview;
+//   • the source seam (AggregateCatalog routing + ICatalogSource DIM probe semantics + StoreLibrarySource's in-memory
+//     slice: probe/offset windows/Singles-plus-EP grouping); and
+//   • the virtualization primitive (VirtualCollection<T>'s provisional-seed reconciliation).
 
 public class DiscographyMapperTests
 {
-    static JsonElement Root(string json) => JsonDocument.Parse(json).RootElement;
-
     // The captured artist-maroon5.json overview (data.artistUnion.discography.<facet>.{items,totalCount}). Located
     // relative to THIS source file so it resolves regardless of the test host's working directory.
     static string FixturePath([CallerFilePath] string? here = null)
@@ -50,82 +48,6 @@ public class DiscographyMapperTests
         Assert.Equal(2, artist.FacetTotal(DiscographyKind.Compilations));
     }
 
-    // ── 2. DiscographyPageFromResponse: flatten one release-per-group + carry totalCount ──
-    [Fact]
-    public void DiscographyPageFromResponse_FlattensOnePerGroup_AndUsesTotalCount()
-    {
-        var page = SpotifyExportMapper.DiscographyPageFromResponse(Root("""
-        { "data": { "artistUnion": { "discography": { "albums": {
-            "totalCount": 18,
-            "items": [
-              { "releases": { "items": [
-                  { "uri": "spotify:album:a1", "name": "First", "type": "ALBUM", "date": { "year": 2020 }, "tracks": { "totalCount": 10 } } ] } },
-              { "releases": { "items": [
-                  { "uri": "spotify:album:a2", "name": "Second (deluxe group head)", "type": "ALBUM", "date": { "year": 2021 }, "tracks": { "totalCount": 12 } },
-                  { "uri": "spotify:album:a2b", "name": "Second (alt edition — must NOT surface)", "type": "ALBUM" } ] } }
-            ] } } } } }
-        """), DiscographyKind.Albums);
-
-        Assert.Equal(2, page.Items.Count);                       // one row per release-GROUP (not per release)
-        Assert.Equal("spotify:album:a1", page.Items[0].Uri);
-        Assert.Equal("spotify:album:a2", page.Items[1].Uri);     // the group's FIRST release; the alt edition is dropped
-        Assert.Equal(18, page.Total);                            // the facet total flows through, not the 2-item slice count
-    }
-
-    [Fact]
-    public void DiscographyPageFromResponse_MissingTotalCount_FallsBackToItemCount()
-    {
-        var page = SpotifyExportMapper.DiscographyPageFromResponse(Root("""
-        { "data": { "artistUnion": { "discography": { "singles": {
-            "items": [
-              { "releases": { "items": [ { "uri": "spotify:album:s1", "name": "S1", "type": "SINGLE" } ] } },
-              { "releases": { "items": [ { "uri": "spotify:album:s2", "name": "S2", "type": "SINGLE" } ] } }
-            ] } } } } }
-        """), DiscographyKind.Singles);
-
-        // No totalCount sibling → Total is clamped up to the delivered item count (never under-report what we handed back).
-        Assert.Equal(2, page.Items.Count);
-        Assert.Equal(page.Items.Count, page.Total);
-    }
-
-    [Fact]
-    public void DiscographyPageFromResponse_CarriesPreciseReleaseDateAndTrackCount()
-    {
-        var page = SpotifyExportMapper.DiscographyPageFromResponse(Root("""
-        { "data": { "artistUnion": { "discography": { "albums": {
-            "totalCount": 1,
-            "items": [ { "releases": { "items": [ {
-                "uri": "spotify:album:3QITXlmmt93E176jzVqKUb",
-                "name": "Nurture",
-                "type": "ALBUM",
-                "date": { "day": 23, "month": 4, "precision": "DAY", "year": 2021 },
-                "tracks": { "totalCount": 14 }
-            } ] } } ]
-        } } } } }
-        """), DiscographyKind.Albums);
-
-        var album = Assert.Single(page.Items);
-        Assert.Equal(14, album.TrackCount);
-        Assert.Equal(2021, album.Year);
-        Assert.Equal("2021-04-23", album.ReleaseDate);
-        Assert.Equal("DAY", album.ReleaseDatePrecision);
-    }
-
-    [Fact]
-    public void DiscographyPageFromResponse_SmallerTotalCount_ClampsUpToItemCount()
-    {
-        var page = SpotifyExportMapper.DiscographyPageFromResponse(Root("""
-        { "data": { "artistUnion": { "discography": { "albums": {
-            "totalCount": 1,
-            "items": [
-              { "releases": { "items": [ { "uri": "spotify:album:a1", "name": "A1", "type": "ALBUM" } ] } },
-              { "releases": { "items": [ { "uri": "spotify:album:a2", "name": "A2", "type": "ALBUM" } ] } }
-            ] } } } } }
-        """), DiscographyKind.Albums);
-
-        Assert.Equal(2, page.Items.Count);
-        Assert.Equal(2, page.Total);   // max(totalCount=1, items=2) == 2
-    }
 }
 
 public class DiscographyRoutingTests
@@ -230,72 +152,103 @@ public class StoreLibraryDiscographyTests
 {
     const string ArtistUri = "spotify:artist:ar";
 
-    static Album Alb(string id, AlbumKind kind = AlbumKind.Album)
-        => new(id, "spotify:album:" + id, "N" + id, null, Array.Empty<ArtistRef>(), 2020, 10, null, kind);
+    static Album Alb(string id, AlbumKind kind = AlbumKind.Album, int year = 2020)
+        => new(id, "spotify:album:" + id, "N" + id, null, Array.Empty<ArtistRef>(), year, 10, null, kind);
+    static Track Trk(string id) => new(id, "spotify:track:" + id, "T" + id, Array.Empty<ArtistRef>(),
+        new AlbumRef("", "", ""), 1000, false, null);
 
-    // Seed an artist into an InMemoryStore with a chosen AlbumsTotal + a set of Album-kind TopAlbums (the overview slice).
-    static StoreLibrarySource SourceWith(int albumsTotal, params Album[] topAlbums)
+    // Seed an artist into an InMemoryStore whose TopAlbums IS the whole discography (V4 groups → resident cards).
+    static (StoreLibrarySource Src, InMemoryStore Store) SourceWith(params Album[] topAlbums)
     {
         var store = new InMemoryStore();
-        store.UpsertArtist(new Artist("ar", ArtistUri, "Ar", null, topAlbums, AlbumsTotal: albumsTotal));
-        return new StoreLibrarySource(store);
+        store.UpsertArtist(new Artist("ar", ArtistUri, "Ar", null, topAlbums));
+        return (new StoreLibrarySource(store), store);
     }
 
-    // ── 4b. Probe through StoreLibrarySource with no live delegate → total == in-memory filtered count (deliverability) ──
+    // ── Probe (limit <= 0) → (empty window, in-memory filtered count). No network; TopAlbums holds the whole facet. ──
     [Fact]
-    public async Task Probe_OfflineNoLiveDelegate_TotalIsInMemoryCount()
+    public async Task Probe_TotalIsInMemoryFilteredCount()
     {
-        var src = SourceWith(albumsTotal: 18, Alb("a1"), Alb("a2"), Alb("a3"));   // cached facet says 18…
-        // LiveDiscography left null → the source can only promise what it holds (3), no permanent trailing shimmer offline.
+        var (src, _) = SourceWith(Alb("a1"), Alb("a2"), Alb("a3"));
 
         var probe = await src.GetDiscographyAsync(ArtistUri, DiscographyKind.Albums, 0, 0);
 
-        Assert.Empty(probe.Items);   // limit <= 0 → total-only probe, no network
+        Assert.Empty(probe.Items);   // limit <= 0 → total-only probe
         Assert.Equal(3, probe.Total);
     }
 
-    // ── 5. No-clamp rule: a live page's own Total is returned verbatim, never Math.Max(pageTotal, cachedFacet) ──
+    // ── Offset windows slice the in-memory filtered list. ──
     [Fact]
-    public async Task LivePage_TotalReturnedVerbatim_NeverClampedToCachedFacet()
+    public async Task OffsetWindow_SlicesInMemory()
     {
-        var src = SourceWith(albumsTotal: 18, Alb("a1"), Alb("a2"), Alb("a3"));   // cached estimate N = 18
-        const int liveTotal = 12;                                                  // the fresh authoritative total M ≠ N (and < N)
-        src.LiveDiscography = (uri, kind, offset, limit, ct)
-            => Task.FromResult<DiscographyPage?>(new DiscographyPage(new[] { Alb("live1"), Alb("live2") }, liveTotal));
+        var (src, _) = SourceWith(Alb("a1"), Alb("a2"), Alb("a3"), Alb("a4"), Alb("a5"));
 
-        var page = await src.GetDiscographyAsync(ArtistUri, DiscographyKind.Albums, 0, 60);
+        var page = await src.GetDiscographyAsync(ArtistUri, DiscographyKind.Albums, 2, 2);
 
-        Assert.Equal(liveTotal, page.Total);   // exactly M — NOT Math.Max(12, 18); a shrunk facet must not freeze trailing shimmer
+        Assert.Equal(5, page.Total);                          // total is always the in-memory filtered count
+        Assert.Equal(2, page.Items.Count);
+        Assert.Equal("spotify:album:a3", page.Items[0].Uri);
+        Assert.Equal("spotify:album:a4", page.Items[1].Uri);
     }
 
-    // ── 6. Fast-path: when the overview slice already covers the facet, no live call is made ──
+    // ── The Singles facet surfaces Singles AND EPs (Spotify's `singles` grouping), never Albums/Compilations. ──
     [Fact]
-    public async Task FastPath_OverviewCoversFacet_NoLiveCall()
+    public async Task SinglesFacet_SurfacesSinglesAndEps_NotAlbums()
     {
-        var src = SourceWith(albumsTotal: 3, Alb("a1"), Alb("a2"), Alb("a3"));   // filtered.Count (3) >= total (3)
-        int liveCalls = 0;
-        src.LiveDiscography = (uri, kind, offset, limit, ct) =>
-        {
-            liveCalls++;
-            return Task.FromResult<DiscographyPage?>(new DiscographyPage(Array.Empty<Album>(), 999));
-        };
+        var (src, _) = SourceWith(
+            Alb("single", AlbumKind.Single), Alb("ep", AlbumKind.EP),
+            Alb("album", AlbumKind.Album), Alb("comp", AlbumKind.Compilation));
 
-        var page = await src.GetDiscographyAsync(ArtistUri, DiscographyKind.Albums, 0, 60);
+        var page = await src.GetDiscographyAsync(ArtistUri, DiscographyKind.Singles, 0, 60);
 
-        Assert.Equal(0, liveCalls);        // served from memory, zero network
-        Assert.Equal(3, page.Total);
-        Assert.Equal(3, page.Items.Count);
+        Assert.Equal(2, page.Total);   // the Single + the EP
+        var uris = new HashSet<string>();
+        foreach (var a in page.Items) uris.Add(a.Uri);
+        Assert.Contains("spotify:album:single", uris);
+        Assert.Contains("spotify:album:ep", uris);
+        Assert.DoesNotContain("spotify:album:album", uris);
     }
 
-    // ── 7. Live failure: LiveDiscography returning null → InvalidOperationException (VC clears its guard, retries later) ──
+    // ── The album on-open gate (EnsureFetchedAsync): a missing, tracklist-less OR unnamed-track album still triggers the
+    // fetcher (the V4-empty-disc case falls back to getAlbum; the gid-only AlbumV4 case — how the prefetch's Wave 2 lands
+    // tracklists before Wave 3 names them — needs TrackV4 enrichment). A NAMED Tracks-level list also fetches because V4
+    // has no play counts; only a Full album is ready. EnsureAlbumAsync itself needs live metadata/Pathfinder resources. ──
     [Fact]
-    public async Task LiveFailure_NullResponse_Throws()
+    public async Task AlbumGate_RequiresFullHydrationForPlayCounts()
     {
-        var src = SourceWith(albumsTotal: 18, Alb("a1"), Alb("a2"), Alb("a3"));   // filtered (3) < total (18) → the live path
-        src.LiveDiscography = (uri, kind, offset, limit, ct) => Task.FromResult<DiscographyPage?>(null);
+        const string albumUri = "spotify:album:g";
+        var store = new InMemoryStore();
+        var src = new StoreLibrarySource(store);
+        int fetches = 0;
+        src.OnDemandFetch = (uri, ct) => { fetches++; return Task.CompletedTask; };
 
-        await Assert.ThrowsAsync<InvalidOperationException>(
-            () => src.GetDiscographyAsync(ArtistUri, DiscographyKind.Albums, 0, 60));
+        await src.GetAlbumAsync(albumUri);          // no album resident → need=true
+        Assert.Equal(1, fetches);
+
+        store.UpsertAlbum(new Album("g", albumUri, "G", null, Array.Empty<ArtistRef>(), 2020, 0, Array.Empty<Track>()));
+        await src.GetAlbumAsync(albumUri);          // tracklist-less → still need=true
+        Assert.Equal(2, fetches);
+
+        var unnamed = new Track("t2", "spotify:track:t2", "", Array.Empty<ArtistRef>(), new AlbumRef("g", albumUri, "G"), 0, false, null);
+        store.UpsertAlbum(new Album("g", albumUri, "G", null, Array.Empty<ArtistRef>(), 2020, 1, new[] { unnamed }));
+        await src.GetAlbumAsync(albumUri);          // gid-only tracklist (empty titles) → still cold → need=true
+        Assert.Equal(3, fetches);
+
+        store.UpsertAlbum(new Album("g", albumUri, "G", null, Array.Empty<ArtistRef>(), 2020, 1, new[] { Trk("t") }));
+        await src.GetAlbumAsync(albumUri);          // named V4 tracklist still lacks play counts → need=true
+        Assert.Equal(4, fetches);
+
+        store.UpsertAlbum(new Album("g", albumUri, "G", null, Array.Empty<ArtistRef>(), 2020, 1, new[] { Trk("t") },
+            Hydration: AlbumHydrationLevel.Full));
+        await src.GetAlbumAsync(albumUri);          // complete cached envelope → no fetch
+        Assert.Equal(4, fetches);
+
+        // Regression: a partial Pathfinder response used to stamp an empty album Full. The source requested a repair,
+        // but EnsureAlbumAsync trusted Full alone and immediately returned, permanently leaving "Nothing here yet".
+        var poisoned = new Album("bad", "spotify:album:bad", "Bad", null, Array.Empty<ArtistRef>(), 2024, 0,
+            Array.Empty<Track>(), Hydration: AlbumHydrationLevel.Full);
+        Assert.False(StoreLibrarySource.IsAlbumComplete(poisoned));
+        Assert.True(StoreLibrarySource.IsAlbumComplete(store.GetAlbum(albumUri)));
     }
 }
 

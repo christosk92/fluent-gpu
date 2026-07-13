@@ -174,10 +174,13 @@ sealed class PlayerBarContent : Component
         var lib = UseContext(LibraryBridge.Slot);    // Mutations: the now-playing like reflects + toggles the saved-set
         var go = UseContext(HistoryStore.NavCtx);    // navigate to the now-playing album / artist on click
         var ui = UseContext(ShellUi.Slot);           // right-rail (lyrics) toggle state
+        var svc = UseContext(Services.Slot);
         var acts = UseContext(ActionServices.Slot);  // now-playing cluster context menu (Menus.NowPlaying)
         var menuOverlay = UseContext(Overlay.Service);
         var titleHover = UseSignal(false);           // hover the now-playing text → BOTH lines scroll together (synced); idle = static + edge fade
         var L = _layout.Value;                       // coarse breakpoint signal; does NOT change for every resize pixel
+        _ = AppearancePrefs.Epoch.Value;
+        bool marqueeDisabled = svc?.Settings.Get(WaveeSettings.DisableMarquee) ?? false;
         if (DiagEnabled)
             WaveeLog.Instance.Event(WaveeLogLevel.Debug, "ui", "playerbar.render", "Player bar rendered",
                 fields:
@@ -276,15 +279,26 @@ sealed class PlayerBarContent : Component
 
         var titleLinkHover = UseSignal(false);
         bool titleHot = albumNav && titleLinkHover.Value;
-        Element titleEl = Marquee.Of(Prop.Of(() => NowPlaying(b).Title),
-            new Marquee.Style
+        Element titleEl = marqueeDisabled
+            ? new BoxEl
             {
-                FontSize = 14f, Weight = 700,
-                Foreground = Prop.Of(() => titleHot ? Tok.AccentTextPrimary : NowPlaying(b).Color),
-                Speed = 18f, CycleMs = MarqueeCycleMs, EndPauseMs = MarqueeEndPauseMs,
-                Mode = Marquee.ScrollMode.PingPong, Trigger = Marquee.TriggerMode.PauseOnHover,
-            },
-            scrollWhen: titleHover);
+                ClipToBounds = true,
+                Children = [new TextEl(Prop.Of(() => NowPlaying(b).Title))
+                {
+                    Size = 14f, Weight = 700,
+                    Color = Prop.Of(() => titleHot ? Tok.AccentTextPrimary : NowPlaying(b).Color),
+                    Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
+                }],
+            }
+            : Marquee.Of(Prop.Of(() => NowPlaying(b).Title),
+                new Marquee.Style
+                {
+                    FontSize = 14f, Weight = 700,
+                    Foreground = Prop.Of(() => titleHot ? Tok.AccentTextPrimary : NowPlaying(b).Color),
+                    Speed = 18f, CycleMs = MarqueeCycleMs, EndPauseMs = MarqueeEndPauseMs,
+                    Mode = Marquee.ScrollMode.PingPong, Trigger = Marquee.TriggerMode.PauseOnHover,
+                },
+                scrollWhen: titleHover);
         if (albumNav)   // make the marquee VIEWPORT itself the stable click target; no wrapper/input-boundary ambiguity
             titleEl = ((BoxEl)titleEl) with
             {
@@ -308,13 +322,15 @@ sealed class PlayerBarContent : Component
         metaKids.Add(titleEl);
         if (showSubtitle && track is not null && err is null)
         {
-            metaKids.Add(Marquee.Content(() => new NowPlayingArtistLinks(),
-                new Marquee.Style
-                {
-                    Speed = 18f, CycleMs = MarqueeCycleMs, EndPauseMs = MarqueeEndPauseMs,
-                    Mode = Marquee.ScrollMode.PingPong, Trigger = Marquee.TriggerMode.PauseOnHover,
-                },
-                scrollWhen: titleHover));
+            metaKids.Add(marqueeDisabled
+                ? new BoxEl { ClipToBounds = true, Children = [Embed.Comp(() => new NowPlayingArtistLinks())] }
+                : Marquee.Content(() => new NowPlayingArtistLinks(),
+                    new Marquee.Style
+                    {
+                        Speed = 18f, CycleMs = MarqueeCycleMs, EndPauseMs = MarqueeEndPauseMs,
+                        Mode = Marquee.ScrollMode.PingPong, Trigger = Marquee.TriggerMode.PauseOnHover,
+                    },
+                    scrollWhen: titleHover));
         }
 
         var metaCol = new BoxEl
@@ -442,10 +458,11 @@ sealed class PlayerBarContent : Component
         if (showVolumeSlider)
             rightKids.Add(Slider.Bind(b.Volume, v => { _ = b.Player.SetVolumeAsync(v); }, 96f, 16f, RailStyle) with { Key = "volume-slider", Animate = ItemMotion });
         if (ui is not null && active)
-            rightKids.Add(Transport(Mdl.Lyrics,
+            rightKids.Add(Transport(WaveeIcons.Lyrics,
                 () => ui.Toggle(RailMode.Lyrics),
                 true,
-                ui.RailOpen.Value && ui.Mode.Value == RailMode.Lyrics, accent, buttonBox, buttonGlyph)
+                ui.RailOpen.Value && ui.Mode.Value == RailMode.Lyrics, accent, buttonBox, buttonGlyph,
+                font: WaveeIcons.Font)
                 with { Key = "lyrics", Animate = ItemMotion });
         // Switch-to-video toggle — shown only when the now-playing track has a music video (async-detected). The swap is a
         // seam for now (sets PreferVideo); the actual video surface/host is a follow-up. Tooltip explains the affordance.
@@ -693,7 +710,8 @@ sealed class PlayerBarContent : Component
     /// <summary>A transport TOGGLE/command glyph button. The active state is shown by an ACCENT glyph + a 3px accent dot
     /// under it — never a filled background (that's reserved for the hover/press interaction axis). Box never fills at
     /// rest; hover/press use the WinUI subtle fills, the glyph carries the foreground ramp + AnimatedIcon-style scale.</summary>
-    internal static BoxEl Transport(string glyph, Action onClick, bool enabled, bool active, ColorF accent, float box = 36f, float glyphSize = 16f, Action<NodeHandle>? onRealized = null)
+    internal static BoxEl Transport(string glyph, Action onClick, bool enabled, bool active, ColorF accent, float box = 36f, float glyphSize = 16f,
+        Action<NodeHandle>? onRealized = null, string? font = null)
     {
         ColorF fg = !enabled ? Tok.TextDisabled : active ? accent : Tok.TextSecondary;
         ColorF hover = !enabled ? Tok.TextDisabled : active ? accent : Tok.TextPrimary;
@@ -701,7 +719,7 @@ sealed class PlayerBarContent : Component
         {
             Width = box, Height = box, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             HitTestVisible = false,
-            Children = [new TextEl(glyph) { Size = glyphSize, FontFamily = Theme.IconFont, Color = fg, HoverColor = hover }],
+            Children = [new TextEl(glyph) { Size = glyphSize, FontFamily = font ?? Theme.IconFont, Color = fg, HoverColor = hover }],
         };
         var dotLayer = new BoxEl
         {

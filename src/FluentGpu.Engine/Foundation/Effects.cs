@@ -89,7 +89,11 @@ public readonly record struct GlyphWipe(ColorF Before, ColorF After, float Split
 /// through <see cref="Fallback"/>, blurs it (<see cref="BlurSigma"/>), then applies WinUI's luminosity/tint recipe.
 /// Realized by the <c>PushLayer</c>/<c>PopLayer</c> backdrop subsystem.
 /// </summary>
-public readonly record struct AcrylicSpec(ColorF Tint, float TintOpacity, float BlurSigma, float NoiseOpacity, float LuminosityOpacity, ColorF Fallback)
+// <paramref name="FeatherTop"/> (0 = off): feather the composited frost in from the TOP over this fraction of the
+// layer's own height, so the frosted band dissolves continuously into the crisp backdrop instead of a hard edge (the
+// Apple-Music editorial-card look). A fraction (not px) so it stays proportional to an auto-sized band; the top corners
+// fade out under it, so a bottom-only-rounded band can round ALL corners and still read square-topped.
+public readonly record struct AcrylicSpec(ColorF Tint, float TintOpacity, float BlurSigma, float NoiseOpacity, float LuminosityOpacity, ColorF Fallback, float FeatherTop = 0f)
 {
     public AcrylicSpec(ColorF tint, float tintOpacity, float blurSigma, float noiseOpacity, float luminosityOpacity)
         : this(tint, tintOpacity, blurSigma, noiseOpacity, luminosityOpacity, tint) { }

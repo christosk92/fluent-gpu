@@ -22,7 +22,6 @@ internal static class Mdl
     public static readonly string RadioTower = Of(0xEC05);     // podcasts
     public static readonly string Check = Of(0xE73E);
     public static readonly string Queue = Of(0xE14C);
-    public static readonly string Lyrics = Of(0xE90A);
     public static readonly string Device = Of(0xE770);
     public static readonly string CellPhone = Of(0xE8EA);      // device picker: Phone
     public static readonly string Speakers = Of(0xE7F5);       // device picker: Speaker / AVR / cast audio
@@ -58,6 +57,7 @@ internal static class WaveeIcons
 
     public static readonly string PlayNext = Of(0xE900);       // play-on-top mark (front of queue)
     public static readonly string PlayAfter = Of(0xE901);      // play-on-bottom / add-to-queue mark (end of queue)
+    public static readonly string Lyrics = Of(0xE902);         // lyrics/chat bubble
 
     // Absolute path + #family (the engine loads by PATH; the #suffix is a stable cache key only).
     public static readonly string Font =

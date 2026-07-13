@@ -362,13 +362,14 @@ public sealed class FillRowVirtualLayout : IViewportVirtualLayout
     public readonly int Rows;
     public readonly int PerPageOverride;   // 0 ⇒ auto-fit
     public readonly float FixedCardW;      // 0 ⇒ auto-fit
+    public readonly int MaxColumns;        // 0 ⇒ unlimited; else the auto-fit never exceeds this many columns
 
     private float _main, _cross;           // last viewport fed by the engine (main = scroll-axis width)
     private int _perPage = 1;
     private float _cardW;
 
     public FillRowVirtualLayout(float minCardW = 150f, float maxCardW = 200f, float gap = 0f, int rows = 1,
-                                int perPageOverride = 0, float fixedCardW = 0f)
+                                int perPageOverride = 0, float fixedCardW = 0f, int maxColumns = 0)
     {
         MinCardW = minCardW <= 0 ? 1f : minCardW;
         MaxCardW = maxCardW < MinCardW ? MinCardW : maxCardW;
@@ -376,6 +377,7 @@ public sealed class FillRowVirtualLayout : IViewportVirtualLayout
         Rows = Math.Max(1, rows);
         PerPageOverride = Math.Max(0, perPageOverride);
         FixedCardW = fixedCardW < 0 ? 0f : fixedCardW;
+        MaxColumns = Math.Max(0, maxColumns);
         _cardW = MinCardW;
     }
 
@@ -388,14 +390,17 @@ public sealed class FillRowVirtualLayout : IViewportVirtualLayout
     {
         if (mainExtent == _main && crossSize == _cross) return;
         _main = mainExtent; _cross = crossSize;
-        (_perPage, _cardW) = Fit(_main, MinCardW, MaxCardW, Gap, PerPageOverride, FixedCardW);
+        (_perPage, _cardW) = Fit(_main, MinCardW, MaxCardW, Gap, PerPageOverride, FixedCardW, MaxColumns);
     }
 
     /// <summary>The viewport→(perPage, cardW) fit — COUNT-INDEPENDENT, cardW capped at <paramref name="maxCardW"/>.
     /// Exposed static so a host control can compute the SAME geometry it will be laid out at (e.g. to size a
-    /// width-driven card's height before it knows the realized cell). Allocation-free.</summary>
+    /// width-driven card's height before it knows the realized cell). Allocation-free.
+    /// <paramref name="maxColumns"/> (0 = unlimited) clamps the AUTO-FIT column count: a wide viewport stops adding
+    /// columns and lets each card grow past <paramref name="minCardW"/> instead (up to <paramref name="maxCardW"/> —
+    /// pass an uncapped max for a row that always fills). Ignored by the override/fixed-width paths.</summary>
     public static (int PerPage, float CardW) Fit(float main, float minCardW, float maxCardW, float gap,
-                                                 int perPageOverride = 0, float fixedCardW = 0f)
+                                                 int perPageOverride = 0, float fixedCardW = 0f, int maxColumns = 0)
     {
         minCardW = minCardW <= 0 ? 1f : minCardW;
         maxCardW = maxCardW < minCardW ? minCardW : maxCardW;
@@ -405,9 +410,11 @@ public sealed class FillRowVirtualLayout : IViewportVirtualLayout
         if (main <= 1f) return (1, minCardW);
         // Max columns that fit at the MIN card width, then grow columns to pull each card down to ≤ maxCardW.
         int perPage = perPageOverride > 0 ? perPageOverride : Math.Max(1, (int)MathF.Floor((main + gap) / (minCardW + gap)));
+        if (perPageOverride == 0 && maxColumns > 0 && perPage > maxColumns) perPage = maxColumns;
         float cardW = (main - (perPage - 1) * gap) / perPage;
-        while (perPageOverride == 0 && cardW > maxCardW) { perPage++; cardW = (main - (perPage - 1) * gap) / perPage; }
-        cardW = MathF.Min(cardW, maxCardW);   // belt-and-suspenders (and the perPageOverride path)
+        while (perPageOverride == 0 && cardW > maxCardW && (maxColumns <= 0 || perPage < maxColumns))
+        { perPage++; cardW = (main - (perPage - 1) * gap) / perPage; }
+        cardW = MathF.Min(cardW, maxCardW);   // belt-and-suspenders (and the perPageOverride/maxColumns paths)
         return (Math.Max(1, perPage), cardW <= 0f ? minCardW : cardW);
     }
 

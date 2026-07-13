@@ -161,6 +161,10 @@ public sealed class LazyGrid : Component
         int oldCols = _lastCols;
         float oldRowH = _lastRowH;
         float oldSectionTop = _lastSectionTop;
+        // CardRefit is a responsive-resize treatment, not an item-realization entrance. Applying it to every newly
+        // virtualized cell made scroll-window advances project fresh cards from default/previous bounds, perturbing the
+        // outer scroller's presented geometry and producing visible up/down bounce. Only arm it for a real grid refit.
+        bool animateRefit = oldCols > 0 && (oldCols != cols || MathF.Abs(oldRowH - rowH) > 0.5f);
         UseLayoutEffect(() =>
         {
             float newTop = Geometry().sectionTop;
@@ -195,18 +199,18 @@ public sealed class LazyGrid : Component
         var children = new List<Element>(5);
         if (view.TopPad > 0.5f) children.Add(new BoxEl { Key = "lazy-top", Height = view.TopPad });
         if (!view.DrawerVisible)
-            children.Add(GridSlice(view.FirstRow, view.LastRow, cols, cellW, rowH, count, isBelow: false));
+            children.Add(GridSlice(view.FirstRow, view.LastRow, cols, cellW, rowH, count, isBelow: false, animateRefit));
         else
         {
             if (_drawer is { } drawer)
             {
                 // Two GridEl siblings need distinct keys that DON'T track the scrolled window, else the drawer-open
                 // reconcile collides (both "lazy-grid") and the below-slice remounts every render.
-                children.Add(GridSlice(view.FirstRow, expandedRow, cols, cellW, rowH, count, isBelow: false));
+                children.Add(GridSlice(view.FirstRow, expandedRow, cols, cellW, rowH, count, isBelow: false, animateRefit));
                 int expandedCol = expandedIndex - expandedRow * cols;
                 children.Add(drawer(expandedIndex, new GridDrawerInfo(cols, expandedCol, cellW, _gap, expandedCol * (cellW + _gap))));
                 if (expandedRow < view.LastRow)
-                    children.Add(GridSlice(expandedRow + 1, view.LastRow, cols, cellW, rowH, count, isBelow: true));
+                    children.Add(GridSlice(expandedRow + 1, view.LastRow, cols, cellW, rowH, count, isBelow: true, animateRefit));
             }
         }
         if (view.BottomPad > 0.5f) children.Add(new BoxEl { Key = "lazy-bottom", Height = view.BottomPad });
@@ -222,7 +226,7 @@ public sealed class LazyGrid : Component
         Children = [inner],
     };
 
-    Element GridSlice(int firstRow, int lastRow, int cols, float cellW, float rowH, int count, bool isBelow)
+    Element GridSlice(int firstRow, int lastRow, int cols, float cellW, float rowH, int count, bool isBelow, bool animateRefit)
     {
         int start = firstRow * cols;
         int end = Math.Min(count, (lastRow + 1) * cols);
@@ -233,7 +237,7 @@ public sealed class LazyGrid : Component
             {
                 Key = "lazy-cell:" + idx,
                 Direction = 1,
-                Animate = MotionRecipes.CardRefit,
+                Animate = animateRefit ? MotionRecipes.CardRefit : null,
                 Children = [_cell(idx, cellW)],
             };
         }

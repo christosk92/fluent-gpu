@@ -3,11 +3,13 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Threading.Tasks;
+using FluentGpu;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Localization;
 using FluentGpu.Signals;
+using FluentGpu.WindowsApi.Dialogs;
 using Wavee.Backend.Audio;
 using Wavee.SpotifyLive.Audio;
 using static FluentGpu.Dsl.Ui;
@@ -21,8 +23,13 @@ sealed partial class SettingsPage
 
     enum StorageLoadPhase : byte { NotStarted, Loading, Ready, Failed }
 
-    static readonly string[] s_bodyBudgetLabels = ["512 MB", "1 GB", "2 GB", "4 GB", "8 GB"];
-    static readonly long[] s_bodyBudgetBytes = [512L << 20, 1L << 30, 2L << 30, 4L << 30, 8L << 30];
+    static readonly string[] s_bodyBudgetLabels = ["1 GB", "2 GB", "4 GB", "8 GB", "16 GB", "32 GB", "64 GB", "128 GB", "256 GB", "512 GB", "1 TB", "Custom"];
+    static readonly long[] s_bodyBudgetBytes = [1L << 30, 2L << 30, 4L << 30, 8L << 30, 16L << 30, 32L << 30, 64L << 30, 128L << 30, 256L << 30, 512L << 30, 1L << 40];
+    readonly Signal<int> _bodyBudgetMode = new((int)AudioCacheBudgetMode.DriveShare);
+    readonly Signal<int> _bodyBudgetPreset = new(5);
+    readonly Signal<double> _bodyBudgetGiB = new(32);
+    readonly Signal<double> _bodyBudgetPercent = new(0);
+    bool _bodyBudgetSeeded;
 
     // Distinct hues for the usage bar + matching row accents (accent tints read as identical blue on dark themes).
     static readonly ColorF StorageColorLibrary = ColorF.FromRgba(0x4A, 0x90, 0xD9);
@@ -85,7 +92,8 @@ sealed partial class SettingsPage
         catch { }
         store += FileSize(Path.Combine(root, "store.json"));
         store += DirSize(Path.Combine(root, "WaveeMusic"));
-        long audioBody = DirSize(AudioBodyDiskCache.DefaultDirectory());
+        var cacheSettings = AppDataSettings.ForUnpackaged("Wavee", "Wavee");
+        long audioBody = DirSize(AudioBodyDiskCache.ResolveDirectory(cacheSettings.Get(WaveeSettings.AudioBodyCacheBasePath)));
         long licenseDb = FileSize(LicenseKeyDiskCache.DefaultDbPath());
         return new StorageSnapshot(library, runtime, logs, logFiles, store, audioBody, licenseDb,
             library + runtime + logs + store + audioBody + licenseDb);
@@ -147,7 +155,7 @@ sealed partial class SettingsPage
 
     static int BodyBudgetIndex(long bytes)
     {
-        int best = 3;
+        int best = 5;
         long bestDiff = long.MaxValue;
         for (int i = 0; i < s_bodyBudgetBytes.Length; i++)
         {
@@ -201,9 +209,20 @@ sealed partial class SettingsPage
 
         var cold = svc?.RealStore as Wavee.Backend.Persistence.CachedStore;
         string residentCacheDescription = ResidentCacheDescription(cold);
-        string audioDir = AudioBodyDiskCache.DefaultDirectory();
+        string audioDir = svc?.AudioBodyCache?.CurrentDirectory
+            ?? AudioBodyDiskCache.ResolveDirectory(settings?.Get(WaveeSettings.AudioBodyCacheBasePath));
         string licenseDb = LicenseKeyDiskCache.DefaultDbPath();
         var keyStats = svc?.AudioLicenseCache?.Stats();
+        if (!_bodyBudgetSeeded && settings is not null)
+        {
+            _bodyBudgetSeeded = true;
+            _bodyBudgetMode.Value = Math.Clamp(settings.Get(WaveeSettings.AudioBodyCacheBudgetMode), 0, 2);
+            long fixedBytes = Math.Max(64L << 20, settings.Get(WaveeSettings.AudioBodyCacheBudgetBytes));
+            _bodyBudgetGiB.Value = fixedBytes / (double)(1L << 30);
+            int preset = Array.IndexOf(s_bodyBudgetBytes, fixedBytes);
+            _bodyBudgetPreset.Value = preset >= 0 ? preset : s_bodyBudgetLabels.Length - 1;
+            _bodyBudgetPercent.Value = Math.Clamp(settings.Get(WaveeSettings.AudioBodyCacheBudgetPercent), 0, 90);
+        }
         string licenseSub = keyStats is { } ks
             ? (ks.Count == 1
                 ? Loc.Get(Strings.Settings.Storage.LicenseKeysCountOne)
@@ -264,6 +283,8 @@ sealed partial class SettingsPage
                 Toggle(WaveeSettings.AudioKeyCacheEnabled), Icons.Document),
             SettingsRow(Loc.Get(Strings.Settings.Storage.BodyBudget), Loc.Get(Strings.Settings.Storage.BodyBudgetSub),
                 BudgetControl(svc, settings, s), Icons.Download),
+            SettingsRow(Loc.Get(Strings.Settings.Storage.CacheLocation), audioDir,
+                CacheLocationActions(svc, settings, post, audioDir), Icons.Folder),
             StorageRowCard(Loc.Get(Strings.Settings.Storage.AudioBodies), Loc.Get(Strings.Settings.Storage.AudioBodiesSub),
                 s?.AudioBody, audioDir, StorageColorAudio, Icons.Download,
                 Button.Standard(Loc.Get(Strings.Settings.Storage.ClearAudio), () =>
@@ -353,48 +374,171 @@ sealed partial class SettingsPage
 
     Element BudgetControl(Services? svc, IAppSettings? settings, StorageSnapshot? s)
     {
-        int idx = BodyBudgetIndex(settings?.Get(WaveeSettings.AudioBodyCacheBudgetBytes) ?? (4L << 30));
-        long budget = s_bodyBudgetBytes[idx];
+        var status = svc?.AudioBodyCache?.Status();
+        int mode = Math.Clamp(_bodyBudgetMode.Value, 0, 2);
+        long? budget = status?.BudgetBytes;
         long used = s?.AudioBody ?? 0;
-        float frac = budget > 0 ? Math.Clamp((float)used / budget, 0f, 1f) : 0f;
-        bool over = used > budget;
+        float frac = budget is > 0 ? Math.Clamp((float)(used / (double)budget.Value), 0f, 1f) : 0f;
+        bool over = budget is { } b && used > b;
+
+        void SetMode(int next)
+        {
+            if (settings is null) return;
+            next = Math.Clamp(next, 0, 2);
+            _bodyBudgetMode.Value = next;
+            settings.Set(WaveeSettings.AudioBodyCacheBudgetMode, next);
+            svc?.AudioBodyCache?.Trim();
+            Bump();
+        }
+
+        Element editor = mode switch
+        {
+            (int)AudioCacheBudgetMode.FixedBytes => FixedBudgetEditor(svc, settings),
+            (int)AudioCacheBudgetMode.DriveShare => NumberBox.Create(value: _bodyBudgetPercent,
+                minimum: 0, maximum: 90, smallChange: 1, spinButtonPlacementMode: NumberBoxSpinButtonPlacementMode.Compact,
+                width: 150f, formatter: v => v <= 0 ? Loc.Get(Strings.Settings.Storage.AutoTenPercent) : v.ToString("0", CultureInfo.InvariantCulture) + "%",
+                onValueChanged: (_, v) =>
+                {
+                    if (settings is null) return;
+                    int pct = Math.Clamp((int)Math.Round(v), 0, 90);
+                    _bodyBudgetPercent.Value = pct;
+                    settings.Set(WaveeSettings.AudioBodyCacheBudgetPercent, pct);
+                    svc?.AudioBodyCache?.Trim();
+                    Bump();
+                }, isEnabled: settings is not null),
+            _ => new TextEl(Loc.Get(Strings.Settings.Storage.UnlimitedReserve)) { Size = 12f, Color = Tok.TextSecondary },
+        };
+
+        string budgetLabel = budget is { } limit ? FmtBytes(limit) : Loc.Get(Strings.Settings.Storage.Unlimited);
 
         return new BoxEl
         {
             Direction = 1, Gap = 6f,
             Children =
             [
-                new BoxEl
-                {
-                    Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
-                    Children =
-                    [
-                        Slider.Ranged(idx, v => SetBodyBudgetIndex(svc, settings, (int)MathF.Round(v)),
-                            new Slider.Options
-                            {
-                                Min = 0f, Max = s_bodyBudgetLabels.Length - 1, Step = 1f, TickFrequency = 1f,
-                                IsThumbToolTipEnabled = true,
-                                ThumbToolTipValueConverter = v => s_bodyBudgetLabels[Math.Clamp((int)MathF.Round(v), 0, s_bodyBudgetLabels.Length - 1)],
-                            },
-                            length: 230f, isEnabled: settings is not null),
-                        new TextEl(s_bodyBudgetLabels[idx]) { Size = 12f, Color = Tok.TextSecondary, Width = 64f, Shrink = 0f },
-                    ],
-                },
+                SelectorBar.Create([
+                    Loc.Get(Strings.Settings.Storage.FixedSize),
+                    Loc.Get(Strings.Settings.Storage.DriveShare),
+                    Loc.Get(Strings.Settings.Storage.Unlimited)], mode, SetMode),
+                editor,
                 ProgressBar.Determinate(frac, width: 300f, state: over ? ProgressBarState.Error : ProgressBarState.Normal),
-                new TextEl(Strings.Settings.Storage.UsedOfBudget(FmtBytes(used), s_bodyBudgetLabels[idx]))
+                new TextEl(Strings.Settings.Storage.UsedOfBudget(FmtBytes(used), budgetLabel))
                     { Size = 11.5f, Color = Tok.TextSecondary },
+                status is { Available: false }
+                    ? new TextEl(Loc.Get(Strings.Settings.Storage.LocationUnavailable)) { Size = 11.5f, Color = Tok.SystemFillCritical }
+                    : new TextEl(Loc.Format("settings.storage.freeReserve", ("reserve", FmtBytes(status?.ReserveBytes ?? 0))))
+                        { Size = 11.5f, Color = Tok.TextTertiary },
             ],
         };
     }
 
-    void SetBodyBudgetIndex(Services? svc, IAppSettings? settings, int index)
+    Element FixedBudgetEditor(Services? svc, IAppSettings? settings)
     {
-        if (settings is null) return;
-        int idx = Math.Clamp(index, 0, s_bodyBudgetBytes.Length - 1);
-        long bytes = s_bodyBudgetBytes[idx];
-        settings.Set(WaveeSettings.AudioBodyCacheBudgetBytes, bytes);
-        svc?.AudioBodyCache?.SetBudget(bytes);
-        Bump();
+        void CommitGiB(double gib)
+        {
+            if (settings is null || double.IsNaN(gib) || double.IsInfinity(gib)) return;
+            gib = Math.Clamp(gib, 0.0625, long.MaxValue / (double)(1L << 30));
+            long bytes = checked((long)Math.Round(gib * (1L << 30)));
+            _bodyBudgetGiB.Value = gib;
+            settings.Set(WaveeSettings.AudioBodyCacheBudgetBytes, bytes);
+            svc?.AudioBodyCache?.SetBudget(bytes);
+            Bump();
+        }
+
+        return new BoxEl
+        {
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, Wrap = true,
+            Children =
+            [
+                ComboBox.Create(s_bodyBudgetLabels, _bodyBudgetPreset, width: 120f, isEnabled: settings is not null,
+                    onSelectionChanged: i =>
+                    {
+                        if (i < 0 || i >= s_bodyBudgetBytes.Length) return;
+                        _bodyBudgetGiB.Value = s_bodyBudgetBytes[i] / (double)(1L << 30);
+                        CommitGiB(_bodyBudgetGiB.Value);
+                    }),
+                NumberBox.Create(value: _bodyBudgetGiB, minimum: 0.0625,
+                    maximum: long.MaxValue / (double)(1L << 30), smallChange: 1,
+                    spinButtonPlacementMode: NumberBoxSpinButtonPlacementMode.Compact, width: 150f,
+                    formatter: v => v.ToString("0.###", CultureInfo.InvariantCulture) + " GB",
+                    onValueChanged: (_, v) =>
+                    {
+                        _bodyBudgetPreset.Value = s_bodyBudgetLabels.Length - 1;
+                        CommitGiB(v);
+                    }, isEnabled: settings is not null),
+            ],
+        };
+    }
+
+    Element CacheLocationActions(Services? svc, IAppSettings? settings, Action<Action> post, string audioDir) =>
+        new BoxEl
+        {
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S, Wrap = true,
+            Children =
+            [
+                Button.Standard(Loc.Get(Strings.Settings.Storage.ChooseLocation), () => PickCacheLocation(svc, settings, post)),
+                Button.Standard(Loc.Get(Strings.Settings.Storage.UseDefaultLocation), () => OfferCacheRelocation(svc, settings, post, "")),
+                HyperlinkButton.Create(Loc.Get(Strings.Settings.Storage.OpenFolder), () => SettingsShared.OpenFolder(audioDir)),
+            ],
+        };
+
+    void PickCacheLocation(Services? svc, IAppSettings? settings, Action<Action> post)
+    {
+        if (settings is null || svc?.AudioBodyCache is null) return;
+        string? selected = FilePicker.PickFolder(FluentApp.WindowHandle, Loc.Get(Strings.Settings.Storage.ChooseCacheFolder));
+        if (string.IsNullOrWhiteSpace(selected)) return;
+        OfferCacheRelocation(svc, settings, post, selected);
+    }
+
+    void OfferCacheRelocation(Services? svc, IAppSettings? settings, Action<Action> post, string newBase)
+    {
+        if (_overlay is null || settings is null || svc?.AudioBodyCache is null) return;
+        ContentDialog.Show(_overlay, d =>
+        {
+            d.Title = Loc.Get(Strings.Settings.Storage.MoveCacheTitle);
+            d.Message = Loc.Get(Strings.Settings.Storage.MoveCacheBody);
+            d.PrimaryText = Loc.Get(Strings.Settings.Storage.MoveExisting);
+            d.SecondaryText = Loc.Get(Strings.Settings.Storage.StartEmpty);
+            d.CloseText = Loc.Get(Strings.Auth.Cancel);
+            d.DefaultButton = ContentDialog.DefaultBtn.Primary;
+            d.PrimaryClick = () => BeginCacheRelocation(svc, settings, post, newBase, AudioCacheRelocationMode.Move);
+            d.SecondaryClick = () => post(() => OfferStartEmptyChoice(svc, settings, post, newBase));
+        });
+    }
+
+    void OfferStartEmptyChoice(Services svc, IAppSettings settings, Action<Action> post, string newBase)
+    {
+        if (_overlay is null) return;
+        ContentDialog.Show(_overlay, d =>
+        {
+            d.Title = Loc.Get(Strings.Settings.Storage.OldCacheTitle);
+            d.Message = Loc.Get(Strings.Settings.Storage.OldCacheBody);
+            d.PrimaryText = Loc.Get(Strings.Settings.Storage.DeleteOldCache);
+            d.SecondaryText = Loc.Get(Strings.Settings.Storage.LeaveOldCache);
+            d.CloseText = Loc.Get(Strings.Auth.Cancel);
+            d.PrimaryClick = () => BeginCacheRelocation(svc, settings, post, newBase, AudioCacheRelocationMode.StartEmptyDeleteOld);
+            d.SecondaryClick = () => BeginCacheRelocation(svc, settings, post, newBase, AudioCacheRelocationMode.StartEmptyKeepOld);
+        });
+    }
+
+    void BeginCacheRelocation(Services svc, IAppSettings settings, Action<Action> post, string newBase, AudioCacheRelocationMode mode)
+    {
+        _ = Task.Run(async () =>
+        {
+            bool ok = await svc.AudioBodyCache!.PrepareRelocationAsync(newBase, mode).ConfigureAwait(false);
+            post(() =>
+            {
+                if (ok)
+                {
+                    settings.Set(WaveeSettings.AudioBodyCacheBasePath, newBase);
+                    Toasts.Show(Loc.Get(Strings.Settings.Storage.CacheLocationChanged), ToastSeverity.Success);
+                    _storage = null;
+                    RefreshStorage(post);
+                    Bump();
+                }
+                else Toasts.Show(Loc.Get(Strings.Settings.Storage.CacheLocationFailed), ToastSeverity.Critical);
+            });
+        });
     }
 
     void ClearAudioBodyCache(Services? svc, Action<Action> post)
@@ -406,8 +550,10 @@ sealed partial class SettingsPage
             {
                 try
                 {
-                    if (Directory.Exists(AudioBodyDiskCache.DefaultDirectory()))
-                        foreach (var f in Directory.EnumerateFiles(AudioBodyDiskCache.DefaultDirectory())) File.Delete(f);
+                    string dir = svc?.AudioBodyCache?.CurrentDirectory ?? AudioBodyDiskCache.DefaultDirectory();
+                    if (Directory.Exists(dir))
+                        foreach (var f in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
+                            if (f.EndsWith(".enc", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".map", StringComparison.OrdinalIgnoreCase)) File.Delete(f);
                 }
                 catch { }
             }

@@ -45,26 +45,31 @@ sealed class FollowButton : Component
 {
     readonly string _uri;
     readonly string? _name;   // display-only: names the profile in the notification-center activity entry
-    public FollowButton(string uri, string? name = null) { _uri = uri; _name = name; }
+    readonly ColorF? _foreground;
+    public FollowButton(string uri, string? name = null, ColorF? foreground = null)
+    { _uri = uri; _name = name; _foreground = foreground; }
 
     public override Element Render()
     {
         var lib = UseContext(LibraryBridge.Slot);
         if (lib is null) return new BoxEl();                 // capability gate
         bool following = lib.IsSaved(_uri);                  // subscribe
+        ColorF idleInk = _foreground ?? Tok.TextPrimary;
         return new BoxEl
         {
             Direction = 0, Height = 36f, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Padding = new Edges4(WaveeSpace.L, 0f, WaveeSpace.L, 0f), Corners = CornerRadius4.All(18f),
-            BorderWidth = 1.5f, BorderColor = following ? Tok.AccentDefault : Tok.StrokeControlDefault,
-            HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+            BorderWidth = 1.5f, BorderColor = following ? Tok.AccentDefault
+                : _foreground is { } fg ? fg with { A = 0.42f } : Tok.StrokeControlDefault,
+            HoverFill = _foreground is { } hover ? hover with { A = 0.12f } : Tok.FillSubtleSecondary,
+            PressedFill = _foreground is { } press ? press with { A = 0.18f } : Tok.FillSubtleTertiary,
             Role = AutomationRole.Button, Cursor = CursorId.Hand,
             OnClick = () => lib.ToggleSaved(_uri, _name),
             Children =
             [
-                Icon(following ? Mdl.HeartFill : Icons.Heart, 14f, following ? Tok.AccentTextPrimary : Tok.TextPrimary),
+                Icon(following ? Mdl.HeartFill : Icons.Heart, 14f, following ? Tok.AccentTextPrimary : idleInk),
                 new TextEl(Loc.Get(following ? Strings.Artist.Following : Strings.Artist.Follow))
-                    { Size = 13f, Weight = 700, Color = following ? Tok.AccentTextPrimary : Tok.TextPrimary },
+                    { Size = 13f, Weight = 700, Color = following ? Tok.AccentTextPrimary : idleInk },
             ],
         };
     }

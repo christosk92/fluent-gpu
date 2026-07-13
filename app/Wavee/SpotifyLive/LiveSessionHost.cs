@@ -13,10 +13,6 @@ using Wavee.SpotifyLive.Audio;
 
 namespace Wavee.SpotifyLive;
 
-// Disambiguate from the UI type Wavee.DiscographyPage (a Component) that is otherwise in scope under the Wavee.* namespace.
-// (Declared inside the namespace so it wins over the enclosing-namespace member.)
-using DiscographyPage = Wavee.Core.DiscographyPage;
-
 // ── Live session bootstrap — bring up Connect + playback and swap it into the running app ─────────────────────────────
 // Logs in, opens the dealer + the persistent AP channel, builds the full LiveConnect stack, and calls svc.GoLive so the
 // UI's PlaybackBridge (bound to the switchable facades) starts reflecting + controlling live playback — with NO UI rebuild.
@@ -327,7 +323,20 @@ public sealed class LiveSessionHost : IAsyncDisposable
             var router = new Wavee.Backend.Realtime.DealerRouter(transport, sync);
             svc.RealSync = sync;
             sync.Enqueue(new Wavee.Backend.Sync.SyncCommand(Wavee.Backend.Sync.SyncKind.DrainWrites));      // replay writes queued while logged out
-            sync.Enqueue(new Wavee.Backend.Sync.SyncCommand(Wavee.Backend.Sync.SyncKind.InitialHydrate));
+            var hydrated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            sync.Enqueue(new Wavee.Backend.Sync.SyncCommand(Wavee.Backend.Sync.SyncKind.InitialHydrate, Done: hydrated));
+            // Aggressive discography prefetch (artists → album cards → tracks) AFTER the saved sets land. Off the sync loop
+            // (it must never block OpenPlaylist), cts-gated (logout cancels), SWR-skip makes re-login cheap.
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await hydrated.Task.ConfigureAwait(false);
+                    await Wavee.Backend.Metadata.DiscographyPrefetcher.RunAsync(md, store, syncLog, cts.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex) { syncLog.Info("discography prefetch failed: " + ex.Message); }
+            });
             // Reconnect resync (§6.2): on a transition back to Online from a drop, run the ordered convergence pass —
             // drain the outbox FIRST (a like made during the gap sends), then rootlist + token-gated deltas + /diff for
             // the open/dirty resident playlists. Pushes during the gap died with the socket; this pass is the recovery.
@@ -364,6 +373,8 @@ public sealed class LiveSessionHost : IAsyncDisposable
             // are immutable per image → ~half-year), and merged into the resident header.
             var playlistPalette = new PlaylistPaletteEnricher(pathfinderResource, store, new ExtractedColorCache(), spclientLog);
             var homeCache = new LiveHomeCache(pathfinderResource);
+            // Featured-card hover peek: the batched feedBaselineLookup preview-track cache (display-only, no Store).
+            HomeBaselinePreviews.Install(pathfinderResource);
             // "What's New" feed (queryWhatsNewFeed) — display-only, rides the PathfinderResource TTL. Seeded now so the
             // notification bell badge is correct before the first open; installed into the switchable the panel binds to.
             var whatsNew = new SpotifyWhatsNewService(pathfinderResource, notificationsLog);
@@ -373,6 +384,9 @@ public sealed class LiveSessionHost : IAsyncDisposable
             // Below-the-fold album enrichment (about-artist / merch / similar via Pathfinder; recommended playlists via the
             // SAME extended-metadata source, kinds 151→205) — installed into the switchable service the album pages hold.
             svc.AlbumEnrichment.SetInner(new SpotifyAlbumEnrichmentService(pathfinderResource, em, store, metadataLog, extensionCache));
+            // Standalone artist-page header stats (queryArtistOverview) — lazy, page-scoped; the Library artist surface
+            // never reads it (100% V4). The discography itself is served from V4, not this.
+            svc.ArtistStats.SetInner(new SpotifyArtistStatsService(pathfinderResource, store));
             // Music-video detection + the video↔audio file-id map over the SAME extended-metadata source (etag-cached).
             svc.Video.SetInner(new SpotifyVideoService(em, store, metadataLog, extensionCache));
             var userProfiles = new SpotifyUserProfileService(em, live.Pipeline, () => live.BaseUrl, socialLog, extensionCache);
@@ -394,14 +408,14 @@ public sealed class LiveSessionHost : IAsyncDisposable
                     {
                         await fetcher.FetchPlaylistAsync(uri, c).ConfigureAwait(false);
                     }
-                    else if (uri.StartsWith("spotify:album:", StringComparison.Ordinal)) await FetchAlbumAsync(pathfinderResource, store, uri, c).ConfigureAwait(false);
-                    else if (uri.StartsWith("spotify:artist:", StringComparison.Ordinal)) await FetchArtistAsync(pathfinderResource, store, uri, c).ConfigureAwait(false);
+                    else if (uri.StartsWith("spotify:album:", StringComparison.Ordinal)) await EnsureAlbumAsync(md, pathfinderResource, store, uri, c).ConfigureAwait(false);
+                    else if (uri.StartsWith("spotify:artist:", StringComparison.Ordinal))
+                        await Wavee.Backend.Metadata.ArtistDiscography.EnsureAsync(md, store, uri, c, hydrateAppearsOn: true).ConfigureAwait(false);   // V4 ensure; appears-on hydrated lazily on open
                     // Detect music videos for the just-hydrated tracklist (batch, off the critical path → the movie icons fill in).
                     DetectContainerVideos(svc.Video, store, uri, c);
                 };
                 libSrc.LiveHomeFetch = c => homeCache.GetAsync(c);   // cached editorial home + separately refreshed recents
                 libSrc.LiveSearch = (q, facet, offset, limit, c) => FetchSearchAsync(pathfinder, q, facet, offset, limit, c);   // paged online search
-                libSrc.LiveDiscography = (uri, kind, off, lim, c) => FetchDiscographyPageAsync(pathfinder, uri, kind, off, lim, c);   // paged artist discography
                 libSrc.LiveSuggest = async (q, c) => (await FetchSuggestRichAsync(pathfinder, q, c).ConfigureAwait(false)).Queries;   // omnibar as-you-type suggestions
                 libSrc.LiveSuggestRich = (q, c) => FetchSuggestRichAsync(pathfinder, q, c);
             }
@@ -607,40 +621,6 @@ public sealed class LiveSessionHost : IAsyncDisposable
         if (uris is not { Count: > 0 }) return;
         var list = uris;
         _ = Task.Run(async () => { try { await video.DetectAsync(list, ct).ConfigureAwait(false); } catch { } }, ct);
-    }
-
-    // Fetch the rich artist overview via Pathfinder GraphQL → map (the export's artist-*.json IS this shape) → store.
-    // Best-effort: a stale persisted-query hash or error leaves the identity-only artist in place.
-    static async Task FetchArtistAsync(PathfinderResource pf, IStore store, string uri, CancellationToken ct)
-    {
-        using var doc = await pf.QueryAsync(PathfinderOps.QueryArtistOverview, PathfinderOps.QueryArtistOverviewHash,
-            w => { w.WriteString("uri", uri); w.WriteString("locale", ""); w.WriteBoolean("preReleaseV2", false); },
-            PathfinderClient.Platform.Desktop, ct).ConfigureAwait(false);
-        if (doc is null) return;
-        if (Wavee.Core.SpotifyExportMapper.ArtistFromOverview(doc.RootElement) is { Uri.Length: > 0 } artist)
-            store.UpsertArtist(artist with { FetchedAt = DateTimeOffset.UtcNow });   // stamp SWR freshness on the full overview
-    }
-
-    // One window of an artist's discography facet. The three facet ops share one persisted hash; the server keys on the
-    // operationName. Variables mirror the desktop client: uri/offset/limit + order DATE_DESC (no preReleaseV2 — that's
-    // overview-only). null doc (HTTP/stale-hash/network) → null, so the source clears the VC page guard and retries.
-    static async Task<DiscographyPage?> FetchDiscographyPageAsync(PathfinderClient pf, string artistUri, DiscographyKind kind, int offset, int limit, CancellationToken ct)
-    {
-        var op = kind switch
-        {
-            DiscographyKind.Singles => PathfinderOps.QueryArtistDiscographySingles,
-            DiscographyKind.Compilations => PathfinderOps.QueryArtistDiscographyCompilations,
-            _ => PathfinderOps.QueryArtistDiscographyAlbums,
-        };
-        using var doc = await pf.QueryAsync(op, PathfinderOps.QueryArtistDiscographyHash, w =>
-        {
-            w.WriteString("uri", artistUri);
-            w.WriteNumber("offset", offset);
-            w.WriteNumber("limit", limit);
-            w.WriteString("order", "DATE_DESC");
-        }, PathfinderClient.Platform.Desktop, ct).ConfigureAwait(false);
-        if (doc is null) return null;
-        return Wavee.Core.SpotifyExportMapper.DiscographyPageFromResponse(doc.RootElement, kind);
     }
 
     // Full-catalog online search via Pathfinder — the per-facet ops (searchTracks/Albums/Artists/Playlists) fired in
@@ -858,37 +838,23 @@ public sealed class LiveSessionHost : IAsyncDisposable
     }
 
     // The editorial/personalized home via Pathfinder → the existing composer (data.home.sectionContainer.sections).
+    // The desktop query embeds recently-played inline, so the composer builds the recents shelf too — no extra call.
     static async Task<IReadOnlyList<HomeGroup>> FetchHomeAsync(PathfinderResource pf, CancellationToken ct)
     {
         using var doc = await pf.UseQueryAsync(PathfinderOps.Home, PathfinderOps.HomeHash,
             w =>
             {
-                w.WriteString("homeEndUserIntegration", "INTEGRATION_WEB_PLAYER");
+                w.WriteString("homeEndUserIntegration", "INTEGRATION_DESKTOP");
                 w.WriteString("timeZone", "Etc/UTC");
                 w.WriteString("sp_t", "");
                 w.WriteString("facet", "");
-                w.WriteNumber("sectionItemsLimit", 20);
-                w.WriteBoolean("includeEpisodeContentRatingsV2", false);
-            }, PathfinderClient.Platform.WebPlayer, ct).ConfigureAwait(false);
+                w.WriteNumber("sectionItemsLimit", 10);
+                w.WriteBoolean("includeEpisodeContentRatingsV2", true);
+            }, PathfinderClient.Platform.Desktop, ct).ConfigureAwait(false);
         if (doc is null) return System.Array.Empty<HomeGroup>();
         var homeRoot = Wavee.Core.SpotifyExportMapper.Dig(doc.RootElement, "data", "home");
-        return Wavee.Core.SpotifyHomeComposer.Compose(homeRoot, System.Array.Empty<Wavee.Core.PlaylistSummary>()).Groups;
-    }
-
-    // Fetch the album (metadata + tracklist) via Pathfinder getAlbum → map (data.albumUnion.tracksV2) → store. The
-    // spclient extended-metadata path was unreliable for some albums; getAlbum returns the full tracklist consistently.
-    static async Task<IReadOnlyList<HomeCard>> FetchRecentsAsync(PathfinderResource pf, CancellationToken ct)
-    {
-        using var doc = await pf.UseQueryAsync(PathfinderOps.Recents, PathfinderOps.RecentsHash,
-            w =>
-            {
-                w.WriteStartArray("uris");
-                w.WriteStringValue("spotify:list:recents:page");
-                w.WriteEndArray();
-                w.WriteNumber("offset", 0);
-                w.WriteNumber("limit", 100);
-            }, PathfinderClient.Platform.WebPlayer, ct).ConfigureAwait(false);
-        return doc is null ? System.Array.Empty<HomeCard>() : Wavee.Core.SpotifyExportMapper.RecentCards(doc.RootElement, 8);
+        return Wavee.Core.SpotifyHomeComposer.Compose(homeRoot, System.Array.Empty<Wavee.Core.PlaylistSummary>(),
+            Loc.Get(Strings.Home.MadeForYou), Loc.Get(Strings.Home.MoreForYou), Loc.Get(Strings.Home.RecentlyPlayed)).Groups;
     }
 
     sealed class LiveHomeCache
@@ -897,32 +863,44 @@ public sealed class LiveSessionHost : IAsyncDisposable
 
         public LiveHomeCache(PathfinderResource pf) => _pf = pf;
 
-        public async Task<IReadOnlyList<HomeGroup>> GetAsync(CancellationToken ct)
-        {
-            var homeTask = GetHomeGroupsAsync(ct);
-            var recentsTask = GetRecentsAsync(ct);
-            await Task.WhenAll(homeTask, recentsTask).ConfigureAwait(false);
-
-            var home = await homeTask.ConfigureAwait(false);
-            var recents = await recentsTask.ConfigureAwait(false);
-            if (recents.Count == 0) return home;
-
-            var groups = new List<HomeGroup>(home.Count + 1)
-            {
-                new(HomeGroupKind.QuickGrid, "Recently played", recents, SpotifyHomeComposer.GroupAccent(HomeGroupKind.QuickGrid, recents)),
-            };
-            groups.AddRange(home);
-            return groups;
-        }
-
-        async Task<IReadOnlyList<HomeGroup>> GetHomeGroupsAsync(CancellationToken ct)
-            => await FetchHomeAsync(_pf, ct).ConfigureAwait(false);
-
-        async Task<IReadOnlyList<HomeCard>> GetRecentsAsync(CancellationToken ct)
-            => await FetchRecentsAsync(_pf, ct).ConfigureAwait(false);
+        public Task<IReadOnlyList<HomeGroup>> GetAsync(CancellationToken ct) => FetchHomeAsync(_pf, ct);
     }
 
-    static async Task FetchAlbumAsync(PathfinderResource pf, IStore store, string uri, CancellationToken ct)
+    // V4-first album ensure: AlbumV4 (usually already resident from the prefetch) + TrackV4 enrichment for gid-only rows,
+    // followed by Pathfinder getAlbum. The latter is required even for a named V4 list because V4 has no play-count field;
+    // it also supplies the remaining Full release envelope. Already-Full cached albums return without another query.
+    static async Task EnsureAlbumAsync(Wavee.Backend.Metadata.MetadataService md, PathfinderResource pf, IStore store, string uri, CancellationToken ct)
+    {
+        // Do not trust Hydration.Full alone. A partial getAlbum response can carry the complete envelope but no usable
+        // rows; treating that as warm made the empty result permanent because every later repair request returned here.
+        if (Wavee.Backend.Library.StoreLibrarySource.IsAlbumComplete(store.GetAlbum(uri))) return;
+        try { await md.SyncAllAsync(new[] { uri }, ct).ConfigureAwait(false); }
+        catch (OperationCanceledException) { throw; }
+        catch { /* fall through to getAlbum */ }
+        var album = store.GetAlbum(uri);
+        if (album?.Tracks is { Count: > 0 } tracks)
+        {
+            var missing = new List<string>();
+            foreach (var t in tracks) if (t.Title.Length == 0) missing.Add(t.Uri);
+            if (missing.Count > 0)
+            {
+                try
+                {
+                    await md.SyncAllAsync(missing, ct).ConfigureAwait(false);
+                    var rebuilt = new List<Track>(tracks.Count);
+                    foreach (var t in tracks) rebuilt.Add(store.GetTrack(t.Uri) ?? t);
+                    store.UpsertAlbum(album with { Tracks = rebuilt });
+                }
+                catch (OperationCanceledException) { throw; }
+                catch { /* TrackV4 batch failed → getAlbum below */ }
+            }
+        }
+        await FetchAlbumAsync(pf, store, uri, ct).ConfigureAwait(false);   // play counts + complete envelope → Hydration.Full
+    }
+
+    // Fetch the album (metadata + tracklist) via Pathfinder getAlbum → map (data.albumUnion.tracksV2) → store. The
+    // getAlbum fallback for the V4-empty-disc case + the below-the-fold "About this release" Full upgrade both call this.
+    internal static async Task FetchAlbumAsync(PathfinderResource pf, IStore store, string uri, CancellationToken ct)
     {
         using var doc = await pf.QueryAsync(PathfinderOps.GetAlbum, PathfinderOps.GetAlbumHash,
             w => { w.WriteString("uri", uri); w.WriteString("locale", ""); w.WriteNumber("offset", 0); w.WriteNumber("limit", 50); },

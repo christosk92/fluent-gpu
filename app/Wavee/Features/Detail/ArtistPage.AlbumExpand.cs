@@ -608,11 +608,22 @@ sealed class DiscographySection : Component
         int total = _vc.CountOr0;
         bool collapsed = _collapsed.Value;
 
-        var children = new List<Element>(3) { Header(total, collapsed) };
+        var children = new List<Element>(2) { Header(total, collapsed) };
         if (!collapsed)
         {
-            children.Add(Embed.Comp(() => new DiscoGrid(_vc!, _svc, _go, _play, cap: Cap, accent: _accent)));
-            if (total > Cap) children.Add(SeeAllButton(total));
+            var body = new List<Element>(2) { Embed.Comp(() => new DiscoGrid(_vc!, _svc, _go, _play, cap: Cap, accent: _accent)) };
+            if (total > Cap) body.Add(SeeAllButton(total));
+            children.Add(new BoxEl
+            {
+                Direction = 1, Gap = WaveeSpace.M,
+                // The sticky header's backdrop is the PAGE ITSELF: while the header is pinned at the viewport top,
+                // this body (the grid + the See-all card) stops painting at the line just under it (the engine's
+                // sticky-clip bind — ClipRect.top rides the viewport line), so the real Mica/tint backdrop shows
+                // behind the pinned header. No acrylic, no painted plate — the cards are simply guillotined at the
+                // header's bottom edge, exactly the iOS grouped-list sticky treatment.
+                ScrollBinds = [ new() { ClipTopAtViewport = HeaderClipInset } ],
+                Children = body.ToArray(),
+            });
         }
         return new BoxEl
         {
@@ -645,12 +656,22 @@ sealed class DiscographySection : Component
         catch { /* OCE (nav away) or a failed probe → _seeded stays clear so a remount retries */ }
     }
 
+    // The pinned header's strip: its own height (accent bar 22 + 2×XS padding ≈ 30) plus a small breath — the
+    // sticky-clip line the section body vanishes at while the header is pinned. Keep the two in lockstep: a taller
+    // header with a stale inset lets card pixels peek under the pinned text.
+    const float HeaderClipInset = 38f;
+
     Element Header(int total, bool collapsed) => new BoxEl
     {
         // Left padding 0 so the accent bar aligns with the non-collapsible AccentHeader sections (Top tracks / Appears on).
         Direction = 0, AlignItems = FlexAlign.Center, Gap = 10f,
         Corners = CornerRadius4.All(6f), HoverFill = Tok.FillSubtleSecondary,
         Padding = new Edges4(0f, WaveeSpace.XS, WaveeSpace.S, WaveeSpace.XS),
+        // CSS-sticky wayfinding: the header pins at the viewport top while ITS section (the parent column = the
+        // containing block) is in view, clamps at the section's end, and releases on scroll-back — so mid-grid the
+        // user always sees which facet (Albums / Singles & EPs) they're in. The header itself never changes looks;
+        // the section BODY's sticky-clip (below) keeps the page backdrop behind it.
+        ScrollBinds = [ new() { PinTop = 0f } ],
         OnClick = () => _collapsed.Value = !_collapsed.Peek(),
         Children =
         [

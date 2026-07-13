@@ -34,6 +34,14 @@ sealed partial class SettingsPage
         int density = Math.Clamp(_density.Value, 0, DensityLabels().Length - 1);
         int pageLayout = Math.Clamp(settings?.Get(WaveeSettings.DetailPageLayout) ?? 0, 0, PageLayoutLabels().Length - 1);
 
+        Element AppearanceToggle(SettingKey<bool> key) => ToggleSwitch.Create(settings?.Get(key) ?? false, () =>
+        {
+            if (settings is null) return;
+            settings.Set(key, !settings.Get(key));
+            AppearancePrefs.Bump();
+            Bump();
+        }, style: SettingsCard.CompactToggleStyle());
+
         void SetTheme(int mode)
         {
             WaveeTheme.ApplyThemeMode(mode, settings);
@@ -61,6 +69,10 @@ sealed partial class SettingsPage
                 SelectorBar.Create(ThemeLabels(), themeMode, SetTheme), Icons.Brush),
             SettingsRow(Loc.Get(Strings.Settings.Appearance.Palette), Loc.Get(Strings.Settings.Appearance.PaletteSub),
                 PaletteRow(settings, requestTheme), Icons.Brush),
+            SettingsRow(Loc.Get(Strings.Settings.Appearance.DisableMarquee), Loc.Get(Strings.Settings.Appearance.DisableMarqueeSub),
+                AppearanceToggle(WaveeSettings.DisableMarquee), Icons.Font),
+            SettingsRow(Loc.Get(Strings.Settings.Appearance.DisableColorWashes), Loc.Get(Strings.Settings.Appearance.DisableColorWashesSub),
+                AppearanceToggle(WaveeSettings.DisableColorWashes), Icons.Brush),
             DensityBlock(density, SetDensity),
             SettingsRow(Loc.Get(Strings.Settings.Appearance.PageLayout), Loc.Get(Strings.Settings.Appearance.PageLayoutSub),
                 PageLayoutCards(pageLayout, SetPageLayout), Icons.List));
@@ -200,77 +212,71 @@ sealed partial class SettingsPage
         };
     }
 
-    Element DensityBlock(int density, Action<int> setDensity)
+    Element DensityBlock(int density, Action<int> setDensity) => new BoxEl
     {
-        float rowH = TrackRow.RowHeightFor(density);
-        string label = DensityLabels()[Math.Clamp(density, 0, DensityLabels().Length - 1)];
+        Direction = 1, AlignSelf = FlexAlign.Stretch,
+        Corners = CornerRadius4.All(WaveeRadius.Card),
+        Fill = Tok.FillCardSecondary, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
+        ClipToBounds = true,
+        Children =
+        [
+            SettingsRow(Loc.Get(Strings.Settings.Appearance.RowDensity), Loc.Get(Strings.Settings.Appearance.RowDensitySub),
+                DensityCards(density, setDensity), Icons.List),
+        ],
+    };
+
+    // Match the page-layout selector: the preview card itself is the radio control. The real density ordering is
+    // compressed into each fixed-size wireframe, so the choice communicates row height before it is applied.
+    static Element DensityCards(int selected, Action<int> set)
+    {
+        var labels = DensityLabels();
+
+        Element Card(int value)
+        {
+            bool on = selected == value;
+            ColorF block = on ? Tok.AccentDefault : Tok.FillSubtleTertiary;
+            ColorF faint = on ? Tok.AccentDefault with { A = 0.45f } : Tok.FillSubtleTertiary with { A = 0.7f };
+            float rowHeight = 8f + value * 3f;
+
+            Element MockRow() => new BoxEl
+            {
+                Height = rowHeight, Direction = 0, Gap = 5f, AlignItems = FlexAlign.Center,
+                Padding = new Edges4(3f, 0f, 3f, 0f),
+                Corners = CornerRadius4.All(3f), Fill = faint,
+                Children =
+                [
+                    new BoxEl { Width = rowHeight - 2f, Height = rowHeight - 2f, Corners = CornerRadius4.All(2f), Fill = block },
+                    new BoxEl { Width = 42f, Height = 4f, Corners = CornerRadius4.All(2f), Fill = block },
+                ],
+            };
+
+            return new BoxEl
+            {
+                Direction = 1, Gap = 6f, AlignItems = FlexAlign.Center,
+                Role = AutomationRole.RadioButton, Focusable = true, Cursor = CursorId.Hand,
+                OnClick = () => set(value),
+                Children =
+                [
+                    new BoxEl
+                    {
+                        Width = 116f, Height = 84f, Padding = Edges4.All(on ? 9f : 10f),
+                        Direction = 1, Gap = 4f, Justify = FlexJustify.Center, ClipToBounds = true,
+                        Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillSubtleSecondary,
+                        BorderWidth = on ? 2f : 1f, BorderColor = on ? Tok.AccentDefault : Tok.StrokeControlDefault,
+                        HoverScale = 1.02f, PressScale = 0.98f,
+                        Children = [MockRow(), MockRow(), MockRow()],
+                    },
+                    new TextEl(labels[value])
+                        { Size = 11f, Weight = (ushort)(on ? 600 : 400), Color = on ? Tok.TextPrimary : Tok.TextSecondary },
+                ],
+            };
+        }
 
         return new BoxEl
         {
-            Direction = 1, AlignSelf = FlexAlign.Stretch,
-            Corners = CornerRadius4.All(WaveeRadius.Card),
-            Fill = Tok.FillCardSecondary, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
-            ClipToBounds = true,
-            Children =
-            [
-                SettingsRow(Loc.Get(Strings.Settings.Appearance.RowDensity), Loc.Get(Strings.Settings.Appearance.RowDensitySub),
-                    SelectorBar.Create(DensityLabels(), density, setDensity), Icons.List),
-                Divider(),
-                new BoxEl
-                {
-                    Direction = 1, Gap = WaveeSpace.S,
-                    Padding = new Edges4(WaveeSpace.L, WaveeSpace.M, WaveeSpace.L, WaveeSpace.M),
-                    Children =
-                    [
-                        new BoxEl
-                        {
-                            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S,
-                            Children =
-                            [
-                                Icon(Icons.List, 14f, Tok.TextSecondary),
-                                new TextEl(Loc.Get(Strings.Settings.Appearance.DensityPreviewTitle))
-                                    { Size = 12f, Weight = 600, Color = Tok.TextPrimary },
-                                new TextEl(Strings.Settings.Appearance.DensityPreviewSub(
-                                    rowH.ToString("0", System.Globalization.CultureInfo.InvariantCulture), label))
-                                    { Size = 12f, Color = Tok.TextSecondary, Grow = 1f },
-                            ],
-                        },
-                        DensityPreviewRows(density),
-                    ],
-                },
-            ],
+            Direction = 0, Gap = 12f, Wrap = true, AlignItems = FlexAlign.Start,
+            Children = [Card(0), Card(1), Card(2), Card(3)],
         };
     }
 
-    static Element DensityPreviewRows(int density)
-    {
-        float rowH = TrackRow.RowHeightFor(density);
-        Element Mock(string label) => new BoxEl
-        {
-            Height = rowH, Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
-            Padding = new Edges4(WaveeSpace.M, 0f, WaveeSpace.M, 0f),
-            Corners = CornerRadius4.All(WaveeRadius.Control), Fill = Tok.FillSubtleSecondary,
-            Children =
-            [
-                new BoxEl { Width = rowH - 16f, Height = rowH - 16f, Corners = CornerRadius4.All(4f), Fill = Tok.FillSubtleTertiary },
-                new TextEl(label) { Size = 13f, Color = Tok.TextPrimary, Grow = 1f },
-            ],
-        };
-
-        return new BoxEl
-        {
-            Direction = 1, Gap = 4f,
-            Padding = new Edges4(WaveeSpace.S, WaveeSpace.S, WaveeSpace.S, WaveeSpace.S),
-            Corners = CornerRadius4.All(WaveeRadius.Control),
-            Fill = Tok.FillSubtleSecondary, BorderWidth = 1f, BorderColor = Tok.StrokeDividerDefault,
-            Children =
-            [
-                Mock(Loc.Get(Strings.Settings.Appearance.DensityPreview1)),
-                Divider(),
-                Mock(Loc.Get(Strings.Settings.Appearance.DensityPreview2)),
-                Divider(),
-                Mock(Loc.Get(Strings.Settings.Appearance.DensityPreview3)),
-            ],
-        };
-    }
 }

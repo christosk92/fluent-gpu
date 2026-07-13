@@ -42,7 +42,9 @@ public sealed class WaveeLog : IWaveeLog
     StreamWriter? _sw;
     bool _fileSinkFailed;
 
-    string? _filePath;
+    string? _basePath;      // as configured (wavee.log); daily mode derives the active dated file from it
+    bool _dailyRolling;     // main app log: one file per LOCAL calendar day (wavee-yyyyMMdd.log, WaveeMusic's scheme)
+    string? _openPath;      // the path the persistent sink currently appends to — touched only under _writeGate
     Action<string>? _echo;
     long _maxFileBytes = DefaultMaxFileBytes;
     int _retainedFiles = DefaultRetainedFiles;
@@ -54,7 +56,12 @@ public sealed class WaveeLog : IWaveeLog
     /// <summary>Upward-only file filter: a line reaches the file when its level is >= both MinLevel (the master gate)
     /// and FileMinLevel. Lowering it below MinLevel has no effect — MinLevel already dropped the entry.</summary>
     public WaveeLogLevel FileMinLevel { get; set; } = WaveeLogLevel.Info;
-    public string? FilePath => _filePath;
+    /// <summary>The file lines are being appended to RIGHT NOW — in daily mode the dated file (wavee-yyyyMMdd.log),
+    /// otherwise the configured path verbatim. Recomputed on read, so it is correct across a midnight roll.</summary>
+    public string? FilePath => ActiveFilePath();
+    /// <summary>The CONFIGURED path (wavee.log). Session discovery derives the whole rolling file set from this —
+    /// deriving it from <see cref="FilePath"/> would glob only one day's files in daily mode.</summary>
+    public string? BasePath => _basePath;
     public long Version { get { lock (_ringGate) return _version; } }
 
     /// <summary>True when the corresponding env override is set — the runtime level UI disables its box then.</summary>
@@ -72,13 +79,14 @@ public sealed class WaveeLog : IWaveeLog
     /// Level precedence is env &gt; explicit arg (settings) &gt; default — the env vars now always win.</summary>
     public void Configure(string? crashLogPath = null, Action<string>? echo = null,
         WaveeLogLevel? minLevel = null, WaveeLogLevel? fileMinLevel = null, long? maxFileBytes = null,
-        int? retainedFiles = null, int? ringCapacity = null)
+        int? retainedFiles = null, int? ringCapacity = null, bool dailyRolling = false)
     {
-        if (!string.Equals(_filePath, crashLogPath, StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(_basePath, crashLogPath, StringComparison.OrdinalIgnoreCase) || _dailyRolling != dailyRolling)
         {
-            lock (_writeGate) CloseStream();   // path change → reopen on next batch
+            lock (_writeGate) CloseStream();   // path/mode change → reopen on next batch
         }
-        _filePath = crashLogPath;
+        _basePath = crashLogPath;
+        _dailyRolling = dailyRolling;
         _echo = echo;
         MinLevel = EnvLevel("WAVEE_LOG_LEVEL") ?? minLevel ?? WaveeLogLevel.Info;
         FileMinLevel = EnvLevel("WAVEE_LOG_FILE_LEVEL") ?? fileMinLevel ?? WaveeLogLevel.Info;
@@ -91,11 +99,44 @@ public sealed class WaveeLog : IWaveeLog
         if (crashLogPath is not null)
         {
             try { Directory.CreateDirectory(Path.GetDirectoryName(crashLogPath)!); } catch { }
+            // One-time migration to daily files: the pre-split single wavee.log is renamed INTO the dated set
+            // (stamped with its own last write, matching the size-roll naming) so the session picker keeps seeing
+            // its history and the writer never appends to the un-dated name again.
+            if (dailyRolling) MigrateLegacyBaseFile(crashLogPath);
             // Parent-side retention: keep the child-process logs bounded the same way the main file rolls. A child
             // (its own file is audio-child-*.log) must NOT sweep its siblings, so only the parent does this.
             if (!Path.GetFileName(crashLogPath).StartsWith("audio-child-", StringComparison.Ordinal))
                 SweepAudioChildLogs(Path.GetDirectoryName(crashLogPath));
+            if (dailyRolling)
+                PruneRolledFiles(Path.GetDirectoryName(crashLogPath),
+                    Path.GetFileNameWithoutExtension(crashLogPath), Path.GetExtension(crashLogPath));
         }
+    }
+
+    string? ActiveFilePath()
+    {
+        string? basePath = _basePath;
+        if (basePath is null || !_dailyRolling) return basePath;
+        return DatedPath(basePath, DateTime.Now);
+    }
+
+    static string DatedPath(string basePath, DateTime day)
+        => Path.Combine(Path.GetDirectoryName(basePath) ?? "",
+            Path.GetFileNameWithoutExtension(basePath) + "-" + day.ToString("yyyyMMdd", CultureInfo.InvariantCulture)
+            + Path.GetExtension(basePath));
+
+    static void MigrateLegacyBaseFile(string basePath)
+    {
+        try
+        {
+            if (!File.Exists(basePath)) return;
+            string dir = Path.GetDirectoryName(basePath) ?? "";
+            string root = Path.GetFileNameWithoutExtension(basePath);
+            string ext = Path.GetExtension(basePath);
+            string stamp = File.GetLastWriteTime(basePath).ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
+            File.Move(basePath, Path.Combine(dir, root + "-" + stamp + ext), overwrite: false);
+        }
+        catch { }   // another instance still holds it open (or the name collides) → leave it; harmless
     }
 
     /// <summary>Point the dev/probe echo at a sink (e.g. Console.Error.WriteLine) without disturbing the file path,
@@ -175,7 +216,7 @@ public sealed class WaveeLog : IWaveeLog
         // Lazy: format only for the dev/probe echo (no consumer → no formatted string).
         if (_echo is { } e) { try { e(entry.Format()); } catch { } }
 
-        if (level >= FileMinLevel && _filePath is not null)
+        if (level >= FileMinLevel && _basePath is not null)
             EnqueueFileEntry(entry);
     }
 
@@ -271,13 +312,16 @@ public sealed class WaveeLog : IWaveeLog
 
     void WriteBatch(WaveeLogEntry[] entries, int dropped)
     {
-        var path = _filePath;
+        var path = ActiveFilePath();
         if (path is null || (entries.Length == 0 && dropped == 0)) return;
 
         lock (_writeGate)
         {
             try
             {
+                // Midnight rolled the active date (daily mode) → release yesterday's file; the open below starts today's.
+                if (_sw is not null && !string.Equals(_openPath, path, StringComparison.OrdinalIgnoreCase))
+                    CloseStream();
                 EnsureStream(path);
                 if (dropped > 0)
                     _sw!.WriteLine("W [log] file sink dropped queued lines count="
@@ -310,8 +354,13 @@ public sealed class WaveeLog : IWaveeLog
         string? dir = Path.GetDirectoryName(path);
         if (dir is not null) Directory.CreateDirectory(dir);
         RollIfNeeded(path, dir);
+        // Daily retention: keep the newest N of the WHOLE dated set (wavee-*.log — dated days + their intra-day
+        // size-rolls together), so the folder stays ~a week deep instead of accreting one file per day forever.
+        if (_dailyRolling && _basePath is { } bp)
+            PruneRolledFiles(Path.GetDirectoryName(bp), Path.GetFileNameWithoutExtension(bp), Path.GetExtension(bp));
         _fs = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
         _sw = new StreamWriter(_fs, new UTF8Encoding(false));
+        _openPath = path;
     }
 
     void CloseStream()
@@ -320,6 +369,7 @@ public sealed class WaveeLog : IWaveeLog
         try { _sw?.Dispose(); } catch { }   // disposes the underlying FileStream
         _sw = null;
         _fs = null;
+        _openPath = null;
     }
 
     void RollIfNeeded(string path, string? dir)

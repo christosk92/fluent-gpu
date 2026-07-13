@@ -86,11 +86,14 @@ public static class PagedShelf
         // The card subtree derives its dimensions from its arranged cell (aspect ratio/stretch) and ignores cardAt's
         // width hint. This keeps realized item components subscribed only to their data: a container resize re-fits the
         // retained cells in layout without scheduling every card component through _cardW.
-        bool cardWidthAgnostic = false)
+        bool cardWidthAgnostic = false,
+        // 0 = unlimited. Clamp the auto-fit column count: a wide viewport stops adding columns and grows each card
+        // instead (see FillRowVirtualLayout.Fit) — the editorial "a few large cards" shelf that still adapts to width.
+        int maxColumns = 0)
         => Embed.Comp(() => new PagedShelfCore(count, cardAt, cardHeight, title, header, pager, customPager,
                                                minCardW, maxCardW, gap, rows, perPageOverride, fixedCardW,
                                                headerGap, edgeFade, prevGlyph, nextGlyph, parts, keyOf, overscan, measured,
-                                               cardWidthAgnostic))
+                                               cardWidthAgnostic, maxColumns))
            // SkeletonProxy: the deriver can't see into this component, so hand it the header + a few real cards (at a
            // representative width) to derive — the shelf shimmers as real cards instead of one default bar.
            with { SkeletonProxy = () => ShelfProxy(count, cardAt, header, title, maxCardW, gap, headerGap) };
@@ -135,7 +138,7 @@ internal sealed class PagedShelfCore : Component
     readonly ShelfPager _pager;
     readonly Func<ShelfPagerContext, Element>? _customPager;
     readonly float _minCardW, _maxCardW, _gap;
-    readonly int _rows, _perPageOverride;
+    readonly int _rows, _perPageOverride, _maxColumns;
     readonly float _fixedCardW, _headerGap, _edgeFade;
     readonly string _prevGlyph, _nextGlyph;
     readonly TemplateParts? _parts;
@@ -164,7 +167,7 @@ internal sealed class PagedShelfCore : Component
                           Element? header, ShelfPager pager, Func<ShelfPagerContext, Element>? customPager,
                           float minCardW, float maxCardW, float gap, int rows, int perPageOverride, float fixedCardW,
                           float headerGap, float edgeFade, string prevGlyph, string nextGlyph, TemplateParts? parts,
-                          Func<int, string>? keyOf, int overscan, bool measured, bool cardWidthAgnostic)
+                          Func<int, string>? keyOf, int overscan, bool measured, bool cardWidthAgnostic, int maxColumns = 0)
     {
         _count = count; _cardAt = cardAt; _cardHeight = cardHeight; _measured = measured; _title = title; _header = header;
         _pager = pager; _customPager = customPager; _minCardW = minCardW; _maxCardW = maxCardW; _gap = gap;
@@ -172,6 +175,7 @@ internal sealed class PagedShelfCore : Component
         _headerGap = headerGap; _edgeFade = edgeFade; _prevGlyph = prevGlyph; _nextGlyph = nextGlyph;
         _parts = parts; _keyOf = keyOf; _overscan = overscan;
         _cardWidthAgnostic = cardWidthAgnostic;
+        _maxColumns = Math.Max(0, maxColumns);
     }
 
     public override Element Render()
@@ -180,7 +184,7 @@ internal sealed class PagedShelfCore : Component
         int page = _page.Value;                        // subscribe → pager state + glide retarget
 
         // Compute the fit the layout will land at (count-independent), to size the strip + page math.
-        var (perPageColumns, cardW) = FillRowVirtualLayout.Fit(w, _minCardW, _maxCardW, _gap, _perPageOverride, _fixedCardW);
+        var (perPageColumns, cardW) = FillRowVirtualLayout.Fit(w, _minCardW, _maxCardW, _gap, _perPageOverride, _fixedCardW, _maxColumns);
         UseLayoutEffect(() =>
         {
             if (!_cardWidthAgnostic && MathF.Abs(_cardW.Peek() - cardW) > 0.25f) _cardW.Value = cardW;
@@ -317,7 +321,7 @@ internal sealed class PagedShelfCore : Component
     // must not capture render-time cols/cardW). Mirrors ScrollMeasuredViewport's target math: page ⇒ cols·stride px.
     int PageFromOffset(float offX)
     {
-        var (cols, cw) = FillRowVirtualLayout.Fit(_w.Peek(), _minCardW, _maxCardW, _gap, _perPageOverride, _fixedCardW);
+        var (cols, cw) = FillRowVirtualLayout.Fit(_w.Peek(), _minCardW, _maxCardW, _gap, _perPageOverride, _fixedCardW, _maxColumns);
         float pageW = cols * (cw + _gap);
         if (pageW <= 1f) return 0;
         int perPage = Math.Max(1, cols * (_measured ? 1 : _rows));
@@ -328,7 +332,7 @@ internal sealed class PagedShelfCore : Component
     // ── Measured-virtual body: sample-measure a bounded card set, lock height, then virtualize the strip. ──
     Element MeasuredVirtualBody(int perPageItems, float cardW, bool fade, bool needProbe)
     {
-        var layout = _layout ??= new FillRowVirtualLayout(_minCardW, _maxCardW, _gap, 1, _perPageOverride, _fixedCardW);
+        var layout = _layout ??= new FillRowVirtualLayout(_minCardW, _maxCardW, _gap, 1, _perPageOverride, _fixedCardW, _maxColumns);
         int shelfOverscan = Math.Max(_overscan, perPageItems);
         float measuredH = _measuredH.Value;
         Element liveItems = ItemsView.Create(
@@ -473,7 +477,7 @@ internal sealed class PagedShelfCore : Component
     Element VirtualBody(int perPageItems, float cardW, bool fade)
     {
         // The SAME stateful layout instance the engine drives via SetViewport; hoisted so its fit cache survives renders.
-        var layout = _layout ??= new FillRowVirtualLayout(_minCardW, _maxCardW, _gap, _rows, _perPageOverride, _fixedCardW);
+        var layout = _layout ??= new FillRowVirtualLayout(_minCardW, _maxCardW, _gap, _rows, _perPageOverride, _fixedCardW, _maxColumns);
 
         float shelfH = _cardHeight is null ? float.NaN : _rows * _cardHeight(cardW) + (_rows - 1) * _gap;
 

@@ -107,7 +107,6 @@ public sealed class PathfinderResource
 
     public static TimeSpan TtlFor(string operationName) => operationName switch
     {
-        PathfinderOps.Recents => TimeSpan.FromSeconds(60),
         PathfinderOps.Home => TimeSpan.FromMinutes(15),
         PathfinderOps.GetAlbum => TimeSpan.FromMinutes(10),
         PathfinderOps.GetTrack => TimeSpan.FromMinutes(10),

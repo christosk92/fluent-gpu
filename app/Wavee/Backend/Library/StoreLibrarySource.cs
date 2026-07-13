@@ -49,10 +49,6 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
     /// store track search is the fallback. Returns null on failure → caller degrades to offline.</summary>
     public Func<string, SearchFacet, int, int, CancellationToken, Task<SearchResults?>>? LiveSearch { get; set; }
 
-    /// <summary>Set by the live bootstrap: page an artist's discography facet online (Pathfinder). Null offline → the
-    /// override serves the in-memory overview slice. Returns null on failure → the override throws so the VC retries.</summary>
-    public Func<string, DiscographyKind, int, int, CancellationToken, Task<DiscographyPage?>>? LiveDiscography { get; set; }
-
     /// <summary>Set by the live bootstrap: as-you-type search suggestions (Pathfinder searchSuggestions). Empty offline.</summary>
     public Func<string, CancellationToken, Task<IReadOnlyList<string>>>? LiveSuggest { get; set; }
     public Func<string, CancellationToken, Task<SearchSuggestions>>? LiveSuggestRich { get; set; }
@@ -146,41 +142,24 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         return _store.GetArtist(uri);
     }
 
-    // Discography paging — the LIVE override that pages the real facet beyond the ~10-item overview slice the DIM sees.
+    // Discography paging — now a pure in-memory slice. TopAlbums holds the WHOLE discography (ArtistV4 groups → stubs,
+    // upgraded to resident cards by ArtistDiscography.Assemble), so paging is client-side and needs no network beyond the
+    // V4 ensure GetArtistAsync already triggers. The facet total is simply the filtered count (what we actually hold).
     public async Task<DiscographyPage> GetDiscographyAsync(string uri, DiscographyKind kind, int offset, int limit, CancellationToken ct = default)
     {
-        var artist = await GetArtistAsync(uri, ct).ConfigureAwait(false);   // cached; triggers the overview fetch if cold
+        var artist = await GetArtistAsync(uri, ct).ConfigureAwait(false);   // triggers the V4 ensure when cold
         var all = artist?.TopAlbums ?? Array.Empty<Album>();
         var filtered = new List<Album>();
         foreach (var a in all) if (AggregateCatalog.KindMatches(a.Kind, kind)) filtered.Add(a);   // shared kind filter (Singles ⇒ Single/EP)
-        int facet = artist?.FacetTotal(kind) ?? 0;
-        // Deliverability lives in the source: offline can only promise what it holds → no permanent trailing shimmer offline.
-        int total = (LiveDiscography is not null && facet > 0) ? Math.Max(facet, filtered.Count) : filtered.Count;
-
-        if (limit <= 0) return new DiscographyPage(Array.Empty<Album>(), total);   // total-only probe: no network
-
-        // The whole facet already fits in memory (the ≤10-item case), or there is no live delegate → serve from memory.
-        if (filtered.Count >= total || LiveDiscography is null)
-        {
-            var window = new List<Album>();
-            for (int i = offset; i < filtered.Count && window.Count < limit; i++) window.Add(filtered[i]);
-            return new DiscographyPage(window, total);
-        }
-
-        var page = await LiveDiscography(uri, kind, offset, limit, ct).ConfigureAwait(false);
-        // null → the fetch failed; throw so VirtualCollection clears the in-flight page guard and retries on next re-window.
-        if (page is null) throw new InvalidOperationException($"Spotify discography ({kind}) page fetch returned no response.");
-        // Return the live page with ITS OWN Total UNTOUCHED — never clamp a fresh authoritative total up to a stale cached one.
-        return page;
+        if (limit <= 0) return new DiscographyPage(Array.Empty<Album>(), filtered.Count);   // total-only probe
+        var window = new List<Album>();
+        for (int i = offset; i < filtered.Count && window.Count < limit; i++) window.Add(filtered[i]);
+        return new DiscographyPage(window, filtered.Count);
     }
 
-    // The artist overview (TopTracks/stats/palette/bio) is a heavy Pathfinder GraphQL read; revalidate it on a generous
-    // window rather than on every open. Longer than the 1h entity-metadata Etag because artist stats/discography change
-    // slowly. (Tunable: drop to TimeSpan.FromHours(1) to mirror the Etag path exactly.)
-    static readonly TimeSpan ArtistOverviewTtl = TimeSpan.FromHours(12);
-
-    // First open fetches the detail envelope. Albums are upgraded until they have BOTH tracks and the full Pathfinder
-    // metadata; a track-only extended-metadata album is not allowed to strand the page without artist art/releases.
+    // First open fetches the detail envelope over the V4 pipeline (ArtistDiscography for artists, EnsureAlbumAsync for
+    // albums). The gates below decide when a read is cold enough to fetch. Album rows expose play counts, which are not
+    // present in AlbumV4/TrackV4, so an album read is complete only after the Pathfinder Full envelope has landed.
     async Task EnsureFetchedAsync(string uri, CancellationToken ct)
     {
         // Playlist on-open routing through the sync loop (SWR, §2.6): a MISSING membership baseline → blocking first
@@ -201,17 +180,34 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
             need = !_store.HasMembership(uri);
         else if (uri.StartsWith("spotify:album:", StringComparison.Ordinal))
         {
-            var album = _store.GetAlbum(uri);
-            need = album is null || album.Tracks is null or { Count: 0 } || album.Hydration < AlbumHydrationLevel.Full;
+            // V4 supplies the fast tracklist, but not play counts. Require Full hydration so EnsureAlbumAsync also lands
+            // the getAlbum envelope before the detail model is published. A cached Full album remains a zero-network read.
+            // A tracklist with UNNAMED rows is still cold: AlbumV4 disc tracks are frequently gid-only on the wire (the
+            // prefetch's Wave 2 lands them like that before Wave 3 enriches), so "has tracks" alone is not hydrated —
+            // without this clause the open path never runs the TrackV4 enrichment and the page renders empty titles.
+            need = !IsAlbumComplete(_store.GetAlbum(uri));
         }
         else if (uri.StartsWith("spotify:artist:", StringComparison.Ordinal))
         {
-            // SWR: re-fetch when the overview is missing its top tracks OR the freshness stamp is older than the TTL. A
-            // record persisted by an earlier build has FetchedAt == default (epoch) → reads as stale → heals on next open.
+            // V4 ensure is SWR-cheap (etag/resident-skip), so no TTL clause — re-run whenever the discography is missing or
+            // still a bare stub. TopAlbums[0].Name empty ⇒ the ArtistV4 stubs haven't been upgraded to resident cards yet.
             var a = _store.GetArtist(uri);
-            need = a is null || a.TopTracks is null or { Count: 0 } || DateTimeOffset.UtcNow - a.FetchedAt > ArtistOverviewTtl;
+            need = a is null || a.TopAlbums is null or { Count: 0 } || a.TopAlbums[0].Name.Length == 0;
         }
         if (need) { try { await fetch(uri, ct).ConfigureAwait(false); } catch { } }
+    }
+
+    // Shared with the live EnsureAlbumAsync callback. `Full` describes the detail envelope that was mapped; it does not
+    // prove that a usable track list landed. A transient/partial Pathfinder response can otherwise seal an empty album as
+    // Full forever: StoreLibrarySource asks for repair, while the callback returns before doing the repair.
+    internal static bool IsAlbumComplete(Album? album)
+        => album is { Hydration: AlbumHydrationLevel.Full, Tracks: { Count: > 0 } tracks }
+           && !HasUnnamedTrack(tracks);
+
+    static bool HasUnnamedTrack(IReadOnlyList<Track> tracks)
+    {
+        for (int i = 0; i < tracks.Count; i++) if (tracks[i].Title.Length == 0) return true;
+        return false;
     }
 
     public async IAsyncEnumerable<TrackPage> StreamTracksAsync(string contextUri, [EnumeratorCancellation] CancellationToken ct = default)
@@ -273,6 +269,14 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         return new SearchResults(tracks, Array.Empty<Album>(), Array.Empty<Artist>(), Array.Empty<Playlist>(),
             TracksTotal: tracks.Count);
     }
+
+    // Offline, cache-only full-text library search (the library page's left search box). Scans the RESIDENT store only —
+    // never the network — so it stays instant; ranked+grouped by LibrarySearchIndex. Off the UI thread (Store reads are
+    // lock-safe); an empty store / empty query → Empty.
+    public Task<LibrarySearchResults> SearchLibraryAsync(string query, LibrarySearchScope scope, CancellationToken ct = default)
+        => query.Trim().Length == 0
+            ? Task.FromResult(LibrarySearchResults.Empty)
+            : Task.Run(() => LibrarySearchIndex.Run(_store, scope, query), ct);
 
     public async Task<IReadOnlyList<string>> SuggestAsync(string query, CancellationToken ct = default)
     {

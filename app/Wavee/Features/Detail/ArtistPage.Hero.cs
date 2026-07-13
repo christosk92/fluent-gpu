@@ -62,7 +62,7 @@ sealed partial class ArtistPage : Component
                         Children =
                         [
                             PlayPill(play), Fab(Icons.Shuffle, shuffle),
-                            Embed.Comp(() => new FollowButton(uri, a.Name)) with { SkeletonProxy = FollowButton.SkeletonShape },
+                            Embed.Comp(() => new FollowButton(uri, a.Name, WhiteText)) with { SkeletonProxy = FollowButton.SkeletonShape },
                             ArtistRadioPill(radio)
                         ],
                     },
@@ -112,19 +112,8 @@ sealed partial class ArtistPage : Component
                 TransformOriginX = 0.5f, TransformOriginY = 0f,
                 // Deeper bottom fade (was 200) so the soft zone still covers the collapse clip line even with the photo's
                 // parallax lag shifting it up — keeps the live shrinking edge soft instead of a hard cut.
-                EdgeFade = new EdgeFadeSpec(EdgeMask.Bottom, 260f),
-                Children =
-                [
-                    heroArt,
-                    new BoxEl
-                    {
-                        Width = w, Height = height,
-                        Gradient = LinearGradient(180f,
-                            new GradientStop(0f, Scrim(0f)),
-                            new GradientStop(0.5f, Scrim(0.22f)),
-                            new GradientStop(1f, Scrim(0.78f))),
-                    },
-                ],
+                EdgeFade = new EdgeFadeSpec(EdgeMask.Bottom, ArtistHeroLayout.PhotoFadeBand),
+                Children = [heroArt],
             };
             // Parallax: the photo rises at ~65% of the collapse rate, so it lags behind the copy (which rides the live
             // bottom edge at full rate). The differential between the two layers is the depth cue. Linear because it's
@@ -140,10 +129,37 @@ sealed partial class ArtistPage : Component
                 Children = [media],
             };
 
+            // Contrast belongs ABOVE the edge-faded media, not inside it. The old scrim was a child of `media`, so the
+            // same Bottom EdgeFade that dissolved the photo also erased its contrast exactly behind the bottom-anchored
+            // copy. A binary black/white palette choice cannot solve mixed collages; this localized veil guarantees the
+            // white hero type/buttons remain readable over both pale faces and dark hair, then fades before the page seam.
+            //
+            // AT MOST 4 STOPS: GradientSpec.MaxStops is 4 and the recorder silently DROPS extras — a 6-stop version of
+            // this veil lost its two release stops, so the last kept stop (peak alpha) held solid to the hero's bottom
+            // edge: a hard-cut dark plate instead of a fade. The shader clamps to the first stop's colour before its
+            // offset, so the transparent top zone needs no explicit 0-offset stop.
+            //
+            // GradientDown, NOT LinearGradient(180f): 180° is the HORIZONTAL axis (right→left) — authored that way
+            // this veil painted a sideways dark band down the hero's full height, which hard-clipped at the
+            // presented-height edge: THE seam line at the hero↔content boundary.
+            var copyContrast = new BoxEl
+            {
+                Width = w, Height = height, HitTestPassThrough = true,
+                Gradient = GradientDown(
+                    new GradientStop(0.34f, Scrim(0f)),
+                    new GradientStop(0.68f, Scrim(0.55f)),
+                    new GradientStop(0.90f, Scrim(0.22f)),
+                    new GradientStop(1f, Scrim(0f))),
+                ScrollBinds =
+                [
+                    new() { From = ScrollChannel.Offset, To = BindSink.Opacity, Range = ScrollRange.Px(height * 0.16f, height * 0.66f), OutStart = 1f, OutEnd = 0f, Ease = Easing.Linear },
+                ],
+            };
+
             return new BoxEl
             {
                 Width = w, Height = height, ZStack = true, ClipToBounds = true,
-                Children = [heroParallax, overlay],
+                Children = [heroParallax, copyContrast, overlay],
             };
         }
 

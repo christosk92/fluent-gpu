@@ -1054,12 +1054,21 @@ public sealed class OverlayHost : Component
 
     static BoxEl Positioned(OverlayEntry e) => e.Chrome == PopupChrome.Modal ? PositionedModal(e) : PositionedAnchored(e);
 
+    // BOTH positioning hosts are full-bleed layers above the scrim and the page: they must gate their SUBTREE with
+    // HitTestVisible (a closing popup goes inert) but must never take a hit THEMSELVES (HitTestPassThrough = self
+    // yields, children keep). A handler-less full-bleed wrapper is invisible to the interaction-gated Hit walk, but
+    // HitTestAny (the wheel's scroll-target resolve) is background-gated — without the pass-through, ANY open
+    // popup/tooltip made the wrapper the window-wide deepest hit, whose ancestor chain has no scroller: wheel
+    // scrolling died everywhere while a mere tooltip was showing, and outside-input probing above the scrim landed
+    // on the wrapper instead of the surface beneath. A tooltip must NEVER block input (its bubble is already
+    // hit-test-invisible); this keeps the promise at the host layer too.
     static BoxEl PositionedModal(OverlayEntry e) => new BoxEl
     {
         Width = float.NaN,
         Height = float.NaN,
         Grow = 1,
         HitTestVisible = e.Phase != OverlayPhase.Closing,
+        HitTestPassThrough = true,
         Direction = 1,
         AlignItems = FlexAlign.Center,
         Justify = FlexJustify.Center,
@@ -1080,6 +1089,7 @@ public sealed class OverlayHost : Component
     {
         Grow = 1,
         HitTestVisible = e.Phase != OverlayPhase.Closing,
+        HitTestPassThrough = true,
         Direction = 1,
         AlignItems = FlexAlign.Start,
         Justify = FlexJustify.Start,
@@ -1090,6 +1100,10 @@ public sealed class OverlayHost : Component
                 Direction = 1,
                 AlignSelf = FlexAlign.Start,
                 OnRealized = h => e.WrapperNode = h,
+                // The translated positioning box sits exactly over the popup rect; it too must yield self (its
+                // CONTENT — the FlyoutSurface plate — is the real hit surface) so a hit-test-invisible tooltip
+                // bubble lets wheel/clicks fall through to the page beneath it.
+                HitTestPassThrough = true,
                 Children =
                 [
                     Embed.Comp(() => new FlyoutSurface
@@ -1141,6 +1155,11 @@ internal sealed class FlyoutSurface : Component
                 TransformOriginX = 0.5f,
                 TransformOriginY = 0.5f,
                 OnRealized = h => OnSurface?.Invoke(h),
+                // A chrome-less surface is just a transform/clip host — the BODY decides what hit-tests. Without
+                // this, HitTestAny (wheel scroll-target resolve) treated this transparent box as the deepest hit
+                // over the popup rect, so a hit-test-invisible tooltip bubble still swallowed wheel under it.
+                // Menu/Flyout chrome (below) keeps its opaque plate as a real hit surface — WinUI parity.
+                HitTestPassThrough = true,
                 Children = [Body],
             };
         }

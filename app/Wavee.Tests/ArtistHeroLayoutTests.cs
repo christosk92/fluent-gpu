@@ -30,4 +30,18 @@ public class ArtistHeroLayoutTests
         Assert.True(narrow > medium);
         Assert.True(medium > wide);
     }
+
+    [Theory]
+    [InlineData(420f)]
+    [InlineData(660f)]
+    [InlineData(900f)]
+    [InlineData(1200f)]
+    public void BlendBackdrop_ExtendsPastHeroAndReleasesInContent(float width)
+    {
+        float hero = ArtistHeroLayout.HeroHeightFor(width);
+        float backdrop = ArtistHeroLayout.BlendBackdropHeightFor(width);
+
+        Assert.Equal(ArtistHeroLayout.ContentBlendTail, backdrop - hero);
+        Assert.Equal(hero / backdrop, ArtistHeroLayout.BlendBoundaryFor(width), 5);
+    }
 }

@@ -65,6 +65,7 @@ public static class ScrollBindEval
             {
                 ref ScrollBind b = ref table.At(s);
                 if (b.PinKind == 0 || !scene.IsLive(b.Target)) continue;
+                if (b.PinKind == 3) { ApplyStickyClip(scene, ref b, in sc, vp); continue; }   // clip, not a pin — no StuckTop
                 anyStuckTop |= ApplyPin(scene, ref b, in sc, vp);
             }
 
@@ -171,6 +172,45 @@ public static class ScrollBindEval
             if (pinned != wasPinned) b.OnFlag?.Invoke(pinned);
         }
         return pinned;
+    }
+
+    /// <summary>Sticky clip-top (PinKind 3, <c>ScrollBindDsl.ClipTopAtViewport</c>): the paint dual of
+    /// <see cref="ApplyPin"/> — instead of translating the node to HOLD the viewport line, write the node-local
+    /// ClipRect TOP so the node's pixels STOP at it (viewport top + inset). Content scrolling under chrome pinned on
+    /// that line is guillotined there, so the page's real backdrop (Mica/tint) shows behind the chrome instead of the
+    /// content sliding through it. Same content-space geometry + device-grid snap as the pin. While the line sits
+    /// at/above the node's top the clip is RELEASED back to <see cref="RectF.Infinite"/> (never left stale); engaged
+    /// clips keep their sides at ±1e8 — inside the sentinel band, since <see cref="RectF.IsInfinite"/> keys off X.
+    /// This bind owns the node's whole ClipRect (documented in the DSL). OnFlag fires per engage/release edge.</summary>
+    static void ApplyStickyClip(SceneStore scene, ref ScrollBind b, in ScrollState sc, NodeHandle vp)
+    {
+        NodeHandle n = b.Target;
+        if (sc.ContentNode.IsNull) return;
+        float yN = NodeYInContent(scene, n, vp, sc.ContentNode, out bool inContent);
+        if (!inContent) return;
+        float top = sc.OffsetY + b.Inset - yN;                     // node-local y of the viewport-anchored line
+        float s = scene.DeviceScale;
+        if (float.IsFinite(s) && s > 0f) top = MathF.Round(top * s) / s;
+        bool clipping = top > 0f;
+        float applied = clipping ? top : -1e9f;                    // -1e9 = the released sentinel
+        // Change-gate against the LIVE paint (exactly like ApplyPin's LocalTransform.Dy compare), NOT a cached
+        // last-written: paint can be re-derived between passes, and a cached gate would skip the healing re-write,
+        // leaving the clip permanently released.
+        ref NodePaint p = ref scene.Paint(n);
+        float cur = p.ClipRect.IsInfinite ? -1e9f : p.ClipRect.Y;
+        if (MathF.Abs(applied - cur) > 0.01f)
+        {
+            p.ClipRect = clipping ? RectF.FromLTRB(-1e8f, top, 1e8f, 1e8f) : RectF.Infinite;
+            scene.Mark(n, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+        }
+        // Edge-only, and the unset state counts as "not clipping" — the first evaluation of a released clip must NOT
+        // fire a spurious false (mirrors ApplyPin, whose initial unpinned state fires nothing).
+        if (b.OnFlag is { } flag)
+        {
+            bool was = b.OnFlagHasLast && b.OnFlagLast;
+            if (clipping != was) flag.Invoke(clipping);
+            b.OnFlagLast = clipping; b.OnFlagHasLast = true;
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────────────────────────

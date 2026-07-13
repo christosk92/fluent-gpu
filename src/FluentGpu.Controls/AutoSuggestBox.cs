@@ -223,6 +223,12 @@ public sealed class AutoSuggestBox : Component
     //    by the layout (root MaxWidth), so _selfW already reflects it — no extra clamp here. Before the first bounds
     //    report (_selfW == 0) fall back to the cap, else the fixed Width, for one frame.
     //  • otherwise: the fixed Width.
+    // A suggestion source EXISTS iff there are static suggestions, a live suggestions/loading signal, or a custom
+    // presenter. With NONE (the plain-filter usage: an empty static list, no signals), the box is just a text field —
+    // it must never open the popup (WinUI opens iff there's something to show; an empty source is not "No results found").
+    internal bool HasSuggestionSource =>
+        Suggestions is { Count: > 0 } || SuggestionsSignal is not null || LoadingSignal is not null || Presenter is not null;
+
     internal float EffectiveWidth =>
         WidthSignal is { } ws ? MathF.Min(Width, ws.Value) :
         Grow > 0f            ? (_selfW.Value > 0f ? _selfW.Value : (MaxFillWidth > 0f ? MaxFillWidth : Width)) :
@@ -355,7 +361,7 @@ public sealed class AutoSuggestBox : Component
                 Presenter?.ResetSelection?.Invoke();
                 userTyped.Value = q;                    // m_userTypedText = strQueryText (only on _UserInput, cpp:479)
                 highlight.Value = -1;                   // a fresh user edit resets the keyboard cursor (cpp:484–496)
-                if (q.Length > 0) OpenPopup();          // keep the attached popup open for no-results
+                if (q.Length > 0 && HasSuggestionSource) OpenPopup();   // keep the attached popup open for no-results
                 else Close();
             }
         }, q);
@@ -421,7 +427,7 @@ public sealed class AutoSuggestBox : Component
 
             if (handle.Value is not { IsOpen: true })
             {
-                if (e.KeyCode == Keys.Down && q.Length > 0) { OpenPopup(); e.Handled = true; }
+                if (e.KeyCode == Keys.Down && q.Length > 0 && HasSuggestionSource) { OpenPopup(); e.Handled = true; }
                 return;
             }
 

@@ -180,6 +180,13 @@ float4 PSMain(V i) : SV_Target
     float d = min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
     float fw = max(fwidth(d), 1e-4);
     float cov = saturate(0.5 - d / fw);
+    // Top feather (blurTexel.z = fraction of the layer height, 0 = off): ramp coverage 0→1 from the top edge downward so
+    // the frosted band dissolves continuously into the crisp backdrop (Apple editorial card) instead of a hard blur line.
+    if (blurTexel.z > 0.0)
+    {
+        float distFromTop = (i.local.y + i.half.y) / max(2.0 * i.half.y, 1e-4);   // 0 at top edge → 1 at bottom
+        cov *= smoothstep(0.0, blurTexel.z, distFromTop);
+    }
     // SV_Position is physical px → uv into the blurred snapshot: region-relative position × used fraction of the
     // bucket RT, clamped half a texel inside the used sub-rect (pooled RTs can be larger than the snapshot).
     float2 uv = (i.pos.xy - vpro.zw) / rsuf.xy * rsuf.zw;
@@ -452,7 +459,7 @@ float4 PSMain(V i) : SV_Target
 
     /// <summary>Direct-to-back-buffer frame setup: set THIS frame's SRV parity bank + run pool upkeep, WITHOUT binding or
     /// clearing the full-window canvas (the directBB path renders the scene straight to the back buffer). The canvas is
-    /// retained only as the region-copy scratch for <see cref="SnapshotBackBufferRegion"/>. Replaces <see cref="TickIdle"/>
+    /// retained only as the region-copy scratch for <see cref="SnapshotTargetRegion"/>. Replaces <see cref="TickIdle"/>
     /// on the directBB path so the retained-backdrop cache's parity-banked SRVs stay correct when an acrylic is present.</summary>
     public void BeginFrameDirect(ulong completedFence, int parity)
     {
@@ -568,12 +575,16 @@ float4 PSMain(V i) : SV_Target
     /// <summary>Pass D: composite the WinUI acrylic recipe into the canvas at the rounded layer rect, sampling the
     /// blurred snapshot in pool entry <paramref name="ia"/> — shared by the re-blur and the cache-hit paths.</summary>
     private void Composite(ID3D12GraphicsCommandList* cmd, in PushLayerCmd L, float lw, float lh, int rx, int ry, int rw, int rh, int ia, int dw, int dh,
-        D3D12_CPU_DESCRIPTOR_HANDLE targetRtv, bool targetIsCanvas)
+        D3D12_CPU_DESCRIPTOR_HANDLE targetRtv, bool targetIsCanvas, RECT compositeScissor)
     {
         float aw = _pool[ia].W, ah = _pool[ia].H;
         Barrier(cmd, _pool[ia].Res, ref _pool[ia].State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         if (targetIsCanvas) Barrier(cmd, _canvas, ref _canvasState, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
         cmd->OMSetRenderTargets(1, &targetRtv, BOOL.FALSE, null); SetViewport(cmd, _w, _h);
+        // Clip the frosted composite to the active clip stack (scroll viewport / ClipToBounds ancestors). SetViewport reset
+        // the scissor to the whole window; without this override the acrylic band alone paints outside its scrolling
+        // container, bleeding over pinned chrome (sticky nav / player bar) — every other layer kind already honors this.
+        RECT sc = compositeScissor; cmd->RSSetScissorRects(1, &sc);
         cmd->SetGraphicsRootSignature(_compRoot);
         cmd->SetPipelineState(_compPso);
         Span<float> cc = _scratch28;
@@ -583,7 +594,7 @@ float4 PSMain(V i) : SV_Target
         cc[12] = L.Tint.R; cc[13] = L.Tint.G; cc[14] = L.Tint.B; cc[15] = L.Tint.A;
         cc[16] = L.Fallback.R; cc[17] = L.Fallback.G; cc[18] = L.Fallback.B; cc[19] = L.Fallback.A;
         cc[20] = L.Radii.TopLeft; cc[21] = L.TintOpacity; cc[22] = L.LuminosityOpacity; cc[23] = L.NoiseOpacity;
-        cc[24] = 1f / aw; cc[25] = 1f / ah; cc[26] = 0f; cc[27] = 0f;
+        cc[24] = 1f / aw; cc[25] = 1f / ah; cc[26] = Math.Clamp(L.FeatherFrac, 0f, 1f); cc[27] = 0f;
         fixed (float* c = cc) cmd->SetGraphicsRoot32BitConstants(0, 28, c, 0);
         cmd->SetGraphicsRootDescriptorTable(1, SrvGpu(PoolSrvSlot(ia)));
         cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
@@ -634,14 +645,15 @@ float4 PSMain(V i) : SV_Target
     /// result for a keyed (<see cref="PushLayerCmd.LayerId"/> != 0) layer. Leaves the canvas bound for continued drawing.
     /// The damage rect (physical px) is this frame's union of moved-node bounds (SceneRecorder) — empty ⇒ reuse.</summary>
     public void BlurAndComposite(ID3D12GraphicsCommandList* cmd, in PushLayerCmd L, float lw, float lh, float scale, ulong frameFence,
-        float dmgX, float dmgY, float dmgW, float dmgH, ID3D12Resource* backBuffer = null, D3D12_CPU_DESCRIPTOR_HANDLE backRtv = default)
+        float dmgX, float dmgY, float dmgW, float dmgH, RECT compositeScissor, ulong backdropSourceId,
+        ID3D12Resource* backdropTarget = null, D3D12_CPU_DESCRIPTOR_HANDLE targetRtv = default)
     {
         if (scale <= 0f) scale = 1f;
         // directBB: when D3D12Device renders straight to the back buffer, snapshot ONLY the small region under this acrylic
         // from the back buffer (into the canvas — the existing region-copy scratch) and composite back onto the back
         // buffer, so a frosted in-app pill/bar no longer forces the whole-window scene→canvas render + blit.
-        bool direct = backBuffer != null;
-        var compTarget = direct ? backRtv : Rtv(0);
+        bool external = backdropTarget != null;
+        var compTarget = external ? targetRtv : Rtv(0);
         int down = AcrylicBackdropMath.DownsampleFactor(L.BlurSigma, scale);
         AcrylicBackdropMath.SnapshotRegion(L.DeviceRect, scale, down, (int)_w, (int)_h, out int rx, out int ry, out int rw, out int rh);
         int dw = Math.Max(1, (rw + down - 1) / down), dh = Math.Max(1, (rh + down - 1) / down);
@@ -651,7 +663,8 @@ float4 PSMain(V i) : SV_Target
         // ── retained-backdrop cache: a stationary acrylic surface reuses its blurred snapshot across frames — re-blur
         // ONLY when its geometry changed OR this frame's damage region touches its snapshot region. So scrolling INSIDE
         // a popup (the backdrop behind it is static) composites the cached blur with passes A/B/C skipped. ──
-        var nowStamp = AcrylicBackdropMath.Stamp(L.DeviceRect, L.BlurSigma, scale, (int)_w, (int)_h);
+        var nowStamp = AcrylicBackdropMath.Stamp(L.DeviceRect, L.BlurSigma, scale, (int)_w, (int)_h,
+            backdropSourceId, compositeScissor.left, compositeScissor.top, compositeScissor.right, compositeScissor.bottom);
         var regionPhys = new RectF(rx, ry, rw, rh);
         var damagePhys = new RectF(dmgX, dmgY, dmgW, dmgH);
         if (L.LayerId != 0)
@@ -662,10 +675,10 @@ float4 PSMain(V i) : SV_Target
                 ref var hit = ref _pool[pin];
                 hit.InUse = true; hit.IdleFrames = 0; hit.LastUseFence = frameFence;
                 CreateSrv(hit.Res, SrvCpu(PoolSrvSlot(pin)));     // refresh THIS frame's parity bank for the composite sample
-                Composite(cmd, in L, lw, lh, rx, ry, rw, rh, pin, dw, dh, compTarget, !direct);
+                Composite(cmd, in L, lw, lh, rx, ry, rw, rh, pin, dw, dh, compTarget, !external, compositeScissor);
                 hit.InUse = false;
                 LayersThisFrame++; CacheHitsThisFrame++;
-                if (!direct) BindCanvas(cmd);   // directBB leaves the back buffer bound (Composite bound it) for continued drawing
+                if (!external) BindCanvas(cmd);
                 return;
             }
         }
@@ -677,7 +690,7 @@ float4 PSMain(V i) : SV_Target
         int ib = Acquire(dw, dh, frameFence);   // ping-pong intermediate (always transient)
 
         // directBB MISS: copy the back-buffer region into the canvas (same coords) so pass A reads the real backdrop.
-        if (direct) SnapshotBackBufferRegion(cmd, backBuffer, rx, ry, rw, rh);
+        if (external) SnapshotTargetRegion(cmd, backdropTarget, rx, ry, rw, rh, compositeScissor);
         // pass A: snapshot + downsample the backdrop region (canvas sub-rect) → ia at 1/down resolution
         Barrier(cmd, _canvas, ref _canvasState, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         Barrier(cmd, _pool[ia].Res, ref _pool[ia].State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -718,14 +731,14 @@ float4 PSMain(V i) : SV_Target
         FullScreen(cmd, _blurPso, PoolSrvSlot(ib), _scratch8);
 
         // pass D: composite the acrylic recipe onto the target — the canvas, or the back buffer on directBB (samples blurred ia)
-        Composite(cmd, in L, lw, lh, rx, ry, rw, rh, ia, dw, dh, compTarget, !direct);
+        Composite(cmd, in L, lw, lh, rx, ry, rw, rh, ia, dw, dh, compTarget, !external, compositeScissor);
 
         if (cache) { _pool[ia].Stamp = nowStamp; _pool[ia].InUse = false; }   // KEEP ia pinned; record what it blurred
         else Release(ia);
         Release(ib);                                                          // ping-pong scratch → free list
         LayersThisFrame++;
 
-        if (!direct) BindCanvas(cmd);   // canvas path leaves the canvas bound; directBB leaves the back buffer bound (Composite)
+        if (!external) BindCanvas(cmd);
     }
 
     /// <summary>Blit the finished canvas to the back buffer (already bound as the render target by the caller).</summary>
@@ -747,17 +760,33 @@ float4 PSMain(V i) : SV_Target
     /// COPY_SOURCE and back to RENDER_TARGET via RAW (untracked) barriers that NET to no change, so D3D12Device's
     /// explicit-state back-buffer tracking (RENDER_TARGET across the submit, then RT→PRESENT) stays consistent. Canvas and
     /// back buffer are both B8G8R8A8_UNORM with a null-desc RTV, so the copy is bit-exact and the colour space matches.</summary>
-    public void SnapshotBackBufferRegion(ID3D12GraphicsCommandList* cmd, ID3D12Resource* backBuffer, int rx, int ry, int rw, int rh)
+    public void SnapshotTargetRegion(ID3D12GraphicsCommandList* cmd, ID3D12Resource* target,
+        int rx, int ry, int rw, int rh, RECT sourceClip)
     {
         if (rw <= 0 || rh <= 0 || _canvas == null) return;
-        RawTransition(cmd, backBuffer, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_SOURCE);
+
+        // A nested group's pooled RT is valid only inside its active clip. Clear the padded scratch capture first, then
+        // copy the valid intersection so pixels left by an earlier pool lease can never bleed into this blur.
+        Barrier(cmd, _canvas, ref _canvasState, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
+        var canvasRtv = Rtv(0);
+        cmd->OMSetRenderTargets(1, &canvasRtv, BOOL.FALSE, null);
+        _scratch4[0] = _scratch4[1] = _scratch4[2] = _scratch4[3] = 0f;
+        RECT clearRect = new() { left = rx, top = ry, right = rx + rw, bottom = ry + rh };
+        fixed (float* clear = _scratch4) cmd->ClearRenderTargetView(canvasRtv, clear, 1, &clearRect);
+
+        int left = Math.Max(rx, sourceClip.left), top = Math.Max(ry, sourceClip.top);
+        int right = Math.Min(rx + rw, sourceClip.right), bottom = Math.Min(ry + rh, sourceClip.bottom);
         Barrier(cmd, _canvas, ref _canvasState, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST);
-        D3D12_TEXTURE_COPY_LOCATION dst = default; dst.pResource = _canvas; dst.Type = D3D12_TEXTURE_COPY_TYPE.D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX; dst.Anonymous.SubresourceIndex = 0;
-        D3D12_TEXTURE_COPY_LOCATION src = default; src.pResource = backBuffer; src.Type = D3D12_TEXTURE_COPY_TYPE.D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX; src.Anonymous.SubresourceIndex = 0;
-        D3D12_BOX box = new() { left = (uint)rx, top = (uint)ry, front = 0, right = (uint)(rx + rw), bottom = (uint)(ry + rh), back = 1 };
-        cmd->CopyTextureRegion(&dst, (uint)rx, (uint)ry, 0, &src, &box);   // → canvas at the SAME (rx,ry)
-        RawTransition(cmd, backBuffer, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
-        // _canvas left COPY_DEST; the snapshot pass's Barrier(_canvas → PIXEL_SHADER_RESOURCE) completes the transition.
+        if (right > left && bottom > top)
+        {
+            RawTransition(cmd, target, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_SOURCE);
+            D3D12_TEXTURE_COPY_LOCATION dst = default; dst.pResource = _canvas; dst.Type = D3D12_TEXTURE_COPY_TYPE.D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX; dst.Anonymous.SubresourceIndex = 0;
+            D3D12_TEXTURE_COPY_LOCATION src = default; src.pResource = target; src.Type = D3D12_TEXTURE_COPY_TYPE.D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX; src.Anonymous.SubresourceIndex = 0;
+            D3D12_BOX box = new() { left = (uint)left, top = (uint)top, front = 0, right = (uint)right, bottom = (uint)bottom, back = 1 };
+            cmd->CopyTextureRegion(&dst, (uint)left, (uint)top, 0, &src, &box);
+            RawTransition(cmd, target, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
+        }
+        // _canvas left COPY_DEST; the snapshot pass transitions it to PIXEL_SHADER_RESOURCE.
     }
 
     private static void RawTransition(ID3D12GraphicsCommandList* cmd, ID3D12Resource* res, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after)

@@ -7,6 +7,10 @@ public static class ArtistHeroLayout
     public const float NarrowHeight = 640f;
     public const float WideWidth = 900f;
     public const float NarrowWidth = 420f;
+    public const float PhotoFadeBand = 260f;
+    /// <summary>How far past the hero the translucent accent wash keeps painting before releasing to alpha 0 —
+    /// the wash dissolves THROUGH the first content band rather than cutting off at the hero's bottom edge.</summary>
+    public const float ContentBlendTail = 320f;
 
     public static float HeroHeightFor(float width)
     {
@@ -17,4 +21,13 @@ public static class ArtistHeroLayout
         float t = (width - NarrowWidth) / (WideWidth - NarrowWidth);
         return NarrowHeight + (WideHeight - NarrowHeight) * t;
     }
+
+    public static float BlendBackdropHeightFor(float width) => HeroHeightFor(width) + ContentBlendTail;
+
+    public static float BlendBoundaryFor(float width)
+    {
+        float h = HeroHeightFor(width);
+        return h / (h + ContentBlendTail);
+    }
+
 }

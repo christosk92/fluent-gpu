@@ -108,6 +108,46 @@ static class PeAndSignature
         }
     }
 
+    /// <summary>Opens the native Windows certificate/signature viewer for a signed PE file (cryptui.dll).</summary>
+    [SupportedOSPlatform("windows")]
+    public static bool TryShowNativeSignatureDialog(string path, nint hwndParent = 0)
+    {
+        if (!OperatingSystem.IsWindows() || string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            return false;
+
+        IntPtr dup = IntPtr.Zero;
+        try
+        {
+#pragma warning disable SYSLIB0057
+            using var cert = new X509Certificate2(X509Certificate.CreateFromSignedFile(path));
+#pragma warning restore SYSLIB0057
+            dup = CertDuplicateCertificateContext(cert.Handle);
+            if (dup == IntPtr.Zero) return false;
+
+            var view = new CRYPTUI_VIEWCERTIFICATE_STRUCT
+            {
+                dwSize = (uint)Marshal.SizeOf<CRYPTUI_VIEWCERTIFICATE_STRUCT>(),
+                hwndParent = hwndParent,
+                dwFlags = CRYPTUI_DISABLE_ADDTOSTORE,
+                szTitle = "Digital Signature",
+                pCertContext = dup,
+            };
+            return CryptUIDlgViewCertificate(ref view, out _);
+        }
+        catch (CryptographicException)
+        {
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
+        finally
+        {
+            if (dup != IntPtr.Zero) CertFreeCertificateContext(dup);
+        }
+    }
+
     [SupportedOSPlatform("windows")]
     public static DigitalSignatureInfo? TryReadDigitalSignatureInfo(string path, SignatureTrust trust, string reason)
     {
@@ -150,6 +190,41 @@ static class PeAndSignature
 
     [DllImport("wintrust.dll", ExactSpelling = true, CharSet = CharSet.Unicode)]
     static extern int WinVerifyTrust(IntPtr hwnd, ref Guid pgActionID, ref WINTRUST_DATA pWVTData);
+
+    const uint CRYPTUI_DISABLE_ADDTOSTORE = 0x00000010;
+
+    [DllImport("cryptui.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern bool CryptUIDlgViewCertificate(ref CRYPTUI_VIEWCERTIFICATE_STRUCT pCryptUIViewCert, out bool pfPropertiesChanged);
+
+    [DllImport("crypt32.dll", SetLastError = true)]
+    static extern IntPtr CertDuplicateCertificateContext(IntPtr pCertContext);
+
+    [DllImport("crypt32.dll", SetLastError = true)]
+    static extern bool CertFreeCertificateContext(IntPtr pCertContext);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    struct CRYPTUI_VIEWCERTIFICATE_STRUCT
+    {
+        public uint dwSize;
+        public IntPtr hwndParent;
+        public uint dwFlags;
+        public string? szTitle;
+        public IntPtr pCertContext;
+        public IntPtr rgszPurposes;
+        public uint cPurposes;
+        // Native union: CRYPT_PROVIDER_DATA* pCryptProviderData / HANDLE hWVTStateData.
+        public IntPtr pCryptProviderData;
+        public int fpCryptProviderDataTrustedUsage;
+        public uint idxSigner;
+        public uint idxCert;
+        public int fCounterSigner;
+        public uint idxCounterSigner;
+        public uint cStores;
+        public IntPtr rghStores;
+        public uint cPropSheetPages;
+        public IntPtr rgPropSheetPages;
+        public uint nStartPage;
+    }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     struct WINTRUST_FILE_INFO_W

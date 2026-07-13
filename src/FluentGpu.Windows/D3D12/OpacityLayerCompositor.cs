@@ -590,6 +590,13 @@ float4 PSMain(V i) : SV_Target
         cmd->OMSetRenderTargets(1, &rtv, BOOL.FALSE, null);
     }
 
+    /// <summary>The canvas-sized render target currently owned by an open group. Acrylic nested inside that group must
+    /// sample and composite against this target—not the main back buffer—or the group's later composite overwrites it.</summary>
+    public ID3D12Resource* TargetResource(int slot) => _pool[slot].Res;
+
+    /// <summary>RTV paired with <see cref="TargetResource"/> for an open group slot.</summary>
+    public D3D12_CPU_DESCRIPTOR_HANDLE TargetRtv(int slot) => Rtv(slot);
+
     /// <summary>Transition the slot to shader-readable. Call BEFORE the caller binds the underlying target for
     /// <see cref="Composite"/> (split out so the caller controls which target the composite lands on).</summary>
     public void BeginRead(ID3D12GraphicsCommandList* cmd, int slot)

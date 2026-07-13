@@ -95,6 +95,9 @@ sealed class DetailShell : Component
     public override Element Render()
     {
         var svc = UseContext(Services.Slot);
+        var settings = _settings ?? svc?.Settings;
+        _ = AppearancePrefs.Epoch.Value;
+        bool colorWashesDisabled = settings?.Get(WaveeSettings.DisableColorWashes) ?? false;
         var bridge = UseContext(PlaybackBridge.Slot);
         var libBridge = UseContext(LibraryBridge.Slot);
         var go = UseContext(HistoryStore.NavCtx);
@@ -145,7 +148,7 @@ sealed class DetailShell : Component
             : WaveePalette.BackgroundDark(art ?? WaveePalette.Neutral);
         // The Mica scrim colour: the art's tinted-dark tone at a low alpha so Mica keeps reading as Mica (≈0.14). Null
         // when there is no real palette ⇒ plain Mica.
-        ColorF? micaTint = (art is null || !_cfg.TwoColumn) ? null : Tok.Theme == ThemeKind.Light
+        ColorF? micaTint = (colorWashesDisabled || art is null || !_cfg.TwoColumn) ? null : Tok.Theme == ThemeKind.Light
             ? WaveePalette.Lift(WaveePalette.ToColor(art.Light)) with { A = 0.05f }
             : WaveePalette.TintedDark(art) with { A = 0.14f };
 
@@ -163,7 +166,11 @@ sealed class DetailShell : Component
             if (shellTint is not null && ReferenceEquals(shellTint.Peek().Owner, _tintOwner)) shellTint.Value = default;
         }
 
-        UseEffect(() => SetTint(micaTint), DepKey.From(micaTint?.GetHashCode() ?? 0, shellTint?.GetHashCode() ?? 0));
+        // This shell is reused across detail routes. Key the publication on the exact nullable colour and route instead
+        // of their 32-bit hash: the latter could suppress a real palette change and did not force a fresh ownership
+        // claim when A -> B happened to resolve to the same tint. Reference comparison is correct for the shell signal;
+        // nullable ColorF and routeName compare by value.
+        UseEffect(() => SetTint(micaTint), route.Name, micaTint.HasValue, micaTint.GetValueOrDefault(), Tok.Theme);
         UseActivation(onActivated: () => SetTint(micaTint), onDeactivated: ClearTint);
 
         // ── handlers (close over live svc/model; not frozen ctor args) ──
@@ -199,7 +206,6 @@ sealed class DetailShell : Component
         }
         // ── persisted per-context sort: load once at mount, save on every change (must be assigned BEFORE handlers
         // captures SetSort, which closes over `settings`) ──
-        var settings = _settings ?? svc?.Settings;
         UseEffect(() =>
         {
             // Re-keyed per context: on a detail-route swap (reused slot) load THIS page's persisted sort + density and
@@ -337,9 +343,9 @@ sealed class DetailShell : Component
                 [
                     new BoxEl
                     {
-                        Key = "detail-wash:" + (art?.GetHashCode() ?? 0) + ":" + Tok.Theme,
+                        Key = "detail-wash:" + (art?.GetHashCode() ?? 0) + ":" + Tok.Theme + ":" + colorWashesDisabled,
                         ZStack = true, Grow = 1f, HitTestVisible = false,
-                        Gradient = Surfaces.HeroWash(washColor), Animate = PaletteWashTransition,
+                        Gradient = colorWashesDisabled ? null : Surfaces.HeroWash(washColor), Animate = PaletteWashTransition,
                     },
                     verticalPage,
                 ],
@@ -392,9 +398,9 @@ sealed class DetailShell : Component
             [
                 new BoxEl
                 {
-                    Key = "detail-wash:" + (art?.GetHashCode() ?? 0) + ":" + Tok.Theme,
+                    Key = "detail-wash:" + (art?.GetHashCode() ?? 0) + ":" + Tok.Theme + ":" + colorWashesDisabled,
                     ZStack = true, Grow = 1f, HitTestVisible = false,
-                    Gradient = Surfaces.HeroWash(washColor), Animate = PaletteWashTransition,
+                    Gradient = colorWashesDisabled ? null : Surfaces.HeroWash(washColor), Animate = PaletteWashTransition,
                 },
                 twoColumnPage,
             ],

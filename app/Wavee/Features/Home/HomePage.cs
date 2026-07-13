@@ -109,34 +109,57 @@ sealed class HomePage : Component
             for (int i = 0; i < n; i++) yield return Tile(cards[i], section, i);
         }
 
+        // Conventional discovery modules remain finite, one-row horizontal shelves using the SAME MediaCard.Shelf
+        // component as the rest of the app. PagedShelf clamps at the first/last page and never loops.
         Element Shelf(HomeGroup g) => PagedShelf.Create(
             g.Cards.Count,
             cardAt: (i, w) =>
             {
                 var c = g.Cards[i];
-                // Home descriptions are Spotify HTML fragments. Shelf is the width-aware card path that preserves the
-                // 3-line RichText parser, link navigation, circular artist fallback, and explicit cover geometry. The
-                // width-agnostic GridCard shortcut regressed all four (literal <a href>, one line, blank artists, and a
-                // poorly constrained hover overlay).
                 return MediaCard.Shelf(c.Image, c.Title, c.Subtitle ?? "", c.Uri,
                     () => NavCard(c), () => PlayCard(c), w,
                     circular: c.Kind == HomeCardKind.Artist, onNavUri: NavUri,
                     menu: Menus.CardAttach(acts, menuOverlay, c.Uri, c.Title));
             },
-            measured: true,   // engine measures each card → row is exactly as tall as the tallest card (no reserved height)
-            header: g.Title is { } t ? Surfaces.AccentHeader(t, GroupAccent(g)) : new BoxEl());
+            measured: true,
+            header: g.Title is { Length: > 0 } t ? Surfaces.AccentHeader(t, GroupAccent(g)) : new BoxEl(),
+            pager: ShelfPager.Chevrons,
+            minCardW: 178f, maxCardW: 232f, gap: WaveeSpace.L, edgeFade: 24f,
+            keyOf: i => g.Cards[i].Uri);
+
+        // Baseline recommendations are the deliberate exception: a three-up editorial interruption with full-bleed
+        // artwork and overlaid context/title, matching Apple Music's Top Picks module.
+        Element FeaturedShelf(HomeGroup g) => PagedShelf.Create(
+            g.Cards.Count,
+            cardAt: (i, w) =>
+            {
+                var c = g.Cards[i];
+                return MediaCard.EditorialCard(c.Image, c.Eyebrow, c.Title, c.Subtitle ?? "", c.Uri,
+                    () => NavCard(c), () => PlayCard(c), w,
+                    Menus.CardAttach(acts, menuOverlay, c.Uri, c.Title),
+                    // Hover peek: preview tracks from the batched feedBaselineLookup cache (primed when the feed lands).
+                    previewsOf: Wavee.SpotifyLive.HomeBaselinePreviews.For,
+                    previewsEpoch: Wavee.SpotifyLive.HomeBaselinePreviews.Epoch);
+            },
+            measured: true,
+            header: g.Title is { Length: > 0 } t ? Surfaces.AccentHeader(t, GroupAccent(g)) : new BoxEl(),
+            pager: ShelfPager.Chevrons,
+            // Width-adaptive editorial row, like a normal shelf but larger: the min width drives the column count
+            // (≈3 cols at ~1000px, 4 at ~1300, 5 from ~1600) and maxColumns caps an ultrawide window at 5 — never the
+            // old count-pinned 3-up that ballooned each card to a third of the row. The uncapped maxCardW keeps the
+            // FITTED columns filling the width (no maxCardW slivers); a break with fewer cards than columns simply
+            // shows them at the fitted size.
+            minCardW: 300f, maxCardW: 9999f, gap: WaveeSpace.L, edgeFade: 0f,
+            maxColumns: 5,
+            keyOf: i => g.Cards[i].Uri);
 
         Element Group(HomeGroup g) => g.Kind switch
         {
             HomeGroupKind.QuickGrid => QuickGrid(QuickTiles(g.Cards, g.Title ?? "quick-grid", 8)),
             HomeGroupKind.Hero when g.Cards.Count > 0 => Responsive.Of(w => HeroBand(g.Cards[0], GroupAccent(g), PlayCard, NavCard, w), fallback: 560f),
-            HomeGroupKind.Shelf when g.Cards.Count > 0 => Shelf(g),   // accent-bar header inside the shelf
-            // The "Made for you" region: an accent-bar header + the cards, behind a faintly tinted accent band.
-            HomeGroupKind.CollapsedGrid => Surfaces.SectionBand(new BoxEl
-            {
-                Direction = 1, Gap = WaveeSpace.M,
-                Children = [ g.Title is { } t ? Surfaces.AccentHeader(t, GroupAccent(g)) : new BoxEl(), QuickGrid(QuickTiles(g.Cards, g.Title ?? "", int.MaxValue)) ],
-            }, GroupAccent(g)),
+            HomeGroupKind.Featured when g.Cards.Count > 0 => FeaturedShelf(g),
+            HomeGroupKind.Shelf when g.Cards.Count > 0 => Shelf(g),
+            HomeGroupKind.CollapsedGrid when g.Cards.Count > 0 => Shelf(g),
             _ => new BoxEl(),
         };
 
@@ -155,7 +178,11 @@ sealed class HomePage : Component
                 // idempotent (a re-hit cache entry is a dictionary lookup), so a rare region rebuild costs nothing.
                 foreach (var g in feed.Groups)
                 {
-                    int px = g.Kind == HomeGroupKind.Hero ? 168 : g.Kind == HomeGroupKind.Shelf ? 256 : 64;
+                    // Featured breaks: batch-resolve every card's preview tracks NOW (one feedBaselineLookup per home
+                    // load, the web-player pattern) so the hover peek has data by the time its countdown completes.
+                    if (g.Kind == HomeGroupKind.Featured)
+                        Wavee.SpotifyLive.HomeBaselinePreviews.Prime(g.Cards.Select(c => c.Uri));
+                    int px = g.Kind is HomeGroupKind.Hero or HomeGroupKind.Featured ? 256 : g.Kind == HomeGroupKind.QuickGrid ? 64 : 168;
                     var cards = g.Cards;
                     for (int i = 0; i < cards.Count; i++)
                         if (cards[i].Image?.Url is { Length: > 0 } url) PrefetchImage(url, px);
@@ -206,13 +233,10 @@ sealed class HomePage : Component
         }
     }
 
-    // Lightweight loading skeleton: match the real home shelves (accent header + square media cards + text bars) instead
-    // of generic row rectangles. Sized childless boxes become shimmer bars through the skeleton deriver.
+    // Lightweight loading skeleton: alternating editorial and conventional shelf rows.
     static Element HomeShimmer()
     {
-        const float cardW = 250f;
         const float pad = WaveeSpace.S;
-        const float cover = cardW - 2f * pad;
 
         static Element Bar(float w, float h, float r = 4f) =>
             new BoxEl { Width = w, Height = h, Corners = CornerRadius4.All(r) };
@@ -227,46 +251,36 @@ sealed class HomePage : Component
             ],
         };
 
-        Element ShelfCard() => new BoxEl
+        // A fit-to-width card (Grow + Basis=0) so a fixed-count row divides the width evenly, like the real UniformGrid.
+        static Element GridCard() => new BoxEl
         {
-            Width = cardW,
-            Direction = 1,
-            Gap = pad,
-            Shrink = 0f,
+            Grow = 1f, Basis = 0f, Direction = 1, Gap = pad,
             Padding = new Edges4(pad, pad, pad, WaveeSpace.M),
             Corners = CornerRadius4.All(WaveeRadius.Card),
             Children =
             [
-                Bar(cover, cover, WaveeRadius.Card),
-                Bar(cover * 0.72f, 18f),
-                Bar(cover * 0.86f, 13f),
-                Bar(cover * 0.58f, 13f),
+                new BoxEl { Height = 150f, Corners = CornerRadius4.All(WaveeRadius.Card) },
+                Bar(96f, 16f),
+                Bar(64f, 12f),
             ],
         };
 
-        Element Shelf(float titleW) => new BoxEl
+        static Element Row() => new BoxEl
         {
-            Direction = 1,
-            Gap = WaveeSpace.M,
-            ClipToBounds = true,
-            Children =
-            [
-                Header(titleW),
-                new BoxEl
-                {
-                    Direction = 0,
-                    Gap = WaveeSpace.M,
-                    ClipToBounds = true,
-                    Children = [ShelfCard(), ShelfCard(), ShelfCard(), ShelfCard(), ShelfCard(), ShelfCard(), ShelfCard()],
-                },
-            ],
+            Direction = 0, Gap = WaveeSpace.M,
+            Children = [GridCard(), GridCard(), GridCard(), GridCard(), GridCard(), GridCard()],
+        };
+
+        Element Section(float titleW) => new BoxEl
+        {
+            Direction = 1, Gap = WaveeSpace.M, ClipToBounds = true,
+            Children = [ Header(titleW), Row() ],
         };
 
         return new BoxEl
         {
-            Direction = 1,
-            Gap = WaveeSpace.XL,
-            Children = [Shelf(260f), Shelf(320f), Shelf(240f)],
+            Direction = 1, Gap = WaveeSpace.XL,
+            Children = [Section(200f), Section(260f), Section(180f)],
         };
     }
 

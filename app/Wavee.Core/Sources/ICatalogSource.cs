@@ -54,6 +54,10 @@ public interface ICatalogSource : ISource
     Task<SearchResults> SearchAsync(string query, CancellationToken ct = default);
     Task<SearchResults> SearchAsync(string query, SearchFacet facet, int offset, int limit, CancellationToken ct = default)
         => SearchAsync(query, ct);
+    /// <summary>Offline, cache-only full-text search scoped per <see cref="LibrarySearchScope"/>. Default empty — only
+    /// the persistent store-backed source (<c>StoreLibrarySource</c>) overrides it.</summary>
+    Task<LibrarySearchResults> SearchLibraryAsync(string query, LibrarySearchScope scope, CancellationToken ct = default)
+        => Task.FromResult(LibrarySearchResults.Empty);
     /// <summary>As-you-type search suggestions (the omnibar dropdown). Default empty — only an online source provides them.</summary>
     Task<IReadOnlyList<string>> SuggestAsync(string query, CancellationToken ct = default)
         => Task.FromResult<IReadOnlyList<string>>(System.Array.Empty<string>());

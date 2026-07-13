@@ -55,7 +55,7 @@ public struct ScrollBind
     public NodeHandle ScrollerHandle; // the enclosing scroller's handle (gen-checked; the pin pass reads ScrollRef from it)
     public ScrollChannel Source;
     public BindSink Sink;
-    public byte PinKind;          // 0 none | 1 top-pin (containing-block clamp) | 2 bottom-pin
+    public byte PinKind;          // 0 none | 1 top-pin (containing-block clamp) | 2 bottom-pin | 3 sticky clip-top (ClipRect.top rides the viewport line)
     public byte Flags;            // bit field — see the Flag* constants below
 
     // RANGE — authored anchors (left) baked to scroll-px bounds (right). a==b ⇒ inactive (writes identity / OutLo).

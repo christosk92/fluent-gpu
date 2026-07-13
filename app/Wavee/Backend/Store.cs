@@ -136,7 +136,7 @@ static class StoreEntityMerge
             Id = NonEmpty(incoming.Id, current.Id),
             Name = NonEmpty(incoming.Name, current.Name),
             Image = incoming.Image ?? current.Image,
-            TopAlbums = Has(incoming.TopAlbums) ? incoming.TopAlbums : current.TopAlbums,
+            TopAlbums = MergeAlbumCards(current.TopAlbums, incoming.TopAlbums),
             MonthlyListeners = incoming.MonthlyListeners > 0 ? incoming.MonthlyListeners : current.MonthlyListeners,
             Followers = incoming.Followers > 0 ? incoming.Followers : current.Followers,
             Bio = incoming.Bio ?? current.Bio,
@@ -144,7 +144,7 @@ static class StoreEntityMerge
             WorldRank = incoming.WorldRank > 0 ? incoming.WorldRank : current.WorldRank,
             HeaderImage = incoming.HeaderImage ?? current.HeaderImage,
             TopTracks = Has(incoming.TopTracks) ? incoming.TopTracks : current.TopTracks,
-            AppearsOn = Has(incoming.AppearsOn) ? incoming.AppearsOn : current.AppearsOn,
+            AppearsOn = MergeAlbumCards(current.AppearsOn, incoming.AppearsOn),
             Pinned = incoming.Pinned ?? current.Pinned,
             Extras = MergeExtras(current.Extras, incoming.Extras),
             Palette = incoming.Palette ?? current.Palette,   // a thin write (no palette) must not drop a full-overview palette
@@ -155,6 +155,25 @@ static class StoreEntityMerge
             // Keep the newer freshness stamp: a full-overview write carries UtcNow; a thin write carries default → keeps current.
             FetchedAt = incoming.FetchedAt > current.FetchedAt ? incoming.FetchedAt : current.FetchedAt,
         };
+    }
+
+    // Discography merge: the incoming list is the authoritative group order + Kind (a fresh ArtistV4 write), so incoming
+    // order wins — but a name-less incoming STUB must never downgrade an already-hydrated card (the "discography flickers
+    // empty" bug). Per URI, a stub keeps the prior rich card (adopting only the incoming Kind); a hydrated incoming card
+    // upgrades. A GraphQL-stats write passes TopAlbums:null → Has=false → keeps current wholesale.
+    static IReadOnlyList<Album>? MergeAlbumCards(IReadOnlyList<Album>? current, IReadOnlyList<Album>? incoming)
+    {
+        if (!Has(incoming)) return current;
+        if (!Has(current)) return incoming;
+        var prior = new Dictionary<string, Album>(StringComparer.Ordinal);
+        for (int i = 0; i < current!.Count; i++) prior[current[i].Uri] = current[i];
+        var merged = new List<Album>(incoming!.Count);
+        for (int i = 0; i < incoming.Count; i++)
+        {
+            var a = incoming[i];
+            merged.Add(a.Name.Length == 0 && prior.TryGetValue(a.Uri, out var rich) ? rich with { Kind = a.Kind } : a);
+        }
+        return merged;
     }
 
     static IReadOnlyList<Artist>? MergeArtists(IReadOnlyList<Artist>? current, IReadOnlyList<Artist>? incoming)

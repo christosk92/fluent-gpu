@@ -9,6 +9,7 @@ using FluentGpu.Hooks;
 using FluentGpu.Localization;
 using FluentGpu.Signals;
 using Wavee.Core;
+using Wavee.Features.Detail;
 using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
@@ -18,6 +19,7 @@ namespace Wavee;
 sealed partial class ArtistPage : Component
 {
     readonly Signal<Route> _route;
+    readonly object _tintOwner = new();   // stable ownership across artist -> artist reuse and KeepAlive park/reactivate
     ColorF _accent = Tok.AccentDefault;   // cover-extracted page accent (lifted); set per-render in Body, read by the hero + section-bar helpers
     ActionServices? _acts;                // shelf-card context menus — resolved per-render, read by the shelf builders
     IOverlayService? _menuOverlay;
@@ -33,9 +35,12 @@ sealed partial class ArtistPage : Component
     public override Element Render()
     {
         var svc = UseContext(Services.Slot);
+        _ = AppearancePrefs.Epoch.Value;
+        bool colorWashesDisabled = svc?.Settings.Get(WaveeSettings.DisableColorWashes) ?? false;
         var go = UseContext(HistoryStore.NavCtx);
         var bridge = UseContext(PlaybackBridge.Slot);
         var store = UseContext(LibraryStore.Slot);
+        var shellTint = UseContext(ShellTint.Slot);
         _acts = UseContext(ActionServices.Slot);          // shelf-card context menus (Menus.CardAttach)
         _menuOverlay = UseContext(Overlay.Service);
         if (svc is null || store is null) return new BoxEl { Grow = 1f };
@@ -46,9 +51,40 @@ sealed partial class ArtistPage : Component
 
         // ContentHost keeps one ArtistPage alive for artist→artist hops. The data is cached per artist, while the
         // scroll/skeleton subtree below is keyed by route so pending/ready branches and child components remount cleanly.
-        var artist = store.ArtistDetail(uri, ct => svc.Library.GetArtistAsync(uri, ct), PendingArtist(uri));
+        // One complete read: the V4 artist (identity + discography) then the lazy stats overlay (header stats only). The
+        // stats call is standalone-page-scoped (IArtistStatsService) — the Library artist pane never fires it. Offline /
+        // no stats provider → EnsureStatsAsync returns null and the V4 artist stands.
+        var artist = store.ArtistDetail(uri, async ct =>
+        {
+            var a = await svc.Library.GetArtistAsync(uri, ct);
+            return await svc.ArtistStats.EnsureStatsAsync(uri, ct) ?? a;
+        }, PendingArtist(uri));
         store.EnsureArtists();
         var fansList = store.Artists.Value.Value;
+
+        // ArtistPage is kept alive and reused for artist -> artist navigation, just like DetailShell. Claim the shell
+        // tint immediately (null while loading clears any prior page's tint), then republish when the overview palette
+        // arrives. Previously ArtistPage only drew its in-card gradient, so a whole-window tint on this route was stale
+        // state from whichever detail page happened to be visited before it.
+        bool artistReady = artist.State.Value == (byte)LoadState.Ready;
+        Palette? artPalette = artistReady ? artist.Value.Value.Palette : null;
+        ColorF? micaTint = colorWashesDisabled || artPalette is null ? null : Tok.Theme == ThemeKind.Light
+            ? WaveePalette.Lift(WaveePalette.ToColor(artPalette.Light)) with { A = 0.05f }
+            : WaveePalette.TintedDark(artPalette) with { A = 0.14f };
+
+        void SetTint(ColorF? color)
+        {
+            if (shellTint is not null) shellTint.Value = new ShellTintState(color, _tintOwner);
+        }
+        void ClearTint()
+        {
+            if (shellTint is not null && ReferenceEquals(shellTint.Peek().Owner, _tintOwner)) shellTint.Value = default;
+        }
+
+        // Exact deps are intentional: this is a low-frequency navigation/data effect, and route identity must refresh
+        // ownership even when two artists happen to have the same extracted colour.
+        UseEffect(() => SetTint(micaTint), routeKey, micaTint.HasValue, micaTint.GetValueOrDefault(), Tok.Theme, artistReady, colorWashesDisabled);
+        UseActivation(onActivated: () => SetTint(micaTint), onDeactivated: ClearTint);
 
         var pinned = UseSignal(false);
         var pageScroll = UseSignal(0f);   // live page scroll offset → published so the in-page virtualized discography grids window against it
@@ -173,7 +209,6 @@ sealed partial class ArtistPage : Component
         // Cover-extracted page accent, lifted so a near-black colorDark stays legible (matches album/playlist via
         // DetailShell). Null palette ⇒ the neutral default. Set before the tree builds so every accent helper reads it.
         _accent = a.Palette is { } pal ? WaveePalette.Lift(WaveePalette.Accent(pal)) : Tok.AccentDefault;
-        ColorF wash = Tok.Theme == ThemeKind.Light ? _accent : WaveePalette.BackgroundDark(a.Palette ?? WaveePalette.Neutral);
         var extras = a.Extras;
         var popular = a.TopTracks is { Count: > 0 } tt ? tt : FakeData.TopTracksOf(a);
         var albumsAll = a.TopAlbums ?? Array.Empty<Album>();
@@ -214,18 +249,43 @@ sealed partial class ArtistPage : Component
         // Arm the shy pill as the hero finishes collapsing (≈offset 380, near full collapse) so the compact bar takes over
         // exactly as the hero's presented height reaches zero — no dead beat, no overlap.
         var sentinel = new BoxEl { Height = 0f, ScrollBinds = [ new() { PinTop = 40f, OnFlag = v => pinned.Value = v } ] };
+        // The seam rule: every paint near the hero↔content boundary must terminate at ALPHA 0 over the shell's one
+        // continuous backdrop (Mica + the ShellTint this page publishes). The photo's bottom EdgeFade reaches exactly
+        // 0 (compositor feather), the copy scrim's last stop is 0, and this wash layer holds its translucent tint
+        // through the hero then releases to 0 across the first content band — so no pixel row exists where background
+        // responsibility changes hands. Never paint an OPAQUE approximation of the page surface here: the real
+        // background is a live Mica composite no constant colour can match, so any opaque bridge/flatten necessarily
+        // draws a line where it ends.
+        float heroWidth = _heroWidth.Value;
+        ColorF wash = Tok.Theme == ThemeKind.Light ? _accent : WaveePalette.BackgroundDark(a.Palette ?? WaveePalette.Neutral);
+        ColorF washTint = wash with { A = Tok.Theme == ThemeKind.Light ? 0.12f : 0.16f };
+        bool colorWashesDisabled = svc.Settings.Get(WaveeSettings.DisableColorWashes);
+        Element washLayer = colorWashesDisabled
+            ? new BoxEl()
+            : new BoxEl
+            {
+                Height = ArtistHeroLayout.BlendBackdropHeightFor(heroWidth), HitTestVisible = false,
+                Gradient = GradientDown(
+                    new GradientStop(0f, washTint),
+                    new GradientStop(ArtistHeroLayout.BlendBoundaryFor(heroWidth), washTint),
+                    new GradientStop(1f, washTint with { A = 0f })),
+            };
         return new BoxEl
         {
-            // The accent wash spans the WHOLE page — behind the hero AND the content — so the hero photo's bottom
-            // edge-fade dissolves INTO the tint and the content continues the same gradient: one continuous wash, no
-            // seam at the hero↔content boundary. (Previously the wash was on `inner` only, which started the tint
-            // abruptly below the hero while the photo faded to bare Mica — a hard discrete edge.)
-            Direction = 1, Gradient = Surfaces.HeroWash(wash),
+            ZStack = true,
             Children =
             [
-                Banner(a, uri, Play, Shuffle, Radio, go),
-                sentinel,
-                inner,
+                washLayer,
+                new BoxEl
+                {
+                    Direction = 1,
+                    Children =
+                    [
+                        Banner(a, uri, Play, Shuffle, Radio, go),
+                        sentinel,
+                        inner,
+                    ],
+                },
             ],
         };
     }

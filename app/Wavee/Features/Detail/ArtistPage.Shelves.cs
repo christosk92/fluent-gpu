@@ -1,13 +1,18 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
+using FluentGpu;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Localization;
 using FluentGpu.Signals;
+using FluentGpu.WindowsApi.Dialogs;
+using Wavee.Backend.Spotify;
 using Wavee.Core;
 using static FluentGpu.Dsl.Ui;
 
@@ -145,10 +150,24 @@ sealed partial class ArtistPage : Component
             PagedShelf.Create(
                 Math.Min(photos.Count, 16),
                 cardAt: (i, w) => new BoxEl { Width = w, Height = w, Corners = CornerRadius4.All(WaveeRadius.Card), ClipToBounds = true,
+                    OnClick = () => OpenGallery(photos, i), Cursor = CursorId.Hand, HoverScale = 1.015f, PressScale = 0.985f,
                     Children = [ Surfaces.Artwork(photos[i], i, w, w, WaveeRadius.Card, decodePx: 480) ] },
                 measured: true, header: AccentHeader(Loc.Get(Strings.Artist.Gallery))),
         ],
     };
+
+    void OpenGallery(IReadOnlyList<Image> photos, int initialIndex)
+    {
+        if (photos.Count == 0 || _menuOverlay is null) return;
+        ContentDialog.Show(_menuOverlay, d =>
+        {
+            d.Title = Loc.Get(Strings.Artist.Gallery);
+            d.DialogWidth = 548f;
+            d.Content = Embed.Comp(() => new ArtistGalleryViewer(photos, initialIndex));
+            d.CloseText = Loc.Get(Strings.Auth.Close);
+            d.DefaultButton = ContentDialog.DefaultBtn.Close;
+        });
+    }
 
     // ── fans also like ───────────────────────────────────────────────────────────────────────────────────
     Element RelatedShelf(IReadOnlyList<RelatedArtist> related, Action<string, string?> go, Action<string> play) => new BoxEl
@@ -178,4 +197,108 @@ sealed partial class ArtistPage : Component
                 measured: true, header: AccentHeader(Loc.Get(Strings.Detail.FansAlsoLike))),
         ],
     };
+}
+
+/// <summary>Modal artist-gallery viewer. FlipView owns keyboard, wheel, touch-drag and adjacent slide navigation; the
+/// export action downloads the selected image's original CDN bytes through the native Save As picker.</summary>
+sealed class ArtistGalleryViewer : Component
+{
+    readonly IReadOnlyList<Image> _photos;
+    readonly int _initialIndex;
+    readonly Signal<bool> _saving = new(false);
+
+    public ArtistGalleryViewer(IReadOnlyList<Image> photos, int initialIndex)
+    {
+        _photos = photos;
+        _initialIndex = Math.Clamp(initialIndex, 0, Math.Max(0, photos.Count - 1));
+    }
+
+    public override Element Render()
+    {
+        var (selected, setSelected) = UseState(_initialIndex);
+        var post = UsePost();
+        int current = Math.Clamp(selected, 0, Math.Max(0, _photos.Count - 1));
+        var pages = new Element[_photos.Count];
+        for (int i = 0; i < pages.Length; i++)
+        {
+            var photo = _photos[i];
+            pages[i] = new BoxEl
+            {
+                Width = 500f, Height = 500f, Fill = Tok.FillSolidBase,
+                AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                Children =
+                [
+                    new ImageEl
+                    {
+                        Key = "gallery-image:" + photo.Url,
+                        Source = photo.Url, Width = 500f, Height = 500f,
+                        Fit = ImageFit.Contain, Placeholder = Tok.FillSolidBase,
+                        Transition = ImageTransition.Fade(140f),
+                    },
+                ],
+            };
+        }
+
+        void Export() => ExportImage(_photos[current], current, post);
+
+        return new BoxEl
+        {
+            Direction = 1, Gap = WaveeSpace.M,
+            Children =
+            [
+                FlipView.Create(pages, 500f, 500f, current, setSelected),
+                new BoxEl
+                {
+                    Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
+                    Children =
+                    [
+                        new TextEl($"{current + 1} / {_photos.Count}") { Grow = 1f, Size = 12f, Color = Tok.TextSecondary },
+                        Button.Accent(_saving.Value ? "Exporting…" : "Export image", Export, isEnabled: !_saving.Value),
+                    ],
+                },
+            ],
+        };
+    }
+
+    async void ExportImage(Image photo, int index, Action<Action> post)
+    {
+        if (_saving.Peek() || photo.Url.Length == 0) return;
+        string ext = ExtensionOf(photo.Url);
+        string? path = FilePicker.SaveFile(FluentApp.WindowHandle, "Export gallery image",
+            $"artist-gallery-{index + 1:D2}{ext}",
+            ("Images", "*.jpg;*.jpeg;*.png;*.webp"), ("All files", "*.*"));
+        if (path is null) return;
+
+        _saving.Value = true;
+        try
+        {
+            using var response = await HttpPools.Get(HttpPool.Cdn).GetAsync(photo.Url).ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+            byte[] bytes = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+            await File.WriteAllBytesAsync(path, bytes).ConfigureAwait(false);
+            post(() =>
+            {
+                _saving.Value = false;
+                Toasts.Show("Image exported", ToastSeverity.Success);
+            });
+        }
+        catch (Exception ex)
+        {
+            post(() =>
+            {
+                _saving.Value = false;
+                Toasts.Show("Image export failed: " + ex.Message, ToastSeverity.Critical);
+            });
+        }
+    }
+
+    static string ExtensionOf(string url)
+    {
+        if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            string ext = Path.GetExtension(uri.AbsolutePath).ToLowerInvariant();
+            if (ext is ".jpg" or ".jpeg" or ".png" or ".webp") return ext;
+        }
+        return ".jpg";
+    }
 }

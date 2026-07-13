@@ -1997,6 +1997,13 @@ public sealed class TreeReconciler
                 row.Sink = FluentGpu.Animation.BindSink.TransY;
                 row.Flags |= FluentGpu.Animation.ScrollBind.FlagPaintAbove;
             }
+            else if (d.ClipTopAtViewport is { } clipInset)
+            {
+                row.PinKind = 3;                                   // sticky clip-top — evaluated in the phase-7 pin pass
+                row.Inset = clipInset;
+                row.Source = FluentGpu.Animation.ScrollChannel.Offset;
+                row.Sink = FluentGpu.Animation.BindSink.ClipTop;
+            }
             else if (d.StretchFromTop)
             {
                 row.Source = FluentGpu.Animation.ScrollChannel.OverscrollBand;
@@ -2032,7 +2039,7 @@ public sealed class TreeReconciler
         for (int i = 0; i < dsls.Length; i++)
         {
             var d = dsls[i];
-            if (d.PinTop is null && !d.StretchFromTop && d.To == sink) return true;
+            if (d.PinTop is null && d.ClipTopAtViewport is null && !d.StretchFromTop && d.To == sink) return true;
         }
         return false;
     }

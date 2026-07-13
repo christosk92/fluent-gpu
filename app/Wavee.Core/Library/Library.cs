@@ -85,6 +85,11 @@ public interface IMusicLibrary
     Task<IReadOnlyList<LibraryItem>> GetLibraryAsync(CancellationToken ct = default);
     Task<SearchResults> SearchAsync(string query, CancellationToken ct = default);
     Task<SearchResults> SearchAsync(string query, SearchFacet facet, int offset, int limit, CancellationToken ct = default);
+    /// <summary>Offline full-text search over the CACHED library, scoped per <see cref="LibrarySearchScope"/> (artists ▸
+    /// albums ▸ tracks / saved albums ▸ tracks). Cache-only — never hits the network. Default empty (only the
+    /// store-backed source contributes).</summary>
+    Task<LibrarySearchResults> SearchLibraryAsync(string query, LibrarySearchScope scope, CancellationToken ct = default)
+        => Task.FromResult(LibrarySearchResults.Empty);
     /// <summary>As-you-type search suggestions for the omnibar dropdown (online catalog; empty offline).</summary>
     Task<IReadOnlyList<string>> SuggestAsync(string query, CancellationToken ct = default);
     /// <summary>As-you-type search suggestions with typed rich hits from the same online response.</summary>

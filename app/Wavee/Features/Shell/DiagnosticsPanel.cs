@@ -133,7 +133,9 @@ sealed class DiagnosticsPanel(IAppSettings? settings = null) : Component
     {
         if (!force && (_sessions is not null || _sessionsBusy)) return;
         _sessionsBusy = true;
-        string? file = WaveeLog.Instance.FilePath;
+        // BasePath, not FilePath: discovery globs "<root>-*.log" off this path, so the DATED live file would
+        // narrow the glob to one day's rolls. The base (wavee.log) yields the whole wavee-*.log set.
+        string? file = WaveeLog.Instance.BasePath;
         int pid = Environment.ProcessId;
         _ = Task.Run(() =>
         {

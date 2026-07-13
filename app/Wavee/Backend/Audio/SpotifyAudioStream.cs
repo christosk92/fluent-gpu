@@ -35,6 +35,8 @@ public sealed class SpotifyAudioStream : Stream, IAsyncDisposable, IAudioReadStr
     bool _failed;
     bool _disposed;
     Exception? _error;
+    int _readAheadPauseCount;
+    IDisposable? _attachedReadAheadPause;
 
     SpotifyAudioStream(HttpClient http, ReadOnlyMemory<byte> head, int headBoundary, string name = "", WaveeLogger log = default,
         AudioBodyDiskCache? bodyDisk = null)
@@ -112,6 +114,8 @@ public sealed class SpotifyAudioStream : Stream, IAsyncDisposable, IAudioReadStr
             try { ranged.Configure(cdnUrls, knownSize); }   // throws on empty/invalid mirrors or bad size — before we mark attached
             catch { ranged.Dispose(); throw; }
             _ranged = ranged;
+            if (_readAheadPauseCount > 0)
+                _attachedReadAheadPause = ranged.PauseReadAhead();
             _bodyAttached = true;
             Monitor.PulseAll(_stateGate);
         }
@@ -119,13 +123,14 @@ public sealed class SpotifyAudioStream : Stream, IAsyncDisposable, IAudioReadStr
 
         try
         {
-            ranged.StartReadAhead();
             if (!eagerFetch)
             {
+                ranged.StartReadAhead();
                 _log.Info($"stream {_name}: lazy body attached; decoder can continue on clear head while read-ahead runs");
                 return;
             }
             await ranged.PrimeAsync(ct).ConfigureAwait(false);
+            ranged.StartReadAhead();
         }
         catch (Exception ex)
         {
@@ -238,7 +243,31 @@ public sealed class SpotifyAudioStream : Stream, IAsyncDisposable, IAudioReadStr
 
     void MarkReadAheadProgress(long offset) => _ranged?.MarkProgress(offset);
 
-    public IDisposable PauseReadAhead() => _ranged?.PauseReadAhead() ?? NoopDisposable.Instance;
+    public IDisposable PauseReadAhead()
+    {
+        lock (_stateGate)
+        {
+            ThrowIfDisposedLocked();
+            if (_readAheadPauseCount++ == 0 && _ranged is not null)
+                _attachedReadAheadPause = _ranged.PauseReadAhead();
+            return new StreamReadAheadPause(this);
+        }
+    }
+
+    void ReleaseReadAheadPause()
+    {
+        IDisposable? attachedPause = null;
+        lock (_stateGate)
+        {
+            if (_readAheadPauseCount <= 0) return;
+            if (--_readAheadPauseCount == 0)
+            {
+                attachedPause = _attachedReadAheadPause;
+                _attachedReadAheadPause = null;
+            }
+        }
+        attachedPause?.Dispose();
+    }
 
     public void ResumeReadAheadAtCurrentOffset() => _ranged?.ResumeReadAheadAt(Volatile.Read(ref _pos));
 
@@ -346,13 +375,17 @@ public sealed class SpotifyAudioStream : Stream, IAsyncDisposable, IAudioReadStr
     {
         if (!disposing) return;
         RangedHttpSource? ranged;
+        IDisposable? attachedPause;
         lock (_stateGate)
         {
             if (_disposed) return;
             _disposed = true;
             ranged = _ranged;
+            attachedPause = _attachedReadAheadPause;
+            _attachedReadAheadPause = null;
             Monitor.PulseAll(_stateGate);
         }
+        attachedPause?.Dispose();
         ranged?.Dispose();   // owns the read-ahead task + fetch resources lifecycle
         base.Dispose(disposing);
     }
@@ -363,10 +396,13 @@ public sealed class SpotifyAudioStream : Stream, IAsyncDisposable, IAudioReadStr
         return ValueTask.CompletedTask;
     }
 
-    sealed class NoopDisposable : IDisposable
+    sealed class StreamReadAheadPause : IDisposable
     {
-        public static readonly NoopDisposable Instance = new();
-        public void Dispose() { }
+        SpotifyAudioStream? _owner;
+
+        public StreamReadAheadPause(SpotifyAudioStream owner) => _owner = owner;
+
+        public void Dispose() => Interlocked.Exchange(ref _owner, null)?.ReleaseReadAheadPause();
     }
 }
 

@@ -32,6 +32,30 @@ public class DetailLayoutBreakpointTests
     }
 
     [Fact]
+    public void NominalTierFor_Tier6_BelowThreshold()
+    {
+        Assert.Equal(4, DetailLayoutBreakpoints.NominalTierFor(340f));   // boundary sanity
+        Assert.Equal(5, DetailLayoutBreakpoints.NominalTierFor(300f));   // ≥300 → 5
+        Assert.Equal(6, DetailLayoutBreakpoints.NominalTierFor(299f));   // < 300 → ultra-compact 6
+    }
+
+    [Fact]
+    public void TierFor_NarrowsToTier6Immediately_WidensAfterHysteresis()
+    {
+        int tier = DetailLayoutBreakpoints.TierFor(310f, 5);
+        Assert.Equal(5, tier);
+
+        tier = DetailLayoutBreakpoints.TierFor(290f, tier);
+        Assert.Equal(6, tier);   // narrowing to a narrower tier applies immediately
+
+        tier = DetailLayoutBreakpoints.TierFor(310f, tier);
+        Assert.Equal(6, tier);   // hold tier 6 until w - 24 crosses 300
+
+        tier = DetailLayoutBreakpoints.TierFor(324f, tier);
+        Assert.Equal(5, tier);   // widen back to 5 once w - 24 ≥ 300
+    }
+
+    [Fact]
     public void ModeFor_Oscillates820PlusMinus24_HoldsMidUntil844()
     {
         int mode = DetailLayoutBreakpoints.ModeFor(810f, 1, initialized: true);

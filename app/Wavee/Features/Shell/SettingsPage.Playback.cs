@@ -1,6 +1,8 @@
 using System;
 using System.Globalization;
+using System.IO;
 using System.Text;
+using FluentGpu;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -8,6 +10,7 @@ using FluentGpu.Localization;
 using FluentGpu.Signals;
 using Wavee.Backend.Audio;
 using Wavee.SpotifyLive.Audio;
+using Wavee.SpotifyLive.Audio.Runtime;
 using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
@@ -108,7 +111,7 @@ sealed partial class SettingsPage
                     RuntimeInfoItem(Loc.Get(Strings.Playback.Runtime.DetailVersion),
                         status.PackId is { Length: > 0 } pack ? status.SpotifyVersion + " (" + pack + ")" : status.SpotifyVersion),
                     RuntimeInfoItem(Loc.Get(Strings.Playback.Runtime.DetailArch), status.Arch?.ToString()),
-                    RuntimeInfoItem(Loc.Get(Strings.Playback.Runtime.DetailSignature), SetupBody.SignatureSummary(status)),
+                    RuntimeSignatureItem(status),
                     RuntimeInfoItem(Loc.Get(Strings.Playback.Runtime.DetailLocation), status.RuntimePath),
                 ],
             });
@@ -238,6 +241,30 @@ sealed partial class SettingsPage
     static Element RuntimeInfoItem(string label, string? value) => SettingsItem(label,
         string.IsNullOrWhiteSpace(value) ? null : value,
         isEnabled: !string.IsNullOrWhiteSpace(value));
+
+    static Element RuntimeSignatureItem(PlaybackRuntimeStatus status)
+    {
+        string summary = SetupBody.SignatureSummary(status);
+        string? dllPath = status.SignatureInfo?.FilePath;
+        bool canView = OperatingSystem.IsWindows()
+                    && !string.IsNullOrWhiteSpace(dllPath)
+                    && File.Exists(dllPath);
+
+        Element? link = canView
+            ? HyperlinkButton.Create(Loc.Get(Strings.Playback.Runtime.ViewSignature),
+                () =>
+                {
+                    if (!PeAndSignature.TryShowNativeSignatureDialog(dllPath!, FluentApp.WindowHandle))
+                        Toasts.Show(Loc.Get(Strings.Playback.Runtime.ViewSignatureFailed), ToastSeverity.Caution);
+                })
+            : null;
+
+        return SettingsExpander.Item(
+            Loc.Get(Strings.Playback.Runtime.DetailSignature),
+            string.IsNullOrWhiteSpace(summary) ? null : summary,
+            link,
+            alignment: SettingsCard.ContentAlignment.Right);
+    }
 
     Element QualityCombo(Services? svc)
     {

@@ -60,14 +60,30 @@ message LeanAlbum {
     optional bytes gid = 1;
     optional string name = 2;
     repeated LeanArtistRef artist = 3;
+    optional int32 type = 4;                 // Album.Type: 1=ALBUM 2=SINGLE 3=COMPILATION 4=EP 5=AUDIOBOOK 6=PODCAST (read as int)
     optional LeanDate date = 6;
     repeated LeanDisc disc = 11;
     optional LeanImageGroup cover_group = 17;
 }
 
+// The discography lean view: an ArtistV4 payload carries the WHOLE discography as release-groups. Each group is one
+// release with its version gids (album[0] is the representative release); we parse the group heads as gid-only stubs
+// (name/cover usually absent on the wire) and let AlbumV4 hydration + assembly upgrade them. top_track carries the
+// popular-list gid refs (resolved to named tracks at assembly time). SAME field numbers as metadata.proto Artist.
+message LeanTrackRef { optional bytes gid = 1; }                          // top_track[].track[] — a gid-only track ref
+message LeanTopTracks { optional string country = 1; repeated LeanTrackRef track = 2; }
+message LeanAlbumGroup { repeated LeanAlbumRef album = 1; }               // reuse LeanAlbumRef (gid+name+cover parse when present)
+message LeanBiography { optional string text = 1; }
+
 message LeanArtist {
     optional bytes gid = 1;
     optional string name = 2;
+    repeated LeanTopTracks top_track = 4;
+    repeated LeanAlbumGroup album_group = 5;
+    repeated LeanAlbumGroup single_group = 6;
+    repeated LeanAlbumGroup compilation_group = 7;
+    repeated LeanAlbumGroup appears_on_group = 8;
+    repeated LeanBiography biography = 12;
     optional LeanImageGroup portrait_group = 17;
 }
 

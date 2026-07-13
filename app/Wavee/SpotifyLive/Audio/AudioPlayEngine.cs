@@ -300,12 +300,23 @@ internal sealed class AudioPlayEngine : IDisposable
     {
         get
         {
-            var current = _current;
-            if (current is null) return 0;
+            DecodePipeline? timeline;
+            long baseFrames;
+            lock (_gate)
+            {
+                // CrossfadeStarted is the semantic track boundary: the controller switches CurrentTrack (and its
+                // duration) to the incoming item as soon as that signal is emitted. Keep the host clock on the same
+                // item. Reporting the outgoing near-EOF timeline here made the new track's seek bar jump to 100% and
+                // its elapsed/remaining labels read duration/-0:00 for the whole fade.
+                bool incomingIsCurrent = _overlapActive && _overlapIncoming is not null;
+                timeline = incomingIsCurrent ? _overlapIncoming : _current;
+                baseFrames = incomingIsCurrent ? _overlapReleasedBase : _renderBaseFrames;
+            }
+            if (timeline is null) return 0;
             int rate = _renderer.SampleRate;
-            long frames = _renderer.PlayedFrames - Interlocked.Read(ref _renderBaseFrames);
+            long frames = _renderer.PlayedFrames - baseFrames;
             long ms = rate > 0 ? frames * 1000 / rate : 0;
-            return Math.Max(0, current.SeekBaseMs + ms);
+            return Math.Max(0, timeline.SeekBaseMs + ms);
         }
     }
 

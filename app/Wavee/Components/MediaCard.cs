@@ -1,9 +1,13 @@
 using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
 using FluentGpu.Animation;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Scene;
+using FluentGpu.Signals;
 using Wavee.Core;
 using static FluentGpu.Dsl.Ui;
 
@@ -85,7 +89,7 @@ public static class MediaCard
                                 Action onClick, Action onPlay, float cardW, bool circular = false, string? morphKey = null,
                                 Action<string>? onNavUri = null, MenuAttach? menu = null)
     {
-        float inner = MathF.Max(48f, cardW - 2f * Pad);          // cover edge = card width minus side padding
+        float inner = MathF.Max(48f, cardW - 2f * Pad);
         float r = circular ? inner / 2f : WaveeRadius.Card;
 
         Element face = circular
@@ -196,6 +200,268 @@ public static class MediaCard
             ],
         };
         return card.WithMenu(menu);
+    }
+
+    // Editorial home card: intentionally reserved for HomeFeedBaselineSectionData. Normal home sections keep the regular
+    // Shelf card; this is the periodic Apple-Music-style visual interruption. Structure mirrors Apple Music's editorial
+    // card: FULL-BLEED portrait artwork with a frosted-glass band pinned to the bottom carrying eyebrow + title + subtitle
+    // OVER the art. The band is an acrylic backdrop-blur sized to just the copy (lower third) — not half the card — so the
+    // artwork stays the hero. (The engine acrylic composite now clips to the scroll viewport, so this band no longer bleeds
+    // over the pinned top nav / player bar; that was the earlier overlap bug, not a reason to drop the frosted look.)
+    //
+    // Stateful (EditorialCardCore): hover zooms the ARTWORK inside the card's own rounded clip (a root HoverScale pushed
+    // the outermost shelf cards past the viewport's exact-bounds clip — squared corners), expands the description, and —
+    // after a swept countdown ring — peeks the recommendation's preview tracks (previewsOf, the feedBaselineLookup cache).
+    // Component props freeze at mount, so the Key remounts on identity or a ≥16px fitted-width change (shelf re-fit).
+    public static Element EditorialCard(Image? cover, string? eyebrow, string title, string subtitle, string uri,
+                                        Action onClick, Action onPlay, float cardW, MenuAttach? menu = null,
+                                        Func<string, IReadOnlyList<HomePreviewTrack>?>? previewsOf = null,
+                                        IReadSignal<int>? previewsEpoch = null)
+        => Embed.Comp(() => new EditorialCardCore(cover, eyebrow, title, subtitle, uri, onClick, onPlay, cardW, menu,
+                                                  previewsOf, previewsEpoch))
+           with
+           {
+               Key = $"edcard:{uri}:{(int)(cardW / 16f)}",
+               // The deriver can't see into the component — hand it the resting card shape (no hover, no peek).
+               SkeletonProxy = () => EditorialCardCore.Build(cover, eyebrow, title, subtitle, uri, onClick, onPlay,
+                   MathF.Min(cardW, 360f), menu, hovered: false, peek: null, counting: false,
+                   arcCapture: null, hoverMove: null, pointerExit: null),
+           };
+
+    // The stateful editorial-card core. Hover choreography (every channel animated — no snaps):
+    //   • the artwork zooms 1.045 INSIDE the card's rounded clip (rides the card's inherited hover progress);
+    //   • the description expands 2 → 5 lines while the frosted band grows to make space (CardResizeHeight reflow);
+    //   • a thin countdown ring sweeps once (StrokeTrimEnd 0→1); when it completes — and the preview batch is cached —
+    //     the description swaps to the recommendation's preview tracks, each row fading in (PageFade enter).
+    // Pointer exit rewinds everything; the countdown is epoch-guarded so a quick re-hover never resurrects a stale peek.
+    internal sealed class EditorialCardCore : Component
+    {
+        const int CountdownMs = 1400;
+        const int PeekRows = 5;
+
+        readonly Image? _cover; readonly string? _eyebrow; readonly string _title; readonly string _subtitle;
+        readonly string _uri; readonly Action _onClick; readonly Action _onPlay; readonly float _cardW;
+        readonly MenuAttach? _menu;
+        readonly Func<string, IReadOnlyList<HomePreviewTrack>?>? _previewsOf;
+        readonly IReadSignal<int>? _previewsEpoch;
+
+        readonly Signal<bool> _hovered = new(false);
+        readonly Signal<bool> _revealed = new(false);
+        int _hoverEpoch;                                   // bumped on every hover edge — abandons stale countdown tails
+        NodeHandle _arcNode = NodeHandle.Null;
+
+        public EditorialCardCore(Image? cover, string? eyebrow, string title, string subtitle, string uri,
+                                 Action onClick, Action onPlay, float cardW, MenuAttach? menu,
+                                 Func<string, IReadOnlyList<HomePreviewTrack>?>? previewsOf, IReadSignal<int>? previewsEpoch)
+        {
+            _cover = cover; _eyebrow = eyebrow; _title = title; _subtitle = subtitle; _uri = uri;
+            _onClick = onClick; _onPlay = onPlay; _cardW = cardW; _menu = menu;
+            _previewsOf = previewsOf; _previewsEpoch = previewsEpoch;
+        }
+
+        void HoverStart()
+        {
+            if (_hovered.Peek()) return;
+            _hovered.Value = true;
+            int epoch = ++_hoverEpoch;
+            _ = RevealAfterCountdownAsync(epoch);
+        }
+
+        async Task RevealAfterCountdownAsync(int epoch)
+        {
+            await Task.Delay(CountdownMs).ConfigureAwait(false);
+            if (epoch == _hoverEpoch && _hovered.Peek() && !_revealed.Peek()) _revealed.Value = true;
+        }
+
+        void HoverEnd()
+        {
+            _hoverEpoch++;
+            if (_hovered.Peek()) _hovered.Value = false;
+            if (_revealed.Peek()) _revealed.Value = false;
+        }
+
+        public override Element Render()
+        {
+            bool hovered = _hovered.Value;
+            bool revealed = _revealed.Value;
+            _ = _previewsEpoch?.Value;                    // subscribe: re-render the moment the preview batch lands
+            var previews = _previewsOf?.Invoke(_uri);
+            bool hasPeek = previews is { Count: > 0 };
+            bool counting = hovered && !revealed && hasPeek;
+
+            // Sweep the countdown ring exactly once per hover: the ring child mounts with `counting`, its OnRealized
+            // captures the arc node, and this post-commit effect seeds the one-shot trim (the ProgressRing pattern —
+            // UseKeyframes only targets the host node, so a child arc is driven through Context.Anim directly).
+            UseLayoutEffect(() =>
+            {
+                if (!counting) return;
+                var anim = Context.Anim; var scene = Context.Scene;
+                var arc = _arcNode;
+                if (anim is null || scene is null || arc.IsNull || !scene.IsLive(arc)) return;
+                anim.Keyframes(arc, AnimChannel.StrokeTrimEnd,
+                    new Keyframe[] { new(0f, 0f, Easing.Linear), new(1f, 1f, Easing.Linear) }, CountdownMs, false);
+            }, counting, _hoverEpoch);
+
+            return Build(_cover, _eyebrow, _title, _subtitle, _uri, _onClick, _onPlay, _cardW, _menu,
+                hovered, revealed && hasPeek ? previews : null, counting,
+                arcCapture: h => _arcNode = h, hoverMove: HoverStart, pointerExit: HoverEnd);
+        }
+
+        internal static Element Build(Image? cover, string? eyebrow, string title, string subtitle, string uri,
+                                      Action onClick, Action onPlay, float cardW, MenuAttach? menu,
+                                      bool hovered, IReadOnlyList<HomePreviewTrack>? peek, bool counting,
+                                      Action<NodeHandle>? arcCapture, Action? hoverMove, Action? pointerExit)
+        {
+            const float editorialScale = 1.25f;
+            float artH = MathF.Max(320f, cardW * 1.34f);      // preserve the established editorial card dimensions
+            float aspect = cardW / artH;
+            float inset = Math.Clamp(cardW * 0.055f, 14f, 20f);
+            // Empty frosted space above the copy the feather ramps across. PROPORTIONAL to the art (≈ a quarter of the
+            // card), not a fixed 52px: a fixed pad on a tall editorial card left a short, abrupt wash — the frost has to
+            // own the lower third of the artwork for the dissolve to read as gradual (the Apple editorial gradient zone).
+            // Scale only the internal frosted treatment: a taller dissolve zone plus the larger copy below it, while the
+            // outer card keeps its original dimensions.
+            float featherPad = Math.Clamp(artH * 0.24f * editorialScale, 72f * editorialScale, 200f * editorialScale);
+            float textW = MathF.Max(32f, cardW - 2f * inset);
+            const float radius = 14f;
+
+            // WinUI AcrylicBrush recipe with a TOP FEATHER (FeatherTop): the frost dissolves continuously into the crisp
+            // artwork over the top ~three-quarters of the band instead of a hard blur line (Apple editorial card). The
+            // copy sits in the fully-frosted lower zone (featherPad reserves the ramp space above it). Rounding all four
+            // corners is safe — the top corners fade out under the feather — so the band's bottom corners match the card.
+            var imageGlass = new AcrylicSpec(
+                Tint: ColorF.FromRgba(8, 8, 10),
+                TintOpacity: 0.24f,
+                BlurSigma: 26f,
+                NoiseOpacity: 0.005f,
+                LuminosityOpacity: 0.28f,
+                Fallback: ColorF.FromRgba(18, 18, 20),
+                FeatherTop: 0.75f);
+
+            var copy = new List<Element>(4);
+            // Eyebrow row also hosts the countdown ring (trailing) so the sweep reads as part of the copy header.
+            if (eyebrow is { Length: > 0 } || counting)
+                copy.Add(new BoxEl
+                {
+                    Direction = 0, AlignItems = FlexAlign.Center, Gap = 8f, Width = textW, HitTestPassThrough = true,
+                    Children =
+                    [
+                        eyebrow is { Length: > 0 }
+                            ? new TextEl(eyebrow)
+                            {
+                                Size = 12.5f * editorialScale, Weight = 600, Color = ColorF.FromRgba(255, 255, 255, 200),
+                                Grow = 1f, Basis = 0f, MaxLines = 1, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis,
+                            }
+                            : new BoxEl { Grow = 1f },
+                        counting ? CountdownRing(arcCapture) : new BoxEl(),
+                    ],
+                });
+            copy.Add(new TextEl(title)
+            {
+                Size = 17f * editorialScale, Weight = 700, Color = ColorF.FromRgba(255, 255, 255), Width = textW,
+                MaxLines = 1, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis,
+            });
+            if (peek is not null)
+            {
+                // The preview-track peek replaces the description: up to five compact cover+name rows, each fading in
+                // (PageFade enter), the container staggering them so the list cascades rather than popping at once.
+                var rows = new Element[Math.Min(peek.Count, PeekRows)];
+                for (int i = 0; i < rows.Length; i++) rows[i] = PeekRow(peek[i], textW);
+                copy.Add(new BoxEl
+                {
+                    Direction = 1, Gap = 7f, Width = textW, HitTestPassThrough = true, Stagger = 45f,
+                    Padding = new Edges4(0f, 6f, 0f, 0f), Key = "peek",
+                    Children = rows,
+                });
+            }
+            else if (subtitle.Length > 0)
+                // The playlist description is an HTML fragment (may carry <a>/<b>) — RichText parses it (decoded, tags
+                // not shown raw); links share the copy colour so they read as prose, not clickable chrome (the card owns
+                // the tap). Hover relaxes the clamp to 5 lines; the band's CardResizeHeight animates the space it takes.
+                copy.Add(RichText.Of(subtitle, 13f * editorialScale, ColorF.FromRgba(255, 255, 255, 224), ColorF.FromRgba(255, 255, 255, 224),
+                    textW, hovered ? 5 : 2));
+
+            var card = new BoxEl
+            {
+                Height = artH, ZStack = true, ClipToBounds = true,
+                Corners = CornerRadius4.All(radius), Shadow = Elevation.Card,
+                PressScale = 0.99f, OnClick = onClick,
+                OnHoverMove = hoverMove is null ? null : _ => hoverMove(),
+                OnPointerExit = pointerExit,
+                Children =
+                [
+                    // NO hover zoom on the artwork: rounded clips apply only to RoundRect-pipeline primitives — an IMAGE
+                    // clips by the rectangular scissor alone (SceneRecorder tier-2 docs), so any geometry scale pushes the
+                    // image's self-rounded corners out and leaves square slivers at the card corners (and a root-level
+                    // scale pokes past the shelf viewport's exact-bounds clip). Hover feedback is the FAB reveal, the
+                    // description expand, and the countdown peek instead.
+                    Ui.Image(cover?.Url ?? "", ImageFit.Cover, aspect, 512, radius, Tok.FillCardDefault, cover?.BlurHash),
+                    // Bottom-pinned frosted copy band, cross-stretched to the full card width; it auto-sizes to the copy
+                    // plus the feather ramp space (featherPad), so the frost covers the text zone and fades up into the
+                    // art. Height changes (line expand / peek swap) tween through real layout (CardResizeHeight).
+                    new BoxEl
+                    {
+                        Height = artH, Direction = 1, Justify = FlexJustify.End, AlignItems = FlexAlign.Stretch,
+                        HitTestPassThrough = true,
+                        Children =
+                        [
+                            new BoxEl
+                            {
+                                Direction = 1, Gap = 3f, HitTestPassThrough = true,
+                                Acrylic = imageGlass, Fill = ColorF.Transparent,
+                                Corners = CornerRadius4.All(radius),
+                                Padding = new Edges4(inset, featherPad, inset, inset),
+                                Animate = MotionRecipes.CardResizeHeight,
+                                Children = copy.ToArray(),
+                            },
+                        ],
+                    },
+                    Embed.Comp(() => new NowPlayingOverlay(uri, onPlay, FabSize, cover: true, cardW)).Skeletonized(false),
+                    MoreCorner(menu is not null),
+                ],
+            };
+            return card.WithMenu(menu);
+        }
+
+        // The countdown ring: an 18px track circle + a round-capped sweep arc whose StrokeTrimEnd the core animates
+        // 0→1 over the countdown (the ProgressRing determinate look, white-on-frost).
+        static Element CountdownRing(Action<NodeHandle>? arcCapture) => new BoxEl
+        {
+            ZStack = true, Width = 18f, Height = 18f, Shrink = 0f, HitTestPassThrough = true,
+            Children =
+            [
+                new BoxEl { Width = 18f, Height = 18f, Arc = new ArcSpec(ColorF.FromRgba(255, 255, 255, 64), 2f, 0f, 360f, RoundCaps: false) },
+                new BoxEl
+                {
+                    Width = 18f, Height = 18f,
+                    Arc = new ArcSpec(ColorF.FromRgba(255, 255, 255, 230), 2f, 0f, 360f, RoundCaps: true),
+                    OnRealized = arcCapture,
+                },
+            ],
+        };
+
+        static Element PeekRow(HomePreviewTrack t, float textW)
+        {
+            float nameW = MathF.Max(24f, textW - 36f - 10f);
+            return new BoxEl
+            {
+                Direction = 0, Gap = 10f, AlignItems = FlexAlign.Center, HitTestPassThrough = true,
+                Animate = MotionRecipes.PageFade,
+                Children =
+                [
+                    new BoxEl
+                    {
+                        Width = 36f, Height = 36f, Shrink = 0f, ClipToBounds = true, Corners = CornerRadius4.All(6f),
+                        Children = [ Surfaces.Artwork(t.Cover, Seed(t.Uri), 36f, 36f, 6f, decodePx: 64) ],
+                    },
+                    new TextEl(t.Name)
+                    {
+                        Size = 12.5f, Weight = 600, Color = ColorF.FromRgba(255, 255, 255, 235),
+                        Width = nameW, MaxLines = 1, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis,
+                    },
+                ],
+            };
+        }
     }
 
     // ── 16:9 video card (sized to a supplied cardW from a measured shelf): wide thumbnail + title + duration. ──
@@ -313,9 +579,10 @@ public static class MediaCard
                 Direction = 1, Height = float.NaN, MinHeight = 72f, Gap = WaveeSpace.S,
                 Padding = new Edges4(WaveeSpace.S, WaveeSpace.S, WaveeSpace.S, WaveeSpace.S),
                 Corners = CornerRadius4.All(6f),
-                Fill = ColorF.Transparent,
-                HoverFill = Tok.FillSubtleSecondary,
+                Fill = Tok.FillCardSecondary,
+                HoverFill = Tok.FillCardDefault,
                 PressedFill = Tok.FillSubtleTertiary,
+                BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
                 Role = AutomationRole.Button, OnClick = onClick, OnPointerExit = static () => { },
                 Children =
                 [
@@ -335,10 +602,10 @@ public static class MediaCard
                     : hasDetail ? new Edges4(WaveeSpace.S, WaveeSpace.S, WaveeSpace.S, WaveeSpace.S)
                     : new Edges4(WaveeSpace.S, 0f, WaveeSpace.S, 0f),
             Corners = CornerRadius4.All(large ? WaveeRadius.Card : 6f),
-            Fill = large ? Tok.FillCardSecondary : ColorF.Transparent,
-            HoverFill = large ? Tok.FillCardDefault : Tok.FillSubtleSecondary,
+            Fill = Tok.FillCardSecondary,
+            HoverFill = Tok.FillCardDefault,
             PressedFill = large ? Tok.FillCardDefault : Tok.FillSubtleTertiary,
-            BorderWidth = large ? 1f : 0f, BorderColor = large ? Tok.StrokeCardDefault : ColorF.Transparent,
+            BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             // The row is the interactive ancestor (OnClick + a no-op pointer-exit), so the cover's hover-revealed play FAB
             // resolves off ROW hover — identical to the card behavior.
             Role = AutomationRole.Button, OnClick = onClick, OnPointerExit = static () => { },

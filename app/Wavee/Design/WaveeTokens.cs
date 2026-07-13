@@ -78,11 +78,14 @@ public static class WaveeColors
     public static ColorF ContentAlt => LightComposite(Active.ContentAlt, 0.40f);
     public static ColorF PremiumText => Active.PremiumText;
 
-    public static ColorF RowZebra => Active.RowZebra;
+    // White-alpha stripes disappear over the near-white light Mica/page composite. Use a restrained neutral-ink ramp
+    // in light mode: visible enough to scan long lists, still quieter than selection and hover states. Dark keeps the
+    // palette-provided white overlays.
+    public static ColorF RowZebra => Tok.Theme == ThemeKind.Light ? ColorF.FromRgba(0, 0, 0, 0x08) : Active.RowZebra;
     public static ColorF RowHover => Active.RowHover;
-    public static ColorF RowHoverZebra => Active.RowHoverZebra;
+    public static ColorF RowHoverZebra => Tok.Theme == ThemeKind.Light ? ColorF.FromRgba(0, 0, 0, 0x0F) : Active.RowHoverZebra;
     public static ColorF RowPressed => Active.RowPressed;
-    public static ColorF RowPressedZebra => Active.RowPressedZebra;
+    public static ColorF RowPressedZebra => Tok.Theme == ThemeKind.Light ? ColorF.FromRgba(0, 0, 0, 0x14) : Active.RowPressedZebra;
 
     public static ColorF ChromeHover => Tok.FillSubtleSecondary;
     public static ColorF ChromePressed => Tok.FillSubtleTertiary;

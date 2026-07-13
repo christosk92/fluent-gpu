@@ -861,22 +861,36 @@ public static class SpotifyExportMapper
         if (lists.ValueKind != JsonValueKind.Array) return cards;
 
         foreach (var list in lists.EnumerateArray())
-        {
-            var items = Dig(list, "items", "items");
-            if (items.ValueKind != JsonValueKind.Array) continue;
-            foreach (var item in items.EnumerateArray())
-            {
-                if (cards.Count >= max) return cards;
-                var wrapper = Dig(item, "entity");
-                var data = Dig(wrapper, "data");
-                if (data.ValueKind != JsonValueKind.Object) continue;
-                if (CardFromRecentEntity(data, StrAt(wrapper, "_uri")) is not { } card) continue;
-                if (!seen.Add(card.Uri)) continue;
-                cards.Add(card);
-            }
-        }
+            AppendRecentCards(list, cards, seen, max);
 
         return cards;
+    }
+
+    /// <summary>Recents cards from a single `List` node (data.__typename == "List") — the shape embedded in the home
+    /// response's HomeRecentlyPlayedSectionData section item. Same recent-entity mapping as <see cref="RecentCards"/>.</summary>
+    public static IReadOnlyList<HomeCard> RecentCardsFromListData(JsonElement listData, int max = 12)
+    {
+        var cards = new List<HomeCard>(max);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        AppendRecentCards(listData, cards, seen, max);
+        return cards;
+    }
+
+    // Walk a `List` node's items.items[].entity.data → recent cards, deduping by URI into the shared accumulator.
+    static void AppendRecentCards(JsonElement list, List<HomeCard> cards, HashSet<string> seen, int max)
+    {
+        var items = Dig(list, "items", "items");
+        if (items.ValueKind != JsonValueKind.Array) return;
+        foreach (var item in items.EnumerateArray())
+        {
+            if (cards.Count >= max) return;
+            var wrapper = Dig(item, "entity");
+            var data = Dig(wrapper, "data");
+            if (data.ValueKind != JsonValueKind.Object) continue;
+            if (CardFromRecentEntity(data, StrAt(wrapper, "_uri")) is not { } card) continue;
+            if (!seen.Add(card.Uri)) continue;
+            cards.Add(card);
+        }
     }
 
     static HomeCard? CardFromRecentEntity(JsonElement data, string? wrapperUri)
@@ -1106,25 +1120,6 @@ public static class SpotifyExportMapper
             AlbumsTotal: (int)Long(au, "discography", "albums", "totalCount"),
             SinglesTotal: (int)Long(au, "discography", "singles", "totalCount"),
             CompilationsTotal: (int)Long(au, "discography", "compilations", "totalCount"));
-    }
-
-    /// <summary>Map a LIVE paged discography response (<c>queryArtistDiscography{Albums,Singles,Compilations}</c>) →
-    /// one <see cref="DiscographyPage"/> window: the flattened release-groups at <c>data.artistUnion.discography.&lt;facet&gt;.items</c>
-    /// plus the facet's <c>totalCount</c> (clamped up to the item count so a lagging total never under-reports the
-    /// delivered items). Same hand-walk as <see cref="MapArtist"/> — no JsonSerializer.</summary>
-    public static DiscographyPage DiscographyPageFromResponse(JsonElement responseRoot, DiscographyKind kind)
-    {
-        var facet = kind switch
-        {
-            DiscographyKind.Singles => "singles",
-            DiscographyKind.Compilations => "compilations",
-            _ => "albums",
-        };
-        var node = Dig(responseRoot, "data", "artistUnion", "discography", facet);
-        var items = new List<Album>();
-        AddReleases(Dig(node, "items"), items);
-        int total = (int)Long(node, "totalCount");
-        return new DiscographyPage(items, System.Math.Max(total, items.Count));
     }
 
     static IReadOnlyList<TopCity>? MapTopCities(JsonElement items)

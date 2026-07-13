@@ -52,9 +52,12 @@ static class Program
 #endif
         int minSetting = settings.Get(WaveeSettings.LogMinLevel);
         int fileSetting = settings.Get(WaveeSettings.LogFileMinLevel);
+        // dailyRolling: the main app log splits into wavee-yyyyMMdd.log per calendar day (the WaveeMusic scheme) —
+        // the old single ever-growing wavee.log is migrated into the dated set on first launch.
         WaveeLog.Instance.Configure(crashLogPath: logPath, echo: DebugEcho(),
             minLevel: minSetting >= 0 ? (WaveeLogLevel)minSetting : defaultLevel,
-            fileMinLevel: fileSetting >= 0 ? (WaveeLogLevel)fileSetting : defaultFileLevel);
+            fileMinLevel: fileSetting >= 0 ? (WaveeLogLevel)fileSetting : defaultFileLevel,
+            dailyRolling: true);
         Diag.Sink = WaveeLog.DiagSink;                 // fold engine diagnostics (FG_DIAG) into the app log stream
         WaveeLog.Instance.Info("app", "startup", "Wavee starting",
             WaveeLogField.Of("pid", Environment.ProcessId),

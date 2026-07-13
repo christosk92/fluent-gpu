@@ -199,9 +199,10 @@ internal sealed class RangedHttpSource : IDisposable
         await _fetchGate.WaitAsync(linked.Token).ConfigureAwait(false);
         try
         {
-            gaps = _ranges.GetGaps(start, end);
-            foreach (var gap in gaps)
+            LoadCachedChunks(start, end);
+            while ((gaps = _ranges.GetGaps(start, end)).Count > 0)
             {
+                var gap = gaps[0];
                 size = Volatile.Read(ref _size);
                 var fetchStart = gap.Start;
                 var fetchEnd = Math.Max(gap.End, gap.Start + MinFetchBytes);
@@ -219,14 +220,6 @@ internal sealed class RangedHttpSource : IDisposable
 
     async Task FetchChunkWithMirrorsAsync(long start, long end, CancellationToken ct)
     {
-        var diskEnd = TryLoadFromDisk(start, end);
-        if (diskEnd >= end)
-        {
-            _onRangeAvailable?.Invoke();
-            return;
-        }
-        if (diskEnd > start) start = diskEnd;
-
         Exception? last = null;
         var urls = _cdnUrls;
         var sw = Stopwatch.StartNew();
@@ -265,13 +258,16 @@ internal sealed class RangedHttpSource : IDisposable
                     var contentRange = resp.Content.Headers.ContentRange;
                     if (contentRange?.From is long from && from != start)
                         throw new HttpRequestException($"CDN returned unexpected range start {from}, expected {start}");
-                    if (contentRange?.Length is long total && total > 0)
-                        SetSize(total);
-                    else if (Volatile.Read(ref _size) <= 0)
-                        throw new HttpRequestException("CDN range response missing total length");
+                    long total = contentRange?.Length ?? Volatile.Read(ref _size);
+                    if (total <= 0) throw new HttpRequestException("CDN range response missing total length");
+                    SetSize(total);
+                    long requestedEnd = Math.Min(end, total);
+                    long expectedEnd = contentRange?.To is long to ? to + 1 : requestedEnd;
+                    if (expectedEnd <= start || expectedEnd > requestedEnd)
+                        throw new HttpRequestException($"CDN returned unexpected range end {expectedEnd}, requested through {requestedEnd}");
 
-                    var maxBytes = (int)Math.Min(end - start, int.MaxValue);
-                    var buf = new byte[maxBytes];
+                    var expectedBytes = checked((int)(expectedEnd - start));
+                    var buf = new byte[expectedBytes];
                     var read = 0;
                     await using var body = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
                     while (read < buf.Length)
@@ -281,13 +277,13 @@ internal sealed class RangedHttpSource : IDisposable
                         read += n;
                     }
                     if (read <= 0)
-                    {
-                        last = new IOException($"CDN returned no bytes for range [{start},{end})");
-                        break;
-                    }
+                        throw new IOException($"CDN returned no bytes for range [{start},{expectedEnd})");
+                    if (contentRange?.To is not null && read != expectedBytes)
+                        throw new IOException($"CDN returned {read} bytes for range [{start},{expectedEnd}), expected {expectedBytes}");
 
                     WriteCdnBytes(start, buf, read);
                     _ranges.AddRange(start, start + read);
+                    FlushCompletedChunks(start, start + read);
                     _onRangeAvailable?.Invoke();
                     if (RangeTrace) _log.Info($"stream {_name}: range fetch ok range=[{start},{start + read}) bytes={read} elapsed={sw.ElapsedMilliseconds}ms");
                     return;
@@ -317,6 +313,7 @@ internal sealed class RangedHttpSource : IDisposable
         SetSize(len);
         WriteCdnBytes(0, ms.GetBuffer(), len);
         _ranges.AddRange(0, len);
+        FlushCompletedChunks(0, len);
     }
 
     /// <summary>Copy buffered RAW (untransformed) bytes into <paramref name="destination"/>. The caller applies any
@@ -343,28 +340,23 @@ internal sealed class RangedHttpSource : IDisposable
         }
     }
 
-    long TryLoadFromDisk(long start, long end)
+    void LoadCachedChunks(long start, long end)
     {
-        if (_disk is null) return start;
-        long pos = start;
-        while (pos < end)
+        if (_disk is null) return;
+        int first = (int)(start / CdnChunkBytes);
+        int last = (int)((end - 1) / CdnChunkBytes);
+        for (int ci = first; ci <= last; ci++)
         {
-            int ci = (int)(pos / CdnChunkBytes);
             var buf = new byte[CdnChunkBytes];
-            if (!_disk.TryReadChunk(_name, ci, buf, out int len) || len <= 0) break;
+            if (!_disk.TryReadChunk(_name, ci, buf, out int len) || len <= 0) continue;
             long cs = (long)ci * CdnChunkBytes;
             WriteCdnBytes(cs, buf, len);
-            pos = cs + len;
-            if (len < CdnChunkBytes) break;
+            _ranges.AddRange(cs, cs + len);
         }
-        if (pos > start) _ranges.AddRange(start, pos);
-        return pos;
     }
 
     void WriteCdnBytes(long start, byte[] source, int count)
     {
-        int firstCi = (int)(start / CdnChunkBytes);
-        int lastCi = (int)((start + count - 1) / CdnChunkBytes);
         lock (_dataGate)
         {
             int src = 0;
@@ -384,38 +376,31 @@ internal sealed class RangedHttpSource : IDisposable
                 pos += n;
             }
         }
-        for (int ci = firstCi; ci <= lastCi; ci++)
-        {
-            long cs = (long)ci * CdnChunkBytes;
-            if (start + count >= cs + CdnChunkBytes) MaybeFlushChunk(ci);
-        }
     }
 
-    void MaybeFlushChunk(int chunkIndex, bool allowPartial = false)
+    void FlushCompletedChunks(long start, long end)
     {
         if (_disk is null) return;
-        long cs = (long)chunkIndex * CdnChunkBytes;
         var size = Volatile.Read(ref _size);
-        int len = CdnChunkBytes;
-        if (size > 0)
+        if (size <= 0 || start >= end) return;
+        int first = (int)(start / CdnChunkBytes);
+        int last = (int)((end - 1) / CdnChunkBytes);
+        for (int chunkIndex = first; chunkIndex <= last; chunkIndex++)
         {
+            long cs = (long)chunkIndex * CdnChunkBytes;
             if (cs >= size) return;
-            if (cs + CdnChunkBytes > size) len = (int)(size - cs);
-        }
-        else if (!allowPartial) return;
+            long ce = Math.Min(size, cs + CdnChunkBytes);
+            if (!_ranges.ContainsRange(cs, ce)) continue;
+            int len = checked((int)(ce - cs));
 
-        lock (_dataGate)
-        {
-            if (!_cdnChunks.TryGetValue(chunkIndex, out var chunk)) return;
-            _disk.WriteChunk(_name, chunkIndex, chunk.AsSpan(0, len));
+            byte[] snapshot;
+            lock (_dataGate)
+            {
+                if (!_cdnChunks.TryGetValue(chunkIndex, out var chunk)) continue;
+                snapshot = chunk.AsSpan(0, len).ToArray();
+            }
+            _disk.WriteChunk(_name, chunkIndex, snapshot);
         }
-    }
-
-    void FlushTailChunkToDisk(long size)
-    {
-        if (_disk is null || size <= 0) return;
-        int lastCi = (int)((size - 1) / CdnChunkBytes);
-        MaybeFlushChunk(lastCi, allowPartial: true);
     }
 
     void SetSize(long size)
@@ -429,7 +414,6 @@ internal sealed class RangedHttpSource : IDisposable
             _size = size;
         }
         _disk?.SetSize(_name, size);
-        FlushTailChunkToDisk(size);
     }
 
     public void InvalidateDiskCache() => _disk?.Invalidate(_name);

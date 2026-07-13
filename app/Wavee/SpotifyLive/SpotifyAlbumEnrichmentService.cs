@@ -111,6 +111,13 @@ sealed class SpotifyAlbumEnrichmentService : IAlbumEnrichmentService
     {
         if (albumUri.Length == 0) return Array.Empty<PlaylistSummary>();
 
+        // Below-the-fold Full upgrade: the interactive album open is now V4-first (tracklist only), so the getAlbum
+        // envelope (label / copyright / OtherVersions / precision) that powers "About this release" lands here, off the
+        // critical open path. Best-effort — a failure leaves the Tracks-level album standing.
+        if (_store.GetAlbum(albumUri) is { Hydration: < AlbumHydrationLevel.Full })
+            try { await LiveSessionHost.FetchAlbumAsync(_pathfinder, _store, albumUri, ct).ConfigureAwait(false); }
+            catch (Exception ex) when (ex is not OperationCanceledException) { _log.Info("album Full upgrade: " + ex.Message); }
+
         ByteString? refsPayload;
         try
         {

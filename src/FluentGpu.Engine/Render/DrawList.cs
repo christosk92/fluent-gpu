@@ -218,15 +218,18 @@ public readonly record struct PushLayerCmd(RectF DeviceRect, CornerRadius4 Radii
     // The rounded-corner radii come from Radii (the feather follows them).
     float FadeBandL = 0f, float FadeBandT = 0f, float FadeBandR = 0f, float FadeBandB = 0f, int FadeFalloff = 0, float FadeIntensity = 1f, int FadeEdges = 0,
     RectF CompositeClip = default,
-    // Acrylic-only: a STABLE per-overlay id (the scene node handle, packed index|gen) keying the compositor's retained
-    // blurred-backdrop cache across frames, so a stationary acrylic surface REUSES its blur instead of re-blurring every
-    // frame (design/subsystems/backdrop-effects-animation.md §2.3). 0 ⇒ no caching (re-blur every frame — prior behavior).
+    // Stable scene-layer id (the node handle, packed index|gen). Acrylic uses its own id to key the retained blurred-
+    // backdrop cache; enclosing opacity/blur/edge-fade groups expose theirs as the acrylic backdrop-source identity, so
+    // moving an acrylic between the main target and an offscreen group cannot reuse a snapshot from the wrong surface.
+    // 0 remains valid for manually-authored/test draw lists and disables acrylic caching when used on an acrylic layer.
     ulong LayerId = 0,
     int BlurCachePolicy = 0,
     // Self-blur only: 1 = the node's world transform moved THIS frame (recorder's inMotion — scroll/fling/FLIP). NOT part
     // of the cross-frame pin key (backdrop-effects-animation.md §FA-2a); at rest (0) the compositor does one exact re-mint
     // when a HIT would otherwise composite a pin captured at a different position (settle exactness for non-glyph subtrees).
-    int InMotion = 0);
+    int InMotion = 0,
+    // Acrylic-only: feather the frost in from the TOP over this FRACTION of the layer height (0 = hard edge). See AcrylicSpec.FeatherTop.
+    float FeatherFrac = 0f);
 public readonly record struct PopLayerCmd(RectF DeviceRect);
 // A circular-arc stroke (ProgressRing). The arc is centred in <see cref="Rect"/> with radius (min(W,H)-Thickness)/2, a
 // <see cref="Thickness"/>-wide stroke, swept from <see cref="StartDeg"/> for <see cref="SweepDeg"/> degrees (0° = 12 o'clock,
@@ -470,10 +473,10 @@ public sealed class DrawList
         PushSort(sortKey);
     }
 
-    public void PushLayer(in RectF deviceRect, in CornerRadius4 radii, in ColorF tint, in ColorF fallback, float tintOpacity, float blurSigma, float noiseOpacity, float luminosityOpacity, ulong sortKey = 0, ulong layerId = 0)
+    public void PushLayer(in RectF deviceRect, in CornerRadius4 radii, in ColorF tint, in ColorF fallback, float tintOpacity, float blurSigma, float noiseOpacity, float luminosityOpacity, ulong sortKey = 0, ulong layerId = 0, float featherFrac = 0f)
     {
         WriteOp(DrawOp.PushLayer);
-        WritePayload(new PushLayerCmd(deviceRect, radii, tint, fallback, tintOpacity, blurSigma, noiseOpacity, luminosityOpacity, LayerId: layerId));
+        WritePayload(new PushLayerCmd(deviceRect, radii, tint, fallback, tintOpacity, blurSigma, noiseOpacity, luminosityOpacity, LayerId: layerId, FeatherFrac: featherFrac));
         PushSort(sortKey);
     }
 
@@ -481,11 +484,11 @@ public sealed class DrawList
     /// <see cref="PopLayer"/> renders at full alpha offscreen and composites once at <paramref name="groupAlpha"/> —
     /// WinUI Composition LayerVisual semantics (no double-blend of overlapping children). Subtree commands should be
     /// recorded with opacity relative to 1, NOT pre-multiplied by the group alpha.</summary>
-    public void PushOpacityLayer(in RectF deviceRect, in CornerRadius4 radii, float groupAlpha, ulong sortKey = 0)
+    public void PushOpacityLayer(in RectF deviceRect, in CornerRadius4 radii, float groupAlpha, ulong sortKey = 0, ulong layerId = 0)
     {
         WriteOp(DrawOp.PushLayer);
         WritePayload(new PushLayerCmd(deviceRect, radii, default, default, 0f, 0f, 0f, 0f,
-            (int)LayerKind.Opacity, Math.Clamp(groupAlpha, 0f, 1f)));
+            (int)LayerKind.Opacity, Math.Clamp(groupAlpha, 0f, 1f), LayerId: layerId));
         PushSort(sortKey);
     }
 
@@ -494,11 +497,12 @@ public sealed class DrawList
     /// <paramref name="blurSigma"/> px, and composites once at <paramref name="groupAlpha"/> (so blur + fade read as one
     /// motion). The element's OWN pixels blur — not the backdrop behind it. Subtree commands record at opacity relative
     /// to 1, NOT pre-multiplied by the group alpha.</summary>
-    public void PushBlurLayer(in RectF deviceRect, in CornerRadius4 radii, float blurSigma, float groupAlpha, ulong sortKey = 0, BlurCachePolicy cachePolicy = BlurCachePolicy.Normal, bool inMotion = false)
+    public void PushBlurLayer(in RectF deviceRect, in CornerRadius4 radii, float blurSigma, float groupAlpha, ulong sortKey = 0, BlurCachePolicy cachePolicy = BlurCachePolicy.Normal, bool inMotion = false, ulong layerId = 0)
     {
         WriteOp(DrawOp.PushLayer);
         WritePayload(new PushLayerCmd(deviceRect, radii, default, default, 0f, MathF.Max(0f, blurSigma), 0f, 0f,
-            (int)LayerKind.Blur, Math.Clamp(groupAlpha, 0f, 1f), BlurCachePolicy: (int)cachePolicy, InMotion: inMotion ? 1 : 0));
+            (int)LayerKind.Blur, Math.Clamp(groupAlpha, 0f, 1f), LayerId: layerId,
+            BlurCachePolicy: (int)cachePolicy, InMotion: inMotion ? 1 : 0));
         PushSort(sortKey);
     }
 
@@ -509,13 +513,13 @@ public sealed class DrawList
     /// recorder scales the DIP spec by the world scale); <paramref name="blurSigma"/> &gt; 0 Gaussian-blurs the RT before
     /// the feather. Subtree commands record at opacity relative to 1.</summary>
     public void PushEdgeFadeLayer(in RectF deviceRect, in RectF compositeClip, in CornerRadius4 radii, float groupAlpha,
-        int edges, float bandL, float bandT, float bandR, float bandB, int falloff, float intensity, float blurSigma = 0f, ulong sortKey = 0)
+        int edges, float bandL, float bandT, float bandR, float bandB, int falloff, float intensity, float blurSigma = 0f, ulong sortKey = 0, ulong layerId = 0)
     {
         WriteOp(DrawOp.PushLayer);
         WritePayload(new PushLayerCmd(deviceRect, radii, default, default, 0f, MathF.Max(0f, blurSigma), 0f, 0f,
             (int)LayerKind.EdgeFade, Math.Clamp(groupAlpha, 0f, 1f),
             MathF.Max(0f, bandL), MathF.Max(0f, bandT), MathF.Max(0f, bandR), MathF.Max(0f, bandB),
-            falloff, Math.Clamp(intensity, 0f, 1f), edges, compositeClip));
+            falloff, Math.Clamp(intensity, 0f, 1f), edges, compositeClip, LayerId: layerId));
         PushSort(sortKey);
     }
 

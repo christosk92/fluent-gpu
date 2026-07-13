@@ -73,7 +73,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private OpacityLayerCompositor? _opacity;
     // ALL layered primary-stream frames composite DIRECTLY on the back buffer (no full-window offscreen canvas + blit).
     // Opacity/blur/edge-fade groups blend over the back buffer (the blur samples its own offscreen group RT); an ACRYLIC
-    // snapshots only the small back-buffer region under it (AcrylicCompositor.SnapshotBackBufferRegion → bit-exact region
+    // snapshots only the small active-target region under it (AcrylicCompositor.SnapshotTargetRegion → bit-exact region
     // copy → blur → composite). An open lyrics rail (blur layers) or a frosted in-app pill/bar therefore no longer forces
     // a whole-window round-trip every frame — the cost grew with window area (measured 5.6ms→2.3ms submit at 1440p).
     // Cross-frame blur cache — ALWAYS ON (no flag). A stationary self-blur reuses last frame's retained, already-blurred
@@ -742,7 +742,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (layerKind != 0)
         {
             // Both opacity/blur (kind 1) and acrylic (kind 2) composite directly on the back buffer — no offscreen canvas
-            // + blit. An acrylic keeps the canvas only as its region-copy scratch (SnapshotBackBufferRegion), so size it
+            // + blit. An acrylic keeps the canvas only as its region-copy scratch (SnapshotTargetRegion), so size it
             // when one is present in the stream.
             if (layerKind == 2) _acrylic!.EnsureSize(_w, _h);
             _opacity!.EnsureSize(_w, _h);
@@ -1542,14 +1542,37 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 }
                 else
                 {
-                    // region snapshot → pooled-RT separable blur → acrylic composite (re-binds canvas + full viewport).
-                    // _fenceValue + 1 is the fence value SignalFrame will signal for THIS frame (gates pooled-RT retire).
-                    // Documented limitation: nested inside an open opacity group, the acrylic composites into the
-                    // CANVAS (the acrylic leaf owns its canvas binding) — combine acrylic + group on one node instead.
+                    // Region snapshot → pooled-RT separable blur → acrylic composite. The backdrop/target is the
+                    // innermost open group when nested; otherwise it is the top-level back buffer (or legacy canvas).
+                    // Snapshotting the back buffer while an edge-fade group is open paints the frost UNDER that group,
+                    // whose later composite then overwrites it with the original crisp subtree.
                     // ctx.Damage is the DIP union of nodes that moved this frame → physical px for the cache's region test.
+                    // Clip the frosted composite to the active clip stack so a card-level acrylic nested in a scroll
+                    // viewport can't bleed over pinned chrome (mirrors the self-blur/edge-fade composites, which already
+                    // pass CurrentScissorRect()). The recorder pushes the scroll/ClipToBounds clips BEFORE the acrylic op,
+                    // so the current scissor already reflects every enclosing clip.
+                    RECT acrylicClip = CurrentScissorRect();
+                    ID3D12Resource* acrylicTarget = null;
+                    D3D12_CPU_DESCRIPTOR_HANDLE acrylicRtv = default;
+                    ulong backdropSourceId = 0xFFFFFFFFFFFFFFF0UL;   // logical top-level surface, stable across swap buffers
+                    if (_opacityGroups.Count > 0)
+                    {
+                        var enclosing = _opacityGroups[^1];
+                        acrylicTarget = _opacity.TargetResource(enclosing.Slot);
+                        acrylicRtv = _opacity.TargetRtv(enclosing.Slot);
+                        backdropSourceId = enclosing.L.LayerId != 0
+                            ? enclosing.L.LayerId
+                            : 0x8000000000000000UL | (uint)(enclosing.Slot + 1);
+                    }
+                    else if (directToBackBuffer)
+                    {
+                        acrylicTarget = _backBuffers[_frameIndex];
+                        acrylicRtv = backRtv;
+                    }
+
                     _acrylic.BlurAndComposite(_cmdList, L, lw, lh, _frameScale, _fenceValue + 1,
                         ctx.Damage.X * _frameScale, ctx.Damage.Y * _frameScale, ctx.Damage.W * _frameScale, ctx.Damage.H * _frameScale,
-                        directToBackBuffer ? _backBuffers[_frameIndex] : null, directToBackBuffer ? backRtv : default);
+                        acrylicClip, backdropSourceId, acrylicTarget, acrylicRtv);
                     InvalidateCmdState();   // the acrylic passes bound their own PSOs/heap + viewport/scissor
                     if (_opacityGroups.Count > 0) _opacity.Bind(_cmdList, _opacityGroups[^1].Slot);   // back to the open group RT
                     ApplyCurrentScissor();

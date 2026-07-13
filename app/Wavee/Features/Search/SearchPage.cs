@@ -167,13 +167,14 @@ sealed class SearchPage : Component
     }
 
     // ── flat unified results list (per chip) ──
-    static Element FlatList(IEnumerable<Element> rows) => new BoxEl { Direction = 1, Gap = 2f, Children = rows.ToArray() };
+    static Element FlatList(IEnumerable<Element> rows) => new BoxEl { Direction = 1, Gap = WaveeSpace.S, Children = rows.ToArray() };
 
     static Element ResultRow(Image? cover, int seed, string title, string subtitle, string type, bool circular, Action open) => new BoxEl
     {
         Direction = 0, Height = 60f, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
         Padding = new Edges4(WaveeSpace.S, 0f, WaveeSpace.S, 0f), Corners = CornerRadius4.All(6f),
-        HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary, OnClick = open,
+        Fill = Tok.FillCardSecondary, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
+        HoverFill = Tok.FillCardDefault, PressedFill = Tok.FillSubtleTertiary, OnClick = open,
         Children =
         [
             new BoxEl { Width = 48f, Height = 48f, Shrink = 0f, Corners = CornerRadius4.All(circular ? 24f : 6f), ClipToBounds = true,
@@ -360,7 +361,8 @@ sealed class SearchSongs : Component
                 int slot0 = scope.Index.Peek();   // the slot's initial item index at realize
                 var wrapper = new BoxEl
                 {
-                    Direction = 1,
+                    Direction = 1, Corners = CornerRadius4.All(6f), ClipToBounds = true,
+                    Fill = Tok.FillCardSecondary, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
                     Animate = slot0 < StaggerRowCap && !Motion.ReducedMotion
                         ? RowRise with { DelayMs = slot0 * Expressive.Stagger }
                         : (LayoutTransition?)null,

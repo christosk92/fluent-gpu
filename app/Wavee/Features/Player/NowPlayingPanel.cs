@@ -188,7 +188,7 @@ sealed class NowPlayingPanel : Component
                     {
                         Height = heroH,
                         Corners = CornerRadius4.All(WaveeRadius.Card),
-                        Gradient = LinearGradient(180f,
+                        Gradient = GradientDown(
                             new GradientStop(0f, Scrim(0f)),
                             new GradientStop(0.55f, Scrim(0.12f)),
                             new GradientStop(1f, Scrim(0.62f))),

@@ -449,6 +449,7 @@ public static class SceneRecorder
         var pb = new RectF(b.X, b.Y, pw, ph);   // presented rect (== b when no reveal in flight)
 
         ulong key = (ulong)depth << 32;   // painter order ~ depth for the slice
+        ulong layerId = ((ulong)node.Raw.Index << 32) | node.Raw.Gen;
         var local = new RectF(0f, 0f, pw, ph);
         var deviceBounds = world.TransformBounds(local);
         bool overlapsClip = deviceBounds.Overlaps(clip);
@@ -620,18 +621,18 @@ public static class SceneRecorder
                 (edgeFade.Edges & EdgeMask.Right) != 0 ? edgeFade.BandRight * efsx : 0f,
                 (edgeFade.Edges & EdgeMask.Bottom) != 0 ? edgeFade.BandBottom * efsy : 0f,
                 (int)edgeFade.Falloff, edgeFade.Intensity,
-                edgeFade.Mode == EdgeFadeMode.Fade ? 0f : edgeFade.BlurSigma * efsx, key);
+                edgeFade.Mode == EdgeFadeMode.Fade ? 0f : edgeFade.BlurSigma * efsx, key, layerId);
             opacity = 1f;
         }
         else if (isBlurGroup)
         {
             dl.PushBlurLayer(deviceBounds, p.Corners, p.BlurSigma, opacity, key,
-                holdBlur ? p.BlurCachePolicy : BlurCachePolicy.Normal, inMotion);
+                holdBlur ? p.BlurCachePolicy : BlurCachePolicy.Normal, inMotion, layerId);
             opacity = 1f;
         }
         else if (isOpacityGroup)
         {
-            dl.PushOpacityLayer(deviceBounds, p.Corners, opacity, key);
+            dl.PushOpacityLayer(deviceBounds, p.Corners, opacity, key, layerId);
             opacity = 1f;
         }
 
@@ -703,7 +704,7 @@ public static class SceneRecorder
             // layerId = the stable node handle (index|gen) → keys the compositor's retained blurred-backdrop cache, so a
             // stationary acrylic surface reuses its blur across frames (scrolling inside it no longer re-blurs).
             dl.PushLayer(deviceBounds, p.Corners, ac.Tint, ac.Fallback, ac.TintOpacity, ac.BlurSigma, ac.NoiseOpacity, ac.LuminosityOpacity, key,
-                ((ulong)node.Raw.Index << 32) | node.Raw.Gen);
+                ((ulong)node.Raw.Index << 32) | node.Raw.Gen, Math.Clamp(ac.FeatherTop, 0f, 1f));
 
         // Cull this node's OWN draw if it falls entirely outside the active clip (offscreen virtualized/overscan rows).
         bool hasOwnVisual = p.VisualKind != VisualKind.None;

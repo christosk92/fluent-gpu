@@ -31,6 +31,8 @@ static class WaveeSettings
     // Track-detail page layout: 0 Automatic (metadata rail on wide windows, stacked hero on narrow) · 1 Stacked (the
     // hero composition at every width — the rail is never composed for track pages; podcasts keep the automatic layout).
     public static readonly SettingKey<int> DetailPageLayout = new("detail.page.layout", 0);
+    public static readonly SettingKey<bool> DisableMarquee = new("appearance.marquee.disabled", false);
+    public static readonly SettingKey<bool> DisableColorWashes = new("appearance.colorWashes.disabled", false);
     // Wide two-column detail pages: user-resizable left metadata rail. Album-like and playlist-like surfaces keep
     // separate widths because their authored defaults differ (280 vs 240 DIP). Responsive mid/narrow modes ignore these
     // values and retain their breakpoint widths; the saved width returns when the page is wide again.
@@ -67,7 +69,12 @@ static class WaveeSettings
     // On-disk playback caches (Phase 6): encrypted CDN bodies + DPAPI-wrapped PlayPlay license payloads.
     public static readonly SettingKey<bool> AudioBodyCacheEnabled = new("audio.cache.body.enabled", true);
     public static readonly SettingKey<bool> AudioKeyCacheEnabled = new("audio.cache.keys.enabled", true);
-    public static readonly SettingKey<long> AudioBodyCacheBudgetBytes = new("audio.cache.body.budgetBytes", 4L << 30);   // 4 GB
+    // Body-cache capacity: 0=fixed bytes, 1=drive share (percent 0 means Auto), 2=unlimited.
+    public static readonly SettingKey<int> AudioBodyCacheBudgetMode = new("audio.cache.body.budgetMode", 1);
+    public static readonly SettingKey<long> AudioBodyCacheBudgetBytes = new("audio.cache.body.budgetBytes", 32L << 30);
+    public static readonly SettingKey<int> AudioBodyCacheBudgetPercent = new("audio.cache.body.budgetPercent", 0);
+    // Empty = AppData default. A custom value is the user-selected parent; Wavee owns its WaveeAudioCache child only.
+    public static readonly SettingKey<string> AudioBodyCacheBasePath = new("audio.cache.body.basePath", "");
     // Crash observability: the newest Windows Error Reporting dump we've already surfaced into wavee.log / Diagnostics.
     public static readonly SettingKey<string> LastSeenCrashDumpPath = new("diagnostics.crash.lastDumpPath", "");
     public static readonly SettingKey<long> LastSeenCrashDumpTicksUtc = new("diagnostics.crash.lastDumpTicksUtc", 0L);

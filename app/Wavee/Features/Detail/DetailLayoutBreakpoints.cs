@@ -8,7 +8,7 @@ public static class DetailLayoutBreakpoints
     public const float ModeHysteresisDip = 24f;
 
     public static int NominalTierFor(float w) =>
-        w <= 0f ? 0 : w >= 860f ? 0 : w >= 720f ? 1 : w >= 560f ? 2 : w >= 440f ? 3 : w >= 340f ? 4 : 5;
+        w <= 0f ? 0 : w >= 860f ? 0 : w >= 720f ? 1 : w >= 560f ? 2 : w >= 440f ? 3 : w >= 340f ? 4 : w >= 300f ? 5 : 6;
 
     /// <summary>Widen immediately; narrow only after <see cref="TierHysteresisDip"/> past the threshold.</summary>
     public static int TierFor(float w, int prev)

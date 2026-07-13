@@ -14,7 +14,12 @@ namespace Wavee;
 // Which optional columns a track row shows. #, Title and Duration are always present. Cell build order (and the matching
 // track widths) is: # · ♥ · (thumb) · Title · Album · AddedBy · DateAdded · Video · Plays · Duration. SHARED by the detail
 // TrackList header + every row builder, so the header and the rows stay column-aligned by construction.
-internal readonly record struct ColumnSet(bool Album, bool By, bool Date, bool Video, bool Plays, bool Heart, bool Thumb);
+// Actions = the trailing "…" overflow lane (dropped at the ultra-compact tier; still reachable via the row context menu).
+// Tier = the resolved width tier this set was built for — carried here so Grid/Header/TracksFor all derive the SAME
+// tier-scaled padding/gap (the alignment invariant). Both are defaulted so the many non-tiered ColumnSet sites (search,
+// artist "Popular", queue, drawers) keep their current look (Actions present, tier-0 spacing).
+internal readonly record struct ColumnSet(bool Album, bool By, bool Date, bool Video, bool Plays, bool Heart, bool Thumb,
+                                          bool Actions = true, int Tier = 0);
 
 // ── the ONE track-row cell, used EVERYWHERE a track is shown (detail list, library pane, artist "Popular", search) ──
 // This is the single source of truth for what a track row LOOKS like and how it BEHAVES at rest/hover/now-playing — the
@@ -35,6 +40,12 @@ internal static class TrackRow
 
     // Track row height by density (0 Compact · 1 Default · 2 Cozy · 3 Comfortable).
     internal static float RowHeightFor(int density) => density switch { 0 => 40f, 2 => 56f, 3 => 64f, _ => RowHeight };
+
+    // Tier-scaled horizontal inset + column gap: full at wide tiers, tighter as the pane narrows so the title keeps
+    // usable width under pressure. Header AND rows read these SAME helpers (keyed by the set's Tier) so columns stay
+    // aligned. Tier 0 returns the unchanged constants, so every non-tiered surface is untouched.
+    internal static float PadXFor(int tier) => tier <= 3 ? PadX : tier <= 5 ? WaveeSpace.M : WaveeSpace.S;
+    internal static float ColGapFor(int tier) => tier <= 4 ? ColGap : WaveeSpace.S;
 
     // Stream count → "11.8M" / "654.8K".
     internal static string PlaysLabel(long n) =>
@@ -117,16 +128,18 @@ internal static class TrackRow
             cells.Add(EndCell(new TextEl(PlaysLabel(t.PlayCount)) { Size = 13f, Color = Tok.TextTertiary }));
         cells.Add(EndCell(new TextEl(DetailFormat.TrackTime(t.DurationMs)) { Size = 13f, Color = Tok.TextSecondary }));
 
-        // Trailing "..." overflow lane (Apple Music style) — a fixed column AFTER Duration. Present only when the caller
-        // reserved its width in `tracks` (the detail list; eager/preview rows pass null → no extra cell). Kept in cell
-        // build order so the header's matching empty cell and the row stay column-aligned.
-        if (actionsCell is not null) cells.Add(actionsCell);
+        // Trailing "..." overflow lane (Apple Music style) — a fixed column AFTER Duration. Present only when the set
+        // keeps the Actions lane AND the caller reserved its width in `tracks` (the detail list; eager/preview rows and
+        // the ultra-compact tier pass null → no extra cell). Kept in cell order so the header's matching empty cell and
+        // the row stay column-aligned.
+        if (set.Actions && actionsCell is not null) cells.Add(actionsCell);
 
+        float padX = PadXFor(set.Tier);
         return new GridEl
         {
-            Columns = tracks, ColGap = ColGap, RowHeight = rowH, Grow = 1f,   // fill the row skin's content lane
-            // Pad PadX − RowInset: with the skin's RowInset margin, columns still start at PadX (header-aligned).
-            Padding = new Edges4(PadX - RowInset, 0f, PadX - RowInset, 0f),
+            Columns = tracks, ColGap = ColGapFor(set.Tier), RowHeight = rowH, Grow = 1f,   // fill the row skin's content lane
+            // Pad padX − RowInset: with the skin's RowInset margin, columns still start at padX (header-aligned).
+            Padding = new Edges4(padX - RowInset, 0f, padX - RowInset, 0f),
             Children = cells.ToArray(),
         };
     }
@@ -150,8 +163,8 @@ internal static class TrackRow
         {
             MinHeight = rowH, ClipToBounds = true, Margin = new Edges4(RowInset, 0f, RowInset, 0f),
             Corners = CornerRadius4.All(6f),
-            // Row fills are neutral translucent overlays in BOTH themes now (white-alpha zebra, ink-alpha hover/press
-            // in light; white-alpha in dark) — the preset tint comes from the surfaces beneath, so no theme branch.
+            // Row fills are neutral translucent overlays: light uses a quiet ink ramp that remains visible over pale
+            // Mica, while dark uses white-alpha. The preset tint still comes from the surface beneath.
             Fill = oddZebra ? WaveeColors.RowZebra : ColorF.Transparent,
             HoverFill = oddZebra ? WaveeColors.RowHoverZebra : WaveeColors.RowHover,
             PressedFill = oddZebra ? WaveeColors.RowPressedZebra : WaveeColors.RowPressed,
@@ -182,12 +195,12 @@ internal static class TrackRow
         if (explicitBadge && t.IsExplicit) meta.Add(ExplicitBadge());
         if (set.Video && t.HasVideo)
         {
-            if (meta.Count > 0) meta.Add(new TextEl("Â·") { Size = 12f, Color = Tok.TextTertiary });
+            if (meta.Count > 0) meta.Add(new TextEl("\u00B7") { Size = 12f, Color = Tok.TextTertiary });
             meta.Add(Icon(Icons.Movie, 13f, Tok.TextTertiary));
         }
         if (showArtists)
         {
-            if (meta.Count > 0) meta.Add(new TextEl("Â·") { Size = 12f, Color = Tok.TextTertiary });
+            if (meta.Count > 0) meta.Add(new TextEl("\u00B7") { Size = 12f, Color = Tok.TextTertiary });
             meta.Add(go is null
                 ? new TextEl(DetailFormat.ArtistNames(t.Artists)) { Size = 12f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f }
                 : ArtistLinks(t.Artists, go));

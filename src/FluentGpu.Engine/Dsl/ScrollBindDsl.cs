@@ -62,6 +62,13 @@ public readonly record struct ScrollBindDsl
     /// <summary>Overscroll hero: scale uniformly from origin (0.5,0) by the top overscroll band, cancelling the band's
     /// content shift (replaces the old <c>ScrollStretchHeader</c>). The hero authors <c>TransformOriginX=0.5, Y=0</c>.</summary>
     public bool StretchFromTop { get; init; }
+    /// <summary>Sticky clip: hold this node's ClipRect TOP at the viewport top + this inset — the paint dual of
+    /// <see cref="PinTop"/>. The node scrolls normally but its pixels STOP at the viewport-anchored line, so the
+    /// page's real backdrop (Mica/tint) — not this node's content — shows behind chrome pinned on that line.
+    /// Released (no clip) while the line sits at/above the node's top. This bind OWNS the node's ClipRect — do not
+    /// combine with <see cref="BindSink.ClipTop"/>/<see cref="BindSink.ClipBottom"/> binds on the same node.
+    /// <see cref="OnFlag"/> observes the clip's engage/release edge (the :stuck analog).</summary>
+    public float? ClipTopAtViewport { get; init; }
 
     // ── predicate channel hook (the CSS :stuck-style observable) ──
     /// <summary>Fires once per edge flip of the watched flag (UI-thread, never per-frame). For a <see cref="PinTop"/>

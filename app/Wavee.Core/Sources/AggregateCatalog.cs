@@ -125,6 +125,17 @@ public sealed class AggregateCatalog : IMusicLibrary, ICollectionEvents
         return new SearchResults(t, al, ar, pl, topHits, tt, at, art, pt);
     }
 
+    // Offline library search: the first source that has cached data wins (the store-backed source); others default empty.
+    public async Task<LibrarySearchResults> SearchLibraryAsync(string query, LibrarySearchScope scope, CancellationToken ct = default)
+    {
+        foreach (var s in _reg.CatalogSources)
+        {
+            var x = await s.SearchLibraryAsync(query, scope, ct).ConfigureAwait(false);
+            if (!x.IsEmpty) return x;
+        }
+        return LibrarySearchResults.Empty;
+    }
+
     public async Task<IReadOnlyList<string>> SuggestAsync(string query, CancellationToken ct = default)
     {
         var x = await SuggestRichAsync(query, ct).ConfigureAwait(false);

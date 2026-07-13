@@ -176,6 +176,75 @@ public class ExtendedMetadataSourceTests
         Assert.Same(tracks[0].Artists[0], tracks[1].Artists[0]);   // memoized → the SAME ArtistRef instance, not two copies
     }
 
+    // ── ArtistV4 discography projection (the V4 path that replaced queryArtistDiscography*) ──
+    // One AlbumGroup head = one gid-only stub album; album[0] is the representative release (versions grouped).
+    static Pb.AlbumGroup Group(byte gid)
+    {
+        var g = new Pb.AlbumGroup();
+        g.Album.Add(new Pb.Album { Gid = Gid(gid) });   // gid only → a stub (Name/Cover absent, as on the real wire)
+        return g;
+    }
+
+    static byte[] CraftArtistResponse(Pb.Artist artist, string uri = "spotify:artist:x")
+    {
+        var array = new Xm.EntityExtensionDataArray { ExtensionKind = Xm.ExtensionKind.ArtistV4 };
+        array.ExtensionData.Add(new Xm.EntityExtensionData { EntityUri = uri, ExtensionData = Any.Pack(artist) });
+        var resp = new Xm.BatchedExtensionResponse();
+        resp.ExtendedMetadata.Add(array);
+        return resp.ToByteArray();
+    }
+
+    [Fact]
+    public void ProjectResponse_ArtistV4_ProjectsDiscographyStubs_TotalsAndBio()
+    {
+        var store = new InMemoryStore();
+        var artist = new Pb.Artist { Gid = Gid(0x30), Name = "Disco Artist" };
+        artist.AlbumGroup.Add(Group(0x40)); artist.AlbumGroup.Add(Group(0x41));           // 2 albums
+        artist.SingleGroup.Add(Group(0x50)); artist.SingleGroup.Add(Group(0x51)); artist.SingleGroup.Add(Group(0x52));   // 3 singles
+        artist.CompilationGroup.Add(Group(0x60));                                          // 1 compilation
+        artist.AppearsOnGroup.Add(Group(0x70));                                            // 1 appears-on
+        artist.Biography.Add(new Pb.Biography { Text = "A short bio." });
+
+        ExtendedMetadataSource.ProjectResponse(CraftArtistResponse(artist), store);
+
+        var a = store.GetArtist("spotify:artist:" + Base62.Encode(Bytes(0x30)));
+        Assert.NotNull(a);
+        // Own discography = 2 albums + 3 singles + 1 compilation, in that group order.
+        Assert.Equal(6, a!.TopAlbums!.Count);
+        Assert.Equal(AlbumKind.Album, a.TopAlbums[0].Kind);
+        Assert.Equal(AlbumKind.Album, a.TopAlbums[1].Kind);
+        Assert.Equal(AlbumKind.Single, a.TopAlbums[2].Kind);
+        Assert.Equal(AlbumKind.Single, a.TopAlbums[4].Kind);
+        Assert.Equal(AlbumKind.Compilation, a.TopAlbums[5].Kind);
+        Assert.Equal(0, a.TopAlbums[0].Name.Length);   // gid-only stub (assembly upgrades it later)
+        // Facet totals ARE the group counts now.
+        Assert.Equal(2, a.AlbumsTotal);
+        Assert.Equal(3, a.SinglesTotal);
+        Assert.Equal(1, a.CompilationsTotal);
+        // Appears-on stubs + biography.
+        Assert.Single(a.AppearsOn!);
+        Assert.Equal("A short bio.", a.Bio);
+        // Top-track gids are NOT written to Artist.TopTracks (that would trip the stats gate).
+        Assert.True(a.TopTracks is null or { Count: 0 });
+    }
+
+    [Fact]
+    public void ProjectResponse_AlbumV4_TypeEp_MapsToEpKind()
+    {
+        var store = new InMemoryStore();
+        var album = new Pb.Album { Gid = Gid(0x81), Name = "An EP", Type = Pb.Album.Types.Type.Ep };   // wire type 4 = EP
+        var array = new Xm.EntityExtensionDataArray { ExtensionKind = Xm.ExtensionKind.AlbumV4 };
+        array.ExtensionData.Add(new Xm.EntityExtensionData { EntityUri = "spotify:album:x", ExtensionData = Any.Pack(album) });
+        var resp = new Xm.BatchedExtensionResponse();
+        resp.ExtendedMetadata.Add(array);
+
+        ExtendedMetadataSource.ProjectResponse(resp.ToByteArray(), store);
+
+        var al = store.GetAlbum("spotify:album:" + Base62.Encode(Bytes(0x81)));
+        Assert.NotNull(al);
+        Assert.Equal(AlbumKind.EP, al!.Kind);
+    }
+
     [Fact]
     public void ProjectResponse_ProjectsShowAndEpisode()
     {
@@ -211,5 +280,89 @@ public class ExtendedMetadataSourceTests
         Assert.Equal("My Show", epi.ShowName);                     // from the embedded show ref
         Assert.Equal(2024, epi.PublishedAt.Year);
         Assert.Equal(3, epi.PublishedAt.Month);
+    }
+}
+
+// The stub-safe discography merge (StoreEntityMerge.MergeAlbumCards, exercised through InMemoryStore.UpsertArtist): a
+// name-less ArtistV4 stub must never downgrade a hydrated card, but incoming order + Kind win.
+public class ArtistCardMergeTests
+{
+    const string ArtistUri = "spotify:artist:ar";
+    static Album Card(string id, string name, AlbumKind kind = AlbumKind.Album, int year = 2020)
+        => new(id, "spotify:album:" + id, name, null, Array.Empty<ArtistRef>(), year, 0, null, kind);
+    static Artist ArtistWith(params Album[] cards) => new("ar", ArtistUri, "Ar", null, cards);
+
+    [Fact]
+    public void StubOverHydrated_KeepsName_TakesIncomingKind()
+    {
+        var store = new InMemoryStore();
+        store.UpsertArtist(ArtistWith(Card("a1", "Hydrated Name", AlbumKind.Album)));   // a hydrated card
+        store.UpsertArtist(ArtistWith(Card("a1", "", AlbumKind.Single)));               // a later name-less stub, different Kind
+
+        var result = store.GetArtist(ArtistUri)!.TopAlbums!;
+        var only = Assert.Single(result);
+        Assert.Equal("Hydrated Name", only.Name);        // the hydrated card was kept…
+        Assert.Equal(AlbumKind.Single, only.Kind);       // …but adopts the incoming (authoritative) Kind
+    }
+
+    [Fact]
+    public void HydratedOverStub_Upgrades()
+    {
+        var store = new InMemoryStore();
+        store.UpsertArtist(ArtistWith(Card("a1", "", AlbumKind.Album)));                // a stub first
+        store.UpsertArtist(ArtistWith(Card("a1", "Hydrated Name", AlbumKind.Album)));   // a hydrated write upgrades it
+
+        var only = Assert.Single(store.GetArtist(ArtistUri)!.TopAlbums!);
+        Assert.Equal("Hydrated Name", only.Name);
+    }
+
+    [Fact]
+    public void NullIncoming_KeepsCurrent()
+    {
+        var store = new InMemoryStore();
+        store.UpsertArtist(ArtistWith(Card("a1", "Hydrated Name")));
+        // A GraphQL-stats write neutralizes discography fields (TopAlbums: null) → the V4 cards must survive.
+        store.UpsertArtist(new Artist("ar", ArtistUri, "Ar", null, TopAlbums: null, MonthlyListeners: 999));
+
+        var result = store.GetArtist(ArtistUri)!;
+        Assert.Equal("Hydrated Name", Assert.Single(result.TopAlbums!).Name);
+        Assert.Equal(999, result.MonthlyListeners);
+    }
+}
+
+// ArtistDiscography.Assemble: upgrade stub cards to resident AlbumV4 cards, DATE_DESC, with tracklists stripped off the
+// embedded cards (an Artist row must not persist hundreds of tracklists).
+public class ArtistDiscographyAssembleTests
+{
+    const string ArtistUri = "spotify:artist:ar";
+    static Track Trk(string id) => new(id, "spotify:track:" + id, "T" + id, Array.Empty<ArtistRef>(),
+        new AlbumRef("", "", ""), 1000, false, null);
+
+    [Fact]
+    public void Assemble_UpgradesStubs_SortsDateDesc_StripsTracklists()
+    {
+        var store = new InMemoryStore();
+        // Stub discography (gid-only, Kind carried).
+        store.UpsertArtist(new Artist("ar", ArtistUri, "Ar", null, new[]
+        {
+            new Album("a1", "spotify:album:a1", "", null, Array.Empty<ArtistRef>(), 0, 0, null, AlbumKind.Album),
+            new Album("a2", "spotify:album:a2", "", null, Array.Empty<ArtistRef>(), 0, 0, null, AlbumKind.Single),
+        }));
+        // Resident hydrated AlbumV4 cards with tracklists + years.
+        store.UpsertAlbum(new Album("a1", "spotify:album:a1", "Old Album", null, Array.Empty<ArtistRef>(), 2018, 1,
+            new[] { Trk("t1") }, AlbumKind.Album, Hydration: AlbumHydrationLevel.Tracks));
+        store.UpsertAlbum(new Album("a2", "spotify:album:a2", "New Single", null, Array.Empty<ArtistRef>(), 2022, 1,
+            new[] { Trk("t2") }, AlbumKind.Single, Hydration: AlbumHydrationLevel.Tracks));
+
+        ArtistDiscography.Assemble(store, ArtistUri);
+
+        var cards = store.GetArtist(ArtistUri)!.TopAlbums!;
+        Assert.Equal(2, cards.Count);
+        Assert.Equal("spotify:album:a2", cards[0].Uri);   // 2022 first (DATE_DESC)
+        Assert.Equal("spotify:album:a1", cards[1].Uri);   // 2018 second
+        Assert.Equal("New Single", cards[0].Name);        // upgraded from the stub
+        Assert.Equal(AlbumKind.Single, cards[0].Kind);    // stub Kind preserved
+        Assert.Null(cards[0].Tracks);                     // tracklist stripped off the embedded card
+        Assert.Null(cards[1].Tracks);
     }
 }

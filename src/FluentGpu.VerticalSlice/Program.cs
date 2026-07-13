@@ -2383,6 +2383,25 @@ sealed class E4ToolTipProbe : Component
     });
 }
 
+// e4popup.7b — the tooltip-over-a-scroller probe: the wrapped target sits in a tall vertical ScrollView, so the
+// gate can prove an OPEN bubble never eats wheel input (neither over the bubble nor anywhere else in the window).
+sealed class E4ToolTipWheelProbe : Component
+{
+    public override Element Render() => Embed.Comp(() => new OverlayHost
+    {
+        Child = ScrollView(new BoxEl
+        {
+            Direction = 1,
+            Children =
+            [
+                new BoxEl { Height = 100f },
+                ToolTip.Wrap(new BoxEl { Width = 120, Height = 32, Fill = ColorF.FromRgba(40, 40, 40) }, "tip-wheel"),
+                new BoxEl { Height = 1200f },
+            ],
+        }) with { Grow = 1f },
+    });
+}
+
 sealed class CheckBoxProbe : Component
 {
     public CheckState State;
@@ -5570,6 +5589,84 @@ static class Slice
                 $"restY={restY:0} pinnedY={pinnedY:0} (vpTop={vpTop:0}) clampedY={clampedY:0} releasedY={releasedY:0} pinEvents={pinEvents} lastPin={lastPin}");
         }
 
+        // 23u3 — sticky clip-top (ScrollBindDsl.ClipTopAtViewport, the paint dual of the 23u pin): the body's
+        // ClipRect.top rides the viewport-anchored line (viewport top + inset) 1:1 with the offset while engaged,
+        // releases back to the Infinite sentinel when the line sits above the body, and OnFlag fires per edge —
+        // the mechanism that keeps the page backdrop (not the cards) behind a pinned section header.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("sticky-clip", new Size2(320, 200), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            int clipEvents = 0; bool lastClip = false; NodeHandle bodyN = NodeHandle.Null;
+            var root = new W0fStaticProbe
+            {
+                Build = () => ScrollView(new BoxEl
+                {
+                    Direction = 1,
+                    Children =
+                    [
+                        new BoxEl { Height = 100f },                              // lead-in
+                        new BoxEl                                                  // the section (containing block)
+                        {
+                            Direction = 1,
+                            Children =
+                            [
+                                new BoxEl { Height = 40f, ScrollBinds = [ new() { PinTop = 0f } ] },   // the pinned header
+                                new BoxEl                                                              // the section body
+                                {
+                                    Height = 400f,
+                                    ScrollBinds = [ new() { ClipTopAtViewport = 40f, OnFlag = c => { clipEvents++; lastClip = c; } } ],
+                                    OnRealized = h => bodyN = h,
+                                },
+                            ],
+                        },
+                        new BoxEl { Height = 600f },                               // after the section
+                    ],
+                }),
+            };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var s = host.Scene;
+            NodeHandle FindScrollable(NodeHandle n)
+            {
+                if (n.IsNull) return NodeHandle.Null;
+                if (s.HasScroll(n)) return n;
+                for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c))
+                {
+                    var r = FindScrollable(c);
+                    if (!r.IsNull) return r;
+                }
+                return NodeHandle.Null;
+            }
+            var vp = FindScrollable(s.Root);
+            var content = s.ScrollRef(vp).ContentNode;
+            void ScrollTo(float y)
+            {
+                ref ScrollState st = ref s.ScrollRef(vp);
+                st.OffsetY = y; st.TargetY = y;
+                s.Paint(content).LocalTransform = Affine2D.Translation(0f, -y);
+                s.Mark(content, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+                window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(8f, 8f), 0, 0));
+                host.RunFrame();
+            }
+
+            bool restReleased = s.Paint(bodyN).ClipRect.IsInfinite;   // at rest: line far above the body → no clip
+            // Body spans content 140..540. At offset 250 the line (viewport top + 40) sits at content-y 290 →
+            // body-local clip top = 250 + 40 − 140 = 150; one more scroll px moves it exactly one px (1:1).
+            ScrollTo(250f);
+            float clipA = s.Paint(bodyN).ClipRect.Y;
+            ScrollTo(251f);
+            float clipB = s.Paint(bodyN).ClipRect.Y;
+            ScrollTo(90f);    // line at content-y 130, above the body top (140) → released, not a stale 0-clip
+            bool releasedMid = s.Paint(bodyN).ClipRect.IsInfinite;
+            Check("23u3. sticky clip-top — body ClipRect.top rides the viewport line 1:1, releases above the body, OnFlag per edge",
+                restReleased && Near(clipA, 150f, 0.5f) && Near(clipB - clipA, 1f, 0.1f)
+                && releasedMid && clipEvents == 2 && !lastClip,
+                $"rest={restReleased} clipA={clipA:0.#} clipB={clipB:0.#} releasedMid={releasedMid} clipEvents={clipEvents} lastClip={lastClip}");
+        }
+
         // 23u2 — trailing-anchored presented height: a pinned hero collapses without relayout, its bottom-authored
         // child + edge stay attached to the live reveal edge, the following content meets that edge through normal
         // scrolling, and hit-testing follows the child-group shift.
@@ -6319,9 +6416,38 @@ static class Slice
         bool edgeClipOk = edgeLayer.Kind == (int)LayerKind.EdgeFade
             && Near(edgeLayer.DeviceRect.H, 160f)
             && Near(edgeLayer.CompositeClip.H, 80f)
-            && Near(edgeLayer.CompositeClip.W, 200f);
-        Check("30a. edge-fade layer carries effective composite clip",
-            edgeClipOk, $"deviceH={edgeLayer.DeviceRect.H:0.#} clip=({edgeLayer.CompositeClip.W:0.#}x{edgeLayer.CompositeClip.H:0.#})");
+            && Near(edgeLayer.CompositeClip.W, 200f)
+            && edgeLayer.LayerId != 0;
+        Check("30a. edge-fade layer carries effective composite clip + stable source id",
+            edgeClipOk, $"deviceH={edgeLayer.DeviceRect.H:0.#} clip=({edgeLayer.CompositeClip.W:0.#}x{edgeLayer.CompositeClip.H:0.#}) id={edgeLayer.LayerId}");
+
+        var nestedScene = new SceneStore();
+        new TreeReconciler(nestedScene, strings).ReconcileRoot(new BoxEl
+        {
+            Width = 240, Height = 120,
+            EdgeFade = new EdgeFadeSpec(EdgeMask.Horizontal, 24f),
+            Children =
+            [
+                new BoxEl
+                {
+                    Width = 180, Height = 80, Acrylic = AcrylicSpec.InAppDefault,
+                    Children = [new BoxEl { Width = 180, Height = 80, Fill = ColorF.FromRgba(255, 255, 255) }],
+                },
+            ],
+        }, null);
+        new FlexLayout(nestedScene, new HeadlessFontSystem(strings)).Run(nestedScene.Root);
+        var nestedDl = new DrawList();
+        SceneRecorder.Record(nestedScene, nestedDl);
+        var nestedDev = new HeadlessGpuDevice();
+        nestedDev.SubmitDrawList(nestedDl.Bytes, nestedDl.SortKeys, new FrameInfo(new Size2(400, 300), 1f, ColorF.Transparent));
+        bool nestedKinds = nestedDev.LastLayers.Count >= 2
+            && nestedDev.LastLayers[0].Kind == (int)LayerKind.EdgeFade
+            && nestedDev.LastLayers[1].Kind == (int)LayerKind.Acrylic
+            && nestedDev.LastLayers[0].LayerId != 0
+            && nestedDev.LastLayers[1].LayerId != 0
+            && nestedDev.LayerBalance == 0;
+        Check("30b. edge-fade -> acrylic records balanced nested layers with stable target identities",
+            nestedKinds, $"layers={nestedDev.LastLayers.Count} balance={nestedDev.LayerBalance}");
     }
 
     // Phase 2 — the generic runtime: keyframes, composite (add), springs, and scroll-driven timelines.
@@ -17173,6 +17299,62 @@ static class Slice
                 $"!700={notAt700} 800={openAt800} dwell={stillOpenAt4800} auto={autoClosed} !300={reshowNotAt300} 400={reshowAt400}");
         }
 
+        // e4popup.7b — an OPEN tooltip never blocks input: the bubble is hit-test-invisible (ToolTip.cs) AND the
+        // overlay host's full-bleed positioning wrappers + the Raw chrome surface yield self (HitTestPassThrough),
+        // so with the bubble open over a scrollable page (a) a wheel AT the bubble scrolls the page beneath it and
+        // (b) a wheel anywhere ELSE in the window still resolves the page scroller. (The regression: the entry's
+        // full-bleed wrapper was HitTestAny's window-wide deepest hit — no scroller in its ancestor chain — so
+        // wheel input died EVERYWHERE while any popup/tooltip was open.)
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("e4tipwheel", new Size2(480, 360), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new E4ToolTipWheelProbe();
+            var clock = new ManualFrameTimeSource();
+            using var host = new AppHost(app, window, device, fonts, strings, root, frameTime: clock);
+            host.RunFrame();
+            var s = host.Scene;
+            NodeHandle FindScrollable(NodeHandle n)
+            {
+                if (n.IsNull) return NodeHandle.Null;
+                if (s.HasScroll(n)) return n;
+                for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c))
+                {
+                    var r = FindScrollable(c);
+                    if (!r.IsNull) return r;
+                }
+                return NodeHandle.Null;
+            }
+            var vp = FindScrollable(s.Root);
+
+            void Hover(float x, float y) { window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(x, y), 0, 0)); host.RunFrame(); }
+            void Step(float ms) { clock.Advance(ms); host.RunFrame(); }
+            void Poll() { for (int i = 0; i < 4; i++) host.RunFrame(); }
+            float ScrollProgress() { ref var st = ref s.ScrollRef(vp); return MathF.Max(st.TargetY, st.OffsetY); }
+
+            Hover(60f, 116f);                 // over the wrapped target (content y 100..132)
+            Poll(); Step(850f); Poll();       // the 800ms show delay elapses → bubble open
+            var bubbleText = FindTextNode(s, strings, s.Root, "tip-wheel");
+            bool open = !bubbleText.IsNull;
+            var br = open ? s.AbsoluteRect(bubbleText) : default;
+
+            // (a) wheel AT the open bubble: the page beneath must scroll (bubble + overlay wrappers all yield).
+            window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(br.X + 2f, br.Y + 2f), 0, 0, 60f));
+            for (int i = 0; i < 6; i++) Step(16f);
+            float afterBubbleWheel = ScrollProgress();
+
+            // (b) wheel far from the bubble while the entry is still open: must also reach the page scroller.
+            window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(420f, 320f), 0, 0, 60f));
+            for (int i = 0; i < 6; i++) Step(16f);
+            float afterFarWheel = ScrollProgress();
+
+            Check("e4popup.7b an open tooltip never blocks input — wheel scrolls the page at the bubble AND anywhere else",
+                open && afterBubbleWheel > 1f && afterFarWheel > afterBubbleWheel + 1f,
+                $"open={open} afterBubble={afterBubbleWheel:0.#} afterFar={afterFarWheel:0.#}");
+        }
+
         // e4popup.8 — focus restores to the pre-open node when the close STARTS, not when the fade finishes: WinUI
         // restores the popup's SavedFocusState synchronously in Hide()/CPopup::Close (Popup_Partial.h:63-64;
         // FlyoutBase returns focus to the invoker on Hide, not after the close animation) — the popup is still on
@@ -17401,15 +17583,23 @@ static class Slice
         var stampA = AcrylicBackdropMath.Stamp(new RectF(100f, 80f, 300f, 200f), 30f, 1f, 1920, 1080);
         var stampSame = AcrylicBackdropMath.Stamp(new RectF(100f, 80f, 300f, 200f), 30f, 1f, 1920, 1080);
         var stampMoved = AcrylicBackdropMath.Stamp(new RectF(100f, 90f, 300f, 200f), 30f, 1f, 1920, 1080);   // rect moved 10 DIP
+        var stampSource = AcrylicBackdropMath.Stamp(new RectF(100f, 80f, 300f, 200f), 30f, 1f, 1920, 1080,
+            sourceId: 42, clipLeft: 90, clipTop: 70, clipRight: 410, clipBottom: 290);
+        var stampOtherSource = AcrylicBackdropMath.Stamp(new RectF(100f, 80f, 300f, 200f), 30f, 1f, 1920, 1080,
+            sourceId: 43, clipLeft: 90, clipTop: 70, clipRight: 410, clipBottom: 290);
+        var stampOtherClip = AcrylicBackdropMath.Stamp(new RectF(100f, 80f, 300f, 200f), 30f, 1f, 1920, 1080,
+            sourceId: 42, clipLeft: 100, clipTop: 70, clipRight: 410, clipBottom: 290);
         AcrylicBackdropMath.SnapshotRegion(new RectF(100f, 80f, 300f, 200f), 1f, 4, 1920, 1080, out int qx, out int qy, out int qw, out int qh);
         var region = new RectF(qx, qy, qw, qh);
         bool reuseNone = AcrylicBackdropMath.BackdropReusable(stampA, stampSame, region, default);                                 // nothing moved → reuse
         bool reuseFar  = AcrylicBackdropMath.BackdropReusable(stampA, stampSame, region, new RectF(1500f, 900f, 100f, 80f));       // damage elsewhere (e.g. bottom player bar) → reuse
         bool reblurHit = !AcrylicBackdropMath.BackdropReusable(stampA, stampSame, region, new RectF(150f, 120f, 40f, 40f));        // damage inside the snapshot region → re-blur
         bool reblurGeo = !AcrylicBackdropMath.BackdropReusable(stampA, stampMoved, region, default);                               // geometry changed → re-blur
-        Check("64n5. acrylic retained-backdrop cache: reuse when unchanged + damage misses the region; re-blur on geometry change or a damage hit (design §2.3)",
-            reuseNone && reuseFar && reblurHit && reblurGeo,
-            $"reuse(none)={reuseNone} reuse(far)={reuseFar} reblur(hit)={reblurHit} reblur(geo)={reblurGeo}");
+        bool reblurSource = !AcrylicBackdropMath.BackdropReusable(stampSource, stampOtherSource, region, default);
+        bool reblurClip = !AcrylicBackdropMath.BackdropReusable(stampSource, stampOtherClip, region, default);
+        Check("64n5. acrylic retained-backdrop cache invalidates on geometry, damage, source-target, or clip changes",
+            reuseNone && reuseFar && reblurHit && reblurGeo && reblurSource && reblurClip,
+            $"reuse(none)={reuseNone} reuse(far)={reuseFar} hit={reblurHit} geo={reblurGeo} source={reblurSource} clip={reblurClip}");
     }
 
     static void ContentDialogChromeChecks(StringTable strings)

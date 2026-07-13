@@ -97,11 +97,6 @@ public static class PathfinderOps
     public const string QueryArtistOverview = "queryArtistOverview";
     public const string QueryArtistOverviewHash = "7f86ff63e38c24973a2842b672abe44c910c1973978dc8a4a0cb648edef34527";
 
-    public const string QueryArtistDiscographyAlbums = "queryArtistDiscographyAlbums";
-    public const string QueryArtistDiscographySingles = "queryArtistDiscographySingles";
-    public const string QueryArtistDiscographyCompilations = "queryArtistDiscographyCompilations";
-    public const string QueryArtistDiscographyHash = "5e07d323febb57b4a56a42abbf781490e58764aa45feb6e3dc0591564fc56599";
-
     public const string GetAlbum = "getAlbum";
     public const string GetAlbumHash = "b9bfabef66ed756e5e13f68a942deb60bd4125ec1f1be8cc42769dc0259b4b10";
 
@@ -110,10 +105,10 @@ public static class PathfinderOps
     public const string FetchExtractedColors = "fetchExtractedColors";
     public const string FetchExtractedColorsHash = "36e90fcaea00d47c695fce31874efeb2519b97d4cd0ee1abfb4f8dc9348596ea";
 
+    // Desktop "home" persisted query (INTEGRATION_DESKTOP). The response embeds the recently-played list inline
+    // (HomeRecentlyPlayedSectionData → a `List` of recent entities), so no separate `recents` query is needed.
     public const string Home = "home";
-    public const string HomeHash = "40c1423fc26ea0d68cd8f212e79ca47df7968fc40d83d184e756af54fd043143";
-    public const string Recents = "recents";
-    public const string RecentsHash = "698be5892a3cc95331deebeff463d05dfdd5febf5254bea30b895b5a93dfb584";
+    public const string HomeHash = "9052ac65ff42aefe6d39c45c184d9144cf8dbcc233ea1a76f8649264ad3e7896";
 
     public const string SearchTracks = "searchTracks";
     public const string SearchTracksHash = "59ee4a659c32e9ad894a71308207594a65ba67bb6b632b183abe97303a51fa55";
@@ -141,4 +136,10 @@ public static class PathfinderOps
 
     public const string QueryWhatsNewFeed = "queryWhatsNewFeed";
     public const string QueryWhatsNewFeedHash = "d889c8c936ab192af8ced595427f5ba2acdf63478fdc0a181c8d477f8322630e";
+
+    // Batch preview lookup for home baseline recommendations: variables { uris:[playlist…] } →
+    // data.lookup[].{_uri, data.previewItems.items[].data.{name, uri, albumOfTrack.coverArt, previews.audioPreviews}}.
+    // Feeds the Featured editorial card's hover peek (HomeBaselinePreviews).
+    public const string FeedBaselineLookup = "feedBaselineLookup";
+    public const string FeedBaselineLookupHash = "a950fb7c4ecdcaf2aad2f3ca9ee9c3aa4b9c43c97e1d07d05148c4d355bea7fc";
 }

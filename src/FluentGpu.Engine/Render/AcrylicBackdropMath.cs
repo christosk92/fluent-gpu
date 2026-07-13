@@ -111,11 +111,15 @@ public static class AcrylicBackdropMath
     /// re-running passes A/B/C (design/subsystems/backdrop-effects-animation.md §2.3 "snapshot taken once on the
     /// overlay's PushLayer"). Bit-exact float compare is correct here: the values come from the same layout/DPI/token
     /// every frame, so a frame at rest reproduces them exactly; any real change (resize, re-anchor, sigma) trips it.</summary>
-    public readonly record struct BackdropStamp(float RectX, float RectY, float RectW, float RectH, float Sigma, float Scale, int CanvasW, int CanvasH);
+    public readonly record struct BackdropStamp(
+        float RectX, float RectY, float RectW, float RectH, float Sigma, float Scale, int CanvasW, int CanvasH,
+        ulong SourceId, int ClipLeft, int ClipTop, int ClipRight, int ClipBottom);
 
     /// <summary>Build the stamp for a layer rect (logical DIP) at the current scale + canvas size.</summary>
-    public static BackdropStamp Stamp(in RectF deviceRectDip, float sigma, float scale, int canvasW, int canvasH)
-        => new(deviceRectDip.X, deviceRectDip.Y, deviceRectDip.W, deviceRectDip.H, sigma, scale, canvasW, canvasH);
+    public static BackdropStamp Stamp(in RectF deviceRectDip, float sigma, float scale, int canvasW, int canvasH,
+        ulong sourceId = 0, int clipLeft = 0, int clipTop = 0, int clipRight = 0, int clipBottom = 0)
+        => new(deviceRectDip.X, deviceRectDip.Y, deviceRectDip.W, deviceRectDip.H, sigma, scale, canvasW, canvasH,
+            sourceId, clipLeft, clipTop, clipRight, clipBottom);
 
     /// <summary>Can a retained blurred backdrop be reused this frame? True IFF the layer's determinants are unchanged
     /// (<paramref name="cached"/> == <paramref name="now"/>) AND nothing behind it changed — i.e. this frame's damage

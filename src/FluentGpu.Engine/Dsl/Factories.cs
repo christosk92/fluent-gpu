@@ -174,9 +174,26 @@ public static partial class Ui
         Children = [new TextEl(label) { Size = 14f, Color = selected ? Tok.TextOnAccentPrimary : Tok.TextPrimary }],
     };
 
-    /// <summary>A linear gradient fill spec (angle 0 = left→right, 90 = top→bottom). Apply with <c>.Gradient(...)</c>.</summary>
+    /// <summary>A linear gradient fill spec. The angle is the AXIS VECTOR direction in screen coords (cos/sin):
+    /// 0 = left→right, 90 = top→bottom, 180 = right→left, 270 = bottom→top. NOT CSS angles (CSS 180deg = to-bottom;
+    /// here 180 is HORIZONTAL) — a vertical-intent gradient authored at 180° renders as a sideways band, which reads
+    /// plausibly enough to survive review (the artist-hero seam bug). For the four axis-aligned cases prefer the
+    /// intent-named <see cref="GradientDown"/>/<see cref="GradientUp"/>/<see cref="GradientRight"/>/<see cref="GradientLeft"/>;
+    /// reserve this raw-angle form for genuine diagonals. Apply with <c>.Gradient(...)</c>.</summary>
     public static GradientSpec LinearGradient(float angleDeg, params GradientStop[] stops)
         => new(GradientShape.Linear, angleDeg, stops);
+
+    /// <summary>A top→bottom linear gradient (stop offset 0 = top edge). Apply with <c>.Gradient(...)</c>.</summary>
+    public static GradientSpec GradientDown(params GradientStop[] stops) => new(GradientShape.Linear, 90f, stops);
+
+    /// <summary>A bottom→top linear gradient (stop offset 0 = bottom edge). Apply with <c>.Gradient(...)</c>.</summary>
+    public static GradientSpec GradientUp(params GradientStop[] stops) => new(GradientShape.Linear, 270f, stops);
+
+    /// <summary>A left→right linear gradient (stop offset 0 = left edge). Apply with <c>.Gradient(...)</c>.</summary>
+    public static GradientSpec GradientRight(params GradientStop[] stops) => new(GradientShape.Linear, 0f, stops);
+
+    /// <summary>A right→left linear gradient (stop offset 0 = right edge). Apply with <c>.Gradient(...)</c>.</summary>
+    public static GradientSpec GradientLeft(params GradientStop[] stops) => new(GradientShape.Linear, 180f, stops);
 
     /// <summary>A radial gradient fill spec (center→edge). Apply with <c>.Gradient(...)</c>.</summary>
     public static GradientSpec RadialGradient(params GradientStop[] stops)

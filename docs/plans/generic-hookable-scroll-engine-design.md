@@ -249,6 +249,12 @@ public readonly record struct ScrollBindDsl
     // shorthands (set the POD Flags / PinKind):
     public float? PinTop  { get; init; }                 // sticky: clamp-to-top at this inset
     public bool   StretchFromTop { get; init; }          // overscroll hero closed-form (origin 0.5,0 + band-cancel)
+    public float? ClipTopAtViewport { get; init; }       // sticky CLIP (PinKind 3): the paint dual of PinTop — the node
+                                                         // scrolls normally but its ClipRect.top rides the viewport line
+                                                         // (top + inset), so the page backdrop, not this node's pixels,
+                                                         // shows behind chrome pinned on that line. Owns the node's
+                                                         // ClipRect; OnFlag observes the engage/release edge. Landed
+                                                         // with VerticalSlice gate 23u3 (2026-07-12).
     // predicate-channel hook (fires only on a flag flip):
     public Action<bool>? OnFlag { get; init; }
     public byte FlagBit { get; init; }                   // which ScrollFlags bit OnFlag observes

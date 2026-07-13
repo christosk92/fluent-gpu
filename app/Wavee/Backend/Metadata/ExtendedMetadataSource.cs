@@ -334,13 +334,61 @@ public sealed class ExtendedMetadataSource : IMetadataSource
             }
 
         store.UpsertAlbum(new Album(id, albumRef.Uri, al.Name, cover, artists, year, tracks.Count, tracks,
-            Hydration: AlbumHydrationLevel.Tracks));
+            Kind: KindFromWire(al.Type), Hydration: AlbumHydrationLevel.Tracks));
+
+        // Album.type (wire field 4) already distinguishes EP=4 — no track-count heuristic needed; map it straight.
+        static AlbumKind KindFromWire(int type) => type switch
+        {
+            2 => AlbumKind.Single, 3 => AlbumKind.Compilation, 4 => AlbumKind.EP, _ => AlbumKind.Album,
+        };
     }
 
     static void ProjectArtist(Lean.LeanArtist ar, IStore store)
     {
         string id = Base62.Encode(ar.Gid.Span);
-        store.UpsertArtist(new Artist(id, "spotify:artist:" + id, ar.Name, PickImage(ar.PortraitGroup)));
+        var artist = new Artist(id, "spotify:artist:" + id, ar.Name, PickImage(ar.PortraitGroup));
+
+        // The whole discography rides one ArtistV4: album/single/compilation groups → the own-discography cards (facet
+        // totals ARE the group counts now); appears_on groups → the appears-on shelf. All written as gid-only stubs here
+        // (Name/Cover usually absent on the wire); ArtistDiscography.Assemble upgrades them to resident AlbumV4 cards.
+        int own = ar.AlbumGroup.Count + ar.SingleGroup.Count + ar.CompilationGroup.Count;
+        if (own > 0)
+        {
+            var stubs = new List<Album>(own);
+            AddStubs(stubs, ar.AlbumGroup, AlbumKind.Album);
+            AddStubs(stubs, ar.SingleGroup, AlbumKind.Single);
+            AddStubs(stubs, ar.CompilationGroup, AlbumKind.Compilation);
+            artist = artist with
+            {
+                TopAlbums = stubs,
+                AlbumsTotal = ar.AlbumGroup.Count,          // per-facet totals = group counts (GraphQL facet parity)
+                SinglesTotal = ar.SingleGroup.Count,
+                CompilationsTotal = ar.CompilationGroup.Count,
+            };
+        }
+        if (ar.AppearsOnGroup.Count > 0)
+        {
+            var appears = new List<Album>(ar.AppearsOnGroup.Count);
+            AddStubs(appears, ar.AppearsOnGroup, AlbumKind.Album);
+            artist = artist with { AppearsOn = appears };
+        }
+        if (ar.Biography.Count > 0 && ar.Biography[0].Text.Length > 0)
+            artist = artist with { Bio = ar.Biography[0].Text };
+        // Top-track gids are NOT written to Artist.TopTracks — that would trip EnsureFetchedAsync's stats gate and clobber
+        // a play-count-rich overview list. They resolve to named tracks at assembly time (ArtistDiscography).
+        store.UpsertArtist(artist);
+
+        // One stub per GROUP: album[0] is the representative release (versions grouped). A gid-less head is skipped.
+        static void AddStubs(List<Album> into, IEnumerable<Lean.LeanAlbumGroup> groups, AlbumKind kind)
+        {
+            foreach (var g in groups)
+            {
+                if (g.Album.Count == 0 || g.Album[0].Gid.Length == 0) continue;
+                string aid = Base62.Encode(g.Album[0].Gid.Span);
+                into.Add(new Album(aid, "spotify:album:" + aid, g.Album[0].Name, PickImage(g.Album[0].CoverGroup),
+                    Array.Empty<ArtistRef>(), 0, 0, Kind: kind));   // Name/Cover usually empty on wire → stub; assembly upgrades
+            }
+        }
     }
 
     static void ProjectShow(Lean.LeanShow sh, IStore store)

@@ -82,6 +82,10 @@ public sealed class Services
     /// <summary>Progressive, below-the-fold album data. Stable wrapper; the live Spotify implementation is installed
     /// after login while mounted pages keep the same service identity.</summary>
     public SwitchableAlbumEnrichmentService AlbumEnrichment { get; }
+    /// <summary>Standalone-artist-page header stats (monthly listeners / followers / world rank / top-track play counts)
+    /// via the lazy <c>queryArtistOverview</c>. Stable wrapper; the live provider is installed after login, offline/fake
+    /// it is the permanently-offline <see cref="NullArtistStatsService"/>. The Library artist surface never reads it.</summary>
+    public SwitchableArtistStatsService ArtistStats { get; }
     /// <summary>Music-video detection + the video↔audio file-id map (extended-metadata, etag-cached). Stable wrapper; the
     /// live Spotify implementation is installed after login. Offline it is a no-op (<see cref="NoVideoService"/>).</summary>
     public SwitchableVideoService Video { get; }
@@ -129,6 +133,7 @@ public sealed class Services
         Connectivity = new Wavee.Backend.SwitchableConnectivity(new Wavee.Backend.Connectivity());
         Lyrics = lyrics;
         AlbumEnrichment = new SwitchableAlbumEnrichmentService(new CatalogAlbumEnrichmentService(library));
+        ArtistStats = new SwitchableArtistStatsService(new NullArtistStatsService());
         Video = new SwitchableVideoService(new NoVideoService());
         UserProfiles = new SwitchableUserProfileService(new NullUserProfileService());
         Friends = new SwitchableFriendActivityService(new NullFriendActivityService());
@@ -318,6 +323,7 @@ public sealed class Services
         Friends.SetInner(new NullFriendActivityService());   // presence feed back offline until the next live login
         SpotifyNotifications.SetInner(new NullSpotifyNotificationsService());   // gander + what's-new feeds back offline
         WhatsNew.SetInner(new NullWhatsNewService());
+        ArtistStats.SetInner(new NullArtistStatsService());   // drop the session-bound overview provider until the next live login
         MutTransport?.SetInner(new Wavee.Backend.StubTransport());   // writes return to the inert stub (queue in the durable outbox, replay on next login)
         if (RealMutationSource is { } mutSrc) mutSrc.ScheduleDrain = null;   // back to inline drains — the loop is torn down with the host
         if (RealPlaylistMutations is { } pmSrc)

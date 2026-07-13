@@ -22,9 +22,8 @@ public static class Surfaces
         Tok.Theme == ThemeKind.Dark ? ColorF.FromRgba(0x2A, 0x2A, 0x2A) : ColorF.FromRgba(0xF2, 0xF2, 0xF2);
 
     /// <summary>A top-anchored accent → transparent wash for a page header, over Mica.</summary>
-    public static GradientSpec HeroWash(ColorF accent) => new(
-        GradientShape.Linear, 90f,
-        [new GradientStop(0f, accent with { A = Tok.Theme == ThemeKind.Light ? 0.12f : 0.16f }), new GradientStop(1f, accent with { A = 0f })]);
+    public static GradientSpec HeroWash(ColorF accent) => GradientDown(
+        new GradientStop(0f, accent with { A = Tok.Theme == ThemeKind.Light ? 0.12f : 0.16f }), new GradientStop(1f, accent with { A = 0f }));
 
     /// <summary>A neutral album-art placeholder: the app's skeleton tile (<see cref="Tok.FillCardDefault"/>) that
     /// BREATHES while the art at <paramref name="url"/> is still loading and settles to a calm static tile once it is
@@ -157,7 +156,7 @@ public static class Surfaces
             Padding = new Edges4(WaveeSpace.L, WaveeSpace.L, WaveeSpace.L, WaveeSpace.L),
             Corners = CornerRadius4.All(WaveeRadius.Card),
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
-            Gradient = LinearGradient(90f,   // 90° = top→bottom
+            Gradient = GradientDown(
                 new GradientStop(0f, top),
                 new GradientStop(0.45f, card),
                 new GradientStop(1f, card)),

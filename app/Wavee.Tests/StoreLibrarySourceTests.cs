@@ -209,29 +209,37 @@ public class StoreLibrarySourceTests
     }
 
     [Fact]
-    public async Task GetArtist_StaleOverview_Revalidates_ThenFreshDoesNot()
+    public async Task GetArtist_MissingOrStubDiscography_Fetches_HydratedDoesNot()
     {
         var store = new InMemoryStore();
-        // A resident artist WITH top tracks but an old/epoch freshness stamp — i.e. a record an earlier build persisted.
-        var resident = new Artist("ar", "spotify:artist:ar", "Stale", null, TopTracks: new[] { Trk("t1") });
-        store.UpsertArtist(resident);   // FetchedAt defaults to epoch → reads as stale
+        // The V4 gate walks three states: no discography → fetch; stub (name-less) discography → fetch again
+        // (the ArtistV4 stubs haven't been upgraded to resident AlbumV4 cards yet); hydrated cards → no fetch
+        // (freshness beyond residency is MetadataService's SWR/etag concern, not this gate's).
+        var resident = new Artist("ar", "spotify:artist:ar", "Billie", null);
+        store.UpsertArtist(resident);
         var src = new StoreLibrarySource(store);
+
+        Album Card(string name) => new("al", "spotify:album:al", name, null, Array.Empty<ArtistRef>(), 2024, 10);
 
         int fetches = 0;
         src.OnDemandFetch = (uri, ct) =>
         {
             fetches++;
-            store.UpsertArtist(resident with { MonthlyListeners = 123, FetchedAt = DateTimeOffset.UtcNow });   // overview lands, stamped fresh
+            // 1st fetch lands the ArtistV4 stub; the 2nd lands the assembled (hydrated) card over it.
+            store.UpsertArtist(resident with { TopAlbums = new[] { Card(fetches == 1 ? "" : "HIT ME HARD AND SOFT") } });
             return Task.CompletedTask;
         };
 
-        var a1 = await src.GetArtistAsync("spotify:artist:ar");
-        Assert.Equal(1, fetches);                 // stale (epoch) → revalidated, even though it had top tracks
-        Assert.Equal(123, a1!.MonthlyListeners);  // served the refreshed record
+        _ = await src.GetArtistAsync("spotify:artist:ar");
+        Assert.Equal(1, fetches);                 // no TopAlbums → the V4 ensure ran
 
         var a2 = await src.GetArtistAsync("spotify:artist:ar");
-        Assert.Equal(1, fetches);                 // now FetchedAt == now → fresh → NOT re-fetched
-        Assert.Equal(123, a2!.MonthlyListeners);
+        Assert.Equal(2, fetches);                 // stub (empty Name) → still cold → ran again
+        Assert.Equal("HIT ME HARD AND SOFT", a2!.TopAlbums![0].Name);   // hydrated write upgraded the stub (MergeAlbumCards)
+
+        var a3 = await src.GetArtistAsync("spotify:artist:ar");
+        Assert.Equal(2, fetches);                 // hydrated cards resident → NOT re-fetched
+        Assert.Equal("HIT ME HARD AND SOFT", a3!.TopAlbums![0].Name);
     }
 
     [Fact]
