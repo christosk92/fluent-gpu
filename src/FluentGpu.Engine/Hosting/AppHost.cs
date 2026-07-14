@@ -273,6 +273,20 @@ public sealed class AppHost : IDisposable
     /// <summary>MemCensus GPU one-line detail hook (glyph/texture-store summary); headless leaves null.</summary>
     public Func<string>? GpuDetail { get; set; }
 
+    // The bounded CPU pixel pool the async-upload sink copies decode pixels into (returned render-side via the queue). A
+    // ctor-default keeps headless/census null-free; FluentApp replaces it with the SHARED pipeline pool before first
+    // RunFrame, and the setter re-points the already-constructed async queue's BufferPool so both draw on one budget.
+    private FluentGpu.Media.PixelBufferPool _pixelPool = new();
+
+    /// <summary>The bounded CPU pixel pool for async-upload copies. Set to the pipeline-shared pool (the one the
+    /// <c>DecodeScheduler</c> rents decode buffers from) BEFORE the first RunFrame so decode + upload draw on one
+    /// retained-bytes budget; the setter re-points the async <c>ImageUploadQueue.BufferPool</c> if it already exists.</summary>
+    public FluentGpu.Media.PixelBufferPool PixelPool
+    {
+        get => _pixelPool;
+        set { _pixelPool = value; if (_imageQueue is not null) _imageQueue.BufferPool = value; }
+    }
+
     // ── single-instance activation redirect (IPlatformApp.ActivationRedirected → app code) ──────────────────────────
     // The PAL raises IPlatformApp.ActivationRedirected on the UI thread when a second app launch is forwarded here (the
     // WM_COPYDATA path). The ctor stashes the payload and wakes a frame; Paint() drains it at the top and re-raises the
@@ -692,6 +706,7 @@ public sealed class AppHost : IDisposable
         if (_lastTrimTicks != 0 && now - _lastTrimTicks < TrimIdleCadenceTicks) return;
         _lastTrimTicks = now;
         _scene.TrimExcessCapacity();   // no-op (returns 0) unless the slab is a mostly-empty high-water tail past the floor
+        _pixelPool.Trim();             // release the idle CPU pixel-pool retention to the GC on the same idle cadence
     }
 
     // ── Skip-submit gate state (finding #3a) ─────────────────────────────────────────────────────────────────────────
@@ -1028,11 +1043,11 @@ public sealed class AppHost : IDisposable
             // ASYNC (Step 1): the UI thread must not touch the device. The pixel sink COPIES the transient decode pixels
             // into a rented ArrayPool buffer and enqueues it (optimistically admitting Ready); the render thread stages it
             // (returning the buffer) and posts back only rejections. The evict sink enqueues too. See ImageUploadQueue.
-            _imageQueue = new Threading.ImageUploadQueue();
+            _imageQueue = new Threading.ImageUploadQueue { BufferPool = _pixelPool };
             var q = _imageQueue;
             _images.SetPixelAttemptSink((int id, System.ReadOnlySpan<byte> px, int w, int h) =>
             {
-                byte[] buf = System.Buffers.ArrayPool<byte>.Shared.Rent(px.Length);
+                byte[] buf = _pixelPool.Rent(px.Length);   // bounded pixel pool copy (returned render-side via the queue's BufferPool)
                 px.CopyTo(buf);
                 q.EnqueueUpload(id, buf, w, h, px.Length);
                 return FluentGpu.Scene.ImageUploadResult.Accepted;   // optimistic; a real rejection returns via the reject ring next Pump

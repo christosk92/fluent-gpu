@@ -137,6 +137,11 @@ sealed class WaveeApp : Component
                     _services.Settings.Set(WaveeSettings.SavedVolume, v);
             }, null, dueTime: 2_000, period: 2_000);
 
+            // Publish the app-side census contributor (entity store + detail caches) for the engine's FG_MEM_DIAG
+            // [memcensus] block. Program's DiagnosticRun composes it into AppHost.GpuDetail once per launch; the string is
+            // built only when the census invokes the hook (census cadence, never per frame).
+            Services.MemCensusHook = () => _services.CensusLine();
+
             // Drive the MemoryGovernor from a periodic OS-memory-pressure poll. The Timer fires on a background thread but
             // marshals Trim to the UI thread (post) so the UI-thread-affine detail caches shed safely. At rest (no pressure)
             // it sheds nothing — each cache's LRU cap already bounds steady state; under real pressure it sheds further.

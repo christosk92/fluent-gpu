@@ -5,6 +5,7 @@ using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Localization;
 using FluentGpu.Signals;
+using Wavee.Features.Concerts;
 using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
@@ -112,6 +113,10 @@ sealed class ContentHost : Component
         if (DiscographyRoute.Is(r.Name))
             return new BoxEl { Key = "page:disco", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
                 Children = [ Embed.Comp(() => new DiscographyPage(new Signal<Route>(r))) ] };
+
+        if (ConcertRoutes.Is(r.Name))
+            return new BoxEl { Key = "page:concert-route", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
+                Children = [ Embed.Comp(() => new ConcertRoutePage(r)) ] };
 
         if (IsArtist(r)) return ArtistHost();
         if (IsDetail(r)) return DetailHost();

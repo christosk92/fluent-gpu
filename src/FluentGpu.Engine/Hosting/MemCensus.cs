@@ -42,6 +42,10 @@ public readonly struct CensusSnapshot
     public readonly int ScrollAnimActive;
     // host
     public readonly int PopupWindows;
+    // pixel pool (bounded CPU decode/upload buffers)
+    public readonly long PixelPoolRetainedBytes;
+    public readonly long PixelPoolPeakBytes;
+    public readonly long PixelPoolCapBytes;
 
     internal CensusSnapshot(AppHost host)
     {
@@ -80,6 +84,11 @@ public readonly struct CensusSnapshot
         ScrollAnimActive = host.ScrollAnimatorCensus;
 
         PopupWindows = host.PopupWindows.Count;
+
+        var pixpool = host.PixelPool;
+        PixelPoolRetainedBytes = pixpool.RetainedBytes;
+        PixelPoolPeakBytes = pixpool.PeakRetainedBytes;
+        PixelPoolCapBytes = pixpool.RetainedCapBytes;
     }
 
     /// <summary>Capture the engine census now. Deterministic and side-effect-free (passive reads only); the next
@@ -105,7 +114,7 @@ internal sealed class MemCensus
     private long _lastSampleTicks;
 
     // Growth tracking: the previous numeric vector + a per-metric "consecutive increases" streak.
-    private const int MetricCount = 26;
+    private const int MetricCount = 28;
     private readonly long[] _prev = new long[MetricCount];
     private readonly int[] _grewStreak = new int[MetricCount];
     private bool _havePrev;
@@ -174,6 +183,8 @@ internal sealed class MemCensus
         _cur[k++] = s.ScrollAnimActive;
         _cur[k++] = s.PopupWindows;
         _cur[k++] = workingSet;
+        _cur[k++] = s.PixelPoolRetainedBytes;   // growth-tracked; self-quiets at ≤cap
+        _cur[k++] = s.PixelPoolPeakBytes;        // growth-tracked; monotone during warmup, then flat (expected)
         // k == MetricCount
 
         if (_havePrev)
@@ -196,6 +207,7 @@ internal sealed class MemCensus
         Line(sb, "  recon   ", $"components={s.Components} nodeBindings={s.NodeBindings} virtuals={s.VirtualBoundaries} providers={s.Providers}", 15, 4);
         Line(sb, "  anim    ", $"tracks={s.AnimTracks} loops={s.AnimLoopTracks} transitions={s.AnimTransitions} interact={s.InteractActive} scroll={s.ScrollAnimActive}", 19, 5);
         Line(sb, "  host    ", $"popupWindows={s.PopupWindows}", 24, 1);
+        Line(sb, "  pixpool ", $"retained={Mb(s.PixelPoolRetainedBytes)} peak={Mb(s.PixelPoolPeakBytes)} cap={Mb(s.PixelPoolCapBytes)}", 26, 2);
 
         if (_host.GpuResources is { } gpuRes)
         {

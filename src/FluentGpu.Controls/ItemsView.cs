@@ -348,6 +348,72 @@ public sealed class ItemsView : Component
             OnScrollGeometryChanged = onScrollGeometryChanged,
         });
 
+    /// <summary>The typed bound factory. The collection snapshot and recycled slot index are resolved together through
+    /// <paramref name="items"/>, so every row property can read <see cref="BoundItemScope{T}.Item"/> without capturing
+    /// a mount-time list instance. The row template still runs once per slot; source changes re-run only computations
+    /// that read the item signal. Typed callbacks resolve the current item at invocation time.</summary>
+    public static Element CreateBound<T>(BoundItemsSource<T> items, Func<BoundItemScope<T>, Element> rowTemplate,
+                                         RepeatLayout layout,
+                                         ItemsSelectionMode selectionMode = ItemsSelectionMode.Single,
+                                         SelectionModel? selection = null,
+                                         bool isItemInvokedEnabled = false,
+                                         Action<int, T>? itemInvoked = null,
+                                         Action? selectionChanged = null,
+                                         Func<int, T, string>? itemText = null,
+                                         Func<int, T, bool>? isItemEnabled = null,
+                                         ItemsViewController? controller = null,
+                                         int overscan = 4,
+                                         float grow = 1f,
+                                         Func<int, (float, float)>? itemDisplacement = null,
+                                         IReadSignal<int>? displacementVersion = null,
+                                         IReadSignal<int>? draggedSlot = null,
+                                         bool suppressScrollBar = false,
+                                         bool autoEdgeFade = false,
+                                         bool staggerColdRealize = false,
+                                         string? scrollKey = null,
+                                         Func<int, (float dx, float dy)?>? itemFlipFrom = null,
+                                         Func<int, (float from, float delayMs)?>? itemFadeFrom = null,
+                                         (Func<ScrollGeometry, long> Project, Action<ScrollGeometry> Action)? onScrollGeometryChanged = null)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+        ArgumentNullException.ThrowIfNull(rowTemplate);
+
+        Action<int>? invoke = itemInvoked is null ? null : i =>
+        {
+            if (items.TryPeek(i, out var item)) itemInvoked(i, item);
+        };
+        Func<int, string>? text = itemText is null ? null : i =>
+            items.TryPeek(i, out var item) ? itemText(i, item) : string.Empty;
+        Func<int, bool>? enabled = isItemEnabled is null ? null : i =>
+            items.TryPeek(i, out var item) && isItemEnabled(i, item);
+
+        return CreateBound(
+            items.Count.Peek(),
+            scope => rowTemplate(new BoundItemScope<T>(scope, items.BindItem(scope.Index))),
+            layout,
+            selectionMode,
+            selection,
+            isItemInvokedEnabled,
+            invoke,
+            selectionChanged,
+            text,
+            enabled,
+            controller,
+            overscan,
+            grow,
+            itemDisplacement,
+            displacementVersion,
+            draggedSlot,
+            suppressScrollBar,
+            autoEdgeFade,
+            staggerColdRealize,
+            scrollKey,
+            itemFlipFrom,
+            itemFadeFrom,
+            onScrollGeometryChanged,
+            items.Count);
+    }
+
     // ── built-in presets (the former ListView/GridView controls, folded onto ItemsView) ──────────────
     // ItemsView.List(...) and ItemsView.Grid(...) are the built-in presets backed by the internal hook-bearing
     // components ItemsViewListPreset / ItemsViewGridPreset (the substrate needs hooks — UseMemo/UseSignal/UseRef/

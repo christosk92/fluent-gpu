@@ -71,13 +71,15 @@ public class NotificationAggregationTests
     }
 
     [Fact]
-    public void Unread_Activity_CountsUnreadEntries()
+    public void Unread_Activity_RemainsUnreadInPanel_ButDoesNotCountTowardBellBadge()
     {
-        var (_, unread) = NotificationMerge.Build(null,
+        var (items, unread) = NotificationMerge.Build(null,
             Array.Empty<SocialNotification>(), 0,
             Array.Empty<NewReleaseNotification>(), 0,
             new[] { Activity(1, 10, read: false), Activity(2, 20, read: true) });
-        Assert.Equal(1, unread);
+
+        Assert.Equal(0, unread);
+        Assert.True(Assert.IsType<ActivityNotification>(items[1]).IsUnread);
     }
 
     [Fact]

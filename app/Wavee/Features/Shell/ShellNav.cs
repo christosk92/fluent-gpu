@@ -1,6 +1,7 @@
 using System;
 using FluentGpu.Controls;
 using FluentGpu.Localization;
+using Wavee.Features.Concerts;
 
 namespace Wavee;
 
@@ -14,6 +15,13 @@ static class ShellNav
         if (key.StartsWith("pl:", StringComparison.Ordinal)) return (arg ?? Loc.Get(Strings.Nav.Playlist), Icons.MusicNote);
         if (key.StartsWith("album:", StringComparison.Ordinal)) return (arg ?? Loc.Get(Strings.Nav.Album), Mdl.Album);
         if (key.StartsWith("artist:", StringComparison.Ordinal)) return (arg ?? Loc.Get(Strings.Nav.Artist), Mdl.Contact);
+        if (ConcertRoutes.TryParse(key, out var concertRoute))
+            return concertRoute.Kind switch
+            {
+                ConcertRouteKind.ArtistSchedule => (arg is { Length: > 0 } ? arg + " concerts" : "Artist concerts", Mdl.Calendar),
+                ConcertRouteKind.Detail => (arg is { Length: > 0 } ? arg : "Concert details", Mdl.Calendar),
+                _ => ("Concerts", Mdl.Calendar),
+            };
         return key switch
         {
             "home"     => (Loc.Get(Strings.Nav.Home), Icons.Home),

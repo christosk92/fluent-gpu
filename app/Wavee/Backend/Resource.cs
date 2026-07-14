@@ -49,6 +49,8 @@ public sealed class Resource<TKey, TValue> where TKey : notnull
     public int FetchCount => _fetchCount;   // dedup / coalesce assertion hook
     public long HitCount => Interlocked.Read(ref _hitCount);
     public long MissCount => Interlocked.Read(ref _missCount);
+    /// <summary>Resident entry count (census attribution) — read under <c>_gate</c>, consistent with the class's locking.</summary>
+    public int Count { get { lock (_gate) return _cache.Count; } }
 
     sealed class Entry
     {

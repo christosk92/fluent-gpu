@@ -23,6 +23,18 @@ public readonly record struct ColdRootlistEntry(int Position, int Kind, string U
 public interface IColdStore : IDisposable
 {
     IEnumerable<ColdEntity> LoadAllEntities();
+
+    /// <summary>Load ONE persisted entity by uri, or null if the cold tier has no row for it. The rehydration seam for
+    /// CachedStore's cold-fallback reads (a hot miss after an entity eviction). The default is a linear scan of
+    /// <see cref="LoadAllEntities"/> (fine for the in-memory test fake); SQLite overrides it with an indexed single-row
+    /// lookup. Sees only committed rows — an entity still queued in the write-behind lane may be missed, which is safe
+    /// here: eviction only reaches entities resident long enough for the lane to have drained.</summary>
+    ColdEntity? GetEntity(string uri)
+    {
+        foreach (var e in LoadAllEntities()) if (e.Uri == uri) return e;
+        return null;
+    }
+
     IEnumerable<ColdSaved> LoadAllSaved();   // unordered library-set membership (collection_items), per active account
     void UpsertEntity(string uri, EntityKind kind, byte[] payload);   // non-blocking (write-behind)
     void UpsertSaved(string setId, string uri, bool saved, SyncState sync, long addedAtMs = 0);   // 0 = preserve stored added_at

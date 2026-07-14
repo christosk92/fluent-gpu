@@ -294,7 +294,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             if (j.Evict) { _imageTextures.Free(j.Id); continue; }
             var res = j.Buffer is null ? ImageUploadResult.Invalid : _imageTextures.Stage(j.Id, j.Buffer.AsSpan(0, j.ByteLen), j.W, j.H);
             if (res != ImageUploadResult.Accepted) queue.PostReject(j.Id, res);   // +1-frame async admission: the UI folds the rejection next Pump
-            if (j.Buffer is not null) System.Buffers.ArrayPool<byte>.Shared.Return(j.Buffer);   // ownership transferred to us; return after Stage copied it
+            if (j.Buffer is not null) queue.ReturnUploadBuffer(j.Buffer);   // ownership transferred to us; return to the host's bounded pixel pool after Stage copied it
         }
     }
 
@@ -1001,7 +1001,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 {
                     var c = MemoryMarshal.Read<DrawGradientRectCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<DrawGradientRectCmd>();
-                    _gradInsts.Add(new GradientInstance
+                    var inst = new GradientInstance
                     {
                         PosX = c.Rect.X, PosY = c.Rect.Y, W = c.Rect.W, H = c.Rect.H,
                         StartX = c.Start.X, StartY = c.Start.Y, EndX = c.End.X, EndY = c.End.Y,
@@ -1013,7 +1013,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                         M11 = c.Transform.M11, M12 = c.Transform.M12, M21 = c.Transform.M21, M22 = c.Transform.M22,
                         Dx = c.Transform.Dx, Dy = c.Transform.Dy, Radius = c.Radii.TopLeft, Opacity = c.Opacity,
                         Shape = c.Shape, StopCount = c.StopCount,
-                    });
+                    };
+                    ApplyRoundedClip(ref inst);
+                    _gradInsts.Add(inst);
                     PushRun(PrimKind.Gradient);
                     break;
                 }
@@ -1021,7 +1023,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 {
                     var c = MemoryMarshal.Read<DrawGradientStrokeCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<DrawGradientStrokeCmd>();
-                    _gradInsts.Add(new GradientInstance
+                    var inst = new GradientInstance
                     {
                         PosX = c.Rect.X, PosY = c.Rect.Y, W = c.Rect.W, H = c.Rect.H,
                         StartX = c.Start.X, StartY = c.Start.Y, EndX = c.End.X, EndY = c.End.Y,
@@ -1033,7 +1035,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                         M11 = c.Transform.M11, M12 = c.Transform.M12, M21 = c.Transform.M21, M22 = c.Transform.M22,
                         Dx = c.Transform.Dx, Dy = c.Transform.Dy, Radius = c.Radii.TopLeft, Opacity = c.Opacity,
                         Shape = c.Shape, StopCount = c.StopCount, Stroke = c.StrokeWidth,
-                    });
+                    };
+                    ApplyRoundedClip(ref inst);
+                    _gradInsts.Add(inst);
                     PushRun(PrimKind.Gradient);
                     break;
                 }
@@ -1085,14 +1089,16 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
 
     private void AddImagePlaceholder(in DrawImageCmd im)
     {
-        _rectInsts.Add(new RectInstance
+        var inst = new RectInstance
         {
             PosX = im.Rect.X, PosY = im.Rect.Y, W = im.Rect.W, H = im.Rect.H,
             RTL = im.Radii.TopLeft, RTR = im.Radii.TopRight, RBR = im.Radii.BottomRight, RBL = im.Radii.BottomLeft,
             R = im.Placeholder.R, G = im.Placeholder.G, B = im.Placeholder.B, A = im.Placeholder.A,
             M11 = im.Transform.M11, M12 = im.Transform.M12, M21 = im.Transform.M21, M22 = im.Transform.M22,
             Dx = im.Transform.Dx, Dy = im.Transform.Dy, Opacity = im.Opacity,
-        });
+        };
+        ApplyRoundedClip(ref inst);
+        _rectInsts.Add(inst);
         _frameRectCount++;
         PushRun(PrimKind.Rect);
     }
@@ -1103,7 +1109,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private void AddReadyImage(in DrawImageCmd im)
     {
         float crossFade = ImageCache.ResolveFade(_imageClockMs, im.FadeStartMs, im.FadeDurationMs, im.FadeEasing);
-        _imageDraws.Add((new ImageInstance
+        var inst = new ImageInstance
         {
             PosX = im.Rect.X, PosY = im.Rect.Y, W = im.Rect.W, H = im.Rect.H,
             RTL = im.Radii.TopLeft, RTR = im.Radii.TopRight, RBR = im.Radii.BottomRight, RBL = im.Radii.BottomLeft,
@@ -1112,7 +1118,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             Opacity = im.Opacity, CrossFade = crossFade,
             PR = im.Placeholder.R, PG = im.Placeholder.G, PB = im.Placeholder.B, PA = im.Placeholder.A,
             UvX = im.UvRect.X, UvY = im.UvRect.Y, UvW = im.UvRect.W, UvH = im.UvRect.H,
-        }, im.ImageId));
+        };
+        ApplyRoundedClip(ref inst);
+        _imageDraws.Add((inst, im.ImageId));
         _frameImageCount++;
         PushRun(PrimKind.Image);
     }
@@ -1204,6 +1212,22 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     /// <summary>Stamp the innermost rounded clip (if any) onto a RoundRect-pipeline instance (the PS multiplies its
     /// coverage by the rounded-box SDF — the tier-2 path for animated clips on rounded surfaces).</summary>
     private void ApplyRoundedClip(ref RectInstance inst)
+    {
+        if (_roundedClipStack.Count == 0) return;
+        var (rect, radius) = _roundedClipStack[^1];
+        if (rect.W <= 0f) return;
+        inst.ClipX = rect.X; inst.ClipY = rect.Y; inst.ClipW = rect.W; inst.ClipH = rect.H; inst.ClipR = radius;
+    }
+
+    private void ApplyRoundedClip(ref ImageInstance inst)
+    {
+        if (_roundedClipStack.Count == 0) return;
+        var (rect, radius) = _roundedClipStack[^1];
+        if (rect.W <= 0f) return;
+        inst.ClipX = rect.X; inst.ClipY = rect.Y; inst.ClipW = rect.W; inst.ClipH = rect.H; inst.ClipR = radius;
+    }
+
+    private void ApplyRoundedClip(ref GradientInstance inst)
     {
         if (_roundedClipStack.Count == 0) return;
         var (rect, radius) = _roundedClipStack[^1];
@@ -1469,13 +1493,20 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     {
                         if (_curBlurHashCount < _curBlurHashes.Length) _curBlurHashes[_curBlurHashCount++] = bhash;
                         int pin = _opacity.FindPin(bhash, _fenceValue + 1, in L, _frameScale);   // G1: a hit refreshes recency (MRU); size-exact match
-                        // An edge-clamped (partial) region can't reuse a full-strip pin without vertically squishing it,
-                        // so a clamped self-blur is uncacheable — miss (render + blur at the exact clamped region) here.
+                        // An edge-clamped region caches too: FindPin is SIZE-exact, so a clamped pin is distinct from the
+                        // full on-canvas pin (no squish — a size mismatch is a miss, never a stretch). We only use this to
+                        // gate MINTING while in motion (a per-frame-changing clamp size would churn RTs); a STATIONARY
+                        // clamped row hits its own clamped pin below.
                         bool regionClamped = _opacity.RegionIsClamped(in L, _frameScale);
                         // Position-independent key ⇒ a scrolled (translated) strip HITS its pin. On the SETTLE frame
                         // (InMotion==0) where the pin was captured at a different integer origin, fall through to one exact
                         // re-blur at rest (settle exactness) instead of compositing the mid-motion pin.
-                        if (pin >= 0 && !regionClamped && !(L.InMotion == 0 && _opacity.PinOriginDiffers(pin, in L, _frameScale)))
+                        // For a CLAMPED region we only hit AT REST: at rest PinOriginDiffers guards cross-clamp conflation
+                        // (a same-size top-edge vs bottom-edge pin has a different captured origin ⇒ no hit ⇒ re-mint), but
+                        // in motion that guard is skipped, so a clamped strip in motion re-blurs (design (b): it changes its
+                        // clamp size ~1px/frame and re-blurs anyway) rather than risk a same-size cross-clamp hit.
+                        if (pin >= 0 && !(regionClamped && L.InMotion != 0)
+                            && !(L.InMotion == 0 && _opacity.PinOriginDiffers(pin, in L, _frameScale)))
                         {
                             // HIT: composite the cached blur over the enclosing target; skip the subtree + its PopLayer.
                             if (_opacityGroups.Count > 0) _opacity.Bind(_cmdList, _opacityGroups[^1].Slot);
@@ -1495,10 +1526,12 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                         if (BlurHashSeenLastFrame(bhash))
                         {
                             int pslot = _opacity.Acquire(_cmdList, _fenceValue + 1);
-                            // Don't pin an edge-clamped (partial) capture: it holds only the on-canvas slice, so a later
-                            // frame at a different clamp would squish it, and each clamp size would mint a distinct
-                            // duplicate same-hash pin, thrashing the budget. pinHash 0 ⇒ pure transient (re-blur next frame).
-                            ulong pinTag = regionClamped ? 0UL : bhash;
+                            // Mint a pin unless this is an edge-clamped region IN MOTION: an actively-scrolling clamped
+                            // strip changes its clamp size ~1px/frame, so minting a fresh region-sized RT every frame is
+                            // churn for no hit (FindPin is size-exact ⇒ next frame's different size misses anyway). At
+                            // rest the clamp size is stable, so a clamped row mints once then HITS — the fix for a
+                            // stationary edge-clamped blur re-blurring every submit. pinHash 0 ⇒ pure transient.
+                            ulong pinTag = (regionClamped && L.InMotion != 0) ? 0UL : bhash;
                             _opacityGroups.Add((pslot, L, pinTag));
                             _layerKinds.Add(L.Kind);
                             _blurCacheMiss++;

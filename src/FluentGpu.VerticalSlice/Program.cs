@@ -432,6 +432,40 @@ sealed class VirtualProbe : Component
            with { Width = 300, Height = 400 };
 }
 
+// A deliberately stateful/custom layout that keeps returning its OLD upper window bound after ItemCount shrinks.
+// Real layouts can briefly have the same stale cached geometry; the reconciler seam must constrain it to the current
+// count before using layout-produced values as Math.Clamp bounds.
+sealed class StaleCountVirtualLayout(int cachedCount) : IVirtualLayout
+{
+    const float Extent = 40f;
+
+    public float ContentExtent(int itemCount, float crossSize) => Math.Max(0, itemCount) * Extent;
+
+    public void Window(int itemCount, float crossSize, float viewportExtent, float scrollOffset, int overscan,
+                       out int first, out int last)
+    {
+        first = 0;
+        last = itemCount < cachedCount
+            ? cachedCount
+            : Math.Min(itemCount, Math.Max(1, (int)MathF.Ceiling(viewportExtent / Extent) + overscan));
+    }
+
+    public RectF ItemRect(int index, float crossSize) => new(0f, index * Extent, crossSize, Extent);
+}
+
+sealed class VirtualCountShrinkProbe(int initialCount) : Component
+{
+    public readonly Signal<int> Count = new(initialCount);
+    readonly IVirtualLayout _layout = new StaleCountVirtualLayout(initialCount);
+    public int MaxRenderedIndex = -1;
+
+    public override Element Render()
+        => Virtual.Custom(Count.Value, _layout,
+               i => { MaxRenderedIndex = Math.Max(MaxRenderedIndex, i); return new BoxEl { Height = 40f }; },
+               keyOf: i => "stale-" + i)
+           with { Width = 300, Height = 400 };
+}
+
 // Scroll-position restoration: a 1000-row uniform virtual list in a 200px viewport, whose ScrollKey (content identity)
 // and presence are signal-driven so a test can simulate a cold remount (Mounted off→on) or a content swap (Key change)
 // and assert the saved offset is seeded BEFORE the first realize (no scroll-to-top flash), with a new key starting at top.
@@ -477,6 +511,20 @@ sealed class BoundVirtualProbe : Component
                };
            })
            with { Width = 300, Height = 400 };
+}
+
+// A component-backed bound row deliberately mixes a component snapshot with an index subscription, mirroring Wavee's
+// TrackRow. Used to prove a stable published virtual range still reports progress when its slot signals need rebinding.
+sealed class StableRangeBoundRow(IReadSignal<int> index) : Component
+{
+    public IReadSignal<int> Index { get; } = index;
+    public int LastRendered = -1;
+
+    public override Element Render()
+    {
+        LastRendered = Index.Value;
+        return new TextEl("row " + LastRendered);
+    }
 }
 
 // Wave 4 (E4/E5/E6) budget probes. FIVE stacked uniform virtual lists — used to prove the scene-owned dirty queue
@@ -558,6 +606,50 @@ sealed class BoundItemsViewProbe : Component
                 }, RepeatLayout.Stack(RowH), selectionMode: ItemsSelectionMode.Multiple, selection: Selection),
             ],
         };
+}
+
+readonly record struct BoundAtomicItem(string Title, string Artist, string Album, int DurationSeconds);
+
+// Same-count source replacement is the failure mode that used to expose mount-owned row captures: the slot and its
+// nodes stay alive, while every independently bound cell must advance to one coherent current item snapshot.
+sealed class BoundAtomicItemsProbe : Component
+{
+    static readonly BoundAtomicItem Fallback = new("", "", "", 0);
+    public readonly Signal<IReadOnlyList<BoundAtomicItem>> Items = new(new BoundAtomicItem[]
+    {
+        new("old-title", "old-artist", "old-album", 101),
+        new("other-title", "other-artist", "other-album", 202),
+    });
+    public BoundItemsSource<BoundAtomicItem> Source = null!;
+    public int TemplateCalls;
+
+    public override Element Render()
+    {
+        Source = UseMemo(() => BoundItems.From(Items, Fallback));
+        return new BoxEl
+        {
+            Width = 420f, Height = 160f,
+            Children =
+            [
+                ItemsView.CreateBound(Source, scope =>
+                {
+                    TemplateCalls++;
+                    var item = scope.Item;
+                    return new BoxEl
+                    {
+                        Direction = 0, MinHeight = 40f,
+                        Children =
+                        [
+                            new TextEl(Prop.Of(() => item.Value.Title)),
+                            new TextEl(Prop.Of(() => item.Value.Artist)),
+                            new TextEl(Prop.Of(() => item.Value.Album)),
+                            new TextEl(Prop.Of(() => item.Value.DurationSeconds.ToString())),
+                        ],
+                    };
+                }, RepeatLayout.Stack(40f)),
+            ],
+        };
+    }
 }
 
 sealed class BoundCountSignalProbe : Component
@@ -3257,6 +3349,64 @@ static class Slice
         if (!ok) s_failures++;
     }
 
+    static void GeolocationChecks()
+    {
+        var provider = new HeadlessGeolocationProvider();
+        var expectedPosition = new GeolocationPosition(
+            52.3676,
+            4.9041,
+            18.5,
+            new DateTimeOffset(2026, 7, 13, 12, 0, 0, TimeSpan.Zero));
+        var request = new GeolocationRequest(
+            TimeSpan.FromSeconds(3),
+            TimeSpan.FromMinutes(2),
+            GeolocationAccuracy.High);
+
+        provider.Enqueue(GeolocationResult.Success(expectedPosition));
+        GeolocationResult success = provider.RequestAsync(request).AsTask().GetAwaiter().GetResult();
+        Check("geo.contract success carries a valid provider-neutral fix",
+            success.IsSuccess && success.Position == expectedPosition &&
+            provider.RequestCount == 1 && provider.LastRequest == request,
+            $"status={success.Status} lat={success.Position.Latitude:0.####} requests={provider.RequestCount}");
+
+        provider.Enqueue(GeolocationResult.PermissionDenied);
+        GeolocationResult denied = provider.RequestAsync(request).AsTask().GetAwaiter().GetResult();
+        Check("geo.contract permission denial is distinct", denied.Status == GeolocationStatus.PermissionDenied,
+            $"status={denied.Status}");
+
+        provider.Enqueue(GeolocationResult.Unavailable);
+        GeolocationResult unavailable = provider.RequestAsync(request).AsTask().GetAwaiter().GetResult();
+        Check("geo.contract unavailable is distinct", unavailable.Status == GeolocationStatus.Unavailable,
+            $"status={unavailable.Status}");
+
+        provider.Enqueue(GeolocationResult.Failed);
+        GeolocationResult failed = provider.RequestAsync(request).AsTask().GetAwaiter().GetResult();
+        Check("geo.contract platform failure is distinct", failed.Status == GeolocationStatus.Failed,
+            $"status={failed.Status}");
+
+        HeadlessGeolocationCompletion lateCompletion = provider.EnqueuePending();
+        GeolocationResult timedOut = provider.RequestAsync(new GeolocationRequest(TimeSpan.Zero))
+            .AsTask().GetAwaiter().GetResult();
+        bool lateWasAcceptedByPlatform = lateCompletion.Complete(GeolocationResult.Success(expectedPosition));
+        Check("geo.headless timeout wins and a late platform completion cannot replace it",
+            timedOut.Status == GeolocationStatus.TimedOut && lateWasAcceptedByPlatform,
+            $"status={timedOut.Status} lateAccepted={lateWasAcceptedByPlatform}");
+
+        provider.EnqueuePending();
+        using var cancellation = new CancellationTokenSource();
+        Task<GeolocationResult> canceledTask = provider.RequestAsync(request, cancellation.Token).AsTask();
+        cancellation.Cancel();
+        GeolocationResult canceled = canceledTask.GetAwaiter().GetResult();
+        Check("geo.headless caller cancellation is distinct", canceled.Status == GeolocationStatus.Canceled,
+            $"status={canceled.Status}");
+
+        var unscripted = new HeadlessGeolocationProvider();
+        GeolocationResult fallback = unscripted.RequestAsync(request).AsTask().GetAwaiter().GetResult();
+        Check("geo.headless unscripted requests deterministically report unavailable",
+            fallback.Status == GeolocationStatus.Unavailable,
+            $"status={fallback.Status}");
+    }
+
     static NodeHandle Child(SceneStore s, NodeHandle parent, int index)
     {
         var c = s.FirstChild(parent);
@@ -4571,6 +4721,23 @@ static class Slice
         return (key, ok);
     }
 
+    // As BlurStripKey but also returns the layer's PushLayerCmd (for SelfBlurRegion clamp/region checks).
+    static (ulong key, PushLayerCmd L) BlurStripKeyL(StringTable strings, float ox, float oy, float sigma, float w, float h, StringId text)
+    {
+        var dl = new DrawList();
+        var fam = strings.Intern("Segoe UI");
+        var layerRect = new RectF(ox, oy, w, h);
+        dl.PushBlurLayer(layerRect, default, sigma, 1f);
+        var world = new Affine2D(1f, 0f, 0f, 1f, ox + 8f, oy + 6f);
+        dl.DrawGlyphRun(new RectF(0f, 0f, w, h), new ColorF(1f, 1f, 1f, 1f), text, fam, 20f, 400, 0, 0, 1, 0f, 24f, 0, 0, world, 1f);
+        dl.PopLayer(layerRect);
+        var bytes = dl.Bytes;
+        var L = MemoryMarshal.Read<PushLayerCmd>(bytes.Slice(sizeof(int)));
+        int start = sizeof(int) + Unsafe.SizeOf<PushLayerCmd>();
+        BlurPinKey.TryCompute(bytes, start, in L, out ulong key, out _);
+        return (key, L);
+    }
+
     static void BlurPinKeyChecks(StringTable strings)
     {
         // BP.1 — the core G3 invariant: a pure translation (scroll) at two DIFFERENT (and fractional) origins ⇒ SAME key.
@@ -4637,6 +4804,63 @@ static class Slice
             for (int i = 0; i < 10000; i++) { BlurPinKey.TryCompute(dl.Bytes, st, in pl, out ulong k, out _); last = k; }
             long delta = GC.GetAllocatedBytesForCurrentThread() - before;
             Check("BP.6 BlurPinKey.TryCompute is zero-alloc (10000 calls)", delta == 0 && last != 0, $"delta={delta}B/10000 last={last:X16}");
+        }
+
+        // gate.blur.edgeClampedPinCaches (FA-2a edge-clamp fix). A self-blur whose halo-inflated region is clamped by a
+        // canvas edge is STILL cacheable: SelfBlurRegion clamps the region and the compositor's FindPin matches SIZE-
+        // exactly, so a STATIONARY clamped row produces a byte-identical key AND a byte-identical clamped region box two
+        // frames running ⇒ a pin HIT (no re-blur — the fix for an edge-clamped blur re-running its Gaussian every submit).
+        // A ≥1-device-px move that shifts the clamp changes the region-box size ⇒ a size MISS (re-render the exact strip),
+        // never a full pin squished into a shorter viewport. The size-exact match is why removing the old clamped-refusal
+        // is sound. (The D3D12 pool/pin lease is a --screenshot golden; the portable predicate is gated here.)
+        {
+            int cw = 1920, ch = 1080;
+            var te = strings.Intern("edge line");
+            // Near the TOP edge: σ=8 ⇒ tap halo min(ceil(24),32)=24 px; DeviceRect.Y=10 ⇒ 10−24 = −14 < 0 ⇒ clamped.
+            var (ke1, Le1) = BlurStripKeyL(strings, 100f, 10f, 8f, 300f, 40f, te);
+            var (ke2, Le2) = BlurStripKeyL(strings, 100f, 10f, 8f, 300f, 40f, te);   // stationary: byte-identical next frame
+            bool clamped = SelfBlurRegion.IsClamped(in Le1, 1f, cw, ch);
+            SelfBlurRegion.RegionBox(in Le1, 1f, cw, ch, out int aX, out int aY, out int aXe, out int aYe);
+            SelfBlurRegion.RegionBox(in Le2, 1f, cw, ch, out int bX, out int bY, out int bXe, out int bYe);
+            bool stationaryHit = ke1 == ke2 && ke1 != 0 && aX == bX && aY == bY && aXe == bXe && aYe == bYe && aY == 0; // clamped at top ⇒ minY 0
+            // Fully on-canvas ⇒ not clamped (mints/hits a full pin as before).
+            var (_, Lon) = BlurStripKeyL(strings, 100f, 400f, 8f, 300f, 40f, te);
+            bool onCanvasUnclamped = !SelfBlurRegion.IsClamped(in Lon, 1f, cw, ch);
+            // A 1px move at the clamped edge changes the region SIZE ⇒ size-exact FindPin misses (re-blur, no squish).
+            var (_, Lmv) = BlurStripKeyL(strings, 100f, 11f, 8f, 300f, 40f, te);
+            SelfBlurRegion.RegionBox(in Lmv, 1f, cw, ch, out _, out int mY, out _, out int mYe);
+            bool moveChangesSize = (mYe - mY) != (aYe - aY);
+            Check("gate.blur.edgeClampedPinCaches: a stationary canvas-clamped self-blur keys + region-boxes identically (pin HIT); a 1px edge move changes the region size (size MISS, no squish)",
+                clamped && stationaryHit && onCanvasUnclamped && moveChangesSize,
+                $"clamped={clamped} hit={stationaryHit} onCanvas={onCanvasUnclamped} moveMiss={moveChangesSize}");
+        }
+
+        // gate.blur.selfBlurHaloCoversKernel. The self-blur RegionBox halo (SelfBlurRegion.TapRadius) MUST equal the
+        // ACTUAL support of the downsample-then-separable-Gaussian schedule OpacityLayerCompositor.BlurInPlace runs —
+        // KernelRadiusTexels(σ/down)·down phys px — so the region's scissor + the cross-frame pin capture keep every
+        // non-zero tap (a HIT stays pixel-identical to a MISS). At σ ≤ 4 (down 1, the exact full-res path) it is the
+        // un-capped ceil(3σ); at large σ it is the true ≈3σ reach, NOT the old 32 px cap (which truncated the Gaussian
+        // to ~1.2σ at σ26). This ties the portable halo to AcrylicBackdropMath, the schedule owner.
+        {
+            bool haloOk = true;
+            string detail = "";
+            // Each σ: halo == kernel support, and (crucially) halo >= the down==1 full-res shader's discrete radius
+            // min(ceil(3σ),32) at σ≤4 so the exact path's scissor never clips a tap.
+            foreach (float s in new[] { 1f, 2f, 4f, 5f, 8f, 16f, 26f, 32f })
+            {
+                int down = AcrylicBackdropMath.DownsampleFactor(s, 1f);
+                float texelSigma = AcrylicBackdropMath.EffectiveTexelSigma(s, 1f, down);
+                int expected = AcrylicBackdropMath.KernelRadiusTexels(texelSigma) * down;
+                int actual = SelfBlurRegion.TapRadius(s);
+                bool covers = actual == expected && texelSigma <= AcrylicBackdropMath.MaxEffectiveTexelSigma + 1e-4f;
+                if (s <= 4f) covers &= actual >= (int)MathF.Ceiling(s * 3f);   // exact path: halo covers the shader's radius
+                if (!covers) { haloOk = false; detail += $" σ{s}:halo={actual}!=support{expected}(down{down},texelσ{texelSigma:0.00})"; }
+            }
+            // σ26 (the editorial-card case): down 8, texelσ 3.25, radius 10 texels ⇒ 80 px support — well past the old 32 cap.
+            int r26 = SelfBlurRegion.TapRadius(26f);
+            bool liftsCap = r26 == 80 && r26 > 32;
+            Check("gate.blur.selfBlurHaloCoversKernel: the self-blur halo == the downsample schedule's KernelRadiusTexels(σ/down)·down support (σ26 ⇒ 80 px, lifting the old 32 px truncation)",
+                haloOk && liftsCap, $"haloOk={haloOk} r26={r26}{detail}");
         }
     }
 
@@ -7140,6 +7364,36 @@ static class Slice
         Check("IV-bound 4. exactly one realized slot holds the roving tab stop (no-current fallback = slot 0)",
             focusable == 1 && theStop == slot0, $"focusable={focusable} isSlot0={theStop == slot0}");
 
+        // Same-count replacement: title is not special. Title, artist, album and duration are four separate mounted
+        // binds, and all four must update on the same persistent row without re-running the template or replacing nodes.
+        using var atomicApp = new HeadlessPlatformApp();
+        var atomicWindow = new HeadlessWindow(new WindowDesc("bound-atomic", new Size2(640, 480), 1f));
+        atomicWindow.Show();
+        var atomicProbe = new BoundAtomicItemsProbe();
+        using var atomicHost = new AppHost(atomicApp, atomicWindow, new HeadlessGpuDevice(), fonts, strings, atomicProbe);
+        atomicHost.RunFrame();
+        int atomicCalls = atomicProbe.TemplateCalls;
+        var oldTitle = FindTextNode(atomicHost.Scene, strings, atomicHost.Scene.Root, "old-title");
+        var oldArtist = FindTextNode(atomicHost.Scene, strings, atomicHost.Scene.Root, "old-artist");
+        var oldAlbum = FindTextNode(atomicHost.Scene, strings, atomicHost.Scene.Root, "old-album");
+        var oldDuration = FindTextNode(atomicHost.Scene, strings, atomicHost.Scene.Root, "101");
+        atomicProbe.Items.Value = new BoundAtomicItem[]
+        {
+            new("new-title", "new-artist", "new-album", 303),
+            new("other-new-title", "other-new-artist", "other-new-album", 404),
+        };
+        atomicHost.RunFrame();
+        var newTitle = FindTextNode(atomicHost.Scene, strings, atomicHost.Scene.Root, "new-title");
+        var newArtist = FindTextNode(atomicHost.Scene, strings, atomicHost.Scene.Root, "new-artist");
+        var newAlbum = FindTextNode(atomicHost.Scene, strings, atomicHost.Scene.Root, "new-album");
+        var newDuration = FindTextNode(atomicHost.Scene, strings, atomicHost.Scene.Root, "303");
+        bool currentActionItem = atomicProbe.Source.TryPeek(0, out var current) && current.Title == "new-title";
+        Check("IV-bound 4a. same-count source replacement atomically updates every cell on persistent row nodes",
+            !oldTitle.IsNull && newTitle == oldTitle && newArtist == oldArtist && newAlbum == oldAlbum && newDuration == oldDuration
+            && atomicProbe.TemplateCalls == atomicCalls && currentActionItem,
+            $"sameNodes={newTitle == oldTitle && newArtist == oldArtist && newAlbum == oldAlbum && newDuration == oldDuration} " +
+            $"templateCalls={atomicCalls}->{atomicProbe.TemplateCalls} currentItem={current.Title}");
+
         // 5/6. A clickable child + an inline link inside a COMPONENT-wrapped bound row must receive the click — not have
         //      it fall through to the row's tap/double-tap. Mirrors the exact Wavee row shape (skin → lane → component → grid).
         using var app2 = new HeadlessPlatformApp();
@@ -7489,6 +7743,76 @@ static class Slice
     // never reintroduce the scroll-flicker blank-row bug phase 7.6 exists to prevent.
     static void VirtualBudgetChecks(StringTable strings)
     {
+        // A bound slot can lag the already-published ScrollState range (for example when two realize paths converge in
+        // one frame). ReRealizeVirtuals must report the SIGNAL rebind as progress even though First/LastRealized stay
+        // unchanged, otherwise AppHost skips its post-realize reactive flush and presents a mixed row: index-bound title
+        // from item N over component-snapshot artist/art/duration from item N-1.
+        {
+            var scene = new SceneStore();
+            var runtime = new ReactiveRuntime();
+            var rows = new List<StableRangeBoundRow>();
+            var recon = new TreeReconciler(scene, strings, runtime);
+            var tree = Virtual.ListBound(100, 40f, index =>
+            {
+                var row = new StableRangeBoundRow(index);
+                rows.Add(row);
+                return Embed.Comp(() => row);
+            }) with { Width = 300f, Height = 400f };
+
+            recon.ReconcileRoot(tree, null);
+            while (recon.ReRealizeVirtuals()) runtime.Flush();
+            runtime.Flush();
+
+            // Put only the slot signals one index ahead while leaving ScrollState's published range untouched, then
+            // flush that setup so every component truthfully snapshots the lagging index.
+            for (int i = 0; i < rows.Count; i++)
+                ((Signal<int>)rows[i].Index).Value++;
+            runtime.Flush();
+
+            scene.Mark(scene.Root, NodeFlags.VirtualRangeDirty);
+            bool reboundProgress = recon.ReRealizeVirtuals();
+            if (reboundProgress && runtime.HasPending) runtime.Flush();   // the exact AppHost contract
+            int mismatches = 0;
+            for (int i = 0; i < rows.Count; i++)
+                if (rows[i].LastRendered != rows[i].Index.Peek()) mismatches++;
+
+            Check("gate.virt.stableRangeBoundRebindFlush a bound-slot signal rebind reports realize progress even when the published range is unchanged, so component snapshots flush in the same frame",
+                reboundProgress && !runtime.HasPending && mismatches == 0,
+                $"progress={reboundProgress} pending={runtime.HasPending} mismatches={mismatches}/{rows.Count}");
+        }
+
+        // A stateful/custom layout can briefly return its cached OLD upper window bound after the collection shrinks.
+        // These are the exact old-to-new count pairs recorded in the two Wavee crash dumps.
+        {
+            (int Before, int After)[] transitions = [(60, 43), (521, 208)];
+            int bounded = 0;
+            string failure = "none";
+            foreach (var (before, after) in transitions)
+            {
+                var probe = new VirtualCountShrinkProbe(before);
+                try
+                {
+                    using var app = new HeadlessPlatformApp();
+                    var window = new HeadlessWindow(new WindowDesc("virt-count-shrink", new Size2(640, 480), 1f)); window.Show();
+                    using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe);
+                    host.RunFrame();
+                    probe.Count.Value = after;
+                    host.RunFrame();
+                    host.Scene.TryGetScroll(host.Scene.Root, out var sc);
+                    if (sc.ItemCount == after && sc.FirstRealized >= 0 && sc.LastRealized <= after
+                        && sc.LastRealized >= sc.FirstRealized && probe.MaxRenderedIndex < after)
+                        bounded++;
+                    else
+                        failure = $"{before}->{after}: count={sc.ItemCount} realized=[{sc.FirstRealized},{sc.LastRealized}) maxRendered={probe.MaxRenderedIndex}";
+                }
+                catch (Exception ex)
+                {
+                    failure = $"{before}->{after}: {ex.GetType().Name}: {ex.Message}";
+                }
+            }
+            Check("gate.virt.countShrinkClampsStaleLayout stale layout windows are clamped to the current ItemCount before budget clipping for the crash transitions 60->43 and 521->208",
+                bounded == transitions.Length, $"bounded={bounded}/{transitions.Length} failure={failure}");
+        }
         // ── gate.virt.velocityOverscanDirectional — the halo skews ahead of the scroll direction; NeedsRealize fires
         // before the visible edge exits the realized window at speed (it would not at rest). ────────────────────────────
         {
@@ -12527,6 +12851,96 @@ static class Slice
         bool transient = r2.ok && r2.att == 3;                                            // 5xx ×2 then 200 → success on attempt 3
         Check("46d. DecodeScheduler: 404 fails fast (no retry); transient 5xx retried to success",
             permanent && transient, $"404=(ok={r1.ok} {r1.fail} att={r1.att}) flaky=(ok={r2.ok} att={r2.att})");
+    }
+
+    // Bounded CPU pixel pool (media-pipeline.md §3): pow2 buckets, cap-bounded retention, always-succeeding Rent, GC drop
+    // past the cap, zero-alloc warm reuse, full idle Trim, and end-to-end through a real DecodeScheduler under a storm.
+    static void PixelBufferPoolChecks()
+    {
+        // P1 — pow2 rounding + reuse identity + retained accounting. A non-pow2 minBytes rounds up to the next bucket;
+        // a returned buffer is parked (RetainedBytes == its rounded length) and the next Rent pops that SAME array.
+        {
+            var pool = new FluentGpu.Media.PixelBufferPool();
+            byte[] a = pool.Rent(20000);                     // 20000 → 32768 (2^15)
+            bool rounded = a.Length == 32768;
+            pool.Return(a);
+            bool parked = pool.RetainedBytes == 32768;
+            byte[] b = pool.Rent(20000);
+            bool reused = ReferenceEquals(a, b) && pool.RetainedBytes == 0;
+            Check("46p1. PixelBufferPool: pow2 rounding + reuse identity + retained accounting",
+                rounded && parked && reused, $"len={a.Length} parked={parked} reused={ReferenceEquals(a, b)} retained={pool.RetainedBytes}");
+        }
+
+        // P2 — Rent ALWAYS succeeds past the cap (8×32KB live vs a 64KB cap); after returning all, RetainedBytes and
+        // PeakRetainedBytes never exceed the cap (the surplus is dropped for the GC, not parked).
+        {
+            var pool = new FluentGpu.Media.PixelBufferPool(64 * 1024);
+            var live = new byte[8][];
+            bool allRented = true;
+            for (int i = 0; i < 8; i++) { live[i] = pool.Rent(32 * 1024); if (live[i].Length != 32 * 1024) allRented = false; }
+            for (int i = 0; i < 8; i++) pool.Return(live[i]);
+            bool bounded = pool.RetainedBytes == 64 * 1024 && pool.PeakRetainedBytes == 64 * 1024
+                           && pool.RetainedBytes <= pool.RetainedCapBytes && pool.PeakRetainedBytes <= pool.RetainedCapBytes;
+            Check("46p2. PixelBufferPool: Rent never fails past the cap; retained/peak bounded by the cap after returns",
+                allRented && bounded, $"rented={allRented} retained={pool.RetainedBytes} peak={pool.PeakRetainedBytes} cap={pool.RetainedCapBytes}");
+        }
+
+        // P3 — an oversize request (MaxBucketBytes+1) is served exact-size and is NEVER retained on Return.
+        {
+            var pool = new FluentGpu.Media.PixelBufferPool();
+            byte[] big = pool.Rent(FluentGpu.Media.PixelBufferPool.MaxBucketBytes + 1);
+            bool exact = big.Length == FluentGpu.Media.PixelBufferPool.MaxBucketBytes + 1;
+            pool.Return(big);
+            bool unretained = pool.RetainedBytes == 0;
+            Check("46p3. PixelBufferPool: oversize is exact-size + unpooled (Return drops it)",
+                exact && unretained, $"len={big.Length} retained={pool.RetainedBytes}");
+        }
+
+        // P4 — warm rent/return ×1000 allocates 0 managed bytes (bucket hit pops the parked array, Return pushes it back;
+        // no fresh allocation once the bucket and its Stack backing are warm).
+        {
+            var pool = new FluentGpu.Media.PixelBufferPool();
+            byte[] warm = pool.Rent(16 * 1024); pool.Return(warm);   // seed the bucket + grow the Stack backing once
+            warm = pool.Rent(16 * 1024); pool.Return(warm);
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 1000; i++) { byte[] x = pool.Rent(16 * 1024); pool.Return(x); }
+            long delta = GC.GetAllocatedBytesForCurrentThread() - before;
+            Check("46p4. PixelBufferPool: warm rent/return ×1000 is zero-alloc", delta == 0, $"delta={delta}B");
+        }
+
+        // P5 — Trim releases every parked array to the GC → RetainedBytes == 0.
+        {
+            var pool = new FluentGpu.Media.PixelBufferPool();
+            pool.Return(pool.Rent(16 * 1024));
+            pool.Return(pool.Rent(64 * 1024));
+            pool.Trim();
+            Check("46p5. PixelBufferPool: Trim() drops all parked arrays", pool.RetainedBytes == 0, $"retained={pool.RetainedBytes}");
+        }
+
+        // P6 — decode storm through a REAL DecodeScheduler on the shared pool: 48 varied-size decodes, 512KB cap; every
+        // decode lands and the max observed retained stays ≤ cap (the FGGUARD double-return tripwire is live in Debug).
+        {
+            var storm = new FluentGpu.Media.PixelBufferPool(512 * 1024);
+            long maxRetained = 0;
+            int done = 0;
+            var sizes = new (int w, int h)[] { (64, 64), (128, 64), (128, 128), (256, 128), (100, 100), (200, 150) };
+            using (var sched = new DecodeScheduler(new TestCodec(), new TestFetcher(),
+                       new DecodeOptions { MaxConcurrency = 4, PixelPool = storm }))
+            {
+                const int N = 48;
+                for (int i = 1; i <= N; i++) { var (w, h) = sizes[i % sizes.Length]; sched.Begin(i, "s" + i, w, h); }
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                while (done < N && sw.ElapsedMilliseconds < 8000)
+                {
+                    sched.Pump((id, ok, w, h, f, a) => { if (ok) done++; }, (id, px, w, h) => { });
+                    long r = storm.RetainedBytes; if (r > maxRetained) maxRetained = r;
+                    System.Threading.Thread.Sleep(2);
+                }
+            }
+            Check("46p6. PixelBufferPool: 48-decode storm lands fully; retained never exceeds the cap",
+                done == 48 && maxRetained <= storm.RetainedCapBytes && storm.PeakRetainedBytes <= storm.RetainedCapBytes,
+                $"done={done}/48 maxRetained={maxRetained} peak={storm.PeakRetainedBytes} cap={storm.RetainedCapBytes}");
+        }
     }
 
     static void BlurHashChecks(StringTable strings)
@@ -17891,49 +18305,69 @@ static class Slice
     // D3D12 AcrylicCompositor's PushLayer{Acrylic} schedule: region snapshot → pooled downsampled RT → two-pass
     // separable gaussian → WinUI composite). WinUI ground truth: microsoft-ui-xaml AcrylicBrush.h:64
     // sc_blurRadius = 30.0f applied as GaussianBlurEffect.BlurAmount (= gaussian STANDARD DEVIATION in DIPs,
-    // AcrylicBrush.cpp:521-525). The runner reproduces sigma = 30·dpiScale physical px with ONE fixed kernel by
-    // choosing the snapshot downsample factor (down · KernelSigma == sigmaPhys). The composited GPU pixels themselves
-    // are needs-pixels (manual --shot) — these checks pin every number the leaf composites with.
+    // AcrylicBrush.cpp:521-525). The runner reproduces sigma = 30·dpiScale physical px with the Flutter-Impeller / Skia
+    // downsample curve: down = pow2up(ceil(sigmaPhys/4)) so the intermediate's EFFECTIVE texel sigma ≤ 4 (the
+    // production-validated quality threshold), and the separable kernel is REBUILT for that texel sigma per bucket
+    // (uploaded as blur-pass constants, not baked). The composited GPU pixels themselves are needs-pixels (manual
+    // --shot) — these checks pin every number the leaf composites with.
     static void AcrylicBackdropMathChecks()
     {
-        var off = AcrylicBackdropMath.TapOffsets;
-        var wgt = AcrylicBackdropMath.TapWeights;
-        double mass = wgt[0];                                        // total kernel mass: center + 2·(mirrored taps)
+        // Kernel: BuildKernel(texelSigma) is a normalized symmetric bilinear-tap gaussian for the VARIABLE ≤4 texel
+        // sigma. Verify at the σ=30-DIP@100% bucket (down 8 ⇒ texel σ 3.75) and a small σ (narrower ⇒ fewer taps).
+        Span<float> koff = stackalloc float[AcrylicBackdropMath.MaxTapCount];
+        Span<float> kwgt = stackalloc float[AcrylicBackdropMath.MaxTapCount];
+        float texelSig = AcrylicBackdropMath.EffectiveTexelSigma(30f, 1f, AcrylicBackdropMath.DownsampleFactor(30f, 1f)); // 3.75
+        int nt = AcrylicBackdropMath.BuildKernel(texelSig, koff, kwgt);
+        double mass = kwgt[0];                                        // total kernel mass: center + 2·(mirrored taps)
         double variance = 0;
-        for (int i = 1; i < wgt.Length; i++) { mass += 2.0 * wgt[i]; variance += 2.0 * wgt[i] * off[i] * off[i]; }
+        for (int i = 1; i < nt; i++) { mass += 2.0 * kwgt[i]; variance += 2.0 * kwgt[i] * koff[i] * koff[i]; }
         double sigma = Math.Sqrt(variance);                          // effective std-dev of the folded bilinear kernel
         bool monotone = true;
-        for (int i = 2; i < off.Length; i++) if (off[i] <= off[i - 1]) monotone = false;
-        Check("64n. acrylic blur kernel: normalized symmetric linear-tap gaussian at the fixed sigma the /down schedule assumes",
-            off.Length == AcrylicBackdropMath.TapCount && wgt.Length == AcrylicBackdropMath.TapCount
-            && off[0] == 0f && monotone && off[^1] <= AcrylicBackdropMath.KernelRadius
-            && Math.Abs(mass - 1.0) < 1e-4 && Math.Abs(sigma - AcrylicBackdropMath.KernelSigma) < 0.25,
-            $"taps={off.Length} mass={mass:0.00000} sigma={sigma:0.000} (kernel sigma {AcrylicBackdropMath.KernelSigma})");
+        for (int i = 2; i < nt; i++) if (koff[i] <= koff[i - 1]) monotone = false;
+        int ntSmall = AcrylicBackdropMath.BuildKernel(1.5f, koff, kwgt);   // small σ ⇒ radius ~5 ⇒ ~4 taps (< the 3.75 bucket)
+        bool kernelOk = nt >= 2 && nt <= AcrylicBackdropMath.MaxTapCount
+            && koff[0] == 0f && kwgt[0] > 0f && monotone
+            && koff[nt - 1] <= AcrylicBackdropMath.MaxKernelRadius
+            && Math.Abs(mass - 1.0) < 1e-4 && Math.Abs(sigma - texelSig) < 0.4
+            && ntSmall >= 2 && ntSmall < nt;                          // a smaller texel σ emits a narrower (fewer-tap) kernel
+        Check("64n. acrylic blur kernel: normalized symmetric linear-tap gaussian rebuilt for the variable <=4 texel sigma",
+            kernelOk,
+            $"taps={nt} mass={mass:0.00000} sigma={sigma:0.000} (texelSigma {texelSig:0.000}) smallTaps={ntSmall}");
 
-        // down(BlurSigma=30 DIP) ⇒ effective full-res sigma = down·KernelSigma = 30·scale physical px, exactly
-        // reproducing AcrylicBrush.h:64 sc_blurRadius at the common DPI scales ("downsample /2 or /4" + DPI-aware).
-        bool downOk = AcrylicBackdropMath.DownsampleFactor(30f, 1f) == 4       // 4·7.5  = 30  phys px @ 100%
-            && AcrylicBackdropMath.DownsampleFactor(30f, 1.5f) == 6            // 6·7.5  = 45  phys px @ 150%
-            && AcrylicBackdropMath.DownsampleFactor(30f, 2f) == 8              // 8·7.5  = 60  phys px @ 200%
-            && AcrylicBackdropMath.DownsampleFactor(15f, 1f) == 2              // smaller sigma ⇒ /2
-            && AcrylicBackdropMath.DownsampleFactor(120f, 2f) == 8;            // clamped at /8
-        Check("64n2. acrylic downsample factor: down·KernelSigma reproduces WinUI BlurAmount 30 DIP across DPI scales (clamped /8)",
-            downOk,
-            $"down@1x={AcrylicBackdropMath.DownsampleFactor(30f, 1f)} @1.5x={AcrylicBackdropMath.DownsampleFactor(30f, 1.5f)} @2x={AcrylicBackdropMath.DownsampleFactor(30f, 2f)}");
+        // Downsample curve (Flutter-Impeller / Skia): down = smallest pow2 >= ceil(sigmaPhys/4), clamped [1,16], so the
+        // effective texel sigma stays ≤ 4; at sigmaPhys ≤ 4 down stays 1 (no downsample, exact).
+        bool downOk = AcrylicBackdropMath.DownsampleFactor(30f, 1f) == 8       // sigmaPhys 30  → ceil(7.5)=8  → pow2 8
+            && AcrylicBackdropMath.DownsampleFactor(30f, 1.5f) == 16           // sigmaPhys 45  → ceil(11.25)=12 → pow2 16
+            && AcrylicBackdropMath.DownsampleFactor(30f, 2f) == 16             // sigmaPhys 60  → ceil(15)=15  → pow2 16
+            && AcrylicBackdropMath.DownsampleFactor(15f, 1f) == 4              // sigmaPhys 15  → ceil(3.75)=4 → pow2 4
+            && AcrylicBackdropMath.DownsampleFactor(120f, 2f) == 16            // sigmaPhys 240 → ceil(60)=60  → pow2 64 → clamp 16
+            && AcrylicBackdropMath.DownsampleFactor(4f, 1f) == 1               // sigmaPhys 4   → down 1 (no downsample at σ≤4)
+            && AcrylicBackdropMath.DownsampleFactor(8f, 1f) == 2;             // sigmaPhys 8   → ceil(2)=2 → pow2 2 (texel σ 4)
+        // Effective texel sigma is ≤ 4 always, and EXACT (never clamped up) when smaller than 4.
+        bool texelOk = AcrylicBackdropMath.EffectiveTexelSigma(30f, 1f, AcrylicBackdropMath.DownsampleFactor(30f, 1f)) <= 4f + 1e-4f
+            && Math.Abs(AcrylicBackdropMath.EffectiveTexelSigma(3f, 1f, AcrylicBackdropMath.DownsampleFactor(3f, 1f)) - 3f) < 1e-4  // down 1 → texel σ 3 (exact)
+            && Math.Abs(AcrylicBackdropMath.EffectiveTexelSigma(8f, 1f, AcrylicBackdropMath.DownsampleFactor(8f, 1f)) - 4f) < 1e-4; // down 2 → texel σ 4
+        Check("64n2. acrylic downsample factor: pow2-snapped down keeps effective texel sigma <=4 (Skia/Impeller), down 1 at σ<=4",
+            downOk && texelOk,
+            $"down@1x={AcrylicBackdropMath.DownsampleFactor(30f, 1f)} @1.5x={AcrylicBackdropMath.DownsampleFactor(30f, 1.5f)} @2x={AcrylicBackdropMath.DownsampleFactor(30f, 2f)} texelOk={texelOk}");
 
-        // Snapshot region: the layer rect inflated by the FULL blur support (KernelRadius·down phys px) on every side
-        // (so blurred texels under the rect see real backdrop — bit-identical to blurring the whole backdrop inside
-        // the rect), clamped to the canvas at window edges.
-        int pad = AcrylicBackdropMath.KernelRadius * 4;   // 88 px at /4
-        AcrylicBackdropMath.SnapshotRegion(new RectF(200f, 160f, 200f, 120f), 1f, 4, 1920, 1080, out int x, out int y, out int w, out int h);
+        // Snapshot region: the layer rect inflated by the FULL blur support (kernelRadiusTexels·down phys px ≈ 3·sigmaPhys)
+        // on every side (so blurred texels under the rect see real backdrop — bit-identical to blurring the whole backdrop
+        // inside the rect), clamped to the canvas at window edges. Pad is derived from the actual kernel, not a constant.
+        int down1 = AcrylicBackdropMath.DownsampleFactor(30f, 1f);                          // 8
+        int rTex1 = AcrylicBackdropMath.KernelRadiusTexels(AcrylicBackdropMath.EffectiveTexelSigma(30f, 1f, down1)); // 12
+        int pad = rTex1 * down1;                                                            // 96 px @ 100% (σ=30)
+        AcrylicBackdropMath.SnapshotRegion(new RectF(200f, 160f, 200f, 120f), 1f, down1, rTex1, 1920, 1080, out int x, out int y, out int w, out int h);
         bool interiorOk = x == 200 - pad && y == 160 - pad && w == 200 + 2 * pad && h == 120 + 2 * pad;
-        AcrylicBackdropMath.SnapshotRegion(new RectF(2f, 2f, 60f, 40f), 1f, 4, 480, 400, out int cx, out int cy, out int cw, out int ch);
+        AcrylicBackdropMath.SnapshotRegion(new RectF(2f, 2f, 60f, 40f), 1f, down1, rTex1, 480, 400, out int cx, out int cy, out int cw, out int ch);
         bool clampOk = cx == 0 && cy == 0 && cw == 2 + 60 + pad && ch == 2 + 40 + pad;   // left/top clamped at the canvas edge
-        int pad8 = AcrylicBackdropMath.KernelRadius * 8;  // 176 px at /8 (200% DPI)
-        AcrylicBackdropMath.SnapshotRegion(new RectF(200f, 160f, 100f, 60f), 2f, 8, 4000, 4000, out int sx, out int sy, out int sw, out int sh);
-        bool scaleOk = sx == 400 - pad8 && sy == 320 - pad8 && sw == 200 + 2 * pad8 && sh == 120 + 2 * pad8;   // DIP→phys at 200% DPI
-        Check("64n3. acrylic snapshot region: rect inflated by the full kernel support and clamped to the canvas (phys px, DPI-aware)",
-            interiorOk && clampOk && scaleOk, $"interior={interiorOk} clamp={clampOk} scale={scaleOk}");
+        int down2 = AcrylicBackdropMath.DownsampleFactor(30f, 2f);                          // 16
+        int rTex2 = AcrylicBackdropMath.KernelRadiusTexels(AcrylicBackdropMath.EffectiveTexelSigma(30f, 2f, down2)); // 12
+        int pad2 = rTex2 * down2;                                                           // 192 px @ 200% (σ=30)
+        AcrylicBackdropMath.SnapshotRegion(new RectF(200f, 160f, 100f, 60f), 2f, down2, rTex2, 4000, 4000, out int sx, out int sy, out int sw, out int sh);
+        bool scaleOk = sx == 400 - pad2 && sy == 320 - pad2 && sw == 200 + 2 * pad2 && sh == 120 + 2 * pad2;   // DIP→phys at 200% DPI
+        Check("64n3. acrylic snapshot region: rect inflated by the actual kernel support and clamped to the canvas (phys px, DPI-aware)",
+            interiorOk && clampOk && scaleOk, $"interior={interiorOk} clamp={clampOk} scale={scaleOk} pad={pad}");
 
         // LayerPool size buckets (gpu-renderer.md §7.1 quantized pow2 buckets, floor 64): monotone, covering, few
         // distinct sizes ⇒ a steady-state frame re-acquires the same bucket and never creates a texture.
@@ -17956,7 +18390,9 @@ static class Slice
             sourceId: 43, clipLeft: 90, clipTop: 70, clipRight: 410, clipBottom: 290);
         var stampOtherClip = AcrylicBackdropMath.Stamp(new RectF(100f, 80f, 300f, 200f), 30f, 1f, 1920, 1080,
             sourceId: 42, clipLeft: 100, clipTop: 70, clipRight: 410, clipBottom: 290);
-        AcrylicBackdropMath.SnapshotRegion(new RectF(100f, 80f, 300f, 200f), 1f, 4, 1920, 1080, out int qx, out int qy, out int qw, out int qh);
+        int down5 = AcrylicBackdropMath.DownsampleFactor(30f, 1f);
+        int rTex5 = AcrylicBackdropMath.KernelRadiusTexels(AcrylicBackdropMath.EffectiveTexelSigma(30f, 1f, down5));
+        AcrylicBackdropMath.SnapshotRegion(new RectF(100f, 80f, 300f, 200f), 1f, down5, rTex5, 1920, 1080, out int qx, out int qy, out int qw, out int qh);
         var region = new RectF(qx, qy, qw, qh);
         bool reuseNone = AcrylicBackdropMath.BackdropReusable(stampA, stampSame, region, default);                                 // nothing moved → reuse
         bool reuseFar  = AcrylicBackdropMath.BackdropReusable(stampA, stampSame, region, new RectF(1500f, 900f, 100f, 80f));       // damage elsewhere (e.g. bottom player bar) → reuse
@@ -18013,6 +18449,57 @@ static class Slice
         bool overflowUnion = !AcrylicBackdropMath.OwnSubtreeReusable(tStamp, tStamp, tightR, ownOnly, 3, 0, 3, true, new RectF(210f, 170f, 20f, 20f)); // overflow → union inside tight → re-blur
         Check("gate.acrylic.ownSubtreeDamageCarvedOut: own-subtree entries excluded; an external entry on the tight region re-blurs; overflow falls back to the union",
             ownCarved && externalBlocks && overflowUnion, $"carved={ownCarved} external={externalBlocks} overflow={overflowUnion}");
+
+        KawaseChainChecks();
+    }
+
+    // ── Wave B: the LIVE-BACKDROP acrylic blur is a dual-Kawase downsample/upsample chain (ARM SIGGRAPH 2015 dual filter;
+    // AcrylicKawaseMath). These gate the PORTABLE σ→(iterations,offset) mapping + the snapshot pad that the D3D12 leaf
+    // consumes, so the chain math is headless-verifiable while the HLSL stays render-thread-confined. The self-blur path
+    // (OpacityLayerCompositor) keeps the separable AcrylicBackdropMath pipeline, gated above.
+    static void KawaseChainChecks()
+    {
+        // gate.kawase.sigmaMapping: σ14/20/30 (WinUI acrylic band) map to the expected (iterations, offset) with the
+        // offset in the sane [1,2] range and 3–4 iterations, and the chain's effective sigma round-trips to the input σ
+        // within tolerance (in-band ⇒ exact). Calibrated K = SigmaPerLevel = 1.25 (validated by the visual A/B).
+        AcrylicKawaseMath.SelectChain(14f, 1f, out int i14, out float o14);
+        AcrylicKawaseMath.SelectChain(20f, 1f, out int i20, out float o20);
+        AcrylicKawaseMath.SelectChain(30f, 1f, out int i30, out float o30);
+        bool mapOk =
+            i14 == 3 && MathF.Abs(o14 - 1.4f) < 1e-4f &&
+            i20 == 3 && MathF.Abs(o20 - 2.0f) < 1e-4f &&
+            i30 == 4 && MathF.Abs(o30 - 1.5f) < 1e-4f;
+        bool roundTrip =
+            MathF.Abs(AcrylicKawaseMath.EffectiveSigma(i14, o14) - 14f) < 0.5f &&
+            MathF.Abs(AcrylicKawaseMath.EffectiveSigma(i20, o20) - 20f) < 0.5f &&
+            MathF.Abs(AcrylicKawaseMath.EffectiveSigma(i30, o30) - 30f) < 0.5f;
+        // every mapped chain stays within the pyramid depth and the sane offset band
+        bool bounded = true;
+        for (float s = 1f; s <= 40f; s += 0.37f)
+        {
+            AcrylicKawaseMath.SelectChain(s, 1f, out int it, out float of);
+            if (it < 1 || it > AcrylicKawaseMath.MaxIterations || of < AcrylicKawaseMath.OffsetMin - 1e-4f || of > AcrylicKawaseMath.OffsetMax + 1e-4f) bounded = false;
+        }
+        Check("gate.kawase.sigmaMapping: σ14/20/30 → (3,1.4)/(3,2.0)/(4,1.5), offset∈[1,2], iters∈[3,4], effective σ round-trips",
+            mapOk && roundTrip && bounded,
+            $"σ14=({i14},{o14:0.00}) σ20=({i20},{o20:0.00}) σ30=({i30},{o30:0.00}) rt={roundTrip} bounded={bounded}");
+
+        // gate.kawase.padCoversSupport: at each iteration count the snapshot pad (PadPx at the max offset) covers the
+        // chain's blur support, AND SnapshotRegion inflated by that pad actually contains the ±support halo on every side
+        // (mirrors 64n3: unclamped rect grows by 2·pad). down = 1 ⇒ the pad passes straight through as kernelRadius·1.
+        bool padOk = true, regionOk = true;
+        for (int it = 1; it <= AcrylicKawaseMath.MaxIterations; it++)
+        {
+            float support = AcrylicKawaseMath.SupportPx(it, AcrylicKawaseMath.OffsetMax);
+            int pad = AcrylicKawaseMath.PadPx(it, AcrylicKawaseMath.OffsetMax);
+            if (pad < support) padOk = false;
+            AcrylicBackdropMath.SnapshotRegion(new RectF(400f, 300f, 200f, 120f), 1f, 1, pad, 4000, 4000,
+                out int rx, out int ry, out int rw, out int rh);
+            // unclamped (region well inside a 4000² canvas): width = rect + 2·pad, origin = rect − pad
+            if (rx != 400 - pad || ry != 300 - pad || rw != 200 + 2 * pad || rh != 120 + 2 * pad) regionOk = false;
+        }
+        Check("gate.kawase.padCoversSupport: snapshot pad ≥ chain support at every iteration count and inflates the region by ±pad",
+            padOk && regionOk, $"padOk={padOk} regionOk={regionOk} pad@4={AcrylicKawaseMath.PadPx(4, 2f)}");
     }
 
     static void ContentDialogChromeChecks(StringTable strings)
@@ -23347,6 +23834,73 @@ static class Slice
         }
     }
 
+    static void MediaCardEngineChecks(StringTable strings)
+    {
+        // Pointer-rate radial-center updates stay in the binding/paint lane: no element rebuild and no GradientSpec
+        // replacement. The recorder must source the draw command's radial origin from the sparse override.
+        var runtime = new ReactiveRuntime();
+        var center = new Signal<Point2>(new Point2(0.2f, 0.3f));
+        var scene = new SceneStore();
+        var recon = new TreeReconciler(scene, strings, runtime);
+        recon.ReconcileRoot(new BoxEl
+        {
+            Width = 160f, Height = 100f,
+            Gradient = new GradientSpec(GradientShape.Radial, 0f,
+                [new GradientStop(0f, ColorF.FromRgba(255, 255, 255)), new GradientStop(1f, ColorF.Transparent)])
+                { RadialCenter = new Point2(0.5f, 0.5f), RadialRadius = new Point2(0.5f, 0.5f) },
+            RadialGradientCenter = Prop<Point2>.FromSignal(center),
+        }, null);
+        new FlexLayout(scene, new HeadlessFontSystem(strings)).Run(scene.Root);
+        center.Value = new Point2(0.8f, 0.6f);
+        runtime.Flush();
+        var dl = new DrawList();
+        SceneRecorder.Record(scene, dl);
+        var dev = new HeadlessGpuDevice();
+        dev.SubmitDrawList(dl.Bytes, dl.SortKeys, new FrameInfo(new Size2(200f, 140f), 1f, ColorF.Transparent));
+        bool radialMoved = scene.TryGetRadialGradientCenter(scene.Root, out Point2 stored)
+            && Near(stored.X, 0.8f, 0.001f) && Near(stored.Y, 0.6f, 0.001f)
+            && dev.LastGradients.Count == 1
+            && Near(dev.LastGradients[0].Start.X, 0.8f, 0.001f)
+            && Near(dev.LastGradients[0].Start.Y, 0.6f, 0.001f);
+        Check("gate.media-card.radial-center signal updates the recorded gradient without rebuilding its spec", radialMoved,
+            $"stored=({stored.X:0.00},{stored.Y:0.00}) gradients={dev.LastGradients.Count}");
+
+        // The new move channel routes through an interactive child to its container, leaf first. Touch and an active
+        // press/capture do not drive hover-only spotlight work.
+        int order = 0, parentCalls = 0;
+        Point2 parentPoint = default;
+        var routed = LayoutTree(strings, new BoxEl
+        {
+            Width = 200f, Height = 160f, Padding = Edges4.All(10f),
+            OnPointerMoveWithin = p => { order = order * 10 + 2; parentCalls++; parentPoint = p; },
+            Children =
+            [
+                new BoxEl
+                {
+                    Width = 80f, Height = 60f, OnClick = static () => { },
+                    OnPointerMoveWithin = _ => order = order * 10 + 1,
+                },
+            ],
+        });
+        var dispatcher = new InputDispatcher(routed);
+        var point = new Point2(30f, 25f);
+        dispatcher.Dispatch([new InputEvent(InputKind.PointerMove, point, 0, 0, Pointer: PointerKind.Mouse)]);
+        bool routedOrder = order == 12 && parentCalls == 1 && Near(parentPoint.X, 30f) && Near(parentPoint.Y, 25f);
+        Check("gate.media-card.pointer-move-within routes leaf-to-root through interactive children", routedOrder,
+            $"order={order} parentCalls={parentCalls} local=({parentPoint.X:0.0},{parentPoint.Y:0.0})");
+
+        int beforeTouch = parentCalls;
+        dispatcher.Dispatch([new InputEvent(InputKind.PointerMove, point, 0, 0, Pointer: PointerKind.Touch, PointerId: 7)]);
+        bool touchSuppressed = parentCalls == beforeTouch;
+        dispatcher.Dispatch([new InputEvent(InputKind.PointerDown, point, 0, 0, Pointer: PointerKind.Mouse)]);
+        int beforeCaptureMove = parentCalls;
+        dispatcher.Dispatch([new InputEvent(InputKind.PointerMove, new Point2(35f, 28f), 0, 0, Pointer: PointerKind.Mouse)]);
+        bool captureSuppressed = parentCalls == beforeCaptureMove;
+        dispatcher.Dispatch([new InputEvent(InputKind.PointerUp, new Point2(35f, 28f), 0, 0, Pointer: PointerKind.Mouse)]);
+        Check("gate.media-card.pointer-move-within suppresses touch and active capture", touchSuppressed && captureSuppressed,
+            $"touch={touchSuppressed} capture={captureSuppressed}");
+    }
+
     static int Main()
     {
         // FG_PROBE=ranged-tooltip — isolated repro driver for the live "ranged slider hover → tooltip → freeze"
@@ -23403,6 +23957,7 @@ static class Slice
         Check("8. steady frame does no work (memoized)", !steady.Rendered);
         Check("9. ZERO managed alloc on the paint half (phases 6–11)", steady.HotPhaseAllocBytes == 0, $"{steady.HotPhaseAllocBytes} bytes");
 
+        GeolocationChecks();
         SidebarCollapseFlipChecks(strings);
         DeviceLostRecoveryChecks(strings);
         FlexChecks(strings);
@@ -23432,6 +23987,7 @@ static class Slice
         NestedChecks(strings);
         ContextChecks(strings);
         HoverChecks(strings);
+        MediaCardEngineChecks(strings);
         ScrollHoverChecks(strings);
         HoverSubtreeChecks(strings);
         StyleChecks();
@@ -23475,6 +24031,7 @@ static class Slice
         ImageElChecks(strings);
         ImageFitChecks(strings);
         DecodeSchedulerChecks();
+        PixelBufferPoolChecks();
         BlurHashChecks(strings);
         ImageTransitionChecks();
         ImageEvictChecks();

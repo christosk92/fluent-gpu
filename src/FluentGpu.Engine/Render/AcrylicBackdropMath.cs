@@ -11,80 +11,114 @@ namespace FluentGpu.Render;
 /// WinUI ground truth: microsoft-ui-xaml AcrylicBrush.h:64 <c>sc_blurRadius = 30.0f</c>, applied as Composition
 /// <c>GaussianBlurEffect.BlurAmount</c> (= the gaussian STANDARD DEVIATION, in DIPs) over the backdrop resolved onto
 /// the opaque FallbackColor (AcrylicBrush.cpp:500-528). The runner reproduces sigma = BlurSigma·dpiScale physical px
-/// with ONE fixed-sigma separable kernel by choosing the snapshot downsample factor instead of the kernel width:
-/// <c>down = round(sigmaPhys / KernelSigma)</c>, so blurring the 1/down-resolution snapshot with the fixed
-/// sigma-7.5 kernel yields the requested full-resolution sigma (30 DIP ⇒ /4 at 100% DPI, /6 at 150%, /8 at 200%).
+/// with the Flutter-Impeller / Skia <c>downsample-then-separable-Gaussian</c> schedule: choose the snapshot downsample
+/// factor so the intermediate's EFFECTIVE texel sigma is ≤ <see cref="MaxEffectiveTexelSigma"/> (4) — the
+/// production-validated quality threshold — snapped UP to a power of two:
+/// <c>down = pow2up(ceil(sigmaPhys / 4))</c> clamped [1,16] (Skia: <c>scale = 4/sigma</c> pow2-snapped, floored 1/16 —
+/// the same curve from the other direction). Blurring the 1/down-resolution snapshot with a kernel rebuilt for
+/// <c>texelSigma = sigmaPhys / down</c> (≤ 4, exact — never clamped when smaller) yields the requested full-resolution
+/// sigma. Because texelSigma is now VARIABLE the kernel is no longer baked static: the leaf recomputes the bilinear
+/// taps per (sigma,down) bucket on the CPU (<see cref="BuildKernel"/>) and uploads them as blur-pass constants, so the
+/// weights the GPU samples still come from this one headless-checked source (no HLSL drift).
 /// </summary>
 public static class AcrylicBackdropMath
 {
-    /// <summary>Gaussian standard deviation of the FIXED separable blur kernel, in downsampled texels.</summary>
-    public const float KernelSigma = 7.5f;
+    /// <summary>Cap on the intermediate's effective texel sigma (Flutter-Impeller / Skia quality threshold): the
+    /// downsample factor is chosen so <c>sigmaPhys/down ≤ 4</c>. Above this the separable Gaussian on the downsampled
+    /// snapshot stops being visually distinguishable from a full-resolution blur, so extra intermediate resolution is
+    /// pure bandwidth waste — the whole point of the downsample curve.</summary>
+    public const float MaxEffectiveTexelSigma = 4f;
 
-    /// <summary>Discrete kernel radius in downsampled texels (≈3σ support; the tail beyond carries &lt;0.4% weight —
-    /// the same truncation a D2D GaussianBlur uses for its kernel window).</summary>
-    public const int KernelRadius = 22;
+    /// <summary>Max snapshot downsample divisor (Skia's 1/16 scale floor): beyond /16 the bilinear down/up-sample
+    /// artifacts outweigh any bandwidth saving.</summary>
+    public const int MaxDownsample = 16;
 
-    /// <summary>Bilinear-optimized taps per pass: the center texel + 11 linear taps, each folding a texel pair of the
-    /// 45-texel discrete kernel into one bilinear fetch (offset weighted between the pair).</summary>
-    public const int TapCount = 12;
+    /// <summary>Max discrete kernel radius in downsampled texels: <c>ceil(3 · MaxEffectiveTexelSigma) = 12</c> (≈3σ
+    /// support; the tail beyond carries &lt;0.4% weight). Bounds the per-pass tap count and the CPU tap buffers.</summary>
+    public const int MaxKernelRadius = 12;
 
-    private static readonly float[] s_tapOffsets = new float[TapCount];
-    private static readonly float[] s_tapWeights = new float[TapCount];
+    /// <summary>Max bilinear taps per pass: center + <c>ceil(MaxKernelRadius/2) = 6</c> folded pairs = 7 (down from the
+    /// old fixed 12 — the ≤4 texel sigma needs a narrower kernel, so each pass is also cheaper).</summary>
+    public const int MaxTapCount = 1 + (MaxKernelRadius + 1) / 2;
 
-    static AcrylicBackdropMath()
-    {
-        // Discrete gaussian σ = KernelSigma over [-KernelRadius..KernelRadius], normalized to sum 1.
-        Span<double> w = stackalloc double[KernelRadius + 1];
-        double sum = 0;
-        for (int i = 0; i <= KernelRadius; i++)
-        {
-            w[i] = Math.Exp(-(double)i * i / (2.0 * KernelSigma * KernelSigma));
-            sum += i == 0 ? w[i] : 2.0 * w[i];
-        }
-        for (int i = 0; i <= KernelRadius; i++) w[i] /= sum;
-
-        // Fold texel pairs (1,2),(3,4),…,(21,22) into single bilinear taps (linear-sampling gaussian):
-        // weight = wa+wb, offset = (a·wa + b·wb)/(wa+wb) — the hardware bilinear filter reconstructs both texels.
-        s_tapOffsets[0] = 0f;
-        s_tapWeights[0] = (float)w[0];
-        for (int t = 1; t < TapCount; t++)
-        {
-            int a = 2 * t - 1, b = 2 * t;
-            double wp = w[a] + w[b];
-            s_tapOffsets[t] = (float)((a * w[a] + b * w[b]) / wp);
-            s_tapWeights[t] = (float)wp;
-        }
-    }
-
-    /// <summary>Per-pass bilinear tap offsets in source texels (index 0 = center). One-sided; the shader mirrors.</summary>
-    public static ReadOnlySpan<float> TapOffsets => s_tapOffsets;
-
-    /// <summary>Per-pass tap weights (index 0 = center weight; indices 1.. are applied at ±offset, so the
-    /// total kernel mass is <c>w[0] + 2·Σ w[1..]</c> == 1).</summary>
-    public static ReadOnlySpan<float> TapWeights => s_tapWeights;
+    /// <summary>The physical blur sigma the schedule reproduces for a WinUI BlurAmount (DIP) at a DPI scale — clamped
+    /// to ≥1 px and scale to ≥0.25 (the same guards <see cref="DownsampleFactor"/> uses).</summary>
+    public static float PhysicalSigma(float blurSigmaDip, float scale) => MathF.Max(1f, blurSigmaDip * MathF.Max(0.25f, scale));
 
     /// <summary>
-    /// Snapshot downsample divisor for a requested blur sigma (in DIPs — WinUI BlurAmount semantics) at a DPI scale.
-    /// Effective full-resolution sigma = factor · <see cref="KernelSigma"/> ≈ blurSigmaDip · scale physical px
-    /// (exact at 100/125/150/175/200% DPI for the WinUI sigma 30). Clamped to /8 — beyond that the bilinear
-    /// down/up-sample artifacts outweigh kernel fidelity.
+    /// Snapshot downsample divisor for a requested blur sigma (in DIPs — WinUI BlurAmount semantics) at a DPI scale:
+    /// the smallest power of two ≥ <c>ceil(sigmaPhys / <see cref="MaxEffectiveTexelSigma"/>)</c>, clamped [1,16]
+    /// (Flutter-Impeller / Skia). At sigmaPhys ≤ 4 this is 1 (no downsample) so small blurs stay full-resolution and
+    /// exact.
     /// </summary>
     public static int DownsampleFactor(float blurSigmaDip, float scale)
     {
-        float sigmaPhys = MathF.Max(1f, blurSigmaDip * MathF.Max(0.25f, scale));
-        return Math.Clamp((int)MathF.Round(sigmaPhys / KernelSigma), 1, 8);
+        float sigmaPhys = PhysicalSigma(blurSigmaDip, scale);
+        int d = (int)MathF.Ceiling(sigmaPhys / MaxEffectiveTexelSigma);
+        // smallest power of two ≥ d (d ≥ 1)
+        int p = 1;
+        while (p < d) p <<= 1;
+        return Math.Clamp(p, 1, MaxDownsample);
+    }
+
+    /// <summary>The intermediate's EFFECTIVE texel sigma for a chosen downsample factor: <c>sigmaPhys / down</c>, EXACT
+    /// (≤ 4 by construction, and NOT clamped up to 4 when smaller — a σ=8 phys blur at down=2 stays texelSigma 4, a
+    /// σ=6 stays 3). This is the sigma the kernel is built for.</summary>
+    public static float EffectiveTexelSigma(float blurSigmaDip, float scale, int down)
+        => PhysicalSigma(blurSigmaDip, scale) / MathF.Max(1, down);
+
+    /// <summary>Discrete kernel radius in downsampled texels for a texel sigma: <c>ceil(3·texelSigma)</c> (≈3σ support),
+    /// clamped [1, <see cref="MaxKernelRadius"/>]. The snapshot pad is this · down (the exact kernel support), and the
+    /// per-pass tap count is <c>1 + ceil(radius/2)</c>.</summary>
+    public static int KernelRadiusTexels(float texelSigma)
+        => Math.Clamp((int)MathF.Ceiling(3f * MathF.Max(1e-3f, texelSigma)), 1, MaxKernelRadius);
+
+    /// <summary>Build the per-pass bilinear-optimized gaussian taps for a given texel sigma into caller buffers (each ≥
+    /// <see cref="MaxTapCount"/>), returning the tap count. Index 0 is the center; indices 1.. are applied at ±offset,
+    /// so the total mass is <c>w[0] + 2·Σ w[1..]</c> == 1. Same fold as the old fixed kernel — texel pairs
+    /// (1,2),(3,4),… collapse into one bilinear fetch at the weight-interpolated offset — but the radius is now variable
+    /// (≤ <see cref="MaxKernelRadius"/>), so a narrower ≤4-sigma kernel emits fewer taps. Zero heap allocation
+    /// (stackalloc only) → safe on the render-thread record path.</summary>
+    public static int BuildKernel(float texelSigma, Span<float> offsets, Span<float> weights)
+    {
+        texelSigma = MathF.Max(1e-3f, texelSigma);
+        int radius = KernelRadiusTexels(texelSigma);
+        // Discrete gaussian σ = texelSigma over [-radius..radius], normalized to sum 1.
+        Span<double> w = stackalloc double[MaxKernelRadius + 1];
+        double sum = 0;
+        for (int i = 0; i <= radius; i++)
+        {
+            w[i] = Math.Exp(-(double)i * i / (2.0 * texelSigma * texelSigma));
+            sum += i == 0 ? w[i] : 2.0 * w[i];
+        }
+        for (int i = 0; i <= radius; i++) w[i] /= sum;
+
+        // Fold texel pairs (1,2),(3,4),… into single bilinear taps; a trailing ODD texel (b > radius) folds alone.
+        offsets[0] = 0f;
+        weights[0] = (float)w[0];
+        int t = 1;
+        for (int a = 1; a <= radius; a += 2, t++)
+        {
+            int b = a + 1;
+            double wa = w[a], wb = b <= radius ? w[b] : 0.0;
+            double wp = wa + wb;
+            offsets[t] = (float)((a * wa + b * wb) / wp);
+            weights[t] = (float)wp;
+        }
+        return t;   // 1 + ceil(radius/2)
     }
 
     /// <summary>
     /// The backdrop region to snapshot beneath a layer rect, in physical px clamped to the canvas: the rect inflated
-    /// on every side by the full blur support (<see cref="KernelRadius"/>·down physical px), so every blurred texel
-    /// under the rect samples REAL backdrop instead of a clamp-streaked edge (WinUI blurs the whole backdrop;
-    /// inflating by the kernel support makes the region blur bit-identical inside the rect).
+    /// on every side by the FULL blur support (<paramref name="kernelRadiusTexels"/>·down physical px ≈ 3·sigmaPhys),
+    /// so every blurred texel under the rect samples REAL backdrop instead of a clamp-streaked edge (WinUI blurs the
+    /// whole backdrop; inflating by the kernel support makes the region blur bit-identical inside the rect). The pad is
+    /// derived from the actual kernel the leaf built (<see cref="KernelRadiusTexels"/>), not a fixed constant.
     /// </summary>
-    public static void SnapshotRegion(in RectF deviceRectDip, float scale, int down, int canvasW, int canvasH,
+    public static void SnapshotRegion(in RectF deviceRectDip, float scale, int down, int kernelRadiusTexels, int canvasW, int canvasH,
         out int x, out int y, out int w, out int h)
     {
-        int pad = KernelRadius * down;
+        int pad = kernelRadiusTexels * down;
         int x0 = (int)MathF.Floor(deviceRectDip.X * scale) - pad;
         int y0 = (int)MathF.Floor(deviceRectDip.Y * scale) - pad;
         int x1 = (int)MathF.Ceiling((deviceRectDip.X + deviceRectDip.W) * scale) + pad;
@@ -102,8 +136,9 @@ public static class AcrylicBackdropMath
     /// <summary>The TIGHT damage-test region for a layer (design §2.3 / E8): the layer rect in physical px WITHOUT the
     /// kernel-support inflation, expanded by <see cref="DamageTestMarginPx"/> on every side and clamped to the canvas.
     /// <see cref="BackdropReusable"/> tests this frame's damage against THIS region (not the inflated
-    /// <see cref="SnapshotRegion"/>), so a node animating in the ±KernelRadius·down halo but outside rect+8 no longer
-    /// forces a per-frame re-blur; a cache MISS still snapshots/blurs the inflated region (edge fidelity unchanged).</summary>
+    /// <see cref="SnapshotRegion"/>), so a node animating in the ±(kernelRadiusTexels·down ≈ 3·sigmaPhys) halo but
+    /// outside rect+8 no longer forces a per-frame re-blur; a cache MISS still snapshots/blurs the inflated region
+    /// (edge fidelity unchanged).</summary>
     public static void SnapshotRegionTight(in RectF deviceRectDip, float scale, int canvasW, int canvasH,
         out int x, out int y, out int w, out int h)
     {
@@ -171,8 +206,9 @@ public static class AcrylicBackdropMath
     /// <see cref="SnapshotRegionTight"/> damage-test region. An empty damage rect (W/H ≤ 0 ⇒ nothing changed) reuses
     /// unconditionally. This is the region-aware "behind-region in the damage set" gate of §2.3, sampled headlessly by
     /// the VerticalSlice. The test region is the TIGHT (un-inflated) rect+<see cref="DamageTestMarginPx"/>, NOT the
-    /// kernel-INFLATED snapshot region — a node animating anywhere in the ±KernelRadius·down halo but outside rect+8 no
-    /// longer forces a re-blur every frame (misses still snapshot/blur the inflated region, so edge fidelity is intact).</summary>
+    /// kernel-INFLATED snapshot region — a node animating anywhere in the ±(kernelRadiusTexels·down) halo but outside
+    /// rect+8 no longer forces a re-blur every frame (misses still snapshot/blur the inflated region, so edge fidelity
+    /// is intact).</summary>
     public static bool BackdropReusable(in BackdropStamp cached, in BackdropStamp now, in RectF damageTestRegionPhys, in RectF damagePhys)
     {
         if (!cached.Equals(now)) return false;                       // geometry / sigma / scale / canvas changed → re-blur

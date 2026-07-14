@@ -7,7 +7,7 @@ using static TerraFX.Interop.Windows.Windows;
 
 namespace FluentGpu.Rhi.D3D12;
 
-/// <summary>CPU mirror of the HLSL gradient <c>Inst</c> (160-byte stride; each float4 on a 16-byte boundary).</summary>
+/// <summary>CPU mirror of the HLSL gradient <c>Inst</c> (192-byte stride; each float4 on a 16-byte boundary).</summary>
 [StructLayout(LayoutKind.Sequential)]
 internal struct GradientInstance
 {
@@ -21,6 +21,8 @@ internal struct GradientInstance
     public float M11, M12, M21, M22;               // 112: world transform (linear)
     public float Dx, Dy, Radius, Opacity;          // 128: translation + corner radius + opacity
     public float Shape, StopCount, Stroke, Pad1;   // 144: 0=linear 1=radial, stop count, stroke width (0=fill, >0=border band)
+    public float ClipX, ClipY, ClipW, ClipH;        // 160: tier-2 rounded clip
+    public float ClipR, Pad2, Pad3, Pad4;           // 176: ClipW <= 0 = none
 }
 
 /// <summary>
@@ -44,10 +46,10 @@ internal sealed unsafe class GradientPipeline : IDisposable
     public int DroppedInstances => _dropped;
 
     private const string Hlsl = """
-struct Inst { float2 pos; float2 size; float2 gstart; float2 gend; float4 c0; float4 c1; float4 c2; float4 c3; float4 offs; float4 m; float2 t; float radius; float opacity; float shape; float stopCount; float stroke; float pad; };
+struct Inst { float2 pos; float2 size; float2 gstart; float2 gend; float4 c0; float4 c1; float4 c2; float4 c3; float4 offs; float4 m; float2 t; float radius; float opacity; float shape; float stopCount; float stroke; float pad; float4 clip; float clipR; float3 pad2; };
 StructuredBuffer<Inst> gInst : register(t0);
 cbuffer Root : register(b0) { float2 gViewport; };
-struct VSOut { float4 pos : SV_Position; float2 local : TEXCOORD0; float2 halfSize : TEXCOORD1; float radius : TEXCOORD2; float opacity : TEXCOORD3; float2 gstart : TEXCOORD4; float2 gend : TEXCOORD5; float2 shapeCount : TEXCOORD6; float4 c0 : TEXCOORD7; float4 c1 : TEXCOORD8; float4 c2 : TEXCOORD9; float4 c3 : TEXCOORD10; float4 offs : TEXCOORD11; float stroke : TEXCOORD12; };
+struct VSOut { float4 pos : SV_Position; float2 local : TEXCOORD0; float2 halfSize : TEXCOORD1; float radius : TEXCOORD2; float opacity : TEXCOORD3; float2 gstart : TEXCOORD4; float2 gend : TEXCOORD5; float2 shapeCount : TEXCOORD6; float4 c0 : TEXCOORD7; float4 c1 : TEXCOORD8; float4 c2 : TEXCOORD9; float4 c3 : TEXCOORD10; float4 offs : TEXCOORD11; float stroke : TEXCOORD12; float4 clip : TEXCOORD13; float clipR : TEXCOORD14; float2 world : TEXCOORD15; };
 
 VSOut VSMain(float2 corner : POSITION, uint iid : SV_InstanceID)
 {
@@ -69,6 +71,7 @@ VSOut VSMain(float2 corner : POSITION, uint iid : SV_InstanceID)
     o.shapeCount = float2(it.shape, it.stopCount);
     o.c0 = it.c0; o.c1 = it.c1; o.c2 = it.c2; o.c3 = it.c3; o.offs = it.offs;
     o.stroke = it.stroke;
+    o.clip = it.clip; o.clipR = it.clipR; o.world = world;
     return o;
 }
 
@@ -84,6 +87,15 @@ float4 PSMain(VSOut i) : SV_Target
         cov = clamp(0.5 - (abs(d) - i.stroke * 0.5) / fw, 0.0, 1.0);   // border: a band of width 'stroke' centred on the edge
     else
         cov = clamp(0.5 - d / fw, 0.0, 1.0);                            // fill
+
+    if (i.clip.z > 0.0)
+    {
+        float2 cp = i.world - (i.clip.xy + i.clip.zw * 0.5);
+        float cr = min(i.clipR, min(i.clip.z, i.clip.w) * 0.5);
+        float2 cq = abs(cp) - (i.clip.zw * 0.5 - cr);
+        float cd = min(max(cq.x, cq.y), 0.0) + length(max(cq, 0.0)) - cr;
+        cov *= clamp(0.5 - cd / max(fwidth(cd), 1e-4), 0.0, 1.0);
+    }
 
     float2 uv = i.local / (i.halfSize * 2.0) + 0.5;
     float t;

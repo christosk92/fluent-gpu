@@ -25,7 +25,9 @@ public static class SpotifyHomeComposer
         string recentlyPlayedTitle = "Recently played")
     {
         HomeGroup? quick = null, hero = null, recents = null;
-        var shelves = new List<HomeGroup>();
+        // Generic sections keep their response order even when their visual treatment differs. Baseline recommendations
+        // are still folded into separate editorial breaks and distributed across this ordered module list below.
+        var modules = new List<HomeGroup>();
         var featured = new List<HomeCard>();
 
         if (library.Count > 0)
@@ -55,10 +57,14 @@ public static class SpotifyHomeComposer
                             featured.Add(title is { Length: > 0 } ? bc with { Eyebrow = title } : bc);
                         break;
                     case "HomeGenericSectionData":
-                        if (shelves.Count < MaxSections)
+                        if (modules.Count < MaxSections)
                         {
                             var cards = Cards(items, CardsPerSection);
-                            if (cards.Count >= 2) shelves.Add(new HomeGroup(HomeGroupKind.Shelf, title, cards, GroupAccent(HomeGroupKind.Shelf, cards)));
+                            if (cards.Count >= 2)
+                            {
+                                var kind = GenericKind(Str(d, "title", "translatedBaseText"));
+                                modules.Add(new HomeGroup(kind, title, cards, GroupAccent(kind, cards)));
+                            }
                         }
                         break;
                     case "HomeRecentlyPlayedSectionData":
@@ -97,10 +103,10 @@ public static class SpotifyHomeComposer
         // of front-loading — the old "every 2 shelves, max 3 breaks" clustered them at the top and dropped the rest.
         AddFeatureBreak();
         int breaksLeft = (featured.Count - featureAt + FeaturedCardsPerBreak - 1) / FeaturedCardsPerBreak;
-        int interval = breaksLeft > 0 ? Math.Max(1, (int)Math.Ceiling(shelves.Count / (double)(breaksLeft + 1))) : int.MaxValue;
-        for (int i = 0; i < shelves.Count; i++)
+        int interval = breaksLeft > 0 ? Math.Max(1, (int)Math.Ceiling(modules.Count / (double)(breaksLeft + 1))) : int.MaxValue;
+        for (int i = 0; i < modules.Count; i++)
         {
-            groups.Add(shelves[i]);
+            groups.Add(modules[i]);
             if ((i + 1) % interval == 0) AddFeatureBreak();
         }
         while (featureAt < featured.Count) AddFeatureBreak();   // drain any leftover recs at the tail
@@ -115,9 +121,19 @@ public static class SpotifyHomeComposer
         return kind switch
         {
             HomeGroupKind.QuickGrid => 0xFFF59E0Bu,                              // amber — your recents
-            HomeGroupKind.CollapsedGrid or HomeGroupKind.Featured => 0xFF3B82F6u, // blue — made for you
+            HomeGroupKind.Compact or HomeGroupKind.CollapsedGrid or HomeGroupKind.Featured => 0xFF3B82F6u, // blue — made for you/editorial
             _ => 0xFF60CDFFu,                                                    // the app accent — generic sections / hero
         };
+    }
+
+    // Route on Spotify's stable canonical template, never the localized/transformed display label. Unknown templates
+    // stay conventional so a server-side copy experiment cannot unexpectedly turn an arbitrary shelf editorial.
+    static HomeGroupKind GenericKind(string? translatedBaseText)
+    {
+        string key = translatedBaseText?.Trim() ?? "";
+        if (key.Equals("Made For {0}", StringComparison.OrdinalIgnoreCase)) return HomeGroupKind.Compact;
+        if (key.Equals("Jump back in", StringComparison.OrdinalIgnoreCase)) return HomeGroupKind.Featured;
+        return HomeGroupKind.Shelf;
     }
 
     static string? Str(JsonElement e, params string[] path)

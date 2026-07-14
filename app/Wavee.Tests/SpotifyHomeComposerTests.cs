@@ -118,4 +118,39 @@ public class SpotifyHomeComposerTests
         Assert.Equal("spotify:artist:A1", recents.Cards[1].Uri);
         Assert.Equal(HomeCardKind.Artist, recents.Cards[1].Kind);
     }
+
+    [Fact]
+    public void CanonicalGenericTitle_RoutesCardTreatment_WithoutDependingOnLocalizedLabel()
+    {
+        const string json = """
+        { "sectionContainer": { "sections": { "items": [
+          { "data": { "__typename": "HomeGenericSectionData", "title": {
+                "transformedLabel": "Speciaal voor Christos", "translatedBaseText": "Made For {0}" } },
+            "sectionItems": { "items": [
+              { "content": { "data": { "__typename": "Playlist", "uri": "spotify:playlist:M1", "name": "Mix one" } } },
+              { "content": { "data": { "__typename": "Playlist", "uri": "spotify:playlist:M2", "name": "Mix two" } } }
+            ] } },
+          { "data": { "__typename": "HomeGenericSectionData", "title": {
+                "transformedLabel": "Ga verder", "translatedBaseText": "Jump back in" } },
+            "sectionItems": { "items": [
+              { "content": { "data": { "__typename": "Album", "uri": "spotify:album:J1", "name": "Album one" } } },
+              { "content": { "data": { "__typename": "Album", "uri": "spotify:album:J2", "name": "Album two" } } }
+            ] } },
+          { "data": { "__typename": "HomeGenericSectionData", "title": {
+                "transformedLabel": "Ontdekken", "translatedBaseText": "A server experiment" } },
+            "sectionItems": { "items": [
+              { "content": { "data": { "__typename": "Artist", "uri": "spotify:artist:S1", "profile": { "name": "One" } } } },
+              { "content": { "data": { "__typename": "Artist", "uri": "spotify:artist:S2", "profile": { "name": "Two" } } } }
+            ] } }
+        ] } } }
+        """;
+
+        var groups = SpotifyHomeComposer.Compose(JsonDocument.Parse(json).RootElement,
+            System.Array.Empty<PlaylistSummary>()).Groups;
+
+        Assert.Collection(groups,
+            g => { Assert.Equal(HomeGroupKind.Compact, g.Kind); Assert.Equal("Speciaal voor Christos", g.Title); },
+            g => { Assert.Equal(HomeGroupKind.Featured, g.Kind); Assert.Equal("Ga verder", g.Title); },
+            g => { Assert.Equal(HomeGroupKind.Shelf, g.Kind); Assert.Equal("Ontdekken", g.Title); });
+    }
 }

@@ -14,7 +14,7 @@ public readonly record struct PathfinderKey(
     string BodyHash,
     PathfinderClient.Platform Platform);
 
-public sealed class PathfinderResource
+public sealed class PathfinderResource : IConcertPathfinder
 {
     readonly PathfinderClient _client;
     readonly Resource<PathfinderKey, CachedJson> _resource;
@@ -37,6 +37,10 @@ public sealed class PathfinderResource
 
     public int FetchCount => _resource.FetchCount;
 
+    /// <summary>Resident request-body count. Test/diagnostic visibility for the cache-HIT body-cleanup contract (a fresh
+    /// hit must not strand its request blob in <c>_bodies</c>).</summary>
+    internal int PendingBodyCount => _bodies.Count;
+
     public async Task<JsonDocument?> QueryAsync(string operationName, string sha256Hash,
         Action<Utf8JsonWriter>? writeVariables, PathfinderClient.Platform platform = PathfinderClient.Platform.Desktop,
         CancellationToken ct = default, TimeSpan? ttl = null)
@@ -57,7 +61,13 @@ public sealed class PathfinderResource
         _bodies[key] = body;
         var loaded = _resource.Use(key);
         if (loaded.IsReady && loaded.Value is { } cached)
+        {
+            // Cache HIT: FetchAsync removes the body only on a fetch. A FRESH hit runs no fetch, so drop the body here or
+            // it leaks one request blob per distinct key forever. A STALE hit's background revalidation still needs it (its
+            // FetchAsync finally removes it), so leave that case alone.
+            if (!loaded.IsStale) _bodies.TryRemove(key, out _);
             return JsonDocument.Parse(cached.Bytes);
+        }
 
         return await QueryAsync(operationName, sha256Hash, writeVariables, platform, ct, ttlValue).ConfigureAwait(false);
     }
@@ -74,6 +84,9 @@ public sealed class PathfinderResource
 
         _bodies[key] = body;
         var loaded = await _resource.GetAsync(key, ct).ConfigureAwait(false);
+        // The awaited fetch (if any) already consumed + removed the body in its finally; on a fresh cache HIT no fetch ran,
+        // so this removal is what plugs that leak. Idempotent after a fetch (TryRemove no-ops).
+        _bodies.TryRemove(key, out _);
         return loaded.IsReady ? loaded.Value.Bytes : null;
     }
 

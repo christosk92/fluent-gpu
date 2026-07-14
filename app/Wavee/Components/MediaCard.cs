@@ -6,6 +6,7 @@ using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Localization;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
 using Wavee.Core;
@@ -47,12 +48,12 @@ public static class MediaCard
     // context-request funnel here and the walk finds the card's OnContextRequested. Same dark-glass chrome as
     // CoverActionFab; hover-revealed like the play FAB. Rendered only when the card actually carries a menu.
     // Skeletonized(false): a hover-only affordance is not skeleton content (the NowPlayingOverlay rule).
-    static Element MoreCorner(bool show) => show
+    static Element MoreCorner(bool show, bool persistent = false) => show
         ? new BoxEl
         {
             Grow = 1f, Direction = 1, AlignItems = FlexAlign.End,
             Padding = new Edges4(0f, FabInset, FabInset, 0f),
-            Opacity = 0f, HoverOpacity = 1f, HoverDurationMs = 180f, HoverEasing = Easing.FluentDecelerate,
+            Opacity = persistent ? 1f : 0f, HoverOpacity = 1f, HoverDurationMs = 180f, HoverEasing = Easing.FluentDecelerate,
             Children =
             [
                 new BoxEl
@@ -70,6 +71,40 @@ public static class MediaCard
             ],
         }.Skeletonized(false)
         : new BoxEl();
+
+    static Element MoreInline(bool show, bool onDark = false, float size = 36f) => show
+        ? new BoxEl
+        {
+            Width = size, Height = size, Shrink = 0f,
+            AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Corners = CornerRadius4.All(size / 2f),
+            Fill = onDark ? ColorF.FromRgba(0, 0, 0, 132) : ColorF.Transparent,
+            HoverFill = onDark ? ColorF.FromRgba(0, 0, 0, 190) : Tok.FillSubtleSecondary,
+            PressedFill = onDark ? ColorF.FromRgba(0, 0, 0, 220) : Tok.FillSubtleTertiary,
+            BorderWidth = onDark ? 1f : 0f,
+            BorderColor = onDark ? ColorF.FromRgba(255, 255, 255, 58) : ColorF.Transparent,
+            ClickRequestsContext = true, Cursor = CursorId.Hand, Role = AutomationRole.Button,
+            Children = [ FabGlyph(Mdl.More, 15f, onDark ? ColorF.FromRgba(255, 255, 255) : Tok.TextSecondary) ],
+        }.Skeletonized(false)
+        : new BoxEl();
+
+    static Element KindChip(HomeCardKind kind)
+    {
+        string label = kind switch
+        {
+            HomeCardKind.Track => Loc.Get(Strings.Search.TypeSong),
+            HomeCardKind.Artist => Loc.Get(Strings.Search.TypeArtist),
+            HomeCardKind.Album => Loc.Get(Strings.Search.TypeAlbum),
+            _ => Loc.Get(Strings.Search.TypePlaylist),
+        };
+        return new BoxEl
+        {
+            Shrink = 0f, Padding = new Edges4(10f, 5f, 10f, 5f), Corners = CornerRadius4.All(12f),
+            Fill = ColorF.FromRgba(0, 0, 0, 142), BorderWidth = 1f,
+            BorderColor = ColorF.FromRgba(255, 255, 255, 55), HitTestVisible = false,
+            Children = [ new TextEl(label) { Size = 10.5f, Weight = 700, Color = ColorF.FromRgba(255, 255, 255, 225), CharSpacing = 30f } ],
+        };
+    }
 
     static Element ArtworkOrLiked(Image? cover, string uri, float width, float height, float radius, string? morphKey = null, int decodePx = 0, Element? diagnostics = null)
     {
@@ -113,7 +148,13 @@ public static class MediaCard
                         Image(cover?.Url ?? "", ImageFit.Cover, 1f, ShelfDecodePx, r, placeholder: ColorF.Transparent)
                             with { MorphId = morphKey });
 
-        var coverStack = ZStack(
+        var coverStack = new BoxEl
+        {
+            Width = inner, Height = inner, ZStack = true, ClipToBounds = true, Corners = CornerRadius4.All(r),
+            HoverScale = Motion.ReducedMotion ? 1f : 1.035f,
+            HoverDurationMs = 300f, HoverEasing = Easing.FluentDecelerate,
+            Children =
+            [
             face,
             // The now-playing equalizer (bottom-left, when this card's context is playing) + the play/pause FAB
             // (bottom-right, REVEALED ON HOVER). Reactive: subscribes to the playback bridge. The container carries NO
@@ -122,9 +163,11 @@ public static class MediaCard
             // Skeletonized(false): a hover-only affordance is not skeleton content — without this the deriver maps the
             // opaque overlay to its default bar, leaving a stray stripe across the top-left of every loading cover.
             Embed.Comp(() => new NowPlayingOverlay(uri, onPlay, FabSize, cover: true, inner)).Skeletonized(false),
-            MoreCorner(menu is not null));
+            MoreCorner(menu is not null),
+            ],
+        };
 
-        var card = new BoxEl
+        var content = new BoxEl
         {
             // No explicit Width: the shelf cell (a column container) cross-stretches the card to the cell's LIVE width.
             // Grow=1 fills the cell's HEIGHT too: in a measured shelf the engine sizes the cell to the TALLEST card's
@@ -132,12 +175,6 @@ public static class MediaCard
             // top-aligned (cover, then text) with any slack below. The card itself just sizes to its content.
             Direction = 1, Gap = Pad, Grow = 1f,
             Padding = new Edges4(Pad, Pad, Pad, WaveeSpace.M),
-            Corners = CornerRadius4.All(WaveeRadius.Card),
-            Fill = Tok.FillCardDefault, HoverFill = Tok.FillControlSecondary,
-            BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
-            Shadow = Elevation.Card,
-            HoverScale = 1.02f, PressScale = 0.99f, ClipToBounds = true,
-            OnClick = onClick,
             Children =
             [
                 coverStack,
@@ -148,7 +185,7 @@ public static class MediaCard
                     [
                         // Explicit Width clamps the run to the card (no overflow, ellipsis at the edge). MaxLines caps how
                         // tall a verbose card can grow (and thus the whole uniform row); short text renders fewer lines.
-                        WaveeType.TrackTitle(title) with { Width = inner, Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.CharacterEllipsis },
+                        WaveeType.TrackTitle(title) with { Width = inner, Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                         // The description can be an HTML fragment (links to artists/playlists, bold) — parse → rich spans
                         // (links accent + clickable via onNavUri, bold rendered, entities decoded), capped at two lines.
                         RichText.Of(subtitle, 12f, Tok.TextSecondary, Tok.AccentTextPrimary, inner, 2, onNavUri),
@@ -156,13 +193,82 @@ public static class MediaCard
                 },
             ],
         };
-        return card.WithMenu(menu);
+        var card = new BoxEl
+        {
+            Grow = 1f, ZStack = true, Corners = CornerRadius4.All(WaveeRadius.Card), ClipToBounds = true,
+            OnClick = onClick, PressScale = 0.99f,
+            WhileHover = Motion.ReducedMotion ? null : new MotionTarget { OffsetY = -4f },
+            WhilePressed = Motion.ReducedMotion ? null : new MotionTarget { Scale = 0.99f, OffsetY = -1f },
+            Transition = MotionTok.ControlNormal,
+            Children =
+            [
+                new BoxEl
+                {
+                    Grow = 1f, Corners = CornerRadius4.All(WaveeRadius.Card),
+                    Fill = Tok.FillCardDefault, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
+                    Shadow = Elevation.Card, Opacity = 0f, HoverOpacity = 1f,
+                    HoverDurationMs = 180f, HoverEasing = Easing.FluentDecelerate, HitTestVisible = false,
+                },
+                content,
+            ],
+        }.WithMenu(menu);
+        return new BoxEl { Grow = 1f, Direction = 1, Padding = new Edges4(0f, 4f, 0f, 2f), Children = [ card ] };
     }
 
     // ── Grid card: fills the grid cell width (no cardW), square or circular cover. For AutoGrid/UniformGrid cells. ──
     // Mirrors the Shelf card but is width-AGNOSTIC: the cover fills the cell (Surfaces.ArtworkFill, CSS aspect-ratio 1)
     // and the labels truncate to the engine-measured slot width (the proven NavCardContent pattern) — so it drops into a
     // responsive grid whose track width isn't known at template time.
+    /// <summary>Dense horizontal Home card used by canonical “Made For {0}” modules.</summary>
+    public static Element Compact(Image? cover, string title, string subtitle, string uri, HomeCardKind kind,
+                                  Action onClick, Action onPlay, float art, float cardH, MenuAttach? menu = null)
+    {
+        bool circular = kind == HomeCardKind.Artist;
+        float radius = circular ? art / 2f : WaveeRadius.Card;
+        float action = art <= 100f ? 40f : 44f;
+        var artBox = new BoxEl
+        {
+            Width = art, Height = art, Shrink = 0f, ZStack = true, ClipToBounds = true,
+            Corners = CornerRadius4.All(radius), HoverScale = Motion.ReducedMotion ? 1f : 1.02f,
+            HoverDurationMs = 300f, HoverEasing = Easing.FluentDecelerate,
+            Children =
+            [
+                circular
+                    ? PersonPicture.Create("", art, displayName: title, imageSourcePath: cover?.Url)
+                    : ArtworkOrLiked(cover, uri, art, art, radius, decodePx: 192),
+            ],
+        };
+        var card = new BoxEl
+        {
+            Direction = 0, Height = cardH, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center,
+            Padding = new Edges4(WaveeSpace.S, MathF.Max(0f, (cardH - art) * 0.5f), WaveeSpace.S, MathF.Max(0f, (cardH - art) * 0.5f)),
+            Corners = CornerRadius4.All(WaveeRadius.Card), ClipToBounds = true,
+            Fill = Tok.FillCardDefault, HoverFill = Tok.FillCardSecondary,
+            BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault, Shadow = Elevation.Card,
+            OnClick = onClick, PressScale = 0.99f,
+            WhileHover = Motion.ReducedMotion ? null : new MotionTarget { OffsetY = -3f },
+            WhilePressed = Motion.ReducedMotion ? null : new MotionTarget { Scale = 0.99f, OffsetY = -1f },
+            Transition = MotionTok.ControlNormal,
+            Children =
+            [
+                artBox,
+                new BoxEl
+                {
+                    Direction = 1, Grow = 1f, Basis = 0f, Gap = 3f, Justify = FlexJustify.Center,
+                    Children =
+                    [
+                        WaveeType.TrackTitle(title) with { Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                        subtitle.Length == 0 ? new BoxEl() : WaveeType.TrackMeta(subtitle) with
+                            { Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                    ],
+                },
+                Embed.Comp(() => new NowPlayingOverlay(uri, onPlay, action, cover: false, action, persistent: true)).Skeletonized(false),
+                MoreInline(menu is not null),
+            ],
+        };
+        return new BoxEl { Direction = 1, Padding = new Edges4(0f, 3f, 0f, 3f), Children = [ card.WithMenu(menu) ] };
+    }
+
     public static Element GridCard(Image? cover, string title, string subtitle, string uri,
                                    Action onClick, Action onPlay, bool circular = false, Action? onNavigate = null,
                                    ColorF? accent = null, MenuAttach? menu = null)
@@ -219,19 +325,19 @@ public static class MediaCard
     // the outermost shelf cards past the viewport's exact-bounds clip — squared corners), expands the description, and —
     // after a swept countdown ring — peeks the recommendation's preview tracks (previewsOf, the feedBaselineLookup cache).
     // Component props freeze at mount, so the Key remounts on identity or a ≥16px fitted-width change (shelf re-fit).
-    public static Element EditorialCard(Image? cover, string? eyebrow, string title, string subtitle, string uri,
+    public static Element EditorialCard(Image? cover, string? eyebrow, string title, string subtitle, string uri, HomeCardKind kind,
                                         Action onClick, Action onPlay, float cardW, MenuAttach? menu = null,
                                         Func<string, IReadOnlyList<HomePreviewTrack>?>? previewsOf = null,
                                         IReadSignal<int>? previewsEpoch = null)
-        => Embed.Comp(() => new EditorialCardCore(cover, eyebrow, title, subtitle, uri, onClick, onPlay, cardW, menu,
+        => Embed.Comp(() => new EditorialCardCore(cover, eyebrow, title, subtitle, uri, kind, onClick, onPlay, cardW, menu,
                                                   previewsOf, previewsEpoch))
            with
            {
                Key = $"edcard:{uri}:{(int)(cardW / 16f)}",
                // The deriver can't see into the component — hand it the resting card shape (no hover, no peek).
-               SkeletonProxy = () => EditorialCardCore.Build(cover, eyebrow, title, subtitle, uri, onClick, onPlay,
+               SkeletonProxy = () => EditorialCardCore.Build(cover, eyebrow, title, subtitle, uri, kind, onClick, onPlay,
                    MathF.Min(cardW, 360f), menu, hovered: false, peek: null, counting: false,
-                   arcCapture: null, hoverMove: null, pointerExit: null),
+                   arcCapture: null, spotlightCenter: new Point2(0.5f, 0.35f), pointerMove: null, pointerExit: null),
            };
 
     // The stateful editorial-card core. Hover choreography (every channel animated — no snaps):
@@ -246,21 +352,22 @@ public static class MediaCard
         const int PeekRows = 5;
 
         readonly Image? _cover; readonly string? _eyebrow; readonly string _title; readonly string _subtitle;
-        readonly string _uri; readonly Action _onClick; readonly Action _onPlay; readonly float _cardW;
+        readonly string _uri; readonly HomeCardKind _kind; readonly Action _onClick; readonly Action _onPlay; readonly float _cardW;
         readonly MenuAttach? _menu;
         readonly Func<string, IReadOnlyList<HomePreviewTrack>?>? _previewsOf;
         readonly IReadSignal<int>? _previewsEpoch;
 
         readonly Signal<bool> _hovered = new(false);
         readonly Signal<bool> _revealed = new(false);
+        readonly Signal<Point2> _spotlightCenter = new(new Point2(0.5f, 0.35f));
         int _hoverEpoch;                                   // bumped on every hover edge — abandons stale countdown tails
         NodeHandle _arcNode = NodeHandle.Null;
 
-        public EditorialCardCore(Image? cover, string? eyebrow, string title, string subtitle, string uri,
+        public EditorialCardCore(Image? cover, string? eyebrow, string title, string subtitle, string uri, HomeCardKind kind,
                                  Action onClick, Action onPlay, float cardW, MenuAttach? menu,
                                  Func<string, IReadOnlyList<HomePreviewTrack>?>? previewsOf, IReadSignal<int>? previewsEpoch)
         {
-            _cover = cover; _eyebrow = eyebrow; _title = title; _subtitle = subtitle; _uri = uri;
+            _cover = cover; _eyebrow = eyebrow; _title = title; _subtitle = subtitle; _uri = uri; _kind = kind;
             _onClick = onClick; _onPlay = onPlay; _cardW = cardW; _menu = menu;
             _previewsOf = previewsOf; _previewsEpoch = previewsEpoch;
         }
@@ -286,6 +393,15 @@ public static class MediaCard
             if (_revealed.Peek()) _revealed.Value = false;
         }
 
+        void PointerMove(Point2 local)
+        {
+            HoverStart();
+            if (Motion.ReducedMotion) return;
+            float w = MathF.Max(1f, _cardW);
+            float h = MathF.Max(360f, _cardW * 1.25f);
+            _spotlightCenter.Value = new Point2(Math.Clamp(local.X / w, 0f, 1f), Math.Clamp(local.Y / h, 0f, 1f));
+        }
+
         public override Element Render()
         {
             bool hovered = _hovered.Value;
@@ -300,7 +416,7 @@ public static class MediaCard
             // UseKeyframes only targets the host node, so a child arc is driven through Context.Anim directly).
             UseLayoutEffect(() =>
             {
-                if (!counting) return;
+                if (!counting || Motion.ReducedMotion) return;
                 var anim = Context.Anim; var scene = Context.Scene;
                 var arc = _arcNode;
                 if (anim is null || scene is null || arc.IsNull || !scene.IsLive(arc)) return;
@@ -308,18 +424,20 @@ public static class MediaCard
                     new Keyframe[] { new(0f, 0f, Easing.Linear), new(1f, 1f, Easing.Linear) }, CountdownMs, false);
             }, counting, _hoverEpoch);
 
-            return Build(_cover, _eyebrow, _title, _subtitle, _uri, _onClick, _onPlay, _cardW, _menu,
+            return Build(_cover, _eyebrow, _title, _subtitle, _uri, _kind, _onClick, _onPlay, _cardW, _menu,
                 hovered, revealed && hasPeek ? previews : null, counting,
-                arcCapture: h => _arcNode = h, hoverMove: HoverStart, pointerExit: HoverEnd);
+                arcCapture: h => _arcNode = h, spotlightCenter: Prop<Point2>.FromSignal(_spotlightCenter),
+                pointerMove: PointerMove, pointerExit: HoverEnd);
         }
 
-        internal static Element Build(Image? cover, string? eyebrow, string title, string subtitle, string uri,
+        internal static Element Build(Image? cover, string? eyebrow, string title, string subtitle, string uri, HomeCardKind kind,
                                       Action onClick, Action onPlay, float cardW, MenuAttach? menu,
                                       bool hovered, IReadOnlyList<HomePreviewTrack>? peek, bool counting,
-                                      Action<NodeHandle>? arcCapture, Action? hoverMove, Action? pointerExit)
+                                      Action<NodeHandle>? arcCapture, Prop<Point2> spotlightCenter,
+                                      Action<Point2>? pointerMove, Action? pointerExit)
         {
             const float editorialScale = 1.25f;
-            float artH = MathF.Max(320f, cardW * 1.34f);      // preserve the established editorial card dimensions
+            float artH = MathF.Max(360f, cardW * 1.25f);
             float aspect = cardW / artH;
             float inset = Math.Clamp(cardW * 0.055f, 14f, 20f);
             // Empty frosted space above the copy the feather ramps across. PROPORTIONAL to the art (≈ a quarter of the
@@ -330,10 +448,11 @@ public static class MediaCard
             float featherPad = Math.Clamp(artH * 0.24f * editorialScale, 72f * editorialScale, 200f * editorialScale);
             float textW = MathF.Max(32f, cardW - 2f * inset);
             const float radius = 14f;
+            bool showCountdown = counting && !Motion.ReducedMotion;
 
-            var copy = new List<Element>(4);
+            var copy = new List<Element>(5);
             // Eyebrow row also hosts the countdown ring (trailing) so the sweep reads as part of the copy header.
-            if (eyebrow is { Length: > 0 } || counting)
+            if (eyebrow is { Length: > 0 } || showCountdown)
                 copy.Add(new BoxEl
                 {
                     Direction = 0, AlignItems = FlexAlign.Center, Gap = 8f, Width = textW, HitTestPassThrough = true,
@@ -346,7 +465,7 @@ public static class MediaCard
                                 Grow = 1f, Basis = 0f, MaxLines = 1, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis,
                             }
                             : new BoxEl { Grow = 1f },
-                        counting ? CountdownRing(arcCapture) : new BoxEl(),
+                        showCountdown ? CountdownRing(arcCapture) : new BoxEl(),
                     ],
                 });
             copy.Add(new TextEl(title)
@@ -358,7 +477,12 @@ public static class MediaCard
             {
                 // The preview-track peek replaces the description: up to five compact cover+name rows, each fading in
                 // (PageFade enter), the container staggering them so the list cascades rather than popping at once.
-                var rows = new Element[Math.Min(peek.Count, PeekRows)];
+                // The card itself has a fixed portrait height, so smaller fitted cards cannot safely hold all five rows
+                // plus the title and actions. Reserve the complete action/footer geometry first and fit only whole rows
+                // in the remainder; this keeps both buttons inside the rounded bottom clip at every shelf width.
+                float rowBudget = MathF.Max(36f, artH - featherPad - inset - 116f);
+                int fittingRows = Math.Clamp((int)MathF.Floor((rowBudget + 7f) / 43f), 1, PeekRows);
+                var rows = new Element[Math.Min(peek.Count, fittingRows)];
                 for (int i = 0; i < rows.Length; i++) rows[i] = PeekRow(peek[i], textW);
                 copy.Add(new BoxEl
                 {
@@ -372,14 +496,26 @@ public static class MediaCard
                 // not shown raw); links share the copy colour so they read as prose, not clickable chrome (the card owns
                 // the tap). Hover relaxes the clamp to 5 lines; the band's CardResizeHeight animates the space it takes.
                 copy.Add(RichText.Of(subtitle, 13f * editorialScale, ColorF.FromRgba(255, 255, 255, 224), ColorF.FromRgba(255, 255, 255, 224),
-                    textW, hovered ? 5 : 2));
+                    textW, hovered ? (artH < 440f ? 4 : 5) : 2));
+
+            copy.Add(new BoxEl
+            {
+                Direction = 0, Width = textW, Gap = 8f, AlignItems = FlexAlign.Center,
+                Padding = new Edges4(0f, 7f, 0f, 0f),
+                Children =
+                [
+                    Embed.Comp(() => new NowPlayingOverlay(uri, onPlay, 48f, cover: false, 48f, persistent: true, light: true)).Skeletonized(false),
+                    Embed.Comp(() => new CardLibraryAction(uri, title, kind, onDark: true)).Skeletonized(false),
+                    new BoxEl { Grow = 1f },
+                ],
+            });
 
             var card = new BoxEl
             {
                 Height = artH, ZStack = true, ClipToBounds = true,
                 Corners = CornerRadius4.All(radius), Shadow = Elevation.Card,
                 PressScale = 0.99f, OnClick = onClick,
-                OnHoverMove = hoverMove is null ? null : _ => hoverMove(),
+                OnPointerMoveWithin = pointerMove,
                 OnPointerExit = pointerExit,
                 Children =
                 [
@@ -388,18 +524,61 @@ public static class MediaCard
                     // image's self-rounded corners out and leaves square slivers at the card corners (and a root-level
                     // scale pokes past the shelf viewport's exact-bounds clip). Hover feedback is the FAB reveal, the
                     // description expand, and the countdown peek instead.
-                    Ui.Image(cover?.Url ?? "", ImageFit.Cover, aspect, 512, radius, Tok.FillCardDefault, cover?.BlurHash),
+                    new BoxEl
+                    {
+                        Height = artH, ZStack = true, ClipToBounds = true, Corners = CornerRadius4.All(radius),
+                        HoverScale = Motion.ReducedMotion ? 1f : 1.055f,
+                        HoverDurationMs = 300f, HoverEasing = Easing.FluentDecelerate,
+                        Children = [ Ui.Image(cover?.Url ?? "", ImageFit.Cover, aspect, 512, radius, Tok.FillCardDefault, cover?.BlurHash) ],
+                    },
+                    new BoxEl
+                    {
+                        Height = artH, HitTestVisible = false, Corners = CornerRadius4.All(radius),
+                        Gradient = new GradientSpec(GradientShape.Radial, 0f,
+                        [
+                            new GradientStop(0f, ColorF.FromRgba(255, 255, 255, 46)),
+                            new GradientStop(0.48f, ColorF.FromRgba(255, 255, 255, 20)),
+                            new GradientStop(1f, ColorF.Transparent),
+                        ])
+                        {
+                            RadialCenter = new Point2(0.5f, 0.35f),
+                            RadialRadius = new Point2(Math.Clamp(Math.Clamp(cardW * 0.46f, 140f, 190f) / MathF.Max(cardW, 1f), 0.01f, 2f),
+                                                      Math.Clamp(Math.Clamp(cardW * 0.46f, 140f, 190f) / artH, 0.01f, 2f)),
+                        },
+                        RadialGradientCenter = spotlightCenter,
+                        Opacity = 0f, HoverOpacity = 1f, HoverDurationMs = 180f, HoverEasing = Easing.FluentDecelerate,
+                    },
+                    new BoxEl
+                    {
+                        Height = artH, HitTestVisible = false, Corners = CornerRadius4.All(radius),
+                        Gradient = new GradientSpec(GradientShape.Linear, 90f,
+                        [
+                            new GradientStop(0f, ColorF.Transparent),
+                            new GradientStop(0.36f, ColorF.Transparent),
+                            new GradientStop(0.66f, ColorF.FromRgba(0, 0, 0, 76)),
+                            new GradientStop(1f, ColorF.FromRgba(0, 0, 0, 224)),
+                        ]),
+                    },
                     // Bottom-pinned frosted copy band, cross-stretched to the full card width; it auto-sizes to the copy
                     // plus the feather ramp space (featherPad), so the frost covers the text zone and fades up into the
                     // art. Height changes (line expand / peek swap) tween through real layout (CardResizeHeight).
                     //
-                    // The frost is a CACHED SELF-BLUR of the artwork itself, not an Acrylic backdrop stamp: a backdrop
-                    // stamp is keyed on the card's canvas position, so a shelf scroll could never HIT its cache — one
-                    // Gaussian per card per frame. The self-blur duplicates the SAME artwork (same URL/decode params ⇒
-                    // shared ImageCache handle) bottom-anchored inside the band, blurs it once (the blur pin rebases to
-                    // the layer origin, so it survives scroll translation — re-run only on art change/resize), feathers
-                    // its top edge (the old FeatherTop 0.75 dissolve, here the featherPad ramp zone), and lays the
-                    // tint/luminosity feel over it as a plain translucent fill.
+                    // The frost is a TRUE GAUSSIAN SELF-BLUR of the artwork (the Element Blur channel, σ26), NOT an
+                    // Acrylic backdrop stamp: a backdrop stamp is keyed on the card's canvas POSITION, so a shelf scroll
+                    // never HITS its cache — one Gaussian per card per frame (the original perf bug). The self-blur
+                    // duplicates the SAME art URL at the SAME 512 decode as the crisp cover above (⇒ shared ImageCache
+                    // handle, no extra decode), blurs its OWN pixels, and rides the engine's position-INDEPENDENT blur
+                    // pin cache (BlurPinKey): the pin key rebases every op to the layer origin, so a pure scroll
+                    // translation yields a byte-identical key ⇒ an on-canvas scrolling card HITS its pin every frame (no
+                    // re-blur). Wave A/B also caches edge-clamped regions AT REST (SelfBlurRegion) — so only a card whose
+                    // band straddles the viewport edge WHILE IN MOTION re-blurs, and only over the tight band region
+                    // (device rect + the kernel's ±min(ceil(3σ),32)px halo), never the whole card. FocusY=1 anchors the
+                    // Cover crop to the BOTTOM slice of the art (the region behind the band); ImageTransition.None keeps
+                    // the blur subtree static (one Ready-flip re-blur at decode, then nothing animates inside it — the
+                    // CardResizeHeight tween lives on the band's OUTER ZStack, not under the blur). The top edge feathers
+                    // over the featherPad ramp (the old FeatherTop 0.75 dissolve) via a separate EdgeFade node wrapping
+                    // the blur — EdgeFade and self-Blur can't share a node (EdgeFade takes precedence), so the blur node
+                    // nests INSIDE it — and the tint/luminosity feel lays over as a plain translucent fill.
                     new BoxEl
                     {
                         Height = artH, Direction = 1, Justify = FlexJustify.End, AlignItems = FlexAlign.Stretch,
@@ -415,7 +594,11 @@ public static class MediaCard
                                 [
                                     // Frost: blurred artwork copy + tint, feathered in from the top so it dissolves
                                     // into the crisp art above (the corner-following EdgeFade keeps the band's rounded
-                                    // bottom corners clean while the top corners fade out under the ramp).
+                                    // bottom corners clean while the top corners fade out under the ramp). The frost box
+                                    // and its image carry NO explicit/aspect size, so they MEASURE to 0 — the COPY below
+                                    // drives the band height (the caption band, not the whole card) — and ARRANGE to fill
+                                    // the band. That fixes the earlier bug where a full-card-tall aspect image forced the
+                                    // frost to cover the entire card.
                                     new BoxEl
                                     {
                                         ZStack = true, HitTestVisible = false,
@@ -423,14 +606,27 @@ public static class MediaCard
                                         EdgeFade = new EdgeFadeSpec(EdgeMask.Top, featherPad),
                                         Children =
                                         [
+                                            // True σ26 self-blur of the artwork. Blur (the Element channel) wraps this
+                                            // node's subtree in a PushLayer{Blur} → its OWN pixels Gaussian-blur (CSS
+                                            // filter: blur(), NOT the backdrop). BlurCachePolicy.Normal is correct: the
+                                            // pin caches at rest for ALL policies, and its position-INDEPENDENT key means
+                                            // an on-canvas scrolling card HITS the pin in motion too (Normal, not a Hold
+                                            // policy, so the frost never flashes crisp/skips when a fresh card scrolls in
+                                            // — it pays one tight-region Gaussian for that frame instead). The image
+                                            // carries NO aspect/size (float.NaN) so it MEASURES 0×0 and the COPY below
+                                            // drives the band height, then ARRANGES to fill the band; the 512 decode
+                                            // matches the crisp cover above ⇒ shared ImageCache handle (no extra decode).
+                                            // FocusY=1 anchors the Cover crop to the art's BOTTOM slice; ImageTransition
+                                            // .None keeps the blur subtree static (one re-blur at decode-ready, no churn).
                                             new BoxEl
                                             {
-                                                Direction = 1, Justify = FlexJustify.End, ClipToBounds = true,
-                                                Blur = 26f,
-                                                // Same call shape as the cover above: the duplicate resolves to the
-                                                // full card size (width-stretched, aspect-derived height = artH),
-                                                // bottom-justified so the band shows exactly the art region behind it.
-                                                Children = [Ui.Image(cover?.Url ?? "", ImageFit.Cover, aspect, 512, radius, Tok.FillCardDefault, cover?.BlurHash)],
+                                                ZStack = true, ClipToBounds = true, HitTestVisible = false,
+                                                Corners = CornerRadius4.All(radius),
+                                                Blur = 26f, BlurCachePolicy = BlurCachePolicy.Normal,
+                                                Children =
+                                                [
+                                                    Ui.Image(cover?.Url ?? "", ImageFit.Cover, float.NaN, 512, radius, Tok.FillCardDefault, cover?.BlurHash, ImageTransition.None) with { FocusY = 1f },
+                                                ],
                                             },
                                             // Tint + luminosity feel of the old recipe (Tint rgba(8,8,10)@0.24 over a
                                             // 0.28 luminosity wash) folded into one translucent fill.
@@ -447,8 +643,12 @@ public static class MediaCard
                             },
                         ],
                     },
-                    Embed.Comp(() => new NowPlayingOverlay(uri, onPlay, FabSize, cover: true, cardW)).Skeletonized(false),
-                    MoreCorner(menu is not null),
+                    new BoxEl
+                    {
+                        Grow = 1f, Direction = 0, AlignItems = FlexAlign.Start,
+                        Padding = new Edges4(inset, inset, inset, 0f), HitTestPassThrough = true,
+                        Children = [ KindChip(kind), new BoxEl { Grow = 1f }, MoreInline(menu is not null, onDark: true, size: 36f) ],
+                    },
                 ],
             };
             return card.WithMenu(menu);
@@ -691,6 +891,43 @@ public static class MediaCard
 
 }
 
+sealed class CardLibraryAction : Component
+{
+    readonly string _uri;
+    readonly string _name;
+    readonly HomeCardKind _kind;
+    readonly bool _onDark;
+
+    public CardLibraryAction(string uri, string name, HomeCardKind kind, bool onDark)
+    { _uri = uri; _name = name; _kind = kind; _onDark = onDark; }
+
+    public override Element Render()
+    {
+        var lib = UseContext(LibraryBridge.Slot);
+        if (lib is null || _kind == HomeCardKind.Liked) return new BoxEl();
+        bool saved = lib.IsSaved(_uri);
+        bool follow = _kind is HomeCardKind.Artist or HomeCardKind.Playlist;
+        string tip = follow
+            ? Loc.Get(saved ? Strings.Artist.Following : Strings.Artist.Follow)
+            : Loc.Get(saved ? Strings.Detail.Edit.Saved : Strings.Detail.Edit.Save);
+        ColorF idle = _onDark ? ColorF.FromRgba(255, 255, 255, 225) : Tok.TextSecondary;
+        return ToolTip.Wrap(new BoxEl
+        {
+            Width = 40f, Height = 40f, Shrink = 0f,
+            AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Corners = CornerRadius4.All(20f),
+            Fill = _onDark ? ColorF.FromRgba(0, 0, 0, 120) : ColorF.Transparent,
+            HoverFill = _onDark ? ColorF.FromRgba(0, 0, 0, 184) : Tok.FillSubtleSecondary,
+            PressedFill = _onDark ? ColorF.FromRgba(0, 0, 0, 218) : Tok.FillSubtleTertiary,
+            BorderWidth = _onDark ? 1f : 0f,
+            BorderColor = _onDark ? ColorF.FromRgba(255, 255, 255, 58) : ColorF.Transparent,
+            Role = AutomationRole.Button, Cursor = CursorId.Hand,
+            OnClick = () => lib.ToggleSaved(_uri, _name),
+            Children = [ Icon(saved ? Mdl.HeartFill : Icons.Heart, 17f, saved ? Tok.AccentTextPrimary : idle) ],
+        }, tip);
+    }
+}
+
 // The reactive now-playing / play affordance on a content card (mirrors WaveeMusic's ContentCard state model):
 //   • the play/pause FAB is REVEALED ON HOVER (and shows PAUSE when this card's context is the one playing);
 //   • when this card's context IS playing, the now-playing EQUALIZER shows (bottom-left on a cover; in the trailing
@@ -706,8 +943,14 @@ sealed class NowPlayingOverlay : Component
     readonly bool _cover;
     readonly float _inner;
     readonly bool _centered;
-    public NowPlayingOverlay(string uri, Action onPlay, float fab, bool cover, float inner, Action? onNavigate = null, bool centered = false)
-    { _uri = uri; _onPlay = onPlay; _fab = fab; _cover = cover; _inner = inner; _onNavigate = onNavigate; _centered = centered; }
+    readonly bool _persistent;
+    readonly bool _light;
+    public NowPlayingOverlay(string uri, Action onPlay, float fab, bool cover, float inner, Action? onNavigate = null,
+                             bool centered = false, bool persistent = false, bool light = false)
+    {
+        _uri = uri; _onPlay = onPlay; _fab = fab; _cover = cover; _inner = inner;
+        _onNavigate = onNavigate; _centered = centered; _persistent = persistent; _light = light;
+    }
 
     public override Element Render()
     {
@@ -740,6 +983,22 @@ sealed class NowPlayingOverlay : Component
                 if (p) _ = b.Player.PauseAsync(); else _ = b.Player.ResumeAsync();
             }
             else _onPlay();
+        }
+
+        if (_persistent)
+        {
+            ColorF fill = _light ? ColorF.FromRgba(255, 255, 255) : Tok.AccentDefault;
+            ColorF hover = _light ? ColorF.FromRgba(235, 235, 235) : Tok.AccentSecondary;
+            ColorF pressed = _light ? ColorF.FromRgba(215, 215, 215) : Tok.AccentTertiary;
+            ColorF ink = _light ? ColorF.FromRgba(12, 12, 14) : Tok.TextOnAccentPrimary;
+            return ToolTip.Wrap(new BoxEl
+            {
+                Width = _fab, Height = _fab, Shrink = 0f,
+                AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                Corners = CornerRadius4.All(_fab / 2f), Fill = fill, HoverFill = hover, PressedFill = pressed,
+                Shadow = Elevation.Card, Role = AutomationRole.Button, Cursor = CursorId.Hand, OnClick = Toggle,
+                Children = [ Icon(playingHere ? Icons.Pause : Icons.Play, _fab * 0.38f, ink) ],
+            }, Loc.Get(playingHere ? Strings.Home.Pause : Strings.Home.Play));
         }
 
         // FAB revealed on card hover: the wrapper is non-interactive, so its HoverOpacity resolves off the CARD's

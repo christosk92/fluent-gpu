@@ -33,7 +33,7 @@ public sealed class NotificationCenterBridge
 
     /// <summary>Every notification across the four categories, newest-first. The panel filters this by <see cref="Filter"/>.</summary>
     public Signal<IReadOnlyList<WaveeNotification>> Items { get; } = new(Array.Empty<WaveeNotification>());
-    /// <summary>Total unread across all categories — the bell badge count.</summary>
+    /// <summary>Badge-eligible unread count. Local Activity entries remain in the panel but do not increment the bell.</summary>
     public Signal<int> UnreadCount { get; } = new(0);
     /// <summary>The active filter pill (null = All).</summary>
     public Signal<NotificationCategory?> Filter { get; } = new(null);

@@ -25,6 +25,7 @@ public sealed class LibraryBridge : IUndoTarget
     readonly IPlaylistMutationSource _playlistEdits;
     readonly ActivityLog _activity;
     readonly List<IDisposable> _subs = [];
+    readonly Dictionary<string, Signal<bool>> _savedByUri = new(StringComparer.Ordinal);
     bool _active;
 
     /// <summary>The saved-set — read by the heart / follow affordances (which subscribe → re-skin on any change).</summary>
@@ -46,7 +47,7 @@ public sealed class LibraryBridge : IUndoTarget
     {
         if (_active) return;
         _active = true;
-        _subs.Add(_mut.SavedChanged.Subscribe(s => post(() => Saved.Value = s)));
+        _subs.Add(_mut.SavedChanged.Subscribe(s => post(() => PublishSaved(s))));
         _subs.Add(_playlists.PlaylistsChanged.Subscribe(v => post(() => PlaylistsVersion.Value = v)));
     }
 
@@ -94,7 +95,17 @@ public sealed class LibraryBridge : IUndoTarget
     }
 
     /// <summary>Is this uri saved / liked / followed? Reads the signal → subscribes the caller (live heart state).</summary>
-    public bool IsSaved(string uri) => Saved.Value.Contains(uri);
+    public bool IsSaved(string uri)
+    {
+        // Saved-state affordances subscribe to this URI only. A mutation elsewhere in the library must not re-render
+        // every visible heart/card and turn a paint-sized state change into app-wide layout invalidation.
+        if (!_savedByUri.TryGetValue(uri, out var state))
+        {
+            state = new Signal<bool>(Saved.Peek().Contains(uri));
+            _savedByUri.Add(uri, state);
+        }
+        return state.Value;
+    }
 
     /// <summary>Toggle saved-state with an OPTIMISTIC local flip (the heart updates this frame), then reconcile through
     /// the source (which re-emits the confirmed set). Called from a click handler, so the reads here don't subscribe.
@@ -107,11 +118,23 @@ public sealed class LibraryBridge : IUndoTarget
         if (cur.Contains(uri) == saved) return;
         var next = new HashSet<string>(cur);
         if (saved) next.Add(uri); else next.Remove(uri);
-        Saved.Value = next;                      // optimistic
+        PublishSaved(next);                      // optimistic, URI-selective subscribers update this frame
         // Record BEFORE the async reconcile so the entry exists to flip Failed if the write faults immediately.
         long id = _activity.IsSuppressed ? -1 : _activity.Record(saved ? ActivityKind.Save : ActivityKind.Unsave, uri, name);
         var task = _mut.SetSavedAsync(uri, saved);   // reconcile (re-emits the confirmed set via the bridge subscription)
         if (id >= 0) _ = task.ContinueWith(t => { if (t.IsFaulted) _activity.MarkFailed(id); }, TaskScheduler.Default);
+    }
+
+    void PublishSaved(IReadOnlySet<string> next)
+    {
+        // Keep the aggregate snapshot for imperative reads/backwards compatibility. Equality suppression on each bool
+        // means a full-set confirmation only wakes the affordance whose URI genuinely changed.
+        Saved.Value = next;
+        foreach (var (uri, state) in _savedByUri)
+        {
+            bool saved = next.Contains(uri);
+            if (state.Peek() != saved) state.Value = saved;
+        }
     }
 
     void IUndoTarget.SetSaved(string uri, bool saved) => SetSaved(uri, saved);

@@ -235,6 +235,139 @@ public sealed class InMemoryStore : IStore
     byte[]? _rootlistRev;
     readonly SimpleSubject<StoreChange> _changes = new();
 
+    // ── entity residency (bounded string floor) ──────────────────────────────────────────────────────────────────────
+    // Per-entity LRU stamp: a strict-monotonic Seq (deterministic recency ordering for eviction) + a wall-clock Tick
+    // (Environment.TickCount64 ms; the upsert-time backstop uses it to never evict an entity touched in the last window).
+    // Touched under _gate on every entity getter HIT and every entity upsert. Only the six real entity kinds are stamped.
+    readonly Dictionary<string, (long Seq, long Tick)> _lastUse = new();
+    long _useClock;
+
+    /// <summary>True once any entity has been evicted this session. CachedStore gates its cold-fallback reads on this so a
+    /// fresh session (hot == cold, nothing evicted) keeps the old zero-disk read semantics; only after the first eviction
+    /// can a hot miss be an evicted-but-recoverable entity worth a cold read.</summary>
+    public bool HasEvictedEntities { get; private set; }
+
+    // Rough per-entity retained-bytes model for census attribution + the bytes-freed return values (order-of-magnitude,
+    // never a hard budget): a Track averages ~0.6 KB of UTF-16 strings + refs; an Album ~0.9 KB; an ACCRETED Artist ~4 KB
+    // (bio + discography cards + extras merge in over a session); a Playlist header ~0.4 KB; Show/Episode ~0.5 KB; and each
+    // _versions row ~48 B (interned uri key + a long). Deliberately coarse — the census is for attribution, not accounting.
+    const int TrackBytes = 640, AlbumBytes = 900, ArtistBytes = 4096, PlaylistBytes = 420, ShowBytes = 512, EpisodeBytes = 512, VersionBytes = 48;
+    static readonly int[] s_kindBytes = { TrackBytes, AlbumBytes, ArtistBytes, PlaylistBytes, ShowBytes, EpisodeBytes };
+
+    // Upsert-time backstop: when a week-long session's entity count climbs past BackstopHigh, immediately shed (LRU-only,
+    // pin-set-free) down to BackstopLow — but never evicting anything touched within BackstopProtectMs (the live working
+    // set). This is the safety net for when the 30 s governor poll never fires eviction (the entity arena is priority 3,
+    // shed only under CRITICAL OS pressure). Suppressed during a bulk sync (see MaybeBackstopEvict / EndBulk).
+    const int BackstopHigh = 12_000, BackstopLow = 8_000, BackstopCheckStride = 256;
+    // The live-working-set guard: the backstop never evicts an entity touched within this window. An instance field (not a
+    // const) purely so a test can zero it to exercise the shed path deterministically (production is always 60 s).
+    internal long BackstopProtectMs = 60_000;
+    // Throttle the (O(n log n)) shed to at most once per BackstopCheckStride upserts past the high-water, so a session that
+    // hovers just above 12k with an all-recent (protected) working set doesn't pay a gather+sort on every single upsert.
+    int _backstopCheckAt;
+
+    void TouchUse(string uri) => _lastUse[uri] = (++_useClock, Environment.TickCount64);   // caller holds _gate
+
+    int TotalEntitiesLocked() => _tracks.Count + _albums.Count + _artists.Count + _playlists.Count + _shows.Count + _episodes.Count;   // caller holds _gate
+
+    /// <summary>Live entity-dictionary counts (census attribution) — the six queryable kinds plus the version side-table.</summary>
+    public (int Tracks, int Albums, int Artists, int Playlists, int Shows, int Episodes, int Versions) EntityCounts
+    {
+        get { lock (_gate) return (_tracks.Count, _albums.Count, _artists.Count, _playlists.Count, _shows.Count, _episodes.Count, _versions.Count); }
+    }
+
+    /// <summary>A coarse estimate of the retained bytes held by the resident entities (the per-kind byte model above ×
+    /// counts). Cheap — no deep walk. Attribution only.</summary>
+    public long EstimatedEntityBytes { get { lock (_gate) return EstimateBytesLocked(); } }
+
+    long EstimateBytesLocked() =>
+        (long)_tracks.Count * TrackBytes + (long)_albums.Count * AlbumBytes + (long)_artists.Count * ArtistBytes
+        + (long)_playlists.Count * PlaylistBytes + (long)_shows.Count * ShowBytes + (long)_episodes.Count * EpisodeBytes
+        + (long)_versions.Count * VersionBytes;
+
+    /// <summary>Pin up to <paramref name="perSet"/> members of each saved (library) set — the collection-page heads the
+    /// entity evictor must not drop. Order is the set's hash order (arbitrary but bounded); it only needs to keep SOME of
+    /// each collection resident so its page paints without a cold round-trip.</summary>
+    public void CollectSavedHeads(ISet<string> pins, int perSet)
+    {
+        if (perSet <= 0) return;
+        lock (_gate)
+            foreach (var kv in _savedBySet)
+            {
+                int n = 0;
+                foreach (var uri in kv.Value) { if (n++ >= perSet) break; pins.Add(uri); }
+            }
+    }
+
+    /// <summary>Evict oldest-first (by LRU Seq) unpinned entities until the resident entity count drops to
+    /// <paramref name="maxResident"/>, returning the estimated bytes freed (the byte model above). A no-op returning 0 when
+    /// already at/under the target. Removes the entity from its kind dictionary, its <c>_versions</c> row, and its LRU
+    /// stamp; the cold tier still holds it (offline-first), so CachedStore's cold-fallback rehydrates it on next access.</summary>
+    public long EvictEntities(ISet<string> pinned, int maxResident) => EvictCore(pinned, maxResident, protectTickFloor: 0);
+
+    // Shared eviction core. protectTickFloor > 0 skips any entity whose last-touch Tick is >= the floor (the backstop's
+    // "never evict the live working set" guard); pinned (nullable) skips reachability-pinned entities (the governor arena).
+    long EvictCore(ISet<string>? pinned, int target, long protectTickFloor)
+    {
+        lock (_gate)
+        {
+            int total = TotalEntitiesLocked();
+            if (total <= target) return 0;
+            var cands = new List<(string Uri, int Kind, long Seq)>(total);
+            GatherCandidatesLocked(cands);
+            cands.Sort(static (a, b) => a.Seq.CompareTo(b.Seq));   // oldest (smallest Seq) first
+            long freed = 0;
+            for (int i = 0; i < cands.Count && total > target; i++)
+            {
+                var (uri, kind, _) = cands[i];
+                if (pinned is not null && pinned.Contains(uri)) continue;
+                if (protectTickFloor > 0 && _lastUse.TryGetValue(uri, out var lu) && lu.Tick >= protectTickFloor) continue;
+                if (RemoveEntityLocked(uri, kind)) { freed += s_kindBytes[kind]; total--; }
+            }
+            if (freed > 0) HasEvictedEntities = true;
+            return freed;
+        }
+    }
+
+    void GatherCandidatesLocked(List<(string Uri, int Kind, long Seq)> cands)
+    {
+        foreach (var k in _tracks.Keys) cands.Add((k, 0, SeqOf(k)));
+        foreach (var k in _albums.Keys) cands.Add((k, 1, SeqOf(k)));
+        foreach (var k in _artists.Keys) cands.Add((k, 2, SeqOf(k)));
+        foreach (var k in _playlists.Keys) cands.Add((k, 3, SeqOf(k)));
+        foreach (var k in _shows.Keys) cands.Add((k, 4, SeqOf(k)));
+        foreach (var k in _episodes.Keys) cands.Add((k, 5, SeqOf(k)));
+        long SeqOf(string uri) => _lastUse.TryGetValue(uri, out var v) ? v.Seq : 0;   // never-stamped ⇒ oldest
+    }
+
+    bool RemoveEntityLocked(string uri, int kind)
+    {
+        bool removed = kind switch
+        {
+            0 => _tracks.Remove(uri), 1 => _albums.Remove(uri), 2 => _artists.Remove(uri),
+            3 => _playlists.Remove(uri), 4 => _shows.Remove(uri), 5 => _episodes.Remove(uri), _ => false,
+        };
+        if (removed) { _lastUse.Remove(uri); _versions.Remove(uri); }
+        return removed;
+    }
+
+    // Called after every entity upsert (and once at the close of a bulk scope). Cheap on the common path (a count read
+    // under the lock); only when past BackstopHigh AND outside a bulk does it run the actual LRU shed. Suppressed during a
+    // bulk sync so a 10k-entity load doesn't trigger an O(n log n) shed per upsert (and doesn't evict the just-loaded set).
+    void MaybeBackstopEvict()
+    {
+        lock (_gate)
+        {
+            if (_bulkDepth != 0) return;   // a bulk sync closes with one backstop pass (EndBulk), never per-upsert
+            int total = TotalEntitiesLocked();
+            if (total <= BackstopHigh) { _backstopCheckAt = 0; return; }   // back under the line → re-arm the throttle
+            if (total < _backstopCheckAt) return;                          // already checked at this level; wait for growth
+            _backstopCheckAt = total + BackstopCheckStride;                // next attempt only after another stride of upserts
+        }
+        long floor = BackstopProtectMs > 0 ? Environment.TickCount64 - BackstopProtectMs : 0;   // 0 ⇒ guard disabled
+        EvictCore(pinned: null, target: BackstopLow, protectTickFloor: floor);
+    }
+
     public IObservable<StoreChange> Changes => _changes;
 
     public void UpsertTrack(Track t)
@@ -243,13 +376,15 @@ public sealed class InMemoryStore : IStore
         {
             _tracks.TryGetValue(t.Uri, out var current);
             _tracks[t.Uri] = StoreEntityMerge.Track(current, t);
+            TouchUse(t.Uri);
         }
         Bump(t.Uri);
+        MaybeBackstopEvict();
     }
 
     public Track? GetTrack(string uri)
     {
-        lock (_gate) return _tracks.TryGetValue(uri, out var t) ? t : null;
+        lock (_gate) { if (_tracks.TryGetValue(uri, out var t)) { TouchUse(uri); return t; } return null; }
     }
 
     public IReadOnlyList<Track> QueryTracks(string? text = null, TrackSort sort = TrackSort.None, int limit = 200)
@@ -305,26 +440,30 @@ public sealed class InMemoryStore : IStore
         {
             _albums.TryGetValue(a.Uri, out var current);
             _albums[a.Uri] = StoreEntityMerge.Album(current, a);
+            TouchUse(a.Uri);
         }
         Bump(a.Uri);
+        MaybeBackstopEvict();
     }
-    public Album? GetAlbum(string uri) { lock (_gate) return _albums.TryGetValue(uri, out var a) ? a : null; }
+    public Album? GetAlbum(string uri) { lock (_gate) { if (_albums.TryGetValue(uri, out var a)) { TouchUse(uri); return a; } return null; } }
     public void UpsertArtist(Artist a)
     {
         lock (_gate)
         {
             _artists.TryGetValue(a.Uri, out var current);
             _artists[a.Uri] = StoreEntityMerge.Artist(current, a);
+            TouchUse(a.Uri);
         }
         Bump(a.Uri);
+        MaybeBackstopEvict();
     }
-    public Artist? GetArtist(string uri) { lock (_gate) return _artists.TryGetValue(uri, out var a) ? a : null; }
-    public void UpsertPlaylist(Playlist p) { lock (_gate) _playlists[p.Uri] = p; Bump(p.Uri); }
-    public Playlist? GetPlaylist(string uri) { lock (_gate) return _playlists.TryGetValue(uri, out var p) ? p : null; }
-    public void UpsertShow(Show s) { lock (_gate) _shows[s.Uri] = s; Bump(s.Uri); }
-    public Show? GetShow(string uri) { lock (_gate) return _shows.TryGetValue(uri, out var s) ? s : null; }
-    public void UpsertEpisode(Episode e) { lock (_gate) _episodes[e.Uri] = e; Bump(e.Uri); }
-    public Episode? GetEpisode(string uri) { lock (_gate) return _episodes.TryGetValue(uri, out var e) ? e : null; }
+    public Artist? GetArtist(string uri) { lock (_gate) { if (_artists.TryGetValue(uri, out var a)) { TouchUse(uri); return a; } return null; } }
+    public void UpsertPlaylist(Playlist p) { lock (_gate) { _playlists[p.Uri] = p; TouchUse(p.Uri); } Bump(p.Uri); MaybeBackstopEvict(); }
+    public Playlist? GetPlaylist(string uri) { lock (_gate) { if (_playlists.TryGetValue(uri, out var p)) { TouchUse(uri); return p; } return null; } }
+    public void UpsertShow(Show s) { lock (_gate) { _shows[s.Uri] = s; TouchUse(s.Uri); } Bump(s.Uri); MaybeBackstopEvict(); }
+    public Show? GetShow(string uri) { lock (_gate) { if (_shows.TryGetValue(uri, out var s)) { TouchUse(uri); return s; } return null; } }
+    public void UpsertEpisode(Episode e) { lock (_gate) { _episodes[e.Uri] = e; TouchUse(e.Uri); } Bump(e.Uri); MaybeBackstopEvict(); }
+    public Episode? GetEpisode(string uri) { lock (_gate) { if (_episodes.TryGetValue(uri, out var e)) { TouchUse(uri); return e; } return null; } }
 
     // A full replace (each fetch yields the complete association; a 304 keeps the prior record with a bumped FetchedAt,
     // handled by the caller). No Bump — this is side-table data; the rendered has-video signal is Track.HasVideo.
@@ -479,7 +618,7 @@ public sealed class InMemoryStore : IStore
     {
         bool fire;
         lock (_gate) fire = --_bulkDepth == 0;
-        if (fire) _changes.OnNext(StoreChange.Bulk);   // exactly one signal for the whole bulk
+        if (fire) { _changes.OnNext(StoreChange.Bulk); MaybeBackstopEvict(); }   // one signal for the whole bulk, then the suppressed backstop
     }
 
     sealed class BulkScope(InMemoryStore store) : IDisposable

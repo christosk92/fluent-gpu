@@ -120,7 +120,10 @@ public sealed record Concert(
     string? Region = null,
     string? Country = null,
     IReadOnlyList<ConcertArtist>? Artists = null,
-    Image? Image = null);
+    Image? Image = null,
+    // Cover/lineup-extracted dark accent (opaque ARGB, matching Palette's uint channels; WaveePalette.ToColor lifts it to
+    // a renderer color at the UI boundary). Null = no extracted colour ⇒ the surface keeps its neutral default.
+    uint? AccentColor = null);
 
 /// <summary>A merch product (image + name + display price). <paramref name="ShopUrl"/> opens the external shop.</summary>
 public sealed record MerchItem(string Name, string Price, string? Description, Image? Image, string? ShopUrl);

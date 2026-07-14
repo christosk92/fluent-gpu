@@ -25,6 +25,7 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     private readonly IImageCodec _codec;
     private readonly IImageFetcher _fetcher;
     private readonly DecodeOptions _opt;
+    private readonly PixelBufferPool _pixels;   // bounded CPU pixel pool for decode dst buffers (fetch buffers stay on ArrayPool.Shared)
     private readonly ConcurrentQueue<int>[] _lanes = { new(), new(), new() };   // [Visible, Overscan, Prefetch]
     private readonly ConcurrentDictionary<int, Req> _reqs = new();
     private readonly SemaphoreSlim _signal = new(0);
@@ -66,6 +67,7 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
         _codec = codec;
         _fetcher = fetcher;
         _opt = options ?? new DecodeOptions();
+        _pixels = _opt.PixelPool ?? new PixelBufferPool();
         int workers = _opt.MaxConcurrency > 0 ? _opt.MaxConcurrency : Math.Clamp(Environment.ProcessorCount - 2, 2, 6);
         _workers = new Task[workers];
         for (int i = 0; i < workers; i++) _workers[i] = Task.Run(WorkerLoop);
@@ -118,7 +120,7 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
         {
             if (d.Ok && d.Buffer != null) onPixels(d.Id, d.Buffer.AsSpan(0, d.ByteLen), d.W, d.H);
             onComplete(d.Id, d.Ok, d.W, d.H, d.Failure, d.Attempts);
-            if (d.Buffer != null) ArrayPool<byte>.Shared.Return(d.Buffer);
+            if (d.Buffer != null) _pixels.Return(d.Buffer);
             // This decode is terminal — reclaim any tombstone a cancel set after the worker's finally (the Done was
             // already queued). The apply above is unchanged: a late cancel does NOT suppress it (today's semantics);
             // reclaim only bounds the map. Idempotent with Process's finally (a no-op when it already removed the id).
@@ -132,6 +134,7 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
             Diag.Set("media", "queued", Volatile.Read(ref _queued));
             Diag.Set("media", "workers", _workers.Length);
             Diag.Set("media", "bytesDownloadedKB", (int)(Interlocked.Read(ref _bytesDownloaded) / 1024));
+            Diag.Set("media", "poolRetainedKB", (int)(_pixels.RetainedBytes / 1024));
         }
     }
 
@@ -191,14 +194,14 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
                 if (_canceled.ContainsKey(req.Id)) { Complete(req.Id, false, 0, 0, ImageFailureKind.Canceled, attempts, null, 0); return; }
 
                 int cap = req.W * req.H * 4;
-                byte[] dst = ArrayPool<byte>.Shared.Rent(cap);           // POOLED decode buffer (returned in Pump after upload)
+                byte[] dst = _pixels.Rent(cap);                          // bounded pixel pool decode buffer (returned in Pump after upload)
                 bool ok; int dw = req.W, dh = req.H;
                 try { ok = _codec.DecodeConstrained(fetch.Span, req.W, req.H, dst.AsSpan(0, cap), out dw, out dh); }
                 catch { ok = false; }
 
                 if (ok && dw > 0 && dh > 0 && dw * dh * 4 <= cap)
                     Complete(req.Id, true, dw, dh, ImageFailureKind.None, attempts, dst, dw * dh * 4);
-                else { ArrayPool<byte>.Shared.Return(dst); Complete(req.Id, false, 0, 0, ImageFailureKind.Decode, attempts, null, 0); }
+                else { _pixels.Return(dst); Complete(req.Id, false, 0, 0, ImageFailureKind.Decode, attempts, null, 0); }
             }
             finally
             {

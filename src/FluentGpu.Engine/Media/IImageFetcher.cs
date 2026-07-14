@@ -45,4 +45,8 @@ public sealed class DecodeOptions
     public TimeSpan BackoffMax { get; init; } = TimeSpan.FromSeconds(5);
     /// <summary>Bounded request-channel capacity; a saturated channel drops the newest enqueue (fast-scroll backpressure).</summary>
     public int QueueCapacity { get; init; } = 512;
+    /// <summary>The bounded CPU pixel pool the scheduler rents decode BGRA buffers from. Null ⇒ a private
+    /// default-cap pool. The host passes its shared pool so decode buffers and async-upload copies draw on ONE
+    /// retained-bytes budget.</summary>
+    public PixelBufferPool? PixelPool { get; init; }
 }

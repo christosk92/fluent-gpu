@@ -33,7 +33,7 @@
 | Media Pipeline | phase-13 upload (two-lane) | lane A (thumbs ≤128px) high byte budget; lane B (256/512 art+bakes) ~1–2/frame | — | replaces flat "4 textures/frame" | media-pipeline.md:430 |
 | Media Pipeline | `DecodeScheduler` channel | bounded `Channel<DecodeRequest>` **cap ~256** | drop lowest-priority off-screen (Prefetch then Overscan), never Visible | priority-drop; `Cancel` on recycle | media-pipeline.md:198,239 |
 | Media Pipeline | decode worker count | **N = min(4, cores)** | — | — | media-pipeline.md:161 |
-| Media Pipeline | `StagingBlock` slab (CPU pixels) | recycled `SlabAllocator<StagingBlock>`, bucket-sized | recycled after BOTH upload-admit AND palette-extract (2-bit refcount) | only off-loop alloc is OS fetch buffer | media-pipeline.md:200,243,344 |
+| Media Pipeline | CPU pixel pool (`PixelBufferPool`) | pow2 buckets 16 KB–16 MB; **retained cap = 32 MB** (`DefaultRetainedCapBytes`, no env knob); oversize → exact-size unpooled | Return drops over-cap arrays to GC; full `Trim()` on ~30 s idle | only remaining `ArrayPool.Shared` use = encoded fetch buffer | media-pipeline.md:200,243,344 |
 | Media Pipeline | decode buckets | 4: 64/128/256/512 px (round up) | — | — | media-pipeline.md:89,375 |
 | PAL/RHI | worker pool | **N = clamp(ProcessorCount−2, 2..6)**; owned threads | — | — | pal-rhi.md:57; hardened-v1-plan.md:46; threading-render-seam.md:77,678 |
 | PAL/RHI | swapchain back buffers | **2** (FLIP_DISCARD); FrameLatencyWaitable | DXGI buffers special-cased in deferred-delete ring | resize CPU-waits only this swapchain's fences; 0-area → clamp 1×1, skip present | pal-rhi.md:226,384,432 |

@@ -23,8 +23,12 @@ public static class NotificationMerge
 
         list.Sort(static (a, b) => b.Timestamp.CompareTo(a.Timestamp));
 
+        // Local activity remains visible (and may retain its unread dot inside the panel), but it is informational:
+        // routine actions such as liking a song must not increase the attention-seeking bell badge.
         int unread = 0;
-        foreach (var x in list) if (x.IsUnread) unread++;
+        foreach (var x in list)
+            if (x.IsUnread && x.Category != NotificationCategory.Activity)
+                unread++;
         return (list, unread);
     }
 }

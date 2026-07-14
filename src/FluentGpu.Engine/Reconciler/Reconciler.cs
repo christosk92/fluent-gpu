@@ -350,8 +350,10 @@ public sealed class TreeReconciler
             // Fully realized (flag cleared) ⇒ drop from the queue; still flagged (budget/warm deficit) ⇒ leave it queued.
             if ((_scene.Flags(node) & NodeFlags.VirtualRangeDirty) == 0) SwapRemoveDirty(dirty, i);
         }
-        // "Made structural progress": the realized window of at least one viewport actually changed. A queue left dirty
-        // PURELY by budget exhaustion (visible already covered, window unchanged) returns false, so the AppHost 2-pass
+        // "Made realize progress": the realized window of at least one viewport changed OR a bound slot was rebound.
+        // The latter can happen while ScrollState already publishes the target range; it still has to return true so the
+        // host performs the same-frame reactive flush for the rewritten index signals. A queue left dirty PURELY by
+        // budget exhaustion (visible already covered, window unchanged, no rebind) returns false, so the AppHost 2-pass
         // loops don't burn a pass re-checking it — the budget catch-up rides subsequent frames (HasBudgetDeferredVirtuals).
         return _realizeProgress;
 
@@ -1235,6 +1237,17 @@ public sealed class TreeReconciler
                 var crb = b.Corners.Thunk; var crs = b.Corners.Signal;
                 AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).Corners = crb is not null ? crb() : crs!.Value; _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
             }
+            if (b.RadialGradientCenter.IsBound)
+            {
+                var rcb = b.RadialGradientCenter.Thunk; var rcs = b.RadialGradientCenter.Signal;
+                AddBinding(node, new Effect(Runtime, () =>
+                {
+                    if (!_scene.IsLive(node)) return;
+                    Point2 center = rcb is not null ? rcb() : rcs!.Value;
+                    if (float.IsFinite(center.X) && float.IsFinite(center.Y)) _scene.SetRadialGradientCenter(node, center);
+                    else _scene.ClearRadialGradientCenter(node);
+                }, owner: null, runNow: true));
+            }
             if (b.Validation.IsBound)
             {
                 // form-validation.md: resolve the semantic state → theme critical color on the UI thread (the recorder
@@ -1474,7 +1487,7 @@ public sealed class TreeReconciler
         float viewport = horizontal ? sc.ViewportW : sc.ViewportH;
         if (viewport <= 0f) viewport = horizontal ? Hint(ve.Width) : Hint(ve.Height);
 
-        int count = ve.ItemCount;
+        int count = Math.Max(0, ve.ItemCount);
         // E5 directional overscan: buffer ahead ∝ fling speed, trim the receding edge. A nested-rail MOUNT defers overscan
         // entirely (overscan 0) so only the visible cards land this frame; the halo trickles in via the budget on later frames.
         float contentExt = horizontal ? sc.ContentW : sc.ContentH;
@@ -1502,10 +1515,19 @@ public sealed class TreeReconciler
             first = Math.Max(0, table.IndexAt(offset) - lowOv);
             last = Math.Min(count, table.IndexAt(offset + viewport) + 1 + highOv);
         }
-        if (visibleLast < visibleFirst) visibleLast = visibleFirst;
-        // The mandatory band (visible +1 guard row/side) must bound the desired window; clamp defensively after the layout math.
+        // Layouts may be stateful. A collection shrink can therefore race a layout's cached geometry and return a
+        // window from the old item count (for example [0,60) after the count became 43). Normalize every range at the
+        // engine seam BEFORE using one range as another Math.Clamp bound; otherwise stale visibleLast/mandLast values
+        // turn into an invalid min > max pair and escape the app loop as Argument_MinMaxValue.
+        visibleFirst = Math.Clamp(visibleFirst, 0, count);
+        visibleLast = Math.Clamp(visibleLast, visibleFirst, count);
+
+        // The mandatory band (visible +1 guard row/side) must bound the desired window. Clamp it to the normalized
+        // visible band/current count, then normalize and expand the directional-overscan window around it.
         mandFirst = Math.Clamp(mandFirst, 0, visibleFirst);
         mandLast = Math.Clamp(mandLast, visibleLast, count);
+        first = Math.Clamp(first, 0, count);
+        last = Math.Clamp(last, first, count);
         if (first > mandFirst) first = mandFirst;
         if (last < mandLast) last = mandLast;
 
@@ -1680,6 +1702,10 @@ public sealed class TreeReconciler
                 if (!slotRoot.IsNull)
                     _scene.Unmark(slotRoot, NodeFlags.Hovered | NodeFlags.Pressed | NodeFlags.Focused | NodeFlags.FocusVisual);
                 sig.Value = idx;   // granular rebind — only this slot's bind effects re-run
+                // ScrollState's range can already equal [first,last) while a slot signal is one generation behind.
+                // Range-only progress detection would then return false and AppHost would skip the post-realize Flush,
+                // presenting mixed rows (index-bound title from the new item, component snapshot cells from the old).
+                _realizeProgress = true;
                 ve.OnItemIndexChanged?.Invoke(prevIdx, idx);   // E11: a persistent bound slot moved indices
             }
             if (!slotRoot.IsNull) slotRoot = _scene.NextSibling(slotRoot);
@@ -1813,7 +1839,8 @@ public sealed class TreeReconciler
                 return true;
             case BoxEl b:
                 if (b.Transform.IsBound || b.Opacity.IsBound || b.Fill.IsBound
-                    || b.Width.IsBound || b.Height.IsBound || b.OnRealized is not null || b.OnBoundsChanged is not null) return false;
+                    || b.RadialGradientCenter.IsBound || b.Width.IsBound || b.Height.IsBound
+                    || b.OnRealized is not null || b.OnBoundsChanged is not null) return false;
                 foreach (var c in b.Children) if (!IsRecyclable(c)) return false;
                 return true;
             case GridEl g:
@@ -2305,6 +2332,12 @@ public sealed class TreeReconciler
                 if (b.Shadow is { } sh) _scene.SetShadow(node, sh); else _scene.ClearShadow(node);
                 if (b.Arc is { } arcSpec) _scene.SetArc(node, arcSpec); else _scene.ClearArc(node);
                 if (b.Gradient is { } gr) _scene.SetGradient(node, gr); else _scene.ClearGradient(node);
+                if (!b.RadialGradientCenter.IsBound)
+                {
+                    Point2 center = b.RadialGradientCenter.Value;
+                    if (float.IsFinite(center.X) && float.IsFinite(center.Y)) _scene.SetRadialGradientCenter(node, center);
+                    else _scene.ClearRadialGradientCenter(node);
+                }
                 if (b.BorderBrush is { } bb) _scene.SetBorderBrush(node, bb); else _scene.ClearBorderBrush(node);
                 if (b.HoverGradient is { } hg) _scene.SetHoverGradient(node, hg); else _scene.ClearHoverGradient(node);
                 if (b.PressedGradient is { } pg) _scene.SetPressedGradient(node, pg); else _scene.ClearPressedGradient(node);
@@ -2471,12 +2504,14 @@ public sealed class TreeReconciler
                     _scene.SetPointerWheel(node, null);
                 }
 
-                if (b.OnPointerDown is not null || b.OnDrag is not null || b.OnHoverMove is not null || b.OnPointerExit is not null)
+                if (b.OnPointerDown is not null || b.OnDrag is not null || b.OnHoverMove is not null
+                    || b.OnPointerMoveWithin is not null || b.OnPointerExit is not null)
                 {
                     ii.HandlerMask |= InteractionInfo.PointerBit;   // hit-testable so it receives press/drag AND bare-hover/exit
                     _scene.SetPointerDown(node, b.OnPointerDown);
                     _scene.SetDrag(node, b.OnDrag);
                     _scene.SetHoverMove(node, b.OnHoverMove);
+                    _scene.SetPointerMoveWithin(node, b.OnPointerMoveWithin);
                     _scene.SetPointerExit(node, b.OnPointerExit);
                     _scene.Mark(node, NodeFlags.WantsPointer);
                     // Cross-axis content-pan opt-in (SwipeControl/FlipView): the touch path enrolls an axis-locked Drag
@@ -2491,6 +2526,7 @@ public sealed class TreeReconciler
                     _scene.SetPointerDown(node, null);
                     _scene.SetDrag(node, null);
                     _scene.SetHoverMove(node, null);
+                    _scene.SetPointerMoveWithin(node, null);
                     _scene.SetPointerExit(node, null);
                     _scene.Unmark(node, NodeFlags.DragYieldsToPan);
                 }
@@ -2637,7 +2673,7 @@ public sealed class TreeReconciler
                 _scene.Mark(node, NodeFlags.ClipsToBounds);
                 ref ScrollState sc = ref _scene.ScrollRef(node);
                 sc.Orientation = v.Horizontal ? (byte)1 : (byte)0;
-                sc.ItemCount = v.ItemCount;
+                sc.ItemCount = Math.Max(0, v.ItemCount);
                 sc.Layout = v.Layout;
                 sc.Overscan = v.Overscan;
                 sc.EdgeCueConfig = ResolveEdgeCues(v.EdgeCues);

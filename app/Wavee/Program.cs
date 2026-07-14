@@ -241,8 +241,21 @@ static class Program
         try
         {
             // Diagnostic harness chain (each gated by its own env flag; all return false in a normal run): the nav/scroll
-            // FPS stress probe (WAVEE_NAV_PROBE) first, then the resize probe (WAVEE_RESIZE_PROBE).
-            FluentApp.DiagnosticRun = (h, w, d) => WaveePerfBench.TryRun(h, w, d) || WaveeNavProbe.TryRun(h, w, d) || WaveeResizeProbe.TryRun(h, w, d) || WaveeMemSoak.TryRun(h, w, d);
+            // FPS stress probe (WAVEE_NAV_PROBE) first, then the resize probe (WAVEE_RESIZE_PROBE). DiagnosticRun is invoked
+            // ONCE per launch (before the loop) regardless of flags, so it doubles as the app's hook to compose the
+            // entity-store census (Services.MemCensusHook) into the engine's FG_MEM_DIAG [memcensus] GpuDetail line — the
+            // only app-reachable point that holds the AppHost. The hook builds its string lazily (at census cadence).
+            FluentApp.DiagnosticRun = (h, w, d) =>
+            {
+                if (d is FluentGpu.Rhi.D3D12.D3D12Device gpuDev)
+                    h.GpuDetail = () =>
+                    {
+                        string gpu = gpuDev.DiagGpuDetail;
+                        string app = Services.MemCensusHook?.Invoke() ?? "";
+                        return app.Length == 0 ? gpu : gpu.Length == 0 ? app : gpu + " | " + app;
+                    };
+                return WaveePerfBench.TryRun(h, w, d) || WaveeNavProbe.TryRun(h, w, d) || WaveeResizeProbe.TryRun(h, w, d) || WaveeMemSoak.TryRun(h, w, d);
+            };
             // customFrame:true → the in-app TitleBar (WaveeShell) draws the Mica-extended caption buttons + drag region.
             // micaAlt:true → Mica BaseAlt (the flatter File-Explorer tint), matching WaveeMusic's MicaBackdrop Kind="BaseAlt".
             // ambientFps: pace PERPETUAL ambient motion (the always-playing seek playhead, the now-playing equalizer,

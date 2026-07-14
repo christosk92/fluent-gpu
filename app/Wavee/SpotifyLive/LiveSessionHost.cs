@@ -372,6 +372,9 @@ public sealed class LiveSessionHost : IAsyncDisposable
                 new PathfinderHeadersMiddleware(_ => Task.FromResult(live.ClientToken)));
             var pathfinder = new PathfinderClient(pathfinderExchange, spclientLog);
             var pathfinderResource = new PathfinderResource(pathfinder, () => live.Session, spclientLog);
+            // Concert discovery (artist schedules, hub feed, location controls) — the live Pathfinder adapter over the same
+            // resource, installed into the switchable the concert pages hold. Reset to the Null service on GoOffline.
+            svc.Concerts.SetInner(new SpotifyConcertService(pathfinderResource));
             // Playlist page tint parity with albums: albums carry cover colors inline (getAlbum); playlists come over the
             // Mercury proto with none, so resolve them via fetchExtractedColors on the cover, cached persistently (colors
             // are immutable per image → ~half-year), and merged into the resident header.

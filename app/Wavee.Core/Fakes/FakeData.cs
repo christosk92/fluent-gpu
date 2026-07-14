@@ -560,8 +560,10 @@ public static class FakeData
     // page itself says nothing about skeletons. Content is blank; the deriver turns each title/cover into a shimmer bar.
     public static readonly HomeFeed HomeSeed = new("", new HomeGroup[]
     {
-        new(HomeGroupKind.CollapsedGrid, " ", BlankCards(6, HomeCardKind.Playlist)),
+        new(HomeGroupKind.QuickGrid, null, BlankCards(6, HomeCardKind.Playlist)),
         new(HomeGroupKind.Shelf, " ", BlankCards(6, HomeCardKind.Album)),
+        new(HomeGroupKind.Compact, " ", BlankCards(4, HomeCardKind.Playlist)),
+        new(HomeGroupKind.Featured, " ", BlankCards(3, HomeCardKind.Playlist)),
         new(HomeGroupKind.Shelf, " ", BlankCards(6, HomeCardKind.Artist)),
     });
     public static readonly SearchResults SearchSeed = Search("skeleton");

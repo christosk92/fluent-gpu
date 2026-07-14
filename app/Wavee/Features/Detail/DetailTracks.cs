@@ -74,9 +74,10 @@ sealed class TrackList : Component
     (bool Date, bool By, bool Video) _lastCols = (false, false, false);   // the columns depend on the tracks (Date-added/Added-by/Video); when they
                                                                           // arrive (preview→full) the cached column SIZES must be recomputed or the grid wraps
     (TrackSort Sort, string Query, TrackFilterFlags Flags) _viewKey = (new((SortColumn)(-1), false), "\0", TrackFilterFlags.None);   // invalid sentinel
+    IReadOnlyList<Track>? _viewTrackSet;                       // source-list identity paired with the sort/filter cache key
     int[] _view = Array.Empty<int>();                          // filtered + sorted → original track-index map (rows read via this)
-    string? _topTrackId;                                       // album surfaces: the most-played track's id (gets a star); null with no play data
-    bool _marqueeDisabled;
+    Memo<TrackRowsSnapshot>? _rowsSnapshot;                    // atomic model/config/handlers/sort/filter value for persistent rows
+    BoundItemsSource<Track>? _rowItems;                        // snapshot + recycled slot index resolve together
     AsyncCommandSet<string>? _play;                            // per-track-id play command in flight → the row's #-cell buffering spinner
     string? _lastCtxUri;                                       // last loaded context uri → detect a reused-slot album swap (invalidate view/columns/selection)
     IReadOnlyList<Track>? _lastTrackSet;                       // last model.Tracks INSTANCE → an in-place refresh (same ContextUri, new list) invalidates the view cache
@@ -126,21 +127,26 @@ sealed class TrackList : Component
     // rows always match the real rows (the single-source-of-truth the skeleton kit is built on).
     static readonly Track EmptyTrack = new("", "", "", Array.Empty<ArtistRef>(), new AlbumRef("", "", ""), 0L, false, null);
 
+    readonly record struct TrackRowsSnapshot(
+        DetailModel Model, DetailConfig Config, DetailHandlers Handlers,
+        TrackSort Sort, string Query, TrackFilterFlags Flags,
+        bool MarqueeDisabled, string? TopTrackId);
+
     // The visible order (cached, keyed by sort + filter): view[displayPos] = original track index, for the tracks that
     // pass the filter (search query + hide-explicit), in the current sort order. Read live by the frozen row template /
     // keyOf / invoke via .Peek(), so a SORT change re-skins the realized window in place; a FILTER change (which alters
     // the count) instead remounts the list via the keyed wrapper.
-    int[] View()
+    int[] View(TrackRowsSnapshot snapshot)
     {
-        var s = _h.Sort.Peek();
-        string q = _h.Query.Peek().Trim();
-        var flags = _h.Flags.Peek();
+        var s = snapshot.Sort;
+        string q = snapshot.Query;
+        var flags = snapshot.Flags;
         var key = (s, q, flags);
-        if (!key.Equals(_viewKey))
+        var tracks = snapshot.Model.Tracks;
+        if (!ReferenceEquals(_viewTrackSet, tracks) || !key.Equals(_viewKey))
         {
             bool hideX = (flags & TrackFilterFlags.HideExplicit) != 0;
             bool vidOnly = (flags & TrackFilterFlags.VideosOnly) != 0;
-            var tracks = _tracks;
             var list = new List<int>(tracks.Count);
             for (int i = 0; i < tracks.Count; i++)
             {
@@ -162,9 +168,20 @@ sealed class TrackList : Component
             };
             // Stable: ties break by original index (ascending), so descending only flips the primary key.
             list.Sort((a, b) => { int c = baseCmp(a, b); if (s.Descending) c = -c; return c != 0 ? c : a.CompareTo(b); });
-            _view = list.ToArray(); _viewKey = key;
+            _view = list.ToArray(); _viewKey = key; _viewTrackSet = tracks;
         }
         return _view;
+    }
+
+    int[] View() => _rowsSnapshot is { } rows ? View(rows.Peek()) : _view;
+
+    Track TrackAt(TrackRowsSnapshot snapshot, int displayPos)
+    {
+        var view = View(snapshot);
+        if ((uint)displayPos >= (uint)view.Length) return EmptyTrack;
+        int original = view[displayPos];
+        var tracks = snapshot.Model.Tracks;
+        return (uint)original < (uint)tracks.Count ? tracks[original] : EmptyTrack;
     }
 
     // A track matches the search query if any of title / artist(s) / album contains it (case-insensitive).
@@ -243,25 +260,46 @@ sealed class TrackList : Component
 
     public override Element Render()
     {
-        _h = _liveHandlers?.Value ?? _initialH;   // subscribe: palette/context publication re-renders only this list
         _play = UseAsyncCommands<string>();      // keyed by track id; a row's #-cell shows the buffer spinner while its PlayAsync runs (same instance each render)
         _lib = UseContext(LibraryBridge.Slot);   // Mutations bridge for the per-row heart (saved-state + toggle)
         _acts = UseContext(ActionServices.Slot); // the action system behind the row context menus + the batch bar
         _menuOverlay = UseContext(Overlay.Service);   // the overlay service the rows' attached menus open through
         var svc = UseContext(Services.Slot);     // extender client (recommended songs) + gate on live edits
-        _ = AppearancePrefs.Epoch.Value;
-        _marqueeDisabled = svc?.Settings.Get(WaveeSettings.DisableMarquee) ?? false;
         _svc = svc; _post = UsePost();           // cached so the rec fetch/add handlers reach the extender + marshal results back to the UI thread
         Context.UseSignalEffect(() => Reactive.OnCleanup(() => { try { _recCts.Cancel(); _recCts.Dispose(); } catch { } }));   // cancel in-flight rec fetches on unmount
         var ui = UseContext(ShellUi.Slot);       // rail layout-defer lock (Task C): gate tier churn during a rail reflow
         bool railLocked = ui?.RailLayoutLocked.Value ?? false;   // subscribe → flush the settled tier when the lock clears
-        var model = _full.Value.Value;           // subscribe → re-render preview→full (chrome columns + trailing update on load)
-        _model = model; _tracks = model.Tracks; _hasDate = model.HasDateAdded; _hasBy = model.HasAddedBy; _topTrackId = TopTrack(model.Tracks);
+        // One stable reactive snapshot owns every non-slot input a persistent row can observe. The memo reads the real
+        // sources directly, so child rows never depend on this parent publishing mutable fields first.
+        var rowsSnapshot = UseComputed(() =>
+        {
+            var handlers = _liveHandlers?.Value ?? _initialH;
+            var currentModel = _full.Value.Value;
+            var config = DetailPage.ResolveConfig(DetailPage.ParseDetail(_route.Value).Kind, currentModel);
+            if (_embedded) config = config with { HasTrailing = false };
+            _ = AppearancePrefs.Epoch.Value;
+            bool noMarquee = svc?.Settings.Get(WaveeSettings.DisableMarquee) ?? false;
+            return new TrackRowsSnapshot(
+                currentModel, config, handlers,
+                handlers.Sort.Value, handlers.Query.Value.Trim(), handlers.Flags.Value,
+                noMarquee, TopTrack(currentModel.Tracks));
+        });
+        var rowItems = UseMemo(() => BoundItems.Project(
+            rowsSnapshot,
+            snapshot => View(snapshot).Length,
+            (snapshot, displayIndex) => TrackAt(snapshot, displayIndex),
+            EmptyTrack));
+        _rowsSnapshot = rowsSnapshot;
+        _rowItems = rowItems;
+
+        var rowState = rowsSnapshot.Value;
+        var model = rowState.Model;
+        _h = rowState.Handlers;
+        _model = model; _tracks = model.Tracks; _hasDate = model.HasDateAdded; _hasBy = model.HasAddedBy;
         if (_h.PlayAllOverride is { Length: > 0 } playAllCell) playAllCell[0] = () => StartVisible(0);   // rail "Play" → visible (sorted) order from the top
-        _cfg = DetailPage.ResolveConfig(DetailPage.ParseDetail(_route.Value).Kind, model);   // route kind + loaded ReleaseKind (reused slot re-derives)
+        _cfg = rowState.Config;
         // Embedded in a compact pane (Library): drop the album trailing so the rows are the scroller (the pane owns the
         // hero + actions above). Everything else — the cell, hover transport, now-playing, heart, tier columns — is identical.
-        if (_embedded) _cfg = _cfg with { HasTrailing = false };
         // Reused slot: a detail-route swap changes the track set under a stable (sort,query,flags) view key, so the cached
         // view map + per-tier column sets + selection would be STALE (wrong / out-of-range indices). Invalidate them on a
         // context change so the new page recomputes cleanly.
@@ -401,8 +439,8 @@ sealed class TrackList : Component
                     selectionMode: _cfg.Selection,
                     selection: _selection,
                     isItemInvokedEnabled: true,
-                    itemInvoked: i => PlayRow(i),
-                    isItemEnabled: i => i < View().Length,   // only track rows are roving-focus / selection targets
+                    itemInvoked: i => { if (rowItems.TryPeek(i, out _)) PlayRow(i); },
+                    isItemEnabled: i => rowItems.TryPeek(i, out _),   // only track rows are roving-focus / selection targets
                     overscan: TrackOverscanItems,
                     grow: _cfg.HasTrailing ? 0f : 1f,
                     autoEdgeFade: !_cfg.HasTrailing,
@@ -424,13 +462,13 @@ sealed class TrackList : Component
             // through View() inside its binds (sort-subscribed), so a sort change reorders in place; filter/density/tier
             // change the slot SET and remount via the keyed wrapper below.
             : ItemsView.CreateBound(
-                visible,
-                scope => WrapRowSwipe(scope, BoundRowSkin(scope, BoundRow(scope, set, tracks, rowH, 0), rowH, narrateRemount, 0), 0),
+                rowItems,
+                scope => WrapRowSwipe(scope.Row, BoundRowSkin(scope.Row, BoundRow(scope.Row, scope.Item, set, tracks, rowH, 0), rowH, narrateRemount, 0), 0, scope.Item),
                 RepeatLayout.Stack(rowH),
                 selectionMode: _cfg.Selection,
                 selection: _selection,                // external → selection survives the tier remount
                 isItemInvokedEnabled: true,
-                itemInvoked: i => PlayRow(i),   // DoubleTap / Enter → same as a row click (visible-order play + now-playing toggle)
+                itemInvoked: (i, _) => PlayRow(i),   // DoubleTap / Enter → same as a row click (visible-order play + now-playing toggle)
                 overscan: TrackOverscanItems,
                 grow: _cfg.HasTrailing ? 0f : 1f,
                 // Alpha-mask edge fade: the page floats over a gradient wash (no opaque plate), so the surface-colour
@@ -453,7 +491,6 @@ sealed class TrackList : Component
                 displacementVersion: _dispVer,
                 itemFlipFrom: i => _flip.TryGetValue(i, out var f) ? f : null,
                 itemFadeFrom: i => _fade.TryGetValue(i, out var f) ? f : null,
-                itemCountSignal: _visibleCount,
                 onScrollGeometryChanged: SwipeCloseObserver());
         }
 
@@ -555,9 +592,7 @@ sealed class TrackList : Component
     // Resolve a display row index (what the SelectionModel stores) → the track, through the current filtered+sorted view.
     Track? DisplayTrack(int itemIndex, int trackStart)
     {
-        int displayIndex = itemIndex - trackStart;
-        var v = View();
-        return displayIndex >= 0 && displayIndex < v.Length ? _tracks[v[displayIndex]] : null;
+        return _rowItems is { } items && items.TryPeek(itemIndex, out var track, trackStart) ? track : null;
     }
 
     // The hosting-playlist descriptor for the context menu / batch bar: only when this context is an editable playlist.
@@ -566,9 +601,13 @@ sealed class TrackList : Component
     // order; Index = the ORIGINAL playlist position the remove op needs).
     PlaylistHost? HostInfo()
     {
-        if (_model.ContextUri is not { Length: > 0 } uri || !_model.Capabilities.CanEditItems) return null;
+        if (_rowsSnapshot is not { } source) return null;
+        var snapshot = source.Peek();
+        var model = snapshot.Model;
+        if (model.ContextUri is not { Length: > 0 } uri || !model.Capabilities.CanEditItems) return null;
         int trackStart = _verticalHeader ? VerticalTrackStart : 0;
-        var v = View();
+        var v = View(snapshot);
+        var tracks = model.Tracks;
         var rows = new List<PlaylistRowRef>();
         for (int i = 0; i < _selection.ItemCount; i++)
         {
@@ -576,11 +615,11 @@ sealed class TrackList : Component
             int d = i - trackStart;
             if ((uint)d >= (uint)v.Length) continue;
             int orig = v[d];
-            if ((uint)orig >= (uint)_tracks.Count) continue;
-            var t = _tracks[orig];
+            if ((uint)orig >= (uint)tracks.Count) continue;
+            var t = tracks[orig];
             rows.Add(new PlaylistRowRef(orig, t.Uri, t.ContextUid ?? string.Empty));
         }
-        return rows.Count == 0 ? null : new PlaylistHost(uri, _model.Capabilities, rows);
+        return rows.Count == 0 ? null : new PlaylistHost(uri, model.Capabilities, rows);
     }
 
     Element VerticalList(int visible, ColumnSet set, TrackSize[] tracks, TrackSort sort, bool labeled, int tier,
@@ -606,9 +645,9 @@ sealed class TrackList : Component
             selectionMode: visible > 0 ? _cfg.Selection : ItemsSelectionMode.None,
             selection: _selection,
             isItemInvokedEnabled: true,
-            itemInvoked: i => { int d = DisplayOf(i); if ((uint)d < (uint)View().Length) PlayRow(d); },
-            itemText: i => { int d = DisplayOf(i); return d >= 0 ? BoundTrackAt(d).Title : ""; },
-            isItemEnabled: i => { int d = DisplayOf(i); return d >= 0 && d < View().Length; },
+            itemInvoked: i => { if (_rowItems!.TryPeek(i, out _, VerticalTrackStart)) PlayRow(DisplayOf(i)); },
+            itemText: i => _rowItems!.TryPeek(i, out var item, VerticalTrackStart) ? item.Title : "",
+            isItemEnabled: i => _rowItems!.TryPeek(i, out _, VerticalTrackStart),
             overscan: TrackOverscanItems,
             grow: _cfg.HasTrailing ? 0f : 1f,
             autoEdgeFade: !_cfg.HasTrailing,
@@ -1053,8 +1092,8 @@ sealed class TrackList : Component
     // ── bound row ────────────────────────────────────────────────────────────────────────────────────────
     // A bound row: ONE self-subscribing content component (re-renders on recycle/sort/now-playing, patching cells in
     // place — never a remount, so no flash) wrapped in the shape-stable bound selection skin.
-    Element BoundRow(RowScope scope, ColumnSet set, TrackSize[] tracks, float rowH, int trackStart)
-        => Embed.Comp(() => new BoundRowContent(this, scope, set, tracks, rowH, trackStart));
+    Element BoundRow(RowScope scope, IReadSignal<Track> item, ColumnSet set, TrackSize[] tracks, float rowH, int trackStart)
+        => Embed.Comp(() => new BoundRowContent(this, scope, item, _rowsSnapshot!, set, tracks, rowH, trackStart));
 
     // ── Phase-D touch swipe-to-action for the VIRTUALIZED track rows (OFF by default) ────────────────────────────────
     // FLAGGED OFF: shipping the swipe layer on the eager queue/preview lists first. Before flipping this on, three things
@@ -1068,15 +1107,13 @@ sealed class TrackList : Component
     static readonly bool RowSwipeOnVirtualizedRows = true;
     readonly SwipeGroup _swipeGroup = new();   // one single-open group per list instance (remounts with the keyed list)
 
-    Element WrapRowSwipe(RowScope scope, Element row, int trackStart)
+    Element WrapRowSwipe(RowScope scope, Element row, int trackStart, IReadSignal<Track> item)
     {
         if (!RowSwipeOnVirtualizedRows || _acts is not { } acts) return row;
         ActionContext? Current()
         {
-            int display = scope.Index.Peek() - trackStart;
-            var view = View();
-            if ((uint)display >= (uint)view.Length) return null;
-            var t = BoundTrackAt(display);
+            var t = item.Peek();
+            if (ReferenceEquals(t, EmptyTrack) || t.Id.Length == 0) return null;
             return new ActionContext(ActionTarget.ForTracks(new[] { t }), acts);
         }
         return RowSwipe.WrapBound(row, Current, group: _swipeGroup,
@@ -1101,13 +1138,13 @@ sealed class TrackList : Component
     // The title element: a Marquee whose text + now-playing colour are bound to the slot's INDEX signal, so it re-skins
     // on recycle / now-playing WITHOUT remounting. The marquee is a reused autonomous child of BoundRowContent — frozen
     // constructor args would stick on the first track, so its inputs MUST read the signal, not a captured value.
-    Element BoundTitle(IReadSignal<int> index, int trackStart) => Marquee.Of(
-        Prop.Of(() => BoundTrackAt(index.Value - trackStart).Title),
+    Element BoundTitle(IReadSignal<Track> item) => Marquee.Of(
+        Prop.Of(() => item.Value.Title),
         new Marquee.Style
         {
             FontSize = 14f, Weight = 600,
             Foreground = Prop.Of(() =>
-                _bridge is not null && _bridge.CurrentTrack.Value?.Id == BoundTrackAt(index.Value - trackStart).Id
+                _bridge is not null && _bridge.CurrentTrack.Value?.Id == item.Value.Id
                     ? Tok.AccentTextPrimary : Tok.TextPrimary),
         });
 
@@ -1117,11 +1154,11 @@ sealed class TrackList : Component
     // row), so render it as a plain, bound, ellipsis TextEl — ONE node, no extra component, no measure cycle, no animation.
     // Recycle-safe: a recycled row is non-playing → stays plain (no type swap); only the single now-playing row uses the
     // marquee, and BoundRowContent re-renders (swapping plain↔marquee for just that row) when now-playing changes.
-    Element BoundTitlePlain(IReadSignal<int> index, int trackStart) => new TextEl(Prop.Of(() => BoundTrackAt(index.Value - trackStart).Title))
+    Element BoundTitlePlain(IReadSignal<Track> item) => new TextEl(Prop.Of(() => item.Value.Title))
     {
         Size = 14f, Weight = 600,
         Color = Prop.Of(() =>
-            _bridge is not null && _bridge.CurrentTrack.Value?.Id == BoundTrackAt(index.Value - trackStart).Id
+            _bridge is not null && _bridge.CurrentTrack.Value?.Id == item.Value.Id
                 ? Tok.AccentTextPrimary : Tok.TextPrimary),
         Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
     };
@@ -1133,12 +1170,15 @@ sealed class TrackList : Component
     {
         readonly TrackList _o;
         readonly RowScope _scope;
+        readonly IReadSignal<Track> _item;
+        readonly IReadSignal<TrackRowsSnapshot> _state;
         readonly ColumnSet _set;
         readonly TrackSize[] _tracks;
         readonly float _rowH;
         readonly int _trackStart;
-        public BoundRowContent(TrackList o, RowScope scope, ColumnSet set, TrackSize[] tracks, float rowH, int trackStart)
-        { _o = o; _scope = scope; _set = set; _tracks = tracks; _rowH = rowH; _trackStart = trackStart; }
+        public BoundRowContent(TrackList o, RowScope scope, IReadSignal<Track> item, IReadSignal<TrackRowsSnapshot> state,
+                               ColumnSet set, TrackSize[] tracks, float rowH, int trackStart)
+        { _o = o; _scope = scope; _item = item; _state = state; _set = set; _tracks = tracks; _rowH = rowH; _trackStart = trackStart; }
 
         public override Element Render()
         {
@@ -1146,8 +1186,9 @@ sealed class TrackList : Component
             _ = _o._full.Value.Value;                                    // subscribe → re-skin when the track set / context model changes (playlist nav, live /diff)
             int i = _scope.Index.Value;                                  // recycle → re-render
             int displayIndex = i - _trackStart;
-            var t = _o.BoundTrackAt(displayIndex);                       // resolves the track; subscribes sort
-            bool isTop = _o._cfg.ShowPlays && _o._topTrackId is not null && t.Id == _o._topTrackId;
+            var rowState = _state.Value;
+            var t = _item.Value;
+            bool isTop = rowState.Config.ShowPlays && rowState.TopTrackId is not null && t.Id == rowState.TopTrackId;
             var st = TrackRow.StateOf(_o._bridge, _o._lib, t, isTop, _o._play?.IsRunning(t.Id) ?? false);
             // Buffering = this track's PlayAsync command is in flight (the Task-driven start spinner), OR the now-playing
             // track is mid-playback re-buffering (the bridge signal). Reading _play.IsRunning subscribes this row so the
@@ -1155,13 +1196,17 @@ sealed class TrackList : Component
             bool likePop = TrackRow.LikeEdge(likePrev, t.Uri, st.Saved);   // pop only on the SAME-uri unsaved→saved edge
 
             // Marquee only for the now-playing row; every other row is a cheap plain ellipsis title (see BoundTitlePlain).
-            Element title = st.IsNow && !_o._marqueeDisabled
-                ? _o.BoundTitle(_scope.Index, _trackStart)
-                : _o.BoundTitlePlain(_scope.Index, _trackStart);
+            Element title = st.IsNow && !rowState.MarqueeDisabled
+                ? _o.BoundTitle(_item)
+                : _o.BoundTitlePlain(_item);
             return _o.RowGrid(t, displayIndex, st.IsNow, st.IsPlaying, st.IsBuffering, st.IsTop, title, _set, _tracks, _rowH,
                               onPlay: () => _o.PlayRow(displayIndex),
-                              saved: st.Saved, onLike: t.Uri.Length > 0 ? (Action)(() => _o._lib?.ToggleSaved(t.Uri, t.Title)) : null,
-                              likePop: likePop);
+                              saved: st.Saved, onLike: t.Uri.Length > 0 ? (Action)(() =>
+                              {
+                                  var current = _item.Peek();
+                                  if (current.Uri.Length > 0) _o._lib?.ToggleSaved(current.Uri, current.Title);
+                              }) : null,
+                              likePop: likePop, rowState: rowState);
         }
     }
 
@@ -1169,6 +1214,7 @@ sealed class TrackList : Component
     {
         readonly TrackList _o;
         readonly RowScope _scope;
+        readonly IReadSignal<Track> _item;
         readonly ColumnSet _set;
         readonly TrackSize[] _tracks;
         readonly float _rowH;
@@ -1177,7 +1223,7 @@ sealed class TrackList : Component
         readonly bool _entrance;
 
         public VerticalItemContent(TrackList o, RowScope scope, ColumnSet set, TrackSize[] tracks, float rowH, bool labeled, int tier, bool entrance)
-        { _o = o; _scope = scope; _set = set; _tracks = tracks; _rowH = rowH; _labeled = labeled; _tier = tier; _entrance = entrance; }
+        { _o = o; _scope = scope; _item = o._rowItems!.BindItem(scope.Index, VerticalTrackStart); _set = set; _tracks = tracks; _rowH = rowH; _labeled = labeled; _tier = tier; _entrance = entrance; }
 
         public override Element Render()
         {
@@ -1195,11 +1241,11 @@ sealed class TrackList : Component
             else
             {
                 int displayIndex = i - VerticalTrackStart;
-                int visible = _o.View().Length;
+                int visible = _o._rowItems!.Count.Value;
                 child = displayIndex >= 0 && displayIndex < visible
                     ? _o.WrapRowSwipe(_scope,
-                        _o.BoundRowSkin(_scope, _o.BoundRow(_scope, _set, _tracks, _rowH, VerticalTrackStart), _rowH, _entrance, VerticalTrackStart),
-                        VerticalTrackStart) with { Key = "vitem:row" }
+                        _o.BoundRowSkin(_scope, _o.BoundRow(_scope, _item, _set, _tracks, _rowH, VerticalTrackStart), _rowH, _entrance, VerticalTrackStart),
+                        VerticalTrackStart, _item) with { Key = "vitem:row" }
                     : new BoxEl { Key = "vitem:empty", MinHeight = 160f, Direction = 1, Children = [FilterEmpty(_o._tracks.Count == 0)] };
             }
 
@@ -1220,23 +1266,24 @@ sealed class TrackList : Component
     {
         readonly TrackList _o;
         readonly RowScope _scope;
+        readonly IReadSignal<Track> _item;
         readonly ColumnSet _set;
         readonly TrackSize[] _tracks;
         readonly float _rowH;
         readonly bool _entrance;
         public RowOrRecContent(TrackList o, RowScope scope, ColumnSet set, TrackSize[] tracks, float rowH, bool entrance)
-        { _o = o; _scope = scope; _set = set; _tracks = tracks; _rowH = rowH; _entrance = entrance; }
+        { _o = o; _scope = scope; _item = o._rowItems!.BindItem(scope.Index); _set = set; _tracks = tracks; _rowH = rowH; _entrance = entrance; }
 
         public override Element Render()
         {
             _ = _o._full.Value.Value;              // re-skin on context / track-set change (same subscription as BoundRowContent)
             int i = _scope.Index.Value;            // recycle → re-render
-            int visible = _o.View().Length;
+            int visible = _o._rowItems!.Count.Value;
             Element child;
             if (i < visible)
                 child = _o.WrapRowSwipe(_scope,
-                    _o.BoundRowSkin(_scope, _o.BoundRow(_scope, _set, _tracks, _rowH, 0), _rowH, _entrance, 0),
-                    0) with { Key = "rec:track" };
+                    _o.BoundRowSkin(_scope, _o.BoundRow(_scope, _item, _set, _tracks, _rowH, 0), _rowH, _entrance, 0),
+                    0, _item) with { Key = "rec:track" };
             else if (i == visible)
                 child = Embed.Comp(() => new RecHeader(_o, _rowH)) with { Key = "rec:header" };
             else
@@ -1405,11 +1452,13 @@ sealed class TrackList : Component
     // from a click handler (not a reactive context), so the .Peek() reads here never subscribe.
     void PlayRow(int displayPos)
     {
-        var v = View();
+        if (_rowsSnapshot is not { } source) return;
+        var snapshot = source.Peek();
+        var v = View(snapshot);
         if ((uint)displayPos >= (uint)v.Length) return;
         int orig = v[displayPos];
-        var track = _tracks[orig];
-        TrackRow.Invoke(_bridge, track, () => StartVisible(displayPos));
+        var track = snapshot.Model.Tracks[orig];
+        TrackRow.Invoke(_bridge, track, () => StartVisible(displayPos, snapshot));
     }
 
     // Start THIS context at the given display row, sending the VISIBLE (sorted/filtered) order so a remote player mirrors
@@ -1419,42 +1468,50 @@ sealed class TrackList : Component
     // The keyed async command drives the row's #-cell buffer spinner. Empty view (still loading / filtered out) → context top.
     void StartVisible(int displayPos)
     {
-        var v = View();
-        if (v.Length == 0) { _h.Play(0); return; }
+        if (_rowsSnapshot is { } source) StartVisible(displayPos, source.Peek());
+    }
+
+    void StartVisible(int displayPos, TrackRowsSnapshot snapshot)
+    {
+        var v = View(snapshot);
+        var model = snapshot.Model;
+        var handlers = snapshot.Handlers;
+        var tracks = model.Tracks;
+        if (v.Length == 0) { handlers.Play(0); return; }
         if ((uint)displayPos >= (uint)v.Length) displayPos = 0;
         int orig = v[displayPos];
-        var track = _tracks[orig];
-        if (_bridge is not null && _play is not null && _model.ContextUri is { } uri)
+        var track = tracks[orig];
+        if (_bridge is not null && _play is not null && model.ContextUri is { } uri)
         {
             // Collection OR natural order → identity-first skip (uri+uid; index diagnostic only), URI-only on the wire (no
             // embedded pages). Only a SORTED/FILTERED non-collection view embeds the visible order (the correct shape there).
-            if (Wavee.Backend.ContextResolve.IsCollection(uri) || IsNaturalContextOrder(v))
+            if (Wavee.Backend.ContextResolve.IsCollection(uri) || IsNaturalContextOrder(snapshot, v))
                 _play.Run(track.Id, ct => _bridge.Player.PlayContextTrackAsync(
                     uri, new PlaybackContextTrack(track.Uri, track.ContextUid ?? string.Empty), orig, ct));
             else
             {
-                var ordered = VisibleOrder(v);
+                var ordered = VisibleOrder(tracks, v);
                 _play.Run(track.Id, ct => _bridge.Player.PlayOrderedAsync(uri, ordered, displayPos, ct));
             }
         }
         else
-            _h.Play(orig);
+            handlers.Play(orig);
     }
 
     // The visible order as (uri, contextUid) pairs — the embedded page the outbound play command carries. ContextUid is
     // the per-row playlist-membership uid (skip_to-by-uid); "" outside a user playlist.
-    PlaybackContextTrack[] VisibleOrder(int[] v)
+    static PlaybackContextTrack[] VisibleOrder(IReadOnlyList<Track> tracks, int[] v)
     {
         var ordered = new PlaybackContextTrack[v.Length];
-        for (int k = 0; k < v.Length; k++) { var t = _tracks[v[k]]; ordered[k] = new PlaybackContextTrack(t.Uri, t.ContextUid ?? string.Empty); }
+        for (int k = 0; k < v.Length; k++) { var t = tracks[v[k]]; ordered[k] = new PlaybackContextTrack(t.Uri, t.ContextUid ?? string.Empty); }
         return ordered;
     }
 
-    bool IsNaturalContextOrder(int[] v)
+    static bool IsNaturalContextOrder(TrackRowsSnapshot snapshot, int[] v)
     {
-        if (_h.Sort.Peek() != TrackSort.Default) return false;
-        if (_h.Query.Peek().Trim().Length != 0 || _h.Flags.Peek() != TrackFilterFlags.None) return false;
-        if (v.Length != _tracks.Count) return false;
+        if (snapshot.Sort != TrackSort.Default) return false;
+        if (snapshot.Query.Length != 0 || snapshot.Flags != TrackFilterFlags.None) return false;
+        if (v.Length != snapshot.Model.Tracks.Count) return false;
         for (int i = 0; i < v.Length; i++)
             if (v[i] != i) return false;
         return true;
@@ -1467,18 +1524,22 @@ sealed class TrackList : Component
     // (BoundRowContent), and the skeleton passes a static title. Plain/diffable → a BoundRowContent re-render patches in place.
     Element RowGrid(Track t, int displayIndex, bool isNow, bool isPlaying, bool isBuffering, bool isTop, Element title,
                     ColumnSet set, TrackSize[] tracks, float rowH, Action? onPlay = null, bool saved = false, Action? onLike = null,
-                    bool likePop = false, bool more = true)
-        => TrackRow.Grid(t, displayIndex, new TrackRow.State(isNow, isPlaying, isBuffering, isTop, saved),
-                         set, tracks, rowH, title, _cfg.ShowTrackArtist, _h.Go, onPlay, onLike, AddedByProfile(t), likePop,
+                    bool likePop = false, bool more = true, TrackRowsSnapshot? rowState = null)
+    {
+        var snapshot = rowState ?? _rowsSnapshot!.Peek();
+        return TrackRow.Grid(t, displayIndex, new TrackRow.State(isNow, isPlaying, isBuffering, isTop, saved),
+                         set, tracks, rowH, title, snapshot.Config.ShowTrackArtist, snapshot.Handlers.Go,
+                         onPlay, onLike, AddedByProfile(snapshot.Model, t), likePop,
                          // The trailing "…" — ClickRequestsContext opens the row's own context menu anchored at the
                          // button (input-a11y §6.5.1). Disabled for the shimmer rows: a skeleton keeps the identical
                          // reserved lane but stays non-interactive and hidden.
                          // The ultra-compact tier drops the "…" lane (set.Actions false) → no button built.
                          actionsCell: set.Actions ? TrackRow.MoreButton(more) : null);
+    }
 
-    Owner? AddedByProfile(Track t)
+    static Owner? AddedByProfile(DetailModel model, Track t)
     {
-        if (t.AddedBy is not { Length: > 0 } raw || _model.UserProfilesById is not { Count: > 0 } profiles) return null;
+        if (t.AddedBy is not { Length: > 0 } raw || model.UserProfilesById is not { Count: > 0 } profiles) return null;
         if (profiles.TryGetValue(raw, out var owner)) return owner;
         var canonical = UserProfileIds.Normalize(raw);
         return canonical is not null && profiles.TryGetValue(canonical, out owner) ? owner : null;
@@ -1557,7 +1618,8 @@ sealed class TrackList : Component
                 new BoxEl
                 {
                     Key = "row-pill", Width = 3f, Height = 16f, Margin = new Edges4(2f, 0f, 0f, 0f),
-                    Corners = CornerRadius4.All(1.5f), Fill = _h.Accent, AlignSelf = FlexAlign.Center,
+                    Corners = CornerRadius4.All(1.5f),
+                    Fill = Prop.Of(() => _rowsSnapshot!.Value.Handlers.Accent), AlignSelf = FlexAlign.Center,
                     HitTestVisible = false, PressScale = 10f / 16f,
                     Opacity = Prop.Of(() => isSel() && !_checksVisibleRead() ? 1f : 0f),
                 },
@@ -1571,7 +1633,7 @@ sealed class TrackList : Component
         if (_acts is { } acts && _menuOverlay is { } menuSvc)
             return skin.WithContextMenu(menuSvc, () => TrackContextMenu.Build(
                 acts, _selection, i => DisplayTrack(i, trackStart), index.Peek(), HostInfo,
-                showGoToAlbum: _cfg.ShowAlbumColumn));
+                showGoToAlbum: _rowsSnapshot?.Peek().Config.ShowAlbumColumn ?? _cfg.ShowAlbumColumn));
         return skin;
     }
 

@@ -44,6 +44,8 @@ internal static class Mdl
     public static readonly string Share = Of(0xE72D);          // hero share action
     public static readonly string Play = Of(0xE768);           // play (hero/pinned/radio actions)
     public static readonly string MapPin = Of(0xE707);         // concert location
+    public static readonly string Clock = Of(0xE823);          // concert doors-open time (Segoe "Recent")
+    public static readonly string Info = Of(0xE946);           // concert age-restriction fact
     public static readonly string Globe = Of(0xE774);          // world rank ("#N in the world")
     public static readonly string Delete = Of(0xE74D);         // delete (trash can)
     public static readonly string More = Of(0xE712);           // track-row overflow "..." (opens the row context menu)

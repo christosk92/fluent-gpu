@@ -17,6 +17,16 @@
     <InformationalVersion>0.1.1-dev</InformationalVersion>
   </PropertyGroup>
 
+  <!-- Memory posture (2026-07 heap audit): the engine's PixelBufferPool bounds decoded-pixel retention; these bound
+       what remains. SharedArrayPool defaults to 8 arrays/bucket × ProcessorCount partitions — on a 12-core machine
+       that legally parks hundreds of MB; 4×4 keeps the remaining users (encoded fetch buffers, BCL/HTTP) to a few MB.
+       ConserveMemory=5 makes the workstation-concurrent GC decommit the churned heap floor more aggressively. -->
+  <ItemGroup>
+    <RuntimeHostConfigurationOption Include="System.Buffers.SharedArrayPool.MaxPartitionCount" Value="4" />
+    <RuntimeHostConfigurationOption Include="System.Buffers.SharedArrayPool.MaxArraysPerPartition" Value="4" />
+    <RuntimeHostConfigurationOption Include="System.GC.ConserveMemory" Value="5" />
+  </ItemGroup>
+
   <Import Project="Wavee.Publish.props" />
 
   <!-- Composition root: the Windows backend (D3D12 / Win32 / DirectWrite / WIC) wired into the

@@ -949,6 +949,8 @@ public sealed class InputDispatcher
                         hm(LocalPos(_hovered, e.PositionPx));
                         handled++;
                     }
+                    if (_down.IsNull && _dragTarget.IsNull && _scrollDragNode.IsNull && !_selDragging)
+                        DeliverPointerMoveWithin(_hovered, e.PositionPx);
                     break;
 
                 case InputKind.PointerDown:
@@ -3232,6 +3234,8 @@ public sealed class InputDispatcher
         // an unchanged target (SetState's early-out already covers the flag/enter/leave).
         if (before != _hovered && !_hovered.IsNull && _scene.GetHoverMove(_hovered) is { } hm)
             hm(LocalPos(_hovered, _lastPointerPx));
+        if (_down.IsNull && _dragTarget.IsNull && _scrollDragNode.IsNull && !_selDragging)
+            DeliverPointerMoveWithin(_hovered, _lastPointerPx);
     }
 
     /// <summary>Layout-move companion to <see cref="RefreshHoverAfterScroll"/> (input-a11y.md §5.4/§15/§1056: hover re-resolves
@@ -3263,7 +3267,12 @@ public sealed class InputDispatcher
         // Cheap: one AbsoluteRect walk + an AABB test — the hit-test only runs on the rare frame the hovered node moved.
         RectF r = _scene.AbsoluteRect(_hovered);
         if (_lastPointerPx.X >= r.X && _lastPointerPx.X < r.X + r.W &&
-            _lastPointerPx.Y >= r.Y && _lastPointerPx.Y < r.Y + r.H) return;
+            _lastPointerPx.Y >= r.Y && _lastPointerPx.Y < r.Y + r.H)
+        {
+            if (_down.IsNull && _dragTarget.IsNull && _scrollDragNode.IsNull && !_selDragging)
+                DeliverPointerMoveWithin(_hovered, _lastPointerPx);
+            return;
+        }
         // The hovered node moved off the cursor: drive the SAME resolve + enter/leave + HoverWithin diff + cursor publish
         // the scroll refresh does, through the one SetState chokepoint (the cursor is genuinely over `next` now).
         NodeHandle before = _hovered;
@@ -3276,6 +3285,16 @@ public sealed class InputDispatcher
         // Bare-hover preview (OnHoverMove) only when the hovered node actually CHANGED this refresh.
         if (before != _hovered && !_hovered.IsNull && _scene.GetHoverMove(_hovered) is { } hm)
             hm(LocalPos(_hovered, _lastPointerPx));
+        if (_down.IsNull && _dragTarget.IsNull && _scrollDragNode.IsNull && !_selDragging)
+            DeliverPointerMoveWithin(_hovered, _lastPointerPx);
+    }
+
+    /// <summary>Deliver a container-aware move leaf→root without allocating a route. The leaf is the already-resolved
+    /// hover hit, so interactive descendants cannot starve an ancestor's reveal/spotlight effect.</summary>
+    private void DeliverPointerMoveWithin(NodeHandle leaf, Point2 windowPx)
+    {
+        for (NodeHandle n = leaf; !n.IsNull && _scene.IsLive(n); n = _scene.Parent(n))
+            _scene.GetPointerMoveWithin(n)?.Invoke(PointToLocal(n, windowPx));
     }
 
     /// <summary>Diagnostic only: drive the wheel-routing path (hit-test → nearest vertical scroller) directly, bypassing the

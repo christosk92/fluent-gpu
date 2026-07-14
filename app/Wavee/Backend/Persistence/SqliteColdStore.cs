@@ -131,6 +131,20 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox
         return list;
     }
 
+    // Indexed single-row rehydration (CachedStore cold-fallback): the entities table is keyed by uri, so this is a PK
+    // lookup, not the LoadAllEntities table scan the default interface method would do.
+    public ColdEntity? GetEntity(string uri)
+    {
+        lock (_connLock)
+        {
+            using var c = _conn.CreateCommand();
+            c.CommandText = "SELECT kind, payload FROM entities WHERE uri=$u;";
+            c.Parameters.AddWithValue("$u", uri);
+            using var r = c.ExecuteReader();
+            return r.Read() ? new ColdEntity(uri, (EntityKind)r.GetInt32(0), r.GetFieldValue<byte[]>(1)) : null;
+        }
+    }
+
     public IEnumerable<ColdVideoAssoc> LoadAllVideoAssociations()
     {
         var list = new List<ColdVideoAssoc>(256);

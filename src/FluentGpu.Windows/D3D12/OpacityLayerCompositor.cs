@@ -36,10 +36,10 @@ namespace FluentGpu.Rhi.D3D12;
 /// (it animates), so the blur shader computes the gaussian weights per-frame from a σ uniform (unlike the acrylic
 /// compositor's fixed 30-DIP kernel, which is tuned for a static backdrop blur). needs-pixels: the blurred GPU pixels
 /// are a --shot manual check; the headless harness asserts the LayerKind.Blur opcode + BlurSigma on HeadlessGpuDevice.
-/// LastLayers. Perf: the RT stays canvas-sized (group content can extend past the layer rect), but the two blur passes
-/// are SCISSORED to the layer's device rect + the kernel's ±3σ tap halo (<see cref="BlurInPlace"/>) — pixel-identical to
-/// a full-canvas blur (the kernel output is zero past that halo) at a fraction of the fill for a small surface (a
-/// one-line lyrics glow is a ~44 px band, not the whole window).
+/// LastLayers. Perf: the RT stays canvas-sized (group content can extend past the layer rect), but the blur is confined
+/// to the layer's device rect + the kernel's tap halo (<see cref="BlurInPlace"/>) — a one-line lyrics glow is a ~44 px
+/// band, not the whole window — and for σ &gt; 4 it runs the Skia/Impeller downsample-then-separable-Gaussian schedule
+/// (blur at 1/down resolution with an ≤7-tap kernel), so a big editorial-card blur pays a fraction of the full-res fill.
 /// </summary>
 internal sealed unsafe class OpacityLayerCompositor : IDisposable
 {
@@ -89,6 +89,11 @@ internal sealed unsafe class OpacityLayerCompositor : IDisposable
     private ID3D12PipelineState* _blurPso;    // separable dynamic-σ gaussian, one axis per invocation (no blend — full overwrite)
     private ID3D12RootSignature* _edgeRoot;   // edge fade: 16 root consts (rect + per-edge band + corner radii + falloff/intensity/alpha) + SRV + point sampler
     private ID3D12PipelineState* _edgePso;    // per-edge feather composite (premultiplied SourceOver, like _pso) — follows the rounded corners (the curve)
+    private ID3D12RootSignature* _copyRoot;   // down/up sample: 8 root consts (src uv off+scale + clamp bounds) + SRV table + LINEAR sampler
+    private ID3D12PipelineState* _copyPso;    // bilinear stretch copy (the downsample prefilter + the upsample; no blend — full overwrite)
+    private ID3D12RootSignature* _dsBlurRoot; // downsampled separable blur: 24 root consts (texel size, axis, usedFrac/maxUv, BuildKernel taps) + SRV + LINEAR
+    private ID3D12PipelineState* _dsBlurPso;  // separable gaussian at texelSigma over the DOWNSAMPLED scratch, unrolled 7 folded bilinear taps
+    private readonly float[] _blurTaps = new float[24];   // ds-blur consts: p0(texel.xy,dir.xy) + p1(usedFrac.xy,maxUv.xy) + o0/o1(offsets) + w0/w1(weights)
 
     /// <summary>Opacity groups composited this frame (diagnostics).</summary>
     public int GroupsThisFrame { get; private set; }
@@ -183,6 +188,51 @@ float4 PSMain(V i) : SV_Target
 }
 """;
 
+    // Downsample/upsample bilinear stretch (the Flutter-Impeller / Skia prefilter — a plain LINEAR sub-rect copy, no
+    // blend). os.xy = source uv offset, os.zw = source uv scale; the sample uv is clamped to [cl.xy, cl.zw] (the used
+    // sub-rect minus a half-texel guard, so an upsample from a pooled bucket RT never bilinear-bleeds the stale texels
+    // past its used region). Downsample passes a full-region clamp (identity). Premultiplied throughout.
+    private const string CopyDsHlsl = """
+cbuffer C : register(b0) { float4 os; float4 cl; };   // os.xy=off os.zw=scale; cl.xy=minUv cl.zw=maxUv
+Texture2D gSrc : register(t0);
+SamplerState gSamp : register(s0);
+struct V { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
+V VSMain(uint id : SV_VertexID) { V o; float2 uv = float2((id << 1) & 2, id & 2); o.pos = float4(uv * 2.0 - 1.0, 0, 1); o.pos.y = -o.pos.y; o.uv = uv; return o; }
+float4 CopyPS(V i) : SV_Target { float2 uv = clamp(os.xy + i.uv * os.zw, cl.xy, cl.zw); return gSrc.Sample(gSamp, uv); }
+""";
+
+    // Separable Gaussian over the DOWNSAMPLED scratch (down > 1): the CPU builds ≤ 7 bilinear-folded taps for
+    // texelSigma = σ/down ≤ 4 (AcrylicBackdropMath.BuildKernel — the ONE headless-checked kernel source) and uploads
+    // them as constants; the shader is fully UNROLLED (center + 6 symmetric pairs, unused pairs carry weight 0), so
+    // there is NO dynamic float4 component indexing (fxc X3504) — every tap is a static swizzle. Each tap is a LINEAR
+    // fetch at a fractional-texel offset (the fold); the weights already sum to 1, so no renormalize. Every sample is
+    // clamped to the used sub-rect of the (bucket-quantized, possibly larger) pooled RT, like the acrylic Kawase passes.
+    private const string DsBlurHlsl = """
+cbuffer C : register(b0) { float4 p0; float4 p1; float4 o0; float4 o1; float4 w0; float4 w1; };
+// p0.xy = 1/bucketSize, p0.zw = axis dir (1,0)|(0,1); p1.xy = usedFrac (used/bucket), p1.zw = maxUv (usedFrac - half texel);
+// o0 = offsets[0..3] (o0.x = 0 center), o1 = offsets[4..6],pad; w0 = weights[0..3], w1 = weights[4..6],pad.
+Texture2D gSrc : register(t0);
+SamplerState gSamp : register(s0);
+struct V { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
+V VSMain(uint id : SV_VertexID) { V o; float2 uv = float2((id << 1) & 2, id & 2); o.pos = float4(uv * 2.0 - 1.0, 0, 1); o.pos.y = -o.pos.y; o.uv = uv; return o; }
+float4 T(float2 uv, float2 lo, float2 hi) { return gSrc.Sample(gSamp, clamp(uv, lo, hi)); }
+float4 BlurPS(V i) : SV_Target
+{
+    float2 lo = p0.xy * 0.5;                  // half-texel clamp floor
+    float2 mx = p1.zw;                        // usedFrac - half texel clamp ceil
+    float2 base = i.uv * p1.xy;               // viewport [0,1] → the used sub-rect
+    float2 stp = p0.zw * p0.xy;               // one texel along the blur axis
+    float4 acc = T(base, lo, mx) * w0.x;                                       // center (o0.x == 0)
+    acc += (T(base + stp * o0.y, lo, mx) + T(base - stp * o0.y, lo, mx)) * w0.y;
+    acc += (T(base + stp * o0.z, lo, mx) + T(base - stp * o0.z, lo, mx)) * w0.z;
+    acc += (T(base + stp * o0.w, lo, mx) + T(base - stp * o0.w, lo, mx)) * w0.w;
+    acc += (T(base + stp * o1.x, lo, mx) + T(base - stp * o1.x, lo, mx)) * w1.x;
+    acc += (T(base + stp * o1.y, lo, mx) + T(base - stp * o1.y, lo, mx)) * w1.y;
+    acc += (T(base + stp * o1.z, lo, mx) + T(base - stp * o1.z, lo, mx)) * w1.z;
+    return acc;                              // BuildKernel weights sum to 1 → premultiplied result, no renormalize
+}
+""";
+
     public void Init(ID3D12Device* device)
     {
         _device = device;
@@ -190,6 +240,84 @@ float4 PSMain(V i) : SV_Target
         BuildPipeline();
         BuildBlurPipeline();
         BuildEdgeFadePipeline();
+        BuildDownsamplePipelines();
+    }
+
+    // Root signature shared by the two downsample-schedule pipelines: N 32-bit root consts + 1 SRV table + a static
+    // LINEAR-clamp sampler (both the bilinear stretch and the folded-tap gaussian want bilinear filtering).
+    private ID3D12RootSignature* BuildLinearSampleRootSig(int numConsts, string what)
+    {
+        D3D12_DESCRIPTOR_RANGE range = default;
+        range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE.D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        range.NumDescriptors = 1;
+        range.BaseShaderRegister = 0;
+        range.OffsetInDescriptorsFromTableStart = 0xFFFFFFFF;
+
+        D3D12_ROOT_PARAMETER* p = stackalloc D3D12_ROOT_PARAMETER[2];
+        p[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE.D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+        p[0].Anonymous.Constants.Num32BitValues = (uint)numConsts;
+        p[0].ShaderVisibility = D3D12_SHADER_VISIBILITY.D3D12_SHADER_VISIBILITY_ALL;
+        p[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE.D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        p[1].Anonymous.DescriptorTable.NumDescriptorRanges = 1;
+        p[1].Anonymous.DescriptorTable.pDescriptorRanges = &range;
+        p[1].ShaderVisibility = D3D12_SHADER_VISIBILITY.D3D12_SHADER_VISIBILITY_PIXEL;
+
+        D3D12_STATIC_SAMPLER_DESC samp = default;
+        samp.Filter = D3D12_FILTER.D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+        samp.AddressU = samp.AddressV = samp.AddressW = D3D12_TEXTURE_ADDRESS_MODE.D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        samp.ShaderRegister = 0;
+        samp.ShaderVisibility = D3D12_SHADER_VISIBILITY.D3D12_SHADER_VISIBILITY_PIXEL;
+        samp.MaxLOD = float.MaxValue;
+
+        D3D12_ROOT_SIGNATURE_DESC desc = default;
+        desc.NumParameters = 2;
+        desc.pParameters = p;
+        desc.NumStaticSamplers = 1;
+        desc.pStaticSamplers = &samp;
+
+        ID3DBlob* sig = null; ID3DBlob* err = null;
+        Check(D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION.D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err), what);
+        ID3D12RootSignature* rs;
+        Check(_device->CreateRootSignature(0, sig->GetBufferPointer(), sig->GetBufferSize(), __uuidof<ID3D12RootSignature>(), (void**)&rs), what);
+        sig->Release();
+        if (err != null) err->Release();
+        return rs;
+    }
+
+    private ID3D12PipelineState* BuildOverwritePso(ID3D12RootSignature* root, string hlsl, string psEntry, string what)
+    {
+        ID3DBlob* vs = CompileSource(hlsl, "VSMain", "vs_5_1");
+        ID3DBlob* ps = CompileSource(hlsl, psEntry, "ps_5_1");
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC pd = default;
+        pd.pRootSignature = root;
+        pd.VS = new D3D12_SHADER_BYTECODE { pShaderBytecode = vs->GetBufferPointer(), BytecodeLength = vs->GetBufferSize() };
+        pd.PS = new D3D12_SHADER_BYTECODE { pShaderBytecode = ps->GetBufferPointer(), BytecodeLength = ps->GetBufferSize() };
+        pd.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE.D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        pd.NumRenderTargets = 1;
+        pd.RTVFormats[0] = DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM;
+        pd.SampleDesc.Count = 1;
+        pd.SampleMask = uint.MaxValue;
+        pd.RasterizerState.FillMode = D3D12_FILL_MODE.D3D12_FILL_MODE_SOLID;
+        pd.RasterizerState.CullMode = D3D12_CULL_MODE.D3D12_CULL_MODE_NONE;
+        pd.RasterizerState.DepthClipEnable = BOOL.TRUE;
+        pd.DepthStencilState.DepthEnable = BOOL.FALSE;
+        pd.DepthStencilState.StencilEnable = BOOL.FALSE;
+        pd.BlendState.RenderTarget[0].BlendEnable = BOOL.FALSE;   // full overwrite (each pass IS the new RT contents)
+        pd.BlendState.RenderTarget[0].RenderTargetWriteMask = (byte)D3D12_COLOR_WRITE_ENABLE.D3D12_COLOR_WRITE_ENABLE_ALL;
+        ID3D12PipelineState* pso;
+        Check(_device->CreateGraphicsPipelineState(&pd, __uuidof<ID3D12PipelineState>(), (void**)&pso), what);
+        vs->Release(); ps->Release();
+        return pso;
+    }
+
+    // The downsample-then-separable-Gaussian schedule (BlurInPlace, down > 1): a LINEAR bilinear-stretch copy PSO for
+    // the down/up sample, and a separable-blur PSO whose taps come from AcrylicBackdropMath.BuildKernel.
+    private void BuildDownsamplePipelines()
+    {
+        _copyRoot = BuildLinearSampleRootSig(8, "OpacityLayer.CopyDsRootSig");
+        _copyPso = BuildOverwritePso(_copyRoot, CopyDsHlsl, "CopyPS", "OpacityLayer.CopyDsPso");
+        _dsBlurRoot = BuildLinearSampleRootSig(24, "OpacityLayer.DsBlurRootSig");
+        _dsBlurPso = BuildOverwritePso(_dsBlurRoot, DsBlurHlsl, "BlurPS", "OpacityLayer.DsBlurPso");
     }
 
     private static void Check(HRESULT hr, string what) { if ((int)hr < 0) throw new InvalidOperationException($"{what} failed: 0x{(uint)hr:X8}"); }
@@ -696,13 +824,7 @@ float4 PSMain(V i) : SV_Target
     /// the kernel's ±min(ceil(3σ),32)px tap halo, clamped to the canvas. The region a pin must capture + composite —
     /// identical to <see cref="BlurInPlace"/>'s scissor, so the pinned strip is exactly the blurred strip.</summary>
     private void RegionBox(in PushLayerCmd L, float scale, out int minX, out int minY, out int maxX, out int maxY)
-    {
-        int rTaps = (int)MathF.Min(MathF.Ceiling(L.BlurSigma * 3f), 32f);
-        minX = Math.Max(0, (int)MathF.Floor(L.DeviceRect.X * scale) - rTaps);
-        minY = Math.Max(0, (int)MathF.Floor(L.DeviceRect.Y * scale) - rTaps);
-        maxX = Math.Min((int)_w, (int)MathF.Ceiling((L.DeviceRect.X + L.DeviceRect.W) * scale) + rTaps);
-        maxY = Math.Min((int)_h, (int)MathF.Ceiling((L.DeviceRect.Y + L.DeviceRect.H) * scale) + rTaps);
-    }
+        => SelfBlurRegion.RegionBox(in L, scale, (int)_w, (int)_h, out minX, out minY, out maxX, out maxY);
 
     /// <summary>A valid (already-blurred) region pin for <paramref name="hash"/> whose retained region size EQUALS this
     /// frame's <see cref="RegionBox"/> (W==rw &amp;&amp; H==rh), refreshed into this frame's SRV bank, or -1. The pin is left
@@ -750,21 +872,15 @@ float4 PSMain(V i) : SV_Target
     }
 
     /// <summary>True iff this self-blur's halo-inflated region is clamped by a CANVAS edge this frame — i.e. the
-    /// UNCLAMPED <see cref="RegionBox"/> would poke outside [0,_w]×[0,_h]. A clamped region captures/needs only a PARTIAL
-    /// strip, so a position-INDEPENDENT pin (minted full while on-canvas) cannot be composited into it without vertically
-    /// squishing (<see cref="CompositePinnedBlur"/> maps the full pin's UV[0,1] onto the shorter clamped viewport). The
-    /// caller therefore treats a clamped region as UNCACHEABLE — no pin HIT (miss ⇒ the pixel-exact scissor path renders
-    /// it) and no pin MINT (a partial capture would squish later AND each distinct clamp size would mint a duplicate
-    /// same-hash pin, thrashing the budget). The full pin minted while fully on-canvas survives and serves again once the
-    /// row scrolls back within the canvas; a STATIONARY clamped row costs nothing (identical drawlist ⇒ skip-submit).</summary>
-    public bool RegionIsClamped(in PushLayerCmd L, float scale)
-    {
-        int rTaps = (int)MathF.Min(MathF.Ceiling(L.BlurSigma * 3f), 32f);
-        return (int)MathF.Floor(L.DeviceRect.X * scale) - rTaps < 0
-            || (int)MathF.Floor(L.DeviceRect.Y * scale) - rTaps < 0
-            || (int)MathF.Ceiling((L.DeviceRect.X + L.DeviceRect.W) * scale) + rTaps > (int)_w
-            || (int)MathF.Ceiling((L.DeviceRect.Y + L.DeviceRect.H) * scale) + rTaps > (int)_h;
-    }
+    /// UNCLAMPED <see cref="RegionBox"/> would poke outside [0,_w]×[0,_h] (delegates to the portable
+    /// <see cref="SelfBlurRegion.IsClamped"/>). A clamped region captures/needs only a PARTIAL strip. It can STILL be
+    /// cached: because <see cref="RegionBox"/> clamps and <see cref="FindPin"/> matches SIZE-exactly, a clamped pin is
+    /// distinct from the full on-canvas pin — no squish is possible (a mismatched size is a miss, never a stretch), so a
+    /// STATIONARY edge-clamped row HITS its own clamped pin every frame instead of re-blurring. This predicate is now
+    /// used only to gate MINTING while the layer is IN MOTION: an actively-scrolling clamped strip changes its clamp
+    /// size ~1px/frame, so minting there would churn a fresh region-sized RT every frame — the caller skips the mint in
+    /// that case (miss-render only, unchanged cost) and mints at rest.</summary>
+    public bool RegionIsClamped(in PushLayerCmd L, float scale) => SelfBlurRegion.IsClamped(in L, scale, (int)_w, (int)_h);
 
     /// <summary>True iff pin <paramref name="slot"/>'s captured integer region origin differs from this frame's region
     /// origin — i.e. the content moved since the pin was minted. Used only on a SETTLED frame (PushLayerCmd.InMotion==0)
@@ -870,41 +986,190 @@ float4 PSMain(V i) : SV_Target
         SetViewport(cmd, _w, _h);   // restore the full-canvas viewport (+ full scissor; the caller re-applies its clip)
     }
 
-    /// <summary>Separable-Gaussian-blur the group RT <paramref name="groupSlot"/> IN PLACE (the Expressive Motion Kit
-    /// self-blur). The slot holds the subtree at full alpha; this leases a scratch RT, blurs H (group → scratch) then V
-    /// (scratch → group) at dynamic σ <paramref name="sigma"/> px, releases the scratch, and leaves the group readable
-    /// (PIXEL_SHADER_RESOURCE) for the caller's <see cref="Composite"/>.
-    /// Both passes are SCISSORED to <paramref name="L"/>.DeviceRect × <paramref name="scale"/> inflated by the kernel's
-    /// tap radius (±min(ceil(3σ),32) px — the same cap BlurHlsl uses), NOT the whole canvas. The subtree's pixels live
-    /// inside DeviceRect and the kernel output is identically zero past that halo, so every non-zero tap the V pass reads
-    /// was written by the H pass inside the scissor — the result is pixel-identical to the old full-canvas blur while
-    /// touching only the layer's strip. The full viewport is kept so the fullscreen-triangle's SV_Position↔texel mapping
-    /// (canvas-sized 1:1 RT) is unchanged; only rasterization is clipped. Leaves the tight scissor set — the composite
-    /// that follows only needs the same region (content ⊆ it), and the caller restores the enclosing clip afterward.</summary>
+    /// <summary>Gaussian-blur the group RT <paramref name="groupSlot"/> IN PLACE (the Expressive Motion Kit self-blur).
+    /// The slot holds the subtree at full alpha; this blurs it at dynamic σ <paramref name="sigma"/> px and leaves the
+    /// group readable (PIXEL_SHADER_RESOURCE) for the caller's <see cref="Composite"/>. Two schedules by the Skia/Impeller
+    /// downsample factor (<see cref="AcrylicBackdropMath.DownsampleFactor"/>, σ read as sigmaPhys):
+    ///  • <b>down == 1</b> (σ ≤ 4 — lyrics DoF, the skeleton cross-blur): the EXACT full-res separable path (leases a
+    ///    canvas scratch, H group→scratch then V scratch→group), scissored to the halo-inflated device rect. Pixel-exact.
+    ///  • <b>down &gt; 1</b> (σ &gt; 4): DOWNSAMPLE the region into a bucketed scratch at 1/down, run H+V at
+    ///    <c>texelSigma = σ/down ≤ 4</c> (≤ 7 <see cref="AcrylicBackdropMath.BuildKernel"/> taps) on that small RT, then
+    ///    UPSAMPLE back into the group RT's region — ~30× fewer texture fetches at σ26 than the full-res Gaussian.
+    /// Both schedules write the SAME halo-inflated region (<see cref="RegionBox"/>) into the group RT, so the following
+    /// <see cref="Composite"/> and the pin copy (<see cref="RetainPinFromScratch"/>) are unchanged and a HIT stays
+    /// pixel-identical to a MISS. Leaves the full-canvas viewport + the region scissor set; the caller restores the clip.</summary>
     public void BlurInPlace(ID3D12GraphicsCommandList* cmd, int groupSlot, float sigma, ulong frameFence, in PushLayerCmd L, float scale)
     {
-        // The halo-inflated device rect (RegionBox = DeviceRect×scale ± ±min(ceil(3σ),32)px) — MUST match BlurHlsl's R so
-        // the scissor keeps every non-zero tap, and MUST match the blur-cache pin region (RetainPinFromScratch copies it).
+        // The halo-inflated device rect (RegionBox = DeviceRect×scale ± the kernel's actual tap support) — MUST match the
+        // blur passes' effective reach so the scissor/region keeps every non-zero tap, and MUST match the blur-cache pin
+        // region (RetainPinFromScratch copies it). SelfBlurRegion derives the halo from the SAME downsample schedule below.
         RegionBox(in L, scale, out int minX, out int minY, out int maxX, out int maxY);
         if (maxX <= minX || maxY <= minY) { BeginRead(cmd, groupSlot); return; }   // off-screen / degenerate — nothing to blur
         RECT box = new() { left = minX, top = minY, right = maxX, bottom = maxY };
 
-        int scratch = Acquire(cmd, frameFence);   // leased + cleared (WHOLE RT → transparent outside the scissor) + bound
-        // pass H: group (SRV) → scratch (RT), clipped to the halo-inflated device rect
+        // Downsample factor (Skia/Impeller): σ ≤ 4 ⇒ down 1 ⇒ the EXACT full-res separable path (small blurs — lyrics DoF,
+        // the FA-3 skeleton cross-blur — must stay pixel-exact). σ > 4 ⇒ down > 1 ⇒ downsample → blur at texelSigma ≤ 4 →
+        // upsample: the same portable schedule the acrylic path documents (AcrylicBackdropMath owns down/texelSigma/kernel).
+        // The self-blur σ is already physical px, so DownsampleFactor reads it as sigmaPhys directly (scale 1).
+        int down = AcrylicBackdropMath.DownsampleFactor(sigma, 1f);
+        if (down <= 1)
+        {
+            int scratch = Acquire(cmd, frameFence);   // leased + cleared (WHOLE RT → transparent outside the scissor) + bound
+            // pass H: group (SRV) → scratch (RT), clipped to the halo-inflated device rect
+            BeginRead(cmd, groupSlot);
+            Bind(cmd, scratch);
+            SetViewport(cmd, _w, _h);                 // full viewport (1:1 mapping); the scissor below bounds the work
+            cmd->RSSetScissorRects(1, &box);
+            BlurPass(cmd, groupSlot, sigma, 1f, 0f);
+            // pass V: scratch (SRV) → group (RT), same scissor
+            BeginRead(cmd, scratch);
+            Bind(cmd, groupSlot);
+            SetViewport(cmd, _w, _h);
+            cmd->RSSetScissorRects(1, &box);
+            BlurPass(cmd, scratch, sigma, 0f, 1f);
+            // leave the group readable for the composite; the scratch returns to the free list (same-queue reuse, no fence)
+            BeginRead(cmd, groupSlot);
+            Release(scratch);
+            return;
+        }
+
+        // ── down > 1: downsample-then-separable-Gaussian-then-upsample ───────────────────────────────────────────────
+        int regionW = maxX - minX, regionH = maxY - minY;
+        int dw = Math.Max(1, (regionW + down - 1) / down);          // ceil(region / down) — the intermediate resolution
+        int dh = Math.Max(1, (regionH + down - 1) / down);
+        float texelSigma = AcrylicBackdropMath.EffectiveTexelSigma(sigma, 1f, down);   // = σ/down ≤ 4 (exact when < 4)
+        Span<float> koff = stackalloc float[AcrylicBackdropMath.MaxTapCount];
+        Span<float> kwgt = stackalloc float[AcrylicBackdropMath.MaxTapCount];
+        int nt = AcrylicBackdropMath.BuildKernel(texelSigma, koff, kwgt);              // ≤ 7 bilinear-folded taps
+
+        int a = AcquireScratch(cmd, dw, dh, frameFence);           // bucketed small RT (region/down) — reused by size bucket
+        int b = AcquireScratch(cmd, dw, dh, frameFence);
+        int bwA = (int)_pool[a].W, bhA = (int)_pool[a].H;          // A/B share the same bucket (same dw,dh)
+
+        // pass 0: DOWNSAMPLE — group RT region [minX..maxX] → A [0..dw] (bilinear stretch, the prefilter)
         BeginRead(cmd, groupSlot);
-        Bind(cmd, scratch);
-        SetViewport(cmd, _w, _h);                 // full viewport (1:1 mapping); the scissor below bounds the work
-        cmd->RSSetScissorRects(1, &box);
-        BlurPass(cmd, groupSlot, sigma, 1f, 0f);
-        // pass V: scratch (SRV) → group (RT), same scissor
-        BeginRead(cmd, scratch);
+        Bind(cmd, a);
+        SetViewport(cmd, (uint)dw, (uint)dh);
+        CopyDsPass(cmd, groupSlot, (float)minX / _w, (float)minY / _h, (float)regionW / _w, (float)regionH / _h,
+            (float)minX / _w, (float)minY / _h, (float)maxX / _w, (float)maxY / _h);
+        // pass H: A → B at texelSigma over the downsampled scratch
+        BeginRead(cmd, a);
+        Bind(cmd, b);
+        SetViewport(cmd, (uint)dw, (uint)dh);
+        DsBlurPass(cmd, a, bwA, bhA, dw, dh, 1f, 0f, koff, kwgt, nt);
+        // pass V: B → A
+        BeginRead(cmd, b);
+        Bind(cmd, a);
+        SetViewport(cmd, (uint)dw, (uint)dh);
+        DsBlurPass(cmd, b, bwA, bhA, dw, dh, 0f, 1f, koff, kwgt, nt);
+        // pass U: UPSAMPLE — A [0..dw] → group RT region [minX..maxX] (bilinear stretch back, overwrite)
+        BeginRead(cmd, a);
         Bind(cmd, groupSlot);
+        float tx = 1f / bwA, ty = 1f / bhA;
+        float ux = (float)dw / bwA, uy = (float)dh / bhA;         // A's used-uv fraction
+        D3D12_VIEWPORT rvp = new() { TopLeftX = minX, TopLeftY = minY, Width = regionW, Height = regionH, MaxDepth = 1 };
+        cmd->RSSetViewports(1, &rvp);
+        cmd->RSSetScissorRects(1, &box);
+        CopyDsPass(cmd, a, 0f, 0f, ux, uy, tx * 0.5f, ty * 0.5f, ux - tx * 0.5f, uy - ty * 0.5f);
+        // restore the full-canvas viewport (device sets it once) + the region scissor, and leave the group readable —
+        // matching the full-res tail so the caller's Composite (a canvas-sized 1:1 pass) maps correctly.
         SetViewport(cmd, _w, _h);
         cmd->RSSetScissorRects(1, &box);
-        BlurPass(cmd, scratch, sigma, 0f, 1f);
-        // leave the group readable for the composite; the scratch returns to the free list (same-queue reuse, no fence)
         BeginRead(cmd, groupSlot);
-        Release(scratch);
+        Release(a); Release(b);
+    }
+
+    /// <summary>Lease a SMALL bucket-quantized (<see cref="AcrylicBackdropMath.BucketDim"/>) transient RT ≥ (w,h) for the
+    /// downsample-blur scratch — distinct from the canvas-sized <see cref="Acquire"/> (which the down==1 blur binds) and
+    /// from region PINS. Kept in the shared pool as a transient entry (PinHash 0) with a NON-canvas size, so the canvas
+    /// <see cref="Acquire"/>'s <c>W==_w &amp;&amp; H==_h</c> reuse guard never grabs it and this never grabs a canvas slot; a
+    /// downsampling burst (a height tween) reuses the same bucket frame-to-frame. NO managed allocation.</summary>
+    private int AcquireScratch(ID3D12GraphicsCommandList* cmd, int w, int h, ulong frameFence)
+    {
+        int bw = AcrylicBackdropMath.BucketDim(w), bh = AcrylicBackdropMath.BucketDim(h);
+        int best = -1;
+        for (int i = 0; i < MaxPool; i++)
+        {
+            ref var e = ref _pool[i];
+            if (e.Res == null || e.InUse || e.PinHash != 0) continue;   // pins are never scratch
+            if (e.W == _w && e.H == _h) continue;                        // canvas transient — leave it for Acquire
+            if ((int)e.W < bw || (int)e.H < bh) continue;
+            if (best < 0 || (long)e.W * e.H < (long)_pool[best].W * _pool[best].H) best = i;
+        }
+        if (best < 0)
+        {
+            int slot = -1;
+            for (int i = 0; i < MaxPool; i++) if (_pool[i].Res == null) { slot = i; break; }
+            if (slot < 0)
+            {
+                for (int i = 0; i < MaxPool; i++)   // LRU evict, preferring an UNPINNED (transient/scratch) victim
+                {
+                    if (_pool[i].InUse) continue;
+                    if (slot < 0) { slot = i; continue; }
+                    bool iUn = _pool[i].PinHash == 0, sUn = _pool[slot].PinHash == 0;
+                    if (iUn != sUn) { if (iUn) slot = i; continue; }
+                    if (_pool[i].LastUseFence < _pool[slot].LastUseFence) slot = i;
+                }
+                if (slot < 0) throw new InvalidOperationException("opacity-layer scratch pool exhausted");
+                _retired.Add(new Retired { Res = _pool[slot].Res, Fence = _pool[slot].LastUseFence });
+                _pool[slot] = default;
+            }
+            _pool[slot].Res = CreateTarget((uint)bw, (uint)bh, $"OpacityLayer.Scratch[{slot}]");
+            _pool[slot].State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            _pool[slot].W = (uint)bw; _pool[slot].H = (uint)bh;
+            _device->CreateRenderTargetView(_pool[slot].Res, null, Rtv(slot));
+            best = slot;
+        }
+        ref var entry = ref _pool[best];
+        entry.InUse = true;
+        entry.IdleFrames = 0;
+        entry.LastUseFence = frameFence;
+        EnsureParitySrv(ref entry, best);
+        return best;
+    }
+
+    // Bilinear stretch copy (downsample prefilter / upsample). src uv = clamp(off + uv·scale, [clMin, clMax]).
+    private void CopyDsPass(ID3D12GraphicsCommandList* cmd, int srcSlot, float offX, float offY, float sclX, float sclY,
+        float clMinX, float clMinY, float clMaxX, float clMaxY)
+    {
+        ID3D12DescriptorHeap* h = _srvHeap;
+        cmd->SetDescriptorHeaps(1, &h);
+        cmd->SetGraphicsRootSignature(_copyRoot);
+        cmd->SetPipelineState(_copyPso);
+        _scratch8[0] = offX; _scratch8[1] = offY; _scratch8[2] = sclX; _scratch8[3] = sclY;
+        _scratch8[4] = clMinX; _scratch8[5] = clMinY; _scratch8[6] = clMaxX; _scratch8[7] = clMaxY;
+        fixed (float* c = _scratch8)
+        {
+            cmd->SetGraphicsRoot32BitConstants(0, 8, c, 0);
+            cmd->SetGraphicsRootDescriptorTable(1, SrvGpu(PoolSrvSlot(srcSlot)));
+            cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            cmd->DrawInstanced(3, 1, 0, 0);
+        }
+    }
+
+    // Separable gaussian at texelSigma over the downsampled scratch, one axis per invocation. The taps come from
+    // AcrylicBackdropMath.BuildKernel (≤ 7); the shader unrolls 7 pairs with unused weights zeroed, so no dynamic indexing.
+    private void DsBlurPass(ID3D12GraphicsCommandList* cmd, int srcSlot, int bucketW, int bucketH, int usedW, int usedH,
+        float dirX, float dirY, ReadOnlySpan<float> off, ReadOnlySpan<float> wgt, int nt)
+    {
+        ID3D12DescriptorHeap* h = _srvHeap;
+        cmd->SetDescriptorHeaps(1, &h);
+        cmd->SetGraphicsRootSignature(_dsBlurRoot);
+        cmd->SetPipelineState(_dsBlurPso);
+        float tx = 1f / bucketW, ty = 1f / bucketH;
+        float ux = (float)usedW / bucketW, uy = (float)usedH / bucketH;
+        var s = _blurTaps;
+        s[0] = tx; s[1] = ty; s[2] = dirX; s[3] = dirY;                       // p0
+        s[4] = ux; s[5] = uy; s[6] = ux - tx * 0.5f; s[7] = uy - ty * 0.5f;   // p1 (usedFrac, maxUv)
+        for (int k = 0; k < 8; k++) { s[8 + k] = 0f; s[16 + k] = 0f; }        // o0/o1 + w0/w1 (unused taps → 0)
+        for (int k = 0; k < nt; k++) { s[8 + k] = off[k]; s[16 + k] = wgt[k]; }
+        fixed (float* c = s)
+        {
+            cmd->SetGraphicsRoot32BitConstants(0, 24, c, 0);
+            cmd->SetGraphicsRootDescriptorTable(1, SrvGpu(PoolSrvSlot(srcSlot)));
+            cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            cmd->DrawInstanced(3, 1, 0, 0);
+        }
     }
 
     private void BlurPass(ID3D12GraphicsCommandList* cmd, int srcSlot, float sigma, float dirX, float dirY)
@@ -1001,5 +1266,9 @@ float4 PSMain(V i) : SV_Target
         if (_blurRoot != null) _blurRoot->Release();
         if (_edgePso != null) _edgePso->Release();
         if (_edgeRoot != null) _edgeRoot->Release();
+        if (_copyPso != null) _copyPso->Release();
+        if (_copyRoot != null) _copyRoot->Release();
+        if (_dsBlurPso != null) _dsBlurPso->Release();
+        if (_dsBlurRoot != null) _dsBlurRoot->Release();
     }
 }

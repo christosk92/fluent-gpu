@@ -180,10 +180,10 @@ public readonly record struct DrawGlyphRunGradientCmd(RectF Bounds, StringId Tex
 // Tier-1 (scissor) clip: an axis-aligned DEVICE-space rect already intersected with the enclosing clip by the recorder.
 // The RHI sets the scissor to <see cref="DeviceRect"/> on PushClip and restores the previous on PopClip.
 // Tier-2 (rounded) clip: when <see cref="CornerRadius"/> > 0, <see cref="RoundedRect"/> is the clipping node's own
-// device-space box and the RHI ADDITIONALLY clamps RoundRect-pipeline primitives (fills/strokes/checker/tab) to the
+// device-space box and the RHI ADDITIONALLY clamps RoundRect, Image, and Gradient pipeline primitives to the
 // rounded-box SDF of (RoundedRect, CornerRadius) — the animated-clip-with-Corners path (AnimChannel.ClipL/T/R/B on a
-// rounded surface). Scope (documented honestly): the rounded clamp covers the RoundRect pipeline only; glyph runs,
-// images, gradients, arcs and polylines still clip rectangularly via the scissor; axis-aligned transforms only (the
+// rounded surface). Scope (documented honestly): glyph runs, arcs and polylines still clip rectangularly via the
+// scissor; axis-aligned transforms only (the
 // same caveat the tier-1 scissor already has).
 public readonly record struct ClipCmd(RectF DeviceRect, RectF RoundedRect = default, float CornerRadius = 0f);
 // An image quad. <see cref="ImageId"/> is the ImageCache handle; <see cref="Ready"/>==0 ⇒ draw <see cref="Placeholder"/>
@@ -418,10 +418,10 @@ public sealed class DrawList
         PushSort(sortKey);
     }
 
-    /// <summary>Push a tier-2 ROUNDED clip: the scissor still clamps to <paramref name="deviceRect"/>, and RoundRect-
-    /// pipeline primitives additionally clamp to the rounded-box SDF of (<paramref name="roundedRect"/>,
+    /// <summary>Push a tier-2 ROUNDED clip: the scissor still clamps to <paramref name="deviceRect"/>, and RoundRect,
+    /// Image, and Gradient pipeline primitives additionally clamp to the rounded-box SDF of (<paramref name="roundedRect"/>,
     /// <paramref name="cornerRadius"/>) — both device-space. Pair with <see cref="PopClip"/>. See <see cref="ClipCmd"/>
-    /// for the honest coverage scope (RoundRect-pipeline primitives only).</summary>
+    /// for the honest coverage scope.</summary>
     public void PushClipRounded(in RectF deviceRect, in RectF roundedRect, float cornerRadius, ulong sortKey = 0)
     {
         WriteOp(DrawOp.PushClip);

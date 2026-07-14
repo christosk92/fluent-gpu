@@ -9,6 +9,7 @@ using FluentGpu.Hooks;
 using FluentGpu.Localization;
 using FluentGpu.Signals;
 using Wavee.Core;
+using Wavee.Features.Concerts;
 using Wavee.Features.Detail;
 using static FluentGpu.Dsl.Ui;
 
@@ -230,10 +231,10 @@ sealed partial class ArtistPage : Component
         if (singles.Length > 0) sections.Add(Embed.Comp(() => new DiscographySection(uri, a.Name, DiscographyKind.Singles, Loc.Get(Strings.Artist.SinglesEps), svc, go, PlayContext, _accent)));
         if (a.AppearsOn is { Count: > 0 } appears) sections.Add(AppearsOnShelf(appears, go, PlayContext));
         if (extras?.Tour is { } tour) sections.Add(TourBannerCard(tour,
-            () => { if (extras.Concerts is { Count: > 0 } cs) PlayContext(cs[0].Uri); }));
+            () => go(ConcertRoutes.ArtistSchedule(uri), a.Name)));
         if (extras?.MusicVideos is { Count: > 0 } videos) sections.Add(MusicVideosShelf(videos, PlayContext));
         if (extras?.Playlists is { Count: > 0 } playlists) sections.Add(PlaylistsShelf(playlists, go, PlayContext));
-        if (extras?.Concerts is { Count: > 0 } concerts) sections.Add(ConcertsRow(concerts));
+        if (extras?.Concerts is { Count: > 0 } concerts) sections.Add(ConcertsRow(concerts, go));
         if (extras?.Merch is { Count: > 0 } merch) sections.Add(MerchRow(merch));
         sections.Add(BiographyBand(a, albums.Length, singles.Length, extras, fans.Length, go));
         if (extras?.Gallery is { Count: > 0 } gallery) sections.Add(GalleryStrip(gallery));

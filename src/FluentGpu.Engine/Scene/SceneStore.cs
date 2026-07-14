@@ -92,6 +92,7 @@ public sealed class SceneStore : ISceneBackend
     private Action<Point2>?[] _pointerDown;   // position-aware (local coords) press / drag handlers
     private Action<Point2>?[] _drag;
     private Action<Point2>?[] _hoverMove;     // position-aware bare-hover move (no press) — RatingControl preview, etc.
+    private Action<Point2>?[] _pointerMoveWithin; // routed mouse/pen move for a node or any descendant
     private Action?[] _pointerExit;           // fired when the pointer leaves the node (hover lost) — reset hover preview
     private Action<PointerEventArgs>?[] _pointerPressed;   // press w/ click-count + modifiers (double/triple-click, drag-select)
     private Action<PointerEventArgs>?[] _pointerReleased;  // clean release-over-press target (tap commit)
@@ -116,6 +117,7 @@ public sealed class SceneStore : ISceneBackend
     private readonly ColdSlab<ArcSpec> _arcs = new();
     private readonly ColdSlab<PolylineStrokeSpec> _polylines = new();   // GEN-17 (wired)
     private readonly ColdSlab<GradientSpec> _gradients = new();   // GEN-17 (wired)
+    private readonly ColdSlab<Point2> _radialGradientCenters = new(); // bindable normalized override for radial fills
     private readonly ColdSlab<GradientSpec> _borderBrushes = new();   // GEN-17 (wired) — gradient border stroke (elevation edge)
     // Stateful gradient variants (P4b): the recorder per-frame interpolates resting→state stops by the eased hover/press
     // progress. Sparse (O(state-gradient nodes)). Stop arrays are mount-allocated + stable — never rebuilt per frame.
@@ -206,6 +208,7 @@ public sealed class SceneStore : ISceneBackend
         _pointerDown = new Action<Point2>?[capacity];
         _drag = new Action<Point2>?[capacity];
         _hoverMove = new Action<Point2>?[capacity];
+        _pointerMoveWithin = new Action<Point2>?[capacity];
         _pointerExit = new Action?[capacity];
         _pointerPressed = new Action<PointerEventArgs>?[capacity];
         _pointerReleased = new Action<PointerEventArgs>?[capacity];
@@ -258,6 +261,7 @@ public sealed class SceneStore : ISceneBackend
         _pointerDown[idx] = null;
         _drag[idx] = null;
         _hoverMove[idx] = null;
+        _pointerMoveWithin[idx] = null;
         _pointerExit[idx] = null;
         _pointerPressed[idx] = null;
         _pointerReleased[idx] = null;
@@ -302,6 +306,7 @@ public sealed class SceneStore : ISceneBackend
         _pointerDown[idx] = null;
         _drag[idx] = null;
         _hoverMove[idx] = null;
+        _pointerMoveWithin[idx] = null;
         _pointerExit[idx] = null;
         _pointerPressed[idx] = null;
         _pointerReleased[idx] = null;
@@ -329,6 +334,7 @@ public sealed class SceneStore : ISceneBackend
             _arcs.Remove(idx);
             _polylines.Remove(idx);
             _gradients.Remove(idx);
+            _radialGradientCenters.Remove(idx);
             _borderBrushes.Remove(idx);
             _hoverGradients.Remove(idx);
             _pressedGradients.Remove(idx);
@@ -582,6 +588,8 @@ public sealed class SceneStore : ISceneBackend
     public Action<Point2>? GetDrag(NodeHandle h) => _drag[LiveIndexOrZero(h)];
     public void SetHoverMove(NodeHandle h, Action<Point2>? handler) => _hoverMove[LiveIndex(h)] = handler;
     public Action<Point2>? GetHoverMove(NodeHandle h) => _hoverMove[LiveIndexOrZero(h)];
+    public void SetPointerMoveWithin(NodeHandle h, Action<Point2>? handler) => _pointerMoveWithin[LiveIndex(h)] = handler;
+    public Action<Point2>? GetPointerMoveWithin(NodeHandle h) => _pointerMoveWithin[LiveIndexOrZero(h)];
     public void SetPointerExit(NodeHandle h, Action? handler) => _pointerExit[LiveIndex(h)] = handler;
     public Action? GetPointerExit(NodeHandle h) => _pointerExit[LiveIndexOrZero(h)];
     public void SetPointerPressed(NodeHandle h, Action<PointerEventArgs>? handler) => _pointerPressed[LiveIndex(h)] = handler;
@@ -1135,6 +1143,26 @@ public sealed class SceneStore : ISceneBackend
     public bool TryGetGradient(NodeHandle h, out GradientSpec g) => _gradients.TryGet((int)h.Raw.Index, out g);
     public void ClearGradient(NodeHandle h) { int idx = (int)h.Raw.Index; _gradients.Remove(idx); MarkRecordDirty(idx); }
 
+    public void SetRadialGradientCenter(NodeHandle h, Point2 center)
+    {
+        int idx = (int)h.Raw.Index;
+        if (_radialGradientCenters.TryGet(idx, out Point2 current) && current == center) return;
+        _flags[idx] |= NodeFlags.SparsePaint;
+        _radialGradientCenters.GetOrAdd(idx) = center;
+        _flags[idx] |= NodeFlags.PaintDirty;
+        MarkRecordDirty(idx);
+    }
+    public bool TryGetRadialGradientCenter(NodeHandle h, out Point2 center)
+        => _radialGradientCenters.TryGet((int)h.Raw.Index, out center);
+    public void ClearRadialGradientCenter(NodeHandle h)
+    {
+        int idx = (int)h.Raw.Index;
+        if (!_radialGradientCenters.TryGet(idx, out _)) return;
+        _radialGradientCenters.Remove(idx);
+        _flags[idx] |= NodeFlags.PaintDirty;
+        MarkRecordDirty(idx);
+    }
+
     public void SetBorderBrush(NodeHandle h, in GradientSpec g)
     {
         int idx = (int)h.Raw.Index;
@@ -1316,7 +1344,7 @@ public sealed class SceneStore : ISceneBackend
         Array.Resize(ref _recordDirtyWrote, n);
         if (_recordDirtyWroteCount > n) _recordDirtyWroteCount = n;
         Array.Resize(ref _click, n); Array.Resize(ref _boundsChanged, n); Array.Resize(ref _boundsDelivered, n); Array.Resize(ref _keyHandler, n); Array.Resize(ref _charHandler, n);
-        Array.Resize(ref _pointerDown, n); Array.Resize(ref _drag, n); Array.Resize(ref _hoverMove, n); Array.Resize(ref _pointerExit, n);
+        Array.Resize(ref _pointerDown, n); Array.Resize(ref _drag, n); Array.Resize(ref _hoverMove, n); Array.Resize(ref _pointerMoveWithin, n); Array.Resize(ref _pointerExit, n);
         Array.Resize(ref _pointerPressed, n); Array.Resize(ref _pointerReleased, n); Array.Resize(ref _pointerWheel, n); Array.Resize(ref _contextRequested, n);
         Array.Resize(ref _focusChanged, n);
         Array.Resize(ref _dragStarted, n); Array.Resize(ref _dragDelta, n);

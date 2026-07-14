@@ -46,6 +46,16 @@
                     }
                   ]
                 },
+                "images": {
+                  "items": [
+                    {
+                      "extractedColors": { "colorDark": { "hex": "#0E79CF" } },
+                      "sources": [
+                        { "url": "https://example.invalid/images/concert-cover.jpg" }
+                      ]
+                    }
+                  ]
+                },
                 "location": { "city": "Example City", "name": "Example Arena" },
                 "startDateIsoString": "2030-10-18T19:30:00+02:00",
                 "title": "Nearby Artist",

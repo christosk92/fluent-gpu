@@ -165,6 +165,34 @@ public sealed class LibraryStore
         return (long)(before - (_details.Count + _artistDetails.Count)) * 24_000;   // rough: a detail model averages tens of KB
     }
 
+    /// <summary>Resident per-entity detail-cache entry count (census attribution): the master-detail models + the
+    /// standalone-artist models. UI-thread read (the census runs on the frame thread that mutates these).</summary>
+    public int DetailCount => _details.Count + _artistDetails.Count;
+
+    /// <summary>Pin every uri reachable from a cached detail model so the entity evictor never sheds the working set a
+    /// still-cached page will re-render: each detail's context/album/playlist uri + its track rows + its billed artists,
+    /// and each cached artist's own uri + its top-track / top-album child uris. On-demand (called inside the shed
+    /// callback); reads the Loadable values with Peek (no signal subscription). UI-thread, like the caches themselves.</summary>
+    public void CollectPinnedUris(ISet<string> pins)
+    {
+        foreach (var cell in _details.Values)
+        {
+            var m = cell.Value.Peek();                     // the seed (or the loaded model) — never null
+            if (m.ContextUri is { Length: > 0 } cu) pins.Add(cu);
+            var tracks = m.Tracks;
+            for (int i = 0; i < tracks.Count; i++) if (tracks[i].Uri is { Length: > 0 } tu) pins.Add(tu);
+            var artists = m.Artists;
+            for (int i = 0; i < artists.Count; i++) if (artists[i].Uri is { Length: > 0 } au) pins.Add(au);
+        }
+        foreach (var (uri, cell) in _artistDetails)
+        {
+            pins.Add(uri);
+            var a = cell.Value.Peek();
+            if (a.TopTracks is { } top) for (int i = 0; i < top.Count; i++) if (top[i].Uri is { Length: > 0 } tu) pins.Add(tu);
+            if (a.TopAlbums is { } albums) for (int i = 0; i < albums.Count; i++) if (albums[i].Uri is { Length: > 0 } bu) pins.Add(bu);
+        }
+    }
+
     void InvalidateWhere(Func<string, bool> match)
     {
         List<string>? keys = null;

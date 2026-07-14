@@ -6,7 +6,7 @@ using static TerraFX.Interop.Windows.Windows;
 
 namespace FluentGpu.Rhi.D3D12;
 
-/// <summary>CPU mirror of the HLSL image <c>Inst</c> (96 B). Like <see cref="RectInstance"/> but sampled from a
+/// <summary>CPU mirror of the HLSL image <c>Inst</c> (128 B). Like <see cref="RectInstance"/> but sampled from a
 /// per-image texture, with a premultiplied placeholder colour + cross-fade factor for the media-pipeline §7
 /// placeholder→image blend (CrossFade=1 ⇒ full image), and an atlas sub-rect UV (origin+size in the page; (0,0,1,1)
 /// for a standalone/whole-texture image, a cell for an atlas-packed thumbnail).</summary>
@@ -20,6 +20,8 @@ internal struct ImageInstance
     public float Opacity, CrossFade;           // 56
     public float PR, PG, PB, PA;               // 64 placeholder (premultiplied) for the cross-fade lerp
     public float UvX, UvY, UvW, UvH;           // 80 atlas sub-rect (origin + size); (0,0,1,1) = whole texture
+    public float ClipX, ClipY, ClipW, ClipH;    // 96 tier-2 rounded clip in world/device-independent coordinates
+    public float ClipR, Pad0, Pad1, Pad2;       // 112; ClipW <= 0 = none
 }
 
 /// <summary>
@@ -47,12 +49,12 @@ internal sealed unsafe class ImagePipeline : IDisposable
     public int DroppedInstances => _dropped;
 
     private const string Hlsl = """
-struct Inst { float2 pos; float2 size; float4 radii; float4 m; float2 t; float opacity; float crossFade; float4 ph; float4 atlasUv; };
+struct Inst { float2 pos; float2 size; float4 radii; float4 m; float2 t; float opacity; float crossFade; float4 ph; float4 atlasUv; float4 clip; float clipR; float3 pad; };
 StructuredBuffer<Inst> gInst : register(t1);
 Texture2D gTex : register(t0);
 SamplerState gSamp : register(s0);
 cbuffer Root : register(b0) { float2 gViewport; };
-struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; float2 local : TEXCOORD1; float2 halfSize : TEXCOORD2; float4 radii : TEXCOORD3; float opacity : TEXCOORD4; float crossFade : TEXCOORD5; float4 ph : TEXCOORD6; float4 atlasUv : TEXCOORD7; };
+struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; float2 local : TEXCOORD1; float2 halfSize : TEXCOORD2; float4 radii : TEXCOORD3; float opacity : TEXCOORD4; float crossFade : TEXCOORD5; float4 ph : TEXCOORD6; float4 atlasUv : TEXCOORD7; float4 clip : TEXCOORD8; float clipR : TEXCOORD9; float2 world : TEXCOORD10; };
 
 VSOut VSMain(float2 corner : POSITION, uint iid : SV_InstanceID)
 {
@@ -70,6 +72,9 @@ VSOut VSMain(float2 corner : POSITION, uint iid : SV_InstanceID)
     o.crossFade = it.crossFade;
     o.ph = it.ph;
     o.atlasUv = it.atlasUv;
+    o.clip = it.clip;
+    o.clipR = it.clipR;
+    o.world = world;
     return o;
 }
 
@@ -84,6 +89,14 @@ float4 PSMain(VSOut i) : SV_Target
     float d = min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
     float fw = max(fwidth(d), 1e-4);
     float cov = clamp(0.5 - d / fw, 0.0, 1.0);          // rounded-corner clip, crisp ~1px AA
+    if (i.clip.z > 0.0)
+    {
+        float2 cp = i.world - (i.clip.xy + i.clip.zw * 0.5);
+        float cr = min(i.clipR, min(i.clip.z, i.clip.w) * 0.5);
+        float2 cq = abs(cp) - (i.clip.zw * 0.5 - cr);
+        float cd = min(max(cq.x, cq.y), 0.0) + length(max(cq, 0.0)) - cr;
+        cov *= clamp(0.5 - cd / max(fwidth(cd), 1e-4), 0.0, 1.0);
+    }
     return col * (cov * i.opacity);                     // scale rgb AND a (premultiplied)
 }
 """;

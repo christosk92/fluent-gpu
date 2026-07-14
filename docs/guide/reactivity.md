@@ -50,6 +50,20 @@ Every bindable channel is ONE `Prop<T>` property with **three accepted forms**: 
 > **Rule:** a bind thunk must read `.Value` (subscribes), not `.Peek()`. And prefer a transform/opacity/fill bind over
 > a width/height/text bind when you can express the change as a transform — it skips layout entirely.
 
+Because the thunk is mount-owned, do not close over a value computed by a component render and expect a later render
+to replace it. Move the reactive read inside the thunk:
+
+```csharp
+int snapshot = selected.Value;
+new TextEl(Prop.Of(() => $"selected {snapshot}"));       // wrong: snapshot freezes at mount (FGRP002)
+new TextEl(Prop.Of(() => $"selected {selected.Value}")); // correct: the mounted bind subscribes directly
+```
+
+Bound virtual rows have the same rule for both halves of their identity: the slot index **and the collection source**
+must be reactive. Prefer `BoundItems.From(...)` / `BoundItems.Project(...)` with the typed
+`ItemsView.CreateBound<T>` overload; `BoundItemScope<T>.Item` resolves one current source snapshot and the recycled
+slot index together, so a same-count collection replacement cannot leave one cell bound to the mount-time list.
+
 ### 2. Granular re-render — re-render one component's subtree
 `UseState`/`UseSignal` read in `Render()` subscribe the component's **render-effect**. A write re-renders only that
 component's subtree (+ a scoped relayout). This is the familiar React style — now granular by construction.

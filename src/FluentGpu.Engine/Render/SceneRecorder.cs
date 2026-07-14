@@ -878,7 +878,11 @@ public static class SceneRecorder
                 // fill ≈ black@10%) the opaque ring shows straight through → a solid grey chip. A hollow ring composites
                 // correctly over ANY fill opacity, exactly like the gradient-border path always has.
                 if (hasGradFill)
-                    EmitGradient(dl, local, p.Corners, in g, in hg, hasHG, in pg, hasPG, gHoverT, gPressT, world, opacity, key);
+                {
+                    bool hasRadialCenter = scene.TryGetRadialGradientCenter(node, out Point2 radialCenter);
+                    EmitGradient(dl, local, p.Corners, in g, in hg, hasHG, in pg, hasPG, gHoverT, gPressT,
+                        hasRadialCenter, radialCenter, world, opacity, key);
+                }
                 else if (fill.A > 0f)
                     dl.FillRoundRect(local, p.Corners, fill, world, opacity, key);
 
@@ -1595,7 +1599,7 @@ public static class SceneRecorder
 
     private static void EmitGradient(DrawList dl, in RectF local, in CornerRadius4 corners, in GradientSpec g,
         in GradientSpec hover, bool hasHover, in GradientSpec pressed, bool hasPressed, float hoverT, float pressT,
-        in Affine2D world, float opacity, ulong key)
+        bool hasRadialCenter, Point2 radialCenter, in Affine2D world, float opacity, ulong key)
     {
         // axis endpoints in local 0..1: linear from the angle (0 = →, 90 = ↓); radial carries its origin in `start`
         // and origin+radius in `end` (the shader reconstructs centre/radius from them).
@@ -1604,8 +1608,9 @@ public static class SceneRecorder
         Point2 start, end;
         if (g.Shape == GradientShape.Radial)
         {
-            start = g.RadialCenter;
-            end = new Point2(g.RadialCenter.X + g.RadialRadius.X, g.RadialCenter.Y + g.RadialRadius.Y);
+            Point2 center = hasRadialCenter ? radialCenter : g.RadialCenter;
+            start = center;
+            end = new Point2(center.X + g.RadialRadius.X, center.Y + g.RadialRadius.Y);
         }
         else
         {

@@ -206,6 +206,15 @@ public sealed class DecodeScheduler
 }
 ```
 
+> **As built (2026-07):** the `SlabAllocator<StagingBlock>` shipped as `PixelBufferPool` (`FluentGpu.Engine/Media/`) —
+> a thread-safe pow2-bucket (16 KB–16 MB) pool with a **retained cap of 32 MB** (`DefaultRetainedCapBytes`, hardcoded,
+> no env knob): `Rent` always succeeds (fresh alloc on a bucket miss, exact-size unpooled past 16 MB), `Return` parks
+> only while retained bytes stay under the cap and otherwise drops the array for the GC, and `Trim` releases all parked
+> arrays on the ~30 s idle cadence. ONE pool is shared by the decode workers (dst BGRA buffers) and the async-upload
+> copies (`AppHost.PixelPool` → `ImageUploadQueue.BufferPool` → render-side `ReturnUploadBuffer`), so both draw on one
+> budget. The interim `ArrayPool<byte>.Shared` shortcut retained ~300 MB (8 arrays/bucket × per-core partitions); only
+> the encoded **fetch** buffer (`FetchResult`, contract-bound) still rides `ArrayPool.Shared`.
+
 **Worker job (pure; touches no Scene, no RhiTable, no fence — `hardened-v1-plan.md` §2 WORKER rule):**
 ```
 DecodeJob(req):
@@ -572,7 +581,7 @@ exact field the playback clock writes. No new opcode (no `DrawLyricsRun`); no Te
 | Path | Mechanism |
 |---|---|
 | Decode requests/results across threads | POD `DecodeRequest`/`UploadRequest` over a bounded `Channel` + lock-free MPSC ring; no boxing |
-| CPU pixels | recycled `SlabAllocator<StagingBlock>`, bucket-sized; the only off-loop alloc is the OS fetch buffer (per-worker AllocScope) |
+| CPU pixels | recycled `PixelBufferPool` (as-built `SlabAllocator<StagingBlock>`), pow2 buckets 16 KB–16 MB, 32 MB retained cap; warm rent/return is zero-alloc (bucket hit), over-cap Return drops to GC; the only off-loop alloc is the OS fetch buffer (per-worker AllocScope) |
 | `UseImage` deps | `ReadOnlySpan<DepKey>` over `[InlineArray]` `DepDeps` (`dotnet10` §3) — 0 heap ≤4 deps |
 | `UseImage` effect state | struct-state via `IPlatformAppLoop.Post<TState>` (no closure box) |
 | Phase-13 upload | `CopyBufferToTexture` into a POOLED texture; `CreateTexture`/`ComPtr` root only on cold pool growth → phase 13 is 0-managed-alloc |

@@ -116,10 +116,15 @@ public static class FluentApp
 
         // Real image pipeline: WIC constrained decode on a worker pool, behind a disk-cached HTTP/2 fetcher.
         using var imageFetcher = new DefaultImageFetcher(diskCache: new DiskImageCache());
-        using var imageDecoder = new DecodeScheduler(new WicImageCodec(), imageFetcher);
+        // ONE bounded CPU pixel pool for the whole pipeline: decode BGRA buffers (workers) + async-upload copies (UI)
+        // share the DefaultRetainedCapBytes budget (media-pipeline.md §3 staging blocks, as built).
+        var pixelPool = new PixelBufferPool();
+        using var imageDecoder = new DecodeScheduler(new WicImageCodec(), imageFetcher,
+            new DecodeOptions { PixelPool = pixelPool });
         var images = new ImageCache(imageDecoder, ImageCacheBudgetBytes());
 
         using var host = new AppHost(app, window, device, fonts, strings, root(), images);
+        host.PixelPool = pixelPool;   // before the first RunFrame
         host.SmoothScroll = true;   // inertial wheel scrolling + auto-hiding scrollbars (the real-app default)
         // App-set ambient power throttle (>0): pace perpetual loop animation (spinner/shimmer/equalizer/media-playhead) to
         // this rate so a never-idling app (one with always-on ambient motion) doesn't free-run the whole render+present

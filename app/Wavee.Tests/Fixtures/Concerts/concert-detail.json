@@ -11,6 +11,14 @@
             "_uri": "spotify:artist:example-artist",
             "data": {
               "__typename": "Artist",
+              "headerImage": {
+                "data": {
+                  "__typename": "ImageV2",
+                  "sources": [
+                    { "maxHeight": 1140, "maxWidth": 2660, "url": "https://example.invalid/images/lineup-header.jpg" }
+                  ]
+                }
+              },
               "profile": { "name": "Example Artist" },
               "uri": "spotify:artist:example-artist",
               "visuals": {
@@ -94,7 +102,29 @@
           {
             "_uri": "spotify:concert:related-example",
             "data": {
-              "artists": { "items": [] },
+              "artists": {
+                "items": [
+                  {
+                    "data": {
+                      "profile": { "name": "Related Artist" },
+                      "uri": "spotify:artist:related-artist",
+                      "visuals": {
+                        "headerImage": {
+                          "extractedColors": { "colorDark": { "hex": "#A9635C", "isFallback": false } },
+                          "sources": [
+                            { "height": 1140, "url": "https://example.invalid/images/related-header.jpg", "width": 2660 }
+                          ]
+                        },
+                        "avatarImage": {
+                          "sources": [
+                            { "height": 640, "url": "https://example.invalid/images/related-avatar.jpg", "width": 640 }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                ]
+              },
               "festival": true,
               "location": {
                 "city": "Nearby City",

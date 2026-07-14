@@ -81,6 +81,13 @@
     <Compile Include="..\Wavee\Features\Detail\DetailLayoutBreakpoints.cs" />
     <!-- concert schedule/detail hysteresis + wide-editorial metrics (BCL only) -->
     <Compile Include="..\Wavee\Features\Concerts\ConcertLayout.cs" />
+    <Compile Include="..\Wavee\Features\Concerts\ConcertRoutes.cs" />
+    <!-- pure schedule shaping (chronological sort/dedup) + geolocation-status → message map (Wavee.Core + FluentGpu.Pal) -->
+    <Compile Include="..\Wavee\Features\Concerts\ConcertScheduleModel.cs" />
+    <!-- pure detail shaping: ticket-URL validation, price/availability/sale-window formatting, status/location lines -->
+    <Compile Include="..\Wavee\Features\Concerts\ConcertDetailModel.cs" />
+    <!-- pure hub decisions: concept toggle/survival, inferred location label, feed emptiness -->
+    <Compile Include="..\Wavee\Features\Concerts\ConcertHubModel.cs" />
     <!-- library collapse breakpoint hysteresis (BCL only) — LibraryLayoutBreakpointTests -->
     <Compile Include="..\Wavee\Features\Library\LibraryLayoutBreakpoints.cs" />
     <!-- vertical track-detail hero layout resolver (BCL only) — DetailVerticalLayoutTests -->
@@ -110,6 +117,9 @@
     <Compile Include="..\Wavee\SpotifyLive\SpotifyWhatsNewService.cs" />
     <Compile Include="..\Wavee\SpotifyLive\PathfinderClient.cs" />
     <Compile Include="..\Wavee\SpotifyLive\PathfinderResource.cs" />
+    <Compile Include="..\Wavee\SpotifyLive\ConcertPathfinderRequests.cs" />
+    <Compile Include="..\Wavee\SpotifyLive\ConcertPathfinderMapper.cs" />
+    <Compile Include="..\Wavee\SpotifyLive\SpotifyConcertService.cs" />
     <Compile Include="..\Wavee\SpotifyLive\ExtractedColorCache.cs" />
     <!-- audio resilience surfaces (all protobuf-free) source-included so the key-resolver / provisioner / IPC-manager
          resilience + error paths are unit-tested without referencing the Windows Wavee assembly. -->
@@ -139,6 +149,20 @@
 
   <ItemGroup>
     <None Include="Fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- The loc-keys generator (same wiring as app/Wavee): source-included files reference the generated `Strings`
+       consts, so the test compilation needs the same base catalog + analyzer. Loc.Get falls back to the key at
+       runtime here — tests assert distinctness/shape, never localized copy. -->
+  <PropertyGroup>
+    <FluentGpuLocNamespace>Wavee</FluentGpuLocNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <AdditionalFiles Include="..\Wavee\assets\loc\en-US.json" FluentGpuLocBase="true" />
+    <CompilerVisibleItemMetadata Include="AdditionalFiles" MetadataName="FluentGpuLocBase" />
+    <CompilerVisibleProperty Include="FluentGpuLocNamespace" />
+    <ProjectReference Include="..\..\src\FluentGpu.SourceGen\FluentGpu.SourceGen.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup Condition="Exists('..\Wavee.PlayPlay\Client\InProcessPlayPlayKeyDeriver.cs')">

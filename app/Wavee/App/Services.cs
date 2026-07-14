@@ -107,6 +107,12 @@ public sealed class Services
     public SwitchableSpotifyNotificationsService SpotifyNotifications { get; }
     /// <summary>"What's New" (new releases/episodes from followed artists). Stable wrapper; live provider installed after login.</summary>
     public SwitchableWhatsNewService WhatsNew { get; }
+    /// <summary>Concert discovery (artist schedules, hub feed, location controls). Stable wrapper; the live Spotify
+    /// Pathfinder adapter is installed after login, offline/fake it is the permanently-offline <see cref="NullConcertService"/>.</summary>
+    public SwitchableConcertService Concerts { get; }
+    /// <summary>One-shot OS geolocation (the "Use my location" concert flow). App/OS-scoped → hand-wired here like the other
+    /// OS services (never switchable). Requested ONLY on an explicit user action; constructing it prompts nothing.</summary>
+    public FluentGpu.Pal.IGeolocationProvider Geolocation { get; }
     /// <summary>The app-update seam. App-scoped → no switchable; the Null stub is permanent until a real updater ships.</summary>
     public IAppUpdateService AppUpdate { get; }
     /// <summary>The notification-center bridge (four categories → one aggregated feed + bell badge). Read via <see cref="NotificationCenterBridge.Slot"/>.</summary>
@@ -120,6 +126,19 @@ public sealed class Services
     /// and driven by a periodic OS-memory-pressure poll (WaveeApp). Steady-state growth is already bounded by each cache's
     /// own LRU cap; the governor sheds FURTHER under real memory pressure. (Was dead code — only referenced by tests.)</summary>
     public Wavee.Backend.Residency.MemoryGovernor Residency { get; } = new();
+
+    // Entity-residency caps (hardcoded good defaults, no env knobs). The governor arena (priority 3, CRITICAL-only) sheds
+    // resident entities down to EntityResidencyCap using the reachability pin-set; SavedHeadPinCount bounds how many members
+    // of each saved set the pin-set keeps warm so a collection page still paints without a cold round-trip. The always-on
+    // 12k→8k upsert backstop in InMemoryStore is the real week-long bound; these size the pressure-driven top-up.
+    const int EntityResidencyCap = 4000;
+    const int SavedHeadPinCount = 200;
+
+    /// <summary>App-side census contributor for the engine's FG_MEM_DIAG <c>[memcensus]</c> block: the entity-store + cache
+    /// attribution line. The Windows host composes this into <c>AppHost.GpuDetail</c> (wired in <c>Program</c>'s
+    /// DiagnosticRun, which runs once per launch); set on app mount. Built on demand at census cadence — never per frame.
+    /// Null ⇒ no app line. Last-writer-wins is fine (one Services per process; tests don't set it).</summary>
+    public static System.Func<string>? MemCensusHook;
 
     Services(IWaveeLog log, ISpotifySession session, IMusicLibrary library,
              IPlaybackPlayer player, IConnectDevices devices, ILyricsProvider lyrics, IAppSettings settings, IMutationSource mutations,
@@ -145,6 +164,8 @@ public sealed class Services
         // Notification center: the four category sources + the aggregation bridge (the friend-activity seam pattern).
         SpotifyNotifications = new SwitchableSpotifyNotificationsService(new NullSpotifyNotificationsService());
         WhatsNew = new SwitchableWhatsNewService(new NullWhatsNewService());
+        Concerts = new SwitchableConcertService(new NullConcertService());   // live Pathfinder adapter installed on go-live
+        Geolocation = new FluentGpu.WindowsApi.Location.WindowsGeolocationProvider();   // OS one-shot; no prompt until used
         AppUpdate = new NullAppUpdateService();
         Notifications = new NotificationCenterBridge(Activity, SpotifyNotifications, WhatsNew, AppUpdate, settings,
             new ActivityUndoExecutor(LibraryBridge, library, Activity));
@@ -153,6 +174,43 @@ public sealed class Services
         // instant; the LRU insert-cap already bounds steady state). The entity-store "unpinned drop" (priority 3/4) is the
         // documented follow-up — it needs a reachability pin-set to evict live entities safely.
         Residency.Register(2, "detail-cache", () => LibraryStore.ShedDetails(keep: 16));
+        // Priority 3 = "unpinned entities" (shed only under CRITICAL OS pressure, per the governor tiers). The reachability
+        // pin-set is built ON DEMAND inside the callback — no steady-state bookkeeping. Null RealStore (fake backend) ⇒ a
+        // no-op 0, and the ?. short-circuit means BuildPinSet never even runs there. The closure captures `this`; RealStore
+        // is populated by CreateReal after construction, long before the 30 s poll first fires.
+        Residency.Register(3, "entity-store",
+            () => (RealStore as Wavee.Backend.Persistence.CachedStore)?.ShedEntities(BuildPinSet(), EntityResidencyCap) ?? 0L);
+    }
+
+    /// <summary>Build the entity-eviction pin-set on demand (inside the shed callback): the now-playing + queue uris, the
+    /// uris a still-cached detail model will re-render, and the saved-set heads. UI-thread (the governor Trim is posted to
+    /// the UI thread); Peek reads never subscribe.</summary>
+    System.Collections.Generic.ISet<string> BuildPinSet()
+    {
+        var pins = new System.Collections.Generic.HashSet<string>(System.StringComparer.Ordinal);
+        if (Playback.CurrentTrack.Peek()?.Uri is { Length: > 0 } cur) pins.Add(cur);
+        if (Playback.CurrentContext.Peek() is { Length: > 0 } ctx) pins.Add(ctx);
+        var queue = Playback.Queue.Peek();
+        for (int i = 0; i < queue.Count; i++) if (queue[i].Track.Uri is { Length: > 0 } qu) pins.Add(qu);
+        LibraryStore.CollectPinnedUris(pins);
+        (RealStore as Wavee.Backend.Persistence.CachedStore)?.CollectSavedHeads(pins, SavedHeadPinCount);
+        return pins;
+    }
+
+    /// <summary>One compact app census line for the FG_MEM_DIAG report (see <see cref="MemCensusHook"/>). Built on demand.</summary>
+    public string CensusLine()
+    {
+        var sb = new System.Text.StringBuilder(160);
+        if (RealStore is Wavee.Backend.Persistence.CachedStore cs)
+        {
+            var c = cs.EntityCounts;
+            sb.Append(System.Globalization.CultureInfo.InvariantCulture,
+                $"store t={c.Tracks} al={c.Albums} ar={c.Artists} pl={c.Playlists} sh={c.Shows} ep={c.Episodes} v={c.Versions} estMB={cs.EstimatedEntityBytes / (1024.0 * 1024):0.0}");
+            if (cs.HasEvictedEntities) sb.Append(" evicted");
+        }
+        else sb.Append("store (fake)");
+        sb.Append(System.Globalization.CultureInfo.InvariantCulture, $" | detail={LibraryStore.DetailCount}");
+        return sb.ToString();
     }
 
     /// <summary>The fake wiring that drives the skeleton with in-memory data (no network). Persistence is real (the
@@ -323,6 +381,7 @@ public sealed class Services
         Friends.SetInner(new NullFriendActivityService());   // presence feed back offline until the next live login
         SpotifyNotifications.SetInner(new NullSpotifyNotificationsService());   // gander + what's-new feeds back offline
         WhatsNew.SetInner(new NullWhatsNewService());
+        Concerts.SetInner(new NullConcertService());   // concert discovery back offline until the next live login
         ArtistStats.SetInner(new NullArtistStatsService());   // drop the session-bound overview provider until the next live login
         MutTransport?.SetInner(new Wavee.Backend.StubTransport());   // writes return to the inert stub (queue in the durable outbox, replay on next login)
         if (RealMutationSource is { } mutSrc) mutSrc.ScheduleDrain = null;   // back to inline drains — the loop is torn down with the host

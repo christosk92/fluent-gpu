@@ -192,11 +192,16 @@ sealed partial class SettingsPage
     static string ResidentCacheDescription(Wavee.Backend.Persistence.CachedStore? cold)
     {
         if (cold is null) return Loc.Get(Strings.Settings.Storage.ResidentCacheSub);
-        return Loc.Format("settings.storage.residentCacheStats",
+        string membership = Loc.Format("settings.storage.residentCacheStats",
             ("used", FmtBytes(cold.ResidentMembershipBytes)),
             ("cap", FmtBytes(cold.MaxResidentBytes)),
             ("count", cold.ResidentMembershipCount),
             ("max", cold.MaxResidentPlaylists));
+        // Entity-store census (attribution for the ~92 MB resident-string floor — the residency plan). Compact + diagnostic,
+        // appended on one line; deliberately developer-facing (raw counts), so not routed through the loc tables.
+        var c = cold.EntityCounts;
+        string entities = $" · entities t={c.Tracks} al={c.Albums} ar={c.Artists} pl={c.Playlists} sh={c.Shows} ep={c.Episodes} (~{FmtBytes(cold.EstimatedEntityBytes)})";
+        return membership + entities;
     }
 
     Element StorageTab(Services? svc, Action<Action> post)

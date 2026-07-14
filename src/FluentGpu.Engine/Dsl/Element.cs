@@ -111,6 +111,10 @@ public sealed record BoxEl : Element
     public ShadowSpec? Shadow { get; init; }       // soft drop shadow / elevation, drawn beneath the fill
     public ArcSpec? Arc { get; init; }             // circular-arc stroke (ProgressRing) — SDF ring trimmed to a sweep
     public GradientSpec? Gradient { get; init; }   // gradient fill — supersedes Fill at record time when set
+    /// <summary>Optional bindable radial-gradient origin in normalized element coordinates. A non-finite static value
+    /// keeps <see cref="GradientSpec.RadialCenter"/> as the source of truth; a signal updates paint only, without a
+    /// component render or gradient-spec rebuild (pointer-driven spotlight/reveal effects).</summary>
+    public Prop<Point2> RadialGradientCenter { get; init; } = new Point2(float.NaN, float.NaN);
     public GradientSpec? BorderBrush { get; init; }// gradient border stroke (WinUI ControlElevationBorderBrush); needs BorderWidth > 0
     // Stateful gradient variants: the recorder per-frame interpolates the resting gradient's stops toward these by the
     // eased hover/press progress (same HoverT/PressT that cross-fades a solid Fill). Must share the resting stop count.
@@ -186,6 +190,10 @@ public sealed record BoxEl : Element
     /// <summary>Position-aware BARE hover (local coords), fired on pointer move while hovering with no button down —
     /// e.g. RatingControl filling stars to the cursor on hover. Makes the node hit-testable so it receives hover.</summary>
     public Action<Point2>? OnHoverMove { get; init; }
+    /// <summary>Routed mouse/pen move in this node's local coordinates while the pointer is anywhere in its subtree.
+    /// Delivered leaf-to-root, including when an interactive child is the hit leaf. Suppressed for touch and capture/
+    /// drag paths. Intended for allocation-free container effects such as a pointer-tracked spotlight.</summary>
+    public Action<Point2>? OnPointerMoveWithin { get; init; }
     /// <summary>Fired when the pointer LEAVES this node (loses hover) — to reset a hover preview to its resting state
     /// (RatingControl reverting to the committed rating, a ToolTip dismissing). Makes the node hit-testable.</summary>
     public Action? OnPointerExit { get; init; }

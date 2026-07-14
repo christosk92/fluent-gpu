@@ -1,14 +1,21 @@
 namespace Wavee.Core;
 
 /// <summary>An artist displayed in a concert lineup. The image and URI are optional because some providers expose
-/// billing text before they resolve the artist to a catalog entity.</summary>
-public sealed record ConcertArtist(string Name, string? Uri = null, Image? Image = null);
+/// billing text before they resolve the artist to a catalog entity. <paramref name="HeaderImage"/> is the artist's
+/// wide full-bleed banner (lineup <c>headerImage.data</c> or related <c>visuals.headerImage</c>); <paramref name="AccentColor"/>
+/// is that banner's extracted dark tone (opaque ARGB) when the branch carries it — null otherwise.</summary>
+public sealed record ConcertArtist(
+    string Name,
+    string? Uri = null,
+    Image? Image = null,
+    Image? HeaderImage = null,
+    uint? AccentColor = null);
 
 /// <summary>Provider-neutral coordinates for a concert venue or selected discovery location.</summary>
 public sealed record GeoCoordinates(double Latitude, double Longitude);
 
-/// <summary>A reusable concert-discovery location. <paramref name="Id"/> is the provider's stable place identifier;
-/// it is deliberately opaque so the domain is not tied to GeoNames.</summary>
+/// <summary>A reusable concert-discovery location. <paramref name="Id"/> is the provider's stable place identifier
+/// when one is available (otherwise empty); it is deliberately opaque so the domain is not tied to GeoNames.</summary>
 public sealed record ConcertPlace(
     string Id,
     string Name,
@@ -81,4 +88,63 @@ public sealed record ConcertFeedSection(
 /// unchanged; callers must not decode it or infer a total count from it.</summary>
 public sealed record ConcertFeedPage(
     IReadOnlyList<ConcertFeedSection> Sections,
-    string? PaginationKey = null);
+    string? PaginationKey = null)
+{
+    /// <summary>Appends a sequential page while preserving section order and removing duplicate canonical concert
+    /// URIs. The next page's opaque pagination key replaces the current one unchanged.</summary>
+    public ConcertFeedPage Append(ConcertFeedPage next)
+    {
+        ArgumentNullException.ThrowIfNull(next);
+
+        var seenConcerts = new HashSet<string>(StringComparer.Ordinal);
+        var seenPromotions = new HashSet<string>(StringComparer.Ordinal);
+        var merged = new List<ConcertFeedSection>(Sections.Count + next.Sections.Count);
+
+        foreach (var section in Sections)
+            merged.Add(Deduplicate(section, seenConcerts, seenPromotions));
+
+        foreach (var incoming in next.Sections)
+        {
+            var deduplicated = Deduplicate(incoming, seenConcerts, seenPromotions);
+            int existingIndex = merged.FindIndex(x =>
+                x.Kind == deduplicated.Kind && string.Equals(x.Key, deduplicated.Key, StringComparison.Ordinal));
+
+            if (existingIndex < 0)
+            {
+                if (deduplicated.Concerts.Count > 0 || deduplicated.PlaylistPromotions is { Count: > 0 })
+                    merged.Add(deduplicated);
+                continue;
+            }
+
+            var existing = merged[existingIndex];
+            var concerts = existing.Concerts.Concat(deduplicated.Concerts).ToArray();
+            var promotions = (existing.PlaylistPromotions ?? Array.Empty<PlaylistRef>())
+                .Concat(deduplicated.PlaylistPromotions ?? Array.Empty<PlaylistRef>())
+                .ToArray();
+            merged[existingIndex] = existing with
+            {
+                Concerts = concerts,
+                PlaylistPromotions = promotions.Length == 0 ? null : promotions,
+                Description = existing.Description ?? deduplicated.Description,
+            };
+        }
+
+        return new ConcertFeedPage(merged, next.PaginationKey);
+    }
+
+    static ConcertFeedSection Deduplicate(ConcertFeedSection section, HashSet<string> seenConcerts,
+        HashSet<string> seenPromotions)
+    {
+        var concerts = section.Concerts
+            .Where(x => !string.IsNullOrWhiteSpace(x.Uri) && seenConcerts.Add(x.Uri))
+            .ToArray();
+        var promotions = (section.PlaylistPromotions ?? Array.Empty<PlaylistRef>())
+            .Where(x => !string.IsNullOrWhiteSpace(x.Uri) && seenPromotions.Add(x.Uri))
+            .ToArray();
+        return section with
+        {
+            Concerts = concerts,
+            PlaylistPromotions = promotions.Length == 0 ? null : promotions,
+        };
+    }
+}

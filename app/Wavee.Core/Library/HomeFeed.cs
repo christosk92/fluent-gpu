@@ -8,7 +8,7 @@ namespace Wavee.Core;
 /// <summary>How a home group is laid out: a featured Hero band, a compact QuickGrid, a finite horizontally paged
 /// Shelf, a compatibility CollapsedGrid, or a Featured editorial break. Home alternates shelves with editorial breaks
 /// so the vertical feed has rhythm instead of repeating one module forever.</summary>
-public enum HomeGroupKind { Hero, QuickGrid, Shelf, CollapsedGrid, Featured }
+public enum HomeGroupKind { Hero, QuickGrid, Shelf, Compact, CollapsedGrid, Featured }
 
 /// <summary>What a home card points at — drives the nav route (pl: / album: / artist: / liked) and the card shape.</summary>
 public enum HomeCardKind { Playlist, Album, Artist, Track, Liked }

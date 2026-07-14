@@ -157,6 +157,8 @@ public static class PathfinderOps
     public const string ConcertConceptsHash = "a409c1eb39b6345e7993d424d2408b65a6699bafc2b8a03217033e517cd76b72";
     public const string ConcertFeed = "concertFeed";
     public const string ConcertFeedHash = "9cae2dbee3f47904c60bab45256260b3ddb9844d5ef25038c17112619d14ce9a";
+    public const string ConcertCount = "concertCount";
+    public const string ConcertCountHash = "29be9d486e073a49268e13ed9e2d2180187e669fcb7a19b98011aca7ab61b141";
     public const string ConcertLocationDetails = "concertLocationDetails";
     public const string ConcertLocationDetailsHash = "b13f195349f188fee25480ae889d782852d68663bf07743c654244454750d681";
     public const string SearchConcertLocations = "searchConcertLocations";

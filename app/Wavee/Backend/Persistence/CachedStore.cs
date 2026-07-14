@@ -45,6 +45,15 @@ public sealed class CachedStore : IStore, IDisposable
     public long MaxResidentBytes => _maxResidentBytes;
     public int MaxResidentPlaylists => _maxResidentPlaylists;
 
+    // ── entity residency + census (see InMemoryStore) — passthroughs to the hot mirror ───────────────────────────────
+    public (int Tracks, int Albums, int Artists, int Playlists, int Shows, int Episodes, int Versions) EntityCounts => _hot.EntityCounts;
+    public long EstimatedEntityBytes => _hot.EstimatedEntityBytes;
+    public bool HasEvictedEntities => _hot.HasEvictedEntities;
+    /// <summary>Governor arena (priority 3): evict oldest-first unpinned entities down to <paramref name="maxResident"/>,
+    /// returning estimated bytes freed. The cold tier keeps every entity, so eviction is safe — a later read cold-falls-back.</summary>
+    public long ShedEntities(ISet<string> pinned, int maxResident) => _hot.EvictEntities(pinned, maxResident);
+    public void CollectSavedHeads(ISet<string> pins, int perSet) => _hot.CollectSavedHeads(pins, perSet);
+
     void TouchResident(string playlistUri, int itemCount)
     {
         lock (_lruGate)
@@ -90,15 +99,34 @@ public sealed class CachedStore : IStore, IDisposable
         catch (JsonException) { /* skip a corrupt row — it's re-fetchable */ }
     }
 
-    // reads → the full in-memory mirror (no disk)
-    public Track? GetTrack(string uri) => _hot.GetTrack(uri);
+    // reads → the full in-memory mirror, with a COLD FALLBACK for entity kinds: once the entity evictor has demoted
+    // something (HasEvictedEntities), a hot miss may be a shed-but-recoverable entity, so read the cold tier, re-upsert the
+    // (thin) row back into hot (promoting + re-stamping its LRU recency), and return it. Before the first eviction hot ==
+    // cold, so a hot miss is a genuine miss and the read stays disk-free (the old semantics). Membership/rootlist keep
+    // their own lazy cold-promotion paths below.
+    public Track? GetTrack(string uri) => _hot.GetTrack(uri) ?? ColdFallback<Track>(uri, EntityKind.Track, EntityJson.Default.Track, static (h, v) => h.UpsertTrack(v));
     public IReadOnlyList<Track> QueryTracks(string? text = null, TrackSort sort = TrackSort.None, int limit = 200) => _hot.QueryTracks(text, sort, limit);
-    public Album? GetAlbum(string uri) => _hot.GetAlbum(uri);
-    public Artist? GetArtist(string uri) => _hot.GetArtist(uri);
-    public Playlist? GetPlaylist(string uri) => _hot.GetPlaylist(uri);
-    public Show? GetShow(string uri) => _hot.GetShow(uri);
-    public Episode? GetEpisode(string uri) => _hot.GetEpisode(uri);
+    public Album? GetAlbum(string uri) => _hot.GetAlbum(uri) ?? ColdFallback<Album>(uri, EntityKind.Album, EntityJson.Default.Album, static (h, v) => h.UpsertAlbum(v));
+    public Artist? GetArtist(string uri) => _hot.GetArtist(uri) ?? ColdFallback<Artist>(uri, EntityKind.Artist, EntityJson.Default.Artist, static (h, v) => h.UpsertArtist(v));
+    public Playlist? GetPlaylist(string uri) => _hot.GetPlaylist(uri) ?? ColdFallback<Playlist>(uri, EntityKind.Playlist, EntityJson.Default.Playlist, static (h, v) => h.UpsertPlaylist(v));
+    public Show? GetShow(string uri) => _hot.GetShow(uri) ?? ColdFallback<Show>(uri, EntityKind.Show, EntityJson.Default.Show, static (h, v) => h.UpsertShow(v));
+    public Episode? GetEpisode(string uri) => _hot.GetEpisode(uri) ?? ColdFallback<Episode>(uri, EntityKind.Episode, EntityJson.Default.Episode, static (h, v) => h.UpsertEpisode(v));
     public VideoAssociation? GetVideoAssociation(string uri) => _hot.GetVideoAssociation(uri);
+
+    // Deserialize one evicted entity from the cold tier and promote it back into hot. Gated on HasEvictedEntities so an
+    // un-evicted session never touches disk on a miss. The upsert re-Bumps (like the membership cold-promotion above),
+    // which is a benign no-value-change signal; consistent with the existing lazy-load precedent.
+    T? ColdFallback<T>(string uri, EntityKind kind, System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> json, Action<InMemoryStore, T> promote) where T : class
+    {
+        if (!_hot.HasEvictedEntities) return null;
+        if (_cold.GetEntity(uri) is not { } ce || ce.Kind != kind) return null;
+        T? v;
+        try { v = JsonSerializer.Deserialize(ce.Payload, json); }
+        catch (JsonException) { return null; }   // a corrupt row is re-fetchable — treat as a miss
+        if (v is null) return null;
+        promote(_hot, v);
+        return v;
+    }
     public bool IsSaved(string setId, string uri) => _hot.IsSaved(setId, uri);
     public IReadOnlyList<string> SavedUris(string setId) => _hot.SavedUris(setId);
 

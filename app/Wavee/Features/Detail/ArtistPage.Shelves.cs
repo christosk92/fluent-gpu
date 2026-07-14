@@ -14,6 +14,7 @@ using FluentGpu.Signals;
 using FluentGpu.WindowsApi.Dialogs;
 using Wavee.Backend.Spotify;
 using Wavee.Core;
+using Wavee.Features.Concerts;
 using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
@@ -30,6 +31,8 @@ sealed partial class ArtistPage : Component
         Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardSecondary,
         BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault, HoverFill = Tok.FillCardDefault,
         HoverScale = 1.005f, PressScale = 0.997f, OnClick = onClick,
+        Role = AutomationRole.Button, Focusable = true, FocusVisualMargin = new Edges4(2f, 2f, 2f, 2f),
+        Cursor = CursorId.Hand,
         Children =
         [
             new BoxEl { Width = 44f, Height = 44f, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
@@ -77,24 +80,28 @@ sealed partial class ArtistPage : Component
     };
 
     // ── upcoming concerts ────────────────────────────────────────────────────────────────────────────────
-    Element ConcertsRow(IReadOnlyList<Concert> concerts) => new BoxEl
+    Element ConcertsRow(IReadOnlyList<Concert> concerts, Action<string, string?> go) => new BoxEl
     {
         Direction = 1,
         Children =
         [
             PagedShelf.Create(
                 Math.Min(concerts.Count, 12),
-                cardAt: (i, w) => ConcertStub(concerts[i]),
+                cardAt: (i, w) => ConcertStub(concerts[i],
+                    () => go(ConcertRoutes.Detail(concerts[i].Uri), concerts[i].Title ?? concerts[i].Venue)),
                 measured: true, header: AccentHeader(Loc.Get(Strings.Artist.UpcomingConcerts))),
         ],
     };
 
-    static Element ConcertStub(Concert c) => new BoxEl
+    static Element ConcertStub(Concert c, Action onClick) => new BoxEl
     {
+        Key = c.Uri,
         Direction = 0, Grow = 1f, Gap = WaveeSpace.M, AlignItems = FlexAlign.Center,
         Padding = new Edges4(WaveeSpace.M, WaveeSpace.M, WaveeSpace.M, WaveeSpace.M),
         Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardSecondary,
-        BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
+        BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault, HoverFill = Tok.FillCardDefault,
+        OnClick = onClick, Role = AutomationRole.Button, Focusable = true,
+        FocusVisualMargin = new Edges4(2f, 2f, 2f, 2f), Cursor = CursorId.Hand,
         Children =
         [
             new BoxEl { Direction = 1, Width = 48f, Shrink = 0f, AlignItems = FlexAlign.Center, Gap = 0f,

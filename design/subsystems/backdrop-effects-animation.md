@@ -278,6 +278,37 @@ PushLayer{Effect=AcrylicBlur, Bounds=behindRegion}
 PopLayer
 ```
 
+**Blur passes B/C — a dual-Kawase down/up chain (Wave B; ARM SIGGRAPH 2015 dual filter, shipped by KWin / picom /
+Plasma Better Blur).** The LIVE-BACKDROP blur is NOT a separable Gaussian; it is a downsample/upsample pyramid.
+`AcrylicKawaseMath.SelectChain` maps `sigmaPhys = BlurSigma·dpiScale` → **(iterations, per-pass offset)**: pass B runs
+`iterations` downsample passes (each halving resolution with a **5-tap** bilinear kernel — center ½ + four half-texel
+diagonal corners ⅛ each, ÷8 — building the **½, ¼, ⅛, 1/16** RT pyramid), pass C the matching `iterations` upsample
+passes (**8-tap** tent, ÷12) folding back to full resolution. The blur radius grows with the iteration count in coarse
+2× steps; the per-pass **offset** interpolates *smoothly* between those integer steps (KWin Phabricator D9848 model), so σ
+is continuously controllable. The adopted equivalence is `σ_eff ≈ offset · 2^iterations · K` with `K = 1.25`
+(`AcrylicKawaseMath.SigmaPerLevel`, calibrated by the WinUI σ=30 visual A/B); this lands the WinUI σ14…30 band in 3–4
+iterations at `offset ∈ [1,2]` — e.g. `σ14→(3, 1.4)`, `σ20→(3, 2.0)`, `σ30→(4, 1.5)`, each round-tripping to its input σ.
+The tap offsets are computed inline in HLSL from one cbuffer texel-size × offset (no arrays ⇒ no dynamic float4 component
+indexing), and every sample is clamped to the level's used sub-rect. ~5% reads / 2% writes vs a full-res Gaussian at
+large σ, visually indistinguishable (49.78 dB PSNR vs 97×97 Gaussian).
+
+**Snapshot (pass A, down = 1) + pad.** Pass A snapshots at **full region resolution** (`down = 1`) and lets the chain
+do all the halving, so the pyramid levels are exactly ½, ¼, ⅛, 1/16 of the region and the pad/support math stays in
+clean full-resolution units; the finest ½ level also preserves the crisp near-edge gradient a pre-halved snapshot would
+soften. The snapshot pad (pass A inflation) is the chain's blur support `AcrylicKawaseMath.PadPx = ceil(2.5·offset·2^iterations)
++ 2^iterations` on every side, clamped to the canvas — the actual geometric reach of the down+up passes, not a fixed
+constant. `AcrylicKawaseMath` owns the σ→chain + support + level-dim contract (headless-gated, VerticalSlice
+`gate.kawase.sigmaMapping` / `gate.kawase.padCoversSupport`). The retained-backdrop cache's tight damage region and
+quantized stamp (E7/E8/E9 below) are unchanged — only the miss-path blur work changed.
+
+**The self-blur (own-content) path stays separable.** `OpacityLayerCompositor.BlurInPlace` (a group blurring its OWN
+rendered content, not the live backdrop) keeps the Flutter-Impeller / Skia **downsample-then-separable-Gaussian**
+schedule owned by `AcrylicBackdropMath`: `down = pow2up(ceil(sigmaPhys / 4))` (clamped `[1,16]`) so the intermediate's
+effective texel sigma `= sigmaPhys / down ≤ 4`, then a separable Gaussian rebuilt for that texel sigma (≤ 7 bilinear taps)
+per `(sigma,down)` bucket from `AcrylicBackdropMath.BuildKernel` (headless-gated, VerticalSlice `64n`/`64n2`/`64n3`;
+supersedes the earlier fixed `down = round(sigmaPhys/7.5)` / σ-7.5 kernel). `AcrylicBackdropMath` remains the owner of
+the separable-path down-factor + kernel + pad + the shared region/stamp/bucket contract.
+
 ```csharp
 // FluentGpu.Render — authored as a FrameGraph step; recorded behind a PushLayerCmd.Effect chain.
 public readonly struct AcrylicParams        // packed into EffectChain payload (POD)
@@ -307,9 +338,9 @@ public readonly struct AcrylicParams        // packed into EffectChain payload (
     and re-blurred **every** frame permanently. Any real ≥1-device-px move / resize / sigma / source / clip change
     still trips it. Cached stamps are stored post-quantize so compares are homogeneous.
   - **Tight damage-test region (E8).** Reuse tests damage against the **un-inflated** rect + `DamageTestMarginPx`
-    (`AcrylicBackdropMath.SnapshotRegionTight`), **not** the ±`KernelRadius·down` snapshot region a MISS still
-    snapshots/blurs. So a node animating anywhere in the ~44–88 px blur halo but outside rect+8 no longer forces a
-    re-blur. **Honest scope:** sub-halo motion *outside* rect+8 but *inside* the σ-support can leave invisible edge
+    (`AcrylicBackdropMath.SnapshotRegionTight`), **not** the ±(`kernelRadiusTexels·down` ≈ 3·sigmaPhys) snapshot region
+    a MISS still snapshots/blurs. So a node animating anywhere in the ~80–192 px blur halo but outside rect+8 no longer
+    forces a re-blur. **Honest scope:** sub-halo motion *outside* rect+8 but *inside* the σ-support can leave invisible edge
     staleness under σ≥14 (the blurred fringe samples last frame's backdrop) — imperceptible through frosted glass,
     the same "v1 at rest" tradeoff as the paint-only case below.
   - **Own-subtree damage carve-out (E9).** Damage emitted by an acrylic layer's **own subtree** (itself + every
@@ -436,8 +467,12 @@ BlurSigma via the self-blur layer) while the real content blur-reveals in — th
 
 **FA-2a (as-built — the cross-frame self-blur PIN cache + its position-independent key).** A self-blur whose subtree
 is byte-identical to a previous frame's reuses that frame's **retained, already-blurred pixels** (a "pin" — a small
-region-sized RT, the layer's device rect + the ±3σ tap halo) instead of re-rendering + re-running the two Gaussian
-passes; a HIT is a single region composite. The pin lives in `OpacityLayerCompositor`'s pool (render-thread-owned,
+region-sized RT, the layer's device rect + the kernel's tap halo) instead of re-rendering + re-running the blur passes;
+a HIT is a single region composite. The halo is the ACTUAL support of the downsample schedule `BlurInPlace` runs —
+`SelfBlurRegion.TapRadius = KernelRadiusTexels(σ/down)·down` phys px (≈ 3σ; at σ ≤ 4 the un-capped `ceil(3σ) ≤ 12`),
+**not** the earlier hardcoded 32 px cap (which truncated a σ26 Gaussian to ~1.2σ — the self-blur now runs the full
+downsample-then-separable-Gaussian schedule of §2.3 rather than a full-res 32 px-capped kernel; VerticalSlice
+`gate.blur.selfBlurHaloCoversKernel` ties the halo to `AcrylicBackdropMath`, the schedule owner). The pin lives in `OpacityLayerCompositor`'s pool (render-thread-owned,
 `threading-render-seam.md`) and is keyed by a **position-INDEPENDENT content key** computed by the portable
 `FluentGpu.Render.BlurPinKey.TryCompute` (so the headless VerticalSlice can gate it).
 
@@ -467,16 +502,25 @@ passes; a HIT is a single region composite. The pin lives in `OpacityLayerCompos
   position; subsequent identical frames are byte-stable ⇒ skip-submit. (For a glyph-bearing subtree the glyph
   `InMotion` field folds into the key and already forces this re-blur at the settle frame; `PushLayerCmd.InMotion` +
   the origin check cover the non-glyph subtrees.)
-- **Edge-clamped region ⇒ uncacheable.** The pin holds only the ON-CANVAS slice (`RegionBox` clamps the halo-inflated
-  device rect to `[0,_w]×[0,_h]`, and a pin is copied out of the canvas-sized scratch). Because the key is
-  position-independent, a strip scrolling partly past a canvas edge would otherwise HIT a full-strip pin and be composited
-  into the shorter clamped viewport — the full pin's `UV[0,1]` mapped onto fewer rows = a vertical **squish** (worse in
-  full-screen lyrics where a dimmed row crosses the window top/bottom). So a frame whose region is canvas-edge-clamped
-  (`OpacityLayerCompositor.RegionIsClamped` — the unclamped `RegionBox` pokes outside the canvas) is treated as
-  uncacheable: **no HIT** (miss ⇒ the pixel-exact scissored render+blur draws the partial strip) **and no MINT** (a
-  partial capture would squish later, and each distinct clamp size would mint a duplicate same-hash pin, thrashing the
-  budget). The full pin minted while fully on-canvas survives and serves again once the row returns; a *stationary*
-  clamped row costs nothing (identical drawlist ⇒ skip-submit).
+- **Edge-clamped region ⇒ cacheable at rest (size-exact).** The pin holds only the ON-CANVAS slice (`RegionBox` — now
+  the portable `SelfBlurRegion.RegionBox` — clamps the halo-inflated device rect to `[0,_w]×[0,_h]`, and a pin is copied
+  out of the canvas-sized scratch). The key is position-independent, so a partly-off-canvas strip *would* return a pin by
+  hash; the **size-exact `FindPin`** (the bullet below: `W==RegionBox.W && H==RegionBox.H`) makes that safe — a full
+  on-canvas pin (taller) can never be composited into the shorter clamped viewport, because the size mismatch is a MISS,
+  not a stretch. So a **STATIONARY edge-clamped row HITS its own clamped pin every frame** (identical key + identical
+  clamped `RegionBox` ⇒ no re-blur) — the fix for a dimmed lyrics row sitting at the window top/bottom re-running its
+  Gaussian every submit whenever anything else in the frame ticks. A clamped region hits **only at rest** (`InMotion==0`):
+  at rest the settle guard `PinOriginDiffers` (stored vs current captured origin) distinguishes clamp geometries — a
+  same-size top-edge vs bottom-edge pin has a different origin ⇒ no hit ⇒ one re-mint at the true position — but that
+  guard is skipped in motion, so a clamped strip **in motion** re-blurs rather than risk a same-size cross-clamp hit.
+  `OpacityLayerCompositor.RegionIsClamped` (`= SelfBlurRegion.IsClamped`) also gates **MINTING while in motion**: an
+  actively-scrolling clamped strip changes its clamp size ~1px/frame, so minting a fresh region-sized RT each frame is
+  churn for no hit (next frame's different size misses anyway) — the caller skips the mint there (`pinTag = 0` iff
+  `RegionIsClamped && InMotion`), falling back to a pixel-exact scissored render+blur (unchanged cost), and mints once
+  the row settles. **Honest scope:** a clamped strip *actively scrolling past an edge* still re-blurs per frame (its
+  size changes every frame); only the resting case caches. The full pin minted while fully on-canvas survives and serves
+  again once the row returns wholly on-canvas. Gated portably by `gate.blur.edgeClampedPinCaches` (the D3D12 pin lease
+  is a `--screenshot` golden).
 - **One pin per hash, size-exact hit.** At most one `BlurReady` pin ever carries a given `PinHash`: before (re)minting,
   `RetainPinFromScratch` retires (fence-gated) any same-hash pin whose region size differs, and `FindPin` requires
   `W == RegionBox.W && H == RegionBox.H` — a physical-size mismatch is a **MISS** (render + blur the exact region), never

@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
 using FluentGpu.Render;
@@ -16,11 +15,14 @@ namespace FluentGpu.Rhi.D3D12;
 /// design/subsystems/backdrop-effects-animation.md §2.3 (two-pass PushLayer{Acrylic} schedule) with the
 /// gpu-renderer.md §7.1 LayerPool, inlined HLSL-side in this leaf. The scene renders into an engine-owned canvas RT;
 /// at each <c>PushLayer</c>:
-///   pass A  SNAPSHOT+downsample the canvas region beneath the layer rect (inflated by the full blur support) into a
-///           pooled offscreen RT at 1/down resolution (down = AcrylicBackdropMath.DownsampleFactor — /4 at 100% DPI),
-///   pass B  blur H (fixed bilinear-tap gaussian, σ = AcrylicBackdropMath.KernelSigma in snapshot texels ⇒
-///           effective σ = 30 DIP, matching microsoft-ui-xaml AcrylicBrush.h:64 sc_blurRadius),
-///   pass C  blur V (ping-pong between the two pooled RTs),
+///   pass A  SNAPSHOT the canvas region beneath the layer rect (inflated by the full chain support) into a pooled
+///           offscreen RT at FULL region resolution (down = 1; the dual-Kawase chain does its own halving — Wave B),
+///   pass B  a dual-Kawase DOWNSAMPLE chain (ARM SIGGRAPH 2015 dual filter): AcrylicKawaseMath.SelectChain maps
+///           sigma = BlurSigma*scale (AcrylicBrush.h:64 sc_blurRadius = 30 DIP) into (iterations, per-pass offset);
+///           each pass halves resolution with a 5-tap bilinear kernel (center 1/2 + four half-texel corners 1/8, /8)
+///           building the 1/2, 1/4, 1/8, 1/16 RT pyramid,
+///   pass C  the matching UPSAMPLE chain (8-tap tent, /12) folds the pyramid back to full resolution; radius grows with
+///           the iteration count, the offset interpolates smoothly between the coarse 2x steps (KWin D9848 model),
 ///   pass D  composite the WinUI AcrylicBrush recipe into the canvas clipped to the rounded layer rect
 ///           (blurred backdrop SourceOver opaque fallback → luminosity blend → tint/color blend → 2% noise —
 ///           AcrylicBrush.cpp:500-548), then the layer's content draws on top.
@@ -33,7 +35,7 @@ namespace FluentGpu.Rhi.D3D12;
 /// convention). Shader-visible SRV descriptors are parity-banked per frame so recreating a slot never rewrites a
 /// descriptor an in-flight frame still references. All RTs + ComPtrs are owned here on the render thread (per the
 /// threading-render-seam contract); device-lost ⇒ the whole device (and this compositor) is torn down and rebuilt.
-/// WARP-safe: ps_5_1, static-array kernel, no UAVs, no typed-load requirements.
+/// WARP-safe: ps_5_1, inline fixed-tap Kawase kernels (no dynamic indexing), no UAVs, no typed-load requirements.
 ///
 /// needs-pixels: the recipe values + region/bucket/kernel math are headless-checked (VerticalSlice 64m/64n via
 /// HeadlessGpuDevice.LastLayers + AcrylicBackdropMath); the composited GPU pixels themselves are verified manually
@@ -41,7 +43,8 @@ namespace FluentGpu.Rhi.D3D12;
 /// </summary>
 internal sealed unsafe class AcrylicCompositor : IDisposable
 {
-    private const int MaxPool = 8;            // pooled RT slots (a frame holds at most 2 at once; steady state uses 2)
+    private const int MaxPool = 12;           // pooled RT slots. A dual-Kawase chain leases iterations+1 (≤5) pyramid
+                                              // levels at once; plus retained per-layer cache RTs → 12 gives headroom.
     private const int TrimIdleFrames = 600;   // free entries idle this long (~10 s) are retired (fence-gated release)
 
     private ID3D12Device* _device;
@@ -76,11 +79,11 @@ internal sealed unsafe class AcrylicCompositor : IDisposable
     private uint _rtvInc, _srvInc;
     private int _parity;                      // this frame's SRV bank (frameIndex & 1), set by BeginCanvas
     private readonly float[] _scratch4 = new float[4];
-    private readonly float[] _scratch8 = new float[8];
+    private readonly float[] _scratchK = new float[8];      // dual-Kawase pass consts: p0(srcTexel.xy, offset, 0) + p1(usedFrac.xy, maxUv.xy)
     private readonly float[] _scratch28 = new float[28];
 
-    private ID3D12RootSignature* _copyRoot;   // copy/blur: 8 root consts + 1 SRV table + static linear-clamp sampler
-    private ID3D12PipelineState* _copyPso, _blurPso;
+    private ID3D12RootSignature* _copyRoot;   // copy/Kawase: root consts + 1 SRV table + static linear-clamp sampler
+    private ID3D12PipelineState* _copyPso, _kdownPso, _kupPso;
     private ID3D12RootSignature* _compRoot;   // composite: 28 root consts + 1 SRV table + static sampler
     private ID3D12PipelineState* _compPso;
 
@@ -91,7 +94,7 @@ internal sealed unsafe class AcrylicCompositor : IDisposable
     /// skipped) instead of re-blurring. A stationary acrylic surface being scrolled should read all-hits (diagnostics).</summary>
     public int CacheHitsThisFrame { get; private set; }
 
-    /// <summary>Live pooled RTs (diagnostics; steady state = 2 while any acrylic surface is open).</summary>
+    /// <summary>Live pooled RTs (diagnostics; a re-blur holds iterations+1 pyramid levels, ≤5, plus retained cache RTs).</summary>
     public int PooledRtCount
     {
         get { int n = 0; for (int i = 0; i < MaxPool; i++) if (_pool[i].Res != null) n++; return n; }
@@ -108,41 +111,50 @@ V VSMain(uint id : SV_VertexID) { V o; float2 uv = float2((id << 1) & 2, id & 2)
 float4 CopyPS(V i) : SV_Target { return gSrc.Sample(gSamp, srcOffScale.xy + i.uv * srcOffScale.zw); }   // preserve premultiplied alpha → transparent pixels reach the backbuffer so DWM Mica composites
 """;
 
-    // One separable gaussian pass with the FIXED kernel (built at Init from AcrylicBackdropMath so the HLSL constants
-    // cannot drift from the headless-checked weights). Sampling is clamped to the used sub-rect of the (possibly
-    // larger) bucket RT so taps never read stale texels from a previous lease of the pooled texture.
-    private static string BuildBlurHlsl()
-    {
-        var off = AcrylicBackdropMath.TapOffsets;
-        var wgt = AcrylicBackdropMath.TapWeights;
-        var sb = new StringBuilder(1024);
-        sb.Append("static const float OFF[").Append(AcrylicBackdropMath.TapCount).Append("] = {");
-        for (int i = 0; i < off.Length; i++) { if (i > 0) sb.Append(", "); sb.Append(off[i].ToString("G9", CultureInfo.InvariantCulture)); }
-        sb.Append("};\nstatic const float WGT[").Append(AcrylicBackdropMath.TapCount).Append("] = {");
-        for (int i = 0; i < wgt.Length; i++) { if (i > 0) sb.Append(", "); sb.Append(wgt[i].ToString("G9", CultureInfo.InvariantCulture)); }
-        sb.Append("};\nstatic const int TAPS = ").Append(AcrylicBackdropMath.TapCount).Append(";\n");
-        return """
-cbuffer C : register(b0) { float4 texelDir; float4 scaleClamp; };   // texelDir: xy = source texel size, zw = blur direction; scaleClamp: xy = used-uv scale, zw = max uv (used minus half texel)
+    // Dual-Kawase downsample/upsample chain (ARM SIGGRAPH 2015 dual filter — the LIVE-BACKDROP blur, Wave B). Both passes
+    // take one cbuffer: p0.xy = the SOURCE texel size (1/bucketW, 1/bucketH), p0.z = the per-pass offset (source texels);
+    // p1.xy = the source used-uv fraction (usedW/bucketW), p1.zw = the max sample uv (usedFrac − half texel). All tap
+    // offsets are computed INLINE from p0 (half-texel × offset) — no arrays, so no dynamic float4 component indexing
+    // (fxc X3504, the lesson from the separable kernel). Every sample is clamped to the used sub-rect so a tap never
+    // reads stale texels outside the level's valid region in a (possibly larger) pooled bucket RT. Premultiplied alpha
+    // is preserved through the chain; the opaque-fallback SourceOver resolves at composite (pass D), never here.
+    private const string KawaseHlsl = """
+cbuffer C : register(b0) { float4 p0; float4 p1; };
 Texture2D gSrc : register(t0);
 SamplerState gSamp : register(s0);
 struct V { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
 V VSMain(uint id : SV_VertexID) { V o; float2 uv = float2((id << 1) & 2, id & 2); o.pos = float4(uv * 2.0 - 1.0, 0, 1); o.pos.y = -o.pos.y; o.uv = uv; return o; }
-""" + sb + """
-float4 BlurPS(V i) : SV_Target
+float4 S(float2 uv, float2 lo, float2 hi) { return gSrc.Sample(gSamp, clamp(uv, lo, hi)); }
+// 5-tap downsample: center (weight 4) + four half-texel diagonal corners (weight 1), sum/8 → center 1/2, corners 1/8.
+float4 KawaseDownPS(V i) : SV_Target
 {
-    float2 c = i.uv * scaleClamp.xy;
-    float2 lo = texelDir.xy * 0.5;
-    float2 d = texelDir.zw * texelDir.xy;
-    float4 acc = gSrc.Sample(gSamp, clamp(c, lo, scaleClamp.zw)) * WGT[0];
-    [unroll] for (int k = 1; k < TAPS; k++)
-    {
-        acc += gSrc.Sample(gSamp, clamp(c + d * OFF[k], lo, scaleClamp.zw)) * WGT[k];
-        acc += gSrc.Sample(gSamp, clamp(c - d * OFF[k], lo, scaleClamp.zw)) * WGT[k];
-    }
-    return acc;   // preserve premultiplied alpha; transparent Mica regions must not blur to black (fallback resolves at composite)
+    float2 lo = p0.xy * 0.5;
+    float2 uv = i.uv * p1.xy;              // dst uv (0..1 over the used dst viewport) → source used sub-rect
+    float2 h  = p0.xy * 0.5 * p0.z;        // half source texel × offset
+    float4 s = S(uv, lo, p1.zw) * 4.0;
+    s += S(uv + float2( h.x,  h.y), lo, p1.zw);
+    s += S(uv + float2(-h.x, -h.y), lo, p1.zw);
+    s += S(uv + float2( h.x, -h.y), lo, p1.zw);
+    s += S(uv + float2(-h.x,  h.y), lo, p1.zw);
+    return s / 8.0;
+}
+// 8-tap upsample tent: four axis taps at 2× distance (weight 1) + four diagonal taps at 1× (weight 2), sum/12.
+float4 KawaseUpPS(V i) : SV_Target
+{
+    float2 lo = p0.xy * 0.5;
+    float2 uv = i.uv * p1.xy;
+    float2 h  = p0.xy * 0.5 * p0.z;
+    float4 s = S(uv + float2(-h.x * 2.0, 0.0), lo, p1.zw);
+    s += S(uv + float2(-h.x,  h.y), lo, p1.zw) * 2.0;
+    s += S(uv + float2(0.0,  h.y * 2.0), lo, p1.zw);
+    s += S(uv + float2( h.x,  h.y), lo, p1.zw) * 2.0;
+    s += S(uv + float2( h.x * 2.0, 0.0), lo, p1.zw);
+    s += S(uv + float2( h.x, -h.y), lo, p1.zw) * 2.0;
+    s += S(uv + float2(0.0, -h.y * 2.0), lo, p1.zw);
+    s += S(uv + float2(-h.x, -h.y), lo, p1.zw) * 2.0;
+    return s / 12.0;
 }
 """;
-    }
 
     private const string CompHlsl = """
 cbuffer C : register(b0) { float4 rect; float4 vpro; float4 rsuf; float4 tint; float4 fallback; float4 prm; float4 blurTexel; };
@@ -329,15 +341,16 @@ float4 PSMain(V i) : SV_Target
 
     private void BuildCopyPipeline()
     {
-        _copyRoot = SampleRootSig(8);   // copy uses 4 floats, blur uses 8 — shared sig sized for the larger
+        _copyRoot = SampleRootSig(8);   // copy uses 4 floats, each Kawase pass uses 8 (p0 + p1) — shared sig sized for the larger
         ID3DBlob* vs = Compile(CopyHlsl, "VSMain", "vs_5_1");
         ID3DBlob* copyPs = Compile(CopyHlsl, "CopyPS", "ps_5_1");
-        string blurHlsl = BuildBlurHlsl();   // kernel constants injected from AcrylicBackdropMath (cold path, Init only)
-        ID3DBlob* blurVs = Compile(blurHlsl, "VSMain", "vs_5_1");
-        ID3DBlob* blurPs = Compile(blurHlsl, "BlurPS", "ps_5_1");
+        ID3DBlob* kVs = Compile(KawaseHlsl, "VSMain", "vs_5_1");
+        ID3DBlob* kDown = Compile(KawaseHlsl, "KawaseDownPS", "ps_5_1");
+        ID3DBlob* kUp = Compile(KawaseHlsl, "KawaseUpPS", "ps_5_1");
         _copyPso = MakePso(_copyRoot, vs, copyPs, blend: false);
-        _blurPso = MakePso(_copyRoot, blurVs, blurPs, blend: false);
-        vs->Release(); copyPs->Release(); blurVs->Release(); blurPs->Release();
+        _kdownPso = MakePso(_copyRoot, kVs, kDown, blend: false);
+        _kupPso = MakePso(_copyRoot, kVs, kUp, blend: false);
+        vs->Release(); copyPs->Release(); kVs->Release(); kDown->Release(); kUp->Release();
     }
 
     private void BuildCompositePipeline()
@@ -492,7 +505,7 @@ float4 PSMain(V i) : SV_Target
             {
                 for (int i = 0; i < MaxPool; i++)
                 {
-                    if (_pool[i].InUse) continue;   // a frame leases at most 2 of 8 slots → a free victim always exists
+                    if (_pool[i].InUse) continue;   // a chain leases ≤ iterations+1 (≤5) of 12 slots → a free victim always exists
                     if (slot < 0 || _pool[i].LastUseFence < _pool[slot].LastUseFence) slot = i;
                 }
                 if (slot < 0) throw new InvalidOperationException("acrylic LayerPool exhausted (more concurrent leases than slots)");
@@ -629,6 +642,18 @@ float4 PSMain(V i) : SV_Target
         SetViewport(cmd, _w, _h);
     }
 
+    // Fill the 8-float dual-Kawase pass constant block from the SOURCE level's bucket + used dims and the per-pass offset.
+    // p0 = (srcTexel.x, srcTexel.y, offset, 0); p1 = (usedFrac.x, usedFrac.y, maxU, maxV) where maxUv = usedFrac − half
+    // texel. The shader maps its 0..1 dst uv onto usedFrac and clamps every tap to [half-texel, maxUv] (the used sub-rect
+    // of a possibly larger pooled bucket RT). Same layout for both the down and up passes; only the source dims differ.
+    private void WriteKawaseConsts(int srcBucketW, int srcBucketH, int srcUsedW, int srcUsedH, float offset)
+    {
+        float tx = 1f / srcBucketW, ty = 1f / srcBucketH;
+        float ux = (float)srcUsedW / srcBucketW, uy = (float)srcUsedH / srcBucketH;
+        _scratchK[0] = tx; _scratchK[1] = ty; _scratchK[2] = offset; _scratchK[3] = 0f;
+        _scratchK[4] = ux; _scratchK[5] = uy; _scratchK[6] = ux - tx * 0.5f; _scratchK[7] = uy - ty * 0.5f;
+    }
+
     private void FullScreen(ID3D12GraphicsCommandList* cmd, ID3D12PipelineState* pso, int srvSlot, ReadOnlySpan<float> consts)
     {
         cmd->SetGraphicsRootSignature(_copyRoot);
@@ -641,7 +666,7 @@ float4 PSMain(V i) : SV_Target
 
     /// <summary>The PushLayer{Acrylic} schedule WITH the retained-backdrop cache (design §2.3): on a cache HIT (the
     /// layer is stationary and nothing behind it moved this frame) skip the snapshot+blur and composite the retained
-    /// snapshot; else snapshot+downsample the canvas region, two-pass separable gaussian, and composite — RETAINING the
+    /// snapshot; else snapshot the canvas region, run the dual-Kawase down/up chain, and composite — RETAINING the
     /// result for a keyed (<see cref="PushLayerCmd.LayerId"/> != 0) layer. Leaves the canvas bound for continued drawing.
     /// The damage rect (physical px) is this frame's union of moved-node bounds (SceneRecorder) — empty ⇒ reuse.</summary>
     public void BlurAndComposite(ID3D12GraphicsCommandList* cmd, in PushLayerCmd L, float lw, float lh, float scale, ulong frameFence,
@@ -654,9 +679,13 @@ float4 PSMain(V i) : SV_Target
         // buffer, so a frosted in-app pill/bar no longer forces the whole-window scene→canvas render + blit.
         bool external = backdropTarget != null;
         var compTarget = external ? targetRtv : Rtv(0);
-        int down = AcrylicBackdropMath.DownsampleFactor(L.BlurSigma, scale);
-        AcrylicBackdropMath.SnapshotRegion(L.DeviceRect, scale, down, (int)_w, (int)_h, out int rx, out int ry, out int rw, out int rh);
-        int dw = Math.Max(1, (rw + down - 1) / down), dh = Math.Max(1, (rh + down - 1) / down);
+        // Dual-Kawase chain (AcrylicKawaseMath, Wave B): map σ = BlurSigma·scale → (iterations, per-pass offset), snapshot
+        // at SnapshotDown (1 = full region; the chain does its own halving — see the down=2 pivot note on the constant),
+        // and inflate the region by the chain's blur support (kernelRadiusTexels = pad ⇒ pad = radius·down).
+        AcrylicKawaseMath.SelectChain(L.BlurSigma, scale, out int iters, out float offset);
+        int pad = AcrylicKawaseMath.PadPx(iters, offset);
+        AcrylicBackdropMath.SnapshotRegion(L.DeviceRect, scale, AcrylicKawaseMath.SnapshotDown, pad, (int)_w, (int)_h, out int rx, out int ry, out int rw, out int rh);
+        int dw = rw, dh = rh;   // level 0 = the full-resolution snapshot
 
         SetHeap(cmd);
 
@@ -687,59 +716,61 @@ float4 PSMain(V i) : SV_Target
             }
         }
 
-        // ── (re)blur, passes A/B/C. For a keyed layer the result lands in a PINNED entry retained for reuse; for
-        // LayerId == 0 it lands in a transient entry released at the end (the prior re-blur-every-frame behavior). ──
+        // ── (re)blur: pass A snapshot + the dual-Kawase down/up chain. Level 0 is the composite/cache buffer (PINNED for a
+        // keyed layer, retained for reuse; transient + released for LayerId == 0); levels 1..iters are transient pyramid
+        // RTs (½, ¼, ⅛, 1/16 of the region), leased once and released after the composite. ──
         bool cache = L.LayerId != 0;
-        int ia = cache ? AcquirePinned(L.LayerId, dw, dh, frameFence) : Acquire(dw, dh, frameFence);
-        int ib = Acquire(dw, dh, frameFence);   // ping-pong intermediate (always transient)
+        Span<int> lv = stackalloc int[AcrylicKawaseMath.MaxIterations + 1];
+        lv[0] = cache ? AcquirePinned(L.LayerId, dw, dh, frameFence) : Acquire(dw, dh, frameFence);
+        for (int k = 1; k <= iters; k++)
+            lv[k] = Acquire(AcrylicKawaseMath.LevelDim(dw, k), AcrylicKawaseMath.LevelDim(dh, k), frameFence);
 
         // directBB MISS: copy the back-buffer region into the canvas (same coords) so pass A reads the real backdrop.
         if (external) SnapshotTargetRegion(cmd, backdropTarget, rx, ry, rw, rh, compositeScissor);
-        // pass A: snapshot + downsample the backdrop region (canvas sub-rect) → ia at 1/down resolution
+        // pass A: snapshot the backdrop region (canvas sub-rect) → level 0 at full resolution (down = 1)
         Barrier(cmd, _canvas, ref _canvasState, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        Barrier(cmd, _pool[ia].Res, ref _pool[ia].State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
-        var rt = Rtv(1 + ia); cmd->OMSetRenderTargets(1, &rt, BOOL.FALSE, null); SetViewport(cmd, (uint)dw, (uint)dh);
+        Barrier(cmd, _pool[lv[0]].Res, ref _pool[lv[0]].State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
+        var rt = Rtv(1 + lv[0]); cmd->OMSetRenderTargets(1, &rt, BOOL.FALSE, null); SetViewport(cmd, (uint)dw, (uint)dh);
         _scratch4[0] = (float)rx / _w;
         _scratch4[1] = (float)ry / _h;
         _scratch4[2] = (float)rw / _w;
         _scratch4[3] = (float)rh / _h;
         FullScreen(cmd, _copyPso, 0, _scratch4);
 
-        // pass B: blur H, ia → ib (fixed σ=KernelSigma kernel in snapshot texels ⇒ effective σ = BlurSigma DIP full-res)
-        float aw = _pool[ia].W, ah = _pool[ia].H, bw = _pool[ib].W, bh = _pool[ib].H;
-        Barrier(cmd, _pool[ia].Res, ref _pool[ia].State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        Barrier(cmd, _pool[ib].Res, ref _pool[ib].State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
-        rt = Rtv(1 + ib); cmd->OMSetRenderTargets(1, &rt, BOOL.FALSE, null); SetViewport(cmd, (uint)dw, (uint)dh);
-        _scratch8[0] = 1f / aw;
-        _scratch8[1] = 1f / ah;
-        _scratch8[2] = 1f;
-        _scratch8[3] = 0f;
-        _scratch8[4] = dw / aw;
-        _scratch8[5] = dh / ah;
-        _scratch8[6] = (dw - 0.5f) / aw;
-        _scratch8[7] = (dh - 0.5f) / ah;
-        FullScreen(cmd, _blurPso, PoolSrvSlot(ia), _scratch8);
+        // pass B: DOWNSAMPLE chain — level k−1 → level k (each halves), 5-tap bilinear kernel, building the RT pyramid.
+        for (int k = 1; k <= iters; k++)
+        {
+            int src = lv[k - 1], dst = lv[k];
+            int duw = AcrylicKawaseMath.LevelDim(dw, k), duh = AcrylicKawaseMath.LevelDim(dh, k);
+            int suw = AcrylicKawaseMath.LevelDim(dw, k - 1), suh = AcrylicKawaseMath.LevelDim(dh, k - 1);
+            Barrier(cmd, _pool[src].Res, ref _pool[src].State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            Barrier(cmd, _pool[dst].Res, ref _pool[dst].State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
+            rt = Rtv(1 + dst); cmd->OMSetRenderTargets(1, &rt, BOOL.FALSE, null); SetViewport(cmd, (uint)duw, (uint)duh);
+            WriteKawaseConsts(_pool[src].W, _pool[src].H, suw, suh, offset);
+            FullScreen(cmd, _kdownPso, PoolSrvSlot(src), _scratchK);
+        }
 
-        // pass C: blur V, ib → ia (the final blurred snapshot lands back in ia)
-        Barrier(cmd, _pool[ib].Res, ref _pool[ib].State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        Barrier(cmd, _pool[ia].Res, ref _pool[ia].State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
-        rt = Rtv(1 + ia); cmd->OMSetRenderTargets(1, &rt, BOOL.FALSE, null); SetViewport(cmd, (uint)dw, (uint)dh);
-        _scratch8[0] = 1f / bw;
-        _scratch8[1] = 1f / bh;
-        _scratch8[2] = 0f;
-        _scratch8[3] = 1f;
-        _scratch8[4] = dw / bw;
-        _scratch8[5] = dh / bh;
-        _scratch8[6] = (dw - 0.5f) / bw;
-        _scratch8[7] = (dh - 0.5f) / bh;
-        FullScreen(cmd, _blurPso, PoolSrvSlot(ib), _scratch8);
+        // pass C: UPSAMPLE chain — level k → level k−1 (each doubles), 8-tap tent, folding back to level 0 (the result).
+        for (int k = iters; k >= 1; k--)
+        {
+            int src = lv[k], dst = lv[k - 1];
+            int duw = AcrylicKawaseMath.LevelDim(dw, k - 1), duh = AcrylicKawaseMath.LevelDim(dh, k - 1);
+            int suw = AcrylicKawaseMath.LevelDim(dw, k), suh = AcrylicKawaseMath.LevelDim(dh, k);
+            Barrier(cmd, _pool[src].Res, ref _pool[src].State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            Barrier(cmd, _pool[dst].Res, ref _pool[dst].State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
+            rt = Rtv(1 + dst); cmd->OMSetRenderTargets(1, &rt, BOOL.FALSE, null); SetViewport(cmd, (uint)duw, (uint)duh);
+            WriteKawaseConsts(_pool[src].W, _pool[src].H, suw, suh, offset);
+            FullScreen(cmd, _kupPso, PoolSrvSlot(src), _scratchK);
+        }
 
-        // pass D: composite the acrylic recipe onto the target — the canvas, or the back buffer on directBB (samples blurred ia)
+        // pass D: composite the acrylic recipe onto the target — the canvas, or the back buffer on directBB (samples the
+        // fully-folded blur in level 0, at dw×dh — down = 1 so the composite's used fraction is unchanged).
+        int ia = lv[0];
         Composite(cmd, in L, lw, lh, rx, ry, rw, rh, ia, dw, dh, compTarget, !external, compositeScissor);
 
-        if (cache) { _pool[ia].Stamp = nowStamp; _pool[ia].InUse = false; }   // KEEP ia pinned; record what it blurred
+        if (cache) { _pool[ia].Stamp = nowStamp; _pool[ia].InUse = false; }   // KEEP level 0 pinned; record what it blurred
         else Release(ia);
-        Release(ib);                                                          // ping-pong scratch → free list
+        for (int k = 1; k <= iters; k++) Release(lv[k]);                      // pyramid levels → free list
         LayersThisFrame++;
 
         if (!external) BindCanvas(cmd);
@@ -824,7 +855,8 @@ float4 PSMain(V i) : SV_Target
         if (_rtvHeap != null) { D3D12MemoryDiagnostics.Release(_rtvHeap, "Acrylic.RtvHeap"); _rtvHeap->Release(); }
         if (_srvHeap != null) { D3D12MemoryDiagnostics.Release(_srvHeap, "Acrylic.SrvHeap"); _srvHeap->Release(); }
         if (_copyPso != null) _copyPso->Release();
-        if (_blurPso != null) _blurPso->Release();
+        if (_kdownPso != null) _kdownPso->Release();
+        if (_kupPso != null) _kupPso->Release();
         if (_compPso != null) _compPso->Release();
         if (_copyRoot != null) _copyRoot->Release();
         if (_compRoot != null) _compRoot->Release();
