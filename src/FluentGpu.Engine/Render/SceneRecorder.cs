@@ -128,6 +128,18 @@ public static class SceneRecorder
         public RectF Damage;       // union of this frame's changed-node device bounds → the acrylic backdrop-cache damage region
         public bool HasDamage;
 
+        // Hover-elevate clip-ESCAPE (HoverElevateClipRootBit): under a flagged clip root, the sibling deferral PARKS
+        // the elevated child here (with everything its re-walk needs) instead of emitting; the flagged ancestor hoists
+        // it after its own clip + edge-fade scope closes, recording against the clip OUTSIDE the strip. One slot: walks
+        // are sequential, each root consumes its own subtree's park before the next shelf starts (innermost root wins).
+        public NodeHandle PendingElevate;
+        public Affine2D PendingElevateWorld;
+        public float PendingElevateOpacity;
+        public int PendingElevateDepth;
+        public float PendingElevateScaleX, PendingElevateScaleY;
+        public bool PendingElevateInMotion, PendingElevateScrollInMotion;
+        public InheritedState PendingElevateState;
+
         // Union a changed node's device bounds into the frame damage region (region-aware acrylic invalidation).
         public void AddDamage(in RectF r)
         {
@@ -185,14 +197,18 @@ public static class SceneRecorder
         public readonly NodeFlags InteractiveFlags;
         public readonly byte HasProgress;
         public readonly byte Disabled;
+        // A HoverElevateClipRoot ancestor is above this subtree: the sibling deferral PARKS the hover-elevated child
+        // in the accumulator for that root to hoist after its clip/fade scope closes, instead of emitting in place.
+        public readonly byte UnderElevateRoot;
 
-        public InheritedState(float hoverT, float pressT, NodeFlags interactiveFlags, byte hasProgress, byte disabled)
+        public InheritedState(float hoverT, float pressT, NodeFlags interactiveFlags, byte hasProgress, byte disabled, byte underElevateRoot = 0)
         {
             HoverT = hoverT;
             PressT = pressT;
             InteractiveFlags = interactiveFlags;
             HasProgress = hasProgress;
             Disabled = disabled;
+            UnderElevateRoot = underElevateRoot;
         }
 
         public readonly InheritedState ForChild(NodeFlags flags, bool nodeInteractive, bool hasLocalProgress, float localHoverT, float localPressT)
@@ -200,9 +216,19 @@ public static class SceneRecorder
             NodeFlags interactiveFlags = nodeInteractive ? flags : InteractiveFlags;
             byte disabled = Disabled != 0 || (flags & NodeFlags.Disabled) != 0 ? (byte)1 : (byte)0;
             if (nodeInteractive && hasLocalProgress)
-                return new InheritedState(localHoverT, localPressT, interactiveFlags, 1, disabled);
-            return new InheritedState(HoverT, PressT, interactiveFlags, HasProgress, disabled);
+                return new InheritedState(localHoverT, localPressT, interactiveFlags, 1, disabled, UnderElevateRoot);
+            return new InheritedState(HoverT, PressT, interactiveFlags, HasProgress, disabled, UnderElevateRoot);
         }
+
+        /// <summary>The state a HoverElevateClipRoot hands its children — descendant deferrals park, not emit.</summary>
+        public readonly InheritedState WithUnderElevateRoot()
+            => new(HoverT, PressT, InteractiveFlags, HasProgress, Disabled, 1);
+
+        /// <summary>The state the HOISTED subtree records under: it is already outside the root, so any flagged child
+        /// INSIDE it (the card wrapper within the hoisted cell) defers in place — a re-park would have no consumer
+        /// left (the root's consume already ran) and the subtree would silently vanish.</summary>
+        public readonly InheritedState WithoutUnderElevateRoot()
+            => new(HoverT, PressT, InteractiveFlags, HasProgress, Disabled, 0);
     }
 
     /// <param name="skipRoots">Subtree roots EXCLUDED from this record pass — out-of-bounds popup wrappers that render
@@ -1047,7 +1073,13 @@ public static class SceneRecorder
             }
             case VisualKind.Image:
             {
-                var ih = new ImageHandle(p.ImageId);
+                ImageVisualEffects effects = default;
+                _ = scene.TryGetImageEffects(node, out effects);
+                int imageId = p.ImageId;
+                if (effects.DerivedImageId != 0 && images is not null
+                    && images.StateOf(new ImageHandle(effects.DerivedImageId)) == ImageState.Ready)
+                    imageId = effects.DerivedImageId;
+                var ih = new ImageHandle(imageId);
                 bool ready = images is not null && images.StateOf(ih) == ImageState.Ready;
                 float fadeStart = float.NaN, fadeDur = 0f;
                 int fadeEase = 0;
@@ -1061,7 +1093,10 @@ public static class SceneRecorder
                     (drawRect, uv) = ImageContentFit((ImageFit)p.ImageFit, in local, srcW, srcH, p.ImageFocusX, p.ImageFocusY);
                 }
 
-                dl.DrawImage(drawRect, p.Corners, p.ImageId, ready, p.Fill, world, opacity, uv, fadeStart, fadeDur, fadeEase, key);
+                ImageMaskSpec mask = effects.Mask;
+                dl.DrawImage(drawRect, p.Corners, imageId, ready, p.Fill, world, opacity, uv, fadeStart, fadeDur,
+                    fadeEase, key, effects.Overlay, (int)mask.Edges, mask.BandLeft, mask.BandTop, mask.BandRight,
+                    mask.BandBottom, (int)mask.Falloff, mask.Intensity);
                 break;
             }
             case VisualKind.IconLayer:
@@ -1099,6 +1134,10 @@ public static class SceneRecorder
             ? world.Translate(p.ChildShiftX, p.ChildShiftY)
             : world;
         InheritedState childState = inherited.ForChild(flags, nodeInteractive, hasLocalProgress, localHoverT, localPressT);
+        // A flagged clip root re-tags its subtree: descendant hover-elevate deferrals PARK for this node's hoist
+        // (see the deferral below and the consume after this node's scope closes) instead of emitting in place.
+        if ((interaction.HandlerMask & InteractionInfo.HoverElevateClipRootBit) != 0)
+            childState = childState.WithUnderElevateRoot();
         // Logically-detached exits remain visually owned by this node. Emit them before live children so incoming
         // content paints over them while this parent's transform, opacity/layers, clip, and popup target stay active.
         var exitingChildren = scene.OrphanChildrenOf(node);
@@ -1115,12 +1154,69 @@ public static class SceneRecorder
         // content scrolling beneath it paints underneath — CSS sticky's implicit stacking. Unpinned = normal order.
         {
             bool anyPinned = false;
+            // Hover-elevate paint order (Element.HoverElevatePaint): a flagged child on the hover path is deferred to
+            // paint ABOVE its non-elevated siblings (the declarative z-index of a hovered card). One deferred slot:
+            // at most one sibling is hovered, and a two-card cross-fade is resolved by keeping the HIGHER-progress
+            // card deferred (the lower one records in place) — O(1) space, no sort, no allocation.
+            NodeHandle deferElevate = NodeHandle.Null;
+            float deferElevateT = 0f;
             for (var c = scene.FirstChild(node); !c.IsNull; c = scene.NextSibling(c))
             {
-                if ((scene.Flags(c) & NodeFlags.StickyPinned) != 0) { anyPinned = true; continue; }
+                NodeFlags cf = scene.Flags(c);
+                if ((cf & NodeFlags.StickyPinned) != 0) { anyPinned = true; continue; }
+                if ((scene.Interaction(c).HandlerMask & InteractionInfo.HoverElevatePaintBit) != 0)
+                {
+                    // Hover source published at record time: NodeFlags.Hovered/HoverWithin (instantaneous), else the
+                    // node's own eased InteractionAnim.HoverT so the EXIT fade keeps it elevated until it decays < 0.01.
+                    float ht = (cf & (NodeFlags.Hovered | NodeFlags.HoverWithin)) != 0 ? 1f
+                             : (scene.TryGetInteract(c, out var cia) ? cia.HoverT : 0f);
+                    if (ht > 0.01f)
+                    {
+                        if (deferElevate.IsNull) { deferElevate = c; deferElevateT = ht; continue; }
+                        if (ht > deferElevateT)
+                        {
+                            // A higher-progress card appeared — flush the previously-deferred (lower) one in place now,
+                            // then defer this one so the most-hovered card ends up on top.
+                            var flushed = Walk(scene, dl, images, deferElevate, childWorld, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack,
+                                childScaleX, childScaleY, inMotion, scrollInMotion, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
+                            result.Include(flushed);
+                            deferElevate = c; deferElevateT = ht;
+                            continue;
+                        }
+                        // Lower progress than the deferred card → record it now in normal order (falls through).
+                    }
+                }
                 var childResult = Walk(scene, dl, images, c, childWorld, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack,
                     childScaleX, childScaleY, inMotion, scrollInMotion, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
                 result.Include(childResult);
+            }
+            // The elevated (hovered) card paints after its non-elevated siblings, but before any sticky-pinned chrome.
+            // Under a HoverElevateClipRoot ancestor it doesn't emit HERE at all: it PARKS in the accumulator (one slot)
+            // and the flagged root hoists it after its clip + edge-fade scope closes — the card's lift/halo then paint
+            // OUTSIDE the strip's clip against the root's incoming clip (the true z-index escape), while everything
+            // resting stays exactly clipped. No root above (or the slot already taken) → emit in place as before.
+            if (!deferElevate.IsNull)
+            {
+                if (childState.UnderElevateRoot != 0 && stats.PendingElevate.IsNull)
+                {
+                    stats.PendingElevate = deferElevate;
+                    stats.PendingElevateWorld = childWorld;
+                    stats.PendingElevateOpacity = opacity;
+                    stats.PendingElevateDepth = depth + 1;
+                    stats.PendingElevateScaleX = childScaleX;
+                    stats.PendingElevateScaleY = childScaleY;
+                    stats.PendingElevateInMotion = inMotion;
+                    stats.PendingElevateScrollInMotion = scrollInMotion;
+                    // Strip the under-root tag: the hoisted subtree records OUTSIDE the root, and a flagged child
+                    // inside it (the card wrapper in the cell) must defer in place, not re-park into a dead slot.
+                    stats.PendingElevateState = childState.WithoutUnderElevateRoot();
+                }
+                else
+                {
+                    var elevResult = Walk(scene, dl, images, deferElevate, childWorld, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack,
+                        childScaleX, childScaleY, inMotion, scrollInMotion, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
+                    result.Include(elevResult);
+                }
             }
             if (anyPinned)
                 for (var c = scene.FirstChild(node); !c.IsNull; c = scene.NextSibling(c))
@@ -1194,6 +1290,24 @@ public static class SceneRecorder
         if (isEdgeFade) dl.PopLayer(deviceBounds, key);
         if (isOpacityGroup) dl.PopLayer(deviceBounds, key);
         if (isBlurGroup) dl.PopLayer(deviceBounds, key);
+
+        // Hover-elevate clip-ESCAPE consume: this node is the flagged clip root and a descendant deferral parked the
+        // hovered card — re-walk it NOW, with this node's whole scope (clip, edge fade, groups) already closed, against
+        // OUR incoming clip. The card's lift + halo paint outside the strip; resting content stayed exactly clipped.
+        // Emitted BEFORE the span store so the hoisted commands live inside this node's stored span (a reused span
+        // replays them at the same position). Span reuse/store are disabled for the hoisted subtree itself — its record
+        // position is hover-dependent, never a stable reuse anchor.
+        if ((interaction.HandlerMask & InteractionInfo.HoverElevateClipRootBit) != 0 && !stats.PendingElevate.IsNull)
+        {
+            var hoist = stats.PendingElevate;
+            stats.PendingElevate = NodeHandle.Null;
+            var hoistResult = Walk(scene, dl, images, hoist, stats.PendingElevateWorld, stats.PendingElevateOpacity,
+                stats.PendingElevateDepth, clip, in focus, in textEdit, scrollThumb, scrollTrack,
+                stats.PendingElevateScaleX, stats.PendingElevateScaleY, stats.PendingElevateInMotion,
+                stats.PendingElevateScrollInMotion, stats.PendingElevateState, skipRoots, spans, spanFrame,
+                spanReuseDisabled: true, spanStoreEnabled: false, ref stats);
+            result.Include(hoistResult);
+        }
 
         if (spanTracking)
         {

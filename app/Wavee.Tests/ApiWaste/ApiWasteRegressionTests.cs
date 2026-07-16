@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
@@ -11,6 +12,7 @@ using Wavee.Backend;
 using Wavee.Backend.Lyrics;
 using Wavee.Backend.Lyrics.Sources;
 using Wavee.Backend.Metadata;
+using Wavee.Backend.Persistence;
 using Wavee.Backend.Spotify;
 using Wavee.Core;
 using Wavee.SpotifyLive;
@@ -53,6 +55,7 @@ public class PathfinderResourceTests
 public class ExtensionEtagCacheTests
 {
     static SessionContext Ctx => new("me", "US", "premium", "en", Tier.Premium, false);
+    static SessionContext DutchCtx => Ctx with { Locale = "nl" };
 
     [Fact]
     public async Task SecondStaleFetch_SendsEtag_AndKeepsPayloadOn304()
@@ -79,6 +82,59 @@ public class ExtensionEtagCacheTests
         Assert.Equal("payload", second!.ToStringUtf8());
         Assert.Equal("v1", secondEtag);
         Assert.Equal(2, http.Calls);
+    }
+
+    [Fact]
+    public async Task Restart_RestoresExactLocalePayloadAndEtag_ForConditionalRevalidation()
+    {
+        const string uri = "spotify:album:persistent";
+        string path = Path.Combine(Path.GetTempPath(), "wavee-extension-test-" + Guid.NewGuid().ToString("N") + ".db");
+        static void DeleteDb(string p)
+        {
+            foreach (string suffix in new[] { "", "-wal", "-shm" })
+                try { File.Delete(p + suffix); } catch { }
+        }
+
+        try
+        {
+            using (var cold = new SqliteColdStore(path, SqliteColdStore.DefaultAccount, "nl-NL"))
+            {
+                var firstHttp = new FakeExchange((req, _) =>
+                {
+                    Assert.Equal("nl", req.Headers["Accept-Language"]);
+                    return new HttpResp(200, new Dictionary<string, string>(),
+                        ExtensionResponse(uri, Xm.ExtensionKind.RecommendedPlaylists, 200, "persistent-v1", ByteString.CopyFromUtf8("disk payload")));
+                });
+                var source = new ExtendedMetadataSource(firstHttp, () => "https://spclient.test", () => DutchCtx);
+                var cache = new ExtensionEtagCache(source, () => DutchCtx, persistent: cold);
+                Assert.Equal("disk payload", (await cache.GetPayloadAsync(uri, Xm.ExtensionKind.RecommendedPlaylists,
+                    TestContext.Current.CancellationToken))!.ToStringUtf8());
+                cold.Flush();
+            }
+
+            string? sentEtag = null;
+            using (var reopened = new SqliteColdStore(path, SqliteColdStore.DefaultAccount, "nl"))
+            {
+                var secondHttp = new FakeExchange((req, _) =>
+                {
+                    var body = Xm.BatchedEntityRequest.Parser.ParseFrom(HttpCompression.Gunzip(req.Body!));
+                    sentEtag = Assert.Single(Assert.Single(body.EntityRequest).Query).Etag;
+                    return new HttpResp(200, new Dictionary<string, string>(),
+                        ExtensionResponse(uri, Xm.ExtensionKind.RecommendedPlaylists, 304, "persistent-v1", null));
+                });
+                var source = new ExtendedMetadataSource(secondHttp, () => "https://spclient.test", () => DutchCtx);
+                var cache = new ExtensionEtagCache(source, () => DutchCtx, persistent: reopened);
+                cache.MarkStale(uri, Xm.ExtensionKind.RecommendedPlaylists);
+
+                var restored = await cache.GetPayloadAsync(uri, Xm.ExtensionKind.RecommendedPlaylists,
+                    TestContext.Current.CancellationToken);
+
+                Assert.Equal("disk payload", restored!.ToStringUtf8());
+                Assert.Equal("persistent-v1", sentEtag);
+                Assert.Equal(1, secondHttp.Calls);
+            }
+        }
+        finally { DeleteDb(path); }
     }
 
     internal static byte[] ExtensionResponse(string uri, Xm.ExtensionKind kind, int status, string? etag, ByteString? payload)

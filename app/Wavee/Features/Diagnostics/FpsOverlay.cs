@@ -29,7 +29,7 @@ sealed class FpsOverlay : Component
     {
         Direction = 0, AlignItems = FlexAlign.Center, Gap = 4f,
         Padding = new Edges4(8f, 4f, 8f, 4f), Corners = CornerRadius4.All(6f),
-        Fill = new ColorF(0f, 0f, 0f, 0.62f), BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
+        Fill = Tok.FillSolidBase with { A = 0.90f }, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
         Children =
         [
             // Retained slots: initial "--" until the host writes the first reading; refreshed in place, no re-render.

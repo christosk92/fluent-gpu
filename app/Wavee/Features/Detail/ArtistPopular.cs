@@ -22,14 +22,14 @@ sealed class ArtistPopular : Component
     readonly string _ctx, _title;
     readonly PlaybackBridge? _bridge;
     readonly Services _svc;
-    readonly ColorF _accent;
+    readonly Func<ColorF> _accent;
     readonly ItemsViewController _ctl = new();
     readonly SelectionModel _sel = new();
     readonly Func<bool> _showChecks;
     FillRowVirtualLayout? _layout;
     int _touchpadSnapPage = -1;
     int _programmaticPage = -1;
-    public ArtistPopular(IReadOnlyList<Track> tracks, string ctx, PlaybackBridge? bridge, Services svc, string title, ColorF accent)
+    public ArtistPopular(IReadOnlyList<Track> tracks, string ctx, PlaybackBridge? bridge, Services svc, string title, Func<ColorF> accent)
     {
         _tracks = tracks; _ctx = ctx; _bridge = bridge; _svc = svc; _title = title; _accent = accent;
         _showChecks = () => { _ = _sel.Version.Value; return _sel.SelectedCount > 1; };   // 2+ only (a plain click must not summon checkboxes)
@@ -141,7 +141,7 @@ sealed class ArtistPopular : Component
             Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
             Children =
             [
-                Surfaces.AccentHeader(_title, _accent) with { Grow = 1f, Basis = 0f },
+                Surfaces.AccentHeader(_title, _accent()) with { Grow = 1f, Basis = 0f },
                 pages > 1 ? Pager(pg, pages, GoTo) : new BoxEl(),
             ],
         };
@@ -301,7 +301,7 @@ sealed class ArtistPopular : Component
                     {
                         Padding = new Edges4(2f, 2f, 2f, 2f), Corners = CornerRadius4.All(6f),
                         Fill = ColorF.FromRgba(0, 0, 0, 204),
-                        Children = [WaveeEqualizer.Of(st.IsPlaying, Tok.AccentTextPrimary, 14f)],
+                        Children = [WaveeEqualizer.Of(st.IsPlaying, static () => Tok.AccentTextPrimary, 14f)],
                     },
                 ],
             }

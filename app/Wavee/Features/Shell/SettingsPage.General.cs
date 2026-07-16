@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -12,6 +13,27 @@ namespace Wavee;
 sealed partial class SettingsPage
 {
     readonly Signal<int> _density = new(1);
+    readonly Signal<int> _language = new(0);
+
+    static (string[] Codes, string[] Labels) LanguageOptions()
+    {
+        return (
+            ["system", "en-US", "nl", "ko-KR"],
+            [
+                Loc.Get(Strings.Settings.Language.System),
+                Loc.Get(Strings.Settings.Language.EnglishUs),
+                Loc.Get(Strings.Settings.Language.Dutch),
+                Loc.Get(Strings.Settings.Language.Korean),
+            ]);
+    }
+
+    static int LanguageIndex(string culture)
+    {
+        var (codes, _) = LanguageOptions();
+        for (int i = 0; i < codes.Length; i++)
+            if (string.Equals(codes[i], culture, StringComparison.OrdinalIgnoreCase)) return i;
+        return 0;
+    }
 
     static string[] DensityLabels() =>
     [
@@ -33,6 +55,8 @@ sealed partial class SettingsPage
         int themeMode = settings?.Get(WaveeSettings.ThemeMode) ?? 0;
         int density = Math.Clamp(_density.Value, 0, DensityLabels().Length - 1);
         int pageLayout = Math.Clamp(settings?.Get(WaveeSettings.DetailPageLayout) ?? 0, 0, PageLayoutLabels().Length - 1);
+        var languageOptions = LanguageOptions();
+        int language = Math.Clamp(_language.Value, 0, languageOptions.Codes.Length - 1);
 
         Element AppearanceToggle(SettingKey<bool> key) => ToggleSwitch.Create(settings?.Get(key) ?? false, () =>
         {
@@ -63,6 +87,14 @@ sealed partial class SettingsPage
             Bump();
         }
 
+        void SetLanguage(int i)
+        {
+            if (settings is null || (uint)i >= (uint)languageOptions.Codes.Length) return;
+            settings.Set(WaveeSettings.UiCulture, languageOptions.Codes[i]);
+            _language.Value = i;
+            Bump();
+        }
+
         return SettingsTabStack(
             SettingsSectionHeader(Loc.Get(Strings.Settings.Appearance.Title), Icons.Brush),
             SettingsRow(Loc.Get(Strings.Settings.Appearance.Theme), Loc.Get(Strings.Settings.Appearance.ThemeSub),
@@ -75,7 +107,11 @@ sealed partial class SettingsPage
                 AppearanceToggle(WaveeSettings.DisableColorWashes), Icons.Brush),
             DensityBlock(density, SetDensity),
             SettingsRow(Loc.Get(Strings.Settings.Appearance.PageLayout), Loc.Get(Strings.Settings.Appearance.PageLayoutSub),
-                PageLayoutCards(pageLayout, SetPageLayout), Icons.List));
+                PageLayoutCards(pageLayout, SetPageLayout), Icons.List),
+            SettingsSectionHeader(Loc.Get(Strings.Settings.Language.Title), Icons.Globe),
+            SettingsRow(Loc.Get(Strings.Settings.Language.Label), Loc.Get(Strings.Settings.Language.RestartSub),
+                ComboBox.Create(languageOptions.Labels, _language, width: 260f, isEnabled: settings is not null,
+                    onSelectionChanged: SetLanguage), Icons.Globe));
     }
 
     // ── the page-layout picker: the preview cards ARE the selector (a radio pair, PaletteRow-style) ─────────────────

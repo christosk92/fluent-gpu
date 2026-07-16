@@ -5,10 +5,12 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Wavee.Backend;
+using Wavee.Backend.Spotify;
 
 namespace Wavee.SpotifyLive;
 
 public readonly record struct PathfinderKey(
+    string Locale,
     string OperationName,
     string Sha256Hash,
     string BodyHash,
@@ -19,12 +21,14 @@ public sealed class PathfinderResource : IConcertPathfinder
     readonly PathfinderClient _client;
     readonly Resource<PathfinderKey, CachedJson> _resource;
     readonly ConcurrentDictionary<PathfinderKey, byte[]> _bodies = new();
+    readonly Func<SessionContext> _ctx;
 
     readonly record struct CachedJson(byte[] Bytes, TimeSpan Ttl);
 
     public PathfinderResource(PathfinderClient client, Func<SessionContext> ctx, WaveeLogger log = default, int maxEntries = 128)
     {
         _client = client;
+        _ctx = ctx;
         _resource = new Resource<PathfinderKey, CachedJson>(
             FetchAsync,
             new FreshnessPolicy.PollWhole(TimeSpan.FromMinutes(15), SuspendInPlayback: false),
@@ -36,6 +40,7 @@ public sealed class PathfinderResource : IConcertPathfinder
     }
 
     public int FetchCount => _resource.FetchCount;
+    public string Locale => SpotifyHeaders.NormalizeLanguage(_ctx().Locale);
 
     /// <summary>Resident request-body count. Test/diagnostic visibility for the cache-HIT body-cleanup contract (a fresh
     /// hit must not strand its request blob in <c>_bodies</c>).</summary>
@@ -57,7 +62,7 @@ public sealed class PathfinderResource : IConcertPathfinder
         if (ttlValue <= TimeSpan.Zero)
             return await QueryAsync(operationName, sha256Hash, writeVariables, platform, ct, ttlValue).ConfigureAwait(false);
 
-        var key = BuildKey(operationName, sha256Hash, writeVariables, platform, out var body);
+        var key = BuildKey(SpotifyHeaders.NormalizeLanguage(_ctx().Locale), operationName, sha256Hash, writeVariables, platform, out var body);
         _bodies[key] = body;
         var loaded = _resource.Use(key);
         if (loaded.IsReady && loaded.Value is { } cached)
@@ -77,7 +82,7 @@ public sealed class PathfinderResource : IConcertPathfinder
         CancellationToken ct = default, TimeSpan? ttl = null)
     {
         var ttlValue = ttl ?? TtlFor(operationName);
-        var key = BuildKey(operationName, sha256Hash, writeVariables, platform, out var body);
+        var key = BuildKey(SpotifyHeaders.NormalizeLanguage(_ctx().Locale), operationName, sha256Hash, writeVariables, platform, out var body);
 
         if (ttlValue <= TimeSpan.Zero)
             return await _client.QueryBodyBytesAsync(operationName, body, platform, ct).ConfigureAwait(false);
@@ -110,12 +115,12 @@ public sealed class PathfinderResource : IConcertPathfinder
         }
     }
 
-    static PathfinderKey BuildKey(string operationName, string sha256Hash,
+    static PathfinderKey BuildKey(string locale, string operationName, string sha256Hash,
         Action<Utf8JsonWriter>? writeVariables, PathfinderClient.Platform platform, out byte[] body)
     {
         body = PathfinderClient.BuildBody(operationName, sha256Hash, writeVariables);
         var hash = Convert.ToHexString(SHA256.HashData(body));
-        return new PathfinderKey(operationName, sha256Hash, hash, platform);
+        return new PathfinderKey(locale, operationName, sha256Hash, hash, platform);
     }
 
     public static TimeSpan TtlFor(string operationName) => operationName switch

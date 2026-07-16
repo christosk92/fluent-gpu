@@ -135,9 +135,11 @@ public sealed class ScrollIntegrator
     {
         public int Node;            // latched node index (-1 = none)
         public bool Horizontal;
-        public double T0, T1;       // the two newest sample times (seconds, QPC-derived)
-        public float X0, X1;        // the two newest sample positions (cumulative axis, DIP)
-        public int Count;           // samples seen since latch (0/1/2+)
+        public double Tp3, Tp2;     // the two OLDEST retained sample times (5-deep history; Tp3 oldest)
+        public float Xp3, Xp2;      // their positions — extra depth feeds the least-squares fit (noise ∝ 1/√N)
+        public double TPrev, T0, T1;// the three newest sample times (seconds, QPC-derived)
+        public float XPrev, X0, X1; // the three newest sample positions (cumulative axis, DIP)
+        public int Count;           // samples seen since latch, capped at 5 (≥3 ⇒ the LSQ fit engages)
         public float Anchor;        // offset captured at latch
     }
     private GestureResampler _rs = new() { Node = -1 };
@@ -277,6 +279,13 @@ public sealed class ScrollIntegrator
         if (n.IsNull || !_scene.IsLive(n) || !_scene.HasScroll(n)) return;
         _rs = new GestureResampler { Node = (int)n.Raw.Index, Horizontal = horizontal, Anchor = anchorOffset };
         ref ScrollState sc = ref _scene.ScrollRef(n);
+        // The anchor just latched from the LIVE offset, which already includes every prior anchor re-pin. Any undrained
+        // shift (recorded while this node was outside the _active tick set — e.g. budgeted realize correcting extents
+        // after the previous gesture settled) is therefore stale here: applying it at the next Tick would double-count
+        // the pin into the anchor. Discard it; only shifts recorded AFTER this latch belong to the anchor.
+        if (sc.PendingAnchorShift != 0f && FluentGpu.Foundation.ScrollTrace.On)
+            FluentGpu.Foundation.ScrollTrace.Note(104, sc.PendingAnchorShift, (int)n.Raw.Index);   // stale pre-latch shift discarded
+        sc.PendingAnchorShift = 0f;
         sc.Phase = TouchpadTracking;
         Arm(n);
     }
@@ -288,9 +297,12 @@ public sealed class ScrollIntegrator
     {
         if (_rs.Node != nodeIndex) return;
         if (_rs.Count > 0 && !(qpcSec > _rs.T1)) return;   // non-monotonic / duplicate ⇒ skip
+        _rs.Tp3 = _rs.Tp2; _rs.Xp3 = _rs.Xp2;              // shift the 5-deep history oldest-first
+        _rs.Tp2 = _rs.TPrev; _rs.Xp2 = _rs.XPrev;
+        _rs.TPrev = _rs.T0; _rs.XPrev = _rs.X0;
         _rs.T0 = _rs.T1; _rs.X0 = _rs.X1;
         _rs.T1 = qpcSec; _rs.X1 = axisPos;
-        if (_rs.Count < 2) _rs.Count++;
+        if (_rs.Count < 5) _rs.Count++;
     }
 
     /// <summary>End contact tracking on <paramref name="n"/> (the dispatcher recorder, P3). Clears the latched resampler.</summary>
@@ -338,6 +350,17 @@ public sealed class ScrollIntegrator
             if (_parkedActive.Contains((int)n.Raw.Index)) continue;   // parked (backgrounded) viewport: freeze; resumes on un-park
             int idx = (int)n.Raw.Index;
             ref ScrollState sc = ref _scene.ScrollRef(n);
+            // Consume any virtualization anchor re-pin the layout recorded since the last tick BEFORE reading the offset.
+            // Drain the shift every tick regardless of phase (a shift arriving during Fling/Idle must not leak into a later
+            // gesture), but only carry the resampler anchor along when THIS node is the one being tracked (§4.1).
+            if (sc.PendingAnchorShift != 0f)
+            {
+                bool tracked = _rs.Node == idx;
+                if (tracked) _rs.Anchor += sc.PendingAnchorShift;
+                if (FluentGpu.Foundation.ScrollTrace.On)
+                    FluentGpu.Foundation.ScrollTrace.Note(tracked ? 102 : 103, sc.PendingAnchorShift, idx);   // 102=shift folded into the live resampler anchor, 103=drained with no tracked gesture
+                sc.PendingAnchorShift = 0f;
+            }
             bool horizontal = sc.Orientation == 1;
             float off = horizontal ? sc.OffsetX : sc.OffsetY;
             byte phase = sc.Phase;
@@ -716,14 +739,75 @@ public sealed class ScrollIntegrator
         double span = t1 - t0;
         if (span < ScrollTuning.ResampleMinDeltaMs / 1000.0) return x1;   // degenerate spacing guard
         double targetT = frameQpcSec - ScrollTuning.ResampleLatencyMs / 1000.0;
-        if (targetT <= t1)
+        // With 3 samples, evaluate a LEAST-SQUARES line through them instead of piecewise 2-point interpolation. The DM
+        // producer stamps content updates at RECEIVE time (per compositor tick) while the digitizer runs ~2× faster, so
+        // adjacent samples carry up to ±half-a-tick of time-quantization noise (traced −38/−69/−13 DIP on evenly-stamped
+        // packets — ±12 DIP position noise at speed, the felt grind). The fit is EXACT for on-line samples — constant
+        // velocity has zero lag (the §8.4 contact-1to1 pin holds unchanged) and velocity-consistent hitch catch-ups
+        // (§A.6) pass through unsmeared; only off-line quantization noise averages out. Evaluation clamps to
+        // [tPrev, t1] — the same no-extrapolation / bounded-back-projection contract as the piecewise path below.
+        if (_rs.Count >= 3)
         {
-            double f = (targetT - t0) / span;                              // interpolate (preferred)
+            // Up to 5 retained samples; a stale tail is EXCLUDED (a sample older than ~3 packet gaps belongs to a
+            // different motion regime — fitting across a pause would tilt the line).
+            int n = Math.Min(_rs.Count, 5);
+            double staleBefore = t1 - 0.050;
+            double ts = 0.0; float xs = 0f; int used = 0;
+            for (int k = 0; k < n; k++)
+            {
+                double tk = k == 0 ? t1 : k == 1 ? t0 : k == 2 ? _rs.TPrev : k == 3 ? _rs.Tp2 : _rs.Tp3;
+                if (tk < staleBefore) break;   // history is ordered newest→oldest; first stale ends the window
+                ts += tk; xs += k == 0 ? x1 : k == 1 ? x0 : k == 2 ? _rs.XPrev : k == 3 ? _rs.Xp2 : _rs.Xp3;
+                used++;
+            }
+            if (used >= 3)
+            {
+                double tm = ts / used; float xm = xs / used;
+                double num = 0.0, denom = 0.0, oldest = t1;
+                for (int k = 0; k < used; k++)
+                {
+                    double tk = k == 0 ? t1 : k == 1 ? t0 : k == 2 ? _rs.TPrev : k == 3 ? _rs.Tp2 : _rs.Tp3;
+                    float xk = k == 0 ? x1 : k == 1 ? x0 : k == 2 ? _rs.XPrev : k == 3 ? _rs.Xp2 : _rs.Xp3;
+                    double d = tk - tm;
+                    num += d * (xk - xm); denom += d * d;
+                    oldest = tk;
+                }
+                if (denom > 1e-9)
+                {
+                    double slope = num / denom;
+                    double tEval = Math.Clamp(targetT, oldest, t1);
+                    if (FluentGpu.Foundation.ScrollTrace.On && targetT > t1) FluentGpu.Foundation.ScrollTrace.Note(101, 0f);
+                    return (float)(xm + slope * (tEval - tm));
+                }
+            }
+        }
+        if (targetT >= t0 && targetT <= t1)
+        {
+            double f = (targetT - t0) / span;                              // interpolate newest pair (the common case)
             return (float)(x0 + (x1 - x0) * f);
         }
-        double predCap = Math.Min(ScrollTuning.ResampleMaxPredictionMs / 1000.0, 0.5 * span);
-        double pred = Math.Min(targetT - t1, predCap);                     // extrapolate, capped (§4.1)
-        return (float)(x1 + (x1 - x0) / span * pred);
+        if (targetT < t0)
+        {
+            // The 12ms latency target can land one pair back — evaluate the [tPrev, t0] segment when the third sample
+            // is usable, else back-project on the newest pair. Always the SAME piecewise-linear function of time (with
+            // f clamped at −1 span), never a hold/clamp to a sample: a hold made the trajectory dt-DEPENDENT at gesture
+            // start (the dt-invariance gate caught a 1.6 DIP divergence at dt=8ms).
+            double spanP = t0 - _rs.TPrev;
+            if (_rs.Count >= 3 && spanP >= ScrollTuning.ResampleMinDeltaMs / 1000.0)
+            {
+                double f = (targetT - _rs.TPrev) / spanP;
+                if (f < -1.0) f = -1.0;
+                return (float)(_rs.XPrev + (x0 - _rs.XPrev) * f);
+            }
+            double fb = (targetT - t0) / span;
+            if (fb < -1.0) fb = -1.0;
+            return (float)(x0 + (x1 - x0) * fb);
+        }
+        // NO extrapolation past the newest sample — hold at it. Traced sessions proved prediction fires almost only at
+        // packet GAPS (deceleration, segment end, lift), exactly where the last slope is stale: every mis-prediction was
+        // a visible snap-back (up to 32 DIP), while with the 12ms latency the live stream virtually never lands here.
+        if (FluentGpu.Foundation.ScrollTrace.On) FluentGpu.Foundation.ScrollTrace.Note(101, 0f);
+        return x1;
     }
 
     /// <summary>Retarget an eased track from the live value (mid-flight retargets stay continuous).</summary>

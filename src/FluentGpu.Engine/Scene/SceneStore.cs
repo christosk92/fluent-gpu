@@ -129,6 +129,7 @@ public sealed class SceneStore : ISceneBackend
     // Per-element edge fade (sparse): feather the subtree's alpha (+ optional blur) near chosen edges; read at record
     // time → PushLayer{EdgeFade}. Freed on FreeSubtree.
     private readonly ColdSlab<EdgeFadeSpec> _edgeFades = new();   // GEN-17 (wired)
+    private readonly ColdSlab<ImageVisualEffects> _imageEffects = new();
     // Per-text-node measure cache (pure-function: (text,style,availW) → size); self-invalidating, freed on FreeSubtree.
     private readonly ColdSlab<TextMeasureCache> _measureCache = new();   // GEN-17 (wired) — hot: per-layout text measure
     // Implicit brush transitions (WinUI BrushTransition): sparse, O(transitioning nodes), advanced at phase 7.
@@ -342,6 +343,7 @@ public sealed class SceneStore : ISceneBackend
             _pressedBorderBrushes.Remove(idx);
             _acrylics.Remove(idx);
             _edgeFades.Remove(idx);
+            _imageEffects.Remove(idx);
             _brushAnims.Remove(idx);
         }
         if (_paint[idx].VisualKind == VisualKind.Text)
@@ -1232,6 +1234,22 @@ public sealed class SceneStore : ISceneBackend
     }
     public bool TryGetEdgeFade(NodeHandle h, out EdgeFadeSpec e) => _edgeFades.TryGet((int)h.Raw.Index, out e);
     public void ClearEdgeFade(NodeHandle h) { int idx = (int)h.Raw.Index; _edgeFades.Remove(idx); MarkRecordDirty(idx); }
+
+    public void SetImageEffects(NodeHandle h, in ImageVisualEffects effects)
+    {
+        int idx = (int)h.Raw.Index;
+        _flags[idx] |= NodeFlags.SparsePaint;
+        _imageEffects.GetOrAdd(idx) = effects;
+        MarkRecordDirty(idx);
+    }
+    public bool TryGetImageEffects(NodeHandle h, out ImageVisualEffects effects)
+        => _imageEffects.TryGet((int)h.Raw.Index, out effects);
+    public void ClearImageEffects(NodeHandle h)
+    {
+        int idx = (int)h.Raw.Index;
+        _imageEffects.Remove(idx);
+        MarkRecordDirty(idx);
+    }
 
     // ── E5-L2 drag-drop columns (BoxEl.Draggable / BoxEl.DropTarget → Input.DragDropContext) ──────
     /// <summary>Set (or clear, null) the node's typed drag-source spec — the reconciler writes it from

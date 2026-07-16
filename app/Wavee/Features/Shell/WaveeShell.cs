@@ -411,7 +411,7 @@ sealed class WaveeShell : Component
                                         // host's live re-theme (RethemeAll) re-fires it → FillCardDefault follows the theme.
                                         Fill = Prop.Of(() => WaveeColors.FileArea),
                                         BorderWidth = 1f,
-                                        BorderColor = Tok.StrokeCardDefault,
+                                        BorderColor = Prop.Of(() => Tok.StrokeCardDefault),
                                         Corners = new CornerRadius4(WaveeRadius.Card, WaveeRadius.Card, 0f, 0f),
                                         ClipToBounds = true,
                                         // Layout firewall (#5): this card is Grow=1 (its size is the shell's content region,

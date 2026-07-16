@@ -1,0 +1,152 @@
+{
+  "$culture": "nl",
+  "$comment": "Nederlandse overrides. Ontbrekende sleutels vallen per sleutel terug op en-US.",
+
+  "detail": {
+    "play": "Afspelen",
+    "pause": "Pauzeren",
+    "likedSongs": "Nummers die je leuk vindt",
+    "artist": "ARTIEST",
+    "songCount": "{count, plural, one {# nummer} other {# nummers}}",
+    "today": "Vandaag",
+    "yesterday": "Gisteren"
+  },
+
+  "home": {
+    "goodMorning": "Goedemorgen",
+    "goodAfternoon": "Goedemiddag",
+    "goodEvening": "Goedenavond",
+    "greeting": "{part}, {name}",
+    "onRotation": "Dit heb je de laatste tijd geluisterd.",
+    "madeForYou": "Voor jou gemaakt",
+    "moreForYou": "Meer voor jou",
+    "recentlyPlayed": "Onlangs afgespeeld",
+    "yourPlaylists": "Jouw playlists",
+    "yourAlbums": "Jouw albums",
+    "yourArtists": "Jouw artiesten",
+    "madeFor": "Gemaakt voor {name}",
+    "you": "jou",
+    "newReleases": "Nieuwe releases",
+    "popularArtists": "Populaire artiesten",
+    "artist": "Artiest",
+    "featuredAlbum": "UITGELICHT ALBUM",
+    "play": "Afspelen",
+    "pause": "Pauzeren",
+    "single": "Single",
+    "ep": "EP",
+    "album": "Album",
+    "compilation": "Compilatie"
+  },
+
+  "settings": {
+    "title": "Instellingen",
+    "tabs": {
+      "general": "Algemeen",
+      "playback": "Afspelen",
+      "storage": "Opslag en cache",
+      "diagnostics": "Diagnostiek",
+      "about": "Over"
+    },
+    "language": {
+      "title": "Taal en regio",
+      "label": "App-taal",
+      "restartSub": "Wijzigingen worden toegepast wanneer Wavee opnieuw wordt gestart.",
+      "system": "Systeemstandaard",
+      "englishUs": "English (United States)",
+      "dutch": "Nederlands",
+      "korean": "한국어"
+    },
+    "appearance": {
+      "title": "Weergave",
+      "subtitle": "Thema, kleurenpalet en lijstdichtheid",
+      "theme": "Thema",
+      "themeSub": "Systeem volgt de Windows-instelling automatisch",
+      "palette": "Palet",
+      "paletteSub": "Kleurt de interface en accentkleur",
+      "rowDensity": "Rijhoogte",
+      "rowDensitySub": "Hoogte van rijen in nummerlijsten",
+      "pageLayout": "Indeling van nummerpagina",
+      "pageLayoutSub": "Zijpaneel op brede vensters of altijd een gestapelde kop",
+      "disableMarquee": "Lopende tekst uitschakelen",
+      "disableMarqueeSub": "Lange titels afkappen in plaats van laten scrollen",
+      "disableColorWashes": "Kleurvlakken uitschakelen",
+      "disableColorWashesSub": "Neutrale Mica en pagina's gebruiken in plaats van kleuren uit artwork",
+      "paletteWarm": "Warm",
+      "paletteSlate": "Leisteen",
+      "paletteNeutral": "Neutraal",
+      "paletteAccent": "Accent"
+    },
+    "choice": {
+      "system": "Systeem",
+      "light": "Licht",
+      "dark": "Donker",
+      "compact": "Compact",
+      "default": "Standaard",
+      "cozy": "Ruim",
+      "comfortable": "Comfortabel",
+      "automatic": "Automatisch",
+      "stacked": "Gestapeld"
+    }
+  },
+
+  "nav": {
+    "home": "Start",
+    "search": "Zoeken",
+    "albums": "Albums",
+    "artists": "Artiesten",
+    "likedSongs": "Nummers die je leuk vindt",
+    "podcasts": "Podcasts",
+    "localFiles": "Lokale bestanden",
+    "playlist": "Playlist",
+    "album": "Album",
+    "artist": "Artiest",
+    "yourLibrary": "Jouw bibliotheek",
+    "viewAllHistory": "Volledige geschiedenis bekijken"
+  },
+
+  "sidebar": {
+    "pinned": "Vastgemaakt",
+    "yourLibrary": "Jouw bibliotheek",
+    "albums": "Albums",
+    "artists": "Artiesten",
+    "likedSongs": "Nummers die je leuk vindt",
+    "podcasts": "Podcasts",
+    "playlists": "Playlists",
+    "localFiles": "Lokale bestanden",
+    "soon": "Binnenkort",
+    "dropToPin": "Sleep items hierheen om ze vast te maken",
+    "songCount": "{count, plural, one {# nummer} other {# nummers}}",
+    "createPlaylist": "Playlist",
+    "createFolder": "Map",
+    "newPlaylist": "Mijn playlist"
+  },
+
+  "common": {
+    "more": "Meer",
+    "retry": "Opnieuw proberen",
+    "dismiss": "Sluiten",
+    "offline": "Je bent offline — opgeslagen inhoud wordt getoond.",
+    "emptyTitle": "Hier is nog niets",
+    "emptySubtitle": "Zodra er iets beschikbaar is, verschijnt het hier.",
+    "errorTitle": "Er is iets misgegaan.",
+    "errorSubtitle": "Controleer je verbinding en probeer het opnieuw."
+  },
+
+  "player": {
+    "nothingPlaying": "Er wordt niets afgespeeld",
+    "loading": "Laden…",
+    "cannotPlay": "Dit nummer kan niet worden afgespeeld",
+    "previous": "Vorige",
+    "next": "Volgende",
+    "shuffle": "Shuffle",
+    "repeat": "Herhalen",
+    "pause": "Pauzeren",
+    "play": "Afspelen",
+    "likedSongs": "Nummers die je leuk vindt"
+  },
+
+  "menu": {
+    "moveUp": "Omhoog verplaatsen",
+    "moveDown": "Omlaag verplaatsen"
+  }
+}

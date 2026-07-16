@@ -14,6 +14,17 @@ public static class SpotifyHeaders
     public static string AppPlatform => SpotifyRuntimeIdentity.AppPlatform;
     public static string AppVersion => SpotifyRuntimeIdentityHost.Current.AppVersion;
     public static string UserAgent => SpotifyRuntimeIdentityHost.Current.UserAgent;
+    /// <summary>Normalizes Spotify's preferred-language value to the two-letter form used by the desktop client.</summary>
+    public static string NormalizeLanguage(string? culture)
+    {
+        if (string.IsNullOrWhiteSpace(culture)) return "en";
+        ReadOnlySpan<char> value = culture.AsSpan().Trim();
+        int separator = value.IndexOfAny('-', '_');
+        ReadOnlySpan<char> language = separator >= 0 ? value[..separator] : value;
+        return language.Length == 2 && char.IsAsciiLetter(language[0]) && char.IsAsciiLetter(language[1])
+            ? language.ToString().ToLowerInvariant()
+            : "en";
+    }
 
     // ── §2.7 — the first-party header set for the playlist-v2 MUTATION routes (/…/changes, /…/rootlist/changes) ──
     // The gateway gates these routes on a matching (Spotify-App-Version · App-Platform · User-Agent · spotify-playlist-
@@ -24,7 +35,7 @@ public static class SpotifyHeaders
     // repeated defensively (the middleware overwrites them with the same values). Origin is intentionally omitted — it is
     // not part of the gateway's gating tuple, and the spclient base URL isn't available at this layer (the transport owns
     // URL composition).
-    public static Dictionary<string, string> PlaylistV2Mutation(string? spclientBaseUrl = null)
+    public static Dictionary<string, string> PlaylistV2Mutation(string language, string? spclientBaseUrl = null)
         => new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["Content-Type"] = "application/x-www-form-urlencoded",
@@ -32,7 +43,7 @@ public static class SpotifyHeaders
             ["Spotify-App-Version"] = AppVersion,
             ["spotify-playlist-sync-reason"] = "CAk=",
             ["spotify-apply-lenses"] = "auto",
-            ["Accept-Language"] = "en",
+            ["Accept-Language"] = NormalizeLanguage(language),
             ["Cache-Control"] = "no-store",
             ["spotify-accept-geoblock"] = "dummy",
             ["spotify-dsa-mode-enabled"] = "false",
@@ -47,10 +58,13 @@ public static class SpotifyHeaders
     // ── PlayPlay Step A — POST /playplay/v1/key/{fileIdHex} ───────────────────────────────────────────────────────────
     // Same gateway quirk as playlist-v2 mutations: Content-Type MUST be x-www-form-urlencoded despite a protobuf body.
     // Bearer, client-token, App-Platform, Spotify-App-Version, and User-Agent are stamped by ClientTokenMiddleware.
-    public static Dictionary<string, string> PlayPlayKey()
+    public static Dictionary<string, string> PlayPlayKey(string language)
         => new(StringComparer.OrdinalIgnoreCase)
         {
             ["Content-Type"] = "application/x-www-form-urlencoded",
-            ["Accept-Language"] = "en",
+            ["Accept-Language"] = NormalizeLanguage(language),
         };
+
+    // Compatibility for optional external PlayPlay source trees that have not yet adopted launch-locale injection.
+    public static Dictionary<string, string> PlayPlayKey() => PlayPlayKey("en");
 }

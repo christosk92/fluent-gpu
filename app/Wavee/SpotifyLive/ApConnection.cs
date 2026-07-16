@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Wavee.Backend;
@@ -16,7 +18,8 @@ public sealed class ApConnection : IDisposable
     /// <summary>Idle read timeout for the persistent channel — longer than the AP's ping interval so idle reads survive.</summary>
     public static readonly TimeSpan IdleReadTimeout = TimeSpan.FromSeconds(90);
 
-    const byte CmdPing = 0x04, CmdPong = 0x49, CmdPongAck = 0x4a, CmdAesKeyRequest = 0x0c, CmdAesKey = 0x0d, CmdAesKeyError = 0x0e;
+    const byte CmdPing = 0x04, CmdPong = 0x49, CmdPongAck = 0x4a, CmdAesKeyRequest = 0x0c, CmdAesKey = 0x0d,
+        CmdAesKeyError = 0x0e, CmdLocalePreamble = 0x0f, CmdPreferredLocale = 0x74;
     static readonly byte[] PongPayload = new byte[4];   // librespot answers Ping with Pong(0x00000000), not the echoed payload
 
     readonly IDuplexStream _stream;
@@ -65,6 +68,24 @@ public sealed class ApConnection : IDisposable
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(TimeSpan.FromSeconds(5));
         return await keyTask.WaitAsync(timeout.Token).ConfigureAwait(false);
+    }
+
+    /// <summary>Publishes Spotify's two-letter preferred locale on the retained AP session. Spotify expects the 0x0f
+    /// random preamble immediately before the 0x74 key/value packet.</summary>
+    public async Task PublishPreferredLocaleAsync(string language, CancellationToken ct = default)
+    {
+        language = SpotifyHeaders.NormalizeLanguage(language);
+        var preamble = new byte[20];
+        RandomNumberGenerator.Fill(preamble);
+        await SendAsync(CmdLocalePreamble, preamble, ct).ConfigureAwait(false);
+
+        byte[] locale = Encoding.ASCII.GetBytes(language);
+        var payload = new byte[5 + 16 + locale.Length];
+        payload[2] = 0x10;
+        payload[4] = 0x02;
+        Encoding.ASCII.GetBytes("preferred-locale", payload.AsSpan(5, 16));
+        locale.CopyTo(payload, 21);
+        await SendAsync(CmdPreferredLocale, payload, ct).ConfigureAwait(false);
     }
 
     async Task PumpAsync(CancellationToken ct)

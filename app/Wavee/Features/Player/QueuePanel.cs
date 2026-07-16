@@ -277,7 +277,7 @@ sealed class QueuePanel : Component
         int n = Math.Min(entries.Count, Math.Max(1, pages.Value) * PageSize);
         var kids = new List<Element>(n + 1);
         for (int i = 0; i < n; i++)
-            kids.Add(QueueRow(b, lib, go, display, entries[i], zebra: (i & 1) != 0, removable, dim, acts, menuOverlay, swipeGroup));
+            kids.Add(QueueRow(b, lib, go, display, entries[i], i, entries.Count, zebra: (i & 1) != 0, removable, dim, acts, menuOverlay, swipeGroup));
         if (entries.Count > n)
             kids.Add(ShowMore(sectionTag, Math.Min(PageSize, entries.Count - n), entries.Count - n,
                 () => pages.Value = pages.Peek() + 1));
@@ -304,7 +304,7 @@ sealed class QueuePanel : Component
     };
 
     static Element QueueRow(PlaybackBridge b, LibraryBridge? lib, Action<string, string?>? go,
-        Signal<IReadOnlyList<QueueEntry>> display, QueueEntry entry, bool zebra, bool removable, bool dim,
+        Signal<IReadOnlyList<QueueEntry>> display, QueueEntry entry, int bucketIndex, int bucketCount, bool zebra, bool removable, bool dim,
         ActionServices? acts = null, IOverlayService? menuOverlay = null, SwipeGroup? swipeGroup = null)
     {
         var t = entry.Track;
@@ -316,6 +316,24 @@ sealed class QueuePanel : Component
             _ = b.Player.RemoveQueueItemAsync(entry.ItemId);
             var cur = new List<QueueEntry>(display.Peek());
             cur.RemoveAll(x => entry.ItemId.IsNone ? x.EntryId == entry.EntryId : x.ItemId == entry.ItemId);
+            display.Value = cur;
+        }
+
+        bool canMove = removable && entry.Bucket == QueueBucket.UserQueue && !entry.ItemId.IsNone;
+        void Move(int delta)
+        {
+            if (!canMove) return;
+            int target = Math.Clamp(bucketIndex + delta, 0, bucketCount - 1);
+            if (target == bucketIndex) return;
+            _ = b.Player.MoveQueueItemAsync(entry.ItemId, target);
+
+            var cur = new List<QueueEntry>(display.Peek());
+            var userPositions = new List<int>();
+            for (int i = 0; i < cur.Count; i++)
+                if (cur[i].Bucket == QueueBucket.UserQueue) userPositions.Add(i);
+            if ((uint)bucketIndex >= (uint)userPositions.Count || (uint)target >= (uint)userPositions.Count) return;
+            int from = userPositions[bucketIndex], to = userPositions[target];
+            (cur[from], cur[to]) = (cur[to], cur[from]);
             display.Value = cur;
         }
 
@@ -406,7 +424,9 @@ sealed class QueuePanel : Component
         Element rowEl = row;
         if (acts is { } a && menuOverlay is { } menuSvc)
             rowEl = row.WithContextMenu(menuSvc, () => Menus.QueueEntry(
-                a, entry, canRemove ? (Action)Remove : null, () => PlayQueueEntry(b, entry)));
+                a, entry, canRemove ? (Action)Remove : null, () => PlayQueueEntry(b, entry),
+                canMove && bucketIndex > 0 ? () => Move(-1) : null,
+                canMove && bucketIndex + 1 < bucketCount ? () => Move(1) : null));
         // Touch swipe-to-action (Phase D): swipe LEFT to remove (destructive red, reusing the Remove() closure via the
         // action target), swipe RIGHT to like. Eager KEYED rows ⇒ no resetKey (each entry mounts its own control; a
         // queue edit remounts by RowKey). The context menu is attached to the row BENEATH the wrapper, so the touch

@@ -18,9 +18,6 @@ namespace Wavee;
 // pattern) with the four-category notification panel. Reads NotificationCenterBridge for the reactive snapshot + badge.
 sealed class NotificationBell : Component
 {
-    readonly IconButton.Style _style;
-    public NotificationBell(IconButton.Style style) => _style = style;
-
     public override Element Render()
     {
         var nc = UseContext(NotificationCenterBridge.Slot);
@@ -46,7 +43,7 @@ sealed class NotificationBell : Component
             nc.OnPanelOpened();
         }
 
-        var button = IconButton.Create(Mdl.Bell, Open, _style) with { OnRealized = h => anchor.Value = h };
+        var button = IconButton.Create(Mdl.Bell, Open, ShellToolbar.NavStyle) with { OnRealized = h => anchor.Value = h };
         if (unread <= 0) return button;
 
         return new BoxEl

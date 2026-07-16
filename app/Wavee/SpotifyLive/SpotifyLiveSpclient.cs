@@ -15,8 +15,9 @@ public static class SpotifyLiveSpclient
 
     public static async Task<LiveSpclient?> ConnectAsync(WaveeLogger log, CancellationToken ct, bool retainApChannel = false,
         bool allowDeviceCode = true, IObserver<AuthState>? authObserver = null, Action? onCredentialAcquired = null,
-        bool allowBrowser = false)
+        bool allowBrowser = false, string language = "en")
     {
+        language = SpotifyHeaders.NormalizeLanguage(language);
         // retainApChannel: keep the login AP socket alive as the ONE persistent channel (login + audio-key share it). The
         // probes/premium-gate leave it false (the socket is disposed after login). allowDeviceCode/allowBrowser/authObserver/
         // onCredentialAcquired thread the in-app login UI: silent-vs-interactive, the method (browser/device), the challenge, Finalizing.
@@ -24,6 +25,11 @@ public static class SpotifyLiveSpclient
         if (login is null) return null;
         var welcome = login.Welcome;
         var deviceId = login.DeviceId;
+        if (login.Channel is not null)
+        {
+            try { await login.Channel.PublishPreferredLocaleAsync(language, ct).ConfigureAwait(false); }
+            catch (Exception ex) { log.Info("Preferred locale publish failed (HTTP locale remains active): " + ex.Message); }
+        }
 
         // 1. client-token (attestation) — required on spclient.
         log.Info("Fetching client-token (attestation)...");
@@ -69,12 +75,12 @@ public static class SpotifyLiveSpclient
         var pipeline = new HttpPipeline(
             new HttpClientExchange(),
             new AuthMiddleware((force, c) => Provider(force, c)),   // refreshes on expiry / forced 401-retry
-            new ClientTokenMiddleware(_ => Task.FromResult(clientToken)),
+            new ClientTokenMiddleware(_ => Task.FromResult(clientToken), language),
             new RateLimitMiddleware());
 
         var tier = welcome.Product?.IsPremium == true ? Tier.Premium : Tier.Free;
         var session = new SessionContext(welcome.Username, welcome.Country ?? "US",
-            tier == Tier.Premium ? "premium" : "free", "en", tier, false);
+            tier == Tier.Premium ? "premium" : "free", language, tier, false);
         var reusable = new Credential(CredentialKind.ReusableBlob, welcome.Username, System.Convert.ToBase64String(welcome.ReusableCredentials));
         return new LiveSpclient(pipeline, baseUrl, session, welcome.Username, accessToken, deviceId, reusable, c => Provider(false, c), clientToken, login.Channel, login.CredStore,
             ForceTokenProvider: c => Provider(true, c));   // G6 — the dealer force-mints after a failed wss handshake

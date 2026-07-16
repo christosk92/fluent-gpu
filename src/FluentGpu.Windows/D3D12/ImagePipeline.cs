@@ -22,6 +22,9 @@ internal struct ImageInstance
     public float UvX, UvY, UvW, UvH;           // 80 atlas sub-rect (origin + size); (0,0,1,1) = whole texture
     public float ClipX, ClipY, ClipW, ClipH;    // 96 tier-2 rounded clip in world/device-independent coordinates
     public float ClipR, Pad0, Pad1, Pad2;       // 112; ClipW <= 0 = none
+    public float OverlayR, OverlayG, OverlayB, OverlayA;
+    public float MaskLeft, MaskTop, MaskRight, MaskBottom;
+    public float MaskEdges, MaskFalloff, MaskIntensity, Pad3;
 }
 
 /// <summary>
@@ -49,12 +52,12 @@ internal sealed unsafe class ImagePipeline : IDisposable
     public int DroppedInstances => _dropped;
 
     private const string Hlsl = """
-struct Inst { float2 pos; float2 size; float4 radii; float4 m; float2 t; float opacity; float crossFade; float4 ph; float4 atlasUv; float4 clip; float clipR; float3 pad; };
+struct Inst { float2 pos; float2 size; float4 radii; float4 m; float2 t; float opacity; float crossFade; float4 ph; float4 atlasUv; float4 clip; float clipR; float3 pad; float4 overlay; float4 maskBands; float4 maskParams; };
 StructuredBuffer<Inst> gInst : register(t1);
 Texture2D gTex : register(t0);
 SamplerState gSamp : register(s0);
 cbuffer Root : register(b0) { float2 gViewport; };
-struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; float2 local : TEXCOORD1; float2 halfSize : TEXCOORD2; float4 radii : TEXCOORD3; float opacity : TEXCOORD4; float crossFade : TEXCOORD5; float4 ph : TEXCOORD6; float4 atlasUv : TEXCOORD7; float4 clip : TEXCOORD8; float clipR : TEXCOORD9; float2 world : TEXCOORD10; };
+struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; float2 local : TEXCOORD1; float2 halfSize : TEXCOORD2; float4 radii : TEXCOORD3; float opacity : TEXCOORD4; float crossFade : TEXCOORD5; float4 ph : TEXCOORD6; float4 atlasUv : TEXCOORD7; float4 clip : TEXCOORD8; float clipR : TEXCOORD9; float2 world : TEXCOORD10; float4 overlay : TEXCOORD11; float4 maskBands : TEXCOORD12; float3 maskParams : TEXCOORD13; };
 
 VSOut VSMain(float2 corner : POSITION, uint iid : SV_InstanceID)
 {
@@ -75,7 +78,18 @@ VSOut VSMain(float2 corner : POSITION, uint iid : SV_InstanceID)
     o.clip = it.clip;
     o.clipR = it.clipR;
     o.world = world;
+    o.overlay = it.overlay;
+    o.maskBands = it.maskBands;
+    o.maskParams = it.maskParams.xyz;
     return o;
+}
+
+float MaskCurve(float x, float kind)
+{
+    x = saturate(x);
+    if (kind > 1.5) return x * x * x;
+    if (kind > 0.5) return x * x * (3.0 - 2.0 * x);
+    return x;
 }
 
 float4 PSMain(VSOut i) : SV_Target
@@ -83,6 +97,9 @@ float4 PSMain(VSOut i) : SV_Target
     float2 auv = i.atlasUv.xy + i.uv * i.atlasUv.zw;    // resolve the atlas sub-rect ((0,0,1,1) = whole texture)
     float4 img = gTex.Sample(gSamp, auv);               // premultiplied image
     float4 col = lerp(i.ph, img, saturate(i.crossFade)); // placeholder→image cross-fade, premultiplied space
+    float4 ov = float4(i.overlay.rgb * i.overlay.a, i.overlay.a);
+    img = ov + img * (1.0 - i.overlay.a);
+    col = lerp(i.ph, img, saturate(i.crossFade));
     float2 s = sign(i.local);
     float r = (s.x < 0.0) ? (s.y < 0.0 ? i.radii.x : i.radii.w) : (s.y < 0.0 ? i.radii.y : i.radii.z);
     float2 q = abs(i.local) - (i.halfSize - r);
@@ -97,6 +114,15 @@ float4 PSMain(VSOut i) : SV_Target
         float cd = min(max(cq.x, cq.y), 0.0) + length(max(cq, 0.0)) - cr;
         cov *= clamp(0.5 - cd / max(fwidth(cd), 1e-4), 0.0, 1.0);
     }
+    uint edges = (uint)i.maskParams.x;
+    float2 p = i.local + i.halfSize;
+    float2 size = i.halfSize * 2.0;
+    float mask = 1.0;
+    if ((edges & 1u) != 0u && i.maskBands.x > 0.0) mask *= MaskCurve(p.x / i.maskBands.x, i.maskParams.y);
+    if ((edges & 2u) != 0u && i.maskBands.y > 0.0) mask *= MaskCurve(p.y / i.maskBands.y, i.maskParams.y);
+    if ((edges & 4u) != 0u && i.maskBands.z > 0.0) mask *= MaskCurve((size.x - p.x) / i.maskBands.z, i.maskParams.y);
+    if ((edges & 8u) != 0u && i.maskBands.w > 0.0) mask *= MaskCurve((size.y - p.y) / i.maskBands.w, i.maskParams.y);
+    cov *= lerp(1.0, mask, saturate(i.maskParams.z));
     return col * (cov * i.opacity);                     // scale rgb AND a (premultiplied)
 }
 """;

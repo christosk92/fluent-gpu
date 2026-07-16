@@ -31,8 +31,8 @@ public sealed class TabStrip : Component
     public float MaxTabWidth = 360f;
     // Prop (not a raw ColorF) so a theme-dependent fill can be passed as a thunk (Prop.Of(() => Tok.X)) and follow a live
     // theme switch — a raw ColorF here freezes at mount (TabStrip is a long-lived component; its constructor args don't
-    // re-read). Defaults to the static FillSolidTertiary (implicit ColorF→Prop); the recorder reads paint.Fill either way.
-    public Prop<ColorF> SelectedFill = Tok.FillSolidTertiary;
+    // re-read). The default is itself a live semantic thunk so callers that do not style the strip also follow retheme.
+    public Prop<ColorF> SelectedFill = Prop.Of(static () => Tok.FillSolidTertiary);
     public TemplateParts? Parts;
 
     public override Element Render()

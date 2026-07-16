@@ -31,7 +31,9 @@ public sealed class DropZone : Component
     public Element Content = new BoxEl();
 
     // ── affordance styling ──
-    public ColorF Accent = Tok.AccentDefault;
+    private ColorF? _accent;
+    /// <summary>Explicit affordance color, or the live accent token when left unset.</summary>
+    public ColorF Accent { get => _accent ?? Tok.AccentDefault; set => _accent = value; }
     public float DashOn = 6f, DashOff = 6f, Corner = 8f, BorderWidth = 2f;
     /// <summary>Span the parent (Grow = 1) — set by <see cref="Window"/> for a whole-window zone.</summary>
     public bool Fill;

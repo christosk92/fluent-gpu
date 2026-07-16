@@ -249,7 +249,7 @@ public class SqliteColdStoreTests
             using var r = q.ExecuteReader();
             Assert.True(r.Read());
             Assert.Equal(0L, r.GetInt64(0));        // `saved` dropped
-            Assert.Equal("2", r.GetString(1));      // schema_version = 2 after the playlist-revision heal
+            Assert.Equal("3", r.GetString(1));      // schema_version = 3 after locale-aware metadata caches land
         }
         finally { TryDelete(path); }
     }
@@ -283,7 +283,69 @@ public class SqliteColdStoreTests
             verify.Open();
             using var q = verify.CreateCommand();
             q.CommandText = "SELECT value FROM meta WHERE key='schema_version';";
-            Assert.Equal("2", q.ExecuteScalar() as string);
+            Assert.Equal("3", q.ExecuteScalar() as string);
+        }
+        finally { TryDelete(path); }
+    }
+
+    [Fact]
+    public void LocalizedEntities_PreferExactLocale_ThenCanonicalWithoutCrossLocaleLeakage()
+    {
+        var path = TempDb();
+        const string uri = "spotify:track:localized";
+        static byte[] Bytes(string value) => System.Text.Encoding.UTF8.GetBytes(value);
+        static string Text(ColdEntity? value) => System.Text.Encoding.UTF8.GetString(value!.Value.Payload);
+        try
+        {
+            using (var canonical = new SqliteColdStore(path))
+            {
+                canonical.UpsertEntity(uri, EntityKind.Track, Bytes("canonical"));
+                canonical.Flush();
+            }
+            using (var dutch = new SqliteColdStore(path, SqliteColdStore.DefaultAccount, "nl-NL"))
+            {
+                dutch.UpsertEntity(uri, EntityKind.Track, Bytes("nederlands"));
+                dutch.Flush();
+            }
+            using (var korean = new SqliteColdStore(path, SqliteColdStore.DefaultAccount, "ko-KR"))
+            {
+                korean.UpsertEntity(uri, EntityKind.Track, Bytes("korean"));
+                korean.Flush();
+            }
+
+            using var dutchRead = new SqliteColdStore(path, SqliteColdStore.DefaultAccount, "nl");
+            using var koreanRead = new SqliteColdStore(path, SqliteColdStore.DefaultAccount, "ko");
+            using var unsupportedRead = new SqliteColdStore(path, SqliteColdStore.DefaultAccount, "fr");
+            using var canonicalRead = new SqliteColdStore(path);
+            Assert.Equal("nederlands", Text(dutchRead.GetEntity(uri)));
+            Assert.Equal("korean", Text(koreanRead.GetEntity(uri)));
+            Assert.Equal("canonical", Text(unsupportedRead.GetEntity(uri)));
+            Assert.Equal("canonical", Text(canonicalRead.GetEntity(uri)));
+        }
+        finally { TryDelete(path); }
+    }
+
+    [Fact]
+    public void ExtensionCache_RoundTripsOnlyWithinItsBoundLocale()
+    {
+        var path = TempDb();
+        var saved = new ColdExtension(
+            "spotify:album:localized", 42, [1, 2, 3], "etag-nl", 300,
+            Missing: false, ExpiresAtUnixSeconds: 2_000_000_000, UpdatedAtUnixSeconds: 1_900_000_000);
+        try
+        {
+            using (var dutch = new SqliteColdStore(path, SqliteColdStore.DefaultAccount, "nl-NL"))
+            {
+                dutch.UpsertExtension(saved);
+                dutch.Flush();
+            }
+
+            using var dutchRead = new SqliteColdStore(path, SqliteColdStore.DefaultAccount, "nl");
+            var restored = Assert.Single(dutchRead.LoadAllExtensions());
+            Assert.Equal(saved, restored);
+
+            using var englishRead = new SqliteColdStore(path, SqliteColdStore.DefaultAccount, "en-US");
+            Assert.Empty(englishRead.LoadAllExtensions());
         }
         finally { TryDelete(path); }
     }

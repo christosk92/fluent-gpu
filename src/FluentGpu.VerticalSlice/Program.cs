@@ -393,6 +393,9 @@ sealed class NestedScrollProbe : Component
 // A 10,000-row virtualized list (40px uniform rows) in a 400px viewport → proves windowing + recycle at scale.
 sealed class PagedShelfMeasuredProbe : Component
 {
+    public static readonly ColorF FirstFill = ColorF.FromRgba(220, 40, 40);
+    public static readonly ColorF OtherFill = ColorF.FromRgba(40, 90, 220);
+
     public readonly Signal<float> Width = new(320f);
     public ShelfPagerContext Pager;
 
@@ -404,7 +407,16 @@ sealed class PagedShelfMeasuredProbe : Component
         Children =
         [
             PagedShelf.Create(10,
-                (i, w) => new BoxEl { Width = w, Height = 44f, Fill = ColorF.FromRgba(30, 30, 30) },
+                (i, w) =>
+                {
+                    ColorF fill = i == 0 ? FirstFill : OtherFill;
+                    return new BoxEl
+                    {
+                        Width = w, Height = 44f,
+                        Fill = fill, HoverFill = fill,
+                        OnClick = static () => { },
+                    };
+                },
                 pager: ShelfPager.None,
                 customPager: ctx => { Pager = ctx; return new BoxEl { Width = 0f, Height = 0f }; },
                 minCardW: 100f,
@@ -412,7 +424,8 @@ sealed class PagedShelfMeasuredProbe : Component
                 gap: 10f,
                 fixedCardW: 100f,
                 headerGap: 0f,
-                edgeFade: 0f,
+                edgeFade: 24f,
+                keyOf: i => "shelf-probe-" + i,
                 measured: true),
         ],
     };
@@ -1449,6 +1462,23 @@ sealed class ImageProbe : Component
     {
         Width = 120, Height = 120, Padding = Edges4.All(10),
         Children = [Ui.Image("album/1.jpg", 80, 80, 6f)],
+    };
+}
+
+sealed class BakedImageProbe : Component
+{
+    public override Element Render() => new BoxEl
+    {
+        Width = 120, Height = 120, Padding = Edges4.All(10),
+        Children =
+        [
+            Ui.Image("album/baked.jpg", 80, 80, 6f) with
+            {
+                BakedBlur = new BakedBlurSpec(26f, 0.5f),
+                ColorOverlay = ColorF.FromRgba(8, 8, 10) with { A = 0.42f },
+                Mask = new ImageMaskSpec(EdgeMask.Top, 24f),
+            },
+        ],
     };
 }
 
@@ -2987,6 +3017,78 @@ sealed class MeasuredSeamProbe : Component
     }
 }
 
+// gate.scroll.anchor-repin-under-gesture probe: a MEASURED virtual list whose rows deliberately measure LARGER (64px)
+// than their 40px estimate, so budgeted realize corrects extents mid-scroll and the virtualization anchor re-pin
+// (FlexLayout.RecordAnchorShift) fires with non-zero deltas DURING a touchpad contact gesture. Viewport = Scene.Root.
+sealed class AnchorRepinProbe : Component
+{
+    public const int N = 800;
+    public const float Estimate = 40f;
+    public const float Real = 64f;   // every row measures LARGER than the estimate (+24) → corrections extend content above the moving anchor
+    public MeasuredStackVirtualLayout? Layout;
+    public override Element Render()
+    {
+        var layout = UseMemo(static () => new MeasuredStackVirtualLayout(Estimate));
+        Layout = layout;
+        return Virtual.Measured(N, layout,
+                   renderItem: _ => new BoxEl { Height = Real, Fill = ColorF.FromRgba(30, 30, 30) },
+                   keyOf: i => "ar" + i)
+               with { Width = 300, Height = 300 };
+    }
+}
+
+// gate.scroll.wheel-chase-extent-shrink probe: a fixed-height virtual list whose row COUNT is signal-driven, so the test
+// can shrink the published content extent (and thus maxOff) far below an in-flight WheelAnimating chase target mid-chase.
+// Fixed-geometry (Virtual.List) publishes ContentH = N·RowH deterministically — no estimate/correct drift. Viewport = Scene.Root.
+sealed class ShrinkChaseProbe : Component
+{
+    public readonly FluentGpu.Signals.Signal<int> Count = new(400);
+    public const float RowH = 60f;
+    public override Element Render()
+    {
+        int n = Count.Value;   // subscribe → re-render (and republish the shrunk content extent) when Count changes
+        return Virtual.List(n, RowH, _ => new BoxEl { Height = RowH, Fill = ColorF.FromRgba(30, 30, 30) }, keyOf: i => "sc" + i)
+               with { Width = 300, Height = 300 };
+    }
+}
+
+// e11virt.elevate-cell — the PagedShelf cell shape: a row of NON-interactive flagged cells, each wrapping an
+// interactive card. The card wins the hit; the cell must still receive HoverWithin (the HoverElevatePaintBit joined
+// UpdateHoverWithin's ancestor mask) so the recorder can defer the whole cell above its sibling cells.
+sealed class ElevateCellProbe : Component
+{
+    public override Element Render() => new BoxEl
+    {
+        Direction = 0,
+        Children = [ Cell(ColorF.FromRgba(220, 40, 40)), Cell(ColorF.FromRgba(40, 90, 220)) ],
+    };
+    // HoverFill = Fill (identity) so the gate's exact-color probe still matches the hovered card's drawn command.
+    internal static Element Cell(ColorF fill) => new BoxEl
+    {
+        Direction = 1, Width = 100f, HoverElevatePaint = true,
+        Children = [ new BoxEl { Width = 100f, Height = 100f, Fill = fill, HoverFill = fill, OnClick = static () => { } } ],
+    };
+}
+
+// e11virt.elevate-escape — the full shelf shape WITH a HoverElevateClipRoot: a clipping viewport wraps the cell row;
+// the hovered cell must HOIST out of the viewport's clip (recorded after its PopClip, against the outer clip) while
+// the resting sibling stays inside it.
+sealed class ElevateEscapeProbe : Component
+{
+    public override Element Render() => new BoxEl
+    {
+        Width = 150f, Height = 100f, ClipToBounds = true, HoverElevateClipRoot = true,
+        Children =
+        [
+            new BoxEl
+            {
+                Direction = 0,
+                Children = [ ElevateCellProbe.Cell(ColorF.FromRgba(220, 40, 40)), ElevateCellProbe.Cell(ColorF.FromRgba(40, 90, 220)) ],
+            },
+        ],
+    };
+}
+
 // E11-L2 — ItemsRepeater lifecycle (ElementPrepared/ElementClearing/visible-range) recorded across a scroll recycle.
 sealed class LifecycleRepeaterProbe : Component
 {
@@ -3000,6 +3102,49 @@ sealed class LifecycleRepeaterProbe : Component
                 elementPrepared: Prepared.Add, elementClearing: Cleared.Add,
                 visibleRange: (f, l) => Ranges.Add((f, l))))
            with { Width = 300, Height = 400 };   // explicit size ⇒ the MOUNT realize windows against 400, not the hint
+}
+
+// Reconcile-window in-place diff (the Home "like-flash" class of bug): a parent re-render rebuilds the VirtualListEl
+// and re-runs RenderItem for every realized slot (Update → RealizeWindow, reuseOverlap:false). Same-slot rows with
+// matching type+key must UPDATE IN PLACE so a component hosted inside a row keeps its instance/state instead of
+// taking the mount+remove path (fresh instance, state reset, first-frame self-measure).
+sealed class WindowInPlaceDiffProbe : Component
+{
+    public const int N = 50;
+    public readonly Signal<int> Rev = new(0);
+    public int ParentRenders;
+    public int RowConstructions;                                   // component MOUNTS (each mount runs the factory once)
+    public readonly Dictionary<int, WindowInPlaceRowComp> Rows = new();
+    public override Element Render()
+    {
+        ParentRenders++;
+        _ = Rev.Value;   // SUBSCRIBE: bumping Rev re-renders this parent → a NEW VirtualListEl for the same window
+        return Virtual.List(N, 40f,
+                   renderItem: i => new BoxEl
+                   {
+                       Height = 40f,
+                       Children = [Embed.Comp(() => new WindowInPlaceRowComp(this, i))],
+                   },
+                   keyOf: i => "ip" + i)
+               with { Width = 300, Height = 200 };
+    }
+}
+
+sealed class WindowInPlaceRowComp : Component
+{
+    readonly WindowInPlaceDiffProbe _p;
+    public readonly Signal<int> Local = new(0);   // per-instance state that must survive the parent re-render
+    public WindowInPlaceRowComp(WindowInPlaceDiffProbe p, int index)
+    {
+        _p = p;
+        p.RowConstructions++;    // safe mount proxy: ChecksReuse is false, so the ReuseGuard never builds a throwaway
+        p.Rows[index] = this;
+    }
+    public override Element Render()
+    {
+        _ = Local.Value;         // subscribe — a state write re-renders THIS row only (granular)
+        return new BoxEl { Height = 40f, Fill = ColorF.FromRgba(24, 24, 24) };
+    }
 }
 
 // E11-L3 — ItemsView keyboard surface (Single over a virtualized stack): arrows/Home/End/PageUp-Down, typeahead,
@@ -3329,6 +3474,28 @@ sealed class CollapseToggleProbe : Component
     }
 }
 
+// A long-lived text field and bound card border used to prove that a retheme updates retained controls in place.
+sealed class LiveThemeDefaultsProbe : Component
+{
+    public int FieldConstructions;
+
+    public override Element Render() => new BoxEl
+    {
+        Width = 180f,
+        Height = 40f,
+        BorderWidth = 1f,
+        BorderColor = Prop.Of(static () => Tok.StrokeCardDefault),
+        Children =
+        [
+            Embed.Comp(() =>
+            {
+                FieldConstructions++;
+                return new EditableText { Initial = "typed", Width = 160f };
+            }),
+        ],
+    };
+}
+
 static class Slice
 {
     static int s_failures;
@@ -3631,6 +3798,20 @@ static class Slice
         return NodeHandle.Null;
     }
 
+    // Depth-first search for a uniquely-coloured paint node. Useful when the interactive card is wrapped in internal
+    // component/cell nodes and its exact depth is intentionally not part of the control contract.
+    static NodeHandle FindFillNode(SceneStore s, NodeHandle n, ColorF fill, float tol = 0.006f)
+    {
+        if (n.IsNull) return NodeHandle.Null;
+        if (ColorClose(s.Paint(n).Fill, fill, tol)) return n;
+        for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c))
+        {
+            var r = FindFillNode(s, c, fill, tol);
+            if (!r.IsNull) return r;
+        }
+        return NodeHandle.Null;
+    }
+
     // The node currently carrying the keyboard-focus flag (the dispatcher sets NodeFlags.Focused on it).
     static NodeHandle FocusedNode(SceneStore s, NodeHandle n)
     {
@@ -3728,6 +3909,32 @@ static class Slice
             {
                 var cmd = MemoryMarshal.Read<FillRoundRectCmd>(bytes.Slice(pos, Unsafe.SizeOf<FillRoundRectCmd>()));
                 if (cmd.Fill.Equals(fill)) return (order, clipDepth);
+            }
+            if (op == DrawOp.PushClip) clipDepth++;
+            else if (op == DrawOp.PopClip) clipDepth--;
+            pos += DrawPayloadSize(op);
+            order++;
+        }
+        return (-1, -1);
+    }
+
+    // Tolerant sibling of FindFillCommand for HOVER-driven fills: ResolveSurface routes an interactive (or
+    // progress-inheriting) fill through LerpLinear, whose sRGB→linear→sRGB float roundtrip is not bit-exact even at
+    // identity (HoverFill == Fill) — match within ~1.5/255 instead.
+    static (int Order, int ClipDepth) FindFillCommandNear(DrawList dl, ColorF fill, float tol = 0.006f)
+    {
+        ReadOnlySpan<byte> bytes = dl.Bytes;
+        int pos = 0, order = 0, clipDepth = 0;
+        while (pos + sizeof(int) <= bytes.Length)
+        {
+            var op = (DrawOp)MemoryMarshal.Read<int>(bytes.Slice(pos, sizeof(int)));
+            pos += sizeof(int);
+            if (op == DrawOp.FillRoundRect)
+            {
+                var cmd = MemoryMarshal.Read<FillRoundRectCmd>(bytes.Slice(pos, Unsafe.SizeOf<FillRoundRectCmd>()));
+                if (MathF.Abs(cmd.Fill.R - fill.R) <= tol && MathF.Abs(cmd.Fill.G - fill.G) <= tol
+                    && MathF.Abs(cmd.Fill.B - fill.B) <= tol && MathF.Abs(cmd.Fill.A - fill.A) <= tol)
+                    return (order, clipDepth);
             }
             if (op == DrawOp.PushClip) clipDepth++;
             else if (op == DrawOp.PopClip) clipDepth--;
@@ -9818,6 +10025,117 @@ static class Slice
             Check("gate.scroll.alloc-zero a full contact+fling+momentum+wheel cycle (incl. the OS-momentum sink cadence) allocates 0 managed bytes on the hot half (phases 6–13)",
                 worst == 0, $"worstHotAlloc={worst}B across the scripted cycle");
         }
+
+        // gate.scroll.anchor-repin-under-gesture (Fix 1: the homepage touchpad-jitter repro): jump DEEP into a MEASURED
+        // virtual list (the sticky-gate raw-ScrollRef pattern, so the rows above the jump target stay UNREALIZED at their
+        // 40px estimate), then drag UPWARD — rows entering from above realize at 64px, and every correction to a row
+        // strictly ABOVE the anchor fires the virtualization anchor re-pin (FlexLayout.RecordAnchorShift) with a +24 delta
+        // WHILE the touchpad contact gesture is tracking. (A downward drag from the top is vacuous: corrections land at or
+        // below the anchor and never move OffsetOf(anchorIndex).) Fix 1 records each re-pin as a coordinate shift
+        // (ScrollState.PendingAnchorShift) the phase-7 integrator drains into the resampler anchor (_rs.Anchor), so the
+        // finger-driven offset moves WITH the re-pin instead of being overwritten/fought a tick later. Decomposition: the
+        // finger leg is reconstructed INDEPENDENTLY of the offset — exactly as gate.scroll.contact-1to1: one packet/frame
+        // at the present time keeps the resampler interpolating the constant-velocity line ⇒
+        // finger = −vel·(present − ResampleLatencyMs − t0). The remaining term Σshift = off − latch − finger must then be
+        // a genuine accumulation of anchor re-pin deltas:
+        //   • FIRED (maxShift ≥ ~one 24-DIP correction) — the discriminator: on pre-fix code TouchpadTracking overwrites
+        //     the pin with Clamp(unshifted anchor + xStar) next tick, so Σshift never accumulates (or oscillates);
+        //   • NON-NEGATIVE (over-measure rows only grow content above the anchor; a dropped re-pin makes it lag);
+        //   • MONOTONE non-decreasing (a fought re-pin oscillates — the felt jitter);
+        //   • BOUNDED by the total possible above-correction (rowsAbove·overMeasure).
+        // Σshift is NOT compared to an exact predicted value: the per-frame re-pin delta depends on the internal
+        // budgeted-realize schedule (which above-viewport rows correct that frame) — an implementation detail.
+        // Tolerance: 0.5 DIP (the contact-1to1 interpolation bound; the shift accumulation is exact POD-float arithmetic).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("anchor-repin-gesture", new Size2(360, 460), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new AnchorRepinProbe());
+            host.RunFrame();
+            var vp = host.Scene.Root;
+            // Jump deep without realizing the rows above (raw ScrollRef write, the sticky-gate pattern): rows < ~400 keep
+            // their 40px estimate, so the upward drag below realizes them mid-gesture and fires genuine re-pins.
+            const float seed = 16000f;
+            {
+                ref ScrollState st = ref host.Scene.ScrollRef(vp);
+                st.OffsetY = seed; st.TargetY = seed;
+            }
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(8f, 8f), 0, 0));
+            for (int i = 0; i < 12; i++) host.RunFrame();   // let the realize window + local corrections settle at the seed
+            var prod = new HeadlessScrollProducer(window, host, new Point2(150, 150)) { Device = (byte)ScrollDeviceClass.Touchpad };
+            const float vel = 0.9f;   // DIP/ms upward — ~860 DIP over the run, ~20 estimate-priced rows entering from above
+            const float overMeasure = AnchorRepinProbe.Real - AnchorRepinProbe.Estimate;   // 24 DIP per row
+            host.Scene.TryGetScroll(vp, out var sL); float latchOff = sL.OffsetY;   // settle may itself have re-pinned; latch from live
+            double t0 = prod.FrameMs;
+            prod.ContactBegin(0f); prod.Frame(16f);
+            bool shiftNonNeg = true, shiftMonotone = true, shiftBounded = true;
+            float prevShift = 0f, maxShift = 0f; bool havePrev = false; int frames = 0;
+            for (int kf = 0; kf < 60; kf++)
+            {
+                prod.Ms = (uint)prod.FrameMs;                  // deliver one packet AT the present time (interpolation regime)
+                prod.ContactUpdate(-vel * 16f);                // UPWARD — toward the unrealized estimate-priced region
+                double present = prod.FrameMs;
+                prod.Frame(16f);
+                host.Scene.TryGetScroll(vp, out var s);
+                if (kf < 3 || s.Phase != ScrollIntegrator.TouchpadTracking) continue;
+                if (!(s.OffsetY > 1f)) continue;                                                 // well clear of the top clamp
+                float finger = (float)(-vel * (present - ScrollTuning.ResampleLatencyMs - t0));  // INDEPENDENT resampled finger position
+                float shift = s.OffsetY - latchOff - finger;                                     // observed Σ(anchor re-pin deltas)
+                if (havePrev && shift - prevShift < -0.5f) shiftMonotone = false;    // a fought re-pin oscillates (the felt jitter)
+                if (shift < -0.5f) shiftNonNeg = false;                              // a dropped re-pin makes the offset lag the finger
+                if (shift > s.AnchorIndex * overMeasure + 1f) shiftBounded = false;  // ≤ total possible above-correction
+                maxShift = MathF.Max(maxShift, shift);
+                prevShift = shift; havePrev = true; frames++;
+            }
+            bool firedRepin = maxShift >= overMeasure - 4f;   // ≥ ~one genuine 24-DIP re-pin — the scenario can't go vacuous
+            Check("gate.scroll.anchor-repin-under-gesture an upward monotone touchpad gesture from a deep seed realizes estimate-priced rows above the anchor mid-gesture, and the offset stays = latch + resampled-finger + a FIRED/non-negative/monotone/bounded Σ(anchor re-pin deltas) — the re-pin is consumed by the phase-7 integrator (Fix 1), never dropped or fought",
+                firedRepin && shiftNonNeg && shiftMonotone && shiftBounded && frames >= 20,
+                $"frames={frames} maxRepinShift={maxShift:0.00} firedRepin={firedRepin} shiftNonNeg={shiftNonNeg} shiftMonotone={shiftMonotone} shiftBounded={shiftBounded}");
+        }
+
+        // gate.scroll.wheel-chase-extent-shrink (Fix 1 tail: the ArrangeViewport PendingTarget re-clamp): a WheelAnimating
+        // chase is seeded toward the bottom of a tall list, then the content extent is shrunk HARD (row count 400 → 60)
+        // mid-chase so maxOff collapses far below the accumulated PendingTargetY. ArrangeViewport now re-clamps
+        // PendingTargetX/Y (NaN-guarded) to the live [0,max] extent, so the chase rides the shrunk extent, lands on the new
+        // bottom, and SETTLES to Idle — instead of a stale target beyond the moving clamp keeping the offset pinned in a
+        // never-settling WheelAnimating fight (the near-bottom oscillation / bounce). Assert: the chase never reverses
+        // against its down direction; PendingTargetY is re-clamped onto the new extent (or NaN once settled); the chase
+        // reaches Idle at the corrected bottom.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("wheel-chase-shrink", new Size2(360, 460), 1f)); window.Show();
+            var probe = new ShrinkChaseProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.Input.SmoothScroll = true;   // a mouse notch drives a WheelAnimating chase (accumulated PendingTarget), not a synchronous jump
+            host.RunFrame();
+            var vp = host.Scene.Root;
+            // Seed a large accumulated chase toward the bottom (WheelNotch is in notch units × PerNotchDip): 480 notches ×
+            // 48 = 23040 DIP, just under the initial maxOff (400·60 − 300 = 23700) so it seeds without being clamped.
+            host.Input.Dispatch(new[] { new InputEvent(InputKind.Wheel, new Point2(150, 150), 0, 0, WheelNotch: 480f, Pointer: PointerKind.Mouse, TimestampMs: 1000) });
+            host.Scene.TryGetScroll(vp, out var seeded);
+            bool seededChase = seeded.Phase == ScrollIntegrator.WheelAnimating && !float.IsNaN(seeded.PendingTargetY) && seeded.PendingTargetY > 10000f;
+            // Shrink the content HARD before the chase advances: 400 → 60 rows ⇒ content 3600, maxOff 3300 — far below the
+            // 23040 target. The re-clamp must pull PendingTargetY down onto the new extent; without it the chase would keep
+            // fighting a target beyond the clamp and never settle.
+            probe.Count.Value = 60;
+            float prevOff = seeded.OffsetY, worstBackStep = 0f; bool settled = false;
+            for (int f = 0; f < 3000; f++)
+            {
+                host.RunFrame();
+                host.Scene.TryGetScroll(vp, out var s);
+                float d = s.OffsetY - prevOff;
+                if (d < worstBackStep) worstBackStep = d;   // most-negative step against the down-chase
+                prevOff = s.OffsetY;
+                if (s.Phase == ScrollIntegrator.Idle) { settled = true; break; }
+            }
+            host.Scene.TryGetScroll(vp, out var fin);
+            float newMax = MathF.Max(0f, fin.ContentH - fin.ViewportH);
+            bool noReversal = worstBackStep >= -0.5f;                                                        // never steps backward (settling is fine)
+            bool targetReclamped = float.IsNaN(fin.PendingTargetY) || fin.PendingTargetY <= newMax + 0.5f;   // rode the shrunk extent
+            bool landed = Near(fin.OffsetY, newMax, 2f);                                                     // ended at the corrected bottom
+            Check("gate.scroll.wheel-chase-extent-shrink a WheelAnimating chase toward the bottom survives the content extent shrinking far below its target mid-chase — ArrangeViewport re-clamps PendingTargetY onto the live extent so the offset never reverses, lands on the corrected bottom, and settles to Idle (no stale-target never-settling fight)",
+                seededChase && noReversal && targetReclamped && landed && settled,
+                $"seeded={seededChase} pendingSeed={seeded.PendingTargetY:0} newMax={newMax:0} finalOff={fin.OffsetY:0} finalPending={fin.PendingTargetY:0} worstBackStep={worstBackStep:0.00} settled={settled}");
+        }
     }
 
     // ── Touch Phase-4 snap + overscroll exit criteria (gate.touch4.*): a touch fling retargets its friction decay to land
@@ -12658,6 +12976,28 @@ static class Slice
         Check("45c. ImageCache: dropped prefetch does not leave a forever-pending handle; visible request restarts it",
             dropDidNotStick && visibleRestarted && visibleReady,
             $"afterDrop={droppedPrefetch.StateOf(warm)} pending={droppedPrefetch.PendingCount} ready={visibleReady}");
+
+        // Static derivatives are keyed only by source pixels + bake parameters, never viewport/style state. They stay
+        // Pending until the render handoff posts completion, then account against the derived residency budget.
+        var baked = new ImageCache(new FakeImageDecoder());
+        var bakeQueue = new FluentGpu.Hosting.Threading.BakedBlurQueue();
+        baked.SetBakedBlurQueue(bakeQueue);
+        var source = baked.Request("baked-source", 512, 256);
+        baked.Pump();
+        var spec = new BakedBlurSpec(26f, 0.5f);
+        var d0 = baked.RequestBakedBlur(source, 512, 256, in spec);
+        var d0Again = baked.RequestBakedBlur(source, 512, 256, in spec);
+        var otherSpec = new BakedBlurSpec(18f, 0.5f);
+        var d1 = baked.RequestBakedBlur(source, 512, 256, in otherSpec);
+        bool jobs = bakeQueue.TryDequeueJob(out var j0) && bakeQueue.TryDequeueJob(out var j1);
+        bool keying = d0 == d0Again && d0 != d1 && jobs && j0.SourceId == source.Id && j0.OutputW == 256 && j0.OutputH == 128;
+        bakeQueue.Post(new FluentGpu.Hosting.Threading.BakedBlurQueue.Result(j0.Id, j0.Generation, true, j0.OutputW, j0.OutputH));
+        baked.Pump();
+        bool derivedReady = baked.StateOf(d0) == ImageState.Ready && baked.SizeOf(d0) == (256, 128)
+            && baked.DerivedUsedBytes == 256 * 128 * 4;
+        Check("45d. ImageCache baked blur: position/style-independent dedup, parameter fork, queued completion, derived byte accounting",
+            keying && derivedReady,
+            $"dedup={d0==d0Again} fork={d0!=d1} job={jobs} size={baked.SizeOf(d0)} bytes={baked.DerivedUsedBytes}");
     }
 
     // ImageEl end-to-end: the reconciler requests the decode + pins residency, the cache completes it (Pump), and the
@@ -12690,6 +13030,24 @@ static class Slice
         int uh = device.Uploads.Count > 0 ? device.Uploads[0].h : 0;
         Check("46b. ImageEl: decoded pixels uploaded to the GPU backend at bucket size", uploaded,
             $"uploads={device.Uploads.Count} dims={uw}x{uh}");
+
+        using var bakedApp = new HeadlessPlatformApp();
+        var bakedWindow = new HeadlessWindow(new WindowDesc("baked-img", new Size2(480, 320), 1f));
+        bakedWindow.Show();
+        var bakedDevice = new HeadlessGpuDevice();
+        using var bakedHost = new AppHost(bakedApp, bakedWindow, bakedDevice, fonts, strings, new BakedImageProbe());
+        bakedHost.RunFrame();
+        int fallbackId = bakedDevice.LastImages.Count == 1 ? bakedDevice.LastImages[0].ImageId : 0;
+        bakedHost.RunFrame();
+        var bakedCmd = bakedDevice.LastImages.Count == 1 ? bakedDevice.LastImages[0] : default;
+        bool oneQuad = bakedDevice.LastImages.Count == 1 && bakedDevice.LastLayers.Count == 0;
+        bool selectedDerived = bakedCmd.ImageId != 0 && bakedCmd.ImageId != fallbackId
+            && bakedHost.Images.StateOf(new ImageHandle(bakedCmd.ImageId)) == ImageState.Ready;
+        bool styling = Near(bakedCmd.Overlay.A, 0.42f) && bakedCmd.MaskEdges == (int)EdgeMask.Top
+            && Near(bakedCmd.MaskTop, 24f) && Near(bakedCmd.MaskIntensity, 1f);
+        Check("46c. Baked ImageEl: source fallback then persistent derived handle; overlay+mask stay in one DrawImage with zero layers",
+            oneQuad && selectedDerived && styling,
+            $"fallback={fallbackId} derived={bakedCmd.ImageId} draws={bakedDevice.LastImages.Count} layers={bakedDevice.LastLayers.Count} mask={bakedCmd.MaskEdges}");
     }
 
     // Renders the AspectTileProbe headlessly and returns the laid-out art rect + the card's inner (content) width.
@@ -15047,6 +15405,65 @@ static class Slice
             Tok.Use(ThemeKind.Dark);
             Check("B.9 TextEl default color = the bound singleton theme brush resolving TextFillColorPrimary (dark #FFFFFF / light #1F1E1B warm off-black)",
                 singleton && dark && light, $"singleton={singleton} dark={dark} light={light}");
+        }
+
+        // B.9b — theme-derived CONTROL defaults and a bound border remain live after mount. The same EditableText
+        // instance keeps its document/focus lifetime while its typed-text brush changes; the shell-card border bind
+        // follows the same RethemeAll pass. TitleBar/DropZone/TabStrip defaults use live semantic fallbacks too.
+        {
+            ThemeKind saved = Tok.Theme;
+            try
+            {
+                Tok.Use(ThemeKind.Dark);
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("theme-defaults", new Size2(320, 120), 1f));
+                window.Show();
+                var probe = new LiveThemeDefaultsProbe();
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+                host.RunFrame();
+
+                NodeHandle FindBorder(NodeHandle n)
+                {
+                    if (host.Scene.Paint(n).BorderWidth > 0f) return n;
+                    for (var c = host.Scene.FirstChild(n); !c.IsNull; c = host.Scene.NextSibling(c))
+                    {
+                        var hit = FindBorder(c);
+                        if (!hit.IsNull) return hit;
+                    }
+                    return NodeHandle.Null;
+                }
+
+                var textNode = FindTextNode(host.Scene, strings, host.Scene.Root, "typed");
+                var borderNode = FindBorder(host.Scene.Root);
+                ColorF darkText = host.Scene.Paint(textNode).TextColor;
+                ColorF darkBorder = host.Scene.Paint(borderNode).BorderColor;
+                var title = new TitleBar();
+                var drop = new DropZone();
+                var tabs = new TabStrip();
+                var marquee = Marquee.Default;
+                ColorF darkTitle = title.IconColor;
+                ColorF darkDrop = drop.Accent;
+                ColorF darkTab = tabs.SelectedFill.Thunk!();
+                ColorF darkMarquee = marquee.Foreground.Thunk!();
+
+                Tok.Use(ThemeKind.Light);
+                host.Reconciler.RethemeAll();
+                host.RunFrame();
+
+                var textAfter = FindTextNode(host.Scene, strings, host.Scene.Root, "typed");
+                var borderAfter = FindBorder(host.Scene.Root);
+                bool retained = probe.FieldConstructions == 1 && textAfter == textNode && borderAfter == borderNode;
+                bool textLive = darkText != Tok.TextPrimary && host.Scene.Paint(textAfter).TextColor == Tok.TextPrimary;
+                bool borderLive = darkBorder != Tok.StrokeCardDefault && host.Scene.Paint(borderAfter).BorderColor == Tok.StrokeCardDefault;
+                bool defaultsLive = darkTitle != title.IconColor && title.IconColor == Tok.AccentDefault
+                                 && darkDrop != drop.Accent && drop.Accent == Tok.AccentDefault
+                                 && darkTab != tabs.SelectedFill.Thunk!() && tabs.SelectedFill.Thunk!() == Tok.FillSolidTertiary
+                                 && darkMarquee != marquee.Foreground.Thunk!() && marquee.Foreground.Thunk!() == Tok.TextPrimary;
+                Check("B.9b retained control defaults + bound border follow RethemeAll in place (no EditableText remount)",
+                    retained && textLive && borderLive && defaultsLive,
+                    $"retained={retained} text={textLive} border={borderLive} defaults={defaultsLive} builds={probe.FieldConstructions}");
+            }
+            finally { Tok.Use(saved); }
         }
 
         // B.10 — PersonPicture geometry contract: initials centered in the circle; the badge plate hangs 4px outside
@@ -19761,6 +20178,98 @@ static class Slice
                 seeded && sticky && correctedG && none, $"total={total:0}→{gl.ContentExtent(n, cross):0} hdr6@{gl.OffsetOf(6, cross):0}");
         }
 
+        // e11virt.pagedshelf-measured — the REAL realize-all PagedShelf branch. Its ScrollEl must remain the root
+        // column's direct cross-stretch child: the old default-row clip-root wrapper gave this Grow=0 scroller a 0px
+        // cross-axis width, so the strip retained its measured height but every card was record-culled. ScrollEl is now
+        // the native hover clip-escape root, preserving both viewport geometry and the elevated-card paint contract.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("pagedshelf-measured", new Size2(640, 480), 1f));
+            window.Show();
+            var probe = new PagedShelfMeasuredProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            for (int i = 0; i < 6 && host.HasActiveWork; i++) host.RunFrame();
+
+            var scene = host.Scene;
+            var viewport = FindScrollable(scene, scene.Root);
+            ScrollState sc0 = default;
+            bool hasScroll = !viewport.IsNull && scene.TryGetScroll(viewport, out sc0);
+            var vr0 = viewport.IsNull ? default : scene.AbsoluteRect(viewport);
+            var dlRest = new DrawList();
+            SceneRecorder.Record(scene, dlRest);
+            var restRed = FindFillCommandNear(dlRest, PagedShelfMeasuredProbe.FirstFill);
+            var restBlue = FindFillCommandNear(dlRest, PagedShelfMeasuredProbe.OtherFill);
+            bool initialGeometry = hasScroll
+                && Near(vr0.X, -12f) && Near(vr0.W, 344f) && Near(vr0.H, 68f)
+                && Near(sc0.ViewportW, 344f) && Near(sc0.ContentW, 1114f)
+                && probe.Pager.Page == 0 && probe.Pager.PageCount == 4;
+            bool restPaints = restRed.Order >= 0 && restBlue.Order >= 0
+                && restRed.Order < restBlue.Order && restRed.ClipDepth == restBlue.ClipDepth;
+            Check("e11virt.pagedshelf-measured direct ScrollEl keeps the realize-all shelf viewport stretched (344×68), all-card extent measurable, and card paint visible",
+                initialGeometry && restPaints,
+                $"vp=({vr0.X:0},{vr0.Y:0},{vr0.W:0}×{vr0.H:0}) scroll={hasScroll} contentW={(hasScroll ? sc0.ContentW : -1):0} pages={probe.Pager.PageCount} draws=r{restRed.Order}/b{restBlue.Order}");
+
+            // Hover through the real dispatcher. The cell should defer after its later sibling and, because the
+            // ScrollEl itself owns HoverElevateClipRoot, record after the scroller's clip/fade scopes have closed.
+            var firstCard = FindFillNode(scene, scene.Root, PagedShelfMeasuredProbe.FirstFill);
+            if (!firstCard.IsNull)
+            {
+                var cardR = scene.AbsoluteRect(firstCard);
+                window.QueueInput(new InputEvent(InputKind.PointerMove,
+                    new Point2(cardR.X + cardR.W / 2f, cardR.Y + cardR.H / 2f), 0, 0));
+                host.RunFrame();
+            }
+            var dlHover = new DrawList();
+            SceneRecorder.Record(scene, dlHover);
+            var hoverRed = FindFillCommandNear(dlHover, PagedShelfMeasuredProbe.FirstFill);
+            var hoverBlue = FindFillCommandNear(dlHover, PagedShelfMeasuredProbe.OtherFill);
+            bool hoverEscapes = !firstCard.IsNull
+                && hoverRed.Order >= 0 && hoverBlue.Order >= 0
+                && hoverRed.Order > hoverBlue.Order && hoverRed.ClipDepth < hoverBlue.ClipDepth;
+            Check("e11virt.pagedshelf-measured ScrollEl-native clip root hoists the hovered measured cell outside its viewport clip/edge-fade scope",
+                hoverEscapes,
+                $"card={!firstCard.IsNull} hov=r{hoverRed.Order}@d{hoverRed.ClipDepth} b{hoverBlue.Order}@d{hoverBlue.ClipDepth}");
+
+            // Refit the same mounted shelf, then exercise its public pager. Reduced motion makes the offset assertion
+            // deterministic; this is the same navigation target path, only snapped instead of time-integrated.
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(630f, 470f), 0, 0));
+            host.RunFrame();
+            probe.Width.Value = 540f;
+            host.RunFrame();
+            for (int i = 0; i < 6 && host.HasActiveWork; i++) host.RunFrame();
+            var viewport2 = FindScrollable(scene, scene.Root);
+            ScrollState sc1 = default;
+            bool resizedScroll = !viewport2.IsNull && scene.TryGetScroll(viewport2, out sc1);
+            var vr1 = viewport2.IsNull ? default : scene.AbsoluteRect(viewport2);
+            bool resized = resizedScroll && Near(vr1.X, -12f) && Near(vr1.W, 564f)
+                && Near(sc1.ViewportW, 564f) && Near(sc1.ContentW, 1114f)
+                && probe.Pager.Page == 0 && probe.Pager.PageCount == 2;
+
+            bool previousReduced = Motion.ReducedMotion;
+            try
+            {
+                Motion.ReducedMotion = true;
+                probe.Pager.Next();
+                host.RunFrame();
+                for (int i = 0; i < 4 && host.HasActiveWork; i++) host.RunFrame();
+            }
+            finally
+            {
+                Motion.ReducedMotion = previousReduced;
+            }
+            ScrollState sc2 = default;
+            bool navigatedScroll = !viewport2.IsNull && scene.TryGetScroll(viewport2, out sc2);
+            var dlPage1 = new DrawList();
+            SceneRecorder.Record(scene, dlPage1);
+            var pageBlue = FindFillCommandNear(dlPage1, PagedShelfMeasuredProbe.OtherFill);
+            bool navigated = navigatedScroll && Near(sc2.OffsetX, 550f, 0.75f)
+                && probe.Pager.Page == 1 && pageBlue.Order >= 0;
+            Check("e11virt.pagedshelf-measured resize refits 3→5 columns without collapsing the viewport; Next snaps to the clamped measured-strip target and still paints cards",
+                resized && navigated,
+                $"vpW={vr1.W:0}/scrollW={(resizedScroll ? sc1.ViewportW : -1):0} pages={probe.Pager.PageCount} page={probe.Pager.Page} off={(navigatedScroll ? sc2.OffsetX : -1):0.0} draw={pageBlue.Order}");
+        }
+
         // e11virt.fillrow — FillRowVirtualLayout (the viewport-aware "fill the width with equal cards" shelf via the
         // IViewportVirtualLayout seam): SetViewport feeds the main-axis viewport; the fit is COUNT-INDEPENDENT, so a
         // handful of items render at the normal fitted width (≤ maxCardW) instead of ballooning to fill — the regression
@@ -19782,6 +20291,150 @@ static class Slice
             bool capped = frOv.PerPage == 2 && Near(frOv.CardW, 200f);
             Check("e11virt.fillrow FillRow: viewport-fed fit (≤maxCardW), count-independent (no balloon), refit on resize, perPage-override cap",
                 fit && fewItems && refit && capped, $"fit={fr.PerPage}@{fr.CardW:0.0} ext3={ext3:0.0} cap={frOv.CardW:0}");
+        }
+
+        // e11virt.fillrow-margin — the FlexLayout stretch behavior the halo-bleed viewport (Feature A / PagedShelf) relies
+        // on: a cross-STRETCH child with a NEGATIVE horizontal margin and no explicit width arranges WIDER than its parent
+        // content box by |lead|+|trail| and starts |lead| to the LEFT of it (FlexLayout.cs:373 Max(0, availCross−crossMargin)
+        // + the arrange leading-margin). This is how the shelf viewport widens 2×HaloBleed into the gutters without moving
+        // the shelf's layout box. Column parent 300 wide; child Margin(-12,0,-12,0) ⇒ width 324 at x −12.
+        {
+            var mt = LayoutTree(strings, new BoxEl
+            {
+                Direction = 1, Width = 300f, Height = 80f,
+                Children = [ new BoxEl { Height = 40f, Margin = new Edges4(-12f, 0f, -12f, 0f) } ],
+            });
+            var childR = mt.AbsoluteRect(Child(mt, mt.Root, 0));
+            Check("e11virt.fillrow-margin negative horizontal margin widens a cross-stretch child by 2×|m| at x −|m| (halo-bleed viewport)",
+                Near(childR.W, 324f) && Near(childR.X, -12f), $"w={childR.W:0.0} x={childR.X:0.0}");
+        }
+
+        // e11virt.fillrow-insets — the MAIN-AXIS content insets Feature A adds to FillRowVirtualLayout: the fed viewport is
+        // widened by Lead+Trail, the fit uses the INNER width (viewport − insets) so cardW is UNCHANGED, item i shifts by
+        // LeadInset, and ContentExtent carries both gutters. Insets default 0 ⇒ existing gates keep their geometry.
+        {
+            const float cross = 240f, lead = 12f, trail = 12f;
+            var frBase = new FillRowVirtualLayout(150f, 200f, 12f);
+            frBase.SetViewport(1400f, cross);                                 // no insets: perPage 8, cardW 164.5
+            var frIns = new FillRowVirtualLayout(150f, 200f, 12f, leadInset: lead, trailInset: trail);
+            frIns.SetViewport(1400f + lead + trail, cross);                   // widened viewport; inner = 1400 ⇒ SAME fit
+            bool sameFit = frIns.PerPage == frBase.PerPage && Near(frIns.CardW, frBase.CardW);
+            var r0 = frIns.ItemRect(0, cross); var r1 = frIns.ItemRect(1, cross);
+            bool shifted = Near(r0.X, lead) && Near(r1.X, lead + frIns.CardW + 12f);
+            bool extent = Near(frIns.ContentExtent(5, cross), frBase.ContentExtent(5, cross) + lead + trail);
+            frIns.Window(64, cross, 1400f + lead + trail, 0f, 0, out int f0, out int l0);   // offset 0 still realizes item 0
+            Check("e11virt.fillrow-insets Lead/Trail: item0 at LeadInset, extent +Lead+Trail, fit uses inner width (cardW unchanged), window realizes from 0",
+                sameFit && shifted && extent && f0 == 0 && l0 >= 8,
+                $"cardW={frIns.CardW:0.0}/{frBase.CardW:0.0} r0={r0.X:0.0} ext+={frIns.ContentExtent(5, cross) - frBase.ContentExtent(5, cross):0.0} win=[{f0},{l0})");
+        }
+
+        // e11virt.elevate — Element.HoverElevatePaint (Feature B): a flagged child on the hover path is DEFERRED to paint
+        // AFTER its later siblings (the design's z-index:2, so a hovered card's lift halo is not overpainted). Two
+        // overlapping ZStack children; the EARLIER (red, flagged) one is hovered → it records AFTER the later (blue)
+        // sibling. At rest it keeps document order. The deferred-path record allocates 0 managed bytes.
+        {
+            var fonts2 = new HeadlessFontSystem(strings);
+            ColorF red = ColorF.FromRgba(220, 40, 40), blue = ColorF.FromRgba(40, 90, 220);
+            Element Tree() => new BoxEl
+            {
+                Width = 200f, Height = 100f, ZStack = true,
+                Children =
+                [
+                    // HoverFill = Fill (identity): without it ResolveSurface auto-lightens a hovered interactive fill
+                    // 8%, and the exact-color probe below would miss the drawn command.
+                    new BoxEl { Key = "elev", Width = 100f, Height = 100f, Fill = red, HoverFill = red, HoverElevatePaint = true, OnClick = static () => { } },
+                    new BoxEl { Key = "sib",  Width = 100f, Height = 100f, Fill = blue },
+                ],
+            };
+            var scene = new SceneStore();
+            new TreeReconciler(scene, strings).ReconcileRoot(Tree(), null);
+            new FlexLayout(scene, fonts2).Run(scene.Root);
+            var elev = Child(scene, scene.Root, 0);
+
+            var dlRest = new DrawList();
+            SceneRecorder.Record(scene, dlRest);
+            var restRed = FindFillCommand(dlRest, red); var restBlue = FindFillCommand(dlRest, blue);
+            bool restOrder = restRed.Order >= 0 && restBlue.Order >= 0 && restRed.Order < restBlue.Order;   // document order at rest
+
+            scene.Flags(elev) |= NodeFlags.Hovered;   // pointer on the flagged (earlier) child
+            var dlHov = new DrawList();
+            SceneRecorder.Record(scene, dlHov);
+            var hovRed = FindFillCommand(dlHov, red); var hovBlue = FindFillCommand(dlHov, blue);
+            bool elevated = hovRed.Order >= 0 && hovBlue.Order >= 0 && hovRed.Order > hovBlue.Order;   // deferred above sibling
+
+            SceneRecorder.Record(scene, dlHov);   // warm DrawList buffers
+            long a0 = GC.GetAllocatedBytesForCurrentThread();
+            SceneRecorder.Record(scene, dlHov);
+            long recBytes = GC.GetAllocatedBytesForCurrentThread() - a0;
+            Check("e11virt.elevate HoverElevatePaint defers a hovered flagged child above its later siblings (z-index:2); document order at rest; 0-alloc deferred record",
+                restOrder && elevated && recBytes == 0,
+                $"rest r{restRed.Order}<b{restBlue.Order} hov r{hovRed.Order}>b{hovBlue.Order} bytes={recBytes}");
+        }
+
+        // e11virt.elevate-cell — the NESTED (shelf) shape end-to-end through the REAL input dispatcher: the flagged
+        // node is a NON-interactive cell whose interactive CARD wins the hit (PagedShelf's containerFactory shape).
+        // HoverElevatePaintBit joins UpdateHoverWithin's ancestor mask, so hovering the card stamps HoverWithin on the
+        // flagged cell — and the recorder then defers the whole cell above its sibling cells.
+        {
+            ColorF red = ColorF.FromRgba(220, 40, 40), blue = ColorF.FromRgba(40, 90, 220);
+            using var appE = new HeadlessPlatformApp();
+            var windowE = new HeadlessWindow(new WindowDesc("elevate-cell", new Size2(640, 480), 1f));
+            windowE.Show();
+            using var hostE = new AppHost(appE, windowE, new HeadlessGpuDevice(), fonts, strings, new ElevateCellProbe());
+            hostE.RunFrame();
+            var sE = hostE.Scene;
+            // Descend to the two-cell row (the probe's root box), then its cells and cell 0's card.
+            var row = sE.Root;
+            while (!row.IsNull && (sE.FirstChild(row).IsNull || sE.NextSibling(sE.FirstChild(row)).IsNull))
+                row = sE.FirstChild(row);
+            var cell0 = sE.FirstChild(row); var cell1 = sE.NextSibling(cell0);
+            var card0 = sE.FirstChild(cell0);
+            var r0 = sE.AbsoluteRect(card0);
+            windowE.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(r0.X + r0.W / 2f, r0.Y + r0.H / 2f), 0, 0));
+            hostE.RunFrame();
+            bool cellWithin = (sE.Flags(cell0) & NodeFlags.HoverWithin) != 0;   // the dispatcher-mask contract
+            var dlCell = new DrawList();
+            SceneRecorder.Record(sE, dlCell);
+            // Near-match: the hovered card's fill went through the real dispatcher → InteractionAnim → LerpLinear,
+            // which is not bit-exact even at HoverFill==Fill identity.
+            var cRed = FindFillCommandNear(dlCell, red); var cBlue = FindFillCommandNear(dlCell, blue);
+            bool cellElevated = cRed.Order >= 0 && cBlue.Order >= 0 && cRed.Order > cBlue.Order;
+            Check("e11virt.elevate-cell a flagged NON-interactive cell gets HoverWithin from its hovered card (dispatcher mask) and defers above sibling cells",
+                cellWithin && cellElevated, $"within={cellWithin} r{cRed.Order}>b{cBlue.Order}");
+        }
+
+        // e11virt.elevate-escape — clip-ESCAPE (Element.HoverElevateClipRoot): with a flagged clipping viewport around
+        // the cell row, the hovered cell is HOISTED out of the viewport's whole scope — recorded AFTER its PopClip,
+        // against the OUTER clip (lower clip depth) — so the lift + halo paint outside the strip, while the resting
+        // sibling stays inside the viewport clip. At rest both record inside (document order, same depth).
+        {
+            ColorF red = ColorF.FromRgba(220, 40, 40), blue = ColorF.FromRgba(40, 90, 220);
+            using var appV = new HeadlessPlatformApp();
+            var windowV = new HeadlessWindow(new WindowDesc("elevate-escape", new Size2(640, 480), 1f));
+            windowV.Show();
+            using var hostV = new AppHost(appV, windowV, new HeadlessGpuDevice(), fonts, strings, new ElevateEscapeProbe());
+            hostV.RunFrame();
+            var sV = hostV.Scene;
+            var dlRest2 = new DrawList();
+            SceneRecorder.Record(sV, dlRest2);
+            var rRed = FindFillCommandNear(dlRest2, red); var rBlue = FindFillCommandNear(dlRest2, blue);
+            bool restInside = rRed.Order >= 0 && rBlue.Order >= 0 && rRed.Order < rBlue.Order && rRed.ClipDepth == rBlue.ClipDepth;
+
+            // Hover card 0 through the real dispatcher, then record: red must hoist out (later order, SHALLOWER clip).
+            var rootV = sV.Root;
+            while (!rootV.IsNull && (sV.FirstChild(rootV).IsNull || sV.NextSibling(sV.FirstChild(rootV)).IsNull))
+                rootV = sV.FirstChild(rootV);   // descend to the two-cell row
+            var card0V = sV.FirstChild(sV.FirstChild(rootV));
+            var rV = sV.AbsoluteRect(card0V);
+            windowV.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(rV.X + rV.W / 2f, rV.Y + rV.H / 2f), 0, 0));
+            hostV.RunFrame();
+            var dlHov2 = new DrawList();
+            SceneRecorder.Record(sV, dlHov2);
+            var hRed = FindFillCommandNear(dlHov2, red); var hBlue = FindFillCommandNear(dlHov2, blue);
+            bool escaped = hRed.Order >= 0 && hBlue.Order >= 0 && hRed.Order > hBlue.Order && hRed.ClipDepth < hBlue.ClipDepth;
+            Check("e11virt.elevate-escape a hovered flagged cell hoists OUT of the HoverElevateClipRoot viewport clip (records after its pop, shallower depth); rest stays inside",
+                restInside && escaped,
+                $"rest r{rRed.Order}@d{rRed.ClipDepth} b{rBlue.Order}@d{rBlue.ClipDepth} hov r{hRed.Order}@d{hRed.ClipDepth} b{hBlue.Order}@d{hBlue.ClipDepth}");
         }
 
         // e11virt.5 — ItemsRepeater lifecycle (E11-L2, ItemsRepeater.idl:186-188): ElementPrepared on entering the
@@ -19823,6 +20476,47 @@ static class Slice
             Check("e11virt.5 ItemsRepeater lifecycle: Prepared/Clearing mirror the realized window across a recycle; in-window scroll fires nothing",
                 mountSequential && mountRange && quiet && windowSet && conserved,
                 $"mount=[0,{sc0.LastRealized}) → [{sc1.FirstRealized},{sc1.LastRealized}) prepared={probe.Prepared.Count} cleared={probe.Cleared.Count}");
+        }
+
+        // e11virt.5b — window in-place diff (component row state survives a VirtualListEl update): a parent re-render
+        // swaps in a REBUILT VirtualListEl over an unchanged window, so RealizeWindow(reuseOverlap:false) re-renders
+        // every realized slot. Same-slot type+key pairs must diff in place (general Update → keyed child reconcile →
+        // ComponentEl same-type reuse) — the hosted row components keep instance identity and state, and NOTHING
+        // remounts. (Component-hosting rows are not IsRecyclable, so without the in-place branch every row took the
+        // mount+remove path: RowConstructions would grow by the window size and Rows[i] would be fresh instances.)
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("e11-inplace", new Size2(640, 480), 1f));
+            window.Show();
+            var probe = new WindowInPlaceDiffProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            host.RunFrame();   // let the mount-deferred overscan trickle settle (E4 budget) before snapshotting
+            host.RunFrame();
+
+            var vp = host.Scene.Root;
+            host.Scene.TryGetScroll(vp, out var sc0);
+            int built0 = probe.RowConstructions;
+            int renders0 = probe.ParentRenders;
+            var row0 = probe.Rows[sc0.FirstRealized];
+
+            // Control: per-row state machinery is live BEFORE the parent re-render (granular row re-render path).
+            row0.Local.Value = 7;
+            host.RunFrame();
+
+            // The parent re-render: a NEW VirtualListEl, same window → every slot gets a fresh Element from RenderItem.
+            probe.Rev.Value = 1;
+            host.RunFrame();
+            host.Scene.TryGetScroll(vp, out var sc1);
+
+            bool reRendered = probe.ParentRenders > renders0;                        // the Update→RealizeWindow path ran
+            bool windowStable = sc1.FirstRealized == sc0.FirstRealized && sc1.LastRealized == sc0.LastRealized;
+            bool noRemount = probe.RowConstructions == built0;                       // ZERO fresh row-component instances
+            bool identity = ReferenceEquals(probe.Rows[sc0.FirstRealized], row0);    // same live instance in the slot
+            bool stateKept = row0.Local.Peek() == 7;                                 // per-instance state survived
+            Check("e11virt.5b window in-place diff: a parent re-render rebuilds every realized row Element; same-slot type+key rows update in place — component instances/state survive, nothing remounts",
+                reRendered && windowStable && noRemount && identity && stateKept,
+                $"renders={renders0}->{probe.ParentRenders} built={built0}->{probe.RowConstructions} window=[{sc1.FirstRealized},{sc1.LastRealized}) state={row0.Local.Peek()}");
         }
 
         // e11virt.6 — typed ItemsRepeater (E11-L2): the (index, item) template binds without casts, and an

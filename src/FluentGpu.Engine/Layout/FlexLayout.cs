@@ -599,6 +599,10 @@ public sealed class FlexLayout
         }
         sc.OffsetX = Clamp(sc.OffsetX, 0f, maxX); sc.TargetX = Clamp(sc.TargetX, 0f, maxX);
         sc.OffsetY = Clamp(sc.OffsetY, 0f, maxY); sc.TargetY = Clamp(sc.TargetY, 0f, maxY);
+        // Re-clamp the WheelAnimating/programmatic chase targets to the (possibly shrunk) extent too — else a chase seeded
+        // toward the old bottom keeps overshooting a moving clamp as the content extent drifts (the near-bottom oscillation).
+        if (!float.IsNaN(sc.PendingTargetX)) sc.PendingTargetX = Clamp(sc.PendingTargetX, 0f, maxX);
+        if (!float.IsNaN(sc.PendingTargetY)) sc.PendingTargetY = Clamp(sc.PendingTargetY, 0f, maxY);
         if (!content.IsNull && _scene.IsLive(content))
         {
             ref NodePaint cp = ref _scene.Paint(content);
@@ -629,7 +633,11 @@ public sealed class FlexLayout
             int visibleFirst, visibleLast;
             if (sc.Layout is not null)
             {
-                float cross = horizontal ? sc.ViewportH : sc.ViewportW;
+                // Cross MUST match what the arrange paths pass (the padding-subtracted inner cross, published as the
+                // content cross) — alternating viewport-vs-inner cross made a width-keyed measured layout (the home
+                // feed's estimator) reseed its extent table every frame, flapping the anchor re-pin (the felt jitter).
+                float cross = horizontal ? (sc.ContentH > 0f ? sc.ContentH : sc.ViewportH)
+                                         : (sc.ContentW > 0f ? sc.ContentW : sc.ViewportW);
                 sc.Layout.Window(sc.ItemCount, cross, vpExtent, off, 0, out visibleFirst, out visibleLast);
             }
             else if (_scene.TryGetExtents(node, out var extents) && extents is not null)
@@ -703,6 +711,8 @@ public sealed class FlexLayout
         int anchorIndex = table.IndexAt(offset);
         float anchorWithin = offset - table.OffsetOf(anchorIndex);
 
+        int prevFirst = sc.PrevArrangedFirst, prevLast = sc.PrevArrangedLast;
+        bool deferred = false;
         int ord = 0;
         for (var rc = _scene.FirstChild(content); !rc.IsNull; rc = _scene.NextSibling(rc), ord++)
         {
@@ -712,6 +722,10 @@ public sealed class FlexLayout
             float main = horizontal ? cs.Width : cs.Height;
             if (horizontal) Arrange(rc, pos, 0f, main, innerH);
             else            Arrange(rc, 0f, pos, innerW, main);
+            // Fresh row above the anchor: defer the extent correction one arrange — its first measure can be
+            // transiently short (deferred inner content), and pushing that into the table re-pins the offset down then
+            // back up (the felt jitter). See ArrangeVirtualMeasured for the full rationale.
+            if ((index < prevFirst || index > prevLast) && index < anchorIndex) { deferred = true; continue; }
             table.SetExtent(index, main);                         // correct this row's extent (O(log n))
         }
 
@@ -727,9 +741,28 @@ public sealed class FlexLayout
         ref ScrollState scw = ref _scene.ScrollRef(node);
         if (horizontal) scw.OffsetX = pinned; else scw.OffsetY = pinned;
         scw.AnchorIndex = anchorIndex;
+        RecordAnchorShift(ref scw, pinned - offset, horizontal, (int)node.Raw.Index, anchorIndex, offset);
+        scw.PrevArrangedFirst = first;
+        scw.PrevArrangedLast = first + ord - 1;   // ord = realized child count (empty window ⇒ first-1)
+        if (deferred) _scene.Mark(node, NodeFlags.LayoutDirty);   // a deferred fresh-row correction needs one follow-up arrange
         ref NodePaint cp = ref _scene.Paint(content);
         cp.LocalTransform = Affine2D.Translation(horizontal ? -pinned : 0f, horizontal ? 0f : -pinned);
         return (contentW, contentH);
+    }
+
+    // The virtualization anchor re-pin (above) shifts the offset directly to keep the topmost item fixed across
+    // estimate-then-correct extent changes. Record that shift as a coordinate delta the phase-7 ScrollIntegrator consumes,
+    // so its live intents (the resampler anchor + the WheelAnimating chase targets) move WITH the re-pin instead of being
+    // overwritten/fought a tick later (the mid-gesture jitter). += is deliberate: D1 realize-after-layout can run a second
+    // scoped arrange in the same frame, so multiple shifts accumulate until the next tick drains PendingAnchorShift.
+    private static void RecordAnchorShift(ref ScrollState scw, float delta, bool horizontal, int nodeIdx, int anchorIndex, float offset)
+    {
+        if (delta == 0f) return;
+        scw.PendingAnchorShift += delta;
+        if (horizontal) { scw.TargetX += delta; if (!float.IsNaN(scw.PendingTargetX)) scw.PendingTargetX += delta; }
+        else            { scw.TargetY += delta; if (!float.IsNaN(scw.PendingTargetY)) scw.PendingTargetY += delta; }
+        if (!float.IsNaN(scw.PendingRawOffset)) scw.PendingRawOffset += delta;
+        if (ScrollTrace.On) ScrollTrace.Note(100, delta, nodeIdx, anchorIndex, offset);
     }
 
     /// <summary>True when the layout participates in estimate-then-correct (not a fixed-geometry grid posing as measured).</summary>
@@ -754,6 +787,9 @@ public sealed class FlexLayout
         if (layout is GridVirtualLayout { IsMeasured: true } grid)
             grid.ResetMeasurePass(sc.ItemCount, cross);
 
+        int prevFirst = sc.PrevArrangedFirst, prevLast = sc.PrevArrangedLast;
+        bool deferred = false;
+
         // Pass 1 — measure every realized cell and feed extents (measured grids need the full row before heights lock).
         int ord = 0;
         for (var rc = _scene.FirstChild(content); !rc.IsNull; rc = _scene.NextSibling(rc), ord++)
@@ -765,6 +801,15 @@ public sealed class FlexLayout
             float measureW = horizontal ? MathF.Max(0f, rect.H - mT - mB) : MathF.Max(0f, rect.W - mL - mR);
             var cs = Measure(rc, measureW);
             float main = horizontal ? cs.Width : cs.Height;
+            float oldMain = horizontal ? rect.W : rect.H;
+            // A row OUTSIDE the previous arrange window is FRESH: its first measure can be transiently short (deferred
+            // inner content lands next frame). Above the anchor that transient would re-pin the offset down then back up
+            // — the felt jitter — so defer the correction one arrange (the slot keeps its table extent; next arrange
+            // measures the settled value and usually matches, so no pin fires at all).
+            bool fresh = index < prevFirst || index > prevLast;
+            if (fresh && index < anchorIndex) { deferred = true; continue; }
+            if (FluentGpu.Foundation.ScrollTrace.On && MathF.Abs(main - oldMain) > 0.5f)
+                FluentGpu.Foundation.ScrollTrace.Note(111, main - oldMain, (int)node.Raw.Index, index, main);   // extent correction: which row, by how much
             layout.SetMeasured(index, main, cross);
         }
 
@@ -792,6 +837,10 @@ public sealed class FlexLayout
         ref ScrollState scw = ref _scene.ScrollRef(node);
         if (horizontal) scw.OffsetX = pinned; else scw.OffsetY = pinned;
         scw.AnchorIndex = anchorIndex;
+        RecordAnchorShift(ref scw, pinned - offset, horizontal, (int)node.Raw.Index, anchorIndex, offset);
+        scw.PrevArrangedFirst = first;
+        scw.PrevArrangedLast = first + ord - 1;   // ord = realized child count after the loops (empty window ⇒ first-1)
+        if (deferred) _scene.Mark(node, NodeFlags.LayoutDirty);   // a deferred fresh-row correction needs one follow-up arrange
         ref NodePaint cp = ref _scene.Paint(content);
         cp.LocalTransform = Affine2D.Translation(horizontal ? -pinned : 0f, horizontal ? 0f : -pinned);
         return (contentW, contentH);

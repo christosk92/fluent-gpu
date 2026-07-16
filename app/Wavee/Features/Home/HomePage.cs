@@ -33,26 +33,23 @@ sealed class HomePage : Component
         var menuOverlay = UseContext(Overlay.Service);
         if (svc is null) return new BoxEl { Grow = 1f };
 
-        // Re-fetch the home when the library changes (e.g. the live-session playlist-header hydration lands) so playlist
-        // names/covers replace the initial URIs without a manual nav.
         var home = UseLoadable(Loadable<HomeFeed>.Pending(FakeData.HomeSeed));   // seed renders the loading shape; later refreshes swap Ready->Ready in place
         var post = UsePost();
         // Home groups have substantially different heights (quick grid / hero / compact grid / shelf / editorial).
         // Hoist one measured extent table so the viewport can correct and anchor rows while recycling offscreen groups.
         var homeLayout = UseMemo(static () => new HomeFeedVirtualLayout());
-        // Start the background home-refresh loop + the library-change subscription ONCE, and tie BOTH to this component's
-        // lifetime. A UseSignalEffect that reads no signals runs exactly once on mount; its Reactive.OnCleanup fires on
-        // unmount (KeepAlive eviction / navigation away). Without this, each cold remount of Home leaked an orphaned 60s
-        // PeriodicTimer loop + a never-unsubscribed observer that COMPOUNDED over a long session (memory + background
-        // fetches). Mirrors the LyricsTicker lifecycle pattern (Features/Player/LyricsView.cs).
+        // Start the background home-refresh loop ONCE and tie it to this component's lifetime. A UseSignalEffect that
+        // reads no signals runs exactly once on mount; its Reactive.OnCleanup fires on unmount (KeepAlive eviction /
+        // navigation away). Without this, each cold remount of Home leaked an orphaned 60s PeriodicTimer loop that
+        // COMPOUNDED over a long session. Mirrors the LyricsTicker lifecycle pattern (Features/Player/LyricsView.cs).
+        // Deliberately NO CollectionsChanged subscription: a like/save emits several collection waves and re-fetching
+        // the whole feed per wave churned the page every time. Library-driven updates (e.g. the post-sign-in
+        // playlist-header hydration) land on the next 60s tick or a manual re-nav — an accepted trade.
         Context.UseSignalEffect(() =>
         {
             var cts = new CancellationTokenSource();
             StartHomeRefreshLoop(svc, home, post, cts.Token);
-            IDisposable? sub = svc.Library is Wavee.Core.ICollectionEvents ev
-                ? ev.CollectionsChanged.Subscribe(Wavee.Backend.Observers.From<Wavee.Core.CollectionKind>(__ => { _ = RefreshHomeOnce(svc, home, post, failIfInitial: false); }))
-                : null;
-            Reactive.OnCleanup(() => { cts.Cancel(); cts.Dispose(); sub?.Dispose(); });
+            Reactive.OnCleanup(() => { cts.Cancel(); cts.Dispose(); });
         });
         string? name = bridge?.User.Value?.DisplayName;     // subscribe → greeting refreshes on login
 
@@ -127,7 +124,9 @@ sealed class HomePage : Component
             measured: true,
             header: g.Title is { Length: > 0 } t ? Surfaces.AccentHeader(t, GroupAccent(g)) : new BoxEl(),
             pager: ShelfPager.Chevrons,
-            minCardW: 178f, maxCardW: 232f, gap: WaveeSpace.L, edgeFade: 24f,
+            // gap S, not L: the Shelf card already insets its artwork by Pad(8) each side for the hover plate, so the
+            // VISUAL cover-to-cover distance is gap + 16 — L read as ~32px of air between resting cards.
+            minCardW: 178f, maxCardW: 232f, gap: WaveeSpace.S, edgeFade: 24f,
             keyOf: i => g.Cards[i].Uri);
 
         // Baseline recommendations are the deliberate exception: a three-up editorial interruption with full-bleed
@@ -152,7 +151,9 @@ sealed class HomePage : Component
             // old count-pinned 3-up that ballooned each card to a third of the row. The uncapped maxCardW keeps the
             // FITTED columns filling the width (no maxCardW slivers); a break with fewer cards than columns simply
             // shows them at the fitted size.
-            minCardW: 300f, maxCardW: 9999f, gap: WaveeSpace.L, edgeFade: 0f,
+            // edgeFade must cover the shelf's HaloBleed gutter (PagedShelf): with fade 0 a free-wheel (non-page-aligned)
+            // rest showed a RAW sliver of the scrolled-out neighbor in the gutter — the fade is what keeps it soft.
+            minCardW: 300f, maxCardW: 9999f, gap: WaveeSpace.L, edgeFade: 24f,
             maxColumns: 5,
             keyOf: i => g.Cards[i].Uri);
 
@@ -183,9 +184,19 @@ sealed class HomePage : Component
             };
         }, fallback: 900f);
 
+        // The library quick picks are the fixed opening matrix, not another unbounded feed module. The responsive
+        // column count A determines an A×A window; only a genuinely shorter source leaves the final row incomplete.
+        Element QuickSection(HomeGroup g) => Responsive.Of(width =>
+        {
+            int columns = HomeQuickLayout.Columns(width);
+            int count = HomeQuickLayout.VisibleCount(width, g.Cards.Count);
+            return UniformGrid(columns, HomeQuickLayout.Gap, MediaCard.QuickH,
+                QuickTiles(g.Cards, g.Title ?? "quick-grid", count).ToArray());
+        }, fallback: 1100f);
+
         Element Group(HomeGroup g) => g.Kind switch
         {
-            HomeGroupKind.QuickGrid => QuickGrid(QuickTiles(g.Cards, g.Title ?? "quick-grid", 8)),
+            HomeGroupKind.QuickGrid => QuickSection(g),
             HomeGroupKind.Hero when g.Cards.Count > 0 => Responsive.Of(w => HeroBand(g.Cards[0], GroupAccent(g), PlayCard, NavCard, w), fallback: 560f),
             HomeGroupKind.Featured when g.Cards.Count > 0 => FeaturedShelf(g),
             HomeGroupKind.Compact when g.Cards.Count > 0 => CompactSection(g),
@@ -528,12 +539,19 @@ sealed class HomePage : Component
             };
         }, fallback: 1100f);
 
+        static Element QuickSection() => Responsive.Of(width =>
+        {
+            int columns = HomeQuickLayout.Columns(width);
+            return UniformGrid(columns, HomeQuickLayout.Gap, MediaCard.QuickH,
+                Repeat(columns * columns, QuickTile));
+        }, fallback: 1100f);
+
         return new BoxEl
         {
             Direction = 1, Gap = WaveeSpace.XL,
             Children =
             [
-                AutoGrid(320f, WaveeSpace.M, MediaCard.QuickH, Repeat(6, QuickTile)),
+                QuickSection(),
                 ShelfSection(212f),
                 CompactSection(),
                 EditorialSection(),
@@ -612,8 +630,6 @@ sealed class HomePage : Component
     }
 
     // ── helpers ────────────────────────────────────────────────────────────────────────────────────────
-    static Element QuickGrid(IEnumerable<Element> tiles) =>
-        AutoGrid(320f, WaveeSpace.M, MediaCard.QuickH, tiles.ToArray());
 }
 
 /// <summary>
@@ -625,11 +641,27 @@ sealed class HomePage : Component
 static class HomeCompactLayout
 {
     public const float GridGap = WaveeSpace.S;
-    public const float RowClearance = 6f;
+    public const float RowClearance = 4f;
 
-    public static float Art(float width) => width < 620f ? 84f : 112f;
-    public static float CardHeight(float width) => width < 620f ? 104f : 132f;
-    public static int Columns(float width) => width >= 852f ? 2 : 1;
+    public static float Art(float width) => width < 620f ? 72f : 88f;
+    public static float CardHeight(float width) => width < 620f ? 88f : 104f;
+    public static int Columns(float width) => width >= 960f ? 3 : width >= 620f ? 2 : 1;
+}
+
+static class HomeQuickLayout
+{
+    public const float MinColumnWidth = 320f;
+    public const float Gap = WaveeSpace.M;
+    public const int MaxColumns = 3;
+
+    public static int Columns(float width)
+        => Math.Clamp((int)MathF.Floor((MathF.Max(1f, width) + Gap) / (MinColumnWidth + Gap)), 1, MaxColumns);
+
+    public static int VisibleCount(float width, int available)
+    {
+        int columns = Columns(width);
+        return Math.Min(Math.Max(0, available), columns * columns);
+    }
 }
 
 sealed class HomeFeedVirtualLayout : IMeasuredVirtualLayout
@@ -678,6 +710,11 @@ sealed class HomeFeedVirtualLayout : IMeasuredVirtualLayout
             && !float.IsNaN(_seededCross) && MathF.Abs(_seededCross - cross) <= 0.5f)
             return;
 
+        // Trace the reseed trigger (code 110): f0=incoming cross, f1=previously seeded cross, i1=itemCount vs i2=seeded
+        // count — a reseed mid-scroll wipes every measured correction and flaps the anchor re-pin.
+        if (FluentGpu.Foundation.ScrollTrace.On)
+            FluentGpu.Foundation.ScrollTrace.Note(110, cross, itemCount, (_extents.Count << 8) | (_seededVersion == _shapeVersion ? 1 : 0), _seededCross);
+
         _extents.Reset(itemCount, 360f);
         for (int i = 0; i < itemCount; i++) _extents.SetExtent(i, Estimate(i, cross));
         _seededCross = cross;
@@ -712,9 +749,10 @@ sealed class HomeFeedVirtualLayout : IMeasuredVirtualLayout
     static float QuickExtent(float width, int count)
     {
         if (count <= 0) return WaveeSpace.XL;
-        int columns = Math.Max(1, (int)MathF.Floor((width + WaveeSpace.M) / (320f + WaveeSpace.M)));
-        int rows = (count + columns - 1) / columns;
-        return rows * MediaCard.QuickH + Math.Max(0, rows - 1) * WaveeSpace.M + WaveeSpace.XL;
+        int columns = HomeQuickLayout.Columns(width);
+        int visible = HomeQuickLayout.VisibleCount(width, count);
+        int rows = (visible + columns - 1) / columns;
+        return rows * MediaCard.QuickH + Math.Max(0, rows - 1) * HomeQuickLayout.Gap + WaveeSpace.XL;
     }
 
     static float CompactExtent(float width, int count)
@@ -822,7 +860,7 @@ static class HomeImageDiagnostics
             var group = feed.Groups[gi];
             if (group.Kind != HomeGroupKind.QuickGrid) continue;
 
-            int total = Math.Min(group.Cards.Count, 8);
+            int total = Math.Min(group.Cards.Count, HomeQuickLayout.MaxColumns * HomeQuickLayout.MaxColumns);
             int url = 0, mosaic = 0, missing = 0, emptyUrl = 0;
             for (int i = 0; i < total; i++)
             {

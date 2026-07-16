@@ -1,0 +1,152 @@
+{
+  "$culture": "ko-KR",
+  "$comment": "한국어 재정의입니다. 누락된 키는 키별로 en-US로 대체됩니다.",
+
+  "detail": {
+    "play": "재생",
+    "pause": "일시 정지",
+    "likedSongs": "좋아요 표시한 곡",
+    "artist": "아티스트",
+    "songCount": "{count, plural, other {#곡}}",
+    "today": "오늘",
+    "yesterday": "어제"
+  },
+
+  "home": {
+    "goodMorning": "좋은 아침이에요",
+    "goodAfternoon": "좋은 오후예요",
+    "goodEvening": "좋은 저녁이에요",
+    "greeting": "{name}님, {part}",
+    "onRotation": "최근 자주 들은 음악이에요.",
+    "madeForYou": "나를 위한 추천",
+    "moreForYou": "나를 위한 더 많은 음악",
+    "recentlyPlayed": "최근 재생한 항목",
+    "yourPlaylists": "내 플레이리스트",
+    "yourAlbums": "내 앨범",
+    "yourArtists": "내 아티스트",
+    "madeFor": "{name}님을 위해 만들었어요",
+    "you": "회원님",
+    "newReleases": "새 앨범 및 싱글",
+    "popularArtists": "인기 아티스트",
+    "artist": "아티스트",
+    "featuredAlbum": "추천 앨범",
+    "play": "재생",
+    "pause": "일시 정지",
+    "single": "싱글",
+    "ep": "EP",
+    "album": "앨범",
+    "compilation": "컴필레이션"
+  },
+
+  "settings": {
+    "title": "설정",
+    "tabs": {
+      "general": "일반",
+      "playback": "재생",
+      "storage": "저장 공간 및 캐시",
+      "diagnostics": "진단",
+      "about": "정보"
+    },
+    "language": {
+      "title": "언어 및 지역",
+      "label": "앱 언어",
+      "restartSub": "변경 사항은 Wavee를 다시 시작할 때 적용됩니다.",
+      "system": "시스템 기본값",
+      "englishUs": "English (United States)",
+      "dutch": "Nederlands",
+      "korean": "한국어"
+    },
+    "appearance": {
+      "title": "모양",
+      "subtitle": "테마, 색상 팔레트 및 목록 밀도",
+      "theme": "테마",
+      "themeSub": "시스템은 Windows 설정을 자동으로 따릅니다",
+      "palette": "팔레트",
+      "paletteSub": "인터페이스와 강조 색상을 지정합니다",
+      "rowDensity": "행 밀도",
+      "rowDensitySub": "트랙 목록의 행 높이",
+      "pageLayout": "트랙 페이지 레이아웃",
+      "pageLayoutSub": "넓은 창에서는 사이드 레일을 사용하거나 항상 쌓인 헤더를 사용합니다",
+      "disableMarquee": "흐르는 텍스트 끄기",
+      "disableMarqueeSub": "긴 제목을 스크롤하지 않고 자릅니다",
+      "disableColorWashes": "색상 워시 끄기",
+      "disableColorWashesSub": "아트워크 색상 대신 중립적인 Mica와 페이지를 사용합니다",
+      "paletteWarm": "따뜻하게",
+      "paletteSlate": "슬레이트",
+      "paletteNeutral": "중립",
+      "paletteAccent": "강조"
+    },
+    "choice": {
+      "system": "시스템",
+      "light": "밝게",
+      "dark": "어둡게",
+      "compact": "좁게",
+      "default": "기본",
+      "cozy": "여유롭게",
+      "comfortable": "편안하게",
+      "automatic": "자동",
+      "stacked": "쌓기"
+    }
+  },
+
+  "nav": {
+    "home": "홈",
+    "search": "검색",
+    "albums": "앨범",
+    "artists": "아티스트",
+    "likedSongs": "좋아요 표시한 곡",
+    "podcasts": "팟캐스트",
+    "localFiles": "로컬 파일",
+    "playlist": "플레이리스트",
+    "album": "앨범",
+    "artist": "아티스트",
+    "yourLibrary": "내 라이브러리",
+    "viewAllHistory": "전체 기록 보기"
+  },
+
+  "sidebar": {
+    "pinned": "고정됨",
+    "yourLibrary": "내 라이브러리",
+    "albums": "앨범",
+    "artists": "아티스트",
+    "likedSongs": "좋아요 표시한 곡",
+    "podcasts": "팟캐스트",
+    "playlists": "플레이리스트",
+    "localFiles": "로컬 파일",
+    "soon": "곧 공개",
+    "dropToPin": "고정하려면 여기에 놓으세요",
+    "songCount": "{count, plural, other {#곡}}",
+    "createPlaylist": "플레이리스트",
+    "createFolder": "폴더",
+    "newPlaylist": "내 플레이리스트"
+  },
+
+  "common": {
+    "more": "더 보기",
+    "retry": "다시 시도",
+    "dismiss": "닫기",
+    "offline": "오프라인 상태입니다. 저장된 콘텐츠를 표시합니다.",
+    "emptyTitle": "아직 아무것도 없어요",
+    "emptySubtitle": "사용 가능한 항목이 생기면 여기에 표시됩니다.",
+    "errorTitle": "문제가 발생했습니다.",
+    "errorSubtitle": "연결을 확인하고 다시 시도하세요."
+  },
+
+  "player": {
+    "nothingPlaying": "재생 중인 항목 없음",
+    "loading": "불러오는 중…",
+    "cannotPlay": "이 트랙을 재생할 수 없습니다",
+    "previous": "이전",
+    "next": "다음",
+    "shuffle": "셔플",
+    "repeat": "반복",
+    "pause": "일시 정지",
+    "play": "재생",
+    "likedSongs": "좋아요 표시한 곡"
+  },
+
+  "menu": {
+    "moveUp": "위로 이동",
+    "moveDown": "아래로 이동"
+  }
+}

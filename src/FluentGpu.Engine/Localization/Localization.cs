@@ -93,13 +93,31 @@ public static class Localization
         BumpEpoch();
     }
 
+    /// <summary>Resolve <paramref name="culture"/> against the loaded tables and select it only when an exact table,
+    /// parent table, or one unambiguous regional table for a neutral language exists. Returns false without changing the
+    /// active culture when the requested language is unsupported.</summary>
+    public static bool TrySetCulture(string? culture)
+    {
+        string? resolved;
+        lock (Gate)
+        {
+            resolved = ResolveLoadedCulture(culture);
+            if (resolved is null) return false;
+            _current = resolved;
+            _pseudo = string.Equals(_current, PseudoLocalizer.PseudoCulture, System.StringComparison.OrdinalIgnoreCase);
+            RebuildChain();
+        }
+        BumpEpoch();
+        return true;
+    }
+
     /// <summary>Detect the OS UI culture via the host-injected <see cref="OsCultureProvider"/> and set it as the active
     /// culture iff a table for it (or a fallback ancestor) exists; otherwise leaves the current culture. Returns the
     /// detected name (may be empty when no provider is wired). Called once at startup by the host/app.</summary>
     public static string UseOsCulture()
     {
         string detected = DetectOsCulture();
-        if (!string.IsNullOrEmpty(detected)) SetCulture(detected);
+        if (!string.IsNullOrEmpty(detected)) TrySetCulture(detected);
         return detected;
     }
 
@@ -257,6 +275,26 @@ public static class Localization
     {
         int dash = culture.IndexOf('-');
         return dash > 0 ? culture.Substring(0, dash) : null;
+    }
+
+    // Called under Gate. A full culture may use a loaded neutral parent (nl-NL -> nl). A neutral request may use a
+    // single loaded regional child (ko -> ko-KR), but never guesses when multiple regional variants are installed.
+    private static string? ResolveLoadedCulture(string? culture)
+    {
+        if (string.IsNullOrWhiteSpace(culture)) return null;
+        string requested = Normalize(culture);
+        if (Tables.ContainsKey(requested)) return requested;
+        if (Parent(requested) is { } parent && Tables.ContainsKey(parent)) return requested;
+        if (requested.IndexOf('-') >= 0) return null;
+
+        string? match = null;
+        foreach (string loaded in Tables.Keys)
+        {
+            if (!string.Equals(Parent(loaded), requested, System.StringComparison.OrdinalIgnoreCase)) continue;
+            if (match is not null) return null;
+            match = loaded;
+        }
+        return match;
     }
 
     /// <summary>Normalize a culture name: trim, collapse <c>_</c>→<c>-</c> (some OSes report <c>fr_FR</c>). Case is

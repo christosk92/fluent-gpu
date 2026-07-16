@@ -594,6 +594,13 @@ public sealed class ItemsView : Component
             {
                 // Home/End edge alignment (ItemsViewInteractions.cpp:1013-1016).
                 target = itemStart - alignmentRatio * MathF.Max(0f, viewport - itemExtent);
+                // A halo-bleed FillRowVirtualLayout positions item i at LeadInset+i·stride inside a viewport widened by
+                // the same gutter; an aligned (paged) bring-into-view must land the item at its REST screen position
+                // (the gutter), not flush to the widened edge — subtract the lead gutter so a page offset cancels to
+                // i·stride and the card stays pixel-identical to the pre-inset shelf. Minimal-scroll (NaN, keyboard nav)
+                // is left alone — keep-visible needs no gutter correction.
+                if (layout is FillRowVirtualLayout frl && frl.LeadInset != 0f)
+                    target -= frl.LeadInset;
             }
 
             float content = horizontal ? sc.ContentW : sc.ContentH;

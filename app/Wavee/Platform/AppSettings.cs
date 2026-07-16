@@ -27,6 +27,9 @@ static class WaveeSettings
     public static readonly SettingKey<int> ThemeMode = new("theme.mode", 0);
     // Color palette preset: neutral (default) | warm | slate | accent (OS-accent-tinted neutrals).
     public static readonly SettingKey<string> PaletteId = new("theme.palette", "neutral");
+    // UI culture selected in Settings. "system" asks the startup composition root to resolve the Windows UI locale;
+    // an explicit BCP-47/language tag selects the matching bundled JSON table. Applied before first mount on next launch.
+    public static readonly SettingKey<string> UiCulture = new("localization.culture", "system");
     public static readonly SettingKey<int> RowDensity = new("detail.rowdensity", 1);   // 0 Compact · 1 Default · 2 Cozy · 3 Comfortable
     // Track-detail page layout: 0 Automatic (metadata rail on wide windows, stacked hero on narrow) · 1 Stacked (the
     // hero composition at every width — the rail is never composed for track pages; podcasts keep the automatic layout).

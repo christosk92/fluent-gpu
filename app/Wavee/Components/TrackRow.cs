@@ -472,7 +472,7 @@ internal static class TrackRow
         ColorF accent = Tok.AccentTextPrimary;
         Element rest =
             isBuffering ? Spinner()
-            : isNow     ? WaveeEqualizer.Of(isPlaying, accent)
+            : isNow     ? WaveeEqualizer.Of(isPlaying, static () => Tok.AccentTextPrimary)
             : isTop     ? Icon(Mdl.FavoriteStarFill, 11f, accent)
             :             new TextEl((index + 1).ToString()) { Size = 13f, Color = Tok.TextTertiary };
         Element transport = isBuffering

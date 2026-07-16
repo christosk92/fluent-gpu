@@ -244,6 +244,7 @@ public sealed class ExtendedMetadataSource : IMetadataSource
             ["Content-Encoding"] = "gzip",
             ["Accept"] = "application/protobuf",
             ["Accept-Encoding"] = "gzip, deflate, br",
+            ["Accept-Language"] = SpotifyHeaders.NormalizeLanguage(_ctx().Locale),
         };
         return await _http.SendAsync(new HttpReq("POST", _baseUrl() + Path, headers, gzippedBody), ct).ConfigureAwait(false);
     }

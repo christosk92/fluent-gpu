@@ -265,12 +265,12 @@ sealed class AlbumDrawerPanel : Component
 {
     readonly Services _svc; readonly Album _thin; readonly float _panelH;
     readonly Action<string> _play; readonly Action<string, string?> _go;
-    readonly ColorF _accent;
+    readonly Func<ColorF> _accent;
     readonly SelectionModel _sel = new();
     readonly SwipeGroup _swipeGroup = new();
     readonly Func<bool> _showChecks;
     IReadOnlyList<Track> _rows = Array.Empty<Track>();
-    public AlbumDrawerPanel(Services svc, Album thin, float panelH, Action<string> play, Action<string, string?> go, ColorF accent)
+    public AlbumDrawerPanel(Services svc, Album thin, float panelH, Action<string> play, Action<string, string?> go, Func<ColorF> accent)
     {
         _svc = svc; _thin = thin; _panelH = panelH; _play = play; _go = go; _accent = accent;
         _showChecks = () => { _ = _sel.Version.Value; return _sel.SelectedCount > 1; };   // 2+ only (a plain click must not summon checkboxes)
@@ -316,7 +316,7 @@ sealed class AlbumDrawerPanel : Component
         Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, Height = 40f,
         Children =
         [
-            new BoxEl { Width = 30f, Height = 30f, Shrink = 0f, Corners = CornerRadius4.All(15f), Fill = _accent,
+            new BoxEl { Width = 30f, Height = 30f, Shrink = 0f, Corners = CornerRadius4.All(15f), Fill = _accent(),
                 AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, OnClick = () => _play(_thin.Uri),
                 Children = [ Icon(Icons.Play, 12f, Tok.TextOnAccentPrimary) ] },
             new BoxEl { Grow = 1f, Basis = 0f, OnClick = () => _go("album:" + _thin.Uri, _thin.Name),
@@ -422,7 +422,8 @@ sealed class DiscoGrid : Component
     readonly Action<string> _play;
     readonly int _cap;
     readonly int _initialIndex;
-    readonly ColorF _accent;
+    static readonly Func<ColorF> ThemeAccent = static () => Tok.AccentDefault;
+    readonly Func<ColorF> _accent;
     readonly Signal<int> _expanded = new(-1);
     ActionServices? _acts;            // card context menus (Menus.CardAttach) — resolved in Render, read by Cell
     IOverlayService? _menuOverlay;
@@ -448,8 +449,8 @@ sealed class DiscoGrid : Component
         Exit: new EnterExit(Dy: -8f, Opacity: 0f, Active: true),
         ExitDynamics: TransitionDynamics.Spring(0.24f, 1f));
 
-    public DiscoGrid(VirtualCollection<Album> vc, Services svc, Action<string, string?> go, Action<string> play, int cap, int initialIndex = 0, ColorF? accent = null)
-    { _vc = vc; _svc = svc; _go = go; _play = play; _cap = cap; _initialIndex = initialIndex; _accent = accent ?? Tok.AccentDefault; }
+    public DiscoGrid(VirtualCollection<Album> vc, Services svc, Action<string, string?> go, Action<string> play, int cap, int initialIndex = 0, Func<ColorF>? accent = null)
+    { _vc = vc; _svc = svc; _go = go; _play = play; _cap = cap; _initialIndex = initialIndex; _accent = accent ?? ThemeAccent; }
 
     public override Element Render()
     {
@@ -490,7 +491,7 @@ sealed class DiscoGrid : Component
             // Highlight the expanded card (accent border + brighter fill) so it's unmistakably the drawer's owner —
             // pairs with the connector bar at the drawer's top edge.
             if (_expanded.Peek() == idx)
-                b = b with { BorderColor = _accent, BorderWidth = 2f, Fill = Tok.FillCardDefault };
+                b = b with { BorderColor = _accent(), BorderWidth = 2f, Fill = Tok.FillCardDefault };
             card = b;
         }
         return card;
@@ -519,8 +520,9 @@ sealed class DiscoGrid : Component
         Key = "album:placeholder",
         Direction = 1, Gap = WaveeSpace.S, Height = cardW + CardChrome,
         Padding = new Edges4(WaveeSpace.S, WaveeSpace.S, WaveeSpace.S, WaveeSpace.M),
-        Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardSecondary,
-        BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
+        // Borderless like the restyled GridCard's resting state (the plate is hover-only now) — a plated skeleton
+        // would flash a different silhouette than the card it becomes.
+        Corners = CornerRadius4.All(WaveeRadius.Card),
         Children =
         [
             // Fluid square cover: Width left NaN + AspectRatio 1f → fills the engine-laid-out cell width and derives its
@@ -552,7 +554,7 @@ sealed class DiscoGrid : Component
             Children =
             [
                 new BoxEl { Width = MathF.Max(0f, info.Left), Height = 0f },
-                new BoxEl { Width = info.CellWidth, Height = 3f, Corners = CornerRadius4.All(1.5f), Fill = _accent },
+                new BoxEl { Width = info.CellWidth, Height = 3f, Corners = CornerRadius4.All(1.5f), Fill = _accent() },
             ],
         };
 
@@ -580,7 +582,7 @@ sealed class DiscographySection : Component
     readonly Services _svc;
     readonly Action<string, string?> _go;
     readonly Action<string> _play;
-    readonly ColorF _accent;
+    readonly Func<ColorF> _accent;
     readonly Signal<bool> _collapsed = new(false);
     VirtualCollection<Album>? _vc;
     System.Threading.CancellationTokenSource? _cts;   // per-instance; cancelled on unmount (feeds the VC + the seed probe)
@@ -588,7 +590,7 @@ sealed class DiscographySection : Component
 
     const int Cap = DiscographyRoute.PreviewCap;
 
-    public DiscographySection(string artistUri, string artistName, DiscographyKind kind, string title, Services svc, Action<string, string?> go, Action<string> play, ColorF accent)
+    public DiscographySection(string artistUri, string artistName, DiscographyKind kind, string title, Services svc, Action<string, string?> go, Action<string> play, Func<ColorF> accent)
     { _artistUri = artistUri; _artistName = artistName; _kind = kind; _title = title; _svc = svc; _go = go; _play = play; _accent = accent; }
 
     public override Element Render()
@@ -675,7 +677,7 @@ sealed class DiscographySection : Component
         OnClick = () => _collapsed.Value = !_collapsed.Peek(),
         Children =
         [
-            new BoxEl { Width = 3f, MinHeight = 22f, AlignSelf = FlexAlign.Stretch, Corners = CornerRadius4.All(1.5f), Fill = _accent },
+            new BoxEl { Width = 3f, MinHeight = 22f, AlignSelf = FlexAlign.Stretch, Corners = CornerRadius4.All(1.5f), Fill = _accent() },
             WaveeType.RailHeader(_title) with { MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
             total > 0 ? new TextEl(total.ToString()) { Size = 15f, Weight = 600, Color = Tok.TextTertiary } : new BoxEl(),
             new BoxEl { Grow = 1f },

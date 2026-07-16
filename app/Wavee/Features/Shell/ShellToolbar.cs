@@ -60,10 +60,12 @@ sealed class ShellToolbar : ReactiveComponent
         return Embed.Comp(() => new ShellToolbarContent(this, layout, b, ui));
     }
 
+    internal static IconButton.Style NavStyle => IconButton.DefaultStyle with { Size = 36f, Height = 32f };
+
     internal Element Bar(ToolbarLayout L, PlaybackBridge? b, ShellUi? ui)
     {
         bool onHome = _route.Value.Name == "home";        // subscribe (home pill)
-        var nav = IconButton.DefaultStyle with { Size = 36f, Height = 32f };
+        var nav = NavStyle;
 
         var kids = new List<Element>
         {
@@ -76,8 +78,8 @@ sealed class ShellToolbar : ReactiveComponent
             {
                 Margin = new Edges4(4f, 0f, -4f, 0f),
             },
-            Embed.Comp(() => new NavHistoryButton(Icons.Back,    _back,    _canBack,    _backHistory,    _go, nav)),
-            Embed.Comp(() => new NavHistoryButton(Icons.Forward, _forward, _canForward, _forwardHistory, _go, nav)),
+            Embed.Comp(() => new NavHistoryButton(Icons.Back,    _back,    _canBack,    _backHistory,    _go)),
+            Embed.Comp(() => new NavHistoryButton(Icons.Forward, _forward, _canForward, _forwardHistory, _go)),
             HomeButton(nav, onHome),
 
             // ── centre: omnibar (left-aligned right after Home, like WaveeMusic — not centred) ──
@@ -100,7 +102,7 @@ sealed class ShellToolbar : ReactiveComponent
             ProfileChip(b, L.ShowProfileName),
         };
         if (L.ShowFriends) kids.Add(IconButton.Create(Mdl.Friends, () => ui?.Toggle(RailMode.Friends), nav));
-        if (L.ShowBell) kids.Add(Embed.Comp(() => new NotificationBell(nav)));
+        if (L.ShowBell) kids.Add(Embed.Comp(() => new NotificationBell()));
         if (L.ShowThemeToggle)
         {
             kids.Add(new BoxEl { Width = 1f, Height = 20f, Fill = Tok.StrokeDividerDefault, Margin = new Edges4(4f, 0f, 4f, 0f) });
@@ -111,7 +113,7 @@ sealed class ShellToolbar : ReactiveComponent
         // overflow-expand clip on top, which made the menu pop the empty chrome then fill in (two out-of-sync clips).
         var overflow = OverflowItems(L, ui);
         bool overflowBell = !L.ShowBell;   // when the bell collapses, the notification center folds into the ⋯ menu
-        if (overflow.Count > 0 || overflowBell) kids.Add(Embed.Comp(() => new OverflowMenu(overflow, nav, overflowBell)));
+        if (overflow.Count > 0 || overflowBell) kids.Add(Embed.Comp(() => new OverflowMenu(overflow, overflowBell)));
 
         return new BoxEl
         {
@@ -191,13 +193,12 @@ sealed class NavHistoryButton : Component
     readonly Signal<bool> _canDo;
     readonly List<Route> _history;   // live reference — read at flyout-open time, not mount time
     readonly Action<string, string?> _go;
-    readonly IconButton.Style _style;
 
     const int HistoryMenuMax = 8;
 
     public NavHistoryButton(string icon, Action primary, Signal<bool> canDo,
-                            List<Route> history, Action<string, string?> go, IconButton.Style style)
-    { _icon = icon; _primary = primary; _canDo = canDo; _history = history; _go = go; _style = style; }
+                            List<Route> history, Action<string, string?> go)
+    { _icon = icon; _primary = primary; _canDo = canDo; _history = history; _go = go; }
 
     public override Element Render()
     {
@@ -235,7 +236,7 @@ sealed class NavHistoryButton : Component
             handle.Value.ClosedAction = () => handle.Value = null;
         }
 
-        return IconButton.Create(_icon, _primary, _style, isEnabled: canDo)
+        return IconButton.Create(_icon, _primary, ShellToolbar.NavStyle, isEnabled: canDo)
             with { OnRealized = h => anchor.Value = h, OnContextRequested = OpenFlyout };
     }
 }
@@ -245,10 +246,9 @@ sealed class NavHistoryButton : Component
 sealed class OverflowMenu : Component
 {
     readonly IReadOnlyList<MenuFlyoutItem> _items;
-    readonly IconButton.Style _style;
     readonly bool _showNotifications;
-    public OverflowMenu(IReadOnlyList<MenuFlyoutItem> items, IconButton.Style style, bool showNotifications = false)
-    { _items = items; _style = style; _showNotifications = showNotifications; }
+    public OverflowMenu(IReadOnlyList<MenuFlyoutItem> items, bool showNotifications = false)
+    { _items = items; _showNotifications = showNotifications; }
 
     public override Element Render()
     {
@@ -295,7 +295,7 @@ sealed class OverflowMenu : Component
             handle.Value.ClosedAction = () => handle.Value = null;
         }
 
-        return IconButton.Create(Icons.More, Toggle, _style) with { OnRealized = h => anchor.Value = h };
+        return IconButton.Create(Icons.More, Toggle, ShellToolbar.NavStyle) with { OnRealized = h => anchor.Value = h };
     }
 }
 

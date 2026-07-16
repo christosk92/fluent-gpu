@@ -11,7 +11,9 @@ namespace Wavee;
 // `animate` so a play↔pause flip remounts the bars with the right looping state.
 public static class WaveeEqualizer
 {
-    public static Element Of(bool animate, ColorF color, float height = 13f) => new BoxEl
+    public static Element Of(bool animate, ColorF color, float height = 13f) => Of(animate, () => color, height);
+
+    public static Element Of(bool animate, Func<ColorF> color, float height = 13f) => new BoxEl
     {
         Key = animate ? "eq-play" : "eq-pause",
         Direction = 0, AlignItems = FlexAlign.End, Justify = FlexJustify.Center, Gap = 2f, Height = height,
@@ -26,7 +28,7 @@ public static class WaveeEqualizer
 
 // One equalizer bar: a bottom-anchored bar whose ScaleY loops (phase-staggered per index) while PLAYING; a single
 // static keyframe holds it low when paused. Its parent is keyed by `animate`, so a play↔pause flip remounts it with
-// the right looping state — the constructor args are fixed for the bar's lifetime.
+// the right looping state. The color provider is fixed for the bar's lifetime but resolves its semantic token live.
 sealed class EqBar : Component
 {
     static readonly float[][] Patterns =
@@ -37,9 +39,9 @@ sealed class EqBar : Component
     ];
     readonly int _i;
     readonly bool _animate;
-    readonly ColorF _color;
+    readonly Func<ColorF> _color;
     readonly float _h;
-    public EqBar(int i, bool animate, ColorF color, float h) { _i = i; _animate = animate; _color = color; _h = h; }
+    public EqBar(int i, bool animate, Func<ColorF> color, float h) { _i = i; _animate = animate; _color = color; _h = h; }
 
     public override Element Render()
     {
@@ -50,7 +52,7 @@ sealed class EqBar : Component
         UseKeyframes(AnimChannel.ScaleY, keys, _animate ? 850f : 1f, _animate);
         return new BoxEl
         {
-            Width = 2.5f, Height = _h, Corners = CornerRadius4.All(1.25f), Fill = _color,
+            Width = 2.5f, Height = _h, Corners = CornerRadius4.All(1.25f), Fill = _color(),
             AlignSelf = FlexAlign.End, TransformOriginY = 1f,   // scale up from the bottom edge
         };
     }

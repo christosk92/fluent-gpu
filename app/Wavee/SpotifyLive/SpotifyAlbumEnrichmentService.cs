@@ -66,7 +66,7 @@ sealed class SpotifyAlbumEnrichmentService : IAlbumEnrichmentService
             return Artists(cached);
 
         using var doc = await _pathfinder.QueryAsync(PathfinderOps.QueryArtistOverview, PathfinderOps.QueryArtistOverviewHash,
-            w => { w.WriteString("uri", artistUri); w.WriteString("locale", ""); w.WriteBoolean("preReleaseV2", false); },
+            w => { w.WriteString("uri", artistUri); w.WriteString("locale", _pathfinder.Locale); w.WriteBoolean("preReleaseV2", false); },
             PathfinderClient.Platform.Desktop, ct).ConfigureAwait(false);
         if (doc is null) return Array.Empty<Artist>();
         var artist = SpotifyExportMapper.ArtistFromOverview(doc.RootElement);

@@ -227,7 +227,7 @@ sealed class LyricsView : Component
             {
                 Direction = 0, AlignItems = FlexAlign.Center, Gap = 5f,
                 Padding = new Edges4(9f, 5f, 9f, 5f), Corners = CornerRadius4.All(7f),
-                Fill = new ColorF(0f, 0f, 0f, 0.55f), BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
+                Fill = Tok.FillSolidBase with { A = 0.90f }, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
                 Cursor = CursorId.Hand, OnClick = () => _debugOpen.Value = true,
                 Role = AutomationRole.Button, Focusable = true, AllowFocusOnInteraction = false,
                 Children = [new TextEl("lyrics debug") { Size = 11f, Weight = 600, Color = Tok.TextSecondary }],
@@ -277,7 +277,7 @@ sealed class LyricsView : Component
 
         return new BoxEl
         {
-            Grow = 1f, MinHeight = 0f, Direction = 1, Fill = new ColorF(0.04f, 0.04f, 0.06f, 0.97f),
+            Grow = 1f, MinHeight = 0f, Direction = 1, Fill = Tok.FillSolidBase with { A = 0.97f },
             Children =
             [
                 new ScrollEl

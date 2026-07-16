@@ -34,8 +34,14 @@ public readonly record struct ScrollTuning(
     public const float RubberC = OverscrollPhysics.RubberC;                          // 0.55 — iOS rubber-band slope at 0
     public const float BandAsymptoteFraction = OverscrollPhysics.BandAsymptoteFraction; // 0.15·vp — band asymptote
     public const float WheelChaseHalflifeMs = 40f;      // velocity-preserving crit-damped wheel chase (~130ms settle)
-    public const float ResampleLatencyMs = 5f;          // TouchpadTracking: resample to frameT − 5ms
-    public const float ResampleMaxPredictionMs = 8f;    // extrapolation cap (also ≤50% of the last inter-sample Δ)
+    public const float ResampleLatencyMs = 12f;         // TouchpadTracking: resample to frameT − 12ms — ~1.5 packet
+                                                        // periods (DM/touchpad packets arrive ~8.3ms apart, the SAME
+                                                        // cadence as a 120Hz frame with drifting phase), so the target
+                                                        // ALWAYS lands between two real samples. At 5ms it fell past the
+                                                        // newest sample on ~40% of frames: extrapolating there bounced on
+                                                        // every deceleration, holding there ground (hold-then-double-step
+                                                        // aliasing). Android resamples at vsync−~11.5ms for this reason.
+    public const float ResampleMaxPredictionMs = 8f;    // (historical) extrapolation cap — the resampler no longer predicts
     public const float ResampleMinDeltaMs = 2f;         // min usable sample spacing
     public const float VelWindowMs = 40f;               // Fling IMPULSE estimator window (= the trailing window; one gate)
     public const float AssumeStoppedMs = 40f;           // newest sample older than this at lift ⇒ v = 0

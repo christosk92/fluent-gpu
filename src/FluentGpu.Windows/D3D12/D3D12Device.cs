@@ -108,6 +108,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private GlyphRenderer? _glyphs;
     private ImageTextureStore? _imageTextures;
     private ImagePipeline? _imagePipe;
+    private BakedBlurCompositor? _bakedBlur;
+    private FluentGpu.Hosting.Threading.BakedBlurQueue? _bakedBlurQueue;
     private readonly List<(ImageInstance inst, int imageId)> _imageDraws = new();
     private readonly List<ImageInstance> _imageRangeScratch = new(64);
     // Painter-order draw runs: a segment's non-glyph primitives in STREAM order (consecutive same-kind ops batched into
@@ -161,6 +163,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _strings = strings;
         _composited = composited;
     }
+
+    public void SetBakedBlurQueue(FluentGpu.Hosting.Threading.BakedBlurQueue queue) => _bakedBlurQueue = queue;
 
     public string BackendNameSuffix { get; private set; } = "";
     public string BackendName => "D3D12" + BackendNameSuffix;
@@ -233,6 +237,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _imageTextures.Init(_device);
         _imagePipe = new ImagePipeline();
         _imagePipe.Init(_device);
+        _bakedBlur = new BakedBlurCompositor();
+        _bakedBlur.Init(_device);
     }
 
     private static void Check(HRESULT hr, string what)
@@ -691,6 +697,15 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         Check(_cmdList->Reset(allocator, null), "cmdList.Reset");
         InvalidateCmdState();   // fresh command list — nothing is bound
         _imageTextures?.FlushUploads(_cmdList);
+        if (ReferenceEquals(sc, _primarySwapchain) &&
+            _bakedBlurQueue is { } bakedQueue && _bakedBlur is { } baker && _imageTextures is { } textures)
+        {
+            if (baker.DrainOne(_cmdList, textures, bakedQueue, (int)_frameIndex))
+            {
+                Diag.Count("d3d12", "bakedBlurJobs");
+                InvalidateCmdState();
+            }
+        }
 
         ID3D12Resource* backBuffer = _backBuffers[_frameIndex];
         Barrier(backBuffer, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -799,6 +814,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
 
         ID3D12CommandList* execList = (ID3D12CommandList*)_cmdList;
         global::FluentGpu.Interop.Generated.ID3D12CommandQueueVtbl.ExecuteCommandLists(_queue, 1, (void**)&execList);   // GEN-COM (wired)
+        _bakedBlur?.PublishRecorded(_bakedBlurQueue);
         SignalFrame(_frameIndex);
         StoreActive();
     }
@@ -1118,6 +1134,10 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             Opacity = im.Opacity, CrossFade = crossFade,
             PR = im.Placeholder.R, PG = im.Placeholder.G, PB = im.Placeholder.B, PA = im.Placeholder.A,
             UvX = im.UvRect.X, UvY = im.UvRect.Y, UvW = im.UvRect.W, UvH = im.UvRect.H,
+            OverlayR = im.Overlay.R, OverlayG = im.Overlay.G, OverlayB = im.Overlay.B, OverlayA = im.Overlay.A,
+            MaskEdges = im.MaskEdges, MaskLeft = im.MaskLeft, MaskTop = im.MaskTop,
+            MaskRight = im.MaskRight, MaskBottom = im.MaskBottom,
+            MaskFalloff = im.MaskFalloff, MaskIntensity = im.MaskIntensity,
         };
         ApplyRoundedClip(ref inst);
         _imageDraws.Add((inst, im.ImageId));
@@ -1851,7 +1871,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     public double LastFenceWaitMs => _lastFenceWaitMs;
 
     /// <inheritdoc/>
-    public bool HasPendingUploads => _imageTextures?.HasPendingUploads ?? false;
+    public bool HasPendingUploads => (_imageTextures?.HasPendingUploads ?? false) || (_bakedBlurQueue?.HasPending ?? false);
 
     public void SuppressLatencyWaitOnce() => _skipLatencyOnce = true;
 
@@ -2044,6 +2064,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (_dcomp != null) { _dcomp->Release(); _dcomp = null; }
         _glyphs?.Dispose(); _glyphs = null;
         _imagePipe?.Dispose(); _imagePipe = null;
+        _bakedBlur?.Dispose(); _bakedBlur = null;
         _imageTextures?.Dispose(); _imageTextures = null;
         _shadowPipe?.Dispose(); _shadowPipe = null;
         _arcPipe?.Dispose(); _arcPipe = null;
@@ -2094,6 +2115,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (_dcomp != null) _dcomp->Release();
         _glyphs?.Dispose();
         _imagePipe?.Dispose();
+        _bakedBlur?.Dispose();
         _imageTextures?.Dispose();
         _shadowPipe?.Dispose();
         _arcPipe?.Dispose();

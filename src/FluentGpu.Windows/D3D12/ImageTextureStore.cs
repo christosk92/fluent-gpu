@@ -184,6 +184,44 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         srv = default; uv = default; return false;
     }
 
+    internal bool TryGetBakeSource(int id, out ID3D12Resource* resource, out RectF uv)
+    {
+        if (TryGet(id, out _, out uv) && _byId.TryGetValue(id, out var t))
+        {
+            resource = t.Atlas ? _pages[t.Page].Tex : t.Resource;
+            return resource != null;
+        }
+        resource = null;
+        return false;
+    }
+
+    /// <summary>Register a render-produced persistent texture under an ordinary image id. Ownership transfers on
+    /// success; eviction follows the same fence-deferred path as standalone decoded images.</summary>
+    internal bool TryAdoptBaked(int id, ID3D12Resource* resource, int w, int h)
+    {
+        AssertRenderThread();
+        if (resource == null || w <= 0 || h <= 0 || !TryAcquireSlot(out int slot)) return false;
+        if (_byId.Remove(id, out var old))
+        {
+            _pendingCopies.Remove(id);
+            RetirePlacement(ref old);
+            if (old.Atlas) _atlasCount--; else if (old.Bucket > 0) _poolCount--;
+        }
+        var t = new Tex
+        {
+            Resource = resource,
+            Slot = slot,
+            W = w,
+            H = h,
+            TexSize = Math.Max(w, h),
+            State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            Live = true,
+        };
+        CreateSrv(resource, slot, out t.Srv);
+        _byId[id] = t;
+        return true;
+    }
+
     /// <summary>Heap/upload-only (NO command list): runs during the host's <c>ImageCache.Pump</c>, before the frame list
     /// opens. Routes the image to the atlas (≤128) or the per-bucket pool, (re)acquiring on a routing/size change, and
     /// copies pixels into a staging buffer with a 256-aligned row pitch. The GPU copy is deferred to <see cref="FlushUploads"/>.</summary>

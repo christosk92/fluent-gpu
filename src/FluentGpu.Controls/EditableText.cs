@@ -95,11 +95,20 @@ public sealed class EditableText : Component
     public IReadSignal<float>? WidthSignal;
     public float Height = 32f;
     public float FontSize = 14f;
-    public ColorF Foreground = Tok.TextPrimary;
+    private ColorF? _foreground;
+    /// <summary>Explicit text color, or the live theme text token when left unset.</summary>
+    public ColorF Foreground { get => _foreground ?? Tok.TextPrimary; set => _foreground = value; }
     // WinUI TextControlForegroundDisabled = TemporaryTextFillColorDisabled #5DFEFEFE dark / #5C010101 light
     // (TextBox_themeresources.xaml:22/34 + :129/141) — distinct from the disabled PLACEHOLDER (TextFillColorDisabled).
-    public ColorF DisabledForeground = Tok.TextControlForegroundDisabled;
-    public ColorF CaretColor = Tok.TextPrimary;   // kept for source-compat; the caret bar is host-themed (TextEditStyle)
+    private ColorF? _disabledForeground;
+    public ColorF DisabledForeground
+    {
+        get => _disabledForeground ?? Tok.TextControlForegroundDisabled;
+        set => _disabledForeground = value;
+    }
+    private ColorF? _caretColor;
+    // Kept for source compatibility; the caret bar itself is host-themed (TextEditStyle).
+    public ColorF CaretColor { get => _caretColor ?? Tok.TextPrimary; set => _caretColor = value; }
     public string Placeholder = "";
     public bool IsEnabled = true;            // gates the WinUI Disabled state visuals + the engine input gate
     public bool Mask = false;                // PasswordBox: display MaskChar per grapheme; copy/cut blocked, paste allowed

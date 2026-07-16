@@ -5,6 +5,10 @@ namespace FluentGpu.Scene;
 
 public enum VisualKind : byte { None = 0, Box = 1, Text = 2, Image = 3, PolylineStroke = 4, TabShape = 5, IconLayer = 6 }
 
+/// <summary>Sparse image-only payload kept out of the dense paint column. The source id stays in
+/// <see cref="NodePaint.ImageId"/>; <see cref="DerivedImageId"/> is selected only after its bake reaches Ready.</summary>
+public readonly record struct ImageVisualEffects(int DerivedImageId, ColorF Overlay, ImageMaskSpec Mask);
+
 /// <summary>Per-text-node measure cache (layout.md §2.3): a pure-function cache of (text, style, availWidth) → size, so a
 /// scoped relayout skips re-shaping a text leaf whose inputs are unchanged. Self-invalidating — any input change makes
 /// the stored key not match. Helps the real DirectWrite shaping path; neutral for the headless fake font.
@@ -198,6 +202,16 @@ public struct ScrollState
                                           // panDelta) on the scroll axis. Per-NODE (not the singleton resampler) so CONCURRENT
                                           // multi-touch pans on sibling scrollers are independent; the phase-7 integrator splits
                                           // it into a clamped offset + rubber-band once (TouchpadTracking, PhaseTouchPan). NaN = none.
+    public float PendingAnchorShift;      // accumulated virtualization anchor re-pin delta (DIP) since the last integrator tick.
+                                          // The layout re-pin (ArrangeVirtualVariable/Measured) shifts the offset to keep the
+                                          // topmost item fixed across extent corrections; it records the shift HERE so the phase-7
+                                          // ScrollIntegrator can move its own live intents (resampler anchor / chase targets) by the
+                                          // same amount instead of fighting the re-pin. Consumed + zeroed every Tick (default 0).
+    public int PrevArrangedFirst;         // the realized row window [first..last] the PREVIOUS virtual arrange saw. A row outside
+    public int PrevArrangedLast;          // it is FRESH this arrange: its first measure can be transiently short (deferred inner
+                                          // content lands a frame later), so a fresh row ABOVE the anchor must not push that
+                                          // transient into the extent table — the dip+restore re-pin pair was the felt scroll
+                                          // jitter. Default 0/-1 = empty window (a mount treats every row as fresh).
     public bool  FlingRetargeted;         // a snap-configured fling has had its velocity re-solved to land on the snap value
                                           // (the ScrollIntegrator does this ONCE on fling entry; reset when a fresh fling is seeded).
     public float FlingFromOffset;         // the offset captured when the fling was seeded (the impulse "ignored value" anchor)
@@ -348,7 +362,7 @@ public struct ScrollState
     /// offset + rubber-band exactly like the resampler path (scroll-feel-rework-v2 §4.1/§4.4).</summary>
     public const byte PhaseTouchPan = 16;
 
-    public static ScrollState Default => new() { ExtentTableRef = -1, ZoomFactor = 1f, MinZoom = 0.1f, MaxZoom = 10f, FlingSnapTarget = float.NaN, PendingTargetX = float.NaN, PendingTargetY = float.NaN, PendingRawOffset = float.NaN };
+    public static ScrollState Default => new() { ExtentTableRef = -1, ZoomFactor = 1f, MinZoom = 0.1f, MaxZoom = 10f, FlingSnapTarget = float.NaN, PendingTargetX = float.NaN, PendingTargetY = float.NaN, PendingRawOffset = float.NaN, PrevArrangedFirst = 0, PrevArrangedLast = -1 };
 
     /// <summary>True when this viewport has any snap points configured (a fling lands on one).</summary>
     public readonly bool HasSnap => SnapInterval > 0f || (SnapPoints is { Length: > 0 });
@@ -601,6 +615,20 @@ public struct InteractionInfo
     public const ushort GestureBit = 32768;         // the node declared a UseGesture handler (§13): hit-testable so a
                                                     // tap/hold/pan over it opens a gesture arena even when the node is
                                                     // not otherwise clickable; set/cleared by SceneStore.SetGestureHandler
+    public const uint HoverElevatePaintBit = 1u << 17;     // Element.HoverElevatePaint (scene-memory.md): a PAINT-ORDER
+                                                    // discriminator ONLY — while this node is on the hover path the
+                                                    // recorder defers it to paint above its non-elevated siblings
+                                                    // (the declarative z-index of a hovered card). Like
+                                                    // ClickRequestsContextBit it is deliberately NOT in
+                                                    // AnyInteractiveMask or the hit-test self-hit mask: it never makes
+                                                    // the node a hit/press/focus target. Clear as `~HoverElevatePaintBit`.
+    public const uint HoverElevateClipRootBit = 1u << 18;  // Element.HoverElevateClipRoot (scene-memory.md): marks a
+                                                    // clipping ancestor (a shelf viewport) as the ESCAPE level for its
+                                                    // hover-elevated descendant — the recorder HOISTS the deferred
+                                                    // HoverElevatePaint child out of this node's clip + edge-fade
+                                                    // scope and records it after the scope closes, against the clip
+                                                    // in effect OUTSIDE this node. Paint-order only, like the bit
+                                                    // above: never a hit/press/focus target.
     public const uint ClickRequestsContextBit = 1u << 16;  // BoxEl.ClickRequestsContext (input-a11y §6.5.1): a
                                                     // commit-time DISCRIMINATOR only — a left-click / touch-tap /
                                                     // Space-Enter activation of this node re-enters the context-request

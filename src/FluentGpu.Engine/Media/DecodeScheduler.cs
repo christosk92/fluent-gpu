@@ -41,6 +41,14 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     // next frames (rows show their skeleton/blur-hash meanwhile). FG_IMG_UPLOADS overrides; default tuned for ~120fps.
     private static readonly int s_maxAppliesPerFrame =
         int.TryParse(System.Environment.GetEnvironmentVariable("FG_IMG_UPLOADS"), out int __u) && __u > 0 ? __u : 6;
+
+    /// <summary>Scroll-scoped upload throttle: while a scroll gesture is live the per-frame apply cap drops to 2 —
+    /// each apply stages a GPU CopyTextureRegion into the SAME command list the double-buffered present then fences on
+    /// (max-latency-1 couples the UI thread to GPU completion), so a 6-upload burst mid-scroll reads as a fence-wait
+    /// hitch (traced as the dominant GPU hitch class). Reveals are already suppressed during scroll, so the slower
+    /// landing is invisible; the backlog drains the moment the gesture settles. (Triple-buffering was the alternative
+    /// and is OFF-LIMITS: it correlated with a DXGI_ERROR_DEVICE_HUNG on the Adreno — see D3D12Device.FRAME_COUNT.)</summary>
+    public bool ScrollThrottled { get; set; }
     private long _bytesDownloaded;
 
     public int WorkerCount => _workers.Length;
@@ -116,7 +124,8 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     public void Pump(ImageCompleteHandler onComplete, ImageReadyHandler onPixels)
     {
         int drained = 0;
-        while (drained < s_maxAppliesPerFrame && _out.TryDequeue(out var d))
+        int cap = ScrollThrottled ? Math.Min(2, s_maxAppliesPerFrame) : s_maxAppliesPerFrame;
+        while (drained < cap && _out.TryDequeue(out var d))
         {
             if (d.Ok && d.Buffer != null) onPixels(d.Id, d.Buffer.AsSpan(0, d.ByteLen), d.W, d.H);
             onComplete(d.Id, d.Ok, d.W, d.H, d.Failure, d.Attempts);

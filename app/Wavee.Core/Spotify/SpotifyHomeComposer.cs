@@ -14,7 +14,7 @@ public static class SpotifyHomeComposer
     // (up to 5 columns), so 5 per break fills a wide row exactly; ALL breaks are placed (no cap) — the interleave
     // below spreads them evenly across the full shelf list instead of clustering them at the top.
     const int FeaturedCardsPerBreak = 5;
-    const int QuickPicks = 8;
+    const int QuickPicks = 9;   // fills the desktop 3×3 quick matrix when the source has enough library data
     const int RecentsShown = 12;
 
     // madeForYouTitle: the localized "Made for you" label supplied by the caller (the app layer has the loc system;

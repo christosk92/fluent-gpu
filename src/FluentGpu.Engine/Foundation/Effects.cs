@@ -121,12 +121,36 @@ public enum BlurCachePolicy : byte
     HoldOrSkipOnMiss = 2,
 }
 
+/// <summary>A static bitmap blur baked once into a persistent derived image. Unlike <see cref="BlurCachePolicy"/>,
+/// this does not create a scene layer: after the bake completes the image is an ordinary textured quad and pure
+/// translation (scrolling) performs no blur work. <see cref="ResolutionScale"/> trades bake/residency cost for detail;
+/// large editorial blurs are low-frequency, so 0.5 is the production default.</summary>
+public readonly record struct BakedBlurSpec(float SigmaDip, float ResolutionScale = 0.5f)
+{
+    public bool IsNone => SigmaDip <= 0f || ResolutionScale <= 0f;
+    public float ClampedResolutionScale => Math.Clamp(ResolutionScale, 0.25f, 1f);
+}
+
 /// <summary>Which edges an <see cref="EdgeFadeSpec"/> feathers (a bit mask).</summary>
 [System.Flags]
 public enum EdgeMask : byte { None = 0, Left = 1, Top = 2, Right = 4, Bottom = 8, Horizontal = Left | Right, Vertical = Top | Bottom, All = 15 }
 
 /// <summary>The alpha falloff curve across an edge-fade band. Smoothstep (default) avoids the visible linear shoulder.</summary>
 public enum FadeFalloff : byte { Linear = 0, Smoothstep = 1, Cubic = 2 }
+
+/// <summary>Leaf-local image alpha feather. This is evaluated by the image pixel shader, so it adds no offscreen
+/// layer. Band depths are DIPs in the image's arranged box; enabled edges fade from transparent at the boundary to
+/// opaque at the inner edge of the band.</summary>
+public readonly record struct ImageMaskSpec(
+    EdgeMask Edges, float BandLeft, float BandTop, float BandRight, float BandBottom,
+    FadeFalloff Falloff = FadeFalloff.Smoothstep, float Intensity = 1f)
+{
+    public ImageMaskSpec(EdgeMask edges, float band, FadeFalloff falloff = FadeFalloff.Smoothstep, float intensity = 1f)
+        : this(edges, band, band, band, band, falloff, intensity) { }
+
+    public bool IsNone => Edges == EdgeMask.None || Intensity <= 0f
+        || (BandLeft <= 0f && BandTop <= 0f && BandRight <= 0f && BandBottom <= 0f);
+}
 
 /// <summary>Edge-fade effect: feather the content alpha (Fade), blur it (Blur), or both near the edge band.</summary>
 public enum EdgeFadeMode : byte { Fade = 0, Blur = 1, FadeAndBlur = 2 }

@@ -116,6 +116,12 @@ in, the diff emits `CreateNode` + `InsertChild`. The slab free-list satisfies st
 reached. This is the explicit avoidance of WinUI's `ElementPool.ForceDetach` COM-detach pain
 (architecture-spec §5.4, app-requirements §3.2): a free is a free-list push, not a COM teardown.
 
+**Same-slot survivors update in place.** A parent re-render can rebuild the window's `Element`s without moving
+the window (`RenderItem` re-ran for every realized slot). Survivors at the same slot with matching type + key
+are diffed in place through the general update path — component rows therefore retain identity (instance, hook
+state, measured extent) across a parent re-render; only scrolled-in/out rows mount/remove. The free-list
+recycle above applies to rows *entering* the window, never to a rebuilt description of a row already in it.
+
 ---
 
 ## 3. The hook trio — `UseVirtual` / `UseInfiniteCollection` / `UseVisibleRange`
@@ -211,6 +217,16 @@ UseVirtual(itemCount, renderItem, getItem, keyOf, spec, deps):
 (reconciler-hooks holds prev-frame `Element`s per host node). Because `ItemKey` interns into `StringId`,
 `KeyMatch`/`GetKey`/`ComputeLIS` are byte-for-byte unchanged: a scroll that keeps 36 of 40 rows produces a
 4-enter/4-exit diff with the surviving 36 as a contiguous LIS run (zero moves).
+
+**Main-axis content insets (viewport-aware "fill the width" layouts).** A viewport-aware layout (`IViewportVirtualLayout`,
+e.g. the responsive card shelf) MAY expose leading/trailing main-axis **content insets** (`LeadInset`/`TrailInset`,
+default 0). Contract: the host feeds a viewport already widened by `LeadInset+TrailInset`; the layout (a) fits cards to
+the **inner** width `viewport − Lead − Trail` so the fitted card width is inset-independent, (b) shifts item *i*'s main
+position by `+LeadInset` (`ItemRect`), (c) adds `Lead+Trail` to `ContentExtent`, and (d) offsets its realize-window query
+by `−LeadInset`. This is pure allocation-free arithmetic; at 0 the geometry is byte-identical to the un-inset layout. Its
+sole use is **halo/elevation bleed**: a card is inset from the clipping viewport edge so a hovered card's shadow paints
+into the gutter instead of hard-clipping, while the widened-viewport/negative-margin shift keeps rest positions pixel-
+identical (a page bring-into-view subtracts `LeadInset` so `page·cols·stride` still lands the card at its rest position).
 
 ### 3.2 `UseInfiniteCollection<T>` — incremental load (composes `UseInfiniteResource`)
 
@@ -449,6 +465,10 @@ topmost visible item's `ItemKey`**:
 > correction recomputes offsets, re-derive `ScrollOffset` so `AnchorKey` lands at `AnchorOffsetWithin` again.
 > This makes an above-viewport extent correction (a header that measured taller than estimated) **not jump the
 > viewport** — the user's place in the list is stable even as off-screen estimates settle.
+>
+> When a re-pin lands mid-gesture, its delta is propagated to the scroll integrator as a coordinate shift so live
+> scroll intents move with it rather than fighting the correction; see `docs/plans/scroll-feel-rework-v2-design.md`
+> §2.5 (anchor re-pin as a coordinate shift the integrator consumes).
 
 ### 6.3 The decode→measure feedback-loop break (owned here, the critical anti-loop)
 
@@ -580,7 +600,7 @@ canonical 13-phase loop (architecture-spec §4.8; PUBLISH at 13a per hardened §
 | **2 input-dispatch** | UI | Scroll/wheel/drag updates `ScrollOffset` (Input owns it). Set `NodeFlags.VirtualRangeDirty` **only if the offset crossed an item boundary** (uniform: `floor` changed; variable: Fenwick range changed). In-window scroll sets nothing here → transform-only frame. |
 | **3 hook-flush** | UI | (nothing) |
 | **4 render** | UI | If `VirtualRangeDirty` **or** `DataVersion != RealizedDataVersion`: `RenderItem` the new window into the pooled `Element[]` (§3.1). Else skip entirely (memoized). `getItem` may return skeletons (§8). |
-| **5 reconcile** | UI | Keyed-LIS diff of the window vs prev children: ENTER → `CreateNode`+`InsertChild`; EXIT → `RemoveChild`+synchronous cleanups+`DestroyNode` (slot reuse consume-gated, §5.4). UPDATE survivors in place via mask diff. |
+| **5 reconcile** | UI | Keyed-LIS diff of the window vs prev children: ENTER → `CreateNode`+`InsertChild`; EXIT → `RemoveChild`+synchronous cleanups+`DestroyNode` (slot reuse consume-gated, §5.4). UPDATE survivors in place via mask diff — including same-slot survivors whose `Element` was rebuilt by a parent re-render (matching type+key ⇒ in-place diff; component rows keep identity; only scrolled-in/out rows mount/remove). |
 | **6 layout** | UI | `VirtualLayout` two-pass (layout.md): extents → realized-row arrange. Uniform = O(1) `ContentSize`; variable = Fenwick + anchoring (§6.2). Writes `Bounds[]` (LOCAL) for realized rows + `ContentSize`. |
 | **6.5 layout-effects** | UI | `UseVisibleRange.onChange` fires (range valid against arranged `Bounds`); `ScrollToIndex` (a layout effect) seeks. Media warm + page prefetch dispatched here (§3.3). `setState` here ⇒ mark dirty + N+1 (no sync re-loop). |
 | **7 animation** | UI | `-ScrollOffset` → viewport-child `LocalTransform` (TransformDirty only — layout-free scroll). Sticky-header pin transform (§7). Skeleton shimmer animated-UV tick. Compose `WorldTransform[]` top-down. |

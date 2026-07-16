@@ -127,6 +127,21 @@ internal sealed class PagedShelfCore : Component
     // cross-axis headroom below the card or the halo is shaved. The pad lives in the item container's BOTTOM padding so
     // the card's own measure/height is unchanged (the shadow renders into the pad; both clip edges move below it).
     const float ShadowClearance = 12f;
+    // Hover-lift headroom ABOVE the card — ShadowClearance's vertical mirror. Cards translate up on hover
+    // (WhileHover OffsetY) and their hover halo blurs past the resting top edge, but the viewport clips exactly at
+    // the strip's top, shaving both. The pad lives in the item container's TOP padding, and the root column's gap
+    // between header and strip shrinks by the same amount (see Render) — so the on-screen rhythm is unchanged: the
+    // former header gap simply moves INSIDE the clip, where the lift and halo can paint into it.
+    const float LiftClearance = 12f;
+    // Hover-halo headroom on the MAIN (horizontal) axis — LiftClearance's horizontal sibling. The first/last card's
+    // elevation halo would hard-clip at the viewport's left/right edge (the viewport must keep clipping to page). The
+    // fix is a MAIN-AXIS content gutter: the viewport is widened 2×HaloBleed (a negative horizontal margin, so the
+    // shelf's own layout box is unmoved) and every card sits HaloBleed inside it (the FillRowVirtualLayout Lead/Trail
+    // insets, or the non-virtual strip's L/R padding). Rest positions stay pixel-identical (inset +Bleed inside a
+    // viewport shifted −Bleed cancels); the fitted cardW still uses the shelf width (Fit is fed the un-widened _w).
+    // NOTE the gutter shows scrolled-out neighbor content ATTENUATED BY THE EDGE FADE at non-page-aligned rests, so a
+    // shelf that enables the bleed should carry an edge fade ≥ the bleed (the fade is what keeps the gutter soft).
+    const float HaloBleed = 12f;
     static readonly bool ShelfLog = Environment.GetEnvironmentVariable("FG_SHELFLOG") == "1";
 
     readonly int _count;
@@ -294,7 +309,9 @@ internal sealed class PagedShelfCore : Component
         Element[] children = headerEl is null ? [ body ] : [ headerEl, body ];
         return _parts.Apply(PagedShelf.PartRoot, new BoxEl
         {
-            Direction = 1, Gap = _headerGap,
+            // LiftClearance of the header gap lives INSIDE the strip's clip (the item container's top pad), so the
+            // header→card distance on screen stays _headerGap while the clip gains hover-lift headroom.
+            Direction = 1, Gap = MathF.Max(0f, _headerGap - LiftClearance),
             // No explicit width: the parent sizes us, so OnBoundsChanged reports the real available width (which the
             // strip's viewport then fills → FillRowVirtualLayout fits the same cardW).
             OnBoundsChanged = r => { if (r.W > 0f && MathF.Abs(r.W - _w.Peek()) > 0.5f) _w.Value = r.W; },
@@ -332,7 +349,8 @@ internal sealed class PagedShelfCore : Component
     // ── Measured-virtual body: sample-measure a bounded card set, lock height, then virtualize the strip. ──
     Element MeasuredVirtualBody(int perPageItems, float cardW, bool fade, bool needProbe)
     {
-        var layout = _layout ??= new FillRowVirtualLayout(_minCardW, _maxCardW, _gap, 1, _perPageOverride, _fixedCardW, _maxColumns);
+        var layout = _layout ??= new FillRowVirtualLayout(_minCardW, _maxCardW, _gap, 1, _perPageOverride, _fixedCardW, _maxColumns,
+            leadInset: HaloBleed, trailInset: HaloBleed);
         int shelfOverscan = Math.Max(_overscan, perPageItems);
         float measuredH = _measuredH.Value;
         Element liveItems = ItemsView.Create(
@@ -352,8 +370,11 @@ internal sealed class PagedShelfCore : Component
             // Bottom padding absorbs the shadow clearance: FillRowVirtualLayout stretches this container to the full
             // viewport cross size (measuredH + clearance), and the card's Grow=1 fills the container's CONTENT box — so
             // the card stays measuredH tall and its shadow renders into the pad below both clip edges.
+            // HoverElevatePaint on the CELL (not just the card inside): the deferral is a direct-sibling mechanism, and
+            // at the strip level the siblings are these cells — the flag makes the cell hover-within-aware (see
+            // InputDispatcher.UpdateHoverWithin), so the hovered card's cell paints above its neighbors' halo-overlap.
             containerFactory: (i, content, state, onInteraction, onFocusChanged) =>
-                new BoxEl { Direction = 1, Padding = new Edges4(0f, 0f, 0f, ShadowClearance), Children = [content] });
+                new BoxEl { Direction = 1, Padding = new Edges4(0f, LiftClearance, 0f, ShadowClearance), HoverElevatePaint = true, Children = [content] });
 
         // Keep this bounded probe layer mounted for the lifetime of a measured-virtual shelf. That makes a width
         // re-probe a pure update: the live ItemsView remains the same sibling and never flashes out of the tree.
@@ -390,16 +411,26 @@ internal sealed class PagedShelfCore : Component
             // ZStack makes the INNER ScrollEl believe the off-screen strip is its viewport. The outer page then clips
             // first, paging clamps after ~one click, and the scroller's right edge-fade is emitted off-screen.
             float viewportW = _w.Value;
+            // This path pins an EXPLICIT width (the probe row's intrinsic N×cardW must not size the ZStack), so the
+            // negative-margin stretch trick can't apply — widen the pinned width by 2×HaloBleed instead and shift it
+            // −HaloBleed (Margin) so the widened clip straddles both gutters exactly like the stretch path. The live
+            // ItemsView (grow:1) fills the widened ZStack ⇒ SetViewport fed _w+2·Bleed ⇒ layout re-fits back to _w.
+            float widenedW = viewportW > 0.5f ? viewportW + 2f * HaloBleed : float.NaN;
             Element probing = measuredH > 0f
-                ? ZStack(liveItems, probeHost) with { Width = viewportW > 0.5f ? viewportW : float.NaN }
+                ? ZStack(liveItems, probeHost) with { Width = widenedW }
                 : probeHost;
             return _parts.Apply(PagedShelf.PartViewport, new BoxEl
             {
-                // + ShadowClearance: the viewport (and the inner scroller it hosts) both clip at this height; the extra
-                // headroom below the card lets the card's soft shadow paint (the pad is inside each item container).
-                Width = viewportW > 0.5f ? viewportW : float.NaN,
-                Height = measuredH > 0f ? measuredH + ShadowClearance : float.NaN,
+                // + both clearances: the viewport (and the inner scroller it hosts) both clip at this height; the extra
+                // headroom below AND above the card lets the soft shadow + hover lift paint (the pads are inside each
+                // item container, so the card itself still measures/fills exactly measuredH).
+                Width = widenedW,
+                Margin = new Edges4(-HaloBleed, 0f, -HaloBleed, 0f),
+                Height = measuredH > 0f ? measuredH + ShadowClearance + LiftClearance : float.NaN,
                 ClipToBounds = true,
+                // Clip-ESCAPE root: the hover-elevated cell hoists out of this viewport's clip AND the inner
+                // scroller's edge fade, so the lifted card's halo paints into the page — resting content stays clipped.
+                HoverElevateClipRoot = true,
                 Animate = MotionRecipes.CardResizeHeight,
                 Children = [ probing ],
             });
@@ -419,17 +450,26 @@ internal sealed class PagedShelfCore : Component
             int idx = i;
             // COLUMN cell at the fitted width so the card's own Grow=1 fills the cell's (stretched) HEIGHT — not the
             // row's width — and the card cross-stretches to cardW. Mirrors the virtualized cell, minus the recycler.
-            cells[i] = new BoxEl { Direction = 1, Width = cardW, Children = [ _cardAt(idx, cardW) ] };
+            cells[i] = new BoxEl { Direction = 1, Width = cardW, HoverElevatePaint = true, Children = [ _cardAt(idx, cardW) ] };
         }
-        // Bottom padding sits the content ScrollEl's clip edge below the card shadow; it is OUTSIDE the row's cross
-        // stretch, so cells still stretch to the tallest CARD (the pad does not inflate card height).
-        Element strip = new BoxEl { Direction = 0, Gap = _gap, Padding = new Edges4(0f, 0f, 0f, ShadowClearance), Children = cells };
+        // Top/bottom padding sits the content ScrollEl's clip edges beyond the card's lift + shadow; it is OUTSIDE the
+        // row's cross stretch, so cells still stretch to the tallest CARD (the pads do not inflate card height). L/R
+        // HaloBleed padding is the MAIN-AXIS content gutter (the non-virtual sibling of the FillRowVirtualLayout insets):
+        // cards sit HaloBleed inside the scroll content so the first/last card's elevation halo has room, while the
+        // ScrollEl's negative horizontal margin widens the clip 2×HaloBleed into the surrounding gutters (rest positions
+        // cancel: gutter +Bleed inside a viewport shifted −Bleed). Page targets anchor to page·cols·stride, so they cancel.
+        Element strip = new BoxEl { Direction = 0, Gap = _gap, Padding = new Edges4(HaloBleed, LiftClearance, HaloBleed, ShadowClearance), Children = cells };
+        // The scroller owns the clip + edge-fade scope, so it is the native clip-ESCAPE root: the hovered cell parks
+        // under it and hoists after both scopes close. Keeping the ScrollEl as the root column's DIRECT child also
+        // preserves cross-axis stretch; an intervening default-row wrapper collapses this Grow=0 viewport to width 0.
         return _parts.Apply(PagedShelf.PartViewport, new ScrollEl
         {
             Horizontal = true,
             Grow = 0f,
             SuppressScrollBar = true,
             AutoEdgeFade = fade,
+            HoverElevateClipRoot = true,
+            Margin = new Edges4(-HaloBleed, 0f, -HaloBleed, 0f),
             OnScrollGeometryChanged = PageScrollSync(),
             Content = strip,
             OnRealized = h => viewport.Value = h,
@@ -477,7 +517,9 @@ internal sealed class PagedShelfCore : Component
     Element VirtualBody(int perPageItems, float cardW, bool fade)
     {
         // The SAME stateful layout instance the engine drives via SetViewport; hoisted so its fit cache survives renders.
-        var layout = _layout ??= new FillRowVirtualLayout(_minCardW, _maxCardW, _gap, _rows, _perPageOverride, _fixedCardW, _maxColumns);
+        // Lead/Trail = HaloBleed carve the halo gutters INSIDE the viewport (widened below by the same amount).
+        var layout = _layout ??= new FillRowVirtualLayout(_minCardW, _maxCardW, _gap, _rows, _perPageOverride, _fixedCardW, _maxColumns,
+            leadInset: HaloBleed, trailInset: HaloBleed);
 
         float shelfH = _cardHeight is null ? float.NaN : _rows * _cardHeight(cardW) + (_rows - 1) * _gap;
 
@@ -505,12 +547,21 @@ internal sealed class PagedShelfCore : Component
             // Multi-row keeps the old clip — RowHeight(cross) would spread the pad across rows and distort every card,
             // and interior rows occlude their own shadows against the row below anyway.
             containerFactory: (i, content, state, onInteraction, onFocusChanged) =>
-                new BoxEl { Direction = 1, Padding = _rows == 1 ? new Edges4(0f, 0f, 0f, ShadowClearance) : default, Children = [content] });
+                new BoxEl { Direction = 1, Padding = _rows == 1 ? new Edges4(0f, LiftClearance, 0f, ShadowClearance) : default, HoverElevatePaint = true, Children = [content] });
 
         return _parts.Apply(PagedShelf.PartViewport, new BoxEl
         {
-            Height = shelfH > 0f ? (_rows == 1 ? shelfH + ShadowClearance : shelfH) : float.NaN,
+            Height = shelfH > 0f ? (_rows == 1 ? shelfH + ShadowClearance + LiftClearance : shelfH) : float.NaN,
             ClipToBounds = true,
+            // Clip-ESCAPE root: the hover-elevated cell hoists out of this clip + the inner scroller's edge fade —
+            // its lift/halo paint into the page while resting content stays exactly clipped (multi-row included:
+            // the grid keeps its tight clip, only the hovered cell escapes).
+            HoverElevateClipRoot = true,
+            // Widen the clip 2×HaloBleed into the surrounding gutters WITHOUT moving the shelf's layout box: a negative
+            // horizontal margin on a cross-STRETCH child resolves to width = availCross − crossMargin (= _w + 2·Bleed)
+            // at x = −Bleed (FlexLayout arrange). The ItemsView (grow:1) fills it, so SetViewport is fed _w+2·Bleed and
+            // the layout subtracts the gutters back to _w for the fit — cards keep their width and rest positions.
+            Margin = new Edges4(-HaloBleed, 0f, -HaloBleed, 0f),
             Children = [ items ],
         });
     }

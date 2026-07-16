@@ -131,7 +131,7 @@ public static class RootlistOps
 
         var r = await transport.Request(Channel.Spclient, route, body, ct, "POST",
 
-            headers: SpotifyHeaders.PlaylistV2Mutation(spclientBaseUrl())).ConfigureAwait(false);
+            headers: SpotifyHeaders.PlaylistV2Mutation(ctx.Locale, spclientBaseUrl())).ConfigureAwait(false);
 
         if (r.Ok) { ApplyRootlistResponse(store, r.Body); return true; }
 

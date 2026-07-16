@@ -91,7 +91,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
         var live = await SpotifyLiveSpclient.ConnectAsync(connectLog, ct, retainApChannel: true,
             allowDeviceCode: interactive && !useBrowser, authObserver: adapter,
             onCredentialAcquired: () => report.Report(new LoginSnapshot(LoginPhase.Finalizing)),
-            allowBrowser: interactive && useBrowser).ConfigureAwait(false);
+            allowBrowser: interactive && useBrowser, language: svc.Locale.SpotifyLanguage).ConfigureAwait(false);
         if (live is null)
         {
             if (ct.IsCancellationRequested || quietPhases) return null;   // superseded / cancelled / a quiet racing sibling → stay silent
@@ -141,7 +141,8 @@ public sealed class LiveSessionHost : IAsyncDisposable
         if (svc.RealStore is { } mdStore)
         {
             extendedMetadata = new Wavee.Backend.Metadata.ExtendedMetadataSource(live.Pipeline, () => live.BaseUrl, () => live.Session);
-            extensionCache = new Wavee.Backend.Metadata.ExtensionEtagCache(extendedMetadata, () => live.Session, connectLog);
+            extensionCache = new Wavee.Backend.Metadata.ExtensionEtagCache(extendedMetadata, () => live.Session, connectLog,
+                persistent: svc.RealCold);
             metadata = new Wavee.Backend.Metadata.MetadataService(extendedMetadata, mdStore, () => live.Session, extensionCache: extensionCache);
             contexts = new LiveContextResolver(transport, metadata, mdStore, () => live.Session, connectLog);
         }
@@ -369,7 +370,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
                     ? refresh(c)
                     : live.TokenProvider(c)),
                 new RateLimitMiddleware(),
-                new PathfinderHeadersMiddleware(_ => Task.FromResult(live.ClientToken)));
+                new PathfinderHeadersMiddleware(_ => Task.FromResult(live.ClientToken), live.Session.Locale));
             var pathfinder = new PathfinderClient(pathfinderExchange, spclientLog);
             var pathfinderResource = new PathfinderResource(pathfinder, () => live.Session, spclientLog);
             // Concert discovery (artist schedules, hub feed, location controls) — the live Pathfinder adapter over the same
@@ -451,7 +452,8 @@ public sealed class LiveSessionHost : IAsyncDisposable
 
         // Social notifications (gander) — session-scoped, display-only. One authed GET; seeds itself at construction so the
         // bell badge is right before the first open. Installed into the switchable the notification panel binds to.
-        var notifications = new SpotifyNotificationsService(live.Pipeline, () => live.BaseUrl, notificationsLog);
+        var notifications = new SpotifyNotificationsService(live.Pipeline, () => live.BaseUrl, notificationsLog,
+            language: live.Session.Locale);
         svc.SpotifyNotifications.SetInner(notifications);
         host.AttachNotifications(notifications);
 
@@ -910,7 +912,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
     internal static async Task FetchAlbumAsync(PathfinderResource pf, IStore store, string uri, CancellationToken ct)
     {
         using var doc = await pf.QueryAsync(PathfinderOps.GetAlbum, PathfinderOps.GetAlbumHash,
-            w => { w.WriteString("uri", uri); w.WriteString("locale", ""); w.WriteNumber("offset", 0); w.WriteNumber("limit", 50); },
+            w => { w.WriteString("uri", uri); w.WriteString("locale", pf.Locale); w.WriteNumber("offset", 0); w.WriteNumber("limit", 50); },
             PathfinderClient.Platform.Desktop, ct).ConfigureAwait(false);
         if (doc is null) return;
         if (Wavee.Core.SpotifyExportMapper.AlbumFromUnion(doc.RootElement) is { } album)
@@ -946,10 +948,11 @@ public sealed class LiveSessionHost : IAsyncDisposable
 
     /// <summary>CLI demo (`--connect-live`): bring up the live session over a REAL Services and log the now-playing the
     /// bridge sees THROUGH the switchable backend, for ~25 s — proving the fake→live swap end-to-end, headlessly.</summary>
-    public static async Task<int> RunAsync(WaveeLogger log, CancellationToken ct)
+    public static async Task<int> RunAsync(WaveeLogger log, CancellationToken ct, string language = "en")
     {
         log.Info("Wavee live Connect probe — building the real backend + going live...");
-        var svc = Services.CreateReal();
+        language = SpotifyHeaders.NormalizeLanguage(language);
+        var svc = Services.CreateReal(appLocale: new AppLocale(language == "en" ? "en-US" : language, language));
         await using var host = await StartAsync(svc, log, ct).ConfigureAwait(false);
         if (host is null) { log.Info("Live session could not start."); return 1; }
 

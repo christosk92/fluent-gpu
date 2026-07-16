@@ -126,6 +126,7 @@ public class ExtendedMetadataSourceTests
         Assert.EndsWith("/extended-metadata/v0/extended-metadata", captured.Url);
         Assert.Equal("gzip", captured.Headers["Content-Encoding"]);       // request body gzipped
         Assert.Equal("application/protobuf", captured.Headers["Content-Type"]);
+        Assert.Equal("en", captured.Headers["Accept-Language"]);
         Assert.NotNull(captured.Body);
         Assert.Equal("Fetched Track", Assert.Single(store.QueryTracks()).Title);
     }

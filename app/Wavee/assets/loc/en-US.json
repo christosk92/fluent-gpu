@@ -258,6 +258,9 @@
     "madeForYou": "Made for you",
     "moreForYou": "More for you",
     "recentlyPlayed": "Recently played",
+    "yourPlaylists": "Your playlists",
+    "yourAlbums": "Your albums",
+    "yourArtists": "Your artists",
     "madeFor": "Made for {name}",
     "you": "you",
     "newReleases": "New releases",
@@ -348,6 +351,15 @@
       "storage": "Storage & cache",
       "diagnostics": "Diagnostics",
       "about": "About"
+    },
+    "language": {
+      "title": "Language & region",
+      "label": "App language",
+      "restartSub": "Changes are applied the next time Wavee starts.",
+      "system": "System default",
+      "englishUs": "English (United States)",
+      "dutch": "Nederlands",
+      "korean": "한국어"
     },
     "appearance": {
       "title": "Appearance",
@@ -923,6 +935,8 @@
     "removeFromThisPlaylist": "Remove from this playlist",
     "removeFromQueue": "Remove from queue",
     "playNow": "Play now",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
     "open": "Open",
     "saveToLibrary": "Save to Your Library",
     "removeFromLibrary": "Remove from Your Library",

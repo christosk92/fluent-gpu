@@ -52,6 +52,11 @@ public interface IGpuDevice : IDisposable
     /// posted back via <see cref="ImageUploadQueue.PostReject"/>. No-op by default (headless has no queue wired).</summary>
     void DrainImageJobs(Hosting.Threading.ImageUploadQueue queue) { }
 
+    /// <summary>Install the persistent derived-image bake handoff. The backend drains jobs at the top of a submit and
+    /// posts completions after registering the output as an ordinary resident image. Headless backends may complete
+    /// jobs semantically without rasterizing pixels.</summary>
+    void SetBakedBlurQueue(Hosting.Threading.BakedBlurQueue queue) { }
+
     // ── Device-lost recovery (Step 4, ASYNC only; design/subsystems/threading-render-seam.md §9) ──
     /// <summary>Arm async device-lost SIGNALING: on a device-removed/reset/hung HRESULT the backend records the reason +
     /// bails the frame instead of throwing on the render thread (an unobserved background exception = process death), and

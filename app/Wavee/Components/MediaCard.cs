@@ -43,6 +43,35 @@ public static class MediaCard
             ? ColorF.Lerp(Tok.FillControlSecondary, a, Tok.Theme == ThemeKind.Dark ? 0.18f : 0.12f)
             : Tok.FillControlSecondary;
 
+    // ── The one hover-plate card shell: resting-borderless content over a hover-revealed plate (fill + 1px stroke +
+    // elevation halo) with the shared lift motion. Every rectangular media card composes THIS instead of hand-rolling
+    // its own plate, so the hover grammar can't drift between surfaces. NO ClipToBounds: an element's own shadow
+    // escapes its own clip, but a PARENT clip shaves a child's halo (SceneRecorder's shadow-before-own-clip contract)
+    // — the plate carries the shadow and every child self-clips. HoverElevatePaint: paint above sibling cards while
+    // hovered so the lift halo isn't overpainted by a later card (the design's z-index:2); layout/hit-testing
+    // unchanged. The returned box is the card ROOT — callers may still override Grow / Height / Border / Fill for
+    // owner states (e.g. the discography drawer owner's accent border).
+    static BoxEl CardShell(Element content, Action onClick, ColorF? plateFill = null) => new BoxEl
+    {
+        ZStack = true, Corners = CornerRadius4.All(WaveeRadius.Card),
+        OnClick = onClick, PressScale = 0.99f,
+        HoverElevatePaint = true,
+        WhileHover = Motion.ReducedMotion ? null : new MotionTarget { OffsetY = -4f },
+        WhilePressed = Motion.ReducedMotion ? null : new MotionTarget { Scale = 0.99f, OffsetY = -1f },
+        Transition = MotionTok.ControlNormal,
+        Children =
+        [
+            new BoxEl
+            {
+                Grow = 1f, Corners = CornerRadius4.All(WaveeRadius.Card),
+                Fill = plateFill ?? Tok.FillCardDefault, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
+                Shadow = Elevation.CardHover, Opacity = 0f, HoverOpacity = 1f,
+                HoverDurationMs = 180f, HoverEasing = Easing.FluentDecelerate, HitTestVisible = false,
+            },
+            content,
+        ],
+    };
+
     // Hover-revealed corner "…" (top-right of the cover — the FAB's opposite corner): opens the card's attached context
     // menu (the WithMenu at the card root) anchored at the button — the engine's ClickRequestsContext re-enters the
     // context-request funnel here and the walk finds the card's OnContextRequested. Same dark-glass chrome as
@@ -150,7 +179,10 @@ public static class MediaCard
 
         var coverStack = new BoxEl
         {
-            Width = inner, Height = inner, ZStack = true, ClipToBounds = true, Corners = CornerRadius4.All(r),
+            // The artwork already owns its square/circular crop. Do not apply that CIRCLE clip to the action layer:
+            // a bottom-right FAB is inside the cover's rectangular slot but outside the avatar circle, so clipping the
+            // whole stack shears its accent background. Square covers retain the old bounds clip.
+            Width = inner, Height = inner, ZStack = true, ClipToBounds = !circular, Corners = CornerRadius4.All(r),
             HoverScale = Motion.ReducedMotion ? 1f : 1.035f,
             HoverDurationMs = 300f, HoverEasing = Easing.FluentDecelerate,
             Children =
@@ -193,25 +225,8 @@ public static class MediaCard
                 },
             ],
         };
-        var card = new BoxEl
-        {
-            Grow = 1f, ZStack = true, Corners = CornerRadius4.All(WaveeRadius.Card), ClipToBounds = true,
-            OnClick = onClick, PressScale = 0.99f,
-            WhileHover = Motion.ReducedMotion ? null : new MotionTarget { OffsetY = -4f },
-            WhilePressed = Motion.ReducedMotion ? null : new MotionTarget { Scale = 0.99f, OffsetY = -1f },
-            Transition = MotionTok.ControlNormal,
-            Children =
-            [
-                new BoxEl
-                {
-                    Grow = 1f, Corners = CornerRadius4.All(WaveeRadius.Card),
-                    Fill = Tok.FillCardDefault, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
-                    Shadow = Elevation.Card, Opacity = 0f, HoverOpacity = 1f,
-                    HoverDurationMs = 180f, HoverEasing = Easing.FluentDecelerate, HitTestVisible = false,
-                },
-                content,
-            ],
-        }.WithMenu(menu);
+        // Grow=1 on the shell: a measured shelf cell stretches every card to the tallest card's height.
+        var card = (CardShell(content, onClick) with { Grow = 1f }).WithMenu(menu);
         return new BoxEl { Grow = 1f, Direction = 1, Padding = new Edges4(0f, 4f, 0f, 2f), Children = [ card ] };
     }
 
@@ -262,7 +277,9 @@ public static class MediaCard
                             { Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                     ],
                 },
-                Embed.Comp(() => new NowPlayingOverlay(uri, onPlay, action, cover: false, action, persistent: true)).Skeletonized(false),
+                // Same reveal convention as the cover cards: retain the trailing slot for stable text geometry, but
+                // fade the play/pause surface in only while the compact card is hovered.
+                Embed.Comp(() => new NowPlayingOverlay(uri, onPlay, action, cover: false, action, persistent: false)).Skeletonized(false),
                 MoreInline(menu is not null),
             ],
         };
@@ -276,7 +293,9 @@ public static class MediaCard
         float r = circular ? 9999f : WaveeRadius.Card;
         var coverStack = new BoxEl
         {
-            ZStack = true, ClipToBounds = true, Corners = CornerRadius4.All(r),
+            // Surfaces.ArtworkFill owns the circular image crop. Keep the overlay layer rectangular so artist FABs and
+            // the corner menu are not clipped by the avatar circle.
+            ZStack = true, ClipToBounds = !circular, Corners = CornerRadius4.All(r),
             Children =
             [
                 Surfaces.ArtworkFill(cover, r),
@@ -284,18 +303,13 @@ public static class MediaCard
                 MoreCorner(menu is not null),
             ],
         };
-        var card = new BoxEl
+        // A grid row may reserve trailing space as its vertical gutter. Do not flex-grow into that space: doing so
+        // stretches the card past its square-cover + two-label geometry, creates a dead footer, and consumes the
+        // intended gap before the next row.
+        var content = new BoxEl
         {
-            // A grid row may reserve trailing space as its vertical gutter. Do not flex-grow into that space: doing so
-            // stretches the card past its square-cover + two-label geometry, creates a dead footer, and consumes the
-            // intended gap before the next row.
-            Direction = 1, Gap = Pad, ClipToBounds = true,
+            Direction = 1, Gap = Pad,
             Padding = new Edges4(Pad, Pad, Pad, WaveeSpace.M),
-            Corners = CornerRadius4.All(WaveeRadius.Card),
-            Fill = AccentCardFill(accent), HoverFill = AccentCardHoverFill(accent),
-            BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
-            Shadow = Elevation.Card,
-            HoverScale = 1.02f, PressScale = 0.99f, OnClick = onClick,
             Children =
             [
                 coverStack,
@@ -311,7 +325,9 @@ public static class MediaCard
                 },
             ],
         };
-        return card.WithMenu(menu);
+        // Same shell as Shelf; the album-palette accent tints the HOVER plate only (accent = small emphasis) — the
+        // expanded-drawer owner still gets its resting accent border/fill via the caller's root override.
+        return CardShell(content, onClick, AccentCardHoverFill(accent)).WithMenu(menu);
     }
 
     // Editorial home card: intentionally reserved for HomeFeedBaselineSectionData. Normal home sections keep the regular
@@ -514,19 +530,17 @@ public static class MediaCard
             {
                 Height = artH, ZStack = true, ClipToBounds = true,
                 Corners = CornerRadius4.All(radius), Shadow = Elevation.Card,
-                PressScale = 0.99f, OnClick = onClick,
-                OnPointerMoveWithin = pointerMove,
-                OnPointerExit = pointerExit,
                 Children =
                 [
-                    // NO hover zoom on the artwork: rounded clips apply only to RoundRect-pipeline primitives — an IMAGE
-                    // clips by the rectangular scissor alone (SceneRecorder tier-2 docs), so any geometry scale pushes the
-                    // image's self-rounded corners out and leaves square slivers at the card corners (and a root-level
-                    // scale pokes past the shelf viewport's exact-bounds clip). Hover feedback is the FAB reveal, the
-                    // description expand, and the countdown peek instead.
+                    // Artwork hover zoom, clipped by the CARD's rounded SDF — deliberately NO clip of its own: the RHI
+                    // clamps Image/Gradient primitives to the TOPMOST rounded clip only (D3D12Device rounded-clip
+                    // stack), so if this container pushed its own rounded clip, the hover SCALE would carry that clip
+                    // out past the card and the zoomed cover would show square slivers at the card corners (the card
+                    // boundary then being scissor-only). With no clip here, the card root's (unscaled) rounded clip
+                    // stays active and the zoomed cover clamps to the card's corners.
                     new BoxEl
                     {
-                        Height = artH, ZStack = true, ClipToBounds = true, Corners = CornerRadius4.All(radius),
+                        Height = artH, ZStack = true,
                         HoverScale = Motion.ReducedMotion ? 1f : 1.055f,
                         HoverDurationMs = 300f, HoverEasing = Easing.FluentDecelerate,
                         Children = [ Ui.Image(cover?.Url ?? "", ImageFit.Cover, aspect, 512, radius, Tok.FillCardDefault, cover?.BlurHash) ],
@@ -562,23 +576,10 @@ public static class MediaCard
                     // Bottom-pinned frosted copy band, cross-stretched to the full card width; it auto-sizes to the copy
                     // plus the feather ramp space (featherPad), so the frost covers the text zone and fades up into the
                     // art. Height changes (line expand / peek swap) tween through real layout (CardResizeHeight).
-                    //
-                    // The frost is a TRUE GAUSSIAN SELF-BLUR of the artwork (the Element Blur channel, σ26), NOT an
-                    // Acrylic backdrop stamp: a backdrop stamp is keyed on the card's canvas POSITION, so a shelf scroll
-                    // never HITS its cache — one Gaussian per card per frame (the original perf bug). The self-blur
-                    // duplicates the SAME art URL at the SAME 512 decode as the crisp cover above (⇒ shared ImageCache
-                    // handle, no extra decode), blurs its OWN pixels, and rides the engine's position-INDEPENDENT blur
-                    // pin cache (BlurPinKey): the pin key rebases every op to the layer origin, so a pure scroll
-                    // translation yields a byte-identical key ⇒ an on-canvas scrolling card HITS its pin every frame (no
-                    // re-blur). Wave A/B also caches edge-clamped regions AT REST (SelfBlurRegion) — so only a card whose
-                    // band straddles the viewport edge WHILE IN MOTION re-blurs, and only over the tight band region
-                    // (device rect + the kernel's ±min(ceil(3σ),32)px halo), never the whole card. FocusY=1 anchors the
-                    // Cover crop to the BOTTOM slice of the art (the region behind the band); ImageTransition.None keeps
-                    // the blur subtree static (one Ready-flip re-blur at decode, then nothing animates inside it — the
-                    // CardResizeHeight tween lives on the band's OUTER ZStack, not under the blur). The top edge feathers
-                    // over the featherPad ramp (the old FeatherTop 0.75 dissolve) via a separate EdgeFade node wrapping
-                    // the blur — EdgeFade and self-Blur can't share a node (EdgeFade takes precedence), so the blur node
-                    // nests INSIDE it — and the tint/luminosity feel lays over as a plain translucent fill.
+                    // The artwork frost is a persistent image derivative: decode once, bake a downsampled separable
+                    // Gaussian once off the scroll path, then draw it as an ordinary image quad. Its cache key is based
+                    // on source + output bucket + blur parameters, never card position, so scrolling only changes the
+                    // quad transform. Until the bake is ready the same draw falls back to the crisp source image.
                     new BoxEl
                     {
                         Height = artH, Direction = 1, Justify = FlexJustify.End, AlignItems = FlexAlign.Stretch,
@@ -592,45 +593,25 @@ public static class MediaCard
                                 Animate = MotionRecipes.CardResizeHeight,
                                 Children =
                                 [
-                                    // Frost: blurred artwork copy + tint, feathered in from the top so it dissolves
-                                    // into the crisp art above (the corner-following EdgeFade keeps the band's rounded
-                                    // bottom corners clean while the top corners fade out under the ramp). The frost box
-                                    // and its image carry NO explicit/aspect size, so they MEASURE to 0 — the COPY below
-                                    // drives the band height (the caption band, not the whole card) — and ARRANGE to fill
-                                    // the band. That fixes the earlier bug where a full-card-tall aspect image forced the
-                                    // frost to cover the entire card.
+                                    // The image has no explicit/aspect size, so it measures to zero and the copy drives
+                                    // the band height. Overlay and top feather are image-shader channels, keeping steady
+                                    // paint to one DrawImage with no PushLayer/PopLayer or per-frame intermediate RT.
                                     new BoxEl
                                     {
                                         ZStack = true, HitTestVisible = false,
                                         Corners = CornerRadius4.All(radius),
-                                        EdgeFade = new EdgeFadeSpec(EdgeMask.Top, featherPad),
                                         Children =
                                         [
-                                            // True σ26 self-blur of the artwork. Blur (the Element channel) wraps this
-                                            // node's subtree in a PushLayer{Blur} → its OWN pixels Gaussian-blur (CSS
-                                            // filter: blur(), NOT the backdrop). BlurCachePolicy.Normal is correct: the
-                                            // pin caches at rest for ALL policies, and its position-INDEPENDENT key means
-                                            // an on-canvas scrolling card HITS the pin in motion too (Normal, not a Hold
-                                            // policy, so the frost never flashes crisp/skips when a fresh card scrolls in
-                                            // — it pays one tight-region Gaussian for that frame instead). The image
-                                            // carries NO aspect/size (float.NaN) so it MEASURES 0×0 and the COPY below
-                                            // drives the band height, then ARRANGES to fill the band; the 512 decode
-                                            // matches the crisp cover above ⇒ shared ImageCache handle (no extra decode).
-                                            // FocusY=1 anchors the Cover crop to the art's BOTTOM slice; ImageTransition
-                                            // .None keeps the blur subtree static (one re-blur at decode-ready, no churn).
-                                            new BoxEl
+                                            // The 512 request deduplicates with the crisp cover; the derivative is a
+                                            // half-resolution σ26 bake. FocusY=1 keeps the cover crop on the bottom slice.
+                                            Ui.Image(cover?.Url ?? "", ImageFit.Cover, float.NaN, 512, radius,
+                                                Tok.FillCardDefault, cover?.BlurHash) with
                                             {
-                                                ZStack = true, ClipToBounds = true, HitTestVisible = false,
-                                                Corners = CornerRadius4.All(radius),
-                                                Blur = 26f, BlurCachePolicy = BlurCachePolicy.Normal,
-                                                Children =
-                                                [
-                                                    Ui.Image(cover?.Url ?? "", ImageFit.Cover, float.NaN, 512, radius, Tok.FillCardDefault, cover?.BlurHash, ImageTransition.None) with { FocusY = 1f },
-                                                ],
+                                                FocusY = 1f,
+                                                BakedBlur = new BakedBlurSpec(26f, 0.5f),
+                                                ColorOverlay = ColorF.FromRgba(8, 8, 10) with { A = 0.42f },
+                                                Mask = new ImageMaskSpec(EdgeMask.Top, featherPad),
                                             },
-                                            // Tint + luminosity feel of the old recipe (Tint rgba(8,8,10)@0.24 over a
-                                            // 0.28 luminosity wash) folded into one translucent fill.
-                                            new BoxEl { Fill = ColorF.FromRgba(8, 8, 10) with { A = 0.42f }, Corners = CornerRadius4.All(radius) },
                                         ],
                                     },
                                     new BoxEl
@@ -651,7 +632,34 @@ public static class MediaCard
                     },
                 ],
             };
-            return card.WithMenu(menu);
+            // Interactivity + hover elevation live on a NON-clipping wrapper (the shelf-card pattern): the surface above
+            // must keep its ClipToBounds (crisp art / spotlight / frost all clamp to the rounded card), and a parent clip
+            // shaves a child's shadow halo — so the hover halo rides a sibling panel BEHIND the opaque surface, where its
+            // own clip can't touch it. The wrapper is the hit target, so the surface's hover channels (artwork zoom,
+            // spotlight, FAB reveal) and the panel's HoverOpacity all ride the same ancestor hover; the lift moves halo
+            // and surface together. The shelf's LiftClearance provides the headroom this paints into.
+            return new BoxEl
+            {
+                ZStack = true,
+                OnClick = onClick, PressScale = 0.99f,
+                // Elevate above sibling editorial cards while hovered so the lift halo survives (design z-index:2).
+                HoverElevatePaint = true,
+                OnPointerMoveWithin = pointerMove,
+                OnPointerExit = pointerExit,
+                WhileHover = Motion.ReducedMotion ? null : new MotionTarget { OffsetY = -4f },
+                WhilePressed = Motion.ReducedMotion ? null : new MotionTarget { Scale = 0.99f, OffsetY = -1f },
+                Transition = MotionTok.ControlNormal,
+                Children =
+                [
+                    new BoxEl
+                    {
+                        Grow = 1f, Corners = CornerRadius4.All(radius),
+                        Shadow = Elevation.CardHover, Opacity = 0f, HoverOpacity = 1f,
+                        HoverDurationMs = 180f, HoverEasing = Easing.FluentDecelerate, HitTestVisible = false,
+                    },
+                    card,
+                ],
+            }.WithMenu(menu);
         }
 
         // The countdown ring: an 18px track circle + a round-capped sweep arc whose StrokeTrimEnd the core animates
@@ -1018,7 +1026,7 @@ sealed class NowPlayingOverlay : Component
         Element EqPill() => new BoxEl
         {
             Padding = new Edges4(5f, 3f, 5f, 3f), Corners = CornerRadius4.All(4f), Fill = ColorF.FromRgba(0, 0, 0, 150),
-            Children = [ WaveeEqualizer.Of(playing, Tok.AccentTextPrimary, 14f) ],
+            Children = [ WaveeEqualizer.Of(playing, static () => Tok.AccentTextPrimary, 14f) ],
         };
 
         if (_cover && _centered)
@@ -1080,7 +1088,7 @@ sealed class NowPlayingOverlay : Component
             [
                 active
                     ? new BoxEl { AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, HoverOpacity = 0f,
-                                  Children = [ WaveeEqualizer.Of(playing, Tok.AccentTextPrimary, 14f) ] }
+                                  Children = [ WaveeEqualizer.Of(playing, static () => Tok.AccentTextPrimary, 14f) ] }
                     : new BoxEl(),
                 reveal,
             ],

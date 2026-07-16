@@ -41,7 +41,7 @@ public sealed class PlaylistMutationSource : IPlaylistMutationSource
         string trimmed = string.IsNullOrWhiteSpace(name) ? "New Playlist" : name.Trim();
         long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var body = PlaylistWireMapper.BuildCreateListRequest(trimmed, ctx.Account, nowMs);
-        var headers = SpotifyHeaders.PlaylistV2Mutation(_spclientBaseUrl());
+        var headers = SpotifyHeaders.PlaylistV2Mutation(ctx.Locale, _spclientBaseUrl());
         var r = await _transport.Request(Channel.Spclient, "/playlist/v2/playlist", body, ct, "POST", headers).ConfigureAwait(false);
         if (!r.Ok) throw new InvalidOperationException($"create playlist failed ({r.Status})");
         var bytes = SpotifyZstd.MaybeDecompressZstd(r.Body);

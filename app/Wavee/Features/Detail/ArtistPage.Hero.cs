@@ -95,12 +95,12 @@ sealed partial class ArtistPage : Component
             // decode the photo reveals via HeroArt's WaveeMusic-matched pop-in (320ms FluentDecelerate fade + 1.0→1.05 zoom).
             // The media also dissolves on the same scroll interval as the copy; once the compact pill owns the header,
             // the large photo must be visually gone, not merely behind the content.
-            ColorF heroWash = Tok.Theme == ThemeKind.Light
+            ColorF HeroWash() => Tok.Theme == ThemeKind.Light
                 ? ColorF.Lerp(WaveeColors.FileArea, _accent, 0.12f)
                 : ColorF.Lerp(ColorF.FromRgba(0x14, 0x14, 0x16), _accent, 0.30f);
             Element heroArt = bg?.Url is { Length: > 0 } hu
-                ? Embed.Comp(() => new HeroArt(hu, _heroWidth, bg.BlurHash, heroWash)) with { Key = "heroart:" + hu }
-                : new BoxEl { Width = w, Height = height, Fill = heroWash };
+                ? Embed.Comp(() => new HeroArt(hu, _heroWidth, bg.BlurHash, HeroWash)) with { Key = "heroart:" + hu }
+                : new BoxEl { Width = w, Height = height, Fill = HeroWash() };
             var media = new BoxEl
             {
                 Width = w, Height = height, ZStack = true, ClipToBounds = true,
@@ -383,8 +383,8 @@ sealed class HeroArt : Component
     readonly string _url;
     readonly IReadSignal<float> _width;
     readonly string? _blurHash;
-    readonly ColorF _wash;
-    public HeroArt(string url, IReadSignal<float> width, string? blurHash, ColorF wash)
+    readonly Func<ColorF> _wash;
+    public HeroArt(string url, IReadSignal<float> width, string? blurHash, Func<ColorF> wash)
     { _url = url; _width = width; _blurHash = blurHash; _wash = wash; }
 
     public override Element Render()
@@ -432,7 +432,7 @@ sealed class HeroArt : Component
                     Children =
                     [
                         Ui.Image(_url, ImageFit.Cover, aspect: w / h, decodePx: w, corners: 0f,
-                                placeholder: _wash, blurHash: _blurHash, transition: ImageTransition.Fade(RevealFadeMs))
+                                placeholder: _wash(), blurHash: _blurHash, transition: ImageTransition.Fade(RevealFadeMs))
                             with { FocusY = 0.35f },
                     ],
                 },

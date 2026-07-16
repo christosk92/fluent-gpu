@@ -78,6 +78,12 @@ float OverscrollPx, OverscrollVel;   // band + band spring velocity (reused)
 ```
 The per-packet contact samples live in the ring's existing velocity side buffer (§3.4), not in the slab — only one gesture is latched at a time, so the resampler state is a **singleton POD in the integrator** (fixed inline arrays), not per-node. No `ScrollState` growth beyond the two small fields above; the old `_tp*` fields are deleted.
 
+### 2.5 Virtualization anchor re-pin is a coordinate shift the integrator consumes
+
+The variable-height virtualizer re-pins the viewport to its anchor key when an extent correction or regroup moves content above the viewport (`design/subsystems/virtualization.md` §6.2). That re-pin is a **coordinate shift**, not a second offset writer: the layout captures the pin delta once and accumulates it into a POD shift column, and every live integrator intent expressed in the same offset space shifts by the same delta — the resampler anchor (when it is tracking the re-pinned node), the wheel/programmatic target, any pending target, and the pending raw offset. The integrator drains the accumulated shift at the top of its tick. Applying the delta this way keeps a correction that lands mid-gesture from being discarded or fought on the next tick — the under-finger jitter that estimate-then-correct lists showed when the re-pin wrote offset directly and the integrator overwrote it from a stale anchor/target.
+
+This is the one deliberate exception to the §2.1 single-writer invariant, and it is honest to state as such: the re-pin is a **layout-owned coordinate shift**, applied outside the single-writer scroll audit (the `gate.scroll.single-writer` check) rather than routed through `Tick`, because it re-expresses the coordinate frame the offset lives in, not a new scroll position.
+
 ---
 
 ## 3. Event ingestion
@@ -149,7 +155,7 @@ displacement = x* − xAppliedLast ;  xAppliedLast = x*
 offset = clamp(anchor + x*, 0, max)                                   // in-range 1:1
 excess = (anchor + x*) − clampedTarget                                // past-edge → §4.4 band
 ```
-`ResampleMinDeltaMs=2` guards degenerate sample spacing. Extrapolation is capped at 8 ms *and* 50 % of the last inter-event delta (overprediction causes overshoot jitter). This is the single fix for R2: exactly one displacement per vsync, proportional to `dt`, independent of packet cadence. **No easing, no low-pass during contact** — the resampler *is* the smoothing.
+`ResampleMinDeltaMs=2` guards degenerate sample spacing. Extrapolation is capped at 8 ms *and* 50 % of the last inter-event delta (overprediction causes overshoot jitter), and is suppressed entirely across a direction reversal: the resampler retains a third sample and, when the newest inter-sample slope opposes the previous one, returns the newest sample rather than predicting along the stale slope — a quick finger reversal never coasts the wrong way for a frame. This is the single fix for R2: exactly one displacement per vsync, proportional to `dt`, independent of packet cadence. **No easing, no low-pass during contact** — the resampler *is* the smoothing.
 
 ### 4.2 Discrete-wheel-tick curve with retargeting (WheelAnimating)
 
@@ -162,7 +168,7 @@ j0 = off − PendingTarget ;  j1 = vel + j0·y ;  e = exp(−y·dt)
 off = e·(j0 + j1·dt) + PendingTarget
 vel = e·(vel − j1·y·dt)
 ```
-Because velocity carries across a re-target, rapid notches accumulate distance smoothly with no restart jerk (the property Chromium's `UpdateTarget` preserves). Bigger gaps move faster naturally. This **supersedes v1's `WheelFlingMode`** and, by using a target rather than a `v·dt` integral, eliminates R3 for the wheel entirely and gives free hard-stop-at-extents. The identical machinery serves keyboard, scrollbar track-click, and Programmatic bring-into-view (Programmatic uses `ProgrammaticSpringHalflifeMs=95`).
+Because velocity carries across a *same-direction* re-target, rapid notches accumulate distance smoothly with no restart jerk (the property Chromium's `UpdateTarget` preserves); a sign reversal instead restarts the chase from the live offset — the carried velocity is zeroed and the pending target rebased off the current position, so a reversed notch cannot be absorbed by stale forward momentum (a brief old-direction overshoot otherwise). Bigger gaps move faster naturally. This **supersedes v1's `WheelFlingMode`** and, by using a target rather than a `v·dt` integral, eliminates R3 for the wheel entirely and gives free hard-stop-at-extents. The identical machinery serves keyboard, scrollbar track-click, and Programmatic bring-into-view (Programmatic uses `ProgrammaticSpringHalflifeMs=95`).
 
 ### 4.3 Velocity tracker + fling decay (Fling)
 

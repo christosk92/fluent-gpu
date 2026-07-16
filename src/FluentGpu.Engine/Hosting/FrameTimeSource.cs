@@ -37,17 +37,23 @@ public sealed class StopwatchFrameTimeSource : IFrameTimeSource
 {
     private long _last;
 
+    /// <summary>The last frame's UNCLAMPED wall-clock delta (ms) — diagnostics only (the 34ms clamp below hides the
+    /// true magnitude of a hitch from every consumer of <see cref="NextDeltaMs"/>).</summary>
+    public float LastRawDeltaMs { get; private set; }
+
     public float NextDeltaMs()
     {
         long now = Stopwatch.GetTimestamp();
         if (_last == 0)
         {
             _last = now;
+            LastRawDeltaMs = 0f;
             return 0f;
         }
 
         float dt = (now - _last) * 1000f / Stopwatch.Frequency;
         _last = now;
+        LastRawDeltaMs = dt;
         // Cap the per-tick advance at ~2 frames (60 Hz). A cold/janky frame can accumulate a large delta (e.g. the first
         // modal-loop tick after WM_ENTERSIZEMOVE, or a GC pause); without a tight cap a 250 ms transition front-loaded by
         // a decelerate curve would LEAP ~0.67 in a single tick — reading as "it just popped, no animation". 34 ms keeps

@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using FluentGpu.Foundation;
 using FluentGpu.Render;
 using FluentGpu.Rhi;
+using FluentGpu.Hosting.Threading;
 
 namespace FluentGpu.Rhi.Headless;
 
@@ -29,6 +30,7 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     private readonly List<(int id, int w, int h)> _uploads = new(32);
     private readonly Dictionary<int, (int w, int h)> _resident = new(32);
     private readonly List<int> _evictions = new(16);
+    private BakedBlurQueue? _bakedBlurs;
 
     public string BackendName => "Headless";
     public bool SupportsSecondarySwapchains => true;
@@ -89,6 +91,8 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     /// <summary>Image ids the residency manager evicted (GPU texture freed) — for eviction assertions.</summary>
     public IReadOnlyList<int> Evictions => _evictions;
     public void EvictImage(int imageId) { _resident.Remove(imageId); _evictions.Add(imageId); }
+    public void SetBakedBlurQueue(BakedBlurQueue queue) => _bakedBlurs = queue;
+    public bool HasPendingUploads => _bakedBlurs?.HasPending ?? false;
 
     public int HintSettlePresentCount { get; private set; }
     public void HintSettlePresent() => HintSettlePresentCount++;
@@ -96,6 +100,16 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     public void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx)
     {
         _rects.Clear();   // retains capacity → no alloc after warmup
+        if (_bakedBlurs is { Paused: false } bakes)
+            while (bakes.TryDequeueJob(out var job))
+            {
+                if (_resident.ContainsKey(job.SourceId))
+                {
+                    _resident[job.Id] = (job.OutputW, job.OutputH);
+                    bakes.Post(new BakedBlurQueue.Result(job.Id, job.Generation, true, job.OutputW, job.OutputH));
+                }
+                else bakes.Post(new BakedBlurQueue.Result(job.Id, job.Generation, false, 0, 0));
+            }
         _glyphs.Clear();
         _glyphGradients.Clear();
         _clips.Clear();

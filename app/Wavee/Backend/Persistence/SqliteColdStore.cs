@@ -6,6 +6,7 @@ using Microsoft.Data.Sqlite;
 using Wavee.Backend;
 using Wavee.Backend.Metadata;
 using Wavee.Backend.Playlists;
+using Wavee.Backend.Spotify;
 
 namespace Wavee.Backend.Persistence;
 
@@ -15,31 +16,36 @@ namespace Wavee.Backend.Persistence;
 // Schema is versioned through meta(schema_version) + an ordered migration runner that runs once on open, BEFORE the writer
 // task starts (so it never races the queue). The account column is carried on every per-account table for the (deferred)
 // per-account-DB-file split; until then a single file holds one logical account (DefaultAccount).
-public sealed class SqliteColdStore : IColdStore, IMutationOutbox
+public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCacheStore
 {
     public const string DefaultAccount = "default";
 
     readonly SqliteConnection _conn;
     readonly object _connLock = new();
     readonly string _account;
+    readonly string? _spotifyLocale;
     readonly Channels.Channel<WriteOp> _queue = Channels.Channel.CreateUnbounded<WriteOp>(new Channels.UnboundedChannelOptions { SingleReader = true });
     readonly Task _writer;
 
     // Prepared once, reused across batches: Microsoft.Data.Sqlite has no cross-command statement cache, so rebuilding the
     // commands + parameters every drain re-compiles statements and allocates per batch (and the steady-state drain often
     // processes a batch of 1).
-    SqliteCommand? _entityCmd, _savedUpCmd, _savedDelCmd, _revCmd, _videoCmd;
-    SqliteParameter _eu = null!, _ek = null!, _ep = null!;
+    SqliteCommand? _entityCmd, _savedUpCmd, _savedDelCmd, _revCmd, _videoCmd, _extensionCmd;
+    SqliteParameter _eu = null!, _ek = null!, _ep = null!, _el = null!, _et = null!;
     SqliteParameter _vu = null!, _vp = null!;
     SqliteParameter _sa = null!, _ss = null!, _su = null!, _sy = null!, _st = null!;
     SqliteParameter _da = null!, _ds = null!, _du = null!;
     SqliteParameter _ra = null!, _rs = null!, _rr = null!, _rt = null!;
+    SqliteParameter _xu = null!, _xl = null!, _xk = null!, _xp = null!, _xe = null!, _xo = null!, _xm = null!, _xx = null!, _xt = null!;
 
-    public SqliteColdStore(string path) : this(path, DefaultAccount) { }
+    public SqliteColdStore(string path) : this(path, DefaultAccount, null) { }
 
-    public SqliteColdStore(string path, string account)
+    public SqliteColdStore(string path, string account) : this(path, account, null) { }
+
+    public SqliteColdStore(string path, string account, string? spotifyLocale)
     {
         _account = account;
+        _spotifyLocale = string.IsNullOrWhiteSpace(spotifyLocale) ? null : SpotifyHeaders.NormalizeLanguage(spotifyLocale);
         _conn = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path }.ToString());
         _conn.Open();
         Exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;");
@@ -65,6 +71,7 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox
     }
 
     public string Account => _account;
+    public string? MetadataLocale => _spotifyLocale;
 
     void Exec(string sql)
     {
@@ -113,6 +120,43 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox
                 using (var c = _conn.CreateCommand()) { c.Transaction = tx; c.CommandText = "DELETE FROM meta WHERE key='rootlist_rev';"; c.ExecuteNonQuery(); }
                 using (var c = _conn.CreateCommand()) { c.Transaction = tx; c.CommandText = "INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','2');"; c.ExecuteNonQuery(); }
                 tx.Commit();
+                ver = "2";
+            }
+
+            if (ver == "2")
+            {
+                using var tx = _conn.BeginTransaction();
+                using (var c = _conn.CreateCommand())
+                {
+                    c.Transaction = tx;
+                    c.CommandText = """
+                        CREATE TABLE IF NOT EXISTS localized_entities(
+                            uri TEXT NOT NULL,
+                            locale TEXT NOT NULL,
+                            kind INTEGER NOT NULL,
+                            payload BLOB NOT NULL,
+                            updated_at INTEGER NOT NULL,
+                            PRIMARY KEY(uri, locale));
+                        CREATE INDEX IF NOT EXISTS ix_localized_entities_locale ON localized_entities(locale);
+                        CREATE INDEX IF NOT EXISTS ix_localized_entities_updated ON localized_entities(updated_at);
+                        CREATE TABLE IF NOT EXISTS localized_extension_cache(
+                            entity_uri TEXT NOT NULL,
+                            locale TEXT NOT NULL,
+                            extension_kind INTEGER NOT NULL,
+                            payload BLOB,
+                            etag TEXT,
+                            offline_ttl INTEGER NOT NULL DEFAULT 0,
+                            missing INTEGER NOT NULL DEFAULT 0,
+                            expires_at INTEGER NOT NULL,
+                            updated_at INTEGER NOT NULL,
+                            PRIMARY KEY(entity_uri, locale, extension_kind));
+                        CREATE INDEX IF NOT EXISTS ix_localized_extension_locale ON localized_extension_cache(locale);
+                        CREATE INDEX IF NOT EXISTS ix_localized_extension_expiry ON localized_extension_cache(expires_at);
+                        """;
+                    c.ExecuteNonQuery();
+                }
+                using (var c = _conn.CreateCommand()) { c.Transaction = tx; c.CommandText = "INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','3');"; c.ExecuteNonQuery(); }
+                tx.Commit();
             }
         }
     }
@@ -123,7 +167,25 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox
         lock (_connLock)
         {
             using var c = _conn.CreateCommand();
-            c.CommandText = "SELECT uri, kind, payload FROM entities;";
+            if (_spotifyLocale is null)
+                c.CommandText = "SELECT uri, kind, payload FROM entities;";
+            else
+            {
+                c.CommandText = """
+                    WITH candidates AS (
+                        SELECT uri,kind,payload,0 AS priority,updated_at FROM localized_entities WHERE locale=$locale
+                        UNION ALL
+                        SELECT uri,kind,payload,1 AS priority,0 AS updated_at FROM entities
+                        UNION ALL
+                        SELECT uri,kind,payload,2 AS priority,updated_at FROM localized_entities WHERE locale<>$locale
+                    ), ranked AS (
+                        SELECT uri,kind,payload,ROW_NUMBER() OVER(PARTITION BY uri ORDER BY priority,updated_at DESC) AS rn
+                        FROM candidates
+                    )
+                    SELECT uri,kind,payload FROM ranked WHERE rn=1;
+                    """;
+                c.Parameters.AddWithValue("$locale", _spotifyLocale);
+            }
             using var r = c.ExecuteReader();
             while (r.Read())
                 list.Add(new ColdEntity(r.GetString(0), (EntityKind)r.GetInt32(1), r.GetFieldValue<byte[]>(2)));
@@ -138,11 +200,51 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox
         lock (_connLock)
         {
             using var c = _conn.CreateCommand();
-            c.CommandText = "SELECT kind, payload FROM entities WHERE uri=$u;";
+            if (_spotifyLocale is null)
+                c.CommandText = "SELECT kind,payload FROM entities WHERE uri=$u;";
+            else
+            {
+                c.CommandText = """
+                    SELECT kind,payload FROM (
+                        SELECT kind,payload,0 AS priority,updated_at FROM localized_entities WHERE uri=$u AND locale=$locale
+                        UNION ALL
+                        SELECT kind,payload,1 AS priority,0 AS updated_at FROM entities WHERE uri=$u
+                        UNION ALL
+                        SELECT kind,payload,2 AS priority,updated_at FROM localized_entities WHERE uri=$u AND locale<>$locale
+                    ) ORDER BY priority,updated_at DESC LIMIT 1;
+                    """;
+                c.Parameters.AddWithValue("$locale", _spotifyLocale);
+            }
             c.Parameters.AddWithValue("$u", uri);
             using var r = c.ExecuteReader();
             return r.Read() ? new ColdEntity(uri, (EntityKind)r.GetInt32(0), r.GetFieldValue<byte[]>(1)) : null;
         }
+    }
+
+    public IEnumerable<ColdExtension> LoadAllExtensions()
+    {
+        var list = new List<ColdExtension>();
+        if (_spotifyLocale is null) return list;
+        lock (_connLock)
+        {
+            using var c = _conn.CreateCommand();
+            c.CommandText = "SELECT entity_uri,extension_kind,payload,etag,offline_ttl,missing,expires_at,updated_at " +
+                            "FROM localized_extension_cache WHERE locale=$locale ORDER BY updated_at DESC;";
+            c.Parameters.AddWithValue("$locale", _spotifyLocale);
+            using var r = c.ExecuteReader();
+            while (r.Read())
+                list.Add(new ColdExtension(
+                    r.GetString(0), r.GetInt32(1), r.IsDBNull(2) ? null : r.GetFieldValue<byte[]>(2),
+                    r.IsDBNull(3) ? null : r.GetString(3), r.GetInt64(4), r.GetInt64(5) != 0,
+                    r.GetInt64(6), r.GetInt64(7)));
+        }
+        return list;
+    }
+
+    public void UpsertExtension(ColdExtension extension)
+    {
+        if (_spotifyLocale is null) return;
+        _queue.Writer.TryWrite(WriteOp.ExtensionValue(extension));
     }
 
     public IEnumerable<ColdVideoAssoc> LoadAllVideoAssociations()
@@ -360,10 +462,33 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox
     {
         if (_entityCmd != null) return;
         _entityCmd = _conn.CreateCommand();
-        _entityCmd.CommandText = "INSERT INTO entities(uri,kind,payload) VALUES($u,$k,$p) ON CONFLICT(uri) DO UPDATE SET kind=excluded.kind, payload=excluded.payload;";
+        _entityCmd.CommandText = _spotifyLocale is null
+            ? "INSERT INTO entities(uri,kind,payload) VALUES($u,$k,$p) ON CONFLICT(uri) DO UPDATE SET kind=excluded.kind, payload=excluded.payload;"
+            : "INSERT INTO localized_entities(uri,locale,kind,payload,updated_at) VALUES($u,$l,$k,$p,$t) " +
+              "ON CONFLICT(uri,locale) DO UPDATE SET kind=excluded.kind,payload=excluded.payload,updated_at=excluded.updated_at;";
         _eu = _entityCmd.Parameters.Add("$u", SqliteType.Text);
         _ek = _entityCmd.Parameters.Add("$k", SqliteType.Integer);
         _ep = _entityCmd.Parameters.Add("$p", SqliteType.Blob);
+        if (_spotifyLocale is not null)
+        {
+            _el = _entityCmd.Parameters.Add("$l", SqliteType.Text);
+            _et = _entityCmd.Parameters.Add("$t", SqliteType.Integer);
+
+            _extensionCmd = _conn.CreateCommand();
+            _extensionCmd.CommandText = "INSERT INTO localized_extension_cache(entity_uri,locale,extension_kind,payload,etag,offline_ttl,missing,expires_at,updated_at) " +
+                "VALUES($u,$l,$k,$p,$e,$o,$m,$x,$t) ON CONFLICT(entity_uri,locale,extension_kind) DO UPDATE SET " +
+                "payload=excluded.payload,etag=excluded.etag,offline_ttl=excluded.offline_ttl,missing=excluded.missing," +
+                "expires_at=excluded.expires_at,updated_at=excluded.updated_at;";
+            _xu = _extensionCmd.Parameters.Add("$u", SqliteType.Text);
+            _xl = _extensionCmd.Parameters.Add("$l", SqliteType.Text);
+            _xk = _extensionCmd.Parameters.Add("$k", SqliteType.Integer);
+            _xp = _extensionCmd.Parameters.Add("$p", SqliteType.Blob);
+            _xe = _extensionCmd.Parameters.Add("$e", SqliteType.Text);
+            _xo = _extensionCmd.Parameters.Add("$o", SqliteType.Integer);
+            _xm = _extensionCmd.Parameters.Add("$m", SqliteType.Integer);
+            _xx = _extensionCmd.Parameters.Add("$x", SqliteType.Integer);
+            _xt = _extensionCmd.Parameters.Add("$t", SqliteType.Integer);
+        }
 
         _videoCmd = _conn.CreateCommand();
         _videoCmd.CommandText = "INSERT INTO video_assoc(uri,payload) VALUES($u,$p) ON CONFLICT(uri) DO UPDATE SET payload=excluded.payload;";
@@ -404,6 +529,7 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox
             EnsureCommands();
             using var tx = _conn.BeginTransaction();
             _entityCmd!.Transaction = tx;
+            if (_extensionCmd is not null) _extensionCmd.Transaction = tx;
             _videoCmd!.Transaction = tx;
             _savedUpCmd!.Transaction = tx;
             _savedDelCmd!.Transaction = tx;
@@ -412,7 +538,23 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox
             {
                 switch (op.Op)
                 {
-                    case OpKind.Entity: _eu.Value = op.A; _ek.Value = op.Kind; _ep.Value = op.Payload!; _entityCmd.ExecuteNonQuery(); break;
+                    case OpKind.Entity:
+                        _eu.Value = op.A; _ek.Value = op.Kind; _ep.Value = op.Payload!;
+                        if (_spotifyLocale is not null) { _el.Value = _spotifyLocale; _et.Value = op.L; }
+                        _entityCmd.ExecuteNonQuery();
+                        break;
+                    case OpKind.Extension when _extensionCmd is not null && op.Extension is { } x:
+                        _xu.Value = x.EntityUri;
+                        _xl.Value = _spotifyLocale!;
+                        _xk.Value = x.ExtensionKind;
+                        _xp.Value = (object?)x.Payload ?? DBNull.Value;
+                        _xe.Value = (object?)x.Etag ?? DBNull.Value;
+                        _xo.Value = x.OfflineTtlSeconds;
+                        _xm.Value = x.Missing ? 1 : 0;
+                        _xx.Value = x.ExpiresAtUnixSeconds;
+                        _xt.Value = x.UpdatedAtUnixSeconds;
+                        _extensionCmd.ExecuteNonQuery();
+                        break;
                     case OpKind.VideoAssoc: _vu.Value = op.A; _vp.Value = op.Payload!; _videoCmd.ExecuteNonQuery(); break;
                     case OpKind.SavedSet: _sa.Value = _account; _ss.Value = op.A; _su.Value = op.B!; _sy.Value = op.Kind; _st.Value = op.L; _savedUpCmd.ExecuteNonQuery(); break;
                     case OpKind.SavedRemove: _da.Value = _account; _ds.Value = op.A; _du.Value = op.B!; _savedDelCmd.ExecuteNonQuery(); break;
@@ -510,6 +652,7 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox
         // a mid-ExecuteNonQuery dispose corrupts/crashes. Leaking on shutdown is the safer choice (the process is exiting).
         if (!drained) return;
         _entityCmd?.Dispose();
+        _extensionCmd?.Dispose();
         _videoCmd?.Dispose();
         _savedUpCmd?.Dispose();
         _savedDelCmd?.Dispose();
@@ -517,7 +660,7 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox
         _conn.Dispose();
     }
 
-    enum OpKind : byte { Entity, VideoAssoc, SavedSet, SavedRemove, Revision, Flush }
+    enum OpKind : byte { Entity, Extension, VideoAssoc, SavedSet, SavedRemove, Revision, Flush }
 
     readonly struct WriteOp
     {
@@ -527,15 +670,18 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox
         public readonly int Kind;            // EntityKind, or SyncState
         public readonly long L;              // revision synced_at
         public readonly byte[]? Payload;
+        public readonly ColdExtension? Extension;
         public readonly TaskCompletionSource? Done;
 
-        WriteOp(OpKind op, string a, string? b, int kind, long l, byte[]? payload, TaskCompletionSource? done)
-        { Op = op; A = a; B = b; Kind = kind; L = l; Payload = payload; Done = done; }
+        WriteOp(OpKind op, string a, string? b, int kind, long l, byte[]? payload, ColdExtension? extension, TaskCompletionSource? done)
+        { Op = op; A = a; B = b; Kind = kind; L = l; Payload = payload; Extension = extension; Done = done; }
 
-        public static WriteOp Entity(string uri, int kind, byte[] payload) => new(OpKind.Entity, uri, null, kind, 0, payload, null);
-        public static WriteOp VideoAssoc(string uri, byte[] payload) => new(OpKind.VideoAssoc, uri, null, 0, 0, payload, null);
-        public static WriteOp Saved(string set, string uri, bool saved, int sync, long addedAtMs = 0) => new(saved ? OpKind.SavedSet : OpKind.SavedRemove, set, uri, sync, addedAtMs, null, null);
-        public static WriteOp Revision(string setId, string? revision, long syncedAt) => new(OpKind.Revision, setId, revision, 0, syncedAt, null, null);
-        public static WriteOp FlushMarker(TaskCompletionSource done) => new(OpKind.Flush, "", null, 0, 0, null, done);
+        public static WriteOp Entity(string uri, int kind, byte[] payload)
+            => new(OpKind.Entity, uri, null, kind, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), payload, null, null);
+        public static WriteOp ExtensionValue(ColdExtension extension) => new(OpKind.Extension, extension.EntityUri, null, 0, 0, null, extension, null);
+        public static WriteOp VideoAssoc(string uri, byte[] payload) => new(OpKind.VideoAssoc, uri, null, 0, 0, payload, null, null);
+        public static WriteOp Saved(string set, string uri, bool saved, int sync, long addedAtMs = 0) => new(saved ? OpKind.SavedSet : OpKind.SavedRemove, set, uri, sync, addedAtMs, null, null, null);
+        public static WriteOp Revision(string setId, string? revision, long syncedAt) => new(OpKind.Revision, setId, revision, 0, syncedAt, null, null, null);
+        public static WriteOp FlushMarker(TaskCompletionSource done) => new(OpKind.Flush, "", null, 0, 0, null, null, done);
     }
 }

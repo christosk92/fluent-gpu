@@ -133,7 +133,7 @@ public sealed class OpRebaseStrategy : IMutationStrategy
         var path = op.EntityKey.StartsWith("spotify:", StringComparison.Ordinal) ? op.EntityKey.Substring(8).Replace(':', '/') : op.EntityKey;
         var baseRev = _store.PlaylistRevision(op.EntityKey) ?? op.BaseRev;   // rebase per attempt: freshest cached rev wins
         var body = PlaylistWireMapper.BuildChanges(baseRev, op.Ops ?? Array.Empty<PlaylistOp>(), ctx.Account, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-        var headers = SpotifyHeaders.PlaylistV2Mutation(_spclientBaseUrl());
+        var headers = SpotifyHeaders.PlaylistV2Mutation(ctx.Locale, _spclientBaseUrl());
         var r = await t.Request(Channel.Spclient, $"/playlist/v2/{path}/changes", body, ct, method: "POST", headers: headers).ConfigureAwait(false);
         if (r.Ok) { CaptureChangesResponse(op.EntityKey, r.Body); return true; }
         return false;   // a 409 (revision conflict) surfaces as !Ok → retry rebased against the fresher cached revision next drain

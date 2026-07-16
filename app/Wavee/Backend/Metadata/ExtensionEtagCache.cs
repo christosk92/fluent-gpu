@@ -4,11 +4,13 @@ using System.Threading;
 using System.Threading.Tasks;
 using Google.Protobuf;
 using Wavee.Backend;
+using Wavee.Backend.Persistence;
+using Wavee.Backend.Spotify;
 using Xm = Wavee.Protocol.ExtendedMetadata;
 
 namespace Wavee.Backend.Metadata;
 
-public readonly record struct ExtensionKey(string Uri, Xm.ExtensionKind Kind);
+public readonly record struct ExtensionKey(string Locale, string Uri, Xm.ExtensionKind Kind);
 
 public sealed record CachedExtension(
     string Uri,
@@ -34,10 +36,16 @@ public sealed class ExtensionEtagCache
     readonly ExtendedMetadataSource _source;
     readonly Resource<ExtensionKey, CachedExtension> _resource;
     readonly SemaphoreSlim _batchGate = new(1, 1);
+    readonly IExtensionCacheStore? _persistent;
+    readonly string _locale;
 
-    public ExtensionEtagCache(ExtendedMetadataSource source, Func<SessionContext> ctx, WaveeLogger log = default, int maxEntries = 2048)
+    public ExtensionEtagCache(ExtendedMetadataSource source, Func<SessionContext> ctx, WaveeLogger log = default, int maxEntries = 2048,
+        IExtensionCacheStore? persistent = null)
     {
         _source = source;
+        _locale = SpotifyHeaders.NormalizeLanguage(ctx().Locale);
+        _persistent = persistent is not null && string.Equals(persistent.MetadataLocale, _locale, StringComparison.OrdinalIgnoreCase)
+            ? persistent : null;
         _resource = new Resource<ExtensionKey, CachedExtension>(
             async (key, _) =>
             {
@@ -50,12 +58,31 @@ public sealed class ExtensionEtagCache
             maxEntries: maxEntries,
             name: "extended-metadata",
             debugLog: log);
+
+        if (_persistent is not null)
+        {
+            var rows = new List<ColdExtension>(_persistent.LoadAllExtensions());
+            int keep = Math.Min(rows.Count, maxEntries > 0 ? maxEntries : rows.Count);
+            long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            // Store returns newest-first; seed oldest-first so an LRU cap retains the newest rows.
+            for (int i = keep - 1; i >= 0; i--)
+            {
+                var row = rows[i];
+                var key = new ExtensionKey(_locale, row.EntityUri, (Xm.ExtensionKind)row.ExtensionKind);
+                var value = new CachedExtension(row.EntityUri, (Xm.ExtensionKind)row.ExtensionKind, row.Etag,
+                    row.OfflineTtlSeconds, row.Payload is { Length: > 0 } bytes ? ByteString.CopyFrom(bytes) : null, row.Missing);
+                _resource.Seed(key, value,
+                    DateTimeOffset.FromUnixTimeSeconds(row.UpdatedAtUnixSeconds).UtcDateTime,
+                    DateTimeOffset.FromUnixTimeSeconds(row.ExpiresAtUnixSeconds).UtcDateTime,
+                    needsRevalidate: row.ExpiresAtUnixSeconds <= now);
+            }
+        }
     }
 
     public int FetchCount => _resource.FetchCount;
 
     public void MarkStale(string uri, Xm.ExtensionKind kind)
-        => _resource.MarkStale(new ExtensionKey(uri, kind));
+        => _resource.MarkStale(new ExtensionKey(_locale, uri, kind));
 
     public async Task<ByteString?> GetPayloadAsync(string uri, Xm.ExtensionKind kind, CancellationToken ct = default)
     {
@@ -114,13 +141,22 @@ public sealed class ExtensionEtagCache
 
                 if (misses.Count > 0)
                 {
-                    var fetched = await FetchBatchAsync(misses, ct).ConfigureAwait(false);
+                    IReadOnlyDictionary<ExtensionKey, CachedExtension> fetched;
+                    try { fetched = await FetchBatchAsync(misses, ct).ConfigureAwait(false); }
+                    catch
+                    {
+                        // Offline/SWR: an expired exact-locale row remains usable. Never substitute another locale's raw
+                        // extension or ETag; if any requested key has no stale value, preserve the original failure.
+                        bool allHaveStale = true;
+                        foreach (var key in misses) if (!_resource.Peek(key).IsReady) { allHaveStale = false; break; }
+                        if (!allHaveStale) throw;
+                        fetched = new Dictionary<ExtensionKey, CachedExtension>();
+                    }
                     foreach (var key in misses)
                     {
-                        var value = fetched.TryGetValue(key, out var cached)
-                            ? cached
-                            : CachedExtension.MissingValue(key.Uri, key.Kind);
-                        _resource.Seed(key, value);
+                        var value = fetched.TryGetValue(key, out var cached) ? cached : _resource.Peek(key).Value;
+                        if (value is null) value = CachedExtension.MissingValue(key.Uri, key.Kind);
+                        if (fetched.ContainsKey(key)) _resource.Seed(key, value);
                         values[(key.Uri, key.Kind)] = value;
                     }
                 }
@@ -141,7 +177,7 @@ public sealed class ExtensionEtagCache
         for (int i = 0; i < keys.Count; i++)
         {
             var cached = _resource.Peek(keys[i]);
-            reqs[i] = (keys[i].Uri, keys[i].Kind, cached.IsReady ? cached.Value.Etag : null);
+            reqs[i] = (keys[i].Uri, keys[i].Kind, cached.IsReady ? cached.Value?.Etag : null);
         }
 
         var response = await _source.GetExtensionsWithHeadersAsync(reqs, ct).ConfigureAwait(false);
@@ -150,9 +186,21 @@ public sealed class ExtensionEtagCache
         {
             response.TryGetValue((key.Uri, key.Kind), out var wire);
             var existing = _resource.Peek(key);
-            result[key] = Fold(key, existing.IsReady ? existing.Value : null, wire);
+            var folded = Fold(key, existing.IsReady ? existing.Value : null, wire);
+            result[key] = folded;
+            if (wire.Status is 200 or 304 or 404) Persist(folded);
         }
         return result;
+    }
+
+    void Persist(CachedExtension value)
+    {
+        if (_persistent is null) return;
+        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        long ttl = Math.Max(1, (long)value.Ttl.TotalSeconds);
+        _persistent.UpsertExtension(new ColdExtension(value.Uri, (int)value.Kind,
+            value.Payload is { IsEmpty: false } payload ? payload.ToByteArray() : null,
+            value.Etag, value.OfflineTtlSeconds, value.Missing, now + ttl, now));
     }
 
     static CachedExtension Fold(ExtensionKey key, CachedExtension? existing, ExtendedMetadataSource.ExtensionResult wire)
@@ -174,14 +222,14 @@ public sealed class ExtensionEtagCache
         };
     }
 
-    static List<ExtensionKey> Normalize(IReadOnlyList<(string Uri, Xm.ExtensionKind Kind)> requests)
+    List<ExtensionKey> Normalize(IReadOnlyList<(string Uri, Xm.ExtensionKind Kind)> requests)
     {
         var keys = new List<ExtensionKey>(requests.Count);
         var seen = new HashSet<ExtensionKey>();
         foreach (var (uri, kind) in requests)
         {
             if (string.IsNullOrEmpty(uri) || kind == Xm.ExtensionKind.UnknownExtension) continue;
-            var key = new ExtensionKey(uri, kind);
+            var key = new ExtensionKey(_locale, uri, kind);
             if (seen.Add(key)) keys.Add(key);
         }
         return keys;

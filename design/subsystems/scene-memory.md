@@ -264,6 +264,24 @@ blocks as cheap insurance.
 | **A11yRel** (cold slab) | 24 | `SlabAllocator<A11yRel>`; `A11yRelRef:int` in `A11yInfo` (0 = shared none-row); `SetSize`/`PositionInSet`/`Level`/`DescribedBy`/`FullDescription`/`FlowsTo` | UIA only (when `UiaClientsAreListening`) | this doc (placement) / **`input-a11y.md`** (semantics, L6) |
 | **UpdateQueueSlab** (slab) | per-record 24 | `SlabAllocator<UpdateRecord>` + per-component `UpdateQueueHead:int` head-index; intrusive `NextInQueue` link; lane byte carried | phase 3 hook-flush (drain), phase 5 reconcile (consume) | this doc (placement) / **`reconciler-hooks.md`** (lane semantics, P1/P2a) |
 
+> **Paint-order discriminators on `HandlerMask` (not hit-test bits).** A small number of `HandlerMask` bits above the
+> hit-test handler bits are **discriminators the recorder reads but that never make a node a hit/press/focus target** —
+> they are deliberately excluded from `AnyInteractiveMask` and the hit-test self-hit mask. The shipped `ClickRequestsContext`
+> bit is one; `HoverElevatePaint` (`Element.HoverElevatePaint`) is another: while the node is on the hover path (its
+> `NodeFlags.Hovered`/`HoverWithin`, or its eased `InteractionAnim.HoverT` during an exit fade), the record child-visit
+> loop **defers** it to paint after its non-elevated siblings (the declarative `z-index` of a hovered card) — the sibling
+> deferral mirrors `StickyPinned`'s emit-after-siblings pass, uses a single deferred slot (O(1), no sort, no allocation),
+> and leaves layout/hit-test untouched. Its pair `HoverElevateClipRoot` (`BoxEl.HoverElevateClipRoot` or
+> `ScrollEl.HoverElevateClipRoot`) marks a clipping
+> viewport as the **clip-ESCAPE level**: a descendant deferral under a flagged root PARKS the elevated child in the
+> record accumulator (one slot, captured world/opacity/state) instead of emitting, and the root re-walks it after its
+> whole scope — clip AND edge-fade layer — has closed, against the root's incoming clip (the hoisted subtree records
+> span-reuse-disabled/store-disabled; its inherited state drops the under-root tag so an inner flagged card defers in
+> place rather than re-parking into a consumed slot). Resting content still clips exactly at the viewport; only the
+> hover-elevated subtree escapes. `HoverElevatePaintBit = 1<<17`, `HoverElevateClipRootBit = 1<<18`; the dispatcher's
+> `UpdateHoverWithin` ancestor mask includes `HoverElevatePaintBit` so a NON-interactive flagged wrapper (a shelf cell)
+> still receives `HoverWithin`. Owner of the bit assignment: this doc (the `InteractionInfo`/`HandlerMask` column).
+
 ```csharp
 [StructLayout(LayoutKind.Sequential, Size = 24)]
 public struct Topology { public int Parent, FirstChild, LastChild, PrevSibling, NextSibling, ChildCount; }

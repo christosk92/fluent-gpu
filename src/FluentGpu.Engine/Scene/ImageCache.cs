@@ -76,6 +76,9 @@ public interface IImageDecoder
     void Pump(ImageCompleteHandler onComplete, ImageReadyHandler onPixels);
     /// <summary>Cancel an in-flight (or queued) decode — e.g. a virtualized row recycled off-screen. Idempotent.</summary>
     void Cancel(int id) { }
+    /// <summary>While true, per-frame GPU upload applies are throttled (scroll-scoped fence-stall guard). Default no-op
+    /// for decoders without an upload stage (headless fakes).</summary>
+    bool ScrollThrottled { get => false; set { } }
     /// <summary>Raise the priority of a queued decode (e.g. a prefetch that just scrolled into view). Idempotent; no-op
     /// once the job has started.</summary>
     void Prioritize(int id, ImagePriority priority) { }
@@ -101,6 +104,7 @@ public sealed class ImageCache
     /// <summary>Dedup key: (source, target size) as a value type — a cache HIT allocates nothing (no `$"{src}@{w}x{h}"`
     /// string per request, which mattered: every realized image row calls <see cref="Request"/>).</summary>
     private readonly record struct SourceKey(string Source, int W, int H);
+    private readonly record struct DerivedKey(int SourceId, int W, int H, int SigmaQ, int ScaleQ);
 
     private sealed class Entry
     {
@@ -115,14 +119,22 @@ public sealed class ImageCache
         public float TextureMs = float.NaN;   // clock (ms) when the FIRST texture (blurhash or full-res) appeared → fade origin
         public ImageTransition Transition;     // the placeholder→image reveal (duration + easing); set at request
         public float LastRestartMs = float.NegativeInfinity;   // backoff gate for visible/transient-failure retries
+        public bool Derived;
+        public int SourceId;
+        public float BakeSigmaTexels;
+        public int BakeGeneration;
+        public bool BakeQueued;
     }
 
     const float RestartBackoffMs = 2000f;   // min gap between visible retries on the same handle (avoids hammering a dead URL)
 
     private readonly Dictionary<SourceKey, int> _byKey = new();
+    private readonly Dictionary<DerivedKey, int> _byDerivedKey = new();
     private readonly Dictionary<int, Entry> _byId = new();
+    private readonly Dictionary<int, List<int>> _derivedBySource = new();
     private readonly IImageDecoder _decoder;
     private readonly long _budgetBytes;
+    private const long DerivedSoftBudgetBytes = 16L * 1024 * 1024;
     private readonly ImageCompleteHandler _onComplete;   // cached → Pump allocates nothing
     private readonly ImageReadyHandler _onPixels;         // cached admission bridge → Pump allocates nothing
     private static readonly ImageReadyHandler _noPixels = static (int id, System.ReadOnlySpan<byte> p, int w, int h) => { };
@@ -133,12 +145,14 @@ public sealed class ImageCache
     private ImageUploadQueue? _asyncUploads;   // non-null ⇒ async render thread: GPU work is handed off, not called inline
     // IImageDecoder guarantees a successful completion calls onPixels immediately before onComplete for the same id.
     // Remember that one admission result so OnDecodeComplete can fold GPU rejection into the terminal cache state.
+    private BakedBlurQueue? _bakedBlurs;
     private int _uploadResultId;
     private ImageUploadResult _uploadResult;
     private int _nextId = 1;
     private long _clock = 1;
     private int _pumpCompleted;
     private int _totalRequested, _totalReady, _totalFailed, _totalRetried, _totalEvicted;
+    private int _totalBakeQueued, _totalBakeReady, _totalBakeFailed, _totalBakeStale;
     // O(1) maintained mirrors of the former PendingCount / HasActiveCrossfades scans (wake-04): these ran on every
     // HasActiveWork call every frame. _pendingCount tracks State==Pending entries (a miss creates one; OnDecodeComplete
     // resolves it; eviction never removes a Pending entry). _maxCrossfadeDeadlineMs is the high-water MAX of
@@ -192,7 +206,11 @@ public sealed class ImageCache
     /// by <see cref="DrainAsyncRejections"/>. Null in default/force-sync (the direct sinks run with no cross-thread overlap).</summary>
     public void SetAsyncUploadQueue(ImageUploadQueue queue) => _asyncUploads = queue;
 
+    /// <summary>Install the render-thread handoff used by <see cref="RequestBakedBlur"/>. Set once by the host.</summary>
+    public void SetBakedBlurQueue(BakedBlurQueue queue) => _bakedBlurs = queue;
+
     public long UsedBytes { get; private set; }
+    public long DerivedUsedBytes { get; private set; }
     public int Count => _byId.Count;
     public int ReadyCount { get { int n = 0; foreach (var e in _byId.Values) if (e.State == ImageState.Ready) n++; return n; } }
     public int ContentEpoch { get; private set; }
@@ -262,6 +280,54 @@ public sealed class ImageCache
     public ImageHandle Prefetch(string source, int targetW, int targetH)
         => Request(source, targetW, targetH, ImagePriority.Prefetch);
 
+    /// <summary>Request a persistent blurred derivative of an existing source handle. The key is local to the source
+    /// pixels and deliberately excludes viewport position, clipping, focus, overlay, and masking.</summary>
+    public ImageHandle RequestBakedBlur(ImageHandle source, int targetW, int targetH, in BakedBlurSpec spec,
+                                        ImageTransition? transition = null)
+    {
+        if (source.IsNull || spec.IsNone || !_byId.ContainsKey(source.Id)) return ImageHandle.Null;
+        float scale = spec.ClampedResolutionScale;
+        int sourceW = targetW > 0 ? targetW : 512;
+        int sourceH = targetH > 0 ? targetH : sourceW;
+        int outW = Math.Max(1, BucketFor((int)MathF.Ceiling(sourceW * scale)));
+        int outH = Math.Max(1, BucketFor((int)MathF.Ceiling(sourceH * scale)));
+        int sigmaQ = Math.Max(1, (int)MathF.Round(spec.SigmaDip * scale * 4f));
+        int scaleQ = Math.Max(1, (int)MathF.Round(scale * 16f));
+        var key = new DerivedKey(source.Id, outW, outH, sigmaQ, scaleQ);
+        if (_byDerivedKey.TryGetValue(key, out int existing))
+        {
+            var hit = _byId[existing];
+            hit.LastUsed = _clock++;
+            if (hit.State is ImageState.None or ImageState.Failed) RestartDerived(existing, hit);
+            return new ImageHandle(existing);
+        }
+
+        int id = _nextId++;
+        var entry = new Entry
+        {
+            Derived = true,
+            SourceId = source.Id,
+            State = ImageState.Pending,
+            W = outW,
+            H = outH,
+            BakeSigmaTexels = sigmaQ * 0.25f,
+            BakeGeneration = 1,
+            LastUsed = _clock++,
+            Transition = transition ?? ImageTransition.Default,
+        };
+        _byDerivedKey[key] = id;
+        _byId[id] = entry;
+        if (!_derivedBySource.TryGetValue(source.Id, out var dependents))
+        {
+            dependents = new List<int>(1);
+            _derivedBySource[source.Id] = dependents;
+        }
+        dependents.Add(id);
+        _pendingCount++;
+        TryQueueDerived(id, entry);
+        return new ImageHandle(id);
+    }
+
     public ImageState StateOf(ImageHandle h) => _byId.TryGetValue(h.Id, out var e) ? e.State : ImageState.None;
     public (int W, int H) SizeOf(ImageHandle h) => _byId.TryGetValue(h.Id, out var e) ? (e.W, e.H) : (0, 0);
     /// <summary>Why an image is <see cref="ImageState.Failed"/> (None otherwise) — for app fallbacks / retry UI.</summary>
@@ -269,10 +335,18 @@ public sealed class ImageCache
     /// <summary>How many fetch attempts the decoder made (≥1 once resolved; &gt;1 means transient retries happened).</summary>
     public int AttemptsOf(ImageHandle h) => _byId.TryGetValue(h.Id, out var e) ? e.Attempts : 0;
     /// <summary>The source URL bound to a handle (null when unknown).</summary>
-    public string? SourceOf(ImageHandle h) => _byId.TryGetValue(h.Id, out var e) ? e.Key.Source : null;
+    public string? SourceOf(ImageHandle h)
+    {
+        if (!_byId.TryGetValue(h.Id, out var e)) return null;
+        if (!e.Derived) return e.Key.Source;
+        return _byId.TryGetValue(e.SourceId, out var sourceEntry) ? sourceEntry.Key.Source : null;
+    }
 
     /// <summary>Cancel an in-flight decode (row recycled / unmounted) — frees worker + network effort under fast scroll.</summary>
-    public void Cancel(ImageHandle h) => _decoder.Cancel(h.Id);
+    public void Cancel(ImageHandle h)
+    {
+        if (_byId.TryGetValue(h.Id, out var e) && !e.Derived) _decoder.Cancel(h.Id);
+    }
 
     /// <summary>Round a display size up to a decode bucket (64/128/256/512) — the texture-pool / atlas granularity.</summary>
     public static int BucketFor(int px) => px <= 64 ? 64 : px <= 128 ? 128 : px <= 256 ? 256 : 512;
@@ -285,6 +359,10 @@ public sealed class ImageCache
 
     /// <summary>While true, newly arriving textures skip the reveal animation (instant CrossFade=1) — used during scroll.</summary>
     public bool SuppressReveals { get; set; }
+
+    /// <summary>While true, per-frame GPU texture uploads are throttled (see <see cref="DecodeScheduler.ScrollThrottled"/>)
+    /// — set alongside <see cref="SuppressReveals"/> during scroll so upload bursts can't feed the present fence stall.</summary>
+    public bool ScrollThrottled { get => _decoder.ScrollThrottled; set => _decoder.ScrollThrottled = value; }
 
     /// <summary>Bake-time fade params for <see cref="DrawImageCmd"/>. False when no texture has landed yet.</summary>
     public bool FadeParamsOf(ImageHandle h, out float startMs, out float durationMs, out int easing)
@@ -370,7 +448,12 @@ public sealed class ImageCache
         if (!_byId.TryGetValue(h.Id, out var e)) return;
         e.Refs++;
         e.LastUsed = _clock++;
-        if (ShouldRestart(e, ImagePriority.Visible)) RestartDecode(h.Id, e, ImagePriority.Visible);
+        if (e.Derived)
+        {
+            if (e.State is ImageState.None or ImageState.Failed) RestartDerived(h.Id, e);
+            else if (e.State == ImageState.Pending) TryQueueDerived(h.Id, e);
+        }
+        else if (ShouldRestart(e, ImagePriority.Visible)) RestartDecode(h.Id, e, ImagePriority.Visible);
         else if (e.State == ImageState.Pending) _decoder.Prioritize(h.Id, ImagePriority.Visible);
     }
     public void Unpin(ImageHandle h) { if (_byId.TryGetValue(h.Id, out var e) && e.Refs > 0) e.Refs--; }
@@ -403,11 +486,65 @@ public sealed class ImageCache
     public void ReRealizeAllResident()
     {
         foreach (var (id, e) in _byId)
-            if (e.State == ImageState.Ready)
+            if (!e.Derived && e.State == ImageState.Ready)
             {
                 UsedBytes -= e.Bytes;   // the texture is gone; RestartDecode re-adds the bytes when the fresh decode completes
                 RestartDecode(id, e, e.Refs > 0 ? ImagePriority.Visible : ImagePriority.Prefetch);
             }
+        foreach (var (id, e) in _byId)
+            if (e.Derived && e.State == ImageState.Ready)
+            {
+                UsedBytes -= e.Bytes;
+                DerivedUsedBytes -= e.Bytes;
+                RestartDerived(id, e);
+            }
+    }
+
+    private void RestartDerived(int id, Entry e)
+    {
+        if (!e.Derived || e.State == ImageState.Pending) { TryQueueDerived(id, e); return; }
+        e.State = ImageState.Pending;
+        e.Failure = ImageFailureKind.None;
+        e.Bytes = 0;
+        e.TextureMs = float.NaN;
+        e.BakeQueued = false;
+        e.BakeGeneration++;
+        _pendingCount++;
+        ContentEpoch++;
+        TryQueueDerived(id, e);
+    }
+
+    private void TryQueueDerived(int id, Entry e)
+    {
+        if (!e.Derived || e.State != ImageState.Pending || e.BakeQueued || _bakedBlurs is null) return;
+        if (!_byId.TryGetValue(e.SourceId, out var source) || source.State != ImageState.Ready) return;
+        e.BakeQueued = true;
+        _bakedBlurs.Enqueue(new BakedBlurQueue.Job(id, e.SourceId, e.W, e.H, e.BakeSigmaTexels, e.BakeGeneration));
+        _totalBakeQueued++;
+        Diag.Set("media", "bakedBlurQueued", _totalBakeQueued);
+    }
+
+    private void QueueSourceDependents(int sourceId, bool sourceReady)
+    {
+        if (!_derivedBySource.TryGetValue(sourceId, out var dependents)) return;
+        for (int i = 0; i < dependents.Count; i++)
+        {
+            int id = dependents[i];
+            if (!_byId.TryGetValue(id, out var e) || !e.Derived) continue;
+            if (sourceReady)
+            {
+                if (e.State is ImageState.None or ImageState.Failed) RestartDerived(id, e);
+                else TryQueueDerived(id, e);
+            }
+            else if (e.State == ImageState.Pending && !e.BakeQueued)
+            {
+                _pendingCount--;
+                e.State = ImageState.Failed;
+                e.Failure = ImageFailureKind.Decode;
+                _totalBakeFailed++;
+                ImageStatusChanged?.Invoke(id, e.State, e.Failure, 1);
+            }
+        }
     }
 
     private void RestartDecode(int id, Entry e, ImagePriority priority)
@@ -441,9 +578,51 @@ public sealed class ImageCache
     {
         _pumpCompleted = 0;
         if (_asyncUploads is { } q) DrainAsyncRejections(q);   // fold +1-frame async upload rejections before this pump's decodes
+        DrainBakedBlurResults();
         _decoder.Pump(_onComplete, _onPixels);
         if (_pumpCompleted > 0) EvictToBudget();
         return _pumpCompleted;
+    }
+
+    private void DrainBakedBlurResults()
+    {
+        if (_bakedBlurs is not { } q) return;
+        while (q.TryDequeueResult(out var result))
+        {
+            if (!_byId.TryGetValue(result.Id, out var e) || !e.Derived
+                || e.BakeGeneration != result.Generation || e.State != ImageState.Pending)
+            {
+                _totalBakeStale++;
+                Diag.Set("media", "bakedBlurStale", _totalBakeStale);
+                continue;
+            }
+
+            e.BakeQueued = false;
+            _pendingCount--;
+            e.State = result.Ok ? ImageState.Ready : ImageState.Failed;
+            e.Failure = result.Ok ? ImageFailureKind.None : ImageFailureKind.GpuUpload;
+            if (result.Ok)
+            {
+                e.W = result.W;
+                e.H = result.H;
+                e.Bytes = (long)result.W * result.H * 4;
+                UsedBytes += e.Bytes;
+                DerivedUsedBytes += e.Bytes;
+                BeginReveal(e);
+                _totalBakeReady++;
+            }
+            else
+            {
+                e.Bytes = 0;
+                _totalBakeFailed++;
+            }
+            _pumpCompleted++;
+            ContentEpoch++;
+            Diag.Set("media", "bakedBlurReady", _totalBakeReady);
+            Diag.Set("media", "bakedBlurFailed", _totalBakeFailed);
+            Diag.Set("media", "pending", PendingCount);
+            ImageStatusChanged?.Invoke(result.Id, e.State, e.Failure, 1);
+        }
     }
 
     // ASYNC only (Step 1): the render thread stages uploads a frame after the UI optimistically admitted them Ready.
@@ -540,24 +719,28 @@ public sealed class ImageCache
         {
             ImageStatusChanged?.Invoke(id, e.State, e.Failure, attempts);
         }
+        QueueSourceDependents(id, ok);
     }
 
     private void EvictToBudget()
     {
-        while (UsedBytes > _budgetBytes)
+        while (UsedBytes > _budgetBytes || DerivedUsedBytes > DerivedSoftBudgetBytes)
         {
             int victim = 0; long oldest = long.MaxValue;
+            bool preferDerived = DerivedUsedBytes > DerivedSoftBudgetBytes;
             foreach (var (id, e) in _byId)
-                if (e.Refs == 0 && e.State == ImageState.Ready && e.LastUsed < oldest) { oldest = e.LastUsed; victim = id; }
+                if (e.Refs == 0 && e.State == ImageState.Ready && (!preferDerived || e.Derived) && e.LastUsed < oldest)
+                { oldest = e.LastUsed; victim = id; }
             if (victim == 0) break;   // everything left is pinned (on screen) — never evict it
             var e2 = _byId[victim];
             UsedBytes -= e2.Bytes;
+            if (e2.Derived) DerivedUsedBytes -= e2.Bytes;
             bool activeDeadline = e2.Transition.Enabled && !float.IsNaN(e2.TextureMs)
                 && e2.TextureMs + e2.Transition.DurationMs >= _clockMs;
             e2.State = ImageState.None;
             e2.Failure = ImageFailureKind.None;
             e2.Attempts = 0;
-            e2.W = e2.H = 0;
+            if (!e2.Derived) e2.W = e2.H = 0;
             e2.Bytes = 0;
             e2.TextureMs = float.NaN;
             // If the evicted entry could still be the crossfade-deadline high-water (an unpinned image whose fade hasn't

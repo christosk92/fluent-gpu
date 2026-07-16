@@ -26,6 +26,8 @@ public enum ScrollTraceKind : byte
     AnimEvent = 14,  // animator: discrete transition (fling end / bounce seed / snap retarget / spring settle / fling seed)
     Note = 15,       // freeform marker (i0 = code)
     OffsetWrite = 16,// integrator/chokepoint: ONE offset write (i0=node, i1=Phase §2.2, i2=writer §ScrollWriter, f0=offset)
+    FrameTiming = 17,// hitch attribution (emitted only for frames >12ms): f0..f5=flush/layout/anim/record/submit/fenceWait ms,
+                     // i0=presentMs×100, i1=(measureCount<<10)|min(textShapeMisses,1023), i2=unclampedDtMs×100
 }
 
 /// <summary>Who wrote a scroll offset (scroll-feel-rework-v2 §8 single-writer gate). The v2 invariant (§2.1) is that
@@ -249,11 +251,29 @@ public static class ScrollTrace
         Add(new Rec { K = ScrollTraceKind.AnimEvent, I0 = nodeIdx, I1 = ev, F0 = f0, F1 = f1, F2 = f2 });
     }
 
-    /// <summary>Freeform marker: i0 = caller-defined code, f0 = payload.</summary>
-    public static void Note(int code, float f0 = 0f)
+    /// <summary>Freeform marker: i0 = caller-defined code, f0 = payload; optional i1/i2/f1 for per-code context
+    /// (100=anchor re-pin: i1=node, i2=anchorIndex, f1=offset; 102/103=shift drain: i1=node; 104=stale discard: i1=node).</summary>
+    public static void Note(int code, float f0 = 0f, int i1 = 0, int i2 = 0, float f1 = 0f)
     {
         if (!On) return;
-        Add(new Rec { K = ScrollTraceKind.Note, I0 = code, F0 = f0 });
+        Add(new Rec { K = ScrollTraceKind.Note, I0 = code, F0 = f0, I1 = i1, I2 = i2, F1 = f1 });
+    }
+
+    /// <summary>Hitch attribution (emit only for frames whose dt exceeded the hitch threshold): the frame's per-phase
+    /// wall-clock split so a lurch in the SAME CSV as the offset writes is directly attributable. f0..f5 =
+    /// flush/layout/anim/record/submit/fenceWait ms; i0 = presentMs×100; i1 = (measureCount&lt;&lt;10)|min(shapeMisses,1023);
+    /// i2 = UNCLAMPED frame dt ×100 (the animator's dt is clamped at 34ms — this records the true gap).</summary>
+    public static void FrameTiming(float flushMs, float layoutMs, float animMs, float recordMs, float submitMs,
+        float fenceWaitMs, float presentMs, int measureCount, int shapeMisses, float rawDtMs)
+    {
+        if (!On) return;
+        int packed = (measureCount << 10) | Math.Min(shapeMisses, 1023);
+        Add(new Rec
+        {
+            K = ScrollTraceKind.FrameTiming,
+            F0 = flushMs, F1 = layoutMs, F2 = animMs, F3 = recordMs, F4 = submitMs, F5 = fenceWaitMs,
+            I0 = (int)(presentMs * 100f), I1 = packed, I2 = (int)(rawDtMs * 100f),
+        });
     }
 
     // ── §8 single-writer offset-write trace + audit ──────────────────────────────────────────────────────────────
@@ -321,7 +341,7 @@ public static class ScrollTrace
     {
         "frame", "rawWheel", "fbLift", "coalesce", "velDeposit", "phase", "latch",
         "velSample", "release", "gestureEnd", "applyPan", "wheelSeed", "wheelCancel",
-        "animTick", "animEvent", "note", "offsetWrite",
+        "animTick", "animEvent", "note", "offsetWrite", "frameTiming",
     };
 
     private static void FlushLocked()

@@ -30,7 +30,7 @@ public static class Marquee
         /// (e.g. <c>Foreground = Tok.TextSecondary</c>) for a fixed colour, or a bind (<c>Prop.Of(() =&gt; …)</c> / a
         /// signal) when it tracks state. It is forwarded straight to the inner <c>TextEl.Color</c>, so a bound colour
         /// repaints reactively without re-rendering the marquee.</summary>
-        public Prop<ColorF> Foreground { get; init; } = Tok.TextPrimary;
+        public Prop<ColorF> Foreground { get; init; } = Prop.Of(static () => Tok.TextPrimary);
         public string? FontFamily { get; init; }
         public float Speed { get; init; } = 9f;           // minimum pixels per second — keeps a barely-overflowing line
                                                           // visibly moving instead of taking CycleMs to travel one glyph.

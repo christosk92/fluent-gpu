@@ -21,7 +21,8 @@ sealed partial class ArtistPage : Component
 {
     readonly Signal<Route> _route;
     readonly object _tintOwner = new();   // stable ownership across artist -> artist reuse and KeepAlive park/reactivate
-    ColorF _accent = Tok.AccentDefault;   // cover-extracted page accent (lifted); set per-render in Body, read by the hero + section-bar helpers
+    ColorF? _paletteAccent;                // cover-extracted page accent (lifted); null keeps the semantic default live
+    ColorF _accent => _paletteAccent ?? Tok.AccentDefault;
     ActionServices? _acts;                // shelf-card context menus — resolved per-render, read by the shelf builders
     IOverlayService? _menuOverlay;
     public ArtistPage(Signal<Route> route) { _route = route; }
@@ -209,7 +210,8 @@ sealed partial class ArtistPage : Component
         string uri = a.Uri;
         // Cover-extracted page accent, lifted so a near-black colorDark stays legible (matches album/playlist via
         // DetailShell). Null palette ⇒ the neutral default. Set before the tree builds so every accent helper reads it.
-        _accent = a.Palette is { } pal ? WaveePalette.Lift(WaveePalette.Accent(pal)) : Tok.AccentDefault;
+        _paletteAccent = a.Palette is { } pal ? WaveePalette.Lift(WaveePalette.Accent(pal)) : null;
+        Func<ColorF> accent = () => _accent;
         var extras = a.Extras;
         var popular = a.TopTracks is { Count: > 0 } tt ? tt : FakeData.TopTracksOf(a);
         var albumsAll = a.TopAlbums ?? Array.Empty<Album>();
@@ -225,10 +227,10 @@ sealed partial class ArtistPage : Component
         void Radio() => RadioLaunch.Start(svc.Player, uri, a.Name, go);
 
         var sections = new List<Element>(14);
-        if (popular.Count > 0) sections.Add(TopBand(popular, uri, bridge, svc, albumsAll, go, PlayContext));
+        if (popular.Count > 0) sections.Add(TopBand(popular, uri, bridge, svc, albumsAll, go, PlayContext, accent));
         // Discography facets: a capped grid + "See all N" that navigates to the dedicated facet page (breadcrumb + full grid).
-        if (albums.Length > 0) sections.Add(Embed.Comp(() => new DiscographySection(uri, a.Name, DiscographyKind.Albums, Loc.Get(Strings.Artist.Albums), svc, go, PlayContext, _accent)));
-        if (singles.Length > 0) sections.Add(Embed.Comp(() => new DiscographySection(uri, a.Name, DiscographyKind.Singles, Loc.Get(Strings.Artist.SinglesEps), svc, go, PlayContext, _accent)));
+        if (albums.Length > 0) sections.Add(Embed.Comp(() => new DiscographySection(uri, a.Name, DiscographyKind.Albums, Loc.Get(Strings.Artist.Albums), svc, go, PlayContext, accent)));
+        if (singles.Length > 0) sections.Add(Embed.Comp(() => new DiscographySection(uri, a.Name, DiscographyKind.Singles, Loc.Get(Strings.Artist.SinglesEps), svc, go, PlayContext, accent)));
         if (a.AppearsOn is { Count: > 0 } appears) sections.Add(AppearsOnShelf(appears, go, PlayContext));
         if (extras?.Tour is { } tour) sections.Add(TourBannerCard(tour,
             () => go(ConcertRoutes.ArtistSchedule(uri), a.Name)));

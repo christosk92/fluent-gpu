@@ -459,6 +459,22 @@ vocabulary this doc owns), the `Dsl.Expressive` token set (durations/distances/s
 `Motion`/`MotionSprings`), and ~15 named recipes. It is an opt-in app-author palette; framework controls keep their
 Fluent curves. Origin-aware scale-open uses the existing `NodePaint.OriginX/OriginY` (`BoxEl.TransformOriginX/Y`).
 
+**FA-2b (as-built — persistent baked blur for static image treatments).** A static artwork blur must not use the
+dynamic self-blur layer above. `ImageEl.BakedBlur = BakedBlurSpec(sigmaDip, resolutionScale)` requests a derived
+`ImageHandle` keyed only by `{source handle, bucketed output size, sigma, resolution scale}`; viewport position,
+clipping, crop focus, overlay, and mask are deliberately excluded. The source decode is shared with the crisp image.
+While the source or bake is pending, the node draws that crisp source as its fallback; when the render-thread bake
+publishes, the same node switches to the persistent derived texture. Steady paint is therefore one `DrawImageCmd` and
+scroll changes only its transform — no `PushLayer`, intermediate RT, subtree replay, or Gaussian work.
+
+The D3D12 lane records at most one bake per primary-swapchain submit and is paused while scroll is active. It runs a
+downsample + horizontal Gaussian + vertical Gaussian + upsample sequence through two **frame-banked** scratch pairs,
+then adopts the output into `ImageTextureStore` as an ordinary resident image. Readiness is published only after
+`ExecuteCommandLists`, so an async UI recorder cannot consume a producer that has not entered the direct queue. The
+image pipeline applies `ImageEl.ColorOverlay` and `ImageEl.Mask` in the same image shader; those visual treatments do
+not create effect layers and do not fork the baked-image cache key. Use dynamic `Element.Blur` only when the subtree
+pixels or sigma truly change over time; use `BakedBlurSpec` for immutable artwork/card frost.
+
 **FA-3 (`EnterExit.Blur` — exit cross-blur for the skeleton swap).** The presence/exit terminal `EnterExit` (owned
 here, on `LayoutTransition`) gains a `float Blur` field: `SeedEnter` seeds `AnimChannel.BlurSigma` Blur→0 on enter,
 `SeedExit` seeds current→Blur on exit. This is the only animation-side addition the native skeleton-loading kit needs

@@ -71,6 +71,11 @@ internal sealed class FlipViewCore : Component
     const float ButtonsShowDurationMs = 3000f;// FLIP_VIEW_BUTTONS_SHOW_DURATION_MS (FlipView_Partial.h:13)
     const float WheelDelayMs = 200f;          // FLIP_VIEW_DISTINCT_SCROLL_WHEEL_DELAY_MS (FlipView_Partial.h:10)
     const float PanSlopPx = 4f;               // the engine drag-box convention (ListViewBaseItem_Partial.cpp:1864-1878)
+    // Hi-res packet stream (precision-touchpad two-finger swipe, arriving via the dispatcher's no-scroller wheel fallback
+    // — InputDispatcher §A). These packets are sub-notch, so they accumulate until a flip's worth of travel is reached.
+    const float SwipeFlipDip = 80f;           // accumulated hi-res travel per flip
+    const float SwipeNotchDip = 48f;          // |axis| at/above this = a discrete detent (mouse notch ≈ 60 DIP)
+    const float SwipeCooldownMs = 350f;       // post-flip refractory for the packet stream (inertia keeps delivering)
     // Fling-distance projection divisor for the MandatorySingle commit. A release of speed v (px/s) coasts an extra
     // v / FlickProjectK px in the snap-settle window before resting; the projected offset is then snapped to the nearest
     // index. Derived from the engine scroller decay (ScrollIntegrator.FlingDecayPerS = 0.05/s survival) over the ControlNormal settle
@@ -105,6 +110,9 @@ internal sealed class FlipViewCore : Component
         var fadePending = UseSignal(false);
         var lastWheelTime = UseRef(0L);          // m_lastScrollWheelTime
         var lastWheelDelta = UseRef(0f);         // m_lastScrollWheelDelta
+        var swipeAccum = UseRef(0f);             // accumulated hi-res axis travel toward the next flip
+        var swipeLastMs = UseRef(0L);            // last hi-res packet time (a gap resets the accumulator)
+        var swipeCooldownUntil = UseRef(0L);     // post-flip refractory deadline (inertia tail can't re-flip)
 
         var p = props;
         int count = p?.Items.Count ?? 0;
@@ -193,31 +201,63 @@ internal sealed class FlipViewCore : Component
         }
 
         // ── Wheel: one flip per distinct event — direction change, or 200ms since the last delta
-        //    (FlipView::OnPointerWheelChanged, FlipView_Partial.cpp:650-749).
+        //    (FlipView::OnPointerWheelChanged, FlipView_Partial.cpp:650-749). Generalized to the DOMINANT axis so a
+        //    horizontal wheel / two-finger swipe (e.DeltaX) pages too, plus a hi-res accumulation path for the sub-notch
+        //    packet stream that the dispatcher's no-scroller wheel fallback (InputDispatcher §A) now delivers.
         void OnWheel(WheelEventArgs e)
         {
             if (e.Handled || count == 0) return;
             if ((e.Mods & KeyModifiers.Ctrl) != 0) return;   // Ctrl+wheel ignored (:666-668)
+
+            bool horizPacket = MathF.Abs(e.DeltaX) > MathF.Abs(e.Delta);   // dominant axis owns this packet
+            float axis = horizPacket ? e.DeltaX : e.Delta;
+            if (axis == 0f) return;
             long now = Environment.TickCount64;
-            bool directionChange = (e.Delta < 0 && lastWheelDelta.Value >= 0) ||
-                                   (e.Delta > 0 && lastWheelDelta.Value <= 0);   // (:687-692)
-            bool canFlip = directionChange || now - lastWheelTime.Value > (long)WheelDelayMs;
-            // Recorded whether a flip happened or not, so a touchpad flick (deltas spread over seconds) can't
-            // re-trigger every 200ms (:708-716).
-            lastWheelTime.Value = now;
-            if (canFlip)
+
+            if (MathF.Abs(axis) >= SwipeNotchDip)
             {
-                bool moved = e.Delta < 0 ? MoveNext() : MovePrevious();   // delta<0 = next (:719-726)
-                if (moved)
+                // Detented wheel — the existing one-flip-per-distinct-event behavior, generalized to the dominant axis.
+                bool directionChange = (axis < 0f && lastWheelDelta.Value >= 0f) ||
+                                       (axis > 0f && lastWheelDelta.Value <= 0f);   // (:687-692)
+                bool canFlip = directionChange || now - lastWheelTime.Value > (long)WheelDelayMs;
+                // Recorded whether a flip happened or not, so a touchpad flick (deltas spread over seconds) can't
+                // re-trigger every 200ms (:708-716).
+                lastWheelTime.Value = now;
+                if (canFlip)
                 {
-                    lastWheelDelta.Value = e.Delta;
-                    e.Handled = true;   // a flip consumes the wheel (:728-733)
+                    bool moved = axis < 0f ? MoveNext() : MovePrevious();   // axis<0 = next (:719-726)
+                    if (moved)
+                    {
+                        lastWheelDelta.Value = axis;
+                        e.Handled = true;   // a flip consumes the wheel (:728-733)
+                    }
+                    // NOT handled at the first/last item so the parent viewport scroll-chains (:736).
                 }
-                // NOT handled at the first/last item so the parent viewport scroll-chains (:736).
+                else
+                {
+                    e.Handled = true;       // throttled: still consumed so ancestors don't scroll (:738-744)
+                }
+                return;
+            }
+
+            // Hi-res packet stream (precision touchpad, via the dispatcher's no-scroller wheel fallback). Sub-notch
+            // packets accumulate until a flip's worth of travel; a gap resets the segment, and a post-flip cooldown
+            // keeps the inertia tail from cascading extra flips.
+            if (now - swipeLastMs.Value > (long)WheelDelayMs) swipeAccum.Value = 0f;   // new segment
+            swipeLastMs.Value = now;
+            if (now < swipeCooldownUntil.Value) { e.Handled = true; return; }
+            swipeAccum.Value += axis;
+            if (MathF.Abs(swipeAccum.Value) >= SwipeFlipDip)
+            {
+                bool moved = swipeAccum.Value < 0f ? MoveNext() : MovePrevious();
+                swipeAccum.Value = 0f;
+                swipeCooldownUntil.Value = now + (long)SwipeCooldownMs;
+                if (moved) e.Handled = true;
+                // At the ends: leave unhandled so the gesture can chain outward, matching the notch path (:736).
             }
             else
             {
-                e.Handled = true;       // throttled: still consumed so ancestors don't scroll (:738-744)
+                e.Handled = true;   // building toward a flip — swallow partials
             }
         }
 

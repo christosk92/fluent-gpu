@@ -24,7 +24,7 @@ sealed class SpotifyArtistStatsService(PathfinderResource pf, IStore store) : IA
         try
         {
             using var doc = await pf.QueryAsync(PathfinderOps.QueryArtistOverview, PathfinderOps.QueryArtistOverviewHash,
-                w => { w.WriteString("uri", artistUri); w.WriteString("locale", ""); w.WriteBoolean("preReleaseV2", false); },
+                w => { w.WriteString("uri", artistUri); w.WriteString("locale", pf.Locale); w.WriteBoolean("preReleaseV2", false); },
                 PathfinderClient.Platform.Desktop, ct).ConfigureAwait(false);
             if (doc is not null && SpotifyExportMapper.ArtistFromOverview(doc.RootElement) is { Uri.Length: > 0 } overview)
                 store.UpsertArtist(overview with          // STATS-ONLY write: discography fields neutralized so the

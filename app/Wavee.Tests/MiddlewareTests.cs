@@ -79,7 +79,7 @@ public class HttpMiddlewareTests
     [Fact]
     public async Task ClientToken_AttachesTokenAndDesktopHeaders()
     {
-        var ctm = new ClientTokenMiddleware(_ => Task.FromResult<string?>("CT123"));
+        var ctm = new ClientTokenMiddleware(_ => Task.FromResult<string?>("CT123"), "nl-NL");
         HttpReq? captured = null;
         var inner = new FakeExchange((req, _) => { captured = req; return Ok(); });
 
@@ -90,6 +90,7 @@ public class HttpMiddlewareTests
         Assert.Equal(SpotifyHeaders.AppPlatform, captured.Headers["App-Platform"]);
         Assert.Equal("129300667", captured.Headers["Spotify-App-Version"]);
         Assert.StartsWith("Spotify/", captured.Headers["User-Agent"]);
+        Assert.Equal("nl", captured.Headers["Accept-Language"]);
     }
 
     [Fact]
@@ -108,7 +109,7 @@ public class HttpMiddlewareTests
     [Fact]
     public async Task PathfinderHeaders_AttachesWebPlayerIdentityAndClientToken()
     {
-        var mw = new PathfinderHeadersMiddleware(_ => Task.FromResult<string?>("CT"));
+        var mw = new PathfinderHeadersMiddleware(_ => Task.FromResult<string?>("CT"), "ko-KR");
         HttpReq? captured = null;
         var inner = new FakeExchange((req, _) => { captured = req; return Ok(); });
         var req = new HttpReq("POST", "https://api-partner.spotify.com/pathfinder/v2/query",
@@ -124,8 +125,18 @@ public class HttpMiddlewareTests
         Assert.Equal("WebPlayer", captured.Headers["app-platform"]);
         Assert.Contains("Chrome/147.0.0.0", captured.Headers["user-agent"]);
         Assert.Equal("application/json", captured.Headers["content-type"]);
+        Assert.Equal("ko", captured.Headers["accept-language"]);
         Assert.False(captured.Headers.ContainsKey(PathfinderHeadersMiddleware.PlatformHeader));
     }
+
+    [Theory]
+    [InlineData("nl-NL", "nl")]
+    [InlineData("KO_kr", "ko")]
+    [InlineData("en", "en")]
+    [InlineData("not-a-language", "en")]
+    [InlineData(null, "en")]
+    public void SpotifyLanguage_NormalizesToDesktopTwoLetterValue(string? input, string expected)
+        => Assert.Equal(expected, SpotifyHeaders.NormalizeLanguage(input));
 }
 
 public class ApResolverTests

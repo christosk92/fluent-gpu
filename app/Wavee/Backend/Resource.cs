@@ -165,6 +165,11 @@ public sealed class Resource<TKey, TValue> where TKey : notnull
     /// <summary>Record a value as freshly-fetched, bypassing the per-key fetch — for a batch path that fetched many at once
     /// (so subsequent <see cref="Peek"/>s see them as fresh and skip the network).</summary>
     public void Seed(TKey key, TValue value)
+        => Seed(key, value, DateTime.UtcNow, ComputeExpiresAt(value), needsRevalidate: false);
+
+    /// <summary>Restore a persisted value without pretending it was fetched at process startup. Used by durable HTTP
+    /// caches so an expired row remains stale (and keeps its ETag) while an unexpired row retains its actual deadline.</summary>
+    public void Seed(TKey key, TValue value, DateTime fetchedAtUtc, DateTime? expiresAtUtc, bool needsRevalidate)
     {
         lock (_gate)
         {
@@ -172,9 +177,9 @@ public sealed class Resource<TKey, TValue> where TKey : notnull
             e.Val = value;
             e.HasVal = true;
             e.Error = null;
-            e.FetchedAt = DateTime.UtcNow;
-            e.ExpiresAt = ComputeExpiresAt(value);
-            e.NeedsRevalidate = false;
+            e.FetchedAt = fetchedAtUtc;
+            e.ExpiresAt = expiresAtUtc;
+            e.NeedsRevalidate = needsRevalidate;
             Touch(e);
             EvictIfNeeded();
         }

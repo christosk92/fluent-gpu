@@ -51,6 +51,11 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     public double AnimMs { get; init; }
     public double RecordMs { get; init; }
     public double SubmitMs { get; init; }
+    // RecordMs sub-split (hitch attribution): the phase-7.5 image pump/tick and the phase-7.6 scroll re-realize
+    // catch-up both run between tAnim and tRecord, so their cost was invisibly charged to "record" — a realize spike
+    // on a fast fling read as SceneRecorder cost. RecordMs still covers the whole segment; these carve it up.
+    public double ImagePumpMs { get; init; }
+    public double RealizeCatchupMs { get; init; }
     // Submit sub-split (diagnostics for the #1 hotspot — GPU fence/present pacing is charged to "submit" on the UI thread
     // until the render-thread seam lands). FenceWaitMs = wall-time BLOCKED on the frame fence + present-latency waitable
     // INSIDE SubmitDrawList; PresentMs = the Present() call. cmdBuild = SubmitMs − FenceWaitMs − PresentMs is the real CPU
@@ -146,6 +151,7 @@ public sealed class AppHost : IDisposable
     // through this queue (drained in SubmitPresentOnRenderThread before submit) instead of touching the device on the UI
     // thread. Null in default/force-sync — there the direct device sinks run with no cross-thread overlap.
     private readonly Threading.ImageUploadQueue? _imageQueue;
+    private readonly Threading.BakedBlurQueue _bakedBlurQueue = new();
     // Step 4 (ASYNC): device-lost recovery rendezvous. Foreground recovery is synchronous and reuses RecoverDevice
     // directly; async parks the render loop and drives RecoverDevice through this coordinator.
     private readonly Threading.DeviceLostCoordinator? _deviceLost;
@@ -545,6 +551,7 @@ public sealed class AppHost : IDisposable
     // STALE throttle/idle gap, not a real render interval — so Paint resyncs the clock before the anim tick when this
     // frame drives interactive or one-shot motion, killing the first-frame lurch on a scroll-start or a connected fly.
     private int _lastWaitMs;
+    private int _traceGc0, _traceGc1, _traceGc2;   // GC collection counts at the last note-113 gap sample (hitch attribution)
     // Post-scroll grace window: keep display-rate pacing for a short tail after the last scroll-active frame so the eased
     // settle + any in-flight art reveal finish smoothly instead of snapping to the 30 Hz ambient cadence mid-motion.
     // 0.25s (was 0.15): a slow wheel-notch cadence (~1 notch / 300-500ms) over an ambient loop (skeleton shimmer) kept
@@ -1038,6 +1045,8 @@ public sealed class AppHost : IDisposable
         _scene.OnFreeIndex = OnSceneSlotFreed;
         _reconciler.Images = _images;
         _reconciler.ImageEpoch = _imageEpoch;
+        _images.SetBakedBlurQueue(_bakedBlurQueue);
+        _device.SetBakedBlurQueue(_bakedBlurQueue);
         if (_asyncActive)
         {
             // ASYNC (Step 1): the UI thread must not touch the device. The pixel sink COPIES the transient decode pixels
@@ -1644,6 +1653,8 @@ public sealed class AppHost : IDisposable
             bool holdSelfBlurForScroll = scrollHoldNow < _selfBlurHoldUntil;
             bool scrollActive = holdSelfBlurForScroll || _scrollAnim.AnyOffsetWroteThisFrame;
             _images.SuppressReveals = scrollActive;
+            _images.ScrollThrottled = scrollActive;   // upload-burst → fence-stall guard (the safe lever; triple-buffer hung the Adreno)
+            _bakedBlurQueue.Paused = scrollActive;
             ScrollBindEval.ApplyPinAndFlagPass(_scene);       // 7 generic scroll-bind pins + the predicate-flag channel (sticky etc.)
             ScrollBindEval.RunObservers(_scene);              // 7 change-only scroll-geometry observers (pull-to-refresh / analytics)
             _repeat.Tick(dtMs);                                // 7 RepeatButton auto-repeat (held → re-fire click)
@@ -1655,6 +1666,7 @@ public sealed class AppHost : IDisposable
             if (s_allocDiag) { db = Probe(SegAnim, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
             _images.Pump();                                    // 7.5 apply finished decodes + evict
             _images.Tick(dtMs);
+            long tImagePump = Stopwatch.GetTimestamp();
             if (s_allocDiag) { db = Probe(SegImages, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
             // Scroll re-realize catch-up (phase 7.6): the fling/smooth scroll animators above advanced the content's
@@ -1671,6 +1683,7 @@ public sealed class AppHost : IDisposable
                 _invalidator.RunDirty(layoutSize);
                 _scene.ClearLayoutDirty();
             }
+            long tRealizeCatchup = Stopwatch.GetTimestamp();   // 7.6 cost was invisibly charged to RecordMs — split it out
 
             // Stuck-hover fix (input-a11y.md §5.4/§15 — "hover re-resolves when content moves under a stationary pointer,
             // not just layout commits"): a scroll offset write OR a reconcile/relayout this frame moved content under a
@@ -1844,6 +1857,8 @@ public sealed class AppHost : IDisposable
                 LayoutMs = ToMs(tLayout - tFlush),
                 AnimMs = ToMs(tAnim - tLayout),         // phase-7 ticks + projections
                 RecordMs = ToMs(tRecord - tAnim),       // image pump + SceneRecorder (+ text shaping) + dyntext
+                ImagePumpMs = ToMs(tImagePump - tAnim),            // of which: phase-7.5 decode apply/evict
+                RealizeCatchupMs = ToMs(tRealizeCatchup - tImagePump), // of which: phase-7.6 re-realize + scoped relayout
                 SubmitMs = ToMs(tSubmit - tRecord),     // command build + GPU submit + present (total; ~0 on a skipped frame)
                 FenceWaitMs = skipSubmit ? 0.0 : _device.LastFenceWaitMs,  // of which: UI-thread stall on the frame fence + latency waitable
                 PresentMs = ToMs(tSubmit - tSubmitDone),// of which: the Present() call (0 on a skipped frame)
@@ -1855,6 +1870,26 @@ public sealed class AppHost : IDisposable
                 MainContentDirtyAtRecord = probeMainDirty,
             };
             PublishFrameStats(LastStats);
+            // Hitch attribution into the scroll trace (>12ms frames only): the per-phase split lands in the SAME CSV as
+            // the offset writes, so a lurch is directly attributable (GPU fence stall vs realize vs record vs shaping).
+            if (FluentGpu.Foundation.ScrollTrace.On && dtMs > 12f)
+            {
+                float rawDt = _frameTime is StopwatchFrameTimeSource sfts ? sfts.LastRawDeltaMs : dtMs;
+                FluentGpu.Foundation.ScrollTrace.FrameTiming(
+                    (float)LastStats.FlushMs, (float)LastStats.LayoutMs, (float)LastStats.AnimMs,
+                    (float)LastStats.RecordMs, (float)LastStats.SubmitMs, (float)LastStats.FenceWaitMs,
+                    (float)LastStats.PresentMs, LastStats.MeasureCount, LastStats.TextShapeMisses, rawDt);
+                // Gap discriminator (note 113): most traced scroll hitches have SLACK — raw dt far exceeding the frame's
+                // measured work — meaning the loop wasn't running. GC-collection deltas vs the wait the loop last asked
+                // for split that into "GC pause" / "wake-model slept" / "externally preempted".
+                float slack = rawDt - (float)(LastStats.FlushMs + LastStats.LayoutMs + LastStats.AnimMs + LastStats.RecordMs + LastStats.SubmitMs);
+                if (slack > 12f)
+                {
+                    int g0 = GC.CollectionCount(0), g1 = GC.CollectionCount(1), g2 = GC.CollectionCount(2);
+                    FluentGpu.Foundation.ScrollTrace.Note(113, slack, g0 - _traceGc0, ((g1 - _traceGc1) << 8) | (g2 - _traceGc2), _lastWaitMs);
+                    _traceGc0 = g0; _traceGc1 = g1; _traceGc2 = g2;
+                }
+            }
             if (_frameClockSig.HasSubscribers) _frameClockSig.Value = ++_frameClock;   // drive per-frame pollers (overlay close) only when watched
             if (s_allocDiag) Probe(SegPublish, db, dt0);   // alloc-05: frame-stat box + frameclock long-box were untracked
             return LastStats;

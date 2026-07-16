@@ -13,9 +13,9 @@ namespace Wavee.SpotifyLive;
 //   --spotify-playlist spotify:playlist:<id>   --spotify-rootlist   --spotify-collection [liked|albums|artists|shows|episodes]
 public static class SpotifyLibraryProbe
 {
-    public static async Task<int> RunPlaylistAsync(string uri, WaveeLogger log, CancellationToken ct)
+    public static async Task<int> RunPlaylistAsync(string uri, WaveeLogger log, CancellationToken ct, string language = "en")
     {
-        var live = await SpotifyLiveSpclient.ConnectAsync(log, ct).ConfigureAwait(false);
+        var live = await SpotifyLiveSpclient.ConnectAsync(log, ct, language: language).ConfigureAwait(false);
         if (live is null) return 1;
 
         var store = new InMemoryStore();
@@ -42,9 +42,9 @@ public static class SpotifyLibraryProbe
         return 0;
     }
 
-    public static async Task<int> RunRootlistAsync(WaveeLogger log, CancellationToken ct)
+    public static async Task<int> RunRootlistAsync(WaveeLogger log, CancellationToken ct, string language = "en")
     {
-        var live = await SpotifyLiveSpclient.ConnectAsync(log, ct).ConfigureAwait(false);
+        var live = await SpotifyLiveSpclient.ConnectAsync(log, ct, language: language).ConfigureAwait(false);
         if (live is null) return 1;
 
         var store = new InMemoryStore();
@@ -66,9 +66,9 @@ public static class SpotifyLibraryProbe
         return 0;
     }
 
-    public static async Task<int> RunCollectionAsync(string setId, WaveeLogger log, CancellationToken ct)
+    public static async Task<int> RunCollectionAsync(string setId, WaveeLogger log, CancellationToken ct, string language = "en")
     {
-        var live = await SpotifyLiveSpclient.ConnectAsync(log, ct).ConfigureAwait(false);
+        var live = await SpotifyLiveSpclient.ConnectAsync(log, ct, language: language).ConfigureAwait(false);
         if (live is null) return 1;
 
         var store = new InMemoryStore();

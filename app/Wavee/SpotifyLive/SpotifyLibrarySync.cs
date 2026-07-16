@@ -20,22 +20,23 @@ public static class SpotifyLibrarySync
 {
     static readonly string[] Sets = { "liked", "albums", "artists", "shows", "episodes" };
 
-    public static async Task<int> RunAsync(WaveeLogger log, CancellationToken ct)
+    public static async Task<int> RunAsync(WaveeLogger log, CancellationToken ct, string language = "en")
     {
-        var live = await SpotifyLiveSpclient.ConnectAsync(log, ct, retainApChannel: true).ConfigureAwait(false);
+        language = SpotifyHeaders.NormalizeLanguage(language);
+        var live = await SpotifyLiveSpclient.ConnectAsync(log, ct, retainApChannel: true, language: language).ConfigureAwait(false);
         if (live is null) return 1;
 
         string dbPath = System.IO.Path.Combine(
             System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData), "Wavee", "library.db");
         System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(dbPath)!);
-        using var cold = new SqliteColdStore(dbPath);
+        using var cold = new SqliteColdStore(dbPath, SqliteColdStore.DefaultAccount, language);
         using var store = new CachedStore(cold);
 
         var metadata = new MetadataService(new ExtendedMetadataSource(live.Pipeline, () => live.BaseUrl, () => live.Session), store, () => live.Session);
         Task Hydrate(IReadOnlyList<string> uris, CancellationToken c) => metadata.SyncAllAsync(uris, c);
 
         var mutEngine = new MutationEngine(store, new IMutationStrategy[] { new SetReplayStrategy(), new OpRebaseStrategy(store, () => live.BaseUrl), new RootlistFollowStrategy(store) }, cold);
-        var sessionHost = new SessionContextHost(new SessionContext(live.Username, "US", "premium", "en", Tier.Premium, false));
+        var sessionHost = new SessionContextHost(new SessionContext(live.Username, "US", "premium", language, Tier.Premium, false));
         var playlistFetcher = new PlaylistFetcher(live.Pipeline, () => live.BaseUrl, store, Hydrate, () => live.Username);
         var collectionFetcher = new CollectionFetcher(live.Pipeline, () => live.BaseUrl, () => live.Username, store,
             s => cold.GetCollectionRevision(s), (s, r) => cold.SetCollectionRevision(s, r, DateTimeOffset.UtcNow.ToUnixTimeSeconds()), Hydrate,

@@ -296,7 +296,6 @@ sealed class GalleryApp : Component
                 {
                     Title = "FluentGpu Gallery",
                     IconGlyph = Icons.Grid,
-                    IconColor = Tok.AccentDefault,
                     ShowBackButton = false,
                     ShowPaneToggle = true,
                     OnPaneToggle = () => _paneToggleReq.Value = _paneToggleReq.Peek() + 1,

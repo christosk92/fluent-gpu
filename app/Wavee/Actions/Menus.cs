@@ -290,7 +290,8 @@ public static class Menus
     /// <summary>Primary [Play now · Like] + rows [Go to album, Go to artist(s), Copy link, — , Remove from queue].
     /// <paramref name="playNow"/> is the panel's skip-in-place; <paramref name="removeFromDisplay"/> the panel's
     /// remove closure (null when a remote viewer — the row renders disabled).</summary>
-    public static ContextMenuModel QueueEntry(ActionServices s, QueueEntry entry, Action? removeFromDisplay, Action playNow)
+    public static ContextMenuModel QueueEntry(ActionServices s, QueueEntry entry, Action? removeFromDisplay, Action playNow,
+        Action? moveUp = null, Action? moveDown = null)
     {
         var ctx = new ActionContext(ActionTarget.ForQueueEntry(entry, removeFromDisplay), s);
         var primary = new[]
@@ -298,7 +299,7 @@ public static class Menus
             new AppBarCommand(Icons.Play, Loc.Get(Strings.Menu.PlayNow), playNow),
             TrackActions.ToggleLike.ToBarCommand(ctx),
         };
-        var rows = new List<MenuFlyoutItem>(6);
+        var rows = new List<MenuFlyoutItem>(9);
         var t = entry.Track;
         if (t.Album is { Uri.Length: > 0 })
             rows.Add(TrackActions.GoToAlbum.ToMenuItem(ctx));
@@ -307,6 +308,11 @@ public static class Menus
         else if (t.Artists.Count > 1)
             rows.Add(GoToArtistsItem(s, t.Artists));
         rows.Add(TrackActions.CopyLink.ToMenuItem(ctx));
+        rows.Add(MenuFlyoutItem.Separator);
+        rows.Add(new MenuFlyoutItem(Loc.Get(Strings.Menu.MoveUp),
+            new IconRef { Glyph = Icons.ChevronUp, Font = Theme.IconFont }, moveUp is not null, moveUp ?? (() => { })));
+        rows.Add(new MenuFlyoutItem(Loc.Get(Strings.Menu.MoveDown),
+            new IconRef { Glyph = Icons.ChevronDown, Font = Theme.IconFont }, moveDown is not null, moveDown ?? (() => { })));
         rows.Add(MenuFlyoutItem.Separator);
         rows.Add(TrackActions.RemoveFromQueue.ToMenuItem(ctx));
         return new ContextMenuModel(primary, rows);

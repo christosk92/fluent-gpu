@@ -162,7 +162,7 @@ sealed class PlayerBarContent : Component
     const float MarqueeEndPauseMs = 2500f;
     // Dark glyph for the WHITE primary play/pause face (the musa/Spotify treatment — a white circle, dark icon).
     // Thin volume rail — the WinUI Slider trimmed to a 4px track + a small 12px thumb so it reads as a level line.
-    static readonly Slider.Style RailStyle = Slider.DefaultStyle with
+    static Slider.Style RailStyle => Slider.DefaultStyle with
     {
         TrackHeight = 4f, TrackCornerRadius = 2f, ThumbRingDiameter = 12f, InnerThumbDiameter = 8f, ThumbCornerRadius = 6f,
     };

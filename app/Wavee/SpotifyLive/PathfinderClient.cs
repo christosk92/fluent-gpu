@@ -23,12 +23,12 @@ public sealed class PathfinderClient
     }
 
     public PathfinderClient(Func<CancellationToken, Task<string>> bearer,
-        Func<CancellationToken, Task<string?>> clientToken, WaveeLogger log = default)
+        Func<CancellationToken, Task<string?>> clientToken, WaveeLogger log = default, string language = "en")
         : this(new HttpPipeline(
             new HttpClientExchange(HttpPools.Get(HttpPool.ControlPlane)),
             new AuthMiddleware((_, c) => bearer(c)),
             new RateLimitMiddleware(),
-            new PathfinderHeadersMiddleware(clientToken)), log) { }
+            new PathfinderHeadersMiddleware(clientToken, language)), log) { }
 
     public enum Platform { Desktop, WebPlayer }
 

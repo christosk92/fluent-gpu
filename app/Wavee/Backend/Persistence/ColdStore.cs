@@ -10,6 +10,15 @@ namespace Wavee.Backend.Persistence;
 // in-memory tier-1 (CachedStore) bulk-loads from here on startup and dual-writes every mutation back, write-behind.
 
 public readonly record struct ColdEntity(string Uri, EntityKind Kind, byte[] Payload);
+public readonly record struct ColdExtension(
+    string EntityUri,
+    int ExtensionKind,
+    byte[]? Payload,
+    string? Etag,
+    long OfflineTtlSeconds,
+    bool Missing,
+    long ExpiresAtUnixSeconds,
+    long UpdatedAtUnixSeconds);
 /// <summary>One persisted video↔audio association blob (JSON of <c>VideoAssociation</c>), keyed by entity uri in its
 /// OWN table (it shares the track uri, so it can't live in the entity store).</summary>
 public readonly record struct ColdVideoAssoc(string Uri, byte[] Payload);
@@ -62,4 +71,13 @@ public interface IColdStore : IDisposable
     void ReplaceRootlist(IReadOnlyList<ColdRootlistEntry> entries);
 
     void Flush();   // block until queued writes are durable
+}
+
+/// <summary>Locale-scoped raw extended-metadata cache. Implementations are bound to one launch locale so ETags and
+/// payloads can never be read across languages.</summary>
+public interface IExtensionCacheStore
+{
+    string? MetadataLocale { get; }
+    IEnumerable<ColdExtension> LoadAllExtensions();
+    void UpsertExtension(ColdExtension extension);
 }

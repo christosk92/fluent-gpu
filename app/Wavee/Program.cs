@@ -2,7 +2,6 @@ using System.IO;
 using FluentGpu;             // FluentApp
 using FluentGpu.Dsl;         // Theme (startup theme seed)
 using FluentGpu.Foundation;  // Diag
-using FluentGpu.Localization; // Loc tables (assets/loc)
 
 namespace Wavee;
 
@@ -38,6 +37,9 @@ static class Program
         // Settings are hoisted above Configure so the persisted log-level overrides seed it (env still wins inside
         // Configure). One instance, reused for theme/backend below.
         var settings = AppDataSettings.ForUnpackaged("Wavee", "Wavee");
+        // Launch-scoped by design: the Settings picker persists a new value, and the next process applies it atomically
+        // to UI strings, Spotify metadata requests, and locale-partitioned caches.
+        AppLocale appLocale = AppLocaleBootstrap.Initialize(settings);
         string logDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Wavee", "logs");
         string logPath = Path.Combine(logDir, "wavee.log");
 #if DEBUG
@@ -127,7 +129,7 @@ static class Program
                 ? args[metaIdx + 1]
                 : "spotify:track:4uLU6hMCjMI75M1A2tKUQC";
             using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(8));
-            int code = Wavee.SpotifyLive.SpotifyMetadataProbe.RunAsync(uri, CliLog("probe"), cts.Token).GetAwaiter().GetResult();
+            int code = Wavee.SpotifyLive.SpotifyMetadataProbe.RunAsync(uri, CliLog("probe"), cts.Token, appLocale.SpotifyLanguage).GetAwaiter().GetResult();
             Environment.Exit(code);
         }
 
@@ -139,7 +141,7 @@ static class Program
             string uri = plIdx + 1 < args.Length && !args[plIdx + 1].StartsWith("--") ? args[plIdx + 1] : "";
             if (uri.Length == 0) { Console.Error.WriteLine("usage: --spotify-playlist spotify:playlist:<id>"); Environment.Exit(2); }
             using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(8));
-            int code = Wavee.SpotifyLive.SpotifyLibraryProbe.RunPlaylistAsync(uri, CliLog("probe"), cts.Token).GetAwaiter().GetResult();
+            int code = Wavee.SpotifyLive.SpotifyLibraryProbe.RunPlaylistAsync(uri, CliLog("probe"), cts.Token, appLocale.SpotifyLanguage).GetAwaiter().GetResult();
             Environment.Exit(code);
         }
 
@@ -147,7 +149,7 @@ static class Program
         if (Array.IndexOf(args, "--spotify-rootlist") >= 0)
         {
             using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(8));
-            int code = Wavee.SpotifyLive.SpotifyLibraryProbe.RunRootlistAsync(CliLog("probe"), cts.Token).GetAwaiter().GetResult();
+            int code = Wavee.SpotifyLive.SpotifyLibraryProbe.RunRootlistAsync(CliLog("probe"), cts.Token, appLocale.SpotifyLanguage).GetAwaiter().GetResult();
             Environment.Exit(code);
         }
 
@@ -158,7 +160,7 @@ static class Program
         {
             string setId = colIdx + 1 < args.Length && !args[colIdx + 1].StartsWith("--") ? args[colIdx + 1] : "liked";
             using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(8));
-            int code = Wavee.SpotifyLive.SpotifyLibraryProbe.RunCollectionAsync(setId, CliLog("probe"), cts.Token).GetAwaiter().GetResult();
+            int code = Wavee.SpotifyLive.SpotifyLibraryProbe.RunCollectionAsync(setId, CliLog("probe"), cts.Token, appLocale.SpotifyLanguage).GetAwaiter().GetResult();
             Environment.Exit(code);
         }
 
@@ -167,7 +169,7 @@ static class Program
         if (Array.IndexOf(args, "--spotify-sync") >= 0)
         {
             using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(10));
-            int code = Wavee.SpotifyLive.SpotifyLibrarySync.RunAsync(CliLog("sync"), cts.Token).GetAwaiter().GetResult();
+            int code = Wavee.SpotifyLive.SpotifyLibrarySync.RunAsync(CliLog("sync"), cts.Token, appLocale.SpotifyLanguage).GetAwaiter().GetResult();
             Environment.Exit(code);
         }
 
@@ -199,7 +201,7 @@ static class Program
         if (Array.IndexOf(args, "--connect-live") >= 0)
         {
             using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(3));
-            int code = Wavee.SpotifyLive.LiveSessionHost.RunAsync(CliLog("connect"), cts.Token).GetAwaiter().GetResult();
+            int code = Wavee.SpotifyLive.LiveSessionHost.RunAsync(CliLog("connect"), cts.Token, appLocale.SpotifyLanguage).GetAwaiter().GetResult();
             Environment.Exit(code);
         }
 
@@ -220,9 +222,6 @@ static class Program
 
         // ── Localization: load the bundled culture tables (assets/loc/*.json, copied next to the exe) before the first
         // frame, so every Loc.Get(Strings.*) resolves. en-US is the base + terminal fallback; more cultures drop in later.
-        Localization.DefaultCulture = "en-US";
-        Localization.LoadFolder(Path.Combine(AppContext.BaseDirectory, "assets", "loc"));
-
         // Real (live Spotify) backend is the DEFAULT: the persistent Store-backed catalog + durable mutations, hydrated by
         // the live session (login → spclient fetchers → the hm:// dealer) that the login takeover starts on launch. Pass
         // --fake for the offline FakeData demo (populated UI with no login/network — used by --screenshot and UI iteration).
@@ -266,7 +265,7 @@ static class Program
             // lyrics wipe/scroll read smooth without quadrupling the idle pipeline. Latency-sensitive input
             // (scroll/hover/drag) is exempt and always runs at the display rate; FG_ANIM_FPS overrides this (=30 to
             // revert to the old cadence, =0 for uncapped / full display rate).
-            FluentApp.Run(() => new WaveeApp(settings), "Wavee Music", 1180, 760,
+            FluentApp.Run(() => new WaveeApp(settings, appLocale), "Wavee Music", 1180, 760,
                           frames: frames, screenshot: screenshot, customFrame: true, micaAlt: true, ambientFps: 60);
         }
         catch (Exception ex)

@@ -117,7 +117,10 @@ public sealed class RateLimitMiddleware : IHttpMiddleware
 public sealed class ClientTokenMiddleware : IHttpMiddleware
 {
     readonly Func<CancellationToken, Task<string?>> _clientToken;
-    public ClientTokenMiddleware(Func<CancellationToken, Task<string?>> clientToken) => _clientToken = clientToken;
+    readonly string _language;
+    public ClientTokenMiddleware(Func<CancellationToken, Task<string?>> clientToken) : this(clientToken, "en") { }
+    public ClientTokenMiddleware(Func<CancellationToken, Task<string?>> clientToken, string language)
+    { _clientToken = clientToken; _language = SpotifyHeaders.NormalizeLanguage(language); }
 
     public async Task<HttpResp> InvokeAsync(HttpReq req, Func<HttpReq, CancellationToken, Task<HttpResp>> next, CancellationToken ct)
     {
@@ -127,6 +130,7 @@ public sealed class ClientTokenMiddleware : IHttpMiddleware
             ["App-Platform"] = SpotifyHeaders.AppPlatform,
             ["Spotify-App-Version"] = SpotifyHeaders.AppVersion,
             ["User-Agent"] = SpotifyHeaders.UserAgent,
+            ["Accept-Language"] = _language,
         };
         if (!string.IsNullOrEmpty(token)) h["client-token"] = token;
         return await next(req with { Headers = h }, ct).ConfigureAwait(false);
@@ -144,8 +148,11 @@ public sealed class PathfinderHeadersMiddleware : IHttpMiddleware
     const string WebPlayerUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36";
 
     readonly Func<CancellationToken, Task<string?>> _clientToken;
+    readonly string _language;
 
-    public PathfinderHeadersMiddleware(Func<CancellationToken, Task<string?>> clientToken) => _clientToken = clientToken;
+    public PathfinderHeadersMiddleware(Func<CancellationToken, Task<string?>> clientToken) : this(clientToken, "en") { }
+    public PathfinderHeadersMiddleware(Func<CancellationToken, Task<string?>> clientToken, string language)
+    { _clientToken = clientToken; _language = SpotifyHeaders.NormalizeLanguage(language); }
 
     public async Task<HttpResp> InvokeAsync(HttpReq req, Func<HttpReq, CancellationToken, Task<HttpResp>> next, CancellationToken ct)
     {
@@ -158,6 +165,7 @@ public sealed class PathfinderHeadersMiddleware : IHttpMiddleware
         h["content-type"] = "application/json";
         h["app-platform"] = webPlayer ? "WebPlayer" : "Win32_x86_64";
         h["user-agent"] = webPlayer ? WebPlayerUa : DesktopUa;
+        h["accept-language"] = _language;
         if (await _clientToken(ct).ConfigureAwait(false) is { Length: > 0 } token)
             h["client-token"] = token;
 

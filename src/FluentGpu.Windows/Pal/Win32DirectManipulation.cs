@@ -85,6 +85,7 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
     private IDirectManipulationViewport* _vp;
     private IDirectManipulationContent* _content;
     private DmViewportEventHandlerCcw* _sink;
+    private DmFrameInfoProviderCcw* _frameInfo;   // IDirectManipulationFrameInfoProvider CCW: reports composition-latency to DM
     private uint _cookie;
     private GCHandle _self;                 // pins THIS so the CCW thunks can reach it via self->Owner
     private bool _coInited;                 // we owe a CoUninitialize (CoInitializeEx returned S_OK or S_FALSE)
@@ -108,6 +109,24 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
     private bool _awaitingEngage;           // a SetContact is pending RUNNING
     private long _engageTick;               // Environment.TickCount64 at SetContact
     private int _wedgeCount;
+
+    // ── pump-time stamping (scroll-jitter §B.1) ──
+    private long _pumpQpc;                   // Stopwatch.GetTimestamp() captured once at the top of Update() — the frame instant
+    private long _pumpMs;                    // Environment.TickCount64 captured at the same instant (coarse ms clock, kept in step)
+    private float _pumpEmaMs = 8f;           // EMA of the pump-to-pump interval ≈ this machine's vblank period during a gesture
+                                             // (present-paced loop) — feeds CompositionDeltaMs so DM's lead matches the display
+    // A stamp older than this (relative to now) was NOT produced by the current Update pump — an Emit reached from a
+    // ProcessInput-time status change (contact-engage → RUNNING) — so Emit re-reads now instead of back-dating it.
+    // ~20ms ≈ 1.2 vsync frames: comfortably larger than any same-pump Update body, smaller than a cross-frame gap.
+    private static readonly long StaleStampTicks = Stopwatch.Frequency / 50;
+
+    /// <summary>Estimated milliseconds from this pump's <c>UpdateManager.Update</c> until the resulting pixels are on
+    /// screen — handed to DM through the <see cref="DmFrameInfoProviderCcw"/> so it evaluates its curve at the
+    /// composition instant, not the pump instant (Microsoft's documented frame-info purpose). The platform may set this
+    /// per frame from real present cadence; absent that it defaults to 8ms (~one 120Hz vblank). XAML hardcodes 16 (one
+    /// 60Hz vblank) — on a 120Hz panel that over-leads the finger by a full extra vblank, which a feel session reported
+    /// as "too fast / easy to lose control". See §B.2 — a follow-up knob once host present timing is threaded here.</summary>
+    public float NextPresentDeltaMs { get; set; } = 8f;
 
     private Win32DirectManipulation(Win32Window window, HWND hwnd)
     {
@@ -159,9 +178,15 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
         if (_mgr->GetUpdateManager(&iidUpd, (void**)&upd).FAILED || upd == null) return false;
         _upd = upd;
 
+        // The frame-info provider must exist before CreateViewport (DM holds it for the viewport's life) and is also
+        // passed to every UpdateManager.Update. It carries a composition-latency hint so DM predicts content position
+        // instead of sampling its curve at the raw pump instant (§B.2). CreateViewport treats it as _In_opt_.
+        _frameInfo = DmFrameInfoProviderCcw.Create();
+        _frameInfo->CompositionDeltaMs = (ulong)MathF.Round(MathF.Max(0f, NextPresentDeltaMs));
+
         Guid iidVp = IID_IDirectManipulationViewport;
         IDirectManipulationViewport* vp = null;
-        if (_mgr->CreateViewport(null, _hwnd, &iidVp, (void**)&vp).FAILED || vp == null) return false;
+        if (_mgr->CreateViewport((IDirectManipulationFrameInfoProvider*)_frameInfo, _hwnd, &iidVp, (void**)&vp).FAILED || vp == null) return false;
         _vp = vp;
 
         // §A.5: viewport rect = the window client rect (browsers size the DM viewport to the window). Fallback to
@@ -221,6 +246,20 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
     internal void Update()
     {
         if (!_enabled) return;
+        // §B.1: stamp this pump once. Every content update DM advances inside the _upd->Update() below fires on this
+        // thread synchronously, so all of them (which Emit coalesces into one per-frame ScrollUpdate downstream) share
+        // this single instant — the resampler's QPC x-axis then carries no per-packet receive jitter.
+        long prevPump = _pumpQpc;
+        _pumpQpc = Stopwatch.GetTimestamp();
+        _pumpMs = Environment.TickCount64;
+        // Self-measured pump cadence (EMA): during a gesture the loop is present-paced, so the pump interval IS this
+        // machine's vblank period (8.3ms @120Hz, 16.7 @60Hz) — no refresh-rate query exists in the PAL, and hardcoding
+        // either value over/under-leads the finger on the other class of machine. Idle gaps (>25ms) are excluded.
+        if (prevPump != 0)
+        {
+            float iv = (_pumpQpc - prevPump) * 1000f / Stopwatch.Frequency;
+            if (iv > 2f && iv < 25f) _pumpEmaMs += (iv - _pumpEmaMs) * 0.1f;
+        }
         // Wedge watchdog: a SetContact that never reached RUNNING within the engage window is a wedge (DManip did not
         // engage). Reaching RUNNING clears _awaitingEngage, so a legitimate finger-down-then-pause is NOT a wedge.
         if (_awaitingEngage && Environment.TickCount64 - _engageTick > DmEngageTimeoutMs)
@@ -229,7 +268,19 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
             OnWedge();
             if (!_enabled) return;   // OnWedge may have session-disabled + torn down
         }
-        if (_upd != null) _upd->Update(null);
+        if (_upd != null)
+        {
+            // Refresh the composition-latency hint for this pump before DM samples its curve (§B.2) — but ONLY during
+            // INERTIA. DM's prediction is exact for its own smooth inertia curve (pure latency win), while during
+            // CONTACT it linearly extrapolates the ragged digitizer motion and AMPLIFIES the noise: traced roughness
+            // rose 10.4%→13-20% with a contact lead, and a 16ms lead felt "too fast / easy to lose control". Contact
+            // stays sample-at-pump (the Chromium/Firefox behavior); the engine's own resampler smooths it downstream.
+            float delta = _status != DM_INERTIA ? 0f
+                        : float.IsNaN(NextPresentDeltaMs) ? Math.Clamp(_pumpEmaMs, 4f, 20f)
+                        : MathF.Max(0f, NextPresentDeltaMs);
+            if (_frameInfo != null) _frameInfo->CompositionDeltaMs = (ulong)MathF.Round(delta);
+            _upd->Update((IDirectManipulationFrameInfoProvider*)_frameInfo);
+        }
     }
 
     /// <summary>DM_POINTERHITTEST (0x0250) → claim this contact for DManip. Gated to <c>PT_TOUCHPAD</c> by the caller
@@ -332,8 +383,17 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
 
     private void Emit(InputKind kind, float dipX, float dipY)
     {
-        long qpc = Stopwatch.GetTimestamp();
-        uint ms = unchecked((uint)Environment.TickCount64);
+        // §B.1: prefer this pump's frame timestamp so every content update from one UpdateManager.Update shares one
+        // instant. Emit is ALSO reachable outside the Update pump: a contact-engage status change (RUNNING) can fire
+        // synchronously inside ProcessInput, where _pumpQpc still holds the PREVIOUS pump's value (~1 frame stale). We
+        // detect that (stamp older than ~1 frame, or never set) and read now instead, so phase markers aren't
+        // back-dated; content updates — the resampler-critical path — always run inside Update and see a fresh
+        // _pumpQpc. ms is taken from the same instant (Stopwatch and TickCount64 both advance in real time).
+        long now = Stopwatch.GetTimestamp();
+        long qpc = _pumpQpc;
+        long ms64 = _pumpMs;
+        if (qpc == 0 || now - qpc > StaleStampTicks) { qpc = now; ms64 = Environment.TickCount64; }
+        uint ms = unchecked((uint)ms64);
         bool isUpdate = kind is InputKind.ScrollUpdate or InputKind.MomentumUpdate;
         _window.EnqueueExternal(new InputEvent(
             kind, _contactPos, 0, 0, dipY, KeyModifiers.None,
@@ -409,6 +469,9 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
         if (_mgr != null) { _mgr->Release(); _mgr = null; }
 
         if (_sink != null) { DmViewportEventHandlerCcw.Destroy(_sink); _sink = null; }   // back to our 1 ref → free
+        // Freed only AFTER the viewport/update-manager/manager are released above — DM can no longer call GetNextFrameInfo,
+        // so there is no live reference into this native block (mirrors the sink's post-Release free).
+        if (_frameInfo != null) { DmFrameInfoProviderCcw.Destroy(_frameInfo); _frameInfo = null; }
         if (_self.IsAllocated) _self.Free();
     }
 
@@ -505,6 +568,81 @@ internal unsafe struct DmViewportEventHandlerCcw
     {
         try { OwnerOf(self)?.HandleContentUpdated((IDirectManipulationContent*)content); }
         catch { /* never throw across the COM boundary */ }
+        return S_OK;
+    }
+}
+
+/// <summary>The hand-rolled <c>IDirectManipulationFrameInfoProvider</c> CCW (vtable + refcount + a POD composition-delta
+/// field) — same hand-vtable shape as <see cref="DmViewportEventHandlerCcw"/>. DM calls <c>GetNextFrameInfo</c> once per
+/// <c>UpdateManager.Update</c> to learn when the frame it is about to compute will hit the screen, and evaluates its
+/// manipulation/inertia curve at that composition instant instead of the raw pump instant (Microsoft's documented
+/// frame-info purpose — the DM-side latency compensation this file's §B.2 fix adds).
+///
+/// <para>Unlike the event-handler sink this CCW does NOT carry an owner <c>GCHandle</c>: the per-query callback must be
+/// POD-only (no managed transition on the hot path), so the owner writes the answer into <see cref="CompositionDeltaMs"/>
+/// (a plain native field) once per pump and the thunk just reads it back. IID verified against the Windows 10.0.26100.0
+/// SDK header <c>directmanipulation.h</c> (<c>MIDL_INTERFACE("fb759dba-6f4c-4c01-874e-19c8a05907f9")</c>) and the shipped
+/// TerraFX 10.0.26100.6 binding; the 4-slot vtable order (IUnknown ×3 + <c>GetNextFrameInfo</c>) matches the same header.
+/// Native-memory backed; the owner frees it in <c>Teardown</c> after every DM object is released.</para></summary>
+internal unsafe struct DmFrameInfoProviderCcw
+{
+    public void** Vtbl;         // MUST be first (the COM "this" vptr)
+    public int Rc;
+    public ulong CompositionDeltaMs;   // owner-written per pump: ms from this Update until the frame is on screen
+
+    // IID_IDirectManipulationFrameInfoProvider {fb759dba-6f4c-4c01-874e-19c8a05907f9}
+    private static readonly Guid IID_IDirectManipulationFrameInfoProvider =
+        new(0xFB759DBA, 0x6F4C, 0x4C01, 0x87, 0x4E, 0x19, 0xC8, 0xA0, 0x59, 0x07, 0xF9);
+    private static readonly Guid IID_IUnknown =
+        new(0x00000000, 0x0000, 0x0000, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46);
+    private const int S_OK = 0, E_POINTER = unchecked((int)0x80004003), E_NOINTERFACE = unchecked((int)0x80004002);
+
+    private static readonly void** _vtbl = Build();
+
+    private static void** Build()
+    {
+        void** v = (void**)NativeMemory.Alloc(4, (nuint)sizeof(void*));
+        v[0] = (delegate* unmanaged[MemberFunction]<DmFrameInfoProviderCcw*, Guid*, void**, int>)&QueryInterface;
+        v[1] = (delegate* unmanaged[MemberFunction]<DmFrameInfoProviderCcw*, uint>)&AddRef;
+        v[2] = (delegate* unmanaged[MemberFunction]<DmFrameInfoProviderCcw*, uint>)&Release;
+        v[3] = (delegate* unmanaged[MemberFunction]<DmFrameInfoProviderCcw*, ulong*, ulong*, ulong*, int>)&GetNextFrameInfo;
+        return v;
+    }
+
+    public static DmFrameInfoProviderCcw* Create()
+    {
+        var p = (DmFrameInfoProviderCcw*)NativeMemory.Alloc((nuint)sizeof(DmFrameInfoProviderCcw));
+        p->Vtbl = _vtbl; p->Rc = 1; p->CompositionDeltaMs = 16;   // XAML-parity default: one 60Hz vblank until re-set
+        return p;
+    }
+
+    public static void Destroy(DmFrameInfoProviderCcw* p) => NativeMemory.Free(p);
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvMemberFunction) })]
+    private static int QueryInterface(DmFrameInfoProviderCcw* self, Guid* riid, void** ppv)
+    {
+        if (ppv == null) return E_POINTER;
+        if (*riid == IID_IUnknown || *riid == IID_IDirectManipulationFrameInfoProvider)
+        { Interlocked.Increment(ref self->Rc); *ppv = self; return S_OK; }
+        *ppv = null; return E_NOINTERFACE;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvMemberFunction) })]
+    private static uint AddRef(DmFrameInfoProviderCcw* self) => (uint)Interlocked.Increment(ref self->Rc);
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvMemberFunction) })]
+    private static uint Release(DmFrameInfoProviderCcw* self) => (uint)Interlocked.Decrement(ref self->Rc);
+
+    // POD-only, zero-alloc: DM asks for the next frame's timing. We mirror XAML's DirectManipulationFrameInfoProvider
+    // (returns time=0, processTime=0, compositionTime=delta-to-present in ms) — the shipped, proven shape — rather than
+    // the absolute-time triple the plan sketched; the DM contract does not crisply document units, so this parity choice
+    // is deliberately the safe one. See the reviewer flag in the change notes.
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvMemberFunction) })]
+    private static int GetNextFrameInfo(DmFrameInfoProviderCcw* self, ulong* time, ulong* processTime, ulong* compositionTime)
+    {
+        if (time != null) *time = 0;
+        if (processTime != null) *processTime = 0;
+        if (compositionTime != null) *compositionTime = self->CompositionDeltaMs;
         return S_OK;
     }
 }

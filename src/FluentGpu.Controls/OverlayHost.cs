@@ -14,7 +14,9 @@ public sealed class OverlayHandle
     internal Action<OverlayCloseCause>? CloseAction;
     public Action? ClosedAction;
     internal Action<OverlayCloseCause>? ClosedWithCauseAction;
-    internal Func<OverlayCloseCause, bool>? ClosingAction;
+    /// <summary>Close veto. Invoked with the close cause before dismissal; return <c>true</c> to allow the close,
+    /// <c>false</c> to veto it (e.g. an Escape that a zoomed viewer consumes internally). See ContentDialog.VetoClosing.</summary>
+    public Func<OverlayCloseCause, bool>? ClosingAction;
     public bool IsOpen { get; internal set; }
     public void Close() => Close(OverlayCloseCause.Programmatic);
     internal void Close(OverlayCloseCause cause) { if (IsOpen) CloseAction?.Invoke(cause); }
@@ -1077,7 +1079,7 @@ public sealed class OverlayHost : Component
         [
             Embed.Comp(() => new FlyoutSurface
             {
-                Body = e.Content(),
+                Body = e.Content,
                 Chrome = e.Chrome,
                 OnSurface = h => e.SurfaceNode = h,
             }),
@@ -1108,7 +1110,7 @@ public sealed class OverlayHost : Component
                 [
                     Embed.Comp(() => new FlyoutSurface
                     {
-                        Body = Ctx.Provide(Overlay.Placement, e.PlacementInfo, e.Content()),
+                        Body = () => Ctx.Provide(Overlay.Placement, e.PlacementInfo, e.Content()),
                         Chrome = e.Chrome,
                         OnSurface = h => e.SurfaceNode = h,
                         OnPlate = h => e.PlateNode = h,
@@ -1126,7 +1128,7 @@ public sealed class OverlayHost : Component
 /// clips the content to both the rounded corners and the revealing window.</summary>
 internal sealed class FlyoutSurface : Component
 {
-    public Element Body = new BoxEl();
+    public Func<Element> Body = static () => new BoxEl();
     public PopupChrome Chrome = PopupChrome.Flyout;
     public Action<NodeHandle>? OnSurface;
     /// <summary>Menu chrome only: the stretch PLATE (acrylic + 1px flyout stroke + elevation shadow) — the engine's
@@ -1160,7 +1162,7 @@ internal sealed class FlyoutSurface : Component
                 // over the popup rect, so a hit-test-invisible tooltip bubble still swallowed wheel under it.
                 // Menu/Flyout chrome (below) keeps its opaque plate as a real hit surface — WinUI parity.
                 HitTestPassThrough = true,
-                Children = [Body],
+                Children = [Body()],
             };
         }
 
@@ -1218,7 +1220,7 @@ internal sealed class FlyoutSurface : Component
                     {
                         Direction = 1,
                         Padding = new Edges4(0, 2, 0, 2),   // MenuFlyoutPresenterThemePadding
-                        Children = [Body],
+                        Children = [Body()],
                     },
                 ],
             };
@@ -1238,7 +1240,7 @@ internal sealed class FlyoutSurface : Component
         ClipToBounds = true,
         Padding = menuPad ? new Edges4(0, 2, 0, 2) : default,
         OnRealized = h => OnSurface?.Invoke(h),
-        Children = [Body],
+        Children = [Body()],
     };
     }
 }

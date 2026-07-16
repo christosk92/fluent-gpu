@@ -17,13 +17,14 @@ sealed partial class ArtistPage : Component
 {
     // Top tracks (left, wider) + Popular releases (right) — a 2-column band, stacked on a narrow page.
     Element TopBand(IReadOnlyList<Track> popular, string uri, PlaybackBridge? bridge, Services svc,
-                    IReadOnlyList<Album> albumsAll, Action<string, string?> go, Action<string> play) =>
+                    IReadOnlyList<Album> albumsAll, Action<string, string?> go, Action<string> play,
+                    Func<ColorF> accent) =>
         Responsive.Of(w =>
         {
             bool wide = w >= 760f;
             // ArtistPopular owns its own header (title + pager) so the pager sits in the section header like WinUI.
             string popTitle = Loc.Get(Strings.Artist.TopTracksReleases);
-            Element left = Embed.Comp(() => new ArtistPopular(popular, uri, bridge, svc, popTitle, _accent))
+            Element left = Embed.Comp(() => new ArtistPopular(popular, uri, bridge, svc, popTitle, accent))
                 with { SkeletonProxy = () => ArtistPopular.SkeletonShape(popular, popTitle) };
             Element right = Section(Loc.Get(Strings.Artist.PopularReleases), PopularReleases(albumsAll, go, play));
             return new BoxEl

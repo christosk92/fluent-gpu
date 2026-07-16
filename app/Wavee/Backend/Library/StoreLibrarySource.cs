@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
+using FluentGpu.Localization;
 using Wavee.Backend.Playlists;
 using Wavee.Core;
 
@@ -41,8 +42,8 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
     /// blocking first fetch / background revalidate); null offline/in tests → the OnDemandFetch path (album/artist unchanged).</summary>
     public Wavee.Backend.Sync.LibrarySync? Sync { get; set; }
 
-    /// <summary>Set by the live bootstrap: the editorial/personalized Pathfinder home groups, prepended ABOVE the
-    /// store-derived library shelves. Null offline → only the library-derived home.</summary>
+    /// <summary>Set by the live bootstrap: the editorial/personalized Pathfinder home groups, inserted after the pinned
+    /// quick-pick matrix and above the store-derived library shelves. Null offline → only the library-derived home.</summary>
     public Func<CancellationToken, Task<IReadOnlyList<HomeGroup>>>? LiveHomeFetch { get; set; }
 
     /// <summary>Set by the live bootstrap: full-catalog online search (Pathfinder). Primary when present; the offline
@@ -304,8 +305,9 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         catch { return SearchSuggestions.Empty; }
     }
 
-    // A home built from the SYNCED library (no Spotify home-feed API needed): a jump-back-in quick grid (Liked +
-    // first playlists), then "Your playlists" / "Your albums" / "Your artists" shelves. Empty only on a truly empty store.
+    // A home built from the SYNCED library (no Spotify home-feed API needed): a pinned jump-back-in quick grid (Liked +
+    // first playlists), then live editorial modules and "Your playlists" / "Your albums" / "Your artists" shelves.
+    // Empty only on a truly empty store.
     public async Task<HomeContribution> GetHomeAsync(CancellationToken ct = default)
     {
         var playlists = await GetPlaylistsAsync(ct).ConfigureAwait(false);
@@ -315,37 +317,39 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
 
         var groups = new List<HomeGroup>();
 
-        // The live editorial/personalized home (Pathfinder) goes first, above the library-derived shelves.
+        var quick = new List<HomeCard>();
+        if (likedCount > 0)
+            quick.Add(new HomeCard("spotify:collection:tracks", Loc.Get(Strings.Detail.LikedSongs),
+                Strings.Detail.SongCount(likedCount), null, HomeCardKind.Liked));
+        for (int i = 0; i < playlists.Count && quick.Count < 9; i++)
+            quick.Add(new HomeCard(playlists[i].Uri, playlists[i].Name, null, playlists[i].Cover, HomeCardKind.Playlist, playlists[i].MosaicTiles));
+        if (quick.Count > 0)
+            groups.Add(new HomeGroup(HomeGroupKind.QuickGrid, null, quick));
+
+        // The personal quick matrix is the stable first home module. Pathfinder editorial/personalized groups follow
+        // it, still above the larger library-derived shelves.
         if (LiveHomeFetch is { } liveFetch)
         {
             try { groups.AddRange(await liveFetch(ct).ConfigureAwait(false)); } catch { /* editorial home is best-effort */ }
         }
 
-        var quick = new List<HomeCard>();
-        if (likedCount > 0)
-            quick.Add(new HomeCard("spotify:collection:tracks", "Liked Songs", likedCount + " songs", null, HomeCardKind.Liked));
-        for (int i = 0; i < playlists.Count && quick.Count < 8; i++)
-            quick.Add(new HomeCard(playlists[i].Uri, playlists[i].Name, null, playlists[i].Cover, HomeCardKind.Playlist, playlists[i].MosaicTiles));
-        if (quick.Count > 0)
-            groups.Add(new HomeGroup(HomeGroupKind.QuickGrid, null, quick));
-
         if (playlists.Count > 0)
         {
             var cards = new List<HomeCard>(playlists.Count);
             foreach (var p in playlists) cards.Add(new HomeCard(p.Uri, p.Name, p.OwnerName, p.Cover, HomeCardKind.Playlist, p.MosaicTiles));
-            groups.Add(new HomeGroup(HomeGroupKind.Shelf, "Your playlists", cards));
+            groups.Add(new HomeGroup(HomeGroupKind.Shelf, Loc.Get(Strings.Home.YourPlaylists), cards));
         }
         if (albums.Count > 0)
         {
             var cards = new List<HomeCard>(albums.Count);
             foreach (var a in albums) cards.Add(new HomeCard(a.Uri, a.Name, "Album", a.Cover, HomeCardKind.Album));
-            groups.Add(new HomeGroup(HomeGroupKind.Shelf, "Your albums", cards));
+            groups.Add(new HomeGroup(HomeGroupKind.Shelf, Loc.Get(Strings.Home.YourAlbums), cards));
         }
         if (artists.Count > 0)
         {
             var cards = new List<HomeCard>(artists.Count);
             foreach (var a in artists) cards.Add(new HomeCard(a.Uri, a.Name, "Artist", a.Image, HomeCardKind.Artist));
-            groups.Add(new HomeGroup(HomeGroupKind.Shelf, "Your artists", cards));
+            groups.Add(new HomeGroup(HomeGroupKind.Shelf, Loc.Get(Strings.Home.YourArtists), cards));
         }
 
         return new HomeContribution(groups, Priority: 100);

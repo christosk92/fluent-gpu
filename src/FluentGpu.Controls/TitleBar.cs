@@ -64,7 +64,9 @@ public sealed class TitleBar : Component
     public string Subtitle = "";
     /// <summary>App-identity glyph (the gallery uses the accent grid glyph; WinUI uses an ImageIcon). Empty = none.</summary>
     public string IconGlyph = "";
-    public ColorF IconColor = Tok.AccentDefault;
+    private ColorF? _iconColor;
+    /// <summary>Explicit app-icon color, or the live accent token when left unset.</summary>
+    public ColorF IconColor { get => _iconColor ?? Tok.AccentDefault; set => _iconColor = value; }
     /// <summary>WinUI IsBackButtonVisible. Pair with <see cref="BackEnabled"/> (visible-but-disabled = no history).</summary>
     public bool ShowBackButton;
     /// <summary>WinUI IsBackEnabled.</summary>

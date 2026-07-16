@@ -403,13 +403,20 @@ public sealed class FillRowVirtualLayout : IViewportVirtualLayout
     public readonly int PerPageOverride;   // 0 ⇒ auto-fit
     public readonly float FixedCardW;      // 0 ⇒ auto-fit
     public readonly int MaxColumns;        // 0 ⇒ unlimited; else the auto-fit never exceeds this many columns
+    // Main-axis CONTENT INSETS (halo-bleed gutters, virtualization.md §fill-row): a leading/trailing gutter carved
+    // INSIDE the (widened) viewport so the first/last card's elevation halo paints into the gutter instead of hard-
+    // clipping at the viewport edge. The engine feeds a viewport already widened by Lead+Trail; the fit subtracts the
+    // gutters (cards stay sized to the SHELF width), item i's main position shifts by LeadInset, and ContentExtent
+    // carries both. Default 0 ⇒ no gutter (byte-identical to the pre-inset geometry). Allocation-free arithmetic.
+    public readonly float LeadInset, TrailInset;
 
     private float _main, _cross;           // last viewport fed by the engine (main = scroll-axis width)
     private int _perPage = 1;
     private float _cardW;
 
     public FillRowVirtualLayout(float minCardW = 150f, float maxCardW = 200f, float gap = 0f, int rows = 1,
-                                int perPageOverride = 0, float fixedCardW = 0f, int maxColumns = 0)
+                                int perPageOverride = 0, float fixedCardW = 0f, int maxColumns = 0,
+                                float leadInset = 0f, float trailInset = 0f)
     {
         MinCardW = minCardW <= 0 ? 1f : minCardW;
         MaxCardW = maxCardW < MinCardW ? MinCardW : maxCardW;
@@ -418,6 +425,8 @@ public sealed class FillRowVirtualLayout : IViewportVirtualLayout
         PerPageOverride = Math.Max(0, perPageOverride);
         FixedCardW = fixedCardW < 0 ? 0f : fixedCardW;
         MaxColumns = Math.Max(0, maxColumns);
+        LeadInset = leadInset < 0f ? 0f : leadInset;
+        TrailInset = trailInset < 0f ? 0f : trailInset;
         _cardW = MinCardW;
     }
 
@@ -430,7 +439,10 @@ public sealed class FillRowVirtualLayout : IViewportVirtualLayout
     {
         if (mainExtent == _main && crossSize == _cross) return;
         _main = mainExtent; _cross = crossSize;
-        (_perPage, _cardW) = Fit(_main, MinCardW, MaxCardW, Gap, PerPageOverride, FixedCardW, MaxColumns);
+        // The fed viewport is widened by the halo-bleed gutters; fit cards to the INNER (shelf) width so the fitted
+        // cardW is unchanged by the insets — the gutters are pure paint headroom, not card space.
+        float inner = MathF.Max(0f, mainExtent - LeadInset - TrailInset);
+        (_perPage, _cardW) = Fit(inner, MinCardW, MaxCardW, Gap, PerPageOverride, FixedCardW, MaxColumns);
     }
 
     /// <summary>The viewport→(perPage, cardW) fit — COUNT-INDEPENDENT, cardW capped at <paramref name="maxCardW"/>.
@@ -465,14 +477,16 @@ public sealed class FillRowVirtualLayout : IViewportVirtualLayout
     public float ContentExtent(int n, float cross)
     {
         int cols = ColCount(n);
-        return cols <= 0 ? 0f : cols * _cardW + (cols - 1) * Gap;
+        float inner = cols <= 0 ? 0f : cols * _cardW + (cols - 1) * Gap;
+        return inner + LeadInset + TrailInset;   // both gutters live in the scroll extent (the widened viewport holds them)
     }
 
     public void Window(int n, float cross, float viewport, float offset, int overscan, out int first, out int last)
     {
         float stride = ColStride;
-        int firstCol = Math.Max(0, (int)MathF.Floor(offset / stride) - overscan);
-        int lastCol = (int)MathF.Ceiling((offset + viewport) / stride) + overscan;
+        float o = offset - LeadInset;   // items live in INNER content space (item 0 starts at LeadInset); shift the query
+        int firstCol = Math.Max(0, (int)MathF.Floor(o / stride) - overscan);
+        int lastCol = (int)MathF.Ceiling((o + viewport) / stride) + overscan;
         first = Math.Min(n, firstCol * Rows);
         last = Math.Min(n, lastCol * Rows);
         if (last < first) last = first;
@@ -482,7 +496,7 @@ public sealed class FillRowVirtualLayout : IViewportVirtualLayout
     {
         int col = i / Rows, row = i % Rows;
         float rh = RowHeight(cross);
-        return new RectF(col * ColStride, row * (rh + Gap), _cardW, rh);
+        return new RectF(LeadInset + col * ColStride, row * (rh + Gap), _cardW, rh);
     }
 }
 

@@ -44,7 +44,7 @@ sealed partial class SettingsPage
             "(© .NET Foundation)."),
     ];
 
-    static readonly SettingsExpander.Style s_licenseExpanderStyle = new()
+    static SettingsExpander.Style LicenseExpanderStyle => new()
     {
         ItemCardStyle = SettingsCard.DefaultStyle with
         {
@@ -130,21 +130,25 @@ sealed partial class SettingsPage
         },
     });
 
-    static Element[] LicenseExpanders() =>
-    [
-        ..s_licenses.Select(lic => SettingsExpander.Create(new SettingsExpander.Options
-        {
-            Header = lic.Name,
-            Description = lic.Kind,
-            InitiallyExpanded = false,
-            Style = s_licenseExpanderStyle,
-            Items =
-            [
-                SettingsExpander.Item("", null,
-                    new TextEl(lic.Body) { Size = 12f, Color = Tok.TextTertiary, FontFamily = "Cascadia Code", Wrap = TextWrap.Wrap },
-                    alignment: SettingsCard.ContentAlignment.Left,
-                    style: s_licenseExpanderStyle),
-            ],
-        })),
-    ];
+    static Element[] LicenseExpanders()
+    {
+        var style = LicenseExpanderStyle;
+        return
+        [
+            ..s_licenses.Select(lic => SettingsExpander.Create(new SettingsExpander.Options
+            {
+                Header = lic.Name,
+                Description = lic.Kind,
+                InitiallyExpanded = false,
+                Style = style,
+                Items =
+                [
+                    SettingsExpander.Item("", null,
+                        new TextEl(lic.Body) { Size = 12f, Color = Tok.TextTertiary, FontFamily = "Cascadia Code", Wrap = TextWrap.Wrap },
+                        alignment: SettingsCard.ContentAlignment.Left,
+                        style: style),
+                ],
+            })),
+        ];
+    }
 }

@@ -142,7 +142,7 @@ sealed class FriendsPanel : Component
                     Children =
                     [
                         live
-                            ? WaveeEqualizer.Of(true, accent, 14f)
+                            ? WaveeEqualizer.Of(true, static () => Tok.AccentDefault, 14f)
                             : new TextEl(RelTime(now - fa.TimestampMs)) { Size = 11f, Weight = 600, Color = Tok.TextTertiary, MaxLines = 1 },
                     ],
                 },

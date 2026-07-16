@@ -89,7 +89,8 @@ public sealed record BoxEl : Element
     /// without remounting the slot. A==0 ⇒ the recorder auto-lightens/darkens <see cref="Fill"/> instead.</summary>
     public Prop<ColorF> HoverFill { get; init; }
     public Prop<ColorF> PressedFill { get; init; }
-    public ColorF BorderColor { get; init; }
+    /// <summary>Bindable like <see cref="Fill"/> so retained shell/card borders can follow a live theme switch.</summary>
+    public Prop<ColorF> BorderColor { get; init; }
     public ColorF HoverBorderColor { get; init; }    // A==0 ⇒ recorder auto-lightens BorderColor on hover; else eases to this exact state token
     public ColorF PressedBorderColor { get; init; }  // A==0 ⇒ recorder auto-darkens BorderColor on press; else eases to this exact state token
     public float BorderWidth { get; init; }
@@ -339,6 +340,20 @@ public sealed record BoxEl : Element
     /// (last on top) — for overlays, scrims, flyouts, the NavigationView Minimal pane. (A flexbox container otherwise.)</summary>
     public bool ZStack { get; init; }
     public bool ClipToBounds { get; init; }
+
+    /// <summary>Paint-order opt-in (the declarative <c>z-index</c> of a hovered card): while the pointer hover path
+    /// passes through this element (it is hovered, or hover-within, or its hover fade is still decaying), it paints
+    /// AFTER (above) its non-elevated siblings, so its elevation halo is not overpainted by a later sibling. LAYOUT and
+    /// HIT-TESTING are unaffected (pure record order). At most one sibling holds the hover path, so the recorder defers
+    /// it with O(1) space and zero allocation; at rest (no hover) the element paints in normal document order.</summary>
+    public bool HoverElevatePaint { get; init; }
+
+    /// <summary>Clip-ESCAPE root for a hover-elevated descendant (pairs with <see cref="HoverElevatePaint"/>): set on a
+    /// clipping viewport (a shelf's paged strip) to let the hovered card's lift + halo paint OUTSIDE this clip. The
+    /// recorder HOISTS the deferred elevated descendant out of this node's whole record scope — its clip AND its
+    /// edge-fade — and records it after the scope closes, against the clip in effect outside this node. Resting content
+    /// still clips exactly here (nothing else escapes). Innermost flagged ancestor wins; layout/hit-testing unaffected.</summary>
+    public bool HoverElevateClipRoot { get; init; }
 
     /// <summary>Layout firewall (opt-in): declare that this box's size is PARENT-determined (it fills/clips and is never
     /// content-sized), so a re-render or state change deep inside its subtree re-solves ONLY this subtree (scoped layout)
@@ -638,6 +653,13 @@ public sealed record ImageEl : Element
     /// <summary>Override the placeholder→image reveal transition (duration + easing). Null ⇒ <see cref="ImageTransition.Default"/>;
     /// pass <see cref="ImageTransition.None"/> to disable the fade (instant).</summary>
     public ImageTransition? Transition { get; init; }
+    /// <summary>Optional static bitmap blur. The engine derives a persistent image once; scrolling then remains one
+    /// ordinary image draw instead of a per-frame scene blur layer.</summary>
+    public BakedBlurSpec? BakedBlur { get; init; }
+    /// <summary>Source-over color applied in the image shader after sampling. Transparent disables it.</summary>
+    public ColorF ColorOverlay { get; init; }
+    /// <summary>Optional leaf-local alpha feather evaluated in the image shader (no offscreen layer).</summary>
+    public ImageMaskSpec? Mask { get; init; }
     public Edges4 Margin { get; init; }
     public FlexAlign AlignSelf { get; init; } = FlexAlign.Auto;
 }
@@ -718,6 +740,10 @@ public sealed record ScrollEl : Element
     /// <summary>Auto edge fade: feather only the edges that currently OVERFLOW (more content past them), ramped with the
     /// scroll offset — the discoverable-overflow affordance as a true alpha fade. Ignored when <see cref="EdgeFade"/> is set.</summary>
     public bool AutoEdgeFade { get; init; }
+    /// <summary>Clip-escape root for a hover-elevated descendant. The recorder hoists the deferred child after this
+    /// viewport's clip and edge-fade scopes close, so only the hovered subtree can paint into the surrounding halo
+    /// gutter while resting scroll content remains clipped.</summary>
+    public bool HoverElevateClipRoot { get; init; }
     /// <summary>Keep the scrollbar VISIBLE (a persistent thin rail) whenever the content overflows, instead of the default
     /// auto-hide that only reveals on hover/scroll. Hover still expands the rail to the full draggable bar. For navigation
     /// surfaces (a sidebar) where a discoverable, always-present scroll affordance is wanted (WinUI 11 nav behavior).</summary>

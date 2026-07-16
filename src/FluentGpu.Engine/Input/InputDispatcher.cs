@@ -97,6 +97,12 @@ public sealed class InputDispatcher
     private float _sgAnchorOffset;      // the target's offset (incl. band excess) when the gesture latched — desired = anchor + accum
     private float _sgAccumX, _sgAccumY; // accumulated gesture deltas (the synthetic position the estimator samples)
     private ImpulseVelocity _sgVel;     // fallback release-velocity estimator (unused on the DManip row)
+    private bool _sgLastHoriz;          // the previous completed gesture's latched axis (sticky-axis re-latch bias)
+    private uint _sgLastEndMs;          // message time the previous gesture ended (0 = none); StickyAxisMs re-latch window
+    // scroll-feel-rework-v2 §A wheel fallback: an unlatched gesture that found NO scroller on EITHER axis under the contact
+    // routes the REST of its packets to the element wheel dispatch (DispatchWheel) instead of dying — precision-touchpad
+    // gestures otherwise exist only as phase events. Latched in AccumulateContactDelta; reset at ScrollBegin/EndScrollGesture.
+    private bool _sgWheelFallback;
     // scroll-feel-rework-v2 §2.1/§8-gate-1 single-writer guard: TRUE only for the span of the phase-7-tick write seams
     // WriteScrollOffset / WriteOverscroll (the sole legitimate paths to the offset chokepoint ApplyScrollPosition). The
     // chokepoint asserts this is TRUE, so ANY ApplyScrollPosition reached off a non-tick stack (a touch-pan / scrollbar /
@@ -185,6 +191,12 @@ public sealed class InputDispatcher
     /// cancels the press candidate (WinUI Pressed→Canceled, never Released — PointerInputProcessor.cpp:397/423).</summary>
     public const float TouchSlopPx = 8f;
     public const float PanSlopPx = TouchSlopPx;
+
+    /// <summary>Sticky-axis re-latch window (ms): touchpads segment one continuous scroll into multiple ScrollBegin/End
+    /// cycles, so a briefly cross-axis-dominant window at the top of a segment could latch a shelf sideways. Within this
+    /// window of the previous gesture's end, switching axes relative to that gesture requires 2× dominance (a deliberate
+    /// shelf swipe still clears it). Beyond it the pick is unbiased again.</summary>
+    public const uint StickyAxisMs = 400;
 
     // NOTE (scroll-feel-rework-v2 §4.3/§4.6): the touch/PTP-fallback self-fling SEED gate is the canonical
     // ScrollTuning.FlingSeedGate = 50 px/s (Android min-fling), NOT a local dispatcher const. The old
@@ -1168,12 +1180,12 @@ public sealed class InputDispatcher
 
                 case InputKind.PointerCancel:
                     CancelPointerContact(in e);
-                    EndScrollGesture(springBand: true);   // cancel == end-with-zero-velocity (checklist #16)
+                    EndScrollGesture(springBand: true, endMs: e.TimestampMs);   // cancel == end-with-zero-velocity (checklist #16)
                     break;
 
                 case InputKind.WindowBlur:
                     CancelPointer();
-                    EndScrollGesture(springBand: true);   // a live gesture dies with activation; its band springs home
+                    EndScrollGesture(springBand: true, endMs: e.TimestampMs);   // a live gesture dies with activation; its band springs home
                     CancelKeyArm(fire: false);
                     SetState(ref _hovered, NodeHandle.Null, NodeFlags.Hovered);
                     // Scroll hover is a separate retained target from normal element hover. Leaving it latched across
@@ -2915,9 +2927,10 @@ public sealed class InputDispatcher
         switch (e.Kind)
         {
             case InputKind.ScrollBegin:
-                EndScrollGesture(springBand: true, traceReason: 2);   // a producer restart ends any prior gesture cleanly
+                EndScrollGesture(springBand: true, traceReason: 2, endMs: e.TimestampMs);   // a producer restart ends any prior gesture cleanly
                 _sgDevice = e.DeviceClassRaw;
                 _sgAccumX = 0f; _sgAccumY = 0f;
+                _sgWheelFallback = false;   // a fresh gesture re-resolves scroller-vs-wheel from scratch
                 _sgVel.Reset(default, e.TimestampMs, e.QpcTicks);
                 if (FluentGpu.Foundation.ScrollTrace.On)
                     FluentGpu.Foundation.ScrollTrace.VelSample(2, 0f, 0f, 0f, 0f, e.QpcTicks);
@@ -2925,6 +2938,7 @@ public sealed class InputDispatcher
                 break;
 
             case InputKind.ScrollUpdate:
+                if (_sgWheelFallback) { DispatchWheel(in e); break; }   // §A: no-scroller gesture → element wheel dispatch
                 if (_sgMomentum) { ApplyMomentumDelta(in e); break; }   // producer glitch tolerance: late Update inside momentum
                 if (_sgLatched) FeedGestureVelocitySide(e.PointerId);   // pre-coalesce packet stamps (cumulative deltas)
                 AccumulateContactDelta(in e);
@@ -2964,7 +2978,7 @@ public sealed class InputDispatcher
                         OnFlingStarted?.Invoke(flingTarget, v);   // → SeedScrollFling: Phase = Fling (integrator coasts at phase 7)
                     }
                 }
-                EndScrollGesture(springBand: true, traceReason: 0);
+                EndScrollGesture(springBand: true, traceReason: 0, endMs: e.TimestampMs);
                 break;
 
             case InputKind.MomentumBegin:
@@ -2977,11 +2991,12 @@ public sealed class InputDispatcher
                 break;
 
             case InputKind.MomentumUpdate:
+                if (_sgWheelFallback) { DispatchWheel(in e); break; }   // §A: inertia keeps flipping; FlipView's cooldown bounds the rate
                 ApplyMomentumDelta(in e);
                 break;
 
             case InputKind.MomentumEnd:
-                EndScrollGesture(springBand: true, traceReason: 1);
+                EndScrollGesture(springBand: true, traceReason: 1, endMs: e.TimestampMs);
                 break;
         }
     }
@@ -3011,12 +3026,27 @@ public sealed class InputDispatcher
         if (!_sgLatched)
         {
             if (MathF.Abs(_sgAccumX) + MathF.Abs(_sgAccumY) < PanSlopPx) return;
-            bool horiz = MathF.Abs(_sgAccumX) > MathF.Abs(_sgAccumY);
+            // Sticky-axis bias (§Fix5): within StickyAxisMs of the previous gesture's end this is a re-latch of the SAME
+            // continuous touchpad scroll segmented by the OS — require 2× dominance to SWITCH away from that gesture's axis
+            // (0.5× makes staying on it easy), so a brief cross-axis window at a segment boundary can't latch a shelf
+            // sideways. A first-ever gesture (_sgLastEndMs == 0) and a deliberate strong cross-axis swipe are unaffected.
+            bool sticky = _sgLastEndMs != 0u && (e.TimestampMs - _sgLastEndMs) < StickyAxisMs;
+            bool horiz = sticky
+                ? (MathF.Abs(_sgAccumX) > MathF.Abs(_sgAccumY) * (_sgLastHoriz ? 0.5f : 2f))
+                : (MathF.Abs(_sgAccumX) > MathF.Abs(_sgAccumY));
             NodeHandle vp = ScrollableUnderForAxis(e.PositionPx, horiz);
             if (vp.IsNull)
             {
                 vp = ScrollableUnderForAxis(e.PositionPx, !horiz);   // dominant axis has no scroller → cross-axis fallback (standalone carousel)
-                if (vp.IsNull) return;
+                if (vp.IsNull)
+                {
+                    // §A: no scroller on EITHER axis under the contact — route the REST of this gesture's packets to the
+                    // element wheel handlers (leaf→root, Handled-stopping) instead of dropping them. A precision-touchpad
+                    // gesture otherwise dies here (it never reaches OnPointerWheel). Reset by ScrollBegin/EndScrollGesture.
+                    _sgWheelFallback = true;
+                    DispatchWheel(in e);   // deliver the slop-crossing packet too (no viewport to scroll — the precondition)
+                    return;
+                }
                 horiz = !horiz;
             }
             _sgTarget = vp; _sgHoriz = horiz; _sgLatched = true;
@@ -3038,7 +3068,8 @@ public sealed class InputDispatcher
             _sgVel.Reset(new Point2(_sgAccumX, _sgAccumY), e.TimestampMs, e.QpcTicks);
             if (FluentGpu.Foundation.ScrollTrace.On)
             {
-                FluentGpu.Foundation.ScrollTrace.Latch((int)vp.Raw.Index, _sgDevice | (horiz ? 1 << 8 : 0),
+                FluentGpu.Foundation.ScrollTrace.Latch((int)vp.Raw.Index,
+                    _sgDevice | (horiz ? 1 << 8 : 0) | (sticky ? 1 << 9 : 0) | (_sgLastHoriz ? 1 << 10 : 0),
                     _sgAnchorOffset, _sgAccumX, _sgAccumY);
                 FluentGpu.Foundation.ScrollTrace.VelSample(2, _sgAccumX, _sgAccumY, 0f, 0f, e.QpcTicks);
             }
@@ -3117,8 +3148,16 @@ public sealed class InputDispatcher
     /// <summary>End the latched gesture: optionally hand a held band to the phase-7 spring-back (lift/momentum-end/
     /// cancel), then unlatch. Cancel semantics == end-with-zero-velocity (checklist #16). <paramref name="traceReason"/>
     /// is diagnostic-only (ScrollTrace gestureEnd i0: 0=ScrollEnd 1=MomentumEnd 2=restart-on-Begin 3=wheel 4=cancel).</summary>
-    private void EndScrollGesture(bool springBand, int traceReason = 4)
+    private void EndScrollGesture(bool springBand, int traceReason = 4, uint endMs = 0)
     {
+        if (_sgLatched)
+        {
+            // Remember this completed gesture's axis + end time so the next segment's re-latch can apply the sticky-axis
+            // bias (§Fix5). Recorded for every latched-gesture end incl. cancel/blur aborts — those carry a real timestamp
+            // and axis, so a follow-on gesture within StickyAxisMs biasing toward the same axis is still the right call.
+            _sgLastHoriz = _sgHoriz;
+            _sgLastEndMs = endMs;
+        }
         if (FluentGpu.Foundation.ScrollTrace.On && _sgLatched)
         {
             float traceBand = (_scene.IsLive(_sgTarget) && _scene.HasScroll(_sgTarget)) ? _scene.ScrollRef(_sgTarget).OverscrollPx : 0f;
@@ -3155,6 +3194,7 @@ public sealed class InputDispatcher
         _sgLatched = false;
         _sgMomentum = false;
         _sgTailConverted = false;   // §A.3 tail-ignore latch is per-gesture
+        _sgWheelFallback = false;   // §A wheel-fallback latch is per-gesture
         _sgAccumX = 0f; _sgAccumY = 0f;
     }
 
@@ -3311,7 +3351,9 @@ public sealed class InputDispatcher
         // scrolls vertically and a vertical wheel never scrolls horizontally.
         // • Vertical wheel → nearest VERTICAL scroller, climbing PAST horizontal-only viewports (a horizontal code box /
         //   shelf nested in a vertical page must not eat the page's wheel — WinUI semantics); a horizontal scroller is a
-        //   FALLBACK so a STANDALONE horizontal carousel still wheel-scrolls.
+        //   FALLBACK ONLY when NO vertical scroller exists anywhere in the chain, so a STANDALONE horizontal carousel
+        //   still wheel-scrolls — but a vertical page pinned at its top/bottom edge keeps the unconsumed delta instead of
+        //   nudging a cross-axis shelf sideways (the confirmed sideways-nudge symptom).
         // • Horizontal wheel/two-finger swipe → nearest HORIZONTAL scroller ONLY (no vertical fallback — a horizontal
         //   swipe must never scroll the page vertically, the symptom this fix removes).
         if (deltaY != 0f) any |= ScrollAxis(node, deltaY, wantHorizontal: false, oppositeFallback: true, isNotch, timestampMs);
@@ -3329,6 +3371,7 @@ public sealed class InputDispatcher
                             uint timestampMs = 0)
     {
         NodeHandle fallback = NodeHandle.Null;
+        bool sawSameAxis = false;
         for (var n = node; !n.IsNull; n = _scene.Parent(n))
         {
             if ((_scene.Flags(n) & NodeFlags.Scrollable) == 0) continue;
@@ -3338,9 +3381,12 @@ public sealed class InputDispatcher
                 if (oppositeFallback && fallback.IsNull) fallback = n;   // opposite-axis scroller remembered as a fallback
                 continue;
             }
+            sawSameAxis = true;   // a same-axis scroller exists in the chain — even edge-pinned it OWNS this axis
             if (TryScrollNode(n, delta, isNotch, timestampMs)) return true;   // a same-axis scroller consumed it (else climb on)
         }
-        if (oppositeFallback && !fallback.IsNull && TryScrollNode(fallback, delta, isNotch, timestampMs)) return true;
+        // Opposite-axis fallback ONLY when NO same-axis scroller exists (a standalone carousel). A same-axis page pinned
+        // at its top/bottom edge (TryScrollNode returned false) keeps the delta rather than leaking it sideways.
+        if (oppositeFallback && !sawSameAxis && !fallback.IsNull && TryScrollNode(fallback, delta, isNotch, timestampMs)) return true;
         return false;
     }
 
@@ -3382,9 +3428,15 @@ public sealed class InputDispatcher
             // Continue an in-flight wheel chase (carry velocity across the re-target); else start fresh from the offset.
             bool sameWheel = sc.Phase == ScrollIntegrator.WheelAnimating && (sc.PhaseFlags & ScrollState.PhaseProgrammatic) == 0;
             float curPending = horizontal ? sc.PendingTargetX : sc.PendingTargetY;
-            float basePending = (sameWheel && !float.IsNaN(curPending)) ? curPending : off;
+            // A reverse-sign notch during a live chase must NOT inherit the opposing chase velocity (guaranteed brief
+            // old-direction overshoot) NOR rebase on the stale forward PendingTarget (it would silently absorb the reverse
+            // notch): a reversal restarts the chase from the live offset with zero velocity. FlingVelocity is this node's
+            // single active-axis chase velocity, sign-aligned with delta (off increases as pending grows), so a sign
+            // mismatch is a genuine direction reversal (§4.2 amendment).
+            bool reversed = sameWheel && sc.FlingVelocity != 0f && MathF.Sign(delta) != MathF.Sign(sc.FlingVelocity);
+            float basePending = (sameWheel && !reversed && !float.IsNaN(curPending)) ? curPending : off;
             float newPending = Math.Clamp(basePending + delta, 0f, max);   // §4.2: hard-stops at the extents
-            if (!sameWheel) sc.FlingVelocity = 0f;   // fresh chase from rest; a same-direction continuation carries velocity
+            if (!sameWheel || reversed) sc.FlingVelocity = 0f;   // fresh chase from rest; a same-direction continuation carries velocity
             if (horizontal) sc.PendingTargetX = newPending; else sc.PendingTargetY = newPending;
             sc.Phase = ScrollIntegrator.WheelAnimating;
             sc.PhaseFlags = ScrollState.PhaseWheel;   // a mouse notch: hard-stops at extents, never bands
@@ -3393,7 +3445,7 @@ public sealed class InputDispatcher
             sc.IdleMs = 0f;
             OnScrollArmed?.Invoke(n);
             if (FluentGpu.Foundation.ScrollTrace.On)
-                FluentGpu.Foundation.ScrollTrace.WheelSeed((int)n.Raw.Index, sameWheel ? 1 : 0, delta, newPending, off);
+                FluentGpu.Foundation.ScrollTrace.WheelSeed((int)n.Raw.Index, (sameWheel ? 1 : 0) | (reversed ? 2 : 0), delta, newPending, off);
             if (FluentGpu.Foundation.ScrollLog.On)
                 FluentGpu.Foundation.ScrollLog.Line($"  scrollBy WHEEL-CHASE {(horizontal ? "x" : "y")} delta={delta:0.0} pending={newPending:0} off={off:0}");
             return true;
@@ -3490,7 +3542,10 @@ public sealed class InputDispatcher
             float contentNext = next / zv;
             if (sc.Layout is not null)   // fixed-geometry (stack/grid/custom)
             {
-                float cross = horizontal ? sc.ViewportH : sc.ViewportW;
+                // Same cross as the arrange paths (inner cross, published on the content's cross axis) — see
+                // FlexLayout's viewport-check comment; a viewport-vs-inner mismatch flaps width-keyed measured layouts.
+                float cross = horizontal ? (sc.ContentH > 0f ? sc.ContentH : sc.ViewportH)
+                                         : (sc.ContentW > 0f ? sc.ContentW : sc.ViewportW);
                 sc.Layout.Window(sc.ItemCount, cross, vp, contentNext, 0, out visibleFirst, out visibleLast);
             }
             else if (_scene.TryGetExtents(n, out var t) && t is not null)   // variable (extent table)
@@ -3658,7 +3713,11 @@ public sealed class InputDispatcher
     // its enter/exit; without this the deepest-leaf-only delivery starved every such wrapper.
     private void UpdateHoverWithin(NodeHandle prev, NodeHandle next)
     {
-        const int interactive = InteractionInfo.PointerBit | InteractionInfo.ClickBit | InteractionInfo.PressedBit;
+        // HoverElevatePaintBit joins the mask: a hover-elevated node's contract is "paints above siblings WHILE THE
+        // HOVER PATH PASSES THROUGH IT", so a non-interactive wrapper carrying the flag (a shelf cell around an
+        // interactive card) must still receive HoverWithin — the recorder's defer check reads exactly this state.
+        const uint interactive = InteractionInfo.PointerBit | InteractionInfo.ClickBit | InteractionInfo.PressedBit
+            | InteractionInfo.HoverElevatePaintBit;
         for (var n = prev.IsNull ? NodeHandle.Null : _scene.Parent(prev); !n.IsNull && _scene.IsLive(n); n = _scene.Parent(n))
         {
             if (n != next && IsSelfOrAncestorOf(n, next)) break;   // still a strict-ancestor of the new leaf → stays set

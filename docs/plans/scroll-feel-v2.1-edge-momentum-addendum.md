@@ -125,3 +125,9 @@ Unchanged: `RubberC=0.55`, `d=0.15·vp`, `SnapBackOmega=12.5`, ζ=1, `FlingDecay
 6. On-device: run the F3 + F6 traces (hard edge flick, >4 s chained fling, lift-at-stretch); confirm no wheel synthesis and no band teleport.
 7. Delete the F3 hold-one-notch latch (`Win32Platform.cs:1175-1195`); keep `GestureLive` suppression and the §3.3 classifier.
 8. Extend the headless gates: `gate.scroll.overscroll-rational` asserts bounce `peak ≤ 0.6·d` and re-grab round-trip at a bounce; add a relatch-catch-up gate asserting 1:1 (no clamp) within one vsync.
+
+---
+
+## A.10 Edge wheel opposite-axis fallback — only when no same-axis scroller exists (Decision 8)
+
+> **The wheel path's opposite-axis fallback fires only when the hit-chain climb found no same-axis scroller at all.** At a page top/bottom an unconsumed vertical wheel delta previously fell back to the opposite-axis scroller under the cursor and nudged a horizontal shelf sideways. The climb now tracks whether it saw a same-axis scroller (even one pinned at its extent); the fallback applies only when it did not. An edge-pinned page (which *has* a vertical scroller, merely at its limit) no longer leaks its vertical delta into a horizontal shelf, while a standalone carousel with no vertical ancestor still receives vertical-wheel service. The documented standalone-carousel intent in `ScrollAxis` is preserved exactly; only the edge-pinned leak is closed.

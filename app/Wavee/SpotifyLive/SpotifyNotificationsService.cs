@@ -22,6 +22,7 @@ sealed class SpotifyNotificationsService : ISpotifyNotificationsService, IDispos
     readonly Func<string> _baseUrl;
     readonly WaveeLogger _log;
     readonly Func<long> _clock;
+    readonly string _language;
 
     readonly SimpleEvent<int> _changed = new();
     readonly object _gate = new();
@@ -33,11 +34,13 @@ sealed class SpotifyNotificationsService : ISpotifyNotificationsService, IDispos
     bool _disposed;
     int _rev;
 
-    public SpotifyNotificationsService(IHttpExchange http, Func<string> baseUrl, WaveeLogger log = default, Func<long>? clock = null)
+    public SpotifyNotificationsService(IHttpExchange http, Func<string> baseUrl, WaveeLogger log = default, Func<long>? clock = null,
+        string language = "en")
     {
         _http = http;
         _baseUrl = baseUrl;
         _log = log;
+        _language = SpotifyHeaders.NormalizeLanguage(language);
         _clock = clock ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         _ = FetchAsync();   // seed at construction (go-live) so the badge is correct before the first open
     }
@@ -72,7 +75,7 @@ sealed class SpotifyNotificationsService : ISpotifyNotificationsService, IDispos
 
         try
         {
-            var url = _baseUrl() + "/gander/v2/GetNotifications?locale=&limit=20";   // empty locale = the captured official-client shape
+            var url = _baseUrl() + "/gander/v2/GetNotifications?locale=" + Uri.EscapeDataString(_language) + "&limit=20";
             using var resp = await _http.SendAsync(new HttpReq("GET", url, JsonHeaders(), null), token).ConfigureAwait(false);
             if (token.IsCancellationRequested) return;
             if (resp.Status != 200) { ApplyFailure("gander HTTP " + resp.Status); return; }

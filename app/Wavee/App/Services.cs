@@ -122,6 +122,8 @@ public sealed class Services
     /// <summary>Persisted app settings (sidebar width, etc.) — read/written through the interface + typed keys, never the
     /// concrete store. The real registry-backed store is wired here, in the composition root, not at the call sites.</summary>
     public IAppSettings Settings { get; }
+    /// <summary>The immutable UI/Spotify locale captured at process startup.</summary>
+    public AppLocale Locale { get; }
     /// <summary>The cross-arena memory-shedding coordinator (Backend/Residency/MemoryGovernor.cs), instantiated + wired here
     /// and driven by a periodic OS-memory-pressure poll (WaveeApp). Steady-state growth is already bounded by each cache's
     /// own LRU cap; the governor sheds FURTHER under real memory pressure. (Was dead code — only referenced by tests.)</summary>
@@ -142,7 +144,7 @@ public sealed class Services
 
     Services(IWaveeLog log, ISpotifySession session, IMusicLibrary library,
              IPlaybackPlayer player, IConnectDevices devices, ILyricsProvider lyrics, IAppSettings settings, IMutationSource mutations,
-             UserPlaylistSource userPlaylists, IPlaylistMutationSource playlistEdits, IActivityStore activityStore)
+             UserPlaylistSource userPlaylists, IPlaylistMutationSource playlistEdits, IActivityStore activityStore, AppLocale appLocale)
     {
         Log = log;
         Session = session;
@@ -157,6 +159,7 @@ public sealed class Services
         UserProfiles = new SwitchableUserProfileService(new NullUserProfileService());
         Friends = new SwitchableFriendActivityService(new NullFriendActivityService());
         Settings = settings;
+        Locale = appLocale;
         Playback = new PlaybackBridge(player, devices, session);
         Activity = new ActivityLog(activityStore);
         LibraryBridge = new LibraryBridge(mutations, userPlaylists, playlistEdits, Activity);
@@ -215,7 +218,7 @@ public sealed class Services
 
     /// <summary>The fake wiring that drives the skeleton with in-memory data (no network). Persistence is real (the
     /// settings store), since it's local state, not catalog data.</summary>
-    public static Services CreateFake(IAppSettings? settings = null)
+    public static Services CreateFake(IAppSettings? settings = null, AppLocale? appLocale = null)
     {
         var session = new FakeSpotifySession();
         // Local audio playback is not supported yet: the player rejects every play intent (surfaced as the standard
@@ -255,7 +258,7 @@ public sealed class Services
             session,                           // Session (auth / account / market)
         });
         var library = new AggregateCatalog(registry);
-        var svc = new Services(WaveeLog.Instance, session, library, player, devices, new NoLyricsProvider(), settings, mutations, userPlaylists, playlistEdits, new InMemoryActivityStore());
+        var svc = new Services(WaveeLog.Instance, session, library, player, devices, new NoLyricsProvider(), settings, mutations, userPlaylists, playlistEdits, new InMemoryActivityStore(), appLocale ?? AppLocale.English);
         player.OnPlayIntentRejected = () => svc.Playback.NotifyLocalPlaybackUnsupported();   // any play intent → the standard toast
         svc.Log.Info("app", "Services created (sources: spotify-export, local-files, user-playlists, podcasts, fake + session facet; playback remote-only; mutations: saved-state + playlists)");
         return svc;
@@ -266,8 +269,9 @@ public sealed class Services
     /// the in-process fake (audio is a later milestone); the live session/transport (login → spclient fetchers → the hm://
     /// dealer) are connected by a separate bootstrap. The catalog reads the persisted Store offline; a first run is empty
     /// until that bootstrap syncs. Gated behind <c>--real-backend</c> so the FakeData demo stays the default.</summary>
-    public static Services CreateReal(IAppSettings? settings = null, string? accountDbPath = null)
+    public static Services CreateReal(IAppSettings? settings = null, string? accountDbPath = null, AppLocale? appLocale = null)
     {
+        AppLocale locale = appLocale ?? AppLocale.English;
         var session = new FakeSpotifySession();     // Session facet — swapped for the real EngineSessionSource on live connect
         var player = new UnsupportedPlaybackPlayer();   // local audio unsupported → play intents toast until go-live swaps in the live controller
         var devices = new NoConnectDevices();           // empty roster until the live Connect cluster arrives on go-live
@@ -277,7 +281,7 @@ public sealed class Services
         accountDbPath ??= System.IO.Path.Combine(
             System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData), "Wavee", "library.db");
         System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(accountDbPath)!);
-        var cold = new Wavee.Backend.Persistence.SqliteColdStore(accountDbPath);
+        var cold = new Wavee.Backend.Persistence.SqliteColdStore(accountDbPath, Wavee.Backend.Persistence.SqliteColdStore.DefaultAccount, locale.SpotifyLanguage);
         var store = new Wavee.Backend.Persistence.CachedStore(cold);
 
         // The collection self-write echo registry (§7.1): the write strategy records accepted-write cuids; the sync loop
@@ -296,7 +300,7 @@ public sealed class Services
         // logged out queue durably and replay on next login (§2.1); the drain binds to this stable facade once.
         var mutTransport = new Wavee.Backend.SwitchableTransport(new Wavee.Backend.StubTransport());
         var sessionHost = new Wavee.Backend.SessionContextHost(
-            new Wavee.Backend.SessionContext("", "US", "premium", "en", Wavee.Backend.Tier.Premium, false));
+            new Wavee.Backend.SessionContext("", "US", "premium", locale.SpotifyLanguage, Wavee.Backend.Tier.Premium, false));
         var mutations = new Wavee.Backend.EngineMutationSource(store, mutEngine, mutTransport, () => sessionHost.Current);
 
         // The catalog: the persistent Store-backed source (collection_items × shared entities; owns spotify:* + podcasts)
@@ -325,7 +329,7 @@ public sealed class Services
         var swDevices = new Wavee.Backend.SwitchableDevices(devices);
         var swSession = new Wavee.Backend.SwitchableSession(session);
         var swLyrics = new Wavee.Backend.SwitchableLyrics(new NoLyricsProvider());   // swapped to the real AggregatingLyricsProvider on live login
-        var svc = new Services(WaveeLog.Instance, swSession, library, swPlayer, swDevices, swLyrics, settings, mutations, userPlaylists, playlistMutations, new Wavee.Backend.Persistence.SqliteActivityStore(accountDbPath));
+        var svc = new Services(WaveeLog.Instance, swSession, library, swPlayer, swDevices, swLyrics, settings, mutations, userPlaylists, playlistMutations, new Wavee.Backend.Persistence.SqliteActivityStore(accountDbPath), locale);
         player.OnPlayIntentRejected = () => svc.Playback.NotifyLocalPlaybackUnsupported();   // pre-go-live: play intents show the "choose a remote device" toast
         svc.RealStore = store;
         svc.RealLibrarySource = storeLibrary;
