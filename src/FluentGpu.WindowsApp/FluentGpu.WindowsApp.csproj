@@ -21,6 +21,33 @@
     <Content Include="assets\**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- Normal desktop PlayReady backend. This builds a native DLL loaded in-process by WindowsApi; there is no UWP
+       package, install action, activation, helper process, IPC path, or bundled MSIX. The legacy source directory is
+       retained only until the desktop playback proof is complete, after which it will be renamed/trimmed. -->
+  <PropertyGroup>
+    <_PlayReadyNativeArch Condition="'$(RuntimeIdentifier)' == 'win-x64'">x64</_PlayReadyNativeArch>
+    <_PlayReadyNativeArch Condition="'$(RuntimeIdentifier)' == 'win-arm64'">arm64</_PlayReadyNativeArch>
+    <_PlayReadyNativeArch Condition="'$(_PlayReadyNativeArch)' == '' and '$(PROCESSOR_ARCHITECTURE)' == 'AMD64'">x64</_PlayReadyNativeArch>
+    <_PlayReadyNativeArch Condition="'$(_PlayReadyNativeArch)' == ''">arm64</_PlayReadyNativeArch>
+    <_PlayReadyNativeDir>$(MSBuildProjectDirectory)\..\..\tools\playready-uwp-helper</_PlayReadyNativeDir>
+    <_PlayReadyNativeDll>$(_PlayReadyNativeDir)\build-desktop-$(_PlayReadyNativeArch)\FluentGpu.PlayReady.Native.dll</_PlayReadyNativeDll>
+  </PropertyGroup>
+  <Target Name="BuildDesktopPlayReadyNative" BeforeTargets="PrepareForBuild"
+          Inputs="$(_PlayReadyNativeDir)\Helper.cpp;$(_PlayReadyNativeDir)\CencMediaSource.h;$(_PlayReadyNativeDir)\build-desktop-dll.cmd"
+          Outputs="$(_PlayReadyNativeDll)">
+    <Exec Command="cmd /c &quot;$(_PlayReadyNativeDir)\build-desktop-dll.cmd&quot; $(_PlayReadyNativeArch)" />
+  </Target>
+  <Target Name="CopyDesktopPlayReadyNative" AfterTargets="Build" DependsOnTargets="BuildDesktopPlayReadyNative">
+    <Copy SourceFiles="$(_PlayReadyNativeDll)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="PublishDesktopPlayReadyNative" BeforeTargets="ComputeFilesToPublish"
+          DependsOnTargets="BuildDesktopPlayReadyNative">
+    <ItemGroup>
+      <ResolvedFileToPublish Include="$(_PlayReadyNativeDll)" RelativePath="FluentGpu.PlayReady.Native.dll"
+                             CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+  </Target>
+
   <!-- ── Compile-safe localization keys (source generator) ──────────────────────────────────────────────────
        The base-culture loc JSON is fed to FluentGpu.SourceGen (its Localization generator) as an AdditionalFiles item; the
        generator emits a nested `static class Strings` of dotted-key consts (+ typed ICU-format methods) into

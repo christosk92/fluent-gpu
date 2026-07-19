@@ -181,6 +181,61 @@ static class Program
             if (i < args.Length - 1 && args[i] == "--shot") shot = args[i + 1];
             if (i < args.Length - 1 && args[i] == "--page") page = args[i + 1];
             if (args[i] == "--mica") micaShot = true;
+            // Interactive-shell diagnostic: starts the protected-video page without requiring UI automation. This is
+            // the command-line equivalent of FG_DRM_AUTOPLAY=1 and is intentionally inert for every normal launch.
+            if (args[i] == "--drm-autoplay") Environment.SetEnvironmentVariable("FG_DRM_AUTOPLAY", "1");
+        }
+
+        // M0 of the DRM-free video compositing spine: restructured DComp present tree + IVideoPresenter + an
+        // engine-owned test surface through the real CreateSurfaceFromHandle path + a graded hole, captured to a PNG
+        // (docs/plans/video-phase1-plan.md §4). `--video-m0 <png>` [--frames N]. Screen capture (the DComp child is
+        // composited by DWM, not in our back buffer), so it needs a live composited desktop session.
+        int vm0 = Array.IndexOf(args, "--video-m0");
+        if (vm0 >= 0)
+        {
+            string outPng = vm0 + 1 < args.Length ? args[vm0 + 1] : ".tmp/m0-graded-hole.png";
+            int vf = -1;
+            for (int i = 0; i < args.Length - 1; i++)
+                if (args[i] == "--frames" && int.TryParse(args[i + 1], out int f)) vf = f;
+            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(outPng))!);
+            Environment.Exit(VideoM0.Run(outPng, vf));
+            return;
+        }
+
+        // M3 of the DRM-free video compositing spine: IMFMediaEngineEx windowless-swapchain decode of a CLEAR MP4 →
+        // GetVideoSwapchainHandle → the SAME IVideoPresenter M0 proved, composited z-below the UI. `--video-real <png>`
+        // [--frames N]. Screen capture (the DComp child is composited by DWM), needs a live composited desktop session.
+        int vreal = Array.IndexOf(args, "--video-real");
+        if (vreal >= 0)
+        {
+            string outPng = vreal + 1 < args.Length && !args[vreal + 1].StartsWith("--") ? args[vreal + 1] : ".tmp/m3-real-video.png";
+            int vf = -1;
+            for (int i = 0; i < args.Length - 1; i++)
+                if (args[i] == "--frames" && int.TryParse(args[i + 1], out int f)) vf = f;
+            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(outPng))!);
+            Environment.Exit(VideoReal.Run(outPng, vf));
+            return;
+        }
+
+        // Standalone MF Media Engine probe (NO D3D12 device / window): create VideoMediaEngine + poll to characterize
+        // exactly how far the engine gets on this machine (isolates MF/DXGI from our renderer). `--video-probe [url]`.
+        int vprobe = Array.IndexOf(args, "--video-probe");
+        if (vprobe >= 0)
+        {
+            string purl = Environment.GetEnvironmentVariable("FG_VIDEO_URL")
+                ?? (vprobe + 1 < args.Length && !args[vprobe + 1].StartsWith("--") ? args[vprobe + 1] : "https://media.w3.org/2010/05/sintel/trailer.mp4");
+            using var eng = new FluentGpu.Media.Windows.VideoMediaEngine();
+            int ihr = eng.Initialize(purl);
+            Console.Error.WriteLine($"video-probe: init hr=0x{(uint)ihr:X8} url={purl}");
+            var dl = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+            while (DateTime.UtcNow < dl && !eng.HasError && !eng.Playing)
+            {
+                System.Threading.Thread.Sleep(500);
+                Console.Error.WriteLine($"video-probe: readyState={eng.ReadyState} meta={eng.MetadataLoaded} play={eng.Playing} trace=[{eng.EventTrace}]");
+            }
+            nuint h = eng.GetSwapchainHandle();
+            Console.Error.WriteLine($"video-probe: FINAL playing={eng.Playing} meta={eng.MetadataLoaded} err={eng.HasError}(0x{(uint)eng.ErrorHr:X8}) swapchainHandle=0x{(ulong)h:X} trace=[{eng.EventTrace}]");
+            return;
         }
 
         // DirectWrite itemizer smoke test (BiDi/script/line-break via the callee CCWs) then exit.

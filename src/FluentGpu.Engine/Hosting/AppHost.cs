@@ -121,6 +121,7 @@ public sealed class AppHost : IDisposable
     private readonly ISwapchain _swapchain;
     private readonly Component _root;
     private readonly StringTable _strings;
+    private readonly FluentGpu.Media.VideoSurfaceRegistry _videoSurfaces = new();   // UI-thread video-surface intents, drained into IVideoPresenter at phase 11
 
     // E4 windowed out-of-bounds popups: one slot per leased popup window (see PopupWindowSlot).
     private readonly List<PopupWindowSlot> _popupWindows = new(2);
@@ -207,6 +208,7 @@ public sealed class AppHost : IDisposable
 
     // Ambient context signals (read via UseContext): published by the host, consumers subscribe granularly.
     private readonly Signal<object?> _viewportSig = new(default(Size2));
+    private readonly Signal<object?> _viewportScaleSig = new(1f);   // Viewport.Scale ambient (DIP→device px)
     private readonly Signal<object?> _frameStatsSig = new(default(FrameStats));
     private readonly InputHooks _inputHooks = new();
     private readonly Signal<object?> _inputHooksSig;
@@ -228,6 +230,7 @@ public sealed class AppHost : IDisposable
     // (and for the UseContext(FrameClock.Tick)-to-drain anti-pattern that re-rendered every frame just to poll).
     private readonly System.Collections.Concurrent.ConcurrentQueue<Action> _uiPosts = new();
     private readonly Signal<object?> _hostPostSig;
+    private readonly Action<Action> _uiPoster;   // cached Post delegate (one instance) — ambient signal + HostDispatch.Current
 
     // ── FG_ALLOC_DIAG=1: once-per-second allocation/CPU attribution (stderr) ──
     // UI-thread bytes + ticks per frame segment (GetAllocatedBytesForCurrentThread deltas) and the process-wide
@@ -598,6 +601,9 @@ public sealed class AppHost : IDisposable
 
     public SceneStore Scene => _scene;
     public AnimEngine Animation => _anim;
+    /// <summary>The host-owned video-surface intent buffer (published on <c>VideoCompositor.Current</c>). A media player
+    /// façade writes surface rect/visibility/handle here; the host drains it into the render-thread presenter at phase 11.</summary>
+    public FluentGpu.Media.VideoSurfaceRegistry VideoSurfaces => _videoSurfaces;
     /// <summary>Probe/diagnostic only: a live shared-element (connected-animation) key, so a harness can trigger a REAL Hero fly.</summary>
     public string? FirstMorphKey => _connected.FirstTaggedKey;
     /// <summary>Probe/diagnostic only: collect distinct live <c>pl:</c> shared-element keys (home cards) for fresh-page fly measurement.</summary>
@@ -1081,18 +1087,23 @@ public sealed class AppHost : IDisposable
         _lastViewportDip = ClientSizeDip();
         _viewportSig.Value = _lastViewportDip;
         _inputHooksSig = new Signal<object?>(_inputHooks);
+        _viewportScaleSig.Value = _window.Scale <= 0f ? 1f : _window.Scale;
         _reconciler.SetAmbient(Viewport.Size, _viewportSig);
+        _reconciler.SetAmbient(Viewport.Scale, _viewportScaleSig);
         _reconciler.SetAmbient(FrameDiagnostics.Current, _frameStatsSig);
         _reconciler.SetAmbient(InputHooks.Current, _inputHooksSig);
         _reconciler.SetAmbient(FrameClock.Tick, _frameClockSig);
-        _hostPostSig = new Signal<object?>((Action<Action>)Post);   // ambient UI-thread poster (HostDispatch.Post / UsePost)
+        _uiPoster = Post;   // ONE delegate instance so HostDispatch.Current can be identity-compared on teardown
+        _hostPostSig = new Signal<object?>(_uiPoster);   // ambient UI-thread poster (HostDispatch.Post / UsePost)
         _reconciler.SetAmbient(HostDispatch.Post, _hostPostSig);
+        HostDispatch.Current = _uiPoster;   // process-static poster for non-component services (localization, …) — cleared in Dispose
         _reconciler.SetAmbient(SharedTransition.Begin, new Signal<object?>((Action<string>)_connected.Begin));   // connected-anim forward capture-at-click
         _reconciler.SetAmbient(SharedTransition.SetMotion, new Signal<object?>((Action<FluentGpu.Animation.ConnectedMotion>)(m => _connected.FlyMotion = m)));   // live fly-curve switcher (app A/B)
         // Window-visibility ambient: the channel value IS the visibility signal (an IReadSignal<bool>, never re-published),
         // so UseIsActive resolves it once and subscribes to the INNER signal — see Activation.IsActive.
         _reconciler.SetAmbient(Activation.IsActive, new Signal<object?>(_windowVisible));
         _reconciler.SetAmbient(ThemeControl.Request, new Signal<object?>((Action<float>)RequestThemeTransition));   // live re-theme trigger for app code
+        _reconciler.SetAmbient(VideoCompositor.Current, new Signal<object?>(_videoSurfaces));   // video-surface intent buffer for UseVideoSurface
 
         // Keep-alive repaint: the OS fires this synchronously from inside a modal move/size loop (and on NC
         // hover/press transitions while the frame loop idles). Paint with keepAlive so the device skips its
@@ -1822,6 +1833,12 @@ public sealed class AppHost : IDisposable
             }
             if (s_allocDiag) { db = Probe(SegSubmit, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
+            // 11.5 — flush queued video-surface intents into the composited presenter (render thread; the hole-punch
+            // rides this same frame turn). GUARDED on a non-null presenter, so it is a no-op on the headless seam and on
+            // an opaque (non-composited) window — the zero-alloc gates never execute this path. Internally cheap: the
+            // registry short-circuits when nothing is dirty.
+            if (_device.VideoPresenter is { } vp) _videoSurfaces.Drain(vp, _window.Scale);
+
             DrainPassiveEffects();                             // 12 passive effects
             _strings.Tick();                                   // 12.5 reclaim released text ids (behind the reader quarantine)
             if (s_allocDiag) { db = Probe(SegEffects, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
@@ -2488,6 +2505,7 @@ public sealed class AppHost : IDisposable
         if (s.Width == _lastSize.Width && s.Height == _lastSize.Height && scale == _lastScale) return false;
         if (DeferModalResize(keepAlive)) return false;   // pending until WM_EXITSIZEMOVE (InModalLoop cleared before Paint)
         _lastSize = s;
+        if (scale != _lastScale) _viewportScaleSig.Value = scale <= 0f ? 1f : scale;
         _lastScale = scale;
         // Step 2 (async resize rendezvous): D3D12Swapchain.Resize does a fenced WaitForGpu + releases the back buffers +
         // ResizeBuffers + recreates RTVs — all mutating ComPtrs the render thread reads in submit/present. Under async,
@@ -2514,6 +2532,8 @@ public sealed class AppHost : IDisposable
     public void Dispose()
     {
         _renderThread?.Dispose();   // Step 4: stop + join the fgpu-render thread before tearing down the device it submits to
+        if (ReferenceEquals(HostDispatch.Current, _uiPoster))
+            HostDispatch.Current = null;   // drop the process-static poster so a disposed host leaks no callback
 
         // Detach the activation-redirect subscription so a disposed host's IPlatformApp keeps no callback into it.
         if (_onActivationRedirected is { } onAct) { _app.ActivationRedirected -= onAct; _onActivationRedirected = null; }

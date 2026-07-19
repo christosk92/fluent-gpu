@@ -84,9 +84,6 @@ static class Program
         if (Array.IndexOf(args, "--perf-bench") >= 0)
             Environment.SetEnvironmentVariable("WAVEE_PERF_BENCH", "1");
 
-        if (Array.IndexOf(args, "--audio-host") >= 0)
-            Environment.Exit(Wavee.SpotifyLive.Audio.Host.AudioHostChild.Run(args));
-
         int frames = -1;
         string? screenshot = null;
         for (int i = 0; i < args.Length; i++)

@@ -87,6 +87,23 @@ internal sealed class AsyncResourceCell<T> : HookCell, IDisposableCell
     public void DisposeCell() { try { Cts.Cancel(); } catch { /* already disposed */ } Cts.Dispose(); }
 }
 
+/// <summary>Backs <see cref="RenderContext.UseVideoSurface"/>: the acquired video-surface token, released (tearing down
+/// the presenter child visual) when the owning component unmounts.</summary>
+internal sealed class VideoSurfaceCell : HookCell, IDisposableCell
+{
+    public FluentGpu.Media.VideoSurfaceRegistry? Registry;
+    public int Token;
+    public void DisposeCell() { if (Token > 0) Registry?.Release(Token); }
+}
+
+/// <summary>Backs <see cref="RenderContext.UseDisposable"/>: a component-lifetime-owned disposable created once at mount
+/// and disposed on unmount.</summary>
+internal sealed class DisposableCell<T> : HookCell, IDisposableCell where T : class, IDisposable
+{
+    public T? Value;
+    public void DisposeCell() { try { Value?.Dispose(); } catch { /* swallow teardown faults */ } }
+}
+
 /// <summary>Backs <see cref="RenderContext.UseAsyncCommand"/>: the persistent command + whether to cancel its in-flight
 /// run on unmount (default false — a started command should complete; the spinner is gone with the component).</summary>
 internal sealed class AsyncCommandCell : HookCell, IDisposableCell
@@ -620,6 +637,37 @@ public sealed partial class RenderContext
     public void PrefetchImage(string src, int decodePx)
     {
         if (Images is not null && !string.IsNullOrEmpty(src)) Images.Prefetch(src, decodePx, decodePx);
+    }
+
+    /// <summary>Acquire a composited video surface for this component (the video-compositing spine). Returns a
+    /// <see cref="FluentGpu.Media.VideoBinding"/> a media player writes placement + a bound DirectComposition handle
+    /// through; the host composites it z-below the UI (revealed through a transparent hole this component draws at the
+    /// same rect) and tears it down automatically on unmount. Invalid (a safe no-op binding) when video compositing is
+    /// unavailable (headless / non-composited window). Zero per-render work after mount.</summary>
+    public FluentGpu.Media.VideoBinding UseVideoSurface()
+    {
+        var registry = UseContext(VideoCompositor.Current);
+        VideoSurfaceCell cell;
+        if (!_mounted)
+        {
+            cell = new VideoSurfaceCell { Registry = registry, Token = registry?.Acquire() ?? 0 };
+            AddCell(cell, cleanupCapable: true);
+        }
+        else cell = (VideoSurfaceCell)_cells[_cursor];
+        _cursor++;
+        return new FluentGpu.Media.VideoBinding(cell.Registry, cell.Token);
+    }
+
+    /// <summary>Create a component-lifetime-owned disposable ONCE at mount and dispose it automatically on unmount.
+    /// Returns the same instance every render (or null if the factory returned null). For a native/OS resource whose
+    /// lifetime should track the component (e.g. a media player owning a background sidecar).</summary>
+    public T? UseDisposable<T>(Func<T?> factory) where T : class, IDisposable
+    {
+        DisposableCell<T> cell;
+        if (!_mounted) { cell = new DisposableCell<T> { Value = factory() }; AddCell(cell, cleanupCapable: true); }
+        else cell = (DisposableCell<T>)_cells[_cursor];
+        _cursor++;
+        return cell.Value;
     }
 
     // ── Skeleton-loading: the async-value spine + the resource lifecycle ─────────────────────────────────────────────

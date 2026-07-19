@@ -23,4 +23,10 @@ public static class HostDispatch
     /// <summary>The host-provided UI-thread poster: <c>post(action)</c> schedules <c>action</c> to run on the UI thread
     /// on the next frame. Cross-thread safe. Null when no host published one (headless/test).</summary>
     public static readonly Context<System.Action<System.Action>?> Post = new(null);
+
+    /// <summary>The same UI-thread poster as a process-static, for NON-component code (a module, a background service)
+    /// that must marshal a signal write onto the UI thread but has no component context to resolve <see cref="Post"/>.
+    /// The host sets it at construction and clears it on dispose; null when no host is running (headless/test → callers
+    /// run inline). Resolved at CALL time, so a service constructed before the host still marshals correctly.</summary>
+    public static volatile System.Action<System.Action>? Current;
 }

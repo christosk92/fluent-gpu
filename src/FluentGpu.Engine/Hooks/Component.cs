@@ -96,6 +96,18 @@ public abstract class Component
     protected ImageBinding UseImage(string src, int decodeW, int decodeH, ImagePriority priority = ImagePriority.Visible, string? blurHash = null) => Context.UseImage(src, decodeW, decodeH, priority, blurHash);
     /// <summary>Prefetch an image the UI is about to need so it's resident before it scrolls in.</summary>
     protected void PrefetchImage(string src, int decodePx) => Context.PrefetchImage(src, decodePx);
+    /// <summary>Acquire a composited video surface for this component (released automatically on unmount). A media player
+    /// writes placement + a bound DirectComposition handle through the returned binding; draw a transparent hole at the
+    /// same rect for the video to show through. A safe no-op binding when video compositing is unavailable.</summary>
+    protected FluentGpu.Media.VideoBinding UseVideoSurface() => Context.UseVideoSurface();
+    /// <summary>Create a component-lifetime-owned disposable once at mount; it is disposed automatically on unmount.</summary>
+    protected T? UseDisposable<T>(Func<T?> factory) where T : class, IDisposable => Context.UseDisposable(factory);
+    /// <summary>A <see cref="FluentGpu.Media.MediaPlayer"/> whose lifetime is bound to this component; auto-disposed
+    /// (async) on unmount. <paramref name="configure"/> runs once at mount against the Layer-2 builder.</summary>
+    protected FluentGpu.Media.MediaPlayer UseMediaPlayer(Action<FluentGpu.Media.MediaPlayerBuilder>? configure = null) => Context.UseMediaPlayer(configure);
+    /// <summary>A <see cref="FluentGpu.Media.MediaPlayer"/> pointed at a source that re-loads when the <paramref name="source"/>
+    /// thunk yields a different value (auto SMTC/buffering/default tracks; auto-disposed on unmount).</summary>
+    protected FluentGpu.Media.MediaPlayer UseVideo(Func<FluentGpu.Media.MediaSource> source) => Context.UseVideo(source);
     protected void UseKeyframes(AnimChannel channel, Keyframe[] keys, float durationMs, bool loop = false, params object[] deps) => Context.UseKeyframes(channel, keys, durationMs, loop, deps);
     protected void UseDrivenAnimation(AnimChannel channel, Keyframe[] keys, Func<float> source, float min, float max, params object[] deps) => Context.UseDrivenAnimation(channel, keys, source, min, max, deps);
     // Zero-alloc DepKey variants (finding #9)

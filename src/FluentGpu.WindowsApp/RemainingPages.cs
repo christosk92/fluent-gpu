@@ -201,11 +201,19 @@ sealed class SwipeControlPage : Component
 
 sealed class MediaPlayerElementPage : Component
 {
-    public override Element Render() => GalleryPage.Shell("MediaPlayerElement",
-        "Plays video and audio with built-in transport controls.",
-        ControlExample.Build("A MediaPlayerElement", MediaPlayerElement.Create(480f),
-            description: "The engine has no media pipeline yet — this renders the 16:9 video surface and transport-controls chrome only.",
-            code: """
-            MediaPlayerElement.Create(480f)
-            """));
+    public override Element Render()
+    {
+        // The real §4.3 control bound to a player. With no source it degrades to audio-only chrome (poster + transport);
+        // the Desktop Video page drives a live MF clear-video surface through the same control.
+        var player = UseMediaPlayer();
+        return GalleryPage.Shell("MediaPlayerElement",
+            "Plays video and audio with built-in transport controls.",
+            ControlExample.Build("A MediaPlayerElement",
+                new BoxEl { Width = 480f, Height = 300f, Children = [Embed.Comp(() => new FluentGpu.Controls.Media.MediaPlayerElement { Player = player })] },
+                description: "The real MediaPlayerElement bound to a headless player. With no source it degrades to audio-only chrome; the Desktop Video page drives a live Media Foundation clear-video surface.",
+                code: """
+                var player = UseMediaPlayer();
+                new MediaPlayerElement { Player = player }
+                """));
+    }
 }

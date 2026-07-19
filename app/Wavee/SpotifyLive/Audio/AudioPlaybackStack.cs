@@ -10,7 +10,6 @@ using Wavee.Backend.Audio;
 using Wavee.Backend.Metadata;
 using Wavee.Backend.Spotify;
 using Wavee.Core;
-using Wavee.SpotifyLive.Audio.Host;
 using Xm = Wavee.Protocol.ExtendedMetadata;
 
 namespace Wavee.SpotifyLive.Audio;
@@ -28,8 +27,6 @@ public sealed class AudioPlaybackStack : IAsyncDisposable
     public LicenseKeyDiskCache? LicenseDiskCache { get; }
     public RuntimeAsset? RuntimeAsset { get; private set; }
     readonly WaveeLogger _log;
-    readonly bool _useOutOfProcessHost;
-    readonly SupervisedAudioHost? _supervisedHost;
 #if WAVEE_PLAYPLAY_LOCAL
     InProcessPlayPlayKeyDeriver? _playPlay;
 #endif
@@ -52,34 +49,17 @@ public sealed class AudioPlaybackStack : IAsyncDisposable
 #endif
         BodyDiskCache = AudioBodyDiskCache.FromSettings(settings);
         LicenseDiskCache = LicenseKeyDiskCache.FromSettings(settings);
-        _useOutOfProcessHost = Environment.GetEnvironmentVariable("WAVEE_AUDIO_INPROC") != "1"
-            && Environment.GetEnvironmentVariable("WAVEE_AUDIO_OOP") != "0";
-        if (_useOutOfProcessHost)
-        {
-            _supervisedHost = new SupervisedAudioHost(
+        // M6: the ONE real audio host — the unified FluentGpu.Media engine, in-process. The old out-of-proc supervision +
+        // AudioPlayEngine/DecodePipeline/WasapiRenderer path is deleted; there is no fallback engine.
+        Host = new FluentMediaAudioHost(
 #if WAVEE_PLAYPLAY_LOCAL
-                () => _playPlay,
-                () => _playPlay,
+            () => _playPlay,
 #else
-                () => null,
-                () => null,
+            () => null,
 #endif
-                log,
-                BodyDiskCache);
-            _supervisedHost.CircuitBroken += OnAudioHostCircuitBroken;
-            Host = _supervisedHost;
-        }
-        else
-        {
-            Host = new InProcessAudioHost(
-#if WAVEE_PLAYPLAY_LOCAL
-                () => _playPlay,
-#else
-                () => null,
-#endif
-                log,
-                BodyDiskCache);
-        }
+            HttpPools.Get(HttpPool.Cdn),
+            log,
+            BodyDiskCache);
         if (Host is IAudioDspControl dsp)
         {
             // Apply persisted DSP before the first load/Hello. Older builds exposed 30 seconds while every host clamped
@@ -91,9 +71,9 @@ public sealed class AudioPlaybackStack : IAsyncDisposable
             dsp.SetCrossfade(settings.Get(WaveeSettings.CrossfadeEnabled), crossfadeMs);
         }
 #if WAVEE_PLAYPLAY_LOCAL
-        Func<IPlayPlayKeyDeriver?> deriver = () => _supervisedHost is not null ? _supervisedHost : _playPlay;
+        Func<IPlayPlayKeyDeriver?> deriver = () => _playPlay;
 #else
-        Func<IPlayPlayKeyDeriver?> deriver = () => _supervisedHost;
+        Func<IPlayPlayKeyDeriver?> deriver = static () => null;
 #endif
         Func<RuntimeAsset?> runtime = () => RuntimeAsset;
 #if WAVEE_PLAYPLAY_LOCAL
@@ -120,7 +100,7 @@ public sealed class AudioPlaybackStack : IAsyncDisposable
         Log(WaveeLogLevel.Debug, "audio.stack.created", "Audio playback stack created",
             WaveeLogField.Of("playplayLocal", PlayPlayLocalCompiled),
             WaveeLogField.Of("formatProbe", formatProbe is not null),
-            WaveeLogField.Of("oop", _useOutOfProcessHost));
+            WaveeLogField.Of("host", "FluentMediaAudioHost"));
     }
 
     static float[] ReadEqualizerGains(IAppSettings settings)
@@ -183,16 +163,6 @@ public sealed class AudioPlaybackStack : IAsyncDisposable
             WaveeLogField.Of("version", asset.Config.Version),
             WaveeLogField.Of("arch", asset.Config.Arch.ToString()),
             WaveeLogField.Of("dll", asset.PackPath));
-        if (_supervisedHost is not null)
-        {
-            _supervisedHost.SetRuntimeAsset(asset);
-            Status.SetProvisioning(ProvisioningOutcome.Ready);
-            Log(WaveeLogLevel.Info, "playplay.bind.remote_ready", "PlayPlay runtime descriptor bound to audio child",
-                WaveeLogField.Of("pack", asset.PackId),
-                WaveeLogField.Of("version", asset.Config.Version),
-                WaveeLogField.Of("arch", asset.Config.Arch.ToString()));
-            return true;
-        }
 #if WAVEE_PLAYPLAY_LOCAL
         return EnsureInProcessPlayPlay(asset, reason);
 #else
@@ -205,25 +175,13 @@ public sealed class AudioPlaybackStack : IAsyncDisposable
 #endif
     }
 
-    void OnAudioHostCircuitBroken()
-    {
-#if WAVEE_PLAYPLAY_LOCAL
-        if (RuntimeAsset is { } asset)
-        {
-            EnsureInProcessPlayPlay(asset, "circuit-breaker");
-            _supervisedHost?.RebindFallbackDecryptors(() => _playPlay);
-        }
-#endif
-    }
-
 #if WAVEE_PLAYPLAY_LOCAL
     bool EnsureInProcessPlayPlay(RuntimeAsset asset, string reason)
     {
         _playPlay?.Dispose();
         _playPlay = InProcessPlayPlayKeyDeriver.TryCreate(asset, Status, _log);
-        if (Host is InProcessAudioHost inProcess)
-            inProcess.RebindPlayPlay(() => _playPlay);
-        _supervisedHost?.RebindFallbackDecryptors(() => _playPlay);
+        // FluentMediaAudioHost reads _playPlay through its decryptor closure (() => _playPlay), so reassigning the field
+        // here is picked up on the next body attach — no explicit rebind call needed.
         if (_playPlay is null)
         {
             Status.SetProvisioning(ProvisioningOutcome.RuntimeUnavailable, "PlayPlay native deriver init failed");
@@ -246,8 +204,6 @@ public sealed class AudioPlaybackStack : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        if (_supervisedHost is not null)
-            _supervisedHost.CircuitBroken -= OnAudioHostCircuitBroken;
         await Host.DisposeAsync().ConfigureAwait(false);
 #if WAVEE_PLAYPLAY_LOCAL
         _playPlay?.Dispose();

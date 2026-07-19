@@ -31,6 +31,14 @@ public interface IGpuDevice : IDisposable
     bool SupportsSecondarySwapchains => false;
     ISwapchain CreateSwapchain(in SwapchainDesc desc);
 
+    /// <summary>The composited-video presenter (DirectComposition child visuals for externally-produced video / protected
+    /// DRM surfaces), or <see langword="null"/> when this backend/target cannot composite video — the headless seam, or
+    /// an opaque non-composited window. Default <see langword="null"/> keeps every non-D3D12 backend AND the headless
+    /// test seam free of video, so the host's phase-11 video-surface drain is a no-op there and the zero-alloc gates are
+    /// untouched by construction. The D3D12 backend returns its render-thread-confined <c>DCompVideoPresenter</c> (only
+    /// while the primary swapchain is composited).</summary>
+    FluentGpu.Pal.IVideoPresenter? VideoPresenter => null;
+
     /// <summary>Record + batch + submit the per-frame DrawList. <paramref name="drawList"/> is the POD command stream.</summary>
     void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx);
 

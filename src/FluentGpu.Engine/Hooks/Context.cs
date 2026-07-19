@@ -20,6 +20,10 @@ public sealed class Context<T>
 public static class Viewport
 {
     public static readonly Context<Size2> Size = new(default);
+    /// <summary>The window DIP→device-px scale factor (1.0 at 96 DPI). Published by the host; updated on a DPI change.
+    /// A component that must size a device-pixel resource (e.g. <c>MediaPlayerElement</c> sizing the MF video stream to
+    /// its laid-out rect) reads <c>UseContext(Viewport.Scale)</c>. Default 1.0 (headless / pre-publish).</summary>
+    public static readonly Context<float> Scale = new(1f);
 }
 
 /// <summary>
@@ -44,6 +48,17 @@ public static class FrameClock
 public static class Activation
 {
     public static readonly Context<IReadSignal<bool>?> IsActive = new(null);
+}
+
+/// <summary>
+/// The host-owned <c>VideoSurfaceRegistry</c> — the portable arbitration buffer a component's <c>UseVideoSurface</c>
+/// hook (or a media player) writes video-surface intents into, drained into the render-thread <c>IVideoPresenter</c> at
+/// phase 11. Read with <c>UseContext(VideoCompositor.Current)</c>. Null (headless / a non-composited window) means video
+/// compositing is unavailable — the hook returns an inert binding and the page shows its poster/fallback.
+/// </summary>
+public static class VideoCompositor
+{
+    public static readonly Context<FluentGpu.Media.VideoSurfaceRegistry?> Current = new(null);
 }
 
 /// <summary>

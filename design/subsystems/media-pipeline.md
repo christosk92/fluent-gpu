@@ -475,16 +475,22 @@ public readonly record struct VideoSurfaceId(uint Value);   // POD, opaque acros
 public interface IVideoPresenter           // FluentGpu.Windows Pal/ → IDCompositionDevice child visual; macOS → AVPlayerLayer
 {
     VideoSurfaceId CreateSurface();
-    void  Place(VideoSurfaceId id, in IntRect deviceRect, float opacity, int z);   // off-loop transform poke
+    void  BindSurfaceHandle(VideoSurfaceId id, nuint dcompSurfaceHandle);   // the surface-handoff + DRM attach point
+    void  Place(VideoSurfaceId id, RectF deviceRect, float opacity, int z);   // off-loop transform poke
     void  SetVisible(VideoSurfaceId id, bool visible);
     void  Destroy(VideoSurfaceId id);
-    nuint GetMediaPlayerSink(VideoSurfaceId id);   // the app binds its MediaPlayer/MediaPlayerElement to this
+    void  Commit();                                // flush queued Place/SetVisible/BindSurfaceHandle at phase 11
 }
 ```
 `IVideoPresenter` is the ONLY new PAL surface for video. All its `IDCompositionVisual`/`IDCompositionDevice`
 ComPtrs are render-thread-confined (`hardened-v1-plan.md` §2/§4.2); `Place`/`SetVisible`/`Commit` execute on
-the render thread at phase 11. The app binds its `MediaPlayer` to the sink (`GetMediaPlayerSink`); FluentGpu
-never sees a decoded video frame.
+the render thread at phase 11. **`BindSurfaceHandle` is the surface-handoff seam** (as-built,
+`src/FluentGpu.Engine/Seams/Pal/IVideoPresenter.cs`; supersedes the earlier `GetMediaPlayerSink` sink-pull
+shape <!-- canon-allow: names the superseded seam method on purpose -->): an external owner produces a
+DirectComposition surface HANDLE (`DCompositionCreateSurfaceHandle` / `IMFMediaEngineEx::GetVideoSwapchainHandle`
+on its side), and the Windows impl wraps it via `IDCompositionDevice::CreateSurfaceFromHandle` and binds it as
+the child visual's content. FluentGpu never sees a decoded video frame. The **DRM path passes a PROTECTED
+handle here — nothing else in this seam or the renderer changes** (§8.4).
 
 ### 8.2 Present-tree amendment to `architecture-spec` §5.1 (one visual → multi-visual)
 
@@ -536,6 +542,40 @@ public sealed class VideoSurfaceRegistry    // UI-thread arbitration; portable p
 
 **macOS boundary:** `IVideoPresenter` → `AVPlayerLayer` as a `CALayer` sibling under the `CAMetalLayer`; the
 hole-punch protocol is identical (premul-0 clear + z-order). No engine change.
+
+### 8.4 DRM — one seam, a protected handle, the same hole-punch (SHIPPED)
+
+DRM adds **no** renderer, present-tree, hole-punch, or registry change: it attaches at the single
+`BindSurfaceHandle` point with a **PROTECTED** DirectComposition surface handle instead of a clear one. A
+protected surface is byte-for-byte the same primitive to the compositor — DWM/the GPU enforce output
+protection *below* the handle, so a protected region captures **BLACK** in a screen capture (expected DRM
+behavior, not a bug; the golden-image gate cannot validate live protected pixels, only the chrome around the
+hole). This is *why* DRM requires zero spine change. **Posture: the engine never sees a decrypted pixel or a
+content key.**
+
+- **Native in-process PlayReady is the shipped v1 DRM path** (`docs/plans/media-playback-api-spec.md` §9.2 +
+  `docs/plans/video-drm-layer-design.md`, superseding finding 2026-07-19; on-box proven, no UWP sidecar). A
+  custom CENC `IMFMediaSource` → the modern MF-CDM decryptor → decode → a non-zero protected windowless-swapchain
+  handle → `BindSurfaceHandle`. It is the DRM code path of the unified spec's `MfMediaPlayer`
+  (`FluentGpu.Windows/Media/`), built from `FluentGpu.PlayReady.Native.dll`
+  (`tools/playready-uwp-helper/{Helper.cpp,CencMediaSource.h}`). Three proven native fixes make it work: the
+  right license server for the content, `MFWrapMediaType(MFMediaType_Protected)` + `MF_SD_PROTECTED` (the
+  modern EME wrap, NOT the raw `MF_MT_PROTECTED` attribute that triggers the legacy ITA/OTA topology →
+  `MF_E_TOPOLOGY_VERIFICATION_FAILED 0xC00D715B` of microsoft-ui-xaml#10918), and a persistent-license EME
+  session — all guarded by `FG_CENC_*` A/B env vars.
+- **License acquisition is the managed `WithDrm` relay.** The native CDM raises the challenge; a managed
+  `Func<LicenseRequest, ValueTask<LicenseResponse>>` (spec §9.2) performs the license POST (the app supplies
+  the server + token per source) and returns the license bytes for the native `Update()`. Native keeps only
+  CDM/CENC/decrypt; the CDM sees no key or decrypted pixel. The relay is the direct analogue of how
+  `SystemMediaControls.ButtonDispatcher` injects host behavior into a generic OS-services component.
+- **Widevine via WebView2 is an optional later fallback for genuinely Widevine-only content** (there is no
+  embeddable self-provisioned native Widevine CDM), not the v1 path.
+- **A DRM shortfall is `MediaError{Category.Drm, Recovery.NeedsLicense/PickLowerQuality}` — never a silent drop
+  to black** (`gpu-renderer.md` treats the protected surface identically to any composited surface).
+
+Canon: `IVideoPresenter`/`VideoSurfaceId` seam shape is owned by `pal-rhi.md`; this doc owns the present-tree
+placement + the DRM attach behavior above; the unified `IMediaPlayer`/`MediaPlayer`/`MediaRouter` + `MfMediaPlayer`
+DRM path + the `WithDrm` relay are registered in `SPEC-INDEX.md §2` + `README.md` §2.
 
 ---
 

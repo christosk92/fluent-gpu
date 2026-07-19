@@ -158,6 +158,33 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private IDCompositionTarget* _dcompTarget;
     private IDCompositionVisual* _dcompVisual;
 
+    // Video compositing spine (M0): the DComp video presenter shares this device's ONE IDCompositionDevice + the primary
+    // swapchain's root visual (docs/plans/video-compositing-spine-design.md §4/§13.6). Lazily created; render-thread-confined.
+    private FluentGpu.Pal.Windows.DCompVideoPresenter? _videoPresenter;
+
+    // The shared IDCompositionDevice + the primary swapchain's DComp root/UI visual, for the video presenter (same assembly).
+    internal IDCompositionDevice* DcompDevice => _dcomp;
+    internal D3D12Swapchain? PrimarySwapchain => _primarySwapchain;
+    internal void AssertRenderThread() => AssertSubmitThread();
+
+    /// <summary>
+    /// The DRM-free video-compositing seam (<c>IVideoPresenter</c>), sharing this device's single
+    /// <c>IDCompositionDevice</c> and the primary swapchain's DComp root visual. Lazily created on first access; must be
+    /// touched only after the primary swapchain's DComp graph is bound (render-thread-confined). Returns null if there is
+    /// no composited primary swapchain (opaque HWND path has no DComp tree).
+    /// </summary>
+    public FluentGpu.Pal.IVideoPresenter? GetVideoPresenter()
+    {
+        AssertSubmitThread();
+        if (_primarySwapchain is not { Composited: true }) return null;
+        return _videoPresenter ??= new FluentGpu.Pal.Windows.DCompVideoPresenter(this);
+    }
+
+    /// <summary><see cref="IGpuDevice.VideoPresenter"/> — the composited-video presenter for the host's phase-11 video
+    /// drain. Delegates to <see cref="GetVideoPresenter"/> (render-thread-confined; null unless the primary swapchain is
+    /// composited).</summary>
+    public FluentGpu.Pal.IVideoPresenter? VideoPresenter => GetVideoPresenter();
+
     public D3D12Device(StringTable strings, bool composited = false)
     {
         _strings = strings;
@@ -613,13 +640,121 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         IDCompositionTarget* dcompTarget;
         Check(_dcomp->CreateTargetForHwnd(target.Hwnd, BOOL.TRUE, &dcompTarget), "CreateTargetForHwnd");
         target.DcompTarget = dcompTarget;
+        // Video spine (M0, docs/plans/video-compositing-spine-design.md §3.2): a ROOT visual wrapping the UI child, so
+        // video child visuals can be lazily inserted z-BELOW the UI. With zero video children this is behaviorally
+        // identical to the old single-visual tree (root → one UI child on top). Back-compat: nothing about the swapchain,
+        // RTVs, present, or the SetContent-survives-ResizeBuffers property changes.
+        IDCompositionVisual* root;
+        Check(_dcomp->CreateVisual(&root), "CreateVisual(root)");
+        target.DcompRoot = root;
         IDCompositionVisual* visual;
-        Check(_dcomp->CreateVisual(&visual), "CreateVisual");
+        Check(_dcomp->CreateVisual(&visual), "CreateVisual(ui)");
         target.DcompVisual = visual;
         Check(target.DcompVisual->SetContent((IUnknown*)target.SwapChain), "Visual.SetContent");
-        Check(target.DcompTarget->SetRoot(target.DcompVisual), "Target.SetRoot");
+        // UI child on TOP of the root (insertAbove=TRUE, ref=null). Video children go under it via AddVisual(child,
+        // insertAbove=FALSE, ref=uiVisual) in DCompVideoPresenter — strictly beneath, revealed by the premul-0 hole.
+        Check(target.DcompRoot->AddVisual(target.DcompVisual, BOOL.TRUE, null), "Root.AddVisual(ui)");
+        Check(target.DcompTarget->SetRoot(target.DcompRoot), "Target.SetRoot(root)");
         Check(_dcomp->Commit(), "DComp.Commit");
         target.DcompBindPending = false;
+        _videoPresenter?.OnSwapchainRebound(target);   // re-attach any live video children under the new root
+    }
+
+    // Producer swapchains that render into engine-owned shareable DComp surface handles (M0 test surfaces). Kept alive
+    // for the device lifetime so the DWM-side CreateSurfaceFromHandle reads live pixels; released in Dispose.
+    private readonly List<nint> _testSurfaceSwapchains = new();
+
+    /// <summary>
+    /// M0 (docs/plans/video-phase1-plan.md §4, correction #4): create a REAL shareable DirectComposition surface via
+    /// <c>DCompositionCreateSurfaceHandle</c>, render a recognizable test pattern into it through a
+    /// composition-surface-handle DXGI swapchain, and return the handle. The video presenter binds it with
+    /// <c>CreateSurfaceFromHandle</c> — so <c>BindSurfaceHandle</c> is exercised end-to-end with no media/decoder/DRM.
+    /// The pattern is a two-tone split (magenta right / cyan left) so the composited blend is unmistakably the surface,
+    /// not a flat fill. Render-thread-confined; the producer swapchain is retained for the device lifetime.
+    /// </summary>
+    public nuint CreateEngineTestSurfaceHandle(uint w, uint h)
+    {
+        AssertSubmitThread();
+        if (w < 1) w = 1; if (h < 1) h = 1;
+
+        // 1. The shareable surface handle (COMPOSITIONOBJECT_ALL_ACCESS). This is the primitive a plain CreateSurface
+        //    lacks — it is what makes the handle path real (correction #4).
+        HANDLE surfHandle;
+        Check(DCompositionCreateSurfaceHandle(COMPOSITIONOBJECT_ALL_ACCESS, null, &surfHandle), "DCompositionCreateSurfaceHandle");
+
+        // 2. A DXGI composition-surface-handle swapchain that renders INTO that handle (the producer side).
+        IDXGIFactoryMedia* factoryMedia;
+        Check(_factory->QueryInterface(__uuidof<IDXGIFactoryMedia>(), (void**)&factoryMedia), "QI IDXGIFactoryMedia");
+        DXGI_SWAP_CHAIN_DESC1 sd = default;
+        sd.Width = w;
+        sd.Height = h;
+        sd.Format = DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM;
+        sd.SampleDesc.Count = 1;
+        sd.BufferUsage = DXGI.DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        sd.BufferCount = FRAME_COUNT;
+        sd.Scaling = DXGI_SCALING.DXGI_SCALING_STRETCH;
+        sd.SwapEffect = DXGI_SWAP_EFFECT.DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+        sd.AlphaMode = DXGI_ALPHA_MODE.DXGI_ALPHA_MODE_IGNORE;   // opaque test pattern (child must present opaque content)
+        IDXGISwapChain1* sc1;
+        Check(factoryMedia->CreateSwapChainForCompositionSurfaceHandle((IUnknown*)_queue, surfHandle, &sd, null, &sc1),
+            "CreateSwapChainForCompositionSurfaceHandle");
+        factoryMedia->Release();
+        IDXGISwapChain3* sc3;
+        Check(sc1->QueryInterface(__uuidof<IDXGISwapChain3>(), (void**)&sc3), "QI IDXGISwapChain3 (test surface)");
+        sc1->Release();
+
+        // 3. Render one frame: clear buffer 0 to magenta, then the left half to cyan (a two-tone split). One-off
+        //    allocator + command list (this runs once at setup, single-threaded).
+        ID3D12Resource* buf;
+        Check(sc3->GetBuffer(0, __uuidof<ID3D12Resource>(), (void**)&buf), "GetBuffer(test surface)");
+        D3D12_DESCRIPTOR_HEAP_DESC hd = default;
+        hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE.D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+        hd.NumDescriptors = 1;
+        ID3D12DescriptorHeap* rtvHeap;
+        Check(_device->CreateDescriptorHeap(&hd, __uuidof<ID3D12DescriptorHeap>(), (void**)&rtvHeap), "CreateDescriptorHeap(test surface)");
+        D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtvHeap->GetCPUDescriptorHandleForHeapStart();
+        _device->CreateRenderTargetView(buf, null, rtv);
+
+        ID3D12CommandAllocator* alloc;
+        Check(_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE.D3D12_COMMAND_LIST_TYPE_DIRECT,
+            __uuidof<ID3D12CommandAllocator>(), (void**)&alloc), "CreateCommandAllocator(test surface)");
+        ID3D12GraphicsCommandList* cl;
+        Check(_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE.D3D12_COMMAND_LIST_TYPE_DIRECT, alloc, null,
+            __uuidof<ID3D12GraphicsCommandList>(), (void**)&cl), "CreateCommandList(test surface)");
+
+        D3D12_RESOURCE_BARRIER b = default;
+        b.Type = D3D12_RESOURCE_BARRIER_TYPE.D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        b.Anonymous.Transition.pResource = buf;
+        b.Anonymous.Transition.Subresource = 0xFFFFFFFF;
+        b.Anonymous.Transition.StateBefore = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COMMON;
+        b.Anonymous.Transition.StateAfter = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET;
+        cl->ResourceBarrier(1, &b);
+
+        float* magenta = stackalloc float[4] { 1f, 0f, 1f, 1f };
+        float* cyan = stackalloc float[4] { 0f, 1f, 1f, 1f };
+        cl->ClearRenderTargetView(rtv, magenta, 0, null);
+        RECT leftHalf = default; leftHalf.left = 0; leftHalf.top = 0; leftHalf.right = (int)(w / 2); leftHalf.bottom = (int)h;
+        cl->ClearRenderTargetView(rtv, cyan, 1, &leftHalf);
+
+        b.Anonymous.Transition.StateBefore = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET;
+        b.Anonymous.Transition.StateAfter = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COMMON;
+        cl->ResourceBarrier(1, &b);
+        Check(cl->Close(), "cmdList.Close(test surface)");
+        ID3D12CommandList* rawList = (ID3D12CommandList*)cl;
+        _queue->ExecuteCommandLists(1, &rawList);
+        WaitForGpu();
+
+        // Present into the composition surface handle so DWM can read the painted pixels.
+        Check((HRESULT)global::FluentGpu.Interop.Generated.IDXGISwapChainVtbl.Present(sc3, 0, 0), "Present(test surface)");
+        WaitForGpu();
+
+        cl->Release();
+        alloc->Release();
+        buf->Release();
+        rtvHeap->Release();
+        _testSurfaceSwapchains.Add((nint)sc3);   // keep the producer alive; released in Dispose
+
+        return (nuint)(nint)surfHandle;
     }
 
     private void CreateRtvs(D3D12Swapchain target)
@@ -2034,6 +2169,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             }
         }
         if (target.DcompVisual != null) { target.DcompVisual->Release(); target.DcompVisual = null; }
+        if (target.DcompRoot != null) { target.DcompRoot->Release(); target.DcompRoot = null; }
         if (target.DcompTarget != null) { target.DcompTarget->Release(); target.DcompTarget = null; }
         if (target.SwapChain != null) { target.SwapChain->Release(); target.SwapChain = null; }
         if (target.RtvHeap != null)
@@ -2112,6 +2248,11 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _swapchains.Clear();
         _primarySwapchain = null;
         _activeSwapchain = null;
+        _videoPresenter?.Dispose();   // video spine (M0): release child visuals + surface content before the DComp device
+        _videoPresenter = null;
+        foreach (nint sc in _testSurfaceSwapchains)
+            if (sc != 0) global::FluentGpu.Interop.Generated.IUnknownVtbl.Release((void*)sc);
+        _testSurfaceSwapchains.Clear();
         if (_dcomp != null) _dcomp->Release();
         _glyphs?.Dispose();
         _imagePipe?.Dispose();
@@ -2153,7 +2294,8 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     internal bool TearingSupported;
     internal uint W, H, FrameIndex;
     internal IDCompositionTarget* DcompTarget;
-    internal IDCompositionVisual* DcompVisual;
+    internal IDCompositionVisual* DcompRoot;     // video spine (M0): the tree root — UI child z-above, video children z-below
+    internal IDCompositionVisual* DcompVisual;   // the UI child (owns the swapchain content); topmost, painted every frame
     internal bool DcompBindPending;   // seam: DComp graph deferred out of UI-thread InitSwapChain; bound on the presenting thread (see BindDComp)
     internal CompositionBackdrop? Backdrop;   // non-null ⇒ WUC desktop-acrylic popup (replaces the DComp path)
     internal readonly bool DesktopAcrylic;

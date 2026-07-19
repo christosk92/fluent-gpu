@@ -5,6 +5,12 @@
          seeds NEW files, which would otherwise inherit the project-name root (FluentGpu.Engine). -->
     <RootNamespace>FluentGpu</RootNamespace>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The M1 media backend unit tests construct a VideoBinding over a real VideoSurfaceRegistry (internal ctor) to
+         exercise the session's surface handoff against a fake IVideoPresenter. -->
+    <InternalsVisibleTo Include="FluentGpu.Windows.Tests" />
+  </ItemGroup>
   <!-- The portable engine core: Foundation, the Rhi/Pal/Text seam interfaces, Scene, Render, Layout, Dsl, Hooks,
        Reconciler, Animation, Input, Media, Hosting, and the three Headless backends. No NuGet, no OS code — the
        Windows leaves live in FluentGpu.Windows behind the interface-level seams. Intra-engine layering (e.g. Dsl

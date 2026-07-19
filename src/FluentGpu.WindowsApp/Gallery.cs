@@ -159,6 +159,8 @@ sealed class GalleryApp : Component
                 new("Image", Icons.Picture, "Image"),
                 new("PersonPicture", Icons.FavoriteStar, "PersonPicture"),
                 new("MediaPlayerElement", Icons.Movie, "MediaPlayerElement"),
+                new("desktop-video", Icons.Movie, "Desktop Video (In-process)"),
+                new("playready-video", Icons.Movie, "Protected Video (DRM)"),
             ],
         },
         new("collections", Icons.List, "Collections")
@@ -421,6 +423,8 @@ sealed class GalleryApp : Component
         "AnnotatedScrollBar" => Embed.Comp(() => new AnnotatedScrollBarPage()),
         "SwipeControl" => Embed.Comp(() => new SwipeControlPage()),
         "MediaPlayerElement" => Embed.Comp(() => new MediaPlayerElementPage()),
+        "desktop-video" => Embed.Comp(() => new DesktopVideoPage()),
+        "playready-video" => Embed.Comp(() => new ProtectedVideoPage()),
         "datetime" => Embed.Comp(() => new DateTimeOverviewPage()),
         "CalendarView" => Embed.Comp(() => new CalendarViewPage()),
         "CalendarDatePicker" => Embed.Comp(() => new CalendarDatePickerPage()),
