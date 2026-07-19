@@ -579,14 +579,19 @@ public sealed class AppHost : IDisposable
         // user-visible motion — keep them at the display rate instead of letting the ambient cap drop the reveal to 30 Hz
         // the instant the fling settles (a driver of the "scroll feels 24 fps then 120 fps" inconsistency). Both bits
         // clear the moment decode/reveal finishes, so this never holds the loop awake the way a perpetual loop would.
-        WakeReasons.ImageCrossfades | WakeReasons.ImagesPending;
+        WakeReasons.ImageCrossfades | WakeReasons.ImagesPending |
+        // Active video presentation is DISPLAY-rate motion (a playing video advances every refresh) — exempt it from the
+        // 30 Hz ambient cap so playback runs at the panel's full frame rate, not the ambient-throttled cadence.
+        WakeReasons.VideoPresenting;
     // Modal-loop keep-alive paints must still run when any of these wake bits are set — even if ambient animation is
     // also live (playback seek ticker). Without this mask the InModalLoop+AnimIsAmbient bail swallowed warming virtual
     // lists mid-drag (detail-resize-flicker fix).
     private const WakeReasons ModalLoopEssentialWake =
         WakeReasons.FrameNeeded | WakeReasons.RuntimePending | WakeReasons.ScrollAnim |
         WakeReasons.DragDropWork | WakeReasons.DragActive | WakeReasons.GestureHold | WakeReasons.TouchPress |
-        WakeReasons.PopupAnim | WakeReasons.ImagesPending | WakeReasons.ImageCrossfades | WakeReasons.Orphans;
+        WakeReasons.PopupAnim | WakeReasons.ImagesPending | WakeReasons.ImageCrossfades | WakeReasons.Orphans |
+        // A video presenting under a modal/seek loop must keep pumping so the frame keeps advancing.
+        WakeReasons.VideoPresenting;
     private static bool OnlyAmbientWakeReasons(WakeReasons reasons) => (reasons & ModalLoopEssentialWake) == 0;
     // Dynamic-text (HUD) intern-on-change cache, indexed by (int)DynamicTextKind (None..FrameMs = 0..5). Each slot
     // holds the last DISPLAYED quantized value (the int fps / int cmd|draw|cull / 0.1-rounded ms — exactly the display
@@ -778,6 +783,12 @@ public sealed class AppHost : IDisposable
         if (_dispatcher.Drag.IsActive) r |= WakeReasons.DragActive;   // E5 reorder dwell keep-alive: a live drag keeps frames coming so the 200/300ms FrameClock dwell tickers advance even on a motionless pointer (DragController.cs:118)
         if (_dispatcher.HasArmedHold) r |= WakeReasons.GestureHold;   // §7A touch long-press: a STATIONARY held finger emits no input, so keep frames coming until TickGestureArenas fires the ~500ms Hold (then this clears and the loop idles)
         if (_dispatcher.HasPendingTouchPress) r |= WakeReasons.TouchPress;
+        // A media player actively presenting a video surface (playing, or ramping to play through the DRM/CDM licensing
+        // handshake) must keep the loop ticking at DISPLAY rate — otherwise the loop idles the instant the initial
+        // FrameNeeded clears, the MediaPlayerElement pump stops, and the video freezes (advancing only when a seek/pause
+        // pokes _frameNeeded). Cleared the moment playback pauses/stops/ends or the surface is released, so a paused,
+        // audio-only, or idle player still lets the loop sleep. O(1) counter read (VideoSurfaceRegistry).
+        if (_videoSurfaces.HasActivePresentation) r |= WakeReasons.VideoPresenting;
         // A windowed popup's desktop-acrylic open reveal is driven per-frame on Present (CompositionBackdrop.TickAnimation),
         // so it needs the loop to keep presenting until it settles — otherwise (no engine animation active for windowed
         // menus) the loop idle-skips and the reveal freezes at its seed. O(popups) ≈ O(1) (typically 0–1 menus open).

@@ -24,6 +24,8 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession
     private MediaSignalSink? _sink;
     private bool _disposed;
     private bool _started;
+    private bool _playRequested;   // UI-thread play intent — re-asserted against the native transport by the pump until it takes
+    private long _lastReassertPos = -1;   // last native PositionMs seen by the play-reassert gate (−1 = not yet sampled)
 
     // Published/realized state (UI thread, via the pump).
     private SizeI _naturalSize = SizeI.Zero;
@@ -40,6 +42,7 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession
         _player = player;
         _request = request;
         _opts = opts;
+        _playRequested = !opts.StartPaused;
         _locus = new MediaLocus(null, request.Source, null, null, null);
     }
 
@@ -74,6 +77,8 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession
     {
         if (_disposed) return ValueTask.CompletedTask;
         StartOnce();
+        _playRequested = true;
+        _lastReassertPos = long.MaxValue;   // re-arm: force the next pump to re-assert Play (fresh play after pause/stall)
         _player.Play();
         _sink?.PlayRequested(true);
         return ValueTask.CompletedTask;
@@ -83,6 +88,7 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession
     public ValueTask PauseAsync()
     {
         if (_disposed) return ValueTask.CompletedTask;
+        _playRequested = false;
         _player.Pause();
         _sink?.PlayRequested(false);
         return ValueTask.CompletedTask;
@@ -170,8 +176,22 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession
         }
 
         // 4. State + position.
+        long posMs = _player.PositionMs.Value;
+
+        // The native CDM/decode engine boots on its own MTA thread over several seconds; a Play issued before it is
+        // ready is dropped, and a StartPaused open leaves the engine paused (it reaches CANPLAY + a non-zero surface
+        // handle but never pulls past sample #0 → black, clock stuck at 0). While play is intended, re-assert Play
+        // each pump until the TIMELINE actually advances — self-limiting (stops the instant PositionMs progresses),
+        // idempotent on the native side (an already-playing engine ignores it), and robust to the coarse snapshot
+        // reporting "playing" before the media engine truly runs.
+        if (_playRequested && pv != ProtectedVideoState.Error && pv != ProtectedVideoState.Ended)
+        {
+            if (posMs > _lastReassertPos) _lastReassertPos = posMs;   // advancing → the engine took the play; stop nudging
+            else _player.Play();                                      // stalled at the same position (or first pump) → nudge Play
+        }
+
         Publish(sink, MapState(pv));
-        sink.Position(TimeSpan.FromMilliseconds(_player.PositionMs.Value));
+        sink.Position(TimeSpan.FromMilliseconds(posMs));
     }
 
     private static PlaybackState MapState(ProtectedVideoState s) => s switch

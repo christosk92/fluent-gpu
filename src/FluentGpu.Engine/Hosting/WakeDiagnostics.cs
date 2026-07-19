@@ -28,6 +28,7 @@ public enum WakeReasons
     GestureHold = 1 << 14,      // _dispatcher.HasArmedHold (§7A touch long-press timer keep-alive on a stationary held finger)
     PopupAnim = 1 << 15,        // a windowed-popup desktop-acrylic open reveal (CompositionBackdrop) is mid-animation — keep presenting so its per-frame clip inset advances to settle
     TouchPress = 1 << 16,       // delayed 100ms pressed visual for touch inside a scrollable viewport
+    VideoPresenting = 1 << 17,  // a media player is actively presenting a video surface (playing / ramping to play) — keep pumping at DISPLAY rate so frames advance (VideoSurfaceRegistry.HasActivePresentation)
 }
 
 /// <summary>
@@ -41,12 +42,12 @@ public enum WakeReasons
 internal sealed class WakeDiagnostics
 {
     // Per-reason awake-frame counts this window, indexed by bit position (0..ReasonCount-1).
-    private const int ReasonCount = 17;
+    private const int ReasonCount = 18;
     private static readonly string[] s_reasonNames =
     [
         "frameNeeded", "runtimePending", "dynamicText", "anim", "interact", "scrollAnim", "repeat", "caret",
         "brushAnims", "imagesPending", "imageCrossfades", "orphans", "dragDropWork", "dragActive", "gestureHold",
-        "popupAnim", "touchPress",
+        "popupAnim", "touchPress", "videoPresenting",
     ];
 
     private readonly long[] _reasonFrames = new long[ReasonCount];   // frames where reason i kept the loop awake

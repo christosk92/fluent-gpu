@@ -30,6 +30,7 @@ public sealed class VideoSurfaceRegistry
         public int Z;
         public nuint DesiredHandle;   // the DComp surface handle to bind (0 = none produced yet)
         public bool ReleasePending;   // token released on the UI side; the host destroys the surface then frees the slot
+        public bool Presenting;       // a media player is actively presenting into this surface (playing / ramping) — drives the host wake reason; does NOT affect the presenter drain
 
         // host-resolved (render thread):
         public VideoSurfaceId SurfaceId;   // none until first created
@@ -40,6 +41,7 @@ public sealed class VideoSurfaceRegistry
     private readonly Entry[] _entries = new Entry[MaxSurfaces];
     private readonly Signal<VideoSurfaceId>[] _surfaceSignals;
     private bool _anyDirty;
+    private int _presentingCount;   // number of slots a media player is actively presenting into (O(1) wake read)
     private static readonly bool s_diag = Environment.GetEnvironmentVariable("FG_DRM_DIAG") == "1";
 
     public VideoSurfaceRegistry()
@@ -81,6 +83,25 @@ public sealed class VideoSurfaceRegistry
         MarkDirty(ref e);
     }
 
+    /// <summary>Mark whether a media player is actively presenting new frames into this surface (playing, or ramping to
+    /// play). This is the source of truth for <see cref="HasActivePresentation"/> — the host folds it into a frame-loop
+    /// wake reason so a playing video keeps the loop ticking at display rate. Value-gated + O(1); it does NOT mark the
+    /// entry dirty (presenting has no effect on the presenter drain). Cleared automatically on <see cref="Release"/> /
+    /// <see cref="DestroyAll"/>. A media player must set it back to <c>false</c> on pause/stop/unbind.</summary>
+    public void SetPresenting(int token, bool presenting)
+    {
+        int i = token - 1;
+        if ((uint)i >= MaxSurfaces || !_entries[i].InUse) return;
+        ref Entry e = ref _entries[i];
+        if (e.Presenting == presenting) return;
+        e.Presenting = presenting;
+        _presentingCount += presenting ? 1 : -1;
+    }
+
+    /// <summary>True when at least one surface has an active presentation in flight (a media player is playing / ramping
+    /// into it). Read once per frame by the host wake computation; O(1), zero-alloc.</summary>
+    public bool HasActivePresentation => _presentingCount > 0;
+
     /// <summary>Bind the DirectComposition surface handle produced by a video source (the single DRM attach point).
     /// Value-gated: re-binding the same handle is a no-op.</summary>
     public void Bind(int token, nuint dcompSurfaceHandle)
@@ -96,6 +117,7 @@ public sealed class VideoSurfaceRegistry
     {
         int i = token - 1;
         if ((uint)i >= MaxSurfaces || !_entries[i].InUse) return;
+        if (_entries[i].Presenting) { _entries[i].Presenting = false; _presentingCount--; }   // stop keeping the loop awake the instant the owner releases
         _entries[i].ReleasePending = true;
         MarkDirty(ref _entries[i]);
     }
@@ -129,6 +151,7 @@ public sealed class VideoSurfaceRegistry
             if (e.ReleasePending)
             {
                 if (!e.SurfaceId.IsNone) { presenter.Destroy(e.SurfaceId); changed = true; }
+                if (e.Presenting) _presentingCount--;   // keep the wake counter balanced when a presenting slot is freed
                 _surfaceSignals[i].Value = default;
                 e = default;   // free the slot
                 continue;
@@ -188,6 +211,7 @@ public sealed class VideoSurfaceRegistry
             e = default;
         }
         _anyDirty = false;
+        _presentingCount = 0;
         if (changed) presenter.Commit();
     }
 
@@ -231,6 +255,10 @@ public readonly struct VideoBinding
     public void Place(RectF rectDip, int z = 0) { if (_registry is { } r) r.Place(Token, rectDip, z); }
     /// <summary>Show/hide the surface.</summary>
     public void SetVisible(bool visible) { if (_registry is { } r) r.SetVisible(Token, visible); }
+    /// <summary>Mark whether a media player is actively presenting new frames into this surface (playing / ramping to
+    /// play). Keeps the host frame loop ticking at display rate while true (see
+    /// <see cref="VideoSurfaceRegistry.HasActivePresentation"/>); set back to <c>false</c> on pause/stop.</summary>
+    public void SetPresenting(bool presenting) { if (_registry is { } r) r.SetPresenting(Token, presenting); }
     /// <summary>Bind the DirectComposition surface handle produced by a video source (the DRM attach point).</summary>
     public void Bind(nuint dcompSurfaceHandle) { if (_registry is { } r) r.Bind(Token, dcompSurfaceHandle); }
     /// <summary>Tear the surface down (also done automatically when the owning component unmounts).</summary>

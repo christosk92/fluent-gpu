@@ -118,6 +118,23 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable
         if (_disposed) return;
         // Only a composited-video session (the MF backend) drives the surface handoff; everything else is a no-op.
         (_session as IVideoSurfaceSession)?.PumpVideo(binding, videoRect, scale);
+
+        // Tell the host whether this video needs the frame loop kept awake at display rate. "Presenting" means the user
+        // intends playback AND the session is either advancing (Playing) or ramping toward it (Opening/Buffering — e.g.
+        // the DRM/CDM licensing handshake): keep pumping so frames advance and the DRM transport is driven to actually
+        // play. Gated so a paused, stopped, ended, or audio-only player lets the loop idle:
+        //  • audio-only sessions don't implement IVideoSurfaceSession (video-capable check below);
+        //  • a resolved audio-only MF source (video-capable but no natural size) only counts while still ramping.
+        // Read back after the pump so it reflects the state the session just published.
+        if (binding.IsValid)
+        {
+            bool videoCapable = _session is IVideoSurfaceSession;
+            var st = _core.State.Peek();
+            bool ramping = st is PlaybackState.Opening or PlaybackState.Buffering or PlaybackState.Stalled;
+            bool advancing = st == PlaybackState.Playing && !_core.NaturalSize.Peek().IsEmpty;
+            bool presenting = videoCapable && _core.IsPlayRequested.Peek() && (ramping || advancing);
+            binding.SetPresenting(presenting);
+        }
     }
 
     // ── transport (forward to the routed session; keep intent coherent on the core) ──────────────────────────────────
