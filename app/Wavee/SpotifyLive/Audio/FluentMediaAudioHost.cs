@@ -223,7 +223,7 @@ internal sealed class SpotifyEngineAudioDecoder : IAudioDecoder
 /// prior one disposed) on each load. Crossfade/prepared-next (engine PlayQueue) and per-endpoint device selection are the
 /// documented follow-ups — this host delivers correct single-track decode→mix→output with graceful natural-end advance.
 /// </summary>
-public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioOutputDeviceControl
+public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioOutputDeviceControl, IPreparedAudioHost
 {
     const int MaxCrossfadeMs = 12_000;
 
@@ -260,6 +260,25 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
     bool _errorReported;
     bool _disposed;
 
+    // ── prepared-next / real overlapping crossfade (IPreparedAudioHost) ──────────────────────────────────────────────
+    readonly SimpleSubject<AudioTransitionSignal> _transitions = new();
+    // the prepared slot (track B) — built/attached ahead of the active track's natural end
+    string? _prepToken;
+    SpotifyAudioStream? _prepStream;
+    IPreparedItem? _prepItem;
+    string _prepUri = "";
+    long _prepDurMs;
+    bool _prepOverlap;
+    // the CURRENTLY-PLAYING (active) track's mixer state, so PositionMs reports active-relative time
+    long _activeStartMs;          // raw session ms at which the active track's frame-0 played (0 for a fresh load)
+    long _activeDurMs;            // the active track's duration (drives the fade-window trigger)
+    long _activePrimaryId;        // the mixer voice id currently carrying the active track
+    string _activeUri = "";       // the active track uri (for the Completed edge)
+    long _nextVoiceId;            // monotonic crossfade voice id source
+    bool _crossfadeInFlight;      // set at commit, cleared on the Completed edge — guards a single commit per hand-off
+    string? _committedToken;      // the token whose crossfade is committed (CancelPrepared → AlreadyStarted)
+    SpotifyAudioStream? _retiringStream;   // track A's stream, disposed on the Completed edge once its voice retires
+
     public event Action<OutputDeviceNotice>? OutputDeviceNotice;
     public event Action<double, bool>? ExternalVolumeChanged;
 
@@ -276,10 +295,14 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
         _ticker = new Timer(_ => Tick(), null, Timeout.Infinite, Timeout.Infinite);
     }
 
-    public long PositionMs => (long)_core.Position.Peek().TotalMilliseconds;
+    // The raw session clock (track A's decode position, in ms). After an overlapping crossfade the active track is a
+    // later mixer voice, so PositionMs subtracts the active track's start offset to stay active-track-relative.
+    long RawPositionMs => (long)_core.Position.Peek().TotalMilliseconds;
+    public long PositionMs => Math.Max(0, RawPositionMs - _activeStartMs);
     public bool IsPlaying => _core.IsPlaying.Peek();
     public bool IsBuffering => _core.IsBuffering.Peek();
     public IObservable<AudioHostSignal> Signals => _signals;
+    public IObservable<AudioTransitionSignal> Transitions => _transitions;
 
     // ── IAudioHost transport ─────────────────────────────────────────────────────────────────────────────────────────
 
@@ -484,6 +507,12 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
             if (epoch != Volatile.Read(ref _loadEpoch)) { await session.DisposeAsync().ConfigureAwait(false); return; }
             session.ConnectSignals(_sink);
             _session = session;
+            // Fresh active track: reset the crossfade/offset bookkeeping to this session's primary voice.
+            _activeStartMs = 0;
+            _activeDurMs = bytes.DurationMs;
+            _activeUri = "";
+            _crossfadeInFlight = false;
+            if (session is PcmAudioSession pcm) _activePrimaryId = pcm.PrimaryVoiceIdValue;
             _core.Volume.Value = (float)_volume;
             session.SetVolume(_volume);
             session.SetMuted(_muted);
@@ -502,8 +531,154 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
         _session = null;
         var stream = _activeStream;
         _activeStream = null;
+        var retiring = _retiringStream;
+        _retiringStream = null;
+        // A manual load/stop supersedes any prepared next and any in-flight crossfade.
+        await DisposePreparedSlotAsync().ConfigureAwait(false);
+        _crossfadeInFlight = false;
+        _committedToken = null;
+        _activeUri = "";
+        _activeStartMs = 0;
+        _activeDurMs = 0;
         if (old is not null) { try { await old.DisposeAsync().ConfigureAwait(false); } catch { } }
         if (stream is not null) { try { stream.Dispose(); } catch { } }
+        if (retiring is not null) { try { retiring.Dispose(); } catch { } }
+    }
+
+    // Dispose the prepared (not-yet-committed) slot and clear its fields. The prepared voice has NOT entered the mixer,
+    // so disposing the IPreparedItem here is correct; once committed we clear the fields WITHOUT disposing (see Tick).
+    async Task DisposePreparedSlotAsync()
+    {
+        var item = _prepItem;
+        var stream = _prepStream;
+        _prepItem = null;
+        _prepStream = null;
+        _prepToken = null;
+        _prepUri = "";
+        _prepDurMs = 0;
+        _prepOverlap = false;
+        if (item is not null) { try { await item.DisposeAsync().ConfigureAwait(false); } catch { } }
+        if (stream is not null) { try { stream.Dispose(); } catch { } }
+    }
+
+    // ── IPreparedAudioHost: prepared-next + real overlapping crossfade ───────────────────────────────────────────────
+
+    public Task PrepareNextAsync(AudioPrepareRequest request, CancellationToken ct = default)
+    {
+        var req = request;
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Enqueue(async () =>
+        {
+            try { await PrepareNextCoreAsync(req, ct).ConfigureAwait(false); tcs.TrySetResult(); }
+            catch (Exception ex) { tcs.TrySetException(ex); }
+        });
+        return tcs.Task;
+    }
+
+    async Task PrepareNextCoreAsync(AudioPrepareRequest req, CancellationToken ct)
+    {
+        if (_session is not PcmAudioSession session) return;   // no live session to hand off from — nothing to prepare
+        var start = req.Start;
+        var kind = KindOf(start.Format);
+        int skip = DetectSkipOffset(start.HeadBytes.Span, start.Format);
+        var stream = SpotifyAudioStream.CreateHeadOnly(_http, start.HeadBytes, start.HeadBytes.Length, start.FileIdHex, _log, _bodyDisk);
+        var bytes = new SpotifyMediaByteSource(stream, skip, kind, start.DurationMs, DbToLinear(start.NormalizationGainDb));
+        var source = MediaSource.FromPull(bytes).WithKind(MediaKind.PcmAudio);
+        var pctx = PrepareContext.For(session.Format, session.NormalizationMode, session.ReferenceLufsValue);
+        var result = await _backend.PrepareAsync(source, pctx, ct).ConfigureAwait(false);
+
+        // Supersede any stale prepared slot (a queue edit re-prepares); keep only the newest.
+        if (_prepToken is not null && !ReferenceEquals(_prepStream, stream))
+            await DisposePreparedSlotAsync().ConfigureAwait(false);
+        _prepToken = req.Token;
+        _prepStream = stream;
+        _prepItem = result;
+        _prepUri = start.TrackUri;
+        _prepDurMs = start.DurationMs;
+        _prepOverlap = req.AllowOverlap;
+    }
+
+    public Task SupplyNextBodyAsync(string token, AudioStreamHandle body, CancellationToken ct = default)
+    {
+        var b = body;
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Enqueue(async () =>
+        {
+            try
+            {
+                if (token == _prepToken && _prepStream is { } s)
+                {
+                    var cdnUrls = b.CdnUrls ?? (string.IsNullOrEmpty(b.CdnUrl) ? Array.Empty<string>() : new[] { b.CdnUrl });
+                    await s.AttachBodyWithNativeDecryptorAsync(BuildDecryptor(b), cdnUrls, null, ct).ConfigureAwait(false);
+                }
+                tcs.TrySetResult();
+            }
+            catch (Exception ex) { tcs.TrySetException(ex); }
+        });
+        return tcs.Task;
+    }
+
+    public Task<AudioPrepareCancelResult> CancelPreparedAsync(string token, CancellationToken ct = default)
+    {
+        var tcs = new TaskCompletionSource<AudioPrepareCancelResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Enqueue(async () =>
+        {
+            try
+            {
+                AudioPrepareCancelResult result;
+                if (token == _prepToken && _prepItem is not null)
+                {
+                    await DisposePreparedSlotAsync().ConfigureAwait(false);
+                    result = AudioPrepareCancelResult.Cancelled;
+                }
+                else if (token == _committedToken)
+                {
+                    result = AudioPrepareCancelResult.AlreadyStarted;   // crossfade already committed — too late to cancel
+                }
+                else result = AudioPrepareCancelResult.NotFound;
+                tcs.TrySetResult(result);
+            }
+            catch (Exception ex) { tcs.TrySetException(ex); }
+        });
+        return tcs.Task;
+    }
+
+    // Commit the overlapping crossfade IN the live session (called from Tick, RT-safe): add B's voice fading in and fade
+    // the active voice out over the same window, then re-point the active state at B. Runs exactly once per hand-off.
+    void CommitCrossfade(PcmAudioSession sess, IPreparedItem item, long rawPos)
+    {
+        _crossfadeInFlight = true;
+        long id = ++_nextVoiceId;
+        long start = sess.SampleClock;
+        int fadeFrames = _crossfadeMs * sess.Format.SampleRate / 1000;
+        var curve = CrossCurve.EqualPower;
+        float rg = ReplayGain.ScalarLinear(item.Loudness, sess.NormalizationMode, sess.ReferenceLufsValue);
+
+        sess.AddCrossfadeVoice(item.AudioVoice!, GainEnvelope.Fade(FadeKind.In, start, fadeFrames, curve), start, rg, sess.BuildVoiceChain(), id);
+        sess.MixerRef.TrySetVoiceEnvelope(_activePrimaryId, GainEnvelope.Fade(FadeKind.Out, start, fadeFrames, curve));
+
+        // Hand streams over: A retires (disposed on the Completed edge), B's kept stream becomes the active stream.
+        _retiringStream = _activeStream;
+        _activeStream = _prepStream;
+        _committedToken = _prepToken;
+        string token = _prepToken ?? "";
+        string uri = _prepUri;
+
+        // Re-point the active bookkeeping at B so PositionMs reads B-relative from here on.
+        _activeStartMs = rawPos;
+        _activePrimaryId = id;
+        _activeDurMs = _prepDurMs;
+        _activeUri = uri;
+
+        // Clear the prepared slot WITHOUT disposing the item — its voice is now live in the mixer.
+        _prepItem = null;
+        _prepStream = null;
+        _prepToken = null;
+        _prepUri = "";
+        _prepDurMs = 0;
+        _prepOverlap = false;
+
+        _transitions.OnNext(new AudioTransitionSignal(AudioTransitionKind.Started, token, uri, 0, _crossfadeMs));
     }
 
     // ── the poll tick: derive AudioHostSignals from the engine's reactive state ──────────────────────────────────────
@@ -515,6 +690,7 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
     {
         if (_disposed) return;
         var state = _core.State.Peek();
+        long rawPos = RawPositionMs;
         long pos = PositionMs;
 
         if (!_errorReported && _core.Error.Peek() is { } err)
@@ -522,6 +698,25 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
             _errorReported = true;
             _signals.OnNext(AudioHostSignal.Fault(pos, AudioKeyFailureReason.None, err.Message));
             return;
+        }
+
+        // ── prepared-next overlapping crossfade: commit when the active track enters its fade window ─────────────────
+        if (state == PlaybackState.Playing && !_crossfadeInFlight
+            && _prepItem is { IsReady: true } item && _prepOverlap && _crossfadeMs > 0 && _activeDurMs > 0
+            && _session is PcmAudioSession sess
+            && (rawPos - _activeStartMs) >= _activeDurMs - _crossfadeMs)
+        {
+            CommitCrossfade(sess, item, rawPos);
+            pos = PositionMs;   // re-read: now B-relative (≈0 at the hand-off)
+        }
+        // ── close the hand-off: once the fade has elapsed, retire A's stream and report Completed ─────────────────────
+        else if (_crossfadeInFlight && (rawPos - _activeStartMs) >= _crossfadeMs)
+        {
+            _crossfadeInFlight = false;
+            var retiring = _retiringStream;
+            _retiringStream = null;
+            if (retiring is not null) { try { retiring.Dispose(); } catch { } }
+            _transitions.OnNext(new AudioTransitionSignal(AudioTransitionKind.Completed, _committedToken ?? "", _activeUri, PositionMs, _crossfadeMs));
         }
 
         switch (state)
