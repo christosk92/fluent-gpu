@@ -18,8 +18,8 @@ them in `Render()` and return the root. Build them with the `Ui.*` helpers (ters
 | `ScrollEl` | `ScrollView` | clipping, scrolling viewport over one (oversized) child |
 | `GridEl` | `Grid`/`UniformGrid`/`AutoGrid` | CSS-grid container (Pixel/Star/Auto tracks) |
 | `VirtualListEl` | `Virtual.List/Grid/VariableList/Custom`, `Repeater.ItemsRepeater` | virtualized collection (10k+ rows) |
-| `ComponentEl` | `Embed.Comp(() => new C())` | embeds a child `Component` |
-| `ContextProviderEl` | `Ctx.Provide(channel, value, child)` | provides a context value |
+| `ComponentEl` | `Embed.Comp(() => new C())`, `Embed.Comp(props, () => new C())` | embeds a child `Component` (2nd form re-pushes live props → `UseProps<T>()`; see [reactivity.md](./reactivity.md#props--re-pushed-to-the-child-embedcompprops-factory)) |
+| `ContextProviderEl` | `Ctx.Provide(channel, value, child)` | provides an **ambient** context value (for concrete parent→child data prefer re-pushed props) |
 | `ShowEl` / `ForEl` | `Flow.Show` / `Flow.For` | reactive conditional / keyed list |
 
 ### `Ui.*` builders (`src/FluentGpu.Engine/Dsl/Factories.cs`)

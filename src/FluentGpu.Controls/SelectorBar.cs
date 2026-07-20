@@ -35,16 +35,13 @@ public static class SelectorBar
     /// rendered before the text at 0.8 scale with the −2,0 icon margin, recolored by the same foreground states.</summary>
     public static Element Create(IReadOnlyList<string> items, int selected, Action<int> onSelect,
                                  TemplateParts? parts = null, IReadOnlyList<string?>? icons = null)
-        => Ctx.Provide(Props.Channel, new Props(items, icons, selected, onSelect, parts),
-                       Embed.Comp(() => new SelectorBarCore()));
+        => Embed.Comp(new Props(items, icons, selected, onSelect, parts), () => new SelectorBarCore());
 
-    /// <summary>Controlled props flow through a provider — a reused ComponentEl never re-runs its factory — so the
-    /// items/selection stay LIVE across parent re-renders (the RadioButtons pattern).</summary>
+    /// <summary>Controlled props are RE-PUSHED live to the reused core (<c>Embed.Comp(props, …)</c>) — a reused
+    /// ComponentEl never re-runs its factory, so the items/selection stay LIVE across parent re-renders via the props
+    /// channel (record value equality coalesces an unchanged re-push). The core reads them with <c>UseProps</c>.</summary>
     internal sealed record Props(IReadOnlyList<string> Items, IReadOnlyList<string?>? Icons, int Selected,
-                                 Action<int> OnSelect, TemplateParts? Parts)
-    {
-        internal static readonly Context<Props?> Channel = new(null);
-    }
+                                 Action<int> OnSelect, TemplateParts? Parts);
 }
 
 /// <summary>The stateful core: captures item node handles (for the roving focus moves) and routes the arrow keys —
@@ -65,12 +62,10 @@ internal sealed class SelectorBarCore : Component
     public override Element Render()
     {
         // Hooks — stable order, unconditionally, before any early-out.
-        var props = UseContext(SelectorBar.Props.Channel);
+        var p = UseProps<SelectorBar.Props>();   // re-pushed live props (items/selection stay current across re-renders)
         var hooks = UseContext(InputHooks.Current);
         var handles = UseRef(new List<NodeHandle>()).Value;
 
-        if (props is null) return new BoxEl();
-        var p = props;
         int count = p.Items?.Count ?? 0;
         while (handles.Count < count) handles.Add(NodeHandle.Null);
 

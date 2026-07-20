@@ -440,6 +440,11 @@ public sealed partial class RenderContext
     public Func<NodeHandle, object, Signal<object?>?>? ResolveContextSignal;   // (anchor, channel) → nearest provider signal
     public IReadSignal<int>? ImageEpoch;        // bumped by the host on any image status change → re-renders UseImage consumers
     public Func<Signal<bool>>? GetActiveSig;    // reconciler-injected: get-or-create THIS component's KeepAlive-parked signal (UseIsActive)
+    /// <summary>Reconciler-injected at mount when this component was embedded with re-pushed props
+    /// (<c>Embed.Comp(props, factory)</c>): the per-instance signal the reconciler's reuse seam writes on each parent
+    /// re-render (equality-gated) and that <see cref="UseProps{T}"/> reads (subscribing this component's render-effect).
+    /// Null for a propless mount or an <see cref="IPropsHost"/> component (which owns its own field signals).</summary>
+    public Signal<object?>? PropsSig;
 
     internal void BeginRender() => _ordinals.Clear();   // reset the per-render loop ordinals; cells persist by key
     internal void EndRender()
@@ -734,6 +739,30 @@ public sealed partial class RenderContext
             $"UseRequiredContext<{typeof(T).Name}>: no provider for this context is in scope (or it carries a null/incompatible " +
             $"value). Wrap an ancestor in Ctx.Provide({typeof(T).Name} …) so the required dependency resolves.");
     }
+
+    /// <summary>Read the RE-PUSHED props of this component (<c>Embed.Comp(props, factory)</c>) as
+    /// <typeparamref name="T"/>, subscribing this component's render-effect so a changed re-push re-renders exactly here.
+    /// NON-positional (no hook cell): it just reads the injected props signal, so it may be called conditionally / after
+    /// an early return. THROWS <see cref="InvalidOperationException"/> (naming this component's type) when the component
+    /// was mounted WITHOUT props — use <see cref="UsePropsOrDefault{T}"/> for a component usable both ways.</summary>
+    public T UseProps<T>(Type? owner = null) where T : class
+    {
+        if (PropsSig is null)
+        {
+            string who = owner?.Name ?? "This component";
+            throw new InvalidOperationException(
+                $"UseProps<{typeof(T).Name}>: {who} was mounted without props. Embed it with " +
+                $"Embed.Comp(new {typeof(T).Name}(…), () => new {who}()) to supply them, or call " +
+                $"UsePropsOrDefault<{typeof(T).Name}>() for a component usable with and without props.");
+        }
+        return (T)PropsSig.Value!;   // .Value subscribes the render-effect; delivered props are non-null by construction
+    }
+
+    /// <summary>Like <see cref="UseProps{T}"/> but returns <c>null</c> (without subscribing) when the component was
+    /// mounted propless — for a component usable both with re-pushed props and standalone. When props ARE present,
+    /// reading them subscribes this component's render-effect.</summary>
+    public T? UsePropsOrDefault<T>() where T : class
+        => PropsSig is null ? null : PropsSig.Value as T;
 
     /// <summary>Return the nearest context as a read signal without subscribing this render. Reading the returned
     /// signal's <c>.Value</c> subscribes the current reactive computation at the call site.</summary>

@@ -429,6 +429,112 @@ sealed class ScopeParkPage : Component
     }
 }
 
+// ── G4c re-pushed live props probes ──────────────────────────────────────────────────────────────────────────────
+// The immutable props record a parent RE-PUSHES to a reused child (Embed.Comp(props, factory)). Record value equality
+// coalesces a fresh-but-equal re-push; an Element slot rides the same record so a slot re-push reconciles in place.
+sealed record PropsPayload(int N, Element? Slot = null);
+
+// An Equals-COUNTING props record: the reference short-circuit at the reuse seam must prevent this Equals from ever
+// running when the SAME reference is re-supplied (a memoized/cached props object).
+sealed record CountingProps(int N)
+{
+    public static int EqualsCalls;
+    public bool Equals(CountingProps? other) { EqualsCalls++; return other is not null && other.N == N; }
+    public override int GetHashCode() => N;
+}
+
+// A child that reads its re-pushed props with UseProps and records what it saw (render count / last value / last slot),
+// so a gate can assert delivery reached THIS instance. Hosts the slot + a stateful sibling (Keeper) so a slot re-push
+// proves in-place reconcile with surviving sibling state.
+sealed class PropsChild : Component
+{
+    public int Renders;
+    public int LastN = -1;
+    public Element? LastSlot;
+    public readonly StateKeeper Keeper = new();
+    public bool HostKeeper;
+    public override Element Render()
+    {
+        var p = UseProps<PropsPayload>();
+        Renders++;
+        LastN = p.N;
+        LastSlot = p.Slot;
+        Element[] kids = HostKeeper
+            ? [p.Slot ?? (Element)new BoxEl(), Embed.Comp(() => Keeper)]
+            : (p.Slot is { } s ? [s] : []);
+        return new BoxEl { Children = kids };
+    }
+}
+
+// A stateful sibling whose UseState must SURVIVE a parent (PropsChild) re-render driven by a slot re-push.
+sealed class StateKeeper : Component
+{
+    public int Ticks;
+    public Action? Bump;
+    public override Element Render()
+    {
+        var (n, setN) = UseState(0);
+        Ticks = n;
+        Bump = () => setN(n + 1);
+        return new BoxEl { Width = 5, Height = 5 };
+    }
+}
+
+// Reads its props with UseProps<CountingProps> (for the ref-shortcircuit Equals-counting gate).
+sealed class CountingPropsChild : Component
+{
+    public int Renders;
+    public override Element Render() { _ = UseProps<CountingProps>(); Renders++; return new BoxEl { Width = 5, Height = 5 }; }
+}
+
+// Reads its props with UsePropsOrDefault — null when mounted propless, the value when present (no throw either way).
+sealed class OptionalPropsChild : Component
+{
+    public bool SawNull;
+    public int Renders;
+    public override Element Render() { SawNull = UsePropsOrDefault<PropsPayload>() is null; Renders++; return new BoxEl { Width = 5, Height = 5 }; }
+}
+
+// A KeepAlive host whose page embeds a props child, so a gate can park a page and re-push props to the parked entry.
+// ChildN is PEEKED (the host never subscribes to it), and the reactivation re-push carries its latest value — so a
+// gate can drive the "latest" the reactivated page sees without churning the host.
+sealed class PropsParkProbe : Component
+{
+    public Signal<string>? Route;
+    public readonly Signal<int> ChildN = new(0);
+    public readonly Dictionary<string, PropsChild> Children = new();
+    public override Element Render()
+    {
+        var route = UseSignal("a");
+        Route = route;
+        return Flow.KeepAlive(
+            () => route.Value,
+            key => key,
+            key =>
+            {
+                var child = Children.TryGetValue(key, out var c) ? c : (Children[key] = new PropsChild());
+                return Embed.Comp(new PropsPayload(ChildN.Peek()), () => child);
+            },
+            new KeepAliveOptions(MaxEntries: 3));
+    }
+}
+
+// A root parent that re-pushes a Driver-derived props record to a single reused child — the single-flush-coalesce case
+// (delivery happens inside the parent's render-effect, mid-flush).
+sealed class PropsFlushParent : Component
+{
+    public readonly Signal<int> Driver;
+    public readonly PropsChild Child = new();
+    public int Renders;
+    public PropsFlushParent(Signal<int> driver) => Driver = driver;
+    public override Element Render()
+    {
+        int n = Driver.Value;   // subscribe → this parent re-renders when Driver changes
+        Renders++;
+        return Embed.Comp(new PropsPayload(n), () => Child);
+    }
+}
+
 // ── G4a call-site-keyed hook substrate probes ────────────────────────────────────────────────────────────────────
 // A CONDITIONAL hook (Middle) between two unconditional neighbours. With the positional cursor this desynced the
 // neighbours' cells; with the keyed substrate each hook keeps its own call-site cell regardless of the conditional.
@@ -5646,6 +5752,187 @@ static class Slice
             ReuseGuard.Enabled = prevEnabled;
             ReuseGuard.ThrowOnViolation = prevThrow;
             ReuseGuard.Reset();
+        }
+    }
+
+    // G4c — RE-PUSHED live props for embedded components (Embed.Comp(props, factory) → UseProps<T>()). Delivery is at the
+    // reconciler reuse seam into a per-instance PropsSig (equality-gated), the same physics as a context-provider signal.
+    static void PropsChannelChecks(StringTable strings)
+    {
+        // gate.props.repush-reaches-instance — a CHANGED props record reaches the SAME instance (no remount, node
+        // identity preserved), re-rendering it exactly once with the new value.
+        {
+            var scene = new SceneStore();
+            var recon = new TreeReconciler(scene, strings);
+            var child = new PropsChild();
+            int ctor = 0;
+            Element Tree(int n) => new BoxEl { Children = [Embed.Comp(new PropsPayload(n), () => { ctor++; return child; })] };
+            var t1 = Tree(1); recon.ReconcileRoot(t1, null); recon.Runtime.Flush();
+            var nodeBefore = scene.FirstChild(scene.Root);
+            bool mount = child.Renders == 1 && child.LastN == 1 && ctor == 1;
+            var t2 = Tree(2); recon.ReconcileRoot(t2, t1); recon.Runtime.Flush();
+            var nodeAfter = scene.FirstChild(scene.Root);
+            bool reached = ctor == 1 && nodeBefore == nodeAfter && child.Renders == 2 && child.LastN == 2;
+            Check("gate.props.repush-reaches-instance changed props re-render the SAME reused instance once (no remount)",
+                mount && reached, $"mount={mount} ctor={ctor} sameNode={nodeBefore == nodeAfter} renders={child.Renders} lastN={child.LastN}");
+        }
+
+        // gate.props.equality-gated — a fresh-but-EQUAL-VALUE record (different instance, equal fields) → no re-render.
+        {
+            var scene = new SceneStore();
+            var recon = new TreeReconciler(scene, strings);
+            var child = new PropsChild();
+            Element Tree(PropsPayload p) => new BoxEl { Children = [Embed.Comp(p, () => child)] };
+            var t1 = Tree(new PropsPayload(7)); recon.ReconcileRoot(t1, null); recon.Runtime.Flush();
+            int afterMount = child.Renders;
+            var t2 = Tree(new PropsPayload(7)); recon.ReconcileRoot(t2, t1); recon.Runtime.Flush();   // fresh, equal
+            Check("gate.props.equality-gated a fresh-but-equal props record does not re-render the child",
+                afterMount == 1 && child.Renders == 1 && child.LastN == 7, $"afterMount={afterMount} renders={child.Renders}");
+        }
+
+        // gate.props.ref-shortcircuit — the SAME reference re-supplied → the record Equals is NEVER walked and the child
+        // is not re-rendered (the reuse seam short-circuits on ReferenceEquals BEFORE the equality-gated write).
+        {
+            CountingProps.EqualsCalls = 0;
+            var scene = new SceneStore();
+            var recon = new TreeReconciler(scene, strings);
+            var child = new CountingPropsChild();
+            var shared = new CountingProps(3);
+            Element Tree() => new BoxEl { Children = [Embed.Comp(shared, () => child)] };
+            var t1 = Tree(); recon.ReconcileRoot(t1, null); recon.Runtime.Flush();
+            int equalsAfterMount = CountingProps.EqualsCalls;   // seeding the signal never compares
+            int rendersAfterMount = child.Renders;
+            var t2 = Tree(); recon.ReconcileRoot(t2, t1); recon.Runtime.Flush();   // SAME shared reference re-pushed
+            bool noEqualsWalk = CountingProps.EqualsCalls == equalsAfterMount;
+            bool noRerender = child.Renders == rendersAfterMount;
+            Check("gate.props.ref-shortcircuit same reference re-supplied → no record-Equals walk, no re-render",
+                equalsAfterMount == 0 && noEqualsWalk && noRerender, $"equals={CountingProps.EqualsCalls} renders={child.Renders}");
+        }
+
+        // gate.props.element-slot-repush — an Element-typed prop (slot) re-pushed → the child subtree reconciles IN PLACE
+        // (slot node identity preserved), and a sibling component's UseState in the child survives.
+        {
+            var scene = new SceneStore();
+            var recon = new TreeReconciler(scene, strings);
+            var child = new PropsChild { HostKeeper = true };
+            Element Tree(Element slot) => new BoxEl { Children = [Embed.Comp(new PropsPayload(0, slot), () => child)] };
+            var slotA = new TextEl("A") { Size = 12f };
+            var t1 = Tree(slotA); recon.ReconcileRoot(t1, null); recon.Runtime.Flush();
+            // root box → PropsChild anchor → child's rendered box → slot (TextEl) node.
+            NodeHandle SlotNode() => scene.FirstChild(scene.FirstChild(scene.FirstChild(scene.Root)));
+            var slotNodeBefore = SlotNode();
+            child.Keeper.Bump!(); recon.Runtime.Flush();                            // sibling state 0 → 1
+            bool keeperTicked = child.Keeper.Ticks == 1;
+            var slotB = new TextEl("B") { Size = 12f };
+            var t2 = Tree(slotB); recon.ReconcileRoot(t2, t1); recon.Runtime.Flush();   // re-push a DIFFERENT slot
+            var slotNodeAfter = SlotNode();
+            bool inPlace = slotNodeBefore == slotNodeAfter;                         // same TextEl node reconciled in place
+            bool siblingSurvived = child.Keeper.Ticks == 1;                         // UseState survived the slot re-push
+            Check("gate.props.element-slot-repush slot re-push reconciles in place; sibling UseState survives",
+                child.Renders == 2 && keeperTicked && inPlace && siblingSurvived,
+                $"renders={child.Renders} inPlace={inPlace} keeper={child.Keeper.Ticks}");
+        }
+
+        // gate.props.key-remount — same type + equal props but a CHANGED Key → fresh instance (state reset), one level
+        // above the reuse seam (the keyed child diff).
+        {
+            var scene = new SceneStore();
+            var recon = new TreeReconciler(scene, strings);
+            int ctor = 0;
+            Element Tree(int key, int n) => new BoxEl { Children = [Embed.Comp(new PropsPayload(n), () => { ctor++; return new PropsChild(); }) with { Key = "k" + key }] };
+            var t1 = Tree(1, 5); recon.ReconcileRoot(t1, null); recon.Runtime.Flush();
+            bool mount = ctor == 1;
+            var t2 = Tree(2, 5); recon.ReconcileRoot(t2, t1); recon.Runtime.Flush();   // equal props, changed Key
+            Check("gate.props.key-remount a changed Key remounts a fresh instance despite equal props",
+                mount && ctor == 2, $"ctor={ctor}");
+        }
+
+        // gate.props.parked-defers-replays-latest — a props write while parked defers (zero renders), and reactivation
+        // replays exactly ONCE reading the LATEST value.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("props-park", new Size2(200, 200), 1f));
+            window.Show();
+            var probe = new PropsParkProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe);
+            host.RunFrame();
+            var childA = probe.Children["a"];
+            bool mountA = childA.Renders == 1 && childA.LastN == 0;
+            probe.Route!.Value = "b"; host.RunFrame();                                                   // park "a", mount "b"
+            probe.ChildN.Value = 1; childA.Context.PropsSig!.Value = new PropsPayload(1); host.RunFrame();   // push reaches the PARKED entry
+            bool deferred1 = childA.Renders == 1;
+            probe.ChildN.Value = 2; childA.Context.PropsSig!.Value = new PropsPayload(2); host.RunFrame();   // latest push, still parked
+            bool deferred2 = childA.Renders == 1;
+            probe.Route.Value = "a"; host.RunFrame();                                                    // reactivate "a" (re-push carries the latest)
+            bool replayOnceLatest = childA.Renders == 2 && childA.LastN == 2;
+            Check("gate.props.parked-defers-replays-latest parked defers props renders; reactivation replays once with the latest",
+                mountA && deferred1 && deferred2 && replayOnceLatest,
+                $"renders={childA.Renders} lastN={childA.LastN} deferred={deferred1 && deferred2}");
+        }
+
+        // gate.props.single-flush-coalesce — a parent write + props delivery + child re-render all settle within ONE
+        // flush (no torn intermediate, nothing owed to the next frame).
+        {
+            var scene = new SceneStore();
+            var rt = new ReactiveRuntime();
+            var recon = new TreeReconciler(scene, strings, rt);
+            var driver = new Signal<int>(0);
+            var parent = new PropsFlushParent(driver);
+            recon.MountRoot(parent);                                 // mount: parent+child render once, child sees 0
+            bool mount = parent.Renders == 1 && parent.Child.Renders == 1 && parent.Child.LastN == 0;
+            driver.Value = 1;                                        // schedule the parent re-render
+            rt.Flush();                                              // ONE flush drains parent → delivers → child
+            bool coalesced = parent.Renders == 2 && parent.Child.Renders == 2 && parent.Child.LastN == 1 && !rt.HasPending;
+            Check("gate.props.single-flush-coalesce parent write + delivery + child re-render settle in one flush",
+                mount && coalesced, $"parent={parent.Renders} child={parent.Child.Renders} lastN={parent.Child.LastN} pending={rt.HasPending}");
+        }
+
+        // gate.props.zero-hot-alloc — steady-state ref-equal re-pushes add NO subscriber (the render-effect is the sole
+        // PropsSig subscriber) and never re-render; the flush hot-window stays 0-alloc.
+        {
+            var scene = new SceneStore();
+            var recon = new TreeReconciler(scene, strings);
+            var child = new PropsChild();
+            var shared = new PropsPayload(4);
+            var t1 = new BoxEl { Children = [Embed.Comp(shared, () => child)] };
+            var t2 = new BoxEl { Children = [Embed.Comp(shared, () => child)] };
+            recon.ReconcileRoot(t1, null); recon.Runtime.Flush();
+            bool oneSubscriber = child.Context.PropsSig!.SubscriberCount == 1;
+            for (int w = 0; w < 6; w++) { recon.ReconcileRoot(w % 2 == 0 ? t2 : t1, w % 2 == 0 ? t1 : t2); recon.Runtime.Flush(); }
+            bool stillOne = child.Context.PropsSig!.SubscriberCount == 1;
+            bool neverRerendered = child.Renders == 1;
+            recon.ReconcileRoot(t2, t1); recon.Runtime.Flush();   // warm a ref-equal delivery (short-circuited)
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 500; i++) recon.Runtime.Flush();
+            long delta = GC.GetAllocatedBytesForCurrentThread() - before;
+            Check("gate.props.zero-hot-alloc ref-equal re-push adds no subscriber, never re-renders; hot-window flush is 0-alloc",
+                oneSubscriber && stillOne && neverRerendered && delta == 0,
+                $"subs={child.Context.PropsSig!.SubscriberCount} renders={child.Renders} flushDelta={delta}B");
+        }
+
+        // gate.props.useprops-throws-propless — UseProps<T> on a propless mount THROWS naming the component + props type;
+        // UsePropsOrDefault returns null propless, the value when present.
+        {
+            var scene = new SceneStore();
+            var recon = new TreeReconciler(scene, strings);
+            var thrower = new PropsChild();
+            bool threw = false; string msg = "";
+            try { recon.ReconcileRoot(new BoxEl { Children = [Embed.Comp(() => thrower)] }, null); recon.Runtime.Flush(); }
+            catch (InvalidOperationException ex) { threw = true; msg = ex.Message; }
+            bool named = msg.Contains("PropsPayload") && msg.Contains(nameof(PropsChild));
+
+            var scene2 = new SceneStore(); var recon2 = new TreeReconciler(scene2, strings);
+            var opt = new OptionalPropsChild();
+            recon2.ReconcileRoot(new BoxEl { Children = [Embed.Comp(() => opt)] }, null); recon2.Runtime.Flush();
+            bool nullPropless = opt.SawNull;
+
+            var scene3 = new SceneStore(); var recon3 = new TreeReconciler(scene3, strings);
+            var opt2 = new OptionalPropsChild();
+            recon3.ReconcileRoot(new BoxEl { Children = [Embed.Comp(new PropsPayload(9), () => opt2)] }, null); recon3.Runtime.Flush();
+            bool valuePresent = !opt2.SawNull;
+
+            Check("gate.props.useprops-throws-propless UseProps throws (naming component+props) propless; UsePropsOrDefault null propless, value when present",
+                threw && named && nullPropless && valuePresent, $"threw={threw} named={named} nullPropless={nullPropless} valuePresent={valuePresent}");
         }
     }
 
@@ -26187,6 +26474,7 @@ static class Slice
         ValidationChecks();
         KeyedChecks(strings);
         ReuseGuardChecks(strings);
+        PropsChannelChecks(strings);
         KeyboardChecks(strings);
         AnimChecks();
         ExpressiveMotionChecks(strings);

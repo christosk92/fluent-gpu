@@ -28,7 +28,7 @@ public sealed class TreeReconciler
     // bindings deliberately stay NODE-owned (_nodeBindings, disposed at node unmount) — a bind created during a render
     // outlives that render and can die with its node WITHOUT the component unmounting (Show/For swaps, KeepAlive
     // eviction), so it must not hang off the component scope. G4c's per-component props signal will hang off Scope too.
-    private sealed class CompEntry { public Component Comp = null!; public Element? Rendered; public Type Type = null!; public Effect? Effect; public ReactiveScope? Scope; public bool Parked; public bool DeferredRender; public Signal<bool>? ActiveSig; public SkeletonStyle? DerivedSkeletonStyle; }
+    private sealed class CompEntry { public Component Comp = null!; public Element? Rendered; public Type Type = null!; public Effect? Effect; public ReactiveScope? Scope; public bool Parked; public bool DeferredRender; public Signal<bool>? ActiveSig; public Signal<object?>? PropsSig; public SkeletonStyle? DerivedSkeletonStyle; }
     private readonly Dictionary<NodeHandle, CompEntry> _comps = new();
     private readonly Dictionary<Component, NodeHandle> _anchorOf = new();
     private readonly List<Component> _live = new();
@@ -453,12 +453,42 @@ public sealed class TreeReconciler
             if (oldEl is ComponentEl oce && oce.ComponentType == nce.ComponentType && _comps.ContainsKey(node)
                 && oce.DeriveRenderedOutput == nce.DeriveRenderedOutput)
             {
-                // DEBUG-only frozen-props tripwire: the factory we're about to discard may carry NEW caller data into
-                // a field that froze at mount. Let the live component compare (only if it opted in). The CompiledIn
-                // const folds this whole block away in release — zero cost, no probe allocation on the hot path.
-                if (ReuseGuard.CompiledIn && ReuseGuard.Enabled)
+                var entry = _comps[node];
+                if (nce.Props is { } p)
                 {
-                    var liveComp = _comps[node].Comp;
+                    // Re-pushed live props — THE core delivery. This runs during the parent's render-effect (inside the
+                    // flush) or a ReconcileRoot: the write marks the child's render-effect stale and it drains in the
+                    // SAME flush (the flush while-loop coalesces — no next-frame defer, no torn intermediate paint).
+                    if (entry.Comp is IPropsHost host)
+                    {
+                        // The [Props]-generator seam (a later phase): a single sink that writes many field signals — wrap
+                        // in Batch so dependent effects never observe a torn mid-diff state (only the outermost exit flushes).
+                        Runtime.Batch(() => host.ApplyProps(p));
+                    }
+                    else if (entry.PropsSig is { } ps)
+                    {
+                        // Reference short-circuit FIRST (adjustment #4): a parent that re-rendered without rebuilding the
+                        // props (a memoized/cached record) hands back the SAME reference — skip the record-Equals walk and
+                        // the write entirely (O(1), no re-render). Only a genuinely new object reaches the equality-gated
+                        // write, which itself coalesces a fresh-but-equal record via the Signal comparer (record value
+                        // equality). Batch keeps the delivery on the same wrapped path the IPropsHost multi-write uses.
+                        if (!ReferenceEquals(ps.Peek(), p))
+                            Runtime.Batch(() => ps.Value = p);
+                    }
+                    else if (ReuseGuard.CompiledIn && ReuseGuard.Enabled)
+                    {
+                        // DEBUG diagnostic: props were re-pushed to a component mounted WITHOUT a props channel (no
+                        // PropsSig, not an IPropsHost) — the value is silently dropped. Mount it via Embed.Comp(props, …).
+                        ReuseGuard.Violation(entry.Comp, "Props",
+                            "this component was mounted without props (Embed.Comp(factory)); re-pushed Props are dropped — mount it via Embed.Comp(props, factory)");
+                    }
+                }
+                // Frozen-props tripwire (DEBUG): only for a PROPLESS reuse — a component receiving data through the props
+                // channel above is no longer frozen, so it is exempt from this probe. The CompiledIn const folds the whole
+                // block away in release — zero cost, no probe allocation on the hot path.
+                else if (ReuseGuard.CompiledIn && ReuseGuard.Enabled)
+                {
+                    var liveComp = entry.Comp;
                     if (liveComp.ChecksReuse) liveComp.DebugCheckReuse(nce.Factory());
                 }
                 return;
@@ -656,6 +686,17 @@ public sealed class TreeReconciler
         // The component's per-instance activation signal (UseIsActive), created lazily on first read so a component that
         // never uses the lifecycle allocates nothing. Initial value = its current attached state (inactive if parked).
         comp.Context.GetActiveSig = () => entry.ActiveSig ??= new Signal<bool>(!entry.Parked);
+
+        // Re-pushed props channel — seeded BEFORE the first render-effect run so the very first Render sees the props.
+        // An IPropsHost ([Props]-generated) component receives them through its typed sink; otherwise we back them with a
+        // per-instance PropsSig (default comparer ⇒ record value equality) that UseProps<T> reads. The signal needs no
+        // explicit disposal: its only subscriber is the scope-owned render-effect, which unlinks from it when the scope
+        // disposes at unmount (ReactiveCore.UnlinkSources); the signal itself is then unreferenced and collected.
+        if (ce.Props is { } props)
+        {
+            if (comp is IPropsHost host) host.ApplyProps(props);
+            else { entry.PropsSig = new Signal<object?>(props); comp.Context.PropsSig = entry.PropsSig; }
+        }
 
         // One lifetime scope per component (the never-re-running owner ReactiveCore was designed for). It OWNS the
         // render-effect (so Scope.Dispose cascades to it — no manual Effect.Dispose) and carries the hook-cleanup

@@ -43,6 +43,15 @@ public abstract class Component
     protected T UseMemo<T>(Func<T> factory, DepKey deps, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UseMemo(factory, deps, __hf, __hl);
     protected Ref<T> UseRef<T>(T initial, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => Context.UseRef(initial, __hf, __hl);
     protected T UseContext<T>(Context<T> context) => Context.UseContext(context);
+    /// <summary>Read this component's RE-PUSHED props (<c>Embed.Comp(props, () =&gt; new This())</c>) as
+    /// <typeparamref name="T"/> — the parent→child data channel. Subscribes this component's render-effect so a changed
+    /// re-push re-renders it in place (no remount, node identity + hook state preserved). Throws (naming this type) when
+    /// mounted without props; use <see cref="UsePropsOrDefault{T}"/> for a component usable both ways. See
+    /// <see cref="RenderContext.UseProps{T}"/>.</summary>
+    protected T UseProps<T>() where T : class => Context.UseProps<T>(GetType());
+    /// <summary>Read this component's re-pushed props, or <c>null</c> when mounted propless — for a component usable
+    /// both with props and standalone. See <see cref="RenderContext.UsePropsOrDefault{T}"/>.</summary>
+    protected T? UsePropsOrDefault<T>() where T : class => Context.UsePropsOrDefault<T>();
     /// <summary>Like <see cref="UseContext{T}"/> but MANDATORY: throws (naming the context type) when no provider is in
     /// scope or it carries null — for a dependency the component cannot render without. See <see cref="RenderContext.UseRequiredContext"/>.</summary>
     protected T UseRequiredContext<T>(Context<T> context) => Context.UseRequiredContext(context);

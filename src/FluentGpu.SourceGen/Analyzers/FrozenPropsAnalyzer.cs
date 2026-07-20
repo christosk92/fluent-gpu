@@ -27,8 +27,8 @@ public sealed class FrozenPropsAnalyzer : DiagnosticAnalyzer
         id: DiagnosticId,
         title: "Element content is frozen when passed as a field into Embed.Comp",
         messageFormat: "'{0}' is Element content assigned as a component field inside Embed.Comp — it freezes at first "
-                     + "mount and later values are dropped. Deliver it via Ctx.Provide + UseContext (the SelectorBar/"
-                     + "Expander idiom) or remount with a changed Key.",
+                     + "mount and later values are dropped. Re-push it via Embed.Comp(props, factory) + UseProps<T>() "
+                     + "(the SelectorBar idiom), or Ctx.Provide + UseContext for ambient data, or remount with a changed Key.",
         category: "FluentGpu.Reactivity",
         defaultSeverity: DiagnosticSeverity.Info,
         isEnabledByDefault: true,

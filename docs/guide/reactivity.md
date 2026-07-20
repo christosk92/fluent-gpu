@@ -310,29 +310,50 @@ VStack(gap: 8,
     Embed.Comp(() => new MainView()));
 ```
 
-## Props don't flow through constructors
+## Props — re-pushed to the child (`Embed.Comp(props, factory)`)
 
-This is the one place the model differs from React, and it trips people up. A child component instance is created
-**once** (by the `Embed.Comp` factory) and **reused** across the parent's re-renders — the reconciler never re-invokes
-the factory. So values captured in the constructor are **frozen at mount**:
+A child component instance is created **once** (by the `Embed.Comp` factory) and **reused** across the parent's
+re-renders — the reconciler never re-invokes the factory. So a value captured in the constructor or a plain field is
+**frozen at mount**: a parent that later re-renders with a new value never delivers it.
+
+The fix is the **props channel**: pass the data as the first argument to `Embed.Comp`, and the reconciler **re-pushes**
+it to the reused child on every parent re-render. The child reads it with `UseProps<T>()`:
 
 ```csharp
-// ❌ WRONG: `title` is captured once; if the parent re-renders with a new title, Header never sees it.
-Embed.Comp(() => new Header(title));
+// ✅ Pass props as a RECORD; the parent re-pushes them live on each re-render.
+Embed.Comp(new HeaderProps(title, count), () => new Header());
 
-// ✅ RIGHT: pass a SIGNAL (a stable reference). The child reads sig.Value and re-renders when it changes.
-Embed.Comp(() => new Header(titleSignal));
+sealed record HeaderProps(string Title, int Count);
 sealed class Header : Component {
-    private readonly Signal<string> _title;
-    public Header(Signal<string> title) => _title = title;
-    public override Element Render() => Ui.Text(_title.Value);   // subscribes; updates when _title changes
+    public override Element Render() {
+        var p = UseProps<HeaderProps>();     // subscribes THIS component; re-renders when a re-push changes the value
+        return Ui.Text($"{p.Title} ({p.Count})");
+    }
 }
 ```
 
-Equivalently, pass data down via **context**. The takeaway: **parent→child data flows through signals or context, not
-through constructor arguments.** A parent re-rendering does not re-render its child components — each component
-re-renders only for its own state/context. (This is also why granular re-render is cheap: there's no prop-diffing
-cascade.)
+Delivery is **equality-gated**, exactly like a context-provider signal: a fresh-but-equal props record (use an immutable
+`record` so value equality applies) is coalesced — **no child re-render**. A parent that hands back the *same* props
+reference (a memoized/cached object) is short-circuited before the equality walk even runs (O(1)). So re-pushing costs
+nothing when the data didn't change, and a delegate field in the record — which defeats record equality — will
+re-render the child every parent render (the same trade-off context providers have always had; the `[Props]` generator,
+a later phase, is the cure).
+
+`UseProps<T>()` is **non-positional** (no hook cell): it may be called conditionally or after an early return, and it
+throws (naming this component) if the component was mounted without props. For a component usable **both** with and
+without props, use `UsePropsOrDefault<T>()` (returns `null` when propless). A changed **`Key`** still forces a full
+remount (fresh instance, state reset) — that lives one level above the props channel, in the keyed child diff.
+
+**Other parent→child mechanisms** (choose by shape):
+- **A `Signal<T>`** passed once through the factory — a stable reference the child reads (`sig.Value`) and re-renders on;
+  best for a *single* live value shared by reference (the controlled-input contract uses this).
+- **Context** (`Ctx.Provide` + `UseContext`) — for *ambient* data consumed by many descendants at varying depths
+  (theme, services, a store), where prop-drilling would be noise.
+- **Re-pushed props** (above) — the default for concrete parent→child data: typed, local, equality-gated.
+
+The takeaway: **a parent re-rendering does not re-render its child components** — each re-renders only for its own
+state/context/props. Data reaches a child through the props channel, a signal, or context — never a frozen field. (This
+is also why granular re-render is cheap: there's no prop-diffing cascade — only the channel a child actually reads.)
 
 ## Allocation discipline (why bindings/effects are wired once)
 
