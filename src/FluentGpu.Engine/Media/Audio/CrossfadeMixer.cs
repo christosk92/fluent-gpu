@@ -172,6 +172,11 @@ public sealed class CrossfadeMixer
     private readonly int _channels;
     private readonly int _maxBlock;
 
+    // Voices retired during the LAST Render() call (RT thread writes; same-thread read by RenderBlock right after). The
+    // ids are handed to the worker for off-RT ring disposal — the RT thread never frees the ring itself (spec §7.9).
+    private readonly long[] _retired = new long[8];
+    private int _retiredCount;
+
     /// <summary>Frames consumed out of the mixer (the device-clock domain; drives quarantine + position).</summary>
     public long ConsumeSeq;
 
@@ -223,6 +228,7 @@ public sealed class CrossfadeMixer
     public int Render(Span<float> dst, int frames, in BlockCtx ctx)
     {
         if (frames > _maxBlock) frames = _maxBlock;
+        _retiredCount = 0;
         int n = frames * ctx.Channels;
         dst[..n].Clear();
 
@@ -236,13 +242,22 @@ public sealed class CrossfadeMixer
         ConsumeSeq += frames;
         long blockEnd = ctx.StartFrame + frames;
 
-        // Retire finished voices (source exhausted + fade complete). RemoveAt is alloc-free.
+        // Retire finished voices (source exhausted + fade complete). RemoveAt is alloc-free. Record the retired ids so
+        // RenderBlock can hand their rings to the worker for off-RT disposal (the RT thread must never free the ring).
         for (int i = _voices.Count - 1; i >= 0; i--)
             if (_voices[i].IsFinished(blockEnd))
+            {
+                if (_voices[i].Id != 0 && _retiredCount < _retired.Length) _retired[_retiredCount++] = _voices[i].Id;
                 _voices.RemoveAt(i);
+            }
 
         return frames;
     }
+
+    /// <summary>The ids of voices retired during the most recent <see cref="Render"/> call (same-thread read only —
+    /// consumed by <c>RenderBlock</c> immediately after <see cref="Render"/> to hand each retired voice's ring to the
+    /// worker for off-RT disposal). Empty until the next <see cref="Render"/> resets it.</summary>
+    public ReadOnlySpan<long> RetiredThisBlock => _retired.AsSpan(0, _retiredCount);
 
     /// <summary>True when every voice is finished (source exhausted + faded) — the mixer has no more audio.</summary>
     public bool IsDrained(long mixerFrame)

@@ -99,6 +99,7 @@ public sealed class VoiceScheduler
     private bool _degrade;                 // decided to degrade (not Ready by the crossfade start)
     private TransitionOutcome _outcome;
     private long _incomingVoiceId;
+    private VoiceInstaller? _installer;    // optional RT-safe voice installer (ring-wraps on the feed path); null = bare mixer
 
     /// <summary>Create a scheduler in the fixed mix format. <paramref name="declickMs"/> is the ramp applied at any
     /// discontinuity (spec §8.4: 2–5 ms). <paramref name="voiceChainFactory"/> builds the incoming voice's per-voice DSP
@@ -123,6 +124,17 @@ public sealed class VoiceScheduler
     public long IncomingVoiceId => _incomingVoiceId;
     /// <summary>The declick ramp length in frames.</summary>
     public int DeclickFrames => _declickFrames;
+
+    /// <summary>Installs the incoming crossfade/gapless voice into the live graph. On the M4 RT feed path the coordinator
+    /// wires this to <see cref="PcmAudioSession.AddCrossfadeVoice"/>, so the incoming source is wrapped in its OWN decode↔RT
+    /// firewall ring (the worker decodes ahead, the RT thread mixes copy-only) — never decoding on the RT block path.</summary>
+    public delegate void VoiceInstaller(IAudioSource src, GainEnvelope env, long startFrame, float replayGain, IDspStage[]? chain, long id);
+
+    /// <summary>Route the incoming-voice install through <paramref name="installer"/> instead of a bare <c>mixer.AddVoice</c>
+    /// (control thread; set once at open). The <see cref="QueuePlaybackCoordinator"/> wires it to
+    /// <see cref="PcmAudioSession.AddCrossfadeVoice"/> so a crossfade committed on an RT-fed session ring-wraps the incoming
+    /// voice (RT-safe — spec §7.9/§8). When null the incoming voice is added directly (the single-thread pull path).</summary>
+    public void SetVoiceInstaller(VoiceInstaller installer) => _installer = installer;
 
     /// <summary>The outgoing track's natural end (mixer frame).</summary>
     public long JoinEndFrame => _activeStart >= 0 && _activeTrimmedLen != long.MaxValue ? _activeStart + _activeTrimmedLen : long.MaxValue;
@@ -283,15 +295,24 @@ public sealed class VoiceScheduler
         _incomingVoiceId = _nextVoiceId++;
         _slot.TargetStartFrame = startFrame;
         float rg = ReplayGain.ScalarLinear(_slot.Loudness, _norm, _refLufs);
-        mixer.AddVoice(new MixVoice
+        var chain = _voiceChainFactory?.Invoke();
+        if (_installer is not null)
         {
-            Id = _incomingVoiceId,
-            Src = _slot.Source!,
-            Env = env,
-            StartFrame = startFrame,
-            ReplayGainScalar = rg,
-            Chain = _voiceChainFactory?.Invoke(),
-        });
+            // RT-safe path: the session ring-wraps the incoming source so the worker (not the RT thread) decodes it.
+            _installer(_slot.Source!, env, startFrame, rg, chain, _incomingVoiceId);
+        }
+        else
+        {
+            mixer.AddVoice(new MixVoice
+            {
+                Id = _incomingVoiceId,
+                Src = _slot.Source!,
+                Env = env,
+                StartFrame = startFrame,
+                ReplayGainScalar = rg,
+                Chain = chain,
+            });
+        }
     }
 
     private static CrossCurve MapCurve(Easing easing) => easing == Easing.Linear ? CrossCurve.Linear : CrossCurve.EqualPower;

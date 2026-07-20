@@ -48,9 +48,16 @@ public sealed class AudioFeedThread : IDisposable
     private readonly PcmAudioSession _session;
     private readonly IRtThreadCharacteristics _rt;
     private readonly List<RingAudioSource> _rings = new(2);
+    private readonly List<long> _ringVoiceIds = new(2);   // kept in lockstep with _rings (primary = 0)
     private readonly int _blockFrames;
     private readonly int _ringFrames;
     private readonly int _targetAheadFrames;
+
+    // Lock-free SPSC retire queue (spec §7.9): the RT thread is the SOLE producer (EnqueueRetire); the worker is the SOLE
+    // consumer (drains in WorkerPumpOnce → disposes the ring off the RT thread). Power-of-two capacity; drop if full.
+    private readonly long[] _retireQ = new long[16];
+    private int _retireHead;   // consumer (worker) cursor
+    private int _retireTail;   // producer (RT) cursor
 
     private readonly Signal<int> _xruns = new(0);
     private long _xrunCount;
@@ -88,9 +95,35 @@ public sealed class AudioFeedThread : IDisposable
     {
         for (int i = 0; i < _rings.Count; i++) _rings[i].Dispose();
         _rings.Clear();
+        _ringVoiceIds.Clear();
         var ring = new RingAudioSource(inner, _session.Format.Channels, _ringFrames, _targetAheadFrames, _blockFrames * 2);
         _rings.Add(ring);
+        _ringVoiceIds.Add(0);   // the primary voice's ring
         return ring;
+    }
+
+    /// <summary>Wrap an ADDITIONAL crossfade voice (spec §8) in its own decode↔RT firewall ring and register it WITHOUT
+    /// clearing the primary — the worker pumps it and the RT loop watches it for underrun, exactly like the primary. The
+    /// ring is tagged with <paramref name="voiceId"/> (the mixer voice id) so the worker can dispose it off-RT when the RT
+    /// thread retires that voice (via <see cref="EnqueueRetire"/>). CONTROL thread only (called from
+    /// <see cref="PcmAudioSession.AddCrossfadeVoice"/>).</summary>
+    public IAudioSource WrapAdditional(IAudioSource inner, long voiceId)
+    {
+        var ring = new RingAudioSource(inner, _session.Format.Channels, _ringFrames, _targetAheadFrames, _blockFrames * 2);
+        _rings.Add(ring);
+        _ringVoiceIds.Add(voiceId);
+        return ring;
+    }
+
+    /// <summary>Enqueue a retired voice id for the worker to dispose its ring off the RT thread (spec §7.9). Alloc-free,
+    /// lock-free ring-buffer push — the RT thread is the sole producer. Drops silently if the queue is full (never blocks).</summary>
+    public void EnqueueRetire(long voiceId)
+    {
+        int tail = _retireTail;
+        int next = (tail + 1) & (_retireQ.Length - 1);
+        if (next == Volatile.Read(ref _retireHead)) return;   // full → drop (the worker will catch it on the next finish)
+        _retireQ[tail] = voiceId;
+        Volatile.Write(ref _retireTail, next);
     }
 
     // ── RT feed thread — copy+mix ONLY ───────────────────────────────────────────────────────────────────────────────
@@ -119,6 +152,28 @@ public sealed class AudioFeedThread : IDisposable
     {
         var rings = _rings;
         for (int i = 0; i < rings.Count; i++) rings[i].PumpAhead();
+        DrainRetireQueue();
+    }
+
+    /// <summary>Drain the RT→worker retire queue: dispose each retired voice's ring and remove it from <see cref="_rings"/>
+    /// / <see cref="_ringVoiceIds"/> (kept in lockstep). Worker thread ONLY — the sole consumer, so dispose is safe.</summary>
+    private void DrainRetireQueue()
+    {
+        int head = _retireHead;
+        while (head != Volatile.Read(ref _retireTail))
+        {
+            long voiceId = _retireQ[head];
+            head = (head + 1) & (_retireQ.Length - 1);
+            for (int i = 0; i < _ringVoiceIds.Count; i++)
+            {
+                if (_ringVoiceIds[i] != voiceId) continue;
+                _rings[i].Dispose();
+                _rings.RemoveAt(i);
+                _ringVoiceIds.RemoveAt(i);
+                break;
+            }
+        }
+        Volatile.Write(ref _retireHead, head);
     }
 
     // ── control / clock tick — off the RT thread ─────────────────────────────────────────────────────────────────────

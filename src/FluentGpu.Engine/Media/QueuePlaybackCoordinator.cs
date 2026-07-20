@@ -90,7 +90,11 @@ public sealed class QueuePlaybackCoordinator : IAsyncDisposable
             float refl = audio.ReferenceLufsValue;
             _scheduler = new VoiceScheduler(_format.SampleRate, _format.Channels,
                 voiceChainFactory: audio.BuildVoiceChain);
-            ArmScheduler(index, primaryVoiceId: 1, startFrame: 0, lenFrames: audio.VoiceTotalFrames, norm, refl);
+            // Install the incoming crossfade voice through the session so it is ring-wrapped on the RT feed path (the worker
+            // decodes ahead, the RT thread mixes copy-only) — RT-safe crossfade THROUGH the feed (spec §7.9/§8). On the
+            // single-thread pull path AddCrossfadeVoice adds the source directly (identical to the bare mixer.AddVoice).
+            _scheduler.SetVoiceInstaller(audio.AddCrossfadeVoice);
+            ArmScheduler(index, primaryVoiceId: audio.PrimaryVoiceIdValue, startFrame: 0, lenFrames: audio.VoiceTotalFrames, norm, refl);
         }
         else
         {

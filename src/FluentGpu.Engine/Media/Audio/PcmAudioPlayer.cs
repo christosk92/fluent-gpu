@@ -321,6 +321,36 @@ public sealed class PcmAudioSession : IMediaSession
 
     /// <summary>The mixer (queue/crossfade scheduler wires prepared voices into it).</summary>
     public CrossfadeMixer MixerRef => _mixer;
+
+    /// <summary>The mixer voice id of the PRIMARY (currently-playing) voice — the id a crossfade retargets to fade out
+    /// (via <see cref="CrossfadeMixer.TrySetVoiceEnvelope"/>). Stable for the session's playing voice.</summary>
+    public long PrimaryVoiceIdValue => PrimaryVoiceId;
+
+    /// <summary>Frames consumed out of the mixer (the device-clock / mixer-timeline domain). Crossfade voice
+    /// <c>StartFrame</c>s are expressed in THIS domain (spec §8.2).</summary>
+    public long ConsumeSeqFrames => _mixer.ConsumeSeq;
+
+    /// <summary>Add a crossfade voice into the mixer (control thread — the queue/crossfade scheduler's incoming voice).
+    /// On the RT path the voice is wrapped in its own decode↔RT firewall ring (the worker decodes ahead; the RT thread
+    /// mixes copy-only, and disposes the ring OFF-RT when the voice retires — spec §7.9); on the single-thread pull path
+    /// the mixer reads the decoder directly. <paramref name="id"/> must be a fresh non-zero voice id.</summary>
+    public void AddCrossfadeVoice(IAudioSource voice, GainEnvelope env, long startFrame, float replayGain, IDspStage[]? chain, long id)
+    {
+        var src = _feed is not null ? _feed.WrapAdditional(voice, id) : voice;
+        _mixer.AddVoice(new MixVoice
+        {
+            Id = id,
+            Src = src,
+            Env = env,
+            StartFrame = startFrame,
+            ReplayGainScalar = replayGain,
+            Chain = chain,
+        });
+    }
+
+    /// <summary>Compute the per-source ReplayGain linear scalar under the session's current normalization/reference-LUFS
+    /// for a crossfade voice (spec §7.7) — the scalar to pass to <see cref="AddCrossfadeVoice"/>.</summary>
+    public float ReplayGainScalarFor(in ReplayGainInfo loudness) => ReplayGain.ScalarLinear(loudness, _norm, _refLufs);
     /// <summary>The fixed-format graph (for the queue scheduler's per-voice chain factory).</summary>
     public IDspStage[]? BuildVoiceChain() => _graph.Live.BuildVoiceChain();
     /// <summary>The primary voice's live EQ stage (for effects tests), or null when EQ is disabled.</summary>
@@ -598,6 +628,13 @@ public sealed class PcmAudioSession : IMediaSession
         var graph = _graph.Live;
 
         _mixer.Render(buf, frames, ctx);
+        // Hand any crossfade voice the mixer just retired to the worker for OFF-RT ring disposal (spec §7.9): a
+        // foreach over a ReadOnlySpan<long> + a lock-free array push — alloc/lock/free-free, stays inside the tripwire.
+        if (_feed is not null)
+        {
+            var retired = _mixer.RetiredThisBlock;
+            for (int i = 0; i < retired.Length; i++) _feed.EnqueueRetire(retired[i]);
+        }
         _masterGain.Process(buf, buf, frames, ctx);
         _masterChannel.Process(buf, buf, frames, ctx);
         graph.RenderMaster(buf, frames, ctx);
