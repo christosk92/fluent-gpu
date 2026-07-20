@@ -750,7 +750,7 @@ sealed class ValidationShot : Component
     }
 
     static readonly object[] LocOnce = new object[] { "val-shot-loc" };
-    static readonly object[] RevealOnce = new object[] { "val-shot-reveal" };
+    static readonly FluentGpu.Hooks.DepKey RevealOnce = FluentGpu.Hooks.DepKey.Empty;
 }
 
 // The DropZone hover overlay (seeded visible) — verifies the opaque accent panel + inset dashed ring + icon/title/

@@ -207,7 +207,7 @@ public static class ProgressBar
                         }, LoopMs, loop: true, displayRate: true);   // transient bar → run at display rate, not the ambient cap
                     }
                 }
-            }, Width, State);
+            }, DepKey.From(HashCode.Combine(Width, State)));
 
             // Indicator2 spans the full track in Paused/Error (SetProgressBarIndicatorWidth: 100%), else 60%.
             float ind2Width = nonNormal ? Width : ts.Indicator2Width;

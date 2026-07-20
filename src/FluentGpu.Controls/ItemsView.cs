@@ -486,7 +486,7 @@ public sealed class ItemsView : Component
     public override Element Render()
     {
         var hooks = UseContext(InputHooks.Current);
-        var ownModel = UseMemo(static () => new SelectionModel());
+        var ownModel = UseMemo(static () => new SelectionModel(), DepKey.Empty);
         var current = UseSignal(-1);                       // CurrentItemIndex (idl:46-47, default −1)
         var viewportNode = UseRef(NodeHandle.Null);        // the VirtualListEl scene node (OnRealized capture)
         var subscribed = UseRef<SelectionModel?>(null);
@@ -526,7 +526,7 @@ public sealed class ItemsView : Component
                 RepeatKind.Custom => spec.CustomLayout,
                 _ => null,   // Wrap/Inline — non-virtual fallback
             },
-            spec.Kind, spec.Extent, spec.Gap, spec.Columns, spec.MinCellWidth, spec.Estimate, spec.Horizontal, spec.CustomLayout ?? (object)0);
+            DepKey.From(HashCode.Combine((int)spec.Kind, spec.Extent, spec.Gap, spec.Columns, spec.MinCellWidth, spec.Estimate, spec.Horizontal, spec.CustomLayout)));
         bool horizontal = spec.Horizontal;
 
         var sceneRef = Context.Scene;

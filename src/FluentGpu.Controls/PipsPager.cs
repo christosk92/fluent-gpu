@@ -109,7 +109,7 @@ internal sealed class PipsPagerCore : Component
             // A mid-flight retarget starts from the LIVE offset (the bring-into-view glide never snaps on interrupt).
             float from = anim.TryGetTrackValue(stripRef.Value, ch, out float live) ? live : to;
             anim.Animate(stripRef.Value, ch, from, to, Motion.ControlNormal, Easing.FluentPopOpen);
-        }, selected, count, maxVisible, vertical);
+        }, DepKey.From(HashCode.Combine(selected, count, maxVisible, vertical)));
 
         if (p is null) return new BoxEl();
         var parts = p.Parts;

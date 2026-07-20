@@ -59,7 +59,7 @@ sealed class LocalizationPage : Component
             Embed.Comp(() => new LocLivePanel()));
     }
 
-    static readonly object[] LocMountOnce = new object[] { "loc-mount" };
+    static readonly FluentGpu.Hooks.DepKey LocMountOnce = FluentGpu.Hooks.DepKey.Empty;
 }
 
 /// <summary>

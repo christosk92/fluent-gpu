@@ -33,18 +33,70 @@ internal sealed class MemoHookCell<T> : HookCell, IDisposableCell
     public void DisposeCell() => Memo.Dispose();
 }
 
+/// <summary>Backs the DEPS-GATED <see cref="RenderContext.UseEffect(Action, DepKey)"/> family: re-runs when the
+/// <see cref="DepKey"/> changes (<c>default</c>/<see cref="DepKey.Empty"/> = mount-once). <see cref="Cleanup"/> is the
+/// return of a <c>Func&lt;Action?&gt;</c> effect — invoked before each re-run and once at unmount.</summary>
 internal sealed class EffectCell : HookCell
 {
-    public object[]? Deps;
-    public DepKey? Key;     // set instead of Deps when the call site uses the zero-alloc DepKey overload (finding #9)
+    public DepKey Key;
+    public bool HasKey;     // false until the first run set Key (so mount always runs, even for DepKey.Empty)
     public Action? Cleanup;
 }
 
 internal sealed class MemoCell<T> : HookCell
 {
     public T Value = default!;
-    public object[]? Deps;
-    public DepKey? Key;     // see EffectCell.Key
+    public DepKey Key;
+    public bool HasKey;
+}
+
+/// <summary>Backs an AUTO-TRACKED effect (<see cref="RenderContext.UseEffect(Action)"/> / <c>Func&lt;Action?&gt;</c>
+/// with no deps): owns the <see cref="AutoEffect"/> computation, disposed on unmount (unlinks sources + runs cleanup).</summary>
+internal sealed class AutoEffectCell : HookCell, IDisposableCell
+{
+    public AutoEffect Effect = null!;
+    public void DisposeCell() => Effect.Dispose();
+}
+
+/// <summary>
+/// An AUTO-TRACKED effect: a reactive computation whose body runs with signal-read tracking, but whose RUN is DEFERRED
+/// into the owning context's pending-effect list (drained after paint) — preserving <c>UseEffect</c>'s passive timing
+/// (never inline during <see cref="ReactiveRuntime.Flush"/>). Tracking is RUNTIME and re-armed EVERY run: a body that
+/// reads <c>sigA</c> this run and (after a branch flip in a later render) <c>sigB</c> the next follows <c>sigB</c> and
+/// drops <c>sigA</c> — <see cref="Computation.RunComputation"/> unlinks the old sources then re-links the new. A body
+/// that reads no signal runs exactly once. The cleanup (a <c>Func&lt;Action?&gt;</c> return) is registered via
+/// <see cref="Reactive.OnCleanup"/>, so it fires before each re-run and once on <see cref="Computation.Dispose"/> (unmount).
+/// </summary>
+internal sealed class AutoEffect : Computation
+{
+    private readonly RenderContext _ctx;
+    private readonly bool _layout;
+    private readonly Action _run;                 // stable delegate enqueued into the pending list (no per-render alloc)
+    public Action? ActionBody;                    // set by the void overload
+    public Func<Action?>? FuncBody;               // set by the cleanup-returning overload (mutually exclusive)
+
+    public AutoEffect(ReactiveRuntime runtime, RenderContext ctx, bool layout) : base(runtime, owner: null)
+    {
+        _ctx = ctx; _layout = layout; _run = RunBody;
+        // Do NOT run at construction — the hook Primes the first run into the pending list so it lands in the passive
+        // drain (after paint), like every other UseEffect body. New Computations start Stale; that is fine (nothing
+        // schedules or runs us until Prime), and RunComputation flips us to Clean once the first run executes.
+    }
+
+    // A read signal changed off-frame ⇒ ask the runtime to schedule (it wakes the host + dedups). The Flush picks us up
+    // and calls RunStale, which does NOT run the body inline — it enqueues it into the passive/layout list instead.
+    private protected override void OnStale() => Runtime.Schedule(this);
+
+    internal override void RunStale() => _ctx.EnqueueEffectRun(_run, _layout);
+
+    /// <summary>Enqueue the first run at mount (a frame is already in flight — no wake needed).</summary>
+    internal void Prime() => _ctx.EnqueueEffectRun(_run, _layout);
+
+    private void RunBody() => RunComputation(() =>
+    {
+        if (FuncBody is { } f) { var cleanup = f(); if (cleanup is not null) Reactive.OnCleanup(cleanup); }
+        else ActionBody?.Invoke();
+    });
 }
 
 internal sealed class RefHolderCell : HookCell
@@ -83,7 +135,8 @@ internal sealed class AsyncResourceCell<T> : HookCell, IDisposableCell
     public Loadable<T> Loadable = null!;
     public CancellationTokenSource Cts = null!;
     public bool Started;
-    public object[]? Deps;   // null for the once-at-mount overload; set by the dep-keyed overload to gate a reload
+    public DepKey Deps;      // the dep-keyed overload's reload gate (unused by the once-at-mount overload)
+    public bool HasDeps;     // false for the once-at-mount overload; true when the dep-keyed overload seeded Deps
     public void DisposeCell() { try { Cts.Cancel(); } catch { /* already disposed */ } Cts.Dispose(); }
 }
 
@@ -138,7 +191,7 @@ internal sealed class GestureHookState
     private readonly RenderContext _ctx;
     private readonly GestureType _kind;
     public Action<GestureEventArgs>? Handler;
-    public readonly object[] KindDep;            // the layout-effect dep array (stable; identity-equal each render)
+    public readonly DepKey KindDep;              // the layout-effect dep key (stable; re-registers only on kind change)
     public readonly Action Register;             // stable effect delegate (installs the forwarder on the current node)
     private readonly Action<GestureEventArgs> _forward;   // stable forwarder written into the scene column
     private NodeHandle _registeredNode;           // the node the forwarder is currently installed on (for re-target/cleanup)
@@ -147,7 +200,7 @@ internal sealed class GestureHookState
     {
         _ctx = ctx;
         _kind = kind;
-        KindDep = new object[] { kind };
+        KindDep = DepKey.From((int)kind);
         _forward = e => Handler?.Invoke(e);
         Register = DoRegister;
     }
@@ -329,19 +382,37 @@ public sealed partial class RenderContext
         return cell.Memo;
     }
 
-    public void UseEffect(Action effect, params object[] deps) => EffectImpl(effect, deps, PendingEffects);
+    // ── UseEffect / UseLayoutEffect ──────────────────────────────────────────────────────────────────────────────────
+    // DEFAULT (no deps) = AUTO-TRACKED: the body runs with signal-read tracking; any signal it read re-runs it, re-armed
+    // EVERY run (a branch that reads a different signal next run re-subscribes to that one). A body that reads no signal
+    // runs exactly once. Runs in the passive-effect drain (after paint) — never inline during Flush.
+    // EXPLICIT (DepKey deps) = DEPS-GATED (no tracking): runs when the key changes; DepKey.Empty/default = mount-once.
+    // The Func<Action?> overloads return a CLEANUP run before each re-run and once at unmount; the Action overloads are
+    // the no-cleanup convenience. NOTE (overload resolution): an expression-bodied lambda that RETURNS an Action binds to
+    // the Func<Action?> overload and its return is treated as the cleanup — write a block body `() => { X(); }` for a
+    // fire-only effect.
 
-    /// <summary>Like <see cref="UseEffect"/> but runs after layout, before paint (Bounds are valid). Phase 6.5.</summary>
-    public void UseLayoutEffect(Action effect, params object[] deps) => EffectImpl(effect, deps, PendingLayoutEffects);
+    public void UseEffect(Action effect) { var e = GetAutoEffect(layout: false, out bool mount); e.ActionBody = effect; e.FuncBody = null; if (mount) e.Prime(); }
+    public void UseEffect(Func<Action?> effect) { var e = GetAutoEffect(layout: false, out bool mount); e.FuncBody = effect; e.ActionBody = null; if (mount) e.Prime(); }
+    /// <summary>Like <see cref="UseEffect(Action)"/> but runs after layout, before paint (Bounds are valid). Phase 6.5.</summary>
+    public void UseLayoutEffect(Action effect) { var e = GetAutoEffect(layout: true, out bool mount); e.ActionBody = effect; e.FuncBody = null; if (mount) e.Prime(); }
+    /// <inheritdoc cref="UseLayoutEffect(Action)"/>
+    public void UseLayoutEffect(Func<Action?> effect) { var e = GetAutoEffect(layout: true, out bool mount); e.FuncBody = effect; e.ActionBody = null; if (mount) e.Prime(); }
 
-    /// <summary>Zero-alloc dep variant (finding #9): pass a <see cref="DepKey"/> instead of a <c>params object[]</c> — no
-    /// array allocation, no value-type boxing per render. Use for hot hooks whose deps are scalars (e.g. a loading bool).</summary>
-    public void UseEffect(Action effect, DepKey deps) => EffectImplKey(effect, deps, PendingEffects);
+    /// <summary>Deps-gated effect (no tracking): runs at mount and whenever <paramref name="deps"/> changes. Pass
+    /// <see cref="DepKey.Empty"/> (the default) for mount-once. Scalars/tuples convert implicitly (<c>UseEffect(fn, count)</c>).</summary>
+    public void UseEffect(Action effect, DepKey deps) => EffectKey(effect, deps, PendingEffects);
     /// <inheritdoc cref="UseEffect(Action, DepKey)"/>
-    public void UseLayoutEffect(Action effect, DepKey deps) => EffectImplKey(effect, deps, PendingLayoutEffects);
+    public void UseEffect(Func<Action?> effect, DepKey deps) => EffectKeyC(effect, deps, PendingEffects);
+    /// <inheritdoc cref="UseEffect(Action, DepKey)"/>
+    public void UseLayoutEffect(Action effect, DepKey deps) => EffectKey(effect, deps, PendingLayoutEffects);
+    /// <inheritdoc cref="UseEffect(Action, DepKey)"/>
+    public void UseLayoutEffect(Func<Action?> effect, DepKey deps) => EffectKeyC(effect, deps, PendingLayoutEffects);
 
-    /// <summary>Mount a signal-tracked effect owned by this component. The body runs once, then whenever signals it reads
-    /// change. Use sparingly for adapter components that bridge a hot signal into a coarser retained signal.</summary>
+    /// <summary>Mount a signal-tracked effect owned by this component that runs EAGERLY (the body runs synchronously now,
+    /// then re-runs inline during <see cref="ReactiveRuntime.Flush"/> when a read signal changes). Distinct from the
+    /// passive auto-tracked <see cref="UseEffect(Action)"/> — use this adapter form ONLY to bridge a hot signal into a
+    /// coarser retained signal where eager timing is required; prefer <see cref="UseEffect(Action)"/> otherwise.</summary>
     public void UseSignalEffect(Action effect)
     {
         SignalEffectCell cell;
@@ -350,33 +421,41 @@ public sealed partial class RenderContext
         _cursor++;
     }
 
-    private void EffectImpl(Action effect, object[] deps, List<Action> target)
+    private AutoEffect GetAutoEffect(bool layout, out bool mount)
+    {
+        mount = !_mounted;
+        AutoEffectCell cell;
+        if (mount) { cell = new AutoEffectCell { Effect = new AutoEffect(Rt, this, layout) }; AddCell(cell, cleanupCapable: true); }
+        else { DebugGuardCursor(); cell = (AutoEffectCell)_cells[_cursor]; }
+        _cursor++;
+        return cell.Effect;
+    }
+
+    private void EffectKey(Action effect, DepKey deps, List<Action> target)
     {
         EffectCell cell;
         if (!_mounted) { cell = new EffectCell(); AddCell(cell, cleanupCapable: true); }
         else { DebugGuardCursor(); cell = (EffectCell)_cells[_cursor]; }
         _cursor++;
 
-        bool changed = !_mounted || !DepsEqual(cell.Deps, deps);
-        if (changed)
+        if (!cell.HasKey || cell.Key != deps)
         {
-            cell.Deps = deps;
+            cell.Key = deps; cell.HasKey = true;
             EnqueueEffect(target, () => { cell.Cleanup?.Invoke(); effect(); });
         }
     }
 
-    private void EffectImplKey(Action effect, DepKey deps, List<Action> target)
+    private void EffectKeyC(Func<Action?> effect, DepKey deps, List<Action> target)
     {
         EffectCell cell;
         if (!_mounted) { cell = new EffectCell(); AddCell(cell, cleanupCapable: true); }
         else { DebugGuardCursor(); cell = (EffectCell)_cells[_cursor]; }
         _cursor++;
 
-        bool changed = !_mounted || cell.Key is not { } k || k != deps;
-        if (changed)
+        if (!cell.HasKey || cell.Key != deps)
         {
-            cell.Key = deps;
-            EnqueueEffect(target, () => { cell.Cleanup?.Invoke(); effect(); });
+            cell.Key = deps; cell.HasKey = true;
+            EnqueueEffect(target, () => { cell.Cleanup?.Invoke(); cell.Cleanup = effect(); });
         }
     }
 
@@ -386,6 +465,10 @@ public sealed partial class RenderContext
             RegisterPendingEffectContext?.Invoke(this, ReferenceEquals(target, PendingLayoutEffects));
         target.Add(action);
     }
+
+    // Enqueue an auto-tracked effect's tracked run into the passive (or layout) drain, registering this context with the
+    // host on the 0→1 transition. Called at mount (Prime) and on each scheduled re-run (AutoEffect.RunStale).
+    internal void EnqueueEffectRun(Action run, bool layout) => EnqueueEffect(layout ? PendingLayoutEffects : PendingEffects, run);
 
     /// <summary>State driven by a reducer (the React <c>useReducer</c>); dispatches fold over the latest committed state.</summary>
     public (TState State, Action<TAction> Dispatch) UseReducer<TState, TAction>(Func<TState, TAction, TState> reducer, TState initial)
@@ -400,38 +483,21 @@ public sealed partial class RenderContext
         return (sig.Value, dispatch);
     }
 
-    /// <summary>Memoize an expensive value; recomputes only when <paramref name="deps"/> change (dep-array memo).</summary>
-    public T UseMemo<T>(Func<T> factory, params object[] deps)
-    {
-        MemoCell<T> cell;
-        if (!_mounted)
-        {
-            cell = new MemoCell<T> { Value = factory(), Deps = deps };
-            _cells.Add(cell);
-        }
-        else
-        {
-            DebugGuardCursor(); cell = (MemoCell<T>)_cells[_cursor];
-            if (!DepsEqual(cell.Deps, deps)) { cell.Value = factory(); cell.Deps = deps; }
-        }
-        _cursor++;
-        return cell.Value;
-    }
-
-    /// <summary>Zero-alloc dep variant of <see cref="UseMemo{T}(Func{T}, object[])"/> (finding #9): a <see cref="DepKey"/>
-    /// instead of a <c>params object[]</c> — no per-render array/boxing.</summary>
+    /// <summary>Memoize an expensive value; recomputes only when <paramref name="deps"/> changes (deps-gated, explicit —
+    /// there is no auto-tracked memo). Scalars/tuples convert implicitly; <see cref="DepKey.Empty"/>/default = compute
+    /// once at mount.</summary>
     public T UseMemo<T>(Func<T> factory, DepKey deps)
     {
         MemoCell<T> cell;
         if (!_mounted)
         {
-            cell = new MemoCell<T> { Value = factory(), Key = deps };
+            cell = new MemoCell<T> { Value = factory(), Key = deps, HasKey = true };
             _cells.Add(cell);
         }
         else
         {
             DebugGuardCursor(); cell = (MemoCell<T>)_cells[_cursor];
-            if (cell.Key is not { } k || k != deps) { cell.Value = factory(); cell.Key = deps; }
+            if (!cell.HasKey || cell.Key != deps) { cell.Value = factory(); cell.Key = deps; cell.HasKey = true; }
         }
         _cursor++;
         return cell.Value;
@@ -574,20 +640,8 @@ public sealed partial class RenderContext
     }
 
     // ── Declarative animation (seed/retarget engine tracks on this component's node; composited, no re-render/frame) ──
+    // DepKey-gated only — the retained-anim hooks re-seed when their key changes (DepKey.Empty = seed once at mount).
 
-    public void UseSpring(AnimChannel channel, float to, SpringParams spring, params object[] deps)
-        => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Spring(HostNode, channel, to, spring); }, deps);
-
-    public void UseTransition(AnimChannel channel, float from, float to, float durationMs, Easing easing = Easing.EaseInOut, params object[] deps)
-        => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Animate(HostNode, channel, from, to, durationMs, easing); }, deps);
-
-    public void UseKeyframes(AnimChannel channel, Keyframe[] keys, float durationMs, bool loop = false, params object[] deps)
-        => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Keyframes(HostNode, channel, keys, durationMs, loop); }, deps);
-
-    public void UseDrivenAnimation(AnimChannel channel, Keyframe[] keys, Func<float> source, float min, float max, params object[] deps)
-        => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Drive(HostNode, channel, keys, a.Clocks.Register(source), min, max); }, deps);
-
-    // Zero-alloc DepKey variants of the retained-anim hooks (finding #9) — no per-render params object[] box.
     public void UseSpring(AnimChannel channel, float to, SpringParams spring, DepKey deps)
         => UseLayoutEffect(() => { if (Anim is { } a && !HostNode.IsNull) a.Spring(HostNode, channel, to, spring); }, deps);
     public void UseTransition(AnimChannel channel, float from, float to, float durationMs, Easing easing, DepKey deps)
@@ -712,13 +766,13 @@ public sealed partial class RenderContext
     /// e.g. a detail page whose album id changes while the component instance is REUSED across navigation, so the data
     /// follows the id with no remount. Re-evaluate <paramref name="seed"/> per render (so the reset shows the NEW key's
     /// placeholder/preview, not the prior one's) and pass a loader that closes over the current key.</summary>
-    public Loadable<T> UseAsyncResource<T>(Func<CancellationToken, Task<T>> loader, T seed, params object[] deps)
+    public Loadable<T> UseAsyncResource<T>(Func<CancellationToken, Task<T>> loader, T seed, DepKey deps)
     {
         var post = UsePost();
         AsyncResourceCell<T> cell;
         if (!_mounted)
         {
-            cell = new AsyncResourceCell<T> { Loadable = Loadable<T>.Pending(seed), Cts = new CancellationTokenSource(), Deps = deps };
+            cell = new AsyncResourceCell<T> { Loadable = Loadable<T>.Pending(seed), Cts = new CancellationTokenSource(), Deps = deps, HasDeps = true };
             AddCell(cell, cleanupCapable: true);
             _cursor++;
             BeginAsyncLoad(cell, loader, post);
@@ -726,9 +780,9 @@ public sealed partial class RenderContext
         }
         cell = (AsyncResourceCell<T>)_cells[_cursor];
         _cursor++;
-        if (!DepsEqual(cell.Deps, deps))
+        if (!cell.HasDeps || cell.Deps != deps)
         {
-            cell.Deps = deps;
+            cell.Deps = deps; cell.HasDeps = true;
             try { cell.Cts.Cancel(); } catch { /* already disposed */ }
             cell.Cts.Dispose();
             cell.Cts = new CancellationTokenSource();
@@ -835,13 +889,5 @@ public sealed partial class RenderContext
         else { cell = (RefHolderCell)_cells[_cursor]; }
         _cursor++;
         return (Ref<T>)cell.Ref!;
-    }
-
-    private static bool DepsEqual(object[]? a, object[]? b)
-    {
-        if (a is null || b is null || a.Length != b.Length) return false;
-        for (int i = 0; i < a.Length; i++)
-            if (!Equals(a[i], b[i])) return false;
-        return true;
     }
 }

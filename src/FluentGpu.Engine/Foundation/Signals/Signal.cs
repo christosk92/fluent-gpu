@@ -9,10 +9,32 @@ public interface IReadSignal<out T>
     T Peek();
 }
 
+/// <summary>Factory helpers for <see cref="Signal{T}"/>.</summary>
+public static class Signal
+{
+    /// <summary>An always-notify signal: every set notifies subscribers even when the value is equal to the current one
+    /// (the third equality mode — see <see cref="Signal{T}"/>). For animation-tick / semantic-retrigger signals and for
+    /// per-field prop diffing of mutable references where an equal-by-reference write must still re-run consumers.</summary>
+    public static Signal<T> AlwaysNotify<T>(T initial) => new(initial, AlwaysNotifyComparer<T>.Instance);
+}
+
+/// <summary>An equality comparer that never reports equal — the always-notify mode (<see cref="Signal.AlwaysNotify{T}"/>).</summary>
+internal sealed class AlwaysNotifyComparer<T> : IEqualityComparer<T>
+{
+    public static readonly AlwaysNotifyComparer<T> Instance = new();
+    public bool Equals(T? a, T? b) => false;   // never equal ⇒ every set notifies
+    public int GetHashCode(T v) => 0;
+}
+
 /// <summary>
 /// A reactive cell: reading <see cref="Value"/> inside a computation subscribes it; writing notifies subscribers
 /// (deferred — they re-run on the next <see cref="ReactiveRuntime.Flush"/>). The unit of state in the engine; a
 /// <c>UseState</c> is a Signal whose subscriber is the owning component's render-effect.
+///
+/// Three equality modes decide when a write notifies:
+///   • DEFAULT — <see cref="EqualityComparer{T}.Default"/>; equal-by-value writes are coalesced (no notify).
+///   • CUSTOM — pass an <see cref="IEqualityComparer{T}"/> to the constructor (e.g. a tolerance/identity comparer).
+///   • ALWAYS-NOTIFY — <see cref="Signal.AlwaysNotify{T}"/>; every set notifies, even on an equal value.
 /// </summary>
 public sealed class Signal<T> : ISignalSource, IReadSignal<T>
 {
@@ -29,12 +51,18 @@ public sealed class Signal<T> : ISignalSource, IReadSignal<T>
     public T Value
     {
         get { Subscribe(); return _value; }
-        set
-        {
-            if (_cmp.Equals(_value, value)) return;
-            _value = value;
-            NotifySubscribers();
-        }
+        set => SetIfChanged(value);
+    }
+
+    /// <summary>Write <paramref name="value"/> and report whether it changed: under the signal's equality mode an equal
+    /// value is coalesced (returns <c>false</c>, no notify), otherwise it writes + notifies and returns <c>true</c>. One
+    /// compare (the setter routes through here — no doubled gate). An always-notify signal returns <c>true</c> every set.</summary>
+    public bool SetIfChanged(T value)
+    {
+        if (_cmp.Equals(_value, value)) return false;
+        _value = value;
+        NotifySubscribers();
+        return true;
     }
 
     public T Peek() => _value;
@@ -86,12 +114,17 @@ public sealed class FloatSignal : ISignalSource, IReadSignal<float>
     public float Value
     {
         get { Subscribe(); return _value; }
-        set
-        {
-            if (_value == value) return;   // exact-equality is intended for a scrub stream
-            _value = value;
-            for (int i = _subs.Count - 1; i >= 0; i--) _subs[i].MarkStale();
-        }
+        set => SetIfChanged(value);   // exact-equality is intended for a scrub stream
+    }
+
+    /// <summary>Write <paramref name="value"/> and report whether it changed (exact float compare) — <c>false</c> +
+    /// no notify on an equal write, <c>true</c> + notify on a change. Single compare (the setter routes through here).</summary>
+    public bool SetIfChanged(float value)
+    {
+        if (_value == value) return false;
+        _value = value;
+        for (int i = _subs.Count - 1; i >= 0; i--) _subs[i].MarkStale();
+        return true;
     }
 
     public float Peek() => _value;

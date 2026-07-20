@@ -397,7 +397,7 @@ internal sealed class SplitViewPaneWatcher : Component
             bool initial = lastViewport.Value == default;
             lastViewport.Value = viewport;
             if (!initial) TryClose();
-        }, viewport.Width, viewport.Height);
+        }, DepKey.From(HashCode.Combine(viewport.Width, viewport.Height)));
 
         return new BoxEl { Width = 0f, Height = 0f, HitTestVisible = false };
     }

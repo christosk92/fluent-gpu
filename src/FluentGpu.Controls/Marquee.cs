@@ -173,7 +173,7 @@ internal sealed class MarqueeScroller : Component
         bool paused = canScroll && !active;
 
         var scrollerHost = UseRef(NodeHandle.Null);
-        UseLayoutEffect(() => { scrollerHost.Value = Context.HostNode; });
+        UseLayoutEffect(() => { scrollerHost.Value = Context.HostNode; }, DepKey.Empty);
 
         bool loop = Sty.Mode == Marquee.ScrollMode.Loop;
         bool textMode = Content is null;
@@ -186,18 +186,18 @@ internal sealed class MarqueeScroller : Component
         {
             if (Context.Anim is { } a && !Context.HostNode.IsNull)
                 a.SetNodeParked(Context.HostNode, paused);
-        }, paused, canScroll);
+        }, (paused, canScroll));
 
         // One animation hook per Mode (Mode is fixed for an instance, so the hook order is stable across renders).
         if (Sty.Mode == Marquee.ScrollMode.SinglePass)
         {
             UseSpring(AnimChannel.TranslateX, canScroll ? -tailDist : 0f,
-                      SpringParams.FromResponse(0.45f, 0.9f), canScroll, tailDist);
+                      SpringParams.FromResponse(0.45f, 0.9f), DepKey.From(tailDist, canScroll ? 1 : 0));
         }
         else
         {
             (Keyframe[] keys, float durMs, bool looping) = BuildTrack(loop, canScroll, loopDist, tailDist);
-            UseKeyframes(AnimChannel.TranslateX, keys, durMs, looping, canScroll, loop, loopDist, tailDist);
+            UseKeyframes(AnimChannel.TranslateX, keys, durMs, looping, DepKey.From(HashCode.Combine(canScroll, loop, loopDist, tailDist)));
         }
 
         var copies = new List<Element>(seamless ? 2 : 1) { Measured() };
@@ -319,7 +319,7 @@ internal sealed class MarqueeScrollTicker : ReactiveComponent
     public override Element Setup()
     {
         var hooks = UseContext(InputHooks.Current);
-        UseEffect(() => hooks.SetAfterAnimations(this, Sample));
+        UseEffect(() => hooks.SetAfterAnimations(this, Sample), DepKey.Empty);   // mount-once (no signal reads)
         return new BoxEl { HitTestVisible = false, Width = 0f, Height = 0f };
     }
 

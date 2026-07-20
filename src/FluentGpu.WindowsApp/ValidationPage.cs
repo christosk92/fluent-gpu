@@ -39,7 +39,7 @@ sealed class ValidationPage : Component
             Embed.Comp(() => new ValidationDemo()));
     }
 
-    static readonly object[] MountOnce = new object[] { "validation-mount" };
+    static readonly FluentGpu.Hooks.DepKey MountOnce = FluentGpu.Hooks.DepKey.Empty;
 }
 
 /// <summary>The live sign-up form. Three controlled signals feed three <c>UseField</c>s under one <c>UseForm</c>; the

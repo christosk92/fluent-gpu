@@ -149,7 +149,7 @@ sealed class SpringProbe : Component
 {
     public override Element Render()
     {
-        UseSpring(AnimChannel.ScaleX, 1.2f, SpringParams.FromResponse(0.2f, 1f), Array.Empty<object>());
+        UseSpring(AnimChannel.ScaleX, 1.2f, SpringParams.FromResponse(0.2f, 1f), DepKey.Empty);
         return new BoxEl { Width = 20, Height = 20, Fill = ColorF.FromRgba(0, 128, 255) };
     }
 }
@@ -261,6 +261,66 @@ sealed class HookProbe : Component
         State = s; Dispatch = d; Memo = m; RefBox = r;
         return Ui.Text("probe");
     }
+}
+
+// ── G1a hook-surface probes (auto-tracked effects, cleanup, DepKey deps) ─────────────────────────────────────────
+// Auto-tracked effect that reads sigA on run 1 and (after a branch flip) sigB on run 2 — proves runtime re-arming.
+sealed class AutoEffectProbe : Component
+{
+    public readonly Signal<int> A = new(0), B = new(0);
+    public bool UseB;
+    public int Runs;
+    public override Element Render()
+    {
+        bool useB = UseB;   // captured per render → the effect closure branches on this render's value
+        UseEffect(() => { Runs++; if (useB) _ = B.Value; else _ = A.Value; });   // AUTO-TRACKED (no deps)
+        return new BoxEl();
+    }
+}
+
+// Deps-gated cleanup-returning effect: cleanup fires before each re-run on dep change and once at unmount.
+sealed class CleanupProbe : Component
+{
+    public int Dep;
+    public int Setup, Cleanup;
+    public override Element Render()
+    {
+        UseEffect(() => { Setup++; return () => Cleanup++; }, DepKey.From(Dep));
+        return new BoxEl();
+    }
+}
+
+// Two auto-tracked cleanup-returning effects: their cleanups must run in cell order at unmount.
+sealed class MultiCleanupProbe : Component
+{
+    public readonly List<int> Order = new();
+    public override Element Render()
+    {
+        UseEffect(() => { return () => Order.Add(1); });
+        UseEffect(() => { return () => Order.Add(2); });
+        return new BoxEl();
+    }
+}
+
+sealed class MountOnceProbe : Component
+{
+    public int Runs;
+    public override Element Render() { UseEffect(() => { Runs++; }, DepKey.Empty); return new BoxEl(); }
+}
+
+sealed class StringTupleProbe : Component
+{
+    public string S = "a";
+    public int I;
+    public int Runs;
+    public override Element Render() { UseEffect(() => { Runs++; }, (S, I)); return new BoxEl(); }
+}
+
+sealed class FromRefProbe : Component
+{
+    public object Obj = new();
+    public int Runs;
+    public override Element Render() { UseEffect(() => { Runs++; }, DepKey.FromRef(Obj)); return new BoxEl(); }
 }
 
 // Form-validation probe: two fields (a Required email, a cross-field confirm) optionally joined to a UseForm scope.
@@ -638,7 +698,7 @@ sealed class BoundAtomicItemsProbe : Component
 
     public override Element Render()
     {
-        Source = UseMemo(() => BoundItems.From(Items, Fallback));
+        Source = UseMemo(() => BoundItems.From(Items, Fallback), DepKey.Empty);
         return new BoxEl
         {
             Width = 420f, Height = 160f,
@@ -2025,7 +2085,7 @@ sealed class ActivationPage : Component
         // A persistent looping animation on every page EXCEPT "blank" — _key is instance-constant, so this conditional
         // hook keeps a stable call order for any given page. Quiesced when the page parks (Layer D).
         if (_key != "blank")
-            UseKeyframes(AnimChannel.Opacity, [new Keyframe(0f, 0.4f), new Keyframe(1f, 1f)], 600f, loop: true);
+            UseKeyframes(AnimChannel.Opacity, [new Keyframe(0f, 0.4f), new Keyframe(1f, 1f)], 600f, loop: true, DepKey.Empty);
         return new BoxEl { Width = 100, Height = 40, Children = [Text("ap-" + _key)] };
     }
 }
@@ -3008,7 +3068,7 @@ sealed class MeasuredSeamProbe : Component
     public MeasuredStackVirtualLayout? Layout;
     public override Element Render()
     {
-        var layout = UseMemo(static () => new MeasuredStackVirtualLayout(Estimate));
+        var layout = UseMemo(static () => new MeasuredStackVirtualLayout(Estimate), DepKey.Empty);
         Layout = layout;
         return Virtual.Measured(N, layout,
                    renderItem: i => new BoxEl { Height = H(i), Fill = ColorF.FromRgba(30, 30, 30) },
@@ -3028,7 +3088,7 @@ sealed class AnchorRepinProbe : Component
     public MeasuredStackVirtualLayout? Layout;
     public override Element Render()
     {
-        var layout = UseMemo(static () => new MeasuredStackVirtualLayout(Estimate));
+        var layout = UseMemo(static () => new MeasuredStackVirtualLayout(Estimate), DepKey.Empty);
         Layout = layout;
         return Virtual.Measured(N, layout,
                    renderItem: _ => new BoxEl { Height = Real, Fill = ColorF.FromRgba(30, 30, 30) },
@@ -4625,6 +4685,135 @@ static class Slice
         Check("14. UseReducer folds dispatches", ok1 && p.State == 8, "0 →(+5,+3)→ 8");
         Check("15. UseMemo recomputes only on dep change", ok2 && ok3, $"memoRuns={p.MemoRuns}");
         Check("16. UseRef persists & is stable", p.RefBox!.Value == 42 && ReferenceEquals(p.RefBox, r1));
+    }
+
+    // Drain a component's passive-effect queue the way the host does after paint (phase 12) — snapshot-per-pass so an
+    // effect that re-enqueues during the drain is handled, but the auto-effect body itself enqueues nothing.
+    static void PumpEffects(RenderContext c)
+    {
+        var q = c.PendingEffects;
+        while (q.Count > 0) { var batch = q.ToArray(); q.Clear(); foreach (var a in batch) a(); }
+    }
+
+    // G1a — the new hook surface: auto-tracked effects (default), DepKey deps (opt-in), cleanup, Signal equality, Prop.Bind.
+    static void HookSurfaceChecks()
+    {
+        // gate.hooks.autotrack-timing — the auto-tracked body executes in the passive drain, NEVER inline during Flush.
+        {
+            var rt = new ReactiveRuntime();
+            var pr = new AutoEffectProbe(); pr.Context.Runtime = rt;
+            pr.RenderWithHooks();
+            bool deferredAtMount = pr.Runs == 0;          // not run during render/mount
+            PumpEffects(pr.Context);
+            bool ranInDrain = pr.Runs == 1;
+            pr.A.Value = 1;
+            bool notOnWrite = pr.Runs == 1;
+            rt.Flush();
+            bool notInFlush = pr.Runs == 1;              // Flush schedules + stages, but does NOT run the body inline
+            PumpEffects(pr.Context);
+            bool ranInPassive = pr.Runs == 2;
+            Check("gate.hooks.autotrack-timing", deferredAtMount && ranInDrain && notOnWrite && notInFlush && ranInPassive,
+                $"mount-deferred={deferredAtMount} drain={ranInDrain} not-in-flush={notInFlush} passive={ranInPassive}");
+        }
+
+        // gate.hooks.autotrack-rearm — reads sigA run 1, sigB run 2 (branch flip); re-fires on sigB, NOT sigA.
+        {
+            var rt = new ReactiveRuntime();
+            var pr = new AutoEffectProbe(); pr.Context.Runtime = rt;
+            pr.UseB = false; pr.RenderWithHooks(); PumpEffects(pr.Context);   // run1 reads A
+            pr.UseB = true; pr.RenderWithHooks();                            // re-render installs closure2 (reads B)
+            pr.A.Value = 1; rt.Flush(); PumpEffects(pr.Context);             // run2 (via still-subscribed A) → now tracks B
+            pr.B.Value = 1; rt.Flush(); PumpEffects(pr.Context);             // re-fires on B
+            int afterB = pr.Runs;
+            pr.A.Value = 2; rt.Flush(); PumpEffects(pr.Context);             // A no longer tracked → no re-fire
+            Check("gate.hooks.autotrack-rearm", pr.Runs == 3 && afterB == 3,
+                $"runs={pr.Runs} (want 3; A-after-flip must not re-fire)");
+        }
+
+        // gate.hooks.effect-cleanup-runs — cleanup before re-run on dep change AND once at unmount.
+        {
+            var rt = new ReactiveRuntime();
+            var cp = new CleanupProbe(); cp.Context.Runtime = rt;
+            cp.Dep = 1; cp.RenderWithHooks(); PumpEffects(cp.Context);   // Setup=1, Cleanup=0
+            cp.Dep = 2; cp.RenderWithHooks(); PumpEffects(cp.Context);   // cleanup fires, then re-run: Cleanup=1, Setup=2
+            bool beforeRerun = cp.Setup == 2 && cp.Cleanup == 1;
+            cp.Unmount();
+            bool atUnmount = cp.Cleanup == 2;
+            Check("gate.hooks.effect-cleanup-runs", beforeRerun && atUnmount, $"setup={cp.Setup} cleanup={cp.Cleanup}");
+        }
+
+        // gate.hooks.effect-cleanup-order — multi-effect cleanups run in cell order at unmount.
+        {
+            var rt = new ReactiveRuntime();
+            var mp = new MultiCleanupProbe(); mp.Context.Runtime = rt;
+            mp.RenderWithHooks(); PumpEffects(mp.Context);
+            mp.Unmount();
+            Check("gate.hooks.effect-cleanup-order", mp.Order.Count == 2 && mp.Order[0] == 1 && mp.Order[1] == 2,
+                $"order=[{string.Join(",", mp.Order)}]");
+        }
+
+        // gate.hooks.deps-empty-mount-once — UseEffect(fn, DepKey.Empty) runs exactly once across N re-renders.
+        {
+            var rt = new ReactiveRuntime();
+            var mo = new MountOnceProbe(); mo.Context.Runtime = rt;
+            mo.RenderWithHooks(); PumpEffects(mo.Context);
+            for (int i = 0; i < 5; i++) { mo.RenderWithHooks(); PumpEffects(mo.Context); }
+            Check("gate.hooks.deps-empty-mount-once", mo.Runs == 1, $"runs={mo.Runs} over 6 renders");
+        }
+
+        // gate.hooks.depkey-string-tuple-parity — (string,int) deps re-fire on either changing, not on equal re-supply.
+        {
+            var rt = new ReactiveRuntime();
+            var sp = new StringTupleProbe(); sp.Context.Runtime = rt;
+            sp.S = "a"; sp.I = 1; sp.RenderWithHooks(); PumpEffects(sp.Context);   // Runs=1
+            sp.RenderWithHooks(); PumpEffects(sp.Context);                         // equal → Runs=1
+            sp.S = "b"; sp.RenderWithHooks(); PumpEffects(sp.Context);             // string changed → Runs=2
+            sp.I = 2; sp.RenderWithHooks(); PumpEffects(sp.Context);               // int changed → Runs=3
+            sp.RenderWithHooks(); PumpEffects(sp.Context);                         // equal → Runs=3
+            Check("gate.hooks.depkey-string-tuple-parity", sp.Runs == 3, $"runs={sp.Runs} (want 3)");
+        }
+
+        // gate.hooks.depkey-fromref-identity — FromRef re-fires on instance swap, not on an unchanged instance.
+        {
+            var rt = new ReactiveRuntime();
+            var fp = new FromRefProbe(); fp.Context.Runtime = rt;
+            fp.RenderWithHooks(); PumpEffects(fp.Context);   // Runs=1
+            fp.RenderWithHooks(); PumpEffects(fp.Context);   // same instance → Runs=1
+            fp.RenderWithHooks(); PumpEffects(fp.Context);   // still same instance → Runs=1
+            bool stable = fp.Runs == 1;
+            fp.Obj = new object(); fp.RenderWithHooks(); PumpEffects(fp.Context);   // swapped → Runs=2
+            Check("gate.hooks.depkey-fromref-identity", stable && fp.Runs == 2, $"runs={fp.Runs} (want 2 after swap)");
+        }
+
+        // gate.signal.setifchanged — false+no-notify on equal, true+notify on change; always-notify notifies on equal set.
+        {
+            var rt = new ReactiveRuntime();
+            var s = new Signal<int>(0);
+            int notifs = 0;
+            _ = new Effect(rt, () => { _ = s.Value; notifs++; });   // subscribes; runs now (notifs=1)
+            bool eqFalse = !s.SetIfChanged(0); rt.Flush(); bool noNotify = notifs == 1;
+            bool changeTrue = s.SetIfChanged(5); rt.Flush(); bool didNotify = notifs == 2;
+            var an = Signal.AlwaysNotify(0);
+            int anNotifs = 0;
+            _ = new Effect(rt, () => { _ = an.Value; anNotifs++; });   // notifs -> 1
+            bool anTrue = an.SetIfChanged(0); rt.Flush(); bool alwaysNotified = anNotifs == 2;   // equal set still notifies
+            Check("gate.signal.setifchanged", eqFalse && noNotify && changeTrue && didNotify && anTrue && alwaysNotified,
+                $"eqFalse={eqFalse} noNotify={noNotify} changeTrue={changeTrue} didNotify={didNotify} alwaysNotify={alwaysNotified}");
+        }
+
+        // gate.prop.bind-named-ctor — Prop.Bind over a Memo-typed-as-IReadSignal wires a live binding that re-fires on write.
+        {
+            var rt = new ReactiveRuntime();
+            var src = new Signal<int>(3);
+            var memo = new Memo<int>(rt, () => src.Value * 2);
+            IReadSignal<int> asInterface = memo;
+            var prop = Prop.Bind(asInterface);
+            bool bound = prop.IsBound && ReferenceEquals(prop.Signal, memo);
+            int v1 = prop.Signal!.Peek();       // 6
+            src.Value = 10; rt.Flush();
+            int v2 = prop.Signal!.Peek();       // 20 — the bound source tracks writes
+            Check("gate.prop.bind-named-ctor", bound && v1 == 6 && v2 == 20, $"bound={bound} {v1}->{v2}");
+        }
     }
 
     // Native form validation (form-validation.md): the signals-native core — gated error memo, cross-field via sibling
@@ -24665,6 +24854,7 @@ static class Slice
         SidebarResizeSimChecks(strings);
         ShellSidebarScrollChecks(strings);
         HookChecks();
+        HookSurfaceChecks();
         ValidationChecks();
         KeyedChecks(strings);
         ReuseGuardChecks(strings);

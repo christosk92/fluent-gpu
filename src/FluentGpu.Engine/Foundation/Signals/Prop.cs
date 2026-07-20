@@ -21,6 +21,12 @@ namespace FluentGpu.Signals;
 public static class Prop
 {
     public static Prop<T> Of<T>(Func<T> thunk) => thunk;
+
+    /// <summary>Bind a channel from an interface-typed reactive source (a <c>Memo&lt;T&gt;</c> or <c>Signal&lt;T&gt;</c>
+    /// held as <see cref="IReadSignal{T}"/>). The named form of the signal-direct bind for the interface case, where the
+    /// implicit <c>Signal&lt;T&gt;</c>/<c>Memo&lt;T&gt;</c> conversions don't apply (a user conversion from an interface
+    /// is illegal, CS0552). Equivalent to assigning a concrete signal directly: <c>Fill = Prop.Bind(store.Color)</c>.</summary>
+    public static Prop<T> Bind<T>(IReadSignal<T> signal) => Prop<T>.FromSignal(signal);
 }
 
 public readonly struct Prop<T> : IEquatable<Prop<T>>

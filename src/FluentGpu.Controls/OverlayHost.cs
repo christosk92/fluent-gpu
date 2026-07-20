@@ -989,7 +989,7 @@ public sealed class OverlayHost : Component
                     }
                 }
             }
-        }, ver, vp.Width, vp.Height);
+        }, DepKey.From(HashCode.Combine(ver, vp.Width, vp.Height)));
 
         // Keep the layer structure index-stable so the reconciler never rebuilds a popup mid-animation: Child is always
         // index 0; while any entry exists the scrim sits at index 1 (its interactivity toggles with AnyOpen, but it stays

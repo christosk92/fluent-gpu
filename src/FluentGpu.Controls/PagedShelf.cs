@@ -245,7 +245,7 @@ internal sealed class PagedShelfCore : Component
             bool animate = nav != _lastMeasuredNav;
             _lastMeasuredNav = nav;
             ScrollMeasuredViewport(viewport.Value, _page.Peek(), perPageColumns, cardW, animate);
-        }, nav, perPageColumns, cardW, _count);
+        }, DepKey.From(HashCode.Combine(nav, perPageColumns, cardW, _count)));
 
         UseLayoutEffect(() =>
         {
@@ -266,7 +266,7 @@ internal sealed class PagedShelfCore : Component
                 _measuredH.Value = maxH;
                 _measuredForCardW.Value = cardW;
             }
-        }, cardW, _probeSample);
+        }, DepKey.From(HashCode.Combine(cardW, _probeSample)));
 
         // RECORD-cull the permanently-mounted probe layer when it isn't measuring. Opacity=0 alone does NOT stop the
         // recorder walking the subtree (SceneRecorder early-outs only on a cleared NodeFlags.Visible), so a settled
@@ -289,7 +289,7 @@ internal sealed class PagedShelfCore : Component
             bool animate = nav != _lastVirtualNav;
             _lastVirtualNav = nav;
             if (w > 1f) _ctl.StartBringItemIntoView(_page.Peek() * perPageItems, 0f, animate);
-        }, nav, needProbe);
+        }, DepKey.From(HashCode.Combine(nav, needProbe)));
 
         Element body = _measured
             ? (measuredRealizeAll

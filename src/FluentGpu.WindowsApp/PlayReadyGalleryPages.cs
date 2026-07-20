@@ -166,7 +166,7 @@ sealed class ProtectedPlayerView : Component
                 try { await player.OpenAsync(source); await player.PlayAsync(); }
                 catch { /* surfaced as the player's typed Error signal */ }
             }
-        }, Array.Empty<object>());
+        }, DepKey.Empty);   // mount-once (open+play the protected stream)
 
         var err = player.Error.Value;   // subscribe → surface a typed CDM/DRM/source error inline
         var kids = new List<Element>(2)

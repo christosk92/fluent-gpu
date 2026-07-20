@@ -146,7 +146,7 @@ public sealed class TabView : Component
 
         // The control-owned live collection (WinUI TabItems, TabView.idl:135) — seeded once, mutated by
         // close/add/reorder; the version signal re-renders consumers of the mutation.
-        var list = UseMemo(SeedItems);
+        var list = UseMemo(SeedItems, DepKey.Empty);
         var itemsVersion = UseSignal(0);
         int version = itemsVersion.Value;   // subscribe
 
@@ -179,7 +179,7 @@ public sealed class TabView : Component
             : float.NaN;
 
         // ── drag reorder (CanReorderTabs default TRUE, TabView.idl:142-143) — the engine E5-L3 strip ─────────────
-        var ro = UseMemo(() => new Reorderable("tabview-strip"));
+        var ro = UseMemo(() => new Reorderable("tabview-strip"), DepKey.Empty);
         ro.Scene = scene;
         ro.RequestRender = Context.RequestRerender;
         ro.ItemCount = count;
@@ -309,7 +309,7 @@ public sealed class TabView : Component
             if (overflowSig.Peek() != of) overflowSig.Value = of;
             UpdateEdges(in sc);
         }
-        UseLayoutEffect(MeasureStrip, version, count, (int)TabWidthMode, viewportSize, measuredW, overflowing, edges);
+        UseLayoutEffect(MeasureStrip, DepKey.From(HashCode.Combine(version, count, (int)TabWidthMode, viewportSize, measuredW, overflowing, edges)));
 
         // ── selection / close / add / reorder ────────────────────────────────────────────────────────────────────
 

@@ -212,7 +212,7 @@ public sealed class NavigationView : Component
         var (paneOpen, setPaneOpen) = UseState(false);
         var (collapsed, setCollapsed) = UseState(false);
         var (expanded, setExpanded) = UseState(SeedExpanded(Items));     // expanded parent keys (new array per toggle — value-eq gated)
-        var rowHandles = UseMemo(static () => new Dictionary<string, NodeHandle>());
+        var rowHandles = UseMemo(static () => new Dictionary<string, NodeHandle>(), DepKey.Empty);
         var focusedKey = UseRef(selected);                               // keyboard cursor (real roving focus, no fill)
         var lastMode = UseRef((PaneMode)255);
         var overlayService = UseContext(Overlay.Service);                // top-mode overflow flyout host

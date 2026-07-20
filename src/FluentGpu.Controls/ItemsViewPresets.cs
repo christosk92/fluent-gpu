@@ -75,9 +75,9 @@ internal sealed class ItemsViewListPreset : Component
     public override Element Render()
     {
         int count = ItemCount >= 0 ? ItemCount : Items.Count;
-        var controller = UseMemo(() => Controller ?? new ItemsViewController());
-        var model = UseMemo<SelectionModel>(() => Selection ?? new SelectionModel());
-        var reorder = UseMemo(static () => new ReorderList { DwellMs = ReorderList.ListDwellMs });
+        var controller = UseMemo(() => Controller ?? new ItemsViewController(), DepKey.Empty);
+        var model = UseMemo<SelectionModel>(() => Selection ?? new SelectionModel(), DepKey.Empty);
+        var reorder = UseMemo(static () => new ReorderList { DwellMs = ReorderList.ListDwellMs }, DepKey.Empty);
         var orderVersion = UseSignal(0);
         var order = UseRef<int[]>([]);
         var lastDwellTick = UseRef(0L);
@@ -327,11 +327,11 @@ internal sealed class ItemsViewGridPreset : Component
     {
         int count = ItemCount >= 0 ? ItemCount : Items.Count;
         int columns = Math.Max(1, Columns);
-        var controller = UseMemo(() => Controller ?? new ItemsViewController());
-        var model = UseMemo<SelectionModel>(() => Selection ?? new SelectionModel());
+        var controller = UseMemo(() => Controller ?? new ItemsViewController(), DepKey.Empty);
+        var model = UseMemo<SelectionModel>(() => Selection ?? new SelectionModel(), DepKey.Empty);
         var orderVersion = UseSignal(0);
         var order = UseRef<int[]>([]);
-        var rl = UseMemo(static () => new ReorderList { DwellMs = ReorderList.GridDwellMs });   // 300ms grid dwell
+        var rl = UseMemo(static () => new ReorderList { DwellMs = ReorderList.GridDwellMs }, DepKey.Empty);   // 300ms grid dwell
         var lastDwellTick = UseRef(0L);
 
         // ── 2-D live-reorder: RESTING order; displacement flows through ItemsView.ItemDisplacement (host-seeded FLIP) ──

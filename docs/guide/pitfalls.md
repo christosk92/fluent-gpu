@@ -45,8 +45,12 @@ Read this before debugging. Each row is a real failure mode of the signals-first
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `UseEffect` cleanup never runs | `UseEffect(Action, deps)` takes an `Action`, not `Func<Action>` — it has no return-cleanup channel | For tear-down inside a reactive effect/binding use `Reactive.OnCleanup(...)`; for component-scoped resources hold them in `UseRef` and release in your own teardown path. (Returning a cleanup from `UseEffect` is a known gap.) |
-| Animation hook seems to do nothing | The hook seeds on `HostNode`, set after the first layout; or `deps` never changed | Animation hooks (`UseSpring` etc.) run in phase 6.5 once mounted; pass `deps` that change to re-target. |
+| `UseEffect` cleanup never runs | The `Action` overload has no return-cleanup channel | Return an `Action?`: `UseEffect(() => { …; return () => dispose(); })`. The returned cleanup runs before each re-run and once at unmount (auto-tracked or deps-gated). |
+| Cleanup-returning effect never re-runs / a fire-only effect fires only once | The lambda's `return`ed `Action` bound to the cleanup overload | Intentional for a cleanup effect. For a **fire-only** effect write a block body `() => { X(); }` (no `return <expr>`) so it binds to the plain `Action` overload. |
+| A no-deps `UseEffect(fn)` re-runs unexpectedly | It's **auto-tracked** now (the default): any signal the body reads re-runs it | If you want run-once, pass `DepKey.Empty`: `UseEffect(fn, DepKey.Empty)`. If you want it keyed, pass a `DepKey` of the values it should follow. |
+| `UseEffect(fn, DepKey.FromRef(x))` re-runs every render | A fresh lambda/instance each render is a new identity | `FromRef` keys on object **identity**, not `Equals` — pass a stable instance (hold it in `UseRef`/`UseMemo`), or key on a scalar/string instead. An in-place mutation of the same instance does **not** re-fire. |
+| `UseEffect(fn, someArray)` won't compile | `params object[]` deps were removed — the one dep shape is `DepKey` | Convert: scalars/tuples convert implicitly (`, count` / `, (name, i)`); `>4` scalars use `DepKey.From(HashCode.Combine(...))` or `DepKey.Combine`; mount-once is `DepKey.Empty`. |
+| Animation hook seems to do nothing | The hook seeds on `HostNode`, set after the first layout; or `deps` never changed | Animation hooks (`UseSpring` etc.) run in phase 6.5 once mounted; pass a `DepKey` `deps` that changes to re-target (`DepKey.Empty` = seed once). |
 | A removed node lingers briefly | It has an exit animation (`BoxEl.Animate` with an `Exit`) — it's an orphan animating out | Expected; it's reclaimed on settle. Not a leak. |
 | State lost when a component's element *type* changes at a position | Type-flip at a position remounts (state-loss is intentional) | Keep the element type stable at a position, or use a `Key`/`For` to preserve identity. |
 

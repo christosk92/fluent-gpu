@@ -172,7 +172,7 @@ public static class ProgressRing
                     new(0.5f, 0f, Easing.Linear),                    // held 0 through the first half
                     new(1f, 0.5f, IndeterminateSpline),              // catches up to 0.5 (collapses the visible arc)
                 }, IndeterminateDurationMs, loop: true);
-            }, props.Size, props.IsActive);
+            }, DepKey.From(HashCode.Combine(props.Size, props.IsActive)));
 
             Action<NodeHandle> arcCapture = h => arcRef.Value = h;
             var arc = new BoxEl

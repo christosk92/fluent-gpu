@@ -363,7 +363,7 @@ sealed class MediaScenarioView : Component
                 try { await player.OpenAsync(source); await player.PlayAsync(); }
                 catch { /* surfaced as the player's typed Error signal */ }
             }
-        }, Array.Empty<object>());
+        }, DepKey.Empty);   // mount-once (open+play the scenario)
 
         float playerWidth = scenario.Features.HasFlag(MediaScenarioFeature.ResponsiveChrome) ? 520f : float.NaN;
         return new BoxEl

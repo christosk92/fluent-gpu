@@ -49,7 +49,7 @@ sealed class ValidationGuidePage : Component
             Embed.Comp(() => new ValidationGuideBody()));
     }
 
-    static readonly object[] MountOnce = new object[] { "validation-guide-mount" };
+    static readonly FluentGpu.Hooks.DepKey MountOnce = FluentGpu.Hooks.DepKey.Empty;
 }
 
 /// <summary>The documentation body + the embedded live demo. A plain <see cref="Component"/>: the prose is static, and the

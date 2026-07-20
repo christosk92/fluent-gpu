@@ -117,7 +117,7 @@ public sealed class ColorPicker : Component
             gText.Value = ((int)MathF.Round(color.G * 255f)).ToString(CultureInfo.InvariantCulture);
             bText.Value = ((int)MathF.Round(color.B * 255f)).ToString(CultureInfo.InvariantCulture);
             hexText.Value = color.ToHex();
-        }, color);
+        }, DepKey.From(color.R, color.G, color.B, color.A));
 
         int Cur(float c) => (int)MathF.Round(c * 255f);
         void SetRgb(int r, int g, int b) => SetColor(ColorF.FromRgba((byte)Math.Clamp(r, 0, 255), (byte)Math.Clamp(g, 0, 255), (byte)Math.Clamp(b, 0, 255), (byte)Cur(A)));

@@ -382,7 +382,7 @@ internal sealed class CommandBarFlyoutBody : Component
             if (scene is null || anim is null || _rootNode.IsNull || !scene.IsLive(_rootNode)) return;
             openFadeSeeded.Value = true;
             anim.Animate(_rootNode, AnimChannel.Opacity, 0f, 1f, Motion.ControlFaster, Easing.Linear);
-        });
+        }, DepKey.Empty);   // mount-once
 
         void CloseSubFlyout() { if (subHandleLive is { IsOpen: true } s) s.Close(); subHandleLive = null; }
 
@@ -480,7 +480,7 @@ internal sealed class CommandBarFlyoutBody : Component
                     widthDelta.Value = 0f;
                 }
             }
-        }, expanded, collapsingNow, expandUp);
+        }, DepKey.From(HashCode.Combine(expanded, collapsingNow, expandUp)));
 
         // Keyboard entry into the overflow (Down past the … / Up-wrap): WinUI opens the overflow BEFORE focusing the
         // secondary command (IsOpen(true) → FocusControl, CommandBarFlyoutCommandBar.cpp:1266-1279) — ours focuses
@@ -496,7 +496,7 @@ internal sealed class CommandBarFlyoutBody : Component
             if (node.IsNull || !scene.IsLive(node)) return;
             pendingFocus.Value = -1;
             hk.MoveFocusVisual?.Invoke(node);
-        }, expanded, pendingFocusNow);
+        }, (pendingFocusNow, expanded));
 
         // Standard-mode initial focus: the first primary command if any, else the first secondary
         // (CommandBarFlyoutCommandBar.cpp:29-71 — FocusState::Programmatic, so no focus visual). Mount-once.
@@ -513,7 +513,7 @@ internal sealed class CommandBarFlyoutBody : Component
                     if (Secondary[j].Kind != AppBarCommandKind.Separator && Secondary[j].Enabled
                         && !_secondaryNodes[j].IsNull && scene.IsLive(_secondaryNodes[j])) { target = _secondaryNodes[j]; break; }
             if (!target.IsNull) hk.FocusNode?.Invoke(target, false);
-        });
+        }, DepKey.Empty);   // mount-once
 
         void ExpandToggle()
         {

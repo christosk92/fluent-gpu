@@ -116,13 +116,13 @@ public sealed class TreeView : Component
         var hooks = UseContext(InputHooks.Current);
         // Stable per-node identity (REFERENCE-keyed — TreeNode is a record, value equality would alias identical
         // subtrees): expansion/selection/keys survive sibling reorders, unlike positional paths.
-        var ids = UseMemo(static () => new Dictionary<TreeNode, string>(ReferenceEqualityComparer.Instance));
+        var ids = UseMemo(static () => new Dictionary<TreeNode, string>(ReferenceEqualityComparer.Instance), DepKey.Empty);
         var (expanded, setExpanded) = UseState(ImmutableHashSet<string>.Empty);
         var (selected, setSelected) = UseState<string?>(null);          // single-select
         var (multiSelected, setMultiSelected) = UseState(ImmutableHashSet<string>.Empty);
-        var handles = UseMemo(static () => new Dictionary<string, NodeHandle>());
+        var handles = UseMemo(static () => new Dictionary<string, NodeHandle>(), DepKey.Empty);
         var focusedId = UseRef<string?>(null);
-        var reorder = UseMemo(static () => new ReorderList { DwellMs = ReorderList.ListDwellMs });
+        var reorder = UseMemo(static () => new ReorderList { DwellMs = ReorderList.ListDwellMs }, DepKey.Empty);
         var dragParentId = UseRef<string?>(null);
         var orderVersion = UseSignal(0);
         var structureVersion = UseSignal(0);     // bumped on in-place sibling mutation (OnReorder == null commits)

@@ -133,7 +133,7 @@ public sealed class TitleBar : Component
         // moves the parts (resize, maximize→WM_SIZE→viewport, DPI hop→DIP viewport change, the measured-width feedback
         // render whose island rect must re-push, and the tab-set revision so the strip island re-reports on change).
         UseLayoutEffect(() => PushRegions(hooks),
-            viewport.Width, viewport.Height, epoch, _availDip.Peek(), tabsVer, ShowBackButton, ShowPaneToggle, ShowCaptionButtons);
+            DepKey.From(HashCode.Combine(viewport.Width, viewport.Height, epoch, _availDip.Peek(), tabsVer, ShowBackButton, ShowPaneToggle, ShowCaptionButtons)));
 
         // Memo gate: a resize-only re-render returns the cached tree alloc-free (the layout effect above already re-ran
         // — its viewport deps changed — so regions re-push without a rebuild). Key excludes the viewport on purpose.

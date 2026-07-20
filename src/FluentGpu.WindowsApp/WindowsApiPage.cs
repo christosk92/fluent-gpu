@@ -166,7 +166,7 @@ sealed class EventLog
 static class WinApiUi
 {
     /// <summary>A stable, identity-equal empty dep array → a UseEffect carrying it runs exactly once per mount.</summary>
-    public static readonly object[] MountOnce = Array.Empty<object>();
+    public static readonly FluentGpu.Hooks.DepKey MountOnce = FluentGpu.Hooks.DepKey.Empty;
 
     // The accent/success/error/caution status colors WinUI uses for inline state lines.
     public static TextEl Status(string text, ColorF color) => new(text) { Size = 13f, Weight = 600, Color = color, Wrap = TextWrap.Wrap };

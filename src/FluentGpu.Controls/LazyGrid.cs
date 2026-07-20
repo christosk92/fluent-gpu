@@ -173,7 +173,7 @@ public sealed class LazyGrid : Component
             _lastCols = cols;
             _lastRowH = rowH;
             _lastSectionTop = newTop;
-        }, cols, rowH);
+        }, DepKey.From(rowH, cols));
 
         // Opening is one coordinated interaction: after final geometry is known, minimally reveal the selected row and
         // drawer through the engine-owned smooth-scroll path. Closing deliberately leaves the viewport alone.

@@ -104,7 +104,7 @@ VStack(gap: 4,
 | `UseComputed<T>(fn)` | `Memo<T>` | reading `.Value` does | derived value (lazy, cached, recomputed when inputs change) |
 | `UseReducer<S,A>(reducer, init)` | `(S state, Action<A> dispatch)` | reading `state` does | folded state; `dispatch` applies immediately |
 | `UseRef<T>(initial)` | `Ref<T>` | never | mutable box that survives re-renders without triggering them |
-| `UseMemo<T>(factory, deps)` | `T` | n/a (dep-array memo) | expensive value recomputed only when `deps` change |
+| `UseMemo<T>(factory, deps)` | `T` | n/a (deps-gated memo) | expensive value recomputed only when the `DepKey` `deps` changes (`default` = compute once) |
 
 `UseState` is just sugar over a signal: the setter writes the signal; the value read subscribes the render-effect.
 
@@ -137,13 +137,34 @@ sealed class Clock : ReactiveComponent
 
 | Hook | Runs | For |
 |---|---|---|
-| `UseEffect(fn, deps)` | after present (phase 12), when `deps` change | subscriptions, IO, side effects |
-| `UseLayoutEffect(fn, deps)` | after layout, before paint (phase 6.5), `Bounds` valid | measuring, seeding animations on the node |
+| `UseEffect(fn)` | after present (phase 12); **auto-tracked** | subscriptions, IO, side effects that follow the signals they read |
+| `UseEffect(fn, deps)` | after present (phase 12), when the `DepKey` `deps` changes | side effects keyed to explicit values (no tracking) |
+| `UseLayoutEffect(fn[, deps])` | after layout, before paint (phase 6.5), `Bounds` valid | measuring, seeding animations on the node |
 | `Reactive.OnCleanup(fn)` | when the enclosing computation re-runs / disposes | tear-down inside an effect/binding |
 | `Reactive.Untrack(fn)` | runs `fn` without subscribing the current computation | read a signal without creating a dependency |
 
-`UseEffect`/`UseLayoutEffect` use a **dependency array** (like React) — they re-run when a dep changes, not via signal
-tracking. The reactive **`Effect`** type (in `FluentGpu.Signals`) is the auto-tracked primitive that powers bindings.
+**Auto-tracking is the default.** `UseEffect(fn)` with no deps runs its body under signal-read tracking: any signal it
+reads re-runs it, and tracking is **re-armed on every run** (a branch that reads a different signal next run follows that
+one and drops the old — never a stale one-shot capture). An effect that reads no signal runs exactly once. The body still
+executes in the passive-effect drain (after paint), never inline during `Flush`.
+
+**`DepKey` deps are the explicit opt-in.** `UseEffect(fn, deps)` disables tracking and re-runs only when the `DepKey`
+changes — the over-scoping escape ("run only when THIS changes"). `deps` is a 16-byte value key, not an array:
+
+- Scalars and short tuples convert implicitly: `UseEffect(fn, count)`, `UseEffect(fn, open)`, `UseEffect(fn, (name, index))`.
+- `DepKey.Empty` (the default) = **mount-once** — the body runs once and never re-runs.
+- `>4` scalars: fold sub-keys with `DepKey.Combine(a, b)`, or `DepKey.From(HashCode.Combine(...))`.
+- Reference deps: `DepKey.FromRef(obj)` re-fires on an **instance swap**, not an in-place mutation (identity, not `Equals`).
+  A fresh lambda each render is a new identity ⇒ it re-runs every render — pass a stable delegate or a scalar key instead.
+- Strings hash (XxHash64) — a ~2⁻⁶⁴ chance two distinct strings collide and miss a re-run (acceptable for dep gating).
+
+**Cleanup return.** Return an `Action?` from the effect body (`UseEffect(() => { …; return () => dispose(); })`) and it runs
+before each re-run and once at unmount — the React `useEffect` cleanup channel. Works on both the auto-tracked and
+deps-gated forms. (Overload note: a lambda whose body `return`s an `Action` binds to the cleanup overload; write a block
+body `() => { X(); }` for a fire-only effect.)
+
+The reactive **`Effect`** type (in `FluentGpu.Signals`) is the always-eager auto-tracked primitive that powers bindings;
+`UseSignalEffect` exposes it for adapter components that need eager (synchronous, inline-`Flush`) timing.
 
 ## Context — `UseContext` + `Ctx.Provide`
 

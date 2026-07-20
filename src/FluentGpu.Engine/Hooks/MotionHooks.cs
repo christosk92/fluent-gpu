@@ -13,12 +13,12 @@ public static class MotionHooks
 {
     /// <summary>The Fluent entrance: TranslateY 24→0 (400ms) + Opacity 0→1 (200ms), FluentDecelerate. Call inside the
     /// component whose rendered root is the node to animate. <paramref name="key"/> distinguishes deps if re-armed.</summary>
-    public static void UseEntrance(this Component c, float offsetPx = Motion.EntranceOffsetPx, object? key = null)
+    public static void UseEntrance(this Component c, float offsetPx = Motion.EntranceOffsetPx, DepKey key = default)
     {
         // Reduced-motion as a VALUE, never an early-return — Motion.ReducedMotion is a mutable global (a resize grip flips
         // it), and skipping these two hooks mid-life would shift every later hook slot in the caller → a cell-cast crash.
         bool reduce = Motion.ReducedMotion;
-        object dep = key ?? "enter";
+        DepKey dep = key;   // default = seed once at mount
         c.Context.UseTransition(AnimChannel.Opacity, reduce ? 1f : 0f, 1f, Motion.Fade, Easing.FluentDecelerate, dep);
         c.Context.UseTransition(AnimChannel.TranslateY, reduce ? 0f : offsetPx, 0f, Motion.OffsetEntrance, Easing.FluentDecelerate, dep);
     }

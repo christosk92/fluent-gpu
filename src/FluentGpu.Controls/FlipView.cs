@@ -164,7 +164,7 @@ internal sealed class FlipViewCore : Component
             {
                 anim.Animate(stripRef.Value, ch, to, to, 1f, Easing.Linear);   // jump
             }
-        }, cur, count, vertical, w, h, animations);
+        }, DepKey.From(HashCode.Combine(cur, count, vertical, w, h, animations)));
 
         // ── Selection (clamped — MoveNext stops at nCount-1, MovePrevious at 0; FlipView_Partial.cpp:131-139/:165-171)
         void Select(int target)

@@ -214,7 +214,7 @@ internal sealed class DrawnCheckmark : Component
         // Reveal the presented width 0→Size on mount (clip exposes the stroke left-to-right). LayoutEffect seeds it before
         // the first anim tick, so the very first recorded frame is already at width 0 — no full-checkmark flash.
         Context.UseKeyframes(AnimChannel.StrokeTrimEnd,
-            [new Keyframe(0f, 0f, Easing.Linear), new Keyframe(1f, 1f, DrawEase)], p.DurationMs);
+            [new Keyframe(0f, 0f, Easing.Linear), new Keyframe(1f, 1f, DrawEase)], p.DurationMs, loop: false, DepKey.Empty);
 
         var mark = new PolylineStrokeEl
         {
@@ -246,7 +246,7 @@ internal sealed class DrawnDash : Component
             ?? new CheckBox.MarkProps(10f, 2f, default, true, 200f, null);
 
         Context.UseKeyframes(AnimChannel.StrokeTrimEnd,
-            [new Keyframe(0f, 0f, Easing.Linear), new Keyframe(1f, 1f, CheckBoxMotion.AcceptTrimEndEase)], p.DurationMs);
+            [new Keyframe(0f, 0f, Easing.Linear), new Keyframe(1f, 1f, CheckBoxMotion.AcceptTrimEndEase)], p.DurationMs, loop: false, DepKey.Empty);
         var dash = new PolylineStrokeEl
         {
             Width = p.Size,

@@ -21,13 +21,21 @@ public abstract class Component
     protected FluentGpu.Signals.FloatSignal UseFloatSignal(float initial = 0f) => Context.UseFloatSignal(initial);
     /// <summary>A derived reactive value recomputed from the signals it reads (the Solid <c>createMemo</c>).</summary>
     protected Memo<T> UseComputed<T>(Func<T> compute) => Context.UseComputed(compute);
-    protected void UseEffect(Action effect, params object[] deps) => Context.UseEffect(effect, deps);
-    protected void UseLayoutEffect(Action effect, params object[] deps) => Context.UseLayoutEffect(effect, deps);
-    // Zero-alloc dep variants (finding #9): a DepKey instead of a params object[] — no per-render array/boxing.
+    /// <summary>Auto-tracked effect (the default): the body runs with signal-read tracking and re-runs when a signal it
+    /// read changes (re-armed every run); a body that reads no signal runs once. Runs in the passive-effect drain.</summary>
+    protected void UseEffect(Action effect) => Context.UseEffect(effect);
+    /// <summary>Auto-tracked effect returning a CLEANUP (run before each re-run and once at unmount).</summary>
+    protected void UseEffect(Func<Action?> effect) => Context.UseEffect(effect);
+    /// <summary>Auto-tracked layout effect (phase 6.5 — Bounds valid) — see <see cref="UseEffect(Action)"/>.</summary>
+    protected void UseLayoutEffect(Action effect) => Context.UseLayoutEffect(effect);
+    /// <inheritdoc cref="UseLayoutEffect(Action)"/>
+    protected void UseLayoutEffect(Func<Action?> effect) => Context.UseLayoutEffect(effect);
+    // Deps-gated (explicit opt-in, no tracking): runs when the DepKey changes; DepKey.Empty/default = mount-once.
     protected void UseEffect(Action effect, DepKey deps) => Context.UseEffect(effect, deps);
+    protected void UseEffect(Func<Action?> effect, DepKey deps) => Context.UseEffect(effect, deps);
     protected void UseLayoutEffect(Action effect, DepKey deps) => Context.UseLayoutEffect(effect, deps);
+    protected void UseLayoutEffect(Func<Action?> effect, DepKey deps) => Context.UseLayoutEffect(effect, deps);
     protected (TState State, Action<TAction> Dispatch) UseReducer<TState, TAction>(Func<TState, TAction, TState> reducer, TState initial) => Context.UseReducer(reducer, initial);
-    protected T UseMemo<T>(Func<T> factory, params object[] deps) => Context.UseMemo(factory, deps);
     protected T UseMemo<T>(Func<T> factory, DepKey deps) => Context.UseMemo(factory, deps);
     protected Ref<T> UseRef<T>(T initial) => Context.UseRef(initial);
     protected T UseContext<T>(Context<T> context) => Context.UseContext(context);
@@ -57,7 +65,7 @@ public abstract class Component
     /// <summary>As <see cref="UseAsyncResource{T}(Func{System.Threading.CancellationToken, System.Threading.Tasks.Task{T}}, T)"/>
     /// but RELOADS when <paramref name="deps"/> change — a resource keyed on a reactive input (e.g. a page reused across
     /// navigation whose id changes): the prior run cancels, the loadable resets to Pending(seed), and the loader restarts.</summary>
-    protected Loadable<T> UseAsyncResource<T>(Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<T>> loader, T seed, params object[] deps) => Context.UseAsyncResource(loader, seed, deps);
+    protected Loadable<T> UseAsyncResource<T>(Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<T>> loader, T seed, DepKey deps) => Context.UseAsyncResource(loader, seed, deps);
     /// <summary>A fire-on-demand async command with a reactive IsRunning state (spinner/disable + re-entry guard + cancel).</summary>
     protected AsyncCommand UseAsyncCommand(bool cancelOnUnmount = false) => Context.UseAsyncCommand(cancelOnUnmount);
     /// <summary>A KEYED set of fire-on-demand async commands (per-item busy state, e.g. per-row play/like).</summary>
@@ -84,10 +92,7 @@ public abstract class Component
     protected (string Culture, Action<string> SetCulture) UseLocale() => Context.UseLocale();
     protected float UseAnimatedValue(float target, float durationMs = 180f, Easing easing = Easing.EaseInOut) => Context.UseAnimatedValue(target, durationMs, easing);
 
-    // Declarative, composited animation of this component's node (no per-frame re-render):
-    protected void UseSpring(AnimChannel channel, float to, SpringParams spring, params object[] deps) => Context.UseSpring(channel, to, spring, deps);
-    protected void UseTransition(AnimChannel channel, float from, float to, float durationMs, Easing easing = Easing.EaseInOut, params object[] deps) => Context.UseTransition(channel, from, to, durationMs, easing, deps);
-    // Zero-alloc DepKey variants (finding #9)
+    // Declarative, composited animation of this component's node (no per-frame re-render); DepKey-gated (Empty = seed once):
     protected void UseSpring(AnimChannel channel, float to, SpringParams spring, DepKey deps) => Context.UseSpring(channel, to, spring, deps);
     protected void UseTransition(AnimChannel channel, float from, float to, float durationMs, Easing easing, DepKey deps) => Context.UseTransition(channel, from, to, durationMs, easing, deps);
     /// <summary>Bind an async image and observe its load state (spinner / error fallback). Pair with <c>Ui.Image</c> to paint it.</summary>
@@ -108,9 +113,6 @@ public abstract class Component
     /// <summary>A <see cref="FluentGpu.Media.MediaPlayer"/> pointed at a source that re-loads when the <paramref name="source"/>
     /// thunk yields a different value (auto SMTC/buffering/default tracks; auto-disposed on unmount).</summary>
     protected FluentGpu.Media.MediaPlayer UseVideo(Func<FluentGpu.Media.MediaSource> source) => Context.UseVideo(source);
-    protected void UseKeyframes(AnimChannel channel, Keyframe[] keys, float durationMs, bool loop = false, params object[] deps) => Context.UseKeyframes(channel, keys, durationMs, loop, deps);
-    protected void UseDrivenAnimation(AnimChannel channel, Keyframe[] keys, Func<float> source, float min, float max, params object[] deps) => Context.UseDrivenAnimation(channel, keys, source, min, max, deps);
-    // Zero-alloc DepKey variants (finding #9)
     protected void UseKeyframes(AnimChannel channel, Keyframe[] keys, float durationMs, bool loop, DepKey deps) => Context.UseKeyframes(channel, keys, durationMs, loop, deps);
     protected void UseDrivenAnimation(AnimChannel channel, Keyframe[] keys, Func<float> source, float min, float max, DepKey deps) => Context.UseDrivenAnimation(channel, keys, source, min, max, deps);
     /// <summary>Declare a gesture handler on this component's node (input-a11y.md §13): config-only, enrolls a
