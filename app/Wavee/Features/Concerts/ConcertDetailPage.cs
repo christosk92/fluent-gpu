@@ -44,9 +44,9 @@ sealed class ConcertDetailPage : Component
 
         // The seed is a representative shape (facts + two offers + lineup rows) so Skel.Region derives its shimmer from
         // the SAME subtree the loaded page renders (never a hand-authored skeleton).
-        var details = UseAsyncResource(
+        var details = UseResource(
             ct => svc.Concerts.GetDetailsAsync(_concertUri, cancellationToken: ct),
-            (ConcertDetails?)SeedDetails(_concertUri, _title), (_concertUri, gen));
+            (ConcertDetails?)SeedDetails(_concertUri, _title), (_concertUri, gen)).Loadable;
 
         var region = Skel.Region(
             details,

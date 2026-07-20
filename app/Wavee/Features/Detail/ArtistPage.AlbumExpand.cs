@@ -124,9 +124,9 @@ sealed class AlbumDrawer : Component
         var show = album ?? _last;
         // Fetch the full album (the discography album is thin — no tracklist). Unconditional hook (stable order); keyed by
         // uri so it re-fetches per album. Cached by GetAlbumAsync, so a re-expand is instant.
-        var full = UseAsyncResource(
+        var full = UseResource(
             ct => show is null ? System.Threading.Tasks.Task.FromResult<Album?>(null) : _svc.Library.GetAlbumAsync(show.Uri, ct),
-            (Album?)null, show?.Uri ?? "");
+            (Album?)null, show?.Uri ?? "").Loadable;
         if (show is null) return new BoxEl();
 
         var ts = (full.Value.Value?.Tracks ?? show.Tracks) ?? System.Array.Empty<Track>();
@@ -287,7 +287,7 @@ sealed class AlbumDrawerPanel : Component
         var lib = UseContext(LibraryBridge.Slot);
         var acts = UseContext(ActionServices.Slot);
         var menuOverlay = UseContext(Overlay.Service);   // row context menus (right-click / long-press / the "…" cell)
-        var full = UseAsyncResource(ct => _svc.Library.GetAlbumAsync(_thin.Uri, ct), (Album?)null, _thin.Uri);
+        var full = UseResource(ct => _svc.Library.GetAlbumAsync(_thin.Uri, ct), (Album?)null, _thin.Uri).Loadable;
         var tracks = (full.Value.Value?.Tracks ?? _thin.Tracks) ?? System.Array.Empty<Track>();
         _rows = tracks;
         bool loading = tracks.Count == 0 && full.State.Value == (byte)LoadState.Pending;

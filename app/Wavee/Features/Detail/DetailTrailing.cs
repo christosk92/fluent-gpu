@@ -54,9 +54,9 @@ sealed class AlbumTrailing : Component
         // cancels the in-flight run and reseeds to empty on a key change (route-keyed cancellation / no stale flash).
         object key = _route.Value.Name + (ready ? ":r" : ":p");
 
-        var trailing = UseAsyncResource(
+        var trailing = UseResource(
             ct => LoadTrailingAsync(svc, ready, shortRelease, leadArtistUri, leadTrackUri, albumUri, seedTrackUri, ct),
-            AlbumTrailingData.Empty, (string)key);
+            AlbumTrailingData.Empty, (string)key).Loadable;
 
         if (!ready) return new BoxEl { Direction = 1, Grow = 1f, AlignSelf = FlexAlign.Stretch };
 

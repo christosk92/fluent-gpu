@@ -143,11 +143,11 @@ sealed class LyricsView : Component
         string artist = track is { Artists.Count: > 0 } ? track.Artists[0].Name : "";
         string fetchKey = trackId.Length == 0 ? "" : trackId + "|" + artist;
 
-        var docL = UseAsyncResource(
+        var docL = UseResource(
             ct => fetchKey.Length > 0 && svc?.Lyrics is { } lp
                 ? lp.GetLyricsAsync(trackId, ct)
                 : Task.FromResult<LyricsDocument?>(null),
-            (LyricsDocument?)null, fetchKey);
+            (LyricsDocument?)null, fetchKey).Loadable;
         _docLoadable = docL;
         UseSignalEffect(() =>
         {

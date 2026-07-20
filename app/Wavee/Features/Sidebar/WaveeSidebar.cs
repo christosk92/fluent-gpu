@@ -199,7 +199,7 @@ sealed class WaveeSidebar : Component
                     Direction = 1, Gap = SkeletonStyle.Default.RowGap,
                     Children = [PlaylistSkeletonRow(), PlaylistSkeletonRow(), PlaylistSkeletonRow(), PlaylistSkeletonRow(), PlaylistSkeletonRow()],
                 },
-                content: arr => Flow.For(() => arr.Count, i => PlaylistRow(arr[i], sel, i), keyOf: i => arr[i].Uri),
+                content: arr => Flow.For(() => arr, p => p.Uri, (p, i) => PlaylistRow(p, sel, i)),
                 reveal: SkelReveal.StaggerRows,
                 onFailed: () => ErrorState.Build(playlists.Error),
                 isEmpty: arr => arr is null || arr.Count == 0, onEmpty: () => EmptyState.Default()),

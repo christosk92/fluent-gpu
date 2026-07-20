@@ -40,7 +40,7 @@ sealed class SearchPage : Component
         int chip = _chip.Value;                             // subscribe
         UseEffect(() => _songsSel.ClearSelection(), q + ":" + chip);
         var facet = RequestFacetFor(chip);
-        var results = UseAsyncResource(ct => svc.Library.SearchAsync(q, facet, 0, SearchPageSize, ct), SearchResults.Empty, (q, chip));   // selected tab drives the live facet op
+        var results = UseResource(ct => svc.Library.SearchAsync(q, facet, 0, SearchPageSize, ct), SearchResults.Empty, (q, chip)).Loadable;   // selected tab drives the live facet op
 
         // Scroll-position restoration keyed by the query: each distinct query has its own remembered scroll (a new query
         // starts at the top; returning to a prior query restores it). One ScrollView node serves every query in place.

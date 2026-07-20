@@ -305,7 +305,7 @@ sealed class Omnibar : Component
 {
     readonly Signal<string> _text;
     readonly Action<string, string?> _go;
-    // The results are held HERE (not via UseAsyncResource, which resets to the seed each keystroke and flashes the popup
+    // The results are held HERE (not via UseResource, which resets to the seed each keystroke and flashes the popup
     // empty): a new fetch keeps the prior list visible + flips _loading until the fresh set lands — no "No results" flash.
     readonly Signal<IReadOnlyList<string>> _sugg = new(System.Array.Empty<string>());
     readonly Signal<bool> _loading = new(false);

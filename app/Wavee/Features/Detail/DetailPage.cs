@@ -16,7 +16,7 @@ using static FluentGpu.Dsl.Ui;
 namespace Wavee;
 
 // The shared detail page (playlist / album / single / liked). A Component keyed per route in ContentHost, so the
-// existing KeepAlive boundary caches it. It loads the matching IMusicLibrary slice through UseAsyncResource (which
+// existing KeepAlive boundary caches it. It loads the matching IMusicLibrary slice through UseResource (which
 // cancels on unmount — a fast nav-away aborts in flight), shows a matched skeleton via Skel.Region, then reveals the
 // two-column shell. The per-context config is resolved POST-load (an album with ≤2 tracks becomes a "single").
 sealed class DetailPage : Component
@@ -56,11 +56,11 @@ sealed class DetailPage : Component
         // Stable per-instance loadable, re-driven by the route dep key — DetailShell freezes the model at construction,
         // so the loadable INSTANCE must be stable across route swaps (a fresh store-cache instance per route would leave
         // the reused shell pinned to the first item — the master-detail reactivity bug). KeepAlive caches the parked page.
-        var model = UseAsyncResource(ct => LoadAsync(svc, kind, id, ct), preview ?? DetailModel.Empty, route.Name);
+        var model = UseResource(ct => LoadAsync(svc, kind, id, ct), preview ?? DetailModel.Empty, route.Name).Loadable;
 
         // §4.1 — open-playlist LIVE in-place refresh (kills the skeleton flash). Subscribe the REAL store; when a push lands
         // for THIS playlist (or a Bulk), debounce the burst 150ms, re-run the SAME load off-thread, and SetReady the SAME
-        // loadable in place — NEVER SetPending (that would re-seed to Empty = the shimmer). The UseAsyncResource dep stays
+        // loadable in place — NEVER SetPending (that would re-seed to Empty = the shimmer). The UseResource dep stays
         // route.Name, untouched. Offline / fake backend (RealStore null) → a no-op. The subscription reads the LIVE route
         // (so one mount-lifetime subscription serves successive playlists), and eager-push context tracks the open uri.
         var post = Context.UsePost();

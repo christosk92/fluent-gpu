@@ -60,7 +60,7 @@ sealed class QueuePanel : Component
         UseEffect(() => setAutoplay(svc?.Settings.Get(WaveeSettings.AutoplayEnabled) ?? true), prefsEpoch);
 
         string ctxUri = b?.CurrentContext.Value ?? "";
-        var ctxName = UseAsyncResource(ct => ResolveContextNameAsync(svc, ctxUri, ct), (string?)null, ctxUri);
+        var ctxName = UseResource(ct => ResolveContextNameAsync(svc, ctxUri, ct), (string?)null, ctxUri).Loadable;
         var uiLogSig = UseRef<string?>(null);
         // New context ⇒ collapse the visual pagination back to the first page of each section.
         UseEffect(() => { _queuePages.Value = 1; _upPages.Value = 1; _autoPages.Value = 1; }, ctxUri);

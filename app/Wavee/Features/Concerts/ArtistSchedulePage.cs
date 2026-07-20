@@ -62,11 +62,11 @@ sealed class ArtistSchedulePage : Component
         UseSignalEffect(_location.TrackQuery);
 
         var savedPlace = _savedPlace.Value;
-        var schedule = UseAsyncResource(
+        var schedule = UseResource(
             ct => svc.Concerts.GetArtistScheduleAsync(_artistUri, savedPlace?.GeoHash, cancellationToken: ct),
-            (ArtistConcertSchedule?)SeedSchedule(_artistUri, _artistName), DepKey.From(HashCode.Combine(_artistUri, savedPlace?.GeoHash, gen)));
-        var locationLabel = UseAsyncResource(
-            ct => svc.Concerts.GetArtistPageLocationAsync(ct), (ConcertPlace?)null, gen);
+            (ArtistConcertSchedule?)SeedSchedule(_artistUri, _artistName), DepKey.From(HashCode.Combine(_artistUri, savedPlace?.GeoHash, gen))).Loadable;
+        var locationLabel = UseResource(
+            ct => svc.Concerts.GetArtistPageLocationAsync(ct), (ConcertPlace?)null, gen).Loadable;
 
         string locLabel = savedPlace?.Name is { Length: > 0 } savedName
             ? savedName

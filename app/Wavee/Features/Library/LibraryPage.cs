@@ -19,7 +19,7 @@ namespace Wavee;
 // sort/view-size dropdown + filter, then a list-or-grid bound to the cached LibraryStore) and a RIGHT pane that is a
 // COMPACT detail panel (104px hero + actions + content) for the selected item — NOT the full page. Albums/podcasts =
 // two columns; ARTISTS = three (artist list | discography | the picked release's tracks). Columns are GridSplitter-
-// resizable. Selection drives the panes via stable per-selection loadables (UseAsyncResource re-driven by the selection
+// resizable. Selection drives the panes via stable per-selection loadables (UseResource re-driven by the selection
 // key), so picking a different item reactively re-skins the pane in place — no navigation, no stale freeze.
 sealed class LibraryPage : Component
 {
@@ -140,11 +140,11 @@ sealed class LibraryPage : Component
         // Hooks must NEVER be branched. All three kinds are the same LibraryPage type, so a branched hook count let the
         // reconciler reuse a sibling's hook slot → an EffectCell→AsyncResourceCell cast crash. Call all three loads
         // unconditionally in a FIXED order; the off-kind ones key on "" → resolve to Empty with no real fetch.
-        var detail = UseAsyncResource(ct => LoadDetail(svc, artists ? "" : sel, ct), DetailModel.Empty, artists ? "" : sel);
-        var artist = UseAsyncResource(ct => LoadArtist(svc, artists ? sel : "", ct), EmptyArtist(""), artists ? sel : "");
-        var albumTracks = UseAsyncResource(ct => LoadDetail(svc, artists ? albumKey : "", ct), DetailModel.Empty, artists ? albumKey : "");
-        var search = UseAsyncResource(ct => SearchLib(svc, _kind, fullSearch ? query : "", ct), LibrarySearchResults.Empty,
-            fullSearch ? _kind + "|" + query : "");
+        var detail = UseResource(ct => LoadDetail(svc, artists ? "" : sel, ct), DetailModel.Empty, artists ? "" : sel).Loadable;
+        var artist = UseResource(ct => LoadArtist(svc, artists ? sel : "", ct), EmptyArtist(""), artists ? sel : "").Loadable;
+        var albumTracks = UseResource(ct => LoadDetail(svc, artists ? albumKey : "", ct), DetailModel.Empty, artists ? albumKey : "").Loadable;
+        var search = UseResource(ct => SearchLib(svc, _kind, fullSearch ? query : "", ct), LibrarySearchResults.Empty,
+            fullSearch ? _kind + "|" + query : "").Loadable;
 
         // Stale-while-revalidate: publish only complete results. The previous rows stay mounted while the next query is
         // pending, avoiding the three-pane rows -> ellipsis -> rows flash on every keystroke.

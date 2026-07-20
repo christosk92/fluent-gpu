@@ -20,7 +20,7 @@ namespace Wavee;
 // catalog seam groups a real Spotify home — dozens of sections — into a small, finite set of typed groups so it never
 // reads as an endless stack of rails; see docs/architecture.md §2). Each group renders by KIND with the existing
 // reusable cards: QuickGrid / Hero spotlight / horizontally-paged Shelf / a CollapsedGrid that folds the many
-// single-item recommendations into one grid. Async skeleton pattern throughout (UseAsyncResource + Skel.Region).
+// single-item recommendations into one grid. Async skeleton pattern throughout (UseResource + Skel.Region).
 sealed class HomePage : Component
 {
     public override Element Render()
