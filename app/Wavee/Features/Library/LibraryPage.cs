@@ -153,7 +153,7 @@ sealed class LibraryPage : Component
         UseEffect(() =>
         {
             if (completedSearch) _searchSnapshot.Value = new SearchSnapshot(query, completedResults);
-        }, completedSearch, query, completedResults);
+        }, DepKey.From(HashCode.Combine(completedSearch, query, completedResults)));
 
         // Resolve the hierarchical results once (subscribes). They drive a DRILL-DOWN across the master-detail columns:
         // matched artists (left) ▸ the selected artist's matched albums (middle) ▸ the selected album's matched tracks

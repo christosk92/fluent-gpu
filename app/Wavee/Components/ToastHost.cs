@@ -57,7 +57,7 @@ public sealed class ToastHost : Component
             timer.Value = new System.Threading.Timer(
                 _ => post(() => { if (g == gen.Value && Toasts.Current.Peek() is not null) Toasts.Dismiss(); }),
                 null, AutoDismissMs, System.Threading.Timeout.Infinite);
-        }, toastOpt);
+        }, toastOpt?.Seq ?? 0);
 
         // The root is ALWAYS a plain BoxEl (stable single-child diff); the toast itself is a KEYED child — keys are
         // honored only in child arrays, and the keyed remount is what plays Enter on show and the Exit orphan fade on

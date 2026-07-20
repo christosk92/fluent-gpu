@@ -32,7 +32,7 @@ sealed class TrackCreditsDialog : Component
 
     public override Element Render()
     {
-        var infoL = UseAsyncResource(ct => LoadAsync(_svc, _artistUri, _trackUri, ct), (TrackNpvInfo?)null, _artistUri, _trackUri);
+        var infoL = UseAsyncResource(ct => LoadAsync(_svc, _artistUri, _trackUri, ct), (TrackNpvInfo?)null, (_artistUri, _trackUri));
         var state = (LoadState)infoL.State.Value;
         var info = infoL.Value.Value;
 

@@ -37,7 +37,7 @@ sealed class HomePage : Component
         var post = UsePost();
         // Home groups have substantially different heights (quick grid / hero / compact grid / shelf / editorial).
         // Hoist one measured extent table so the viewport can correct and anchor rows while recycling offscreen groups.
-        var homeLayout = UseMemo(static () => new HomeFeedVirtualLayout());
+        var homeLayout = UseMemo(static () => new HomeFeedVirtualLayout(), DepKey.Empty);
         // Start the background home-refresh loop ONCE and tie it to this component's lifetime. A UseSignalEffect that
         // reads no signals runs exactly once on mount; its Reactive.OnCleanup fires on unmount (KeepAlive eviction /
         // navigation away). Without this, each cold remount of Home leaked an orphaned 60s PeriodicTimer loop that

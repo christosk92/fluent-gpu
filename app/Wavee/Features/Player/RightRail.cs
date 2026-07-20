@@ -52,7 +52,7 @@ sealed class RightRail : Component
                 anim.Animate(Context.HostNode, AnimChannel.TranslateX, from, x, 300f,
                     EasingSpec.CubicBezier(0f, 0.35f, 0.15f, 1f));
             }
-        }, open, railWidth, baseline);
+        }, DepKey.From(HashCode.Combine(open, railWidth, baseline)));
         // Flat FileArea surface (the album-wash gradient read as a muddy smudge), TOP-LEFT rounded like the content
         // card's top-right — the two sit as sibling cards across the 4px chrome gap.
         var corners = new CornerRadius4(WaveeRadius.Card, 0f, 0f, 0f);

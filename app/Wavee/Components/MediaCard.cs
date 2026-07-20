@@ -438,7 +438,7 @@ public static class MediaCard
                 if (anim is null || scene is null || arc.IsNull || !scene.IsLive(arc)) return;
                 anim.Keyframes(arc, AnimChannel.StrokeTrimEnd,
                     new Keyframe[] { new(0f, 0f, Easing.Linear), new(1f, 1f, Easing.Linear) }, CountdownMs, false);
-            }, counting, _hoverEpoch);
+            }, (_hoverEpoch, counting));
 
             return Build(_cover, _eyebrow, _title, _subtitle, _uri, _kind, _onClick, _onPlay, _cardW, _menu,
                 hovered, revealed && hasPeek ? previews : null, counting,

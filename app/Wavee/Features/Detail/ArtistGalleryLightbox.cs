@@ -93,7 +93,7 @@ sealed class ArtistGalleryLightbox : Component
         var photo = _photos[current];
         bool zoomed = _zoomMode.Value;
 
-        UseEffect(() => Poke(post));   // start the idle loop once at mount (chrome shows, then fades after IdleHideMs)
+        UseEffect(() => Poke(post), DepKey.Empty);   // start the idle loop once at mount (chrome shows, then fades after IdleHideMs)
 
         return new BoxEl
         {

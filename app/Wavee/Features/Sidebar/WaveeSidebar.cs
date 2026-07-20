@@ -576,7 +576,7 @@ sealed class WaveeSelPill : Component
                 new Keyframe(StretchPeak, fromY,   Easing.Linear),
                 new Keyframe(1f,          targetY, Easing.FluentDecelerate),
             ], StretchDuration);
-        }, st.Dep, visible);
+        }, (st.Dep, visible));
 
         // Opacity fade with WinUI selection-indicator timing (150ms EaseOut). Capture _seeded before the effect is
         // queued: on the very first mount with visible=false, skip the animation to avoid a startup flash at Y=0.

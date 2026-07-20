@@ -28,7 +28,7 @@ sealed class NowPlayingPanel : Component
         var track = b?.CurrentTrack.Value;
         string artistUri = track is { Artists.Count: > 0 } ? track.Artists[0].Uri : "";
         string trackUri = track?.Uri ?? "";
-        var infoL = UseAsyncResource(ct => LoadInfoAsync(svc, artistUri, trackUri, ct), (NowPlayingInfo?)null, artistUri, trackUri);
+        var infoL = UseAsyncResource(ct => LoadInfoAsync(svc, artistUri, trackUri, ct), (NowPlayingInfo?)null, (artistUri, trackUri));
         var loadState = (LoadState)infoL.State.Value;
         var info = infoL.Value.Value;
 

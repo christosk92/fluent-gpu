@@ -85,7 +85,7 @@ sealed partial class ArtistPage : Component
 
         // Exact deps are intentional: this is a low-frequency navigation/data effect, and route identity must refresh
         // ownership even when two artists happen to have the same extracted colour.
-        UseEffect(() => SetTint(micaTint), routeKey, micaTint.HasValue, micaTint.GetValueOrDefault(), Tok.Theme, artistReady, colorWashesDisabled);
+        UseEffect(() => SetTint(micaTint), DepKey.From(HashCode.Combine(routeKey, micaTint.HasValue, micaTint.GetValueOrDefault(), Tok.Theme, artistReady, colorWashesDisabled)));
         UseActivation(onActivated: () => SetTint(micaTint), onDeactivated: ClearTint);
 
         var pinned = UseSignal(false);

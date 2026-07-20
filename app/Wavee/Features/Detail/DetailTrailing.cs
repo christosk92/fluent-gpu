@@ -56,7 +56,7 @@ sealed class AlbumTrailing : Component
 
         var trailing = UseAsyncResource(
             ct => LoadTrailingAsync(svc, ready, shortRelease, leadArtistUri, leadTrackUri, albumUri, seedTrackUri, ct),
-            AlbumTrailingData.Empty, key);
+            AlbumTrailingData.Empty, (string)key);
 
         if (!ready) return new BoxEl { Direction = 1, Grow = 1f, AlignSelf = FlexAlign.Stretch };
 

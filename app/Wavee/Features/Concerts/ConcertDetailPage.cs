@@ -46,7 +46,7 @@ sealed class ConcertDetailPage : Component
         // the SAME subtree the loaded page renders (never a hand-authored skeleton).
         var details = UseAsyncResource(
             ct => svc.Concerts.GetDetailsAsync(_concertUri, cancellationToken: ct),
-            (ConcertDetails?)SeedDetails(_concertUri, _title), _concertUri, gen);
+            (ConcertDetails?)SeedDetails(_concertUri, _title), (_concertUri, gen));
 
         var region = Skel.Region(
             details,

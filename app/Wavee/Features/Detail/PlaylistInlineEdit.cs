@@ -236,7 +236,7 @@ static class PlaylistInlineEdit
         {
             if (!editing.Peek() || shell.Value.IsNull) return;
             post(() => BringIntoView(c.Context, shell.Value, margin: 32f));
-        }, editing.Value, uriKey, draftSnapshot);
+        }, DepKey.From(HashCode.Combine(editing.Value, uriKey, draftSnapshot)));
     }
 
     /// <summary>Snap-scroll a node into its nearest vertical viewport (viewport-relative bounds — reliable inside nested
@@ -415,7 +415,7 @@ static class PlaylistInlineEdit
             var post = UsePost();
             var m = _full.Value.Value;
             string? uri = m.ContextUri;
-            UseLayoutEffect(() => { if (!_editing.Peek()) _draft.Value = m.Title; }, uri ?? "", m.Title);
+            UseLayoutEffect(() => { if (!_editing.Peek()) _draft.Value = m.Title; }, (uri ?? "", m.Title));
             UseEditScroll(this, post, _editing, _editShell, uri ?? "", _draft.Value);
 
             if (lib is null || !m.Capabilities.CanEditMetadata || uri is null)
@@ -542,7 +542,7 @@ static class PlaylistInlineEdit
             var post = UsePost();
             var m = _full.Value.Value;
             string? uri = m.ContextUri;
-            UseLayoutEffect(() => { if (!_editing.Peek()) _draft.Value = m.Description ?? ""; }, uri ?? "", m.Description ?? "");
+            UseLayoutEffect(() => { if (!_editing.Peek()) _draft.Value = m.Description ?? ""; }, (uri ?? "", m.Description ?? ""));
             UseEditScroll(this, post, _editing, _editShell, uri ?? "", _draft.Value);
 
             if (_maxLines <= 0 || lib is null || !m.Capabilities.CanEditMetadata || uri is null)

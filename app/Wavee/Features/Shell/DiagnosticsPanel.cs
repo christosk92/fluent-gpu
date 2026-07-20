@@ -65,7 +65,7 @@ sealed class DiagnosticsPanel(IAppSettings? settings = null) : Component
         var lastVersion = UseRef(-1L);
         _overlay = UseContext(Overlay.Service);
 
-        UseEffect(() => RefreshSessions(post), Array.Empty<object>());
+        UseEffect(() => RefreshSessions(post), DepKey.Empty);
 
         UseSignalEffect(() =>
         {
@@ -96,7 +96,7 @@ sealed class DiagnosticsPanel(IAppSettings? settings = null) : Component
         });
 
         // Hoisted here (unconditional) so the hook order is stable — LogBody has early-out branches before the list.
-        var logLayout = UseMemo(() => new MeasuredStackVirtualLayout(estimatedExtent: 40f), Array.Empty<object>());
+        var logLayout = UseMemo(() => new MeasuredStackVirtualLayout(estimatedExtent: 40f), DepKey.Empty);
 
         _ = _refresh.Value;
         _ = _diagVersion.Value;

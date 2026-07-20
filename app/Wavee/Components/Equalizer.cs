@@ -49,7 +49,7 @@ sealed class EqBar : Component
         Keyframe[] keys = _animate
             ? [new(0f, p[0]), new(0.25f, p[1]), new(0.5f, p[2]), new(0.75f, p[3]), new(1f, p[4])]
             : [new(0f, 0.4f), new(1f, 0.4f)];
-        UseKeyframes(AnimChannel.ScaleY, keys, _animate ? 850f : 1f, _animate);
+        UseKeyframes(AnimChannel.ScaleY, keys, _animate ? 850f : 1f, _animate, DepKey.Empty);
         return new BoxEl
         {
             Width = 2.5f, Height = _h, Corners = CornerRadius4.All(1.25f), Fill = _color(),

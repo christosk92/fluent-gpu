@@ -57,7 +57,7 @@ sealed class LoginView : Component
                     announce(Loc.Get(Strings.Auth.CodeExpired), true);
                     break;
             }
-        }, snap.Phase);
+        }, (int)snap.Phase);
 
         Element card = snap.Phase switch
         {
@@ -411,7 +411,7 @@ sealed class WaitingDots : Component
             Drive(d0.Value, 0.16f);   // STAGGERED peaks → a left-to-right hop wave (dot0 → dot1 → dot2)
             Drive(d1.Value, 0.28f);
             Drive(d2.Value, 0.40f);
-        });
+        }, DepKey.Empty);
         Element Dot(Action<NodeHandle> cap) => new BoxEl { Width = 6f, Height = 6f, Corners = CornerRadius4.All(3f), Fill = Tok.AccentDefault, OnRealized = cap };
         return new BoxEl { Direction = 0, Gap = 5f, AlignItems = FlexAlign.Center, Children = [Dot(h => d0.Value = h), Dot(h => d1.Value = h), Dot(h => d2.Value = h)] };
     }
@@ -435,7 +435,7 @@ sealed class LoginCountdown : Component
                 await Task.Delay(1000, ct).ConfigureAwait(false);
                 post(() => tick.Value++);   // marshal the 1 Hz write to the UI thread (the loop runs off-thread)
             }
-        }));
+        }), DepKey.Empty);
         _ = tick.Value;   // subscribe → re-render each second
 
         var remaining = _expiry - DateTimeOffset.UtcNow;

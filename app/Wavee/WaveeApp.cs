@@ -53,7 +53,7 @@ sealed class WaveeApp : Component
                 else if (FluentApp.SystemAccent() is { } a) Tok.SetAccent(a);
                 requestTheme?.Invoke(250f);
             };
-        });
+        }, DepKey.Empty);
 
         var post = Context.UsePost();
         var loginSession = UseRef<System.Threading.CancellationTokenSource?>(null);
@@ -182,7 +182,7 @@ sealed class WaveeApp : Component
                 _ = _services.Session.ConnectAsync();
                 _services.Log.Info("app", "Demo backend; fake session started (playback remote-only)");
             }
-        });
+        }, DepKey.Empty);
 
         // (Re)start the takeover login on every Auth flip to not-authenticated: the real backend kicks the silent-resume →
         // device-code two-pane; the fake demo seeds a demo challenge — but ONLY after it has authenticated once (wasAuthed),
@@ -194,7 +194,7 @@ sealed class WaveeApp : Component
             if (authState == AuthStatus.Authenticated) { wasAuthed.Value = true; return; }
             if (Services.UseRealBackend) RestartCode();
             else if (wasAuthed.Value) SeedDemoChallenge();   // a fake LOGOUT (not the first launch) → the demo two-pane
-        }, authState);
+        }, (int)authState);
 
         this.UseSoftReveal(); // app entrance (compositor-only, reduced-motion-aware)
 

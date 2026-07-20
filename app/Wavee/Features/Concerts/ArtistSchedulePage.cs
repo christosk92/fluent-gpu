@@ -64,7 +64,7 @@ sealed class ArtistSchedulePage : Component
         var savedPlace = _savedPlace.Value;
         var schedule = UseAsyncResource(
             ct => svc.Concerts.GetArtistScheduleAsync(_artistUri, savedPlace?.GeoHash, cancellationToken: ct),
-            (ArtistConcertSchedule?)SeedSchedule(_artistUri, _artistName), _artistUri, savedPlace?.GeoHash, gen);
+            (ArtistConcertSchedule?)SeedSchedule(_artistUri, _artistName), DepKey.From(HashCode.Combine(_artistUri, savedPlace?.GeoHash, gen)));
         var locationLabel = UseAsyncResource(
             ct => svc.Concerts.GetArtistPageLocationAsync(ct), (ConcertPlace?)null, gen);
 

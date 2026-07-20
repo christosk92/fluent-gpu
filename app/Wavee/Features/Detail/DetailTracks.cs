@@ -288,7 +288,7 @@ sealed class TrackList : Component
             rowsSnapshot,
             snapshot => View(snapshot).Length,
             (snapshot, displayIndex) => TrackAt(snapshot, displayIndex),
-            EmptyTrack));
+            EmptyTrack), DepKey.Empty);
         _rowsSnapshot = rowsSnapshot;
         _rowItems = rowItems;
 
@@ -417,7 +417,7 @@ sealed class TrackList : Component
             if (_listCount.Peek() != listTotal) _listCount.Value = listTotal;
             int verticalCount = VerticalTrackStart + Math.Max(visible, 1);
             if (_verticalItemCount.Peek() != verticalCount) _verticalItemCount.Value = verticalCount;
-        }, visible, listTotal);
+        }, (visible, listTotal));
 
         Element RealList()
         {
