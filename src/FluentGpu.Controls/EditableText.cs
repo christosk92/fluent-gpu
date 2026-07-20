@@ -851,7 +851,13 @@ public sealed class EditableText : Component
         bool first = !_synced;
         _core.ResetText(nv);
         LastChangeReason = TextChangeReason.ProgrammaticChange;
-        if (!first) OnTextChanged?.Invoke(v);
+        // Dispatch the consumer notification OUTSIDE this call's tracked scope. SyncFromSignal runs inside the
+        // BindDisplay text-bind thunk (a tracked computation), but a consumer's OnTextChanged is side-effect dispatch,
+        // NOT part of the display binding's reactive dependencies: its reads must not subscribe the bind thunk, and a
+        // normalize-write it makes to the bound text signal (e.g. NumberBox validation reformatting "25" → "10") must
+        // not be attributed to the bind thunk as a backwards-write. The write still notifies (BindDisplay re-evaluates
+        // and shows the normalized text) — only the false self-attribution is removed.
+        if (!first) Reactive.Untrack(() => OnTextChanged?.Invoke(v));
         var tn = TextNode();
         if (!tn.IsNull) _hooks?.CaretReset?.Invoke(tn);
         SyncVisual();

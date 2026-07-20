@@ -23990,7 +23990,7 @@ static class Slice
             bool restarted = ring == ring0 && arc == arc0 && Near(host.Scene.Paint(ring).Opacity, 1f, 0.001f)
                 && host.Animation.HasTracks(ring) && host.Animation.HasTracks(arc);
 
-            Check("progress.1 ProgressRing isActive flows through context: active spins, inactive stops, reactivation restarts without remount",
+            Check("progress.1 ProgressRing isActive flows through re-pushed props: active spins, inactive stops, reactivation restarts without remount",
                 activeMount && stopped && restarted,
                 $"active={activeMount} stopped={stopped} restarted={restarted} same={ring == ring0 && arc == arc0}"
                 + $" reOpacity={host.Scene.Paint(ring).Opacity:0.###} reRingTracks={host.Animation.HasTracks(ring)} reArcTracks={host.Animation.HasTracks(arc)}");
@@ -24019,7 +24019,7 @@ static class Slice
                 idle, $"arc={arc} ring={ring} tracks arc={(!arc.IsNull && host.Animation.HasTracks(arc))}");
         }
 
-        // ProgressBar: parent re-render updates state/width through context, so the existing effect deps fire.
+        // ProgressBar: parent re-render updates state/width through re-pushed props, so the existing effect deps fire.
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("progress-bar-lifecycle", new Size2(420, 180), 1f)); window.Show();
@@ -24067,7 +24067,7 @@ static class Slice
                 $"normal={normalTracks} paused={paused} resumed={resumed} resized={resized} width={(!barRoot.IsNull ? host.Scene.AbsoluteRect(barRoot).W : 0):0.#}");
         }
 
-        // CheckBox: checked mark color/pressability must update through context without remounting or replaying draw-on.
+        // CheckBox: checked mark color/pressability must update through re-pushed props without remounting or replaying draw-on.
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("checkbox-mark-props", new Size2(260, 160), 1f)); window.Show();
@@ -24098,7 +24098,7 @@ static class Slice
                 && ColorClose(after.Color, Tok.TextOnAccentDisabled, 0.004f);
             bool noReplay = !markAfter.IsNull && !host.Animation.HasTracks(markAfter);
 
-            Check("progress.4 CheckBox mark props update through context without remounting or replaying draw-on",
+            Check("progress.4 CheckBox mark props update through re-pushed props without remounting or replaying draw-on",
                 settled && initialColor && sameNode && disabledColor && noReplay,
                 $"settled={settled} initial={initialColor} same={sameNode} disabled={disabledColor} replay={!noReplay}");
         }
@@ -25514,30 +25514,42 @@ static class Slice
                     Build = () =>
                     {
                         bool big = heavy.Value;   // subscribe: a flip re-renders the owner and restructures the tree
+                        Element view;
                         if (!big)
-                            return new BoxEl
+                            view = new BoxEl
                             {
-                                Direction = 1, Width = 320, Height = 440, Gap = 8, Padding = Edges4.All(12),
+                                Direction = 1, Gap = 8, Padding = Edges4.All(12),
                                 Children = [new TextEl("baseline") { Size = 16f }, Button.Accent("idle", () => { })],
                             };
-                        // Heavy: a few hundred rows (SceneLive + StringMap), a bound Fill per row (NodeBindings),
-                        // and a couple of embedded components (Components) — drives every LIVE census column up.
-                        var rows = new Element[HeavyRows];
-                        for (int i = 0; i < HeavyRows; i++)
+                        else
                         {
-                            int idx = i;
-                            rows[i] = new BoxEl
+                            // Heavy: a few hundred rows (SceneLive + StringMap), a bound Fill per row (NodeBindings),
+                            // and a couple of embedded components (Components) — drives every LIVE census column up.
+                            var rows = new Element[HeavyRows];
+                            for (int i = 0; i < HeavyRows; i++)
                             {
-                                Height = 24f, Direction = 0, Gap = 4,
-                                Fill = Prop.Of(() => ColorF.FromRgba(20, 20, (byte)(idx % 2 == 0 ? 28 : 40))),
-                                Children =
-                                [
-                                    new TextEl("") { Size = 12f, Text = Prop.Of(() => "heavy row " + idx) },
-                                    .. (idx < 3 ? new Element[] { Embed.Comp(() => new NestChild()) } : Array.Empty<Element>()),
-                                ],
-                            };
+                                int idx = i;
+                                rows[i] = new BoxEl
+                                {
+                                    Height = 24f, Direction = 0, Gap = 4,
+                                    Fill = Prop.Of(() => ColorF.FromRgba(20, 20, (byte)(idx % 2 == 0 ? 28 : 40))),
+                                    Children =
+                                    [
+                                        new TextEl("") { Size = 12f, Text = Prop.Of(() => "heavy row " + idx) },
+                                        .. (idx < 3 ? new Element[] { Embed.Comp(() => new NestChild()) } : Array.Empty<Element>()),
+                                    ],
+                                };
+                            }
+                            view = new BoxEl { Direction = 1, Children = rows };
                         }
-                        return new BoxEl { Direction = 1, Width = 320, Height = 440, Children = rows };
+                        // KEY the swapped subtree so a baseline↔heavy swap REMOUNTS it rather than reusing nodes
+                        // positionally — otherwise the static-Fill Button and a bound-Fill heavy row collide at the same
+                        // slot (a bound↔static channel flip on a reused node, which the BindContract tripwire flags).
+                        return new BoxEl
+                        {
+                            Direction = 1, Width = 320, Height = 480,
+                            Children = [view with { Key = big ? "heavy" : "baseline" }],
+                        };
                     },
                 });
             host.RunFrame();
@@ -26397,6 +26409,163 @@ static class Slice
         }
     }
 
+    // G4d — the Props.Channel → re-pushed-props migration (master plan §WS1+WS2 Phase P4). Two locks:
+    //   gate.props.migration-sweep    — 3 representative migrated controls (ToggleSwitch/ProgressRing/ToolTip) deliver
+    //                                    LIVE prop updates to the SAME mounted core on a parent re-render (no remount).
+    //   gate.guards.control-kit-clean — a DEBUG scene mounting the migrated controls + re-pushing changed props trips
+    //                                    ZERO BindContract flips and ZERO backwards-writes (locks in the Part-2 fixes:
+    //                                    the ItemsView dwell effect + the EditableText untracked OnTextChanged dispatch).
+    static void G4dMigrationChecks(StringTable strings)
+    {
+        // ── gate.props.migration-sweep ────────────────────────────────────────────────────────────────────────────
+        {
+            // (1) ToggleSwitch: flipping isOn re-pushes to the reused core → the track cross-fades to the accent ON
+            //     fill on the SAME track node (a single realize = no remount).
+            bool toggleLive;
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("g4d-toggle", new Size2(320, 160), 1f)); window.Show();
+                var on = new Signal<bool>(false);
+                var tracks = new List<NodeHandle>();
+                var parts = new TemplateParts();
+                parts[ToggleSwitch.PartTrack] = b => b with { OnRealized = h => { if (!tracks.Contains(h)) tracks.Add(h); } };
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings,
+                    new W0fStaticProbe { Build = () => new BoxEl { Padding = Edges4.All(12),
+                        Children = [ToggleSwitch.Create(on.Value, () => { }, parts: parts)] } });
+                host.RunFrame();
+                bool mount = tracks.Count == 1;
+                var track0 = tracks.Count > 0 ? tracks[0] : NodeHandle.Null;
+                on.Value = true;
+                for (int i = 0; i < 24; i++) host.RunFrame();
+                bool noRemount = tracks.Count == 1 && !track0.IsNull;
+                bool toAccent = !track0.IsNull && ColorClose(host.Scene.Paint(track0).Fill, Tok.AccentDefault, 0.03f);
+                toggleLive = mount && noRemount && toAccent;
+            }
+
+            // (2) ProgressRing: flipping isActive re-pushes to the reused core → the SAME ring node starts spinning
+            //     (animation tracks appear) with no remount.
+            bool ringLive;
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("g4d-ring", new Size2(200, 200), 1f)); window.Show();
+                var active = new Signal<bool>(false);
+                NodeHandle arc = default; int realizes = 0;
+                var parts = new TemplateParts();
+                parts[ProgressRing.PartRing] = b => b with { OnRealized = h => { arc = h; realizes++; } };
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings,
+                    new W0fStaticProbe { Build = () => new BoxEl { Padding = Edges4.All(16),
+                        Children = [ProgressRing.Indeterminate(isActive: active.Value, parts: parts)] } });
+                host.RunFrame();
+                var ring0 = host.Scene.Parent(arc);
+                bool idleMount = !arc.IsNull && realizes == 1 && !host.Animation.HasTracks(ring0);
+                active.Value = true;
+                host.RunFrame();
+                var ring1 = host.Scene.Parent(arc);
+                bool spinLive = realizes == 1 && ring1 == ring0 && host.Animation.HasTracks(ring1);
+                ringLive = idleMount && spinLive;
+            }
+
+            // (3) ToolTip: Wrap re-pushes new (target,text) slots to the reused core → the wrapped target reconciles IN
+            //     PLACE (same node) and its new width lands (a frozen-field ToolTip would keep the mount-time width).
+            bool tipLive;
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("g4d-tip", new Size2(320, 160), 1f)); window.Show();
+                var w = new Signal<float>(100f);
+                var targets = new List<NodeHandle>();
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings,
+                    new W0fStaticProbe { Build = () => new BoxEl { Padding = Edges4.All(12),
+                        Children = [ToolTip.Wrap(
+                            new BoxEl { Width = w.Value, Height = 20f, Fill = Tok.AccentDefault,
+                                        OnRealized = h => { if (!targets.Contains(h)) targets.Add(h); } },
+                            "tip")] } });
+                host.RunFrame();
+                var target0 = targets.Count > 0 ? targets[0] : NodeHandle.Null;
+                bool mount = targets.Count == 1 && !target0.IsNull && Near(host.Scene.AbsoluteRect(target0).W, 100f, 0.5f);
+                w.Value = 160f;
+                host.RunFrame(); host.RunFrame();
+                bool grewInPlace = targets.Count == 1 && Near(host.Scene.AbsoluteRect(target0).W, 160f, 0.5f);
+                tipLive = mount && grewInPlace;
+            }
+
+            Check("gate.props.migration-sweep migrated controls deliver live prop updates to the SAME mounted core (ToggleSwitch/ProgressRing/ToolTip, no remount)",
+                toggleLive && ringLive && tipLive, $"toggle={toggleLive} ring={ringLive} tooltip={tipLive}");
+        }
+
+        // ── gate.guards.control-kit-clean ─────────────────────────────────────────────────────────────────────────
+        {
+            bool prevBc = BindContract.Enabled, prevBcT = BindContract.ThrowOnViolation;
+            bool prevBw = BackwardsWriteGuard.Enabled, prevBwT = BackwardsWriteGuard.ThrowOnViolation;
+            BindContract.Enabled = BindContract.CompiledIn; BindContract.ThrowOnViolation = false;
+            BackwardsWriteGuard.Enabled = BackwardsWriteGuard.CompiledIn; BackwardsWriteGuard.ThrowOnViolation = false;
+            BindContract.Reset(); BackwardsWriteGuard.Reset();
+            try
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("g4d-guards", new Size2(480, 960), 1f)); window.Show();
+                var flip = new Signal<bool>(false);
+                var idx = new Signal<int>(0);
+                var gen = new Signal<int>(0);
+                var enabled = new Signal<bool>(true);
+                var combo = new Signal<int>(0);
+                var num = new Signal<double>(1);
+                string[] items3 = ["a", "b", "c"];
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings,
+                    new W0fStaticProbe
+                    {
+                        Build = () => new BoxEl
+                        {
+                            Direction = 1, Width = 440, Gap = 6, Padding = Edges4.All(12),
+                            Children =
+                            [
+                                ToggleSwitch.Create(flip.Value, () => { }, header: "t"),
+                                CheckBox.Create("c", flip.Value ? CheckState.Checked : CheckState.Unchecked, _ => { }, isEnabled: enabled.Value),
+                                ProgressRing.Indeterminate(isActive: flip.Value),
+                                ProgressBar.Indeterminate(240f, flip.Value ? ProgressBarState.Paused : ProgressBarState.Normal),
+                                Slider.Ranged(0.3f, _ => { }, new Slider.Options()),
+                                PipsPager.Create(5, idx.Value, _ => { }),
+                                Pivot.Create(items3, i => new TextEl("p" + i) { Size = 12f }, selectedIndex: idx.Value),
+                                FlipView.Create([new TextEl("0"), new TextEl("1"), new TextEl("2")], selectedIndex: idx.Value),
+                                RadioButtons.Create(items3, idx.Value, _ => { }),
+                                SelectorBar.Create(items3, idx.Value, _ => { }),
+                                BreadcrumbBar.Create(items3),
+                                ComboBox.Create(items3, combo, isEnabled: enabled.Value),
+                                NumberBox.Create(value: null, initial: num.Value, isEnabled: enabled.Value),
+                                Expander.Create("e", new TextEl("body") { Size = 12f }),
+                                SwipeControl.Create("row", System.Array.Empty<SwipeAction>()),
+                                SettingsCard.Create(new SettingsCard.Options { Header = "s", Description = "d" }),
+                                SettingsExpander.Create(new SettingsExpander.Options { Header = "se" }),
+                                ToolTip.Wrap(new TextEl("hover") { Size = 12f }, "tip " + gen.Value),
+                            ],
+                        },
+                    });
+                host.RunFrame();
+                // Re-push changed props over several re-renders to exercise the reuse/delivery seam (the flip surface).
+                for (int r = 0; r < 4; r++)
+                {
+                    flip.Value = !flip.Value;
+                    idx.Value = (idx.Value + 1) % 3;
+                    gen.Value = gen.Value + 1;
+                    enabled.Value = !enabled.Value;
+                    host.RunFrame(); host.RunFrame();
+                }
+                // Programmatic NumberBox Text write via the value signal (exercises the EditableText SyncFromSignal path).
+                num.Value = 7; host.RunFrame(); host.RunFrame();
+
+                bool bcClean = BindContract.Violations == 0;
+                bool bwClean = BackwardsWriteGuard.Violations == 0;
+                Check("gate.guards.control-kit-clean migrated controls + prop re-push trip ZERO BindContract flips and ZERO backwards-writes",
+                    bcClean && bwClean,
+                    $"compiledIn={BindContract.CompiledIn} bindFlips={BindContract.Violations} [{BindContract.LastViolation}] backWrites={BackwardsWriteGuard.Violations} [{BackwardsWriteGuard.LastViolation}]");
+            }
+            finally
+            {
+                BindContract.Enabled = prevBc; BindContract.ThrowOnViolation = prevBcT;
+                BackwardsWriteGuard.Enabled = prevBw; BackwardsWriteGuard.ThrowOnViolation = prevBwT;
+            }
+        }
+    }
+
     static int Main()
     {
         // FG_PROBE=ranged-tooltip — isolated repro driver for the live "ranged slider hover → tooltip → freeze"
@@ -26627,6 +26796,7 @@ static class Slice
         Cp2ConsolidationChecks(strings);   // collection consolidation: ItemsView premiere + thin LV/GV presets + 2-D reorder + displacement channel
         D2PasswordRevealFocusChecks(strings);
         ProgressIndeterminateLifecycleChecks(strings);
+        G4dMigrationChecks(strings);       // G4d: Props.Channel → re-pushed-props migration sweep + control-kit guard-clean lock
         PropNetClobberChecks(strings);     // Prop<T> W0: bound-channel ownership net (clobber guards + contract locks)
         AnimRestChecks(strings);           // Prop<T> B1-B3: canceled/settled-track resting values vs static re-asserts
         PropUnionChecks(strings);          // Prop<T> W1: signal-direct bind kind + the locked mount-only wiring contract

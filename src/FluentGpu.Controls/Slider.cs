@@ -324,10 +324,9 @@ public static partial class Slider
             Direction = 1,
             Children =
             [
-                Ctx.Provide(
-                    RangedSliderProps.Channel,
+                Embed.Comp(
                     new RangedSliderProps(value, onChange, o, length, thickness, style ?? DefaultStyle, isEnabled, parts),
-                    Embed.Comp(() => new RangedSlider())),
+                    () => new RangedSlider()),
             ],
         };
 
@@ -505,15 +504,12 @@ public static partial class Slider
 }
 
 /// <summary>
-/// Props for the full <see cref="Slider.Ranged"/> control, pushed through a context provider on every parent re-render
-/// (the reconciler writes the provider's signal on update — the sanctioned prop channel for autonomous embedded
-/// components). The component re-renders granularly when the record changes.
+/// Props for the full <see cref="Slider.Ranged"/> control, RE-PUSHED to the core on every parent re-render
+/// (<c>Embed.Comp(props, …)</c> — the reconciler writes the component's props signal on update, equality-gated). The
+/// component re-renders granularly when the record changes; it reads them with <c>UseProps</c>.
 /// </summary>
 internal sealed record RangedSliderProps(
-    float Value, Action<float> OnChange, Slider.Options O, float Length, float Thickness, Slider.Style S, bool IsEnabled, TemplateParts? Parts = null)
-{
-    public static readonly Context<RangedSliderProps?> Channel = new(null);
-}
+    float Value, Action<float> OnChange, Slider.Options O, float Length, float Thickness, Slider.Style S, bool IsEnabled, TemplateParts? Parts = null);
 
 /// <summary>
 /// The stateful body of <see cref="Slider.Ranged"/>: the WinUI track/thumb template plus the cross-render state the
@@ -536,8 +532,7 @@ internal sealed class RangedSlider : Component
 {
     public override Element Render()
     {
-        var props = UseContext(RangedSliderProps.Channel);
-        if (props is null) return new BoxEl();   // defensive: the factory always wraps in a provider
+        var props = UseProps<RangedSliderProps>();
 
         var o = props.O;
         var s = props.S;

@@ -113,20 +113,17 @@ public static partial class ToggleSwitch
         ForegroundDisabled = Tok.TextDisabled, HeaderColorDisabled = Tok.TextDisabled,
     };
 
-    /// <summary>Controlled props, carried to the stateful core via context (a ComponentEl reuse never re-runs its
-    /// factory — Reconciler.cs:211-219 — so props MUST flow through a provider, the NavigationView pattern).</summary>
+    /// <summary>Controlled props, RE-PUSHED live to the stateful core (<c>Embed.Comp(props, …)</c>): a ComponentEl
+    /// reuse never re-runs its factory, so props delivered here (equality-gated) stay current across re-renders; the
+    /// core reads them with <c>UseProps</c>.</summary>
     internal sealed record Props(bool IsOn, Action OnToggle, string? Header, string? OnContent, string? OffContent,
-                                 bool IsEnabled, Style Style, TemplateParts? Parts = null)
-    {
-        internal static readonly Context<Props?> Channel = new(null);
-    }
+                                 bool IsEnabled, Style Style, TemplateParts? Parts = null);
 
     public static Element Create(bool isOn, Action onToggle, string? header = null, string? onContent = null,
                                  string? offContent = null, bool isEnabled = true, Style? style = null,
                                  TemplateParts? parts = null)
-        => Ctx.Provide(Props.Channel,
-                       new Props(isOn, onToggle, header, onContent, offContent, isEnabled, style ?? DefaultStyle, parts),
-                       Embed.Comp(() => new ToggleSwitchCore()));
+        => Embed.Comp(new Props(isOn, onToggle, header, onContent, offContent, isEnabled, style ?? DefaultStyle, parts),
+                      () => new ToggleSwitchCore());
 }
 
 /// <summary>
@@ -151,13 +148,12 @@ internal sealed class ToggleSwitchCore : Component
     public override Element Render()
     {
         // Hooks — stable order, unconditionally, before any early-out.
-        var props = UseContext(ToggleSwitch.Props.Channel);
+        var props = UseProps<ToggleSwitch.Props>();
         var g = UseRef(new Gesture()).Value;
         var (dragX, setDragX) = UseState(float.NaN);     // NaN = not dragging; else the knob translation (0..travel)
         var (hovered, setHovered) = UseState(false);
         var (pressed, setPressed) = UseState(false);
 
-        if (props is null) return new BoxEl();
         var s = props.Style;
         var parts = props.Parts;
         bool isOn = props.IsOn;

@@ -34,29 +34,24 @@ public static partial class RadioButtons
     public static Element Create(IReadOnlyList<string> items, int selectedIndex, Action<int> onSelect,
                                  string? header = null, int maxColumns = 1, bool isEnabled = true,
                                  RadioButton.Style? style = null, TemplateParts? parts = null)
-        => Ctx.Provide(Props.Channel,
-                       new Props(items.Count, items, null, selectedIndex, onSelect, header, maxColumns, isEnabled,
-                                 style ?? RadioButton.DefaultStyle, parts),
-                       Embed.Comp(() => new RadioButtonsCore()));
+        => Embed.Comp(new Props(items.Count, items, null, selectedIndex, onSelect, header, maxColumns, isEnabled,
+                                style ?? RadioButton.DefaultStyle, parts),
+                      () => new RadioButtonsCore());
 
     /// <summary>Element-factory items: <paramref name="itemContent"/>(i) renders each item's content in place of the
     /// text label (the WinUI arbitrary-content item wrapped in a RadioButton).</summary>
     public static Element Create(int itemCount, Func<int, Element> itemContent, int selectedIndex, Action<int> onSelect,
                                  string? header = null, int maxColumns = 1, bool isEnabled = true,
                                  RadioButton.Style? style = null, TemplateParts? parts = null)
-        => Ctx.Provide(Props.Channel,
-                       new Props(itemCount, null, itemContent, selectedIndex, onSelect, header, maxColumns, isEnabled,
-                                 style ?? RadioButton.DefaultStyle, parts),
-                       Embed.Comp(() => new RadioButtonsCore()));
+        => Embed.Comp(new Props(itemCount, null, itemContent, selectedIndex, onSelect, header, maxColumns, isEnabled,
+                                style ?? RadioButton.DefaultStyle, parts),
+                      () => new RadioButtonsCore());
 
-    /// <summary>Controlled props via context — a reused ComponentEl never re-runs its factory (Reconciler.cs:211-219),
-    /// so props must flow through a provider.</summary>
+    /// <summary>Controlled props RE-PUSHED to the core (<c>Embed.Comp(props, …)</c>) — a reused ComponentEl never
+    /// re-runs its factory — so props are delivered live (equality-gated); the core reads them with <c>UseProps</c>.</summary>
     internal sealed record Props(int Count, IReadOnlyList<string>? Labels, Func<int, Element>? Content, int Selected,
                                  Action<int> OnSelect, string? Header, int MaxColumns, bool IsEnabled,
-                                 RadioButton.Style Style, TemplateParts? Parts = null)
-    {
-        internal static readonly Context<Props?> Channel = new(null);
-    }
+                                 RadioButton.Style Style, TemplateParts? Parts = null);
 }
 
 /// <summary>The stateful core: captures item node handles (for the roving focus moves) and routes the arrow keys.</summary>
@@ -65,12 +60,10 @@ internal sealed class RadioButtonsCore : Component
     public override Element Render()
     {
         // Hooks — stable order, unconditionally, before any early-out.
-        var props = UseContext(RadioButtons.Props.Channel);
+        var p = UseProps<RadioButtons.Props>();
         var hooks = UseContext(InputHooks.Current);
         var handles = UseRef(new List<NodeHandle>()).Value;
 
-        if (props is null) return new BoxEl();
-        var p = props;
         int n = p.Count;
         var s = p.Style;
 

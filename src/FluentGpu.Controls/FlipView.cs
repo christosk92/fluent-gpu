@@ -40,18 +40,15 @@ public static class FlipView
     public static Element Create(IReadOnlyList<Element> items, float width = 400f, float height = 240f,
                                  int selectedIndex = 0, Action<int>? onSelectionChanged = null,
                                  bool useTouchAnimationsForAllNavigation = true, bool vertical = false)
-        => Ctx.Provide(Props.Channel,
-                       new Props(items, width, height, selectedIndex, onSelectionChanged,
-                                 useTouchAnimationsForAllNavigation, vertical),
-                       Embed.Comp(() => new FlipViewCore()));
+        => Embed.Comp(new Props(items, width, height, selectedIndex, onSelectionChanged,
+                                useTouchAnimationsForAllNavigation, vertical),
+                      () => new FlipViewCore());
 
-    /// <summary>Controlled props via context — a reused ComponentEl never re-runs its factory, so props must flow
-    /// through a provider (the SelectorBar/PipsPager convention).</summary>
+    /// <summary>Controlled props RE-PUSHED to the core (<c>Embed.Comp(props, …)</c>) — a reused ComponentEl never
+    /// re-runs its factory, so props are delivered live (equality-gated); the core reads them with <c>UseProps</c>
+    /// (the SelectorBar/PipsPager convention).</summary>
     internal sealed record Props(IReadOnlyList<Element> Items, float Width, float Height, int SelectedIndex,
-                                 Action<int>? OnSelectionChanged, bool UseTouchAnimations, bool Vertical)
-    {
-        internal static readonly Context<Props?> Channel = new(null);
-    }
+                                 Action<int>? OnSelectionChanged, bool UseTouchAnimations, bool Vertical);
 }
 
 /// <summary>The stateful core: the clamped Selector index, the sliding item strip, the 3s-fading navigation bars,
@@ -92,7 +89,7 @@ internal sealed class FlipViewCore : Component
     public override Element Render()
     {
         // Hooks — stable order, unconditionally.
-        var props = UseContext(FlipView.Props.Channel);
+        var props = UseProps<FlipView.Props>();
         var hooks = UseContext(InputHooks.Current);   // PointerVelocity: real flick speed for the touch commit
         var (idx, setIdx) = UseState(Math.Max(0, props?.SelectedIndex ?? 0));
         var stripRef = UseRef<NodeHandle>(default);

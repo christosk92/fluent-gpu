@@ -101,20 +101,18 @@ public static class ProgressRing
     /// <paramref name="parts"/> = per-part styling keyed by <see cref="PartRing"/> (the spinning arc).</summary>
     public static Element Indeterminate(float size = DefaultSize, bool isActive = true, ColorF? foreground = null,
                                         TemplateParts? parts = null)
-        => Ctx.Provide(Props.Channel, new Props(size, isActive, foreground, parts), Embed.Comp(() => new SpinnerRing()));
+        => Embed.Comp(new Props(size, isActive, foreground, parts), () => new SpinnerRing());
 
-    /// <summary>Controlled props, carried to the stateful core via context (a reused ComponentEl never re-runs its
-    /// factory, so runtime-changeable props must flow through a provider).</summary>
-    internal sealed record Props(float Size, bool IsActive, ColorF? Foreground, TemplateParts? Parts)
-    {
-        internal static readonly Context<Props?> Channel = new(null);
-    }
+    /// <summary>Controlled props RE-PUSHED to the stateful core (<c>Embed.Comp(props, …)</c>): a reused ComponentEl
+    /// never re-runs its factory, so runtime-changeable props are delivered live (equality-gated); the core reads them
+    /// with <c>UseProps</c>.</summary>
+    internal sealed record Props(float Size, bool IsActive, ColorF? Foreground, TemplateParts? Parts);
 
     internal sealed class SpinnerRing : Component
     {
         public override Element Render()
         {
-            var props = UseContext(Props.Channel) ?? new Props(DefaultSize, true, null, null);
+            var props = UseProps<Props>();
             var Parts = props.Parts;
             bool IsActive = props.IsActive;
             var ts = ProgressRingTemplateSettings.ForIndeterminate(props.Size);

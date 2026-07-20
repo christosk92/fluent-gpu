@@ -39,19 +39,16 @@ public static class PipsPager
                                  PipsPagerButtonVisibility previousButtonVisibility = PipsPagerButtonVisibility.Collapsed,
                                  PipsPagerButtonVisibility nextButtonVisibility = PipsPagerButtonVisibility.Collapsed,
                                  bool vertical = false)
-        => Ctx.Provide(Props.Channel,
-                       new Props(count, selected, onSelect, parts, maxVisiblePips,
-                                 previousButtonVisibility, nextButtonVisibility, vertical),
-                       Embed.Comp(() => new PipsPagerCore()));
+        => Embed.Comp(new Props(count, selected, onSelect, parts, maxVisiblePips,
+                                previousButtonVisibility, nextButtonVisibility, vertical),
+                      () => new PipsPagerCore());
 
-    /// <summary>Controlled props via context — a reused ComponentEl never re-runs its factory, so props must flow
-    /// through a provider (the RadioButtons convention).</summary>
+    /// <summary>Controlled props RE-PUSHED to the core (<c>Embed.Comp(props, …)</c>) — a reused ComponentEl never
+    /// re-runs its factory — so props are delivered live (equality-gated); the core reads them with <c>UseProps</c>
+    /// (the RadioButtons convention).</summary>
     internal sealed record Props(int Count, int Selected, Action<int> OnSelect, TemplateParts? Parts,
                                  int MaxVisiblePips, PipsPagerButtonVisibility PrevVisibility,
-                                 PipsPagerButtonVisibility NextVisibility, bool Vertical)
-    {
-        internal static readonly Context<Props?> Channel = new(null);
-    }
+                                 PipsPagerButtonVisibility NextVisibility, bool Vertical);
 }
 
 /// <summary>The stateful core: pointer-over/focus reveal for the nav buttons, the scroll-to-center strip animation,
@@ -74,7 +71,7 @@ internal sealed class PipsPagerCore : Component
     public override Element Render()
     {
         // Hooks — stable order, unconditionally, before any early-out.
-        var props = UseContext(PipsPager.Props.Channel);
+        var props = UseProps<PipsPager.Props>();
         var hooks = UseContext(InputHooks.Current);
         var handles = UseRef(new List<NodeHandle>()).Value;   // pip node per index (roving focus targets)
         var stripRef = UseRef<NodeHandle>(default);
@@ -111,7 +108,6 @@ internal sealed class PipsPagerCore : Component
             anim.Animate(stripRef.Value, ch, from, to, Motion.ControlNormal, Easing.FluentPopOpen);
         }, DepKey.From(HashCode.Combine(selected, count, maxVisible, vertical)));
 
-        if (p is null) return new BoxEl();
         var parts = p.Parts;
 
         while (handles.Count < count) handles.Add(NodeHandle.Null);

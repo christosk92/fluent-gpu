@@ -36,13 +36,11 @@ public sealed class Pivot : Component
     private const float FlyInMs = 767f;
     private const float FlyInFadeMs = 333f;
 
-    /// <summary>Controlled props flow through a provider — a reused ComponentEl never re-runs its factory — so
-    /// Headers/SelectedIndex stay LIVE across parent re-renders (the RadioButtons pattern).</summary>
+    /// <summary>Controlled props RE-PUSHED to the core (<c>Embed.Comp(props, …)</c>) — a reused ComponentEl never
+    /// re-runs its factory — so Headers/SelectedIndex stay LIVE across parent re-renders; the core reads them with
+    /// <c>UseProps</c> (the RadioButtons pattern).</summary>
     internal sealed record Props(IReadOnlyList<string> Headers, Func<int, Element>? Content, int? SelectedIndex,
-                                 Action<int>? OnSelectionChanged, TemplateParts? Parts)
-    {
-        internal static readonly Context<Props?> Channel = new(null);
-    }
+                                 Action<int>? OnSelectionChanged, TemplateParts? Parts);
 
     /// <summary><paramref name="content"/> builds the selected tab's content (the WinUI PivotItem; null keeps a
     /// placeholder label). <paramref name="selectedIndex"/> controls the selection when set (WinUI SelectedIndex DP —
@@ -51,8 +49,8 @@ public sealed class Pivot : Component
     public static Element Create(IReadOnlyList<string> headers, Func<int, Element>? content = null,
                                  int? selectedIndex = null, Action<int>? onSelectionChanged = null,
                                  TemplateParts? parts = null)
-        => Ctx.Provide(Props.Channel, new Props(headers, content, selectedIndex, onSelectionChanged, parts),
-                       Embed.Comp(() => new Pivot()));
+        => Embed.Comp(new Props(headers, content, selectedIndex, onSelectionChanged, parts),
+                      () => new Pivot());
 
     /// <summary>SystemControlHighlightAltBaseMediumHighBrush — the hover AND pressed header foreground for both the
     /// selected and unselected legs (Pivot_themeresources.xaml:48-49, :51-52): SystemBaseMediumHighColor
@@ -64,7 +62,7 @@ public sealed class Pivot : Component
     public override Element Render()
     {
         // Hooks — stable order, unconditionally, before any early-out.
-        var props = UseContext(Props.Channel);
+        var props = UseProps<Props>();
         var (localSel, setLocalSel) = UseState(0);
         var contentNode = UseRef<NodeHandle>(default);
         var prevSel = UseRef(-1);
@@ -90,7 +88,7 @@ public sealed class Pivot : Component
             anim.Animate(node, AnimChannel.Opacity, 0f, 1f, FlyInFadeMs, spline);
         }, selected);
 
-        if (props is null || count == 0)
+        if (count == 0)
             return new BoxEl { Direction = 1, Grow = 1f };
 
         var headers = props.Headers;

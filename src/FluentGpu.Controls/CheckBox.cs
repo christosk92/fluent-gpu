@@ -104,13 +104,13 @@ public static partial class CheckBox
         // tip, so a left-to-right reveal is the pen order). The dash reveals the same way. Unchecked has NO child (an empty
         // placeholder would persist as the same node and suppress the insert/remove). The box fill/stroke ease under it.
         Element[] markChildren = on
-            ? [Ctx.Provide(MarkProps.Channel,
+            ? [Embed.Comp(
                 new MarkProps(s.GlyphSize + 2f, 1.8f, glyphColor, enabled, CheckBoxMotion.NormalOffToNormalOnMs, parts),
-                Embed.Comp(() => new DrawnCheckmark()))]
+                () => new DrawnCheckmark())]
             : indet
-                ? [Ctx.Provide(MarkProps.Channel,
+                ? [Embed.Comp(
                     new MarkProps(s.BoxSize * 0.5f, 2f, glyphColor, enabled, 200f, parts),
-                    Embed.Comp(() => new DrawnDash()))]
+                    () => new DrawnDash())]
                 : [];
 
         // The box keeps a 1px ring in every state; the engine eases Fill/BorderColor toward the Hover/Pressed legs of the
@@ -175,11 +175,9 @@ public static partial class CheckBox
         return parts.Apply(PartRoot, root) with { OnClick = toggle, Role = AutomationRole.CheckBox, Children = children };
     }
 
-    /// <summary>Runtime mark props flow through context because a reused ComponentEl never re-runs its factory.</summary>
-    internal sealed record MarkProps(float Size, float Thickness, ColorF Color, bool Pressable, float DurationMs, TemplateParts? Parts)
-    {
-        internal static readonly Context<MarkProps?> Channel = new(null);
-    }
+    /// <summary>Runtime mark props are RE-PUSHED live to the drawn-mark core (<c>Embed.Comp(props, …)</c>) because a
+    /// reused ComponentEl never re-runs its factory; the core reads them with <c>UseProps</c>.</summary>
+    internal sealed record MarkProps(float Size, float Thickness, ColorF Color, bool Pressable, float DurationMs, TemplateParts? Parts);
 }
 
 /// <summary>
@@ -208,8 +206,7 @@ internal sealed class DrawnCheckmark : Component
 
     public override Element Render()
     {
-        var p = UseContext(CheckBox.MarkProps.Channel)
-            ?? new CheckBox.MarkProps(14f, 1.8f, default, true, CheckBoxMotion.NormalOffToNormalOnMs, null);
+        var p = UseProps<CheckBox.MarkProps>();
 
         // Reveal the presented width 0→Size on mount (clip exposes the stroke left-to-right). LayoutEffect seeds it before
         // the first anim tick, so the very first recorded frame is already at width 0 — no full-checkmark flash.
@@ -242,8 +239,7 @@ internal sealed class DrawnDash : Component
 {
     public override Element Render()
     {
-        var p = UseContext(CheckBox.MarkProps.Channel)
-            ?? new CheckBox.MarkProps(10f, 2f, default, true, 200f, null);
+        var p = UseProps<CheckBox.MarkProps>();
 
         Context.UseKeyframes(AnimChannel.StrokeTrimEnd,
             [new Keyframe(0f, 0f, Easing.Linear), new Keyframe(1f, 1f, CheckBoxMotion.AcceptTrimEndEase)], p.DurationMs, loop: false, DepKey.Empty);

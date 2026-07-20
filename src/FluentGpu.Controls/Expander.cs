@@ -72,16 +72,14 @@ public sealed class Expander : Component
     public static Element Create(string header, Element content, bool initiallyExpanded = false)
         => Embed.Comp(() => new Expander { Header = header, Content = content, InitiallyExpanded = initiallyExpanded });
 
-    /// <summary>LIVE content slots delivered by a parent provider (the SelectorBar/RadioButtons pattern). An
-    /// <see cref="Expander"/> is an autonomous component: its <see cref="Content"/>/<see cref="HeaderContent"/>/
+    /// <summary>LIVE content slots RE-PUSHED to the core (<c>Embed.Comp(slots, …)</c>; the SelectorBar/RadioButtons
+    /// pattern). An <see cref="Expander"/> is an autonomous component: its <see cref="Content"/>/<see cref="HeaderContent"/>/
     /// <see cref="Parts"/> FIELDS are frozen at first mount (a reused <c>ComponentEl</c> never re-runs its factory),
     /// so dynamic content passed by value would go stale. A parent that rebuilds its content each render must instead
-    /// wrap the Expander in <c>Ctx.Provide(Expander.SlotsChannel, new ExpanderSlots(...), Embed.Comp(() =&gt; new
-    /// Expander { InitiallyExpanded = …, IsExpanded = … }))</c>; when present these slots WIN over the fields, and the
-    /// Expander re-renders reactively whenever the provided value changes (context is signal-backed).</summary>
+    /// mount the Expander as <c>Embed.Comp(new ExpanderSlots(...), () =&gt; new Expander { InitiallyExpanded = …,
+    /// IsExpanded = … })</c>; when present these slots WIN over the fields, and the Expander re-renders reactively
+    /// whenever the re-pushed value changes (props are signal-backed). Read with <c>UsePropsOrDefault</c>.</summary>
     public sealed record ExpanderSlots(Element? HeaderContent, Element Content, TemplateParts? Parts);
-
-    internal static readonly Context<ExpanderSlots?> SlotsChannel = new(null);
 
     // WinUI Expander durations/easings (Expander.xaml, ExpandDown ~62-77 / CollapseUp ~78-90), applied to the clip
     // wrapper's LAYOUT height (SizeMode.Reflow) instead of WinUI's content TranslateY-into-snapped-space:
@@ -99,9 +97,9 @@ public sealed class Expander : Component
 
     public override Element Render()
     {
-        // Live content slots (SettingsExpander etc.) win over the frozen fields; reading the context subscribes this
-        // component so a parent that rebuilds its content re-renders us with it. Static callers provide no slots → fields.
-        var slots = UseContext(SlotsChannel);
+        // Live content slots (SettingsExpander etc.) win over the frozen fields; reading the re-pushed props subscribes
+        // this component so a parent that rebuilds its content re-renders us with it. Static callers provide no slots → fields.
+        var slots = UsePropsOrDefault<ExpanderSlots>();
         Element? headerContent = slots?.HeaderContent ?? HeaderContent;
         Element contentSlot = slots?.Content ?? Content;
         TemplateParts? parts = slots?.Parts ?? Parts;

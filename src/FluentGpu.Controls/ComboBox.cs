@@ -129,10 +129,12 @@ public sealed class ComboBox : Component
     /// <see cref="TemplateParts"/> for the contract.</summary>
     public TemplateParts? Parts;
 
-    /// <summary>LIVE enabled flag (provider idiom): <see cref="IsEnabled"/> is a plain field, so via <c>Embed.Comp</c>
-    /// it freezes at mount — toggling a setting that enables/disables a dropdown would be silently dropped. <see cref="Create"/>
-    /// routes it through this provider so the field re-renders reactively; the frozen field is the fallback.</summary>
-    internal static readonly Context<bool?> EnabledChannel = new(null);
+    /// <summary>LIVE enabled flag re-pushed to the mounted core (<c>Embed.Comp(props, …)</c>): <see cref="IsEnabled"/>
+    /// is a plain field, so via a propless <c>Embed.Comp</c> it freezes at mount — toggling a setting that enables/
+    /// disables a dropdown would be silently dropped. <see cref="Create"/> routes it through re-pushed props so the
+    /// flag re-renders reactively; the frozen field is the fallback for direct callers. A tiny record carries the bool
+    /// because re-pushed props are class-typed.</summary>
+    internal sealed record EnabledProps(bool IsEnabled);
 
     public static Element Create(IReadOnlyList<string> items, Signal<int> selectedIndex, bool editable = false,
                                  Signal<string>? text = null, float width = 220f, string placeholder = "",
@@ -142,14 +144,14 @@ public sealed class ComboBox : Component
                                  bool touchInputMode = false, Field<int>? field = null,
                                  IReadOnlyList<string>? itemDescriptions = null,
                                  IReadOnlyList<bool>? itemEnabled = null)
-        => Ctx.Provide(EnabledChannel, isEnabled, Embed.Comp(() => new ComboBox
+        => Embed.Comp(new EnabledProps(isEnabled), () => new ComboBox
         {
             Items = items, ItemDescriptions = itemDescriptions, ItemEnabled = itemEnabled,
             SelectedIndex = selectedIndex, Editable = editable, Text = text,
             Width = width, Placeholder = placeholder, IsEnabled = isEnabled, OnSelectionChanged = onSelectionChanged,
             OnTextSubmitted = onTextSubmitted,
             Header = header, Description = description, ErrorText = errorText, TouchInputMode = touchInputMode, Field = field,
-        }));
+        });
 
     internal bool IsItemEnabled(int index)
         => ItemEnabled is not { } flags || index < 0 || index >= flags.Count || flags[index];
@@ -170,7 +172,7 @@ public sealed class ComboBox : Component
         // Read the enabled flag reactively: the provider (Create) wins over the frozen field. A shadowing local named
         // IsEnabled so every downstream read in this method — the field chrome, OpenPopup gate, key/click handlers —
         // sees the live value with no further edits. `this.IsEnabled` is the mount-time fallback for direct callers.
-        bool IsEnabled = UseContext(EnabledChannel) ?? this.IsEnabled;
+        bool IsEnabled = UsePropsOrDefault<EnabledProps>()?.IsEnabled ?? this.IsEnabled;
         var anchor = UseRef<NodeHandle>(default);
         var handle = UseRef<OverlayHandle?>(null);
         var fallbackText = UseSignal("");

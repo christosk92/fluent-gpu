@@ -72,10 +72,8 @@ public static partial class SettingsExpander
         public TemplateParts? Parts { get; init; }
     }
 
-    internal static readonly Context<Options?> OptionsContext = new(null);
-
     public static Element Create(Options options)
-        => Ctx.Provide(OptionsContext, options, Embed.Comp(() => new SettingsExpanderCore()));
+        => Embed.Comp(options, () => new SettingsExpanderCore());
 
     public static Element Item(string header, string? description, Element? content = null,
                                SettingsCard.ContentAlignment alignment = SettingsCard.ContentAlignment.Right,
@@ -103,7 +101,7 @@ sealed class SettingsExpanderCore : Component
 {
     public override Element Render()
     {
-        var o = UseContext(SettingsExpander.OptionsContext) ?? new SettingsExpander.Options();
+        var o = UseProps<SettingsExpander.Options>();
         var s = o.Style ?? new SettingsExpander.Style();
 
         var headerCard = SettingsCard.Create(new SettingsCard.Options
@@ -168,15 +166,15 @@ sealed class SettingsExpanderCore : Component
             },
         };
 
-        // Deliver the (freshly rebuilt) header/content/parts to the Expander through its slots context — NOT as
-        // constructor args. The Expander is an autonomous component whose factory is discarded on reuse, so field
-        // values are frozen at first mount; routing through the provider keeps dynamic content (e.g. a live equalizer
-        // curve) reactive across parent re-renders. Only the stable open-state stays on the (frozen) fields.
-        return Ctx.Provide(Expander.SlotsChannel, new Expander.ExpanderSlots(headerCard, items, parts),
-            Embed.Comp(() => new Expander
+        // Deliver the (freshly rebuilt) header/content/parts to the Expander as RE-PUSHED props — NOT as constructor
+        // args. The Expander is an autonomous component whose factory is discarded on reuse, so field values are frozen
+        // at first mount; re-pushing the slots keeps dynamic content (e.g. a live equalizer curve) reactive across
+        // parent re-renders. Only the stable open-state stays on the (frozen) fields.
+        return Embed.Comp(new Expander.ExpanderSlots(headerCard, items, parts),
+            () => new Expander
             {
                 InitiallyExpanded = o.InitiallyExpanded,
                 IsExpanded = o.IsExpanded,
-            }));
+            });
     }
 }

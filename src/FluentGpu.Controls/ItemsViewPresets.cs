@@ -114,16 +114,24 @@ internal sealed class ItemsViewListPreset : Component
         for (int i = 0; i < count; i++) slots[i] = i;
 
         // The 200ms live-reorder dwell ticks on the frame clock ONLY while a drag is active (the conditional
-        // FrameClock read is safe — UseContext keeps no hook cell).
-        if (reordering)
+        // FrameClock read is safe — UseContext keeps no hook cell). The tick subscription drives the per-frame
+        // re-render; the dwell ADVANCE + orderVersion bump run in the post-render effect below, NOT here — writing
+        // orderVersion in the render body would be a backwards-write (the render subscribes it above to bootstrap
+        // the reorder loop on drag-start, so a same-run write re-marks this render stale = a convergence risk).
+        long tick = reordering ? UseContext(FrameClock.Tick) : 0L;
+
+        // Advance the dwell OUTSIDE the tracked render scope: this effect (a SEPARATE computation) bumps orderVersion,
+        // which re-renders this preset (the subscribe above) AND re-seeds ItemsView's displacement channel — so the
+        // read and the write never share one computation. Keyed on the frame tick so it advances once per frame while
+        // a drag is live; the transition to idle runs it once more to reset the dwell clock.
+        UseEffect(() =>
         {
-            _ = UseContext(FrameClock.Tick);
+            if (!reorder.IsActive) { lastDwellTick.Value = 0; return; }
             long now = Environment.TickCount64;
             float dt = lastDwellTick.Value == 0 ? 0f : Math.Clamp(now - lastDwellTick.Value, 0, 100);
             lastDwellTick.Value = now;
             if (reorder.Advance(dt)) orderVersion.Value = orderVersion.Peek() + 1;
-        }
-        else lastDwellTick.Value = 0;
+        }, DepKey.From(reordering ? tick + 1 : 0L));
 
         var ctx = Context;   // edge auto-scroll host-node rect + dwell re-render context
 
@@ -345,15 +353,18 @@ internal sealed class ItemsViewGridPreset : Component
         var slots = order.Value;
         for (int i = 0; i < count; i++) slots[i] = i;
 
-        if (reordering)
+        // The 300ms grid dwell subscribes the frame tick to re-render each frame; the dwell ADVANCE + orderVersion bump
+        // run in the post-render effect below, NOT the render body — writing orderVersion here would be a backwards-write
+        // (the render subscribes it above to bootstrap the reorder loop, so a same-run write re-marks this render stale).
+        long tick = reordering ? UseContext(FrameClock.Tick) : 0L;
+        UseEffect(() =>
         {
-            _ = UseContext(FrameClock.Tick);   // safe conditional read (no hook cell) — drives the 300ms dwell
+            if (!rl.IsActive) { lastDwellTick.Value = 0; return; }
             long now = Environment.TickCount64;
             float dt = lastDwellTick.Value == 0 ? 0f : Math.Clamp(now - lastDwellTick.Value, 0, 100);
             lastDwellTick.Value = now;
             if (rl.Advance(dt)) orderVersion.Value = orderVersion.Peek() + 1;
-        }
-        else lastDwellTick.Value = 0;
+        }, DepKey.From(reordering ? tick + 1 : 0L));
 
         float stride = TileSize + ItemGap;
         void Bump() => orderVersion.Value = orderVersion.Peek() + 1;
