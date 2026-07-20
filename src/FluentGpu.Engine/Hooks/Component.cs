@@ -154,13 +154,6 @@ public abstract class Component
     /// gesture-arena member and routes the winner's Tap/Hold/Pan event to <paramref name="handler"/>. No re-render.</summary>
     protected void UseGesture(GestureType kind, Action<GestureEventArgs> handler) => Context.UseGesture(kind, handler);
 
-    /// <summary>
-    /// True for run-once (signals-native) components: the reconciler runs their body untracked, so the render-effect
-    /// never re-subscribes and never re-renders — reactivity comes purely from the bindings/For/Show inside. False for
-    /// classic <see cref="Component"/>s, whose render-effect re-runs on their own state/context changes (granular).
-    /// </summary>
-    public virtual bool RunsOnce => false;
-
     /// <summary>Run one render pass with hook bookkeeping. In DEBUG / FLUENTGPU_DIAG builds the render duration is fed to
     /// the <see cref="FluentGpu.Hosting.RenderBudget"/> tripwire (slow-render + every-frame-re-render detection); the
     /// timing guard folds away entirely in release (<c>CompiledIn</c> is a const <c>false</c>), so the shipping path is
@@ -194,29 +187,4 @@ public abstract class Component
     /// value is being silently dropped). Only invoked when <see cref="ChecksReuse"/> is true and the guard is enabled;
     /// never called in release. Deliver such data reactively (Signal / Ctx.Provide) or remount with a Key instead.</summary>
     public virtual void DebugCheckReuse(Component next) { }
-}
-
-/// <summary>
-/// A signals-native component: <see cref="Setup"/> runs ONCE at mount (the SolidJS model) — create signals, wire
-/// bindings (<c>TransformBind</c>/<c>For</c>/<c>Show</c>) and return the tree. The component never re-renders;
-/// fine-grained bindings update exactly the nodes that read a changed signal. Use this for the highest-performance UI;
-/// use plain <see cref="Component"/> when you prefer the re-render model (still granular).
-/// </summary>
-public abstract class ReactiveComponent : Component
-{
-    private Element? _tree;
-    public sealed override bool RunsOnce => true;
-
-    /// <summary>Build the tree once. Reads of signals here do NOT subscribe a re-render — bind them instead.</summary>
-    public abstract Element Setup();
-
-    public sealed override Element Render() => _tree ??= Setup();
-
-    /// <summary>Drop the cached tree so the next render re-runs <see cref="Setup"/>. Used by the host's live re-theme
-    /// (<c>Reconciler.RethemeAll</c>) to refresh construction-resolved token colors (e.g. a <c>Tok.*</c> read directly in
-    /// <c>Setup</c>) without a remount: the render-effect re-runs <c>Setup</c> against the SAME <see cref="Component.Context"/>,
-    /// so positional hook cells (state signals, effects, refs) are reused — state and signal identity survive, exactly like
-    /// a plain <see cref="Component"/> re-render. Safe when <c>Setup</c>'s hook call-order and root element type are
-    /// theme-invariant (no hook call gated on a token value), which holds for all in-repo ReactiveComponents.</summary>
-    public void InvalidateTree() => _tree = null;
 }

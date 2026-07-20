@@ -100,11 +100,11 @@ readonly record struct PlayerBarLayout(
     }
 }
 
-sealed class PlayerBar : ReactiveComponent
+sealed class PlayerBar : Component
 {
     static readonly bool DiagEnabled = Diag.EnvFlag("WAVEE_PLAYERBAR_DIAG");
 
-    public override Element Setup()
+    public override Element Render()
     {
         var viewport = UseContextSignal(Viewport.Size);
         var layout = UseSignal(PlayerBarLayout.FromWidth(viewport.Peek().Width));

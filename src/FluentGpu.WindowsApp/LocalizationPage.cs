@@ -63,14 +63,15 @@ sealed class LocalizationPage : Component
 }
 
 /// <summary>
-/// The live demo body, a <see cref="ReactiveComponent"/> — its <see cref="Setup"/> runs ONCE, so the fact that the
-/// strings still change on a language switch PROVES the no-re-render path: every dynamic label is a bound thunk
-/// (<c>L</c>/<c>Lf</c> or a <see cref="GalleryPage.LiveText"/> reading the culture epoch + the count signal), not a
-/// re-rendered value. The only thing that re-renders is the inner <see cref="LanguagePicker"/> (to move its selection).
+/// The live demo body, a run-once <see cref="Component"/> — its <see cref="Render"/> reads no signals directly, so it
+/// renders exactly ONCE; the fact that the strings still change on a language switch PROVES the no-re-render path:
+/// every dynamic label is a bound thunk (<c>L</c>/<c>Lf</c> or a <see cref="GalleryPage.LiveText"/> reading the culture
+/// epoch + the count signal), not a re-rendered value. The only thing that re-renders is the inner
+/// <see cref="LanguagePicker"/> (to move its selection).
 /// </summary>
-sealed class LocLivePanel : ReactiveComponent
+sealed class LocLivePanel : Component
 {
-    public override Element Setup()
+    public override Element Render()
     {
         // The plural-demo count, a hot-path scalar bound straight into the count thunks (no re-render on scrub). The
         // engine Slider rides a normalized 0..1 signal; we map it to an integer 0..30 count for the plural operand.

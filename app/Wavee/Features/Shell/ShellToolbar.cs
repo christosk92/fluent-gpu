@@ -19,7 +19,7 @@ namespace Wavee;
 // RESPONSIVE (mirrors PlayerBar): the right cluster collapses at width thresholds (band-gated via the Viewport signal so
 // it only re-renders when a threshold is crossed, not every resize frame) — otherwise the fixed account/icon cluster
 // eats the row and the omnibar shrinks to an unusable sliver on a narrow window.
-sealed class ShellToolbar : ReactiveComponent
+sealed class ShellToolbar : Component
 {
     readonly Signal<Route> _route;
     readonly Signal<bool> _canBack;
@@ -45,7 +45,7 @@ sealed class ShellToolbar : ReactiveComponent
         _backHistory = backHistory; _forwardHistory = forwardHistory;
     }
 
-    public override Element Setup()
+    public override Element Render()
     {
         var b = UseContext(PlaybackBridge.Slot);
         var ui = UseContext(ShellUi.Slot);   // the right-rail chrome state — the Friends button toggles the Friends panel

@@ -28,8 +28,8 @@ property *binding* is a finer one. **No full-app re-render, no global dirty flag
 1. To make something update, a signal it **reads** must change. `.Value` subscribes; `.Peek()` does not.
 2. `Component.Render()` re-runs on its **own** state/context only — never because a parent re-rendered.
    **Parent→child data flows via signals or context, never constructor args** (those freeze at mount).
-3. `ReactiveComponent.Setup()` runs **once**. Show dynamic values via a **bound prop** (`Text = sig` signal-direct, or `Text = Prop.Of(() => …)` for derived text),
-   never `Ui.Text(sig.Value)`. (#1 signals-native mistake.)
+3. There is ONE `Component` base (no `ReactiveComponent`). Every `Render()` is tracked; a render that reads no signals renders **once** — run-once is inferred, not a mode. In a run-once render, show dynamic values via a **bound prop** (`Text = sig` signal-direct, or `Text = Prop.Of(() => …)` for derived text),
+   never `Ui.Text(sig.Value)`. (#1 mistake.)
 4. A bind thunk must read `.Value` (subscribes), not `.Peek()`.
 5. Every bindable channel is ONE `Prop<T>` prop taking a value, a `Func<T>` (`Prop.Of` for inline lambdas), or a concrete signal. Bound `Transform`/`Opacity`/`Fill` = compositor-only; bound `Width`/`Height`/`Text` = scoped relayout.
    Prefer a transform bind for hot values.
@@ -45,7 +45,7 @@ property *binding* is a finer one. **No full-app re-render, no global dirty flag
 
 ```csharp
 using static FluentGpu.Dsl.Ui;   // VStack, HStack, Text, Heading, Button, Image, Grid, ScrollView
-using FluentGpu.Hooks;            // Component, ReactiveComponent, Embed, Ctx, Flow
+using FluentGpu.Hooks;            // Component, Embed, Ctx, Flow
 using FluentGpu.Signals;          // Signal<T>, FloatSignal, Memo<T>
 using FluentGpu.Controls;         // Button, Slider, NavigationView, Virtual, …
 
@@ -159,7 +159,7 @@ Design corpus (architecture authority, canon-gated) is `design/`; as-built react
 
 ## Deeper docs (read for the relevant task)
 - `theming.md` (this skill dir) — **how theming + LIVE theme switching work end-to-end**: tokens, the `Epoch`/`RethemeAll`/transition-window mechanism, the OS-follow + persistence wiring, what updates vs what's frozen, and the gotchas (frozen constructor-arg literals, `Flow.For`/bound colors, control `ColorF` props, app-local color constants, Mica/DWM). **Read before any theme work or "X won't change theme" debugging.**
-- `docs/guide/reactivity.md` — signals, hooks, `Component` vs `ReactiveComponent`, bindings, context (the core).
+- `docs/guide/reactivity.md` — signals, hooks, the one `Component` model (run-once inferred), bindings, context (the core).
 - `docs/guide/components-elements-layout.md` — element zoo, layout, controls, navigation, virtualization, theming.
 - `docs/guide/rendering-and-performance.md` — frame pipeline, scoped relayout + boundary firewall, optimization guide.
 - `docs/guide/pitfalls.md` — symptom → cause → fix.

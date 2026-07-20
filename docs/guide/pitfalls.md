@@ -9,7 +9,7 @@ Read this before debugging. Each row is a real failure mode of the signals-first
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| A `ReactiveComponent` shows a stale value forever | `Setup()` runs **once**; `Ui.Text(sig.Value)` read the value one time | Use a bound prop: `new TextEl("") { Text = sig }` (signal-direct) or `Text = Prop.Of(() => f(sig.Value))`. In `Setup()`, *everything dynamic* must be a bind / `For` / `Show`. |
+| A run-once component shows a stale value forever | A `Component` whose `Render()` reads no signals renders **once**; `Ui.Text(sig.Value)` read the value one time | Use a bound prop: `new TextEl("") { Text = sig }` (signal-direct) or `Text = Prop.Of(() => f(sig.Value))`. In a render that should stay run-once, *everything dynamic* must be a bind / `For` / `Show`. |
 | A binding never updates | The thunk used `.Peek()` (no subscribe) — or read a plain field, not a signal | Read `.Value` inside the thunk: `Transform = Prop.Of(() => Affine2D.Translation(sig.Value, 0))`. `.Value` subscribes the binding effect; `.Peek()` does not. |
 | Setting a signal does nothing visible | Whatever should react never *read* that signal (no subscription exists) | Make the renderer/binding read `signal.Value` (in `Render()` to re-render, or in a bind thunk to update a node). |
 | One cell stays stale after a list refresh | A bound row reads a reactive slot index but its bind captured a mount-time collection/snapshot; a fresh `Prop.Of` thunk on re-render does not replace the mounted thunk | Use `BoundItems.From`/`BoundItems.Project` with typed `ItemsView.CreateBound<T>`, and read `scope.Item.Value` inside every bound cell. Resolve actions from the current source instead of capturing an earlier row value. |

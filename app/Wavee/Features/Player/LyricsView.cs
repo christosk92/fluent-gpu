@@ -1303,13 +1303,13 @@ sealed class LyricsUpgradeObserver(Action<LyricsDocument> onNext) : IObserver<Ly
     public void OnNext(LyricsDocument value) => onNext(value);
 }
 
-sealed class LyricsTicker : ReactiveComponent
+sealed class LyricsTicker : Component
 {
     public required LyricsView Owner;
     Timer? _timer;
     int _timerGeneration;
 
-    public override Element Setup()
+    public override Element Render()
     {
         Owner.ResetScrollSnap();
         LyricsView.ProbeActive = Owner;   // probe hook (harmless otherwise): the live instance the advance-probe drives

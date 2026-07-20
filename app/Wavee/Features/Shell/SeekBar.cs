@@ -326,11 +326,11 @@ sealed class SeekBar : Component
 /// track is playing, it subscribes to the host frame clock and advances the owner's <c>_displayFrac</c> signal each
 /// frame so the playhead interpolates smoothly between the ~1 Hz position ticks. The owner unmounts it on pause/stop,
 /// idling the frame loop. It NEVER re-renders the owner (it only writes a signal the compositor binds read).</summary>
-sealed class SeekTicker : ReactiveComponent
+sealed class SeekTicker : Component
 {
     public required SeekBar Owner;
 
-    public override Element Setup()
+    public override Element Render()
     {
         var tick = UseContextSignal(FrameClock.Tick);
         UseSignalEffect(() =>

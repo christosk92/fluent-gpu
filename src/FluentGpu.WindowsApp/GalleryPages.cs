@@ -1465,7 +1465,7 @@ sealed class StatePage : Component
         [
             BodyStrong("Rules that prevent most state bugs"),
             Rule(".Value subscribes the current computation; .Peek() reads without subscribing. A bind thunk must read .Value."),
-            Rule("ReactiveComponent.Setup() runs ONCE — show changing values via a bound prop (Text = sig, or Text = Prop.Of(() => …) for derived text), never Ui.Text(sig.Value)."),
+            Rule("A component whose Render() reads no signals renders ONCE — show changing values via a bound prop (Text = sig, or Text = Prop.Of(() => …) for derived text), never Ui.Text(sig.Value)."),
             Rule("Never write a signal during render (infinite loop) — write from an event handler or UseEffect."),
             Rule("Parent→child data flows through signals or context, never constructor args — those freeze at mount."),
             Rule("Prefer Transform/Opacity/Fill binds for hot values; Width/Height/Text binds cost a scoped relayout."),

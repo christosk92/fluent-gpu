@@ -307,16 +307,17 @@ internal sealed class MarqueeScroller : Component
 
 /// <summary>After <c>_anim.Tick</c>, mirrors the scroller host's live <see cref="AnimChannel.TranslateX"/> into the
 /// shared <see cref="MarqueeScroller.ScrollX"/> signal so <see cref="MarqueeHost"/> can derive per-edge fade bands.
-/// ReactiveComponent + <see cref="InputHooks.SetAfterAnimations"/> avoids the stale-closure trap of wiring this inside
+/// A run-once <see cref="Component"/> (its render reads only a stable ambient context, so the render-effect never
+/// re-fires) + <see cref="InputHooks.SetAfterAnimations"/> avoids the stale-closure trap of wiring this inside
 /// <see cref="MarqueeScroller.Render"/> (where <c>UseSignalEffect</c> freezes <c>canScroll</c> from the first mount).</summary>
-internal sealed class MarqueeScrollTicker : ReactiveComponent
+internal sealed class MarqueeScrollTicker : Component
 {
     public Signal<float> ContainerW = null!;
     public Signal<float> TextW = null!;
     public Signal<float> ScrollX = null!;
     public Ref<NodeHandle> ScrollerHost = null!;
 
-    public override Element Setup()
+    public override Element Render()
     {
         var hooks = UseContext(InputHooks.Current);
         UseEffect(() => hooks.SetAfterAnimations(this, Sample), DepKey.Empty);   // mount-once (no signal reads)

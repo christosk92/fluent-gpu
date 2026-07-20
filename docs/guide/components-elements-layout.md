@@ -7,7 +7,7 @@
 ## The element zoo
 
 `Element` is an immutable record describing a node — cheap to build, never touches the scene directly. You compose
-them in `Render()`/`Setup()` and return the root. Build them with the `Ui.*` helpers (terse) or the records directly
+them in `Render()` and return the root. Build them with the `Ui.*` helpers (terse) or the records directly
 (full control).
 
 | Element | Builder | What it is |

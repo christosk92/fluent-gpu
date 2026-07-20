@@ -323,6 +323,112 @@ sealed class FromRefProbe : Component
     public override Element Render() { UseEffect(() => { Runs++; }, DepKey.FromRef(Obj)); return new BoxEl(); }
 }
 
+// ── G4b component unification + per-component ReactiveScope probes ────────────────────────────────────────────────
+// A component whose Render() reads NO signals must render exactly once — run-once is a consequence of subscribing to
+// nothing, not a class/flag (ReactiveComponent is deleted).
+sealed class SignalFreeProbe : Component
+{
+    public int Renders;
+    public override Element Render() { Renders++; return new BoxEl { Width = 10f, Height = 10f }; }
+}
+
+sealed class SignalFreeRoot : Component
+{
+    public readonly SignalFreeProbe Probe = new();
+    public Signal<int>? Unrelated;
+    public int RootRenders;
+    public override Element Render()
+    {
+        RootRenders++;
+        var u = UseSignal(0);
+        Unrelated = u;
+        _ = u.Value;   // the ROOT subscribes to an unrelated signal → writing it makes real render work flush
+        return new BoxEl { Children = [Embed.Comp(() => Probe)] };
+    }
+}
+
+// The former-ReactiveComponent idiom under the unified model: reads Tok.* DIRECTLY in render (no signal subscription)
+// and holds hook state. RethemeAll must re-run it IN PLACE — new token color, SAME node, preserved hook state.
+sealed class RethemeInPlaceProbe : Component
+{
+    public int Renders;
+    public int SeenState;
+    public Action<int>? SetState;
+    public override Element Render()
+    {
+        Renders++;
+        var (n, setN) = UseState(1);
+        SeenState = n; SetState = setN;
+        return new BoxEl { Children = [new TextEl("g4b-themed") { Color = Tok.TextPrimary, Size = 14f }] };
+    }
+}
+
+sealed class ScopeCounters
+{
+    public int Renders;
+    public int Cleanups;
+    public readonly Signal<int> Dep = new(0);
+    public readonly Signal<bool> Show = new(true);
+}
+
+sealed class ScopeLifetimeChild : Component
+{
+    readonly ScopeCounters _c;
+    public ScopeLifetimeChild(ScopeCounters c) => _c = c;
+    public override Element Render()
+    {
+        _c.Renders++;
+        _ = _c.Dep.Value;                                  // render-effect subscribes to Dep
+        UseEffect(() => { return () => _c.Cleanups++; });  // cleanup runs once at unmount, via the scope
+        return new BoxEl();
+    }
+}
+
+sealed class ScopeLifetimeRoot : Component
+{
+    public readonly ScopeCounters C = new();
+    public override Element Render()
+        => Flow.Show(() => C.Show.Value, Embed.Comp(() => new ScopeLifetimeChild(C)));
+}
+
+// KeepAlive parking must NOT dispose the scope: the page instance + hook state survive a park/reactivate, a parked page
+// defers renders (no re-render even when a signal it read changes), and reactivation replays exactly once.
+sealed class ScopeParkProbe : Component
+{
+    public Signal<string>? Route;
+    public readonly Signal<int> Ping = new(0);
+    public readonly Dictionary<string, int> Renders = new();
+    public readonly Dictionary<string, int> Constructions = new();
+    public override Element Render()
+    {
+        var route = UseSignal("a");
+        Route = route;
+        return Flow.KeepAlive(
+            () => route.Value,
+            key => key,
+            key => Embed.Comp(() => new ScopeParkPage(key, this)),
+            new KeepAliveOptions(MaxEntries: 3));
+    }
+}
+
+sealed class ScopeParkPage : Component
+{
+    readonly string _key;
+    readonly ScopeParkProbe _o;
+    public ScopeParkPage(string key, ScopeParkProbe o)
+    {
+        _key = key; _o = o;
+        o.Constructions.TryGetValue(key, out int c); o.Constructions[key] = c + 1;
+    }
+    public override Element Render()
+    {
+        _o.Renders.TryGetValue(_key, out int r); _o.Renders[_key] = r + 1;
+        _ = _o.Ping.Value;              // subscribe to Ping
+        var (n, _) = UseState(0);       // component-local state that must survive parking
+        return new BoxEl { Width = 40f, Height = 40f, Children = [Text("park-" + _key + ":" + n)] };
+    }
+}
+
 // ── G4a call-site-keyed hook substrate probes ────────────────────────────────────────────────────────────────────
 // A CONDITIONAL hook (Middle) between two unconditional neighbours. With the positional cursor this desynced the
 // neighbours' cells; with the keyed substrate each hook keeps its own call-site cell regardless of the conditional.
@@ -5262,6 +5368,109 @@ static class Slice
                     tripped && clean, $"tripped={tripped} clean={clean}");
             }
             finally { BackwardsWriteGuard.Enabled = prevEnabled; BackwardsWriteGuard.ThrowOnViolation = prevThrow; }
+        }
+    }
+
+    // G4b — Component/ReactiveComponent unification (one tracked model; run-once inferred; RethemeAll re-runs in place)
+    // + per-component ReactiveScope ownership (render-effect + hook cleanups owned by one scope disposed at unmount;
+    // KeepAlive parking never disposes it). Bindings stay NODE-owned (they outlive a render but die with their node).
+    static void UnifyChecks(StringTable strings)
+    {
+        // gate.unify.signal-free-render-once — a render that reads no signals runs exactly once, even while an unrelated
+        // sibling re-renders across many flushes (run-once is a consequence of subscribing to nothing, not a mode).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("unify-once", new Size2(200, 200), 1f));
+            window.Show();
+            var root = new SignalFreeRoot();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, root);
+            host.RunFrame();
+            bool mountedOnce = root.Probe.Renders == 1 && root.RootRenders == 1;
+            for (int i = 0; i < 5; i++) { root.Unrelated!.Value = i + 1; host.RunFrame(); }
+            bool rootReran = root.RootRenders >= 6;          // the root really re-rendered on each unrelated flush…
+            bool childStillOnce = root.Probe.Renders == 1;   // …but the signal-free child never did
+            Check("gate.unify.signal-free-render-once a signal-free render runs exactly once across unrelated flushes",
+                mountedOnce && rootReran && childStillOnce,
+                $"childRenders={root.Probe.Renders} rootRenders={root.RootRenders}");
+        }
+
+        // gate.unify.retheme-in-place — RethemeAll re-runs a run-once component's render IN PLACE: token color updates,
+        // hook state + node identity preserved (no remount). Replaces the deleted ReactiveComponent.InvalidateTree path.
+        {
+            ThemeKind saved = Tok.Theme;
+            try
+            {
+                Tok.Use(ThemeKind.Dark);
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("unify-retheme", new Size2(240, 120), 1f));
+                window.Show();
+                var probe = new RethemeInPlaceProbe();
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe);
+                host.RunFrame();
+                bool once = probe.Renders == 1;
+                probe.SetState!(42); host.RunFrame();
+                bool stateWrite = probe.SeenState == 42 && probe.Renders == 2;
+                var textNode = FindTextNode(host.Scene, strings, host.Scene.Root, "g4b-themed");
+                ColorF darkColor = host.Scene.Paint(textNode).TextColor;
+
+                Tok.Use(ThemeKind.Light);
+                host.Reconciler.RethemeAll();
+                host.RunFrame();
+                var textAfter = FindTextNode(host.Scene, strings, host.Scene.Root, "g4b-themed");
+                bool sameNode = !textAfter.IsNull && textAfter == textNode;
+                bool colorUpdated = darkColor != Tok.TextPrimary && host.Scene.Paint(textAfter).TextColor == Tok.TextPrimary;
+                bool statePreserved = probe.SeenState == 42 && probe.Renders == 3;   // re-rendered in place; state survived
+                Check("gate.unify.retheme-in-place RethemeAll re-runs a run-once render in place (color updates; state + node identity preserved)",
+                    once && stateWrite && sameNode && colorUpdated && statePreserved,
+                    $"once={once} stateWrite={stateWrite} sameNode={sameNode} colorUpdated={colorUpdated} statePreserved={statePreserved} renders={probe.Renders}");
+            }
+            finally { Tok.Use(saved); }
+        }
+
+        // gate.unify.scope-owns-lifetime — unmount == Scope.Dispose(): it disposes the render-effect (the signal it read
+        // has zero subscribers afterward) AND runs the hook cleanups exactly once, both via the ONE per-component scope.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("unify-scope", new Size2(200, 200), 1f));
+            window.Show();
+            var root = new ScopeLifetimeRoot();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, root);
+            host.RunFrame();
+            var c = root.C;
+            bool mounted = c.Renders == 1 && c.Cleanups == 0 && c.Dep.SubscriberCount == 1;
+            c.Dep.Value = 1; host.RunFrame();
+            bool reran = c.Renders == 2 && c.Cleanups == 0;
+            c.Show.Value = false; host.RunFrame();               // unmount the child
+            bool cleanedOnce = c.Cleanups == 1;
+            bool effectDisposed = c.Dep.SubscriberCount == 0;    // render-effect unsubscribed ⇒ disposed via the scope
+            c.Dep.Value = 2; host.RunFrame();                    // a post-unmount write must not re-run or re-clean
+            bool inert = c.Renders == 2 && c.Cleanups == 1;
+            Check("gate.unify.scope-owns-lifetime unmount disposes the render-effect + runs hook cleanups exactly once, via the scope",
+                mounted && reran && cleanedOnce && effectDisposed && inert,
+                $"renders={c.Renders} cleanups={c.Cleanups} subs={c.Dep.SubscriberCount}");
+        }
+
+        // gate.unify.scope-keepalive-parks — parking does NOT dispose the scope: the page instance + hook state survive,
+        // a parked page defers renders (no re-render even when a signal it read changes), and reactivation replays once.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("unify-park", new Size2(200, 200), 1f));
+            window.Show();
+            var probe = new ScopeParkProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe);
+            host.RunFrame();
+            bool mountA = probe.Renders["a"] == 1 && probe.Constructions["a"] == 1;
+            probe.Ping.Value = 1; host.RunFrame();
+            bool activeReran = probe.Renders["a"] == 2;                        // active + subscribed → re-renders
+            probe.Route!.Value = "b"; host.RunFrame();                         // park "a", mount "b"
+            bool parkedMountB = probe.Renders.GetValueOrDefault("b") == 1 && probe.Renders["a"] == 2;
+            probe.Ping.Value = 2; host.RunFrame();                             // write a signal "a" read while it is parked
+            bool parkedDeferred = probe.Renders["a"] == 2;                     // parked ⇒ deferred, NOT re-rendered
+            probe.Route.Value = "a"; host.RunFrame();                          // reactivate "a"
+            bool reactivateReplayOnce = probe.Renders["a"] == 3 && probe.Constructions["a"] == 1;   // replayed once; never reconstructed ⇒ scope preserved
+            Check("gate.unify.scope-keepalive-parks parking keeps the scope (state survives, parked defers renders, reactivation replays once)",
+                mountA && activeReran && parkedMountB && parkedDeferred && reactivateReplayOnce,
+                $"rendersA={probe.Renders.GetValueOrDefault("a")} rendersB={probe.Renders.GetValueOrDefault("b")} ctorA={probe.Constructions.GetValueOrDefault("a")}");
         }
     }
 
@@ -25974,6 +26183,7 @@ static class Slice
         HookChecks();
         HookSurfaceChecks();
         HookSubstrateChecks(strings);
+        UnifyChecks(strings);
         ValidationChecks();
         KeyedChecks(strings);
         ReuseGuardChecks(strings);

@@ -169,30 +169,33 @@ stays aligned by ordinal when the count changes (append/remove at the end — re
 same as a keyed list without a `keyOf`); and don't write **two** `Use*` calls on one physical source line behind a
 conditional (they share a line and would swap cell types). `FGRP005` remains as a compatibility lint, not a hard rule.
 
-## `Component` vs `ReactiveComponent`
+## One component model — run-once is inferred, not a mode
 
-| | `Component` (classic) | `ReactiveComponent` (signals-native) |
-|---|---|---|
-| Authoring method | `Element Render()` | `Element Setup()` |
-| Runs | re-runs on its own state/context change | **runs once** at mount |
-| Reactivity | re-render the subtree (granular) | **bindings / `For` / `Show` only** |
-| Use when | normal UI; familiar React style | hottest paths; you want zero re-renders |
+There is a single base: **`Component`** (override `Element Render()`). Every render runs **tracked** — it auto-subscribes
+to the signals it reads and re-runs only when one of those changes. **A render that reads no signals subscribes to
+nothing and therefore renders exactly once**; run-once is a *consequence* of not reading signals, not a separate class
+or a flag. (There is no `ReactiveComponent`/`Setup()` any more — the old duality is deleted.)
+
+So the "signals-native, zero-re-render" style is just a `Component` whose `Render()` reads no signals directly and
+drives everything dynamic through **bindings / `For` / `Show`**:
 
 ```csharp
-// Signals-native: Setup() runs ONCE. To show a changing value you MUST bind it.
-sealed class Clock : ReactiveComponent
+// Reads no signal directly → renders ONCE. To show a changing value you MUST bind it.
+sealed class Clock : Component
 {
-    public override Element Setup()
+    public override Element Render()
     {
         var t = UseSignal("00:00");
         return new TextEl("") { Text = t };                   // ✅ signal-direct: updates when t changes
-        // return Ui.Text(t.Value);                            // ❌ reads once, never updates (Setup runs once!)
+        // return Ui.Text(t.Value);                            // ❌ reads once here → subscribes THIS render (re-render), not a live bind
     }
 }
 ```
 
-> 🤖 **AGENT:** the `❌` line above is the #1 signals-native mistake. In `Setup()`, `signal.Value` is a one-time read.
-> Anything that should change over time must go through a **bound prop** (`Text`/`Transform`/… set to a Func/signal) or `For`/`Show`.
+> 🤖 **AGENT:** the `❌` line is the #1 mistake. Reading `signal.Value` **in `Render()`** subscribes the whole render
+> (coarse: re-runs `Render` on change). Anything that should change over time should instead go through a **bound prop**
+> (`Text`/`Transform`/… set to a Func/signal) or `For`/`Show`, so only the affected node updates and the component
+> itself never re-renders. Reach for a `.Value` read in render only when you genuinely want render to branch on it.
 
 ## Effects
 

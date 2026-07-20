@@ -35,7 +35,7 @@ The whole framework is the corollaries of that model. If you internalize the tab
 
 ```csharp
 using static FluentGpu.Dsl.Ui;          // VStack, HStack, Text, Heading, Button, Image, Grid, ScrollView…
-using FluentGpu.Hooks;                   // Component, ReactiveComponent, Embed, Ctx, Flow
+using FluentGpu.Hooks;                   // Component, Embed, Ctx, Flow
 using FluentGpu.Signals;                 // Signal<T>, FloatSignal, Memo<T>
 using FluentGpu.Controls;                // Button, Slider, IconButton, NavigationView, Virtual…
 
@@ -81,9 +81,10 @@ Run it (host wiring): see **[getting-started.md](./getting-started.md)**.
 2. **`Component.Render()` re-runs on its own state/context changes only** — never because a parent re-rendered.
    Parent→child data flows through **signals or context**, *not* through the component's constructor args (those are
    captured once at mount and frozen). See [reactivity.md#props](./reactivity.md#props-dont-flow-through-constructors).
-3. **`ReactiveComponent.Setup()` runs exactly once.** Reading `signal.Value` there is a one-time read. To show a
-   changing value you must use a **bound prop** (`Text = sig`, or `Text = Prop.Of(() => …)` for derived text), never `Text(sig.Value.ToString())`.
-   This is the #1 signals-native mistake. See [pitfalls.md](./pitfalls.md).
+3. **A `Component` whose `Render()` reads no signals runs exactly once.** (Run-once is inferred — there is one
+   component model, no `ReactiveComponent`.) Reading `signal.Value` in such a render is a one-time read. To show a
+   changing value without re-rendering, use a **bound prop** (`Text = sig`, or `Text = Prop.Of(() => …)` for derived
+   text), never `Text(sig.Value.ToString())`. This is the #1 mistake. See [pitfalls.md](./pitfalls.md).
 4. **Binding thunks must read `.Value` (not `.Peek()`).** The thunk runs inside the binding effect; `.Value`
    subscribes it so it re-runs. `.Peek()` would wire a binding that never updates.
 5. **Bound `Transform`/`Opacity`/`Fill` are compositor-only (no layout).** Bound `Width`/`Height`/`Text`
@@ -105,7 +106,7 @@ Run it (host wiring): see **[getting-started.md](./getting-started.md)**.
 |---|---|---|
 | The reactive runtime (signals, effects, scheduler) | `src/FluentGpu.Engine/Foundation/Signals/{ReactiveCore,Signal,Effect,Memo}.cs` | AOT-clean; set→notify must stay alloc-free |
 | Hooks (`UseState`/`UseSignal`/`UseContext`/…) | `src/FluentGpu.Engine/Hooks/RenderContext.cs` (impl) + `Component.cs` (surface) | stable call-order; hook-cell zoo |
-| Component model (`Component`/`ReactiveComponent`) | `src/FluentGpu.Engine/Hooks/Component.cs` | `RunsOnce` gates tracked vs untracked render |
+| Component model (`Component`) | `src/FluentGpu.Engine/Hooks/Component.cs` | one base; every render is tracked (run-once is inferred — reads no signals ⇒ never re-runs) |
 | Reconcile, render-effects, `For`/`Show`, context, bindings | `src/FluentGpu.Engine/Reconciler/Reconciler.cs` | the heart; render-effects + keyed `ReconcileChildren` |
 | Element shapes / props / bindings | `src/FluentGpu.Engine/Dsl/Element.cs`, `ControlFlow.cs`, `Context.cs`, `ComponentEl.cs` | add a free `ElementTypeId`; wire in reconciler `Mount`/`Update` |
 | DSL helpers (`Ui.*`) / modifiers | `src/FluentGpu.Engine/Dsl/Factories.cs`, `Modifiers.cs` | pure element builders |
@@ -130,7 +131,7 @@ Run it (host wiring): see **[getting-started.md](./getting-started.md)**.
 
 1. **[getting-started.md](./getting-started.md)** — minimal app, hosting, the frame loop you call, project layout.
 2. **[reactivity.md](./reactivity.md)** — signals, the update model, `UseState`/`UseSignal`/`UseComputed`, effects,
-   `Component` vs `ReactiveComponent`, bindings, `For`/`Show`, context. *The most important doc.*
+   the one `Component` model (run-once is inferred), bindings, `For`/`Show`, context. *The most important doc.*
 3. **[components-elements-layout.md](./components-elements-layout.md)** — hooks reference, the element zoo, flexbox &
    grid, modifiers, controls, navigation, virtualization, theming.
 4. **[rendering-and-performance.md](./rendering-and-performance.md)** — the frame pipeline, the SoA scene, reconcile,
@@ -163,5 +164,6 @@ Run it (host wiring): see **[getting-started.md](./getting-started.md)**.
   allocation in the per-frame paint phases (6–13), bounded Gen0 at the reconcile/edge. Slowness is *decoupled, not
   invincible* — a sustained GPU stall still bounds back to the UI thread.
 - **Programming model:** Reactor/React (components + hooks) you already know, with a Solid-style signals core
-  underneath so the default is fast. You can stay in the familiar `Component`/`UseState` style (now granular) or go
-  fully signals-native (`ReactiveComponent` + bindings) for the hottest paths.
+  underneath so the default is fast. One `Component` base: stay in the familiar `Component`/`UseState` style (granular
+  re-render) or go fully signals-native (a `Render()` that reads no signals + bindings) for the hottest paths — same
+  class, run-once is inferred.

@@ -260,12 +260,12 @@ public sealed class MediaSeekBar : Component
 /// it subscribes to the host frame clock and advances the owner's <c>_displayFrac</c> signal each frame so the playhead
 /// interpolates smoothly between coarse position reports. Unmounted on pause/stop, idling the frame loop. It NEVER
 /// re-renders the owner.</summary>
-public sealed class MediaSeekTicker : ReactiveComponent
+public sealed class MediaSeekTicker : Component
 {
     /// <summary>The seek bar this ticker advances.</summary>
     public required MediaSeekBar Owner;
 
-    public override Element Setup()
+    public override Element Render()
     {
         var tick = UseContextSignal(FrameClock.Tick);
         UseSignalEffect(() =>

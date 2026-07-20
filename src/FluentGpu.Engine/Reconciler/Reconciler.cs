@@ -22,7 +22,13 @@ public sealed class TreeReconciler
     private readonly StringTable _strings;
 
     // Mounted child components, keyed by their host node (the ComponentEl anchor).
-    private sealed class CompEntry { public Component Comp = null!; public Element? Rendered; public Type Type = null!; public Effect? Effect; public bool Parked; public bool DeferredRender; public Signal<bool>? ActiveSig; public SkeletonStyle? DerivedSkeletonStyle; }
+    // Scope: the component's ONE lifetime owner (ReactiveCore's ReactiveScope, a stable owner that never re-runs). It
+    // owns the render-effect (auto-disposed when the scope disposes) and carries the hook-cleanup teardown as a scope
+    // cleanup, so component unmount == Scope.Dispose() (cascades: dispose render-effect → run RunAllCleanups). Node
+    // bindings deliberately stay NODE-owned (_nodeBindings, disposed at node unmount) — a bind created during a render
+    // outlives that render and can die with its node WITHOUT the component unmounting (Show/For swaps, KeepAlive
+    // eviction), so it must not hang off the component scope. G4c's per-component props signal will hang off Scope too.
+    private sealed class CompEntry { public Component Comp = null!; public Element? Rendered; public Type Type = null!; public Effect? Effect; public ReactiveScope? Scope; public bool Parked; public bool DeferredRender; public Signal<bool>? ActiveSig; public SkeletonStyle? DerivedSkeletonStyle; }
     private readonly Dictionary<NodeHandle, CompEntry> _comps = new();
     private readonly Dictionary<Component, NodeHandle> _anchorOf = new();
     private readonly List<Component> _live = new();
@@ -249,8 +255,9 @@ public sealed class TreeReconciler
     /// <summary>Schedule a live re-theme after a <c>Tok.Use</c>/<c>SetAccent</c>: re-run EVERY reactive computation that
     /// reads the token set so each picks up the new theme, IN PLACE (diff, not remount — state + node identity survive):
     /// <list type="bullet">
-    /// <item>every mounted component's render-effect (and the root) — <see cref="ReactiveComponent"/>s are invalidated
-    /// first so their cached <c>Setup</c> re-runs with preserved positional hook cells;</item>
+    /// <item>every mounted component's render-effect (and the root) — scheduling re-runs each render body against its
+    /// SAME <see cref="RenderContext"/> (keyed hook cells preserved), so a direct <c>Tok.*</c> read in a render body
+    /// (the former <c>Setup</c> idiom) picks up the new theme in place, with hook state + node identity intact;</item>
     /// <item>every node binding + control-flow boundary in <c>_nodeBindings</c> — <c>Flow.For</c>/<c>Flow.Show</c>/skeleton
     /// boundary effects (which build their rows/branches reading tokens, and are NOT component re-renders) and bound
     /// color channels (<c>Fill</c>/<c>Color</c> = <c>Prop.Of(() =&gt; Tok.X)</c>, owned by their effect, never reached by a
@@ -261,16 +268,11 @@ public sealed class TreeReconciler
     /// channels snap, as they bypass the BrushAnim path by design).</summary>
     public void RethemeAll()
     {
-        if (_root is ReactiveComponent rr) rr.InvalidateTree();
         _rootEffect?.Schedule();
         _rethemeScratch.Clear();
         foreach (var e in _comps.Values) _rethemeScratch.Add(e);   // snapshot: Schedule won't mutate _comps, but be defensive
         for (int i = 0; i < _rethemeScratch.Count; i++)
-        {
-            var e = _rethemeScratch[i];
-            if (e.Comp is ReactiveComponent rc) rc.InvalidateTree();
-            e.Effect?.Schedule();
-        }
+            _rethemeScratch[i].Effect?.Schedule();
         _rethemeScratch.Clear();
         // Re-run bindings + control-flow boundaries (Flow.For rows, bound colors, Show/skeleton branches). They read
         // tokens but are not component renders, so a component re-render alone leaves them on the old theme. Scheduling
@@ -298,7 +300,7 @@ public sealed class TreeReconciler
     private void RunRoot(Component root)
     {
         _renderCount++;
-        Element newRoot = root.RunsOnce ? Reactive.Untrack(root.RenderWithHooks) : root.RenderWithHooks();
+        Element newRoot = root.RenderWithHooks();
         RenderRootDiff(newRoot);
     }
 
@@ -655,7 +657,16 @@ public sealed class TreeReconciler
         // never uses the lifecycle allocates nothing. Initial value = its current attached state (inactive if parked).
         comp.Context.GetActiveSig = () => entry.ActiveSig ??= new Signal<bool>(!entry.Parked);
 
-        var effect = new Effect(Runtime, () => RunComponent(node, entry), owner: null, runNow: false);
+        // One lifetime scope per component (the never-re-running owner ReactiveCore was designed for). It OWNS the
+        // render-effect (so Scope.Dispose cascades to it — no manual Effect.Dispose) and carries the hook-cleanup
+        // teardown as a scope cleanup, so unmount collapses to Scope.Dispose(): dispose the render-effect, then run
+        // RunAllCleanups — the same order the split (Effect.Dispose(); Comp.Unmount();) ran. Re-running the render-effect
+        // is safe under this owner: it owns nothing itself (its nested binds/For/Show effects are created owner:null and
+        // registered node-owned via AddBinding), so RunComputation's dispose-children pass on re-render is a no-op.
+        var scope = new ReactiveScope(Runtime);
+        entry.Scope = scope;
+        scope.AddCleanup(comp.Unmount);   // RunAllCleanups runs exactly once, when the scope disposes
+        var effect = new Effect(Runtime, () => RunComponent(node, entry), owner: scope, runNow: false);
         entry.Effect = effect;
         comp.Context.RequestRerender = effect.Schedule;   // imperative re-render (granular) for escape-hatch callers
         effect.RunNow();                                  // first render + child mount (deferred if mounted parked)
@@ -671,7 +682,7 @@ public sealed class TreeReconciler
         _renderCount++;
         if (Diag.Enabled) Diag.Event("render", entry.Comp.GetType().Name);   // who re-rendered (granularity diagnosis)
         var comp = entry.Comp;
-        Element newRendered = comp.RunsOnce ? Reactive.Untrack(comp.RenderWithHooks) : comp.RenderWithHooks();
+        Element newRendered = comp.RenderWithHooks();
         if (entry.DerivedSkeletonStyle is { } skeletonStyle)
             newRendered = SkeletonDeriver.Derive(newRendered, skeletonStyle);
         ReconcileSingleChild(node, newRendered, entry.Rendered);
@@ -721,7 +732,7 @@ public sealed class TreeReconciler
         var kids = new List<NodeHandle>();
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c)) kids.Add(c);
         foreach (var k in kids) Remove(k);
-        if (_comps.Remove(node, out var old)) { old.Effect?.Dispose(); old.Comp.Unmount(); _live.Remove(old.Comp); _anchorOf.Remove(old.Comp); }
+        if (_comps.Remove(node, out var old)) { old.Scope?.Dispose(); _live.Remove(old.Comp); _anchorOf.Remove(old.Comp); }
         MountComponent(node, ce);
     }
 
@@ -2180,7 +2191,7 @@ public sealed class TreeReconciler
         _skelForce.Remove(idx);
         ReleaseSkeletonScrollbarSuppression(idx);
         if (_skelState.Remove(idx, out var sk) && sk.Group is { } skg) SkelGroupCoordinator.Unregister(skg, idx);
-        if (_comps.Remove(node, out var e)) { e.Effect?.Dispose(); e.Comp.Unmount(); _live.Remove(e.Comp); _anchorOf.Remove(e.Comp); }
+        if (_comps.Remove(node, out var e)) { e.Scope?.Dispose(); _live.Remove(e.Comp); _anchorOf.Remove(e.Comp); }   // Scope.Dispose cascades: dispose render-effect → RunAllCleanups
         if (_virtuals.Remove(node, out var v))
         {
             if (v.Warming) _warmingCount--;   // a bound list unmounted mid-warm → keep the warming census exact
