@@ -20,20 +20,27 @@ public sealed class ProtectedMediaBackend : IMediaBackend, IPreparableBackend
     private readonly Func<IProtectedVideoPlayer> _playerFactory;
     private readonly Func<LicenseRequest, ValueTask<LicenseResponse>>? _defaultRelay;
     private readonly TimeSpan _prepareTimeout;
+    private readonly DashSourceDescriptor? _descriptor;
 
     /// <summary>Create the production backend (each open builds a real in-process native CDM player). An optional
-    /// <paramref name="defaultRelay"/> is used for the prepare hook (which has no per-open options).</summary>
-    public ProtectedMediaBackend(Func<LicenseRequest, ValueTask<LicenseResponse>>? defaultRelay = null)
-        : this(static () => new DesktopProtectedVideoPlayer(), defaultRelay) { }
+    /// <paramref name="defaultRelay"/> is used for the prepare hook (which has no per-open options). Pass a
+    /// <paramref name="descriptor"/> (from <see cref="DashManifestParser"/>) to play an ARBITRARY parsed DASH/PlayReady
+    /// source; omit it to fall back to the baked Axinom test vector for a recognized URI.</summary>
+    public ProtectedMediaBackend(Func<LicenseRequest, ValueTask<LicenseResponse>>? defaultRelay = null,
+                                 DashSourceDescriptor? descriptor = null)
+        : this(static () => new DesktopProtectedVideoPlayer(), defaultRelay, null, descriptor) { }
 
-    /// <summary>Test/DI seam: supply the protected-player factory + optional prepare timeout.</summary>
+    /// <summary>Test/DI seam: supply the protected-player factory + optional prepare timeout + optional parsed source
+    /// descriptor.</summary>
     public ProtectedMediaBackend(Func<IProtectedVideoPlayer> playerFactory,
                                  Func<LicenseRequest, ValueTask<LicenseResponse>>? defaultRelay = null,
-                                 TimeSpan? prepareTimeout = null)
+                                 TimeSpan? prepareTimeout = null,
+                                 DashSourceDescriptor? descriptor = null)
     {
         _playerFactory = playerFactory;
         _defaultRelay = defaultRelay;
         _prepareTimeout = prepareTimeout ?? TimeSpan.FromSeconds(10);
+        _descriptor = descriptor;
     }
 
     /// <inheritdoc/>
@@ -51,7 +58,7 @@ public sealed class ProtectedMediaBackend : IMediaBackend, IPreparableBackend
         if (source.Drm is null)
             throw new NotSupportedException("ProtectedMediaBackend requires a source carrying a DrmConfig (source.With(drm)).");
 
-        var request = BuildRequest(source, source.Drm, opts.LicenseRelay ?? _defaultRelay, opts.StartPaused);
+        var request = BuildRequest(source, source.Drm, opts.LicenseRelay ?? _defaultRelay, opts.StartPaused, _descriptor);
         var player = _playerFactory();
         IMediaSession session = new ProtectedMediaSession(player, request, opts);
         return ValueTask.FromResult(session);
@@ -63,7 +70,7 @@ public sealed class ProtectedMediaBackend : IMediaBackend, IPreparableBackend
         if (next.Drm is null)
             throw new NotSupportedException("ProtectedMediaBackend.PrepareAsync requires a source carrying a DrmConfig.");
 
-        var request = BuildRequest(next, next.Drm, _defaultRelay, startPaused: true);
+        var request = BuildRequest(next, next.Drm, _defaultRelay, startPaused: true, _descriptor);
         var player = _playerFactory();
         var opts = new MediaOpenOptions { StartPaused = true, LicenseRelay = _defaultRelay };
         var session = new ProtectedMediaSession(player, request, opts);
@@ -85,11 +92,12 @@ public sealed class ProtectedMediaBackend : IMediaBackend, IPreparableBackend
         return new ProtectedPreparedItem(session, ready, duration);
     }
 
-    /// <summary>Map a <see cref="MediaSource"/> + <see cref="DrmConfig"/> + relay into a native open request. A recognized
-    /// DASH test-vector URI is expanded to an explicit init+segment template (so the descriptor — not a native hardcode —
-    /// carries the source); an unrecognized URI leaves the template empty and native falls back to its baked vector.</summary>
+    /// <summary>Map a <see cref="MediaSource"/> + <see cref="DrmConfig"/> + relay into a native open request. When a parsed
+    /// <paramref name="descriptor"/> is supplied (from <see cref="DashManifestParser"/>) it carries the source verbatim —
+    /// ANY DASH/PlayReady MPD, not just the test vector. Otherwise a recognized Axinom URI is expanded to its known
+    /// init+segment template, and an unrecognized URI leaves the template empty (native falls back to its baked vector).</summary>
     internal static ProtectedVideoRequest BuildRequest(MediaSource source, DrmConfig drm,
-        Func<LicenseRequest, ValueTask<LicenseResponse>>? relay, bool startPaused)
+        Func<LicenseRequest, ValueTask<LicenseResponse>>? relay, bool startPaused, DashSourceDescriptor? descriptor = null)
     {
         var req = new ProtectedVideoRequest
         {
@@ -99,8 +107,23 @@ public sealed class ProtectedMediaBackend : IMediaBackend, IPreparableBackend
             Mode = "protected-custom",
         };
 
+        // Preferred generic path: a parsed manifest descriptor drives the native open ABI directly.
+        if (descriptor is not null)
+        {
+            return req with
+            {
+                InitUrl = descriptor.InitUrl,
+                SegmentBaseUrl = descriptor.SegmentBaseUrl,
+                SegmentPrefix = descriptor.SegmentPrefix,
+                SegmentSuffix = descriptor.SegmentSuffix,
+                StartNumber = descriptor.StartNumber,
+                SegmentCount = descriptor.SegmentCount,
+                Pssh = descriptor.Pssh,
+            };
+        }
+
         string? uri = ExtractUri(source);
-        // Axinom public singlekey PlayReady vector: expand its MPD to the explicit init/segment template.
+        // Legacy fallback — Axinom public singlekey PlayReady vector: expand its MPD to the explicit init/segment template.
         if (uri is not null && uri.Contains("protected_dash_1080p_h264_singlekey", StringComparison.OrdinalIgnoreCase))
         {
             const string baseUrl = "https://media.axprod.net/TestVectors/Dash/protected_dash_1080p_h264_singlekey/";

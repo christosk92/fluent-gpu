@@ -105,18 +105,14 @@ public sealed class MediaPlayerElement : Component
 
     private Element BuildTransport(float areaWidth)
     {
-        bool playing = Player.IsPlaying.Value;                 // subscribe
-        var pos = Player.Position.Value;                       // subscribe (updated each frame)
-        var dur = Player.Duration.Value;
-        bool muted = Player.Muted.Value;
-
-        float frac = dur > TimeSpan.Zero ? (float)Math.Clamp(pos.TotalSeconds / dur.TotalSeconds, 0.0, 1.0) : 0f;
-        float seekWidth = MathF.Max(80f, areaWidth - 300f);
-
-        void Seek(float f)
-        {
-            if (dur > TimeSpan.Zero) _ = Player.SeekAsync(dur * Math.Clamp(f, 0f, 1f));
-        }
+        // The transport render reads only LOW-frequency signals (play-state + muted) so it does NOT re-render each frame
+        // as the playhead advances. The seek scrub bar is an AUTONOMOUS component (its own scrub gate + compositor-bound
+        // playhead — see MediaSeekBar), and the time label is an isolated leaf that re-renders on its own position tick.
+        // The old per-frame Slider.Create(frac, …) recreated a controlled slider every frame, destroying any in-flight
+        // drag (the thumb snapped back on release) — the seek bug this replaces.
+        bool playing = Player.IsPlaying.Value;                 // subscribe (low-frequency)
+        bool muted = Player.Muted.Value;                       // subscribe (low-frequency)
+        _ = areaWidth;                                         // the seek bar now Grows to fill; width is self-measured
 
         var playPause = IconButton(playing ? Icons.Pause : Icons.Play, () =>
         {
@@ -125,9 +121,10 @@ public sealed class MediaPlayerElement : Component
 
         var muteBtn = IconButton(muted ? Icons.Mute : Icons.Volume, () => Player.SetMuted(!muted));
 
-        var time = new TextEl($"{FormatTime(pos)} / {FormatTime(dur)}")
+        var seek = new BoxEl
         {
-            Size = 12f, Color = Tok.TextSecondary,
+            Grow = 1f, Shrink = 1f, MinWidth = 0f, AlignItems = FlexAlign.Center,
+            Children = new Element[] { Embed.Comp(() => new MediaSeekBar { Player = Player }) },
         };
 
         return new BoxEl
@@ -142,11 +139,28 @@ public sealed class MediaPlayerElement : Component
             Children = new Element[]
             {
                 playPause,
-                Slider.Create(frac, Seek, width: seekWidth, height: 24f),
-                time,
+                seek,
+                Embed.Comp(() => new MediaTransportTime { Player = Player }),
                 muteBtn,
             },
         };
+    }
+
+    /// <summary>The <c>elapsed / total</c> time label as its OWN component so it re-renders on the ~per-frame position
+    /// tick WITHOUT re-rendering the transport (whose seek bar is compositor-only).</summary>
+    private sealed class MediaTransportTime : Component
+    {
+        public required IMediaPlayer Player { get; init; }
+
+        public override Element Render()
+        {
+            var pos = Player.Position.Value;    // subscribe → this leaf re-renders on the position tick
+            var dur = Player.Duration.Value;
+            return new TextEl($"{FormatTime(pos)} / {FormatTime(dur)}")
+            {
+                Size = 12f, Color = Tok.TextSecondary,
+            };
+        }
     }
 
     private static BoxEl IconButton(string glyph, Action onClick) => new()

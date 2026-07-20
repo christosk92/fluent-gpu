@@ -1,9 +1,14 @@
 using System;
 using System.Collections.Generic;
+using System.Net.Http;
+using System.Threading.Tasks;
 using FluentGpu.Controls;
+using FluentGpu.Controls.Media;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Media;
+using FluentGpu.Media.Windows;
 using FluentGpu.WindowsApi.Media.PlayReady;
 using static FluentGpu.Dsl.Ui;
 
@@ -70,15 +75,24 @@ sealed class ClearVideoDemo : Component
     }
 }
 
-/// <summary>Protected (PlayReady) playback through the UNIFIED Media Playback API (M5): a <c>MediaPlayer</c> routed to an
-/// <c>MfMediaPlayer</c> + a <c>ProtectedMediaBackend</c> (the native CDM), opened on a <c>MediaSource</c> carrying a
-/// <c>DrmConfig</c>, and presented by the real <c>MediaPlayerElement</c>. The Axinom test license is acquired by a MANAGED
-/// <c>WithDrm</c> relay (the license POST + X-AxDRM-Message live here, not in native).</summary>
+/// <summary>A prepared, parsed protected source ready to play: the DASH descriptor (from <see cref="DashManifestParser"/>)
+/// + the built <c>WithDrm</c> license relay + the entered MPD/license URLs. Handed to a keyed <see cref="ProtectedPlayerView"/>
+/// so each Play remounts a fresh player.</summary>
+sealed record PreparedProtectedSource(int Id, string MpdUrl, string LicenseUrl, DashSourceDescriptor Descriptor,
+    Func<LicenseRequest, ValueTask<LicenseResponse>> Relay);
+
+/// <summary>GENERIC protected (PlayReady) playback through the unified Media Playback API: a FORM (MPD URL, license server
+/// URL, an optional custom license header) that, on Play, parses ANY DASH/PlayReady MPD (<see cref="DashManifestParser"/>),
+/// builds a <c>MediaPlayer</c> routed to <c>MfMediaPlayer</c> + a <c>ProtectedMediaBackend</c> carrying the parsed
+/// descriptor, and a MANAGED <c>WithDrm</c> relay that POSTs the CDM challenge to the entered license server with the
+/// entered header. Prefilled with the Axinom single-key v10 test vector as the default preset. Parse/license failures
+/// show inline (never a silent black frame).</summary>
 sealed class ProtectedVideoDemo : Component
 {
-    // Axinom public single-key PlayReady v10 test vector (the license POST now lives in managed app code).
+    // ── Axinom public single-key PlayReady v10 test vector — the default preset (edit the fields to play any source) ──
     const string AxinomMpd = "https://media.axprod.net/TestVectors/Dash/protected_dash_1080p_h264_singlekey/manifest.mpd";
     const string AxinomLicenseUrl = "https://drm-playready-licensing.axprod.net/AcquireLicense";
+    const string AxinomHeaderName = "X-AxDRM-Message";
     const string AxinomToken =
         "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.ewogICJ2ZXJzaW9uIjogMSwKICAiY29tX2tleV9pZCI6ICI2OWU1NDA4OC1lOWUw" +
         "LTQ1MzAtOGMxYS0xZWI2ZGNkMGQxNGUiLAogICJtZXNzYWdlIjogewogICAgInR5cGUiOiAiZW50aXRsZW1lbnRfbWVzc2FnZSIs" +
@@ -91,42 +105,132 @@ sealed class ProtectedVideoDemo : Component
         "ICAgICJwbGF5X2VuYWJsZXJzIjogWwogICAgICAgICAgICAiNzg2NjI3RDgtQzJBNi00NEJFLThGODgtMDhBRTI1NUIwMUE3Igog" +
         "ICAgICAgICAgXQogICAgICAgIH0KICAgICAgfQogICAgXQogIH0KfQ.l8PnZznspJ6lnNmfAE9UQV532Ypzt1JXQkvrk8gFSRw";
 
-    private static readonly System.Net.Http.HttpClient s_http = new();
-
-    /// <summary>The managed WithDrm relay: POST the CDM challenge to the Axinom license server with the v10 entitlement
-    /// token. The engine never sees the key; a shortfall becomes MediaError{Category.Drm} (never a silent drop).</summary>
-    private static async System.Threading.Tasks.ValueTask<FluentGpu.Media.LicenseResponse> AcquireAxinomLicense(
-        FluentGpu.Media.LicenseRequest request)
-    {
-        using var content = new System.Net.Http.ByteArrayContent(request.Challenge.ToArray());
-        content.Headers.TryAddWithoutValidation("Content-Type", "text/xml; charset=utf-8");
-        using var msg = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Post, AxinomLicenseUrl) { Content = content };
-        msg.Headers.TryAddWithoutValidation("SOAPAction", "\"http://schemas.microsoft.com/DRM/2007/03/protocols/AcquireLicense\"");
-        msg.Headers.TryAddWithoutValidation("X-AxDRM-Message", AxinomToken);
-        using var resp = await s_http.SendAsync(msg).ConfigureAwait(false);
-        resp.EnsureSuccessStatusCode();
-        byte[] license = await resp.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
-        return new FluentGpu.Media.LicenseResponse(license);
-    }
+    private static readonly HttpClient s_http = new();
 
     public override Element Render()
     {
+        var mpd = UseSignal(AxinomMpd);
+        var licenseUrl = UseSignal(AxinomLicenseUrl);
+        var headerName = UseSignal(AxinomHeaderName);
+        var headerValue = UseSignal(AxinomToken);
+        var (request, setRequest) = UseState<PreparedProtectedSource?>(null);
+        var (error, setError) = UseState<string?>(null);
+        var (busy, setBusy) = UseState(false);
+        var nextId = UseRef(0);
+        var post = UsePost();   // marshal the async parse result back onto the UI thread
+
+        async void Play()
+        {
+            setBusy(true);
+            setError(null);
+            string mpdUrl = mpd.Peek().Trim();
+            string licUrl = licenseUrl.Peek().Trim();
+            string? hName = string.IsNullOrWhiteSpace(headerName.Peek()) ? null : headerName.Peek().Trim();
+            string hValue = headerValue.Peek();
+            try
+            {
+                var desc = await DashManifestParser.ParseAsync(mpdUrl, s_http).ConfigureAwait(false);
+                var relay = PlayReadyLicense.HttpRelay(licUrl, hName, hValue);
+                post(() =>
+                {
+                    nextId.Value++;
+                    setRequest(new PreparedProtectedSource(nextId.Value, mpdUrl, licUrl, desc, relay));
+                    setBusy(false);
+                });
+            }
+            catch (Exception ex)
+            {
+                string msg = ex is DashManifestException ? ex.Message : "Could not prepare the source: " + ex.Message;
+                post(() => { setError(msg); setBusy(false); });
+            }
+        }
+
+        var form = new BoxEl
+        {
+            Direction = 1, Gap = 10f,
+            Children =
+            [
+                TextBox.Create(header: "MPD manifest URL", placeholder: "https://…/manifest.mpd", width: 640f, text: mpd),
+                TextBox.Create(header: "License server URL", placeholder: "https://…/AcquireLicense", width: 640f, text: licenseUrl),
+                new BoxEl
+                {
+                    Direction = 0, Gap = 10f, AlignItems = FlexAlign.End,
+                    Children =
+                    [
+                        TextBox.Create(header: "License header name (optional)", placeholder: "X-AxDRM-Message", width: 220f, text: headerName),
+                        TextBox.Create(header: "License header value (optional)", placeholder: "token…", width: 410f, text: headerValue),
+                    ],
+                },
+                new BoxEl
+                {
+                    Direction = 0, Gap = 10f, AlignItems = FlexAlign.Center,
+                    Children =
+                    [
+                        Button.Accent(busy ? "Preparing…" : "Play", Play, isEnabled: !busy),
+                        Body("Prefilled with the Axinom single-key test vector. Enter any DASH + PlayReady source.").Secondary(),
+                    ],
+                },
+                error is not null ? ErrorBanner(error) : new BoxEl { Height = 0f },
+            ],
+        };
+
+        var kids = new List<Element>(2) { form };
+        if (request is { } req)
+            kids.Add(Embed.Comp(() => new ProtectedPlayerView(req)) with { Key = "player#" + req.Id });
+
+        return new BoxEl { Direction = 1, Gap = 14f, Children = kids.ToArray() };
+    }
+
+    static Element ErrorBanner(string message) => new BoxEl
+    {
+        Direction = 0, Gap = 8f, AlignItems = FlexAlign.Center,
+        Padding = new Edges4(12f, 10f, 12f, 10f),
+        Corners = Radii.ControlAll,
+        Fill = new ColorF(0.28f, 0.10f, 0.11f, 1f),
+        BorderColor = new ColorF(0.62f, 0.24f, 0.26f, 1f), BorderWidth = 1f,
+        Children =
+        [
+            new TextEl(message) { Size = 13f, Color = new ColorF(0.98f, 0.80f, 0.80f, 1f), Wrap = TextWrap.Wrap },
+        ],
+    };
+}
+
+/// <summary>Owns the <c>MediaPlayer</c> for one prepared protected source: routed to <c>MfMediaPlayer</c> + a
+/// <c>ProtectedMediaBackend</c> carrying the parsed descriptor, opened once at mount, presented by the real
+/// <c>MediaPlayerElement</c>. A typed DRM/playback error is shown inline (never a silent black frame). Keyed per request,
+/// so a new Play remounts a fresh player.</summary>
+sealed class ProtectedPlayerView : Component
+{
+    private readonly PreparedProtectedSource _req;
+    public ProtectedPlayerView(PreparedProtectedSource req) => _req = req;
+
+    public override Element Render()
+    {
+        var req = _req;
         var player = UseMediaPlayer(b => b
-            .WithBackend(FluentGpu.Media.MediaKind.MfVideoOrFile,
-                new FluentGpu.Media.Windows.MfMediaPlayer(new ProtectedMediaBackend(AcquireAxinomLicense)))
-            .WithDrm(AcquireAxinomLicense));
+            .WithBackend(MediaKind.MfVideoOrFile,
+                new MfMediaPlayer(new ProtectedMediaBackend(req.Relay, req.Descriptor)))
+            .WithDrm(req.Relay));
 
         UseEffect(() =>
         {
-            var source = FluentGpu.Media.MediaSource.FromUri(AxinomMpd)
-                .With(new FluentGpu.Media.DrmConfig(FluentGpu.Media.DrmSystem.PlayReady, AxinomLicenseUrl));
+            var source = MediaSource.FromUri(req.MpdUrl).With(new DrmConfig(DrmSystem.PlayReady, req.LicenseUrl));
             _ = player.OpenAsync(source);
-        }, System.Array.Empty<object>());
+        }, Array.Empty<object>());
 
-        return new BoxEl
+        var err = player.Error.Value;   // subscribe → surface a typed CDM/DRM/source error inline
+        var kids = new List<Element>(2)
         {
-            Height = 460f,
-            Children = [Embed.Comp(() => new FluentGpu.Controls.Media.MediaPlayerElement { Player = player })],
+            new BoxEl { Height = 420f, Children = [Embed.Comp(() => new MediaPlayerElement { Player = player })] },
         };
+        if (err is not null)
+            kids.Add(new BoxEl
+            {
+                Padding = new Edges4(12f, 10f, 12f, 10f), Corners = Radii.ControlAll,
+                Fill = new ColorF(0.28f, 0.10f, 0.11f, 1f),
+                BorderColor = new ColorF(0.62f, 0.24f, 0.26f, 1f), BorderWidth = 1f,
+                Children = [new TextEl($"{err.Category}: {err.Message}") { Size = 13f, Color = new ColorF(0.98f, 0.80f, 0.80f, 1f), Wrap = TextWrap.Wrap }],
+            });
+        return new BoxEl { Direction = 1, Gap = 8f, Children = kids.ToArray() };
     }
 }

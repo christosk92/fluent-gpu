@@ -130,9 +130,17 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable
         {
             bool videoCapable = _session is IVideoSurfaceSession;
             var st = _core.State.Peek();
+            bool hasVideo = !_core.NaturalSize.Peek().IsEmpty;
+            // Ramping = the DRM/CDM licensing handshake / initial buffer, where the natural size may not be known yet —
+            // keep pumping so the handshake completes. ActivePlayback = a resolved video the user intends to play:
+            // Playing (advancing), Ready, OR Paused — Paused is CRITICAL: on resume, IsPlayRequested flips true while the
+            // state is still Paused (the native engine hasn't resumed yet), and the pump is what drives the transport
+            // re-assert that actually resumes it. Excluding Paused here made resume-after-pause hang (the loop idled, the
+            // pump stopped, the native never got the resume). Play-intent false (user paused) → not presenting → the loop
+            // idles; Idle/Ended/Failed → not presenting.
             bool ramping = st is PlaybackState.Opening or PlaybackState.Buffering or PlaybackState.Stalled;
-            bool advancing = st == PlaybackState.Playing && !_core.NaturalSize.Peek().IsEmpty;
-            bool presenting = videoCapable && _core.IsPlayRequested.Peek() && (ramping || advancing);
+            bool activePlayback = hasVideo && st is PlaybackState.Ready or PlaybackState.Paused or PlaybackState.Playing;
+            bool presenting = videoCapable && _core.IsPlayRequested.Peek() && (ramping || activePlayback);
             binding.SetPresenting(presenting);
         }
     }
