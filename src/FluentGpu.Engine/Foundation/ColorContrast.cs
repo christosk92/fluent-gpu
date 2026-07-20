@@ -19,6 +19,22 @@ public static class ColorContrast
 
     public static bool MeetsAaText(in ColorF fg, in ColorF bg, float min = 4.5f) => Ratio(fg, bg) >= min;
 
+    /// <summary>The near-black ink (#161616) the on-accent picker uses as the dark candidate (WinUI TextOnAccent's dark
+    /// stop; matches the accent-legibility picker Wavee proved on cover-extracted accents).</summary>
+    public static readonly ColorF NearBlackInk = ColorF.FromRgba(0x16, 0x16, 0x16);
+    private static readonly ColorF WhiteInk = ColorF.FromRgba(0xFF, 0xFF, 0xFF);
+
+    /// <summary>Pick whichever of <paramref name="darkInk"/> / <paramref name="lightInk"/> reads with the higher WCAG
+    /// contrast on <paramref name="bg"/> — the legible foreground for text/icons sitting ON a solid fill, chosen by the
+    /// fill's luminance, NOT the theme. (A cover-extracted / custom accent can land anywhere from a near-white grey to a
+    /// saturated mid-tone, where a theme-fixed on-accent color fails contrast.) Pure; no allocation.</summary>
+    public static ColorF PickContrast(in ColorF bg, in ColorF darkInk, in ColorF lightInk)
+        => Ratio(darkInk, bg) >= Ratio(lightInk, bg) ? darkInk : lightInk;
+
+    /// <summary>Pick the legible ink for a solid <paramref name="bg"/> fill from the default pair — near-black
+    /// (<see cref="NearBlackInk"/>) vs white.</summary>
+    public static ColorF PickContrast(in ColorF bg) => PickContrast(bg, NearBlackInk, WhiteInk);
+
     /// <summary>Relative luminance delta as a fraction of the lighter surface (for adjacent-layer checks).</summary>
     public static float LuminanceDelta(in ColorF a, in ColorF b)
     {

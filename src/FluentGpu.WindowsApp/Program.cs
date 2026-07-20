@@ -265,20 +265,31 @@ static class Program
                 if (args[i] == "--w" && int.TryParse(args[i + 1], out int w)) sw = w;
                 if (args[i] == "--h" && int.TryParse(args[i + 1], out int h)) sh = h;
             }
-            FluentApp.Run(() => new ShotScene(shot), "FluentGpu — Shot", sw, sh, mica: micaShot, frames: sf, screenshot: screenshot);
+            FluentAppHarness.Run(() => new ShotScene(shot),
+                new AppOptions { Title = "FluentGpu — Shot", Width = sw, Height = sh, Mica = micaShot },
+                new HarnessOptions { Frames = sf, Screenshot = screenshot });
             return;
         }
 
         // Default = the capability gallery (everything). `--demo wavee` = the Wavee skeleton; `--demo list` = the
-        // virtualized track list; `--demo basic` = the original minimal demo.
+        // virtualized track list; `--demo basic` = the original minimal demo. All route through the harness so `--frames`
+        // stays a diagnostic knob (AppOptions carries only the everyday window options).
         if (demo == "wavee")
-            FluentApp.Run(() => new WaveeShell(), "FluentGpu — Wavee skeleton", 1180, 760, frames: frames);
+            FluentAppHarness.Run(() => new WaveeShell(),
+                new AppOptions { Title = "FluentGpu — Wavee skeleton", Width = 1180, Height = 760 },
+                new HarnessOptions { Frames = frames });
         else if (demo == "list")
-            FluentApp.Run(() => new TrackListDemo(), "FluentGpu — Virtualized List", 520, 640, frames: frames);
+            FluentAppHarness.Run(() => new TrackListDemo(),
+                new AppOptions { Title = "FluentGpu — Virtualized List", Width = 520, Height = 640 },
+                new HarnessOptions { Frames = frames });
         else if (demo == "basic")
-            FluentApp.Run(() => new DemoApp(), "FluentGpu — Demo", 560, 360, frames: frames);
+            FluentAppHarness.Run(() => new DemoApp(),
+                new AppOptions { Title = "FluentGpu — Demo", Width = 560, Height = 360 },
+                new HarnessOptions { Frames = frames });
         else
-            FluentApp.Run(() => new GalleryApp { InitialPage = page }, "FluentGpu — Capability Gallery", 1240, 820,
-                          frames: frames, customFrame: true);   // the gallery draws the WinUI TitleBar (engine caption buttons)
+            // the gallery draws the WinUI TitleBar (engine caption buttons)
+            FluentAppHarness.Run(() => new GalleryApp { InitialPage = page },
+                new AppOptions { Title = "FluentGpu — Capability Gallery", Width = 1240, Height = 820, CustomFrame = true },
+                new HarnessOptions { Frames = frames });
     }
 }

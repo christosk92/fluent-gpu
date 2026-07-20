@@ -29,6 +29,11 @@ VStack(float gap, params Element[] children)            // column flex
 HStack(float gap, params Element[] children)            // row flex
 Panel(Edges4 padding, float gap, params Element[] kids) // padded column
 ZStack(params Element[] children)                       // overlay (last on top)
+Spacer()                                               // flex spacer — grows to eat main-axis slack
+Spacer(float px)                                       // rigid fixed gap on the main axis (never grows/shrinks)
+Wrap(float gap, params Element[] children)             // horizontal wrap panel (children flow + wrap to lines)
+Center(Element child)                                  // centers child on both axes in a box that fills its parent
+AspectRatio(float ratio, Element child)                // box sized to width÷height (CSS aspect-ratio); derives the missing extent
 Heading(string text)                                   // 28pt bold
 Text(string text)                                      // 14pt body
 Icon(string glyph, float size = 16, ColorF? color = null, string? family = null)
@@ -108,6 +113,7 @@ Flexbox (Yoga-style) is the default; CSS-grid is available via `GridEl`. Key `Bo
 | `Justify` | `FlexJustify` | main-axis distribution |
 | `AlignItems` / `AlignSelf` | `FlexAlign` | cross-axis alignment |
 | `Wrap` | `bool` | wrap children to lines |
+| `AspectRatio` | `float` | width÷height (CSS `aspect-ratio`); `NaN` = off. Derives the missing extent for a fluid box (the `Ui.AspectRatio` helper). One dimension stays unset, so an aspect box is never a layout boundary. |
 | `ZStack` | `bool` | children overlay at the origin, painted in order (last on top) |
 | `ClipToBounds` | `bool` | clip children — **and a layout-boundary signal** (see performance doc) |
 
@@ -234,5 +240,28 @@ Theme.BodyFont = "Segoe UI"; Theme.IconFont = "Segoe Fluent Icons";   // typefac
 ```
 
 `Theme.*` is a small back-compat facade forwarding to `Tok`. `FluentApp.Run` already wires the real OS accent + Mica.
+
+The `Tok` color getters are **source-generated** (`TokAccessorGenerator`) from the `TokenSet` fields — a new
+semantic brush on `TokenSet` gets its `Tok.*` accessor automatically (no hand-written forward to forget). Only
+the getters with logic (accent-aware shades, the memoized elevation-border gradients, `WindowBackground`) stay
+hand-written.
+
+**On-media ink + scrim** (theme-invariant — ink over album art / video / dark scrims doesn't follow the theme):
+
+```csharp
+Tok.OnMediaPrimary / OnMediaSecondary / OnMediaTertiary   // white-alpha ink ramp (1.0 / 0.80 / 0.60)
+Tok.MediaScrim                                             // black-alpha chip/pill/FAB scrim plate (~0.55)
+Tok.ScrimBottom / Tok.ScrimTop                            // footer / hero scrim GradientSpecs (transparent↔black)
+```
+
+**On-accent contrast** — the legible ink (near-black or white) for text/icons on a solid accent fill, chosen by
+the fill's WCAG luminance. `Tok.OnAccent` is **baked at accent-set time** (memoized per `Tok.Epoch`, which
+`SetAccent`/`Use` bump), so paint reads a field with **zero per-frame contrast math**. For an arbitrary fill use
+`ColorContrast.PickContrast(bg)` (near-black vs white) or `PickContrast(bg, darkInk, lightInk)`.
+
+**Non-color tokens**: `Spacing` is the 4px grid (`XXS=2, XS=4, S=8, M=12, L=16, XL=20, XXL=24, XXXL=32, Gutter=24`)
+with the semantic names (`PageWide/PageNarrow/Card/Inner/StackS/StackM/StackL` + `PagePadWide/PagePadNarrow/CardPad`
+presets) re-pointed onto it. `Radii` adds `None=0, Card=8, Full=999` alongside `Control=4/Overlay=8/Pill=16`
+(`ControlAll/CardAll/OverlayAll/PillAll/FullAll` presets). `Elevation`/`Typography` round out the non-color set.
 
 Next: **[rendering-and-performance.md](./rendering-and-performance.md)** — the frame pipeline and how to keep it fast.

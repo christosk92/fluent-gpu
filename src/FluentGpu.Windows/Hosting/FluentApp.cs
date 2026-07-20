@@ -22,7 +22,7 @@ public static class FluentApp
 {
     /// <summary>
     /// The live top-level window HWND of the currently-running app, or <see cref="nint.Zero"/> before
-    /// <see cref="Run(Func{Component}, string, int, int, bool, int, string?, bool)"/> creates the window (and after it
+    /// <see cref="Run(Func{Component}, AppOptions?)"/> creates the window (and after it
     /// closes). This is the real <c>FluentGpu</c> window handle — the app-layer accessor that
     /// <c>FluentGpu.WindowsApi</c> consumers (SMTC / file pickers / taskbar) pass as their explicit <c>nint hwnd</c>
     /// parameter, so a UI page never has to invent a handle on the Engine seam. UI-thread only (the value is set on the
@@ -73,15 +73,20 @@ public static class FluentApp
     /// </summary>
     public static Func<AppHost, IPlatformWindow, IGpuDevice, bool>? DiagnosticRun;
 
-    /// <param name="ambientFps">Optional power throttle for PERPETUAL ambient motion (a looping spinner/shimmer/equalizer,
-    /// a smooth media playhead, a reveal/brush fade): the frame loop paces autonomous-animation frames to this rate
-    /// instead of free-running at the panel refresh, where a sub-display rate is imperceptible but idles the CPU. 0 (the
-    /// default) keeps the engine default (uncapped / display-rate). Latency-sensitive motion the user actively drives
-    /// (scroll, hover, press, drag, repeat) is exempt and always runs at the display rate; input never waits on the cap.
-    /// Maps to <see cref="AppHost.AmbientAnimationFps"/> (an app/battery policy, per the engine's FG_ANIM_FPS knob).</param>
-    public static void Run(Func<Component> root, string title = "FluentGpu", int width = 800, int height = 600,
-                           bool mica = true, int frames = -1, string? screenshot = null, bool customFrame = false,
-                           bool micaAlt = false, int ambientFps = 0)
+    /// <summary>Run the app: create a DPI-aware window, bring up D3D12 + Mica + the real OS accent, wire the font system
+    /// and frame loop, and render <paramref name="root"/>. Pass <paramref name="options"/> to set the window title/size,
+    /// Mica variant, custom frame, ambient-fps throttle, and warm-cadence hold; omit it for the defaults.</summary>
+    public static void Run(Func<Component> root, AppOptions? options = null)
+        => RunCore(root, options ?? new AppOptions(), new HarnessOptions());
+
+    /// <summary><c>FluentApp.Run&lt;MyApp&gt;()</c> — same, for a parameterless root component.</summary>
+    public static void Run<T>(AppOptions? options = null) where T : Component, new()
+        => Run(() => new T(), options);
+
+    // The single implementation. Public entry points (Run) and the diagnostic harness (FluentAppHarness.Run) both route
+    // here; splitting the interactive options (AppOptions) from the test/diagnostic knobs (HarnessOptions: frames,
+    // screenshot, frame-wait) keeps the everyday surface a one-liner while the harness owns the deterministic controls.
+    internal static void RunCore(Func<Component> root, AppOptions o, HarnessOptions h)
     {
         if (Array.IndexOf(Environment.GetCommandLineArgs(), "--audio-host") >= 0)
             throw new InvalidOperationException("FluentApp.Run must not be reached in --audio-host child mode.");
@@ -97,7 +102,7 @@ public static class FluentApp
         using var app = new Win32App();
         // customFrame: the app draws its own WinUI TitleBar (caption stripped, engine caption buttons, snap layouts) —
         // an explicit opt-in (the gallery): apps without a TitleBar keep the standard OS frame.
-        var window = (Win32Window)app.CreateWindow(new WindowDesc(title, new Size2(width, height), 1f, mica, CustomFrame: customFrame));
+        var window = (Win32Window)app.CreateWindow(new WindowDesc(o.Title, new Size2(o.Width, o.Height), 1f, o.Mica, CustomFrame: o.CustomFrame));
         // Publish the real top-level HWND so app-layer callers (the Windows-APIs page: SMTC / pickers / taskbar) can pass
         // it as their explicit nint hwnd — the host accessor, not an Engine-seam invention. Cleared when the run ends.
         WindowHandle = window.Handle.Value;
@@ -106,13 +111,13 @@ public static class FluentApp
         if (Win32Theme.ReadAccentRamp() is { } ramp) Tok.SetAccent(in ramp);
         else if (Win32Theme.AccentLight2() is { } a) Theme.Accent = ColorF.FromRgba(a.R, a.G, a.B);
         else if (Win32Theme.Accent() is { } b) Theme.Accent = ColorF.FromRgba(b.R, b.G, b.B);
-        Win32Theme.ApplyWindowMaterial(window.Handle.Value, Theme.Dark, mica, customFrame, micaAlt);
-        if (mica) Theme.WindowBackground = ColorF.Transparent;
+        Win32Theme.ApplyWindowMaterial(window.Handle.Value, Theme.Dark, o.Mica, o.CustomFrame, o.MicaAlt);
+        if (o.Mica) Theme.WindowBackground = ColorF.Transparent;
 
         // Text measurement runs through DirectWrite (the same design advances + line-break math the D3D12 GlyphRenderer
         // uses to render), so measured wrap/height matches rendered wrap/height exactly. (GDI measure is retired here.)
         var fonts = new DirectWriteFontSystem(strings);
-        IGpuDevice device = new D3D12Device(strings, composited: mica);
+        IGpuDevice device = new D3D12Device(strings, composited: o.Mica);
 
         // Real image pipeline: WIC constrained decode on a worker pool, behind a disk-cached HTTP/2 fetcher.
         using var imageFetcher = new DefaultImageFetcher(diskCache: new DiskImageCache());
@@ -130,8 +135,11 @@ public static class FluentApp
         // this rate so a never-idling app (one with always-on ambient motion) doesn't free-run the whole render+present
         // pipeline at the panel refresh. A live FG_ANIM_FPS env var still wins (the host seeded its default from it), so
         // the diagnostic override (incl. =0 to A/B uncapped) is preserved; 0 here = leave the host default untouched.
-        if (ambientFps > 0 && Environment.GetEnvironmentVariable("FG_ANIM_FPS") is null)
-            host.AmbientAnimationFps = ambientFps;
+        if (o.AmbientFps > 0 && Environment.GetEnvironmentVariable("FG_ANIM_FPS") is null)
+            host.AmbientAnimationFps = o.AmbientFps;
+        // Post-input warm-cadence hold (G1b): keep rendering ~WarmCadenceMs after the last input so a follow-up
+        // interaction pays no cold-start ramp. 0 disables the hold (see AppHost.WarmCadenceHoldMs).
+        host.WarmCadenceHoldMs = o.WarmCadenceMs;
 
         // Relay the host's UI-thread single-instance redirect to the app-layer static event (the Windows-APIs page
         // subscribes there). Forwarding the payload, not the handler chain — handlers attach to FluentApp.ActivationRedirected.
@@ -141,7 +149,7 @@ public static class FluentApp
         // Live re-theme: on every theme change the host re-applies the OS window material so DWM's immersive-dark titlebar
         // and the Mica system backdrop flip to the new theme's variant (instant — the OS can't cross-fade its backdrop;
         // the in-app content cross-fades). Mirrors the one-shot startup ApplyWindowMaterial above.
-        host.OnApplyThemeMaterial = dark => Win32Theme.ApplyWindowMaterial(window.Handle.Value, dark, mica, customFrame, micaAlt);
+        host.OnApplyThemeMaterial = dark => Win32Theme.ApplyWindowMaterial(window.Handle.Value, dark, o.Mica, o.CustomFrame, o.MicaAlt);
         // Relay the host's UI-thread OS color-settings-change to the app-layer static event (the app subscribes to follow
         // the OS dark-mode/accent live while its theme mode is "System").
         Action forwardSystemColors = () => SystemColorsChanged?.Invoke();
@@ -194,9 +202,9 @@ public static class FluentApp
                     Console.Error.WriteLine($"[fps]{(spike ? " SPIKE" : "")} ui {s.Fps:0}fps {s.FrameMs:0.0}ms (flush{s.FlushMs:0.0} layout{s.LayoutMs:0.0} anim{s.AnimMs:0.0} record{s.RecordMs:0.0} submit{s.SubmitMs:0.0}) | present {presentFps:0}fps gpu {gpuMs:0.0}ms (f{n})");
                 }
             }
-            if (frames > 0 && n >= frames) break;
-            if (screenshot != null)
-                window.WaitForWork(8);   // deterministic ~8ms/frame so time-driven animations advance (and never block)
+            if (h.Frames > 0 && n >= h.Frames) break;
+            if (h.Screenshot != null)
+                window.WaitForWork(h.FrameWaitMs);   // deterministic ~8ms/frame so time-driven animations advance (and never block)
             else
                 // Low-rate wake pacing: idle/minimized block until a message (0% CPU); a HUD-only readout throttles to
                 // ~10 Hz; real animation/scroll/decode paces at the display rate. WaitForWork returns early on input,
@@ -207,12 +215,12 @@ public static class FluentApp
         if (allocTypes) AllocTypeProfiler.Stop();   // tear down the EventListener (no leak past the run)
 
         // --screenshot: read the last-rendered back buffer back to CPU and write a PNG for visual fidelity diffing.
-        if (screenshot != null && device is D3D12Device d3d)
+        if (h.Screenshot is { } shotPath && device is D3D12Device d3d)
         {
             host.QuiesceRenderThread();   // async (FG_RENDER_ASYNC): stop the render thread so CaptureBgra (a UI-thread GPU op) is the sole GPU owner
             var px = d3d.CaptureBgra(out int cw, out int ch);
-            PngWriter.WriteBgra(screenshot, px, cw, ch);
-            Console.Error.WriteLine($"screenshot: wrote {screenshot} ({cw}x{ch})");
+            PngWriter.WriteBgra(shotPath, px, cw, ch);
+            Console.Error.WriteLine($"screenshot: wrote {shotPath} ({cw}x{ch})");
         }
 
         WindowHandle = 0;   // the window is gone; don't leave a stale handle for a late SMTC/picker call.
@@ -225,8 +233,65 @@ public static class FluentApp
         if (int.TryParse(raw, out int mb) && mb is >= 16 and <= 1024) return (long)mb * 1024 * 1024;
         return DefaultBytes;
     }
+}
 
-    /// <summary><c>FluentApp.Run&lt;MyApp&gt;()</c> — same, for a parameterless root component.</summary>
-    public static void Run<T>(string title = "FluentGpu", int width = 800, int height = 600) where T : Component, new()
-        => Run(() => new T(), title, width, height);
+/// <summary>
+/// The everyday window/app options for <see cref="FluentApp.Run(Func{Component}, AppOptions?)"/>: window title + size,
+/// Mica material, custom frame, the ambient-fps power throttle, and the post-input warm-cadence hold. Every field has a
+/// flagship default, so <c>new AppOptions { Title = "…" }</c> overrides only what it names.
+/// </summary>
+public sealed record AppOptions
+{
+    /// <summary>Window title (caption / taskbar).</summary>
+    public string Title { get; init; } = "FluentGpu";
+    /// <summary>Initial client width (DIP).</summary>
+    public int Width { get; init; } = 800;
+    /// <summary>Initial client height (DIP).</summary>
+    public int Height { get; init; } = 600;
+    /// <summary>Apply the DWM Mica system backdrop (window becomes transparent to it). False = an opaque window.</summary>
+    public bool Mica { get; init; } = true;
+    /// <summary>Use Mica BaseAlt (the flatter File-Explorer tint) instead of the default Mica Base.</summary>
+    public bool MicaAlt { get; init; }
+    /// <summary>The app draws its own title bar (OS caption stripped; engine caption buttons + snap layouts).</summary>
+    public bool CustomFrame { get; init; }
+    /// <summary>Power throttle for PERPETUAL ambient motion (looping spinner/shimmer/equalizer, smooth playhead): the
+    /// frame loop paces autonomous-animation frames to this rate instead of free-running at the panel refresh. 0 (the
+    /// default) keeps the engine default (uncapped / display-rate). Latency-sensitive motion the user drives (scroll,
+    /// hover, press, drag) is exempt and always runs at the display rate. Maps to <see cref="AppHost.AmbientAnimationFps"/>
+    /// (a live <c>FG_ANIM_FPS</c> env var still wins).</summary>
+    public int AmbientFps { get; init; }
+    /// <summary>Post-input warm-cadence hold (ms): after the last input, keep rendering this long before allowing full
+    /// quiesce so a follow-up interaction pays no cold-start ramp (G1b / research #10). 0 disables the hold. Maps to
+    /// <see cref="AppHost.WarmCadenceHoldMs"/>.</summary>
+    public float WarmCadenceMs { get; init; } = 1000f;
+}
+
+/// <summary>
+/// The deterministic diagnostic knobs for <see cref="FluentAppHarness.Run"/> (test / screenshot / visual-diff loops):
+/// a fixed frame count, a screenshot output path, and the per-frame wait. Separate from <see cref="AppOptions"/> so the
+/// everyday <see cref="FluentApp.Run(Func{Component}, AppOptions?)"/> surface never sees them.
+/// </summary>
+public sealed record HarnessOptions
+{
+    /// <summary>Stop after this many frames (&gt; 0); -1 (the default) runs interactively until the window closes.</summary>
+    public int Frames { get; init; } = -1;
+    /// <summary>When set, read the last-rendered back buffer to a PNG at this path after the run (visual-diff). The frame
+    /// loop then paces at <see cref="FrameWaitMs"/> so time-driven animations advance deterministically.</summary>
+    public string? Screenshot { get; init; }
+    /// <summary>Per-frame wait (ms) used while a <see cref="Screenshot"/> is pending — deterministic settle pacing.</summary>
+    public int FrameWaitMs { get; init; } = 8;
+}
+
+/// <summary>
+/// The diagnostic / test entry point: <see cref="FluentApp.Run(Func{Component}, AppOptions?)"/> with the deterministic
+/// controls (frame count, screenshot, frame-wait) exposed via <see cref="HarnessOptions"/>. The gallery's
+/// <c>--frames</c> / <c>--screenshot</c> arms and the screenshot visual-diff loop route through here; everyday apps use
+/// <see cref="FluentApp.Run(Func{Component}, AppOptions?)"/>.
+/// </summary>
+public static class FluentAppHarness
+{
+    /// <summary>Run <paramref name="root"/> with the given window <paramref name="options"/> and diagnostic
+    /// <paramref name="harness"/> controls.</summary>
+    public static void Run(Func<Component> root, AppOptions? options = null, HarnessOptions? harness = null)
+        => FluentApp.RunCore(root, options ?? new AppOptions(), harness ?? new HarnessOptions());
 }

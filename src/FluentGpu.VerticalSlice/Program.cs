@@ -1701,6 +1701,41 @@ sealed class GridProbe : Component
         => Ui.UniformGrid(3, 10f, 50f, Cell(), Cell(), Cell(), Cell(), Cell()) with { Width = 320, Height = 400 };
 }
 
+// G3: BoxEl.AspectRatio derive-missing-dimension (CSS aspect-ratio via Ui.AspectRatio). child0 = width-constrained
+// (Width 320, 16:9 -> derives H 180); child1 = height-constrained (Height 90, 16:9 -> derives W 160). AlignSelf.Start
+// so the column's cross-stretch never overrides the derived cross size.
+sealed class AspectProbe : Component
+{
+    public override Element Render() => new BoxEl
+    {
+        Direction = 1,
+        Children =
+        [
+            new BoxEl { Width = 320f, AspectRatio = 16f / 9f, AlignSelf = FlexAlign.Start },
+            new BoxEl { Height = 90f, AspectRatio = 16f / 9f, AlignSelf = FlexAlign.Start },
+        ],
+    };
+}
+
+// G3: Ui.Spacer / Spacer(px) / Wrap / Center primitives. Row0: a growing Spacer pushes the trailing box to the far edge
+// (300 - 40 - 60 = 200 slack eaten -> box2.X == 240). Row1: a fixed Spacer(24) holds a rigid gap (box2.X == 64). Wrap:
+// three 120-wide boxes + gap 10 in a 260-wide panel -> the third wraps to a new line. Center: 40x40 centered in 200x200.
+sealed class PrimitivesProbe : Component
+{
+    static BoxEl Box(float w, float h) => new() { Width = w, Height = h };
+    public override Element Render() => new BoxEl
+    {
+        Direction = 1, Gap = 8f, AlignItems = FlexAlign.Start,   // never stretch children's width past their explicit size
+        Children =
+        [
+            new BoxEl { Direction = 0, Width = 300f, Children = [ Box(40f, 20f), Ui.Spacer(), Box(60f, 20f) ] },
+            new BoxEl { Direction = 0, Width = 300f, Children = [ Box(40f, 20f), Ui.Spacer(24f), Box(60f, 20f) ] },
+            Ui.Wrap(10f, Box(120f, 30f), Box(120f, 30f), Box(120f, 30f)) with { Width = 260f },
+            new BoxEl { Width = 200f, Height = 200f, Children = [ Ui.Center(Box(40f, 40f)) ] },
+        ],
+    };
+}
+
 // A grid whose FIXED columns (100+100+60 = 260) exceed its definite width (120) with a Star track present — the
 // overflow case that used to spill cells past the edge + overlap. The engine must shrink the fixed tracks to fit.
 sealed class GridOverflowProbe : Component
@@ -14506,6 +14541,135 @@ static class Slice
             $"longFit={longFit:0.#} < longFixed={longFixed:0.#} | shortFit={shortFit:0.#} ~= shortFixed={shortFixed:0.#}");
     }
 
+    // G3 - token system: OnAccent (contrast baked at accent-set time, never at paint), on-media ink/scrim static
+    // identity, generated Tok accessors forward the live TokenSet across a theme swap, and the generated Icons table.
+    static void G3TokenChecks()
+    {
+        var savedPalette = Tok.Palette;
+        var savedTheme = Tok.Theme;
+
+        // gate.tok.onaccent-contrast
+        // Extreme 1: white fill (dark theme -> Light2(white) == white) -> near-black ink, AA-passing, memoized per epoch.
+        Tok.Use(savedPalette, ThemeKind.Dark);
+        Tok.SetAccent(ColorF.FromRgba(0xFF, 0xFF, 0xFF));
+        ColorF bgW = Tok.AccentDefault;
+        int cA = Tok.OnAccentComputeCount;
+        ColorF inkW = Tok.OnAccent;
+        ColorF inkW2 = Tok.OnAccent;               // second read, same epoch -> cached (no recompute)
+        int cB = Tok.OnAccentComputeCount;
+        bool memoized = cB == cA + 1 && inkW2 == inkW;
+        bool wMatches = inkW == ColorContrast.PickContrast(bgW) && ColorContrast.Ratio(inkW, bgW) >= 4.5f;
+
+        // Extreme 2: near-black fill (light theme -> Dark1(#161616) very dark) -> white ink, AA-passing.
+        Tok.Use(savedPalette, ThemeKind.Light);
+        Tok.SetAccent(ColorF.FromRgba(0x16, 0x16, 0x16));
+        ColorF bgB = Tok.AccentDefault;
+        ColorF inkB = Tok.OnAccent;
+        bool bMatches = inkB == ColorContrast.PickContrast(bgB) && ColorContrast.Ratio(inkB, bgB) >= 4.5f;
+
+        // Mid-saturated fill: picks the WCAG-better ink of the pair.
+        Tok.SetAccent(ColorF.FromRgba(0x2E, 0x6C, 0xE0));
+        ColorF bgM = Tok.AccentDefault;
+        bool mMatches = Tok.OnAccent == ColorContrast.PickContrast(bgM);
+        Check("gate.tok.onaccent-contrast", wMatches && bMatches && mMatches && memoized,
+            $"whiteAA={ColorContrast.Ratio(inkW, bgW):0.0} blackAA={ColorContrast.Ratio(inkB, bgB):0.0} midMatch={mMatches} memo={memoized}(compute {cA}->{cB})");
+
+        // gate.tok.onmedia-static-identity: scrim/ink getters return identical instances/values (no per-read alloc).
+        var s1 = Tok.ScrimBottom; var s2 = Tok.ScrimBottom;
+        var t1 = Tok.ScrimTop; var t2 = Tok.ScrimTop;
+        bool gradSame = ReferenceEquals(s1.Stops, s2.Stops) && ReferenceEquals(t1.Stops, t2.Stops);
+        bool inkStatic = Tok.OnMediaPrimary == new ColorF(1f, 1f, 1f, 1f)
+                      && Tok.OnMediaSecondary == new ColorF(1f, 1f, 1f, 0.80f)
+                      && Tok.OnMediaTertiary == new ColorF(1f, 1f, 1f, 0.60f)
+                      && Tok.MediaScrim == new ColorF(0f, 0f, 0f, 0.55f);
+        Check("gate.tok.onmedia-static-identity", gradSame && inkStatic,
+            $"scrimStopsIdentical={gradSame} inkScrimValues={inkStatic}");
+
+        // gate.tok.generated-accessors: a GENERATED forward reflects the live TokenSet across a theme swap.
+        Tok.Use(savedPalette, ThemeKind.Dark);
+        ColorF darkVal = Tok.FillCardDefault;                     // generated `=> T.FillCardDefault`
+        bool darkMatch = darkVal == Tok.T.FillCardDefault;
+        Tok.Use(savedPalette, ThemeKind.Light);
+        ColorF lightVal = Tok.FillCardDefault;
+        bool lightMatch = lightVal == Tok.T.FillCardDefault;
+        bool flipped = darkVal != lightVal;                       // the table swap is visible through the generated getter
+        Check("gate.tok.generated-accessors", darkMatch && lightMatch && flipped,
+            $"darkMatch={darkMatch} lightMatch={lightMatch} flipped={flipped}");
+
+        // gate.icons.generated-table: the generated Icons table matches (golden few incl. a Wavee fold-in).
+        // Compared by codepoint (ASCII-safe source; no raw PUA glyphs, per the engine icon-font convention).
+        bool iconsOk = Icons.Play.Length == 1 && Icons.Play[0] == (char)0xE768
+                    && Icons.Pause[0] == (char)0xE769 && Icons.Home[0] == (char)0xE80F
+                    && Icons.ChromeClose[0] == (char)0xE8BB && Icons.Album[0] == (char)0xE93C
+                    && Icons.Delete[0] == (char)0xE74D;
+        Check("gate.icons.generated-table", iconsOk,
+            $"Play=U+{(int)Icons.Play[0]:X4} Album=U+{(int)Icons.Album[0]:X4} Delete=U+{(int)Icons.Delete[0]:X4}");
+
+        Tok.SetAccent(null);                                      // restore (headless slice runs with no injected accent)
+        Tok.Use(savedPalette, savedTheme);
+    }
+
+    // G3 - layout primitives: Ui.AspectRatio derive-missing-dimension + an aspect box is NOT a relayout boundary.
+    static void G3AspectChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("aspect", new Size2(640, 480), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        using var host = new AppHost(app, window, device, fonts, strings, new AspectProbe());
+        host.RunFrame();
+
+        var root = host.Scene.Root;
+        var wBox = Child(host.Scene, root, 0);
+        var hBox = Child(host.Scene, root, 1);
+        var wb = host.Scene.Bounds(wBox);
+        var hb = host.Scene.Bounds(hBox);
+        bool wDerives = Near(wb.W, 320f, 0.5f) && Near(wb.H, 180f, 0.5f);   // 320 / (16/9) = 180
+        bool hDerives = Near(hb.W, 160f, 0.5f) && Near(hb.H, 90f, 0.5f);    // 90 * (16/9) = 160
+        // Not a layout boundary: exactly one authored dimension stays NaN (IsLayoutBoundary needs both set).
+        bool notBoundary = float.IsNaN(host.Scene.Layout(wBox).Height) && float.IsNaN(host.Scene.Layout(hBox).Width);
+        Check("gate.layout.aspect-derive", wDerives && hDerives && notBoundary,
+            $"w=({wb.W:0}x{wb.H:0}) h=({hb.W:0}x{hb.H:0}) notBoundary={notBoundary}");
+    }
+
+    // G3 - Spacer / Spacer(px) / Wrap / Center primitives (arranged-rect assertions).
+    static void G3PrimitiveChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("primitives", new Size2(640, 640), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        using var host = new AppHost(app, window, device, fonts, strings, new PrimitivesProbe());
+        host.RunFrame();
+
+        var s = host.Scene;
+        var root = s.Root;
+        var row0 = Child(s, root, 0);
+        var row1 = Child(s, root, 1);
+        var wrap = Child(s, root, 2);
+        var centerOuter = Child(s, root, 3);
+
+        // Spacer() grows: the trailing box is pushed to the far edge (300 - 40 - 60 = 200 slack -> box2.X == 240).
+        float grownX = s.AbsoluteRect(Child(s, row0, 2)).X - s.AbsoluteRect(row0).X;
+        bool spacerGrows = Near(grownX, 240f, 1f);
+        // Spacer(24) is rigid: trailing box sits right after the 24px gap (box2.X == 40 + 24 == 64).
+        float fixedX = s.AbsoluteRect(Child(s, row1, 2)).X - s.AbsoluteRect(row1).X;
+        bool spacerFixed = Near(fixedX, 64f, 1f);
+        // Wrap: the third 120-wide box wraps to a new line (Y drops one row, X returns to the line start).
+        var w0 = s.AbsoluteRect(Child(s, wrap, 0));
+        var w2 = s.AbsoluteRect(Child(s, wrap, 2));
+        bool wraps = w2.Y > w0.Y + 20f && Near(w2.X, w0.X, 1f);
+        // Center: the 40x40 child is centered on both axes in the 200x200 box.
+        var outer = s.AbsoluteRect(centerOuter);
+        var inner = s.AbsoluteRect(Child(s, Child(s, centerOuter, 0), 0));
+        bool centered = Near(inner.X - outer.X, (outer.W - inner.W) / 2f, 1f)
+                     && Near(inner.Y - outer.Y, (outer.H - inner.H) / 2f, 1f);
+        Check("gate.ui.spacer-wrap-center", spacerGrows && spacerFixed && wraps && centered,
+            $"grow={grownX:0} fixed={fixedX:0} wrapDy={w2.Y - w0.Y:0} centerOff={inner.X - outer.X:0}");
+    }
+
     static void GridChecks(StringTable strings)
     {
         using var app = new HeadlessPlatformApp();
@@ -25697,6 +25861,9 @@ static class Slice
         KeepAliveChecks(strings);
         ActivationLifecycleChecks(strings);
         AutoFitTextChecks(strings);
+        G3TokenChecks();
+        G3AspectChecks(strings);
+        G3PrimitiveChecks(strings);
         GridChecks(strings);
         GridOverflowChecks(strings);
         GridStretchChecks(strings);

@@ -123,7 +123,8 @@ internal static unsafe class FilePickerProbe
         watchdog.Start();
 
         // BLOCKS on the UI thread until the watchdog closes the window. The picker crash (if any) fail-fasts the process.
-        FluentApp.Run(() => new FilePickerAutoDriver(), "FluentGpu — FilePicker Auto Probe", 900, 640, frames: -1);
+        FluentApp.Run(() => new FilePickerAutoDriver(),
+            new AppOptions { Title = "FluentGpu — FilePicker Auto Probe", Width = 900, Height = 640 });
 
         // We only reach here if Run returned (window closed) WITHOUT a crash.
         if (!s_autoPickerReturned) { Console.WriteLine("[fp-auto] FAILED — the picker never returned (hang or window closed first)."); return 2; }

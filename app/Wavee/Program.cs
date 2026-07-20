@@ -262,8 +262,9 @@ static class Program
             // lyrics wipe/scroll read smooth without quadrupling the idle pipeline. Latency-sensitive input
             // (scroll/hover/drag) is exempt and always runs at the display rate; FG_ANIM_FPS overrides this (=30 to
             // revert to the old cadence, =0 for uncapped / full display rate).
-            FluentApp.Run(() => new WaveeApp(settings, appLocale), "Wavee Music", 1180, 760,
-                          frames: frames, screenshot: screenshot, customFrame: true, micaAlt: true, ambientFps: 60);
+            FluentAppHarness.Run(() => new WaveeApp(settings, appLocale),
+                new AppOptions { Title = "Wavee Music", Width = 1180, Height = 760, CustomFrame = true, MicaAlt = true, AmbientFps = 60 },
+                new HarnessOptions { Frames = frames, Screenshot = screenshot });
         }
         catch (Exception ex)
         {

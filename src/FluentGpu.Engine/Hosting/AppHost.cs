@@ -251,7 +251,11 @@ public sealed class AppHost : IDisposable
     // rendering for WarmCadenceHoldMs before allowing full quiesce so a follow-up interaction pays no cold-start ramp.
     // On for a real window; OFF headless by default (a synthetic-input gate flips it via WarmCadenceEnabledForTest) so
     // every existing headless idle gate that injects input still quiesces exactly as before.
-    private const float WarmCadenceHoldMs = 1000f;
+    /// <summary>Post-input warm-cadence hold (ms) — how long the loop keeps rendering after the last input before it is
+    /// allowed to fully quiesce (research #10; default 1000). App-settable via <c>AppOptions.WarmCadenceMs</c>; 0 disables
+    /// the hold entirely (each idle frame quiesces immediately). Only takes effect on a real window (headless gates flip
+    /// <c>_warmCadenceEnabled</c> per-test).</summary>
+    public float WarmCadenceHoldMs { get; set; } = 1000f;
     private bool _warmCadenceEnabled;
     private double _warmCadenceUntilMs;
 
@@ -1308,7 +1312,7 @@ public sealed class AppHost : IDisposable
         if (s_allocDiag) { db = Probe(SegDispatch, db, dt); dt = Stopwatch.GetTimestamp(); }
         // Post-input warm-cadence hold: any input this frame (a pumped event or a handled click) keeps the loop rendering
         // for WarmCadenceHoldMs so a follow-up interaction pays no cold-start ramp (see field). Real window only by default.
-        if (_warmCadenceEnabled && (clicks > 0 || _tracePumpedEvents > 0))
+        if (_warmCadenceEnabled && WarmCadenceHoldMs > 0f && (clicks > 0 || _tracePumpedEvents > 0))
             _warmCadenceUntilMs = _timers.NowMs + WarmCadenceHoldMs;
 
         // Step 4 fault injection (FG_FORCE_DEVICE_LOST=<frameN>): force a controlled DEVICE_REMOVED so the next submit

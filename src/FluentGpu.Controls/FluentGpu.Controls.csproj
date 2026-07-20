@@ -17,4 +17,9 @@
     <ProjectReference Include="..\FluentGpu.SourceGen\FluentGpu.SourceGen.csproj"
                       OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
+  <!-- Icons source of truth: glyphs.json -> GlyphTableGenerator emits the Icons const surface (dormant unless present). -->
+  <ItemGroup>
+    <AdditionalFiles Include="glyphs.json" FluentGpuGlyphs="true" />
+    <CompilerVisibleItemMetadata Include="AdditionalFiles" MetadataName="FluentGpuGlyphs" />
+  </ItemGroup>
 </Project>

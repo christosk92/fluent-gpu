@@ -42,7 +42,8 @@ public sealed class LayoutInvalidator
     }
 
     /// <summary>A fixed-size, non-flexing, overflow-clipping container — its size is independent of its children, so the
-    /// up-rule stops here (layout.md §4.3). (AspectRatio is not modeled in the live LayoutInput; add when it lands.)</summary>
+    /// up-rule stops here (layout.md §4.3). An aspect-sized box (LayoutInput.AspectRatio set) is intentionally NOT a
+    /// boundary: it leaves one of Width/Height NaN (the derived extent), so it never satisfies the both-explicit test.</summary>
     private static bool IsLayoutBoundary(in LayoutInput s, NodeFlags f)
         => (f & NodeFlags.LayoutBoundary) != 0
         || (!float.IsNaN(s.Width) && !float.IsNaN(s.Height)
