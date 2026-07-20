@@ -546,9 +546,29 @@ public sealed class TreeReconciler
         // (keeping the BoundsAnimated/FLIP/reflow side-effects correct). Children are EXCLUDED from the diff, so they
         // are ALWAYS reconciled. The FLIP "First" capture runs in the host commit loop over the BoundsAnimated flag
         // (AppHost), independent of this call, so a truly-unchanged node still rides a sibling reflow.
+        // DEBUG-only bind-contract tripwire: a bindable channel that flipped between static and bound on this reused
+        // node silently loses (bind wiring is mount-only). The CompiledIn const folds this away in release.
+        if (BindContract.CompiledIn && BindContract.Enabled && BindFlip(newEl, oldEl) is { } flipped)
+            BindContract.Flip(newEl.GetType().Name, flipped);
+
         if (RecordChanged(newEl, oldEl)) WriteColumns(node, newEl, isMount: false, oldEl);
         ReconcileChildren(node, ChildrenOf(newEl), ChildrenOf(oldEl));
     }
+
+    /// <summary>DEBUG-only (<see cref="BindContract"/>): the name of the first bindable channel whose bound/static shape
+    /// flipped between the same-type <paramref name="a"/>/<paramref name="b"/> element versions (the generated
+    /// <c>{T}Diff.FirstBoundFlip</c>), or null. A type mismatch is a replace (handled elsewhere), never a flip.</summary>
+    private static string? BindFlip(Element a, Element b) => a switch
+    {
+        BoxEl x => b is BoxEl y ? BoxElDiff.FirstBoundFlip(x, y) : null,
+        TextEl x => b is TextEl y ? TextElDiff.FirstBoundFlip(x, y) : null,
+        GridEl x => b is GridEl y ? GridElDiff.FirstBoundFlip(x, y) : null,
+        ImageEl x => b is ImageEl y ? ImageElDiff.FirstBoundFlip(x, y) : null,
+        IconLayerEl x => b is IconLayerEl y ? IconLayerElDiff.FirstBoundFlip(x, y) : null,
+        SpanTextEl x => b is SpanTextEl y ? SpanTextElDiff.FirstBoundFlip(x, y) : null,
+        PolylineStrokeEl x => b is PolylineStrokeEl y ? PolylineStrokeElDiff.FirstBoundFlip(x, y) : null,
+        _ => null,
+    };
 
     /// <summary>GEN-01 (wired): true unless <paramref name="a"/> and <paramref name="b"/> are the same leaf element
     /// type with EVERY diffable prop unchanged (the generated <c>{T}Diff.AnyChanged</c> — inherited fields included,

@@ -59,6 +59,8 @@ public sealed class Signal<T> : ISignalSource, IReadSignal<T>
     /// compare (the setter routes through here — no doubled gate). An always-notify signal returns <c>true</c> every set.</summary>
     public bool SetIfChanged(T value)
     {
+        if (BackwardsWriteGuard.CompiledIn && BackwardsWriteGuard.Enabled)
+            BackwardsWriteGuard.CheckWrite(Tracking.Current, _subs, typeof(T));
         if (_cmp.Equals(_value, value)) return false;
         _value = value;
         NotifySubscribers();
@@ -121,6 +123,8 @@ public sealed class FloatSignal : ISignalSource, IReadSignal<float>
     /// no notify on an equal write, <c>true</c> + notify on a change. Single compare (the setter routes through here).</summary>
     public bool SetIfChanged(float value)
     {
+        if (BackwardsWriteGuard.CompiledIn && BackwardsWriteGuard.Enabled)
+            BackwardsWriteGuard.CheckWriteFloat(Tracking.Current, _subs);
         if (_value == value) return false;
         _value = value;
         for (int i = _subs.Count - 1; i >= 0; i--) _subs[i].MarkStale();

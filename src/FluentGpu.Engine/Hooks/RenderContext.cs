@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentGpu.Animation;
@@ -9,6 +10,12 @@ using FluentGpu.Signals;
 namespace FluentGpu.Hooks;
 
 internal abstract class HookCell { }
+
+/// <summary>The call-site identity of a hook cell (the WS1 keyed-substrate key): the hashed <c>[CallerFilePath]</c>,
+/// the <c>[CallerLineNumber]</c>, and a per-render ORDINAL (the Nth time this exact source line is hit in one render —
+/// a hook in a loop gets ordinals 0..N-1, reset each render). Value-typed (record struct ⇒ non-boxing
+/// <c>IEquatable</c>) so the per-render dictionary lookup that resolves a hook to its cell never allocates.</summary>
+internal readonly record struct HookKey(ulong FileHash, int Line, int Ordinal);
 
 /// <summary>A hook cell that owns a disposable reactive primitive (a memo), disposed when the component unmounts.</summary>
 internal interface IDisposableCell { void DisposeCell(); }
@@ -394,10 +401,23 @@ internal sealed class GestureHookState
 /// </summary>
 public sealed partial class RenderContext
 {
+    // ── Call-site-keyed hook cells (WS1 substrate) ──────────────────────────────────────────────────────────────────
+    // Each hook cell is keyed by its CALL SITE — (hashed [CallerFilePath], [CallerLineNumber], per-render ordinal) —
+    // NOT by a positional cursor. A stable key means a hook keeps the SAME cell across renders even when it is called
+    // CONDITIONALLY: a hook inside an `if` gains/loses its slot without shifting its neighbours' state (the thing the
+    // old positional cursor could not do), and a hook in a loop is disambiguated by the per-line ordinal. Cells persist
+    // in _cells for the component's lifetime; a conditionally-skipped hook keeps its state for when the branch is
+    // re-entered, and every cell's cleanup still runs at unmount (RunAllCleanups walks all of _cells). Conditional /
+    // looped hooks are therefore LEGAL — see docs/guide/reactivity.md.
     private readonly List<HookCell> _cells = new();
-    private int _cursor;
+    private readonly Dictionary<HookKey, int> _keyed = new();                     // call-site key → index into _cells
+    private readonly Dictionary<(ulong File, int Line), int> _ordinals = new();   // per-render loop-ordinal counter (reset each render)
     private int _cleanupCellCount;
-    private bool _mounted;
+
+    // [CallerFilePath] yields the SAME interned string reference for every call site in a file, so the file path is
+    // hashed ONCE per distinct file (XxHash64, via DepKey) and cached by reference identity — the steady render re-hashes
+    // nothing. Static + UI-thread-confined (the engine's single render/reconcile thread), so no lock is needed.
+    private static readonly Dictionary<string, ulong> _fileHashes = new(ReferenceEqualityComparer.Instance);
 
     public readonly List<Action> PendingEffects = new();        // UseEffect — after present (phase 12)
     public readonly List<Action> PendingLayoutEffects = new();  // UseLayoutEffect — after layout, before paint (phase 6.5)
@@ -421,38 +441,46 @@ public sealed partial class RenderContext
     public IReadSignal<int>? ImageEpoch;        // bumped by the host on any image status change → re-renders UseImage consumers
     public Func<Signal<bool>>? GetActiveSig;    // reconciler-injected: get-or-create THIS component's KeepAlive-parked signal (UseIsActive)
 
-    internal void BeginRender() => _cursor = 0;
+    internal void BeginRender() => _ordinals.Clear();   // reset the per-render loop ordinals; cells persist by key
     internal void EndRender()
     {
-        DebugCheckHooksConsumed();   // rules-of-hooks guard (DEBUG only; erased on Release) — see below
-        _mounted = true;
         // The "form under construction" thread-local (set by UseForm so same-component UseField calls auto-join) lives
         // only for this render — clear it so it never leaks into the next component the reconciler renders.
         FluentGpu.Forms.FormScope.Building = null;
     }
 
-    // ── Rules-of-hooks guard (engine follow-up to the DetailShell conditional-hook crash) ─────────────────────────────
-    // Positional hooks (UseState/UseMemo/UseEffect/UseContextSignal/…) index a fixed _cells list by a per-render cursor,
-    // so EVERY render of a mounted component must call the SAME hooks in the SAME order. A conditional hook (inside an
-    // if/branch/loop, or after an early return) desyncs the cursor → an opaque IndexOutOfRange / InvalidCast deep in a
-    // Use* call (the back-forward crash). These [Conditional("DEBUG")] checks turn that into a clear, named error in
-    // DEBUG/CI and are entirely erased from the shipping Release/AOT binary (zero production cost).
-    [System.Diagnostics.Conditional("DEBUG")]
-    private void DebugCheckHooksConsumed()
+    // ── Keyed cell resolution ────────────────────────────────────────────────────────────────────────────────────────
+    // Every positional hook resolves its cell through these two helpers. LookupCell advances the per-(file,line) loop
+    // ordinal, computes the call-site key, and returns the existing cell index (or -1 for a fresh call site/ordinal —
+    // the hook then creates its cell and calls RegisterCell with the SAME key). No closures ⇒ zero allocation on the
+    // steady (reuse) path; the ordinal/keyed dictionary probes are value-typed (no boxing).
+
+    /// <summary>Resolve the current call site to its existing cell index (or -1 if fresh), yielding the key to register with.</summary>
+    private int LookupCell(string? file, int line, out HookKey key)
     {
-        if (_mounted && _cursor != _cells.Count)
-            throw new InvalidOperationException(
-                $"Rules of hooks violated: a component called {_cursor} positional hook(s) this render but {_cells.Count} on its first render — " +
-                "a Use* hook was called conditionally (inside an if/branch/loop) or after an early return. Hoist every hook above any branch/return.");
+        ulong fh = FileHash(file);
+        var fl = (fh, line);
+        _ordinals.TryGetValue(fl, out int ord);
+        _ordinals[fl] = ord + 1;
+        key = new HookKey(fh, line, ord);
+        return _keyed.TryGetValue(key, out int idx) ? idx : -1;
     }
 
-    [System.Diagnostics.Conditional("DEBUG")]
-    private void DebugGuardCursor()
+    /// <summary>Append a freshly-created cell and bind it to its call-site <paramref name="key"/>.</summary>
+    private void RegisterCell(in HookKey key, HookCell cell, bool cleanupCapable = false)
     {
-        if (_cursor >= _cells.Count)
-            throw new InvalidOperationException(
-                "Rules of hooks violated: more positional hooks ran this render than on the first render — a Use* hook was called conditionally " +
-                "(inside an if/branch/loop) or after an early return. Hoist every hook above any branch/return.");
+        _keyed[key] = _cells.Count;
+        _cells.Add(cell);
+        if (cleanupCapable) _cleanupCellCount++;
+    }
+
+    private static ulong FileHash(string? file)
+    {
+        if (file is null) return 0;
+        if (_fileHashes.TryGetValue(file, out ulong h)) return h;
+        h = (ulong)DepKey.HashString(file);   // the existing zero-alloc XxHash64; computed once per distinct file
+        _fileHashes[file] = h;
+        return h;
     }
 
     /// <summary>Run every pending effect cleanup + dispose owned reactive primitives (component unmount).</summary>
@@ -466,12 +494,6 @@ public sealed partial class RenderContext
             if (cell is EffectCell e) e.Cleanup?.Invoke();
             else if (cell is IDisposableCell d) d.DisposeCell();
         }
-    }
-
-    private void AddCell(HookCell cell, bool cleanupCapable = false)
-    {
-        _cells.Add(cell);
-        if (cleanupCapable) _cleanupCellCount++;
     }
 
     private ReactiveRuntime Rt => Runtime ?? throw new InvalidOperationException("RenderContext.Runtime not set (component not mounted by the host).");
@@ -503,12 +525,12 @@ public sealed partial class RenderContext
         }
     }
 
-    public (T Value, Action<T> Set) UseState<T>(T initial)
+    public (T Value, Action<T> Set) UseState<T>(T initial, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
+        int idx = LookupCell(__hf, __hl, out var __k);
         SignalCell<T> cell;
-        if (!_mounted) { cell = new SignalCell<T>(new Signal<T>(initial)); _cells.Add(cell); }
-        else cell = (SignalCell<T>)_cells[_cursor];
-        _cursor++;
+        if (idx < 0) { cell = new SignalCell<T>(new Signal<T>(initial)); RegisterCell(__k, cell); }
+        else cell = (SignalCell<T>)_cells[idx];
 
         var sig = cell.Signal;
         // Reading .Value here (inside the render-effect) subscribes this component; the setter writes the signal,
@@ -518,33 +540,33 @@ public sealed partial class RenderContext
 
     /// <summary>A persistent reactive cell you own (the Solid/Preact <c>signal</c>): read <c>.Value</c> in render to
     /// subscribe, or bind it to a node channel for a render-free update. Survives re-renders.</summary>
-    public Signal<T> UseSignal<T>(T initial)
+    public Signal<T> UseSignal<T>(T initial, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
+        int idx = LookupCell(__hf, __hl, out var __k);
         SignalCell<T> cell;
-        if (!_mounted) { cell = new SignalCell<T>(new Signal<T>(initial)); _cells.Add(cell); }
-        else cell = (SignalCell<T>)_cells[_cursor];
-        _cursor++;
+        if (idx < 0) { cell = new SignalCell<T>(new Signal<T>(initial)); RegisterCell(__k, cell); }
+        else cell = (SignalCell<T>)_cells[idx];
         return cell.Signal;
     }
 
     /// <summary>A persistent scalar signal for the hot path (slider/scroll/progress). Bind it to a node transform/paint
     /// channel (<c>TransformBind</c>/<c>OpacityBind</c>) for a value→pixels update that skips render/reconcile/layout.</summary>
-    public FloatSignal UseFloatSignal(float initial = 0f)
+    public FloatSignal UseFloatSignal(float initial = 0f, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
+        int idx = LookupCell(__hf, __hl, out var __k);
         FloatSignalCell cell;
-        if (!_mounted) { cell = new FloatSignalCell(new FloatSignal(initial)); _cells.Add(cell); }
-        else cell = (FloatSignalCell)_cells[_cursor];
-        _cursor++;
+        if (idx < 0) { cell = new FloatSignalCell(new FloatSignal(initial)); RegisterCell(__k, cell); }
+        else cell = (FloatSignalCell)_cells[idx];
         return cell.Signal;
     }
 
     /// <summary>A derived reactive value (the Solid <c>createMemo</c>): recomputes from the signals it reads, cached.</summary>
-    public Memo<T> UseComputed<T>(Func<T> compute)
+    public Memo<T> UseComputed<T>(Func<T> compute, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
+        int idx = LookupCell(__hf, __hl, out var __k);
         MemoHookCell<T> cell;
-        if (!_mounted) { cell = new MemoHookCell<T>(new Memo<T>(Rt, compute)); AddCell(cell, cleanupCapable: true); }
-        else cell = (MemoHookCell<T>)_cells[_cursor];
-        _cursor++;
+        if (idx < 0) { cell = new MemoHookCell<T>(new Memo<T>(Rt, compute)); RegisterCell(__k, cell, cleanupCapable: true); }
+        else cell = (MemoHookCell<T>)_cells[idx];
         return cell.Memo;
     }
 
@@ -558,51 +580,58 @@ public sealed partial class RenderContext
     // the Func<Action?> overload and its return is treated as the cleanup — write a block body `() => { X(); }` for a
     // fire-only effect.
 
-    public void UseEffect(Action effect) { var e = GetAutoEffect(layout: false, out bool mount); e.ActionBody = effect; e.FuncBody = null; if (mount) e.Prime(); }
-    public void UseEffect(Func<Action?> effect) { var e = GetAutoEffect(layout: false, out bool mount); e.FuncBody = effect; e.ActionBody = null; if (mount) e.Prime(); }
+    // AUTO-TRACKED (no deps) and DEPS-GATED (a DepKey) stay separate overloads (non-nullable DepKey → 0-alloc; a
+    // DepKey? nullable boxes on every call). The deps overloads carry [OverloadResolutionPriority(1)] so a bare-string
+    // deps — `UseEffect(fn, someString)`, where `string → DepKey` competes with the CallerFilePath `string? __hf` of the
+    // auto overload — still binds to the DEPS overload (the higher priority wins over the identity string conversion).
+    // Without it the string would be captured as the file path and the effect would silently become auto-tracked.
+    public void UseEffect(Action effect, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) { var e = GetAutoEffect(layout: false, out bool mount, __hf, __hl); e.ActionBody = effect; e.FuncBody = null; if (mount) e.Prime(); }
+    public void UseEffect(Func<Action?> effect, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) { var e = GetAutoEffect(layout: false, out bool mount, __hf, __hl); e.FuncBody = effect; e.ActionBody = null; if (mount) e.Prime(); }
     /// <summary>Like <see cref="UseEffect(Action)"/> but runs after layout, before paint (Bounds are valid). Phase 6.5.</summary>
-    public void UseLayoutEffect(Action effect) { var e = GetAutoEffect(layout: true, out bool mount); e.ActionBody = effect; e.FuncBody = null; if (mount) e.Prime(); }
+    public void UseLayoutEffect(Action effect, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) { var e = GetAutoEffect(layout: true, out bool mount, __hf, __hl); e.ActionBody = effect; e.FuncBody = null; if (mount) e.Prime(); }
     /// <inheritdoc cref="UseLayoutEffect(Action)"/>
-    public void UseLayoutEffect(Func<Action?> effect) { var e = GetAutoEffect(layout: true, out bool mount); e.FuncBody = effect; e.ActionBody = null; if (mount) e.Prime(); }
+    public void UseLayoutEffect(Func<Action?> effect, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) { var e = GetAutoEffect(layout: true, out bool mount, __hf, __hl); e.FuncBody = effect; e.ActionBody = null; if (mount) e.Prime(); }
 
     /// <summary>Deps-gated effect (no tracking): runs at mount and whenever <paramref name="deps"/> changes. Pass
-    /// <see cref="DepKey.Empty"/> (the default) for mount-once. Scalars/tuples convert implicitly (<c>UseEffect(fn, count)</c>).</summary>
-    public void UseEffect(Action effect, DepKey deps) => EffectKey(effect, deps, PendingEffects);
+    /// <see cref="DepKey.Empty"/> for mount-once. Scalars/tuples convert implicitly (<c>UseEffect(fn, count)</c>).</summary>
+    [OverloadResolutionPriority(1)]
+    public void UseEffect(Action effect, DepKey deps, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => EffectKey(effect, deps, PendingEffects, __hf, __hl);
     /// <inheritdoc cref="UseEffect(Action, DepKey)"/>
-    public void UseEffect(Func<Action?> effect, DepKey deps) => EffectKeyC(effect, deps, PendingEffects);
+    [OverloadResolutionPriority(1)]
+    public void UseEffect(Func<Action?> effect, DepKey deps, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => EffectKeyC(effect, deps, PendingEffects, __hf, __hl);
     /// <inheritdoc cref="UseEffect(Action, DepKey)"/>
-    public void UseLayoutEffect(Action effect, DepKey deps) => EffectKey(effect, deps, PendingLayoutEffects);
+    [OverloadResolutionPriority(1)]
+    public void UseLayoutEffect(Action effect, DepKey deps, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => EffectKey(effect, deps, PendingLayoutEffects, __hf, __hl);
     /// <inheritdoc cref="UseEffect(Action, DepKey)"/>
-    public void UseLayoutEffect(Func<Action?> effect, DepKey deps) => EffectKeyC(effect, deps, PendingLayoutEffects);
+    [OverloadResolutionPriority(1)]
+    public void UseLayoutEffect(Func<Action?> effect, DepKey deps, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => EffectKeyC(effect, deps, PendingLayoutEffects, __hf, __hl);
 
     /// <summary>Mount a signal-tracked effect owned by this component that runs EAGERLY (the body runs synchronously now,
     /// then re-runs inline during <see cref="ReactiveRuntime.Flush"/> when a read signal changes). Distinct from the
     /// passive auto-tracked <see cref="UseEffect(Action)"/> — use this adapter form ONLY to bridge a hot signal into a
     /// coarser retained signal where eager timing is required; prefer <see cref="UseEffect(Action)"/> otherwise.</summary>
-    public void UseSignalEffect(Action effect)
+    public void UseSignalEffect(Action effect, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
-        SignalEffectCell cell;
-        if (!_mounted) { cell = new SignalEffectCell(new Effect(Rt, effect)); AddCell(cell, cleanupCapable: true); }
-        else cell = (SignalEffectCell)_cells[_cursor];
-        _cursor++;
+        int idx = LookupCell(__hf, __hl, out var __k);
+        if (idx < 0) { var cell = new SignalEffectCell(new Effect(Rt, effect)); RegisterCell(__k, cell, cleanupCapable: true); }
     }
 
-    private AutoEffect GetAutoEffect(bool layout, out bool mount)
+    private AutoEffect GetAutoEffect(bool layout, out bool mount, string? file, int line)
     {
-        mount = !_mounted;
+        int idx = LookupCell(file, line, out var __k);
+        mount = idx < 0;
         AutoEffectCell cell;
-        if (mount) { cell = new AutoEffectCell { Effect = new AutoEffect(Rt, this, layout) }; AddCell(cell, cleanupCapable: true); }
-        else { DebugGuardCursor(); cell = (AutoEffectCell)_cells[_cursor]; }
-        _cursor++;
+        if (mount) { cell = new AutoEffectCell { Effect = new AutoEffect(Rt, this, layout) }; RegisterCell(__k, cell, cleanupCapable: true); }
+        else cell = (AutoEffectCell)_cells[idx];
         return cell.Effect;
     }
 
-    private void EffectKey(Action effect, DepKey deps, List<Action> target)
+    private void EffectKey(Action effect, DepKey deps, List<Action> target, string? file, int line)
     {
+        int idx = LookupCell(file, line, out var __k);
         EffectCell cell;
-        if (!_mounted) { cell = new EffectCell(); AddCell(cell, cleanupCapable: true); }
-        else { DebugGuardCursor(); cell = (EffectCell)_cells[_cursor]; }
-        _cursor++;
+        if (idx < 0) { cell = new EffectCell(); RegisterCell(__k, cell, cleanupCapable: true); }
+        else cell = (EffectCell)_cells[idx];
 
         if (!cell.HasKey || cell.Key != deps)
         {
@@ -611,12 +640,12 @@ public sealed partial class RenderContext
         }
     }
 
-    private void EffectKeyC(Func<Action?> effect, DepKey deps, List<Action> target)
+    private void EffectKeyC(Func<Action?> effect, DepKey deps, List<Action> target, string? file, int line)
     {
+        int idx = LookupCell(file, line, out var __k);
         EffectCell cell;
-        if (!_mounted) { cell = new EffectCell(); AddCell(cell, cleanupCapable: true); }
-        else { DebugGuardCursor(); cell = (EffectCell)_cells[_cursor]; }
-        _cursor++;
+        if (idx < 0) { cell = new EffectCell(); RegisterCell(__k, cell, cleanupCapable: true); }
+        else cell = (EffectCell)_cells[idx];
 
         if (!cell.HasKey || cell.Key != deps)
         {
@@ -637,12 +666,12 @@ public sealed partial class RenderContext
     internal void EnqueueEffectRun(Action run, bool layout) => EnqueueEffect(layout ? PendingLayoutEffects : PendingEffects, run);
 
     /// <summary>State driven by a reducer (the React <c>useReducer</c>); dispatches fold over the latest committed state.</summary>
-    public (TState State, Action<TAction> Dispatch) UseReducer<TState, TAction>(Func<TState, TAction, TState> reducer, TState initial)
+    public (TState State, Action<TAction> Dispatch) UseReducer<TState, TAction>(Func<TState, TAction, TState> reducer, TState initial, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
+        int idx = LookupCell(__hf, __hl, out var __k);
         SignalCell<TState> cell;
-        if (!_mounted) { cell = new SignalCell<TState>(new Signal<TState>(initial)); _cells.Add(cell); }
-        else cell = (SignalCell<TState>)_cells[_cursor];
-        _cursor++;
+        if (idx < 0) { cell = new SignalCell<TState>(new Signal<TState>(initial)); RegisterCell(__k, cell); }
+        else cell = (SignalCell<TState>)_cells[idx];
 
         var sig = cell.Signal; var r = reducer;
         Action<TAction> dispatch = action => sig.Value = r(sig.Peek(), action);
@@ -652,20 +681,20 @@ public sealed partial class RenderContext
     /// <summary>Memoize an expensive value; recomputes only when <paramref name="deps"/> changes (deps-gated, explicit —
     /// there is no auto-tracked memo). Scalars/tuples convert implicitly; <see cref="DepKey.Empty"/>/default = compute
     /// once at mount.</summary>
-    public T UseMemo<T>(Func<T> factory, DepKey deps)
+    public T UseMemo<T>(Func<T> factory, DepKey deps, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
+        int idx = LookupCell(__hf, __hl, out var __k);
         MemoCell<T> cell;
-        if (!_mounted)
+        if (idx < 0)
         {
             cell = new MemoCell<T> { Value = factory(), Key = deps, HasKey = true };
-            _cells.Add(cell);
+            RegisterCell(__k, cell);
         }
         else
         {
-            DebugGuardCursor(); cell = (MemoCell<T>)_cells[_cursor];
+            cell = (MemoCell<T>)_cells[idx];
             if (!cell.HasKey || cell.Key != deps) { cell.Value = factory(); cell.Key = deps; cell.HasKey = true; }
         }
-        _cursor++;
         return cell.Value;
     }
 
@@ -688,14 +717,32 @@ public sealed partial class RenderContext
         return context.Default;
     }
 
+    /// <summary>Like <see cref="UseContext{T}"/> but MANDATORY: resolves the nearest provided value of
+    /// <paramref name="context"/> (same resolve path, including the parked <see cref="_ctxResolveCache"/> fallback so a
+    /// KeepAlive-parked re-render still finds it), subscribing this component to that provider's signal — but THROWS
+    /// <see cref="InvalidOperationException"/> naming the context type when no provider is in scope. A provider carrying
+    /// <c>null</c> (for a <c>Context&lt;T?&gt;</c>) also throws — a required dependency must be present AND non-null.
+    /// Use for a dependency the component cannot render without (a service/store), so a missing provider is a loud
+    /// programming error at the consumer instead of a silent default.</summary>
+    public T UseRequiredContext<T>(Context<T> context)
+    {
+        var sig = ResolveContextSignal?.Invoke(AnchorNode, context);
+        if (sig is not null) (_ctxResolveCache ??= new())[context] = sig;   // attached: refresh the last-resolved provider
+        else _ctxResolveCache?.TryGetValue(context, out sig);              // detached/parked: reuse it (providers above are unchanged)
+        if (sig is not null && sig.Value is T tv) return tv;   // sig.Value subscribes the render-effect
+        throw new InvalidOperationException(
+            $"UseRequiredContext<{typeof(T).Name}>: no provider for this context is in scope (or it carries a null/incompatible " +
+            $"value). Wrap an ancestor in Ctx.Provide({typeof(T).Name} …) so the required dependency resolves.");
+    }
+
     /// <summary>Return the nearest context as a read signal without subscribing this render. Reading the returned
     /// signal's <c>.Value</c> subscribes the current reactive computation at the call site.</summary>
-    public IReadSignal<T> UseContextSignal<T>(Context<T> context)
+    public IReadSignal<T> UseContextSignal<T>(Context<T> context, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
+        int idx = LookupCell(__hf, __hl, out var __k);
         ContextSignalCell<T> cell;
-        if (!_mounted) { cell = new ContextSignalCell<T>(this, context); _cells.Add(cell); }
-        else { DebugGuardCursor(); cell = (ContextSignalCell<T>)_cells[_cursor]; }
-        _cursor++;
+        if (idx < 0) { cell = new ContextSignalCell<T>(this, context); RegisterCell(__k, cell); }
+        else cell = (ContextSignalCell<T>)_cells[idx];
         return cell.Signal;
     }
 
@@ -707,10 +754,11 @@ public sealed partial class RenderContext
     /// <see cref="UseActivation"/>. A value-gated <see cref="Memo{T}"/> built once at mount (zero steady-state
     /// allocation); a fresh component is active. Folds the per-component KeepAlive signal with the ambient
     /// <c>Activation.IsActive</c> window-visibility signal — either being false makes the component inactive.</summary>
-    public IReadSignal<bool> UseIsActive()
+    public IReadSignal<bool> UseIsActive([CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
+        int idx = LookupCell(__hf, __hl, out var __k);
         MemoHookCell<bool> cell;
-        if (!_mounted)
+        if (idx < 0)
         {
             var componentActive = GetActiveSig;   // get-or-create this component's parked signal on first compute (lazy)
             var meta = ResolveContextSignal?.Invoke(AnchorNode, Activation.IsActive);
@@ -718,10 +766,9 @@ public sealed partial class RenderContext
             var memo = new Memo<bool>(Rt, () =>
                 (componentActive is null || componentActive().Value) && (windowVisible is null || windowVisible.Value));
             cell = new MemoHookCell<bool>(memo);
-            AddCell(cell, cleanupCapable: true);
+            RegisterCell(__k, cell, cleanupCapable: true);
         }
-        else cell = (MemoHookCell<bool>)_cells[_cursor];
-        _cursor++;
+        else cell = (MemoHookCell<bool>)_cells[idx];
         return cell.Memo;
     }
 
@@ -734,7 +781,7 @@ public sealed partial class RenderContext
     /// notification must live in an independent computation that keeps observing while parked. The latest callbacks are
     /// read from a stable cell (a fresh lambda each render does not re-subscribe) and invoked under
     /// <see cref="Reactive.Untrack"/> (a callback's signal reads do not subscribe the effect).</summary>
-    public void UseActivation(Action? onActivated = null, Action? onDeactivated = null)
+    public void UseActivation(Action? onActivated = null, Action? onDeactivated = null, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
         var cb = UseRef<(Action? On, Action? Off)>(default);
         cb.Value = (onActivated, onDeactivated);     // always route to the latest closures
@@ -742,8 +789,8 @@ public sealed partial class RenderContext
         var prev = UseRef(true);
         var started = UseRef(false);
 
-        SignalEffectCell cell;
-        if (!_mounted)
+        int idx = LookupCell(__hf, __hl, out var __k);
+        if (idx < 0)
         {
             var effect = new Effect(Rt, () =>
             {
@@ -754,11 +801,8 @@ public sealed partial class RenderContext
                 var (on, off) = cb.Value;
                 Reactive.Untrack(() => { if (now) on?.Invoke(); else off?.Invoke(); });
             });
-            cell = new SignalEffectCell(effect);
-            AddCell(cell, cleanupCapable: true);
+            RegisterCell(__k, new SignalEffectCell(effect), cleanupCapable: true);
         }
-        else cell = (SignalEffectCell)_cells[_cursor];
-        _cursor++;
     }
 
     /// <summary>The host's cross-thread UI-thread poster (<see cref="HostDispatch.Post"/>): <c>post(action)</c> runs
@@ -786,12 +830,12 @@ public sealed partial class RenderContext
     /// when this component re-renders for some other reason — for motion prefer the retained engine path
     /// (<see cref="UseSpring"/>/<see cref="UseTransition"/>), which rides the compositor frame with no re-render.
     /// </summary>
-    public float UseAnimatedValue(float target, float durationMs = 180f, Easing easing = Easing.EaseInOut)
+    public float UseAnimatedValue(float target, float durationMs = 180f, Easing easing = Easing.EaseInOut, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
+        int idx = LookupCell(__hf, __hl, out var __k);
         AnimValueCell cell;
-        if (!_mounted) { cell = new AnimValueCell { Current = target, From = target, Target = target }; _cells.Add(cell); }
-        else cell = (AnimValueCell)_cells[_cursor];
-        _cursor++;
+        if (idx < 0) { cell = new AnimValueCell { Current = target, From = target, Target = target }; RegisterCell(__k, cell); }
+        else cell = (AnimValueCell)_cells[idx];
 
         if (cell.Target != target) { cell.From = cell.Current; cell.Target = target; cell.Elapsed = 0f; }
         if (cell.Current != cell.Target)
@@ -864,29 +908,29 @@ public sealed partial class RenderContext
     /// through; the host composites it z-below the UI (revealed through a transparent hole this component draws at the
     /// same rect) and tears it down automatically on unmount. Invalid (a safe no-op binding) when video compositing is
     /// unavailable (headless / non-composited window). Zero per-render work after mount.</summary>
-    public FluentGpu.Media.VideoBinding UseVideoSurface()
+    public FluentGpu.Media.VideoBinding UseVideoSurface([CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
         var registry = UseContext(VideoCompositor.Current);
+        int idx = LookupCell(__hf, __hl, out var __k);
         VideoSurfaceCell cell;
-        if (!_mounted)
+        if (idx < 0)
         {
             cell = new VideoSurfaceCell { Registry = registry, Token = registry?.Acquire() ?? 0 };
-            AddCell(cell, cleanupCapable: true);
+            RegisterCell(__k, cell, cleanupCapable: true);
         }
-        else cell = (VideoSurfaceCell)_cells[_cursor];
-        _cursor++;
+        else cell = (VideoSurfaceCell)_cells[idx];
         return new FluentGpu.Media.VideoBinding(cell.Registry, cell.Token);
     }
 
     /// <summary>Create a component-lifetime-owned disposable ONCE at mount and dispose it automatically on unmount.
     /// Returns the same instance every render (or null if the factory returned null). For a native/OS resource whose
     /// lifetime should track the component (e.g. a media player owning a background sidecar).</summary>
-    public T? UseDisposable<T>(Func<T?> factory) where T : class, IDisposable
+    public T? UseDisposable<T>(Func<T?> factory, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) where T : class, IDisposable
     {
+        int idx = LookupCell(__hf, __hl, out var __k);
         DisposableCell<T> cell;
-        if (!_mounted) { cell = new DisposableCell<T> { Value = factory() }; AddCell(cell, cleanupCapable: true); }
-        else cell = (DisposableCell<T>)_cells[_cursor];
-        _cursor++;
+        if (idx < 0) { cell = new DisposableCell<T> { Value = factory() }; RegisterCell(__k, cell, cleanupCapable: true); }
+        else cell = (DisposableCell<T>)_cells[idx];
         return cell.Value;
     }
 
@@ -895,12 +939,12 @@ public sealed partial class RenderContext
     /// <summary>A persistent per-field async value (Pending|Ready|Failed + value) — the skeleton-loading spine. Survives
     /// re-renders; flip it with <c>SetReady</c>/<c>SetFailed</c> (typically from <see cref="UseResource"/> or an
     /// off-thread <see cref="UsePost"/>). Use this for a field whose load you drive yourself (or a partial-known seed).</summary>
-    public Loadable<T> UseLoadable<T>(Loadable<T>? initial = null)
+    public Loadable<T> UseLoadable<T>(Loadable<T>? initial = null, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
+        int idx = LookupCell(__hf, __hl, out var __k);
         LoadableCell<T> cell;
-        if (!_mounted) { cell = new LoadableCell<T> { Loadable = initial ?? Loadable<T>.Pending() }; _cells.Add(cell); }
-        else cell = (LoadableCell<T>)_cells[_cursor];
-        _cursor++;
+        if (idx < 0) { cell = new LoadableCell<T> { Loadable = initial ?? Loadable<T>.Pending() }; RegisterCell(__k, cell); }
+        else cell = (LoadableCell<T>)_cells[idx];
         return cell.Loadable;
     }
 
@@ -911,11 +955,12 @@ public sealed partial class RenderContext
     /// so an older/slower fetch can never overwrite a newer one; the in-flight load + any stale timer are cancelled on
     /// unmount. <paramref name="seed"/> is the placeholder while Pending; <paramref name="options"/> tunes stale time and
     /// keep-previous-data (default: <c>StaleTimeMs=0</c> ⇒ stale on Ready; deps change ⇒ reset to <c>Pending(seed)</c>).</summary>
-    public Resource<T> UseResource<T>(Func<CancellationToken, Task<T>> loader, T seed = default!, DepKey deps = default, ResourceOptions? options = null)
+    public Resource<T> UseResource<T>(Func<CancellationToken, Task<T>> loader, T seed = default!, DepKey deps = default, ResourceOptions? options = null, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
-        var post = UsePost();   // UsePost consumes no hook cursor, so calling it here does not shift hook order
+        var post = UsePost();   // UsePost consumes no hook cell, so calling it here does not shift the ordinal
+        int idx = LookupCell(__hf, __hl, out var __k);
         ResourceCell<T> cell;
-        if (!_mounted)
+        if (idx < 0)
         {
             cell = new ResourceCell<T>
             {
@@ -925,14 +970,11 @@ public sealed partial class RenderContext
                 Options = options ?? ResourceOptions.Default,
                 Seed = seed, Loader = loader, Post = post, Queue = ResolveTimers(),
             };
-            AddCell(cell, cleanupCapable: true);
-            _cursor++;
+            RegisterCell(__k, cell, cleanupCapable: true);
             cell.Reload(keepPrevious: false);   // initial load (Loadable already Pending(seed) ⇒ no signal write during render)
             return new Resource<T>(cell);
         }
-        DebugGuardCursor();
-        cell = (ResourceCell<T>)_cells[_cursor];
-        _cursor++;
+        cell = (ResourceCell<T>)_cells[idx];
         cell.Loader = loader;                    // re-point the latest closure (fresh lambdas don't restart the load)
         cell.Seed = seed;
         if (options is not null) cell.Options = options;
@@ -948,33 +990,33 @@ public sealed partial class RenderContext
     /// command), render a spinner / disable off <c>IsRunning</c>, guard re-entry, and optionally cancel. Completion is
     /// marshalled to the UI thread via <see cref="UsePost"/>. By default an in-flight run is NOT cancelled on unmount
     /// (a started command should complete); pass <paramref name="cancelOnUnmount"/> true to abort it.</summary>
-    public AsyncCommand UseAsyncCommand(bool cancelOnUnmount = false)
+    public AsyncCommand UseAsyncCommand(bool cancelOnUnmount = false, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
-        var post = UsePost();   // UseContext consumes no hook cursor (calling it here does not shift hook order)
+        var post = UsePost();   // UseContext consumes no hook cell (calling it here does not shift the ordinal)
+        int idx = LookupCell(__hf, __hl, out var __k);
         AsyncCommandCell cell;
-        if (!_mounted)
+        if (idx < 0)
         {
             cell = new AsyncCommandCell { Command = new AsyncCommand(post), CancelOnUnmount = cancelOnUnmount };
-            AddCell(cell, cleanupCapable: true);
+            RegisterCell(__k, cell, cleanupCapable: true);
         }
-        else cell = (AsyncCommandCell)_cells[_cursor];
-        _cursor++;
+        else cell = (AsyncCommandCell)_cells[idx];
         return cell.Command;
     }
 
     /// <summary>A persistent KEYED <see cref="AsyncCommandSet{TKey}"/> — per-item commands (e.g. per-row play/like) with
     /// a reactive in-progress state per key. Same lifecycle as <see cref="UseAsyncCommand"/>.</summary>
-    public AsyncCommandSet<TKey> UseAsyncCommands<TKey>(bool cancelOnUnmount = false) where TKey : notnull
+    public AsyncCommandSet<TKey> UseAsyncCommands<TKey>(bool cancelOnUnmount = false, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) where TKey : notnull
     {
         var post = UsePost();
+        int idx = LookupCell(__hf, __hl, out var __k);
         AsyncCommandSetCell<TKey> cell;
-        if (!_mounted)
+        if (idx < 0)
         {
             cell = new AsyncCommandSetCell<TKey> { Commands = new AsyncCommandSet<TKey>(post), CancelOnUnmount = cancelOnUnmount };
-            AddCell(cell, cleanupCapable: true);
+            RegisterCell(__k, cell, cleanupCapable: true);
         }
-        else cell = (AsyncCommandSetCell<TKey>)_cells[_cursor];
-        _cursor++;
+        else cell = (AsyncCommandSetCell<TKey>)_cells[idx];
         return cell.Commands;
     }
 
@@ -1007,12 +1049,12 @@ public sealed partial class RenderContext
     }
 
     /// <summary>A stable mutable box that survives re-renders without triggering them.</summary>
-    public Ref<T> UseRef<T>(T initial)
+    public Ref<T> UseRef<T>(T initial, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
+        int idx = LookupCell(__hf, __hl, out var __k);
         RefHolderCell cell;
-        if (!_mounted) { cell = new RefHolderCell { Ref = new Ref<T>(initial) }; _cells.Add(cell); }
-        else { cell = (RefHolderCell)_cells[_cursor]; }
-        _cursor++;
+        if (idx < 0) { cell = new RefHolderCell { Ref = new Ref<T>(initial) }; RegisterCell(__k, cell); }
+        else cell = (RefHolderCell)_cells[idx];
         return (Ref<T>)cell.Ref!;
     }
 }

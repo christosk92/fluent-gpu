@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.CompilerServices;
 using FluentGpu.Foundation;
 using FluentGpu.Hosting;
 using FluentGpu.Scene;
@@ -111,17 +112,17 @@ public sealed partial class RenderContext
     /// the layout phase, so a same-frame layout-effect sees the PREVIOUS value and the consumer re-renders NEXT frame (no
     /// re-entrancy). Equality-gated: no re-render while the bounds are stable. Prefer <see cref="UseMeasuredWidth"/> when
     /// only the width matters (a scalar signal + quantum kills sub-pixel churn).</summary>
-    public IReadSignal<RectF> UseMeasuredBounds()
+    public IReadSignal<RectF> UseMeasuredBounds([CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
+        int idx = LookupCell(__hf, __hl, out var __k);
         MeasuredBoundsCell cell;
-        if (!_mounted)
+        if (idx < 0)
         {
             cell = new MeasuredBoundsCell(this) { BoundsSig = new Signal<RectF>(default) };
-            AddCell(cell, cleanupCapable: true);
+            RegisterCell(__k, cell, cleanupCapable: true);
             EnqueueEffect(PendingLayoutEffects, cell.Register);   // runs once at phase 6.5 (HostNode valid) then is cleared
         }
-        else { DebugGuardCursor(); cell = (MeasuredBoundsCell)_cells[_cursor]; }
-        _cursor++;
+        else cell = (MeasuredBoundsCell)_cells[idx];
         return cell.BoundsSig!;
     }
 
@@ -130,17 +131,17 @@ public sealed partial class RenderContext
     /// rounded to that grid before the (exact-compare) signal write, so sub-quantum layout jitter never re-renders the
     /// consumer (e.g. quantum 4 ⇒ a &lt;4px wobble is absorbed). Same timing contract as <see cref="UseMeasuredBounds"/>:
     /// written during layout, consumer re-renders NEXT frame; a same-frame layout-effect sees the previous value.</summary>
-    public IReadSignal<float> UseMeasuredWidth(float quantum = 0f)
+    public IReadSignal<float> UseMeasuredWidth(float quantum = 0f, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
+        int idx = LookupCell(__hf, __hl, out var __k);
         MeasuredBoundsCell cell;
-        if (!_mounted)
+        if (idx < 0)
         {
             cell = new MeasuredBoundsCell(this) { WidthSig = new FloatSignal(0f), Quantum = MathF.Max(quantum, 0f) };
-            AddCell(cell, cleanupCapable: true);
+            RegisterCell(__k, cell, cleanupCapable: true);
             EnqueueEffect(PendingLayoutEffects, cell.Register);
         }
-        else { DebugGuardCursor(); cell = (MeasuredBoundsCell)_cells[_cursor]; }
-        _cursor++;
+        else cell = (MeasuredBoundsCell)_cells[idx];
         return cell.WidthSig!;
     }
 }

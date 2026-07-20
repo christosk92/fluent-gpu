@@ -45,7 +45,7 @@ new BoxEl {
 | (`TextEl`) `Text : Prop<string>` | text content | **scoped relayout** (metrics may change) |
 | (`TextEl`) `Color : Prop<ColorF>` | text color | compositor-only |
 
-Every bindable channel is ONE `Prop<T>` property with **three accepted forms**: a static value (`Opacity = 0.5f` — written at reconcile, granular re-render tier), a derived thunk (`Opacity = Prop.Of(() => f(sig.Value))`, or assign a typed `Func<T>` local — inline lambdas need `Prop.Of` because C# cannot chain a lambda conversion into a user conversion), or a **concrete signal** (`Opacity = sig` — signal-direct, no closure; `Signal<T>`/`FloatSignal`/`Memo<T>`; through an `IReadSignal<T>` parameter use the thunk form). A BOUND channel ignores its static sibling and is wired **once at mount** — a fresh thunk on re-render is ignored (change the signal's value, not the bind). `UseState` values feed the static form (setState → re-render); the hot-scalar upgrade is `UseState` → `UseSignal` and the assignment flips from value to signal with no property-name change. Never use `default(Prop<T>)` to mean "unset", and in a `cond ? value : signal` ternary put the `(Prop<T>)` cast on the value arm. `Prop<T>` is a property type, not a parameter type — factories take `T`/`Func<T>`/`Signal<T>` params.
+Every bindable channel is ONE `Prop<T>` property with **three accepted forms**: a static value (`Opacity = 0.5f` — written at reconcile, granular re-render tier), a derived thunk (`Opacity = Prop.Of(() => f(sig.Value))`, or assign a typed `Func<T>` local — inline lambdas need `Prop.Of` because C# cannot chain a lambda conversion into a user conversion), or a **concrete signal** (`Opacity = sig` — signal-direct, no closure; `Signal<T>`/`FloatSignal`/`Memo<T>`; through an `IReadSignal<T>` parameter use the thunk form). A BOUND channel ignores its static sibling and is wired **once at mount** — a fresh thunk on re-render is ignored (change the signal's value, not the bind). `UseState` values feed the static form (setState → re-render); the hot-scalar upgrade is `UseState` → `UseSignal` and the assignment flips from value to signal with no property-name change. Never use `default(Prop<T>)` to mean "unset", and in a `cond ? value : signal` ternary put the `(Prop<T>)` cast on the value arm. `Prop<T>` is a property type, not a parameter type — factories take `T`/`Func<T>`/`Signal<T>` params. Because a bind wires **once at mount**, keep a channel's bound-vs-static shape **stable across renders** — flipping `Fill = staticColor` ↔ `Fill = signal` on a reused node silently loses (the new form never takes). A DEBUG-only tripwire (`BindContract`; folds out of Release; env kill-switch `FG_BIND_CONTRACT=0`) reports such a flip; a fresh thunk on re-render (bound→bound) is fine and is not flagged.
 
 > **Rule:** a bind thunk must read `.Value` (subscribes), not `.Peek()`. And prefer a transform/opacity/fill bind over
 > a width/height/text bind when you can express the change as a transform — it skips layout entirely.
@@ -146,6 +146,29 @@ loads, instead of resetting to `Pending(seed)`).
 
 `UseState` is just sugar over a signal: the setter writes the signal; the value read subscribes the render-effect.
 
+### Hook cells are keyed by call site — conditional and looped hooks are legal
+
+Hook cells are stored **per call site**, not by a positional cursor. Each `Use*` captures its `[CallerFilePath]` +
+`[CallerLineNumber]` (+ a per-render ordinal that disambiguates the same source line hit N times — a hook in a loop), so
+a hook keeps the **same** cell across renders even when it is called **conditionally**:
+
+```csharp
+public override Element Render()
+{
+    var (name, setName) = UseState("");
+    if (ShowEmail) { var (email, setEmail) = UseState(""); … }   // ✅ legal: a hook inside `if`
+    foreach (var f in fields) { var s = UseSignal(f.Default); … } // ✅ legal: hooks in a loop (keyed per ordinal)
+    var (phone, setPhone) = UseState("");                        // keeps its own cell regardless of the branch above
+    return …;
+}
+```
+
+A conditionally-skipped hook **keeps its state** for when the branch is re-entered, and it never shifts its neighbours'
+cells (the failure mode of the old positional model). Two caveats: put loop hooks at the **end** so per-iteration state
+stays aligned by ordinal when the count changes (append/remove at the end — reordering the middle re-associates state,
+same as a keyed list without a `keyOf`); and don't write **two** `Use*` calls on one physical source line behind a
+conditional (they share a line and would swap cell types). `FGRP005` remains as a compatibility lint, not a hard rule.
+
 ## `Component` vs `ReactiveComponent`
 
 | | `Component` (classic) | `ReactiveComponent` (signals-native) |
@@ -185,6 +208,10 @@ sealed class Clock : ReactiveComponent
 reads re-runs it, and tracking is **re-armed on every run** (a branch that reads a different signal next run follows that
 one and drops the old — never a stale one-shot capture). An effect that reads no signal runs exactly once. The body still
 executes in the passive-effect drain (after paint), never inline during `Flush`.
+
+> **DEBUG tripwire — backwards write.** An effect (or bind thunk) that **writes a signal it also reads** in the same run
+> re-marks itself stale → a convergence risk. A DEBUG-only tripwire (`BackwardsWriteGuard`; folds out of Release; env
+> kill-switch `FG_BACKWARDS_WRITE=0`) reports it once. Derive the value, or split the read and the write across effects.
 
 **`DepKey` deps are the explicit opt-in.** `UseEffect(fn, deps)` disables tracking and re-runs only when the `DepKey`
 changes — the over-scoping escape ("run only when THIS changes"). `deps` is a 16-byte value key, not an array:
@@ -260,6 +287,12 @@ sealed class Child : Component
     public override Element Render() => Ui.Text(UseContext(ThemeName));     // reads + subscribes; re-renders on change
 }
 ```
+
+`UseContext` returns the channel **default** when no provider is in scope. For a dependency the component cannot render
+without (a required service/store), use **`UseRequiredContext<T>(channel)`**: same resolve + subscribe path (including
+the parked-subtree fallback so a `Flow.KeepAlive`-parked re-render still resolves), but it **throws**
+`InvalidOperationException` naming the type when no provider resolves — and a provider carrying `null` for a
+`Context<T?>` also throws. A missing provider becomes a loud error at the consumer instead of a silent default.
 
 Built-in ambient contexts published by the host: `Viewport.Size` (`Context<Size2>`, client size in DIP — used for
 responsive layout) and `FrameDiagnostics.Current` (`Context<FrameStats>`).

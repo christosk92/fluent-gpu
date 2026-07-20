@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using FluentGpu.Hosting;
 using FluentGpu.Signals;
 
@@ -167,17 +168,18 @@ public sealed partial class RenderContext
 
     /// <summary>A read signal that follows <paramref name="source"/> after <paramref name="ms"/> of quiet (trailing-edge
     /// debounce). Zero re-render — driven by a standalone watcher effect + the host timer queue.</summary>
-    public IReadSignal<T> UseDebouncedValue<T>(IReadSignal<T> source, float ms) => UseDebouncedValue(source, ms, out _);
+    public IReadSignal<T> UseDebouncedValue<T>(IReadSignal<T> source, float ms, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => UseDebouncedValue(source, ms, out _, __hf, __hl);
 
     /// <inheritdoc cref="UseDebouncedValue{T}(IReadSignal{T}, float)"/>
     /// <param name="handle">Imperative <see cref="DebounceHandle.Flush"/>/<see cref="DebounceHandle.Cancel"/> control.</param>
-    public IReadSignal<T> UseDebouncedValue<T>(IReadSignal<T> source, float ms, out DebounceHandle handle)
+    public IReadSignal<T> UseDebouncedValue<T>(IReadSignal<T> source, float ms, out DebounceHandle handle, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
+        int idx = LookupCell(__hf, __hl, out var __k);
         DebounceCell<T> cell;
-        if (!_mounted)
+        if (idx < 0)
         {
             cell = new DebounceCell<T> { Queue = ResolveTimers(), Source = source, Ms = ms, Output = new Signal<T>(source.Peek()) };
-            AddCell(cell, cleanupCapable: true);
+            RegisterCell(__k, cell, cleanupCapable: true);
             cell.Watcher = new Effect(Rt, () =>
             {
                 _ = cell.Source.Value;   // subscribe to source
@@ -185,8 +187,7 @@ public sealed partial class RenderContext
                 cell.Arm();
             });
         }
-        else { DebugGuardCursor(); cell = (DebounceCell<T>)_cells[_cursor]; }
-        _cursor++;
+        else cell = (DebounceCell<T>)_cells[idx];
         cell.Ms = ms;
         handle = new DebounceHandle(cell);
         return cell.Output;
@@ -194,17 +195,18 @@ public sealed partial class RenderContext
 
     /// <summary>Thunk form of <see cref="UseDebouncedValue{T}(IReadSignal{T}, float)"/>: <paramref name="source"/> is a
     /// getter over the signals to watch (wrapped in a memo that auto-tracks them).</summary>
-    public IReadSignal<T> UseDebouncedValue<T>(Func<T> source, float ms) => UseDebouncedValue(source, ms, out _);
+    public IReadSignal<T> UseDebouncedValue<T>(Func<T> source, float ms, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => UseDebouncedValue(source, ms, out _, __hf, __hl);
 
     /// <inheritdoc cref="UseDebouncedValue{T}(Func{T}, float)"/>
-    public IReadSignal<T> UseDebouncedValue<T>(Func<T> source, float ms, out DebounceHandle handle)
+    public IReadSignal<T> UseDebouncedValue<T>(Func<T> source, float ms, out DebounceHandle handle, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
+        int idx = LookupCell(__hf, __hl, out var __k);
         DebounceCell<T> cell;
-        if (!_mounted)
+        if (idx < 0)
         {
             var memo = new Memo<T>(Rt, source);
             cell = new DebounceCell<T> { Queue = ResolveTimers(), Source = memo, OwnedSource = memo, Ms = ms, Output = new Signal<T>(memo.Peek()) };
-            AddCell(cell, cleanupCapable: true);
+            RegisterCell(__k, cell, cleanupCapable: true);
             cell.Watcher = new Effect(Rt, () =>
             {
                 _ = cell.Source.Value;
@@ -212,8 +214,7 @@ public sealed partial class RenderContext
                 cell.Arm();
             });
         }
-        else { DebugGuardCursor(); cell = (DebounceCell<T>)_cells[_cursor]; }
-        _cursor++;
+        else cell = (DebounceCell<T>)_cells[idx];
         cell.Ms = ms;
         handle = new DebounceHandle(cell);
         return cell.Output;
@@ -225,13 +226,14 @@ public sealed partial class RenderContext
     /// <summary>A read signal that follows <paramref name="source"/> at most once per <paramref name="ms"/>: the first
     /// change emits immediately (leading edge); further changes within the window are coalesced and the last value is
     /// emitted when the window closes (trailing sample). Zero re-render.</summary>
-    public IReadSignal<T> UseThrottledValue<T>(IReadSignal<T> source, float ms)
+    public IReadSignal<T> UseThrottledValue<T>(IReadSignal<T> source, float ms, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
+        int idx = LookupCell(__hf, __hl, out var __k);
         ThrottleCell<T> cell;
-        if (!_mounted)
+        if (idx < 0)
         {
             cell = new ThrottleCell<T> { Queue = ResolveTimers(), Source = source, Ms = ms, Output = new Signal<T>(source.Peek()), Latest = source.Peek() };
-            AddCell(cell, cleanupCapable: true);
+            RegisterCell(__k, cell, cleanupCapable: true);
             cell.Watcher = new Effect(Rt, () =>
             {
                 _ = cell.Source.Value;
@@ -239,21 +241,21 @@ public sealed partial class RenderContext
                 cell.OnChange();
             });
         }
-        else { DebugGuardCursor(); cell = (ThrottleCell<T>)_cells[_cursor]; }
-        _cursor++;
+        else cell = (ThrottleCell<T>)_cells[idx];
         cell.Ms = ms;
         return cell.Output;
     }
 
     /// <summary>Thunk form of <see cref="UseThrottledValue{T}(IReadSignal{T}, float)"/>.</summary>
-    public IReadSignal<T> UseThrottledValue<T>(Func<T> source, float ms)
+    public IReadSignal<T> UseThrottledValue<T>(Func<T> source, float ms, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
+        int idx = LookupCell(__hf, __hl, out var __k);
         ThrottleCell<T> cell;
-        if (!_mounted)
+        if (idx < 0)
         {
             var memo = new Memo<T>(Rt, source);
             cell = new ThrottleCell<T> { Queue = ResolveTimers(), Source = memo, OwnedSource = memo, Ms = ms, Output = new Signal<T>(memo.Peek()), Latest = memo.Peek() };
-            AddCell(cell, cleanupCapable: true);
+            RegisterCell(__k, cell, cleanupCapable: true);
             cell.Watcher = new Effect(Rt, () =>
             {
                 _ = cell.Source.Value;
@@ -261,8 +263,7 @@ public sealed partial class RenderContext
                 cell.OnChange();
             });
         }
-        else { DebugGuardCursor(); cell = (ThrottleCell<T>)_cells[_cursor]; }
-        _cursor++;
+        else cell = (ThrottleCell<T>)_cells[idx];
         cell.Ms = ms;
         return cell.Output;
     }
@@ -273,24 +274,23 @@ public sealed partial class RenderContext
     /// <paramref name="deps"/> change (<see cref="DepKey.Empty"/>/default = fire once, from mount). The returned
     /// <see cref="TimerHandle"/> can <see cref="TimerHandle.Cancel"/>/<see cref="TimerHandle.Restart"/> it. A due fire
     /// after the component unmounts is a no-op (generation-guarded).</summary>
-    public TimerHandle UseTimeout(Action callback, float ms, DepKey deps = default)
+    public TimerHandle UseTimeout(Action callback, float ms, DepKey deps = default, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
+        int idx = LookupCell(__hf, __hl, out var __k);
         TimeoutCell cell;
-        if (!_mounted)
+        if (idx < 0)
         {
             cell = new TimeoutCell { Queue = ResolveTimers(), Callback = callback, Ms = ms, Key = deps, HasKey = true };
-            AddCell(cell, cleanupCapable: true);
+            RegisterCell(__k, cell, cleanupCapable: true);
             cell.Arm(ms);
         }
         else
         {
-            DebugGuardCursor();
-            cell = (TimeoutCell)_cells[_cursor];
+            cell = (TimeoutCell)_cells[idx];
             cell.Callback = callback;   // route to the latest closure
             cell.Ms = ms;
             if (cell.Key != deps) { cell.Key = deps; cell.Arm(ms); }   // deps change → restart
         }
-        _cursor++;
         return new TimerHandle(cell);
     }
 
@@ -300,25 +300,24 @@ public sealed partial class RenderContext
     /// component is active — it auto-PAUSES while the component is parked by <c>Flow.KeepAlive</c> or the window is
     /// minimized/suspended (folds <see cref="UseIsActive"/>), and resumes cleanly on return. Zero re-render; the latest
     /// <paramref name="tick"/> closure is routed each render.</summary>
-    public void UseInterval(Action tick, float ms, bool enabled = true)
+    public void UseInterval(Action tick, float ms, bool enabled = true, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
-        var active = UseIsActive();   // positional cell — always called so hook order is stable
+        var active = UseIsActive();   // keyed to its own internal call site — pauses while parked/minimized
+        int idx = LookupCell(__hf, __hl, out var __k);
         IntervalCell cell;
-        if (!_mounted)
+        if (idx < 0)
         {
             cell = new IntervalCell { Queue = ResolveTimers(), Enabled = enabled, Ms = ms, Tick = tick, Active = active.Peek() };
-            AddCell(cell, cleanupCapable: true);
+            RegisterCell(__k, cell, cleanupCapable: true);
             cell.ActiveWatcher = new Effect(Rt, () => cell.SetActive(active.Value));   // subscribe → pause/resume on activation change
             cell.Reconcile();   // initial arm if running
         }
         else
         {
-            DebugGuardCursor();
-            cell = (IntervalCell)_cells[_cursor];
+            cell = (IntervalCell)_cells[idx];
             cell.Tick = tick;
             cell.Ms = ms;
             cell.SetEnabled(enabled);
         }
-        _cursor++;
     }
 }

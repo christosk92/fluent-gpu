@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentGpu.Forms;
@@ -33,12 +34,12 @@ internal sealed class ReactiveEffectCell : HookCell, IDisposableCell
 public sealed partial class RenderContext
 {
     /// <summary>Register once at mount and dispose on unmount (RunAllCleanups). Returns the live handle (or null).</summary>
-    private IDisposable? UseRegistration(Func<IDisposable?> register)
+    private IDisposable? UseRegistration(Func<IDisposable?> register, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
+        int idx = LookupCell(__hf, __hl, out var __k);
         DisposableCell cell;
-        if (!_mounted) { cell = new DisposableCell { Disposable = register() }; AddCell(cell, cleanupCapable: true); }
-        else cell = (DisposableCell)_cells[_cursor];
-        _cursor++;
+        if (idx < 0) { cell = new DisposableCell { Disposable = register() }; RegisterCell(__k, cell, cleanupCapable: true); }
+        else cell = (DisposableCell)_cells[idx];
         return cell.Disposable;
     }
 
@@ -148,15 +149,15 @@ public sealed partial class RenderContext
     /// the UI poster. Out-of-order completion is race-immune: the result lands in an equality-gated signal the field's
     /// error memo merges. The hook is always invoked (even with no async) so the cell sequence stays stable.
     /// </summary>
-    private void UseAsyncValidation<T>(Signal<T> value, FieldOptions<T> opts, Signal<MsgId> server, Signal<bool> validating)
+    private void UseAsyncValidation<T>(Signal<T> value, FieldOptions<T> opts, Signal<MsgId> server, Signal<bool> validating, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
         var stateRef = UseRef<AsyncFieldState<T>?>(null);
 
-        ReactiveEffectCell cell;
-        if (!_mounted)
+        int idx = LookupCell(__hf, __hl, out var __k);
+        if (idx < 0)
         {
-            cell = new ReactiveEffectCell();
-            AddCell(cell, cleanupCapable: true);
+            var cell = new ReactiveEffectCell();
+            RegisterCell(__k, cell, cleanupCapable: true);
             if (opts.Async is not null)
             {
                 var st = new AsyncFieldState<T>(opts, server, validating, UsePost());
@@ -166,8 +167,6 @@ public sealed partial class RenderContext
                 cell.Effect = new Effect(Rt, () => st.OnValueChanged(value.Value));
             }
         }
-        else cell = (ReactiveEffectCell)_cells[_cursor];
-        _cursor++;
     }
 
     /// <summary>Per-field async state: a single reused debounce timer + a cancel-stale CTS. Created once; disposed on

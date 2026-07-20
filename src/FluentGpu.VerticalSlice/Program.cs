@@ -323,6 +323,55 @@ sealed class FromRefProbe : Component
     public override Element Render() { UseEffect(() => { Runs++; }, DepKey.FromRef(Obj)); return new BoxEl(); }
 }
 
+// ── G4a call-site-keyed hook substrate probes ────────────────────────────────────────────────────────────────────
+// A CONDITIONAL hook (Middle) between two unconditional neighbours. With the positional cursor this desynced the
+// neighbours' cells; with the keyed substrate each hook keeps its own call-site cell regardless of the conditional.
+sealed class ConditionalHookProbe : Component
+{
+    public bool IncludeMiddle = true;
+    public (int Value, Action<int> Set) Top, Middle, Bottom;
+    public override Element Render()
+    {
+        Top = UseState(10);
+        if (IncludeMiddle) Middle = UseState(20);   // CONDITIONAL hook — legal under the keyed substrate
+        Bottom = UseState(30);
+        return _box;
+    }
+    static readonly BoxEl _box = new();
+}
+
+// Hooks in a loop keyed per-ordinal: per-iteration state survives a count change (append/remove at the END).
+sealed class LoopHookProbe : Component
+{
+    public int Count = 3;
+    public readonly List<Signal<int>> Sigs = new();
+    public override Element Render()
+    {
+        Sigs.Clear();
+        for (int i = 0; i < Count; i++) Sigs.Add(UseSignal(i * 100));   // same source line, ordinals 0..N-1
+        return _box;
+    }
+    static readonly BoxEl _box = new();
+}
+
+// Steady-state re-render over capture-free keyed hooks — the keyed lookup itself must allocate nothing.
+sealed class SteadyHookProbe : Component
+{
+    static readonly Func<int> Memo42 = static () => 42;
+    static readonly Action Noop = static () => { };
+    static readonly BoxEl _box = new();
+    public override Element Render()
+    {
+        var b = UseSignal(0);
+        var f = UseFloatSignal(0f);
+        var r = UseRef(0);
+        var m = UseMemo(Memo42, DepKey.Empty);
+        UseEffect(Noop);   // AUTO-tracked (deps-gated EffectKey has a pre-existing DEBUG-only closure alloc, unrelated to the lookup)
+        _ = b; _ = f; _ = r; _ = m;
+        return _box;
+    }
+}
+
 // Form-validation probe: two fields (a Required email, a cross-field confirm) optionally joined to a UseForm scope.
 sealed class ValidationProbe : Component
 {
@@ -5077,6 +5126,142 @@ static class Slice
             src.Value = 10; rt.Flush();
             int v2 = prop.Signal!.Peek();       // 20 — the bound source tracks writes
             Check("gate.prop.bind-named-ctor", bound && v1 == 6 && v2 == 20, $"bound={bound} {v1}->{v2}");
+        }
+    }
+
+    // G4a — the call-site-keyed hook substrate DECISION gates: conditional hooks, looped hooks, zero-alloc lookup,
+    // plus UseRequiredContext, the BindContract flip tripwire, and the backwards-write tripwire.
+    static void HookSubstrateChecks(StringTable strings)
+    {
+        // gate.hooks.substrate-conditional — a hook inside `if` gains/loses its cell WITHOUT corrupting its neighbours;
+        // the skipped hook's state survives for when the branch is re-entered (the thing positional cursor cells cannot do).
+        {
+            var rt = new ReactiveRuntime();
+            var p = new ConditionalHookProbe(); p.Context.Runtime = rt;
+            p.IncludeMiddle = true; p.RenderWithHooks();            // mount: Top=10 Middle=20 Bottom=30
+            p.Top.Set(11); p.Middle.Set(21); p.Bottom.Set(31);
+            p.RenderWithHooks();
+            bool r1 = p.Top.Value == 11 && p.Middle.Value == 21 && p.Bottom.Value == 31;
+            p.IncludeMiddle = false; p.RenderWithHooks();          // Middle skipped — Bottom must stay 31 (NOT inherit Middle's cell)
+            bool r2 = p.Top.Value == 11 && p.Bottom.Value == 31;
+            p.Bottom.Set(32); p.RenderWithHooks();
+            bool r3 = p.Top.Value == 11 && p.Bottom.Value == 32;
+            p.IncludeMiddle = true; p.RenderWithHooks();           // Middle re-enters — its state (21) is preserved
+            bool r4 = p.Middle.Value == 21 && p.Top.Value == 11 && p.Bottom.Value == 32;
+            Check("gate.hooks.substrate-conditional a conditional hook gains/loses its cell without shifting neighbours; skipped state survives",
+                r1 && r2 && r3 && r4, $"r1={r1} r2={r2} r3={r3} r4={r4} (Top={p.Top.Value} Middle={p.Middle.Value} Bottom={p.Bottom.Value})");
+        }
+
+        // gate.hooks.substrate-loop — hooks in a loop keyed per ordinal keep per-iteration state across a count change.
+        {
+            var rt = new ReactiveRuntime();
+            var p = new LoopHookProbe(); p.Context.Runtime = rt;
+            p.Count = 3; p.RenderWithHooks();
+            p.Sigs[0].Value = 1; p.Sigs[1].Value = 101; p.Sigs[2].Value = 201;
+            p.RenderWithHooks();
+            bool keep = p.Sigs[0].Peek() == 1 && p.Sigs[1].Peek() == 101 && p.Sigs[2].Peek() == 201;
+            p.Count = 4; p.RenderWithHooks();                      // append at end → first 3 keep state, 4th mounts fresh (300)
+            bool grow = p.Sigs.Count == 4 && p.Sigs[0].Peek() == 1 && p.Sigs[1].Peek() == 101 && p.Sigs[2].Peek() == 201 && p.Sigs[3].Peek() == 300;
+            p.Count = 2; p.RenderWithHooks();                      // remove at end → first 2 keep state
+            bool shrink = p.Sigs.Count == 2 && p.Sigs[0].Peek() == 1 && p.Sigs[1].Peek() == 101;
+            Check("gate.hooks.substrate-loop looped hooks keyed per ordinal keep per-iteration state across grow/shrink",
+                keep && grow && shrink, $"keep={keep} grow={grow} shrink={shrink}");
+        }
+
+        // gate.hooks.substrate-alloc — the keyed lookup on a steady re-render allocates 0 bytes in the hot window.
+        {
+            var rt = new ReactiveRuntime();
+            var p = new SteadyHookProbe(); p.Context.Runtime = rt;
+            p.RenderWithHooks(); p.RenderWithHooks(); p.RenderWithHooks();   // warm (JIT + mount + dict capacity)
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 200; i++) p.RenderWithHooks();
+            long delta = GC.GetAllocatedBytesForCurrentThread() - before;
+            Check("gate.hooks.substrate-alloc keyed cell lookup is 0-alloc on a steady re-render", delta == 0, $"delta={delta}B/200 renders");
+        }
+
+        // gate.ctx.required — UseRequiredContext throws (naming the type) when unprovided; returns the value when
+        // provided; survives a parked re-render (resolves via the parked _ctxResolveCache fallback).
+        {
+            var channel = new Context<string>("dflt");
+            var ctx = new RenderContext();
+            bool unprovidedThrows = false; string? msg = null;
+            try { ctx.UseRequiredContext(channel); } catch (InvalidOperationException ex) { unprovidedThrows = true; msg = ex.Message; }
+            bool named = msg is not null && msg.Contains("String");
+
+            var provided = new Signal<object?>("hello");
+            ctx.ResolveContextSignal = (a, c) => ReferenceEquals(c, channel) ? provided : null;
+            string got = ctx.UseRequiredContext(channel);                    // resolves + caches
+            ctx.ResolveContextSignal = (a, c) => null;                       // simulate a PARKED (detached) re-render
+            string parked = ctx.UseRequiredContext(channel);                 // reuses the cached provider signal
+
+            var ctx2 = new RenderContext();
+            var nullSig = new Signal<object?>(null);
+            ctx2.ResolveContextSignal = (a, c) => nullSig;                   // provider carrying null → must also throw
+            bool nullThrows = false;
+            try { ctx2.UseRequiredContext(channel); } catch (InvalidOperationException) { nullThrows = true; }
+
+            Check("gate.ctx.required throws (named) when unprovided/null; returns the value; survives a parked re-render",
+                unprovidedThrows && named && got == "hello" && parked == "hello" && nullThrows,
+                $"threw={unprovidedThrows} named={named} got={got} parked={parked} nullThrows={nullThrows}");
+        }
+
+        // gate.bind.contract-flip — a bound↔static flip on a REUSED node trips BindContract; a fresh-thunk re-render does NOT.
+        {
+            bool prevEnabled = BindContract.Enabled, prevThrow = BindContract.ThrowOnViolation;
+            BindContract.Enabled = true; BindContract.ThrowOnViolation = false;
+            try
+            {
+                var sig = new Signal<FluentGpu.Foundation.ColorF>(FluentGpu.Foundation.ColorF.Transparent);
+
+                BindContract.Reset();
+                var s1 = new SceneStore(); var r1 = new TreeReconciler(s1, strings);
+                var e1 = new BoxEl { Width = 10, Height = 10, Fill = FluentGpu.Foundation.ColorF.Transparent };   // static
+                var e2 = new BoxEl { Width = 10, Height = 10, Fill = sig };                                       // bound
+                r1.ReconcileRoot(e1, null); r1.ReconcileRoot(e2, e1);
+                bool staticToBound = BindContract.Violations == 1 && BindContract.LastViolation!.Contains("Fill");
+
+                BindContract.Reset();
+                var s2 = new SceneStore(); var r2 = new TreeReconciler(s2, strings);
+                var f1 = new BoxEl { Width = 10, Height = 10, Fill = sig };                                       // bound
+                var f2 = new BoxEl { Width = 10, Height = 10, Fill = FluentGpu.Foundation.ColorF.Transparent };   // static
+                r2.ReconcileRoot(f1, null); r2.ReconcileRoot(f2, f1);
+                bool boundToStatic = BindContract.Violations == 1;
+
+                BindContract.Reset();
+                var s3 = new SceneStore(); var r3 = new TreeReconciler(s3, strings);
+                var g1 = new BoxEl { Width = 10, Height = 10, Fill = Prop.Of(() => FluentGpu.Foundation.ColorF.Transparent) };   // bound (thunk)
+                var g2 = new BoxEl { Width = 10, Height = 10, Fill = Prop.Of(() => FluentGpu.Foundation.ColorF.Transparent) };   // FRESH thunk, same shape → NOT a flip
+                r3.ReconcileRoot(g1, null); r3.ReconcileRoot(g2, g1);
+                bool thunkQuiet = BindContract.Violations == 0;
+
+                Check("gate.bind.contract-flip bound↔static flip on a reused node trips; a fresh-thunk re-render does not",
+                    staticToBound && boundToStatic && thunkQuiet,
+                    $"staticToBound={staticToBound} boundToStatic={boundToStatic} thunkQuiet={thunkQuiet}");
+            }
+            finally { BindContract.Enabled = prevEnabled; BindContract.ThrowOnViolation = prevThrow; }
+        }
+
+        // gate.signal.backwards-write-tripwire — an effect that reads+writes the same signal trips once; a normal effect does not.
+        {
+            bool prevEnabled = BackwardsWriteGuard.Enabled, prevThrow = BackwardsWriteGuard.ThrowOnViolation;
+            BackwardsWriteGuard.Enabled = true; BackwardsWriteGuard.ThrowOnViolation = false;
+            try
+            {
+                var rt = new ReactiveRuntime();
+                BackwardsWriteGuard.Reset();
+                var sig = new Signal<int>(5);
+                _ = new Effect(rt, () => { int v = sig.Value; sig.Value = v; });   // read (subscribe) then write the SAME signal
+                bool tripped = BackwardsWriteGuard.Violations >= 1 && BackwardsWriteGuard.LastViolation!.Contains("Signal");
+
+                BackwardsWriteGuard.Reset();
+                var a = new Signal<int>(1); var b = new Signal<int>(2);
+                _ = new Effect(rt, () => { int v = a.Value; b.Value = v; });       // reads A, writes B → no convergence risk
+                bool clean = BackwardsWriteGuard.Violations == 0;
+
+                Check("gate.signal.backwards-write-tripwire an effect reading+writing the same signal trips once; a normal effect does not",
+                    tripped && clean, $"tripped={tripped} clean={clean}");
+            }
+            finally { BackwardsWriteGuard.Enabled = prevEnabled; BackwardsWriteGuard.ThrowOnViolation = prevThrow; }
         }
     }
 
@@ -25788,6 +25973,7 @@ static class Slice
         ShellSidebarScrollChecks(strings);
         HookChecks();
         HookSurfaceChecks();
+        HookSubstrateChecks(strings);
         ValidationChecks();
         KeyedChecks(strings);
         ReuseGuardChecks(strings);

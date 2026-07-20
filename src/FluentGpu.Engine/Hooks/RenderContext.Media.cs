@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.CompilerServices;
 using FluentGpu.Media;
 
 namespace FluentGpu.Hooks;
@@ -21,18 +22,18 @@ public sealed partial class RenderContext
     /// <summary>A <see cref="MediaPlayer"/> whose lifetime is bound to this component; auto-disposed (async) on unmount
     /// by the reconciler (spec §4.1). <paramref name="configure"/> runs ONCE at mount against the Layer-2 builder (network,
     /// buffering, ABR, DRM relay, backend registrations). Reuses the same instance across re-renders.</summary>
-    public MediaPlayer UseMediaPlayer(Action<MediaPlayerBuilder>? configure = null)
+    public MediaPlayer UseMediaPlayer(Action<MediaPlayerBuilder>? configure = null, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
+        int idx = LookupCell(__hf, __hl, out var __k);
         MediaPlayerCell cell;
-        if (!_mounted)
+        if (idx < 0)
         {
             var builder = MediaPlayer.Build();
             configure?.Invoke(builder);
             cell = new MediaPlayerCell { Player = builder.Build() };
-            AddCell(cell, cleanupCapable: true);
+            RegisterCell(__k, cell, cleanupCapable: true);
         }
-        else cell = (MediaPlayerCell)_cells[_cursor];
-        _cursor++;
+        else cell = (MediaPlayerCell)_cells[idx];
         return cell.Player;
     }
 

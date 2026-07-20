@@ -48,6 +48,19 @@ public static class Diag
             && !value.Equals("no", StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>True ONLY when <paramref name="name"/> is EXPLICITLY set to a falsy value (0/false/off/no) — the
+    /// kill-switch form for facilities that default ON when compiled in (BindContract, BackwardsWriteGuard). Unset ⇒
+    /// false (stays enabled).</summary>
+    public static bool EnvFlagDisabled(string name)
+    {
+        string? value = Environment.GetEnvironmentVariable(name);
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        return value.Equals("0", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("false", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("off", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("no", StringComparison.OrdinalIgnoreCase);
+    }
+
     [Conditional("DEBUG"), Conditional("FLUENTGPU_DIAG")]
     public static void Count(string category, string key, long delta = 1)
     {

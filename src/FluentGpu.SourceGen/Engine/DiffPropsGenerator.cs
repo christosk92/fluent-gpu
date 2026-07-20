@@ -69,7 +69,8 @@ namespace FluentGpu.SourceGen.Engine
                     if (member is not IPropertySymbol p || p.IsStatic || p.IsIndexer) continue;
                     if (!seen.Add(p.Name)) continue;                 // most-derived wins on a `new` shadow
                     if (IsElementShaped(p.Type)) continue;           // children are the subtree diff's job
-                    var info = new PropInfo(p.Name, p.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat));
+                    string typeFqn = p.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+                    var info = new PropInfo(p.Name, typeFqn, IsPropChannel(p.Type));
                     if (p.GetAttributes().Any(a => a.AttributeClass?.ToDisplayString() == PropAttr))
                         explicitProps.Add(info);
                     if (p.DeclaredAccessibility == Accessibility.Public && p.SetMethod is not null)
@@ -106,6 +107,13 @@ namespace FluentGpu.SourceGen.Engine
             return false;
         }
 
+        // A bindable channel is a FluentGpu.Signals.Prop<T> — the ONE shape whose static-vs-bound state (IsBound) the
+        // BindContract tripwire checks for a mount-only-bind flip. Detected structurally (constructed generic named
+        // Prop in FluentGpu.Signals) so the check is generated, never hand-listed per element type.
+        private static bool IsPropChannel(ITypeSymbol t)
+            => t is INamedTypeSymbol { Name: "Prop", IsGenericType: true } n
+               && n.ContainingNamespace?.ToDisplayString() == "FluentGpu.Signals";
+
         private static string Emit(Model m)
         {
             var sb = new StringBuilder();
@@ -128,6 +136,29 @@ namespace FluentGpu.SourceGen.Engine
                   .Append(">.Default.Equals(a.").Append(p.Name).Append(", b.").Append(p.Name).Append(")")
                   .Append(i == m.Props.Length - 1 ? ";\n" : "\n");
             }
+
+            // BindContract helper (DEBUG tripwire): the name of the FIRST bindable channel (a Prop<T>) whose bound-vs-
+            // static shape FLIPPED between the two element versions, or null if none did. Bind wiring is mount-only, so a
+            // static→bound or bound→static flip on a reused node silently loses; the reconciler reports it. Generated (not
+            // hand-listed) so every element type + every Prop<T> channel is covered mechanically, with no drift.
+            sb.Append("\n");
+            sb.Append(pad).Append("    /// <summary>The first bindable <c>Prop&lt;T&gt;</c> channel whose <c>IsBound</c> flipped between\n");
+            sb.Append(pad).Append("    /// <paramref name=\"a\"/> and <paramref name=\"b\"/> (mount-only bind wiring ⇒ a silent loss), or null. BindContract tripwire.</summary>\n");
+            sb.Append(pad).Append("    public static string? FirstBoundFlip(").Append(m.FqTypeName).Append(" a, ").Append(m.FqTypeName).Append(" b)\n");
+            sb.Append(pad).Append("    {\n");
+            bool anyProp = false;
+            for (int i = 0; i < m.Props.Length; i++)
+            {
+                PropInfo p = m.Props[i];
+                if (!p.IsProp) continue;
+                anyProp = true;
+                sb.Append(pad).Append("        if (a.").Append(p.Name).Append(".IsBound != b.").Append(p.Name)
+                  .Append(".IsBound) return \"").Append(p.Name).Append("\";\n");
+            }
+            if (!anyProp) sb.Append(pad).Append("        _ = a; _ = b;\n");
+            sb.Append(pad).Append("        return null;\n");
+            sb.Append(pad).Append("    }\n");
+
             sb.Append(pad).Append("}\n");
 
             if (hasNs) sb.Append("}\n");
@@ -153,7 +184,7 @@ namespace FluentGpu.CodeGen
 }
 ";
 
-        private readonly record struct PropInfo(string Name, string TypeFqn);
+        private readonly record struct PropInfo(string Name, string TypeFqn, bool IsProp);
 
         private readonly record struct Model(
             string? Namespace, string TypeName, string FqTypeName, string HintName, ImmutableArray<PropInfo> Props);
