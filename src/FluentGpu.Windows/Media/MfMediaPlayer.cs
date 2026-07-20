@@ -1,8 +1,10 @@
 using System;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentGpu.Foundation;
 using FluentGpu.Media;
+using FluentGpu.Media.Adaptive;
 using FluentGpu.Pal;
 
 namespace FluentGpu.Media.Windows;
@@ -18,8 +20,10 @@ namespace FluentGpu.Media.Windows;
 /// </summary>
 public sealed class MfMediaPlayer : IMediaBackend
 {
+    private static readonly HttpClient s_http = new();
     private readonly Func<IVideoEngine> _engineFactory;
     private readonly IMediaBackend? _drmBackend;
+    private readonly HttpClient _http;
 
     /// <summary>Create the production MF backend (each open builds a real <see cref="VideoMediaEngine"/>); no DRM support.</summary>
     public MfMediaPlayer() : this(static () => new VideoMediaEngine(), null) { }
@@ -31,10 +35,11 @@ public sealed class MfMediaPlayer : IMediaBackend
     public MfMediaPlayer(IMediaBackend drmBackend) : this(static () => new VideoMediaEngine(), drmBackend) { }
 
     /// <summary>Test/DI seam: supply a video-engine factory (a fake in unit tests) and an optional DRM backend.</summary>
-    internal MfMediaPlayer(Func<IVideoEngine> engineFactory, IMediaBackend? drmBackend = null)
+    internal MfMediaPlayer(Func<IVideoEngine> engineFactory, IMediaBackend? drmBackend = null, HttpClient? http = null)
     {
         _engineFactory = engineFactory;
         _drmBackend = drmBackend;
+        _http = http ?? s_http;
         Capabilities = new(SupportsVideo: true, SupportsAudioGraph: false, SupportsDrm: drmBackend is not null)
         {
             // MF resolves the container/codec on open; report the common clear-video families as query-time supported.
@@ -57,6 +62,11 @@ public sealed class MfMediaPlayer : IMediaBackend
                     "This MfMediaPlayer has no DRM backend; construct it with a protected backend (new MfMediaPlayer(protectedBackend)) to play protected sources.");
             return await _drmBackend.OpenAsync(source, opts, ct).ConfigureAwait(false);
         }
+
+        AdaptiveManifest? manifest = null;
+        if (source is AdaptiveSource adaptive)
+            manifest = await AdaptiveManifestLoader.LoadAsync(_http, adaptive,
+                adaptive.Network ?? opts.Network, ct).ConfigureAwait(false);
 
         string url = ResolveUrl(source) ?? throw new NotSupportedException(
             "MfMediaPlayer supports a file path or a URL source (FromFile/FromUri).");
@@ -88,7 +98,7 @@ public sealed class MfMediaPlayer : IMediaBackend
         engine.SetLoop(false);
         if (opts.StartPaused) engine.Pause();
 
-        return new MfMediaSession(engine, opts);
+        return new MfMediaSession(engine, opts, manifest);
     }
 
     /// <summary>Extract the MF source URL from a <see cref="MediaSource"/> (a local path is passed through; MF accepts
@@ -97,6 +107,7 @@ public sealed class MfMediaPlayer : IMediaBackend
     {
         FileSource f => f.Path,
         UriSource u => u.Url,
+        AdaptiveSource a => a.ManifestUri,
         ClipSource c => ResolveUrl(c.Inner),
         LoopSource l => ResolveUrl(l.Inner),
         _ => null,

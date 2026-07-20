@@ -44,6 +44,9 @@ public sealed record ProtectedVideoRequest
     public string? HttpHeaders { get; init; }
     /// <summary>The bounded license-acquisition timeout (a shortfall becomes a <see cref="MediaErrorCategory.Drm"/> error).</summary>
     public TimeSpan LicenseTimeout { get; init; } = TimeSpan.FromSeconds(30);
+    /// <summary>Initial transport intent. The native worker is pre-seeded before it starts so an immediate managed
+    /// <c>PlayAsync</c> cannot race with native-session initialization and get overwritten.</summary>
+    public bool StartPaused { get; init; } = true;
     /// <summary>The playback mode (<c>"clear"</c> selects the native clear diagnostic; else the protected CENC path).</summary>
     public string? Mode { get; init; }
 }

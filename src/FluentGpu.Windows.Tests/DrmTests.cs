@@ -201,6 +201,84 @@ public sealed class DrmTests
         await session.DisposeAsync().AsTask().WaitAsync(Bound);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ProtectedBackend_ThreadsInitialTransportIntent_IntoNativeRequest(bool startPaused)
+    {
+        var player = new FakeProtectedVideoPlayer();
+        var backend = new ProtectedMediaBackend(() => player);
+        var source = MediaSource.FromUri(AxinomMpd).With(new DrmConfig(DrmSystem.PlayReady));
+        var session = await backend
+            .OpenAsync(source, new MediaOpenOptions { StartPaused = startPaused }, CancellationToken.None)
+            .AsTask().WaitAsync(Bound);
+
+        session.ConnectSignals(new MediaSignalSink(new MediaPlayerCore()));
+
+        Assert.NotNull(player.StartedWith);
+        Assert.Equal(startPaused, player.StartedWith!.StartPaused);
+        Assert.Equal(startPaused ? 0 : 1, player.PlayCalls);
+
+        await session.DisposeAsync().AsTask().WaitAsync(Bound);
+    }
+
+    [Fact]
+    public async Task ProtectedSession_ForwardsPauseResumeAndSeek_WithoutCommandCoalescing()
+    {
+        var player = new FakeProtectedVideoPlayer();
+        var backend = new ProtectedMediaBackend(() => player);
+        var source = MediaSource.FromUri(AxinomMpd).With(new DrmConfig(DrmSystem.PlayReady));
+        var session = await backend
+            .OpenAsync(source, new MediaOpenOptions { StartPaused = true }, CancellationToken.None)
+            .AsTask().WaitAsync(Bound);
+
+        var core = new MediaPlayerCore();
+        session.ConnectSignals(new MediaSignalSink(core));
+        player.SetDurationMs(5_000);
+        Assert.IsAssignableFrom<IVideoSurfaceSession>(session).PumpVideo(default, default, 1f);
+
+        await session.PlayAsync().AsTask().WaitAsync(Bound);
+        await session.PauseAsync().AsTask().WaitAsync(Bound);
+        await session.PlayAsync().AsTask().WaitAsync(Bound);
+        await session.SeekAsync(TimeSpan.FromMilliseconds(3_500), SeekMode.Accurate).AsTask().WaitAsync(Bound);
+
+        Assert.Equal(2, player.PlayCalls);
+        Assert.Equal(1, player.PauseCalls);
+        Assert.Equal(3_500, player.LastSeekMs);
+        Assert.True(core.IsPlayRequested.Peek());
+        Assert.Equal(TimeSpan.FromMilliseconds(3_500), core.Position.Peek());
+
+        await session.DisposeAsync().AsTask().WaitAsync(Bound);
+    }
+
+    [Fact]
+    public async Task ProtectedSession_TransportCompletesOnlyAfterNativeAcknowledgement()
+    {
+        var player = new FakeProtectedVideoPlayer
+        {
+            PlayAck = new(TaskCreationOptions.RunContinuationsAsynchronously),
+            SeekAck = new(TaskCreationOptions.RunContinuationsAsynchronously),
+        };
+        var backend = new ProtectedMediaBackend(() => player);
+        var source = MediaSource.FromUri(AxinomMpd).With(new DrmConfig(DrmSystem.PlayReady));
+        var session = await backend
+            .OpenAsync(source, new MediaOpenOptions { StartPaused = true }, CancellationToken.None)
+            .AsTask().WaitAsync(Bound);
+        session.ConnectSignals(new MediaSignalSink(new MediaPlayerCore()));
+
+        Task play = session.PlayAsync().AsTask();
+        Assert.False(play.IsCompleted);
+        player.PlayAck.SetResult(true);
+        await play.WaitAsync(Bound);
+
+        Task seek = session.SeekAsync(TimeSpan.FromSeconds(2), SeekMode.Accurate).AsTask();
+        Assert.False(seek.IsCompleted);
+        player.SeekAck.SetResult(true);
+        await seek.WaitAsync(Bound);
+
+        await session.DisposeAsync().AsTask().WaitAsync(Bound);
+    }
+
     // ── IPreparableBackend on the protected path ─────────────────────────────────────────────────────────────────────
 
     [Fact]

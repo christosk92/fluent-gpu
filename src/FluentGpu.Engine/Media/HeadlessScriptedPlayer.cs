@@ -64,7 +64,19 @@ public sealed class HeadlessScriptedPlayer : IMediaPlayer
     /// <inheritdoc/>
     public IReadSignal<BufferHealth> Buffer => _core.Buffer;
     /// <inheritdoc/>
+    public IReadSignal<BufferingInfo> Buffering => _core.Buffering;
+    /// <inheritdoc/>
+    public IReadSignal<TimelineInfo> Timeline => _core.Timeline;
+    /// <inheritdoc/>
     public IReadSignal<SizeI> NaturalSize => _core.NaturalSize;
+    /// <inheritdoc/>
+    public IReadSignal<VideoGeometry> VideoGeometry => _core.VideoGeometry;
+    /// <inheritdoc/>
+    public IReadSignal<VideoColorInfo> VideoColor => _core.VideoColor;
+    /// <inheritdoc/>
+    public IReadSignal<PlaybackStatistics> Statistics => _core.Statistics;
+    /// <inheritdoc/>
+    public IReadSignal<TimedCue?> ActiveCue => _core.ActiveCue;
     /// <inheritdoc/>
     public IReadSignal<MediaError?> Error => _core.Error;
     /// <inheritdoc/>
@@ -83,6 +95,8 @@ public sealed class HeadlessScriptedPlayer : IMediaPlayer
     public NowPlaying NowPlaying => _core.NowPlaying;
     /// <inheritdoc/>
     public MediaCommands Commands => _core.Commands;
+    /// <inheritdoc/>
+    public QualitySet Qualities => _core.Qualities;
     /// <inheritdoc/>
     public IReadSignal<VideoSurfaceId> VideoSurface => _core.VideoSurface;
 
@@ -139,6 +153,8 @@ public sealed class HeadlessScriptedPlayer : IMediaPlayer
             _prepareEpoch++;
             var hi = _duration > TimeSpan.Zero ? _duration : to;
             _pendingSeek = to < TimeSpan.Zero ? TimeSpan.Zero : (to > hi ? hi : to);
+            _core.SetBuffering(new BufferingInfo(BufferingReason.Seeking, -1,
+                _core.Buffer.Peek().ForwardBuffered, TimeSpan.Zero, false));
         });
         return ValueTask.CompletedTask;
     }
@@ -157,6 +173,49 @@ public sealed class HeadlessScriptedPlayer : IMediaPlayer
     public void SetVolume(double volume) { if (!_disposed) _core.Volume.Value = (float)Math.Clamp(volume, 0, 1); }
     /// <inheritdoc/>
     public void SetMuted(bool muted) { if (!_disposed) _core.SetMuted(muted); }
+
+    /// <inheritdoc/>
+    public ValueTask SelectTrackAsync(MediaTrack? track)
+    {
+        if (_disposed) return ValueTask.CompletedTask;
+        if (track is null) _core.Tracks.DisableText(); else _core.Tracks.Select(track);
+        return ValueTask.CompletedTask;
+    }
+
+    /// <inheritdoc/>
+    public ValueTask SelectQualityAsync(QualitySelection selection)
+    {
+        if (!_disposed) _core.Qualities.PublishSelection(selection);
+        return ValueTask.CompletedTask;
+    }
+
+    /// <inheritdoc/>
+    public ValueTask GoLiveAsync()
+    {
+        if (_disposed) return ValueTask.CompletedTask;
+        var edge = _core.Timeline.Peek().LiveEdge;
+        return edge > TimeSpan.Zero ? SeekAsync(edge) : ValueTask.CompletedTask;
+    }
+
+    /// <inheritdoc/>
+    public ValueTask PreviousChapterAsync() => SeekChapter(-1);
+    /// <inheritdoc/>
+    public ValueTask NextChapterAsync() => SeekChapter(+1);
+
+    private ValueTask SeekChapter(int direction)
+    {
+        var chapters = _core.Timeline.Peek().Chapters;
+        if (_disposed || chapters.Count == 0) return ValueTask.CompletedTask;
+        if (direction < 0)
+        {
+            for (int i = chapters.Count - 1; i >= 0; i--)
+                if (chapters[i].Start < _clock - TimeSpan.FromSeconds(2)) return SeekAsync(chapters[i].Start);
+            return SeekAsync(chapters[0].Start);
+        }
+        for (int i = 0; i < chapters.Count; i++)
+            if (chapters[i].Start > _clock + TimeSpan.FromMilliseconds(250)) return SeekAsync(chapters[i].Start);
+        return ValueTask.CompletedTask;
+    }
 
     // ── source + queue + preroll ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -217,6 +276,7 @@ public sealed class HeadlessScriptedPlayer : IMediaPlayer
             _pendingSeek = null;
             _core.SetPosition(_clock);
             _source?.SeekAsync(_clock, default);
+            _core.SetBuffering(BufferingInfo.None);
             if (_core.State.Peek() == PlaybackState.Ended && _clock < _duration)
                 _core.SetState(_core.IsPlayRequested.Peek() ? PlaybackState.Ready : PlaybackState.Paused);
         }
@@ -310,7 +370,11 @@ public sealed class HeadlessScriptedPlayer : IMediaPlayer
             }
         }
         _core.SetDuration(_duration);
-        _core.SetNaturalSize(size);
+        _core.SetVideoGeometry(size.IsEmpty
+            ? global::FluentGpu.Media.VideoGeometry.Empty
+            : new VideoGeometry(size, new PixelRect(0, 0, size.Width, size.Height), PixelAspectRatio.Square, 0, size));
+        _core.SetTimeline(new TimelineInfo(false, TimeSpan.Zero, _duration, _duration, TimeSpan.Zero, false,
+            Array.Empty<MediaChapter>()));
         _core.SetCommands(size.IsEmpty
             ? MediaCommandFlags.Play | MediaCommandFlags.Pause | MediaCommandFlags.Seek | MediaCommandFlags.Rate | MediaCommandFlags.Next | MediaCommandFlags.Previous
             : MediaCommandFlags.Play | MediaCommandFlags.Pause | MediaCommandFlags.Seek | MediaCommandFlags.Rate | MediaCommandFlags.StepFrame | MediaCommandFlags.PictureInPicture);

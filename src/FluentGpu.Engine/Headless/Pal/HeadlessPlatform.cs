@@ -115,6 +115,8 @@ public sealed class HeadlessWindow : IPlatformWindow
 
     public int MinimizeCount { get; private set; }
     public int ToggleMaximizeCount { get; private set; }
+    public int SetFullscreenCount { get; private set; }
+    public bool IsFullscreen { get; private set; }
     public int CloseCount { get; private set; }
 
     public void Minimize() { MinimizeCount++; State = WindowState.Minimized; }
@@ -125,6 +127,8 @@ public sealed class HeadlessWindow : IPlatformWindow
         State = State == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
         QueueInput(new InputEvent(InputKind.WindowStateChanged, default, 0, 0));
     }
+
+    public void SetFullscreen(bool fullscreen) { SetFullscreenCount++; IsFullscreen = fullscreen; }
 
     public void CloseWindow() => CloseCount++;
 

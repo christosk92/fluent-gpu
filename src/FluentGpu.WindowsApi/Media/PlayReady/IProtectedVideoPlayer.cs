@@ -19,9 +19,9 @@ public interface IProtectedVideoPlayer : IDisposable
     /// <summary>Begin a protected session for <paramref name="request"/> (source descriptor + the app license relay).
     /// Non-blocking: the native CDM/decode loop runs on a background MTA thread; state surfaces through the signals.</summary>
     void Start(ProtectedVideoRequest request);
-    void Play();
-    void Pause();
-    void Seek(long positionMs);
+    ValueTask PlayAsync();
+    ValueTask PauseAsync();
+    ValueTask SeekAsync(long positionMs);
     void SetVolume(float volume);
     void SetRate(float rate);
     void Stop();

@@ -47,8 +47,20 @@ public interface IVideoPresenter
     /// </summary>
     void Place(VideoSurfaceId id, RectF deviceRect, float opacity, int z);
 
+    /// <summary>Clip the placed content to a device-space viewport. This is distinct from <see cref="Place"/> so
+    /// UniformToFill can place an oversized, centered frame and crop it to the element without distortion.</summary>
+    void SetViewport(VideoSurfaceId id, RectF deviceRect) { }
+
     /// <summary>Show/hide the child visual (queued for the next <see cref="Commit"/>).</summary>
     void SetVisible(VideoSurfaceId id, bool visible);
+
+    /// <summary>
+    /// The externally-produced content's native pixel size (e.g. the decoder swapchain's 1920×1080). The presenter scales
+    /// that content to exactly fill the <see cref="Place"/> device rect (the rect is already aspect-fit by the caller), so
+    /// the frame fits its container instead of being shown 1:1 and cropped. A <c>0×0</c> size means "unknown yet" — the
+    /// presenter then places 1:1 (the pre-scale fallback). Default no-op so headless/test presenters need not implement it.
+    /// </summary>
+    void SetContentSize(VideoSurfaceId id, uint width, uint height) { }
 
     /// <summary>Tear down one surface (removes the child visual, releases its content). Cold path.</summary>
     void Destroy(VideoSurfaceId id);

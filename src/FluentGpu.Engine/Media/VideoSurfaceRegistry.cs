@@ -25,7 +25,9 @@ public sealed class VideoSurfaceRegistry
     private struct Entry
     {
         public bool InUse;
-        public RectF RectDip;         // desired rect in DIP; the host scales to device px at drain time
+        public RectF RectDip;         // desired content rect in DIP; the host scales to device px at drain time
+        public RectF ViewportDip;     // visible container; smaller than RectDip for center-crop
+        public uint ContentW, ContentH; // the content's native pixel size (e.g. decoder swapchain) — the presenter scales it to fill the rect (0 = unknown)
         public bool Visible;
         public int Z;
         public nuint DesiredHandle;   // the DComp surface handle to bind (0 = none produced yet)
@@ -71,6 +73,24 @@ public sealed class VideoSurfaceRegistry
         ref Entry e = ref Slot(token);
         if (e.RectDip == rectDip && e.Z == z) return;
         e.RectDip = rectDip; e.Z = z;
+        MarkDirty(ref e);
+    }
+
+    public void SetViewport(int token, RectF viewportDip)
+    {
+        ref Entry e = ref Slot(token);
+        if (e.ViewportDip == viewportDip) return;
+        e.ViewportDip = viewportDip;
+        MarkDirty(ref e);
+    }
+
+    /// <summary>Set the content's native pixel size (decoder swapchain size) so the presenter can scale it to fill the
+    /// rect instead of showing it 1:1 (cropped). Value-gated.</summary>
+    public void SetContentSize(int token, uint width, uint height)
+    {
+        ref Entry e = ref Slot(token);
+        if (e.ContentW == width && e.ContentH == height) return;
+        e.ContentW = width; e.ContentH = height;
         MarkDirty(ref e);
     }
 
@@ -178,7 +198,11 @@ public sealed class VideoSurfaceRegistry
             }
 
             var dev = new RectF(e.RectDip.X * scale, e.RectDip.Y * scale, e.RectDip.W * scale, e.RectDip.H * scale);
+            RectF viewportDip = e.ViewportDip.W > 0f && e.ViewportDip.H > 0f ? e.ViewportDip : e.RectDip;
+            var viewportDev = new RectF(viewportDip.X * scale, viewportDip.Y * scale, viewportDip.W * scale, viewportDip.H * scale);
+            presenter.SetContentSize(e.SurfaceId, e.ContentW, e.ContentH);   // so it scales the frame to fill `dev` (not 1:1-cropped)
             presenter.Place(e.SurfaceId, dev, 1f, e.Z);
+            presenter.SetViewport(e.SurfaceId, viewportDev);
             presenter.SetVisible(e.SurfaceId, e.Visible);
             changed = true;
             e.Dirty = false;
@@ -253,6 +277,10 @@ public readonly struct VideoBinding
 
     /// <summary>Set the surface rect (DIP) + draw order.</summary>
     public void Place(RectF rectDip, int z = 0) { if (_registry is { } r) r.Place(Token, rectDip, z); }
+    /// <summary>Set the visible container. Oversized content is center-clipped to this rect.</summary>
+    public void SetViewport(RectF rectDip) { if (_registry is { } r) r.SetViewport(Token, rectDip); }
+    /// <summary>Set the content's native pixel size (decoder swapchain size) so the frame scales to fill the rect.</summary>
+    public void SetContentSize(SizeI px) { if (_registry is { } r) r.SetContentSize(Token, (uint)Math.Max(0, px.Width), (uint)Math.Max(0, px.Height)); }
     /// <summary>Show/hide the surface.</summary>
     public void SetVisible(bool visible) { if (_registry is { } r) r.SetVisible(Token, visible); }
     /// <summary>Mark whether a media player is actively presenting new frames into this surface (playing / ramping to

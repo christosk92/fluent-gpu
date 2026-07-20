@@ -12,68 +12,7 @@ using FluentGpu.Media.Windows;
 using FluentGpu.WindowsApi.Media.PlayReady;
 using static FluentGpu.Dsl.Ui;
 
-// ── Protected-video (PlayReady) playback page ──────────────────────────────────────────────────────────────────────
-
-/// <summary>Plays a protected (PlayReady) video through the engine's video-compositing spine. Native PlayReady runs
-/// in-process (the <see cref="DesktopProtectedVideoPlayer"/> DLL backend); when that backend isn't present in the build
-/// the page shows a graceful "not available" note instead of failing.</summary>
-sealed class ProtectedVideoPage : Component
-{
-    public override Element Render()
-    {
-        Element body = DesktopProtectedVideoPlayer.IsAvailable
-            ? Embed.Comp(() => new ProtectedVideoDemo())
-            : NotAvailable();
-
-        return GalleryPage.Shell("Protected Video (PlayReady - Desktop)",
-            "Native desktop PlayReady through the unified Media Playback API: a MediaPlayer routed to MfMediaPlayer + a " +
-            "protected backend (native CDM), a MediaSource carrying DrmConfig, and the Axinom test license supplied by a " +
-            "managed WithDrm relay. Windows owns the mfpmp.exe boundary; capture is black by design (output protection).",
-            body);
-    }
-
-    static Element NotAvailable()
-        => ControlExample.Build("PlayReady backend unavailable",
-            new BoxEl { Direction = 1, Gap = 10, Children =
-                [Body("The in-process PlayReady native backend (FluentGpu.PlayReady.Native.dll) isn't present in this build.").Secondary()] });
-}
-
-/// <summary>Clear-video control through the unified Media Playback API: a real <c>MfMediaPlayer</c> (Media Foundation
-/// windowless-swapchain decode) bound to the real <c>MediaPlayerElement</c> — the M1 on-box proof of the same-process
-/// video surface + gallery composition, independent of DRM.</summary>
-sealed class DesktopVideoPage : Component
-{
-    public override Element Render()
-        => GalleryPage.Shell("Desktop Video (In-process)",
-            "A real clear MP4 decoded by Media Foundation inside the normal FluentGpu desktop process via the unified " +
-            "Media Playback API (MfMediaPlayer → MediaPlayerElement). This proves the same-process video surface and " +
-            "gallery composition independently of DRM.",
-            Embed.Comp(() => new ClearVideoDemo()));
-}
-
-/// <summary>Owns a <c>MediaPlayer</c> routed to the MF video backend, opens a clear MP4 once at mount, and presents it
-/// through the real <c>MediaPlayerElement</c> (its own transport, its own hole-punched video surface).</summary>
-sealed class ClearVideoDemo : Component
-{
-    // A stable clear progressive H.264 MP4 IMFMediaEngine resolves by URL. Override via FG_VIDEO_URL (e.g. a local path).
-    const string DefaultUrl = "https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/720/Big_Buck_Bunny_720_10s_1MB.mp4";
-
-    public override Element Render()
-    {
-        var player = UseMediaPlayer(b => b.WithBackend(FluentGpu.Media.MediaKind.MfVideoOrFile, new FluentGpu.Media.Windows.MfMediaPlayer()));
-        UseEffect(() =>
-        {
-            string url = Environment.GetEnvironmentVariable("FG_VIDEO_URL") is { Length: > 0 } e ? e : DefaultUrl;
-            _ = player.OpenAsync(FluentGpu.Media.MediaSource.FromUri(url));
-        }, System.Array.Empty<object>());
-
-        return new BoxEl
-        {
-            Height = 460f,
-            Children = [Embed.Comp(() => new FluentGpu.Controls.Media.MediaPlayerElement { Player = player })],
-        };
-    }
-}
+// ── Protected-video (PlayReady) playback — presented inside the Media Lab ("Custom source · DRM form") ────────────
 
 /// <summary>A prepared, parsed protected source ready to play: the DASH descriptor (from <see cref="DashManifestParser"/>)
 /// + the built <c>WithDrm</c> license relay + the entered MPD/license URLs. Handed to a keyed <see cref="ProtectedPlayerView"/>
@@ -90,10 +29,10 @@ sealed record PreparedProtectedSource(int Id, string MpdUrl, string LicenseUrl, 
 sealed class ProtectedVideoDemo : Component
 {
     // ── Axinom public single-key PlayReady v10 test vector — the default preset (edit the fields to play any source) ──
-    const string AxinomMpd = "https://media.axprod.net/TestVectors/Dash/protected_dash_1080p_h264_singlekey/manifest.mpd";
-    const string AxinomLicenseUrl = "https://drm-playready-licensing.axprod.net/AcquireLicense";
-    const string AxinomHeaderName = "X-AxDRM-Message";
-    const string AxinomToken =
+    internal const string AxinomMpd = "https://media.axprod.net/TestVectors/Dash/protected_dash_1080p_h264_singlekey/manifest.mpd";
+    internal const string AxinomLicenseUrl = "https://drm-playready-licensing.axprod.net/AcquireLicense";
+    internal const string AxinomHeaderName = "X-AxDRM-Message";
+    internal const string AxinomToken =
         "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.ewogICJ2ZXJzaW9uIjogMSwKICAiY29tX2tleV9pZCI6ICI2OWU1NDA4OC1lOWUw" +
         "LTQ1MzAtOGMxYS0xZWI2ZGNkMGQxNGUiLAogICJtZXNzYWdlIjogewogICAgInR5cGUiOiAiZW50aXRsZW1lbnRfbWVzc2FnZSIs" +
         "CiAgICAidmVyc2lvbiI6IDIsCiAgICAibGljZW5zZSI6IHsKICAgICAgImFsbG93X3BlcnNpc3RlbmNlIjogdHJ1ZQogICAgfSwK" +
@@ -106,13 +45,16 @@ sealed class ProtectedVideoDemo : Component
         "ICAgICAgICAgXQogICAgICAgIH0KICAgICAgfQogICAgXQogIH0KfQ.l8PnZznspJ6lnNmfAE9UQV532Ypzt1JXQkvrk8gFSRw";
 
     private static readonly HttpClient s_http = new();
+    private readonly MediaTestScenario? _preset;
+
+    public ProtectedVideoDemo(MediaTestScenario? preset = null) => _preset = preset;
 
     public override Element Render()
     {
-        var mpd = UseSignal(AxinomMpd);
-        var licenseUrl = UseSignal(AxinomLicenseUrl);
-        var headerName = UseSignal(AxinomHeaderName);
-        var headerValue = UseSignal(AxinomToken);
+        var mpd = UseSignal(_preset?.Source ?? AxinomMpd);
+        var licenseUrl = UseSignal(_preset?.LicenseUrl ?? AxinomLicenseUrl);
+        var headerName = UseSignal(_preset?.HeaderName ?? (_preset is null ? AxinomHeaderName : ""));
+        var headerValue = UseSignal(_preset?.HeaderValue ?? (_preset is null ? AxinomToken : ""));
         var (request, setRequest) = UseState<PreparedProtectedSource?>(null);
         var (error, setError) = UseState<string?>(null);
         var (busy, setBusy) = UseState(false);
@@ -215,7 +157,15 @@ sealed class ProtectedPlayerView : Component
         UseEffect(() =>
         {
             var source = MediaSource.FromUri(req.MpdUrl).With(new DrmConfig(DrmSystem.PlayReady, req.LicenseUrl));
-            _ = player.OpenAsync(source);
+            _ = OpenAndPlayAsync();
+
+            async Task OpenAndPlayAsync()
+            {
+                // The user already pressed Play in the form — declare the intent so the session pump doesn't pause the
+                // auto-playing protected engine right after metadata.
+                try { await player.OpenAsync(source); await player.PlayAsync(); }
+                catch { /* surfaced as the player's typed Error signal */ }
+            }
         }, Array.Empty<object>());
 
         var err = player.Error.Value;   // subscribe → surface a typed CDM/DRM/source error inline

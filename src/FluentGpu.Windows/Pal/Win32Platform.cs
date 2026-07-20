@@ -261,6 +261,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
 
     private const uint CS_VREDRAW = 0x0001, CS_HREDRAW = 0x0002;
     private const uint WS_OVERLAPPEDWINDOW = 0x00CF0000;
+    private const int GWL_STYLE = -16;
+    private const uint MONITOR_DEFAULTTONEAREST = 2;
+    private const int SW_MAXIMIZE = 3;
     private const int CW_USEDEFAULT = unchecked((int)0x80000000);
     private const int SW_SHOW = 5;
     private const uint PM_REMOVE = 0x0001;
@@ -449,6 +452,10 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private bool _ncTracking;     // TME_NONCLIENT leave-tracking armed (legacy WM_NCMOUSE* fallback only)
     private bool _ncPointerSeen;  // a WM_NCPOINTER* arrived → the legacy WM_NCMOUSE* fallback stands down (no double-fire)
     private bool _active = true;  // WM_(NC)ACTIVATE — IsActive pull side
+    private bool _fullscreen;
+    private bool _windowedWasZoomed;
+    private nint _windowedStyle;
+    private RECT _windowedRect;
     private bool _wasZoomed;      // WM_SIZE edge-detect → InputKind.WindowStateChanged
     private bool _inMoveSizeLoop; // WM_ENTERSIZEMOVE..WM_EXITSIZEMOVE modal loop
     private bool _sizedInMoveSizeLoop; // true once this modal loop has delivered WM_SIZE (edge resize, not pure titlebar move)
@@ -650,6 +657,42 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         => IsZoomed(_hwnd) ? WindowState.Maximized : IsIconic(_hwnd) ? WindowState.Minimized : WindowState.Normal;
 
     public bool IsActive => _active;
+
+    public bool IsFullscreen => _fullscreen;
+
+    public void SetFullscreen(bool fullscreen)
+    {
+        if (_fullscreen == fullscreen) return;
+        if (fullscreen)
+        {
+            _windowedWasZoomed = IsZoomed(_hwnd);
+            _windowedStyle = GetWindowLongPtrW(_hwnd, GWL_STYLE);
+            RECT windowedRect = default;
+            GetWindowRect(_hwnd, &windowedRect);
+            _windowedRect = windowedRect;
+
+            MONITORINFO mi = default;
+            mi.cbSize = (uint)sizeof(MONITORINFO);
+            HMONITOR monitor = MonitorFromWindow(_hwnd, MONITOR_DEFAULTTONEAREST);
+            if (!GetMonitorInfoW(monitor, &mi)) return;
+
+            _fullscreen = true;
+            SetWindowLongPtrW(_hwnd, GWL_STYLE, _windowedStyle & ~(nint)WS_OVERLAPPEDWINDOW);
+            RECT r = mi.rcMonitor;
+            SetWindowPos(_hwnd, HWND.NULL, r.left, r.top, r.right - r.left, r.bottom - r.top,
+                SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        }
+        else
+        {
+            _fullscreen = false;
+            SetWindowLongPtrW(_hwnd, GWL_STYLE, _windowedStyle);
+            RECT r = _windowedRect;
+            SetWindowPos(_hwnd, HWND.NULL, r.left, r.top, r.right - r.left, r.bottom - r.top,
+                SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+            if (_windowedWasZoomed) ShowWindow(_hwnd, SW_MAXIMIZE);
+        }
+        _queue.Enqueue(new InputEvent(InputKind.WindowStateChanged, default, 0, 0, TimestampMs: Now()));
+    }
 
     public void Minimize() => PostMessageW(_hwnd, WM_SYSCOMMAND, SC_MINIMIZE, 0);
 
@@ -1364,7 +1407,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 return true;
 
             // ── custom frame (WindowDesc.CustomFrame): strip the caption, keep the resize frame (Terminal recipe) ────
-            case WM_NCCALCSIZE when _customFrame && (nuint)wParam != 0:
+            case WM_NCCALCSIZE when _customFrame && !_fullscreen && (nuint)wParam != 0:
             {
                 // DefWindowProc insets all four edges by the standard frame (caption included on top); restoring the
                 // original top reclaims the caption strip as client while keeping the thin L/R/B frame — DWM shadow,
@@ -1384,7 +1427,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 return true;
             }
 
-            case WM_NCHITTEST when _customFrame:
+            case WM_NCHITTEST when _customFrame && !_fullscreen:
             {
                 // lParam = SCREEN px → client px. Priority: engine caption buttons (they win even inside the top
                 // resize band — the Win11 Fitts corner: close stays clickable at y=0), then the top resize band

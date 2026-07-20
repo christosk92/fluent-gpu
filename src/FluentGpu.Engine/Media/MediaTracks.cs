@@ -89,6 +89,14 @@ public sealed class TrackSet
     /// <summary>The selected text track (null = text disabled).</summary>
     public IReadSignal<MediaTrack?> SelectedText => _selText;
 
+    /// <summary>Clear backend-discovered tracks and acknowledged selections for a new source.</summary>
+    public void Reset()
+    {
+        Audio.Clear(); Video.Clear(); Text.Clear();
+        _selAudio.Value = null; _selVideo.Value = null; _selText.Value = null;
+        _selectedFlags.Clear(); _syncOffsets.Clear();
+    }
+
     /// <summary>Select <paramref name="track"/> in its collection (the engine flips <see cref="MediaTrack.IsSelected"/>).</summary>
     public void Select(MediaTrack track)
     {
@@ -181,6 +189,10 @@ public sealed class CueTrack
 
     /// <summary>The frame-accurate active cue (null when none is active).</summary>
     public IReadSignal<TimedCue?> ActiveCue => _active;
+    /// <summary>Number of parsed cues.</summary>
+    public int Count => _cues.Count;
+    /// <summary>One cue by timeline order.</summary>
+    public TimedCue this[int index] => _cues[index];
     /// <summary>Register a per-cue enter handler (karaoke highlight).</summary>
     public void OnCueEnter(Action<TimedCue> handler) => _onEnter.Add(handler);
     /// <summary>Register a per-cue exit handler.</summary>

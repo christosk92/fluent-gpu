@@ -60,15 +60,69 @@ public sealed class MediaPlayerElementLogicTests
     }
 
     [Fact]
-    public void FitVideoRect_UniformToFill_CoversAreaWithoutBleeding()
+    public void FitVideoRect_UniformToFill_ReturnsOversizedCenteredContentForViewportCrop()
     {
         var r = MediaPlayerElement.FitVideoRect(new RectF(0, 0, 320, 180), new SizeI(100, 50), MediaStretch.UniformToFill);
-        Assert.True(r.W <= 320f + 1e-3f);
-        Assert.True(r.H <= 180f + 1e-3f);
         // Fills at least one axis fully (scale = max(3.2, 3.6) = 3.6 ⇒ height hits 180, width clamps to 320).
         Assert.Equal(180f, r.H, P);
-        Assert.Equal(320f, r.W, P);
+        Assert.Equal(360f, r.W, P);
+        Assert.Equal(-20f, r.X, P);
     }
+
+    [Fact]
+    public void FitVideoRect_CustomAspect_UsesRequestedDisplayRatio()
+    {
+        var r = MediaPlayerElement.FitVideoRect(new RectF(0, 0, 400, 300), new SizeI(1920, 1080),
+            VideoAspectMode.Custom, 1.0);
+        Assert.Equal(300f, r.W, P);
+        Assert.Equal(300f, r.H, P);
+        Assert.Equal(50f, r.X, P);
+    }
+
+    [Theory]
+    [InlineData(4.0 / 3.0, 400, 300)]
+    [InlineData(16.0 / 9.0, 400, 225)]
+    [InlineData(2.39, 400, 167.364)]
+    public void FitVideoRect_CustomPresets_PreserveRequestedDisplayRatio(double ratio, float expectedW, float expectedH)
+    {
+        var r = MediaPlayerElement.FitVideoRect(new RectF(0, 0, 400, 300), new SizeI(1920, 1080),
+            VideoAspectMode.Custom, ratio);
+        Assert.Equal(expectedW, r.W, 2);
+        Assert.Equal(expectedH, r.H, 2);
+        Assert.Equal(200f, r.X + r.W * 0.5f, P);
+        Assert.Equal(150f, r.Y + r.H * 0.5f, P);
+    }
+
+    [Fact]
+    public void LetterboxBars_UniformProducesCenteredPillars_CropProducesNone()
+    {
+        Span<RectF> bars = stackalloc RectF[4];
+        var area = new RectF(0, 0, 400, 180);
+        var fit = MediaPlayerElement.FitVideoRect(area, new SizeI(1920, 1080), VideoAspectMode.Uniform, 0);
+        int count = MediaPlayerElement.CalculateLetterboxBars(area, fit, bars);
+        Assert.Equal(2, count);
+        Assert.Equal(new RectF(0, 0, 40, 180), bars[0]);
+        Assert.Equal(new RectF(360, 0, 40, 180), bars[1]);
+
+        var crop = MediaPlayerElement.FitVideoRect(area, new SizeI(1920, 1080), VideoAspectMode.UniformToFill, 0);
+        Assert.Equal(0, MediaPlayerElement.CalculateLetterboxBars(area, crop, bars));
+    }
+
+    [Theory]
+    [InlineData(true, PlaybackState.Opening, true)]
+    [InlineData(true, PlaybackState.Buffering, true)]
+    [InlineData(true, PlaybackState.Playing, false)]
+    [InlineData(false, PlaybackState.Playing, true)]
+    public void ChromePolicy_KeepsEarlyPlayAndPausedStatesVisible(bool playIntent, PlaybackState state, bool forced)
+        => Assert.Equal(forced, MediaPlayerElement.ShouldForceChrome(playIntent, state));
+
+    [Theory]
+    [InlineData(0, false)]
+    [InlineData(420, true)]
+    [InlineData(759, true)]
+    [InlineData(760, false)]
+    public void ResponsiveChrome_CollapsesAdvancedCommandsIntoEllipsis(float width, bool compact)
+        => Assert.Equal(compact, MediaPlayerElement.IsCompactTransport(width));
 
     [Fact]
     public void FitVideoRect_DegenerateArea_ReturnsArea()

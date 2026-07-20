@@ -38,6 +38,7 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
     private volatile int _runHr;
     private volatile bool _runCompleted;
     private volatile string? _runError;
+    private volatile bool _playRequested;
 
     // The active session's license bridge + a background-thread-recorded typed relay error (mirrored on the UI pump).
     private DrmLicenseBridge? _bridge;
@@ -86,6 +87,12 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
         _error.Value = null;
         _relayError = null;
         _state.Value = ProtectedVideoState.Loading;
+        _playRequested = !request.StartPaused;
+
+        // Seed the process-global native transport level BEFORE the worker enters FgPlayReadyRunEx. MediaPlayer opens
+        // sessions paused and immediately calls PlayAsync; that Play can otherwise arrive before RunEx initializes and
+        // be overwritten by its startup reset. RunEx intentionally preserves this pre-seeded atomic level.
+        if (_playRequested) Native.FgPlayReadyPlay(); else Native.FgPlayReadyPause();
 
         var system = request.Drm?.System ?? DrmSystem.PlayReady;
         _bridge = new DrmLicenseBridge(request.LicenseRelay, system, request.LicenseTimeout,
@@ -190,12 +197,51 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
         }
     }
 
-    public void Play() => Native.FgPlayReadyPlay();
-    public void Pause() => Native.FgPlayReadyPause();
-    public void Seek(long positionMs) => Native.FgPlayReadySeek(positionMs);
-    public void SetVolume(float volume) => Native.FgPlayReadySetVolume(volume);
-    public void SetRate(float rate) { /* rate control follows after the desktop playback proof */ }
+    public ValueTask PlayAsync()
+    {
+        _playRequested = true;
+        return AwaitAppliedAsync(Native.FgPlayReadyPlay(), TransportAck.PlayPause);
+    }
+
+    public ValueTask PauseAsync()
+    {
+        _playRequested = false;
+        return AwaitAppliedAsync(Native.FgPlayReadyPause(), TransportAck.PlayPause);
+    }
+
+    public ValueTask SeekAsync(long positionMs)
+        => AwaitAppliedAsync(Native.FgPlayReadySeek(positionMs), TransportAck.Seek);
+
+    public void SetVolume(float volume) => _ = Native.FgPlayReadySetVolume(volume);
+    public void SetRate(float rate) => _ = Native.FgPlayReadySetRate(rate);
     public void Stop() => Native.FgPlayReadyStop();
+
+    private enum TransportAck : byte { PlayPause, Seek }
+
+    private ValueTask AwaitAppliedAsync(ulong sequence, TransportAck kind)
+    {
+        if (sequence == 0 || _disposed) return ValueTask.CompletedTask;
+        // This type is unsafe because it owns the native callback. C# forbids await in an unsafe context, so the cold
+        // transport acknowledgement wait runs on a worker. It never blocks the UI/render/native-MTA threads.
+        return new ValueTask(Task.Run(() =>
+        {
+            long deadline = Environment.TickCount64 + 5_000;
+            while (!_disposed && Environment.TickCount64 < deadline)
+            {
+                if (Native.FgPlayReadyGetSnapshot(out var snapshot) >= 0)
+                {
+                    ulong applied = kind == TransportAck.PlayPause ? snapshot.PlayAppliedSeq : snapshot.SeekAppliedSeq;
+                    if (applied >= sequence) return;
+                    if (snapshot.State == 5)
+                        throw new InvalidOperationException(
+                            $"PlayReady transport failed while applying {kind} (0x{unchecked((uint)snapshot.ErrorHr):X8}).");
+                }
+                Thread.Sleep(10);
+            }
+            if (!_disposed)
+                throw new TimeoutException($"PlayReady transport did not acknowledge {kind} sequence {sequence}.");
+        }));
+    }
 
     public void Pump(in VideoBinding binding)
     {
@@ -265,6 +311,10 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
         public int Height;
         public long PositionMs;
         public long DurationMs;
+        public ulong PlayAppliedSeq;
+        public ulong SeekAppliedSeq;
+        public ulong VolumeAppliedSeq;
+        public ulong RateAppliedSeq;
     }
 
     /// <summary>Blittable mirror of the native <c>FgPlayReadyOpenDesc</c> (all pointer fields are hand-marshaled to
@@ -293,10 +343,11 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
         [LibraryImport(NativeLibraryName, StringMarshalling = StringMarshalling.Utf16)]
         internal static partial int FgPlayReadyRunEx(string baseDir, ref FgOpenDescNative desc, IntPtr licenseCallback, IntPtr licenseCtx);
         [LibraryImport(NativeLibraryName)] internal static partial int FgPlayReadyGetSnapshot(out NativeSnapshot value);
-        [LibraryImport(NativeLibraryName)] internal static partial void FgPlayReadyPlay();
-        [LibraryImport(NativeLibraryName)] internal static partial void FgPlayReadyPause();
+        [LibraryImport(NativeLibraryName)] internal static partial ulong FgPlayReadyPlay();
+        [LibraryImport(NativeLibraryName)] internal static partial ulong FgPlayReadyPause();
         [LibraryImport(NativeLibraryName)] internal static partial void FgPlayReadyStop();
-        [LibraryImport(NativeLibraryName)] internal static partial void FgPlayReadySeek(long positionMs);
-        [LibraryImport(NativeLibraryName)] internal static partial void FgPlayReadySetVolume(double volume);
+        [LibraryImport(NativeLibraryName)] internal static partial ulong FgPlayReadySeek(long positionMs);
+        [LibraryImport(NativeLibraryName)] internal static partial ulong FgPlayReadySetVolume(double volume);
+        [LibraryImport(NativeLibraryName)] internal static partial ulong FgPlayReadySetRate(double rate);
     }
 }

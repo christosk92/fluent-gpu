@@ -63,7 +63,13 @@ public enum MediaCommandFlags : uint
     /// <summary>Enter picture-in-picture.</summary>
     PictureInPicture = 4096,
     /// <summary>Cast to a remote device.</summary>
-    Cast = 8192
+    Cast = 8192,
+    /// <summary>Jump to the current live edge.</summary>
+    GoLive = 16384,
+    /// <summary>Navigate chapters.</summary>
+    Chapters = 32768,
+    /// <summary>Enter or leave fullscreen presentation.</summary>
+    Fullscreen = 65536
 }
 
 /// <summary>The capability bitset surface (spec §10). One control kit drives file/stream/live/cast backends and greys out

@@ -27,7 +27,13 @@ public sealed class MediaPlayerCore
     private readonly Signal<TimeSpan> _position = new(TimeSpan.Zero);
     private readonly Signal<TimeSpan> _duration = new(TimeSpan.Zero);
     private readonly Signal<BufferHealth> _buffer = new(BufferHealth.Empty);
+    private readonly Signal<BufferingInfo> _buffering = new(BufferingInfo.None);
+    private readonly Signal<TimelineInfo> _timeline = new(TimelineInfo.Empty);
     private readonly Signal<SizeI> _naturalSize = new(SizeI.Zero);
+    private readonly Signal<VideoGeometry> _videoGeometry = new(global::FluentGpu.Media.VideoGeometry.Empty);
+    private readonly Signal<VideoColorInfo> _videoColor = new(VideoColorInfo.Sdr);
+    private readonly Signal<PlaybackStatistics> _statistics = new(PlaybackStatistics.Empty);
+    private readonly Signal<TimedCue?> _activeCue = new(null);
     private readonly Signal<MediaError?> _error = new(null);
     private readonly FloatSignal _volume = new(1f);
     private readonly Signal<bool> _muted = new(false);
@@ -67,8 +73,20 @@ public sealed class MediaPlayerCore
     public IReadSignal<TimeSpan> Duration => _duration;
     /// <summary>The buffer-health signal.</summary>
     public IReadSignal<BufferHealth> Buffer => _buffer;
+    /// <summary>The detailed reason/progress behind a buffering state.</summary>
+    public IReadSignal<BufferingInfo> Buffering => _buffering;
+    /// <summary>The VOD/live/DVR timeline.</summary>
+    public IReadSignal<TimelineInfo> Timeline => _timeline;
     /// <summary>The natural-size signal.</summary>
     public IReadSignal<SizeI> NaturalSize => _naturalSize;
+    /// <summary>Display geometry including aperture, sample aspect ratio, and rotation.</summary>
+    public IReadSignal<VideoGeometry> VideoGeometry => _videoGeometry;
+    /// <summary>Colorimetry and HDR metadata.</summary>
+    public IReadSignal<VideoColorInfo> VideoColor => _videoColor;
+    /// <summary>Bounded-cadence playback diagnostics.</summary>
+    public IReadSignal<PlaybackStatistics> Statistics => _statistics;
+    /// <summary>The currently-active engine-rendered subtitle/caption cue.</summary>
+    public IReadSignal<TimedCue?> ActiveCue => _activeCue;
     /// <summary>The typed-error signal.</summary>
     public IReadSignal<MediaError?> Error => _error;
     /// <summary>The read-write master volume.</summary>
@@ -90,6 +108,8 @@ public sealed class MediaPlayerCore
     public NowPlaying NowPlaying { get; } = new();
     /// <summary>The capability bitset.</summary>
     public MediaCommands Commands { get; }
+    /// <summary>Adaptive quality variants and acknowledged selection.</summary>
+    public QualitySet Qualities { get; } = new();
 
     // ── setters (value-gated; the sole-writer surface) ───────────────────────────────────────────────────────────────
 
@@ -97,6 +117,22 @@ public sealed class MediaPlayerCore
     public void SetState(PlaybackState state)
     {
         _state.Value = state;
+        if (state is PlaybackState.Opening or PlaybackState.Buffering)
+        {
+            if (!_buffering.Peek().IsBuffering)
+                _buffering.Value = new BufferingInfo(BufferingReason.Initial, -1, _buffer.Peek().ForwardBuffered,
+                    TimeSpan.Zero, false);
+        }
+        else if (state == PlaybackState.Stalled)
+        {
+            if (!_buffering.Peek().IsBuffering)
+                _buffering.Value = new BufferingInfo(BufferingReason.Rebuffering, -1,
+                    _buffer.Peek().ForwardBuffered, TimeSpan.Zero, false);
+        }
+        else if (_buffering.Peek().IsBuffering)
+        {
+            _buffering.Value = BufferingInfo.None;
+        }
         RecomputeDerived();
     }
 
@@ -130,8 +166,19 @@ public sealed class MediaPlayerCore
     public void SetDuration(TimeSpan duration) => _duration.Value = duration;
     /// <summary>Set the buffer health.</summary>
     public void SetBuffer(BufferHealth buffer) => _buffer.Value = buffer;
+    public void SetBuffering(BufferingInfo buffering) => _buffering.Value = buffering;
+    public void SetTimeline(TimelineInfo timeline) => _timeline.Value = timeline;
     /// <summary>Set the video natural size.</summary>
     public void SetNaturalSize(SizeI size) => _naturalSize.Value = size;
+    public void SetVideoGeometry(VideoGeometry geometry)
+    {
+        _videoGeometry.Value = geometry;
+        SizeI display = geometry.DisplaySize.IsEmpty ? geometry.CodedSize : geometry.DisplaySize;
+        if (!display.IsEmpty) _naturalSize.Value = display;
+    }
+    public void SetVideoColor(VideoColorInfo color) => _videoColor.Value = color;
+    public void SetStatistics(PlaybackStatistics statistics) => _statistics.Value = statistics;
+    public void SetActiveCue(TimedCue? cue) => _activeCue.Value = cue;
     /// <summary>Set (or clear with null) the typed error.</summary>
     public void SetError(MediaError? error) => _error.Value = error;
     /// <summary>Set the muted state.</summary>
@@ -254,8 +301,35 @@ public sealed class MediaSignalSink
     public void Duration(TimeSpan duration) => _core.SetDuration(duration);
     /// <summary>Push the buffer health.</summary>
     public void Buffer(BufferHealth buffer) => _core.SetBuffer(buffer);
+    /// <summary>Push detailed buffering progress/reason.</summary>
+    public void Buffering(BufferingInfo buffering) => _core.SetBuffering(buffering);
+    /// <summary>Push the current live/VOD timeline.</summary>
+    public void Timeline(TimelineInfo timeline) => _core.SetTimeline(timeline);
     /// <summary>Push the natural size.</summary>
     public void NaturalSize(SizeI size) => _core.SetNaturalSize(size);
+    /// <summary>Push display geometry.</summary>
+    public void VideoGeometry(VideoGeometry geometry) => _core.SetVideoGeometry(geometry);
+    /// <summary>Push colorimetry/HDR metadata.</summary>
+    public void VideoColor(VideoColorInfo color) => _core.SetVideoColor(color);
+    /// <summary>Push bounded-cadence playback statistics.</summary>
+    public void Statistics(PlaybackStatistics statistics) => _core.SetStatistics(statistics);
+    /// <summary>Replace the available quality variants.</summary>
+    public void QualityVariants(IEnumerable<QualityVariant> variants) => _core.Qualities.Variants.Reset(variants);
+    /// <summary>Publish the acknowledged quality selection and active representation.</summary>
+    public void QualitySelection(QualitySelection selection, QualityVariant? active)
+    {
+        _core.Qualities.PublishSelection(selection);
+        _core.Qualities.PublishActive(active);
+    }
+    /// <summary>Reset tracks before publishing a new source's manifest/backend discovery.</summary>
+    public void ResetTracks() => _core.Tracks.Reset();
+    /// <summary>Publish one backend-discovered selectable track.</summary>
+    public MediaTrack Track(int id, TrackKind kind, string? language, string label, TrackRole role,
+        MediaContentType codec, bool selected = false)
+        => _core.Tracks.Register(id, kind, language, label, role, codec, selected);
+    /// <summary>Push the active engine-rendered subtitle/caption cue (null = none). Used by backends that source cues
+    /// from the stream/manifest (in-band WebVTT); external sidecar subtitles are advanced by the player facade.</summary>
+    public void ActiveCue(TimedCue? cue) => _core.SetActiveCue(cue);
     /// <summary>Push (or clear) the typed error.</summary>
     public void Error(MediaError? error) => _core.SetError(error);
     /// <summary>Push the muted state.</summary>

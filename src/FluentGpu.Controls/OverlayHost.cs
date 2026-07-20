@@ -62,6 +62,11 @@ public readonly record struct PopupOptions(
 {
     private readonly bool _unconstrained;
 
+    /// <summary>Keep the invoker focused when the popup opens while still installing a focus scope. Pointer-opened
+    /// context menus use this; the first Tab then enters the scoped menu, whereas keyboard-opened menus focus their
+    /// first item immediately. Default false preserves modal/dropdown auto-focus behavior.</summary>
+    public bool PreserveFocusOnOpen { get; init; }
+
     /// <summary>
     /// WinUI <c>Popup.ShouldConstrainToRootBounds</c> (Popup_Partial.cpp:951-970: read-only false for WINDOWED popups;
     /// FlyoutBase_Partial.cpp:3181-3205 <c>SetIsWindowedPopup</c>). Default TRUE = the popup is clamped inside the
@@ -166,6 +171,7 @@ internal sealed class OverlayEntry
     public CornerJoin CornerJoin;     // which popup corners abut the anchor (corner-squaring for ComboBox/AutoSuggestBox)
     public NodeHandle SavedFocus;     // focus captured at open time → restored when the close STARTS (WinUI timing)
     public bool FocusTrap;
+    public bool PreserveFocusOnOpen;
     public bool ScopePushed;          // a dispatcher focus scope is live for this entry (popped at close start)
     public DismissBehavior DismissBehavior;
     public PopupChrome Chrome;
@@ -251,6 +257,7 @@ internal sealed class OverlayServiceImpl : IOverlayService
         {
             Id = _nextId++, Anchor = anchor, AnchorRect = anchorRect, Content = content, Placement = placement, Handle = handle,
             FocusTrap = options.FocusTrap,
+            PreserveFocusOnOpen = options.PreserveFocusOnOpen,
             DismissBehavior = options.DismissBehavior,
             Chrome = options.Chrome,
             ConstrainToRootBounds = options.ConstrainToRootBounds,
@@ -816,8 +823,11 @@ public sealed class OverlayHost : Component
                 {
                     e.ScopePushed = true;
                     hooks.PushFocusScope?.Invoke(e.WrapperNode);
-                    var firstStop = hooks.FirstFocusableIn?.Invoke(e.WrapperNode) ?? NodeHandle.Null;
-                    if (!firstStop.IsNull) hooks.FocusNode?.Invoke(firstStop, false);
+                    if (!e.PreserveFocusOnOpen)
+                    {
+                        var firstStop = hooks.FirstFocusableIn?.Invoke(e.WrapperNode) ?? NodeHandle.Null;
+                        if (!firstStop.IsNull) hooks.FocusNode?.Invoke(firstStop, false);
+                    }
                 }
 
                 if (e.SurfaceNode.IsNull || !scene.IsLive(e.SurfaceNode)) continue;

@@ -137,6 +137,9 @@ public sealed class InputHooks
     public Func<bool>? IsWindowActive;
     /// <summary>Caption-button commands → <c>IPlatformWindow.Minimize/ToggleMaximize/CloseWindow</c>.</summary>
     public Action? WindowMinimize, WindowToggleMaximize, WindowClose;
+    /// <summary>Borderless monitor-fullscreen state + command. Media surfaces use this instead of maximizing.</summary>
+    public Func<bool>? IsWindowFullscreen;
+    public Action<bool>? WindowSetFullscreen;
     /// <summary>Push the titlebar drag/button regions (array + count — the caller reuses ONE array across pushes,
     /// the host forwards <c>regions.AsSpan(0, count)</c> to <c>IPlatformWindow.SetTitleBarRegions</c>; push happens
     /// on titlebar relayout only, never per frame).</summary>

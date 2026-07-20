@@ -56,6 +56,7 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
     private volatile bool _metadataLoaded;
     private volatile bool _canPlay;
     private volatile bool _playing;
+    private volatile bool _seeking;
     private volatile bool _ended;
     private volatile bool _error;
     private volatile uint _errorCode;
@@ -65,6 +66,7 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
     public bool MetadataLoaded => _metadataLoaded;
     public bool CanPlay => _canPlay;
     public bool Playing => _playing;
+    public bool Seeking => _seeking;
     public bool Ended => _ended;
     public bool HasError => _error;
     public uint ErrorCode => _errorCode;
@@ -305,6 +307,8 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
             case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_PLAY: _ended = false; break;
             case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_PLAYING: _playing = true; _canPlay = true; _ended = false; break;
             case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_PAUSE: _playing = false; break;
+            case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_SEEKING: _seeking = true; break;
+            case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_SEEKED: _seeking = false; break;
             case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_ENDED: _ended = true; _playing = false; break;
             case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_ERROR: _error = true; _errorCode = (uint)p1; _errorHr = (int)p2; break;
         }

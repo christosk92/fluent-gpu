@@ -159,8 +159,10 @@ sealed class GalleryApp : Component
                 new("Image", Icons.Picture, "Image"),
                 new("PersonPicture", Icons.FavoriteStar, "PersonPicture"),
                 new("MediaPlayerElement", Icons.Movie, "MediaPlayerElement"),
-                new("desktop-video", Icons.Movie, "Desktop Video (In-process)"),
-                new("playready-video", Icons.Movie, "Protected Video (DRM)"),
+                // ONE media area: the lab's catalog navigates to per-scenario player pages, and DRM (incl. the
+                // free-form DASH+PlayReady source) is a section inside it — the former Desktop Video / Protected
+                // Video pages are folded in.
+                new("media-lab", Icons.Movie, "Media Lab"),
             ],
         },
         new("collections", Icons.List, "Collections")
@@ -423,8 +425,8 @@ sealed class GalleryApp : Component
         "AnnotatedScrollBar" => Embed.Comp(() => new AnnotatedScrollBarPage()),
         "SwipeControl" => Embed.Comp(() => new SwipeControlPage()),
         "MediaPlayerElement" => Embed.Comp(() => new MediaPlayerElementPage()),
-        "desktop-video" => Embed.Comp(() => new DesktopVideoPage()),
-        "playready-video" => Embed.Comp(() => new ProtectedVideoPage()),
+        // "desktop-video"/"playready-video" fold into the Media Lab (kept as deep-link aliases).
+        "media-lab" or "desktop-video" or "playready-video" => Embed.Comp(() => new MediaLabPage()),
         "datetime" => Embed.Comp(() => new DateTimeOverviewPage()),
         "CalendarView" => Embed.Comp(() => new CalendarViewPage()),
         "CalendarDatePicker" => Embed.Comp(() => new CalendarDatePickerPage()),

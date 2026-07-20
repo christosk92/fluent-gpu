@@ -322,7 +322,12 @@ public sealed class EditableText : Component
         ];
         var lane = new BoxEl
         {
-            Direction = 0, Grow = 1f, AlignItems = laneAlign,
+            // Grow to fill the field, but ALSO Shrink=1 + MinWidth=0 so a long single-line (NoWrap) value can't blow the
+            // lane out to the text's full intrinsic width. FlexShrink defaults to 0 (Yoga-style), so without this the lane
+            // measured as wide as the whole token: the caret-follow viewport (`vw`) went huge → the text "fit" → nothing
+            // to scroll (wheel OR touchpad), AND the DeleteButton sibling was pushed past the field edge and clipped away
+            // (the "can't scroll to the overflow" + "missing ✕" bugs — both are this one missing constraint).
+            Direction = 0, Grow = 1f, Shrink = 1f, MinWidth = 0f, AlignItems = laneAlign,
             // WinUI TextBox content padding (10,5,6,6) unless the composer overrides it (the editable ComboBox passes
             // ComboBoxEditableTextPadding 11,5,38,6); the affix is a FULL-HEIGHT sibling outside this padding.
             Padding = LanePadding ?? new Edges4(10, 5, 6, 6),

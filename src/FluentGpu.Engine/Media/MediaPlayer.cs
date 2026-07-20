@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentGpu.Foundation;
@@ -26,6 +27,9 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable
     private readonly BufferPolicy? _buffering;
     private readonly IAbrPolicy? _abr;
     private readonly Func<LicenseRequest, ValueTask<LicenseResponse>>? _licenseRelay;
+    private static readonly HttpClient s_subtitleHttp = new();
+    private readonly Dictionary<int, CueTrack> _captionTracks = new();
+    private CueTrack? _activeCaptions;
 
     private IMediaSession? _session;
     private MediaKind _currentKind = MediaKind.Auto;
@@ -90,7 +94,19 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable
     /// <inheritdoc/>
     public IReadSignal<BufferHealth> Buffer => _core.Buffer;
     /// <inheritdoc/>
+    public IReadSignal<BufferingInfo> Buffering => _core.Buffering;
+    /// <inheritdoc/>
+    public IReadSignal<TimelineInfo> Timeline => _core.Timeline;
+    /// <inheritdoc/>
     public IReadSignal<SizeI> NaturalSize => _core.NaturalSize;
+    /// <inheritdoc/>
+    public IReadSignal<VideoGeometry> VideoGeometry => _core.VideoGeometry;
+    /// <inheritdoc/>
+    public IReadSignal<VideoColorInfo> VideoColor => _core.VideoColor;
+    /// <inheritdoc/>
+    public IReadSignal<PlaybackStatistics> Statistics => _core.Statistics;
+    /// <inheritdoc/>
+    public IReadSignal<TimedCue?> ActiveCue => _core.ActiveCue;
     /// <inheritdoc/>
     public IReadSignal<MediaError?> Error => _core.Error;
     /// <inheritdoc/>
@@ -110,6 +126,8 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable
     /// <inheritdoc/>
     public MediaCommands Commands => _core.Commands;
     /// <inheritdoc/>
+    public QualitySet Qualities => _core.Qualities;
+    /// <inheritdoc/>
     public IReadSignal<VideoSurfaceId> VideoSurface => _core.VideoSurface;
 
     /// <inheritdoc/>
@@ -118,6 +136,11 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable
         if (_disposed) return;
         // Only a composited-video session (the MF backend) drives the surface handoff; everything else is a no-op.
         (_session as IVideoSurfaceSession)?.PumpVideo(binding, videoRect, scale);
+        if (_activeCaptions is { } captions)
+        {
+            captions.Advance(_core.Position.Peek());
+            _core.SetActiveCue(captions.ActiveCue.Peek());
+        }
 
         // Tell the host whether this video needs the frame loop kept awake at display rate. "Presenting" means the user
         // intends playback AND the session is either advancing (Playing) or ramping toward it (Opening/Buffering — e.g.
@@ -187,6 +210,62 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable
     /// <inheritdoc/>
     public void SetMuted(bool muted) { if (_disposed) return; _core.SetMuted(muted); _session?.SetMuted(muted); }
 
+    /// <inheritdoc/>
+    public async ValueTask SelectTrackAsync(MediaTrack? track)
+    {
+        if (_disposed || _session is null) return;
+        await _session.SelectTrackAsync(track).ConfigureAwait(false);
+        if (track is null)
+        {
+            _core.Tracks.DisableText();
+            _activeCaptions = null;
+            _core.SetActiveCue(null);
+        }
+        else
+        {
+            _core.Tracks.Select(track);
+            if (track.Kind == TrackKind.Text)
+            {
+                _captionTracks.TryGetValue(track.Id, out _activeCaptions);
+                _core.SetActiveCue(null);
+            }
+        }
+    }
+
+    /// <inheritdoc/>
+    public async ValueTask SelectQualityAsync(QualitySelection selection)
+    {
+        if (_disposed || _session is null) return;
+        await _session.SelectQualityAsync(selection).ConfigureAwait(false);
+        _core.Qualities.PublishSelection(selection);
+    }
+
+    /// <inheritdoc/>
+    public ValueTask GoLiveAsync()
+        => _disposed ? ValueTask.CompletedTask : (_session?.GoLiveAsync() ?? SeekAsync(_core.Timeline.Peek().LiveEdge));
+
+    /// <inheritdoc/>
+    public ValueTask PreviousChapterAsync() => SeekChapter(-1);
+
+    /// <inheritdoc/>
+    public ValueTask NextChapterAsync() => SeekChapter(+1);
+
+    private ValueTask SeekChapter(int direction)
+    {
+        var chapters = _core.Timeline.Peek().Chapters;
+        if (_disposed || chapters.Count == 0) return ValueTask.CompletedTask;
+        TimeSpan pos = _core.Position.Peek();
+        if (direction < 0)
+        {
+            for (int i = chapters.Count - 1; i >= 0; i--)
+                if (chapters[i].Start < pos - TimeSpan.FromSeconds(2)) return SeekAsync(chapters[i].Start);
+            return SeekAsync(chapters[0].Start);
+        }
+        for (int i = 0; i < chapters.Count; i++)
+            if (chapters[i].Start > pos + TimeSpan.FromMilliseconds(250)) return SeekAsync(chapters[i].Start);
+        return ValueTask.CompletedTask;
+    }
+
     // ── source + queue + preroll ─────────────────────────────────────────────────────────────────────────────────────
 
     /// <inheritdoc/>
@@ -202,8 +281,9 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable
             return;
         }
 
-        // Backend switch (spec §12): only a KIND change recreates the inner session; same kind reuses across sources.
-        if (_session is not null && kind != _currentKind)
+        // A source open owns a fresh backend session. Backends may reuse their expensive device/decoder factories
+        // internally, but retaining the previous live session here leaks clocks, network requests and native handles.
+        if (_session is not null)
         {
             await _session.DisposeAsync().ConfigureAwait(false);
             _session = null;
@@ -211,13 +291,22 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable
 
         _core.SetError(null);
         _core.SetState(PlaybackState.Opening);
-        var opts = new MediaOpenOptions { StartPaused = true, Buffering = _buffering, LicenseRelay = _licenseRelay };
+        var opts = new MediaOpenOptions
+        {
+            StartPaused = true,
+            Buffering = _buffering,
+            Network = source.Network ?? _network,
+            Abr = _abr,
+            LiveLatency = source is AdaptiveSource adaptive ? adaptive.Options.LatencyMode : LiveLatencyMode.Standard,
+            LicenseRelay = _licenseRelay
+        };
         try
         {
             var session = await backend.OpenAsync(source, opts, ct).ConfigureAwait(false);
             _session = session;
             _currentKind = kind;
             session.ConnectSignals(_sink);
+            await LoadExternalSubtitlesAsync(source, opts.Network, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -227,6 +316,32 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable
         {
             _core.SetError(new MediaError(MediaErrorCategory.Source, ex.Message, null, new MediaLocus(null, source, null, null, null), MediaRecovery.Retryable));
             _core.SetState(PlaybackState.Failed);
+        }
+    }
+
+    private async ValueTask LoadExternalSubtitlesAsync(MediaSource source, NetworkOptions? network, CancellationToken ct)
+    {
+        _captionTracks.Clear();
+        _activeCaptions = null;
+        _core.SetActiveCue(null);
+        for (int i = 0; i < source.ExternalSubtitles.Count; i++)
+        {
+            SubtitleSource subtitle = source.ExternalSubtitles[i];
+            try
+            {
+                CueTrack cues = await SubtitleLoader.LoadAsync(s_subtitleHttp, subtitle, network, ct).ConfigureAwait(false);
+                string label = Path.GetFileNameWithoutExtension(subtitle.Uri);
+                if (string.IsNullOrWhiteSpace(label)) label = $"Subtitle {i + 1}";
+                MediaTrack track = _core.Tracks.AddExternalSubtitle(subtitle, "und", label);
+                _captionTracks[track.Id] = cues;
+                if (_activeCaptions is null)
+                {
+                    _core.Tracks.Select(track);
+                    _activeCaptions = cues;
+                }
+            }
+            catch (OperationCanceledException) { throw; }
+            catch { /* A sidecar subtitle failure never takes down the primary audio/video session. */ }
         }
     }
 

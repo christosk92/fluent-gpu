@@ -940,6 +940,8 @@ public sealed class AppHost : IDisposable
         _inputHooks.IsWindowActive = () => _window.IsActive;
         _inputHooks.WindowMinimize = _window.Minimize;
         _inputHooks.WindowToggleMaximize = _window.ToggleMaximize;
+        _inputHooks.IsWindowFullscreen = () => _window.IsFullscreen;
+        _inputHooks.WindowSetFullscreen = _window.SetFullscreen;
         _inputHooks.WindowClose = _window.CloseWindow;
         _inputHooks.SetTitleBarRegions = (regions, count) => _window.SetTitleBarRegions(regions.AsSpan(0, count));
         _inputHooks.GetNodeRect = _scene.AbsoluteRect;

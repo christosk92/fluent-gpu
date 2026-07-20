@@ -104,6 +104,7 @@ public sealed class ProtectedMediaBackend : IMediaBackend, IPreparableBackend
             Source = source,
             Drm = drm,
             LicenseRelay = relay,
+            StartPaused = startPaused,
             Mode = "protected-custom",
         };
 

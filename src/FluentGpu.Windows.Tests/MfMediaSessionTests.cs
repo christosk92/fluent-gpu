@@ -3,6 +3,7 @@ using System.Threading.Tasks;
 using FluentGpu.Foundation;
 using FluentGpu.Media;
 using FluentGpu.Media.Windows;
+using FluentGpu.Media.Adaptive;
 using FluentGpu.Pal;
 using Xunit;
 
@@ -43,6 +44,77 @@ public sealed class MfMediaSessionTests
     {
         var (_, core, _) = NewSession();
         Assert.Equal(PlaybackState.Opening, core.State.Peek());
+    }
+
+    [Fact]
+    public void AdaptiveManifest_PublishesTracksQualitiesLiveWindowAndHdrBeforeMetadata()
+    {
+        var video = new QualityVariant("v1080", 4_000_000, new SizeI(1920, 1080), 60,
+            new MediaContentType(Container.Dash, CodecId.Hevc, CodecId.None), HdrFormat.Hdr10);
+        var audio = new QualityVariant("a-en", 128_000, SizeI.Zero, 0,
+            new MediaContentType(Container.Dash, CodecId.None, CodecId.Aac));
+        AdaptiveSegment seg = new(new Uri("https://fixture.test/1.m4s"), 1, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(2));
+        var manifest = new AdaptiveManifest(new Uri("https://fixture.test/live.mpd"), AdaptiveManifestKind.Dash,
+            true, true, null, TimeSpan.FromSeconds(2), TimeSpan.FromMinutes(2), TimeSpan.FromSeconds(2), null,
+            [
+                new AdaptiveTrackGroup("video", AdaptiveTrackType.Video, null, TrackRole.Main,
+                    [new AdaptiveRepresentation(video, null, [seg])], true),
+                new AdaptiveTrackGroup("audio-en", AdaptiveTrackType.Audio, "en", TrackRole.Main,
+                    [new AdaptiveRepresentation(audio, null, [seg])], true),
+            ]);
+        var core = new MediaPlayerCore();
+        var session = new MfMediaSession(new FakeVideoEngine(), new MediaOpenOptions(), manifest);
+
+        session.ConnectSignals(new MediaSignalSink(core));
+
+        Assert.Single(core.Tracks.Video);
+        Assert.Single(core.Tracks.Audio);
+        Assert.Single(core.Qualities.Variants);
+        Assert.True(core.Timeline.Peek().IsLive);
+        Assert.Equal(TimeSpan.FromSeconds(12), core.Timeline.Peek().LiveEdge);
+        Assert.Equal(HdrFormat.Hdr10, core.VideoColor.Peek().Hdr);
+        Assert.Equal(new SizeI(1920, 1080), core.VideoGeometry.Peek().DisplaySize);
+    }
+
+    [Fact]
+    public void AdaptiveTextTracks_DefaultUnselected_CaptionsOff()
+    {
+        var subs = new QualityVariant("sub-en", 0, SizeI.Zero, 0,
+            new MediaContentType(Container.Dash, CodecId.None, CodecId.None));
+        var manifest = new AdaptiveManifest(new Uri("https://fixture.test/master.m3u8"), AdaptiveManifestKind.Hls,
+            false, false, TimeSpan.FromMinutes(30), TimeSpan.Zero, TimeSpan.Zero, TimeSpan.Zero, null,
+            [
+                new AdaptiveTrackGroup("subs-en", AdaptiveTrackType.Text, "en", TrackRole.Subtitles,
+                    [new AdaptiveRepresentation(subs, null, Array.Empty<AdaptiveSegment>(), "https://fixture.test/subs.m3u8")],
+                    IsDefault: true),
+            ]);
+        var core = new MediaPlayerCore();
+        var session = new MfMediaSession(new FakeVideoEngine(), new MediaOpenOptions(), manifest);
+
+        session.ConnectSignals(new MediaSignalSink(core));
+
+        // Captions must default OFF even when the manifest marks the rendition DEFAULT (only FORCED auto-selects).
+        Assert.Single(core.Tracks.Text);
+        Assert.Null(core.Tracks.SelectedText.Peek());
+    }
+
+    [Fact]
+    public void SeekInFlight_PublishesSeekingBuffering_UntilSeeked()
+    {
+        var (s, core, eng) = NewSession();
+        eng.MetadataLoaded = true; eng.DurationSeconds = 60; Pump(s);
+        _ = s.PlayAsync(); eng.Playing = true; Pump(s);
+
+        _ = s.SeekAsync(TimeSpan.FromSeconds(30), SeekMode.Accurate);
+        eng.Seeking = true;                 // MF keeps Playing=true across an in-flight seek
+        Pump(s);
+        Assert.Equal(PlaybackState.Buffering, core.State.Peek());
+        Assert.Equal(BufferingReason.Seeking, core.Buffering.Peek().Reason);
+
+        eng.Seeking = false;
+        Pump(s);
+        Assert.Equal(PlaybackState.Playing, core.State.Peek());
+        Assert.False(core.Buffering.Peek().IsBuffering);
     }
 
     [Fact]

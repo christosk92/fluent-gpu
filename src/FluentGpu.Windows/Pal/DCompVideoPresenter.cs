@@ -26,6 +26,8 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
         public IDCompositionVisual* Child;   // the video child visual (owned)
         public IUnknown* Content;            // the surface wrapped from the external handle (owned)
         public RectF Rect;
+        public RectF Viewport;
+        public uint ContentW, ContentH;      // the content's native pixel size (decoder swapchain) — scale source (0 = unknown → 1:1)
         public float Opacity;
         public int Z;
         public bool Visible;
@@ -83,11 +85,29 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
         if (!s.Dirty) { s.Dirty = true; _dirtyCount++; }
     }
 
+    public void SetViewport(VideoSurfaceId id, RectF deviceRect)
+    {
+        _device.AssertRenderThread();
+        ref Slot s = ref Get(id);
+        if (s.Viewport == deviceRect) return;
+        s.Viewport = deviceRect;
+        if (!s.Dirty) { s.Dirty = true; _dirtyCount++; }
+    }
+
     public void SetVisible(VideoSurfaceId id, bool visible)
     {
         _device.AssertRenderThread();
         ref Slot s = ref Get(id);
         s.Visible = visible;
+        if (!s.Dirty) { s.Dirty = true; _dirtyCount++; }
+    }
+
+    public void SetContentSize(VideoSurfaceId id, uint width, uint height)
+    {
+        _device.AssertRenderThread();
+        ref Slot s = ref Get(id);
+        if (s.ContentW == width && s.ContentH == height) return;
+        s.ContentW = width; s.ContentH = height;
         if (!s.Dirty) { s.Dirty = true; _dirtyCount++; }
     }
 
@@ -165,10 +185,30 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
         if (s.Child == null) return;
         Check(s.Child->SetOffsetX(s.Rect.X), "video child SetOffsetX");
         Check(s.Child->SetOffsetY(s.Rect.Y), "video child SetOffsetY");
-        // Belt-and-suspenders clip to the device rect so an over-large external surface can't bleed past the hole.
-        // Hidden ⇒ clip to an empty rect (the M0 SetVisible semantics).
+
+        // Scale the native-resolution content (e.g. a 1920×1080 decoder swapchain) to exactly fill the placed device
+        // rect. The rect is already aspect-fit by the caller (MediaPlayerElement.FitVideoRect), so this letterboxes
+        // correctly. Without the scale the swapchain composites 1:1 and the bottom-right is cropped (the fit bug).
+        // DComp applies the offset AFTER the transform, so a pure scale about the origin lands the content's top-left at
+        // the rect's top-left. Unknown content size (0) ⇒ identity (the 1:1 fallback, e.g. before natural size resolves).
+        bool scaled = s.ContentW > 0 && s.ContentH > 0 && s.Rect.W > 0f && s.Rect.H > 0f;
+        float sx = scaled ? s.Rect.W / s.ContentW : 1f;
+        float sy = scaled ? s.Rect.H / s.ContentH : 1f;
+        D2D_MATRIX_3X2_F m = default;
+        m.m11 = sx; m.m22 = sy;
+        Check(s.Child->SetTransform(&m), "video child SetTransform(scale)");
+
+        // Belt-and-suspenders clip in the visual's LOCAL (pre-transform) space: the full content when scaling (a no-op
+        // guard that maps to the rect), else the device rect. Hidden ⇒ empty rect (the M0 SetVisible semantics).
+        RectF viewport = s.Viewport.W > 0f && s.Viewport.H > 0f ? s.Viewport : s.Rect;
+        float localW = scaled ? s.ContentW : s.Rect.W;
+        float localH = scaled ? s.ContentH : s.Rect.H;
+        float left = scaled ? Math.Clamp((viewport.X - s.Rect.X) / sx, 0f, localW) : 0f;
+        float top = scaled ? Math.Clamp((viewport.Y - s.Rect.Y) / sy, 0f, localH) : 0f;
+        float right = scaled ? Math.Clamp((viewport.X + viewport.W - s.Rect.X) / sx, 0f, localW) : MathF.Min(localW, viewport.W);
+        float bottom = scaled ? Math.Clamp((viewport.Y + viewport.H - s.Rect.Y) / sy, 0f, localH) : MathF.Min(localH, viewport.H);
         D2D_RECT_F clip = s.Visible
-            ? new D2D_RECT_F { left = 0f, top = 0f, right = s.Rect.W, bottom = s.Rect.H }
+            ? new D2D_RECT_F { left = left, top = top, right = right, bottom = bottom }
             : new D2D_RECT_F { left = 0f, top = 0f, right = 0f, bottom = 0f };
         Check(s.Child->SetClip(&clip), "video child SetClip");
     }

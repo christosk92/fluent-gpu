@@ -64,6 +64,8 @@ public static class Icons
     public const string Brush = "\uE790";
     public const string Edit = "\uE70F";           // Segoe Fluent "Edit" — inline-edit pencil affordance
     public const string Movie = "\uE8B2";
+    public const string FullScreen = "\uE740";
+    public const string BackToWindow = "\uE73F";
     // -- Window chrome (Segoe Fluent Icons caption set \u2014 the Win11 system caption-button glyphs, drawn at 10px) ------
     public const string ChromeMinimize = "\uE921";   // Minimize \u2014
     public const string ChromeMaximize = "\uE922";   // Maximize \u25A1

@@ -22,10 +22,14 @@ internal interface IVideoEngine : IDisposable
     bool CanPlay { get; }
     bool Playing { get; }
     bool Ended { get; }
+    /// <summary>True while a seek is in flight (MF SEEKING fired, SEEKED not yet) — drives the "Seeking…" buffering UX.</summary>
+    bool Seeking { get; }
     bool HasError { get; }
     uint ErrorCode { get; }
     int ErrorHr { get; }
     string LastEventName { get; }
+    /// <summary>HTML/MF ready state (0 HAVE_NOTHING through 4 HAVE_ENOUGH_DATA).</summary>
+    uint ReadyState { get; }
 
     // ── metadata / geometry ────────────────────────────────────────────────────────────────────────────────────────
     bool TryGetNativeVideoSize(out uint cx, out uint cy);

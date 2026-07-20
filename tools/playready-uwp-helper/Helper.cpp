@@ -40,6 +40,7 @@
 #include <chrono>
 #include <thread>
 #include <cstdint>
+#include <cmath>
 #include <cstdio>
 #include <atomic>
 
@@ -113,6 +114,10 @@ struct FgPlayReadySnapshot
     int height;
     int64_t positionMs;
     int64_t durationMs;
+    uint64_t playAppliedSeq;
+    uint64_t seekAppliedSeq;
+    uint64_t volumeAppliedSeq;
+    uint64_t rateAppliedSeq;
 };
 
 static std::atomic<int>      g_desktopState{0};
@@ -120,8 +125,18 @@ static std::atomic<int>      g_desktopErrorHr{0};
 static std::atomic<uint64_t> g_desktopHandle{0};
 static std::atomic<int>      g_desktopWidth{0}, g_desktopHeight{0};
 static std::atomic<int64_t>  g_desktopPositionMs{0}, g_desktopDurationMs{0};
-static std::atomic<int>      g_desktopCommand{0}; // 1 play, 2 pause, 3 stop, 4 seek, 5 volume
-static std::atomic<int64_t>  g_desktopCommandValue{0};
+// Transport is delivered as SEPARATE, non-clobbering slots (the old single g_desktopCommand slot lost commands: the
+// managed re-assert stored Play on nearly every frame and overwrote a Seek/Pause issued in the same 80ms window).
+// Play/pause is a LEVEL the MTA loop reconciles against the engine's real paused state; seek + volume are one-shot
+// slots (-1 = none) drained independently. This removes the need for the managed 60Hz Play re-assert entirely.
+static std::atomic<int>      g_desktopDesiredPlay{1};   // 1 = playing, 0 = paused (managed writes; loop reconciles)
+static std::atomic<int64_t>  g_desktopSeekMs{0};
+static std::atomic<int64_t>  g_desktopVolMilli{1000000};
+static std::atomic<int64_t>  g_desktopRateMilli{1000000};
+static std::atomic<uint64_t> g_desktopPlayRequestSeq{0}, g_desktopPlayAppliedSeq{0};
+static std::atomic<uint64_t> g_desktopSeekRequestSeq{0}, g_desktopSeekAppliedSeq{0};
+static std::atomic<uint64_t> g_desktopVolumeRequestSeq{0}, g_desktopVolumeAppliedSeq{0};
+static std::atomic<uint64_t> g_desktopRateRequestSeq{0}, g_desktopRateAppliedSeq{0};
 static std::atomic<bool>     g_desktopRunning{false};
 
 // ── M5 generalized open ABI ─────────────────────────────────────────────────────────────────────────────────────────
@@ -401,12 +416,94 @@ struct MediaEngineNotify : public IMFMediaEngineNotify
         {
             case MF_MEDIA_ENGINE_EVENT_LOADEDMETADATA: metadata = true; break;
             case MF_MEDIA_ENGINE_EVENT_CANPLAY:        canplay = true; break;
-            case MF_MEDIA_ENGINE_EVENT_PLAYING:        playing = true; canplay = true; break;
+            case MF_MEDIA_ENGINE_EVENT_PLAY:
+                LogLine("[media-engine] PLAY requested");
+                break;
+            case MF_MEDIA_ENGINE_EVENT_PLAYING:
+                playing = true; canplay = true;
+                LogLine("[media-engine] PLAYING");
+                break;
+            case MF_MEDIA_ENGINE_EVENT_PAUSE:
+                playing = false;
+                LogLine("[media-engine] PAUSE");
+                break;
+            case MF_MEDIA_ENGINE_EVENT_SEEKING:
+                LogLine("[media-engine] SEEKING");
+                break;
+            case MF_MEDIA_ENGINE_EVENT_SEEKED:
+                LogLine("[media-engine] SEEKED");
+                break;
             case MF_MEDIA_ENGINE_EVENT_ERROR:          error = true; errCode = (int)p1; errHr = (int)p2; break;
         }
         return S_OK;
     }
 };
+
+#ifdef FG_DESKTOP_DLL
+// Reconcile the media engine to the managed-published transport intents (desktop DLL path). Drains the one-shot seek +
+// volume slots, then asserts the desired play/pause LEVEL against IMFMediaEngine::IsPaused. A command is retried only
+// while the engine has not reached the requested level; once it does, no Play/Pause calls are made. Seek has its OWN
+// slot, so the old
+// single-command clobbering (a Play overwriting a Seek in the same 80ms window) is gone. Runs on the owning MTA loop
+// thread only. The custom CENC source implements the corresponding pause/resume/seek events in CencMediaSource.h.
+static void ReconcileTransport(IMFMediaEngine* engine)
+{
+    auto hrText = [](HRESULT h) { std::stringstream ss; ss << "0x" << std::hex << (uint32_t)h; return ss.str(); };
+    uint64_t seekSeq = g_desktopSeekRequestSeq.load(std::memory_order_acquire);
+    if (seekSeq != g_desktopSeekAppliedSeq.load(std::memory_order_acquire))
+    {
+        int64_t seekMs = g_desktopSeekMs.load(std::memory_order_acquire);
+        HRESULT hr = engine->SetCurrentTime((double)seekMs / 1000.0);
+        LogLine("[transport] SEEK ms=" + std::to_string((long long)seekMs) + " hr=" + hrText(hr));
+        if (SUCCEEDED(hr)) g_desktopSeekAppliedSeq.store(seekSeq, std::memory_order_release);
+    }
+    uint64_t volumeSeq = g_desktopVolumeRequestSeq.load(std::memory_order_acquire);
+    if (volumeSeq != g_desktopVolumeAppliedSeq.load(std::memory_order_acquire))
+    {
+        int64_t volMilli = g_desktopVolMilli.load(std::memory_order_acquire);
+        HRESULT hr = engine->SetVolume((double)volMilli / 1000000.0);
+        if (FAILED(hr)) LogLine("[transport] VOLUME hr=" + hrText(hr));
+        else g_desktopVolumeAppliedSeq.store(volumeSeq, std::memory_order_release);
+    }
+    uint64_t rateSeq = g_desktopRateRequestSeq.load(std::memory_order_acquire);
+    if (rateSeq != g_desktopRateAppliedSeq.load(std::memory_order_acquire))
+    {
+        int64_t rateMilli = g_desktopRateMilli.load(std::memory_order_acquire);
+        HRESULT hr = engine->SetPlaybackRate((double)rateMilli / 1000000.0);
+        if (FAILED(hr)) LogLine("[transport] RATE hr=" + hrText(hr));
+        else g_desktopRateAppliedSeq.store(rateSeq, std::memory_order_release);
+    }
+
+    double nowSec = engine->GetCurrentTime();
+    uint64_t playSeq = g_desktopPlayRequestSeq.load(std::memory_order_acquire);
+    bool wantsPlay = g_desktopDesiredPlay.load(std::memory_order_acquire) != 0;
+    if (wantsPlay)
+    {
+        double dur = engine->GetDuration();
+        bool atEnd = dur > 0.0 && nowSec >= dur - 0.05;
+        if (!atEnd && engine->IsPaused())
+        {
+            HRESULT hr = engine->Play();
+            LogLine("[transport] PLAY hr=" + hrText(hr) + " posMs=" +
+                    std::to_string((long long)(nowSec * 1000.0)));
+        }
+    }
+    else
+    {
+        if (!engine->IsPaused())
+        {
+            HRESULT hr = engine->Pause();
+            LogLine("[transport] PAUSE hr=" + hrText(hr) + " posMs=" +
+                    std::to_string((long long)(nowSec * 1000.0)));
+        }
+    }
+    bool paused = engine->IsPaused();
+    if ((wantsPlay && !paused) || (!wantsPlay && paused))
+        g_desktopPlayAppliedSeq.store(playSeq, std::memory_order_release);
+    g_desktopState.store(paused ? 3 : 2, std::memory_order_release);
+    g_desktopPositionMs.store((int64_t)(nowSec * 1000.0), std::memory_order_release);
+}
+#endif
 
 static int RunClear(const std::wstring& url)
 {
@@ -525,15 +622,7 @@ static int RunClear(const std::wstring& url)
         engine->OnVideoStreamTick(&pts);
         engineEx->UpdateVideoStream(nullptr, nullptr, nullptr);   // repaint latest frame
 #ifdef FG_DESKTOP_DLL
-        switch (g_desktopCommand.exchange(0, std::memory_order_acq_rel))
-        {
-            case 1: engine->Play();  g_desktopState.store(2, std::memory_order_release); break;
-            case 2: engine->Pause(); g_desktopState.store(3, std::memory_order_release); break;
-            case 3: g_shutdownRequested = true; break;
-            case 4: engine->SetCurrentTime((double)g_desktopCommandValue.load(std::memory_order_acquire) / 1000.0); break;
-            case 5: engine->SetVolume((double)g_desktopCommandValue.load(std::memory_order_acquire) / 1000000.0); break;
-        }
-        g_desktopPositionMs.store((int64_t)(engine->GetCurrentTime() * 1000.0), std::memory_order_release);
+        ReconcileTransport(engine);
         g_desktopDurationMs.store((int64_t)(engine->GetDuration() * 1000.0), std::memory_order_release);
 #else
         PollCommands(engine);
@@ -2118,17 +2207,9 @@ static bool RunCustomSourceAttempt(const std::wstring& storePath)
             LONGLONG pts; engine->OnVideoStreamTick(&pts);
             engineEx->UpdateVideoStream(nullptr, nullptr, nullptr);
 #ifdef FG_DESKTOP_DLL
-            // Transport crosses no process boundary: managed only publishes an atomic command and this owning MTA
-            // thread drives the media engine.
-            switch (g_desktopCommand.exchange(0, std::memory_order_acq_rel))
-            {
-                case 1: engine->Play();  g_desktopState.store(2, std::memory_order_release); break;
-                case 2: engine->Pause(); g_desktopState.store(3, std::memory_order_release); break;
-                case 3: g_shutdownRequested = true; break;
-                case 4: engine->SetCurrentTime((double)g_desktopCommandValue.load(std::memory_order_acquire) / 1000.0); break;
-                case 5: engine->SetVolume((double)g_desktopCommandValue.load(std::memory_order_acquire) / 1000000.0); break;
-            }
-            g_desktopPositionMs.store((int64_t)(engine->GetCurrentTime() * 1000.0), std::memory_order_release);
+            // Transport crosses no process boundary: managed publishes the desired level + one-shot seek/volume slots
+            // and this owning MTA thread reconciles the media engine (no single-slot clobbering, no managed re-assert).
+            ReconcileTransport(engine);
             g_desktopDurationMs.store((int64_t)(engine->GetDuration() * 1000.0), std::memory_order_release);
 #else
             PollCommands(engine);
@@ -2173,7 +2254,14 @@ extern "C" __declspec(dllexport) int __stdcall FgPlayReadyRunEx(const wchar_t* b
     if (!g_desktopRunning.compare_exchange_strong(expected, true)) return HRESULT_FROM_WIN32(ERROR_BUSY);
 
     g_shutdownRequested = false;
-    g_desktopCommand.store(0);
+    // Preserve the level pre-seeded by DesktopProtectedVideoPlayer.Start. OpenAsync starts paused and PlayAsync may run
+    // before this worker enters RunEx; resetting here would lose that legitimate Play request.
+    // Ignore one-shot controls left by a prior session. Play is intentionally not acknowledged here: Start pre-seeds
+    // the new session's level before this blocking entry point begins, and the MTA loop must reach that level first.
+    g_desktopSeekAppliedSeq.store(g_desktopSeekRequestSeq.load(std::memory_order_acquire), std::memory_order_release);
+    g_desktopVolumeAppliedSeq.store(g_desktopVolumeRequestSeq.load(std::memory_order_acquire), std::memory_order_release);
+    g_desktopRateAppliedSeq.store(g_desktopRateRequestSeq.load(std::memory_order_acquire), std::memory_order_release);
+    g_desktopPlayAppliedSeq.store(0, std::memory_order_release);
     g_desktopErrorHr.store(0);
     g_desktopHandle.store(0);
     g_desktopWidth.store(0); g_desktopHeight.store(0);
@@ -2255,6 +2343,9 @@ extern "C" __declspec(dllexport) int __stdcall FgPlayReadyRunEx(const wchar_t* b
 // the original entry point + on-box A/B still work.
 extern "C" __declspec(dllexport) int __stdcall FgPlayReadyRun(const wchar_t* baseDir, int mode)
 {
+    // The legacy entry point has no initial-transport field. Preserve its historical autoplay behavior even if a
+    // previous generalized session left the process-global level paused.
+    g_desktopDesiredPlay.store(1, std::memory_order_release);
     FgPlayReadyOpenDesc desc{};
     desc.structSize = sizeof(FgPlayReadyOpenDesc);
     desc.mode = mode;
@@ -2271,26 +2362,51 @@ extern "C" __declspec(dllexport) int __stdcall FgPlayReadyGetSnapshot(FgPlayRead
     value->height = g_desktopHeight.load(std::memory_order_acquire);
     value->positionMs = g_desktopPositionMs.load(std::memory_order_acquire);
     value->durationMs = g_desktopDurationMs.load(std::memory_order_acquire);
+    value->playAppliedSeq = g_desktopPlayAppliedSeq.load(std::memory_order_acquire);
+    value->seekAppliedSeq = g_desktopSeekAppliedSeq.load(std::memory_order_acquire);
+    value->volumeAppliedSeq = g_desktopVolumeAppliedSeq.load(std::memory_order_acquire);
+    value->rateAppliedSeq = g_desktopRateAppliedSeq.load(std::memory_order_acquire);
     return S_OK;
 }
 
-extern "C" __declspec(dllexport) void __stdcall FgPlayReadyPlay() { g_desktopCommand.store(1, std::memory_order_release); }
-extern "C" __declspec(dllexport) void __stdcall FgPlayReadyPause() { g_desktopCommand.store(2, std::memory_order_release); }
+static uint64_t NextTransportSeq(std::atomic<uint64_t>& seq)
+{
+    return seq.fetch_add(1, std::memory_order_acq_rel) + 1;
+}
+
+// Independent sequence-numbered transport slots. The returned sequence appears in FgPlayReadySnapshot only after the
+// owning MTA thread has applied (or, for play/pause, actually reached) the requested state.
+extern "C" __declspec(dllexport) uint64_t __stdcall FgPlayReadyPlay()
+{
+    g_desktopDesiredPlay.store(1, std::memory_order_release);
+    return NextTransportSeq(g_desktopPlayRequestSeq);
+}
+extern "C" __declspec(dllexport) uint64_t __stdcall FgPlayReadyPause()
+{
+    g_desktopDesiredPlay.store(0, std::memory_order_release);
+    return NextTransportSeq(g_desktopPlayRequestSeq);
+}
 extern "C" __declspec(dllexport) void __stdcall FgPlayReadyStop()
 {
-    g_desktopCommand.store(3, std::memory_order_release);
+    g_desktopDesiredPlay.store(0, std::memory_order_release);
     g_shutdownRequested = true;
 }
-extern "C" __declspec(dllexport) void __stdcall FgPlayReadySeek(int64_t positionMs)
+extern "C" __declspec(dllexport) uint64_t __stdcall FgPlayReadySeek(int64_t positionMs)
 {
-    g_desktopCommandValue.store(positionMs, std::memory_order_release);
-    g_desktopCommand.store(4, std::memory_order_release);
+    g_desktopSeekMs.store(positionMs < 0 ? 0 : positionMs, std::memory_order_release);
+    return NextTransportSeq(g_desktopSeekRequestSeq);
 }
-extern "C" __declspec(dllexport) void __stdcall FgPlayReadySetVolume(double volume)
+extern "C" __declspec(dllexport) uint64_t __stdcall FgPlayReadySetVolume(double volume)
 {
     if (volume < 0.0) volume = 0.0; else if (volume > 1.0) volume = 1.0;
-    g_desktopCommandValue.store((int64_t)(volume * 1000000.0), std::memory_order_release);
-    g_desktopCommand.store(5, std::memory_order_release);
+    g_desktopVolMilli.store((int64_t)(volume * 1000000.0), std::memory_order_release);
+    return NextTransportSeq(g_desktopVolumeRequestSeq);
+}
+extern "C" __declspec(dllexport) uint64_t __stdcall FgPlayReadySetRate(double rate)
+{
+    if (!std::isfinite(rate) || rate <= 0.0) rate = 1.0;
+    g_desktopRateMilli.store((int64_t)(rate * 1000000.0), std::memory_order_release);
+    return NextTransportSeq(g_desktopRateRequestSeq);
 }
 #endif
 

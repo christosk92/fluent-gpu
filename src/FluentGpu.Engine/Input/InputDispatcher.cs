@@ -346,7 +346,10 @@ public sealed class InputDispatcher
         {
             _vx = 0f; _vy = 0f;
             if (_count < 2) return;
-            if (_hasLast && (tLift - _lastT) * 1000.0 > AssumeStoppedMs) return;   // stopped before lifting
+            // Floating conversion of the integer-ms fallback can turn an exact 40ms boundary into
+            // 40.00000000003. Treat the policy boundary as inclusive; only a gap materially beyond it means the
+            // pointer stopped. This keeps identical flicks invariant across the realistic 8..40ms OS lift jitter.
+            if (_hasLast && (tLift - _lastT) * 1000.0 > AssumeStoppedMs + 0.001) return;   // stopped before lifting
 
             int oldest = (_head - _count + Cap) % Cap;
             double wx = 0.0, wy = 0.0, vpx = 0.0, vpy = 0.0;
@@ -355,7 +358,9 @@ public sealed class InputDispatcher
             for (int k = 0; k < _count; k++)
             {
                 VSample s = _ring[(oldest + k) % Cap];
-                if ((tLift - s.TSec) * 1000.0 > HorizonMs)
+                // Same inclusive-boundary tolerance as AssumeStoppedMs above: integer message times expressed as
+                // binary seconds can place an exact 40ms sample infinitesimally outside the 40ms window.
+                if ((tLift - s.TSec) * 1000.0 > HorizonMs + 0.001)
                 {
                     prev = s; hasPrev = true;   // the newest pre-window sample baselines the first in-window segment
                     continue;
@@ -2803,6 +2808,19 @@ public sealed class InputDispatcher
 
     /// <summary>Element-level wheel routing (WinUI PointerWheelChanged bubbling): every enabled WheelBit handler up the
     /// chain sees the event until one sets Handled — which also stops the enclosing viewport from scrolling.</summary>
+    /// <summary>True when some element under <paramref name="p"/> (leaf→root) subscribes to the pointer wheel — the probe
+    /// the touchpad-pan latch uses to route a dominant-axis-unscrollable gesture to element wheel dispatch (a single-line
+    /// text field's horizontal scroll) instead of cross-axis-latching the page. Mirrors <see cref="DispatchWheel"/>'s walk.</summary>
+    private bool HasWheelHandlerUnder(Point2 p)
+    {
+        for (var n = HitTestAny(p); !n.IsNull; n = _scene.Parent(n))
+        {
+            if ((_scene.Flags(n) & NodeFlags.Disabled) != 0) continue;
+            if ((_scene.Interaction(n).HandlerMask & InteractionInfo.WheelBit) != 0) return true;
+        }
+        return false;
+    }
+
     private bool DispatchWheel(in InputEvent e)
     {
         WheelEventArgs? args = null;
@@ -3037,6 +3055,18 @@ public sealed class InputDispatcher
             NodeHandle vp = ScrollableUnderForAxis(e.PositionPx, horiz);
             if (vp.IsNull)
             {
+                // §A′: the DOMINANT axis has no scroller, but an element under the contact handles the wheel (e.g. a
+                // single-line text field's horizontal scroll). Route this gesture to element wheel dispatch BEFORE the
+                // cross-axis page fallback — a horizontal pan over an overflowing text box must scroll the BOX, not
+                // cross-axis-latch the enclosing vertical page (WinUI parity). If the element can't consume (fits / at its
+                // limit) DispatchWheel leaves it unhandled and the packet drops — a horizontal pan legitimately does
+                // nothing to a vertical page. Reset by ScrollBegin/EndScrollGesture like the no-scroller fallback below.
+                if (HasWheelHandlerUnder(e.PositionPx))
+                {
+                    _sgWheelFallback = true;
+                    DispatchWheel(in e);
+                    return;
+                }
                 vp = ScrollableUnderForAxis(e.PositionPx, !horiz);   // dominant axis has no scroller → cross-axis fallback (standalone carousel)
                 if (vp.IsNull)
                 {

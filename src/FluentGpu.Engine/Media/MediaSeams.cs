@@ -47,10 +47,31 @@ public sealed record NetworkOptions(
 /// <summary>The forward-buffer policy (spec example D). Declarative target — the engine owns eviction/flow control.</summary>
 public sealed record BufferPolicy
 {
-    /// <summary>How far ahead (in time) the engine tries to keep buffered.</summary>
+    /// <summary>Steady-state forward target.</summary>
     public TimeSpan TargetForward { get; init; } = TimeSpan.FromSeconds(30);
+    /// <summary>Minimum media required to leave initial buffering.</summary>
+    public TimeSpan InitialPlayback { get; init; } = TimeSpan.FromSeconds(1.5);
+    /// <summary>Minimum media required to resume after an underrun.</summary>
+    public TimeSpan ResumePlayback { get; init; } = TimeSpan.FromSeconds(3);
+    /// <summary>Backward retention for quick reverse seeks.</summary>
+    public TimeSpan RetainBehind { get; init; } = TimeSpan.FromSeconds(30);
+    /// <summary>Upper encoded-memory budget; schedulers evict behind first.</summary>
+    public long MaxEncodedBytes { get; init; } = 96L * 1024 * 1024;
     /// <summary>What to do on an underrun.</summary>
     public StallPolicy StallPolicy { get; init; } = StallPolicy.Rebuffer;
+
+    public static BufferPolicy Vod { get; } = new();
+    public static BufferPolicy Live { get; } = new()
+    {
+        TargetForward = TimeSpan.FromSeconds(12), InitialPlayback = TimeSpan.FromSeconds(1),
+        ResumePlayback = TimeSpan.FromSeconds(2), RetainBehind = TimeSpan.FromMinutes(5)
+    };
+    public static BufferPolicy LowLatencyLive { get; } = new()
+    {
+        TargetForward = TimeSpan.FromSeconds(3), InitialPlayback = TimeSpan.FromMilliseconds(500),
+        ResumePlayback = TimeSpan.FromSeconds(1), RetainBehind = TimeSpan.FromMinutes(2),
+        StallPolicy = StallPolicy.SkipForward
+    };
 }
 
 // ── DRM relay (spec §9.2) ────────────────────────────────────────────────────────────────────────────────────────────
@@ -355,6 +376,12 @@ public sealed record MediaOpenOptions
     public TimeSpan StartPosition { get; init; } = TimeSpan.Zero;
     /// <summary>The buffering policy.</summary>
     public BufferPolicy? Buffering { get; init; }
+    /// <summary>Network defaults after per-source overrides are applied.</summary>
+    public NetworkOptions? Network { get; init; }
+    /// <summary>Adaptive bitrate policy for DASH/HLS sources.</summary>
+    public IAbrPolicy? Abr { get; init; }
+    /// <summary>Live-latency target.</summary>
+    public LiveLatencyMode LiveLatency { get; init; } = LiveLatencyMode.Standard;
     /// <summary>The DRM license relay (spec §9.2), if the source is protected.</summary>
     public Func<LicenseRequest, ValueTask<LicenseResponse>>? LicenseRelay { get; init; }
 }
@@ -397,6 +424,12 @@ public interface IMediaSession : IAsyncDisposable
     void SetVolume(double volume);
     /// <summary>Mute/unmute.</summary>
     void SetMuted(bool muted);
+    /// <summary>Select a backend-discovered audio/video/text track. Null disables text where supported.</summary>
+    ValueTask SelectTrackAsync(MediaTrack? track) => ValueTask.CompletedTask;
+    /// <summary>Select automatic quality or pin a representation.</summary>
+    ValueTask SelectQualityAsync(QualitySelection selection) => ValueTask.CompletedTask;
+    /// <summary>Seek to the current live edge.</summary>
+    ValueTask GoLiveAsync() => ValueTask.CompletedTask;
     /// <summary>How this session delivers video.</summary>
     VideoDelivery Video { get; }
 }

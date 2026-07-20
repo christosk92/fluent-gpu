@@ -25,11 +25,13 @@ internal sealed class FakeVideoEngine : IVideoEngine
     public bool MetadataLoaded { get; set; }
     public bool CanPlay { get; set; }
     public bool Playing { get; set; }
+    public bool Seeking { get; set; }
     public bool Ended { get; set; }
     public bool HasError { get; set; }
     public uint ErrorCode { get; set; }
     public int ErrorHr { get; set; }
     public string LastEventName { get; set; } = "<fake>";
+    public uint ReadyState { get; set; }
     public double DurationSeconds { get; set; }
     public double CurrentTimeSeconds { get; set; }
 
@@ -105,6 +107,7 @@ internal sealed class FakeProtectedVideoPlayer : IProtectedVideoPlayer
     public float LastVolume = 1f;
     public bool ReadyOnStart;
     public bool HasSurface { get; set; }
+    public TaskCompletionSource<bool>? PlayAck, PauseAck, SeekAck;
 
     public IReadSignal<ProtectedVideoState> State => _state;
     public IReadSignal<long> PositionMs => _positionMs;
@@ -123,12 +126,17 @@ internal sealed class FakeProtectedVideoPlayer : IProtectedVideoPlayer
     {
         StartCalls++;
         StartedWith = request;
+        if (!request.StartPaused) PlayCalls++;
         if (ReadyOnStart) { HasSurface = true; _naturalSize.Value = new Size2(1280, 720); _state.Value = ProtectedVideoState.Playing; }
     }
 
-    public void Play() => PlayCalls++;
-    public void Pause() => PauseCalls++;
-    public void Seek(long positionMs) => LastSeekMs = positionMs;
+    public ValueTask PlayAsync() { PlayCalls++; return PlayAck is { } ack ? new ValueTask(ack.Task) : ValueTask.CompletedTask; }
+    public ValueTask PauseAsync() { PauseCalls++; return PauseAck is { } ack ? new ValueTask(ack.Task) : ValueTask.CompletedTask; }
+    public ValueTask SeekAsync(long positionMs)
+    {
+        LastSeekMs = positionMs;
+        return SeekAck is { } ack ? new ValueTask(ack.Task) : ValueTask.CompletedTask;
+    }
     public void SetVolume(float volume) => LastVolume = volume;
     public void SetRate(float rate) { }
     public void Stop() => StopCalls++;

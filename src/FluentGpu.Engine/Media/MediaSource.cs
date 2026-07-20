@@ -36,6 +36,9 @@ public abstract record MediaSource
     public static MediaSource FromFile(string path) => new FileSource(path);
     /// <summary>A URL (optionally with per-source network options).</summary>
     public static MediaSource FromUri(string url, NetworkOptions? net = null) => new UriSource(url) { Network = net };
+    /// <summary>A DASH or HLS manifest with adaptive/live policy.</summary>
+    public static MediaSource FromAdaptive(string manifestUri, AdaptiveSourceOptions? options = null, NetworkOptions? net = null)
+        => new AdaptiveSource(manifestUri, options ?? new AdaptiveSourceOptions()) { Network = net, Kind = MediaKind.MfVideoOrFile };
     /// <summary>An existing <see cref="Stream"/> (the easy case, verbatim); <paramref name="hint"/> seeds the content type.</summary>
     public static MediaSource FromStream(Stream stream, MediaContentType? hint = null) => new StreamSource(stream, hint);
     /// <summary>An in-memory byte blob; <paramref name="hint"/> seeds the content type.</summary>
@@ -98,6 +101,8 @@ public abstract record MediaSource
 public sealed record FileSource(string Path) : MediaSource;
 /// <summary>A URL source.</summary>
 public sealed record UriSource(string Url) : MediaSource;
+/// <summary>A DASH/HLS adaptive manifest source.</summary>
+public sealed record AdaptiveSource(string ManifestUri, AdaptiveSourceOptions Options) : MediaSource;
 /// <summary>A <see cref="Stream"/> source (the easy case).</summary>
 public sealed record StreamSource(Stream Stream, MediaContentType? Hint) : MediaSource;
 /// <summary>An in-memory bytes source.</summary>

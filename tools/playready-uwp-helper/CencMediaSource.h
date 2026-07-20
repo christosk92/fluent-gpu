@@ -439,7 +439,8 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
     std::vector<cenc::Sample> m_samples;
     cenc::InitInfo m_info;
     size_t m_next = 0;
-    bool m_started = false, m_eos = false, m_shutdown = false;
+    bool m_started = false, m_paused = false, m_eos = false, m_discontinuity = true, m_shutdown = false;
+    std::vector<winrt::com_ptr<::IUnknown>> m_pausedRequests;
     std::mutex m_mx;
 
     CencMediaStream() { winrt::check_hresult(MFCreateEventQueue(m_queue.put())); }
@@ -471,6 +472,20 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         std::lock_guard<std::mutex> g(m_mx);
         if (m_shutdown) return MF_E_SHUTDOWN;
         if (!m_started) return MF_E_MEDIA_SOURCE_WRONGSTATE;
+        // A paused source must ACCEPT sample requests but deliver nothing until the next Start (IMFMediaSource::Pause
+        // contract). Retain the token so resume can satisfy the exact request instead of depending on a re-request.
+        if (m_paused)
+        {
+            winrt::com_ptr<::IUnknown> token;
+            if (pToken) token.copy_from(pToken);
+            m_pausedRequests.push_back(std::move(token));
+            return S_OK;
+        }
+        return DeliverSampleLocked(pToken);
+    }
+
+    HRESULT DeliverSampleLocked(::IUnknown* pToken)
+    {
         if (m_next >= m_samples.size())
         {
             if (!m_eos) { m_eos = true; m_queue->QueueEventParamVar(MEEndOfStream, GUID_NULL, S_OK, nullptr); NotifySourceEnded(); }
@@ -501,19 +516,79 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         HRESULT hr = MakeSample(m_samples[m_next], sample.put());
         if (FAILED(hr)) return hr;
         if (pToken) sample->SetUnknown(MFSampleExtension_Token, pToken);
-        if (m_next == 0) sample->SetUINT32(MFSampleExtension_Discontinuity, TRUE);
+        if (m_discontinuity)
+        {
+            sample->SetUINT32(MFSampleExtension_Discontinuity, TRUE);
+            m_discontinuity = false;
+        }
         if (m_next == 0 || (m_next % 100) == 0) LogLine("[cenc-src] RequestSample #" + std::to_string(m_next) + " (encrypted sample delivered)");
         m_next++;
         return m_queue->QueueEventParamUnk(MEMediaSample, GUID_NULL, S_OK, sample.get());
     }
 
-    void Start(const PROPVARIANT* startPos)
+    // Complete one Start operation on the stream. An explicit position repositions to the nearest keyframe at or
+    // before the requested presentation time; Media Foundation discards the decoded preroll before the exact target.
+    // A resume passes VT_EMPTY and deliberately preserves m_next/decoder history.
+    void Start(const PROPVARIANT* startPos, bool seeking, bool reposition)
     {
         std::lock_guard<std::mutex> g(m_mx);
-        m_started = true; m_eos = false;
-        m_queue->QueueEventParamVar(MEStreamStarted, GUID_NULL, S_OK, startPos);
+        if (reposition)
+        {
+            LONGLONG requested100ns = startPos && startPos->vt == VT_I8
+                ? std::max<LONGLONG>(0, startPos->hVal.QuadPart)
+                : 0;
+            uint64_t targetTicks = 0;
+            if (m_info.timescale > 0)
+            {
+                uint64_t wholeSeconds = (uint64_t)requested100ns / 10000000ULL;
+                uint64_t remainder100ns = (uint64_t)requested100ns % 10000000ULL;
+                targetTicks = wholeSeconds * m_info.timescale +
+                              (remainder100ns * m_info.timescale) / 10000000ULL;
+            }
+
+            size_t best = 0;
+            uint64_t bestTime = 0;
+            bool found = false;
+            for (size_t i = 0; i < m_samples.size(); i++)
+            {
+                auto const& sample = m_samples[i];
+                if (!sample.keyframe || sample.timeTicks > targetTicks) continue;
+                if (!found || sample.timeTicks >= bestTime)
+                {
+                    best = i;
+                    bestTime = sample.timeTicks;
+                    found = true;
+                }
+            }
+            m_next = found ? best : 0;
+            m_discontinuity = true;
+            LogLine("[cenc-src] seek target100ns=" + std::to_string((long long)requested100ns) +
+                    " -> sample=" + std::to_string(m_next) +
+                    " keyframe100ns=" + std::to_string(m_info.timescale > 0
+                        ? (long long)((bestTime * 10000000ULL) / m_info.timescale) : 0));
+        }
+        m_started = true; m_paused = false; m_eos = false;
+        m_queue->QueueEventParamVar(seeking ? MEStreamSeeked : MEStreamStarted, GUID_NULL, S_OK, startPos);
+        // Requests accepted during Pause are released only AFTER MEStreamStarted, which is the exact boundary after
+        // which the stream may resume data delivery. Deliver under the same stream lock to preserve request order.
+        for (auto const& token : m_pausedRequests) DeliverSampleLocked(token.get());
+        m_pausedRequests.clear();
     }
-    void Stop() { std::lock_guard<std::mutex> g(m_mx); m_started = false; m_queue->QueueEventParamVar(MEStreamStopped, GUID_NULL, S_OK, nullptr); }
+    void Pause()
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        if (!m_started || m_paused) return;
+        m_paused = true;
+        m_queue->QueueEventParamVar(MEStreamPaused, GUID_NULL, S_OK, nullptr);
+    }
+    void Stop()
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        m_started = false; m_paused = false;
+        m_next = 0; m_eos = false; m_discontinuity = true;
+        m_pausedRequests.clear();
+        m_queue->QueueEventParamVar(MEStreamStopped, GUID_NULL, S_OK, nullptr);
+    }
     void Shutdown() { std::lock_guard<std::mutex> g(m_mx); if (m_shutdown) return; m_shutdown = true; if (m_queue) m_queue->Shutdown(); }
 
     void NotifySourceEnded();   // defined after CencMediaSource
@@ -588,7 +663,7 @@ struct CencMediaSource : winrt::implements<CencMediaSource, IMFMediaSource, IMFT
     winrt::com_ptr<IMFTrustedInput> m_trustedInput;
     winrt::com_ptr<IMFInputTrustAuthority> m_inputTrustAuthority;   // one stable ITA per stream (PMP contract)
     DWORD m_inputTrustAuthorityStreamId = UINT32_MAX;
-    bool m_started = false, m_shutdown = false;
+    bool m_started = false, m_paused = false, m_streamAnnounced = false, m_shutdown = false;
     std::mutex m_mx;
 
     CencMediaSource() { winrt::check_hresult(MFCreateEventQueue(m_queue.put())); }
@@ -605,7 +680,7 @@ struct CencMediaSource : winrt::implements<CencMediaSource, IMFMediaSource, IMFT
         std::lock_guard<std::mutex> g(m_mx);
         if (m_shutdown) return MF_E_SHUTDOWN;
         if (!pdw) return E_POINTER;
-        *pdw = MFMEDIASOURCE_CAN_PAUSE;
+        *pdw = MFMEDIASOURCE_CAN_PAUSE | MFMEDIASOURCE_CAN_SEEK;
         return S_OK;
     }
     IFACEMETHODIMP CreatePresentationDescriptor(IMFPresentationDescriptor** ppPD) noexcept override
@@ -618,46 +693,81 @@ struct CencMediaSource : winrt::implements<CencMediaSource, IMFMediaSource, IMFT
     }
     IFACEMETHODIMP Start(IMFPresentationDescriptor* pd, const GUID* timeFormat, const PROPVARIANT* startPos) noexcept override
     {
-        std::lock_guard<std::mutex> g(m_mx);
-        if (m_shutdown) return MF_E_SHUTDOWN;
-        if (timeFormat && *timeFormat != GUID_NULL) return MF_E_UNSUPPORTED_TIME_FORMAT;
-
         PROPVARIANT startVar; PropVariantInit(&startVar);
-        if (startPos && (startPos->vt == VT_I8 || startPos->vt == VT_EMPTY)) PropVariantCopy(&startVar, startPos);
-        else { startVar.vt = VT_I8; startVar.hVal.QuadPart = 0; }
-
-        bool isNew = !m_started;
-        // Raise MENewStream/MEUpdatedStream on the SOURCE for the (single) stream, then start the stream.
-        if (pd)
+        winrt::com_ptr<CencMediaStream> stream;
+        bool isNew = false, wasActive = false, seeking = false, explicitPosition = false;
         {
+            std::lock_guard<std::mutex> g(m_mx);
+            if (m_shutdown) return MF_E_SHUTDOWN;
+            if (timeFormat && *timeFormat != GUID_NULL) return MF_E_UNSUPPORTED_TIME_FORMAT;
+            if (!pd || !startPos || (startPos->vt != VT_I8 && startPos->vt != VT_EMPTY)) return E_INVALIDARG;
+            if (FAILED(PropVariantCopy(&startVar, startPos))) return E_OUTOFMEMORY;
+
+            wasActive = m_started;
+            isNew = !m_streamAnnounced;
+            explicitPosition = startVar.vt == VT_I8;
+            seeking = wasActive && explicitPosition;
+            LogLine("[cenc-src] Start previous=" + std::string(m_paused ? "paused" : (wasActive ? "started" : "stopped")) +
+                    " position=" + (explicitPosition
+                        ? std::to_string((long long)startVar.hVal.QuadPart) : std::string("current")) +
+                    " event=" + (seeking ? "seeked" : "started"));
+
+            // MENewStream is sent only for the first selection; every later Start (resume or seek) updates it.
             BOOL selected = FALSE; winrt::com_ptr<IMFStreamDescriptor> sd;
-            if (SUCCEEDED(pd->GetStreamDescriptorByIndex(0, &selected, sd.put())) && selected && m_stream)
+            if (FAILED(pd->GetStreamDescriptorByIndex(0, &selected, sd.put())) || !selected || !m_stream)
             {
-                if (isNew)
-                    m_queue->QueueEventParamUnk(MENewStream, GUID_NULL, S_OK, (::IUnknown*)(IMFMediaStream*)m_stream.get());
-                else
-                    m_queue->QueueEventParamUnk(MEUpdatedStream, GUID_NULL, S_OK, (::IUnknown*)(IMFMediaStream*)m_stream.get());
-                m_stream->Start(&startVar);
+                PropVariantClear(&startVar);
+                return MF_E_INVALIDREQUEST;
             }
+            stream = m_stream;
+            m_queue->QueueEventParamUnk(isNew ? MENewStream : MEUpdatedStream, GUID_NULL, S_OK,
+                                        (::IUnknown*)(IMFMediaStream*)stream.get());
+
+            m_started = true;
+            m_paused = false;
+            m_streamAnnounced = true;
+            // The source event precedes the corresponding stream event (the documented custom-source sequence).
+            m_queue->QueueEventParamVar(seeking ? MESourceSeeked : MESourceStarted, GUID_NULL, S_OK, &startVar);
         }
-        m_started = true;
-        m_queue->QueueEventParamVar(MESourceStarted, GUID_NULL, S_OK, &startVar);
+
+        if (stream)
+        {
+            // A non-empty position also repositions a previously stopped source, but that operation is still a Start
+            // (MESourceStarted/MEStreamStarted), not a seek. VT_EMPTY is pause-resume and preserves the sample cursor.
+            stream->Start(&startVar, seeking, explicitPosition || !wasActive);
+        }
         PropVariantClear(&startVar);
         return S_OK;
     }
     IFACEMETHODIMP Stop() noexcept override
     {
-        std::lock_guard<std::mutex> g(m_mx);
-        if (m_shutdown) return MF_E_SHUTDOWN;
-        m_started = false;
-        if (m_stream) m_stream->Stop();
-        return m_queue->QueueEventParamVar(MESourceStopped, GUID_NULL, S_OK, nullptr);
+        winrt::com_ptr<CencMediaStream> stream;
+        HRESULT hr;
+        {
+            std::lock_guard<std::mutex> g(m_mx);
+            if (m_shutdown) return MF_E_SHUTDOWN;
+            m_started = false; m_paused = false;
+            stream = m_stream;
+            hr = m_queue->QueueEventParamVar(MESourceStopped, GUID_NULL, S_OK, nullptr);
+        }
+        if (stream) stream->Stop();
+        return hr;
     }
     IFACEMETHODIMP Pause() noexcept override
     {
-        std::lock_guard<std::mutex> g(m_mx);
-        if (m_shutdown) return MF_E_SHUTDOWN;
-        return m_queue->QueueEventParamVar(MESourcePaused, GUID_NULL, S_OK, nullptr);
+        winrt::com_ptr<CencMediaStream> stream;
+        HRESULT hr;
+        {
+            std::lock_guard<std::mutex> g(m_mx);
+            if (m_shutdown) return MF_E_SHUTDOWN;
+            if (!m_started || m_paused) return MF_E_INVALID_STATE_TRANSITION;
+            m_paused = true;
+            stream = m_stream;
+            LogLine("[cenc-src] Pause -> MESourcePaused + MEStreamPaused");
+            hr = m_queue->QueueEventParamVar(MESourcePaused, GUID_NULL, S_OK, nullptr);
+        }
+        if (stream) stream->Pause();
+        return hr;
     }
     IFACEMETHODIMP Shutdown() noexcept override
     {

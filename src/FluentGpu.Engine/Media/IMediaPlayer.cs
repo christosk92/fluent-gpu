@@ -44,8 +44,20 @@ public interface IMediaPlayer : IAsyncDisposable
     IReadSignal<TimeSpan> Duration { get; }
     /// <summary>Buffer health (ranges in time + forward seconds + stall policy).</summary>
     IReadSignal<BufferHealth> Buffer { get; }
+    /// <summary>Detailed buffering reason/progress for professional chrome and telemetry.</summary>
+    IReadSignal<BufferingInfo> Buffering { get; }
+    /// <summary>VOD/live/DVR window and chapters.</summary>
+    IReadSignal<TimelineInfo> Timeline { get; }
     /// <summary>The video natural size in px; <c>(0,0)</c> = audio-only.</summary>
     IReadSignal<SizeI> NaturalSize { get; }
+    /// <summary>Display geometry including clean aperture, sample aspect ratio, and rotation.</summary>
+    IReadSignal<VideoGeometry> VideoGeometry { get; }
+    /// <summary>Colorimetry/HDR metadata.</summary>
+    IReadSignal<VideoColorInfo> VideoColor { get; }
+    /// <summary>Bounded-cadence playback diagnostics.</summary>
+    IReadSignal<PlaybackStatistics> Statistics { get; }
+    /// <summary>The selected subtitle/caption cue at the authoritative media position.</summary>
+    IReadSignal<TimedCue?> ActiveCue { get; }
     /// <summary>The single typed error (null = no error).</summary>
     IReadSignal<MediaError?> Error { get; }
 
@@ -68,6 +80,8 @@ public interface IMediaPlayer : IAsyncDisposable
     NowPlaying NowPlaying { get; }
     /// <summary>The capability bitset (spec §10).</summary>
     MediaCommands Commands { get; }
+    /// <summary>Adaptive representations and acknowledged quality choice.</summary>
+    QualitySet Qualities { get; }
 
     // ── video surface binding (for the control; spec §10) ─────────────────────────────────────────────────────────────
 
@@ -99,6 +113,16 @@ public interface IMediaPlayer : IAsyncDisposable
     void SetVolume(double volume);
     /// <summary>Mute/unmute.</summary>
     void SetMuted(bool muted);
+    /// <summary>Select a discovered audio/video/text track; null disables text.</summary>
+    ValueTask SelectTrackAsync(MediaTrack? track);
+    /// <summary>Enable automatic ABR or pin a representation.</summary>
+    ValueTask SelectQualityAsync(QualitySelection selection);
+    /// <summary>Seek to the current live edge.</summary>
+    ValueTask GoLiveAsync();
+    /// <summary>Seek to the previous chapter marker.</summary>
+    ValueTask PreviousChapterAsync();
+    /// <summary>Seek to the next chapter marker.</summary>
+    ValueTask NextChapterAsync();
 
     // ── source + queue + preroll ─────────────────────────────────────────────────────────────────────────────────────
 
