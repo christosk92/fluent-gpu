@@ -749,7 +749,7 @@ sealed class ValidationShot : Component
             TextBox.Create(header: "Confirm password", width: 340f, text: _confirm, field: confirm));
     }
 
-    static readonly object[] LocOnce = new object[] { "val-shot-loc" };
+    static readonly DepKey LocOnce = "val-shot-loc";
     static readonly FluentGpu.Hooks.DepKey RevealOnce = FluentGpu.Hooks.DepKey.Empty;
 }
 

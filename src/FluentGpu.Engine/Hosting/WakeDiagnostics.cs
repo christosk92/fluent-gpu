@@ -29,6 +29,8 @@ public enum WakeReasons
     PopupAnim = 1 << 15,        // a windowed-popup desktop-acrylic open reveal (CompositionBackdrop) is mid-animation — keep presenting so its per-frame clip inset advances to settle
     TouchPress = 1 << 16,       // delayed 100ms pressed visual for touch inside a scrollable viewport
     VideoPresenting = 1 << 17,  // a media player is actively presenting a video surface (playing / ramping to play) — keep pumping at DISPLAY rate so frames advance (VideoSurfaceRegistry.HasActivePresentation)
+    Timer = 1 << 18,            // a HostTimerQueue timer is DUE this frame (UseTimeout/UseInterval/UseDebouncedValue/UseThrottledValue) — a pending-but-future timer sets NO bit (it only shapes RecommendedWaitMs, so the loop still idles)
+    WarmCadence = 1 << 19,      // post-input warm-cadence hold: keep rendering ~1s after the last input before full quiesce (GPUI ProMotion re-ramp lesson) — real window only
 }
 
 /// <summary>
@@ -42,12 +44,12 @@ public enum WakeReasons
 internal sealed class WakeDiagnostics
 {
     // Per-reason awake-frame counts this window, indexed by bit position (0..ReasonCount-1).
-    private const int ReasonCount = 18;
+    private const int ReasonCount = 20;
     private static readonly string[] s_reasonNames =
     [
         "frameNeeded", "runtimePending", "dynamicText", "anim", "interact", "scrollAnim", "repeat", "caret",
         "brushAnims", "imagesPending", "imageCrossfades", "orphans", "dragDropWork", "dragActive", "gestureHold",
-        "popupAnim", "touchPress", "videoPresenting",
+        "popupAnim", "touchPress", "videoPresenting", "timer", "warmCadence",
     ];
 
     private readonly long[] _reasonFrames = new long[ReasonCount];   // frames where reason i kept the loop awake

@@ -143,27 +143,27 @@ sealed class ItemsViewPage : Component
 
     public override Element Render()
     {
-        var multi = UseMemo(static () => new SelectionModel());
+        var multi = UseMemo(static () => new SelectionModel(), DepKey.Empty);
         var wall = UseMemo(static () => new LinedFlowLayout(
-            lineHeight: 72f, aspectRatio: i => WallAspects[i % WallAspects.Length], lineSpacing: 8f, minItemSpacing: 8f));
+            lineHeight: 72f, aspectRatio: i => WallAspects[i % WallAspects.Length], lineSpacing: 8f, minItemSpacing: 8f), DepKey.Empty);
         var (invoked, setInvoked) = UseState("—");
 
         // Card 1 (picker): a reactive index over the 5 visuals; the live ItemsView re-renders when it changes. A
         // SelectionModel pre-selecting index 0 (created once, in the memo factory) keeps a selected row visible so the
         // chosen selector visual always reads.
         var (sel, setSel) = UseState(0);
-        var pickSel = UseMemo(static () => { var m = new SelectionModel(); m.Select(0); return m; });
+        var pickSel = UseMemo(static () => { var m = new SelectionModel(); m.Select(0); return m; }, DepKey.Empty);
 
         // Card-group 2 (List preset) state — re-homed verbatim from the deleted ListViewPage.
         var listSel = UseSignal(0);   // a default selection so the accent pill is visible (WinUI gallery parity)
-        var listMulti = UseMemo(static () => new SelectionModel());
-        var drinks = UseMemo(static () => new List<string> { "Water", "Juice", "Lemonade", "Soda", "Coffee", "Tea" });
+        var listMulti = UseMemo(static () => new SelectionModel(), DepKey.Empty);
+        var drinks = UseMemo(static () => new List<string> { "Water", "Juice", "Lemonade", "Soda", "Coffee", "Tea" }, DepKey.Empty);
         var listOrder = UseSignal(0);
         _ = listOrder.Value;   // re-render after a drag-reorder commit (refreshes the template closures)
 
         // Card-group 3 (Grid preset) state — re-homed verbatim from the deleted GridViewPage.
-        var gridMulti = UseMemo(static () => new SelectionModel());
-        var colors = UseMemo(static () => new List<string> { "Red", "Orange", "Yellow", "Green", "Blue", "Purple", "Pink", "Teal" });
+        var gridMulti = UseMemo(static () => new SelectionModel(), DepKey.Empty);
+        var colors = UseMemo(static () => new List<string> { "Red", "Orange", "Yellow", "Green", "Blue", "Purple", "Pink", "Teal" }, DepKey.Empty);
         var gridOrder = UseSignal(0);
         _ = gridOrder.Value;
 
@@ -186,7 +186,7 @@ sealed class ItemsViewPage : Component
                 description: "SelectionMode.Multiple slides in the ItemContainer checkbox; the SelectionModel stores the selected ranges (Ctrl+A selects all).",
                 output: GalleryPage.LiveText(() => { _ = multi.Version.Value; return $"{multi.SelectedCount} selected"; }),
                 code: """
-                var multi = UseMemo(static () => new SelectionModel());
+                var multi = UseMemo(static () => new SelectionModel(), DepKey.Empty);
 
                 ItemsView.Create(Items.Length, i => Tile(Items[i]), RepeatLayout.Grid(4, 80f, 8f),
                     selectionMode: ItemsSelectionMode.Multiple,
@@ -221,7 +221,7 @@ sealed class ItemsViewPage : Component
                 code: """
                 static readonly float[] WallAspects = { 1.0f, 1.5f, 0.75f, 1.8f, 1.2f, 0.9f };
                 var wall = UseMemo(static () => new LinedFlowLayout(
-                    lineHeight: 72f, aspectRatio: i => WallAspects[i % WallAspects.Length], lineSpacing: 8f, minItemSpacing: 8f));
+                    lineHeight: 72f, aspectRatio: i => WallAspects[i % WallAspects.Length], lineSpacing: 8f, minItemSpacing: 8f), DepKey.Empty);
 
                 ItemsView.Create(24, WallTile, RepeatLayout.Custom(wall),
                     itemText: i => "Photo " + (i + 1),
@@ -273,7 +273,7 @@ sealed class ItemsViewPage : Component
                 description: "SelectionMode.Multiple slides in the inline checkboxes; the SelectionModel stores the selected ranges (Ctrl+A selects all).",
                 output: GalleryPage.LiveText(() => { _ = listMulti.Version.Value; return $"{listMulti.SelectedCount} selected"; }),
                 code: """
-                var multi = UseMemo(static () => new SelectionModel());
+                var multi = UseMemo(static () => new SelectionModel(), DepKey.Empty);
 
                 ItemsView.List(Coffees.Length,
                     i => new TextEl(Coffees[i]) { Size = 14f, Color = Tok.TextPrimary, Grow = 1f },
@@ -291,7 +291,7 @@ sealed class ItemsViewPage : Component
                 description: "CanReorderItems: drag a row — displaced rows part after the 200ms WinUI live-reorder dwell, then the commit moves the item.",
                 output: GalleryPage.LiveText(() => { _ = listOrder.Value; return string.Join(" · ", drinks); }),
                 code: """
-                var drinks = UseMemo(static () => new List<string> { "Water", "Juice", "Lemonade", "Soda", "Coffee", "Tea" });
+                var drinks = UseMemo(static () => new List<string> { "Water", "Juice", "Lemonade", "Soda", "Coffee", "Tea" }, DepKey.Empty);
                 var order = UseSignal(0);
 
                 ItemsView.List(drinks.Count,
@@ -319,7 +319,7 @@ sealed class ItemsViewPage : Component
                 description: "SelectionMode.Multiple shows the top-right overlay check square; selected tiles get the 2px accent border with the inner ring.",
                 output: GalleryPage.LiveText(() => { _ = gridMulti.Version.Value; return $"{gridMulti.SelectedCount} selected"; }),
                 code: """
-                var multi = UseMemo(static () => new SelectionModel());
+                var multi = UseMemo(static () => new SelectionModel(), DepKey.Empty);
 
                 ItemsView.Grid(GridItems.Length, i => Tile(GridItems[i]), columns: 4, tileHeight: 96f,
                     selectionMode: ItemsSelectionMode.Multiple,
@@ -334,7 +334,7 @@ sealed class ItemsViewPage : Component
                 description: "2-D live reorder: drag a tile — displaced tiles part after the 300ms WinUI grid dwell, then the commit moves the item.",
                 output: GalleryPage.LiveText(() => { _ = gridOrder.Value; return string.Join(" · ", colors); }),
                 code: """
-                var colors = UseMemo(static () => new List<string> { "Red", "Orange", "Yellow", "Green", "Blue", "Purple", "Pink", "Teal" });
+                var colors = UseMemo(static () => new List<string> { "Red", "Orange", "Yellow", "Green", "Blue", "Purple", "Pink", "Teal" }, DepKey.Empty);
                 var order = UseSignal(0);
 
                 ItemsView.Grid(colors.Count, i => Tile(colors[i]), columns: 4, tileHeight: 96f,

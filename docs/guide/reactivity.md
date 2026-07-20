@@ -166,6 +166,46 @@ body `() => { X(); }` for a fire-only effect.)
 The reactive **`Effect`** type (in `FluentGpu.Signals`) is the always-eager auto-tracked primitive that powers bindings;
 `UseSignalEffect` exposes it for adapter components that need eager (synchronous, inline-`Flush`) timing.
 
+## Timers — debounce, throttle, timeout, interval
+
+Four hooks schedule work on the host's **frame-clock timer queue** (`HostTimerQueue`, an engine-owned min-heap drained
+at the top of the frame, before the reactive flush — so a fired timer's signal writes land in the same re-render). Use
+these instead of `System.Threading.Timer` / `Task.Delay`: they never wake a background thread, they let the frame loop
+**idle-quiesce** (the loop blocks until the earliest timer is due — a pending timer costs zero frames), and they pause
+correctly with the component. They are **not** the media clock — playback position stays device-clock-derived.
+
+| Hook | Returns | For |
+|---|---|---|
+| `UseDebouncedValue(source, ms)` | `IReadSignal<T>` | a signal that follows `source` after `ms` of quiet — **trailing edge** (search-as-you-type) |
+| `UseThrottledValue(source, ms)` | `IReadSignal<T>` | follows `source` at most once per `ms` — **leading edge + trailing sample** |
+| `UseTimeout(cb, ms[, deps])` | `TimerHandle` | fire `cb` once, `ms` from now; **restarts when `deps` change** (default = once from mount) |
+| `UseInterval(tick, ms[, enabled])` | `void` | fire `tick` every `ms` — **auto-pauses while parked / minimized**, resumes cleanly |
+
+`source` is an `IReadSignal<T>` **or** a `Func<T>` thunk (wrapped in a memo that auto-tracks the signals it reads). The
+returned debounced/throttled signal updates with **zero re-render** — bind or read it like any signal.
+
+**Debounce control — `Flush()` / `Cancel()`.** Take the handle with the out-overload
+`UseDebouncedValue(source, ms, out DebounceHandle h)`:
+
+- `h.Flush()` — commit the source's current value **now** and drop the pending fire (the "search on Enter" path).
+- `h.Cancel()` — drop the pending fire without committing (the debounced signal keeps its last value).
+
+**Timeout control — `TimerHandle{ Cancel(), Restart() }`.** `Cancel()` drops the pending fire; `Restart()` re-arms from
+now. Both are generation-guarded, so a callback that comes due **after the component unmounts is a no-op** (every timer
+cell cancels itself on unmount).
+
+**Interval pausing.** `UseInterval` folds `UseIsActive()`: it stops ticking while the component's page is parked by
+`Flow.KeepAlive` **or** the window is minimized/app-suspended, and re-arms when it comes back — so a background tab burns
+no CPU. Pass `enabled: false` to pause it explicitly.
+
+**Idle-quiesce + warm cadence.** A pending-but-future timer sets **no** wake reason — the loop still idles (0% CPU), and
+its message-loop wait is shortened to reach the earliest due time; only a *due* timer forces exactly the frame that fires
+it. Separately, after the last input the loop keeps rendering for a short **warm-cadence** hold (~1 s, real window) before
+allowing full quiesce, so a follow-up interaction pays no cold-start ramp.
+
+**Steady-state cost is zero.** The wrapper + watcher are allocated once at mount; a source change re-arms by a lazy heap
+re-insert (a generation bump), so a quiet frame with an armed timer adds **0 bytes** to the hot phase.
+
 ## Context — `UseContext` + `Ctx.Provide`
 
 Context values are signals under the hood. A provider stores a signal per node; `UseContext` resolves the nearest

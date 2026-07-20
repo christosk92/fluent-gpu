@@ -58,6 +58,29 @@ public abstract class Component
     /// <summary>Reactive snapshot of the live drag (in-app <c>DragSource</c> or OS file drag) — re-renders on drag
     /// begin/move/end. Render a cursor-following custom preview (see <c>DragPreviewLayer</c>) from it.</summary>
     protected DragState UseDragState() => Context.UseDragState();
+
+    // ── Timing hooks (frame-clock HostTimerQueue; never the media clock) ────────────────────────────────────────────
+    /// <summary>A read signal that follows <paramref name="source"/> after <paramref name="ms"/> of quiet (trailing-edge
+    /// debounce; zero re-render). See <see cref="RenderContext.UseDebouncedValue{T}(IReadSignal{T}, float)"/>.</summary>
+    protected IReadSignal<T> UseDebouncedValue<T>(IReadSignal<T> source, float ms) => Context.UseDebouncedValue(source, ms);
+    /// <inheritdoc cref="RenderContext.UseDebouncedValue{T}(IReadSignal{T}, float, out DebounceHandle)"/>
+    protected IReadSignal<T> UseDebouncedValue<T>(IReadSignal<T> source, float ms, out DebounceHandle handle) => Context.UseDebouncedValue(source, ms, out handle);
+    /// <summary>Thunk form of debounce — <paramref name="source"/> is a getter over the signals to watch.</summary>
+    protected IReadSignal<T> UseDebouncedValue<T>(Func<T> source, float ms) => Context.UseDebouncedValue(source, ms);
+    /// <inheritdoc cref="RenderContext.UseDebouncedValue{T}(Func{T}, float, out DebounceHandle)"/>
+    protected IReadSignal<T> UseDebouncedValue<T>(Func<T> source, float ms, out DebounceHandle handle) => Context.UseDebouncedValue(source, ms, out handle);
+    /// <summary>A read signal that follows <paramref name="source"/> at most once per <paramref name="ms"/> — leading
+    /// edge + trailing sample (zero re-render). See <see cref="RenderContext.UseThrottledValue{T}(IReadSignal{T}, float)"/>.</summary>
+    protected IReadSignal<T> UseThrottledValue<T>(IReadSignal<T> source, float ms) => Context.UseThrottledValue(source, ms);
+    /// <summary>Thunk form of throttle.</summary>
+    protected IReadSignal<T> UseThrottledValue<T>(Func<T> source, float ms) => Context.UseThrottledValue(source, ms);
+    /// <summary>Fire <paramref name="callback"/> once <paramref name="ms"/> from now, restarting on
+    /// <paramref name="deps"/> change (default = once from mount); a due fire after unmount is a no-op. See
+    /// <see cref="RenderContext.UseTimeout"/>.</summary>
+    protected TimerHandle UseTimeout(Action callback, float ms, DepKey deps = default) => Context.UseTimeout(callback, ms, deps);
+    /// <summary>Fire <paramref name="tick"/> every <paramref name="ms"/> while <paramref name="enabled"/> and the
+    /// component is active — auto-pauses while parked/minimized, resumes cleanly. See <see cref="RenderContext.UseInterval"/>.</summary>
+    protected void UseInterval(Action tick, float ms, bool enabled = true) => Context.UseInterval(tick, ms, enabled);
     /// <summary>A persistent per-field async value (Pending|Ready|Failed) — the skeleton-loading spine; flip with SetReady/SetFailed.</summary>
     protected Loadable<T> UseLoadable<T>(Loadable<T>? initial = null) => Context.UseLoadable(initial);
     /// <summary>Kick an async loader once at mount; returns a Loadable&lt;T&gt; (Pending→Ready/Failed via UsePost; cancels on unmount).</summary>

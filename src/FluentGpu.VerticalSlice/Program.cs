@@ -649,6 +649,66 @@ sealed class AsyncCommandsProbe : Component
     public override Element Render() { Cmds = UseAsyncCommands<int>(); _ = Cmds.AnyRunning(); return new BoxEl(); }
 }
 
+// ── Timing-hook probes (gate.timer.*) ────────────────────────────────────────────────────────────────────────────
+// Each exposes the hook result + a writable source so the gate can drive it deterministically over the headless frame
+// clock (host.Paint(0) advances the FixedFrameTimeSource step per frame). The render reads no signal → mounts once.
+sealed class DebounceProbe : Component
+{
+    private readonly float _ms;
+    public DebounceProbe(float ms) => _ms = ms;
+    public readonly Signal<string> Source = new("");
+    public IReadSignal<string> Debounced = null!;
+    public DebounceHandle Handle;
+    public override Element Render() { Debounced = UseDebouncedValue<string>(Source, _ms, out var h); Handle = h; return new BoxEl(); }
+}
+
+sealed class ThrottleProbe : Component
+{
+    private readonly float _ms;
+    public ThrottleProbe(float ms) => _ms = ms;
+    public readonly Signal<int> Source = new(0);
+    public IReadSignal<int> Throttled = null!;
+    public override Element Render() { Throttled = UseThrottledValue<int>(Source, _ms); return new BoxEl(); }
+}
+
+sealed class TimeoutProbe : Component
+{
+    private readonly float _ms;
+    public TimeoutProbe(float ms) => _ms = ms;
+    public int Fires;
+    public TimerHandle Handle;
+    public override Element Render() { Handle = UseTimeout(() => Fires++, _ms); return new BoxEl(); }
+}
+
+sealed class IntervalProbe : Component
+{
+    private readonly float _ms;
+    public IntervalProbe(float ms) => _ms = ms;
+    public int Ticks;
+    public override Element Render() { UseInterval(() => Ticks++, _ms); return new BoxEl(); }
+}
+
+// A parent that conditionally mounts a timeout-owning child so the gate can UNMOUNT it (Flow.Show flip) before the fire.
+sealed class TimeoutUnmountParent : Component
+{
+    public readonly Signal<bool> Show = new(true);
+    public int Fires;
+    public override Element Render() => Flow.Show(() => Show.Value, Embed.Comp(() => new TimeoutUnmountChild(this)));
+}
+
+sealed class TimeoutUnmountChild : Component
+{
+    private readonly TimeoutUnmountParent _p;
+    public TimeoutUnmountChild(TimeoutUnmountParent p) => _p = p;
+    public override Element Render() { UseTimeout(() => _p.Fires++, 200f); return new BoxEl(); }
+}
+
+// A trivial inert root for the warm-cadence gate (no interaction → any post-input activity is warm-cadence alone).
+sealed class InertBoxProbe : Component
+{
+    public override Element Render() => new BoxEl { Width = 100, Height = 100 };
+}
+
 // now-playing recolours a bound TEXT WITHOUT re-running the row template (the anti-flash proof — a re-run would mean a
 // rebuild/remount + Enter replay). Content carries no per-row `$"…"` so the re-skin frames stay 0-alloc on the paint phases.
 sealed class BoundItemsViewProbe : Component
@@ -7396,6 +7456,171 @@ static class Slice
             $"expanded=({expandedGutter},{expandedThumb}) collapsed=({collapsedGutter},{collapsedThumb}) hidden={!anyScrollbar}");
         Check("38b. hover-visible scrollbar settles without keeping frames active",
             hoverSettledIdle, $"active={host.HasActiveWork}");
+    }
+
+    // Frame-clock timing hooks (gate.timer.*): UseDebouncedValue / UseThrottledValue / UseTimeout / UseInterval over
+    // the host's HostTimerQueue. All driven deterministically over the headless frame clock (each host.Paint(0) advances
+    // one FixedFrameTimeSource step = 16 ms), so a 100 ms window fires ~7 frames in. Media playback keeps its own device
+    // clock and never rides this queue (WS-Media non-goal) — no media gate here.
+    static void TimerHookChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+
+        // ── gate.timer.debounce-trailing: 3 writes within the window ⇒ exactly one trailing commit to the last value ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("timer-debounce", new Size2(200, 120), 1f)); window.Show();
+            var probe = new DebounceProbe(100f);
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.Paint(0);
+            probe.Source.Value = "a"; host.Paint(0);   // arm
+            probe.Source.Value = "b"; host.Paint(0);   // re-arm
+            probe.Source.Value = "c"; host.Paint(0);   // re-arm — the last value wins
+            bool pendingStillInitial = probe.Debounced.Peek() == "";
+            string prev = probe.Debounced.Peek();
+            int transitions = 0;
+            for (int i = 0; i < 16; i++) { host.Paint(0); var v = probe.Debounced.Peek(); if (v != prev) { transitions++; prev = v; } }
+            bool committedOnce = transitions == 1 && probe.Debounced.Peek() == "c";
+            Check("gate.timer.debounce-trailing 3 writes in the window ⇒ exactly 1 trailing commit to the last value",
+                pendingStillInitial && committedOnce, $"pendingInitial={pendingStillInitial} transitions={transitions} value='{probe.Debounced.Peek()}'");
+        }
+
+        // ── gate.timer.debounce-flush: Flush() commits immediately + cancels pending; Cancel() never commits ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("timer-flush", new Size2(200, 120), 1f)); window.Show();
+            var probe = new DebounceProbe(100f);
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.Paint(0);
+            probe.Source.Value = "x"; host.Paint(0);      // arm
+            bool beforeFlush = probe.Debounced.Peek() == "";
+            probe.Handle.Flush();                          // commit NOW + cancel pending
+            bool afterFlush = probe.Debounced.Peek() == "x";
+            string p = probe.Debounced.Peek(); int extra = 0;
+            for (int i = 0; i < 16; i++) { host.Paint(0); if (probe.Debounced.Peek() != p) { extra++; p = probe.Debounced.Peek(); } }
+            bool flushNoExtra = extra == 0;
+
+            using var app2 = new HeadlessPlatformApp();
+            var window2 = new HeadlessWindow(new WindowDesc("timer-cancel", new Size2(200, 120), 1f)); window2.Show();
+            var probe2 = new DebounceProbe(100f);
+            using var host2 = new AppHost(app2, window2, new HeadlessGpuDevice(), fonts, strings, probe2);
+            host2.Paint(0);
+            probe2.Source.Value = "y"; host2.Paint(0);     // arm
+            probe2.Handle.Cancel();                         // drop the pending fire
+            for (int i = 0; i < 16; i++) host2.Paint(0);
+            bool cancelNoCommit = probe2.Debounced.Peek() == "";
+            Check("gate.timer.debounce-flush Flush() commits immediately + cancels pending; Cancel() never commits",
+                beforeFlush && afterFlush && flushNoExtra && cancelNoCommit,
+                $"beforeFlush={beforeFlush} afterFlush={afterFlush} flushNoExtra={flushNoExtra} cancelNoCommit={cancelNoCommit}");
+        }
+
+        // ── gate.timer.throttle-leading-trailing: leading fires immediately; trailing samples the last value ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("timer-throttle", new Size2(200, 120), 1f)); window.Show();
+            var probe = new ThrottleProbe(100f);
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.Paint(0);
+            probe.Source.Value = 1; host.Paint(0);   // leading → emit immediately
+            bool leading = probe.Throttled.Peek() == 1;
+            probe.Source.Value = 2; host.Paint(0);   // suppressed (cooldown)
+            probe.Source.Value = 3; host.Paint(0);   // suppressed, latest = 3
+            bool stillLeading = probe.Throttled.Peek() == 1;
+            for (int i = 0; i < 16; i++) host.Paint(0);   // window closes → trailing sample
+            bool trailing = probe.Throttled.Peek() == 3;
+            Check("gate.timer.throttle-leading-trailing leading emits immediately; trailing samples the last value",
+                leading && stillLeading && trailing, $"leading={leading} stillLeading={stillLeading} trailing={trailing} value={probe.Throttled.Peek()}");
+        }
+
+        // ── gate.timer.interval-pauses-inactive: ticks while active, pauses while window-inactive, resumes on return ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("timer-interval", new Size2(200, 120), 1f)); window.Show();
+            var probe = new IntervalProbe(48f);   // ~3 frames per tick
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.Paint(0);
+            for (int i = 0; i < 20; i++) host.Paint(0);
+            bool tickedWhileActive = probe.Ticks > 0;
+            host.SetWindowActive(false); host.Paint(0);   // flush the activation change → interval pauses
+            int atPause = probe.Ticks;
+            for (int i = 0; i < 20; i++) host.Paint(0);
+            bool pausedNoTicks = probe.Ticks == atPause;
+            host.SetWindowActive(true); host.Paint(0);    // resume
+            for (int i = 0; i < 20; i++) host.Paint(0);
+            bool resumed = probe.Ticks > atPause;
+            Check("gate.timer.interval-pauses-inactive interval ticks while active, pauses while window-inactive, resumes",
+                tickedWhileActive && pausedNoTicks && resumed, $"active={probe.Ticks - (probe.Ticks - atPause)} atPause={atPause} final={probe.Ticks}");
+        }
+
+        // ── gate.timer.unmount-cancels: a due-after-unmount timeout never fires ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("timer-unmount", new Size2(200, 120), 1f)); window.Show();
+            var parent = new TimeoutUnmountParent();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, parent);
+            host.RunFrame();                        // mount: child arms a 200 ms timeout (due ≈ 200)
+            bool notFiredYet = parent.Fires == 0;
+            parent.Show.Value = false; host.Paint(0);   // unmount the child BEFORE the fire → RunAllCleanups cancels the timer
+            for (int i = 0; i < 24; i++) host.Paint(0);  // advance well past 200 ms
+            Check("gate.timer.unmount-cancels a due-after-unmount timeout never fires",
+                notFiredYet && parent.Fires == 0, $"notFiredYet={notFiredYet} fires={parent.Fires}");
+        }
+
+        // ── gate.timer.quiesce-idle: one pending 5 s timeout — the host wait reflects the due time; no intermediate frame runs ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("timer-quiesce", new Size2(200, 120), 1f)); window.Show();
+            var probe = new TimeoutProbe(5000f);
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            for (int i = 0; i < 6 && host.HasActiveWork; i++) host.RunFrame();   // settle the mount (leaves only the pending 5 s timer)
+            int wait = host.RecommendedWaitMs();
+            bool waitReflectsDue = wait >= 4000 && wait <= 5100;
+            bool noTimerWake = (host.CurrentWakeReasons & WakeReasons.Timer) == 0;   // pending, not due
+            bool wouldIdle = !host.HasActiveWork;                                     // the loop would fully block
+            double clockBefore = host.FrameClockMsForTest;
+            bool anyRendered = false;
+            for (int i = 0; i < 8; i++) { var f = host.RunFrame(); if (f.Rendered) anyRendered = true; }
+            bool noIntermediateFrames = !anyRendered && probe.Fires == 0 && host.FrameClockMsForTest == clockBefore;
+            Check("gate.timer.quiesce-idle a pending 5s timeout: the wait reflects the due time and no intermediate frame runs",
+                waitReflectsDue && noTimerWake && wouldIdle && noIntermediateFrames,
+                $"wait={wait} noTimerWake={noTimerWake} wouldIdle={wouldIdle} rendered={anyRendered} fires={probe.Fires}");
+        }
+
+        // ── gate.timer.zero-steady-alloc: an armed timer adds 0 bytes to the hot phase on quiet frames ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("timer-alloc", new Size2(200, 120), 1f)); window.Show();
+            var probe = new IntervalProbe(100000f);   // armed the whole time, never fires during the window
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            for (int i = 0; i < 4 && host.HasActiveWork; i++) host.RunFrame();
+            for (int i = 0; i < 6; i++) host.Paint(0);   // warm the drain path (JIT) with the timer armed
+            long worst = 0;
+            for (int i = 0; i < 10; i++) { var f = host.Paint(0); if (f.HotPhaseAllocBytes > worst) worst = f.HotPhaseAllocBytes; }
+            Check("gate.timer.zero-steady-alloc an armed timer adds 0 bytes to the hot phase on quiet frames",
+                worst == 0, $"worst={worst} bytes (armed timers={host.TimersForTest.Count})");
+        }
+
+        // ── gate.timer.warm-cadence: frames continue for the hold window after a synthetic input, then quiesce ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("timer-warm", new Size2(200, 120), 1f)); window.Show();
+            var probe = new InertBoxProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.WarmCadenceEnabledForTest = true;   // off headless by default (keeps existing idle gates green); the gate opts in
+            for (int i = 0; i < 6 && host.HasActiveWork; i++) host.RunFrame();
+            bool idleBefore = !host.HasActiveWork;
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(10f, 10f), 0, 0));
+            host.RunFrame();                          // dispatch → warm-cadence armed for ~1 s
+            bool warmLit = (host.CurrentWakeReasons & WakeReasons.WarmCadence) != 0;
+            int warmFrames = 0;
+            for (int i = 0; i < 200; i++) { if ((host.CurrentWakeReasons & WakeReasons.WarmCadence) == 0) break; host.RunFrame(); warmFrames++; }
+            bool held = warmFrames >= 50 && warmFrames <= 75;   // ~1000 ms / 16 ms ≈ 62 frames
+            for (int i = 0; i < 8 && host.HasActiveWork; i++) host.RunFrame();
+            bool quiescedAfter = !host.HasActiveWork;
+            Check("gate.timer.warm-cadence frames continue for the ~1s hold after input, then quiesce",
+                idleBefore && warmLit && held && quiescedAfter,
+                $"idleBefore={idleBefore} warmLit={warmLit} warmFrames={warmFrames} quiescedAfter={quiescedAfter}");
+        }
     }
 
     // Generic async-command primitive (UseAsyncCommand / UseAsyncCommands<TKey>): the in-progress state tracks the
@@ -24893,6 +25118,7 @@ static class Slice
         VirtualBudgetChecks(strings);    // Wave 4 (scroll-perf): E5 velocity overscan, E4 steady-scroll realize budget + nested-rail mount deferral, E6 scene-owned virtual-dirty queue
         BoundItemsViewChecks(strings);   // ItemsView CreateBound: bound-slot re-skin (no rebuild on select/now-playing = no flash), roving tab stop
         AsyncCommandChecks(strings);     // UseAsyncCommand(s): in-progress state tracks the Task, re-fire blocked, cancel, keyed independence, idle 0-alloc
+        TimerHookChecks(strings);        // UseDebouncedValue/UseThrottledValue/UseTimeout/UseInterval + HostTimerQueue: debounce trailing/flush/cancel, throttle leading+trailing, interval pause-on-inactive, unmount-cancels, idle-quiesce wait, zero steady alloc, post-input warm cadence
         ExtentTableChecks();
         VariableChecks(strings);
         ZeroAllocScrollChecks(strings);

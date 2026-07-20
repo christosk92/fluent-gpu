@@ -232,6 +232,23 @@ public sealed class AppHost : IDisposable
     private readonly Signal<object?> _hostPostSig;
     private readonly Action<Action> _uiPoster;   // cached Post delegate (one instance) — ambient signal + HostDispatch.Current
 
+    // Frame-clock timer queue (UseDebouncedValue/UseThrottledValue/UseTimeout/UseInterval). Drained at frame top INSIDE
+    // the hot-phase window, before the reactive flush, so a fired timer's signal writes land in the SAME flush (the
+    // DrainUiPosts rationale). Its clock is the wall clock for a real window (idle quiesce stays accurate across a
+    // blocked WaitForWork — the animation frame delta is clamped and would drift) and the deterministic accumulated
+    // frame delta (_frameClockMs) headless (the VerticalSlice gates ride it). NOT the media clock — playback position is
+    // device-clock-derived and never routes through here (WS-Media non-goal).
+    private readonly HostTimerQueue _timers;
+    private readonly Action _drainTimers;   // cached (one instance) so the per-frame drain call allocates nothing
+    private double _frameClockMs;           // monotonic accumulated frame delta — the headless timer clock (+= NextDeltaMs each Paint)
+    // Post-input warm-cadence (research #10 — GPUI ProMotion re-ramp lesson): after the last input, keep the loop
+    // rendering for WarmCadenceHoldMs before allowing full quiesce so a follow-up interaction pays no cold-start ramp.
+    // On for a real window; OFF headless by default (a synthetic-input gate flips it via WarmCadenceEnabledForTest) so
+    // every existing headless idle gate that injects input still quiesces exactly as before.
+    private const float WarmCadenceHoldMs = 1000f;
+    private bool _warmCadenceEnabled;
+    private double _warmCadenceUntilMs;
+
     // ── FG_ALLOC_DIAG=1: once-per-second allocation/CPU attribution (stderr) ──
     // UI-thread bytes + ticks per frame segment (GetAllocatedBytesForCurrentThread deltas) and the process-wide
     // allocation total, so scroll-time churn can be pinned to a phase (or to a worker thread) without a profiler.
@@ -591,7 +608,9 @@ public sealed class AppHost : IDisposable
         WakeReasons.DragDropWork | WakeReasons.DragActive | WakeReasons.GestureHold | WakeReasons.TouchPress |
         WakeReasons.PopupAnim | WakeReasons.ImagesPending | WakeReasons.ImageCrossfades | WakeReasons.Orphans |
         // A video presenting under a modal/seek loop must keep pumping so the frame keeps advancing.
-        WakeReasons.VideoPresenting;
+        WakeReasons.VideoPresenting |
+        // A due frame-clock timer (a debounce/timeout/interval) must still fire while the user drags/resizes the window.
+        WakeReasons.Timer;
     private static bool OnlyAmbientWakeReasons(WakeReasons reasons) => (reasons & ModalLoopEssentialWake) == 0;
     // Dynamic-text (HUD) intern-on-change cache, indexed by (int)DynamicTextKind (None..FrameMs = 0..5). Each slot
     // holds the last DISPLAYED quantized value (the int fps / int cmd|draw|cull / 0.1-rounded ms — exactly the display
@@ -650,9 +669,22 @@ public sealed class AppHost : IDisposable
     /// (~10), and it reports the real frame rate again the instant anything else animates.</summary>
     public int RecommendedWaitMs()
     {
-        int w = RecommendedWaitMsCore();
+        int w = ClampWaitToTimers(RecommendedWaitMsCore());
         _lastWaitMs = w;   // remembered so Paint can detect a throttle/idle → display-rate step-up and resync the frame clock
         return w;
+    }
+
+    /// <summary>Shorten an IDLE/throttled wait so the loop wakes when the earliest frame-clock timer is due (a pending
+    /// timer keeps the loop from over-sleeping past its fire). A display-rate wait (0 sync / <see cref="AsyncDisplayPaceMs"/>
+    /// async — animation/scroll live) is left untouched: it already drains the timer next frame, and shortening it to a
+    /// sub-frame value would spuriously trip the frame-clock step-up Resync (the frozen-one-shot-anim bug class). No armed
+    /// timer ⇒ the wait is unchanged (a fully idle loop stays -1 → 0% CPU).</summary>
+    private int ClampWaitToTimers(int w)
+    {
+        if (w == 0 || w == AsyncDisplayPaceMs) return w;
+        if (!_timers.TryPeekEarliest(out double due)) return w;
+        int dueIn = (int)Math.Ceiling(Math.Max(0.0, due - _timers.NowMs));
+        return w < 0 ? dueIn : Math.Min(w, dueIn);
     }
 
     private int RecommendedWaitMsCore()
@@ -794,6 +826,16 @@ public sealed class AppHost : IDisposable
         // menus) the loop idle-skips and the reveal freezes at its seed. O(popups) ≈ O(1) (typically 0–1 menus open).
         for (int i = 0; i < _popupWindows.Count; i++)
             if (_popupWindows[i].Swapchain?.PopupAnimating == true) { r |= WakeReasons.PopupAnim; break; }
+        // Frame-clock timers: a DUE timer forces exactly the frame that fires it; a pending-but-future timer sets NO bit
+        // (the loop still idles — RecommendedWaitMs shapes the wait to reach it). Warm-cadence keeps the loop rendering
+        // for a bounded window after the last input. Read the clock once, and only when a timer is armed / a warm hold is
+        // live (so an idle host with no timers pays nothing here).
+        if (_timers.Count > 0 || (_warmCadenceEnabled && _warmCadenceUntilMs > 0.0))
+        {
+            double tnow = _timers.NowMs;
+            if (_timers.HasDue(tnow)) r |= WakeReasons.Timer;
+            if (_warmCadenceEnabled && tnow < _warmCadenceUntilMs) r |= WakeReasons.WarmCadence;
+        }
         return r;
     }
 
@@ -821,6 +863,14 @@ public sealed class AppHost : IDisposable
     internal long MainScrollHoldUntilForTest { get => _mainScrollHoldUntil; set => _mainScrollHoldUntil = value; }
     /// <summary>Test-only companion: force the post-scroll display-rate grace expired so the gate isolates the HOLD term.</summary>
     internal void SetScrollGraceForTest(long until) => _scrollGraceUntil = until;
+
+    /// <summary>Test-only (gate.timer.*): the frame-clock timer queue, its deterministic headless clock, and the
+    /// post-input warm-cadence enable (off headless by default so existing idle gates are unaffected; the warm-cadence
+    /// gate flips it on). <see cref="FrameClockMsForTest"/> is the headless timer clock (advances by the fixed step per Paint).</summary>
+    internal HostTimerQueue TimersForTest => _timers;
+    internal double FrameClockMsForTest => _frameClockMs;
+    internal bool WarmCadenceEnabledForTest { get => _warmCadenceEnabled; set => _warmCadenceEnabled = value; }
+    internal double WarmCadenceUntilForTest => _warmCadenceUntilMs;
 
     /// <summary>The frame loop's current wake-reason mask — why <see cref="HasActiveWork"/> would keep running this
     /// instant (for tests / census). An O(1) recompute of the same terms.</summary>
@@ -873,6 +923,13 @@ public sealed class AppHost : IDisposable
         _images = images ?? new ImageCache(new FakeImageDecoder());
         _isHeadless = window.Handle.Kind == NativeHandleKind.Headless;
         _frameTime = frameTime ?? (_isHeadless ? new FixedFrameTimeSource() : new StopwatchFrameTimeSource());
+        // Timer clock: headless rides the deterministic accumulated frame delta (gates pump frames); a real window uses
+        // the monotonic wall clock so a due time survives a fully-blocked WaitForWork (the clamped anim delta would drift).
+        _timers = new HostTimerQueue(_isHeadless
+            ? () => _frameClockMs
+            : static () => Stopwatch.GetTimestamp() * 1000.0 / Stopwatch.Frequency);
+        _drainTimers = _timers.Drain;
+        _warmCadenceEnabled = !_isHeadless;   // gates opt in via WarmCadenceEnabledForTest
         _swapchain = device.CreateSwapchain(new SwapchainDesc(window.Handle, window.ClientSizePx));
         _reconciler = new TreeReconciler(_scene, strings, _runtime);
         _reconciler.RegisterPendingEffectContext = RegisterPendingEffectContext;
@@ -1117,6 +1174,7 @@ public sealed class AppHost : IDisposable
         _reconciler.SetAmbient(Activation.IsActive, new Signal<object?>(_windowVisible));
         _reconciler.SetAmbient(ThemeControl.Request, new Signal<object?>((Action<float>)RequestThemeTransition));   // live re-theme trigger for app code
         _reconciler.SetAmbient(VideoCompositor.Current, new Signal<object?>(_videoSurfaces));   // video-surface intent buffer for UseVideoSurface
+        _reconciler.SetAmbient(HostTimers.Current, new Signal<object?>(_timers));   // frame-clock timer queue for the timing hooks (UseTimeout/UseInterval/UseDebouncedValue/UseThrottledValue)
 
         // Keep-alive repaint: the OS fires this synchronously from inside a modal move/size loop (and on NC
         // hover/press transitions while the frame loop idles). Paint with keepAlive so the device skips its
@@ -1241,6 +1299,10 @@ public sealed class AppHost : IDisposable
         if (s_allocDiag) { db = Probe(SegPump, db, dt); dt = Stopwatch.GetTimestamp(); }
         int clicks = _dispatcher.Dispatch(_ring.Drain(), _ring.DrainVelocitySamples());  // 2 input dispatch (handlers write signals → schedule effects)
         if (s_allocDiag) { db = Probe(SegDispatch, db, dt); dt = Stopwatch.GetTimestamp(); }
+        // Post-input warm-cadence hold: any input this frame (a pumped event or a handled click) keeps the loop rendering
+        // for WarmCadenceHoldMs so a follow-up interaction pays no cold-start ramp (see field). Real window only by default.
+        if (_warmCadenceEnabled && (clicks > 0 || _tracePumpedEvents > 0))
+            _warmCadenceUntilMs = _timers.NowMs + WarmCadenceHoldMs;
 
         // Step 4 fault injection (FG_FORCE_DEVICE_LOST=<frameN>): force a controlled DEVICE_REMOVED so the next submit
         // fails and the recovery rendezvous below is exercised on real hardware.
@@ -1515,6 +1577,11 @@ public sealed class AppHost : IDisposable
             // Paint-ONLY path (the PaintRequested keep-alive fired from inside an OS modal move/size loop, which bypasses
             // RunFrame entirely) — there a post that arrived mid-drag still applies this frame instead of being stranded.
             if (!_uiPosts.IsEmpty) _runtime.Batch(DrainUiPosts);
+            // Frame-clock timers (UseTimeout/UseInterval/UseDebouncedValue/UseThrottledValue): fire due callbacks INSIDE
+            // the hot-phase window, before the flush, so their signal writes coalesce into THIS frame's re-render (same
+            // rationale as the UI-post drain above). Skipped when nothing is armed → 0-alloc on every frame that uses no
+            // timer, and 0-alloc on a quiet frame with an armed-but-not-due timer (Drain is one comparison then returns).
+            if (_timers.Count > 0) _runtime.Batch(_drainTimers);
             // Drag epoch: while a typed drag is live, bump each frame so a DragPreviewLayer re-renders and follows the
             // cursor; bump once more when it ends so the preview tears down. Only the preview subtree re-renders.
             bool dragActive = _dispatcher.DragDrop.IsActive;
@@ -1645,6 +1712,7 @@ public sealed class AppHost : IDisposable
                     _frameTime.Resync();
             }
             float dtMs = _frameTime.NextDeltaMs();
+            _frameClockMs += dtMs;                             // frame-clock timer base (headless: the deterministic FixedFrameTimeSource step; ignored by the real-window wall clock)
             _anim.Tick(dtMs);                                  // 7 animation (transform/opacity/presented-size — never relayout)
             _reconciler.FinalizeKeepAliveTransitions();         // 7 park retained outgoing pages after their exit settles
             _inputHooks.RunAfterAnimations();                  // 7.1 tree lifecycle finalizers (overlays) before record/present
