@@ -3616,6 +3616,82 @@ sealed class LiveThemeDefaultsProbe : Component
     };
 }
 
+// ── G1c: LayoutBoundary (.Boundary) + relayout-escape counter + UseMeasuredBounds/Width probes ──────────────────────
+
+// A deep-nested subtree with a re-rendering leaf, wrapped in a container that is EITHER a `.Boundary()` (layout firewall)
+// or a plain flex box. Flipping the leaf signal marks the deep node LayoutDirty; the boundary decides whether the scoped
+// relayout stops at the container (escapes = 0) or walks all the way to the scene root (escapes >= 1).
+sealed class BoundaryEscapeProbe : Component
+{
+    public static bool UseBoundary;
+    public readonly FluentGpu.Signals.Signal<int> Deep = new(0);
+
+    public override Element Render()
+    {
+        var inner = new BoxEl { Grow = 1f, Direction = 1, Children = [ Embed.Comp(() => new BoundaryDeepLeaf { Sig = Deep }) ] };
+        var container = new BoxEl { Grow = 1f, Direction = 1, Children = [ inner ] };
+        if (UseBoundary) container = container.Boundary();
+        return new BoxEl { Grow = 1f, Direction = 1, Children = [ container ] };
+    }
+}
+
+sealed class BoundaryDeepLeaf : Component
+{
+    public FluentGpu.Signals.Signal<int> Sig = null!;
+    public override Element Render()
+    {
+        int v = Sig.Value;   // subscribe → re-render (and change size, marking LayoutDirty) on flip
+        return new BoxEl { Width = 100f, Height = 20f + v };
+    }
+}
+
+// Hosts a nested component so the measured component's HostNode is its OWN rendered box (NOT the scene root, which is what
+// the top-level component's HostNode is forced to). The child's box width is a bound FloatSignal (a compositor/layout
+// bind — no re-render), driven per frame to reproduce a resize.
+sealed class MeasureHost : Component
+{
+    readonly Component _child;
+    public MeasureHost(Component child) => _child = child;
+    public override Element Render() => new BoxEl { Grow = 1f, Direction = 0, Children = [ Embed.Comp(() => _child) ] };
+}
+
+sealed class MeasuredWidthProbe : Component
+{
+    public readonly FluentGpu.Signals.FloatSignal DriveWidth = new(100f);
+    public float Quantum;
+    public int RenderCount;
+    public float LastSeen = -1f;
+
+    public override Element Render()
+    {
+        RenderCount++;
+        var w = UseMeasuredWidth(Quantum);
+        LastSeen = w.Value;   // subscribe → re-render when the (quantized) measured width changes
+        return new BoxEl { Grow = 0f, Shrink = 0f, Height = 50f, Width = Prop.Of(() => DriveWidth.Value) };
+    }
+}
+
+sealed class ComposeBoundsProbe : Component
+{
+    public readonly FluentGpu.Signals.FloatSignal DriveWidth = new(100f);
+    public int AuthorFires;
+    public int RenderCount;
+    public float LastSeenW = -1f;
+
+    public override Element Render()
+    {
+        RenderCount++;
+        var bounds = UseMeasuredBounds();
+        LastSeenW = bounds.Value.W;   // subscribe
+        return new BoxEl
+        {
+            Grow = 0f, Shrink = 0f, Height = 50f,
+            Width = Prop.Of(() => DriveWidth.Value),
+            OnBoundsChanged = _ => AuthorFires++,   // the element author's own handler — must still fire alongside the hook
+        };
+    }
+}
+
 static class Slice
 {
     static int s_failures;
@@ -25009,6 +25085,104 @@ static class Slice
             $"touch={touchSuppressed} capture={captureSuppressed}");
     }
 
+    // G1c: .Boundary() firewall + FrameStats.RootRelayoutEscapes counter + UseMeasuredBounds/UseMeasuredWidth.
+    static void LayoutBoundaryMeasuredChecks(StringTable strings)
+    {
+        // gate.layout.boundary-modifier (record contract): .Boundary() == IsolateLayout + ClipToBounds.
+        {
+            var b = new BoxEl { Grow = 1f }.Boundary();
+            Check("gate.layout.boundary-modifier (record): .Boundary() sets IsolateLayout + ClipToBounds",
+                b.IsolateLayout && b.ClipToBounds, $"isolate={b.IsolateLayout} clip={b.ClipToBounds}");
+        }
+
+        int EscapesOnDeepFlip(bool useBoundary)
+        {
+            BoundaryEscapeProbe.UseBoundary = useBoundary;
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("boundary", new Size2(800, 600), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var probe = new BoundaryEscapeProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, probe);
+            for (int i = 0; i < 4; i++) host.RunFrame();   // mount + full layout + settle (_everLaidOut ⇒ scoped path next)
+            probe.Deep.Value = 1;                          // deep re-render → deep node LayoutDirty → SCOPED relayout next frame
+            return host.RunFrame().RootRelayoutEscapes;
+        }
+
+        int withBoundary = EscapesOnDeepFlip(true);
+        int withoutBoundary = EscapesOnDeepFlip(false);
+        BoundaryEscapeProbe.UseBoundary = false;   // restore the static
+        Check("gate.layout.boundary-modifier: deep re-render inside a .Boundary() relayouts only the subtree (0 escapes to root)",
+            withBoundary == 0, $"escapes={withBoundary} (want 0)");
+        Check("gate.layout.escape-counter: the same scene WITHOUT .Boundary() escapes to root >= 1 (full-subtree relayout)",
+            withoutBoundary >= 1, $"escapes={withoutBoundary} (want >=1)");
+
+        // gate.bounds.measured-one-frame-late: a resize takes layout effect in frame A but the consumer re-renders in
+        // frame B (the write happens during layout ⇒ MarksStale only), and layout is not re-entered in frame A.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("measured", new Size2(800, 600), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var probe = new MeasuredWidthProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, new MeasureHost(probe));
+            for (int i = 0; i < 5; i++) host.RunFrame();   // mount + seed re-render + settle
+            int r0 = probe.RenderCount; float seen0 = probe.LastSeen;
+            probe.DriveWidth.Value = 108f;                 // resize the bound width
+            host.RunFrame();                               // frame A: bind → scoped relayout → hook writes measured signal (DEFERRED)
+            int rA = probe.RenderCount;
+            host.RunFrame();                               // frame B: consumer re-renders with the new value
+            int rB = probe.RenderCount; float seenB = probe.LastSeen;
+            Check("gate.bounds.measured-one-frame-late: consumer does NOT re-render in the resize frame (no re-entrancy), then exactly next frame",
+                seen0 == 100f && rA == r0 && rB == r0 + 1 && seenB == 108f,
+                $"seen0={seen0} rA-r0={rA - r0}(want 0) rB-r0={rB - r0}(want 1) seenB={seenB}(want 108)");
+        }
+
+        // gate.bounds.measured-quantum: quantum=4 → round(w/4)*4; a +2px change stays in-bucket (suppressed), a +8px crosses.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("quantum", new Size2(800, 600), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var probe = new MeasuredWidthProbe { Quantum = 4f };
+            probe.DriveWidth.Value = 199f;                 // round(199/4)*4 = 200
+            using var host = new AppHost(app, window, device, fonts, strings, new MeasureHost(probe));
+            for (int i = 0; i < 5; i++) host.RunFrame();
+            int q0 = probe.RenderCount; float qseen0 = probe.LastSeen;
+            probe.DriveWidth.Value = 201f;                 // Δ2: round(201/4)*4 = 200 (same bucket) → suppressed
+            host.RunFrame(); host.RunFrame();
+            int qSup = probe.RenderCount;
+            probe.DriveWidth.Value = 209f;                 // Δ8: round(209/4)*4 = 208 → passes
+            host.RunFrame(); host.RunFrame();
+            int qPass = probe.RenderCount; float qseenPass = probe.LastSeen;
+            Check("gate.bounds.measured-quantum: quantum=4 suppresses a 2px change, passes an 8px change",
+                qseen0 == 200f && qSup == q0 && qPass == q0 + 1 && qseenPass == 208f,
+                $"seen0={qseen0}(want 200) supΔ={qSup - q0}(want 0) passΔ={qPass - q0}(want 1) seenPass={qseenPass}(want 208)");
+        }
+
+        // gate.bounds.composes-with-onboundschanged: the element author's own OnBoundsChanged still fires with a
+        // UseMeasuredBounds active on the same node (separate SceneStore slots, both dispatched).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("compose", new Size2(800, 600), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var probe = new ComposeBoundsProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, new MeasureHost(probe));
+            for (int i = 0; i < 5; i++) host.RunFrame();
+            int authorBefore = probe.AuthorFires;   // >= 1 (mount initial delivery)
+            probe.DriveWidth.Value = 140f;
+            host.RunFrame(); host.RunFrame();
+            Check("gate.bounds.composes-with-onboundschanged: element OnBoundsChanged still fires with UseMeasuredBounds on the same node",
+                authorBefore >= 1 && probe.AuthorFires > authorBefore && probe.LastSeenW == 140f,
+                $"authorBefore={authorBefore} authorAfter={probe.AuthorFires} measuredW={probe.LastSeenW}(want 140)");
+        }
+    }
+
     static int Main()
     {
         // FG_PROBE=ranged-tooltip — isolated repro driver for the live "ranged slider hover → tooltip → freeze"
@@ -25077,6 +25251,7 @@ static class Slice
         CollapsedHeroRebakeChecks(strings);
         CollapsedHeroFocusChecks(strings);
         SidebarResizeSimChecks(strings);
+        LayoutBoundaryMeasuredChecks(strings);   // G1c: .Boundary() firewall + RootRelayoutEscapes counter + UseMeasuredBounds/Width
         ShellSidebarScrollChecks(strings);
         HookChecks();
         HookSurfaceChecks();

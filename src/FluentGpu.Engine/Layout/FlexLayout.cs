@@ -145,8 +145,9 @@ public sealed class FlexLayout
     {
         ref RectF b = ref _scene.Bounds(node);
         b = next;
-        var handler = _scene.GetBoundsChangedHandler(node);
-        if (handler is null) return;
+        var handler = _scene.GetBoundsChangedHandler(node);   // element author's Element.OnBoundsChanged
+        var hook = _scene.GetBoundsChangedHook(node);          // hook-owned observers (UseMeasuredBounds/Width) — separate slot
+        if (handler is null && hook is null) return;
         // Edge-trigger against the LAST DELIVERED arranged rect — NOT the live Bounds. Measure pre-writes Bounds to each
         // node's hypothetical size earlier in this pass, so for an unconstrained node (arranged == measured, e.g. the
         // marquee's Shrink=0 text box) a Bounds-vs-next compare is always false and the handler would fire only once via
@@ -160,7 +161,8 @@ public sealed class FlexLayout
         {
             if (pending) _scene.Unmark(node, NodeFlags.BoundsChangedPending);
             delivered = next;
-            handler.Invoke(next);
+            handler?.Invoke(next);
+            hook?.Invoke(next);
         }
     }
 

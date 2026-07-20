@@ -75,6 +75,30 @@ boundary  ⟺  Width and Height are both explicit (not NaN/auto)
 > stops at their boundary. Without a boundary, the up-walk reaches the root and you fall back to a full layout (still
 > correct, just not scoped).
 
+When the box's outer size is **parent-determined** (it fills its region and is never content-sized — a page/content
+host), you don't have an explicit `Width`+`Height` to make it an implicit boundary. Mark it a boundary **explicitly**
+with the `.Boundary()` modifier (`= IsolateLayout + ClipToBounds`; boundary implies clipping):
+
+```csharp
+new BoxEl { Grow = 1f, Children = [ pageContent ] }.Boundary()   // firewall a fills-the-region page host
+```
+
+Use it only where the box truly can't need to resize its own outer box from a descendant (the scoped relayout reuses
+its current bounds); a window resize still triggers a full layout, so resize stays correct.
+
+### Diagnosing a missing boundary — the relayout-escape counter
+
+`FrameStats.RootRelayoutEscapes` (always on, even in Release) counts the dirty nodes each frame whose scoped-relayout
+search walked a deep node (tree-depth > 1) **all the way to the scene root** — i.e. found no boundary and fell back to
+a full-subtree relayout. A steady nonzero value while interacting means a hot subtree is missing a boundary. Run with
+`FG_DIAG=1` (DEBUG builds) to get a throttled per-node message naming the offender:
+
+```
+[layout] relayout escaped to root from node #4218 (type 1, key detail-page) — add a fixed-size ClipToBounds boundary or .Boundary()
+```
+
+The fix is one of the two above: a fixed-size `ClipToBounds` container, or `.Boundary()` on a fills-the-region host.
+
 A self-invalidating **text measure cache** (per node, keyed by text+style+available-width) lets a scoped relayout skip
 re-shaping unchanged text leaves on the real DirectWrite path.
 
@@ -113,7 +137,7 @@ stay clean:
 | A value that changes occasionally and is shown as text/affects layout | `UseState`/`UseSignal` + read it in render (granular re-render) |
 | A long/large list | `Virtual.*` / `Repeater.ItemsRepeater` with a stable `keyOf` (virtualized) |
 | A dynamic list/conditional that *isn't* huge | `Flow.For` / `Flow.Show` (restructure with no parent re-render) |
-| A deep component whose updates shouldn't relayout the page | wrap it in a fixed-size `ClipToBounds` boundary |
+| A deep component whose updates shouldn't relayout the page | wrap it in a fixed-size `ClipToBounds` boundary, or `.Boundary()` a fills-the-region host (watch `FrameStats.RootRelayoutEscapes`) |
 | Motion / enter-exit / hover lift | animation hooks or `BoxEl.Animate` (FLIP), `UseEntrance`/`UseHoverScale` — composited, no re-render |
 | Derived value that's expensive | `UseComputed` (reactive, cached) or `UseMemo(deps)` (dep-array) |
 | Passing data parent→child | a **signal** or **context** — never a constructor arg (frozen at mount) |

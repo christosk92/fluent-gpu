@@ -40,6 +40,7 @@ Read this before debugging. Each row is a real failure mode of the signals-first
 | Element not clickable | `HitTestVisible = false`, zero size, or no handler | Give it size and an `OnClick`/`OnPointerDown`; `HitTestVisible` defaults true. |
 | Text doesn't wrap | `Wrap = NoWrap` (default) or no width constraint to wrap against | `text.Wrapped()` + a bounded width (explicit `Width` or a stretching parent). |
 | Colors look wrong across themes | Hard-coded `ColorF` instead of tokens | Read `Tok.*` (e.g. `Tok.TextPrimary`, `Tok.FillCardDefault`); they follow `Tok.Use(theme)`. |
+| `UseMeasuredBounds`/`UseMeasuredWidth` re-renders every frame (a "measured-bounds feedback loop") | The rendered root's size is **derived from its own measured size** — reading the measured value changes layout, which changes the measured value, forever | Measure an **outer, fixed** node instead of one whose size the render controls, or add a `quantum` to `UseMeasuredWidth` to absorb sub-quantum wobble. The value lands **one frame late** by design (written during layout ⇒ re-render next frame — never same-frame); a same-frame layout-effect sees the *previous* value. `FG_DIAG=1` (DEBUG) warns after >8 consecutive changing frames. |
 
 ## Lifecycle & effects
 

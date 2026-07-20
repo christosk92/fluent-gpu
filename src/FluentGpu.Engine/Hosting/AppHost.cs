@@ -40,6 +40,12 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     public int MeasureCount { get; init; }
     public int ArrangeCount { get; init; }
     public int TextShapeMisses { get; init; }
+    // Relayout-escape diagnostic (ALWAYS-ON, incl. Release): the number of dirty nodes this frame whose scoped-relayout
+    // search (LayoutInvalidator.FindRelayoutRoot) walked a node at depth > 1 ALL the way to the scene root — i.e. found no
+    // layout boundary, forcing a full-subtree relayout from the top. A sustained nonzero value during interaction means a
+    // hot subtree is missing a fixed-size ClipToBounds boundary (or a `.Boundary()`); set FG_DIAG to log the offending node.
+    // 0 on a well-firewalled tree (and on full-layout frames — the counter is a SCOPED-relayout metric).
+    public int RootRelayoutEscapes { get; init; }
     public double Fps { get; init; }
     public double FrameMs { get; init; }
     public int ComponentsRendered { get; init; }
@@ -935,6 +941,7 @@ public sealed class AppHost : IDisposable
         _reconciler.RegisterPendingEffectContext = RegisterPendingEffectContext;
         _layout = new FlexLayout(_scene, fonts);
         _invalidator = new LayoutInvalidator(_scene, _layout);
+        _invalidator.DebugKeyResolver = _reconciler.DebugKeyOf;   // best-effort node→key for the FG_DIAG relayout-escape message (DEBUG-only invocation)
         var scrollProfile = scrollTuning ?? ScrollTuning.WinUiLike;   // WinUI-parity wheel distance + feel (the Win32 app default)
         _dispatcher = new InputDispatcher(_scene) { Tuning = scrollProfile };
         _reconciler.OnSubtreeDeactivated = _dispatcher.DeactivateSubtree;
@@ -1616,6 +1623,7 @@ public sealed class AppHost : IDisposable
             bool layoutNeeded = _needFullLayout || reconciled || _scene.AnyLayoutDirty;
             string layoutPath = "none";
             _layout.ResetFrameDiagCounters();   // frame start for the measure/arrange/text-miss counters read into FrameStats
+            _invalidator.BeginFrame(_timers.NowMs);   // reset the per-frame relayout-escape counter (FrameStats.RootRelayoutEscapes)
             if (layoutNeeded && !_scene.Root.IsNull)
             {
                 if (_needFullLayout || !_everLaidOut)
@@ -1948,6 +1956,7 @@ public sealed class AppHost : IDisposable
                 MeasureCount = _layout.DiagMeasure,
                 ArrangeCount = _layout.DiagArrange,
                 TextShapeMisses = _layout.DiagTextMiss,
+                RootRelayoutEscapes = _invalidator.EscapesThisFrame,
                 Fps = _fps,
                 FrameMs = _frameMs,
                 ComponentsRendered = componentsRendered,

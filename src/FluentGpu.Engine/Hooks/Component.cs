@@ -81,6 +81,12 @@ public abstract class Component
     /// <summary>Fire <paramref name="tick"/> every <paramref name="ms"/> while <paramref name="enabled"/> and the
     /// component is active — auto-pauses while parked/minimized, resumes cleanly. See <see cref="RenderContext.UseInterval"/>.</summary>
     protected void UseInterval(Action tick, float ms, bool enabled = true) => Context.UseInterval(tick, ms, enabled);
+    /// <summary>The arranged LOCAL bounds of this component's rendered root (<see cref="RenderContext.HostNode"/>) as a
+    /// read signal. Written during layout ⇒ consumers re-render NEXT frame. See <see cref="RenderContext.UseMeasuredBounds"/>.</summary>
+    protected IReadSignal<FluentGpu.Foundation.RectF> UseMeasuredBounds() => Context.UseMeasuredBounds();
+    /// <summary>The arranged width of this component's rendered root as a read signal; <paramref name="quantum"/> &gt; 0
+    /// rounds the value to that grid before the write (kills sub-quantum churn). See <see cref="RenderContext.UseMeasuredWidth"/>.</summary>
+    protected IReadSignal<float> UseMeasuredWidth(float quantum = 0f) => Context.UseMeasuredWidth(quantum);
     /// <summary>A persistent per-field async value (Pending|Ready|Failed) — the skeleton-loading spine; flip with SetReady/SetFailed.</summary>
     protected Loadable<T> UseLoadable<T>(Loadable<T>? initial = null) => Context.UseLoadable(initial);
     /// <summary>Kick an async loader once at mount; returns a Loadable&lt;T&gt; (Pending→Ready/Failed via UsePost; cancels on unmount).</summary>

@@ -379,6 +379,18 @@ public sealed class TreeReconciler
         ctx.RegisterPendingEffectContext = RegisterPendingEffectContext;
     }
 
+    /// <summary>DEBUG diagnostic helper (the relayout-escape message): a best-effort human key for a node — the
+    /// KeepAlive slot key or the MorphId a follower FLIPs against, if this node happens to be one. Null otherwise. This is
+    /// NOT a general per-node key store (the reconciler keys transiently during the keyed diff); it just surfaces the
+    /// boundary-worthy anchors (page/keepalive hosts) that a "relayout escaped to root" message most wants to name.</summary>
+    internal string? DebugKeyOf(NodeHandle n)
+    {
+        int idx = (int)n.Raw.Index;
+        if (_keepAliveRootKey.TryGetValue(idx, out var k)) return k;
+        if (_relativeKey.TryGetValue(idx, out var rk)) return rk;
+        return null;
+    }
+
     private Signal<object?>? ResolveContext(NodeHandle anchor, object channel)
     {
         for (var n = anchor.IsNull ? NodeHandle.Null : _scene.Parent(anchor); !n.IsNull; n = _scene.Parent(n))
