@@ -1731,15 +1731,15 @@ sealed class StatePage_ForHost : Component
                         Button.Standard("Reverse", () => Mutate(l => l.Reverse())),
                     ],
                 },
-                Flow.For(() => items.Value.Count, i => Row(items.Value[i]), keyOf: i => items.Value[i])),
+                Flow.For<string>(() => items.Value, s => s, (s, i) => Row(s))),
             description: "Flow.For diffs its rows by key when the list signal changes: adds mount, removes unmount, moves reorder — row state is preserved by key, and the host never re-renders.",
             output: VStack(4, GalleryPage.LiveText(() => $"{items.Value.Count} items"), Caption($"host renders: {_renders}").Tertiary()),
             code: """
             var items = UseSignal(new List<string> { "Alpha", "Beta", "Gamma" });
 
-            Flow.For(() => items.Value.Count,
-                     i => Row(items.Value[i]),
-                     keyOf: i => items.Value[i]);   // keyed: moves preserve row state
+            Flow.For(() => items.Value,     // snapshotted once per change
+                     s => s,                // key: a stable unique per-item id (NOT the index)
+                     (s, i) => Row(s));      // keyed: moves preserve row state
 
             // mutate by writing a NEW list instance:
             var next = new List<string>(items.Peek()); next.Reverse(); items.Value = next;

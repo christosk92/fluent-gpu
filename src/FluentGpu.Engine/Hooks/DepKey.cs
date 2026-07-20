@@ -10,7 +10,7 @@ namespace FluentGpu.Hooks;
 //  DepKey — the canonical pure-scalar, blittable 16-byte hook-dependency key (SPEC-INDEX §2; owner reconciler-hooks).
 //
 //  The single dep shape for the whole hook surface: UseEffect/UseLayoutEffect/UseMemo + the retained-anim hooks
-//  (UseSpring/UseTransition/UseKeyframes/UseDrivenAnimation) + UseAsyncResource compare a stored DepKey by value —
+//  (UseSpring/UseTransition/UseKeyframes/UseDrivenAnimation) + UseResource compare a stored DepKey by value —
 //  no per-render `object[]` box, no value-type boxing. It packs up to four 4-byte scalars (or two longs) by value.
 //  Scalars and short tuples are EXACT; string / >4-scalar / reference keys hash (documented per-member tradeoff).
 //  `default`/`Empty` = a mount-once key (never changes across renders). GC-REF deps do NOT live inline (a

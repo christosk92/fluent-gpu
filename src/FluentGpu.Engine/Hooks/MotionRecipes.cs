@@ -250,7 +250,7 @@ public static class MotionRecipes
     {
         // Reduced-motion is read as a VALUE — never early-return. Motion.ReducedMotion is a mutable global (a drag-resize
         // grip flips it to suppress springs), so an early-return would change THIS hook's slot count mid-life and shift
-        // every later hook in the calling component → an EffectCell↔AsyncResourceCell cast crash. When reduced, the
+        // every later hook in the calling component → an EffectCell↔ResourceCell cast crash. When reduced, the
         // transitions are seeded already at their end state (instant, no visible motion) so the hook order stays invariant.
         bool reduce = Motion.ReducedMotion;
         DepKey dep = key;   // default = seed once at mount

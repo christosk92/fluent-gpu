@@ -51,6 +51,9 @@ namespace FluentGpu.SourceGen.Engine
             var decl = (RecordDeclarationSyntax)ctx.Node;
             if (ctx.SemanticModel.GetDeclaredSymbol(decl, ct) is not INamedTypeSymbol type) return null;
             if (type.IsAbstract) return null;
+            // Generic Element records (e.g. Flow's ForEl<T>) get no DiffProps: a non-generic static Diff class can't name
+            // the open type parameter, and these boundary elements bypass WriteColumns (MountFor/UpdateFor own them).
+            if (type.TypeParameters.Length > 0) return null;
             if (!DerivesFromElement(type)) return null;
             if (type.GetAttributes().Any(a => a.AttributeClass?.ToDisplayString() == OptOutAttr)) return null; // opt-out
 

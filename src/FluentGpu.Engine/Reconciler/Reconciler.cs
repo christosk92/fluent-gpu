@@ -89,6 +89,8 @@ public sealed class TreeReconciler
     private readonly Dictionary<int, ShowEl> _showEl = new();                  // latest ShowEl per boundary node (parent re-renders replace it — see UpdateShow)
     private readonly Dictionary<int, Effect> _showEffect = new();              // the Show boundary effect, rescheduled by UpdateShow
     private readonly Dictionary<int, (Element[] Prev, int Len)> _forState = new();   // last realized children per ForEl node
+    private readonly Dictionary<int, ForElBase> _forEl = new();                       // latest ForElBase per boundary node (parent re-renders replace it — see UpdateFor)
+    private readonly Dictionary<int, Effect> _forEffect = new();                      // the For boundary effect, rescheduled by UpdateFor
     private readonly Dictionary<int, float> _childStagger = new();                   // node → per-child Enter stagger (ms): a parent's Element.Stagger, read by SynthesizeDeclarative
     private readonly Dictionary<string, NodeHandle> _keyNode = new();                 // MorphId → node: the shared-layout anchor a RelativeTo follower FLIPs against
     private readonly Dictionary<int, string> _morphKeyByNode = new();                 // node → MorphId; gates shared-element teardown to actual participants
@@ -409,7 +411,7 @@ public sealed class TreeReconciler
         if (el is ScrollEl se) { MountScroll(node, se); return; }
         if (el is VirtualListEl ve) { MountVirtual(node, ve); return; }
         if (el is ShowEl sh) { MountShow(node, sh); return; }
-        if (el is ForEl fe) { MountFor(node, fe); return; }
+        if (el is ForElBase fe) { MountFor(node, fe); return; }
         if (el is KeepAliveEl ka) { MountKeepAlive(node, ka); return; }
         if (el is SkelRegionEl skr) { MountSkeletonRegion(node, skr); return; }
 
@@ -504,9 +506,13 @@ public sealed class TreeReconciler
             return;
         }
 
-        if (newEl is ForEl nfe)
+        if (newEl is ForElBase nfe)
         {
-            return;   // autonomous reactive list boundary
+            // Parent re-renders replace the stored ForElBase and reschedule the boundary effect (mirrors UpdateShow),
+            // so the fresh Items/KeyOf/Row closures take hold instead of freezing at first mount (the Show-parity fix —
+            // ForEl.Update used to be a no-op, which froze rows built from parent render state).
+            UpdateFor(node, nfe);
+            return;
         }
 
         if (newEl is KeepAliveEl)
@@ -855,32 +861,36 @@ public sealed class TreeReconciler
         MirrorParticipation(node, _scene.FirstChild(node));
     }
 
-    private void MountFor(NodeHandle node, ForEl fe)
+    private void MountFor(NodeHandle node, ForElBase fe)
     {
+        // The boundary node is a layout-transparent container; the effect reads the LATEST stored ForElBase (not its
+        // mount-time capture), so a parent re-render can re-point the closures (UpdateFor) — exactly like MountShow.
+        int mountIdx = (int)node.Raw.Index;
+        _forEl[mountIdx] = fe;
         var eff = new Effect(Runtime, () =>
         {
             if (!_scene.IsLive(node)) return;
-            int n = fe.Count();
-            // Rent the realized-children buffer from the pool (mirrors RealizeBoundWindow) instead of a fresh new Element[n]
-            // each render — drops the per-render array off the nav-churn Gen0 (finding #6).
-            var cur = n == 0 ? Array.Empty<Element>() : ArrayPool<Element>.Shared.Rent(n);
-            for (int i = 0; i < n; i++)
-            {
-                var el = fe.ItemAt(i);
-                // Skip the `el with { Key }` record clone (a heap alloc — Element is a record class) in the common keyless
-                // case: a null key positionally-diffs identically to the old positional fallback key "#i". A KeyOf supplies
-                // the real key; a user-set key under a keyless For keeps the old positional-override semantics ("#i").
-                cur[i] = fe.KeyOf is { } keyOf ? el with { Key = keyOf(i) }
-                       : el.Key is null ? el
-                       : el with { Key = "#" + i };
-            }
             int idx = (int)node.Raw.Index;
+            if (!_forEl.TryGetValue(idx, out var cur)) return;
+            // Fill reads the items source ONCE (tracked ⇒ subscribes this effect) and fills a pooled buffer it rents via
+            // Grow (mirrors RealizeBoundWindow) — no fresh new Element[n] each run, so the nav-churn Gen0 stays flat.
+            Element[] buf = Array.Empty<Element>();
+            int n = cur.Fill(ref buf);
             var prev = _forState.TryGetValue(idx, out var p) ? p : (Array.Empty<Element>(), 0);
-            ReconcileChildren(node, cur.AsSpan(0, n), prev.Item1.AsSpan(0, prev.Item2));
+            ReconcileChildren(node, buf.AsSpan(0, n), prev.Item1.AsSpan(0, prev.Item2));
             if (prev.Item1.Length > 0) { Array.Clear(prev.Item1, 0, prev.Item2); ArrayPool<Element>.Shared.Return(prev.Item1); }
-            _forState[idx] = (cur, n);
-        }, owner: null, runNow: true);
+            _forState[idx] = (buf, n);
+        }, owner: null, runNow: false);
+        _forEffect[mountIdx] = eff;
         AddBinding(node, eff);
+        eff.RunNow();
+    }
+
+    private void UpdateFor(NodeHandle node, ForElBase next)
+    {
+        int idx = (int)node.Raw.Index;
+        _forEl[idx] = next;
+        if (_forEffect.TryGetValue(idx, out var eff)) eff.Schedule();
     }
 
     // ── Fine-grained bindings (signal → scene node, no re-render) ────────────────────────────────
@@ -2138,6 +2148,8 @@ public sealed class TreeReconciler
         _showState.Remove(idx);
         _showEl.Remove(idx);
         _showEffect.Remove(idx);
+        _forEl.Remove(idx);
+        _forEffect.Remove(idx);
         if (_forState.Remove(idx, out var fs) && fs.Prev.Length > 0)   // return the pooled For buffer (finding #6)
         {
             Array.Clear(fs.Prev, 0, fs.Len);

@@ -148,7 +148,7 @@ Run it (host wiring): see **[getting-started.md](./getting-started.md)**.
    per-node self-blur + the expressive curve/token vocabulary. An opt-in app-author palette (controls keep Fluent curves).
 9. **[skeleton-loading.md](./skeleton-loading.md)** — native **skeleton/shimmer-while-loading**: ONE UI source, the
    framework derives the shimmer from it, keeps partial-known parts real, shimmers the pending region, and blur-reveal
-   swaps to real on load. `Loadable<T>` + `Skel.Region` + `UseAsyncResource`; incremental per-field, onFailed, groups.
+   swaps to real on load. `Loadable<T>` + `Skel.Region` + `UseResource` (SWR); incremental per-field, onFailed, groups.
 10. **[professional-media-lab.md](./professional-media-lab.md)** — the public DASH/HLS/PlayReady fixture catalog,
     behavior-coverage matrix, live diagnostics and on-device media verification pass.
 

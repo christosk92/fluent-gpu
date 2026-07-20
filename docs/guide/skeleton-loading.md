@@ -25,24 +25,26 @@ public sealed class Loadable<T> {
 ```
 
 Get one from a hook:
-- `UseAsyncResource(loader, seed)` — kicks `loader(CancellationToken)` once at mount, marshals the result to the UI
-  thread (via `UsePost`), and **cancels on unmount** (back-nav mid-load). Returns a `Loadable<T>` (starts Pending).
+- `UseResource(loader, seed)` — kicks `loader(CancellationToken)` at mount, marshals the result to the UI thread (via
+  `UsePost`), reloads on a `deps` change, and **cancels on unmount** (back-nav mid-load). Returns a `Resource<T>`; bind
+  its `.Loadable` (the Pending/Ready/Failed spine) here. Also exposes `IsFetching`/`IsStale`/`Refresh()`/`Mutate()` —
+  see [reactivity.md](reactivity.md#4-async-data--useresource-stale-while-revalidate).
 - `UseLoadable(initial)` — a persistent loadable you drive yourself (`SetReady`/`SetFailed`).
 
 ## The boundary — `Skel.Region`
 
 ```csharp
-var tracks = UseAsyncResource(LoadTracks, seed: Array.Empty<Track>());   // Loadable<Track[]>
+var tracks = UseResource(LoadTracks, seed: Array.Empty<Track>());        // Resource<Track[]>
 
 return new BoxEl { Direction = 1, Gap = 16f, Children = [
     Header(Seed.Cover, Seed.Title),                          // REAL on frame 1 — known on click, NOT in a region
 
-    Skel.Region(tracks,
+    Skel.Region(tracks.Loadable,                             // the Loadable spine drives the shimmer/reveal
         rowTemplate: AlbumRow,                               // Track? -> Element : your ONE row shape
         count: Seed.TrackCount,                              // placeholder rows before data lands
         reveal: SkelReveal.StaggerRows,
         onFailed: () => ErrorCard("Couldn't load — Retry"),
-        content: ts => Flow.For(() => ts.Length, i => AlbumRow(ts[i]), keyOf: i => ts[i].Id)),
+        content: ts => Flow.For(() => ts, t => t.Id, (t, i) => AlbumRow(t))),
 ]};
 ```
 

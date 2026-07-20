@@ -11,7 +11,7 @@ public enum LoadState : byte { Pending, Ready, Failed }
 /// signals-first granularity (a flip re-fires only the boundaries that read THIS loadable's State). A reference type
 /// (NOT a struct): <see cref="SetFailed"/> mutates <see cref="Error"/>, and an incremental field is stored ON a model
 /// record (<c>Track.Duration : Loadable&lt;string&gt;</c>) then mutated later — both need reference semantics so every
-/// holder sees the same cells. Two <see cref="Signal{T}"/>s allocated once (in <c>UseLoadable</c>/<c>UseAsyncResource</c>).
+/// holder sees the same cells. Two <see cref="Signal{T}"/>s allocated once (in <c>UseLoadable</c>/<c>UseResource</c>).
 /// </summary>
 public sealed class Loadable<T>
 {

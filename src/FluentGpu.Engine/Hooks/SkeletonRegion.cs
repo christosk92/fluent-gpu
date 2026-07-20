@@ -101,7 +101,7 @@ public static class Skel
 
     /// <summary>The single-subtree skeleton — pass ONLY your real <paramref name="content"/>, nothing about skeletons:
     /// the engine renders <c>content(seed)</c> (your SAME content rendered against the loadable's own pending seed value —
-    /// the placeholder you gave <c>UseAsyncResource</c>) and DERIVES the shimmer from it, then fills in the real data on
+    /// the placeholder you gave <c>UseResource</c>) and DERIVES the shimmer from it, then fills in the real data on
     /// load. There is no second tree and no shimmer arg. The author's ONLY responsibility is that the resource's seed
     /// renders a representative shape (e.g. an empty artist whose page still lays out hero + tracks via a fake-data
     /// fallback; a home/search seed with a few blank items) — a DATA concern declared at the resource, not skeleton code.

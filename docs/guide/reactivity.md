@@ -84,15 +84,53 @@ sealed class Counter : Component
 their own children via the keyed reconciler — the enclosing component does **not** re-render.
 
 ```csharp
-var items = UseSignal(new List<Track>());
+var items = UseSignal<IReadOnlyList<Track>>(new List<Track>());
 var open  = UseSignal(false);
 
 VStack(gap: 4,
-    Flow.For(() => items.Value.Count,
-             i => Row(items.Value[i]),
-             keyOf: i => items.Value[i].Id),               // add/move/remove rows, state preserved by key
+    Flow.For(items,                                        // the collection signal (or a Func<IReadOnlyList<T>>)
+             t => t.Id,                                    // key: a stable, unique per-item id — REQUIRED, never the index
+             (t, i) => Row(t)),                            // add/move/remove rows, state preserved by key
     Flow.Show(() => open.Value, detailsPanel, fallback));  // mount/unmount the branch
 ```
+
+`Flow.For<T>` is **typed and mandatory-keyed**. It snapshots the items source **once** per structural change (no
+per-row re-read of the signal), diffs the rows by `key`, and preserves each row's node — and therefore its component
+state — across insert/move/remove. The `key` must be a stable, unique per-item id: **never the index** (a reorder would
+otherwise reassign state to the wrong row). A duplicate key trips a DEBUG tripwire. Overloads accept a
+`Func<IReadOnlyList<T>>` or the collection signal directly, and a `(item)` or `(item, index)` row builder. A parent
+re-render that rebuilds the `Flow.For` re-points the row closures in place (they never freeze at first mount).
+
+### 4. Async data — `UseResource` (stale-while-revalidate)
+`UseResource` kicks an async `loader` at mount, reloads when its `DepKey deps` change, and returns a `Resource<T>` — a
+`Loadable<T>` spine (bind it straight into `Skel.Region`) plus fetch state and imperative controls. Every load is
+**epoch-stamped**, so an older/slower fetch can never overwrite a newer one; the in-flight load and any stale timer are
+cancelled on unmount.
+
+```csharp
+var album = UseResource(ct => svc.GetAlbumAsync(id, ct),
+                        seed: Album.Empty,
+                        deps: id,                                    // id changes ⇒ reload (component reused, no remount)
+                        options: new ResourceOptions { StaleTimeMs = 30_000 });
+
+Skel.Region(album.Loadable, AlbumRow, count: 8,                      // shimmer while Pending, reveal on Ready
+    content: ts => Flow.For(() => ts.Tracks, t => t.Id, (t, i) => AlbumRow(t)));
+
+// from an event: album.Refresh();  or  album.Mutate(optimisticValue);
+```
+
+| Member | Behaviour |
+|---|---|
+| `Loadable` | Pending/Ready/Failed value spine — bind into `Skel.Region` / a leaf `.Bind()` |
+| `IsFetching` | `IReadSignal<bool>` — true while any load (initial / deps / refresh / mutate-revalidate) is in flight |
+| `IsStale` | `IReadSignal<bool>` — flips true once the data is older than `StaleTimeMs` (immediately when 0, the default) |
+| `LastError` | the last failure (kept even when a refresh failure leaves the prior `Ready` value visible) |
+| `Refresh()` | re-run the loader, **keeping the current `Ready` value visible while it loads**; a refresh failure keeps the old value + sets `LastError` |
+| `Mutate(v, refresh = true)` | write `v` as `Ready` **immediately** (optimistic), cancel any in-flight load, then revalidate |
+
+`ResourceOptions`: `StaleTimeMs` (0 = stale on Ready; the `IsStale` flip is driven by the host frame-clock timer queue,
+not a poller) and `KeepPreviousData` (a deps change keeps showing the previous `Ready` value while the new identity
+loads, instead of resetting to `Pending(seed)`).
 
 ## The hooks (state side)
 

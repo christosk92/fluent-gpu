@@ -89,12 +89,11 @@ public abstract class Component
     protected IReadSignal<float> UseMeasuredWidth(float quantum = 0f) => Context.UseMeasuredWidth(quantum);
     /// <summary>A persistent per-field async value (Pending|Ready|Failed) — the skeleton-loading spine; flip with SetReady/SetFailed.</summary>
     protected Loadable<T> UseLoadable<T>(Loadable<T>? initial = null) => Context.UseLoadable(initial);
-    /// <summary>Kick an async loader once at mount; returns a Loadable&lt;T&gt; (Pending→Ready/Failed via UsePost; cancels on unmount).</summary>
-    protected Loadable<T> UseAsyncResource<T>(Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<T>> loader, T seed = default!) => Context.UseAsyncResource(loader, seed);
-    /// <summary>As <see cref="UseAsyncResource{T}(Func{System.Threading.CancellationToken, System.Threading.Tasks.Task{T}}, T)"/>
-    /// but RELOADS when <paramref name="deps"/> change — a resource keyed on a reactive input (e.g. a page reused across
-    /// navigation whose id changes): the prior run cancels, the loadable resets to Pending(seed), and the loader restarts.</summary>
-    protected Loadable<T> UseAsyncResource<T>(Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<T>> loader, T seed, DepKey deps) => Context.UseAsyncResource(loader, seed, deps);
+    /// <summary>A stale-while-revalidate async resource: kicks the loader at mount, RELOADS when <paramref name="deps"/>
+    /// change (value-equality — a page reused across navigation whose id changes), and returns a <see cref="Resource{T}"/>
+    /// with a Loadable spine + IsFetching/IsStale + Refresh()/Mutate(). Every load is epoch-stamped (an older slower fetch
+    /// can never overwrite a newer one); the in-flight load + stale timer cancel on unmount. See <see cref="RenderContext.UseResource"/>.</summary>
+    protected Resource<T> UseResource<T>(Func<System.Threading.CancellationToken, System.Threading.Tasks.Task<T>> loader, T seed = default!, DepKey deps = default, ResourceOptions? options = null) => Context.UseResource(loader, seed, deps, options);
     /// <summary>A fire-on-demand async command with a reactive IsRunning state (spinner/disable + re-entry guard + cancel).</summary>
     protected AsyncCommand UseAsyncCommand(bool cancelOnUnmount = false) => Context.UseAsyncCommand(cancelOnUnmount);
     /// <summary>A KEYED set of fire-on-demand async commands (per-item busy state, e.g. per-row play/like).</summary>

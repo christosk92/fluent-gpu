@@ -128,16 +128,182 @@ internal sealed class LoadableCell<T> : HookCell
     public Loadable<T> Loadable = null!;
 }
 
-/// <summary>Backs <see cref="RenderContext.UseAsyncResource{T}"/>: the loadable + the fetch's CancellationTokenSource,
-/// cancelled on component unmount (IDisposableCell ⇒ RunAllCleanups disposes it) so a back-nav mid-load aborts cleanly.</summary>
-internal sealed class AsyncResourceCell<T> : HookCell, IDisposableCell
+/// <summary>Tuning for <see cref="RenderContext.UseResource{T}"/>. <see cref="StaleTimeMs"/> = how long a freshly-loaded
+/// value is considered fresh (0 = stale immediately on Ready); <see cref="KeepPreviousData"/> = on a deps change, keep
+/// showing the previous <c>Ready</c> value while the new identity loads (instead of resetting to <c>Pending(seed)</c>).</summary>
+public sealed record ResourceOptions
+{
+    public float StaleTimeMs { get; init; }
+    public bool KeepPreviousData { get; init; }
+    public static ResourceOptions Default { get; } = new();
+}
+
+internal interface IResourceControl<T>
+{
+    Loadable<T> Loadable { get; }
+    IReadSignal<bool> IsFetching { get; }
+    IReadSignal<bool> IsStale { get; }
+    Exception? LastError { get; }
+    void Refresh();
+    void Mutate(T optimistic, bool refresh);
+}
+
+/// <summary>
+/// A stale-while-revalidate async resource (returned by <see cref="RenderContext.UseResource{T}"/>). The
+/// <see cref="Loadable"/> is the Pending/Ready/Failed spine (unchanged — <c>Skel.Region</c> consumers bind it directly);
+/// <see cref="IsFetching"/> is any load in flight; <see cref="IsStale"/> flips once the data is older than the configured
+/// stale time; <see cref="Refresh"/> revalidates keeping the current data visible; <see cref="Mutate"/> writes an
+/// optimistic value immediately and (by default) revalidates. Every load is epoch-stamped, so an older/slower fetch can
+/// never overwrite a newer one.
+/// </summary>
+public readonly struct Resource<T>
+{
+    private readonly IResourceControl<T>? _c;
+    internal Resource(IResourceControl<T> c) => _c = c;
+
+    /// <summary>The Pending/Ready/Failed value spine — bind straight into <c>Skel.Region</c> / a leaf's <c>.Bind()</c>.</summary>
+    public Loadable<T> Loadable => _c!.Loadable;
+    /// <summary>True while any load (initial / deps-change / refresh / mutate-revalidate) is in flight.</summary>
+    public IReadSignal<bool> IsFetching => _c!.IsFetching;
+    /// <summary>True once the current data is older than <see cref="ResourceOptions.StaleTimeMs"/> (immediately when 0).</summary>
+    public IReadSignal<bool> IsStale => _c!.IsStale;
+    /// <summary>The last load failure (kept even when a refresh failure leaves the prior <c>Ready</c> value visible); null on success.</summary>
+    public Exception? LastError => _c?.LastError;
+    /// <summary>Re-run the loader keeping the current <c>Ready</c> value visible while it loads (stale-while-revalidate);
+    /// a refresh failure keeps the old value + sets <see cref="LastError"/>.</summary>
+    public void Refresh() => _c?.Refresh();
+    /// <summary>Write <paramref name="optimistic"/> as <c>Ready</c> immediately, then (when <paramref name="refresh"/>)
+    /// revalidate. Cancels any in-flight load first so a stale completion can't clobber the optimistic value.</summary>
+    public void Mutate(T optimistic, bool refresh = true) => _c?.Mutate(optimistic, refresh);
+}
+
+/// <summary>Backs <see cref="RenderContext.UseResource{T}"/> — the SWR resource controller: the loadable spine + fetch
+/// state signals + the epoch-stamped load pipeline. Cancelled + epoch-bumped on unmount (IDisposableCell ⇒ RunAllCleanups)
+/// so a back-nav mid-load aborts and any late completion is dropped.</summary>
+internal sealed class ResourceCell<T> : HookCell, IDisposableCell, IResourceControl<T>
 {
     public Loadable<T> Loadable = null!;
+    public readonly Signal<bool> IsFetchingSig = new(true);   // the initial mount load is in flight from construction
+    public readonly Signal<bool> IsStaleSig = new(false);
     public CancellationTokenSource Cts = null!;
-    public bool Started;
-    public DepKey Deps;      // the dep-keyed overload's reload gate (unused by the once-at-mount overload)
-    public bool HasDeps;     // false for the once-at-mount overload; true when the dep-keyed overload seeded Deps
-    public void DisposeCell() { try { Cts.Cancel(); } catch { /* already disposed */ } Cts.Dispose(); }
+    public long Epoch;          // monotonic; a completion whose epoch != Epoch is DROPPED (older slower fetch can't win)
+    public long StaleGen;       // generation guard for the stale timer (a re-arm / cancel bumps it)
+    public DepKey Deps;
+    public bool HasDeps;
+    public ResourceOptions Options = ResourceOptions.Default;
+    public T Seed = default!;
+    public Func<CancellationToken, Task<T>> Loader = null!;   // latest closure, re-pointed each render
+    public Action<Action> Post = null!;                       // UI-thread marshal for completions
+    public FluentGpu.Hosting.HostTimerQueue? Queue;           // drives the stale-time flip (UI cadence; NOT the media clock)
+    public Exception? LastError { get; private set; }
+    private readonly Action<long> _staleFire;
+
+    public ResourceCell() => _staleFire = OnStaleFire;
+
+    Loadable<T> IResourceControl<T>.Loadable => Loadable;
+    IReadSignal<bool> IResourceControl<T>.IsFetching => IsFetchingSig;
+    IReadSignal<bool> IResourceControl<T>.IsStale => IsStaleSig;
+
+    private void OnStaleFire(long g) { if (g == StaleGen) IsStaleSig.Value = true; }
+
+    // Arm the stale-time countdown from a fresh Ready. staleTime<=0 ⇒ stale immediately; else a one-shot on the queue.
+    private void ArmStale()
+    {
+        StaleGen++;
+        IsStaleSig.Value = false;
+        if (Options.StaleTimeMs <= 0f) { IsStaleSig.Value = true; return; }
+        Queue?.Schedule(Queue.NowMs + Options.StaleTimeMs, StaleGen, _staleFire);
+    }
+
+    // Bump the epoch + swap the CTS (cancels any in-flight load). Returns the new epoch the completion must match.
+    private long Advance()
+    {
+        try { Cts?.Cancel(); } catch { /* already disposed */ }
+        Cts?.Dispose();
+        Cts = new CancellationTokenSource();
+        return ++Epoch;
+    }
+
+    // Fire the loader on a captured epoch/token. The result is ALWAYS posted; Settle's epoch guard is the sole authority
+    // for whether it lands (so a completion enqueued before a supersession is dropped when it drains late).
+    private void Launch(long epoch)
+    {
+        IsFetchingSig.Value = true;
+        var token = Cts.Token;
+        var loader = Loader;
+        var post = Post;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                token.ThrowIfCancellationRequested();
+                T v = await loader(token).ConfigureAwait(false);
+                post(() => Settle(epoch, v, null));
+            }
+            catch (OperationCanceledException) { /* cancelled — a fresher load owns the epoch */ }
+            catch (Exception ex) { post(() => Settle(epoch, default!, ex)); }
+        });
+    }
+
+    // A completion lands on the UI thread. EPOCH ORDERING (the non-negotiable): a completion whose epoch is not current
+    // is dropped, so an older/slower fetch never overwrites a newer one.
+    private void Settle(long epoch, T value, Exception? error)
+    {
+        if (epoch != Epoch) return;
+        IsFetchingSig.Value = false;
+        if (error is null)
+        {
+            LastError = null;
+            Loadable.SetReady(value);
+            ArmStale();
+        }
+        else
+        {
+            LastError = error;
+            // A refresh/revalidation failure keeps the prior Ready value (stale-while-revalidate); only surface Failed
+            // when there is no prior data to keep.
+            if (!Loadable.IsReady) Loadable.SetFailed(error);
+        }
+    }
+
+    /// <summary>Initial / deps-change load. <paramref name="keepPrevious"/> keeps a prior <c>Ready</c> value visible
+    /// (KeepPreviousData); otherwise resets to <c>Pending(seed)</c>.</summary>
+    public void Reload(bool keepPrevious)
+    {
+        long epoch = Advance();
+        StaleGen++;
+        IsStaleSig.Value = false;
+        if (!keepPrevious || !Loadable.IsReady) Loadable.SetPending(Seed);
+        Launch(epoch);
+    }
+
+    public void Refresh()
+    {
+        long epoch = Advance();
+        StaleGen++;
+        IsStaleSig.Value = false;
+        // Keep Ready(old) visible while revalidating — do NOT reset to Pending.
+        Launch(epoch);
+    }
+
+    public void Mutate(T optimistic, bool refresh)
+    {
+        long epoch = Advance();          // (1) cancel in-flight so a stale completion can't clobber the optimistic value
+        StaleGen++;
+        IsStaleSig.Value = false;
+        LastError = null;
+        Loadable.SetReady(optimistic);   // (2) optimistic write, visible immediately
+        if (refresh) Launch(epoch);      // (3) revalidate on this epoch (keeps Ready(optimistic) visible until it lands)
+        else { IsFetchingSig.Value = false; ArmStale(); }
+    }
+
+    public void DisposeCell()
+    {
+        Epoch++;        // any in-flight completion posted after here is epoch-dropped by Settle
+        StaleGen++;     // drop any pending stale timer
+        try { Cts?.Cancel(); } catch { /* already disposed */ }
+        Cts?.Dispose();
+    }
 }
 
 /// <summary>Backs <see cref="RenderContext.UseVideoSurface"/>: the acquired video-surface token, released (tearing down
@@ -727,7 +893,7 @@ public sealed partial class RenderContext
     // ── Skeleton-loading: the async-value spine + the resource lifecycle ─────────────────────────────────────────────
 
     /// <summary>A persistent per-field async value (Pending|Ready|Failed + value) — the skeleton-loading spine. Survives
-    /// re-renders; flip it with <c>SetReady</c>/<c>SetFailed</c> (typically from <see cref="UseAsyncResource"/> or an
+    /// re-renders; flip it with <c>SetReady</c>/<c>SetFailed</c> (typically from <see cref="UseResource"/> or an
     /// off-thread <see cref="UsePost"/>). Use this for a field whose load you drive yourself (or a partial-known seed).</summary>
     public Loadable<T> UseLoadable<T>(Loadable<T>? initial = null)
     {
@@ -738,85 +904,44 @@ public sealed partial class RenderContext
         return cell.Loadable;
     }
 
-    /// <summary>Kick an async <paramref name="loader"/> ONCE at mount and return its <see cref="Loadable{T}"/> (starts
-    /// Pending). Completion is marshalled to the UI thread via <see cref="UsePost"/> so <c>SetReady</c>/<c>SetFailed</c>
-    /// land in the batched flush; the <see cref="CancellationToken"/> is cancelled on unmount (the back-nav-mid-load
-    /// case — the cell is <see cref="IDisposableCell"/>) and a late post is dropped by the cancelled-token guard.
-    /// Modeled on the <see cref="UseImage"/> lifecycle. <paramref name="seed"/> is the placeholder value while pending
-    /// (e.g. an empty array so the region's content lambda is never invoked against null).</summary>
-    public Loadable<T> UseAsyncResource<T>(Func<CancellationToken, Task<T>> loader, T seed = default!)
+    /// <summary>A stale-while-revalidate async resource. Kicks <paramref name="loader"/> at mount (Pending→Ready/Failed
+    /// via <see cref="UsePost"/>), RE-FIRES when <paramref name="deps"/> change (value-equality — a detail page whose id
+    /// changes while its component instance is REUSED across navigation), and hands back a <see cref="Resource{T}"/> whose
+    /// <see cref="Resource{T}.Refresh"/>/<see cref="Resource{T}.Mutate"/> drive revalidation. Every load is EPOCH-stamped,
+    /// so an older/slower fetch can never overwrite a newer one; the in-flight load + any stale timer are cancelled on
+    /// unmount. <paramref name="seed"/> is the placeholder while Pending; <paramref name="options"/> tunes stale time and
+    /// keep-previous-data (default: <c>StaleTimeMs=0</c> ⇒ stale on Ready; deps change ⇒ reset to <c>Pending(seed)</c>).</summary>
+    public Resource<T> UseResource<T>(Func<CancellationToken, Task<T>> loader, T seed = default!, DepKey deps = default, ResourceOptions? options = null)
     {
         var post = UsePost();   // UsePost consumes no hook cursor, so calling it here does not shift hook order
-        AsyncResourceCell<T> cell;
+        ResourceCell<T> cell;
         if (!_mounted)
         {
-            cell = new AsyncResourceCell<T> { Loadable = Loadable<T>.Pending(seed), Cts = new CancellationTokenSource() };
-            AddCell(cell, cleanupCapable: true);
-        }
-        else cell = (AsyncResourceCell<T>)_cells[_cursor];
-        _cursor++;
-
-        if (!cell.Started) { cell.Started = true; BeginAsyncLoad(cell, loader, post); }
-        return cell.Loadable;
-    }
-
-    /// <summary>As <see cref="UseAsyncResource{T}(Func{CancellationToken, Task{T}}, T)"/> but RE-FIRES when
-    /// <paramref name="deps"/> change (value-equality, like <see cref="UseMemo"/>): the in-flight run is cancelled, the
-    /// loadable resets to <c>Pending(seed)</c>, and the loader restarts. Use for a resource keyed on a reactive input —
-    /// e.g. a detail page whose album id changes while the component instance is REUSED across navigation, so the data
-    /// follows the id with no remount. Re-evaluate <paramref name="seed"/> per render (so the reset shows the NEW key's
-    /// placeholder/preview, not the prior one's) and pass a loader that closes over the current key.</summary>
-    public Loadable<T> UseAsyncResource<T>(Func<CancellationToken, Task<T>> loader, T seed, DepKey deps)
-    {
-        var post = UsePost();
-        AsyncResourceCell<T> cell;
-        if (!_mounted)
-        {
-            cell = new AsyncResourceCell<T> { Loadable = Loadable<T>.Pending(seed), Cts = new CancellationTokenSource(), Deps = deps, HasDeps = true };
+            cell = new ResourceCell<T>
+            {
+                Loadable = Loadable<T>.Pending(seed),
+                Cts = new CancellationTokenSource(),
+                Deps = deps, HasDeps = true,
+                Options = options ?? ResourceOptions.Default,
+                Seed = seed, Loader = loader, Post = post, Queue = ResolveTimers(),
+            };
             AddCell(cell, cleanupCapable: true);
             _cursor++;
-            BeginAsyncLoad(cell, loader, post);
-            return cell.Loadable;
+            cell.Reload(keepPrevious: false);   // initial load (Loadable already Pending(seed) ⇒ no signal write during render)
+            return new Resource<T>(cell);
         }
-        cell = (AsyncResourceCell<T>)_cells[_cursor];
+        DebugGuardCursor();
+        cell = (ResourceCell<T>)_cells[_cursor];
         _cursor++;
-        if (!cell.HasDeps || cell.Deps != deps)
+        cell.Loader = loader;                    // re-point the latest closure (fresh lambdas don't restart the load)
+        cell.Seed = seed;
+        if (options is not null) cell.Options = options;
+        if (cell.Deps != deps)
         {
-            cell.Deps = deps; cell.HasDeps = true;
-            try { cell.Cts.Cancel(); } catch { /* already disposed */ }
-            cell.Cts.Dispose();
-            cell.Cts = new CancellationTokenSource();
-            cell.Loadable.SetPending(seed);   // new key → its own preview/skeleton while the fresh load runs (no stale flash)
-            BeginAsyncLoad(cell, loader, post);
+            cell.Deps = deps;
+            cell.Reload(keepPrevious: cell.Options.KeepPreviousData);   // deps change → reload (keep-prev shows old data meanwhile)
         }
-        return cell.Loadable;
-    }
-
-    // The loader kickoff shared by both UseAsyncResource overloads. Fires loader on cell.Cts's CURRENT token (pulled
-    // here, AFTER any restart swapped cell.Cts, so it tracks THIS run) and marshals the result to the UI thread via post,
-    // cancelled-token-guarded both before and inside the post so an unmount / re-key mid-load drops the late completion.
-    private static void BeginAsyncLoad<T>(AsyncResourceCell<T> cell, Func<CancellationToken, Task<T>> loader, Action<Action> post)
-    {
-        var loadable = cell.Loadable;
-        var token = cell.Cts.Token;
-        _ = Task.Run(Run);
-
-        async Task Run()
-        {
-            try
-            {
-                token.ThrowIfCancellationRequested();
-                T v = await loader(token).ConfigureAwait(false);
-                if (!token.IsCancellationRequested)
-                    post(() => { if (!token.IsCancellationRequested) loadable.SetReady(v); });
-            }
-            catch (OperationCanceledException) { /* unmounted / re-keyed mid-load — the CTS was cancelled */ }
-            catch (Exception ex)
-            {
-                if (!token.IsCancellationRequested)
-                    post(() => { if (!token.IsCancellationRequested) loadable.SetFailed(ex); });
-            }
-        }
+        return new Resource<T>(cell);
     }
 
     /// <summary>A persistent fire-on-demand <see cref="AsyncCommand"/> — run an async action from an event (a button

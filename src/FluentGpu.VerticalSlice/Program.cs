@@ -1925,7 +1925,7 @@ sealed class FlowProbe : Component
             Direction = 1,
             Children =
             [
-                Flow.For(() => count.Value, i => new BoxEl { Key = "r" + i, Width = 40, Height = 12, Children = [Text("row" + i)] }),
+                new IndexForEl(() => count.Value, i => new BoxEl { Width = 40, Height = 12, Children = [Text("row" + i)] }, i => "r" + i),
                 Flow.Show(() => show.Value, new BoxEl { Width = 40, Height = 12, Children = [Text("SHOWN")] }, new BoxEl { Width = 40, Height = 12, Children = [Text("HIDDEN")] }),
             ],
         };
@@ -1946,9 +1946,8 @@ sealed class FlowReorderProbe : Component
             Direction = 1,
             Children =
             [
-                Flow.For(() => items.Value.Count,
-                    i => new BoxEl { Width = 40, Height = 12, Children = [Text(items.Value[i])] },
-                    keyOf: i => items.Value[i]),
+                Flow.For<string>(() => items.Value, s => s,
+                    (s, i) => new BoxEl { Width = 40, Height = 12, Children = [Text(s)] }),
             ],
         };
     }
@@ -1977,6 +1976,100 @@ sealed class FlowShowRefreshProbe : Component
                 Flow.Show(() => show.Value, new BoxEl { Width = 40, Height = 12, Children = [Text(text)] }),
             ],
         };
+    }
+}
+
+// ── Flow.For<T> probes (gate.for.*) — typed, mandatory-key reactive lists ──────────────────────────────────────────
+// A keyed list over a collection signal (signal-direct overload). Row identity must survive insert/remove/reorder by key.
+sealed class ForKeyedDiffProbe : Component
+{
+    public readonly Signal<IReadOnlyList<string>> Items = new(new[] { "a", "b", "c" });
+    public override Element Render() => new BoxEl
+    {
+        Direction = 1,
+        Children = [Flow.For<string>(Items, s => s, (s, i) => new BoxEl { Width = 30, Height = 10, Children = [Text(s)] })],
+    };
+}
+
+// Instrumented items thunk: the boundary run must read the source EXACTLY ONCE per structural change (not N+1 like the
+// old Count()+ItemAt(i) shape that re-read the signal per row).
+sealed class ForSnapshotProbe : Component
+{
+    public int ItemsReads;
+    public readonly Signal<IReadOnlyList<int>> Items = new(new[] { 1, 2, 3, 4, 5 });
+    public override Element Render() => new BoxEl
+    {
+        Children = [Flow.For<int>(() => { ItemsReads++; return Items.Value; }, n => "k" + n, (n, i) => new BoxEl { Width = 8, Height = 8 })],
+    };
+}
+
+// A For whose Row closure captures PARENT render state (the prefix). A parent re-render must re-point the closures
+// (UpdateFor — the Show-parity fix) so rows reflect the NEW state in place; pre-fix (ForEl.Update no-op) they froze.
+sealed class ForUpdateProbe : Component
+{
+    public static int Renders;
+    public Signal<string>? Prefix;
+    public readonly Signal<IReadOnlyList<int>> Items = new(new[] { 1, 2, 3 });
+    public override Element Render()
+    {
+        Renders++;
+        var prefix = UseSignal("A");
+        Prefix = prefix;
+        string p = prefix.Value;   // read in the PARENT → a change re-renders the parent and rebuilds the For with a fresh Row closure
+        return new BoxEl
+        {
+            Direction = 1,
+            Children = [Flow.For<int>(Items, n => "k" + n, (n, i) => new BoxEl { Width = 40, Height = 12, Children = [Text(p + n)] })],
+        };
+    }
+}
+
+// Two rows collapsing to the SAME key — the DEBUG duplicate-key tripwire must throw inside Fill (structural change).
+sealed class ForDupKeyProbe : Component
+{
+    public override Element Render() => new BoxEl
+    {
+        Children = [Flow.For<int>(() => new[] { 1, 2 }, n => "dup", (n, i) => new BoxEl { Width = 8, Height = 8 })],
+    };
+}
+
+// A settled For over a stable list — a quiet frame must add 0 bytes to the hot phase (the effect runs only on change).
+sealed class ForAllocProbe : Component
+{
+    public readonly Signal<IReadOnlyList<int>> Items = new(new[] { 1, 2, 3, 4 });
+    public override Element Render() => new BoxEl
+    {
+        Width = 200, Height = 200, Direction = 1,
+        Children = [Flow.For<int>(Items, n => "k" + n, (n, i) => new BoxEl { Width = 40, Height = 12 })],
+    };
+}
+
+// ── UseResource probe (gate.resource.*) — one probe drives every SWR gate ───────────────────────────────────────────
+// The deps signal (Key) re-keys the resource; the loader parks a controllable TaskCompletionSource per load so the gate
+// completes them in any order (epoch-ordering) or with an exception (refresh-failure). ObserveCancellation=false makes a
+// superseded load's completion still arrive (so the EPOCH guard — not the token — is what drops it).
+sealed class ResourceProbe : Component
+{
+    public readonly Signal<int> Key = new(0);
+    public ResourceOptions Options = ResourceOptions.Default;
+    public bool ObserveCancellation = true;
+    public readonly List<TaskCompletionSource<string>> Gates = new();
+    public readonly List<int> StartedKeys = new();
+    public Resource<string> Res;
+
+    public override Element Render()
+    {
+        int k = Key.Value;   // subscribe → a deps change re-renders and reloads the resource on the new key
+        Res = UseResource(async ct =>
+        {
+            var tcs = new TaskCompletionSource<string>();
+            lock (Gates) { Gates.Add(tcs); StartedKeys.Add(k); }
+            System.Threading.CancellationTokenRegistration reg = default;
+            if (ObserveCancellation) reg = ct.Register(() => tcs.TrySetCanceled());
+            try { return await tcs.Task.ConfigureAwait(false); }
+            finally { reg.Dispose(); }
+        }, seed: "", deps: k, options: Options);
+        return new BoxEl();
     }
 }
 
@@ -5631,7 +5724,7 @@ static class Slice
             var tracks = Loadable<SkTrack[]>.Pending(Array.Empty<SkTrack>());
             recon.ReconcileRoot(
                 Skel.Region(tracks, SkRow, count: 5,
-                    content: ts => Flow.For(() => ts.Length, i => SkRow(ts[i]), keyOf: i => ts[i].Number.ToString()),
+                    content: ts => Flow.For<SkTrack>(() => ts, t => t.Number.ToString(), (t, i) => SkRow(t)),
                     reveal: SkelReveal.StaggerRows),
                 null);
             new FlexLayout(scene, fonts).Run(scene.Root);
@@ -5668,7 +5761,7 @@ static class Slice
             var recon = new TreeReconciler(scene, strings);
             var ready = Loadable<SkTrack[]>.Ready(new[] { new SkTrack(1, "Known", "0:30") });
             recon.ReconcileRoot(
-                Skel.Region(ready, SkRow, count: 3, content: ts => Flow.For(() => ts.Length, i => SkRow(ts[i]), keyOf: i => i.ToString())),
+                Skel.Region(ready, SkRow, count: 3, content: ts => Flow.For<SkTrack>(() => ts, t => t.Number.ToString(), (t, i) => SkRow(t))),
                 null);
             new FlexLayout(scene, fonts).Run(scene.Root);
             Check("SK.d a pre-Ready region (partial-known data) renders REAL immediately — no shimmer",
@@ -5700,7 +5793,7 @@ static class Slice
             var recon = new TreeReconciler(scene, strings);
             var ld = Loadable<SkTrack[]>.Pending(Array.Empty<SkTrack>());
             recon.ReconcileRoot(
-                Skel.Region(ld, SkRow, count: 3, content: ts => Flow.For(() => ts.Length, i => SkRow(ts[i]), keyOf: i => i.ToString()),
+                Skel.Region(ld, SkRow, count: 3, content: ts => Flow.For<SkTrack>(() => ts, t => t.Number.ToString(), (t, i) => SkRow(t)),
                     onFailed: () => new TextEl("FAILED") { Size = 14f }),
                 null);
             new FlexLayout(scene, fonts).Run(scene.Root);
@@ -5721,7 +5814,7 @@ static class Slice
                 var recon = new TreeReconciler(scene, strings) { Anim = engine };
                 var tracks = Loadable<SkTrack[]>.Pending(Array.Empty<SkTrack>());
                 recon.ReconcileRoot(
-                    Skel.Region(tracks, SkRow, count: 3, content: ts => Flow.For(() => ts.Length, i => SkRow(ts[i]), keyOf: i => i.ToString())),
+                    Skel.Region(tracks, SkRow, count: 3, content: ts => Flow.For<SkTrack>(() => ts, t => t.Number.ToString(), (t, i) => SkRow(t))),
                     null);
                 new FlexLayout(scene, fonts).Run(scene.Root);
                 bool noPulse = engine.LoopTrackCount == 0;
@@ -5853,7 +5946,7 @@ static class Slice
             var recon = new TreeReconciler(scene, strings) { Anim = engine };
             var ld = Loadable<SkTrack[]>.Pending(Array.Empty<SkTrack>());
             recon.ReconcileRoot(
-                Skel.Region(ld, SkRow, count: 4, content: ts => Flow.For(() => ts.Length, i => SkRow(ts[i]), keyOf: i => i.ToString())),
+                Skel.Region(ld, SkRow, count: 4, content: ts => Flow.For<SkTrack>(() => ts, t => t.Number.ToString(), (t, i) => SkRow(t))),
                 null);
             var region = scene.Root;
             bool boundsAnim = (scene.Flags(region) & NodeFlags.BoundsAnimated) != 0;
@@ -15123,6 +15216,282 @@ static class Slice
         Check("61c. parent re-render refreshes a Show boundary's branch in place (new children, same node, still hides)",
             init && refreshed && reRendered && sameNode && hidden,
             $"init={init} refreshed={refreshed} reRendered={reRendered} sameNode={sameNode} hidden={hidden} parentRenders={FlowShowRefreshProbe.Renders}");
+    }
+
+    static int DirectChildCount(SceneStore s, NodeHandle n)
+    {
+        int c = 0;
+        for (var ch = s.FirstChild(n); !ch.IsNull; ch = s.NextSibling(ch)) c++;
+        return c;
+    }
+
+    // Flow.For<T> — typed, mandatory-key reactive lists (gate.for.*). Keyed diff preserves row identity; the source is
+    // snapshotted ONCE per boundary run; a parent re-render re-points the row closures (the UpdateShow-parity fix);
+    // duplicate keys trip a DEBUG guard; and a settled list is 0-alloc on a quiet frame.
+    static void ForTypedChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+
+        // gate.for.typed-keyed-diff — insert/remove/reorder preserve a row's scene node (⇒ its component state) by key.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("for-keyed", new Size2(240, 400), 1f)); window.Show();
+            var probe = new ForKeyedDiffProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var forHost = Child(host.Scene, host.Scene.Root, 0);
+            var rowB = Child(host.Scene, forHost, 1);            // the "b" row — its handle must survive every mutation
+            bool init = !rowB.IsNull && DirectChildCount(host.Scene, forHost) == 3;
+
+            probe.Items.Value = new[] { "d", "a", "b", "c" };    // insert 'd' at front → b shifts to index 2, node preserved
+            host.RunFrame();
+            bool afterInsert = Child(host.Scene, forHost, 2) == rowB && DirectChildCount(host.Scene, forHost) == 4;
+
+            probe.Items.Value = new[] { "d", "b", "c" };         // remove 'a' → b at index 1, node preserved
+            host.RunFrame();
+            bool afterRemove = Child(host.Scene, forHost, 1) == rowB && DirectChildCount(host.Scene, forHost) == 3;
+
+            probe.Items.Value = new[] { "c", "b", "d" };         // pure reorder → b at index 1, node preserved
+            host.RunFrame();
+            bool afterReorder = Child(host.Scene, forHost, 1) == rowB && DirectChildCount(host.Scene, forHost) == 3;
+
+            Check("gate.for.typed-keyed-diff insert/remove/reorder preserve a row's node (state) by key",
+                init && afterInsert && afterRemove && afterReorder,
+                $"init={init} insert={afterInsert} remove={afterRemove} reorder={afterReorder}");
+        }
+
+        // gate.for.snapshot-single-read — the items source is read EXACTLY ONCE per boundary run (kills the old N+1).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("for-snapshot", new Size2(240, 400), 1f)); window.Show();
+            var probe = new ForSnapshotProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            int afterMount = probe.ItemsReads;                   // 1 read for 5 rows (not 6)
+            probe.Items.Value = new[] { 1, 2, 3, 4, 5, 6 };
+            host.RunFrame();
+            int afterChange = probe.ItemsReads;                  // +1 for the structural change
+            Check("gate.for.snapshot-single-read the items thunk runs exactly once per boundary run (N rows, 1 read)",
+                afterMount == 1 && afterChange == 2, $"afterMount={afterMount} afterChange={afterChange}");
+        }
+
+        // gate.for.update-repoints-closures — a parent re-render rebuilds the For with a fresh Row closure; rows must
+        // reflect the NEW captured state IN PLACE (same node), not freeze at mount. Pre-fix (ForEl.Update no-op) fails.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("for-update", new Size2(240, 400), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            ForUpdateProbe.Renders = 0;
+            var probe = new ForUpdateProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, probe);
+            host.RunFrame();
+            var forHost = Child(host.Scene, host.Scene.Root, 0);
+            var row0 = Child(host.Scene, forHost, 0);            // the "k1" row — identity must survive the parent re-render
+            bool init = HasGlyph(device, strings, "A1") && !row0.IsNull;
+
+            probe.Prefix!.Value = "B";                           // mutate parent-read state → parent re-renders → fresh Row closure
+            host.RunFrame();
+            var row0b = Child(host.Scene, forHost, 0);
+            bool refreshed = HasGlyph(device, strings, "B1") && !HasGlyph(device, strings, "A1");
+            bool reRendered = ForUpdateProbe.Renders > 1;
+            bool sameNode = row0b == row0 && !row0b.IsNull;      // in-place update by key, NOT a remount
+            Check("gate.for.update-repoints-closures parent re-render re-points the For row closures in place (UpdateShow parity)",
+                init && refreshed && reRendered && sameNode,
+                $"init={init} refreshed={refreshed} reRendered={reRendered} sameNode={sameNode} renders={ForUpdateProbe.Renders}");
+        }
+
+        // gate.for.duplicate-key-tripwire (DEBUG) — two rows sharing a key throw inside Fill, naming the key.
+        {
+#if DEBUG
+            bool threw = false; string detail = "no throw";
+            try
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("for-dup", new Size2(200, 120), 1f)); window.Show();
+                var probe = new ForDupKeyProbe();
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+                host.RunFrame();
+            }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("duplicate key")) { threw = true; detail = "threw naming the dup key"; }
+            catch (Exception ex) { detail = "wrong exception: " + ex.GetType().Name; }
+            Check("gate.for.duplicate-key-tripwire DEBUG: two rows sharing a key throw inside Fill", threw, detail);
+#else
+            Check("gate.for.duplicate-key-tripwire DEBUG: two rows sharing a key throw inside Fill", true, "release: DEBUG-only tripwire compiled out");
+#endif
+        }
+
+        // gate.for.effect-zero-steady-alloc — a settled For adds 0 bytes to the hot phase on a quiet frame.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("for-alloc", new Size2(240, 300), 1f)); window.Show();
+            var probe = new ForAllocProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            for (int i = 0; i < 4 && host.HasActiveWork; i++) host.RunFrame();
+            for (int i = 0; i < 6; i++) host.Paint(0);           // warm the paths (JIT)
+            long worst = 0;
+            for (int i = 0; i < 10; i++) { var f = host.Paint(0); if (f.HotPhaseAllocBytes > worst) worst = f.HotPhaseAllocBytes; }
+            Check("gate.for.effect-zero-steady-alloc a settled For adds 0 bytes to the hot phase on a quiet frame",
+                worst == 0, $"worst={worst} bytes");
+        }
+    }
+
+    // Pump frames until <paramref name="cond"/> holds (or the frame budget runs out) — drains the UsePost queue each frame
+    // so an async completion (posted from a threadpool continuation) lands. Returns whether the condition held.
+    static bool PumpUntil(AppHost host, Func<bool> cond, int maxFrames = 200)
+    {
+        for (int i = 0; i < maxFrames; i++)
+        {
+            if (cond()) return true;
+            host.RunFrame();
+        }
+        return cond();
+    }
+
+    // UseResource — the full stale-while-revalidate contract (gate.resource.*): epoch-ordered completions, refresh SWR,
+    // refresh-failure keeps data, optimistic mutate, keep-previous-data, deps re-key to Pending, and stale-time via the
+    // HostTimerQueue. Loads are controllable TaskCompletionSources so completion ORDER is scripted deterministically.
+    static void ResourceChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+
+        // gate.resource.epoch-ordering — start A (slow), re-key to B (fast); B lands; A completing LATER is dropped by
+        // the epoch guard (the loader ignores cancellation, so only the epoch stamp — not the token — can drop A).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("res-epoch", new Size2(200, 120), 1f)); window.Show();
+            var probe = new ResourceProbe { ObserveCancellation = false };
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 1, 3000);   // load A started (deps=0)
+            probe.Key.Value = 1; host.RunFrame();                                       // re-key → load B (deps=1)
+            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 2, 3000);
+            probe.Gates[1].SetResult("B");
+            bool bLanded = PumpUntil(host, () => probe.Res.Loadable.IsReady && probe.Res.Loadable.Value.Peek() == "B");
+            probe.Gates[0].SetResult("A");                                              // the superseded (older-epoch) load completes late
+            for (int i = 0; i < 24; i++) host.RunFrame();
+            bool aDropped = probe.Res.Loadable.Value.Peek() == "B";
+            Check("gate.resource.epoch-ordering out-of-order completion never regresses: B lands, older A is dropped",
+                bLanded && aDropped, $"bLanded={bLanded} aDropped={aDropped} value='{probe.Res.Loadable.Value.Peek()}'");
+        }
+
+        // gate.resource.refresh-swr — Refresh() keeps Ready(old) visible while fetching (IsFetching true), lands
+        // Ready(new); IsFetching toggles false; IsStale flips true after Ready (staleTime=0 default).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("res-swr", new Size2(200, 120), 1f)); window.Show();
+            var probe = new ResourceProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 1, 3000);
+            probe.Gates[0].SetResult("v0");
+            bool ready0 = PumpUntil(host, () => probe.Res.Loadable.Value.Peek() == "v0");
+            bool staleAfterReady = probe.Res.IsStale.Peek();                            // staleTime=0 ⇒ stale as soon as Ready
+            bool notFetching0 = !probe.Res.IsFetching.Peek();
+
+            probe.Res.Refresh();
+            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 2, 3000);
+            bool duringSwr = probe.Res.Loadable.IsReady && probe.Res.Loadable.Value.Peek() == "v0"
+                             && probe.Res.IsFetching.Peek() && !probe.Res.IsStale.Peek();
+            probe.Gates[1].SetResult("v1");
+            bool ready1 = PumpUntil(host, () => probe.Res.Loadable.Value.Peek() == "v1" && !probe.Res.IsFetching.Peek());
+            Check("gate.resource.refresh-swr Refresh keeps Ready(old) while fetching, lands Ready(new); IsFetching/IsStale toggle",
+                ready0 && staleAfterReady && notFetching0 && duringSwr && ready1,
+                $"ready0={ready0} staleAfterReady={staleAfterReady} notFetching0={notFetching0} duringSwr={duringSwr} ready1={ready1}");
+        }
+
+        // gate.resource.refresh-failure-keeps-data — a refresh that FAILS keeps the prior Ready value + sets LastError.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("res-failkeep", new Size2(200, 120), 1f)); window.Show();
+            var probe = new ResourceProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 1, 3000);
+            probe.Gates[0].SetResult("v0");
+            PumpUntil(host, () => probe.Res.Loadable.Value.Peek() == "v0");
+            probe.Res.Refresh();
+            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 2, 3000);
+            probe.Gates[1].SetException(new InvalidOperationException("boom"));
+            bool settled = PumpUntil(host, () => !probe.Res.IsFetching.Peek() && probe.Res.LastError is not null);
+            bool keptData = probe.Res.Loadable.IsReady && probe.Res.Loadable.Value.Peek() == "v0";
+            bool errored = probe.Res.LastError is not null;
+            Check("gate.resource.refresh-failure-keeps-data a failed refresh keeps Ready(old) + sets LastError",
+                settled && keptData && errored,
+                $"settled={settled} keptData={keptData} err={(errored ? probe.Res.LastError!.Message : "null")}");
+        }
+
+        // gate.resource.mutate-optimistic — Mutate writes Ready(optimistic) immediately; the revalidation replaces it.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("res-mutate", new Size2(200, 120), 1f)); window.Show();
+            var probe = new ResourceProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 1, 3000);
+            probe.Gates[0].SetResult("v0");
+            PumpUntil(host, () => probe.Res.Loadable.Value.Peek() == "v0");
+            probe.Res.Mutate("optimistic");
+            bool optimisticNow = probe.Res.Loadable.IsReady && probe.Res.Loadable.Value.Peek() == "optimistic" && probe.Res.IsFetching.Peek();
+            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 2, 3000);
+            probe.Gates[1].SetResult("revalidated");
+            bool revalidated = PumpUntil(host, () => probe.Res.Loadable.Value.Peek() == "revalidated");
+            Check("gate.resource.mutate-optimistic Mutate shows the optimistic value immediately; revalidation replaces it",
+                optimisticNow && revalidated, $"optimisticNow={optimisticNow} revalidated={revalidated}");
+        }
+
+        // gate.resource.keep-previous-data — a deps change with KeepPreviousData keeps the old value + IsFetching visible.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("res-keepprev", new Size2(200, 120), 1f)); window.Show();
+            var probe = new ResourceProbe { Options = new ResourceOptions { KeepPreviousData = true } };
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 1, 3000);
+            probe.Gates[0].SetResult("v0");
+            PumpUntil(host, () => probe.Res.Loadable.Value.Peek() == "v0");
+            probe.Key.Value = 1; host.RunFrame();                                       // deps change — keep-previous
+            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 2, 3000);
+            bool keptPrev = probe.Res.Loadable.IsReady && probe.Res.Loadable.Value.Peek() == "v0" && probe.Res.IsFetching.Peek();
+            probe.Gates[1].SetResult("v1");
+            bool landedNew = PumpUntil(host, () => probe.Res.Loadable.Value.Peek() == "v1");
+            Check("gate.resource.keep-previous-data deps change shows the previous value + IsFetching until the new lands",
+                keptPrev && landedNew, $"keptPrev={keptPrev} landedNew={landedNew}");
+        }
+
+        // gate.resource.deps-rekey-pending — default (no KeepPreviousData): a deps change resets to Pending(seed).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("res-rekey", new Size2(200, 120), 1f)); window.Show();
+            var probe = new ResourceProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 1, 3000);
+            probe.Gates[0].SetResult("v0");
+            PumpUntil(host, () => probe.Res.Loadable.Value.Peek() == "v0");
+            probe.Key.Value = 1; host.RunFrame();                                       // deps change — reset to Pending(seed)
+            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 2, 3000);
+            bool pendingSeed = probe.Res.Loadable.IsLoading && probe.Res.Loadable.Value.Peek() == "" && probe.Res.IsFetching.Peek();
+            Check("gate.resource.deps-rekey-pending a deps change (default) resets the resource to Pending(seed)",
+                pendingSeed, $"isLoading={probe.Res.Loadable.IsLoading} value='{probe.Res.Loadable.Value.Peek()}' fetching={probe.Res.IsFetching.Peek()}");
+        }
+
+        // gate.resource.stale-timer — staleTime>0: IsStale stays false after Ready, then flips true once the
+        // HostTimerQueue one-shot fires (frame-clock driven; NOT the media clock).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("res-stale", new Size2(200, 120), 1f)); window.Show();
+            var probe = new ResourceProbe { Options = new ResourceOptions { StaleTimeMs = 200f } };
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 1, 3000);
+            probe.Gates[0].SetResult("v0");
+            PumpUntil(host, () => probe.Res.Loadable.Value.Peek() == "v0");
+            bool freshAfterReady = !probe.Res.IsStale.Peek();                           // still fresh right after Ready
+            for (int i = 0; i < 20; i++) host.Paint(0);                                 // advance ~320 ms past the 200 ms stale timer
+            bool staleAfterTimeout = probe.Res.IsStale.Peek();
+            Check("gate.resource.stale-timer staleTime>0 keeps data fresh until the HostTimerQueue one-shot fires",
+                freshAfterReady && staleAfterTimeout, $"freshAfterReady={freshAfterReady} staleAfterTimeout={staleAfterTimeout}");
+        }
     }
 
     static void RepeatButtonChecks(StringTable strings)
@@ -25349,6 +25718,8 @@ static class Slice
         FlowChecks(strings);
         FlowReorderChecks(strings);
         FlowShowRefreshChecks(strings);
+        ForTypedChecks(strings);          // Flow.For<T>: typed keyed diff, single-read snapshot, update re-points closures, dup-key tripwire, zero steady alloc
+        ResourceChecks(strings);          // UseResource SWR: epoch ordering, refresh SWR, refresh-failure keeps data, optimistic mutate, keep-previous-data, deps re-key Pending, stale-time timer
 
         // Wave 1 engine primitives (control-parity foundation). P1 — disabled gate; P2 — stateful text ramps;
         // P4b — stateful gradient transitions; P4a — authored clip-rect channel; P6 — focus/keyboard nav.
