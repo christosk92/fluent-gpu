@@ -122,8 +122,8 @@ Run it (host wiring): see **[getting-started.md](./getting-started.md)**.
 | Theming tokens / colors | `src/FluentGpu.Engine/Dsl/Tokens.cs` (`Tok`), `Theme.cs` | `Tok.Use(ThemeKind)` re-themes in one pointer write |
 | Tests / golden checks | `src/FluentGpu.VerticalSlice/Program.cs` | add a `Check(...)`; call it from `Main` |
 
-**Design corpus** (architecture source-of-truth, canon-gated) lives in `design/`. The as-built reactive model is
-`design/subsystems/reconciler-hooks.md §0bis`. After editing `design/*`, run `powershell -File design/check-canon.ps1`.
+**Design corpus** (architecture source-of-truth, canon-gated) lives in `docs/design/`. The as-built reactive model is
+`docs/design/subsystems/reconciler-hooks.md §0bis`. After editing `docs/design/*`, run `powershell -File docs/design/check-canon.ps1`.
 
 ---
 

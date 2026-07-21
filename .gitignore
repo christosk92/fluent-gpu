@@ -31,13 +31,50 @@ out/
 # MSIX packaging prototype: self-contained publish output (loose-register install location)
 .pkg-publish*/
 
-# MSIX pipeline (build/pack-msix.ps1): publish+layout staging area (artifacts/ already ignored above).
-# NOTE: build/appicon-source.png and src/**/assets/AppIcon/*.png|*.ico ARE committed (the app's icon source + assets).
+# MSIX pipeline (ops/build/pack-msix.ps1): publish+layout staging area (artifacts/ already ignored above).
+# NOTE: ops/build/appicon-source.png and src/**/assets/AppIcon/*.png|*.ico ARE committed.
 .msix-build/
 .tmp-*
+.tmp/
+.tmp/**
+app/.tmp/
+src/apps/.tmp/
+
+# Agent / MSBuild scratch (not covered by .tmp-*)
+.codex-msbuild-temp/
+codex-build-temp/
+codex-build-temp-*/
+codex-engine-prof/
+codex-vslice-temp/
+tmp-msbuild/
+**/TestResults/
+
+# Profiling / traces / probe screenshots
+*.etl
+*.etlx
+*.nettrace
+*.speedscope.json
+*_verify-fps.png
+_verify-fps.png
+
+# DocFX generated site (source stays under docs/site/; regenerate in CI)
+docs/site/_site/
+
+# PlayReady / tools build products (sources stay tracked)
+tools/**/publish-arm64/
+ops/tools/**/publish-arm64/
+tools/**/dist/
+ops/tools/**/dist/
+tools/**/generated/
+ops/tools/**/generated/
+tools/playready*/out/
+ops/tools/playready*/out/
+tools/playready*/build-*/
+ops/tools/playready*/build-*/
 
 # Trusted Signing account config (not secret, but keep it local; commit the .template instead).
 build/signing/metadata.json
+ops/build/signing/metadata.json
 
 # PlayPlay runtime payloads (manifest carries pins — never commit real copies).
 **/playplay-runtime.json
@@ -45,26 +82,40 @@ private-runtimes/
 
 # Legacy audio-runtime pack dir (superseded by manifest-driven bare DLL layout).
 app/audio-runtime/
+src/apps/audio-runtime/
 
 # Local PlayPlay native-derivation package. This contains version/arch-specific
 # reverse-engineering glue and is intentionally kept out of source control.
 app/Wavee.PlayPlay/
+src/apps/Wavee.PlayPlay/
 
 # Out-of-scope native/derivation material — lives in the separate private
 # workspace (wavee-playplay-private), junctioned in on demand. Never commit here.
 app/.native/
+src/apps/.native/
 app/tmp_*
+src/apps/tmp_*
 scripts/pyghidra*
+ops/scripts/pyghidra*
 tools/pyghidra*
+ops/tools/pyghidra*
 tools/playplay_*
+ops/tools/playplay_*
 tools/x64_*
+ops/tools/x64_*
 tools/fill_random_sweep.py
+ops/tools/fill_random_sweep.py
 tools/*_decomp.json
+ops/tools/*_decomp.json
 tools/*_derive_*.json
+ops/tools/*_derive_*.json
 playplay-probe-out*.txt
 app/docs/spotiload-offline-path.md
 app/docs/playplay-*.md
 app/docs/wavee-playplay-*.md
+docs/plans/wavee/spotiload-offline-path.md
+docs/plans/wavee/playplay-*.md
+docs/plans/wavee/wavee-playplay-*.md
 
 # On-demand junction helper for the private package (machine-local).
 link-playplay.ps1

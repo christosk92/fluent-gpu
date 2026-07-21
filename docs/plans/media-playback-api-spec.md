@@ -10,7 +10,7 @@ decisions into one surface a team can implement against.
 **Owner docs to reconcile on landing:** `design/subsystems/media-pipeline.md` (video present-tree §8,
 lyrics playback clock §9), `design/hardened-v1-plan.md` (§2 threading, §4.1 PUBLISH→consume seam,
 §6 build order). Register the new cross-cutting seams in `design/SPEC-INDEX.md §2` + the
-`design/subsystems/README.md` ownership map, then run `design/check-canon.ps1`.
+`design/subsystems/README.md` ownership map, then run `docs/design/check-canon.ps1`.
 **Depends on (PROVEN, in `src/` today):** `IVideoPresenter` PAL seam
 (`src/FluentGpu.Engine/Seams/Pal/IVideoPresenter.cs`), the working `VideoMediaEngine`
 (`src/FluentGpu.Windows/Media/VideoMediaEngine.cs`, `IMFMediaEngineEx` windowless swapchain), the
@@ -1484,4 +1484,4 @@ the managed `WithDrm` relay — no longer blocked (§9.2).
 `src/FluentGpu.Controls/MediaPlayerElement.cs` that §4.3 replaces; DRM findings in
 `docs/plans/video-drm-layer-design.md`; the video spine in `docs/plans/video-compositing-spine-design.md`; the
 lyrics playback clock in `design/subsystems/media-pipeline.md §9`. On landing: update `media-pipeline.md`,
-register the new seams in `SPEC-INDEX.md §2` + `subsystems/README.md`, run `design/check-canon.ps1`.*
+register the new seams in `SPEC-INDEX.md §2` + `subsystems/README.md`, run `docs/design/check-canon.ps1`.*

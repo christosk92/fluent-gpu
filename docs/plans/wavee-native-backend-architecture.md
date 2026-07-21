@@ -9,7 +9,7 @@
 > checklist** (13 capabilities + corrections, code-grounded). §9 here maps every one onto an engine — that mapping is the
 > proof the design is complete *and* that it isn't a port.
 >
-> **Locked:** local-first; built inside `app/Wavee` (no new library csproj); `Wavee.Core` stays the zero-dep seam; NativeAOT
+> **Locked:** local-first; built inside `src/apps/Wavee` (no new library csproj); `Wavee.Core` stays the zero-dep seam; NativeAOT
 > + low-alloc + signals-first (no `System.Reactive`); protocol *mechanics* (handshake/Shannon/protobuf/queue-ladder/gabo)
 > lifted as pure functions, *structure* redesigned; **audio is in-process** behind a swappable `IAudioEngine` seam (an
 > out-of-process flip stays possible; a separate x64 PlayPlay key-oracle is an *optional* narrow helper, never load-bearing).

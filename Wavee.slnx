@@ -7,9 +7,9 @@
     <Project Path="src/FluentGpu.Windows/FluentGpu.Windows.csproj" />
     <Project Path="src/FluentGpu.WindowsApi/FluentGpu.WindowsApi.csproj" />
   </Folder>
-  <Folder Name="/app/">
-    <Project Path="app/Wavee/Wavee.csproj" />
-    <Project Path="app/Wavee.Core/Wavee.Core.csproj" />
-    <Project Path="app/Wavee.Tests/Wavee.Tests.csproj" />
+  <Folder Name="/apps/">
+    <Project Path="src/apps/Wavee/Wavee.csproj" />
+    <Project Path="src/apps/Wavee.Core/Wavee.Core.csproj" />
+    <Project Path="src/apps/Wavee.Tests/Wavee.Tests.csproj" />
   </Folder>
 </Solution>

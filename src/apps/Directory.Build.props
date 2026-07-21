@@ -1,0 +1,23 @@
+<Project>
+
+  <!-- Wavee app baseline. `src/apps/` lives outside the engine `src/` solution root, so it does NOT inherit
+       src/Directory.Build.props — this mirrors that file's PropertyGroup so the
+       Wavee projects share the engine's net10 / zero-alloc / GC posture.
+       `PublishAot` is set ONLY on the WinExe csproj (avoids NETSDK1207 on the class lib). -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>14</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <InvariantGlobalization>true</InvariantGlobalization>
+
+    <Deterministic>true</Deterministic>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <RootNamespace>$(MSBuildProjectName)</RootNamespace>
+  </PropertyGroup>
+
+</Project>

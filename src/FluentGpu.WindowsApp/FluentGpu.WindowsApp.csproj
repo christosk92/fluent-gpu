@@ -29,13 +29,13 @@
     <_PlayReadyNativeArch Condition="'$(RuntimeIdentifier)' == 'win-arm64'">arm64</_PlayReadyNativeArch>
     <_PlayReadyNativeArch Condition="'$(_PlayReadyNativeArch)' == '' and '$(PROCESSOR_ARCHITECTURE)' == 'AMD64'">x64</_PlayReadyNativeArch>
     <_PlayReadyNativeArch Condition="'$(_PlayReadyNativeArch)' == ''">arm64</_PlayReadyNativeArch>
-    <_PlayReadyNativeDir>$(MSBuildProjectDirectory)\..\..\tools\playready-uwp-helper</_PlayReadyNativeDir>
-    <_PlayReadyNativeDll>$(_PlayReadyNativeDir)\build-desktop-$(_PlayReadyNativeArch)\FluentGpu.PlayReady.Native.dll</_PlayReadyNativeDll>
+    <_PlayReadyNativeDir>$(MSBuildProjectDirectory)\..\..\ops\tools\playready-native</_PlayReadyNativeDir>
+    <_PlayReadyNativeDll>$(_PlayReadyNativeDir)\out\$(_PlayReadyNativeArch)\FluentGpu.PlayReady.Native.dll</_PlayReadyNativeDll>
   </PropertyGroup>
   <Target Name="BuildDesktopPlayReadyNative" BeforeTargets="PrepareForBuild"
-          Inputs="$(_PlayReadyNativeDir)\Helper.cpp;$(_PlayReadyNativeDir)\CencMediaSource.h;$(_PlayReadyNativeDir)\build-desktop-dll.cmd"
+          Inputs="$(_PlayReadyNativeDir)\PlayReadyNative.cpp;$(_PlayReadyNativeDir)\CencMediaSource.h;$(_PlayReadyNativeDir)\build.cmd"
           Outputs="$(_PlayReadyNativeDll)">
-    <Exec Command="cmd /c &quot;$(_PlayReadyNativeDir)\build-desktop-dll.cmd&quot; $(_PlayReadyNativeArch)" />
+    <Exec Command="cmd /c &quot;$(_PlayReadyNativeDir)\build.cmd&quot; $(_PlayReadyNativeArch)" />
   </Target>
   <Target Name="CopyDesktopPlayReadyNative" AfterTargets="Build" DependsOnTargets="BuildDesktopPlayReadyNative">
     <Copy SourceFiles="$(_PlayReadyNativeDll)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />

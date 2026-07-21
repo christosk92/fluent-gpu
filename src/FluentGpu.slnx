@@ -14,9 +14,9 @@
     <Project Path="FluentGpu.SourceGen/FluentGpu.SourceGen.csproj" />
   </Folder>
   <Folder Name="/Apps/">
-    <Project Path="../app/Wavee.Core/Wavee.Core.csproj" />
-    <Project Path="../app/Wavee.Tests/Wavee.Tests.csproj" />
-    <Project Path="../app/Wavee/Wavee.csproj" />
+    <Project Path="apps/Wavee.Core/Wavee.Core.csproj" />
+    <Project Path="apps/Wavee.Tests/Wavee.Tests.csproj" />
+    <Project Path="apps/Wavee/Wavee.csproj" />
     <Project Path="FluentGpu.VerticalSlice/FluentGpu.VerticalSlice.csproj" />
     <Project Path="FluentGpu.WindowsApp/FluentGpu.WindowsApp.csproj" />
   </Folder>
@@ -26,5 +26,6 @@
   <Folder Name="/Tests/">
     <Project Path="FluentGpu.Engine.Tests/FluentGpu.Engine.Tests.csproj" />
     <Project Path="FluentGpu.Windows.Tests/FluentGpu.Windows.Tests.csproj" />
+    <Project Path="FluentGpu.SourceGen.Tests/FluentGpu.SourceGen.Tests.csproj" />
   </Folder>
 </Solution>

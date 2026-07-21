@@ -33,7 +33,7 @@ Correctness flows entirely through the **revision + `GET /diff`** path, which ru
 
 ## 3. What we have vs. what's missing (the corrected table)
 
-Status for **our rebuild** (`app/Wavee/Backend` + `app/Wavee.Core`): **have** (built + reachable), **partial** (built but wrong-shaped or unwired), **missing** (absent).
+Status for **our rebuild** (`src/apps/Wavee/Backend` + `src/apps/Wavee.Core`): **have** (built + reachable), **partial** (built but wrong-shaped or unwired), **missing** (absent).
 
 | # | Capability | Status | Evidence | Honest note |
 |---|---|---|---|---|
@@ -254,7 +254,7 @@ RECONNECT: re-open 1 socket; drain outbox; eager /diff ONLY {rootlist âˆª HOT
 The riskiest unknown is empirical: does our login â†’ client-token â†’ login5 â†’ spclient chain return a real `SelectedListContent`, and does our 10k hydration path join to it? P1 answers with a live probe before anything is persisted â€” the natural next milestone after the proven track/album/artist Milestone-0.
 
 **Deliverables**
-- **Vendor `playlist4_external.proto`** (+ `playlist_permission.proto` for `Capabilities`) under `app/Wavee/SpotifyLive/Protos/`. P1 *consumes* only the read subset (`SelectedListContent{revision, length, attributes, contents, capabilities}`, `ListItems{pos, truncated, items}`, `Item{uri, attributes}`, `ItemAttributes{added_by, timestamp, item_id, format_attributes}`), leaving `Diff`/`Op`/`PlaylistModificationInfo` vendored-but-dormant for P2/P3.
+- **Vendor `playlist4_external.proto`** (+ `playlist_permission.proto` for `Capabilities`) under `src/apps/Wavee/SpotifyLive/Protos/`. P1 *consumes* only the read subset (`SelectedListContent{revision, length, attributes, contents, capabilities}`, `ListItems{pos, truncated, items}`, `Item{uri, attributes}`, `ItemAttributes{added_by, timestamp, item_id, format_attributes}`), leaving `Diff`/`Op`/`PlaylistModificationInfo` vendored-but-dormant for P2/P3.
 - **`PlaylistSource`** = the fetch+project half of the Â§2 `Playlist` Resource. One GET `{spclient}/playlist/v2/{path}?decorate=revision,attributes,length,owner,capabilities`, **Bearer only** (no client-token, `SpClient.cs:1620-1623`). **Stream-parse** (a 10k-URI body is ~0.5â€“0.8 MB â†’ over the 85 KB LOH cliff), exactly the `ParseFrom(Stream)` discipline `ExtendedMetadataSource.ProjectResponse` already uses (`ExtendedMetadataSource.cs:115-116`).
 - **Thin membership model split.** Project the wire `Item[]` into ordered `(item_uri, position, item_id, added_by, added_at)` + opaque `byte[] Revision`, **separate from the shared `Track`**. Removes the fat-blob hazard before it can land (`Models.cs:107-112`, `CachedStore.cs:59`); also move `AddedAt`/`AddedBy` off `Track` (`Models.cs:82`).
 - **Reuse hydration verbatim.** Filter membership to `spotify:track:` â†’ `MetadataService.SyncAllAsync(trackUris)` (`MetadataService.cs:37-49`) â†’ **join membership Ã— `Store.GetTrack` at read** (the Â§2 "container Resource âˆ˜ Entities Resource" composition).

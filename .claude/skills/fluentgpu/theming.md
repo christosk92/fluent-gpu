@@ -122,4 +122,4 @@ UseContext(ThemeControl.Request)?.Invoke(250f);        // host: in-place re-rend
 | Ambient `ThemeControl.Request` | `src/FluentGpu.Engine/Hooks/ThemeControl.cs` |
 | `BrushAnim` cross-fade | `src/FluentGpu.Engine/Scene/{Columns,SceneStore}.cs`, `Render/SceneRecorder.cs` |
 | Material flip + OS reader + `WM_SETTINGCHANGE` | `src/FluentGpu.Windows/Pal/{Win32Theme,Win32Platform}.cs`, `Hosting/FluentApp.cs` |
-| Wavee theme wiring (toggle / persistence / OS-follow / bound surfaces) | `app/Wavee/{Program.cs, WaveeApp.cs, Features/Shell/WaveeShell.cs, Platform/AppSettings.cs, Design/WaveeTokens.cs}` |
+| Wavee theme wiring (toggle / persistence / OS-follow / bound surfaces) | `src/apps/Wavee/{Program.cs, WaveeApp.cs, Features/Shell/WaveeShell.cs, Platform/AppSettings.cs, Design/WaveeTokens.cs}` |
