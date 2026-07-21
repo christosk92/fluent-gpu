@@ -493,33 +493,33 @@ sealed class SliderControlPage : Component
     public override Element Render()
     {
         var basic = UseFloatSignal(0.4f);
-        var (range, setRange) = UseState(50f);
-        var (ticks, setTicks) = UseState(40f);
-        var (vert, setVert) = UseState(30f);
+        var range = UseFloatSignal(50f);
+        var ticks = UseFloatSignal(40f);
+        var vert = UseFloatSignal(30f);
         return GalleryPage.Shell("Slider", "Selects a value from a range — with optional ticks, step snapping and vertical orientation.",
-            ControlExample.Build("A simple slider (0–1, signal-bound)", Slider.Bind(basic), output: GalleryPage.LiveText(() => $"{basic.Value:0.00}"),
+            ControlExample.Build("A simple slider (0–1, signal-bound)", Slider.Create(basic), output: GalleryPage.LiveText(() => $"{basic.Value:0.00}"),
                 code: """
-                // The hot path: bind a FloatSignal — drags update the thumb/track via
+                // The hot path: pass a FloatSignal — drags update the thumb/track via
                 // compositor bindings, with NO component re-render per move.
                 var basic = UseFloatSignal(0.4f);
 
-                Slider.Bind(basic)
+                Slider.Create(basic)
                 """),
-            ControlExample.Build("A ranged slider (0–100)", Slider.Ranged(range, setRange, new Slider.Options { Min = 0, Max = 100 }), output: BodyStrong($"{range:0}"),
+            ControlExample.Build("A ranged slider (0–100)", Slider.Create(range, options: new Slider.SliderOptions { Min = 0, Max = 100 }), output: GalleryPage.LiveText(() => $"{range.Value:0}"),
                 code: """
-                var (range, setRange) = UseState(50f);
+                var range = UseFloatSignal(50f);
 
-                Slider.Ranged(range, setRange, new Slider.Options { Min = 0, Max = 100 })
+                Slider.Create(range, options: new Slider.SliderOptions { Min = 0, Max = 100 })
                 """),
-            ControlExample.Build("Ticks + step (step 10)", Slider.Ranged(ticks, setTicks, new Slider.Options { Min = 0, Max = 100, Step = 10, TickFrequency = 10 }), output: BodyStrong($"{ticks:0}"),
+            ControlExample.Build("Ticks + step (step 10)", Slider.Create(ticks, options: new Slider.SliderOptions { Min = 0, Max = 100, Step = 10, TickFrequency = 10 }), output: GalleryPage.LiveText(() => $"{ticks.Value:0}"),
                 code: """
-                Slider.Ranged(ticks, setTicks,
-                    new Slider.Options { Min = 0, Max = 100, Step = 10, TickFrequency = 10 })
+                Slider.Create(ticks,
+                    options: new Slider.SliderOptions { Min = 0, Max = 100, Step = 10, TickFrequency = 10 })
                 """),
-            ControlExample.Build("Vertical", Slider.Ranged(vert, setVert, new Slider.Options { Min = 0, Max = 100, Vertical = true }, length: 160f), output: BodyStrong($"{vert:0}"),
+            ControlExample.Build("Vertical", Slider.Create(vert, options: new Slider.SliderOptions { Min = 0, Max = 100, Vertical = true }, length: 160f), output: GalleryPage.LiveText(() => $"{vert.Value:0}"),
                 code: """
-                Slider.Ranged(vert, setVert,
-                    new Slider.Options { Min = 0, Max = 100, Vertical = true }, length: 160f)
+                Slider.Create(vert,
+                    options: new Slider.SliderOptions { Min = 0, Max = 100, Vertical = true }, length: 160f)
                 """));
     }
 }

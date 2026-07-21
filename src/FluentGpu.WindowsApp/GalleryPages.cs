@@ -386,8 +386,8 @@ sealed class InputsPage : Component
 
     public override Element Render()
     {
-        var (vol, setVol) = UseState(0.6f);
-        var (seek, setSeek) = UseState(0.3f);
+        var vol = UseFloatSignal(0.6f);
+        var seek = UseFloatSignal(0.3f);
         var shuffle = UseSignal(false);
         var repeat = UseSignal(true);
         var (pos, setPos) = UseState(0f);
@@ -405,15 +405,16 @@ sealed class InputsPage : Component
                 Children =
                 [
                     SectionLabel("Volume", 70f),
-                    Slider.Create(vol, setVol, 260f),
+                    Slider.Create(vol, length: 260f),
                     new BoxEl
                     {
                         Width = 52f,
                         AlignItems = FlexAlign.End,
                         Children =
                         [
-                            new TextEl(((int)(vol * 100f)).ToString() + "%")
+                            new TextEl("")
                             {
+                                Text = Prop.Of(() => ((int)(vol.Value * 100f)).ToString() + "%"),
                                 Size = 14f,
                                 Bold = true,
                                 Color = Theme.Accent,
@@ -438,14 +439,15 @@ sealed class InputsPage : Component
                         Width = 52f,
                         Children =
                         [
-                            new TextEl(FormatTime(seek, trackSeconds))
+                            new TextEl("")
                             {
+                                Text = Prop.Of(() => FormatTime(seek.Value, trackSeconds)),
                                 Size = 13f,
                                 Color = Theme.ControlText,
                             }
                         ],
                     },
-                    Slider.Create(seek, setSeek, 240f),
+                    Slider.Create(seek, length: 240f),
                     new BoxEl
                     {
                         Width = 52f,
@@ -1577,14 +1579,14 @@ sealed class StatePage_BindHost : Component
                 },
             ],
         };
-        return ControlExample.Build("Compositor-only binding — Slider.Bind + a bound Transform",
-            VStack(14, Slider.Bind(x), track),
+        return ControlExample.Build("Compositor-only binding — Slider.Create + a bound Transform",
+            VStack(14, Slider.Create(x), track),
             description: "The slider drag writes the FloatSignal (no setState per move); the box rides bound Transform + Fill thunks. Frames while dragging are compositor-only: no render, no reconcile, no layout.",
             output: VStack(4, GalleryPage.LiveText(() => $"x = {x.Value:0.00}"), Caption($"host renders: {_renders}").Tertiary()),
             code: """
-            var x = UseFloatSignal(0.3f);   // hot scalar → bind it, don't setState per move
+            var x = UseFloatSignal(0.3f);   // hot scalar → pass the signal, don't setState per move
 
-            Slider.Bind(x);
+            Slider.Create(x);
 
             new BoxEl
             {
@@ -1622,7 +1624,7 @@ sealed class StatePage_ThreeFormsHost : Component
                     Chip("signal (compositor)", op)),                     // FloatSignal  → Prop<float>, no closure
                 HStack(12,
                     Button.Standard($"static → {(staticOp > 0.7f ? "0.4" : "1.0")}", () => setStaticOp(staticOp > 0.7f ? 0.4f : 1.0f)),
-                    Slider.Bind(op))),
+                    Slider.Create(op))),
             description: "Every bindable channel is one Prop<T> property accepting a static value, a Func<T> thunk, or a concrete signal. " +
                          "The static form re-asserts on re-render (the button bumps the counter); the two bound forms ride the compositor — " +
                          "scrubbing the slider updates both right-hand chips with zero host re-renders.",

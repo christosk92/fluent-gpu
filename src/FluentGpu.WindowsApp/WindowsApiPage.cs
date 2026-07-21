@@ -730,7 +730,7 @@ sealed class ShellCard : Component
 {
     public override Element Render()
     {
-        var progress = UseSignal(0.4f);
+        var progress = UseFloatSignal(0.4f);
         var overlayOn = UseSignal(false);
         var status = UseSignal("Drag the slider to drive the taskbar button progress.");
         var statusColor = UseSignal(WinApiUi.Info);
@@ -812,11 +812,10 @@ sealed class ShellCard : Component
                     Children =
                     [
                         new BoxEl { Width = 64f, Children = [new TextEl("Progress") { Size = 13f, Color = Tok.TextSecondary }] },
-                        // .Value (NOT .Peek): Slider.Create is CONTROLLED — its thumb shows the value passed each render.
-                        // Reading .Value subscribes this card so an Apply() write re-renders it with the new value (granular,
-                        // only when progress changes — not every frame). With .Peek the card never re-rendered after the
-                        // FrameClock.Tick drain was removed, so the slider snapped back to the stale initial value on release.
-                        Slider.Create(progress.Value, Apply, 240f),
+                        // Signal-bound: the thumb rides `progress` on the compositor fast path (a scrub writes the signal,
+                        // no card re-render). Apply() runs the taskbar side-effect; its progress.Value write coalesces
+                        // (the slider already wrote the same value) and the status text below re-renders on that change.
+                        Slider.Create(progress, Apply, length: 240f),
                     ],
                 },
                 new BoxEl

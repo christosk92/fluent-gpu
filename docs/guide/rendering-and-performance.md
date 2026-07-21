@@ -111,7 +111,7 @@ render/reconcile/layout and just re-records. Proof: harness check #60 — a boun
 
 ```csharp
 var v = UseFloatSignal(0.5f);
-Slider.Bind(v);                                   // built-in: thumb offset + fill scale are bound Transforms
+Slider.Create(v);                                 // built-in: thumb offset + fill scale are bound Transforms
 // or hand-rolled:
 new BoxEl { /*…*/ Transform = Prop.Of(() => Affine2D.Translation(v.Value * trackW, 0f)) };
 ```

@@ -23,7 +23,7 @@ Read this before debugging. Each row is a real failure mode of the signals-first
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Dragging a slider tanks FPS | A `setState` per pointer-move re-renders the owning component every frame | Use `Slider.Bind(FloatSignal)` (compositor bypass), or hand-bind the value to `Transform`. Confirm `FrameStats.Rendered == false` on drag. |
+| Dragging a slider tanks FPS | A `setState` per pointer-move re-renders the owning component every frame | Pass a `FloatSignal` to `Slider.Create` (compositor bypass — the one slider API), or hand-bind the value to `Transform`. Confirm `FrameStats.Rendered == false` on drag. |
 | A small change relayouts the whole page | No layout boundary above the change → the up-walk reaches the root → full layout | Give the enclosing container explicit `Width`+`Height`+`ClipToBounds=true` so it's a boundary. See [rendering-and-performance.md](./rendering-and-performance.md#scoped-relayout). |
 | `HotPhaseAllocBytes > 0` (zero-alloc check fails) | Allocation inside a bind thunk or hot effect body (`new`, LINQ, boxing, per-call closure) | Capture everything once at mount; the thunk must only read + write existing state. No allocation in phases 6–13. |
 | Whole app re-renders on one interaction | State lives too high (at the root), so the root's render-effect runs | Move state down into the component that owns it; or bind the hot value instead of `setState`. |

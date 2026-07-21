@@ -480,7 +480,7 @@ sealed class AnimKeySplinePlayground : Component
             Children =
             [
                 new TextEl(label) { Size = 12f, Color = Tok.TextSecondary, Width = 22f },
-                Slider.Bind(sig, width: 150f),
+                Slider.Create(sig, length: 150f),
             ],
         };
 
@@ -675,8 +675,8 @@ sealed class AnimSpringLab : Component
                     Children =
                     [
                         Button.Accent("Toggle", () => setOn(!on)),
-                        Slider.Bind(resp, width: 110f, header: "response"),
-                        Slider.Bind(damp, width: 110f, header: "damping"),
+                        Slider.Create(resp, length: 110f, options: new Slider.SliderOptions { Header = "response" }),
+                        Slider.Create(damp, length: 110f, options: new Slider.SliderOptions { Header = "damping" }),
                         GalleryPage.LiveText(() => $"{MathF.Max(0.12f, resp.Value * 0.8f):0.00}s · ζ {0.2f + damp.Value:0.00}"),
                     ],
                 },
@@ -713,7 +713,7 @@ sealed class AnimDrivenScrub : Component
                     Width = 250f, Height = 34f, Direction = 0, AlignItems = FlexAlign.Center,
                     Children = [new BoxEl { Width = 26f, Height = 26f, Corners = Radii.ControlAll, Fill = Tok.AccentDefault, OnRealized = h => dot.Value = h }],
                 },
-                Slider.Bind(t, width: 250f, header: "timeline"),
+                Slider.Create(t, length: 250f, options: new Slider.SliderOptions { Header = "timeline" }),
             ],
         };
     }

@@ -208,8 +208,8 @@ Button.Standard(string label, Action onClick, Style? style = null)   // neutral
 IconButton.Create(string glyph, Action onClick, Style? style = null)
 ToggleButton.Create(string label, Signal<bool>? on = null, Action<bool>? onChange = null, Style? style = null)   // controlled signal + sugar
 
-Slider.Create(float value, Action<float> onChange, float w = 200, float h = 24, Style? = null)   // controlled (re-render)
-Slider.Bind(FloatSignal value, Action<float>? onChange = null, float w = 200, float h = 24, …)    // signals-native (no re-render) ★
+Slider.Create(FloatSignal? value = null, Action<float>? onChange = null, SliderOptions? options = null,
+              float length = 200, float thickness = 32, Style? = null, bool isEnabled = true, TemplateParts? = null)   // ONE API — signals-native (no re-render) ★
 ScrollBar.Create(float fraction, float position, Action<float> onScroll, float h = 200, Style? = null)
 AnimatedIcon.Glyph(string glyph, float size = 16, ColorF? color = null, string? font = null, float hoverScale = 1.08f, float pressScale = 0.88f)
 ```
@@ -228,9 +228,12 @@ var on = UseSignal(false);
 ToggleSwitch.Create(on, onChange: v => Save(v));   // v is the new value; `on` is live
 ```
 
-★ **Prefer `Slider.Bind` for a scrubber.** A drag writes the `FloatSignal` → the thumb/fill composited transforms
-update with **zero render/reconcile/layout**. `Slider.Create` is the controlled (React-style) variant that re-renders
-the owning component on each move — fine for low-frequency use, but `Bind` is the slider-tank fix.
+★ **`Slider.Create` is the one slider API** (the old `Slider.Create(float,…)` / `Slider.Bind` / `Slider.Ranged` trio
+is gone). It follows the controlled-input contract above: pass a `FloatSignal` (or omit it to auto-materialize), and a
+drag writes that signal → the thumb/fill composited transforms update with **zero render/reconcile/layout**, at ANY
+range (the slider-tank fix, now the default). `SliderOptions` (null ⇒ 0..1, tooltip enabled) carries range / step
+snapping / ticks / vertical / header and the thumb value tooltip — the tooltip binds the same signal, so its readout
+updates per-move without a bubble re-render (open/close is per-gesture-edge).
 
 ### Navigation
 ```csharp

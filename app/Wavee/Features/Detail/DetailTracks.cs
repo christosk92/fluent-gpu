@@ -1949,6 +1949,10 @@ sealed class DensityPanel : Component
     public override Element Render()
     {
         int d = _density.Value;   // subscribe → the slider thumb + label track the value
+        // The unified Slider.Create takes a FloatSignal; mirror the external int density into one (synced via an effect
+        // keyed on d) so the thumb rides the compositor bind and still follows external density changes.
+        var dv = UseFloatSignal(d);
+        UseEffect(() => { dv.Value = d; return null; }, d);
         return Layer(Edges4.All(WaveeSpace.M),
             new BoxEl
             {
@@ -1964,8 +1968,8 @@ sealed class DensityPanel : Component
                             new TextEl(ListButton.Label(d)) { Size = 12f, Color = Tok.TextSecondary },
                         ],
                     },
-                    Slider.Ranged((float)d, v => _setDensity(Math.Clamp((int)MathF.Round(v), 0, 3)),
-                        new Slider.Options { Min = 0f, Max = 3f, Step = 1f, TickFrequency = 1f },   // Step=1 → snaps to each level
+                    Slider.Create(dv, v => _setDensity(Math.Clamp((int)MathF.Round(v), 0, 3)),
+                        new Slider.SliderOptions { Min = 0f, Max = 3f, Step = 1f, TickFrequency = 1f },   // Step=1 → snaps to each level
                         length: 216f),
                 ],
             });

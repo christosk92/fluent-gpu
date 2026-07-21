@@ -39,7 +39,7 @@ property *binding* is a finer one. **No full-app re-render, no global dirty flag
    change can't relayout the page.
 9. Zero managed allocation in paint phases 6–13: wire bindings/effects once at mount; never `new`/box/LINQ in a bind
    thunk or hot effect body.
-10. High-frequency scalar (slider/scroll)? Bind it (`Slider.Bind(FloatSignal)`), don't `setState` per move.
+10. High-frequency scalar (slider/scroll)? Bind it (`Slider.Create(FloatSignal)` — the one slider API), don't `setState` per move.
 
 ## Author UI (cheat sheet)
 
@@ -56,7 +56,7 @@ sealed class Counter : Component {
   }
 }
 // hot path — no re-render on drag:
-var vol = UseFloatSignal(0.5f); Slider.Bind(vol);
+var vol = UseFloatSignal(0.5f); Slider.Create(vol);
 // compose / context / reactive lists:
 Embed.Comp(() => new Counter());
 Ctx.Provide(MyCtx, "dark", child);

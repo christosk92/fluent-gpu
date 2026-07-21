@@ -57,7 +57,7 @@ sealed class Volume : Component
     public override Element Render()
     {
         var vol = UseFloatSignal(0.5f);                       // persistent scalar signal
-        return Slider.Bind(vol);                              // drag => vol.Value = x => thumb/fill transform only
+        return Slider.Create(vol);                            // drag => vol.Value = x => thumb/fill transform only
     }
 }
 

@@ -64,6 +64,7 @@ sealed partial class SettingsPage : Component
             _eqPreset.Value = EqPresetIndex(svc.Settings.Get(WaveeSettings.EqualizerPreset));
             int crossMs = Math.Clamp(svc.Settings.Get(WaveeSettings.CrossfadeMs), 0, 12_000);
             _crossSecs.Value = crossMs / 1000.0;
+            _crossSlider.Value = (float)(crossMs / 1000.0);
             _language.Value = LanguageIndex(svc.Settings.Get(WaveeSettings.UiCulture));
         }, DepKey.Empty);
 

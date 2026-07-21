@@ -20,7 +20,7 @@ namespace Wavee;
 //
 // Cost discipline (signals-first): the bar's Render reads only the LOW-frequency signals (track/play-state/shuffle/repeat/
 // buffering/error/viewport) so it re-renders only on those. The HOT values never re-render the bar — the SEEK is a
-// bespoke compositor-bound SeekBar sub-component (smooth interpolated playhead + scrub-gate), the VOLUME is Slider.Bind
+// bespoke compositor-bound SeekBar sub-component (smooth interpolated playhead + scrub-gate), the VOLUME is Slider.Create (signal-bound)
 // (compositor-only), and the time labels + volume glyph are isolated sub-components that re-render at ~1 Hz.
 enum PlayerState : byte { NoTrack, Loading, Reconnecting, Error, Active }
 
@@ -458,7 +458,11 @@ sealed class PlayerBarContent : Component
                 ]
             });
         if (showVolumeSlider)
-            rightKids.Add(Slider.Bind(b.Volume, v => { _ = b.Player.SetVolumeAsync(v); }, 96f, 16f, RailStyle) with { Key = "volume-slider", Animate = ItemMotion });
+            rightKids.Add(new BoxEl
+            {
+                Key = "volume-slider", Animate = ItemMotion,   // Slider.Create returns a component element (no Animate lane); wrap it like the other Embed.Comp items
+                Children = [Slider.Create(b.Volume, v => { _ = b.Player.SetVolumeAsync(v); }, length: 96f, thickness: 16f, style: RailStyle)],
+            });
         if (ui is not null && active)
             rightKids.Add(Transport(WaveeIcons.Lyrics,
                 () => ui.Toggle(RailMode.Lyrics),
@@ -1056,16 +1060,16 @@ sealed class VolumePopup : Component
 
     public override Element Render()
     {
-        float v = _b.Volume.Value;
-        void SetVolume(float next) { _b.Volume.Value = next; _ = _b.Player.SetVolumeAsync(next); }
+        // Signal-bound: the vertical volume thumb rides _b.Volume on the compositor bind (a scrub writes the signal),
+        // so onChange only pushes the async device write; no per-move re-render.
         return new BoxEl
         {
             Width = 52f, Height = 168f, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Padding = new Edges4(10f, 14f, 10f, 14f),
             Children =
             [
-                Slider.Ranged(v, SetVolume,
-                    new Slider.Options { Vertical = true, IsThumbToolTipEnabled = false },
+                Slider.Create(_b.Volume, next => { _ = _b.Player.SetVolumeAsync(next); },
+                    new Slider.SliderOptions { Vertical = true, IsThumbToolTipEnabled = false },
                     length: 124f, thickness: 32f, style: Slider.DefaultStyle)
             ],
         };

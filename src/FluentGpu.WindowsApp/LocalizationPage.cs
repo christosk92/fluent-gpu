@@ -309,7 +309,7 @@ sealed class LocLivePanel : Component
                                 Direction = 0, Gap = 14f, AlignItems = FlexAlign.Center,
                                 Children =
                                 [
-                                    Slider.Bind(count, width: 220f, header: "count (0–30)"),
+                                    Slider.Create(count, length: 220f, options: new Slider.SliderOptions { Header = "count (0–30)" }),
                                     GalleryPage.LiveText(() => $"count = {Count()}"),
                                 ],
                             },

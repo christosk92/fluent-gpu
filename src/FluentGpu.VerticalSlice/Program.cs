@@ -1766,9 +1766,9 @@ sealed class FastPathSliderProbe : Component
     public float Val;
     public override Element Render()
     {
-        var (v, setV) = UseState(0f);
-        Val = v;
-        return Slider.Create(v, x => { setV(x); Val = x; }, 220f, 28f);
+        var v = UseFloatSignal(0f);
+        Val = v.Peek();
+        return Slider.Create(v, x => Val = x, length: 220f, thickness: 28f);
     }
 }
 
@@ -1975,16 +1975,16 @@ sealed class ControlsProbe : Component
 
     public override Element Render()
     {
-        var (sv, setSv) = UseState(0f);
+        var sv = UseFloatSignal(0f);
         var on = UseSignal(false);
         var (sp, setSp) = UseState(0f);
-        SliderVal = sv; Toggled = on.Value; ScrollPos = sp;
+        SliderVal = sv.Peek(); Toggled = on.Value; ScrollPos = sp;
         return new BoxEl
         {
             Direction = 1, Gap = 0,
             Children =
             [
-                Slider.Create(sv, setSv, 200f, 24f),
+                Slider.Create(sv, x => SliderVal = x, length: 200f, thickness: 24f),
                 ToggleButton.Create("Shuffle", on),
                 IconButton.Create("▶", () => IconClicks++),
                 ScrollBar.Create(0.25f, sp, setSp, 200f),
@@ -2131,7 +2131,7 @@ sealed class WaveeShell : Component
     public override Element Render()
     {
         var (playing, setPlaying) = UseState(false);
-        var (seek, setSeek) = UseState(0.3f);
+        var seek = UseFloatSignal(0.3f);
         return new BoxEl
         {
             Direction = 1,
@@ -2142,7 +2142,7 @@ sealed class WaveeShell : Component
                     Direction = 0, Grow = 1,
                     Children = [Sidebar(), Embed.Comp(() => new PageHost(_nav, Page))],
                 },
-                PlayerBar(playing, setPlaying, seek, setSeek),
+                PlayerBar(playing, setPlaying, seek),
             ],
         };
     }
@@ -2188,7 +2188,7 @@ sealed class WaveeShell : Component
         ],
     };
 
-    Element PlayerBar(bool playing, Action<bool> setPlaying, float seek, Action<float> setSeek) => new BoxEl
+    Element PlayerBar(bool playing, Action<bool> setPlaying, FloatSignal seek) => new BoxEl
     {
         Direction = 0, Height = 80, AlignItems = FlexAlign.Center, Gap = 16, Padding = new Edges4(16, 0, 16, 0),
         Fill = ColorF.FromRgba(0x18, 0x18, 0x18),
@@ -2199,7 +2199,7 @@ sealed class WaveeShell : Component
             IconButton.Create("⏮", () => { }),
             IconButton.Create(playing ? "⏸" : "▶", () => setPlaying(!playing)),
             IconButton.Create("⏭", () => { }),
-            Slider.Create(seek, setSeek, 220f),
+            Slider.Create(seek, length: 220f),
             ToggleButton.Create("Shuffle"),
         ],
     };
@@ -2239,7 +2239,7 @@ sealed class SliderSignalProbe : Component
         Renders++;
         var sig = UseFloatSignal(0.3f);
         Sig = sig;
-        return Slider.Bind(sig, onChange: null, width: 200f, height: 24f);
+        return Slider.Create(sig, onChange: null, length: 200f, thickness: 24f);
     }
 }
 
@@ -3223,9 +3223,9 @@ sealed class RangeSliderProbe : Component
     public float Val;
     public override Element Render()
     {
-        var (v, setV) = UseState(0f);
-        Val = v;
-        return Slider.Ranged(v, setV, new Slider.Options { Min = 0f, Max = 100f, Step = 10f, TickFrequency = 20f }, length: 200f, thickness: 32f);
+        var v = UseFloatSignal(0f);
+        Val = v.Peek();
+        return Slider.Create(v, x => Val = x, new Slider.SliderOptions { Min = 0f, Max = 100f, Step = 10f, TickFrequency = 20f }, length: 200f, thickness: 32f);
     }
 }
 
@@ -3297,24 +3297,24 @@ sealed class W1RadioButtonsProbe : Component
     }
 }
 
-// Slider.Ranged over 0..200 with a header — exercises the AUTO step sizes (SmallChange 0 → range/100 = 2,
+// Slider.Create over 0..200 with a header — exercises the AUTO step sizes (SmallChange 0 → range/100 = 2,
 // LargeChange 0 → range/10 = 20; WinUI's absolute defaults 1/10 on its 0–100 range, Slider_Partial.h:13-15).
 sealed class W1SliderKeysProbe : Component
 {
     public float Val;
     public override Element Render()
     {
-        var (v, setV) = UseState(0f);
-        Val = v;
+        var v = UseFloatSignal(0f);
+        Val = v.Peek();
         return new BoxEl
         {
             Padding = Edges4.All(20),
-            Children = [Slider.Ranged(v, setV, new Slider.Options { Min = 0f, Max = 200f, Header = "w1-vol" }, length: 200f, thickness: 32f)],
+            Children = [Slider.Create(v, x => Val = x, new Slider.SliderOptions { Min = 0f, Max = 200f, Header = "w1-vol" }, length: 200f, thickness: 32f)],
         };
     }
 }
 
-// Slider.Ranged inside an OverlayHost (the thumb value tooltip needs a real overlay service) + inline ticks; a leading
+// Slider.Create inside an OverlayHost (the thumb value tooltip needs a real overlay service) + inline ticks; a leading
 // dummy focusable pins the Tab order. The probe never re-renders — the tooltip readout is the live tipValue signal.
 sealed class W1SliderTipProbe : Component
 {
@@ -3327,7 +3327,7 @@ sealed class W1SliderTipProbe : Component
             Children =
             [
                 new BoxEl { Width = 40, Height = 20, OnClick = () => { } },
-                Slider.Ranged(0f, v => Val = v, new Slider.Options { Min = 0f, Max = 200f, TickFrequency = 50f }, length: 200f, thickness: 32f),
+                Slider.Create(new FloatSignal(0f), v => Val = v, new Slider.SliderOptions { Min = 0f, Max = 200f, TickFrequency = 50f }, length: 200f, thickness: 32f),
             ],
         },
     });
@@ -3353,26 +3353,38 @@ sealed class RangedTooltipProbeBody : Component
 
     public override Element Render()
     {
-        float value = 0f;
-        Action<float> onChange = NoOp;
-        if (Stateful)
-        {
-            var (v, setV) = UseState(0f);
-            value = v;
-            onChange = setV;
-        }
+        // Signal-bound: the thumb follows the scrub via the compositor bind regardless of onChange, so the old
+        // Stateful/UseState distinction (whether the thumb moved) is now automatic — one code path.
+        var value = UseFloatSignal(0f);
         return new BoxEl
         {
             Direction = 1, Gap = 12, Padding = Edges4.All(20),
             Children =
             [
                 new BoxEl { Width = 40, Height = 20, OnClick = () => { } },
-                Slider.Ranged(value, onChange, new Slider.Options { Min = 0f, Max = 200f, IsThumbToolTipEnabled = TooltipEnabled }, length: 200f, thickness: 32f),
+                Slider.Create(value, NoOp, new Slider.SliderOptions { Min = 0f, Max = 200f, IsThumbToolTipEnabled = TooltipEnabled }, length: 200f, thickness: 32f),
             ],
         };
     }
 
     static void NoOp(float _) { }
+}
+
+// WS3 P3 — the unified Slider.Create under an OverlayHost (so the signal-bound tooltip has a real overlay service).
+// Caller == null exercises value auto-materialization; onChange records the reported value for the gates.
+sealed class SliderUnifiedProbe : Component
+{
+    public float Val = float.NaN;
+    public FloatSignal? Caller;                 // null ⇒ the control materializes its own signal
+    public Slider.SliderOptions? Opts;          // null ⇒ 0..1, tooltip enabled
+    public override Element Render() => Embed.Comp(() => new OverlayHost
+    {
+        Child = new BoxEl
+        {
+            Padding = Edges4.All(20),
+            Children = [Slider.Create(Caller, x => Val = x, Opts, length: 200f, thickness: 32f)],
+        },
+    });
 }
 
 /// <summary>FG_PROBE=titlebar-resize root — the gallery's titlebar wiring (pane toggle + icon + title + the
@@ -16363,7 +16375,8 @@ static class Slice
         host.RunFrame();
         int renders0 = SliderSignalProbe.Renders;
 
-        var thumbRow = Child(host.Scene, host.Scene.Root, 1);
+        var track = FindRole(host.Scene, host.Scene.Root, AutomationRole.Slider);   // the unified Create wraps a stable root; find the track by role
+        var thumbRow = Child(host.Scene, track, 1);
         var thumb = Child(host.Scene, thumbRow, 0);
         float dx0 = host.Scene.Paint(thumb).LocalTransform.Dx;
 
@@ -16377,6 +16390,115 @@ static class Slice
         Check("60. signal-bound slider: value→transform, NO re-render/reconcile/layout (the slider tank, fixed)",
             moved && noRerender && compositorOnly,
             $"thumbDx {dx0:0}→{dx1:0} renders+{SliderSignalProbe.Renders - renders0} rendered={f.Rendered}");
+    }
+
+    // WS3 P3 — the ONE Slider.Create: ranged options + step snap + keyboard, value auto-materialization, and a
+    // signal-bound tooltip that stays out of the per-move re-render path (the gate-60 contract WITH the tooltip up).
+    static void SliderUnifiedChecks(StringTable strings)
+    {
+        // gate.ctl.slider.one-api — ranged [min,max] mapping + step snap + the WinUI keyboard, ALL through Slider.Create.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("sl-oneapi", new Size2(360, 220), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new SliderUnifiedProbe { Caller = new FloatSignal(0f), Opts = new Slider.SliderOptions { Min = 0f, Max = 100f, Step = 10f, TickFrequency = 20f } };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var track = FindRole(host.Scene, host.Scene.Root, AutomationRole.Slider);
+            var tr = host.Scene.AbsoluteRect(track);
+            var p = new Point2(tr.X + 94f, tr.Y + tr.H / 2f);          // raw 0.47 → 47 → step-10 snap → 50
+            window.QueueInput(new InputEvent(InputKind.PointerDown, p, 0, 0));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, p, 0, 0));   // press+release also focuses the track for the keys
+            host.RunFrame();
+            float snapped = root.Val;
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Right)); host.RunFrame();
+            float afterRight = root.Val;                              // +SmallChange (auto range/100 = 1) → 51
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Home)); host.RunFrame();
+            float afterHome = root.Val;                               // Minimum → 0
+            Check("gate.ctl.slider.one-api ranged [min,max] mapping + step-10 snap + keyboard (SmallChange/Home) all through the single Slider.Create",
+                Near(snapped, 50f) && Near(afterRight, 51f) && Near(afterHome, 0f),
+                $"snapped={snapped:0.#} right={afterRight:0.#} home={afterHome:0.#}");
+        }
+
+        // gate.ctl.slider.automaterialize — value:null scrubs via the control's OWN signal; a caller signal controls it
+        // externally (a programmatic write moves the thumb on the compositor bind, no re-render).
+        bool ownedScrubs;
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("sl-auto", new Size2(360, 220), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new SliderUnifiedProbe { Caller = null, Opts = null };   // null value ⇒ control-owned (0..1)
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var track = FindRole(host.Scene, host.Scene.Root, AutomationRole.Slider);
+            var tr = host.Scene.AbsoluteRect(track);
+            var p = new Point2(tr.X + 120f, tr.Y + tr.H / 2f);        // 0.6 of length 200
+            window.QueueInput(new InputEvent(InputKind.PointerDown, p, 0, 0));
+            host.RunFrame();
+            ownedScrubs = Near(root.Val, 0.6f, 0.02f);                 // the internal signal drove onChange
+            window.QueueInput(new InputEvent(InputKind.PointerUp, p, 0, 0)); host.RunFrame();
+        }
+        bool externalMoves; float exDx0 = 0f, exDx1 = 0f; bool exRendered = true;
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("sl-ext", new Size2(360, 220), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var caller = new FloatSignal(0.2f);
+            var root = new SliderUnifiedProbe { Caller = caller, Opts = null };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var track = FindRole(host.Scene, host.Scene.Root, AutomationRole.Slider);
+            var thumbRow = Child(host.Scene, track, 1);
+            var thumb = Child(host.Scene, thumbRow, 0);
+            exDx0 = host.Scene.Paint(thumb).LocalTransform.Dx;
+            caller.Value = 0.9f;                                       // external programmatic write
+            var f = host.RunFrame();
+            exDx1 = host.Scene.Paint(thumb).LocalTransform.Dx;
+            exRendered = f.Rendered;
+            externalMoves = (exDx1 - exDx0) > 50f && !exRendered;      // moved on the compositor bind, no re-render
+        }
+        Check("gate.ctl.slider.automaterialize value:null scrubs via its own signal; a caller signal controls it externally (compositor-only)",
+            ownedScrubs && externalMoves, $"owned={ownedScrubs} extDx {exDx0:0}→{exDx1:0} rendered={exRendered}");
+
+        // gate.ctl.slider.tooltip-bind — the tooltip opens on press, then drag moves keep FrameStats.Rendered == false.
+        // A 0..1 continuous slider formats the readout as "0" across [0,0.5): the thumb rides the compositor bind while
+        // the bound tooltip text is unchanged (the effect early-returns on paint.Text == next → no LayoutDirty), so a
+        // scrub with the bubble UP stays compositor-only — the bubble follows via OverlayHost.AfterAnimations.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("sl-tip", new Size2(360, 240), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var caller = new FloatSignal(0.1f);
+            var root = new SliderUnifiedProbe { Caller = caller, Opts = null };   // tooltip enabled by default
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var track = FindRole(host.Scene, host.Scene.Root, AutomationRole.Slider);
+            var tr = host.Scene.AbsoluteRect(track);
+            var thumbRow = Child(host.Scene, track, 1);
+            var thumb = Child(host.Scene, thumbRow, 0);
+            var p = new Point2(tr.X + 20f, tr.Y + tr.H / 2f);         // value 0.1 → readout "0"
+            window.QueueInput(new InputEvent(InputKind.PointerDown, p, 0, 0));
+            host.RunFrame(); host.RunFrame();                          // press → tooltip opens + places (this renders — expected)
+            bool opened = HasGlyph(device, strings, "0");
+            float dx0 = host.Scene.Paint(thumb).LocalTransform.Dx;
+            bool dragCompositorOnly = true;
+            for (int i = 1; i <= 3; i++)                               // drag within [0,0.5): readout stays "0"
+            {
+                window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(tr.X + 20f + i * 20f, tr.Y + tr.H / 2f), 0, 0));
+                var f = host.RunFrame();
+                if (f.Rendered) dragCompositorOnly = false;
+            }
+            float dx1 = host.Scene.Paint(thumb).LocalTransform.Dx;
+            window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(tr.X + 80f, tr.Y + tr.H / 2f), 0, 0));
+            host.RunFrame();
+            bool moved = (dx1 - dx0) > 20f;
+            Check("gate.ctl.slider.tooltip-bind tooltip opens on press, then drag moves keep FrameStats.Rendered == false (gate-60 contract WITH the tooltip)",
+                opened && dragCompositorOnly && moved, $"opened={opened} compositorOnly={dragCompositorOnly} thumbDx {dx0:0}→{dx1:0}");
+        }
     }
 
     // Reactive control-flow: For (keyed list) + Show (conditional) restructure the tree with NO parent re-render.
@@ -21573,7 +21695,7 @@ static class Slice
             window.QueueInput(new InputEvent(InputKind.PointerUp, mid, 0, 0));
             host.RunFrame();
             float v = root.Val;
-            Check("72a. Slider.Ranged: maps to [min,max] and snaps to step", Near(v, 50f), $"value={v}");
+            Check("72a. Slider (ranged options): maps to [min,max] and snaps to step", Near(v, 50f), $"value={v}");
         }
 
         // ColorPicker — hue / spectrum / alpha drags + a hex channel edit.
@@ -26924,6 +27046,7 @@ static class Slice
                 var enabled = new Signal<bool>(true);
                 var combo = new Signal<int>(0);
                 var num = new Signal<double>(1);
+                var sval = new FloatSignal(0.3f);
                 string[] items3 = ["a", "b", "c"];
                 using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings,
                     new W0fStaticProbe
@@ -26937,7 +27060,7 @@ static class Slice
                                 CheckBox.Create("c", flip, isEnabled: enabled.Value),
                                 ProgressRing.Indeterminate(isActive: flip.Value),
                                 ProgressBar.Indeterminate(240f, flip.Value ? ProgressBarState.Paused : ProgressBarState.Normal),
-                                Slider.Ranged(0.3f, _ => { }, new Slider.Options()),
+                                Slider.Create(sval, _ => { }, new Slider.SliderOptions()),
                                 PipsPager.Create(5, idx),
                                 Pivot.Create(items3, i => new TextEl("p" + i) { Size = 12f }, selectedIndex: idx),
                                 FlipView.Create([new TextEl("0"), new TextEl("1"), new TextEl("2")], selectedIndex: idx),
@@ -27153,6 +27276,7 @@ static class Slice
         // Signals-first model: granular re-render, the compositor bypass (slider tank), reactive control-flow.
         GranularityChecks(strings);
         SliderSignalChecks(strings);
+        SliderUnifiedChecks(strings);     // WS3 P3: one Slider.Create — ranged/step/keyboard, auto-materialize, signal-bound tooltip
         FlowChecks(strings);
         FlowReorderChecks(strings);
         FlowShowRefreshChecks(strings);

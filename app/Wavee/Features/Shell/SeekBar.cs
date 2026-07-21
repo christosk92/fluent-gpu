@@ -9,7 +9,7 @@ using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
 
-// The center scrub bar — a bespoke media-seek control that REPLACES the old Slider.Bind seek in the player bar. Three
+// The center scrub bar — a bespoke media-seek control that REPLACES the old signal-bound Slider seek in the player bar. Three
 // reasons it isn't a Slider:
 //   1. THE SCRUB GATE (the bug fix). While the user is dragging, the displayed fraction must IGNORE PositionFrac so the
 //      1 Hz position tick can't yank the thumb back under the finger. Slider.Bind reads one signal; we need a derived

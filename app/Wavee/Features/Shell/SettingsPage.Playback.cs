@@ -31,6 +31,9 @@ sealed partial class SettingsPage
     readonly Signal<int> _quality = new(2);
     readonly Signal<int> _eqPreset = new(0);
     readonly Signal<double> _crossSecs = new(5.0);
+    // The unified Slider.Create takes a FloatSignal; mirror _crossSecs (a Signal<double>, shared with the NumberBox)
+    // into it at both write sites so the thumb tracks settings-load AND NumberBox edits (signal-bound, no re-render).
+    readonly FloatSignal _crossSlider = new(5f);
 
     static string[] EqPresetLabels() =>
     [
@@ -196,6 +199,7 @@ sealed partial class SettingsPage
             int ms = (int)MathF.Round((float)Math.Clamp(seconds, 0, 12) * 1000f);
             settings.Set(WaveeSettings.CrossfadeMs, ms);
             _crossSecs.Value = ms / 1000.0;
+            _crossSlider.Value = (float)(ms / 1000.0);
             PushDsp(svc);
             Bump();
         }
@@ -208,8 +212,8 @@ sealed partial class SettingsPage
             Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
             Children =
             [
-                Slider.Ranged((float)_crossSecs.Value, v => Commit(v),
-                    new Slider.Options
+                Slider.Create(_crossSlider, v => Commit(v),
+                    new Slider.SliderOptions
                     {
                         Min = 0f, Max = 12f, Step = 0.5f, TickFrequency = 2f, IsThumbToolTipEnabled = true,
                         ThumbToolTipValueConverter = v => v.ToString("0.#", CultureInfo.InvariantCulture) + " s",

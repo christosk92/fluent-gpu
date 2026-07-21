@@ -437,8 +437,8 @@ sealed class BorderPage : Component
 {
     public override Element Render()
     {
-        var (t, setT) = UseState(0.4f);
-        float thickness = 1f + MathF.Round(t * 5f);
+        var t = UseFloatSignal(0.4f);
+        float thickness = 1f + MathF.Round(t.Value * 5f);
 
         return GalleryPage.Shell("Border",
             "Draws a border, background, and rounded corners around a single child element.",
@@ -451,7 +451,7 @@ sealed class BorderPage : Component
             ControlExample.Build("Border thickness and color",
                 Border.Create(new TextEl("Content inside an accent Border") { Size = 14f, Color = Tok.TextPrimary },
                     borderWidth: thickness, cornerRadius: 8f, borderColor: Tok.AccentDefault, padding: 20f),
-                options: Slider.Create(t, setT, 200f, header: "BorderThickness"),
+                options: Slider.Create(t, length: 200f, options: new Slider.SliderOptions { Header = "BorderThickness" }),
                 output: BodyStrong($"{thickness:0} epx"),
                 code: """
                 var (t, setT) = UseState(0.4f);

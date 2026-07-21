@@ -12,7 +12,7 @@ sealed class ProgressRingPage : Component
     public override Element Render()
     {
         var active = UseSignal(true);
-        var (value, setValue) = UseState(0.7f);
+        var value = UseFloatSignal(0.7f);
         return GalleryPage.Shell("ProgressRing",
             "A circular progress indicator — determinate (a known fraction) or indeterminate (ongoing).",
             ControlExample.Build("An indeterminate ProgressRing",
@@ -27,14 +27,14 @@ sealed class ProgressRingPage : Component
                         onContent: "Working", offContent: "Do work"))
                 """),
             ControlExample.Build("A determinate ProgressRing",
-                HStack(24, ProgressRing.Determinate(value), Slider.Create(value, setValue, 200f)),
-                output: BodyStrong($"{(int)(value * 100)}%"),
+                HStack(24, ProgressRing.Determinate(value.Value), Slider.Create(value, length: 200f)),
+                output: BodyStrong($"{(int)(value.Value * 100)}%"),
                 code: """
-                var (value, setValue) = UseState(0.7f);
+                var value = UseFloatSignal(0.7f);
 
                 HStack(24,
-                    ProgressRing.Determinate(value),
-                    Slider.Create(value, setValue, 200f))
+                    ProgressRing.Determinate(value.Value),
+                    Slider.Create(value, length: 200f))
                 """),
             ControlExample.Build("A determinate ProgressRing with a visible track", ProgressRing.Determinate(0.7f, track: Tok.FillControlStrong),
                 code: """

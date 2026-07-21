@@ -22,7 +22,7 @@ sealed class WaveeShell : Component
     public override Element Render()
     {
         var (playing, setPlaying) = UseState(false);
-        var (seek, setSeek) = UseState(0.3f);
+        var seek = UseFloatSignal(0.3f);
         var shuffle = UseSignal(false);
         return new BoxEl
         {
@@ -30,7 +30,7 @@ sealed class WaveeShell : Component
             Children =
             [
                 new BoxEl { Direction = 0, Grow = 1, Children = [Sidebar(), Embed.Comp(() => new PageHost(_nav, Page))] },
-                PlayerBar(playing, setPlaying, seek, setSeek, shuffle),
+                PlayerBar(playing, setPlaying, seek, shuffle),
             ],
         };
     }
@@ -102,7 +102,7 @@ sealed class WaveeShell : Component
         ],
     };
 
-    Element PlayerBar(bool playing, Action<bool> setPlaying, float seek, Action<float> setSeek, Signal<bool> shuffle) => new BoxEl
+    Element PlayerBar(bool playing, Action<bool> setPlaying, FloatSignal seek, Signal<bool> shuffle) => new BoxEl
     {
         Direction = 0, Height = 84, AlignItems = FlexAlign.Center, Gap = 16, Padding = new Edges4(16, 0, 16, 0),
         Fill = ColorF.FromRgba(0x18, 0x18, 0x18),
@@ -113,7 +113,7 @@ sealed class WaveeShell : Component
             IconButton.Create(Icons.Previous, () => { }),
             IconButton.Create(playing ? Icons.Pause : Icons.Play, () => setPlaying(!playing), IconButton.DefaultStyle with { Size = 44f }),
             IconButton.Create(Icons.Next, () => { }),
-            Slider.Create(seek, setSeek, 260f),
+            Slider.Create(seek, length: 260f),
             ToggleButton.Create("Shuffle", shuffle),
         ],
     };
