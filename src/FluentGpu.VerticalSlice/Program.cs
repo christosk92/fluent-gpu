@@ -535,6 +535,42 @@ sealed class PropsFlushParent : Component
     }
 }
 
+// G4e — a [Props] SOURCE-GENERATED component. The PropsGenerator emits (into this partial) the Signal-backed storage,
+// the subscribing getters, the AlphaProp bind accessor, the PropsData transport + Of/CurrentProps/From, and the
+// IPropsHost.ApplyProps sink. Count+Label are READ in Render (their re-push re-renders the core); Alpha is BOUND to
+// Opacity via AlphaProp (never read in render ⇒ compositor-only, no re-render on change); OnPing is a delegate → a
+// STABLE latest-write forwarder (a fresh lambda never re-renders; the forwarder invokes the newest). Serves
+// gate.props.gen.{field-level, bind-direct, partial-notify, batch-coalesce}.
+[Props]
+sealed partial class PropsGenProbe : Component
+{
+    [Prop] public partial int Count { get; }
+    [Prop] public partial string Label { get; }
+    [Prop] public partial float Alpha { get; }
+    [Prop] public partial Action? OnPing { get; }
+
+    public int Renders;
+    public int LastCount;
+    public string? LastLabel;
+    public NodeHandle Box;
+    public Action? Wired;   // the captured STABLE forwarder (the "wired handler invokes the newest" assertion)
+
+    public override Element Render()
+    {
+        Renders++;
+        LastCount = Count;      // subscribing getter → the render-effect depends on Count
+        LastLabel = Label;      // subscribing getter → the render-effect depends on Label
+        Wired = OnPing;         // capture the stable forwarder (delegates have no signal — no subscription)
+        return new BoxEl
+        {
+            Width = 20f, Height = 20f,
+            Opacity = Prop.Bind(AlphaProp),          // bind the field signal directly → a compositor-only bind effect
+            OnRealized = h => Box = h,
+            Children = [new TextEl(LastLabel + LastCount) { Size = 10f }],
+        };
+    }
+}
+
 // ── G4a call-site-keyed hook substrate probes ────────────────────────────────────────────────────────────────────
 // A CONDITIONAL hook (Middle) between two unconditional neighbours. With the positional cursor this desynced the
 // neighbours' cells; with the keyed substrate each hook keeps its own call-site cell regardless of the conditional.
@@ -5933,6 +5969,109 @@ static class Slice
 
             Check("gate.props.useprops-throws-propless UseProps throws (naming component+props) propless; UsePropsOrDefault null propless, value when present",
                 threw && named && nullPropless && valuePresent, $"threw={threw} named={named} nullPropless={nullPropless} valuePresent={valuePresent}");
+        }
+    }
+
+    // G4e — the [Props] source generator (master plan §WS1 P5). A [Props] partial component gets per-field signal-backed
+    // storage, subscribing getters, XxxProp bind accessors, a PropsData transport, and IPropsHost.ApplyProps — so a
+    // signal-backed field re-renders the core on change, a delegate field is a stable latest-write forwarder that never
+    // re-renders, and a bound XxxProp accessor updates compositor-only.
+    static void PropsGenChecks(StringTable strings)
+    {
+        // gate.props.gen.field-level — changing ONE generated (signal-backed) prop re-renders the core once; supplying a
+        // FRESH delegate (new lambda, all signal-backed fields unchanged) does NOT re-render; the wired handler (the
+        // captured stable forwarder) invokes the NEWEST delegate.
+        {
+            var scene = new SceneStore();
+            var recon = new TreeReconciler(scene, strings);
+            var probe = new PropsGenProbe();
+            int pings = 0;
+            Element Tree(int count, string label, float alpha, Action? onPing)
+                => new BoxEl { Children = [Embed.Comp(new PropsGenProbe.PropsData(count, label, alpha, onPing), () => probe)] };
+            var t1 = Tree(1, "a", 0.5f, () => pings++); recon.ReconcileRoot(t1, null); recon.Runtime.Flush();
+            bool mount = probe.Renders == 1 && probe.LastCount == 1;
+            var t2 = Tree(2, "a", 0.5f, () => pings++); recon.ReconcileRoot(t2, t1); recon.Runtime.Flush();   // one signal field changed
+            bool changedReRenders = probe.Renders == 2 && probe.LastCount == 2;
+            Action fresh = () => pings += 10;
+            var t3 = Tree(2, "a", 0.5f, fresh); recon.ReconcileRoot(t3, t2); recon.Runtime.Flush();           // only a fresh delegate
+            bool freshNoRerender = probe.Renders == 2;
+            probe.Wired!.Invoke();                                                                            // stable forwarder → newest
+            bool invokesNewest = pings == 10;
+            Check("gate.props.gen.field-level a changed signal-prop re-renders; a fresh delegate does not; the forwarder invokes the newest",
+                mount && changedReRenders && freshNoRerender && invokesNewest,
+                $"mount={mount} changed={changedReRenders} freshNoRerender={freshNoRerender} pings={pings}");
+        }
+
+        // gate.props.gen.batch-coalesce — ApplyProps writing TWO changed fields (wrapped in Runtime.Batch at the reuse
+        // seam) re-renders the core EXACTLY ONCE, both values landed (no torn intermediate, no double render).
+        {
+            var scene = new SceneStore();
+            var recon = new TreeReconciler(scene, strings);
+            var probe = new PropsGenProbe();
+            Element Tree(int c, string l) => new BoxEl { Children = [Embed.Comp(new PropsGenProbe.PropsData(c, l, 0.5f, null), () => probe)] };
+            var t1 = Tree(1, "a"); recon.ReconcileRoot(t1, null); recon.Runtime.Flush();
+            bool mount = probe.Renders == 1;
+            var t2 = Tree(2, "b"); recon.ReconcileRoot(t2, t1); recon.Runtime.Flush();   // two signal fields change at once
+            bool once = probe.Renders == 2 && probe.LastCount == 2 && probe.LastLabel == "b";
+            Check("gate.props.gen.batch-coalesce ApplyProps writing two changed fields re-renders the core exactly once (Batch wrap)",
+                mount && once, $"renders={probe.Renders} count={probe.LastCount} label={probe.LastLabel}");
+        }
+
+        // gate.props.gen.bind-direct — a NameProp accessor (AlphaProp) bound to a node channel (Opacity) updates
+        // compositor-only when the field changes: FrameStats.Rendered == false, no component re-render.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("props-gen-bind", new Size2(120, 120), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var probe = new PropsGenProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, new W0fStaticProbe
+            {
+                Build = () => new BoxEl { Children = [Embed.Comp(new PropsGenProbe.PropsData(1, "a", 0.5f, null), () => probe)] },
+            });
+            host.RunFrame();
+            int rendersAfterMount = probe.Renders;
+            float op0 = host.Scene.Paint(probe.Box).Opacity;
+            ((IPropsHost)probe).ApplyProps(new PropsGenProbe.PropsData(1, "a", 0.9f, null));   // change ONLY the bound field
+            var f = host.RunFrame();
+            float op1 = host.Scene.Paint(probe.Box).Opacity;
+            bool changed = Near(op1, 0.9f, 0.01f) && !Near(op0, op1, 0.01f);
+            bool compositorOnly = !f.Rendered && probe.Renders == rendersAfterMount;
+            Check("gate.props.gen.bind-direct AlphaProp bound to Opacity updates compositor-only (Rendered==false, no re-render)",
+                changed && compositorOnly, $"op {op0:0.00}->{op1:0.00} rendered={f.Rendered} renders+{probe.Renders - rendersAfterMount}");
+        }
+
+        // gate.props.gen.partial-notify — each of three fields notifies ONLY its own subscribers: Count/Label (read in
+        // render) re-fire the render-effect while the Alpha bind holds; Alpha (bound only) fires the bind effect while
+        // the render-effect is untouched (Rendered==false, no re-render).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("props-gen-partial", new Size2(120, 120), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var probe = new PropsGenProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, new W0fStaticProbe
+            {
+                Build = () => new BoxEl { Children = [Embed.Comp(new PropsGenProbe.PropsData(1, "a", 0.5f, null), () => probe)] },
+            });
+            host.RunFrame();
+            int r0 = probe.Renders;
+            float opMount = host.Scene.Paint(probe.Box).Opacity;
+            ((IPropsHost)probe).ApplyProps(new PropsGenProbe.PropsData(2, "a", 0.5f, null));   // only Count
+            var fCount = host.RunFrame();
+            bool countIsolated = probe.Renders == r0 + 1 && probe.LastCount == 2
+                && Near(host.Scene.Paint(probe.Box).Opacity, opMount, 0.01f) && fCount.Rendered;
+            ((IPropsHost)probe).ApplyProps(new PropsGenProbe.PropsData(2, "a", 0.8f, null));   // only Alpha (bound)
+            var fAlpha = host.RunFrame();
+            bool alphaIsolated = probe.Renders == r0 + 1 && !fAlpha.Rendered
+                && Near(host.Scene.Paint(probe.Box).Opacity, 0.8f, 0.01f);
+            ((IPropsHost)probe).ApplyProps(new PropsGenProbe.PropsData(2, "b", 0.8f, null));   // only Label
+            host.RunFrame();
+            bool labelIsolated = probe.Renders == r0 + 2 && probe.LastLabel == "b"
+                && Near(host.Scene.Paint(probe.Box).Opacity, 0.8f, 0.01f);
+            Check("gate.props.gen.partial-notify each field notifies only its own subscribers (Count/Label->render, Alpha->bind; others untouched)",
+                countIsolated && alphaIsolated && labelIsolated,
+                $"countIso={countIsolated} alphaIso={alphaIsolated} labelIso={labelIsolated} renders={probe.Renders}");
         }
     }
 
@@ -26644,6 +26783,7 @@ static class Slice
         KeyedChecks(strings);
         ReuseGuardChecks(strings);
         PropsChannelChecks(strings);
+        PropsGenChecks(strings);
         KeyboardChecks(strings);
         AnimChecks();
         ExpressiveMotionChecks(strings);

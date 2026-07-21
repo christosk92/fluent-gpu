@@ -336,8 +336,8 @@ Delivery is **equality-gated**, exactly like a context-provider signal: a fresh-
 `record` so value equality applies) is coalesced — **no child re-render**. A parent that hands back the *same* props
 reference (a memoized/cached object) is short-circuited before the equality walk even runs (O(1)). So re-pushing costs
 nothing when the data didn't change, and a delegate field in the record — which defeats record equality — will
-re-render the child every parent render (the same trade-off context providers have always had; the `[Props]` generator,
-a later phase, is the cure).
+re-render the child every parent render (the same trade-off context providers have always had; the **`[Props]`
+generator** below is the cure — it makes delegate props latest-write so a fresh lambda never re-renders).
 
 `UseProps<T>()` is **non-positional** (no hook cell): it may be called conditionally or after an early return, and it
 throws (naming this component) if the component was mounted without props. For a component usable **both** with and
@@ -354,6 +354,74 @@ remount (fresh instance, state reset) — that lives one level above the props c
 The takeaway: **a parent re-rendering does not re-render its child components** — each re-renders only for its own
 state/context/props. Data reaches a child through the props channel, a signal, or context — never a frozen field. (This
 is also why granular re-render is cheap: there's no prop-diffing cascade — only the channel a child actually reads.)
+
+## `[Props]` — generated signal-backed props (the ergonomic form)
+
+Writing the transport record + `UseProps<T>()` + hand-rolled per-field diffing by hand is boilerplate. Mark the
+component `[Props] partial` and declare each prop as a **get-only partial property** with `[Prop]`; the source
+generator emits all of it — into the same partial — with **zero reflection** (AOT-clean):
+
+```csharp
+using FluentGpu.Hooks;
+
+[Props]
+sealed partial class Header : Component {
+    [Prop] public partial string Title  { get; }   // non-delegate → per-field Signal<T>
+    [Prop] public partial int    Count  { get; }
+    [Prop] public partial Action? OnTap { get; }    // delegate → stable latest-write forwarder
+
+    public override Element Render()                 // reading Title/Count SUBSCRIBES this render (re-renders on change)
+        => new BoxEl { OnClick = () => OnTap?.Invoke(),   // the forwarder invokes the NEWEST OnTap, no re-render needed
+                       Children = [Ui.Text($"{Title} ({Count})")] };
+}
+
+// Mount it — the generated PropsData transport + Of(...) factory:
+Header.Of(title, count, onTap);                      // ≡ Embed.Comp(new Header.PropsData(title, count, onTap), () => new Header())
+```
+
+What the generator emits into the partial:
+
+- **Per non-delegate `[Prop]`** — a mount-allocated `Signal<T>`, a **subscribing getter** (`Title => _titleProp.Value`),
+  and a **`TitleProp`** `IReadSignal<T>` **bind accessor**. Reading `Title` in `Render` subscribes this component (a
+  re-push re-renders it); binding `TitleProp` into a node/child channel (`Opacity = Prop.Bind(alphaProp)`) updates
+  **compositor-only** — no re-render, no reconcile, no layout.
+- **Per delegate `[Prop]`** (`Action` / `Action<T1..T4>` / `Func`) — a **latest-write slot** behind a **stable
+  forwarder**. A parent passing a *fresh but equivalent* lambda does **not** re-render the child (delegates have no
+  signal); a handler that captured the forwarder always invokes the **newest** delegate. A delegate with **more than
+  four parameters** degrades to a raw latest field (no stable forwarder — diagnostic `FGSG004`, Info; a captured
+  reference is then a snapshot, not the newest).
+- **`PropsData`** — the immutable transport record (one positional per `[Prop]`, declared order). **Its declared order
+  is the `PropsData(...)` / `Of(...)` argument order** — keep the `[Prop]` list in the order callers expect.
+- **`void IPropsHost.ApplyProps(object)`** — the delivery sink the reconciler calls at its reuse seam (wrapped in
+  `Runtime.Batch`, so a multi-field re-push settles in **one** child re-render, never a torn intermediate). It
+  reference-short-circuits an identical re-push (O(1)), then writes each field signal **equality-gated** — only
+  *changed* fields notify — and assigns delegate slots without notifying. `MountComponent` seeds it before the first
+  render, so the very first `Render` sees the props.
+- **`Of(...)`** — the embed factory (defaults on the trailing nullable params). **`CurrentProps()` / `From(source)`** —
+  a **snapshot** of the live values (see forwarding below).
+
+**Collection-typed props draw a warning.** A `[Prop]` of `List<>` / `IReadOnlyList<>` / an array / `Dictionary<>` /
+`HashSet<>` is backed by a default-comparer signal, so a mutated-in-place collection **never notifies** and a
+fresh-but-equal one **always** re-renders. The generator emits **`FGSG005` (Warning)** advising an
+immutable/keyed representation (e.g. `ImmutableArray<T>`, which has value semantics and is exempt) or a version stamp.
+(Diagnostics: `FGSG001` a `[Prop]` that isn't a get-only partial property; `FGSG002` a non-`partial` `[Props]` class;
+`FGSG003` a `[Props]` class not deriving `Component` — all Error; `FGSG004` wide delegate — Info; `FGSG005` collection —
+Warning.) A build-time **`PropsManifest`** constant lists, per component, which props became signals vs delegate
+forwarders — the skippability report, greppable and zero runtime cost.
+
+**Forwarding a SUBSET of props to a child** (Solid's `splitProps` problem — passing part of a component's live props on
+has two shapes, choose deliberately):
+
+- **Reactivity-preserving (prefer this):** bind the typed **`XxxProp`** accessors into the child's props/binds
+  (`child: new Panel.PropsData(title: this.Title, alpha: /* bind */ AlphaProp …)` or `Opacity = Prop.Bind(AlphaProp)`).
+  The child's channel tracks the live signal, so later parent re-pushes keep flowing. For a **whole-record** edit, use
+  record `with`: `parentProps with { Title = "x" }` — that IS the "merge" story (PropsData is a `record`).
+- **Snapshot (documented COLLAPSE hazard):** `CurrentProps()` / `From(source)` capture the *current* values into a new
+  `PropsData`. Passing that subset to a child **freezes** those fields at snapshot time (their live reactivity is lost) —
+  use it only when a point-in-time copy is what you want.
+
+Everything from the plain-record section still holds: delivery is reconcile-phase (outside the paint alloc window),
+signals are allocated at **mount**, the forwarder lazily **once**; a changed `Key` still remounts.
 
 ## Allocation discipline (why bindings/effects are wired once)
 
