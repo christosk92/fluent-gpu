@@ -115,7 +115,7 @@ sealed partial class SettingsPage : Component
                     Direction = 1, Padding = new Edges4(WaveeSpace.L, 0f, WaveeSpace.L, 0f),
                     Children =
                     [
-                        SelectorBar.Create(TabLabels(), tab, i => _tab.Value = i),
+                        SelectorBar.Create(TabLabels(), _tab),
                         Divider(),
                     ],
                 },

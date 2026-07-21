@@ -100,7 +100,7 @@ sealed class SearchPage : Component
     Element ChipBar(int chip) => new BoxEl
     {
         Direction = 0, AlignItems = FlexAlign.Center,
-        Children = [SelectorBar.Create(ChipLabels(), chip, i => _chip.Value = i)],
+        Children = [SelectorBar.Create(ChipLabels(), _chip)],
     };
 
     static string[] ChipLabels() =>

@@ -216,7 +216,7 @@ sealed class ButtonsPage : Component
     public override Element Render()
     {
         var (count, setCount) = UseState(0);
-        var (shuffle, setShuffle) = UseState(false);
+        var shuffle = UseSignal(false);
 
         var greenStyle = Button.AccentStyle with
         {
@@ -284,10 +284,10 @@ sealed class ButtonsPage : Component
                             AlignItems = FlexAlign.Center,
                             Children =
                             [
-                                ToggleButton.Create("Shuffle", shuffle, () => setShuffle(!shuffle)),
-                                new TextEl(shuffle ? "Shuffle is ON" : "Shuffle is OFF")
+                                ToggleButton.Create("Shuffle", shuffle),
+                                new TextEl(shuffle.Value ? "Shuffle is ON" : "Shuffle is OFF")
                                     .FontSize(14f)
-                                    .Foreground(shuffle ? Theme.Accent : Theme.WindowText)
+                                    .Foreground(shuffle.Value ? Theme.Accent : Theme.WindowText)
                             ],
                         }),
 
@@ -388,8 +388,8 @@ sealed class InputsPage : Component
     {
         var (vol, setVol) = UseState(0.6f);
         var (seek, setSeek) = UseState(0.3f);
-        var (shuffle, setShuffle) = UseState(false);
-        var (repeat, setRepeat) = UseState(true);
+        var shuffle = UseSignal(false);
+        var repeat = UseSignal(true);
         var (pos, setPos) = UseState(0f);
 
         const int trackSeconds = 214; // ~3:34 song
@@ -472,15 +472,15 @@ sealed class InputsPage : Component
                 AlignItems = FlexAlign.Center,
                 Children =
                 [
-                    ToggleButton.Create("Shuffle", shuffle, () => setShuffle(!shuffle)),
-                    ToggleButton.Create("Repeat", repeat, () => setRepeat(!repeat)),
+                    ToggleButton.Create("Shuffle", shuffle),
+                    ToggleButton.Create("Repeat", repeat),
                     new BoxEl
                     {
                         Children =
                         [
                             new TextEl(
-                                "shuffle=" + (shuffle ? "on" : "off") +
-                                "  repeat=" + (repeat ? "on" : "off"))
+                                "shuffle=" + (shuffle.Value ? "on" : "off") +
+                                "  repeat=" + (repeat.Value ? "on" : "off"))
                             {
                                 Size = 12.5f,
                                 Color = Theme.ControlText with { A = 0.7f },

@@ -118,7 +118,7 @@ public sealed class ComboBox : Component
     /// <summary>WinUI TouchInputMode/GameControllerInputMode: items take ComboBoxItemThemeTouchPadding 11,11,11,13
     /// (generic.xaml:131) instead of the pointer padding 11,5,11,7.</summary>
     public bool TouchInputMode;
-    public Action<int>? OnSelectionChanged;
+    public Action<int>? OnChange;
     /// <summary>WinUI <c>TextSubmitted</c> with the Handled contract (ComboBoxTextSubmittedEventArgs): raised on commit
     /// (Enter / Tab / focus loss) when the typed text matched NO item during search (ComboBox_Partial.cpp:2487–2513).
     /// Return true = handled (the app accepted the custom value; the default matching is skipped); false/null → the
@@ -138,7 +138,7 @@ public sealed class ComboBox : Component
 
     public static Element Create(IReadOnlyList<string> items, Signal<int> selectedIndex, bool editable = false,
                                  Signal<string>? text = null, float width = 220f, string placeholder = "",
-                                 bool isEnabled = true, Action<int>? onSelectionChanged = null,
+                                 bool isEnabled = true, Action<int>? onChange = null,
                                  Func<string, bool>? onTextSubmitted = null,
                                  string header = "", string description = "", string errorText = "",
                                  bool touchInputMode = false, Field<int>? field = null,
@@ -148,7 +148,7 @@ public sealed class ComboBox : Component
         {
             Items = items, ItemDescriptions = itemDescriptions, ItemEnabled = itemEnabled,
             SelectedIndex = selectedIndex, Editable = editable, Text = text,
-            Width = width, Placeholder = placeholder, IsEnabled = isEnabled, OnSelectionChanged = onSelectionChanged,
+            Width = width, Placeholder = placeholder, IsEnabled = isEnabled, OnChange = onChange,
             OnTextSubmitted = onTextSubmitted,
             Header = header, Description = description, ErrorText = errorText, TouchInputMode = touchInputMode, Field = field,
         });
@@ -221,7 +221,7 @@ public sealed class ComboBox : Component
                 if (_edit is { } e) e.ReplaceText(Items[i], 0, Items[i].Length);
                 else text.Value = Items[i];
             }
-            OnSelectionChanged?.Invoke(i);
+            OnChange?.Invoke(i);
         }
 
         void Choose(int i) { Commit(i); handle.Value?.Close(); handle.Value = null; openVer.Value = openVer.Peek() + 1; }

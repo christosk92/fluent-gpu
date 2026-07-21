@@ -268,21 +268,21 @@ sealed class ToggleButtonControlPage : Component
 {
     public override Element Render()
     {
-        var (on, setOn) = UseState(false);
-        var (tri, setTri) = UseState(CheckState.Unchecked);
+        var on = UseSignal(false);
+        var tri = UseSignal(CheckState.Unchecked);
         return GalleryPage.Shell("ToggleButton", "A button that can be switched between two states (or a third, indeterminate, state).",
-            ControlExample.Build("Two-state", ToggleButton.Create(on ? "On" : "Off", on, () => setOn(!on)), output: BodyStrong(on ? "On" : "Off"),
+            ControlExample.Build("Two-state", ToggleButton.Create(on.Value ? "On" : "Off", on), output: BodyStrong(on.Value ? "On" : "Off"),
                 code: """
-                var (on, setOn) = UseState(false);
+                var on = UseSignal(false);
 
-                ToggleButton.Create(on ? "On" : "Off", on, () => setOn(!on))
+                ToggleButton.Create(on.Value ? "On" : "Off", on)
                 """),
-            ControlExample.Build("Three-state", ToggleButton.Create($"{tri}", tri, setTri), output: BodyStrong($"{tri}"),
+            ControlExample.Build("Three-state", ToggleButton.Create($"{tri.Value}", tri), output: BodyStrong($"{tri.Value}"),
                 code: """
-                var (tri, setTri) = UseState(CheckState.Unchecked);
+                var tri = UseSignal(CheckState.Unchecked);
 
                 // Clicks cycle Unchecked -> Checked -> Indeterminate.
-                ToggleButton.Create($"{tri}", tri, setTri)
+                ToggleButton.Create($"{tri.Value}", tri)
                 """));
     }
 }
@@ -336,7 +336,7 @@ sealed class ToggleSplitButtonControlPage : Component
             new("Numbered list", Icons.List, true, () => setStyle("Numbered")),
         };
         return GalleryPage.Shell("ToggleSplitButton", "A SplitButton whose primary part toggles on and off.",
-            ControlExample.Build("A ToggleSplitButton", ToggleSplitButton.Create("List", on, items, glyph: Icons.List),
+            ControlExample.Build("A ToggleSplitButton", ToggleSplitButton.Create("List", items, on, glyph: Icons.List),
                 output: BodyStrong($"On: {on.Value} · {style}"),
                 code: """
                 var on = UseSignal(false);
@@ -346,7 +346,7 @@ sealed class ToggleSplitButtonControlPage : Component
                     new("Numbered list", Icons.List, true, () => setStyle("Numbered")),
                 };
 
-                ToggleSplitButton.Create("List", on, items, glyph: Icons.List)
+                ToggleSplitButton.Create("List", items, on, glyph: Icons.List)
                 """));
     }
 }
@@ -355,43 +355,46 @@ sealed class CheckBoxControlPage : Component
 {
     public override Element Render()
     {
-        var (a, setA) = UseState(false);
-        var (tri, setTri) = UseState(CheckState.Indeterminate);
-        // "Select all" — parent reflects the two children.
-        var (c1, setC1) = UseState(true);
-        var (c2, setC2) = UseState(false);
-        var parent = c1 && c2 ? CheckState.Checked : c1 || c2 ? CheckState.Indeterminate : CheckState.Unchecked;
-        void ToggleAll() { bool all = !(c1 && c2); setC1(all); setC2(all); }
+        var a = UseSignal(false);
+        var tri = UseSignal(CheckState.Indeterminate);
+        // "Select all" — the parent is a DERIVED tri-state pushed into a controlled signal: c1/c2 are the source of
+        // truth; parent re-derives each render (the control reads it) and a click runs ToggleAll via onChange.
+        var c1 = UseSignal(true);
+        var c2 = UseSignal(false);
+        var parent = UseSignal(CheckState.Indeterminate);
+        parent.Value = c1.Value && c2.Value ? CheckState.Checked : c1.Value || c2.Value ? CheckState.Indeterminate : CheckState.Unchecked;
+        void ToggleAll() { bool all = !(c1.Value && c2.Value); c1.Value = all; c2.Value = all; }
 
         return GalleryPage.Shell("CheckBox", "A control for selecting or clearing options — two-state, or three-state with an indeterminate value.",
-            ControlExample.Build("Two-state", CheckBox.Create("I agree", a, () => setA(!a)), output: BodyStrong(a ? "Checked" : "Unchecked"),
+            ControlExample.Build("Two-state", CheckBox.Create("I agree", a), output: BodyStrong(a.Value ? "Checked" : "Unchecked"),
                 code: """
-                var (a, setA) = UseState(false);
+                var a = UseSignal(false);
 
-                CheckBox.Create("I agree", a, () => setA(!a))
+                CheckBox.Create("I agree", a)
                 """),
-            ControlExample.Build("Three-state", CheckBox.Create("Mixed", tri, setTri), output: BodyStrong($"{tri}"),
+            ControlExample.Build("Three-state", CheckBox.Create("Mixed", tri), output: BodyStrong($"{tri.Value}"),
                 code: """
-                var (tri, setTri) = UseState(CheckState.Indeterminate);
+                var tri = UseSignal(CheckState.Indeterminate);
 
-                CheckBox.Create("Mixed", tri, setTri)
+                CheckBox.Create("Mixed", tri)
                 """),
             ControlExample.Build("Select all (indeterminate parent)",
                 VStack(4,
                     CheckBox.Create("Select all", parent, _ => ToggleAll()),
-                    new BoxEl { Margin = new Edges4(24, 0, 0, 0), Direction = 1, Gap = 4, Children = [CheckBox.Create("Option A", c1, () => setC1(!c1)), CheckBox.Create("Option B", c2, () => setC2(!c2))] }),
+                    new BoxEl { Margin = new Edges4(24, 0, 0, 0), Direction = 1, Gap = 4, Children = [CheckBox.Create("Option A", c1), CheckBox.Create("Option B", c2)] }),
                 code: """
-                var (c1, setC1) = UseState(true);
-                var (c2, setC2) = UseState(false);
-                var parent = c1 && c2 ? CheckState.Checked
-                           : c1 || c2 ? CheckState.Indeterminate
-                           : CheckState.Unchecked;
-                void ToggleAll() { bool all = !(c1 && c2); setC1(all); setC2(all); }
+                var c1 = UseSignal(true);
+                var c2 = UseSignal(false);
+                var parent = UseSignal(CheckState.Indeterminate);
+                parent.Value = c1.Value && c2.Value ? CheckState.Checked
+                             : c1.Value || c2.Value ? CheckState.Indeterminate
+                             : CheckState.Unchecked;
+                void ToggleAll() { bool all = !(c1.Value && c2.Value); c1.Value = all; c2.Value = all; }
 
                 VStack(4,
                     CheckBox.Create("Select all", parent, _ => ToggleAll()),
-                    CheckBox.Create("Option A", c1, () => setC1(!c1)),
-                    CheckBox.Create("Option B", c2, () => setC2(!c2)))
+                    CheckBox.Create("Option A", c1),
+                    CheckBox.Create("Option B", c2))
                 """));
     }
 }
@@ -452,15 +455,15 @@ sealed class RadioButtonControlPage : Component
 
     public override Element Render()
     {
-        var (sel, setSel) = UseState(1);
+        var sel = UseSignal(1);
         return GalleryPage.Shell("RadioButton", "A control that lets a user select a single option from a mutually-exclusive set.",
-            ControlExample.Build("A RadioButtons group", RadioButton.Group(Options, sel, setSel),
-                output: BodyStrong($"Selected: {(sel >= 0 ? Options[sel] : "—")}"),
+            ControlExample.Build("A RadioButtons group", RadioButton.Group(Options, sel),
+                output: BodyStrong($"Selected: {(sel.Value >= 0 ? Options[sel.Value] : "—")}"),
                 code: """
                 static readonly string[] Options = { "Small", "Medium", "Large" };
-                var (sel, setSel) = UseState(1);
+                var sel = UseSignal(1);
 
-                RadioButton.Group(Options, sel, setSel)
+                RadioButton.Group(Options, sel)
                 """));
     }
 }
@@ -525,19 +528,19 @@ sealed class ToggleSwitchControlPage : Component
 {
     public override Element Render()
     {
-        var (a, setA) = UseState(true);
-        var (b, setB) = UseState(false);
+        var a = UseSignal(true);
+        var b = UseSignal(false);
         return GalleryPage.Shell("ToggleSwitch", "A switch that a user can turn on and off.",
-            ControlExample.Build("A simple ToggleSwitch", ToggleSwitch.Create(a, () => setA(!a)), output: BodyStrong(a ? "On" : "Off"),
+            ControlExample.Build("A simple ToggleSwitch", ToggleSwitch.Create(a), output: BodyStrong(a.Value ? "On" : "Off"),
                 code: """
-                var (a, setA) = UseState(true);
+                var a = UseSignal(true);
 
-                ToggleSwitch.Create(a, () => setA(!a))
+                ToggleSwitch.Create(a)
                 """),
-            ControlExample.Build("With header + On/Off content", ToggleSwitch.Create(b, () => setB(!b), header: "Wi-Fi", onContent: "Connected", offContent: "Disconnected"),
-                output: BodyStrong(b ? "Connected" : "Disconnected"),
+            ControlExample.Build("With header + On/Off content", ToggleSwitch.Create(b, header: "Wi-Fi", onContent: "Connected", offContent: "Disconnected"),
+                output: BodyStrong(b.Value ? "Connected" : "Disconnected"),
                 code: """
-                ToggleSwitch.Create(b, () => setB(!b),
+                ToggleSwitch.Create(b,
                     header: "Wi-Fi", onContent: "Connected", offContent: "Disconnected")
                 """));
     }

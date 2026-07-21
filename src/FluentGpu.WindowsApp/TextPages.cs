@@ -17,41 +17,41 @@ sealed class TextBoxPage : Component
         var (committed, setCommitted) = UseState("—");
         return GalleryPage.Shell("TextBox",
             "A single-line text field for entering and editing plain text. (Type to edit; Enter commits, Esc cancels.)",
-            ControlExample.Build("A simple TextBox", TextBox.Create("Enter your name"),
+            ControlExample.Build("A simple TextBox", TextBox.Create(options: new TextBox.TextBoxOptions { Placeholder = "Enter your name" }),
                 code: """
-                TextBox.Create("Enter your name")
+                TextBox.Create(options: new TextBox.TextBoxOptions { Placeholder = "Enter your name" })
                 """),
-            ControlExample.Build("With a header and a description", TextBox.Create("you@example.com", 280f, "Email", description: "We'll only use this to contact you."),
+            ControlExample.Build("With a header and a description", TextBox.Create(options: new TextBox.TextBoxOptions { Placeholder = "you@example.com", Width = 280f, Header = "Email", Description = "We'll only use this to contact you." }),
                 code: """
-                TextBox.Create("you@example.com", 280f, "Email",
-                    description: "We'll only use this to contact you.")
+                TextBox.Create(options: new TextBox.TextBoxOptions { Placeholder = "you@example.com", Width = 280f, Header = "Email",
+                    Description = "We'll only use this to contact you." })
                 """),
-            ControlExample.Build("A read-only TextBox", TextBox.Create(width: 320f, text: locked, isReadOnly: true),
+            ControlExample.Build("A read-only TextBox", TextBox.Create(locked, options: new TextBox.TextBoxOptions { Width = 320f, IsReadOnly = true }),
                 code: """
                 var text = UseSignal("This text is read-only — selection and copy still work; edits are blocked.");
 
-                TextBox.Create(width: 320f, text: text, isReadOnly: true)
+                TextBox.Create(text, options: new TextBox.TextBoxOptions { Width = 320f, IsReadOnly = true })
                 """),
-            ControlExample.Build("A multi-line TextBox", TextBox.Create("Type multiple lines of text", 320f, acceptsReturn: true, height: 96f),
+            ControlExample.Build("A multi-line TextBox", TextBox.Create(options: new TextBox.TextBoxOptions { Placeholder = "Type multiple lines of text", Width = 320f, AcceptsReturn = true, Height = 96f }),
                 description: "acceptsReturn turns Enter into a newline; the delete button is hidden for multi-line boxes.",
                 code: """
-                TextBox.Create("Type multiple lines of text", 320f,
-                    acceptsReturn: true, height: 96f)
+                TextBox.Create(options: new TextBox.TextBoxOptions { Placeholder = "Type multiple lines of text", Width = 320f,
+                    AcceptsReturn = true, Height = 96f })
                 """),
-            ControlExample.Build("With a character limit (MaxLength)", TextBox.Create("Max 12 characters", 280f, text: capped, maxLength: 12),
+            ControlExample.Build("With a character limit (MaxLength)", TextBox.Create(capped, options: new TextBox.TextBoxOptions { Placeholder = "Max 12 characters", Width = 280f, MaxLength = 12 }),
                 output: GalleryPage.LiveText(() => $"{capped.Value.Length}/12"),
                 code: """
                 var text = UseSignal("");
 
-                TextBox.Create("Max 12 characters", 280f, text: text, maxLength: 12)
+                TextBox.Create(text, options: new TextBox.TextBoxOptions { Placeholder = "Max 12 characters", Width = 280f, MaxLength = 12 })
                 """),
-            ControlExample.Build("Filtering input (BeforeTextChanging)", TextBox.Create("Digits only", 280f, beforeTextChanging: s => s.All(char.IsAsciiDigit)),
+            ControlExample.Build("Filtering input (BeforeTextChanging)", TextBox.Create(options: new TextBox.TextBoxOptions { Placeholder = "Digits only", Width = 280f, BeforeTextChanging = s => s.All(char.IsAsciiDigit) }),
                 description: "The gate receives the proposed full text; returning false rejects the insertion (typing, paste, IME).",
                 code: """
-                TextBox.Create("Digits only", 280f,
-                    beforeTextChanging: s => s.All(char.IsAsciiDigit))
+                TextBox.Create(options: new TextBox.TextBoxOptions { Placeholder = "Digits only", Width = 280f,
+                    BeforeTextChanging = s => s.All(char.IsAsciiDigit) })
                 """),
-            ControlExample.Build("Two-way text with Enter commit", TextBox.Create("Type, then press Enter", 280f, text: live, onCommit: setCommitted),
+            ControlExample.Build("Two-way text with Enter commit", TextBox.Create(live, options: new TextBox.TextBoxOptions { Placeholder = "Type, then press Enter", Width = 280f, OnCommit = setCommitted }),
                 output: VStack(4,
                     GalleryPage.LiveText(() => "Live: " + (live.Value.Length == 0 ? "—" : live.Value)),
                     BodyStrong($"Committed: {committed}")),
@@ -59,7 +59,7 @@ sealed class TextBoxPage : Component
                 var text = UseSignal("");
                 var (committed, setCommitted) = UseState("—");
 
-                TextBox.Create("Type, then press Enter", 280f, text: text, onCommit: setCommitted)
+                TextBox.Create(text, options: new TextBox.TextBoxOptions { Placeholder = "Type, then press Enter", Width = 280f, OnCommit = setCommitted })
 
                 // The live readout rides a compositor-only text binding — no page re-render per keystroke:
                 new TextEl("") { Text = text }

@@ -157,8 +157,8 @@ sealed class ValidationGuideBody : Component
                         Rules.Matches(EmailRx, "validation.email"));
 
                     // ONE prop wires border + message + touched-on-blur:
-                    TextBox.Create(header: "Email", placeholder: "you@example.com",
-                                   width: 380f, text: _email, field: email);
+                    TextBox.Create(_email, options: new TextBox.TextBoxOptions { Header = "Email", Placeholder = "you@example.com",
+                                   Width = 380f, Field = email });
                     """),
 
                 new BoxEl { Height = 12f },
@@ -547,7 +547,7 @@ sealed class EmailOnlyDemo : Component
             Rules.Required("validation.required"),
             Rules.Matches(EmailRx, "validation.email"));
 
-        return TextBox.Create(header: "Email", placeholder: "you@example.com", width: 380f, text: _email, field: email);
+        return TextBox.Create(_email, options: new TextBox.TextBoxOptions { Header = "Email", Placeholder = "you@example.com", Width = 380f, Field = email });
     }
 }
 
@@ -568,7 +568,7 @@ sealed class NoSpacesDemo : Component
         // Reuse the shipped "match" message text for this demo (no validation.nospaces key in the sample table); the
         // factory body is the point — interning once, comparing per keystroke.
         var user = UseField(_user, Rules.Required("validation.required"), NoSpaces("validation.match"));
-        return TextBox.Create(header: "Username (no spaces)", placeholder: "no spaces allowed", width: 380f, text: _user, field: user);
+        return TextBox.Create(_user, options: new TextBox.TextBoxOptions { Header = "Username (no spaces)", Placeholder = "no spaces allowed", Width = 380f, Field = user });
     }
 }
 
@@ -604,9 +604,9 @@ sealed class ValidationGuideDemo : Component
                 Direction = 1, Gap = 14f, MaxWidth = 460f,
                 Children =
                 [
-                    TextBox.Create(header: "Email", placeholder: "you@example.com", width: 380f, text: _email, field: email),
-                    TextBox.Create(header: "Password", width: 380f, text: _pwd, field: pwd),
-                    TextBox.Create(header: "Confirm password", width: 380f, text: _confirm, field: confirm),
+                    TextBox.Create(_email, options: new TextBox.TextBoxOptions { Header = "Email", Placeholder = "you@example.com", Width = 380f, Field = email }),
+                    TextBox.Create(_pwd, options: new TextBox.TextBoxOptions { Header = "Password", Width = 380f, Field = pwd }),
+                    TextBox.Create(_confirm, options: new TextBox.TextBoxOptions { Header = "Confirm password", Width = 380f, Field = confirm }),
                     Embed.Comp(() => new ValidationGuideSubmitRow(form)),
                 ],
             },
@@ -619,7 +619,7 @@ sealed class ValidationGuideDemo : Component
             var pwd     = UseField(_pwd,     Rules.Required(), Rules.MinLength(8));
             var confirm = UseField(_confirm, Rules.Equals(_pwd, "validation.match"));   // cross-field, free
 
-            TextBox.Create(header: "Email", text: _email, field: email);   // one prop wires border + message + touched
+            TextBox.Create(_email, options: new TextBox.TextBoxOptions { Header = "Email", Field = email });   // one prop wires border + message + touched
 
             Button.Accent("Create account",
                 () => { if (form.Validate()) Save(); },

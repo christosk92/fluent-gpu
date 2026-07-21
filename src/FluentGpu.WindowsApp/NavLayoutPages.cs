@@ -11,7 +11,7 @@ sealed class SplitViewPage : Component
 {
     public override Element Render()
     {
-        var (open, setOpen) = UseState(true);
+        var open = UseSignal(true);
         return GalleryPage.Shell("SplitView",
             "A container with two views: a side pane and the main content area.",
             ControlExample.Build("A SplitView", Frame(SplitView.Create(DemoPane(), DemoContent(), paneWidth: 200f)),
@@ -21,15 +21,15 @@ sealed class SplitViewPage : Component
 
                 SplitView.Create(pane, content, paneWidth: 200f)
                 """),
-            ControlExample.Build("Toggling the pane (isPaneOpen)", Frame(SplitView.Create(DemoPane(), DemoContent(), paneWidth: 200f, isPaneOpen: open)),
-                options: ToggleSwitch.Create(open, () => setOpen(!open), header: "IsPaneOpen"),
+            ControlExample.Build("Toggling the pane (isPaneOpen)", Frame(SplitView.Create(DemoPane(), DemoContent(), paneWidth: 200f, isPaneOpen: open.Value)),
+                options: ToggleSwitch.Create(open, header: "IsPaneOpen"),
                 code: """
-                var (open, setOpen) = UseState(true);
+                var open = UseSignal(true);
 
-                SplitView.Create(pane, content, paneWidth: 200f, isPaneOpen: open)
+                SplitView.Create(pane, content, paneWidth: 200f, isPaneOpen: open.Value)
 
                 // Paired with:
-                ToggleSwitch.Create(open, () => setOpen(!open), header: "IsPaneOpen")
+                ToggleSwitch.Create(open, header: "IsPaneOpen")
                 """),
             ControlExample.Build("A custom pane width", Frame(SplitView.Create(DemoPane(), DemoContent(), paneWidth: 120f)),
                 code: """
@@ -60,7 +60,7 @@ sealed class BreadcrumbBarPage : Component
 
                 BreadcrumbBar.Create(Crumbs)
                 """),
-            ControlExample.Build("Navigating with onSelect", BreadcrumbBar.Create(Crumbs[..depth], i => setDepth(i + 1)),
+            ControlExample.Build("Navigating with onChange", BreadcrumbBar.Create(Crumbs[..depth], i => setDepth(i + 1)),
                 description: "Clicking a crumb trims the trail back to it (the WinUI ItemClicked pattern).",
                 output: VStack(8,
                     BodyStrong($"Location: {Crumbs[depth - 1]}"),
@@ -79,38 +79,38 @@ sealed class SelectorBarPage : Component
     static readonly string[] Views = { "Recent", "Shared", "Favorites" };
     public override Element Render()
     {
-        var (sel, setSel) = UseState(0);
-        var (view, setView) = UseState(0);
+        var sel = UseSignal(0);
+        var view = UseSignal(0);
         return GalleryPage.Shell("SelectorBar",
             "A horizontal, single-select list with an accent underline on the selected item.",
-            ControlExample.Build("A SelectorBar", SelectorBar.Create(Items, sel, setSel),
-                output: GalleryPage.LiveText(() => Items[sel]),
+            ControlExample.Build("A SelectorBar", SelectorBar.Create(Items, sel),
+                output: GalleryPage.LiveText(() => Items[sel.Value]),
                 code: """
                 static readonly string[] Items = { "All", "Photos", "Videos", "Folders" };
-                var (sel, setSel) = UseState(0);
+                var sel = UseSignal(0);
 
-                SelectorBar.Create(Items, sel, setSel)
+                SelectorBar.Create(Items, sel)
                 """),
             ControlExample.Build("Switching views with a SelectorBar",
                 VStack(12,
-                    SelectorBar.Create(Views, view, setView),
+                    SelectorBar.Create(Views, view),
                     new BoxEl
                     {
                         Width = 360, Height = 100, Padding = Edges4.All(16), Fill = Tok.FillSolidBase,
                         BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f, Corners = Radii.OverlayAll,
-                        Children = [Body($"Content of the {Views[view]} view.")],
+                        Children = [Body($"Content of the {Views[view.Value]} view.")],
                     }),
                 code: """
                 static readonly string[] Views = { "Recent", "Shared", "Favorites" };
-                var (view, setView) = UseState(0);
+                var view = UseSignal(0);
 
                 VStack(12,
-                    SelectorBar.Create(Views, view, setView),
+                    SelectorBar.Create(Views, view),
                     new BoxEl
                     {
                         Width = 360, Height = 100, Padding = Edges4.All(16), Fill = Tok.FillSolidBase,
                         BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f, Corners = Radii.OverlayAll,
-                        Children = [Body($"Content of the {Views[view]} view.")],
+                        Children = [Body($"Content of the {Views[view.Value]} view.")],
                     })
                 """));
     }

@@ -84,7 +84,7 @@ public sealed class PasswordBox : Component
         bool isEnabled = true,
         string? description = null,
         Signal<string>? password = null,
-        Action<string>? onPasswordChanged = null,
+        Action<string>? onChange = null,
         Action<string>? onCommit = null,
         TemplateParts? parts = null,
         Field<string>? field = null)
@@ -93,7 +93,7 @@ public sealed class PasswordBox : Component
             Placeholder = placeholder, Width = width, Header = header,
             RevealMode = revealMode, PasswordChar = passwordChar, MaxLength = maxLength, IsEnabled = isEnabled,
             Description = description, Password = password,
-            OnPasswordChanged = onPasswordChanged, OnCommit = onCommit, Parts = parts, Field = field,
+            OnPasswordChanged = onChange, OnCommit = onCommit, Parts = parts, Field = field,
         });
 
     private EditableText? _edit;

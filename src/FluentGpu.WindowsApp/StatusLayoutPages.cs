@@ -278,12 +278,12 @@ sealed class PipsPagerPage : Component
         var page = UseSignal(0);
         return GalleryPage.Shell("PipsPager",
             "A glyph-based pager for navigating a small, fixed number of pages.",
-            ControlExample.Build("A PipsPager", PipsPager.Create(5, sel.Value, i => sel.Value = i),
+            ControlExample.Build("A PipsPager", PipsPager.Create(5, sel),
                 output: GalleryPage.LiveText(() => $"Page {sel.Value + 1} / 5"),
                 code: """
                 var sel = UseSignal(0);
 
-                PipsPager.Create(5, sel.Value, i => sel.Value = i)
+                PipsPager.Create(5, sel)
                 """),
             ControlExample.Build("Paging content (the FlipView pairing)",
                 new BoxEl
@@ -297,7 +297,7 @@ sealed class PipsPagerPage : Component
                             Corners = Radii.OverlayAll, Fill = Tok.FillCardDefault, BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f,
                             Children = [BodyStrong(Slides[page.Value])],
                         },
-                        PipsPager.Create(Slides.Length, page.Value, i => page.Value = i),
+                        PipsPager.Create(Slides.Length, page),
                     ],
                 },
                 output: GalleryPage.LiveText(() => Slides[page.Value]),
@@ -312,7 +312,7 @@ sealed class PipsPagerPage : Component
                         Corners = Radii.OverlayAll, Fill = Tok.FillCardDefault, BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f,
                         Children = [BodyStrong(Slides[page.Value])],
                     },
-                    PipsPager.Create(Slides.Length, page.Value, i => page.Value = i))
+                    PipsPager.Create(Slides.Length, page))
                 """));
     }
 }

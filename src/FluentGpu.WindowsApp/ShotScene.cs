@@ -122,7 +122,7 @@ sealed class ShotScene : Component
         },
     };
 
-    static Element Content(string id) => id switch
+    Element Content(string id) => id switch
     {
         // Sanity scene: a flat known-color rounded rect (proves the readback→PNG pipeline before trusting acrylic shots).
         "swatch" => new BoxEl { Width = 200, Height = 120, Corners = Radii.OverlayAll, Fill = ColorF.FromRgba(0x10, 0x7C, 0x10) },
@@ -158,18 +158,18 @@ sealed class ShotScene : Component
         // unselected RadioButton must read as an OUTLINED box/ring (hairline strong-stroke + ~10% fill), never a solid
         // grey chip (the donut bug). The TextBox placeholder must be DIM and the caret would sit at x=0 (empty).
         "checkbox" => CardColumn(
-            CheckBox.Create("Unchecked", CheckState.Unchecked, _ => { }),
-            CheckBox.Create("Checked", CheckState.Checked, _ => { }),
-            CheckBox.Create("Indeterminate", CheckState.Indeterminate, _ => { })),
+            CheckBox.Create("Unchecked", UseSignal(CheckState.Unchecked)),
+            CheckBox.Create("Checked", UseSignal(CheckState.Checked)),
+            CheckBox.Create("Indeterminate", UseSignal(CheckState.Indeterminate))),
         "radiobutton" => CardColumn(
-            RadioButton.Create("Option A", false, () => { }),
-            RadioButton.Create("Option B (selected)", true, () => { })),
+            RadioButton.Create("Option A", false),
+            RadioButton.Create("Option B (selected)", true)),
         "toggle" => CardColumn(
-            ToggleSwitch.Create(false, () => { }, "Off"),
-            ToggleSwitch.Create(true, () => { }, "On")),
+            ToggleSwitch.Create(header: "Off"),
+            ToggleSwitch.Create(UseSignal(true), header: "On")),
         "textbox" => CardColumn(
-            TextBox.Create("Enter your name"),
-            TextBox.Create("you@example.com", 280f, "Email")),
+            TextBox.Create(options: new TextBox.TextBoxOptions { Placeholder = "Enter your name" }),
+            TextBox.Create(options: new TextBox.TextBoxOptions { Placeholder = "you@example.com", Width = 280f, Header = "Email" })),
         _ => new TextEl($"unknown shot '{id}'") { Size = 16f, Color = Tok.TextPrimary },
     };
 
@@ -744,9 +744,9 @@ sealed class ValidationShot : Component
         UseEffect(() => form.Validate(), RevealOnce);
 
         return ShotCards.Column(
-            TextBox.Create(header: "Email", width: 340f, text: _email, field: email),
-            TextBox.Create(header: "Password", width: 340f, text: _pwd, field: pwd),
-            TextBox.Create(header: "Confirm password", width: 340f, text: _confirm, field: confirm));
+            TextBox.Create(_email, options: new TextBox.TextBoxOptions { Header = "Email", Width = 340f, Field = email }),
+            TextBox.Create(_pwd, options: new TextBox.TextBoxOptions { Header = "Password", Width = 340f, Field = pwd }),
+            TextBox.Create(_confirm, options: new TextBox.TextBoxOptions { Header = "Confirm password", Width = 340f, Field = confirm }));
     }
 
     static readonly DepKey LocOnce = "val-shot-loc";
@@ -782,7 +782,7 @@ sealed class PipsPagerShot : Component
     public override Element Render()
     {
         var sel = UseSignal(2);
-        return ShotCards.Column(PipsPager.Create(7, sel.Value, i => sel.Value = i));
+        return ShotCards.Column(PipsPager.Create(7, sel));
     }
 }
 
@@ -792,8 +792,8 @@ sealed class SelectorBarShot : Component
 
     public override Element Render()
     {
-        var (sel, setSel) = UseState(1);
-        return ShotCards.Column(SelectorBar.Create(Items, sel, setSel));
+        var sel = UseSignal(1);
+        return ShotCards.Column(SelectorBar.Create(Items, sel));
     }
 }
 
@@ -819,8 +819,8 @@ sealed class RadioButtonsShot : Component
 
     public override Element Render()
     {
-        var (sel, setSel) = UseState(1);
-        return ShotCards.Column(RadioButton.Group(Options, sel, setSel));
+        var sel = UseSignal(1);
+        return ShotCards.Column(RadioButton.Group(Options, sel));
     }
 }
 

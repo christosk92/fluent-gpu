@@ -61,7 +61,7 @@ sealed partial class SettingsPage
         int preset = Math.Clamp(_eqPreset.Value, 0, s_eqPresetIds.Length - 1);
 
         Element Toggle(SettingKey<bool> key, bool pushDsp = false, bool bumpPlayerBar = false, bool bumpPlayback = false) =>
-            ToggleSwitch.Create(settings?.Get(key) ?? true, () =>
+            ToggleSwitch.Create(new Signal<bool>(settings?.Get(key) ?? true), onChange: _ =>
             {
                 if (settings is null) return;
                 settings.Set(key, !settings.Get(key));
@@ -135,7 +135,7 @@ sealed partial class SettingsPage
 
     Element EqualizerGroup(Services? svc, IAppSettings? settings, bool eqOn, float[] gains, int preset)
     {
-        var toggle = ToggleSwitch.Create(eqOn, () =>
+        var toggle = ToggleSwitch.Create(new Signal<bool>(eqOn), onChange: _ =>
         {
             if (settings is null) return;
             settings.Set(WaveeSettings.EqualizerEnabled, !settings.Get(WaveeSettings.EqualizerEnabled));
@@ -155,7 +155,7 @@ sealed partial class SettingsPage
                 SettingsExpander.Item(Loc.Get(Strings.Settings.Sound.Preset), EqPresetDescriptions()[preset],
                     ComboBox.Create(EqPresetLabels(), _eqPreset, width: 200f, itemDescriptions: EqPresetDescriptions(),
                         isEnabled: eqOn && settings is not null,
-                        onSelectionChanged: i => ApplyEqPreset(svc, settings, i))),
+                        onChange: i => ApplyEqPreset(svc, settings, i))),
                 SettingsExpander.Item(Loc.Get(Strings.Settings.Sound.Curve),
                     eqOn ? Loc.Get(Strings.Settings.Sound.CurveOn) : Loc.Get(Strings.Settings.Sound.CurveOff),
                     new BoxEl
@@ -182,7 +182,7 @@ sealed partial class SettingsPage
 
     Element CrossfadeGroup(Services? svc, IAppSettings? settings, bool crossOn)
     {
-        var toggle = ToggleSwitch.Create(crossOn, () =>
+        var toggle = ToggleSwitch.Create(new Signal<bool>(crossOn), onChange: _ =>
         {
             if (settings is null) return;
             settings.Set(WaveeSettings.CrossfadeEnabled, !settings.Get(WaveeSettings.CrossfadeEnabled));
@@ -218,7 +218,7 @@ sealed partial class SettingsPage
                 NumberBox.Create(value: _crossSecs, minimum: 0, maximum: 12, smallChange: 0.5,
                     spinButtonPlacementMode: NumberBoxSpinButtonPlacementMode.Compact, width: 96f,
                     formatter: v => v.ToString("0.#", CultureInfo.InvariantCulture) + " s",
-                    onValueChanged: (_, v) => Commit(v), isEnabled: crossOn && settings is not null),
+                    onChange: v => Commit(v), isEnabled: crossOn && settings is not null),
             ],
         };
 
@@ -287,7 +287,7 @@ sealed partial class SettingsPage
         return ComboBox.Create(labels, _quality, width: 280f,
             itemDescriptions: descriptions, itemEnabled: enabled,
             isEnabled: settings is not null,
-            onSelectionChanged: i =>
+            onChange: i =>
             {
                 if (settings is null || i < 0 || i > 2) return;
                 settings.Set(WaveeSettings.PlaybackQuality, i);

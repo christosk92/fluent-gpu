@@ -151,7 +151,7 @@ sealed class ItemsViewPage : Component
         // Card 1 (picker): a reactive index over the 5 visuals; the live ItemsView re-renders when it changes. A
         // SelectionModel pre-selecting index 0 (created once, in the memo factory) keeps a selected row visible so the
         // chosen selector visual always reads.
-        var (sel, setSel) = UseState(0);
+        var sel = UseSignal(0);
         var pickSel = UseMemo(static () => { var m = new SelectionModel(); m.Select(0); return m; }, DepKey.Empty);
 
         // Card-group 2 (List preset) state — re-homed verbatim from the deleted ListViewPage.
@@ -233,23 +233,23 @@ sealed class ItemsViewPage : Component
                 ItemsView.Create(Items.Length, i => Tile(Items[i]), RepeatLayout.Stack(44f),
                     selectionMode: ItemsSelectionMode.Single,
                     selection: pickSel,
-                    selector: (SelectorVisual)sel,
+                    selector: (SelectorVisual)sel.Value,
                     itemText: i => Items[i],
                     // Constructor args freeze at mount (the reconciler never re-renders a mounted component on a
                     // parent re-render — pitfalls.md "child ignores new data"). A sel-derived Key remounts the view
                     // with the new Selector; pickSel is hoisted above, so the selection survives the remount.
-                    grow: 0f) with { Key = "selvis-" + Visuals[sel] },
+                    grow: 0f) with { Key = "selvis-" + Visuals[sel.Value] },
                 description: "Any selector visual works with any layout × any selection mode — no WinUI capability cliffs. AccentPill is the ListView accent bar; Check is the GridView corner check; FullRow is a full-bleed superset; Border is the default ItemContainer ring; None is app-drawn.",
-                options: RadioButton.Group(Visuals, sel, setSel),
+                options: RadioButton.Group(Visuals, sel),
                 code: """
-                var (sel, setSel) = UseState(0);
+                var sel = UseSignal(0);
                 static readonly string[] Visuals = { "AccentPill", "Check", "FullRow", "Border", "None" };
 
                 ItemsView.Create(Items.Length, i => Tile(Items[i]), RepeatLayout.Stack(44f),
                     selectionMode: ItemsSelectionMode.Single,
-                    selector: (SelectorVisual)sel,
-                    grow: 0f) with { Key = "selvis-" + Visuals[sel] }   // key change ⇒ remount with the new selector
-                // …wired to RadioButton.Group(Visuals, sel, setSel)
+                    selector: (SelectorVisual)sel.Value,
+                    grow: 0f) with { Key = "selvis-" + Visuals[sel.Value] }   // key change ⇒ remount with the new selector
+                // …wired to RadioButton.Group(Visuals, sel)
                 """),
 
             // ── 2) List preset (AccentPill) — absorbs the 3 deleted ListViewPage examples ─────────────────────────

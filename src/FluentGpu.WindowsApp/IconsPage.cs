@@ -87,7 +87,7 @@ sealed class IconsPage : Component
                     Direction = 0, Gap = 12f, AlignItems = FlexAlign.Center,
                     Children =
                     [
-                        TextBox.Create(placeholder: "Search icons by name, tag, or codepoint", width: 320f, onTextChanged: setQuery),
+                        TextBox.Create(onChange: setQuery, options: new TextBox.TextBoxOptions { Placeholder = "Search icons by name, tag, or codepoint", Width = 320f }),
                         Caption($"{filtered.Length} / {All.Length} icons").Tertiary(),
                     ],
                 },

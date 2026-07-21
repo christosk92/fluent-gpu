@@ -234,7 +234,7 @@ sealed partial class SettingsPage
                 : Loc.Format("settings.storage.licenseKeysCount", ("count", ks.Count)))
             : Loc.Get(Strings.Settings.Storage.LicenseKeysSub);
 
-        Element Toggle(SettingKey<bool> key) => ToggleSwitch.Create(settings?.Get(key) ?? true, () =>
+        Element Toggle(SettingKey<bool> key) => ToggleSwitch.Create(new Signal<bool>(settings?.Get(key) ?? true), onChange: _ =>
         {
             if (settings is null) return;
             settings.Set(key, !settings.Get(key));
@@ -390,7 +390,6 @@ sealed partial class SettingsPage
         {
             if (settings is null) return;
             next = Math.Clamp(next, 0, 2);
-            _bodyBudgetMode.Value = next;
             settings.Set(WaveeSettings.AudioBodyCacheBudgetMode, next);
             svc?.AudioBodyCache?.Trim();
             Bump();
@@ -402,7 +401,7 @@ sealed partial class SettingsPage
             (int)AudioCacheBudgetMode.DriveShare => NumberBox.Create(value: _bodyBudgetPercent,
                 minimum: 0, maximum: 90, smallChange: 1, spinButtonPlacementMode: NumberBoxSpinButtonPlacementMode.Compact,
                 width: 150f, formatter: v => v <= 0 ? Loc.Get(Strings.Settings.Storage.AutoTenPercent) : v.ToString("0", CultureInfo.InvariantCulture) + "%",
-                onValueChanged: (_, v) =>
+                onChange: v =>
                 {
                     if (settings is null) return;
                     int pct = Math.Clamp((int)Math.Round(v), 0, 90);
@@ -424,7 +423,7 @@ sealed partial class SettingsPage
                 SelectorBar.Create([
                     Loc.Get(Strings.Settings.Storage.FixedSize),
                     Loc.Get(Strings.Settings.Storage.DriveShare),
-                    Loc.Get(Strings.Settings.Storage.Unlimited)], mode, SetMode),
+                    Loc.Get(Strings.Settings.Storage.Unlimited)], _bodyBudgetMode, onChange: SetMode),
                 editor,
                 ProgressBar.Determinate(frac, width: 300f, state: over ? ProgressBarState.Error : ProgressBarState.Normal),
                 new TextEl(Strings.Settings.Storage.UsedOfBudget(FmtBytes(used), budgetLabel))
@@ -456,7 +455,7 @@ sealed partial class SettingsPage
             Children =
             [
                 ComboBox.Create(s_bodyBudgetLabels, _bodyBudgetPreset, width: 120f, isEnabled: settings is not null,
-                    onSelectionChanged: i =>
+                    onChange: i =>
                     {
                         if (i < 0 || i >= s_bodyBudgetBytes.Length) return;
                         _bodyBudgetGiB.Value = s_bodyBudgetBytes[i] / (double)(1L << 30);
@@ -466,7 +465,7 @@ sealed partial class SettingsPage
                     maximum: long.MaxValue / (double)(1L << 30), smallChange: 1,
                     spinButtonPlacementMode: NumberBoxSpinButtonPlacementMode.Compact, width: 150f,
                     formatter: v => v.ToString("0.###", CultureInfo.InvariantCulture) + " GB",
-                    onValueChanged: (_, v) =>
+                    onChange: v =>
                     {
                         _bodyBudgetPreset.Value = s_bodyBudgetLabels.Length - 1;
                         CommitGiB(v);

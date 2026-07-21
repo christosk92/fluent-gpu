@@ -247,7 +247,7 @@ sealed class ArtistSchedulePage : Component
             new BoxEl
             {
                 Direction = 0,
-                Children = [ SelectorBar.Create(labels, selected, i => _selectedMonth.Value = groups[i].Key) ],
+                Children = [ SelectorBar.Create(labels, new Signal<int>(selected), onChange: i => _selectedMonth.Value = groups[i].Key) ],
             }, horizontal: true) with
         {
             Height = 48f, Grow = 0f, AutoEdgeFade = true, SuppressScrollBar = true,

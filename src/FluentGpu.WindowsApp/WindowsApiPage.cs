@@ -285,8 +285,8 @@ sealed class NotificationsCard : Component
             Direction = 1, Gap = 12f,
             Children =
             [
-                TextBox.Create(header: "Title", text: title, width: 320f),
-                TextBox.Create(header: "Body", text: body, width: 320f),
+                TextBox.Create(title, options: new TextBox.TextBoxOptions { Header = "Title", Width = 320f }),
+                TextBox.Create(body, options: new TextBox.TextBoxOptions { Header = "Body", Width = 320f }),
                 new BoxEl
                 {
                     Direction = 0, Gap = 8f, Wrap = true, AlignItems = FlexAlign.Center,
@@ -372,9 +372,9 @@ sealed class CredentialsCard : Component
             Direction = 1, Gap = 12f,
             Children =
             [
-                TextBox.Create(header: "Target", text: target, width: 320f),
-                TextBox.Create(header: "User name", text: user, width: 320f),
-                TextBox.Create(header: "Secret", text: secret, width: 320f),
+                TextBox.Create(target, options: new TextBox.TextBoxOptions { Header = "Target", Width = 320f }),
+                TextBox.Create(user, options: new TextBox.TextBoxOptions { Header = "User name", Width = 320f }),
+                TextBox.Create(secret, options: new TextBox.TextBoxOptions { Header = "Secret", Width = 320f }),
                 new BoxEl
                 {
                     Direction = 0, Gap = 8f, Wrap = true, AlignItems = FlexAlign.Center,
@@ -607,8 +607,8 @@ sealed class MediaCard : Component
             Direction = 1, Gap = 12f,
             Children =
             [
-                TextBox.Create(header: "Track title", text: trackTitle, width: 320f),
-                TextBox.Create(header: "Artist", text: artist, width: 320f),
+                TextBox.Create(trackTitle, options: new TextBox.TextBoxOptions { Header = "Track title", Width = 320f }),
+                TextBox.Create(artist, options: new TextBox.TextBoxOptions { Header = "Artist", Width = 320f }),
                 new BoxEl
                 {
                     Direction = 0, Gap = 8f, Wrap = true, AlignItems = FlexAlign.Center,
@@ -888,21 +888,21 @@ sealed class PowerCard : Component
             WindowsApiLive.Swap(ref WindowsApiLive.PowerSub, PowerSession.Subscribe());
         }, WinApiUi.MountOnce);
 
-        Action toggle = () =>
+        // The ToggleSwitch owns the `awake` signal (writes it before onChange), so this only performs the side effect
+        // for the NEW value — it must NOT flip `awake` again.
+        Action<bool> toggle = on =>
         {
             try
             {
-                if (awake.Peek())
+                if (!on)
                 {
                     WindowsApiLive.Swap(ref WindowsApiLive.KeepAwake, null);
-                    awake.Value = false;
                     status.Value = "System sleep is allowed.";
                     statusColor.Value = WinApiUi.Info;
                 }
                 else
                 {
                     WindowsApiLive.Swap(ref WindowsApiLive.KeepAwake, (System.IDisposable)PowerSession.KeepAwake(keepDisplayOn: false));
-                    awake.Value = true;
                     status.Value = "Keep-awake ACTIVE — the system will not sleep (display may still dim).";
                     statusColor.Value = WinApiUi.Ok;
                 }
@@ -936,7 +936,7 @@ sealed class PowerCard : Component
                 // Reading .Value subscribes this card so toggle()'s awake.Value write re-renders it (granular). With .Peek
                 // the card didn't re-render after the FrameClock.Tick drain was removed, so the switch froze OFF while the
                 // status text (a bound Prop) read ACTIVE.
-                ToggleSwitch.Create(awake.Value, toggle, header: "Keep system awake"),
+                ToggleSwitch.Create(awake, onChange: toggle, header: "Keep system awake"),
                 Body("Holds a power-availability request (SetThreadExecutionState) for as long as it is on. Suspend/resume broadcasts appear in the log — try sleeping and waking the machine.").Secondary() with { MaxWidth = 460f },
                 new BoxEl { Direction = 0, Gap = 8f, AlignItems = FlexAlign.Center, Children = [Button.Standard("Read power status", readPower)] },
             ],
@@ -1074,7 +1074,7 @@ sealed class StorageCard : Component
             Direction = 1, Gap = 12f,
             Children =
             [
-                TextBox.Create(header: "Persisted note", text: note, width: 360f),
+                TextBox.Create(note, options: new TextBox.TextBoxOptions { Header = "Persisted note", Width = 360f }),
                 new BoxEl { Direction = 0, Gap = 8f, Wrap = true, AlignItems = FlexAlign.Center, Children = [Button.Accent("Save", save), Button.Standard("Reload", reload), Button.Standard("Clear", clear)] },
                 WinApiUi.Field("Local folder", store.Value!.LocalFolder),
             ],

@@ -81,9 +81,9 @@ sealed class ValidationDemo : Component
                         Direction = 1, Gap = 14f,
                         Children =
                         [
-                            TextBox.Create(header: "Email", placeholder: "you@example.com", width: 380f, text: _email, field: email),
-                            TextBox.Create(header: "Password", width: 380f, text: _pwd, field: pwd),
-                            TextBox.Create(header: "Confirm password", width: 380f, text: _confirm, field: confirm),
+                            TextBox.Create(_email, options: new TextBox.TextBoxOptions { Header = "Email", Placeholder = "you@example.com", Width = 380f, Field = email }),
+                            TextBox.Create(_pwd, options: new TextBox.TextBoxOptions { Header = "Password", Width = 380f, Field = pwd }),
+                            TextBox.Create(_confirm, options: new TextBox.TextBoxOptions { Header = "Confirm password", Width = 380f, Field = confirm }),
                             Embed.Comp(() => new SubmitRow(form)),
                         ],
                     },
@@ -100,8 +100,8 @@ sealed class ValidationDemo : Component
                     var confirm = UseField(_confirm, Rules.Equals(_pwd));
 
                     // one prop wires the border + message + touched:
-                    TextBox.Create(header: "Email", text: _email,
-                                   field: email);
+                    TextBox.Create(_email, options: new TextBox.TextBoxOptions { Header = "Email",
+                                   Field = email });
 
                     // submit auto-gated by the whole form's validity:
                     Button.Accent("Create account",

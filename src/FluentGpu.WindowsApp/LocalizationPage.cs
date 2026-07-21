@@ -426,7 +426,8 @@ sealed class LanguagePicker : Component
         var labels = new string[LocalizationPage_Languages.Length];
         for (int i = 0; i < labels.Length; i++) labels[i] = LocalizationPage_Languages[i].Label;
 
-        return RadioButtons.Create(labels, selected, i =>
+        var sel = UseSignal(selected);
+        return RadioButtons.Create(labels, sel, onChange: i =>
         {
             if ((uint)i < (uint)LocalizationPage_Languages.Length) setCulture(LocalizationPage_Languages[i].Culture);
         }, header: null);
@@ -458,8 +459,8 @@ sealed class PseudoToggle : Component
     public override Element Render()
     {
         _ = Localization.CultureEpoch.Value;   // reflect auto-enable when qps-ploc is selected
-        bool on = Localization.PseudoLocalize;
-        return ToggleSwitch.Create(on, () => Localization.PseudoLocalize = !on,
+        var on = UseSignal(Localization.PseudoLocalize);
+        return ToggleSwitch.Create(on, onChange: v => Localization.PseudoLocalize = v,
             header: null, onContent: "On", offContent: "Off");
     }
 }

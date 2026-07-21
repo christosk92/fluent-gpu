@@ -13,7 +13,7 @@ namespace FluentGpu.Controls;
 /// localized default, calendardatepicker_partial.cpp:45-48) with a trailing calendar glyph (E787). Clicking opens an
 /// interactive <see cref="CalendarView"/> in a light-dismissable flyout anchored below the button; the calendar's
 /// <c>SelectedDatesChanged</c> is wired back — picking a date sets <see cref="Date"/>, CLOSES the flyout and raises
-/// <see cref="OnDateChanged"/> (calendardatepicker_partial.cpp:201-204, :259-276; a deselect nulls the date but keeps
+/// <see cref="OnChange"/> (calendardatepicker_partial.cpp:201-204, :259-276; a deselect nulls the date but keeps
 /// the flyout open). The face text uses the culture's short-date pattern by default (the WinUI ShortDate formatter,
 /// calendardatepicker_partial.cpp:467-473), overridable via <see cref="DateFormat"/>.
 /// </summary>
@@ -35,7 +35,7 @@ public sealed class CalendarDatePicker : Component
     /// <summary>WinUI <c>DateFormat</c> analog: a .NET date format string; null = the culture's ShortDatePattern
     /// (the WinUI default ShortDate formatter, calendardatepicker_partial.cpp:467-473).</summary>
     public string? DateFormat;
-    public Action<DateOnly?>? OnDateChanged;
+    public Action<DateOnly?>? OnChange;
 
     /// <summary>Zero-arg factory — keeps the existing demo call site (DateTimePages.cs) compiling unchanged.</summary>
     public static Element Create() => Embed.Comp(() => new CalendarDatePicker());
@@ -47,13 +47,13 @@ public sealed class CalendarDatePicker : Component
         DayOfWeek? firstDayOfWeek = null, bool isTodayHighlighted = true,
         CalendarViewDisplayMode displayMode = CalendarViewDisplayMode.Month,
         string? dateFormat = null,
-        Action<DateOnly?>? onDateChanged = null)
+        Action<DateOnly?>? onChange = null)
         => Embed.Comp(() => new CalendarDatePicker
         {
             Date = date, PlaceholderText = placeholderText ?? "Pick a date", Header = header,
             MinDate = minDate, MaxDate = maxDate, FirstDayOfWeek = firstDayOfWeek,
             IsTodayHighlighted = isTodayHighlighted, DisplayMode = displayMode,
-            DateFormat = dateFormat, OnDateChanged = onDateChanged,
+            DateFormat = dateFormat, OnChange = onChange,
         });
 
     public override Element Render()
@@ -72,11 +72,11 @@ public sealed class CalendarDatePicker : Component
             if (dates.Count > 0)
             {
                 h.Value?.Close();
-                OnDateChanged?.Invoke(dates[0]);
+                OnChange?.Invoke(dates[0]);
             }
             else
             {
-                OnDateChanged?.Invoke(null);
+                OnChange?.Invoke(null);
             }
         }
 
@@ -87,7 +87,7 @@ public sealed class CalendarDatePicker : Component
                 () => anchor.Value,
                 () => CalendarView.Create(
                     date, MinDate, MaxDate, CalendarViewSelectionMode.Single, FirstDayOfWeek,
-                    IsTodayHighlighted, displayMode: DisplayMode, onSelectedDatesChanged: OnCalendarDates),
+                    IsTodayHighlighted, displayMode: DisplayMode, onChange: OnCalendarDates),
                 FlyoutPlacement.BottomLeft);
         }
 

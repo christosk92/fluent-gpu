@@ -230,7 +230,7 @@ sealed class DiagnosticsPanel(IAppSettings? settings = null) : Component
                     Children =
                     [
                         ComboBox.Create(labels, _session, width: 300f, itemDescriptions: subs,
-                            onSelectionChanged: _ => _expandedSeq.Value = -1),
+                            onChange: _ => _expandedSeq.Value = -1),
                         warn > 0 ? ClickableBadge(InfoBadge.Count(warn, InfoBadgeSeverity.Caution), () => _level.Value = 2) : new BoxEl(),
                         err > 0 ? ClickableBadge(InfoBadge.Count(err, InfoBadgeSeverity.Critical), () => _level.Value = 3) : new BoxEl(),
                         new BoxEl { Grow = 1f },
@@ -245,10 +245,10 @@ sealed class DiagnosticsPanel(IAppSettings? settings = null) : Component
                         AutoSuggestBox.Create(Array.Empty<string>(),
                             placeholder: Loc.Get(Strings.Settings.Diagnostics.FilterPlaceholder),
                             grow: 1f, text: _search,
-                            onTextChanged: q => _search.Value = q,
+                            onChange: q => _search.Value = q,
                             onQuerySubmitted: q => _search.Value = q,
                             minHeight: 34f, cornerRadius: WaveeRadius.Control),
-                        SelectorBar.Create(s_levelLabels, _level.Value, i => _level.Value = i),
+                        SelectorBar.Create(s_levelLabels, _level),
                         Embed.Comp(() => new DiagToolbarToggle(Icons.Sort, _newestFirst,
                             Loc.Get(Strings.Settings.Diagnostics.SortNewestTip),
                             Loc.Get(Strings.Settings.Diagnostics.SortOldestTip),
@@ -277,7 +277,7 @@ sealed class DiagnosticsPanel(IAppSettings? settings = null) : Component
             header: Loc.Get(isFile ? Strings.Settings.Diagnostics.FileLevel : Strings.Settings.Diagnostics.CaptureLevel),
             description: desc,
             isEnabled: !envSet,
-            onSelectionChanged: i =>
+            onChange: i =>
             {
                 var lvl = (WaveeLogLevel)Math.Clamp(i, 0, 4);
                 if (isFile)

@@ -581,7 +581,8 @@ internal sealed class PagedShelfCore : Component
         else
         {
             if ((_pager & ShelfPager.Pips) != 0 && pageCount > 1)
-                row.Add(PipsPager.Create(pageCount, p, goTo));
+                // Pass the page signal directly; onChange=goTo re-arms the bring-into-view glide (_pageNav bump).
+                row.Add(PipsPager.Create(pageCount, _page, onChange: goTo));
             if ((_pager & ShelfPager.Chevrons) != 0)
             {
                 row.Add(Chevron(_prevGlyph, canPrev, () => goTo(p - 1), PagedShelf.PartChevronPrev));

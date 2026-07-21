@@ -2,6 +2,7 @@ using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
 
@@ -39,17 +40,17 @@ public sealed class Pivot : Component
     /// <summary>Controlled props RE-PUSHED to the core (<c>Embed.Comp(props, …)</c>) — a reused ComponentEl never
     /// re-runs its factory — so Headers/SelectedIndex stay LIVE across parent re-renders; the core reads them with
     /// <c>UseProps</c> (the RadioButtons pattern).</summary>
-    internal sealed record Props(IReadOnlyList<string> Headers, Func<int, Element>? Content, int? SelectedIndex,
-                                 Action<int>? OnSelectionChanged, TemplateParts? Parts);
+    internal sealed record Props(IReadOnlyList<string> Headers, Func<int, Element>? Content, Signal<int>? SelectedIndex,
+                                 Action<int>? OnChange, TemplateParts? Parts);
 
     /// <summary><paramref name="content"/> builds the selected tab's content (the WinUI PivotItem; null keeps a
-    /// placeholder label). <paramref name="selectedIndex"/> controls the selection when set (WinUI SelectedIndex DP —
-    /// the control stops owning it); <paramref name="onSelectionChanged"/> = WinUI SelectionChanged, fired with the
-    /// new index on every user-initiated change (controlled or not).</summary>
+    /// placeholder label). <paramref name="selectedIndex"/> is the caller's selected-index <see cref="Signal{T}"/>
+    /// (null ⇒ the control materializes its own — auto-materialize); a user change WRITES it then fires
+    /// <paramref name="onChange"/> (WinUI SelectionChanged).</summary>
     public static Element Create(IReadOnlyList<string> headers, Func<int, Element>? content = null,
-                                 int? selectedIndex = null, Action<int>? onSelectionChanged = null,
+                                 Signal<int>? selectedIndex = null, Action<int>? onChange = null,
                                  TemplateParts? parts = null)
-        => Embed.Comp(new Props(headers, content, selectedIndex, onSelectionChanged, parts),
+        => Embed.Comp(new Props(headers, content, selectedIndex, onChange, parts),
                       () => new Pivot());
 
     /// <summary>SystemControlHighlightAltBaseMediumHighBrush — the hover AND pressed header foreground for both the
@@ -63,12 +64,13 @@ public sealed class Pivot : Component
     {
         // Hooks — stable order, unconditionally, before any early-out.
         var props = UseProps<Props>();
-        var (localSel, setLocalSel) = UseState(0);
+        var own = UseSignal(0);
         var contentNode = UseRef<NodeHandle>(default);
         var prevSel = UseRef(-1);
 
+        var sig = props?.SelectedIndex ?? own;   // caller's value signal, else the internal one (one code path)
         int count = props?.Headers.Count ?? 0;
-        int selRaw = props?.SelectedIndex ?? localSel;
+        int selRaw = sig.Value;
         int selected = count == 0 ? 0 : Math.Clamp(selRaw, 0, count - 1);
 
         // Directional content fly-in on selection change (PivotStateMachine fly-out→fly-in, Pivot_Partial.cpp:
@@ -97,8 +99,8 @@ public sealed class Pivot : Component
         void Select(int index)
         {
             if (index == selected || (uint)index >= (uint)count) return;
-            setLocalSel(index);                              // uncontrolled selection (ignored while controlled)
-            props.OnSelectionChanged?.Invoke(index);         // WinUI SelectionChanged (Pivot_Partial.h:375)
+            sig.Value = index;                               // write the value signal first
+            props.OnChange?.Invoke(index);                   // WinUI SelectionChanged (Pivot_Partial.h:375)
         }
 
         // Pivot::OnHeaderKeyDown (Pivot_Partial.cpp:2939-2981): Left/Right move ±1, Home/End jump to first/last;

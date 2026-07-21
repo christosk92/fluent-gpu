@@ -21,27 +21,52 @@ public static class TextBox
     // WinUI TextBoxTopHeaderMargin = 0,0,0,8 (TextBox_themeresources.xaml:175).
     private const float HeaderMargin = 8f;
 
-    /// <summary>Create a TextBox. The original 3-parameter shape is source-compatible; everything after
-    /// <paramref name="header"/> is the grown WinUI surface (Description, two-way Text signal, MaxLength, IsReadOnly,
-    /// AcceptsReturn + multi-line height, IsEnabled, and the EditableText change/selection/commit callbacks).</summary>
-    public static Element Create(
-        string placeholder = "", float width = 280f, string? header = null,
-        string? description = null,
-        Signal<string>? text = null,
-        int maxLength = 0,
-        bool isReadOnly = false,
-        bool acceptsReturn = false,
-        float height = 32f,                      // multi-line: pass the taller box height (WinUI MinHeight stays 32)
-        bool isEnabled = true,
-        Action<string>? onTextChanged = null,
-        Func<string, bool>? beforeTextChanging = null,
-        Action<int, int>? onSelectionChanged = null,
-        Action<string>? onCommit = null,
-        Action? onCancel = null,
-        Field<string>? field = null)
+    /// <summary>The long-tail TextBox surface (everything past the controlled value) as one record — the WinUI grown
+    /// props: placeholder/width, header/description labels, MaxLength, IsReadOnly, AcceptsReturn + multi-line height,
+    /// IsEnabled, and the EditableText validation/selection/commit callbacks + a form <see cref="Field{T}"/>.</summary>
+    public sealed record TextBoxOptions
     {
-        float w = Math.Max(width, MinWidth);
-        float h = Math.Max(height, 32f);         // TextControlThemeMinHeight = 32 (generic.xaml:96)
+        public string Placeholder { get; init; } = "";
+        public float Width { get; init; } = 280f;
+        public string? Header { get; init; }
+        public string? Description { get; init; }
+        public int MaxLength { get; init; }
+        public bool IsReadOnly { get; init; }
+        public bool AcceptsReturn { get; init; }
+        public float Height { get; init; } = 32f;   // multi-line: pass the taller box height (WinUI MinHeight stays 32)
+        public bool IsEnabled { get; init; } = true;
+        public Func<string, bool>? BeforeTextChanging { get; init; }
+        public Action<int, int>? OnSelectionChanged { get; init; }
+        public Action<string>? OnCommit { get; init; }
+        public Action? OnCancel { get; init; }
+        public Field<string>? Field { get; init; }
+    }
+
+    private static readonly TextBoxOptions DefaultOptions = new();
+
+    /// <summary>Create a TextBox. The controlled value is a two-way <paramref name="text"/> signal (null ⇒ the field
+    /// materializes its own — auto-materialize); user edits write it then fire <paramref name="onChange"/>. All other
+    /// props live in <paramref name="options"/> (<see cref="TextBoxOptions"/>).</summary>
+    public static Element Create(
+        Signal<string>? text = null,
+        Action<string>? onChange = null,
+        TextBoxOptions? options = null)
+    {
+        var o = options ?? DefaultOptions;
+        string placeholder = o.Placeholder;
+        string? header = o.Header;
+        string? description = o.Description;
+        int maxLength = o.MaxLength;
+        bool isReadOnly = o.IsReadOnly;
+        bool acceptsReturn = o.AcceptsReturn;
+        bool isEnabled = o.IsEnabled;
+        var beforeTextChanging = o.BeforeTextChanging;
+        var onSelectionChanged = o.OnSelectionChanged;
+        var onCommit = o.OnCommit;
+        var onCancel = o.OnCancel;
+        var field = o.Field;
+        float w = Math.Max(o.Width, MinWidth);
+        float h = Math.Max(o.Height, 32f);       // TextControlThemeMinHeight = 32 (generic.xaml:96)
 
         Element editor = Embed.Comp(() => new EditableText
         {
@@ -52,7 +77,7 @@ public static class TextBox
             // (PasswordBox/NumberBox put their reveal/spin affixes in that lane instead). EditableText itself
             // suppresses it for multi-line/mask/read-only.
             ShowDeleteButton = true,
-            OnTextChanged = onTextChanged,
+            OnTextChanged = onChange,
             BeforeTextChanging = beforeTextChanging,
             OnSelectionChanged = onSelectionChanged,
             OnCommit = onCommit,

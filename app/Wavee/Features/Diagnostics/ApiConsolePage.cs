@@ -56,7 +56,6 @@ sealed class ApiConsolePage : Component
 
         void OnBodyMode(int i)
         {
-            _bodyMode.Value = i;
             if (i == 2 && _headers.Peek().Trim().Length == 0)
                 _headers.Value = ApiDebugBodyBuilder.DefaultExtendedMetadataHeaders();
             if (i == 2 && _body.Peek().Trim().Length == 0)
@@ -232,7 +231,7 @@ sealed class ApiConsolePage : Component
                             })),
 
                         Field("Status", Readout(_status)),
-                        SelectorBar.Create(["Body", "Headers"], _responseTab.Value, i => { _responseTab.Value = i; Bump(); }),
+                        SelectorBar.Create(["Body", "Headers"], _responseTab, onChange: i => Bump()),
                         ResponsePane(),
                         Caption("gzip/zstd auto-decompressed · on-screen body truncated · Save JSON unpacks Artist/Track/Album protos"),
                     ],
@@ -259,13 +258,13 @@ sealed class ApiConsolePage : Component
         {
             1 => VStack(8f,
                 Label("Body"),
-                SelectorBar.Create(ApiDebugBodyBuilder.BodyModeLabels, _bodyMode.Value, OnBodyMode),
+                SelectorBar.Create(ApiDebugBodyBuilder.BodyModeLabels, _bodyMode, OnBodyMode),
                 Caption("JSON or plain text — enable gzip to compress automatically."),
                 Editor(_body, 140f, multiline: true),
                 ToggleRow("Gzip request body", _gzipText)),
             2 => VStack(8f,
                 Label("Body"),
-                SelectorBar.Create(ApiDebugBodyBuilder.BodyModeLabels, _bodyMode.Value, OnBodyMode),
+                SelectorBar.Create(ApiDebugBodyBuilder.BodyModeLabels, _bodyMode, OnBodyMode),
                 Button.Standard("Fill extended-metadata headers", () =>
                 {
                     _headers.Value = ApiDebugBodyBuilder.DefaultExtendedMetadataHeaders();
@@ -283,7 +282,7 @@ sealed class ApiConsolePage : Component
                     }))),
             _ => VStack(8f,
                 Label("Body"),
-                SelectorBar.Create(ApiDebugBodyBuilder.BodyModeLabels, _bodyMode.Value, OnBodyMode),
+                SelectorBar.Create(ApiDebugBodyBuilder.BodyModeLabels, _bodyMode, OnBodyMode),
                 Caption("No request body.")),
         };
     }
@@ -323,7 +322,7 @@ sealed class ApiConsolePage : Component
         Direction = 0, AlignItems = FlexAlign.Center, Gap = 8f,
         Children =
         [
-            ToggleSwitch.Create(on.Value != 0, () => { on.Value = on.Peek() == 0 ? 1 : 0; }),
+            ToggleSwitch.Create(new Signal<bool>(on.Value != 0), onChange: _ => { on.Value = on.Peek() == 0 ? 1 : 0; }),
             new TextEl(label) { Size = 12f },
         ],
     };

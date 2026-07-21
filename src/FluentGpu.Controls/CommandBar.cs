@@ -203,8 +203,8 @@ public sealed class CommandBar : Component
                 // The top-level CommandBar strip uses the glyph-font buttons; a themed name falls back to its glyph here
                 // (themed layered icons are the flyout/overflow path — CommandBarFlyout + the overflow rows above).
                 children.Add(c.Kind == AppBarCommandKind.ToggleButton
-                    ? AppBarToggleButton.Create(c.Icon.Glyph ?? "", c.Label, c.IsChecked, c.Enabled, isCompact: !labeled,
-                        onToggled: _ => c.Invoke?.Invoke())
+                    ? AppBarToggleButton.Create(c.Icon.Glyph ?? "", c.Label, isChecked: new Signals.Signal<bool>(c.IsChecked),
+                        onChange: _ => c.Invoke?.Invoke(), isEnabled: c.Enabled, isCompact: !labeled)
                     : AppBarButton.Create(c.Icon.Glyph ?? "", c.Label, () => c.Invoke?.Invoke(), c.Enabled, isCompact: !labeled,
                         accelerator: c.Accelerator));
             }

@@ -555,7 +555,7 @@ sealed class HistoryPage : Component
                     grow: 1f,
                     text: _search,
                     onQuerySubmitted: q => _search.Value = q,
-                    onTextChanged: q => _search.Value = q,
+                    onChange: q => _search.Value = q,
                     minHeight: 36f,
                     cornerRadius: WaveeRadius.Control),
                 // ── Filter (SelectorBar) + Sort (ComboBox) ────────────────────────
@@ -566,7 +566,7 @@ sealed class HistoryPage : Component
                     Margin = new Edges4(0f, 0f, 0f, WaveeSpace.S),
                     Children =
                     [
-                        SelectorBar.Create(s_filterLabels, filterIndex, i => _filterIndex.Value = i),
+                        SelectorBar.Create(s_filterLabels, _filterIndex),
                         new BoxEl { Grow = 1f },
                         ComboBox.Create(s_sortLabels, _sortIndex, width: 160f),
                     ],

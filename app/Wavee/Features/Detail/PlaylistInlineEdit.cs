@@ -977,7 +977,7 @@ static class PlaylistInlineEdit
                     ],
                 },
                 status != StatusIdle ? StatusChip(status) : new BoxEl { Width = 0f },
-                ToggleSwitch.Create(isOn, onToggle, isEnabled: status != StatusSaving, style: SettingsCard.CompactToggleStyle()),
+                ToggleSwitch.Create(new Signal<bool>(isOn), onChange: _ => onToggle(), isEnabled: status != StatusSaving, style: SettingsCard.CompactToggleStyle()),
             ],
         };
     }

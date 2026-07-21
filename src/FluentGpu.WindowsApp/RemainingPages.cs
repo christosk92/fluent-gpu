@@ -11,19 +11,19 @@ sealed class ProgressRingPage : Component
 {
     public override Element Render()
     {
-        var (active, setActive) = UseState(true);
+        var active = UseSignal(true);
         var (value, setValue) = UseState(0.7f);
         return GalleryPage.Shell("ProgressRing",
             "A circular progress indicator — determinate (a known fraction) or indeterminate (ongoing).",
             ControlExample.Build("An indeterminate ProgressRing",
-                HStack(24, ProgressRing.Indeterminate(isActive: active), ToggleSwitch.Create(active, () => setActive(!active), onContent: "Working", offContent: "Do work")),
-                output: BodyStrong(active ? "Active" : "Inactive"),
+                HStack(24, ProgressRing.Indeterminate(isActive: active.Value), ToggleSwitch.Create(active, onContent: "Working", offContent: "Do work")),
+                output: BodyStrong(active.Value ? "Active" : "Inactive"),
                 code: """
-                var (active, setActive) = UseState(true);
+                var active = UseSignal(true);
 
                 HStack(24,
-                    ProgressRing.Indeterminate(isActive: active),
-                    ToggleSwitch.Create(active, () => setActive(!active),
+                    ProgressRing.Indeterminate(isActive: active.Value),
+                    ToggleSwitch.Create(active,
                         onContent: "Working", offContent: "Do work"))
                 """),
             ControlExample.Build("A determinate ProgressRing",

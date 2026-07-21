@@ -58,7 +58,7 @@ public sealed class DatePicker : Component
     /// <summary>WinUI <c>Header</c> — shown above the face (HeaderContentPresenter, DatePicker_themeresources.xaml:237).</summary>
     public string? Header;
     public bool IsEnabled = true;
-    public Action<DateOnly?>? OnDateChanged;
+    public Action<DateOnly?>? OnChange;
 
     /// <summary>Zero-arg factory — keeps the existing demo call site (DateTimePages.cs) compiling unchanged.</summary>
     public static Element Create() => Embed.Comp(() => new DatePicker());
@@ -67,13 +67,13 @@ public sealed class DatePicker : Component
         Signal<DateOnly?> selectedDate,
         bool dayVisible = true, bool monthVisible = true, bool yearVisible = true,
         int? minYear = null, int? maxYear = null,
-        Action<DateOnly?>? onDateChanged = null,
+        Action<DateOnly?>? onChange = null,
         string? header = null, bool isEnabled = true)
         => Embed.Comp(() => new DatePicker
         {
             SelectedDate = selectedDate,
             DayVisible = dayVisible, MonthVisible = monthVisible, YearVisible = yearVisible,
-            MinYear = minYear, MaxYear = maxYear, OnDateChanged = onDateChanged,
+            MinYear = minYear, MaxYear = maxYear, OnChange = onChange,
             Header = header, IsEnabled = isEnabled,
         });
 
@@ -207,7 +207,7 @@ public sealed class DatePicker : Component
             int day = Math.Clamp(tentDay.Peek() + 1, 1, maxDay);
             var picked = new DateOnly(year, month, day);
             date.Value = picked;
-            OnDateChanged?.Invoke(picked);
+            OnChange?.Invoke(picked);
             handle.Value?.Close();
         }
 

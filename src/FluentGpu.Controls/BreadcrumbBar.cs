@@ -29,13 +29,13 @@ public static class BreadcrumbBar
     /// Owned: nothing (pure styling).</summary>
     public const string PartSeparator = "Separator";
 
-    public static Element Create(IReadOnlyList<string> items, Action<int>? onSelect = null, TemplateParts? parts = null)
-        => Embed.Comp(new Props(items, onSelect, parts), () => new BreadcrumbBarCore());
+    public static Element Create(IReadOnlyList<string> items, Action<int>? onChange = null, TemplateParts? parts = null)
+        => Embed.Comp(new Props(items, onChange, parts), () => new BreadcrumbBarCore());
 
     /// <summary>Controlled props are RE-PUSHED live to the reused core (<c>Embed.Comp(props, …)</c>) — a reused
     /// ComponentEl never re-runs its factory — so the trail stays LIVE across parent re-renders; the core reads them
     /// with <c>UseProps</c> (the SelectorBar/RadioButtons convention).</summary>
-    internal sealed record Props(IReadOnlyList<string> Items, Action<int>? OnSelect, TemplateParts? Parts);
+    internal sealed record Props(IReadOnlyList<string> Items, Action<int>? OnChange, TemplateParts? Parts);
 }
 
 /// <summary>The stateful core: captures crumb node handles so Left/Right can move focus crumb-to-crumb, the
@@ -103,8 +103,8 @@ internal sealed class BreadcrumbBarCore : Component
                     PressedColor = Tok.TextTertiary,  // BreadcrumbBarPressedForegroundBrush = TextFillColorTertiary (themeresources:11)
                 };
 
-            var onSelect = p.OnSelect;
-            Action? click = isLast || onSelect is null ? null : () => onSelect(index);
+            var onChange = p.OnChange;
+            Action? click = isLast || onChange is null ? null : () => onChange(index);
             var crumb = new BoxEl
             {
                 Direction = 0,

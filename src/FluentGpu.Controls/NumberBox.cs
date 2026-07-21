@@ -82,7 +82,7 @@ public sealed class NumberBox : Component
     /// invariant <c>double.TryParse</c> (null = parse failure). With <see cref="AcceptsExpression"/> the expression
     /// evaluator runs instead (operands parse invariantly), mirroring NumberBoxParser::Compute.</summary>
     public Func<string, double?>? Parser;
-    public Action<double, double>? OnValueChanged;   // (oldValue, newValue) — WinUI ValueChangedEventArgs
+    public Action<double>? OnChange;   // the NEW value (controlled-input contract; peek the value signal for the old one)
     public Field<double>? Field;                     // form-validation.md: invalid border + touched-on-blur + message row
     public Style? StyleOverride;
     /// <summary>Lightweight per-part styling (CSS ::part): modifiers keyed by the <c>PartXxx</c> consts; see
@@ -141,7 +141,7 @@ public sealed class NumberBox : Component
         NumberBoxValidationMode validationMode = NumberBoxValidationMode.InvalidInputOverwritten,
         bool isWrapEnabled = false, bool acceptsExpression = false,
         string placeholderText = "", string? header = null, string? description = null,
-        float width = 120f, Func<double, string>? formatter = null, Action<double, double>? onValueChanged = null,
+        float width = 120f, Func<double, string>? formatter = null, Action<double>? onChange = null,
         Signal<string>? text = null, Func<string, double?>? parser = null, bool isEnabled = true,
         Field<double>? field = null)
         => Embed.Comp(new EnabledProps(isEnabled), () => new NumberBox
@@ -151,7 +151,7 @@ public sealed class NumberBox : Component
             SpinButtonPlacementMode = spinButtonPlacementMode, ValidationMode = validationMode,
             IsWrapEnabled = isWrapEnabled, AcceptsExpression = acceptsExpression,
             PlaceholderText = placeholderText, Header = header, Description = description,
-            Width = width, Formatter = formatter, OnValueChanged = onValueChanged,
+            Width = width, Formatter = formatter, OnChange = onChange,
             Text = text, Parser = parser, IsEnabled = isEnabled, Field = field,
         });
 
@@ -233,7 +233,7 @@ public sealed class NumberBox : Component
             if (!NumEquals(old, next))
             {
                 value.Value = next;
-                OnValueChanged?.Invoke(old, next);
+                OnChange?.Invoke(next);
             }
             SetText(FormatToText(next));
         }

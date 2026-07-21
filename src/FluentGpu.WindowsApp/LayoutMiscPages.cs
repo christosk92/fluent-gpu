@@ -83,9 +83,9 @@ sealed class AppBarToggleButtonPage : Component
 {
     public override Element Render()
     {
-        var (bold, setBold) = UseState(true);
-        var (italic, setItalic) = UseState(false);
-        var (under, setUnder) = UseState(false);
+        var bold = UseSignal(true);
+        var italic = UseSignal(false);
+        var under = UseSignal(false);
         return GalleryPage.Shell("AppBarToggleButton",
             "A two-state command button for a CommandBar (e.g. Bold / Italic / Underline).",
             ControlExample.Build("AppBarToggleButtons",
@@ -95,31 +95,31 @@ sealed class AppBarToggleButtonPage : Component
                     BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f,
                     Children =
                     [
-                        AppBarToggleButton.Create(Icons.Font, "Bold", initiallyChecked: true, onToggled: setBold),
-                        AppBarToggleButton.Create(Icons.Font, "Italic", onToggled: setItalic),
-                        AppBarToggleButton.Create(Icons.Font, "Underline", onToggled: setUnder),
+                        AppBarToggleButton.Create(Icons.Font, "Bold", isChecked: bold),
+                        AppBarToggleButton.Create(Icons.Font, "Italic", isChecked: italic),
+                        AppBarToggleButton.Create(Icons.Font, "Underline", isChecked: under),
                     ],
                 },
                 description: "Checked toggles paint the solid accent pill with the accent elevation border.",
-                output: BodyStrong($"Bold {(bold ? "on" : "off")} · Italic {(italic ? "on" : "off")} · Underline {(under ? "on" : "off")}"),
+                output: BodyStrong($"Bold {(bold.Value ? "on" : "off")} · Italic {(italic.Value ? "on" : "off")} · Underline {(under.Value ? "on" : "off")}"),
                 code: """
-                var (bold, setBold) = UseState(true);
+                var bold = UseSignal(true);
 
                 HStack(4,
-                    AppBarToggleButton.Create(Icons.Font, "Bold", initiallyChecked: true, onToggled: setBold),
+                    AppBarToggleButton.Create(Icons.Font, "Bold", isChecked: bold),
                     AppBarToggleButton.Create(Icons.Font, "Italic"),
                     AppBarToggleButton.Create(Icons.Font, "Underline"))
                 """),
             ControlExample.Build("Compact and disabled AppBarToggleButtons",
                 HStack(4,
                     AppBarToggleButton.Create(Icons.Shuffle, "Shuffle", isCompact: true),
-                    AppBarToggleButton.Create(Icons.Font, "Bold", initiallyChecked: true, isEnabled: false),
+                    AppBarToggleButton.Create(Icons.Font, "Bold", isChecked: UseSignal(true), isEnabled: false),
                     AppBarToggleButton.Create(Icons.Font, "Italic", isEnabled: false)),
                 description: "Compact is the closed-CommandBar 48px icon-only layout. A disabled checked toggle keeps the disabled-accent pill; a disabled unchecked one stays transparent.",
                 code: """
                 HStack(4,
                     AppBarToggleButton.Create(Icons.Shuffle, "Shuffle", isCompact: true),
-                    AppBarToggleButton.Create(Icons.Font, "Bold", initiallyChecked: true, isEnabled: false),
+                    AppBarToggleButton.Create(Icons.Font, "Bold", isChecked: UseSignal(true), isEnabled: false),
                     AppBarToggleButton.Create(Icons.Font, "Italic", isEnabled: false))
                 """));
     }

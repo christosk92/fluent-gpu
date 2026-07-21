@@ -65,6 +65,9 @@ public sealed class Expander : Component
     /// the expander reads this signal instead of its local state — writes from anywhere (an "expand all" button, a
     /// view-model) open/close it with the full motion — and the header click writes back into it.</summary>
     public Signal<bool>? IsExpanded;
+    /// <summary>Optional <c>onChange</c> sugar: fired with the new open state AFTER a header toggle writes the state;
+    /// a programmatic <see cref="IsExpanded"/> write does not echo it.</summary>
+    public Action<bool>? OnChange;
     /// <summary>Lightweight per-part styling (CSS ::part): modifiers keyed by the <c>PartXxx</c> consts; see the
     /// class remarks and <see cref="TemplateParts"/> for the contract.</summary>
     public TemplateParts? Parts;
@@ -72,8 +75,13 @@ public sealed class Expander : Component
     // FGRP001: Content is a deliberate mount-time slot for this convenience factory (STATIC content). A parent with
     // per-render content must use the re-push slots overload documented below (Embed.Comp(new ExpanderSlots(...), …)).
 #pragma warning disable FGRP001
-    public static Element Create(string header, Element content, bool initiallyExpanded = false)
-        => Embed.Comp(() => new Expander { Header = header, Content = content, InitiallyExpanded = initiallyExpanded });
+    /// <summary><paramref name="isExpanded"/> = optional CONTROLLED open-state <see cref="Signal{T}"/> (null ⇒ the
+    /// expander owns its state via <paramref name="initiallyExpanded"/> — today's behavior); <paramref name="onChange"/>
+    /// fires on a header toggle.</summary>
+    public static Element Create(string header, Element content, bool initiallyExpanded = false,
+                                 Signal<bool>? isExpanded = null, Action<bool>? onChange = null)
+        => Embed.Comp(() => new Expander { Header = header, Content = content, InitiallyExpanded = initiallyExpanded,
+                                           IsExpanded = isExpanded, OnChange = onChange });
 #pragma warning restore FGRP001
 
     /// <summary>LIVE content slots RE-PUSHED to the core (<c>Embed.Comp(slots, …)</c>; the SelectorBar/RadioButtons
@@ -156,8 +164,9 @@ public sealed class Expander : Component
         Action toggle = () =>
         {
             bool next = !open;
-            if (IsExpanded is { } sig) sig.Value = next; else setLocalOpen(next);
+            if (IsExpanded is { } sig) sig.Value = next; else setLocalOpen(next);   // write the state first
             if (next) shown.Value = true;
+            OnChange?.Invoke(next);                                                  // then onChange (user toggle only)
         };
 
         // Trailing 32x32 rounded chevron button: only this gets the subtle hover/press, not the whole header.

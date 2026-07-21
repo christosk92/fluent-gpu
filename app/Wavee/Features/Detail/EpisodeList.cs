@@ -79,9 +79,9 @@ sealed class EpisodeList : Component
         Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, Margin = new Edges4(0f, 0f, 0f, WaveeSpace.XS),
         Children =
         [
-            SelectorBar.Create(StatusLabels(), status, i => _status.Value = i),
+            SelectorBar.Create(StatusLabels(), _status),
             new BoxEl { Grow = 1f },
-            SelectorBar.Create(OrderLabels(), order, i => _order.Value = i),
+            SelectorBar.Create(OrderLabels(), _order),
         ],
     };
 

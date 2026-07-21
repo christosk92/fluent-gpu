@@ -171,11 +171,12 @@ public sealed class RatingControl : Component
     const float CaptionFontSize = 12f;            // Caption TextBlock FontSize = 12 (CaptionTextBlockStyle)
 
     public static Element Create(
-        FloatSignal value, int max = 5, float placeholder = NoValueSet, string caption = "",
+        FloatSignal? value = null, int max = 5, float placeholder = NoValueSet, string caption = "",
         bool readOnly = false, bool isEnabled = true, bool isClearEnabled = true, Action<float>? onChange = null)
         => Embed.Comp(() => new RatingControl
         {
-            Value = value, MaxRating = max, PlaceholderValue = placeholder, Caption = caption,
+            // Auto-materialize: the factory closure runs ONCE at mount, so `value ?? new(...)` is a stable instance.
+            Value = value ?? new(NoValueSet), MaxRating = max, PlaceholderValue = placeholder, Caption = caption,
             ReadOnly = readOnly, IsEnabled = isEnabled, IsClearEnabled = isClearEnabled, OnChange = onChange,
         });
 

@@ -2,6 +2,7 @@ using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
 
@@ -71,23 +72,30 @@ public static partial class CheckBox
         LabelFg   = StateBrush.Flat(Tok.TextPrimary) with { Disabled = Tok.TextDisabled },
     };
 
-    public static BoxEl Create(string label, bool isChecked, Action onToggle, Style? style = null, bool isEnabled = true,
-                               TemplateParts? parts = null)
-        => Build(label, isChecked ? CheckState.Checked : CheckState.Unchecked, _ => onToggle(), style, isEnabled, parts);
+    /// <summary>Two-state CheckBox. The checked state is a caller <see cref="Signal{T}"/> (read directly inside the
+    /// core — live); a click WRITES it then fires <paramref name="onChange"/> once; a programmatic write re-skins with
+    /// no onChange echo. The signal instance freezes at mount (re-key to swap). Pass no signal
+    /// (<paramref name="isChecked"/> = null) and the control materializes its own (auto-materialize — one code path).
+    /// Non-value props (style/enabled/parts) ride the G4 props channel.</summary>
+    public static Element Create(string label, Signal<bool>? isChecked = null, Action<bool>? onChange = null,
+                                 Style? style = null, bool isEnabled = true, TemplateParts? parts = null)
+        => Embed.Comp(new Props(label, isChecked, null, onChange, null, style ?? DefaultStyle, isEnabled, parts),
+                      () => new CheckBoxCore());
 
-    public static BoxEl Create(string label, CheckState state, Action<CheckState> onChange, Style? style = null, bool isEnabled = true,
-                               TemplateParts? parts = null)
-    {
-        var next = state switch
-        {
-            CheckState.Unchecked => CheckState.Checked,
-            CheckState.Checked => CheckState.Indeterminate,
-            _ => CheckState.Unchecked,
-        };
-        return Build(label, state, _ => onChange(next), style, isEnabled, parts);
-    }
+    /// <summary>Three-state CheckBox (adds the mixed "indeterminate" glyph). The <see cref="CheckState"/> is a caller
+    /// <see cref="Signal{T}"/> (required — the three-state variant); a click cycles Unchecked → Checked →
+    /// Indeterminate → Unchecked, WRITING the signal then firing <paramref name="onChange"/>.</summary>
+    public static Element Create(string label, Signal<CheckState> state, Action<CheckState>? onChange = null,
+                                 Style? style = null, bool isEnabled = true, TemplateParts? parts = null)
+        => Embed.Comp(new Props(label, null, state, null, onChange, style ?? DefaultStyle, isEnabled, parts),
+                      () => new CheckBoxCore());
 
-    static BoxEl Build(string label, CheckState state, Action<CheckState> onClick, Style? style, bool enabled, TemplateParts? parts)
+    /// <summary>Controlled props RE-PUSHED to <see cref="CheckBoxCore"/> (<c>Embed.Comp(props, …)</c>). Exactly one of
+    /// <see cref="Bool"/> / <see cref="Tri"/> is set by the matching overload (both null ⇒ 2-state auto-materialize).</summary>
+    internal sealed record Props(string Label, Signal<bool>? Bool, Signal<CheckState>? Tri, Action<bool>? OnBool,
+                                 Action<CheckState>? OnTri, Style Style, bool IsEnabled, TemplateParts? Parts);
+
+    internal static BoxEl Build(string label, CheckState state, Action<CheckState> onClick, Style? style, bool enabled, TemplateParts? parts)
     {
         var s = style ?? DefaultStyle;
         bool on = state == CheckState.Checked;
@@ -178,6 +186,40 @@ public static partial class CheckBox
     /// <summary>Runtime mark props are RE-PUSHED live to the drawn-mark core (<c>Embed.Comp(props, …)</c>) because a
     /// reused ComponentEl never re-runs its factory; the core reads them with <c>UseProps</c>.</summary>
     internal sealed record MarkProps(float Size, float Thickness, ColorF Color, bool Pressable, float DurationMs, TemplateParts? Parts);
+}
+
+/// <summary>The stateful core: reads the caller's value signal DIRECTLY (2-state <c>bool</c> or 3-state
+/// <see cref="CheckState"/>) so a check/uncheck/cycle re-skins granularly, and reuses <see cref="CheckBox.Build"/> for
+/// the exact WinUI visuals. A click writes the signal first, then fires the matching onChange.</summary>
+internal sealed class CheckBoxCore : Component
+{
+    public override Element Render()
+    {
+        var p = UseProps<CheckBox.Props>();
+        var own = UseSignal(false);   // internal 2-state signal (auto-materialize; unconditional hook)
+
+        CheckState state;
+        Action<CheckState> onClick;
+        if (p.Tri is { } tri)
+        {
+            state = tri.Value;        // read directly (live)
+            var next = state switch
+            {
+                CheckState.Unchecked => CheckState.Checked,
+                CheckState.Checked => CheckState.Indeterminate,
+                _ => CheckState.Unchecked,
+            };
+            onClick = _ => { tri.Value = next; p.OnTri?.Invoke(next); };
+        }
+        else
+        {
+            var b = p.Bool ?? own;    // caller's signal wins; else the internal one (one code path)
+            bool on = b.Value;
+            state = on ? CheckState.Checked : CheckState.Unchecked;
+            onClick = _ => { bool next = !on; b.Value = next; p.OnBool?.Invoke(next); };
+        }
+        return CheckBox.Build(p.Label, state, onClick, p.Style, p.IsEnabled, p.Parts);
+    }
 }
 
 /// <summary>

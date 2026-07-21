@@ -97,7 +97,7 @@ sealed class LibrarySortPanel : Component
         if (view >= 2)
         {
             rows.Add(Header(Loc.Get(Strings.Library.Size)));
-            rows.Add(SelectorBar.Create(["S", "M", "L"], size, i => _size.Value = i));
+            rows.Add(SelectorBar.Create(["S", "M", "L"], _size));
         }
 
         // A frosted WinUI flyout surface (acrylic + 1px flyout stroke + flyout shadow), NOT a solid plate — lighter than Ui.Layer.

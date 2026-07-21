@@ -68,6 +68,8 @@ public static partial class SettingsExpander
         public Element? ItemsFooter { get; init; }
         public bool InitiallyExpanded { get; init; }
         public Signal<bool>? IsExpanded { get; init; }
+        /// <summary>Optional <c>onChange</c> sugar — fired with the new open state on a header toggle.</summary>
+        public Action<bool>? OnChange { get; init; }
         public Style? Style { get; init; }
         public TemplateParts? Parts { get; init; }
     }
@@ -175,6 +177,7 @@ sealed class SettingsExpanderCore : Component
             {
                 InitiallyExpanded = o.InitiallyExpanded,
                 IsExpanded = o.IsExpanded,
+                OnChange = o.OnChange,
             });
     }
 }

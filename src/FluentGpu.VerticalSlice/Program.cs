@@ -1594,8 +1594,11 @@ sealed class FlipFlickProbe : Component
 {
     public int Selected;
     public override Element Render()
-        => FlipView.Create(new[] { "Page A", "Page B", "Page C" }, width: 400f, height: 240f,
-                           selectedIndex: 0, onSelectionChanged: i => Selected = i);
+    {
+        var sel = UseSignal(0);
+        return FlipView.Create(new[] { "Page A", "Page B", "Page C" }, width: 400f, height: 240f,
+                           selectedIndex: sel, onChange: i => Selected = i);
+    }
 }
 
 // A box that requests a context menu (the touch Hold target — touch has no right button, so a long-press is the only
@@ -1973,16 +1976,16 @@ sealed class ControlsProbe : Component
     public override Element Render()
     {
         var (sv, setSv) = UseState(0f);
-        var (on, setOn) = UseState(false);
+        var on = UseSignal(false);
         var (sp, setSp) = UseState(0f);
-        SliderVal = sv; Toggled = on; ScrollPos = sp;
+        SliderVal = sv; Toggled = on.Value; ScrollPos = sp;
         return new BoxEl
         {
             Direction = 1, Gap = 0,
             Children =
             [
                 Slider.Create(sv, setSv, 200f, 24f),
-                ToggleButton.Create("Shuffle", on, () => setOn(!on)),
+                ToggleButton.Create("Shuffle", on),
                 IconButton.Create("▶", () => IconClicks++),
                 ScrollBar.Create(0.25f, sp, setSp, 200f),
             ],
@@ -2197,7 +2200,7 @@ sealed class WaveeShell : Component
             IconButton.Create(playing ? "⏸" : "▶", () => setPlaying(!playing)),
             IconButton.Create("⏭", () => { }),
             Slider.Create(seek, setSeek, 220f),
-            ToggleButton.Create("Shuffle", false, () => { }),
+            ToggleButton.Create("Shuffle"),
         ],
     };
 }
@@ -2823,7 +2826,7 @@ sealed class W0fNumberProbe : Component
     public Signal<string>? Txt;
     public double Initial = 5;
     public NumberBoxSpinButtonPlacementMode Mode = NumberBoxSpinButtonPlacementMode.Hidden;
-    public readonly List<(double Old, double New)> Changes = new();
+    public readonly List<double> Changes = new();
     public override Element Render()
     {
         var v = UseSignal(Initial); Val = v;
@@ -2831,7 +2834,7 @@ sealed class W0fNumberProbe : Component
         return Embed.Comp(() => new OverlayHost
         {
             Child = NumberBox.Create(value: v, minimum: 0, maximum: 10, smallChange: 1, largeChange: 5,
-                spinButtonPlacementMode: Mode, text: t, onValueChanged: (o, n) => Changes.Add((o, n))),
+                spinButtonPlacementMode: Mode, text: t, onChange: n => Changes.Add(n)),
         });
     }
 }
@@ -3141,9 +3144,9 @@ sealed class CheckBoxProbe : Component
     public CheckState State;
     public override Element Render()
     {
-        var (st, setSt) = UseState(CheckState.Unchecked);
-        State = st;
-        return CheckBox.Create("opt", st, next => setSt(next));
+        var st = UseSignal(CheckState.Unchecked);
+        State = st.Value;
+        return CheckBox.Create("opt", st);
     }
 }
 
@@ -3152,9 +3155,9 @@ sealed class RadioProbe : Component
     public int Selected = -1;
     public override Element Render()
     {
-        var (sel, setSel) = UseState(-1);
-        Selected = sel;
-        return RadioButton.Group(new[] { "A", "B", "C" }, sel, setSel);
+        var sel = UseSignal(-1);
+        Selected = sel.Value;
+        return RadioButton.Group(new[] { "A", "B", "C" }, sel);
     }
 }
 
@@ -3163,9 +3166,9 @@ sealed class ToggleSwitchProbe : Component
     public bool On;
     public override Element Render()
     {
-        var (on, setOn) = UseState(false);
-        On = on;
-        return ToggleSwitch.Create(on, () => setOn(!on));
+        var on = UseSignal(false);
+        On = on.Value;
+        return ToggleSwitch.Create(on);
     }
 }
 
@@ -3255,7 +3258,7 @@ sealed class W1ToggleButtonProbe : Component
         return new BoxEl
         {
             Padding = Edges4.All(20),
-            Children = [ToggleButton.Create("w1-tb", on.Value, () => on.Value = !on.Value)],
+            Children = [ToggleButton.Create("w1-tb", on)],
         };
     }
 }
@@ -3280,15 +3283,15 @@ sealed class W1RadioButtonsProbe : Component
     public int SelectCalls;
     public override Element Render()
     {
-        var (sel, setSel) = UseState(0);
-        Selected = sel;
+        var sel = UseSignal(0);
+        Selected = sel.Value;
         return new BoxEl
         {
             Padding = Edges4.All(10),
             Children =
             [
                 RadioButtons.Create(new[] { "A", "B", "C", "D", "E" }, sel,
-                    i => { SelectCalls++; setSel(i); }, header: "w1-group", maxColumns: 2),
+                    onChange: i => { SelectCalls++; }, header: "w1-group", maxColumns: 2),
             ],
         };
     }
@@ -3533,7 +3536,7 @@ sealed class PipsPagerOutputProbe : Component
             Direction = 1,
             Children =
             [
-                PipsPager.Create(5, selected.Value, i => selected.Value = i),
+                PipsPager.Create(5, selected),
                 new TextEl("") { Size = 14f, Color = Tok.TextPrimary, Text = Prop.Of(() => $"Page {selected.Value + 1} / 5") },
             ],
         };
@@ -7069,7 +7072,7 @@ static class Slice
         {
             var scene = new SceneStore();
             var recon = new TreeReconciler(scene, strings);
-            recon.ReconcileRoot(RadioButton.Create("x", true, () => { }), null);   // root = row; ring = child0; dot = ring.child0
+            recon.ReconcileRoot(RadioButton.Create("x", true), null);   // root = row; ring = child0; dot = ring.child0
             new FlexLayout(scene, new HeadlessFontSystem(strings)).Run(scene.Root);
             var ring = Child(scene, scene.Root, 0);
             var dot = Child(scene, ring, 0);
@@ -7086,7 +7089,7 @@ static class Slice
 
             var unselected = new SceneStore();
             var unselectedRecon = new TreeReconciler(unselected, strings);
-            unselectedRecon.ReconcileRoot(RadioButton.Create("x", false, () => { }), null);
+            unselectedRecon.ReconcileRoot(RadioButton.Create("x", false), null);
             new FlexLayout(unselected, new HeadlessFontSystem(strings)).Run(unselected.Root);
             var unselectedRing = Child(unselected, unselected.Root, 0);
             var pressedGlyph = Child(unselected, unselectedRing, 0);
@@ -7120,8 +7123,9 @@ static class Slice
         {
             var scene = new SceneStore();
             var recon = new TreeReconciler(scene, strings);
-            recon.ReconcileRoot(CheckBox.Create("x", CheckState.Unchecked, _ => { }), null);
-            ref var p = ref scene.Paint(Child(scene, scene.Root, 0));   // the 20px box
+            recon.ReconcileRoot(CheckBox.Create("x", new Signal<CheckState>(CheckState.Unchecked)), null);
+            var cbRow = FindRole(scene, scene.Root, AutomationRole.CheckBox);   // CheckBox is a component now → find its row
+            ref var p = ref scene.Paint(Child(scene, cbRow, 0));   // the 20px box (child 0 of the CheckBox row)
             bool restRing = MathF.Abs(p.BorderColor.A - Tok.StrokeControlStrongDefault.A) < 0.02f;
             bool pressDims = MathF.Abs(p.PressedBorderColor.A - Tok.StrokeControlStrongDisabled.A) < 0.02f && p.PressedBorderColor.A < p.BorderColor.A;
             bool hoverFill = MathF.Abs(p.HoverFill.A - Tok.FillControlAltTertiary.A) < 0.02f;
@@ -15186,6 +15190,158 @@ static class Slice
         }
     }
 
+    // ── gate.ctl.bind.* — WS3 P2 the controlled-input contract: the value is a concrete Signal the control writes on
+    //    user interaction FIRST, then fires onChange; a programmatic signal write re-skins with NO onChange echo and
+    //    without re-rendering the owner (the controlled-everything decoupling); auto-materialize is one code path.
+    static void ControlBindChecks(StringTable strings)
+    {
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+
+        // gate.ctl.bind.toggle — user toggle writes the value signal then fires onChange ONCE; a programmatic write
+        // re-skins with NO echo and never re-invokes the owner's render (adjustment #8's decoupling regression pin).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("bind-toggle", new Size2(320, 160), 1f)); window.Show();
+            var sig = new Signal<bool>(false);
+            int probeRenders = 0, changes = 0; bool lastV = false;
+            using var host = new AppHost(app, window, device, fonts, strings,
+                new W0fStaticProbe { Build = () => { probeRenders++; return new BoxEl { Padding = Edges4.All(12),
+                    Children = [ToggleSwitch.Create(sig, onChange: v => { changes++; lastV = v; })] }; } });
+            host.RunFrame();
+            int rendersAtMount = probeRenders;
+            var ts = FindRole(host.Scene, host.Scene.Root, AutomationRole.ToggleSwitch);
+            ClickNode(host, window, ts);
+            bool wrote = sig.Value && changes == 1 && lastV;
+            int changesBefore = changes;
+            sig.Value = false;                      // programmatic write
+            host.RunFrame();
+            bool noEcho = changes == changesBefore;
+            bool decoupled = probeRenders == rendersAtMount;   // the Signal write never re-rendered the owner
+            Check("gate.ctl.bind.toggle ToggleSwitch: user toggle writes the signal then fires onChange once; programmatic write re-skins with no echo (owner not re-rendered)",
+                wrote && noEcho && decoupled, $"wrote={wrote} changes={changes} noEcho={noEcho} ownerRenders={probeRenders}(mount {rendersAtMount})");
+        }
+
+        // gate.ctl.bind.automaterialize — a signal-less ToggleSwitch toggles via its OWN internal signal; an external
+        // signal controls another; BOTH ride the one `IsOn ?? own` code path.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("bind-auto", new Size2(320, 220), 1f)); window.Show();
+            var extSig = new Signal<bool>(false);
+            int autoN = 0, extN = 0;
+            using var host = new AppHost(app, window, device, fonts, strings,
+                new W0fStaticProbe { Build = () => new BoxEl { Direction = 1, Gap = 8, Padding = Edges4.All(12),
+                    Children = [
+                        ToggleSwitch.Create(onChange: _ => autoN++),            // signal-less → internal signal
+                        ToggleSwitch.Create(extSig, onChange: _ => extN++),     // caller-owned signal
+                    ] } });
+            host.RunFrame();
+            var toggles = Roles(host.Scene, AutomationRole.ToggleSwitch);
+            ClickNode(host, window, toggles[0]);
+            bool autoToggled = autoN == 1;         // the internal signal drove a toggle
+            toggles = Roles(host.Scene, AutomationRole.ToggleSwitch);
+            ClickNode(host, window, toggles[1]);
+            bool extToggled = extSig.Value && extN == 1;
+            Check("gate.ctl.bind.automaterialize signal-less ToggleSwitch toggles via its own internal signal; a caller signal controls another; one code path",
+                autoToggled && extToggled, $"auto={autoN} ext={extSig.Value}/{extN}");
+        }
+
+        // gate.ctl.bind.check + gate.ctl.bind.tristate — CheckBox 2-state click writes the bool signal; the CheckState
+        // overload cycles Unchecked → Checked → Indeterminate → Unchecked through the signal.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("bind-check", new Size2(360, 240), 1f)); window.Show();
+            var b = new Signal<bool>(false);
+            var tri = new Signal<CheckState>(CheckState.Unchecked);
+            int bN = 0, tN = 0;
+            using var host = new AppHost(app, window, device, fonts, strings,
+                new W0fStaticProbe { Build = () => new BoxEl { Direction = 1, Gap = 8, Padding = Edges4.All(12),
+                    Children = [
+                        CheckBox.Create("two", b, onChange: _ => bN++),
+                        CheckBox.Create("tri", tri, onChange: _ => tN++),
+                    ] } });
+            host.RunFrame();
+            var boxes = Roles(host.Scene, AutomationRole.CheckBox);
+            ClickNode(host, window, boxes[0]);
+            bool check2 = b.Value && bN == 1;
+            boxes = Roles(host.Scene, AutomationRole.CheckBox);
+            ClickNode(host, window, boxes[1]); bool c1 = tri.Value == CheckState.Checked;
+            boxes = Roles(host.Scene, AutomationRole.CheckBox);
+            ClickNode(host, window, boxes[1]); bool c2 = tri.Value == CheckState.Indeterminate;
+            boxes = Roles(host.Scene, AutomationRole.CheckBox);
+            ClickNode(host, window, boxes[1]); bool c3 = tri.Value == CheckState.Unchecked;
+            Check("gate.ctl.bind.check CheckBox 2-state click writes the bool signal (onChange once)",
+                check2, $"val={b.Value} changes={bN}");
+            Check("gate.ctl.bind.tristate CheckBox CheckState click cycles Unchecked→Checked→Indeterminate→Unchecked via the signal",
+                c1 && c2 && c3 && tN == 3, $"c1={c1} c2={c2} c3={c3} changes={tN}");
+        }
+
+        // gate.ctl.bind.radio — a RadioButtons click WRITES the selected-index signal (onChange once); arrow roving
+        // (Down) moves the selection and updates the SAME signal (selection follows focus).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("bind-radio", new Size2(320, 240), 1f)); window.Show();
+            var sel = new Signal<int>(0);   // start at 0 so Tab lands on the roving stop (item 0)
+            int rN = 0;
+            using var host = new AppHost(app, window, device, fonts, strings,
+                new W0fStaticProbe { Build = () => new BoxEl { Padding = Edges4.All(12),
+                    Children = [RadioButtons.Create(new[] { "A", "B", "C" }, sel, onChange: _ => rN++, maxColumns: 1)] } });
+            host.RunFrame();
+            // arrow roving: Tab focuses the single roving stop, Down moves selection (selection follows focus) → writes the signal.
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Tab)); host.RunFrame();
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Down)); host.RunFrame();
+            bool roved = sel.Value == 1 && rN == 1;
+            // click selects: clicking item C writes index 2 (mutual exclusion via the one shared signal).
+            ClickNode(host, window, Roles(host.Scene, AutomationRole.RadioButton)[2]);
+            bool clickWrote = sel.Value == 2 && rN == 2;
+            Check("gate.ctl.bind.radio RadioButtons: arrow roving updates the index signal; a click writes the selected index (onChange each)",
+                roved && clickWrote, $"afterDown={(roved ? 1 : sel.Value)}@{rN} afterClick={sel.Value}");
+        }
+
+        // gate.ctl.bind.naming — the closed callback-name set is enforced: NO public control factory (Create/Group)
+        // parameter is named onToggle/onSelect/onTextChanged/OnValueChanged (the eliminated Action<TOld,TNew>/idiom
+        // spellings). A reflection scan over the whole FluentGpu.Controls surface (comprehensive — catches any control,
+        // migrated or not). Param names are present under JIT (the gate run); under AOT trimming they degrade to a
+        // vacuous pass, never a false failure.
+        {
+            string[] banned = { "ontoggle", "onselect", "ontextchanged", "onvaluechanged" };
+            var offenders = new List<string>();
+            foreach (var t in typeof(ToggleSwitch).Assembly.GetExportedTypes())
+                foreach (var m in t.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static))
+                {
+                    if (m.Name != "Create" && m.Name != "Group") continue;
+                    foreach (var pi in m.GetParameters())
+                        if (Array.IndexOf(banned, (pi.Name ?? "").ToLowerInvariant()) >= 0)
+                            offenders.Add($"{t.Name}.{m.Name}({pi.Name})");
+                }
+            Check("gate.ctl.bind.naming no public control factory parameter named onToggle/onSelect/onTextChanged/OnValueChanged remains",
+                offenders.Count == 0, offenders.Count == 0 ? "clean" : string.Join(", ", offenders));
+        }
+
+        // gate.ctl.bind.textbox-options — TextBox is built via the TextBoxOptions record (the long tail) + a controlled
+        // value signal; a user edit round-trips text THROUGH the signal and fires onChange; the mount-time signal seed
+        // does NOT fire onChange (onChange is an edit callback, not a re-push echo).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("bind-tb", new Size2(420, 240), 1f)); window.Show();
+            var text = new Signal<string>("");
+            int changes = 0; string last = "";
+            using var host = new AppHost(app, window, device, fonts, strings,
+                new W0fStaticProbe { Build = () => new BoxEl { Padding = Edges4.All(12),
+                    Children = [TextBox.Create(text, onChange: s => { changes++; last = s; },
+                        new TextBox.TextBoxOptions { Placeholder = "ph", Width = 200f, Header = "H" })] } });
+            host.RunFrame();
+            bool mountQuiet = changes == 0;   // the mount-time seed sync does not fire onChange
+            var field = FindRole(host.Scene, host.Scene.Root, AutomationRole.Text);
+            ClickNode(host, window, field);
+            foreach (char c in "hi") window.QueueInput(new InputEvent(InputKind.Char, default, 0, c));
+            host.RunFrame();
+            bool userWrote = text.Value == "hi" && changes >= 1 && last == "hi";   // user edit → signal round-trip + onChange
+            Check("gate.ctl.bind.textbox-options TextBox via TextBoxOptions round-trips text through the signal; onChange fires on user edits (not the mount seed)",
+                mountQuiet && userWrote, $"mountQuiet={mountQuiet} text='{text.Peek()}' changes={changes} last='{last}'");
+        }
+    }
+
     static void ControlsChecks(StringTable strings)
     {
         using var app = new HeadlessPlatformApp();
@@ -19284,7 +19440,7 @@ static class Slice
                     Direction = 1, Gap = 12,
                     Children =
                     [
-                        TextBox.Create("ph", 280f, "Email", description: "Helper"),
+                        TextBox.Create(options: new TextBox.TextBoxOptions { Placeholder = "ph", Width = 280f, Header = "Email", Description = "Helper" }),
                         PasswordBox.Create("Password", 280f, "Pw", isEnabled: false,
                                            password: new Signal<string>("secret")),
                     ],
@@ -24331,12 +24487,13 @@ static class Slice
             var device = new HeadlessGpuDevice();
             var fonts = new HeadlessFontSystem(strings);
             var enabled = new Signal<bool>(true);
+            var markChecked = new Signal<CheckState>(CheckState.Checked);   // stable instance across re-renders
             using var host = new AppHost(app, window, device, fonts, strings, new W0fStaticProbe
             {
                 Build = () => new BoxEl
                 {
                     Width = 220, Height = 80, Padding = Edges4.All(16),
-                    Children = [CheckBox.Create("opt", CheckState.Checked, _ => { }, isEnabled: enabled.Value)],
+                    Children = [CheckBox.Create("opt", markChecked, isEnabled: enabled.Value)],
                 },
             });
             host.RunFrame();
@@ -25734,6 +25891,7 @@ static class Slice
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("gate-settle", new Size2(360, 420), 1f)); window.Show();
+            var settleChecked = new Signal<CheckState>(CheckState.Checked);   // stable instance (no per-render churn → the loop settles)
             using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings,
                 new W0fStaticProbe
                 {
@@ -25744,7 +25902,7 @@ static class Slice
                         [
                             new TextEl("settle") { Size = 16f },
                             Button.Accent("ok", () => { }),
-                            CheckBox.Create("opt", CheckState.Checked, _ => { }),
+                            CheckBox.Create("opt", settleChecked),
                             (Element)Repeater.ItemsRepeater(64, i => new BoxEl { Height = 32f, Fill = ColorF.FromRgba(28, 28, 28) },
                                 RepeatLayout.Stack(32f), keyOf: i => "s" + i),
                         ],
@@ -26688,7 +26846,7 @@ static class Slice
                 parts[ToggleSwitch.PartTrack] = b => b with { OnRealized = h => { if (!tracks.Contains(h)) tracks.Add(h); } };
                 using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings,
                     new W0fStaticProbe { Build = () => new BoxEl { Padding = Edges4.All(12),
-                        Children = [ToggleSwitch.Create(on.Value, () => { }, parts: parts)] } });
+                        Children = [ToggleSwitch.Create(on, parts: parts)] } });
                 host.RunFrame();
                 bool mount = tracks.Count == 1;
                 var track0 = tracks.Count > 0 ? tracks[0] : NodeHandle.Null;
@@ -26775,16 +26933,16 @@ static class Slice
                             Direction = 1, Width = 440, Gap = 6, Padding = Edges4.All(12),
                             Children =
                             [
-                                ToggleSwitch.Create(flip.Value, () => { }, header: "t"),
-                                CheckBox.Create("c", flip.Value ? CheckState.Checked : CheckState.Unchecked, _ => { }, isEnabled: enabled.Value),
+                                ToggleSwitch.Create(flip, header: "t"),
+                                CheckBox.Create("c", flip, isEnabled: enabled.Value),
                                 ProgressRing.Indeterminate(isActive: flip.Value),
                                 ProgressBar.Indeterminate(240f, flip.Value ? ProgressBarState.Paused : ProgressBarState.Normal),
                                 Slider.Ranged(0.3f, _ => { }, new Slider.Options()),
-                                PipsPager.Create(5, idx.Value, _ => { }),
-                                Pivot.Create(items3, i => new TextEl("p" + i) { Size = 12f }, selectedIndex: idx.Value),
-                                FlipView.Create([new TextEl("0"), new TextEl("1"), new TextEl("2")], selectedIndex: idx.Value),
-                                RadioButtons.Create(items3, idx.Value, _ => { }),
-                                SelectorBar.Create(items3, idx.Value, _ => { }),
+                                PipsPager.Create(5, idx),
+                                Pivot.Create(items3, i => new TextEl("p" + i) { Size = 12f }, selectedIndex: idx),
+                                FlipView.Create([new TextEl("0"), new TextEl("1"), new TextEl("2")], selectedIndex: idx),
+                                RadioButtons.Create(items3, idx),
+                                SelectorBar.Create(items3, idx),
                                 BreadcrumbBar.Create(items3),
                                 ComboBox.Create(items3, combo, isEnabled: enabled.Value),
                                 NumberBox.Create(value: null, initial: num.Value, isEnabled: enabled.Value),
@@ -26968,6 +27126,7 @@ static class Slice
         UseImageChecks(strings);
         ControlsChecks(strings);
         RecipeChecks(strings);         // WS3 P1 InteractionRecipe (gate.ctl.recipe.*): expand, presets (theme-live), disabled legs, zero-alloc
+        ControlBindChecks(strings);    // WS3 P2 controlled-input contract (gate.ctl.bind.*): toggle/check/tristate/radio/automaterialize
         NavigationChecks();
         PageHostChecks(strings);
         KeepAliveChecks(strings);

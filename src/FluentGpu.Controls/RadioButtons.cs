@@ -1,6 +1,7 @@
 using FluentGpu.Foundation;
 using FluentGpu.Dsl;
 using FluentGpu.Hooks;
+using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
 
@@ -31,26 +32,28 @@ public static partial class RadioButtons
 
     /// <summary>String items (the WinUI ItemsSource-of-strings shape). <paramref name="parts"/> = the per-item
     /// <see cref="RadioButton"/> template parts (PartRing/PartDot/…), applied to EVERY item (not virtualized).</summary>
-    public static Element Create(IReadOnlyList<string> items, int selectedIndex, Action<int> onSelect,
+    public static Element Create(IReadOnlyList<string> items, Signal<int>? selectedIndex = null, Action<int>? onChange = null,
                                  string? header = null, int maxColumns = 1, bool isEnabled = true,
                                  RadioButton.Style? style = null, TemplateParts? parts = null)
-        => Embed.Comp(new Props(items.Count, items, null, selectedIndex, onSelect, header, maxColumns, isEnabled,
+        => Embed.Comp(new Props(items.Count, items, null, selectedIndex, onChange, header, maxColumns, isEnabled,
                                 style ?? RadioButton.DefaultStyle, parts),
                       () => new RadioButtonsCore());
 
     /// <summary>Element-factory items: <paramref name="itemContent"/>(i) renders each item's content in place of the
     /// text label (the WinUI arbitrary-content item wrapped in a RadioButton).</summary>
-    public static Element Create(int itemCount, Func<int, Element> itemContent, int selectedIndex, Action<int> onSelect,
+    public static Element Create(int itemCount, Func<int, Element> itemContent, Signal<int>? selectedIndex = null, Action<int>? onChange = null,
                                  string? header = null, int maxColumns = 1, bool isEnabled = true,
                                  RadioButton.Style? style = null, TemplateParts? parts = null)
-        => Embed.Comp(new Props(itemCount, null, itemContent, selectedIndex, onSelect, header, maxColumns, isEnabled,
+        => Embed.Comp(new Props(itemCount, null, itemContent, selectedIndex, onChange, header, maxColumns, isEnabled,
                                 style ?? RadioButton.DefaultStyle, parts),
                       () => new RadioButtonsCore());
 
     /// <summary>Controlled props RE-PUSHED to the core (<c>Embed.Comp(props, …)</c>) — a reused ComponentEl never
-    /// re-runs its factory — so props are delivered live (equality-gated); the core reads them with <c>UseProps</c>.</summary>
-    internal sealed record Props(int Count, IReadOnlyList<string>? Labels, Func<int, Element>? Content, int Selected,
-                                 Action<int> OnSelect, string? Header, int MaxColumns, bool IsEnabled,
+    /// re-runs its factory — so props are delivered live (equality-gated); the core reads them with <c>UseProps</c>.
+    /// The selected index is a caller <see cref="Signal{T}"/> read directly in the core (null ⇒ the core materializes
+    /// its own internal signal — auto-materialize). A select/roving move WRITES the signal, then fires OnChange.</summary>
+    internal sealed record Props(int Count, IReadOnlyList<string>? Labels, Func<int, Element>? Content, Signal<int>? Selected,
+                                 Action<int>? OnChange, string? Header, int MaxColumns, bool IsEnabled,
                                  RadioButton.Style Style, TemplateParts? Parts = null);
 }
 
@@ -63,6 +66,9 @@ internal sealed class RadioButtonsCore : Component
         var p = UseProps<RadioButtons.Props>();
         var hooks = UseContext(InputHooks.Current);
         var handles = UseRef(new List<NodeHandle>()).Value;
+        var own = UseSignal(-1);
+        var sig = p.Selected ?? own;   // auto-materialize: one code path (caller's signal, else the internal one)
+        int selected = sig.Value;      // read directly (live); a programmatic write re-skins with no OnChange echo
 
         int n = p.Count;
         var s = p.Style;
@@ -89,12 +95,12 @@ internal sealed class RadioButtonsCore : Component
 
         // The single roving tab stop: the selected item, or the first when nothing is selected
         // (OnGettingFocus redirects entering focus to the selected item, RadioButtons.cpp:80-97).
-        int tabStop = (uint)p.Selected < (uint)n ? p.Selected : 0;
+        int tabStop = (uint)selected < (uint)n ? selected : 0;
 
         void MoveTo(int target, bool ctrl)
         {
             if ((uint)target >= (uint)n) return;
-            if (!ctrl) p.OnSelect(target);                                 // selection follows focus unless Ctrl (cpp:100-107)
+            if (!ctrl) { sig.Value = target; p.OnChange?.Invoke(target); }  // selection follows focus unless Ctrl (cpp:100-107)
             if (target < handles.Count && !handles[target].IsNull)
                 (hooks.MoveFocusVisual ?? hooks.RestoreFocus)?.Invoke(handles[target]);   // keyboard move → focus visual
         }
@@ -131,8 +137,8 @@ internal sealed class RadioButtonsCore : Component
             string? label = p.Labels is not null && i < p.Labels.Count ? p.Labels[i] : null;
             return RadioButton.Build(
                 label, content,
-                selected: i == p.Selected,
-                onSelect: () => p.OnSelect(idx),
+                selected: i == selected,
+                onSelect: () => { sig.Value = idx; p.OnChange?.Invoke(idx); },
                 s, p.IsEnabled,
                 focusable: i == tabStop,                                   // roving single tab stop (RadioButtons.xaml:5-6)
                 onKeyDown: a => OnItemKey(idx, a),

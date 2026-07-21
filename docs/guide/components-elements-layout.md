@@ -206,12 +206,26 @@ Every control has a `Style` record + a global `…StyleOverride` and reads theme
 Button.Accent(string label, Action onClick, Style? style = null)     // primary
 Button.Standard(string label, Action onClick, Style? style = null)   // neutral
 IconButton.Create(string glyph, Action onClick, Style? style = null)
-ToggleButton.Create(string label, bool on, Action onToggle, Style? style = null)
+ToggleButton.Create(string label, Signal<bool>? on = null, Action<bool>? onChange = null, Style? style = null)   // controlled signal + sugar
 
 Slider.Create(float value, Action<float> onChange, float w = 200, float h = 24, Style? = null)   // controlled (re-render)
 Slider.Bind(FloatSignal value, Action<float>? onChange = null, float w = 200, float h = 24, …)    // signals-native (no re-render) ★
 ScrollBar.Create(float fraction, float position, Action<float> onScroll, float h = 200, Style? = null)
 AnimatedIcon.Glyph(string glyph, float size = 16, ColorF? color = null, string? font = null, float hoverScale = 1.08f, float pressScale = 0.88f)
+```
+
+### The controlled-input contract (every stateful control)
+
+One uniform contract, so binding any stateful control is the same everywhere:
+
+1. **Signal-in.** The canonical factory takes the controlled value as a **concrete signal** (`Signal<T>` / `FloatSignal`) — e.g. `ToggleSwitch.Create(Signal<bool> isOn)`, `CheckBox.Create(string, Signal<bool>)`, `RadioButtons.Create(items, Signal<int> selectedIndex)`. The control reads that signal *directly* (live) — you do **not** re-render the parent to change the value.
+2. **`onChange` sugar.** An optional `Action<T>? onChange = null` runs on user interaction. Order is fixed: the control writes the signal **first**, then invokes `onChange`. A **programmatic** signal write (`sig.Value = …`) re-skins the control with **no** `onChange` echo (and never re-renders the owner) — so app code and user input can't feedback-loop.
+3. **Auto-materialize.** Pass no signal and the control creates its own internal one (`isOn = null` ⇒ one code path — "uncontrolled" just means "the control made the signal"). `ToggleSwitch.Create()` toggles on its own; `ToggleSwitch.Create(mySig)` is externally controlled — same code path.
+4. **The signal instance freezes at mount** (bind wiring is mount-only). Swap the signal by re-keying the control.
+5. **Closed callback-name set:** `onChange` (the controlled value), `onClick` / `onInvoked` (actions), `onCommit` / `onCancel` (editors), `onOpenChanged` (open state). There is no `onToggle` / `onSelect` / `onTextChanged` / `OnValueChanged`; `onChange` receives the NEW value (peek your own signal for the old one). The one documented exception is the **leaf `RadioButton`** (`bool isSelected, Action? onChange`) — the owning group/`RadioButtons` owns the shared selection signal.
+```csharp
+var on = UseSignal(false);
+ToggleSwitch.Create(on, onChange: v => Save(v));   // v is the new value; `on` is live
 ```
 
 ★ **Prefer `Slider.Bind` for a scrubber.** A drag writes the `FloatSignal` → the thumb/fill composited transforms

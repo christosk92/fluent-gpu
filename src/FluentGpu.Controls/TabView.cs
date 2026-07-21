@@ -84,8 +84,8 @@ public sealed class TabView : Component
     /// <summary>Controlled selection: a two-way signal (the engine's controlled-prop idiom — plain fields are
     /// mount-only). Null = the control owns selection (WinUI SelectedIndex DP, TabView.idl:159-161).</summary>
     public Signal<int>? SelectedIndex;
-    /// <summary>WinUI <c>SelectionChanged</c> (TabView.idl:169) with the new index.</summary>
-    public Action<int>? OnSelectionChanged;
+    /// <summary>WinUI <c>SelectionChanged</c> (TabView.idl:169) with the new index (the controlled-value callback).</summary>
+    public Action<int>? OnChange;
     /// <summary>WinUI <c>TabCloseRequested</c> (TabView.idl:124), raised with the closing index BEFORE the control
     /// commits the removal. WinUI leaves removal to the handler; our collection is control-owned (the TabItems
     /// vector), so the control performs the WinUI handler's <c>TabItems.RemoveAt</c> itself after raising.</summary>
@@ -102,28 +102,32 @@ public sealed class TabView : Component
     public TemplateParts? Parts;
 
     public static Element Create(IReadOnlyList<string> tabs,
+                                 Signal<int>? selectedIndex = null,
+                                 Action<int>? onChange = null,
                                  Action<int>? onTabCloseRequested = null,
-                                 Func<TabViewItem?>? onAddTabButtonClick = null,
-                                 Action<int>? onSelectionChanged = null)
+                                 Func<TabViewItem?>? onAddTabButtonClick = null)
         => Embed.Comp(() => new TabView
         {
             Tabs = tabs,
+            SelectedIndex = selectedIndex,
+            OnChange = onChange,
             OnTabCloseRequested = onTabCloseRequested,
             OnAddTabButtonClick = onAddTabButtonClick,
-            OnSelectionChanged = onSelectionChanged,
         });
 
     public static Element Create(IReadOnlyList<TabViewItem> items,
+                                 Signal<int>? selectedIndex = null,
+                                 Action<int>? onChange = null,
                                  Action<int>? onTabCloseRequested = null,
                                  Func<TabViewItem?>? onAddTabButtonClick = null,
-                                 Action<int>? onSelectionChanged = null,
                                  TabViewWidthMode widthMode = TabViewWidthMode.Equal)
         => Embed.Comp(() => new TabView
         {
             Items = items,
+            SelectedIndex = selectedIndex,
+            OnChange = onChange,
             OnTabCloseRequested = onTabCloseRequested,
             OnAddTabButtonClick = onAddTabButtonClick,
-            OnSelectionChanged = onSelectionChanged,
             TabWidthMode = widthMode,
         });
 
@@ -317,7 +321,7 @@ public sealed class TabView : Component
         {
             if ((uint)idx >= (uint)list.Count || idx == selSig.Peek()) return;
             selSig.Value = idx;
-            OnSelectionChanged?.Invoke(idx);
+            OnChange?.Invoke(idx);
             BringTabIntoView(idx);   // selecting scrolls the tab into view (TabViewItem.cpp:151-155)
             // A tapped TabViewItem takes focus (ListViewItem semantics) — explicit because unselected plates are
             // TabStop=false (the roving single strip stop), which also opts them out of press-focus.
@@ -338,7 +342,7 @@ public sealed class TabView : Component
                 if (idx < s)
                 {
                     selSig.Value = s - 1;       // items shifted left beneath the selection — same item, new index
-                    OnSelectionChanged?.Invoke(s - 1);
+                    OnChange?.Invoke(s - 1);
                 }
                 else if (idx == s)
                 {
@@ -346,7 +350,7 @@ public sealed class TabView : Component
                     // TabView.cpp:786-812; the enabled/visible forward walk degenerates to this clamp here).
                     int ns = Math.Min(idx, list.Count - 1);
                     if (selSig.Peek() != ns) selSig.Value = ns;
-                    OnSelectionChanged?.Invoke(ns);
+                    OnChange?.Invoke(ns);
                 }
             }
             itemsVersion.Value = itemsVersion.Peek() + 1;

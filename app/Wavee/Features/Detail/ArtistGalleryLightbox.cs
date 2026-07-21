@@ -133,7 +133,7 @@ sealed class ArtistGalleryLightbox : Component
                 Children = [ HeroImage(_photos[i], vp) ],
             };
         }
-        return FlipView.Create(pages, vp.Width, vp.Height, current, onSelect);
+        return FlipView.Create(pages, vp.Width, vp.Height, new Signal<int>(current), onChange: onSelect);
     }
 
     Element HeroImage(Image photo, Size2 vp) => new ImageEl

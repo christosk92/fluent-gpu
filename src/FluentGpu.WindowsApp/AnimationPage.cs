@@ -962,7 +962,7 @@ sealed class AnimReflow : Component
     public override Element Render()
     {
         var (open, setOpen) = UseState(false);
-        var (on, setOn) = UseState(true);
+        var on = UseSignal(true);
         return new BoxEl
         {
             Direction = 1, Gap = 10f, AlignItems = FlexAlign.Start,
@@ -996,7 +996,7 @@ sealed class AnimReflow : Component
                     Direction = 0, Gap = 14f, AlignItems = FlexAlign.Center,
                     Children =
                     [
-                        ToggleSwitch.Create(on, () => setOn(!on)),
+                        ToggleSwitch.Create(on),
                         new TextEl("← rides the reveal rigidly (pill stays locked to its track)") { Size = 12f, Color = Tok.TextTertiary },
                     ],
                 },

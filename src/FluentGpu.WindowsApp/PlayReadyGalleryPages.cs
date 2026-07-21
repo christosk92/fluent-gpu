@@ -92,15 +92,15 @@ sealed class ProtectedVideoDemo : Component
             Direction = 1, Gap = 10f,
             Children =
             [
-                TextBox.Create(header: "MPD manifest URL", placeholder: "https://…/manifest.mpd", width: 640f, text: mpd),
-                TextBox.Create(header: "License server URL", placeholder: "https://…/AcquireLicense", width: 640f, text: licenseUrl),
+                TextBox.Create(mpd, options: new TextBox.TextBoxOptions { Header = "MPD manifest URL", Placeholder = "https://…/manifest.mpd", Width = 640f }),
+                TextBox.Create(licenseUrl, options: new TextBox.TextBoxOptions { Header = "License server URL", Placeholder = "https://…/AcquireLicense", Width = 640f }),
                 new BoxEl
                 {
                     Direction = 0, Gap = 10f, AlignItems = FlexAlign.End,
                     Children =
                     [
-                        TextBox.Create(header: "License header name (optional)", placeholder: "X-AxDRM-Message", width: 220f, text: headerName),
-                        TextBox.Create(header: "License header value (optional)", placeholder: "token…", width: 410f, text: headerValue),
+                        TextBox.Create(headerName, options: new TextBox.TextBoxOptions { Header = "License header name (optional)", Placeholder = "X-AxDRM-Message", Width = 220f }),
+                        TextBox.Create(headerValue, options: new TextBox.TextBoxOptions { Header = "License header value (optional)", Placeholder = "token…", Width = 410f }),
                     ],
                 },
                 new BoxEl

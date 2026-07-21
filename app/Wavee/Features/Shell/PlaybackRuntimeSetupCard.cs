@@ -710,7 +710,7 @@ sealed class SetupBody : Component
                     labels[i] = $"Spotify {packs[i].SpotifyVersion} · {packs[i].Arch}";
                     if (i == 0) labels[i] += $"  ({Loc.Get(Strings.Playback.Runtime.Recommended)})";
                 }
-                kids.Add(RadioButtons.Create(labels, _m.SelectedPackIndex.Value, i => _m.SelectedPackIndex.Value = i,
+                kids.Add(RadioButtons.Create(labels, _m.SelectedPackIndex,
                     header: Loc.Get(Strings.Playback.Runtime.ChooseVersion)));
                 break;
             }
