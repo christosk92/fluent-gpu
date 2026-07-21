@@ -1,6 +1,6 @@
 # Wavee Connect remote-play — manual live smoke test (parity sign-off)
 
-The headless harness (`dotnet test app/Wavee.Tests/Wavee.Tests.csproj`, 343 green) proves the command/state logic. This
+The headless harness (`dotnet test src/apps/Wavee.Tests/Wavee.Tests.csproj`, 343 green) proves the command/state logic. This
 is the **live** sign-off that exercises the real Spotify service end-to-end. Audio is intentionally silent (the real
 `IAudioHost` is a separate milestone) — what we verify here is the **control plane**: the device appears, is controllable,
 controls others, state syncs, and a network drop is *visible*.
@@ -10,7 +10,7 @@ controls others, state syncs, and a network drop is *visible*.
 From the repo root (`C:\WAVEE\fluent-gpu`):
 
 ```
-dotnet run --project app/Wavee/Wavee.csproj -- --connect-live
+dotnet run --project src/apps/Wavee/Wavee.csproj -- --connect-live
 ```
 
 The probe (`LiveSessionHost.RunAsync`) logs in (stored cred or device-code), brings up the live dealer socket, swaps the

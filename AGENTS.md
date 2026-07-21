@@ -5,13 +5,13 @@ discipline) and a `.claude/skills/fluentgpu` skill; the full human/agent guide i
 
 ## Out-of-scope paths — do NOT read, search, edit, or summarize
 
-Agent scope in this repo is the **FluentGpu engine** (`src/`, `design/`, `docs/`) and app UI.
+Agent scope in this repo is the **FluentGpu engine** (`src/`, `docs/design/`, `docs/`) and app UI.
 The paths below are out of scope and belong to a separate workspace. Unless the user names a
 specific file below **and** confirms it for this session, do not read, grep, edit, or summarize:
 
-- `app/.native/**`, `app/Wavee.PlayPlay/**`, `private-runtimes/**`
-- `app/tmp_*`, `scripts/pyghidra*`, `tools/pyghidra*`, `tools/playplay_*`, `tools/x64_*`
-- `app/docs/wavee-playplay*.md`, `app/docs/playplay-*.md`, `app/docs/spotiload-offline-path.md`
+- `src/apps/.native/**`, `src/apps/Wavee.PlayPlay/**`, `private-runtimes/**`
+- `src/apps/tmp_*`, `ops/scripts/pyghidra*`, `ops/tools/pyghidra*`, `ops/tools/playplay_*`, `ops/tools/x64_*`
+- `docs/plans/wavee/wavee-playplay*.md`, `docs/plans/wavee/playplay-*.md`, `docs/plans/wavee/spotiload-offline-path.md`
 - `**/playplay-runtime.json`
 
 These live in the separate `wavee-playplay-private` repo (see `docs/guide/playplay-private-split.md`).
@@ -37,8 +37,8 @@ dotnet run   --project src/FluentGpu.VerticalSlice      # expect: "ALL CHECKS PA
 # Build the real Windows app:
 dotnet build src/FluentGpu.WindowsApp
 
-# Design-corpus drift gate (only if you edited design/*.md), Windows PowerShell:
-powershell -File design/check-canon.ps1                 # must exit 0
+# Design-corpus drift gate (only if you edited docs/design/*.md), Windows PowerShell:
+powershell -File docs/design/check-canon.ps1            # must exit 0
 ```
 
 The harness runs headlessly (no GPU/window), is deterministic, and asserts on the recorded DrawList + post-layout
@@ -135,8 +135,8 @@ Adding an `Element` type: assign a free `ElementTypeId`, then handle it in `Reco
 - .NET 10, C# 14, nullable enabled, `unsafe` allowed, NativeAOT-targeted. No reflection on hot paths; keep new
   code AOT-clean (delegates over reflection). Match the terse, XML-doc-commented style of nearby files.
 - Commit/push only when asked. Don't commit build output or diagnostics dumps (`*.dmp`/`*.gcdump` are gitignored).
-- The `design/` tree is the canon-gated architecture authority; usage docs live in `docs/`. As-built reactive model:
-  `design/subsystems/reconciler-hooks.md §0bis`.
+- The `docs/design/` tree is the canon-gated architecture authority; usage docs live in `docs/guide/`. As-built reactive model:
+  `docs/design/subsystems/reconciler-hooks.md §0bis`.
 
 ## Deeper docs
 `docs/guide/README.md` (hub + file map) → `reactivity.md` (the core) → `components-elements-layout.md` →

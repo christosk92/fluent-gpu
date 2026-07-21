@@ -1,7 +1,7 @@
 # fluent-gpu → WaveeMusic app-parity roadmap — the next best things to build
 
 > **What this is.** A dependency-ordered, value-ranked plan of the next engine + app work to make the in-repo
-> fluent-gpu rebuild (`app/Wavee/`) match the shipping **WaveeMusic** WinUI 3 app (`C:\WAVEE\WaveeMusic`).
+> fluent-gpu rebuild (`src/apps/Wavee/`) match the shipping **WaveeMusic** WinUI 3 app (`C:\WAVEE\WaveeMusic`).
 > This is *app-level* parity (the composed surfaces WaveeMusic ships) — distinct from the *control-level* parity in
 > [`winui-parity-sweep.md`](./winui-parity-sweep.md) and the *spec-level* gap in [`../design/BUILD-ROADMAP.md`](../design/BUILD-ROADMAP.md).
 >
@@ -18,7 +18,7 @@
 
 ## 1. Executive summary
 
-The engine is well past a "skeleton," and so is the rebuild. **`app/Wavee/` is already a working browser-shaped shell**:
+The engine is well past a "skeleton," and so is the rebuild. **`src/apps/Wavee/` is already a working browser-shaped shell**:
 4-row chrome (custom `TitleBar` + `TabStrip`, `ShellToolbar` with back/forward/omnibar, resizable/collapsible sidebar,
 docked `PlayerBar`), a **per-tab keep-alive navigation host** (`ContentHost.cs:23` → `Flow.KeepAlive`, `MaxEntries: 8`),
 detail pages with a **landed collapsing hero + shy pill** (`ArtistPage.Hero.cs`), Home/Library/Search pages,
@@ -54,12 +54,12 @@ player/action surfaces (mostly app-composition over landed primitives), and only
 ## 2. What already works — the foundation (do **not** rebuild)
 
 **Shell / navigation (app-side, landed).**
-- Per-tab keep-alive nav host via `Flow.KeepAlive` (`app/Wavee/Features/Shell/ContentHost.cs`; primitive
+- Per-tab keep-alive nav host via `Flow.KeepAlive` (`src/apps/Wavee/Features/Shell/ContentHost.cs`; primitive
   `src/FluentGpu.Engine/Hooks/ControlFlow.cs`; reconciler `Reconciler.cs:723+`). Back/forward = visibility flip; scroll
   position + bindings survive eviction.
 - Browser `TabStrip` (add/close/select/reorder + per-tab isolated stack, `WaveeShell.cs`); custom `TitleBar` with
   WM_NCHITTEST drag regions + snap-layout (`src/FluentGpu.Windows/Pal/Win32Platform.cs`).
-- Resizable + collapsible sidebar (persisted width, 1:1-drag snap, `app/Wavee/Features/Sidebar/`).
+- Resizable + collapsible sidebar (persisted width, 1:1-drag snap, `src/apps/Wavee/Features/Sidebar/`).
 - Collapsing/shy hero + compact pill + parallax (`ArtistPage.Hero.cs`); `ScrollBind`/`ScrollState` slab
   (`src/FluentGpu.Engine/Animation/ScrollBind.cs`).
 - Connected/shared-element morph (`Animation/ConnectedAnimation.cs`); animated live re-theme + Mica (`FluentApp.cs`).
@@ -126,7 +126,7 @@ Integrates the synthesis shortlist with the completeness critic's promotions (mu
 - **1.4 Async/lazy submenu population + `ContextFlyout` helper** *(M, high)* — on-open async submenu loader w/ loading
   placeholder (`MenuFlyout.cs:30/46` static today); one-property helper wiring `Element.OnContextRequested` → `MenuFlyout`
   at cursor. Touch: `Controls/MenuFlyout.cs`, `CommandBarFlyout.cs`, `OverlayHost.cs`.
-- **1.5 SMTC app-side wiring** *(S, medium)* — `app/Wavee/Features/Shell/PlayerBar.cs` ↔ `WindowsApi/Media/SystemMediaControls.cs`.
+- **1.5 SMTC app-side wiring** *(S, medium)* — `src/apps/Wavee/Features/Shell/PlayerBar.cs` ↔ `WindowsApi/Media/SystemMediaControls.cs`.
 - **1.6 UIA provider-tree — begin the design** *(design only this wave)* — `Uia/Placeholder.cs` is an empty stub;
   `AutomationRole` is already tagged on the scene column. Start the provider-tree design now (it is the longest non-media
   pole, landing in Wave 5) — and note it is **UIA-client testable, not needs-pixels**.

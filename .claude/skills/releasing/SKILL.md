@@ -22,9 +22,9 @@ gh release view vX.Y.Z --json assets -q '.assets[].name'   # expect 2 .msix + 2 
 
 ## Build / sign locally
 ```powershell
-pwsh build/pack-msix.ps1                            # host arch, self-signed dev cert
-pwsh build/pack-msix.ps1 -TrustedSigning            # Azure Trusted Signing (publicly trusted)
-pwsh build/pack-msix.ps1 -TrustedSigning -Install   # + Add-AppxPackage (installs clean, no cert prompt)
+pwsh ops/build/pack-msix.ps1                            # host arch, self-signed dev cert
+pwsh ops/build/pack-msix.ps1 -TrustedSigning            # Azure Trusted Signing (publicly trusted)
+pwsh ops/build/pack-msix.ps1 -TrustedSigning -Install   # + Add-AppxPackage (installs clean, no cert prompt)
 ```
 Local Trusted Signing needs `az login` as an identity with the **Artifact Signing Certificate Profile Signer** role on the `Wavee` account, with that subscription active.
 
@@ -36,7 +36,7 @@ Local Trusted Signing needs `az login` as an identity with the **Artifact Signin
 | Publisher (manifest Identity = cert subject) | `CN=cproducts, O=cproducts, L=Utrecht, S=Utrecht, C=NL` |
 | CI service principal | app `fluentgpu-ci-signing` (`ad16e7be-55d9-4a60-9446-3e2f58b5688c`) |
 | GitHub secrets / vars | `AZURE_TENANT_ID/CLIENT_ID/CLIENT_SECRET`; `TRUSTED_SIGNING_ACCOUNT/ENDPOINT/PROFILE`, `RELEASE_PUBLISHER` |
-| Files | `build/pack-msix.ps1`, `build/AppxManifest.xml`, `build/AppInstaller.template.xml`, `build/signing/metadata.json` (gitignored), `.github/workflows/msix.yml` |
+| Files | `ops/build/pack-msix.ps1`, `ops/build/AppxManifest.xml`, `ops/build/AppInstaller.template.xml`, `ops/build/signing/metadata.json` (gitignored), `.github/workflows/msix.yml` |
 
 ## Gotchas (every one of these actually happened)
 - **CI sign job `Invalid tenant id` / `SignerSign() failed 0x80004005`** → a GitHub secret has a stray `\r`. **NEVER pipe to `gh secret set` from PowerShell** (CRLF leaves a trailing `\r`). Use `gh secret set NAME --body "value"`. Re-mint: `az ad app credential reset --id ad16e7be-… --years 1 --query password -o tsv`, set all three with `--body`, then `gh run rerun <id> --failed`.
@@ -46,7 +46,7 @@ Local Trusted Signing needs `az login` as an identity with the **Artifact Signin
 - **Timestamp**: `http://timestamp.acs.microsoft.com` (HTTP, not HTTPS).
 - **AOT link fails / `vswhere` not found** → needs VS Build Tools (MSVC); `pack-msix.ps1` prepends the VS Installer dir to PATH.
 - **`.appinstaller` 404** until that tag's release exists — expected.
-- **Art changed?** regenerate then commit: `build/generate-appicon.ps1`, `build/generate-download-buttons.ps1`.
+- **Art changed?** regenerate then commit: `ops/build/generate-appicon.ps1`, `ops/build/generate-download-buttons.ps1`.
 
 ## Revoke CI signing
 `az ad app delete --id ad16e7be-55d9-4a60-9446-3e2f58b5688c` (removes the SPN + its secret).

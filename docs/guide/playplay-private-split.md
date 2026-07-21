@@ -12,10 +12,10 @@ public GitHub record.
 
 ## How it links back in
 
-The build is absence-tolerant. The presence of `app/Wavee.PlayPlay/Client/InProcessPlayPlayKeyDeriver.cs` flips the
+The build is absence-tolerant. The presence of `src/apps/Wavee.PlayPlay/Client/InProcessPlayPlayKeyDeriver.cs` flips the
 `WAVEE_PLAYPLAY_LOCAL` MSBuild symbol (not the sibling csproj alone — a partial junction must not enable code paths
 that reference types which never compile); the package's `**/*.cs` + `Protos/playplay.proto` then source-link
-into the `Wavee` assembly (`app/Wavee/Wavee.csproj`), and the test project links `Tests/`. With the
+into the `Wavee` assembly (`src/apps/Wavee/Wavee.csproj`), and the test project links `Tests/`. With the
 package absent, the app compiles against the public seam only: `IPlayPlayKeyDeriver`/`NullPlayPlayKeyDeriver`,
 `IPlayPlayProvisioner`/`NullPlayPlayProvisioner`, and the pure DTOs/status enums under
 `SpotifyLive/Audio` + `Backend/Audio/Contracts`.
@@ -32,8 +32,8 @@ Default state is **unlinked/absent** — the clean state agents and CI see.
 
 ## Guardrails (do not commit out-of-scope material here)
 
-- `.gitignore` ignores the whole out-of-scope surface (`app/.native/`, `app/Wavee.PlayPlay/`, `app/tmp_*`,
-  `scripts/pyghidra*`, `tools/{pyghidra*,playplay_*,x64_*}`, the mechanism docs, runtime payloads).
+- `.gitignore` ignores the whole out-of-scope surface (`src/apps/.native/`, `src/apps/Wavee.PlayPlay/`, `src/apps/tmp_*`,
+  `ops/scripts/pyghidra*`, `ops/tools/{pyghidra*,playplay_*,x64_*}`, the mechanism docs, runtime payloads).
 - **Enable the pre-commit guard once per clone:** `git config core.hooksPath .githooks`. It blocks staging
   any out-of-scope path or mechanism keyword (bypass only for a verified false positive with
   `git commit --no-verify`).

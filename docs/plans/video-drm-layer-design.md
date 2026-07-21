@@ -6,7 +6,7 @@
 > no separate process, no MSIX install, no cross-process handle duplication.** The custom CENC `IMFMediaSource`
 > → modern MF-CDM decryptor → decode → non-zero protected windowless-swapchain handle →
 > `IVideoPresenter.BindSurfaceHandle` pipeline runs entirely inside the full-trust engine process (build
-> `desktop-cdm-20260719-persist-v11`, Surface Laptop 7 ARM64; `tools/playready-uwp-helper/{Helper.cpp,
+> `desktop-cdm-20260719-persist-v11`, Surface Laptop 7 ARM64; `ops/tools/playready-native/{Helper.cpp,
 > CencMediaSource.h}` compiled by `build-desktop-dll.cmd` into `FluentGpu.PlayReady.Native.dll`). This removes
 > the entire process/app-model boundary the pass-1..pass-3 blocks below wrestled with: the gate was **not** the
 > app model (InboxOnly/UWP), **not** signing, and **not** the sandbox — it was three stacked content/wiring
@@ -60,7 +60,7 @@
 > **EMPIRICAL FINDINGS (2026-07-19, pass 3 — the custom CENC `IMFMediaSource`; PROTECTED VIDEO NOW RENDERS END TO END).**
 > The last mile flagged by pass 2 (a custom encrypted-sample media source, Microsoft's `MediaEngineEMEUWPSample`
 > `CdmMediaSource` model) is **built and PROVEN** on the Surface Laptop 7 (ARM64), mode `protected-custom` of
-> `tools/playready-uwp-helper/` (`CencMediaSource.h` + Helper.cpp). An **in-app fragmented-MP4/CENC demuxer** (from
+> `ops/tools/playready-native/` (`CencMediaSource.h` + Helper.cpp). An **in-app fragmented-MP4/CENC demuxer** (from
 > scratch — parses `moov`/`trak`/`mdia`(`mdhd`)/`minf`/`stbl`/`stsd`/`encv`/`avcC`+`sinf`(`frma`/`schm`/`schi`/`tenc`)
 > for codec/SPS-PPS/`default_KID`/scheme/IV-size + `moov` `pssh`; and per segment `moof`/`traf`/`tfhd`/`tfdt`/`trun`
 > + `senc` + `mdat`) feeds a **custom `IMFMediaSource`/`IMFMediaStream`** that emits encrypted `IMFSample`s carrying the
@@ -87,7 +87,7 @@
 > conclusion for the UWP context).** The `SetPMPHostApp`/`GenerateRequest` walls that pass-1/pass-2 hit in
 > **full-trust / LPAC / packaged** are **CLEARED in a GENUINE-UWP CoreApplication AppContainer** — and the
 > cross-process surface pipe the milestone needs is proven end to end. Built + run on the Surface Laptop 7 (ARM64):
-> a UWP AppContainer producer helper (`tools/playready-uwp-helper/`, C++/WinRT, same toolchain as
+> a UWP AppContainer producer helper (`ops/tools/playready-native/`, C++/WinRT, same toolchain as
 > `tools/playready-uwp-test/`) + a full-trust engine consumer (`FluentGpu.WindowsApp --uwp-video`).
 >
 > 1. **Cross-process DirectComposition surface-handle sharing WORKS (visually proven).** The helper creates a
@@ -124,7 +124,7 @@
 > integration task, not an open research question.
 
 > **EMPIRICAL FINDINGS (2026-07-19, pass 2 — the protected media-engine wiring; corrects finding 3 above).** The
-> `protected` mode of `tools/playready-uwp-helper/` now implements the full `IMFMediaEngine`+EME path (built + run,
+> `protected` mode of `ops/tools/playready-native/` now implements the full `IMFMediaEngine`+EME path (built + run,
 > Surface Laptop 7 ARM64). **Every COM step of the protected wiring SUCCEEDS at runtime** and the key is `USABLE`:
 > modern `IMFContentDecryptionModule` created + `SetPMPHostApp` S_FALSE; a `MediaEngineProtectionManager`
 > (`IMFContentProtectionManager` + WinRT `IMediaProtectionManager`) exposing the CDM's `IMediaProtectionPMPServer` via

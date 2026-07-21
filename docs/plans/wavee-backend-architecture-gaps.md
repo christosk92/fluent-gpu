@@ -1,5 +1,5 @@
 > **Provenance & status.** Output of a 12-domain adversarial gap-hunt — each domain grounded in the real WaveeMusic code
-> (`C:\WAVEE\WaveeMusic`) + the `app/Wavee.Core` seam, each finding challenged by a skeptic that discarded false positives.
+> (`C:\WAVEE\WaveeMusic`) + the `src/apps/Wavee.Core` seam, each finding challenged by a skeptic that discarded false positives.
 > This is the **worklist + corrections** for the sibling [`wavee-native-backend-architecture.md`](./wavee-native-backend-architecture.md).
 > Headline: the architecture is **sound** (no structural rethink), but was **under-scoped by ~1/3** (13 missing subsystems)
 > and shipped **two load-bearing claims that are factually wrong** — the `entities` opaque-blob breaks offline search/sort,
@@ -15,7 +15,7 @@
 
 # Wavee Backend Architecture — Consolidated Gap Report
 
-This is the de-duplicated, cross-domain worklist for `docs/plans/wavee-native-backend-architecture.md`. Eleven domain reviews converged on a small set of structural holes that recur across many sections; they are consolidated below. Evidence paths are under `C:\WAVEE\WaveeMusic\src` and `C:\WAVEE\fluent-gpu\app\Wavee.Core` unless noted.
+This is the de-duplicated, cross-domain worklist for `docs/plans/wavee-native-backend-architecture.md`. Eleven domain reviews converged on a small set of structural holes that recur across many sections; they are consolidated below. Evidence paths are under `C:\WAVEE\WaveeMusic\src` and `C:\WAVEE\fluent-gpu\src\apps\Wavee.Core` unless noted.
 
 ---
 

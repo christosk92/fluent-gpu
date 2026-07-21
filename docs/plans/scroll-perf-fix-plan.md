@@ -471,7 +471,7 @@ The EdgeFade semantic (Effects.cs; shader in OpacityLayerCompositor): render con
 - **(c) Surface-colour `EmitScrollEdgeCues` gradient** (SceneRecorder.cs:1657): zero new scene nodes, zero managed allocation, no layer, drawn straight to the target as a `GradientRect` (surface→transparent) at each overflowing edge, alpha ramped with per-edge overflow. Visually identical to a true alpha fade IFF the thing directly behind the band is that flat surface colour. `TryResolveCueSurface` (SceneRecorder.cs:1637-1650) resolves the nearest opaque self/ancestor fill (or an acrylic `Fallback`), and self-skips (draws nothing) when no opaque plate exists — so it degrades safe, never wrong-colour. **Primary mechanism for opaque-plate page scrollers.**
 - **(d) Cross-frame layer reuse:** ruled out (§1).
 
-**No app edge fade uses blur mode.** Grep of `app/Wavee` shows every `EdgeFadeSpec` construction uses the two/four-arg ctor with the default `Mode = EdgeFadeMode.Fade` (Rail.cs:48, ArtistPage.Hero.cs:113, ArtistPage.Shelves.cs:25, DetailTrailing.cs:26, NowPlayingPanel.cs:183); no `Mode=Blur`/`FadeAndBlur` anywhere. So the blur-mode clear corruption (§0) is latent, but the engine fix must still be blur-correct for the shared primitive.
+**No app edge fade uses blur mode.** Grep of `src/apps/Wavee` shows every `EdgeFadeSpec` construction uses the two/four-arg ctor with the default `Mode = EdgeFadeMode.Fade` (Rail.cs:48, ArtistPage.Hero.cs:113, ArtistPage.Shelves.cs:25, DetailTrailing.cs:26, NowPlayingPanel.cs:183); no `Mode=Blur`/`FadeAndBlur` anywhere. So the blur-mode clear corruption (§0) is latent, but the engine fix must still be blur-correct for the shared primitive.
 
 **Where (c) is correct in this app (DOWNGRADE):** detail/library content scrolls inside the shell's opaque rounded "page" card — `Fill = Prop.Of(() => WaveeColors.FileArea)`, `Corners = All(WaveeRadius.Card)`, `Shadow = Elevation.Card`, `ClipToBounds = true` (WaveeShell.cs:329, hosting `ContentHost` at :335). ArtistPage / DetailTracks / DiscographyPage / EpisodeList / LibraryPage all render inside this ContentHost card, so top/bottom bands sit over the flat opaque FileArea colour; `TryResolveCueSurface` walks up to it and the cue is pixel-honest.
 
@@ -517,12 +517,12 @@ Note the `EdgeFadeComposite` call site (D3D12Device.cs:1527) is unchanged; it al
 ## 4. Per-file changes
 
 ### App (primary — drop the flag on opaque-plate page scrollers)
-- `app/Wavee/Features/Detail/ArtistPage.cs:69` — delete `AutoEdgeFade = true,` (keep `OnScrollGeometryChanged` on :71). Top FPS offender.
-- `app/Wavee/Features/Detail/DetailTracks.cs:597` — delete `AutoEdgeFade = true,`.
-- `app/Wavee/Features/Detail/DiscographyPage.cs:123` — delete `AutoEdgeFade = true,`.
-- `app/Wavee/Features/Detail/EpisodeList.cs:74` — delete `AutoEdgeFade = true`.
-- `app/Wavee/Features/Library/LibraryPage.cs:366` — delete `AutoEdgeFade = true` on the compact-episodes ScrollView.
-- **`app/Wavee/Features/Player/NowPlayingPanel.cs` — NO CHANGE.** The outer `AutoEdgeFade = true` (:75) stays true-alpha (rail plate possibly translucent; small; not an FPS offender). The section EdgeFade (:183, `EdgeMask.Bottom, 56f`) is untouched.
+- `src/apps/Wavee/Features/Detail/ArtistPage.cs:69` — delete `AutoEdgeFade = true,` (keep `OnScrollGeometryChanged` on :71). Top FPS offender.
+- `src/apps/Wavee/Features/Detail/DetailTracks.cs:597` — delete `AutoEdgeFade = true,`.
+- `src/apps/Wavee/Features/Detail/DiscographyPage.cs:123` — delete `AutoEdgeFade = true,`.
+- `src/apps/Wavee/Features/Detail/EpisodeList.cs:74` — delete `AutoEdgeFade = true`.
+- `src/apps/Wavee/Features/Library/LibraryPage.cs:366` — delete `AutoEdgeFade = true` on the compact-episodes ScrollView.
+- **`src/apps/Wavee/Features/Player/NowPlayingPanel.cs` — NO CHANGE.** The outer `AutoEdgeFade = true` (:75) stays true-alpha (rail plate possibly translucent; small; not an FPS offender). The section EdgeFade (:183, `EdgeMask.Bottom, 56f`) is untouched.
 - **No change** (keep true alpha): `LyricsView.cs:462/505`, `WaveeSidebar.cs:136`, `ArtistPage.Hero.cs:113`, `ArtistPage.Shelves.cs:26-27` + `DetailTrailing.cs:27-28`, `Rail.cs:48`, `ArtistFacePile.cs:174`, `CollaboratorFacePile.cs:148`.
 
 Optional polish: on the five downgraded surfaces you may set `EdgeCues = ScrollEdgeCues.Fade` explicitly (documents intent), but it is already the resolved default (Reconciler.cs:2318/2350 → `ScrollEdgeCuesDefaults.Default = Fade`) — not required.
@@ -561,7 +561,7 @@ Asserts via `HeadlessGpuDevice.LastLayers` (`IReadOnlyList<PushLayerCmd>`) + `Sc
 
 ## 8. Canon reconciliation
 - Owning docs (SPEC-INDEX.md §2 / subsystems/README.md ownership map): `design/subsystems/controls.md §8.3` owns the AutoEdgeFade-vs-EdgeCue affordance contract — record the per-surface policy above. `design/subsystems/gpu-renderer.md` owns the `PushLayer{EdgeFade}` realization — amend the clear wording (scissored for `BlurSigma==0`, full-canvas for `BlurSigma>0`) and log the deferred items. No canonical VALUE (opcode shape, struct, seam) changes and no superseded token is introduced, so no `design/archive/` move is required.
-- Run `powershell -File design\check-canon.ps1` (expect exit 0) after the doc edits.
+- Run `powershell -File docs\design\check-canon.ps1` (expect exit 0) after the doc edits.
 
 ## 9. Edge cases
 - **At-rest (non-scrolling) frames** on downgraded pages lose the true-alpha look and show the surface-colour cue instead; the cue only draws when `content > viewport` (SceneRecorder.cs:1663), so a page that fits shows nothing (correct — no overflow). Deliberate policy call under the one-experience rule.
@@ -744,7 +744,7 @@ Setting `MeasuredRealizeAllCap = int.MaxValue` reverts every `measured:true` she
 - **`design/subsystems/gpu-renderer.md`** (owner of the recorder/DrawList/span machinery): document the off-screen clean-subtree cull as an extension of the span-reuse family, plus the new `NodesCulled` stat and the `_culled`/`StoreCulled`/`TryGetSubtree` `SpanTable` surface.
 - **`design/SPEC-INDEX.md` §2**: add a sub-clause under the clean-span-reuse validity contract — "an off-screen clean subtree (same cleanliness predicate + pure-translation world delta + trustworthy prior device-space `SubtreeBounds`) may be SKIPPED from the walk entirely; a skipped span is non-reusable next frame."
 - **`design/subsystems/virtualization.md`** and the `PagedShelf` section of **`design/subsystems/controls.md`**: `measured:true` above `MeasuredRealizeAllCap` now virtualizes with a sample-measured, locked cross-axis height instead of realizing all cards.
-- Run **`design/check-canon.ps1`** after the doc edits (exit 0).
+- Run **`docs/design/check-canon.ps1`** after the doc edits (exit 0).
 
 
 ## Part E — open questions
@@ -957,7 +957,7 @@ See `gates`. Discriminators: `image_fade_bound_source_scoped` (the exact case th
 - **`design/subsystems/media-pipeline.md`** (candidate owner of `ImageCache`): document the `_activeReveals` set + `MarkActiveReveals`, and that the reveal fade is scoped via the reconciler's **existing** `_imageNodes` registry + `MarkImageDirty`, replacing the global `ImageContent` kill. **Caveat (reviewer minor #3):** `ImageCache.cs` sits in `src/FluentGpu.Engine/Scene/` (namespace `FluentGpu.Scene`); confirm against `design/subsystems/README.md` whether `media-pipeline.md` or `scene-memory.md` is the ownership doc for `ImageCache`, and place the `_activeReveals` prose accordingly (likely `media-pipeline.md` owns the cache behavior; `scene-memory.md` need not co-own since no `SceneStore` registry is added).
 - **`design/subsystems/layout.md`**: note `pw/ph` now enters the span signature (no `SetArrangedBounds` change in the primary design).
 - **`design/subsystems/reconciler-hooks.md`**: no change (the `_imageNodes`/`MarkImageDirty` contract already exists and is unchanged; only a new *caller* is added).
-- Run `design/check-canon.ps1` (exit 0) after the prose edits.
+- Run `docs/design/check-canon.ps1` (exit 0) after the prose edits.
 
 ## 8. Edge cases
 
@@ -1106,7 +1106,7 @@ Run `dotnet run --project src/FluentGpu.VerticalSlice` ("ALL CHECKS PASSED", zer
 
 ## Canon
 - Phase 1 changes **no** command shape or cross-cutting contract — host gating + a new per-node dirty path only. Add an implementation note to `design/subsystems/media-pipeline.md §7` that the reveal no longer forces a window-wide re-record (it is per-node / replay-resolved). No `check-canon.ps1` token change expected; run it after the doc note.
-- Phase 2 changes `DrawImageCmd` (a DrawList opcode POD). Reconcile the owning doc — the DrawImage/`DrawImageCmd` opcode owner in `design/subsystems/README.md` ownership map (gpu-renderer.md) + the reveal semantics in `media-pipeline.md §7` (CrossFade=1 wording) — and register the shape change in `design/SPEC-INDEX.md §2`. Then `powershell -File design\check-canon.ps1` must exit 0.
+- Phase 2 changes `DrawImageCmd` (a DrawList opcode POD). Reconcile the owning doc — the DrawImage/`DrawImageCmd` opcode owner in `design/subsystems/README.md` ownership map (gpu-renderer.md) + the reveal semantics in `media-pipeline.md §7` (CrossFade=1 wording) — and register the shape change in `design/SPEC-INDEX.md §2`. Then `powershell -File docs\design\check-canon.ps1` must exit 0.
 
 ## Rollback
 - Phase 1: debug-only diagnostic env flag `FG_IMAGE_GLOBAL_FADE_DISABLE` (default off) that restores the old three-term global `ImageContent` disable and skips the fade pass — for A/B on a suspected regression. This is a diagnostic, not a quality knob (permitted by the "one experience, no flags" rule). If needed, revert is localized to `AppHost.cs` (re-add the three terms + the two fields).

@@ -173,7 +173,7 @@ Each converted control gets its `DebugCheckReuse` override for any field intenti
    `ReuseGuard` tripwire, and the checklist for authoring a new control ("caller data ⇒ provider or signal;
    plain fields only for mount-seed config, each listed in `DebugCheckReuse`").
 2. Register in `design/SPEC-INDEX.md` §2 + the `design/subsystems/README.md` ownership map; run
-   `design/check-canon.ps1`.
+   `docs/design/check-canon.ps1`.
 3. One-line pointer in `CLAUDE.md` "Working in the code": *"Component props freeze at mount — see
    component-props-contract.md before passing data into `Embed.Comp`."*
 4. Update the `fluentgpu` skill / `docs/guide/` how-to page with the same rule stated app-side.

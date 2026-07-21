@@ -65,7 +65,7 @@ Flow.For(() => xs.Value, x => x.Id, (x, i) => Row(x));   // typed keyed list: (i
 Flow.Show(() => open.Value, panel, fallback);
 ```
 
-**Four ways to get changing data into a child** (see `design/subsystems/component-props-contract.md`): (1) **re-pushed
+**Four ways to get changing data into a child** (see `docs/design/subsystems/component-props-contract.md`): (1) **re-pushed
 props** `Embed.Comp(props, factory)` + `UseProps<T>()`, or a `[Props]` partial component (per-field signals, generated);
 (2) a **bind** for a hot scalar (`Text = sig`, `Slider.Create(FloatSignal)`); (3) **context** for ambient/broadcast
 state; (4) a **`Key` remount** when the item *identity* changes. Frozen constructor fields are the trap `[Props]`/props
@@ -176,9 +176,9 @@ durations/easings) and serviced by the engine's `HoverFade`/`PressFade`/`BrushFa
 belong in `AnimEngine` (stroke trim, reveal, FLIP, open/close, real AnimatedIcon segments). Do not add a per-control
 VisualStateManager or duplicate animation runtime.
 
-Design corpus (architecture authority, canon-gated) is `design/`; as-built reactive model is
-`design/subsystems/reconciler-hooks.md §0bis`. After editing `design/*`: `powershell -File design/check-canon.ps1`
-(must exit 0). Usage docs go in `docs/`, not `design/`.
+Design corpus (architecture authority, canon-gated) is `docs/design/`; as-built reactive model is
+`docs/design/subsystems/reconciler-hooks.md §0bis`. After editing `docs/design/*`: `powershell -File docs/design/check-canon.ps1`
+(must exit 0). Usage docs go in `docs/guide/`, not `docs/design/`.
 
 ## Deeper docs (read for the relevant task)
 - `theming.md` (this skill dir) — **how theming + LIVE theme switching work end-to-end**: tokens, the `Epoch`/`RethemeAll`/transition-window mechanism, the OS-follow + persistence wiring, what updates vs what's frozen, and the gotchas (frozen constructor-arg literals, `Flow.For`/bound colors, control `ColorF` props, app-local color constants, Mica/DWM). **Read before any theme work or "X won't change theme" debugging.**

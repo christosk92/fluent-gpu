@@ -3,7 +3,7 @@
 # Improves on WaveeMusic's WinUI/MSBuild pipeline:
 #   * NativeAOT  -> a ~7 MB signed .msix per arch (no bundled .NET runtime; Wavee ships ~200 MB self-contained JIT)
 #   * arm64 + x64, each built natively on a matching runner (AOT can't cross-compile)
-#   * one packaging script (build/pack-msix.ps1) shared by local dev and CI - no drift
+#   * one packaging script (ops/build/pack-msix.ps1) shared by local dev and CI - no drift
 #   * signing is OPTIONAL: with Azure Trusted Signing secrets it signs; without, it ships unsigned + the dev-cert flow
 #   * an .appinstaller per arch for one-click sideload auto-update
 #
@@ -63,7 +63,7 @@ jobs:
       - name: Pack MSIX (NativeAOT)
         shell: pwsh
         # -Publisher must match the signing cert subject (Trusted Signing) - set repo variable RELEASE_PUBLISHER.
-        run: ./build/pack-msix.ps1 -Arch ${{ matrix.arch }} -Version ${{ needs.version.outputs.version }} -NoSign -Publisher "${{ vars.RELEASE_PUBLISHER || 'CN=MarTeco Dev, O=MarTeco, C=NL' }}"
+        run: ./ops/build/pack-msix.ps1 -Arch ${{ matrix.arch }} -Version ${{ needs.version.outputs.version }} -NoSign -Publisher "${{ vars.RELEASE_PUBLISHER || 'CN=MarTeco Dev, O=MarTeco, C=NL' }}"
       - uses: actions/upload-artifact@v4
         with:
           name: msix-${{ matrix.arch }}
@@ -71,7 +71,7 @@ jobs:
           retention-days: 14
 
   # Optional: sign with Azure Trusted Signing IF the secrets are configured; otherwise this job is skipped and the
-  # release ships the unsigned packages (install with a local dev cert via build/pack-msix.ps1 -Install).
+  # release ships the unsigned packages (install with a local dev cert via ops/build/pack-msix.ps1 -Install).
   sign:
     needs: [version, build]
     runs-on: windows-latest
@@ -115,7 +115,7 @@ jobs:
                 -e "s#__PUBLISHER__#${PUBLISHER}#g" \
                 -e "s#__APPINSTALLER_URI__#${REPO}/releases/latest/download/FluentGpu.${ARCH}.appinstaller#g" \
                 -e "s#__MSIX_URI__#${REPO}/releases/download/v${{ needs.version.outputs.semver }}/FluentGpu.WindowsApp_${{ needs.version.outputs.version }}_${ARCH}.msix#g" \
-                build/AppInstaller.template.xml > "artifacts/FluentGpu.${ARCH}.appinstaller"
+                ops/build/AppInstaller.template.xml > "artifacts/FluentGpu.${ARCH}.appinstaller"
           done
       - uses: softprops/action-gh-release@v2
         with:

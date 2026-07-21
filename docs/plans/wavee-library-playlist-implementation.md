@@ -261,12 +261,12 @@ Each is settled with THE recommendation.
 25. **L4 conflict scope:** `SetReplay` idempotent re-POST + `OpRebase` 409 â†’ refetch-revision â†’ rebase-by-`item_id` â†’ re-POST, with optimistic apply/rollback. Defer rootlist op-apply/`TreeOp`, reorder-rebase, `multiple_heads` merge, and `OnlineOnly` pins/cover-upload (drift-prone or off the membership/edit path).
 
 ### Critical Files for Implementation
-- C:\WAVEE\fluent-gpu\app\Wavee\Backend\Persistence\SqliteColdStore.cs
-- C:\WAVEE\fluent-gpu\app\Wavee\Backend\Store.cs
-- C:\WAVEE\fluent-gpu\app\Wavee\Backend\Resource.cs
-- C:\WAVEE\fluent-gpu\app\Wavee\Backend\Mutation.cs
-- C:\WAVEE\fluent-gpu\app\Wavee\Backend\Seam.cs
-- C:\WAVEE\fluent-gpu\app\Wavee.Core\Sources\AggregateCatalog.cs
-- C:\WAVEE\fluent-gpu\app\Wavee.Core\Domain\Models.cs
-- C:\WAVEE\fluent-gpu\app\Wavee\App\LibraryStore.cs
+- C:\WAVEE\fluent-gpu\src\apps\Wavee\Backend\Persistence\SqliteColdStore.cs
+- C:\WAVEE\fluent-gpu\src\apps\Wavee\Backend\Store.cs
+- C:\WAVEE\fluent-gpu\src\apps\Wavee\Backend\Resource.cs
+- C:\WAVEE\fluent-gpu\src\apps\Wavee\Backend\Mutation.cs
+- C:\WAVEE\fluent-gpu\src\apps\Wavee\Backend\Seam.cs
+- C:\WAVEE\fluent-gpu\src\apps\Wavee.Core\Sources\AggregateCatalog.cs
+- C:\WAVEE\fluent-gpu\src\apps\Wavee.Core\Domain\Models.cs
+- C:\WAVEE\fluent-gpu\src\apps\Wavee\App\LibraryStore.cs
 - C:\WAVEE\fluent-gpu\src\FluentGpu.Engine\Scene\ImageCache.cs

@@ -88,4 +88,4 @@ same offscreen-layer machinery as `OpacityGroup`, plus the blur). It blurs the e
 
 - `src/FluentGpu.Engine/Hooks/MotionRecipes.cs` — the recipe source.
 - `docs/guide/control-fidelity.md` — building WinUI-faithful controls (and why the kit is a *separate* palette).
-- `design/subsystems/backdrop-effects-animation.md` — the animation/effects design canon.
+- `docs/design/subsystems/backdrop-effects-animation.md` — the animation/effects design canon.

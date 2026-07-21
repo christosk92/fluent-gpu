@@ -44,7 +44,7 @@ capability WinUI issue microsoft/microsoft-ui-xaml#10918 asks Microsoft to ship 
   `IAsyncAction`-based (fully projected, awaitable for free).
 - **Packaged-identity is NOT a showstopper.** Inbox WinRT PlayReady types activate from an unpackaged NativeAOT
   process (same as the repo's SMTC), and — decisively — the product **already ships as a packaged full-trust
-  MSIX** (`build/pack-msix.ps1`, `build/AppxManifest.xml`, the `releasing` skill), so it has identity in the
+  MSIX** (`ops/build/pack-msix.ps1`, `build/AppxManifest.xml`, the `releasing` skill), so it has identity in the
   ship vehicle regardless. Only the dev loop and `FluentGpu.VerticalSlice` are unpackaged, and neither exercises
   video DRM.
 - **SL2000 software DRM needs no special packaging;** the protected surface composites like any other; and

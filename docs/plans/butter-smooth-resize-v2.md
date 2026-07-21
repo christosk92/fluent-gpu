@@ -1,7 +1,7 @@
 # Butter-smooth resize v2 — code-verified implementation plan
 
 Status: PROPOSED (supersedes the v1 "Butter-smooth resize" draft plan after a five-way code recon).
-Scope: `src/FluentGpu.Engine`, `src/FluentGpu.Windows`, `src/FluentGpu.VerticalSlice`, `app/Wavee` (breakpoints only), `design/`.
+Scope: `src/FluentGpu.Engine`, `src/FluentGpu.Windows`, `src/FluentGpu.VerticalSlice`, `src/apps/Wavee` (breakpoints only), `design/`.
 
 ---
 
@@ -330,7 +330,7 @@ be updated with this change.
 
 ---
 
-## 6. Phase 6 — Breakpoint hysteresis (app-side, `app/Wavee`)
+## 6. Phase 6 — Breakpoint hysteresis (app-side, `src/apps/Wavee`)
 
 Keep hysteresis; cut the `InModalResize` freeze (dead code under composited defer — `OnBoundsChanged`
 fires synchronously inside Arrange, FlexLayout.cs:129-150, and Arrange doesn't run mid-drag; the root
@@ -371,7 +371,7 @@ lines 73-85) already implements asymmetric hysteresis for mode 3 and must be pre
 Concretely: in `ModeFor`, when `nominal < currentMode` (widening among modes 0-2), re-evaluate
 `NominalModeFor(w - H)` before adopting.
 
-Make both functions `internal static` and unit-test them in `app/Wavee.Tests` (oscillation across
+Make both functions `internal static` and unit-test them in `src/apps/Wavee.Tests` (oscillation across
 860±24 and 820±24, multi-tier jump-downs, `w <= 0` no-ops, vertical band unchanged) — the
 VerticalSlice tests the engine, not Wavee; the app's own test project is the right home.
 
@@ -467,7 +467,7 @@ paths stop deferring unless the gate also sets `Composited = true`. Review `RZ-M
 `RZ1-3`, `RZ-RESP`, `S3`, `SK.h`, `54c` and set `Composited = true` wherever the gate models the Wavee
 (Mica) window; leave it false where the gate intends the live path.
 
-Hysteresis tests live in `app/Wavee.Tests` (§6), not the VerticalSlice.
+Hysteresis tests live in `src/apps/Wavee.Tests` (§6), not the VerticalSlice.
 
 On-device acceptance (manual, from §2.2): detail page, playback active, 16-step edge-drag storm on
 each edge + cross-monitor DPI drag + aero-snap release: 0 blank frames, no tier flip-flop, one settle
@@ -492,7 +492,7 @@ pop, recorded and eyeballed.
   `design/subsystems/validation.md` as the owning doc (it owns the gate regime; the ratchet script is
   a gate), and add the working rule to `CLAUDE.md`.
 - Grep `design/` + `docs/` for `FG_LIVE_MODAL_RESIZE` and update/annotate; then
-  `powershell -File design\check-canon.ps1` (exit 0). If any live doc must mention the deleted flag
+  `powershell -File docs\design\check-canon.ps1` (exit 0). If any live doc must mention the deleted flag
   historically, use `<!-- canon-allow: superseded flag, removed by butter-smooth-resize-v2 -->`.
 
 ---
@@ -535,7 +535,7 @@ pop, recorded and eyeballed.
 
 Owner decision: **every env behavior flag is retired, and new env opt-in flags are banned** — behavior
 must be identical for identical inputs regardless of environment. Full inventory (grep of
-`Diag.EnvFlag(` + `GetEnvironmentVariable(` across `src/` and `app/Wavee`, 2026-07-08) classifies
+`Diag.EnvFlag(` + `GetEnvironmentVariable(` across `src/` and `src/apps/Wavee`, 2026-07-08) classifies
 ~70 reads into three classes with different treatments.
 
 ### 12.1 Behavior flags — all deleted (each with an explicit disposition)
@@ -610,7 +610,7 @@ string — never a new env var.
 
 ### 12.5 Enforcement ratchet (land this FIRST)
 
-`tools/check-env-flags.ps1`: scan `src/` + `app/Wavee` (excluding the fenced playplay paths) for
+`tools/check-env-flags.ps1`: scan `src/` + `src/apps/Wavee` (excluding the fenced playplay paths) for
 `EnvFlag\(|GetEnvironmentVariable\(|SetEnvironmentVariable\(`; every hit must match a line in
 `tools/env-flag-allowlist.txt` (`<path>:<name>` per line). Non-allowlisted hit → exit 1. Wire into CI
 next to the build, and into `.githooks/pre-commit` (precedent: the playplay guard). Seed the allowlist

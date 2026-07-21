@@ -2,16 +2,35 @@
 # (Undocumented for Codex as of 2026-01; harmless if ignored. The load-bearing
 #  guards are .codex/config.toml deny rules + AGENTS.md steering.)
 app/.native/
+src/apps/.native/
 app/Wavee.PlayPlay/
+src/apps/Wavee.PlayPlay/
 private-runtimes/
 app/tmp_*
+src/apps/tmp_*
 scripts/pyghidra*
+ops/scripts/pyghidra*
 tools/pyghidra*
+ops/tools/pyghidra*
 tools/playplay_*
+ops/tools/playplay_*
 tools/x64_*
+ops/tools/x64_*
 tools/fill_random_sweep.py
+ops/tools/fill_random_sweep.py
 app/docs/wavee-playplay*.md
 app/docs/playplay-*.md
 app/docs/spotiload-offline-path.md
+docs/plans/wavee/wavee-playplay*.md
+docs/plans/wavee/playplay-*.md
+docs/plans/wavee/spotiload-offline-path.md
 playplay-probe-out*.txt
 **/playplay-runtime.json
+.tmp/
+.codex-msbuild-temp/
+codex-build-temp/
+codex-build-temp-*/
+codex-engine-prof/
+codex-vslice-temp/
+tmp-msbuild/
+docs/site/_site/

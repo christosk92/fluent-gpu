@@ -8,7 +8,7 @@
 
 Three connected asks:
 
-1. **Bug**: the floating selection command bar (`SelectionBar`, `app/Wavee/Features/Detail/DetailTracks.cs`) is layout-bugged — fixed-intrinsic-width flex row with no `MaxWidth`/`Shrink`, centered by the overlay, so on narrow panes it overflows and clips at both window edges. No responsive behavior exists.
+1. **Bug**: the floating selection command bar (`SelectionBar`, `src/apps/Wavee/Features/Detail/DetailTracks.cs`) is layout-bugged — fixed-intrinsic-width flex row with no `MaxWidth`/`Shrink`, centered by the overlay, so on narrow panes it overflows and clips at both window edges. No responsive behavior exists.
 2. **Feature**: add a **multi-select toggle** to the track-list toolbar that turns on row checkboxes.
 3. **Feature**: **auto-show animated checkboxes** in track rows on every page that shows tracks, with identical behavior everywhere.
 
@@ -24,7 +24,7 @@ User decisions (confirmed via Q&A):
 1. **Engine** — `SelectorVisualsBound.BoundCheckLane` + optional `showCheckbox` on `AccentPill`
 2. **Icon + loc** — `Icons.MultiSelect`, `detail.select`, `detail.clearSelection`
 3. **State** — `DetailHandlers.MultiSelect` / `SetMultiSelect`; ephemeral per-`DetailShell` signal
-4. **Shared bar** — `app/Wavee/Components/SelectionCommandBar.cs` with responsive collapse
+4. **Shared bar** — `src/apps/Wavee/Components/SelectionCommandBar.cs` with responsive collapse
 5. **Detail TrackList** — toggle, `UseComputed` visibility, checkbox lane, header inset
 6. **Search Songs** — Extended selection + bar
 7. **Artist Popular** — Extended selection + bar

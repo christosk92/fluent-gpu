@@ -19,26 +19,26 @@ glob_scan_max_depth = 8
 "." = "write"
 
 # --- Native / binary artifacts ---
-"app/.native/**" = "deny"
-"app/Wavee.PlayPlay/**" = "deny"
+"src/apps/.native/**" = "deny"
+"src/apps/Wavee.PlayPlay/**" = "deny"
 "private-runtimes/**" = "deny"
 
 # --- Scratch scripts + RE dumps ---
-"app/tmp_*" = "deny"
-"scripts/pyghidra*" = "deny"
-"tools/pyghidra*" = "deny"
-"tools/playplay_*" = "deny"
-"tools/x64_*" = "deny"
-"tools/fill_random_sweep.py" = "deny"
+"src/apps/tmp_*" = "deny"
+"ops/scripts/pyghidra*" = "deny"
+"ops/tools/pyghidra*" = "deny"
+"ops/tools/playplay_*" = "deny"
+"ops/tools/x64_*" = "deny"
+"ops/tools/fill_random_sweep.py" = "deny"
 "playplay-probe-out*.txt" = "deny"
 
 # --- Out-of-scope docs ---
-"app/docs/wavee-playplay*.md" = "deny"
-"app/docs/playplay-*.md" = "deny"
-"app/docs/spotiload-offline-path.md" = "deny"
+"docs/plans/wavee/wavee-playplay*.md" = "deny"
+"docs/plans/wavee/playplay-*.md" = "deny"
+"docs/plans/wavee/spotiload-offline-path.md" = "deny"
 "**/playplay-runtime.json" = "deny"
 
 # Optional — uncomment to also fence off the C# seams. Left readable so agents can
 # still help with the provisioning UX.
-# "app/Wavee/SpotifyLive/Audio/*PlayPlay*" = "deny"
-# "app/Wavee/SpotifyLive/Protos/playplay.proto" = "deny"
+# "src/apps/Wavee/SpotifyLive/Audio/*PlayPlay*" = "deny"
+# "src/apps/Wavee/SpotifyLive/Protos/playplay.proto" = "deny"

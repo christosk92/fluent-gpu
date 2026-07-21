@@ -60,7 +60,7 @@ Read this before debugging. Each row is a real failure mode of the signals-first
 | Symptom | Cause | Fix |
 |---|---|---|
 | "It builds, ship it" but a seam regressed | Didn't run the cross-seam harness | `dotnet run --project src/FluentGpu.VerticalSlice` → require `ALL CHECKS PASSED` before claiming done. |
-| Canon gate fails after editing `design/` | A stale/superseded token reappeared in the live design tree | Fix the token, or add `<!-- canon-allow: reason -->`; re-run `powershell -File design/check-canon.ps1`. Usage docs go in `docs/`, not `design/` (the gate scans `design/` only). |
+| Canon gate fails after editing `docs/design/` | A stale/superseded token reappeared in the live design tree | Fix the token, or add `<!-- canon-allow: reason -->`; re-run `powershell -File docs/design/check-canon.ps1`. Usage docs go in `docs/guide/`, not `docs/design/` (the gate scans `docs/design/` only). |
 | Added an `Element` type but it doesn't render | Not wired into the reconciler | Give it a free `ElementTypeId`, then handle it in `Reconciler.Mount`/`Update` (and `ChildrenOf` if it has children). |
 | AOT publish fails at the native link step | The shell isn't a VS Developer environment (`link.exe`/`vswhere` not on PATH) | The managed/IL-AOT analysis still validated; run the publish from a VS Developer prompt for the final native link. Don't treat the link error as a code defect. |
 | Claimed a fix works without evidence | No verification run | Show the harness output / `FrameStats` (`Rendered`, `ComponentsRendered`, `HotPhaseAllocBytes`). Evidence before assertions. |
@@ -85,4 +85,4 @@ The in-repo Roslyn analyzer flags reactivity mistakes at build time (`FluentGpu.
 2. `dotnet run --project src/FluentGpu.VerticalSlice` — `ALL CHECKS PASSED`.
 3. If you touched reactivity/layout/render: confirm `FrameStats.Rendered`/`ComponentsRendered`/`HotPhaseAllocBytes`
    are what you expect on the relevant interaction (add a `Check`).
-4. If you edited `design/`: `powershell -File design/check-canon.ps1` exits 0.
+4. If you edited `docs/design/`: `powershell -File docs/design/check-canon.ps1` exits 0.

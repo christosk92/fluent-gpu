@@ -417,7 +417,7 @@ phases 6–13 gate.
 - `design/architecture-spec.md §5.1` (present tree) — amend the single-visual description to root+children (§3.2).
 - `design/SPEC-INDEX.md §2` + `design/subsystems/README.md` ownership map — register the new opcode `DrawVideo`,
   the new PAL seam `IVideoPresenter`, and `VideoSurfaceRegistry`/`UseVideoSurface` to their owning docs. Run
-  `powershell -File design\check-canon.ps1` after (exit 0). No superseded tokens should reappear in live prose.
+  `powershell -File docs\design\check-canon.ps1` after (exit 0). No superseded tokens should reappear in live prose.
 
 **Gates (per `design/subsystems/validation.md`):**
 - **VerticalSlice headless golden check:** a `Rhi.Headless`/`Pal.Headless` `IVideoPresenter` fake records

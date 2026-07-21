@@ -26,13 +26,13 @@ FluentGpu Gallery ships as a signed **MSIX** from GitHub Releases — a single *
       <img src="./docs/media/download/download-arm64-light.png" height="56" alt="Download for Windows ARM64" /></picture></a>
 </p>
 
-> Or build it yourself: `pwsh build/pack-msix.ps1 -Install` (NativeAOT, self‑signed dev cert). Pipeline docs: [`build/README.md`](./build/README.md).
+> Or build it yourself: `pwsh ops/build/pack-msix.ps1 -Install` (NativeAOT, self‑signed dev cert). Pipeline docs: [`ops/build/README.md`](./ops/build/README.md).
 
 > **Status (June 2026): the engine is built and runs.** A fine-grained **signals-first** reactive core, keyed
 > reconciler, flex/grid layout, the control kit, virtualization (10k+ lists), the async image pipeline, theming +
 > Mica, and animation all pass **60+ end-to-end golden checks** on the headless backends — including a full
 > Wavee-shell acceptance test. The real Windows path (Direct3D 12 + DirectComposition + Mica + WIC images) is wired
-> via `FluentApp.Run`; on-screen pixel polish is the ongoing edge. Full design corpus in [`design/`](./design/README.md);
+> via `FluentApp.Run`; on-screen pixel polish is the ongoing edge. Full design corpus in [`docs/design/`](./docs/design/README.md);
 > developer & agent guide in [`docs/guide/`](./docs/guide/README.md).
 
 
@@ -81,7 +81,7 @@ Slider.Create(vol);                // a drag updates the thumb/fill transform on
 
 WinUI 3 is slow in ways that are *structural*, not tunable: every `DependencyProperty` boxes through an `object`-typed store, every control is a finalizable COM object, the visual+logical trees are doubled, layout/composition run on one thread, and `setState` fans out to a broad re-render. The result is GC stutter under scroll, a UI thread that blocks easily, and a heavy footprint.
 
-fluent-gpu attacks the *causes*: unmanaged SoA columns instead of dependency properties; generational handles + arenas + slabs instead of GC objects on the hot path; hand-vtable `calli` instead of COM RCW churn; a single render tree; fine-grained signals so updates are surgical, not tree-wide; and a GPU-batched paint path that targets **zero per-frame managed allocation**. The honest grades (see [the painpoints assessment](./design/winui-painpoints-assessment.md)): **GC pressure — largely solved; over-rendering — solved (granular re-render + a compositor bypass for hot values); slow UI thread — decoupled (not invincible); footprint + startup — substantially better.** It is *not* a risk-free engine — it trades GC-correctness for hand-rolled-COM and renderer correctness, made safe-by-construction where it can and CI-gated everywhere else.
+fluent-gpu attacks the *causes*: unmanaged SoA columns instead of dependency properties; generational handles + arenas + slabs instead of GC objects on the hot path; hand-vtable `calli` instead of COM RCW churn; a single render tree; fine-grained signals so updates are surgical, not tree-wide; and a GPU-batched paint path that targets **zero per-frame managed allocation**. The honest grades (see [the painpoints assessment](./docs/design/winui-painpoints-assessment.md)): **GC pressure — largely solved; over-rendering — solved (granular re-render + a compositor bypass for hot values); slow UI thread — decoupled (not invincible); footprint + startup — substantially better.** It is *not* a risk-free engine — it trades GC-correctness for hand-rolled-COM and renderer correctness, made safe-by-construction where it can and CI-gated everywhere else.
 
 The driving app is [**WaveeMusic**](https://github.com/christosk92/WaveeMusic), a Spotify desktop client — media-heavy, list-heavy (10k+ track lists), theming-heavy (album-art dynamic color, Mica), with video and synced lyrics. If fluent-gpu can run Wavee at 60fps with no GC hitch, it works.
 
@@ -102,7 +102,7 @@ Three update paths, cheapest first: a **binding** (signal → node transform/pai
 re-render** (one component's subtree + a scoped relayout firewalled at a layout boundary); **reactive control-flow**
 (`For`/`Show`, a keyed diff of one boundary, no parent re-render). See [`docs/guide/reactivity.md`](./docs/guide/reactivity.md).
 
-Read the [architecture spec](./design/architecture-spec.md) for the full picture, the [subsystem index](./design/subsystems/README.md) for the component designs, or [`reconciler-hooks.md §0bis`](./design/subsystems/reconciler-hooks.md) for the as-built signals model.
+Read the [architecture spec](./docs/design/architecture-spec.md) for the full picture, the [subsystem index](./docs/design/subsystems/README.md) for the component designs, or [`reconciler-hooks.md §0bis`](./docs/design/subsystems/reconciler-hooks.md) for the as-built signals model.
 
 ## Use it in your app (NuGet)
 
@@ -158,7 +158,7 @@ backend, `FluentGpu.WindowsApi`, the `FluentGpu.SourceGen` analyzer, the `Fluent
 
 ## Roadmap (relative phases)
 
-Built in an order where **safety is never speculative** (full detail in the [hardened-v1 plan](./design/hardened-v1-plan.md) §6):
+Built in an order where **safety is never speculative** (full detail in the [hardened-v1 plan](./docs/design/hardened-v1-plan.md) §6):
 
 1. **Vertical slice** — ✅ window → GPU clear → rounded rect → text → flex → reconciler + `UseState` → clickable button, zero per-frame alloc on the paint half.
 2. **Core engine** — ✅ renderer, flex + grid layout, text, the **signals-first** reconciler/hooks runtime (granular re-render + compositor bypass + scoped relayout), the DSL + modifiers, input.
