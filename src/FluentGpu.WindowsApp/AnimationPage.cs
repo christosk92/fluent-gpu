@@ -369,6 +369,17 @@ sealed class AnimationPage : Component
             code: """
             new BoxEl { Fill = palette[i], BrushTransitionMs = 250f }   // click: i++ → 250ms cross-fade
             """),
+        ControlExample.Build("Interaction recipes — the app-authoring surface (InteractionRecipe)",
+            Embed.Comp(() => new AnimRecipeSurfaces()),
+            description: "One .Interactive(recipe) modifier packages a whole interactive surface — the brush ramp (Fill/Hover/" +
+                "Pressed + BrushTransitionMs) AND the motion (WhileHover/WhilePressed scale on a token). Theme-live presets read " +
+                "Tok, so a theme flip re-resolves them. App-authoring only — framework controls keep their own WinUI ramps.",
+            code: """
+            // pure with-expansion at construction (zero closures, zero per-frame alloc):
+            new BoxEl { OnClick = go }.Interactive(Interaction.Subtle);   // transparent → subtle hover/press
+            new BoxEl { OnClick = go }.Interactive(Interaction.Card);     // card fills + stroke + 0.985 spring press
+            new BoxEl { OnClick = go }.Interactive(Interaction.AccentGhost);
+            """),
     ];
 
     static Element[] HooksExamples() =>
@@ -1080,6 +1091,30 @@ sealed class AnimBrushTransition : Component
             ],
         };
     }
+}
+
+// The app-authoring InteractionRecipe surface: one .Interactive(recipe) writes the brush ramp + While* motion. The
+// presets read Tok live, so they follow a theme flip. Framework controls keep their own hand ramps — these are for apps.
+sealed class AnimRecipeSurfaces : Component
+{
+    static Element Surface(string label, InteractionRecipe recipe) => new BoxEl
+    {
+        Width = 150f, Height = 68f, Corners = Radii.OverlayAll,
+        AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+        OnClick = static () => { },
+        Children = [new TextEl(label) { Size = 12.5f, Color = Tok.TextPrimary }],
+    }.Interactive(recipe);
+
+    public override Element Render() => new BoxEl
+    {
+        Direction = 0, Gap = 12f, AlignItems = FlexAlign.Center, Wrap = true,
+        Children =
+        [
+            Surface("Subtle", Interaction.Subtle),
+            Surface("Card · spring press", Interaction.Card),
+            Surface("Accent ghost", Interaction.AccentGhost),
+        ],
+    };
 }
 
 // ── Hooks sugar ──────────────────────────────────────────────────────────────────────────────────────────────────

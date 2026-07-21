@@ -15072,6 +15072,120 @@ static class Slice
     }
 
     // Controls: a slider press-sets and drag-scrubs its value; a toggle flips; an icon button clicks; a scrollbar drags.
+    // ── gate.ctl.recipe.* — WS3 P1 InteractionRecipe (the app-authoring interactive-styling surface) ────────────
+    // The HYBRID: the brush half rides the BoxEl Fill/Hover/Pressed field ramp + BrushTransitionMs; the motion half
+    // rides the declarative WhileHover/WhilePressed + Transition token. `.Interactive` is a pure with-expansion.
+    static void RecipeChecks(StringTable strings)
+    {
+        // A deterministic (theme-independent) recipe with BOTH halves + a stroke ramp.
+        var fillRamp = new StateBrush(ColorF.FromRgba(10, 10, 10), ColorF.FromRgba(20, 20, 20), ColorF.FromRgba(30, 30, 30), ColorF.FromRgba(5, 5, 5));
+        var strokeRamp = new StateBrush(ColorF.FromRgba(40, 40, 40), ColorF.FromRgba(50, 50, 50), ColorF.FromRgba(60, 60, 60), ColorF.FromRgba(35, 35, 35));
+        var recipe = new InteractionRecipe
+        {
+            Fill = fillRamp, Stroke = strokeRamp, StrokeWidth = 2f,
+            HoverScale = 1.04f, PressScale = 0.96f, HoverOpacity = 0.9f,
+            BrushMs = 120f, Motion = MotionTokenId.StandardSpring,
+        };
+        // Pre-set channels the recipe does NOT name (must survive) + a caller While* leg (must be preserved).
+        var pre = new BoxEl
+        {
+            Width = 33f, Padding = Edges4.All(7), Corners = CornerRadius4.All(5f),
+            WhileFocus = new MotionTarget { Scale = 1.5f }, OnClick = static () => { },
+        };
+
+        // gate.ctl.recipe.expand — the exact field writes + untouched channels.
+        var box = pre.Interactive(recipe);
+        bool brush = box.Fill.Value == fillRamp.Rest && box.HoverFill.Value == fillRamp.Hover && box.PressedFill.Value == fillRamp.Pressed
+                     && box.BrushTransitionMs == 120f && box.IsEnabled;
+        bool border = box.BorderColor.Value == strokeRamp.Rest && box.HoverBorderColor == strokeRamp.Hover
+                      && box.PressedBorderColor == strokeRamp.Pressed && box.BorderWidth == 2f;
+        bool motion = box.WhileHover is { } wh && wh.Scale == 1.04f && wh.Opacity == 0.9f
+                      && box.WhilePressed is { } wp && wp.Scale == 0.96f && wp.Opacity == 1f
+                      && box.Transition is not null;
+        bool untouched = box.Width.Value == 33f && box.WhileFocus is { } wf && wf.Scale == 1.5f && box.OnClick is not null;
+        Check("gate.ctl.recipe.expand .Interactive writes fill/border/brush-ms + While* targets; unnamed channels untouched",
+            brush && border && motion && untouched, $"brush={brush} border={border} motion={motion} untouched={untouched}");
+
+        // A recipe with NO motion half must not touch While*/Transition (don't stomp channels the recipe doesn't use).
+        var noMotion = new InteractionRecipe { Fill = fillRamp };   // HoverScale/PressScale default 1, opacities NaN
+        var b2 = pre.Interactive(noMotion);
+        Check("gate.ctl.recipe.expand no-motion recipe leaves While*/Transition untouched (caller WhileFocus survives, no WhileHover)",
+            b2.WhileHover is null && b2.WhilePressed is null && b2.Transition is null && b2.WhileFocus is { } f2 && f2.Scale == 1.5f,
+            $"hover={b2.WhileHover is null} press={b2.WhilePressed is null} transition={b2.Transition is null}");
+
+        // One-transform-owner: a bound Transform suppresses the recipe's While* (the bound matrix is the sole owner).
+        var bound = new BoxEl { Transform = Prop.Of(() => Affine2D.Identity), OnClick = static () => { } }.Interactive(recipe);
+        Check("gate.ctl.recipe.expand bound Transform suppresses the While* motion half (one transform owner)",
+            bound.WhileHover is null && bound.WhilePressed is null && bound.Fill.Value == fillRamp.Rest,
+            $"hover={bound.WhileHover is null} press={bound.WhilePressed is null} brushStillApplied={bound.Fill.Value == fillRamp.Rest}");
+
+        // gate.ctl.recipe.presets — the four presets resolve the expected Tok values, and a theme swap re-resolves them.
+        var kind0 = Tok.Theme;
+        bool subtleNow = Interaction.Subtle.Fill.Hover == Tok.FillSubtleSecondary && Interaction.Subtle.Fill.Rest == Tok.FillSubtleTransparent;
+        bool listRowNow = Interaction.ListRow.Fill.Hover == Tok.FillSubtleSecondary;
+        bool cardNow = Interaction.Card.Fill.Rest == Tok.FillCardDefault && Interaction.Card.Stroke is { } cs && cs.Rest == Tok.StrokeCardDefault
+                       && Interaction.Card.PressScale == 0.985f && Interaction.Card.Motion == MotionTokenId.StandardSpring;
+        bool ghostNow = Interaction.AccentGhost.Fill.Hover == Tok.AccentSubtle && Interaction.AccentGhost.Fill.Rest == ColorF.Transparent;
+        var subtleHover0 = Interaction.Subtle.Fill.Hover;
+        var cardRest0 = Interaction.Card.Fill.Rest;
+        // Flip the theme kind: FillSubtleSecondary / FillCardDefault differ light↔dark, so a live re-resolve must change.
+        Tok.Use(kind0 == ThemeKind.Dark ? ThemeKind.Light : ThemeKind.Dark);
+        bool reResolved = Interaction.Subtle.Fill.Hover == Tok.FillSubtleSecondary && Interaction.Subtle.Fill.Hover != subtleHover0
+                          && Interaction.Card.Fill.Rest == Tok.FillCardDefault && Interaction.Card.Fill.Rest != cardRest0;
+        Tok.Use(kind0);   // restore the original theme kind
+        Check("gate.ctl.recipe.presets Subtle/ListRow/Card/AccentGhost resolve Tok values; a theme swap re-resolves (theme-live)",
+            subtleNow && listRowNow && cardNow && ghostNow && reResolved,
+            $"subtle={subtleNow} listRow={listRowNow} card={cardNow} ghost={ghostNow} reResolved={reResolved}");
+
+        // gate.ctl.recipe.disabled — isEnabled=false applies the Disabled legs, sets IsEnabled=false (the engine's
+        // hover/press gate), and suppresses the motion half (no hover/press response).
+        var dis = pre.Interactive(recipe, isEnabled: false);
+        bool disElem = !dis.IsEnabled && dis.Fill.Value == fillRamp.Disabled && dis.BorderColor.Value == strokeRamp.Disabled
+                       && dis.WhileHover is null && dis.WhilePressed is null;
+        // Reconcile it and confirm the scene Disabled flag is set (what actually blocks hover/press dispatch).
+        using (var app = new HeadlessPlatformApp())
+        {
+            var window = new HeadlessWindow(new WindowDesc("recipe-dis", new Size2(200, 200), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            NodeHandle n = default;
+            var root = new W0fStaticProbe { Build = () => (pre with { OnRealized = h => n = h }).Interactive(recipe, isEnabled: false) };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            bool flagged = !n.IsNull && (host.Scene.Flags(n) & NodeFlags.Disabled) != 0;
+            Check("gate.ctl.recipe.disabled disabled legs + IsEnabled=false (scene Disabled flag) + no While* motion",
+                disElem && flagged, $"elem={disElem} disabledFlag={flagged}");
+        }
+
+        // gate.ctl.recipe.zero-alloc — a scene of N recipe-styled boxes, once mounted, adds NO per-frame paint cost: the
+        // recipe bakes into scene columns at reconcile (the cold path), so steady frames are 0-alloc in the hot window
+        // (the HotPhaseAllocBytes window spans flush + record + submit + present). Proven the same way as slice gate 9.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("recipe-alloc", new Size2(400, 400), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            const int N = 24;
+            InteractionRecipe[] presets = [Interaction.Subtle, Interaction.ListRow, Interaction.Card, Interaction.AccentGhost];
+            var root = new W0fStaticProbe
+            {
+                Build = () =>
+                {
+                    var kids = new Element[N];
+                    for (int i = 0; i < N; i++)
+                        kids[i] = new BoxEl { Width = 40f, Height = 20f, Corners = Radii.ControlAll, OnClick = static () => { } }
+                            .Interactive(presets[i % presets.Length]);
+                    return new BoxEl { Direction = 1, Gap = 2f, Children = kids };
+                },
+            };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            for (int i = 0; i < 8; i++) host.RunFrame();   // warm (mount + JIT) → memoized steady state
+            var steady = host.RunFrame();
+            Check("gate.ctl.recipe.zero-alloc 24 recipe-styled boxes, steady frame: memoized + hot window 0 bytes",
+                !steady.Rendered && steady.HotPhaseAllocBytes == 0, $"rendered={steady.Rendered} hot={steady.HotPhaseAllocBytes}B");
+        }
+    }
+
     static void ControlsChecks(StringTable strings)
     {
         using var app = new HeadlessPlatformApp();
@@ -26853,6 +26967,7 @@ static class Slice
         ImageLifecycleChecks(strings);
         UseImageChecks(strings);
         ControlsChecks(strings);
+        RecipeChecks(strings);         // WS3 P1 InteractionRecipe (gate.ctl.recipe.*): expand, presets (theme-live), disabled legs, zero-alloc
         NavigationChecks();
         PageHostChecks(strings);
         KeepAliveChecks(strings);

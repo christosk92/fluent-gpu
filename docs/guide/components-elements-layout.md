@@ -127,6 +127,49 @@ Sizes are in DIP (device-independent pixels); the host scales by the monitor DPI
 (`AcrylicSpec`, per-node frosted glass). Composited (animate with no relayout): `OffsetX/OffsetY`, `ScaleX/ScaleY`,
 `Rotation`, `Opacity`, plus interaction-driven `HoverScale`/`PressScale` (eased pop on hover/press).
 
+### `.Interactive(recipe)` — the one interactive-styling surface (`src/FluentGpu.Controls/Interaction.cs`)
+
+Instead of hand-wiring `Fill`/`HoverFill`/`PressedFill` + a border ramp + `WhileHover`/`WhilePressed` on every clickable
+surface, package them in an `InteractionRecipe` (a value struct) and apply it with one modifier. It's a **HYBRID** —
+brushes ride the `BoxEl` field ramp (engine-serviced `HoverFade`/`PressFade`/`BrushFade`), geometry/opacity ride the
+declarative `WhileHover`/`WhilePressed` + `Transition` motion token (the `press > focus > hover > rest` resolver):
+
+```csharp
+new BoxEl { OnClick = go }.Interactive(Interaction.Subtle);      // transparent → subtle hover/press
+new BoxEl { OnClick = go }.Interactive(Interaction.Card);        // card fills + stroke + 0.985 spring press
+new BoxEl { OnClick = go }.Interactive(myRecipe, isEnabled: on); // isEnabled=false → Disabled legs, no hover/press
+
+var myRecipe = new InteractionRecipe {                           // build your own
+    Fill = new StateBrush(rest, hover, pressed, disabled),
+    Stroke = StateBrush.Flat(Tok.StrokeCardDefault), StrokeWidth = 1f,
+    HoverScale = 1.04f, PressScale = 0.96f,                       // 1 = none → While* scale
+    HoverOpacity = 0.9f,                                         // NaN = none → While* opacity
+    BrushMs = 83f, Motion = MotionTokenId.StandardSpring,        // brush cross-fade ms + While* dynamics
+};
+```
+
+`.Interactive` is a pure `with`-expansion at construction (cold path, zero closures, zero per-frame alloc). Composition
+rules it honors:
+- **One transform owner.** If the box already carries a **bound `Transform`**, the recipe's `While*` motion half is
+  skipped (the bound matrix owns the transform outright — a `While*` scale would fight it). The brush half still applies.
+- **No stomping.** A `While*` leg the caller already set is preserved (caller wins), as is a caller-set `Transition`;
+  channels the recipe doesn't name are untouched. A recipe with no motion (scales 1, opacities `NaN`) never touches
+  `While*`/`Transition` at all.
+- **`isEnabled: false`** applies the `Disabled` fill/stroke legs and sets `IsEnabled = false`, so the engine routes no
+  hover/press progress (exactly how CheckBox/Button disable their ramps) and the motion half is suppressed.
+
+**Theme-live presets** (get-only, re-read `Tok.*` on every access — a live theme/palette swap re-resolves them):
+
+| Preset | Fill ramp | Stroke | Motion |
+|---|---|---|---|
+| `Interaction.Subtle` | transparent → `FillSubtleSecondary` → `FillSubtleTertiary` | none | none |
+| `Interaction.ListRow` | same as Subtle (separate preset so list tuning can diverge) | none | none |
+| `Interaction.Card` | `FillCardDefault` → `FillCardSecondary` | `Flat(StrokeCardDefault)` | `PressScale 0.985` + `StandardSpring` |
+| `Interaction.AccentGhost` | transparent → `AccentSubtle` → dimmer `AccentSubtle` | none | none |
+
+> **Presets are an APP-AUTHORING surface. Framework controls keep their own WinUI-exact hand ramps — do NOT restyle a
+> control (Button, CheckBox, list item, …) with a preset.** The recipe packages the *app's* clickable surfaces.
+
 ## Hooks reference (full)
 
 State/derivation hooks are in **[reactivity.md](./reactivity.md)**. The rest:
