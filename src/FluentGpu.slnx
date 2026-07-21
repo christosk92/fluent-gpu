@@ -4,6 +4,7 @@
   </Folder>
   <Folder Name="/Controls-Windowing/">
     <Project Path="FluentGpu.Controls/FluentGpu.Controls.csproj" />
+    <Project Path="FluentGpu.GalleryKit/FluentGpu.GalleryKit.csproj" />
     <Project Path="FluentGpu.Windows/FluentGpu.Windows.csproj" />
   </Folder>
   <Folder Name="/Windows-APIs/">

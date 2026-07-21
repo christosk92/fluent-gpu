@@ -7,6 +7,7 @@ using static FluentGpu.Dsl.Ui;
 
 // ── Navigation / Layout / Media / Dialogs control demo pages (WinUI Gallery parity, batch 2) ──────────
 
+[GalleryPage("SplitView", "SplitView", "Layout")]
 [Route("SplitView")]
 sealed class SplitViewPage : Component
 {
@@ -47,6 +48,7 @@ sealed class SplitViewPage : Component
     };
 }
 
+[GalleryPage("BreadcrumbBar", "BreadcrumbBar", "Navigation")]
 [Route("BreadcrumbBar")]
 sealed class BreadcrumbBarPage : Component
 {
@@ -75,6 +77,7 @@ sealed class BreadcrumbBarPage : Component
     }
 }
 
+[GalleryPage("SelectorBar", "SelectorBar", "Navigation")]
 [Route("SelectorBar")]
 sealed class SelectorBarPage : Component
 {
@@ -119,6 +122,7 @@ sealed class SelectorBarPage : Component
     }
 }
 
+[GalleryPage("TabView", "TabView", "Navigation")]
 [Route("TabView")]
 sealed class TabViewPage : Component
 {
@@ -167,6 +171,7 @@ sealed class TabViewPage : Component
     };
 }
 
+[GalleryPage("PersonPicture", "PersonPicture", "Media")]
 [Route("PersonPicture")]
 sealed class PersonPicturePage : Component
 {
@@ -225,6 +230,7 @@ sealed class PersonPicturePage : Component
         => new BoxEl { Direction = 1, Gap = 8, AlignItems = FlexAlign.Center, Children = [avatar, Caption(caption)] };
 }
 
+[GalleryPage("Flyout", "Flyout", "Dialogs & flyouts")]
 [Route("Flyout")]
 sealed class FlyoutPage : Component
 {
@@ -261,6 +267,7 @@ sealed class FlyoutPage : Component
 }
 
 // Category overview pages (the expandable group keys land here when selected).
+[GalleryPage("navigation-cat", "Navigation", "Overview", Hidden = true)]
 [Route("navigation-cat")]
 sealed class NavigationOverviewPage : Component
 {
@@ -272,6 +279,7 @@ sealed class NavigationOverviewPage : Component
     }
 }
 
+[GalleryPage("dialogs", "Dialogs & flyouts", "Overview", Hidden = true)]
 [Route("dialogs")]
 sealed class DialogsOverviewPage : Component
 {
@@ -283,6 +291,7 @@ sealed class DialogsOverviewPage : Component
     }
 }
 
+[GalleryPage("media", "Media", "Overview", Hidden = true)]
 [Route("media")]
 sealed class MediaOverviewPage : Component
 {

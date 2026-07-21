@@ -14838,6 +14838,12 @@ static class Slice
         bakedHost.RunFrame();
         int fallbackId = bakedDevice.LastImages.Count == 1 ? bakedDevice.LastImages[0].ImageId : 0;
         bakedHost.RunFrame();
+        bool deferredUntilSettled = bakedDevice.LastImages.Count == 1
+            && bakedDevice.LastImages[0].ImageId == fallbackId;
+        int bakeSettleFrames = 0;
+        while (bakeSettleFrames++ < 60 && bakedDevice.LastImages.Count == 1
+               && bakedDevice.LastImages[0].ImageId == fallbackId)
+            bakedHost.RunFrame();
         var bakedCmd = bakedDevice.LastImages.Count == 1 ? bakedDevice.LastImages[0] : default;
         bool oneQuad = bakedDevice.LastImages.Count == 1 && bakedDevice.LastLayers.Count == 0;
         bool selectedDerived = bakedCmd.ImageId != 0 && bakedCmd.ImageId != fallbackId
@@ -14845,8 +14851,8 @@ static class Slice
         bool styling = Near(bakedCmd.Overlay.A, 0.42f) && bakedCmd.MaskEdges == (int)EdgeMask.Top
             && Near(bakedCmd.MaskTop, 24f) && Near(bakedCmd.MaskIntensity, 1f);
         Check("46c. Baked ImageEl: source fallback then persistent derived handle; overlay+mask stay in one DrawImage with zero layers",
-            oneQuad && selectedDerived && styling,
-            $"fallback={fallbackId} derived={bakedCmd.ImageId} draws={bakedDevice.LastImages.Count} layers={bakedDevice.LastLayers.Count} mask={bakedCmd.MaskEdges}");
+            deferredUntilSettled && oneQuad && selectedDerived && styling,
+            $"deferred={deferredUntilSettled} settleFrames={bakeSettleFrames} fallback={fallbackId} derived={bakedCmd.ImageId} draws={bakedDevice.LastImages.Count} layers={bakedDevice.LastLayers.Count} mask={bakedCmd.MaskEdges}");
     }
 
     // Renders the AspectTileProbe headlessly and returns the laid-out art rect + the card's inner (content) width.
@@ -15925,6 +15931,66 @@ static class Slice
         Check("50a3. nested transparent component boundaries remain input-traversable when an inner branch becomes hit-testable",
             !nestedScroll.IsNull && nestedRouted == nestedScroll && nestedState.OffsetY > 1f,
             $"scroll=n#{nestedScroll.Raw.Index} routed=n#{nestedRouted.Raw.Index} offset={nestedState.OffsetY:0.#}");
+    }
+
+    // §WS7 W7.0/W7.1 gallery scaffolding: the sectioned nav-tree derivation the registry-driven shell builds on, and
+    // the graduated theme-aware CodeBlock control.
+    static void GalleryChecks(StringTable strings)
+    {
+        // gate.gallery.registry — resolve + the two-level (section → category → page) nav derivation the shell uses.
+        {
+            var reg = new RouteRegistry();
+            reg.Add(new RouteDef("Button", _ => new BoxEl()) { Title = "Button", Category = "Basic input", Order = 1 });
+            reg.Add(new RouteDef("Slider", _ => new BoxEl()) { Title = "Slider", Category = "Basic input", Order = 2 });
+            reg.Add(new RouteDef("Image", _ => new BoxEl()) { Title = "Image", Category = "Media" });
+            reg.Add(new RouteDef("flex", _ => new BoxEl()) { Title = "Flexbox", Category = "Fundamentals" });
+            reg.Add(new RouteDef("state", _ => new BoxEl()) { Title = "State", Category = "Fundamentals" });
+
+            var tree = reg.BuildSectionedNavTree(
+                ("Controls", "IC", new[] { "Basic input", "Media" }),
+                ("Fundamentals", "IF", new[] { "Fundamentals" }));
+
+            // Controls section → two category subgroups (Basic input {Button,Slider by Order}, Media {Image}).
+            bool controls = tree.Length == 2 && tree[0].Key == "Controls"
+                && tree[0].Children is { Length: 2 } cc
+                && cc[0].Key == "Basic input" && cc[0].Children is { Length: 2 } bi && bi[0].Key == "Button" && bi[1].Key == "Slider"
+                && cc[1].Key == "Media" && cc[1].Children is { Length: 1 } md && md[0].Key == "Image";
+            // Fundamentals section holds a same-named category → its pages FLATTEN as direct leaves (sorted by title).
+            bool fundFlat = tree[1].Key == "Fundamentals" && tree[1].Children is { Length: 2 } fc
+                && fc[0].Key == "flex" && fc[1].Key == "state";
+            bool resolve = reg.Resolve("Button")?.Title == "Button" && reg.Resolve("zzz") is null;
+
+            Check("gate.gallery.registry resolve + sectioned nav-tree derivation (categories nest under sections; flat section flattens)",
+                controls && fundFlat && resolve, $"controls={controls} fundFlat={fundFlat} resolve={resolve}");
+        }
+
+        // gate.gallery.codeblock — the CodeBlock control renders tinted C# and RE-COLORS a keyword on a live theme swap.
+        {
+            ThemeKind saved = Tok.Theme;
+            try
+            {
+                Tok.Use(ThemeKind.Light);
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("codeblock", new Size2(420, 200), 1f));
+                window.Show();
+                var device = new HeadlessGpuDevice();
+                var fonts = new HeadlessFontSystem(strings);
+                using var host = new AppHost(app, window, device, fonts, strings, new CodeBlock { Code = "using x = 1;", Copyable = false });
+                host.RunFrame();
+                ColorF lightKw = GlyphColor(device, strings, "using");
+
+                Tok.Use(ThemeKind.Dark);
+                host.Reconciler.RethemeAll();
+                host.RunFrame();
+                ColorF darkKw = GlyphColor(device, strings, "using");
+
+                bool rendered = lightKw != default(ColorF) && darkKw != default(ColorF);
+                bool recolored = !ColorClose(lightKw, darkKw, 0.01f);
+                Check("gate.gallery.codeblock renders tinted C# + re-colors keyword on theme swap",
+                    rendered && recolored, $"rendered={rendered} recolored={recolored} light={lightKw} dark={darkKw}");
+            }
+            finally { Tok.Use(saved); }
+        }
     }
 
     // §WS3 P8 registry-driven router: RouteRegistry, the RouteTableGenerator (FluentGpu.Generated.Routes),
@@ -28748,6 +28814,7 @@ static class Slice
         PageHostChecks(strings);
         KeepAliveChecks(strings);
         NavRouterChecks(strings);      // WS3 P8 registry-driven router (gate.nav.registry/route-gen/pagehost-v2/transition)
+        GalleryChecks(strings);        // WS7 gallery scaffolding (gate.gallery.registry / gate.gallery.codeblock)
         ActivationLifecycleChecks(strings);
         AutoFitTextChecks(strings);
         G3TokenChecks();

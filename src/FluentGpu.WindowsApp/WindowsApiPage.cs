@@ -40,6 +40,7 @@ using static FluentGpu.Dsl.Ui;
 // re-render the card every frame (the earlier UseContext(FrameClock.Tick) drain did, which froze this page); the loop
 // stays idle until an event actually arrives, then runs exactly one frame to apply it.
 
+[GalleryPage("windowsapi", "Windows APIs", "App services")]
 [Route("windowsapi")]
 sealed class WindowsApiPage : Component
 {

@@ -11,6 +11,7 @@ using static FluentGpu.Dsl.Ui;
 // (Slider + transport IconButtons + ToggleButton). Composes every subsystem built this session.
 //
 //   dotnet run --project src/FluentGpu.WindowsApp -- --demo wavee
+[GalleryPage("wavee", "Wavee skeleton", "Samples")]
 [Route("wavee")]
 sealed class WaveeShell : Component
 {

@@ -14,6 +14,7 @@ using static FluentGpu.Dsl.Ui;
 // partial-known content immediately (cover + title), shimmers the still-loading region (the track list), and swaps to
 // real with the blur reveal we built — then streams per-row durations in via incremental per-field Loadables. No second
 // hand-authored skeleton tree, no two UIs to keep in sync.
+[GalleryPage("async-skeletons", "Async & skeletons", "Patterns")]
 [Route("async-skeletons")]
 sealed class AsyncSkeletonPage : Component
 {

@@ -12,6 +12,7 @@ using static FluentGpu.Dsl.Ui;
 
 
 // ===== TypographyPage =====
+[GalleryPage("typography", "Typography", "Design")]
 [Route("typography")]
 sealed class TypographyPage : Component
 {
@@ -212,6 +213,7 @@ sealed class TypographyPage : Component
 }
 
 // ===== ButtonsPage =====
+[GalleryPage("buttons", "Buttons", "Overview", Hidden = true)]
 [Route("buttons")]
 sealed class ButtonsPage : Component
 {
@@ -343,6 +345,7 @@ sealed class ButtonsPage : Component
 }
 
 // ===== InputsPage =====
+[GalleryPage("inputs", "Inputs", "Overview", Hidden = true)]
 [Route("inputs")]
 sealed class InputsPage : Component
 {
@@ -547,6 +550,7 @@ sealed class InputsPage : Component
 }
 
 // ===== FlexPage =====
+[GalleryPage("flex", "Flexbox", "Fundamentals")]
 [Route("flex")]
 sealed class FlexPage : Component
 {
@@ -719,6 +723,7 @@ sealed class FlexPage : Component
 }
 
 // ===== GridPage =====
+[GalleryPage("grid", "CSS Grid", "Fundamentals")]
 [Route("grid")]
 sealed class GridPage : Component
 {
@@ -872,6 +877,7 @@ sealed class GridPage : Component
 // panel — a simple image, object-fit (Cover/Contain), corner radius, sizing/decodePx, the placeholder tint, and the
 // responsive async album grid (the full FluentGpu.Media pipeline: HTTP/2 fetch → off-thread WIC decode → disk cache →
 // GPU texture residency).
+[GalleryPage("Image", "Image", "Media")]
 [Route("Image")]
 sealed class ImagePage : Component
 {
@@ -1009,6 +1015,7 @@ sealed class ImagePage : Component
 }
 
 // ===== ScrollPage =====
+[GalleryPage("scrolling", "Scrolling", "Fundamentals")]
 [Route("scrolling")]
 sealed class ScrollPage : Component
 {
@@ -1099,6 +1106,7 @@ sealed class ScrollPage : Component
 }
 
 // ===== VirtualizationPage =====
+[GalleryPage("virtualization", "List virtualization", "Fundamentals")]
 [Route("virtualization")]
 sealed class VirtualizationPage : Component
 {
@@ -1186,6 +1194,7 @@ sealed class VirtualizationPage : Component
 // ===== AnimationPage lives in AnimationPage.cs — the complete AnimEngine showcase =====
 
 // ===== CompositorPage =====
+[GalleryPage("compositor", "Compositor", "Fundamentals")]
 [Route("compositor")]
 sealed class CompositorPage : Component
 {
@@ -1390,6 +1399,7 @@ sealed class CompositorPage : Component
 // The signals-first state model, demonstrated end to end: the three update mechanisms (binding / granular re-render /
 // reactive control flow), the state hooks (UseState, UseSignal, UseComputed, UseReducer, UseContext), and live
 // render-count instrumentation that PROVES which path re-renders. Canon: docs/guide/reactivity.md.
+[GalleryPage("state", "State & components", "Fundamentals")]
 [Route("state")]
 sealed class StatePage : Component
 {

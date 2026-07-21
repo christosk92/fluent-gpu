@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using FluentGpu.Controls;
+using FluentGpu.Dsl;
 
 // ── Per-page metadata (the WinUI Gallery ControlInfoData pattern) ──────────────────────────────────────────────────
 // Each gallery page can carry: a tile subtitle, a long description, a tile image (bundled from WinUI-Gallery), the
@@ -152,4 +154,66 @@ static partial class PageInfo
     public static void Open(string uri)
         => FluentGpu.Hooks.InputHooks.Current.Default.OpenUri?.Invoke(
             uri.StartsWith("http", StringComparison.Ordinal) ? uri : RepoBlobUrl + uri.Replace('\\', '/'));
+
+    // ── Header adapter (the WinUI ItemPage PageHeader, assembled from PageMeta) ────────────────────────────────────
+    // GalleryKit.PageHeader is pure layout; the metadata business logic (which docs/source links, the API line, the
+    // deep-link string) lives here where PageMeta + PageInfo.Open are in scope. Both former PageHeader.Build call sites
+    // (the page scaffold + IconsPage) route through this.
+    public static Element HeaderFor(string title, string? description, PageMeta? meta)
+    {
+        if (meta is null) return FluentGpu.GalleryKit.PageHeader.Build(title, description);
+        var docs = BuildDocItems(meta);
+        var src = BuildSourceItems(meta);
+        string? apiLine = meta.ControlSource is { } cs ? $"{AssemblyOf(cs)} · {FileName(cs)}" : null;
+        string deepLink = $"dotnet run --project src/FluentGpu.WindowsApp -- --page {meta.Key}";
+        return FluentGpu.GalleryKit.PageHeader.Build(title, description, apiLine, docs, src, deepLink);
+    }
+
+    static string FileName(string path)
+    {
+        int i = path.LastIndexOf('/');
+        return i >= 0 ? path[(i + 1)..] : path;
+    }
+
+    // "src/FluentGpu.Controls/Button.cs" → "FluentGpu.Controls"
+    static string AssemblyOf(string path)
+    {
+        var parts = path.Split('/');
+        return parts.Length >= 2 ? parts[1] : "FluentGpu";
+    }
+
+    static List<MenuFlyoutItem> BuildDocItems(PageMeta meta)
+    {
+        var items = new List<MenuFlyoutItem>();
+        foreach (var d in meta.Docs)
+        {
+            var uri = d.Uri;   // capture per item (not the loop variable's final value)
+            bool external = uri.StartsWith("http", StringComparison.Ordinal);
+            items.Add(new(d.Title, external ? Icons.Globe : Icons.Document, true, () => Open(uri)));
+        }
+        if (meta.WinUiTemplate is not null)
+        {
+            if (items.Count > 0) items.Add(MenuFlyoutItem.Separator);
+            items.Add(new("Guide — building WinUI-faithful controls", Icons.Document, true, () => Open("docs/guide/control-fidelity.md")));
+            items.Add(new("Guide — elements, controls & theming", Icons.Document, true, () => Open("docs/guide/components-elements-layout.md")));
+            items.Add(new("Spec — controls subsystem", Icons.Document, true, () => Open("design/subsystems/controls.md")));
+        }
+        return items;
+    }
+
+    static List<MenuFlyoutItem> BuildSourceItems(PageMeta meta)
+    {
+        var items = new List<MenuFlyoutItem>();
+        if (meta.ControlSource is { } cs)
+            items.Add(new($"Engine implementation — {FileName(cs)}", Icons.Code, true, () => Open(cs)));
+        if (meta.SamplePage is { } sp)
+            items.Add(new($"This sample page — {FileName(sp)}", Icons.Document, true, () => Open(sp)));
+        if (meta.WinUiTemplate is { } tpl)
+        {
+            if (items.Count > 0) items.Add(MenuFlyoutItem.Separator);
+            items.Add(new($"WinUI reference template — {FileName(tpl)}", Icons.Globe, true,
+                () => Open(WinUiXamlBlobUrl + tpl)));
+        }
+        return items;
+    }
 }

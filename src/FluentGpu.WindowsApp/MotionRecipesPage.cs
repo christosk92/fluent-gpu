@@ -14,6 +14,7 @@ using static FluentGpu.Dsl.Ui;
 // springs, eased tracks, the per-node self-blur channel (AnimChannel.Blur), and the expressive curve/token vocabulary
 // (Easing.SmoothOut/Overshoot/Pop, Expressive.*). Each card seeds a recipe imperatively on captured nodes — the same
 // Context.Anim idiom as AnimationPage. This is an opt-in app-author palette; framework controls keep their Fluent curves.
+[GalleryPage("motion-recipes", "Motion recipes", "Patterns")]
 [Route("motion-recipes")]
 sealed class MotionRecipesPage : Component
 {

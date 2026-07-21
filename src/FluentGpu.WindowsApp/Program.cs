@@ -161,6 +161,19 @@ static class Program
             Environment.Exit(LocProbe.Run(args));
             return;
         }
+        // WS7 gallery integrity gate: mount every [GalleryPage] registry entry headlessly (3 frames), assert no throw +
+        // key uniqueness + Related-key resolution. Exit code = failure count. Runs BEFORE any window/GPU spins up.
+        if (Array.IndexOf(args, "--gallery-audit") >= 0)
+        {
+            Environment.Exit(GalleryAudit.Run(args));
+            return;
+        }
+        // WS7 shot-sweep contract: print every registry shot id (page:<key>) with ShotMode != Skip + the shell id.
+        if (Array.IndexOf(args, "--shot-list") >= 0)
+        {
+            Environment.Exit(GalleryAudit.ShotList());
+            return;
+        }
 
         // Wire the gallery's soak / stress diagnostic harness into the engine's batteries-included entry point. The hook
         // only fires when an FG_SOAK / FG_STRESS_* / FG_WAKE_AUDIT env flag is set; normal runs ignore it. SoakProbe lives
@@ -287,8 +300,9 @@ static class Program
                 new AppOptions { Title = "FluentGpu — Demo", Width = 560, Height = 360 },
                 new HarnessOptions { Frames = frames });
         else
-            // the gallery draws the WinUI TitleBar (engine caption buttons)
-            FluentAppHarness.Run(() => new GalleryApp { InitialPage = page },
+            // WS7: the registry-driven GalleryShell (GalleryApp remains the "gallery-legacy" ShotScene fallback).
+            // The gallery draws the WinUI TitleBar (engine caption buttons).
+            FluentAppHarness.Run(() => new GalleryShell { InitialPage = page },
                 new AppOptions { Title = "FluentGpu — Capability Gallery", Width = 1240, Height = 820, CustomFrame = true },
                 new HarnessOptions { Frames = frames });
     }

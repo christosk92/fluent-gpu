@@ -7,6 +7,7 @@ using static FluentGpu.Dsl.Ui;
 
 // ── RichTextBlock / Canvas / ToolTip / CommandBarFlyout demo pages ─────────────────
 
+[GalleryPage("RichTextBlock", "RichTextBlock", "Text")]
 [Route("RichTextBlock")]
 sealed class RichTextBlockPage : Component
 {
@@ -56,6 +57,7 @@ sealed class RichTextBlockPage : Component
             """));
 }
 
+[GalleryPage("Canvas", "Canvas", "Layout")]
 [Route("Canvas")]
 sealed class CanvasPage : Component
 {
@@ -112,6 +114,7 @@ sealed class CanvasPage : Component
             """));
 }
 
+[GalleryPage("ToolTip", "ToolTip", "Status & info")]
 [Route("ToolTip")]
 sealed class ToolTipPage : Component
 {
@@ -170,6 +173,7 @@ sealed class ToolTipPage : Component
     }
 }
 
+[GalleryPage("CommandBarFlyout", "CommandBarFlyout", "Menus & toolbars")]
 [Route("CommandBarFlyout")]
 sealed class CommandBarFlyoutPage : Component
 {

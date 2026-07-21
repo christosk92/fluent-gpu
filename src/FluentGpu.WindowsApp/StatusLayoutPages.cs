@@ -7,6 +7,7 @@ using static FluentGpu.Dsl.Ui;
 
 // ── Status & info / Layout / Scrolling control demo pages (WinUI Gallery parity) ──────────────
 
+[GalleryPage("ProgressBar", "ProgressBar", "Status & info")]
 [Route("ProgressBar")]
 sealed class ProgressBarPage : Component
 {
@@ -62,6 +63,7 @@ sealed class ProgressBarPage : Component
     }
 }
 
+[GalleryPage("InfoBar", "InfoBar", "Status & info")]
 [Route("InfoBar")]
 sealed class InfoBarPage : Component
 {
@@ -133,6 +135,7 @@ sealed class InfoBarPage : Component
     }
 }
 
+[GalleryPage("InfoBadge", "InfoBadge", "Status & info")]
 [Route("InfoBadge")]
 sealed class InfoBadgePage : Component
 {
@@ -206,6 +209,7 @@ sealed class InfoBadgePage : Component
     }
 }
 
+[GalleryPage("Expander", "Expander", "Layout")]
 [Route("Expander")]
 sealed class ExpanderPage : Component
 {
@@ -272,6 +276,7 @@ sealed class ExpanderPage : Component
     }
 }
 
+[GalleryPage("PipsPager", "PipsPager", "Scrolling")]
 [Route("PipsPager")]
 sealed class PipsPagerPage : Component
 {
@@ -323,6 +328,7 @@ sealed class PipsPagerPage : Component
 }
 
 // Category overview pages (the expandable group keys land here when selected) — WinUI tile grids per category.
+[GalleryPage("status-info", "Status & info", "Overview", Hidden = true)]
 [Route("status-info")]
 sealed class StatusInfoOverviewPage : Component
 {
@@ -334,6 +340,7 @@ sealed class StatusInfoOverviewPage : Component
     }
 }
 
+[GalleryPage("layout", "Layout", "Overview", Hidden = true)]
 [Route("layout")]
 sealed class LayoutOverviewPage : Component
 {
@@ -345,6 +352,7 @@ sealed class LayoutOverviewPage : Component
     }
 }
 
+[GalleryPage("scrolling-controls", "Scrolling", "Overview", Hidden = true)]
 [Route("scrolling-controls")]
 sealed class ScrollingOverviewPage : Component
 {

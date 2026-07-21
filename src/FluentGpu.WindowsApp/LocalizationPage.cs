@@ -20,6 +20,7 @@ using Strings = FluentGpu.WindowsApp.Strings;
 // live slider — watch the form change across en one/other and pl one/few/many), ICU select (gender), and a pseudo-loc
 // toggle. The language picker re-renders ONLY itself (a scoped Component reading UseLocale) to move the selection.
 
+[GalleryPage("localization", "Localization", "App services")]
 [Route("localization")]
 sealed class LocalizationPage : Component
 {

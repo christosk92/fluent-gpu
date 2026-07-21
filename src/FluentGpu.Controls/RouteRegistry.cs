@@ -111,6 +111,40 @@ public sealed class RouteRegistry
     }
 
     /// <summary>
+    /// Derive a TWO-level nav tree for a sectioned information architecture (the WS7 gallery shape): each
+    /// <paramref name="sections"/> entry is a section group whose children are its listed categories. A category whose
+    /// name equals its section name is <b>flattened</b> — its pages become direct leaf children of the section (e.g.
+    /// "Fundamentals" section holding "Fundamentals"-category pages directly); every other category becomes a subgroup
+    /// of its pages (e.g. the "Controls" section holding "Basic input"/"Media"/… subgroups). Pages within a category are
+    /// sorted by <see cref="RouteDef.Order"/> then title; empty categories and empty sections are dropped. Only routes
+    /// with <see cref="RouteDef.ShowInNav"/> participate. This is the derivation primitive a registry-driven gallery
+    /// shell builds its nav from (paired with a hand-authored section→categories table).
+    /// </summary>
+    public NavItem[] BuildSectionedNavTree(params (string Section, string Icon, string[] Categories)[] sections)
+    {
+        var visible = _order.Where(static r => r.ShowInNav).ToList();
+        NavItem Leaf(RouteDef r) => new(r.Key, r.Icon, r.Title.Length > 0 ? r.Title : r.Key);
+        NavItem[] PagesIn(string cat) => visible.Where(r => r.Category == cat)
+            .OrderBy(static r => r.Order).ThenBy(static r => r.Title, StringComparer.Ordinal)
+            .Select(Leaf).ToArray();
+
+        var result = new List<NavItem>();
+        foreach (var (section, icon, cats) in sections)
+        {
+            var children = new List<NavItem>();
+            foreach (var cat in cats)
+            {
+                var pages = PagesIn(cat);
+                if (pages.Length == 0) continue;
+                if (string.Equals(cat, section, StringComparison.Ordinal)) children.AddRange(pages);   // flat section
+                else children.Add(new NavItem(cat, "", cat) { Children = pages });                      // category subgroup
+            }
+            if (children.Count > 0) result.Add(new NavItem(section, icon, section) { Children = children.ToArray() });
+        }
+        return result.ToArray();
+    }
+
+    /// <summary>
     /// Derive the search corpus: one <c>(Label, Key)</c> per visible route (label = title, else key), plus one entry
     /// per <see cref="RouteDef.SearchTerms"/> alias pointing at the same key. Powers an AutoSuggestBox / command palette.
     /// </summary>

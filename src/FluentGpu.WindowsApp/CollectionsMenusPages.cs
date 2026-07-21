@@ -11,6 +11,7 @@ using static FluentGpu.Dsl.Ui;
 // coverage moved onto the flagship ItemsViewPage (MiscPages.cs) as the List/Grid preset card groups (simple +
 // multiple + reorder, same Coffees/drinks/GridItems/colors data), via ItemsView.List(...) / ItemsView.Grid(...).
 
+[GalleryPage("FlipView", "FlipView", "Collections")]
 [Route("FlipView")]
 sealed class FlipViewPage : Component
 {
@@ -35,6 +36,7 @@ sealed class FlipViewPage : Component
             """));
 }
 
+[GalleryPage("TreeView", "TreeView", "Collections")]
 [Route("TreeView")]
 sealed class TreeViewPage : Component
 {
@@ -110,6 +112,7 @@ sealed class TreeViewPage : Component
     static Element Card(Element tree) => new BoxEl { Width = 320, Corners = Radii.OverlayAll, BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f, Padding = new Edges4(0, 6, 0, 6), Children = [tree] };
 }
 
+[GalleryPage("AppBarButton", "AppBarButton", "Menus & toolbars")]
 [Route("AppBarButton")]
 sealed class AppBarButtonPage : Component
 {
@@ -174,6 +177,7 @@ sealed class AppBarButtonPage : Component
     };
 }
 
+[GalleryPage("MenuBar", "MenuBar", "Menus & toolbars")]
 [Route("MenuBar")]
 sealed class MenuBarPage : Component
 {
@@ -258,6 +262,7 @@ sealed class MenuBarPage : Component
 }
 
 // Category overview pages.
+[GalleryPage("collections", "Collections", "Overview", Hidden = true)]
 [Route("collections")]
 sealed class CollectionsOverviewPage : Component
 {
@@ -269,6 +274,7 @@ sealed class CollectionsOverviewPage : Component
     }
 }
 
+[GalleryPage("menus", "Menus & toolbars", "Overview", Hidden = true)]
 [Route("menus")]
 sealed class MenusOverviewPage : Component
 {
@@ -283,6 +289,7 @@ sealed class MenusOverviewPage : Component
 // Context menus attached with ContextMenu.Attach / .WithContextMenu — the one-liner over any element. Right-click, the
 // Menu key / Shift+F10 on a focused row, or a touch long-press all open it. A non-empty Primary strip yields the
 // Explorer command-bar shape; an empty Primary yields a plain vertical menu; a null / all-disabled model opens nothing.
+[GalleryPage("ContextMenu", "ContextMenu", "Menus & toolbars")]
 [Route("ContextMenu")]
 sealed class ContextMenuPage : Component
 {

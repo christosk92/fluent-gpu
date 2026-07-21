@@ -17,11 +17,9 @@ static class GalleryPage
     public static Element ShellKeyed(string key, string title, string description, params Element[] body)
     {
         var meta = PageInfo.Find(key);
-        var kids = new List<Element> { PageHeader.Build(title, description, meta), new BoxEl { Height = 8 } };
-        kids.AddRange(body);
-        if (meta is not null && PageInfo.RoutableRelated(meta) is { Length: > 0 } related)
-            kids.Add(Embed.Comp(() => new RelatedLinks { Keys = related }));
-        return ScrollView(new BoxEl { Direction = 1, Gap = 4f, Padding = Edges4.All(28), Children = kids.ToArray() });
+        var header = PageInfo.HeaderFor(title, description, meta);
+        string[]? related = meta is not null ? PageInfo.RoutableRelated(meta) : null;
+        return GalleryScaffold.Page(header, related, body);
     }
 
     /// <summary>A bold readout whose text rides a signal-reading thunk — only the text node updates (no page re-render).</summary>
@@ -67,6 +65,7 @@ static class GalleryPage
 }
 
 // ── Overview / category pages ─────────────────────────────────────────────────────
+[GalleryPage("fundamentals", "Fundamentals", "Overview", Hidden = true)]
 [Route("fundamentals")]
 sealed class FundamentalsPage : Component
 {
@@ -89,6 +88,7 @@ sealed class FundamentalsPage : Component
     }
 }
 
+[GalleryPage("patterns", "Patterns", "Overview", Hidden = true)]
 [Route("patterns")]
 sealed class PatternsPage : Component
 {
@@ -107,6 +107,7 @@ sealed class PatternsPage : Component
     }
 }
 
+[GalleryPage("app-services", "App services", "Overview", Hidden = true)]
 [Route("app-services")]
 sealed class AppServicesPage : Component
 {
@@ -126,6 +127,7 @@ sealed class AppServicesPage : Component
     }
 }
 
+[GalleryPage("design", "Design", "Overview", Hidden = true)]
 [Route("design")]
 sealed class DesignPage : Component
 {
@@ -143,6 +145,7 @@ sealed class DesignPage : Component
     }
 }
 
+[GalleryPage("basic-input", "Basic input", "Overview", Hidden = true)]
 [Route("basic-input")]
 sealed class BasicInputOverviewPage : Component
 {
@@ -154,6 +157,7 @@ sealed class BasicInputOverviewPage : Component
     }
 }
 
+[GalleryPage("all", "All controls", "Overview", Hidden = true)]
 [Route("all")]
 sealed class AllControlsPage : Component
 {
@@ -174,6 +178,7 @@ sealed class AllControlsPage : Component
 }
 
 // ── Basic input — the 14 control demo pages ───────────────────────────────────────
+[GalleryPage("Button", "Button", "Basic input")]
 [Route("Button")]
 sealed class ButtonControlPage : Component
 {
@@ -237,6 +242,7 @@ sealed class ButtonControlPage : Component
     };
 }
 
+[GalleryPage("DropDownButton", "DropDownButton", "Basic input")]
 [Route("DropDownButton")]
 sealed class DropDownButtonControlPage : Component
 {
@@ -269,6 +275,7 @@ sealed class DropDownButtonControlPage : Component
     }
 }
 
+[GalleryPage("HyperlinkButton", "HyperlinkButton", "Basic input")]
 [Route("HyperlinkButton")]
 sealed class HyperlinkButtonControlPage : Component
 {
@@ -288,6 +295,7 @@ sealed class HyperlinkButtonControlPage : Component
     }
 }
 
+[GalleryPage("RepeatButton", "RepeatButton", "Basic input")]
 [Route("RepeatButton")]
 sealed class RepeatButtonControlPage : Component
 {
@@ -307,6 +315,7 @@ sealed class RepeatButtonControlPage : Component
     }
 }
 
+[GalleryPage("ToggleButton", "ToggleButton", "Basic input")]
 [Route("ToggleButton")]
 sealed class ToggleButtonControlPage : Component
 {
@@ -331,6 +340,7 @@ sealed class ToggleButtonControlPage : Component
     }
 }
 
+[GalleryPage("SplitButton", "SplitButton", "Basic input")]
 [Route("SplitButton")]
 sealed class SplitButtonControlPage : Component
 {
@@ -369,6 +379,7 @@ sealed class SplitButtonControlPage : Component
     }
 }
 
+[GalleryPage("ToggleSplitButton", "ToggleSplitButton", "Basic input")]
 [Route("ToggleSplitButton")]
 sealed class ToggleSplitButtonControlPage : Component
 {
@@ -397,6 +408,7 @@ sealed class ToggleSplitButtonControlPage : Component
     }
 }
 
+[GalleryPage("CheckBox", "CheckBox", "Basic input")]
 [Route("CheckBox")]
 sealed class CheckBoxControlPage : Component
 {
@@ -446,6 +458,7 @@ sealed class CheckBoxControlPage : Component
     }
 }
 
+[GalleryPage("ColorPicker", "ColorPicker", "Basic input")]
 [Route("ColorPicker")]
 sealed class ColorPickerControlPage : Component
 {
@@ -468,6 +481,7 @@ sealed class ColorPickerControlPage : Component
     }
 }
 
+[GalleryPage("ComboBox", "ComboBox", "Basic input")]
 [Route("ComboBox")]
 sealed class ComboBoxControlPage : Component
 {
@@ -498,6 +512,7 @@ sealed class ComboBoxControlPage : Component
     }
 }
 
+[GalleryPage("RadioButton", "RadioButton", "Basic input")]
 [Route("RadioButton")]
 sealed class RadioButtonControlPage : Component
 {
@@ -518,6 +533,7 @@ sealed class RadioButtonControlPage : Component
     }
 }
 
+[GalleryPage("RatingControl", "RatingControl", "Basic input")]
 [Route("RatingControl")]
 sealed class RatingControlControlPage : Component
 {
@@ -539,6 +555,7 @@ sealed class RatingControlControlPage : Component
     }
 }
 
+[GalleryPage("Slider", "Slider", "Basic input")]
 [Route("Slider")]
 sealed class SliderControlPage : Component
 {
@@ -576,6 +593,7 @@ sealed class SliderControlPage : Component
     }
 }
 
+[GalleryPage("ToggleSwitch", "ToggleSwitch", "Basic input")]
 [Route("ToggleSwitch")]
 sealed class ToggleSwitchControlPage : Component
 {

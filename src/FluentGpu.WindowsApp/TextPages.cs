@@ -7,6 +7,7 @@ using static FluentGpu.Dsl.Ui;
 
 // ── Text input control demo pages (TextBox, PasswordBox, AutoSuggestBox) ──────────
 
+[GalleryPage("TextBox", "TextBox", "Text")]
 [Route("TextBox")]
 sealed class TextBoxPage : Component
 {
@@ -68,6 +69,7 @@ sealed class TextBoxPage : Component
     }
 }
 
+[GalleryPage("PasswordBox", "PasswordBox", "Text")]
 [Route("PasswordBox")]
 sealed class PasswordBoxPage : Component
 {
@@ -109,6 +111,7 @@ sealed class PasswordBoxPage : Component
     }
 }
 
+[GalleryPage("AutoSuggestBox", "AutoSuggestBox", "Text")]
 [Route("AutoSuggestBox")]
 sealed class AutoSuggestBoxPage : Component
 {

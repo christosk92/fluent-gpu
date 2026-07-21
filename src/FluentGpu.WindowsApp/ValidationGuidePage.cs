@@ -22,6 +22,7 @@ using static FluentGpu.Dsl.Ui;
 // Every code snippet uses the EXACT public signatures from FluentGpu.Forms. The only loc keys resolved LIVE are the ones
 // shipped in assets/loc/*.json under "validation" (required/minlen/maxlen/range/email/match); illustrative custom keys
 // (validation.reserved, validation.nospaces, …) appear ONLY inside code: text blocks, never in compiled bindings.
+[GalleryPage("validation-guide", "Validation", "App services")]
 [Route("validation-guide")]
 sealed class ValidationGuidePage : Component
 {

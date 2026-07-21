@@ -7,6 +7,7 @@ using static FluentGpu.Dsl.Ui;
 
 // ── ProgressRing / RelativePanel / VariableSizedWrapGrid / AnnotatedScrollBar / SwipeControl / MediaPlayerElement ──
 
+[GalleryPage("ProgressRing", "ProgressRing", "Status & info")]
 [Route("ProgressRing")]
 sealed class ProgressRingPage : Component
 {
@@ -49,6 +50,7 @@ sealed class ProgressRingPage : Component
     }
 }
 
+[GalleryPage("RelativePanel", "RelativePanel", "Layout")]
 [Route("RelativePanel")]
 sealed class RelativePanelPage : Component
 {
@@ -99,6 +101,7 @@ sealed class RelativePanelPage : Component
             """));
 }
 
+[GalleryPage("VariableSizedWrapGrid", "VariableSizedWrapGrid", "Layout")]
 [Route("VariableSizedWrapGrid")]
 sealed class VariableSizedWrapGridPage : Component
 {
@@ -132,6 +135,7 @@ sealed class VariableSizedWrapGridPage : Component
             """));
 }
 
+[GalleryPage("AnnotatedScrollBar", "AnnotatedScrollBar", "Scrolling")]
 [Route("AnnotatedScrollBar")]
 sealed class AnnotatedScrollBarPage : Component
 {
@@ -173,6 +177,7 @@ sealed class AnnotatedScrollBarPage : Component
     }
 }
 
+[GalleryPage("SwipeControl", "SwipeControl", "Menus & toolbars")]
 [Route("SwipeControl")]
 sealed class SwipeControlPage : Component
 {
@@ -204,6 +209,7 @@ sealed class SwipeControlPage : Component
             """));
 }
 
+[GalleryPage("MediaPlayerElement", "MediaPlayerElement", "Media")]
 [Route("MediaPlayerElement")]
 sealed class MediaPlayerElementPage : Component
 {

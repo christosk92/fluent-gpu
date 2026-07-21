@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <!-- The showcase-app scaffolding library (WS7). Holds the reusable gallery chrome — ExampleCard, PageHeader,
+       CopyButton, RelatedLinks, the page scaffold, the Knobs interactive-property surface — plus the [GalleryPage] /
+       [Sample] attributes + records the two Gallery source generators key off. It is NOT a control kit: it depends on
+       Engine + Controls but is deliberately kept OUT of the single shippable FluentGpu NuGet package (see
+       FluentGpu.Package — it bundles Engine/Controls/Windows/WindowsApi only). A second docs/gallery app can consume
+       GalleryKit unchanged; the main package stays lean. TerraFX-free (Engine + Controls only). -->
+  <ItemGroup>
+    <ProjectReference Include="..\FluentGpu.Engine\FluentGpu.Engine.csproj" />
+    <ProjectReference Include="..\FluentGpu.Controls\FluentGpu.Controls.csproj" />
+    <!-- The in-repo Roslyn analyzer as an analyzer-only ref (dormant unless a trigger attribute is present),
+         matching the sibling csprojs. GalleryKit itself declares no [GalleryPage]/[Sample], so the Gallery
+         generators stay dormant here; the consuming gallery app is where they fire. -->
+    <ProjectReference Include="..\FluentGpu.SourceGen\FluentGpu.SourceGen.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+</Project>

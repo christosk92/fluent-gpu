@@ -22,9 +22,22 @@ sealed class ShotScene : Component
 
     public override Element Render() => _id switch
     {
-        // Full-bleed: the whole gallery (regression check), optionally deep-linked to a nav page via "gallery:<navkey>".
-        "gallery" => Embed.Comp(() => new GalleryApp()),
-        _ when _id.StartsWith("gallery:") => Embed.Comp(() => new GalleryApp { InitialPage = _id.Substring("gallery:".Length) }),
+        // Full-bleed: the whole gallery (regression check). WS7: "gallery"/"page:<key>" mount the registry-driven
+        // GalleryShell (deep-linked); "gallery-legacy" keeps the hand-shell GalleryApp reachable for comparison until
+        // GalleryShell is verified; "page-content:<key>" renders the bare page on the standard dark page (tight diffs).
+        "gallery" => Embed.Comp(() => new GalleryShell()),
+        _ when _id.StartsWith("gallery:") => Embed.Comp(() => new GalleryShell { InitialPage = _id.Substring("gallery:".Length) }),
+        _ when _id.StartsWith("page:") => Embed.Comp(() => new GalleryShell { InitialPage = _id.Substring("page:".Length) }),
+        _ when _id.StartsWith("page-content:") => Embed.Comp(() => new OverlayHost
+        {
+            Child = new BoxEl
+            {
+                Grow = 1, Direction = 1, Fill = PageBg,
+                Children = [FluentGpu.Generated.GalleryRegistry.Create(_id.Substring("page-content:".Length)) ?? new BoxEl()],
+            },
+        }),
+        "gallery-legacy" => Embed.Comp(() => new GalleryApp()),
+        _ when _id.StartsWith("gallery-legacy:") => Embed.Comp(() => new GalleryApp { InitialPage = _id.Substring("gallery-legacy:".Length) }),
         // The "Windows APIs" page's below-the-fold pillar cards (Shell / Power / Network), rendered directly so a
         // top-anchored screenshot can verify them without scrolling the full page (the device-height clamp hides them).
         "windowsapi-cards" => Embed.Comp(() => new OverlayHost

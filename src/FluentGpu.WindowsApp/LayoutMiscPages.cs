@@ -7,6 +7,7 @@ using static FluentGpu.Dsl.Ui;
 
 // ── Pivot / NumberBox / AppBarToggleButton / CommandBar / Viewbox / ContentDialog demo pages (batch 4) ──────────
 
+[GalleryPage("Pivot", "Pivot", "Navigation")]
 [Route("Pivot")]
 sealed class PivotPage : Component
 {
@@ -25,6 +26,7 @@ sealed class PivotPage : Component
             """));
 }
 
+[GalleryPage("NumberBox", "NumberBox", "Text")]
 [Route("NumberBox")]
 sealed class NumberBoxPage : Component
 {
@@ -81,6 +83,7 @@ sealed class NumberBoxPage : Component
     }
 }
 
+[GalleryPage("AppBarToggleButton", "AppBarToggleButton", "Menus & toolbars")]
 [Route("AppBarToggleButton")]
 sealed class AppBarToggleButtonPage : Component
 {
@@ -128,6 +131,7 @@ sealed class AppBarToggleButtonPage : Component
     }
 }
 
+[GalleryPage("CommandBar", "CommandBar", "Menus & toolbars")]
 [Route("CommandBar")]
 sealed class CommandBarPage : Component
 {
@@ -188,6 +192,7 @@ sealed class CommandBarPage : Component
     }
 }
 
+[GalleryPage("Viewbox", "Viewbox", "Layout")]
 [Route("Viewbox")]
 sealed class ViewboxPage : Component
 {
@@ -259,6 +264,7 @@ sealed class ViewboxPage : Component
         Caption(label));
 }
 
+[GalleryPage("ContentDialog", "ContentDialog", "Dialogs & flyouts")]
 [Route("ContentDialog")]
 sealed class ContentDialogPage : Component
 {
@@ -307,6 +313,7 @@ sealed class ContentDialogPage : Component
     }
 }
 
+[GalleryPage("text-cat", "Text", "Overview", Hidden = true)]
 [Route("text-cat")]
 sealed class TextOverviewPage : Component
 {

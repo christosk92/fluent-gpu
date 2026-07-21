@@ -10,6 +10,7 @@ using static FluentGpu.Dsl.Ui;
 // transparent (+ optional blur) over a band near chosen edges, so it dissolves into whatever is behind. The feather
 // FOLLOWS the rounded corners (the curve). Customizable per-edge / falloff / intensity / mode. Realized as one offscreen
 // layer per faded element, composited with a per-edge distance feather (per-corner arc) in the opacity compositor.
+[GalleryPage("edge-fade", "Edge fade", "Fundamentals")]
 [Route("edge-fade")]
 sealed class EdgeFadePage : Component
 {

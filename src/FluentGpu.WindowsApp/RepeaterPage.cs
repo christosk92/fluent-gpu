@@ -27,6 +27,7 @@ sealed class StaggerLayout : IVirtualLayout
 }
 
 // Showcases the ItemsRepeater abstraction: one control, data + template + a pluggable layout (Wrap / Grid / Custom).
+[GalleryPage("repeater", "ItemsRepeater", "Fundamentals")]
 [Route("repeater")]
 sealed class RepeaterPage : Component
 {

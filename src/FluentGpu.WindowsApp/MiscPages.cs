@@ -8,6 +8,7 @@ using static FluentGpu.Dsl.Ui;
 
 // ── TeachingTip / Popup / ItemsView / TextBlock / Border / AppBarSeparator demo pages (batch 5) ──────────
 
+[GalleryPage("TeachingTip", "TeachingTip", "Dialogs & flyouts")]
 [Route("TeachingTip")]
 sealed class TeachingTipPage : Component
 {
@@ -89,6 +90,7 @@ sealed class TeachingTipPage : Component
     }
 }
 
+[GalleryPage("Popup", "Popup", "Dialogs & flyouts")]
 [Route("Popup")]
 sealed class PopupPage : Component
 {
@@ -148,6 +150,7 @@ sealed class PopupDemo : Component
     }
 }
 
+[GalleryPage("Toast", "Toast", "Dialogs & flyouts")]
 [Route("Toast")]
 sealed class ToastPage : Component
 {
@@ -196,6 +199,7 @@ sealed class ToastPage : Component
             description: "Two unrelated APIs share the name Toast: the in-app card here, and the OS notification builder in the Windows pillar."));
 }
 
+[GalleryPage("ItemsView", "ItemsView", "Collections")]
 [Route("ItemsView")]
 sealed class ItemsViewPage : Component
 {
@@ -493,6 +497,7 @@ sealed class ItemsViewPage : Component
     static Element ListCard(Element list) => new BoxEl { Width = 280, Corners = Radii.OverlayAll, BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f, Padding = new Edges4(0, 4, 0, 4), Children = [list] };
 }
 
+[GalleryPage("TextBlock", "TextBlock", "Text")]
 [Route("TextBlock")]
 sealed class TextBlockPage : Component
 {
@@ -546,6 +551,7 @@ sealed class TextBlockPage : Component
             """));
 }
 
+[GalleryPage("Border", "Border", "Layout")]
 [Route("Border")]
 sealed class BorderPage : Component
 {
@@ -584,6 +590,7 @@ sealed class BorderPage : Component
     }
 }
 
+[GalleryPage("AppBarSeparator", "AppBarSeparator", "Menus & toolbars")]
 [Route("AppBarSeparator")]
 sealed class AppBarSeparatorPage : Component
 {
