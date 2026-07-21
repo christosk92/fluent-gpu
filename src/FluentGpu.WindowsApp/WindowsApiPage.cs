@@ -14,6 +14,9 @@ using FluentGpu.WindowsApi.Network;
 using FluentGpu.WindowsApi.Notifications;
 using FluentGpu.WindowsApi.Packaging;
 using FluentGpu.WindowsApi.Power;
+// Disambiguate the flagged naming collision: this Windows-pillar page uses the OS-notification Toast. The in-app
+// Controls.Toast (a card in the app window) is a different type in a different namespace (see the Toast gallery page).
+using Toast = FluentGpu.WindowsApi.Notifications.Toast;
 using FluentGpu.WindowsApi.Shell;
 using FluentGpu.WindowsApi.Storage;
 using static FluentGpu.Dsl.Ui;

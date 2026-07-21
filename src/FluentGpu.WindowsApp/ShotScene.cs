@@ -472,7 +472,7 @@ sealed class TeachingTipOpenShot : Component
 
 sealed class PopupOpenShot : Component
 {
-    public override Element Render() => Embed.Comp(() => new Popup
+    public override Element Render() => Embed.Comp(() => new PopupDemo
     {
         TriggerLabel = "Show popup",
         Text = "This content is displayed in a popup above the page.",

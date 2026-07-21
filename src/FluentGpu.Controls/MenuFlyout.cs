@@ -262,6 +262,9 @@ internal sealed class MenuFlyoutPresenter : Component
     /// <summary>Part modifiers keyed by the <see cref="MenuFlyout"/> <c>PartXxx</c> consts — inherited by every
     /// cascading sub-menu level.</summary>
     public TemplateParts? Parts;
+    /// <summary>Set on a cascade CHILD presenter: reports the child's realized root node so the PARENT can compute the
+    /// safe-triangle (hover-intent) geometry for it. Null on a root presenter.</summary>
+    public Action<NodeHandle>? OnRootRealized;
 
     // WinUI MenuFlyoutPresenter ScrollViewer max before internal scroll (mirrors the flyout's content cap; AutoSuggest
     // uses 374 — menus share the same overlay sizing). Content shorter than this never scrolls.
@@ -276,6 +279,8 @@ internal sealed class MenuFlyoutPresenter : Component
         var pendingOpenIdx = UseSignal(-1);                       // sub-item row hovered, waiting MenuShowDelay
         var pendingClose = UseSignal(false);                      // hover left the open sub-item row → delay-close armed
         var subHandle = UseRef<OverlayHandle?>(null);
+        var subMenuNode = UseRef<NodeHandle>(default);   // the open cascade child's root node (safe-triangle base edge)
+        var aimApex = UseRef<Point2>(default);           // launch point for the safe-triangle (pointer over the open sub-item row)
         var rowNodes = UseRef<NodeHandle[]>([]);
         if (rowNodes.Value.Length != Items.Count) rowNodes.Value = new NodeHandle[Items.Count];
 
@@ -347,6 +352,7 @@ internal sealed class MenuFlyoutPresenter : Component
             pendingOpenIdx.Value = -1;
             if (subHandle.Value is { IsOpen: true } h) h.Close();
             subHandle.Value = null;
+            subMenuNode.Value = default;
             subOpenIdx.Value = -1;
         }
 
@@ -361,6 +367,7 @@ internal sealed class MenuFlyoutPresenter : Component
             CloseSub();
             var node = rowNodes.Value[i];
             if (node.IsNull) return;
+            aimApex.Value = hooks.GetPointerPosition?.Invoke() ?? aimApex.Value;   // safe-triangle launch point
             var handle = svc.Open(
                 () => rowNodes.Value[i],
                 () => Embed.Comp(() => new MenuFlyoutPresenter
@@ -372,6 +379,7 @@ internal sealed class MenuFlyoutPresenter : Component
                     OnChildHover = () => pendingClose.Value = false,   // pointer inside the child cancels delay-close
                     FocusFirstOnMount = focusFirst,      // keyboard open → cursor + focus on the first sub item
                     Parts = Parts,                       // part modifiers cascade into every sub-menu level
+                    OnRootRealized = h => subMenuNode.Value = h,   // safe-triangle base edge (the child's rect)
                 }),
                 FlyoutPlacement.RightEdgeAlignedTop,
                 new PopupOptions(Chrome: PopupChrome.Flyout)
@@ -405,13 +413,52 @@ internal sealed class MenuFlyoutPresenter : Component
         //  • hovering a sub-item row arms the 400ms delay-OPEN (cancelled by leaving it);
         //  • hovering any OTHER row while a cascade is open arms the 400ms delay-CLOSE (cancelled by re-entering the
         //    open sub-item row or by the pointer reaching the child popup — OnChildHover).
+        // Safe-triangle (WinUI/macOS submenu hover-intent): while the pointer moves from the sub-item that opened a
+        // cascade TOWARD that open cascade, it stays inside the triangle (launch point → the submenu's near edge) — so
+        // a transient hover over an intervening sibling must NOT arm the delay-close. Leaving the triangle (or dwelling
+        // over a sibling outside it) falls through to the normal 400ms delay-close.
+        bool AimingAtOpenSubmenu(Point2 ptr)
+        {
+            var scene = Context.Scene;
+            int so = subOpenIdx.Peek();
+            if (scene is null || so < 0 || so >= rowNodes.Value.Length) return false;
+            var sub = subMenuNode.Value;
+            if (sub.IsNull || !scene.IsLive(sub)) return false;
+            var r = scene.AbsoluteRect(sub);
+            if (r.W <= 0f || r.H <= 0f) return false;
+            // Near edge = the submenu edge facing the parent menu (left edge when the cascade opened to the right of the
+            // row, else the right edge on a left-flip).
+            var rowNode = rowNodes.Value[so];
+            float nearX = r.X;
+            if (!rowNode.IsNull && scene.IsLive(rowNode))
+            {
+                var rr = scene.AbsoluteRect(rowNode);
+                nearX = r.X >= rr.X ? r.X : r.X + r.W;
+            }
+            return MenuSafeTriangle.Contains(aimApex.Value, new Point2(nearX, r.Y), new Point2(nearX, r.Y + r.H), ptr);
+        }
+
         void OnRowHover(int i)
         {
             OnChildHover?.Invoke();   // bubbling: pointer in THIS presenter also cancels the parent's delay-close
             var it = Items[i];
+            var ptr = hooks.GetPointerPosition?.Invoke() ?? default;
+            if (subOpenIdx.Peek() == i)   // over the open sub-item row → keep the cascade, refresh the launch point
+            {
+                aimApex.Value = ptr;
+                pendingClose.Value = false;
+                pendingOpenIdx.Value = -1;
+                return;
+            }
+            // Aiming into the open cascade: keep it open (cancel any armed delay-close), ignore this passing sibling.
+            if (subOpenIdx.Peek() >= 0 && AimingAtOpenSubmenu(ptr))
+            {
+                if (pendingClose.Peek()) pendingClose.Value = false;
+                if (pendingOpenIdx.Peek() >= 0) pendingOpenIdx.Value = -1;
+                return;
+            }
             if (it.Kind == MenuItemKind.SubMenu && it.Enabled)
             {
-                if (subOpenIdx.Peek() == i) { pendingClose.Value = false; pendingOpenIdx.Value = -1; return; }
                 if (pendingOpenIdx.Peek() != i) pendingOpenIdx.Value = i;
                 if (subOpenIdx.Peek() >= 0) pendingClose.Value = true;
             }
@@ -498,6 +545,25 @@ internal sealed class MenuFlyoutPresenter : Component
             ContentSized = true,
             MinWidth = MinWidth,
             MaxHeight = MaxHeight,
+            OnRealized = OnRootRealized,   // cascade child reports its rect for the parent's safe-triangle
         };
     }
+}
+
+/// <summary>The submenu hover-intent polygon (WinUI/macOS "safe triangle"): a pointer travelling from the launch point
+/// (the sub-item that opened the cascade) toward the open submenu's near edge stays inside this triangle, so intervening
+/// sibling hovers don't close the cascade. A pure geometry test (deterministic, gate-checkable).</summary>
+internal static class MenuSafeTriangle
+{
+    /// <summary>True when <paramref name="p"/> lies inside (or on) triangle <paramref name="a"/>/<paramref name="b"/>/<paramref name="c"/>.</summary>
+    internal static bool Contains(Point2 a, Point2 b, Point2 c, Point2 p)
+    {
+        float d1 = Cross(p, a, b), d2 = Cross(p, b, c), d3 = Cross(p, c, a);
+        bool neg = d1 < 0f || d2 < 0f || d3 < 0f;
+        bool pos = d1 > 0f || d2 > 0f || d3 > 0f;
+        return !(neg && pos);   // all same sign (or a zero on an edge) ⇒ inside
+    }
+
+    private static float Cross(Point2 p, Point2 a, Point2 b)
+        => (p.X - b.X) * (a.Y - b.Y) - (a.X - b.X) * (p.Y - b.Y);
 }

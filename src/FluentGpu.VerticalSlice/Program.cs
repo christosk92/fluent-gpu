@@ -3036,6 +3036,76 @@ sealed class OverlayProbeInner : Component
     }
 }
 
+// ── G5f — controlled Popup + Flyout.Attach probes ────────────────────────────────────────────────────────────────
+sealed class PopupCtlProbe : Component
+{
+    public IOverlayService? Service;
+    public readonly Signal<bool> Open = new(false);
+    public int OpenChanges;
+    public bool LastChanged;
+    public bool AnchorLow;   // dock the anchor at the bottom edge → the popup flips ABOVE (positioner flip test)
+    public NodeHandle Anchor;
+    public override Element Render() => Embed.Comp(() => new OverlayHost { Child = Embed.Comp(() => new PopupCtlInner(this)) });
+}
+
+sealed class PopupCtlInner : Component
+{
+    readonly PopupCtlProbe _p;
+    public PopupCtlInner(PopupCtlProbe p) => _p = p;
+    public override Element Render()
+    {
+        _p.Service = UseContext(Overlay.Service);
+        var anchor = new BoxEl
+        {
+            Width = 120, Height = 32, Role = AutomationRole.Button, OnClick = () => { },
+            OnRealized = h => _p.Anchor = h, Children = [Ui.Text("anchor")],
+        };
+        var pop = Popup.Create(
+            anchor,
+            () => new BoxEl { Width = 120, Height = 80, Fill = Tok.FillCardDefault, Children = [Ui.Text("popup-body")] },
+            _p.Open,
+            b => { _p.OpenChanges++; _p.LastChanged = b; },
+            FlyoutPlacement.BottomLeft);
+        return new BoxEl
+        {
+            Width = 240, Grow = 1, Direction = 1,   // fill the window height so AnchorLow docks at the true bottom edge (flip test)
+            Justify = _p.AnchorLow ? FlexJustify.End : FlexJustify.Start,
+            Padding = Edges4.All(8),
+            Children = [pop],
+        };
+    }
+}
+
+sealed class FlyoutAttachProbe : Component
+{
+    public IOverlayService? Service;
+    public int AnchorClicks;
+    public NodeHandle Anchor;
+    public override Element Render() => Embed.Comp(() => new OverlayHost { Child = Embed.Comp(() => new FlyoutAttachInner(this)) });
+}
+
+sealed class FlyoutAttachInner : Component
+{
+    readonly FlyoutAttachProbe _p;
+    public FlyoutAttachInner(FlyoutAttachProbe p) => _p = p;
+    public override Element Render()
+    {
+        var svc = UseContext(Overlay.Service);
+        _p.Service = svc;
+        // An anchor with its OWN OnClick; Flyout.Attach must chain (keep both) it.
+        var anchor = new BoxEl
+        {
+            Width = 120, Height = 32, Role = AutomationRole.Button,
+            OnClick = () => _p.AnchorClicks++,
+            OnRealized = h => _p.Anchor = h,
+            Children = [Ui.Text("trigger")],
+        };
+        var attached = Flyout.Attach(anchor, svc,
+            () => new BoxEl { Width = 120, Height = 60, Fill = Tok.FillCardDefault, Children = [Ui.Text("flyout")] });
+        return new BoxEl { Width = 240, Height = 160, Padding = Edges4.All(8), Children = [attached] };
+    }
+}
+
 // Windowed-popup exit-routing probe: swapping the keyed child keeps the outgoing text alive for one frame. Its orphan
 // must be recorded by the popup subtree at the former parent (not by the main window's global fallback pass).
 sealed class PopupExitProbeBody : Component
@@ -19997,6 +20067,268 @@ static class Slice
             $"typed='{typed}' back='{afterBack}' clampedLen={clamped.Length}");
     }
 
+    // ── G5f — controlled Popup + Flyout.Attach + Toast host + PinsAnchor seam + MenuFlyout safe-triangle ─────────────
+    static void G5fPopupToastChecks(StringTable strings)
+    {
+        // gate.popup.controlled — isOpen drives open/close; light-dismiss writes the signal back + onOpenChanged(false)
+        // once; a programmatic close does NOT echo onOpenChanged.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("g5f-popup", new Size2(480, 360), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var probe = new PopupCtlProbe();
+            var clock = new ManualFrameTimeSource();
+            using var host = new AppHost(app, window, device, fonts, strings, probe, frameTime: clock);
+            void Settle() { for (int i = 0; i < 20; i++) { clock.Advance(16f); host.RunFrame(); } }
+            host.RunFrame();
+            var svc = probe.Service!;
+
+            probe.Open.Value = true; Settle();
+            bool opened = svc.AnyOpen;
+
+            int changesBeforeProg = probe.OpenChanges;
+            probe.Open.Value = false; Settle();
+            bool progClosed = !svc.AnyOpen;
+            bool progNoEcho = probe.OpenChanges == changesBeforeProg;   // programmatic close does not fire onOpenChanged
+
+            probe.Open.Value = true; Settle();
+            bool reopened = svc.AnyOpen;
+            int changesBeforeDismiss = probe.OpenChanges;
+            // Light-dismiss: press a blank point on the full-bleed scrim (outside the popup + anchor).
+            window.QueueInput(new InputEvent(InputKind.PointerDown, new Point2(420, 320), 0, 0));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(420, 320), 0, 0));
+            Settle();
+            bool dismissClosed = !svc.AnyOpen;
+            bool signalWrittenBack = !probe.Open.Peek();
+            bool echoedOnce = probe.OpenChanges == changesBeforeDismiss + 1 && !probe.LastChanged;
+
+            Check("gate.popup.controlled", opened && progClosed && progNoEcho && reopened && dismissClosed && signalWrittenBack && echoedOnce,
+                $"open={opened} progClosed={progClosed} progNoEcho={progNoEcho} reopen={reopened} dismissClosed={dismissClosed} writeback={signalWrittenBack} echoOnce={echoedOnce}");
+        }
+
+        // gate.popup.anchor — the primitive rides the FlyoutPositioner: node-anchored (live-follow eligible), placed
+        // below a top anchor, and FLIPS above when it would overflow below a bottom anchor.
+        {
+            bool belowOk = false, nodeAnchored = false;
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("g5f-anchor-top", new Size2(480, 360), 1f));
+                window.Show();
+                var probe = new PopupCtlProbe { AnchorLow = false };
+                var clock = new ManualFrameTimeSource();
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe, frameTime: clock);
+                host.RunFrame();
+                probe.Open.Value = true;
+                for (int i = 0; i < 20; i++) { clock.Advance(16f); host.RunFrame(); }
+                var impl = (OverlayServiceImpl)probe.Service!;
+                if (impl.Entries.Count > 0)
+                {
+                    var e = impl.Entries[0];
+                    nodeAnchored = e.AnchorRect is null;   // node-anchored ⇒ AfterAnimations live-follows it
+                    var aRect = host.Scene.AbsoluteRect(probe.Anchor);
+                    var sRect = host.Scene.AbsoluteRect(e.SurfaceNode);
+                    belowOk = !e.OpensUp && sRect.Y >= aRect.Y + aRect.H - 1f;
+                }
+            }
+            bool flipOk = false;
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("g5f-anchor-bottom", new Size2(480, 360), 1f));
+                window.Show();
+                var probe = new PopupCtlProbe { AnchorLow = true };
+                var clock = new ManualFrameTimeSource();
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe, frameTime: clock);
+                host.RunFrame();
+                probe.Open.Value = true;
+                for (int i = 0; i < 20; i++) { clock.Advance(16f); host.RunFrame(); }
+                var impl = (OverlayServiceImpl)probe.Service!;
+                if (impl.Entries.Count > 0) flipOk = impl.Entries[0].OpensUp;   // flipped ABOVE the bottom anchor
+            }
+            Check("gate.popup.anchor", nodeAnchored && belowOk && flipOk,
+                $"nodeAnchored={nodeAnchored} placedBelow={belowOk} flipUp={flipOk}");
+        }
+
+        // gate.flyout.attach-chains-onclick — an anchor with its OWN OnClick keeps BOTH behaviours (its handler + open).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("g5f-flyout", new Size2(480, 360), 1f));
+            window.Show();
+            var probe = new FlyoutAttachProbe();
+            var clock = new ManualFrameTimeSource();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe, frameTime: clock);
+            host.RunFrame();
+            var svc = probe.Service!;
+            var c = CenterOf(host.Scene, probe.Anchor);
+            window.QueueInput(new InputEvent(InputKind.PointerDown, c, 0, 0));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, c, 0, 0));
+            for (int i = 0; i < 20; i++) { clock.Advance(16f); host.RunFrame(); }
+            bool ownRan = probe.AnchorClicks == 1;
+            bool opened = svc.AnyOpen;
+            Check("gate.flyout.attach-chains-onclick", ownRan && opened,
+                $"ownClick={probe.AnchorClicks} opened={opened}");
+        }
+
+        // gate.overlay.pins-anchor — an open PinsAnchor overlay reports its anchor scope pinned; close unpins; a
+        // PinsAnchor=false overlay never pins. PinEpoch bumps on open/close so auto-hide consumers can subscribe.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("g5f-pin", new Size2(480, 360), 1f));
+            window.Show();
+            var probe = new OverlayProbe();
+            var clock = new ManualFrameTimeSource();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe, frameTime: clock);
+            void Settle() { for (int i = 0; i < 20; i++) { clock.Advance(16f); host.RunFrame(); } }
+            host.RunFrame();
+            var svc = probe.Service!;
+            var scope = host.Scene.Parent(probe.Anchor);   // the anchor's auto-hide SCOPE (an ancestor)
+            Func<Element> body = () => new BoxEl { Width = 100, Height = 60, Fill = Tok.FillCardDefault, Children = [Ui.Text("pinned")] };
+
+            int epoch0 = svc.PinEpoch.Peek();
+            var h = svc.Open(() => probe.Anchor, body, FlyoutPlacement.BottomLeft);   // default PinsAnchor = true
+            host.RunFrame();
+            bool pinnedAnchor = svc.IsAnchorPinned(probe.Anchor);
+            bool pinnedScope = svc.IsAnchorPinned(scope);
+            bool epochBumpedOpen = svc.PinEpoch.Peek() > epoch0;
+
+            int epoch1 = svc.PinEpoch.Peek();
+            h.Close(); Settle();
+            bool unpinnedAfterClose = !svc.IsAnchorPinned(probe.Anchor);
+            bool epochBumpedClose = svc.PinEpoch.Peek() > epoch1;
+
+            var h2 = svc.Open(() => probe.Anchor, body, FlyoutPlacement.BottomLeft, new PopupOptions { PinsAnchor = false });
+            host.RunFrame();
+            bool notPinnedWhenOptedOut = !svc.IsAnchorPinned(probe.Anchor);
+            h2.Close(); Settle();
+
+            Check("gate.overlay.pins-anchor",
+                pinnedAnchor && pinnedScope && epochBumpedOpen && unpinnedAfterClose && epochBumpedClose && notPinnedWhenOptedOut,
+                $"anchor={pinnedAnchor} scope={pinnedScope} epochOpen={epochBumpedOpen} unpin={unpinnedAfterClose} epochClose={epochBumpedClose} optOut={notPinnedWhenOptedOut}");
+        }
+
+        // gate.menu.safe-triangle — a pointer path THROUGH the hover-intent triangle (launch point → submenu near
+        // edge) stays inside (submenu kept open); a path OUTSIDE it is not.
+        {
+            // Launch point left of the submenu; the submenu near edge is the segment (100,0)→(100,100).
+            var apex = new Point2(0f, 50f);
+            var top = new Point2(100f, 0f);
+            var bot = new Point2(100f, 100f);
+            bool through = MenuSafeTriangle.Contains(apex, top, bot, new Point2(20f, 50f))
+                        && MenuSafeTriangle.Contains(apex, top, bot, new Point2(55f, 48f))
+                        && MenuSafeTriangle.Contains(apex, top, bot, new Point2(90f, 45f));
+            bool outside = !MenuSafeTriangle.Contains(apex, top, bot, new Point2(55f, 95f))    // veered down toward a sibling
+                        && !MenuSafeTriangle.Contains(apex, top, bot, new Point2(50f, -20f));  // veered up, off-aim
+            Check("gate.menu.safe-triangle", through && outside, $"through={through} outside={outside}");
+        }
+
+        G5fToastChecks(strings);
+    }
+
+    // Toast host gates (own method — several timer-driven sub-scenarios on the deterministic frame clock).
+    static void G5fToastChecks(StringTable strings)
+    {
+        int savedMax = Toast.MaxVisible;
+        Toast.MaxVisible = 3;
+        try
+        {
+            // gate.toast.queue — MaxVisible=3 stacking + FIFO overflow: 4 shown ⇒ 3 rendered + only 3 armed (the 4th
+            // waits); closing the front releases the queued one into the visible window (its countdown starts).
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("g5f-toast-q", new Size2(640, 480), 1f));
+                window.Show();
+                var probe = new OverlayProbe();
+                var clock = new ManualFrameTimeSource();
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe, frameTime: clock);
+                void Settle() { for (int i = 0; i < 8; i++) { clock.Advance(16f); host.RunFrame(); } }
+                host.RunFrame();
+                var h1 = Toast.Show("one",   new ToastOptions { Title = "1" });
+                var h2 = Toast.Show("two",   new ToastOptions { Title = "2" });
+                var h3 = Toast.Show("three", new ToastOptions { Title = "3" });
+                var h4 = Toast.Show("four",  new ToastOptions { Title = "4" });
+                Settle();
+                var ctl = Toast.Default!;
+                bool queuedAll = ctl.Items.Count == 4;
+                bool visible3 = Roles(host.Scene, AutomationRole.InfoBar).Count == 3;
+                bool armed3 = ctl.Items[0].Armed && ctl.Items[1].Armed && ctl.Items[2].Armed;
+                bool fourthWaits = !ctl.Items[3].Armed;
+                h1.Close(); Settle();
+                bool released = ctl.Items.Count == 3 && ctl.Items[2].Armed;   // former 4th now visible + counting
+                Check("gate.toast.queue", queuedAll && visible3 && armed3 && fourthWaits && released,
+                    $"queued4={queuedAll} rendered3={visible3} armed3={armed3} fourthWaits={fourthWaits} released={released}");
+                Toast.CloseAll();
+            }
+
+            // gate.toast.autodismiss — a toast closes itself after DurationMs via the HostTimerQueue. Driven by
+            // host.Paint(0) (16ms/step, unconditional advance — the gate.timer.* convention; RunFrame is wake-gated and
+            // an armed-but-not-due timer alone doesn't wake it).
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("g5f-toast-ad", new Size2(640, 480), 1f));
+                window.Show();
+                var probe = new OverlayProbe();
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe);
+                host.Paint(0);
+                var h = Toast.Show("bye", new ToastOptions { DurationMs = 200f });
+                var ctl = Toast.Default!;
+                bool armed = ctl.Items.Count == 1 && ctl.Items[0].Armed;
+                for (int i = 0; i < 5; i++) host.Paint(0);   // ~80ms — armed, not due
+                bool stillOpenMid = ctl.Items.Count == 1 && h.IsOpen;
+                for (int i = 0; i < 20; i++) host.Paint(0);  // well past 200ms ⇒ fires
+                bool closed = ctl.Items.Count == 0 && !h.IsOpen;
+                Check("gate.toast.autodismiss", armed && stillOpenMid && closed,
+                    $"armed={armed} mid={stillOpenMid} closed={closed}");
+                Toast.CloseAll();
+            }
+
+            // gate.toast.hover-pause — hovering the strip FREEZES the remaining time; advancing past the original due
+            // does not fire; resume re-arms for the banked remainder, which then fires.
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("g5f-toast-hp", new Size2(640, 480), 1f));
+                window.Show();
+                var probe = new OverlayProbe();
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe);
+                host.Paint(0);
+                var h = Toast.Show("hover", new ToastOptions { DurationMs = 200f });
+                var ctl = Toast.Default!;
+                for (int i = 0; i < 5; i++) host.Paint(0);   // ~80ms elapsed, armed, not due
+                bool armedBefore = ctl.Items[0].Armed;
+                ctl.SetPaused(true);   // strip hover: banks the ~120ms remaining, cancels the pending fire
+                bool pausedCancels = !ctl.Items[0].Armed;
+                for (int i = 0; i < 25; i++) host.Paint(0);  // ~400ms — way past the original due, but paused ⇒ no fire
+                bool frozen = ctl.Items.Count == 1 && h.IsOpen;
+                ctl.SetPaused(false);  // resume → re-arm for the banked remainder
+                bool rearmed = ctl.Items[0].Armed;
+                for (int i = 0; i < 3; i++) host.Paint(0);   // ~48ms — banked remainder not yet elapsed
+                bool stillOpen = ctl.Items.Count == 1;
+                for (int i = 0; i < 15; i++) host.Paint(0);  // remainder elapsed ⇒ fires
+                bool fired = ctl.Items.Count == 0 && !h.IsOpen;
+                Check("gate.toast.hover-pause", armedBefore && pausedCancels && frozen && rearmed && stillOpen && fired,
+                    $"armed={armedBefore} pausedCancel={pausedCancels} frozen={frozen} rearmed={rearmed} stillOpen={stillOpen} fired={fired}");
+                Toast.CloseAll();
+            }
+
+            // gate.toast.severity — the toast severity visuals ARE InfoBar's (the shared SeverityVisuals helper), so they
+            // cannot drift.
+            {
+                bool allMatch = true;
+                foreach (var sev in new[] { InfoBarSeverity.Informational, InfoBarSeverity.Success, InfoBarSeverity.Warning, InfoBarSeverity.Error })
+                {
+                    var v = SeverityVisuals.For(sev);
+                    var s = InfoBar.InfoBarTemplateSettings.For(sev);
+                    allMatch &= v.Glyph == s.Glyph
+                             && v.IconBackground.Equals(s.IconBackground)
+                             && v.IconForeground.Equals(s.IconForeground)
+                             && v.Background.Equals(s.Background);
+                }
+                Check("gate.toast.severity", allMatch, $"sharedIdentity={allMatch}");
+            }
+        }
+        finally { Toast.MaxVisible = savedMax; Toast.Default = null; }
+    }
+
     static void OverlayChecks(StringTable strings)
     {
         using var app = new HeadlessPlatformApp();
@@ -27610,6 +27942,7 @@ static class Slice
         OverlayChecks(strings);
         OverlayAnimationChecks(strings);
         E4PopupWindowingChecks(strings);
+        G5fPopupToastChecks(strings);
         FlyoutAcrylicChecks(strings);
         AcrylicBackdropMathChecks();
         ContentDialogChromeChecks(strings);

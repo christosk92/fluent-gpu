@@ -92,27 +92,105 @@ sealed class PopupPage : Component
 {
     public override Element Render() => GalleryPage.Shell("Popup",
         "Displays content on top of existing content, shown and hidden programmatically.",
-        ControlExample.Build("A Popup", Popup.Create("Show popup", "This content is displayed in a popup above the page."),
-            description: "Light-dismiss: click the trigger again, or anywhere outside the popup, to close it.",
+        ControlExample.Build("A Popup",
+            Embed.Comp(() => new PopupDemo
+            {
+                TriggerLabel = "Show popup",
+                Text = "This content is displayed in a popup above the page.",
+            }),
+            description: "Controlled by a Signal<bool>: the trigger toggles it, and a light-dismiss (click outside) writes the signal back. Setting isOpen from anywhere opens/closes it.",
             code: """
-            Popup.Create("Show popup", "This content is displayed in a popup above the page.")
+            var isOpen = UseSignal(false);
+            return Popup.Create(
+                Button.Standard("Show popup", () => isOpen.Value = !isOpen.Value),
+                () => new BoxEl { Padding = Edges4.All(16), Children = [Ui.Text("…")] },
+                isOpen);
             """),
         ControlExample.Build("A windowed Popup",
-            Embed.Comp(() => new Popup
+            Embed.Comp(() => new PopupDemo
             {
                 TriggerLabel = "Show windowed popup",
                 Text = "This popup rides its own top-level window and may escape the app window.",
-                ShouldConstrainToRootBounds = false,
+                Constrain = false,
             }),
-            description: "ShouldConstrainToRootBounds = false renders the popup in its own top-level window (the WinUI windowed-popup path); when the platform can't create popup windows it silently falls back to constrained placement.",
+            description: "ConstrainToRootBounds = false renders the popup in its own top-level window (the WinUI windowed-popup path); when the platform can't create popup windows it silently falls back to constrained placement.",
             code: """
-            Embed.Comp(() => new Popup
-            {
-                TriggerLabel = "Show windowed popup",
-                Text = "This popup rides its own top-level window and may escape the app window.",
-                ShouldConstrainToRootBounds = false,
-            })
+            Popup.Create(anchor, content, isOpen,
+                options: new PopupOptions { ConstrainToRootBounds = false });
             """));
+}
+
+/// <summary>Gallery demo of the controlled <see cref="Popup"/> primitive: a trigger button toggling a
+/// <c>Signal&lt;bool&gt;</c> that drives an anchored, light-dismissable popup.</summary>
+sealed class PopupDemo : Component
+{
+    public string TriggerLabel = "Show popup";
+    public string Text = "Popup content";
+    public bool Constrain = true;
+    public bool OpenOnMount;   // deterministic visual-shot hook
+
+    public override Element Render()
+    {
+        var open = UseSignal(OpenOnMount);
+        return Popup.Create(
+            Button.Standard(TriggerLabel, () => open.Value = !open.Value),
+            () => new BoxEl
+            {
+                Direction = 1,
+                Padding = Edges4.All(16),
+                MinWidth = 180f,
+                Children = [new TextEl(Text) { Size = 14f, Color = Tok.TextPrimary }],
+            },
+            open,
+            options: new PopupOptions { ConstrainToRootBounds = Constrain });
+    }
+}
+
+sealed class ToastPage : Component
+{
+    public override Element Render() => GalleryPage.Shell("Toast",
+        "Transient in-app status messages, stacked at a screen corner and auto-dismissing.",
+        ControlExample.Build("Severities",
+            HStack(8f,
+                Button.Standard("Info",    () => Toast.Show("Your changes are being synced.", new ToastOptions { Severity = InfoBarSeverity.Informational, Title = "Syncing" })),
+                Button.Standard("Success", () => Toast.Show("Playlist saved.", new ToastOptions { Severity = InfoBarSeverity.Success, Title = "Saved" })),
+                Button.Standard("Warning", () => Toast.Show("You are offline — changes are queued.", new ToastOptions { Severity = InfoBarSeverity.Warning, Title = "Offline" })),
+                Button.Standard("Error",   () => Toast.Show("Failed to reach the server.", new ToastOptions { Severity = InfoBarSeverity.Error, Title = "Error" }))),
+            description: "Toast.Show returns a ToastHandle {IsOpen, Close()}. Severity reuses InfoBarSeverity (shared visuals). Toasts auto-dismiss after 5s; hovering the strip pauses the countdown. Up to Toast.MaxVisible (3) show at once; the rest wait in a FIFO queue.",
+            code: """
+            Toast.Show("Playlist saved.", new ToastOptions {
+                Severity = InfoBarSeverity.Success, Title = "Saved",
+            });
+            """),
+        ControlExample.Build("With an action + sticky",
+            HStack(8f,
+                Button.Standard("With action", () => Toast.Show("A newer version is available.",
+                    new ToastOptions { Severity = InfoBarSeverity.Informational, Title = "Update", ActionLabel = "Reload", OnAction = () => { } })),
+                Button.Standard("Sticky", () => Toast.Show("This stays until dismissed.",
+                    new ToastOptions { Severity = InfoBarSeverity.Warning, Title = "Sticky", DurationMs = 0f })),
+                Button.Standard("Dismiss all", Toast.CloseAll)),
+            description: "DurationMs = 0 makes a toast sticky (dismissed only by its close button or Toast.CloseAll()). An ActionLabel/OnAction adds an inline action button.",
+            code: """
+            Toast.Show("A newer version is available.", new ToastOptions {
+                Title = "Update", ActionLabel = "Reload", OnAction = Reload,
+            });
+            Toast.Show("This stays until dismissed.", new ToastOptions { DurationMs = 0f });
+            """),
+        // NAMING NOTE (WS3 P6): FluentGpu.Controls.Toast (this page) is the IN-APP toast — a card in the app window.
+        // It is distinct from FluentGpu.WindowsApi's OS notification Toast (Action Center), which lives in a different
+        // namespace and surfaces at the OS level.
+        ControlExample.Build("In-app toast vs OS notification",
+            new BoxEl
+            {
+                Direction = 1,
+                Gap = 4f,
+                Children =
+                [
+                    new TextEl("This Toast (FluentGpu.Controls) shows a card inside the app window.") { Size = 13f, Color = Tok.TextSecondary },
+                    new TextEl("For an OS-level notification (Action Center), use FluentGpu.WindowsApi.Notifications.Toast — a different type in a different namespace.") { Size = 13f, Color = Tok.TextSecondary },
+                ],
+            },
+            description: "Two unrelated APIs share the name Toast: the in-app card here, and the OS notification builder in the Windows pillar."));
 }
 
 sealed class ItemsViewPage : Component

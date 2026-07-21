@@ -281,6 +281,46 @@ new NavigationView {
 };   // adapts Expanded/Compact/Minimal by Viewport.Size width (1008 / 641 thresholds)
 ```
 
+### Overlays: Popup, Flyout & Toast
+
+All three ride the shared `OverlayHost` (flip/nudge placement, live-anchor follow, focus save/restore, light-dismiss) —
+mount one `OverlayHost.Create(root)` near the app root; resolve the service inside with `UseContext(Overlay.Service)`.
+
+```csharp
+// Controlled popup — open state owned by a Signal<bool> (the controlled-input contract). Light-dismiss / Escape write
+// the signal BACK to false and fire onOpenChanged(false) once; a programmatic close (you set isOpen=false) never echoes.
+var open = UseSignal(false);
+Popup.Create(Button.Standard("Show", () => open.Value = !open.Value), () => body, open,
+             onOpenChanged: v => …, placement: FlyoutPlacement.BottomLeft);
+
+// Event-driven sugar (the ContextMenu.Attach precedent): chains OnClick (never clobbers) to open a content flyout.
+var svc = UseContext(Overlay.Service);
+Flyout.Attach(myBoxEl, svc, () => body);   // re-click closes via the light-dismiss scrim (no toggle state)
+```
+
+**In-app toasts** live in a top-Z lane every `OverlayHost` auto-mounts (dormant when empty); the static API needs no
+wiring:
+
+```csharp
+ToastHandle h = Toast.Show("Playlist saved.", new ToastOptions {
+    Severity = InfoBarSeverity.Success,   // reuses InfoBar's severity visuals (shared SeverityVisuals — can't drift)
+    Title = "Saved", DurationMs = 5000,   // 0 = sticky; auto-dismiss rides the host frame-clock timer queue
+    ActionLabel = "Undo", OnAction = Undo, Closable = true });
+Toast.MaxVisible = 3;   // stacked newest-nearest-edge, 8px gap; overflow waits in a FIFO queue. Toast.Placement = BottomRight.
+Toast.CloseAll();       // hovering the strip PAUSES the remaining auto-dismiss time; enter/exit ride the Standard motion tokens.
+```
+
+> **Naming:** `FluentGpu.Controls.Toast` is the **in-app** toast (a card in the app window). It is a different type from
+> `FluentGpu.WindowsApi.Notifications.Toast`, which raises an **OS notification** (Action Center) — different namespace,
+> different surface. Alias one (`using OsToast = FluentGpu.WindowsApi.Notifications.Toast;`) when a file uses both.
+
+**Anchor pinning** (`PopupOptions.PinsAnchor`, default true for anchored flyouts): while such an overlay is open its
+anchor's auto-hide *scope* is pinned — auto-hide logic (a chrome idle-hide, a ToolTip dismissal timer) consults
+`svc.IsAnchorPinned(scopeNode)` (true when an open pinning overlay is anchored inside that scope) and subscribes to
+`svc.PinEpoch` for reactivity, so a picker opened from inside an auto-hiding surface keeps it alive. **Submenu
+safe-triangle**: a `MenuFlyout` cascade stays open while the pointer travels from the opening item toward the submenu's
+near edge (the WinUI/macOS hover-intent polygon), so a passing sibling hover doesn't close it.
+
 ### Virtualization (10k+ rows, bounded live nodes)
 ```csharp
 Virtual.List(int itemCount, float itemExtent, Func<int,Element> renderItem, Func<int,string>? keyOf = null, int overscan = 4)

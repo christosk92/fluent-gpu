@@ -61,6 +61,19 @@ public readonly record struct PopupOptions(
     PopupChrome Chrome = PopupChrome.Flyout)
 {
     private readonly bool _unconstrained;
+    private readonly bool _noPinAnchor;
+
+    /// <summary>The anchor-liveness contract (WS3 P6): while this overlay is open its anchor's auto-hide SCOPE is
+    /// PINNED — auto-hide logic (a chrome idle-hide, a ToolTipClock-style dismissal) consults
+    /// <see cref="IOverlayService.IsAnchorPinned"/> and keeps the scope visible while a descendant of it anchors an
+    /// open pinning overlay (a picker flyout opened from a transport button keeps the media chrome up). Default TRUE
+    /// for anchored flyouts; stored inverted so <c>default(PopupOptions)</c> stays pinned. Rect-anchored
+    /// (pointer-placement) opens carry no anchor node, so pinning is naturally inert for them.</summary>
+    public bool PinsAnchor
+    {
+        get => !_noPinAnchor;
+        init => _noPinAnchor = !value;
+    }
 
     /// <summary>Keep the invoker focused when the popup opens while still installing a focus scope. Pointer-opened
     /// context menus use this; the first Tab then enters the scoped menu, whereas keyboard-opened menus focus their
@@ -122,6 +135,18 @@ public interface IOverlayService
     void CloseTop();
     void CloseAll();
     bool AnyOpen { get; }
+
+    /// <summary>Anchor-liveness consult (WS3 P6 <see cref="PopupOptions.PinsAnchor"/>): true when some open,
+    /// non-closing overlay with <see cref="PopupOptions.PinsAnchor"/> is anchored to <paramref name="scope"/> or to a
+    /// node inside its subtree. Auto-hide logic (a chrome idle-hide timer, ToolTipClock-style dismissal) consults this
+    /// so a flyout opened from within an auto-hiding scope keeps the scope alive while it is open. Rides
+    /// <see cref="PinEpoch"/> for reactivity (a consulting effect subscribes to that + calls this).</summary>
+    bool IsAnchorPinned(NodeHandle scope);
+
+    /// <summary>Bumps whenever the set of open pinning anchors changes (open/close of a <see cref="PopupOptions.PinsAnchor"/>
+    /// overlay). A consuming effect subscribes to this and re-reads <see cref="IsAnchorPinned"/> — the engine-visible
+    /// counter half of the anchor-liveness contract.</summary>
+    IReadSignal<int> PinEpoch { get; }
 }
 
 /// <summary>Ambient overlay service, provided by the nearest <see cref="OverlayHost"/>.</summary>
@@ -148,6 +173,9 @@ internal sealed class NullOverlayService : IOverlayService
     public void CloseTop() { }
     public void CloseAll() { }
     public bool AnyOpen => false;
+    public bool IsAnchorPinned(NodeHandle scope) => false;
+    private static readonly Signal<int> _noPinEpoch = new(0);
+    public IReadSignal<int> PinEpoch => _noPinEpoch;
 }
 
 internal sealed class OverlayEntry
@@ -176,6 +204,7 @@ internal sealed class OverlayEntry
     public DismissBehavior DismissBehavior;
     public PopupChrome Chrome;
     public bool ConstrainToRootBounds = true;
+    public bool PinsAnchor = true;    // WS3 P6 anchor-liveness: pins the anchor's auto-hide scope while open
     public int ParentId = -1;         // nested flyout chain: the entry whose subtree contains this entry's anchor
     public int PopupWindowToken = -1; // host popup-window lease for an out-of-bounds popup (-1 = none/in-window)
     public OverlayPhase Phase;
@@ -197,6 +226,7 @@ internal sealed class OverlayServiceImpl : IOverlayService
     internal const float RawFadeMs = 167f;
 
     private readonly Signal<int> _version;     // bump → OverlayHost re-renders
+    private readonly Signal<int> _pinEpoch = new(0);   // bump → anchor-pin set changed (auto-hide consumers subscribe)
     private int _nextId;
     public readonly List<OverlayEntry> Entries = new(4);
 
@@ -261,6 +291,7 @@ internal sealed class OverlayServiceImpl : IOverlayService
             DismissBehavior = options.DismissBehavior,
             Chrome = options.Chrome,
             ConstrainToRootBounds = options.ConstrainToRootBounds,
+            PinsAnchor = options.PinsAnchor,
             SeamOffsetY = options.SeamOffsetY,
             PassThrough = options.PassThrough,
             AnchorOffsetX = options.AnchorOffsetX,
@@ -270,8 +301,28 @@ internal sealed class OverlayServiceImpl : IOverlayService
         };
         handle.CloseAction = cause => BeginClose(entry, cause);
         Entries.Add(entry);
+        if (entry.PinsAnchor) _pinEpoch.Value = _pinEpoch.Peek() + 1;
         Bump();
         return handle;
+    }
+
+    // ── Anchor-liveness (WS3 P6 PopupOptions.PinsAnchor) ──────────────────────────────────────────────────────────────
+    public IReadSignal<int> PinEpoch => _pinEpoch;
+
+    /// <summary>True when an open, non-closing, PinsAnchor overlay is anchored to <paramref name="scope"/> or to a node
+    /// inside its subtree (walk the anchor up its parent chain to <paramref name="scope"/>). Zero-alloc; O(entries×depth).</summary>
+    public bool IsAnchorPinned(NodeHandle scope)
+    {
+        if (scope.IsNull || Scene is not { } scene) return false;
+        foreach (var e in Entries)
+        {
+            if (e.Phase == OverlayPhase.Closing || !e.PinsAnchor) continue;
+            var a = e.Anchor();
+            if (a.IsNull || !scene.IsLive(a)) continue;
+            for (var n = a; !n.IsNull; n = scene.Parent(n))
+                if (n == scope) return true;
+        }
+        return false;
     }
 
     /// <summary>Nested-flyout chain: the parent is the open entry whose wrapper subtree contains this entry's anchor
@@ -342,6 +393,7 @@ internal sealed class OverlayServiceImpl : IOverlayService
         e.CloseCause = cause;
         e.Phase = OverlayPhase.Closing;
         e.Handle.IsOpen = false;
+        if (e.PinsAnchor) _pinEpoch.Value = _pinEpoch.Peek() + 1;   // close START unpins the anchor scope
 
         // The focus trap lifts when the close STARTS (the WinUI DialogShowing → DialogHidden Tab-cycle teardown:
         // ContentDialog_themeresources.xaml:123 sets BackgroundElement.TabFocusNavigation=Cycle only while showing),
@@ -1058,8 +1110,12 @@ public sealed class OverlayHost : Component
         // the live window each frame. A tall popup still overflows freely: every node from the root down is sized by
         // Run(root, window) + cross-stretch, so the stack stays window-sized regardless of a tall child (no page reflow).
         // Reproduced + guarded by the real-Win32 resize harness; do not re-add the pin.
+        // Toast lane (WS3 P6): auto-mount one top-Z, hit-test-transparent toast lane above the popup stack, always
+        // present (index-stable, so opening/closing a popup never remounts it) and registering itself as the
+        // process-default for the static Toast API. Dormant (an inert full-bleed pass-through) when no toasts are live.
+        var inner = Ui.ZStack(layers.ToArray()) with { Grow = 1 };
         return Ctx.Provide(Overlay.Service, (IOverlayService)svc,
-            Ui.ZStack(layers.ToArray()) with { Grow = 1 });
+            Ui.ZStack(inner, Embed.Comp(() => new ToastHost())) with { Grow = 1 });
     }
 
     /// <summary>Cascading-menu overlap (CascadingMenuHelper.cpp:678 — sub-menu lands at owner edge − 4): nudge the
