@@ -98,7 +98,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // blur group is an opacity group with Sigma > 0: its RT is separable-Gaussian-blurred before the flat composite.
     private const int NoopLayerKind = -1;
     private readonly List<int> _layerKinds = new(8);
-    private readonly List<(int Slot, PushLayerCmd L, ulong PinHash)> _opacityGroups = new(4);
+    private readonly record struct LayerGroup(int Slot, PushLayerCmd L, ulong PinHash,
+        OpacityLayerCompositor.LocalBlurSurface LocalBlur);
+    private readonly List<LayerGroup> _opacityGroups = new(4);
 
     public int LastBlurCacheHit => _blurCacheHit;
     public int LastBlurCacheMiss => _blurCacheMiss;
@@ -143,6 +145,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private RECT _desiredScissor;
     private bool _scissorValid;
     private bool _desiredScissorValid;
+    private int _targetOriginX, _targetOriginY;
+    private int _targetWidth, _targetHeight;
     private int _framePipeBinds, _framePipeBindsSkipped;      // PSO/shared-state binds vs runs that reused bound state
     private int _frameScissorSets, _frameScissorSkipped;      // RSSetScissorRects recorded vs deduped
     private int _frameSegments, _frameRuns;                   // FlushSegment calls / painter-order runs replayed
@@ -256,7 +260,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _acrylic = new AcrylicCompositor();
         _acrylic.Init(_device);
         _opacity = new OpacityLayerCompositor();
-        _opacity.Init(_device);
+        _opacity.Init(_device, _queue);
         _glyphs = new GlyphRenderer();
         _glyphs.SetLivenessSource(_strings);   // reclaimed text ids → prompt run-cache eviction (quad-array recycling)
         _glyphs.Init(_device);
@@ -265,7 +269,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _imagePipe = new ImagePipeline();
         _imagePipe.Init(_device);
         _bakedBlur = new BakedBlurCompositor();
-        _bakedBlur.Init(_device);
+        _bakedBlur.Init(_device, _queue);
     }
 
     private static void Check(HRESULT hr, string what)
@@ -916,6 +920,13 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         Diag.Set("d3d12", "acrylicPoolRts", _acrylic?.PooledRtCount ?? 0);    // live pooled layer RTs (steady state: 2 while a surface is open)
         Diag.Set("d3d12", "opacityGroups", _opacity?.GroupsThisFrame ?? 0);   // flat opacity groups composited this frame
         Diag.Set("d3d12", "opacityPoolRts", _opacity?.PooledRtCount ?? 0);    // live pooled group RTs (≈ nesting depth while fading)
+        Diag.Set("d3d12", "blurLayers", _opacity?.BlurLayersThisFrame ?? 0);
+        Diag.Set("d3d12", "blurRegionPx", _opacity?.BlurRegionPixelsThisFrame ?? 0);
+        Diag.Set("d3d12", "blurWorkPx", _opacity?.BlurWorkPixelsThisFrame ?? 0);
+        Diag.Set("d3d12", "blurCompositePx", _opacity?.BlurCompositePixelsThisFrame ?? 0);
+        Diag.Set("d3d12", "blurClearPx", _opacity?.BlurClearPixelsThisFrame ?? 0);
+        Diag.Set("d3d12", "blurSpanGpuMs", _opacity?.LastBlurGpuMs ?? 0d);
+        Diag.Set("d3d12", "blurRtCreates", _opacity?.RtCreatesThisFrame ?? 0);
         Diag.Set("d3d12", "blurCacheHit", _blurCacheHit);                     // blur layers served from the cross-frame pin cache this frame
         Diag.Set("d3d12", "blurCacheMiss", _blurCacheMiss);                   // blur layers re-rendered+re-blurred (content/position/σ changed)
         Diag.Set("d3d12", "blurHoldHit", _blurHoldHit);
@@ -1282,8 +1293,30 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
 
     private void SetFullViewport()
     {
+        _targetOriginX = 0; _targetOriginY = 0;
+        _targetWidth = (int)_w; _targetHeight = (int)_h;
         D3D12_VIEWPORT vpd = new() { TopLeftX = 0, TopLeftY = 0, Width = _w, Height = _h, MinDepth = 0, MaxDepth = 1 };
         _cmdList->RSSetViewports(1, &vpd);
+        SetFullScissor();
+    }
+
+    private void SetLocalBlurViewport(in OpacityLayerCompositor.LocalBlurSurface surface)
+    {
+        _targetOriginX = surface.OriginX; _targetOriginY = surface.OriginY;
+        _targetWidth = surface.UsedW; _targetHeight = surface.UsedH;
+        // Geometry shaders still emit clip positions against the logical full-canvas dimensions. Shifting the physical
+        // viewport maps absolute screen pixels into the local texture without rewriting any recorded transforms.
+        D3D12_VIEWPORT vp = new()
+        {
+            TopLeftX = -surface.OriginX,
+            TopLeftY = -surface.OriginY,
+            Width = _w,
+            Height = _h,
+            MinDepth = 0,
+            MaxDepth = 1,
+        };
+        _cmdList->RSSetViewports(1, &vp);
+        _scissorValid = false;
         SetFullScissor();
     }
 
@@ -1297,12 +1330,23 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // command-list state — only invalidated when a compositor pass sets its own scissor, via InvalidateCmdState).
     private void SetScissorRect(RECT sc)
     {
-        if (_scissorValid && sc.left == _lastScissor.left && sc.top == _lastScissor.top
-            && sc.right == _lastScissor.right && sc.bottom == _lastScissor.bottom) { _frameScissorSkipped++; return; }
-        _lastScissor = sc;
+        int tw = _targetWidth > 0 ? _targetWidth : (int)_w;
+        int th = _targetHeight > 0 ? _targetHeight : (int)_h;
+        RECT targetScissor = new()
+        {
+            left = Math.Clamp(sc.left - _targetOriginX, 0, tw),
+            top = Math.Clamp(sc.top - _targetOriginY, 0, th),
+            right = Math.Clamp(sc.right - _targetOriginX, 0, tw),
+            bottom = Math.Clamp(sc.bottom - _targetOriginY, 0, th),
+        };
+        if (targetScissor.right < targetScissor.left) targetScissor.right = targetScissor.left;
+        if (targetScissor.bottom < targetScissor.top) targetScissor.bottom = targetScissor.top;
+        if (_scissorValid && targetScissor.left == _lastScissor.left && targetScissor.top == _lastScissor.top
+            && targetScissor.right == _lastScissor.right && targetScissor.bottom == _lastScissor.bottom) { _frameScissorSkipped++; return; }
+        _lastScissor = targetScissor;
         _scissorValid = true;
         _frameScissorSets++;
-        _cmdList->RSSetScissorRects(1, &sc);
+        _cmdList->RSSetScissorRects(1, &targetScissor);
     }
 
     private RECT ToScissor(in RectF r)
@@ -1643,6 +1687,21 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     // or an unrecognized op. `pos` is already past the PushLayerCmd, i.e. at the first subtree op.
                     bool holdIfCached = L.Kind == (int)LayerKind.Blur && L.BlurCachePolicy != (int)BlurCachePolicy.Normal;
                     bool skipOnHoldMiss = L.BlurCachePolicy == (int)BlurCachePolicy.HoldOrSkipOnMiss;
+                    // An animated sigma is deliberately not entered into the stationary pin cache. When the subtree is
+                    // flat/walkable (no nested layers) render it into a clip-aware region target instead of clearing two
+                    // full canvases per stagger row. Unsupported/nested content falls through to the exact canvas path.
+                    if (L.Kind == (int)LayerKind.Blur && L.BlurSigma > 0f && L.BlurIsTransient != 0
+                        && _opacityGroups.Count == 0
+                        && BlurPinKey.TryCompute(drawList, pos, in L, out _, out _)
+                        && _opacity.TryAcquireLocalBlur(_cmdList, _fenceValue + 1, in L, _frameScale, out var localBlur))
+                    {
+                        _opacityGroups.Add(new LayerGroup(localBlur.Slot, L, 0UL, localBlur));
+                        _layerKinds.Add(L.Kind);
+                        InvalidateCmdState();
+                        SetLocalBlurViewport(in localBlur);
+                        ApplyCurrentScissor();
+                        continue;
+                    }
                     if (L.Kind == (int)LayerKind.Blur && L.BlurSigma > 0f
                         && BlurPinKey.TryCompute(drawList, pos, in L, out ulong bhash, out int afterPop))
                     {
@@ -1664,7 +1723,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                             && !(L.InMotion == 0 && _opacity.PinOriginDiffers(pin, in L, _frameScale)))
                         {
                             // HIT: composite the cached blur over the enclosing target; skip the subtree + its PopLayer.
-                            if (_opacityGroups.Count > 0) _opacity.Bind(_cmdList, _opacityGroups[^1].Slot);
+                            if (_opacityGroups.Count > 0) BindOpacityGroupTarget(_opacityGroups[^1]);
                             else BindLayerTopTarget(directToBackBuffer, backRtv);
                             _opacity.CompositePinnedBlur(_cmdList, pin, L.GroupAlpha, in L, _frameScale, CurrentScissorRect());
                             InvalidateCmdState();   // the composite bound its own PSO/heap + viewport/scissor
@@ -1687,7 +1746,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                             // rest the clamp size is stable, so a clamped row mints once then HITS — the fix for a
                             // stationary edge-clamped blur re-blurring every submit. pinHash 0 ⇒ pure transient.
                             ulong pinTag = (regionClamped && L.InMotion != 0) ? 0UL : bhash;
-                            _opacityGroups.Add((pslot, L, pinTag));
+                            _opacityGroups.Add(new LayerGroup(pslot, L, pinTag, default));
                             _layerKinds.Add(L.Kind);
                             _blurCacheMiss++;
                             continue;
@@ -1725,7 +1784,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                         }
                     }
                     int slot = _opacity.Acquire(_cmdList, _fenceValue + 1, clearRect);
-                    _opacityGroups.Add((slot, L, 0UL));
+                    _opacityGroups.Add(new LayerGroup(slot, L, 0UL, default));
                     _layerKinds.Add(L.Kind);
                 }
                 else
@@ -1768,7 +1827,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                         dmgX * _frameScale, dmgY * _frameScale, dmgW * _frameScale, dmgH * _frameScale,
                         acrylicClip, backdropSourceId, acrylicTarget, acrylicRtv);
                     InvalidateCmdState();   // the acrylic passes bound their own PSOs/heap + viewport/scissor
-                    if (_opacityGroups.Count > 0) _opacity.Bind(_cmdList, _opacityGroups[^1].Slot);   // back to the open group RT
+                    if (_opacityGroups.Count > 0) BindOpacityGroupTarget(_opacityGroups[^1]);   // back to the open group RT
                     ApplyCurrentScissor();
                     _layerKinds.Add((int)LayerKind.Acrylic);
                 }
@@ -1783,19 +1842,28 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 if ((kind == (int)LayerKind.Opacity || kind == (int)LayerKind.Blur || kind == (int)LayerKind.EdgeFade) && _opacityGroups.Count > 0)
                 {
                     FlushSegment(lw, lh);                   // finish the subtree into the group RT
-                    var (slot, gl, pinHash) = _opacityGroups[^1];
+                    LayerGroup closed = _opacityGroups[^1];
+                    int slot = closed.Slot;
+                    PushLayerCmd gl = closed.L;
+                    ulong pinHash = closed.PinHash;
+                    OpacityLayerCompositor.LocalBlurSurface localSurface = closed.LocalBlur;
+                    bool localBlur = localSurface.UsedW > 0;
                     _opacityGroups.RemoveAt(_opacityGroups.Count - 1);
                     // Self-blur (or edge-fade-with-blur): gaussian-blur the group RT in place (leaves it readable); else BeginRead.
-                    if ((kind == (int)LayerKind.Blur || kind == (int)LayerKind.EdgeFade) && gl.BlurSigma > 0f)
+                    if (localBlur)
+                        _opacity.BlurLocalInPlace(_cmdList, in localSurface, gl.BlurSigma, _fenceValue + 1);
+                    else if ((kind == (int)LayerKind.Blur || kind == (int)LayerKind.EdgeFade) && gl.BlurSigma > 0f)
                         _opacity.BlurInPlace(_cmdList, slot, gl.BlurSigma, _fenceValue + 1, in gl, _frameScale);
                     else _opacity.BeginRead(_cmdList, slot);
                     InvalidateCmdState();   // BlurInPlace set its own scissor/PSO — MUST invalidate before BindLayerTopTarget's SetFullViewport dedup
                     // Composite over the UNDERLYING target: the enclosing group's RT, or the top-level target (canvas, or
                     // the back buffer directly on the FG_BACKBUFFER_LAYERS path).
-                    if (_opacityGroups.Count > 0) _opacity.Bind(_cmdList, _opacityGroups[^1].Slot);
+                    if (_opacityGroups.Count > 0) BindOpacityGroupTarget(_opacityGroups[^1]);
                     else BindLayerTopTarget(directToBackBuffer, backRtv);
                     ApplyCurrentScissor();
-                    if (kind == (int)LayerKind.EdgeFade) _opacity.EdgeFadeComposite(_cmdList, slot, in gl, _frameScale, CurrentScissorRect());
+                    if (localBlur) _opacity.CompositeLocalBlur(_cmdList, in localSurface, gl.GroupAlpha, CurrentScissorRect());
+                    else if (kind == (int)LayerKind.EdgeFade) _opacity.EdgeFadeComposite(_cmdList, slot, in gl, _frameScale, CurrentScissorRect());
+                    else if (kind == (int)LayerKind.Blur) _opacity.CompositeBlur(_cmdList, slot, gl.GroupAlpha, in gl, _frameScale, CurrentScissorRect());
                     else _opacity.Composite(_cmdList, slot, gl.GroupAlpha);
                     // Blur-cache MISS (pinHash != 0): COPY the just-composited blurred region out of the scratch into a small
                     // retained pin for next frame's FindPin. The scratch is ALWAYS released (the pin is a separate small RT).
@@ -1812,15 +1880,23 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // Defensive: a malformed stream that left groups open still composites them (full alpha chain preserved).
         while (_opacityGroups.Count > 0)
         {
-            var (slot, gl, pinHash) = _opacityGroups[^1];
+            LayerGroup closed = _opacityGroups[^1];
+            int slot = closed.Slot;
+            PushLayerCmd gl = closed.L;
+            ulong pinHash = closed.PinHash;
+            OpacityLayerCompositor.LocalBlurSurface localSurface = closed.LocalBlur;
+            bool localBlur = localSurface.UsedW > 0;
             _opacityGroups.RemoveAt(_opacityGroups.Count - 1);
-            if (gl.BlurSigma > 0f) _opacity.BlurInPlace(_cmdList, slot, gl.BlurSigma, _fenceValue + 1, in gl, _frameScale);
+            if (localBlur) _opacity.BlurLocalInPlace(_cmdList, in localSurface, gl.BlurSigma, _fenceValue + 1);
+            else if (gl.BlurSigma > 0f) _opacity.BlurInPlace(_cmdList, slot, gl.BlurSigma, _fenceValue + 1, in gl, _frameScale);
             else _opacity.BeginRead(_cmdList, slot);
             InvalidateCmdState();   // as in the main PopLayer branch: BlurInPlace bypassed the scissor cache
-            if (_opacityGroups.Count > 0) _opacity.Bind(_cmdList, _opacityGroups[^1].Slot);
+            if (_opacityGroups.Count > 0) BindOpacityGroupTarget(_opacityGroups[^1]);
             else BindLayerTopTarget(directToBackBuffer, backRtv);
             ApplyCurrentScissor();
-            if (gl.Kind == (int)LayerKind.EdgeFade) _opacity.EdgeFadeComposite(_cmdList, slot, in gl, _frameScale, CurrentScissorRect());
+            if (localBlur) _opacity.CompositeLocalBlur(_cmdList, in localSurface, gl.GroupAlpha, CurrentScissorRect());
+            else if (gl.Kind == (int)LayerKind.EdgeFade) _opacity.EdgeFadeComposite(_cmdList, slot, in gl, _frameScale, CurrentScissorRect());
+            else if (gl.Kind == (int)LayerKind.Blur) _opacity.CompositeBlur(_cmdList, slot, gl.GroupAlpha, in gl, _frameScale, CurrentScissorRect());
             else _opacity.Composite(_cmdList, slot, gl.GroupAlpha);
             if (pinHash != 0) _opacity.RetainPinFromScratch(_cmdList, slot, pinHash, in gl, _frameScale, _fenceValue + 1);
             _opacity.Release(slot);
@@ -1828,6 +1904,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _layerKinds.Clear();
         _clipStack.Clear();
         _roundedClipStack.Clear();
+        _opacity.EndFrame(_cmdList);
         if (!directToBackBuffer) _acrylic.BlitToBackBuffer(_cmdList, backRtv);   // back-buffer-direct path already drew there
     }
 
@@ -1836,7 +1913,15 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private void BindLayerTopTarget(bool directToBackBuffer, D3D12_CPU_DESCRIPTOR_HANDLE backRtv)
     {
         if (directToBackBuffer) { _cmdList->OMSetRenderTargets(1, &backRtv, BOOL.FALSE, null); SetFullViewport(); }
-        else _acrylic!.BindCanvas(_cmdList);
+        else { _acrylic!.BindCanvas(_cmdList); SetFullViewport(); }
+    }
+
+    private void BindOpacityGroupTarget(LayerGroup group)
+    {
+        _opacity!.Bind(_cmdList, group.Slot);
+        OpacityLayerCompositor.LocalBlurSurface localSurface = group.LocalBlur;
+        if (localSurface.UsedW > 0) SetLocalBlurViewport(in localSurface);
+        else SetFullViewport();
     }
 
     // The self-blur pin cache's position-independent content key is computed by FluentGpu.Render.BlurPinKey.TryCompute
@@ -2006,7 +2091,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     public double LastFenceWaitMs => _lastFenceWaitMs;
 
     /// <inheritdoc/>
-    public bool HasPendingUploads => (_imageTextures?.HasPendingUploads ?? false) || (_bakedBlurQueue?.HasPending ?? false);
+    public bool HasPendingUploads => _imageTextures?.HasPendingUploads ?? false;
 
     public void SuppressLatencyWaitOnce() => _skipLatencyOnce = true;
 

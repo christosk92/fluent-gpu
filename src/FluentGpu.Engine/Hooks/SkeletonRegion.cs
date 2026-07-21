@@ -162,6 +162,13 @@ internal static class SkeletonReveal
             case SkelReveal.StaggerRows:
             {
                 NodeHandle rowParent = UnwrapTransparentBoundaries(scene, realRoot);
+                // ItemsView adds two structural wrappers before its realized rows:
+                // Component -> host Box -> VirtualList viewport -> ContentNode -> row roots.
+                // Staggering the viewport's one direct child animates the entire list as a single slab. Follow a
+                // single-child chain only when it leads to a virtual viewport, then seed the realized row roots. This
+                // preserves the ordinary direct-child contract for non-virtual stacks and keeps virtualization intact.
+                var virtualRows = FindVirtualRows(scene, rowParent);
+                if (!virtualRows.IsNull) rowParent = virtualRows;
                 int n = 0;
                 for (var c = scene.FirstChild(rowParent); !c.IsNull; c = scene.NextSibling(c)) n++;
                 if (n == 0) { anim.SoftReveal(realRoot); break; }
@@ -188,6 +195,20 @@ internal static class SkeletonReveal
             n = child;
         }
         return n;
+    }
+
+    static NodeHandle FindVirtualRows(SceneStore scene, NodeHandle root)
+    {
+        var n = root;
+        for (int depth = 0; depth < 8 && scene.IsLive(n); depth++)
+        {
+            if (scene.TryGetScroll(n, out var scroll) && scroll.ItemCount > 0
+                && !scroll.ContentNode.IsNull && scene.IsLive(scroll.ContentNode))
+                return scroll.ContentNode;
+            if (scene.ChildCount(n) != 1) break;
+            n = scene.FirstChild(n);
+        }
+        return NodeHandle.Null;
     }
 
     static bool IsTransparentBoundary(ushort typeId) => typeId is

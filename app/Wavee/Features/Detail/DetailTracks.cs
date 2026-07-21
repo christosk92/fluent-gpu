@@ -503,10 +503,10 @@ sealed class TrackList : Component
         // The tracks stream in via the engine's skeleton boundary: while the model is Pending it shows shimmer rows the
         // engine DERIVES from the real Row(EmptyTrack) template (ONE definition — no hand-written shimmer, no drift); on
         // Ready it reveals the real virtualized list.
-        // SkelReveal.None: the ItemsView owns its entrance (per-row ItemCollectionTransition adds); the engine lingers
-        // the shimmer across that entrance so the gray rows cross-dissolve INTO the real rows at the same positions —
-        // no shimmer→empty→rows gap, and no exit-timing to hand-tune here.
-        Element list = Skel.Region(_full, () => RowsShimmer(set, tracks, rowH), _ => RealList(), reveal: SkelReveal.None, smoothResize: false);
+        // StaggerRows follows the ItemsView's virtual viewport to the currently realized row roots. That gives albums,
+        // playlists, singles and liked songs one shared per-visible-row blur-rise while leaving cold realization and
+        // recycling untouched; newly realized overscan/scroll rows do not replay the navigation reveal.
+        Element list = Skel.Region(_full, () => RowsShimmer(set, tracks, rowH), _ => RealList(), reveal: SkelReveal.StaggerRows, smoothResize: false);
 
         // Key the list by tier + density + filter → any of those REMOUNTS it (a clean, shape-stable slot template with
         // the right column set / row height / filtered window). Sort is NOT in the key — each bound row re-skins itself

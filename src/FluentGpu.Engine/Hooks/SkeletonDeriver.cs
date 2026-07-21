@@ -59,6 +59,13 @@ internal static class SkeletonDeriver
                 if (float.IsNaN(w) && !float.IsNaN(b.MinWidth)) w = b.MinWidth;
                 if (float.IsNaN(h) && !float.IsNaN(b.MinHeight)) h = b.MinHeight;
 
+                // A statically invisible leaf is chrome reserved for another interaction state (the canonical case is
+                // MediaCard's Grow=1 hover plate: Opacity=0, HoverOpacity=1). It participates in the real ZStack but is
+                // not loading content. Turning it into a default-height bar leaves a floating stripe over every card.
+                // Preserve its slot exactly like SkeletonMode.Off, without reading a bound opacity thunk.
+                if (b.Opacity.ValueOr(1f) <= 0.001f)
+                    return Spacer(b, s);
+
                 // Empty conditional branches (`condition ? real : new BoxEl()`) and paint-only layers such as a hero
                 // gradient are not content. They must remain zero/transparent; mapping them to the default 14px bar
                 // creates phantom full-width rows, while a full-size gradient becomes a second image-sized slab.

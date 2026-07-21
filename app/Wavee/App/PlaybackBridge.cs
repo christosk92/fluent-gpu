@@ -40,6 +40,14 @@ public sealed class PlaybackBridge
     long _queueRev;
     Action? _playbackErrorAction;
     long _playbackErrorActionToken;
+    // Seek latch (#2): a seek is applied by the engine ASYNCHRONOUSLY, so a stale pre-seek PositionTick can land between
+    // the optimistic paint and the engine catching up — snapping the slider back to the old spot for a frame. While the
+    // latch is live we drop incoming position ticks that are still far from the target, and release it once a tick lands
+    // near the target (the seek took) or the window expires. UI-thread only (every writer is post-marshalled).
+    long _seekLatchTargetMs = -1;
+    long _seekLatchDeadlineTick;
+    const long SeekLatchWindowMs = 1200;   // max time to suppress stale ticks after a seek
+    const long SeekLatchToleranceMs = 750;  // a tick within this of the target = the seek landed → release
     // OS media surfaces (SMTC: lock screen, now-playing flyout, hardware media keys) mirrored from the unified state below.
     // Null when the platform refuses it or before Activate; every push is then a no-op.
     SystemMediaControlsBridge? _smtc;
@@ -364,8 +372,23 @@ public sealed class PlaybackBridge
         QueueRevision.Value = ++_queueRev;
     }
 
+    /// <summary>Arm the seek latch (#2): call the instant a seek is issued from the UI so stale pre-seek position ticks are
+    /// suppressed until the engine catches up. UI-thread only. The caller also optimistically writes PositionMs/Frac.</summary>
+    public void NoteSeek(long targetMs)
+    {
+        _seekLatchTargetMs = targetMs;
+        _seekLatchDeadlineTick = Environment.TickCount64 + SeekLatchWindowMs;
+    }
+
     void PushPosition(long ms)
     {
+        if (_seekLatchTargetMs >= 0)
+        {
+            bool landed = Math.Abs(ms - _seekLatchTargetMs) <= SeekLatchToleranceMs;
+            bool expired = Environment.TickCount64 >= _seekLatchDeadlineTick;
+            if (!landed && !expired) return;   // stale pre-seek tick → keep the optimistic target on screen
+            _seekLatchTargetMs = -1;           // seek took (or gave up waiting) → resume normal position flow
+        }
         PositionMs.Value = ms;
         long dur = DurationMs.Value;
         PositionFrac.Value = dur > 0 ? Math.Clamp(ms / (float)dur, 0f, 1f) : 0f;

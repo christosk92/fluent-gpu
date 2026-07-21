@@ -615,6 +615,7 @@ sealed class LyricsView : Component
         var b = _b; var doc = _doc;
         if (b is null || doc is null || (uint)index >= (uint)doc.Lines.Count) return;
         long ms = doc.Lines[index].StartMs;
+        b.NoteSeek(ms);     // arm the seek latch: suppress stale pre-seek position ticks (#2)
         b.PositionMs.Value = ms;
         RebaseClock(ms);    // seed all clock fields; _lastAuthMs=ms keeps OnFrame from re-treating our own jump as a seek
         _scrollSnapped = false;

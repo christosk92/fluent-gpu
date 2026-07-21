@@ -57,6 +57,7 @@ public sealed class AudioFeedThread : IDisposable
     private readonly int _blockFrames;
     private readonly int _ringFrames;
     private readonly int _targetAheadFrames;
+    private readonly int _blockPeriodMs;
 
     // The published ring table (spec §7.9/§12): an immutable snapshot the RT thread + worker Volatile-read; rebuilt under
     // _tableLock by the control thread (install) and the worker (retire-removal) — NEVER touched by the RT thread.
@@ -95,6 +96,7 @@ public sealed class AudioFeedThread : IDisposable
         _session = session;
         _rt = rt ?? NullRtThreadCharacteristics.Instance;
         _blockFrames = Math.Clamp(blockFrames, 1, session.Format.SampleRate);
+        _blockPeriodMs = Math.Max(1, (int)Math.Round(_blockFrames * 1000.0 / session.Format.SampleRate));
         _ringFrames = Math.Max(ringFrames, targetAheadFrames + blockFrames);
         _targetAheadFrames = targetAheadFrames;
         session.AttachFeed(this);
@@ -327,9 +329,16 @@ public sealed class AudioFeedThread : IDisposable
         using var _ = _rt.Enter();   // MMCSS Pro-Audio for the lifetime of the RT thread
         while (_run)
         {
-            try { FeedOnce(); }
+            int rendered = 0;
+            try { rendered = FeedOnce(); }
             catch (Exception e) { RecordFault(ref _rtFaults, e); }
-            Thread.Yield();          // sink-write backpressure paces us; no wall-clock sleep on the RT path
+
+            // A live blocking endpoint (WASAPI) is the clock: its buffer-full wait INSIDE FeedOnce paces this thread to the
+            // device and avoids a busy spin. Adding a wall-clock period sleep on TOP of that double-paces it — the timer
+            // granularity overshoots every period, so the loop settles below real time and the device buffer never fills
+            // (chronic near-empty → stutter + slow). Sleep ONLY when nothing was rendered (paused / inert / headless /
+            // device-loss sinks return instantly) so the MMCSS thread doesn't spin a core; on the live path the sink paces.
+            if (rendered <= 0) Thread.Sleep(_blockPeriodMs);
         }
     }
 
@@ -339,7 +348,9 @@ public sealed class AudioFeedThread : IDisposable
         {
             try { WorkerPumpOnce(); }
             catch (Exception e) { RecordFault(ref _workerFaults, e); }
-            Thread.Yield();
+            // PumpAhead fills every ring to a multi-period target in one pass. Polling once per half-period is enough to
+            // replenish it while avoiding the full-ring busy spin measured on FluentGpu.AudioWorker.
+            Thread.Sleep(Math.Max(1, _blockPeriodMs / 2));
         }
         if (_disposed) FinalCleanup();   // sole safe disposer: frees rings even when Dispose's join timed out
     }
@@ -350,7 +361,8 @@ public sealed class AudioFeedThread : IDisposable
         {
             try { ControlTickOnce(); }
             catch (Exception e) { RecordFault(ref _clockFaults, e); }
-            Thread.Yield();
+            // Position/state publication is a control-rate concern, not an audio-rate spin loop.
+            Thread.Sleep(15);
         }
     }
 

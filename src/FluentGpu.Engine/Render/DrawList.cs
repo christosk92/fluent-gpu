@@ -216,9 +216,9 @@ public readonly record struct DrawGradientStrokeCmd(RectF Rect, CornerRadius4 Ra
 // acrylic fields (Tint/Fallback/TintOpacity/BlurSigma/NoiseOpacity/LuminosityOpacity) are unused for this kind.
 public readonly record struct PushLayerCmd(RectF DeviceRect, CornerRadius4 Radii, ColorF Tint, ColorF Fallback, float TintOpacity, float BlurSigma, float NoiseOpacity, float LuminosityOpacity,
     int Kind = 0, float GroupAlpha = 1f,
-    // EdgeFade-only (Kind == 3): per-edge feather band depth in DEVICE px (0 = edge disabled), falloff curve, fade
-    // intensity, enabled-edge bit mask, and the exact device-space clip used when compositing the offscreen layer.
-    // The rounded-corner radii come from Radii (the feather follows them).
+    // EdgeFade (Kind == 3): per-edge feather band depth in DEVICE px (0 = edge disabled), falloff curve, fade intensity,
+    // and enabled-edge bit mask. CompositeClip is the inherited active device-space clip for EdgeFade AND self-blur;
+    // it bounds the offscreen result that can reach the canvas. The rounded-corner radii come from Radii.
     float FadeBandL = 0f, float FadeBandT = 0f, float FadeBandR = 0f, float FadeBandB = 0f, int FadeFalloff = 0, float FadeIntensity = 1f, int FadeEdges = 0,
     RectF CompositeClip = default,
     // Stable scene-layer id (the node handle, packed index|gen). Acrylic uses its own id to key the retained blurred-
@@ -231,6 +231,10 @@ public readonly record struct PushLayerCmd(RectF DeviceRect, CornerRadius4 Radii
     // of the cross-frame pin key (backdrop-effects-animation.md §FA-2a); at rest (0) the compositor does one exact re-mint
     // when a HIT would otherwise composite a pin captured at a different position (settle exactness for non-glyph subtrees).
     int InMotion = 0,
+    // Self-blur only: 1 while a live, non-parked AnimChannel.BlurSigma row drives the node. Unlike InMotion this is
+    // independent of world translation and lets the backend select a retained/adaptive sigma path without inferring
+    // animation state from changing values. Authored/static blur always carries 0.
+    int BlurIsTransient = 0,
     // Acrylic-only: feather the frost in from the TOP over this FRACTION of the layer height (0 = hard edge). See AcrylicSpec.FeatherTop.
     float FeatherFrac = 0f,
     // Acrylic retained-backdrop cache (design §2.3 / E9 own-subtree damage carve-out): the EXTERNAL damage rect for THIS
@@ -511,12 +515,12 @@ public sealed class DrawList
     /// <paramref name="blurSigma"/> px, and composites once at <paramref name="groupAlpha"/> (so blur + fade read as one
     /// motion). The element's OWN pixels blur — not the backdrop behind it. Subtree commands record at opacity relative
     /// to 1, NOT pre-multiplied by the group alpha.</summary>
-    public void PushBlurLayer(in RectF deviceRect, in CornerRadius4 radii, float blurSigma, float groupAlpha, ulong sortKey = 0, BlurCachePolicy cachePolicy = BlurCachePolicy.Normal, bool inMotion = false, ulong layerId = 0)
+    public void PushBlurLayer(in RectF deviceRect, in CornerRadius4 radii, float blurSigma, float groupAlpha, ulong sortKey = 0, BlurCachePolicy cachePolicy = BlurCachePolicy.Normal, bool inMotion = false, ulong layerId = 0, RectF compositeClip = default, bool blurIsTransient = false)
     {
         WriteOp(DrawOp.PushLayer);
         WritePayload(new PushLayerCmd(deviceRect, radii, default, default, 0f, MathF.Max(0f, blurSigma), 0f, 0f,
-            (int)LayerKind.Blur, Math.Clamp(groupAlpha, 0f, 1f), LayerId: layerId,
-            BlurCachePolicy: (int)cachePolicy, InMotion: inMotion ? 1 : 0));
+            (int)LayerKind.Blur, Math.Clamp(groupAlpha, 0f, 1f), CompositeClip: compositeClip, LayerId: layerId,
+            BlurCachePolicy: (int)cachePolicy, InMotion: inMotion ? 1 : 0, BlurIsTransient: blurIsTransient ? 1 : 0));
         PushSort(sortKey);
     }
 

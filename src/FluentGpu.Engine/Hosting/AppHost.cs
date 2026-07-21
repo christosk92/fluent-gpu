@@ -142,7 +142,9 @@ public sealed class AppHost : IDisposable
     private readonly LayoutInvalidator _invalidator;
     private readonly DrawList _drawList = new();
     private readonly SpanTable _spanTable = new();
-    private int _recordedImageContentEpoch;   // retained for diagnostics only (global ImageContent kill removed)
+    // Last image-content epoch included in a submitted frame. It does not invalidate retained spans; it only defeats
+    // byte-hash submit elision for the one frame where a same-handle texture (for example a baked-blur upgrade) changed.
+    private int _recordedImageContentEpoch;
     private bool _imageCrossfadeWasActive;
     // Render-thread seam (Cut A, submit-only; docs/plans/render-thread-seam-landing-plan.md · design/subsystems/threading-render-seam.md).
     // STEP 1 — single-thread pass-through: the UI records into _drawList, copies it into a render-readable arena, then
@@ -606,7 +608,7 @@ public sealed class AppHost : IDisposable
         // user-visible motion — keep them at the display rate instead of letting the ambient cap drop the reveal to 30 Hz
         // the instant the fling settles (a driver of the "scroll feels 24 fps then 120 fps" inconsistency). Both bits
         // clear the moment decode/reveal finishes, so this never holds the loop awake the way a perpetual loop would.
-        WakeReasons.ImageCrossfades | WakeReasons.ImagesPending |
+        WakeReasons.ImageCrossfades | WakeReasons.ImagesPending | WakeReasons.ImageReady |
         // Active video presentation is DISPLAY-rate motion (a playing video advances every refresh) — exempt it from the
         // 30 Hz ambient cap so playback runs at the panel's full frame rate, not the ambient-throttled cadence.
         WakeReasons.VideoPresenting;
@@ -616,7 +618,7 @@ public sealed class AppHost : IDisposable
     private const WakeReasons ModalLoopEssentialWake =
         WakeReasons.FrameNeeded | WakeReasons.RuntimePending | WakeReasons.ScrollAnim |
         WakeReasons.DragDropWork | WakeReasons.DragActive | WakeReasons.GestureHold | WakeReasons.TouchPress |
-        WakeReasons.PopupAnim | WakeReasons.ImagesPending | WakeReasons.ImageCrossfades | WakeReasons.Orphans |
+        WakeReasons.PopupAnim | WakeReasons.ImagesPending | WakeReasons.ImageReady | WakeReasons.ImageCrossfades | WakeReasons.Orphans |
         // A video presenting under a modal/seek loop must keep pumping so the frame keeps advancing.
         WakeReasons.VideoPresenting |
         // A due frame-clock timer (a debounce/timeout/interval) must still fire while the user drags/resizes the window.
@@ -703,6 +705,13 @@ public sealed class AppHost : IDisposable
         WakeReasons r = ComputeWakeReasons();
         if (r == WakeReasons.None) { MaybeTrimOnIdle(); return -1; }   // fully idle: trim the slab tail once, then block until a message arrives
         if (r == WakeReasons.DynamicText) return 100;   // HUD-only: 10 Hz readout, ~0% idle CPU
+        if ((r & ~(WakeReasons.BakedBlurPending | WakeReasons.DynamicText)) == 0)
+        {
+            int bakedWait = _bakedBlurQueue.RecommendedWaitMs;
+            return (r & WakeReasons.DynamicText) != 0
+                ? (bakedWait < 0 ? 100 : Math.Min(100, bakedWait))
+                : bakedWait;
+        }
         // A live scroll arms a short display-rate grace so the eased settle + any in-flight art reveal finish at the
         // display rate instead of snapping back to the 30 Hz ambient cadence the instant the fling drops below cutoff.
         long now = Stopwatch.GetTimestamp();
@@ -817,8 +826,9 @@ public sealed class AppHost : IDisposable
         if (_repeat.HasActive) r |= WakeReasons.Repeat;
         if (_caretBlinker.HasActive) r |= WakeReasons.Caret;
         if (_scene.HasBrushAnims) r |= WakeReasons.BrushAnims;
-        if (_images.PendingCount > 0) r |= WakeReasons.ImagesPending;
+        if (_images.HasReadyCompletions) r |= WakeReasons.ImageReady;
         if (_device.HasPendingUploads) r |= WakeReasons.ImagesPending;
+        if (_bakedBlurQueue.HasJobs) r |= WakeReasons.BakedBlurPending;
         if (_images.HasActiveCrossfades) r |= WakeReasons.ImageCrossfades;
         if (_scene.OrphanCount > 0) r |= WakeReasons.Orphans;
         if (_dispatcher.Drag.HasActiveWork || _dispatcher.DragDrop.HasActiveWork) r |= WakeReasons.DragDropWork;   // E5: ghost spring easing / edge auto-scroll
@@ -1133,6 +1143,8 @@ public sealed class AppHost : IDisposable
         _reconciler.Images = _images;
         _reconciler.ImageEpoch = _imageEpoch;
         _images.SetBakedBlurQueue(_bakedBlurQueue);
+        _images.SetCompletionWake(_window.Wake);
+        _bakedBlurQueue.SetCompletionWake(_window.Wake);
         _device.SetBakedBlurQueue(_bakedBlurQueue);
         if (_asyncActive)
         {
@@ -1764,7 +1776,6 @@ public sealed class AppHost : IDisposable
             bool scrollActive = holdSelfBlurForScroll || _scrollAnim.AnyOffsetWroteThisFrame;
             _images.SuppressReveals = scrollActive;
             _images.ScrollThrottled = scrollActive;   // upload-burst → fence-stall guard (the safe lever; triple-buffer hung the Adreno)
-            _bakedBlurQueue.Paused = scrollActive;
             ScrollBindEval.ApplyPinAndFlagPass(_scene);       // 7 generic scroll-bind pins + the predicate-flag channel (sticky etc.)
             ScrollBindEval.RunObservers(_scene);              // 7 change-only scroll-geometry observers (pull-to-refresh / analytics)
             _repeat.Tick(dtMs);                                // 7 RepeatButton auto-repeat (held → re-fire click)
@@ -1852,6 +1863,7 @@ public sealed class AppHost : IDisposable
             _anim.PendingStructuralDamage.Clear();   // retains capacity → no steady-state alloc
             SceneRecorder.RecordDetached(_scene, _drawList, _images, _connected.Detached, _scene.OverlayClip);   // 8 detached fly snapshots (flag-gated rebuild; no-op when none)
             RecordPopupWindows(in focus, in textEdit);         // 8b record each popup window's subtree DrawList
+            bool imageContentChanged = _recordedImageContentEpoch != _images.ContentEpoch;
             _recordedImageContentEpoch = _images.ContentEpoch;
             // 8b′ probe capture (WAVEE_LYRICS_ADVANCE_PROBE): snapshot the designated viewports' scroll state HERE — before
             // the ClearTransformDirty below wipes the content-node TransformDirty bit that drove this frame's DoF defer.
@@ -1860,6 +1872,15 @@ public sealed class AppHost : IDisposable
             // 8c consume the frame's motion bits (the glyph-snap gate read them during record). A motion frame queues ONE
             // settle frame: the last moved frame recorded its text unsnapped, so the trailing static record re-snaps crisp.
             bool transformWrote = _scene.AnyTransformWrote;
+            // A bake is already bounded to ONE adaptive, downscaled job per cadence interval. Pause only for work that
+            // represents direct manipulation or a structural commit in THIS frame. Image cross-fades, ordinary entrance
+            // motion and unrelated texture uploads can remain active for hundreds of milliseconds while a page fills;
+            // treating those as a global quiet-frame prerequisite made a visible editorial card stay crisp long after its
+            // source was resident. The queue now gets its first chance on the next non-structural, non-input frame (often
+            // the source-completion frame itself), while scroll/drag remains protected from the one-shot GPU pass.
+            _bakedBlurQueue.Paused = scrollActive || reconciled || layoutNeeded
+                || clicks > 0 || _tracePumpedEvents > 0
+                || _dispatcher.Drag.IsActive || _dispatcher.DragDrop.IsActive;
             if (transformWrote) { _frameAfterPaint = true; _scene.ClearTransformDirty(); }
             _scene.ClearRecordDirty();
             long tRecord = Stopwatch.GetTimestamp();
@@ -1877,7 +1898,9 @@ public sealed class AppHost : IDisposable
             // Active image reveals resolve at replay time — defeat skip-submit while fades are live.
             bool maybeUnchanged = _everLaidOut && !resized && !keepAlive && _popupWindows.Count == 0
                 && !reconciled && !layoutNeeded && !transformWrote
+                && !imageContentChanged
                 && !_device.HasPendingUploads
+                && !_bakedBlurQueue.HasRunnableJob
                 && !_images.HasActiveCrossfades;
             ulong dlHash = maybeUnchanged ? DrawListHash(_drawList.Bytes, _drawList.SortKeys) : 0UL;
             bool skipSubmit = maybeUnchanged && dlHash == _lastPresentedDrawListHash;

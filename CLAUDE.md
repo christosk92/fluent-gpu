@@ -43,6 +43,32 @@ powershell -File design\check-canon.ps1                   # design-time drift ga
 
 The VerticalSlice harness (`src/FluentGpu.VerticalSlice/Program.cs`) runs ~60 cross-seam golden checks headlessly (no GPU/window) and enforces the alloc tripwire (`GC.GetAllocatedBytesForCurrentThread()` delta == 0 per hot phase) on the headless `Rhi.Headless`/`Pal.Headless` seams; GPU pixels are the separate `--screenshot` check.
 
+### Claude scratchpads and PlayPlay-inclusive Wavee publishes
+
+Claude scratchpad/worktree checkouts contain tracked files only. The local `link-playplay.ps1` helper and the
+gitignored `app\Wavee.PlayPlay` junction are therefore **not inherited** by a scratchpad. Publishing Wavee from such a
+checkout without recreating the junction produces a valid public NativeAOT build, but it does **not** include PlayPlay.
+
+When the user explicitly requests a PlayPlay-inclusive build from a Claude scratchpad, have the **user run** the
+following in that scratchpad's root. The agent must still not read, search, or summarize the private target:
+
+```powershell
+$target = 'C:\WAVEE\wavee-playplay-private\app\Wavee.PlayPlay'
+$link = Join-Path $PWD 'app\Wavee.PlayPlay'
+
+if (-not (Test-Path $target)) { throw "Private package not found: $target" }
+if (-not (Test-Path $link)) { New-Item -ItemType Junction -Path $link -Target $target }
+if (-not (Test-Path "$link\Client\InProcessPlayPlayKeyDeriver.cs")) {
+  throw 'PlayPlay junction is incomplete; refusing to publish the public-only variant.'
+}
+
+.\build\publish-wavee-aot.ps1 -Arch arm64
+```
+
+Do not tell the user to run `./link-playplay.ps1` inside a scratchpad unless that untracked helper was copied there;
+normally it is absent. Running the helper by absolute path from the main checkout also does not fix a scratchpad,
+because the helper intentionally creates its junction relative to its own `$PSScriptRoot`.
+
 The canon gate fails if a known-stale/superseded token reappears anywhere in the **live** `design/` tree (`design/archive/` is excluded). To intentionally mention a superseded form in live prose, put `<!-- canon-allow: reason -->` on that line. The canonical values it protects are in `design/SPEC-INDEX.md`; superseding a value means adding a rule to `check-canon.ps1` **and** moving the old doc to `design/archive/`.
 
 The build/GC baseline lives in `src/Directory.Build.props` (per `design/dotnet10-csharp14-zero-alloc.md` §1: target `net10.0`, `LangVersion 14`, `PublishAot`, `TrimMode full`, Workstation+Concurrent GC, `GCSettings.SustainedLowLatency`). The full gate regime — alloc tripwire, golden-image diff, headless seams, COM-leak gate, the seam race gate — is specified in `design/subsystems/validation.md`.

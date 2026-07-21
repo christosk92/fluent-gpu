@@ -749,7 +749,10 @@ public static class SceneRecorder
         EdgeFadeSpec edgeFade = default;
         bool isEdgeFade = overlapsClip && TryResolveEdgeFade(scene, node, flags, maybeSparsePaint, out edgeFade);
         if (isEdgeFade) stats.EdgeFadeGroupCount++;
-        bool isBlurCandidate = !isEdgeFade && p.BlurSigma > 0.01f && overlapsClip;
+        // An opacity-zero stagger row still has a non-zero authored blur during its delay. It contributes no pixels, so
+        // allocating/clearing an offscreen RT and running two Gaussian passes is exact dead work (and made several
+        // delayed Home rows overlap their GPU cost). Keep walking for animation/hit state, but do not emit a blur group.
+        bool isBlurCandidate = !isEdgeFade && opacity > 0.001f && p.BlurSigma > 0.01f && overlapsClip;
         if (isBlurCandidate)
         {
             stats.BlurCandidateCount++;
@@ -785,7 +788,8 @@ public static class SceneRecorder
         else if (isBlurGroup)
         {
             dl.PushBlurLayer(deviceBounds, p.Corners, p.BlurSigma, opacity, key,
-                holdBlur ? p.BlurCachePolicy : BlurCachePolicy.Normal, inMotion, layerId);
+                holdBlur ? p.BlurCachePolicy : BlurCachePolicy.Normal, inMotion, layerId, clip,
+                p.BlurAnimationActive != 0);
             opacity = 1f;
         }
         else if (isOpacityGroup)

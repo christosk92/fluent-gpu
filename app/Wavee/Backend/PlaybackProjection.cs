@@ -92,6 +92,10 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     ClusterDelta? _lastCluster;   // the last folded cluster (raw next/prev with uid+provider+metadata) — the source the controller replays through PlaybackSession.ReplaceFromCluster on ghost-resume (§8)
     string _queueRevision = "";
     bool _isPlaying, _isBuffering, _isPrebuffering, _shuffle;
+    // The play/buffering state last PUSHED to the UI via FireChanges (structural). PositionTicks carry the live
+    // IsPlaying/IsBuffering too, so we watch for a flip on a tick and fire a structural change — otherwise a missed/
+    // overridden Playing edge leaves the player bar stuck (position keeps flowing, play-state doesn't). See OnHostSignal.
+    bool _lastPubPlaying, _lastPubBuffering;
     PlaybackRecoveryKind _recoveryKind;
     public bool IsPrivateSession { get; set; }
     RepeatMode _repeat;
@@ -459,6 +463,7 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     public void OnHostSignal(in AudioHostSignal s)
     {
         bool structural = s.Kind != AudioHostSignalKind.PositionTick;
+        bool stateFlipped;
         lock (_gate)
         {
             if (s.Kind == AudioHostSignalKind.Ended)
@@ -483,9 +488,17 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
                 _recoveryKind = s.RecoveryKind;
             }
             _speed = 1.0; _posMs = s.PositionMs; _posAnchorWall = _now();
+            // Detect whether this signal changes the EFFECTIVE published play/buffering state. A PositionTick carries the
+            // live IsPlaying/IsBuffering, so if the one-shot Playing edge was missed or overridden (e.g. a Connect-cluster
+            // clamp), the next tick corrects the bar here instead of leaving it stuck showing Buffering/paused.
+            bool effPlaying = _isPlaying;
+            bool effBuffering = _isBuffering || _isPrebuffering;
+            stateFlipped = effPlaying != _lastPubPlaying || effBuffering != _lastPubBuffering;
+            _lastPubPlaying = effPlaying;
+            _lastPubBuffering = effBuffering;
         }
-        if (structural) { FireChanges(); RestartTicker(); }
-        else _positionTicks.OnNext(s.PositionMs);
+        if (structural || stateFlipped) { FireChanges(); RestartTicker(); }
+        if (!structural) _positionTicks.OnNext(s.PositionMs);
     }
 
     void FireChanges() { if (_disposed) return; _changes.OnNext(this); PropertyChanged?.Invoke(this, AllChanged); }

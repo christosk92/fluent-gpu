@@ -203,11 +203,23 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
     // Full forever: StoreLibrarySource asks for repair, while the callback returns before doing the repair.
     internal static bool IsAlbumComplete(Album? album)
         => album is { Hydration: AlbumHydrationLevel.Full, Tracks: { Count: > 0 } tracks }
-           && !HasUnnamedTrack(tracks);
+           && !HasUnnamedTrack(tracks)
+           // The Full flag alone is not proof: a partial/transient getAlbum response can carry named tracks but NEITHER
+           // play counts NOR inline colors, and marking that Full sealed the album "Full forever" (0 plays + no wash +
+           // stub artist — every later open early-returned here). A COMPLETE envelope always delivers inline colors and/or
+           // play counts, so require at least one; a payload-less "Full" is treated as cold and re-fetched. (Play counts
+           // are legitimately 0 on brand-new releases, hence OR — colors alone still count as complete, and vice versa.)
+           && (album.Palette is not null || HasAnyPlayCount(tracks));
 
     static bool HasUnnamedTrack(IReadOnlyList<Track> tracks)
     {
         for (int i = 0; i < tracks.Count; i++) if (tracks[i].Title.Length == 0) return true;
+        return false;
+    }
+
+    static bool HasAnyPlayCount(IReadOnlyList<Track> tracks)
+    {
+        for (int i = 0; i < tracks.Count; i++) if (tracks[i].PlayCount > 0) return true;
         return false;
     }
 

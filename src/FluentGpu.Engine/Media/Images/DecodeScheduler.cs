@@ -33,14 +33,19 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     private readonly ConcurrentDictionary<int, byte> _canceled = new();
     private readonly Task[] _workers;
     private readonly CancellationTokenSource _shutdown = new();
+    private Action? _completionWake;
     private int _inflight, _queued;
     // Max decoded images APPLIED (GPU-uploaded) per Pump = per frame. An UNBOUNDED drain uploaded a whole fast-scroll's
     // worth of album art in ONE frame → a 10-35ms GPU submit spike (the frame lands late → a stale composited frame =
     // the edge "another viewport" flash). Bounding it spreads uploads over frames: un-applied decodes stay in _out and
-    // their ImageCache entries stay State==Pending, so PendingCount>0 keeps the frame loop awake → the rest drain on the
-    // next frames (rows show their skeleton/blur-hash meanwhile). FG_IMG_UPLOADS overrides; default tuned for ~120fps.
+    // their ImageCache entries stay State==Pending. HasReadyCompletions keeps only actionable UI work awake until the
+    // queue drains (rows show their skeleton/blur-hash meanwhile). FG_IMG_UPLOADS overrides; default tuned for ~120fps.
     private static readonly int s_maxAppliesPerFrame =
         int.TryParse(System.Environment.GetEnvironmentVariable("FG_IMG_UPLOADS"), out int __u) && __u > 0 ? __u : 6;
+    private static readonly int s_maxApplyBytesPerFrame =
+        int.TryParse(System.Environment.GetEnvironmentVariable("FG_IMG_UPLOAD_BYTES"), out int __b) && __b > 0
+            ? __b : 2 * 1024 * 1024;
+    private const int ScrollApplyBytesPerFrame = 512 * 1024;
 
     /// <summary>Scroll-scoped upload throttle: while a scroll gesture is live the per-frame apply cap drops to 2 —
     /// each apply stages a GPU CopyTextureRegion into the SAME command list the double-buffered present then fences on
@@ -69,6 +74,10 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     // IImageDecoder census passthroughs (MemCensus reads these through ImageCache).
     int IImageDecoder.DiagInflight => Volatile.Read(ref _inflight);
     int IImageDecoder.DiagCanceledPending => _canceled.Count;
+    public bool HasReadyCompletions => !_out.IsEmpty;
+
+    /// <inheritdoc/>
+    public void SetCompletionWake(Action? wake) => Volatile.Write(ref _completionWake, wake);
 
     public DecodeScheduler(IImageCodec codec, IImageFetcher fetcher, DecodeOptions? options = null)
     {
@@ -125,8 +134,13 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     {
         int drained = 0;
         int cap = ScrollThrottled ? Math.Min(2, s_maxAppliesPerFrame) : s_maxAppliesPerFrame;
-        while (drained < cap && _out.TryDequeue(out var d))
+        int byteCap = ScrollThrottled ? Math.Min(ScrollApplyBytesPerFrame, s_maxApplyBytesPerFrame) : s_maxApplyBytesPerFrame;
+        int appliedBytes = 0;
+        while (drained < cap && _out.TryPeek(out var next))
         {
+            // Always admit one oversized image so a request larger than the budget cannot wedge the queue forever.
+            if (drained > 0 && next.ByteLen > byteCap - appliedBytes) break;
+            if (!_out.TryDequeue(out var d)) continue;
             if (d.Ok && d.Buffer != null) onPixels(d.Id, d.Buffer.AsSpan(0, d.ByteLen), d.W, d.H);
             onComplete(d.Id, d.Ok, d.W, d.H, d.Failure, d.Attempts);
             if (d.Buffer != null) _pixels.Return(d.Buffer);
@@ -134,6 +148,7 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
             // already queued). The apply above is unchanged: a late cancel does NOT suppress it (today's semantics);
             // reclaim only bounds the map. Idempotent with Process's finally (a no-op when it already removed the id).
             _canceled.TryRemove(d.Id, out _);
+            appliedBytes += d.ByteLen;
             drained++;
         }
         int inflight = Volatile.Read(ref _inflight);
@@ -224,7 +239,10 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     }
 
     private void Complete(int id, bool ok, int w, int h, ImageFailureKind failure, int attempts, byte[]? buffer, int byteLen)
-        => _out.Enqueue(new Done { Id = id, Ok = ok, W = w, H = h, Failure = failure, Attempts = attempts, Buffer = buffer, ByteLen = byteLen });
+    {
+        _out.Enqueue(new Done { Id = id, Ok = ok, W = w, H = h, Failure = failure, Attempts = attempts, Buffer = buffer, ByteLen = byteLen });
+        Volatile.Read(ref _completionWake)?.Invoke();
+    }
 
     private async Task<(FetchResult result, int attempts)> FetchWithRetry(string src, int id)
     {

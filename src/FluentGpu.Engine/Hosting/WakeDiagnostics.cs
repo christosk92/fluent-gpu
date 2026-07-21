@@ -20,7 +20,7 @@ public enum WakeReasons
     Repeat = 1 << 6,            // _repeat.HasActive (RepeatButton auto-repeat)
     Caret = 1 << 7,             // _caretBlinker.HasActive (focused-editor caret blink)
     BrushAnims = 1 << 8,        // _scene.HasBrushAnims (implicit BrushTransition)
-    ImagesPending = 1 << 9,     // _images.PendingCount > 0 (in-flight decodes)
+    ImagesPending = 1 << 9,     // device-side texture uploads/copies still need a submit
     ImageCrossfades = 1 << 10,  // _images.HasActiveCrossfades (reveal fades in flight)
     Orphans = 1 << 11,          // _scene.OrphanCount > 0 (exit-animating orphans)
     DragDropWork = 1 << 12,     // _dispatcher.Drag.HasActiveWork || _dispatcher.DragDrop.HasActiveWork (E5 easing/edge-scroll)
@@ -31,6 +31,8 @@ public enum WakeReasons
     VideoPresenting = 1 << 17,  // a media player is actively presenting a video surface (playing / ramping to play) — keep pumping at DISPLAY rate so frames advance (VideoSurfaceRegistry.HasActivePresentation)
     Timer = 1 << 18,            // a HostTimerQueue timer is DUE this frame (UseTimeout/UseInterval/UseDebouncedValue/UseThrottledValue) — a pending-but-future timer sets NO bit (it only shapes RecommendedWaitMs, so the loop still idles)
     WarmCadence = 1 << 19,      // post-input warm-cadence hold: keep rendering ~1s after the last input before full quiesce (GPUI ProMotion re-ramp lesson) — real window only
+    ImageReady = 1 << 20,       // a decode worker published a completion that the UI thread can apply now
+    BakedBlurPending = 1 << 21, // queued static derivatives, serviced at a low 30 Hz budget only after interaction settles
 }
 
 /// <summary>
@@ -44,12 +46,12 @@ public enum WakeReasons
 internal sealed class WakeDiagnostics
 {
     // Per-reason awake-frame counts this window, indexed by bit position (0..ReasonCount-1).
-    private const int ReasonCount = 20;
+    private const int ReasonCount = 22;
     private static readonly string[] s_reasonNames =
     [
         "frameNeeded", "runtimePending", "dynamicText", "anim", "interact", "scrollAnim", "repeat", "caret",
         "brushAnims", "imagesPending", "imageCrossfades", "orphans", "dragDropWork", "dragActive", "gestureHold",
-        "popupAnim", "touchPress", "videoPresenting", "timer", "warmCadence",
+        "popupAnim", "touchPress", "videoPresenting", "timer", "warmCadence", "imageReady", "bakedBlurPending",
     ];
 
     private readonly long[] _reasonFrames = new long[ReasonCount];   // frames where reason i kept the loop awake

@@ -6637,6 +6637,59 @@ static class Slice
             Check("gate.blur.selfBlurHaloCoversKernel: the self-blur halo == the downsample schedule's KernelRadiusTexels(σ/down)·down support (σ26 ⇒ 80 px, lifting the old 32 px truncation)",
                 haloOk && liftsCap, $"haloOk={haloOk} r26={r26}{detail}");
         }
+
+        // gate.blur.tightWorkGeometry. A self blur has three distinct regions: the clipped output pixels, the subset of
+        // crisp source that can contribute to those pixels, and their union (the local RT work box). All conversions are
+        // conservative floor/ceil in physical pixels; blur sigma is already physical, so DPI scales geometry/clip but
+        // not the kernel halo. These are the portable invariants used by the D3D12 local-surface implementation.
+        {
+            static PushLayerCmd Layer(RectF rect, float sigma, RectF clip) => new(
+                rect, default, default, default, 0f, sigma, 0f, 0f,
+                Kind: (int)LayerKind.Blur, CompositeClip: clip);
+            static bool Is(SelfBlurPixelBox b, int x0, int y0, int x1, int y1)
+                => b.MinX == x0 && b.MinY == y0 && b.MaxX == x1 && b.MaxY == y1;
+
+            // DPI: floor left/top, ceil right/bottom, then add the physical (not DIP-scaled) sigma-3 halo of 9 px.
+            var dpiLayer = Layer(new RectF(10.25f, 20.25f, 100.5f, 40.5f), 3f, new RectF(0f, 0f, 200f, 100f));
+            var dpi = SelfBlurRegion.ComputeWork(in dpiLayer, 1.5f, 300, 150);
+            bool dpiOk = Is(dpi.VisibleOutput, 6, 21, 176, 101)
+                && Is(dpi.RequiredSource, 15, 30, 167, 92)
+                && Is(dpi.Work, 6, 21, 176, 101);
+            Check("gate.blur.tightWorkGeometry.dpi: DIP layer/clip scale conservatively while the physical sigma halo stays unscaled",
+                dpiOk, $"out={dpi.VisibleOutput} src={dpi.RequiredSource} work={dpi.Work}");
+
+            // Partial clip: only source within one halo of the 50x30 visible output is required. The far-left 128 px of
+            // the layer never contributes, and the work area is much smaller than its full 224x84 halo box.
+            var partialLayer = Layer(new RectF(100f, 100f, 200f, 60f), 4f, new RectF(240f, 110f, 50f, 30f));
+            var partial = SelfBlurRegion.ComputeWork(in partialLayer, 1f, 500, 300);
+            bool partialOk = Is(partial.VisibleOutput, 240, 110, 290, 140)
+                && Is(partial.RequiredSource, 228, 100, 300, 152)
+                && Is(partial.Work, 228, 100, 300, 152)
+                && partial.Work.AreaPx == 3744 && partial.Work.AreaPx < 224L * 84L;
+            Check("gate.blur.tightWorkGeometry.partialClip: clipped output pulls only its contributing crisp-source neighborhood",
+                partialOk, $"out={partial.VisibleOutput} src={partial.RequiredSource} work={partial.Work} area={partial.Work.AreaPx}");
+
+            // Canvas edge: off-canvas layer/halo pixels do not enter either source or output. A clip that touches only
+            // the blur halo still retains the narrow strip of layer source that contributes to it.
+            var edgeLayer = Layer(new RectF(-5f, 5f, 40f, 20f), 3f, RectF.Infinite);
+            var edge = SelfBlurRegion.ComputeWork(in edgeLayer, 1f, 100, 50);
+            var haloOnlyLayer = Layer(new RectF(100f, 100f, 200f, 60f), 4f, new RectF(305f, 110f, 5f, 30f));
+            var haloOnly = SelfBlurRegion.ComputeWork(in haloOnlyLayer, 1f, 500, 300);
+            bool edgesOk = Is(edge.VisibleOutput, 0, 0, 44, 34)
+                && Is(edge.RequiredSource, 0, 5, 35, 25)
+                && Is(edge.Work, 0, 0, 44, 34)
+                && Is(haloOnly.VisibleOutput, 305, 110, 310, 140)
+                && Is(haloOnly.RequiredSource, 293, 100, 300, 152)
+                && Is(haloOnly.Work, 293, 100, 310, 152);
+            Check("gate.blur.tightWorkGeometry.edges: canvas clamping is exact and a halo-only clip keeps its contributing source strip",
+                edgesOk, $"edge(out={edge.VisibleOutput} src={edge.RequiredSource}) halo(out={haloOnly.VisibleOutput} src={haloOnly.RequiredSource})");
+
+            var outsideLayer = Layer(new RectF(100f, 100f, 80f, 40f), 3f, new RectF(300f, 200f, 20f, 20f));
+            var outside = SelfBlurRegion.ComputeWork(in outsideLayer, 1f, 500, 300);
+            Check("gate.blur.tightWorkGeometry.outsideClip: a clip outside the halo schedules zero blur work",
+                outside.VisibleOutput.IsEmpty && outside.RequiredSource.IsEmpty && outside.Work.IsEmpty,
+                $"out={outside.VisibleOutput} src={outside.RequiredSource} work={outside.Work}");
+        }
     }
 
     // Expressive Motion Kit (transitions.dev adoption): the new named expressive curves, the per-node self-blur channel
@@ -6674,17 +6727,31 @@ static class Slice
             scene.Paint(node).BlurSigma = 8f;
             scene.Flags(node) &= ~(NodeFlags.PaintDirty | NodeFlags.LayoutDirty | NodeFlags.TransformDirty);
             engine.Animate(node, AnimChannel.BlurSigma, 8f, 0f, 100f, Easing.Linear);
+            bool intentSeeded = scene.Paint(node).BlurAnimationActive != 0;
             engine.Tick(0f);
             float b0 = scene.Paint(node).BlurSigma;
             engine.Tick(50f);
             float bMid = scene.Paint(node).BlurSigma;
             var fl = scene.Flags(node);
-            bool midOk = Near(bMid, 4f, 0.2f) && (fl & NodeFlags.PaintDirty) != 0 && (fl & NodeFlags.LayoutDirty) == 0;
+            bool midOk = Near(bMid, 4f, 0.2f) && scene.Paint(node).BlurAnimationActive != 0
+                && (fl & NodeFlags.PaintDirty) != 0 && (fl & NodeFlags.LayoutDirty) == 0;
             engine.Tick(60f);   // > 100ms → complete
             float bEnd = scene.Paint(node).BlurSigma;
-            bool doneOk = Near(bEnd, 0f, 1e-3f) && !engine.HasActive;
-            Check("EM.b AnimChannel.BlurSigma eases BlurSigma 8→0 (PaintDirty only, settles at 0)",
-                Near(b0, 8f, 0.1f) && midOk && doneOk, $"t0={b0:0.0} mid={bMid:0.0} end={bEnd:0.00}");
+            bool doneOk = Near(bEnd, 0f, 1e-3f) && !engine.HasActive && scene.Paint(node).BlurAnimationActive == 0;
+
+            // The bit follows slab lifecycle rather than sigma: KeepAlive parking turns it off without destroying
+            // the row, resume restores it, and cancellation clears it even if the last blur value remains.
+            engine.Animate(node, AnimChannel.BlurSigma, 0f, 8f, 100f, Easing.Linear);
+            bool reseeded = scene.Paint(node).BlurAnimationActive != 0;
+            engine.SetNodeParked(node, true);
+            bool parked = scene.Paint(node).BlurAnimationActive == 0;
+            engine.SetNodeParked(node, false);
+            bool resumed = scene.Paint(node).BlurAnimationActive != 0;
+            engine.Cancel(node, AnimChannel.BlurSigma);
+            bool cancelled = scene.Paint(node).BlurAnimationActive == 0;
+            Check("EM.b BlurSigma eases 8→0 and transient intent follows live/non-parked track lifecycle",
+                intentSeeded && Near(b0, 8f, 0.1f) && midOk && doneOk && reseeded && parked && resumed && cancelled,
+                $"intentSeed={intentSeeded} t0={b0:0.0} mid={bMid:0.0} end={bEnd:0.00} done={doneOk} park={parked}/{resumed} cancel={cancelled}");
         }
 
         // EM.c — the recorder wraps a node with Blur>0 in a balanced PushLayer{Blur} carrying its σ; a 0-blur node does not.
@@ -6693,7 +6760,7 @@ static class Slice
             var recon = new TreeReconciler(s, strings);
             recon.ReconcileRoot(new BoxEl
             {
-                Width = 80, Height = 60, Fill = ColorF.FromRgba(0x20, 0x20, 0x20),
+                Width = 80, Height = 60, ClipToBounds = true, Fill = ColorF.FromRgba(0x20, 0x20, 0x20),
                 Children = [new BoxEl { Width = 30, Height = 30, Blur = 6f, Fill = ColorF.FromRgba(0x60, 0xCD, 0xFF) }],
             }, null);
             new FlexLayout(s, new HeadlessFontSystem(strings)).Run(s.Root);
@@ -6701,9 +6768,26 @@ static class Slice
             SceneRecorder.Record(s, dl);
             var dev = new HeadlessGpuDevice();
             dev.SubmitDrawList(dl.Bytes, dl.SortKeys, new FrameInfo(new Size2(120, 80), 1f, ColorF.Transparent));
-            bool blurLayer = false; float sigma = 0f;
-            foreach (var l in dev.LastLayers) if (l.Kind == (int)LayerKind.Blur) { blurLayer = true; sigma = l.BlurSigma; }
+            bool blurLayer = false; float sigma = 0f; RectF blurClip = default; bool staticIntent = true;
+            foreach (var l in dev.LastLayers) if (l.Kind == (int)LayerKind.Blur)
+            {
+                blurLayer = true; sigma = l.BlurSigma; blurClip = l.CompositeClip;
+                staticIntent &= l.BlurIsTransient == 0;
+            }
             bool balanced = dev.LayerBalance == 0;
+
+            // A real BlurSigma row propagates the engine-owned transient intent into the POD layer command.
+            var animatedNode = s.FirstChild(s.Root);
+            var anim = new AnimEngine(s);
+            anim.Animate(animatedNode, AnimChannel.BlurSigma, 6f, 5f, 100f, Easing.Linear);
+            anim.Tick(0f);
+            var dlAnimated = new DrawList();
+            SceneRecorder.Record(s, dlAnimated);
+            var devAnimated = new HeadlessGpuDevice();
+            devAnimated.SubmitDrawList(dlAnimated.Bytes, dlAnimated.SortKeys, new FrameInfo(new Size2(120, 80), 1f, ColorF.Transparent));
+            bool transientIntent = false;
+            foreach (var l in devAnimated.LastLayers)
+                if (l.Kind == (int)LayerKind.Blur) transientIntent |= l.BlurIsTransient == 1;
 
             var s0 = new SceneStore();
             var recon0 = new TreeReconciler(s0, strings);
@@ -6720,9 +6804,28 @@ static class Slice
             bool noBlurWhenZero = true;
             foreach (var l in dev0.LastLayers) if (l.Kind == (int)LayerKind.Blur) noBlurWhenZero = false;
 
-            Check("EM.c recorder emits a balanced PushLayer{Blur} (σ carried) for Blur>0; none for Blur=0",
-                blurLayer && Near(sigma, 6f, 0.01f) && balanced && noBlurWhenZero,
-                $"blurLayer={blurLayer} sigma={sigma:0.0} balanced={balanced} noneWhenZero={noBlurWhenZero}");
+            // A delayed stagger row starts at alpha zero while retaining a non-zero blur channel. It is still walked,
+            // but its blur is exact dead work and must not produce an offscreen layer until it becomes visible.
+            var si = new SceneStore();
+            var reconi = new TreeReconciler(si, strings);
+            reconi.ReconcileRoot(new BoxEl
+            {
+                Width = 80, Height = 60,
+                Children = [new BoxEl { Width = 30, Height = 30, Opacity = 0f, Blur = 6f, Fill = ColorF.FromRgba(0x60, 0xCD, 0xFF) }],
+            }, null);
+            new FlexLayout(si, new HeadlessFontSystem(strings)).Run(si.Root);
+            var dli = new DrawList();
+            SceneRecordStats invisibleStats = SceneRecorder.Record(si, dli);
+            var devi = new HeadlessGpuDevice();
+            devi.SubmitDrawList(dli.Bytes, dli.SortKeys, new FrameInfo(new Size2(120, 80), 1f, ColorF.Transparent));
+            bool noBlurWhenInvisible = invisibleStats.BlurCandidateCount == 0;
+            foreach (var l in devi.LastLayers) if (l.Kind == (int)LayerKind.Blur) noBlurWhenInvisible = false;
+            bool activeClipCarried = Near(blurClip.X, 0f) && Near(blurClip.Y, 0f) && Near(blurClip.W, 80f) && Near(blurClip.H, 60f);
+
+            Check("EM.c recorder emits balanced PushLayer{Blur} carrying clip + static/transient intent; none for invisible/zero blur",
+                blurLayer && Near(sigma, 6f, 0.01f) && activeClipCarried && balanced && staticIntent && transientIntent
+                    && noBlurWhenZero && noBlurWhenInvisible,
+                $"blurLayer={blurLayer} sigma={sigma:0.0} clip={blurClip} balanced={balanced} static={staticIntent} transient={transientIntent} noneZero={noBlurWhenZero} noneInvisible={noBlurWhenInvisible}");
         }
 
         // EM.d — the PopIn recipe (number pop-in) seeds Opacity 0→1 + TranslateY dist→0 + Blur small→0, and settles to
@@ -6836,6 +6939,31 @@ static class Slice
     // Native skeleton-loading (the Skel.Region kit): ONE UI source → derived shimmer → blur-reveal swap, partial-known,
     // incremental per-field, failed, reduced-motion, and the wake-loop pulse-cancel. Drives the loadable across a flush.
     private sealed record SkTrack(int Number, string Title, string Dur);
+
+    // Host-level shape of Wavee Home: a grow-to-viewport Skel.Region whose one authored content tree is a measured
+    // virtual list. The controllable loadable lets SK.k exercise the real Post → Flush → scoped-layout path without
+    // manufacturing a focus/resize event.
+    private sealed class SkeletonVirtualHostProbe : Component
+    {
+        public readonly Loadable<int> Count = Loadable<int>.Pending(6);
+        private readonly MeasuredStackVirtualLayout _layout = new(72f);
+
+        public override Element Render() => new BoxEl
+        {
+            Direction = 1, Grow = 1f, Shrink = 1f, MinHeight = 0f,
+            Children =
+            [
+                Skel.Region(Count, n => Virtual.Measured(n, _layout,
+                    i => new BoxEl
+                    {
+                        Direction = 1, Height = 72f,
+                        Children = [SkRow(new SkTrack(i + 1, "Host " + i, "0:00"))],
+                    }, keyOf: i => i.ToString()) with
+                    { Grow = 1f, Shrink = 1f, MinHeight = 0f },
+                    reveal: SkelReveal.StaggerRows),
+            ],
+        };
+    }
 
     static Element SkRow(SkTrack? t) => new BoxEl
     {
@@ -7157,6 +7285,37 @@ static class Slice
                 && Near(scene.Bounds(scene.Root).H, 300f, 0.5f);
             Check("SK.j content(seed) derives a bounded virtual-list pending window (not one blank opaque leaf)",
                 representative, $"nodes={pendingNodes} text={CountText(scene, scene.Root)} h={scene.Bounds(scene.Root).H:0}");
+        }
+
+        // SK.k is the end-to-end regression for Wavee Home being blank until Alt+Tab. Pending must occupy the viewport
+        // immediately, and a worker-style HostDispatch.Post of Ready must mount, realize, lay out and record real virtual
+        // rows in that SAME next frame. No focus, resize, extra signal write or second frame is allowed to unstick it.
+        {
+            var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("skel-virtual-host", new Size2(420, 300), 1f));
+            var probe = new SkeletonVirtualHostProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+
+            host.RunFrame();
+            bool pendingVisible = CountNodes(host.Scene, host.Scene.Root) >= 20
+                && CountText(host.Scene, host.Scene.Root) == 0
+                && host.Scene.Bounds(host.Scene.Root).H >= 299f;
+
+            host.Post(() => probe.Count.SetReady(6));
+            var readyFrame = host.RunFrame();
+            bool readyVisible = CountText(host.Scene, host.Scene.Root) > 0
+                && host.Scene.Bounds(host.Scene.Root).H >= 299f;
+            var viewport = FindScrollNode(host.Scene, host.Scene.Root);
+            host.Scene.TryGetScroll(viewport, out var scroll);
+            var row0 = host.Scene.FirstChild(scroll.ContentNode);
+            var row1 = row0.IsNull ? NodeHandle.Null : host.Scene.NextSibling(row0);
+            bool rowsOwnStagger = !row0.IsNull && !row1.IsNull
+                && host.Animation.HasTracks(row0) && host.Animation.HasTracks(row1)
+                && !host.Animation.HasTracks(scroll.ContentNode);
+
+            Check("SK.k host Post Pending→Ready: virtual skeleton is visible immediately and real rows appear next frame (no focus/resize)",
+                pendingVisible && readyVisible && readyFrame.Rendered && rowsOwnStagger,
+                $"pending={pendingVisible} ready={readyVisible} text={CountText(host.Scene, host.Scene.Root)} rendered={readyFrame.Rendered} rowTracks={rowsOwnStagger}");
         }
     }
 
@@ -15951,6 +16110,36 @@ static class Slice
         Check("50a3. nested transparent component boundaries remain input-traversable when an inner branch becomes hit-testable",
             !nestedScroll.IsNull && nestedRouted == nestedScroll && nestedState.OffsetY > 1f,
             $"scroll=n#{nestedScroll.Raw.Index} routed=n#{nestedRouted.Raw.Index} offset={nestedState.OffsetY:0.#}");
+
+        // A retained slot can intentionally serve several route TOKENS (album→album / artist→artist) under one
+        // cache key. The page must stay mounted, but TransitionFor still owns that navigation edge and seeds an entrance
+        // on the updated root; otherwise those in-place navigations silently lose all page motion.
+        {
+            var scene = new SceneStore();
+            var anim = new AnimEngine(scene);
+            var recon = new TreeReconciler(scene, strings) { Anim = anim };
+            var token = new Signal<int>(1);
+            recon.ReconcileRoot(
+                Flow.KeepAlive(
+                    () => token.Value,
+                    _ => "shared-detail-slot",
+                    n => new BoxEl { Width = 240f, Height = 120f, Children = [Text("detail-" + n)] },
+                    new KeepAliveOptions(TransitionFor: static (_, _) => MotionRecipes.PageSlideForward with { Exit = default })),
+                null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var retainedRoot = scene.FirstChild(scene.Root);
+
+            token.Value = 2;
+            recon.Runtime.Flush();
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            anim.Tick(0f);
+            var afterRoot = scene.FirstChild(scene.Root);
+            bool entrance = anim.TryGetTrackValue(afterRoot, AnimChannel.Opacity, out float op) && op < 0.2f;
+
+            Check("50a4. KeepAlive same-key token change preserves the retained root and still replays TransitionFor entrance",
+                afterRoot == retainedRoot && entrance,
+                $"sameRoot={afterRoot == retainedRoot} entrance={entrance} opacity={op:0.00}");
+        }
     }
 
     // §WS7 W7.0/W7.1 gallery scaffolding: the sectioned nav-tree derivation the registry-driven shell builds on, and

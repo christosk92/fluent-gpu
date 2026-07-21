@@ -107,6 +107,16 @@ sealed class SeekBar : Component
             Recompute();
         }, posTick);
 
+        // RE-ANCHOR on a play/pause flip. Position doesn't tick while paused, so on RESUME the interpolation would
+        // extrapolate `_tickPosMs + (now - _tickWallMs)` across the whole paused gap for one frame (the timestamp jumps
+        // ahead, then snaps back when the next tick re-anchors). Resetting the wall/pos anchor on the transition kills it.
+        UseEffect(() =>
+        {
+            _tickWallMs = Environment.TickCount64;
+            _tickPosMs = b.PositionMs.Peek();
+            Recompute();
+        }, playing);
+
         // Fill: a full-width accent bar scaled from the LEFT edge by _displayFrac. TransformOriginX=0 makes the bound
         // Scale pivot on the left (SceneRecorder: world ∘ T(ox,oy) ∘ Local ∘ T(-ox,-oy), ox = W·OriginX = 0), so the
         // fill grows rightward from 0. No layout, no re-render — a pure compositor transform reading ONE signal.
@@ -300,6 +310,7 @@ sealed class SeekBar : Component
         if (!Enabled() || (dur = _b.DurationMs.Peek()) <= 0) { OnCanceled(); return; }
         float f = _scrubFrac.Peek();
         long targetMs = Math.Clamp((long)(f * dur), 0, dur);
+        _b.NoteSeek(targetMs);                             // arm the seek latch: suppress stale pre-seek position ticks (#2)
         _b.PositionFrac.Value = f;                         // optimistic: paint the new position immediately
         _b.PositionMs.Value = targetMs;                    // keep time labels + interpolation anchor in the same place
         _tickWallMs = Environment.TickCount64;

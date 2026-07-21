@@ -2,8 +2,10 @@ using System;
 using System.Buffers;
 using System.Threading;
 using System.Threading.Tasks;
+using FluentGpu.Foundation;
 using FluentGpu.Hosting.Threading;
 using FluentGpu.Media;
+using FluentGpu.Scene;
 using Xunit;
 
 namespace FluentGpu.Engine.Tests;
@@ -83,6 +85,63 @@ public sealed class ImageSchedulingTests
         Assert.Equal(BakedBlurQueue.Quality.High, feedback.AdaptiveQuality);
         feedback.ReportGpuTime(2.1);
         Assert.Equal(BakedBlurQueue.Quality.Economy, feedback.AdaptiveQuality);
+    }
+
+    [Fact]
+    public void BakedBlurQueue_DeduplicatesGenerations_AndPreservesHighUpgradeIntent()
+    {
+        var queue = new BakedBlurQueue();
+        var stale = new BakedBlurQueue.Job(7, 99, 256, 128, 13f, 1);
+        queue.Enqueue(stale);
+        queue.Enqueue(stale);                         // duplicate producer notification
+        queue.Invalidate(7, 2);
+        queue.Enqueue(stale);                         // older than the invalidation: ignored
+        queue.Enqueue(stale with { Generation = 2 });
+
+        Assert.True(queue.TryDequeueJob(out var current));
+        Assert.Equal(2, current.Generation);
+        Assert.False(queue.TryDequeueJob(out _));
+
+        queue.Enqueue(current with { IsUpgrade = true, Quality = BakedBlurQueue.Quality.Minimal });
+        Assert.True(queue.TryDequeueJob(out var upgrade));
+        Assert.True(upgrade.IsUpgrade);
+        Assert.Equal(BakedBlurQueue.Quality.High, upgrade.Quality);
+        Assert.Equal((256, 128, 13f), (upgrade.OutputW, upgrade.OutputH, upgrade.SigmaTexels));
+    }
+
+    [Fact]
+    public void BakedBlur_ProvisionalVisibleResult_UpgradesInPlaceWithoutDoubleAccounting()
+    {
+        var queue = new BakedBlurQueue();
+        var cache = new ImageCache(new FakeImageDecoder());
+        cache.SetBakedBlurQueue(queue);
+        var source = cache.Request("source", 512, 256);
+        cache.Pump();
+
+        var spec = new BakedBlurSpec(26f, 0.5f);
+        var derived = cache.RequestBakedBlur(source, 512, 256, in spec);
+        cache.Pin(derived);
+        Assert.True(queue.TryDequeueJob(out var initial));
+        queue.Post(new BakedBlurQueue.Result(initial.Id, initial.Generation, true, 128, 64,
+            BakedBlurQueue.Quality.Economy));
+        cache.Pump();
+
+        Assert.Equal(ImageState.Ready, cache.StateOf(derived));
+        Assert.Equal((128, 64), cache.SizeOf(derived));
+        Assert.Equal(128 * 64 * 4, cache.DerivedUsedBytes);
+        Assert.True(queue.TryDequeueJob(out var upgrade));
+        Assert.True(upgrade.IsUpgrade);
+        Assert.Equal(BakedBlurQueue.Quality.High, upgrade.Quality);
+        Assert.Equal((256, 128), (upgrade.OutputW, upgrade.OutputH));
+
+        queue.Post(new BakedBlurQueue.Result(upgrade.Id, upgrade.Generation, true,
+            upgrade.OutputW, upgrade.OutputH, upgrade.Quality, IsUpgrade: true));
+        cache.Pump();
+
+        Assert.Equal(ImageState.Ready, cache.StateOf(derived));
+        Assert.Equal((256, 128), cache.SizeOf(derived));
+        Assert.Equal(256 * 128 * 4, cache.DerivedUsedBytes);
+        Assert.Equal(256 * 128 * 4 + 512 * 256 * 4, cache.UsedBytes);
     }
 
     private static async Task WaitForAsync(Func<bool> predicate)

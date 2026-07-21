@@ -172,6 +172,11 @@ sealed class DetailShell : Component
         // nullable ColorF and routeName compare by value.
         UseEffect(() => SetTint(micaTint), DepKey.From(HashCode.Combine(route.Name, micaTint.HasValue, micaTint.GetValueOrDefault(), Tok.Theme)));
         UseActivation(onActivated: () => SetTint(micaTint), onDeactivated: ClearTint);
+        // onDeactivated fires ONLY on PARK, never on unmount (RenderContext.UseActivation). A nav that unmounts this page
+        // without parking it first (keep-alive eviction / direct replace) would otherwise leave the wash stuck — owned by
+        // a gone page — until the next page's SetTint overwrites it (the intermittent "color wash sticks" bug). Clear on
+        // UNMOUNT too via a mount-once effect cleanup; owner-gated, so it never clobbers the next page's tint.
+        UseEffect(() => (Action?)ClearTint, DepKey.Empty);
 
         // ── handlers (close over live svc/model; not frozen ctor args) ──
         void Play(int index) { if (m.ContextUri is { } uri && svc is not null) _ = svc.Player.PlayAsync(uri, Math.Max(0, index)); }

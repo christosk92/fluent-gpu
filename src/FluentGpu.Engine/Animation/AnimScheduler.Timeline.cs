@@ -46,6 +46,7 @@ public sealed partial class AnimEngine
         r.DrivenSrc = AnimValue.WallClock;
         _keysBySlot[s] = keys;
         _slab.BumpVersion();   // Loop/DisplayRate rewritten in place on a retarget — keep the census memo honest
+        if (channel == AnimChannel.BlurSigma) RefreshBlurAnimationActive(node);
     }
 
     /// <summary>Scroll/value-driven track: progress = clamp01((source − domainMin)/(domainMax − domainMin)), source
@@ -66,6 +67,7 @@ public sealed partial class AnimEngine
         r.DrivenSrc = (ushort)drivenRef;
         _keysBySlot[s] = keys;
         _slab.BumpVersion();   // Loop cleared in place on a retarget — keep the census memo honest
+        if (channel == AnimChannel.BlurSigma) RefreshBlurAnimationActive(node);
     }
 
     /// <summary>Advance a non-spring row (Eased two-point / Keyframes / Driven) to its value this tick; sets Done.

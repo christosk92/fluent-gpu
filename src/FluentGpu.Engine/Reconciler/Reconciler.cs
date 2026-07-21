@@ -1013,6 +1013,16 @@ public sealed class TreeReconciler
 
         LayoutTransition? transition = null;
 
+        if (state.ActiveKey is { } activeKey && state.Entries.TryGetValue(activeKey, out var activeEntry)
+            && activeKey == key && !Equals(activeEntry.Token, token))
+        {
+            // A cache key identifies retained STATE, not necessarily one immutable route. Wavee deliberately collapses
+            // album→album and artist→artist onto one warm slot; the token still changed and TransitionFor must get the
+            // edge so the in-place update receives its directional entrance. There is no outgoing root in this case:
+            // Update below preserves the mounted component/state, then the normal enter seed animates that same root.
+            transition = options.TransitionFor?.Invoke(activeEntry.Token, token);
+        }
+
         if (state.ActiveKey is { } oldKey && oldKey != key && state.Entries.TryGetValue(oldKey, out var oldActive))
         {
             transition = options.TransitionFor?.Invoke(oldActive.Token, token);

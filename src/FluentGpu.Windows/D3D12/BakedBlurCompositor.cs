@@ -20,6 +20,11 @@ internal sealed unsafe class BakedBlurCompositor : IDisposable
     private ID3D12RootSignature* _root;
     private ID3D12PipelineState* _copyPso;
     private ID3D12PipelineState* _blurPso;
+    private ID3D12QueryHeap* _timestampHeap;
+    private ID3D12Resource* _timestampReadback;
+    private ulong* _timestampData;
+    private ulong _timestampFrequency;
+    private readonly bool[] _timestampPending = new bool[2];
     private ID3D12Resource* _scratchA0;
     private ID3D12Resource* _scratchB0;
     private ID3D12Resource* _scratchA1;
@@ -57,9 +62,10 @@ float4 BlurPS(V i) : SV_Target {
  a+=(T(base+stp*o1.z,lo,mx)+T(base-stp*o1.z,lo,mx))*w1.z; return a; }
 """;
 
-    public void Init(ID3D12Device* device)
+    public void Init(ID3D12Device* device, ID3D12CommandQueue* queue)
     {
         _device = device;
+        InitTimestamps(queue);
         BuildHeaps();
         BuildRoot();
         _copyPso = BuildPso(CopyHlsl, "CopyPS", "BakedBlur.Copy");
@@ -76,10 +82,13 @@ float4 BlurPS(V i) : SV_Target {
 
     public bool DrainOne(ID3D12GraphicsCommandList* cmd, ImageTextureStore images, BakedBlurQueue queue, int frameIndex)
     {
-        if (queue.Paused || !queue.TryDequeueJob(out var job)) return false;
+        CollectGpuTime(queue, frameIndex);
+        if (!queue.TryDequeueRunnableJob(out var job)) return false;
+        long recordStart = System.Diagnostics.Stopwatch.GetTimestamp();
         if (!images.TryGetBakeSource(job.SourceId, out var source, out var sourceUv))
         {
-            queue.Post(new BakedBlurQueue.Result(job.Id, job.Generation, false, 0, 0));
+            queue.Post(new BakedBlurQueue.Result(job.Id, job.Generation, false, 0, 0, job.Quality, job.IsUpgrade));
+            queue.ReportRecordTime(System.Diagnostics.Stopwatch.GetElapsedTime(recordStart).TotalMilliseconds);
             return true;
         }
 
@@ -92,17 +101,10 @@ float4 BlurPS(V i) : SV_Target {
         ID3D12Resource* scratchB = bank == 0 ? _scratchB0 : _scratchB1;
         ref D3D12_RESOURCE_STATES stateA = ref (bank == 0 ? ref _stateA0 : ref _stateA1);
         ref D3D12_RESOURCE_STATES stateB = ref (bank == 0 ? ref _stateB0 : ref _stateB1);
-
-        ID3D12Resource* output = CreateTarget(outW, outH, "Image.BakedBlur");
-        if (!images.TryAdoptBaked(job.Id, output, outW, outH))
-        {
-            D3D12MemoryDiagnostics.Release(output, "Image.BakedBlur"); output->Release();
-            queue.Post(new BakedBlurQueue.Result(job.Id, job.Generation, false, 0, 0));
-            return true;
-        }
+        int query = bank * 2;
+        if (_timestampHeap != null) cmd->EndQuery(_timestampHeap, D3D12_QUERY_TYPE.D3D12_QUERY_TYPE_TIMESTAMP, (uint)query);
 
         CreateSrv(source, SrvCpu(slot));
-        _device->CreateRenderTargetView(output, null, Rtv(slot + 2));
         ID3D12DescriptorHeap* heap = _srvHeap;
         cmd->SetDescriptorHeaps(1, &heap);
         cmd->SetGraphicsRootSignature(_root);
@@ -121,18 +123,75 @@ float4 BlurPS(V i) : SV_Target {
         RecordBlur(cmd, slot + 2, Rtv(slot), blurW, blurH, texelSigma, 0f, 1f);
         Barrier(cmd, scratchA, ref stateA, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
-        D3D12_RESOURCE_STATES outputState = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-        Barrier(cmd, output, ref outputState, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
+        Barrier(cmd, scratchB, ref stateB, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
         float uw = (float)blurW / ScratchSize, uh = (float)blurH / ScratchSize;
         float tx = 0.5f / ScratchSize, ty = 0.5f / ScratchSize;
-        RecordCopy(cmd, slot + 1, Rtv(slot + 2), outW, outH, 0f, 0f, uw, uh, tx, ty, uw - tx, uh - ty);
-        Barrier(cmd, output, ref outputState, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        RecordCopy(cmd, slot + 1, Rtv(slot + 1), outW, outH, 0f, 0f, uw, uh, tx, ty, uw - tx, uh - ty);
+        Barrier(cmd, scratchB, ref stateB, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+
+        if (!queue.IsCurrent(in job) || !images.TryAdoptBakedFrom(cmd, job.Id, scratchB, outW, outH))
+        {
+            queue.Post(new BakedBlurQueue.Result(job.Id, job.Generation, false, 0, 0, job.Quality, job.IsUpgrade));
+            queue.ReportRecordTime(System.Diagnostics.Stopwatch.GetElapsedTime(recordStart).TotalMilliseconds);
+            return true;
+        }
+
+        if (_timestampHeap != null && _timestampReadback != null)
+        {
+            cmd->EndQuery(_timestampHeap, D3D12_QUERY_TYPE.D3D12_QUERY_TYPE_TIMESTAMP, (uint)(query + 1));
+            cmd->ResolveQueryData(_timestampHeap, D3D12_QUERY_TYPE.D3D12_QUERY_TYPE_TIMESTAMP,
+                (uint)query, 2, _timestampReadback, (ulong)query * sizeof(ulong));
+            _timestampPending[bank] = true;
+        }
 
         // Register the texture now so later commands in this list can resolve its SRV, but do not expose Ready to the
         // UI/cache until ExecuteCommandLists has accepted the producer work.
-        _recordedResult = new BakedBlurQueue.Result(job.Id, job.Generation, true, outW, outH);
+        _recordedResult = new BakedBlurQueue.Result(job.Id, job.Generation, true, outW, outH, job.Quality, job.IsUpgrade);
         _hasRecordedResult = true;
+        queue.ReportRecordTime(System.Diagnostics.Stopwatch.GetElapsedTime(recordStart).TotalMilliseconds);
         return true;
+    }
+
+    private void InitTimestamps(ID3D12CommandQueue* queue)
+    {
+        ulong frequency;
+        if (queue == null || queue->GetTimestampFrequency(&frequency) < 0 || frequency == 0) return;
+        _timestampFrequency = frequency;
+        D3D12_QUERY_HEAP_DESC qd = default;
+        qd.Type = D3D12_QUERY_HEAP_TYPE.D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+        qd.Count = 4;
+        ID3D12QueryHeap* heap;
+        if (_device->CreateQueryHeap(&qd, __uuidof<ID3D12QueryHeap>(), (void**)&heap) < 0) return;
+        _timestampHeap = heap;
+
+        D3D12_HEAP_PROPERTIES hp = default;
+        hp.Type = D3D12_HEAP_TYPE.D3D12_HEAP_TYPE_READBACK;
+        D3D12_RESOURCE_DESC rd = default;
+        rd.Dimension = D3D12_RESOURCE_DIMENSION.D3D12_RESOURCE_DIMENSION_BUFFER;
+        rd.Width = 4 * sizeof(ulong); rd.Height = 1; rd.DepthOrArraySize = 1; rd.MipLevels = 1;
+        rd.Format = DXGI_FORMAT.DXGI_FORMAT_UNKNOWN; rd.SampleDesc.Count = 1;
+        rd.Layout = D3D12_TEXTURE_LAYOUT.D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        ID3D12Resource* readback;
+        if (_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &rd,
+            D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST, null,
+            __uuidof<ID3D12Resource>(), (void**)&readback) < 0)
+        {
+            _timestampHeap->Release(); _timestampHeap = null; return;
+        }
+        _timestampReadback = readback;
+        D3D12MemoryDiagnostics.Track(readback, "BakedBlur.TimestampReadback", 4 * sizeof(ulong));
+        void* mapped;
+        if (readback->Map(0, null, &mapped) >= 0) _timestampData = (ulong*)mapped;
+    }
+
+    private void CollectGpuTime(BakedBlurQueue queue, int frameIndex)
+    {
+        int bank = frameIndex & 1;
+        if (!_timestampPending[bank] || _timestampData == null || _timestampFrequency == 0) return;
+        int query = bank * 2;
+        ulong begin = _timestampData[query], end = _timestampData[query + 1];
+        _timestampPending[bank] = false;
+        if (end >= begin) queue.ReportGpuTime((end - begin) * 1000.0 / _timestampFrequency);
     }
 
     public void PublishRecorded(BakedBlurQueue? queue)
@@ -253,6 +312,8 @@ float4 BlurPS(V i) : SV_Target {
 
     public void Dispose()
     {
+        if(_timestampReadback!=null){if(_timestampData!=null)_timestampReadback->Unmap(0,null);_timestampData=null;D3D12MemoryDiagnostics.Release(_timestampReadback,"BakedBlur.TimestampReadback");_timestampReadback->Release();_timestampReadback=null;}
+        if(_timestampHeap!=null){_timestampHeap->Release();_timestampHeap=null;}
         if(_scratchA0!=null){D3D12MemoryDiagnostics.Release(_scratchA0,"BakedBlur.ScratchA0");_scratchA0->Release();_scratchA0=null;}
         if(_scratchB0!=null){D3D12MemoryDiagnostics.Release(_scratchB0,"BakedBlur.ScratchB0");_scratchB0->Release();_scratchB0=null;}
         if(_scratchA1!=null){D3D12MemoryDiagnostics.Release(_scratchA1,"BakedBlur.ScratchA1");_scratchA1->Release();_scratchA1=null;}
