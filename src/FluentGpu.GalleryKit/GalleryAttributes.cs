@@ -12,6 +12,14 @@ namespace FluentGpu.GalleryKit;
 public enum ShotMode : byte { Deterministic, Animated, Skip }
 
 /// <summary>
+/// A gallery page's difficulty facet (the Compose Material Catalog "difficulty badge"): <see cref="Basic"/> is a single
+/// control / one primitive shown in isolation (the default); <see cref="RealWorld"/> is a composed pattern an app would
+/// actually ship; <see cref="Advanced"/> is a deep or perf-critical showcase. Rendered as a tile/header badge and a
+/// filter facet on the All-controls grid.
+/// </summary>
+public enum GalleryLevel : byte { Basic, RealWorld, Advanced }
+
+/// <summary>
 /// Tags a <see cref="FluentGpu.Hooks.Component"/> subclass as a gallery page. The <c>GalleryRegistryGenerator</c>
 /// collects every <c>[GalleryPage]</c>-tagged component in the assembly and emits <c>GalleryRegistry.Pages</c>
 /// (a <see cref="GalleryPageInfo"/> table) + <c>GalleryRegistry.Create(key)</c> — compile-time, zero reflection.
@@ -38,6 +46,15 @@ public sealed class GalleryPageAttribute(string key, string title, string catego
     public ShotMode ShotMode { get; set; } = ShotMode.Deterministic;
     /// <summary>Hidden pages resolve/deep-link and construct in the audit, but do not appear in the nav tree or search.</summary>
     public bool Hidden { get; set; }
+    /// <summary>Difficulty facet (see <see cref="GalleryKit.GalleryLevel"/>) — rendered as a tile/header badge and an
+    /// All-controls filter facet. Default <see cref="GalleryLevel.Basic"/>.</summary>
+    public GalleryLevel Level { get; set; } = GalleryLevel.Basic;
+    /// <summary>The "See this in Wavee" claim — a short phrase naming where the driving app (Wavee) uses this capability
+    /// (e.g. "PlayerBar volume slider"). Rendered as a documented pointer chip on the page. Requires <see cref="WaveePath"/>.</summary>
+    public string WaveeUse { get; set; } = "";
+    /// <summary>The repo-relative source path backing <see cref="WaveeUse"/> (e.g.
+    /// <c>src/apps/Wavee/Features/Shell/PlayerBar.cs</c>). The <c>--gallery-audit</c> link contract asserts it exists on disk.</summary>
+    public string WaveePath { get; set; } = "";
 }
 
 /// <summary>
@@ -52,6 +69,11 @@ public sealed record GalleryPageInfo(string Key, string Title, string Category, 
     public int Order { get; init; } = 1000;
     public ShotMode ShotMode { get; init; } = ShotMode.Deterministic;
     public bool Hidden { get; init; }
+    public GalleryLevel Level { get; init; } = GalleryLevel.Basic;
+    /// <summary>The "See this in Wavee" claim (empty when the page has no Wavee link).</summary>
+    public string WaveeUse { get; init; } = "";
+    /// <summary>The repo-relative source path backing <see cref="WaveeUse"/> (empty when none).</summary>
+    public string WaveePath { get; init; } = "";
 }
 
 /// <summary>

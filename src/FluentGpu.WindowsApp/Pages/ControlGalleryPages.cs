@@ -18,8 +18,49 @@ static class GalleryPage
     {
         var meta = PageInfo.Find(key);
         var header = PageInfo.HeaderFor(title, description, meta);
+        header = DecorateHeader(header, key);
         string[]? related = meta is not null ? PageInfo.RoutableRelated(meta) : null;
         return GalleryScaffold.Page(header, related, body);
+    }
+
+    // G8c2: an eyebrow meta row above the page title — a difficulty badge, an optional "See this in Wavee" pointer chip
+    // (registry WaveeUse/WaveePath), and a Favorite star for the page. All from the generated registry, so a page that
+    // never authored PageInfo still gets its badge + star.
+    static Element DecorateHeader(Element header, string key)
+    {
+        var info = GalleryProjection.Info(key);
+        if (info is null) return header;
+        var row = new List<Element> { LevelBadge.Of(info.Level) };
+        if (info.WaveeUse.Length > 0) row.Add(WaveeChip(info.WaveeUse, info.WaveePath));
+        row.Add(new BoxEl { Grow = 1f });
+        row.Add(Embed.Comp(() => new StarButton { PageKey = key, Size = 18f }));
+        return new BoxEl
+        {
+            Direction = 1, Gap = 12f,
+            Children = [new BoxEl { Direction = 0, Gap = 8f, AlignItems = FlexAlign.Center, Wrap = true, Children = row.ToArray() }, header],
+        };
+    }
+
+    // The "See this in Wavee" chip: a documented pointer (claim + source path) into the driving app. It opens NOTHING —
+    // this is a native app, not a web IDE; the chip just tells you where to look. The --gallery-audit link contract
+    // asserts WaveePath exists on disk.
+    static Element WaveeChip(string claim, string path)
+    {
+        var kids = new List<Element>
+        {
+            Icon(Icons.MusicNote, 13f).Foreground(Tok.AccentDefault),
+            new TextEl("See this in Wavee — " + claim) { Size = 12f, Color = Tok.TextPrimary },
+        };
+        if (path.Length > 0)
+        {
+            int slash = path.LastIndexOf('/');
+            kids.Add(new TextEl(slash >= 0 ? path[(slash + 1)..] : path) { Size = 11.5f, Color = Tok.TextTertiary, FontFamily = "Cascadia Code" });
+        }
+        return new BoxEl
+        {
+            Direction = 0, Gap = 8f, AlignItems = FlexAlign.Center, Padding = new Edges4(10, 4, 10, 4),
+            Corners = Radii.PillAll, Fill = Tok.AccentSubtle, Children = kids.ToArray(),
+        };
     }
 
     /// <summary>A bold readout whose text rides a signal-reading thunk — only the text node updates (no page re-render).</summary>
@@ -47,12 +88,10 @@ static class GalleryPage
         ],
     };
 
-    /// <summary>A tile for a registered page key — image/subtitle pulled from the PageInfo registry.</summary>
+    /// <summary>A tile for a registered page key — the shared registry-projected <see cref="GalleryTile"/> (icon, title,
+    /// one-liner, difficulty badge, Favorite star). Every gallery grid routes through this.</summary>
     public static Element TileFor(string key, Action onOpen)
-    {
-        var meta = PageInfo.Find(key);
-        return Tile(key, meta?.Image, null, onOpen, meta?.Subtitle);
-    }
+        => Embed.Comp(() => new GalleryTile { PageKey = key, OnOpen = onOpen }) with { Key = key };
 
     /// <summary>The tile grid for one nav category (the WinUI category overview page body).</summary>
     public static Element CategoryGrid(string category, Action<string> navigate)
@@ -60,7 +99,7 @@ static class GalleryPage
         var keys = GalleryShell.CategoryKeys(category);
         var tiles = new Element[keys.Length];
         for (int i = 0; i < keys.Length; i++) { var k = keys[i]; tiles[i] = TileFor(k, () => navigate(k)); }
-        return AutoGrid(300f, 12f, 90f, tiles);
+        return AutoGrid(300f, 12f, float.NaN, tiles);   // rows size to content (badge + 2-line subtitle)
     }
 }
 
@@ -155,18 +194,56 @@ sealed class BasicInputOverviewPage : Component
 [GalleryPage("all", "All controls", "Overview", Hidden = true)]
 sealed class AllControlsPage : Component
 {
+    // -1 = All; else the GalleryLevel filter.
     public override Element Render()
     {
         var navigate = UseContext(NavigationView.Nav);
-        var sections = new List<Element>();
+        var (filter, setFilter) = UseState(-1);
+
+        var sections = new List<Element> { FilterBar(filter, setFilter) };
         foreach (var (title, keys) in GalleryShell.ControlCatalog)
         {
+            var shown = keys.Where(k => filter < 0 || (int)GalleryProjection.LevelOf(k) == filter).ToArray();
+            if (shown.Length == 0) continue;
             sections.Add(new BoxEl { Height = 12f });
             sections.Add(Subtitle(title));
-            var tiles = new Element[keys.Length];
-            for (int i = 0; i < keys.Length; i++) { var k = keys[i]; tiles[i] = GalleryPage.TileFor(k, () => navigate(k)); }
-            sections.Add(AutoGrid(300f, 12f, 90f, tiles));
+            var tiles = new Element[shown.Length];
+            for (int i = 0; i < shown.Length; i++) { var k = shown[i]; tiles[i] = GalleryPage.TileFor(k, () => navigate(k)); }
+            sections.Add(AutoGrid(300f, 12f, float.NaN, tiles));
         }
-        return GalleryPage.Shell("All controls", "Every control in the gallery, grouped by category.", sections.ToArray());
+        if (sections.Count == 1)
+            sections.Add(Body("No controls match this difficulty.").Secondary());
+        return GalleryPage.Shell("All controls", "Every control in the gallery, grouped by category. Filter by difficulty.", sections.ToArray());
+    }
+
+    static Element FilterBar(int filter, Action<int> set)
+    {
+        Element Chip(int level, string label)
+        {
+            bool on = filter == level;
+            return new BoxEl
+            {
+                Direction = 0, AlignItems = FlexAlign.Center, Gap = 6f, MinHeight = 32f,
+                Padding = new Edges4(12, 4, 12, 4), Corners = Radii.PillAll, OnClick = () => set(level),
+                Fill = on ? Tok.AccentSubtle : Tok.FillSubtleTransparent,
+                HoverFill = on ? Tok.AccentSubtle : Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+                Children =
+                [
+                    Icon(Icons.Filter, 13f).Foreground(on ? Tok.AccentDefault : Tok.TextTertiary),
+                    new TextEl(label) { Size = 13f, Color = on ? Tok.TextPrimary : Tok.TextSecondary },
+                ],
+            };
+        }
+        return new BoxEl
+        {
+            Direction = 0, Gap = 8f, Wrap = true, Margin = new Edges4(0, 4, 0, 8), AlignItems = FlexAlign.Center,
+            Children =
+            [
+                Chip(-1, "All"),
+                Chip((int)GalleryLevel.Basic, LevelBadge.Label(GalleryLevel.Basic)),
+                Chip((int)GalleryLevel.RealWorld, LevelBadge.Label(GalleryLevel.RealWorld)),
+                Chip((int)GalleryLevel.Advanced, LevelBadge.Label(GalleryLevel.Advanced)),
+            ],
+        };
     }
 }

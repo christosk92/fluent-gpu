@@ -29,7 +29,8 @@ sealed class GalleryShell : Component
     public string InitialPage = "welcome";
 
     // The one source of truth, bridged to the app-facing RouteRegistry (Controls) so we reuse its proven derivation
-    // (BuildSectionedNavTree / BuildSearchIndex) + PageHost resolution. Built once (registration is stable).
+    // (BuildSearchIndex + PageHost resolution). Built once (registration is stable). G8c2: the nav tree is a FLAT
+    // top-level spine (BuildItems) — no "Controls" wrapper — with group headers routing to registry-projected overviews.
     static readonly RouteRegistry Registry = BuildRegistry();
     static readonly NavItem[] NavItems = BuildItems();
     static readonly (string Label, string Key)[] SearchIndex = Registry.BuildSearchIndex();
@@ -55,7 +56,7 @@ sealed class GalleryShell : Component
 
     static (string Title, string[] Keys)[] BuildCatalog()
     {
-        string[] cats = GallerySections.Sections.FirstOrDefault(s => s.Section == "Controls").Categories ?? Array.Empty<string>();
+        string[] cats = GallerySections.ControlCategories;
         var list = new List<(string, string[])>(cats.Length);
         foreach (var cat in cats)
         {
@@ -67,6 +68,21 @@ sealed class GalleryShell : Component
             list.Add((cat, keys));
         }
         return list.ToArray();
+    }
+
+    /// <summary>The non-hidden page keys in a category, in nav order (Order then registry order).</summary>
+    internal static string[] PagesInCategory(string category)
+        => FluentGpu.Generated.GalleryRegistry.Pages
+            .Where(p => p.Category == category && !p.Hidden)
+            .OrderBy(p => p.Order)
+            .Select(p => p.Key)
+            .ToArray();
+
+    /// <summary>True when <paramref name="key"/> is a top-level group (a category with an overview grid), not a page.</summary>
+    internal static bool IsGroup(string key)
+    {
+        foreach (var (cat, _) in GallerySections.Order) if (cat == key) return true;
+        return key == "all";
     }
 
     static RouteRegistry BuildRegistry()
@@ -87,16 +103,39 @@ sealed class GalleryShell : Component
 
     static NavItem[] BuildItems()
     {
-        // "Home" is a top-level leaf; the rest are the sectioned tree (categories nested under the 8 IA sections).
-        var sections = Registry.BuildSectionedNavTree(GallerySections.Sections);
-        var items = new NavItem[sections.Length + 1];
-        items[0] = new NavItem("welcome", Icons.Home, "Home");
-        Array.Copy(sections, 0, items, 1, sections.Length);
-        return items;
+        // G8c2 FLAT spine: "Home" is a top-level leaf; every entry in GallerySections.Order is a TOP-LEVEL expander whose
+        // children are its non-hidden registry pages (no "Controls" wrapper level). The group's Key IS the category name
+        // (e.g. "Basic input") — clicking it routes to that category's overview grid (see Page). Empty categories drop.
+        var items = new List<NavItem>
+        {
+            new("welcome", Icons.Home, "Home"),
+            new("all", Icons.ViewGrid, "All controls"),
+        };
+        foreach (var (cat, icon) in GallerySections.Order)
+        {
+            var keys = PagesInCategory(cat);
+            if (keys.Length == 0) continue;
+            var kids = new NavItem[keys.Length];
+            for (int i = 0; i < keys.Length; i++)
+            {
+                var def = Registry.Resolve(keys[i]);
+                kids[i] = new NavItem(keys[i], def?.Icon ?? "", (def?.Title.Length ?? 0) > 0 ? def!.Title : keys[i]);
+            }
+            items.Add(new NavItem(cat, icon, cat) { Children = kids });
+        }
+        return items.ToArray();
     }
 
-    static Element Page(string key) => FluentGpu.Generated.GalleryRegistry.Create(key)
-        ?? FluentGpu.Generated.GalleryRegistry.Create("welcome") ?? new BoxEl();
+    // Page factory (the NavigationView Content seam). A real registry page resolves directly; a top-level GROUP key
+    // (a category, or "all") routes to a registry-projected overview grid — so a group header NEVER falls through to
+    // Home (the G8c2 Resolve-miss→Fallback fix). Only a truly unknown key lands on the Home fallback.
+    static Element Page(string key)
+    {
+        var page = FluentGpu.Generated.GalleryRegistry.Create(key);
+        if (page is not null) return page;
+        if (IsGroup(key)) return Embed.Comp(() => new OverviewPage { Category = key });
+        return FluentGpu.Generated.GalleryRegistry.Create("welcome") ?? new BoxEl();
+    }
 
     readonly Signal<int> _paneToggleReq = new(0);
     readonly Signal<string> _navigateReq = new("");
@@ -125,6 +164,12 @@ sealed class GalleryShell : Component
     // Back-driven selects arrive with key == _current (GoBack sets it first), so they do not re-push.
     void RecordNav(string key)
     {
+        // Recent = real visit history: only actual (non-hidden, resolvable) content pages count — skip Home, groups, the
+        // All-controls grid, and hidden pages so Recent stays a list of pages the user actually opened.
+        if (key.Length > 0 && key != "welcome" && key != "all" && !IsGroup(key)
+            && GalleryProjection.Info(key) is { Hidden: false })
+            GalleryPrefs.RecordVisit(key);
+
         if (key == _current) return;
         if (_current.Length > 0) _history.Add(_current);
         _current = key;
@@ -206,6 +251,7 @@ sealed class GalleryShell : Component
                 ShowPaneToggle = false,
                 PaneToggleRequest = _paneToggleReq,
                 NavigateRequest = _navigateReq,
+                DistinctGroupHeaders = true,   // G8c2: flat spine — groups get the eyebrow treatment, pages the icon+primary look
             })
         ) with { Grow = 1 };
 

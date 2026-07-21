@@ -125,9 +125,12 @@ namespace FluentGpu.SourceGen.Gallery
                 named.TryGetValue("Icon", out var i) && i.Value is string ic ? ic : "",
                 keywords,
                 named.TryGetValue("Order", out var o) && o.Value is int ov ? ov : 1000,
-                // ShotMode is a byte-backed enum, so its TypedConstant value is a boxed byte (not int) — convert.
+                // ShotMode / Level are byte-backed enums, so their TypedConstant values are boxed bytes (not int) — convert.
                 named.TryGetValue("ShotMode", out var sm) && sm.Value is not null ? System.Convert.ToInt32(sm.Value) : 0,
                 named.TryGetValue("Hidden", out var h) && h.Value is bool hv && hv,
+                named.TryGetValue("Level", out var lv) && lv.Value is not null ? System.Convert.ToInt32(lv.Value) : 0,
+                named.TryGetValue("WaveeUse", out var wu) && wu.Value is string wus ? wus : "",
+                named.TryGetValue("WaveePath", out var wp) && wp.Value is string wps ? wps : "",
                 diags.ToImmutable(), emit);
         }
 
@@ -156,6 +159,9 @@ namespace FluentGpu.SourceGen.Gallery
                 if (m.Order != 1000) inits.Add("Order = " + m.Order.ToString(System.Globalization.CultureInfo.InvariantCulture));
                 if (m.ShotMode != 0) inits.Add("ShotMode = (global::FluentGpu.GalleryKit.ShotMode)" + m.ShotMode.ToString(System.Globalization.CultureInfo.InvariantCulture));
                 if (m.Hidden) inits.Add("Hidden = true");
+                if (m.Level != 0) inits.Add("Level = (global::FluentGpu.GalleryKit.GalleryLevel)" + m.Level.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                if (m.WaveeUse.Length > 0) inits.Add("WaveeUse = " + Quote(m.WaveeUse));
+                if (m.WaveePath.Length > 0) inits.Add("WaveePath = " + Quote(m.WaveePath));
                 if (inits.Count > 0) sb.Append(" { ").Append(string.Join(", ", inits)).Append(" }");
                 sb.Append(",\n");
             }
@@ -192,6 +198,7 @@ namespace FluentGpu.SourceGen.Gallery
         private readonly record struct PageModel(
             string Key, Location KeyLocation, string FqTypeName, string Title, string Category,
             string Icon, string[] Keywords, int Order, int ShotMode, bool Hidden,
+            int Level, string WaveeUse, string WaveePath,
             ImmutableArray<Diag> Diagnostics, bool Emit);
     }
 }

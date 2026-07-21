@@ -315,7 +315,8 @@ sealed partial class RatingControlControlPage : Component
     static Element ReadOnly() => RatingControl.Create(_ro, readOnly: true);
 }
 
-[GalleryPage("Slider", "Slider", "Basic input", Icon = Icons.Volume)]
+[GalleryPage("Slider", "Slider", "Basic input", Icon = Icons.Volume,
+    WaveeUse = "Volume & seek sliders in the player bar", WaveePath = "src/apps/Wavee/Features/Shell/PlayerBar.cs")]
 sealed partial class SliderControlPage : Component
 {
     static readonly FloatSignal _range = new(50f);

@@ -33,6 +33,43 @@ sealed class WelcomePage : Component
         var (tab, setTab) = UseState("recent");
         var navigate = UseContext(NavigationView.Nav);
 
+        // Recent = real visit history; Favorites = starred pages (both persisted via GalleryPrefs). Reading the signals
+        // subscribes Home so a star toggle / new visit re-renders the active tab. Recent falls back to the curated demo
+        // cards on first run (empty history) so the landing is never blank.
+        var recent = GalleryPrefs.Recent.Value;
+        var favs = GalleryPrefs.Favorites.Value;
+
+        Element grid = tab == "favorites"
+            ? (favs.Length > 0 ? TileGrid(favs, navigate) : EmptyState("No favorites yet", "Tap the star on any tile or page header to pin it here."))
+            : (recent.Length > 0 ? TileGrid(recent, navigate) : CuratedGrid(navigate));
+
+        return ScrollView(new BoxEl
+        {
+            Direction = 1, Gap = 0,
+            Children =
+            [
+                Embed.Comp(() => new HomeHero()),
+                new BoxEl
+                {
+                    Margin = new Edges4(36, 8, 36, 12), Direction = 0, AlignItems = FlexAlign.Center,
+                    Children = [SelectorBar(tab, setTab), new BoxEl { Grow = 1f }, HyperlinkButton.Create("Browse all controls", () => navigate("all"))],
+                },
+                grid,
+            ],
+        });
+    }
+
+    // Registry-projected tiles for a set of page keys (Recent / Favorites) — the shared GalleryTile (badge + star).
+    static Element TileGrid(string[] keys, Action<string> navigate)
+    {
+        var tiles = new Element[keys.Length];
+        for (int i = 0; i < keys.Length; i++) { var k = keys[i]; tiles[i] = GalleryPage.TileFor(k, () => navigate(k)); }
+        return AutoGrid(280f, 12f, float.NaN, tiles) with { Padding = new Edges4(36, 0, 36, 36) };
+    }
+
+    // The first-run landing: the curated, entrance-animated sample cards.
+    static Element CuratedGrid(Action<string> navigate)
+    {
         var cards = new Element[Demos.Length];
         for (int i = 0; i < Demos.Length; i++)
         {
@@ -43,19 +80,14 @@ sealed class WelcomePage : Component
                 OnOpen = () => navigate(d.Key),
             }) with { Key = d.Key };
         }
-
-        return ScrollView(new BoxEl
-        {
-            Direction = 1, Gap = 0,
-            Children =
-            [
-                Embed.Comp(() => new HomeHero()),
-                new BoxEl { Margin = new Edges4(36, 8, 36, 12), Children = [SelectorBar(tab, setTab)] },
-                // Responsive: as many equal columns as fit at >=280 DIP, stretched to fill the width (reflows on resize).
-                AutoGrid(280f, 12f, 88f, cards) with { Padding = new Edges4(36, 0, 36, 36) },
-            ],
-        });
+        return AutoGrid(280f, 12f, 88f, cards) with { Padding = new Edges4(36, 0, 36, 36) };
     }
+
+    static Element EmptyState(string title, string sub) => new BoxEl
+    {
+        Direction = 1, Gap = 6f, Padding = new Edges4(36, 24, 36, 36),
+        Children = [BodyStrong(title), Caption(sub).Secondary()],
+    };
 
     // Stateless factory — selection is owned by this page (component props are mount-only, so a stateful SelectorBar
     // would freeze its Selected at mount).

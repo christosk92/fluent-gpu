@@ -14,7 +14,8 @@ using static FluentGpu.Dsl.Ui;
 // springs, eased tracks, the per-node self-blur channel (AnimChannel.Blur), and the expressive curve/token vocabulary
 // (Easing.SmoothOut/Overshoot/Pop, Expressive.*). Each card seeds a recipe imperatively on captured nodes — the same
 // Context.Anim idiom as AnimationPage. This is an opt-in app-author palette; framework controls keep their Fluent curves.
-[GalleryPage("motion-recipes", "Motion recipes", "Patterns", Icon = Icons.Movie, ShotMode = ShotMode.Animated)]
+[GalleryPage("motion-recipes", "Motion recipes", "Patterns", Icon = Icons.Movie, ShotMode = ShotMode.Animated,
+    Level = GalleryLevel.RealWorld, WaveeUse = "Track-row hover & press ramps", WaveePath = "src/apps/Wavee/Components/TrackRow.cs")]
 sealed class MotionRecipesPage : Component
 {
     public override Element Render() => GalleryPage.Shell("Motion recipes",

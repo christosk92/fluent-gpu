@@ -11,7 +11,8 @@ using static FluentGpu.Dsl.Ui;
 // (Slider + transport IconButtons + ToggleButton). Composes every subsystem built this session.
 //
 //   dotnet run --project src/FluentGpu.WindowsApp -- --demo wavee
-[GalleryPage("wavee", "Wavee skeleton", "Samples", Icon = Icons.MusicNote)]
+[GalleryPage("wavee", "Wavee skeleton", "Samples", Icon = Icons.MusicNote, Level = GalleryLevel.Advanced,
+    WaveeUse = "The whole driving app — a Spotify desktop client", WaveePath = "src/apps/Wavee/Wavee.csproj")]
 sealed class WaveeShell : Component
 {
     static readonly ColorF Grey = ColorF.FromRgba(0x9A, 0x9A, 0x9A);
