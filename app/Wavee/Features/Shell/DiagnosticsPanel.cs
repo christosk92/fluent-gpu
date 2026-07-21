@@ -61,7 +61,6 @@ sealed class DiagnosticsPanel(IAppSettings? settings = null) : Component
     {
         var hooks = UseContext(InputHooks.Current);
         var post = UsePost();
-        var timer = UseRef<Timer?>(null);
         var lastVersion = UseRef(-1L);
         _overlay = UseContext(Overlay.Service);
 
@@ -74,26 +73,15 @@ sealed class DiagnosticsPanel(IAppSettings? settings = null) : Component
             EnsureSessionLoaded(post);
         });
 
-        UseSignalEffect(() =>
+        // Live-log tail poll (session 0 only): a frame-clock interval that AUTO-PAUSES while parked/minimized (idle
+        // quiesce) — replaces the old System.Threading.Timer + post marshal. Bumps _refresh only when the log version moved.
+        UseInterval(() =>
         {
-            bool live = _session.Value == 0;
-            timer.Value?.Dispose();
-            timer.Value = null;
-            if (live)
-            {
-                timer.Value = new Timer(_ =>
-                {
-                    post(() =>
-                    {
-                        long v = WaveeLog.Instance.Version;
-                        if (v == lastVersion.Value) return;
-                        lastVersion.Value = v;
-                        _refresh.Value = _refresh.Peek() + 1;
-                    });
-                }, null, 250, 750);
-            }
-            Reactive.OnCleanup(() => { timer.Value?.Dispose(); timer.Value = null; });
-        });
+            long v = WaveeLog.Instance.Version;
+            if (v == lastVersion.Value) return;
+            lastVersion.Value = v;
+            _refresh.Value = _refresh.Peek() + 1;
+        }, 750f, enabled: _session.Value == 0);
 
         // Hoisted here (unconditional) so the hook order is stable — LogBody has early-out branches before the list.
         var logLayout = UseMemo(() => new MeasuredStackVirtualLayout(estimatedExtent: 40f), DepKey.Empty);

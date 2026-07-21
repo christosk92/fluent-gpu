@@ -385,7 +385,7 @@ sealed class PlaybackRuntimeSetupModel
                 }
             }
         });
-        Toasts.Show(Loc.Get(Strings.Playback.Runtime.Ready), ToastSeverity.Success);
+        Toast.Show(Loc.Get(Strings.Playback.Runtime.Ready), new ToastOptions { Severity = InfoBarSeverity.Success });
     }
 
     void Fail(string message)

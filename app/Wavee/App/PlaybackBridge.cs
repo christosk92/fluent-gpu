@@ -1,3 +1,4 @@
+using FluentGpu.Controls;
 using FluentGpu.Hooks;
 using FluentGpu.Localization;
 using FluentGpu.Signals;
@@ -118,8 +119,12 @@ public sealed class PlaybackBridge
                 OutputDeviceNoticeKind.DeviceRestored => Strings.Player.DeviceRestored(name),
                 _ => Loc.Get(Strings.Player.OutputFailed),
             };
-            Toasts.Show(msg, ToastSeverity.Caution, Loc.Get(Strings.Player.ChooseDevice),
-                () => DevicePickerRequest.Value = DevicePickerRequest.Peek() + 1);
+            Toast.Show(msg, new ToastOptions
+            {
+                Severity = InfoBarSeverity.Warning,
+                ActionLabel = Loc.Get(Strings.Player.ChooseDevice),
+                OnAction = () => DevicePickerRequest.Value = DevicePickerRequest.Peek() + 1,
+            });
         });
     }
 
@@ -176,11 +181,14 @@ public sealed class PlaybackBridge
     public void NotifyLocalPlaybackUnsupported()
     {
         if (_post is not { } post) return;
-        post(() => Toasts.Show(
+        post(() => Toast.Show(
             Loc.Get(Strings.Player.LocalPlaybackUnsupported),
-            ToastSeverity.Critical,
-            Loc.Get(Strings.Player.ChooseDevice),
-            () => DevicePickerRequest.Value = DevicePickerRequest.Peek() + 1));
+            new ToastOptions
+            {
+                Severity = InfoBarSeverity.Error,
+                ActionLabel = Loc.Get(Strings.Player.ChooseDevice),
+                OnAction = () => DevicePickerRequest.Value = DevicePickerRequest.Peek() + 1,
+            }));
     }
 
     /// <summary>An outbound Connect command (transfer / play) to the active remote device failed — surface it as a critical
@@ -188,7 +196,7 @@ public sealed class PlaybackBridge
     public void NotifyRemoteCommandFailed()
     {
         if (_post is not { } post) return;
-        post(() => Toasts.Show(Loc.Get(Strings.Player.RemoteCommandFailed), ToastSeverity.Critical));
+        post(() => Toast.Show(Loc.Get(Strings.Player.RemoteCommandFailed), new ToastOptions { Severity = InfoBarSeverity.Error }));
     }
 
     /// <summary>A LOCAL playback attempt failed (key/CDN/decode/provisioning) — surface a typed, user-facing message as a
@@ -205,8 +213,12 @@ public sealed class PlaybackBridge
             var token = ++_playbackErrorActionToken;
             _playbackErrorAction = retry;
             HasPlaybackErrorAction.Value = retry is not null;
-            Toasts.Show(message, ToastSeverity.Critical, retryLabel,
-                retry is null ? null : () => InvokePlaybackErrorAction(token));
+            Toast.Show(message, new ToastOptions
+            {
+                Severity = InfoBarSeverity.Error,
+                ActionLabel = retryLabel,
+                OnAction = retry is null ? null : () => InvokePlaybackErrorAction(token),
+            });
         });
     }
 

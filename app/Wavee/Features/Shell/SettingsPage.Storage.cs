@@ -180,10 +180,10 @@ sealed partial class SettingsPage
             catch { }
             post(() =>
             {
-                Toasts.Show(deleted > 0
+                Toast.Show(deleted > 0
                     ? Loc.Format("settings.storage.oldLogsDeleted", ("count", deleted))
                     : Loc.Get(Strings.Settings.Storage.NoOldLogsDeleted),
-                    ToastSeverity.Success);
+                    new ToastOptions { Severity = InfoBarSeverity.Success });
                 RefreshStorage(post);
             });
         });
@@ -309,7 +309,7 @@ sealed partial class SettingsPage
                 Button.Standard(Loc.Get(Strings.Settings.Storage.ReleaseNow), () =>
                 {
                     svc?.LibraryStore.ShedDetails(keep: 16);
-                    Toasts.Show(Loc.Get(Strings.Settings.Storage.DetailsReleased), ToastSeverity.Success);
+                    Toast.Show(Loc.Get(Strings.Settings.Storage.DetailsReleased), new ToastOptions { Severity = InfoBarSeverity.Success });
                     Bump();
                 }), Icons.List));
     }
@@ -538,12 +538,12 @@ sealed partial class SettingsPage
                 if (ok)
                 {
                     settings.Set(WaveeSettings.AudioBodyCacheBasePath, newBase);
-                    Toasts.Show(Loc.Get(Strings.Settings.Storage.CacheLocationChanged), ToastSeverity.Success);
+                    Toast.Show(Loc.Get(Strings.Settings.Storage.CacheLocationChanged), new ToastOptions { Severity = InfoBarSeverity.Success });
                     _storage = null;
                     RefreshStorage(post);
                     Bump();
                 }
-                else Toasts.Show(Loc.Get(Strings.Settings.Storage.CacheLocationFailed), ToastSeverity.Critical);
+                else Toast.Show(Loc.Get(Strings.Settings.Storage.CacheLocationFailed), new ToastOptions { Severity = InfoBarSeverity.Error });
             });
         });
     }
@@ -566,7 +566,7 @@ sealed partial class SettingsPage
             }
             post(() =>
             {
-                Toasts.Show(Loc.Get(Strings.Settings.Storage.AudioCacheCleared), ToastSeverity.Success);
+                Toast.Show(Loc.Get(Strings.Settings.Storage.AudioCacheCleared), new ToastOptions { Severity = InfoBarSeverity.Success });
                 _storage = null;
                 RefreshStorage(post);
             });
@@ -581,7 +581,7 @@ sealed partial class SettingsPage
             catch { }
             post(() =>
             {
-                Toasts.Show(Loc.Get(Strings.Settings.Storage.LicenseKeysCleared), ToastSeverity.Success);
+                Toast.Show(Loc.Get(Strings.Settings.Storage.LicenseKeysCleared), new ToastOptions { Severity = InfoBarSeverity.Success });
                 _storage = null;
                 RefreshStorage(post);
             });

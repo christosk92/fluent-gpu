@@ -451,7 +451,7 @@ sealed class WaveeSidebar : Component
                 string uri = await lib.CreatePlaylistAsync(Loc.Get(Strings.Sidebar.NewPlaylist)).ConfigureAwait(false);
                 _go("pl:" + uri, null);
             }
-            catch (Exception ex) { Toasts.Show(ex.Message, ToastSeverity.Critical); }
+            catch (Exception ex) { Toast.Show(ex.Message, new ToastOptions { Severity = InfoBarSeverity.Error }); }
         }
     }
     void CreateFolder() { }

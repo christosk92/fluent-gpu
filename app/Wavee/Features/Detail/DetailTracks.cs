@@ -1442,7 +1442,7 @@ sealed class TrackList : Component
                 var next = new List<Track>(Math.Max(0, cur.Count - 1));
                 for (int i = 0; i < cur.Count; i++) { var o = cur[i]; if (!ReferenceEquals(o, t) && o.Id != t.Id) next.Add(o); }
                 _recs.Value = next;
-                Toasts.Show(Strings.Detail.AddedToPlaylist(_model.Title), ToastSeverity.Success);
+                Toast.Show(Strings.Detail.AddedToPlaylist(_model.Title), new ToastOptions { Severity = InfoBarSeverity.Success });
                 if (next.Count == 0 && _svc is not null && _post is not null)
                     FetchRecs(_svc, _post, uri, force: true);
             });

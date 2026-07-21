@@ -120,7 +120,7 @@ sealed partial class SettingsPage
                 HyperlinkButton.Create(Loc.Get(Strings.Settings.About.CopyDiagnostics), () =>
                 {
                     hooks.Clipboard?.SetText(diagInfo());
-                    Toasts.Show(Loc.Get(Strings.Settings.About.DiagnosticsCopied), ToastSeverity.Success);
+                    Toast.Show(Loc.Get(Strings.Settings.About.DiagnosticsCopied), new ToastOptions { Severity = InfoBarSeverity.Success });
                 }),
                 HyperlinkButton.Create(Loc.Get(Strings.Settings.About.OpenDataFolder),
                     () => SettingsShared.OpenFolder(SettingsShared.AppDataRoot)),

@@ -62,11 +62,10 @@ sealed class WaveeShell : Component
 
     // Rail layout-defer lock (Task C): while the RailReveal spring plays out (and the fits-flip settles) the responsive
     // breakpoints (track-list tier, detail mode) are gated so a transient width state doesn't churn multiple remounts
-    // (the open/close flash). Armed on every rail toggle; a one-shot Timer clears it after the spring settles. RailLockMs
+    // (the open/close flash). Armed on every rail toggle; a one-shot UseTimeout clears it after the spring settles. RailLockMs
     // must EXCEED the RailReveal settle (Spring(0.22f,1f) ≈ 220ms) so the lock never clears mid-flight → an extra remount.
     bool _lastRailOpen;
-    int _railLockGen;
-    System.Threading.Timer? _railLockTimer;
+    TimerHandle _railLockClear;   // frame-clock one-shot; Restart() re-arms, generation-guarded (replaces the old System.Threading.Timer + gen int)
     const int RailLockMs = 300;
     // Interactive grip drag owns geometry and therefore suppresses projection globally while the pointer is down. Rail
     // and collapse toggles must NOT use this gate: doing so cancels their own Reveal/FLIP tracks. Those commits use the
@@ -262,6 +261,9 @@ sealed class WaveeShell : Component
         // Rail viewport-fit + layout-defer (off-render, auto-tracking effects — the render body stays subscription-free
         // so the shell isn't re-run on every resize pixel; only the rail band / pages re-solve from the signals below).
         var post = UsePost();
+        // One-shot layout-defer clear: fires RailLockMs after each arm to release RailLayoutLocked once the RailReveal
+        // spring settles (frame-clock UseTimeout — generation-guarded, auto-cancels on unmount; replaces the old Timer + post).
+        _railLockClear = UseTimeout(() => _shellUi.RailLayoutLocked.Value = false, RailLockMs);
 
         // Refresh the (reference-stable) ActionServices bag — plain field writes on the same instance, so the
         // Ctx.Provide below never churns its consumers. Overlay is bound by ActionServicesOverlayBinder (inside the
@@ -276,15 +278,7 @@ sealed class WaveeShell : Component
         void ArmRailLockWithClear()
         {
             _shellUi.ArmRailLock();
-            int gen = ++_railLockGen;
-            _railLockTimer?.Dispose();
-            _railLockTimer = new System.Threading.Timer(
-                _ => post(() =>
-                {
-                    if (gen != _railLockGen) return;
-                    _shellUi.RailLayoutLocked.Value = false;
-                }),
-                null, RailLockMs, System.Threading.Timeout.Infinite);
+            _railLockClear.Restart();   // one-shot clear after RailLockMs; the handle's generation guard drops a stale fire
         }
         // (1) Maintain ShellUi.RailFits from the live viewport/sidebar/rail widths. The rail no longer auto-closes on a
         // fits-flip — it switches between inline (spacer reserves width) and floating (overlay only); the flip animates
@@ -545,17 +539,9 @@ sealed class WaveeShell : Component
             Children = [column],
         };
 
-        // Transient toasts: a full-bleed PASS-THROUGH positioner that pins the toast bottom-centre, just above the docked
-        // player bar. CRITICAL: the positioner MUST be a plain BoxEl with HitTestPassThrough (a bare Embed.Comp wrapper
-        // node is mirrored-but-NOT-passthrough and would swallow every hit, silently killing scrolling — the FPS-HUD
-        // trap); the toast's own filled surface captures its clicks.
-        var toastLayer = new BoxEl
-        {
-            Grow = 1f, HitTestPassThrough = true,
-            Direction = 1, Justify = FlexJustify.End, AlignItems = FlexAlign.Center,
-            Padding = new Edges4(0f, 0f, 0f, WaveeSize.PlayerBarH + 12f),
-            Children = [ new BoxEl { MaxWidth = 560f, Children = [ Embed.Comp(() => new ToastHost()) ] } ],
-        };
+        // Transient toasts are now the engine's auto-mounted Toast host (a top-Z lane inside OverlayHost, InfoBar-chromed,
+        // HostTimerQueue-driven with hover-pause). The bespoke Wavee ToastHost + its bottom-centre-above-the-bar positioner
+        // were deleted in G6b; the engine host docks bottom-right (Toast.Placement) 24px from the window edge.
         // The local-playback setup banner FLOATS over the content (top-centre, just below the toolbar) instead of
         // inserting into the chrome column — a persistent offer must never reflow the page. Same pass-through positioner
         // pattern as the toast layer; the wrapper adds the overlay elevation the InfoBar itself doesn't carry. Sits
@@ -572,7 +558,7 @@ sealed class WaveeShell : Component
         };
         // The zero-size binder leaf lives INSIDE the OverlayHost subtree so it can capture the real overlay service
         // into the stable ActionServices bag (invoke-time dialogs: confirm / rename / add-to-playlist picker).
-        var shellWithOverlays = Ui.ZStack(tinted, runtimeBannerLayer, toastLayer,
+        var shellWithOverlays = Ui.ZStack(tinted, runtimeBannerLayer,
             Embed.Comp(() => new ActionServicesOverlayBinder(_actions))) with { Grow = 1f };
 
         return Ctx.Provide(ShellUi.Slot, _shellUi,

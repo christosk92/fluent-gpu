@@ -112,7 +112,7 @@ static class PlaylistInlineEdit
         string ext = Path.GetExtension(path);
         if (!ext.Equals(".jpg", StringComparison.OrdinalIgnoreCase) && !ext.Equals(".jpeg", StringComparison.OrdinalIgnoreCase))
         {
-            Toasts.Show(Loc.Get(Strings.Detail.Edit.PickCover), ToastSeverity.Caution);
+            Toast.Show(Loc.Get(Strings.Detail.Edit.PickCover), new ToastOptions { Severity = InfoBarSeverity.Warning });
             return false;
         }
         return await ApplyCoverJpegAsync(lib, uri, await File.ReadAllBytesAsync(path).ConfigureAwait(false)).ConfigureAwait(false);
@@ -678,14 +678,12 @@ static class PlaylistInlineEdit
     {
         readonly Loadable<DetailModel> _full;
         readonly Signal<bool> _copied = new(false);
-        System.Threading.Timer? _timer;
-        int _copyEpoch;
+        TimerHandle _copyReset;   // one-shot: flips the "copied ✓" glyph back after 1600ms (frame-clock UseTimeout, generation-guarded)
         public PlaylistShareButton(Loadable<DetailModel> full) => _full = full;
 
         public override Element Render()
         {
-            var post = UsePost();
-            UseSignalEffect(() => Reactive.OnCleanup(() => _timer?.Dispose()));
+            _copyReset = UseTimeout(() => _copied.Value = false, 1600f);
             var m = _full.Value.Value;
             bool copied = _copied.Value;
             return new BoxEl
@@ -699,7 +697,7 @@ static class PlaylistInlineEdit
                         Corners = CornerRadius4.All(20f),
                         HoverScale = 1.06f, PressScale = 0.94f,
                         Cursor = CursorId.Hand, Focusable = true, Role = AutomationRole.Button,
-                        OnClick = () => Share(m, post),
+                        OnClick = () => Share(m),
                         Children = [new BoxEl
                         {
                             Key = copied ? "share-check" : "share-link",
@@ -712,7 +710,7 @@ static class PlaylistInlineEdit
             };
         }
 
-        void Share(DetailModel m, Action<Action> post)
+        void Share(DetailModel m)
         {
             if (m.ContextUri is not { } uri) return;
             var url = m.ShareUrl ?? DetailPage.SpotifyPlaylistWebUrl(uri);
@@ -722,12 +720,7 @@ static class PlaylistInlineEdit
                 catch (Exception ex) { PlaylistEditErrors.Toast(ex); return; }
                 InputHooks.Current.Default.Announce?.Invoke(Loc.Get(Strings.Auth.Copied), false);
                 _copied.Value = true;
-                int epoch = ++_copyEpoch;
-                _timer?.Dispose();
-                _timer = new System.Threading.Timer(_ => post(() =>
-                {
-                    if (epoch == _copyEpoch) _copied.Value = false;
-                }), null, 1600, System.Threading.Timeout.Infinite);
+                _copyReset.Restart();   // reset the ✓ back to the share glyph after 1600ms (generation-guarded handle)
             }
             else InputHooks.Current.Default.OpenUri?.Invoke(url);
         }

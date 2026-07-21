@@ -849,20 +849,23 @@ sealed class LibraryDetailPane : Component
         {
             var m = Cur(); if (m is null) return;
             int n = DetailQueueActions.AddToEnd(_svc.Player, m.Tracks);
-            if (n > 0) Toasts.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), ToastSeverity.Success);
+            if (n > 0) Toast.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), new ToastOptions { Severity = InfoBarSeverity.Success });
         }
         void PlayNext()
         {
             var m = Cur(); if (m is null) return;
             int n = DetailQueueActions.PlayNext(_svc.Player, m.Tracks);
-            if (n > 0) Toasts.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), ToastSeverity.Success);
+            if (n > 0) Toast.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), new ToastOptions { Severity = InfoBarSeverity.Success });
         }
         void AddToPlaylist()
         {
             var m = Cur(); if (lib is null || m is null || m.Tracks.Count == 0) return;
             var (plUri, plName) = lib.AddToDefaultPlaylist(m.Tracks);
-            Toasts.Show(Strings.Detail.AddedToPlaylist(plName), ToastSeverity.Success,
-                actionLabel: Loc.Get(Strings.Detail.GoToPlaylist), onAction: () => go("pl:" + plUri, plName));
+            Toast.Show(Strings.Detail.AddedToPlaylist(plName), new ToastOptions
+            {
+                Severity = InfoBarSeverity.Success,
+                ActionLabel = Loc.Get(Strings.Detail.GoToPlaylist), OnAction = () => go("pl:" + plUri, plName),
+            });
         }
         return new DetailHandlers(Play, () => Play(0), Shuffle, PlayContext, go, Tok.AccentDefault,
             _sort, s => _sort.Value = s, _query, _flags, f => _flags.Value = f, _density, d => _density.Value = d,

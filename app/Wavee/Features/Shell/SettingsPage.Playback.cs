@@ -264,7 +264,7 @@ sealed partial class SettingsPage
                 () =>
                 {
                     if (!PeAndSignature.TryShowNativeSignatureDialog(dllPath!, FluentApp.WindowHandle))
-                        Toasts.Show(Loc.Get(Strings.Playback.Runtime.ViewSignatureFailed), ToastSeverity.Caution);
+                        Toast.Show(Loc.Get(Strings.Playback.Runtime.ViewSignatureFailed), new ToastOptions { Severity = InfoBarSeverity.Warning });
                 })
             : null;
 

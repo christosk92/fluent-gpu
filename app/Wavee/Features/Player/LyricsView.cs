@@ -29,8 +29,8 @@ sealed class LyricsView : Component
 
     // ── Probe seam (WAVEE_LYRICS_ADVANCE_PROBE) ──────────────────────────────────────────────────────────────────────
     // The redesigned lyrics-advance probe drives the media clock SYNCHRONOUSLY (one advance == the frame that records its
-    // scroll settle) so the async 16 ms ticker's decoupling can't smear the correlation. ProbeSyncMode silences the timer
-    // (StartTimer no-ops); ProbeStep injects the clock via OnFrame; ProbeForceSnapped skips the one-time instant-jump latch
+    // scroll settle) so the async 16 ms ticker's decoupling can't smear the correlation. ProbeSyncMode silences the ticker
+    // (the LyricsTicker UseInterval stays disabled); ProbeStep injects the clock via OnFrame; ProbeForceSnapped skips the one-time instant-jump latch
     // so the first measured advance is a real ProgrammaticMode spring (the settle-frame path BUG1 lives on).
     internal static bool ProbeSyncMode;
     internal static LyricsView? ProbeActive;
@@ -1306,53 +1306,43 @@ sealed class LyricsUpgradeObserver(Action<LyricsDocument> onNext) : IObserver<Ly
 sealed class LyricsTicker : Component
 {
     public required LyricsView Owner;
-    Timer? _timer;
-    int _timerGeneration;
 
     public override Element Render()
     {
-        Owner.ResetScrollSnap();
-        LyricsView.ProbeActive = Owner;   // probe hook (harmless otherwise): the live instance the advance-probe drives
         var bridge = UseContextSignal(PlaybackBridge.Slot);
-        var post = UsePost();
+
+        // Once per mount (re-keyed on a track change): reset scroll-snap + mark this the probe-active instance.
+        UseEffect(() =>
+        {
+            Owner.ResetScrollSnap();
+            LyricsView.ProbeActive = Owner;   // probe hook (harmless otherwise): the live instance the advance-probe drives
+        }, DepKey.Empty);
+
+        var b = bridge.Value;                                  // subscribe → re-render when the bridge arrives
+        bool playing = b is not null && b.IsPlaying.Value;     // subscribe IsPlaying → re-gate the interval on play/pause
+
+        // Play-start edge → one immediate advance (matches the old dueTime:0 ticker); paused → subscribe PositionMs so a
+        // scrub while paused re-wipes to the new spot. Re-runs on any bridge/IsPlaying change.
         UseSignalEffect(() =>
         {
-            Reactive.OnCleanup(StopTimer);
-            var b = bridge.Value;
-            if (b is null)
+            var bb = bridge.Value;
+            if (bb is null) return;
+            if (bb.IsPlaying.Value)
             {
-                StopTimer();
-                return;
+                if (!LyricsView.ProbeSyncMode) Owner.OnFrame();
             }
-            if (!b.IsPlaying.Value)
+            else
             {
-                StopTimer();
-                _ = b.PositionMs.Value;
+                _ = bb.PositionMs.Value;
                 Owner.OnFrame(forceVisual: true);
-                return;
             }
-            StartTimer(post);
         });
+
+        // Playing: advance the karaoke wipe every WipeIntervalMs on the frame clock — AUTO-PAUSES while parked/minimized
+        // (idle quiesce), while the wall-clock throttle inside OnFrame still governs the real wipe cadence. ProbeSyncMode
+        // drives OnFrame synchronously (ProbeStep), so the interval stays disabled under the probe. Replaces the old
+        // System.Threading.Timer + generation guard + UsePost marshal.
+        UseInterval(() => Owner.OnFrame(), Owner.WipeIntervalMs, enabled: playing && !LyricsView.ProbeSyncMode);
         return new BoxEl { HitTestVisible = false, Width = 0f, Height = 0f };
-    }
-
-    void StartTimer(Action<Action> post)
-    {
-        if (LyricsView.ProbeSyncMode) return;   // probe drives OnFrame synchronously via ProbeStep — no async ticker
-        if (_timer is not null) return;
-        int generation = Interlocked.Increment(ref _timerGeneration);
-        _timer = new Timer(_ => post(() =>
-        {
-            if (Volatile.Read(ref _timerGeneration) == generation) Owner.OnFrame();
-        }), null, 0, Owner.WipeIntervalMs);
-    }
-
-    void StopTimer()
-    {
-        var timer = _timer;
-        if (timer is null) return;
-        _timer = null;
-        Interlocked.Increment(ref _timerGeneration);
-        timer.Dispose();
     }
 }

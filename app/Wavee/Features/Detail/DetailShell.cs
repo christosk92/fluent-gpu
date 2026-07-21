@@ -189,20 +189,23 @@ sealed class DetailShell : Component
             // opens the player-bar device picker) instead of the old silent no-op.
             if (string.IsNullOrEmpty(bridge.ActiveDeviceId.Peek())) { bridge.NotifyLocalPlaybackUnsupported(); return; }
             int n = DetailQueueActions.AddToEnd(svc?.Player, m.Tracks);
-            if (n > 0) Toasts.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), ToastSeverity.Success);
+            if (n > 0) Toast.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), new ToastOptions { Severity = InfoBarSeverity.Success });
         }
         void PlayNext()
         {
             if (string.IsNullOrEmpty(bridge.ActiveDeviceId.Peek())) { bridge.NotifyLocalPlaybackUnsupported(); return; }
             int n = DetailQueueActions.PlayNext(svc?.Player, m.Tracks);
-            if (n > 0) Toasts.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), ToastSeverity.Success);
+            if (n > 0) Toast.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), new ToastOptions { Severity = InfoBarSeverity.Success });
         }
         void AddToPlaylist()
         {
             if (libBridge is null || m.Tracks.Count == 0) return;
             var (plUri, plName) = libBridge.AddToDefaultPlaylist(m.Tracks);
-            Toasts.Show(Strings.Detail.AddedToPlaylist(plName), ToastSeverity.Success,
-                actionLabel: Loc.Get(Strings.Detail.GoToPlaylist), onAction: () => go("pl:" + plUri, plName));
+            Toast.Show(Strings.Detail.AddedToPlaylist(plName), new ToastOptions
+            {
+                Severity = InfoBarSeverity.Success,
+                ActionLabel = Loc.Get(Strings.Detail.GoToPlaylist), OnAction = () => go("pl:" + plUri, plName),
+            });
         }
         // ── persisted per-context sort: load once at mount, save on every change (must be assigned BEFORE handlers
         // captures SetSort, which closes over `settings`) ──

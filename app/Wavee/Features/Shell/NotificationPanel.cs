@@ -70,8 +70,6 @@ sealed class NotificationPanel : Component
     const int TickMs = 30_000;
 
     readonly Action? _close;   // dismiss the flyout when a click navigates away (a floating panel over a new page reads as stuck)
-    Timer? _timer;
-    int _timerGeneration;
 
     public NotificationPanel(Action? close = null) => _close = close;
 
@@ -80,26 +78,11 @@ sealed class NotificationPanel : Component
         var nc = UseContext(NotificationCenterBridge.Slot);
         var go = UseContext(HistoryStore.NavCtx);
         var svc = UseContext(Services.Slot);
-        var post = UsePost();
         var expanded = UseSignal<long>(-1);
 
-        // 30-second ticker so relative times advance while the panel is open (FriendsPanel / LyricsTicker pattern).
-        UseSignalEffect(() =>
-        {
-            if (nc is null) return;
-            int generation = Interlocked.Increment(ref _timerGeneration);
-            var timer = new Timer(_ => post(() =>
-            {
-                if (Volatile.Read(ref _timerGeneration) == generation) nc.NowTick.Value = nc.NowTick.Peek() + 1;
-            }), null, TickMs, TickMs);
-            _timer = timer;
-            Reactive.OnCleanup(() =>
-            {
-                Interlocked.Increment(ref _timerGeneration);
-                if (ReferenceEquals(_timer, timer)) _timer = null;
-                timer.Dispose();
-            });
-        });
+        // 30-second refresh so relative times advance while the panel is open: a frame-clock interval that AUTO-PAUSES
+        // while parked/minimized (idle quiesce) — replaces the old System.Threading.Timer + post marshal.
+        UseInterval(() => { if (nc is not null) nc.NowTick.Value = nc.NowTick.Peek() + 1; }, TickMs, enabled: nc is not null);
 
         if (nc is null) return new BoxEl { Width = Width };
 

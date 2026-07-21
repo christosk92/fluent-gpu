@@ -36,7 +36,7 @@ public static class TrackActions
         Execute = static c =>
         {
             int n = DetailQueueActions.PlayNext(c.S.Svc?.Player, c.Target.Tracks, c.Target.Count);
-            if (n > 0) Toasts.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), ToastSeverity.Success);
+            if (n > 0) Toast.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), new ToastOptions { Severity = InfoBarSeverity.Success });
         },
     };
 
@@ -49,7 +49,7 @@ public static class TrackActions
         Execute = static c =>
         {
             int n = DetailQueueActions.AddToEnd(c.S.Svc?.Player, c.Target.Tracks, c.Target.Count);
-            if (n > 0) Toasts.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), ToastSeverity.Success);
+            if (n > 0) Toast.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), new ToastOptions { Severity = InfoBarSeverity.Success });
         },
     };
 
@@ -91,7 +91,7 @@ public static class TrackActions
             try { clip.SetText(text); }
             catch (Exception ex) { PlaylistEditErrors.Toast(ex); return; }   // the PlaylistInlineEdit.Share precedent
             InputHooks.Current.Default.Announce?.Invoke(Loc.Get(Strings.Auth.Copied), false);
-            Toasts.Show(Loc.Get(Strings.Menu.LinkCopied), ToastSeverity.Success);
+            Toast.Show(Loc.Get(Strings.Menu.LinkCopied), new ToastOptions { Severity = InfoBarSeverity.Success });
         },
     };
 
@@ -175,7 +175,7 @@ public static class TrackActions
             try { clip.SetText(uri); }
             catch (Exception ex) { PlaylistEditErrors.Toast(ex); return; }
             InputHooks.Current.Default.Announce?.Invoke(Loc.Get(Strings.Auth.Copied), false);
-            Toasts.Show(Loc.Get(Strings.Menu.UriCopied), ToastSeverity.Success);
+            Toast.Show(Loc.Get(Strings.Menu.UriCopied), new ToastOptions { Severity = InfoBarSeverity.Success });
         },
     };
 

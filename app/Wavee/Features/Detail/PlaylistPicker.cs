@@ -97,8 +97,11 @@ public sealed class PlaylistPickerPanel : Component
             if (lib is null) return;
             _ = lib.AddTracksAsync(uri, getTracks());
             close();
-            Toasts.Show(Strings.Detail.AddedToPlaylist(name), ToastSeverity.Success,
-                actionLabel: Loc.Get(Strings.Detail.GoToPlaylist), onAction: () => go?.Invoke("pl:" + uri, name));
+            Toast.Show(Strings.Detail.AddedToPlaylist(name), new ToastOptions
+            {
+                Severity = InfoBarSeverity.Success,
+                ActionLabel = Loc.Get(Strings.Detail.GoToPlaylist), OnAction = () => go?.Invoke("pl:" + uri, name),
+            });
         }
 
         void CreateAndAdd()
@@ -113,12 +116,15 @@ public sealed class PlaylistPickerPanel : Component
                     string uri = await lib.CreatePlaylistAsync(name).ConfigureAwait(false);
                     await lib.AddTracksAsync(uri, getTracks()).ConfigureAwait(false);
                     close();
-                    Toasts.Show(Strings.Detail.AddedToPlaylist(name), ToastSeverity.Success,
-                        actionLabel: Loc.Get(Strings.Detail.GoToPlaylist), onAction: () => go?.Invoke("pl:" + uri, name));
+                    Toast.Show(Strings.Detail.AddedToPlaylist(name), new ToastOptions
+                    {
+                        Severity = InfoBarSeverity.Success,
+                        ActionLabel = Loc.Get(Strings.Detail.GoToPlaylist), OnAction = () => go?.Invoke("pl:" + uri, name),
+                    });
                 }
                 catch (Exception ex)
                 {
-                    Toasts.Show(ex.Message, ToastSeverity.Critical);
+                    Toast.Show(ex.Message, new ToastOptions { Severity = InfoBarSeverity.Error });
                 }
             }
         }

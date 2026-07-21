@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using FluentGpu.Controls;
 using FluentGpu.Localization;
 using Wavee.Backend;
 using Wavee.Backend.Audio;
@@ -296,11 +297,14 @@ public sealed class LiveSessionHost : IAsyncDisposable
             var snap = audio.Provisioner.GetSnapshot();
             if (snap.Outcome == ProvisioningOutcome.RuntimeUnavailable)
             {
-                void ShowSetupToast() => Toasts.Show(
+                void ShowSetupToast() => Toast.Show(
                     Loc.Get(Strings.Playback.Runtime.Missing),
-                    ToastSeverity.Caution,
-                    Loc.Get(Strings.Playback.Runtime.SetUp),
-                    () => svc.Playback.OpenPlaybackRuntimeSetup.Value++);
+                    new ToastOptions
+                    {
+                        Severity = InfoBarSeverity.Warning,
+                        ActionLabel = Loc.Get(Strings.Playback.Runtime.SetUp),
+                        OnAction = () => svc.Playback.OpenPlaybackRuntimeSetup.Value++,
+                    });
                 if (uiPost is { } post) post(ShowSetupToast);
             }
         }

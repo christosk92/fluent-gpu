@@ -49,8 +49,9 @@ sealed class ArtistGalleryLightbox : Component
     readonly Keyframe[] _seedKeys = new Keyframe[2];   // reused per write (FlipView PanMove 0-alloc idiom)
     Point2 _dragLast; Point2 _dragDown; bool _dragMoved;
 
-    long _lastActivityMs;
-    CancellationTokenSource? _idleCts;
+    // Auto-hiding floating chrome: a frame-clock one-shot Restart()ed on pointer activity (fires → fade the chrome).
+    // Generation-guarded, auto-cancels on unmount (replaces the old _idleCts + Task.Delay IdleLoop + UsePost pattern).
+    TimerHandle _idleHide;
 
     // Per-render hand-offs: mount-frozen ctor args can't carry per-render values, so Render() publishes the live index
     // and the UI-thread post dispatcher to the imperative pan/zoom helpers below.
@@ -75,12 +76,7 @@ sealed class ArtistGalleryLightbox : Component
 
     /// <summary>Idle-loop teardown, wired from OpenGallery's <c>ClosedAction</c> (UseEffect cleanup does not run inside a
     /// tracked computation, so the overlay drives disposal deterministically on close).</summary>
-    public void Cleanup()
-    {
-        _idleCts?.Cancel();
-        _idleCts?.Dispose();
-        _idleCts = null;
-    }
+    public void Cleanup() => _idleHide.Cancel();
 
     public override Element Render()
     {
@@ -93,7 +89,8 @@ sealed class ArtistGalleryLightbox : Component
         var photo = _photos[current];
         bool zoomed = _zoomMode.Value;
 
-        UseEffect(() => Poke(post), DepKey.Empty);   // start the idle loop once at mount (chrome shows, then fades after IdleHideMs)
+        // Chrome shows at open, then fades after IdleHideMs of pointer stillness; Poke (pointer activity) re-shows + re-arms.
+        _idleHide = UseTimeout(() => { if (_chrome.Peek()) _chrome.Value = false; }, IdleHideMs);
 
         return new BoxEl
         {
@@ -101,7 +98,7 @@ sealed class ArtistGalleryLightbox : Component
             Fill = ColorF.FromRgba(0, 0, 0, 224),          // ~88% scrim over the standard modal smoke
             Focusable = true,
             OnKeyDown = e => OnKeys(e, current, setSelected),
-            OnHoverMove = _ => Poke(post),
+            OnHoverMove = _ => Poke(),
             Children =
             [
                 zoomed ? ZoomSurface(photo, vp)
@@ -357,34 +354,12 @@ sealed class ArtistGalleryLightbox : Component
         };
     }
 
-    // ── idle-hide loop (no timer hook exists; CTS + Task.Delay + UsePost pattern) ────────────
+    // ── idle-hide (frame-clock UseTimeout; Restart on pointer activity) ────────────
 
-    void Poke(Action<Action> post)
+    void Poke()
     {
-        _lastActivityMs = Environment.TickCount64;
         if (!_chrome.Peek()) _chrome.Value = true;
-        if (_idleCts is not null) return;              // one loop; it re-reads _lastActivityMs each pass
-        var cts = _idleCts = new CancellationTokenSource();
-        _ = IdleLoop(cts, post);
-    }
-
-    async Task IdleLoop(CancellationTokenSource cts, Action<Action> post)
-    {
-        try
-        {
-            while (!cts.IsCancellationRequested)
-            {
-                long idle = Environment.TickCount64 - _lastActivityMs;
-                if (idle >= (long)IdleHideMs)
-                {
-                    post(() => { if (!cts.IsCancellationRequested) _chrome.Value = false; });
-                    break;
-                }
-                await Task.Delay((int)(IdleHideMs - idle) + 16, cts.Token).ConfigureAwait(false);
-            }
-        }
-        catch (OperationCanceledException) { }
-        finally { if (ReferenceEquals(_idleCts, cts)) _idleCts = null; }
+        _idleHide.Restart();   // re-arm the fade countdown from now
     }
 
     // ── export: moved verbatim from ArtistGalleryViewer ──────────────────────────────────────
@@ -408,7 +383,7 @@ sealed class ArtistGalleryLightbox : Component
             post(() =>
             {
                 _saving.Value = false;
-                Toasts.Show("Image exported", ToastSeverity.Success);
+                Toast.Show("Image exported", new ToastOptions { Severity = InfoBarSeverity.Success });
             });
         }
         catch (Exception ex)
@@ -416,7 +391,7 @@ sealed class ArtistGalleryLightbox : Component
             post(() =>
             {
                 _saving.Value = false;
-                Toasts.Show("Image export failed: " + ex.Message, ToastSeverity.Critical);
+                Toast.Show("Image export failed: " + ex.Message, new ToastOptions { Severity = InfoBarSeverity.Error });
             });
         }
     }

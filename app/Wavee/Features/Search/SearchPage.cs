@@ -36,7 +36,10 @@ sealed class SearchPage : Component
         var go = UseContext(HistoryStore.NavCtx);
         var querySig = UseContext(SearchQuery.Slot);
         if (svc is null) return new BoxEl { Grow = 1f };
-        string q = (querySig?.Value ?? "").Trim();          // subscribe → re-render + re-search as the user types
+        // Debounce the omnibar query 250ms: a fast typist fires ONE search, not one per keystroke. The thunk auto-tracks
+        // querySig, so each keystroke re-arms the trailing-edge commit; the UseResource deps below ride the debounced value
+        // (empty query → BrowseAll after the same quiet window). Zero re-render until the debounce fires.
+        string q = UseDebouncedValue(() => (querySig?.Value ?? "").Trim(), 250f).Value;   // subscribe → re-render + re-search after quiet
         int chip = _chip.Value;                             // subscribe
         UseEffect(() => _songsSel.ClearSelection(), q + ":" + chip);
         var facet = RequestFacetFor(chip);

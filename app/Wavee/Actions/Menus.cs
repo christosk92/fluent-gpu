@@ -131,8 +131,11 @@ public static class Menus
     {
         if (s.Library is not { } lib || tracks.Count == 0) return;
         _ = lib.AddTracksAsync(uri, tracks);
-        Toasts.Show(Strings.Detail.AddedToPlaylist(name), ToastSeverity.Success,
-            actionLabel: Loc.Get(Strings.Detail.GoToPlaylist), onAction: () => s.Go?.Invoke("pl:" + uri, name));
+        Toast.Show(Strings.Detail.AddedToPlaylist(name), new ToastOptions
+        {
+            Severity = InfoBarSeverity.Success,
+            ActionLabel = Loc.Get(Strings.Detail.GoToPlaylist), OnAction = () => s.Go?.Invoke("pl:" + uri, name),
+        });
     }
 
     /// <summary>"New playlist" — the PlaylistPickerPanel.CreateAndAdd behavior verbatim.</summary>
@@ -147,10 +150,13 @@ public static class Menus
             {
                 string uri = await lib.CreatePlaylistAsync(name).ConfigureAwait(false);
                 await lib.AddTracksAsync(uri, tracks).ConfigureAwait(false);
-                Toasts.Show(Strings.Detail.AddedToPlaylist(name), ToastSeverity.Success,
-                    actionLabel: Loc.Get(Strings.Detail.GoToPlaylist), onAction: () => s.Go?.Invoke("pl:" + uri, name));
+                Toast.Show(Strings.Detail.AddedToPlaylist(name), new ToastOptions
+                {
+                    Severity = InfoBarSeverity.Success,
+                    ActionLabel = Loc.Get(Strings.Detail.GoToPlaylist), OnAction = () => s.Go?.Invoke("pl:" + uri, name),
+                });
             }
-            catch (Exception ex) { Toasts.Show(ex.Message, ToastSeverity.Critical); }
+            catch (Exception ex) { Toast.Show(ex.Message, new ToastOptions { Severity = InfoBarSeverity.Error }); }
         }
     }
 

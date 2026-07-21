@@ -131,7 +131,7 @@ public static class ContainerActions
     static async Task RunInvite(LibraryBridge lib, string uri)
     {
         if (await PlaylistInlineEdit.CopyContributorInviteAsync(lib, DetailModel.Empty with { ContextUri = uri }).ConfigureAwait(false))
-            Toasts.Show(Loc.Get(Strings.Menu.LinkCopied), ToastSeverity.Success);
+            Toast.Show(Loc.Get(Strings.Menu.LinkCopied), new ToastOptions { Severity = InfoBarSeverity.Success });
     }
 
     /// <summary>Delete playlist (owner) — destructive, behind the existing confirm dialog
