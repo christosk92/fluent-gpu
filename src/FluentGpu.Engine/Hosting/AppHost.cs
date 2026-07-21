@@ -1730,6 +1730,12 @@ public sealed class AppHost : IDisposable
             _inputHooks.RunAfterAnimations();                  // 7.1 tree lifecycle finalizers (overlays) before record/present
             RunIncrementalLayout();                            // 7 scoped subtree relayout for SizeMode.Relayout
             RunReflowLayout(layoutSize);                       // 7 boundary-scoped re-solve for SizeMode.Reflow (smooth reflow)
+            // 7.2 video pump: engine-invoked per-binding pump (the video pump / viewport writes LEAVE the control's
+            // Render — Render is pure). Each registered media element reads its now-final laid-out area + this scale and
+            // writes value-gated video intents; the phase-11.5 Drain flushes them the same frame. Single-writer
+            // enforced by the registry (fullscreen ownership transfer). Runs on every backend incl. headless so the
+            // pump cadence is FRAME-driven not render-driven; zero-alloc (mount-registered closures over a fixed array).
+            _videoSurfaces.PumpAll(_scene.DeviceScale);
             ReclaimSettledOrphans();                           // 7 free settled exit orphans
             _connected.Settle();                               // 7 retire landed shared-element flies (reveal dest, unpin, free overlay)
             _connected.SyncDetached();                         // 7 flag-gated rebuild: mirror the engine-animated fly into its DetachedNode snapshot (RecordDetached draws it)

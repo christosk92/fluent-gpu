@@ -40,6 +40,28 @@ public static class SubtitleLoader
     public static CueTrack ParseWebVtt(string text) => Parse(text, webVtt: true);
     public static CueTrack ParseSrt(string text) => Parse(text, webVtt: false);
 
+    /// <summary>Compute the <c>[Lo, Hi)</c> segment-index window to keep loaded for a playhead at
+    /// <paramref name="position"/> — a few segments BEHIND the current one (scrub-back headroom) and AHEAD
+    /// (prefetch). <paramref name="segmentStarts"/> must be ascending. This is the pure core of the windowed in-band
+    /// WebVTT fetch (replacing the old fetch-up-to-512-upfront storm): it advances as the playhead moves and never
+    /// returns the whole track. Empty input ⇒ <c>(0, 0)</c>.</summary>
+    public static (int Lo, int Hi) CueWindow(ReadOnlySpan<TimeSpan> segmentStarts, TimeSpan position, int behind, int ahead)
+    {
+        int n = segmentStarts.Length;
+        if (n == 0) return (0, 0);
+        if (behind < 0) behind = 0;
+        if (ahead < 0) ahead = 0;
+        int cur = 0;
+        for (int i = 0; i < n; i++)
+        {
+            if (segmentStarts[i] <= position) cur = i;   // last segment whose start is at/before the playhead
+            else break;
+        }
+        int lo = Math.Max(0, cur - behind);
+        int hi = Math.Min(n, cur + ahead + 1);
+        return (lo, hi);
+    }
+
     private static CueTrack Parse(string text, bool webVtt)
     {
         var track = new CueTrack();

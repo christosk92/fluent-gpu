@@ -5,6 +5,11 @@ using FluentGpu.Signals;
 
 namespace FluentGpu.Media;
 
+/// <summary>The engine-invoked per-frame video pump for one binding (see <see cref="VideoSurfaceRegistry.RegisterPump"/>).
+/// Given the current DIP→device <paramref name="scale"/>, it reads the live laid-out area and writes video intents /
+/// drives <see cref="IMediaPlayer.PumpVideo"/> — so the control's <c>Render</c> stays a pure function.</summary>
+public delegate void VideoPump(float scale);
+
 /// <summary>
 /// The portable arbitration buffer between the UI thread and the render-thread-confined <see cref="IVideoPresenter"/>.
 /// A component (via the <c>UseVideoSurface</c> hook) or a media player declares a video surface — its rect, visibility,
@@ -38,6 +43,9 @@ public sealed class VideoSurfaceRegistry
         public VideoSurfaceId SurfaceId;   // none until first created
         public nuint BoundHandle;          // last handle actually bound (detects a change)
         public bool Dirty;                 // an intent changed → the next Drain re-applies it
+
+        // single-writer pump ownership (UI thread): the ONE owner whose registered pump drives this slot each frame.
+        public object? PumpOwner;
     }
 
     private readonly Entry[] _entries = new Entry[MaxSurfaces];
@@ -45,6 +53,12 @@ public sealed class VideoSurfaceRegistry
     private bool _anyDirty;
     private int _presentingCount;   // number of slots a media player is actively presenting into (O(1) wake read)
     private static readonly bool s_diag = Environment.GetEnvironmentVariable("FG_DRM_DIAG") == "1";
+
+    // ── per-binding pump callbacks (engine-invoked each frame; replaces the control's side-effecting Render) ──────────
+    private struct PumpReg { public bool InUse; public int Token; public object? Owner; public VideoPump? Pump; }
+    private readonly PumpReg[] _pumps = new PumpReg[MaxSurfaces];
+    private long _pumpInvocations;         // total OWNER pumps actually invoked (fix: pump count tracks FRAMES, not renders)
+    private long _suppressedNonOwnerPumps; // non-owner pumps suppressed by the single-writer contract (ownership diag)
 
     public VideoSurfaceRegistry()
     {
@@ -149,6 +163,94 @@ public sealed class VideoSurfaceRegistry
         int i = token - 1;
         return (uint)i < MaxSurfaces ? _surfaceSignals[i] : _surfaceSignals[0];
     }
+
+    // ── per-binding pump seam (UI thread; engine-invoked per frame — the video pump leaves the control's Render) ──────
+
+    /// <summary>Register a per-frame pump for a surface slot, owned by <paramref name="owner"/>. The host invokes it
+    /// each frame (via <see cref="PumpAll"/>) with the current DIP→device scale, AFTER layout settles — so the pump
+    /// reads the live laid-out area and writes video intents with NO side effect in the control's Render. The FIRST
+    /// registrant of a slot becomes its initial pump owner. Returns a registration id (>0), or 0 when the slot is dead
+    /// or the pump pool is exhausted.</summary>
+    public int RegisterPump(int token, object owner, VideoPump pump)
+    {
+        int ti = token - 1;
+        if ((uint)ti >= MaxSurfaces || !_entries[ti].InUse || owner is null || pump is null) return 0;
+        for (int i = 0; i < MaxSurfaces; i++)
+        {
+            if (_pumps[i].InUse) continue;
+            _pumps[i] = new PumpReg { InUse = true, Token = token, Owner = owner, Pump = pump };
+            _entries[ti].PumpOwner ??= owner;   // first registrant claims the slot
+            return i + 1;
+        }
+        return 0;
+    }
+
+    /// <summary>Drop a pump registration. If it was the slot's current owner, ownership passes to any surviving
+    /// registration for the same slot (keeps a shared slot single-writer without a gap when an owner unmounts).</summary>
+    public void UnregisterPump(int regId)
+    {
+        int i = regId - 1;
+        if ((uint)i >= MaxSurfaces || !_pumps[i].InUse) return;
+        int token = _pumps[i].Token;
+        object? owner = _pumps[i].Owner;
+        _pumps[i] = default;
+        int ti = token - 1;
+        if ((uint)ti < MaxSurfaces && _entries[ti].InUse && ReferenceEquals(_entries[ti].PumpOwner, owner))
+        {
+            object? next = null;
+            for (int j = 0; j < MaxSurfaces; j++)
+                if (_pumps[j].InUse && _pumps[j].Token == token) { next = _pumps[j].Owner; break; }
+            _entries[ti].PumpOwner = next;
+        }
+    }
+
+    /// <summary>Transfer single-writer pump ownership of a slot to <paramref name="owner"/> (the first-class fullscreen
+    /// hand-off, replacing the "exactly one instance pumps" convention). Only the owner's registered pump runs each
+    /// frame; a non-owner pump is a no-op counted in <see cref="SuppressedNonOwnerPumpCount"/>.</summary>
+    public void TransferOwnership(int token, object owner)
+    {
+        int ti = token - 1;
+        if ((uint)ti >= MaxSurfaces || !_entries[ti].InUse || owner is null) return;
+        _entries[ti].PumpOwner = owner;
+    }
+
+    /// <summary>True when <paramref name="owner"/> currently owns the slot's pump.</summary>
+    public bool IsPumpOwner(int token, object owner)
+    {
+        int ti = token - 1;
+        return (uint)ti < MaxSurfaces && _entries[ti].InUse && ReferenceEquals(_entries[ti].PumpOwner, owner);
+    }
+
+    /// <summary>Invoke every registered pump whose owner holds its slot; a non-owner pump is suppressed (counted). The
+    /// host calls this once per frame on the UI thread after layout is settled and before <see cref="Drain"/>. Zero
+    /// managed allocation: iterates a fixed array and invokes mount-registered delegates. Runs on every backend
+    /// (headless too) so the pump cadence is frame-driven, not render-driven.</summary>
+    public void PumpAll(float scale)
+    {
+        for (int i = 0; i < MaxSurfaces; i++)
+        {
+            ref PumpReg p = ref _pumps[i];
+            if (!p.InUse || p.Pump is null) continue;
+            int ti = p.Token - 1;
+            if ((uint)ti >= MaxSurfaces || !_entries[ti].InUse) continue;
+            if (ReferenceEquals(p.Owner, _entries[ti].PumpOwner))
+            {
+                p.Pump(scale);
+                _pumpInvocations++;
+            }
+            else
+            {
+                _suppressedNonOwnerPumps++;   // single-writer contract: a non-owner pump does nothing this frame
+                if (s_diag) Console.Error.WriteLine($"[drm-reg] non-owner pump suppressed for token {p.Token}");
+            }
+        }
+    }
+
+    /// <summary>Total owner-pump invocations since construction — the frame-phase pump cadence probe (pure-render gate:
+    /// this tracks FRAMES, not component renders).</summary>
+    public long PumpInvocationCount => _pumpInvocations;
+    /// <summary>Non-owner pump attempts suppressed by the single-writer contract (ownership-transfer gate probe).</summary>
+    public long SuppressedNonOwnerPumpCount => _suppressedNonOwnerPumps;
 
     // ── Host drain (render/submit thread, phase 11) ────────────────────────────────────────────────────────────────
 
@@ -291,4 +393,14 @@ public readonly struct VideoBinding
     public void Bind(nuint dcompSurfaceHandle) { if (_registry is { } r) r.Bind(Token, dcompSurfaceHandle); }
     /// <summary>Tear the surface down (also done automatically when the owning component unmounts).</summary>
     public void Release() { if (_registry is { } r) r.Release(Token); }
+
+    /// <summary>Register a per-frame pump owned by <paramref name="owner"/> (the engine invokes it each frame — the
+    /// video pump leaves the control's Render). Returns a registration id, or 0 when this binding is inert.</summary>
+    public int RegisterPump(object owner, VideoPump pump) => _registry?.RegisterPump(Token, owner, pump) ?? 0;
+    /// <summary>Drop a pump registration returned by <see cref="RegisterPump"/>.</summary>
+    public void UnregisterPump(int regId) { if (_registry is { } r) r.UnregisterPump(regId); }
+    /// <summary>Transfer single-writer pump ownership of this slot to <paramref name="owner"/> (fullscreen hand-off).</summary>
+    public void TransferOwnershipTo(object owner) { if (_registry is { } r) r.TransferOwnership(Token, owner); }
+    /// <summary>True when <paramref name="owner"/> currently owns this slot's pump.</summary>
+    public bool IsPumpOwner(object owner) => _registry is { } r && r.IsPumpOwner(Token, owner);
 }

@@ -329,9 +329,9 @@ sealed class MediaScenarioPage : Component
 sealed class MediaScenarioView : Component
 {
     private readonly MediaTestScenario _scenario;
-    private readonly IReadSignal<VideoAspectMode> _aspect;
-    private readonly IReadSignal<double> _customAspect;
-    public MediaScenarioView(MediaTestScenario scenario, IReadSignal<VideoAspectMode> aspect, IReadSignal<double> customAspect)
+    private readonly Signal<VideoAspectMode> _aspect;
+    private readonly Signal<double> _customAspect;
+    public MediaScenarioView(MediaTestScenario scenario, Signal<VideoAspectMode> aspect, Signal<double> customAspect)
     { _scenario = scenario; _aspect = aspect; _customAspect = customAspect; }
 
     public override Element Render()

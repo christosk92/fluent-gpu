@@ -32,7 +32,29 @@ The default player chrome is an overlay, not a permanent row that steals video h
 width; the lower command row retains play/mute/time and collapses advanced commands into the `…` menu below 760 DIP.
 That menu always provides aspect policy (Fit with black bars, Crop, Stretch, Native, 16:9, 4:3, 21:9 and 2.39:1),
 speed, quality, audio, captions, chapters and fullscreen where the player reports those capabilities. While playback
-advances the chrome fades after 2.5 seconds; pointer movement, touch, focus and keyboard input reveal it again.
+advances the chrome fades after the configured idle delay (2.5 seconds by default); pointer movement, touch, focus and
+keyboard input reveal it again. The idle-hide is a declarative `UseTimeout` restarted on activity — while an open
+picker/menu **pins** the chrome (`IOverlayService.IsAnchorPinned`), the timeout does not collapse it out from under the
+open flyout; closing the flyout re-arms the timer.
+
+## Architecture notes (the G5g rebuild)
+
+The `MediaPlayerElement` is built on the overhauled engine seams and is the flagship proof control:
+
+- **Pure Render, engine-driven pump.** `Render` has no side effects. The per-frame video pump (viewport +
+  `IMediaPlayer.PumpVideo`) is a callback registered once at mount and invoked by the engine each frame
+  (`VideoSurfaceRegistry.PumpAll`); it reads the live laid-out area, so the video tracks layout without the control
+  re-rendering. There is **no** whole-player `FrameClock.Tick` subscription — the playhead drives compositor binds
+  (the seek fill/thumb) and a per-second quantized time label, so position advance re-renders neither the player nor
+  the transport.
+- **First-class fullscreen surface hand-off.** The fullscreen presentation shares the inline composited surface via an
+  explicit single-writer ownership transfer on the registry (`TransferOwnership`); a non-owner pump is a no-op, so the
+  two views never fight over the shared slot.
+- **Controlled aspect + tokens.** Aspect/fullscreen are concrete signals (auto-materialized when a caller passes none),
+  and every on-media ink/scrim/stage color reads a `Tok.*` media token — no hardcoded colors.
+- **Windowed in-band captions.** Manifest-declared WebVTT is fetched **around the playhead** — a few segments behind
+  (scrub-back headroom) and ahead (prefetch), advancing with playback — instead of prefetching the whole track upfront;
+  it stays best-effort and off-thread, and TTML remains typed-unsupported. Sidecar WebVTT/SRT is unchanged.
 
 ## Source authorities
 

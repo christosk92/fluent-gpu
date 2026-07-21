@@ -3036,6 +3036,35 @@ sealed class OverlayProbeInner : Component
     }
 }
 
+// ── G5g — MediaPlayerElement host probe: mounts the player under a REAL OverlayHost so its chrome can consult the
+// overlay service (PinsAnchor auto-hide gate). Exposes the service for the gate to open a pinning picker. ───────────
+sealed class MediaPlayerHostProbe : Component
+{
+    public IOverlayService? Service;
+    public required IMediaPlayer Player;
+    public float HideMs = 200f;
+    public override Element Render()
+        => Embed.Comp(() => new OverlayHost { Child = Embed.Comp(() => new MediaPlayerHostInner(this)) });
+}
+
+sealed class MediaPlayerHostInner : Component
+{
+    readonly MediaPlayerHostProbe _p;
+    public MediaPlayerHostInner(MediaPlayerHostProbe p) => _p = p;
+    public override Element Render()
+    {
+        _p.Service = UseContext(Overlay.Service);
+        return new BoxEl
+        {
+            Width = 480, Height = 300,
+            Children = [Embed.Comp(() => new FluentGpu.Controls.Media.MediaPlayerElement
+            {
+                Player = _p.Player, TransportControlsHideDelayMs = _p.HideMs, AutoHideTransportControls = true,
+            })],
+        };
+    }
+}
+
 // ── G5f — controlled Popup + Flyout.Attach probes ────────────────────────────────────────────────────────────────
 sealed class PopupCtlProbe : Component
 {
@@ -27410,6 +27439,210 @@ static class Slice
         }
     }
 
+    // ── G5g — MediaPlayerElement rebuild gates (UI-chrome behavior in the slice against HeadlessScriptedPlayer;
+    // playback/model gates stay in the xUnit projects per the standing directive) ──────────────────────────────────
+    static void MediaPlayerElementChecks(StringTable strings)
+    {
+        // A headless player driven to steady Playing at position 0 (audio-only unless a video size is supplied).
+        static HeadlessScriptedPlayer PlayingPlayer(SizeI? video = null)
+        {
+            var p = new HeadlessScriptedPlayer { OpenTicks = 0, BufferTicks = 0, DefaultDuration = TimeSpan.FromSeconds(120) };
+            p.OpenAsync(MediaSource.FromSamples(new ScriptedSampleSource(TimeSpan.FromSeconds(120), TimeSpan.FromMilliseconds(20), video)))
+                .GetAwaiter().GetResult();
+            p.PlayAsync().GetAwaiter().GetResult();
+            return p;
+        }
+
+        // gate.media.el.no-frameclock-rerender + gate.media.el.pure-render: during scripted position advance the player
+        // component does NOT re-render (the FrameClock.Tick subscription is deleted), while the engine-driven pump fires
+        // ONCE PER FRAME (not per render) — the video pump left Render for the frame phase.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("g5g-mpe", new Size2(480, 320), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var player = PlayingPlayer();
+            var root = new FluentGpu.Controls.Media.MediaPlayerElement { Player = player };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();                                                 // mount
+            player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();       // Opening → Buffering
+            player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();       // Buffering → Playing
+            host.Paint(0); host.Paint(0);                                     // settle
+            bool playing = player.State.Peek() == PlaybackState.Playing;
+
+            long pump0 = host.VideoSurfaces.PumpInvocationCount;
+            int renders = 0; bool anyRendered = false;
+            const int N = 8;
+            for (int i = 0; i < N; i++)
+            {
+                player.Pump(TimeSpan.FromMilliseconds(40));                   // advance position, sub-second (≤0.32s)
+                var fs = host.Paint(0);
+                renders += fs.ComponentsRendered;
+                anyRendered |= fs.Rendered;
+            }
+            long pumpDelta = host.VideoSurfaces.PumpInvocationCount - pump0;
+            float posAdvanced = player.PositionSeconds.Peek();
+
+            Check("gate.media.el.no-frameclock-rerender", playing && renders == 0 && !anyRendered && posAdvanced > 0.1f,
+                $"playing={playing} renders={renders} anyRendered={anyRendered} pos={posAdvanced:0.###}");
+            Check("gate.media.el.pure-render", pumpDelta == N && renders == 0,
+                $"pumpDelta={pumpDelta} frames={N} renders={renders}");
+        }
+
+        // gate.media.el.ownership-transfer: single-writer contract on the registry — only the current owner's pump runs;
+        // a non-owner pump is a counted no-op; transfer + transfer-back flip which pump drives, restoring the original.
+        {
+            var reg = new VideoSurfaceRegistry();
+            int token = reg.Acquire();
+            var a = new object(); var b = new object();
+            int aRuns = 0, bRuns = 0;
+            int ra = reg.RegisterPump(token, a, _ => aRuns++);               // first registrant → initial owner
+            int rb = reg.RegisterPump(token, b, _ => bRuns++);
+            long supp0 = reg.SuppressedNonOwnerPumpCount;
+
+            reg.PumpAll(1f);                                                  // a owns
+            bool aDrivesFirst = aRuns == 1 && bRuns == 0;
+            bool bSuppressed = reg.SuppressedNonOwnerPumpCount == supp0 + 1;
+
+            reg.TransferOwnership(token, b);
+            reg.PumpAll(1f);                                                  // b owns now; a is a no-op
+            bool bDrivesAfter = bRuns == 1 && aRuns == 1;
+            bool aSuppressed = reg.SuppressedNonOwnerPumpCount == supp0 + 2;
+
+            reg.TransferOwnership(token, a);
+            reg.PumpAll(1f);                                                  // transferred back
+            bool aRestored = aRuns == 2 && bRuns == 1;
+
+            reg.UnregisterPump(ra); reg.UnregisterPump(rb);
+            Check("gate.media.el.ownership-transfer",
+                token > 0 && ra > 0 && rb > 0 && aDrivesFirst && bSuppressed && bDrivesAfter && aSuppressed && aRestored,
+                $"aFirst={aDrivesFirst} bSupp={bSuppressed} bDrives={bDrivesAfter} aSupp={aSuppressed} restored={aRestored}");
+        }
+
+        // gate.media.el.pins-anchor-autohide: while a picker (an anchored PinsAnchor overlay inside the player) is open,
+        // the idle-hide timeout does NOT collapse the chrome; after it closes, the timeout collapses it.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("g5g-mpe-pin", new Size2(560, 360), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var player = PlayingPlayer();
+            var probe = new MediaPlayerHostProbe { Player = player, HideMs = 200f };
+            using var host = new AppHost(app, window, device, fonts, strings, probe);
+            host.RunFrame();
+            player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();
+            player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();
+            host.Paint(0);
+            var svc = probe.Service!;
+
+            int Buttons() => Roles(host.Scene, AutomationRole.Button).Count;
+            bool chromeShownAtPlaying = Buttons() > 0;
+
+            // Open a picker anchored to a transport button (a node INSIDE the player subtree) → PinsAnchor default true.
+            var anchorBtn = Roles(host.Scene, AutomationRole.Button)[0];
+            Func<Element> body = () => new BoxEl { Width = 120, Height = 80, Fill = Tok.FillCardDefault, Children = [Ui.Text("picker")] };
+            var pick = svc.Open(() => anchorBtn, body, FlyoutPlacement.TopEdgeAlignedRight);
+            host.RunFrame();
+            for (int i = 0; i < 30; i++) host.Paint(0);                       // ~480ms ≫ 200ms hide delay
+            bool heldWhilePinned = Buttons() > 0;                            // chrome NOT collapsed while the picker is open
+
+            pick.Close();
+            for (int i = 0; i < 34; i++) host.Paint(0);                       // close settles + re-armed timer fires (>200ms)
+            bool collapsedAfterClose = Buttons() == 0;
+
+            Check("gate.media.el.pins-anchor-autohide", chromeShownAtPlaying && heldWhilePinned && collapsedAfterClose,
+                $"shown={chromeShownAtPlaying} heldPinned={heldWhilePinned} collapsedAfterClose={collapsedAfterClose}");
+        }
+
+        // gate.media.el.controlled-aspect: an external Signal<VideoAspectMode> drives the fitted video rect (letterbox
+        // pillars for Uniform, none for UniformToFill); the control also works standalone (auto-materialized signal).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("g5g-mpe-aspect", new Size2(520, 340), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var player = PlayingPlayer(new SizeI(100, 100));                  // square video → pillarbox under Uniform in a wide area
+            var ext = new Signal<VideoAspectMode>(VideoAspectMode.Uniform);
+            var root = new FluentGpu.Controls.Media.MediaPlayerElement { Player = player, AspectMode = ext };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();
+            player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();
+            for (int i = 0; i < 5; i++) host.Paint(0);                        // settle layout + areaBounds → letterbox computed
+
+            int barsUniform = CountFill(host.Scene, host.Scene.Root, Tok.MediaLetterbox);
+            ext.Value = VideoAspectMode.UniformToFill;
+            for (int i = 0; i < 3; i++) host.Paint(0);
+            int barsCrop = CountFill(host.Scene, host.Scene.Root, Tok.MediaLetterbox);
+            ext.Value = VideoAspectMode.Uniform;
+            for (int i = 0; i < 3; i++) host.Paint(0);
+            int barsUniform2 = CountFill(host.Scene, host.Scene.Root, Tok.MediaLetterbox);
+
+            // Standalone (auto-materialized: no AspectMode passed) still renders letterbox under the default Uniform.
+            var player2 = PlayingPlayer(new SizeI(100, 100));
+            var root2 = new FluentGpu.Controls.Media.MediaPlayerElement { Player = player2 };
+            using var host2 = new AppHost(new HeadlessPlatformApp(),
+                new HeadlessWindow(new WindowDesc("g5g-mpe-auto", new Size2(520, 340), 1f)),
+                new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, root2);
+            host2.RunFrame();
+            player2.Pump(TimeSpan.FromMilliseconds(1)); host2.RunFrame();
+            player2.Pump(TimeSpan.FromMilliseconds(1)); host2.RunFrame();
+            for (int i = 0; i < 5; i++) host2.Paint(0);
+            int barsAuto = CountFill(host2.Scene, host2.Scene.Root, Tok.MediaLetterbox);
+
+            Check("gate.media.el.controlled-aspect", barsUniform >= 2 && barsCrop == 0 && barsUniform2 >= 2 && barsAuto >= 2,
+                $"uniform={barsUniform} crop={barsCrop} uniform2={barsUniform2} autoMaterialized={barsAuto}");
+        }
+
+        // gate.media.el.tokens: the media element carries ZERO hardcoded FromRgba color literals — every ink/scrim/stage
+        // reads a Tok.* media token (source-scan of the control's source, located via the compile-time repo path).
+        {
+            string? src = ReadRepoFile("src/FluentGpu.Controls/Media/MediaPlayerElement.cs");
+            bool found = src is not null;
+            int fromRgba = src is null ? -1 : CountOccurrences(src, "FromRgba");
+            bool usesTokens = src is not null && src.Contains("Tok.ScrimBottom") && src.Contains("Tok.OnMediaPrimary")
+                && src.Contains("Tok.MediaStage") && src.Contains("Tok.MediaLetterbox");
+            Check("gate.media.el.tokens", found && fromRgba == 0 && usesTokens,
+                $"found={found} FromRgba={fromRgba} usesTokens={usesTokens}");
+        }
+    }
+
+    // Count scene nodes whose solid fill equals `target` (letterbox-bar detector for the controlled-aspect gate).
+    static int CountFill(SceneStore s, NodeHandle n, ColorF target)
+    {
+        if (n.IsNull) return 0;
+        int c = ColorApprox(s.Paint(n).Fill, target) ? 1 : 0;
+        for (var ch = s.FirstChild(n); !ch.IsNull; ch = s.NextSibling(ch)) c += CountFill(s, ch, target);
+        return c;
+    }
+
+    static bool ColorApprox(ColorF a, ColorF b)
+        => MathF.Abs(a.R - b.R) < 1e-3f && MathF.Abs(a.G - b.G) < 1e-3f && MathF.Abs(a.B - b.B) < 1e-3f && MathF.Abs(a.A - b.A) < 1e-3f;
+
+    static int CountOccurrences(string haystack, string needle)
+    {
+        int count = 0, idx = 0;
+        while ((idx = haystack.IndexOf(needle, idx, StringComparison.Ordinal)) >= 0) { count++; idx += needle.Length; }
+        return count;
+    }
+
+    // Locate a repo-relative file from the compile-time path of THIS source (repo/src/FluentGpu.VerticalSlice/Program.cs).
+    static string? ReadRepoFile(string relative, [CallerFilePath] string here = "")
+    {
+        try
+        {
+            string? dir = System.IO.Path.GetDirectoryName(here);          // …/src/FluentGpu.VerticalSlice
+            if (dir is null) return null;
+            string repo = System.IO.Path.GetFullPath(System.IO.Path.Combine(dir, "..", ".."));   // repo root
+            string path = System.IO.Path.Combine(repo, relative.Replace('/', System.IO.Path.DirectorySeparatorChar));
+            return System.IO.File.Exists(path) ? System.IO.File.ReadAllText(path) : null;
+        }
+        catch { return null; }
+    }
+
     static void MediaCardEngineChecks(StringTable strings)
     {
         // Pointer-rate radial-center updates stay in the binding/paint lane: no element rebuild and no GradientSpec
@@ -27826,6 +28059,7 @@ static class Slice
         ContextChecks(strings);
         HoverChecks(strings);
         MediaCardEngineChecks(strings);
+        MediaPlayerElementChecks(strings);
         ScrollHoverChecks(strings);
         HoverSubtreeChecks(strings);
         StyleChecks();

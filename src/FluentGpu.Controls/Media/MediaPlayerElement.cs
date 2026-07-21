@@ -22,18 +22,26 @@ public enum MediaStretch : byte
 }
 
 /// <summary>
-/// The real <c>MediaPlayerElement</c> (spec §4.3) — replaces the chrome-only mockup. Binds a headless
-/// <see cref="IMediaPlayer"/> to a composited video layer and pure-FluentGpu transport chrome:
+/// The real <c>MediaPlayerElement</c> (spec §4.3) — the flagship proof control of the overhauled architecture. Binds a
+/// headless <see cref="IMediaPlayer"/> to a composited video layer + pure-FluentGpu transport chrome, built ON the new
+/// engine seams:
 /// <list type="bullet">
-/// <item>Acquires a composited video surface (<c>UseVideoSurface</c>), draws a premultiplied-0 hole at the video rect,
-///   and drives the player's per-frame video pump (<see cref="IMediaPlayer.PumpVideo"/>) which binds the produced
-///   DirectComposition handle and positions the child z-below the UI.</item>
-/// <item><b>Degrades to audio-only chrome</b> when <see cref="IMediaPlayer.NaturalSize"/> is <c>(0,0)</c> — no hole, just
-///   the poster/audio surface + transport.</item>
-/// <item>The default transport is pure FluentGpu (our own GPU text + a scrub <c>Slider</c>) — there is NO OS control to
-///   crash on (the WinUI <c>MediaTransportControls</c> #7702 <c>E_NOINTERFACE</c> process-crash is unreachable here).</item>
+/// <item><b>Pure Render.</b> Render has NO side effects. The per-frame video pump (viewport + <see cref="IMediaPlayer.PumpVideo"/>)
+///   is a callback registered once at mount and invoked by the engine each frame (<see cref="VideoSurfaceRegistry.PumpAll"/>) —
+///   it reads the live laid-out area, so the video tracks layout without the control re-rendering.</item>
+/// <item><b>No whole-player frame-clock re-render.</b> Position drives compositor binds (the seek fill/playhead in
+///   <see cref="MediaSeekBar"/>) and a per-second quantized time label (<see cref="MediaTransportTime"/>); the player
+///   component re-renders only on LOW-frequency signal changes, never per frame.</item>
+/// <item><b>First-class fullscreen hand-off.</b> The fullscreen presentation shares the inline surface via an explicit
+///   single-writer ownership transfer on the registry (<see cref="VideoSurfaceRegistry.TransferOwnership"/>) — a
+///   non-owner pump is a no-op, so the two views never fight over the shared slot.</item>
+/// <item><b>Declarative idle-hide.</b> Auto-hide is a <see cref="Component.UseTimeout"/> restarted on pointer activity
+///   that consults <see cref="IOverlayService.IsAnchorPinned"/> — an open picker pins the chrome, no hand-rolled counter.</item>
+/// <item><b>Controlled inputs + tokens.</b> Aspect/fullscreen are concrete signals (auto-materialized when absent); all
+///   on-media ink/scrim/stage reads a <c>Tok.*</c> media token — no hardcoded colors.</item>
 /// </list>
-/// TerraFX-free: references only Engine/Controls types + the <see cref="IMediaPlayer"/>/<see cref="VideoBinding"/> seam.
+/// The default transport is pure FluentGpu (our own GPU text + a scrub <c>Slider</c>) — there is NO OS control to crash
+/// on. TerraFX-free: references only Engine/Controls types + the <see cref="IMediaPlayer"/>/<see cref="VideoBinding"/> seam.
 /// </summary>
 public sealed class MediaPlayerElement : Component
 {
@@ -60,38 +68,51 @@ public sealed class MediaPlayerElement : Component
     public float TransportControlsHideDelayMs { get; init; } = 2500f;
     /// <summary>How the frame scales into the video area. Default <see cref="MediaStretch.Uniform"/>.</summary>
     public MediaStretch Stretch { get; init; } = MediaStretch.Uniform;
-    /// <summary>Optional dynamic professional aspect policy. When present it overrides <see cref="Stretch"/>.</summary>
-    public IReadSignal<VideoAspectMode>? AspectMode { get; init; }
-    /// <summary>Display aspect used by <see cref="VideoAspectMode.Custom"/> (for example 2.39). Defaults to 16:9.</summary>
-    public IReadSignal<double>? CustomAspectRatio { get; init; }
-    /// <summary>Notification for the built-in aspect menu. Writable Signal inputs are also updated directly.</summary>
+    /// <summary>Optional controlled aspect policy (the G5b controlled-input contract). When present it overrides
+    /// <see cref="Stretch"/>; the built-in aspect menu writes it. Absent → the control materializes its own signal.</summary>
+    public Signal<VideoAspectMode>? AspectMode { get; init; }
+    /// <summary>Controlled display aspect for <see cref="VideoAspectMode.Custom"/> (for example 2.39). Auto-materialized
+    /// (defaults to 16:9) when absent.</summary>
+    public Signal<double>? CustomAspectRatio { get; init; }
+    /// <summary>Fired after the built-in aspect menu writes the aspect signal(s) (notification sugar).</summary>
     public Action<VideoAspectMode, double>? AspectModeChanged { get; init; }
-    /// <summary>Opaque bars painted around Uniform/Native content. Defaults to video black.</summary>
-    public ColorF LetterboxColor { get; init; } = ColorF.FromRgba(0, 0, 0);
+    /// <summary>Opaque bars painted around Uniform/Native content. Defaults to video black (<see cref="Tok.MediaLetterbox"/>).</summary>
+    public ColorF LetterboxColor { get; init; } = Tok.MediaLetterbox;
     public bool ShowLetterboxBars { get; init; } = true;
     /// <summary>Shown over the video area until the first frame / when audio-only. Null → a default poster.</summary>
     public Element? PosterContent { get; init; }
     /// <summary>Bring-your-own transport (still reads the same bound player). Null → the default FluentGpu transport.</summary>
     public Element? TransportOverride { get; init; }
 
+    /// <summary>Controlled fullscreen state (auto-materialized when absent).</summary>
     internal Signal<bool>? FullscreenState { get; init; }
+    /// <summary>True when this instance is the fullscreen presentation (mounted in the fullscreen overlay).</summary>
     internal bool IsFullscreenPresentation { get; init; }
+    /// <summary>Invoked by the fullscreen presentation to ask its host to leave fullscreen.</summary>
     internal Action? ExitFullscreen { get; init; }
-    /// <summary>The inline element's surface slot, handed to the fullscreen presentation. A second
-    /// <c>UseVideoSurface</c> slot would bind the same swapchain handle to a second DComp visual, and destroying that
-    /// visual on exit clobbers the shared content while the inline slot's value-gated re-bind no-ops — the video hole
-    /// then permanently shows the window backdrop ("the player goes grey").</summary>
-    internal VideoBinding ExternalBinding { get; init; }
+    /// <summary>The inline element's surface binding, handed to the fullscreen presentation so BOTH views drive the
+    /// SAME composited slot (a second <c>UseVideoSurface</c> slot would bind the same swapchain to a second visual and
+    /// clobber it on exit). Which view actually pumps is decided by explicit single-writer ownership transfer on the
+    /// registry — see <see cref="VideoSurfaceRegistry.TransferOwnership"/> — not by a "who am I" convention.</summary>
+    internal VideoBinding PresentationBinding { get; init; }
+
+    // Pump state (set each Render, read by the engine-invoked PumpNow — the video pump lives OUTSIDE Render).
+    private VideoBinding _binding;
+    private Ref<NodeHandle>? _areaRef;
+    private Signal<VideoAspectMode>? _aspectForPump;
+    private Signal<double>? _customAspectForPump;
+    private SceneStore? _scene;
 
     public override Element Render()
     {
-        var tick = UseContext(FrameClock.Tick);
-        // IsFullscreenPresentation freezes at mount, so the hook sequence is stable for this instance's lifetime.
-        var binding = IsFullscreenPresentation ? ExternalBinding : UseVideoSurface();
-        float scale = UseContext(Viewport.Scale);
+        // IsFullscreenPresentation freezes at mount, so this conditional hook is stable for the instance's lifetime.
+        // The DEFECT the rebuild fixes was never the conditional hook (call-site keying makes it legal) — it was the
+        // "exactly one instance pumps" convention; that is replaced by explicit registry ownership transfer below.
+        var binding = IsFullscreenPresentation ? PresentationBinding : UseVideoSurface();
         var hooks = UseContext(InputHooks.Current);
         var overlayService = UseContext(Overlay.Service);
         var areaRef = UseRef<NodeHandle>(default);
+        var playerRoot = UseRef<NodeHandle>(default);
         var moreAnchor = UseRef<NodeHandle>(default);
         var ccAnchor = UseRef<NodeHandle>(default);
         var qualityAnchor = UseRef<NodeHandle>(default);
@@ -101,59 +122,69 @@ public sealed class MediaPlayerElement : Component
         var fullscreen = FullscreenState ?? localFullscreen;
         var localAspect = UseSignal(ToAspectMode(Stretch));
         var localCustomAspect = UseSignal(16.0 / 9.0);
+        var aspectSig = AspectMode ?? localAspect;                 // materialized controlled signals (no write-sniffing)
+        var customAspectSig = CustomAspectRatio ?? localCustomAspect;
         var chromeVisible = UseSignal(true);
-        var hideEpoch = UseSignal(0);
-        var overlayPin = UseSignal(0);   // >0 while a player-spawned flyout is open → chrome must not auto-hide under it
+        var areaBounds = UseSignal<RectF>(default);                // video-area bounds (bounds-changed column → letterbox recompute)
 
         var natural = Player.NaturalSize.Value;
         var state = Player.State.Value;
         bool playIntent = Player.IsPlayRequested.Value;
         var bufferingInfo = Player.Buffering.Value;
         TimedCue? activeCue = Player.ActiveCue.Value;
+        VideoAspectMode aspect = aspectSig.Value;
+        double customAspect = customAspectSig.Value;
         bool audioOnly = IsAudioOnly(natural);
         bool videoReady = !audioOnly && state is not (PlaybackState.Idle or PlaybackState.Opening);
-        bool fullscreenActive = fullscreen.Value;
-        // Exactly ONE instance drives the shared surface slot at any time: the inline element while windowed, the
-        // fullscreen presentation while fullscreen — including the overlay's closing-animation frames.
-        bool pumpingHere = IsFullscreenPresentation == fullscreenActive;
+        int pinEpoch = overlayService.PinEpoch.Value;              // subscribe: re-render when a picker opens/closes
+        bool pinned = !playerRoot.Value.IsNull && overlayService.IsAnchorPinned(playerRoot.Value);
+        _ = pinEpoch;
 
-        VideoAspectMode aspect = AspectMode?.Value ?? localAspect.Value;
-        double customAspect = CustomAspectRatio?.Value ?? localCustomAspect.Value;
-        RectF area = default;
-        if (hooks?.GetNodeRect is { } getRect && !areaRef.Value.IsNull)
-            area = getRect(areaRef.Value);
-        RectF videoRect = (audioOnly || area.W <= 0f) ? area : FitVideoRect(area, natural, aspect, customAspect);
-        if (pumpingHere)
+        // ── the video pump lives OUTSIDE Render (fix: pure Render). Publish the inputs it reads, register it once. ──
+        _binding = binding;
+        _areaRef = areaRef;
+        _aspectForPump = aspectSig;
+        _customAspectForPump = customAspectSig;
+        _scene = Context.Scene;
+
+        UseEffect(() =>
         {
-            binding.SetViewport(area);
-            Player.PumpVideo(binding, videoRect, scale <= 0f ? 1f : scale);
-            if (audioOnly) binding.SetVisible(false);
-        }
-        // While the fullscreen view owns the shared binding, the inline element must not touch it at all — a hide or
-        // viewport write here would fight the fullscreen pump on the same registry slot.
+            if (!binding.IsValid) return (Action?)null;
+            int reg = binding.RegisterPump(this, PumpNow);   // engine invokes PumpNow each frame with the current scale
+            return () => binding.UnregisterPump(reg);
+        }, DepKey.Empty);
+
+        // Single-writer ownership: the fullscreen presentation CLAIMS the shared slot on mount; the inline element
+        // (re)claims it whenever NOT fullscreen (mount + every exit, incl. the overlay's closing frames). A non-owner
+        // pump is a no-op — the two views never fight over the slot.
+        UseEffect(() =>
+        {
+            if (!binding.IsValid) return;
+            if (IsFullscreenPresentation) binding.TransferOwnershipTo(this);
+            else if (!fullscreen.Value) binding.TransferOwnershipTo(this);   // auto-tracked on fullscreen
+        });
+
+        RectF area = areaBounds.Value;
+        RectF videoRect = (audioOnly || area.W <= 0f) ? area : FitVideoRect(area, natural, aspect, customAspect);
 
         void RevealChrome()
         {
             if (!AreTransportControlsEnabled) return;
-            chromeVisible.Value = true;
-            hideEpoch.Value = hideEpoch.Peek() + 1;
+            chromeVisible.Value = true;   // value-gated: no re-render if already visible
         }
 
         void SetAspect(VideoAspectMode mode, double ratio = 0)
         {
-            double nextRatio = ratio > 0 ? ratio : customAspect;
-            if (AspectMode is Signal<VideoAspectMode> writableAspect) writableAspect.Value = mode;
-            else localAspect.Value = mode;
-            if (CustomAspectRatio is Signal<double> writableRatio && ratio > 0) writableRatio.Value = ratio;
-            else if (ratio > 0) localCustomAspect.Value = ratio;
-            AspectModeChanged?.Invoke(mode, nextRatio);
+            aspectSig.Value = mode;                                // controlled: write the signal directly
+            if (ratio > 0) customAspectSig.Value = ratio;
+            AspectModeChanged?.Invoke(mode, ratio > 0 ? ratio : customAspectSig.Peek());
             RevealChrome();
         }
 
         void LeaveFullscreen()
         {
             if (!fullscreen.Peek() && fullscreenHandle.Value is null) return;
-            fullscreen.Value = false;
+            fullscreen.Value = false;                              // inline ownership effect reclaims on this edge
             hooks?.WindowSetFullscreen?.Invoke(false);
             var h = fullscreenHandle.Value;
             fullscreenHandle.Value = null;
@@ -173,8 +204,8 @@ public sealed class MediaPlayerElement : Component
                 {
                     Player = Player,
                     Binding = binding,
-                    AspectMode = AspectMode ?? localAspect,
-                    CustomAspectRatio = CustomAspectRatio ?? localCustomAspect,
+                    AspectMode = aspectSig,
+                    CustomAspectRatio = customAspectSig,
                     AspectModeChanged = AspectModeChanged,
                     FullscreenState = fullscreen,
                     Exit = LeaveFullscreen,
@@ -187,8 +218,17 @@ public sealed class MediaPlayerElement : Component
         }
 
         bool forceChrome = ShouldForceChrome(playIntent, state);
-        bool menuPinned = overlayPin.Value > 0;
-        bool showChrome = AreTransportControlsEnabled && (forceChrome || menuPinned || chromeVisible.Value);
+        bool showChrome = AreTransportControlsEnabled && (forceChrome || pinned || chromeVisible.Value);
+
+        // ── declarative idle-hide (replaces the ToolTipClock borrow + the overlayPin counter): a one-shot timer that
+        // hides the chrome after inactivity, RESTARTED on pointer activity, armed only while actively playing and not
+        // pinned/force-shown. An open picker pins the anchor (PinEpoch above) ⇒ armed=false ⇒ timer cancelled ⇒ chrome
+        // stays; closing the picker re-arms it.
+        bool autoHideArmed = AreTransportControlsEnabled && AutoHideTransportControls && !pinned && !forceChrome
+            && playIntent && state == PlaybackState.Playing;
+        var hideTimer = UseTimeout(() => chromeVisible.Value = false, MathF.Max(100f, TransportControlsHideDelayMs), DepKey.Empty);
+        UseEffect(() => { if (autoHideArmed) hideTimer.Restart(); else hideTimer.Cancel(); return (Action?)null; }, autoHideArmed ? 1 : 0);
+        void RevealAndRearm() { RevealChrome(); hideTimer.Restart(); }
 
         Element? statusOverlay = !videoReady && (state is PlaybackState.Opening or PlaybackState.Buffering || playIntent)
             ? OpeningOverlay(playIntent)
@@ -203,7 +243,7 @@ public sealed class MediaPlayerElement : Component
             videoReady
                 ? new BoxEl { Grow = 1f }
                 : statusOverlay is not null
-                    ? new BoxEl { Grow = 1f, Fill = ColorF.FromRgba(0x0A, 0x0A, 0x0A) }
+                    ? new BoxEl { Grow = 1f, Fill = Tok.MediaStage }
                     : PosterContent ?? DefaultPoster(),
         };
         if (ShowLetterboxBars && videoReady) AddLetterboxBars(videoChildren, area, videoRect, LetterboxColor);
@@ -229,6 +269,7 @@ public sealed class MediaPlayerElement : Component
             Corners = IsFullscreenPresentation ? default : Radii.OverlayAll,
             Fill = ColorF.Transparent,
             OnRealized = h => areaRef.Value = h,
+            OnBoundsChanged = b => { if (b != areaBounds.Peek()) areaBounds.Value = b; },   // resize → recompute letterbox
             Children = videoChildren.ToArray(),
         };
 
@@ -243,18 +284,12 @@ public sealed class MediaPlayerElement : Component
                 HitTestPassThrough = true,
                 Animate = ChromeMotion,
                 Children = [TransportOverride ?? BuildTransport(area.W, aspect, customAspect, SetAspect, ToggleFullscreen,
-                    moreAnchor, ccAnchor, qualityAnchor, rateAnchor, overlayService, overlayPin)],
+                    moreAnchor, ccAnchor, qualityAnchor, rateAnchor, overlayService)],
             });
-        if (showChrome && AutoHideTransportControls && !menuPinned && playIntent && state == PlaybackState.Playing)
-            layers.Add(Embed.Comp(() => new ToolTipClock
-            {
-                DurationMs = MathF.Max(500f, TransportControlsHideDelayMs),
-                OnElapsed = () => chromeVisible.Value = false,
-            }) with { Key = "media-hide:" + hideEpoch.Value });
 
         void HandleKey(KeyEventArgs e)
         {
-            RevealChrome();
+            RevealAndRearm();
             switch (e.KeyCode)
             {
                 case Keys.Space:
@@ -272,7 +307,6 @@ public sealed class MediaPlayerElement : Component
             }
         }
 
-        _ = tick;
         return new BoxEl
         {
             ZStack = true,
@@ -282,12 +316,36 @@ public sealed class MediaPlayerElement : Component
             BorderColor = IsFullscreenPresentation ? ColorF.Transparent : Tok.StrokeFlyoutDefault,
             BorderWidth = IsFullscreenPresentation ? 0f : 1f,
             Focusable = true,
+            OnRealized = h => playerRoot.Value = h,
             OnKeyDown = HandleKey,
-            OnPointerMoveWithin = _ => RevealChrome(),
-            OnPointerPressed = _ => RevealChrome(),
-            OnFocusChanged = focused => { if (focused) RevealChrome(); },
+            OnPointerMoveWithin = _ => RevealAndRearm(),
+            OnPointerPressed = _ => RevealAndRearm(),
+            OnFocusChanged = focused => { if (focused) RevealAndRearm(); },
             Children = layers.ToArray(),
         };
+    }
+
+    /// <summary>The engine-invoked per-frame video pump (registered at mount; see <see cref="VideoPump"/>). Reads the
+    /// live laid-out video-area rect + the current scale and drives <see cref="IMediaPlayer.PumpVideo"/> — NO side
+    /// effect ever runs in Render. Zero-alloc (all struct math + value-gated intents). A no-op when a non-owner (the
+    /// registry only invokes the current owner's pump).</summary>
+    private void PumpNow(float scale)
+    {
+        VideoBinding b = _binding;
+        if (!b.IsValid) return;
+        var scene = _scene;
+        NodeHandle h = _areaRef?.Value ?? default;
+        if (scene is null || h.IsNull || !scene.IsLive(h)) return;
+        RectF area = scene.AbsoluteRect(h);
+        if (area.W <= 0f || area.H <= 0f) return;
+        SizeI natural = Player.NaturalSize.Peek();
+        bool audioOnly = IsAudioOnly(natural);
+        RectF videoRect = audioOnly
+            ? area
+            : FitVideoRect(area, natural, _aspectForPump?.Peek() ?? VideoAspectMode.Uniform, _customAspectForPump?.Peek() ?? (16.0 / 9.0));
+        b.SetViewport(area);
+        Player.PumpVideo(b, videoRect, scale <= 0f ? 1f : scale);
+        if (audioOnly) b.SetVisible(false);
     }
 
     // ── default transport (pure FluentGpu: play/pause, scrub Slider, GPU time text, mute) ────────────────────────────
@@ -295,13 +353,11 @@ public sealed class MediaPlayerElement : Component
     private Element BuildTransport(float areaWidth, VideoAspectMode aspect, double customAspect,
         Action<VideoAspectMode, double> setAspect, Action toggleFullscreen, Ref<NodeHandle> moreAnchor,
         Ref<NodeHandle> ccAnchor, Ref<NodeHandle> qualityAnchor, Ref<NodeHandle> rateAnchor,
-        IOverlayService overlayService, Signal<int> overlayPin)
+        IOverlayService overlayService)
     {
         // The transport render reads only LOW-frequency signals (play-state + muted) so it does NOT re-render each frame
         // as the playhead advances. The seek scrub bar is an AUTONOMOUS component (its own scrub gate + compositor-bound
-        // playhead — see MediaSeekBar), and the time label is an isolated leaf that re-renders on its own position tick.
-        // The old per-frame Slider.Create(frac, …) recreated a controlled slider every frame, destroying any in-flight
-        // drag (the thumb snapped back on release) — the seek bug this replaces.
+        // playhead — see MediaSeekBar), and the time label is an isolated leaf that re-renders on its own ~1 Hz tick.
         bool playIntent = Player.IsPlayRequested.Value;        // intent wins during Opening/Buffering (early Play)
         bool muted = Player.Muted.Value;                       // subscribe (low-frequency)
         MediaCommandFlags commands = Player.Commands.Available.Value;
@@ -309,7 +365,6 @@ public sealed class MediaPlayerElement : Component
         _ = Player.Tracks.Audio.Version.Value;
         _ = Player.Tracks.Text.Version.Value;
         _ = Player.Qualities.Variants.Version.Value;
-        MediaTrack? audio = Player.Tracks.SelectedAudio.Value;
         MediaTrack? text = Player.Tracks.SelectedText.Value;
         QualitySelection quality = Player.Qualities.Selected.Value;
         float rate = Player.Rate.Value;
@@ -334,16 +389,16 @@ public sealed class MediaPlayerElement : Component
             controls.Add(Embed.Comp(() => new MediaTransportTime { Player = Player }));
         controls.Add(new BoxEl { Grow = 1f, MinWidth = 0f });
         if ((commands & MediaCommandFlags.GoLive) != 0)
-            controls.Add(TextButton(timeline.IsAtLiveEdge ? "● LIVE" : "Go live", () => _ = Player.GoLiveAsync(), timeline.IsAtLiveEdge));
+            controls.Add(TextButton(timeline.IsAtLiveEdge ? MediaStrings.LiveEdge : MediaStrings.GoLive, () => _ = Player.GoLiveAsync(), timeline.IsAtLiveEdge));
         // Each inline button opens a PICKER flyout at its own anchor (never blind-cycles through the options).
         if (!compact && (commands & MediaCommandFlags.SelectTextTrack) != 0 && Player.Tracks.Text.Count > 0)
-            controls.Add(TextButton(text is null ? "CC" : $"CC {text.Language ?? text.Label}",
+            controls.Add(TextButton(text is null ? MediaStrings.CaptionsShort : MediaStrings.CaptionsFor(text.Language ?? text.Label),
                 () => OpenPicker(ccAnchor, CaptionItems()), text is not null) with { OnRealized = h => ccAnchor.Value = h });
         if (!compact && (commands & MediaCommandFlags.SelectVideoQuality) != 0 && Player.Qualities.Variants.Count > 0)
             controls.Add(TextButton(QualityLabel(quality), () => OpenPicker(qualityAnchor, QualityItems()))
                 with { OnRealized = h => qualityAnchor.Value = h });
         if (!compact && (commands & MediaCommandFlags.Rate) != 0)
-            controls.Add(TextButton($"{rate:0.##}×", () => OpenPicker(rateAnchor, SpeedItems()))
+            controls.Add(TextButton(MediaStrings.RateLabel(rate), () => OpenPicker(rateAnchor, SpeedItems()))
                 with { OnRealized = h => rateAnchor.Value = h });
         controls.Add(IconButton(Icons.More, OpenMore) with { OnRealized = h => moreAnchor.Value = h });
         controls.Add(IconButton(IsFullscreenPresentation ? Icons.BackToWindow : Icons.FullScreen, toggleFullscreen));
@@ -353,14 +408,9 @@ public sealed class MediaPlayerElement : Component
             Direction = 1,
             Gap = 2f,
             Padding = new Edges4(14, 34, 14, 8),
-            // A bottom-anchored scrim ramp instead of a flat band: the controls sit on darkness that dissolves into the
+            // The canonical media footer scrim (Tok.ScrimBottom): controls sit on darkness that dissolves into the
             // video, the YouTube/Netflix-style overlay read.
-            Gradient = new GradientSpec(GradientShape.Linear, 90f,
-            [
-                new GradientStop(0f, ColorF.FromRgba(0, 0, 0, 0x00)),
-                new GradientStop(0.45f, ColorF.FromRgba(0, 0, 0, 0x66)),
-                new GradientStop(1f, ColorF.FromRgba(0, 0, 0, 0xB8)),
-            ]),
+            Gradient = Tok.ScrimBottom,
             Children =
             [
                 seek,
@@ -374,21 +424,18 @@ public sealed class MediaPlayerElement : Component
             m = overlayService.Open(() => anchor.Value,
                 () => MenuFlyout.Build(items, () => m?.Close()), FlyoutPlacement.TopEdgeAlignedRight,
                 new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
-            // Pin the chrome while the flyout is open: auto-hide collapsing the transport would destroy the anchor
-            // mid-flight and make the open flyout jump.
-            overlayPin.Value++;
-            bool unpinned = false;
-            m.ClosedAction = () => { if (!unpinned) { unpinned = true; overlayPin.Value = Math.Max(0, overlayPin.Peek() - 1); } };
+            // PopupOptions.PinsAnchor defaults true → the open flyout PINS the player's auto-hide scope; the chrome's
+            // idle-hide consults IsAnchorPinned/PinEpoch and stays put. No hand-rolled counter, no ClosedAction unpin.
         }
 
         System.Collections.Generic.List<MenuFlyoutItem> CaptionItems()
         {
             var items = new System.Collections.Generic.List<MenuFlyoutItem>(Player.Tracks.Text.Count + 1)
-            { MenuFlyoutItem.RadioItem("Off", text is null, () => _ = Player.SelectTrackAsync(null)) };
+            { MenuFlyoutItem.RadioItem(MediaStrings.Off, text is null, () => _ = Player.SelectTrackAsync(null)) };
             for (int i = 0; i < Player.Tracks.Text.Count; i++)
             {
                 MediaTrack track = Player.Tracks.Text[i];
-                items.Add(MenuFlyoutItem.RadioItem(track.Label ?? track.Language ?? $"Captions {i + 1}", text?.Id == track.Id,
+                items.Add(MenuFlyoutItem.RadioItem(track.Label ?? track.Language ?? MediaStrings.CaptionsIndexed(i + 1), text?.Id == track.Id,
                     () => _ = Player.SelectTrackAsync(track)));
             }
             return items;
@@ -397,12 +444,12 @@ public sealed class MediaPlayerElement : Component
         System.Collections.Generic.List<MenuFlyoutItem> QualityItems()
         {
             var items = new System.Collections.Generic.List<MenuFlyoutItem>(Player.Qualities.Variants.Count + 1)
-            { MenuFlyoutItem.RadioItem("Auto", quality.IsAuto, () => _ = Player.SelectQualityAsync(QualitySelection.Auto)) };
+            { MenuFlyoutItem.RadioItem(MediaStrings.Auto, quality.IsAuto, () => _ = Player.SelectQualityAsync(QualitySelection.Auto)) };
             for (int i = 0; i < Player.Qualities.Variants.Count; i++)
             {
                 QualityVariant variant = Player.Qualities.Variants[i];
                 string id = variant.Id;
-                string label = variant.Resolution.Height > 0 ? $"{variant.Resolution.Height}p" : variant.Label ?? id;
+                string label = variant.Resolution.Height > 0 ? MediaStrings.QualityHeight(variant.Resolution.Height) : variant.Label ?? id;
                 items.Add(MenuFlyoutItem.RadioItem(label, !quality.IsAuto && quality.VariantId == id,
                     () => _ = Player.SelectQualityAsync(QualitySelection.Pin(id))));
             }
@@ -412,10 +459,11 @@ public sealed class MediaPlayerElement : Component
         System.Collections.Generic.List<MenuFlyoutItem> AudioItems()
         {
             var items = new System.Collections.Generic.List<MenuFlyoutItem>(Player.Tracks.Audio.Count);
+            MediaTrack? audio = Player.Tracks.SelectedAudio.Peek();
             for (int i = 0; i < Player.Tracks.Audio.Count; i++)
             {
                 MediaTrack track = Player.Tracks.Audio[i];
-                items.Add(MenuFlyoutItem.RadioItem(track.Label ?? track.Language ?? $"Audio {i + 1}", audio?.Id == track.Id,
+                items.Add(MenuFlyoutItem.RadioItem(track.Label ?? track.Language ?? MediaStrings.AudioIndexed(i + 1), audio?.Id == track.Id,
                     () => _ = Player.SelectTrackAsync(track)));
             }
             return items;
@@ -426,59 +474,69 @@ public sealed class MediaPlayerElement : Component
             Speed(0.5), Speed(0.75), Speed(1), Speed(1.25), Speed(1.5), Speed(2),
         ];
 
-        MenuFlyoutItem Speed(double value) => MenuFlyoutItem.RadioItem($"{value:0.##}×", Math.Abs(rate - value) < 0.01,
+        MenuFlyoutItem Speed(double value) => MenuFlyoutItem.RadioItem(MediaStrings.RateLabel((float)value), Math.Abs(rate - value) < 0.01,
             () => Player.SetRate(value));
 
         void OpenMore()
         {
             var items = new System.Collections.Generic.List<MenuFlyoutItem>(12);
-            items.Add(MenuFlyoutItem.SubMenu("Aspect ratio",
+            items.Add(MenuFlyoutItem.SubMenu(MediaStrings.AspectRatio,
             [
-                MenuFlyoutItem.RadioItem("Fit · black bars", aspect == VideoAspectMode.Uniform, () => setAspect(VideoAspectMode.Uniform, 0)),
-                MenuFlyoutItem.RadioItem("Crop · fill frame", aspect == VideoAspectMode.UniformToFill, () => setAspect(VideoAspectMode.UniformToFill, 0)),
-                MenuFlyoutItem.RadioItem("Stretch", aspect == VideoAspectMode.Fill, () => setAspect(VideoAspectMode.Fill, 0)),
-                MenuFlyoutItem.RadioItem("None · native pixels", aspect == VideoAspectMode.Native, () => setAspect(VideoAspectMode.Native, 0)),
+                MenuFlyoutItem.RadioItem(MediaStrings.AspectFit, aspect == VideoAspectMode.Uniform, () => setAspect(VideoAspectMode.Uniform, 0)),
+                MenuFlyoutItem.RadioItem(MediaStrings.AspectCrop, aspect == VideoAspectMode.UniformToFill, () => setAspect(VideoAspectMode.UniformToFill, 0)),
+                MenuFlyoutItem.RadioItem(MediaStrings.AspectStretch, aspect == VideoAspectMode.Fill, () => setAspect(VideoAspectMode.Fill, 0)),
+                MenuFlyoutItem.RadioItem(MediaStrings.AspectNative, aspect == VideoAspectMode.Native, () => setAspect(VideoAspectMode.Native, 0)),
                 MenuFlyoutItem.Separator,
-                MenuFlyoutItem.RadioItem("16:9", aspect == VideoAspectMode.Custom && Near(customAspect, 16.0 / 9.0), () => setAspect(VideoAspectMode.Custom, 16.0 / 9.0)),
-                MenuFlyoutItem.RadioItem("4:3", aspect == VideoAspectMode.Custom && Near(customAspect, 4.0 / 3.0), () => setAspect(VideoAspectMode.Custom, 4.0 / 3.0)),
-                MenuFlyoutItem.RadioItem("21:9", aspect == VideoAspectMode.Custom && Near(customAspect, 21.0 / 9.0), () => setAspect(VideoAspectMode.Custom, 21.0 / 9.0)),
-                MenuFlyoutItem.RadioItem("2.39:1", aspect == VideoAspectMode.Custom && Near(customAspect, 2.39), () => setAspect(VideoAspectMode.Custom, 2.39)),
+                MenuFlyoutItem.RadioItem(MediaStrings.Ratio169, aspect == VideoAspectMode.Custom && Near(customAspect, 16.0 / 9.0), () => setAspect(VideoAspectMode.Custom, 16.0 / 9.0)),
+                MenuFlyoutItem.RadioItem(MediaStrings.Ratio43, aspect == VideoAspectMode.Custom && Near(customAspect, 4.0 / 3.0), () => setAspect(VideoAspectMode.Custom, 4.0 / 3.0)),
+                MenuFlyoutItem.RadioItem(MediaStrings.Ratio219, aspect == VideoAspectMode.Custom && Near(customAspect, 21.0 / 9.0), () => setAspect(VideoAspectMode.Custom, 21.0 / 9.0)),
+                MenuFlyoutItem.RadioItem(MediaStrings.Ratio239, aspect == VideoAspectMode.Custom && Near(customAspect, 2.39), () => setAspect(VideoAspectMode.Custom, 2.39)),
             ], Icons.Movie));
             if ((commands & MediaCommandFlags.Rate) != 0)
-                items.Add(MenuFlyoutItem.SubMenu("Playback speed", SpeedItems()));
+                items.Add(MenuFlyoutItem.SubMenu(MediaStrings.PlaybackSpeed, SpeedItems()));
             if ((commands & MediaCommandFlags.SelectVideoQuality) != 0 && Player.Qualities.Variants.Count > 0)
-                items.Add(MenuFlyoutItem.SubMenu("Quality", QualityItems()));
+                items.Add(MenuFlyoutItem.SubMenu(MediaStrings.Quality, QualityItems()));
             if ((commands & MediaCommandFlags.SelectAudioTrack) != 0 && Player.Tracks.Audio.Count > 1)
-                items.Add(MenuFlyoutItem.SubMenu("Audio track", AudioItems()));
+                items.Add(MenuFlyoutItem.SubMenu(MediaStrings.AudioTrack, AudioItems()));
             if ((commands & MediaCommandFlags.SelectTextTrack) != 0 && Player.Tracks.Text.Count > 0)
-                items.Add(MenuFlyoutItem.SubMenu("Captions", CaptionItems()));
+                items.Add(MenuFlyoutItem.SubMenu(MediaStrings.Captions, CaptionItems()));
             if ((commands & MediaCommandFlags.Chapters) != 0)
             {
                 items.Add(MenuFlyoutItem.Separator);
-                items.Add(new MenuFlyoutItem("Previous chapter", Icons.Previous, Invoke: () => _ = Player.PreviousChapterAsync()));
-                items.Add(new MenuFlyoutItem("Next chapter", Icons.Next, Invoke: () => _ = Player.NextChapterAsync()));
+                items.Add(new MenuFlyoutItem(MediaStrings.PreviousChapter, Icons.Previous, Invoke: () => _ = Player.PreviousChapterAsync()));
+                items.Add(new MenuFlyoutItem(MediaStrings.NextChapter, Icons.Next, Invoke: () => _ = Player.NextChapterAsync()));
             }
             items.Add(MenuFlyoutItem.Separator);
-            items.Add(new MenuFlyoutItem(IsFullscreenPresentation ? "Exit fullscreen" : "Fullscreen",
-                IsFullscreenPresentation ? Icons.BackToWindow : Icons.FullScreen, Invoke: toggleFullscreen) { AcceleratorText = "F11" });
+            items.Add(new MenuFlyoutItem(IsFullscreenPresentation ? MediaStrings.ExitFullscreen : MediaStrings.Fullscreen,
+                IsFullscreenPresentation ? Icons.BackToWindow : Icons.FullScreen, Invoke: toggleFullscreen) { AcceleratorText = MediaStrings.F11 });
 
             OpenPicker(moreAnchor, items);
         }
     }
 
-    /// <summary>The <c>elapsed / total</c> time label as its OWN component so it re-renders on the ~per-frame position
-    /// tick WITHOUT re-rendering the transport (whose seek bar is compositor-only).</summary>
+    /// <summary>The <c>elapsed / total</c> time label as its OWN component. It bridges the ~per-frame position/duration
+    /// signals into WHOLE-SECOND value-gated signals via eager effects, so it re-renders at most ~once per second (never
+    /// per frame) — the position tick reaches the compositor-bound seek bar, not this text.</summary>
     private sealed class MediaTransportTime : Component
     {
         public required IMediaPlayer Player { get; init; }
+        private readonly Signal<int> _posSec = new(0);
+        private readonly Signal<int> _durSec = new(-1);
 
         public override Element Render()
         {
-            var pos = Player.Position.Value;    // subscribe → this leaf re-renders on the position tick
-            var dur = Player.Duration.Value;
-            return new TextEl($"{FormatTime(pos)} / {FormatTime(dur)}")
+            UseSignalEffect(() => { int s = (int)Player.PositionSeconds.Value; if (s != _posSec.Peek()) _posSec.Value = s; });
+            UseSignalEffect(() =>
             {
-                Size = 12f, Color = ColorF.FromRgba(235, 235, 235),
+                var d = Player.Duration.Value;
+                int s = d > TimeSpan.Zero ? (int)d.TotalSeconds : -1;
+                if (s != _durSec.Peek()) _durSec.Value = s;
+            });
+            int pos = _posSec.Value;
+            int dur = _durSec.Value;
+            return new TextEl($"{FormatTime(TimeSpan.FromSeconds(Math.Max(0, pos)))} / {FormatTime(TimeSpan.FromSeconds(Math.Max(0, dur)))}")
+            {
+                Size = 12f, Color = Tok.OnMediaSecondary,
             };
         }
     }
@@ -487,8 +545,8 @@ public sealed class MediaPlayerElement : Component
     {
         public required IMediaPlayer Player { get; init; }
         public required VideoBinding Binding { get; init; }
-        public required IReadSignal<VideoAspectMode> AspectMode { get; init; }
-        public required IReadSignal<double> CustomAspectRatio { get; init; }
+        public required Signal<VideoAspectMode> AspectMode { get; init; }
+        public required Signal<double> CustomAspectRatio { get; init; }
         public required Signal<bool> FullscreenState { get; init; }
         public required Action Exit { get; init; }
         public Action<VideoAspectMode, double>? AspectModeChanged { get; init; }
@@ -507,7 +565,7 @@ public sealed class MediaPlayerElement : Component
                     Embed.Comp(() => new MediaPlayerElement
                     {
                         Player = Player,
-                        ExternalBinding = Binding,
+                        PresentationBinding = Binding,
                         AspectMode = AspectMode,
                         CustomAspectRatio = CustomAspectRatio,
                         AspectModeChanged = AspectModeChanged,
@@ -525,10 +583,10 @@ public sealed class MediaPlayerElement : Component
     {
         Width = 40f, Height = 40f, Corners = Radii.ControlAll,
         AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        HoverFill = ColorF.FromRgba(255, 255, 255, 0x18), PressedFill = ColorF.FromRgba(255, 255, 255, 0x28),
+        HoverFill = Tok.OnMediaPrimary with { A = 0.09f }, PressedFill = Tok.OnMediaPrimary with { A = 0.16f },
         Role = AutomationRole.Button,
         OnClick = onClick,
-        Children = new Element[] { new TextEl(glyph) { Size = 16f, Color = ColorF.FromRgba(255, 255, 255), FontFamily = Theme.IconFont } },
+        Children = new Element[] { new TextEl(glyph) { Size = 16f, Color = Tok.OnMediaPrimary, FontFamily = Theme.IconFont } },
     };
 
     private static BoxEl TextButton(string label, Action onClick, bool active = false) => new()
@@ -536,38 +594,38 @@ public sealed class MediaPlayerElement : Component
         Height = 34f, MinWidth = 42f, Padding = new Edges4(8f, 0f, 8f, 0f), Corners = Radii.ControlAll,
         AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
         Fill = active ? Tok.AccentDefault : ColorF.Transparent,
-        HoverFill = active ? Tok.AccentSecondary : ColorF.FromRgba(255, 255, 255, 0x18),
-        PressedFill = active ? Tok.AccentTertiary : ColorF.FromRgba(255, 255, 255, 0x28),
+        HoverFill = active ? Tok.AccentSecondary : Tok.OnMediaPrimary with { A = 0.09f },
+        PressedFill = active ? Tok.AccentTertiary : Tok.OnMediaPrimary with { A = 0.16f },
         Role = AutomationRole.Button, OnClick = onClick,
-        Children = [new TextEl(label) { Size = 12f, Color = ColorF.FromRgba(255, 255, 255) }],
+        Children = [new TextEl(label) { Size = 12f, Color = Tok.OnMediaPrimary }],
     };
 
     private string QualityLabel(QualitySelection selection)
     {
-        if (selection.IsAuto) return "Auto";
+        if (selection.IsAuto) return MediaStrings.Auto;
         for (int i = 0; i < Player.Qualities.Variants.Count; i++)
         {
             QualityVariant q = Player.Qualities.Variants[i];
             if (q.Id == selection.VariantId)
-                return q.Resolution.Height > 0 ? $"{q.Resolution.Height}p" : q.Label ?? q.Id;
+                return q.Resolution.Height > 0 ? MediaStrings.QualityHeight(q.Resolution.Height) : q.Label ?? q.Id;
         }
-        return "Auto";
+        return MediaStrings.Auto;
     }
 
     private Element DefaultPoster() => new BoxEl
     {
         Grow = 1f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Fill = ColorF.FromRgba(0x0A, 0x0A, 0x0A),
+        Fill = Tok.MediaStage,
         Children = new Element[]
         {
             new BoxEl
             {
                 Width = 56f, Height = 56f, Corners = Radii.Circle(56f),
-                Fill = ColorF.FromRgba(0, 0, 0, 0x80),
+                Fill = Tok.MediaScrim,
                 AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                 Children = new Element[]
                 {
-                    new TextEl(Icons.Play) { Size = 24f, Color = ColorF.FromRgba(0xFF, 0xFF, 0xFF), FontFamily = Theme.IconFont },
+                    new TextEl(Icons.Play) { Size = 24f, Color = Tok.OnMediaPrimary, FontFamily = Theme.IconFont },
                 },
             },
         },
@@ -582,8 +640,8 @@ public sealed class MediaPlayerElement : Component
         Children =
         [
             ProgressRing.Indeterminate(40f),
-            new TextEl(playIntent ? "Starting playback…" : "Loading…")
-            { Size = 13f, Color = ColorF.FromRgba(255, 255, 255, 0xDC) },
+            new TextEl(playIntent ? MediaStrings.StartingPlayback : MediaStrings.Loading)
+            { Size = 13f, Color = Tok.OnMediaSecondary },
         ],
     };
 
@@ -631,13 +689,13 @@ public sealed class MediaPlayerElement : Component
     {
         string reason = info.Reason switch
         {
-            BufferingReason.Seeking => "Seeking…",
-            BufferingReason.QualitySwitch => "Changing quality…",
-            BufferingReason.TrackSwitch => "Changing track…",
-            BufferingReason.LiveCatchUp => "Catching up to live…",
-            BufferingReason.NetworkRecovery => "Reconnecting…",
-            BufferingReason.Rebuffering => "Buffering…",
-            _ => "Loading…",
+            BufferingReason.Seeking => MediaStrings.Seeking,
+            BufferingReason.QualitySwitch => MediaStrings.ChangingQuality,
+            BufferingReason.TrackSwitch => MediaStrings.ChangingTrack,
+            BufferingReason.LiveCatchUp => MediaStrings.CatchingUp,
+            BufferingReason.NetworkRecovery => MediaStrings.Reconnecting,
+            BufferingReason.Rebuffering => MediaStrings.Buffering,
+            _ => MediaStrings.Loading,
         };
         Element ring = info.Percent is >= 0 and <= 1
             ? ProgressRing.Determinate((float)info.Percent, 36f)
@@ -646,8 +704,8 @@ public sealed class MediaPlayerElement : Component
         {
             Direction = 1, Gap = 8f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Padding = new Edges4(14f, 12f, 14f, 12f), Corners = Radii.OverlayAll,
-            Fill = ColorF.FromRgba(0, 0, 0, 0x8A),
-            Children = [ring, new TextEl(reason) { Size = 13f, Color = ColorF.FromRgba(255, 255, 255) }],
+            Fill = Tok.MediaScrim,
+            Children = [ring, new TextEl(reason) { Size = 13f, Color = Tok.OnMediaPrimary }],
         };
     }
 
@@ -658,20 +716,22 @@ public sealed class MediaPlayerElement : Component
         Margin = new Edges4(24f, 0f, 24f, 28f),
         Padding = new Edges4(10f, 5f, 10f, 6f),
         Corners = Radii.ControlAll,
-        Fill = ColorF.FromRgba(0, 0, 0, 0xB8),
+        Fill = Tok.MediaScrim with { A = 0.72f },
         Children =
         [
             new TextEl(cue.Text)
             {
                 Size = Math.Clamp(18f * cue.Style.FontScale, 12f, 40f),
-                Color = cue.Style.ArgbColor == 0 ? ColorF.FromRgba(255, 255, 255) : FromArgb(cue.Style.ArgbColor),
+                Color = cue.Style.ArgbColor == 0 ? Tok.OnMediaPrimary : FromArgb(cue.Style.ArgbColor),
                 Wrap = TextWrap.Wrap,
             },
         ],
     };
 
+    // Convert a cue-supplied 0xAARRGGBB color (dynamic subtitle data) to a ColorF via the float ctor — a runtime
+    // conversion, not a hardcoded color constant, so the media element carries no baked color literals.
     private static ColorF FromArgb(uint argb)
-        => ColorF.FromRgba((byte)(argb >> 16), (byte)(argb >> 8), (byte)argb, (byte)(argb >> 24));
+        => new(((argb >> 16) & 0xFF) / 255f, ((argb >> 8) & 0xFF) / 255f, (argb & 0xFF) / 255f, ((argb >> 24) & 0xFF) / 255f);
 
     // ── pure helpers (unit-tested) ───────────────────────────────────────────────────────────────────────────────────
 
@@ -741,4 +801,48 @@ public sealed class MediaPlayerElement : Component
         int h = total / 3600, m = (total % 3600) / 60, s = total % 60;
         return h > 0 ? $"{h}:{m:D2}:{s:D2}" : $"{m}:{s:D2}";
     }
+}
+
+/// <summary>Every user-facing string in the media player chrome, hoisted to ONE place so the G5j localization pillar is
+/// a single-file wiring change (route these through generated loc keys). Strings stay English this phase.</summary>
+internal static class MediaStrings
+{
+    public const string StartingPlayback = "Starting playback…";
+    public const string Loading = "Loading…";
+    public const string Off = "Off";
+    public const string Auto = "Auto";
+    public const string GoLive = "Go live";
+    public const string LiveEdge = "● LIVE";
+    public const string CaptionsShort = "CC";
+    public const string AspectRatio = "Aspect ratio";
+    public const string AspectFit = "Fit · black bars";
+    public const string AspectCrop = "Crop · fill frame";
+    public const string AspectStretch = "Stretch";
+    public const string AspectNative = "None · native pixels";
+    public const string Ratio169 = "16:9";
+    public const string Ratio43 = "4:3";
+    public const string Ratio219 = "21:9";
+    public const string Ratio239 = "2.39:1";
+    public const string PlaybackSpeed = "Playback speed";
+    public const string Quality = "Quality";
+    public const string AudioTrack = "Audio track";
+    public const string Captions = "Captions";
+    public const string PreviousChapter = "Previous chapter";
+    public const string NextChapter = "Next chapter";
+    public const string Fullscreen = "Fullscreen";
+    public const string ExitFullscreen = "Exit fullscreen";
+    public const string F11 = "F11";
+
+    public const string Seeking = "Seeking…";
+    public const string ChangingQuality = "Changing quality…";
+    public const string ChangingTrack = "Changing track…";
+    public const string CatchingUp = "Catching up to live…";
+    public const string Reconnecting = "Reconnecting…";
+    public const string Buffering = "Buffering…";
+
+    public static string CaptionsFor(string? label) => $"CC {label}";
+    public static string CaptionsIndexed(int n) => $"Captions {n}";
+    public static string AudioIndexed(int n) => $"Audio {n}";
+    public static string QualityHeight(int height) => $"{height}p";
+    public static string RateLabel(float rate) => $"{rate:0.##}×";
 }

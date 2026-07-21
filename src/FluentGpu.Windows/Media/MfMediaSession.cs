@@ -58,6 +58,12 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession
     private volatile CueTrack? _inbandCues;
     private int _cueEpoch;
     private TimedCue? _publishedCue;
+    // The pump publishes the authoritative playhead here (double is atomic on 64-bit; a torn read only mis-windows a
+    // best-effort fetch by a segment). The off-thread windowed loader reads it to fetch cues AROUND the playhead.
+    private volatile int _cuePlayheadMs;
+    private const int CueSegmentsBehind = 1;   // scrub-back headroom
+    private const int CueSegmentsAhead = 3;    // prefetch a few segments ahead of the playhead
+    private const int CueWindowPollMs = 500;   // re-evaluate the window this often as playback advances
 
     internal MfMediaSession(IVideoEngine engine, MediaOpenOptions opts, AdaptiveManifest? manifest = null)
     {
@@ -172,30 +178,52 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession
             }
             if (segments.Count == 0) return;
 
+            // Playhead-windowed fetch (replaces the fetch-up-to-512-upfront storm): fetch only the segments AROUND the
+            // current playhead — a few behind (scrub-back headroom) + a few ahead (prefetch) — advancing as playback
+            // moves. Fetched cues are RETAINED (played-through captions stay available for scrub-back); only never-in-
+            // window tail segments are skipped. Best-effort + off-thread + epoch-guarded exactly as before.
+            var starts = new TimeSpan[segments.Count];
+            for (int i = 0; i < segments.Count; i++) starts[i] = segments[i].Start;
+            var loaded = new bool[segments.Count];
             var merged = new List<TimedCue>();
             var seen = new HashSet<(long, string)>();   // segments repeat boundary-spanning cues — dedupe on (start, text)
-            int cap = Math.Min(segments.Count, 512);    // bound the fetch storm on very long presentations
-            for (int i = 0; i < cap; i++)
+            bool sniffed = false, isWebVtt = false;
+            int loadedCount = 0;
+
+            while (epoch == _cueEpoch && !_disposed)
             {
-                if (epoch != _cueEpoch || _disposed) return;   // selection superseded / torn down
-                string vtt;
-                try { vtt = await s_subtitleHttp.GetStringAsync(segments[i].Uri).ConfigureAwait(false); }
-                catch (HttpRequestException) { continue; }      // one missing caption segment is not fatal
-                if (i == 0 && !vtt.AsSpan().TrimStart().StartsWith("WEBVTT", StringComparison.Ordinal))
-                    return;                                     // not WebVTT (e.g. TTML) — unsupported for now
-                CueTrack part = SubtitleLoader.ParseWebVtt(vtt);
+                var pos = TimeSpan.FromMilliseconds(_cuePlayheadMs);
+                (int lo, int hi) = SubtitleLoader.CueWindow(starts, pos, CueSegmentsBehind, CueSegmentsAhead);
                 bool added = false;
-                for (int c = 0; c < part.Count; c++)
+                for (int i = lo; i < hi; i++)
                 {
-                    TimedCue cue = part[c];
-                    if (seen.Add((cue.Start.Ticks, cue.Text))) { merged.Add(cue); added = true; }
+                    if (epoch != _cueEpoch || _disposed) return;   // selection superseded / torn down
+                    if (loaded[i]) continue;
+                    string vtt;
+                    try { vtt = await s_subtitleHttp.GetStringAsync(segments[i].Uri).ConfigureAwait(false); }
+                    catch (HttpRequestException) { loaded[i] = true; loadedCount++; continue; }   // one missing segment is not fatal
+                    loaded[i] = true; loadedCount++;
+                    // One-time WebVTT sniff on the FIRST segment actually fetched (windowing means i is not 0-first):
+                    // a non-WebVTT rendition (e.g. TTML) stays typed-unsupported — bail without producing garbage cues.
+                    if (!sniffed)
+                    {
+                        sniffed = true;
+                        isWebVtt = vtt.AsSpan().TrimStart().StartsWith("WEBVTT", StringComparison.Ordinal);
+                    }
+                    if (!isWebVtt) return;
+                    CueTrack part = SubtitleLoader.ParseWebVtt(vtt);
+                    for (int c = 0; c < part.Count; c++)
+                    {
+                        TimedCue cue = part[c];
+                        if (seen.Add((cue.Start.Ticks, cue.Text))) { merged.Add(cue); added = true; }
+                    }
                 }
-                // Progressive availability: swap in a freshly-built snapshot (the pump only ever sees a complete,
-                // immutable-from-its-view CueTrack — never a list another thread is still mutating).
-                if (added && (i % 8 == 7 || i == cap - 1) && epoch == _cueEpoch)
-                    _inbandCues = Snapshot(merged);
+                // Progressive availability: swap in a freshly-built, start-sorted snapshot (the pump only ever sees a
+                // complete, immutable-from-its-view CueTrack — never a list another thread is still mutating).
+                if (added && epoch == _cueEpoch) _inbandCues = Snapshot(merged);
+                if (loadedCount >= segments.Count) return;   // whole (finite) track loaded — nothing left to window in
+                await Task.Delay(CueWindowPollMs).ConfigureAwait(false);   // wait for the playhead to advance the window
             }
-            if (epoch == _cueEpoch && merged.Count > 0) _inbandCues = Snapshot(merged);
         }
         catch
         {
@@ -204,6 +232,7 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession
 
         static CueTrack Snapshot(List<TimedCue> cues)
         {
+            cues.Sort(static (a, b) => a.Start.CompareTo(b.Start));   // window order != time order; CueTrack.Advance scans in time
             var track = new CueTrack();
             for (int i = 0; i < cues.Count; i++) track.Add(cues[i]);
             return track;
@@ -294,6 +323,7 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession
         {
             TimeSpan pos = TimeSpan.FromSeconds(_engine.CurrentTimeSeconds);
             sink.Position(pos);
+            _cuePlayheadMs = (int)Math.Clamp(pos.TotalMilliseconds, 0.0, int.MaxValue);   // feed the windowed cue loader
             TimedCue? cue = null;
             if (_inbandCues is { } cues) { cues.Advance(pos); cue = cues.ActiveCue.Peek(); }
             if (!EqualityComparer<TimedCue?>.Default.Equals(cue, _publishedCue))

@@ -349,6 +349,11 @@ public static partial class Tok
     public static readonly ColorF OnMediaTertiary = new(1f, 1f, 1f, 0.60f);
     /// <summary>The chip/pill/FAB scrim plate floated over media (the MediaCard "…" / kind-chip / eq-pill fills): black @ 0.55.</summary>
     public static readonly ColorF MediaScrim = new(0f, 0f, 0f, 0.55f);
+    /// <summary>Opaque media stage under a transparent video hole / behind a loading spinner or audio-only poster
+    /// (the streaming-player near-black stage): <c>#0A0A0A</c>.</summary>
+    public static readonly ColorF MediaStage = new(0.0392f, 0.0392f, 0.0392f, 1f);
+    /// <summary>Opaque letterbox / pillarbox bars around Uniform/Native video content (video black).</summary>
+    public static readonly ColorF MediaLetterbox = new(0f, 0f, 0f, 1f);
 
     /// <summary>Footer scrim (transparent at the top → black at the bottom) so ink pinned to the bottom of a media tile
     /// stays legible. The exact ramp from MediaCard's editorial footer gradient. Apply with <c>.Gradient(...)</c>.</summary>
