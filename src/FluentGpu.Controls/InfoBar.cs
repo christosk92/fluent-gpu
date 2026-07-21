@@ -1,5 +1,6 @@
 using FluentGpu.Foundation;
 using FluentGpu.Dsl;
+using FluentGpu.Localization;
 
 namespace FluentGpu.Controls;
 
@@ -278,7 +279,7 @@ public static class InfoBar
             var m = parts.Apply(PartCloseButton, closeButton);
             // WinUI attaches a localized "Close" tooltip to the close button in OnApplyTemplate (InfoBar.cpp:55-59,
             // SR_InfoBarCloseButtonTooltip = "Close"). The ToolTip wrapper self-aligns Start (VerticalAlignment="Top").
-            children.Add(ToolTip.Wrap(m with { OnClick = closeClick ?? m.OnClick, Role = AutomationRole.Button }, "Close"));
+            children.Add(ToolTip.Wrap(m with { OnClick = closeClick ?? m.OnClick, Role = AutomationRole.Button }, Loc.Get(Strings.InfoBar.Close)));
         }
 
         var root = new BoxEl

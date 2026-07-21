@@ -41,6 +41,15 @@ public static class Localization
     private static string _default = "en-US";
     private static bool _pseudo;
 
+    // The NEUTRAL fallback floor: the built-in, ship-with-the-assembly neutral strings a library registers for its OWN
+    // user-facing text (the control kit does this — see FluentGpu.Controls, whose generated module initializer calls
+    // RegisterNeutral). It is consulted LAST in every resolution (after the active culture, its parent, and the default
+    // culture), so a key ALWAYS resolves to its neutral string even when NO culture table is loaded — the zero-config
+    // contract that keeps a library's text visible for an app that never touches localization. It is NOT a culture (it
+    // never appears in AvailableCultures) and Clear() never wipes it (the built-in floor is permanent). Because it is
+    // the terminal link, a translation for the same key in any real culture table always wins.
+    private static Dictionary<string, string> _neutral = new(System.StringComparer.Ordinal);
+
     /// <summary>The culture-epoch signal: bumped by <see cref="SetCulture"/> / data changes. <see cref="Get"/> reads it
     /// (subscribing the calling thunk), so a bound text node re-resolves when the culture changes — with no re-render.
     /// The host's <c>ReactiveRuntime</c> drains the resulting bind-effect updates on the next frame.</summary>
@@ -175,6 +184,22 @@ public static class Localization
     public static void AddJson(string culture, ReadOnlySpan<byte> utf8Json)
         => AddStrings(culture, JsonResourceReader.Read(utf8Json));
 
+    /// <summary>Register a library's built-in NEUTRAL strings as the terminal fallback floor (see <see cref="_neutral"/>).
+    /// The control kit calls this from a generated module initializer so its user-facing text resolves to the neutral
+    /// string with ZERO configuration — an app that never touches localization sees the kit's default English unchanged.
+    /// A translation for the same key in any loaded culture table always wins (neutral is consulted last). Merges into
+    /// any previously-registered neutral strings; idempotent for equal values. Does NOT bump the culture epoch: the
+    /// neutral floor is the immutable baseline set once at assembly load, before any UI resolves, so no re-resolution is
+    /// needed and no reactive write happens off the UI thread during module init.</summary>
+    public static void RegisterNeutral(IReadOnlyDictionary<string, string> strings)
+    {
+        lock (Gate)
+        {
+            foreach (var kv in strings) _neutral[kv.Key] = kv.Value;
+            RebuildChain();
+        }
+    }
+
     /// <summary>Drop all loaded cultures and reset to the empty state (tests / re-init).</summary>
     public static void Clear()
     {
@@ -227,6 +252,20 @@ public static class Localization
         return pseudo ? PseudoLocalizer.Transform(formatted) : formatted;
     }
 
+    /// <summary>Bind <paramref name="key"/> as a live localized string for a text/tooltip channel WITHOUT re-rendering:
+    /// returns a <see cref="Prop{T}"/> thunk over <see cref="Get"/>, so the engine's mount-time bind effect re-resolves
+    /// ONLY that node on a culture change (the binding-not-re-render path). Usable from static control-factory code where
+    /// the instance <c>L</c>/<c>Lf</c> hooks (which need a component <c>Context</c>) are unavailable — this is the control
+    /// kit's canonical localized-text mechanism. Missing key falls back to the neutral floor (or renders <c>[key]</c> if
+    /// no neutral was registered).</summary>
+    public static Prop<string> Bind(string key) => Prop.Of(() => Get(key));
+
+    /// <summary>Bind <paramref name="key"/> as a live localized + formatted string (named placeholders / ICU
+    /// plural-select) — the <see cref="Bind(string)"/> counterpart over <see cref="Format(string, ValueTuple{string, object}[])"/>.
+    /// Re-resolves on culture change with no re-render; the <paramref name="args"/> are captured by the thunk.</summary>
+    public static Prop<string> BindF(string key, params (string Name, object Value)[] args)
+        => Prop.Of(() => Format(key, args));
+
     /// <summary>True iff <paramref name="key"/> resolves in the current chain (without producing the visible-missing
     /// form). Useful for conditional UI / tests.</summary>
     public static bool Has(string key)
@@ -267,6 +306,9 @@ public static class Localization
         Add(Parent(_current));
         Add(_default);
         Add(Parent(_default));
+        // The neutral floor is the terminal link: every real culture table above wins per-key, but a key missing from
+        // all of them (or when none are loaded) still resolves to its built-in neutral string.
+        if (_neutral.Count > 0) order.Add(_neutral);
         _chain = order.ToArray();
     }
 
@@ -316,6 +358,10 @@ public static class Loc
     public static string Get(string key) => Localization.Get(key);
     /// <inheritdoc cref="Localization.Format(string, ValueTuple{string, object}[])"/>
     public static string Format(string key, params (string Name, object Value)[] args) => Localization.Format(key, args);
+    /// <inheritdoc cref="Localization.Bind(string)"/>
+    public static FluentGpu.Signals.Prop<string> Bind(string key) => Localization.Bind(key);
+    /// <inheritdoc cref="Localization.BindF(string, ValueTuple{string, object}[])"/>
+    public static FluentGpu.Signals.Prop<string> BindF(string key, params (string Name, object Value)[] args) => Localization.BindF(key, args);
     /// <inheritdoc cref="Localization.CurrentCulture"/>
     public static string CurrentCulture => Localization.CurrentCulture;
     /// <inheritdoc cref="Localization.SetCulture"/>

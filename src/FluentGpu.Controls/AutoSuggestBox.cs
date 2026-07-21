@@ -2,6 +2,7 @@ using FluentGpu.Dsl;
 using FluentGpu.Forms;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Localization;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
 
@@ -687,7 +688,7 @@ internal sealed class SuggestionsList : Component
                             MinHeight = AutoSuggestBox.ItemMinHeight,
                             AlignItems = FlexAlign.Center,
                             Padding = new Edges4(24, 0, 24, 0),
-                            Children = [new TextEl("No results found") { Size = 14f, Color = Tok.TextPrimary, Grow = 1f }],
+                            Children = [new TextEl("") { Text = Loc.Bind(Strings.AutoSuggest.NoResults), Size = 14f, Color = Tok.TextPrimary, Grow = 1f }],
                         },
                     ],
                 });

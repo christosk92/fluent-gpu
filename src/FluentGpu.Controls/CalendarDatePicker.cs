@@ -1,6 +1,7 @@
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Localization;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
 using System;
@@ -23,8 +24,10 @@ public sealed class CalendarDatePicker : Component
     //    FirstDayOfWeek forward to the hosted CalendarView — CalendarDatePicker_themeresources.xaml:203). ──
     /// <summary>Caller-owned date; null shows <see cref="PlaceholderText"/>. A fallback signal is used when null.</summary>
     public Signal<DateOnly?>? Date;
-    /// <summary>WinUI <c>PlaceholderText</c> — default localized "Pick a date" (calendardatepicker_partial.cpp:45-48).</summary>
-    public string PlaceholderText = "Pick a date";
+    /// <summary>WinUI <c>PlaceholderText</c> — null = the localized default (Strings.CalendarDatePicker.Placeholder,
+    /// neutral "Pick a date"), resolved at render so it translates and re-resolves on a culture change
+    /// (calendardatepicker_partial.cpp:45-48).</summary>
+    public string? PlaceholderText;
     /// <summary>WinUI <c>Header</c> — shown above the face (HeaderContentPresenter, CalendarDatePicker_themeresources.xaml:216).</summary>
     public string? Header;
     public DateOnly? MinDate;
@@ -50,7 +53,7 @@ public sealed class CalendarDatePicker : Component
         Action<DateOnly?>? onChange = null)
         => Embed.Comp(() => new CalendarDatePicker
         {
-            Date = date, PlaceholderText = placeholderText ?? "Pick a date", Header = header,
+            Date = date, PlaceholderText = placeholderText, Header = header,
             MinDate = minDate, MaxDate = maxDate, FirstDayOfWeek = firstDayOfWeek,
             IsTodayHighlighted = isTodayHighlighted, DisplayMode = displayMode,
             DateFormat = dateFormat, OnChange = onChange,
@@ -94,7 +97,7 @@ public sealed class CalendarDatePicker : Component
         // Default formatter = the system short-date (calendardatepicker_partial.cpp:473 get_ShortDate).
         string faceText = d is { } picked
             ? picked.ToString(DateFormat ?? CultureInfo.CurrentCulture.DateTimeFormat.ShortDatePattern, CultureInfo.CurrentCulture)
-            : PlaceholderText;
+            : PlaceholderText ?? Loc.Get(Strings.CalendarDatePicker.Placeholder);
 
         var face = new BoxEl
         {

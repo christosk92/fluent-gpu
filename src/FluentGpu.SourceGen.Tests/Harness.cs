@@ -40,9 +40,9 @@ internal static class Harness
         return builder.ToImmutable();
     }
 
-    private static CSharpCompilation Compile(string source, ImmutableArray<MetadataReference> refs)
+    private static CSharpCompilation Compile(string source, ImmutableArray<MetadataReference> refs, string? assemblyName = null)
         => CSharpCompilation.Create(
-            "FgAnalyzerTest_" + Guid.NewGuid().ToString("N"),
+            assemblyName ?? "FgAnalyzerTest_" + Guid.NewGuid().ToString("N"),
             new[] { CSharpSyntaxTree.ParseText(source, ParseOpts) },
             refs,
             new CSharpCompilationOptions(
@@ -51,10 +51,11 @@ internal static class Harness
                 allowUnsafe: true));
 
     /// <summary>Run <paramref name="analyzer"/> over <paramref name="source"/> (resolved against the real engine) and
-    /// return only its diagnostics.</summary>
-    public static ImmutableArray<Diagnostic> Analyze(DiagnosticAnalyzer analyzer, string source)
+    /// return only its diagnostics. <paramref name="assemblyName"/> lets an assembly-scoped rule (FGRP008 arms only in
+    /// <c>FluentGpu.Controls</c>) be exercised both in and out of scope.</summary>
+    public static ImmutableArray<Diagnostic> Analyze(DiagnosticAnalyzer analyzer, string source, string? assemblyName = null)
     {
-        var compilation = Compile(source, EngineRefs);
+        var compilation = Compile(source, EngineRefs, assemblyName);
         var withAnalyzers = compilation.WithAnalyzers(
             ImmutableArray.Create(analyzer),
             new CompilationWithAnalyzersOptions(new AnalyzerOptions(ImmutableArray<AdditionalText>.Empty),
@@ -77,6 +78,14 @@ internal static class Harness
     /// return the concatenated generated source plus the generator diagnostics.</summary>
     public static (string Generated, ImmutableArray<Diagnostic> Diagnostics) Generate(
         IIncrementalGenerator generator, string source, params (string Name, string Content)[] additionalTexts)
+        => Generate(generator, source, globalOptions: null, additionalTexts);
+
+    /// <summary>As <see cref="Generate(IIncrementalGenerator, string, ValueTuple{string, string}[])"/> but also feeds
+    /// MSBuild global properties (surfaced to a generator via <c>build_property.*</c>) — e.g.
+    /// <c>FluentGpuLocRegisterNeutral</c>.</summary>
+    public static (string Generated, ImmutableArray<Diagnostic> Diagnostics) Generate(
+        IIncrementalGenerator generator, string source, (string Key, string Value)[]? globalOptions,
+        params (string Name, string Content)[] additionalTexts)
     {
         var compilation = Compile(source, BclRefs);
         IEnumerable<AdditionalText> additional = additionalTexts.Select(t => (AdditionalText)new InMemoryText(t.Name, t.Content));
@@ -85,7 +94,7 @@ internal static class Harness
             new[] { generator.AsSourceGenerator() },
             additionalTexts: additional,
             parseOptions: ParseOpts,
-            optionsProvider: null);
+            optionsProvider: globalOptions is null ? null : new DictOptionsProvider(globalOptions));
 
         driver = driver.RunGeneratorsAndUpdateCompilation(compilation, out _, out var diagnostics);
         var result = driver.GetRunResult();
@@ -101,5 +110,25 @@ internal static class Harness
         public override string Path { get; }
         public override SourceText GetText(CancellationToken cancellationToken = default)
             => SourceText.From(_content, System.Text.Encoding.UTF8);
+    }
+
+    // Minimal AnalyzerConfigOptionsProvider carrying a fixed set of global (build_property.*) options.
+    private sealed class DictOptionsProvider : AnalyzerConfigOptionsProvider
+    {
+        public DictOptionsProvider((string Key, string Value)[] opts) => GlobalOptions = new DictOptions(opts);
+        public override AnalyzerConfigOptions GlobalOptions { get; }
+        public override AnalyzerConfigOptions GetOptions(SyntaxTree tree) => GlobalOptions;
+        public override AnalyzerConfigOptions GetOptions(AdditionalText textFile) => GlobalOptions;
+    }
+
+    private sealed class DictOptions : AnalyzerConfigOptions
+    {
+        private readonly Dictionary<string, string> _d;
+        public DictOptions((string Key, string Value)[] opts)
+        {
+            _d = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (k, v) in opts) _d[k] = v;
+        }
+        public override bool TryGetValue(string key, out string value) => _d.TryGetValue(key, out value!);
     }
 }

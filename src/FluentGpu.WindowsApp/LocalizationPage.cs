@@ -7,6 +7,9 @@ using FluentGpu.Localization;
 using FluentGpu.Signals;
 using FluentGpu.WindowsApp;   // generated compile-safe loc keys: Strings.App.Title, Strings.Player.Queue, …
 using static FluentGpu.Dsl.Ui;
+// The control kit now ships its own FluentGpu.Controls.Strings; this page uses the gallery's generated keys, so pin
+// the bare `Strings` name to the app's table (G5j made the kit's Strings public → both are in-scope via usings).
+using Strings = FluentGpu.WindowsApp.Strings;
 
 // ── The "Localization" gallery page ───────────────────────────────────────────────────────────────────────────────────
 // A live showcase of the FluentGpu i18n engine (src/FluentGpu.Engine/Localization): a JSON-resource, signal-backed,

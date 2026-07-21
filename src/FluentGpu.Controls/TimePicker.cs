@@ -1,6 +1,7 @@
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Localization;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
 using System;
@@ -89,8 +90,8 @@ public sealed class TimePicker : Component
         //    Microsoft.UI.Xaml.Common.rc:430-432 TEXT_TIMEPICKER_*_PLACEHOLDER). ──
         var seed = committed ?? TimeOnly.FromDateTime(DateTime.Now);
         int hour12 = seed.Hour % 12 == 0 ? 12 : seed.Hour % 12;
-        string hourText = hasTime ? (is12h ? hour12 : seed.Hour).ToString(CultureInfo.CurrentCulture) : "hour";
-        string minuteText = hasTime ? seed.Minute.ToString("00", CultureInfo.CurrentCulture) : "minute";
+        string hourText = hasTime ? (is12h ? hour12 : seed.Hour).ToString(CultureInfo.CurrentCulture) : Loc.Get(Strings.TimePicker.Hour);
+        string minuteText = hasTime ? seed.Minute.ToString("00", CultureInfo.CurrentCulture) : Loc.Get(Strings.TimePicker.Minute);
         string periodText = hasTime ? (seed.Hour >= 12 ? dtf.PMDesignator : dtf.AMDesignator) : dtf.AMDesignator;
         // HasNoTime → TimePickerButtonForegroundDefault = TextFillColorSecondary (TimePicker_themeresources.xaml:19, :222).
         var faceColor = hasTime ? Tok.TextPrimary : Tok.TextSecondary;

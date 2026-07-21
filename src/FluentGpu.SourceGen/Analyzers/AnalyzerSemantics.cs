@@ -35,6 +35,11 @@ internal static class AnalyzerSemantics
         return false;
     }
 
+    /// <summary>True for <c>FluentGpu.Dsl.TextEl</c> (the text element whose first ctor arg / <c>Text</c> prop is
+    /// user-facing copy). Used by FGRP008 to scope the hardcoded-string lint to the text sink.</summary>
+    public static bool IsTextEl(ITypeSymbol? type)
+        => type is { Name: "TextEl" } && type.ContainingNamespace?.ToDisplayString() == "FluentGpu.Dsl";
+
     // ── Component (the hook host) ────────────────────────────────────────────────────────────────────────────────
     /// <summary>True for <c>FluentGpu.Hooks.Component</c> or any type deriving from it (the positional-cell hook host).</summary>
     public static bool DerivesFromComponent(ITypeSymbol? type)

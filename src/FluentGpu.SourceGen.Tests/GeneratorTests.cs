@@ -1,5 +1,6 @@
 using System.Linq;
 using FluentGpu.SourceGen.Engine;
+using FluentGpu.SourceGen.Localization;
 using FluentGpu.SourceGen.Routing;
 using Xunit;
 
@@ -239,5 +240,41 @@ public sealed class GeneratorTests
             }
             """);
         Assert.Contains(diags, d => d.Id == "FGRT003");
+    }
+
+    // ── LocalizationKeysGenerator — the control-kit neutral-registration opt-in (G5j) ────────────────────────────
+    private const string LocJson = "{\"dialog\":{\"ok\":\"OK\"},\"media\":{\"off\":\"Off\",\"captionsIndexed\":\"Captions {n}\"}}";
+
+    [Fact]
+    public void LocalizationKeysGenerator_Emits_Compile_Safe_Keys()
+    {
+        var (gen, _) = Harness.Generate(new LocalizationKeysGenerator(), "",
+            ("assets/loc/en-US.json", LocJson));
+        Assert.Contains("public const string Ok = \"dialog.ok\"", gen);           // plain key const == dotted key
+        Assert.Contains("public const string Off = \"media.off\"", gen);
+        Assert.Contains("CaptionsIndexedKey = \"media.captionsIndexed\"", gen);    // parameterized key gets the Key const
+        Assert.Contains("CaptionsIndexed(object n)", gen);                        // + a typed format method
+    }
+
+    [Fact]
+    public void LocalizationKeysGenerator_Emits_Neutral_Registration_When_Opted_In()
+    {
+        var (gen, _) = Harness.Generate(new LocalizationKeysGenerator(), "",
+            new[] { ("build_property.FluentGpuLocRegisterNeutral", "true") },
+            ("assets/loc/en-US.json", LocJson));
+        Assert.Contains("ModuleInitializer", gen);                                // registers at module load
+        Assert.Contains("RegisterNeutral", gen);
+        Assert.Contains("t[\"dialog.ok\"] = \"OK\"", gen);                         // neutral value baked in
+        Assert.Contains("t[\"media.off\"] = \"Off\"", gen);
+    }
+
+    [Fact]
+    public void LocalizationKeysGenerator_No_Neutral_Registration_By_Default()
+    {
+        var (gen, _) = Harness.Generate(new LocalizationKeysGenerator(), "",
+            ("assets/loc/en-US.json", LocJson));
+        Assert.Contains("public const string Ok", gen);                           // keys still emitted
+        Assert.DoesNotContain("ModuleInitializer", gen);                          // but NO neutral registration
+        Assert.DoesNotContain("RegisterNeutral", gen);
     }
 }

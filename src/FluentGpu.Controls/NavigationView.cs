@@ -3,6 +3,7 @@ using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Localization;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
 
@@ -65,7 +66,7 @@ public sealed record NavigationViewOptions
     public Edges4 ContentPadding { get; init; }
     public bool SelectionFollowsFocus { get; init; }
     public bool IsSettingsVisible { get; init; }
-    public string SettingsLabel { get; init; } = "Settings";
+    public string? SettingsLabel { get; init; }   // null = localized default (Strings.Nav.Settings)
     public Element? AutoSuggest { get; init; }
     public Action<NavPaneClosingArgs>? PaneClosing { get; init; }
     public Action<PaneMode>? DisplayModeChanged { get; init; }
@@ -167,7 +168,7 @@ public sealed class NavigationView : Component
     public bool SelectionFollowsFocus;
     /// <summary>Append the WinUI auto settings footer item (gear E713, key "settings"). See the class doc.</summary>
     public bool IsSettingsVisible;
-    public string SettingsLabel = "Settings";
+    public string? SettingsLabel;   // null = localized default (Strings.Nav.Settings), resolved at render
     /// <summary>The AutoSuggestBox slot (WinUI AutoSuggestArea): rendered under the pane title row when the pane is
     /// open; the compact rail shows a search button that opens the pane (the PaneAutoSuggestButton behavior).</summary>
     public Element? AutoSuggest;
@@ -278,7 +279,7 @@ public sealed class NavigationView : Component
         var overflowAnchor = UseRef(NodeHandle.Null);
 
         NavItem[] footerItems = IsSettingsVisible
-            ? [.. Footer, new NavItem("settings", Icons.Settings, SettingsLabel) { IsSettings = true }]   // gear E713 (Icons.Settings)
+            ? [.. Footer, new NavItem("settings", Icons.Settings, SettingsLabel ?? Loc.Get(Strings.Nav.Settings)) { IsSettings = true }]   // gear E713 (Icons.Settings)
             : Footer;
 
         float width = UseContext(Viewport.Size).Width;

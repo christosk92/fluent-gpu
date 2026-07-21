@@ -1,6 +1,7 @@
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Localization;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
 using System;
@@ -107,9 +108,9 @@ public sealed class DatePicker : Component
 
         // ── FACE text per column (placeholder day/month/year when no date). ──
         var seed = committed ?? DateOnly.FromDateTime(DateTime.Now);
-        string dayText = hasDate ? seed.Day.ToString(CultureInfo.CurrentCulture) : "day";
-        string monthText = hasDate ? monthNames[seed.Month - 1] : "month";
-        string yearText = hasDate ? seed.Year.ToString(CultureInfo.CurrentCulture) : "year";
+        string dayText = hasDate ? seed.Day.ToString(CultureInfo.CurrentCulture) : Loc.Get(Strings.DatePicker.Day);
+        string monthText = hasDate ? monthNames[seed.Month - 1] : Loc.Get(Strings.DatePicker.Month);
+        string yearText = hasDate ? seed.Year.ToString(CultureInfo.CurrentCulture) : Loc.Get(Strings.DatePicker.Year);
         // HasNoDate → DatePickerButtonForegroundDefault = TextFillColorSecondary (DatePicker_themeresources.xaml:25, :228).
         var faceColor = hasDate ? Tok.TextPrimary : Tok.TextSecondary;
 

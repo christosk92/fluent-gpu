@@ -286,4 +286,72 @@ public sealed class AnalyzerTests
             """);
         Assert.Equal(0, Harness.Count(diags, "FGRP007"));
     }
+
+    // ── FGRP008 — hardcoded user-facing string in the control kit (assembly-scoped) ──────────────────────────────
+    private const string Kit = "FluentGpu.Controls";   // the assembly the rule arms itself in
+
+    [Fact]
+    public void FGRP008_Fires_On_TextEl_Literal_In_Kit()
+    {
+        var diags = Harness.Analyze(new HardcodedKitStringAnalyzer(), Usings + """
+            sealed class C : Component { public override Element Render() => new TextEl("Cut"); }
+            """, assemblyName: Kit);
+        Assert.Equal(1, Harness.Count(diags, "FGRP008"));
+        Assert.Equal(Microsoft.CodeAnalysis.DiagnosticSeverity.Warning, diags[0].Severity);
+    }
+
+    [Fact]
+    public void FGRP008_Fires_On_Text_Property_Assignment_In_Kit()
+    {
+        var diags = Harness.Analyze(new HardcodedKitStringAnalyzer(), Usings + """
+            sealed class C : Component { public override Element Render() => new TextEl("") { Text = "Copy" }; }
+            """, assemblyName: Kit);
+        Assert.Equal(1, Harness.Count(diags, "FGRP008"));   // the "" ctor arg is allow-listed (empty); "Copy" fires
+    }
+
+    [Fact]
+    public void FGRP008_Fires_On_AutomationName_Assignment_In_Kit()
+    {
+        var diags = Harness.Analyze(new HardcodedKitStringAnalyzer(), Usings + """
+            sealed class W { public string AutomationName = ""; }
+            sealed class C : Component { public override Element Render() { var w = new W { AutomationName = "Close" }; return new BoxEl(); } }
+            """, assemblyName: Kit);
+        Assert.Equal(1, Harness.Count(diags, "FGRP008"));
+    }
+
+    [Fact] // the shared analyzer is referenced everywhere; it must NOT fire outside the control kit.
+    public void FGRP008_Silent_Out_Of_Scope()
+    {
+        var diags = Harness.Analyze(new HardcodedKitStringAnalyzer(), Usings + """
+            sealed class C : Component { public override Element Render() => new TextEl("Cut"); }
+            """);   // default (non-kit) assembly name
+        Assert.Equal(0, Harness.Count(diags, "FGRP008"));
+    }
+
+    [Fact] // a letter-free literal (glyph / format / ratio / separator) is auto-allowed.
+    public void FGRP008_Silent_On_Letter_Free_Literal()
+    {
+        var diags = Harness.Analyze(new HardcodedKitStringAnalyzer(), Usings + """
+            sealed class C : Component { public override Element Render() => new TextEl("16:9"); }
+            """, assemblyName: Kit);
+        Assert.Equal(0, Harness.Count(diags, "FGRP008"));
+    }
+
+    [Fact] // the // loc-allow line marker opts a deliberate literal out.
+    public void FGRP008_Silent_On_LocAllow_Marker()
+    {
+        var diags = Harness.Analyze(new HardcodedKitStringAnalyzer(), Usings + """
+            sealed class C : Component { public override Element Render() => new TextEl("F11"); /* loc-allow: key name */ }
+            """, assemblyName: Kit);
+        Assert.Equal(0, Harness.Count(diags, "FGRP008"));
+    }
+
+    [Fact] // a non-literal (a loc lookup, a variable) is never flagged.
+    public void FGRP008_Silent_On_NonLiteral()
+    {
+        var diags = Harness.Analyze(new HardcodedKitStringAnalyzer(), Usings + """
+            sealed class C : Component { public override Element Render() { string s = "x"; return new TextEl(s); } }
+            """, assemblyName: Kit);
+        Assert.Equal(0, Harness.Count(diags, "FGRP008"));
+    }
 }

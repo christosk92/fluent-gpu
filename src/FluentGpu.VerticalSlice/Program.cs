@@ -40,6 +40,15 @@ sealed class Counter : Component
     }
 }
 
+// G5j localization: a DatePicker with no date renders its "day"/"month"/"year" column placeholders — kit-owned,
+// localized text drawn INLINE in the picker's own Render (Loc.Get subscribes its render-effect), so a culture switch
+// re-resolves them. The loc-kit gate mounts this and reads the rendered glyphs (neutral / pseudo / switched-back).
+sealed class LocDatePickerProbe : Component
+{
+    readonly Signal<DateOnly?> _date = new(null);
+    public override Element Render() => DatePicker.Create(_date);
+}
+
 // Nested composition: a parent embedding a stateful child component (its own hooks).
 sealed class NestChild : Component
 {
@@ -4415,6 +4424,78 @@ static class Slice
         foreach (var g in dev.LastGlyphs)
             if (strings.Resolve(g.Text) == text) return true;
         return false;
+    }
+
+    // G5j (WS3 P9b) — control-kit localization. Proves: (1) the neutral fallback FLOOR resolves the kit's generated
+    // keys with NO tables loaded (zero-config contract — the generated module initializer ran RegisterNeutral); (2) the
+    // pseudo-locale transforms those same keys and switching back restores neutral (culture-change re-resolution);
+    // (3) a real kit control (DatePicker face) renders those strings to pixels — neutral, then fully-pseudo (any raw
+    // English leak would show as un-bracketed text = a hardcoded literal), then neutral again — and a quiet frame after
+    // the switch is 0-alloc (the loc bind does not leak into paint phases 6–13).
+    static void LocalizationKitChecks(StringTable strings)
+    {
+        // Clean, deterministic starting point: no culture tables loaded → only the kit's baked-in neutral floor exists.
+        FluentGpu.Localization.Localization.Clear();
+        FluentGpu.Localization.Localization.SetCulture("en-US");
+
+        // ── gate.loc.kit-fallback — the zero-config contract (neutral floor resolves via the generated keys). ──
+        bool fbOk    = FluentGpu.Localization.Loc.Get(FluentGpu.Controls.Strings.Dialog.Ok) == "OK";
+        bool fbOff   = FluentGpu.Localization.Loc.Get(FluentGpu.Controls.Strings.Media.Off) == "Off";
+        bool fbClose = FluentGpu.Localization.Loc.Get(FluentGpu.Controls.Strings.InfoBar.Close) == "Close";
+        bool fbFmt   = FluentGpu.Localization.Loc.Format(FluentGpu.Controls.Strings.Media.CaptionsIndexedKey, ("n", 2)) == "Captions 2";
+        Check("gate.loc.kit-fallback: kit keys resolve to neutral strings with NO tables loaded",
+            fbOk && fbOff && fbClose && fbFmt,
+            $"ok={fbOk} off={fbOff} close={fbClose} fmt={fbFmt}");
+
+        // ── gate.loc.kit-pseudo — pseudo transforms the neutral floor; switching back restores it. ──
+        FluentGpu.Localization.Localization.SetCulture(FluentGpu.Localization.PseudoLocalizer.PseudoCulture);
+        string psOk    = FluentGpu.Localization.Loc.Get(FluentGpu.Controls.Strings.Dialog.Ok);
+        string psOff   = FluentGpu.Localization.Loc.Get(FluentGpu.Controls.Strings.Media.Off);
+        string psClose = FluentGpu.Localization.Loc.Get(FluentGpu.Controls.Strings.InfoBar.Close);
+        bool psTransformed =
+            psOk == FluentGpu.Localization.PseudoLocalizer.Transform("OK") && psOk.StartsWith("⟦") &&
+            psOff == FluentGpu.Localization.PseudoLocalizer.Transform("Off") &&
+            psClose == FluentGpu.Localization.PseudoLocalizer.Transform("Close");
+        FluentGpu.Localization.Localization.SetCulture("en-US");
+        bool backToNeutral = FluentGpu.Localization.Loc.Get(FluentGpu.Controls.Strings.Dialog.Ok) == "OK";
+        Check("gate.loc.kit-pseudo: pseudo-locale transforms kit keys; switching back re-resolves neutral",
+            psTransformed && backToNeutral,
+            $"pseudoOk='{psOk}' transformed={psTransformed} back={backToNeutral}");
+
+        // ── gate.loc.no-hardcoded-kit-strings — render a real kit control and prove its text goes through loc. ──
+        // A DatePicker with no date draws "day"/"month"/"year" faces. Under pseudo EVERY leaf must be bracketed; an
+        // un-keyed hardcoded literal would render as plain English and fail the pseudo assertion (pseudo-loc's purpose).
+        var dev = new HeadlessGpuDevice();
+        var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("loc-kit", new Size2(420, 320), 1f));
+        window.Show();
+        using (app)
+        using (var host = new AppHost(app, window, dev, new HeadlessFontSystem(strings), strings, new LocDatePickerProbe()))
+        {
+            host.RunFrame();
+            bool neutralFace = HasGlyph(dev, strings, "day") && HasGlyph(dev, strings, "month") && HasGlyph(dev, strings, "year");
+
+            FluentGpu.Localization.Localization.SetCulture(FluentGpu.Localization.PseudoLocalizer.PseudoCulture);
+            host.RunFrame();
+            bool pseudoFace =
+                HasGlyph(dev, strings, FluentGpu.Localization.PseudoLocalizer.Transform("day")) &&
+                HasGlyph(dev, strings, FluentGpu.Localization.PseudoLocalizer.Transform("month")) &&
+                HasGlyph(dev, strings, FluentGpu.Localization.PseudoLocalizer.Transform("year")) &&
+                !HasGlyph(dev, strings, "day");   // the raw English literal must NOT leak through under pseudo
+
+            FluentGpu.Localization.Localization.SetCulture("en-US");
+            var quiet = host.RunFrame();                 // re-resolves back to neutral on the culture bump
+            bool restored = HasGlyph(dev, strings, "day");
+            var quiet2 = host.RunFrame();                // now truly quiet — the loc bind must not allocate in paint
+            bool zeroAlloc = quiet2.HotPhaseAllocBytes == 0;
+
+            Check("gate.loc.no-hardcoded-kit-strings: DatePicker faces render loc-resolved text (neutral↔pseudo), quiet frame 0-alloc",
+                neutralFace && pseudoFace && restored && zeroAlloc,
+                $"neutral={neutralFace} pseudo={pseudoFace} restored={restored} quietAlloc={quiet2.HotPhaseAllocBytes}B");
+        }
+
+        // Leave global localization state clean for any later phase.
+        FluentGpu.Localization.Localization.SetCulture("en-US");
     }
 
     enum DeviceLossProbeFailure { Submit, Present, PresentNonDevice }
@@ -28723,6 +28804,7 @@ static class Slice
         DiagnosticsLeakGateChecks(strings);
 
         PaletteContrastChecks();
+        LocalizationKitChecks(strings);   // G5j (WS3 P9b): kit localization — neutral fallback floor, pseudo transform, no-hardcoded proof
 
         Console.WriteLine();
         if (s_failures == 0) { Console.WriteLine($"ALL CHECKS PASSED — the vertical slice exercises every seam end-to-end.{ArenaSummarySuffix()}"); return 0; }

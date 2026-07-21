@@ -2,6 +2,7 @@ using System;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Localization;
 using FluentGpu.Media;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
@@ -803,46 +804,51 @@ public sealed class MediaPlayerElement : Component
     }
 }
 
-/// <summary>Every user-facing string in the media player chrome, hoisted to ONE place so the G5j localization pillar is
-/// a single-file wiring change (route these through generated loc keys). Strings stay English this phase.</summary>
+/// <summary>Every user-facing string in the media player chrome, hoisted to ONE place and routed through the control-kit
+/// localization pillar (G5j). Each member resolves through <c>Loc.Get</c>/<c>Loc.Format</c> against a compile-safe
+/// <c>Strings.Media.*</c> key, so it renders its neutral English with zero app configuration (the kit's baked-in
+/// neutral floor), an app's culture table overrides it per-key, and it re-resolves on a culture change — the chrome is
+/// built inside a component <c>Render</c>, so reading these (which subscribes the culture epoch) re-renders the player
+/// on a language switch. Universal notation (aspect-ratio numbers, the <c>×</c> rate symbol, the <c>p</c> resolution
+/// suffix, the <c>F11</c> key name) stays invariant in C# and is deliberately NOT localized.</summary>
 internal static class MediaStrings
 {
-    public const string StartingPlayback = "Starting playback…";
-    public const string Loading = "Loading…";
-    public const string Off = "Off";
-    public const string Auto = "Auto";
-    public const string GoLive = "Go live";
-    public const string LiveEdge = "● LIVE";
-    public const string CaptionsShort = "CC";
-    public const string AspectRatio = "Aspect ratio";
-    public const string AspectFit = "Fit · black bars";
-    public const string AspectCrop = "Crop · fill frame";
-    public const string AspectStretch = "Stretch";
-    public const string AspectNative = "None · native pixels";
-    public const string Ratio169 = "16:9";
-    public const string Ratio43 = "4:3";
-    public const string Ratio219 = "21:9";
-    public const string Ratio239 = "2.39:1";
-    public const string PlaybackSpeed = "Playback speed";
-    public const string Quality = "Quality";
-    public const string AudioTrack = "Audio track";
-    public const string Captions = "Captions";
-    public const string PreviousChapter = "Previous chapter";
-    public const string NextChapter = "Next chapter";
-    public const string Fullscreen = "Fullscreen";
-    public const string ExitFullscreen = "Exit fullscreen";
-    public const string F11 = "F11";
+    public static string StartingPlayback => Loc.Get(Strings.Media.StartingPlayback);
+    public static string Loading => Loc.Get(Strings.Media.Loading);
+    public static string Off => Loc.Get(Strings.Media.Off);
+    public static string Auto => Loc.Get(Strings.Media.Auto);
+    public static string GoLive => Loc.Get(Strings.Media.GoLive);
+    public static string LiveEdge => Loc.Get(Strings.Media.LiveEdge);
+    public static string CaptionsShort => Loc.Get(Strings.Media.CaptionsShort);
+    public static string AspectRatio => Loc.Get(Strings.Media.AspectRatio);
+    public static string AspectFit => Loc.Get(Strings.Media.AspectFit);
+    public static string AspectCrop => Loc.Get(Strings.Media.AspectCrop);
+    public static string AspectStretch => Loc.Get(Strings.Media.AspectStretch);
+    public static string AspectNative => Loc.Get(Strings.Media.AspectNative);
+    public const string Ratio169 = "16:9";                 // loc-allow: universal aspect-ratio notation, not translated
+    public const string Ratio43 = "4:3";                   // loc-allow: universal aspect-ratio notation
+    public const string Ratio219 = "21:9";                 // loc-allow: universal aspect-ratio notation
+    public const string Ratio239 = "2.39:1";               // loc-allow: universal aspect-ratio notation
+    public static string PlaybackSpeed => Loc.Get(Strings.Media.PlaybackSpeed);
+    public static string Quality => Loc.Get(Strings.Media.Quality);
+    public static string AudioTrack => Loc.Get(Strings.Media.AudioTrack);
+    public static string Captions => Loc.Get(Strings.Media.Captions);
+    public static string PreviousChapter => Loc.Get(Strings.Media.PreviousChapter);
+    public static string NextChapter => Loc.Get(Strings.Media.NextChapter);
+    public static string Fullscreen => Loc.Get(Strings.Media.Fullscreen);
+    public static string ExitFullscreen => Loc.Get(Strings.Media.ExitFullscreen);
+    public const string F11 = "F11";                       // loc-allow: keyboard-accelerator key name, invariant
 
-    public const string Seeking = "Seeking…";
-    public const string ChangingQuality = "Changing quality…";
-    public const string ChangingTrack = "Changing track…";
-    public const string CatchingUp = "Catching up to live…";
-    public const string Reconnecting = "Reconnecting…";
-    public const string Buffering = "Buffering…";
+    public static string Seeking => Loc.Get(Strings.Media.Seeking);
+    public static string ChangingQuality => Loc.Get(Strings.Media.ChangingQuality);
+    public static string ChangingTrack => Loc.Get(Strings.Media.ChangingTrack);
+    public static string CatchingUp => Loc.Get(Strings.Media.CatchingUp);
+    public static string Reconnecting => Loc.Get(Strings.Media.Reconnecting);
+    public static string Buffering => Loc.Get(Strings.Media.Buffering);
 
-    public static string CaptionsFor(string? label) => $"CC {label}";
-    public static string CaptionsIndexed(int n) => $"Captions {n}";
-    public static string AudioIndexed(int n) => $"Audio {n}";
-    public static string QualityHeight(int height) => $"{height}p";
-    public static string RateLabel(float rate) => $"{rate:0.##}×";
+    public static string CaptionsFor(string? label) => Loc.Format(Strings.Media.CaptionsForKey, ("label", label ?? ""));
+    public static string CaptionsIndexed(int n) => Loc.Format(Strings.Media.CaptionsIndexedKey, ("n", n));
+    public static string AudioIndexed(int n) => Loc.Format(Strings.Media.AudioIndexedKey, ("n", n));
+    public static string QualityHeight(int height) => $"{height}p";      // loc-allow: universal resolution suffix
+    public static string RateLabel(float rate) => $"{rate:0.##}×";       // loc-allow: universal multiplier symbol
 }
