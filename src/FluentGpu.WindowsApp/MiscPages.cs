@@ -257,44 +257,59 @@ sealed class ItemsViewPage : Component
                 """),
             ControlExample.Build("Multiple selection",
                 ItemsView.Create(Items.Length, i => Tile(Items[i]), RepeatLayout.Grid(4, 80f, 8f),
-                    selectionMode: ItemsSelectionMode.Multiple,
-                    selection: multi,
-                    itemText: i => Items[i],
-                    grow: 0f),
+                    new ListOptions
+                    {
+                        SelectionMode = ItemsSelectionMode.Multiple,
+                        Selection = multi,
+                        ItemText = i => Items[i],
+                        Grow = 0f,
+                    }),
                 description: "SelectionMode.Multiple slides in the ItemContainer checkbox; the SelectionModel stores the selected ranges (Ctrl+A selects all).",
                 output: GalleryPage.LiveText(() => { _ = multi.Version.Value; return $"{multi.SelectedCount} selected"; }),
                 code: """
                 var multi = UseMemo(static () => new SelectionModel(), DepKey.Empty);
 
                 ItemsView.Create(Items.Length, i => Tile(Items[i]), RepeatLayout.Grid(4, 80f, 8f),
-                    selectionMode: ItemsSelectionMode.Multiple,
-                    selection: multi,
-                    itemText: i => Items[i],
-                    grow: 0f)
+                    new ListOptions
+                    {
+                        SelectionMode = ItemsSelectionMode.Multiple,
+                        Selection = multi,
+                        ItemText = i => Items[i],
+                        Grow = 0f,
+                    })
                 """),
             ControlExample.Build("Item invocation",
                 ItemsView.Create(Items.Length, i => Tile(Items[i]), RepeatLayout.Grid(4, 80f, 8f),
-                    selectionMode: ItemsSelectionMode.None,
-                    isItemInvokedEnabled: true,
-                    itemInvoked: i => setInvoked(Items[i]),
-                    itemText: i => Items[i],
-                    grow: 0f),
+                    new ListOptions
+                    {
+                        SelectionMode = ItemsSelectionMode.None,
+                        IsItemInvokedEnabled = true,
+                        OnInvoked = i => setInvoked(Items[i]),
+                        ItemText = i => Items[i],
+                        Grow = 0f,
+                    }),
                 description: "With SelectionMode.None and IsItemInvokedEnabled, a tap raises ItemInvoked instead of selecting (the WinUI CanRaiseItemInvoked matrix).",
                 output: BodyStrong($"Invoked: {invoked}"),
                 code: """
                 var (invoked, setInvoked) = UseState("—");
 
                 ItemsView.Create(Items.Length, i => Tile(Items[i]), RepeatLayout.Grid(4, 80f, 8f),
-                    selectionMode: ItemsSelectionMode.None,
-                    isItemInvokedEnabled: true,
-                    itemInvoked: i => setInvoked(Items[i]),
-                    itemText: i => Items[i],
-                    grow: 0f)
+                    new ListOptions
+                    {
+                        SelectionMode = ItemsSelectionMode.None,
+                        IsItemInvokedEnabled = true,
+                        OnInvoked = i => setInvoked(Items[i]),
+                        ItemText = i => Items[i],
+                        Grow = 0f,
+                    })
                 """),
             ControlExample.Build("The photo wall (LinedFlowLayout)",
                 ItemsView.Create(24, WallTile, RepeatLayout.Custom(wall),
-                    itemText: i => "Photo " + (i + 1),
-                    grow: 0f),
+                    new ListOptions
+                    {
+                        ItemText = i => "Photo " + (i + 1),
+                        Grow = 0f,
+                    }),
                 description: "The WinUI LinedFlowLayout: items flow into uniform-height lines, each item's width = aspect ratio × line height — the gallery photo wall. The layout is stateful, so it is hoisted with UseMemo.",
                 code: """
                 static readonly float[] WallAspects = { 1.0f, 1.5f, 0.75f, 1.8f, 1.2f, 0.9f };
@@ -302,21 +317,27 @@ sealed class ItemsViewPage : Component
                     lineHeight: 72f, aspectRatio: i => WallAspects[i % WallAspects.Length], lineSpacing: 8f, minItemSpacing: 8f), DepKey.Empty);
 
                 ItemsView.Create(24, WallTile, RepeatLayout.Custom(wall),
-                    itemText: i => "Photo " + (i + 1),
-                    grow: 0f)
+                    new ListOptions
+                    {
+                        ItemText = i => "Photo " + (i + 1),
+                        Grow = 0f,
+                    })
                 """),
 
             // ── 1) the INTERACTIVE selector-visual picker ────────────────────────────────────────────────────────
             ControlExample.Build("Pick a selector visual",
                 ItemsView.Create(Items.Length, i => Tile(Items[i]), RepeatLayout.Stack(44f),
-                    selectionMode: ItemsSelectionMode.Single,
-                    selection: pickSel,
-                    selector: (SelectorVisual)sel.Value,
-                    itemText: i => Items[i],
-                    // Constructor args freeze at mount (the reconciler never re-renders a mounted component on a
-                    // parent re-render — pitfalls.md "child ignores new data"). A sel-derived Key remounts the view
-                    // with the new Selector; pickSel is hoisted above, so the selection survives the remount.
-                    grow: 0f) with { Key = "selvis-" + Visuals[sel.Value] },
+                    new ListOptions
+                    {
+                        SelectionMode = ItemsSelectionMode.Single,
+                        Selection = pickSel,
+                        Selector = (SelectorVisual)sel.Value,
+                        ItemText = i => Items[i],
+                        // Constructor args freeze at mount (the reconciler never re-renders a mounted component on a
+                        // parent re-render — pitfalls.md "child ignores new data"). A sel-derived Key remounts the view
+                        // with the new Selector; pickSel is hoisted above, so the selection survives the remount.
+                        Grow = 0f,
+                    }) with { Key = "selvis-" + Visuals[sel.Value] },
                 description: "Any selector visual works with any layout × any selection mode — no WinUI capability cliffs. AccentPill is the ListView accent bar; Check is the GridView corner check; FullRow is a full-bleed superset; Border is the default ItemContainer ring; None is app-drawn.",
                 options: RadioButton.Group(Visuals, sel),
                 code: """
@@ -324,9 +345,12 @@ sealed class ItemsViewPage : Component
                 static readonly string[] Visuals = { "AccentPill", "Check", "FullRow", "Border", "None" };
 
                 ItemsView.Create(Items.Length, i => Tile(Items[i]), RepeatLayout.Stack(44f),
-                    selectionMode: ItemsSelectionMode.Single,
-                    selector: (SelectorVisual)sel.Value,
-                    grow: 0f) with { Key = "selvis-" + Visuals[sel.Value] }   // key change ⇒ remount with the new selector
+                    new ListOptions
+                    {
+                        SelectionMode = ItemsSelectionMode.Single,
+                        Selector = (SelectorVisual)sel.Value,
+                        Grow = 0f,
+                    }) with { Key = "selvis-" + Visuals[sel.Value] }   // key change ⇒ remount with the new selector
                 // …wired to RadioButton.Group(Visuals, sel)
                 """),
 
@@ -424,20 +448,26 @@ sealed class ItemsViewPage : Component
             // ── 4) Per-item customization (PartDelta) — the newly-legal per-item-variation seam ────────────────────
             ControlExample.Build("Per-item customization (PartDelta)",
                 ItemsView.Create(Swatches.Length, i => Tile(Swatches[i].Name), RepeatLayout.Stack(44f),
-                    selectionMode: ItemsSelectionMode.Single,
-                    selector: SelectorVisual.FullRow,
-                    partDelta: (i, st) => new PartDelta(Fill: Swatches[i].Tint, Corners: CornerRadius4.All(8f)),
-                    itemText: i => Swatches[i].Name,
-                    grow: 0f),
+                    new ListOptions
+                    {
+                        SelectionMode = ItemsSelectionMode.Single,
+                        Selector = SelectorVisual.FullRow,
+                        PartDelta = (i, st) => new PartDelta(Fill: Swatches[i].Tint, Corners: CornerRadius4.All(8f)),
+                        ItemText = i => Swatches[i].Name,
+                        Grow = 0f,
+                    }),
                 description: "PartDelta bakes per-item VALUES (fill/foreground/opacity/corner/padding/glyph) into the chrome during construction — zero extra allocation, provably shape-stable. The legal way to vary item chrome per item (per-item TemplateParts in a recycled scroll path is the banned hazard).",
                 code: """
                 static readonly (string Name, ColorF Tint)[] Swatches = { … };
 
                 ItemsView.Create(Swatches.Length, i => Tile(Swatches[i].Name), RepeatLayout.Stack(44f),
-                    selectionMode: ItemsSelectionMode.Single,
-                    selector: SelectorVisual.FullRow,
-                    partDelta: (i, st) => new PartDelta(Fill: Swatches[i].Tint, Corners: CornerRadius4.All(8f)),
-                    grow: 0f)
+                    new ListOptions
+                    {
+                        SelectionMode = ItemsSelectionMode.Single,
+                        Selector = SelectorVisual.FullRow,
+                        PartDelta = (i, st) => new PartDelta(Fill: Swatches[i].Tint, Corners: CornerRadius4.All(8f)),
+                        Grow = 0f,
+                    })
                 """));
     }
 

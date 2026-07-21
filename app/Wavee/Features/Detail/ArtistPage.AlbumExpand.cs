@@ -348,18 +348,21 @@ sealed class AlbumDrawerPanel : Component
                 }, _swipeGroup, TrackActions.ToggleLike, TrackActions.AddToQueue, scope.Index);
             },
             RepeatLayout.Stack(TrackRow.CompactListItemExtent),
-            selectionMode: ItemsSelectionMode.Extended,
-            selection: _sel,
-            isItemInvokedEnabled: true,
-            itemInvoked: i =>
+            new ListOptions
             {
-                if ((uint)i >= (uint)n) return;
-                var t = tracks[i];
-                TrackRow.Invoke(bridge, t, () => _ = _svc.Player.PlayAsync(_thin.Uri, i));
-            },
-            itemText: i => (uint)i < (uint)n ? tracks[i].Title : "",
-            onScrollGeometryChanged: (g => _swipeGroup.AnyOpen ? BitConverter.SingleToInt32Bits(g.OffsetY) : 0L, _ => _swipeGroup.Close()),
-            grow: 0f);
+                SelectionMode = ItemsSelectionMode.Extended,
+                Selection = _sel,
+                IsItemInvokedEnabled = true,
+                OnInvoked = i =>
+                {
+                    if ((uint)i >= (uint)n) return;
+                    var t = tracks[i];
+                    TrackRow.Invoke(bridge, t, () => _ = _svc.Player.PlayAsync(_thin.Uri, i));
+                },
+                ItemText = i => (uint)i < (uint)n ? tracks[i].Title : "",
+                Grow = 0f,
+                Scroll = new ScrollOptions { OnScrollGeometryChanged = (g => _swipeGroup.AnyOpen ? BitConverter.SingleToInt32Bits(g.OffsetY) : 0L, _ => _swipeGroup.Close()) },
+            });
 
     sealed class DrawerTrackRow : Component
     {

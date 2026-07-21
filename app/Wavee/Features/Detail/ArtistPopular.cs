@@ -166,21 +166,23 @@ sealed class ArtistPopular : Component
                 return skin;
             },
             RepeatLayout.Custom(layout, horizontal: true),
-            selectionMode: ItemsSelectionMode.Extended,
-            selection: _sel,
-            isItemInvokedEnabled: true,
-            itemInvoked: i =>
+            new ListOptions
             {
-                if ((uint)i >= (uint)total) return;
-                var t = _tracks[i];
-                TrackRow.Invoke(_bridge, t, () => _ = _svc.Player.PlayAsync(_ctx, i));
-            },
-            itemText: i => (uint)i < (uint)total ? _tracks[i].Title : "",
-            controller: _ctl,
-            overscan: 8,
-            grow: 1f,
-            suppressScrollBar: true,
-            onScrollGeometryChanged: (ScrollKey, OnScrollSettled));
+                SelectionMode = ItemsSelectionMode.Extended,
+                Selection = _sel,
+                IsItemInvokedEnabled = true,
+                OnInvoked = i =>
+                {
+                    if ((uint)i >= (uint)total) return;
+                    var t = _tracks[i];
+                    TrackRow.Invoke(_bridge, t, () => _ = _svc.Player.PlayAsync(_ctx, i));
+                },
+                ItemText = i => (uint)i < (uint)total ? _tracks[i].Title : "",
+                Controller = _ctl,
+                Overscan = 8,
+                Grow = 1f,
+                Scroll = new ScrollOptions { SuppressScrollBar = true, OnScrollGeometryChanged = (ScrollKey, OnScrollSettled) },
+            });
 
         var stripHost = new BoxEl { Height = Rows * ItemHeight + (Rows - 1) * ItemGap, ClipToBounds = true, Children = [strip] };
         return new BoxEl

@@ -388,18 +388,21 @@ sealed class SearchSongs : Component
                 return result;
             },
             RepeatLayout.Stack(RowExtent),
-            selectionMode: ItemsSelectionMode.Extended,
-            selection: model.Selection,
-            isItemInvokedEnabled: true,
-            itemInvoked: i =>
+            new ListOptions
             {
-                if ((uint)i >= (uint)n) return;
-                var t = tracks[i];
-                TrackRow.Invoke(bridge, t, () => model.PlayTrack(t));
-            },
-            itemText: i => (uint)i < (uint)n ? tracks[i].Title : "",
-            onScrollGeometryChanged: (g => _swipeGroup.AnyOpen ? BitConverter.SingleToInt32Bits(g.OffsetY) : 0L, _ => _swipeGroup.Close()),
-            grow: 0f);
+                SelectionMode = ItemsSelectionMode.Extended,
+                Selection = model.Selection,
+                IsItemInvokedEnabled = true,
+                OnInvoked = i =>
+                {
+                    if ((uint)i >= (uint)n) return;
+                    var t = tracks[i];
+                    TrackRow.Invoke(bridge, t, () => model.PlayTrack(t));
+                },
+                ItemText = i => (uint)i < (uint)n ? tracks[i].Title : "",
+                Grow = 0f,
+                Scroll = new ScrollOptions { OnScrollGeometryChanged = (g => _swipeGroup.AnyOpen ? BitConverter.SingleToInt32Bits(g.OffsetY) : 0L, _ => _swipeGroup.Close()) },
+            });
     }
 
     sealed class SearchSongRow : Component

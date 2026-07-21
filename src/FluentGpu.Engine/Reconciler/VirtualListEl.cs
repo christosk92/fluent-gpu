@@ -34,6 +34,25 @@ public sealed record VirtualListEl : Element
     public IVirtualLayout? Layout { get; init; }      // fixed OR measured (IMeasuredVirtualLayout) seam; null ⇒ legacy variable Fenwick
     public float EstimatedExtent { get; init; } = 48f;// legacy variable path: seed extent for unmeasured rows
     public int Overscan { get; init; } = 4;
+    /// <summary>Research adjustment #16 — pre-realize CACHE EXTENT in PIXELS beyond the viewport (per edge). Overscan is
+    /// row-based (<see cref="Overscan"/>); this is a pixel band converted to a row count against the average row extent
+    /// at realize time and used as the effective overscan when set. <see cref="float.NaN"/> (default) ⇒ <see cref="Overscan"/>
+    /// stays authoritative (byte-identical to the pre-knob path).</summary>
+    public float CacheExtentPx { get; init; } = float.NaN;
+    /// <summary>Research adjustment #16 — recycle-pool discriminator for the BOUND path (<see cref="RowBind"/>):
+    /// <c>index → contentType</c>. A slot only rebinds to an index whose content-type matches the type it was built for;
+    /// a cross-type reuse falls back to a full element rebuild (fresh slot). Null ⇒ one homogeneous pool (today's cheap
+    /// rebind for every recycle). Ignored on the <see cref="RenderItem"/> path.</summary>
+    public Func<int, int>? ContentType { get; init; }
+    /// <summary>Research adjustment #5 — keep-alive predicate for the BOUND path (<see cref="RowBind"/>): <c>index → true</c>
+    /// marks an item whose slot must NOT be index-rebound when it scrolls off-window. Its subtree parks HIDDEN (detached,
+    /// no layout/paint, render-effects/animations quiesced — the <c>Flow.KeepAlive</c> parking mechanics) and is excluded
+    /// from the recycle pool until the item re-enters the window or the bounded bucket evicts it (LRU). Null (default) ⇒
+    /// no keep-alive bucket (recycled slots lose live state; byte-identical to the pre-#5 path). Ignored on RenderItem.</summary>
+    public Func<int, bool>? KeepAlive { get; init; }
+    /// <summary>Bounded keep-alive bucket cap (default 8): the most parked keep-alive slots retained at once; the LRU is
+    /// evicted (subtree unmounted) beyond it. Only consulted when <see cref="KeepAlive"/> is set.</summary>
+    public int KeepAliveCap { get; init; } = 8;
     public bool Horizontal { get; init; }
     /// <summary>Opt-in cold-mount stagger (bound lists only): when true, a freshly-mounted list realizes its large
     /// initial window a few rows PER FRAME instead of all at once — trading a couple of frames of staggered fill for

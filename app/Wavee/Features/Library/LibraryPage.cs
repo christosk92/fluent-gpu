@@ -415,8 +415,7 @@ sealed class LibraryPage : Component
                 Key = key, Grow = 1f, Direction = 1, Padding = new Edges4(WaveeSpace.S, WaveeSpace.S, WaveeSpace.S, 0f),
                 Children = [ItemsView.Create(shown.Length, i => NavCardContent(shown[i], compact),
                     RepeatLayout.GridFit((compact ? 88f : 116f) + size * (compact ? 16f : 24f), 8f),
-                    selectionMode: ItemsSelectionMode.Single, selection: _navSel, selector: SelectorVisual.Border,
-                    selectionChanged: () => OnNavSel(shown), grow: 1f)],
+                    new ListOptions { SelectionMode = ItemsSelectionMode.Single, Selection = _navSel, Selector = SelectorVisual.Border, OnChange = () => OnNavSel(shown), Grow = 1f })],
             };
 
         return new BoxEl
@@ -1064,8 +1063,7 @@ sealed class LibraryArtistPane : Component
                 Padding = new Edges4(WaveeSpace.M, 0f, WaveeSpace.M, 0f),
                 Children = [ItemsView.Create(albums.Count, i => DiscoCardContent(albums[i], compact),
                     RepeatLayout.GridFit((compact ? 84f : 100f) + size * (compact ? 16f : 24f), 8f),
-                    selectionMode: ItemsSelectionMode.Single, selection: _discoSel, selector: SelectorVisual.Border,
-                    selectionChanged: () => Pick(_discoSel.FirstSelectedIndex), grow: 1f)],
+                    new ListOptions { SelectionMode = ItemsSelectionMode.Single, Selection = _discoSel, Selector = SelectorVisual.Border, OnChange = () => Pick(_discoSel.FirstSelectedIndex), Grow = 1f })],
             };
 
         return new BoxEl

@@ -322,36 +322,66 @@ safe-triangle**: a `MenuFlyout` cascade stays open while the pointer travels fro
 near edge (the WinUI/macOS hover-intent polygon), so a passing sibling hover doesn't close it.
 
 ### Virtualization (10k+ rows, bounded live nodes)
+Every virtualized layout is a `RepeatLayout` preset; `ItemsView` (below) hosts them all. The low-level substrates:
 ```csharp
-Virtual.List(int itemCount, float itemExtent, Func<int,Element> renderItem, Func<int,string>? keyOf = null, int overscan = 4)
-Virtual.Grid(int itemCount, int columns, float itemHeight, float gap, Func<int,Element> renderItem, …)
-Virtual.VariableList(int itemCount, float estimatedExtent, Func<int,Element> renderItem, …)   // measured heights + anchoring
 Repeater.ItemsRepeater(int count, Func<int,Element> template, in RepeatLayout layout, Func<int,string>? keyOf = null, int overscan = 4)
-//   RepeatLayout.Stack(extent, horizontal) / .Grid(cols,h,gap) / .Custom(IVirtualLayout) / .Wrap(gap) / .Inline(...)
+//   RepeatLayout.Stack(extent, horizontal) / .Grid(cols,h,gap) / .GridAuto / .GridFit / .Custom(IVirtualLayout)
+//     .LinedFlow(lineHeight,…) / .SpanGrid(cols,rowH,gap,spanOf) / .HorizontalGrid(rows,w,gap)
+//     .Measured(IMeasuredVirtualLayout) / .VariableList(estimate) / .GroupedList(headerIdx,headerH,itemEstimate)
+//     .Wrap(gap) / .Inline(…)   ← non-virtual, for small collections
 ```
 Only the visible window (+overscan) is realized; scrolling recycles row nodes through the slab free-list. Provide a
 stable `keyOf` so row state/identity survives recycling. In-window scroll is transform-only (no realize, no relayout).
+`Repeater` is the advanced no-selection substrate; most apps want `ItemsView`. (`Virtual.*` are thin low-level
+constructors used internally by `Repeater`/`ItemsView`; prefer the `RepeatLayout` presets.)
 
 ### Collections — `ItemsView` and its presets
 `ItemsView` is the premiere collection control: any `RepeatLayout` × any `SelectionModel` mode × any `SelectorVisual`
 chrome × built-in drag-reorder, over one virtualized viewport. The former `ListView`/`GridView` controls are FOLDED
-onto it as static presets (the control types no longer exist):
+onto it as static presets (the control types no longer exist). The canonical **creation trio** takes the item count/
+source + template + layout POSITIONALLY, and everything else in ONE `ListOptions` record:
 ```csharp
-ItemsView.List(items, selectedIndex)                       // AccentPill selector, Stack(44), Single, 200ms reorder dwell
-ItemsView.List(count, itemTemplate, selectionMode: …, canReorderItems: …, onReorder: …, …)
-ItemsView.Grid(items, columns: 4, tileSize: 96f)           // Check selector, Grid layout, 300ms 2-D reorder dwell
-ItemsView.Grid(count, itemTemplate, columns, tileHeight, selectionMode: …, canReorderItems: …, …)
-ItemsView.Create(count, itemTemplate, layout, selector: SelectorVisual.AccentPill|Check|FullRow|Border|None,
-                 selection: …, partDelta: (i, state) => new PartDelta(Fill: …, Corners: …), …)   // the full surface
+ItemsView.Create(count, itemTemplate, layout, options)                     // templated items (rebuilt per index)
+ItemsView.CreateBound(count, rowScope => …, layout, options)               // signals-first bound slots (recycle by index-signal write)
+ItemsView.CreateBound<T>(BoundItemsSource<T> items, scope => …, layout, options)   // typed bound slots (ListOptions<T>)
+ItemsView.List(items, selectedIndex) / ItemsView.Grid(items, columns: 4)   // sugar presets forwarding to Create
+```
+`ListOptions` (a plain init-record, unpacked to component fields at factory time — the recycling hot path never reads it):
+```csharp
+new ListOptions {
+  SelectionMode = ItemsSelectionMode.Multiple, Selection = model,     // selection
+  IsItemInvokedEnabled = true, OnInvoked = i => …, OnChange = () => …,// invoke + selection-changed callbacks
+  ItemText = i => …, IsItemEnabled = i => …, Controller = ctl,        // typeahead / enabled gate / imperative handle
+  Overscan = 4, Grow = 1f, KeyOf = i => …, CountSignal = countSig,    // window + flex + keyed diff + reactive count
+  Selector = SelectorVisual.AccentPill, ContainerFactory = …,         // item chrome (RenderItem path)
+  PartDelta = (i, state) => new PartDelta(Fill: …, Corners: …),       // per-item VALUE variation (0-alloc, shape-stable)
+  Transition = ItemCollectionTransition.Default,
+  Scroll   = new ScrollOptions   { ScrollKey = …, SuppressScrollBar = …, AutoEdgeFade = …, OnScrollGeometryChanged = … },
+  Reorder  = new ReorderOptions  { ItemDisplacement = …, DisplacementVersion = …, DraggedSlot = … },
+  Entrance = new EntranceOptions { StaggerColdRealize = …, ItemFlipFrom = …, ItemFadeFrom = … },   // bound path
+  // ── virtualization knobs ──
+  ContentType   = i => rowKind(i),   // recycle-pool discriminator: heterogeneous rows only rebind within their type pool
+  CacheExtentPx = 400f,              // pre-realize margin in PIXELS beyond the viewport (overrides row-based Overscan)
+  RepaintBoundary = true,            // per-item paint isolation (IsolateLayout + clip) so an item can't relayout the list
+  KeepAlive = i => rows[i].IsEditing,// #5: this row's slot parks HIDDEN off-window instead of recycling (state survives)
+  KeepAliveCap = 8,                  // bounded keep-alive bucket (LRU-evicted beyond the cap — no leak)
+}
 ```
 - `SelectorVisual` picks the item chrome (AccentPill = the WinUI ListView accent bar; Check = the GridView corner
   check; FullRow = a full-bleed superset; Border = the default `ItemContainer` ring; None = app-drawn). A custom
   `ContainerFactory` overrides the preset.
-- Per-item VARIATION uses `PartDelta` (fill/foreground/opacity/corner/padding/glyph as VALUES, applied during
-  construction — zero extra allocation, shape-stable). This is the legal per-item-customization path; a per-item
-  `TemplateParts` modifier in a recycled scroll path is the banned hazard (see control-fidelity §6).
-- Reorder rides the displacement channel (`ItemDisplacement`/`DisplacementVersion`); displaced siblings glide aside
-  via an animated translate — a capability WinUI's own ItemsView lacks.
+- **Bound vs templated:** `Create` rebuilds a row Element per index (recycled by a window diff); `CreateBound` builds
+  each row ONCE per slot and recycles by writing its index signal — a mid-edit `TextBox`/in-flight `UseResource` in a
+  bound row survives recycling, and there is no Enter-transition replay.
+- **`KeepAlive` (#5)** — a bound slot for a keep-alive item parks HIDDEN (detached, no layout/paint, effects/animations
+  quiesced — the same `Flow.KeepAlive` parking mechanics) instead of index-rebinding when it scrolls off-window, so its
+  live state is preserved until it re-enters the window or the bounded bucket (`KeepAliveCap`, default 8) LRU-evicts it.
+- **`ContentType` (#16)** — heterogeneous bound rows (e.g. header vs track) only cheap-rebind within their content-type
+  pool; a cross-type reuse rebuilds the slot (structure differs), never showing type-B data in a type-A subtree.
+- **`CacheExtentPx` (#16)** — pixel pre-realize band; overscan stays row-based by default, this overrides it when set.
+- **`RepaintBoundary` (#16)** — wraps each realized item container as a layout/paint boundary.
+- Reorder rides the displacement channel (`ReorderOptions`); displaced siblings glide aside via an animated translate
+  — a capability WinUI's own ItemsView lacks.
 
 ## Theming (`Tok` / `Theme`, `src/FluentGpu.Engine/Dsl/Tokens.cs`)
 

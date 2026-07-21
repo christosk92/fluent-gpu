@@ -399,14 +399,17 @@ sealed class DiagnosticsPanel(IAppSettings? settings = null) : Component
                 ItemsView.Create(
                     visible.Count, i => LogRow(visible[i]),
                     RepeatLayout.Measured(layout),
-                    selectionMode: ItemsSelectionMode.Single,
-                    controller: _listCtrl,
-                    selector: SelectorVisual.AccentPill,
-                    keyOf: i => listKey + ":" + visible[i].Entry.Sequence,
-                    isItemInvokedEnabled: true,
-                    itemInvoked: i => ToggleExpand(visible[i].Entry.Sequence, visible),
-                    grow: 1f,
-                    scrollKey: listKey),
+                    new ListOptions
+                    {
+                        SelectionMode = ItemsSelectionMode.Single,
+                        Controller = _listCtrl,
+                        Selector = SelectorVisual.AccentPill,
+                        KeyOf = i => listKey + ":" + visible[i].Entry.Sequence,
+                        IsItemInvokedEnabled = true,
+                        OnInvoked = i => ToggleExpand(visible[i].Entry.Sequence, visible),
+                        Grow = 1f,
+                        Scroll = new ScrollOptions { ScrollKey = listKey },
+                    }),
             ],
         };
     }

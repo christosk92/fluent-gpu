@@ -436,23 +436,21 @@ sealed class TrackList : Component
                     listTotal,
                     scope => Embed.Comp(() => new RowOrRecContent(this, scope, set, tracks, rowH, narrateRemount)),
                     RepeatLayout.Stack(rowH),
-                    selectionMode: _cfg.Selection,
-                    selection: _selection,
-                    isItemInvokedEnabled: true,
-                    itemInvoked: i => { if (rowItems.TryPeek(i, out _)) PlayRow(i); },
-                    isItemEnabled: i => rowItems.TryPeek(i, out _),   // only track rows are roving-focus / selection targets
-                    overscan: TrackOverscanItems,
-                    grow: _cfg.HasTrailing ? 0f : 1f,
-                    autoEdgeFade: !_cfg.HasTrailing,
-                    staggerColdRealize: staggerCold,
-                    scrollKey: _route.Value.Name + ":r" + _resetEpoch.Value,
-                    controller: _listCtl,
-                    itemDisplacement: static _ => (0f, 0f),
-                    displacementVersion: _dispVer,
-                    itemFlipFrom: i => _flip.TryGetValue(i, out var f) ? f : null,
-                    itemFadeFrom: i => _fade.TryGetValue(i, out var f) ? f : null,
-                    itemCountSignal: _listCount,
-                    onScrollGeometryChanged: SwipeCloseObserver());
+                    new ListOptions
+                    {
+                        SelectionMode = _cfg.Selection,
+                        Selection = _selection,
+                        IsItemInvokedEnabled = true,
+                        OnInvoked = i => { if (rowItems.TryPeek(i, out _)) PlayRow(i); },
+                        IsItemEnabled = i => rowItems.TryPeek(i, out _),   // only track rows are roving-focus / selection targets
+                        Overscan = TrackOverscanItems,
+                        Grow = _cfg.HasTrailing ? 0f : 1f,
+                        Controller = _listCtl,
+                        CountSignal = _listCount,
+                        Scroll = new ScrollOptions { ScrollKey = _route.Value.Name + ":r" + _resetEpoch.Value, AutoEdgeFade = !_cfg.HasTrailing, OnScrollGeometryChanged = SwipeCloseObserver() },
+                        Reorder = new ReorderOptions { ItemDisplacement = static _ => (0f, 0f), DisplacementVersion = _dispVer },
+                        Entrance = new EntranceOptions { StaggerColdRealize = staggerCold, ItemFlipFrom = i => _flip.TryGetValue(i, out var f) ? f : null, ItemFadeFrom = i => _fade.TryGetValue(i, out var f) ? f : null },
+                    });
             }
             return visible == 0
             ? FilterEmpty(_tracks.Count == 0)     // empty playlist, or a filter that matched nothing
@@ -465,33 +463,41 @@ sealed class TrackList : Component
                 rowItems,
                 scope => WrapRowSwipe(scope.Row, BoundRowSkin(scope.Row, BoundRow(scope.Row, scope.Item, set, tracks, rowH, 0), rowH, narrateRemount, 0), 0, scope.Item),
                 RepeatLayout.Stack(rowH),
-                selectionMode: _cfg.Selection,
-                selection: _selection,                // external → selection survives the tier remount
-                isItemInvokedEnabled: true,
-                itemInvoked: (i, _) => PlayRow(i),   // DoubleTap / Enter → same as a row click (visible-order play + now-playing toggle)
-                overscan: TrackOverscanItems,
-                grow: _cfg.HasTrailing ? 0f : 1f,
-                // Alpha-mask edge fade: the page floats over a gradient wash (no opaque plate), so the surface-colour
-                // EdgeCues fade self-skips — this feathers the rows' own alpha at the overflowing top/bottom instead.
-                // Only when the ItemsView is itself the scroller (playlist/liked); the album path fades its outer scroll.
-                autoEdgeFade: !_cfg.HasTrailing,
-                // Realize the full oversized row window immediately. Bound slots are persistent; exposing partial
-                // materialization during scroll reads as cut-off rows under the fixed chrome.
-                staggerColdRealize: staggerCold,
-                // Scroll-position restoration keyed by the detail content (route): navigate away from a 10k-track
-                // playlist and back and the viewport seeds the saved row BEFORE its first realize — no scroll-to-top
-                // flash, no jump (the engine scopes this per tab via the KeepAlive slot). A different album starts at
-                // top. The reset epoch folds in so a curated re-cut starts a FRESH scroll state (top) instead of
-                // restoring the pre-reset offset into all-new content.
-                scrollKey: _route.Value.Name + ":r" + _resetEpoch.Value,
-                // §4.6 choreography: the controller reads/adjusts the scroll for anchoring; the displacement seed
-                // (target always rest) starts each row from its FLIP residual and eases added rows' opacity in.
-                controller: _listCtl,
-                itemDisplacement: static _ => (0f, 0f),
-                displacementVersion: _dispVer,
-                itemFlipFrom: i => _flip.TryGetValue(i, out var f) ? f : null,
-                itemFadeFrom: i => _fade.TryGetValue(i, out var f) ? f : null,
-                onScrollGeometryChanged: SwipeCloseObserver());
+                new ListOptions<Track>
+                {
+                    SelectionMode = _cfg.Selection,
+                    Selection = _selection,                // external → selection survives the tier remount
+                    IsItemInvokedEnabled = true,
+                    OnInvokedTyped = (i, _) => PlayRow(i),   // DoubleTap / Enter → same as a row click (visible-order play + now-playing toggle)
+                    Overscan = TrackOverscanItems,
+                    Grow = _cfg.HasTrailing ? 0f : 1f,
+                    // §4.6 choreography: the controller reads/adjusts the scroll for anchoring; the displacement seed
+                    // (target always rest) starts each row from its FLIP residual and eases added rows' opacity in.
+                    Controller = _listCtl,
+                    Scroll = new ScrollOptions
+                    {
+                        // Alpha-mask edge fade: the page floats over a gradient wash (no opaque plate), so the surface-colour
+                        // EdgeCues fade self-skips — this feathers the rows' own alpha at the overflowing top/bottom instead.
+                        // Only when the ItemsView is itself the scroller (playlist/liked); the album path fades its outer scroll.
+                        AutoEdgeFade = !_cfg.HasTrailing,
+                        // Scroll-position restoration keyed by the detail content (route): navigate away from a 10k-track
+                        // playlist and back and the viewport seeds the saved row BEFORE its first realize — no scroll-to-top
+                        // flash, no jump (the engine scopes this per tab via the KeepAlive slot). A different album starts at
+                        // top. The reset epoch folds in so a curated re-cut starts a FRESH scroll state (top) instead of
+                        // restoring the pre-reset offset into all-new content.
+                        ScrollKey = _route.Value.Name + ":r" + _resetEpoch.Value,
+                        OnScrollGeometryChanged = SwipeCloseObserver(),
+                    },
+                    Reorder = new ReorderOptions { ItemDisplacement = static _ => (0f, 0f), DisplacementVersion = _dispVer },
+                    Entrance = new EntranceOptions
+                    {
+                        // Realize the full oversized row window immediately. Bound slots are persistent; exposing partial
+                        // materialization during scroll reads as cut-off rows under the fixed chrome.
+                        StaggerColdRealize = staggerCold,
+                        ItemFlipFrom = i => _flip.TryGetValue(i, out var f) ? f : null,
+                        ItemFadeFrom = i => _fade.TryGetValue(i, out var f) ? f : null,
+                    },
+                });
         }
 
         // The tracks stream in via the engine's skeleton boundary: while the model is Pending it shows shimmer rows the
@@ -642,24 +648,22 @@ sealed class TrackList : Component
             itemCount,
             scope => Embed.Comp(() => new VerticalItemContent(this, scope, set, tracks, rowH, labeled, tier, narrateRemount)),
             RepeatLayout.Measured(layout),
-            selectionMode: visible > 0 ? _cfg.Selection : ItemsSelectionMode.None,
-            selection: _selection,
-            isItemInvokedEnabled: true,
-            itemInvoked: i => { if (_rowItems!.TryPeek(i, out _, VerticalTrackStart)) PlayRow(DisplayOf(i)); },
-            itemText: i => _rowItems!.TryPeek(i, out var item, VerticalTrackStart) ? item.Title : "",
-            isItemEnabled: i => _rowItems!.TryPeek(i, out _, VerticalTrackStart),
-            overscan: TrackOverscanItems,
-            grow: _cfg.HasTrailing ? 0f : 1f,
-            autoEdgeFade: !_cfg.HasTrailing,
-            staggerColdRealize: staggerCold,
-            scrollKey: _route.Value.Name + ":r" + _resetEpoch.Value,
-            controller: _listCtl,
-            itemDisplacement: static _ => (0f, 0f),
-            displacementVersion: _dispVer,
-            itemFlipFrom: FlipFrom,
-            itemFadeFrom: FadeFrom,
-            onScrollGeometryChanged: _cfg.HasTrailing ? null : VerticalScrollObserver(),
-            itemCountSignal: _verticalItemCount);
+            new ListOptions
+            {
+                SelectionMode = visible > 0 ? _cfg.Selection : ItemsSelectionMode.None,
+                Selection = _selection,
+                IsItemInvokedEnabled = true,
+                OnInvoked = i => { if (_rowItems!.TryPeek(i, out _, VerticalTrackStart)) PlayRow(DisplayOf(i)); },
+                ItemText = i => _rowItems!.TryPeek(i, out var item, VerticalTrackStart) ? item.Title : "",
+                IsItemEnabled = i => _rowItems!.TryPeek(i, out _, VerticalTrackStart),
+                Overscan = TrackOverscanItems,
+                Grow = _cfg.HasTrailing ? 0f : 1f,
+                Controller = _listCtl,
+                CountSignal = _verticalItemCount,
+                Scroll = new ScrollOptions { ScrollKey = _route.Value.Name + ":r" + _resetEpoch.Value, AutoEdgeFade = !_cfg.HasTrailing, OnScrollGeometryChanged = _cfg.HasTrailing ? null : VerticalScrollObserver() },
+                Reorder = new ReorderOptions { ItemDisplacement = static _ => (0f, 0f), DisplacementVersion = _dispVer },
+                Entrance = new EntranceOptions { StaggerColdRealize = staggerCold, ItemFlipFrom = FlipFrom, ItemFadeFrom = FadeFrom },
+            });
     }
 
     // ── §4.6 — the choreography pass. Runs INSIDE the render that commits the new order (the ItemsView child renders

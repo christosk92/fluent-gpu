@@ -1033,7 +1033,7 @@ sealed class BoundItemsViewProbe : Component
                             ? ColorF.FromRgba(0x4C, 0xC2, 0xFF) : ColorF.FromRgba(0xE0, 0xE0, 0xE0)),
                     };
                     return SelectorVisualsBound.AccentPill(scope, content);
-                }, RepeatLayout.Stack(RowH), selectionMode: ItemsSelectionMode.Multiple, selection: Selection),
+                }, RepeatLayout.Stack(RowH), new ListOptions { SelectionMode = ItemsSelectionMode.Multiple, Selection = Selection }),
             ],
         };
 }
@@ -1098,7 +1098,7 @@ sealed class BoundCountSignalProbe : Component
                     MinHeight = 40f,
                     Fill = ColorF.FromRgba(30, 30, 30),
                     Children = [new TextEl("") { Size = 12f, Text = Prop.Of(() => "row " + scope.Index.Value) }],
-                }, RepeatLayout.Stack(40f), itemCountSignal: Count),
+                }, RepeatLayout.Stack(40f), new ListOptions { CountSignal = Count }),
             ],
         };
 }
@@ -1130,7 +1130,7 @@ sealed class ColdStaggerRemountProbe : Component
                         {
                             TemplateCalls++;
                             return new BoxEl { MinHeight = 40f, Children = [new TextEl("row") { Size = 13f }] };
-                        }, RepeatLayout.Stack(40f), staggerColdRealize: staggerCold),
+                        }, RepeatLayout.Stack(40f), new ListOptions { Entrance = new EntranceOptions { StaggerColdRealize = staggerCold } }),
                     ],
                 },
             ],
@@ -1148,9 +1148,55 @@ sealed class ModalWarmProbe : Component
         Children =
         [
             ItemsView.CreateBound(200, _ => new BoxEl { MinHeight = 40f, Fill = ColorF.FromRgba(30, 30, 30) },
-                RepeatLayout.Stack(40f), staggerColdRealize: true),
+                RepeatLayout.Stack(40f), new ListOptions { Entrance = new EntranceOptions { StaggerColdRealize = true } }),
         ],
     };
+}
+
+// G5h (WS3 P7) — a flexible ItemsView probe for the list-consolidation gates: drives Create (RenderItem) or CreateBound
+// (bound slots) through the new ListOptions surface, with a rowBind/template BUILD counter (fresh builds/rebuilds only —
+// never a cheap rebind) and an optional capture of item 0's slot index-signal (to observe keep-alive park vs recycle).
+sealed class ListOptProbe : Component
+{
+    public int Count = 100;
+    public float Extent = 40f;
+    public float Vw = 360f, Vh = 240f;
+    public int Overscan = 2;
+    public bool Bound = true;
+    public bool CaptureSig0;
+    public ListOptions? Options;
+    public RepeatLayout? ExplicitLayout;      // null ⇒ Stack(Extent)
+    public Func<int, float>? RowHeightOf;     // per-index content height (measured layouts); null ⇒ Extent
+    public int Builds;                        // template/rowBind invocations (fresh build/rebuild — NOT a rebind)
+    public IReadSignal<int>? Sig0;
+
+    public override Element Render()
+    {
+        var layout = ExplicitLayout ?? RepeatLayout.Stack(Extent);
+        var opts = Options ?? new ListOptions { Overscan = Overscan, Grow = 1f };
+        Element list = Bound
+            ? ItemsView.CreateBound(Count, scope =>
+              {
+                  Builds++;
+                  if (CaptureSig0 && Sig0 is null && scope.Index.Peek() == 0) Sig0 = scope.Index;
+                  var idx = scope.Index;
+                  return new BoxEl
+                  {
+                      MinHeight = Extent,
+                      Children = [new TextEl("") { Size = 12f, Text = Prop.Of(() => "row " + idx.Value) }],
+                  };
+              }, layout, opts)
+            : ItemsView.Create(Count, i =>
+              {
+                  Builds++;
+                  return new BoxEl
+                  {
+                      MinHeight = RowHeightOf?.Invoke(i) ?? Extent,
+                      Children = [new TextEl("row") { Size = 12f }],
+                  };
+              }, layout, opts);
+        return new BoxEl { Width = Vw, Height = Vh, Children = [list] };
+    }
 }
 
 // Reproduces the Wavee bound-row SHAPE exactly: a ZStack skin (OnPointerPressed = the row tap) whose content is a
@@ -1230,7 +1276,7 @@ sealed class BoundListHitProbe : Component
                         Children = [new BoxEl { Direction = 0, Grow = 1f, AlignItems = FlexAlign.Center,
                                                 Children = [Embed.Comp(() => new HitRowContent(this, scope.Index))] }],
                     };
-                }, RepeatLayout.Stack(40f), selection: Selection),
+                }, RepeatLayout.Stack(40f), new ListOptions { Selection = Selection }),
             ],
         };
 
@@ -2102,7 +2148,7 @@ sealed class ColumnAlignProbe : Component
             // The rows go through a real ItemsView (40 items → overflow → scrollbar), wrapped by a RowSkin-like
             // container — the actual app path. This is what the bare-grid probe omitted.
             ItemsView.Create(40, i => RowGrid(), RepeatLayout.Stack(48f),
-                containerFactory: (i, content, st, oi, of) => RowSkinLike(content), grow: 1f),
+                new ListOptions { ContainerFactory = (i, content, st, oi, of) => RowSkinLike(content), Grow = 1f }),
         ],
     };
 }
@@ -3825,10 +3871,13 @@ sealed class ItemsViewKeyboardProbe : Component
                 ItemsView.Create(N,
                     itemTemplate: i => new BoxEl { Children = [new TextEl(NameOf(i)) { Size = 12f }] },
                     layout: RepeatLayout.Stack(Row),
-                    isItemInvokedEnabled: true,
-                    itemInvoked: i => { InvokedCount++; LastInvoked = i; },
-                    itemText: NameOf,
-                    controller: Controller),
+                    options: new ListOptions
+                    {
+                        IsItemInvokedEnabled = true,
+                        OnInvoked = i => { InvokedCount++; LastInvoked = i; },
+                        ItemText = NameOf,
+                        Controller = Controller,
+                    }),
             ],
         };
 }
@@ -3843,7 +3892,7 @@ sealed class ItemsViewGridProbe : Component
         => new BoxEl
         {
             Width = 360, Height = 320,
-            Children = [ItemsView.Create(N, i => new BoxEl(), RepeatLayout.Grid(4, 72f, 8f), controller: Controller)],
+            Children = [ItemsView.Create(N, i => new BoxEl(), RepeatLayout.Grid(4, 72f, 8f), new ListOptions { Controller = Controller })],
         };
 }
 
@@ -3860,9 +3909,12 @@ sealed class ItemsViewExtendedProbe : Component
             Children =
             [
                 ItemsView.Create(N, i => new BoxEl(), RepeatLayout.Stack(40f),
-                    selectionMode: ItemsSelectionMode.Extended,
-                    selectionChanged: () => SelectionChangedCount++,
-                    controller: Controller),
+                    new ListOptions
+                    {
+                        SelectionMode = ItemsSelectionMode.Extended,
+                        OnChange = () => SelectionChangedCount++,
+                        Controller = Controller,
+                    }),
             ],
         };
 }
@@ -3880,7 +3932,7 @@ sealed class ItemsViewMultipleProbe : Component
             Children =
             [
                 ItemsView.Create(N, i => { TemplateCalls++; return new BoxEl(); }, RepeatLayout.Stack(40f),
-                    selectionMode: ItemsSelectionMode.Multiple, controller: Controller),
+                    new ListOptions { SelectionMode = ItemsSelectionMode.Multiple, Controller = Controller }),
             ],
         };
 }
@@ -23639,6 +23691,262 @@ static class Slice
         }
     }
 
+    // ── G5h (WS3 P7) — ItemsView list consolidation: ListOptions parity + the two research adjustments (#5 keep-alive
+    //    slot, #16 contentType / cache-extent / repaint-boundary knobs) + RepeatLayout exotic-layout presets. ─────────
+    static void ListConsolidationChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+
+        NodeHandle FindVp(SceneStore s, int count)
+        {
+            NodeHandle found = default;
+            void Visit(NodeHandle n)
+            {
+                if (n.IsNull) return;
+                if (s.TryGetScroll(n, out var sc) && sc.ItemCount == count) found = n;
+                for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c)) Visit(c);
+            }
+            Visit(s.Root);
+            return found;
+        }
+        int LiveChildren(SceneStore s, NodeHandle vp)
+        {
+            if (vp.IsNull || !s.TryGetScroll(vp, out var sc) || sc.ContentNode.IsNull) return 0;
+            int n = 0;
+            for (var c = s.FirstChild(sc.ContentNode); !c.IsNull; c = s.NextSibling(c)) n++;
+            return n;
+        }
+        void ScrollTo(AppHost h, HeadlessWindow w, NodeHandle vp, float y)
+        {
+            var s = h.Scene;
+            ref ScrollState st = ref s.ScrollRef(vp);
+            st.OffsetY = y; st.TargetY = y;
+            var cn = st.ContentNode;
+            if (!cn.IsNull && s.IsLive(cn)) { s.Paint(cn).LocalTransform = Affine2D.Translation(0f, -y); s.Mark(cn, NodeFlags.TransformDirty | NodeFlags.PaintDirty); }
+            s.Mark(vp, NodeFlags.VirtualRangeDirty);
+            w.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(8f, 8f), 0, 0));
+            for (int k = 0; k < 8; k++) h.RunFrame();   // let the E4 realize budget spread the window
+        }
+
+        // ── gate.list.options-parity: a representative old-arg scenario (selection + invoke + overscan) reproduced via
+        //    ListOptions produces the correct realized window + selection behaviour. ────────────────────────────────
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("lo-parity", new Size2(360, 360), 1f));
+            window.Show();
+            var model = new SelectionModel();
+            var ctl = new ItemsViewController();
+            int invoked = -1;
+            var probe = new ListOptProbe
+            {
+                Count = 200, Extent = 40f, Vh = 200f, Overscan = 4, Bound = false,
+                Options = new ListOptions
+                {
+                    SelectionMode = ItemsSelectionMode.Single, Selection = model, Controller = ctl,
+                    IsItemInvokedEnabled = true, OnInvoked = i => invoked = i, Overscan = 4, Grow = 1f,
+                },
+            };
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            for (int k = 0; k < 6; k++) host.RunFrame();   // settle overscan
+            var vp = FindVp(host.Scene, 200);
+            host.Scene.TryGetScroll(vp, out var sc);
+            int realized = sc.LastRealized - sc.FirstRealized;
+            // Options landed: provided model wired through the controller; overscan honored (visible 5 + overscan,
+            // bounded ≪ 200); a programmatic selection re-skins with the model this list was given.
+            bool modelWired = ReferenceEquals(ctl.Selection, model);
+            // Windowed ≪ Count is the invariant: the mount realizes against the height Hint (ItemsView forwards no
+            // explicit VirtualListEl.Height ⇒ Hint 1024 ⇒ ~26 visible + overscan), and virtualization never TRIMS a
+            // still-covering window, so the steady realized band is bounded but larger than the 200px-viewport minimum.
+            bool windowBounded = realized >= 5 && realized < 100;   // ASSERTION: windowed, not the full 200
+            model.ItemCount = 200; model.Select(3);
+            bool selects = model.IsSelected(3);
+            Check("gate.list.options-parity ListOptions reproduces selection-model wiring + overscan-bounded realized window + invoke wiring",
+                modelWired && windowBounded && selects,
+                $"realized={realized} modelWired={modelWired} selects={selects} invokeWired={(probe.Options!.OnInvoked is not null)}");
+        }
+
+        // ── gate.list.bound-zero-alloc: a bound list scrolled over recycled slots stays 0-alloc on phases 6–13 (the
+        //    recycling contract re-asserted through ItemsView.CreateBound + ListOptions). ──────────────────────────
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("lo-boundzero", new Size2(360, 360), 1f));
+            window.Show();
+            var probe = new ListOptProbe { Count = 1000, Extent = 40f, Vh = 240f, Overscan = 3, Bound = true };
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var vp = FindVp(host.Scene, 1000);
+            ScrollTo(host, window, vp, 4000f);   // recycle slots over a big jump
+            int buildsAfterScroll = probe.Builds;
+            // Settle, then a steady frame allocates 0 on the paint phases (slot rebind is a signal write, not a rebuild).
+            for (int k = 0; k < 4; k++) host.RunFrame();
+            var warm = host.RunFrame();
+            var steady = host.RunFrame();
+            host.Scene.TryGetScroll(vp, out var sc);
+            bool recycledNotRebuilt = probe.Builds == buildsAfterScroll;   // no fresh builds on a steady scrolled frame
+            bool zero = steady.HotPhaseAllocBytes == 0;
+            Check("gate.list.bound-zero-alloc a bound ItemsView.CreateBound list scrolled far rebinds slots (no rebuild) with 0 hot-phase alloc on a steady frame",
+                zero && recycledNotRebuilt && sc.FirstRealized > 0,
+                $"{steady.HotPhaseAllocBytes} bytes (warm={warm.HotPhaseAllocBytes}) builds@scroll={buildsAfterScroll} builds@steady={probe.Builds} first={sc.FirstRealized}");
+        }
+
+        // ── gate.list.keepalive-slot: a keep-alive row's slot stays bound to its item off-window (state retained); a
+        //    plain row's slot recycles; the bounded bucket cap evicts LRU (no leak). ────────────────────────────────
+        {
+            // (a) keep-alive item 0: its slot parks (index signal stays 0) after scrolling far off-window.
+            using var appK = new HeadlessPlatformApp();
+            var winK = new HeadlessWindow(new WindowDesc("lo-ka", new Size2(360, 240), 1f));
+            winK.Show();
+            var kProbe = new ListOptProbe
+            {
+                Count = 300, Extent = 40f, Vh = 200f, Overscan = 2, Bound = true, CaptureSig0 = true,
+                Options = new ListOptions { KeepAlive = i => i == 0, KeepAliveCap = 8, Overscan = 2, Grow = 1f },
+            };
+            using var hostK = new AppHost(appK, winK, new HeadlessGpuDevice(), fonts, strings, kProbe);
+            hostK.RunFrame();
+            var vpK = FindVp(hostK.Scene, 300);
+            var sig0 = kProbe.Sig0;
+            ScrollTo(hostK, winK, vpK, 6000f);   // item 0 far off-window
+            bool keptBound = sig0 is not null && sig0.Peek() == 0;   // parked: never index-rebound away from its item
+
+            // (b) plain (no keep-alive): the item-0 slot's signal is rebound to a visible far item.
+            using var appP = new HeadlessPlatformApp();
+            var winP = new HeadlessWindow(new WindowDesc("lo-ka-plain", new Size2(360, 240), 1f));
+            winP.Show();
+            var pProbe = new ListOptProbe { Count = 300, Extent = 40f, Vh = 200f, Overscan = 2, Bound = true, CaptureSig0 = true };
+            using var hostP = new AppHost(appP, winP, new HeadlessGpuDevice(), fonts, strings, pProbe);
+            hostP.RunFrame();
+            var vpP = FindVp(hostP.Scene, 300);
+            var sig0P = pProbe.Sig0;
+            ScrollTo(hostP, winP, vpP, 6000f);
+            bool plainRecycled = sig0P is not null && sig0P.Peek() != 0;   // recycled: rebound to a far item
+
+            // (c) bounded bucket + LRU eviction: ALL items keep-alive, cap 3 — a top→bottom sweep must NOT leak slots
+            //     (live content children stay bounded ≈ window + cap, not growing toward Count).
+            using var appC = new HeadlessPlatformApp();
+            var winC = new HeadlessWindow(new WindowDesc("lo-ka-cap", new Size2(360, 240), 1f));
+            winC.Show();
+            var cProbe = new ListOptProbe
+            {
+                Count = 200, Extent = 40f, Vh = 200f, Overscan = 1, Bound = true,
+                Options = new ListOptions { KeepAlive = i => true, KeepAliveCap = 3, Overscan = 1, Grow = 1f },
+            };
+            using var hostC = new AppHost(appC, winC, new HeadlessGpuDevice(), fonts, strings, cProbe);
+            hostC.RunFrame();
+            var vpC = FindVp(hostC.Scene, 200);
+            for (int step = 1; step <= 20; step++) ScrollTo(hostC, winC, vpC, step * 300f);
+            int live = LiveChildren(hostC.Scene, vpC);
+            bool bounded = live <= 5 + 3 + 6;   // ~visible(5) + cap(3) + slack; NOT leaking toward 200
+
+            Check("gate.list.keepalive-slot keep-alive slot parks bound to its item off-window (state retained); a plain slot recycles; the bucket cap bounds retained slots (LRU-evicted, no leak)",
+                keptBound && plainRecycled && bounded,
+                $"keptBound={keptBound}(sig0={sig0?.Peek()}) plainRecycled={plainRecycled}(sig0P={sig0P?.Peek()}) capLive={live}");
+        }
+
+        // ── gate.list.contenttype-pools: heterogeneous rows never cross-rebind — a scroll that FLIPS a slot's content
+        //    type rebuilds it (rowBind runs); a scroll that PRESERVES the type cheap-rebinds (no rebuild). ──────────
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("lo-ctype", new Size2(360, 240), 1f));
+            window.Show();
+            var probe = new ListOptProbe
+            {
+                Count = 400, Extent = 40f, Vh = 200f, Overscan = 0, Bound = true,
+                Options = new ListOptions { ContentType = i => i % 2, Overscan = 0, Grow = 1f },
+            };
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var vp = FindVp(host.Scene, 400);
+            // Settle at a stable window at the REAL viewport (row 40) — clear of the mount-time height-Hint over-realize.
+            ScrollTo(host, window, vp, 40 * 40f);
+            for (int k = 0; k < 6; k++) host.RunFrame();
+            // A 2-row jump preserves each slot's parity (type) => cheap rebind, no rebuild.
+            int b0 = probe.Builds;
+            ScrollTo(host, window, vp, 42 * 40f);
+            int sameTypeBuilds = probe.Builds - b0;
+            // A 1-row jump flips every slot's parity => every reused slot must REBUILD (never cross-rebind).
+            int b1 = probe.Builds;
+            ScrollTo(host, window, vp, 43 * 40f);
+            int crossTypeBuilds = probe.Builds - b1;
+            Check("gate.list.contenttype-pools a type-preserving scroll cheap-rebinds (0 rebuilds); a type-flipping scroll rebuilds every reused slot (never cross-rebinds)",
+                sameTypeBuilds == 0 && crossTypeBuilds > 0,
+                $"sameTypeBuilds={sameTypeBuilds} crossTypeBuilds={crossTypeBuilds}");
+        }
+
+        // ── gate.list.cache-extent: CacheExtentPx realizes rows beyond the viewport per the PIXEL margin (overriding
+        //    the row-based overscan). A larger pixel band realizes a strictly larger window. ───────────────────────
+        {
+            int RealizedAt(float cachePx, int overscan)
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("lo-cache", new Size2(360, 240), 1f));
+                window.Show();
+                var probe = new ListOptProbe
+                {
+                    Count = 1000, Extent = 40f, Vh = 200f, Overscan = overscan, Bound = false,
+                    Options = new ListOptions { Overscan = overscan, CacheExtentPx = cachePx, Grow = 1f },
+                };
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+                host.RunFrame();
+                var vp = FindVp(host.Scene, 1000);
+                ScrollTo(host, window, vp, 4000f);   // mid-list so both edges get cache; budget settles over frames
+                for (int k = 0; k < 10; k++) host.RunFrame();
+                host.Scene.TryGetScroll(vp, out var sc);
+                return sc.LastRealized - sc.FirstRealized;
+            }
+            int rowBased = RealizedAt(float.NaN, 2);   // 5 visible + 2 overscan/edge
+            int cache400 = RealizedAt(400f, 2);         // 400px / 40 = 10 rows/edge ⇒ a much larger window
+            Check("gate.list.cache-extent CacheExtentPx pre-realizes rows by the pixel margin (overrides row overscan) — a larger band realizes a strictly larger window",
+                cache400 > rowBased + 6 && cache400 >= 5 + 2 * 8,
+                $"rowBased={rowBased} cache400={cache400}");
+        }
+
+        // ── gate.list.layout-presets: LinedFlow / SpanGrid / GroupedList reached through RepeatLayout presets render
+        //    with the same geometry as the Virtual.* forms (spot-checks on the realized item rects). ───────────────
+        {
+            (SceneStore scene, NodeHandle content) Build(RepeatLayout layout, int count, Func<int, float>? rowHeight = null)
+            {
+                var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("lo-presets", new Size2(400, 300), 1f));
+                window.Show();
+                var probe = new ListOptProbe
+                {
+                    Count = count, Vw = 400f, Vh = 300f, Bound = false, ExplicitLayout = layout, RowHeightOf = rowHeight,
+                    Options = new ListOptions { Selector = SelectorVisual.None, Overscan = 1, Grow = 1f },
+                };
+                var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+                host.RunFrame();
+                for (int k = 0; k < 4; k++) host.RunFrame();
+                var vp = FindVp(host.Scene, count);
+                host.Scene.TryGetScroll(vp, out var sc);
+                return (host.Scene, sc.ContentNode);
+            }
+
+            // LinedFlow: item 0 is a square line-height cell (aspect 1 × 100) at the top-left (the WinUI photo wall).
+            var (sLf, cLf) = Build(RepeatLayout.LinedFlow(100f, aspectRatio: static _ => 1f), 60);
+            var lf0 = Child(sLf, cLf, 0);
+            bool linedFlow = !lf0.IsNull && Near(sLf.Bounds(lf0).W, 100f, 1f) && Near(sLf.Bounds(lf0).H, 100f, 1f) && Near(sLf.Bounds(lf0).Y, 0f, 1f);
+
+            // SpanGrid: item 0 spans all 4 columns ⇒ full cross width (the hero row).
+            var (sSg, cSg) = Build(RepeatLayout.SpanGrid(4, 80f, 0f, static i => i == 0 ? 4 : 1), 40);
+            var sg0 = Child(sSg, cSg, 0);
+            var sg1 = Child(sSg, cSg, 1);
+            bool spanGrid = !sg0.IsNull && !sg1.IsNull && sSg.Bounds(sg0).W > sSg.Bounds(sg1).W * 3f && Near(sSg.Bounds(sg0).H, 80f, 1f);
+
+            // GroupedList: index 0 is a header (48h), index 1 a normal item (40h). The measured seam corrects each row
+            // to its CONTENT extent, so the header/item content heights must match the layout's seeded estimates.
+            var (sGl, cGl) = Build(RepeatLayout.GroupedList(new[] { 0, 20 }, 48f, 40f), 60,
+                rowHeight: static i => i == 0 || i == 20 ? 48f : 40f);
+            var gl0 = Child(sGl, cGl, 0);
+            var gl1 = Child(sGl, cGl, 1);
+            bool grouped = !gl0.IsNull && !gl1.IsNull && Near(sGl.Bounds(gl0).H, 48f, 1f) && Near(sGl.Bounds(gl1).H, 40f, 1f);
+
+            Check("gate.list.layout-presets LinedFlow/SpanGrid/GroupedList via RepeatLayout presets render with the Virtual.* geometry (square photo cells / full-width hero span / seeded header extents)",
+                linedFlow && spanGrid && grouped,
+                $"linedFlow={linedFlow} spanGrid={spanGrid} grouped={grouped}");
+        }
+    }
+
     // D1 — the ItemsView List preset / ItemsView rendered EMPTY when the host imposed no size (gallery regression, commit 4a9047b):
     // (1) FlexLayout.MeasureViewport collapsed an unsized virtual viewport to 0 (NaN→0), so the auto-width 280-card
     //     List preset arranged at W=0 and the auto-height Start-row ItemsView at H=0; fixed by the natural-size
@@ -23859,9 +24167,11 @@ static class Slice
                         ItemsView.Create(8,
                             i => new BoxEl { Children = [new TextEl($"row {i}") { Size = 13f }] },
                             RepeatLayout.Stack(40f),
-                            selector: SelectorVisual.AccentPill,
-                            itemDisplacement: i => i == dispTarget ? (0f, 40f) : (0f, 0f),
-                            displacementVersion: ver),
+                            new ListOptions
+                            {
+                                Selector = SelectorVisual.AccentPill,
+                                Reorder = new ReorderOptions { ItemDisplacement = i => i == dispTarget ? (0f, 40f) : (0f, 0f), DisplacementVersion = ver },
+                            }),
                     ],
                 },
             });
@@ -24037,10 +24347,12 @@ static class Slice
                         ItemsView.Create(100,
                             i => new BoxEl { Children = [new TextEl($"row {i}") { Size = 13f }] },
                             RepeatLayout.Stack(40f),
-                            controller: ctl,
-                            selector: SelectorVisual.AccentPill,
-                            itemDisplacement: i => i == dispTarget ? (0f, 24f) : (0f, 0f),
-                            displacementVersion: ver),
+                            new ListOptions
+                            {
+                                Controller = ctl,
+                                Selector = SelectorVisual.AccentPill,
+                                Reorder = new ReorderOptions { ItemDisplacement = i => i == dispTarget ? (0f, 24f) : (0f, 0f), DisplacementVersion = ver },
+                            }),
                     ],
                 },
             });
@@ -24209,9 +24521,11 @@ static class Slice
                             ItemsView.Create(5,
                                 i => new BoxEl { Children = [new TextEl($"row {i}") { Size = 13f }] },
                                 RepeatLayout.Stack(40f),
-                                selector: SelectorVisual.AccentPill,
-                                itemDisplacement: i => { rl.OffsetFor2D(i, 0f, 0f, out _, out _); return (0f, rl.OffsetFor(i)); },
-                                displacementVersion: ver),
+                                new ListOptions
+                                {
+                                    Selector = SelectorVisual.AccentPill,
+                                    Reorder = new ReorderOptions { ItemDisplacement = i => { rl.OffsetFor2D(i, 0f, 0f, out _, out _); return (0f, rl.OffsetFor(i)); }, DisplacementVersion = ver },
+                                }),
                         ],
                     },
                 });
@@ -24255,7 +24569,7 @@ static class Slice
                         Children =
                         [
                             ItemsView.Create(1, i => new BoxEl { Width = 120, Height = 40 }, RepeatLayout.Stack(44f),
-                                selectionMode: mode, selection: model, selector: sel),
+                                new ListOptions { SelectionMode = mode, Selection = model, Selector = sel }),
                         ],
                     },
                 });
@@ -24400,9 +24714,11 @@ static class Slice
                         ItemsView.Create(8,
                             i => new BoxEl { Children = [new TextEl($"row {i}") { Size = 13f }] },
                             RepeatLayout.Stack(40f),
-                            selector: SelectorVisual.AccentPill,
-                            itemDisplacement: i => i == dispTarget ? (0f, 24f) : (0f, 0f),
-                            displacementVersion: ver),
+                            new ListOptions
+                            {
+                                Selector = SelectorVisual.AccentPill,
+                                Reorder = new ReorderOptions { ItemDisplacement = i => i == dispTarget ? (0f, 24f) : (0f, 0f), DisplacementVersion = ver },
+                            }),
                     ],
                 },
             });
@@ -24438,8 +24754,11 @@ static class Slice
                         ItemsView.Create(8,
                             i => new BoxEl { Children = [new TextEl($"row {i}") { Size = 13f }] },
                             RepeatLayout.Stack(40f),
-                            selector: SelectorVisual.AccentPill,
-                            partDelta: (i, st) => new PartDelta(Fill: i % 2 == 0 ? Tok.FillSubtleSecondary : ColorF.Transparent)),
+                            new ListOptions
+                            {
+                                Selector = SelectorVisual.AccentPill,
+                                PartDelta = (i, st) => new PartDelta(Fill: i % 2 == 0 ? Tok.FillSubtleSecondary : ColorF.Transparent),
+                            }),
                     ],
                 },
             });
@@ -24473,12 +24792,15 @@ static class Slice
                         ItemsView.Create(200,
                             i => new BoxEl { Children = [new TextEl($"row {i}") { Size = 13f }] },
                             RepeatLayout.Stack(40f),
-                            controller: ctl,
-                            selector: SelectorVisual.FullRow,
-                            grow: 1f,
-                            partDelta: (i, st) => new PartDelta(
-                                Fill: i % 3 == 0 ? Tok.FillSubtleTertiary : ColorF.Transparent,
-                                Corners: CornerRadius4.All(6f))),
+                            new ListOptions
+                            {
+                                Controller = ctl,
+                                Selector = SelectorVisual.FullRow,
+                                Grow = 1f,
+                                PartDelta = (i, st) => new PartDelta(
+                                    Fill: i % 3 == 0 ? Tok.FillSubtleTertiary : ColorF.Transparent,
+                                    Corners: CornerRadius4.All(6f)),
+                            }),
                     ],
                 },
             });
@@ -28197,6 +28519,7 @@ static class Slice
         // E11 — unified virtualization substrate (measured seam, LinedFlow/GroupedList, repeater lifecycle,
         // SelectionModel, ItemContainer, ItemsView).
         E11VirtChecks(strings);
+        ListConsolidationChecks(strings);   // G5h (WS3 P7): ListOptions parity + keep-alive slot (#5) + contentType/cache-extent/repaint-boundary (#16) + RepeatLayout presets
 
         // Parity wave-1 defect fixes (D1 collection-host sizing, D2 pointer-focus/PasswordBox reveal,
         // D3 Expander WinUI motion, D4 ScrollBar/AnnotatedScrollBar anatomy).
