@@ -17,8 +17,7 @@ using static FluentGpu.Dsl.Ui;
 // LayoutTransition family (Position FLIP, ScaleCorrect, Relayout, SizeMode.Reflow smooth reflow with the Trailing
 // anchor, EnterExit terminals with per-item stagger), interaction motion (hover/press), and implicit brush
 // transitions. The page header teaches the mental model: one engine, per-(node, channel) tracks, three ways to seed.
-[GalleryPage("animation", "Animation", "Fundamentals")]
-[Route("animation")]
+[GalleryPage("animation", "Animation", "Fundamentals", Icon = Icons.Movie, ShotMode = ShotMode.Animated)]
 sealed class AnimationPage : Component
 {
     public override Element Render()
@@ -146,7 +145,7 @@ sealed class AnimationPage : Component
                     Children = treeLines,
                 },
                 new TextEl("Declarative — the element animates its own layout changes:") { Size = 12.5f, Bold = true, Color = Tok.TextPrimary },
-                CodeText.Block("""
+                CodeBlock.Of("""
                 new BoxEl {
                     Height = open ? float.NaN : 0f,          // change the declaration…
                     Animate = new LayoutTransition(          // …and the engine animates the diff
@@ -157,7 +156,7 @@ sealed class AnimationPage : Component
                 }
                 """),
                 new TextEl("Imperative — capture a node and seed any channel:") { Size = 12.5f, Bold = true, Color = Tok.TextPrimary },
-                CodeText.Block("""
+                CodeBlock.Of("""
                 var dot = UseRef<NodeHandle>(default);
                 // …in the element tree:  new BoxEl { OnRealized = h => dot.Value = h }
                 UseLayoutEffect(() =>
@@ -217,7 +216,7 @@ sealed class AnimationPage : Component
 
     static Element[] TracksExamples() =>
     [
-        ControlExample.Build("Easing curves — the race",
+        ExampleCard.Build("Easing curves — the race",
             Embed.Comp(() => new AnimEasingRace()),
             description: "Every named curve in the engine, racing the same 1100ms translate. The four Fluent curves at the bottom are the real WinUI motion vocabulary.",
             code: """
@@ -225,14 +224,14 @@ sealed class AnimationPage : Component
             anim.Animate(dot, AnimChannel.TranslateX,    // eased two-point tween
                 0f, 186f, 1100f, Easing.Bounce);         // any named curve
             """),
-        ControlExample.Build("Authored KeySpline (EasingSpec.CubicBezier)",
+        ExampleCard.Build("Authored KeySpline (EasingSpec.CubicBezier)",
             Embed.Comp(() => new AnimKeySplinePlayground()),
             description: "Any cubic-bezier easing is expressible, not just the named curves — this is how WinUI storyboard KeySplines port 1:1 (the Expander collapse is KeySpline 1,1,0,1).",
             code: """
             anim.Animate(dot, AnimChannel.TranslateX, 0f, 200f, 900f,
                 EasingSpec.CubicBezier(x1, y1, x2, y2));   // a WinUI KeySpline, verbatim
             """),
-        ControlExample.Build("Channels — one node, every axis",
+        ExampleCard.Build("Channels — one node, every axis",
             Embed.Comp(() => new AnimChannelsPlayground()),
             description: "Transform channels compose into one LocalTransform (translate ∘ rotate ∘ scale) plus opacity — each button plays a there-and-back keyframe pair on a single channel of the same tile.",
             code: """
@@ -240,7 +239,7 @@ sealed class AnimationPage : Component
                 [new(0f, 0f), new(0.5f, 360f, Easing.FluentStandard), new(1f, 0f, Easing.FluentPopOpen)],
                 900f);
             """),
-        ControlExample.Build("Multi-keyframe paths, loops & stagger (DelayMs)",
+        ExampleCard.Build("Multi-keyframe paths, loops & stagger (DelayMs)",
             Embed.Comp(() => new AnimKeyframesStagger()),
             description: "A four-keyframe path with a DIFFERENT easing per segment, replayed across three dots with 0/110/220ms seed delays — stagger is an engine primitive, not a timer. The right dot pulses on an infinite loop.",
             code: """
@@ -251,14 +250,14 @@ sealed class AnimationPage : Component
             anim.Keyframes(dotC, AnimChannel.TranslateX, path, 1400f, delayMs: 220f);
             anim.Keyframes(pulse, AnimChannel.ScaleX, [new(0f, 1f), new(0.5f, 1.3f), new(1f, 1f)], 1200f, loop: true);
             """),
-        ControlExample.Build("Springs — velocity-carrying retarget",
+        ExampleCard.Build("Springs — velocity-carrying retarget",
             Embed.Comp(() => new AnimSpringLab()),
             description: "Click Toggle repeatedly MID-FLIGHT: the tween restarts from its keyframe, the spring keeps position AND velocity (the iOS/Compose handoff). Tune the physics live.",
             code: """
             anim.Spring(dot, AnimChannel.TranslateX, target,
                 SpringParams.FromResponse(response, dampingRatio));   // retarget = no snap, velocity carries
             """),
-        ControlExample.Build("Driven timeline — scrub by value",
+        ExampleCard.Build("Driven timeline — scrub by value",
             Embed.Comp(() => new AnimDrivenScrub()),
             description: "A track's clock can be any value source instead of wall time (scroll offset, playback position, a slider). Three channels of the same dot ride one scrubbed timeline.",
             code: """
@@ -267,7 +266,7 @@ sealed class AnimationPage : Component
             anim.Drive(dot, AnimChannel.Rotation,   [new(0f, 0f), new(1f, 360f, Easing.Linear)], src, 0f, 1f);
             anim.Drive(dot, AnimChannel.Opacity,    [new(0f, 1f), new(0.5f, 0.35f), new(1f, 1f)], src, 0f, 1f);
             """),
-        ControlExample.Build("Additive composition (CompositeOp.Add)",
+        ExampleCard.Build("Additive composition (CompositeOp.Add)",
             Embed.Comp(() => new AnimAdditive()),
             description: "Per (node, channel) tracks compose like CSS animation-composition: a slow Replace drift plus an additive wobble layer on the SAME channel.",
             code: """
@@ -281,14 +280,14 @@ sealed class AnimationPage : Component
 
     static Element[] RevealsExamples() =>
     [
-        ControlExample.Build("Clip reveal (ClipL/T/R/B)",
+        ExampleCard.Build("Clip reveal (ClipL/T/R/B)",
             Embed.Comp(() => new AnimClipReveal()),
             description: "The authored clip-rect channels sweep one edge while the surface's rounded corners stay round (the WinUI composition-clip look). A settled clip clears its override automatically.",
             code: """
             anim.Animate(card, AnimChannel.ClipR, 0f, width, 450f, Easing.FluentPopOpen);   // reveal left → right
             anim.Animate(card, AnimChannel.ClipT, height, 0f, 450f, Easing.FluentPopOpen);  // reveal bottom → top
             """),
-        ControlExample.Build("Stroke-trim draw-on (StrokeTrimStart/End)",
+        ExampleCard.Build("Stroke-trim draw-on (StrokeTrimStart/End)",
             Embed.Comp(() => new AnimDrawOn()),
             description: "An analytic polyline revealed along its own length — the CheckBox checkmark's exact mechanism, with the WinUI AnimatedAccept spline.",
             code: """
@@ -296,7 +295,7 @@ sealed class AnimationPage : Component
                 [new(0f, 0f, Easing.Linear), new(1f, 1f, EasingSpec.CubicBezier(0.55f, 0f, 0f, 1f))], 800f, deps);
             return new PolylineStrokeEl { P0 = ..., P1 = ..., P2 = ..., P3 = ..., PointCount = 4, Thickness = 3f };
             """),
-        ControlExample.Build("Presented-size reveal (SizeMode.Reveal)",
+        ExampleCard.Build("Presented-size reveal (SizeMode.Reveal)",
             Embed.Comp(() => new AnimPresentedReveal()),
             description: "Layout lands at the final size IMMEDIATELY (the row below snaps); only the drawn extent eases — crisp, compositor-only. Compare with smooth reflow further down.",
             code: """
@@ -307,7 +306,7 @@ sealed class AnimationPage : Component
 
     static Element[] LayoutExamples() =>
     [
-        ControlExample.Build("Position FLIP — slide between layout slots",
+        ExampleCard.Build("Position FLIP — slide between layout slots",
             Embed.Comp(() => new AnimFlipSlide()),
             description: "The element re-lays-out instantly; the engine projects the residual and plays it back. Projection is PARENT-RELATIVE: only the node's own slot change animates — an ancestor reflow never re-triggers it. Spring (top) retargets velocity-continuously; tween (bottom) restarts.",
             code: """
@@ -315,21 +314,21 @@ sealed class AnimationPage : Component
             new BoxEl { Animate = new LayoutTransition(TransitionChannels.Position,
                             TransitionDynamics.Tween(420f, Easing.FluentStandard)) }
             """),
-        ControlExample.Build("SizeMode.ScaleCorrect — chrome projection",
+        ExampleCard.Build("SizeMode.ScaleCorrect — chrome projection",
             Embed.Comp(() => new AnimScaleCorrect()),
             description: "A size change becomes a GPU scale that springs toward 1 (Framer-Motion projection). Cheap, but it distorts text/borders mid-flight — chrome only.",
             code: """
             new BoxEl { Width = wide ? 240f : 130f,
                         Animate = LayoutTransition.BoundsT(SizeMode.ScaleCorrect) }
             """),
-        ControlExample.Build("SizeMode.Relayout — live re-wrap",
+        ExampleCard.Build("SizeMode.Relayout — live re-wrap",
             Embed.Comp(() => new AnimRelayout()),
             description: "The subtree re-solves at the interpolated size every tick, so text re-wraps LIVE while the width animates — correct, costs scoped layout.",
             code: """
             new BoxEl { Width = wide ? 300f : 160f,
                         Animate = LayoutTransition.BoundsT(SizeMode.Relayout) }
             """),
-        ControlExample.Build("SizeMode.Reflow — smooth reflow (the Expander's engine)",
+        ExampleCard.Build("SizeMode.Reflow — smooth reflow (the Expander's engine)",
             Embed.Comp(() => new AnimReflow()),
             description: "The one DELIBERATE divergence from WinUI: the interpolated size runs through REAL layout each tick (boundary-scoped), so everything below eases instead of snapping — and rides RIGIDLY (watch the ToggleSwitch pill stay locked to its track). SizeAnchor.Trailing keeps the panel's bottom edge on the reveal edge; ExitDynamics gives the asymmetric WinUI 333/167ms timing.",
             code: """
@@ -341,7 +340,7 @@ sealed class AnimationPage : Component
 
             new BoxEl { ClipToBounds = true, Height = open ? float.NaN : 0f, Animate = Reflow, Children = [panel] }
             """),
-        ControlExample.Build("Enter / Exit terminals + per-item stagger",
+        ExampleCard.Build("Enter / Exit terminals + per-item stagger",
             Embed.Comp(() => new AnimEnterExit()),
             description: "An inserted node animates FROM its enter terminal (offset/scale/opacity); a removed node becomes an exit ORPHAN that stays alive until its tracks settle. DelayMs staggers a batch.",
             code: """
@@ -356,7 +355,7 @@ sealed class AnimationPage : Component
 
     static Element[] InteractionExamples() =>
     [
-        ControlExample.Build("Hover / press motion (InteractionAnimator)",
+        ExampleCard.Build("Hover / press motion (InteractionAnimator)",
             Embed.Comp(() => new AnimInteraction()),
             description: "Visual states are DECLARED, not animated by hand: hover/press fills, scales, durations and easings on the element — the interaction animator eases the progress and the recorder cross-fades.",
             code: """
@@ -365,13 +364,13 @@ sealed class AnimationPage : Component
                         HoverDurationMs = 167f, PressDurationMs = 83f,
                         HoverEasing = Easing.FluentPopOpen }
             """),
-        ControlExample.Build("Implicit brush transition (BrushTransitionMs)",
+        ExampleCard.Build("Implicit brush transition (BrushTransitionMs)",
             Embed.Comp(() => new AnimBrushTransition()),
             description: "A logical state flip cross-fades the surface brushes over the given duration — WinUI's implicit color animation, one field.",
             code: """
             new BoxEl { Fill = palette[i], BrushTransitionMs = 250f }   // click: i++ → 250ms cross-fade
             """),
-        ControlExample.Build("Interaction recipes — the app-authoring surface (InteractionRecipe)",
+        ExampleCard.Build("Interaction recipes — the app-authoring surface (InteractionRecipe)",
             Embed.Comp(() => new AnimRecipeSurfaces()),
             description: "One .Interactive(recipe) modifier packages a whole interactive surface — the brush ramp (Fill/Hover/" +
                 "Pressed + BrushTransitionMs) AND the motion (WhileHover/WhilePressed scale on a token). Theme-live presets read " +
@@ -386,7 +385,7 @@ sealed class AnimationPage : Component
 
     static Element[] HooksExamples() =>
     [
-        ControlExample.Build("UseTransition / UseKeyframes / UseSpring / UseAnimatedValue",
+        ExampleCard.Build("UseTransition / UseKeyframes / UseSpring / UseAnimatedValue",
             Embed.Comp(() => new AnimHooksDemo()),
             description: "Hooks seed the same engine tracks on the component's OWN node: a mount transition, a looping pulse, a spring toggle, and an eased scalar driving a color lerp.",
             code: """

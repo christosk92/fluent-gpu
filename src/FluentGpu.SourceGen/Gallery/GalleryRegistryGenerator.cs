@@ -125,7 +125,8 @@ namespace FluentGpu.SourceGen.Gallery
                 named.TryGetValue("Icon", out var i) && i.Value is string ic ? ic : "",
                 keywords,
                 named.TryGetValue("Order", out var o) && o.Value is int ov ? ov : 1000,
-                named.TryGetValue("ShotMode", out var sm) && sm.Value is int smv ? smv : 0,
+                // ShotMode is a byte-backed enum, so its TypedConstant value is a boxed byte (not int) — convert.
+                named.TryGetValue("ShotMode", out var sm) && sm.Value is not null ? System.Convert.ToInt32(sm.Value) : 0,
                 named.TryGetValue("Hidden", out var h) && h.Value is bool hv && hv,
                 diags.ToImmutable(), emit);
         }

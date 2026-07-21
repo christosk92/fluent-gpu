@@ -7,15 +7,14 @@ using static FluentGpu.Dsl.Ui;
 
 // ── Pivot / NumberBox / AppBarToggleButton / CommandBar / Viewbox / ContentDialog demo pages (batch 4) ──────────
 
-[GalleryPage("Pivot", "Pivot", "Navigation")]
-[Route("Pivot")]
+[GalleryPage("Pivot", "Pivot", "Navigation", Icon = Icons.Document)]
 sealed class PivotPage : Component
 {
     static readonly string[] Headers = { "All", "Recent", "Favorites" };
 
     public override Element Render() => GalleryPage.Shell("Pivot",
         "Presents content in a series of large, horizontally-arranged section headers.",
-        ControlExample.Build("A Pivot with text headers",
+        ExampleCard.Build("A Pivot with text headers",
             new BoxEl { Height = 220, Corners = Radii.OverlayAll, BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f, ClipToBounds = true, Children = [Pivot.Create(Headers)] },
             description: "The control owns its selection: the selected header turns primary with the 3px accent pipe underneath, and the content region below swaps.",
             code: """
@@ -26,8 +25,7 @@ sealed class PivotPage : Component
             """));
 }
 
-[GalleryPage("NumberBox", "NumberBox", "Text")]
-[Route("NumberBox")]
+[GalleryPage("NumberBox", "NumberBox", "Text", Icon = Icons.Volume)]
 sealed class NumberBoxPage : Component
 {
     public override Element Render()
@@ -38,7 +36,7 @@ sealed class NumberBoxPage : Component
         var compact = UseSignal(0.0);
         return GalleryPage.Shell("NumberBox",
             "A text control for numeric input with validation, expression evaluation and optional spin buttons. Spin buttons are hidden by default (WinUI); Inline places up/down repeat buttons at the trailing edge of the field, Compact opens them in a popup while the field is focused.",
-            ControlExample.Build("A NumberBox (editable, no spin buttons — the WinUI default)",
+            ExampleCard.Build("A NumberBox (editable, no spin buttons — the WinUI default)",
                 NumberBox.Create(value: plain, options: new NumberBox.NumberBoxOptions { PlaceholderText = "Enter a number" }),
                 description: "Invalid input reverts on commit (Enter or blur); clearing the field commits NaN and shows the placeholder.",
                 output: GalleryPage.LiveText(() => double.IsNaN(plain.Value) ? "—" : $"{plain.Value:0.##}"),
@@ -47,7 +45,7 @@ sealed class NumberBoxPage : Component
 
                 NumberBox.Create(value: value, options: new NumberBox.NumberBoxOptions { PlaceholderText = "Enter a number" })
                 """),
-            ControlExample.Build("A NumberBox that evaluates expressions",
+            ExampleCard.Build("A NumberBox that evaluates expressions",
                 NumberBox.Create(value: expr, options: new NumberBox.NumberBoxOptions { AcceptsExpression = true, PlaceholderText = "1 + 2^2" }),
                 description: "Type an arithmetic expression (+ - * / ^ and parentheses) and press Enter — it evaluates on commit.",
                 output: GalleryPage.LiveText(() => double.IsNaN(expr.Value) ? "—" : $"{expr.Value:0.##}"),
@@ -56,7 +54,7 @@ sealed class NumberBoxPage : Component
 
                 NumberBox.Create(value: value, options: new NumberBox.NumberBoxOptions { AcceptsExpression = true, PlaceholderText = "1 + 2^2" })
                 """),
-            ControlExample.Build("A NumberBox with inline spin buttons",
+            ExampleCard.Build("A NumberBox with inline spin buttons",
                 NumberBox.Create(value: inline, options: new NumberBox.NumberBoxOptions
                     { Minimum = 0, Maximum = 100, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Inline }),
                 description: "A 0–100 range: spin buttons disable at the bounds. Up/Down step by SmallChange (1), PageUp/PageDown by LargeChange (10).",
@@ -67,7 +65,7 @@ sealed class NumberBoxPage : Component
                 NumberBox.Create(value: value, options: new NumberBox.NumberBoxOptions
                     { Minimum = 0, Maximum = 100, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Inline })
                 """),
-            ControlExample.Build("A NumberBox with a header, range and compact spin buttons",
+            ExampleCard.Build("A NumberBox with a header, range and compact spin buttons",
                 NumberBox.Create(value: compact, options: new NumberBox.NumberBoxOptions
                     { Minimum = 0, Maximum = 100, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact,
                       Header = "Enter an integer:" }),
@@ -83,8 +81,7 @@ sealed class NumberBoxPage : Component
     }
 }
 
-[GalleryPage("AppBarToggleButton", "AppBarToggleButton", "Menus & toolbars")]
-[Route("AppBarToggleButton")]
+[GalleryPage("AppBarToggleButton", "AppBarToggleButton", "Menus & toolbars", Icon = Icons.Accept)]
 sealed class AppBarToggleButtonPage : Component
 {
     public override Element Render()
@@ -94,7 +91,7 @@ sealed class AppBarToggleButtonPage : Component
         var under = UseSignal(false);
         return GalleryPage.Shell("AppBarToggleButton",
             "A two-state command button for a CommandBar (e.g. Bold / Italic / Underline).",
-            ControlExample.Build("AppBarToggleButtons",
+            ExampleCard.Build("AppBarToggleButtons",
                 new BoxEl
                 {
                     Direction = 0, Gap = 4, Padding = new Edges4(8, 6, 8, 6), Corners = Radii.OverlayAll, Fill = Tok.FillCardDefault,
@@ -116,7 +113,7 @@ sealed class AppBarToggleButtonPage : Component
                     AppBarToggleButton.Create(Icons.Font, "Italic"),
                     AppBarToggleButton.Create(Icons.Font, "Underline"))
                 """),
-            ControlExample.Build("Compact and disabled AppBarToggleButtons",
+            ExampleCard.Build("Compact and disabled AppBarToggleButtons",
                 HStack(4,
                     AppBarToggleButton.Create(Icons.Shuffle, "Shuffle", isCompact: true),
                     AppBarToggleButton.Create(Icons.Font, "Bold", isChecked: UseSignal(true), isEnabled: false),
@@ -131,8 +128,7 @@ sealed class AppBarToggleButtonPage : Component
     }
 }
 
-[GalleryPage("CommandBar", "CommandBar", "Menus & toolbars")]
-[Route("CommandBar")]
+[GalleryPage("CommandBar", "CommandBar", "Menus & toolbars", Icon = Icons.More)]
 sealed class CommandBarPage : Component
 {
     public override Element Render()
@@ -155,7 +151,7 @@ sealed class CommandBarPage : Component
         var minimalSecondary = new AppBarCommand[] { new(Icons.Settings, "Settings") };
         return GalleryPage.Shell("CommandBar",
             "A toolbar for exposing common, frequently-used commands — with a … More button that expands the bar and opens the secondary commands as an overflow menu.",
-            ControlExample.Build("A CommandBar with primary and secondary commands",
+            ExampleCard.Build("A CommandBar with primary and secondary commands",
                 new BoxEl { Width = 440, Direction = 1, Children = [CommandBar.Create(primary, secondary)] },
                 description: "The … button expands the closed compact bar to the full-size labeled layout and drops the secondary commands as an overflow menu.",
                 output: BodyStrong($"Invoked: {last}"),
@@ -177,7 +173,7 @@ sealed class CommandBarPage : Component
 
                 CommandBar.Create(primary, secondary)
                 """),
-            ControlExample.Build("Minimal closed display mode",
+            ExampleCard.Build("Minimal closed display mode",
                 new BoxEl { Width = 440, Direction = 1, Children = [CommandBar.Create(minimalPrimary, minimalSecondary, closedDisplayMode: CommandBarDisplayMode.Minimal)] },
                 description: "Closed, the bar is a 24px sliver showing only the … More button; opening it reveals the full-size labeled commands.",
                 code: """
@@ -192,13 +188,12 @@ sealed class CommandBarPage : Component
     }
 }
 
-[GalleryPage("Viewbox", "Viewbox", "Layout")]
-[Route("Viewbox")]
+[GalleryPage("Viewbox", "Viewbox", "Layout", Icon = Icons.Picture)]
 sealed class ViewboxPage : Component
 {
     public override Element Render() => GalleryPage.Shell("Viewbox",
         "Scales its single child up or down to a target size, preserving aspect ratio.",
-        ControlExample.Build("A Viewbox (explicit 1.8× factor)", Viewbox.Create(Chip(), scale: 1.8f),
+        ExampleCard.Build("A Viewbox (explicit 1.8× factor)", Viewbox.Create(Chip(), scale: 1.8f),
             code: """
             var chip = new BoxEl
             {
@@ -209,7 +204,7 @@ sealed class ViewboxPage : Component
 
             Viewbox.Create(chip, scale: 1.8f)
             """),
-        ControlExample.Build("Stretch modes",
+        ExampleCard.Build("Stretch modes",
             HStack(12,
                 StretchTile("Uniform (1.5×)", ViewboxStretch.Uniform),
                 StretchTile("UniformToFill (2×, clips)", ViewboxStretch.UniformToFill),
@@ -223,7 +218,7 @@ sealed class ViewboxPage : Component
             Viewbox.Create(chip, contentWidth: 80, contentHeight: 40,
                 availableWidth: 120, availableHeight: 80, stretch: ViewboxStretch.Uniform)
             """),
-        ControlExample.Build("Stretch direction",
+        ExampleCard.Build("Stretch direction",
             HStack(12,
                 DirectionTile("DownOnly — shrinks to fit", ViewboxStretchDirection.DownOnly),
                 DirectionTile("UpOnly — never shrinks", ViewboxStretchDirection.UpOnly)),
@@ -264,8 +259,7 @@ sealed class ViewboxPage : Component
         Caption(label));
 }
 
-[GalleryPage("ContentDialog", "ContentDialog", "Dialogs & flyouts")]
-[Route("ContentDialog")]
+[GalleryPage("ContentDialog", "ContentDialog", "Dialogs & flyouts", Icon = Icons.Document)]
 sealed class ContentDialogPage : Component
 {
     public override Element Render()
@@ -273,7 +267,7 @@ sealed class ContentDialogPage : Component
         var (result, setResult) = UseState("—");
         return GalleryPage.Shell("ContentDialog",
             "A modal dialog that shows contextual information and requires a response.",
-            ControlExample.Build("A ContentDialog",
+            ExampleCard.Build("A ContentDialog",
                 Embed.Comp(() => new ContentDialog
                 {
                     TriggerLabel = "Show dialog",
@@ -302,7 +296,7 @@ sealed class ContentDialogPage : Component
                     Closed = r => setResult(r.ToString()),   // Primary / Secondary / None
                 })
                 """),
-            ControlExample.Build("A ContentDialog with a single button",
+            ExampleCard.Build("A ContentDialog with a single button",
                 ContentDialog.Create("Show dialog", "No internet connection",
                     "Check your connection and try again.", "Close"),
                 description: "With one command the button right-aligns in the command row (the WinUI single-button column layout).",
@@ -314,7 +308,6 @@ sealed class ContentDialogPage : Component
 }
 
 [GalleryPage("text-cat", "Text", "Overview", Hidden = true)]
-[Route("text-cat")]
 sealed class TextOverviewPage : Component
 {
     public override Element Render()

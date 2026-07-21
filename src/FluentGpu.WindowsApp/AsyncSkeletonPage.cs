@@ -14,8 +14,7 @@ using static FluentGpu.Dsl.Ui;
 // partial-known content immediately (cover + title), shimmers the still-loading region (the track list), and swaps to
 // real with the blur reveal we built — then streams per-row durations in via incremental per-field Loadables. No second
 // hand-authored skeleton tree, no two UIs to keep in sync.
-[GalleryPage("async-skeletons", "Async & skeletons", "Patterns")]
-[Route("async-skeletons")]
+[GalleryPage("async-skeletons", "Async & skeletons", "Patterns", Icon = Icons.Refresh, ShotMode = ShotMode.Animated)]
 sealed class AsyncSkeletonPage : Component
 {
     public override Element Render() => GalleryPage.Shell("Async & skeletons",
@@ -23,7 +22,7 @@ sealed class AsyncSkeletonPage : Component
         "framework derives the shimmer from that same UI, keeps the parts you already have (the album cover + title) " +
         "real, shimmers the pending region (the tracks), and swaps to real content with the blur reveal on load. " +
         "Per-field Loadables let individual cells (track durations) stream in afterwards, shimmering just that leaf.",
-        ControlExample.Build("Album page — ONE UI: known header, async track list, streaming durations",
+        ExampleCard.Build("Album page — ONE UI: known header, async track list, streaming durations",
             Embed.Comp(() => new AlbumLoadingDemo()),
             description: "The cover + title render REAL on frame 1 (they're known on click — outside any region). The track " +
                 "list is a Skel.Region: it shimmers " + "derived row placeholders, then blur-reveals the real rows on load. " +
@@ -38,7 +37,7 @@ sealed class AsyncSkeletonPage : Component
                 content: ts => Flow.For(() => ts, t => t.Id, (t, i) => AlbumRow(t))));
             // a row's duration cell:  new TextEl("") { Text = t.Dur.Bind() }.Pending(t.Dur)
             """),
-        ControlExample.Build("Load failure → onFailed branch",
+        ExampleCard.Build("Load failure → onFailed branch",
             Embed.Comp(() => new SkeletonFailureDemo()),
             description: "When the loader throws, SetFailed routes through the same State signal and the region shows the " +
                 "onFailed UI instead of shimmering forever. Retry re-arms the load.",

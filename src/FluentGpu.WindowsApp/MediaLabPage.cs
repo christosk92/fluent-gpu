@@ -202,8 +202,7 @@ static class MediaTestCatalog
 /// per-scenario player page (auto-runs on entry, back returns to the catalog). Replaces the former three-page split
 /// (Professional Media Lab / Desktop Video / Protected Video) — DRM lives here as its own section, including the
 /// free-form DASH+PlayReady source form.</summary>
-[GalleryPage("media-lab", "Media Lab", "Media")]
-[Route("media-lab")]
+[GalleryPage("media-lab", "Media Lab", "Media", Icon = Icons.Movie, ShotMode = ShotMode.Skip)]
 sealed class MediaLabPage : Component
 {
     /// <summary>The non-catalog detail entry: the free-form DASH + PlayReady source form (Axinom prefilled).</summary>

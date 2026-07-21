@@ -18,6 +18,9 @@ public sealed record TitleBarOptions
     public ColorF? IconColor { get; init; }
     public bool ShowBackButton { get; init; }
     public bool BackEnabled { get; init; }
+    /// <summary>Live back-enabled override (see <see cref="TitleBar.BackEnabledSignal"/>) — bind this when the back
+    /// button reflects a runtime navigation stack.</summary>
+    public IReadSignal<bool>? BackEnabledSignal { get; init; }
     public Action? OnBack { get; init; }
     public bool ShowPaneToggle { get; init; }
     public Action? OnPaneToggle { get; init; }
@@ -93,6 +96,10 @@ public sealed class TitleBar : Component
     public bool ShowBackButton;
     /// <summary>WinUI IsBackEnabled.</summary>
     public bool BackEnabled;
+    /// <summary>Live override of <see cref="BackEnabled"/>: when set, the back button's enabled state tracks this signal
+    /// (component fields freeze at mount, so a shell whose back-availability changes at runtime — a navigation back
+    /// stack — binds this instead). Reading it subscribes the bar, so the button re-glyphs enabled↔disabled in place.</summary>
+    public IReadSignal<bool>? BackEnabledSignal;
     public Action? OnBack;
     /// <summary>WinUI IsPaneToggleButtonVisible.</summary>
     public bool ShowPaneToggle;
@@ -132,7 +139,8 @@ public sealed class TitleBar : Component
             var tb = new TitleBar
             {
                 Title = options.Title, Subtitle = options.Subtitle, IconGlyph = options.IconGlyph,
-                ShowBackButton = options.ShowBackButton, BackEnabled = options.BackEnabled, OnBack = options.OnBack,
+                ShowBackButton = options.ShowBackButton, BackEnabled = options.BackEnabled,
+                BackEnabledSignal = options.BackEnabledSignal, OnBack = options.OnBack,
                 ShowPaneToggle = options.ShowPaneToggle, OnPaneToggle = options.OnPaneToggle,
                 Tabs = options.Tabs, TabsVersion = options.TabsVersion,
                 ShowCaptionButtons = options.ShowCaptionButtons, Parts = options.Parts,
@@ -171,6 +179,7 @@ public sealed class TitleBar : Component
         bool active = hooks.IsWindowActive?.Invoke() ?? true;
         bool maximized = hooks.GetWindowState?.Invoke() == WindowState.Maximized;
         int tabsVer = TabsVersion?.Invoke() ?? 0;                 // subscribe: re-render + re-push regions on tab add/remove
+        bool backEnabled = BackEnabledSignal is { } bes ? bes.Value : BackEnabled;   // subscribe: re-glyph the back button live
 
         // Report the drag/button regions after THIS render's layout settles (phase 6.5) — deps cover everything that
         // moves the parts (resize, maximize→WM_SIZE→viewport, DPI hop→DIP viewport change, the measured-width feedback
@@ -183,7 +192,7 @@ public sealed class TitleBar : Component
         // Tok.Epoch is in the key so a live theme switch busts the cache — otherwise RethemeAll re-runs this effect but
         // the memo returns the OLD-theme tree (the caption glyphs/foregrounds would stay stale).
         int key = unchecked(((((epoch * 397 ^ tabsVer) * 397 ^ _availDip.Peek().GetHashCode()) * 397 ^ Tok.Epoch) * 397)
-            ^ ((active ? 1 : 0) | (maximized ? 2 : 0) | (ShowBackButton ? 4 : 0) | (ShowPaneToggle ? 8 : 0) | (ShowCaptionButtons ? 16 : 0) | (BackEnabled ? 32 : 0)));
+            ^ ((active ? 1 : 0) | (maximized ? 2 : 0) | (ShowBackButton ? 4 : 0) | (ShowPaneToggle ? 8 : 0) | (ShowCaptionButtons ? 16 : 0) | (backEnabled ? 32 : 0)));
         if (_cachedTree is { } cached && key == _cacheKey) return cached;
 
         // WinUI back/pane: 40w × 44h with Margin 2 (the hover backplate spans y=2..46 of the 48px bar; adjacent
@@ -201,7 +210,7 @@ public sealed class TitleBar : Component
 
         if (ShowBackButton)
         {
-            var back = IconButton.Create(Icons.Back, () => OnBack?.Invoke(), navStyle, isEnabled: BackEnabled)
+            var back = IconButton.Create(Icons.Back, () => OnBack?.Invoke(), navStyle, isEnabled: backEnabled)
                 with { Margin = navMargin };
             var applied = Parts.Apply(PartBackButton, back);
             kids.Add(applied with

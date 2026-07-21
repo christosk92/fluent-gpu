@@ -177,7 +177,7 @@ static class Program
 
         // Wire the gallery's soak / stress diagnostic harness into the engine's batteries-included entry point. The hook
         // only fires when an FG_SOAK / FG_STRESS_* / FG_WAKE_AUDIT env flag is set; normal runs ignore it. SoakProbe lives
-        // here (in the gallery) because it drives GalleryApp's nav hook, so it cannot move into the engine library.
+        // here (in the gallery) because it drives GalleryShell's nav hook, so it cannot move into the engine library.
         FluentApp.DiagnosticRun = SoakProbe.TryRun;
 
         int frames = -1;   // optional --frames N for headless/CI; omit for a normal interactive window
@@ -300,7 +300,7 @@ static class Program
                 new AppOptions { Title = "FluentGpu — Demo", Width = 560, Height = 360 },
                 new HarnessOptions { Frames = frames });
         else
-            // WS7: the registry-driven GalleryShell (GalleryApp remains the "gallery-legacy" ShotScene fallback).
+            // WS7: the registry-driven GalleryShell (the sole shell — the legacy GalleryApp was deleted in G8b).
             // The gallery draws the WinUI TitleBar (engine caption buttons).
             FluentAppHarness.Run(() => new GalleryShell { InitialPage = page },
                 new AppOptions { Title = "FluentGpu — Capability Gallery", Width = 1240, Height = 820, CustomFrame = true },

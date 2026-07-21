@@ -7138,6 +7138,26 @@ static class Slice
             Check("SK.i composes with a 10k-row Virtual.List — swaps to a WINDOWED list (≪10k nodes realized, not 10k)",
                 realNodes < 2000, $"pendingNodes={pendingNodes} realNodes={realNodes} (10k items)");
         }
+
+        // SK.j content(seed) over a virtual viewport still derives a representative pending window. The deriver invokes
+        // the real RenderItem source for at most eight rows; it neither collapses to one opaque bar nor materializes the
+        // complete collection. This is the Home pending-state shape (heterogeneous measured virtual rows).
+        {
+            var scene = new SceneStore();
+            var recon = new TreeReconciler(scene, strings);
+            var count = Loadable<int>.Pending(6);
+            recon.ReconcileRoot(
+                Skel.Region(count, n => Virtual.List(n, 44f,
+                    i => SkRow(new SkTrack(i + 1, "Seed " + i, "0:00")), keyOf: i => i.ToString()) with
+                    { Width = 360f, Height = 300f }),
+                null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            int pendingNodes = CountNodes(scene, scene.Root);
+            bool representative = pendingNodes >= 20 && CountText(scene, scene.Root) == 0
+                && Near(scene.Bounds(scene.Root).H, 300f, 0.5f);
+            Check("SK.j content(seed) derives a bounded virtual-list pending window (not one blank opaque leaf)",
+                representative, $"nodes={pendingNodes} text={CountText(scene, scene.Root)} h={scene.Bounds(scene.Root).H:0}");
+        }
     }
 
     // General layout-transition projection (continuous FLIP): the side-table plumbing, the spring that drives a moved

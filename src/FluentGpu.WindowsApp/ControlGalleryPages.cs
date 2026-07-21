@@ -57,7 +57,7 @@ static class GalleryPage
     /// <summary>The tile grid for one nav category (the WinUI category overview page body).</summary>
     public static Element CategoryGrid(string category, Action<string> navigate)
     {
-        var keys = GalleryApp.CategoryKeys(category);
+        var keys = GalleryShell.CategoryKeys(category);
         var tiles = new Element[keys.Length];
         for (int i = 0; i < keys.Length; i++) { var k = keys[i]; tiles[i] = TileFor(k, () => navigate(k)); }
         return AutoGrid(300f, 12f, 90f, tiles);
@@ -66,7 +66,6 @@ static class GalleryPage
 
 // ── Overview / category pages ─────────────────────────────────────────────────────
 [GalleryPage("fundamentals", "Fundamentals", "Overview", Hidden = true)]
-[Route("fundamentals")]
 sealed class FundamentalsPage : Component
 {
     // The engine model — kept in lockstep with the "fundamentals" nav group's children (Gallery.Items).
@@ -89,7 +88,6 @@ sealed class FundamentalsPage : Component
 }
 
 [GalleryPage("patterns", "Patterns", "Overview", Hidden = true)]
-[Route("patterns")]
 sealed class PatternsPage : Component
 {
     static readonly (string Key, string Glyph, string Title)[] Items =
@@ -108,7 +106,6 @@ sealed class PatternsPage : Component
 }
 
 [GalleryPage("app-services", "App services", "Overview", Hidden = true)]
-[Route("app-services")]
 sealed class AppServicesPage : Component
 {
     static readonly (string Key, string Glyph, string Title)[] Items =
@@ -128,7 +125,6 @@ sealed class AppServicesPage : Component
 }
 
 [GalleryPage("design", "Design", "Overview", Hidden = true)]
-[Route("design")]
 sealed class DesignPage : Component
 {
     static readonly (string Key, string Glyph, string Title)[] Items =
@@ -146,7 +142,6 @@ sealed class DesignPage : Component
 }
 
 [GalleryPage("basic-input", "Basic input", "Overview", Hidden = true)]
-[Route("basic-input")]
 sealed class BasicInputOverviewPage : Component
 {
     public override Element Render()
@@ -158,14 +153,13 @@ sealed class BasicInputOverviewPage : Component
 }
 
 [GalleryPage("all", "All controls", "Overview", Hidden = true)]
-[Route("all")]
 sealed class AllControlsPage : Component
 {
     public override Element Render()
     {
         var navigate = UseContext(NavigationView.Nav);
         var sections = new List<Element>();
-        foreach (var (title, keys) in GalleryApp.ControlCatalog)
+        foreach (var (title, keys) in GalleryShell.ControlCatalog)
         {
             sections.Add(new BoxEl { Height = 12f });
             sections.Add(Subtitle(title));
@@ -174,445 +168,5 @@ sealed class AllControlsPage : Component
             sections.Add(AutoGrid(300f, 12f, 90f, tiles));
         }
         return GalleryPage.Shell("All controls", "Every control in the gallery, grouped by category.", sections.ToArray());
-    }
-}
-
-// ── Basic input — the 14 control demo pages ───────────────────────────────────────
-[GalleryPage("Button", "Button", "Basic input")]
-[Route("Button")]
-sealed class ButtonControlPage : Component
-{
-    public override Element Render()
-    {
-        var (clicks, setClicks) = UseState(0);
-        return GalleryPage.Shell("Button", "A control that responds to user input and raises a Click event.",
-            ControlExample.Build("A standard & accent button", HStack(8, Button.Standard("Standard", () => setClicks(clicks + 1)), Button.Accent("Accent", () => setClicks(clicks + 1))),
-                output: BodyStrong($"Clicks: {clicks}"),
-                code: """
-                var (clicks, setClicks) = UseState(0);
-
-                HStack(8,
-                    Button.Standard("Standard", () => setClicks(clicks + 1)),
-                    Button.Accent("Accent", () => setClicks(clicks + 1)))
-                """),
-            ControlExample.Build("A disabled button", DisabledButton("Disabled"),
-                code: """
-                Button.Standard("Disabled", () => { }, isEnabled: false)
-                """),
-            // Orthogonal axes (G5d): appearance selects the token ramp, size selects the geometry — they compose.
-            ControlExample.Build("Appearance axis (Standard / Accent / Subtle / Outline)",
-                Wrap(8,
-                    Button.Create("Standard", () => setClicks(clicks + 1), ButtonAppearance.Standard),
-                    Button.Create("Accent", () => setClicks(clicks + 1), ButtonAppearance.Accent),
-                    Button.Create("Subtle", () => setClicks(clicks + 1), ButtonAppearance.Subtle),
-                    Button.Create("Outline", () => setClicks(clicks + 1), ButtonAppearance.Outline)),
-                code: """
-                Wrap(8,
-                    Button.Create("Standard", onClick, ButtonAppearance.Standard),
-                    Button.Create("Accent",   onClick, ButtonAppearance.Accent),
-                    Button.Create("Subtle",   onClick, ButtonAppearance.Subtle),
-                    Button.Create("Outline",  onClick, ButtonAppearance.Outline))
-                """),
-            ControlExample.Build("Size axis (Small / Medium / Large)",
-                HStack(8,
-                    Button.Create("Small", () => setClicks(clicks + 1), ButtonAppearance.Accent, ControlSize.Small),
-                    Button.Create("Medium", () => setClicks(clicks + 1), ButtonAppearance.Accent, ControlSize.Medium),
-                    Button.Create("Large", () => setClicks(clicks + 1), ButtonAppearance.Accent, ControlSize.Large)),
-                code: """
-                HStack(8,
-                    Button.Create("Small",  onClick, ButtonAppearance.Accent, ControlSize.Small),
-                    Button.Create("Medium", onClick, ButtonAppearance.Accent, ControlSize.Medium),
-                    Button.Create("Large",  onClick, ButtonAppearance.Accent, ControlSize.Large))
-                """),
-            ControlExample.Build("Leading-icon (glyph) slot",
-                HStack(8,
-                    Button.Create("Add item", () => setClicks(clicks + 1), ButtonAppearance.Accent, glyph: Icons.Add),
-                    Button.Create("Copy", () => setClicks(clicks + 1), ButtonAppearance.Standard, glyph: Icons.Copy)),
-                code: """
-                Button.Create("Add item", onClick, ButtonAppearance.Accent, glyph: Icons.Add)
-                Button.Create("Copy",     onClick, ButtonAppearance.Standard, glyph: Icons.Copy)
-                """));
-    }
-
-    static Element DisabledButton(string label) => new BoxEl
-    {
-        Direction = 0, Padding = new Edges4(11, 5, 11, 6), MinHeight = 32f, AlignItems = FlexAlign.Center, Corners = Radii.ControlAll,
-        Fill = Tok.FillControlDisabled, BorderColor = Tok.StrokeControlDefault, BorderWidth = 1f,
-        Children = [new TextEl(label) { Size = 14f, Color = Tok.TextDisabled }],
-    };
-}
-
-[GalleryPage("DropDownButton", "DropDownButton", "Basic input")]
-[Route("DropDownButton")]
-sealed class DropDownButtonControlPage : Component
-{
-    public override Element Render()
-    {
-        var (pick, setPick) = UseState("—");
-        var items = new List<MenuFlyoutItem>
-        {
-            new("Small", Icons.Tag, true, () => setPick("Small")),
-            new("Medium", Icons.Tag, true, () => setPick("Medium")),
-            new("Large", Icons.Tag, true, () => setPick("Large")),
-            MenuFlyoutItem.Separator,
-            new("Disabled", Icons.Cancel, false, null),
-        };
-        return GalleryPage.Shell("DropDownButton", "A button that displays a flyout of choices when clicked.",
-            ControlExample.Build("A DropDownButton with a menu flyout", DropDownButton.Create("Sizes", items, Icons.Font),
-                output: BodyStrong($"Chosen: {pick}"),
-                code: """
-                var items = new List<MenuFlyoutItem>
-                {
-                    new("Small", Icons.Tag, true, () => setPick("Small")),
-                    new("Medium", Icons.Tag, true, () => setPick("Medium")),
-                    new("Large", Icons.Tag, true, () => setPick("Large")),
-                    MenuFlyoutItem.Separator,
-                    new("Disabled", Icons.Cancel, false, null),
-                };
-
-                DropDownButton.Create("Sizes", items, Icons.Font)
-                """));
-    }
-}
-
-[GalleryPage("HyperlinkButton", "HyperlinkButton", "Basic input")]
-[Route("HyperlinkButton")]
-sealed class HyperlinkButtonControlPage : Component
-{
-    public override Element Render()
-    {
-        var (clicks, setClicks) = UseState(0);
-        return GalleryPage.Shell("HyperlinkButton", "A button that appears as hyperlink text and can navigate.",
-            ControlExample.Build("A HyperlinkButton", HyperlinkButton.Create("Open the design docs", () => setClicks(clicks + 1)),
-                output: BodyStrong($"Activated {clicks}×"),
-                code: """
-                // Click handler form:
-                HyperlinkButton.Create("Open the design docs", () => setClicks(clicks + 1))
-
-                // NavigateUri form (opens in the default browser via the PAL OpenUri seam):
-                HyperlinkButton.Create("fluent-gpu on GitHub", "https://github.com/christosk92/fluent-gpu")
-                """));
-    }
-}
-
-[GalleryPage("RepeatButton", "RepeatButton", "Basic input")]
-[Route("RepeatButton")]
-sealed class RepeatButtonControlPage : Component
-{
-    public override Element Render()
-    {
-        var (count, setCount) = UseState(0);
-        return GalleryPage.Shell("RepeatButton", "A button that raises Click events repeatedly while it is pressed and held.",
-            ControlExample.Build("Hold to increment", HStack(8, RepeatButton.Create("–", () => setCount(count - 1)), RepeatButton.Create("+", () => setCount(count + 1))),
-                output: BodyStrong($"Value: {count}"),
-                code: """
-                var (count, setCount) = UseState(0);
-
-                HStack(8,
-                    RepeatButton.Create("–", () => setCount(count - 1)),
-                    RepeatButton.Create("+", () => setCount(count + 1)))
-                """));
-    }
-}
-
-[GalleryPage("ToggleButton", "ToggleButton", "Basic input")]
-[Route("ToggleButton")]
-sealed class ToggleButtonControlPage : Component
-{
-    public override Element Render()
-    {
-        var on = UseSignal(false);
-        var tri = UseSignal(CheckState.Unchecked);
-        return GalleryPage.Shell("ToggleButton", "A button that can be switched between two states (or a third, indeterminate, state).",
-            ControlExample.Build("Two-state", ToggleButton.Create(on.Value ? "On" : "Off", on), output: BodyStrong(on.Value ? "On" : "Off"),
-                code: """
-                var on = UseSignal(false);
-
-                ToggleButton.Create(on.Value ? "On" : "Off", on)
-                """),
-            ControlExample.Build("Three-state", ToggleButton.Create($"{tri.Value}", tri), output: BodyStrong($"{tri.Value}"),
-                code: """
-                var tri = UseSignal(CheckState.Unchecked);
-
-                // Clicks cycle Unchecked -> Checked -> Indeterminate.
-                ToggleButton.Create($"{tri.Value}", tri)
-                """));
-    }
-}
-
-[GalleryPage("SplitButton", "SplitButton", "Basic input")]
-[Route("SplitButton")]
-sealed class SplitButtonControlPage : Component
-{
-    public override Element Render()
-    {
-        var (msg1, setMsg1) = UseState("—");   // each example owns its own output state (was one shared signal → both updated)
-        var (msg2, setMsg2) = UseState("—");
-        var items = new List<MenuFlyoutItem>
-        {
-            new("Paste as text", Icons.Document, true, () => setMsg1("Paste as text")),
-            new("Paste special", Icons.Document, true, () => setMsg1("Paste special")),
-        };
-        var colors = new List<MenuFlyoutItem>
-        {
-            new("Red", null, true, () => setMsg2("Red")),
-            new("Green", null, true, () => setMsg2("Green")),
-            new("Blue", null, true, () => setMsg2("Blue")),
-        };
-        return GalleryPage.Shell("SplitButton", "A two-part button: a primary action plus a dropdown of related choices.",
-            ControlExample.Build("A SplitButton", SplitButton.Create("Paste", () => setMsg1("Paste (primary)"), items, Icons.Document),
-                output: BodyStrong(msg1),
-                code: """
-                var items = new List<MenuFlyoutItem>
-                {
-                    new("Paste as text", Icons.Document, true, () => setMsg("Paste as text")),
-                    new("Paste special", Icons.Document, true, () => setMsg("Paste special")),
-                };
-
-                SplitButton.Create("Paste", () => setMsg("Paste (primary)"), items, Icons.Document)
-                """),
-            ControlExample.Build("A SplitButton with text", SplitButton.Create("Choose color", () => setMsg2("Choose color"), colors),
-                output: BodyStrong(msg2),
-                code: """
-                SplitButton.Create("Choose color", () => setMsg("Choose color"), colors)
-                """));
-    }
-}
-
-[GalleryPage("ToggleSplitButton", "ToggleSplitButton", "Basic input")]
-[Route("ToggleSplitButton")]
-sealed class ToggleSplitButtonControlPage : Component
-{
-    public override Element Render()
-    {
-        var on = UseSignal(false);
-        var (style, setStyle) = UseState("List");
-        var items = new List<MenuFlyoutItem>
-        {
-            new("Bulleted list", Icons.List, true, () => setStyle("Bulleted")),
-            new("Numbered list", Icons.List, true, () => setStyle("Numbered")),
-        };
-        return GalleryPage.Shell("ToggleSplitButton", "A SplitButton whose primary part toggles on and off.",
-            ControlExample.Build("A ToggleSplitButton", ToggleSplitButton.Create("List", items, on, glyph: Icons.List),
-                output: BodyStrong($"On: {on.Value} · {style}"),
-                code: """
-                var on = UseSignal(false);
-                var items = new List<MenuFlyoutItem>
-                {
-                    new("Bulleted list", Icons.List, true, () => setStyle("Bulleted")),
-                    new("Numbered list", Icons.List, true, () => setStyle("Numbered")),
-                };
-
-                ToggleSplitButton.Create("List", items, on, glyph: Icons.List)
-                """));
-    }
-}
-
-[GalleryPage("CheckBox", "CheckBox", "Basic input")]
-[Route("CheckBox")]
-sealed class CheckBoxControlPage : Component
-{
-    public override Element Render()
-    {
-        var a = UseSignal(false);
-        var tri = UseSignal(CheckState.Indeterminate);
-        // "Select all" — the parent is a DERIVED tri-state pushed into a controlled signal: c1/c2 are the source of
-        // truth; parent re-derives each render (the control reads it) and a click runs ToggleAll via onChange.
-        var c1 = UseSignal(true);
-        var c2 = UseSignal(false);
-        var parent = UseSignal(CheckState.Indeterminate);
-        parent.Value = c1.Value && c2.Value ? CheckState.Checked : c1.Value || c2.Value ? CheckState.Indeterminate : CheckState.Unchecked;
-        void ToggleAll() { bool all = !(c1.Value && c2.Value); c1.Value = all; c2.Value = all; }
-
-        return GalleryPage.Shell("CheckBox", "A control for selecting or clearing options — two-state, or three-state with an indeterminate value.",
-            ControlExample.Build("Two-state", CheckBox.Create("I agree", a), output: BodyStrong(a.Value ? "Checked" : "Unchecked"),
-                code: """
-                var a = UseSignal(false);
-
-                CheckBox.Create("I agree", a)
-                """),
-            ControlExample.Build("Three-state", CheckBox.Create("Mixed", tri), output: BodyStrong($"{tri.Value}"),
-                code: """
-                var tri = UseSignal(CheckState.Indeterminate);
-
-                CheckBox.Create("Mixed", tri)
-                """),
-            ControlExample.Build("Select all (indeterminate parent)",
-                VStack(4,
-                    CheckBox.Create("Select all", parent, _ => ToggleAll()),
-                    new BoxEl { Margin = new Edges4(24, 0, 0, 0), Direction = 1, Gap = 4, Children = [CheckBox.Create("Option A", c1), CheckBox.Create("Option B", c2)] }),
-                code: """
-                var c1 = UseSignal(true);
-                var c2 = UseSignal(false);
-                var parent = UseSignal(CheckState.Indeterminate);
-                parent.Value = c1.Value && c2.Value ? CheckState.Checked
-                             : c1.Value || c2.Value ? CheckState.Indeterminate
-                             : CheckState.Unchecked;
-                void ToggleAll() { bool all = !(c1.Value && c2.Value); c1.Value = all; c2.Value = all; }
-
-                VStack(4,
-                    CheckBox.Create("Select all", parent, _ => ToggleAll()),
-                    CheckBox.Create("Option A", c1),
-                    CheckBox.Create("Option B", c2))
-                """));
-    }
-}
-
-[GalleryPage("ColorPicker", "ColorPicker", "Basic input")]
-[Route("ColorPicker")]
-sealed class ColorPickerControlPage : Component
-{
-    public override Element Render()
-    {
-        var color = UseSignal(ColorF.FromRgba(0x4C, 0xC2, 0xFF));
-        return GalleryPage.Shell("ColorPicker", "A spectrum, hue and alpha selector with channel/hex input.",
-            ControlExample.Build("A ColorPicker with alpha", ColorPicker.Create(color, alphaEnabled: true),
-                output: VStack(6,
-                    new BoxEl { Width = 96, Height = 40, Corners = Radii.ControlAll, BorderColor = Tok.StrokeControlDefault, BorderWidth = 1f, Fill = color },
-                    GalleryPage.LiveText(() => "#" + color.Value.ToHex())),
-                code: """
-                var color = UseSignal(ColorF.FromRgba(0x4C, 0xC2, 0xFF));
-
-                ColorPicker.Create(color, alphaEnabled: true)
-
-                // The swatch rides a compositor-only fill binding — no re-render while dragging:
-                new BoxEl { Width = 96, Height = 40, Fill = color }
-                """));
-    }
-}
-
-[GalleryPage("ComboBox", "ComboBox", "Basic input")]
-[Route("ComboBox")]
-sealed class ComboBoxControlPage : Component
-{
-    static readonly string[] Fonts = { "Segoe UI", "Cascadia Code", "Arial", "Calibri", "Consolas", "Georgia" };
-
-    public override Element Render()
-    {
-        var sel = UseSignal(0);
-        var editSel = UseSignal(-1);
-        var editText = UseSignal("");
-        return GalleryPage.Shell("ComboBox", "A drop-down list of items a user can select from — optionally with an editable text field.",
-            ControlExample.Build("A ComboBox", ComboBox.Create(Fonts, sel, placeholder: "Pick a font"),
-                output: GalleryPage.LiveText(() => sel.Value >= 0 ? Fonts[sel.Value] : "—"),
-                code: """
-                static readonly string[] Fonts = { "Segoe UI", "Cascadia Code", "Arial", "Calibri", "Consolas", "Georgia" };
-                var sel = UseSignal(0);
-
-                ComboBox.Create(Fonts, sel, placeholder: "Pick a font")
-                """),
-            ControlExample.Build("An editable ComboBox", ComboBox.Create(Fonts, editSel, editable: true, text: editText, placeholder: "Type or pick"),
-                output: GalleryPage.LiveText(() => editText.Value.Length > 0 ? editText.Value : "—"),
-                code: """
-                var editSel = UseSignal(-1);
-                var editText = UseSignal("");
-
-                ComboBox.Create(Fonts, editSel, editable: true, text: editText, placeholder: "Type or pick")
-                """));
-    }
-}
-
-[GalleryPage("RadioButton", "RadioButton", "Basic input")]
-[Route("RadioButton")]
-sealed class RadioButtonControlPage : Component
-{
-    static readonly string[] Options = { "Small", "Medium", "Large" };
-
-    public override Element Render()
-    {
-        var sel = UseSignal(1);
-        return GalleryPage.Shell("RadioButton", "A control that lets a user select a single option from a mutually-exclusive set.",
-            ControlExample.Build("A RadioButtons group", RadioButton.Group(Options, sel),
-                output: BodyStrong($"Selected: {(sel.Value >= 0 ? Options[sel.Value] : "—")}"),
-                code: """
-                static readonly string[] Options = { "Small", "Medium", "Large" };
-                var sel = UseSignal(1);
-
-                RadioButton.Group(Options, sel)
-                """));
-    }
-}
-
-[GalleryPage("RatingControl", "RatingControl", "Basic input")]
-[Route("RatingControl")]
-sealed class RatingControlControlPage : Component
-{
-    public override Element Render()
-    {
-        var val = UseFloatSignal(3f);
-        var ro = UseFloatSignal(4f);
-        return GalleryPage.Shell("RatingControl", "Lets a user rate with a row of stars, set by click or drag.",
-            ControlExample.Build("Interactive", RatingControl.Create(val), output: GalleryPage.LiveText(() => $"{(int)val.Value} / 5"),
-                code: """
-                var val = UseFloatSignal(3f);
-
-                RatingControl.Create(val)
-                """),
-            ControlExample.Build("Read-only", RatingControl.Create(ro, readOnly: true),
-                code: """
-                RatingControl.Create(UseFloatSignal(4f), readOnly: true)
-                """));
-    }
-}
-
-[GalleryPage("Slider", "Slider", "Basic input")]
-[Route("Slider")]
-sealed class SliderControlPage : Component
-{
-    public override Element Render()
-    {
-        var basic = UseFloatSignal(0.4f);
-        var range = UseFloatSignal(50f);
-        var ticks = UseFloatSignal(40f);
-        var vert = UseFloatSignal(30f);
-        return GalleryPage.Shell("Slider", "Selects a value from a range — with optional ticks, step snapping and vertical orientation.",
-            ControlExample.Build("A simple slider (0–1, signal-bound)", Slider.Create(basic), output: GalleryPage.LiveText(() => $"{basic.Value:0.00}"),
-                code: """
-                // The hot path: pass a FloatSignal — drags update the thumb/track via
-                // compositor bindings, with NO component re-render per move.
-                var basic = UseFloatSignal(0.4f);
-
-                Slider.Create(basic)
-                """),
-            ControlExample.Build("A ranged slider (0–100)", Slider.Create(range, options: new Slider.SliderOptions { Min = 0, Max = 100 }), output: GalleryPage.LiveText(() => $"{range.Value:0}"),
-                code: """
-                var range = UseFloatSignal(50f);
-
-                Slider.Create(range, options: new Slider.SliderOptions { Min = 0, Max = 100 })
-                """),
-            ControlExample.Build("Ticks + step (step 10)", Slider.Create(ticks, options: new Slider.SliderOptions { Min = 0, Max = 100, Step = 10, TickFrequency = 10 }), output: GalleryPage.LiveText(() => $"{ticks.Value:0}"),
-                code: """
-                Slider.Create(ticks,
-                    options: new Slider.SliderOptions { Min = 0, Max = 100, Step = 10, TickFrequency = 10 })
-                """),
-            ControlExample.Build("Vertical", Slider.Create(vert, options: new Slider.SliderOptions { Min = 0, Max = 100, Vertical = true }, length: 160f), output: GalleryPage.LiveText(() => $"{vert.Value:0}"),
-                code: """
-                Slider.Create(vert,
-                    options: new Slider.SliderOptions { Min = 0, Max = 100, Vertical = true }, length: 160f)
-                """));
-    }
-}
-
-[GalleryPage("ToggleSwitch", "ToggleSwitch", "Basic input")]
-[Route("ToggleSwitch")]
-sealed class ToggleSwitchControlPage : Component
-{
-    public override Element Render()
-    {
-        var a = UseSignal(true);
-        var b = UseSignal(false);
-        return GalleryPage.Shell("ToggleSwitch", "A switch that a user can turn on and off.",
-            ControlExample.Build("A simple ToggleSwitch", ToggleSwitch.Create(a), output: BodyStrong(a.Value ? "On" : "Off"),
-                code: """
-                var a = UseSignal(true);
-
-                ToggleSwitch.Create(a)
-                """),
-            ControlExample.Build("With header + On/Off content", ToggleSwitch.Create(b, header: "Wi-Fi", onContent: "Connected", offContent: "Disconnected"),
-                output: BodyStrong(b.Value ? "Connected" : "Disconnected"),
-                code: """
-                ToggleSwitch.Create(b,
-                    header: "Wi-Fi", onContent: "Connected", offContent: "Disconnected")
-                """));
     }
 }

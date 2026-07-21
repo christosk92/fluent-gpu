@@ -7,8 +7,7 @@ using static FluentGpu.Dsl.Ui;
 
 // The Home page — mirrors the WinUI Gallery landing: a gradient hero, a Recent/Favorites selector, and a wrapping
 // grid of sample cards that entrance-animate and navigate the shell on click.
-[GalleryPage("welcome", "Home", "Home")]
-[Route("welcome")]
+[GalleryPage("welcome", "Home", "Home", Icon = Icons.Home)]
 sealed class WelcomePage : Component
 {
     static readonly (string Key, string Glyph, string Title, string Sub)[] Demos =

@@ -11,8 +11,7 @@ using static FluentGpu.Dsl.Ui;
 // coverage moved onto the flagship ItemsViewPage (MiscPages.cs) as the List/Grid preset card groups (simple +
 // multiple + reorder, same Coffees/drinks/GridItems/colors data), via ItemsView.List(...) / ItemsView.Grid(...).
 
-[GalleryPage("FlipView", "FlipView", "Collections")]
-[Route("FlipView")]
+[GalleryPage("FlipView", "FlipView", "Collections", Icon = Icons.Picture)]
 sealed class FlipViewPage : Component
 {
     static readonly string[] Items = { "Page 1", "Page 2", "Page 3", "Page 4" };
@@ -20,14 +19,14 @@ sealed class FlipViewPage : Component
 
     public override Element Render() => GalleryPage.Shell("FlipView",
         "Lets you flip through a collection of items, one at a time.",
-        ControlExample.Build("A FlipView", FlipView.Create(Items, width: 420f, height: 220f),
+        ExampleCard.Build("A FlipView", FlipView.Create(Items, width: 420f, height: 220f),
             description: "The thin edge bars flip between items (WinUI's HorizontalPrevious/Next buttons); navigation wraps around.",
             code: """
             static readonly string[] Items = { "Page 1", "Page 2", "Page 3", "Page 4" };
 
             FlipView.Create(Items, width: 420f, height: 220f)
             """),
-        ControlExample.Build("A compact FlipView", FlipView.Create(Seasons, width: 240f, height: 140f),
+        ExampleCard.Build("A compact FlipView", FlipView.Create(Seasons, width: 240f, height: 140f),
             description: "Width and height size the clipped frame.",
             code: """
             static readonly string[] Seasons = { "Spring", "Summer", "Autumn", "Winter" };
@@ -36,8 +35,7 @@ sealed class FlipViewPage : Component
             """));
 }
 
-[GalleryPage("TreeView", "TreeView", "Collections")]
-[Route("TreeView")]
+[GalleryPage("TreeView", "TreeView", "Collections", Icon = Icons.List)]
 sealed class TreeViewPage : Component
 {
     static readonly TreeNode[] Roots =
@@ -66,7 +64,7 @@ sealed class TreeViewPage : Component
 
         return GalleryPage.Shell("TreeView",
             "Displays hierarchical data with expandable and collapsible nodes.",
-            ControlExample.Build("A TreeView",
+            ExampleCard.Build("A TreeView",
                 Card(TreeView.Create(Roots, null, itemInvoked: n => setInvoked(n.Label))),
                 description: "The chevron is its own hit target (expand-only); clicking a row selects it and raises ItemInvoked.",
                 output: BodyStrong($"Invoked: {invoked}"),
@@ -83,7 +81,7 @@ sealed class TreeViewPage : Component
 
                 TreeView.Create(Roots, null, itemInvoked: n => setInvoked(n.Label))
                 """),
-            ControlExample.Build("Multi-select with checkboxes",
+            ExampleCard.Build("Multi-select with checkboxes",
                 Card(TreeView.Create(Roots, null, isMultiSelectEnabled: true,
                     selectionChanged: (n, on) => setToggled($"{n.Label}: {(on ? "selected" : "cleared")}"))),
                 description: "Toggling a parent cascades through its subtree; a partially-selected parent shows the indeterminate dash.",
@@ -92,7 +90,7 @@ sealed class TreeViewPage : Component
                 TreeView.Create(Roots, null, isMultiSelectEnabled: true,
                     selectionChanged: (n, on) => setToggled($"{n.Label}: {(on ? "selected" : "cleared")}"))
                 """),
-            ControlExample.Build("Drag to reorder siblings",
+            ExampleCard.Build("Drag to reorder siblings",
                 Card(TreeView.Create(Chapters, null, canReorderItems: true)),
                 description: "Drag a node among its siblings (whole subtrees move together; an expanded node collapses first) — or Ctrl+Up/Down on the focused node.",
                 code: """
@@ -112,8 +110,7 @@ sealed class TreeViewPage : Component
     static Element Card(Element tree) => new BoxEl { Width = 320, Corners = Radii.OverlayAll, BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f, Padding = new Edges4(0, 6, 0, 6), Children = [tree] };
 }
 
-[GalleryPage("AppBarButton", "AppBarButton", "Menus & toolbars")]
-[Route("AppBarButton")]
+[GalleryPage("AppBarButton", "AppBarButton", "Menus & toolbars", Icon = Icons.Accept)]
 sealed class AppBarButtonPage : Component
 {
     public override Element Render()
@@ -124,7 +121,7 @@ sealed class AppBarButtonPage : Component
 
         return GalleryPage.Shell("AppBarButton",
             "A command button for a CommandBar — a vertical icon over a label.",
-            ControlExample.Build("A bar of AppBarButtons",
+            ExampleCard.Build("A bar of AppBarButtons",
                 Strip(
                     AppBarButton.Create(Icons.Add, "Add", () => setLast("Add")),
                     AppBarButton.Create(Icons.Tag, "Edit", () => setLast("Edit")),
@@ -140,7 +137,7 @@ sealed class AppBarButtonPage : Component
                     AppBarButton.Create(Icons.Cancel, "Delete", () => setLast("Delete")),
                     AppBarButton.Create(Icons.Settings, "Settings", () => setLast("Settings")))
                 """),
-            ControlExample.Build("Compact AppBarButtons",
+            ExampleCard.Build("Compact AppBarButtons",
                 Strip(
                     AppBarButton.Create(Icons.Play, "Play", () => setCompactLast("Play"), isCompact: true),
                     AppBarButton.Create(Icons.Pause, "Pause", () => setCompactLast("Pause"), isCompact: true),
@@ -153,12 +150,12 @@ sealed class AppBarButtonPage : Component
                     AppBarButton.Create(Icons.Pause, "Pause", () => setCompactLast("Pause"), isCompact: true),
                     AppBarButton.Create(Icons.Stop, "Stop", () => setCompactLast("Stop"), isCompact: true))
                 """),
-            ControlExample.Build("A disabled AppBarButton",
+            ExampleCard.Build("A disabled AppBarButton",
                 Strip(AppBarButton.Create(Icons.Share, "Share", () => { }, enabled: false)),
                 code: """
                 AppBarButton.Create(Icons.Share, "Share", () => { }, enabled: false)
                 """),
-            ControlExample.Build("A keyboard accelerator",
+            ExampleCard.Build("A keyboard accelerator",
                 Strip(AppBarButton.Create(Icons.Document, "Save", () => setSaves(saves + 1),
                     accelerator: new KeyAccelerator(Keys.S, KeyModifiers.Ctrl))),
                 description: "The Ctrl+S chord invokes the button from anywhere in the window (WinUI KeyboardAccelerator).",
@@ -177,8 +174,7 @@ sealed class AppBarButtonPage : Component
     };
 }
 
-[GalleryPage("MenuBar", "MenuBar", "Menus & toolbars")]
-[Route("MenuBar")]
+[GalleryPage("MenuBar", "MenuBar", "Menus & toolbars", Icon = Icons.More)]
 sealed class MenuBarPage : Component
 {
     public override Element Render()
@@ -190,7 +186,7 @@ sealed class MenuBarPage : Component
 
         return GalleryPage.Shell("MenuBar",
             "Provides a quick and organized way to expose commands in top-level menus.",
-            ControlExample.Build("A simple MenuBar",
+            ExampleCard.Build("A simple MenuBar",
                 MenuBar.Create(new[]
                 {
                     new MenuBarItem("File", new[] { new MenuFlyoutItem("New", null, true, () => setCmd1("New")), new MenuFlyoutItem("Open", null, true, () => setCmd1("Open")), MenuFlyoutItem.Separator, new MenuFlyoutItem("Exit", null, true, () => setCmd1("Exit")) }),
@@ -207,7 +203,7 @@ sealed class MenuBarPage : Component
                     new MenuBarItem("Help", new[] { new MenuFlyoutItem("About", null, true, () => setCmd("About")) }),
                 })
                 """),
-            ControlExample.Build("Submenus, toggles, and radio items",
+            ExampleCard.Build("Submenus, toggles, and radio items",
                 MenuBar.Create(new[]
                 {
                     new MenuBarItem("File", new[]
@@ -263,7 +259,6 @@ sealed class MenuBarPage : Component
 
 // Category overview pages.
 [GalleryPage("collections", "Collections", "Overview", Hidden = true)]
-[Route("collections")]
 sealed class CollectionsOverviewPage : Component
 {
     public override Element Render()
@@ -275,7 +270,6 @@ sealed class CollectionsOverviewPage : Component
 }
 
 [GalleryPage("menus", "Menus & toolbars", "Overview", Hidden = true)]
-[Route("menus")]
 sealed class MenusOverviewPage : Component
 {
     public override Element Render()
@@ -289,8 +283,7 @@ sealed class MenusOverviewPage : Component
 // Context menus attached with ContextMenu.Attach / .WithContextMenu — the one-liner over any element. Right-click, the
 // Menu key / Shift+F10 on a focused row, or a touch long-press all open it. A non-empty Primary strip yields the
 // Explorer command-bar shape; an empty Primary yields a plain vertical menu; a null / all-disabled model opens nothing.
-[GalleryPage("ContextMenu", "ContextMenu", "Menus & toolbars")]
-[Route("ContextMenu")]
+[GalleryPage("ContextMenu", "ContextMenu", "Menus & toolbars", Icon = Icons.More)]
 sealed class ContextMenuPage : Component
 {
     static readonly string[] Tracks = { "Bohemian Rhapsody", "Stairway to Heaven", "Hotel California", "Imagine" };
@@ -369,7 +362,7 @@ sealed class ContextMenuPage : Component
         return GalleryPage.Shell("Context menu",
             "Attach a Win11-style context menu to any element in one line with ContextMenu.Attach / .WithContextMenu — "
             + "right-click, the Menu key (or Shift+F10) on a focused row, or a touch long-press all open it.",
-            ControlExample.Build("Track rows (menu style)", trackList,
+            ExampleCard.Build("Track rows (menu style)", trackList,
                 description: "Right-click a track (or focus it and press the Menu key / Shift+F10). Items build lazily at open time, so the "
                 + "toggle reflects the current “Liked” state; right-clicking another row opens its menu in one gesture; Esc or an outside click dismisses.",
                 output: BodyStrong($"Last: {last}"),
@@ -383,7 +376,7 @@ sealed class ContextMenuPage : Component
                     new MenuFlyoutItem("Copy link", Icons.Link) { AcceleratorText = "Ctrl+C" },
                 }))
                 """),
-            ControlExample.Build("Rich target (command-bar style)", card,
+            ExampleCard.Build("Rich target (command-bar style)", card,
                 description: "A non-empty Primary strip switches the body to the Explorer command-bar shape — a horizontal quick-action row over the labeled rows.",
                 output: BodyStrong($"Last: {last}"),
                 code: """
@@ -399,7 +392,7 @@ sealed class ContextMenuPage : Component
                         new("Copy link", Icons.Link) { AcceleratorText = "Ctrl+C" },
                     }))
                 """),
-            ControlExample.Build("Disabled / empty", emptyCard,
+            ExampleCard.Build("Disabled / empty", emptyCard,
                 description: "A null factory result, or a model whose entries are all disabled/separators, opens nothing — the right-click is inert.",
                 code: """
                 card.WithContextMenu(svc, () => new ContextMenuModel(

@@ -14,8 +14,7 @@ using static FluentGpu.Dsl.Ui;
 // springs, eased tracks, the per-node self-blur channel (AnimChannel.Blur), and the expressive curve/token vocabulary
 // (Easing.SmoothOut/Overshoot/Pop, Expressive.*). Each card seeds a recipe imperatively on captured nodes — the same
 // Context.Anim idiom as AnimationPage. This is an opt-in app-author palette; framework controls keep their Fluent curves.
-[GalleryPage("motion-recipes", "Motion recipes", "Patterns")]
-[Route("motion-recipes")]
+[GalleryPage("motion-recipes", "Motion recipes", "Patterns", Icon = Icons.Movie, ShotMode = ShotMode.Animated)]
 sealed class MotionRecipesPage : Component
 {
     public override Element Render() => GalleryPage.Shell("Motion recipes",
@@ -23,7 +22,7 @@ sealed class MotionRecipesPage : Component
         "animation engine. Number pop-in, error shake and the skeleton reveal lead; each recipe is one call on " +
         "Context.Anim (e.g. anim.PopIn(node), anim.Shake(node)). The new per-node BLUR channel is the perceptual " +
         "softener — a short travel reads as a full motion. All honour reduced-motion and allocate nothing per frame.",
-        ControlExample.Build("Number pop-in — staggered, blurred digits",
+        ExampleCard.Build("Number pop-in — staggered, blurred digits",
             Embed.Comp(() => new RecipeNumberPopIn()),
             description: "Each digit re-enters from below with a blurred slide on the Pop curve; the last digits stagger 70ms so decimals feel alive. The blur (2px → 0) makes the 8px travel read as a full pop.",
             code: """
@@ -31,14 +30,14 @@ sealed class MotionRecipesPage : Component
             Context.Anim.PopInStaggered(digits.Value, dirY: 1f,
                 distance: 8f, blur: 2f, durationMs: 500f, staggerMs: 70f);
             """),
-        ControlExample.Build("Error shake — per-segment cubic-bezier",
+        ExampleCard.Build("Error shake — per-segment cubic-bezier",
             Embed.Comp(() => new RecipeShake()),
             description: "A percussive left/right shake with overshoot: a multi-segment TranslateX keyframe path, the SmoothOut curve per leg. The border flips to the error color independently, so the shake can replay without re-flickering the error state.",
             code: """
             // on a validation failure:
             Context.Anim.Shake(field, distance: 6f, overshoot: 4f);   // 280ms, A,A,B,B legs
             """),
-        ControlExample.Build("Skeleton loader → reveal",
+        ExampleCard.Build("Skeleton loader → reveal",
             Embed.Comp(() => new RecipeSkeleton()),
             description: "The placeholder bars pulse (looping opacity); when data arrives the real content cross-fades in with a matching cross-blur (SoftReveal). The skeleton stays in the same slot, so the swap is layout-free.",
             code: """
@@ -46,7 +45,7 @@ sealed class MotionRecipesPage : Component
             // when loaded → swap to the content component, which calls:
             this.UseSoftReveal();                                            // opacity + blur rise
             """),
-        ControlExample.Build("Success check — fade + rotate + bob + draw-on",
+        ExampleCard.Build("Success check — fade + rotate + bob + draw-on",
             Embed.Comp(() => new RecipeSuccessCheck()),
             description: "The badge fades in, un-rotates from 80°, bobs up with a settle, and un-blurs from 8px — while the checkmark path draws itself on via the engine's stroke-trim channel (the same mechanism as the CheckBox glyph).",
             code: """
@@ -54,26 +53,26 @@ sealed class MotionRecipesPage : Component
             Context.UseKeyframes(AnimChannel.StrokeTrimEnd,                 // the line draws on
                 [new(0f, 0f, Easing.Linear), new(1f, 1f, Easing.SmoothOut)], 500f, false, key);
             """),
-        ControlExample.Build("Icon swap — blurred scale cross-fade",
+        ExampleCard.Build("Icon swap — blurred scale cross-fade",
             Embed.Comp(() => new RecipeIconSwap()),
             description: "The replacement glyph grows from 0.25 scale with a blurred fade-in (ease-in-out). Swap the glyph, then play the recipe on the new icon.",
             code: """
             Context.Anim.IconSwapIn(icon);                                 // scale 0.25→1 + blur + fade
             """),
-        ControlExample.Build("Notification badge — overshoot pop",
+        ExampleCard.Build("Notification badge — overshoot pop",
             Embed.Comp(() => new RecipeBadge()),
             description: "The dot slides onto the trigger and pops with a low-damping spring (the overshoot as physics, so a re-trigger mid-flight stays velocity-continuous), fading and un-blurring as it lands.",
             code: """
             Context.Anim.BadgePop(dot, offsetX: -8f, offsetY: 12f);
             """),
-        ControlExample.Build("Texts reveal — staggered blurred rise",
+        ExampleCard.Build("Texts reveal — staggered blurred rise",
             Embed.Comp(() => new RecipeTextsReveal()),
             description: "Stacked lines rise in with a blurred fade, each 40ms behind the last (SoftRevealStaggered) — hero copy, empty states, onboarding steps.",
             code: """
             Context.Anim.SoftRevealStaggered(lines.Value, dy: 12f, blur: 3f,
                 durationMs: 500f, staggerMs: 40f);
             """),
-        ControlExample.Build("Avatar group hover — distance falloff",
+        ExampleCard.Build("Avatar group hover — distance falloff",
             Embed.Comp(() => new RecipeNeighborLift()),
             description: "Hovering an item lifts it and its neighbours with an exponential falloff (lift·0.45^distance), each on a spring; on release the row springs back bouncy. Try the buttons to move the active item.",
             code: """

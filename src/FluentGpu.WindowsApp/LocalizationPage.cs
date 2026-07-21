@@ -20,8 +20,7 @@ using Strings = FluentGpu.WindowsApp.Strings;
 // live slider — watch the form change across en one/other and pl one/few/many), ICU select (gender), and a pseudo-loc
 // toggle. The language picker re-renders ONLY itself (a scoped Component reading UseLocale) to move the selection.
 
-[GalleryPage("localization", "Localization", "App services")]
-[Route("localization")]
+[GalleryPage("localization", "Localization", "App services", Icon = Icons.Globe)]
 sealed class LocalizationPage : Component
 {
     // Cultures offered by the picker (must have a loaded JSON table). qps-ploc is the pseudo dev-locale.
@@ -98,7 +97,7 @@ sealed class LocLivePanel : Component
                      "folder, and pick the startup culture. The portable engine has no Win32, so OS-culture detection is " +
                      "host-injected via OsCultureProvider.").Secondary(),
 
-                ControlExample.Build("1 · Author the JSON resources",
+                ExampleCard.Build("1 · Author the JSON resources",
                     new BoxEl
                     {
                         Direction = 1, Gap = 2f,
@@ -124,7 +123,7 @@ sealed class LocLivePanel : Component
                     // fr-FR.json may OMIT keys (e.g. the whole "player" namespace) — they fall back per key to fr.json -> en-US.
                     """),
 
-                ControlExample.Build("2 · Wire OS-culture detection + the terminal fallback",
+                ExampleCard.Build("2 · Wire OS-culture detection + the terminal fallback",
                     GalleryPage.LiveText(() => $"OS UI culture: {Localization.DetectOsCulture()}   ·   DefaultCulture: {Localization.DefaultCulture}"),
                     description: "OsCultureProvider is host-injected (the Windows app supplies GetUserDefaultLocaleName via " +
                                  "WindowsApiInterop.GetOsUiCultureName). DefaultCulture is the terminal fallback when a key " +
@@ -139,7 +138,7 @@ sealed class LocLivePanel : Component
                     Localization.LoadFolder(dir);                                             // load every *.json
                     """),
 
-                ControlExample.Build("3 · Pick the startup culture",
+                ExampleCard.Build("3 · Pick the startup culture",
                     Embed.Comp(() => new LanguagePicker()),
                     description: "UseOsCulture() detects the OS UI culture and switches to it IF a table exists (else no-op); " +
                                  "or call SetCulture(name) directly. SetCulture is UI-thread-only — it bumps CultureEpoch, " +
@@ -169,7 +168,7 @@ sealed class LocLivePanel : Component
                      "component does not re-render. Reach for the re-rendering UseLocale() hook only when render itself " +
                      "must branch on the culture (e.g. a language picker moving its selection).").Secondary(),
 
-                ControlExample.Build("L(key) / Lf(key, args) — reactive, no re-render",
+                ExampleCard.Build("L(key) / Lf(key, args) — reactive, no re-render",
                     new BoxEl
                     {
                         Direction = 1, Gap = 4f,
@@ -200,7 +199,7 @@ sealed class LocLivePanel : Component
                      "Loc.Format — no reflection, no satellite assemblies. Every Strings.* identifier on this page is " +
                      "generator output.").Secondary(),
 
-                ControlExample.Build("Wire the generator (csproj)",
+                ExampleCard.Build("Wire the generator (csproj)",
                     new TextEl("Mark the base JSON FluentGpuLocBase=\"true\"; reference the generator as an Analyzer.") { Size = 13f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap },
                     description: "AdditionalFiles feeds the base culture to the generator; CompilerVisibleItemMetadata " +
                                  "surfaces the FluentGpuLocBase flag; the ProjectReference loads it as an analyzer (kept out " +
@@ -222,7 +221,7 @@ sealed class LocLivePanel : Component
                     </ItemGroup>
                     """),
 
-                ControlExample.Build("Typed keys & format methods",
+                ExampleCard.Build("Typed keys & format methods",
                     new BoxEl
                     {
                         Direction = 1, Gap = 4f,
@@ -267,7 +266,7 @@ sealed class LocLivePanel : Component
                      "are live — switch language above and watch the forms change.").Secondary(),
 
                 // ── Dotted-key strings ────────────────────────────────────────────────────────────────────────────
-                ControlExample.Build("Dotted-key strings",
+                ExampleCard.Build("Dotted-key strings",
                     new BoxEl
                     {
                         Direction = 1, Gap = 4f,
@@ -286,7 +285,7 @@ sealed class LocLivePanel : Component
                     """),
 
                 // ── Named placeholders ────────────────────────────────────────────────────────────────────────────
-                ControlExample.Build("Named placeholders {name}",
+                ExampleCard.Build("Named placeholders {name}",
                     new BoxEl
                     {
                         Direction = 1, Gap = 4f,
@@ -303,7 +302,7 @@ sealed class LocLivePanel : Component
                     """),
 
                 // ── ICU plural (live count) ───────────────────────────────────────────────────────────────────────
-                ControlExample.Build("ICU plural {count, plural, …}",
+                ExampleCard.Build("ICU plural {count, plural, …}",
                     new BoxEl
                     {
                         Direction = 1, Gap = 10f,
@@ -338,7 +337,7 @@ sealed class LocLivePanel : Component
                     """),
 
                 // ── ICU select (gender) ───────────────────────────────────────────────────────────────────────────
-                ControlExample.Build("ICU select {gender, select, …}",
+                ExampleCard.Build("ICU select {gender, select, …}",
                     new BoxEl
                     {
                         Direction = 1, Gap = 4f,
@@ -356,7 +355,7 @@ sealed class LocLivePanel : Component
                     """),
 
                 // ── Pseudo-localization toggle ────────────────────────────────────────────────────────────────────
-                ControlExample.Build("Pseudo-localization",
+                ExampleCard.Build("Pseudo-localization",
                     Embed.Comp(() => new PseudoToggle()),
                     description: "A dev QA transform RESW lacks: accents every letter (á-é-ö …) and expands ~+40% with " +
                                  "brackets ⟦…⟧, so un-localized literals and layout overflow jump out. Placeholders are " +

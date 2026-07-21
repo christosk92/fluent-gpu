@@ -8,8 +8,7 @@ using static FluentGpu.Dsl.Ui;
 
 // ── TeachingTip / Popup / ItemsView / TextBlock / Border / AppBarSeparator demo pages (batch 5) ──────────
 
-[GalleryPage("TeachingTip", "TeachingTip", "Dialogs & flyouts")]
-[Route("TeachingTip")]
+[GalleryPage("TeachingTip", "TeachingTip", "Dialogs & flyouts", Icon = Icons.Star)]
 sealed class TeachingTipPage : Component
 {
     public override Element Render()
@@ -17,14 +16,14 @@ sealed class TeachingTipPage : Component
         var (closed, setClosed) = UseState("—");
         return GalleryPage.Shell("TeachingTip",
             "A non-modal, contextual callout that highlights a feature or teaches the user something.",
-            ControlExample.Build("A TeachingTip",
+            ExampleCard.Build("A TeachingTip",
                 TeachingTip.Create("Show teaching tip", "Save your work", "Click the disk icon, or press Ctrl+S, to save your changes."),
                 description: "With no CloseButtonContent the close moves to the 40×40 header (alternate) close button; the tip is not light-dismiss — only the close button or Escape dismisses it.",
                 code: """
                 TeachingTip.Create("Show teaching tip", "Save your work",
                     "Click the disk icon, or press Ctrl+S, to save your changes.")
                 """),
-            ControlExample.Build("A TeachingTip with action and close buttons",
+            ExampleCard.Build("A TeachingTip with action and close buttons",
                 Embed.Comp(() => new TeachingTip
                 {
                     TriggerLabel = "Show tip with buttons",
@@ -55,7 +54,7 @@ sealed class TeachingTipPage : Component
                     Closed = r => setClosed(r.ToString()),
                 })
                 """),
-            ControlExample.Build("Hero content and preferred placement",
+            ExampleCard.Build("Hero content and preferred placement",
                 Embed.Comp(() => new TeachingTip
                 {
                     TriggerLabel = "Show tip with hero content",
@@ -90,13 +89,12 @@ sealed class TeachingTipPage : Component
     }
 }
 
-[GalleryPage("Popup", "Popup", "Dialogs & flyouts")]
-[Route("Popup")]
+[GalleryPage("Popup", "Popup", "Dialogs & flyouts", Icon = Icons.More)]
 sealed class PopupPage : Component
 {
     public override Element Render() => GalleryPage.Shell("Popup",
         "Displays content on top of existing content, shown and hidden programmatically.",
-        ControlExample.Build("A Popup",
+        ExampleCard.Build("A Popup",
             Embed.Comp(() => new PopupDemo
             {
                 TriggerLabel = "Show popup",
@@ -110,7 +108,7 @@ sealed class PopupPage : Component
                 () => new BoxEl { Padding = Edges4.All(16), Children = [Ui.Text("…")] },
                 isOpen);
             """),
-        ControlExample.Build("A windowed Popup",
+        ExampleCard.Build("A windowed Popup",
             Embed.Comp(() => new PopupDemo
             {
                 TriggerLabel = "Show windowed popup",
@@ -150,13 +148,12 @@ sealed class PopupDemo : Component
     }
 }
 
-[GalleryPage("Toast", "Toast", "Dialogs & flyouts")]
-[Route("Toast")]
+[GalleryPage("Toast", "Toast", "Dialogs & flyouts", Icon = Icons.More)]
 sealed class ToastPage : Component
 {
     public override Element Render() => GalleryPage.Shell("Toast",
         "Transient in-app status messages, stacked at a screen corner and auto-dismissing.",
-        ControlExample.Build("Severities",
+        ExampleCard.Build("Severities",
             HStack(8f,
                 Button.Standard("Info",    () => Toast.Show("Your changes are being synced.", new ToastOptions { Severity = InfoBarSeverity.Informational, Title = "Syncing" })),
                 Button.Standard("Success", () => Toast.Show("Playlist saved.", new ToastOptions { Severity = InfoBarSeverity.Success, Title = "Saved" })),
@@ -168,7 +165,7 @@ sealed class ToastPage : Component
                 Severity = InfoBarSeverity.Success, Title = "Saved",
             });
             """),
-        ControlExample.Build("With an action + sticky",
+        ExampleCard.Build("With an action + sticky",
             HStack(8f,
                 Button.Standard("With action", () => Toast.Show("A newer version is available.",
                     new ToastOptions { Severity = InfoBarSeverity.Informational, Title = "Update", ActionLabel = "Reload", OnAction = () => { } })),
@@ -185,7 +182,7 @@ sealed class ToastPage : Component
         // NAMING NOTE (WS3 P6): FluentGpu.Controls.Toast (this page) is the IN-APP toast — a card in the app window.
         // It is distinct from FluentGpu.WindowsApi's OS notification Toast (Action Center), which lives in a different
         // namespace and surfaces at the OS level.
-        ControlExample.Build("In-app toast vs OS notification",
+        ExampleCard.Build("In-app toast vs OS notification",
             new BoxEl
             {
                 Direction = 1,
@@ -199,8 +196,7 @@ sealed class ToastPage : Component
             description: "Two unrelated APIs share the name Toast: the in-app card here, and the OS notification builder in the Windows pillar."));
 }
 
-[GalleryPage("ItemsView", "ItemsView", "Collections")]
-[Route("ItemsView")]
+[GalleryPage("ItemsView", "ItemsView", "Collections", Icon = Icons.Grid)]
 sealed class ItemsViewPage : Component
 {
     static readonly string[] Items = { "Photo 1", "Photo 2", "Photo 3", "Photo 4", "Photo 5", "Photo 6", "Photo 7", "Photo 8" };
@@ -256,14 +252,14 @@ sealed class ItemsViewPage : Component
         return GalleryPage.Shell("ItemsView",
             "The premiere collection control — every layout × selection mode × selector visual, with built-in drag-reorder.",
             // ── the 4 original ItemsView cards (UNCHANGED) ───────────────────────────────────────────────────────
-            ControlExample.Build("An ItemsView", ItemsView.Create(Items, columns: 4),
+            ExampleCard.Build("An ItemsView", ItemsView.Create(Items, columns: 4),
                 description: "Single selection (the default): click a tile or arrow-key between them; type to jump by prefix.",
                 code: """
                 static readonly string[] Items = { "Photo 1", "Photo 2", "Photo 3", "Photo 4", "Photo 5", "Photo 6", "Photo 7", "Photo 8" };
 
                 ItemsView.Create(Items, columns: 4)
                 """),
-            ControlExample.Build("Multiple selection",
+            ExampleCard.Build("Multiple selection",
                 ItemsView.Create(Items.Length, i => Tile(Items[i]), RepeatLayout.Grid(4, 80f, 8f),
                     new ListOptions
                     {
@@ -286,7 +282,7 @@ sealed class ItemsViewPage : Component
                         Grow = 0f,
                     })
                 """),
-            ControlExample.Build("Item invocation",
+            ExampleCard.Build("Item invocation",
                 ItemsView.Create(Items.Length, i => Tile(Items[i]), RepeatLayout.Grid(4, 80f, 8f),
                     new ListOptions
                     {
@@ -311,7 +307,7 @@ sealed class ItemsViewPage : Component
                         Grow = 0f,
                     })
                 """),
-            ControlExample.Build("The photo wall (LinedFlowLayout)",
+            ExampleCard.Build("The photo wall (LinedFlowLayout)",
                 ItemsView.Create(24, WallTile, RepeatLayout.Custom(wall),
                     new ListOptions
                     {
@@ -333,7 +329,7 @@ sealed class ItemsViewPage : Component
                 """),
 
             // ── 1) the INTERACTIVE selector-visual picker ────────────────────────────────────────────────────────
-            ControlExample.Build("Pick a selector visual",
+            ExampleCard.Build("Pick a selector visual",
                 ItemsView.Create(Items.Length, i => Tile(Items[i]), RepeatLayout.Stack(44f),
                     new ListOptions
                     {
@@ -364,7 +360,7 @@ sealed class ItemsViewPage : Component
 
             // ── 2) List preset (AccentPill) — absorbs the 3 deleted ListViewPage examples ─────────────────────────
             BodyStrong("List preset (AccentPill)"),
-            ControlExample.Build("A simple list",
+            ExampleCard.Build("A simple list",
                 ListCard(ItemsView.List(Coffees, listSel)),
                 description: "ItemsView.List(items, selection) is the former ListView: a vertical accent-pill list. A default selection keeps the accent bar visible.",
                 output: GalleryPage.LiveText(() => listSel.Value >= 0 ? Coffees[listSel.Value] : "—"),
@@ -374,7 +370,7 @@ sealed class ItemsViewPage : Component
 
                 ItemsView.List(Coffees, selected)
                 """),
-            ControlExample.Build("Multiple selection",
+            ExampleCard.Build("Multiple selection",
                 ListCard(ItemsView.List(Coffees.Length,
                     i => new TextEl(Coffees[i]) { Size = 14f, Color = Tok.TextPrimary, Grow = 1f },
                     selectionMode: ItemsSelectionMode.Multiple,
@@ -391,7 +387,7 @@ sealed class ItemsViewPage : Component
                     selection: multi,
                     itemText: i => Coffees[i])
                 """),
-            ControlExample.Build("Drag to reorder",
+            ExampleCard.Build("Drag to reorder",
                 ListCard(ItemsView.List(drinks.Count,
                     i => new TextEl(drinks[i]) { Size = 14f, Color = Tok.TextPrimary, Grow = 1f },
                     canReorderItems: true,
@@ -414,14 +410,14 @@ sealed class ItemsViewPage : Component
 
             // ── 3) Grid preset (Check) — absorbs the 3 deleted GridViewPage examples ──────────────────────────────
             BodyStrong("Grid preset (Check)"),
-            ControlExample.Build("A simple grid", ItemsView.Grid(GridItems, columns: 4),
+            ExampleCard.Build("A simple grid", ItemsView.Grid(GridItems, columns: 4),
                 description: "ItemsView.Grid(items, columns) is the former GridView: a tile grid with the top-right corner-check selector.",
                 code: """
                 static readonly string[] GridItems = { "Item 1", "Item 2", "Item 3", "Item 4", "Item 5", "Item 6", "Item 7", "Item 8" };
 
                 ItemsView.Grid(GridItems, columns: 4)
                 """),
-            ControlExample.Build("Multiple selection",
+            ExampleCard.Build("Multiple selection",
                 ItemsView.Grid(GridItems.Length, i => Tile(GridItems[i]), columns: 4, tileHeight: 96f,
                     selectionMode: ItemsSelectionMode.Multiple,
                     selection: gridMulti,
@@ -436,7 +432,7 @@ sealed class ItemsViewPage : Component
                     selection: multi,
                     itemText: i => GridItems[i])
                 """),
-            ControlExample.Build("Drag to reorder",
+            ExampleCard.Build("Drag to reorder",
                 ItemsView.Grid(colors.Count, i => Tile(colors[i]), columns: 4, tileHeight: 96f,
                     canReorderItems: true,
                     onReorder: (from, to) => { ReorderList.Move(colors, from, to); gridOrder.Value = gridOrder.Peek() + 1; },
@@ -454,7 +450,7 @@ sealed class ItemsViewPage : Component
                 """),
 
             // ── 4) Per-item customization (PartDelta) — the newly-legal per-item-variation seam ────────────────────
-            ControlExample.Build("Per-item customization (PartDelta)",
+            ExampleCard.Build("Per-item customization (PartDelta)",
                 ItemsView.Create(Swatches.Length, i => Tile(Swatches[i].Name), RepeatLayout.Stack(44f),
                     new ListOptions
                     {
@@ -497,19 +493,18 @@ sealed class ItemsViewPage : Component
     static Element ListCard(Element list) => new BoxEl { Width = 280, Corners = Radii.OverlayAll, BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f, Padding = new Edges4(0, 4, 0, 4), Children = [list] };
 }
 
-[GalleryPage("TextBlock", "TextBlock", "Text")]
-[Route("TextBlock")]
+[GalleryPage("TextBlock", "TextBlock", "Text", Icon = Icons.Font)]
 sealed class TextBlockPage : Component
 {
     const string LongText = "Text wrapping flows this sentence onto as many lines as its 320 epx column needs, breaking between words exactly like a WinUI TextBlock.";
 
     public override Element Render() => GalleryPage.Shell("TextBlock",
         "Displays read-only, formatted text — the foundation of the WinUI type ramp.",
-        ControlExample.Build("A simple TextBlock", TextBlocks.Body("I am a TextBlock."),
+        ExampleCard.Build("A simple TextBlock", TextBlocks.Body("I am a TextBlock."),
             code: """
             TextBlocks.Body("I am a TextBlock.")
             """),
-        ControlExample.Build("The type ramp",
+        ExampleCard.Build("The type ramp",
             VStack(8,
                 TextBlocks.Title("Title"),
                 TextBlocks.Subtitle("Subtitle"),
@@ -524,7 +519,7 @@ sealed class TextBlockPage : Component
                 TextBlocks.Body("Body — the default paragraph text used across the app."),
                 TextBlocks.Caption("Caption — secondary metadata and timestamps."))
             """),
-        ControlExample.Build("A customized TextBlock",
+        ExampleCard.Build("A customized TextBlock",
             VStack(8,
                 new TextEl("I am a styled TextBlock.") { Size = 18f, Bold = true, Color = Tok.AccentDefault },
                 new TextEl("Underlined for emphasis.") { Size = 14f, Underline = true, Color = Tok.TextPrimary },
@@ -537,7 +532,7 @@ sealed class TextBlockPage : Component
                 new TextEl("No longer relevant.") { Size = 14f, Strikethrough = true, Color = Tok.TextSecondary },
                 new TextEl("A monospace code run.") { Size = 14f, FontFamily = "Cascadia Code", Color = Tok.TextPrimary })
             """),
-        ControlExample.Build("Text wrapping and trimming",
+        ExampleCard.Build("Text wrapping and trimming",
             VStack(12,
                 new BoxEl { Width = 320f, Children = [new TextEl(LongText) { Size = 14f, Color = Tok.TextPrimary, Wrap = TextWrap.Wrap }] },
                 new BoxEl { Width = 320f, Children = [new TextEl(LongText) { Size = 14f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, MaxLines = 2 }] }),
@@ -551,8 +546,7 @@ sealed class TextBlockPage : Component
             """));
 }
 
-[GalleryPage("Border", "Border", "Layout")]
-[Route("Border")]
+[GalleryPage("Border", "Border", "Layout", Icon = Icons.Grid)]
 sealed class BorderPage : Component
 {
     public override Element Render()
@@ -562,13 +556,13 @@ sealed class BorderPage : Component
 
         return GalleryPage.Shell("Border",
             "Draws a border, background, and rounded corners around a single child element.",
-            ControlExample.Build("A Border",
+            ExampleCard.Build("A Border",
                 Border.Create(new TextEl("Content inside a Border") { Size = 14f, Color = Tok.TextPrimary }, cornerRadius: 8f, padding: 20f),
                 code: """
                 Border.Create(new TextEl("Content inside a Border") { Size = 14f, Color = Tok.TextPrimary },
                     cornerRadius: 8f, padding: 20f)
                 """),
-            ControlExample.Build("Border thickness and color",
+            ExampleCard.Build("Border thickness and color",
                 Border.Create(new TextEl("Content inside an accent Border") { Size = 14f, Color = Tok.TextPrimary },
                     borderWidth: thickness, cornerRadius: 8f, borderColor: Tok.AccentDefault, padding: 20f),
                 options: Slider.Create(t, length: 200f, options: new Slider.SliderOptions { Header = "BorderThickness" }),
@@ -580,7 +574,7 @@ sealed class BorderPage : Component
                 Border.Create(new TextEl("Content inside an accent Border") { Size = 14f, Color = Tok.TextPrimary },
                     borderWidth: thickness, cornerRadius: 8f, borderColor: Tok.AccentDefault, padding: 20f)
                 """),
-            ControlExample.Build("A background with no border",
+            ExampleCard.Build("A background with no border",
                 Border.Create(new TextEl("Background only") { Size = 14f, Color = Tok.TextPrimary },
                     borderWidth: 0f, cornerRadius: 8f, background: Tok.FillSubtleSecondary, padding: 20f),
                 code: """
@@ -590,13 +584,12 @@ sealed class BorderPage : Component
     }
 }
 
-[GalleryPage("AppBarSeparator", "AppBarSeparator", "Menus & toolbars")]
-[Route("AppBarSeparator")]
+[GalleryPage("AppBarSeparator", "AppBarSeparator", "Menus & toolbars", Icon = Icons.More)]
 sealed class AppBarSeparatorPage : Component
 {
     public override Element Render() => GalleryPage.Shell("AppBarSeparator",
         "A thin vertical divider that separates groups of commands in a CommandBar.",
-        ControlExample.Build("Commands with a separator",
+        ExampleCard.Build("Commands with a separator",
             new BoxEl
             {
                 Direction = 0, Gap = 4, AlignItems = FlexAlign.Center, Padding = new Edges4(8, 6, 8, 6), Corners = Radii.OverlayAll,
@@ -617,7 +610,7 @@ sealed class AppBarSeparatorPage : Component
                 AppBarSeparator.Create(),
                 AppBarButton.Create(Icons.Cancel, "Delete", () => { }))
             """),
-        ControlExample.Build("The Overflow state",
+        ExampleCard.Build("The Overflow state",
             new BoxEl
             {
                 Direction = 1, Width = 220f, Padding = Edges4.All(4), Corners = Radii.OverlayAll,

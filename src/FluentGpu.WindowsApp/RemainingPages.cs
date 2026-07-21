@@ -7,8 +7,7 @@ using static FluentGpu.Dsl.Ui;
 
 // ── ProgressRing / RelativePanel / VariableSizedWrapGrid / AnnotatedScrollBar / SwipeControl / MediaPlayerElement ──
 
-[GalleryPage("ProgressRing", "ProgressRing", "Status & info")]
-[Route("ProgressRing")]
+[GalleryPage("ProgressRing", "ProgressRing", "Status & info", Icon = Icons.Refresh)]
 sealed class ProgressRingPage : Component
 {
     public override Element Render()
@@ -17,7 +16,7 @@ sealed class ProgressRingPage : Component
         var value = UseFloatSignal(0.7f);
         return GalleryPage.Shell("ProgressRing",
             "A circular progress indicator — determinate (a known fraction) or indeterminate (ongoing).",
-            ControlExample.Build("An indeterminate ProgressRing",
+            ExampleCard.Build("An indeterminate ProgressRing",
                 HStack(24, ProgressRing.Indeterminate(isActive: active.Value), ToggleSwitch.Create(active, onContent: "Working", offContent: "Do work")),
                 output: BodyStrong(active.Value ? "Active" : "Inactive"),
                 code: """
@@ -28,7 +27,7 @@ sealed class ProgressRingPage : Component
                     ToggleSwitch.Create(active,
                         onContent: "Working", offContent: "Do work"))
                 """),
-            ControlExample.Build("A determinate ProgressRing",
+            ExampleCard.Build("A determinate ProgressRing",
                 HStack(24, ProgressRing.Determinate(value.Value), Slider.Create(value, length: 200f)),
                 output: BodyStrong($"{(int)(value.Value * 100)}%"),
                 code: """
@@ -38,27 +37,26 @@ sealed class ProgressRingPage : Component
                     ProgressRing.Determinate(value.Value),
                     Slider.Create(value, length: 200f))
                 """),
-            ControlExample.Build("A determinate ProgressRing with a visible track", ProgressRing.Determinate(0.7f, track: Tok.FillControlStrong),
+            ExampleCard.Build("A determinate ProgressRing with a visible track", ProgressRing.Determinate(0.7f, track: Tok.FillControlStrong),
                 code: """
                 // WinUI's default ring Background is transparent — pass a track color to show the full circle.
                 ProgressRing.Determinate(0.7f, track: Tok.FillControlStrong)
                 """),
-            ControlExample.Build("A ProgressRing with a custom size", ProgressRing.Indeterminate(size: 64f),
+            ExampleCard.Build("A ProgressRing with a custom size", ProgressRing.Indeterminate(size: 64f),
                 code: """
                 ProgressRing.Indeterminate(size: 64f)
                 """));
     }
 }
 
-[GalleryPage("RelativePanel", "RelativePanel", "Layout")]
-[Route("RelativePanel")]
+[GalleryPage("RelativePanel", "RelativePanel", "Layout", Icon = Icons.Grid)]
 sealed class RelativePanelPage : Component
 {
     static Element Chip(string s) => new BoxEl { Padding = new Edges4(12, 8, 12, 8), Corners = Radii.ControlAll, Fill = Tok.FillCardDefault, BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f, Children = [new TextEl(s) { Size = 13f, Color = Tok.TextPrimary }] };
 
     public override Element Render() => GalleryPage.Shell("RelativePanel",
         "Positions child elements relative to the panel and to each other.",
-        ControlExample.Build("A RelativePanel",
+        ExampleCard.Build("A RelativePanel",
             new BoxEl { Corners = Radii.OverlayAll, BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f, ClipToBounds = true, Children =
             [
                 RelativePanel.Create(400, 160, new[]
@@ -80,7 +78,7 @@ sealed class RelativePanelPage : Component
                 new RelativeChild(12, 118, Chip("Bottom")),
             })
             """),
-        ControlExample.Build("Overlap and z-order (later children draw on top)",
+        ExampleCard.Build("Overlap and z-order (later children draw on top)",
             new BoxEl { Corners = Radii.OverlayAll, BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f, ClipToBounds = true, Children =
             [
                 RelativePanel.Create(240, 120, new[]
@@ -101,13 +99,12 @@ sealed class RelativePanelPage : Component
             """));
 }
 
-[GalleryPage("VariableSizedWrapGrid", "VariableSizedWrapGrid", "Layout")]
-[Route("VariableSizedWrapGrid")]
+[GalleryPage("VariableSizedWrapGrid", "VariableSizedWrapGrid", "Layout", Icon = Icons.Grid)]
 sealed class VariableSizedWrapGridPage : Component
 {
     public override Element Render() => GalleryPage.Shell("VariableSizedWrapGrid",
         "A grid that wraps tiles of varying column/row spans.",
-        ControlExample.Build("A VariableSizedWrapGrid", VariableSizedWrapGrid.Create(new[]
+        ExampleCard.Build("A VariableSizedWrapGrid", VariableSizedWrapGrid.Create(new[]
         {
             new WrapTile("1", 2, 1), new WrapTile("2", 1, 1), new WrapTile("3", 1, 1),
             new WrapTile("4", 1, 1), new WrapTile("5", 1, 1), new WrapTile("6", 2, 1),
@@ -120,7 +117,7 @@ sealed class VariableSizedWrapGridPage : Component
                 new WrapTile("4", 1, 1), new WrapTile("5", 1, 1), new WrapTile("6", 2, 1),
             })
             """),
-        ControlExample.Build("Row spans with a custom cell size and column count", VariableSizedWrapGrid.Create(new[]
+        ExampleCard.Build("Row spans with a custom cell size and column count", VariableSizedWrapGrid.Create(new[]
         {
             new WrapTile("Tall", 1, 2), new WrapTile("Wide", 2, 1), new WrapTile("1x1", 1, 1),
             new WrapTile("1x1", 1, 1), new WrapTile("Big", 2, 2),
@@ -135,8 +132,7 @@ sealed class VariableSizedWrapGridPage : Component
             """));
 }
 
-[GalleryPage("AnnotatedScrollBar", "AnnotatedScrollBar", "Scrolling")]
-[Route("AnnotatedScrollBar")]
+[GalleryPage("AnnotatedScrollBar", "AnnotatedScrollBar", "Scrolling", Icon = Icons.More)]
 sealed class AnnotatedScrollBarPage : Component
 {
     public override Element Render()
@@ -147,7 +143,7 @@ sealed class AnnotatedScrollBarPage : Component
         var pos = UseSignal(0.2f);
         return GalleryPage.Shell("AnnotatedScrollBar",
             "A scrollbar enhanced with labels/annotations alongside the rail.",
-            ControlExample.Build("An AnnotatedScrollBar beside a content region (click, drag, or hold the buttons)",
+            ExampleCard.Build("An AnnotatedScrollBar beside a content region (click, drag, or hold the buttons)",
                 new BoxEl
                 {
                     Direction = 0, Height = 280f, Gap = 12f,
@@ -177,13 +173,12 @@ sealed class AnnotatedScrollBarPage : Component
     }
 }
 
-[GalleryPage("SwipeControl", "SwipeControl", "Menus & toolbars")]
-[Route("SwipeControl")]
+[GalleryPage("SwipeControl", "SwipeControl", "Menus & toolbars", Icon = Icons.More)]
 sealed class SwipeControlPage : Component
 {
     public override Element Render() => GalleryPage.Shell("SwipeControl",
         "Reveals contextual actions (e.g. archive, delete) by swiping a list item.",
-        ControlExample.Build("A SwipeControl with reveal items", SwipeControl.Create("Quarterly report.docx", new[]
+        ExampleCard.Build("A SwipeControl with reveal items", SwipeControl.Create("Quarterly report.docx", new[]
         {
             new SwipeAction(Icons.Accept, "Archive"),
             new SwipeAction(Icons.Cancel, "Delete", ColorF.FromRgba(0xC4, 0x2B, 0x1C)),
@@ -196,7 +191,7 @@ sealed class SwipeControlPage : Component
                 new SwipeAction(Icons.Cancel, "Delete", ColorF.FromRgba(0xC4, 0x2B, 0x1C)),
             })
             """),
-        ControlExample.Build("A SwipeControl with a single execute item", SwipeControl.Create("Inbox — 14 unread", new[]
+        ExampleCard.Build("A SwipeControl with a single execute item", SwipeControl.Create("Inbox — 14 unread", new[]
         {
             new SwipeAction(Icons.Cancel, "Delete", ColorF.FromRgba(0xC4, 0x2B, 0x1C)),
         }),
@@ -209,8 +204,7 @@ sealed class SwipeControlPage : Component
             """));
 }
 
-[GalleryPage("MediaPlayerElement", "MediaPlayerElement", "Media")]
-[Route("MediaPlayerElement")]
+[GalleryPage("MediaPlayerElement", "MediaPlayerElement", "Media", Icon = Icons.Movie, ShotMode = ShotMode.Skip)]
 sealed class MediaPlayerElementPage : Component
 {
     public override Element Render()
@@ -220,7 +214,7 @@ sealed class MediaPlayerElementPage : Component
         var player = UseMediaPlayer();
         return GalleryPage.Shell("MediaPlayerElement",
             "Plays video and audio with built-in transport controls.",
-            ControlExample.Build("A MediaPlayerElement",
+            ExampleCard.Build("A MediaPlayerElement",
                 new BoxEl { Width = 480f, Height = 300f, Children = [Embed.Comp(() => new FluentGpu.Controls.Media.MediaPlayerElement { Player = player })] },
                 description: "The real MediaPlayerElement bound to a headless player. With no source it degrades to audio-only chrome; the Desktop Video page drives a live Media Foundation clear-video surface.",
                 code: """

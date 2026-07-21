@@ -18,8 +18,7 @@ readonly record struct IconInfo(string Code, string Name, string[] Tags)
     public string Glyph => char.ConvertFromUtf32(Convert.ToInt32(Code, 16));
 }
 
-[GalleryPage("icons", "Iconography", "Design")]
-[Route("icons")]
+[GalleryPage("icons", "Iconography", "Design", Icon = Icons.Star)]
 sealed class IconsPage : Component
 {
     static IconInfo[]? _all;

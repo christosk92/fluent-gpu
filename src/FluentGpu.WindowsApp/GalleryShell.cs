@@ -9,17 +9,18 @@ using FluentGpu.Hooks;
 using FluentGpu.Signals;
 using static FluentGpu.Dsl.Ui;
 
-// ── GalleryShell (WS7 W7.0) ───────────────────────────────────────────────────────────────────────────────────────
-// The registry-driven capability gallery: the nav tree, search index, and page factory are ALL derived from the one
-// source of truth — the generated FluentGpu.Generated.GalleryRegistry ([GalleryPage] tags) — via a RouteRegistry bridge
-// + the hand-authored GallerySections IA table. It replaces GalleryApp's three hand-synced tables (NavItem tree /
-// ControlCatalog / search index) and the 100-arm page switch: the compile IS the sync check. Built on the REAL
-// Navigator (Route.Name = page key) wired into NavigationView; deep-linkable via InitialPage; the SoakProbe
-// StressNavigate seam is preserved (keys now come from the registry).
+// ── GalleryShell (WS7 W7.0 + G8b) ─────────────────────────────────────────────────────────────────────────────────
+// The registry-driven capability gallery: the nav tree, search index, page factory, All-controls grid, and shot sweep
+// are ALL derived from the one source of truth — the generated FluentGpu.Generated.GalleryRegistry ([GalleryPage] tags)
+// — via a RouteRegistry bridge + the hand-authored GallerySections IA table. It fully replaces the former GalleryApp
+// (deleted in G8b) and its three hand-synced tables (NavItem tree / ControlCatalog / search index) + the 100-arm page
+// switch: the compile IS the sync check. Built on the REAL Navigator (Route.Name = page key) wired into NavigationView;
+// deep-linkable via InitialPage; the SoakProbe StressNavigate seam is preserved (keys come from the registry).
 //
-// NOTE (G8b remainder): the Ctrl+K command palette and the CanGoBack/Pop TitleBar back button are deferred — the shell
-// mirrors GalleryApp's proven TitleBar+NavigationView+OverlayHost wiring (no back stack yet). GalleryApp is kept intact
-// as the "gallery-legacy" fallback until GalleryShell is verified in the running app.
+// G8b adds: a Ctrl+K command palette (Popup over the registry search index), a TitleBar back button driven by a
+// shell-owned back stack (NavigationView selects via Navigator.Replace, so the shell keeps the history and drives the
+// pop through NavigateRequest — selection follows on back), and the ControlCatalog/CategoryKeys helpers derived from
+// the registry (were hand-tables on GalleryApp).
 sealed class GalleryShell : Component
 {
     static readonly bool ShowDiagnosticsHud = Diag.EnvFlag("FG_HUD");
@@ -33,6 +34,40 @@ sealed class GalleryShell : Component
     static readonly NavItem[] NavItems = BuildItems();
     static readonly (string Label, string Key)[] SearchIndex = Registry.BuildSearchIndex();
     static readonly string[] SearchTitles = SearchIndex.Select(e => e.Label).Distinct().ToArray();
+
+    // ── SoakProbe seam (moved from GalleryApp) ───────────────────────────────────────────────────────────────────
+    // A static lever so the longevity/leak harness (FG_SOAK / FG_STRESS_NAV) can cycle pages by key without simulating
+    // clicks. Wired in Render under the env flag; invoked between RunFrames on the UI thread.
+    internal static Action<string>? StressNavigate;
+    internal static string[] StressNavKeys = Array.Empty<string>();
+
+    // ── Control catalog (derived from the registry — was a hand table on GalleryApp) ─────────────────────────────
+    // The "Controls" IA section's categories, in GallerySections order; each category's keys are its registry pages
+    // (ShowInNav, i.e. not Hidden/Overview), ordered by Order then registry order. Drives the All-controls page and
+    // the per-category overview grids.
+    internal static readonly (string Title, string[] Keys)[] ControlCatalog = BuildCatalog();
+
+    internal static string[] CategoryKeys(string title)
+    {
+        foreach (var (t, keys) in ControlCatalog) if (t == title) return keys;
+        return Array.Empty<string>();
+    }
+
+    static (string Title, string[] Keys)[] BuildCatalog()
+    {
+        string[] cats = GallerySections.Sections.FirstOrDefault(s => s.Section == "Controls").Categories ?? Array.Empty<string>();
+        var list = new List<(string, string[])>(cats.Length);
+        foreach (var cat in cats)
+        {
+            var keys = FluentGpu.Generated.GalleryRegistry.Pages
+                .Where(p => p.Category == cat && !p.Hidden)
+                .OrderBy(p => p.Order)   // stable: ties keep registry order
+                .Select(p => p.Key)
+                .ToArray();
+            list.Add((cat, keys));
+        }
+        return list.ToArray();
+    }
 
     static RouteRegistry BuildRegistry()
     {
@@ -66,9 +101,46 @@ sealed class GalleryShell : Component
     readonly Signal<int> _paneToggleReq = new(0);
     readonly Signal<string> _navigateReq = new("");
     readonly Signal<string> _searchText = new("");
+    readonly Signal<bool> _paletteOpen = new(false);
+    // The shell-owned back stack. NavigationView.Select uses Navigator.Replace (top-level nav is a replace, never a
+    // push), so the Navigator's own stack stays depth-1; the shell records history here and drives a pop through
+    // NavigateRequest. _current tracks the displayed page so a back-driven select is not re-recorded as forward.
+    readonly Signal<bool> _canGoBack = new(false);
+    readonly List<string> _history = new();
+    string _current = "";
     // Seeded lazily in Render so it picks up InitialPage (set via object-initializer AFTER the ctor); NavigationView
     // uses Navigator.Current as the initial selection, so seeding it wrong would defeat deep-linking.
     Navigator? _nav;
+
+    // The one forward-navigation entry point (search commit / palette pick). Drives the NavigationView selection; its
+    // OnSelect records history. A ""-reset first so re-navigating to the SAME page still changes the gated signal.
+    void Navigate(string key)
+    {
+        if (key.Length == 0) return;
+        _navigateReq.Value = "";
+        _navigateReq.Value = key;
+    }
+
+    // Records every navigation (nav click / search / palette / back all funnel through NavigationView.Select→OnSelect).
+    // Back-driven selects arrive with key == _current (GoBack sets it first), so they do not re-push.
+    void RecordNav(string key)
+    {
+        if (key == _current) return;
+        if (_current.Length > 0) _history.Add(_current);
+        _current = key;
+        _canGoBack.Value = _history.Count > 0;
+    }
+
+    void GoBack()
+    {
+        if (_history.Count == 0) return;
+        string prev = _history[^1];
+        _history.RemoveAt(_history.Count - 1);
+        _current = prev;                       // set BEFORE driving so OnSelect(prev) is recognised as the back target
+        _canGoBack.Value = _history.Count > 0;
+        _navigateReq.Value = "";               // drive the NavigationView selection to the popped page
+        _navigateReq.Value = prev;
+    }
 
     // Search commit (Enter or suggestion choice) → resolve the typed/chosen title to a page key and navigate.
     void NavigateToTitle(string query)
@@ -82,20 +154,19 @@ sealed class GalleryShell : Component
             foreach (var (label, k) in SearchIndex)
                 if (label.Contains(q, StringComparison.OrdinalIgnoreCase)) { key = k; break; }
         if (key is null) return;
-        _navigateReq.Value = "";        // ""-reset so re-searching the same page still changes the equality-gated signal
-        _navigateReq.Value = key;
+        Navigate(key);
     }
 
     public override Element Render()
     {
         _nav ??= new Navigator(new Route(InitialPage.Length > 0 ? InitialPage : "welcome"));
+        if (_current.Length == 0) _current = _nav.Current.Name;
 
         if (Diag.EnvFlag("FG_SOAK") || Diag.EnvFlag("FG_STRESS_NAV") || Diag.EnvFlag("FG_WAKE_AUDIT"))
         {
-            // Reuse GalleryApp's static seam so SoakProbe needs no change; keys now come from the registry.
-            GalleryApp.StressNavigate = key => { _navigateReq.Value = ""; _navigateReq.Value = key; };
-            if (GalleryApp.StressNavKeys.Length == 0)
-                GalleryApp.StressNavKeys = SearchIndex.Select(e => e.Key).Distinct().ToArray();
+            StressNavigate = key => { _navigateReq.Value = ""; _navigateReq.Value = key; };
+            if (StressNavKeys.Length == 0)
+                StressNavKeys = SearchIndex.Select(e => e.Key).Distinct().ToArray();
         }
 
         var shell = VStack(0,
@@ -105,7 +176,9 @@ sealed class GalleryShell : Component
                 {
                     Title = "FluentGpu Gallery",
                     IconGlyph = Icons.Grid,
-                    ShowBackButton = false,          // registry-driven back stack (CanGoBack/Pop) lands in G8b
+                    ShowBackButton = true,               // G8b: registry-driven back stack (shell-owned history)
+                    BackEnabledSignal = _canGoBack,      // live enable/disable as history grows/shrinks
+                    OnBack = GoBack,
                     ShowPaneToggle = true,
                     OnPaneToggle = () => _paneToggleReq.Value = _paneToggleReq.Peek() + 1,
                     ShowCaptionButtons = true,
@@ -114,7 +187,7 @@ sealed class GalleryShell : Component
                     ? new BoxEl()
                     : AutoSuggestBox.Create(
                         suggestions: SearchTitles,
-                        placeholder: "Search controls and samples...",
+                        placeholder: "Search controls and samples...   (Ctrl+K)",
                         width: 580f,
                         widthSignal: tb.ContentAvail,
                         text: _searchText,
@@ -129,13 +202,28 @@ sealed class GalleryShell : Component
                 Items = NavItems,
                 Content = Page,
                 Navigator = _nav,
+                OnSelect = RecordNav,
                 ShowPaneToggle = false,
                 PaneToggleRequest = _paneToggleReq,
                 NavigateRequest = _navigateReq,
             })
         ) with { Grow = 1 };
 
-        var content = ShowDiagnosticsHud ? ZStack(shell, DiagnosticsOverlay()) with { Grow = 1 } : shell;
+        // Ctrl+K opens the command palette (a global KeyAccelerator invokes this invisible node's OnClick from anywhere);
+        // the palette overlay + accelerator ride a ZStack lane over the shell (both inside the OverlayHost so the popup
+        // has its service). Hit-test transparent so it never intercepts page input.
+        var paletteLane = ZStack(
+            shell,
+            CommandPalette.Overlay(SearchIndex, Navigate, _paletteOpen),
+            new BoxEl
+            {
+                Width = 0f, Height = 0f, HitTestVisible = false,
+                Accelerator = new KeyAccelerator(Keys.K, KeyModifiers.Ctrl),
+                OnClick = () => _paletteOpen.Value = !_paletteOpen.Peek(),
+            }
+        ) with { Grow = 1 };
+
+        var content = ShowDiagnosticsHud ? ZStack(paletteLane, DiagnosticsOverlay()) with { Grow = 1 } : paletteLane;
 #pragma warning disable FGRP001
         return Embed.Comp(() => new OverlayHost { Child = content });
 #pragma warning restore FGRP001
@@ -146,5 +234,35 @@ sealed class GalleryShell : Component
         Direction = 0, Justify = FlexJustify.End, AlignItems = FlexAlign.Start, HitTestVisible = false,
         Padding = new Edges4(12, 56, 152, 0),
         Children = [Embed.Comp(() => new FrameDiagnosticsHud())],
+    };
+}
+
+// FG_HUD on-screen fps/draw-count readout (moved from GalleryApp). FG_DIAG is engine diag OUTPUT only (stderr) and must
+// NOT mount the HUD — the HUD's per-frame dynamic-text refresh is itself a wake source (it records+presents forever).
+sealed class FrameDiagnosticsHud : Component
+{
+    public override Element Render() => new BoxEl
+    {
+        Direction = 0, Gap = 10, AlignItems = FlexAlign.Center, Padding = new Edges4(10, 5, 10, 5), MinHeight = 30,
+        Fill = ColorF.FromRgba(0x13, 0x15, 0x1A, 0xCC), BorderColor = Tok.StrokeSurfaceDefault, BorderWidth = 1f,
+        Corners = Radii.ControlAll,
+        Children =
+        [
+            Metric("fps", "000", DynamicTextKind.FrameFps, Tok.AccentDefault),
+            Metric("cmd", "0000", DynamicTextKind.FrameCommandCount, Tok.TextPrimary),
+            Metric("draw", "0000", DynamicTextKind.FrameDrawCount, Tok.TextPrimary),
+            Metric("cull", "0000", DynamicTextKind.FrameCullCount, Tok.TextPrimary),
+            Metric("ms", "000.0", DynamicTextKind.FrameMs, Tok.TextSecondary),
+        ],
+    };
+
+    static Element Metric(string label, string placeholder, DynamicTextKind dynamicText, ColorF valueColor) => new BoxEl
+    {
+        Direction = 0, Gap = 4, AlignItems = FlexAlign.Center,
+        Children =
+        [
+            new TextEl(label) { Size = 11f, Color = Tok.TextTertiary, FontFamily = "Cascadia Code" },
+            new TextEl(placeholder) { Size = 12f, Bold = true, Color = valueColor, FontFamily = "Cascadia Code", DynamicText = dynamicText },
+        ],
     };
 }

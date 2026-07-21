@@ -22,9 +22,10 @@ sealed class ShotScene : Component
 
     public override Element Render() => _id switch
     {
-        // Full-bleed: the whole gallery (regression check). WS7: "gallery"/"page:<key>" mount the registry-driven
-        // GalleryShell (deep-linked); "gallery-legacy" keeps the hand-shell GalleryApp reachable for comparison until
-        // GalleryShell is verified; "page-content:<key>" renders the bare page on the standard dark page (tight diffs).
+        // Full-bleed: the whole gallery (regression check). WS7: "gallery"/"gallery:<key>"/"page:<key>" mount the
+        // registry-driven GalleryShell (deep-linked); "page-content:<key>" renders the bare page on the standard dark
+        // page (tight diffs). (The former "gallery-legacy" GalleryApp fallback is deleted in G8b — GalleryShell is the
+        // sole shell.)
         "gallery" => Embed.Comp(() => new GalleryShell()),
         _ when _id.StartsWith("gallery:") => Embed.Comp(() => new GalleryShell { InitialPage = _id.Substring("gallery:".Length) }),
         _ when _id.StartsWith("page:") => Embed.Comp(() => new GalleryShell { InitialPage = _id.Substring("page:".Length) }),
@@ -36,8 +37,6 @@ sealed class ShotScene : Component
                 Children = [FluentGpu.Generated.GalleryRegistry.Create(_id.Substring("page-content:".Length)) ?? new BoxEl()],
             },
         }),
-        "gallery-legacy" => Embed.Comp(() => new GalleryApp()),
-        _ when _id.StartsWith("gallery-legacy:") => Embed.Comp(() => new GalleryApp { InitialPage = _id.Substring("gallery-legacy:".Length) }),
         // The "Windows APIs" page's below-the-fold pillar cards (Shell / Power / Network), rendered directly so a
         // top-anchored screenshot can verify them without scrolling the full page (the device-height clamp hides them).
         "windowsapi-cards" => Embed.Comp(() => new OverlayHost
@@ -692,7 +691,7 @@ sealed class ExpanderReflowShot : Component
             Width = 440f,   // gallery-like content width: the body wraps boundary-proximate (2 lines)
             Children =
             [
-                ControlExample.Build("A simple Expander",
+                ExampleCard.Build("A simple Expander",
                     Embed.Comp(() => new Expander
                     {
                         Header = "This text is collapsible",

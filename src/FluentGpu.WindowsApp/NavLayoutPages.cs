@@ -7,8 +7,7 @@ using static FluentGpu.Dsl.Ui;
 
 // ── Navigation / Layout / Media / Dialogs control demo pages (WinUI Gallery parity, batch 2) ──────────
 
-[GalleryPage("SplitView", "SplitView", "Layout")]
-[Route("SplitView")]
+[GalleryPage("SplitView", "SplitView", "Layout", Icon = Icons.Grid)]
 sealed class SplitViewPage : Component
 {
     public override Element Render()
@@ -16,14 +15,14 @@ sealed class SplitViewPage : Component
         var open = UseSignal(true);
         return GalleryPage.Shell("SplitView",
             "A container with two views: a side pane and the main content area.",
-            ControlExample.Build("A SplitView", Frame(SplitView.Create(DemoPane(), DemoContent(), paneWidth: 200f)),
+            ExampleCard.Build("A SplitView", Frame(SplitView.Create(DemoPane(), DemoContent(), paneWidth: 200f)),
                 code: """
                 var pane = new BoxEl { Padding = Edges4.All(12), Children = [VStack(8, BodyStrong("Pane"), Body("Navigation").Secondary())] };
                 var content = new BoxEl { Padding = Edges4.All(16), Children = [Body("Main content area.")] };
 
                 SplitView.Create(pane, content, paneWidth: 200f)
                 """),
-            ControlExample.Build("Toggling the pane (isPaneOpen)", Frame(SplitView.Create(DemoPane(), DemoContent(), paneWidth: 200f, isPaneOpen: open)),
+            ExampleCard.Build("Toggling the pane (isPaneOpen)", Frame(SplitView.Create(DemoPane(), DemoContent(), paneWidth: 200f, isPaneOpen: open)),
                 options: ToggleSwitch.Create(open, header: "IsPaneOpen"),
                 code: """
                 var open = UseSignal(true);
@@ -33,7 +32,7 @@ sealed class SplitViewPage : Component
                 // Paired with:
                 ToggleSwitch.Create(open, header: "IsPaneOpen")
                 """),
-            ControlExample.Build("A custom pane width", Frame(SplitView.Create(DemoPane(), DemoContent(), paneWidth: 120f)),
+            ExampleCard.Build("A custom pane width", Frame(SplitView.Create(DemoPane(), DemoContent(), paneWidth: 120f)),
                 code: """
                 SplitView.Create(pane, content, paneWidth: 120f)
                 """));
@@ -48,8 +47,7 @@ sealed class SplitViewPage : Component
     };
 }
 
-[GalleryPage("BreadcrumbBar", "BreadcrumbBar", "Navigation")]
-[Route("BreadcrumbBar")]
+[GalleryPage("BreadcrumbBar", "BreadcrumbBar", "Navigation", Icon = Icons.List)]
 sealed class BreadcrumbBarPage : Component
 {
     static readonly string[] Crumbs = { "Home", "Documents", "Design", "Specs" };
@@ -58,13 +56,13 @@ sealed class BreadcrumbBarPage : Component
         var (depth, setDepth) = UseState(Crumbs.Length);
         return GalleryPage.Shell("BreadcrumbBar",
             "Shows the trail of navigation from the home/root location to the current one.",
-            ControlExample.Build("A BreadcrumbBar", BreadcrumbBar.Create(Crumbs),
+            ExampleCard.Build("A BreadcrumbBar", BreadcrumbBar.Create(Crumbs),
                 code: """
                 static readonly string[] Crumbs = { "Home", "Documents", "Design", "Specs" };
 
                 BreadcrumbBar.Create(Crumbs)
                 """),
-            ControlExample.Build("Navigating with onChange", BreadcrumbBar.Create(Crumbs[..depth], i => setDepth(i + 1)),
+            ExampleCard.Build("Navigating with onChange", BreadcrumbBar.Create(Crumbs[..depth], i => setDepth(i + 1)),
                 description: "Clicking a crumb trims the trail back to it (the WinUI ItemClicked pattern).",
                 output: VStack(8,
                     BodyStrong($"Location: {Crumbs[depth - 1]}"),
@@ -77,8 +75,7 @@ sealed class BreadcrumbBarPage : Component
     }
 }
 
-[GalleryPage("SelectorBar", "SelectorBar", "Navigation")]
-[Route("SelectorBar")]
+[GalleryPage("SelectorBar", "SelectorBar", "Navigation", Icon = Icons.List)]
 sealed class SelectorBarPage : Component
 {
     static readonly string[] Items = { "All", "Photos", "Videos", "Folders" };
@@ -89,7 +86,7 @@ sealed class SelectorBarPage : Component
         var view = UseSignal(0);
         return GalleryPage.Shell("SelectorBar",
             "A horizontal, single-select list with an accent underline on the selected item.",
-            ControlExample.Build("A SelectorBar", SelectorBar.Create(Items, sel),
+            ExampleCard.Build("A SelectorBar", SelectorBar.Create(Items, sel),
                 output: GalleryPage.LiveText(() => Items[sel.Value]),
                 code: """
                 static readonly string[] Items = { "All", "Photos", "Videos", "Folders" };
@@ -97,7 +94,7 @@ sealed class SelectorBarPage : Component
 
                 SelectorBar.Create(Items, sel)
                 """),
-            ControlExample.Build("Switching views with a SelectorBar",
+            ExampleCard.Build("Switching views with a SelectorBar",
                 VStack(12,
                     SelectorBar.Create(Views, view),
                     new BoxEl
@@ -122,8 +119,7 @@ sealed class SelectorBarPage : Component
     }
 }
 
-[GalleryPage("TabView", "TabView", "Navigation")]
-[Route("TabView")]
+[GalleryPage("TabView", "TabView", "Navigation", Icon = Icons.Document)]
 sealed class TabViewPage : Component
 {
     static readonly string[] Tabs = { "Document 1", "Document 2", "Document 3" };
@@ -141,7 +137,7 @@ sealed class TabViewPage : Component
 
         return GalleryPage.Shell("TabView",
             "Displays a set of tabs and their content — for managing multiple documents or pages.",
-            ControlExample.Build("A TabView", Frame(TabView.Create(Tabs, onAddTabButtonClick: addDoc)),
+            ExampleCard.Build("A TabView", Frame(TabView.Create(Tabs, onAddTabButtonClick: addDoc)),
                 description: "The \"+\" adds a new document tab; tabs reflow smoothly as they are added or closed.",
                 code: """
                 static readonly string[] Tabs = { "Document 1", "Document 2", "Document 3" };
@@ -150,7 +146,7 @@ sealed class TabViewPage : Component
                 TabView.Create(Tabs,
                     onAddTabButtonClick: () => new TabViewItem { Header = $"Document {nextDoc.Value++}", Icon = Icons.Document })
                 """),
-            ControlExample.Build("Restyling tabs with template parts", Frame(Embed.Comp(() => new TabView { Tabs = Tabs, Parts = parts, OnAddTabButtonClick = addDoc })),
+            ExampleCard.Build("Restyling tabs with template parts", Frame(Embed.Comp(() => new TabView { Tabs = Tabs, Parts = parts, OnAddTabButtonClick = addDoc })),
                 description: "Template parts restyle the strip and tab labels without re-templating the control.",
                 code: """
                 var parts = new TemplateParts { [TabView.PartStrip] = s => s with { Fill = Tok.FillSolidBaseAlt } };
@@ -171,13 +167,12 @@ sealed class TabViewPage : Component
     };
 }
 
-[GalleryPage("PersonPicture", "PersonPicture", "Media")]
-[Route("PersonPicture")]
+[GalleryPage("PersonPicture", "PersonPicture", "Media", Icon = Icons.FavoriteStar)]
 sealed class PersonPicturePage : Component
 {
     public override Element Render() => GalleryPage.Shell("PersonPicture",
         "Displays the avatar image or initials for a person.",
-        ControlExample.Build("Initials at different sizes",
+        ExampleCard.Build("Initials at different sizes",
             HStack(12, PersonPicture.Create("JD"), PersonPicture.Create("AB", 64f), PersonPicture.Create("CK", 32f)),
             code: """
             HStack(12,
@@ -185,7 +180,7 @@ sealed class PersonPicturePage : Component
                 PersonPicture.Create("AB", 64f),
                 PersonPicture.Create("CK", 32f))
             """),
-        ControlExample.Build("A profile photo",
+        ExampleCard.Build("A profile photo",
             HStack(12,
                 PersonPicture.Create("JD", imageSourcePath: Assets.ControlImage("PersonPicture.png")),
                 PersonPicture.Create("JD", 64f, imageSourcePath: Assets.ControlImage("PersonPicture.png"))),
@@ -196,7 +191,7 @@ sealed class PersonPicturePage : Component
                 PersonPicture.Create("JD", imageSourcePath: Assets.ControlImage("PersonPicture.png")),
                 PersonPicture.Create("JD", 64f, imageSourcePath: Assets.ControlImage("PersonPicture.png")))
             """),
-        ControlExample.Build("Badges",
+        ExampleCard.Build("Badges",
             HStack(12,
                 PersonPicture.Create("JD", badgeNumber: 5),
                 PersonPicture.Create("JD", badgeNumber: 150),
@@ -208,13 +203,13 @@ sealed class PersonPicturePage : Component
                 PersonPicture.Create("JD", badgeNumber: 150),          // >99 renders "99+"
                 PersonPicture.Create("JD", badgeGlyph: Icons.Accept))
             """),
-        ControlExample.Build("A group avatar",
+        ExampleCard.Build("A group avatar",
             PersonPicture.Create("", isGroup: true),
             description: "isGroup shows the People glyph — it outranks initials and the photo.",
             code: """
             PersonPicture.Create("", isGroup: true)
             """),
-        ControlExample.Build("Initials from a display name",
+        ExampleCard.Build("Initials from a display name",
             HStack(12,
                 Labeled(PersonPicture.Create("", displayName: "John Doe"), "John Doe"),
                 Labeled(PersonPicture.Create("", displayName: "Maria de la Cruz (Contoso)"), "Maria de la Cruz (Contoso)"),
@@ -230,8 +225,7 @@ sealed class PersonPicturePage : Component
         => new BoxEl { Direction = 1, Gap = 8, AlignItems = FlexAlign.Center, Children = [avatar, Caption(caption)] };
 }
 
-[GalleryPage("Flyout", "Flyout", "Dialogs & flyouts")]
-[Route("Flyout")]
+[GalleryPage("Flyout", "Flyout", "Dialogs & flyouts", Icon = Icons.More)]
 sealed class FlyoutPage : Component
 {
     public override Element Render()
@@ -239,7 +233,7 @@ sealed class FlyoutPage : Component
         var (msg, setMsg) = UseState("—");
         return GalleryPage.Shell("Flyout",
             "A lightweight contextual popup that shows arbitrary content, dismissed by clicking away.",
-            ControlExample.Build("A Flyout", FlyoutButton.Create("Open flyout",
+            ExampleCard.Build("A Flyout", FlyoutButton.Create("Open flyout",
                     () => VStack(8, BodyStrong("All items will be removed."), Button.Accent("Yes, delete", () => setMsg("Deleted")))),
                 output: BodyStrong(msg),
                 code: """
@@ -250,7 +244,7 @@ sealed class FlyoutPage : Component
                         BodyStrong("All items will be removed."),
                         Button.Accent("Yes, delete", () => setMsg("Deleted"))))
                 """),
-            ControlExample.Build("Flyout placement",
+            ExampleCard.Build("Flyout placement",
                 HStack(8,
                     FlyoutButton.Create("Top", () => Body("Placed above the button."), FlyoutPlacement.Top),
                     FlyoutButton.Create("Bottom", () => Body("Placed below the button."), FlyoutPlacement.Bottom),
@@ -268,7 +262,6 @@ sealed class FlyoutPage : Component
 
 // Category overview pages (the expandable group keys land here when selected).
 [GalleryPage("navigation-cat", "Navigation", "Overview", Hidden = true)]
-[Route("navigation-cat")]
 sealed class NavigationOverviewPage : Component
 {
     public override Element Render()
@@ -280,7 +273,6 @@ sealed class NavigationOverviewPage : Component
 }
 
 [GalleryPage("dialogs", "Dialogs & flyouts", "Overview", Hidden = true)]
-[Route("dialogs")]
 sealed class DialogsOverviewPage : Component
 {
     public override Element Render()
@@ -292,7 +284,6 @@ sealed class DialogsOverviewPage : Component
 }
 
 [GalleryPage("media", "Media", "Overview", Hidden = true)]
-[Route("media")]
 sealed class MediaOverviewPage : Component
 {
     public override Element Render()

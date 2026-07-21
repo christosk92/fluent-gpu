@@ -73,12 +73,20 @@ public static class ExampleCard
         return new BoxEl { Direction = 1, Gap = 8, Margin = new Edges4(0, 0, 0, 12), Children = outer.ToArray() };
     }
 
+    // The right-side column: an "Output" readout (when present) over the framework-control knob rows under an "Options"
+    // header (the WinUI-Gallery property panel). Rendered only when there is something to show (the caller passes null →
+    // the card collapses to just the example area), so it is inherently collapsible-when-empty.
     private static Element OptionsPanel(Element? options, Element? output)
     {
         var kids = new List<Element>();
         if (output is not null) { kids.Add(Caption("Output").Tertiary()); kids.Add(output); }
-        if (options is not null) kids.Add(options);
-        return new BoxEl { Direction = 1, Gap = Spacing.StackM, Padding = Spacing.CardPad, MinWidth = 220, Children = kids.ToArray() };
+        if (options is not null)
+        {
+            if (output is not null) kids.Add(new BoxEl { Height = 4f });
+            kids.Add(Caption("Options").Tertiary());
+            kids.Add(options);
+        }
+        return new BoxEl { Direction = 1, Gap = Spacing.StackM, Padding = Spacing.CardPad, MinWidth = 240, Children = kids.ToArray() };
     }
 
     // The source expander body: a "C#" + copy toolbar over the theme-aware CodeBlock (copyable:false — the toolbar owns copy).

@@ -7,13 +7,12 @@ using static FluentGpu.Dsl.Ui;
 
 // ── Date & time control demo pages ──────────
 
-[GalleryPage("CalendarView", "CalendarView", "Date & time")]
-[Route("CalendarView")]
+[GalleryPage("CalendarView", "CalendarView", "Date & time", Icon = Icons.Grid)]
 sealed class CalendarViewPage : Component
 {
     public override Element Render() => GalleryPage.Shell("CalendarView",
         "Shows a large view of a calendar month and lets the user pick a date.",
-        ControlExample.Build("A CalendarView",
+        ExampleCard.Build("A CalendarView",
             new BoxEl { Corners = Radii.OverlayAll, BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f, Children = [CalendarView.Create()] },
             code: """
             // CalendarView owns its displayed month + selected day internally;
@@ -26,8 +25,7 @@ sealed class CalendarViewPage : Component
             """));
 }
 
-[GalleryPage("DatePicker", "DatePicker", "Date & time")]
-[Route("DatePicker")]
+[GalleryPage("DatePicker", "DatePicker", "Date & time", Icon = Icons.Document)]
 sealed class DatePickerPage : Component
 {
     public override Element Render()
@@ -37,14 +35,14 @@ sealed class DatePickerPage : Component
         var ranged = UseSignal<DateOnly?>(null);
         return GalleryPage.Shell("DatePicker",
             "Lets a user pick a date value using month / day / year fields.",
-            ControlExample.Build("A simple DatePicker", DatePicker.Create(date),
+            ExampleCard.Build("A simple DatePicker", DatePicker.Create(date),
                 output: GalleryPage.LiveText(() => date.Value is { } d ? d.ToString("MMM d, yyyy") : "No date selected"),
                 code: """
                 var date = UseSignal<DateOnly?>(null);
 
                 DatePicker.Create(date)
                 """),
-            ControlExample.Build("A DatePicker with the year hidden", DatePicker.Create(noYear, yearVisible: false),
+            ExampleCard.Build("A DatePicker with the year hidden", DatePicker.Create(noYear, yearVisible: false),
                 output: GalleryPage.LiveText(() => noYear.Value is { } d ? d.ToString("MMM d") : "No date selected"),
                 code: """
                 var noYear = UseSignal<DateOnly?>(null);
@@ -52,7 +50,7 @@ sealed class DatePickerPage : Component
                 // Each of the day / month / year columns can be hidden independently.
                 DatePicker.Create(noYear, yearVisible: false)
                 """),
-            ControlExample.Build("A DatePicker with a constrained year range", DatePicker.Create(ranged, minYear: 2020, maxYear: 2030),
+            ExampleCard.Build("A DatePicker with a constrained year range", DatePicker.Create(ranged, minYear: 2020, maxYear: 2030),
                 output: GalleryPage.LiveText(() => ranged.Value is { } d ? d.ToString("MMM d, yyyy") : "No date selected"),
                 code: """
                 var ranged = UseSignal<DateOnly?>(null);
@@ -63,13 +61,12 @@ sealed class DatePickerPage : Component
     }
 }
 
-[GalleryPage("TimePicker", "TimePicker", "Date & time")]
-[Route("TimePicker")]
+[GalleryPage("TimePicker", "TimePicker", "Date & time", Icon = Icons.Document)]
 sealed class TimePickerPage : Component
 {
     public override Element Render() => GalleryPage.Shell("TimePicker",
         "Lets a user pick a single time value using hour / minute / AM-PM fields.",
-        ControlExample.Build("A simple TimePicker", TimePicker.Create(),
+        ExampleCard.Build("A simple TimePicker", TimePicker.Create(),
             code: """
             // Hour / minute / AM-PM state is owned by the control; tapping a
             // field opens a flyout list of its choices.
@@ -77,13 +74,12 @@ sealed class TimePickerPage : Component
             """));
 }
 
-[GalleryPage("CalendarDatePicker", "CalendarDatePicker", "Date & time")]
-[Route("CalendarDatePicker")]
+[GalleryPage("CalendarDatePicker", "CalendarDatePicker", "Date & time", Icon = Icons.Document)]
 sealed class CalendarDatePickerPage : Component
 {
     public override Element Render() => GalleryPage.Shell("CalendarDatePicker",
         "A drop-down control that shows a calendar for picking a single date.",
-        ControlExample.Build("A CalendarDatePicker", CalendarDatePicker.Create(),
+        ExampleCard.Build("A CalendarDatePicker", CalendarDatePicker.Create(),
             code: """
             // Opens an interactive CalendarView in a light-dismiss flyout below the field.
             CalendarDatePicker.Create()
@@ -91,7 +87,6 @@ sealed class CalendarDatePickerPage : Component
 }
 
 [GalleryPage("datetime", "Date & time", "Overview", Hidden = true)]
-[Route("datetime")]
 sealed class DateTimeOverviewPage : Component
 {
     public override Element Render()
