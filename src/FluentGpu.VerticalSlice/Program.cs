@@ -8044,6 +8044,71 @@ static class Slice
             "custom style + .Background().Rounded() + WinUI no-scale Button / opt-in icon scale");
     }
 
+    // Button's ORTHOGONAL axes (G5d): ButtonAppearance x ControlSize compose independently through one palette switch +
+    // one metrics switch (Radix/CVA precedent), a global StyleHook, and an optional leading-glyph slot.
+    static void ButtonAxesChecks()
+    {
+        // -- gate.ctl.button.axes -- the 4x3 matrix resolves the specified token ramps; axes are INDEPENDENT --
+        var std = Button.DefaultStyle(ButtonAppearance.Standard, ControlSize.Medium);
+        var accent = Button.DefaultStyle(ButtonAppearance.Accent, ControlSize.Medium);
+        var subtle = Button.DefaultStyle(ButtonAppearance.Subtle, ControlSize.Medium);
+        var outline = Button.DefaultStyle(ButtonAppearance.Outline, ControlSize.Medium);
+        var smallStd = Button.DefaultStyle(ButtonAppearance.Standard, ControlSize.Small);
+        var largeStd = Button.DefaultStyle(ButtonAppearance.Standard, ControlSize.Large);
+        var subtleLarge = Button.DefaultStyle(ButtonAppearance.Subtle, ControlSize.Large);
+
+        // Standard/Accent = EXACTLY today's WinUI-faithful tokens + Medium metrics (pixel-identical, no drift).
+        bool stdIdentity = std.Background == Tok.FillControlDefault && std.HoverBackground == Tok.FillControlSecondary
+            && std.PressedBackground == Tok.FillControlTertiary && std.Foreground == Tok.TextPrimary
+            && std.BackgroundSizing == BackgroundSizing.InnerBorderEdge
+            && std.Padding == new Edges4(11, 5, 11, 6) && std.MinHeight == 32f && std.FontSize == 14f;
+        bool accentIdentity = accent.Background == Tok.AccentDefault && accent.HoverBackground == Tok.AccentSecondary
+            && accent.Foreground == Tok.TextOnAccentPrimary && accent.BackgroundSizing == BackgroundSizing.OuterBorderEdge;
+
+        // Subtle = the WinUI SubtleFillColor* ramp; the sampled assertion: hover fill == FillSubtleSecondary.
+        bool subtleHover = subtle.HoverBackground == Tok.FillSubtleSecondary
+            && subtle.Background == Tok.FillSubtleTransparent && subtle.Foreground == Tok.TextPrimary;
+        // Outline = solid StrokeControlDefault border at REST *and* PRESSED, transparent interior.
+        bool outlineBorder = outline.BorderBrush is { } obr && obr.Stops[0].Color == Tok.StrokeControlDefault
+            && outline.PressedBorderBrush is { } obp && obp.Stops[0].Color == Tok.StrokeControlDefault
+            && outline.Background == Tok.FillSubtleTransparent;
+
+        // Size axis is orthogonal: Small MinHeight 24 / Large 40, appearance-independent metrics.
+        bool sizes = smallStd.MinHeight == 24f && smallStd.FontSize == 12f && smallStd.Padding == new Edges4(7, 2, 7, 3)
+            && largeStd.MinHeight == 40f && largeStd.Padding == new Edges4(15, 9, 15, 10);
+        // Subtle+Large == Subtle palette (hover fill unchanged by size) + Large metrics (height/padding unchanged by appearance).
+        bool independent = subtleLarge.HoverBackground == Tok.FillSubtleSecondary && subtleLarge.Background == subtle.Background
+            && subtleLarge.MinHeight == 40f && subtleLarge.Padding == largeStd.Padding;
+
+        Check("gate.ctl.button.axes 4x3 appearance x size matrix resolves token ramps + axes independent",
+            stdIdentity && accentIdentity && subtleHover && outlineBorder && sizes && independent,
+            $"stdId={stdIdentity} accId={accentIdentity} subtleHover={subtleHover} outlineBorder={outlineBorder} sizes={sizes} indep={independent}");
+
+        // -- gate.ctl.button.stylehook -- StyleHook wins over DefaultStyle; null falls through to the composed default --
+        var sentinel = new Button.Style { Background = ColorF.FromRgba(1, 2, 3), MinHeight = 99f };
+        Button.StyleHook = (a, sz) => a == ButtonAppearance.Outline && sz == ControlSize.Large ? sentinel : null;
+        var hooked = Button.DefaultStyle(ButtonAppearance.Outline, ControlSize.Large);
+        var fell = Button.DefaultStyle(ButtonAppearance.Outline, ControlSize.Small);   // hook returns null here
+        var builtHooked = Button.Create("x", () => { }, ButtonAppearance.Outline, ControlSize.Large);   // hook flows through Create
+        Button.StyleHook = null;                                                        // reset the global before anything else
+        bool hookWins = hooked.MinHeight == 99f && hooked.Background == ColorF.FromRgba(1, 2, 3) && builtHooked.MinHeight == 99f;
+        bool nullFallsThrough = fell.MinHeight == 24f
+            && fell.BorderBrush is { } fb && fb.Stops[0].Color == Tok.StrokeControlDefault;   // Outline+Small composed normally
+        Check("gate.ctl.button.stylehook StyleHook wins over DefaultStyle; null falls through",
+            hookWins && nullFallsThrough, $"hookWins={hookWins} nullFallsThrough={nullFallsThrough}");
+
+        // -- gate.ctl.button.glyph-slot -- Create with glyph renders icon+label; without = label-only --
+        var withGlyph = Button.Create("Save", () => { }, glyph: Icons.Play);
+        var noGlyph = Button.Create("Save", () => { });
+        bool glyphStructure = withGlyph.Children.Length == 2
+            && withGlyph.Children[0] is TextEl g && g.FontFamily == Theme.IconFont && g.Text.Value == Icons.Play
+            && withGlyph.Children[1] is TextEl gl && gl.Text.Value == "Save";
+        bool labelOnly = noGlyph.Children.Length == 1
+            && noGlyph.Children[0] is TextEl only && only.Text.Value == "Save" && only.FontFamily != Theme.IconFont;
+        Check("gate.ctl.button.glyph-slot Create(glyph) renders icon+label; without = label-only",
+            glyphStructure && labelOnly, $"withGlyph={glyphStructure} labelOnly={labelOnly}");
+    }
+
     // UseAnimatedValue eases toward a changed target across renders, then settles (React/framer-style transition).
     static void AnimValueChecks()
     {
@@ -27200,6 +27265,7 @@ static class Slice
         ScrollHoverChecks(strings);
         HoverSubtreeChecks(strings);
         StyleChecks();
+        ButtonAxesChecks();
         AnimValueChecks();
         WrapChecks(strings);
         WrapGrowChecks(strings);

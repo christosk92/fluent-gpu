@@ -71,15 +71,32 @@ public static partial class HyperlinkButton
         PressedFill = Tok.FillSubtleTertiary, DisabledFill = Tok.FillSubtleTransparent,
     };
 
+    /// <summary>The per-control clamp seam (adjustment #6 — the axes a control can refuse, Radix precedent).
+    /// HyperlinkButton REFUSES the <see cref="ButtonAppearance"/> axis entirely: it is accent link text with no fill
+    /// chrome, so Subtle/Outline (which are fill/border ramps) are meaningless — the parameter is simply not exposed.
+    /// It DOES adopt the <see cref="ControlSize"/> axis, mapping it to the text size + padding (Medium unchanged).</summary>
+    internal static ControlSize ClampSize(ControlSize size) => size;
+
+    /// <summary>Resolve the effective style: an explicit style wins; else the size axis maps to the link's text size +
+    /// padding via the shared <see cref="ControlMetrics"/> (Medium byte-identical to the pre-axis default).</summary>
+    static Style? Sized(Style? style, ControlSize size)
+    {
+        if (style is not null) return style;
+        var cs = ClampSize(size);
+        if (cs == ControlSize.Medium) return null;   // null ⇒ Build uses DefaultStyle unchanged
+        var m = ControlMetrics.For(cs);
+        return DefaultStyle with { FontSize = m.FontSize, Padding = m.Padding };
+    }
+
     /// <summary>A link that raises <paramref name="onClick"/> (in-app navigation).</summary>
-    public static BoxEl Create(string text, Action onClick, Style? style = null, bool isEnabled = true, TemplateParts? parts = null)
-        => Build(text, onClick, style, isEnabled, parts);
+    public static BoxEl Create(string text, Action onClick, Style? style = null, bool isEnabled = true, TemplateParts? parts = null, ControlSize size = ControlSize.Medium)
+        => Build(text, onClick, Sized(style, size), isEnabled, parts);
 
     /// <summary>A link with a WinUI <c>NavigateUri</c>: raises Click first, then launches <paramref name="navigateUri"/>
     /// in the OS default handler (browser/mail) — WinUI's exact OnClick order (Click → Launcher::TryInvokeLauncher,
     /// HyperLinkButton_Partial.cpp:166-173) through the <c>IPlatformApp.OpenUri</c> PAL seam. Headless hosts record the
     /// URI instead of launching (HeadlessPlatformApp.OpenedUris).</summary>
-    public static BoxEl Create(string text, string navigateUri, Style? style = null, bool isEnabled = true, Action? onClick = null, TemplateParts? parts = null)
+    public static BoxEl Create(string text, string navigateUri, Style? style = null, bool isEnabled = true, Action? onClick = null, TemplateParts? parts = null, ControlSize size = ControlSize.Medium)
         => Build(text, () =>
         {
             onClick?.Invoke();
@@ -87,7 +104,7 @@ public static partial class HyperlinkButton
             // InputHooks.Current channel-DEFAULT instance (static factories have no component scope → no UseContext,
             // so they reach the seam via the default). Null until a host exists — building elements never launches.
             InputHooks.Current.Default.OpenUri?.Invoke(navigateUri);
-        }, style, isEnabled, parts);
+        }, Sized(style, size), isEnabled, parts);
 
     private static BoxEl Build(string text, Action onClick, Style? style, bool isEnabled, TemplateParts? parts)
     {

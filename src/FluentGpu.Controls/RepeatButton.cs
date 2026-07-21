@@ -83,9 +83,16 @@ public static partial class RepeatButton
         DisabledBorderBrush = GradientSpec.Solid(Tok.StrokeControlDefault), // line 17/65
     };
 
-    public static BoxEl Create(string label, Action onClick, Style? style = null, bool isEnabled = true, TemplateParts? parts = null)
+    /// <summary>The per-control clamp seam (adjustment #6). RepeatButton honors every size — identity.</summary>
+    internal static ControlSize ClampSize(ControlSize size) => size;
+
+    public static BoxEl Create(string label, Action onClick, Style? style = null, bool isEnabled = true, TemplateParts? parts = null, ControlSize size = ControlSize.Medium)
     {
-        var s = style ?? DefaultStyle;
+        var cs = ClampSize(size);
+        var m = ControlMetrics.For(cs);
+        // Size axis composes over the default style's geometry; Medium is byte-identical to the pre-axis default.
+        var s = style ?? (cs == ControlSize.Medium ? DefaultStyle
+            : DefaultStyle with { Padding = m.Padding, MinHeight = m.MinHeight, FontSize = m.FontSize, CornerRadius = m.CornerRadius });
         var labelEl = parts.Apply(PartLabel, new TextEl(label)
         {
             Size = s.FontSize,

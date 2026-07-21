@@ -200,19 +200,38 @@ actually paint, also use `Ui.Image(src, …)`. Album-art decode is off-thread, c
 ## Controls (`src/FluentGpu.Controls/`)
 
 Most controls are **element-returning factories** (call them in render); `NavigationView`/`PageHost` are `Component`s.
-Every control has a `Style` record + a global `…StyleOverride` and reads theme tokens by default.
+Every control has a `Style` record and reads theme tokens by default; most expose a global `…StyleOverride`, while
+`Button` exposes the axis-aware `Button.StyleHook` (below).
 
 ```csharp
-Button.Accent(string label, Action onClick, Style? style = null)     // primary
-Button.Standard(string label, Action onClick, Style? style = null)   // neutral
-IconButton.Create(string glyph, Action onClick, Style? style = null)
-ToggleButton.Create(string label, Signal<bool>? on = null, Action<bool>? onChange = null, Style? style = null)   // controlled signal + sugar
+// Button = TWO orthogonal axes (Radix/CVA precedent): appearance selects the token ramp, size the geometry.
+Button.Create(string label, Action onClick, ButtonAppearance appearance = Standard, ControlSize size = Medium,
+              string? glyph = null, Style? style = null, bool isEnabled = true, TemplateParts? parts = null)  // canonical
+Button.Accent / Standard / Subtle / Outline(string label, Action onClick, Style? style = null, …)   // one-line sugar
+IconButton.Create(string glyph, Action onClick, Style? style = null, …, ControlSize size = Medium)   // clamps Large→Medium (square)
+ToggleButton.Create(string label, Signal<bool>? on = null, Action<bool>? onChange = null, Style? style = null, …, ControlSize size = Medium)
+RepeatButton.Create(string label, Action onClick, Style? style = null, …, ControlSize size = Medium)
+HyperlinkButton.Create(string text, Action onClick, Style? style = null, …, ControlSize size = Medium)   // no appearance axis (link text, no fill)
 
 Slider.Create(FloatSignal? value = null, Action<float>? onChange = null, SliderOptions? options = null,
               float length = 200, float thickness = 32, Style? = null, bool isEnabled = true, TemplateParts? = null)   // ONE API — signals-native (no re-render) ★
 ScrollBar.Create(float fraction, float position, Action<float> onScroll, float h = 200, Style? = null)
 AnimatedIcon.Glyph(string glyph, float size = 16, ColorF? color = null, string? font = null, float hoverScale = 1.08f, float pressScale = 0.88f)
 ```
+
+**Button variant axes.** `ButtonAppearance { Standard, Accent, Subtle, Outline }` and the kit-shared
+`ControlSize { Small, Medium, Large }` are **orthogonal** — they are NOT a flattened product. Appearance dispatches
+through one 4-arm `ButtonPalette` switch (the token ramp: fill/foreground/border + BackgroundSizing); size through one
+3-arm `ControlMetrics` switch (padding/min-height/font/corner/icon). `Button.DefaultStyle(appearance, size)` composes
+them into the same 24-member `Style` record, which survives as the **full-override escape hatch** (pass `style:` to win
+outright). Standard/Accent are pixel-identical to before; Subtle uses the WinUI SubtleFillColor* ramp; Outline is a
+documented Fluent-2 extension (solid stroke all states). `glyph:` adds a leading icon-font run. To restyle globally,
+set `Button.StyleHook = (appearance, size) => …` (return a `Style`, or `null` to fall through to the composed default)
+— it replaces the old per-appearance `AccentStyleOverride`/`StandardStyleOverride`. Sibling button-family controls
+(`IconButton`/`ToggleButton`/`RepeatButton`/`HyperlinkButton`) adopt `ControlSize` too; a control may **clamp** an axis
+value it can't honor (a small per-control table, Radix precedent): `IconButton` clamps `Large`→`Medium` to keep its
+square glyph box sane, and `HyperlinkButton` doesn't expose the appearance axis at all (it is link text with no fill
+chrome, so Subtle/Outline are meaningless).
 
 ### The controlled-input contract (every stateful control)
 

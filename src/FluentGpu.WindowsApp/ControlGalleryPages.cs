@@ -186,6 +186,39 @@ sealed class ButtonControlPage : Component
             ControlExample.Build("A disabled button", DisabledButton("Disabled"),
                 code: """
                 Button.Standard("Disabled", () => { }, isEnabled: false)
+                """),
+            // Orthogonal axes (G5d): appearance selects the token ramp, size selects the geometry — they compose.
+            ControlExample.Build("Appearance axis (Standard / Accent / Subtle / Outline)",
+                Wrap(8,
+                    Button.Create("Standard", () => setClicks(clicks + 1), ButtonAppearance.Standard),
+                    Button.Create("Accent", () => setClicks(clicks + 1), ButtonAppearance.Accent),
+                    Button.Create("Subtle", () => setClicks(clicks + 1), ButtonAppearance.Subtle),
+                    Button.Create("Outline", () => setClicks(clicks + 1), ButtonAppearance.Outline)),
+                code: """
+                Wrap(8,
+                    Button.Create("Standard", onClick, ButtonAppearance.Standard),
+                    Button.Create("Accent",   onClick, ButtonAppearance.Accent),
+                    Button.Create("Subtle",   onClick, ButtonAppearance.Subtle),
+                    Button.Create("Outline",  onClick, ButtonAppearance.Outline))
+                """),
+            ControlExample.Build("Size axis (Small / Medium / Large)",
+                HStack(8,
+                    Button.Create("Small", () => setClicks(clicks + 1), ButtonAppearance.Accent, ControlSize.Small),
+                    Button.Create("Medium", () => setClicks(clicks + 1), ButtonAppearance.Accent, ControlSize.Medium),
+                    Button.Create("Large", () => setClicks(clicks + 1), ButtonAppearance.Accent, ControlSize.Large)),
+                code: """
+                HStack(8,
+                    Button.Create("Small",  onClick, ButtonAppearance.Accent, ControlSize.Small),
+                    Button.Create("Medium", onClick, ButtonAppearance.Accent, ControlSize.Medium),
+                    Button.Create("Large",  onClick, ButtonAppearance.Accent, ControlSize.Large))
+                """),
+            ControlExample.Build("Leading-icon (glyph) slot",
+                HStack(8,
+                    Button.Create("Add item", () => setClicks(clicks + 1), ButtonAppearance.Accent, glyph: Icons.Add),
+                    Button.Create("Copy", () => setClicks(clicks + 1), ButtonAppearance.Standard, glyph: Icons.Copy)),
+                code: """
+                Button.Create("Add item", onClick, ButtonAppearance.Accent, glyph: Icons.Add)
+                Button.Create("Copy",     onClick, ButtonAppearance.Standard, glyph: Icons.Copy)
                 """));
     }
 

@@ -101,17 +101,31 @@ public static partial class ToggleButton
         OffDisabledBorder = GradientSpec.Solid(Tok.StrokeControlDefault),
     };
 
+    /// <summary>The per-control clamp seam (adjustment #6). ToggleButton honors every size — identity.</summary>
+    internal static ControlSize ClampSize(ControlSize size) => size;
+
+    /// <summary>Resolve the effective style: an explicit style is the full-override escape hatch; otherwise the size
+    /// axis composes over the default's geometry (Medium byte-identical to the pre-axis default).</summary>
+    static Style Sized(Style? style, ControlSize size)
+    {
+        if (style is not null) return style;
+        var cs = ClampSize(size);
+        if (cs == ControlSize.Medium) return DefaultStyle;
+        var m = ControlMetrics.For(cs);
+        return DefaultStyle with { Padding = m.Padding, MinHeight = m.MinHeight, FontSize = m.FontSize, CornerRadius = m.CornerRadius };
+    }
+
     /// <summary>Two-state toggle. The on/off state is a caller <see cref="Signal{T}"/> (read directly in the core —
     /// live); a click WRITES it then fires <paramref name="onChange"/> once; a programmatic write re-skins with no
     /// onChange echo. Pass no signal (<paramref name="on"/> = null) to auto-materialize an internal one (one code path).</summary>
-    public static Element Create(string label, Signal<bool>? on = null, Action<bool>? onChange = null, Style? style = null, bool isEnabled = true, TemplateParts? parts = null)
-        => Embed.Comp(new Props(label, on, null, onChange, null, style ?? DefaultStyle, isEnabled, parts),
+    public static Element Create(string label, Signal<bool>? on = null, Action<bool>? onChange = null, Style? style = null, bool isEnabled = true, TemplateParts? parts = null, ControlSize size = ControlSize.Medium)
+        => Embed.Comp(new Props(label, on, null, onChange, null, Sized(style, size), isEnabled, parts),
                       () => new ToggleButtonCore());
 
     /// <summary>Three-state toggle (adds the mixed "indeterminate" look). The <see cref="CheckState"/> is a caller
     /// <see cref="Signal{T}"/>; a click cycles Unchecked → Checked → Indeterminate, WRITING it then firing onChange.</summary>
-    public static Element Create(string label, Signal<CheckState> state, Action<CheckState>? onChange = null, Style? style = null, bool isEnabled = true, TemplateParts? parts = null)
-        => Embed.Comp(new Props(label, null, state, null, onChange, style ?? DefaultStyle, isEnabled, parts),
+    public static Element Create(string label, Signal<CheckState> state, Action<CheckState>? onChange = null, Style? style = null, bool isEnabled = true, TemplateParts? parts = null, ControlSize size = ControlSize.Medium)
+        => Embed.Comp(new Props(label, null, state, null, onChange, Sized(style, size), isEnabled, parts),
                       () => new ToggleButtonCore());
 
     /// <summary>Controlled props RE-PUSHED to <see cref="ToggleButtonCore"/>. Exactly one of <see cref="Bool"/> /
