@@ -330,7 +330,10 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
     }
 
     public void Play() { _playIntent = true; Enqueue(async () => { if (_session is not null) await _session.PlayAsync().ConfigureAwait(false); StartTicker(); }); }
-    public void Pause() { _playIntent = false; Enqueue(async () => { if (_session is not null) await _session.PauseAsync().ConfigureAwait(false); }); }
+    // Stop the poll tick once paused: position is frozen and no crossfade commit / Ended / Error can occur while paused
+    // (all Playing-only), and the paused UI state is driven by the controller's optimistic EmitState — not this tick — so
+    // quiescing the 200ms wakeups here is free idle CPU. StartTicker resumes it on the next Play.
+    public void Pause() { _playIntent = false; Enqueue(async () => { if (_session is not null) await _session.PauseAsync().ConfigureAwait(false); StopTicker(); }); }
 
     public void Stop()
     {

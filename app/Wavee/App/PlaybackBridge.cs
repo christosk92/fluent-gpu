@@ -1,3 +1,4 @@
+using FluentGpu;
 using FluentGpu.Controls;
 using FluentGpu.Hooks;
 using FluentGpu.Localization;
@@ -39,6 +40,9 @@ public sealed class PlaybackBridge
     long _queueRev;
     Action? _playbackErrorAction;
     long _playbackErrorActionToken;
+    // OS media surfaces (SMTC: lock screen, now-playing flyout, hardware media keys) mirrored from the unified state below.
+    // Null when the platform refuses it or before Activate; every push is then a no-op.
+    SystemMediaControlsBridge? _smtc;
 
     // ── UI signals (read by components) ─────────────────────────────────────────────────────────────────────────────
     public Signal<Track?> CurrentTrack { get; } = new(null);
@@ -169,6 +173,14 @@ public sealed class PlaybackBridge
             User.Value = _session.CurrentUser;            // profile chip (name/avatar) follows the session
         })));
         WireStore();   // if a store was attached before mount, start observing it now
+        // Mirror the unified now-playing state onto the OS media surfaces (SMTC). UI-thread + the real top-level HWND
+        // (FluentApp.WindowHandle); fail-soft if the platform refuses. Enabled for every backend (fake/offline included) —
+        // it reflects whatever the bridge is showing, and transport buttons route back through _player like the on-screen ones.
+        if (OperatingSystem.IsWindowsVersionAtLeast(8, 0))
+        {
+            _smtc = new SystemMediaControlsBridge(this, _player, post);
+            _smtc.Activate(FluentApp.WindowHandle);
+        }
         PlaybackBucketDiagnostics.Startup("bridge", "activated");
         PlaybackBucketDiagnostics.QueueIfChanged(ref _lastQueueDiagSig, "bridge.activate.initial",
             _state.Queue, _state.ContextUri, _state.CurrentTrack?.Uri);
@@ -329,6 +341,7 @@ public sealed class PlaybackBridge
         CanSeek.Value = s.CanSeek && s.RecoveryKind == PlaybackRecoveryKind.None;
         ActiveDeviceId.Value = s.ActiveDeviceId;
         PushPosition(s.PositionMs);
+        _smtc?.OnStateChanged();   // metadata / play-status / prev-next availability → OS media surface
     }
 
     // Fold the queue's SET identity (count + per-row id/bucket/provider) and bump the revision only on a real change.
@@ -356,5 +369,6 @@ public sealed class PlaybackBridge
         PositionMs.Value = ms;
         long dur = DurationMs.Value;
         PositionFrac.Value = dur > 0 ? Math.Clamp(ms / (float)dur, 0f, 1f) : 0f;
+        _smtc?.OnPositionChanged(ms);   // ~1 Hz timeline scrub → OS media surface (throttled inside)
     }
 }
