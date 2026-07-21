@@ -65,7 +65,7 @@ sealed class Volume : Component
 VStack(gap: 8,
     Embed.Comp(() => new Counter()),
     Ctx.Provide(MyTheme, "dark", Embed.Comp(() => new Child())),
-    Flow.For(() => items.Value.Count, i => Row(items.Value[i]), keyOf: i => items.Value[i].Id),
+    Flow.For(() => items.Value, x => x.Id, (x, i) => Row(x)),
     Flow.Show(() => open.Value, panel, fallback));
 ```
 

@@ -74,7 +74,7 @@ For the slider tank — a value that changes 90×/second — bind it instead of 
 
 ```csharp
 var vol = UseFloatSignal(0.5f);
-Slider.Bind(vol);                  // a drag updates the thumb/fill transform only — no render, no reconcile, no layout
+Slider.Create(vol);                // a drag updates the thumb/fill transform only — no render, no reconcile, no layout
 ```
 
 ## Why

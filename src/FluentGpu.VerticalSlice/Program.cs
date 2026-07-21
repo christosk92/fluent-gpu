@@ -3529,9 +3529,8 @@ sealed class W1SliderTipProbe : Component
     });
 }
 
-// FG_PROBE=ranged-tooltip variants: the W1 probe shape with a switchable IsThumbToolTipEnabled (the triangulation
-// lever). Since G5c the thumb follows the scrub via the compositor bind regardless of onChange, so the old
-// STATEFUL/UseState variant (whether the thumb moved) collapsed into one code path (the vestigial flag was removed).
+// FG_PROBE=ranged-tooltip: the W1 probe shape with a switchable IsThumbToolTipEnabled (the triangulation lever).
+// The thumb follows the scrub via the compositor bind regardless of onChange — one code path (the unified Slider.Create).
 sealed class RangedTooltipProbeRoot : Component
 {
     public bool TooltipEnabled = true;
@@ -4443,6 +4442,16 @@ static class Slice
         Check("gate.loc.kit-fallback: kit keys resolve to neutral strings with NO tables loaded",
             fbOk && fbOff && fbClose && fbFmt,
             $"ok={fbOk} off={fbOff} close={fbClose} fmt={fbFmt}");
+
+        // ── gate.loc.validation-neutral-floor (G7 item 6) — the ENGINE's built-in validation rule messages (Rules.*)
+        // resolve to their ship-with-the-assembly neutral strings with NO culture table loaded, so a form error never
+        // surfaces the visible-missing [validation.*] marker on the hot path (Engine-side RegisterNeutral floor). ──
+        bool vReq = FluentGpu.Localization.Loc.Get("validation.required") == "Required.";
+        bool vMin = FluentGpu.Localization.Loc.Get("validation.minlen")   == "Too short.";
+        bool vMax = FluentGpu.Localization.Loc.Get("validation.maxlen")   == "Too long.";
+        bool vRng = FluentGpu.Localization.Loc.Get("validation.range")    == "Out of range.";
+        Check("gate.loc.validation-neutral-floor: engine validation.* keys resolve to the neutral floor (no [key] marker)",
+            vReq && vMin && vMax && vRng, $"req={vReq} min={vMin} max={vMax} range={vRng}");
 
         // ── gate.loc.kit-pseudo — pseudo transforms the neutral floor; switching back restores it. ──
         FluentGpu.Localization.Localization.SetCulture(FluentGpu.Localization.PseudoLocalizer.PseudoCulture);
@@ -15489,6 +15498,23 @@ static class Slice
             subtleNow && listRowNow && cardNow && ghostNow && reResolved,
             $"subtle={subtleNow} listRow={listRowNow} card={cardNow} ghost={ghostNow} reResolved={reResolved}");
 
+        // gate.ctl.recipe.control — the standard control-surface preset (G7): the opaque control fill ramp
+        // (default→secondary→tertiary→disabled, the same ramp Button's Standard appearance uses) + a 1px control border,
+        // fill+border only. Theme-live: the get-only preset re-reads Tok on every access (proven in BOTH theme kinds).
+        bool controlNow = Interaction.Control.Fill.Rest == Tok.FillControlDefault
+                          && Interaction.Control.Fill.Hover == Tok.FillControlSecondary
+                          && Interaction.Control.Fill.Pressed == Tok.FillControlTertiary
+                          && Interaction.Control.Fill.Disabled == Tok.FillControlDisabled
+                          && Interaction.Control.Stroke is { } ctrlStroke && ctrlStroke.Rest == Tok.StrokeControlDefault
+                          && Interaction.Control.StrokeWidth == 1f
+                          && Interaction.Control.HoverScale == 1f && Interaction.Control.PressScale == 1f;   // no geometry
+        Tok.Use(kind0 == ThemeKind.Dark ? ThemeKind.Light : ThemeKind.Dark);
+        bool controlLiveOtherTheme = Interaction.Control.Fill.Rest == Tok.FillControlDefault
+                                     && Interaction.Control.Stroke is { } ctrlStroke2 && ctrlStroke2.Rest == Tok.StrokeControlDefault;
+        Tok.Use(kind0);   // restore
+        Check("gate.ctl.recipe.control standard control-surface preset resolves FillControl ramp + control border (theme-live in both kinds)",
+            controlNow && controlLiveOtherTheme, $"control={controlNow} liveOtherTheme={controlLiveOtherTheme}");
+
         // gate.ctl.recipe.disabled — isEnabled=false applies the Disabled legs, sets IsEnabled=false (the engine's
         // hover/press gate), and suppresses the motion half (no hover/press response).
         var dis = pre.Interactive(recipe, isEnabled: false);
@@ -20653,6 +20679,39 @@ static class Slice
                              && v.Background.Equals(s.Background);
                 }
                 Check("gate.toast.severity", allMatch, $"sharedIdentity={allMatch}");
+            }
+
+            // gate.toast.edge-inset (G7 item 9) — EdgeInset reserves extra DIP on the docked edge so the strip clears a
+            // player/chrome bar (Wavee's above-the-player-bar placement). On a Bottom* dock, a larger inset lifts the
+            // toast UP by ~that many DIP (the strip's bottom padding = 24 + EdgeInset). Measured off the rendered node.
+            {
+                float savedInset = Toast.EdgeInset;
+                var savedPlacement = Toast.Placement;
+                Toast.Placement = ToastPlacement.BottomRight;   // a bottom dock
+                float MeasureToastTop(float inset)
+                {
+                    Toast.EdgeInset = inset;
+                    using var app = new HeadlessPlatformApp();
+                    var window = new HeadlessWindow(new WindowDesc("g5f-toast-inset", new Size2(640, 480), 1f));
+                    window.Show();
+                    var probe = new OverlayProbe();
+                    var clock = new ManualFrameTimeSource();
+                    using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe, frameTime: clock);
+                    host.RunFrame();
+                    Toast.Show("inset", new ToastOptions { Title = "x" });
+                    for (int i = 0; i < 8; i++) { clock.Advance(16f); host.RunFrame(); }
+                    var toasts = Roles(host.Scene, AutomationRole.InfoBar);
+                    float y = toasts.Count > 0 ? host.Scene.AbsoluteRect(toasts[0]).Y : float.NaN;
+                    Toast.CloseAll();
+                    return y;
+                }
+                float top0 = MeasureToastTop(0f);
+                float top120 = MeasureToastTop(120f);
+                Toast.EdgeInset = savedInset; Toast.Placement = savedPlacement;
+                float lift = top0 - top120;
+                bool shiftedUp = !float.IsNaN(top0) && !float.IsNaN(top120) && lift > 100f && lift < 140f;   // ~120 up
+                Check("gate.toast.edge-inset: a Bottom* dock lifts the toast strip up by ~EdgeInset DIP",
+                    shiftedUp, $"top@0={top0:0.#} top@120={top120:0.#} lift={lift:0.#}");
             }
         }
         finally { Toast.MaxVisible = savedMax; Toast.Default = null; }

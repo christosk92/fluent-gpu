@@ -112,7 +112,7 @@ rendered child `LayoutDirty` so a re-render that changed subtree size is re-laid
 // TreeReconciler.RunComponent (abridged)
 if (!_scene.IsLive(node)) return;
 _renderCount++;
-Element newRendered = comp.RunsOnce ? Reactive.Untrack(comp.RenderWithHooks) : comp.RenderWithHooks();
+Element newRendered = comp.RenderWithHooks();   // always tracked; a body that reads no signals never subscribes → run-once
 ReconcileSingleChild(node, newRendered, entry.Rendered);
 MirrorParticipation(node, _scene.FirstChild(node));
 entry.Rendered = newRendered;
@@ -120,8 +120,8 @@ var child = _scene.FirstChild(node);
 if (!child.IsNull) _scene.Mark(child, NodeFlags.LayoutDirty);
 ```
 
-`ReactiveComponent.Setup()` is the run-once variant — its body is `Reactive.Untrack`ed (`RunsOnce`), so it never
-re-renders; reactivity comes purely from bindings / `For` / `Show` inside it.
+A `Component.Render()` that reads no signals is the run-once case — it creates no subscriptions, so it is never
+re-scheduled and never re-renders; reactivity there comes purely from bindings / `For` / `Show` inside it.
 
 **`Flow.Show` (ShowEl) and `Flow.For` (ForEl)** are autonomous reactive boundaries (`MountShow` / `MountFor`). Each
 registers a boundary `Effect` via `AddBinding(node, eff)`. The `Show` effect re-evaluates `When()` and mounts
@@ -339,9 +339,9 @@ component when the signal changes:
 ```csharp
 var items = UseSignal(new List<string> { "Alpha", "Beta", "Gamma" });
 
-Flow.For(() => items.Value.Count,
-         i => Row(items.Value[i]),
-         keyOf: i => items.Value[i]);   // keyed: moves preserve row state
+Flow.For(() => items.Value,
+         x => x,
+         (x, i) => Row(x));   // keyed: moves preserve row state
 
 // mutate by writing a NEW list instance (signal writes are value-equality gated):
 var next = new List<string>(items.Peek()); next.Reverse(); items.Value = next;

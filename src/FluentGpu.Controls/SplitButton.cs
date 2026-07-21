@@ -60,12 +60,10 @@ public sealed class SplitButton : Component
     public static Element Create(string label, Action onInvoke, IReadOnlyList<MenuFlyoutItem> items, string? glyph = null, bool isEnabled = true)
         => Embed.Comp(() => new SplitButton { Label = label, OnInvoke = onInvoke, Items = items, Glyph = glyph, IsEnabled = isEnabled });
 
-    // FGRP001: PrimaryContent is a deliberate mount-time slot (the ReuseGuard tripwire below documents the freeze);
-    // callers pass static custom content. Dynamic content should be reached via a signal/context inside the slot.
-#pragma warning disable FGRP001
-    public static Element Create(Element primaryContent, Action onInvoke, IReadOnlyList<MenuFlyoutItem> items, bool isEnabled = true)
+    // PrimaryContent is a deliberate mount-time slot ([MountOnceContent]; the ReuseGuard tripwire below documents the
+    // freeze) — callers pass static custom content. Dynamic content should be reached via a signal/context inside the slot.
+    public static Element Create([MountOnceContent] Element primaryContent, Action onInvoke, IReadOnlyList<MenuFlyoutItem> items, bool isEnabled = true)
         => Embed.Comp(() => new SplitButton { PrimaryContent = primaryContent, OnInvoke = onInvoke, Items = items, IsEnabled = isEnabled });
-#pragma warning restore FGRP001
 
     // Frozen-props tripwire (ReuseGuard): Label/Glyph/IsEnabled freeze at mount (PrimaryContent/Items are element/list
     // slots — deliver those via a provider). A reused instance whose scalar caller-data changed is the frozen-props bug.

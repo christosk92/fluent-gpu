@@ -176,10 +176,10 @@ State/derivation hooks are in **[reactivity.md](./reactivity.md)**. The rest:
 
 ### Animation (composited — no re-render, rides the compositor frame)
 ```csharp
-UseSpring(AnimChannel ch, float to, SpringParams spring, params object[] deps)        // springs a channel to `to`
-UseTransition(AnimChannel ch, float from, float to, float ms, Easing e, params object[] deps)
-UseKeyframes(AnimChannel ch, Keyframe[] keys, float ms, bool loop = false, params object[] deps)
-UseDrivenAnimation(AnimChannel ch, Keyframe[] keys, Func<float> source, float min, float max, params object[] deps)
+UseSpring(AnimChannel ch, float to, SpringParams spring, DepKey deps = default)        // springs a channel to `to`
+UseTransition(AnimChannel ch, float from, float to, float ms, Easing e, DepKey deps = default)
+UseKeyframes(AnimChannel ch, Keyframe[] keys, float ms, bool loop = false, DepKey deps = default)
+UseDrivenAnimation(AnimChannel ch, Keyframe[] keys, Func<float> source, float min, float max, DepKey deps = default)
 // MotionHooks (extension methods on Component):
 this.UseEntrance(float offsetPx = 24, object? key = null)   // Fluent show transition (TranslateY 24→0 + fade)
 this.UseHoverScale(bool hovered, float to = 1.02f)          // card/button lift

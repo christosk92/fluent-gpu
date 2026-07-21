@@ -124,8 +124,8 @@ contracts owned elsewhere:
   Opacity `!= 1f` reappear bug and the Fill/TextColor bound-value clobbers by construction. A bound fire writes ONE
   scene column + marks the matching dirty axis (Transform/Paint → compositor-only; Width/Height/Text → scoped
   relayout). This is the **compositor bypass**: a high-frequency scalar (slider scrub via
-  `Slider.Bind(FloatSignal)`, scroll offset) updates the exact node with **zero render/reconcile/layout** — the
-  "slider tank" fix (vertical-slice check #60; the one slider API is `Slider.Create(FloatSignal)` since G5c). The superseded dual surface spelled each bind as a parallel
+  `Slider.Create(FloatSignal)` scrub, scroll offset) updates the exact node with **zero render/reconcile/layout** — the
+  "slider tank" fix (vertical-slice check #60). The superseded dual surface spelled each bind as a parallel
   `*Bind` prop (TransformBind/OpacityBind/…) beside its static twin <!-- canon-allow: names the superseded *Bind form on purpose -->.
 - **Reactive control-flow** reuses the keyed `ChildReconciler` as the *structural* engine: `ShowEl` (conditional)
   and `ForEl` (keyed list) are boundary effects that mount/remove/diff their subtree on signal change with no
@@ -140,8 +140,8 @@ contracts owned elsewhere:
   `backdrop-effects-animation.md`) while the real rows blur-reveal in (the `SoftReveal` recipes), and cancels the
   looping `SkeletonPulse` on the exit so HasTracks drops (the idle wake-stop is not defeated). `.Pending(field)` lowers
   to a leaf-grain region for incremental per-field arrival. Per-node `SkeletonMode.Off`/`SkeletonOverride` (on the base
-  `Element`, owned by `dsl-aot.md`) tune derivation (checks SK.a–g). `UseAsyncResource` (RenderContext) is the fetch
-  lifecycle (UsePost marshal + CTS-cancel-on-unmount), modelled on `UseImage`.
+  `Element`, owned by `dsl-aot.md`) tune derivation (checks SK.a–g). `UseResource` (RenderContext; renames the former
+  `UseAsyncResource`, G2) is the fetch lifecycle (UsePost marshal + CTS-cancel-on-unmount), modelled on `UseImage`.
 - **Context = signals.** A `ContextProviderEl` stores a `Signal<object?>` per provider node; `UseContext` resolves
   the nearest provider by walking ancestors (`SceneStore.Parent`) and subscribes — so a value change re-renders
   exactly the consumers, and a scoped re-render needs no context-stack reconstruction. Ambient contexts
@@ -482,7 +482,7 @@ internal struct DepDeps
 }
 ```
 
-`DepsEqual` = length check + per-element `DepKey.Equals`, with `Ref` elements resolved through
+`DepDeps.Equals` = length check + per-element `DepKey.Equals`, with `Ref` elements resolved through
 `gc.RefEqualPrev(...)`. No allocation, no boxing.
 
 ### 3.5 The hook table lives behind `ComponentSlot`, not behind a node GC-ref
@@ -873,7 +873,7 @@ The skip decision is the **3-signal gate**, evaluated per component, exactly as 
 ```
 selfTriggered = Volatile.Read(slot.SelfTriggered) != 0;  Volatile.Write(slot.SelfTriggered, 0);
 propsChanged  = (class)  ShouldUpdate(old,new) / ShouldUpdate(oldProps,newProps)
-                (memo)   !DepsEqual(slot.MemoDeps, newMemo.Deps)            // boxless DepDeps + GcDepTable
+                (memo)   !DepDeps.Equals(slot.MemoDeps, newMemo.Deps)       // boxless DepDeps + GcDepTable
                 (func)   !ShallowEquals(prevElement, newElement)
 contextChanged = HasConsumedContextChanged(slot)                            // per-consumer; see §8
 

@@ -33,7 +33,7 @@ The assemblies you will actually edit, with the one type each is known for:
 |---|---|---|
 | `FluentGpu.Engine` (`Foundation/`) | handles, the four allocators, `ColorF`/`Affine2D`/geometry, `StringTable`, **the Signals reactive core** (`Signals/`) | **`ReactiveCore`** (`Reactive`/`Computation`/`ReactiveRuntime`) |
 | `FluentGpu.Engine` (`Dsl/`) | `Element` records, `Ui.*` builders, `Modifiers`, theming tokens (`Tok`/`Theme`), the `Prop<T>` bindable channel | `Element`, `BoxEl`/`TextEl`/`ImageEl` |
-| `FluentGpu.Engine` (`Hooks/`) | `Component`/`ReactiveComponent`, `RenderContext` + the hook cells, `ComponentEl`/`Context`/`ControlFlow` | `Component` |
+| `FluentGpu.Engine` (`Hooks/`) | `Component`, `RenderContext` + the hook cells, `ComponentEl`/`Context`/`ControlFlow` | `Component` |
 | `FluentGpu.Engine` (`Reconciler/`) | the heart: render-effects, the keyed positional+type diff, `For`/`Show`, context, bindings, `VirtualListEl` | **`Reconciler`** (`TreeReconciler`) |
 | `FluentGpu.Engine` (`Layout/`) | flexbox/grid measure+arrange, the scoped-relayout boundary walk | **`FlexLayout`**, `LayoutInvalidator` |
 | `FluentGpu.Engine` (`Scene/`) | the retained SoA tree, the parallel columns, the 3-axis dirty flags, `ImageCache`, `VirtualLayout` | **`SceneStore`** (`ISceneBackend`) |
@@ -128,7 +128,7 @@ You do **not** need to read the whole corpus before your first change. Take this
    [getting-started.md](../../guide/getting-started.md) and run the verification harness once, so you have a known-green
    baseline before you change anything.
 2. **Read the one model from below.** [reactivity.md](../../guide/reactivity.md) — signals, the three update
-   mechanisms, `Component` vs `ReactiveComponent`, bindings, `For`/`Show`, context. You are about to edit the machinery
+   mechanisms, the one `Component` model (run-once inferred), bindings, `For`/`Show`, context. You are about to edit the machinery
    that implements this; know its observable contract cold first.
 3. **Learn the data substrate and the pipeline.**
    [rendering-and-performance.md](../../guide/rendering-and-performance.md) — the frame pipeline as-built, the SoA scene,

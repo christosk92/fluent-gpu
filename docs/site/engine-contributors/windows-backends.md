@@ -227,7 +227,7 @@ pump boundary so they match the DIP scene bounds.
 
 ### The custom frame (`WindowDesc.CustomFrame`)
 
-`CustomFrame` is the WinUI `ExtendsContentIntoTitleBar` analogue — opt-in (the gallery passes `customFrame: true`; the
+`CustomFrame` is the WinUI `ExtendsContentIntoTitleBar` analogue — opt-in (the gallery sets `AppOptions.CustomFrame = true`; the
 basic demos keep the standard OS frame). When set, the leaf strips the OS caption via `WM_NCCALCSIZE` (restoring the top
 inset to reclaim the caption strip as client, while keeping the thin L/R/B resize frame — the Windows Terminal recipe so
 the DWM shadow, Win11 rounded corners, and resize borders stay system-handled), answers `WM_NCHITTEST` from the
@@ -333,7 +333,7 @@ The harness verifies engine *logic* headlessly; on-screen D3D12 pixels are a sep
 the [Engine Contributors index](./index.md#the-golden-rule-verify-with-the-headless-harness-before-claiming-done)). The
 screenshot path is the tooling for that visual loop:
 
-- `FluentApp.Run(..., screenshot: "<path>")` runs a fixed number of settle frames (the gallery's `Program.cs` uses 6),
+- `FluentAppHarness.Run(root, null, new HarnessOptions { Screenshot = "<path>" })` runs a fixed number of settle frames (the gallery's `Program.cs` uses 6),
   then, if the device is a `D3D12Device`, reads the last back buffer back to CPU and writes a PNG:
 
   ```csharp

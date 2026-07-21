@@ -49,12 +49,10 @@ public sealed class ToggleSplitButton : Component
     public static Element Create(string label, IReadOnlyList<MenuFlyoutItem> items, Signal<bool>? isChecked = null, Action<bool>? onChange = null, string? glyph = null, bool isEnabled = true)
         => Embed.Comp(() => new ToggleSplitButton { Label = label, IsChecked = isChecked ?? new(false), Items = items, OnChange = onChange, Glyph = glyph, IsEnabled = isEnabled });
 
-    // FGRP001: PrimaryContent is a deliberate mount-time slot (see SplitButton) — static custom content, keyed/
-    // remounted or signal-driven for the dynamic case.
-#pragma warning disable FGRP001
-    public static Element Create(Element primaryContent, IReadOnlyList<MenuFlyoutItem> items, Signal<bool>? isChecked = null, Action<bool>? onChange = null, bool isEnabled = true)
+    // PrimaryContent is a deliberate mount-time slot ([MountOnceContent]; see SplitButton) — static custom content,
+    // keyed/remounted or signal-driven for the dynamic case.
+    public static Element Create([MountOnceContent] Element primaryContent, IReadOnlyList<MenuFlyoutItem> items, Signal<bool>? isChecked = null, Action<bool>? onChange = null, bool isEnabled = true)
         => Embed.Comp(() => new ToggleSplitButton { PrimaryContent = primaryContent, IsChecked = isChecked ?? new(false), Items = items, OnChange = onChange, IsEnabled = isEnabled });
-#pragma warning restore FGRP001
 
     public override Element Render()
     {

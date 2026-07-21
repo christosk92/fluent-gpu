@@ -72,17 +72,15 @@ public sealed class Expander : Component
     /// class remarks and <see cref="TemplateParts"/> for the contract.</summary>
     public TemplateParts? Parts;
 
-    // FGRP001: Content is a deliberate mount-time slot for this convenience factory (STATIC content). A parent with
-    // per-render content must use the re-push slots overload documented below (Embed.Comp(new ExpanderSlots(...), …)).
-#pragma warning disable FGRP001
     /// <summary><paramref name="isExpanded"/> = optional CONTROLLED open-state <see cref="Signal{T}"/> (null ⇒ the
     /// expander owns its state via <paramref name="initiallyExpanded"/> — today's behavior); <paramref name="onChange"/>
-    /// fires on a header toggle.</summary>
-    public static Element Create(string header, Element content, bool initiallyExpanded = false,
+    /// fires on a header toggle. <paramref name="content"/> is a <see cref="MountOnceContentAttribute">deliberate
+    /// mount-time slot</see> (STATIC content); a parent with per-render content uses the re-push slots overload below
+    /// (<c>Embed.Comp(new ExpanderSlots(...), …)</c>).</summary>
+    public static Element Create(string header, [MountOnceContent] Element content, bool initiallyExpanded = false,
                                  Signal<bool>? isExpanded = null, Action<bool>? onChange = null)
         => Embed.Comp(() => new Expander { Header = header, Content = content, InitiallyExpanded = initiallyExpanded,
                                            IsExpanded = isExpanded, OnChange = onChange });
-#pragma warning restore FGRP001
 
     /// <summary>LIVE content slots RE-PUSHED to the core (<c>Embed.Comp(slots, …)</c>; the SelectorBar/RadioButtons
     /// pattern). An <see cref="Expander"/> is an autonomous component: its <see cref="Content"/>/<see cref="HeaderContent"/>/

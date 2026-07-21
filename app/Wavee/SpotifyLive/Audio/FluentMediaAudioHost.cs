@@ -335,11 +335,14 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
         Enqueue(() => SupplyBodyAsync(b, epoch));
     }
 
-    public void Play() { _playIntent = true; Enqueue(async () => { if (_session is not null) await _session.PlayAsync().ConfigureAwait(false); StartTicker(); }); }
+    public void Play() { _playIntent = true; _log.Info($"[posdiag] play-intent raw={RawPositionMs} pos={PositionMs} activeStart={_activeStartMs} lastState={_lastState}"); _diagResumeTicks = 12; Enqueue(async () => { if (_session is not null) await _session.PlayAsync().ConfigureAwait(false); StartTicker(); }); }
     // Stop the poll tick once paused: position is frozen and no crossfade commit / Ended / Error can occur while paused
     // (all Playing-only), and the paused UI state is driven by the controller's optimistic EmitState — not this tick — so
     // quiescing the 200ms wakeups here is free idle CPU. StartTicker resumes it on the next Play.
-    public void Pause() { _playIntent = false; Enqueue(async () => { if (_session is not null) await _session.PauseAsync().ConfigureAwait(false); StopTicker(); }); }
+    public void Pause() { _playIntent = false; _log.Info($"[posdiag] pause raw={RawPositionMs} pos={PositionMs} activeStart={_activeStartMs} lastState={_lastState}"); Enqueue(async () => { if (_session is not null) await _session.PauseAsync().ConfigureAwait(false); StopTicker(); }); }
+
+    // TEMP DIAGNOSTIC (#3 resume overshoot): log raw/derived position for a few ticks after a resume, then self-disable.
+    int _diagResumeTicks;
 
     public void Stop()
     {
@@ -701,6 +704,12 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
         var state = _core.State.Peek();
         long rawPos = RawPositionMs;
         long pos = PositionMs;
+
+        if (_diagResumeTicks > 0)   // TEMP (#3): trace position for a few ticks after resume to locate the overshoot
+        {
+            _diagResumeTicks--;
+            _log.Info($"[posdiag] tick raw={rawPos} pos={pos} activeStart={_activeStartMs} state={state} lastState={_lastState}");
+        }
 
         if (!_errorReported && _core.Error.Peek() is { } err)
         {

@@ -32,3 +32,17 @@ public sealed class PropsAttribute : Attribute { }
 /// </summary>
 [AttributeUsage(AttributeTargets.Property)]
 public sealed class PropAttribute : Attribute { }
+
+/// <summary>
+/// Marks an <see cref="FluentGpu.Dsl.Element"/> content slot (a factory <c>Element</c>/<c>Element[]</c> parameter, or a
+/// component field/property that receives one) as a <b>deliberate mount-time slot</b> — the content is built once by
+/// the caller and frozen at first mount BY DESIGN, not by mistake. <c>FGRP001</c> (the frozen-Element-content analyzer)
+/// treats an assignment sourced from, or targeting, a member marked with this attribute as intentional and does NOT
+/// flag it — the sanctioned replacement for a blanket <c>#pragma warning disable FGRP001</c> around a convenience
+/// factory (Expander/SplitButton/DropZone/ToggleSplitButton static-content overloads). It documents intent at the
+/// declaration and keeps FGRP001 armed for genuinely accidental frozen content elsewhere. Callers needing per-render
+/// content use the component's re-push slots overload (<c>Embed.Comp(props, factory)</c> + <c>UseProps</c>) or a
+/// changed <c>Key</c>.
+/// </summary>
+[AttributeUsage(AttributeTargets.Parameter | AttributeTargets.Property | AttributeTargets.Field)]
+public sealed class MountOnceContentAttribute : Attribute { }

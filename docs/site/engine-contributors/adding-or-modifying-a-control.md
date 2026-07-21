@@ -383,10 +383,10 @@ sealed class ToggleSwitchControlPage : Component
 Conventions to mirror:
 
 - Use a **signal-bound readout** for hot, per-move values so only the readout updates:
-  `GalleryPage.LiveText(() => $"{basic.Value:0.00}")` over `Slider.Bind(basic)` — never re-render the whole page on a
+  `GalleryPage.LiveText(() => $"{basic.Value:0.00}")` over `Slider.Create(basic)` — never re-render the whole page on a
   drag. Use `output: BodyStrong(...)` for low-frequency, re-render-driven readouts.
-- Show the *cheapest correct* path in the snippet: the Slider page leads with `Slider.Bind` (compositor-only) and
-  annotates *why*, then shows `Slider.Ranged` for the controlled variant.
+- Show the *cheapest correct* path in the snippet: the Slider page leads with a `FloatSignal`-bound `Slider.Create`
+  (compositor-only) and annotates *why*, then shows the controlled `Slider.Create(float, onChange)` variant.
 - One demo card per distinct facet (two-state vs three-state, simple vs header), each with its own `output` and `code`.
 - For controls that need a sized frame (SplitView, TabView), wrap the live control in a fixed-size bordered `BoxEl`
   like `NavLayoutPages.cs`'s `Frame(...)`.

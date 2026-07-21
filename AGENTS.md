@@ -61,7 +61,7 @@ computation; a property *binding* is a finer one. Three update paths, cheapest f
 1. To make something update, a signal it **reads** must change. `.Value` subscribes; `.Peek()` does not.
 2. `Component.Render()` re-runs on its **own** state/context only. **Parent→child data flows via signals or context,
    never constructor args** — constructor values freeze at mount (the factory is not re-invoked on re-render).
-3. `ReactiveComponent.Setup()` runs **once**; show dynamic values via a bound prop (`Text = sig` signal-direct, or `Text = Prop.Of(() => …)` for derived text), not
+3. A `Component.Render()` that reads no signals is inferred **run-once** (there is ONE `Component` base — no `ReactiveComponent`); show dynamic values via a bound prop (`Text = sig` signal-direct, or `Text = Prop.Of(() => …)` for derived text), not
    `Ui.Text(sig.Value)`.
 4. Bind thunks must read `.Value`, not `.Peek()`.
 5. Every bindable channel is ONE `Prop<T>` prop (value / `Func<T>` via `Prop.Of` / concrete signal). Bound `Transform`/`Opacity`/`Fill` are compositor-only; bound `Width`/`Height`/`Text` trigger scoped
@@ -72,7 +72,7 @@ computation; a property *binding* is a finer one. Three update paths, cheapest f
    page. Give cards/panes/rows a boundary.
 9. **Zero managed allocation in paint phases 6–13.** Wire bindings/effects once at mount; no `new`/box/LINQ/per-call
    closures in a bind thunk or hot effect. The harness asserts `FrameStats.HotPhaseAllocBytes == 0` on steady frames.
-10. High-frequency scalar? Bind it (`Slider.Bind(FloatSignal)`), don't `setState` per move.
+10. High-frequency scalar? Bind it (`Slider.Create(FloatSignal)`), don't `setState` per move.
 
 ## Async loading & skeletons — DERIVE, never hand-author
 
@@ -83,7 +83,7 @@ never a hand-authored second tree."*
 
 - **A whole subtree** (card / hero / page): `Skel.Region(loadable, content, onFailed:…, isEmpty:…, onEmpty:…)` — the
   engine derives the shimmer from **`content(seed)`**: your `content` func rendered against the loadable's *seed* value
-  (the placeholder you already gave `UseAsyncResource`). You don't pass a shimmer at all. Make the seed render a
+  (the placeholder you already gave `UseResource`). You don't pass a shimmer at all. Make the seed render a
   representative shape (e.g. an empty `Artist` whose page still lays out hero + tracks via `FakeData`) — see
   `ArtistPage`.
 - **A homogeneous list**: `Skel.Region(loadable, rowTemplate, count, content, onEmpty:…, onFailed:…)` — the engine

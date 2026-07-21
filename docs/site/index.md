@@ -29,7 +29,7 @@ FluentGpu, and people **changing the engine internals**. Pick your path under
   invincible* — a sustained GPU stall still bounds back to the UI thread.
 - **Programming model:** Reactor/React (components + hooks) you already know, with a signals core underneath so the
   default is fast. Stay in the familiar `Component` / `UseState` style (now granular) or go fully signals-native
-  (`ReactiveComponent` + bindings) for the hottest paths.
+  (bindings) for the hottest paths.
 
 Why bother? WinUI 3 is slow in ways that are *structural*, not tunable — boxed dependency properties, a finalizable COM
 object per control, doubled visual+logical trees, single-threaded layout/composition, and a `setState` that fans out to
@@ -61,8 +61,8 @@ Most pitfalls are corollaries of that table. The two that bite first:
 - **Parent → child data flows through signals or context — never constructor args**, which are captured once at mount
   and frozen. Pass a `Signal<T>` (or use context) and have the child read it.
 
-The full treatment — `Component` vs `ReactiveComponent`, bindings, `For`/`Show`, context, the scoped-relayout firewall —
-is in the guide's [reactivity page](../guide/reactivity.md), the single most important doc to read.
+The full treatment — the one `Component` model (run-once inferred), bindings, `For`/`Show`, context, the scoped-relayout
+firewall — is in the guide's [reactivity page](../guide/reactivity.md), the single most important doc to read.
 
 ---
 
@@ -97,10 +97,8 @@ sealed class App : Component
 The signature (`src/FluentGpu.WindowsApp/FluentApp.cs`):
 
 ```csharp
-public static void Run(Func<Component> root, string title = "FluentGpu",
-                       int width = 800, int height = 600, bool mica = true, int frames = -1,
-                       string? screenshot = null, bool customFrame = false);
-public static void Run<T>(string title = "FluentGpu", int width = 800, int height = 600) where T : Component, new();
+public static void Run(Func<Component> root, AppOptions? options = null);
+public static void Run<T>(AppOptions? options = null) where T : Component, new();
 ```
 
 For a value that changes many times per second — a slider drag, scroll, a progress bar — **bind it** instead of calling
@@ -110,7 +108,7 @@ For a value that changes many times per second — a slider drag, scroll, a prog
 using FluentGpu.Signals;   // Signal<T>, FloatSignal, Prop, Prop.Of
 
 var vol = UseFloatSignal(0.5f);
-Slider.Bind(vol);          // a drag sets vol.Value = x → thumb/fill transform only
+Slider.Create(vol);        // a drag sets vol.Value = x → thumb/fill transform only
 ```
 
 When you bind a channel yourself, the thunk must read `.Value` (which subscribes the binding effect) — not `.Peek()`:
@@ -128,15 +126,15 @@ concrete signal assigns directly — `Text = sig`. The `Prop<T>` type lives in `
 1. [Getting started](../guide/getting-started.md) — the minimal app, the frame loop you call, running headless, the
    verification harness, the assembly layout.
 2. [Reactivity](../guide/reactivity.md) — signals, the update model, `UseState`/`UseSignal`/`UseComputed`, effects,
-   `Component` vs `ReactiveComponent`, bindings, `For`/`Show`, context. **The most important doc.**
+   the one `Component` model (run-once inferred), bindings, `For`/`Show`, context. **The most important doc.**
 3. [Components, elements & layout](../guide/components-elements-layout.md) — the hooks reference, the element zoo,
    flexbox & grid, modifiers, controls, navigation, virtualization, theming.
 4. [Rendering & performance](../guide/rendering-and-performance.md) — the frame pipeline, the SoA scene, reconcile,
    scoped relayout + the boundary firewall, the compositor bypass, zero-alloc, an optimization decision guide.
 5. [Pitfalls](../guide/pitfalls.md) — common mistakes as **symptom → cause → fix**. Read it before you debug.
 
-The two mistakes new authors hit most (both in [Pitfalls](../guide/pitfalls.md)): a `ReactiveComponent.Setup()` reads
-`sig.Value` once and then shows a stale value forever — fix it with a **bound prop** (`Text = sig`, or
+The two mistakes new authors hit most (both in [Pitfalls](../guide/pitfalls.md)): a `Component.Render()` that reads
+`sig.Value` once (run-once inferred) then shows a stale value forever — fix it with a **bound prop** (`Text = sig`, or
 `Text = Prop.Of(() => …)`); and a slider dragged through `setState` tanks FPS — fix it by **binding** the value and
 confirming `FrameStats.Rendered == false` during the drag.
 
@@ -202,7 +200,7 @@ pipeline as-built, and the design corpus for architecture — start at [`design/
   contract-ownership map; [`architecture-spec.md`](../../design/architecture-spec.md) is the end-to-end engine.
 - **The key types**, in one place:
   - `FluentApp.Run` — `src/FluentGpu.WindowsApp/FluentApp.cs`. The batteries-included entry point.
-  - `Component` (and `ReactiveComponent`) — `src/FluentGpu.Engine/Hooks/Component.cs`. Override `Render()`; it re-runs on its
+  - `Component` — `src/FluentGpu.Engine/Hooks/Component.cs`. Override `Render()`; it re-runs on its
     own state/context changes only.
   - `Signal<T>` — `src/FluentGpu.Engine/Foundation/Signals/Signal.cs` (namespace `FluentGpu.Signals`). The unit of state:
     `.Value` reads **and subscribes** the current computation; `.Peek()` reads without subscribing; setting `.Value`

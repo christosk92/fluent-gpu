@@ -63,6 +63,7 @@ public sealed class SystemMediaControlsBridge : IDisposable
             var smtc = SystemMediaControls.GetForWindow(hwnd);
             smtc.ButtonDispatcher = _post;   // OS worker thread → UI thread (the same post the bridge marshals on)
             smtc.ButtonPressed += OnButton;
+            smtc.PositionChangeRequested += OnSeek;   // lock-screen / flyout scrub-bar drag → SeekAsync (best-effort seam)
             smtc.SetEnabledButtons(play: true, pause: true, next: true, previous: true);
             smtc.PlaybackRate = 1.0;         // must be > 0; Spotify content is normal speed (spoken-word rate is not surfaced here)
             smtc.IsEnabled = true;
@@ -128,8 +129,8 @@ public sealed class SystemMediaControlsBridge : IDisposable
 
     /// <summary>Push the timeline (position + duration) so the Win11 flyout / lock-screen scrub bar tracks playback.
     /// Called from <see cref="PlaybackBridge"/> on each position tick (UI thread); throttled to whole-second changes so
-    /// it stays the ~1 Hz cadence the OS expects (SMTC seek-DRAG would need a position-change callback the current
-    /// <see cref="SystemMediaControls"/> surface does not expose — read-only scrub only).</summary>
+    /// it stays the ~1 Hz cadence the OS expects. Seek-DRAG on the OS scrub bar arrives via
+    /// <see cref="SystemMediaControls.PositionChangeRequested"/> → <see cref="OnSeek"/> (a best-effort seam).</summary>
     public void OnPositionChanged(long positionMs)
     {
         if (_smtc is not { } smtc || _disposed) return;
@@ -158,6 +159,17 @@ public sealed class SystemMediaControlsBridge : IDisposable
         }
     }
 
+    // The user dragged the OS scrub bar (lock screen / SMTC flyout). Routed to the UI thread by the same dispatcher,
+    // then translated into a seek intent. The requested position arrives in SECONDS; clamp to the known duration.
+    void OnSeek(double seconds)
+    {
+        if (_disposed) return;
+        long ms = (long)Math.Round(seconds * 1000.0);
+        long dur = _bridge.DurationMs.Peek();
+        ms = dur > 0 ? Math.Clamp(ms, 0, dur) : Math.Max(0, ms);
+        _ = _player.SeekAsync(ms);
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
@@ -167,6 +179,7 @@ public sealed class SystemMediaControlsBridge : IDisposable
         if (smtc is not null)
         {
             try { smtc.ButtonPressed -= OnButton; } catch (Exception) { }
+            try { smtc.PositionChangeRequested -= OnSeek; } catch (Exception) { }
             try { smtc.IsEnabled = false; } catch (Exception) { }
             try { smtc.Dispose(); } catch (Exception) { }
         }

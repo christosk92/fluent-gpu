@@ -55,6 +55,34 @@ public sealed class AnalyzerTests
         Assert.Equal(0, Harness.Count(diags, "FGRP001"));
     }
 
+    [Fact] // [MountOnceContent] on the SOURCE parameter marks a deliberate mount-time slot — the sanctioned replacement
+           // for a blanket #pragma around a static-content convenience factory (Expander/SplitButton/DropZone).
+    public void FGRP001_Silent_On_MountOnceContent_Parameter()
+    {
+        var diags = Harness.Analyze(new FrozenPropsAnalyzer(), Usings + """
+            sealed class Wrapper : Component { public Element Slot = new BoxEl(); public override Element Render() => Slot; }
+            static class Factory {
+                public static Element Make([MountOnceContent] Element body) => Embed.Comp(() => new Wrapper { Slot = body });
+            }
+            """);
+        Assert.Equal(0, Harness.Count(diags, "FGRP001"));
+    }
+
+    [Fact] // [MountOnceContent] on the TARGET member likewise marks the slot intentionally frozen.
+    public void FGRP001_Silent_On_MountOnceContent_Member()
+    {
+        var diags = Harness.Analyze(new FrozenPropsAnalyzer(), Usings + """
+            sealed class Wrapper : Component { [MountOnceContent] public Element Slot = new BoxEl(); public override Element Render() => Slot; }
+            sealed class Host : Component {
+                public override Element Render() {
+                    Element body = new BoxEl();
+                    return Embed.Comp(() => new Wrapper { Slot = body });
+                }
+            }
+            """);
+        Assert.Equal(0, Harness.Count(diags, "FGRP001"));
+    }
+
     // ── FGRP002 — mount-time signal snapshot capture ─────────────────────────────────────────────────────────────
     [Fact]
     public void FGRP002_Fires_On_Signal_Value_Snapshot_Local()

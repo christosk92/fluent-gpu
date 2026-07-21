@@ -53,33 +53,35 @@ To run the verification harness or any non-windowed scenario, see
 `FluentApp.Run` has two overloads (`src/FluentGpu.WindowsApp/FluentApp.cs`):
 
 ```csharp
-public static void Run(Func<Component> root, string title = "FluentGpu",
-                       int width = 800, int height = 600, bool mica = true, int frames = -1,
-                       string? screenshot = null, bool customFrame = false);
+public static void Run(Func<Component> root, AppOptions? options = null);
 
-public static void Run<T>(string title = "FluentGpu", int width = 800, int height = 600)
+public static void Run<T>(AppOptions? options = null)
     where T : Component, new();
 ```
 
 The generic overload is sugar for a parameterless root: `FluentApp.Run<App>()` is exactly
-`FluentApp.Run(() => new App())` with the same `title`/`width`/`height` defaults.
+`FluentApp.Run(() => new App())` with the same `AppOptions` defaults.
 
-| Parameter | Default | What it does |
+`root` is a factory that builds your root `Component` (called once, at mount). Everything else is
+configuration on the `AppOptions` record — pass `null` for all defaults:
+
+| `AppOptions` field | Default | What it does |
 |---|---|---|
-| `root` | — | A factory that builds your root `Component`. Called once, at mount. |
-| `title` | `"FluentGpu"` | The window title. |
-| `width` / `height` | `800` / `600` | Initial client size in DIPs (logical pixels at scale 1.0). |
-| `mica` | `true` | Apply the Mica system backdrop + a transparent window background + the composited swapchain. `false` gives an opaque window. |
-| `frames` | `-1` | Run forever (`-1`), or auto-exit after exactly `frames` frames — handy for deterministic screenshots and smoke tests. |
-| `screenshot` | `null` | When set, paces the loop at a fixed ~8 ms/frame, then reads the last back buffer back to the CPU and writes a PNG to this path for visual diffing. |
-| `customFrame` | `false` | Opt in to drawing your own title bar (caption stripped, engine caption buttons, snap layouts). Apps that don't pass this keep the standard OS frame. The gallery app uses this. |
+| `Title` | `"FluentGpu"` | The window title. |
+| `Width` / `Height` | `800` / `600` | Initial client size in DIPs (logical pixels at scale 1.0). |
+| `Mica` | `true` | Apply the Mica system backdrop + a transparent window background + the composited swapchain. `false` gives an opaque window. |
+| `CustomFrame` | `false` | Opt in to drawing your own title bar (caption stripped, engine caption buttons, snap layouts). Apps that don't pass this keep the standard OS frame. The gallery app uses this. |
+
+`AppOptions` also carries `MicaAlt` (the tabbed Mica variant), `AmbientFps` (idle frame pacing), and
+`Modules` (OS-service modules to register). **Frames and screenshots are not on `AppOptions`** — they
+moved to the test/CI harness: `FluentAppHarness.Run(root, AppOptions?, HarnessOptions { Frames, Screenshot, FrameWaitMs })`.
 
 A few things worth knowing:
 
-- **`frames` + `screenshot` together** are how the test/gallery tooling captures a frame
-  deterministically: `FluentApp.Run(() => new App(), frames: 1, screenshot: "out.png")` renders one
-  frame, writes the PNG, and exits.
-- **`customFrame: true`** is an explicit opt-in because it changes window chrome ownership. Don't
+- **`Frames` + `Screenshot` together** are how the test/gallery tooling captures a frame
+  deterministically: `FluentAppHarness.Run(() => new App(), null, new HarnessOptions { Frames = 1, Screenshot = "out.png" })`
+  renders one frame, writes the PNG, and exits.
+- **`CustomFrame = true`** is an explicit opt-in because it changes window chrome ownership. Don't
   set it unless you are actually rendering a title bar (FluentGpu ships a WinUI-style one — see the
   controls guide).
 - **Diagnostics**: set the `FG_DIAG` (or `FG_DIAG_CONSOLE`) environment variable to route engine
@@ -155,8 +157,8 @@ Two rules that matter from day one (both from [pitfalls](../../guide/pitfalls.md
   handlers (the `() => setN(...)` lambda above) or in `UseEffect`.
 
 If you want a counter with **no re-render at all** — the value bound straight to a node channel — that
-is the `ReactiveComponent` + bound-prop path. `ReactiveComponent.Setup()` runs *once*; everything
-dynamic is a bound prop, a `Flow.For`, or a `Flow.Show`. That distinction (re-render vs. bind vs.
+is the bound-prop path: a `Component.Render()` that reads no signals runs *once* (run-once inferred),
+so everything dynamic is a bound prop, a `Flow.For`, or a `Flow.Show`. That distinction (re-render vs. bind vs.
 control-flow) is the core of [reactivity](../../guide/reactivity.md); start with `Component` +
 `UseState` and reach for binds when a profiler (or `FrameStats.Rendered`) tells you to.
 
@@ -308,7 +310,7 @@ you reference a handful and almost never open the rest:
 |---|---|
 | `FluentGpu.WindowsApp` | `FluentApp.Run` (your entry point) **and** the gallery app that demonstrates every control. Start here. |
 | `FluentGpu.Engine` / `Dsl/` | `Element` records, the `Ui.*` builders, `Modifiers`, and theming (`Tok`/`Theme`). This is the authoring surface you compose with. |
-| `FluentGpu.Engine` / `Hooks/` | `Component` / `ReactiveComponent`, the hooks (`UseState`, `UseSignal`, `UseEffect`, …), context and control-flow. |
+| `FluentGpu.Engine` / `Hooks/` | `Component`, the hooks (`UseState`, `UseSignal`, `UseEffect`, …), context and control-flow. |
 | `FluentGpu.Controls` | Button / IconButton / ToggleButton / Slider / ScrollBar / NavigationView / Repeater / Virtual / Navigator — composition over the DSL, no rendering. |
 | `FluentGpu.Engine` / `Foundation/` | Handles, allocators, `ColorF`/`Affine2D`/geometry, the **Signals reactive core** (`Foundation/Signals/`), `StringTable`. |
 | `FluentGpu.Engine` / `Hosting/` | `AppHost` (the frame loop), `FrameStats`, `FrameDiagnostics` — this page's subject. |

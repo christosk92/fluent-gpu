@@ -151,6 +151,18 @@ public static class Interaction
         Motion = MotionTokenId.StandardSpring,
     };
 
+    /// <summary>The STANDARD control-surface chrome: the opaque control fill ramp (default→secondary→tertiary→disabled,
+    /// the same ramp <see cref="Button"/>'s Standard appearance uses) under a 1px control border — the "this is a
+    /// standard button / input face" treatment that sits between the transparent <see cref="Subtle"/> ghost and the
+    /// elevated <see cref="Card"/>. Fill + border only (no press geometry), so it reads as a solid control face;
+    /// theme-live like the other presets.</summary>
+    public static InteractionRecipe Control => new()
+    {
+        Fill = new StateBrush(Tok.FillControlDefault, Tok.FillControlSecondary, Tok.FillControlTertiary, Tok.FillControlDisabled),
+        Stroke = StateBrush.Flat(Tok.StrokeControlDefault),
+        StrokeWidth = 1f,
+    };
+
     /// <summary>Transparent at rest, an accent-subtle wash on hover, a dimmer accent on press — an accent-tinted ghost
     /// affordance (a toolbar toggle, an accent list action) that shows intent without a solid accent plate.</summary>
     public static InteractionRecipe AccentGhost => new()

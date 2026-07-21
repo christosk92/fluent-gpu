@@ -6,7 +6,7 @@ The authoring surface is React/Reactor — immutable `Element` records, `Compone
 
 ```csharp
 using static FluentGpu.Dsl.Ui;   // VStack, HStack, Text, Heading, Button, Image, Grid, ScrollView…
-using FluentGpu.Hooks;            // Component, ReactiveComponent, Embed, Ctx, Flow
+using FluentGpu.Hooks;            // Component, Embed, Ctx, Flow
 using FluentGpu.Signals;          // Signal<T>, FloatSignal, Memo<T>, Prop<T>, Prop.Of, Reactive
 using FluentGpu.Controls;         // Button, Slider, IconButton, NavigationView, Virtual…
 ```
@@ -49,7 +49,7 @@ A binding is a thunk (or a signal) you assign to a node *channel*. The reconcile
 ```csharp
 var x = UseFloatSignal(0.3f);   // hot scalar → bind it, don't setState per move
 
-Slider.Bind(x);                  // a drag writes x.Value directly — no setState per pointer-move
+Slider.Create(x);                // a drag writes x.Value directly — no setState per pointer-move
 
 new BoxEl
 {
@@ -103,9 +103,9 @@ VStack(gap: 10,
     Button.Standard("Toggle details", () => open.Value = !open.Peek()),
     Flow.Show(() => open.Value, detailsPanel, fallback),         // mount/unmount the branch
 
-    Flow.For(() => items.Value.Count,
-             i => Row(items.Value[i]),
-             keyOf: i => items.Value[i]));                        // add/move/remove rows; state preserved by key
+    Flow.For(() => items.Value,
+             x => x,
+             (x, i) => Row(x)));                                  // add/move/remove rows; state preserved by key
 ```
 
 Mutate a collection signal by writing a **new instance** (writes are value-equality gated, so an in-place mutation followed by re-assigning the same reference is dropped):
@@ -186,30 +186,25 @@ Two important distinctions:
 - **`UseMemo` vs `UseComputed`.** `UseMemo` is a *dependency-array* memo (React style): it recomputes only when an entry in `deps` changes, and is **not** reactive to signals it reads internally. `UseComputed` *is* reactive — it tracks the signals its function reads. Use `UseMemo` to cache an expensive value keyed on explicit deps; use `UseComputed` for derived reactive state.
 - **`UseRef`** is a stable mutable box (`Ref<T>` with a public `.Value`) that *never* subscribes anyone — perfect for a mutable counter, a captured handle, or "did I already do X". Writing `ref.Value` does not re-render.
 
-## `Component` vs `ReactiveComponent` (`Render` re-runs vs `Setup` runs once)
+## The one `Component` model (run-once is inferred)
 
-| | `Component` (classic) | `ReactiveComponent` (signals-native) |
-|---|---|---|
-| Authoring method | `Element Render()` | `Element Setup()` |
-| Runs | re-runs on its own state/context change | **runs once** at mount |
-| Reactivity | re-render the subtree (granular) | **bindings / `Flow.For` / `Flow.Show` only** |
-| Use when | normal UI; familiar React style | the hottest paths; you want zero re-renders |
+There is **one** `Component` base with one authoring method, `Element Render()`. Every `Render()` runs **tracked**: it subscribes to the signals it reads and re-runs (granular, subtree-scoped) when one of them changes. A `Render()` that reads **no** signals is inferred to run exactly once and never re-render — **run-once is a consequence, not a mode.** You do not opt into it; you get it by not reading a signal in the body.
 
-`ReactiveComponent.Setup()` runs **exactly once**. Reading `signal.Value` there is a one-time read — to show a value that changes over time you **must** route it through a bound prop or a `Flow` boundary:
+So when a `Render()` runs once, reading `signal.Value` there is a one-time read — to show a value that changes over time you **must** route it through a bound prop or a `Flow` boundary:
 
 ```csharp
-sealed class Clock : ReactiveComponent
+sealed class Clock : Component
 {
-    public override Element Setup()
+    public override Element Render()
     {
         var t = UseSignal("00:00");
         return new TextEl("") { Text = t };       // ✅ signal-direct: the bind updates when t changes
-        // return Ui.Text(t.Value);                // ❌ reads ONCE, never updates (Setup runs once!)
+        // return Ui.Text(t.Value);                // ❌ reads ONCE, never updates (this Render ran once!)
     }
 }
 ```
 
-The `❌` line is the single most common signals-native mistake. In `Setup()`, *everything dynamic* must be a bind / `For` / `Show`. (`Component.RunsOnce` is the gate — `false` for classic, sealed `true` for `ReactiveComponent`; the reconciler runs a run-once body untracked so its render-effect never re-subscribes.) Stay with plain `Component` until a profiler tells you a subtree re-renders too often.
+The `❌` line is the single most common signals-native mistake. When a `Render()` runs once, *everything dynamic* must be a bind / `Flow.For` / `Flow.Show` (or flow in through context). Read a signal's `.Value` in the body instead and that same component re-renders its subtree (granular) on change — pick the tier you want by what the body reads.
 
 ## Effects (`UseEffect`, `UseLayoutEffect`, `Reactive.OnCleanup`, `Reactive.Untrack`)
 

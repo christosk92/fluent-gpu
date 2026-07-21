@@ -21,8 +21,8 @@ You do **not** need to read the whole guide before you ship something. Take this
 1. **Run your first app — 2 minutes.** The [60-second cheat sheet](#60-second-cheat-sheet) below, then
    [getting-started.md](../../guide/getting-started.md) for `FluentApp.Run` and the (optional) frame loop.
 2. **Learn the one model — the highest-leverage read.** [reactivity.md](../../guide/reactivity.md): signals, the three
-   update mechanisms, `UseState`/`UseSignal`, `Component` vs `ReactiveComponent`, bindings, `Flow.For`/`Flow.Show`, and
-   context. Treat it as required.
+   update mechanisms, `UseState`/`UseSignal`, the one `Component` model (run-once inferred), bindings,
+   `Flow.For`/`Flow.Show`, and context. Treat it as required.
 3. **Look up the building blocks as you need them.**
    [components-elements-layout.md](../../guide/components-elements-layout.md) — the hooks reference, the element zoo,
    flexbox & grid, modifiers, controls, navigation, virtualization, and theming.
@@ -42,7 +42,7 @@ The whole surface, end to end. Copy it, change the body, run it.
 
 ```csharp
 using FluentGpu;                         // FluentApp
-using FluentGpu.Hooks;                   // Component, ReactiveComponent, Embed, Ctx, Flow
+using FluentGpu.Hooks;                   // Component, Embed, Ctx, Flow
 using FluentGpu.Signals;                 // Signal<T>, FloatSignal, Memo<T>
 using FluentGpu.Controls;                // Button, Slider, NavigationView, Virtual…
 using static FluentGpu.Dsl.Ui;           // VStack, HStack, Text, Heading, Button (DSL builders), Image, Grid, ScrollView…
@@ -73,17 +73,16 @@ Embed.Comp(() => new Sidebar());
 Ctx.Provide(ThemeName, "dark", Embed.Comp(() => new Child()));
 
 // Reactive control-flow: a keyed list and a conditional. The thunks read `.Value` so the boundary subscribes.
-Flow.For(() => items.Value.Count,
-         i => Row(items.Value[i]),
-         keyOf: i => items.Value[i].Id);              // add/move/remove rows — state preserved by key
+Flow.For(() => items.Value,
+         x => x.Id,
+         (x, i) => Row(x));                           // add/move/remove rows — state preserved by key
 Flow.Show(() => open.Value, detailsPanel, fallback);  // mount/unmount one branch
 ```
 
 `FluentApp.Run` (signature from `src/FluentGpu.WindowsApp/FluentApp.cs`) is the only host wiring you need:
 
 ```csharp
-public static void Run(Func<Component> root, string title = "FluentGpu",
-                       int width = 800, int height = 600, bool mica = true, int frames = -1);
+public static void Run(Func<Component> root, AppOptions? options = null);
 ```
 
 That is the entire "getting an app on screen" story. For driving the loop yourself, or running headless in
@@ -109,18 +108,18 @@ catalogued in [pitfalls.md](../../guide/pitfalls.md).
    Embed.Comp(() => new Header(titleSignal));
    ```
 
-3. **`ReactiveComponent.Setup()` runs exactly once.** Reading `signal.Value` there is a one-time read. To show a
-   *changing* value you must use a **bound prop** — `Text = sig` (signal-direct), or `Text = Prop.Of(() => …)` for
-   derived text — never `Ui.Text(sig.Value)`. This is the #1 signals-native mistake.
+3. **A `Component.Render()` that reads no signals runs exactly once (run-once inferred).** Reading `signal.Value` there
+   is a one-time read. To show a *changing* value you must use a **bound prop** — `Text = sig` (signal-direct), or
+   `Text = Prop.Of(() => …)` for derived text — never `Ui.Text(sig.Value)`. This is the #1 signals-native mistake.
 
    ```csharp
-   sealed class Clock : ReactiveComponent
+   sealed class Clock : Component
    {
-       public override Element Setup()
+       public override Element Render()
        {
-           var t = UseSignal("00:00");
+           var t = UseSignal("00:00");           // reads no signals => this Render runs once
            return new TextEl("") { Text = t };   // ✅ updates when t changes
-           // return Ui.Text(t.Value);            // ❌ reads once, never updates (Setup runs once!)
+           // return Ui.Text(t.Value);            // ❌ reads once, never updates (Render ran once!)
        }
    }
    ```

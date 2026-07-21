@@ -289,7 +289,7 @@ static void SliderSignalChecks(StringTable strings)
 }
 ```
 
-**The Probe pattern.** A *Probe* is a small `Component` (or `ReactiveComponent`) defined at the top of `Program.cs` that
+**The Probe pattern.** A *Probe* is a small `Component` defined at the top of `Program.cs` that
 exposes observable state for the assertion — a `static int Renders` it bumps in `Render()`, a `Signal<T>` field the test
 writes to drive it, or a captured hook value. The test resets the static, mounts the probe as the root, runs a frame,
 pokes a signal, runs another frame, and reads the probe back. Existing probes to copy: `Counter` (the slice root),
