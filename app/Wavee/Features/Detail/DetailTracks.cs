@@ -1772,7 +1772,7 @@ sealed class SortMenuButton : Component
             if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
             handle.Value = svc.Open(
                 () => anchor.Value,
-                () => MenuFlyout.Build(Items(), () => handle.Value?.Close()),
+                () => MenuFlyout.Create(Items(), () => handle.Value?.Close()),
                 FlyoutPlacement.BottomEdgeAlignedRight,
                 new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
             handle.Value.ClosedAction = () => handle.Value = null;
@@ -1886,7 +1886,7 @@ sealed class FilterButton : Component
         {
             if (svc is null) return;
             if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
-            handle.Value = svc.Open(() => anchor.Value, () => MenuFlyout.Build(Items(), () => handle.Value?.Close()),
+            handle.Value = svc.Open(() => anchor.Value, () => MenuFlyout.Create(Items(), () => handle.Value?.Close()),
                 FlyoutPlacement.BottomEdgeAlignedRight, ToolFx.Popup);
             handle.Value.ClosedAction = () => handle.Value = null;
         }

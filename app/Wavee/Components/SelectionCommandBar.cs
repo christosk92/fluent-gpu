@@ -183,7 +183,7 @@ sealed class SelectionCommandBar : Component
         items.Add(new MenuFlyoutItem(Loc.Get(Strings.Detail.SelectAll), Icons.Accept, true, SelectAllTracks));
         menuHandle.Value = overlaySvc.Open(
             () => menuAnchor.Value,
-            () => MenuFlyout.Build(items, () => menuHandle.Value?.Close()),
+            () => MenuFlyout.Create(items, () => menuHandle.Value?.Close()),
             FlyoutPlacement.TopEdgeAlignedRight, ToolFx.Popup);
         menuHandle.Value.ClosedAction = () => menuHandle.Value = null;
     }

@@ -609,7 +609,15 @@ internal sealed class OverlayServiceImpl : IOverlayService
 /// </summary>
 public sealed class OverlayHost : Component
 {
+    /// <summary>The base app content wrapped by the overlay host (always the first ZStack child, so opening/closing an
+    /// overlay never remounts it). Prefer <see cref="Create"/> (the documented factory); the property-init field stays
+    /// public because the in-repo headless probes + shells compose the host via <c>new OverlayHost { Child = … }</c>.</summary>
     public Element Child = new BoxEl();
+
+    /// <summary>The one canonical factory: wrap <paramref name="child"/> (the app root) in an overlay host that hosts
+    /// anchored flyouts / menus / dialogs / toasts in a top-level ZStack. Resolve the service inside via
+    /// <c>UseContext(Overlay.Service)</c>.</summary>
+    public static Element Create(Element child) => Embed.Comp(() => new OverlayHost { Child = child });
 
     // WinUI MenuPopupThemeTransition timings: s_OpenDuration=250 / s_OpacityChangeDuration=83
     // (MenuPopupThemeTransition_Partial.h:23-24); ClosedRatio=0.5 for root menus (MenuFlyout_Partial.cpp:253

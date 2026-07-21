@@ -399,8 +399,7 @@ sealed partial class SettingsPage
         {
             (int)AudioCacheBudgetMode.FixedBytes => FixedBudgetEditor(svc, settings),
             (int)AudioCacheBudgetMode.DriveShare => NumberBox.Create(value: _bodyBudgetPercent,
-                minimum: 0, maximum: 90, smallChange: 1, spinButtonPlacementMode: NumberBoxSpinButtonPlacementMode.Compact,
-                width: 150f, formatter: v => v <= 0 ? Loc.Get(Strings.Settings.Storage.AutoTenPercent) : v.ToString("0", CultureInfo.InvariantCulture) + "%",
+                options: new NumberBox.NumberBoxOptions { Minimum = 0, Maximum = 90, SmallChange = 1, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact, Width = 150f, Formatter = v => v <= 0 ? Loc.Get(Strings.Settings.Storage.AutoTenPercent) : v.ToString("0", CultureInfo.InvariantCulture) + "%", IsEnabled = settings is not null },
                 onChange: v =>
                 {
                     if (settings is null) return;
@@ -409,7 +408,7 @@ sealed partial class SettingsPage
                     settings.Set(WaveeSettings.AudioBodyCacheBudgetPercent, pct);
                     svc?.AudioBodyCache?.Trim();
                     Bump();
-                }, isEnabled: settings is not null),
+                }),
             _ => new TextEl(Loc.Get(Strings.Settings.Storage.UnlimitedReserve)) { Size = 12f, Color = Tok.TextSecondary },
         };
 
@@ -461,15 +460,19 @@ sealed partial class SettingsPage
                         _bodyBudgetGiB.Value = s_bodyBudgetBytes[i] / (double)(1L << 30);
                         CommitGiB(_bodyBudgetGiB.Value);
                     }),
-                NumberBox.Create(value: _bodyBudgetGiB, minimum: 0.0625,
-                    maximum: long.MaxValue / (double)(1L << 30), smallChange: 1,
-                    spinButtonPlacementMode: NumberBoxSpinButtonPlacementMode.Compact, width: 150f,
-                    formatter: v => v.ToString("0.###", CultureInfo.InvariantCulture) + " GB",
+                NumberBox.Create(value: _bodyBudgetGiB,
+                    options: new NumberBox.NumberBoxOptions
+                    {
+                        Minimum = 0.0625, Maximum = long.MaxValue / (double)(1L << 30), SmallChange = 1,
+                        SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact, Width = 150f,
+                        Formatter = v => v.ToString("0.###", CultureInfo.InvariantCulture) + " GB",
+                        IsEnabled = settings is not null,
+                    },
                     onChange: v =>
                     {
                         _bodyBudgetPreset.Value = s_bodyBudgetLabels.Length - 1;
                         CommitGiB(v);
-                    }, isEnabled: settings is not null),
+                    }),
             ],
         };
     }

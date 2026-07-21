@@ -44,6 +44,38 @@ public sealed class NavPaneClosingArgs
     public bool Cancel;
 }
 
+/// <summary>The <see cref="NavigationView.Create"/> options record — wraps the NavigationView property-init config
+/// (items/footer, the selected/content seam, pane display + toggle/navigate request signals, the AutoSuggest slot,
+/// settings footer, and the adaptive-threshold/width metrics) so the control has one canonical factory. Field defaults
+/// mirror the control's own.</summary>
+public sealed record NavigationViewOptions
+{
+    public NavItem[] Items { get; init; } = [];
+    public NavItem[] Footer { get; init; } = [];
+    public string Initial { get; init; } = "";
+    public Action<string>? OnSelect { get; init; }
+    public Func<string, Element>? Content { get; init; }
+    public string? Header { get; init; }
+    public bool ShowBackButton { get; init; }
+    public Action? OnBack { get; init; }
+    public bool ShowPaneToggle { get; init; } = true;
+    public Signal<int>? PaneToggleRequest { get; init; }
+    public Signal<string>? NavigateRequest { get; init; }
+    public NavPaneDisplayMode PaneDisplayMode { get; init; } = NavPaneDisplayMode.Auto;
+    public Edges4 ContentPadding { get; init; }
+    public bool SelectionFollowsFocus { get; init; }
+    public bool IsSettingsVisible { get; init; }
+    public string SettingsLabel { get; init; } = "Settings";
+    public Element? AutoSuggest { get; init; }
+    public Action<NavPaneClosingArgs>? PaneClosing { get; init; }
+    public Action<PaneMode>? DisplayModeChanged { get; init; }
+    public TemplateParts? Parts { get; init; }
+    public float ExpandedModeThresholdWidth { get; init; } = 1008f;
+    public float CompactModeThresholdWidth { get; init; } = 641f;
+    public float PaneWidth { get; init; } = 320f;
+    public float CompactWidth { get; init; } = 48f;
+}
+
 /// <summary>
 /// Adaptive NavigationView modeled on WinUI's SplitView-backed template: expanded / compact / minimal LEFT modes plus
 /// the TOP display mode (horizontal items + overflow flyout), a WinUI-style pane toggle row, section headers,
@@ -141,6 +173,22 @@ public sealed class NavigationView : Component
     /// <summary>Lightweight per-part styling (CSS ::part): modifiers keyed by the <c>PartXxx</c> consts; see
     /// <see cref="TemplateParts"/> for the contract. Top-mode bar items are not part-routed (different structure).</summary>
     public TemplateParts? Parts;
+
+    /// <summary>The one canonical NavigationView factory (WS3 creation idiom). Wraps the property-init surface in a
+    /// <see cref="NavigationViewOptions"/> record. Property-init construction stays available for the in-repo headless
+    /// probes/shells that compose the control directly, but this is the documented public path.</summary>
+    public static Element Create(NavigationViewOptions options)
+        => Embed.Comp(() => new NavigationView
+        {
+            Items = options.Items, Footer = options.Footer, Initial = options.Initial, OnSelect = options.OnSelect,
+            Content = options.Content, Header = options.Header, ShowBackButton = options.ShowBackButton, OnBack = options.OnBack,
+            ShowPaneToggle = options.ShowPaneToggle, PaneToggleRequest = options.PaneToggleRequest, NavigateRequest = options.NavigateRequest,
+            PaneDisplayMode = options.PaneDisplayMode, ContentPadding = options.ContentPadding, SelectionFollowsFocus = options.SelectionFollowsFocus,
+            IsSettingsVisible = options.IsSettingsVisible, SettingsLabel = options.SettingsLabel, AutoSuggest = options.AutoSuggest,
+            PaneClosing = options.PaneClosing, DisplayModeChanged = options.DisplayModeChanged, Parts = options.Parts,
+            ExpandedModeThresholdWidth = options.ExpandedModeThresholdWidth, CompactModeThresholdWidth = options.CompactModeThresholdWidth,
+            PaneWidth = options.PaneWidth, CompactWidth = options.CompactWidth,
+        });
 
     /// <summary>Ambient navigate action for descendants that need to drive selection without prop threading.</summary>
     public static readonly Context<Action<string>> Nav = new(static _ => { });

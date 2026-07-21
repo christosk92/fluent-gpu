@@ -35,46 +35,46 @@ sealed class NumberBoxPage : Component
         return GalleryPage.Shell("NumberBox",
             "A text control for numeric input with validation, expression evaluation and optional spin buttons. Spin buttons are hidden by default (WinUI); Inline places up/down repeat buttons at the trailing edge of the field, Compact opens them in a popup while the field is focused.",
             ControlExample.Build("A NumberBox (editable, no spin buttons — the WinUI default)",
-                NumberBox.Create(value: plain, placeholderText: "Enter a number"),
+                NumberBox.Create(value: plain, options: new NumberBox.NumberBoxOptions { PlaceholderText = "Enter a number" }),
                 description: "Invalid input reverts on commit (Enter or blur); clearing the field commits NaN and shows the placeholder.",
                 output: GalleryPage.LiveText(() => double.IsNaN(plain.Value) ? "—" : $"{plain.Value:0.##}"),
                 code: """
                 var value = UseSignal(0.0);   // caller-owned; NaN = cleared
 
-                NumberBox.Create(value: value, placeholderText: "Enter a number")
+                NumberBox.Create(value: value, options: new NumberBox.NumberBoxOptions { PlaceholderText = "Enter a number" })
                 """),
             ControlExample.Build("A NumberBox that evaluates expressions",
-                NumberBox.Create(value: expr, acceptsExpression: true, placeholderText: "1 + 2^2"),
+                NumberBox.Create(value: expr, options: new NumberBox.NumberBoxOptions { AcceptsExpression = true, PlaceholderText = "1 + 2^2" }),
                 description: "Type an arithmetic expression (+ - * / ^ and parentheses) and press Enter — it evaluates on commit.",
                 output: GalleryPage.LiveText(() => double.IsNaN(expr.Value) ? "—" : $"{expr.Value:0.##}"),
                 code: """
                 var value = UseSignal(double.NaN);
 
-                NumberBox.Create(value: value, acceptsExpression: true, placeholderText: "1 + 2^2")
+                NumberBox.Create(value: value, options: new NumberBox.NumberBoxOptions { AcceptsExpression = true, PlaceholderText = "1 + 2^2" })
                 """),
             ControlExample.Build("A NumberBox with inline spin buttons",
-                NumberBox.Create(value: inline, minimum: 0, maximum: 100,
-                    spinButtonPlacementMode: NumberBoxSpinButtonPlacementMode.Inline),
+                NumberBox.Create(value: inline, options: new NumberBox.NumberBoxOptions
+                    { Minimum = 0, Maximum = 100, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Inline }),
                 description: "A 0–100 range: spin buttons disable at the bounds. Up/Down step by SmallChange (1), PageUp/PageDown by LargeChange (10).",
                 output: GalleryPage.LiveText(() => double.IsNaN(inline.Value) ? "—" : $"{inline.Value:0.##}"),
                 code: """
                 var value = UseSignal(0.0);
 
-                NumberBox.Create(value: value, minimum: 0, maximum: 100,
-                    spinButtonPlacementMode: NumberBoxSpinButtonPlacementMode.Inline)
+                NumberBox.Create(value: value, options: new NumberBox.NumberBoxOptions
+                    { Minimum = 0, Maximum = 100, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Inline })
                 """),
             ControlExample.Build("A NumberBox with a header, range and compact spin buttons",
-                NumberBox.Create(value: compact, minimum: 0, maximum: 100,
-                    spinButtonPlacementMode: NumberBoxSpinButtonPlacementMode.Compact,
-                    header: "Enter an integer:"),
+                NumberBox.Create(value: compact, options: new NumberBox.NumberBoxOptions
+                    { Minimum = 0, Maximum = 100, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact,
+                      Header = "Enter an integer:" }),
                 description: "Compact mode shows the in-field indicator glyph and opens the up/down buttons in a popup while the field is focused.",
                 output: GalleryPage.LiveText(() => double.IsNaN(compact.Value) ? "—" : $"{compact.Value:0.##}"),
                 code: """
                 var value = UseSignal(0.0);
 
-                NumberBox.Create(value: value, minimum: 0, maximum: 100,
-                    spinButtonPlacementMode: NumberBoxSpinButtonPlacementMode.Compact,
-                    header: "Enter an integer:")
+                NumberBox.Create(value: value, options: new NumberBox.NumberBoxOptions
+                    { Minimum = 0, Maximum = 100, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact,
+                      Header = "Enter an integer:" })
                 """));
     }
 }

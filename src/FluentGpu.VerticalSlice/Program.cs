@@ -2833,8 +2833,8 @@ sealed class W0fNumberProbe : Component
         var t = UseSignal(""); Txt = t;
         return Embed.Comp(() => new OverlayHost
         {
-            Child = NumberBox.Create(value: v, minimum: 0, maximum: 10, smallChange: 1, largeChange: 5,
-                spinButtonPlacementMode: Mode, text: t, onChange: n => Changes.Add(n)),
+            Child = NumberBox.Create(value: v, onChange: n => Changes.Add(n),
+                options: new NumberBox.NumberBoxOptions { Minimum = 0, Maximum = 10, SmallChange = 1, LargeChange = 5, SpinButtonPlacementMode = Mode, Text = t }),
         });
     }
 }
@@ -20103,7 +20103,7 @@ static class Slice
         host.RunFrame();
 
         var svc = root.Service!;
-        Func<Element> menu = () => MenuFlyout.Build(new[]
+        Func<Element> menu = () => MenuFlyout.Create(new[]
         {
             new MenuFlyoutItem("One"), new MenuFlyoutItem("Two"), new MenuFlyoutItem("Three"),
             new MenuFlyoutItem("Four"), new MenuFlyoutItem("Five"),
@@ -21321,7 +21321,7 @@ static class Slice
             MenuFlyoutItem.Separator,
             new MenuFlyoutItem("Disabled", Icons.Cancel, false),
         };
-        root.Service!.Open(() => root.Anchor, () => MenuFlyout.Build(items, () => root.Service!.CloseTop()), FlyoutPlacement.BottomLeft);
+        root.Service!.Open(() => root.Anchor, () => MenuFlyout.Create(items, () => root.Service!.CloseTop()), FlyoutPlacement.BottomLeft);
         host.RunFrame();
 
         var rows = Roles(host.Scene, AutomationRole.MenuItem);
@@ -24549,6 +24549,238 @@ static class Slice
         }
     }
 
+    // ── WS3 P5 (G5e): the one creation idiom + the three G5b binding-contract deferrals ─────────────────────────────
+    static void ControlKitIdiomChecks(StringTable strings)
+    {
+        // gate.ctl.idiom.no-public-build — reflection scan: no public static Build/BuildBody member on any Controls type.
+        {
+            var asm = typeof(FluentGpu.Controls.Button).Assembly;
+            var offenders = new System.Collections.Generic.List<string>();
+            foreach (var t in asm.GetExportedTypes())
+                foreach (var m in t.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.DeclaredOnly))
+                    if (m.Name == "Build" || m.Name == "BuildBody")
+                        offenders.Add(t.Name + "." + m.Name);
+            Check("gate.ctl.idiom.no-public-build no public static Build/BuildBody on any Controls type",
+                offenders.Count == 0, offenders.Count == 0 ? "clean" : string.Join(", ", offenders));
+        }
+
+        // gate.ctl.idiom.factories-exist — NavigationView/TitleBar/OverlayHost/MenuFlyout expose a public static Create,
+        // and NavigationView.Create mounts + navigates through the options record.
+        {
+            static bool HasCreate(Type t)
+            {
+                foreach (var m in t.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static))
+                    if (m.Name == "Create") return true;
+                return false;
+            }
+            bool exist = HasCreate(typeof(NavigationView)) && HasCreate(typeof(TitleBar))
+                       && HasCreate(typeof(OverlayHost)) && HasCreate(typeof(MenuFlyout));
+
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("nav-create", new Size2(1200, 700), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            string selected = "";
+            var nav = NavigationView.Create(new NavigationViewOptions
+            {
+                Initial = "home",
+                Items = new[] { new NavItem("home", Icons.Home, "Home"), new NavItem("files", Icons.Folder, "Files") },
+                Content = key => new TextEl("page:" + key) { Size = 16f, Color = Tok.TextPrimary },
+                OnSelect = k => selected = k,
+            });
+            using var host = new AppHost(app, window, device, fonts, strings, new W0fStaticProbe { Build = () => nav });
+            host.RunFrame();
+            var items = Roles(host.Scene, AutomationRole.NavigationItem);
+            bool mounted = items.Count >= 2;
+            if (mounted) ClickNode(host, window, items[1]);   // navigate to "files"
+            bool navigated = selected == "files";
+            Check("gate.ctl.idiom.factories-exist NavigationView/TitleBar/OverlayHost/MenuFlyout expose Create; NavigationView.Create mounts + navigates",
+                exist && mounted && navigated, $"exist={exist} mounted={mounted} items={items.Count} selected={selected}");
+        }
+
+        // gate.ctl.bind.scrollbar — ScrollBar.Create: a track-click page writes the FloatSignal + fires onChange; a
+        // programmatic write does NOT echo onChange and never re-renders the owner (compositor-instant thumb).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("bind-scrollbar", new Size2(320, 320), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var pos = new FloatSignal(0f);
+            int changes = 0; float last = -1f; int probeRenders = 0;
+            // ScrollBar conformance (rename-only, like ComboBox/ColorPicker): the caller's onChange writes the
+            // position signal back (the control reads it compositor-instant via the thumb Transform bind).
+            using var host = new AppHost(app, window, device, fonts, strings, new W0fStaticProbe
+            {
+                Build = () => { probeRenders++; return new BoxEl { Padding = Edges4.All(20f),
+                    Children = [ScrollBar.Create(0.25f, pos, p => { changes++; last = p; pos.Value = p; }, length: 240f)] }; },
+            });
+            host.RunFrame();
+            int rendersAtMount = probeRenders;
+            var bar = FindRole(host.Scene, host.Scene.Root, AutomationRole.ScrollBar);
+            var barRect = host.Scene.AbsoluteRect(bar);
+            var pt = new Point2(barRect.X + barRect.W * 0.5f, barRect.Y + barRect.H * 0.7f);   // track strip, below the thumb
+            window.QueueInput(new InputEvent(InputKind.PointerDown, pt, 0, 0));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, pt, 0, 0));
+            host.RunFrame();
+            bool wrote = changes >= 1 && pos.Value > 0f && last == pos.Value;
+            int changesBefore = changes;
+            pos.Value = 0.5f;                       // programmatic write
+            host.RunFrame();
+            bool noEcho = changes == changesBefore;
+            bool decoupled = probeRenders == rendersAtMount;   // the signal write never re-rendered the owner
+            Check("gate.ctl.bind.scrollbar ScrollBar.Create: interaction writes the position signal + fires onChange; programmatic write no echo (owner not re-rendered)",
+                wrote && noEcho && decoupled, $"wrote={wrote} changes={changes} noEcho={noEcho} pos={pos.Value:0.00} ownerRenders={probeRenders}(mount {rendersAtMount})");
+        }
+
+        // gate.ctl.bind.numberbox-options — NumberBox.Create(value, onChange, NumberBoxOptions): the options record is
+        // threaded (an inline spin steps the value), a spin click fires onChange once, a programmatic write no echo.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("bind-numberbox", new Size2(360, 220), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var sig = new Signal<double>(5);
+            int changes = 0;
+            using var host = new AppHost(app, window, device, fonts, strings, new W0fStaticProbe
+            {
+                Build = () => new BoxEl { Padding = Edges4.All(12f), Children =
+                [
+                    NumberBox.Create(value: sig, onChange: _ => changes++, options: new NumberBox.NumberBoxOptions
+                    {
+                        Minimum = 0, Maximum = 10, SmallChange = 1,
+                        SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Inline,
+                    }),
+                ] },
+            });
+            host.RunFrame();
+            bool mountQuiet = changes == 0;                     // the mount-seed must NOT fire onChange
+            var buttons = Roles(host.Scene, AutomationRole.Button);
+            if (buttons.Count >= 1) ClickNode(host, window, buttons[0]);   // an inline spin (±SmallChange)
+            bool stepped = changes == 1 && System.Math.Abs(System.Math.Abs(sig.Value - 5.0) - 1.0) < 0.01;
+            int changesBefore = changes;
+            sig.Value = 8;                                      // programmatic write
+            host.RunFrame();
+            bool noEcho = changes == changesBefore;
+            Check("gate.ctl.bind.numberbox-options NumberBox.Create(options): a spin step writes the value signal + fires onChange once; mount + programmatic write no echo",
+                mountQuiet && stepped && noEcho, $"mountQuiet={mountQuiet} stepped={stepped} val={sig.Value:0.##} changes={changes} noEcho={noEcho} buttons={buttons.Count}");
+        }
+
+        // gate.ctl.bind.splitview-pane — SplitView.Create(isPaneOpen: signal, onOpenChanged): light dismiss writes the
+        // pane-open signal false + fires onOpenChanged once; a programmatic re-open does NOT echo onOpenChanged.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("bind-splitview", new Size2(600, 400), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var openSig = new Signal<bool>(true);
+            int changes = 0;
+            var pane = new BoxEl { Width = 200f, Padding = Edges4.All(12f), Children = [new TextEl("Pane") { Size = 14f, Color = Tok.TextPrimary }] };
+            var content = new BoxEl { Grow = 1f, Padding = Edges4.All(16f), Children = [new TextEl("Content") { Size = 14f, Color = Tok.TextPrimary }] };
+            using var host = new AppHost(app, window, device, fonts, strings, new W0fStaticProbe
+            {
+                Build = () => SplitView.Create(pane, content, paneWidth: 200f, isPaneOpen: openSig, onOpenChanged: _ => changes++),
+            });
+            host.RunFrame();
+            bool openMount = openSig.Value && changes == 0;
+            // Light dismiss: click the content side (right of the left pane) → the light-dismiss layer closes the pane.
+            var rootRect = host.Scene.AbsoluteRect(host.Scene.Root);
+            var pt = new Point2(rootRect.Right - 24f, rootRect.Y + rootRect.H * 0.5f);
+            window.QueueInput(new InputEvent(InputKind.PointerDown, pt, 0, 0));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, pt, 0, 0));
+            host.RunFrame();
+            bool dismissed = !openSig.Value && changes == 1;
+            int changesBefore = changes;
+            openSig.Value = true;                               // programmatic re-open
+            host.RunFrame();
+            bool noEcho = changes == changesBefore;
+            Check("gate.ctl.bind.splitview-pane SplitView.Create: light dismiss writes the isPaneOpen signal + fires onOpenChanged once; programmatic re-open no echo",
+                openMount && dismissed && noEcho, $"openMount={openMount} dismissed={dismissed} open={openSig.Value} changes={changes} noEcho={noEcho}");
+        }
+
+        // gate.ctl.progress.null-indeterminate — ProgressBar/ProgressRing Create(null) = indeterminate (animating);
+        // Create(signal) = determinate that tracks the signal (no sweep/spin anim tracks).
+        {
+            bool barDet, barInd, ringDet, ringInd;
+            // ProgressBar determinate tracks the signal (bound indicator width; no sweep tracks).
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("progress-bar-det", new Size2(320, 120), 1f)); window.Show();
+                var device = new HeadlessGpuDevice();
+                var fonts = new HeadlessFontSystem(strings);
+                NodeHandle fill = default;
+                var pd = new TemplateParts();
+                pd[ProgressBar.PartFill] = b => b with { OnRealized = h => fill = h };
+                var sig = new FloatSignal(0.5f);
+                using var host = new AppHost(app, window, device, fonts, strings, new W0fStaticProbe
+                {
+                    Build = () => new BoxEl { Padding = Edges4.All(16f), Children = [ProgressBar.Create(value: sig, width: 200f, parts: pd)] },
+                });
+                host.RunFrame();
+                float w50 = fill.IsNull ? -1f : host.Scene.AbsoluteRect(fill).W;
+                bool noTracks = !fill.IsNull && !host.Animation.HasTracks(fill);
+                sig.Value = 0.25f;
+                host.RunFrame();
+                float w25 = fill.IsNull ? -1f : host.Scene.AbsoluteRect(fill).W;
+                barDet = noTracks && Near(w50, 100f, 3f) && Near(w25, 50f, 3f);
+            }
+            // ProgressBar Create(null) = indeterminate (the sweeping indicator animates).
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("progress-bar-ind", new Size2(320, 120), 1f)); window.Show();
+                var device = new HeadlessGpuDevice();
+                var fonts = new HeadlessFontSystem(strings);
+                NodeHandle fill = default;
+                var pi = new TemplateParts();
+                pi[ProgressBar.PartFill] = b => b with { OnRealized = h => fill = h };
+                using var host = new AppHost(app, window, device, fonts, strings, new W0fStaticProbe
+                {
+                    Build = () => new BoxEl { Padding = Edges4.All(16f), Children = [ProgressBar.Create(null, width: 200f, parts: pi)] },
+                });
+                host.RunFrame(); host.RunFrame();
+                barInd = !fill.IsNull && host.Animation.HasTracks(fill);
+            }
+            // ProgressRing determinate: no spin/trim anim tracks; re-renders when the value signal changes.
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("progress-ring-det", new Size2(200, 200), 1f)); window.Show();
+                var device = new HeadlessGpuDevice();
+                var fonts = new HeadlessFontSystem(strings);
+                NodeHandle arc = default;
+                var pd = new TemplateParts();
+                pd[ProgressRing.PartRing] = b => b with { OnRealized = h => arc = h };
+                var sig = new FloatSignal(0.5f);
+                using var host = new AppHost(app, window, device, fonts, strings, new W0fStaticProbe
+                {
+                    Build = () => ProgressRing.Create(value: sig, parts: pd),
+                });
+                host.RunFrame();
+                bool noTracks = !arc.IsNull && !host.Animation.HasTracks(arc);
+                sig.Value = 0.25f;
+                var fs = host.RunFrame();
+                ringDet = noTracks && fs.Rendered;   // the determinate ring observes the signal (granular re-render)
+            }
+            // ProgressRing Create(null) = indeterminate (the arc spins / trim breathes).
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("progress-ring-ind", new Size2(200, 200), 1f)); window.Show();
+                var device = new HeadlessGpuDevice();
+                var fonts = new HeadlessFontSystem(strings);
+                NodeHandle arc = default;
+                var pi = new TemplateParts();
+                pi[ProgressRing.PartRing] = b => b with { OnRealized = h => arc = h };
+                using var host = new AppHost(app, window, device, fonts, strings, new W0fStaticProbe
+                {
+                    Build = () => ProgressRing.Create(null, parts: pi),
+                });
+                host.RunFrame(); host.RunFrame();
+                ringInd = !arc.IsNull && host.Animation.HasTracks(arc);
+            }
+            Check("gate.ctl.progress.null-indeterminate ProgressBar/Ring Create(null)=indeterminate (animates); Create(signal)=determinate tracking the value",
+                barDet && barInd && ringDet && ringInd,
+                $"barDet={barDet} barInd={barInd} ringDet={ringDet} ringInd={ringInd}");
+        }
+    }
+
     static void ProgressIndeterminateLifecycleChecks(StringTable strings)
     {
         // ProgressRing: parent re-render updates isActive through context, preserving the component instance.
@@ -24998,13 +25230,13 @@ static class Slice
             window.Show();
             var device = new HeadlessGpuDevice();
             var fonts = new HeadlessFontSystem(strings);
-            var pos = new Signal<float>(0f);
+            var pos = new FloatSignal(0f);
             var root = new W0fStaticProbe
             {
                 Build = () => new BoxEl
                 {
                     Direction = 0, AlignItems = FlexAlign.Start, Padding = Edges4.All(20f),
-                    Children = [ScrollBar.Anatomy(0.25f, pos, p => pos.Value = p, 200f)],
+                    Children = [ScrollBar.Create(0.25f, pos, p => pos.Value = p, 200f)],
                 },
             };
             using var host = new AppHost(app, window, device, fonts, strings, root);
@@ -25380,7 +25612,7 @@ static class Slice
             // (no CompositionBackdrop); the metrics it receives are asserted by cp6.h.
             {
                 var hd = svc.Open(() => root.Anchor,
-                    () => MenuFlyout.Build(new[] { new MenuFlyoutItem("One"), new MenuFlyoutItem("Two") }, () => svc.CloseTop()),
+                    () => MenuFlyout.Create(new[] { new MenuFlyoutItem("One"), new MenuFlyoutItem("Two") }, () => svc.CloseTop()),
                     FlyoutPlacement.BottomLeft,
                     new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
                 host.RunFrame();   // mount + place + seed
@@ -25406,7 +25638,7 @@ static class Slice
             // runs on the real D3D12 backend; here we assert the RHI receives the correct parameters.
             {
                 var hd = svc.Open(() => root.Anchor,
-                    () => MenuFlyout.Build(new[] { new MenuFlyoutItem("One"), new MenuFlyoutItem("Two") }, () => svc.CloseTop()),
+                    () => MenuFlyout.Create(new[] { new MenuFlyoutItem("One"), new MenuFlyoutItem("Two") }, () => svc.CloseTop()),
                     FlyoutPlacement.BottomLeft,
                     new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
                 host.RunFrame(); host.RunFrame();
@@ -25428,7 +25660,7 @@ static class Slice
             // and its content TranslateY slides in (Dy<0 mid-flight, MenuPopupThemeTransition).
             {
                 svc.Open(() => root.Anchor,
-                    () => MenuFlyout.Build(new[] { new MenuFlyoutItem("One"), new MenuFlyoutItem("Two"), new MenuFlyoutItem("Three") }, () => svc.CloseTop()),
+                    () => MenuFlyout.Create(new[] { new MenuFlyoutItem("One"), new MenuFlyoutItem("Two"), new MenuFlyoutItem("Three") }, () => svc.CloseTop()),
                     FlyoutPlacement.BottomLeft);
                 host.RunFrame();
                 host.RunFrame();   // t=0
@@ -25530,7 +25762,7 @@ static class Slice
             // TOP clip edge (ClipRect.Y) + content TranslateY, so BOTH are held fixed through the fade (along with ClipB).
             {
                 svc.Open(() => root.Anchor,
-                    () => MenuFlyout.Build(new[] { new MenuFlyoutItem("One"), new MenuFlyoutItem("Two") }, () => svc.CloseTop()),
+                    () => MenuFlyout.Create(new[] { new MenuFlyoutItem("One"), new MenuFlyoutItem("Two") }, () => svc.CloseTop()),
                     FlyoutPlacement.BottomLeft);
                 host.RunFrame();
                 host.RunFrame();                       // t=0
@@ -27133,7 +27365,7 @@ static class Slice
                                 SelectorBar.Create(items3, idx),
                                 BreadcrumbBar.Create(items3),
                                 ComboBox.Create(items3, combo, isEnabled: enabled.Value),
-                                NumberBox.Create(value: null, initial: num.Value, isEnabled: enabled.Value),
+                                NumberBox.Create(value: null, options: new NumberBox.NumberBoxOptions { Initial = num.Value, IsEnabled = enabled.Value }),
                                 Expander.Create("e", new TextEl("body") { Size = 12f }),
                                 SwipeControl.Create("row", System.Array.Empty<SwipeAction>()),
                                 SettingsCard.Create(new SettingsCard.Options { Header = "s", Description = "d" }),
@@ -27316,6 +27548,7 @@ static class Slice
         ControlsChecks(strings);
         RecipeChecks(strings);         // WS3 P1 InteractionRecipe (gate.ctl.recipe.*): expand, presets (theme-live), disabled legs, zero-alloc
         ControlBindChecks(strings);    // WS3 P2 controlled-input contract (gate.ctl.bind.*): toggle/check/tristate/radio/automaterialize
+        ControlKitIdiomChecks(strings); // WS3 P5 (G5e) one creation idiom + G5b deferrals (gate.ctl.idiom.*, gate.ctl.bind.scrollbar/numberbox-options/splitview-pane, gate.ctl.progress.null-indeterminate)
         NavigationChecks();
         PageHostChecks(strings);
         KeepAliveChecks(strings);

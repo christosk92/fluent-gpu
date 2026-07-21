@@ -53,8 +53,9 @@ public static class ItemContainer
     public const float FadeMs = 167f;                   // ControlFastAnimationDuration (the KeySpline 0,0,0,1 storyboards)
 
     /// <summary>Standalone two-state convenience: toggles <paramref name="isSelected"/> on tap/Space (the WinUI
-    /// out-of-ItemsView ItemContainer behavior, IsSelected get/set per ItemContainer.idl:69).</summary>
-    public static BoxEl Build(Element child, bool isSelected, Action<bool> onSelectionChanged,
+    /// out-of-ItemsView ItemContainer behavior, IsSelected get/set per ItemContainer.idl:69). Internal: ItemContainer
+    /// is realized by the items controls (ItemsView/SelectorVisuals), never composed directly by an app.</summary>
+    internal static BoxEl Build(Element child, bool isSelected, Action<bool> onSelectionChanged,
                               bool isEnabled = true, CornerRadius4? corners = null)
         => Build(child, isSelected,
                  onInteraction: (t, _) =>
@@ -73,7 +74,7 @@ public static class ItemContainer
     // Per-item chrome SKIN goes through the composing control's ContainerFactory/SelectorVisual seam; per-item
     // VARIATION goes through the PartDelta value seam (fill/fg/opacity/corner/padding/glyph as values, applied during
     // construction — shape-stable, 0-alloc, CI-enforced; docs/guide/control-fidelity.md §6).
-    public static BoxEl Build(
+    internal static BoxEl Build(
         Element child,
         bool isSelected,
         Action<ItemContainerTrigger, KeyModifiers>? onInteraction = null,

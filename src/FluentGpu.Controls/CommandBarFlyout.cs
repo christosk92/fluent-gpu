@@ -152,8 +152,9 @@ public sealed class CommandBarFlyout : Component
     /// hides the … button; the body opens in Standard mode (WinUI initial focus on the first command). Pass
     /// <paramref name="fadeCloseSlot"/> so a tracker-forced close rides the 83ms ClosingOpacityStoryboard;
     /// <paramref name="touchInputMode"/> for the roomier touch metrics (a Hold-triggered open);
-    /// <paramref name="overflowMinWidth"/> to widen the overflow to the Explorer ~250 feel.</summary>
-    public static Element BuildBody(
+    /// <paramref name="overflowMinWidth"/> to widen the overflow to the Explorer ~250 feel. Internal: the standalone
+    /// command-bar body is composed by <c>ContextMenu</c>; the public door is <see cref="Create"/>.</summary>
+    internal static Element BuildBody(
         IReadOnlyList<AppBarCommand> primary,
         IReadOnlyList<AppBarCommand> secondary,
         Action close,

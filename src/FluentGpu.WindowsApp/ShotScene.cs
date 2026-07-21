@@ -236,7 +236,7 @@ sealed class ShotScene : Component
             Corners = Radii.OverlayAll,
             Shadow = Elevation.Flyout,
             Padding = new Edges4(0, 2, 0, 2),
-            Children = [MenuFlyout.Build(items, () => { })],
+            Children = [MenuFlyout.Create(items, () => { })],
         };
     }
 }
@@ -264,7 +264,7 @@ sealed class FlyoutLiveShot : Component
                 MenuFlyoutItem.Separator,
                 new MenuFlyoutItem("Delete", Icons.Cancel, false),
             };
-            svc.Open(() => anchor.Value, () => MenuFlyout.Build(items, () => { }), FlyoutPlacement.BottomLeft);
+            svc.Open(() => anchor.Value, () => MenuFlyout.Create(items, () => { }), FlyoutPlacement.BottomLeft);
         }, tick);
 
         return new BoxEl
@@ -323,13 +323,7 @@ sealed class ComboBoxOpenShot : Component
             Children =
             [
                 new TextEl("A ComboBox") { Size = 20f, Bold = true, Color = Tok.TextPrimary },
-                Embed.Comp(() => new ComboBox
-                {
-                    Items = Colors,
-                    SelectedIndex = selected,
-                    Width = 298f,
-                    OpenOnMount = true,
-                }),
+                ComboBox.Create(Colors, selected, width: 298f, openOnMount: true),
             ],
         };
     }
@@ -356,15 +350,7 @@ sealed class ComboBoxEditableOpenShot : Component
             Children =
             [
                 new TextEl("An editable ComboBox") { Size = 20f, Bold = true, Color = Tok.TextPrimary },
-                Embed.Comp(() => new ComboBox
-                {
-                    Items = Colors,
-                    SelectedIndex = selected,
-                    Editable = true,
-                    Text = text,
-                    Width = 298f,
-                    OpenOnMount = true,
-                }),
+                ComboBox.Create(Colors, selected, editable: true, text: text, width: 298f, openOnMount: true),
             ],
         };
     }

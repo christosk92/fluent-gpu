@@ -798,7 +798,7 @@ sealed class PlayerBarContent : Component
                 if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
                 handle.Value = svc.Open(
                     () => anchor.Value,
-                    () => MenuFlyout.Build(_items, () => handle.Value?.Close()),
+                    () => MenuFlyout.Create(_items, () => handle.Value?.Close()),
                     FlyoutPlacement.TopEdgeAlignedRight,
                     new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
                 handle.Value.ClosedAction = () => handle.Value = null;
@@ -897,7 +897,7 @@ sealed class DevicePickerMenu : Component
 {
     readonly PlaybackBridge _b; readonly Action _close;
     public DevicePickerMenu(PlaybackBridge b, Action close) { _b = b; _close = close; }
-    public override Element Render() => MenuFlyout.Build(PlayerBarContent.DevicePickerItems(_b), _close);
+    public override Element Render() => MenuFlyout.Create(PlayerBarContent.DevicePickerItems(_b), _close);
 }
 
 sealed class VolumeButton : Component

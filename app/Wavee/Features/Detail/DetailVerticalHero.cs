@@ -186,7 +186,7 @@ sealed class DetailHeroMoreButton : Component
             }
             handle.Value = overlay.Open(
                 () => anchor.Value,
-                () => MenuFlyout.Build(items, () => handle.Value?.Close()),
+                () => MenuFlyout.Create(items, () => handle.Value?.Close()),
                 FlyoutPlacement.BottomEdgeAlignedRight,
                 new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
             handle.Value.ClosedAction = () => handle.Value = null;

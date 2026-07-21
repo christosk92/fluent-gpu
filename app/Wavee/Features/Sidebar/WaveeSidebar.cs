@@ -634,7 +634,7 @@ sealed class SidebarCreateButton : Component
             if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
             handle.Value = svc.Open(
                 () => anchor.Value,
-                () => MenuFlyout.Build(items, () => handle.Value?.Close()),
+                () => MenuFlyout.Create(items, () => handle.Value?.Close()),
                 FlyoutPlacement.BottomLeft,
                 new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
             handle.Value.ClosedAction = () => handle.Value = null;

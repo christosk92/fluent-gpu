@@ -8,6 +8,11 @@ namespace FluentGpu.Controls;
 /// (InfoBadge_themeresources.xaml). Default == the plain accent badge.</summary>
 public enum InfoBadgeSeverity : byte { Default = 0, Attention = 1, Informational = 2, Success = 3, Caution = 4, Critical = 5 }
 
+/// <summary>The display kind selected by the canonical <see cref="InfoBadge.Create"/> factory (WinUI's
+/// Dot / Value / Icon <c>OnDisplayKindPropertiesChanged</c> discriminant). <see cref="Dot"/> = a bare disc,
+/// <see cref="Count"/> = a numeric pill, <see cref="Icon"/> = a glyph pill.</summary>
+public enum InfoBadgeKind : byte { Dot = 0, Count = 1, Icon = 2 }
+
 /// <summary>
 /// Computed template settings for the <see cref="InfoBadge"/> — the typed-record convention modelled on
 /// <see cref="ExpanderTemplateSettings"/>. Mirrors WinUI's generated <c>InfoBadgeTemplateSettings</c>: the display kind
@@ -110,11 +115,36 @@ public static class InfoBadge
         _                               => Tok.AccentDefault,          // Default
     };
 
+    /// <summary>The ONE canonical InfoBadge factory. <paramref name="kind"/> picks the display kind; the named
+    /// <see cref="Dot"/>/<see cref="Count"/>/<see cref="Icon"/> helpers are one-line forwarders onto it. <paramref name="value"/>
+    /// is the count (<see cref="InfoBadgeKind.Count"/>); <paramref name="glyph"/> the Segoe Fluent glyph
+    /// (<see cref="InfoBadgeKind.Icon"/>; null with a <paramref name="severity"/> uses that severity's stock glyph);
+    /// <paramref name="severity"/> selects the WinUI SystemFill background (and, for Icon, the stock glyph + metrics);
+    /// <paramref name="color"/> overrides the background when no severity is given.</summary>
+    public static BoxEl Create(InfoBadgeKind kind, int value = 0, string? glyph = null,
+                               InfoBadgeSeverity? severity = null, ColorF? color = null, TemplateParts? parts = null)
+        => kind switch
+        {
+            InfoBadgeKind.Count => severity is { } cs
+                ? CountCore(value, SeverityFill(cs), parts)
+                : CountCore(value, color ?? Tok.AccentDefault, parts),
+            InfoBadgeKind.Icon => glyph is { Length: > 0 }
+                ? (severity is { } isv
+                    ? IconCore(glyph, SeverityFill(isv), FontIconGlyphSize(isv), FontIconGlyphMargin(isv), parts)
+                    : IconCore(glyph, color ?? Tok.AccentDefault, InfoBadgeTemplateSettings.IconGlyphSizeFull,
+                               InfoBadgeTemplateSettings.ContentMarginValueOrFontIcon, parts))
+                : (severity is { } dsv
+                    ? IconCore(DefaultGlyph(dsv), SeverityFill(dsv), DefaultGlyphSize(dsv), DefaultGlyphMargin(dsv), parts)
+                    : IconCore(DefaultGlyph(InfoBadgeSeverity.Attention), color ?? Tok.AccentDefault,
+                               InfoBadgeTemplateSettings.IconGlyphSizeFull, InfoBadgeTemplateSettings.ContentMarginValueOrFontIcon, parts)),
+            _ => severity is { } ds ? DotSeverity(SeverityFill(ds), parts) : DotSeverity(color, parts),
+        };
+
     /// <summary>The bare 4x4 dot. WinUI Dot state (no Value, no Icon): 4x4, corner = 2 (pill at that height).</summary>
-    public static BoxEl Dot(ColorF? color = null, TemplateParts? parts = null) => DotSeverity(color, parts);
+    public static BoxEl Dot(ColorF? color = null, TemplateParts? parts = null) => Create(InfoBadgeKind.Dot, color: color, parts: parts);
 
     /// <summary>Severity dot — same geometry as <see cref="Dot"/> with the severity background.</summary>
-    public static BoxEl Dot(InfoBadgeSeverity severity, TemplateParts? parts = null) => DotSeverity(SeverityFill(severity), parts);
+    public static BoxEl Dot(InfoBadgeSeverity severity, TemplateParts? parts = null) => Create(InfoBadgeKind.Dot, severity: severity, parts: parts);
 
     private static BoxEl DotSeverity(ColorF? color, TemplateParts? parts)
     {
@@ -132,10 +162,10 @@ public static class InfoBadge
     /// <summary>The Value badge: a notification count. WinUI clamps to a 16-tall pill; single digits stay circular via the
     /// MinWidth = Height square. Pass <paramref name="severity"/> to recolor.</summary>
     public static BoxEl Count(int value, ColorF? color = null, TemplateParts? parts = null) =>
-        CountCore(value, color ?? Tok.AccentDefault, parts);
+        Create(InfoBadgeKind.Count, value: value, color: color, parts: parts);
 
     public static BoxEl Count(int value, InfoBadgeSeverity severity, TemplateParts? parts = null) =>
-        CountCore(value, SeverityFill(severity), parts);
+        Create(InfoBadgeKind.Count, value: value, severity: severity, parts: parts);
 
     private static BoxEl CountCore(int value, ColorF fill, TemplateParts? parts)
     {
@@ -175,17 +205,16 @@ public static class InfoBadge
     /// glyph to the content-box height (14 = 16 − 2 for the ad-hoc, no-severity overloads; the Attention/Informational
     /// severity styles pad the root 0,4,0,2 → 8).</summary>
     public static BoxEl Icon(string glyph, ColorF? color = null, TemplateParts? parts = null) =>
-        IconCore(glyph, color ?? Tok.AccentDefault, InfoBadgeTemplateSettings.IconGlyphSizeFull,
-                 InfoBadgeTemplateSettings.ContentMarginValueOrFontIcon, parts);
+        Create(InfoBadgeKind.Icon, glyph: glyph, color: color, parts: parts);
 
     public static BoxEl Icon(string glyph, InfoBadgeSeverity severity, TemplateParts? parts = null) =>
-        IconCore(glyph, SeverityFill(severity), FontIconGlyphSize(severity), FontIconGlyphMargin(severity), parts);
+        Create(InfoBadgeKind.Icon, glyph: glyph, severity: severity, parts: parts);
 
     /// <summary>Severity icon using WinUI's default per-severity IconSource (Attention 0xEA38, Informational 0xF13F —
     /// FontIconSource; Success Accept, Caution Important, Critical Cancel — SymbolIconSource), scaled by the per-state
     /// IconPresenter Viewbox target (8 in every severity style; see <see cref="InfoBadgeTemplateSettings"/>).</summary>
     public static BoxEl Icon(InfoBadgeSeverity severity, TemplateParts? parts = null) =>
-        IconCore(DefaultGlyph(severity), SeverityFill(severity), DefaultGlyphSize(severity), DefaultGlyphMargin(severity), parts);
+        Create(InfoBadgeKind.Icon, severity: severity, parts: parts);
 
     // A custom glyph is a FontIconSource → always the 'FontIcon' state (margin 4,0,4,2, InfoBadge_themeresources.xaml
     // :14/:71); only the Attention/Informational severity STYLES add root Padding 0,4,0,2 (:96/:108) → content box 8

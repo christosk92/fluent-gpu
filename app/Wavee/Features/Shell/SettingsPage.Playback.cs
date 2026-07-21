@@ -219,10 +219,15 @@ sealed partial class SettingsPage
                         ThumbToolTipValueConverter = v => v.ToString("0.#", CultureInfo.InvariantCulture) + " s",
                     },
                     length: 220f, isEnabled: crossOn && settings is not null),
-                NumberBox.Create(value: _crossSecs, minimum: 0, maximum: 12, smallChange: 0.5,
-                    spinButtonPlacementMode: NumberBoxSpinButtonPlacementMode.Compact, width: 96f,
-                    formatter: v => v.ToString("0.#", CultureInfo.InvariantCulture) + " s",
-                    onChange: v => Commit(v), isEnabled: crossOn && settings is not null),
+                NumberBox.Create(value: _crossSecs,
+                    options: new NumberBox.NumberBoxOptions
+                    {
+                        Minimum = 0, Maximum = 12, SmallChange = 0.5,
+                        SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact, Width = 96f,
+                        Formatter = v => v.ToString("0.#", CultureInfo.InvariantCulture) + " s",
+                        IsEnabled = crossOn && settings is not null,
+                    },
+                    onChange: v => Commit(v)),
             ],
         };
 

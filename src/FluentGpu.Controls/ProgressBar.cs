@@ -2,6 +2,7 @@ using FluentGpu.Foundation;
 using FluentGpu.Dsl;
 using FluentGpu.Hooks;
 using FluentGpu.Animation;
+using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
 
@@ -60,15 +61,41 @@ public static class ProgressBar
         _ => Tok.AccentDefault,                              // ProgressBarForeground            = AccentFillColorDefaultBrush
     };
 
+    // ── Create (the one canonical factory) ───────────────────────────────────────────────────────────
+    /// <summary>The ONE canonical ProgressBar factory. <paramref name="value"/> = a caller-owned 0..1
+    /// <see cref="FloatSignal"/> tracked compositor-live (the determinate indicator's width binds to it, so a scrub
+    /// updates the bar with no re-render); <c>null</c> = the indeterminate sweep. <paramref name="state"/> selects the
+    /// indicator color (Normal accent / Paused caution / Error critical). <see cref="Determinate"/> (static value) and
+    /// <see cref="Indeterminate"/> are one-line forwarders onto this.</summary>
+    public static Element Create(FloatSignal? value = null, float width = DefaultWidth,
+                                 ProgressBarState state = ProgressBarState.Normal, TemplateParts? parts = null)
+        => value is null
+            ? Embed.Comp(new Props(width, state, parts), () => new IndeterminateBar())
+            // Determinate tracking the signal: the indicator width is a bound Func (compositor/relayout, no re-render).
+            : DeterminateView((Prop<float>)(Func<float>)(() =>
+              {
+                  float v = value.Value;   // subscribe the width bind → scrub the bar live
+                  return (v < 0f ? 0f : v > 1f ? 1f : v) * width;
+              }), width, state, parts);
+
     // ── Determinate ────────────────────────────────────────────────────────────────────────────────
-    /// <summary>Determinate progress; <paramref name="value"/> is clamped to 0..1, indicator width = value * width.
-    /// <paramref name="state"/> selects the indicator color (Normal accent / Paused caution / Error critical).
-    /// <paramref name="parts"/> = per-part styling keyed by <see cref="PartTrack"/>/<see cref="PartFill"/>.</summary>
+    /// <summary>Determinate progress with a STATIC value; <paramref name="value"/> is clamped to 0..1, indicator width
+    /// = value * width. A one-line forwarder onto <see cref="Create"/>'s shared builder. <paramref name="state"/>
+    /// selects the indicator color (Normal accent / Paused caution / Error critical). <paramref name="parts"/> =
+    /// per-part styling keyed by <see cref="PartTrack"/>/<see cref="PartFill"/>. For a LIVE value use <see cref="Create"/>
+    /// with a <see cref="FloatSignal"/>.</summary>
     public static BoxEl Determinate(float value, float width = DefaultWidth, ProgressBarState state = ProgressBarState.Normal,
                                     TemplateParts? parts = null)
     {
         float v = value < 0f ? 0f : value > 1f ? 1f : value;
-        return new BoxEl
+        return DeterminateView((Prop<float>)(v * width), width, state, parts);
+    }
+
+    /// <summary>Shared determinate builder: the ZStack track + indicator, with the indicator's width supplied as either
+    /// a static value (<see cref="Determinate"/>) or a signal-bound <c>Func</c> (<see cref="Create"/>). The value-driven
+    /// Width + state recolor are stock (a PartFill modifier sees and may override them).</summary>
+    static BoxEl DeterminateView(Prop<float> indicatorWidth, float width, ProgressBarState state, TemplateParts? parts)
+        => new BoxEl
         {
             ZStack = true,
             Width = width,
@@ -85,18 +112,16 @@ public static class ProgressBar
                     Corners = CornerRadius4.All(TrackRadius),
                     Fill = Tok.StrokeControlStrongDefault,
                 }),
-                // DeterminateProgressBarIndicator: foreground fill, 1.5px corner, left-aligned, width = v * track width
-                // (the value-driven Width/state recolor are stock — a PartFill modifier sees and may override them).
+                // DeterminateProgressBarIndicator: foreground fill, 1.5px corner, left-aligned, width = value * track width.
                 parts.Apply(PartFill, new BoxEl
                 {
-                    Width = v * width,
+                    Width = indicatorWidth,
                     Height = MinHeight,
                     Corners = CornerRadius4.All(IndicatorRadius),
                     Fill = ForegroundFor(state),
                 }),
             ],
         };
-    }
 
     // ── Indeterminate ────────────────────────────────────────────────────────────────────────────
     /// <summary>Indeterminate progress: the two clipped accent indicators sweeping across the track on the WinUI
@@ -106,7 +131,7 @@ public static class ProgressBar
     /// PartFill modifier runs on BOTH sweeping indicators).</summary>
     public static Element Indeterminate(float width = DefaultWidth, ProgressBarState state = ProgressBarState.Normal,
                                         TemplateParts? parts = null)
-        => Embed.Comp(new Props(width, state, parts), () => new IndeterminateBar());
+        => Create(null, width, state, parts);
 
     /// <summary>Controlled props RE-PUSHED to the stateful core (<c>Embed.Comp(props, …)</c>): a reused ComponentEl
     /// never re-runs its factory, so runtime-changeable props are delivered live (equality-gated); the core reads them

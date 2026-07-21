@@ -345,7 +345,7 @@ sealed class ScrollingOverviewPage : Component
         // The standalone WinUI mouse ScrollBar (ScrollBar.Anatomy): a 12px rail at the content's right edge.
         // Hover the rail and dwell 400ms → the thumb expands 2px→6px over 167ms and the arrows/track fade in 83ms;
         // leave → it contracts after 500ms (ScrollBar_themeresources.xaml begin times). Position is signal-bound.
-        var pos = UseSignal(0.3f);
+        var pos = UseFloatSignal(0.3f);
         var navigate = UseContext(NavigationView.Nav);
         return GalleryPage.Shell("Scrolling",
             "Controls for paging and scrolling content: PipsPager, ScrollBar, AnnotatedScrollBar.",
@@ -358,12 +358,12 @@ sealed class ScrollingOverviewPage : Component
                     Children =
                     [
                         new BoxEl { Width = 320f, Corners = Radii.ControlAll, Fill = Tok.FillCardSecondary },   // content stand-in
-                        ScrollBar.Anatomy(0.25f, pos, p => pos.Value = p, length: 200f),
+                        ScrollBar.Create(0.25f, pos, p => pos.Value = p, length: 200f),
                     ],
                 },
                 output: GalleryPage.LiveText(() => "position " + pos.Value.ToString("0.00")),
                 code: """
-                var pos = UseSignal(0.3f);
+                var pos = UseFloatSignal(0.3f);
 
                 new BoxEl
                 {
@@ -371,7 +371,7 @@ sealed class ScrollingOverviewPage : Component
                     Children =
                     [
                         new BoxEl { Width = 320f, Corners = Radii.ControlAll, Fill = Tok.FillCardSecondary },   // content stand-in
-                        ScrollBar.Anatomy(0.25f, pos, p => pos.Value = p, length: 200f),
+                        ScrollBar.Create(0.25f, pos, p => pos.Value = p, length: 200f),
                     ],
                 }
                 """));

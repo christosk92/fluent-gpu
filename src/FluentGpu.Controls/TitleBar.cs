@@ -6,6 +6,28 @@ using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
 
+/// <summary>The <see cref="TitleBar.Create"/> options record — wraps the TitleBar property-init config. The
+/// <see cref="Content"/> builder receives the LIVE content-slot width signal (subscribe it for content that must
+/// resize with the slot at runtime, e.g. <c>AutoSuggestBox.Create(widthSignal: …)</c>; read <c>.Peek()</c> to pick the
+/// shape per render). Field defaults mirror the control's own.</summary>
+public sealed record TitleBarOptions
+{
+    public string Title { get; init; } = "";
+    public string Subtitle { get; init; } = "";
+    public string IconGlyph { get; init; } = "";
+    public ColorF? IconColor { get; init; }
+    public bool ShowBackButton { get; init; }
+    public bool BackEnabled { get; init; }
+    public Action? OnBack { get; init; }
+    public bool ShowPaneToggle { get; init; }
+    public Action? OnPaneToggle { get; init; }
+    public Func<IReadSignal<float>, Element>? Content { get; init; }
+    public Func<Element>? Tabs { get; init; }
+    public Func<int>? TabsVersion { get; init; }
+    public bool ShowCaptionButtons { get; init; } = true;
+    public TemplateParts? Parts { get; init; }
+}
+
 /// <summary>
 /// The WinUI 3 <c>TitleBar</c> control (WinAppSDK 1.7, microsoft-ui-xaml controls\dev\TitleBar) over a custom frame
 /// (<see cref="WindowDesc.CustomFrame"/>): back + pane-toggle buttons (40w, 16px glyphs), a 16×16 app-identity icon,
@@ -98,6 +120,27 @@ public sealed class TitleBar : Component
     /// <summary>False = a standard OS frame owns the caption buttons; the bar keeps a right inset clear of them.</summary>
     public bool ShowCaptionButtons = true;
     public TemplateParts? Parts;
+
+    /// <summary>The one canonical TitleBar factory (WS3 creation idiom). Wraps the property-init surface in a
+    /// <see cref="TitleBarOptions"/> record; the options' <see cref="TitleBarOptions.Content"/> builder is handed the
+    /// live <see cref="ContentAvail"/> signal so it can wire content that resizes with the slot without needing the
+    /// instance. Property-init stays available for the in-repo probes/shells that compose the bar directly, but this is
+    /// the documented public path.</summary>
+    public static Element Create(TitleBarOptions options)
+        => Embed.Comp(() =>
+        {
+            var tb = new TitleBar
+            {
+                Title = options.Title, Subtitle = options.Subtitle, IconGlyph = options.IconGlyph,
+                ShowBackButton = options.ShowBackButton, BackEnabled = options.BackEnabled, OnBack = options.OnBack,
+                ShowPaneToggle = options.ShowPaneToggle, OnPaneToggle = options.OnPaneToggle,
+                Tabs = options.Tabs, TabsVersion = options.TabsVersion,
+                ShowCaptionButtons = options.ShowCaptionButtons, Parts = options.Parts,
+            };
+            if (options.IconColor is { } ic) tb.IconColor = ic;
+            if (options.Content is { } content) tb.Content = _ => content(tb.ContentAvail);
+            return tb;
+        });
 
     // Captured part handles (OnRealized fires at mount; the component instance persists across re-renders, so plain
     // fields are the stable store) → the WM_NCHITTEST region report.

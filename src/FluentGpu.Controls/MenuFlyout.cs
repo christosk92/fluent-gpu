@@ -92,18 +92,25 @@ public static class MenuFlyout
     /// <summary>A separator row (pure chrome — no owned props).</summary>
     public const string PartSeparator = "Separator";
 
-    /// <summary><paramref name="focusFirst"/>: put the keyboard cursor + focus on the first selectable row after mount
-    /// (WinUI keyboard-invoked menu / context menu opened via Menu key — <see cref="MenuFlyoutPresenter.FocusFirstOnMount"/>).</summary>
-    public static Element Build(IReadOnlyList<MenuFlyoutItem> items, Action close, float minWidth = ThemeMinWidth,
+    /// <summary>The one canonical MenuFlyout body factory. <paramref name="focusFirst"/>: put the keyboard cursor +
+    /// focus on the first selectable row after mount (WinUI keyboard-invoked menu / context menu opened via Menu key —
+    /// <see cref="MenuFlyoutPresenter.FocusFirstOnMount"/>).</summary>
+    public static Element Create(IReadOnlyList<MenuFlyoutItem> items, Action close, float minWidth = ThemeMinWidth,
         TemplateParts? parts = null, bool focusFirst = false)
-        => Build(items, close, minWidth, onNavigate: null, parts, focusFirst);
+        => Create(items, close, minWidth, onNavigate: null, parts, focusFirst);
 
     /// <summary><paramref name="onNavigate"/>: Left(-1)/Right(+1) pressed while the menu is open and the focused row is
     /// not a sub-menu boundary — MenuBar uses it to move between adjacent open menus (MenuBarItem.cpp:205-228
     /// OnPresenterKeyDown → OpenFlyoutFrom). <paramref name="focusFirst"/> focuses the first row on mount (keyboard open).</summary>
-    public static Element Build(IReadOnlyList<MenuFlyoutItem> items, Action close, float minWidth, Action<int>? onNavigate,
+    public static Element Create(IReadOnlyList<MenuFlyoutItem> items, Action close, float minWidth, Action<int>? onNavigate,
         TemplateParts? parts = null, bool focusFirst = false)
         => Embed.Comp(() => new MenuFlyoutPresenter { Items = items, Close = close, MinWidth = minWidth, OnNavigate = onNavigate, Parts = parts, FocusFirstOnMount = focusFirst });
+
+    /// <summary>Internal alias retained for in-Controls callers (DropDownButton/SplitButton/ToggleSplitButton/MenuBar/
+    /// ContextMenu/CommandBarFlyout sub-menus/MediaPlayerElement) — the public door is <see cref="Create"/>.</summary>
+    internal static Element Build(IReadOnlyList<MenuFlyoutItem> items, Action close, float minWidth = ThemeMinWidth,
+        TemplateParts? parts = null, bool focusFirst = false)
+        => Create(items, close, minWidth, onNavigate: null, parts, focusFirst);
 
     // ── Separator: a 1px DividerStrokeColorDefault line; SeparatorThemePadding -4,1,-4,1 bleeds it past the item
     //    inset to full presenter width (we model the -4 bleed with a negative horizontal margin on the line). ────────

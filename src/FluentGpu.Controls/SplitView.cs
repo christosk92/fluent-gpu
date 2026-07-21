@@ -2,6 +2,7 @@ using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Scene;
+using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
 
@@ -30,9 +31,10 @@ public sealed class SplitViewPaneClosingArgs
 /// <see cref="PaneNode"/> is written by the pane's <c>OnRealized</c> at mount; <see cref="Close"/> is filled by the
 /// watcher with its light-dismiss <c>TryClose</c> so the factory-built dismiss layer / Escape handler can invoke it.</summary>
 internal sealed record SplitViewPaneLink(
-    bool IsOpen,
+    Signal<bool> IsOpen,
+    bool Controlled,
     bool LightDismissible,
-    Action<bool>? SetIsPaneOpen,
+    Action<bool>? OnOpenChanged,
     Action? OnPaneOpening,
     Action? OnPaneOpened,
     Action<SplitViewPaneClosingArgs>? OnPaneClosing,
@@ -52,8 +54,9 @@ internal sealed record SplitViewPaneLink(
 /// <item><b>CompactOverlay / CompactInline</b> — closed leaves a <c>compactPaneLength</c> (48) rail: the SAME pane,
 /// clipped to the rail (a clip-reveal, never a resize — core SplitView.cpp:343-377).</item>
 /// </list>
-/// State is caller-owned (<paramref name="isPaneOpen"/> is a prop, the WinUI <c>IsPaneOpen</c> DP): wire
-/// <paramref name="setIsPaneOpen"/> so light dismiss can write the close back. PaneOpening/PaneOpened/
+/// State is a controlled two-way <paramref name="isPaneOpen"/> <c>Signal&lt;bool&gt;</c> the watcher observes (the WinUI
+/// <c>IsPaneOpen</c> DP): the control writes it on light dismiss and fires <paramref name="onOpenChanged"/>; a
+/// programmatic caller write re-renders without echoing. PaneOpening/PaneOpened/
 /// PaneClosing(cancelable on light dismiss)/PaneClosed mirror the WinUI events (XCPTypesAutoGen SplitView.cs:82-96).</summary>
 public static class SplitView
 {
@@ -85,24 +88,31 @@ public static class SplitView
     /// <param name="content">The main content (WinUI <c>SplitView.Content</c>).</param>
     /// <param name="paneWidth">WinUI <c>OpenPaneLength</c> — default 320 (SplitViewOpenPaneThemeLength,
     /// SplitView_themeresources.xaml:5).</param>
-    /// <param name="isPaneOpen">WinUI <c>IsPaneOpen</c> — CLR default false (XCPTypesAutoGen SplitView.cs:58-60;
-    /// PaneRoot starts Collapsed, SplitView_themeresources.xaml:700).</param>
+    /// <param name="isPaneOpen">The controlled two-way pane-open <c>Signal&lt;bool&gt;</c> (WinUI <c>IsPaneOpen</c>); the
+    /// watcher observes it and light dismiss writes it back. Null ⇒ uncontrolled (an internal, always-closed pane).</param>
     /// <param name="displayMode">Default Overlay (the WinUI DP default — SplitView_Partial.cpp:136, :446).</param>
     /// <param name="compactPaneLength">WinUI <c>CompactPaneLength</c> — default 48 (SplitViewCompactPaneThemeLength,
     /// SplitView_themeresources.xaml:6).</param>
-    /// <param name="setIsPaneOpen">Write-back for the caller-owned open state — light dismiss (content click,
-    /// Escape, host resize) closes through this. Null ⇒ light dismiss is inert (state cannot be flipped).</param>
+    /// <param name="onOpenChanged">Fired with the new open state AFTER light dismiss (content click, Escape, host
+    /// resize) writes the <paramref name="isPaneOpen"/> signal false; a programmatic caller write does NOT echo it.</param>
     /// <param name="onPaneClosing">Cancelable on light dismiss only; an app-initiated close (the caller flipping
     /// <paramref name="isPaneOpen"/>) raises it but ignores Cancel (core SplitView.cpp:432-456).</param>
-    public static Element Create(Element pane, Element content, float paneWidth = 320f, bool isPaneOpen = false,
+    public static Element Create(Element pane, Element content, float paneWidth = 320f, Signal<bool>? isPaneOpen = null,
                                  SplitViewDisplayMode displayMode = SplitViewDisplayMode.Overlay,
                                  SplitViewPanePlacement panePlacement = SplitViewPanePlacement.Left,
                                  float compactPaneLength = 48f,
-                                 Action<bool>? setIsPaneOpen = null,
+                                 Action<bool>? onOpenChanged = null,
                                  Action? onPaneOpening = null, Action? onPaneOpened = null,
                                  Action<SplitViewPaneClosingArgs>? onPaneClosing = null, Action? onPaneClosed = null,
                                  TemplateParts? parts = null)
     {
+        // Controlled two-way open state: the pane-open state is a caller-owned SIGNAL the watcher observes. Reading it
+        // here subscribes the caller, so a programmatic open/close rebuilds the tree; light dismiss / Escape / a host
+        // resize write it back and fire onOpenChanged (a programmatic caller write does NOT echo onOpenChanged). Null =
+        // uncontrolled (an internal always-closed signal, i.e. a permanently-collapsed pane — today's default shape).
+        bool controlled = isPaneOpen is not null;
+        var openSig = isPaneOpen ?? new Signal<bool>(false);
+        bool open = openSig.Value;
         bool right = panePlacement == SplitViewPanePlacement.Right;
         bool compact = displayMode is SplitViewDisplayMode.CompactOverlay or SplitViewDisplayMode.CompactInline;
         // IsLightDismissible = DisplayMode is not Inline/CompactInline (core SplitView.cpp:176-182) — exactly the
@@ -112,7 +122,7 @@ public static class SplitView
         // (TemplateSettings.NegativeOpenPaneLength left / OpenPaneLength right — core SplitView.cpp:356-366).
         float slideDx = right ? paneWidth : -paneWidth;
 
-        var link = new SplitViewPaneLink(isPaneOpen, overlayPane, setIsPaneOpen,
+        var link = new SplitViewPaneLink(openSig, controlled, overlayPane, onOpenChanged,
             onPaneOpening, onPaneOpened, onPaneClosing, onPaneClosed,
             new Ref<NodeHandle>(NodeHandle.Null), new Ref<Action?>(null));
         Action<NodeHandle> capturePane = h => link.PaneNode.Value = h;
@@ -127,7 +137,7 @@ public static class SplitView
             // 0.2s open-duration leg, :396-399). Overlay modes never move the content (ContentRoot has no
             // ContentTransform keyframes in the overlay transitions).
             Animate = overlayPane ? (LayoutTransition?)null : new LayoutTransition(TransitionChannels.Position,
-                TransitionDynamics.Tween(isPaneOpen || compact ? 200f : 100f, InlineSpline)),
+                TransitionDynamics.Tween(open || compact ? 200f : 100f, InlineSpline)),
             Children = [content],
         };
         {
@@ -167,10 +177,10 @@ public static class SplitView
         BoxEl PaneCompact(float openMs, float closeMs, EasingSpec spline) => new()
         {
             Key = "sv-pane",
-            Width = isPaneOpen ? paneWidth : compactPaneLength,
+            Width = open ? paneWidth : compactPaneLength,
             ClipToBounds = true,
             Animate = new LayoutTransition(TransitionChannels.Bounds,
-                TransitionDynamics.Tween(isPaneOpen ? openMs : closeMs, spline),
+                TransitionDynamics.Tween(open ? openMs : closeMs, spline),
                 Size: SizeMode.Reveal),
             Children = [paneBox],
         };
@@ -183,7 +193,7 @@ public static class SplitView
             // :54-58; OpenInlineRight template :607-634).
             Element? paneCol = displayMode == SplitViewDisplayMode.CompactInline
                 ? PaneCompact(openMs: 200f, closeMs: 200f, InlineSpline)
-                : isPaneOpen
+                : open
                     ? new BoxEl
                     {
                         Key = "sv-pane",
@@ -221,7 +231,7 @@ public static class SplitView
 
             Element? paneLayer = compactOverlay
                 ? PaneCompact(openMs: 350f, closeMs: 120f, OverlaySpline)
-                : isPaneOpen
+                : open
                     ? new BoxEl
                     {
                         Key = "sv-pane",
@@ -264,13 +274,13 @@ public static class SplitView
 
             Element[] zk = paneLayer is null
                 ? [baseRow]
-                : isPaneOpen ? [baseRow, dismiss, Aligned(paneLayer, slide: !compactOverlay)]
-                             : [baseRow, Aligned(paneLayer, slide: false)];
+                : open ? [baseRow, dismiss, Aligned(paneLayer, slide: !compactOverlay)]
+                       : [baseRow, Aligned(paneLayer, slide: false)];
 
             // VK_ESCAPE (and gamepad B) light-dismisses the open overlay pane (core SplitView.cpp:574-578) —
             // bubbled here from the focused pane descendant, the WinUI KeyDown-on-the-control routing.
             Action<KeyEventArgs>? rootKeys = null;
-            if (isPaneOpen)
+            if (open)
             {
                 rootKeys = e =>
                 {
@@ -325,8 +335,8 @@ internal sealed class SplitViewPaneWatcher : Component
         // PaneClosing is cancelable on THIS path only (OnCancelClosing :246-249).
         void TryClose()
         {
-            if (link is null || !link.IsOpen || !link.LightDismissible || closingByLightDismiss.Value
-                || link.SetIsPaneOpen is null)
+            if (link is null || !link.IsOpen.Peek() || !link.LightDismissible || closingByLightDismiss.Value
+                || !link.Controlled)
             {
                 return;
             }
@@ -334,17 +344,18 @@ internal sealed class SplitViewPaneWatcher : Component
             link.OnPaneClosing?.Invoke(args);
             if (args.Cancel) return;
             closingByLightDismiss.Value = true;
-            link.SetIsPaneOpen(false);
+            link.IsOpen.Value = false;          // write the controlled signal (the interaction)
+            link.OnOpenChanged?.Invoke(false);  // then onChange — a programmatic caller write does NOT echo it
         }
         if (link is not null) link.Close.Value = TryClose;
 
         // The IsPaneOpen transition work (SplitView_Partial.cpp:470-515).
         UseEffect(() =>
         {
-            if (link is null || link.IsOpen == lastOpen.Value) return;
-            lastOpen.Value = link.IsOpen;
+            if (link is null || link.IsOpen.Peek() == lastOpen.Value) return;
+            lastOpen.Value = link.IsOpen.Peek();
             var scene = Context.Scene;
-            if (link.IsOpen)
+            if (link.IsOpen.Peek())
             {
                 link.OnPaneOpening?.Invoke();   // PaneOpening fires BEFORE the focus move (SplitView_Partial.cpp:481-487)
                 if (link.LightDismissible)
@@ -387,7 +398,7 @@ internal sealed class SplitViewPaneWatcher : Component
                 }
                 link.OnPaneClosed?.Invoke();
             }
-        }, link?.IsOpen ?? false);
+        }, link?.IsOpen.Value ?? false);   // read .Value → the watcher OBSERVES the pane-state signal (re-renders on change)
 
         // A host/root size change light-dismisses the open pane — skipping the initial size
         // (SplitView_Partial.cpp:230-244 OnSizeChanged; :246-256 OnXamlRootChanged).

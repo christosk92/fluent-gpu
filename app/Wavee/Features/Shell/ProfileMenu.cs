@@ -125,7 +125,7 @@ sealed class ProfileMenu : Component
             [
                 AccountHeader(name, premium, avatar, email),
                 HeaderSeparator(),
-                MenuFlyout.Build(items, close, MenuWidth),
+                MenuFlyout.Create(items, close, MenuWidth),
             ],
         };
     }

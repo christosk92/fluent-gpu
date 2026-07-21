@@ -21,12 +21,12 @@ sealed class SplitViewPage : Component
 
                 SplitView.Create(pane, content, paneWidth: 200f)
                 """),
-            ControlExample.Build("Toggling the pane (isPaneOpen)", Frame(SplitView.Create(DemoPane(), DemoContent(), paneWidth: 200f, isPaneOpen: open.Value)),
+            ControlExample.Build("Toggling the pane (isPaneOpen)", Frame(SplitView.Create(DemoPane(), DemoContent(), paneWidth: 200f, isPaneOpen: open)),
                 options: ToggleSwitch.Create(open, header: "IsPaneOpen"),
                 code: """
                 var open = UseSignal(true);
 
-                SplitView.Create(pane, content, paneWidth: 200f, isPaneOpen: open.Value)
+                SplitView.Create(pane, content, paneWidth: 200f, isPaneOpen: open)
 
                 // Paired with:
                 ToggleSwitch.Create(open, header: "IsPaneOpen")

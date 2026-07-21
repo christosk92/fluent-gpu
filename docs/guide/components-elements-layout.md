@@ -203,6 +203,16 @@ Most controls are **element-returning factories** (call them in render); `Naviga
 Every control has a `Style` record and reads theme tokens by default; most expose a global `…StyleOverride`, while
 `Button` exposes the axis-aware `Button.StyleHook` (below).
 
+**One creation idiom.** Every public control exposes exactly ONE canonical `X.Create(…)`; named variants are one-line
+forwarders onto it — `Button.Accent/Standard/Subtle/Outline`, `InfoBadge.Dot/Count/Icon` (→ `InfoBadge.Create(kind, …)`),
+`ProgressBar`/`ProgressRing`.`Determinate/Indeterminate` (→ `Create(FloatSignal? value = null, …)`, where a **null value =
+indeterminate** and a signal = a determinate that tracks it), `NumberBox.CreateWithSpinners`. `Build` is never on the public
+surface (`MenuFlyout.Build`→`MenuFlyout.Create`; `ItemContainer`/`CommandBarFlyout` bodies are internal). Controls without a
+natural argument list take an **options record**: `NavigationView.Create(NavigationViewOptions)`,
+`TitleBar.Create(TitleBarOptions)`, `OverlayHost.Create(Element child)`, and `TextBox`/`NumberBox` `.Create(signal, onChange,
+…Options)`. (`NavigationView`/`TitleBar`/`OverlayHost` also keep their property-init fields for the in-repo probes/shells that
+compose them directly, but `Create` is the documented path.)
+
 ```csharp
 // Button = TWO orthogonal axes (Radix/CVA precedent): appearance selects the token ramp, size the geometry.
 Button.Create(string label, Action onClick, ButtonAppearance appearance = Standard, ControlSize size = Medium,
@@ -215,7 +225,8 @@ HyperlinkButton.Create(string text, Action onClick, Style? style = null, …, Co
 
 Slider.Create(FloatSignal? value = null, Action<float>? onChange = null, SliderOptions? options = null,
               float length = 200, float thickness = 32, Style? = null, bool isEnabled = true, TemplateParts? = null)   // ONE API — signals-native (no re-render) ★
-ScrollBar.Create(float fraction, float position, Action<float> onScroll, float h = 200, Style? = null)
+ScrollBar.Create(float fraction, FloatSignal? position = null, Action<float>? onChange = null, float length = 200, …)  // canonical = the full WinUI mouse scrollbar (signals-native); the legacy thin panning indicator is a distinct Create(float,float,Action,…) overload
+SplitView.Create(pane, content, Signal<bool>? isPaneOpen = null, Action<bool>? onOpenChanged = null, …)   // controlled two-way pane state; light dismiss writes the signal + fires onOpenChanged
 AnimatedIcon.Glyph(string glyph, float size = 16, ColorF? color = null, string? font = null, float hoverScale = 1.08f, float pressScale = 0.88f)
 ```
 
