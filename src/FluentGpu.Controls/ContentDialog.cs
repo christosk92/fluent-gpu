@@ -1,6 +1,7 @@
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Localization;
 
 namespace FluentGpu.Controls;
 
@@ -34,7 +35,9 @@ public sealed class ContentDialog : Component
     public string TriggerLabel = "Show dialog";
     public string Title = "Title";
     public string Message = "";
-    public string PrimaryText = "OK";
+    // null = the localized default label (Strings.Dialog.Ok, neutral "OK") resolved at render — so it translates and
+    // re-resolves on a culture change. Set to a non-null string to override; set to "" to hide the primary button.
+    public string? PrimaryText;
     public string SecondaryText = "";
     public string CloseText = "";
     public bool OpenOnMount;
@@ -113,7 +116,7 @@ public sealed class ContentDialog : Component
     const float ButtonMinW = 130f;
     const float ButtonH = 32f;
 
-    public static Element Create(string triggerLabel, string title, string message, string primaryText = "OK",
+    public static Element Create(string triggerLabel, string title, string message, string? primaryText = null,
                                  string secondaryText = "", string closeText = "", DefaultBtn defaultButton = DefaultBtn.Primary)
         => Embed.Comp(() => new ContentDialog
         {
@@ -199,7 +202,7 @@ public sealed class ContentDialog : Component
 
     Element BuildCardCore(Func<OverlayHandle?> getHandle, Action<ContentDialogResult> setResult)
     {
-        bool primaryShown = PrimaryText.Length > 0;
+        bool primaryShown = PrimaryText != "";   // null => localized default (shown); "" => explicitly hidden
         bool secondaryShown = SecondaryText.Length > 0;
         bool closeShown = CloseText.Length > 0;
 
@@ -273,7 +276,7 @@ public sealed class ContentDialog : Component
         var buttons = new List<BoxEl>(3);
         if (Footer is null)
         {
-            if (primaryShown) buttons.Add(CommandButton(PrimaryText, primaryAccent, IsPrimaryButtonEnabled, RunPrimary));
+            if (primaryShown) buttons.Add(CommandButton(PrimaryText ?? Loc.Get(Strings.Dialog.Ok), primaryAccent, IsPrimaryButtonEnabled, RunPrimary));
             if (secondaryShown) buttons.Add(CommandButton(SecondaryText, secondaryAccent, IsSecondaryButtonEnabled, RunSecondary));
             if (closeShown) buttons.Add(CommandButton(CloseText, closeAccent, true, RunClose));
         }

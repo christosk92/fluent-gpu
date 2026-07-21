@@ -28,7 +28,7 @@ sealed class NowPlayingPanel : Component
         var track = b?.CurrentTrack.Value;
         string artistUri = track is { Artists.Count: > 0 } ? track.Artists[0].Uri : "";
         string trackUri = track?.Uri ?? "";
-        var infoL = UseAsyncResource(ct => LoadInfoAsync(svc, artistUri, trackUri, ct), (NowPlayingInfo?)null, artistUri, trackUri);
+        var infoL = UseResource(ct => LoadInfoAsync(svc, artistUri, trackUri, ct), (NowPlayingInfo?)null, (artistUri, trackUri)).Loadable;
         var loadState = (LoadState)infoL.State.Value;
         var info = infoL.Value.Value;
 
@@ -67,7 +67,7 @@ sealed class NowPlayingPanel : Component
                     : new BoxEl
                     {
                         Direction = 1, Gap = 16f,
-                        Padding = new Edges4(WaveeSpace.M, 0f, WaveeSpace.M, WaveeSpace.M),
+                        Padding = new Edges4(Spacing.M, 0f, Spacing.M, Spacing.M),
                         Children = sections.ToArray(),
                     },
             ],
@@ -103,21 +103,21 @@ sealed class NowPlayingPanel : Component
 
         string? url = track.Image?.Url is { Length: > 0 } u ? ImageSource.Normalize(u) : null;
         Element art = url is { Length: > 0 }
-            ? Ui.Image(url, ImageFit.Cover, 1f, 512, WaveeRadius.Card, wash, track.Image?.BlurHash) with { AlignSelf = FlexAlign.Stretch }
+            ? Ui.Image(url, ImageFit.Cover, 1f, 512, Radii.Card, wash, track.Image?.BlurHash) with { AlignSelf = FlexAlign.Stretch }
             : new ImageEl
             {
                 Source = "",
                 AspectRatio = 1f,
                 AlignSelf = FlexAlign.Stretch,
-                Corners = CornerRadius4.All(WaveeRadius.Card),
+                Corners = CornerRadius4.All(Radii.Card),
                 Placeholder = wash,
             };
 
         return new BoxEl
         {
             Direction = 1,
-            Padding = new Edges4(WaveeSpace.S, WaveeSpace.S, WaveeSpace.S, WaveeSpace.L),
-            Gap = WaveeSpace.M,
+            Padding = new Edges4(Spacing.S, Spacing.S, Spacing.S, Spacing.L),
+            Gap = Spacing.M,
             Children =
             [
                 art,
@@ -179,15 +179,15 @@ sealed class NowPlayingPanel : Component
             ? new BoxEl
             {
                 Height = heroH, ZStack = true, ClipToBounds = true,
-                Corners = CornerRadius4.All(WaveeRadius.Card),
+                Corners = CornerRadius4.All(Radii.Card),
                 EdgeFade = new EdgeFadeSpec(EdgeMask.Bottom, 56f),
                 Children =
                 [
-                    Ui.Image(heroUrl, ImageFit.Cover, 2.6f, 320, WaveeRadius.Card, Tok.FillSubtleSecondary, hero?.BlurHash),
+                    Ui.Image(heroUrl, ImageFit.Cover, 2.6f, 320, Radii.Card, Tok.FillSubtleSecondary, hero?.BlurHash),
                     new BoxEl
                     {
                         Height = heroH,
-                        Corners = CornerRadius4.All(WaveeRadius.Card),
+                        Corners = CornerRadius4.All(Radii.Card),
                         Gradient = GradientDown(
                             new GradientStop(0f, Scrim(0f)),
                             new GradientStop(0.55f, Scrim(0.12f)),
@@ -199,7 +199,7 @@ sealed class NowPlayingPanel : Component
             {
                 Height = 72f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                 Fill = Tok.FillSubtleSecondary,
-                Corners = CornerRadius4.All(WaveeRadius.Card),
+                Corners = CornerRadius4.All(Radii.Card),
                 ClipToBounds = true,
                 Children = [PersonPicture.Create("", 56f, displayName: artist.Name, imageSourcePath: artist.Image?.Url)],
             };
@@ -212,7 +212,7 @@ sealed class NowPlayingPanel : Component
                 Children =
                 [
                     new TextEl(artist.Name) { Size = 18f, Weight = 800, Color = Tok.TextPrimary, Grow = 1f, Basis = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-                    artist.Verified ? Icon(Mdl.Check, 12f, Tok.AccentTextPrimary) : new BoxEl(),
+                    artist.Verified ? Icon(Icons.Check, 12f, Tok.AccentTextPrimary) : new BoxEl(),
                 ],
             },
         };
@@ -224,7 +224,7 @@ sealed class NowPlayingPanel : Component
         return Section(Loc.Get(Strings.Detail.AboutTheArtist), new BoxEl
         {
             Direction = 1, Gap = 0f,
-            Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardSecondary, ClipToBounds = true,
+            Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillCardSecondary, ClipToBounds = true,
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             HoverFill = go is null ? Tok.FillCardSecondary : Tok.FillCardDefault,
             Cursor = go is null ? (CursorId?)null : CursorId.Hand,
@@ -319,7 +319,7 @@ sealed class NowPlayingPanel : Component
     static Element MerchRow(MerchItem item) => new BoxEl
     {
         Direction = 0, Gap = 10f, AlignItems = FlexAlign.Center, Padding = Edges4.All(8f),
-        Corners = CornerRadius4.All(WaveeRadius.Control), Fill = Tok.FillCardSecondary,
+        Corners = CornerRadius4.All(Radii.Control), Fill = Tok.FillCardSecondary,
         BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault, HoverFill = Tok.FillCardDefault,
         Cursor = item.ShopUrl is { Length: > 0 } ? CursorId.Hand : (CursorId?)null,
         OnClick = item.ShopUrl is { Length: > 0 } url ? () => InputHooks.Current.Default.OpenUri?.Invoke(url) : null,
@@ -327,8 +327,8 @@ sealed class NowPlayingPanel : Component
         [
             new BoxEl
             {
-                Width = 56f, Height = 56f, Shrink = 0f, Corners = CornerRadius4.All(WaveeRadius.Control), ClipToBounds = true,
-                Children = [Surfaces.Artwork(item.Image, item.Name.GetHashCode() & 0x7fffffff, 56f, 56f, WaveeRadius.Control)],
+                Width = 56f, Height = 56f, Shrink = 0f, Corners = CornerRadius4.All(Radii.Control), ClipToBounds = true,
+                Children = [Surfaces.Artwork(item.Image, item.Name.GetHashCode() & 0x7fffffff, 56f, 56f, Radii.Control)],
             },
             new BoxEl
             {
@@ -394,7 +394,7 @@ sealed class NowPlayingPanel : Component
     static Element LoadingSection() => Section(Loc.Get(Strings.Detail.AboutTheArtist), new BoxEl
     {
         Direction = 1, Gap = 10f, Padding = Edges4.All(12f),
-        Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardSecondary,
+        Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillCardSecondary,
         Children =
         [
             new BoxEl { Height = 18f, Width = 180f, Corners = CornerRadius4.All(4f), Fill = Tok.FillSubtleSecondary },

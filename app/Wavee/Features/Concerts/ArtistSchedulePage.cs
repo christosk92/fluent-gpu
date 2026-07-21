@@ -62,11 +62,11 @@ sealed class ArtistSchedulePage : Component
         UseSignalEffect(_location.TrackQuery);
 
         var savedPlace = _savedPlace.Value;
-        var schedule = UseAsyncResource(
+        var schedule = UseResource(
             ct => svc.Concerts.GetArtistScheduleAsync(_artistUri, savedPlace?.GeoHash, cancellationToken: ct),
-            (ArtistConcertSchedule?)SeedSchedule(_artistUri, _artistName), _artistUri, savedPlace?.GeoHash, gen);
-        var locationLabel = UseAsyncResource(
-            ct => svc.Concerts.GetArtistPageLocationAsync(ct), (ConcertPlace?)null, gen);
+            (ArtistConcertSchedule?)SeedSchedule(_artistUri, _artistName), DepKey.From(HashCode.Combine(_artistUri, savedPlace?.GeoHash, gen))).Loadable;
+        var locationLabel = UseResource(
+            ct => svc.Concerts.GetArtistPageLocationAsync(ct), (ConcertPlace?)null, gen).Loadable;
 
         string locLabel = savedPlace?.Name is { Length: > 0 } savedName
             ? savedName
@@ -84,7 +84,7 @@ sealed class ArtistSchedulePage : Component
             onFailed: () => ErrorState.Build(schedule.Error, onRetry: () => reload.Value++),
             isEmpty: s => s is null || s.Concerts.Count == 0,
             onEmpty: () => EmptyState.Build(Loc.Get(Strings.Concerts.Schedule.NoUpcoming),
-                Loc.Get(Strings.Concerts.Schedule.NoUpcomingSubtitle), Mdl.Calendar),
+                Loc.Get(Strings.Concerts.Schedule.NoUpcomingSubtitle), Icons.Calendar),
             group: "artist-schedule:" + _artistUri);
 
         var content = new BoxEl
@@ -147,20 +147,20 @@ sealed class ArtistSchedulePage : Component
             sections.Add(new BoxEl
             {
                 Direction = 1, MinWidth = 0f, AlignItems = FlexAlign.Center,
-                Padding = new Edges4(WaveeSpace.XL, WaveeSpace.XXL, WaveeSpace.XL, WaveeSpace.XXL),
-                Corners = CornerRadius4.All(WaveeRadius.Card),
+                Padding = new Edges4(Spacing.XL, Spacing.XXL, Spacing.XL, Spacing.XXL),
+                Corners = CornerRadius4.All(Radii.Card),
                 Fill = Tok.FillCardDefault, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
                 Children =
                 [
                     EmptyState.Build(Loc.Get(Strings.Concerts.Schedule.NoMoreDates),
-                        Loc.Get(Strings.Concerts.Schedule.NoMoreDatesSubtitle), Mdl.Calendar,
+                        Loc.Get(Strings.Concerts.Schedule.NoMoreDatesSubtitle), Icons.Calendar,
                         actionLabel: Loc.Get(Strings.Concerts.Location.Set),
                         onAction: () => _location.TogglePicker(() => _anchor.Value)),
                 ],
             });
         }
 
-        return new BoxEl { Direction = 1, MinWidth = 0f, Gap = WaveeSpace.XL, Children = sections.ToArray() };
+        return new BoxEl { Direction = 1, MinWidth = 0f, Gap = Spacing.XL, Children = sections.ToArray() };
     }
 
     Element TourHero(ArtistConcertSchedule schedule, string artistName, Concert? spotlight,
@@ -187,7 +187,7 @@ sealed class ArtistSchedulePage : Component
             blocks.Add(new BoxEl { Height = 1f, MinWidth = 0f, Fill = Tok.StrokeDividerDefault });
             blocks.Add(new BoxEl
             {
-                Direction = 0, MinWidth = 0f, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
+                Direction = 0, MinWidth = 0f, AlignItems = FlexAlign.Center, Gap = Spacing.M,
                 Children =
                 [
                     ConcertUi.DateBlock(next.Date),
@@ -221,7 +221,7 @@ sealed class ArtistSchedulePage : Component
             : wide
                 ? new BoxEl
                 {
-                    Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
+                    Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M,
                     Children =
                     [
                         Button.Accent(Loc.Get(Strings.Concerts.Schedule.ViewEvent), open) with { Shrink = 0f },
@@ -230,12 +230,12 @@ sealed class ArtistSchedulePage : Component
                 }
                 : new BoxEl
                 {
-                    Direction = 1, Gap = WaveeSpace.S,
+                    Direction = 1, Gap = Spacing.S,
                     Children = [ Button.Accent(Loc.Get(Strings.Concerts.Schedule.ViewEvent), open), location ],
                 };
         blocks.Add(actions);
 
-        var copy = new BoxEl { Direction = 1, MinWidth = 0f, Gap = WaveeSpace.M, Children = blocks.ToArray() };
+        var copy = new BoxEl { Direction = 1, MinWidth = 0f, Gap = Spacing.M, Children = blocks.ToArray() };
         return ConcertUi.SplitEditorialHero(schedule.HeaderImage, spotlight?.AccentColor, copy, wide);
     }
 
@@ -247,7 +247,7 @@ sealed class ArtistSchedulePage : Component
             new BoxEl
             {
                 Direction = 0,
-                Children = [ SelectorBar.Create(labels, selected, i => _selectedMonth.Value = groups[i].Key) ],
+                Children = [ SelectorBar.Create(labels, new Signal<int>(selected), onChange: i => _selectedMonth.Value = groups[i].Key) ],
             }, horizontal: true) with
         {
             Height = 48f, Grow = 0f, AutoEdgeFade = true, SuppressScrollBar = true,
@@ -264,14 +264,14 @@ sealed class ArtistSchedulePage : Component
         return new BoxEl
         {
             Direction = 1, MinWidth = 0f, ClipToBounds = true,
-            Corners = CornerRadius4.All(WaveeRadius.Card),
+            Corners = CornerRadius4.All(Radii.Card),
             Fill = Tok.FillCardDefault, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             Children =
             [
                 new BoxEl
                 {
-                    Direction = 1, MinWidth = 0f, Gap = WaveeSpace.S,
-                    Padding = new Edges4(WaveeSpace.L, WaveeSpace.M, WaveeSpace.L, WaveeSpace.S),
+                    Direction = 1, MinWidth = 0f, Gap = Spacing.S,
+                    Padding = new Edges4(Spacing.L, Spacing.M, Spacing.L, Spacing.S),
                     Children =
                     [
                         new TextEl(Loc.Get(Strings.Concerts.Schedule.TourDates))

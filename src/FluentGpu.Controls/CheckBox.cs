@@ -2,6 +2,7 @@ using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
 
@@ -71,23 +72,30 @@ public static partial class CheckBox
         LabelFg   = StateBrush.Flat(Tok.TextPrimary) with { Disabled = Tok.TextDisabled },
     };
 
-    public static BoxEl Create(string label, bool isChecked, Action onToggle, Style? style = null, bool isEnabled = true,
-                               TemplateParts? parts = null)
-        => Build(label, isChecked ? CheckState.Checked : CheckState.Unchecked, _ => onToggle(), style, isEnabled, parts);
+    /// <summary>Two-state CheckBox. The checked state is a caller <see cref="Signal{T}"/> (read directly inside the
+    /// core — live); a click WRITES it then fires <paramref name="onChange"/> once; a programmatic write re-skins with
+    /// no onChange echo. The signal instance freezes at mount (re-key to swap). Pass no signal
+    /// (<paramref name="isChecked"/> = null) and the control materializes its own (auto-materialize — one code path).
+    /// Non-value props (style/enabled/parts) ride the G4 props channel.</summary>
+    public static Element Create(string label, Signal<bool>? isChecked = null, Action<bool>? onChange = null,
+                                 Style? style = null, bool isEnabled = true, TemplateParts? parts = null)
+        => Embed.Comp(new Props(label, isChecked, null, onChange, null, style ?? DefaultStyle, isEnabled, parts),
+                      () => new CheckBoxCore());
 
-    public static BoxEl Create(string label, CheckState state, Action<CheckState> onChange, Style? style = null, bool isEnabled = true,
-                               TemplateParts? parts = null)
-    {
-        var next = state switch
-        {
-            CheckState.Unchecked => CheckState.Checked,
-            CheckState.Checked => CheckState.Indeterminate,
-            _ => CheckState.Unchecked,
-        };
-        return Build(label, state, _ => onChange(next), style, isEnabled, parts);
-    }
+    /// <summary>Three-state CheckBox (adds the mixed "indeterminate" glyph). The <see cref="CheckState"/> is a caller
+    /// <see cref="Signal{T}"/> (required — the three-state variant); a click cycles Unchecked → Checked →
+    /// Indeterminate → Unchecked, WRITING the signal then firing <paramref name="onChange"/>.</summary>
+    public static Element Create(string label, Signal<CheckState> state, Action<CheckState>? onChange = null,
+                                 Style? style = null, bool isEnabled = true, TemplateParts? parts = null)
+        => Embed.Comp(new Props(label, null, state, null, onChange, style ?? DefaultStyle, isEnabled, parts),
+                      () => new CheckBoxCore());
 
-    static BoxEl Build(string label, CheckState state, Action<CheckState> onClick, Style? style, bool enabled, TemplateParts? parts)
+    /// <summary>Controlled props RE-PUSHED to <see cref="CheckBoxCore"/> (<c>Embed.Comp(props, …)</c>). Exactly one of
+    /// <see cref="Bool"/> / <see cref="Tri"/> is set by the matching overload (both null ⇒ 2-state auto-materialize).</summary>
+    internal sealed record Props(string Label, Signal<bool>? Bool, Signal<CheckState>? Tri, Action<bool>? OnBool,
+                                 Action<CheckState>? OnTri, Style Style, bool IsEnabled, TemplateParts? Parts);
+
+    internal static BoxEl Build(string label, CheckState state, Action<CheckState> onClick, Style? style, bool enabled, TemplateParts? parts)
     {
         var s = style ?? DefaultStyle;
         bool on = state == CheckState.Checked;
@@ -104,13 +112,13 @@ public static partial class CheckBox
         // tip, so a left-to-right reveal is the pen order). The dash reveals the same way. Unchecked has NO child (an empty
         // placeholder would persist as the same node and suppress the insert/remove). The box fill/stroke ease under it.
         Element[] markChildren = on
-            ? [Ctx.Provide(MarkProps.Channel,
+            ? [Embed.Comp(
                 new MarkProps(s.GlyphSize + 2f, 1.8f, glyphColor, enabled, CheckBoxMotion.NormalOffToNormalOnMs, parts),
-                Embed.Comp(() => new DrawnCheckmark()))]
+                () => new DrawnCheckmark())]
             : indet
-                ? [Ctx.Provide(MarkProps.Channel,
+                ? [Embed.Comp(
                     new MarkProps(s.BoxSize * 0.5f, 2f, glyphColor, enabled, 200f, parts),
-                    Embed.Comp(() => new DrawnDash()))]
+                    () => new DrawnDash())]
                 : [];
 
         // The box keeps a 1px ring in every state; the engine eases Fill/BorderColor toward the Hover/Pressed legs of the
@@ -175,10 +183,42 @@ public static partial class CheckBox
         return parts.Apply(PartRoot, root) with { OnClick = toggle, Role = AutomationRole.CheckBox, Children = children };
     }
 
-    /// <summary>Runtime mark props flow through context because a reused ComponentEl never re-runs its factory.</summary>
-    internal sealed record MarkProps(float Size, float Thickness, ColorF Color, bool Pressable, float DurationMs, TemplateParts? Parts)
+    /// <summary>Runtime mark props are RE-PUSHED live to the drawn-mark core (<c>Embed.Comp(props, …)</c>) because a
+    /// reused ComponentEl never re-runs its factory; the core reads them with <c>UseProps</c>.</summary>
+    internal sealed record MarkProps(float Size, float Thickness, ColorF Color, bool Pressable, float DurationMs, TemplateParts? Parts);
+}
+
+/// <summary>The stateful core: reads the caller's value signal DIRECTLY (2-state <c>bool</c> or 3-state
+/// <see cref="CheckState"/>) so a check/uncheck/cycle re-skins granularly, and reuses <see cref="CheckBox.Build"/> for
+/// the exact WinUI visuals. A click writes the signal first, then fires the matching onChange.</summary>
+internal sealed class CheckBoxCore : Component
+{
+    public override Element Render()
     {
-        internal static readonly Context<MarkProps?> Channel = new(null);
+        var p = UseProps<CheckBox.Props>();
+        var own = UseSignal(false);   // internal 2-state signal (auto-materialize; unconditional hook)
+
+        CheckState state;
+        Action<CheckState> onClick;
+        if (p.Tri is { } tri)
+        {
+            state = tri.Value;        // read directly (live)
+            var next = state switch
+            {
+                CheckState.Unchecked => CheckState.Checked,
+                CheckState.Checked => CheckState.Indeterminate,
+                _ => CheckState.Unchecked,
+            };
+            onClick = _ => { tri.Value = next; p.OnTri?.Invoke(next); };
+        }
+        else
+        {
+            var b = p.Bool ?? own;    // caller's signal wins; else the internal one (one code path)
+            bool on = b.Value;
+            state = on ? CheckState.Checked : CheckState.Unchecked;
+            onClick = _ => { bool next = !on; b.Value = next; p.OnBool?.Invoke(next); };
+        }
+        return CheckBox.Build(p.Label, state, onClick, p.Style, p.IsEnabled, p.Parts);
     }
 }
 
@@ -208,13 +248,12 @@ internal sealed class DrawnCheckmark : Component
 
     public override Element Render()
     {
-        var p = UseContext(CheckBox.MarkProps.Channel)
-            ?? new CheckBox.MarkProps(14f, 1.8f, default, true, CheckBoxMotion.NormalOffToNormalOnMs, null);
+        var p = UseProps<CheckBox.MarkProps>();
 
         // Reveal the presented width 0→Size on mount (clip exposes the stroke left-to-right). LayoutEffect seeds it before
         // the first anim tick, so the very first recorded frame is already at width 0 — no full-checkmark flash.
         Context.UseKeyframes(AnimChannel.StrokeTrimEnd,
-            [new Keyframe(0f, 0f, Easing.Linear), new Keyframe(1f, 1f, DrawEase)], p.DurationMs);
+            [new Keyframe(0f, 0f, Easing.Linear), new Keyframe(1f, 1f, DrawEase)], p.DurationMs, loop: false, DepKey.Empty);
 
         var mark = new PolylineStrokeEl
         {
@@ -242,11 +281,10 @@ internal sealed class DrawnDash : Component
 {
     public override Element Render()
     {
-        var p = UseContext(CheckBox.MarkProps.Channel)
-            ?? new CheckBox.MarkProps(10f, 2f, default, true, 200f, null);
+        var p = UseProps<CheckBox.MarkProps>();
 
         Context.UseKeyframes(AnimChannel.StrokeTrimEnd,
-            [new Keyframe(0f, 0f, Easing.Linear), new Keyframe(1f, 1f, CheckBoxMotion.AcceptTrimEndEase)], p.DurationMs);
+            [new Keyframe(0f, 0f, Easing.Linear), new Keyframe(1f, 1f, CheckBoxMotion.AcceptTrimEndEase)], p.DurationMs, loop: false, DepKey.Empty);
         var dash = new PolylineStrokeEl
         {
             Width = p.Size,

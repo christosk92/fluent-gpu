@@ -18,6 +18,7 @@ readonly record struct IconInfo(string Code, string Name, string[] Tags)
     public string Glyph => char.ConvertFromUtf32(Convert.ToInt32(Code, 16));
 }
 
+[GalleryPage("icons", "Iconography", "Design", Icon = Icons.Star)]
 sealed class IconsPage : Component
 {
     static IconInfo[]? _all;
@@ -80,14 +81,14 @@ sealed class IconsPage : Component
             Direction = 1, Gap = 12f, Padding = Edges4.All(28), Grow = 1f,
             Children =
             [
-                PageHeader.Build("Iconography", null, PageInfo.Find("icons")),
+                PageInfo.HeaderFor("Iconography", null, PageInfo.Find("icons")),
                 Body("Segoe Fluent Icons is the standard glyph font for Windows apps. Search the full catalog by name, tag, or codepoint; select a glyph for copyable usage snippets.").Secondary(),
                 new BoxEl
                 {
                     Direction = 0, Gap = 12f, AlignItems = FlexAlign.Center,
                     Children =
                     [
-                        TextBox.Create(placeholder: "Search icons by name, tag, or codepoint", width: 320f, onTextChanged: setQuery),
+                        TextBox.Create(onChange: setQuery, options: new TextBox.TextBoxOptions { Placeholder = "Search icons by name, tag, or codepoint", Width = 320f }),
                         Caption($"{filtered.Length} / {All.Length} icons").Tertiary(),
                     ],
                 },

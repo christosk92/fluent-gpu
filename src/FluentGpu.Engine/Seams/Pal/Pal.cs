@@ -489,6 +489,10 @@ public interface IPlatformWindow : IDisposable
     /// <summary>Engine caption-button commands (Win32: WM_SYSCOMMAND SC_MINIMIZE / SC_MAXIMIZE↔SC_RESTORE / WM_CLOSE).</summary>
     void Minimize() { }
     void ToggleMaximize() { }
+    /// <summary>True while the client occupies the current monitor with window chrome removed.</summary>
+    bool IsFullscreen => false;
+    /// <summary>Enter/leave borderless monitor fullscreen, restoring the exact prior window placement on exit.</summary>
+    void SetFullscreen(bool fullscreen) { }
     void CloseWindow() { }
 }
 

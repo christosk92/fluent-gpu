@@ -64,8 +64,9 @@ sealed partial class SettingsPage : Component
             _eqPreset.Value = EqPresetIndex(svc.Settings.Get(WaveeSettings.EqualizerPreset));
             int crossMs = Math.Clamp(svc.Settings.Get(WaveeSettings.CrossfadeMs), 0, 12_000);
             _crossSecs.Value = crossMs / 1000.0;
+            _crossSlider.Value = (float)(crossMs / 1000.0);
             _language.Value = LanguageIndex(svc.Settings.Get(WaveeSettings.UiCulture));
-        });
+        }, DepKey.Empty);
 
         _ = _uiEpoch.Value;
         _ = PlayerBarPrefs.Epoch.Value;
@@ -94,13 +95,13 @@ sealed partial class SettingsPage : Component
             ? new BoxEl
             {
                 Grow = 1f, Shrink = 1f, MinHeight = 0f, Direction = 1,
-                Padding = new Edges4(WaveeSpace.L, WaveeSpace.L, WaveeSpace.L, WaveeSpace.L),
+                Padding = new Edges4(Spacing.L, Spacing.L, Spacing.L, Spacing.L),
                 Children = [body],
             }
             : ScrollView(new BoxEl
             {
                 Direction = 1,
-                Padding = new Edges4(WaveeSpace.L, WaveeSpace.L, WaveeSpace.L, WaveeSpace.XXL),
+                Padding = new Edges4(Spacing.L, Spacing.L, Spacing.L, Spacing.XXL),
                 Children = [SettingsContentColumn(body)],
             }) with { Grow = 1f, ScrollKey = "settings:" + s_tabKeys[tab], Key = "settings:scroll:" + s_tabKeys[tab] };
 
@@ -112,10 +113,10 @@ sealed partial class SettingsPage : Component
                 Header(),
                 new BoxEl
                 {
-                    Direction = 1, Padding = new Edges4(WaveeSpace.L, 0f, WaveeSpace.L, 0f),
+                    Direction = 1, Padding = new Edges4(Spacing.L, 0f, Spacing.L, 0f),
                     Children =
                     [
-                        SelectorBar.Create(TabLabels(), tab, i => _tab.Value = i),
+                        SelectorBar.Create(TabLabels(), _tab),
                         Divider(),
                     ],
                 },
@@ -142,7 +143,7 @@ sealed partial class SettingsPage : Component
 
     static Element SettingsSectionHeader(string title, string? icon = null) => new BoxEl
     {
-        Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S,
+        Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S,
         Margin = SettingsSectionHeaderMargin,
         Children = icon is null
             ? [BodyStrong(title)]
@@ -151,8 +152,8 @@ sealed partial class SettingsPage : Component
 
     static Element Header() => new BoxEl
     {
-        Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
-        Padding = new Edges4(WaveeSpace.L, WaveeSpace.L, WaveeSpace.L, WaveeSpace.M),
+        Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M,
+        Padding = new Edges4(Spacing.L, Spacing.L, Spacing.L, Spacing.M),
         Children =
         [
             Icon(Icons.Settings, 22f, Tok.TextPrimary),
@@ -185,7 +186,7 @@ sealed partial class SettingsPage : Component
     static Element StatPill(string value, string label) => new BoxEl
     {
         Direction = 0, Gap = 4f, AlignItems = FlexAlign.Center,
-        Padding = new Edges4(8f, 3f, 8f, 3f), Corners = CornerRadius4.All(WaveeRadius.Pill),
+        Padding = new Edges4(8f, 3f, 8f, 3f), Corners = CornerRadius4.All(Radii.Full),
         Fill = Tok.FillSubtleSecondary,
         Children =
         [

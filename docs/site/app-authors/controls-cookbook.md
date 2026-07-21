@@ -48,7 +48,7 @@ var green = Button.AccentStyle with
 Button.Accent("Save", OnSave, green);
 
 // 2) Global: replace the default style for ALL instances (set once at startup).
-Button.AccentStyleOverride = green;          // every Button.Accent now uses it
+Button.StyleHook = (appearance, size) => appearance == ButtonAppearance.Accent ? green : null;  // every Button.Accent now uses it
 Slider.StyleOverride       = mySliderStyle;
 
 // 3) Ad-hoc: chain a modifier — a `with`-copy of that one instance, no Style fork.
@@ -239,16 +239,17 @@ ToggleSwitch.Create(b, () => setB(!b),
 
 ## Value inputs: Slider, ScrollBar, RatingControl, ColorPicker, NumberBox
 
-### Slider — prefer `Bind` for scrubbers
+### Slider — bind a `FloatSignal` for scrubbers
 
-The Slider has three factories, and **which one you pick is a performance decision**:
+The Slider is **one factory, `Slider.Create`**; **how you call it is a performance decision**:
 
-- **`Slider.Bind(FloatSignal value, …)`** — the signals-native, 0..1 hot path. A drag writes the `FloatSignal`, which
-  updates only the value-fill's and thumb's composited transforms on the compositor fast path: **zero render, zero
-  reconcile, zero relayout per pointer-move.** This is the slider-tank fix. Use it for media seek and volume.
+- **`Slider.Create(FloatSignal value, Action<float>? onChange = null, SliderOptions? options = null, …)`** — the
+  signals-native, 0..1 hot path. Bound to a `FloatSignal`, a drag writes the signal, which updates only the value-fill's
+  and thumb's composited transforms on the compositor fast path: **zero render, zero reconcile, zero relayout per
+  pointer-move.** This is the slider-tank fix. Use it for media seek and volume.
 - **`Slider.Create(float value, Action<float> onChange, …)`** — the controlled (React-style) 0..1 variant. Each move
   calls `onChange`, which re-renders the owning component. Fine for low-frequency use; it will tank FPS if dragged hard.
-- **`Slider.Ranged(float value, Action<float> onChange, Slider.Options o, …)`** — the full WinUI-parity control over an
+- **`Slider.Create(float value, Action<float> onChange, SliderOptions o, …)`** — the full WinUI-parity control over an
   arbitrary range, with step snapping, ticks, vertical orientation, a header, the full keyboard map and the thumb value
   tooltip.
 
@@ -256,19 +257,19 @@ The Slider has three factories, and **which one you pick is a performance decisi
 // Hot path: bind a FloatSignal — drags update the thumb/track via compositor
 // bindings, with NO component re-render per move.
 var basic = UseFloatSignal(0.4f);
-Slider.Bind(basic)
+Slider.Create(basic)
 
 // Ranged (0–100), controlled
 var (range, setRange) = UseState(50f);
-Slider.Ranged(range, setRange, new Slider.Options { Min = 0, Max = 100 })
+Slider.Create(range, setRange, new SliderOptions { Min = 0, Max = 100 })
 
 // Ticks + step snapping (step 10)
-Slider.Ranged(ticks, setTicks,
-    new Slider.Options { Min = 0, Max = 100, Step = 10, TickFrequency = 10 })
+Slider.Create(ticks, setTicks,
+    new SliderOptions { Min = 0, Max = 100, Step = 10, TickFrequency = 10 })
 
 // Vertical
-Slider.Ranged(vert, setVert,
-    new Slider.Options { Min = 0, Max = 100, Vertical = true }, length: 160f)
+Slider.Create(vert, setVert,
+    new SliderOptions { Min = 0, Max = 100, Vertical = true }, length: 160f)
 ```
 
 Reading the bound value elsewhere stays compositor-cheap too — drive a readout off the same signal with a bound text
@@ -277,12 +278,12 @@ prop so only the text node updates:
 ```csharp
 var basic = UseFloatSignal(0.4f);
 VStack(8,
-    Slider.Bind(basic),
+    Slider.Create(basic),
     new TextEl("") { Text = Prop.Of(() => $"{basic.Value:0.00}") });   // no page re-render per move
 ```
 
-If a slider drag tanks FPS, the cause is almost always `Slider.Create` (a `setState` per move) — switch to
-`Slider.Bind`. See [pitfalls → Dragging a slider tanks FPS](../../guide/pitfalls.md).
+If a slider drag tanks FPS, the cause is almost always the controlled form (`Slider.Create(float, onChange)` — a
+`setState` per move) — switch to a `FloatSignal`-bound `Slider.Create(FloatSignal)`. See [pitfalls → Dragging a slider tanks FPS](../../guide/pitfalls.md).
 
 ### ScrollBar
 
@@ -477,7 +478,7 @@ var parts = new TemplateParts
 // A TextEl part: restyle the combo's chevron glyph.
 parts.Set<TextEl>(ComboBox.PartChevron, t => t with { Color = Tok.AccentDefault });
 
-Slider.Bind(volume, parts: parts);
+Slider.Create(volume, parts: parts);
 ComboBox.Create(items, sel, parts: parts);
 ```
 

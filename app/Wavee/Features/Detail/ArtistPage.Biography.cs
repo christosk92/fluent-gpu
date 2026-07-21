@@ -22,9 +22,9 @@ sealed partial class ArtistPage : Component
             bool wide = w >= 820f;
             var left = new BoxEl
             {
-                Direction = 1, Gap = WaveeSpace.L, Grow = wide ? 2f : 1f, Basis = 0f, MinWidth = 0f, ClipToBounds = true,
-                Padding = new Edges4(WaveeSpace.XL, WaveeSpace.L, WaveeSpace.XL, WaveeSpace.L),
-                Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardSecondary,
+                Direction = 1, Gap = Spacing.L, Grow = wide ? 2f : 1f, Basis = 0f, MinWidth = 0f, ClipToBounds = true,
+                Padding = new Edges4(Spacing.XL, Spacing.L, Spacing.XL, Spacing.L),
+                Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillCardSecondary,
                 BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
                 Children =
                 [
@@ -51,29 +51,29 @@ sealed partial class ArtistPage : Component
             Tile(relatedCount, Loc.Get(Strings.Artist.Stat.Related));
             var right = new BoxEl
             {
-                Direction = 1, Gap = WaveeSpace.M, Grow = 1f, Basis = 0f, MinWidth = 0f,
+                Direction = 1, Gap = Spacing.M, Grow = 1f, Basis = 0f, MinWidth = 0f,
                 Children =
                 [
                     AccentHeader(Loc.Get(Strings.Artist.ProfileFacts)),
-                    new BoxEl { Direction = 0, Gap = WaveeSpace.M, Wrap = true, Children = tiles.ToArray() },
+                    new BoxEl { Direction = 0, Gap = Spacing.M, Wrap = true, Children = tiles.ToArray() },
                 ],
             };
             return new BoxEl
             {
-                Direction = (byte)(wide ? 0 : 1), Gap = WaveeSpace.XL,
+                Direction = (byte)(wide ? 0 : 1), Gap = Spacing.XL,
                 Children = tiles.Count > 0 ? new Element[] { left, right } : new Element[] { left },
             };
         }, fallback: 900f);
 
     static Element ExternalLinkPills(IReadOnlyList<ExternalLink> links) => new BoxEl
     {
-        Direction = 0, Gap = WaveeSpace.S, Wrap = true,
+        Direction = 0, Gap = Spacing.S, Wrap = true,
         Children = links.Select(l => (Element)new BoxEl
         {
             Direction = 0, Gap = 6f, AlignItems = FlexAlign.Center,
-            Padding = new Edges4(12f, 7f, 14f, 7f), Corners = CornerRadius4.All(WaveeRadius.Pill),
+            Padding = new Edges4(12f, 7f, 14f, 7f), Corners = CornerRadius4.All(Radii.Full),
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault, HoverFill = Tok.FillSubtleSecondary,
-            Children = [ Icon(Mdl.Link, 13f, Tok.TextSecondary), new TextEl(l.Name) { Size = 13f, Weight = 600, Color = Tok.TextPrimary } ],
+            Children = [ Icon(Icons.Link, 13f, Tok.TextSecondary), new TextEl(l.Name) { Size = 13f, Weight = 600, Color = Tok.TextPrimary } ],
         }).ToArray(),
     };
 
@@ -83,7 +83,7 @@ sealed partial class ArtistPage : Component
         foreach (var c in cities) if (c.Listeners > max) max = c.Listeners;
         var rows = new List<Element>(cities.Count + 1) { new TextEl(Loc.Get(Strings.Artist.ListenedMostIn)) { Size = 13f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 10f } };
         foreach (var c in cities) rows.Add(CityBarRow(c, max));
-        return new BoxEl { Direction = 1, Gap = WaveeSpace.S, Children = rows.ToArray() };
+        return new BoxEl { Direction = 1, Gap = Spacing.S, Children = rows.ToArray() };
     }
 
     Element CityBarRow(TopCity c, long max)
@@ -112,9 +112,9 @@ sealed partial class ArtistPage : Component
 
     static Element StatTile(string value, string label) => new BoxEl
     {
-        Direction = 1, Gap = WaveeSpace.XS, Grow = 1f, Basis = 140f,
-        Padding = new Edges4(WaveeSpace.L, WaveeSpace.L, WaveeSpace.L, WaveeSpace.L),
-        Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardSecondary,
+        Direction = 1, Gap = Spacing.XS, Grow = 1f, Basis = 140f,
+        Padding = new Edges4(Spacing.L, Spacing.L, Spacing.L, Spacing.L),
+        Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillCardSecondary,
         BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
         Children = [new TextEl(value) { Size = 26f, Weight = 800, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis }, new TextEl(label) { Size = 12f, Color = Tok.TextSecondary }],
     };
@@ -124,9 +124,9 @@ sealed partial class ArtistPage : Component
     // so the "#N in the world" standing stands apart from the neutral count tiles.
     Element RankTile(int rank) => new BoxEl
     {
-        Direction = 1, Gap = WaveeSpace.XS, Grow = 1f, Basis = 140f, MinWidth = 0f,
-        Padding = new Edges4(WaveeSpace.L, WaveeSpace.L, WaveeSpace.L, WaveeSpace.L),
-        Corners = CornerRadius4.All(WaveeRadius.Card),
+        Direction = 1, Gap = Spacing.XS, Grow = 1f, Basis = 140f, MinWidth = 0f,
+        Padding = new Edges4(Spacing.L, Spacing.L, Spacing.L, Spacing.L),
+        Corners = CornerRadius4.All(Radii.Card),
         Fill = ColorF.Lerp(Tok.FillCardSecondary, _accent, 0.20f) with { A = Tok.FillCardSecondary.A },
         BorderWidth = 1f, BorderColor = _accent with { A = 0.45f },
         Children =
@@ -136,7 +136,7 @@ sealed partial class ArtistPage : Component
                 Direction = 0, AlignItems = FlexAlign.Center, Gap = 7f,
                 Children =
                 [
-                    Icon(Mdl.Globe, 18f, _accent),
+                    Icon(Icons.Globe, 18f, _accent),
                     new TextEl("#" + rank.ToString()) { Size = 26f, Weight = 800, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                 ],
             },

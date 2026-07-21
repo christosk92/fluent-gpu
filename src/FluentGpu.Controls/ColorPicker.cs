@@ -80,9 +80,12 @@ public sealed class ColorPicker : Component
     /// <see cref="TemplateParts"/> for the contract. The Hex/R/G/B fields are composed <see cref="EditableText"/>
     /// controls — their chrome is EditableText's own (not forwarded).</summary>
     public TemplateParts? Parts;
+    /// <summary>Optional sugar (the controlled-input contract's <c>onChange</c>): fired with the new color on every
+    /// user edit AFTER the <see cref="Color"/> signal is written; a programmatic signal write does not echo it.</summary>
+    public Action<ColorF>? OnChange;
 
-    public static Element Create(Signal<ColorF> color, bool alphaEnabled = false, float spectrumW = 256f, float spectrumH = 256f, Style? style = null, TemplateParts? parts = null)
-        => Embed.Comp(() => new ColorPicker { Color = color, AlphaEnabled = alphaEnabled, SpectrumW = spectrumW, SpectrumH = spectrumH, StyleArg = style, Parts = parts });
+    public static Element Create(Signal<ColorF> color, bool alphaEnabled = false, float spectrumW = 256f, float spectrumH = 256f, Style? style = null, Action<ColorF>? onChange = null, TemplateParts? parts = null)
+        => Embed.Comp(() => new ColorPicker { Color = color, AlphaEnabled = alphaEnabled, SpectrumW = spectrumW, SpectrumH = spectrumH, StyleArg = style, OnChange = onChange, Parts = parts });
 
     static readonly ColorF White = ColorF.FromRgba(255, 255, 255);
     static readonly ColorF Black = ColorF.FromRgba(0, 0, 0);
@@ -101,7 +104,12 @@ public sealed class ColorPicker : Component
         float H = h.Value, S = sat.Value, V = val.Value, A = alpha.Value;   // subscribe → re-render on edit
         var color = ColorF.FromHsv(H, S, V, AlphaEnabled ? A : 1f);
 
-        void Push() => Color.Value = ColorF.FromHsv(h.Peek(), sat.Peek(), val.Peek(), AlphaEnabled ? alpha.Peek() : 1f);
+        void Push()
+        {
+            var next = ColorF.FromHsv(h.Peek(), sat.Peek(), val.Peek(), AlphaEnabled ? alpha.Peek() : 1f);
+            Color.Value = next;                 // write the value signal first
+            OnChange?.Invoke(next);             // then the onChange sugar (user edits only — no programmatic echo)
+        }
         void SetColor(ColorF c)
         {
             var hsv = c.ToHsv();
@@ -117,7 +125,7 @@ public sealed class ColorPicker : Component
             gText.Value = ((int)MathF.Round(color.G * 255f)).ToString(CultureInfo.InvariantCulture);
             bText.Value = ((int)MathF.Round(color.B * 255f)).ToString(CultureInfo.InvariantCulture);
             hexText.Value = color.ToHex();
-        }, color);
+        }, DepKey.From(color.R, color.G, color.B, color.A));
 
         int Cur(float c) => (int)MathF.Round(c * 255f);
         void SetRgb(int r, int g, int b) => SetColor(ColorF.FromRgba((byte)Math.Clamp(r, 0, 255), (byte)Math.Clamp(g, 0, 255), (byte)Math.Clamp(b, 0, 255), (byte)Cur(A)));

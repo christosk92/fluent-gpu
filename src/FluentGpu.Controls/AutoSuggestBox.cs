@@ -2,6 +2,7 @@ using FluentGpu.Dsl;
 using FluentGpu.Forms;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Localization;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
 
@@ -132,7 +133,7 @@ public sealed class AutoSuggestBox : Component
     /// <summary>True while an async suggestion fetch is in flight: the popup shows an indeterminate bar at the top and
     /// KEEPS the prior results (instead of flashing "No results found") until the fresh set lands.</summary>
     public IReadSignal<bool>? LoadingSignal;
-    public string Placeholder = "Search";
+    public Prop<string> Placeholder = Loc.Bind(Strings.AutoSuggest.Search);   // culture-reactive default; a plain string overrides
     public float Width = 280f;
     /// <summary>Flex-fill factor. When &gt; 0 the field fills its parent's WIDTH on its own — no wrapper, no external
     /// <see cref="WidthSignal"/>: the root drops its explicit <see cref="Width"/> (so a COLUMN parent cross-stretches it
@@ -180,10 +181,10 @@ public sealed class AutoSuggestBox : Component
 
     public static Element Create(
         IReadOnlyList<string> suggestions,
-        string placeholder = "Search",
+        string? placeholder = null,
         float width = 280f,
         Signal<string>? text = null,
-        Action<string>? onTextChanged = null,
+        Action<string>? onChange = null,
         Action<string>? onSuggestionChosen = null,
         Action<string>? onQuerySubmitted = null,
         string? queryIcon = Icons.Search,
@@ -207,9 +208,10 @@ public sealed class AutoSuggestBox : Component
         => Embed.Comp(() => new AutoSuggestBox
         {
             Suggestions = suggestions, SuggestionsSignal = suggestionsSignal, LoadingSignal = loadingSignal,
-            Placeholder = placeholder, Width = width, Grow = grow, MaxFillWidth = maxFillWidth,
+            Placeholder = placeholder is null ? Loc.Bind(Strings.AutoSuggest.Search) : (Prop<string>)placeholder,
+            Width = width, Grow = grow, MaxFillWidth = maxFillWidth,
             WidthSignal = widthSignal, Text = text,
-            OnTextChanged = onTextChanged, OnSuggestionChosen = onSuggestionChosen,
+            OnTextChanged = onChange, OnSuggestionChosen = onSuggestionChosen,
             OnQuerySubmitted = onQuerySubmitted, QueryIcon = queryIcon, MaxHeight = maxPopupHeight, DebounceMs = debounceMs,
             TextChanged = textChanged, UpdateTextOnSelect = updateTextOnSelect, Parts = parts, Field = field,
             FieldMinHeight = minHeight, FieldRadius = cornerRadius, BoldMatch = boldMatch, ItemGlyph = itemGlyph,
@@ -687,7 +689,7 @@ internal sealed class SuggestionsList : Component
                             MinHeight = AutoSuggestBox.ItemMinHeight,
                             AlignItems = FlexAlign.Center,
                             Padding = new Edges4(24, 0, 24, 0),
-                            Children = [new TextEl("No results found") { Size = 14f, Color = Tok.TextPrimary, Grow = 1f }],
+                            Children = [new TextEl("") { Text = Loc.Bind(Strings.AutoSuggest.NoResults), Size = 14f, Color = Tok.TextPrimary, Grow = 1f }],
                         },
                     ],
                 });

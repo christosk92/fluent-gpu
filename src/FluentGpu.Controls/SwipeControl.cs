@@ -89,10 +89,9 @@ public static class SwipeControl
     public static Element Create(Element content, SwipeSide? leading = null, SwipeSide? trailing = null,
                                  SwipeGroup? group = null, IReadSignal<int>? resetKey = null, bool touchOnly = false,
                                  ColorF? contentFill = null, CornerRadius4? corners = null, Edges4 margin = default)
-        => Ctx.Provide(Props.Channel,
-                       new Props(content, Normalize(leading), Normalize(trailing), group, resetKey, touchOnly,
-                                 contentFill, corners ?? default, margin),
-                       Embed.Comp(() => new SwipeControlCore()));
+        => Embed.Comp(new Props(content, Normalize(leading), Normalize(trailing), group, resetKey, touchOnly,
+                                contentFill, corners ?? default, margin),
+                      () => new SwipeControlCore());
 
     /// <summary>Legacy WinUI-shaped overload (kept source-compatible; maps onto <see cref="SwipeSide"/>):
     /// left/right action lists with per-side <see cref="SwipeMode"/> — Execute ⇒ FullSwipe, Reveal ⇒ tap-only.</summary>
@@ -115,14 +114,12 @@ public static class SwipeControl
 
     static SwipeSide? Normalize(SwipeSide? side) => side is { Actions.Count: > 0 } ? side : null;
 
-    /// <summary>Controlled props via context — a reused ComponentEl never re-runs its factory, so props must flow
-    /// through a provider (the SelectorBar/PipsPager convention). ONE model: both public overloads normalize here.</summary>
+    /// <summary>Controlled props RE-PUSHED to the core (<c>Embed.Comp(props, …)</c>) — a reused ComponentEl never
+    /// re-runs its factory — so props are delivered live (equality-gated); the core reads them with <c>UseProps</c>
+    /// (the SelectorBar/PipsPager convention). ONE model: both public overloads normalize here.</summary>
     internal sealed record Props(Element Content, SwipeSide? Leading, SwipeSide? Trailing,
                                  SwipeGroup? Group = null, IReadSignal<int>? ResetKey = null, bool TouchOnly = false,
-                                 ColorF? ContentFill = null, CornerRadius4 Corners = default, Edges4 Margin = default)
-    {
-        internal static readonly Context<Props?> Channel = new(null);
-    }
+                                 ColorF? ContentFill = null, CornerRadius4 Corners = default, Edges4 Margin = default);
 }
 
 /// <summary>The stateful core: 1:1 pan tracking, capsule birth/distribution springs, the full-swipe arm/morph,
@@ -306,7 +303,7 @@ internal sealed class SwipeControlCore : Component
     public override Element Render()
     {
         // Hooks — stable order, unconditionally.
-        var props = UseContext(SwipeControl.Props.Channel);
+        var props = UseProps<SwipeControl.Props>();
         var hooks = UseContext(InputHooks.Current);
         var contentRef = UseRef<NodeHandle>(default);
         var rootRef = UseRef<NodeHandle>(default);
@@ -681,7 +678,6 @@ internal sealed class SwipeControlCore : Component
         }
         void ReleaseOrTap()   // the OnDrag gesture's release/commit edge; a plain tap lands here with panning=false
         {
-            if (p is null) return;
             if (!panning.Value)
             {
                 // Tap on the content of an open swipe dismisses it.
@@ -798,8 +794,6 @@ internal sealed class SwipeControlCore : Component
             keys[1] = new Keyframe(1f, 0f, Easing.Linear);
             Context.Anim?.Keyframes(contentRef.Value, AnimChannel.TranslateX, keys, 1f);   // const write ⇒ cancels + pins to 0 (0-alloc)
         }, resetKey);
-
-        if (p is null) return new BoxEl();
 
         // ── One action button: a compact capsule (icon-only, radius = height/2) with the label BELOW it when the
         //    row is tall enough — the iOS 26 Mail look. The whole column is the tap target. ─────────────────────

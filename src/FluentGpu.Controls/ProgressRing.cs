@@ -2,6 +2,7 @@ using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Animation;
+using FluentGpu.Signals;
 using System;
 
 namespace FluentGpu.Controls;
@@ -73,6 +74,21 @@ public static class ProgressRing
     // WinUI Lottie cubic spline {0.167,0.167}{0.833,0.833} — a near-linear ease applied to each segment.
     static readonly EasingSpec IndeterminateSpline = EasingSpec.CubicBezier(0.167f, 0.167f, 0.833f, 0.833f);
 
+    // ── Create (the one canonical factory) ───────────────────────────────────────────────────────────
+    /// <summary>The ONE canonical ProgressRing factory. <paramref name="value"/> = a caller-owned 0..1
+    /// <see cref="FloatSignal"/> the determinate arc tracks (a change re-renders the arc sweep — progress updates are
+    /// coarse, so this is not a per-frame path); <c>null</c> = the indeterminate spinner. <see cref="Determinate"/>
+    /// (static value) and <see cref="Indeterminate"/> are one-line forwarders onto this.</summary>
+    public static Element Create(FloatSignal? value = null, float size = DefaultSize, bool isActive = true,
+                                 ColorF? foreground = null, ColorF? track = null, TemplateParts? parts = null)
+        => value is null
+            ? Embed.Comp(new Props(size, isActive, foreground, parts), () => new SpinnerRing())
+            : Embed.Comp(() => new DeterminateRing
+              {
+                  Value = value, Size = size, IsActive = isActive,
+                  Foreground = foreground, Track = track, Parts = parts,
+              });
+
     /// <summary>A determinate ring: the accent arc's sweep is <c>value·360°</c> from 12 o'clock clockwise, over a track
     /// ring. WinUI's default Background is <c>ControlFillColorTransparentBrush</c>, so the track is invisible unless a
     /// <paramref name="track"/> color is supplied. <paramref name="foreground"/> defaults to AccentFillColorDefault.
@@ -101,20 +117,38 @@ public static class ProgressRing
     /// <paramref name="parts"/> = per-part styling keyed by <see cref="PartRing"/> (the spinning arc).</summary>
     public static Element Indeterminate(float size = DefaultSize, bool isActive = true, ColorF? foreground = null,
                                         TemplateParts? parts = null)
-        => Ctx.Provide(Props.Channel, new Props(size, isActive, foreground, parts), Embed.Comp(() => new SpinnerRing()));
+        => Create(null, size, isActive, foreground, null, parts);
 
-    /// <summary>Controlled props, carried to the stateful core via context (a reused ComponentEl never re-runs its
-    /// factory, so runtime-changeable props must flow through a provider).</summary>
-    internal sealed record Props(float Size, bool IsActive, ColorF? Foreground, TemplateParts? Parts)
+    /// <summary>Controlled props RE-PUSHED to the stateful core (<c>Embed.Comp(props, …)</c>): a reused ComponentEl
+    /// never re-runs its factory, so runtime-changeable props are delivered live (equality-gated); the core reads them
+    /// with <c>UseProps</c>.</summary>
+    internal sealed record Props(float Size, bool IsActive, ColorF? Foreground, TemplateParts? Parts);
+
+    /// <summary>The determinate-with-signal core (behind <see cref="Create"/> with a non-null value): subscribes the
+    /// caller's <see cref="FloatSignal"/> and rebuilds the static <see cref="Determinate"/> arc whenever it changes.
+    /// Progress updates are coarse, so a per-value re-render is fine; the arc sweep is a value struct (no compositor
+    /// bind), so tracking the signal means a granular re-render of this tiny ring.</summary>
+    internal sealed class DeterminateRing : Component
     {
-        internal static readonly Context<Props?> Channel = new(null);
+        public required FloatSignal Value;
+        public float Size = DefaultSize;
+        public bool IsActive = true;
+        public ColorF? Foreground;
+        public ColorF? Track;
+        public TemplateParts? Parts;
+
+        public override Element Render()
+        {
+            float v = Value.Value;   // subscribe → re-render (rebuild the arc sweep) when the value changes
+            return Determinate(v, Size, IsActive, Foreground, Track, Parts);
+        }
     }
 
     internal sealed class SpinnerRing : Component
     {
         public override Element Render()
         {
-            var props = UseContext(Props.Channel) ?? new Props(DefaultSize, true, null, null);
+            var props = UseProps<Props>();
             var Parts = props.Parts;
             bool IsActive = props.IsActive;
             var ts = ProgressRingTemplateSettings.ForIndeterminate(props.Size);
@@ -172,7 +206,7 @@ public static class ProgressRing
                     new(0.5f, 0f, Easing.Linear),                    // held 0 through the first half
                     new(1f, 0.5f, IndeterminateSpline),              // catches up to 0.5 (collapses the visible arc)
                 }, IndeterminateDurationMs, loop: true);
-            }, props.Size, props.IsActive);
+            }, DepKey.From(HashCode.Combine(props.Size, props.IsActive)));
 
             Action<NodeHandle> arcCapture = h => arcRef.Value = h;
             var arc = new BoxEl

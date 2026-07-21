@@ -21,6 +21,12 @@ namespace FluentGpu.Signals;
 public static class Prop
 {
     public static Prop<T> Of<T>(Func<T> thunk) => thunk;
+
+    /// <summary>Bind a channel from an interface-typed reactive source (a <c>Memo&lt;T&gt;</c> or <c>Signal&lt;T&gt;</c>
+    /// held as <see cref="IReadSignal{T}"/>). The named form of the signal-direct bind for the interface case, where the
+    /// implicit <c>Signal&lt;T&gt;</c>/<c>Memo&lt;T&gt;</c> conversions don't apply (a user conversion from an interface
+    /// is illegal, CS0552). Equivalent to assigning a concrete signal directly: <c>Fill = Prop.Bind(store.Color)</c>.</summary>
+    public static Prop<T> Bind<T>(IReadSignal<T> signal) => Prop<T>.FromSignal(signal);
 }
 
 public readonly struct Prop<T> : IEquatable<Prop<T>>
@@ -38,6 +44,18 @@ public readonly struct Prop<T> : IEquatable<Prop<T>>
     /// <summary>The static value, or <paramref name="fallback"/> when bound — for engine edge readers that need a
     /// scalar regardless (e.g. exit-animation seeds).</summary>
     public T ValueOr(T fallback) => _ref is null ? _value : fallback;
+
+    /// <summary>Resolve the CURRENT value regardless of kind: a static returns its value, a thunk is invoked, a
+    /// signal is read (<see cref="IReadSignal{T}.Value"/> — so reading this inside a bind thunk / reactive
+    /// computation subscribes to it). Use when a control reads a <see cref="Prop{T}"/> from INSIDE its own bind
+    /// thunk (e.g. a culture-reactive placeholder via <c>Loc.Bind(key)</c>), rather than letting the reconciler
+    /// wire the channel into a scene-column mount effect.</summary>
+    public T Current() => _ref switch
+    {
+        Func<T> f => f(),
+        IReadSignal<T> s => s.Value,
+        _ => _value,
+    };
 
     /// <summary>The thunk payload (bind wiring only — one type test per channel per mount).</summary>
     public Func<T>? Thunk => _ref as Func<T>;

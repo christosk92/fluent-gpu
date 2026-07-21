@@ -88,68 +88,74 @@ public sealed class ComboBox : Component
     internal const float DropdownContentInset = 4f;
     internal const float ItemLineHeight = 20f;
 
-    public IReadOnlyList<string> Items = [];
+    // Property-init CLOSED (WS3 creation idiom): the config fields are internal — construct a ComboBox through
+    // <see cref="Create"/>, the one canonical factory (it sets these from within the class). The controlled value is
+    // the caller-owned SelectedIndex signal.
+    internal IReadOnlyList<string> Items = [];
     /// <summary>Optional per-item description lines (WinUI ComboBoxItem content with a secondary TextBlock). When set,
     /// dropdown rows render title + caption; the closed field still shows <see cref="Items"/> only.</summary>
-    public IReadOnlyList<string>? ItemDescriptions;
+    internal IReadOnlyList<string>? ItemDescriptions;
     /// <summary>Optional per-item enabled flags. Disabled rows are greyed out and cannot be selected.</summary>
-    public IReadOnlyList<bool>? ItemEnabled;
-    public Signal<int> SelectedIndex = new(-1);
-    public bool Editable;
-    public Signal<string>? Text;
-    public string Placeholder = "";
-    public float Width = 220f;
-    public bool IsEnabled = true;
-    public bool OpenOnMount;   // deterministic visual-shot hook: open the real popup after first mount
+    internal IReadOnlyList<bool>? ItemEnabled;
+    internal Signal<int> SelectedIndex = new(-1);
+    internal bool Editable;
+    internal Signal<string>? Text;
+    internal string Placeholder = "";
+    internal float Width = 220f;
+    internal bool IsEnabled = true;
+    internal bool OpenOnMount;   // deterministic visual-shot hook: open the real popup after first mount
     /// <summary>WinUI <c>Header</c> (HeaderContentPresenter, generic.xaml:9155-9166): a label row above the field,
     /// FontWeight Normal (ComboBoxHeaderThemeFontWeight), margin 0,0,0,4 (ComboBoxTopHeaderMargin, generic.xaml:5911).</summary>
-    public string Header = "";
+    internal string Header = "";
     /// <summary>WinUI <c>Description</c> (DescriptionPresenter, generic.xaml:9233-9239): helper text below the field
     /// in SystemControlDescriptionTextForegroundBrush.</summary>
-    public string Description = "";
+    internal string Description = "";
     /// <summary>Input-validation error message (WinUI InputValidation InlineErrors state, generic.xaml:9118-9127):
     /// non-empty → the field border swaps to SystemControlErrorTextForegroundBrush and the message renders below the
     /// field (replacing the Description row, per the InlineErrors setters).</summary>
-    public string ErrorText = "";
+    internal string ErrorText = "";
     /// <summary>form-validation.md: a reactive validation field (over <see cref="SelectedIndex"/>). When set, its gated
     /// error drives the SAME InlineErrors visual as <see cref="ErrorText"/> (border swap + message row); an explicit
     /// <see cref="ErrorText"/> still wins. Marked touched on a selection commit.</summary>
-    public Field<int>? Field;
+    internal Field<int>? Field;
     /// <summary>WinUI TouchInputMode/GameControllerInputMode: items take ComboBoxItemThemeTouchPadding 11,11,11,13
     /// (generic.xaml:131) instead of the pointer padding 11,5,11,7.</summary>
-    public bool TouchInputMode;
-    public Action<int>? OnSelectionChanged;
+    internal bool TouchInputMode;
+    internal Action<int>? OnChange;
     /// <summary>WinUI <c>TextSubmitted</c> with the Handled contract (ComboBoxTextSubmittedEventArgs): raised on commit
     /// (Enter / Tab / focus loss) when the typed text matched NO item during search (ComboBox_Partial.cpp:2487–2513).
     /// Return true = handled (the app accepted the custom value; the default matching is skipped); false/null → the
     /// default: exact-match the items case-insensitively and select on a hit (cpp:2516–2543), else the text stays as a
     /// custom value with <see cref="SelectedIndex"/> = −1.</summary>
-    public Func<string, bool>? OnTextSubmitted;
+    internal Func<string, bool>? OnTextSubmitted;
     /// <summary>Lightweight per-part styling (CSS ::part): modifiers keyed by the <c>PartXxx</c> consts; see
     /// <see cref="TemplateParts"/> for the contract.</summary>
-    public TemplateParts? Parts;
+    internal TemplateParts? Parts;
 
-    /// <summary>LIVE enabled flag (provider idiom): <see cref="IsEnabled"/> is a plain field, so via <c>Embed.Comp</c>
-    /// it freezes at mount — toggling a setting that enables/disables a dropdown would be silently dropped. <see cref="Create"/>
-    /// routes it through this provider so the field re-renders reactively; the frozen field is the fallback.</summary>
-    internal static readonly Context<bool?> EnabledChannel = new(null);
+    /// <summary>LIVE enabled flag re-pushed to the mounted core (<c>Embed.Comp(props, …)</c>): <see cref="IsEnabled"/>
+    /// is a plain field, so via a propless <c>Embed.Comp</c> it freezes at mount — toggling a setting that enables/
+    /// disables a dropdown would be silently dropped. <see cref="Create"/> routes it through re-pushed props so the
+    /// flag re-renders reactively; the frozen field is the fallback for direct callers. A tiny record carries the bool
+    /// because re-pushed props are class-typed.</summary>
+    internal sealed record EnabledProps(bool IsEnabled);
 
     public static Element Create(IReadOnlyList<string> items, Signal<int> selectedIndex, bool editable = false,
                                  Signal<string>? text = null, float width = 220f, string placeholder = "",
-                                 bool isEnabled = true, Action<int>? onSelectionChanged = null,
+                                 bool isEnabled = true, Action<int>? onChange = null,
                                  Func<string, bool>? onTextSubmitted = null,
                                  string header = "", string description = "", string errorText = "",
                                  bool touchInputMode = false, Field<int>? field = null,
                                  IReadOnlyList<string>? itemDescriptions = null,
-                                 IReadOnlyList<bool>? itemEnabled = null)
-        => Ctx.Provide(EnabledChannel, isEnabled, Embed.Comp(() => new ComboBox
+                                 IReadOnlyList<bool>? itemEnabled = null,
+                                 bool openOnMount = false)
+        => Embed.Comp(new EnabledProps(isEnabled), () => new ComboBox
         {
             Items = items, ItemDescriptions = itemDescriptions, ItemEnabled = itemEnabled,
             SelectedIndex = selectedIndex, Editable = editable, Text = text,
-            Width = width, Placeholder = placeholder, IsEnabled = isEnabled, OnSelectionChanged = onSelectionChanged,
-            OnTextSubmitted = onTextSubmitted,
+            Width = width, Placeholder = placeholder, IsEnabled = isEnabled, OnChange = onChange,
+            OnTextSubmitted = onTextSubmitted, OpenOnMount = openOnMount,
             Header = header, Description = description, ErrorText = errorText, TouchInputMode = touchInputMode, Field = field,
-        }));
+        });
 
     internal bool IsItemEnabled(int index)
         => ItemEnabled is not { } flags || index < 0 || index >= flags.Count || flags[index];
@@ -170,7 +176,7 @@ public sealed class ComboBox : Component
         // Read the enabled flag reactively: the provider (Create) wins over the frozen field. A shadowing local named
         // IsEnabled so every downstream read in this method — the field chrome, OpenPopup gate, key/click handlers —
         // sees the live value with no further edits. `this.IsEnabled` is the mount-time fallback for direct callers.
-        bool IsEnabled = UseContext(EnabledChannel) ?? this.IsEnabled;
+        bool IsEnabled = UsePropsOrDefault<EnabledProps>()?.IsEnabled ?? this.IsEnabled;
         var anchor = UseRef<NodeHandle>(default);
         var handle = UseRef<OverlayHandle?>(null);
         var fallbackText = UseSignal("");
@@ -219,7 +225,7 @@ public sealed class ComboBox : Component
                 if (_edit is { } e) e.ReplaceText(Items[i], 0, Items[i].Length);
                 else text.Value = Items[i];
             }
-            OnSelectionChanged?.Invoke(i);
+            OnChange?.Invoke(i);
         }
 
         void Choose(int i) { Commit(i); handle.Value?.Close(); handle.Value = null; openVer.Value = openVer.Peek() + 1; }

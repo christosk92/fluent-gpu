@@ -1,4 +1,6 @@
+using FluentGpu.Animation;
 using FluentGpu.Dsl;
+using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 
 namespace FluentGpu.Controls;
@@ -66,22 +68,72 @@ public sealed class Navigator
 }
 
 /// <summary>
-/// Renders the top route of a <see cref="Navigator"/> via a route→view factory, re-rendering on every navigation.
-/// Wraps the view in the <see cref="Nav.Context"/> provider, so any descendant can <c>UseContext(Nav.Context)</c> to
-/// push/pop. Pages keep their state by reconciler identity (same route name at the top ⇒ same node subtree).
+/// Renders the top route of a <see cref="Navigator"/> and re-renders the view tree on every navigation, wrapping it in
+/// the <see cref="Nav.Context"/> provider so any descendant can <c>UseContext(Nav.Context)</c> to push/pop.
+///
+/// <para>Two shapes: the PRIMITIVE <c>PageHost(nav, Func&lt;Route,Element&gt;)</c> renders the top route through a
+/// caller-supplied factory (pages keep state by reconciler identity - same route name at the top => same node subtree);
+/// the REGISTRY-DRIVEN <see cref="Create(Navigator, RouteRegistry)"/> resolves the top route's page through a
+/// <see cref="RouteRegistry"/> (with <see cref="RouteRegistry.Fallback"/> for unknown keys), parks
+/// <see cref="RouteDef.KeepAlive"/> pages via <c>Flow.KeepAlive</c> (their state survives navigating away and back), and
+/// applies the route's <see cref="RouteDef.Transition"/> to the page root (see <see cref="WithTransition"/>).</para>
 /// </summary>
 public sealed class PageHost : Component
 {
     private readonly Navigator _nav;
-    private readonly Func<Route, Element> _view;
+    private readonly Func<Route, Element>? _view;
+    private readonly RouteRegistry? _routes;
 
     public PageHost(Navigator nav, Func<Route, Element> view) { _nav = nav; _view = view; }
+    public PageHost(Navigator nav, RouteRegistry routes) { _nav = nav; _routes = routes; }
+
+    /// <summary>The registry-driven host: resolve <paramref name="nav"/>'s top route through <paramref name="routes"/>
+    /// (fallback for unknown keys, KeepAlive parking, entrance transitions). The one-liner router surface.</summary>
+    public static Element Create(Navigator nav, RouteRegistry routes) => Embed.Comp(() => new PageHost(nav, routes));
 
     public override Element Render()
     {
-        _nav.OnChange = Context.RequestRerender;          // navigation → re-render this host
-        return Ctx.Provide(Nav.Context, _nav, _view(_nav.Current));
+        if (_routes is { } routes)
+        {
+            // A route change updates a signal the active-route reader subscribes to - so the KeepAlive boundary re-runs
+            // (its Update is a no-op by design), with no global dirty flag. Seeded once at mount.
+            var routeSig = UseSignal(_nav.Current);
+            _nav.OnChange = () => routeSig.Value = _nav.Current;
+            var content = Flow.KeepAlive(
+                () => routeSig.Value,                                        // reactive read here re-arms the boundary
+                static r => r.Arg is null ? r.Name : r.Name + "|" + r.Arg,   // arg-aware park identity
+                r => ResolveView(routes, r),
+                // Only routes that opt into KeepAlive are cached/parked; the rest remount fresh on return.
+                new KeepAliveOptions(ShouldCache: o => routes.Resolve(((Route)o).Name)?.KeepAlive == true));
+            return Ctx.Provide(Nav.Context, _nav, content);
+        }
+
+        _nav.OnChange = Context.RequestRerender;          // primitive path: navigation re-renders this host
+        return Ctx.Provide(Nav.Context, _nav, _view!(_nav.Current));
     }
+
+    private static Element ResolveView(RouteRegistry routes, Route route)
+    {
+        RouteDef? def = routes.Resolve(route.Name);
+        Element view = def is not null
+            ? def.Factory(route)
+            : routes.Fallback?.Invoke(route) ?? new BoxEl();
+        return WithTransition(view, def?.Transition ?? NavTransition.Default);
+    }
+
+    // Emphasized page enter travels further than the standard one; both fade in. None snaps (author owns motion).
+    private static readonly EnterExit StandardPageEnter = new(Dy: 8f, Opacity: 0f, Active: true);
+    private static readonly EnterExit EmphasizedPageEnter = new(Dy: 24f, Opacity: 0f, Active: true);
+
+    /// <summary>Apply a <see cref="NavTransition"/> to a page root: <see cref="NavTransition.None"/> leaves it untouched;
+    /// <see cref="NavTransition.Default"/>/<see cref="NavTransition.Entrance"/> seed the engine's declarative
+    /// <see cref="Element.Enter"/> + <see cref="Element.Transition"/> motion tokens (a fade + slide-up entrance).</summary>
+    public static Element WithTransition(Element view, NavTransition transition) => transition switch
+    {
+        NavTransition.None => view,
+        NavTransition.Entrance => view with { Enter = EmphasizedPageEnter, Transition = MotionTok.EmphasizedEnter },
+        _ => view with { Enter = StandardPageEnter, Transition = MotionTok.StandardEnter },
+    };
 }
 
 /// <summary>The ambient navigator. Read it in any component with <c>UseContext(Nav.Context)</c> to push/pop.</summary>

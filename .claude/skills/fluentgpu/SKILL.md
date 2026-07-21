@@ -28,8 +28,8 @@ property *binding* is a finer one. **No full-app re-render, no global dirty flag
 1. To make something update, a signal it **reads** must change. `.Value` subscribes; `.Peek()` does not.
 2. `Component.Render()` re-runs on its **own** state/context only — never because a parent re-rendered.
    **Parent→child data flows via signals or context, never constructor args** (those freeze at mount).
-3. `ReactiveComponent.Setup()` runs **once**. Show dynamic values via a **bound prop** (`Text = sig` signal-direct, or `Text = Prop.Of(() => …)` for derived text),
-   never `Ui.Text(sig.Value)`. (#1 signals-native mistake.)
+3. There is ONE `Component` base (no `ReactiveComponent`). Every `Render()` is tracked; a render that reads no signals renders **once** — run-once is inferred, not a mode. In a run-once render, show dynamic values via a **bound prop** (`Text = sig` signal-direct, or `Text = Prop.Of(() => …)` for derived text),
+   never `Ui.Text(sig.Value)`. (#1 mistake.)
 4. A bind thunk must read `.Value` (subscribes), not `.Peek()`.
 5. Every bindable channel is ONE `Prop<T>` prop taking a value, a `Func<T>` (`Prop.Of` for inline lambdas), or a concrete signal. Bound `Transform`/`Opacity`/`Fill` = compositor-only; bound `Width`/`Height`/`Text` = scoped relayout.
    Prefer a transform bind for hot values.
@@ -39,13 +39,13 @@ property *binding* is a finer one. **No full-app re-render, no global dirty flag
    change can't relayout the page.
 9. Zero managed allocation in paint phases 6–13: wire bindings/effects once at mount; never `new`/box/LINQ in a bind
    thunk or hot effect body.
-10. High-frequency scalar (slider/scroll)? Bind it (`Slider.Bind(FloatSignal)`), don't `setState` per move.
+10. High-frequency scalar (slider/scroll)? Bind it (`Slider.Create(FloatSignal)` — the one slider API), don't `setState` per move.
 
 ## Author UI (cheat sheet)
 
 ```csharp
 using static FluentGpu.Dsl.Ui;   // VStack, HStack, Text, Heading, Button, Image, Grid, ScrollView
-using FluentGpu.Hooks;            // Component, ReactiveComponent, Embed, Ctx, Flow
+using FluentGpu.Hooks;            // Component, Embed, Ctx, Flow
 using FluentGpu.Signals;          // Signal<T>, FloatSignal, Memo<T>
 using FluentGpu.Controls;         // Button, Slider, NavigationView, Virtual, …
 
@@ -56,13 +56,34 @@ sealed class Counter : Component {
   }
 }
 // hot path — no re-render on drag:
-var vol = UseFloatSignal(0.5f); Slider.Bind(vol);
+var vol = UseFloatSignal(0.5f); Slider.Create(vol);
 // compose / context / reactive lists:
-Embed.Comp(() => new Counter());
-Ctx.Provide(MyCtx, "dark", child);
-Flow.For(() => xs.Value.Count, i => Row(xs.Value[i]), keyOf: i => xs.Value[i].Id);
+Embed.Comp(() => new Counter());                    // static child
+Embed.Comp(new Row.PropsData(title, count), () => new Row());   // re-pushed live props (parent→child); child reads UseProps<Row.PropsData>()
+Ctx.Provide(MyCtx, "dark", child);                  // ambient/broadcast (many consumers)
+Flow.For(() => xs.Value, x => x.Id, (x, i) => Row(x));   // typed keyed list: (items, keyOf, row) — key MANDATORY
 Flow.Show(() => open.Value, panel, fallback);
 ```
+
+**Four ways to get changing data into a child** (see `design/subsystems/component-props-contract.md`): (1) **re-pushed
+props** `Embed.Comp(props, factory)` + `UseProps<T>()`, or a `[Props]` partial component (per-field signals, generated);
+(2) a **bind** for a hot scalar (`Text = sig`, `Slider.Create(FloatSignal)`); (3) **context** for ambient/broadcast
+state; (4) a **`Key` remount** when the item *identity* changes. Frozen constructor fields are the trap `[Props]`/props
+cure — a parent re-render reuses the instance and discards a new factory.
+
+**Handy hooks:** `UseState`/`UseSignal`/`UseMemo`/`UseRef`; `UseEffect(() => { …; return cleanup; })` (auto-tracked on
+signals it reads — no deps list; pass a `DepKey` only to over-scope); `UseRequiredContext`; `UseResource(ct => Fetch(ct))`
+→ `Resource<T>{ Loadable, IsFetching, IsStale, Refresh(), Mutate(…) }` (SWR); `UseDebouncedValue`/`UseThrottledValue`/
+`UseTimeout`/`UseInterval` (host-timer-queue backed); `UseMeasuredBounds`/`UseMeasuredWidth(quantum)`; `sig.SetIfChanged(v)`.
+
+**Controls (one `X.Create` idiom; controlled-input contract — pass a signal + `onChange`, or none to auto-materialize):**
+`Button.Accent(label, onClick)` / `Button.Create(label, onClick, ButtonAppearance.Subtle, ControlSize.Small)`;
+`Slider.Create(vol, onChange)`; `ToggleSwitch.Create(isOn, onChange)`; `CheckBox.Create(label, isChecked, onChange)`;
+`TextBox.Create(text, onChange, new TextBoxOptions{…})`. Style hover/press with **`el.Interactive(Interaction.ListRow)`**
+(recipe: `Subtle`/`ListRow`/`Card`/`AccentGhost`). Overlays: `Popup.Create(anchor, content, isOpen)`,
+`Toast.Show("Saved", new ToastOptions{ Severity = Success })`. Lists: `ItemsView.Create(count, template, layout,
+new ListOptions{…})`. Routing: `[Route("key")]` on a page `Component` + `PageHost.Create(nav, routes)`.
+Localize kit strings with `Loc.Bind("key")` (a `Prop<string>`).
 
 Run an app: `FluentApp.Run(() => new App());` (`src/FluentGpu.WindowsApp/FluentApp.cs`).
 
@@ -89,7 +110,7 @@ All engine subsystems now live under the single `src/FluentGpu.Engine` project (
 | Element shapes / props / binds | `src/FluentGpu.Engine/Dsl/Element.cs`; `src/FluentGpu.Engine/Hooks/{ControlFlow,Context,ComponentEl}.cs` |
 | DSL helpers / modifiers | `src/FluentGpu.Engine/Dsl/Factories.cs`, `Modifiers.cs` |
 | Controls | `src/FluentGpu.Controls/*.cs` (composition only) — WinUI fidelity rules: `docs/guide/control-fidelity.md` |
-| Control visual state / motion | `StateBrush` ramps + `InteractionAnimator` progress; `BoxEl.{Hover,Pressed}{Fill,BorderColor,Opacity}` + `{Hover,Press}Scale` + `{Hover,Press}DurationMs/Easing`. Declare targets/specs, NOT a state matrix or per-control runtime |
+| Control visual state / motion | `StateBrush` ramps + `BoxEl.{Hover,Pressed}{Fill,BorderColor,Opacity}` + `{Hover,Press}Scale` — engine-serviced via the `HoverFade`/`PressFade`/`BrushFade` animation channels (the old `InteractionAnimator` runtime is **deleted**, subsumed into the slab). App code: prefer `el.Interactive(Interaction.*)` (`Controls/Interaction.cs`). Declare targets/specs, NOT a state matrix or per-control runtime |
 | Explicit control timelines | `AnimEngine` keyframes/channels (`Opacity`, transform, stroke trim, FLIP/reveal); use for draw-on paths and authored timelines, not hover/press visual states |
 | Rounded-rect / border rendering | `src/FluentGpu.Engine/Render/SceneRecorder.cs` + `src/FluentGpu.Windows/D3D12/{RoundRect,Gradient}Pipeline.cs` — hollow SDF ring (no donut), `InsetCorners`, VS quad inflation for stroke band + AA |
 | Frame loop / scheduling | `src/FluentGpu.Engine/Hosting/AppHost.cs` (`RunFrame`/`Paint`; flush = phase 3) |
@@ -149,9 +170,11 @@ interaction axis: Normal --pointer enter--> PointerOver --pointer down--> Presse
 ```
 
 Map WinUI cross-product names to axes: `SelectedPressed` = selected logical ramp + pressed interaction target.
-Hover/press visual states belong in `InteractionAnimator` data (`HoverFill`, `PressedOpacity`, `PressScale`,
-durations/easings). Explicit timelines belong in `AnimEngine` (stroke trim, reveal, FLIP, open/close, real AnimatedIcon
-segments). Do not add a per-control VisualStateManager or duplicate animation runtime.
+Hover/press visual states are declared as `BoxEl` fields (`HoverFill`, `PressedOpacity`, `PressScale`,
+durations/easings) and serviced by the engine's `HoverFade`/`PressFade`/`BrushFade` animation channels (the old
+`InteractionAnimator` runtime is deleted). App-level chrome uses `el.Interactive(Interaction.*)`. Explicit timelines
+belong in `AnimEngine` (stroke trim, reveal, FLIP, open/close, real AnimatedIcon segments). Do not add a per-control
+VisualStateManager or duplicate animation runtime.
 
 Design corpus (architecture authority, canon-gated) is `design/`; as-built reactive model is
 `design/subsystems/reconciler-hooks.md §0bis`. After editing `design/*`: `powershell -File design/check-canon.ps1`
@@ -159,13 +182,13 @@ Design corpus (architecture authority, canon-gated) is `design/`; as-built react
 
 ## Deeper docs (read for the relevant task)
 - `theming.md` (this skill dir) — **how theming + LIVE theme switching work end-to-end**: tokens, the `Epoch`/`RethemeAll`/transition-window mechanism, the OS-follow + persistence wiring, what updates vs what's frozen, and the gotchas (frozen constructor-arg literals, `Flow.For`/bound colors, control `ColorF` props, app-local color constants, Mica/DWM). **Read before any theme work or "X won't change theme" debugging.**
-- `docs/guide/reactivity.md` — signals, hooks, `Component` vs `ReactiveComponent`, bindings, context (the core).
+- `docs/guide/reactivity.md` — signals, hooks, the one `Component` model (run-once inferred), bindings, context (the core).
 - `docs/guide/components-elements-layout.md` — element zoo, layout, controls, navigation, virtualization, theming.
 - `docs/guide/rendering-and-performance.md` — frame pipeline, scoped relayout + boundary firewall, optimization guide.
 - `docs/guide/pitfalls.md` — symptom → cause → fix.
 - `docs/guide/control-fidelity.md` — **building WinUI-faithful controls**: exact WinUI template/storyboard/timing-token
   lookup, state-search pitfalls, the logical-state x interaction-state graph, rounded-rect rendering rules,
-  `StateBrush`/`InteractionAnimator` visual states, explicit `AnimEngine` timelines like checkmark stroke trim, and the
+  `StateBrush`/interaction-channel (`HoverFade`/`PressFade`) visual states, explicit `AnimEngine` timelines like checkmark stroke trim, and the
   empirical verify workflow (golden checks + `--shot` + slow-motion proof). Read before any control parity work.
 - `docs/guide/motion-recipes.md` — the **Expressive Motion Kit** (`MotionRecipes.*`): named transitions adopted from
   transitions.dev (number pop-in, error shake, skeleton reveal, success check, icon swap, badge pop, soft/texts reveal,

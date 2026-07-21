@@ -22,9 +22,21 @@ sealed class ShotScene : Component
 
     public override Element Render() => _id switch
     {
-        // Full-bleed: the whole gallery (regression check), optionally deep-linked to a nav page via "gallery:<navkey>".
-        "gallery" => Embed.Comp(() => new GalleryApp()),
-        _ when _id.StartsWith("gallery:") => Embed.Comp(() => new GalleryApp { InitialPage = _id.Substring("gallery:".Length) }),
+        // Full-bleed: the whole gallery (regression check). WS7: "gallery"/"gallery:<key>"/"page:<key>" mount the
+        // registry-driven GalleryShell (deep-linked); "page-content:<key>" renders the bare page on the standard dark
+        // page (tight diffs). (The former "gallery-legacy" GalleryApp fallback is deleted in G8b — GalleryShell is the
+        // sole shell.)
+        "gallery" => Embed.Comp(() => new GalleryShell()),
+        _ when _id.StartsWith("gallery:") => Embed.Comp(() => new GalleryShell { InitialPage = _id.Substring("gallery:".Length) }),
+        _ when _id.StartsWith("page:") => Embed.Comp(() => new GalleryShell { InitialPage = _id.Substring("page:".Length) }),
+        _ when _id.StartsWith("page-content:") => Embed.Comp(() => new OverlayHost
+        {
+            Child = new BoxEl
+            {
+                Grow = 1, Direction = 1, Fill = PageBg,
+                Children = [FluentGpu.Generated.GalleryRegistry.Create(_id.Substring("page-content:".Length)) ?? new BoxEl()],
+            },
+        }),
         // The "Windows APIs" page's below-the-fold pillar cards (Shell / Power / Network), rendered directly so a
         // top-anchored screenshot can verify them without scrolling the full page (the device-height clamp hides them).
         "windowsapi-cards" => Embed.Comp(() => new OverlayHost
@@ -122,7 +134,7 @@ sealed class ShotScene : Component
         },
     };
 
-    static Element Content(string id) => id switch
+    Element Content(string id) => id switch
     {
         // Sanity scene: a flat known-color rounded rect (proves the readback→PNG pipeline before trusting acrylic shots).
         "swatch" => new BoxEl { Width = 200, Height = 120, Corners = Radii.OverlayAll, Fill = ColorF.FromRgba(0x10, 0x7C, 0x10) },
@@ -158,18 +170,18 @@ sealed class ShotScene : Component
         // unselected RadioButton must read as an OUTLINED box/ring (hairline strong-stroke + ~10% fill), never a solid
         // grey chip (the donut bug). The TextBox placeholder must be DIM and the caret would sit at x=0 (empty).
         "checkbox" => CardColumn(
-            CheckBox.Create("Unchecked", CheckState.Unchecked, _ => { }),
-            CheckBox.Create("Checked", CheckState.Checked, _ => { }),
-            CheckBox.Create("Indeterminate", CheckState.Indeterminate, _ => { })),
+            CheckBox.Create("Unchecked", UseSignal(CheckState.Unchecked)),
+            CheckBox.Create("Checked", UseSignal(CheckState.Checked)),
+            CheckBox.Create("Indeterminate", UseSignal(CheckState.Indeterminate))),
         "radiobutton" => CardColumn(
-            RadioButton.Create("Option A", false, () => { }),
-            RadioButton.Create("Option B (selected)", true, () => { })),
+            RadioButton.Create("Option A", false),
+            RadioButton.Create("Option B (selected)", true)),
         "toggle" => CardColumn(
-            ToggleSwitch.Create(false, () => { }, "Off"),
-            ToggleSwitch.Create(true, () => { }, "On")),
+            ToggleSwitch.Create(header: "Off"),
+            ToggleSwitch.Create(UseSignal(true), header: "On")),
         "textbox" => CardColumn(
-            TextBox.Create("Enter your name"),
-            TextBox.Create("you@example.com", 280f, "Email")),
+            TextBox.Create(options: new TextBox.TextBoxOptions { Placeholder = "Enter your name" }),
+            TextBox.Create(options: new TextBox.TextBoxOptions { Placeholder = "you@example.com", Width = 280f, Header = "Email" })),
         _ => new TextEl($"unknown shot '{id}'") { Size = 16f, Color = Tok.TextPrimary },
     };
 
@@ -236,7 +248,7 @@ sealed class ShotScene : Component
             Corners = Radii.OverlayAll,
             Shadow = Elevation.Flyout,
             Padding = new Edges4(0, 2, 0, 2),
-            Children = [MenuFlyout.Build(items, () => { })],
+            Children = [MenuFlyout.Create(items, () => { })],
         };
     }
 }
@@ -264,7 +276,7 @@ sealed class FlyoutLiveShot : Component
                 MenuFlyoutItem.Separator,
                 new MenuFlyoutItem("Delete", Icons.Cancel, false),
             };
-            svc.Open(() => anchor.Value, () => MenuFlyout.Build(items, () => { }), FlyoutPlacement.BottomLeft);
+            svc.Open(() => anchor.Value, () => MenuFlyout.Create(items, () => { }), FlyoutPlacement.BottomLeft);
         }, tick);
 
         return new BoxEl
@@ -323,13 +335,7 @@ sealed class ComboBoxOpenShot : Component
             Children =
             [
                 new TextEl("A ComboBox") { Size = 20f, Bold = true, Color = Tok.TextPrimary },
-                Embed.Comp(() => new ComboBox
-                {
-                    Items = Colors,
-                    SelectedIndex = selected,
-                    Width = 298f,
-                    OpenOnMount = true,
-                }),
+                ComboBox.Create(Colors, selected, width: 298f, openOnMount: true),
             ],
         };
     }
@@ -356,15 +362,7 @@ sealed class ComboBoxEditableOpenShot : Component
             Children =
             [
                 new TextEl("An editable ComboBox") { Size = 20f, Bold = true, Color = Tok.TextPrimary },
-                Embed.Comp(() => new ComboBox
-                {
-                    Items = Colors,
-                    SelectedIndex = selected,
-                    Editable = true,
-                    Text = text,
-                    Width = 298f,
-                    OpenOnMount = true,
-                }),
+                ComboBox.Create(Colors, selected, editable: true, text: text, width: 298f, openOnMount: true),
             ],
         };
     }
@@ -486,7 +484,7 @@ sealed class TeachingTipOpenShot : Component
 
 sealed class PopupOpenShot : Component
 {
-    public override Element Render() => Embed.Comp(() => new Popup
+    public override Element Render() => Embed.Comp(() => new PopupDemo
     {
         TriggerLabel = "Show popup",
         Text = "This content is displayed in a popup above the page.",
@@ -693,7 +691,7 @@ sealed class ExpanderReflowShot : Component
             Width = 440f,   // gallery-like content width: the body wraps boundary-proximate (2 lines)
             Children =
             [
-                ControlExample.Build("A simple Expander",
+                ExampleCard.Build("A simple Expander",
                     Embed.Comp(() => new Expander
                     {
                         Header = "This text is collapsible",
@@ -744,13 +742,13 @@ sealed class ValidationShot : Component
         UseEffect(() => form.Validate(), RevealOnce);
 
         return ShotCards.Column(
-            TextBox.Create(header: "Email", width: 340f, text: _email, field: email),
-            TextBox.Create(header: "Password", width: 340f, text: _pwd, field: pwd),
-            TextBox.Create(header: "Confirm password", width: 340f, text: _confirm, field: confirm));
+            TextBox.Create(_email, options: new TextBox.TextBoxOptions { Header = "Email", Width = 340f, Field = email }),
+            TextBox.Create(_pwd, options: new TextBox.TextBoxOptions { Header = "Password", Width = 340f, Field = pwd }),
+            TextBox.Create(_confirm, options: new TextBox.TextBoxOptions { Header = "Confirm password", Width = 340f, Field = confirm }));
     }
 
-    static readonly object[] LocOnce = new object[] { "val-shot-loc" };
-    static readonly object[] RevealOnce = new object[] { "val-shot-reveal" };
+    static readonly DepKey LocOnce = "val-shot-loc";
+    static readonly FluentGpu.Hooks.DepKey RevealOnce = FluentGpu.Hooks.DepKey.Empty;
 }
 
 // The DropZone hover overlay (seeded visible) — verifies the opaque accent panel + inset dashed ring + icon/title/
@@ -782,7 +780,7 @@ sealed class PipsPagerShot : Component
     public override Element Render()
     {
         var sel = UseSignal(2);
-        return ShotCards.Column(PipsPager.Create(7, sel.Value, i => sel.Value = i));
+        return ShotCards.Column(PipsPager.Create(7, sel));
     }
 }
 
@@ -792,8 +790,8 @@ sealed class SelectorBarShot : Component
 
     public override Element Render()
     {
-        var (sel, setSel) = UseState(1);
-        return ShotCards.Column(SelectorBar.Create(Items, sel, setSel));
+        var sel = UseSignal(1);
+        return ShotCards.Column(SelectorBar.Create(Items, sel));
     }
 }
 
@@ -819,8 +817,8 @@ sealed class RadioButtonsShot : Component
 
     public override Element Render()
     {
-        var (sel, setSel) = UseState(1);
-        return ShotCards.Column(RadioButton.Group(Options, sel, setSel));
+        var sel = UseSignal(1);
+        return ShotCards.Column(RadioButton.Group(Options, sel));
     }
 }
 

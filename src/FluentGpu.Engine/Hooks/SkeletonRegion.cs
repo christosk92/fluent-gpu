@@ -101,7 +101,7 @@ public static class Skel
 
     /// <summary>The single-subtree skeleton — pass ONLY your real <paramref name="content"/>, nothing about skeletons:
     /// the engine renders <c>content(seed)</c> (your SAME content rendered against the loadable's own pending seed value —
-    /// the placeholder you gave <c>UseAsyncResource</c>) and DERIVES the shimmer from it, then fills in the real data on
+    /// the placeholder you gave <c>UseResource</c>) and DERIVES the shimmer from it, then fills in the real data on
     /// load. There is no second tree and no shimmer arg. The author's ONLY responsibility is that the resource's seed
     /// renders a representative shape (e.g. an empty artist whose page still lays out hero + tracks via a fake-data
     /// fallback; a home/search seed with a few blank items) — a DATA concern declared at the resource, not skeleton code.
@@ -162,6 +162,13 @@ internal static class SkeletonReveal
             case SkelReveal.StaggerRows:
             {
                 NodeHandle rowParent = UnwrapTransparentBoundaries(scene, realRoot);
+                // ItemsView adds two structural wrappers before its realized rows:
+                // Component -> host Box -> VirtualList viewport -> ContentNode -> row roots.
+                // Staggering the viewport's one direct child animates the entire list as a single slab. Follow a
+                // single-child chain only when it leads to a virtual viewport, then seed the realized row roots. This
+                // preserves the ordinary direct-child contract for non-virtual stacks and keeps virtualization intact.
+                var virtualRows = FindVirtualRows(scene, rowParent);
+                if (!virtualRows.IsNull) rowParent = virtualRows;
                 int n = 0;
                 for (var c = scene.FirstChild(rowParent); !c.IsNull; c = scene.NextSibling(c)) n++;
                 if (n == 0) { anim.SoftReveal(realRoot); break; }
@@ -188,6 +195,20 @@ internal static class SkeletonReveal
             n = child;
         }
         return n;
+    }
+
+    static NodeHandle FindVirtualRows(SceneStore scene, NodeHandle root)
+    {
+        var n = root;
+        for (int depth = 0; depth < 8 && scene.IsLive(n); depth++)
+        {
+            if (scene.TryGetScroll(n, out var scroll) && scroll.ItemCount > 0
+                && !scroll.ContentNode.IsNull && scene.IsLive(scroll.ContentNode))
+                return scroll.ContentNode;
+            if (scene.ChildCount(n) != 1) break;
+            n = scene.FirstChild(n);
+        }
+        return NodeHandle.Null;
     }
 
     static bool IsTransparentBoundary(ushort typeId) => typeId is

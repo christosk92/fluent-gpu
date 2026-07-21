@@ -1,5 +1,7 @@
 using FluentGpu.Foundation;
 using FluentGpu.Dsl;
+using FluentGpu.Hooks;
+using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
 
@@ -99,22 +101,39 @@ public static partial class ToggleButton
         OffDisabledBorder = GradientSpec.Solid(Tok.StrokeControlDefault),
     };
 
-    public static BoxEl Create(string label, bool on, Action onToggle, Style? style = null, bool isEnabled = true, TemplateParts? parts = null)
-        => Build(label, on ? CheckState.Checked : CheckState.Unchecked, _ => onToggle(), style, isEnabled, parts);
+    /// <summary>The per-control clamp seam (adjustment #6). ToggleButton honors every size — identity.</summary>
+    internal static ControlSize ClampSize(ControlSize size) => size;
 
-    /// <summary>Three-state toggle (adds the mixed "indeterminate" look). Click cycles Unchecked → Checked → Indeterminate.</summary>
-    public static BoxEl Create(string label, CheckState state, Action<CheckState> onCycle, Style? style = null, bool isEnabled = true, TemplateParts? parts = null)
+    /// <summary>Resolve the effective style: an explicit style is the full-override escape hatch; otherwise the size
+    /// axis composes over the default's geometry (Medium byte-identical to the pre-axis default).</summary>
+    static Style Sized(Style? style, ControlSize size)
     {
-        var next = state switch
-        {
-            CheckState.Unchecked => CheckState.Checked,
-            CheckState.Checked => CheckState.Indeterminate,
-            _ => CheckState.Unchecked,
-        };
-        return Build(label, state, _ => onCycle(next), style, isEnabled, parts);
+        if (style is not null) return style;
+        var cs = ClampSize(size);
+        if (cs == ControlSize.Medium) return DefaultStyle;
+        var m = ControlMetrics.For(cs);
+        return DefaultStyle with { Padding = m.Padding, MinHeight = m.MinHeight, FontSize = m.FontSize, CornerRadius = m.CornerRadius };
     }
 
-    static BoxEl Build(string label, CheckState state, Action<CheckState> onClick, Style? style, bool isEnabled, TemplateParts? parts)
+    /// <summary>Two-state toggle. The on/off state is a caller <see cref="Signal{T}"/> (read directly in the core —
+    /// live); a click WRITES it then fires <paramref name="onChange"/> once; a programmatic write re-skins with no
+    /// onChange echo. Pass no signal (<paramref name="on"/> = null) to auto-materialize an internal one (one code path).</summary>
+    public static Element Create(string label, Signal<bool>? on = null, Action<bool>? onChange = null, Style? style = null, bool isEnabled = true, TemplateParts? parts = null, ControlSize size = ControlSize.Medium)
+        => Embed.Comp(new Props(label, on, null, onChange, null, Sized(style, size), isEnabled, parts),
+                      () => new ToggleButtonCore());
+
+    /// <summary>Three-state toggle (adds the mixed "indeterminate" look). The <see cref="CheckState"/> is a caller
+    /// <see cref="Signal{T}"/>; a click cycles Unchecked → Checked → Indeterminate, WRITING it then firing onChange.</summary>
+    public static Element Create(string label, Signal<CheckState> state, Action<CheckState>? onChange = null, Style? style = null, bool isEnabled = true, TemplateParts? parts = null, ControlSize size = ControlSize.Medium)
+        => Embed.Comp(new Props(label, null, state, null, onChange, Sized(style, size), isEnabled, parts),
+                      () => new ToggleButtonCore());
+
+    /// <summary>Controlled props RE-PUSHED to <see cref="ToggleButtonCore"/>. Exactly one of <see cref="Bool"/> /
+    /// <see cref="Tri"/> is set by the matching overload (both null ⇒ 2-state auto-materialize).</summary>
+    internal sealed record Props(string Label, Signal<bool>? Bool, Signal<CheckState>? Tri, Action<bool>? OnBool,
+                                 Action<CheckState>? OnTri, Style Style, bool IsEnabled, TemplateParts? Parts);
+
+    internal static BoxEl Build(string label, CheckState state, Action<CheckState> onClick, Style? style, bool isEnabled, TemplateParts? parts)
     {
         var s = style ?? DefaultStyle;
         bool on = state == CheckState.Checked;
@@ -169,5 +188,39 @@ public static partial class ToggleButton
         };
         // Parts: restyle anything (fills, corners, padding…); the cycle mechanics and the label slot always win.
         return parts.Apply(PartRoot, root) with { OnClick = click, Role = AutomationRole.ToggleButton, Children = root.Children };
+    }
+}
+
+/// <summary>The stateful core: reads the caller's value signal DIRECTLY (2-state <c>bool</c> or 3-state
+/// <see cref="CheckState"/>) so a flip/cycle re-skins granularly, reusing <see cref="ToggleButton.Build"/> for the
+/// exact WinUI visuals. A click writes the signal first, then fires the matching onChange.</summary>
+internal sealed class ToggleButtonCore : Component
+{
+    public override Element Render()
+    {
+        var p = UseProps<ToggleButton.Props>();
+        var own = UseSignal(false);   // internal 2-state signal (auto-materialize; unconditional hook)
+
+        CheckState state;
+        Action<CheckState> onClick;
+        if (p.Tri is { } tri)
+        {
+            state = tri.Value;
+            var next = state switch
+            {
+                CheckState.Unchecked => CheckState.Checked,
+                CheckState.Checked => CheckState.Indeterminate,
+                _ => CheckState.Unchecked,
+            };
+            onClick = _ => { tri.Value = next; p.OnTri?.Invoke(next); };
+        }
+        else
+        {
+            var b = p.Bool ?? own;
+            bool on = b.Value;
+            state = on ? CheckState.Checked : CheckState.Unchecked;
+            onClick = _ => { bool next = !on; b.Value = next; p.OnBool?.Invoke(next); };
+        }
+        return ToggleButton.Build(p.Label, state, onClick, p.Style, p.IsEnabled, p.Parts);
     }
 }

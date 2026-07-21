@@ -32,9 +32,9 @@ internal static class TrackRow
     // Grid-layout constants — SHARED so a row's columns line up under the detail header (the alignment invariant).
     internal const float RowHeight = 48f;            // density M
     internal const float HeaderHeight = 36f;
-    internal const float ColGap = WaveeSpace.M;       // shared by header + rows
-    internal const float PadX = WaveeSpace.L;         // shared horizontal inset (header chrome padding == row grid padding)
-    internal const float RowInset = WaveeSpace.S;     // rounded row-highlight inset (rows pad PadX−RowInset so columns stay header-aligned)
+    internal const float ColGap = Spacing.M;       // shared by header + rows
+    internal const float PadX = Spacing.L;         // shared horizontal inset (header chrome padding == row grid padding)
+    internal const float RowInset = Spacing.S;     // rounded row-highlight inset (rows pad PadX−RowInset so columns stay header-aligned)
     internal const float ThumbSize = 36f;
     internal const float CompactListItemExtent = ItemsView.ListItemExtent;
 
@@ -44,8 +44,8 @@ internal static class TrackRow
     // Tier-scaled horizontal inset + column gap: full at wide tiers, tighter as the pane narrows so the title keeps
     // usable width under pressure. Header AND rows read these SAME helpers (keyed by the set's Tier) so columns stay
     // aligned. Tier 0 returns the unchanged constants, so every non-tiered surface is untouched.
-    internal static float PadXFor(int tier) => tier <= 3 ? PadX : tier <= 5 ? WaveeSpace.M : WaveeSpace.S;
-    internal static float ColGapFor(int tier) => tier <= 4 ? ColGap : WaveeSpace.S;
+    internal static float PadXFor(int tier) => tier <= 3 ? PadX : tier <= 5 ? Spacing.M : Spacing.S;
+    internal static float ColGapFor(int tier) => tier <= 4 ? ColGap : Spacing.S;
 
     // Stream count → "11.8M" / "654.8K".
     internal static string PlaysLabel(long n) =>
@@ -105,7 +105,7 @@ internal static class TrackRow
         // not the artwork (the WaveeMusic RowArtColDef pattern). Then the title + artist subline (subline hidden on
         // single-artist albums/singles/EPs).
         if (set.Thumb)
-            cells.Add(CenterCell(Surfaces.Artwork(t.Image, t.Id.GetHashCode() & 0x7fffffff, thumb, thumb, WaveeRadius.Control)));
+            cells.Add(CenterCell(Surfaces.Artwork(t.Image, t.Id.GetHashCode() & 0x7fffffff, thumb, thumb, Radii.Control)));
         var titleCol = new BoxEl
         {
             Direction = 1, Grow = 1f, Basis = 0f, Gap = 1f,
@@ -372,7 +372,7 @@ internal static class TrackRow
         string label = profile?.Name is { Length: > 0 } name ? name : by;
         return new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start, Gap = WaveeSpace.S,
+            Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start, Gap = Spacing.S,
             Children =
             [
                 PersonPicture.Create("", 22f, displayName: label, imageSourcePath: profile?.Avatar?.Url),
@@ -405,7 +405,7 @@ internal static class TrackRow
     internal static Element Heart(bool saved, Action? onLike, bool pop = false) => new BoxEl
     {
         Width = 28f, Height = 28f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Corners = CornerRadius4.All(14f), HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+        Corners = CornerRadius4.All(14f),
         Cursor = onLike is null ? (CursorId?)null : CursorId.Hand, OnClick = onLike,
         Children =
         [
@@ -413,10 +413,10 @@ internal static class TrackRow
             {
                 Key = saved ? "hg:on" : "hg:off",              // keyed CHILD of the stable circle (keys live in child arrays)
                 Animate = pop && saved ? HeartPopIn : null,
-                Children = [Icon(saved ? Mdl.HeartFill : Icons.Heart, 14f, saved ? Tok.AccentTextPrimary : Tok.TextTertiary)],
+                Children = [Icon(saved ? Icons.HeartFill : Icons.Heart, 14f, saved ? Tok.AccentTextPrimary : Tok.TextTertiary)],
             },
         ],
-    };
+    }.Interactive(Interaction.Subtle);
 
     // The trailing row "..." overflow button (Apple Music / Spotify): revealed on ROW hover — the same interactive-ancestor
     // reveal the # cell's play/pause transport uses (the recorder drives the fade off the nearest interactive ancestor, the
@@ -430,12 +430,12 @@ internal static class TrackRow
         var btn = new BoxEl
         {
             Width = 28f, Height = 28f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Corners = CornerRadius4.All(14f), HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+            Corners = CornerRadius4.All(14f),
             HoverScale = 1.06f, PressScale = 0.94f,
             Cursor = enabled ? CursorId.Hand : (CursorId?)null, ClickRequestsContext = enabled,
             Role = AutomationRole.Button,
-            Children = [Icon(Mdl.More, 16f, Tok.TextSecondary)],
-        };
+            Children = [Icon(Icons.More, 16f, Tok.TextSecondary)],
+        }.Interactive(Interaction.Subtle);
         // Hidden at rest; fades in on row hover (Opacity 0 → HoverOpacity 1, inherited from the row's hover progress).
         return new BoxEl
         {
@@ -451,11 +451,10 @@ internal static class TrackRow
     {
         Width = 28f, Height = 28f, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
         Corners = CornerRadius4.All(14f), BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault,
-        HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
         HoverScale = 1.06f, PressScale = 0.94f,
         Cursor = onAdd is null ? (CursorId?)null : CursorId.Hand, OnClick = onAdd,
         Children = [Icon(Icons.Add, 15f, Tok.TextPrimary)],
-    };
+    }.Interactive(Interaction.Subtle);
 
     // The # cell — a small state machine over the playback of THIS track, with the transport button revealed on row hover:
     //   • fetching/buffering → a spinner (shown whether or not you're hovering);
@@ -473,7 +472,7 @@ internal static class TrackRow
         Element rest =
             isBuffering ? Spinner()
             : isNow     ? WaveeEqualizer.Of(isPlaying, static () => Tok.AccentTextPrimary)
-            : isTop     ? Icon(Mdl.FavoriteStarFill, 11f, accent)
+            : isTop     ? Icon(Icons.FavoriteStarFill, 11f, accent)
             :             new TextEl((index + 1).ToString()) { Size = 13f, Color = Tok.TextTertiary };
         Element transport = isBuffering
             ? Spinner()

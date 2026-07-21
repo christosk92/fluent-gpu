@@ -24,36 +24,22 @@ sealed class FriendsPanel : Component
     const long LiveWindowMs = 120_000;   // "listening now" — age ≤ 2 min shows the equalizer + presence dot
     const int TickMs = 30_000;           // relative-time / live-window refresh cadence while the panel is visible
 
-    Timer? _timer;
-    int _timerGeneration;
-
     public override Element Render()
     {
         var fb = UseContext(FriendsBridge.Slot);
         var go = UseContext(HistoryStore.NavCtx);
-        var post = UsePost();
 
         // Mount == visible (RightRail only embeds this in Friends mode): mark the feed active (starts the watchdog +
-        // lazy-seed) and run a generation-guarded 30-s ticker that bumps NowTick so the relative times + live window
-        // recompute on the UI thread. Cleanup on unmount stops both. (LyricsTicker pattern.)
+        // lazy-seed); cleanup on unmount stops it.
         UseSignalEffect(() =>
         {
             if (fb is null) return;
             fb.SetActive(true);
-            int generation = Interlocked.Increment(ref _timerGeneration);
-            var timer = new Timer(_ => post(() =>
-            {
-                if (Volatile.Read(ref _timerGeneration) == generation) fb.NowTick.Value = fb.NowTick.Peek() + 1;
-            }), null, TickMs, TickMs);
-            _timer = timer;
-            Reactive.OnCleanup(() =>
-            {
-                fb.SetActive(false);
-                Interlocked.Increment(ref _timerGeneration);
-                if (ReferenceEquals(_timer, timer)) _timer = null;
-                timer.Dispose();
-            });
+            Reactive.OnCleanup(() => fb.SetActive(false));
         });
+        // Relative-time / live-window refresh: a 30-s frame-clock interval that AUTO-PAUSES while parked/minimized (idle
+        // quiesce) — replaces the old System.Threading.Timer + post marshal. Bumps NowTick so the times + live window recompute.
+        UseInterval(() => { if (fb is not null) fb.NowTick.Value = fb.NowTick.Peek() + 1; }, TickMs, enabled: fb is not null);
 
         if (fb is null) return new BoxEl();
 

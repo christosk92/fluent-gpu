@@ -161,10 +161,23 @@ static class Program
             Environment.Exit(LocProbe.Run(args));
             return;
         }
+        // WS7 gallery integrity gate: mount every [GalleryPage] registry entry headlessly (3 frames), assert no throw +
+        // key uniqueness + Related-key resolution. Exit code = failure count. Runs BEFORE any window/GPU spins up.
+        if (Array.IndexOf(args, "--gallery-audit") >= 0)
+        {
+            Environment.Exit(GalleryAudit.Run(args));
+            return;
+        }
+        // WS7 shot-sweep contract: print every registry shot id (page:<key>) with ShotMode != Skip + the shell id.
+        if (Array.IndexOf(args, "--shot-list") >= 0)
+        {
+            Environment.Exit(GalleryAudit.ShotList());
+            return;
+        }
 
         // Wire the gallery's soak / stress diagnostic harness into the engine's batteries-included entry point. The hook
         // only fires when an FG_SOAK / FG_STRESS_* / FG_WAKE_AUDIT env flag is set; normal runs ignore it. SoakProbe lives
-        // here (in the gallery) because it drives GalleryApp's nav hook, so it cannot move into the engine library.
+        // here (in the gallery) because it drives GalleryShell's nav hook, so it cannot move into the engine library.
         FluentApp.DiagnosticRun = SoakProbe.TryRun;
 
         int frames = -1;   // optional --frames N for headless/CI; omit for a normal interactive window
@@ -181,6 +194,61 @@ static class Program
             if (i < args.Length - 1 && args[i] == "--shot") shot = args[i + 1];
             if (i < args.Length - 1 && args[i] == "--page") page = args[i + 1];
             if (args[i] == "--mica") micaShot = true;
+            // Interactive-shell diagnostic: starts the protected-video page without requiring UI automation. This is
+            // the command-line equivalent of FG_DRM_AUTOPLAY=1 and is intentionally inert for every normal launch.
+            if (args[i] == "--drm-autoplay") Environment.SetEnvironmentVariable("FG_DRM_AUTOPLAY", "1");
+        }
+
+        // M0 of the DRM-free video compositing spine: restructured DComp present tree + IVideoPresenter + an
+        // engine-owned test surface through the real CreateSurfaceFromHandle path + a graded hole, captured to a PNG
+        // (docs/plans/video-phase1-plan.md §4). `--video-m0 <png>` [--frames N]. Screen capture (the DComp child is
+        // composited by DWM, not in our back buffer), so it needs a live composited desktop session.
+        int vm0 = Array.IndexOf(args, "--video-m0");
+        if (vm0 >= 0)
+        {
+            string outPng = vm0 + 1 < args.Length ? args[vm0 + 1] : ".tmp/m0-graded-hole.png";
+            int vf = -1;
+            for (int i = 0; i < args.Length - 1; i++)
+                if (args[i] == "--frames" && int.TryParse(args[i + 1], out int f)) vf = f;
+            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(outPng))!);
+            Environment.Exit(VideoM0.Run(outPng, vf));
+            return;
+        }
+
+        // M3 of the DRM-free video compositing spine: IMFMediaEngineEx windowless-swapchain decode of a CLEAR MP4 →
+        // GetVideoSwapchainHandle → the SAME IVideoPresenter M0 proved, composited z-below the UI. `--video-real <png>`
+        // [--frames N]. Screen capture (the DComp child is composited by DWM), needs a live composited desktop session.
+        int vreal = Array.IndexOf(args, "--video-real");
+        if (vreal >= 0)
+        {
+            string outPng = vreal + 1 < args.Length && !args[vreal + 1].StartsWith("--") ? args[vreal + 1] : ".tmp/m3-real-video.png";
+            int vf = -1;
+            for (int i = 0; i < args.Length - 1; i++)
+                if (args[i] == "--frames" && int.TryParse(args[i + 1], out int f)) vf = f;
+            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(outPng))!);
+            Environment.Exit(VideoReal.Run(outPng, vf));
+            return;
+        }
+
+        // Standalone MF Media Engine probe (NO D3D12 device / window): create VideoMediaEngine + poll to characterize
+        // exactly how far the engine gets on this machine (isolates MF/DXGI from our renderer). `--video-probe [url]`.
+        int vprobe = Array.IndexOf(args, "--video-probe");
+        if (vprobe >= 0)
+        {
+            string purl = Environment.GetEnvironmentVariable("FG_VIDEO_URL")
+                ?? (vprobe + 1 < args.Length && !args[vprobe + 1].StartsWith("--") ? args[vprobe + 1] : "https://media.w3.org/2010/05/sintel/trailer.mp4");
+            using var eng = new FluentGpu.Media.Windows.VideoMediaEngine();
+            int ihr = eng.Initialize(purl);
+            Console.Error.WriteLine($"video-probe: init hr=0x{(uint)ihr:X8} url={purl}");
+            var dl = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+            while (DateTime.UtcNow < dl && !eng.HasError && !eng.Playing)
+            {
+                System.Threading.Thread.Sleep(500);
+                Console.Error.WriteLine($"video-probe: readyState={eng.ReadyState} meta={eng.MetadataLoaded} play={eng.Playing} trace=[{eng.EventTrace}]");
+            }
+            nuint h = eng.GetSwapchainHandle();
+            Console.Error.WriteLine($"video-probe: FINAL playing={eng.Playing} meta={eng.MetadataLoaded} err={eng.HasError}(0x{(uint)eng.ErrorHr:X8}) swapchainHandle=0x{(ulong)h:X} trace=[{eng.EventTrace}]");
+            return;
         }
 
         // DirectWrite itemizer smoke test (BiDi/script/line-break via the callee CCWs) then exit.
@@ -210,20 +278,32 @@ static class Program
                 if (args[i] == "--w" && int.TryParse(args[i + 1], out int w)) sw = w;
                 if (args[i] == "--h" && int.TryParse(args[i + 1], out int h)) sh = h;
             }
-            FluentApp.Run(() => new ShotScene(shot), "FluentGpu — Shot", sw, sh, mica: micaShot, frames: sf, screenshot: screenshot);
+            FluentAppHarness.Run(() => new ShotScene(shot),
+                new AppOptions { Title = "FluentGpu — Shot", Width = sw, Height = sh, Mica = micaShot },
+                new HarnessOptions { Frames = sf, Screenshot = screenshot });
             return;
         }
 
         // Default = the capability gallery (everything). `--demo wavee` = the Wavee skeleton; `--demo list` = the
-        // virtualized track list; `--demo basic` = the original minimal demo.
+        // virtualized track list; `--demo basic` = the original minimal demo. All route through the harness so `--frames`
+        // stays a diagnostic knob (AppOptions carries only the everyday window options).
         if (demo == "wavee")
-            FluentApp.Run(() => new WaveeShell(), "FluentGpu — Wavee skeleton", 1180, 760, frames: frames);
+            FluentAppHarness.Run(() => new WaveeShell(),
+                new AppOptions { Title = "FluentGpu — Wavee skeleton", Width = 1180, Height = 760 },
+                new HarnessOptions { Frames = frames });
         else if (demo == "list")
-            FluentApp.Run(() => new TrackListDemo(), "FluentGpu — Virtualized List", 520, 640, frames: frames);
+            FluentAppHarness.Run(() => new TrackListDemo(),
+                new AppOptions { Title = "FluentGpu — Virtualized List", Width = 520, Height = 640 },
+                new HarnessOptions { Frames = frames });
         else if (demo == "basic")
-            FluentApp.Run(() => new DemoApp(), "FluentGpu — Demo", 560, 360, frames: frames);
+            FluentAppHarness.Run(() => new DemoApp(),
+                new AppOptions { Title = "FluentGpu — Demo", Width = 560, Height = 360 },
+                new HarnessOptions { Frames = frames });
         else
-            FluentApp.Run(() => new GalleryApp { InitialPage = page }, "FluentGpu — Capability Gallery", 1240, 820,
-                          frames: frames, customFrame: true);   // the gallery draws the WinUI TitleBar (engine caption buttons)
+            // WS7: the registry-driven GalleryShell (the sole shell — the legacy GalleryApp was deleted in G8b).
+            // The gallery draws the WinUI TitleBar (engine caption buttons).
+            FluentAppHarness.Run(() => new GalleryShell { InitialPage = page },
+                new AppOptions { Title = "FluentGpu — Capability Gallery", Width = 1240, Height = 820, CustomFrame = true },
+                new HarnessOptions { Frames = frames });
     }
 }

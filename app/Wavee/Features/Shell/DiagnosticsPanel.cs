@@ -61,11 +61,10 @@ sealed class DiagnosticsPanel(IAppSettings? settings = null) : Component
     {
         var hooks = UseContext(InputHooks.Current);
         var post = UsePost();
-        var timer = UseRef<Timer?>(null);
         var lastVersion = UseRef(-1L);
         _overlay = UseContext(Overlay.Service);
 
-        UseEffect(() => RefreshSessions(post), Array.Empty<object>());
+        UseEffect(() => RefreshSessions(post), DepKey.Empty);
 
         UseSignalEffect(() =>
         {
@@ -74,29 +73,18 @@ sealed class DiagnosticsPanel(IAppSettings? settings = null) : Component
             EnsureSessionLoaded(post);
         });
 
-        UseSignalEffect(() =>
+        // Live-log tail poll (session 0 only): a frame-clock interval that AUTO-PAUSES while parked/minimized (idle
+        // quiesce) — replaces the old System.Threading.Timer + post marshal. Bumps _refresh only when the log version moved.
+        UseInterval(() =>
         {
-            bool live = _session.Value == 0;
-            timer.Value?.Dispose();
-            timer.Value = null;
-            if (live)
-            {
-                timer.Value = new Timer(_ =>
-                {
-                    post(() =>
-                    {
-                        long v = WaveeLog.Instance.Version;
-                        if (v == lastVersion.Value) return;
-                        lastVersion.Value = v;
-                        _refresh.Value = _refresh.Peek() + 1;
-                    });
-                }, null, 250, 750);
-            }
-            Reactive.OnCleanup(() => { timer.Value?.Dispose(); timer.Value = null; });
-        });
+            long v = WaveeLog.Instance.Version;
+            if (v == lastVersion.Value) return;
+            lastVersion.Value = v;
+            _refresh.Value = _refresh.Peek() + 1;
+        }, 750f, enabled: _session.Value == 0);
 
         // Hoisted here (unconditional) so the hook order is stable — LogBody has early-out branches before the list.
-        var logLayout = UseMemo(() => new MeasuredStackVirtualLayout(estimatedExtent: 40f), Array.Empty<object>());
+        var logLayout = UseMemo(() => new MeasuredStackVirtualLayout(estimatedExtent: 40f), DepKey.Empty);
 
         _ = _refresh.Value;
         _ = _diagVersion.Value;
@@ -116,7 +104,7 @@ sealed class DiagnosticsPanel(IAppSettings? settings = null) : Component
         return new BoxEl
         {
             Grow = 1f, Shrink = 1f, MinHeight = 0f, Direction = 1,
-            Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardSecondary,
+            Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillCardSecondary,
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault, ClipToBounds = true,
             Children =
             [
@@ -220,17 +208,17 @@ sealed class DiagnosticsPanel(IAppSettings? settings = null) : Component
 
         return new BoxEl
         {
-            Direction = 1, Gap = WaveeSpace.S,
-            Padding = new Edges4(WaveeSpace.L, WaveeSpace.S, WaveeSpace.M, WaveeSpace.S),
+            Direction = 1, Gap = Spacing.S,
+            Padding = new Edges4(Spacing.L, Spacing.S, Spacing.M, Spacing.S),
             Children =
             [
                 new BoxEl
                 {
-                    Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, MinHeight = 40f,
+                    Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M, MinHeight = 40f,
                     Children =
                     [
                         ComboBox.Create(labels, _session, width: 300f, itemDescriptions: subs,
-                            onSelectionChanged: _ => _expandedSeq.Value = -1),
+                            onChange: _ => _expandedSeq.Value = -1),
                         warn > 0 ? ClickableBadge(InfoBadge.Count(warn, InfoBadgeSeverity.Caution), () => _level.Value = 2) : new BoxEl(),
                         err > 0 ? ClickableBadge(InfoBadge.Count(err, InfoBadgeSeverity.Critical), () => _level.Value = 3) : new BoxEl(),
                         new BoxEl { Grow = 1f },
@@ -239,16 +227,16 @@ sealed class DiagnosticsPanel(IAppSettings? settings = null) : Component
                 },
                 new BoxEl
                 {
-                    Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, Wrap = true, MinHeight = 40f,
+                    Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M, Wrap = true, MinHeight = 40f,
                     Children =
                     [
                         AutoSuggestBox.Create(Array.Empty<string>(),
                             placeholder: Loc.Get(Strings.Settings.Diagnostics.FilterPlaceholder),
                             grow: 1f, text: _search,
-                            onTextChanged: q => _search.Value = q,
+                            onChange: q => _search.Value = q,
                             onQuerySubmitted: q => _search.Value = q,
-                            minHeight: 34f, cornerRadius: WaveeRadius.Control),
-                        SelectorBar.Create(s_levelLabels, _level.Value, i => _level.Value = i),
+                            minHeight: 34f, cornerRadius: Radii.Control),
+                        SelectorBar.Create(s_levelLabels, _level),
                         Embed.Comp(() => new DiagToolbarToggle(Icons.Sort, _newestFirst,
                             Loc.Get(Strings.Settings.Diagnostics.SortNewestTip),
                             Loc.Get(Strings.Settings.Diagnostics.SortOldestTip),
@@ -277,7 +265,7 @@ sealed class DiagnosticsPanel(IAppSettings? settings = null) : Component
             header: Loc.Get(isFile ? Strings.Settings.Diagnostics.FileLevel : Strings.Settings.Diagnostics.CaptureLevel),
             description: desc,
             isEnabled: !envSet,
-            onSelectionChanged: i =>
+            onChange: i =>
             {
                 var lvl = (WaveeLogLevel)Math.Clamp(i, 0, 4);
                 if (isFile)
@@ -359,7 +347,7 @@ sealed class DiagnosticsPanel(IAppSettings? settings = null) : Component
         {
             return new BoxEl
             {
-                Grow = 1f, Direction = 1, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Gap = WaveeSpace.M,
+                Grow = 1f, Direction = 1, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Gap = Spacing.M,
                 Children =
                 [
                     ProgressRing.Indeterminate(),
@@ -373,7 +361,7 @@ sealed class DiagnosticsPanel(IAppSettings? settings = null) : Component
             return new BoxEl
             {
                 Grow = 1f, Direction = 1, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                Gap = WaveeSpace.M, Padding = new Edges4(0, 64, 0, 64),
+                Gap = Spacing.M, Padding = new Edges4(0, 64, 0, 64),
                 Children =
                 [
                     Icon(Icons.Search, 36f, Tok.TextTertiary),
@@ -399,14 +387,17 @@ sealed class DiagnosticsPanel(IAppSettings? settings = null) : Component
                 ItemsView.Create(
                     visible.Count, i => LogRow(visible[i]),
                     RepeatLayout.Measured(layout),
-                    selectionMode: ItemsSelectionMode.Single,
-                    controller: _listCtrl,
-                    selector: SelectorVisual.AccentPill,
-                    keyOf: i => listKey + ":" + visible[i].Entry.Sequence,
-                    isItemInvokedEnabled: true,
-                    itemInvoked: i => ToggleExpand(visible[i].Entry.Sequence, visible),
-                    grow: 1f,
-                    scrollKey: listKey),
+                    new ListOptions
+                    {
+                        SelectionMode = ItemsSelectionMode.Single,
+                        Controller = _listCtrl,
+                        Selector = SelectorVisual.AccentPill,
+                        KeyOf = i => listKey + ":" + visible[i].Entry.Sequence,
+                        IsItemInvokedEnabled = true,
+                        OnInvoked = i => ToggleExpand(visible[i].Entry.Sequence, visible),
+                        Grow = 1f,
+                        Scroll = new ScrollOptions { ScrollKey = listKey },
+                    }),
             ],
         };
     }
@@ -429,8 +420,8 @@ sealed class DiagnosticsPanel(IAppSettings? settings = null) : Component
 
         var line = new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S,
-            MinHeight = 40f, Padding = new Edges4(WaveeSpace.M, 0f, WaveeSpace.M, 0f), Grow = 1f,
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S,
+            MinHeight = 40f, Padding = new Edges4(Spacing.M, 0f, Spacing.M, 0f), Grow = 1f,
             Children =
             [
                 SeverityDot(e.Level),
@@ -458,7 +449,7 @@ sealed class DiagnosticsPanel(IAppSettings? settings = null) : Component
         string fieldText = FieldText(e.Fields);
         if (fieldText.Length > 0) detail.Add(MonoLine(fieldText, Tok.TextSecondary));
         if (e.Exception is { Length: > 0 } ex) detail.Add(MonoLine(ex, Tok.SystemFillCritical));
-        return new BoxEl { Direction = 1, Gap = 4f, Padding = new Edges4(0, 0, WaveeSpace.S, WaveeSpace.S), Children = detail.ToArray() };
+        return new BoxEl { Direction = 1, Gap = 4f, Padding = new Edges4(0, 0, Spacing.S, Spacing.S), Children = detail.ToArray() };
     }
 
     static Element MonoLine(string text, ColorF color) =>
@@ -466,7 +457,7 @@ sealed class DiagnosticsPanel(IAppSettings? settings = null) : Component
 
     static Element RepeatBadge(int repeat) => new BoxEl
     {
-        Padding = new Edges4(7f, 1f, 7f, 2f), Corners = CornerRadius4.All(WaveeRadius.Pill),
+        Padding = new Edges4(7f, 1f, 7f, 2f), Corners = CornerRadius4.All(Radii.Full),
         Fill = Tok.FillSubtleSecondary,
         Children = [new TextEl("×" + repeat.ToString(CultureInfo.InvariantCulture)) { Size = 10.5f, Weight = 700, Color = Tok.TextSecondary }],
     };
@@ -498,8 +489,8 @@ sealed class DiagnosticsPanel(IAppSettings? settings = null) : Component
 
         return new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
-            Padding = new Edges4(WaveeSpace.L, WaveeSpace.S, WaveeSpace.M, WaveeSpace.S),
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M,
+            Padding = new Edges4(Spacing.L, Spacing.S, Spacing.M, Spacing.S),
             Children = kids.ToArray(),
         };
     }
@@ -516,7 +507,7 @@ sealed class DiagnosticsPanel(IAppSettings? settings = null) : Component
         return new BoxEl
         {
             Width = 58f, Height = 22f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Corners = CornerRadius4.All(WaveeRadius.Pill),
+            Corners = CornerRadius4.All(Radii.Full),
             Fill = color with { A = 0.12f }, BorderWidth = 1f, BorderColor = color with { A = 0.38f },
             Children = [new TextEl(level.ToString().ToUpperInvariant()) { Size = 10f, Weight = 800, Color = color }],
         };
@@ -616,7 +607,7 @@ sealed class DiagnosticsPanel(IAppSettings? settings = null) : Component
                 if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
                 handle.Value = svc.Open(
                     () => anchor.Value,
-                    () => MenuFlyout.Build(items, () => handle.Value?.Close()),
+                    () => MenuFlyout.Create(items, () => handle.Value?.Close()),
                     FlyoutPlacement.BottomEdgeAlignedRight,
                     new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
                 handle.Value.ClosedAction = () => handle.Value = null;
@@ -625,11 +616,10 @@ sealed class DiagnosticsPanel(IAppSettings? settings = null) : Component
             return new BoxEl
             {
                 Width = 32f, Height = 32f, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                Fill = ColorF.Transparent, HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
                 Role = AutomationRole.Button, Focusable = true, OnClick = Toggle, Cursor = CursorId.Hand,
                 OnRealized = h => anchor.Value = h,
                 Children = [new TextEl(Icons.More) { Size = 16f, FontFamily = Theme.IconFont, Color = Tok.TextSecondary }],
-            };
+            }.Interactive(Interaction.Subtle);
         }
     }
 

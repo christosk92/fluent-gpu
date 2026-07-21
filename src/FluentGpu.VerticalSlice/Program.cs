@@ -40,6 +40,15 @@ sealed class Counter : Component
     }
 }
 
+// G5j localization: a DatePicker with no date renders its "day"/"month"/"year" column placeholders — kit-owned,
+// localized text drawn INLINE in the picker's own Render (Loc.Get subscribes its render-effect), so a culture switch
+// re-resolves them. The loc-kit gate mounts this and reads the rendered glyphs (neutral / pseudo / switched-back).
+sealed class LocDatePickerProbe : Component
+{
+    readonly Signal<DateOnly?> _date = new(null);
+    public override Element Render() => DatePicker.Create(_date);
+}
+
 // Nested composition: a parent embedding a stateful child component (its own hooks).
 sealed class NestChild : Component
 {
@@ -149,7 +158,7 @@ sealed class SpringProbe : Component
 {
     public override Element Render()
     {
-        UseSpring(AnimChannel.ScaleX, 1.2f, SpringParams.FromResponse(0.2f, 1f), Array.Empty<object>());
+        UseSpring(AnimChannel.ScaleX, 1.2f, SpringParams.FromResponse(0.2f, 1f), DepKey.Empty);
         return new BoxEl { Width = 20, Height = 20, Fill = ColorF.FromRgba(0, 128, 255) };
     }
 }
@@ -260,6 +269,363 @@ sealed class HookProbe : Component
         var r = UseRef(7);
         State = s; Dispatch = d; Memo = m; RefBox = r;
         return Ui.Text("probe");
+    }
+}
+
+// ── G1a hook-surface probes (auto-tracked effects, cleanup, DepKey deps) ─────────────────────────────────────────
+// Auto-tracked effect that reads sigA on run 1 and (after a branch flip) sigB on run 2 — proves runtime re-arming.
+sealed class AutoEffectProbe : Component
+{
+    public readonly Signal<int> A = new(0), B = new(0);
+    public bool UseB;
+    public int Runs;
+    public override Element Render()
+    {
+        bool useB = UseB;   // captured per render → the effect closure branches on this render's value
+        UseEffect(() => { Runs++; if (useB) _ = B.Value; else _ = A.Value; });   // AUTO-TRACKED (no deps)
+        return new BoxEl();
+    }
+}
+
+// Deps-gated cleanup-returning effect: cleanup fires before each re-run on dep change and once at unmount.
+sealed class CleanupProbe : Component
+{
+    public int Dep;
+    public int Setup, Cleanup;
+    public override Element Render()
+    {
+        UseEffect(() => { Setup++; return () => Cleanup++; }, DepKey.From(Dep));
+        return new BoxEl();
+    }
+}
+
+// Two auto-tracked cleanup-returning effects: their cleanups must run in cell order at unmount.
+sealed class MultiCleanupProbe : Component
+{
+    public readonly List<int> Order = new();
+    public override Element Render()
+    {
+        UseEffect(() => { return () => Order.Add(1); });
+        UseEffect(() => { return () => Order.Add(2); });
+        return new BoxEl();
+    }
+}
+
+sealed class MountOnceProbe : Component
+{
+    public int Runs;
+    public override Element Render() { UseEffect(() => { Runs++; }, DepKey.Empty); return new BoxEl(); }
+}
+
+sealed class StringTupleProbe : Component
+{
+    public string S = "a";
+    public int I;
+    public int Runs;
+    public override Element Render() { UseEffect(() => { Runs++; }, (S, I)); return new BoxEl(); }
+}
+
+sealed class FromRefProbe : Component
+{
+    public object Obj = new();
+    public int Runs;
+    public override Element Render() { UseEffect(() => { Runs++; }, DepKey.FromRef(Obj)); return new BoxEl(); }
+}
+
+// ── G4b component unification + per-component ReactiveScope probes ────────────────────────────────────────────────
+// A component whose Render() reads NO signals must render exactly once — run-once is a consequence of subscribing to
+// nothing, not a class/flag (ReactiveComponent is deleted).
+sealed class SignalFreeProbe : Component
+{
+    public int Renders;
+    public override Element Render() { Renders++; return new BoxEl { Width = 10f, Height = 10f }; }
+}
+
+sealed class SignalFreeRoot : Component
+{
+    public readonly SignalFreeProbe Probe = new();
+    public Signal<int>? Unrelated;
+    public int RootRenders;
+    public override Element Render()
+    {
+        RootRenders++;
+        var u = UseSignal(0);
+        Unrelated = u;
+        _ = u.Value;   // the ROOT subscribes to an unrelated signal → writing it makes real render work flush
+        return new BoxEl { Children = [Embed.Comp(() => Probe)] };
+    }
+}
+
+// The former-ReactiveComponent idiom under the unified model: reads Tok.* DIRECTLY in render (no signal subscription)
+// and holds hook state. RethemeAll must re-run it IN PLACE — new token color, SAME node, preserved hook state.
+sealed class RethemeInPlaceProbe : Component
+{
+    public int Renders;
+    public int SeenState;
+    public Action<int>? SetState;
+    public override Element Render()
+    {
+        Renders++;
+        var (n, setN) = UseState(1);
+        SeenState = n; SetState = setN;
+        return new BoxEl { Children = [new TextEl("g4b-themed") { Color = Tok.TextPrimary, Size = 14f }] };
+    }
+}
+
+sealed class ScopeCounters
+{
+    public int Renders;
+    public int Cleanups;
+    public readonly Signal<int> Dep = new(0);
+    public readonly Signal<bool> Show = new(true);
+}
+
+sealed class ScopeLifetimeChild : Component
+{
+    readonly ScopeCounters _c;
+    public ScopeLifetimeChild(ScopeCounters c) => _c = c;
+    public override Element Render()
+    {
+        _c.Renders++;
+        _ = _c.Dep.Value;                                  // render-effect subscribes to Dep
+        UseEffect(() => { return () => _c.Cleanups++; });  // cleanup runs once at unmount, via the scope
+        return new BoxEl();
+    }
+}
+
+sealed class ScopeLifetimeRoot : Component
+{
+    public readonly ScopeCounters C = new();
+    public override Element Render()
+        => Flow.Show(() => C.Show.Value, Embed.Comp(() => new ScopeLifetimeChild(C)));
+}
+
+// KeepAlive parking must NOT dispose the scope: the page instance + hook state survive a park/reactivate, a parked page
+// defers renders (no re-render even when a signal it read changes), and reactivation replays exactly once.
+sealed class ScopeParkProbe : Component
+{
+    public Signal<string>? Route;
+    public readonly Signal<int> Ping = new(0);
+    public readonly Dictionary<string, int> Renders = new();
+    public readonly Dictionary<string, int> Constructions = new();
+    public override Element Render()
+    {
+        var route = UseSignal("a");
+        Route = route;
+        return Flow.KeepAlive(
+            () => route.Value,
+            key => key,
+            key => Embed.Comp(() => new ScopeParkPage(key, this)),
+            new KeepAliveOptions(MaxEntries: 3));
+    }
+}
+
+sealed class ScopeParkPage : Component
+{
+    readonly string _key;
+    readonly ScopeParkProbe _o;
+    public ScopeParkPage(string key, ScopeParkProbe o)
+    {
+        _key = key; _o = o;
+        o.Constructions.TryGetValue(key, out int c); o.Constructions[key] = c + 1;
+    }
+    public override Element Render()
+    {
+        _o.Renders.TryGetValue(_key, out int r); _o.Renders[_key] = r + 1;
+        _ = _o.Ping.Value;              // subscribe to Ping
+        var (n, _) = UseState(0);       // component-local state that must survive parking
+        return new BoxEl { Width = 40f, Height = 40f, Children = [Text("park-" + _key + ":" + n)] };
+    }
+}
+
+// ── G4c re-pushed live props probes ──────────────────────────────────────────────────────────────────────────────
+// The immutable props record a parent RE-PUSHES to a reused child (Embed.Comp(props, factory)). Record value equality
+// coalesces a fresh-but-equal re-push; an Element slot rides the same record so a slot re-push reconciles in place.
+sealed record PropsPayload(int N, Element? Slot = null);
+
+// An Equals-COUNTING props record: the reference short-circuit at the reuse seam must prevent this Equals from ever
+// running when the SAME reference is re-supplied (a memoized/cached props object).
+sealed record CountingProps(int N)
+{
+    public static int EqualsCalls;
+    public bool Equals(CountingProps? other) { EqualsCalls++; return other is not null && other.N == N; }
+    public override int GetHashCode() => N;
+}
+
+// A child that reads its re-pushed props with UseProps and records what it saw (render count / last value / last slot),
+// so a gate can assert delivery reached THIS instance. Hosts the slot + a stateful sibling (Keeper) so a slot re-push
+// proves in-place reconcile with surviving sibling state.
+sealed class PropsChild : Component
+{
+    public int Renders;
+    public int LastN = -1;
+    public Element? LastSlot;
+    public readonly StateKeeper Keeper = new();
+    public bool HostKeeper;
+    public override Element Render()
+    {
+        var p = UseProps<PropsPayload>();
+        Renders++;
+        LastN = p.N;
+        LastSlot = p.Slot;
+        Element[] kids = HostKeeper
+            ? [p.Slot ?? (Element)new BoxEl(), Embed.Comp(() => Keeper)]
+            : (p.Slot is { } s ? [s] : []);
+        return new BoxEl { Children = kids };
+    }
+}
+
+// A stateful sibling whose UseState must SURVIVE a parent (PropsChild) re-render driven by a slot re-push.
+sealed class StateKeeper : Component
+{
+    public int Ticks;
+    public Action? Bump;
+    public override Element Render()
+    {
+        var (n, setN) = UseState(0);
+        Ticks = n;
+        Bump = () => setN(n + 1);
+        return new BoxEl { Width = 5, Height = 5 };
+    }
+}
+
+// Reads its props with UseProps<CountingProps> (for the ref-shortcircuit Equals-counting gate).
+sealed class CountingPropsChild : Component
+{
+    public int Renders;
+    public override Element Render() { _ = UseProps<CountingProps>(); Renders++; return new BoxEl { Width = 5, Height = 5 }; }
+}
+
+// Reads its props with UsePropsOrDefault — null when mounted propless, the value when present (no throw either way).
+sealed class OptionalPropsChild : Component
+{
+    public bool SawNull;
+    public int Renders;
+    public override Element Render() { SawNull = UsePropsOrDefault<PropsPayload>() is null; Renders++; return new BoxEl { Width = 5, Height = 5 }; }
+}
+
+// A KeepAlive host whose page embeds a props child, so a gate can park a page and re-push props to the parked entry.
+// ChildN is PEEKED (the host never subscribes to it), and the reactivation re-push carries its latest value — so a
+// gate can drive the "latest" the reactivated page sees without churning the host.
+sealed class PropsParkProbe : Component
+{
+    public Signal<string>? Route;
+    public readonly Signal<int> ChildN = new(0);
+    public readonly Dictionary<string, PropsChild> Children = new();
+    public override Element Render()
+    {
+        var route = UseSignal("a");
+        Route = route;
+        return Flow.KeepAlive(
+            () => route.Value,
+            key => key,
+            key =>
+            {
+                var child = Children.TryGetValue(key, out var c) ? c : (Children[key] = new PropsChild());
+                return Embed.Comp(new PropsPayload(ChildN.Peek()), () => child);
+            },
+            new KeepAliveOptions(MaxEntries: 3));
+    }
+}
+
+// A root parent that re-pushes a Driver-derived props record to a single reused child — the single-flush-coalesce case
+// (delivery happens inside the parent's render-effect, mid-flush).
+sealed class PropsFlushParent : Component
+{
+    public readonly Signal<int> Driver;
+    public readonly PropsChild Child = new();
+    public int Renders;
+    public PropsFlushParent(Signal<int> driver) => Driver = driver;
+    public override Element Render()
+    {
+        int n = Driver.Value;   // subscribe → this parent re-renders when Driver changes
+        Renders++;
+        return Embed.Comp(new PropsPayload(n), () => Child);
+    }
+}
+
+// G4e — a [Props] SOURCE-GENERATED component. The PropsGenerator emits (into this partial) the Signal-backed storage,
+// the subscribing getters, the AlphaProp bind accessor, the PropsData transport + Of/CurrentProps/From, and the
+// IPropsHost.ApplyProps sink. Count+Label are READ in Render (their re-push re-renders the core); Alpha is BOUND to
+// Opacity via AlphaProp (never read in render ⇒ compositor-only, no re-render on change); OnPing is a delegate → a
+// STABLE latest-write forwarder (a fresh lambda never re-renders; the forwarder invokes the newest). Serves
+// gate.props.gen.{field-level, bind-direct, partial-notify, batch-coalesce}.
+[Props]
+sealed partial class PropsGenProbe : Component
+{
+    [Prop] public partial int Count { get; }
+    [Prop] public partial string Label { get; }
+    [Prop] public partial float Alpha { get; }
+    [Prop] public partial Action? OnPing { get; }
+
+    public int Renders;
+    public int LastCount;
+    public string? LastLabel;
+    public NodeHandle Box;
+    public Action? Wired;   // the captured STABLE forwarder (the "wired handler invokes the newest" assertion)
+
+    public override Element Render()
+    {
+        Renders++;
+        LastCount = Count;      // subscribing getter → the render-effect depends on Count
+        LastLabel = Label;      // subscribing getter → the render-effect depends on Label
+        Wired = OnPing;         // capture the stable forwarder (delegates have no signal — no subscription)
+        return new BoxEl
+        {
+            Width = 20f, Height = 20f,
+            Opacity = Prop.Bind(AlphaProp),          // bind the field signal directly → a compositor-only bind effect
+            OnRealized = h => Box = h,
+            Children = [new TextEl(LastLabel + LastCount) { Size = 10f }],
+        };
+    }
+}
+
+// ── G4a call-site-keyed hook substrate probes ────────────────────────────────────────────────────────────────────
+// A CONDITIONAL hook (Middle) between two unconditional neighbours. With the positional cursor this desynced the
+// neighbours' cells; with the keyed substrate each hook keeps its own call-site cell regardless of the conditional.
+sealed class ConditionalHookProbe : Component
+{
+    public bool IncludeMiddle = true;
+    public (int Value, Action<int> Set) Top, Middle, Bottom;
+    public override Element Render()
+    {
+        Top = UseState(10);
+        if (IncludeMiddle) Middle = UseState(20);   // CONDITIONAL hook — legal under the keyed substrate
+        Bottom = UseState(30);
+        return _box;
+    }
+    static readonly BoxEl _box = new();
+}
+
+// Hooks in a loop keyed per-ordinal: per-iteration state survives a count change (append/remove at the END).
+sealed class LoopHookProbe : Component
+{
+    public int Count = 3;
+    public readonly List<Signal<int>> Sigs = new();
+    public override Element Render()
+    {
+        Sigs.Clear();
+        for (int i = 0; i < Count; i++) Sigs.Add(UseSignal(i * 100));   // same source line, ordinals 0..N-1
+        return _box;
+    }
+    static readonly BoxEl _box = new();
+}
+
+// Steady-state re-render over capture-free keyed hooks — the keyed lookup itself must allocate nothing.
+sealed class SteadyHookProbe : Component
+{
+    static readonly Func<int> Memo42 = static () => 42;
+    static readonly Action Noop = static () => { };
+    static readonly BoxEl _box = new();
+    public override Element Render()
+    {
+        var b = UseSignal(0);
+        var f = UseFloatSignal(0f);
+        var r = UseRef(0);
+        var m = UseMemo(Memo42, DepKey.Empty);
+        UseEffect(Noop);   // AUTO-tracked (deps-gated EffectKey has a pre-existing DEBUG-only closure alloc, unrelated to the lookup)
+        _ = b; _ = f; _ = r; _ = m;
+        return _box;
     }
 }
 
@@ -589,6 +955,66 @@ sealed class AsyncCommandsProbe : Component
     public override Element Render() { Cmds = UseAsyncCommands<int>(); _ = Cmds.AnyRunning(); return new BoxEl(); }
 }
 
+// ── Timing-hook probes (gate.timer.*) ────────────────────────────────────────────────────────────────────────────
+// Each exposes the hook result + a writable source so the gate can drive it deterministically over the headless frame
+// clock (host.Paint(0) advances the FixedFrameTimeSource step per frame). The render reads no signal → mounts once.
+sealed class DebounceProbe : Component
+{
+    private readonly float _ms;
+    public DebounceProbe(float ms) => _ms = ms;
+    public readonly Signal<string> Source = new("");
+    public IReadSignal<string> Debounced = null!;
+    public DebounceHandle Handle;
+    public override Element Render() { Debounced = UseDebouncedValue<string>(Source, _ms, out var h); Handle = h; return new BoxEl(); }
+}
+
+sealed class ThrottleProbe : Component
+{
+    private readonly float _ms;
+    public ThrottleProbe(float ms) => _ms = ms;
+    public readonly Signal<int> Source = new(0);
+    public IReadSignal<int> Throttled = null!;
+    public override Element Render() { Throttled = UseThrottledValue<int>(Source, _ms); return new BoxEl(); }
+}
+
+sealed class TimeoutProbe : Component
+{
+    private readonly float _ms;
+    public TimeoutProbe(float ms) => _ms = ms;
+    public int Fires;
+    public TimerHandle Handle;
+    public override Element Render() { Handle = UseTimeout(() => Fires++, _ms); return new BoxEl(); }
+}
+
+sealed class IntervalProbe : Component
+{
+    private readonly float _ms;
+    public IntervalProbe(float ms) => _ms = ms;
+    public int Ticks;
+    public override Element Render() { UseInterval(() => Ticks++, _ms); return new BoxEl(); }
+}
+
+// A parent that conditionally mounts a timeout-owning child so the gate can UNMOUNT it (Flow.Show flip) before the fire.
+sealed class TimeoutUnmountParent : Component
+{
+    public readonly Signal<bool> Show = new(true);
+    public int Fires;
+    public override Element Render() => Flow.Show(() => Show.Value, Embed.Comp(() => new TimeoutUnmountChild(this)));
+}
+
+sealed class TimeoutUnmountChild : Component
+{
+    private readonly TimeoutUnmountParent _p;
+    public TimeoutUnmountChild(TimeoutUnmountParent p) => _p = p;
+    public override Element Render() { UseTimeout(() => _p.Fires++, 200f); return new BoxEl(); }
+}
+
+// A trivial inert root for the warm-cadence gate (no interaction → any post-input activity is warm-cadence alone).
+sealed class InertBoxProbe : Component
+{
+    public override Element Render() => new BoxEl { Width = 100, Height = 100 };
+}
+
 // now-playing recolours a bound TEXT WITHOUT re-running the row template (the anti-flash proof — a re-run would mean a
 // rebuild/remount + Enter replay). Content carries no per-row `$"…"` so the re-skin frames stay 0-alloc on the paint phases.
 sealed class BoundItemsViewProbe : Component
@@ -616,7 +1042,7 @@ sealed class BoundItemsViewProbe : Component
                             ? ColorF.FromRgba(0x4C, 0xC2, 0xFF) : ColorF.FromRgba(0xE0, 0xE0, 0xE0)),
                     };
                     return SelectorVisualsBound.AccentPill(scope, content);
-                }, RepeatLayout.Stack(RowH), selectionMode: ItemsSelectionMode.Multiple, selection: Selection),
+                }, RepeatLayout.Stack(RowH), new ListOptions { SelectionMode = ItemsSelectionMode.Multiple, Selection = Selection }),
             ],
         };
 }
@@ -638,7 +1064,7 @@ sealed class BoundAtomicItemsProbe : Component
 
     public override Element Render()
     {
-        Source = UseMemo(() => BoundItems.From(Items, Fallback));
+        Source = UseMemo(() => BoundItems.From(Items, Fallback), DepKey.Empty);
         return new BoxEl
         {
             Width = 420f, Height = 160f,
@@ -681,7 +1107,7 @@ sealed class BoundCountSignalProbe : Component
                     MinHeight = 40f,
                     Fill = ColorF.FromRgba(30, 30, 30),
                     Children = [new TextEl("") { Size = 12f, Text = Prop.Of(() => "row " + scope.Index.Value) }],
-                }, RepeatLayout.Stack(40f), itemCountSignal: Count),
+                }, RepeatLayout.Stack(40f), new ListOptions { CountSignal = Count }),
             ],
         };
 }
@@ -713,7 +1139,7 @@ sealed class ColdStaggerRemountProbe : Component
                         {
                             TemplateCalls++;
                             return new BoxEl { MinHeight = 40f, Children = [new TextEl("row") { Size = 13f }] };
-                        }, RepeatLayout.Stack(40f), staggerColdRealize: staggerCold),
+                        }, RepeatLayout.Stack(40f), new ListOptions { Entrance = new EntranceOptions { StaggerColdRealize = staggerCold } }),
                     ],
                 },
             ],
@@ -731,9 +1157,55 @@ sealed class ModalWarmProbe : Component
         Children =
         [
             ItemsView.CreateBound(200, _ => new BoxEl { MinHeight = 40f, Fill = ColorF.FromRgba(30, 30, 30) },
-                RepeatLayout.Stack(40f), staggerColdRealize: true),
+                RepeatLayout.Stack(40f), new ListOptions { Entrance = new EntranceOptions { StaggerColdRealize = true } }),
         ],
     };
+}
+
+// G5h (WS3 P7) — a flexible ItemsView probe for the list-consolidation gates: drives Create (RenderItem) or CreateBound
+// (bound slots) through the new ListOptions surface, with a rowBind/template BUILD counter (fresh builds/rebuilds only —
+// never a cheap rebind) and an optional capture of item 0's slot index-signal (to observe keep-alive park vs recycle).
+sealed class ListOptProbe : Component
+{
+    public int Count = 100;
+    public float Extent = 40f;
+    public float Vw = 360f, Vh = 240f;
+    public int Overscan = 2;
+    public bool Bound = true;
+    public bool CaptureSig0;
+    public ListOptions? Options;
+    public RepeatLayout? ExplicitLayout;      // null ⇒ Stack(Extent)
+    public Func<int, float>? RowHeightOf;     // per-index content height (measured layouts); null ⇒ Extent
+    public int Builds;                        // template/rowBind invocations (fresh build/rebuild — NOT a rebind)
+    public IReadSignal<int>? Sig0;
+
+    public override Element Render()
+    {
+        var layout = ExplicitLayout ?? RepeatLayout.Stack(Extent);
+        var opts = Options ?? new ListOptions { Overscan = Overscan, Grow = 1f };
+        Element list = Bound
+            ? ItemsView.CreateBound(Count, scope =>
+              {
+                  Builds++;
+                  if (CaptureSig0 && Sig0 is null && scope.Index.Peek() == 0) Sig0 = scope.Index;
+                  var idx = scope.Index;
+                  return new BoxEl
+                  {
+                      MinHeight = Extent,
+                      Children = [new TextEl("") { Size = 12f, Text = Prop.Of(() => "row " + idx.Value) }],
+                  };
+              }, layout, opts)
+            : ItemsView.Create(Count, i =>
+              {
+                  Builds++;
+                  return new BoxEl
+                  {
+                      MinHeight = RowHeightOf?.Invoke(i) ?? Extent,
+                      Children = [new TextEl("row") { Size = 12f }],
+                  };
+              }, layout, opts);
+        return new BoxEl { Width = Vw, Height = Vh, Children = [list] };
+    }
 }
 
 // Reproduces the Wavee bound-row SHAPE exactly: a ZStack skin (OnPointerPressed = the row tap) whose content is a
@@ -813,7 +1285,7 @@ sealed class BoundListHitProbe : Component
                         Children = [new BoxEl { Direction = 0, Grow = 1f, AlignItems = FlexAlign.Center,
                                                 Children = [Embed.Comp(() => new HitRowContent(this, scope.Index))] }],
                     };
-                }, RepeatLayout.Stack(40f), selection: Selection),
+                }, RepeatLayout.Stack(40f), new ListOptions { Selection = Selection }),
             ],
         };
 
@@ -1177,8 +1649,11 @@ sealed class FlipFlickProbe : Component
 {
     public int Selected;
     public override Element Render()
-        => FlipView.Create(new[] { "Page A", "Page B", "Page C" }, width: 400f, height: 240f,
-                           selectedIndex: 0, onSelectionChanged: i => Selected = i);
+    {
+        var sel = UseSignal(0);
+        return FlipView.Create(new[] { "Page A", "Page B", "Page C" }, width: 400f, height: 240f,
+                           selectedIndex: sel, onChange: i => Selected = i);
+    }
 }
 
 // A box that requests a context menu (the touch Hold target — touch has no right button, so a long-press is the only
@@ -1346,9 +1821,9 @@ sealed class FastPathSliderProbe : Component
     public float Val;
     public override Element Render()
     {
-        var (v, setV) = UseState(0f);
-        Val = v;
-        return Slider.Create(v, x => { setV(x); Val = x; }, 220f, 28f);
+        var v = UseFloatSignal(0f);
+        Val = v.Peek();
+        return Slider.Create(v, x => Val = x, length: 220f, thickness: 28f);
     }
 }
 
@@ -1555,17 +2030,17 @@ sealed class ControlsProbe : Component
 
     public override Element Render()
     {
-        var (sv, setSv) = UseState(0f);
-        var (on, setOn) = UseState(false);
+        var sv = UseFloatSignal(0f);
+        var on = UseSignal(false);
         var (sp, setSp) = UseState(0f);
-        SliderVal = sv; Toggled = on; ScrollPos = sp;
+        SliderVal = sv.Peek(); Toggled = on.Value; ScrollPos = sp;
         return new BoxEl
         {
             Direction = 1, Gap = 0,
             Children =
             [
-                Slider.Create(sv, setSv, 200f, 24f),
-                ToggleButton.Create("Shuffle", on, () => setOn(!on)),
+                Slider.Create(sv, x => SliderVal = x, length: 200f, thickness: 24f),
+                ToggleButton.Create("Shuffle", on),
                 IconButton.Create("▶", () => IconClicks++),
                 ScrollBar.Create(0.25f, sp, setSp, 200f),
             ],
@@ -1579,6 +2054,41 @@ sealed class GridProbe : Component
     static Element Cell() => new BoxEl { Fill = ColorF.FromRgba(40, 40, 40) };
     public override Element Render()
         => Ui.UniformGrid(3, 10f, 50f, Cell(), Cell(), Cell(), Cell(), Cell()) with { Width = 320, Height = 400 };
+}
+
+// G3: BoxEl.AspectRatio derive-missing-dimension (CSS aspect-ratio via Ui.AspectRatio). child0 = width-constrained
+// (Width 320, 16:9 -> derives H 180); child1 = height-constrained (Height 90, 16:9 -> derives W 160). AlignSelf.Start
+// so the column's cross-stretch never overrides the derived cross size.
+sealed class AspectProbe : Component
+{
+    public override Element Render() => new BoxEl
+    {
+        Direction = 1,
+        Children =
+        [
+            new BoxEl { Width = 320f, AspectRatio = 16f / 9f, AlignSelf = FlexAlign.Start },
+            new BoxEl { Height = 90f, AspectRatio = 16f / 9f, AlignSelf = FlexAlign.Start },
+        ],
+    };
+}
+
+// G3: Ui.Spacer / Spacer(px) / Wrap / Center primitives. Row0: a growing Spacer pushes the trailing box to the far edge
+// (300 - 40 - 60 = 200 slack eaten -> box2.X == 240). Row1: a fixed Spacer(24) holds a rigid gap (box2.X == 64). Wrap:
+// three 120-wide boxes + gap 10 in a 260-wide panel -> the third wraps to a new line. Center: 40x40 centered in 200x200.
+sealed class PrimitivesProbe : Component
+{
+    static BoxEl Box(float w, float h) => new() { Width = w, Height = h };
+    public override Element Render() => new BoxEl
+    {
+        Direction = 1, Gap = 8f, AlignItems = FlexAlign.Start,   // never stretch children's width past their explicit size
+        Children =
+        [
+            new BoxEl { Direction = 0, Width = 300f, Children = [ Box(40f, 20f), Ui.Spacer(), Box(60f, 20f) ] },
+            new BoxEl { Direction = 0, Width = 300f, Children = [ Box(40f, 20f), Ui.Spacer(24f), Box(60f, 20f) ] },
+            Ui.Wrap(10f, Box(120f, 30f), Box(120f, 30f), Box(120f, 30f)) with { Width = 260f },
+            new BoxEl { Width = 200f, Height = 200f, Children = [ Ui.Center(Box(40f, 40f)) ] },
+        ],
+    };
 }
 
 // A grid whose FIXED columns (100+100+60 = 260) exceed its definite width (120) with a Star track present — the
@@ -1647,7 +2157,7 @@ sealed class ColumnAlignProbe : Component
             // The rows go through a real ItemsView (40 items → overflow → scrollbar), wrapped by a RowSkin-like
             // container — the actual app path. This is what the bare-grid probe omitted.
             ItemsView.Create(40, i => RowGrid(), RepeatLayout.Stack(48f),
-                containerFactory: (i, content, st, oi, of) => RowSkinLike(content), grow: 1f),
+                new ListOptions { ContainerFactory = (i, content, st, oi, of) => RowSkinLike(content), Grow = 1f }),
         ],
     };
 }
@@ -1676,7 +2186,7 @@ sealed class WaveeShell : Component
     public override Element Render()
     {
         var (playing, setPlaying) = UseState(false);
-        var (seek, setSeek) = UseState(0.3f);
+        var seek = UseFloatSignal(0.3f);
         return new BoxEl
         {
             Direction = 1,
@@ -1687,7 +2197,7 @@ sealed class WaveeShell : Component
                     Direction = 0, Grow = 1,
                     Children = [Sidebar(), Embed.Comp(() => new PageHost(_nav, Page))],
                 },
-                PlayerBar(playing, setPlaying, seek, setSeek),
+                PlayerBar(playing, setPlaying, seek),
             ],
         };
     }
@@ -1733,7 +2243,7 @@ sealed class WaveeShell : Component
         ],
     };
 
-    Element PlayerBar(bool playing, Action<bool> setPlaying, float seek, Action<float> setSeek) => new BoxEl
+    Element PlayerBar(bool playing, Action<bool> setPlaying, FloatSignal seek) => new BoxEl
     {
         Direction = 0, Height = 80, AlignItems = FlexAlign.Center, Gap = 16, Padding = new Edges4(16, 0, 16, 0),
         Fill = ColorF.FromRgba(0x18, 0x18, 0x18),
@@ -1744,8 +2254,8 @@ sealed class WaveeShell : Component
             IconButton.Create("⏮", () => { }),
             IconButton.Create(playing ? "⏸" : "▶", () => setPlaying(!playing)),
             IconButton.Create("⏭", () => { }),
-            Slider.Create(seek, setSeek, 220f),
-            ToggleButton.Create("Shuffle", false, () => { }),
+            Slider.Create(seek, length: 220f),
+            ToggleButton.Create("Shuffle"),
         ],
     };
 }
@@ -1784,7 +2294,7 @@ sealed class SliderSignalProbe : Component
         Renders++;
         var sig = UseFloatSignal(0.3f);
         Sig = sig;
-        return Slider.Bind(sig, onChange: null, width: 200f, height: 24f);
+        return Slider.Create(sig, onChange: null, length: 200f, thickness: 24f);
     }
 }
 
@@ -1805,7 +2315,7 @@ sealed class FlowProbe : Component
             Direction = 1,
             Children =
             [
-                Flow.For(() => count.Value, i => new BoxEl { Key = "r" + i, Width = 40, Height = 12, Children = [Text("row" + i)] }),
+                new IndexForEl(() => count.Value, i => new BoxEl { Width = 40, Height = 12, Children = [Text("row" + i)] }, i => "r" + i),
                 Flow.Show(() => show.Value, new BoxEl { Width = 40, Height = 12, Children = [Text("SHOWN")] }, new BoxEl { Width = 40, Height = 12, Children = [Text("HIDDEN")] }),
             ],
         };
@@ -1826,9 +2336,8 @@ sealed class FlowReorderProbe : Component
             Direction = 1,
             Children =
             [
-                Flow.For(() => items.Value.Count,
-                    i => new BoxEl { Width = 40, Height = 12, Children = [Text(items.Value[i])] },
-                    keyOf: i => items.Value[i]),
+                Flow.For<string>(() => items.Value, s => s,
+                    (s, i) => new BoxEl { Width = 40, Height = 12, Children = [Text(s)] }),
             ],
         };
     }
@@ -1860,7 +2369,143 @@ sealed class FlowShowRefreshProbe : Component
     }
 }
 
+// ── Flow.For<T> probes (gate.for.*) — typed, mandatory-key reactive lists ──────────────────────────────────────────
+// A keyed list over a collection signal (signal-direct overload). Row identity must survive insert/remove/reorder by key.
+sealed class ForKeyedDiffProbe : Component
+{
+    public readonly Signal<IReadOnlyList<string>> Items = new(new[] { "a", "b", "c" });
+    public override Element Render() => new BoxEl
+    {
+        Direction = 1,
+        Children = [Flow.For<string>(Items, s => s, (s, i) => new BoxEl { Width = 30, Height = 10, Children = [Text(s)] })],
+    };
+}
+
+// Instrumented items thunk: the boundary run must read the source EXACTLY ONCE per structural change (not N+1 like the
+// old Count()+ItemAt(i) shape that re-read the signal per row).
+sealed class ForSnapshotProbe : Component
+{
+    public int ItemsReads;
+    public readonly Signal<IReadOnlyList<int>> Items = new(new[] { 1, 2, 3, 4, 5 });
+    public override Element Render() => new BoxEl
+    {
+        Children = [Flow.For<int>(() => { ItemsReads++; return Items.Value; }, n => "k" + n, (n, i) => new BoxEl { Width = 8, Height = 8 })],
+    };
+}
+
+// A For whose Row closure captures PARENT render state (the prefix). A parent re-render must re-point the closures
+// (UpdateFor — the Show-parity fix) so rows reflect the NEW state in place; pre-fix (ForEl.Update no-op) they froze.
+sealed class ForUpdateProbe : Component
+{
+    public static int Renders;
+    public Signal<string>? Prefix;
+    public readonly Signal<IReadOnlyList<int>> Items = new(new[] { 1, 2, 3 });
+    public override Element Render()
+    {
+        Renders++;
+        var prefix = UseSignal("A");
+        Prefix = prefix;
+        string p = prefix.Value;   // read in the PARENT → a change re-renders the parent and rebuilds the For with a fresh Row closure
+        return new BoxEl
+        {
+            Direction = 1,
+            Children = [Flow.For<int>(Items, n => "k" + n, (n, i) => new BoxEl { Width = 40, Height = 12, Children = [Text(p + n)] })],
+        };
+    }
+}
+
+// Two rows collapsing to the SAME key — the DEBUG duplicate-key tripwire must throw inside Fill (structural change).
+sealed class ForDupKeyProbe : Component
+{
+    public override Element Render() => new BoxEl
+    {
+        Children = [Flow.For<int>(() => new[] { 1, 2 }, n => "dup", (n, i) => new BoxEl { Width = 8, Height = 8 })],
+    };
+}
+
+// A settled For over a stable list — a quiet frame must add 0 bytes to the hot phase (the effect runs only on change).
+sealed class ForAllocProbe : Component
+{
+    public readonly Signal<IReadOnlyList<int>> Items = new(new[] { 1, 2, 3, 4 });
+    public override Element Render() => new BoxEl
+    {
+        Width = 200, Height = 200, Direction = 1,
+        Children = [Flow.For<int>(Items, n => "k" + n, (n, i) => new BoxEl { Width = 40, Height = 12 })],
+    };
+}
+
+// ── UseResource probe (gate.resource.*) — one probe drives every SWR gate ───────────────────────────────────────────
+// The deps signal (Key) re-keys the resource; the loader parks a controllable TaskCompletionSource per load so the gate
+// completes them in any order (epoch-ordering) or with an exception (refresh-failure). ObserveCancellation=false makes a
+// superseded load's completion still arrive (so the EPOCH guard — not the token — is what drops it).
+sealed class ResourceProbe : Component
+{
+    public readonly Signal<int> Key = new(0);
+    public ResourceOptions Options = ResourceOptions.Default;
+    public bool ObserveCancellation = true;
+    public readonly List<TaskCompletionSource<string>> Gates = new();
+    public readonly List<int> StartedKeys = new();
+    public Resource<string> Res;
+
+    public override Element Render()
+    {
+        int k = Key.Value;   // subscribe → a deps change re-renders and reloads the resource on the new key
+        Res = UseResource(async ct =>
+        {
+            var tcs = new TaskCompletionSource<string>();
+            lock (Gates) { Gates.Add(tcs); StartedKeys.Add(k); }
+            System.Threading.CancellationTokenRegistration reg = default;
+            if (ObserveCancellation) reg = ct.Register(() => tcs.TrySetCanceled());
+            try { return await tcs.Task.ConfigureAwait(false); }
+            finally { reg.Dispose(); }
+        }, seed: "", deps: k, options: Options);
+        return new BoxEl();
+    }
+}
+
 // ── Basic-input infrastructure probes (overlay / text input / repeat) ─────────────
+// ── §WS3 P8 registry-driven router probes (gate.nav.*) ──────────────────────────────────────────────────────────
+// A [Route]-tagged page the RouteTableGenerator picks up (metadata + a parameterless-ctor factory).
+[Route("vs.route-gen.plain", Title = "Plain Page", Icon = "P", Category = "RouteGen", Order = 7, KeepAlive = true)]
+sealed class RouteGenPlainPage : Component
+{
+    public override Element Render() => new BoxEl { Children = [Text("VSGEN-PLAIN")] };
+}
+
+// A [Route]-tagged page with a (string) ctor — the generated factory threads route.Arg into it.
+[Route("vs.route-gen.arg")]
+sealed class RouteGenArgPage : Component
+{
+    readonly string _arg;
+    public RouteGenArgPage(string arg) { _arg = arg; }
+    public override Element Render() => new BoxEl { Children = [Text("VSGEN-ARG:" + _arg)] };
+}
+
+// A router page with a clickable counter — the PageHost.Create gate checks resolve/fallback/keepalive-restore.
+sealed class RouterProbePage : Component
+{
+    readonly string _label;
+    public RouterProbePage(string label) { _label = label; }
+    public override Element Render()
+    {
+        var (count, setCount) = UseState(0);
+        return new BoxEl
+        {
+            Direction = 1, Width = 200, Height = 120,
+            Children =
+            [
+                new BoxEl
+                {
+                    Width = 140, Height = 32, Role = AutomationRole.Button,
+                    Fill = new ColorF(0.2f, 0.2f, 0.2f, 1f),
+                    OnClick = () => setCount(count + 1),
+                    Children = [Text(_label + ":" + count)],
+                },
+            ],
+        };
+    }
+}
+
 sealed class KeepAliveProbe : Component
 {
     public Signal<string>? Route;
@@ -2025,7 +2670,7 @@ sealed class ActivationPage : Component
         // A persistent looping animation on every page EXCEPT "blank" — _key is instance-constant, so this conditional
         // hook keeps a stable call order for any given page. Quiesced when the page parks (Layer D).
         if (_key != "blank")
-            UseKeyframes(AnimChannel.Opacity, [new Keyframe(0f, 0.4f), new Keyframe(1f, 1f)], 600f, loop: true);
+            UseKeyframes(AnimChannel.Opacity, [new Keyframe(0f, 0.4f), new Keyframe(1f, 1f)], 600f, loop: true, DepKey.Empty);
         return new BoxEl { Width = 100, Height = 40, Children = [Text("ap-" + _key)] };
     }
 }
@@ -2278,15 +2923,15 @@ sealed class W0fNumberProbe : Component
     public Signal<string>? Txt;
     public double Initial = 5;
     public NumberBoxSpinButtonPlacementMode Mode = NumberBoxSpinButtonPlacementMode.Hidden;
-    public readonly List<(double Old, double New)> Changes = new();
+    public readonly List<double> Changes = new();
     public override Element Render()
     {
         var v = UseSignal(Initial); Val = v;
         var t = UseSignal(""); Txt = t;
         return Embed.Comp(() => new OverlayHost
         {
-            Child = NumberBox.Create(value: v, minimum: 0, maximum: 10, smallChange: 1, largeChange: 5,
-                spinButtonPlacementMode: Mode, text: t, onValueChanged: (o, n) => Changes.Add((o, n))),
+            Child = NumberBox.Create(value: v, onChange: n => Changes.Add(n),
+                options: new NumberBox.NumberBoxOptions { Minimum = 0, Maximum = 10, SmallChange = 1, LargeChange = 5, SpinButtonPlacementMode = Mode, Text = t }),
         });
     }
 }
@@ -2488,6 +3133,105 @@ sealed class OverlayProbeInner : Component
     }
 }
 
+// ── G5g — MediaPlayerElement host probe: mounts the player under a REAL OverlayHost so its chrome can consult the
+// overlay service (PinsAnchor auto-hide gate). Exposes the service for the gate to open a pinning picker. ───────────
+sealed class MediaPlayerHostProbe : Component
+{
+    public IOverlayService? Service;
+    public required IMediaPlayer Player;
+    public float HideMs = 200f;
+    public override Element Render()
+        => Embed.Comp(() => new OverlayHost { Child = Embed.Comp(() => new MediaPlayerHostInner(this)) });
+}
+
+sealed class MediaPlayerHostInner : Component
+{
+    readonly MediaPlayerHostProbe _p;
+    public MediaPlayerHostInner(MediaPlayerHostProbe p) => _p = p;
+    public override Element Render()
+    {
+        _p.Service = UseContext(Overlay.Service);
+        return new BoxEl
+        {
+            Width = 480, Height = 300,
+            Children = [Embed.Comp(() => new FluentGpu.Controls.Media.MediaPlayerElement
+            {
+                Player = _p.Player, TransportControlsHideDelayMs = _p.HideMs, AutoHideTransportControls = true,
+            })],
+        };
+    }
+}
+
+// ── G5f — controlled Popup + Flyout.Attach probes ────────────────────────────────────────────────────────────────
+sealed class PopupCtlProbe : Component
+{
+    public IOverlayService? Service;
+    public readonly Signal<bool> Open = new(false);
+    public int OpenChanges;
+    public bool LastChanged;
+    public bool AnchorLow;   // dock the anchor at the bottom edge → the popup flips ABOVE (positioner flip test)
+    public NodeHandle Anchor;
+    public override Element Render() => Embed.Comp(() => new OverlayHost { Child = Embed.Comp(() => new PopupCtlInner(this)) });
+}
+
+sealed class PopupCtlInner : Component
+{
+    readonly PopupCtlProbe _p;
+    public PopupCtlInner(PopupCtlProbe p) => _p = p;
+    public override Element Render()
+    {
+        _p.Service = UseContext(Overlay.Service);
+        var anchor = new BoxEl
+        {
+            Width = 120, Height = 32, Role = AutomationRole.Button, OnClick = () => { },
+            OnRealized = h => _p.Anchor = h, Children = [Ui.Text("anchor")],
+        };
+        var pop = Popup.Create(
+            anchor,
+            () => new BoxEl { Width = 120, Height = 80, Fill = Tok.FillCardDefault, Children = [Ui.Text("popup-body")] },
+            _p.Open,
+            b => { _p.OpenChanges++; _p.LastChanged = b; },
+            FlyoutPlacement.BottomLeft);
+        return new BoxEl
+        {
+            Width = 240, Grow = 1, Direction = 1,   // fill the window height so AnchorLow docks at the true bottom edge (flip test)
+            Justify = _p.AnchorLow ? FlexJustify.End : FlexJustify.Start,
+            Padding = Edges4.All(8),
+            Children = [pop],
+        };
+    }
+}
+
+sealed class FlyoutAttachProbe : Component
+{
+    public IOverlayService? Service;
+    public int AnchorClicks;
+    public NodeHandle Anchor;
+    public override Element Render() => Embed.Comp(() => new OverlayHost { Child = Embed.Comp(() => new FlyoutAttachInner(this)) });
+}
+
+sealed class FlyoutAttachInner : Component
+{
+    readonly FlyoutAttachProbe _p;
+    public FlyoutAttachInner(FlyoutAttachProbe p) => _p = p;
+    public override Element Render()
+    {
+        var svc = UseContext(Overlay.Service);
+        _p.Service = svc;
+        // An anchor with its OWN OnClick; Flyout.Attach must chain (keep both) it.
+        var anchor = new BoxEl
+        {
+            Width = 120, Height = 32, Role = AutomationRole.Button,
+            OnClick = () => _p.AnchorClicks++,
+            OnRealized = h => _p.Anchor = h,
+            Children = [Ui.Text("trigger")],
+        };
+        var attached = Flyout.Attach(anchor, svc,
+            () => new BoxEl { Width = 120, Height = 60, Fill = Tok.FillCardDefault, Children = [Ui.Text("flyout")] });
+        return new BoxEl { Width = 240, Height = 160, Padding = Edges4.All(8), Children = [attached] };
+    }
+}
+
 // Windowed-popup exit-routing probe: swapping the keyed child keeps the outgoing text alive for one frame. Its orphan
 // must be recorded by the popup subtree at the former parent (not by the main window's global fallback pass).
 sealed class PopupExitProbeBody : Component
@@ -2596,9 +3340,9 @@ sealed class CheckBoxProbe : Component
     public CheckState State;
     public override Element Render()
     {
-        var (st, setSt) = UseState(CheckState.Unchecked);
-        State = st;
-        return CheckBox.Create("opt", st, next => setSt(next));
+        var st = UseSignal(CheckState.Unchecked);
+        State = st.Value;
+        return CheckBox.Create("opt", st);
     }
 }
 
@@ -2607,9 +3351,9 @@ sealed class RadioProbe : Component
     public int Selected = -1;
     public override Element Render()
     {
-        var (sel, setSel) = UseState(-1);
-        Selected = sel;
-        return RadioButton.Group(new[] { "A", "B", "C" }, sel, setSel);
+        var sel = UseSignal(-1);
+        Selected = sel.Value;
+        return RadioButton.Group(new[] { "A", "B", "C" }, sel);
     }
 }
 
@@ -2618,9 +3362,9 @@ sealed class ToggleSwitchProbe : Component
     public bool On;
     public override Element Render()
     {
-        var (on, setOn) = UseState(false);
-        On = on;
-        return ToggleSwitch.Create(on, () => setOn(!on));
+        var on = UseSignal(false);
+        On = on.Value;
+        return ToggleSwitch.Create(on);
     }
 }
 
@@ -2675,9 +3419,9 @@ sealed class RangeSliderProbe : Component
     public float Val;
     public override Element Render()
     {
-        var (v, setV) = UseState(0f);
-        Val = v;
-        return Slider.Ranged(v, setV, new Slider.Options { Min = 0f, Max = 100f, Step = 10f, TickFrequency = 20f }, length: 200f, thickness: 32f);
+        var v = UseFloatSignal(0f);
+        Val = v.Peek();
+        return Slider.Create(v, x => Val = x, new Slider.SliderOptions { Min = 0f, Max = 100f, Step = 10f, TickFrequency = 20f }, length: 200f, thickness: 32f);
     }
 }
 
@@ -2710,7 +3454,7 @@ sealed class W1ToggleButtonProbe : Component
         return new BoxEl
         {
             Padding = Edges4.All(20),
-            Children = [ToggleButton.Create("w1-tb", on.Value, () => on.Value = !on.Value)],
+            Children = [ToggleButton.Create("w1-tb", on)],
         };
     }
 }
@@ -2735,38 +3479,38 @@ sealed class W1RadioButtonsProbe : Component
     public int SelectCalls;
     public override Element Render()
     {
-        var (sel, setSel) = UseState(0);
-        Selected = sel;
+        var sel = UseSignal(0);
+        Selected = sel.Value;
         return new BoxEl
         {
             Padding = Edges4.All(10),
             Children =
             [
                 RadioButtons.Create(new[] { "A", "B", "C", "D", "E" }, sel,
-                    i => { SelectCalls++; setSel(i); }, header: "w1-group", maxColumns: 2),
+                    onChange: i => { SelectCalls++; }, header: "w1-group", maxColumns: 2),
             ],
         };
     }
 }
 
-// Slider.Ranged over 0..200 with a header — exercises the AUTO step sizes (SmallChange 0 → range/100 = 2,
+// Slider.Create over 0..200 with a header — exercises the AUTO step sizes (SmallChange 0 → range/100 = 2,
 // LargeChange 0 → range/10 = 20; WinUI's absolute defaults 1/10 on its 0–100 range, Slider_Partial.h:13-15).
 sealed class W1SliderKeysProbe : Component
 {
     public float Val;
     public override Element Render()
     {
-        var (v, setV) = UseState(0f);
-        Val = v;
+        var v = UseFloatSignal(0f);
+        Val = v.Peek();
         return new BoxEl
         {
             Padding = Edges4.All(20),
-            Children = [Slider.Ranged(v, setV, new Slider.Options { Min = 0f, Max = 200f, Header = "w1-vol" }, length: 200f, thickness: 32f)],
+            Children = [Slider.Create(v, x => Val = x, new Slider.SliderOptions { Min = 0f, Max = 200f, Header = "w1-vol" }, length: 200f, thickness: 32f)],
         };
     }
 }
 
-// Slider.Ranged inside an OverlayHost (the thumb value tooltip needs a real overlay service) + inline ticks; a leading
+// Slider.Create inside an OverlayHost (the thumb value tooltip needs a real overlay service) + inline ticks; a leading
 // dummy focusable pins the Tab order. The probe never re-renders — the tooltip readout is the live tipValue signal.
 sealed class W1SliderTipProbe : Component
 {
@@ -2779,52 +3523,60 @@ sealed class W1SliderTipProbe : Component
             Children =
             [
                 new BoxEl { Width = 40, Height = 20, OnClick = () => { } },
-                Slider.Ranged(0f, v => Val = v, new Slider.Options { Min = 0f, Max = 200f, TickFrequency = 50f }, length: 200f, thickness: 32f),
+                Slider.Create(new FloatSignal(0f), v => Val = v, new Slider.SliderOptions { Min = 0f, Max = 200f, TickFrequency = 50f }, length: 200f, thickness: 32f),
             ],
         },
     });
 }
 
-// FG_PROBE=ranged-tooltip variants: the W1 probe shape with a switchable IsThumbToolTipEnabled (the triangulation
-// lever) and an optional STATEFUL value — the drag-follow variant needs the thumb to actually move on scrub, so the
-// state lives in an INNER self-re-rendering component (the outer Embed.Comp factory freezes at mount).
+// FG_PROBE=ranged-tooltip: the W1 probe shape with a switchable IsThumbToolTipEnabled (the triangulation lever).
+// The thumb follows the scrub via the compositor bind regardless of onChange — one code path (the unified Slider.Create).
 sealed class RangedTooltipProbeRoot : Component
 {
     public bool TooltipEnabled = true;
-    public bool Stateful;
     public override Element Render() => Embed.Comp(() => new OverlayHost
     {
-        Child = Embed.Comp(() => new RangedTooltipProbeBody { TooltipEnabled = TooltipEnabled, Stateful = Stateful }),
+        Child = Embed.Comp(() => new RangedTooltipProbeBody { TooltipEnabled = TooltipEnabled }),
     });
 }
 
 sealed class RangedTooltipProbeBody : Component
 {
     public bool TooltipEnabled = true;
-    public bool Stateful;   // constant per instance — the conditional hook below is slot-stable for the lifetime
 
     public override Element Render()
     {
-        float value = 0f;
-        Action<float> onChange = NoOp;
-        if (Stateful)
-        {
-            var (v, setV) = UseState(0f);
-            value = v;
-            onChange = setV;
-        }
+        // Signal-bound: the thumb follows the scrub via the compositor bind regardless of onChange (one code path).
+        var value = UseFloatSignal(0f);
         return new BoxEl
         {
             Direction = 1, Gap = 12, Padding = Edges4.All(20),
             Children =
             [
                 new BoxEl { Width = 40, Height = 20, OnClick = () => { } },
-                Slider.Ranged(value, onChange, new Slider.Options { Min = 0f, Max = 200f, IsThumbToolTipEnabled = TooltipEnabled }, length: 200f, thickness: 32f),
+                Slider.Create(value, NoOp, new Slider.SliderOptions { Min = 0f, Max = 200f, IsThumbToolTipEnabled = TooltipEnabled }, length: 200f, thickness: 32f),
             ],
         };
     }
 
     static void NoOp(float _) { }
+}
+
+// WS3 P3 — the unified Slider.Create under an OverlayHost (so the signal-bound tooltip has a real overlay service).
+// Caller == null exercises value auto-materialization; onChange records the reported value for the gates.
+sealed class SliderUnifiedProbe : Component
+{
+    public float Val = float.NaN;
+    public FloatSignal? Caller;                 // null ⇒ the control materializes its own signal
+    public Slider.SliderOptions? Opts;          // null ⇒ 0..1, tooltip enabled
+    public override Element Render() => Embed.Comp(() => new OverlayHost
+    {
+        Child = new BoxEl
+        {
+            Padding = Edges4.All(20),
+            Children = [Slider.Create(Caller, x => Val = x, Opts, length: 200f, thickness: 32f)],
+        },
+    });
 }
 
 /// <summary>FG_PROBE=titlebar-resize root — the gallery's titlebar wiring (pane toggle + icon + title + the
@@ -2988,7 +3740,7 @@ sealed class PipsPagerOutputProbe : Component
             Direction = 1,
             Children =
             [
-                PipsPager.Create(5, selected.Value, i => selected.Value = i),
+                PipsPager.Create(5, selected),
                 new TextEl("") { Size = 14f, Color = Tok.TextPrimary, Text = Prop.Of(() => $"Page {selected.Value + 1} / 5") },
             ],
         };
@@ -3008,7 +3760,7 @@ sealed class MeasuredSeamProbe : Component
     public MeasuredStackVirtualLayout? Layout;
     public override Element Render()
     {
-        var layout = UseMemo(static () => new MeasuredStackVirtualLayout(Estimate));
+        var layout = UseMemo(static () => new MeasuredStackVirtualLayout(Estimate), DepKey.Empty);
         Layout = layout;
         return Virtual.Measured(N, layout,
                    renderItem: i => new BoxEl { Height = H(i), Fill = ColorF.FromRgba(30, 30, 30) },
@@ -3028,7 +3780,7 @@ sealed class AnchorRepinProbe : Component
     public MeasuredStackVirtualLayout? Layout;
     public override Element Render()
     {
-        var layout = UseMemo(static () => new MeasuredStackVirtualLayout(Estimate));
+        var layout = UseMemo(static () => new MeasuredStackVirtualLayout(Estimate), DepKey.Empty);
         Layout = layout;
         return Virtual.Measured(N, layout,
                    renderItem: _ => new BoxEl { Height = Real, Fill = ColorF.FromRgba(30, 30, 30) },
@@ -3166,10 +3918,13 @@ sealed class ItemsViewKeyboardProbe : Component
                 ItemsView.Create(N,
                     itemTemplate: i => new BoxEl { Children = [new TextEl(NameOf(i)) { Size = 12f }] },
                     layout: RepeatLayout.Stack(Row),
-                    isItemInvokedEnabled: true,
-                    itemInvoked: i => { InvokedCount++; LastInvoked = i; },
-                    itemText: NameOf,
-                    controller: Controller),
+                    options: new ListOptions
+                    {
+                        IsItemInvokedEnabled = true,
+                        OnInvoked = i => { InvokedCount++; LastInvoked = i; },
+                        ItemText = NameOf,
+                        Controller = Controller,
+                    }),
             ],
         };
 }
@@ -3184,7 +3939,7 @@ sealed class ItemsViewGridProbe : Component
         => new BoxEl
         {
             Width = 360, Height = 320,
-            Children = [ItemsView.Create(N, i => new BoxEl(), RepeatLayout.Grid(4, 72f, 8f), controller: Controller)],
+            Children = [ItemsView.Create(N, i => new BoxEl(), RepeatLayout.Grid(4, 72f, 8f), new ListOptions { Controller = Controller })],
         };
 }
 
@@ -3201,9 +3956,12 @@ sealed class ItemsViewExtendedProbe : Component
             Children =
             [
                 ItemsView.Create(N, i => new BoxEl(), RepeatLayout.Stack(40f),
-                    selectionMode: ItemsSelectionMode.Extended,
-                    selectionChanged: () => SelectionChangedCount++,
-                    controller: Controller),
+                    new ListOptions
+                    {
+                        SelectionMode = ItemsSelectionMode.Extended,
+                        OnChange = () => SelectionChangedCount++,
+                        Controller = Controller,
+                    }),
             ],
         };
 }
@@ -3221,7 +3979,7 @@ sealed class ItemsViewMultipleProbe : Component
             Children =
             [
                 ItemsView.Create(N, i => { TemplateCalls++; return new BoxEl(); }, RepeatLayout.Stack(40f),
-                    selectionMode: ItemsSelectionMode.Multiple, controller: Controller),
+                    new ListOptions { SelectionMode = ItemsSelectionMode.Multiple, Controller = Controller }),
             ],
         };
 }
@@ -3496,6 +4254,82 @@ sealed class LiveThemeDefaultsProbe : Component
     };
 }
 
+// ── G1c: LayoutBoundary (.Boundary) + relayout-escape counter + UseMeasuredBounds/Width probes ──────────────────────
+
+// A deep-nested subtree with a re-rendering leaf, wrapped in a container that is EITHER a `.Boundary()` (layout firewall)
+// or a plain flex box. Flipping the leaf signal marks the deep node LayoutDirty; the boundary decides whether the scoped
+// relayout stops at the container (escapes = 0) or walks all the way to the scene root (escapes >= 1).
+sealed class BoundaryEscapeProbe : Component
+{
+    public static bool UseBoundary;
+    public readonly FluentGpu.Signals.Signal<int> Deep = new(0);
+
+    public override Element Render()
+    {
+        var inner = new BoxEl { Grow = 1f, Direction = 1, Children = [ Embed.Comp(() => new BoundaryDeepLeaf { Sig = Deep }) ] };
+        var container = new BoxEl { Grow = 1f, Direction = 1, Children = [ inner ] };
+        if (UseBoundary) container = container.Boundary();
+        return new BoxEl { Grow = 1f, Direction = 1, Children = [ container ] };
+    }
+}
+
+sealed class BoundaryDeepLeaf : Component
+{
+    public FluentGpu.Signals.Signal<int> Sig = null!;
+    public override Element Render()
+    {
+        int v = Sig.Value;   // subscribe → re-render (and change size, marking LayoutDirty) on flip
+        return new BoxEl { Width = 100f, Height = 20f + v };
+    }
+}
+
+// Hosts a nested component so the measured component's HostNode is its OWN rendered box (NOT the scene root, which is what
+// the top-level component's HostNode is forced to). The child's box width is a bound FloatSignal (a compositor/layout
+// bind — no re-render), driven per frame to reproduce a resize.
+sealed class MeasureHost : Component
+{
+    readonly Component _child;
+    public MeasureHost(Component child) => _child = child;
+    public override Element Render() => new BoxEl { Grow = 1f, Direction = 0, Children = [ Embed.Comp(() => _child) ] };
+}
+
+sealed class MeasuredWidthProbe : Component
+{
+    public readonly FluentGpu.Signals.FloatSignal DriveWidth = new(100f);
+    public float Quantum;
+    public int RenderCount;
+    public float LastSeen = -1f;
+
+    public override Element Render()
+    {
+        RenderCount++;
+        var w = UseMeasuredWidth(Quantum);
+        LastSeen = w.Value;   // subscribe → re-render when the (quantized) measured width changes
+        return new BoxEl { Grow = 0f, Shrink = 0f, Height = 50f, Width = Prop.Of(() => DriveWidth.Value) };
+    }
+}
+
+sealed class ComposeBoundsProbe : Component
+{
+    public readonly FluentGpu.Signals.FloatSignal DriveWidth = new(100f);
+    public int AuthorFires;
+    public int RenderCount;
+    public float LastSeenW = -1f;
+
+    public override Element Render()
+    {
+        RenderCount++;
+        var bounds = UseMeasuredBounds();
+        LastSeenW = bounds.Value.W;   // subscribe
+        return new BoxEl
+        {
+            Grow = 0f, Shrink = 0f, Height = 50f,
+            Width = Prop.Of(() => DriveWidth.Value),
+            OnBoundsChanged = _ => AuthorFires++,   // the element author's own handler — must still fire alongside the hook
+        };
+    }
+}
+
 static class Slice
 {
     static int s_failures;
@@ -3586,6 +4420,88 @@ static class Slice
         foreach (var g in dev.LastGlyphs)
             if (strings.Resolve(g.Text) == text) return true;
         return false;
+    }
+
+    // G5j (WS3 P9b) — control-kit localization. Proves: (1) the neutral fallback FLOOR resolves the kit's generated
+    // keys with NO tables loaded (zero-config contract — the generated module initializer ran RegisterNeutral); (2) the
+    // pseudo-locale transforms those same keys and switching back restores neutral (culture-change re-resolution);
+    // (3) a real kit control (DatePicker face) renders those strings to pixels — neutral, then fully-pseudo (any raw
+    // English leak would show as un-bracketed text = a hardcoded literal), then neutral again — and a quiet frame after
+    // the switch is 0-alloc (the loc bind does not leak into paint phases 6–13).
+    static void LocalizationKitChecks(StringTable strings)
+    {
+        // Clean, deterministic starting point: no culture tables loaded → only the kit's baked-in neutral floor exists.
+        FluentGpu.Localization.Localization.Clear();
+        FluentGpu.Localization.Localization.SetCulture("en-US");
+
+        // ── gate.loc.kit-fallback — the zero-config contract (neutral floor resolves via the generated keys). ──
+        bool fbOk    = FluentGpu.Localization.Loc.Get(FluentGpu.Controls.Strings.Dialog.Ok) == "OK";
+        bool fbOff   = FluentGpu.Localization.Loc.Get(FluentGpu.Controls.Strings.Media.Off) == "Off";
+        bool fbClose = FluentGpu.Localization.Loc.Get(FluentGpu.Controls.Strings.InfoBar.Close) == "Close";
+        bool fbFmt   = FluentGpu.Localization.Loc.Format(FluentGpu.Controls.Strings.Media.CaptionsIndexedKey, ("n", 2)) == "Captions 2";
+        Check("gate.loc.kit-fallback: kit keys resolve to neutral strings with NO tables loaded",
+            fbOk && fbOff && fbClose && fbFmt,
+            $"ok={fbOk} off={fbOff} close={fbClose} fmt={fbFmt}");
+
+        // ── gate.loc.validation-neutral-floor (G7 item 6) — the ENGINE's built-in validation rule messages (Rules.*)
+        // resolve to their ship-with-the-assembly neutral strings with NO culture table loaded, so a form error never
+        // surfaces the visible-missing [validation.*] marker on the hot path (Engine-side RegisterNeutral floor). ──
+        bool vReq = FluentGpu.Localization.Loc.Get("validation.required") == "Required.";
+        bool vMin = FluentGpu.Localization.Loc.Get("validation.minlen")   == "Too short.";
+        bool vMax = FluentGpu.Localization.Loc.Get("validation.maxlen")   == "Too long.";
+        bool vRng = FluentGpu.Localization.Loc.Get("validation.range")    == "Out of range.";
+        Check("gate.loc.validation-neutral-floor: engine validation.* keys resolve to the neutral floor (no [key] marker)",
+            vReq && vMin && vMax && vRng, $"req={vReq} min={vMin} max={vMax} range={vRng}");
+
+        // ── gate.loc.kit-pseudo — pseudo transforms the neutral floor; switching back restores it. ──
+        FluentGpu.Localization.Localization.SetCulture(FluentGpu.Localization.PseudoLocalizer.PseudoCulture);
+        string psOk    = FluentGpu.Localization.Loc.Get(FluentGpu.Controls.Strings.Dialog.Ok);
+        string psOff   = FluentGpu.Localization.Loc.Get(FluentGpu.Controls.Strings.Media.Off);
+        string psClose = FluentGpu.Localization.Loc.Get(FluentGpu.Controls.Strings.InfoBar.Close);
+        bool psTransformed =
+            psOk == FluentGpu.Localization.PseudoLocalizer.Transform("OK") && psOk.StartsWith("⟦") &&
+            psOff == FluentGpu.Localization.PseudoLocalizer.Transform("Off") &&
+            psClose == FluentGpu.Localization.PseudoLocalizer.Transform("Close");
+        FluentGpu.Localization.Localization.SetCulture("en-US");
+        bool backToNeutral = FluentGpu.Localization.Loc.Get(FluentGpu.Controls.Strings.Dialog.Ok) == "OK";
+        Check("gate.loc.kit-pseudo: pseudo-locale transforms kit keys; switching back re-resolves neutral",
+            psTransformed && backToNeutral,
+            $"pseudoOk='{psOk}' transformed={psTransformed} back={backToNeutral}");
+
+        // ── gate.loc.no-hardcoded-kit-strings — render a real kit control and prove its text goes through loc. ──
+        // A DatePicker with no date draws "day"/"month"/"year" faces. Under pseudo EVERY leaf must be bracketed; an
+        // un-keyed hardcoded literal would render as plain English and fail the pseudo assertion (pseudo-loc's purpose).
+        var dev = new HeadlessGpuDevice();
+        var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("loc-kit", new Size2(420, 320), 1f));
+        window.Show();
+        using (app)
+        using (var host = new AppHost(app, window, dev, new HeadlessFontSystem(strings), strings, new LocDatePickerProbe()))
+        {
+            host.RunFrame();
+            bool neutralFace = HasGlyph(dev, strings, "day") && HasGlyph(dev, strings, "month") && HasGlyph(dev, strings, "year");
+
+            FluentGpu.Localization.Localization.SetCulture(FluentGpu.Localization.PseudoLocalizer.PseudoCulture);
+            host.RunFrame();
+            bool pseudoFace =
+                HasGlyph(dev, strings, FluentGpu.Localization.PseudoLocalizer.Transform("day")) &&
+                HasGlyph(dev, strings, FluentGpu.Localization.PseudoLocalizer.Transform("month")) &&
+                HasGlyph(dev, strings, FluentGpu.Localization.PseudoLocalizer.Transform("year")) &&
+                !HasGlyph(dev, strings, "day");   // the raw English literal must NOT leak through under pseudo
+
+            FluentGpu.Localization.Localization.SetCulture("en-US");
+            var quiet = host.RunFrame();                 // re-resolves back to neutral on the culture bump
+            bool restored = HasGlyph(dev, strings, "day");
+            var quiet2 = host.RunFrame();                // now truly quiet — the loc bind must not allocate in paint
+            bool zeroAlloc = quiet2.HotPhaseAllocBytes == 0;
+
+            Check("gate.loc.no-hardcoded-kit-strings: DatePicker faces render loc-resolved text (neutral↔pseudo), quiet frame 0-alloc",
+                neutralFace && pseudoFace && restored && zeroAlloc,
+                $"neutral={neutralFace} pseudo={pseudoFace} restored={restored} quietAlloc={quiet2.HotPhaseAllocBytes}B");
+        }
+
+        // Leave global localization state clean for any later phase.
+        FluentGpu.Localization.Localization.SetCulture("en-US");
     }
 
     enum DeviceLossProbeFailure { Submit, Present, PresentNonDevice }
@@ -4627,6 +5543,374 @@ static class Slice
         Check("16. UseRef persists & is stable", p.RefBox!.Value == 42 && ReferenceEquals(p.RefBox, r1));
     }
 
+    // Drain a component's passive-effect queue the way the host does after paint (phase 12) — snapshot-per-pass so an
+    // effect that re-enqueues during the drain is handled, but the auto-effect body itself enqueues nothing.
+    static void PumpEffects(RenderContext c)
+    {
+        var q = c.PendingEffects;
+        while (q.Count > 0) { var batch = q.ToArray(); q.Clear(); foreach (var a in batch) a(); }
+    }
+
+    // G1a — the new hook surface: auto-tracked effects (default), DepKey deps (opt-in), cleanup, Signal equality, Prop.Bind.
+    static void HookSurfaceChecks()
+    {
+        // gate.hooks.autotrack-timing — the auto-tracked body executes in the passive drain, NEVER inline during Flush.
+        {
+            var rt = new ReactiveRuntime();
+            var pr = new AutoEffectProbe(); pr.Context.Runtime = rt;
+            pr.RenderWithHooks();
+            bool deferredAtMount = pr.Runs == 0;          // not run during render/mount
+            PumpEffects(pr.Context);
+            bool ranInDrain = pr.Runs == 1;
+            pr.A.Value = 1;
+            bool notOnWrite = pr.Runs == 1;
+            rt.Flush();
+            bool notInFlush = pr.Runs == 1;              // Flush schedules + stages, but does NOT run the body inline
+            PumpEffects(pr.Context);
+            bool ranInPassive = pr.Runs == 2;
+            Check("gate.hooks.autotrack-timing", deferredAtMount && ranInDrain && notOnWrite && notInFlush && ranInPassive,
+                $"mount-deferred={deferredAtMount} drain={ranInDrain} not-in-flush={notInFlush} passive={ranInPassive}");
+        }
+
+        // gate.hooks.autotrack-rearm — reads sigA run 1, sigB run 2 (branch flip); re-fires on sigB, NOT sigA.
+        {
+            var rt = new ReactiveRuntime();
+            var pr = new AutoEffectProbe(); pr.Context.Runtime = rt;
+            pr.UseB = false; pr.RenderWithHooks(); PumpEffects(pr.Context);   // run1 reads A
+            pr.UseB = true; pr.RenderWithHooks();                            // re-render installs closure2 (reads B)
+            pr.A.Value = 1; rt.Flush(); PumpEffects(pr.Context);             // run2 (via still-subscribed A) → now tracks B
+            pr.B.Value = 1; rt.Flush(); PumpEffects(pr.Context);             // re-fires on B
+            int afterB = pr.Runs;
+            pr.A.Value = 2; rt.Flush(); PumpEffects(pr.Context);             // A no longer tracked → no re-fire
+            Check("gate.hooks.autotrack-rearm", pr.Runs == 3 && afterB == 3,
+                $"runs={pr.Runs} (want 3; A-after-flip must not re-fire)");
+        }
+
+        // gate.hooks.effect-cleanup-runs — cleanup before re-run on dep change AND once at unmount.
+        {
+            var rt = new ReactiveRuntime();
+            var cp = new CleanupProbe(); cp.Context.Runtime = rt;
+            cp.Dep = 1; cp.RenderWithHooks(); PumpEffects(cp.Context);   // Setup=1, Cleanup=0
+            cp.Dep = 2; cp.RenderWithHooks(); PumpEffects(cp.Context);   // cleanup fires, then re-run: Cleanup=1, Setup=2
+            bool beforeRerun = cp.Setup == 2 && cp.Cleanup == 1;
+            cp.Unmount();
+            bool atUnmount = cp.Cleanup == 2;
+            Check("gate.hooks.effect-cleanup-runs", beforeRerun && atUnmount, $"setup={cp.Setup} cleanup={cp.Cleanup}");
+        }
+
+        // gate.hooks.effect-cleanup-order — multi-effect cleanups run in cell order at unmount.
+        {
+            var rt = new ReactiveRuntime();
+            var mp = new MultiCleanupProbe(); mp.Context.Runtime = rt;
+            mp.RenderWithHooks(); PumpEffects(mp.Context);
+            mp.Unmount();
+            Check("gate.hooks.effect-cleanup-order", mp.Order.Count == 2 && mp.Order[0] == 1 && mp.Order[1] == 2,
+                $"order=[{string.Join(",", mp.Order)}]");
+        }
+
+        // gate.hooks.deps-empty-mount-once — UseEffect(fn, DepKey.Empty) runs exactly once across N re-renders.
+        {
+            var rt = new ReactiveRuntime();
+            var mo = new MountOnceProbe(); mo.Context.Runtime = rt;
+            mo.RenderWithHooks(); PumpEffects(mo.Context);
+            for (int i = 0; i < 5; i++) { mo.RenderWithHooks(); PumpEffects(mo.Context); }
+            Check("gate.hooks.deps-empty-mount-once", mo.Runs == 1, $"runs={mo.Runs} over 6 renders");
+        }
+
+        // gate.hooks.depkey-string-tuple-parity — (string,int) deps re-fire on either changing, not on equal re-supply.
+        {
+            var rt = new ReactiveRuntime();
+            var sp = new StringTupleProbe(); sp.Context.Runtime = rt;
+            sp.S = "a"; sp.I = 1; sp.RenderWithHooks(); PumpEffects(sp.Context);   // Runs=1
+            sp.RenderWithHooks(); PumpEffects(sp.Context);                         // equal → Runs=1
+            sp.S = "b"; sp.RenderWithHooks(); PumpEffects(sp.Context);             // string changed → Runs=2
+            sp.I = 2; sp.RenderWithHooks(); PumpEffects(sp.Context);               // int changed → Runs=3
+            sp.RenderWithHooks(); PumpEffects(sp.Context);                         // equal → Runs=3
+            Check("gate.hooks.depkey-string-tuple-parity", sp.Runs == 3, $"runs={sp.Runs} (want 3)");
+        }
+
+        // gate.hooks.depkey-fromref-identity — FromRef re-fires on instance swap, not on an unchanged instance.
+        {
+            var rt = new ReactiveRuntime();
+            var fp = new FromRefProbe(); fp.Context.Runtime = rt;
+            fp.RenderWithHooks(); PumpEffects(fp.Context);   // Runs=1
+            fp.RenderWithHooks(); PumpEffects(fp.Context);   // same instance → Runs=1
+            fp.RenderWithHooks(); PumpEffects(fp.Context);   // still same instance → Runs=1
+            bool stable = fp.Runs == 1;
+            fp.Obj = new object(); fp.RenderWithHooks(); PumpEffects(fp.Context);   // swapped → Runs=2
+            Check("gate.hooks.depkey-fromref-identity", stable && fp.Runs == 2, $"runs={fp.Runs} (want 2 after swap)");
+        }
+
+        // gate.signal.setifchanged — false+no-notify on equal, true+notify on change; always-notify notifies on equal set.
+        {
+            var rt = new ReactiveRuntime();
+            var s = new Signal<int>(0);
+            int notifs = 0;
+            _ = new Effect(rt, () => { _ = s.Value; notifs++; });   // subscribes; runs now (notifs=1)
+            bool eqFalse = !s.SetIfChanged(0); rt.Flush(); bool noNotify = notifs == 1;
+            bool changeTrue = s.SetIfChanged(5); rt.Flush(); bool didNotify = notifs == 2;
+            var an = Signal.AlwaysNotify(0);
+            int anNotifs = 0;
+            _ = new Effect(rt, () => { _ = an.Value; anNotifs++; });   // notifs -> 1
+            bool anTrue = an.SetIfChanged(0); rt.Flush(); bool alwaysNotified = anNotifs == 2;   // equal set still notifies
+            Check("gate.signal.setifchanged", eqFalse && noNotify && changeTrue && didNotify && anTrue && alwaysNotified,
+                $"eqFalse={eqFalse} noNotify={noNotify} changeTrue={changeTrue} didNotify={didNotify} alwaysNotify={alwaysNotified}");
+        }
+
+        // gate.prop.bind-named-ctor — Prop.Bind over a Memo-typed-as-IReadSignal wires a live binding that re-fires on write.
+        {
+            var rt = new ReactiveRuntime();
+            var src = new Signal<int>(3);
+            var memo = new Memo<int>(rt, () => src.Value * 2);
+            IReadSignal<int> asInterface = memo;
+            var prop = Prop.Bind(asInterface);
+            bool bound = prop.IsBound && ReferenceEquals(prop.Signal, memo);
+            int v1 = prop.Signal!.Peek();       // 6
+            src.Value = 10; rt.Flush();
+            int v2 = prop.Signal!.Peek();       // 20 — the bound source tracks writes
+            Check("gate.prop.bind-named-ctor", bound && v1 == 6 && v2 == 20, $"bound={bound} {v1}->{v2}");
+        }
+    }
+
+    // G4a — the call-site-keyed hook substrate DECISION gates: conditional hooks, looped hooks, zero-alloc lookup,
+    // plus UseRequiredContext, the BindContract flip tripwire, and the backwards-write tripwire.
+    static void HookSubstrateChecks(StringTable strings)
+    {
+        // gate.hooks.substrate-conditional — a hook inside `if` gains/loses its cell WITHOUT corrupting its neighbours;
+        // the skipped hook's state survives for when the branch is re-entered (the thing positional cursor cells cannot do).
+        {
+            var rt = new ReactiveRuntime();
+            var p = new ConditionalHookProbe(); p.Context.Runtime = rt;
+            p.IncludeMiddle = true; p.RenderWithHooks();            // mount: Top=10 Middle=20 Bottom=30
+            p.Top.Set(11); p.Middle.Set(21); p.Bottom.Set(31);
+            p.RenderWithHooks();
+            bool r1 = p.Top.Value == 11 && p.Middle.Value == 21 && p.Bottom.Value == 31;
+            p.IncludeMiddle = false; p.RenderWithHooks();          // Middle skipped — Bottom must stay 31 (NOT inherit Middle's cell)
+            bool r2 = p.Top.Value == 11 && p.Bottom.Value == 31;
+            p.Bottom.Set(32); p.RenderWithHooks();
+            bool r3 = p.Top.Value == 11 && p.Bottom.Value == 32;
+            p.IncludeMiddle = true; p.RenderWithHooks();           // Middle re-enters — its state (21) is preserved
+            bool r4 = p.Middle.Value == 21 && p.Top.Value == 11 && p.Bottom.Value == 32;
+            Check("gate.hooks.substrate-conditional a conditional hook gains/loses its cell without shifting neighbours; skipped state survives",
+                r1 && r2 && r3 && r4, $"r1={r1} r2={r2} r3={r3} r4={r4} (Top={p.Top.Value} Middle={p.Middle.Value} Bottom={p.Bottom.Value})");
+        }
+
+        // gate.hooks.substrate-loop — hooks in a loop keyed per ordinal keep per-iteration state across a count change.
+        {
+            var rt = new ReactiveRuntime();
+            var p = new LoopHookProbe(); p.Context.Runtime = rt;
+            p.Count = 3; p.RenderWithHooks();
+            p.Sigs[0].Value = 1; p.Sigs[1].Value = 101; p.Sigs[2].Value = 201;
+            p.RenderWithHooks();
+            bool keep = p.Sigs[0].Peek() == 1 && p.Sigs[1].Peek() == 101 && p.Sigs[2].Peek() == 201;
+            p.Count = 4; p.RenderWithHooks();                      // append at end → first 3 keep state, 4th mounts fresh (300)
+            bool grow = p.Sigs.Count == 4 && p.Sigs[0].Peek() == 1 && p.Sigs[1].Peek() == 101 && p.Sigs[2].Peek() == 201 && p.Sigs[3].Peek() == 300;
+            p.Count = 2; p.RenderWithHooks();                      // remove at end → first 2 keep state
+            bool shrink = p.Sigs.Count == 2 && p.Sigs[0].Peek() == 1 && p.Sigs[1].Peek() == 101;
+            Check("gate.hooks.substrate-loop looped hooks keyed per ordinal keep per-iteration state across grow/shrink",
+                keep && grow && shrink, $"keep={keep} grow={grow} shrink={shrink}");
+        }
+
+        // gate.hooks.substrate-alloc — the keyed lookup on a steady re-render allocates 0 bytes in the hot window.
+        {
+            var rt = new ReactiveRuntime();
+            var p = new SteadyHookProbe(); p.Context.Runtime = rt;
+            p.RenderWithHooks(); p.RenderWithHooks(); p.RenderWithHooks();   // warm (JIT + mount + dict capacity)
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 200; i++) p.RenderWithHooks();
+            long delta = GC.GetAllocatedBytesForCurrentThread() - before;
+            Check("gate.hooks.substrate-alloc keyed cell lookup is 0-alloc on a steady re-render", delta == 0, $"delta={delta}B/200 renders");
+        }
+
+        // gate.ctx.required — UseRequiredContext throws (naming the type) when unprovided; returns the value when
+        // provided; survives a parked re-render (resolves via the parked _ctxResolveCache fallback).
+        {
+            var channel = new Context<string>("dflt");
+            var ctx = new RenderContext();
+            bool unprovidedThrows = false; string? msg = null;
+            try { ctx.UseRequiredContext(channel); } catch (InvalidOperationException ex) { unprovidedThrows = true; msg = ex.Message; }
+            bool named = msg is not null && msg.Contains("String");
+
+            var provided = new Signal<object?>("hello");
+            ctx.ResolveContextSignal = (a, c) => ReferenceEquals(c, channel) ? provided : null;
+            string got = ctx.UseRequiredContext(channel);                    // resolves + caches
+            ctx.ResolveContextSignal = (a, c) => null;                       // simulate a PARKED (detached) re-render
+            string parked = ctx.UseRequiredContext(channel);                 // reuses the cached provider signal
+
+            var ctx2 = new RenderContext();
+            var nullSig = new Signal<object?>(null);
+            ctx2.ResolveContextSignal = (a, c) => nullSig;                   // provider carrying null → must also throw
+            bool nullThrows = false;
+            try { ctx2.UseRequiredContext(channel); } catch (InvalidOperationException) { nullThrows = true; }
+
+            Check("gate.ctx.required throws (named) when unprovided/null; returns the value; survives a parked re-render",
+                unprovidedThrows && named && got == "hello" && parked == "hello" && nullThrows,
+                $"threw={unprovidedThrows} named={named} got={got} parked={parked} nullThrows={nullThrows}");
+        }
+
+        // gate.bind.contract-flip — a bound↔static flip on a REUSED node trips BindContract; a fresh-thunk re-render does NOT.
+        {
+            bool prevEnabled = BindContract.Enabled, prevThrow = BindContract.ThrowOnViolation;
+            BindContract.Enabled = true; BindContract.ThrowOnViolation = false;
+            try
+            {
+                var sig = new Signal<FluentGpu.Foundation.ColorF>(FluentGpu.Foundation.ColorF.Transparent);
+
+                BindContract.Reset();
+                var s1 = new SceneStore(); var r1 = new TreeReconciler(s1, strings);
+                var e1 = new BoxEl { Width = 10, Height = 10, Fill = FluentGpu.Foundation.ColorF.Transparent };   // static
+                var e2 = new BoxEl { Width = 10, Height = 10, Fill = sig };                                       // bound
+                r1.ReconcileRoot(e1, null); r1.ReconcileRoot(e2, e1);
+                bool staticToBound = BindContract.Violations == 1 && BindContract.LastViolation!.Contains("Fill");
+
+                BindContract.Reset();
+                var s2 = new SceneStore(); var r2 = new TreeReconciler(s2, strings);
+                var f1 = new BoxEl { Width = 10, Height = 10, Fill = sig };                                       // bound
+                var f2 = new BoxEl { Width = 10, Height = 10, Fill = FluentGpu.Foundation.ColorF.Transparent };   // static
+                r2.ReconcileRoot(f1, null); r2.ReconcileRoot(f2, f1);
+                bool boundToStatic = BindContract.Violations == 1;
+
+                BindContract.Reset();
+                var s3 = new SceneStore(); var r3 = new TreeReconciler(s3, strings);
+                var g1 = new BoxEl { Width = 10, Height = 10, Fill = Prop.Of(() => FluentGpu.Foundation.ColorF.Transparent) };   // bound (thunk)
+                var g2 = new BoxEl { Width = 10, Height = 10, Fill = Prop.Of(() => FluentGpu.Foundation.ColorF.Transparent) };   // FRESH thunk, same shape → NOT a flip
+                r3.ReconcileRoot(g1, null); r3.ReconcileRoot(g2, g1);
+                bool thunkQuiet = BindContract.Violations == 0;
+
+                Check("gate.bind.contract-flip bound↔static flip on a reused node trips; a fresh-thunk re-render does not",
+                    staticToBound && boundToStatic && thunkQuiet,
+                    $"staticToBound={staticToBound} boundToStatic={boundToStatic} thunkQuiet={thunkQuiet}");
+            }
+            finally { BindContract.Enabled = prevEnabled; BindContract.ThrowOnViolation = prevThrow; }
+        }
+
+        // gate.signal.backwards-write-tripwire — an effect that reads+writes the same signal trips once; a normal effect does not.
+        {
+            bool prevEnabled = BackwardsWriteGuard.Enabled, prevThrow = BackwardsWriteGuard.ThrowOnViolation;
+            BackwardsWriteGuard.Enabled = true; BackwardsWriteGuard.ThrowOnViolation = false;
+            try
+            {
+                var rt = new ReactiveRuntime();
+                BackwardsWriteGuard.Reset();
+                var sig = new Signal<int>(5);
+                _ = new Effect(rt, () => { int v = sig.Value; sig.Value = v; });   // read (subscribe) then write the SAME signal
+                bool tripped = BackwardsWriteGuard.Violations >= 1 && BackwardsWriteGuard.LastViolation!.Contains("Signal");
+
+                BackwardsWriteGuard.Reset();
+                var a = new Signal<int>(1); var b = new Signal<int>(2);
+                _ = new Effect(rt, () => { int v = a.Value; b.Value = v; });       // reads A, writes B → no convergence risk
+                bool clean = BackwardsWriteGuard.Violations == 0;
+
+                Check("gate.signal.backwards-write-tripwire an effect reading+writing the same signal trips once; a normal effect does not",
+                    tripped && clean, $"tripped={tripped} clean={clean}");
+            }
+            finally { BackwardsWriteGuard.Enabled = prevEnabled; BackwardsWriteGuard.ThrowOnViolation = prevThrow; }
+        }
+    }
+
+    // G4b — Component/ReactiveComponent unification (one tracked model; run-once inferred; RethemeAll re-runs in place)
+    // + per-component ReactiveScope ownership (render-effect + hook cleanups owned by one scope disposed at unmount;
+    // KeepAlive parking never disposes it). Bindings stay NODE-owned (they outlive a render but die with their node).
+    static void UnifyChecks(StringTable strings)
+    {
+        // gate.unify.signal-free-render-once — a render that reads no signals runs exactly once, even while an unrelated
+        // sibling re-renders across many flushes (run-once is a consequence of subscribing to nothing, not a mode).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("unify-once", new Size2(200, 200), 1f));
+            window.Show();
+            var root = new SignalFreeRoot();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, root);
+            host.RunFrame();
+            bool mountedOnce = root.Probe.Renders == 1 && root.RootRenders == 1;
+            for (int i = 0; i < 5; i++) { root.Unrelated!.Value = i + 1; host.RunFrame(); }
+            bool rootReran = root.RootRenders >= 6;          // the root really re-rendered on each unrelated flush…
+            bool childStillOnce = root.Probe.Renders == 1;   // …but the signal-free child never did
+            Check("gate.unify.signal-free-render-once a signal-free render runs exactly once across unrelated flushes",
+                mountedOnce && rootReran && childStillOnce,
+                $"childRenders={root.Probe.Renders} rootRenders={root.RootRenders}");
+        }
+
+        // gate.unify.retheme-in-place — RethemeAll re-runs a run-once component's render IN PLACE: token color updates,
+        // hook state + node identity preserved (no remount). Replaces the deleted ReactiveComponent.InvalidateTree path.
+        {
+            ThemeKind saved = Tok.Theme;
+            try
+            {
+                Tok.Use(ThemeKind.Dark);
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("unify-retheme", new Size2(240, 120), 1f));
+                window.Show();
+                var probe = new RethemeInPlaceProbe();
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe);
+                host.RunFrame();
+                bool once = probe.Renders == 1;
+                probe.SetState!(42); host.RunFrame();
+                bool stateWrite = probe.SeenState == 42 && probe.Renders == 2;
+                var textNode = FindTextNode(host.Scene, strings, host.Scene.Root, "g4b-themed");
+                ColorF darkColor = host.Scene.Paint(textNode).TextColor;
+
+                Tok.Use(ThemeKind.Light);
+                host.Reconciler.RethemeAll();
+                host.RunFrame();
+                var textAfter = FindTextNode(host.Scene, strings, host.Scene.Root, "g4b-themed");
+                bool sameNode = !textAfter.IsNull && textAfter == textNode;
+                bool colorUpdated = darkColor != Tok.TextPrimary && host.Scene.Paint(textAfter).TextColor == Tok.TextPrimary;
+                bool statePreserved = probe.SeenState == 42 && probe.Renders == 3;   // re-rendered in place; state survived
+                Check("gate.unify.retheme-in-place RethemeAll re-runs a run-once render in place (color updates; state + node identity preserved)",
+                    once && stateWrite && sameNode && colorUpdated && statePreserved,
+                    $"once={once} stateWrite={stateWrite} sameNode={sameNode} colorUpdated={colorUpdated} statePreserved={statePreserved} renders={probe.Renders}");
+            }
+            finally { Tok.Use(saved); }
+        }
+
+        // gate.unify.scope-owns-lifetime — unmount == Scope.Dispose(): it disposes the render-effect (the signal it read
+        // has zero subscribers afterward) AND runs the hook cleanups exactly once, both via the ONE per-component scope.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("unify-scope", new Size2(200, 200), 1f));
+            window.Show();
+            var root = new ScopeLifetimeRoot();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, root);
+            host.RunFrame();
+            var c = root.C;
+            bool mounted = c.Renders == 1 && c.Cleanups == 0 && c.Dep.SubscriberCount == 1;
+            c.Dep.Value = 1; host.RunFrame();
+            bool reran = c.Renders == 2 && c.Cleanups == 0;
+            c.Show.Value = false; host.RunFrame();               // unmount the child
+            bool cleanedOnce = c.Cleanups == 1;
+            bool effectDisposed = c.Dep.SubscriberCount == 0;    // render-effect unsubscribed ⇒ disposed via the scope
+            c.Dep.Value = 2; host.RunFrame();                    // a post-unmount write must not re-run or re-clean
+            bool inert = c.Renders == 2 && c.Cleanups == 1;
+            Check("gate.unify.scope-owns-lifetime unmount disposes the render-effect + runs hook cleanups exactly once, via the scope",
+                mounted && reran && cleanedOnce && effectDisposed && inert,
+                $"renders={c.Renders} cleanups={c.Cleanups} subs={c.Dep.SubscriberCount}");
+        }
+
+        // gate.unify.scope-keepalive-parks — parking does NOT dispose the scope: the page instance + hook state survive,
+        // a parked page defers renders (no re-render even when a signal it read changes), and reactivation replays once.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("unify-park", new Size2(200, 200), 1f));
+            window.Show();
+            var probe = new ScopeParkProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe);
+            host.RunFrame();
+            bool mountA = probe.Renders["a"] == 1 && probe.Constructions["a"] == 1;
+            probe.Ping.Value = 1; host.RunFrame();
+            bool activeReran = probe.Renders["a"] == 2;                        // active + subscribed → re-renders
+            probe.Route!.Value = "b"; host.RunFrame();                         // park "a", mount "b"
+            bool parkedMountB = probe.Renders.GetValueOrDefault("b") == 1 && probe.Renders["a"] == 2;
+            probe.Ping.Value = 2; host.RunFrame();                             // write a signal "a" read while it is parked
+            bool parkedDeferred = probe.Renders["a"] == 2;                     // parked ⇒ deferred, NOT re-rendered
+            probe.Route.Value = "a"; host.RunFrame();                          // reactivate "a"
+            bool reactivateReplayOnce = probe.Renders["a"] == 3 && probe.Constructions["a"] == 1;   // replayed once; never reconstructed ⇒ scope preserved
+            Check("gate.unify.scope-keepalive-parks parking keeps the scope (state survives, parked defers renders, reactivation replays once)",
+                mountA && activeReran && parkedMountB && parkedDeferred && reactivateReplayOnce,
+                $"rendersA={probe.Renders.GetValueOrDefault("a")} rendersB={probe.Renders.GetValueOrDefault("b")} ctorA={probe.Constructions.GetValueOrDefault("a")}");
+        }
+    }
+
     // Native form validation (form-validation.md): the signals-native core — gated error memo, cross-field via sibling
     // reads, submit gating, server-error merge, zero-alloc rule evaluation, and form deregistration on unmount.
     static void ValidationChecks()
@@ -4799,6 +6083,290 @@ static class Slice
             ReuseGuard.Enabled = prevEnabled;
             ReuseGuard.ThrowOnViolation = prevThrow;
             ReuseGuard.Reset();
+        }
+    }
+
+    // G4c — RE-PUSHED live props for embedded components (Embed.Comp(props, factory) → UseProps<T>()). Delivery is at the
+    // reconciler reuse seam into a per-instance PropsSig (equality-gated), the same physics as a context-provider signal.
+    static void PropsChannelChecks(StringTable strings)
+    {
+        // gate.props.repush-reaches-instance — a CHANGED props record reaches the SAME instance (no remount, node
+        // identity preserved), re-rendering it exactly once with the new value.
+        {
+            var scene = new SceneStore();
+            var recon = new TreeReconciler(scene, strings);
+            var child = new PropsChild();
+            int ctor = 0;
+            Element Tree(int n) => new BoxEl { Children = [Embed.Comp(new PropsPayload(n), () => { ctor++; return child; })] };
+            var t1 = Tree(1); recon.ReconcileRoot(t1, null); recon.Runtime.Flush();
+            var nodeBefore = scene.FirstChild(scene.Root);
+            bool mount = child.Renders == 1 && child.LastN == 1 && ctor == 1;
+            var t2 = Tree(2); recon.ReconcileRoot(t2, t1); recon.Runtime.Flush();
+            var nodeAfter = scene.FirstChild(scene.Root);
+            bool reached = ctor == 1 && nodeBefore == nodeAfter && child.Renders == 2 && child.LastN == 2;
+            Check("gate.props.repush-reaches-instance changed props re-render the SAME reused instance once (no remount)",
+                mount && reached, $"mount={mount} ctor={ctor} sameNode={nodeBefore == nodeAfter} renders={child.Renders} lastN={child.LastN}");
+        }
+
+        // gate.props.equality-gated — a fresh-but-EQUAL-VALUE record (different instance, equal fields) → no re-render.
+        {
+            var scene = new SceneStore();
+            var recon = new TreeReconciler(scene, strings);
+            var child = new PropsChild();
+            Element Tree(PropsPayload p) => new BoxEl { Children = [Embed.Comp(p, () => child)] };
+            var t1 = Tree(new PropsPayload(7)); recon.ReconcileRoot(t1, null); recon.Runtime.Flush();
+            int afterMount = child.Renders;
+            var t2 = Tree(new PropsPayload(7)); recon.ReconcileRoot(t2, t1); recon.Runtime.Flush();   // fresh, equal
+            Check("gate.props.equality-gated a fresh-but-equal props record does not re-render the child",
+                afterMount == 1 && child.Renders == 1 && child.LastN == 7, $"afterMount={afterMount} renders={child.Renders}");
+        }
+
+        // gate.props.ref-shortcircuit — the SAME reference re-supplied → the record Equals is NEVER walked and the child
+        // is not re-rendered (the reuse seam short-circuits on ReferenceEquals BEFORE the equality-gated write).
+        {
+            CountingProps.EqualsCalls = 0;
+            var scene = new SceneStore();
+            var recon = new TreeReconciler(scene, strings);
+            var child = new CountingPropsChild();
+            var shared = new CountingProps(3);
+            Element Tree() => new BoxEl { Children = [Embed.Comp(shared, () => child)] };
+            var t1 = Tree(); recon.ReconcileRoot(t1, null); recon.Runtime.Flush();
+            int equalsAfterMount = CountingProps.EqualsCalls;   // seeding the signal never compares
+            int rendersAfterMount = child.Renders;
+            var t2 = Tree(); recon.ReconcileRoot(t2, t1); recon.Runtime.Flush();   // SAME shared reference re-pushed
+            bool noEqualsWalk = CountingProps.EqualsCalls == equalsAfterMount;
+            bool noRerender = child.Renders == rendersAfterMount;
+            Check("gate.props.ref-shortcircuit same reference re-supplied → no record-Equals walk, no re-render",
+                equalsAfterMount == 0 && noEqualsWalk && noRerender, $"equals={CountingProps.EqualsCalls} renders={child.Renders}");
+        }
+
+        // gate.props.element-slot-repush — an Element-typed prop (slot) re-pushed → the child subtree reconciles IN PLACE
+        // (slot node identity preserved), and a sibling component's UseState in the child survives.
+        {
+            var scene = new SceneStore();
+            var recon = new TreeReconciler(scene, strings);
+            var child = new PropsChild { HostKeeper = true };
+            Element Tree(Element slot) => new BoxEl { Children = [Embed.Comp(new PropsPayload(0, slot), () => child)] };
+            var slotA = new TextEl("A") { Size = 12f };
+            var t1 = Tree(slotA); recon.ReconcileRoot(t1, null); recon.Runtime.Flush();
+            // root box → PropsChild anchor → child's rendered box → slot (TextEl) node.
+            NodeHandle SlotNode() => scene.FirstChild(scene.FirstChild(scene.FirstChild(scene.Root)));
+            var slotNodeBefore = SlotNode();
+            child.Keeper.Bump!(); recon.Runtime.Flush();                            // sibling state 0 → 1
+            bool keeperTicked = child.Keeper.Ticks == 1;
+            var slotB = new TextEl("B") { Size = 12f };
+            var t2 = Tree(slotB); recon.ReconcileRoot(t2, t1); recon.Runtime.Flush();   // re-push a DIFFERENT slot
+            var slotNodeAfter = SlotNode();
+            bool inPlace = slotNodeBefore == slotNodeAfter;                         // same TextEl node reconciled in place
+            bool siblingSurvived = child.Keeper.Ticks == 1;                         // UseState survived the slot re-push
+            Check("gate.props.element-slot-repush slot re-push reconciles in place; sibling UseState survives",
+                child.Renders == 2 && keeperTicked && inPlace && siblingSurvived,
+                $"renders={child.Renders} inPlace={inPlace} keeper={child.Keeper.Ticks}");
+        }
+
+        // gate.props.key-remount — same type + equal props but a CHANGED Key → fresh instance (state reset), one level
+        // above the reuse seam (the keyed child diff).
+        {
+            var scene = new SceneStore();
+            var recon = new TreeReconciler(scene, strings);
+            int ctor = 0;
+            Element Tree(int key, int n) => new BoxEl { Children = [Embed.Comp(new PropsPayload(n), () => { ctor++; return new PropsChild(); }) with { Key = "k" + key }] };
+            var t1 = Tree(1, 5); recon.ReconcileRoot(t1, null); recon.Runtime.Flush();
+            bool mount = ctor == 1;
+            var t2 = Tree(2, 5); recon.ReconcileRoot(t2, t1); recon.Runtime.Flush();   // equal props, changed Key
+            Check("gate.props.key-remount a changed Key remounts a fresh instance despite equal props",
+                mount && ctor == 2, $"ctor={ctor}");
+        }
+
+        // gate.props.parked-defers-replays-latest — a props write while parked defers (zero renders), and reactivation
+        // replays exactly ONCE reading the LATEST value.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("props-park", new Size2(200, 200), 1f));
+            window.Show();
+            var probe = new PropsParkProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe);
+            host.RunFrame();
+            var childA = probe.Children["a"];
+            bool mountA = childA.Renders == 1 && childA.LastN == 0;
+            probe.Route!.Value = "b"; host.RunFrame();                                                   // park "a", mount "b"
+            probe.ChildN.Value = 1; childA.Context.PropsSig!.Value = new PropsPayload(1); host.RunFrame();   // push reaches the PARKED entry
+            bool deferred1 = childA.Renders == 1;
+            probe.ChildN.Value = 2; childA.Context.PropsSig!.Value = new PropsPayload(2); host.RunFrame();   // latest push, still parked
+            bool deferred2 = childA.Renders == 1;
+            probe.Route.Value = "a"; host.RunFrame();                                                    // reactivate "a" (re-push carries the latest)
+            bool replayOnceLatest = childA.Renders == 2 && childA.LastN == 2;
+            Check("gate.props.parked-defers-replays-latest parked defers props renders; reactivation replays once with the latest",
+                mountA && deferred1 && deferred2 && replayOnceLatest,
+                $"renders={childA.Renders} lastN={childA.LastN} deferred={deferred1 && deferred2}");
+        }
+
+        // gate.props.single-flush-coalesce — a parent write + props delivery + child re-render all settle within ONE
+        // flush (no torn intermediate, nothing owed to the next frame).
+        {
+            var scene = new SceneStore();
+            var rt = new ReactiveRuntime();
+            var recon = new TreeReconciler(scene, strings, rt);
+            var driver = new Signal<int>(0);
+            var parent = new PropsFlushParent(driver);
+            recon.MountRoot(parent);                                 // mount: parent+child render once, child sees 0
+            bool mount = parent.Renders == 1 && parent.Child.Renders == 1 && parent.Child.LastN == 0;
+            driver.Value = 1;                                        // schedule the parent re-render
+            rt.Flush();                                              // ONE flush drains parent → delivers → child
+            bool coalesced = parent.Renders == 2 && parent.Child.Renders == 2 && parent.Child.LastN == 1 && !rt.HasPending;
+            Check("gate.props.single-flush-coalesce parent write + delivery + child re-render settle in one flush",
+                mount && coalesced, $"parent={parent.Renders} child={parent.Child.Renders} lastN={parent.Child.LastN} pending={rt.HasPending}");
+        }
+
+        // gate.props.zero-hot-alloc — steady-state ref-equal re-pushes add NO subscriber (the render-effect is the sole
+        // PropsSig subscriber) and never re-render; the flush hot-window stays 0-alloc.
+        {
+            var scene = new SceneStore();
+            var recon = new TreeReconciler(scene, strings);
+            var child = new PropsChild();
+            var shared = new PropsPayload(4);
+            var t1 = new BoxEl { Children = [Embed.Comp(shared, () => child)] };
+            var t2 = new BoxEl { Children = [Embed.Comp(shared, () => child)] };
+            recon.ReconcileRoot(t1, null); recon.Runtime.Flush();
+            bool oneSubscriber = child.Context.PropsSig!.SubscriberCount == 1;
+            for (int w = 0; w < 6; w++) { recon.ReconcileRoot(w % 2 == 0 ? t2 : t1, w % 2 == 0 ? t1 : t2); recon.Runtime.Flush(); }
+            bool stillOne = child.Context.PropsSig!.SubscriberCount == 1;
+            bool neverRerendered = child.Renders == 1;
+            recon.ReconcileRoot(t2, t1); recon.Runtime.Flush();   // warm a ref-equal delivery (short-circuited)
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 500; i++) recon.Runtime.Flush();
+            long delta = GC.GetAllocatedBytesForCurrentThread() - before;
+            Check("gate.props.zero-hot-alloc ref-equal re-push adds no subscriber, never re-renders; hot-window flush is 0-alloc",
+                oneSubscriber && stillOne && neverRerendered && delta == 0,
+                $"subs={child.Context.PropsSig!.SubscriberCount} renders={child.Renders} flushDelta={delta}B");
+        }
+
+        // gate.props.useprops-throws-propless — UseProps<T> on a propless mount THROWS naming the component + props type;
+        // UsePropsOrDefault returns null propless, the value when present.
+        {
+            var scene = new SceneStore();
+            var recon = new TreeReconciler(scene, strings);
+            var thrower = new PropsChild();
+            bool threw = false; string msg = "";
+            try { recon.ReconcileRoot(new BoxEl { Children = [Embed.Comp(() => thrower)] }, null); recon.Runtime.Flush(); }
+            catch (InvalidOperationException ex) { threw = true; msg = ex.Message; }
+            bool named = msg.Contains("PropsPayload") && msg.Contains(nameof(PropsChild));
+
+            var scene2 = new SceneStore(); var recon2 = new TreeReconciler(scene2, strings);
+            var opt = new OptionalPropsChild();
+            recon2.ReconcileRoot(new BoxEl { Children = [Embed.Comp(() => opt)] }, null); recon2.Runtime.Flush();
+            bool nullPropless = opt.SawNull;
+
+            var scene3 = new SceneStore(); var recon3 = new TreeReconciler(scene3, strings);
+            var opt2 = new OptionalPropsChild();
+            recon3.ReconcileRoot(new BoxEl { Children = [Embed.Comp(new PropsPayload(9), () => opt2)] }, null); recon3.Runtime.Flush();
+            bool valuePresent = !opt2.SawNull;
+
+            Check("gate.props.useprops-throws-propless UseProps throws (naming component+props) propless; UsePropsOrDefault null propless, value when present",
+                threw && named && nullPropless && valuePresent, $"threw={threw} named={named} nullPropless={nullPropless} valuePresent={valuePresent}");
+        }
+    }
+
+    // G4e — the [Props] source generator (master plan §WS1 P5). A [Props] partial component gets per-field signal-backed
+    // storage, subscribing getters, XxxProp bind accessors, a PropsData transport, and IPropsHost.ApplyProps — so a
+    // signal-backed field re-renders the core on change, a delegate field is a stable latest-write forwarder that never
+    // re-renders, and a bound XxxProp accessor updates compositor-only.
+    static void PropsGenChecks(StringTable strings)
+    {
+        // gate.props.gen.field-level — changing ONE generated (signal-backed) prop re-renders the core once; supplying a
+        // FRESH delegate (new lambda, all signal-backed fields unchanged) does NOT re-render; the wired handler (the
+        // captured stable forwarder) invokes the NEWEST delegate.
+        {
+            var scene = new SceneStore();
+            var recon = new TreeReconciler(scene, strings);
+            var probe = new PropsGenProbe();
+            int pings = 0;
+            Element Tree(int count, string label, float alpha, Action? onPing)
+                => new BoxEl { Children = [Embed.Comp(new PropsGenProbe.PropsData(count, label, alpha, onPing), () => probe)] };
+            var t1 = Tree(1, "a", 0.5f, () => pings++); recon.ReconcileRoot(t1, null); recon.Runtime.Flush();
+            bool mount = probe.Renders == 1 && probe.LastCount == 1;
+            var t2 = Tree(2, "a", 0.5f, () => pings++); recon.ReconcileRoot(t2, t1); recon.Runtime.Flush();   // one signal field changed
+            bool changedReRenders = probe.Renders == 2 && probe.LastCount == 2;
+            Action fresh = () => pings += 10;
+            var t3 = Tree(2, "a", 0.5f, fresh); recon.ReconcileRoot(t3, t2); recon.Runtime.Flush();           // only a fresh delegate
+            bool freshNoRerender = probe.Renders == 2;
+            probe.Wired!.Invoke();                                                                            // stable forwarder → newest
+            bool invokesNewest = pings == 10;
+            Check("gate.props.gen.field-level a changed signal-prop re-renders; a fresh delegate does not; the forwarder invokes the newest",
+                mount && changedReRenders && freshNoRerender && invokesNewest,
+                $"mount={mount} changed={changedReRenders} freshNoRerender={freshNoRerender} pings={pings}");
+        }
+
+        // gate.props.gen.batch-coalesce — ApplyProps writing TWO changed fields (wrapped in Runtime.Batch at the reuse
+        // seam) re-renders the core EXACTLY ONCE, both values landed (no torn intermediate, no double render).
+        {
+            var scene = new SceneStore();
+            var recon = new TreeReconciler(scene, strings);
+            var probe = new PropsGenProbe();
+            Element Tree(int c, string l) => new BoxEl { Children = [Embed.Comp(new PropsGenProbe.PropsData(c, l, 0.5f, null), () => probe)] };
+            var t1 = Tree(1, "a"); recon.ReconcileRoot(t1, null); recon.Runtime.Flush();
+            bool mount = probe.Renders == 1;
+            var t2 = Tree(2, "b"); recon.ReconcileRoot(t2, t1); recon.Runtime.Flush();   // two signal fields change at once
+            bool once = probe.Renders == 2 && probe.LastCount == 2 && probe.LastLabel == "b";
+            Check("gate.props.gen.batch-coalesce ApplyProps writing two changed fields re-renders the core exactly once (Batch wrap)",
+                mount && once, $"renders={probe.Renders} count={probe.LastCount} label={probe.LastLabel}");
+        }
+
+        // gate.props.gen.bind-direct — a NameProp accessor (AlphaProp) bound to a node channel (Opacity) updates
+        // compositor-only when the field changes: FrameStats.Rendered == false, no component re-render.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("props-gen-bind", new Size2(120, 120), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var probe = new PropsGenProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, new W0fStaticProbe
+            {
+                Build = () => new BoxEl { Children = [Embed.Comp(new PropsGenProbe.PropsData(1, "a", 0.5f, null), () => probe)] },
+            });
+            host.RunFrame();
+            int rendersAfterMount = probe.Renders;
+            float op0 = host.Scene.Paint(probe.Box).Opacity;
+            ((IPropsHost)probe).ApplyProps(new PropsGenProbe.PropsData(1, "a", 0.9f, null));   // change ONLY the bound field
+            var f = host.RunFrame();
+            float op1 = host.Scene.Paint(probe.Box).Opacity;
+            bool changed = Near(op1, 0.9f, 0.01f) && !Near(op0, op1, 0.01f);
+            bool compositorOnly = !f.Rendered && probe.Renders == rendersAfterMount;
+            Check("gate.props.gen.bind-direct AlphaProp bound to Opacity updates compositor-only (Rendered==false, no re-render)",
+                changed && compositorOnly, $"op {op0:0.00}->{op1:0.00} rendered={f.Rendered} renders+{probe.Renders - rendersAfterMount}");
+        }
+
+        // gate.props.gen.partial-notify — each of three fields notifies ONLY its own subscribers: Count/Label (read in
+        // render) re-fire the render-effect while the Alpha bind holds; Alpha (bound only) fires the bind effect while
+        // the render-effect is untouched (Rendered==false, no re-render).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("props-gen-partial", new Size2(120, 120), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var probe = new PropsGenProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, new W0fStaticProbe
+            {
+                Build = () => new BoxEl { Children = [Embed.Comp(new PropsGenProbe.PropsData(1, "a", 0.5f, null), () => probe)] },
+            });
+            host.RunFrame();
+            int r0 = probe.Renders;
+            float opMount = host.Scene.Paint(probe.Box).Opacity;
+            ((IPropsHost)probe).ApplyProps(new PropsGenProbe.PropsData(2, "a", 0.5f, null));   // only Count
+            var fCount = host.RunFrame();
+            bool countIsolated = probe.Renders == r0 + 1 && probe.LastCount == 2
+                && Near(host.Scene.Paint(probe.Box).Opacity, opMount, 0.01f) && fCount.Rendered;
+            ((IPropsHost)probe).ApplyProps(new PropsGenProbe.PropsData(2, "a", 0.8f, null));   // only Alpha (bound)
+            var fAlpha = host.RunFrame();
+            bool alphaIsolated = probe.Renders == r0 + 1 && !fAlpha.Rendered
+                && Near(host.Scene.Paint(probe.Box).Opacity, 0.8f, 0.01f);
+            ((IPropsHost)probe).ApplyProps(new PropsGenProbe.PropsData(2, "b", 0.8f, null));   // only Label
+            host.RunFrame();
+            bool labelIsolated = probe.Renders == r0 + 2 && probe.LastLabel == "b"
+                && Near(host.Scene.Paint(probe.Box).Opacity, 0.8f, 0.01f);
+            Check("gate.props.gen.partial-notify each field notifies only its own subscribers (Count/Label->render, Alpha->bind; others untouched)",
+                countIsolated && alphaIsolated && labelIsolated,
+                $"countIso={countIsolated} alphaIso={alphaIsolated} labelIso={labelIsolated} renders={probe.Renders}");
         }
     }
 
@@ -5069,6 +6637,59 @@ static class Slice
             Check("gate.blur.selfBlurHaloCoversKernel: the self-blur halo == the downsample schedule's KernelRadiusTexels(σ/down)·down support (σ26 ⇒ 80 px, lifting the old 32 px truncation)",
                 haloOk && liftsCap, $"haloOk={haloOk} r26={r26}{detail}");
         }
+
+        // gate.blur.tightWorkGeometry. A self blur has three distinct regions: the clipped output pixels, the subset of
+        // crisp source that can contribute to those pixels, and their union (the local RT work box). All conversions are
+        // conservative floor/ceil in physical pixels; blur sigma is already physical, so DPI scales geometry/clip but
+        // not the kernel halo. These are the portable invariants used by the D3D12 local-surface implementation.
+        {
+            static PushLayerCmd Layer(RectF rect, float sigma, RectF clip) => new(
+                rect, default, default, default, 0f, sigma, 0f, 0f,
+                Kind: (int)LayerKind.Blur, CompositeClip: clip);
+            static bool Is(SelfBlurPixelBox b, int x0, int y0, int x1, int y1)
+                => b.MinX == x0 && b.MinY == y0 && b.MaxX == x1 && b.MaxY == y1;
+
+            // DPI: floor left/top, ceil right/bottom, then add the physical (not DIP-scaled) sigma-3 halo of 9 px.
+            var dpiLayer = Layer(new RectF(10.25f, 20.25f, 100.5f, 40.5f), 3f, new RectF(0f, 0f, 200f, 100f));
+            var dpi = SelfBlurRegion.ComputeWork(in dpiLayer, 1.5f, 300, 150);
+            bool dpiOk = Is(dpi.VisibleOutput, 6, 21, 176, 101)
+                && Is(dpi.RequiredSource, 15, 30, 167, 92)
+                && Is(dpi.Work, 6, 21, 176, 101);
+            Check("gate.blur.tightWorkGeometry.dpi: DIP layer/clip scale conservatively while the physical sigma halo stays unscaled",
+                dpiOk, $"out={dpi.VisibleOutput} src={dpi.RequiredSource} work={dpi.Work}");
+
+            // Partial clip: only source within one halo of the 50x30 visible output is required. The far-left 128 px of
+            // the layer never contributes, and the work area is much smaller than its full 224x84 halo box.
+            var partialLayer = Layer(new RectF(100f, 100f, 200f, 60f), 4f, new RectF(240f, 110f, 50f, 30f));
+            var partial = SelfBlurRegion.ComputeWork(in partialLayer, 1f, 500, 300);
+            bool partialOk = Is(partial.VisibleOutput, 240, 110, 290, 140)
+                && Is(partial.RequiredSource, 228, 100, 300, 152)
+                && Is(partial.Work, 228, 100, 300, 152)
+                && partial.Work.AreaPx == 3744 && partial.Work.AreaPx < 224L * 84L;
+            Check("gate.blur.tightWorkGeometry.partialClip: clipped output pulls only its contributing crisp-source neighborhood",
+                partialOk, $"out={partial.VisibleOutput} src={partial.RequiredSource} work={partial.Work} area={partial.Work.AreaPx}");
+
+            // Canvas edge: off-canvas layer/halo pixels do not enter either source or output. A clip that touches only
+            // the blur halo still retains the narrow strip of layer source that contributes to it.
+            var edgeLayer = Layer(new RectF(-5f, 5f, 40f, 20f), 3f, RectF.Infinite);
+            var edge = SelfBlurRegion.ComputeWork(in edgeLayer, 1f, 100, 50);
+            var haloOnlyLayer = Layer(new RectF(100f, 100f, 200f, 60f), 4f, new RectF(305f, 110f, 5f, 30f));
+            var haloOnly = SelfBlurRegion.ComputeWork(in haloOnlyLayer, 1f, 500, 300);
+            bool edgesOk = Is(edge.VisibleOutput, 0, 0, 44, 34)
+                && Is(edge.RequiredSource, 0, 5, 35, 25)
+                && Is(edge.Work, 0, 0, 44, 34)
+                && Is(haloOnly.VisibleOutput, 305, 110, 310, 140)
+                && Is(haloOnly.RequiredSource, 293, 100, 300, 152)
+                && Is(haloOnly.Work, 293, 100, 310, 152);
+            Check("gate.blur.tightWorkGeometry.edges: canvas clamping is exact and a halo-only clip keeps its contributing source strip",
+                edgesOk, $"edge(out={edge.VisibleOutput} src={edge.RequiredSource}) halo(out={haloOnly.VisibleOutput} src={haloOnly.RequiredSource})");
+
+            var outsideLayer = Layer(new RectF(100f, 100f, 80f, 40f), 3f, new RectF(300f, 200f, 20f, 20f));
+            var outside = SelfBlurRegion.ComputeWork(in outsideLayer, 1f, 500, 300);
+            Check("gate.blur.tightWorkGeometry.outsideClip: a clip outside the halo schedules zero blur work",
+                outside.VisibleOutput.IsEmpty && outside.RequiredSource.IsEmpty && outside.Work.IsEmpty,
+                $"out={outside.VisibleOutput} src={outside.RequiredSource} work={outside.Work}");
+        }
     }
 
     // Expressive Motion Kit (transitions.dev adoption): the new named expressive curves, the per-node self-blur channel
@@ -5106,17 +6727,31 @@ static class Slice
             scene.Paint(node).BlurSigma = 8f;
             scene.Flags(node) &= ~(NodeFlags.PaintDirty | NodeFlags.LayoutDirty | NodeFlags.TransformDirty);
             engine.Animate(node, AnimChannel.BlurSigma, 8f, 0f, 100f, Easing.Linear);
+            bool intentSeeded = scene.Paint(node).BlurAnimationActive != 0;
             engine.Tick(0f);
             float b0 = scene.Paint(node).BlurSigma;
             engine.Tick(50f);
             float bMid = scene.Paint(node).BlurSigma;
             var fl = scene.Flags(node);
-            bool midOk = Near(bMid, 4f, 0.2f) && (fl & NodeFlags.PaintDirty) != 0 && (fl & NodeFlags.LayoutDirty) == 0;
+            bool midOk = Near(bMid, 4f, 0.2f) && scene.Paint(node).BlurAnimationActive != 0
+                && (fl & NodeFlags.PaintDirty) != 0 && (fl & NodeFlags.LayoutDirty) == 0;
             engine.Tick(60f);   // > 100ms → complete
             float bEnd = scene.Paint(node).BlurSigma;
-            bool doneOk = Near(bEnd, 0f, 1e-3f) && !engine.HasActive;
-            Check("EM.b AnimChannel.BlurSigma eases BlurSigma 8→0 (PaintDirty only, settles at 0)",
-                Near(b0, 8f, 0.1f) && midOk && doneOk, $"t0={b0:0.0} mid={bMid:0.0} end={bEnd:0.00}");
+            bool doneOk = Near(bEnd, 0f, 1e-3f) && !engine.HasActive && scene.Paint(node).BlurAnimationActive == 0;
+
+            // The bit follows slab lifecycle rather than sigma: KeepAlive parking turns it off without destroying
+            // the row, resume restores it, and cancellation clears it even if the last blur value remains.
+            engine.Animate(node, AnimChannel.BlurSigma, 0f, 8f, 100f, Easing.Linear);
+            bool reseeded = scene.Paint(node).BlurAnimationActive != 0;
+            engine.SetNodeParked(node, true);
+            bool parked = scene.Paint(node).BlurAnimationActive == 0;
+            engine.SetNodeParked(node, false);
+            bool resumed = scene.Paint(node).BlurAnimationActive != 0;
+            engine.Cancel(node, AnimChannel.BlurSigma);
+            bool cancelled = scene.Paint(node).BlurAnimationActive == 0;
+            Check("EM.b BlurSigma eases 8→0 and transient intent follows live/non-parked track lifecycle",
+                intentSeeded && Near(b0, 8f, 0.1f) && midOk && doneOk && reseeded && parked && resumed && cancelled,
+                $"intentSeed={intentSeeded} t0={b0:0.0} mid={bMid:0.0} end={bEnd:0.00} done={doneOk} park={parked}/{resumed} cancel={cancelled}");
         }
 
         // EM.c — the recorder wraps a node with Blur>0 in a balanced PushLayer{Blur} carrying its σ; a 0-blur node does not.
@@ -5125,7 +6760,7 @@ static class Slice
             var recon = new TreeReconciler(s, strings);
             recon.ReconcileRoot(new BoxEl
             {
-                Width = 80, Height = 60, Fill = ColorF.FromRgba(0x20, 0x20, 0x20),
+                Width = 80, Height = 60, ClipToBounds = true, Fill = ColorF.FromRgba(0x20, 0x20, 0x20),
                 Children = [new BoxEl { Width = 30, Height = 30, Blur = 6f, Fill = ColorF.FromRgba(0x60, 0xCD, 0xFF) }],
             }, null);
             new FlexLayout(s, new HeadlessFontSystem(strings)).Run(s.Root);
@@ -5133,9 +6768,26 @@ static class Slice
             SceneRecorder.Record(s, dl);
             var dev = new HeadlessGpuDevice();
             dev.SubmitDrawList(dl.Bytes, dl.SortKeys, new FrameInfo(new Size2(120, 80), 1f, ColorF.Transparent));
-            bool blurLayer = false; float sigma = 0f;
-            foreach (var l in dev.LastLayers) if (l.Kind == (int)LayerKind.Blur) { blurLayer = true; sigma = l.BlurSigma; }
+            bool blurLayer = false; float sigma = 0f; RectF blurClip = default; bool staticIntent = true;
+            foreach (var l in dev.LastLayers) if (l.Kind == (int)LayerKind.Blur)
+            {
+                blurLayer = true; sigma = l.BlurSigma; blurClip = l.CompositeClip;
+                staticIntent &= l.BlurIsTransient == 0;
+            }
             bool balanced = dev.LayerBalance == 0;
+
+            // A real BlurSigma row propagates the engine-owned transient intent into the POD layer command.
+            var animatedNode = s.FirstChild(s.Root);
+            var anim = new AnimEngine(s);
+            anim.Animate(animatedNode, AnimChannel.BlurSigma, 6f, 5f, 100f, Easing.Linear);
+            anim.Tick(0f);
+            var dlAnimated = new DrawList();
+            SceneRecorder.Record(s, dlAnimated);
+            var devAnimated = new HeadlessGpuDevice();
+            devAnimated.SubmitDrawList(dlAnimated.Bytes, dlAnimated.SortKeys, new FrameInfo(new Size2(120, 80), 1f, ColorF.Transparent));
+            bool transientIntent = false;
+            foreach (var l in devAnimated.LastLayers)
+                if (l.Kind == (int)LayerKind.Blur) transientIntent |= l.BlurIsTransient == 1;
 
             var s0 = new SceneStore();
             var recon0 = new TreeReconciler(s0, strings);
@@ -5152,9 +6804,28 @@ static class Slice
             bool noBlurWhenZero = true;
             foreach (var l in dev0.LastLayers) if (l.Kind == (int)LayerKind.Blur) noBlurWhenZero = false;
 
-            Check("EM.c recorder emits a balanced PushLayer{Blur} (σ carried) for Blur>0; none for Blur=0",
-                blurLayer && Near(sigma, 6f, 0.01f) && balanced && noBlurWhenZero,
-                $"blurLayer={blurLayer} sigma={sigma:0.0} balanced={balanced} noneWhenZero={noBlurWhenZero}");
+            // A delayed stagger row starts at alpha zero while retaining a non-zero blur channel. It is still walked,
+            // but its blur is exact dead work and must not produce an offscreen layer until it becomes visible.
+            var si = new SceneStore();
+            var reconi = new TreeReconciler(si, strings);
+            reconi.ReconcileRoot(new BoxEl
+            {
+                Width = 80, Height = 60,
+                Children = [new BoxEl { Width = 30, Height = 30, Opacity = 0f, Blur = 6f, Fill = ColorF.FromRgba(0x60, 0xCD, 0xFF) }],
+            }, null);
+            new FlexLayout(si, new HeadlessFontSystem(strings)).Run(si.Root);
+            var dli = new DrawList();
+            SceneRecordStats invisibleStats = SceneRecorder.Record(si, dli);
+            var devi = new HeadlessGpuDevice();
+            devi.SubmitDrawList(dli.Bytes, dli.SortKeys, new FrameInfo(new Size2(120, 80), 1f, ColorF.Transparent));
+            bool noBlurWhenInvisible = invisibleStats.BlurCandidateCount == 0;
+            foreach (var l in devi.LastLayers) if (l.Kind == (int)LayerKind.Blur) noBlurWhenInvisible = false;
+            bool activeClipCarried = Near(blurClip.X, 0f) && Near(blurClip.Y, 0f) && Near(blurClip.W, 80f) && Near(blurClip.H, 60f);
+
+            Check("EM.c recorder emits balanced PushLayer{Blur} carrying clip + static/transient intent; none for invisible/zero blur",
+                blurLayer && Near(sigma, 6f, 0.01f) && activeClipCarried && balanced && staticIntent && transientIntent
+                    && noBlurWhenZero && noBlurWhenInvisible,
+                $"blurLayer={blurLayer} sigma={sigma:0.0} clip={blurClip} balanced={balanced} static={staticIntent} transient={transientIntent} noneZero={noBlurWhenZero} noneInvisible={noBlurWhenInvisible}");
         }
 
         // EM.d — the PopIn recipe (number pop-in) seeds Opacity 0→1 + TranslateY dist→0 + Blur small→0, and settles to
@@ -5269,6 +6940,31 @@ static class Slice
     // incremental per-field, failed, reduced-motion, and the wake-loop pulse-cancel. Drives the loadable across a flush.
     private sealed record SkTrack(int Number, string Title, string Dur);
 
+    // Host-level shape of Wavee Home: a grow-to-viewport Skel.Region whose one authored content tree is a measured
+    // virtual list. The controllable loadable lets SK.k exercise the real Post → Flush → scoped-layout path without
+    // manufacturing a focus/resize event.
+    private sealed class SkeletonVirtualHostProbe : Component
+    {
+        public readonly Loadable<int> Count = Loadable<int>.Pending(6);
+        private readonly MeasuredStackVirtualLayout _layout = new(72f);
+
+        public override Element Render() => new BoxEl
+        {
+            Direction = 1, Grow = 1f, Shrink = 1f, MinHeight = 0f,
+            Children =
+            [
+                Skel.Region(Count, n => Virtual.Measured(n, _layout,
+                    i => new BoxEl
+                    {
+                        Direction = 1, Height = 72f,
+                        Children = [SkRow(new SkTrack(i + 1, "Host " + i, "0:00"))],
+                    }, keyOf: i => i.ToString()) with
+                    { Grow = 1f, Shrink = 1f, MinHeight = 0f },
+                    reveal: SkelReveal.StaggerRows),
+            ],
+        };
+    }
+
     static Element SkRow(SkTrack? t) => new BoxEl
     {
         Direction = 0, Gap = 12f,
@@ -5306,7 +7002,7 @@ static class Slice
             var tracks = Loadable<SkTrack[]>.Pending(Array.Empty<SkTrack>());
             recon.ReconcileRoot(
                 Skel.Region(tracks, SkRow, count: 5,
-                    content: ts => Flow.For(() => ts.Length, i => SkRow(ts[i]), keyOf: i => ts[i].Number.ToString()),
+                    content: ts => Flow.For<SkTrack>(() => ts, t => t.Number.ToString(), (t, i) => SkRow(t)),
                     reveal: SkelReveal.StaggerRows),
                 null);
             new FlexLayout(scene, fonts).Run(scene.Root);
@@ -5343,7 +7039,7 @@ static class Slice
             var recon = new TreeReconciler(scene, strings);
             var ready = Loadable<SkTrack[]>.Ready(new[] { new SkTrack(1, "Known", "0:30") });
             recon.ReconcileRoot(
-                Skel.Region(ready, SkRow, count: 3, content: ts => Flow.For(() => ts.Length, i => SkRow(ts[i]), keyOf: i => i.ToString())),
+                Skel.Region(ready, SkRow, count: 3, content: ts => Flow.For<SkTrack>(() => ts, t => t.Number.ToString(), (t, i) => SkRow(t))),
                 null);
             new FlexLayout(scene, fonts).Run(scene.Root);
             Check("SK.d a pre-Ready region (partial-known data) renders REAL immediately — no shimmer",
@@ -5375,7 +7071,7 @@ static class Slice
             var recon = new TreeReconciler(scene, strings);
             var ld = Loadable<SkTrack[]>.Pending(Array.Empty<SkTrack>());
             recon.ReconcileRoot(
-                Skel.Region(ld, SkRow, count: 3, content: ts => Flow.For(() => ts.Length, i => SkRow(ts[i]), keyOf: i => i.ToString()),
+                Skel.Region(ld, SkRow, count: 3, content: ts => Flow.For<SkTrack>(() => ts, t => t.Number.ToString(), (t, i) => SkRow(t)),
                     onFailed: () => new TextEl("FAILED") { Size = 14f }),
                 null);
             new FlexLayout(scene, fonts).Run(scene.Root);
@@ -5396,7 +7092,7 @@ static class Slice
                 var recon = new TreeReconciler(scene, strings) { Anim = engine };
                 var tracks = Loadable<SkTrack[]>.Pending(Array.Empty<SkTrack>());
                 recon.ReconcileRoot(
-                    Skel.Region(tracks, SkRow, count: 3, content: ts => Flow.For(() => ts.Length, i => SkRow(ts[i]), keyOf: i => i.ToString())),
+                    Skel.Region(tracks, SkRow, count: 3, content: ts => Flow.For<SkTrack>(() => ts, t => t.Number.ToString(), (t, i) => SkRow(t))),
                     null);
                 new FlexLayout(scene, fonts).Run(scene.Root);
                 bool noPulse = engine.LoopTrackCount == 0;
@@ -5528,7 +7224,7 @@ static class Slice
             var recon = new TreeReconciler(scene, strings) { Anim = engine };
             var ld = Loadable<SkTrack[]>.Pending(Array.Empty<SkTrack>());
             recon.ReconcileRoot(
-                Skel.Region(ld, SkRow, count: 4, content: ts => Flow.For(() => ts.Length, i => SkRow(ts[i]), keyOf: i => i.ToString())),
+                Skel.Region(ld, SkRow, count: 4, content: ts => Flow.For<SkTrack>(() => ts, t => t.Number.ToString(), (t, i) => SkRow(t))),
                 null);
             var region = scene.Root;
             bool boundsAnim = (scene.Flags(region) & NodeFlags.BoundsAnimated) != 0;
@@ -5569,6 +7265,57 @@ static class Slice
             int realNodes = CountNodes(scene, scene.Root);
             Check("SK.i composes with a 10k-row Virtual.List — swaps to a WINDOWED list (≪10k nodes realized, not 10k)",
                 realNodes < 2000, $"pendingNodes={pendingNodes} realNodes={realNodes} (10k items)");
+        }
+
+        // SK.j content(seed) over a virtual viewport still derives a representative pending window. The deriver invokes
+        // the real RenderItem source for at most eight rows; it neither collapses to one opaque bar nor materializes the
+        // complete collection. This is the Home pending-state shape (heterogeneous measured virtual rows).
+        {
+            var scene = new SceneStore();
+            var recon = new TreeReconciler(scene, strings);
+            var count = Loadable<int>.Pending(6);
+            recon.ReconcileRoot(
+                Skel.Region(count, n => Virtual.List(n, 44f,
+                    i => SkRow(new SkTrack(i + 1, "Seed " + i, "0:00")), keyOf: i => i.ToString()) with
+                    { Width = 360f, Height = 300f }),
+                null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            int pendingNodes = CountNodes(scene, scene.Root);
+            bool representative = pendingNodes >= 20 && CountText(scene, scene.Root) == 0
+                && Near(scene.Bounds(scene.Root).H, 300f, 0.5f);
+            Check("SK.j content(seed) derives a bounded virtual-list pending window (not one blank opaque leaf)",
+                representative, $"nodes={pendingNodes} text={CountText(scene, scene.Root)} h={scene.Bounds(scene.Root).H:0}");
+        }
+
+        // SK.k is the end-to-end regression for Wavee Home being blank until Alt+Tab. Pending must occupy the viewport
+        // immediately, and a worker-style HostDispatch.Post of Ready must mount, realize, lay out and record real virtual
+        // rows in that SAME next frame. No focus, resize, extra signal write or second frame is allowed to unstick it.
+        {
+            var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("skel-virtual-host", new Size2(420, 300), 1f));
+            var probe = new SkeletonVirtualHostProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+
+            host.RunFrame();
+            bool pendingVisible = CountNodes(host.Scene, host.Scene.Root) >= 20
+                && CountText(host.Scene, host.Scene.Root) == 0
+                && host.Scene.Bounds(host.Scene.Root).H >= 299f;
+
+            host.Post(() => probe.Count.SetReady(6));
+            var readyFrame = host.RunFrame();
+            bool readyVisible = CountText(host.Scene, host.Scene.Root) > 0
+                && host.Scene.Bounds(host.Scene.Root).H >= 299f;
+            var viewport = FindScrollNode(host.Scene, host.Scene.Root);
+            host.Scene.TryGetScroll(viewport, out var scroll);
+            var row0 = host.Scene.FirstChild(scroll.ContentNode);
+            var row1 = row0.IsNull ? NodeHandle.Null : host.Scene.NextSibling(row0);
+            bool rowsOwnStagger = !row0.IsNull && !row1.IsNull
+                && host.Animation.HasTracks(row0) && host.Animation.HasTracks(row1)
+                && !host.Animation.HasTracks(scroll.ContentNode);
+
+            Check("SK.k host Post Pending→Ready: virtual skeleton is visible immediately and real rows appear next frame (no focus/resize)",
+                pendingVisible && readyVisible && readyFrame.Rendered && rowsOwnStagger,
+                $"pending={pendingVisible} ready={readyVisible} text={CountText(host.Scene, host.Scene.Root)} rendered={readyFrame.Rendered} rowTracks={rowsOwnStagger}");
         }
     }
 
@@ -5796,7 +7543,7 @@ static class Slice
         {
             var scene = new SceneStore();
             var recon = new TreeReconciler(scene, strings);
-            recon.ReconcileRoot(RadioButton.Create("x", true, () => { }), null);   // root = row; ring = child0; dot = ring.child0
+            recon.ReconcileRoot(RadioButton.Create("x", true), null);   // root = row; ring = child0; dot = ring.child0
             new FlexLayout(scene, new HeadlessFontSystem(strings)).Run(scene.Root);
             var ring = Child(scene, scene.Root, 0);
             var dot = Child(scene, ring, 0);
@@ -5813,7 +7560,7 @@ static class Slice
 
             var unselected = new SceneStore();
             var unselectedRecon = new TreeReconciler(unselected, strings);
-            unselectedRecon.ReconcileRoot(RadioButton.Create("x", false, () => { }), null);
+            unselectedRecon.ReconcileRoot(RadioButton.Create("x", false), null);
             new FlexLayout(unselected, new HeadlessFontSystem(strings)).Run(unselected.Root);
             var unselectedRing = Child(unselected, unselected.Root, 0);
             var pressedGlyph = Child(unselected, unselectedRing, 0);
@@ -5847,8 +7594,9 @@ static class Slice
         {
             var scene = new SceneStore();
             var recon = new TreeReconciler(scene, strings);
-            recon.ReconcileRoot(CheckBox.Create("x", CheckState.Unchecked, _ => { }), null);
-            ref var p = ref scene.Paint(Child(scene, scene.Root, 0));   // the 20px box
+            recon.ReconcileRoot(CheckBox.Create("x", new Signal<CheckState>(CheckState.Unchecked)), null);
+            var cbRow = FindRole(scene, scene.Root, AutomationRole.CheckBox);   // CheckBox is a component now → find its row
+            ref var p = ref scene.Paint(Child(scene, cbRow, 0));   // the 20px box (child 0 of the CheckBox row)
             bool restRing = MathF.Abs(p.BorderColor.A - Tok.StrokeControlStrongDefault.A) < 0.02f;
             bool pressDims = MathF.Abs(p.PressedBorderColor.A - Tok.StrokeControlStrongDisabled.A) < 0.02f && p.PressedBorderColor.A < p.BorderColor.A;
             bool hoverFill = MathF.Abs(p.HoverFill.A - Tok.FillControlAltTertiary.A) < 0.02f;
@@ -6755,6 +8503,71 @@ static class Slice
             "custom style + .Background().Rounded() + WinUI no-scale Button / opt-in icon scale");
     }
 
+    // Button's ORTHOGONAL axes (G5d): ButtonAppearance x ControlSize compose independently through one palette switch +
+    // one metrics switch (Radix/CVA precedent), a global StyleHook, and an optional leading-glyph slot.
+    static void ButtonAxesChecks()
+    {
+        // -- gate.ctl.button.axes -- the 4x3 matrix resolves the specified token ramps; axes are INDEPENDENT --
+        var std = Button.DefaultStyle(ButtonAppearance.Standard, ControlSize.Medium);
+        var accent = Button.DefaultStyle(ButtonAppearance.Accent, ControlSize.Medium);
+        var subtle = Button.DefaultStyle(ButtonAppearance.Subtle, ControlSize.Medium);
+        var outline = Button.DefaultStyle(ButtonAppearance.Outline, ControlSize.Medium);
+        var smallStd = Button.DefaultStyle(ButtonAppearance.Standard, ControlSize.Small);
+        var largeStd = Button.DefaultStyle(ButtonAppearance.Standard, ControlSize.Large);
+        var subtleLarge = Button.DefaultStyle(ButtonAppearance.Subtle, ControlSize.Large);
+
+        // Standard/Accent = EXACTLY today's WinUI-faithful tokens + Medium metrics (pixel-identical, no drift).
+        bool stdIdentity = std.Background == Tok.FillControlDefault && std.HoverBackground == Tok.FillControlSecondary
+            && std.PressedBackground == Tok.FillControlTertiary && std.Foreground == Tok.TextPrimary
+            && std.BackgroundSizing == BackgroundSizing.InnerBorderEdge
+            && std.Padding == new Edges4(11, 5, 11, 6) && std.MinHeight == 32f && std.FontSize == 14f;
+        bool accentIdentity = accent.Background == Tok.AccentDefault && accent.HoverBackground == Tok.AccentSecondary
+            && accent.Foreground == Tok.TextOnAccentPrimary && accent.BackgroundSizing == BackgroundSizing.OuterBorderEdge;
+
+        // Subtle = the WinUI SubtleFillColor* ramp; the sampled assertion: hover fill == FillSubtleSecondary.
+        bool subtleHover = subtle.HoverBackground == Tok.FillSubtleSecondary
+            && subtle.Background == Tok.FillSubtleTransparent && subtle.Foreground == Tok.TextPrimary;
+        // Outline = solid StrokeControlDefault border at REST *and* PRESSED, transparent interior.
+        bool outlineBorder = outline.BorderBrush is { } obr && obr.Stops[0].Color == Tok.StrokeControlDefault
+            && outline.PressedBorderBrush is { } obp && obp.Stops[0].Color == Tok.StrokeControlDefault
+            && outline.Background == Tok.FillSubtleTransparent;
+
+        // Size axis is orthogonal: Small MinHeight 24 / Large 40, appearance-independent metrics.
+        bool sizes = smallStd.MinHeight == 24f && smallStd.FontSize == 12f && smallStd.Padding == new Edges4(7, 2, 7, 3)
+            && largeStd.MinHeight == 40f && largeStd.Padding == new Edges4(15, 9, 15, 10);
+        // Subtle+Large == Subtle palette (hover fill unchanged by size) + Large metrics (height/padding unchanged by appearance).
+        bool independent = subtleLarge.HoverBackground == Tok.FillSubtleSecondary && subtleLarge.Background == subtle.Background
+            && subtleLarge.MinHeight == 40f && subtleLarge.Padding == largeStd.Padding;
+
+        Check("gate.ctl.button.axes 4x3 appearance x size matrix resolves token ramps + axes independent",
+            stdIdentity && accentIdentity && subtleHover && outlineBorder && sizes && independent,
+            $"stdId={stdIdentity} accId={accentIdentity} subtleHover={subtleHover} outlineBorder={outlineBorder} sizes={sizes} indep={independent}");
+
+        // -- gate.ctl.button.stylehook -- StyleHook wins over DefaultStyle; null falls through to the composed default --
+        var sentinel = new Button.Style { Background = ColorF.FromRgba(1, 2, 3), MinHeight = 99f };
+        Button.StyleHook = (a, sz) => a == ButtonAppearance.Outline && sz == ControlSize.Large ? sentinel : null;
+        var hooked = Button.DefaultStyle(ButtonAppearance.Outline, ControlSize.Large);
+        var fell = Button.DefaultStyle(ButtonAppearance.Outline, ControlSize.Small);   // hook returns null here
+        var builtHooked = Button.Create("x", () => { }, ButtonAppearance.Outline, ControlSize.Large);   // hook flows through Create
+        Button.StyleHook = null;                                                        // reset the global before anything else
+        bool hookWins = hooked.MinHeight == 99f && hooked.Background == ColorF.FromRgba(1, 2, 3) && builtHooked.MinHeight == 99f;
+        bool nullFallsThrough = fell.MinHeight == 24f
+            && fell.BorderBrush is { } fb && fb.Stops[0].Color == Tok.StrokeControlDefault;   // Outline+Small composed normally
+        Check("gate.ctl.button.stylehook StyleHook wins over DefaultStyle; null falls through",
+            hookWins && nullFallsThrough, $"hookWins={hookWins} nullFallsThrough={nullFallsThrough}");
+
+        // -- gate.ctl.button.glyph-slot -- Create with glyph renders icon+label; without = label-only --
+        var withGlyph = Button.Create("Save", () => { }, glyph: Icons.Play);
+        var noGlyph = Button.Create("Save", () => { });
+        bool glyphStructure = withGlyph.Children.Length == 2
+            && withGlyph.Children[0] is TextEl g && g.FontFamily == Theme.IconFont && g.Text.Value == Icons.Play
+            && withGlyph.Children[1] is TextEl gl && gl.Text.Value == "Save";
+        bool labelOnly = noGlyph.Children.Length == 1
+            && noGlyph.Children[0] is TextEl only && only.Text.Value == "Save" && only.FontFamily != Theme.IconFont;
+        Check("gate.ctl.button.glyph-slot Create(glyph) renders icon+label; without = label-only",
+            glyphStructure && labelOnly, $"withGlyph={glyphStructure} labelOnly={labelOnly}");
+    }
+
     // UseAnimatedValue eases toward a changed target across renders, then settles (React/framer-style transition).
     static void AnimValueChecks()
     {
@@ -7207,6 +9020,171 @@ static class Slice
             $"expanded=({expandedGutter},{expandedThumb}) collapsed=({collapsedGutter},{collapsedThumb}) hidden={!anyScrollbar}");
         Check("38b. hover-visible scrollbar settles without keeping frames active",
             hoverSettledIdle, $"active={host.HasActiveWork}");
+    }
+
+    // Frame-clock timing hooks (gate.timer.*): UseDebouncedValue / UseThrottledValue / UseTimeout / UseInterval over
+    // the host's HostTimerQueue. All driven deterministically over the headless frame clock (each host.Paint(0) advances
+    // one FixedFrameTimeSource step = 16 ms), so a 100 ms window fires ~7 frames in. Media playback keeps its own device
+    // clock and never rides this queue (WS-Media non-goal) — no media gate here.
+    static void TimerHookChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+
+        // ── gate.timer.debounce-trailing: 3 writes within the window ⇒ exactly one trailing commit to the last value ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("timer-debounce", new Size2(200, 120), 1f)); window.Show();
+            var probe = new DebounceProbe(100f);
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.Paint(0);
+            probe.Source.Value = "a"; host.Paint(0);   // arm
+            probe.Source.Value = "b"; host.Paint(0);   // re-arm
+            probe.Source.Value = "c"; host.Paint(0);   // re-arm — the last value wins
+            bool pendingStillInitial = probe.Debounced.Peek() == "";
+            string prev = probe.Debounced.Peek();
+            int transitions = 0;
+            for (int i = 0; i < 16; i++) { host.Paint(0); var v = probe.Debounced.Peek(); if (v != prev) { transitions++; prev = v; } }
+            bool committedOnce = transitions == 1 && probe.Debounced.Peek() == "c";
+            Check("gate.timer.debounce-trailing 3 writes in the window ⇒ exactly 1 trailing commit to the last value",
+                pendingStillInitial && committedOnce, $"pendingInitial={pendingStillInitial} transitions={transitions} value='{probe.Debounced.Peek()}'");
+        }
+
+        // ── gate.timer.debounce-flush: Flush() commits immediately + cancels pending; Cancel() never commits ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("timer-flush", new Size2(200, 120), 1f)); window.Show();
+            var probe = new DebounceProbe(100f);
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.Paint(0);
+            probe.Source.Value = "x"; host.Paint(0);      // arm
+            bool beforeFlush = probe.Debounced.Peek() == "";
+            probe.Handle.Flush();                          // commit NOW + cancel pending
+            bool afterFlush = probe.Debounced.Peek() == "x";
+            string p = probe.Debounced.Peek(); int extra = 0;
+            for (int i = 0; i < 16; i++) { host.Paint(0); if (probe.Debounced.Peek() != p) { extra++; p = probe.Debounced.Peek(); } }
+            bool flushNoExtra = extra == 0;
+
+            using var app2 = new HeadlessPlatformApp();
+            var window2 = new HeadlessWindow(new WindowDesc("timer-cancel", new Size2(200, 120), 1f)); window2.Show();
+            var probe2 = new DebounceProbe(100f);
+            using var host2 = new AppHost(app2, window2, new HeadlessGpuDevice(), fonts, strings, probe2);
+            host2.Paint(0);
+            probe2.Source.Value = "y"; host2.Paint(0);     // arm
+            probe2.Handle.Cancel();                         // drop the pending fire
+            for (int i = 0; i < 16; i++) host2.Paint(0);
+            bool cancelNoCommit = probe2.Debounced.Peek() == "";
+            Check("gate.timer.debounce-flush Flush() commits immediately + cancels pending; Cancel() never commits",
+                beforeFlush && afterFlush && flushNoExtra && cancelNoCommit,
+                $"beforeFlush={beforeFlush} afterFlush={afterFlush} flushNoExtra={flushNoExtra} cancelNoCommit={cancelNoCommit}");
+        }
+
+        // ── gate.timer.throttle-leading-trailing: leading fires immediately; trailing samples the last value ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("timer-throttle", new Size2(200, 120), 1f)); window.Show();
+            var probe = new ThrottleProbe(100f);
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.Paint(0);
+            probe.Source.Value = 1; host.Paint(0);   // leading → emit immediately
+            bool leading = probe.Throttled.Peek() == 1;
+            probe.Source.Value = 2; host.Paint(0);   // suppressed (cooldown)
+            probe.Source.Value = 3; host.Paint(0);   // suppressed, latest = 3
+            bool stillLeading = probe.Throttled.Peek() == 1;
+            for (int i = 0; i < 16; i++) host.Paint(0);   // window closes → trailing sample
+            bool trailing = probe.Throttled.Peek() == 3;
+            Check("gate.timer.throttle-leading-trailing leading emits immediately; trailing samples the last value",
+                leading && stillLeading && trailing, $"leading={leading} stillLeading={stillLeading} trailing={trailing} value={probe.Throttled.Peek()}");
+        }
+
+        // ── gate.timer.interval-pauses-inactive: ticks while active, pauses while window-inactive, resumes on return ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("timer-interval", new Size2(200, 120), 1f)); window.Show();
+            var probe = new IntervalProbe(48f);   // ~3 frames per tick
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.Paint(0);
+            for (int i = 0; i < 20; i++) host.Paint(0);
+            bool tickedWhileActive = probe.Ticks > 0;
+            host.SetWindowActive(false); host.Paint(0);   // flush the activation change → interval pauses
+            int atPause = probe.Ticks;
+            for (int i = 0; i < 20; i++) host.Paint(0);
+            bool pausedNoTicks = probe.Ticks == atPause;
+            host.SetWindowActive(true); host.Paint(0);    // resume
+            for (int i = 0; i < 20; i++) host.Paint(0);
+            bool resumed = probe.Ticks > atPause;
+            Check("gate.timer.interval-pauses-inactive interval ticks while active, pauses while window-inactive, resumes",
+                tickedWhileActive && pausedNoTicks && resumed, $"active={probe.Ticks - (probe.Ticks - atPause)} atPause={atPause} final={probe.Ticks}");
+        }
+
+        // ── gate.timer.unmount-cancels: a due-after-unmount timeout never fires ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("timer-unmount", new Size2(200, 120), 1f)); window.Show();
+            var parent = new TimeoutUnmountParent();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, parent);
+            host.RunFrame();                        // mount: child arms a 200 ms timeout (due ≈ 200)
+            bool notFiredYet = parent.Fires == 0;
+            parent.Show.Value = false; host.Paint(0);   // unmount the child BEFORE the fire → RunAllCleanups cancels the timer
+            for (int i = 0; i < 24; i++) host.Paint(0);  // advance well past 200 ms
+            Check("gate.timer.unmount-cancels a due-after-unmount timeout never fires",
+                notFiredYet && parent.Fires == 0, $"notFiredYet={notFiredYet} fires={parent.Fires}");
+        }
+
+        // ── gate.timer.quiesce-idle: one pending 5 s timeout — the host wait reflects the due time; no intermediate frame runs ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("timer-quiesce", new Size2(200, 120), 1f)); window.Show();
+            var probe = new TimeoutProbe(5000f);
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            for (int i = 0; i < 6 && host.HasActiveWork; i++) host.RunFrame();   // settle the mount (leaves only the pending 5 s timer)
+            int wait = host.RecommendedWaitMs();
+            bool waitReflectsDue = wait >= 4000 && wait <= 5100;
+            bool noTimerWake = (host.CurrentWakeReasons & WakeReasons.Timer) == 0;   // pending, not due
+            bool wouldIdle = !host.HasActiveWork;                                     // the loop would fully block
+            double clockBefore = host.FrameClockMsForTest;
+            bool anyRendered = false;
+            for (int i = 0; i < 8; i++) { var f = host.RunFrame(); if (f.Rendered) anyRendered = true; }
+            bool noIntermediateFrames = !anyRendered && probe.Fires == 0 && host.FrameClockMsForTest == clockBefore;
+            Check("gate.timer.quiesce-idle a pending 5s timeout: the wait reflects the due time and no intermediate frame runs",
+                waitReflectsDue && noTimerWake && wouldIdle && noIntermediateFrames,
+                $"wait={wait} noTimerWake={noTimerWake} wouldIdle={wouldIdle} rendered={anyRendered} fires={probe.Fires}");
+        }
+
+        // ── gate.timer.zero-steady-alloc: an armed timer adds 0 bytes to the hot phase on quiet frames ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("timer-alloc", new Size2(200, 120), 1f)); window.Show();
+            var probe = new IntervalProbe(100000f);   // armed the whole time, never fires during the window
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            for (int i = 0; i < 4 && host.HasActiveWork; i++) host.RunFrame();
+            for (int i = 0; i < 6; i++) host.Paint(0);   // warm the drain path (JIT) with the timer armed
+            long worst = 0;
+            for (int i = 0; i < 10; i++) { var f = host.Paint(0); if (f.HotPhaseAllocBytes > worst) worst = f.HotPhaseAllocBytes; }
+            Check("gate.timer.zero-steady-alloc an armed timer adds 0 bytes to the hot phase on quiet frames",
+                worst == 0, $"worst={worst} bytes (armed timers={host.TimersForTest.Count})");
+        }
+
+        // ── gate.timer.warm-cadence: frames continue for the hold window after a synthetic input, then quiesce ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("timer-warm", new Size2(200, 120), 1f)); window.Show();
+            var probe = new InertBoxProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.WarmCadenceEnabledForTest = true;   // off headless by default (keeps existing idle gates green); the gate opts in
+            for (int i = 0; i < 6 && host.HasActiveWork; i++) host.RunFrame();
+            bool idleBefore = !host.HasActiveWork;
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(10f, 10f), 0, 0));
+            host.RunFrame();                          // dispatch → warm-cadence armed for ~1 s
+            bool warmLit = (host.CurrentWakeReasons & WakeReasons.WarmCadence) != 0;
+            int warmFrames = 0;
+            for (int i = 0; i < 200; i++) { if ((host.CurrentWakeReasons & WakeReasons.WarmCadence) == 0) break; host.RunFrame(); warmFrames++; }
+            bool held = warmFrames >= 50 && warmFrames <= 75;   // ~1000 ms / 16 ms ≈ 62 frames
+            for (int i = 0; i < 8 && host.HasActiveWork; i++) host.RunFrame();
+            bool quiescedAfter = !host.HasActiveWork;
+            Check("gate.timer.warm-cadence frames continue for the ~1s hold after input, then quiesce",
+                idleBefore && warmLit && held && quiescedAfter,
+                $"idleBefore={idleBefore} warmLit={warmLit} warmFrames={warmFrames} quiescedAfter={quiescedAfter}");
+        }
     }
 
     // Generic async-command primitive (UseAsyncCommand / UseAsyncCommands<TKey>): the in-progress state tracks the
@@ -13039,6 +15017,12 @@ static class Slice
         bakedHost.RunFrame();
         int fallbackId = bakedDevice.LastImages.Count == 1 ? bakedDevice.LastImages[0].ImageId : 0;
         bakedHost.RunFrame();
+        bool deferredUntilSettled = bakedDevice.LastImages.Count == 1
+            && bakedDevice.LastImages[0].ImageId == fallbackId;
+        int bakeSettleFrames = 0;
+        while (bakeSettleFrames++ < 60 && bakedDevice.LastImages.Count == 1
+               && bakedDevice.LastImages[0].ImageId == fallbackId)
+            bakedHost.RunFrame();
         var bakedCmd = bakedDevice.LastImages.Count == 1 ? bakedDevice.LastImages[0] : default;
         bool oneQuad = bakedDevice.LastImages.Count == 1 && bakedDevice.LastLayers.Count == 0;
         bool selectedDerived = bakedCmd.ImageId != 0 && bakedCmd.ImageId != fallbackId
@@ -13046,8 +15030,8 @@ static class Slice
         bool styling = Near(bakedCmd.Overlay.A, 0.42f) && bakedCmd.MaskEdges == (int)EdgeMask.Top
             && Near(bakedCmd.MaskTop, 24f) && Near(bakedCmd.MaskIntensity, 1f);
         Check("46c. Baked ImageEl: source fallback then persistent derived handle; overlay+mask stay in one DrawImage with zero layers",
-            oneQuad && selectedDerived && styling,
-            $"fallback={fallbackId} derived={bakedCmd.ImageId} draws={bakedDevice.LastImages.Count} layers={bakedDevice.LastLayers.Count} mask={bakedCmd.MaskEdges}");
+            deferredUntilSettled && oneQuad && selectedDerived && styling,
+            $"deferred={deferredUntilSettled} settleFrames={bakeSettleFrames} fallback={fallbackId} derived={bakedCmd.ImageId} draws={bakedDevice.LastImages.Count} layers={bakedDevice.LastLayers.Count} mask={bakedCmd.MaskEdges}");
     }
 
     // Renders the AspectTileProbe headlessly and returns the laid-out art rect + the card's inner (content) width.
@@ -13634,6 +15618,289 @@ static class Slice
     }
 
     // Controls: a slider press-sets and drag-scrubs its value; a toggle flips; an icon button clicks; a scrollbar drags.
+    // ── gate.ctl.recipe.* — WS3 P1 InteractionRecipe (the app-authoring interactive-styling surface) ────────────
+    // The HYBRID: the brush half rides the BoxEl Fill/Hover/Pressed field ramp + BrushTransitionMs; the motion half
+    // rides the declarative WhileHover/WhilePressed + Transition token. `.Interactive` is a pure with-expansion.
+    static void RecipeChecks(StringTable strings)
+    {
+        // A deterministic (theme-independent) recipe with BOTH halves + a stroke ramp.
+        var fillRamp = new StateBrush(ColorF.FromRgba(10, 10, 10), ColorF.FromRgba(20, 20, 20), ColorF.FromRgba(30, 30, 30), ColorF.FromRgba(5, 5, 5));
+        var strokeRamp = new StateBrush(ColorF.FromRgba(40, 40, 40), ColorF.FromRgba(50, 50, 50), ColorF.FromRgba(60, 60, 60), ColorF.FromRgba(35, 35, 35));
+        var recipe = new InteractionRecipe
+        {
+            Fill = fillRamp, Stroke = strokeRamp, StrokeWidth = 2f,
+            HoverScale = 1.04f, PressScale = 0.96f, HoverOpacity = 0.9f,
+            BrushMs = 120f, Motion = MotionTokenId.StandardSpring,
+        };
+        // Pre-set channels the recipe does NOT name (must survive) + a caller While* leg (must be preserved).
+        var pre = new BoxEl
+        {
+            Width = 33f, Padding = Edges4.All(7), Corners = CornerRadius4.All(5f),
+            WhileFocus = new MotionTarget { Scale = 1.5f }, OnClick = static () => { },
+        };
+
+        // gate.ctl.recipe.expand — the exact field writes + untouched channels.
+        var box = pre.Interactive(recipe);
+        bool brush = box.Fill.Value == fillRamp.Rest && box.HoverFill.Value == fillRamp.Hover && box.PressedFill.Value == fillRamp.Pressed
+                     && box.BrushTransitionMs == 120f && box.IsEnabled;
+        bool border = box.BorderColor.Value == strokeRamp.Rest && box.HoverBorderColor == strokeRamp.Hover
+                      && box.PressedBorderColor == strokeRamp.Pressed && box.BorderWidth == 2f;
+        bool motion = box.WhileHover is { } wh && wh.Scale == 1.04f && wh.Opacity == 0.9f
+                      && box.WhilePressed is { } wp && wp.Scale == 0.96f && wp.Opacity == 1f
+                      && box.Transition is not null;
+        bool untouched = box.Width.Value == 33f && box.WhileFocus is { } wf && wf.Scale == 1.5f && box.OnClick is not null;
+        Check("gate.ctl.recipe.expand .Interactive writes fill/border/brush-ms + While* targets; unnamed channels untouched",
+            brush && border && motion && untouched, $"brush={brush} border={border} motion={motion} untouched={untouched}");
+
+        // A recipe with NO motion half must not touch While*/Transition (don't stomp channels the recipe doesn't use).
+        var noMotion = new InteractionRecipe { Fill = fillRamp };   // HoverScale/PressScale default 1, opacities NaN
+        var b2 = pre.Interactive(noMotion);
+        Check("gate.ctl.recipe.expand no-motion recipe leaves While*/Transition untouched (caller WhileFocus survives, no WhileHover)",
+            b2.WhileHover is null && b2.WhilePressed is null && b2.Transition is null && b2.WhileFocus is { } f2 && f2.Scale == 1.5f,
+            $"hover={b2.WhileHover is null} press={b2.WhilePressed is null} transition={b2.Transition is null}");
+
+        // One-transform-owner: a bound Transform suppresses the recipe's While* (the bound matrix is the sole owner).
+        var bound = new BoxEl { Transform = Prop.Of(() => Affine2D.Identity), OnClick = static () => { } }.Interactive(recipe);
+        Check("gate.ctl.recipe.expand bound Transform suppresses the While* motion half (one transform owner)",
+            bound.WhileHover is null && bound.WhilePressed is null && bound.Fill.Value == fillRamp.Rest,
+            $"hover={bound.WhileHover is null} press={bound.WhilePressed is null} brushStillApplied={bound.Fill.Value == fillRamp.Rest}");
+
+        // gate.ctl.recipe.presets — the four presets resolve the expected Tok values, and a theme swap re-resolves them.
+        var kind0 = Tok.Theme;
+        bool subtleNow = Interaction.Subtle.Fill.Hover == Tok.FillSubtleSecondary && Interaction.Subtle.Fill.Rest == Tok.FillSubtleTransparent;
+        bool listRowNow = Interaction.ListRow.Fill.Hover == Tok.FillSubtleSecondary;
+        bool cardNow = Interaction.Card.Fill.Rest == Tok.FillCardDefault && Interaction.Card.Stroke is { } cs && cs.Rest == Tok.StrokeCardDefault
+                       && Interaction.Card.PressScale == 0.985f && Interaction.Card.Motion == MotionTokenId.StandardSpring;
+        bool ghostNow = Interaction.AccentGhost.Fill.Hover == Tok.AccentSubtle && Interaction.AccentGhost.Fill.Rest == ColorF.Transparent;
+        var subtleHover0 = Interaction.Subtle.Fill.Hover;
+        var cardRest0 = Interaction.Card.Fill.Rest;
+        // Flip the theme kind: FillSubtleSecondary / FillCardDefault differ light↔dark, so a live re-resolve must change.
+        Tok.Use(kind0 == ThemeKind.Dark ? ThemeKind.Light : ThemeKind.Dark);
+        bool reResolved = Interaction.Subtle.Fill.Hover == Tok.FillSubtleSecondary && Interaction.Subtle.Fill.Hover != subtleHover0
+                          && Interaction.Card.Fill.Rest == Tok.FillCardDefault && Interaction.Card.Fill.Rest != cardRest0;
+        Tok.Use(kind0);   // restore the original theme kind
+        Check("gate.ctl.recipe.presets Subtle/ListRow/Card/AccentGhost resolve Tok values; a theme swap re-resolves (theme-live)",
+            subtleNow && listRowNow && cardNow && ghostNow && reResolved,
+            $"subtle={subtleNow} listRow={listRowNow} card={cardNow} ghost={ghostNow} reResolved={reResolved}");
+
+        // gate.ctl.recipe.control — the standard control-surface preset (G7): the opaque control fill ramp
+        // (default→secondary→tertiary→disabled, the same ramp Button's Standard appearance uses) + a 1px control border,
+        // fill+border only. Theme-live: the get-only preset re-reads Tok on every access (proven in BOTH theme kinds).
+        bool controlNow = Interaction.Control.Fill.Rest == Tok.FillControlDefault
+                          && Interaction.Control.Fill.Hover == Tok.FillControlSecondary
+                          && Interaction.Control.Fill.Pressed == Tok.FillControlTertiary
+                          && Interaction.Control.Fill.Disabled == Tok.FillControlDisabled
+                          && Interaction.Control.Stroke is { } ctrlStroke && ctrlStroke.Rest == Tok.StrokeControlDefault
+                          && Interaction.Control.StrokeWidth == 1f
+                          && Interaction.Control.HoverScale == 1f && Interaction.Control.PressScale == 1f;   // no geometry
+        Tok.Use(kind0 == ThemeKind.Dark ? ThemeKind.Light : ThemeKind.Dark);
+        bool controlLiveOtherTheme = Interaction.Control.Fill.Rest == Tok.FillControlDefault
+                                     && Interaction.Control.Stroke is { } ctrlStroke2 && ctrlStroke2.Rest == Tok.StrokeControlDefault;
+        Tok.Use(kind0);   // restore
+        Check("gate.ctl.recipe.control standard control-surface preset resolves FillControl ramp + control border (theme-live in both kinds)",
+            controlNow && controlLiveOtherTheme, $"control={controlNow} liveOtherTheme={controlLiveOtherTheme}");
+
+        // gate.ctl.recipe.disabled — isEnabled=false applies the Disabled legs, sets IsEnabled=false (the engine's
+        // hover/press gate), and suppresses the motion half (no hover/press response).
+        var dis = pre.Interactive(recipe, isEnabled: false);
+        bool disElem = !dis.IsEnabled && dis.Fill.Value == fillRamp.Disabled && dis.BorderColor.Value == strokeRamp.Disabled
+                       && dis.WhileHover is null && dis.WhilePressed is null;
+        // Reconcile it and confirm the scene Disabled flag is set (what actually blocks hover/press dispatch).
+        using (var app = new HeadlessPlatformApp())
+        {
+            var window = new HeadlessWindow(new WindowDesc("recipe-dis", new Size2(200, 200), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            NodeHandle n = default;
+            var root = new W0fStaticProbe { Build = () => (pre with { OnRealized = h => n = h }).Interactive(recipe, isEnabled: false) };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            bool flagged = !n.IsNull && (host.Scene.Flags(n) & NodeFlags.Disabled) != 0;
+            Check("gate.ctl.recipe.disabled disabled legs + IsEnabled=false (scene Disabled flag) + no While* motion",
+                disElem && flagged, $"elem={disElem} disabledFlag={flagged}");
+        }
+
+        // gate.ctl.recipe.zero-alloc — a scene of N recipe-styled boxes, once mounted, adds NO per-frame paint cost: the
+        // recipe bakes into scene columns at reconcile (the cold path), so steady frames are 0-alloc in the hot window
+        // (the HotPhaseAllocBytes window spans flush + record + submit + present). Proven the same way as slice gate 9.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("recipe-alloc", new Size2(400, 400), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            const int N = 24;
+            InteractionRecipe[] presets = [Interaction.Subtle, Interaction.ListRow, Interaction.Card, Interaction.AccentGhost];
+            var root = new W0fStaticProbe
+            {
+                Build = () =>
+                {
+                    var kids = new Element[N];
+                    for (int i = 0; i < N; i++)
+                        kids[i] = new BoxEl { Width = 40f, Height = 20f, Corners = Radii.ControlAll, OnClick = static () => { } }
+                            .Interactive(presets[i % presets.Length]);
+                    return new BoxEl { Direction = 1, Gap = 2f, Children = kids };
+                },
+            };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            for (int i = 0; i < 8; i++) host.RunFrame();   // warm (mount + JIT) → memoized steady state
+            var steady = host.RunFrame();
+            Check("gate.ctl.recipe.zero-alloc 24 recipe-styled boxes, steady frame: memoized + hot window 0 bytes",
+                !steady.Rendered && steady.HotPhaseAllocBytes == 0, $"rendered={steady.Rendered} hot={steady.HotPhaseAllocBytes}B");
+        }
+    }
+
+    // ── gate.ctl.bind.* — WS3 P2 the controlled-input contract: the value is a concrete Signal the control writes on
+    //    user interaction FIRST, then fires onChange; a programmatic signal write re-skins with NO onChange echo and
+    //    without re-rendering the owner (the controlled-everything decoupling); auto-materialize is one code path.
+    static void ControlBindChecks(StringTable strings)
+    {
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+
+        // gate.ctl.bind.toggle — user toggle writes the value signal then fires onChange ONCE; a programmatic write
+        // re-skins with NO echo and never re-invokes the owner's render (adjustment #8's decoupling regression pin).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("bind-toggle", new Size2(320, 160), 1f)); window.Show();
+            var sig = new Signal<bool>(false);
+            int probeRenders = 0, changes = 0; bool lastV = false;
+            using var host = new AppHost(app, window, device, fonts, strings,
+                new W0fStaticProbe { Build = () => { probeRenders++; return new BoxEl { Padding = Edges4.All(12),
+                    Children = [ToggleSwitch.Create(sig, onChange: v => { changes++; lastV = v; })] }; } });
+            host.RunFrame();
+            int rendersAtMount = probeRenders;
+            var ts = FindRole(host.Scene, host.Scene.Root, AutomationRole.ToggleSwitch);
+            ClickNode(host, window, ts);
+            bool wrote = sig.Value && changes == 1 && lastV;
+            int changesBefore = changes;
+            sig.Value = false;                      // programmatic write
+            host.RunFrame();
+            bool noEcho = changes == changesBefore;
+            bool decoupled = probeRenders == rendersAtMount;   // the Signal write never re-rendered the owner
+            Check("gate.ctl.bind.toggle ToggleSwitch: user toggle writes the signal then fires onChange once; programmatic write re-skins with no echo (owner not re-rendered)",
+                wrote && noEcho && decoupled, $"wrote={wrote} changes={changes} noEcho={noEcho} ownerRenders={probeRenders}(mount {rendersAtMount})");
+        }
+
+        // gate.ctl.bind.automaterialize — a signal-less ToggleSwitch toggles via its OWN internal signal; an external
+        // signal controls another; BOTH ride the one `IsOn ?? own` code path.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("bind-auto", new Size2(320, 220), 1f)); window.Show();
+            var extSig = new Signal<bool>(false);
+            int autoN = 0, extN = 0;
+            using var host = new AppHost(app, window, device, fonts, strings,
+                new W0fStaticProbe { Build = () => new BoxEl { Direction = 1, Gap = 8, Padding = Edges4.All(12),
+                    Children = [
+                        ToggleSwitch.Create(onChange: _ => autoN++),            // signal-less → internal signal
+                        ToggleSwitch.Create(extSig, onChange: _ => extN++),     // caller-owned signal
+                    ] } });
+            host.RunFrame();
+            var toggles = Roles(host.Scene, AutomationRole.ToggleSwitch);
+            ClickNode(host, window, toggles[0]);
+            bool autoToggled = autoN == 1;         // the internal signal drove a toggle
+            toggles = Roles(host.Scene, AutomationRole.ToggleSwitch);
+            ClickNode(host, window, toggles[1]);
+            bool extToggled = extSig.Value && extN == 1;
+            Check("gate.ctl.bind.automaterialize signal-less ToggleSwitch toggles via its own internal signal; a caller signal controls another; one code path",
+                autoToggled && extToggled, $"auto={autoN} ext={extSig.Value}/{extN}");
+        }
+
+        // gate.ctl.bind.check + gate.ctl.bind.tristate — CheckBox 2-state click writes the bool signal; the CheckState
+        // overload cycles Unchecked → Checked → Indeterminate → Unchecked through the signal.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("bind-check", new Size2(360, 240), 1f)); window.Show();
+            var b = new Signal<bool>(false);
+            var tri = new Signal<CheckState>(CheckState.Unchecked);
+            int bN = 0, tN = 0;
+            using var host = new AppHost(app, window, device, fonts, strings,
+                new W0fStaticProbe { Build = () => new BoxEl { Direction = 1, Gap = 8, Padding = Edges4.All(12),
+                    Children = [
+                        CheckBox.Create("two", b, onChange: _ => bN++),
+                        CheckBox.Create("tri", tri, onChange: _ => tN++),
+                    ] } });
+            host.RunFrame();
+            var boxes = Roles(host.Scene, AutomationRole.CheckBox);
+            ClickNode(host, window, boxes[0]);
+            bool check2 = b.Value && bN == 1;
+            boxes = Roles(host.Scene, AutomationRole.CheckBox);
+            ClickNode(host, window, boxes[1]); bool c1 = tri.Value == CheckState.Checked;
+            boxes = Roles(host.Scene, AutomationRole.CheckBox);
+            ClickNode(host, window, boxes[1]); bool c2 = tri.Value == CheckState.Indeterminate;
+            boxes = Roles(host.Scene, AutomationRole.CheckBox);
+            ClickNode(host, window, boxes[1]); bool c3 = tri.Value == CheckState.Unchecked;
+            Check("gate.ctl.bind.check CheckBox 2-state click writes the bool signal (onChange once)",
+                check2, $"val={b.Value} changes={bN}");
+            Check("gate.ctl.bind.tristate CheckBox CheckState click cycles Unchecked→Checked→Indeterminate→Unchecked via the signal",
+                c1 && c2 && c3 && tN == 3, $"c1={c1} c2={c2} c3={c3} changes={tN}");
+        }
+
+        // gate.ctl.bind.radio — a RadioButtons click WRITES the selected-index signal (onChange once); arrow roving
+        // (Down) moves the selection and updates the SAME signal (selection follows focus).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("bind-radio", new Size2(320, 240), 1f)); window.Show();
+            var sel = new Signal<int>(0);   // start at 0 so Tab lands on the roving stop (item 0)
+            int rN = 0;
+            using var host = new AppHost(app, window, device, fonts, strings,
+                new W0fStaticProbe { Build = () => new BoxEl { Padding = Edges4.All(12),
+                    Children = [RadioButtons.Create(new[] { "A", "B", "C" }, sel, onChange: _ => rN++, maxColumns: 1)] } });
+            host.RunFrame();
+            // arrow roving: Tab focuses the single roving stop, Down moves selection (selection follows focus) → writes the signal.
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Tab)); host.RunFrame();
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Down)); host.RunFrame();
+            bool roved = sel.Value == 1 && rN == 1;
+            // click selects: clicking item C writes index 2 (mutual exclusion via the one shared signal).
+            ClickNode(host, window, Roles(host.Scene, AutomationRole.RadioButton)[2]);
+            bool clickWrote = sel.Value == 2 && rN == 2;
+            Check("gate.ctl.bind.radio RadioButtons: arrow roving updates the index signal; a click writes the selected index (onChange each)",
+                roved && clickWrote, $"afterDown={(roved ? 1 : sel.Value)}@{rN} afterClick={sel.Value}");
+        }
+
+        // gate.ctl.bind.naming — the closed callback-name set is enforced: NO public control factory (Create/Group)
+        // parameter is named onToggle/onSelect/onTextChanged/OnValueChanged (the eliminated Action<TOld,TNew>/idiom
+        // spellings). A reflection scan over the whole FluentGpu.Controls surface (comprehensive — catches any control,
+        // migrated or not). Param names are present under JIT (the gate run); under AOT trimming they degrade to a
+        // vacuous pass, never a false failure.
+        {
+            string[] banned = { "ontoggle", "onselect", "ontextchanged", "onvaluechanged" };
+            var offenders = new List<string>();
+            foreach (var t in typeof(ToggleSwitch).Assembly.GetExportedTypes())
+                foreach (var m in t.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static))
+                {
+                    if (m.Name != "Create" && m.Name != "Group") continue;
+                    foreach (var pi in m.GetParameters())
+                        if (Array.IndexOf(banned, (pi.Name ?? "").ToLowerInvariant()) >= 0)
+                            offenders.Add($"{t.Name}.{m.Name}({pi.Name})");
+                }
+            Check("gate.ctl.bind.naming no public control factory parameter named onToggle/onSelect/onTextChanged/OnValueChanged remains",
+                offenders.Count == 0, offenders.Count == 0 ? "clean" : string.Join(", ", offenders));
+        }
+
+        // gate.ctl.bind.textbox-options — TextBox is built via the TextBoxOptions record (the long tail) + a controlled
+        // value signal; a user edit round-trips text THROUGH the signal and fires onChange; the mount-time signal seed
+        // does NOT fire onChange (onChange is an edit callback, not a re-push echo).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("bind-tb", new Size2(420, 240), 1f)); window.Show();
+            var text = new Signal<string>("");
+            int changes = 0; string last = "";
+            using var host = new AppHost(app, window, device, fonts, strings,
+                new W0fStaticProbe { Build = () => new BoxEl { Padding = Edges4.All(12),
+                    Children = [TextBox.Create(text, onChange: s => { changes++; last = s; },
+                        new TextBox.TextBoxOptions { Placeholder = "ph", Width = 200f, Header = "H" })] } });
+            host.RunFrame();
+            bool mountQuiet = changes == 0;   // the mount-time seed sync does not fire onChange
+            var field = FindRole(host.Scene, host.Scene.Root, AutomationRole.Text);
+            ClickNode(host, window, field);
+            foreach (char c in "hi") window.QueueInput(new InputEvent(InputKind.Char, default, 0, c));
+            host.RunFrame();
+            bool userWrote = text.Value == "hi" && changes >= 1 && last == "hi";   // user edit → signal round-trip + onChange
+            Check("gate.ctl.bind.textbox-options TextBox via TextBoxOptions round-trips text through the signal; onChange fires on user edits (not the mount seed)",
+                mountQuiet && userWrote, $"mountQuiet={mountQuiet} text='{text.Peek()}' changes={changes} last='{last}'");
+        }
+    }
+
     static void ControlsChecks(StringTable strings)
     {
         using var app = new HeadlessPlatformApp();
@@ -13843,6 +16110,224 @@ static class Slice
         Check("50a3. nested transparent component boundaries remain input-traversable when an inner branch becomes hit-testable",
             !nestedScroll.IsNull && nestedRouted == nestedScroll && nestedState.OffsetY > 1f,
             $"scroll=n#{nestedScroll.Raw.Index} routed=n#{nestedRouted.Raw.Index} offset={nestedState.OffsetY:0.#}");
+
+        // A retained slot can intentionally serve several route TOKENS (album→album / artist→artist) under one
+        // cache key. The page must stay mounted, but TransitionFor still owns that navigation edge and seeds an entrance
+        // on the updated root; otherwise those in-place navigations silently lose all page motion.
+        {
+            var scene = new SceneStore();
+            var anim = new AnimEngine(scene);
+            var recon = new TreeReconciler(scene, strings) { Anim = anim };
+            var token = new Signal<int>(1);
+            recon.ReconcileRoot(
+                Flow.KeepAlive(
+                    () => token.Value,
+                    _ => "shared-detail-slot",
+                    n => new BoxEl { Width = 240f, Height = 120f, Children = [Text("detail-" + n)] },
+                    new KeepAliveOptions(TransitionFor: static (_, _) => MotionRecipes.PageSlideForward with { Exit = default })),
+                null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var retainedRoot = scene.FirstChild(scene.Root);
+
+            token.Value = 2;
+            recon.Runtime.Flush();
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            anim.Tick(0f);
+            var afterRoot = scene.FirstChild(scene.Root);
+            bool entrance = anim.TryGetTrackValue(afterRoot, AnimChannel.Opacity, out float op) && op < 0.2f;
+
+            Check("50a4. KeepAlive same-key token change preserves the retained root and still replays TransitionFor entrance",
+                afterRoot == retainedRoot && entrance,
+                $"sameRoot={afterRoot == retainedRoot} entrance={entrance} opacity={op:0.00}");
+        }
+    }
+
+    // §WS7 W7.0/W7.1 gallery scaffolding: the sectioned nav-tree derivation the registry-driven shell builds on, and
+    // the graduated theme-aware CodeBlock control.
+    static void GalleryChecks(StringTable strings)
+    {
+        // gate.gallery.registry — resolve + the two-level (section → category → page) nav derivation the shell uses.
+        {
+            var reg = new RouteRegistry();
+            reg.Add(new RouteDef("Button", _ => new BoxEl()) { Title = "Button", Category = "Basic input", Order = 1 });
+            reg.Add(new RouteDef("Slider", _ => new BoxEl()) { Title = "Slider", Category = "Basic input", Order = 2 });
+            reg.Add(new RouteDef("Image", _ => new BoxEl()) { Title = "Image", Category = "Media" });
+            reg.Add(new RouteDef("flex", _ => new BoxEl()) { Title = "Flexbox", Category = "Fundamentals" });
+            reg.Add(new RouteDef("state", _ => new BoxEl()) { Title = "State", Category = "Fundamentals" });
+
+            var tree = reg.BuildSectionedNavTree(
+                ("Controls", "IC", new[] { "Basic input", "Media" }),
+                ("Fundamentals", "IF", new[] { "Fundamentals" }));
+
+            // Controls section → two category subgroups (Basic input {Button,Slider by Order}, Media {Image}).
+            bool controls = tree.Length == 2 && tree[0].Key == "Controls"
+                && tree[0].Children is { Length: 2 } cc
+                && cc[0].Key == "Basic input" && cc[0].Children is { Length: 2 } bi && bi[0].Key == "Button" && bi[1].Key == "Slider"
+                && cc[1].Key == "Media" && cc[1].Children is { Length: 1 } md && md[0].Key == "Image";
+            // Fundamentals section holds a same-named category → its pages FLATTEN as direct leaves (sorted by title).
+            bool fundFlat = tree[1].Key == "Fundamentals" && tree[1].Children is { Length: 2 } fc
+                && fc[0].Key == "flex" && fc[1].Key == "state";
+            bool resolve = reg.Resolve("Button")?.Title == "Button" && reg.Resolve("zzz") is null;
+
+            Check("gate.gallery.registry resolve + sectioned nav-tree derivation (categories nest under sections; flat section flattens)",
+                controls && fundFlat && resolve, $"controls={controls} fundFlat={fundFlat} resolve={resolve}");
+        }
+
+        // gate.gallery.codeblock — the CodeBlock control renders tinted C# and RE-COLORS a keyword on a live theme swap.
+        {
+            ThemeKind saved = Tok.Theme;
+            try
+            {
+                Tok.Use(ThemeKind.Light);
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("codeblock", new Size2(420, 200), 1f));
+                window.Show();
+                var device = new HeadlessGpuDevice();
+                var fonts = new HeadlessFontSystem(strings);
+                using var host = new AppHost(app, window, device, fonts, strings, new CodeBlock { Code = "using x = 1;", Copyable = false });
+                host.RunFrame();
+                ColorF lightKw = GlyphColor(device, strings, "using");
+
+                Tok.Use(ThemeKind.Dark);
+                host.Reconciler.RethemeAll();
+                host.RunFrame();
+                ColorF darkKw = GlyphColor(device, strings, "using");
+
+                bool rendered = lightKw != default(ColorF) && darkKw != default(ColorF);
+                bool recolored = !ColorClose(lightKw, darkKw, 0.01f);
+                Check("gate.gallery.codeblock renders tinted C# + re-colors keyword on theme swap",
+                    rendered && recolored, $"rendered={rendered} recolored={recolored} light={lightKw} dark={darkKw}");
+            }
+            finally { Tok.Use(saved); }
+        }
+    }
+
+    // §WS3 P8 registry-driven router: RouteRegistry, the RouteTableGenerator (FluentGpu.Generated.Routes),
+    // PageHost.Create (fallback + KeepAlive parking), and the NavTransition → Enter-token mapping.
+    static void NavRouterChecks(StringTable strings)
+    {
+        // gate.nav.registry — pure: Add/Resolve/Fallback/duplicate-throw/BuildNavTree grouping/BuildSearchIndex.
+        {
+            var reg = new RouteRegistry();
+            reg.Add(new RouteDef("a", _ => new BoxEl()) { Title = "Alpha", Icon = "IA", Category = "Group1", Order = 2 });
+            reg.Add("b", "Beta", "IB", () => new BoxEl());                          // convenience overload; uncategorized
+            reg.Add(new RouteDef("c", _ => new BoxEl()) { Title = "Gamma", Icon = "IC", Category = "Group1", Order = 1 });
+            reg.Add(new RouteDef("d", _ => new BoxEl()) { Title = "Delta", Icon = "ID", Category = "Group2" });
+            reg.Add(new RouteDef("hid", _ => new BoxEl()) { Title = "Hidden", ShowInNav = false });
+
+            bool resolve = reg.Resolve("a")?.Title == "Alpha" && reg.Resolve("zzz") is null && reg.All.Count == 5;
+
+            bool threw = false;
+            try { reg.Add(new RouteDef("a", _ => new BoxEl())); } catch (InvalidOperationException) { threw = true; }
+
+            reg.Fallback = r => new TextEl("FB:" + r.Name);
+            bool fallbackSettable = reg.Fallback is not null;
+
+            var tree = reg.BuildNavTree(("Group1", "G1I"), ("Group2", "G2I"));
+            // Group1 first (children sorted by Order: c(1) then a(2)); Group2 (d); then top-level b. "hid" is excluded.
+            bool g1 = tree.Length == 3 && tree[0].Key == "Group1" && tree[0].Glyph == "G1I"
+                      && tree[0].Children is { Length: 2 } k1 && k1[0].Key == "c" && k1[1].Key == "a";
+            bool g2 = tree[1].Key == "Group2" && tree[1].Children is { Length: 1 } k2 && k2[0].Key == "d";
+            bool top = tree[2].Key == "b" && tree[2].Children is null;
+            bool hiddenOut = true;
+            foreach (var t in tree)
+            {
+                if (t.Key == "hid") hiddenOut = false;
+                if (t.Children is { } ch) foreach (var c in ch) if (c.Key == "hid") hiddenOut = false;
+            }
+
+            var idx = reg.BuildSearchIndex();
+            bool hasAlpha = false, hasHidden = false;
+            foreach (var (label, key) in idx) { if (key == "a" && label == "Alpha") hasAlpha = true; if (key == "hid") hasHidden = true; }
+            bool search = hasAlpha && !hasHidden;
+
+            Check("gate.nav.registry Add/Resolve/Fallback/duplicate-throw/BuildNavTree/BuildSearchIndex",
+                resolve && threw && fallbackSettable && g1 && g2 && top && hiddenOut && search,
+                $"resolve={resolve} threw={threw} g1={g1} g2={g2} top={top} hiddenOut={hiddenOut} search={search}");
+        }
+
+        // gate.nav.route-gen — the generated Routes.RegisterAll registers a [Route] page with correct metadata, and an
+        // argful ([string] ctor) page threads route.Arg through PageHost.
+        {
+            var reg = new RouteRegistry();
+            FluentGpu.Generated.Routes.RegisterAll(reg);
+            var plain = reg.Resolve("vs.route-gen.plain");
+            bool meta = plain is { Title: "Plain Page", Icon: "P", Category: "RouteGen", Order: 7, KeepAlive: true };
+
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("route-gen", new Size2(320, 240), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var nav = new Navigator(new Route("vs.route-gen.arg", "ZZZ"));
+            using var host = new AppHost(app, window, device, fonts, strings, new PageHost(nav, reg));
+            host.RunFrame();
+            bool argRoutes = HasGlyph(device, strings, "VSGEN-ARG:ZZZ");
+
+            Check("gate.nav.route-gen generated RegisterAll: page metadata + argful ctor threads route.Arg",
+                meta && argRoutes, $"meta={meta} argRoutes={argRoutes}");
+        }
+
+        // gate.nav.pagehost-v2 — PageHost.Create resolves by key; unknown → Fallback; a KeepAlive route restores its
+        // state on return, a non-KeepAlive route remounts fresh.
+        {
+            var reg = new RouteRegistry();
+            reg.Add(new RouteDef("home", _ => Embed.Comp(() => new RouterProbePage("HOME"))));
+            reg.Add(new RouteDef("ka", _ => Embed.Comp(() => new RouterProbePage("KA"))) { KeepAlive = true });
+            reg.Add(new RouteDef("plain", _ => Embed.Comp(() => new RouterProbePage("PLAIN"))));
+            reg.Fallback = r => new BoxEl { Children = [Text("FALLBACK:" + r.Name)] };
+
+            bool createShape = PageHost.Create(new Navigator(new Route("home")), reg) is ComponentEl ce && ce.ComponentType == typeof(PageHost);
+
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("pagehost-v2", new Size2(320, 240), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var nav = new Navigator(new Route("home"));
+            using var host = new AppHost(app, window, device, fonts, strings, new PageHost(nav, reg));
+
+            host.RunFrame();
+            bool onHome = HasGlyph(device, strings, "HOME:0");
+
+            nav.Replace(new Route("ka")); host.RunFrame();
+            bool onKa = HasGlyph(device, strings, "KA:0");
+            ClickNode(host, window, FindRole(host.Scene, host.Scene.Root, AutomationRole.Button));
+            bool kaClicked = HasGlyph(device, strings, "KA:1");
+
+            nav.Replace(new Route("home")); host.RunFrame();
+            bool backHome = HasGlyph(device, strings, "HOME:0") && !HasGlyph(device, strings, "KA:1");
+
+            nav.Replace(new Route("ka")); host.RunFrame();
+            bool kaRestored = HasGlyph(device, strings, "KA:1");                    // KeepAlive kept the counter
+
+            nav.Replace(new Route("plain")); host.RunFrame();
+            ClickNode(host, window, FindRole(host.Scene, host.Scene.Root, AutomationRole.Button));
+            bool plainClicked = HasGlyph(device, strings, "PLAIN:1");
+            nav.Replace(new Route("home")); host.RunFrame();
+            nav.Replace(new Route("plain")); host.RunFrame();
+            bool plainFresh = HasGlyph(device, strings, "PLAIN:0") && !HasGlyph(device, strings, "PLAIN:1");   // non-KeepAlive remounts fresh
+
+            nav.Replace(new Route("nope")); host.RunFrame();
+            bool fallback = HasGlyph(device, strings, "FALLBACK:nope");
+
+            Check("gate.nav.pagehost-v2 resolve-by-key/fallback/keepalive-restore/non-keepalive-fresh",
+                createShape && onHome && onKa && kaClicked && backHome && kaRestored && plainClicked && plainFresh && fallback,
+                $"create={createShape} home={onHome} ka={onKa} kaClick={kaClicked} back={backHome} kaRestored={kaRestored} plainFresh={plainFresh} fallback={fallback}");
+        }
+
+        // gate.nav.transition — an Entrance route gets Enter tokens on its root; Default too; None snaps (author owns motion).
+        {
+            var entrance = PageHost.WithTransition(new BoxEl(), NavTransition.Entrance);
+            var standard = PageHost.WithTransition(new BoxEl(), NavTransition.Default);
+            var none = PageHost.WithTransition(new BoxEl(), NavTransition.None);
+            bool entranceEnter = entrance.Enter is { Active: true } && entrance.Transition is not null;
+            bool standardEnter = standard.Enter is { Active: true } && standard.Transition is not null;
+            bool noneBare = none.Enter is null && none.Transition is null;
+            Check("gate.nav.transition Entrance/Default seed Enter tokens on the page root; None snaps",
+                entranceEnter && standardEnter && noneBare,
+                $"entrance={entranceEnter} standard={standardEnter} none={noneBare}");
+        }
     }
 
     // Component activation lifecycle: UseActivation fires once per park/minimize transition (never at mount), and a
@@ -13921,6 +16406,135 @@ static class Slice
         Check("AF1. TextEl auto-fit (MinSize): a long title shrinks to fit MaxLines; a short title is unchanged",
             longShrank && shortKept,
             $"longFit={longFit:0.#} < longFixed={longFixed:0.#} | shortFit={shortFit:0.#} ~= shortFixed={shortFixed:0.#}");
+    }
+
+    // G3 - token system: OnAccent (contrast baked at accent-set time, never at paint), on-media ink/scrim static
+    // identity, generated Tok accessors forward the live TokenSet across a theme swap, and the generated Icons table.
+    static void G3TokenChecks()
+    {
+        var savedPalette = Tok.Palette;
+        var savedTheme = Tok.Theme;
+
+        // gate.tok.onaccent-contrast
+        // Extreme 1: white fill (dark theme -> Light2(white) == white) -> near-black ink, AA-passing, memoized per epoch.
+        Tok.Use(savedPalette, ThemeKind.Dark);
+        Tok.SetAccent(ColorF.FromRgba(0xFF, 0xFF, 0xFF));
+        ColorF bgW = Tok.AccentDefault;
+        int cA = Tok.OnAccentComputeCount;
+        ColorF inkW = Tok.OnAccent;
+        ColorF inkW2 = Tok.OnAccent;               // second read, same epoch -> cached (no recompute)
+        int cB = Tok.OnAccentComputeCount;
+        bool memoized = cB == cA + 1 && inkW2 == inkW;
+        bool wMatches = inkW == ColorContrast.PickContrast(bgW) && ColorContrast.Ratio(inkW, bgW) >= 4.5f;
+
+        // Extreme 2: near-black fill (light theme -> Dark1(#161616) very dark) -> white ink, AA-passing.
+        Tok.Use(savedPalette, ThemeKind.Light);
+        Tok.SetAccent(ColorF.FromRgba(0x16, 0x16, 0x16));
+        ColorF bgB = Tok.AccentDefault;
+        ColorF inkB = Tok.OnAccent;
+        bool bMatches = inkB == ColorContrast.PickContrast(bgB) && ColorContrast.Ratio(inkB, bgB) >= 4.5f;
+
+        // Mid-saturated fill: picks the WCAG-better ink of the pair.
+        Tok.SetAccent(ColorF.FromRgba(0x2E, 0x6C, 0xE0));
+        ColorF bgM = Tok.AccentDefault;
+        bool mMatches = Tok.OnAccent == ColorContrast.PickContrast(bgM);
+        Check("gate.tok.onaccent-contrast", wMatches && bMatches && mMatches && memoized,
+            $"whiteAA={ColorContrast.Ratio(inkW, bgW):0.0} blackAA={ColorContrast.Ratio(inkB, bgB):0.0} midMatch={mMatches} memo={memoized}(compute {cA}->{cB})");
+
+        // gate.tok.onmedia-static-identity: scrim/ink getters return identical instances/values (no per-read alloc).
+        var s1 = Tok.ScrimBottom; var s2 = Tok.ScrimBottom;
+        var t1 = Tok.ScrimTop; var t2 = Tok.ScrimTop;
+        bool gradSame = ReferenceEquals(s1.Stops, s2.Stops) && ReferenceEquals(t1.Stops, t2.Stops);
+        bool inkStatic = Tok.OnMediaPrimary == new ColorF(1f, 1f, 1f, 1f)
+                      && Tok.OnMediaSecondary == new ColorF(1f, 1f, 1f, 0.80f)
+                      && Tok.OnMediaTertiary == new ColorF(1f, 1f, 1f, 0.60f)
+                      && Tok.MediaScrim == new ColorF(0f, 0f, 0f, 0.55f);
+        Check("gate.tok.onmedia-static-identity", gradSame && inkStatic,
+            $"scrimStopsIdentical={gradSame} inkScrimValues={inkStatic}");
+
+        // gate.tok.generated-accessors: a GENERATED forward reflects the live TokenSet across a theme swap.
+        Tok.Use(savedPalette, ThemeKind.Dark);
+        ColorF darkVal = Tok.FillCardDefault;                     // generated `=> T.FillCardDefault`
+        bool darkMatch = darkVal == Tok.T.FillCardDefault;
+        Tok.Use(savedPalette, ThemeKind.Light);
+        ColorF lightVal = Tok.FillCardDefault;
+        bool lightMatch = lightVal == Tok.T.FillCardDefault;
+        bool flipped = darkVal != lightVal;                       // the table swap is visible through the generated getter
+        Check("gate.tok.generated-accessors", darkMatch && lightMatch && flipped,
+            $"darkMatch={darkMatch} lightMatch={lightMatch} flipped={flipped}");
+
+        // gate.icons.generated-table: the generated Icons table matches (golden few incl. a Wavee fold-in).
+        // Compared by codepoint (ASCII-safe source; no raw PUA glyphs, per the engine icon-font convention).
+        bool iconsOk = Icons.Play.Length == 1 && Icons.Play[0] == (char)0xE768
+                    && Icons.Pause[0] == (char)0xE769 && Icons.Home[0] == (char)0xE80F
+                    && Icons.ChromeClose[0] == (char)0xE8BB && Icons.Album[0] == (char)0xE93C
+                    && Icons.Delete[0] == (char)0xE74D;
+        Check("gate.icons.generated-table", iconsOk,
+            $"Play=U+{(int)Icons.Play[0]:X4} Album=U+{(int)Icons.Album[0]:X4} Delete=U+{(int)Icons.Delete[0]:X4}");
+
+        Tok.SetAccent(null);                                      // restore (headless slice runs with no injected accent)
+        Tok.Use(savedPalette, savedTheme);
+    }
+
+    // G3 - layout primitives: Ui.AspectRatio derive-missing-dimension + an aspect box is NOT a relayout boundary.
+    static void G3AspectChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("aspect", new Size2(640, 480), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        using var host = new AppHost(app, window, device, fonts, strings, new AspectProbe());
+        host.RunFrame();
+
+        var root = host.Scene.Root;
+        var wBox = Child(host.Scene, root, 0);
+        var hBox = Child(host.Scene, root, 1);
+        var wb = host.Scene.Bounds(wBox);
+        var hb = host.Scene.Bounds(hBox);
+        bool wDerives = Near(wb.W, 320f, 0.5f) && Near(wb.H, 180f, 0.5f);   // 320 / (16/9) = 180
+        bool hDerives = Near(hb.W, 160f, 0.5f) && Near(hb.H, 90f, 0.5f);    // 90 * (16/9) = 160
+        // Not a layout boundary: exactly one authored dimension stays NaN (IsLayoutBoundary needs both set).
+        bool notBoundary = float.IsNaN(host.Scene.Layout(wBox).Height) && float.IsNaN(host.Scene.Layout(hBox).Width);
+        Check("gate.layout.aspect-derive", wDerives && hDerives && notBoundary,
+            $"w=({wb.W:0}x{wb.H:0}) h=({hb.W:0}x{hb.H:0}) notBoundary={notBoundary}");
+    }
+
+    // G3 - Spacer / Spacer(px) / Wrap / Center primitives (arranged-rect assertions).
+    static void G3PrimitiveChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("primitives", new Size2(640, 640), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        using var host = new AppHost(app, window, device, fonts, strings, new PrimitivesProbe());
+        host.RunFrame();
+
+        var s = host.Scene;
+        var root = s.Root;
+        var row0 = Child(s, root, 0);
+        var row1 = Child(s, root, 1);
+        var wrap = Child(s, root, 2);
+        var centerOuter = Child(s, root, 3);
+
+        // Spacer() grows: the trailing box is pushed to the far edge (300 - 40 - 60 = 200 slack -> box2.X == 240).
+        float grownX = s.AbsoluteRect(Child(s, row0, 2)).X - s.AbsoluteRect(row0).X;
+        bool spacerGrows = Near(grownX, 240f, 1f);
+        // Spacer(24) is rigid: trailing box sits right after the 24px gap (box2.X == 40 + 24 == 64).
+        float fixedX = s.AbsoluteRect(Child(s, row1, 2)).X - s.AbsoluteRect(row1).X;
+        bool spacerFixed = Near(fixedX, 64f, 1f);
+        // Wrap: the third 120-wide box wraps to a new line (Y drops one row, X returns to the line start).
+        var w0 = s.AbsoluteRect(Child(s, wrap, 0));
+        var w2 = s.AbsoluteRect(Child(s, wrap, 2));
+        bool wraps = w2.Y > w0.Y + 20f && Near(w2.X, w0.X, 1f);
+        // Center: the 40x40 child is centered on both axes in the 200x200 box.
+        var outer = s.AbsoluteRect(centerOuter);
+        var inner = s.AbsoluteRect(Child(s, Child(s, centerOuter, 0), 0));
+        bool centered = Near(inner.X - outer.X, (outer.W - inner.W) / 2f, 1f)
+                     && Near(inner.Y - outer.Y, (outer.H - inner.H) / 2f, 1f);
+        Check("gate.ui.spacer-wrap-center", spacerGrows && spacerFixed && wraps && centered,
+            $"grow={grownX:0} fixed={fixedX:0} wrapDy={w2.Y - w0.Y:0} centerOff={inner.X - outer.X:0}");
     }
 
     static void GridChecks(StringTable strings)
@@ -14526,7 +17140,8 @@ static class Slice
         host.RunFrame();
         int renders0 = SliderSignalProbe.Renders;
 
-        var thumbRow = Child(host.Scene, host.Scene.Root, 1);
+        var track = FindRole(host.Scene, host.Scene.Root, AutomationRole.Slider);   // the unified Create wraps a stable root; find the track by role
+        var thumbRow = Child(host.Scene, track, 1);
         var thumb = Child(host.Scene, thumbRow, 0);
         float dx0 = host.Scene.Paint(thumb).LocalTransform.Dx;
 
@@ -14540,6 +17155,115 @@ static class Slice
         Check("60. signal-bound slider: value→transform, NO re-render/reconcile/layout (the slider tank, fixed)",
             moved && noRerender && compositorOnly,
             $"thumbDx {dx0:0}→{dx1:0} renders+{SliderSignalProbe.Renders - renders0} rendered={f.Rendered}");
+    }
+
+    // WS3 P3 — the ONE Slider.Create: ranged options + step snap + keyboard, value auto-materialization, and a
+    // signal-bound tooltip that stays out of the per-move re-render path (the gate-60 contract WITH the tooltip up).
+    static void SliderUnifiedChecks(StringTable strings)
+    {
+        // gate.ctl.slider.one-api — ranged [min,max] mapping + step snap + the WinUI keyboard, ALL through Slider.Create.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("sl-oneapi", new Size2(360, 220), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new SliderUnifiedProbe { Caller = new FloatSignal(0f), Opts = new Slider.SliderOptions { Min = 0f, Max = 100f, Step = 10f, TickFrequency = 20f } };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var track = FindRole(host.Scene, host.Scene.Root, AutomationRole.Slider);
+            var tr = host.Scene.AbsoluteRect(track);
+            var p = new Point2(tr.X + 94f, tr.Y + tr.H / 2f);          // raw 0.47 → 47 → step-10 snap → 50
+            window.QueueInput(new InputEvent(InputKind.PointerDown, p, 0, 0));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, p, 0, 0));   // press+release also focuses the track for the keys
+            host.RunFrame();
+            float snapped = root.Val;
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Right)); host.RunFrame();
+            float afterRight = root.Val;                              // +SmallChange (auto range/100 = 1) → 51
+            window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Home)); host.RunFrame();
+            float afterHome = root.Val;                               // Minimum → 0
+            Check("gate.ctl.slider.one-api ranged [min,max] mapping + step-10 snap + keyboard (SmallChange/Home) all through the single Slider.Create",
+                Near(snapped, 50f) && Near(afterRight, 51f) && Near(afterHome, 0f),
+                $"snapped={snapped:0.#} right={afterRight:0.#} home={afterHome:0.#}");
+        }
+
+        // gate.ctl.slider.automaterialize — value:null scrubs via the control's OWN signal; a caller signal controls it
+        // externally (a programmatic write moves the thumb on the compositor bind, no re-render).
+        bool ownedScrubs;
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("sl-auto", new Size2(360, 220), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new SliderUnifiedProbe { Caller = null, Opts = null };   // null value ⇒ control-owned (0..1)
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var track = FindRole(host.Scene, host.Scene.Root, AutomationRole.Slider);
+            var tr = host.Scene.AbsoluteRect(track);
+            var p = new Point2(tr.X + 120f, tr.Y + tr.H / 2f);        // 0.6 of length 200
+            window.QueueInput(new InputEvent(InputKind.PointerDown, p, 0, 0));
+            host.RunFrame();
+            ownedScrubs = Near(root.Val, 0.6f, 0.02f);                 // the internal signal drove onChange
+            window.QueueInput(new InputEvent(InputKind.PointerUp, p, 0, 0)); host.RunFrame();
+        }
+        bool externalMoves; float exDx0 = 0f, exDx1 = 0f; bool exRendered = true;
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("sl-ext", new Size2(360, 220), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var caller = new FloatSignal(0.2f);
+            var root = new SliderUnifiedProbe { Caller = caller, Opts = null };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var track = FindRole(host.Scene, host.Scene.Root, AutomationRole.Slider);
+            var thumbRow = Child(host.Scene, track, 1);
+            var thumb = Child(host.Scene, thumbRow, 0);
+            exDx0 = host.Scene.Paint(thumb).LocalTransform.Dx;
+            caller.Value = 0.9f;                                       // external programmatic write
+            var f = host.RunFrame();
+            exDx1 = host.Scene.Paint(thumb).LocalTransform.Dx;
+            exRendered = f.Rendered;
+            externalMoves = (exDx1 - exDx0) > 50f && !exRendered;      // moved on the compositor bind, no re-render
+        }
+        Check("gate.ctl.slider.automaterialize value:null scrubs via its own signal; a caller signal controls it externally (compositor-only)",
+            ownedScrubs && externalMoves, $"owned={ownedScrubs} extDx {exDx0:0}→{exDx1:0} rendered={exRendered}");
+
+        // gate.ctl.slider.tooltip-bind — the tooltip opens on press, then drag moves keep FrameStats.Rendered == false.
+        // A 0..1 continuous slider formats the readout as "0" across [0,0.5): the thumb rides the compositor bind while
+        // the bound tooltip text is unchanged (the effect early-returns on paint.Text == next → no LayoutDirty), so a
+        // scrub with the bubble UP stays compositor-only — the bubble follows via OverlayHost.AfterAnimations.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("sl-tip", new Size2(360, 240), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var caller = new FloatSignal(0.1f);
+            var root = new SliderUnifiedProbe { Caller = caller, Opts = null };   // tooltip enabled by default
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var track = FindRole(host.Scene, host.Scene.Root, AutomationRole.Slider);
+            var tr = host.Scene.AbsoluteRect(track);
+            var thumbRow = Child(host.Scene, track, 1);
+            var thumb = Child(host.Scene, thumbRow, 0);
+            var p = new Point2(tr.X + 20f, tr.Y + tr.H / 2f);         // value 0.1 → readout "0"
+            window.QueueInput(new InputEvent(InputKind.PointerDown, p, 0, 0));
+            host.RunFrame(); host.RunFrame();                          // press → tooltip opens + places (this renders — expected)
+            bool opened = HasGlyph(device, strings, "0");
+            float dx0 = host.Scene.Paint(thumb).LocalTransform.Dx;
+            bool dragCompositorOnly = true;
+            for (int i = 1; i <= 3; i++)                               // drag within [0,0.5): readout stays "0"
+            {
+                window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(tr.X + 20f + i * 20f, tr.Y + tr.H / 2f), 0, 0));
+                var f = host.RunFrame();
+                if (f.Rendered) dragCompositorOnly = false;
+            }
+            float dx1 = host.Scene.Paint(thumb).LocalTransform.Dx;
+            window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(tr.X + 80f, tr.Y + tr.H / 2f), 0, 0));
+            host.RunFrame();
+            bool moved = (dx1 - dx0) > 20f;
+            Check("gate.ctl.slider.tooltip-bind tooltip opens on press, then drag moves keep FrameStats.Rendered == false (gate-60 contract WITH the tooltip)",
+                opened && dragCompositorOnly && moved, $"opened={opened} compositorOnly={dragCompositorOnly} thumbDx {dx0:0}→{dx1:0}");
+        }
     }
 
     // Reactive control-flow: For (keyed list) + Show (conditional) restructure the tree with NO parent re-render.
@@ -14633,6 +17357,282 @@ static class Slice
         Check("61c. parent re-render refreshes a Show boundary's branch in place (new children, same node, still hides)",
             init && refreshed && reRendered && sameNode && hidden,
             $"init={init} refreshed={refreshed} reRendered={reRendered} sameNode={sameNode} hidden={hidden} parentRenders={FlowShowRefreshProbe.Renders}");
+    }
+
+    static int DirectChildCount(SceneStore s, NodeHandle n)
+    {
+        int c = 0;
+        for (var ch = s.FirstChild(n); !ch.IsNull; ch = s.NextSibling(ch)) c++;
+        return c;
+    }
+
+    // Flow.For<T> — typed, mandatory-key reactive lists (gate.for.*). Keyed diff preserves row identity; the source is
+    // snapshotted ONCE per boundary run; a parent re-render re-points the row closures (the UpdateShow-parity fix);
+    // duplicate keys trip a DEBUG guard; and a settled list is 0-alloc on a quiet frame.
+    static void ForTypedChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+
+        // gate.for.typed-keyed-diff — insert/remove/reorder preserve a row's scene node (⇒ its component state) by key.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("for-keyed", new Size2(240, 400), 1f)); window.Show();
+            var probe = new ForKeyedDiffProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var forHost = Child(host.Scene, host.Scene.Root, 0);
+            var rowB = Child(host.Scene, forHost, 1);            // the "b" row — its handle must survive every mutation
+            bool init = !rowB.IsNull && DirectChildCount(host.Scene, forHost) == 3;
+
+            probe.Items.Value = new[] { "d", "a", "b", "c" };    // insert 'd' at front → b shifts to index 2, node preserved
+            host.RunFrame();
+            bool afterInsert = Child(host.Scene, forHost, 2) == rowB && DirectChildCount(host.Scene, forHost) == 4;
+
+            probe.Items.Value = new[] { "d", "b", "c" };         // remove 'a' → b at index 1, node preserved
+            host.RunFrame();
+            bool afterRemove = Child(host.Scene, forHost, 1) == rowB && DirectChildCount(host.Scene, forHost) == 3;
+
+            probe.Items.Value = new[] { "c", "b", "d" };         // pure reorder → b at index 1, node preserved
+            host.RunFrame();
+            bool afterReorder = Child(host.Scene, forHost, 1) == rowB && DirectChildCount(host.Scene, forHost) == 3;
+
+            Check("gate.for.typed-keyed-diff insert/remove/reorder preserve a row's node (state) by key",
+                init && afterInsert && afterRemove && afterReorder,
+                $"init={init} insert={afterInsert} remove={afterRemove} reorder={afterReorder}");
+        }
+
+        // gate.for.snapshot-single-read — the items source is read EXACTLY ONCE per boundary run (kills the old N+1).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("for-snapshot", new Size2(240, 400), 1f)); window.Show();
+            var probe = new ForSnapshotProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            int afterMount = probe.ItemsReads;                   // 1 read for 5 rows (not 6)
+            probe.Items.Value = new[] { 1, 2, 3, 4, 5, 6 };
+            host.RunFrame();
+            int afterChange = probe.ItemsReads;                  // +1 for the structural change
+            Check("gate.for.snapshot-single-read the items thunk runs exactly once per boundary run (N rows, 1 read)",
+                afterMount == 1 && afterChange == 2, $"afterMount={afterMount} afterChange={afterChange}");
+        }
+
+        // gate.for.update-repoints-closures — a parent re-render rebuilds the For with a fresh Row closure; rows must
+        // reflect the NEW captured state IN PLACE (same node), not freeze at mount. Pre-fix (ForEl.Update no-op) fails.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("for-update", new Size2(240, 400), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            ForUpdateProbe.Renders = 0;
+            var probe = new ForUpdateProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, probe);
+            host.RunFrame();
+            var forHost = Child(host.Scene, host.Scene.Root, 0);
+            var row0 = Child(host.Scene, forHost, 0);            // the "k1" row — identity must survive the parent re-render
+            bool init = HasGlyph(device, strings, "A1") && !row0.IsNull;
+
+            probe.Prefix!.Value = "B";                           // mutate parent-read state → parent re-renders → fresh Row closure
+            host.RunFrame();
+            var row0b = Child(host.Scene, forHost, 0);
+            bool refreshed = HasGlyph(device, strings, "B1") && !HasGlyph(device, strings, "A1");
+            bool reRendered = ForUpdateProbe.Renders > 1;
+            bool sameNode = row0b == row0 && !row0b.IsNull;      // in-place update by key, NOT a remount
+            Check("gate.for.update-repoints-closures parent re-render re-points the For row closures in place (UpdateShow parity)",
+                init && refreshed && reRendered && sameNode,
+                $"init={init} refreshed={refreshed} reRendered={reRendered} sameNode={sameNode} renders={ForUpdateProbe.Renders}");
+        }
+
+        // gate.for.duplicate-key-tripwire (DEBUG) — two rows sharing a key throw inside Fill, naming the key.
+        {
+#if DEBUG
+            bool threw = false; string detail = "no throw";
+            try
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("for-dup", new Size2(200, 120), 1f)); window.Show();
+                var probe = new ForDupKeyProbe();
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+                host.RunFrame();
+            }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("duplicate key")) { threw = true; detail = "threw naming the dup key"; }
+            catch (Exception ex) { detail = "wrong exception: " + ex.GetType().Name; }
+            Check("gate.for.duplicate-key-tripwire DEBUG: two rows sharing a key throw inside Fill", threw, detail);
+#else
+            Check("gate.for.duplicate-key-tripwire DEBUG: two rows sharing a key throw inside Fill", true, "release: DEBUG-only tripwire compiled out");
+#endif
+        }
+
+        // gate.for.effect-zero-steady-alloc — a settled For adds 0 bytes to the hot phase on a quiet frame.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("for-alloc", new Size2(240, 300), 1f)); window.Show();
+            var probe = new ForAllocProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            for (int i = 0; i < 4 && host.HasActiveWork; i++) host.RunFrame();
+            for (int i = 0; i < 6; i++) host.Paint(0);           // warm the paths (JIT)
+            long worst = 0;
+            for (int i = 0; i < 10; i++) { var f = host.Paint(0); if (f.HotPhaseAllocBytes > worst) worst = f.HotPhaseAllocBytes; }
+            Check("gate.for.effect-zero-steady-alloc a settled For adds 0 bytes to the hot phase on a quiet frame",
+                worst == 0, $"worst={worst} bytes");
+        }
+    }
+
+    // Pump frames until <paramref name="cond"/> holds (or the frame budget runs out) — drains the UsePost queue each frame
+    // so an async completion (posted from a threadpool continuation) lands. Returns whether the condition held.
+    static bool PumpUntil(AppHost host, Func<bool> cond, int maxFrames = 200)
+    {
+        for (int i = 0; i < maxFrames; i++)
+        {
+            if (cond()) return true;
+            host.RunFrame();
+        }
+        return cond();
+    }
+
+    // UseResource — the full stale-while-revalidate contract (gate.resource.*): epoch-ordered completions, refresh SWR,
+    // refresh-failure keeps data, optimistic mutate, keep-previous-data, deps re-key to Pending, and stale-time via the
+    // HostTimerQueue. Loads are controllable TaskCompletionSources so completion ORDER is scripted deterministically.
+    static void ResourceChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+
+        // gate.resource.epoch-ordering — start A (slow), re-key to B (fast); B lands; A completing LATER is dropped by
+        // the epoch guard (the loader ignores cancellation, so only the epoch stamp — not the token — can drop A).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("res-epoch", new Size2(200, 120), 1f)); window.Show();
+            var probe = new ResourceProbe { ObserveCancellation = false };
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 1, 3000);   // load A started (deps=0)
+            probe.Key.Value = 1; host.RunFrame();                                       // re-key → load B (deps=1)
+            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 2, 3000);
+            probe.Gates[1].SetResult("B");
+            bool bLanded = PumpUntil(host, () => probe.Res.Loadable.IsReady && probe.Res.Loadable.Value.Peek() == "B");
+            probe.Gates[0].SetResult("A");                                              // the superseded (older-epoch) load completes late
+            for (int i = 0; i < 24; i++) host.RunFrame();
+            bool aDropped = probe.Res.Loadable.Value.Peek() == "B";
+            Check("gate.resource.epoch-ordering out-of-order completion never regresses: B lands, older A is dropped",
+                bLanded && aDropped, $"bLanded={bLanded} aDropped={aDropped} value='{probe.Res.Loadable.Value.Peek()}'");
+        }
+
+        // gate.resource.refresh-swr — Refresh() keeps Ready(old) visible while fetching (IsFetching true), lands
+        // Ready(new); IsFetching toggles false; IsStale flips true after Ready (staleTime=0 default).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("res-swr", new Size2(200, 120), 1f)); window.Show();
+            var probe = new ResourceProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 1, 3000);
+            probe.Gates[0].SetResult("v0");
+            bool ready0 = PumpUntil(host, () => probe.Res.Loadable.Value.Peek() == "v0");
+            bool staleAfterReady = probe.Res.IsStale.Peek();                            // staleTime=0 ⇒ stale as soon as Ready
+            bool notFetching0 = !probe.Res.IsFetching.Peek();
+
+            probe.Res.Refresh();
+            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 2, 3000);
+            bool duringSwr = probe.Res.Loadable.IsReady && probe.Res.Loadable.Value.Peek() == "v0"
+                             && probe.Res.IsFetching.Peek() && !probe.Res.IsStale.Peek();
+            probe.Gates[1].SetResult("v1");
+            bool ready1 = PumpUntil(host, () => probe.Res.Loadable.Value.Peek() == "v1" && !probe.Res.IsFetching.Peek());
+            Check("gate.resource.refresh-swr Refresh keeps Ready(old) while fetching, lands Ready(new); IsFetching/IsStale toggle",
+                ready0 && staleAfterReady && notFetching0 && duringSwr && ready1,
+                $"ready0={ready0} staleAfterReady={staleAfterReady} notFetching0={notFetching0} duringSwr={duringSwr} ready1={ready1}");
+        }
+
+        // gate.resource.refresh-failure-keeps-data — a refresh that FAILS keeps the prior Ready value + sets LastError.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("res-failkeep", new Size2(200, 120), 1f)); window.Show();
+            var probe = new ResourceProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 1, 3000);
+            probe.Gates[0].SetResult("v0");
+            PumpUntil(host, () => probe.Res.Loadable.Value.Peek() == "v0");
+            probe.Res.Refresh();
+            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 2, 3000);
+            probe.Gates[1].SetException(new InvalidOperationException("boom"));
+            bool settled = PumpUntil(host, () => !probe.Res.IsFetching.Peek() && probe.Res.LastError is not null);
+            bool keptData = probe.Res.Loadable.IsReady && probe.Res.Loadable.Value.Peek() == "v0";
+            bool errored = probe.Res.LastError is not null;
+            Check("gate.resource.refresh-failure-keeps-data a failed refresh keeps Ready(old) + sets LastError",
+                settled && keptData && errored,
+                $"settled={settled} keptData={keptData} err={(errored ? probe.Res.LastError!.Message : "null")}");
+        }
+
+        // gate.resource.mutate-optimistic — Mutate writes Ready(optimistic) immediately; the revalidation replaces it.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("res-mutate", new Size2(200, 120), 1f)); window.Show();
+            var probe = new ResourceProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 1, 3000);
+            probe.Gates[0].SetResult("v0");
+            PumpUntil(host, () => probe.Res.Loadable.Value.Peek() == "v0");
+            probe.Res.Mutate("optimistic");
+            bool optimisticNow = probe.Res.Loadable.IsReady && probe.Res.Loadable.Value.Peek() == "optimistic" && probe.Res.IsFetching.Peek();
+            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 2, 3000);
+            probe.Gates[1].SetResult("revalidated");
+            bool revalidated = PumpUntil(host, () => probe.Res.Loadable.Value.Peek() == "revalidated");
+            Check("gate.resource.mutate-optimistic Mutate shows the optimistic value immediately; revalidation replaces it",
+                optimisticNow && revalidated, $"optimisticNow={optimisticNow} revalidated={revalidated}");
+        }
+
+        // gate.resource.keep-previous-data — a deps change with KeepPreviousData keeps the old value + IsFetching visible.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("res-keepprev", new Size2(200, 120), 1f)); window.Show();
+            var probe = new ResourceProbe { Options = new ResourceOptions { KeepPreviousData = true } };
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 1, 3000);
+            probe.Gates[0].SetResult("v0");
+            PumpUntil(host, () => probe.Res.Loadable.Value.Peek() == "v0");
+            probe.Key.Value = 1; host.RunFrame();                                       // deps change — keep-previous
+            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 2, 3000);
+            bool keptPrev = probe.Res.Loadable.IsReady && probe.Res.Loadable.Value.Peek() == "v0" && probe.Res.IsFetching.Peek();
+            probe.Gates[1].SetResult("v1");
+            bool landedNew = PumpUntil(host, () => probe.Res.Loadable.Value.Peek() == "v1");
+            Check("gate.resource.keep-previous-data deps change shows the previous value + IsFetching until the new lands",
+                keptPrev && landedNew, $"keptPrev={keptPrev} landedNew={landedNew}");
+        }
+
+        // gate.resource.deps-rekey-pending — default (no KeepPreviousData): a deps change resets to Pending(seed).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("res-rekey", new Size2(200, 120), 1f)); window.Show();
+            var probe = new ResourceProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 1, 3000);
+            probe.Gates[0].SetResult("v0");
+            PumpUntil(host, () => probe.Res.Loadable.Value.Peek() == "v0");
+            probe.Key.Value = 1; host.RunFrame();                                       // deps change — reset to Pending(seed)
+            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 2, 3000);
+            bool pendingSeed = probe.Res.Loadable.IsLoading && probe.Res.Loadable.Value.Peek() == "" && probe.Res.IsFetching.Peek();
+            Check("gate.resource.deps-rekey-pending a deps change (default) resets the resource to Pending(seed)",
+                pendingSeed, $"isLoading={probe.Res.Loadable.IsLoading} value='{probe.Res.Loadable.Value.Peek()}' fetching={probe.Res.IsFetching.Peek()}");
+        }
+
+        // gate.resource.stale-timer — staleTime>0: IsStale stays false after Ready, then flips true once the
+        // HostTimerQueue one-shot fires (frame-clock driven; NOT the media clock).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("res-stale", new Size2(200, 120), 1f)); window.Show();
+            var probe = new ResourceProbe { Options = new ResourceOptions { StaleTimeMs = 200f } };
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            System.Threading.SpinWait.SpinUntil(() => probe.Gates.Count >= 1, 3000);
+            probe.Gates[0].SetResult("v0");
+            PumpUntil(host, () => probe.Res.Loadable.Value.Peek() == "v0");
+            bool freshAfterReady = !probe.Res.IsStale.Peek();                           // still fresh right after Ready
+            for (int i = 0; i < 20; i++) host.Paint(0);                                 // advance ~320 ms past the 200 ms stale timer
+            bool staleAfterTimeout = probe.Res.IsStale.Peek();
+            Check("gate.resource.stale-timer staleTime>0 keeps data fresh until the HostTimerQueue one-shot fires",
+                freshAfterReady && staleAfterTimeout, $"freshAfterReady={freshAfterReady} staleAfterTimeout={staleAfterTimeout}");
+        }
     }
 
     static void RepeatButtonChecks(StringTable strings)
@@ -17327,7 +20327,7 @@ static class Slice
                     Direction = 1, Gap = 12,
                     Children =
                     [
-                        TextBox.Create("ph", 280f, "Email", description: "Helper"),
+                        TextBox.Create(options: new TextBox.TextBoxOptions { Placeholder = "ph", Width = 280f, Header = "Email", Description = "Helper" }),
                         PasswordBox.Create("Password", 280f, "Pw", isEnabled: false,
                                            password: new Signal<string>("secret")),
                     ],
@@ -17697,6 +20697,301 @@ static class Slice
             $"typed='{typed}' back='{afterBack}' clampedLen={clamped.Length}");
     }
 
+    // ── G5f — controlled Popup + Flyout.Attach + Toast host + PinsAnchor seam + MenuFlyout safe-triangle ─────────────
+    static void G5fPopupToastChecks(StringTable strings)
+    {
+        // gate.popup.controlled — isOpen drives open/close; light-dismiss writes the signal back + onOpenChanged(false)
+        // once; a programmatic close does NOT echo onOpenChanged.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("g5f-popup", new Size2(480, 360), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var probe = new PopupCtlProbe();
+            var clock = new ManualFrameTimeSource();
+            using var host = new AppHost(app, window, device, fonts, strings, probe, frameTime: clock);
+            void Settle() { for (int i = 0; i < 20; i++) { clock.Advance(16f); host.RunFrame(); } }
+            host.RunFrame();
+            var svc = probe.Service!;
+
+            probe.Open.Value = true; Settle();
+            bool opened = svc.AnyOpen;
+
+            int changesBeforeProg = probe.OpenChanges;
+            probe.Open.Value = false; Settle();
+            bool progClosed = !svc.AnyOpen;
+            bool progNoEcho = probe.OpenChanges == changesBeforeProg;   // programmatic close does not fire onOpenChanged
+
+            probe.Open.Value = true; Settle();
+            bool reopened = svc.AnyOpen;
+            int changesBeforeDismiss = probe.OpenChanges;
+            // Light-dismiss: press a blank point on the full-bleed scrim (outside the popup + anchor).
+            window.QueueInput(new InputEvent(InputKind.PointerDown, new Point2(420, 320), 0, 0));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(420, 320), 0, 0));
+            Settle();
+            bool dismissClosed = !svc.AnyOpen;
+            bool signalWrittenBack = !probe.Open.Peek();
+            bool echoedOnce = probe.OpenChanges == changesBeforeDismiss + 1 && !probe.LastChanged;
+
+            Check("gate.popup.controlled", opened && progClosed && progNoEcho && reopened && dismissClosed && signalWrittenBack && echoedOnce,
+                $"open={opened} progClosed={progClosed} progNoEcho={progNoEcho} reopen={reopened} dismissClosed={dismissClosed} writeback={signalWrittenBack} echoOnce={echoedOnce}");
+        }
+
+        // gate.popup.anchor — the primitive rides the FlyoutPositioner: node-anchored (live-follow eligible), placed
+        // below a top anchor, and FLIPS above when it would overflow below a bottom anchor.
+        {
+            bool belowOk = false, nodeAnchored = false;
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("g5f-anchor-top", new Size2(480, 360), 1f));
+                window.Show();
+                var probe = new PopupCtlProbe { AnchorLow = false };
+                var clock = new ManualFrameTimeSource();
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe, frameTime: clock);
+                host.RunFrame();
+                probe.Open.Value = true;
+                for (int i = 0; i < 20; i++) { clock.Advance(16f); host.RunFrame(); }
+                var impl = (OverlayServiceImpl)probe.Service!;
+                if (impl.Entries.Count > 0)
+                {
+                    var e = impl.Entries[0];
+                    nodeAnchored = e.AnchorRect is null;   // node-anchored ⇒ AfterAnimations live-follows it
+                    var aRect = host.Scene.AbsoluteRect(probe.Anchor);
+                    var sRect = host.Scene.AbsoluteRect(e.SurfaceNode);
+                    belowOk = !e.OpensUp && sRect.Y >= aRect.Y + aRect.H - 1f;
+                }
+            }
+            bool flipOk = false;
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("g5f-anchor-bottom", new Size2(480, 360), 1f));
+                window.Show();
+                var probe = new PopupCtlProbe { AnchorLow = true };
+                var clock = new ManualFrameTimeSource();
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe, frameTime: clock);
+                host.RunFrame();
+                probe.Open.Value = true;
+                for (int i = 0; i < 20; i++) { clock.Advance(16f); host.RunFrame(); }
+                var impl = (OverlayServiceImpl)probe.Service!;
+                if (impl.Entries.Count > 0) flipOk = impl.Entries[0].OpensUp;   // flipped ABOVE the bottom anchor
+            }
+            Check("gate.popup.anchor", nodeAnchored && belowOk && flipOk,
+                $"nodeAnchored={nodeAnchored} placedBelow={belowOk} flipUp={flipOk}");
+        }
+
+        // gate.flyout.attach-chains-onclick — an anchor with its OWN OnClick keeps BOTH behaviours (its handler + open).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("g5f-flyout", new Size2(480, 360), 1f));
+            window.Show();
+            var probe = new FlyoutAttachProbe();
+            var clock = new ManualFrameTimeSource();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe, frameTime: clock);
+            host.RunFrame();
+            var svc = probe.Service!;
+            var c = CenterOf(host.Scene, probe.Anchor);
+            window.QueueInput(new InputEvent(InputKind.PointerDown, c, 0, 0));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, c, 0, 0));
+            for (int i = 0; i < 20; i++) { clock.Advance(16f); host.RunFrame(); }
+            bool ownRan = probe.AnchorClicks == 1;
+            bool opened = svc.AnyOpen;
+            Check("gate.flyout.attach-chains-onclick", ownRan && opened,
+                $"ownClick={probe.AnchorClicks} opened={opened}");
+        }
+
+        // gate.overlay.pins-anchor — an open PinsAnchor overlay reports its anchor scope pinned; close unpins; a
+        // PinsAnchor=false overlay never pins. PinEpoch bumps on open/close so auto-hide consumers can subscribe.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("g5f-pin", new Size2(480, 360), 1f));
+            window.Show();
+            var probe = new OverlayProbe();
+            var clock = new ManualFrameTimeSource();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe, frameTime: clock);
+            void Settle() { for (int i = 0; i < 20; i++) { clock.Advance(16f); host.RunFrame(); } }
+            host.RunFrame();
+            var svc = probe.Service!;
+            var scope = host.Scene.Parent(probe.Anchor);   // the anchor's auto-hide SCOPE (an ancestor)
+            Func<Element> body = () => new BoxEl { Width = 100, Height = 60, Fill = Tok.FillCardDefault, Children = [Ui.Text("pinned")] };
+
+            int epoch0 = svc.PinEpoch.Peek();
+            var h = svc.Open(() => probe.Anchor, body, FlyoutPlacement.BottomLeft);   // default PinsAnchor = true
+            host.RunFrame();
+            bool pinnedAnchor = svc.IsAnchorPinned(probe.Anchor);
+            bool pinnedScope = svc.IsAnchorPinned(scope);
+            bool epochBumpedOpen = svc.PinEpoch.Peek() > epoch0;
+
+            int epoch1 = svc.PinEpoch.Peek();
+            h.Close(); Settle();
+            bool unpinnedAfterClose = !svc.IsAnchorPinned(probe.Anchor);
+            bool epochBumpedClose = svc.PinEpoch.Peek() > epoch1;
+
+            var h2 = svc.Open(() => probe.Anchor, body, FlyoutPlacement.BottomLeft, new PopupOptions { PinsAnchor = false });
+            host.RunFrame();
+            bool notPinnedWhenOptedOut = !svc.IsAnchorPinned(probe.Anchor);
+            h2.Close(); Settle();
+
+            Check("gate.overlay.pins-anchor",
+                pinnedAnchor && pinnedScope && epochBumpedOpen && unpinnedAfterClose && epochBumpedClose && notPinnedWhenOptedOut,
+                $"anchor={pinnedAnchor} scope={pinnedScope} epochOpen={epochBumpedOpen} unpin={unpinnedAfterClose} epochClose={epochBumpedClose} optOut={notPinnedWhenOptedOut}");
+        }
+
+        // gate.menu.safe-triangle — a pointer path THROUGH the hover-intent triangle (launch point → submenu near
+        // edge) stays inside (submenu kept open); a path OUTSIDE it is not.
+        {
+            // Launch point left of the submenu; the submenu near edge is the segment (100,0)→(100,100).
+            var apex = new Point2(0f, 50f);
+            var top = new Point2(100f, 0f);
+            var bot = new Point2(100f, 100f);
+            bool through = MenuSafeTriangle.Contains(apex, top, bot, new Point2(20f, 50f))
+                        && MenuSafeTriangle.Contains(apex, top, bot, new Point2(55f, 48f))
+                        && MenuSafeTriangle.Contains(apex, top, bot, new Point2(90f, 45f));
+            bool outside = !MenuSafeTriangle.Contains(apex, top, bot, new Point2(55f, 95f))    // veered down toward a sibling
+                        && !MenuSafeTriangle.Contains(apex, top, bot, new Point2(50f, -20f));  // veered up, off-aim
+            Check("gate.menu.safe-triangle", through && outside, $"through={through} outside={outside}");
+        }
+
+        G5fToastChecks(strings);
+    }
+
+    // Toast host gates (own method — several timer-driven sub-scenarios on the deterministic frame clock).
+    static void G5fToastChecks(StringTable strings)
+    {
+        int savedMax = Toast.MaxVisible;
+        Toast.MaxVisible = 3;
+        try
+        {
+            // gate.toast.queue — MaxVisible=3 stacking + FIFO overflow: 4 shown ⇒ 3 rendered + only 3 armed (the 4th
+            // waits); closing the front releases the queued one into the visible window (its countdown starts).
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("g5f-toast-q", new Size2(640, 480), 1f));
+                window.Show();
+                var probe = new OverlayProbe();
+                var clock = new ManualFrameTimeSource();
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe, frameTime: clock);
+                void Settle() { for (int i = 0; i < 8; i++) { clock.Advance(16f); host.RunFrame(); } }
+                host.RunFrame();
+                var h1 = Toast.Show("one",   new ToastOptions { Title = "1" });
+                var h2 = Toast.Show("two",   new ToastOptions { Title = "2" });
+                var h3 = Toast.Show("three", new ToastOptions { Title = "3" });
+                var h4 = Toast.Show("four",  new ToastOptions { Title = "4" });
+                Settle();
+                var ctl = Toast.Default!;
+                bool queuedAll = ctl.Items.Count == 4;
+                bool visible3 = Roles(host.Scene, AutomationRole.InfoBar).Count == 3;
+                bool armed3 = ctl.Items[0].Armed && ctl.Items[1].Armed && ctl.Items[2].Armed;
+                bool fourthWaits = !ctl.Items[3].Armed;
+                h1.Close(); Settle();
+                bool released = ctl.Items.Count == 3 && ctl.Items[2].Armed;   // former 4th now visible + counting
+                Check("gate.toast.queue", queuedAll && visible3 && armed3 && fourthWaits && released,
+                    $"queued4={queuedAll} rendered3={visible3} armed3={armed3} fourthWaits={fourthWaits} released={released}");
+                Toast.CloseAll();
+            }
+
+            // gate.toast.autodismiss — a toast closes itself after DurationMs via the HostTimerQueue. Driven by
+            // host.Paint(0) (16ms/step, unconditional advance — the gate.timer.* convention; RunFrame is wake-gated and
+            // an armed-but-not-due timer alone doesn't wake it).
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("g5f-toast-ad", new Size2(640, 480), 1f));
+                window.Show();
+                var probe = new OverlayProbe();
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe);
+                host.Paint(0);
+                var h = Toast.Show("bye", new ToastOptions { DurationMs = 200f });
+                var ctl = Toast.Default!;
+                bool armed = ctl.Items.Count == 1 && ctl.Items[0].Armed;
+                for (int i = 0; i < 5; i++) host.Paint(0);   // ~80ms — armed, not due
+                bool stillOpenMid = ctl.Items.Count == 1 && h.IsOpen;
+                for (int i = 0; i < 20; i++) host.Paint(0);  // well past 200ms ⇒ fires
+                bool closed = ctl.Items.Count == 0 && !h.IsOpen;
+                Check("gate.toast.autodismiss", armed && stillOpenMid && closed,
+                    $"armed={armed} mid={stillOpenMid} closed={closed}");
+                Toast.CloseAll();
+            }
+
+            // gate.toast.hover-pause — hovering the strip FREEZES the remaining time; advancing past the original due
+            // does not fire; resume re-arms for the banked remainder, which then fires.
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("g5f-toast-hp", new Size2(640, 480), 1f));
+                window.Show();
+                var probe = new OverlayProbe();
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe);
+                host.Paint(0);
+                var h = Toast.Show("hover", new ToastOptions { DurationMs = 200f });
+                var ctl = Toast.Default!;
+                for (int i = 0; i < 5; i++) host.Paint(0);   // ~80ms elapsed, armed, not due
+                bool armedBefore = ctl.Items[0].Armed;
+                ctl.SetPaused(true);   // strip hover: banks the ~120ms remaining, cancels the pending fire
+                bool pausedCancels = !ctl.Items[0].Armed;
+                for (int i = 0; i < 25; i++) host.Paint(0);  // ~400ms — way past the original due, but paused ⇒ no fire
+                bool frozen = ctl.Items.Count == 1 && h.IsOpen;
+                ctl.SetPaused(false);  // resume → re-arm for the banked remainder
+                bool rearmed = ctl.Items[0].Armed;
+                for (int i = 0; i < 3; i++) host.Paint(0);   // ~48ms — banked remainder not yet elapsed
+                bool stillOpen = ctl.Items.Count == 1;
+                for (int i = 0; i < 15; i++) host.Paint(0);  // remainder elapsed ⇒ fires
+                bool fired = ctl.Items.Count == 0 && !h.IsOpen;
+                Check("gate.toast.hover-pause", armedBefore && pausedCancels && frozen && rearmed && stillOpen && fired,
+                    $"armed={armedBefore} pausedCancel={pausedCancels} frozen={frozen} rearmed={rearmed} stillOpen={stillOpen} fired={fired}");
+                Toast.CloseAll();
+            }
+
+            // gate.toast.severity — the toast severity visuals ARE InfoBar's (the shared SeverityVisuals helper), so they
+            // cannot drift.
+            {
+                bool allMatch = true;
+                foreach (var sev in new[] { InfoBarSeverity.Informational, InfoBarSeverity.Success, InfoBarSeverity.Warning, InfoBarSeverity.Error })
+                {
+                    var v = SeverityVisuals.For(sev);
+                    var s = InfoBar.InfoBarTemplateSettings.For(sev);
+                    allMatch &= v.Glyph == s.Glyph
+                             && v.IconBackground.Equals(s.IconBackground)
+                             && v.IconForeground.Equals(s.IconForeground)
+                             && v.Background.Equals(s.Background);
+                }
+                Check("gate.toast.severity", allMatch, $"sharedIdentity={allMatch}");
+            }
+
+            // gate.toast.edge-inset (G7 item 9) — EdgeInset reserves extra DIP on the docked edge so the strip clears a
+            // player/chrome bar (Wavee's above-the-player-bar placement). On a Bottom* dock, a larger inset lifts the
+            // toast UP by ~that many DIP (the strip's bottom padding = 24 + EdgeInset). Measured off the rendered node.
+            {
+                float savedInset = Toast.EdgeInset;
+                var savedPlacement = Toast.Placement;
+                Toast.Placement = ToastPlacement.BottomRight;   // a bottom dock
+                float MeasureToastTop(float inset)
+                {
+                    Toast.EdgeInset = inset;
+                    using var app = new HeadlessPlatformApp();
+                    var window = new HeadlessWindow(new WindowDesc("g5f-toast-inset", new Size2(640, 480), 1f));
+                    window.Show();
+                    var probe = new OverlayProbe();
+                    var clock = new ManualFrameTimeSource();
+                    using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe, frameTime: clock);
+                    host.RunFrame();
+                    Toast.Show("inset", new ToastOptions { Title = "x" });
+                    for (int i = 0; i < 8; i++) { clock.Advance(16f); host.RunFrame(); }
+                    var toasts = Roles(host.Scene, AutomationRole.InfoBar);
+                    float y = toasts.Count > 0 ? host.Scene.AbsoluteRect(toasts[0]).Y : float.NaN;
+                    Toast.CloseAll();
+                    return y;
+                }
+                float top0 = MeasureToastTop(0f);
+                float top120 = MeasureToastTop(120f);
+                Toast.EdgeInset = savedInset; Toast.Placement = savedPlacement;
+                float lift = top0 - top120;
+                bool shiftedUp = !float.IsNaN(top0) && !float.IsNaN(top120) && lift > 100f && lift < 140f;   // ~120 up
+                Check("gate.toast.edge-inset: a Bottom* dock lifts the toast strip up by ~EdgeInset DIP",
+                    shiftedUp, $"top@0={top0:0.#} top@120={top120:0.#} lift={lift:0.#}");
+            }
+        }
+        finally { Toast.MaxVisible = savedMax; Toast.Default = null; }
+    }
+
     static void OverlayChecks(StringTable strings)
     {
         using var app = new HeadlessPlatformApp();
@@ -17803,7 +21098,7 @@ static class Slice
         host.RunFrame();
 
         var svc = root.Service!;
-        Func<Element> menu = () => MenuFlyout.Build(new[]
+        Func<Element> menu = () => MenuFlyout.Create(new[]
         {
             new MenuFlyoutItem("One"), new MenuFlyoutItem("Two"), new MenuFlyoutItem("Three"),
             new MenuFlyoutItem("Four"), new MenuFlyoutItem("Five"),
@@ -19021,7 +22316,7 @@ static class Slice
             MenuFlyoutItem.Separator,
             new MenuFlyoutItem("Disabled", Icons.Cancel, false),
         };
-        root.Service!.Open(() => root.Anchor, () => MenuFlyout.Build(items, () => root.Service!.CloseTop()), FlyoutPlacement.BottomLeft);
+        root.Service!.Open(() => root.Anchor, () => MenuFlyout.Create(items, () => root.Service!.CloseTop()), FlyoutPlacement.BottomLeft);
         host.RunFrame();
 
         var rows = Roles(host.Scene, AutomationRole.MenuItem);
@@ -19460,7 +22755,7 @@ static class Slice
             window.QueueInput(new InputEvent(InputKind.PointerUp, mid, 0, 0));
             host.RunFrame();
             float v = root.Val;
-            Check("72a. Slider.Ranged: maps to [min,max] and snaps to step", Near(v, 50f), $"value={v}");
+            Check("72a. Slider (ranged options): maps to [min,max] and snaps to step", Near(v, 50f), $"value={v}");
         }
 
         // ColorPicker — hue / spectrum / alpha drags + a hex channel edit.
@@ -20978,6 +24273,262 @@ static class Slice
         }
     }
 
+    // ── G5h (WS3 P7) — ItemsView list consolidation: ListOptions parity + the two research adjustments (#5 keep-alive
+    //    slot, #16 contentType / cache-extent / repaint-boundary knobs) + RepeatLayout exotic-layout presets. ─────────
+    static void ListConsolidationChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+
+        NodeHandle FindVp(SceneStore s, int count)
+        {
+            NodeHandle found = default;
+            void Visit(NodeHandle n)
+            {
+                if (n.IsNull) return;
+                if (s.TryGetScroll(n, out var sc) && sc.ItemCount == count) found = n;
+                for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c)) Visit(c);
+            }
+            Visit(s.Root);
+            return found;
+        }
+        int LiveChildren(SceneStore s, NodeHandle vp)
+        {
+            if (vp.IsNull || !s.TryGetScroll(vp, out var sc) || sc.ContentNode.IsNull) return 0;
+            int n = 0;
+            for (var c = s.FirstChild(sc.ContentNode); !c.IsNull; c = s.NextSibling(c)) n++;
+            return n;
+        }
+        void ScrollTo(AppHost h, HeadlessWindow w, NodeHandle vp, float y)
+        {
+            var s = h.Scene;
+            ref ScrollState st = ref s.ScrollRef(vp);
+            st.OffsetY = y; st.TargetY = y;
+            var cn = st.ContentNode;
+            if (!cn.IsNull && s.IsLive(cn)) { s.Paint(cn).LocalTransform = Affine2D.Translation(0f, -y); s.Mark(cn, NodeFlags.TransformDirty | NodeFlags.PaintDirty); }
+            s.Mark(vp, NodeFlags.VirtualRangeDirty);
+            w.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(8f, 8f), 0, 0));
+            for (int k = 0; k < 8; k++) h.RunFrame();   // let the E4 realize budget spread the window
+        }
+
+        // ── gate.list.options-parity: a representative old-arg scenario (selection + invoke + overscan) reproduced via
+        //    ListOptions produces the correct realized window + selection behaviour. ────────────────────────────────
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("lo-parity", new Size2(360, 360), 1f));
+            window.Show();
+            var model = new SelectionModel();
+            var ctl = new ItemsViewController();
+            int invoked = -1;
+            var probe = new ListOptProbe
+            {
+                Count = 200, Extent = 40f, Vh = 200f, Overscan = 4, Bound = false,
+                Options = new ListOptions
+                {
+                    SelectionMode = ItemsSelectionMode.Single, Selection = model, Controller = ctl,
+                    IsItemInvokedEnabled = true, OnInvoked = i => invoked = i, Overscan = 4, Grow = 1f,
+                },
+            };
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            for (int k = 0; k < 6; k++) host.RunFrame();   // settle overscan
+            var vp = FindVp(host.Scene, 200);
+            host.Scene.TryGetScroll(vp, out var sc);
+            int realized = sc.LastRealized - sc.FirstRealized;
+            // Options landed: provided model wired through the controller; overscan honored (visible 5 + overscan,
+            // bounded ≪ 200); a programmatic selection re-skins with the model this list was given.
+            bool modelWired = ReferenceEquals(ctl.Selection, model);
+            // Windowed ≪ Count is the invariant: the mount realizes against the height Hint (ItemsView forwards no
+            // explicit VirtualListEl.Height ⇒ Hint 1024 ⇒ ~26 visible + overscan), and virtualization never TRIMS a
+            // still-covering window, so the steady realized band is bounded but larger than the 200px-viewport minimum.
+            bool windowBounded = realized >= 5 && realized < 100;   // ASSERTION: windowed, not the full 200
+            model.ItemCount = 200; model.Select(3);
+            bool selects = model.IsSelected(3);
+            Check("gate.list.options-parity ListOptions reproduces selection-model wiring + overscan-bounded realized window + invoke wiring",
+                modelWired && windowBounded && selects,
+                $"realized={realized} modelWired={modelWired} selects={selects} invokeWired={(probe.Options!.OnInvoked is not null)}");
+        }
+
+        // ── gate.list.bound-zero-alloc: a bound list scrolled over recycled slots stays 0-alloc on phases 6–13 (the
+        //    recycling contract re-asserted through ItemsView.CreateBound + ListOptions). ──────────────────────────
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("lo-boundzero", new Size2(360, 360), 1f));
+            window.Show();
+            var probe = new ListOptProbe { Count = 1000, Extent = 40f, Vh = 240f, Overscan = 3, Bound = true };
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var vp = FindVp(host.Scene, 1000);
+            ScrollTo(host, window, vp, 4000f);   // recycle slots over a big jump
+            int buildsAfterScroll = probe.Builds;
+            // Settle, then a steady frame allocates 0 on the paint phases (slot rebind is a signal write, not a rebuild).
+            for (int k = 0; k < 4; k++) host.RunFrame();
+            var warm = host.RunFrame();
+            var steady = host.RunFrame();
+            host.Scene.TryGetScroll(vp, out var sc);
+            bool recycledNotRebuilt = probe.Builds == buildsAfterScroll;   // no fresh builds on a steady scrolled frame
+            bool zero = steady.HotPhaseAllocBytes == 0;
+            Check("gate.list.bound-zero-alloc a bound ItemsView.CreateBound list scrolled far rebinds slots (no rebuild) with 0 hot-phase alloc on a steady frame",
+                zero && recycledNotRebuilt && sc.FirstRealized > 0,
+                $"{steady.HotPhaseAllocBytes} bytes (warm={warm.HotPhaseAllocBytes}) builds@scroll={buildsAfterScroll} builds@steady={probe.Builds} first={sc.FirstRealized}");
+        }
+
+        // ── gate.list.keepalive-slot: a keep-alive row's slot stays bound to its item off-window (state retained); a
+        //    plain row's slot recycles; the bounded bucket cap evicts LRU (no leak). ────────────────────────────────
+        {
+            // (a) keep-alive item 0: its slot parks (index signal stays 0) after scrolling far off-window.
+            using var appK = new HeadlessPlatformApp();
+            var winK = new HeadlessWindow(new WindowDesc("lo-ka", new Size2(360, 240), 1f));
+            winK.Show();
+            var kProbe = new ListOptProbe
+            {
+                Count = 300, Extent = 40f, Vh = 200f, Overscan = 2, Bound = true, CaptureSig0 = true,
+                Options = new ListOptions { KeepAlive = i => i == 0, KeepAliveCap = 8, Overscan = 2, Grow = 1f },
+            };
+            using var hostK = new AppHost(appK, winK, new HeadlessGpuDevice(), fonts, strings, kProbe);
+            hostK.RunFrame();
+            var vpK = FindVp(hostK.Scene, 300);
+            var sig0 = kProbe.Sig0;
+            ScrollTo(hostK, winK, vpK, 6000f);   // item 0 far off-window
+            bool keptBound = sig0 is not null && sig0.Peek() == 0;   // parked: never index-rebound away from its item
+
+            // (b) plain (no keep-alive): the item-0 slot's signal is rebound to a visible far item.
+            using var appP = new HeadlessPlatformApp();
+            var winP = new HeadlessWindow(new WindowDesc("lo-ka-plain", new Size2(360, 240), 1f));
+            winP.Show();
+            var pProbe = new ListOptProbe { Count = 300, Extent = 40f, Vh = 200f, Overscan = 2, Bound = true, CaptureSig0 = true };
+            using var hostP = new AppHost(appP, winP, new HeadlessGpuDevice(), fonts, strings, pProbe);
+            hostP.RunFrame();
+            var vpP = FindVp(hostP.Scene, 300);
+            var sig0P = pProbe.Sig0;
+            ScrollTo(hostP, winP, vpP, 6000f);
+            bool plainRecycled = sig0P is not null && sig0P.Peek() != 0;   // recycled: rebound to a far item
+
+            // (c) bounded bucket + LRU eviction: ALL items keep-alive, cap 3 — a top→bottom sweep must NOT leak slots
+            //     (live content children stay bounded ≈ window + cap, not growing toward Count).
+            using var appC = new HeadlessPlatformApp();
+            var winC = new HeadlessWindow(new WindowDesc("lo-ka-cap", new Size2(360, 240), 1f));
+            winC.Show();
+            var cProbe = new ListOptProbe
+            {
+                Count = 200, Extent = 40f, Vh = 200f, Overscan = 1, Bound = true,
+                Options = new ListOptions { KeepAlive = i => true, KeepAliveCap = 3, Overscan = 1, Grow = 1f },
+            };
+            using var hostC = new AppHost(appC, winC, new HeadlessGpuDevice(), fonts, strings, cProbe);
+            hostC.RunFrame();
+            var vpC = FindVp(hostC.Scene, 200);
+            for (int step = 1; step <= 20; step++) ScrollTo(hostC, winC, vpC, step * 300f);
+            int live = LiveChildren(hostC.Scene, vpC);
+            bool bounded = live <= 5 + 3 + 6;   // ~visible(5) + cap(3) + slack; NOT leaking toward 200
+
+            Check("gate.list.keepalive-slot keep-alive slot parks bound to its item off-window (state retained); a plain slot recycles; the bucket cap bounds retained slots (LRU-evicted, no leak)",
+                keptBound && plainRecycled && bounded,
+                $"keptBound={keptBound}(sig0={sig0?.Peek()}) plainRecycled={plainRecycled}(sig0P={sig0P?.Peek()}) capLive={live}");
+        }
+
+        // ── gate.list.contenttype-pools: heterogeneous rows never cross-rebind — a scroll that FLIPS a slot's content
+        //    type rebuilds it (rowBind runs); a scroll that PRESERVES the type cheap-rebinds (no rebuild). ──────────
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("lo-ctype", new Size2(360, 240), 1f));
+            window.Show();
+            var probe = new ListOptProbe
+            {
+                Count = 400, Extent = 40f, Vh = 200f, Overscan = 0, Bound = true,
+                Options = new ListOptions { ContentType = i => i % 2, Overscan = 0, Grow = 1f },
+            };
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var vp = FindVp(host.Scene, 400);
+            // Settle at a stable window at the REAL viewport (row 40) — clear of the mount-time height-Hint over-realize.
+            ScrollTo(host, window, vp, 40 * 40f);
+            for (int k = 0; k < 6; k++) host.RunFrame();
+            // A 2-row jump preserves each slot's parity (type) => cheap rebind, no rebuild.
+            int b0 = probe.Builds;
+            ScrollTo(host, window, vp, 42 * 40f);
+            int sameTypeBuilds = probe.Builds - b0;
+            // A 1-row jump flips every slot's parity => every reused slot must REBUILD (never cross-rebind).
+            int b1 = probe.Builds;
+            ScrollTo(host, window, vp, 43 * 40f);
+            int crossTypeBuilds = probe.Builds - b1;
+            Check("gate.list.contenttype-pools a type-preserving scroll cheap-rebinds (0 rebuilds); a type-flipping scroll rebuilds every reused slot (never cross-rebinds)",
+                sameTypeBuilds == 0 && crossTypeBuilds > 0,
+                $"sameTypeBuilds={sameTypeBuilds} crossTypeBuilds={crossTypeBuilds}");
+        }
+
+        // ── gate.list.cache-extent: CacheExtentPx realizes rows beyond the viewport per the PIXEL margin (overriding
+        //    the row-based overscan). A larger pixel band realizes a strictly larger window. ───────────────────────
+        {
+            int RealizedAt(float cachePx, int overscan)
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("lo-cache", new Size2(360, 240), 1f));
+                window.Show();
+                var probe = new ListOptProbe
+                {
+                    Count = 1000, Extent = 40f, Vh = 200f, Overscan = overscan, Bound = false,
+                    Options = new ListOptions { Overscan = overscan, CacheExtentPx = cachePx, Grow = 1f },
+                };
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+                host.RunFrame();
+                var vp = FindVp(host.Scene, 1000);
+                ScrollTo(host, window, vp, 4000f);   // mid-list so both edges get cache; budget settles over frames
+                for (int k = 0; k < 10; k++) host.RunFrame();
+                host.Scene.TryGetScroll(vp, out var sc);
+                return sc.LastRealized - sc.FirstRealized;
+            }
+            int rowBased = RealizedAt(float.NaN, 2);   // 5 visible + 2 overscan/edge
+            int cache400 = RealizedAt(400f, 2);         // 400px / 40 = 10 rows/edge ⇒ a much larger window
+            Check("gate.list.cache-extent CacheExtentPx pre-realizes rows by the pixel margin (overrides row overscan) — a larger band realizes a strictly larger window",
+                cache400 > rowBased + 6 && cache400 >= 5 + 2 * 8,
+                $"rowBased={rowBased} cache400={cache400}");
+        }
+
+        // ── gate.list.layout-presets: LinedFlow / SpanGrid / GroupedList reached through RepeatLayout presets render
+        //    with the same geometry as the Virtual.* forms (spot-checks on the realized item rects). ───────────────
+        {
+            (SceneStore scene, NodeHandle content) Build(RepeatLayout layout, int count, Func<int, float>? rowHeight = null)
+            {
+                var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("lo-presets", new Size2(400, 300), 1f));
+                window.Show();
+                var probe = new ListOptProbe
+                {
+                    Count = count, Vw = 400f, Vh = 300f, Bound = false, ExplicitLayout = layout, RowHeightOf = rowHeight,
+                    Options = new ListOptions { Selector = SelectorVisual.None, Overscan = 1, Grow = 1f },
+                };
+                var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+                host.RunFrame();
+                for (int k = 0; k < 4; k++) host.RunFrame();
+                var vp = FindVp(host.Scene, count);
+                host.Scene.TryGetScroll(vp, out var sc);
+                return (host.Scene, sc.ContentNode);
+            }
+
+            // LinedFlow: item 0 is a square line-height cell (aspect 1 × 100) at the top-left (the WinUI photo wall).
+            var (sLf, cLf) = Build(RepeatLayout.LinedFlow(100f, aspectRatio: static _ => 1f), 60);
+            var lf0 = Child(sLf, cLf, 0);
+            bool linedFlow = !lf0.IsNull && Near(sLf.Bounds(lf0).W, 100f, 1f) && Near(sLf.Bounds(lf0).H, 100f, 1f) && Near(sLf.Bounds(lf0).Y, 0f, 1f);
+
+            // SpanGrid: item 0 spans all 4 columns ⇒ full cross width (the hero row).
+            var (sSg, cSg) = Build(RepeatLayout.SpanGrid(4, 80f, 0f, static i => i == 0 ? 4 : 1), 40);
+            var sg0 = Child(sSg, cSg, 0);
+            var sg1 = Child(sSg, cSg, 1);
+            bool spanGrid = !sg0.IsNull && !sg1.IsNull && sSg.Bounds(sg0).W > sSg.Bounds(sg1).W * 3f && Near(sSg.Bounds(sg0).H, 80f, 1f);
+
+            // GroupedList: index 0 is a header (48h), index 1 a normal item (40h). The measured seam corrects each row
+            // to its CONTENT extent, so the header/item content heights must match the layout's seeded estimates.
+            var (sGl, cGl) = Build(RepeatLayout.GroupedList(new[] { 0, 20 }, 48f, 40f), 60,
+                rowHeight: static i => i == 0 || i == 20 ? 48f : 40f);
+            var gl0 = Child(sGl, cGl, 0);
+            var gl1 = Child(sGl, cGl, 1);
+            bool grouped = !gl0.IsNull && !gl1.IsNull && Near(sGl.Bounds(gl0).H, 48f, 1f) && Near(sGl.Bounds(gl1).H, 40f, 1f);
+
+            Check("gate.list.layout-presets LinedFlow/SpanGrid/GroupedList via RepeatLayout presets render with the Virtual.* geometry (square photo cells / full-width hero span / seeded header extents)",
+                linedFlow && spanGrid && grouped,
+                $"linedFlow={linedFlow} spanGrid={spanGrid} grouped={grouped}");
+        }
+    }
+
     // D1 — the ItemsView List preset / ItemsView rendered EMPTY when the host imposed no size (gallery regression, commit 4a9047b):
     // (1) FlexLayout.MeasureViewport collapsed an unsized virtual viewport to 0 (NaN→0), so the auto-width 280-card
     //     List preset arranged at W=0 and the auto-height Start-row ItemsView at H=0; fixed by the natural-size
@@ -21198,9 +24749,11 @@ static class Slice
                         ItemsView.Create(8,
                             i => new BoxEl { Children = [new TextEl($"row {i}") { Size = 13f }] },
                             RepeatLayout.Stack(40f),
-                            selector: SelectorVisual.AccentPill,
-                            itemDisplacement: i => i == dispTarget ? (0f, 40f) : (0f, 0f),
-                            displacementVersion: ver),
+                            new ListOptions
+                            {
+                                Selector = SelectorVisual.AccentPill,
+                                Reorder = new ReorderOptions { ItemDisplacement = i => i == dispTarget ? (0f, 40f) : (0f, 0f), DisplacementVersion = ver },
+                            }),
                     ],
                 },
             });
@@ -21376,10 +24929,12 @@ static class Slice
                         ItemsView.Create(100,
                             i => new BoxEl { Children = [new TextEl($"row {i}") { Size = 13f }] },
                             RepeatLayout.Stack(40f),
-                            controller: ctl,
-                            selector: SelectorVisual.AccentPill,
-                            itemDisplacement: i => i == dispTarget ? (0f, 24f) : (0f, 0f),
-                            displacementVersion: ver),
+                            new ListOptions
+                            {
+                                Controller = ctl,
+                                Selector = SelectorVisual.AccentPill,
+                                Reorder = new ReorderOptions { ItemDisplacement = i => i == dispTarget ? (0f, 24f) : (0f, 0f), DisplacementVersion = ver },
+                            }),
                     ],
                 },
             });
@@ -21548,9 +25103,11 @@ static class Slice
                             ItemsView.Create(5,
                                 i => new BoxEl { Children = [new TextEl($"row {i}") { Size = 13f }] },
                                 RepeatLayout.Stack(40f),
-                                selector: SelectorVisual.AccentPill,
-                                itemDisplacement: i => { rl.OffsetFor2D(i, 0f, 0f, out _, out _); return (0f, rl.OffsetFor(i)); },
-                                displacementVersion: ver),
+                                new ListOptions
+                                {
+                                    Selector = SelectorVisual.AccentPill,
+                                    Reorder = new ReorderOptions { ItemDisplacement = i => { rl.OffsetFor2D(i, 0f, 0f, out _, out _); return (0f, rl.OffsetFor(i)); }, DisplacementVersion = ver },
+                                }),
                         ],
                     },
                 });
@@ -21594,7 +25151,7 @@ static class Slice
                         Children =
                         [
                             ItemsView.Create(1, i => new BoxEl { Width = 120, Height = 40 }, RepeatLayout.Stack(44f),
-                                selectionMode: mode, selection: model, selector: sel),
+                                new ListOptions { SelectionMode = mode, Selection = model, Selector = sel }),
                         ],
                     },
                 });
@@ -21739,9 +25296,11 @@ static class Slice
                         ItemsView.Create(8,
                             i => new BoxEl { Children = [new TextEl($"row {i}") { Size = 13f }] },
                             RepeatLayout.Stack(40f),
-                            selector: SelectorVisual.AccentPill,
-                            itemDisplacement: i => i == dispTarget ? (0f, 24f) : (0f, 0f),
-                            displacementVersion: ver),
+                            new ListOptions
+                            {
+                                Selector = SelectorVisual.AccentPill,
+                                Reorder = new ReorderOptions { ItemDisplacement = i => i == dispTarget ? (0f, 24f) : (0f, 0f), DisplacementVersion = ver },
+                            }),
                     ],
                 },
             });
@@ -21777,8 +25336,11 @@ static class Slice
                         ItemsView.Create(8,
                             i => new BoxEl { Children = [new TextEl($"row {i}") { Size = 13f }] },
                             RepeatLayout.Stack(40f),
-                            selector: SelectorVisual.AccentPill,
-                            partDelta: (i, st) => new PartDelta(Fill: i % 2 == 0 ? Tok.FillSubtleSecondary : ColorF.Transparent)),
+                            new ListOptions
+                            {
+                                Selector = SelectorVisual.AccentPill,
+                                PartDelta = (i, st) => new PartDelta(Fill: i % 2 == 0 ? Tok.FillSubtleSecondary : ColorF.Transparent),
+                            }),
                     ],
                 },
             });
@@ -21812,12 +25374,15 @@ static class Slice
                         ItemsView.Create(200,
                             i => new BoxEl { Children = [new TextEl($"row {i}") { Size = 13f }] },
                             RepeatLayout.Stack(40f),
-                            controller: ctl,
-                            selector: SelectorVisual.FullRow,
-                            grow: 1f,
-                            partDelta: (i, st) => new PartDelta(
-                                Fill: i % 3 == 0 ? Tok.FillSubtleTertiary : ColorF.Transparent,
-                                Corners: CornerRadius4.All(6f))),
+                            new ListOptions
+                            {
+                                Controller = ctl,
+                                Selector = SelectorVisual.FullRow,
+                                Grow = 1f,
+                                PartDelta = (i, st) => new PartDelta(
+                                    Fill: i % 3 == 0 ? Tok.FillSubtleTertiary : ColorF.Transparent,
+                                    Corners: CornerRadius4.All(6f)),
+                            }),
                     ],
                 },
             });
@@ -22146,7 +25711,11 @@ static class Slice
                 Build = () =>
                 {
                     int r = rr.Value;                            // each render captures a FRESH r in a FRESH thunk
+                    // FGRP002: this probe DELIBERATELY captures a signal-value snapshot to prove the reconciler ignores
+                    // replacement thunks (the exact anti-pattern the rule flags). Suppressed on purpose.
+#pragma warning disable FGRP002
                     return new BoxEl { Width = 40, Height = 10, Opacity = Prop.Of(() => 0.1f + 0.2f * r), OnRealized = h => box = h };
+#pragma warning restore FGRP002
                 },
             });
             host.RunFrame();
@@ -22245,6 +25814,238 @@ static class Slice
         }
     }
 
+    // ── WS3 P5 (G5e): the one creation idiom + the three G5b binding-contract deferrals ─────────────────────────────
+    static void ControlKitIdiomChecks(StringTable strings)
+    {
+        // gate.ctl.idiom.no-public-build — reflection scan: no public static Build/BuildBody member on any Controls type.
+        {
+            var asm = typeof(FluentGpu.Controls.Button).Assembly;
+            var offenders = new System.Collections.Generic.List<string>();
+            foreach (var t in asm.GetExportedTypes())
+                foreach (var m in t.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.DeclaredOnly))
+                    if (m.Name == "Build" || m.Name == "BuildBody")
+                        offenders.Add(t.Name + "." + m.Name);
+            Check("gate.ctl.idiom.no-public-build no public static Build/BuildBody on any Controls type",
+                offenders.Count == 0, offenders.Count == 0 ? "clean" : string.Join(", ", offenders));
+        }
+
+        // gate.ctl.idiom.factories-exist — NavigationView/TitleBar/OverlayHost/MenuFlyout expose a public static Create,
+        // and NavigationView.Create mounts + navigates through the options record.
+        {
+            static bool HasCreate(Type t)
+            {
+                foreach (var m in t.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static))
+                    if (m.Name == "Create") return true;
+                return false;
+            }
+            bool exist = HasCreate(typeof(NavigationView)) && HasCreate(typeof(TitleBar))
+                       && HasCreate(typeof(OverlayHost)) && HasCreate(typeof(MenuFlyout));
+
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("nav-create", new Size2(1200, 700), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            string selected = "";
+            var nav = NavigationView.Create(new NavigationViewOptions
+            {
+                Initial = "home",
+                Items = new[] { new NavItem("home", Icons.Home, "Home"), new NavItem("files", Icons.Folder, "Files") },
+                Content = key => new TextEl("page:" + key) { Size = 16f, Color = Tok.TextPrimary },
+                OnSelect = k => selected = k,
+            });
+            using var host = new AppHost(app, window, device, fonts, strings, new W0fStaticProbe { Build = () => nav });
+            host.RunFrame();
+            var items = Roles(host.Scene, AutomationRole.NavigationItem);
+            bool mounted = items.Count >= 2;
+            if (mounted) ClickNode(host, window, items[1]);   // navigate to "files"
+            bool navigated = selected == "files";
+            Check("gate.ctl.idiom.factories-exist NavigationView/TitleBar/OverlayHost/MenuFlyout expose Create; NavigationView.Create mounts + navigates",
+                exist && mounted && navigated, $"exist={exist} mounted={mounted} items={items.Count} selected={selected}");
+        }
+
+        // gate.ctl.bind.scrollbar — ScrollBar.Create: a track-click page writes the FloatSignal + fires onChange; a
+        // programmatic write does NOT echo onChange and never re-renders the owner (compositor-instant thumb).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("bind-scrollbar", new Size2(320, 320), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var pos = new FloatSignal(0f);
+            int changes = 0; float last = -1f; int probeRenders = 0;
+            // ScrollBar conformance (rename-only, like ComboBox/ColorPicker): the caller's onChange writes the
+            // position signal back (the control reads it compositor-instant via the thumb Transform bind).
+            using var host = new AppHost(app, window, device, fonts, strings, new W0fStaticProbe
+            {
+                Build = () => { probeRenders++; return new BoxEl { Padding = Edges4.All(20f),
+                    Children = [ScrollBar.Create(0.25f, pos, p => { changes++; last = p; pos.Value = p; }, length: 240f)] }; },
+            });
+            host.RunFrame();
+            int rendersAtMount = probeRenders;
+            var bar = FindRole(host.Scene, host.Scene.Root, AutomationRole.ScrollBar);
+            var barRect = host.Scene.AbsoluteRect(bar);
+            var pt = new Point2(barRect.X + barRect.W * 0.5f, barRect.Y + barRect.H * 0.7f);   // track strip, below the thumb
+            window.QueueInput(new InputEvent(InputKind.PointerDown, pt, 0, 0));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, pt, 0, 0));
+            host.RunFrame();
+            bool wrote = changes >= 1 && pos.Value > 0f && last == pos.Value;
+            int changesBefore = changes;
+            pos.Value = 0.5f;                       // programmatic write
+            host.RunFrame();
+            bool noEcho = changes == changesBefore;
+            bool decoupled = probeRenders == rendersAtMount;   // the signal write never re-rendered the owner
+            Check("gate.ctl.bind.scrollbar ScrollBar.Create: interaction writes the position signal + fires onChange; programmatic write no echo (owner not re-rendered)",
+                wrote && noEcho && decoupled, $"wrote={wrote} changes={changes} noEcho={noEcho} pos={pos.Value:0.00} ownerRenders={probeRenders}(mount {rendersAtMount})");
+        }
+
+        // gate.ctl.bind.numberbox-options — NumberBox.Create(value, onChange, NumberBoxOptions): the options record is
+        // threaded (an inline spin steps the value), a spin click fires onChange once, a programmatic write no echo.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("bind-numberbox", new Size2(360, 220), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var sig = new Signal<double>(5);
+            int changes = 0;
+            using var host = new AppHost(app, window, device, fonts, strings, new W0fStaticProbe
+            {
+                Build = () => new BoxEl { Padding = Edges4.All(12f), Children =
+                [
+                    NumberBox.Create(value: sig, onChange: _ => changes++, options: new NumberBox.NumberBoxOptions
+                    {
+                        Minimum = 0, Maximum = 10, SmallChange = 1,
+                        SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Inline,
+                    }),
+                ] },
+            });
+            host.RunFrame();
+            bool mountQuiet = changes == 0;                     // the mount-seed must NOT fire onChange
+            var buttons = Roles(host.Scene, AutomationRole.Button);
+            if (buttons.Count >= 1) ClickNode(host, window, buttons[0]);   // an inline spin (±SmallChange)
+            bool stepped = changes == 1 && System.Math.Abs(System.Math.Abs(sig.Value - 5.0) - 1.0) < 0.01;
+            int changesBefore = changes;
+            sig.Value = 8;                                      // programmatic write
+            host.RunFrame();
+            bool noEcho = changes == changesBefore;
+            Check("gate.ctl.bind.numberbox-options NumberBox.Create(options): a spin step writes the value signal + fires onChange once; mount + programmatic write no echo",
+                mountQuiet && stepped && noEcho, $"mountQuiet={mountQuiet} stepped={stepped} val={sig.Value:0.##} changes={changes} noEcho={noEcho} buttons={buttons.Count}");
+        }
+
+        // gate.ctl.bind.splitview-pane — SplitView.Create(isPaneOpen: signal, onOpenChanged): light dismiss writes the
+        // pane-open signal false + fires onOpenChanged once; a programmatic re-open does NOT echo onOpenChanged.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("bind-splitview", new Size2(600, 400), 1f)); window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var openSig = new Signal<bool>(true);
+            int changes = 0;
+            var pane = new BoxEl { Width = 200f, Padding = Edges4.All(12f), Children = [new TextEl("Pane") { Size = 14f, Color = Tok.TextPrimary }] };
+            var content = new BoxEl { Grow = 1f, Padding = Edges4.All(16f), Children = [new TextEl("Content") { Size = 14f, Color = Tok.TextPrimary }] };
+            using var host = new AppHost(app, window, device, fonts, strings, new W0fStaticProbe
+            {
+                Build = () => SplitView.Create(pane, content, paneWidth: 200f, isPaneOpen: openSig, onOpenChanged: _ => changes++),
+            });
+            host.RunFrame();
+            bool openMount = openSig.Value && changes == 0;
+            // Light dismiss: click the content side (right of the left pane) → the light-dismiss layer closes the pane.
+            var rootRect = host.Scene.AbsoluteRect(host.Scene.Root);
+            var pt = new Point2(rootRect.Right - 24f, rootRect.Y + rootRect.H * 0.5f);
+            window.QueueInput(new InputEvent(InputKind.PointerDown, pt, 0, 0));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, pt, 0, 0));
+            host.RunFrame();
+            bool dismissed = !openSig.Value && changes == 1;
+            int changesBefore = changes;
+            openSig.Value = true;                               // programmatic re-open
+            host.RunFrame();
+            bool noEcho = changes == changesBefore;
+            Check("gate.ctl.bind.splitview-pane SplitView.Create: light dismiss writes the isPaneOpen signal + fires onOpenChanged once; programmatic re-open no echo",
+                openMount && dismissed && noEcho, $"openMount={openMount} dismissed={dismissed} open={openSig.Value} changes={changes} noEcho={noEcho}");
+        }
+
+        // gate.ctl.progress.null-indeterminate — ProgressBar/ProgressRing Create(null) = indeterminate (animating);
+        // Create(signal) = determinate that tracks the signal (no sweep/spin anim tracks).
+        {
+            bool barDet, barInd, ringDet, ringInd;
+            // ProgressBar determinate tracks the signal (bound indicator width; no sweep tracks).
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("progress-bar-det", new Size2(320, 120), 1f)); window.Show();
+                var device = new HeadlessGpuDevice();
+                var fonts = new HeadlessFontSystem(strings);
+                NodeHandle fill = default;
+                var pd = new TemplateParts();
+                pd[ProgressBar.PartFill] = b => b with { OnRealized = h => fill = h };
+                var sig = new FloatSignal(0.5f);
+                using var host = new AppHost(app, window, device, fonts, strings, new W0fStaticProbe
+                {
+                    Build = () => new BoxEl { Padding = Edges4.All(16f), Children = [ProgressBar.Create(value: sig, width: 200f, parts: pd)] },
+                });
+                host.RunFrame();
+                float w50 = fill.IsNull ? -1f : host.Scene.AbsoluteRect(fill).W;
+                bool noTracks = !fill.IsNull && !host.Animation.HasTracks(fill);
+                sig.Value = 0.25f;
+                host.RunFrame();
+                float w25 = fill.IsNull ? -1f : host.Scene.AbsoluteRect(fill).W;
+                barDet = noTracks && Near(w50, 100f, 3f) && Near(w25, 50f, 3f);
+            }
+            // ProgressBar Create(null) = indeterminate (the sweeping indicator animates).
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("progress-bar-ind", new Size2(320, 120), 1f)); window.Show();
+                var device = new HeadlessGpuDevice();
+                var fonts = new HeadlessFontSystem(strings);
+                NodeHandle fill = default;
+                var pi = new TemplateParts();
+                pi[ProgressBar.PartFill] = b => b with { OnRealized = h => fill = h };
+                using var host = new AppHost(app, window, device, fonts, strings, new W0fStaticProbe
+                {
+                    Build = () => new BoxEl { Padding = Edges4.All(16f), Children = [ProgressBar.Create(null, width: 200f, parts: pi)] },
+                });
+                host.RunFrame(); host.RunFrame();
+                barInd = !fill.IsNull && host.Animation.HasTracks(fill);
+            }
+            // ProgressRing determinate: no spin/trim anim tracks; re-renders when the value signal changes.
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("progress-ring-det", new Size2(200, 200), 1f)); window.Show();
+                var device = new HeadlessGpuDevice();
+                var fonts = new HeadlessFontSystem(strings);
+                NodeHandle arc = default;
+                var pd = new TemplateParts();
+                pd[ProgressRing.PartRing] = b => b with { OnRealized = h => arc = h };
+                var sig = new FloatSignal(0.5f);
+                using var host = new AppHost(app, window, device, fonts, strings, new W0fStaticProbe
+                {
+                    Build = () => ProgressRing.Create(value: sig, parts: pd),
+                });
+                host.RunFrame();
+                bool noTracks = !arc.IsNull && !host.Animation.HasTracks(arc);
+                sig.Value = 0.25f;
+                var fs = host.RunFrame();
+                ringDet = noTracks && fs.Rendered;   // the determinate ring observes the signal (granular re-render)
+            }
+            // ProgressRing Create(null) = indeterminate (the arc spins / trim breathes).
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("progress-ring-ind", new Size2(200, 200), 1f)); window.Show();
+                var device = new HeadlessGpuDevice();
+                var fonts = new HeadlessFontSystem(strings);
+                NodeHandle arc = default;
+                var pi = new TemplateParts();
+                pi[ProgressRing.PartRing] = b => b with { OnRealized = h => arc = h };
+                using var host = new AppHost(app, window, device, fonts, strings, new W0fStaticProbe
+                {
+                    Build = () => ProgressRing.Create(null, parts: pi),
+                });
+                host.RunFrame(); host.RunFrame();
+                ringInd = !arc.IsNull && host.Animation.HasTracks(arc);
+            }
+            Check("gate.ctl.progress.null-indeterminate ProgressBar/Ring Create(null)=indeterminate (animates); Create(signal)=determinate tracking the value",
+                barDet && barInd && ringDet && ringInd,
+                $"barDet={barDet} barInd={barInd} ringDet={ringDet} ringInd={ringInd}");
+        }
+    }
+
     static void ProgressIndeterminateLifecycleChecks(StringTable strings)
     {
         // ProgressRing: parent re-render updates isActive through context, preserving the component instance.
@@ -22286,7 +26087,7 @@ static class Slice
             bool restarted = ring == ring0 && arc == arc0 && Near(host.Scene.Paint(ring).Opacity, 1f, 0.001f)
                 && host.Animation.HasTracks(ring) && host.Animation.HasTracks(arc);
 
-            Check("progress.1 ProgressRing isActive flows through context: active spins, inactive stops, reactivation restarts without remount",
+            Check("progress.1 ProgressRing isActive flows through re-pushed props: active spins, inactive stops, reactivation restarts without remount",
                 activeMount && stopped && restarted,
                 $"active={activeMount} stopped={stopped} restarted={restarted} same={ring == ring0 && arc == arc0}"
                 + $" reOpacity={host.Scene.Paint(ring).Opacity:0.###} reRingTracks={host.Animation.HasTracks(ring)} reArcTracks={host.Animation.HasTracks(arc)}");
@@ -22315,7 +26116,7 @@ static class Slice
                 idle, $"arc={arc} ring={ring} tracks arc={(!arc.IsNull && host.Animation.HasTracks(arc))}");
         }
 
-        // ProgressBar: parent re-render updates state/width through context, so the existing effect deps fire.
+        // ProgressBar: parent re-render updates state/width through re-pushed props, so the existing effect deps fire.
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("progress-bar-lifecycle", new Size2(420, 180), 1f)); window.Show();
@@ -22363,19 +26164,20 @@ static class Slice
                 $"normal={normalTracks} paused={paused} resumed={resumed} resized={resized} width={(!barRoot.IsNull ? host.Scene.AbsoluteRect(barRoot).W : 0):0.#}");
         }
 
-        // CheckBox: checked mark color/pressability must update through context without remounting or replaying draw-on.
+        // CheckBox: checked mark color/pressability must update through re-pushed props without remounting or replaying draw-on.
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("checkbox-mark-props", new Size2(260, 160), 1f)); window.Show();
             var device = new HeadlessGpuDevice();
             var fonts = new HeadlessFontSystem(strings);
             var enabled = new Signal<bool>(true);
+            var markChecked = new Signal<CheckState>(CheckState.Checked);   // stable instance across re-renders
             using var host = new AppHost(app, window, device, fonts, strings, new W0fStaticProbe
             {
                 Build = () => new BoxEl
                 {
                     Width = 220, Height = 80, Padding = Edges4.All(16),
-                    Children = [CheckBox.Create("opt", CheckState.Checked, _ => { }, isEnabled: enabled.Value)],
+                    Children = [CheckBox.Create("opt", markChecked, isEnabled: enabled.Value)],
                 },
             });
             host.RunFrame();
@@ -22394,7 +26196,7 @@ static class Slice
                 && ColorClose(after.Color, Tok.TextOnAccentDisabled, 0.004f);
             bool noReplay = !markAfter.IsNull && !host.Animation.HasTracks(markAfter);
 
-            Check("progress.4 CheckBox mark props update through context without remounting or replaying draw-on",
+            Check("progress.4 CheckBox mark props update through re-pushed props without remounting or replaying draw-on",
                 settled && initialColor && sameNode && disabledColor && noReplay,
                 $"settled={settled} initial={initialColor} same={sameNode} disabled={disabledColor} replay={!noReplay}");
         }
@@ -22693,13 +26495,13 @@ static class Slice
             window.Show();
             var device = new HeadlessGpuDevice();
             var fonts = new HeadlessFontSystem(strings);
-            var pos = new Signal<float>(0f);
+            var pos = new FloatSignal(0f);
             var root = new W0fStaticProbe
             {
                 Build = () => new BoxEl
                 {
                     Direction = 0, AlignItems = FlexAlign.Start, Padding = Edges4.All(20f),
-                    Children = [ScrollBar.Anatomy(0.25f, pos, p => pos.Value = p, 200f)],
+                    Children = [ScrollBar.Create(0.25f, pos, p => pos.Value = p, 200f)],
                 },
             };
             using var host = new AppHost(app, window, device, fonts, strings, root);
@@ -23075,7 +26877,7 @@ static class Slice
             // (no CompositionBackdrop); the metrics it receives are asserted by cp6.h.
             {
                 var hd = svc.Open(() => root.Anchor,
-                    () => MenuFlyout.Build(new[] { new MenuFlyoutItem("One"), new MenuFlyoutItem("Two") }, () => svc.CloseTop()),
+                    () => MenuFlyout.Create(new[] { new MenuFlyoutItem("One"), new MenuFlyoutItem("Two") }, () => svc.CloseTop()),
                     FlyoutPlacement.BottomLeft,
                     new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
                 host.RunFrame();   // mount + place + seed
@@ -23101,7 +26903,7 @@ static class Slice
             // runs on the real D3D12 backend; here we assert the RHI receives the correct parameters.
             {
                 var hd = svc.Open(() => root.Anchor,
-                    () => MenuFlyout.Build(new[] { new MenuFlyoutItem("One"), new MenuFlyoutItem("Two") }, () => svc.CloseTop()),
+                    () => MenuFlyout.Create(new[] { new MenuFlyoutItem("One"), new MenuFlyoutItem("Two") }, () => svc.CloseTop()),
                     FlyoutPlacement.BottomLeft,
                     new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
                 host.RunFrame(); host.RunFrame();
@@ -23123,7 +26925,7 @@ static class Slice
             // and its content TranslateY slides in (Dy<0 mid-flight, MenuPopupThemeTransition).
             {
                 svc.Open(() => root.Anchor,
-                    () => MenuFlyout.Build(new[] { new MenuFlyoutItem("One"), new MenuFlyoutItem("Two"), new MenuFlyoutItem("Three") }, () => svc.CloseTop()),
+                    () => MenuFlyout.Create(new[] { new MenuFlyoutItem("One"), new MenuFlyoutItem("Two"), new MenuFlyoutItem("Three") }, () => svc.CloseTop()),
                     FlyoutPlacement.BottomLeft);
                 host.RunFrame();
                 host.RunFrame();   // t=0
@@ -23225,7 +27027,7 @@ static class Slice
             // TOP clip edge (ClipRect.Y) + content TranslateY, so BOTH are held fixed through the fade (along with ClipB).
             {
                 svc.Open(() => root.Anchor,
-                    () => MenuFlyout.Build(new[] { new MenuFlyoutItem("One"), new MenuFlyoutItem("Two") }, () => svc.CloseTop()),
+                    () => MenuFlyout.Create(new[] { new MenuFlyoutItem("One"), new MenuFlyoutItem("Two") }, () => svc.CloseTop()),
                     FlyoutPlacement.BottomLeft);
                 host.RunFrame();
                 host.RunFrame();                       // t=0
@@ -23536,7 +27338,7 @@ static class Slice
             var device = new HeadlessGpuDevice();
             var fonts = new HeadlessFontSystem(strings);
             using var host = new AppHost(app, window, device, fonts, strings,
-                new RangedTooltipProbeRoot { TooltipEnabled = true, Stateful = true });
+                new RangedTooltipProbeRoot { TooltipEnabled = true });
             host.RunFrame();
             var sliders = Roles(host.Scene, AutomationRole.Slider);
             if (sliders.Count == 0) { Console.WriteLine("V4: FAIL no slider node"); return 2; }
@@ -23773,6 +27575,7 @@ static class Slice
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("gate-settle", new Size2(360, 420), 1f)); window.Show();
+            var settleChecked = new Signal<CheckState>(CheckState.Checked);   // stable instance (no per-render churn → the loop settles)
             using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings,
                 new W0fStaticProbe
                 {
@@ -23783,7 +27586,7 @@ static class Slice
                         [
                             new TextEl("settle") { Size = 16f },
                             Button.Accent("ok", () => { }),
-                            CheckBox.Create("opt", CheckState.Checked, _ => { }),
+                            CheckBox.Create("opt", settleChecked),
                             (Element)Repeater.ItemsRepeater(64, i => new BoxEl { Height = 32f, Fill = ColorF.FromRgba(28, 28, 28) },
                                 RepeatLayout.Stack(32f), keyOf: i => "s" + i),
                         ],
@@ -23810,30 +27613,42 @@ static class Slice
                     Build = () =>
                     {
                         bool big = heavy.Value;   // subscribe: a flip re-renders the owner and restructures the tree
+                        Element view;
                         if (!big)
-                            return new BoxEl
+                            view = new BoxEl
                             {
-                                Direction = 1, Width = 320, Height = 440, Gap = 8, Padding = Edges4.All(12),
+                                Direction = 1, Gap = 8, Padding = Edges4.All(12),
                                 Children = [new TextEl("baseline") { Size = 16f }, Button.Accent("idle", () => { })],
                             };
-                        // Heavy: a few hundred rows (SceneLive + StringMap), a bound Fill per row (NodeBindings),
-                        // and a couple of embedded components (Components) — drives every LIVE census column up.
-                        var rows = new Element[HeavyRows];
-                        for (int i = 0; i < HeavyRows; i++)
+                        else
                         {
-                            int idx = i;
-                            rows[i] = new BoxEl
+                            // Heavy: a few hundred rows (SceneLive + StringMap), a bound Fill per row (NodeBindings),
+                            // and a couple of embedded components (Components) — drives every LIVE census column up.
+                            var rows = new Element[HeavyRows];
+                            for (int i = 0; i < HeavyRows; i++)
                             {
-                                Height = 24f, Direction = 0, Gap = 4,
-                                Fill = Prop.Of(() => ColorF.FromRgba(20, 20, (byte)(idx % 2 == 0 ? 28 : 40))),
-                                Children =
-                                [
-                                    new TextEl("") { Size = 12f, Text = Prop.Of(() => "heavy row " + idx) },
-                                    .. (idx < 3 ? new Element[] { Embed.Comp(() => new NestChild()) } : Array.Empty<Element>()),
-                                ],
-                            };
+                                int idx = i;
+                                rows[i] = new BoxEl
+                                {
+                                    Height = 24f, Direction = 0, Gap = 4,
+                                    Fill = Prop.Of(() => ColorF.FromRgba(20, 20, (byte)(idx % 2 == 0 ? 28 : 40))),
+                                    Children =
+                                    [
+                                        new TextEl("") { Size = 12f, Text = Prop.Of(() => "heavy row " + idx) },
+                                        .. (idx < 3 ? new Element[] { Embed.Comp(() => new NestChild()) } : Array.Empty<Element>()),
+                                    ],
+                                };
+                            }
+                            view = new BoxEl { Direction = 1, Children = rows };
                         }
-                        return new BoxEl { Direction = 1, Width = 320, Height = 440, Children = rows };
+                        // KEY the swapped subtree so a baseline↔heavy swap REMOUNTS it rather than reusing nodes
+                        // positionally — otherwise the static-Fill Button and a bound-Fill heavy row collide at the same
+                        // slot (a bound↔static channel flip on a reused node, which the BindContract tripwire flags).
+                        return new BoxEl
+                        {
+                            Direction = 1, Width = 320, Height = 480,
+                            Children = [view with { Key = big ? "heavy" : "baseline" }],
+                        };
                     },
                 });
             host.RunFrame();
@@ -24528,6 +28343,210 @@ static class Slice
         }
     }
 
+    // ── G5g — MediaPlayerElement rebuild gates (UI-chrome behavior in the slice against HeadlessScriptedPlayer;
+    // playback/model gates stay in the xUnit projects per the standing directive) ──────────────────────────────────
+    static void MediaPlayerElementChecks(StringTable strings)
+    {
+        // A headless player driven to steady Playing at position 0 (audio-only unless a video size is supplied).
+        static HeadlessScriptedPlayer PlayingPlayer(SizeI? video = null)
+        {
+            var p = new HeadlessScriptedPlayer { OpenTicks = 0, BufferTicks = 0, DefaultDuration = TimeSpan.FromSeconds(120) };
+            p.OpenAsync(MediaSource.FromSamples(new ScriptedSampleSource(TimeSpan.FromSeconds(120), TimeSpan.FromMilliseconds(20), video)))
+                .GetAwaiter().GetResult();
+            p.PlayAsync().GetAwaiter().GetResult();
+            return p;
+        }
+
+        // gate.media.el.no-frameclock-rerender + gate.media.el.pure-render: during scripted position advance the player
+        // component does NOT re-render (the FrameClock.Tick subscription is deleted), while the engine-driven pump fires
+        // ONCE PER FRAME (not per render) — the video pump left Render for the frame phase.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("g5g-mpe", new Size2(480, 320), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var player = PlayingPlayer();
+            var root = new FluentGpu.Controls.Media.MediaPlayerElement { Player = player };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();                                                 // mount
+            player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();       // Opening → Buffering
+            player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();       // Buffering → Playing
+            host.Paint(0); host.Paint(0);                                     // settle
+            bool playing = player.State.Peek() == PlaybackState.Playing;
+
+            long pump0 = host.VideoSurfaces.PumpInvocationCount;
+            int renders = 0; bool anyRendered = false;
+            const int N = 8;
+            for (int i = 0; i < N; i++)
+            {
+                player.Pump(TimeSpan.FromMilliseconds(40));                   // advance position, sub-second (≤0.32s)
+                var fs = host.Paint(0);
+                renders += fs.ComponentsRendered;
+                anyRendered |= fs.Rendered;
+            }
+            long pumpDelta = host.VideoSurfaces.PumpInvocationCount - pump0;
+            float posAdvanced = player.PositionSeconds.Peek();
+
+            Check("gate.media.el.no-frameclock-rerender", playing && renders == 0 && !anyRendered && posAdvanced > 0.1f,
+                $"playing={playing} renders={renders} anyRendered={anyRendered} pos={posAdvanced:0.###}");
+            Check("gate.media.el.pure-render", pumpDelta == N && renders == 0,
+                $"pumpDelta={pumpDelta} frames={N} renders={renders}");
+        }
+
+        // gate.media.el.ownership-transfer: single-writer contract on the registry — only the current owner's pump runs;
+        // a non-owner pump is a counted no-op; transfer + transfer-back flip which pump drives, restoring the original.
+        {
+            var reg = new VideoSurfaceRegistry();
+            int token = reg.Acquire();
+            var a = new object(); var b = new object();
+            int aRuns = 0, bRuns = 0;
+            int ra = reg.RegisterPump(token, a, _ => aRuns++);               // first registrant → initial owner
+            int rb = reg.RegisterPump(token, b, _ => bRuns++);
+            long supp0 = reg.SuppressedNonOwnerPumpCount;
+
+            reg.PumpAll(1f);                                                  // a owns
+            bool aDrivesFirst = aRuns == 1 && bRuns == 0;
+            bool bSuppressed = reg.SuppressedNonOwnerPumpCount == supp0 + 1;
+
+            reg.TransferOwnership(token, b);
+            reg.PumpAll(1f);                                                  // b owns now; a is a no-op
+            bool bDrivesAfter = bRuns == 1 && aRuns == 1;
+            bool aSuppressed = reg.SuppressedNonOwnerPumpCount == supp0 + 2;
+
+            reg.TransferOwnership(token, a);
+            reg.PumpAll(1f);                                                  // transferred back
+            bool aRestored = aRuns == 2 && bRuns == 1;
+
+            reg.UnregisterPump(ra); reg.UnregisterPump(rb);
+            Check("gate.media.el.ownership-transfer",
+                token > 0 && ra > 0 && rb > 0 && aDrivesFirst && bSuppressed && bDrivesAfter && aSuppressed && aRestored,
+                $"aFirst={aDrivesFirst} bSupp={bSuppressed} bDrives={bDrivesAfter} aSupp={aSuppressed} restored={aRestored}");
+        }
+
+        // gate.media.el.pins-anchor-autohide: while a picker (an anchored PinsAnchor overlay inside the player) is open,
+        // the idle-hide timeout does NOT collapse the chrome; after it closes, the timeout collapses it.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("g5g-mpe-pin", new Size2(560, 360), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var player = PlayingPlayer();
+            var probe = new MediaPlayerHostProbe { Player = player, HideMs = 200f };
+            using var host = new AppHost(app, window, device, fonts, strings, probe);
+            host.RunFrame();
+            player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();
+            player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();
+            host.Paint(0);
+            var svc = probe.Service!;
+
+            int Buttons() => Roles(host.Scene, AutomationRole.Button).Count;
+            bool chromeShownAtPlaying = Buttons() > 0;
+
+            // Open a picker anchored to a transport button (a node INSIDE the player subtree) → PinsAnchor default true.
+            var anchorBtn = Roles(host.Scene, AutomationRole.Button)[0];
+            Func<Element> body = () => new BoxEl { Width = 120, Height = 80, Fill = Tok.FillCardDefault, Children = [Ui.Text("picker")] };
+            var pick = svc.Open(() => anchorBtn, body, FlyoutPlacement.TopEdgeAlignedRight);
+            host.RunFrame();
+            for (int i = 0; i < 30; i++) host.Paint(0);                       // ~480ms ≫ 200ms hide delay
+            bool heldWhilePinned = Buttons() > 0;                            // chrome NOT collapsed while the picker is open
+
+            pick.Close();
+            for (int i = 0; i < 34; i++) host.Paint(0);                       // close settles + re-armed timer fires (>200ms)
+            bool collapsedAfterClose = Buttons() == 0;
+
+            Check("gate.media.el.pins-anchor-autohide", chromeShownAtPlaying && heldWhilePinned && collapsedAfterClose,
+                $"shown={chromeShownAtPlaying} heldPinned={heldWhilePinned} collapsedAfterClose={collapsedAfterClose}");
+        }
+
+        // gate.media.el.controlled-aspect: an external Signal<VideoAspectMode> drives the fitted video rect (letterbox
+        // pillars for Uniform, none for UniformToFill); the control also works standalone (auto-materialized signal).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("g5g-mpe-aspect", new Size2(520, 340), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var player = PlayingPlayer(new SizeI(100, 100));                  // square video → pillarbox under Uniform in a wide area
+            var ext = new Signal<VideoAspectMode>(VideoAspectMode.Uniform);
+            var root = new FluentGpu.Controls.Media.MediaPlayerElement { Player = player, AspectMode = ext };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();
+            player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();
+            for (int i = 0; i < 5; i++) host.Paint(0);                        // settle layout + areaBounds → letterbox computed
+
+            int barsUniform = CountFill(host.Scene, host.Scene.Root, Tok.MediaLetterbox);
+            ext.Value = VideoAspectMode.UniformToFill;
+            for (int i = 0; i < 3; i++) host.Paint(0);
+            int barsCrop = CountFill(host.Scene, host.Scene.Root, Tok.MediaLetterbox);
+            ext.Value = VideoAspectMode.Uniform;
+            for (int i = 0; i < 3; i++) host.Paint(0);
+            int barsUniform2 = CountFill(host.Scene, host.Scene.Root, Tok.MediaLetterbox);
+
+            // Standalone (auto-materialized: no AspectMode passed) still renders letterbox under the default Uniform.
+            var player2 = PlayingPlayer(new SizeI(100, 100));
+            var root2 = new FluentGpu.Controls.Media.MediaPlayerElement { Player = player2 };
+            using var host2 = new AppHost(new HeadlessPlatformApp(),
+                new HeadlessWindow(new WindowDesc("g5g-mpe-auto", new Size2(520, 340), 1f)),
+                new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, root2);
+            host2.RunFrame();
+            player2.Pump(TimeSpan.FromMilliseconds(1)); host2.RunFrame();
+            player2.Pump(TimeSpan.FromMilliseconds(1)); host2.RunFrame();
+            for (int i = 0; i < 5; i++) host2.Paint(0);
+            int barsAuto = CountFill(host2.Scene, host2.Scene.Root, Tok.MediaLetterbox);
+
+            Check("gate.media.el.controlled-aspect", barsUniform >= 2 && barsCrop == 0 && barsUniform2 >= 2 && barsAuto >= 2,
+                $"uniform={barsUniform} crop={barsCrop} uniform2={barsUniform2} autoMaterialized={barsAuto}");
+        }
+
+        // gate.media.el.tokens: the media element carries ZERO hardcoded FromRgba color literals — every ink/scrim/stage
+        // reads a Tok.* media token (source-scan of the control's source, located via the compile-time repo path).
+        {
+            string? src = ReadRepoFile("src/FluentGpu.Controls/Media/MediaPlayerElement.cs");
+            bool found = src is not null;
+            int fromRgba = src is null ? -1 : CountOccurrences(src, "FromRgba");
+            bool usesTokens = src is not null && src.Contains("Tok.ScrimBottom") && src.Contains("Tok.OnMediaPrimary")
+                && src.Contains("Tok.MediaStage") && src.Contains("Tok.MediaLetterbox");
+            Check("gate.media.el.tokens", found && fromRgba == 0 && usesTokens,
+                $"found={found} FromRgba={fromRgba} usesTokens={usesTokens}");
+        }
+    }
+
+    // Count scene nodes whose solid fill equals `target` (letterbox-bar detector for the controlled-aspect gate).
+    static int CountFill(SceneStore s, NodeHandle n, ColorF target)
+    {
+        if (n.IsNull) return 0;
+        int c = ColorApprox(s.Paint(n).Fill, target) ? 1 : 0;
+        for (var ch = s.FirstChild(n); !ch.IsNull; ch = s.NextSibling(ch)) c += CountFill(s, ch, target);
+        return c;
+    }
+
+    static bool ColorApprox(ColorF a, ColorF b)
+        => MathF.Abs(a.R - b.R) < 1e-3f && MathF.Abs(a.G - b.G) < 1e-3f && MathF.Abs(a.B - b.B) < 1e-3f && MathF.Abs(a.A - b.A) < 1e-3f;
+
+    static int CountOccurrences(string haystack, string needle)
+    {
+        int count = 0, idx = 0;
+        while ((idx = haystack.IndexOf(needle, idx, StringComparison.Ordinal)) >= 0) { count++; idx += needle.Length; }
+        return count;
+    }
+
+    // Locate a repo-relative file from the compile-time path of THIS source (repo/src/FluentGpu.VerticalSlice/Program.cs).
+    static string? ReadRepoFile(string relative, [CallerFilePath] string here = "")
+    {
+        try
+        {
+            string? dir = System.IO.Path.GetDirectoryName(here);          // …/src/FluentGpu.VerticalSlice
+            if (dir is null) return null;
+            string repo = System.IO.Path.GetFullPath(System.IO.Path.Combine(dir, "..", ".."));   // repo root
+            string path = System.IO.Path.Combine(repo, relative.Replace('/', System.IO.Path.DirectorySeparatorChar));
+            return System.IO.File.Exists(path) ? System.IO.File.ReadAllText(path) : null;
+        }
+        catch { return null; }
+    }
+
     static void MediaCardEngineChecks(StringTable strings)
     {
         // Pointer-rate radial-center updates stay in the binding/paint lane: no element rebuild and no GradientSpec
@@ -24593,6 +28612,262 @@ static class Slice
         dispatcher.Dispatch([new InputEvent(InputKind.PointerUp, new Point2(35f, 28f), 0, 0, Pointer: PointerKind.Mouse)]);
         Check("gate.media-card.pointer-move-within suppresses touch and active capture", touchSuppressed && captureSuppressed,
             $"touch={touchSuppressed} capture={captureSuppressed}");
+    }
+
+    // G1c: .Boundary() firewall + FrameStats.RootRelayoutEscapes counter + UseMeasuredBounds/UseMeasuredWidth.
+    static void LayoutBoundaryMeasuredChecks(StringTable strings)
+    {
+        // gate.layout.boundary-modifier (record contract): .Boundary() == IsolateLayout + ClipToBounds.
+        {
+            var b = new BoxEl { Grow = 1f }.Boundary();
+            Check("gate.layout.boundary-modifier (record): .Boundary() sets IsolateLayout + ClipToBounds",
+                b.IsolateLayout && b.ClipToBounds, $"isolate={b.IsolateLayout} clip={b.ClipToBounds}");
+        }
+
+        int EscapesOnDeepFlip(bool useBoundary)
+        {
+            BoundaryEscapeProbe.UseBoundary = useBoundary;
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("boundary", new Size2(800, 600), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var probe = new BoundaryEscapeProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, probe);
+            for (int i = 0; i < 4; i++) host.RunFrame();   // mount + full layout + settle (_everLaidOut ⇒ scoped path next)
+            probe.Deep.Value = 1;                          // deep re-render → deep node LayoutDirty → SCOPED relayout next frame
+            return host.RunFrame().RootRelayoutEscapes;
+        }
+
+        int withBoundary = EscapesOnDeepFlip(true);
+        int withoutBoundary = EscapesOnDeepFlip(false);
+        BoundaryEscapeProbe.UseBoundary = false;   // restore the static
+        Check("gate.layout.boundary-modifier: deep re-render inside a .Boundary() relayouts only the subtree (0 escapes to root)",
+            withBoundary == 0, $"escapes={withBoundary} (want 0)");
+        Check("gate.layout.escape-counter: the same scene WITHOUT .Boundary() escapes to root >= 1 (full-subtree relayout)",
+            withoutBoundary >= 1, $"escapes={withoutBoundary} (want >=1)");
+
+        // gate.bounds.measured-one-frame-late: a resize takes layout effect in frame A but the consumer re-renders in
+        // frame B (the write happens during layout ⇒ MarksStale only), and layout is not re-entered in frame A.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("measured", new Size2(800, 600), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var probe = new MeasuredWidthProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, new MeasureHost(probe));
+            for (int i = 0; i < 5; i++) host.RunFrame();   // mount + seed re-render + settle
+            int r0 = probe.RenderCount; float seen0 = probe.LastSeen;
+            probe.DriveWidth.Value = 108f;                 // resize the bound width
+            host.RunFrame();                               // frame A: bind → scoped relayout → hook writes measured signal (DEFERRED)
+            int rA = probe.RenderCount;
+            host.RunFrame();                               // frame B: consumer re-renders with the new value
+            int rB = probe.RenderCount; float seenB = probe.LastSeen;
+            Check("gate.bounds.measured-one-frame-late: consumer does NOT re-render in the resize frame (no re-entrancy), then exactly next frame",
+                seen0 == 100f && rA == r0 && rB == r0 + 1 && seenB == 108f,
+                $"seen0={seen0} rA-r0={rA - r0}(want 0) rB-r0={rB - r0}(want 1) seenB={seenB}(want 108)");
+        }
+
+        // gate.bounds.measured-quantum: quantum=4 → round(w/4)*4; a +2px change stays in-bucket (suppressed), a +8px crosses.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("quantum", new Size2(800, 600), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var probe = new MeasuredWidthProbe { Quantum = 4f };
+            probe.DriveWidth.Value = 199f;                 // round(199/4)*4 = 200
+            using var host = new AppHost(app, window, device, fonts, strings, new MeasureHost(probe));
+            for (int i = 0; i < 5; i++) host.RunFrame();
+            int q0 = probe.RenderCount; float qseen0 = probe.LastSeen;
+            probe.DriveWidth.Value = 201f;                 // Δ2: round(201/4)*4 = 200 (same bucket) → suppressed
+            host.RunFrame(); host.RunFrame();
+            int qSup = probe.RenderCount;
+            probe.DriveWidth.Value = 209f;                 // Δ8: round(209/4)*4 = 208 → passes
+            host.RunFrame(); host.RunFrame();
+            int qPass = probe.RenderCount; float qseenPass = probe.LastSeen;
+            Check("gate.bounds.measured-quantum: quantum=4 suppresses a 2px change, passes an 8px change",
+                qseen0 == 200f && qSup == q0 && qPass == q0 + 1 && qseenPass == 208f,
+                $"seen0={qseen0}(want 200) supΔ={qSup - q0}(want 0) passΔ={qPass - q0}(want 1) seenPass={qseenPass}(want 208)");
+        }
+
+        // gate.bounds.composes-with-onboundschanged: the element author's own OnBoundsChanged still fires with a
+        // UseMeasuredBounds active on the same node (separate SceneStore slots, both dispatched).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("compose", new Size2(800, 600), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var probe = new ComposeBoundsProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, new MeasureHost(probe));
+            for (int i = 0; i < 5; i++) host.RunFrame();
+            int authorBefore = probe.AuthorFires;   // >= 1 (mount initial delivery)
+            probe.DriveWidth.Value = 140f;
+            host.RunFrame(); host.RunFrame();
+            Check("gate.bounds.composes-with-onboundschanged: element OnBoundsChanged still fires with UseMeasuredBounds on the same node",
+                authorBefore >= 1 && probe.AuthorFires > authorBefore && probe.LastSeenW == 140f,
+                $"authorBefore={authorBefore} authorAfter={probe.AuthorFires} measuredW={probe.LastSeenW}(want 140)");
+        }
+    }
+
+    // G4d — the Props.Channel → re-pushed-props migration (master plan §WS1+WS2 Phase P4). Two locks:
+    //   gate.props.migration-sweep    — 3 representative migrated controls (ToggleSwitch/ProgressRing/ToolTip) deliver
+    //                                    LIVE prop updates to the SAME mounted core on a parent re-render (no remount).
+    //   gate.guards.control-kit-clean — a DEBUG scene mounting the migrated controls + re-pushing changed props trips
+    //                                    ZERO BindContract flips and ZERO backwards-writes (locks in the Part-2 fixes:
+    //                                    the ItemsView dwell effect + the EditableText untracked OnTextChanged dispatch).
+    static void G4dMigrationChecks(StringTable strings)
+    {
+        // ── gate.props.migration-sweep ────────────────────────────────────────────────────────────────────────────
+        {
+            // (1) ToggleSwitch: flipping isOn re-pushes to the reused core → the track cross-fades to the accent ON
+            //     fill on the SAME track node (a single realize = no remount).
+            bool toggleLive;
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("g4d-toggle", new Size2(320, 160), 1f)); window.Show();
+                var on = new Signal<bool>(false);
+                var tracks = new List<NodeHandle>();
+                var parts = new TemplateParts();
+                parts[ToggleSwitch.PartTrack] = b => b with { OnRealized = h => { if (!tracks.Contains(h)) tracks.Add(h); } };
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings,
+                    new W0fStaticProbe { Build = () => new BoxEl { Padding = Edges4.All(12),
+                        Children = [ToggleSwitch.Create(on, parts: parts)] } });
+                host.RunFrame();
+                bool mount = tracks.Count == 1;
+                var track0 = tracks.Count > 0 ? tracks[0] : NodeHandle.Null;
+                on.Value = true;
+                for (int i = 0; i < 24; i++) host.RunFrame();
+                bool noRemount = tracks.Count == 1 && !track0.IsNull;
+                bool toAccent = !track0.IsNull && ColorClose(host.Scene.Paint(track0).Fill, Tok.AccentDefault, 0.03f);
+                toggleLive = mount && noRemount && toAccent;
+            }
+
+            // (2) ProgressRing: flipping isActive re-pushes to the reused core → the SAME ring node starts spinning
+            //     (animation tracks appear) with no remount.
+            bool ringLive;
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("g4d-ring", new Size2(200, 200), 1f)); window.Show();
+                var active = new Signal<bool>(false);
+                NodeHandle arc = default; int realizes = 0;
+                var parts = new TemplateParts();
+                parts[ProgressRing.PartRing] = b => b with { OnRealized = h => { arc = h; realizes++; } };
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings,
+                    new W0fStaticProbe { Build = () => new BoxEl { Padding = Edges4.All(16),
+                        Children = [ProgressRing.Indeterminate(isActive: active.Value, parts: parts)] } });
+                host.RunFrame();
+                var ring0 = host.Scene.Parent(arc);
+                bool idleMount = !arc.IsNull && realizes == 1 && !host.Animation.HasTracks(ring0);
+                active.Value = true;
+                host.RunFrame();
+                var ring1 = host.Scene.Parent(arc);
+                bool spinLive = realizes == 1 && ring1 == ring0 && host.Animation.HasTracks(ring1);
+                ringLive = idleMount && spinLive;
+            }
+
+            // (3) ToolTip: Wrap re-pushes new (target,text) slots to the reused core → the wrapped target reconciles IN
+            //     PLACE (same node) and its new width lands (a frozen-field ToolTip would keep the mount-time width).
+            bool tipLive;
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("g4d-tip", new Size2(320, 160), 1f)); window.Show();
+                var w = new Signal<float>(100f);
+                var targets = new List<NodeHandle>();
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings,
+                    new W0fStaticProbe { Build = () => new BoxEl { Padding = Edges4.All(12),
+                        Children = [ToolTip.Wrap(
+                            new BoxEl { Width = w.Value, Height = 20f, Fill = Tok.AccentDefault,
+                                        OnRealized = h => { if (!targets.Contains(h)) targets.Add(h); } },
+                            "tip")] } });
+                host.RunFrame();
+                var target0 = targets.Count > 0 ? targets[0] : NodeHandle.Null;
+                bool mount = targets.Count == 1 && !target0.IsNull && Near(host.Scene.AbsoluteRect(target0).W, 100f, 0.5f);
+                w.Value = 160f;
+                host.RunFrame(); host.RunFrame();
+                bool grewInPlace = targets.Count == 1 && Near(host.Scene.AbsoluteRect(target0).W, 160f, 0.5f);
+                tipLive = mount && grewInPlace;
+            }
+
+            Check("gate.props.migration-sweep migrated controls deliver live prop updates to the SAME mounted core (ToggleSwitch/ProgressRing/ToolTip, no remount)",
+                toggleLive && ringLive && tipLive, $"toggle={toggleLive} ring={ringLive} tooltip={tipLive}");
+        }
+
+        // ── gate.guards.control-kit-clean ─────────────────────────────────────────────────────────────────────────
+        {
+            bool prevBc = BindContract.Enabled, prevBcT = BindContract.ThrowOnViolation;
+            bool prevBw = BackwardsWriteGuard.Enabled, prevBwT = BackwardsWriteGuard.ThrowOnViolation;
+            BindContract.Enabled = BindContract.CompiledIn; BindContract.ThrowOnViolation = false;
+            BackwardsWriteGuard.Enabled = BackwardsWriteGuard.CompiledIn; BackwardsWriteGuard.ThrowOnViolation = false;
+            BindContract.Reset(); BackwardsWriteGuard.Reset();
+            try
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("g4d-guards", new Size2(480, 960), 1f)); window.Show();
+                var flip = new Signal<bool>(false);
+                var idx = new Signal<int>(0);
+                var gen = new Signal<int>(0);
+                var enabled = new Signal<bool>(true);
+                var combo = new Signal<int>(0);
+                var num = new Signal<double>(1);
+                var sval = new FloatSignal(0.3f);
+                string[] items3 = ["a", "b", "c"];
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings,
+                    new W0fStaticProbe
+                    {
+                        Build = () => new BoxEl
+                        {
+                            Direction = 1, Width = 440, Gap = 6, Padding = Edges4.All(12),
+                            Children =
+                            [
+                                ToggleSwitch.Create(flip, header: "t"),
+                                CheckBox.Create("c", flip, isEnabled: enabled.Value),
+                                ProgressRing.Indeterminate(isActive: flip.Value),
+                                ProgressBar.Indeterminate(240f, flip.Value ? ProgressBarState.Paused : ProgressBarState.Normal),
+                                Slider.Create(sval, _ => { }, new Slider.SliderOptions()),
+                                PipsPager.Create(5, idx),
+                                Pivot.Create(items3, i => new TextEl("p" + i) { Size = 12f }, selectedIndex: idx),
+                                FlipView.Create([new TextEl("0"), new TextEl("1"), new TextEl("2")], selectedIndex: idx),
+                                RadioButtons.Create(items3, idx),
+                                SelectorBar.Create(items3, idx),
+                                BreadcrumbBar.Create(items3),
+                                ComboBox.Create(items3, combo, isEnabled: enabled.Value),
+                                NumberBox.Create(value: null, options: new NumberBox.NumberBoxOptions { Initial = num.Value, IsEnabled = enabled.Value }),
+                                Expander.Create("e", new TextEl("body") { Size = 12f }),
+                                SwipeControl.Create("row", System.Array.Empty<SwipeAction>()),
+                                SettingsCard.Create(new SettingsCard.Options { Header = "s", Description = "d" }),
+                                SettingsExpander.Create(new SettingsExpander.Options { Header = "se" }),
+                                ToolTip.Wrap(new TextEl("hover") { Size = 12f }, "tip " + gen.Value),
+                            ],
+                        },
+                    });
+                host.RunFrame();
+                // Re-push changed props over several re-renders to exercise the reuse/delivery seam (the flip surface).
+                for (int r = 0; r < 4; r++)
+                {
+                    flip.Value = !flip.Value;
+                    idx.Value = (idx.Value + 1) % 3;
+                    gen.Value = gen.Value + 1;
+                    enabled.Value = !enabled.Value;
+                    host.RunFrame(); host.RunFrame();
+                }
+                // Programmatic NumberBox Text write via the value signal (exercises the EditableText SyncFromSignal path).
+                num.Value = 7; host.RunFrame(); host.RunFrame();
+
+                bool bcClean = BindContract.Violations == 0;
+                bool bwClean = BackwardsWriteGuard.Violations == 0;
+                Check("gate.guards.control-kit-clean migrated controls + prop re-push trip ZERO BindContract flips and ZERO backwards-writes",
+                    bcClean && bwClean,
+                    $"compiledIn={BindContract.CompiledIn} bindFlips={BindContract.Violations} [{BindContract.LastViolation}] backWrites={BackwardsWriteGuard.Violations} [{BackwardsWriteGuard.LastViolation}]");
+            }
+            finally
+            {
+                BindContract.Enabled = prevBc; BindContract.ThrowOnViolation = prevBcT;
+                BackwardsWriteGuard.Enabled = prevBw; BackwardsWriteGuard.ThrowOnViolation = prevBwT;
+            }
+        }
     }
 
     static int Main()
@@ -24663,11 +28938,17 @@ static class Slice
         CollapsedHeroRebakeChecks(strings);
         CollapsedHeroFocusChecks(strings);
         SidebarResizeSimChecks(strings);
+        LayoutBoundaryMeasuredChecks(strings);   // G1c: .Boundary() firewall + RootRelayoutEscapes counter + UseMeasuredBounds/Width
         ShellSidebarScrollChecks(strings);
         HookChecks();
+        HookSurfaceChecks();
+        HookSubstrateChecks(strings);
+        UnifyChecks(strings);
         ValidationChecks();
         KeyedChecks(strings);
         ReuseGuardChecks(strings);
+        PropsChannelChecks(strings);
+        PropsGenChecks(strings);
         KeyboardChecks(strings);
         AnimChecks();
         ExpressiveMotionChecks(strings);
@@ -24682,9 +28963,11 @@ static class Slice
         ContextChecks(strings);
         HoverChecks(strings);
         MediaCardEngineChecks(strings);
+        MediaPlayerElementChecks(strings);
         ScrollHoverChecks(strings);
         HoverSubtreeChecks(strings);
         StyleChecks();
+        ButtonAxesChecks();
         AnimValueChecks();
         WrapChecks(strings);
         WrapGrowChecks(strings);
@@ -24703,6 +28986,7 @@ static class Slice
         VirtualBudgetChecks(strings);    // Wave 4 (scroll-perf): E5 velocity overscan, E4 steady-scroll realize budget + nested-rail mount deferral, E6 scene-owned virtual-dirty queue
         BoundItemsViewChecks(strings);   // ItemsView CreateBound: bound-slot re-skin (no rebuild on select/now-playing = no flash), roving tab stop
         AsyncCommandChecks(strings);     // UseAsyncCommand(s): in-progress state tracks the Task, re-fire blocked, cancel, keyed independence, idle 0-alloc
+        TimerHookChecks(strings);        // UseDebouncedValue/UseThrottledValue/UseTimeout/UseInterval + HostTimerQueue: debounce trailing/flush/cancel, throttle leading+trailing, interval pause-on-inactive, unmount-cancels, idle-quiesce wait, zero steady alloc, post-input warm cadence
         ExtentTableChecks();
         VariableChecks(strings);
         ZeroAllocScrollChecks(strings);
@@ -24732,11 +29016,19 @@ static class Slice
         ImageLifecycleChecks(strings);
         UseImageChecks(strings);
         ControlsChecks(strings);
+        RecipeChecks(strings);         // WS3 P1 InteractionRecipe (gate.ctl.recipe.*): expand, presets (theme-live), disabled legs, zero-alloc
+        ControlBindChecks(strings);    // WS3 P2 controlled-input contract (gate.ctl.bind.*): toggle/check/tristate/radio/automaterialize
+        ControlKitIdiomChecks(strings); // WS3 P5 (G5e) one creation idiom + G5b deferrals (gate.ctl.idiom.*, gate.ctl.bind.scrollbar/numberbox-options/splitview-pane, gate.ctl.progress.null-indeterminate)
         NavigationChecks();
         PageHostChecks(strings);
         KeepAliveChecks(strings);
+        NavRouterChecks(strings);      // WS3 P8 registry-driven router (gate.nav.registry/route-gen/pagehost-v2/transition)
+        GalleryChecks(strings);        // WS7 gallery scaffolding (gate.gallery.registry / gate.gallery.codeblock)
         ActivationLifecycleChecks(strings);
         AutoFitTextChecks(strings);
+        G3TokenChecks();
+        G3AspectChecks(strings);
+        G3PrimitiveChecks(strings);
         GridChecks(strings);
         GridOverflowChecks(strings);
         GridStretchChecks(strings);
@@ -24755,9 +29047,12 @@ static class Slice
         // Signals-first model: granular re-render, the compositor bypass (slider tank), reactive control-flow.
         GranularityChecks(strings);
         SliderSignalChecks(strings);
+        SliderUnifiedChecks(strings);     // WS3 P3: one Slider.Create — ranged/step/keyboard, auto-materialize, signal-bound tooltip
         FlowChecks(strings);
         FlowReorderChecks(strings);
         FlowShowRefreshChecks(strings);
+        ForTypedChecks(strings);          // Flow.For<T>: typed keyed diff, single-read snapshot, update re-points closures, dup-key tripwire, zero steady alloc
+        ResourceChecks(strings);          // UseResource SWR: epoch ordering, refresh SWR, refresh-failure keeps data, optimistic mutate, keep-previous-data, deps re-key Pending, stale-time timer
 
         // Wave 1 engine primitives (control-parity foundation). P1 — disabled gate; P2 — stateful text ramps;
         // P4b — stateful gradient transitions; P4a — authored clip-rect channel; P6 — focus/keyboard nav.
@@ -24787,6 +29082,7 @@ static class Slice
         OverlayChecks(strings);
         OverlayAnimationChecks(strings);
         E4PopupWindowingChecks(strings);
+        G5fPopupToastChecks(strings);
         FlyoutAcrylicChecks(strings);
         AcrylicBackdropMathChecks();
         ContentDialogChromeChecks(strings);
@@ -24807,6 +29103,7 @@ static class Slice
         // E11 — unified virtualization substrate (measured seam, LinedFlow/GroupedList, repeater lifecycle,
         // SelectionModel, ItemContainer, ItemsView).
         E11VirtChecks(strings);
+        ListConsolidationChecks(strings);   // G5h (WS3 P7): ListOptions parity + keep-alive slot (#5) + contentType/cache-extent/repaint-boundary (#16) + RepeatLayout presets
 
         // Parity wave-1 defect fixes (D1 collection-host sizing, D2 pointer-focus/PasswordBox reveal,
         // D3 Expander WinUI motion, D4 ScrollBar/AnnotatedScrollBar anatomy).
@@ -24814,6 +29111,7 @@ static class Slice
         Cp2ConsolidationChecks(strings);   // collection consolidation: ItemsView premiere + thin LV/GV presets + 2-D reorder + displacement channel
         D2PasswordRevealFocusChecks(strings);
         ProgressIndeterminateLifecycleChecks(strings);
+        G4dMigrationChecks(strings);       // G4d: Props.Channel → re-pushed-props migration sweep + control-kit guard-clean lock
         PropNetClobberChecks(strings);     // Prop<T> W0: bound-channel ownership net (clobber guards + contract locks)
         AnimRestChecks(strings);           // Prop<T> B1-B3: canceled/settled-track resting values vs static re-asserts
         PropUnionChecks(strings);          // Prop<T> W1: signal-direct bind kind + the locked mount-only wiring contract
@@ -24838,6 +29136,7 @@ static class Slice
         DiagnosticsLeakGateChecks(strings);
 
         PaletteContrastChecks();
+        LocalizationKitChecks(strings);   // G5j (WS3 P9b): kit localization — neutral fallback floor, pseudo transform, no-hardcoded proof
 
         Console.WriteLine();
         if (s_failures == 0) { Console.WriteLine($"ALL CHECKS PASSED — the vertical slice exercises every seam end-to-end.{ArenaSummarySuffix()}"); return 0; }

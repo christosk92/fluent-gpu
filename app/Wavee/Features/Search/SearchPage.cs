@@ -36,11 +36,14 @@ sealed class SearchPage : Component
         var go = UseContext(HistoryStore.NavCtx);
         var querySig = UseContext(SearchQuery.Slot);
         if (svc is null) return new BoxEl { Grow = 1f };
-        string q = (querySig?.Value ?? "").Trim();          // subscribe → re-render + re-search as the user types
+        // Debounce the omnibar query 250ms: a fast typist fires ONE search, not one per keystroke. The thunk auto-tracks
+        // querySig, so each keystroke re-arms the trailing-edge commit; the UseResource deps below ride the debounced value
+        // (empty query → BrowseAll after the same quiet window). Zero re-render until the debounce fires.
+        string q = UseDebouncedValue(() => (querySig?.Value ?? "").Trim(), 250f).Value;   // subscribe → re-render + re-search after quiet
         int chip = _chip.Value;                             // subscribe
         UseEffect(() => _songsSel.ClearSelection(), q + ":" + chip);
         var facet = RequestFacetFor(chip);
-        var results = UseAsyncResource(ct => svc.Library.SearchAsync(q, facet, 0, SearchPageSize, ct), SearchResults.Empty, q, chip);   // selected tab drives the live facet op
+        var results = UseResource(ct => svc.Library.SearchAsync(q, facet, 0, SearchPageSize, ct), SearchResults.Empty, (q, chip)).Loadable;   // selected tab drives the live facet op
 
         // Scroll-position restoration keyed by the query: each distinct query has its own remembered scroll (a new query
         // starts at the top; returning to a prior query restores it). One ScrollView node serves every query in place.
@@ -49,8 +52,8 @@ sealed class SearchPage : Component
 
         var resultBody = new BoxEl
         {
-            Direction = 1, Gap = WaveeSpace.L,
-            Padding = new Edges4(WaveeSpace.L, WaveeSpace.S, WaveeSpace.L, PlayerDock.Reserve + WaveeSpace.XXL),
+            Direction = 1, Gap = Spacing.L,
+            Padding = new Edges4(Spacing.L, Spacing.S, Spacing.L, PlayerDock.Reserve + Spacing.XXL),
             // Songs (chip 1) is a BOUND virtualized list — its slots realize AFTER the skel-reveal walk runs, so the
             // block-level StaggerRows would fade the whole list as one; the per-slot RowRise entrance in SearchSongs
             // owns the stagger there instead (mirrors the detail list's entrance-vs-reveal split).
@@ -69,7 +72,7 @@ sealed class SearchPage : Component
                 new BoxEl
                 {
                     Shrink = 0f,
-                    Padding = new Edges4(WaveeSpace.L, WaveeSpace.M, WaveeSpace.L, WaveeSpace.S),
+                    Padding = new Edges4(Spacing.L, Spacing.M, Spacing.L, Spacing.S),
                     Children = [ChipBar(chip)],
                 },
                 chip == 1
@@ -91,16 +94,16 @@ sealed class SearchPage : Component
             rows[i] = new BoxEl
             {
                 Height = 48f, AlignSelf = FlexAlign.Stretch,
-                Corners = CornerRadius4.All(WaveeRadius.Control),
+                Corners = CornerRadius4.All(Radii.Control),
                 Fill = Tok.FillSubtleSecondary,
             };
-        return new BoxEl { Direction = 1, Gap = WaveeSpace.S, AlignSelf = FlexAlign.Stretch, Children = rows };
+        return new BoxEl { Direction = 1, Gap = Spacing.S, AlignSelf = FlexAlign.Stretch, Children = rows };
     }
 
     Element ChipBar(int chip) => new BoxEl
     {
         Direction = 0, AlignItems = FlexAlign.Center,
-        Children = [SelectorBar.Create(ChipLabels(), chip, i => _chip.Value = i)],
+        Children = [SelectorBar.Create(ChipLabels(), _chip)],
     };
 
     static string[] ChipLabels() =>
@@ -167,12 +170,12 @@ sealed class SearchPage : Component
     }
 
     // ── flat unified results list (per chip) ──
-    static Element FlatList(IEnumerable<Element> rows) => new BoxEl { Direction = 1, Gap = WaveeSpace.S, Children = rows.ToArray() };
+    static Element FlatList(IEnumerable<Element> rows) => new BoxEl { Direction = 1, Gap = Spacing.S, Children = rows.ToArray() };
 
     static Element ResultRow(Image? cover, int seed, string title, string subtitle, string type, bool circular, Action open) => new BoxEl
     {
-        Direction = 0, Height = 60f, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
-        Padding = new Edges4(WaveeSpace.S, 0f, WaveeSpace.S, 0f), Corners = CornerRadius4.All(6f),
+        Direction = 0, Height = 60f, AlignItems = FlexAlign.Center, Gap = Spacing.M,
+        Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f), Corners = CornerRadius4.All(6f),
         Fill = Tok.FillCardSecondary, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
         HoverFill = Tok.FillCardDefault, PressedFill = Tok.FillSubtleTertiary, OnClick = open,
         Children =
@@ -212,17 +215,17 @@ sealed class SearchPage : Component
         }
         return new BoxEl
         {
-            Direction = 1, Gap = WaveeSpace.L,
-            Padding = new Edges4(WaveeSpace.L, WaveeSpace.M, WaveeSpace.L, PlayerDock.Reserve + WaveeSpace.XXL),
-            Children = [WaveeType.PageHero(Loc.Get(Strings.Search.BrowseAll)), AutoGrid(200f, WaveeSpace.M, 104f, cards)],
+            Direction = 1, Gap = Spacing.L,
+            Padding = new Edges4(Spacing.L, Spacing.M, Spacing.L, PlayerDock.Reserve + Spacing.XXL),
+            Children = [WaveeType.PageHero(Loc.Get(Strings.Search.BrowseAll)), AutoGrid(200f, Spacing.M, 104f, cards)],
         };
     }
 
     static Element CategoryCard(string name, int i, Action open) => new BoxEl
     {
-        Height = 104f, Corners = CornerRadius4.All(WaveeRadius.Card), ClipToBounds = true,
+        Height = 104f, Corners = CornerRadius4.All(Radii.Card), ClipToBounds = true,
         Gradient = LinearGradient(135f, new GradientStop(0f, CatColor(i)), new GradientStop(1f, CatColor(i) with { A = 0.7f })),
-        Padding = new Edges4(WaveeSpace.M, WaveeSpace.M, WaveeSpace.M, WaveeSpace.M),
+        Padding = new Edges4(Spacing.M, Spacing.M, Spacing.M, Spacing.M),
         HoverScale = 1.02f, PressScale = 0.99f, OnClick = open,
         Children = [new TextEl(name) { Size = 18f, Weight = 800, Color = ColorF.FromRgba(255, 255, 255), MaxLines = 2, Wrap = TextWrap.Wrap, Trim = TextTrim.CharacterEllipsis }],
     };
@@ -250,15 +253,15 @@ sealed class SearchPage : Component
 
     static Element TopCard(Image? img, string name, string type, int seed, bool circular, Action open, Action play) => new BoxEl
     {
-        Direction = 1, Gap = WaveeSpace.M,
-        Padding = new Edges4(WaveeSpace.L, WaveeSpace.L, WaveeSpace.L, WaveeSpace.L),
-        Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardSecondary,
+        Direction = 1, Gap = Spacing.M,
+        Padding = new Edges4(Spacing.L, Spacing.L, Spacing.L, Spacing.L),
+        Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillCardSecondary,
         BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault, ClipToBounds = true,
         HoverFill = Tok.FillCardDefault, OnClick = open,
         Children =
         [
-            new BoxEl { Width = 92f, Height = 92f, Corners = CornerRadius4.All(circular ? 46f : WaveeRadius.Card), ClipToBounds = true, Shadow = Elevation.Card,
-                Children = [Surfaces.Artwork(img, seed & 0x7fffffff, 92f, 92f, circular ? 46f : WaveeRadius.Card, decodePx: 256)] },
+            new BoxEl { Width = 92f, Height = 92f, Corners = CornerRadius4.All(circular ? 46f : Radii.Card), ClipToBounds = true, Shadow = Elevation.Card,
+                Children = [Surfaces.Artwork(img, seed & 0x7fffffff, 92f, 92f, circular ? 46f : Radii.Card, decodePx: 256)] },
             WaveeType.PageHero(name) with { MaxLines = 2, Wrap = TextWrap.Wrap, Trim = TextTrim.CharacterEllipsis },
             new BoxEl
             {
@@ -279,7 +282,7 @@ sealed class SearchPage : Component
     // ── songs (the All-view right column) — the SAME shared track cell as the detail/library lists, capped to 4 rows. ──
     static Element SongsSection(IReadOnlyList<Track> tracks, Action<Track> playTrack, Action<string, string?> go) => new BoxEl
     {
-        Direction = 1, Gap = WaveeSpace.S,
+        Direction = 1, Gap = Spacing.S,
         Children =
         [
             WaveeType.RailHeader(Loc.Get(Strings.Search.Songs)),
@@ -297,8 +300,8 @@ sealed class SearchPage : Component
 
     static Element Centered(string glyph, string title, string sub) => new BoxEl
     {
-        Grow = 1f, Direction = 1, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Gap = WaveeSpace.M,
-        Padding = new Edges4(WaveeSpace.XL, WaveeSpace.XXL, WaveeSpace.XL, WaveeSpace.XXL),
+        Grow = 1f, Direction = 1, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Gap = Spacing.M,
+        Padding = new Edges4(Spacing.XL, Spacing.XXL, Spacing.XL, Spacing.XXL),
         Children =
         [
             Icon(glyph, 40f, Tok.TextTertiary),
@@ -388,18 +391,21 @@ sealed class SearchSongs : Component
                 return result;
             },
             RepeatLayout.Stack(RowExtent),
-            selectionMode: ItemsSelectionMode.Extended,
-            selection: model.Selection,
-            isItemInvokedEnabled: true,
-            itemInvoked: i =>
+            new ListOptions
             {
-                if ((uint)i >= (uint)n) return;
-                var t = tracks[i];
-                TrackRow.Invoke(bridge, t, () => model.PlayTrack(t));
-            },
-            itemText: i => (uint)i < (uint)n ? tracks[i].Title : "",
-            onScrollGeometryChanged: (g => _swipeGroup.AnyOpen ? BitConverter.SingleToInt32Bits(g.OffsetY) : 0L, _ => _swipeGroup.Close()),
-            grow: 0f);
+                SelectionMode = ItemsSelectionMode.Extended,
+                Selection = model.Selection,
+                IsItemInvokedEnabled = true,
+                OnInvoked = i =>
+                {
+                    if ((uint)i >= (uint)n) return;
+                    var t = tracks[i];
+                    TrackRow.Invoke(bridge, t, () => model.PlayTrack(t));
+                },
+                ItemText = i => (uint)i < (uint)n ? tracks[i].Title : "",
+                Grow = 0f,
+                Scroll = new ScrollOptions { OnScrollGeometryChanged = (g => _swipeGroup.AnyOpen ? BitConverter.SingleToInt32Bits(g.OffsetY) : 0L, _ => _swipeGroup.Close()) },
+            });
     }
 
     sealed class SearchSongRow : Component
@@ -503,12 +509,12 @@ sealed class SearchAllList : Component
             var rows = new List<Element>(hits.Count);
             rows.Add(HitRow(hits[0], lib, model, large: true, acts, menuOverlay));
             for (int i = 1; i < hits.Count; i++) rows.Add(HitRow(hits[i], lib, model, large: false, acts, menuOverlay));
-            return new BoxEl { Direction = 1, Gap = WaveeSpace.S, Children = rows.ToArray() };
+            return new BoxEl { Direction = 1, Gap = Spacing.S, Children = rows.ToArray() };
         }
 
         var fallback = FallbackRows(r, lib, model, acts, menuOverlay);
         if (fallback.Count > 0)
-            return new BoxEl { Direction = 1, Gap = WaveeSpace.S, Children = fallback.ToArray() };
+            return new BoxEl { Direction = 1, Gap = Spacing.S, Children = fallback.ToArray() };
 
         // No unified top-results and no facet rows.
         return EmptyState.Build(Loc.Get(Strings.Search.NoResults), glyph: Icons.Search);
@@ -523,7 +529,7 @@ sealed class SearchAllList : Component
         var rows = new Element[hits.Length];
         for (int i = 0; i < hits.Length; i++)
             rows[i] = HitRow(hits[i], lib, model, large: false, acts, menuOverlay);
-        return new BoxEl { Direction = 1, Gap = WaveeSpace.S, Children = rows };
+        return new BoxEl { Direction = 1, Gap = Spacing.S, Children = rows };
     }
 
     // ── every row is MediaCard.Row (the shared factory); these supply the per-kind data + actions only ───────────────────

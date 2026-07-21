@@ -14,6 +14,7 @@ using static FluentGpu.Dsl.Ui;
 // partial-known content immediately (cover + title), shimmers the still-loading region (the track list), and swaps to
 // real with the blur reveal we built — then streams per-row durations in via incremental per-field Loadables. No second
 // hand-authored skeleton tree, no two UIs to keep in sync.
+[GalleryPage("async-skeletons", "Async & skeletons", "Patterns", Icon = Icons.Refresh, ShotMode = ShotMode.Animated)]
 sealed class AsyncSkeletonPage : Component
 {
     public override Element Render() => GalleryPage.Shell("Async & skeletons",
@@ -21,22 +22,22 @@ sealed class AsyncSkeletonPage : Component
         "framework derives the shimmer from that same UI, keeps the parts you already have (the album cover + title) " +
         "real, shimmers the pending region (the tracks), and swaps to real content with the blur reveal on load. " +
         "Per-field Loadables let individual cells (track durations) stream in afterwards, shimmering just that leaf.",
-        ControlExample.Build("Album page — ONE UI: known header, async track list, streaming durations",
+        ExampleCard.Build("Album page — ONE UI: known header, async track list, streaming durations",
             Embed.Comp(() => new AlbumLoadingDemo()),
             description: "The cover + title render REAL on frame 1 (they're known on click — outside any region). The track " +
                 "list is a Skel.Region: it shimmers " + "derived row placeholders, then blur-reveals the real rows on load. " +
                 "Each row's duration is its OWN Loadable (.Pending) — the row is real while the duration cell shimmers, then " +
                 "the duration streams in. Hit Reload to replay.",
             code: """
-            var tracks = UseAsyncResource(LoadTracks, seed: Array.Empty<Track>());   // Loadable<Track[]>
+            var tracks = UseResource(LoadTracks, seed: Array.Empty<Track>());       // Resource<Track[]>
             return VStack(
               Header(Seed.Cover, Seed.Title),                                        // REAL frame 1 (known)
-              Skel.Region(tracks, rowTemplate: AlbumRow, count: Seed.TrackCount,
+              Skel.Region(tracks.Loadable, rowTemplate: AlbumRow, count: Seed.TrackCount,
                 reveal: SkelReveal.StaggerRows,
-                content: ts => Flow.For(() => ts.Length, i => AlbumRow(ts[i]), keyOf: i => ts[i].Id)));
+                content: ts => Flow.For(() => ts, t => t.Id, (t, i) => AlbumRow(t))));
             // a row's duration cell:  new TextEl("") { Text = t.Dur.Bind() }.Pending(t.Dur)
             """),
-        ControlExample.Build("Load failure → onFailed branch",
+        ExampleCard.Build("Load failure → onFailed branch",
             Embed.Comp(() => new SkeletonFailureDemo()),
             description: "When the loader throws, SetFailed routes through the same State signal and the region shows the " +
                 "onFailed UI instead of shimmering forever. Retry re-arms the load.",
@@ -130,7 +131,7 @@ sealed class AlbumLoadingDemo : Component
                 // TRACK LIST — the shimmering region. ONE source: AlbumRow (real + skeleton are the same shape).
                 Skel.Region(tracks, AlbumRowSkeleton, count: Titles.Length,
                     reveal: SkelReveal.StaggerRows,
-                    content: ts => Flow.For(() => ts.Length, i => AlbumRowReal(ts[i]), keyOf: i => ts[i].Number.ToString())),
+                    content: ts => Flow.For<AlbumTrack>(() => ts, t => t.Number.ToString(), (t, i) => AlbumRowReal(t))),
 
                 Button.Standard("Reload", () => setReload(reload + 1)),
             ],
@@ -184,7 +185,7 @@ sealed class SkeletonFailureDemo : Component
             Children =
             [
                 Skel.Region(items, _ => RowBar(), count: 4,
-                    content: xs => Flow.For(() => xs.Length, i => new TextEl(xs[i]) { Size = 14f }, keyOf: i => i.ToString()),
+                    content: xs => Flow.For<string>(() => xs, s => s, (s, i) => new TextEl(s) { Size = 14f }),
                     onFailed: () => new BoxEl
                     {
                         Direction = 1, Gap = 8f, Padding = Edges4.All(16),

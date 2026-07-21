@@ -20,7 +20,7 @@ namespace Wavee;
 // catalog seam groups a real Spotify home — dozens of sections — into a small, finite set of typed groups so it never
 // reads as an endless stack of rails; see docs/architecture.md §2). Each group renders by KIND with the existing
 // reusable cards: QuickGrid / Hero spotlight / horizontally-paged Shelf / a CollapsedGrid that folds the many
-// single-item recommendations into one grid. Async skeleton pattern throughout (UseAsyncResource + Skel.Region).
+// single-item recommendations into one grid. Async skeleton pattern throughout (UseResource + Skel.Region).
 sealed class HomePage : Component
 {
     public override Element Render()
@@ -37,7 +37,7 @@ sealed class HomePage : Component
         var post = UsePost();
         // Home groups have substantially different heights (quick grid / hero / compact grid / shelf / editorial).
         // Hoist one measured extent table so the viewport can correct and anchor rows while recycling offscreen groups.
-        var homeLayout = UseMemo(static () => new HomeFeedVirtualLayout());
+        var homeLayout = UseMemo(static () => new HomeFeedVirtualLayout(), DepKey.Empty);
         // Start the background home-refresh loop ONCE and tie it to this component's lifetime. A UseSignalEffect that
         // reads no signals runs exactly once on mount; its Reactive.OnCleanup fires on unmount (KeepAlive eviction /
         // navigation away). Without this, each cold remount of Home leaked an orphaned 60s PeriodicTimer loop that
@@ -126,7 +126,7 @@ sealed class HomePage : Component
             pager: ShelfPager.Chevrons,
             // gap S, not L: the Shelf card already insets its artwork by Pad(8) each side for the hover plate, so the
             // VISUAL cover-to-cover distance is gap + 16 — L read as ~32px of air between resting cards.
-            minCardW: 178f, maxCardW: 232f, gap: WaveeSpace.S, edgeFade: 24f,
+            minCardW: 178f, maxCardW: 232f, gap: Spacing.S, edgeFade: 24f,
             keyOf: i => g.Cards[i].Uri);
 
         // Baseline recommendations are the deliberate exception: a three-up editorial interruption with full-bleed
@@ -153,7 +153,7 @@ sealed class HomePage : Component
             // shows them at the fitted size.
             // edgeFade must cover the shelf's HaloBleed gutter (PagedShelf): with fade 0 a free-wheel (non-page-aligned)
             // rest showed a RAW sliver of the scrolled-out neighbor in the gutter — the fade is what keeps it soft.
-            minCardW: 300f, maxCardW: 9999f, gap: WaveeSpace.L, edgeFade: 24f,
+            minCardW: 300f, maxCardW: 9999f, gap: Spacing.L, edgeFade: 24f,
             maxColumns: 5,
             keyOf: i => g.Cards[i].Uri);
 
@@ -175,7 +175,7 @@ sealed class HomePage : Component
             }
             return new BoxEl
             {
-                Direction = 1, Gap = WaveeSpace.M,
+                Direction = 1, Gap = Spacing.M,
                 Children =
                 [
                     g.Title is { Length: > 0 } t ? Surfaces.AccentHeader(t, GroupAccent(g)) : new BoxEl(),
@@ -238,7 +238,7 @@ sealed class HomePage : Component
         Element HomeRow(Element child, string contentKey, float top, float bottom) => new BoxEl
         {
             Direction = 1,
-            Padding = new Edges4(WaveeSpace.L, top, WaveeSpace.L, bottom),
+            Padding = new Edges4(Spacing.L, top, Spacing.L, bottom),
             // Home is a heterogeneous virtual list: greeting, grids, shelves and the concert destination do not share
             // a recyclable subtree shape. Keep this cheap row shell recyclable, but key its content so a shell reused
             // for another row replaces the old subtree instead of positionally rebinding incompatible element trees.
@@ -265,10 +265,10 @@ sealed class HomePage : Component
             {
                 string key = KeyAt(index);
                 if (index == 0)
-                    return HomeRow(GreetingHero(name), key, WaveeSpace.M, WaveeSpace.XL);
+                    return HomeRow(GreetingHero(name), key, Spacing.M, Spacing.XL);
                 if (index == concertIndex)
-                    return HomeRow(concerts, key, 0f, PlayerDock.Reserve + WaveeSpace.XXL);
-                return HomeRow(Group(feed.Groups[index - 1]), key, 0f, WaveeSpace.XL);
+                    return HomeRow(concerts, key, 0f, PlayerDock.Reserve + Spacing.XXL);
+                return HomeRow(Group(feed.Groups[index - 1]), key, 0f, Spacing.XL);
             }
 
             return Virtual.Measured(groupCount + 2, homeLayout, RowAt, KeyAt, overscan: 1) with
@@ -287,19 +287,11 @@ sealed class HomePage : Component
             };
         }
 
-        Element PendingHome() => ScrollView(new BoxEl
-        {
-            Direction = 1,
-            Gap = WaveeSpace.XL,
-            Padding = new Edges4(WaveeSpace.L, WaveeSpace.M, WaveeSpace.L, PlayerDock.Reserve + WaveeSpace.XXL),
-            Children = [ GreetingHero(name), HomeShimmer(), concerts ],
-        }) with { Grow = 1f, ScrollKey = "home" };
-
         Element StateHome(Element state) => ScrollView(new BoxEl
         {
             Direction = 1,
-            Gap = WaveeSpace.XL,
-            Padding = new Edges4(WaveeSpace.L, WaveeSpace.M, WaveeSpace.L, PlayerDock.Reserve + WaveeSpace.XXL),
+            Gap = Spacing.XL,
+            Padding = new Edges4(Spacing.L, Spacing.M, Spacing.L, PlayerDock.Reserve + Spacing.XXL),
             Children = [ GreetingHero(name), state, concerts ],
         }) with { Grow = 1f, ScrollKey = "home" };
 
@@ -307,7 +299,6 @@ sealed class HomePage : Component
         // measure the virtual list at its complete content extent and silently realize every group again.
         return Skel.Region(
             home,
-            shimmerSource: PendingHome,
             reveal: SkelReveal.StaggerRows,
             isEmpty: feed => feed.Groups.Count == 0,
             onEmpty: () => StateHome(EmptyState.Default()),
@@ -347,219 +338,6 @@ sealed class HomePage : Component
         }
     }
 
-    // Lightweight loading skeleton for the SAME visual rhythm as the seeded/real Home feed. It deliberately keeps
-    // the trees paint-only (no media components, timers, menus, or image work), while reserving the geometry of the
-    // quick grid, conventional shelf, compact two-column module, and editorial break before content arrives.
-    static Element HomeShimmer()
-    {
-        const float pad = WaveeSpace.S;
-
-        static Element Bar(float w, float h, float r = 4f) =>
-            new BoxEl { Width = w, Height = h, Corners = CornerRadius4.All(r) };
-
-        static Element[] Repeat(int count, Func<Element> make)
-        {
-            var items = new Element[count];
-            for (int i = 0; i < items.Length; i++) items[i] = make();
-            return items;
-        }
-
-        static Element Header(float titleW, bool pager = true) => new BoxEl
-        {
-            Direction = 0, Gap = 12f, AlignItems = FlexAlign.Center,
-            Children = pager
-                ?
-                [
-                    new BoxEl { Width = 3f, Height = 42f, Corners = CornerRadius4.All(1.5f) },
-                    Bar(titleW, 28f, 6f),
-                    new BoxEl { Grow = 1f, SkeletonMode = SkeletonMode.Off },
-                    Bar(32f, 32f, 16f),
-                    Bar(32f, 32f, 16f),
-                ]
-                :
-                [
-                    new BoxEl { Width = 3f, Height = 42f, Corners = CornerRadius4.All(1.5f) },
-                    Bar(titleW, 28f, 6f),
-                ],
-        };
-
-        static Element QuickTile() => new BoxEl
-        {
-            Height = MediaCard.QuickH, Direction = 0, Gap = WaveeSpace.M, AlignItems = FlexAlign.Center,
-            Corners = CornerRadius4.All(WaveeRadius.Card),
-            Children =
-            [
-                new BoxEl
-                {
-                    Width = MediaCard.QuickW, Height = MediaCard.QuickH,
-                    Corners = CornerRadius4.All(WaveeRadius.Card), Shrink = 0f,
-                },
-                new BoxEl
-                {
-                    Direction = 1, Grow = 1f, Basis = 0f, Gap = 6f, Justify = FlexJustify.Center,
-                    Children = [ Bar(132f, 15f, 7.5f), Bar(88f, 11f, 5.5f) ],
-                },
-            ],
-        };
-
-        static Element ShelfCard(float cardW)
-        {
-            float art = MathF.Max(48f, cardW - 2f * pad);
-            return new BoxEl
-            {
-                Width = cardW, Shrink = 0f, Direction = 1, Gap = pad,
-                Padding = new Edges4(pad, 4f, pad, WaveeSpace.M),
-                Children =
-                [
-                    new BoxEl { Width = art, Height = art, Corners = CornerRadius4.All(WaveeRadius.Card) },
-                    Bar(MathF.Min(132f, art), 15f, 7.5f),
-                    Bar(MathF.Min(92f, art * 0.68f), 11f, 5.5f),
-                ],
-            };
-        }
-
-        static Element ShelfSection(float titleW) => Responsive.Of(width =>
-        {
-            const float minCardW = 178f;
-            const float maxCardW = 232f;
-            const float gap = WaveeSpace.L;
-            int columns = Math.Clamp((int)MathF.Floor((MathF.Max(width, minCardW) + gap) / (minCardW + gap)), 1, 6);
-            float fitted = (MathF.Max(width, minCardW) - gap * (columns - 1)) / columns;
-            float cardW = Math.Clamp(fitted, minCardW, maxCardW);
-            return new BoxEl
-            {
-                Direction = 1, Gap = WaveeSpace.M,
-                Children =
-                [
-                    Header(titleW),
-                    new BoxEl
-                    {
-                        Direction = 0, Gap = gap, ClipToBounds = true,
-                        Children = Repeat(6, () => ShelfCard(cardW)),
-                    },
-                ],
-            };
-        }, fallback: 1100f);
-
-        static Element CompactCard(float art, float cardH) => new BoxEl
-        {
-            Direction = 1, Padding = new Edges4(0f, HomeCompactLayout.RowClearance * 0.5f, 0f, HomeCompactLayout.RowClearance * 0.5f),
-            Children =
-            [
-                new BoxEl
-                {
-                    Direction = 0, Height = cardH, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center,
-                    Padding = new Edges4(WaveeSpace.S, MathF.Max(0f, (cardH - art) * 0.5f), WaveeSpace.S,
-                        MathF.Max(0f, (cardH - art) * 0.5f)),
-                    Corners = CornerRadius4.All(WaveeRadius.Card),
-                    Children =
-                    [
-                        new BoxEl
-                        {
-                            Width = art, Height = art, Shrink = 0f,
-                            Corners = CornerRadius4.All(WaveeRadius.Card),
-                        },
-                        new BoxEl
-                        {
-                            Direction = 1, Grow = 1f, Basis = 0f, Gap = 7f, Justify = FlexJustify.Center,
-                            Children = [ Bar(148f, 15f, 7.5f), Bar(104f, 11f, 5.5f) ],
-                        },
-                        Bar(42f, 42f, 21f),
-                        Bar(32f, 32f, 16f),
-                    ],
-                },
-            ],
-        };
-
-        static Element CompactSection() => Responsive.Of(width =>
-        {
-            float art = HomeCompactLayout.Art(width);
-            float cardH = HomeCompactLayout.CardHeight(width);
-            int columns = HomeCompactLayout.Columns(width);
-            return new BoxEl
-            {
-                Direction = 1, Gap = WaveeSpace.M,
-                Children =
-                [
-                    Header(224f, pager: false),
-                    UniformGrid(columns, HomeCompactLayout.GridGap, cardH + HomeCompactLayout.RowClearance, Repeat(4, () => CompactCard(art, cardH))),
-                ],
-            };
-        }, fallback: 900f);
-
-        static Element EditorialCard(float cardW)
-        {
-            float artH = MathF.Max(360f, cardW * 1.25f);
-            float inset = Math.Clamp(cardW * 0.055f, 14f, 20f);
-            return new BoxEl
-            {
-                Width = cardW, Height = artH, Shrink = 0f, ZStack = true, ClipToBounds = true,
-                Corners = CornerRadius4.All(14f),
-                Children =
-                [
-                    new BoxEl { Height = artH, Corners = CornerRadius4.All(14f) },
-                    new BoxEl
-                    {
-                        Height = artH, Direction = 1, Justify = FlexJustify.End,
-                        Padding = new Edges4(inset, inset, inset, inset), Gap = 8f,
-                        Children =
-                        [
-                            Bar(MathF.Min(116f, cardW * 0.42f), 11f, 5.5f),
-                            Bar(MathF.Max(96f, cardW - inset * 2f), 19f, 9.5f),
-                            Bar(MathF.Min(184f, cardW * 0.68f), 12f, 6f),
-                            new BoxEl
-                            {
-                                Direction = 0, Gap = 8f,
-                                Children = [ Bar(44f, 44f, 22f), Bar(44f, 44f, 22f) ],
-                            },
-                        ],
-                    },
-                ],
-            };
-        }
-
-        static Element EditorialSection() => Responsive.Of(width =>
-        {
-            const float minCardW = 300f;
-            const float gap = WaveeSpace.L;
-            int columns = Math.Clamp((int)MathF.Floor((MathF.Max(width, minCardW) + gap) / (minCardW + gap)), 1, 5);
-            float cardW = MathF.Max(minCardW, (MathF.Max(width, minCardW) - gap * (columns - 1)) / columns);
-            return new BoxEl
-            {
-                Direction = 1, Gap = WaveeSpace.M,
-                Children =
-                [
-                    Header(188f),
-                    new BoxEl
-                    {
-                        Direction = 0, Gap = gap, ClipToBounds = true,
-                        Children = Repeat(3, () => EditorialCard(cardW)),
-                    },
-                ],
-            };
-        }, fallback: 1100f);
-
-        static Element QuickSection() => Responsive.Of(width =>
-        {
-            int columns = HomeQuickLayout.Columns(width);
-            return UniformGrid(columns, HomeQuickLayout.Gap, MediaCard.QuickH,
-                Repeat(columns * columns, QuickTile));
-        }, fallback: 1100f);
-
-        return new BoxEl
-        {
-            Direction = 1, Gap = WaveeSpace.XL,
-            Children =
-            [
-                QuickSection(),
-                ShelfSection(212f),
-                CompactSection(),
-                EditorialSection(),
-                ShelfSection(176f),
-            ],
-        };
-    }
-
     static string Id(string uri) { int i = uri.LastIndexOf(':'); return i >= 0 ? uri[(i + 1)..] : uri; }
     // The group's lifted accent (renderer color): the composer-assigned tint (cover-extracted or semantic), or a
     // per-kind fallback for groups with none (the offline/library home). Lift keeps a near-black cover color legible.
@@ -580,7 +358,7 @@ sealed class HomePage : Component
         string greet = (string.IsNullOrWhiteSpace(name) || looksLikeHandle) ? part : Strings.Home.Greeting(part, name);
         return new BoxEl
         {
-            Direction = 1, Gap = WaveeSpace.XS, Padding = new Edges4(0f, WaveeSpace.S, 0f, 0f),
+            Direction = 1, Gap = Spacing.XS, Padding = new Edges4(0f, Spacing.S, 0f, 0f),
             Children = [ WaveeType.PageHero(greet), WaveeType.TrackMeta(Loc.Get(Strings.Home.OnRotation)) ],
         };
     }
@@ -591,9 +369,9 @@ sealed class HomePage : Component
         float textMax = innerW > 1f ? MathF.Max(160f, innerW - 216f) : 560f;
         return new BoxEl
         {
-            Direction = 0, Gap = WaveeSpace.L, AlignItems = FlexAlign.Center,
-            Padding = new Edges4(WaveeSpace.L, WaveeSpace.L, WaveeSpace.L, WaveeSpace.L),
-            Corners = CornerRadius4.All(WaveeRadius.Card), Shadow = Elevation.Card,
+            Direction = 0, Gap = Spacing.L, AlignItems = FlexAlign.Center,
+            Padding = new Edges4(Spacing.L, Spacing.L, Spacing.L, Spacing.L),
+            Corners = CornerRadius4.All(Radii.Card), Shadow = Elevation.Card,
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             // Spotlight glow: a soft accent radial pooled behind the cover (left-of-center), fading into the neutral
             // card material toward the right — so the art appears to emit its own color (the WinUI hero treatment),
@@ -606,13 +384,13 @@ sealed class HomePage : Component
             [
                 new BoxEl
                 {
-                    Corners = CornerRadius4.All(WaveeRadius.Card), Shadow = Elevation.Card, ClipToBounds = true,
+                    Corners = CornerRadius4.All(Radii.Card), Shadow = Elevation.Card, ClipToBounds = true,
                     OnClick = () => nav(c), Cursor = CursorId.Hand,
-                    Children = [ Image(c.Image?.Url ?? "", 168f, 168f, WaveeRadius.Card, placeholder: Tok.FillCardDefault) ],
+                    Children = [ Image(c.Image?.Url ?? "", 168f, 168f, Radii.Card, placeholder: Tok.FillCardDefault) ],
                 },
                 new BoxEl
                 {
-                    Direction = 1, Grow = 1f, Basis = 0f, Gap = WaveeSpace.S,
+                    Direction = 1, Grow = 1f, Basis = 0f, Gap = Spacing.S,
                     Children =
                     [
                         Caption(Loc.Get(Strings.Home.FeaturedAlbum)) with { Color = accent, Weight = 700, CharSpacing = 80f, MaxWidth = textMax },
@@ -620,7 +398,7 @@ sealed class HomePage : Component
                         WaveeType.TrackMeta(c.Subtitle ?? "") with { MaxWidth = textMax, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                         new BoxEl
                         {
-                            Direction = 0, Margin = new Edges4(0f, WaveeSpace.S, 0f, 0f),
+                            Direction = 0, Margin = new Edges4(0f, Spacing.S, 0f, 0f),
                             Children = [ Button.Accent(Loc.Get(Strings.Home.Play), () => play(c)) ],
                         },
                     ],
@@ -640,7 +418,7 @@ sealed class HomePage : Component
 /// </summary>
 static class HomeCompactLayout
 {
-    public const float GridGap = WaveeSpace.S;
+    public const float GridGap = Spacing.S;
     public const float RowClearance = 4f;
 
     public static float Art(float width) => width < 620f ? 72f : 88f;
@@ -651,7 +429,7 @@ static class HomeCompactLayout
 static class HomeQuickLayout
 {
     public const float MinColumnWidth = 320f;
-    public const float Gap = WaveeSpace.M;
+    public const float Gap = Spacing.M;
     public const int MaxColumns = 3;
 
     public static int Columns(float width)
@@ -723,36 +501,36 @@ sealed class HomeFeedVirtualLayout : IMeasuredVirtualLayout
 
     float Estimate(int index, float cross)
     {
-        float available = MathF.Max(1f, cross - 2f * WaveeSpace.L);
+        float available = MathF.Max(1f, cross - 2f * Spacing.L);
         if (index == 0)
-            return 84f + WaveeSpace.M + WaveeSpace.XL; // greeting copy + row top/bottom rhythm
+            return 84f + Spacing.M + Spacing.XL; // greeting copy + row top/bottom rhythm
         if (index == _groupCount + 1)
             return Wavee.Features.Concerts.ConcertLayout.WideEditorial(available).Height
-                + PlayerDock.Reserve + WaveeSpace.XXL;
+                + PlayerDock.Reserve + Spacing.XXL;
 
         int gi = index - 1;
         if ((uint)gi >= (uint)_groupCount) return 360f;
         int count = _cardCounts[gi];
-        float header = _titled[gi] ? 42f + WaveeSpace.M : 0f;
+        float header = _titled[gi] ? 42f + Spacing.M : 0f;
 
         return _kinds[gi] switch
         {
             HomeGroupKind.QuickGrid => QuickExtent(available, count),
-            HomeGroupKind.Hero => 168f + 2f * WaveeSpace.L + WaveeSpace.XL,
-            HomeGroupKind.Compact => header + CompactExtent(available, count) + WaveeSpace.XL,
-            HomeGroupKind.Featured => header + FeaturedExtent(available) + WaveeSpace.XL,
-            HomeGroupKind.Shelf or HomeGroupKind.CollapsedGrid => header + ShelfExtent(available) + WaveeSpace.XL,
-            _ => WaveeSpace.XL,
+            HomeGroupKind.Hero => 168f + 2f * Spacing.L + Spacing.XL,
+            HomeGroupKind.Compact => header + CompactExtent(available, count) + Spacing.XL,
+            HomeGroupKind.Featured => header + FeaturedExtent(available) + Spacing.XL,
+            HomeGroupKind.Shelf or HomeGroupKind.CollapsedGrid => header + ShelfExtent(available) + Spacing.XL,
+            _ => Spacing.XL,
         };
     }
 
     static float QuickExtent(float width, int count)
     {
-        if (count <= 0) return WaveeSpace.XL;
+        if (count <= 0) return Spacing.XL;
         int columns = HomeQuickLayout.Columns(width);
         int visible = HomeQuickLayout.VisibleCount(width, count);
         int rows = (visible + columns - 1) / columns;
-        return rows * MediaCard.QuickH + Math.Max(0, rows - 1) * HomeQuickLayout.Gap + WaveeSpace.XL;
+        return rows * MediaCard.QuickH + Math.Max(0, rows - 1) * HomeQuickLayout.Gap + Spacing.XL;
     }
 
     static float CompactExtent(float width, int count)
@@ -765,14 +543,14 @@ sealed class HomeFeedVirtualLayout : IMeasuredVirtualLayout
 
     static float ShelfExtent(float width)
     {
-        var (_, cardW) = FillRowVirtualLayout.Fit(width, 178f, 232f, WaveeSpace.L);
+        var (_, cardW) = FillRowVirtualLayout.Fit(width, 178f, 232f, Spacing.L);
         // Square art plus the fixed one-line title/two-line metadata stack, card padding, and shelf shadow clearance.
         return cardW + 76f;
     }
 
     static float FeaturedExtent(float width)
     {
-        var (_, cardW) = FillRowVirtualLayout.Fit(width, 300f, 9999f, WaveeSpace.L, maxColumns: 5);
+        var (_, cardW) = FillRowVirtualLayout.Fit(width, 300f, 9999f, Spacing.L, maxColumns: 5);
         return MathF.Max(360f, cardW * 1.25f) + 12f; // portrait art/card + shelf shadow clearance
     }
 

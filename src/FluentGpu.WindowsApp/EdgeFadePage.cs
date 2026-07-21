@@ -10,6 +10,7 @@ using static FluentGpu.Dsl.Ui;
 // transparent (+ optional blur) over a band near chosen edges, so it dissolves into whatever is behind. The feather
 // FOLLOWS the rounded corners (the curve). Customizable per-edge / falloff / intensity / mode. Realized as one offscreen
 // layer per faded element, composited with a per-edge distance feather (per-corner arc) in the opacity compositor.
+[GalleryPage("edge-fade", "Edge fade", "Fundamentals", Icon = Icons.Brush)]
 sealed class EdgeFadePage : Component
 {
     static readonly ColorF Accent  = ColorF.FromRgba(0x4C, 0x8B, 0xF5);
@@ -70,19 +71,19 @@ sealed class EdgeFadePage : Component
             "rounded corners (the curve) — where a corner's two adjacent edges both fade, the band hugs the corner arc. " +
             "Realized as one offscreen layer per faded element (LayerKind.EdgeFade), composited with a per-edge distance " +
             "feather; opt in via EdgeFade on any BoxEl/ScrollEl, or AutoEdgeFade on a scroller.",
-            ControlExample.Build("Perimeter — follows the rounded corners",
+            ExampleCard.Build("Perimeter — follows the rounded corners",
                 OnStage(Card(EdgeFadeSpec.Perimeter(26f), 16f)),
                 description: "Every edge feathers inward; the band hugs each rounded corner's arc, so the card dissolves cleanly around its curve. The core stays crisp — it's a pure alpha fade, not a blur.",
                 code: "new BoxEl { Corners = CornerRadius4.All(16),\n            EdgeFade = EdgeFadeSpec.Perimeter(26) }"),
-            ControlExample.Build("Fade + blur",
+            ExampleCard.Build("Fade + blur",
                 OnStage(Card(new EdgeFadeSpec(EdgeMask.All, 26f, 26f, 26f, 26f, FadeFalloff.Smoothstep, 1f, EdgeFadeMode.FadeAndBlur, 6f), 16f)),
                 description: "The same feather over a Gaussian-blurred layer — THIS one softens the whole card (blur and fade read as one soft dissolve).",
                 code: "EdgeFade = new EdgeFadeSpec(EdgeMask.All, 26, ...,\n            EdgeFadeMode.FadeAndBlur, blurSigma: 6)"),
-            ControlExample.Build("Directional — bottom only",
+            ExampleCard.Build("Directional — bottom only",
                 OnStage(Card(new EdgeFadeSpec(EdgeMask.Bottom, 48f), 16f)),
                 description: "Only the chosen edges fade — here the bottom (a card sliding out of view). Top / left / right stay crisp.",
                 code: "EdgeFade = new EdgeFadeSpec(EdgeMask.Bottom, 48)"),
-            ControlExample.Build("Auto on a scroller — only the overflowing edges",
+            ExampleCard.Build("Auto on a scroller — only the overflowing edges",
                 OnStage(hScroller),
                 description: "A scroller feathers only the edges that currently overflow, ramped with the scroll offset — the discoverable-overflow affordance as a true alpha fade (the content dissolves, not a surface gradient). Scroll the strip with the wheel.",
                 code: "ScrollView(strip, horizontal: true)\n    with { AutoEdgeFade = true }"));

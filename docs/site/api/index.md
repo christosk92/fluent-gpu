@@ -40,7 +40,7 @@ namespaces a typical app `using`s are `FluentGpu` (the entry point), `FluentGpu.
 | Assembly | Headline namespace(s) | What it gives you |
 | --- | --- | --- |
 | `FluentGpu.Engine` (the `Dsl/` folder) | `FluentGpu.Dsl` | The immutable element records (`Element`, `BoxEl`/`TextEl`/`ImageEl`/`ScrollEl`) and the `Ui.*` builders (`VStack`/`HStack`/`Text`/`Heading`/`Icon`/`ScrollView`/`Image`/`Grid`), the fluent `Modifiers`, and the theme tokens (`Tok`, `Theme`, `Radii`). |
-| `FluentGpu.Engine` (the `Hooks/` folder) | `FluentGpu.Hooks` | `Component` and `ReactiveComponent`, the state/effect/motion hooks surfaced as `protected` methods (`UseState`, `UseSignal`, `UseFloatSignal`, `UseComputed`, `UseEffect`, `UseSpring`, …), `Flow.For`/`Flow.Show`, `Ctx`, and `Embed`. |
+| `FluentGpu.Engine` (the `Hooks/` folder) | `FluentGpu.Hooks` | `Component`, the state/effect/motion hooks surfaced as `protected` methods (`UseState`, `UseSignal`, `UseFloatSignal`, `UseComputed`, `UseEffect`, `UseSpring`, …), `Flow.For`/`Flow.Show`, `Ctx`, and `Embed`. |
 | `FluentGpu.Controls` | `FluentGpu.Controls` | The Fluent control kit — `Button`, `Slider`, `CheckBox`, `ToggleSwitch`, `ComboBox`, `TextBox`, `NavigationView`, `TabView`, `Virtual`, `ItemsView`, and ~70 more. Controls are **pure composition** over the rings below — they add no opcode, column, PAL seam, or hook. |
 | `FluentGpu.Engine` (the `Hosting/` folder) | `FluentGpu.Hosting` | `AppHost` — the single-UI-thread frame loop you normally drive through `FluentApp.Run` — and the per-frame `FrameStats` (`Rendered`, `ComponentsRendered`, `HotPhaseAllocBytes`, …) you assert on in tests. |
 | `FluentGpu.Engine` (the `Foundation/` folder) | `FluentGpu.Signals`, `FluentGpu.Foundation` | The signals reactive core (`Signal<T>`, `FloatSignal`, `Memo<T>`, `Effect`) and the unified bindable channel `Prop<T>` / `Prop.Of` — plus the shared value types (`ColorF`, `Affine2D`, geometry, `Edges4`). |
@@ -60,8 +60,7 @@ namespace FluentGpu;
 
 public static class FluentApp
 {
-    public static void Run(Func<Component> root, string title = "FluentGpu", int width = 800, int height = 600,
-                           bool mica = true, int frames = -1, string? screenshot = null, bool customFrame = false);
+    public static void Run(Func<Component> root, AppOptions? options = null);
 }
 ```
 

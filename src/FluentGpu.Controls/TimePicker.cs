@@ -1,6 +1,7 @@
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Localization;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
 using System;
@@ -47,7 +48,7 @@ public sealed class TimePicker : Component
     /// <summary>WinUI <c>Header</c> — shown above the face (HeaderContentPresenter, TimePicker_themeresources.xaml:231).</summary>
     public string? Header;
     public bool IsEnabled = true;
-    public Action<TimeOnly?>? OnTimeChanged;
+    public Action<TimeOnly?>? OnChange;
 
     /// <summary>Zero-arg factory — keeps the existing demo call site (DateTimePages.cs) compiling unchanged.</summary>
     public static Element Create() => Embed.Comp(() => new TimePicker());
@@ -56,12 +57,12 @@ public sealed class TimePicker : Component
         Signal<TimeOnly?> selectedTime,
         string clockIdentifier = TwelveHourClock,
         int minuteIncrement = 1,
-        Action<TimeOnly?>? onTimeChanged = null,
+        Action<TimeOnly?>? onChange = null,
         string? header = null, bool isEnabled = true)
         => Embed.Comp(() => new TimePicker
         {
             SelectedTime = selectedTime, ClockIdentifier = clockIdentifier, MinuteIncrement = minuteIncrement,
-            OnTimeChanged = onTimeChanged, Header = header, IsEnabled = isEnabled,
+            OnChange = onChange, Header = header, IsEnabled = isEnabled,
         });
 
     public override Element Render()
@@ -89,8 +90,8 @@ public sealed class TimePicker : Component
         //    Microsoft.UI.Xaml.Common.rc:430-432 TEXT_TIMEPICKER_*_PLACEHOLDER). ──
         var seed = committed ?? TimeOnly.FromDateTime(DateTime.Now);
         int hour12 = seed.Hour % 12 == 0 ? 12 : seed.Hour % 12;
-        string hourText = hasTime ? (is12h ? hour12 : seed.Hour).ToString(CultureInfo.CurrentCulture) : "hour";
-        string minuteText = hasTime ? seed.Minute.ToString("00", CultureInfo.CurrentCulture) : "minute";
+        string hourText = hasTime ? (is12h ? hour12 : seed.Hour).ToString(CultureInfo.CurrentCulture) : Loc.Get(Strings.TimePicker.Hour);
+        string minuteText = hasTime ? seed.Minute.ToString("00", CultureInfo.CurrentCulture) : Loc.Get(Strings.TimePicker.Minute);
         string periodText = hasTime ? (seed.Hour >= 12 ? dtf.PMDesignator : dtf.AMDesignator) : dtf.AMDesignator;
         // HasNoTime → TimePickerButtonForegroundDefault = TextFillColorSecondary (TimePicker_themeresources.xaml:19, :222).
         var faceColor = hasTime ? Tok.TextPrimary : Tok.TextSecondary;
@@ -166,7 +167,7 @@ public sealed class TimePicker : Component
             int minute = Math.Min(Math.Clamp(tentMinute.Peek(), 0, minuteCount - 1) * inc, 59);
             var picked = new TimeOnly(hour, minute);
             time.Value = picked;
-            OnTimeChanged?.Invoke(picked);
+            OnChange?.Invoke(picked);
             handle.Value?.Close();
         }
 

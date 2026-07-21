@@ -28,7 +28,7 @@ internal static class SoakProbe
     /// <summary>
     /// Adapter for <see cref="FluentGpu.FluentApp.DiagnosticRun"/>: dispatch to the env-selected soak / stress mode and
     /// report whether it took over the run (the interactive frame loop is then skipped). Wired in <c>Program.Main</c>.
-    /// Lives in the gallery (not the engine) because the modes drive <c>GalleryApp</c>'s nav hook.
+    /// Lives in the gallery (not the engine) because the modes drive <c>GalleryShell</c>'s nav hook.
     /// </summary>
     public static bool TryRun(AppHost host, IPlatformWindow window, IGpuDevice device)
     {
@@ -48,8 +48,8 @@ internal static class SoakProbe
         var proc = Process.GetCurrentProcess();
 
         for (int i = 0; i < 30 && !window.IsClosed; i++) host.RunFrame();   // warm up + let the gallery mount (sets the nav hook)
-        var nav = GalleryApp.StressNavigate;
-        var keys = GalleryApp.StressNavKeys;
+        var nav = GalleryShell.StressNavigate;
+        var keys = GalleryShell.StressNavKeys;
         bool canNav = nav is not null && keys.Length > 0;
 
         var frameMs = new double[report * fpa + 16];
@@ -152,8 +152,8 @@ internal static class SoakProbe
         int cycles = EnvInt("FG_STRESS_CYCLES", 12);
         var proc = Process.GetCurrentProcess();
         for (int i = 0; i < 30 && !window.IsClosed; i++) host.RunFrame();
-        var nav = GalleryApp.StressNavigate; var keys = GalleryApp.StressNavKeys;
-        if (nav is null || keys.Length == 0) { Console.Error.WriteLine("[stress] nav hook unavailable — is the root GalleryApp?"); return; }
+        var nav = GalleryShell.StressNavigate; var keys = GalleryShell.StressNavKeys;
+        if (nav is null || keys.Length == 0) { Console.Error.WriteLine("[stress] nav hook unavailable — is the root GalleryShell?"); return; }
         Console.Error.WriteLine($"[stress] nav: {cycles} cycles x {keys.Length} pages");
         Mem(proc, "nav-base"); gpu.DiagDumpLive("nav-base");
 
@@ -180,7 +180,7 @@ internal static class SoakProbe
     {
         const int SettleCap = 240;   // up to ~4s of frames to let entrance transitions / decodes finish
         for (int i = 0; i < 30 && !window.IsClosed; i++) host.RunFrame();
-        var nav = GalleryApp.StressNavigate; var keys = GalleryApp.StressNavKeys;
+        var nav = GalleryShell.StressNavigate; var keys = GalleryShell.StressNavKeys;
         if (nav is null || keys.Length == 0) { Console.Error.WriteLine("[wake] nav hook unavailable"); return; }
         Console.Error.WriteLine($"[wake] auditing {keys.Length} pages (settle cap {SettleCap} frames)");
 

@@ -1,0 +1,75 @@
+{
+  "$culture": "en-US",
+  "$comment": "Neutral (base-culture) strings for the FluentGpu control kit. This file is a BUILD input only (an AdditionalFiles item, not Content): the LocalizationKeysGenerator turns it into (1) the compile-safe FluentGpu.Controls.Strings key surface and (2) a module initializer that registers this table with Localization.RegisterNeutral — so the kit's text renders these neutral strings with ZERO app configuration, and an app that ships a culture folder overrides any key per-culture. Keys use control-semantic namespaces (unprefixed, matching the existing validation.* convention). Universal notation (aspect ratios, the '×' rate symbol, the 'p' resolution suffix, the 'F11' key name) stays invariant in C# and is intentionally NOT keyed here.",
+
+  "dialog": {
+    "$comment": "ContentDialog default command labels. Only the primary (OK) is a genuine default; Cancel/Yes/No/Close are caller-supplied.",
+    "ok": "OK"
+  },
+
+  "infoBar": {
+    "$comment": "InfoBar (and Toast, which builds on InfoBar) close-button tooltip — WinUI SR_InfoBarCloseButtonTooltip.",
+    "close": "Close"
+  },
+
+  "nav": {
+    "settings": "Settings"
+  },
+
+  "autoSuggest": {
+    "noResults": "No results found",
+    "search": "Search"
+  },
+
+  "passwordBox": {
+    "placeholder": "Password"
+  },
+
+  "calendarDatePicker": {
+    "placeholder": "Pick a date"
+  },
+
+  "datePicker": {
+    "day": "day",
+    "month": "month",
+    "year": "year"
+  },
+
+  "timePicker": {
+    "hour": "hour",
+    "minute": "minute"
+  },
+
+  "media": {
+    "$comment": "MediaPlayerElement chrome (MediaStrings). Status overlays, transport button/menu labels, and the parameterized track/caption labels.",
+    "startingPlayback": "Starting playback…",
+    "loading": "Loading…",
+    "seeking": "Seeking…",
+    "changingQuality": "Changing quality…",
+    "changingTrack": "Changing track…",
+    "catchingUp": "Catching up to live…",
+    "reconnecting": "Reconnecting…",
+    "buffering": "Buffering…",
+    "off": "Off",
+    "auto": "Auto",
+    "goLive": "Go live",
+    "liveEdge": "● LIVE",
+    "captionsShort": "CC",
+    "playbackSpeed": "Playback speed",
+    "quality": "Quality",
+    "audioTrack": "Audio track",
+    "captions": "Captions",
+    "previousChapter": "Previous chapter",
+    "nextChapter": "Next chapter",
+    "fullscreen": "Fullscreen",
+    "exitFullscreen": "Exit fullscreen",
+    "aspectRatio": "Aspect ratio",
+    "aspectFit": "Fit · black bars",
+    "aspectCrop": "Crop · fill frame",
+    "aspectStretch": "Stretch",
+    "aspectNative": "None · native pixels",
+    "captionsFor": "CC {label}",
+    "captionsIndexed": "Captions {n}",
+    "audioIndexed": "Audio {n}"
+  }
+}

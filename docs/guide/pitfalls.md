@@ -9,7 +9,7 @@ Read this before debugging. Each row is a real failure mode of the signals-first
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| A `ReactiveComponent` shows a stale value forever | `Setup()` runs **once**; `Ui.Text(sig.Value)` read the value one time | Use a bound prop: `new TextEl("") { Text = sig }` (signal-direct) or `Text = Prop.Of(() => f(sig.Value))`. In `Setup()`, *everything dynamic* must be a bind / `For` / `Show`. |
+| A run-once component shows a stale value forever | A `Component` whose `Render()` reads no signals renders **once**; `Ui.Text(sig.Value)` read the value one time | Use a bound prop: `new TextEl("") { Text = sig }` (signal-direct) or `Text = Prop.Of(() => f(sig.Value))`. In a render that should stay run-once, *everything dynamic* must be a bind / `For` / `Show`. |
 | A binding never updates | The thunk used `.Peek()` (no subscribe) — or read a plain field, not a signal | Read `.Value` inside the thunk: `Transform = Prop.Of(() => Affine2D.Translation(sig.Value, 0))`. `.Value` subscribes the binding effect; `.Peek()` does not. |
 | Setting a signal does nothing visible | Whatever should react never *read* that signal (no subscription exists) | Make the renderer/binding read `signal.Value` (in `Render()` to re-render, or in a bind thunk to update a node). |
 | One cell stays stale after a list refresh | A bound row reads a reactive slot index but its bind captured a mount-time collection/snapshot; a fresh `Prop.Of` thunk on re-render does not replace the mounted thunk | Use `BoundItems.From`/`BoundItems.Project` with typed `ItemsView.CreateBound<T>`, and read `scope.Item.Value` inside every bound cell. Resolve actions from the current source instead of capturing an earlier row value. |
@@ -23,7 +23,7 @@ Read this before debugging. Each row is a real failure mode of the signals-first
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Dragging a slider tanks FPS | A `setState` per pointer-move re-renders the owning component every frame | Use `Slider.Bind(FloatSignal)` (compositor bypass), or hand-bind the value to `Transform`. Confirm `FrameStats.Rendered == false` on drag. |
+| Dragging a slider tanks FPS | A `setState` per pointer-move re-renders the owning component every frame | Pass a `FloatSignal` to `Slider.Create` (compositor bypass — the one slider API), or hand-bind the value to `Transform`. Confirm `FrameStats.Rendered == false` on drag. |
 | A small change relayouts the whole page | No layout boundary above the change → the up-walk reaches the root → full layout | Give the enclosing container explicit `Width`+`Height`+`ClipToBounds=true` so it's a boundary. See [rendering-and-performance.md](./rendering-and-performance.md#scoped-relayout). |
 | `HotPhaseAllocBytes > 0` (zero-alloc check fails) | Allocation inside a bind thunk or hot effect body (`new`, LINQ, boxing, per-call closure) | Capture everything once at mount; the thunk must only read + write existing state. No allocation in phases 6–13. |
 | Whole app re-renders on one interaction | State lives too high (at the root), so the root's render-effect runs | Move state down into the component that owns it; or bind the hot value instead of `setState`. |
@@ -40,13 +40,18 @@ Read this before debugging. Each row is a real failure mode of the signals-first
 | Element not clickable | `HitTestVisible = false`, zero size, or no handler | Give it size and an `OnClick`/`OnPointerDown`; `HitTestVisible` defaults true. |
 | Text doesn't wrap | `Wrap = NoWrap` (default) or no width constraint to wrap against | `text.Wrapped()` + a bounded width (explicit `Width` or a stretching parent). |
 | Colors look wrong across themes | Hard-coded `ColorF` instead of tokens | Read `Tok.*` (e.g. `Tok.TextPrimary`, `Tok.FillCardDefault`); they follow `Tok.Use(theme)`. |
+| `UseMeasuredBounds`/`UseMeasuredWidth` re-renders every frame (a "measured-bounds feedback loop") | The rendered root's size is **derived from its own measured size** — reading the measured value changes layout, which changes the measured value, forever | Measure an **outer, fixed** node instead of one whose size the render controls, or add a `quantum` to `UseMeasuredWidth` to absorb sub-quantum wobble. The value lands **one frame late** by design (written during layout ⇒ re-render next frame — never same-frame); a same-frame layout-effect sees the *previous* value. `FG_DIAG=1` (DEBUG) warns after >8 consecutive changing frames. |
 
 ## Lifecycle & effects
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `UseEffect` cleanup never runs | `UseEffect(Action, deps)` takes an `Action`, not `Func<Action>` — it has no return-cleanup channel | For tear-down inside a reactive effect/binding use `Reactive.OnCleanup(...)`; for component-scoped resources hold them in `UseRef` and release in your own teardown path. (Returning a cleanup from `UseEffect` is a known gap.) |
-| Animation hook seems to do nothing | The hook seeds on `HostNode`, set after the first layout; or `deps` never changed | Animation hooks (`UseSpring` etc.) run in phase 6.5 once mounted; pass `deps` that change to re-target. |
+| `UseEffect` cleanup never runs | The `Action` overload has no return-cleanup channel | Return an `Action?`: `UseEffect(() => { …; return () => dispose(); })`. The returned cleanup runs before each re-run and once at unmount (auto-tracked or deps-gated). |
+| Cleanup-returning effect never re-runs / a fire-only effect fires only once | The lambda's `return`ed `Action` bound to the cleanup overload | Intentional for a cleanup effect. For a **fire-only** effect write a block body `() => { X(); }` (no `return <expr>`) so it binds to the plain `Action` overload. |
+| A no-deps `UseEffect(fn)` re-runs unexpectedly | It's **auto-tracked** now (the default): any signal the body reads re-runs it | If you want run-once, pass `DepKey.Empty`: `UseEffect(fn, DepKey.Empty)`. If you want it keyed, pass a `DepKey` of the values it should follow. |
+| `UseEffect(fn, DepKey.FromRef(x))` re-runs every render | A fresh lambda/instance each render is a new identity | `FromRef` keys on object **identity**, not `Equals` — pass a stable instance (hold it in `UseRef`/`UseMemo`), or key on a scalar/string instead. An in-place mutation of the same instance does **not** re-fire. |
+| `UseEffect(fn, someArray)` won't compile | `params object[]` deps were removed — the one dep shape is `DepKey` | Convert: scalars/tuples convert implicitly (`, count` / `, (name, i)`); `>4` scalars use `DepKey.From(HashCode.Combine(...))` or `DepKey.Combine`; mount-once is `DepKey.Empty`. |
+| Animation hook seems to do nothing | The hook seeds on `HostNode`, set after the first layout; or `deps` never changed | Animation hooks (`UseSpring` etc.) run in phase 6.5 once mounted; pass a `DepKey` `deps` that changes to re-target (`DepKey.Empty` = seed once). |
 | A removed node lingers briefly | It has an exit animation (`BoxEl.Animate` with an `Exit`) — it's an orphan animating out | Expected; it's reclaimed on settle. Not a leak. |
 | State lost when a component's element *type* changes at a position | Type-flip at a position remounts (state-loss is intentional) | Keep the element type stable at a position, or use a `Key`/`For` to preserve identity. |
 
@@ -59,6 +64,20 @@ Read this before debugging. Each row is a real failure mode of the signals-first
 | Added an `Element` type but it doesn't render | Not wired into the reconciler | Give it a free `ElementTypeId`, then handle it in `Reconciler.Mount`/`Update` (and `ChildrenOf` if it has children). |
 | AOT publish fails at the native link step | The shell isn't a VS Developer environment (`link.exe`/`vswhere` not on PATH) | The managed/IL-AOT analysis still validated; run the publish from a VS Developer prompt for the final native link. Don't treat the link error as a code defect. |
 | Claimed a fix works without evidence | No verification run | Show the harness output / `FrameStats` (`Rendered`, `ComponentsRendered`, `HotPhaseAllocBytes`). Evidence before assertions. |
+
+## Analyzer diagnostics (FGRP)
+
+The in-repo Roslyn analyzer flags reactivity mistakes at build time (`FluentGpu.SourceGen`; warnings unless noted).
+
+| Symptom | Rule | Fix |
+|---|---|---|
+| Frozen Element content slot — a child never shows updated content | FGRP001 (Warning) | Content assigned as a field inside `Embed.Comp(() => new T { … })` freezes at mount. Re-push via `Embed.Comp(props, factory)` + `[Props]`/`UseProps<T>`, use `Ctx.Provide`, or remount with a changed `Key`. |
+| A bound channel never updates after the first render | FGRP002 (Warning) | A `Prop.Of` thunk captured a `var v = sig.Value;` snapshot. Read the signal's `.Value` *inside* the thunk instead. |
+| A bind thunk fires once then goes dead | FGRP003 (Warning) | The `Prop.Of` thunk reads only `.Peek()` (no subscription). Read `.Value` inside it, or bind the signal directly. |
+| An element expression statement has no effect | FGRP004 (Warning) | `Element` is immutable; a modifier (`box.Rounded(8);`) or `new BoxEl { … };` returns a new element you discarded — return/assign/add it to a children list. |
+| A hook in a loop shifts state between iterations on reorder | FGRP005 (Info) | Positional-cell hooks key by per-line ordinal + index; key rows with `Flow.For` (a keyed child per item) or hoist the state out of the loop. Conditional hooks are fine. |
+| A dep-gated effect/memo re-runs every render | FGRP006 (Warning) | `DepKey.FromRef(new …/lambda)` keys off a fresh identity each render. Hoist the reference or key on a value projection (`DepKey.From(...)`). |
+| A declared channel silently paints `default(T)` | FGRP007 (Warning) | `default(Prop<T>)` is a static `default(T)`, not "unset". Give every `Prop<T> { get; init; }` channel on an `Element` record an explicit initializer (`= Tok.Foo` / `= 1f` / `= default`). |
 
 ## Quick self-check before committing an engine change
 

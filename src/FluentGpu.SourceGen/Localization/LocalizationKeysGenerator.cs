@@ -40,6 +40,15 @@ namespace FluentGpu.SourceGen.Localization
         private const string NamespaceProperty = "build_property.FluentGpuLocNamespace";
         private const string DefaultNamespace = "FluentGpu.WindowsApp";
 
+        // Opt-in property that makes a LIBRARY register its base strings as the engine's neutral fallback floor:
+        //   <CompilerVisibleProperty Include="FluentGpuLocRegisterNeutral" /> + <FluentGpuLocRegisterNeutral>true</...>.
+        // When set, the generator emits (alongside Strings) a module initializer that hands the flattened
+        // dotted-key → neutral-value table to Localization.RegisterNeutral, so the library's user-facing text resolves
+        // to its neutral string with ZERO app configuration. Only FluentGpu.Controls sets it; every other consumer keeps
+        // today's keys-only behavior. (An APP that loads its own culture folder at runtime must NOT set it — it would
+        // pin all its keys as an always-present fallback and change Localization.Has semantics.)
+        private const string NeutralRegisterProperty = "build_property.FluentGpuLocRegisterNeutral";
+
         private static readonly DiagnosticDescriptor MalformedJson = new(
             id: "FLLOC001",
             title: "Localization base JSON could not be fully parsed",
@@ -83,12 +92,18 @@ namespace FluentGpu.SourceGen.Localization
                     ? ns!.Trim()
                     : DefaultNamespace);
 
-            var collected = baseTexts.Collect().Combine(nsProvider);
+            // The (optional) opt-in neutral-registration property (default false).
+            var neutralProvider = context.AnalyzerConfigOptionsProvider.Select(static (p, _) =>
+                p.GlobalOptions.TryGetValue(NeutralRegisterProperty, out string? v) && v is not null &&
+                v.Trim().Equals("true", System.StringComparison.OrdinalIgnoreCase));
+
+            var collected = baseTexts.Collect().Combine(nsProvider).Combine(neutralProvider);
 
             context.RegisterSourceOutput(collected, static (spc, tuple) =>
             {
-                ImmutableArray<BaseFile> files = tuple.Left;
-                string ns = tuple.Right;
+                ImmutableArray<BaseFile> files = tuple.Left.Left;
+                string ns = tuple.Left.Right;
+                bool registerNeutral = tuple.Right;
 
                 if (files.IsDefaultOrEmpty)
                 {
@@ -109,6 +124,11 @@ namespace FluentGpu.SourceGen.Localization
 
                 string source = Emit(ns, pairs);
                 spc.AddSource("Strings.g.cs", SourceText.From(source, Encoding.UTF8));
+
+                // Library-only: bake the neutral (dotted-key → value) table into a module initializer so the assembly's
+                // user-facing text resolves to its neutral string with zero app configuration.
+                if (registerNeutral)
+                    spc.AddSource("StringsNeutral.g.cs", SourceText.From(EmitNeutral(ns, pairs), Encoding.UTF8));
             });
         }
 
@@ -225,6 +245,31 @@ namespace FluentGpu.SourceGen.Localization
                 sb.Append(", (").Append(Quote(ph[i])).Append(", ").Append(Identifiers.ToParam(ph[i])).Append(")");
             }
             sb.Append(");\n");
+        }
+
+        // Emit the neutral-fallback registration: a module initializer that hands the flattened dotted-key → neutral
+        // string table to Localization.RegisterNeutral. Runs once at assembly load, zero reflection, AOT-clean (plain
+        // dictionary inserts). Keys are the SAME dotted keys the Strings consts equal, so call sites resolve to these.
+        private static string EmitNeutral(string ns, List<KeyValuePair<string, string>> pairs)
+        {
+            var sb = new StringBuilder();
+            sb.Append(Header());
+            sb.Append("using System.Runtime.CompilerServices;\n\n");
+            sb.Append("namespace ").Append(ns).Append(";\n\n");
+            sb.Append("/// <summary>Registers this assembly's built-in neutral loc strings (from the base-culture JSON) as the\n");
+            sb.Append("/// engine's terminal fallback floor, so the kit's user-facing text resolves with zero app configuration.\n");
+            sb.Append("/// Runs once at module load; a translation for the same key in any loaded culture always wins.</summary>\n");
+            sb.Append("internal static class StringsNeutral\n{\n");
+            sb.Append("    [ModuleInitializer]\n");
+            sb.Append("    internal static void Register()\n    {\n");
+            sb.Append("        var t = new global::System.Collections.Generic.Dictionary<string, string>(")
+              .Append(pairs.Count.ToString(System.Globalization.CultureInfo.InvariantCulture))
+              .Append(", global::System.StringComparer.Ordinal);\n");
+            foreach (var kv in pairs)
+                sb.Append("        t[").Append(Quote(kv.Key)).Append("] = ").Append(Quote(kv.Value)).Append(";\n");
+            sb.Append("        global::FluentGpu.Localization.Localization.RegisterNeutral(t);\n");
+            sb.Append("    }\n}\n");
+            return sb.ToString();
         }
 
         private static string EmitEmpty(string ns)

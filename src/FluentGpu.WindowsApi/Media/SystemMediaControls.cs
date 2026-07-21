@@ -104,6 +104,12 @@ public sealed unsafe class SystemMediaControls : IDisposable
     private nint _buttonHandlerUnknown;     // the IUnknown* (CCW) we passed to add_ButtonPressed; we own one ref
     private EventRegistrationToken _buttonToken;
 
+    // The implemented playback-position-change delegate (SMTC scrub-bar seek) + its token + CCW pointer. Registered on
+    // ISystemMediaTransportControls2; registration is best-effort (non-fatal) — see EnsurePositionHandlerRegistered.
+    private MediaPositionChangeHandler? _positionHandler;
+    private nint _positionHandlerUnknown;
+    private EventRegistrationToken _positionToken;
+
     /// <summary>The <see cref="StrategyBasedComWrappers"/> used to realize the button handler's native pointer — the
     /// sanctioned generated-COM marshaller (NOT forbidden subclassing), shared with the Notifications activator.</summary>
     private static readonly StrategyBasedComWrappers ComWrappers = ToastActivatorClassFactory.ComWrappers;
@@ -355,6 +361,38 @@ public sealed unsafe class SystemMediaControls : IDisposable
     private Action<MediaButton>? _buttonPressed;
 
     /// <summary>
+    /// Raised when the user drags the system scrub bar (lock screen / SMTC flyout) to a new position — the seek-request
+    /// side of the transport surface (<c>ISystemMediaTransportControls2.PlaybackPositionChangeRequested</c>). The
+    /// <see cref="double"/> is the requested position in SECONDS. Like <see cref="ButtonPressed"/> it fires on an
+    /// arbitrary OS thread and is routed through <see cref="ButtonDispatcher"/> when one is installed. The
+    /// <c>add_PlaybackPositionChangeRequested</c> registration is made lazily on first subscription and is
+    /// <b>best-effort</b>: on a platform that refuses it (older OS / the derived parameterized IID) the event simply
+    /// never fires — the scrub bar stays display-only — rather than throwing.
+    /// </summary>
+    public event Action<double>? PositionChangeRequested
+    {
+        add
+        {
+            lock (_gate)
+            {
+                ThrowIfDisposed();
+                _positionChangeRequested += value;
+                EnsurePositionHandlerRegistered();
+            }
+        }
+        remove
+        {
+            lock (_gate)
+            {
+                _positionChangeRequested -= value;
+                if (_positionChangeRequested is null)
+                    RemovePositionHandler();
+            }
+        }
+    }
+    private Action<double>? _positionChangeRequested;
+
+    /// <summary>
     /// The marshaller the cross-thread button callback is routed through before <see cref="ButtonPressed"/> is raised.
     /// The host installs a delegate that posts to its UI thread (e.g. <c>PostMessage</c> to the <c>"FluentGpuWindow"</c>
     /// HWND). If left null, the callback raises the event inline on the OS thread.
@@ -434,6 +472,48 @@ public sealed unsafe class SystemMediaControls : IDisposable
         _buttonHandler = null;
     }
 
+    private void EnsurePositionHandlerRegistered()
+    {
+        if (_positionHandlerUnknown != 0)
+            return; // already registered (one OS registration fans out to all managed subscribers)
+
+        EnsureV2();
+        _positionHandler = new MediaPositionChangeHandler(DispatchPosition);
+
+        // Realize the managed handler's IUnknown via the generated ComWrappers, then add_PlaybackPositionChangeRequested.
+        // The OS interprets the pointer as ITypedEventHandler<SystemMediaTransportControls, PlaybackPositionChangeRequestedEventArgs>*
+        // (the parameterized IID on IMediaPositionChangeRequestedHandler makes the OS's QI succeed).
+        nint unknown = ComWrappers.GetOrCreateComInterfaceForObject(_positionHandler, CreateComInterfaceFlags.None);
+
+        EventRegistrationToken token;
+        int hr = _smtc2->add_PlaybackPositionChangeRequested(
+            (ITypedEventHandler<Pointer<ISystemMediaTransportControls>, Pointer<IPlaybackPositionChangeRequestedEventArgs>>*)unknown,
+            &token);
+        if (hr < 0)
+        {
+            // NON-FATAL by design: an older OS without the v2 scrub bar, or a platform that rejects the derived
+            // parameterized IID (E_NOINTERFACE), leaves the lock-screen scrub display-only. Do NOT throw — degrade.
+            Marshal.Release(unknown);
+            _positionHandler = null;
+            return;
+        }
+
+        _positionHandlerUnknown = unknown;
+        _positionToken = token;
+    }
+
+    private void RemovePositionHandler()
+    {
+        if (_positionHandlerUnknown == 0)
+            return;
+        if (_smtc2 != null)
+            _smtc2->remove_PlaybackPositionChangeRequested(_positionToken);
+        Marshal.Release(_positionHandlerUnknown);
+        _positionHandlerUnknown = 0;
+        _positionToken = default;
+        _positionHandler = null;
+    }
+
     /// <summary>Build a <c>Windows.Foundation.Uri</c> from the file/URL string, wrap it in a
     /// <c>RandomAccessStreamReference</c> via <c>CreateFromUri</c>, and stage it as the thumbnail. The OS fetches the
     /// bytes lazily (async) when it renders the art.</summary>
@@ -500,6 +580,19 @@ public sealed unsafe class SystemMediaControls : IDisposable
             raise();
     }
 
+    /// <summary>Route a cross-thread scrub-bar seek request (position in seconds) through the host dispatcher (if
+    /// installed) before raising <see cref="PositionChangeRequested"/>; otherwise raise inline. Called by
+    /// <see cref="MediaPositionChangeHandler"/>.</summary>
+    private void DispatchPosition(double seconds)
+    {
+        Action raise = () => _positionChangeRequested?.Invoke(seconds);
+        Action<Action>? dispatcher = ButtonDispatcher;
+        if (dispatcher is not null)
+            dispatcher(raise);
+        else
+            raise();
+    }
+
     /// <summary>Lazily <c>RoInitialize</c> the apartment. Tolerates S_FALSE (already initialized) and RPC_E_CHANGED_MODE
     /// (already initialized with a different model) — both benign, the same pitfall the toast spike documented.</summary>
     private void EnsureRoInitialized()
@@ -539,6 +632,8 @@ public sealed unsafe class SystemMediaControls : IDisposable
 
             RemoveButtonHandler();
             _buttonPressed = null;
+            RemovePositionHandler();
+            _positionChangeRequested = null;
 
             if (_streamRefStatics != null) { _streamRefStatics->Release(); _streamRefStatics = null; }
             if (_uriFactory != null) { _uriFactory->Release(); _uriFactory = null; }

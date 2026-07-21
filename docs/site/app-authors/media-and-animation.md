@@ -208,10 +208,10 @@ The four scalar hooks all live on the component and take `deps` that re-seed the
 (`src/FluentGpu.Engine/Hooks/RenderContext.cs`):
 
 ```csharp
-UseSpring(AnimChannel ch, float to, SpringParams spring, params object[] deps);
-UseTransition(AnimChannel ch, float from, float to, float ms, Easing e = Easing.EaseInOut, params object[] deps);
-UseKeyframes(AnimChannel ch, Keyframe[] keys, float ms, bool loop = false, params object[] deps);
-UseDrivenAnimation(AnimChannel ch, Keyframe[] keys, Func<float> source, float min, float max, params object[] deps);
+UseSpring(AnimChannel ch, float to, SpringParams spring, DepKey deps = default);
+UseTransition(AnimChannel ch, float from, float to, float ms, Easing e = Easing.EaseInOut, DepKey deps = default);
+UseKeyframes(AnimChannel ch, Keyframe[] keys, float ms, bool loop = false, DepKey deps = default);
+UseDrivenAnimation(AnimChannel ch, Keyframe[] keys, Func<float> source, float min, float max, DepKey deps = default);
 ```
 
 A **tween** is a fixed-duration eased interpolation; a **spring** is a velocity-carrying physical settle that
@@ -529,8 +529,9 @@ The three update paths from the [reactivity model](../../guide/reactivity.md), c
 For **per-frame motion**, paths 1 and the animation hooks both stay on the compositor; a `setState` per tick is
 path 2 every frame and is the classic frame-rate killer. The rules of thumb:
 
-- **A high-frequency scalar from a drag/scroll/timer** → bind it. A slider scrubber is the canonical case: use
-  `Slider.Bind(FloatSignal)` (compositor bypass), not `Slider.Create` (re-renders on each move). The
+- **A high-frequency scalar from a drag/scroll/timer** → bind it. A slider scrubber is the canonical case:
+  `Slider.Create(FloatSignal)` bound to a signal IS the compositor bypass — a drag writes the signal, moving the
+  thumb/fill transform only (no render/reconcile/layout). The
   [pitfalls table](../../guide/pitfalls.md) lists this as the slider-tank fix — and the proof is
   `FrameStats.Rendered == false` while you drag.
 - **A self-running transition or spring on this component** → `UseSpring` / `UseTransition` / `UseKeyframes`. They

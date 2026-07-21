@@ -22,7 +22,13 @@ public sealed class TreeReconciler
     private readonly StringTable _strings;
 
     // Mounted child components, keyed by their host node (the ComponentEl anchor).
-    private sealed class CompEntry { public Component Comp = null!; public Element? Rendered; public Type Type = null!; public Effect? Effect; public bool Parked; public bool DeferredRender; public Signal<bool>? ActiveSig; public SkeletonStyle? DerivedSkeletonStyle; }
+    // Scope: the component's ONE lifetime owner (ReactiveCore's ReactiveScope, a stable owner that never re-runs). It
+    // owns the render-effect (auto-disposed when the scope disposes) and carries the hook-cleanup teardown as a scope
+    // cleanup, so component unmount == Scope.Dispose() (cascades: dispose render-effect → run RunAllCleanups). Node
+    // bindings deliberately stay NODE-owned (_nodeBindings, disposed at node unmount) — a bind created during a render
+    // outlives that render and can die with its node WITHOUT the component unmounting (Show/For swaps, KeepAlive
+    // eviction), so it must not hang off the component scope. G4c's per-component props signal will hang off Scope too.
+    private sealed class CompEntry { public Component Comp = null!; public Element? Rendered; public Type Type = null!; public Effect? Effect; public ReactiveScope? Scope; public bool Parked; public bool DeferredRender; public Signal<bool>? ActiveSig; public Signal<object?>? PropsSig; public SkeletonStyle? DerivedSkeletonStyle; }
     private readonly Dictionary<NodeHandle, CompEntry> _comps = new();
     private readonly Dictionary<Component, NodeHandle> _anchorOf = new();
     private readonly List<Component> _live = new();
@@ -42,6 +48,25 @@ public sealed class TreeReconciler
         // per-frame row budget was exhausted (or a nested-rail mount deferred its overscan). The window's VISIBLE band is
         // always fully realized; only the overscan halo is spread across frames. Tracked so the host stays awake until caught up.
         public bool RealizeDeferred;
+        // ── extended bound-realize state (research adjustments #5 keep-alive + #16 content-type) — allocated ONLY when
+        //    ve.KeepAlive or ve.ContentType is set (the default RealizeBoundWindow leaves both null; byte-identical path).
+        // Per-active-slot content-type (parallel to Slots): the type each live slot's frozen subtree was BUILT for; a
+        // rebind is legal only when the target index's content-type matches (else the slot rebuilds). Null ⇒ no discriminator.
+        public List<int>? SlotTypes;
+        // Keep-alive bucket: item index → its parked slot (detached, hidden, quiesced). Bounded + LRU-evicted.
+        public Dictionary<int, KeptSlot>? Kept;
+    }
+
+    // A keep-alive-parked bound slot (research adjustment #5): its subtree stays mounted but is detached from the content
+    // node (no layout/paint), parked (render-effects/animations quiesced via SetSubtreeParked), and kept bound to its item
+    // so its live state (a mid-edit TextBox, an in-flight UseResource) survives until the item re-enters the window.
+    private sealed class KeptSlot
+    {
+        public Signal<int> Index = null!;
+        public Element El = null!;
+        public NodeHandle Root;
+        public int ContentType;
+        public long LastUsed;   // FrameEpoch of the last park/touch — the LRU key
     }
     private readonly Dictionary<NodeHandle, VirtualEntry> _virtuals = new();
 
@@ -89,6 +114,8 @@ public sealed class TreeReconciler
     private readonly Dictionary<int, ShowEl> _showEl = new();                  // latest ShowEl per boundary node (parent re-renders replace it — see UpdateShow)
     private readonly Dictionary<int, Effect> _showEffect = new();              // the Show boundary effect, rescheduled by UpdateShow
     private readonly Dictionary<int, (Element[] Prev, int Len)> _forState = new();   // last realized children per ForEl node
+    private readonly Dictionary<int, ForElBase> _forEl = new();                       // latest ForElBase per boundary node (parent re-renders replace it — see UpdateFor)
+    private readonly Dictionary<int, Effect> _forEffect = new();                      // the For boundary effect, rescheduled by UpdateFor
     private readonly Dictionary<int, float> _childStagger = new();                   // node → per-child Enter stagger (ms): a parent's Element.Stagger, read by SynthesizeDeclarative
     private readonly Dictionary<string, NodeHandle> _keyNode = new();                 // MorphId → node: the shared-layout anchor a RelativeTo follower FLIPs against
     private readonly Dictionary<int, string> _morphKeyByNode = new();                 // node → MorphId; gates shared-element teardown to actual participants
@@ -247,8 +274,9 @@ public sealed class TreeReconciler
     /// <summary>Schedule a live re-theme after a <c>Tok.Use</c>/<c>SetAccent</c>: re-run EVERY reactive computation that
     /// reads the token set so each picks up the new theme, IN PLACE (diff, not remount — state + node identity survive):
     /// <list type="bullet">
-    /// <item>every mounted component's render-effect (and the root) — <see cref="ReactiveComponent"/>s are invalidated
-    /// first so their cached <c>Setup</c> re-runs with preserved positional hook cells;</item>
+    /// <item>every mounted component's render-effect (and the root) — scheduling re-runs each render body against its
+    /// SAME <see cref="RenderContext"/> (keyed hook cells preserved), so a direct <c>Tok.*</c> read in a render body
+    /// (the former <c>Setup</c> idiom) picks up the new theme in place, with hook state + node identity intact;</item>
     /// <item>every node binding + control-flow boundary in <c>_nodeBindings</c> — <c>Flow.For</c>/<c>Flow.Show</c>/skeleton
     /// boundary effects (which build their rows/branches reading tokens, and are NOT component re-renders) and bound
     /// color channels (<c>Fill</c>/<c>Color</c> = <c>Prop.Of(() =&gt; Tok.X)</c>, owned by their effect, never reached by a
@@ -259,16 +287,11 @@ public sealed class TreeReconciler
     /// channels snap, as they bypass the BrushAnim path by design).</summary>
     public void RethemeAll()
     {
-        if (_root is ReactiveComponent rr) rr.InvalidateTree();
         _rootEffect?.Schedule();
         _rethemeScratch.Clear();
         foreach (var e in _comps.Values) _rethemeScratch.Add(e);   // snapshot: Schedule won't mutate _comps, but be defensive
         for (int i = 0; i < _rethemeScratch.Count; i++)
-        {
-            var e = _rethemeScratch[i];
-            if (e.Comp is ReactiveComponent rc) rc.InvalidateTree();
-            e.Effect?.Schedule();
-        }
+            _rethemeScratch[i].Effect?.Schedule();
         _rethemeScratch.Clear();
         // Re-run bindings + control-flow boundaries (Flow.For rows, bound colors, Show/skeleton branches). They read
         // tokens but are not component renders, so a component re-render alone leaves them on the old theme. Scheduling
@@ -296,7 +319,7 @@ public sealed class TreeReconciler
     private void RunRoot(Component root)
     {
         _renderCount++;
-        Element newRoot = root.RunsOnce ? Reactive.Untrack(root.RenderWithHooks) : root.RenderWithHooks();
+        Element newRoot = root.RenderWithHooks();
         RenderRootDiff(newRoot);
     }
 
@@ -379,6 +402,18 @@ public sealed class TreeReconciler
         ctx.RegisterPendingEffectContext = RegisterPendingEffectContext;
     }
 
+    /// <summary>DEBUG diagnostic helper (the relayout-escape message): a best-effort human key for a node — the
+    /// KeepAlive slot key or the MorphId a follower FLIPs against, if this node happens to be one. Null otherwise. This is
+    /// NOT a general per-node key store (the reconciler keys transiently during the keyed diff); it just surfaces the
+    /// boundary-worthy anchors (page/keepalive hosts) that a "relayout escaped to root" message most wants to name.</summary>
+    internal string? DebugKeyOf(NodeHandle n)
+    {
+        int idx = (int)n.Raw.Index;
+        if (_keepAliveRootKey.TryGetValue(idx, out var k)) return k;
+        if (_relativeKey.TryGetValue(idx, out var rk)) return rk;
+        return null;
+    }
+
     private Signal<object?>? ResolveContext(NodeHandle anchor, object channel)
     {
         for (var n = anchor.IsNull ? NodeHandle.Null : _scene.Parent(anchor); !n.IsNull; n = _scene.Parent(n))
@@ -397,7 +432,7 @@ public sealed class TreeReconciler
         if (el is ScrollEl se) { MountScroll(node, se); return; }
         if (el is VirtualListEl ve) { MountVirtual(node, ve); return; }
         if (el is ShowEl sh) { MountShow(node, sh); return; }
-        if (el is ForEl fe) { MountFor(node, fe); return; }
+        if (el is ForElBase fe) { MountFor(node, fe); return; }
         if (el is KeepAliveEl ka) { MountKeepAlive(node, ka); return; }
         if (el is SkelRegionEl skr) { MountSkeletonRegion(node, skr); return; }
 
@@ -437,12 +472,42 @@ public sealed class TreeReconciler
             if (oldEl is ComponentEl oce && oce.ComponentType == nce.ComponentType && _comps.ContainsKey(node)
                 && oce.DeriveRenderedOutput == nce.DeriveRenderedOutput)
             {
-                // DEBUG-only frozen-props tripwire: the factory we're about to discard may carry NEW caller data into
-                // a field that froze at mount. Let the live component compare (only if it opted in). The CompiledIn
-                // const folds this whole block away in release — zero cost, no probe allocation on the hot path.
-                if (ReuseGuard.CompiledIn && ReuseGuard.Enabled)
+                var entry = _comps[node];
+                if (nce.Props is { } p)
                 {
-                    var liveComp = _comps[node].Comp;
+                    // Re-pushed live props — THE core delivery. This runs during the parent's render-effect (inside the
+                    // flush) or a ReconcileRoot: the write marks the child's render-effect stale and it drains in the
+                    // SAME flush (the flush while-loop coalesces — no next-frame defer, no torn intermediate paint).
+                    if (entry.Comp is IPropsHost host)
+                    {
+                        // The [Props]-generator seam (a later phase): a single sink that writes many field signals — wrap
+                        // in Batch so dependent effects never observe a torn mid-diff state (only the outermost exit flushes).
+                        Runtime.Batch(() => host.ApplyProps(p));
+                    }
+                    else if (entry.PropsSig is { } ps)
+                    {
+                        // Reference short-circuit FIRST (adjustment #4): a parent that re-rendered without rebuilding the
+                        // props (a memoized/cached record) hands back the SAME reference — skip the record-Equals walk and
+                        // the write entirely (O(1), no re-render). Only a genuinely new object reaches the equality-gated
+                        // write, which itself coalesces a fresh-but-equal record via the Signal comparer (record value
+                        // equality). Batch keeps the delivery on the same wrapped path the IPropsHost multi-write uses.
+                        if (!ReferenceEquals(ps.Peek(), p))
+                            Runtime.Batch(() => ps.Value = p);
+                    }
+                    else if (ReuseGuard.CompiledIn && ReuseGuard.Enabled)
+                    {
+                        // DEBUG diagnostic: props were re-pushed to a component mounted WITHOUT a props channel (no
+                        // PropsSig, not an IPropsHost) — the value is silently dropped. Mount it via Embed.Comp(props, …).
+                        ReuseGuard.Violation(entry.Comp, "Props",
+                            "this component was mounted without props (Embed.Comp(factory)); re-pushed Props are dropped — mount it via Embed.Comp(props, factory)");
+                    }
+                }
+                // Frozen-props tripwire (DEBUG): only for a PROPLESS reuse — a component receiving data through the props
+                // channel above is no longer frozen, so it is exempt from this probe. The CompiledIn const folds the whole
+                // block away in release — zero cost, no probe allocation on the hot path.
+                else if (ReuseGuard.CompiledIn && ReuseGuard.Enabled)
+                {
+                    var liveComp = entry.Comp;
                     if (liveComp.ChecksReuse) liveComp.DebugCheckReuse(nce.Factory());
                 }
                 return;
@@ -492,9 +557,13 @@ public sealed class TreeReconciler
             return;
         }
 
-        if (newEl is ForEl nfe)
+        if (newEl is ForElBase nfe)
         {
-            return;   // autonomous reactive list boundary
+            // Parent re-renders replace the stored ForElBase and reschedule the boundary effect (mirrors UpdateShow),
+            // so the fresh Items/KeyOf/Row closures take hold instead of freezing at first mount (the Show-parity fix —
+            // ForEl.Update used to be a no-op, which froze rows built from parent render state).
+            UpdateFor(node, nfe);
+            return;
         }
 
         if (newEl is KeepAliveEl)
@@ -528,9 +597,29 @@ public sealed class TreeReconciler
         // (keeping the BoundsAnimated/FLIP/reflow side-effects correct). Children are EXCLUDED from the diff, so they
         // are ALWAYS reconciled. The FLIP "First" capture runs in the host commit loop over the BoundsAnimated flag
         // (AppHost), independent of this call, so a truly-unchanged node still rides a sibling reflow.
+        // DEBUG-only bind-contract tripwire: a bindable channel that flipped between static and bound on this reused
+        // node silently loses (bind wiring is mount-only). The CompiledIn const folds this away in release.
+        if (BindContract.CompiledIn && BindContract.Enabled && BindFlip(newEl, oldEl) is { } flipped)
+            BindContract.Flip(newEl.GetType().Name, flipped);
+
         if (RecordChanged(newEl, oldEl)) WriteColumns(node, newEl, isMount: false, oldEl);
         ReconcileChildren(node, ChildrenOf(newEl), ChildrenOf(oldEl));
     }
+
+    /// <summary>DEBUG-only (<see cref="BindContract"/>): the name of the first bindable channel whose bound/static shape
+    /// flipped between the same-type <paramref name="a"/>/<paramref name="b"/> element versions (the generated
+    /// <c>{T}Diff.FirstBoundFlip</c>), or null. A type mismatch is a replace (handled elsewhere), never a flip.</summary>
+    private static string? BindFlip(Element a, Element b) => a switch
+    {
+        BoxEl x => b is BoxEl y ? BoxElDiff.FirstBoundFlip(x, y) : null,
+        TextEl x => b is TextEl y ? TextElDiff.FirstBoundFlip(x, y) : null,
+        GridEl x => b is GridEl y ? GridElDiff.FirstBoundFlip(x, y) : null,
+        ImageEl x => b is ImageEl y ? ImageElDiff.FirstBoundFlip(x, y) : null,
+        IconLayerEl x => b is IconLayerEl y ? IconLayerElDiff.FirstBoundFlip(x, y) : null,
+        SpanTextEl x => b is SpanTextEl y ? SpanTextElDiff.FirstBoundFlip(x, y) : null,
+        PolylineStrokeEl x => b is PolylineStrokeEl y ? PolylineStrokeElDiff.FirstBoundFlip(x, y) : null,
+        _ => null,
+    };
 
     /// <summary>GEN-01 (wired): true unless <paramref name="a"/> and <paramref name="b"/> are the same leaf element
     /// type with EVERY diffable prop unchanged (the generated <c>{T}Diff.AnyChanged</c> — inherited fields included,
@@ -617,7 +706,27 @@ public sealed class TreeReconciler
         // never uses the lifecycle allocates nothing. Initial value = its current attached state (inactive if parked).
         comp.Context.GetActiveSig = () => entry.ActiveSig ??= new Signal<bool>(!entry.Parked);
 
-        var effect = new Effect(Runtime, () => RunComponent(node, entry), owner: null, runNow: false);
+        // Re-pushed props channel — seeded BEFORE the first render-effect run so the very first Render sees the props.
+        // An IPropsHost ([Props]-generated) component receives them through its typed sink; otherwise we back them with a
+        // per-instance PropsSig (default comparer ⇒ record value equality) that UseProps<T> reads. The signal needs no
+        // explicit disposal: its only subscriber is the scope-owned render-effect, which unlinks from it when the scope
+        // disposes at unmount (ReactiveCore.UnlinkSources); the signal itself is then unreferenced and collected.
+        if (ce.Props is { } props)
+        {
+            if (comp is IPropsHost host) host.ApplyProps(props);
+            else { entry.PropsSig = new Signal<object?>(props); comp.Context.PropsSig = entry.PropsSig; }
+        }
+
+        // One lifetime scope per component (the never-re-running owner ReactiveCore was designed for). It OWNS the
+        // render-effect (so Scope.Dispose cascades to it — no manual Effect.Dispose) and carries the hook-cleanup
+        // teardown as a scope cleanup, so unmount collapses to Scope.Dispose(): dispose the render-effect, then run
+        // RunAllCleanups — the same order the split (Effect.Dispose(); Comp.Unmount();) ran. Re-running the render-effect
+        // is safe under this owner: it owns nothing itself (its nested binds/For/Show effects are created owner:null and
+        // registered node-owned via AddBinding), so RunComputation's dispose-children pass on re-render is a no-op.
+        var scope = new ReactiveScope(Runtime);
+        entry.Scope = scope;
+        scope.AddCleanup(comp.Unmount);   // RunAllCleanups runs exactly once, when the scope disposes
+        var effect = new Effect(Runtime, () => RunComponent(node, entry), owner: scope, runNow: false);
         entry.Effect = effect;
         comp.Context.RequestRerender = effect.Schedule;   // imperative re-render (granular) for escape-hatch callers
         effect.RunNow();                                  // first render + child mount (deferred if mounted parked)
@@ -633,7 +742,7 @@ public sealed class TreeReconciler
         _renderCount++;
         if (Diag.Enabled) Diag.Event("render", entry.Comp.GetType().Name);   // who re-rendered (granularity diagnosis)
         var comp = entry.Comp;
-        Element newRendered = comp.RunsOnce ? Reactive.Untrack(comp.RenderWithHooks) : comp.RenderWithHooks();
+        Element newRendered = comp.RenderWithHooks();
         if (entry.DerivedSkeletonStyle is { } skeletonStyle)
             newRendered = SkeletonDeriver.Derive(newRendered, skeletonStyle);
         ReconcileSingleChild(node, newRendered, entry.Rendered);
@@ -683,7 +792,7 @@ public sealed class TreeReconciler
         var kids = new List<NodeHandle>();
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c)) kids.Add(c);
         foreach (var k in kids) Remove(k);
-        if (_comps.Remove(node, out var old)) { old.Effect?.Dispose(); old.Comp.Unmount(); _live.Remove(old.Comp); _anchorOf.Remove(old.Comp); }
+        if (_comps.Remove(node, out var old)) { old.Scope?.Dispose(); _live.Remove(old.Comp); _anchorOf.Remove(old.Comp); }
         MountComponent(node, ce);
     }
 
@@ -843,32 +952,36 @@ public sealed class TreeReconciler
         MirrorParticipation(node, _scene.FirstChild(node));
     }
 
-    private void MountFor(NodeHandle node, ForEl fe)
+    private void MountFor(NodeHandle node, ForElBase fe)
     {
+        // The boundary node is a layout-transparent container; the effect reads the LATEST stored ForElBase (not its
+        // mount-time capture), so a parent re-render can re-point the closures (UpdateFor) — exactly like MountShow.
+        int mountIdx = (int)node.Raw.Index;
+        _forEl[mountIdx] = fe;
         var eff = new Effect(Runtime, () =>
         {
             if (!_scene.IsLive(node)) return;
-            int n = fe.Count();
-            // Rent the realized-children buffer from the pool (mirrors RealizeBoundWindow) instead of a fresh new Element[n]
-            // each render — drops the per-render array off the nav-churn Gen0 (finding #6).
-            var cur = n == 0 ? Array.Empty<Element>() : ArrayPool<Element>.Shared.Rent(n);
-            for (int i = 0; i < n; i++)
-            {
-                var el = fe.ItemAt(i);
-                // Skip the `el with { Key }` record clone (a heap alloc — Element is a record class) in the common keyless
-                // case: a null key positionally-diffs identically to the old positional fallback key "#i". A KeyOf supplies
-                // the real key; a user-set key under a keyless For keeps the old positional-override semantics ("#i").
-                cur[i] = fe.KeyOf is { } keyOf ? el with { Key = keyOf(i) }
-                       : el.Key is null ? el
-                       : el with { Key = "#" + i };
-            }
             int idx = (int)node.Raw.Index;
+            if (!_forEl.TryGetValue(idx, out var cur)) return;
+            // Fill reads the items source ONCE (tracked ⇒ subscribes this effect) and fills a pooled buffer it rents via
+            // Grow (mirrors RealizeBoundWindow) — no fresh new Element[n] each run, so the nav-churn Gen0 stays flat.
+            Element[] buf = Array.Empty<Element>();
+            int n = cur.Fill(ref buf);
             var prev = _forState.TryGetValue(idx, out var p) ? p : (Array.Empty<Element>(), 0);
-            ReconcileChildren(node, cur.AsSpan(0, n), prev.Item1.AsSpan(0, prev.Item2));
+            ReconcileChildren(node, buf.AsSpan(0, n), prev.Item1.AsSpan(0, prev.Item2));
             if (prev.Item1.Length > 0) { Array.Clear(prev.Item1, 0, prev.Item2); ArrayPool<Element>.Shared.Return(prev.Item1); }
-            _forState[idx] = (cur, n);
-        }, owner: null, runNow: true);
+            _forState[idx] = (buf, n);
+        }, owner: null, runNow: false);
+        _forEffect[mountIdx] = eff;
         AddBinding(node, eff);
+        eff.RunNow();
+    }
+
+    private void UpdateFor(NodeHandle node, ForElBase next)
+    {
+        int idx = (int)node.Raw.Index;
+        _forEl[idx] = next;
+        if (_forEffect.TryGetValue(idx, out var eff)) eff.Schedule();
     }
 
     // ── Fine-grained bindings (signal → scene node, no re-render) ────────────────────────────────
@@ -899,6 +1012,16 @@ public sealed class TreeReconciler
         state.Options = options;
 
         LayoutTransition? transition = null;
+
+        if (state.ActiveKey is { } activeKey && state.Entries.TryGetValue(activeKey, out var activeEntry)
+            && activeKey == key && !Equals(activeEntry.Token, token))
+        {
+            // A cache key identifies retained STATE, not necessarily one immutable route. Wavee deliberately collapses
+            // album→album and artist→artist onto one warm slot; the token still changed and TransitionFor must get the
+            // edge so the in-place update receives its directional entrance. There is no outgoing root in this case:
+            // Update below preserves the mounted component/state, then the normal enter seed animates that same root.
+            transition = options.TransitionFor?.Invoke(activeEntry.Token, token);
+        }
 
         if (state.ActiveKey is { } oldKey && oldKey != key && state.Entries.TryGetValue(oldKey, out var oldActive))
         {
@@ -1531,7 +1654,12 @@ public sealed class TreeReconciler
         // entirely (overscan 0) so only the visible cards land this frame; the halo trickles in via the budget on later frames.
         float contentExt = horizontal ? sc.ContentW : sc.ContentH;
         float avgExtent = count > 0 && contentExt > 0f ? contentExt / count : (ve.EstimatedExtent > 0f ? ve.EstimatedExtent : 1f);
-        int effOverscan = mount ? 0 : ve.Overscan;
+        // Research adjustment #16 — CacheExtentPx overrides the row-based Overscan when set: convert the pixel band to a
+        // row count against the average scroll-axis row extent (row-based Overscan stays the default when NaN).
+        int rowOverscan = ve.Overscan;
+        if (!float.IsNaN(ve.CacheExtentPx) && ve.CacheExtentPx >= 0f)
+            rowOverscan = Math.Max(0, (int)MathF.Ceiling(ve.CacheExtentPx / (avgExtent > 0f ? avgExtent : 1f)));
+        int effOverscan = mount ? 0 : rowOverscan;
         VirtualWindowing.DirectionalOverscan(effOverscan, sc.FlingVelocity, avgExtent, out int lowOv, out int highOv);
 
         int first, last, visibleFirst, visibleLast, mandFirst, mandLast;
@@ -1582,7 +1710,12 @@ public sealed class TreeReconciler
 
         if (ve.RowBind is not null)
         {
-            RealizeBoundWindow(node, content, entry, ve, first, last, w, visibleSlots, stayDirty);
+            // Research adjustments #5/#16: the keep-alive bucket + content-type pools ride an EXTENDED realize; when
+            // neither is opted into (the default) the original zero-alloc positional recycler runs unchanged.
+            if (ve.KeepAlive is not null || ve.ContentType is not null)
+                RealizeBoundWindowExtended(node, content, entry, ve, first, last, w, visibleSlots, stayDirty);
+            else
+                RealizeBoundWindow(node, content, entry, ve, first, last, w, visibleSlots, stayDirty);
         }
         else
         {
@@ -1771,6 +1904,177 @@ public sealed class TreeReconciler
         }
 
         FireWindowLifecycle(ve, oldFirst, oldLast, first, first + mat);
+    }
+
+    /// <summary>
+    /// The EXTENDED bound realize (research adjustments #5 keep-alive + #16 content-type pools). Runs ONLY when
+    /// <see cref="VirtualListEl.KeepAlive"/> or <see cref="VirtualListEl.ContentType"/> is set — the default
+    /// <see cref="RealizeBoundWindow"/> stays the byte-identical zero-alloc positional recycler. This path trades the
+    /// tight positional recycle for two behaviours:
+    /// <list type="bullet">
+    /// <item><b>Keep-alive (#5):</b> a slot bound to an item for which <c>KeepAlive(item)</c> is true is NOT recycled when
+    /// it leaves the window — it PARKS (detached from the content node ⇒ no layout/paint, and <see cref="SetSubtreeParked"/>
+    /// quiesces its render-effects/animations — the same mechanics as <c>Flow.KeepAlive</c>), keeping its live state until
+    /// the item re-enters the window (reactivate) or the bounded bucket evicts the LRU (<see cref="VirtualListEl.KeepAliveCap"/>).</item>
+    /// <item><b>Content-type pools (#16):</b> a slot only cheap-rebinds to an index whose <c>ContentType(index)</c> matches
+    /// the type its frozen subtree was built for; a cross-type reuse REBUILDS the slot (fresh subtree) instead. Homogeneous
+    /// lists (all one type) rebind exactly as the default path does.</item>
+    /// </list>
+    /// Allocation here is acceptable (opt-in, never a zero-alloc-gated list); the content children are re-ordered to window
+    /// order at the end (the arrange pass positions the ord-th child at item <c>first+ord</c>).
+    /// </summary>
+    private void RealizeBoundWindowExtended(NodeHandle node, NodeHandle content, VirtualEntry entry,
+                                            VirtualListEl ve, int first, int last, int w, int visibleSlots, bool stayDirty)
+    {
+        var rowBind = ve.RowBind!;
+        var keepAlive = ve.KeepAlive;
+        var contentTypeOf = ve.ContentType;
+        var slots = entry.Slots ??= new List<(Signal<int>, Element)>(Math.Max(4, w));
+        var types = entry.SlotTypes ??= new List<int>(Math.Max(4, w));
+        var kept = entry.Kept ??= new Dictionary<int, KeptSlot>();
+        int epoch = FrameEpoch;
+        bool structural = false;
+        int oldFirst = entry.PrevFirst, oldLast = entry.PrevFirst + entry.PrevLen;
+
+        int TypeOf(int idx) => contentTypeOf?.Invoke(idx) ?? 0;
+
+        // Snapshot the live pool (slot signal/element/type + its content child node, by ordinal — the invariant the
+        // default path maintains: slots[i] ↔ the i-th child of content).
+        int n0 = slots.Count;
+        var poolNode = n0 > 0 ? new NodeHandle[n0] : System.Array.Empty<NodeHandle>();
+        {
+            var c = _scene.FirstChild(content);
+            for (int i = 0; i < n0 && !c.IsNull; i++) { poolNode[i] = c; c = _scene.NextSibling(c); }
+        }
+
+        // ── PHASE 1 — PARK keep-alive slots leaving the window. Marked consumed (Null node) so PHASE 2 skips them.
+        if (keepAlive is not null)
+        {
+            for (int i = 0; i < n0; i++)
+            {
+                if (poolNode[i].IsNull) continue;
+                int item = slots[i].Index.Peek();
+                if (item >= first && item < last) continue;          // stays in the window — normal handling
+                if (!keepAlive(item)) continue;                       // plain row — recycle/shrink handles it
+                if (kept.ContainsKey(item)) continue;                 // defensive: already parked
+                _scene.Detach(poolNode[i]);
+                SetSubtreeParked(poolNode[i], parked: true);          // quiesce render-effects/animations (Flow.KeepAlive mechanics)
+                kept[item] = new KeptSlot
+                {
+                    Index = slots[i].Index, El = slots[i].El, Root = poolNode[i],
+                    ContentType = i < types.Count ? types[i] : 0, LastUsed = epoch,
+                };
+                poolNode[i] = NodeHandle.Null;   // consumed
+                structural = true;
+            }
+        }
+
+        // ── PHASE 2 — rebuild the active window [first,last) in order, consuming kept slots first, then the surviving
+        //    pool (rebind on type-match, rebuild on type-mismatch), then growing. Result lists replace slots/types.
+        var newSlots = new List<(Signal<int>, Element)>(Math.Max(4, w));
+        var newTypes = new List<int>(Math.Max(4, w));
+        var order = w > 0 ? new NodeHandle[w] : System.Array.Empty<NodeHandle>();
+        int poolCursor = 0;
+        for (int ord = 0; ord < w; ord++)
+        {
+            int item = first + ord;
+            int dtype = TypeOf(item);
+            if (kept.TryGetValue(item, out var ks))
+            {
+                // Reactivate: re-attach (so a replayed render resolves context up-tree), un-park, ensure bound to item.
+                kept.Remove(item);
+                _scene.AppendChild(content, ks.Root);
+                SetSubtreeParked(ks.Root, parked: false);
+                if (ks.Index.Peek() != item) ks.Index.Value = item;
+                newSlots.Add((ks.Index, ks.El)); newTypes.Add(ks.ContentType); order[ord] = ks.Root;
+                structural = true; _realizeProgress = true;
+                continue;
+            }
+            // Advance to the next surviving (non-parked) pool slot.
+            while (poolCursor < n0 && poolNode[poolCursor].IsNull) poolCursor++;
+            if (poolCursor < n0)
+            {
+                var (sig, el) = slots[poolCursor];
+                int stype = poolCursor < types.Count ? types[poolCursor] : 0;
+                var pnode = poolNode[poolCursor];
+                poolCursor++;
+                if (stype == dtype)
+                {
+                    int prev = sig.Peek();
+                    if (prev != item)
+                    {
+                        _scene.Unmark(pnode, NodeFlags.Hovered | NodeFlags.Pressed | NodeFlags.Focused | NodeFlags.FocusVisual);
+                        sig.Value = item;   // cheap in-pool rebind (same content type)
+                        _realizeProgress = true;
+                        ve.OnItemIndexChanged?.Invoke(prev, item);
+                    }
+                    newSlots.Add((sig, el)); newTypes.Add(stype); order[ord] = pnode;
+                }
+                else
+                {
+                    // Cross-type: never rebind — rebuild a fresh subtree for the new content type.
+                    Remove(pnode);
+                    var nsig = new Signal<int>(item);
+                    Element nel = rowBind(nsig);
+                    var child = _scene.CreateNode(nel.ElementTypeId);
+                    _scene.AppendChild(content, child);
+                    Mount(child, nel);
+                    newSlots.Add((nsig, nel)); newTypes.Add(dtype); order[ord] = child;
+                    structural = true; _realizeProgress = true;
+                }
+            }
+            else
+            {
+                // Grow: no free pool slot — build a fresh one (its template runs once).
+                var nsig = new Signal<int>(item);
+                Element nel = rowBind(nsig);
+                var child = _scene.CreateNode(nel.ElementTypeId);
+                _scene.AppendChild(content, child);
+                Mount(child, nel);
+                newSlots.Add((nsig, nel)); newTypes.Add(dtype); order[ord] = child;
+                structural = true;
+            }
+        }
+
+        // Shrink: any surviving pool slot not consumed by the window is dropped.
+        for (int i = poolCursor; i < n0; i++)
+            if (!poolNode[i].IsNull) { Remove(poolNode[i]); structural = true; }
+
+        entry.Slots = newSlots; entry.SlotTypes = newTypes;
+
+        // Re-order the content children to window order (ord-th child ⇒ item first+ord — the arrange contract).
+        for (int ord = 0; ord < w; ord++)
+        {
+            var h = order[ord];
+            if (h.IsNull || !_scene.IsLive(h)) continue;
+            _scene.Detach(h);
+            _scene.AppendChild(content, h);
+        }
+
+        // Bounded keep-alive bucket: evict the LRU beyond the cap so a long scroll over keep-alive rows can't leak subtrees.
+        int cap = Math.Max(1, ve.KeepAliveCap);
+        while (kept.Count > cap)
+        {
+            int victimItem = 0; long victimUsed = long.MaxValue; bool found = false;
+            foreach (var kv in kept)
+                if (kv.Value.LastUsed < victimUsed) { victimUsed = kv.Value.LastUsed; victimItem = kv.Key; found = true; }
+            if (!found) break;
+            var v = kept[victimItem];
+            kept.Remove(victimItem);
+            if (_scene.IsLive(v.Root)) Remove(v.Root);   // unmount the evicted parked subtree
+            structural = true;
+        }
+
+        if (structural) _reconciled = true;
+        _scene.Mark(content, NodeFlags.LayoutDirty);   // window/order changed → re-arrange the realized band
+
+        ref ScrollState scw = ref _scene.ScrollRef(node);
+        scw.FirstRealized = first; scw.LastRealized = first + w;
+        if (stayDirty) _scene.Mark(node, NodeFlags.VirtualRangeDirty);
+        else _scene.Unmark(node, NodeFlags.VirtualRangeDirty);
+        entry.PrevFirst = first; entry.PrevLen = w;
+
+        FireWindowLifecycle(ve, oldFirst, oldLast, first, first + w);
     }
 
     /// <summary>
@@ -2126,6 +2430,8 @@ public sealed class TreeReconciler
         _showState.Remove(idx);
         _showEl.Remove(idx);
         _showEffect.Remove(idx);
+        _forEl.Remove(idx);
+        _forEffect.Remove(idx);
         if (_forState.Remove(idx, out var fs) && fs.Prev.Length > 0)   // return the pooled For buffer (finding #6)
         {
             Array.Clear(fs.Prev, 0, fs.Len);
@@ -2136,7 +2442,7 @@ public sealed class TreeReconciler
         _skelForce.Remove(idx);
         ReleaseSkeletonScrollbarSuppression(idx);
         if (_skelState.Remove(idx, out var sk) && sk.Group is { } skg) SkelGroupCoordinator.Unregister(skg, idx);
-        if (_comps.Remove(node, out var e)) { e.Effect?.Dispose(); e.Comp.Unmount(); _live.Remove(e.Comp); _anchorOf.Remove(e.Comp); }
+        if (_comps.Remove(node, out var e)) { e.Scope?.Dispose(); _live.Remove(e.Comp); _anchorOf.Remove(e.Comp); }   // Scope.Dispose cascades: dispose render-effect → RunAllCleanups
         if (_virtuals.Remove(node, out var v))
         {
             if (v.Warming) _warmingCount--;   // a bound list unmounted mid-warm → keep the warming census exact
@@ -2478,6 +2784,7 @@ public sealed class TreeReconciler
                 li.Justify = b.Justify;
                 li.AlignItems = b.AlignItems;
                 li.Wrap = b.Wrap;
+                li.AspectRatio = b.AspectRatio;   // CSS aspect-ratio: FlexLayout.Measure derives the missing extent (Ui.AspectRatio)
                 if (b.ZStack) _scene.Mark(node, NodeFlags.ZStack); else _scene.Unmark(node, NodeFlags.ZStack);
                 if (b.ClipToBounds) _scene.Mark(node, NodeFlags.ClipsToBounds); else _scene.Unmark(node, NodeFlags.ClipsToBounds);
                 if (b.IsolateLayout) _scene.Mark(node, NodeFlags.LayoutBoundary); else _scene.Unmark(node, NodeFlags.LayoutBoundary);

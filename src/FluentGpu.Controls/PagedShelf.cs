@@ -245,7 +245,7 @@ internal sealed class PagedShelfCore : Component
             bool animate = nav != _lastMeasuredNav;
             _lastMeasuredNav = nav;
             ScrollMeasuredViewport(viewport.Value, _page.Peek(), perPageColumns, cardW, animate);
-        }, nav, perPageColumns, cardW, _count);
+        }, DepKey.From(HashCode.Combine(nav, perPageColumns, cardW, _count)));
 
         UseLayoutEffect(() =>
         {
@@ -266,7 +266,7 @@ internal sealed class PagedShelfCore : Component
                 _measuredH.Value = maxH;
                 _measuredForCardW.Value = cardW;
             }
-        }, cardW, _probeSample);
+        }, DepKey.From(HashCode.Combine(cardW, _probeSample)));
 
         // RECORD-cull the permanently-mounted probe layer when it isn't measuring. Opacity=0 alone does NOT stop the
         // recorder walking the subtree (SceneRecorder early-outs only on a cleared NodeFlags.Visible), so a settled
@@ -289,7 +289,7 @@ internal sealed class PagedShelfCore : Component
             bool animate = nav != _lastVirtualNav;
             _lastVirtualNav = nav;
             if (w > 1f) _ctl.StartBringItemIntoView(_page.Peek() * perPageItems, 0f, animate);
-        }, nav, needProbe);
+        }, DepKey.From(HashCode.Combine(nav, needProbe)));
 
         Element body = _measured
             ? (measuredRealizeAll
@@ -359,22 +359,23 @@ internal sealed class PagedShelfCore : Component
                 ? _maxCardW
                 : (_cardW.Value > 0f ? _cardW.Value : layout.CardW)),
             RepeatLayout.Custom(layout, horizontal: true),
-            selectionMode: ItemsSelectionMode.None,
-            controller: _ctl,
-            overscan: shelfOverscan,
-            keyOf: _keyOf,
-            grow: 1f,
-            suppressScrollBar: true,
-            autoEdgeFade: fade,
-            onScrollGeometryChanged: PageScrollSync(),
-            // Bottom padding absorbs the shadow clearance: FillRowVirtualLayout stretches this container to the full
-            // viewport cross size (measuredH + clearance), and the card's Grow=1 fills the container's CONTENT box — so
-            // the card stays measuredH tall and its shadow renders into the pad below both clip edges.
-            // HoverElevatePaint on the CELL (not just the card inside): the deferral is a direct-sibling mechanism, and
-            // at the strip level the siblings are these cells — the flag makes the cell hover-within-aware (see
-            // InputDispatcher.UpdateHoverWithin), so the hovered card's cell paints above its neighbors' halo-overlap.
-            containerFactory: (i, content, state, onInteraction, onFocusChanged) =>
-                new BoxEl { Direction = 1, Padding = new Edges4(0f, LiftClearance, 0f, ShadowClearance), HoverElevatePaint = true, Children = [content] });
+            new ListOptions
+            {
+                SelectionMode = ItemsSelectionMode.None,
+                Controller = _ctl,
+                Overscan = shelfOverscan,
+                KeyOf = _keyOf,
+                Grow = 1f,
+                Scroll = new ScrollOptions { SuppressScrollBar = true, AutoEdgeFade = fade, OnScrollGeometryChanged = PageScrollSync() },
+                // Bottom padding absorbs the shadow clearance: FillRowVirtualLayout stretches this container to the full
+                // viewport cross size (measuredH + clearance), and the card's Grow=1 fills the container's CONTENT box — so
+                // the card stays measuredH tall and its shadow renders into the pad below both clip edges.
+                // HoverElevatePaint on the CELL (not just the card inside): the deferral is a direct-sibling mechanism, and
+                // at the strip level the siblings are these cells — the flag makes the cell hover-within-aware (see
+                // InputDispatcher.UpdateHoverWithin), so the hovered card's cell paints above its neighbors' halo-overlap.
+                ContainerFactory = (i, content, state, onInteraction, onFocusChanged) =>
+                    new BoxEl { Direction = 1, Padding = new Edges4(0f, LiftClearance, 0f, ShadowClearance), HoverElevatePaint = true, Children = [content] },
+            });
 
         // Keep this bounded probe layer mounted for the lifetime of a measured-virtual shelf. That makes a width
         // re-probe a pure update: the live ItemsView remains the same sibling and never flashes out of the tree.
@@ -533,21 +534,23 @@ internal sealed class PagedShelfCore : Component
                 ? _maxCardW
                 : (_cardW.Value > 0f ? _cardW.Value : layout.CardW)),
             RepeatLayout.Custom(layout, horizontal: true),
-            selectionMode: ItemsSelectionMode.None,
-            controller: _ctl,
-            overscan: shelfOverscan,
-            keyOf: _keyOf,
-            grow: 1f,
-            suppressScrollBar: true,   // paged: navigate by the chevron/pips pager, not a draggable scrollbar
-            autoEdgeFade: fade,
-            onScrollGeometryChanged: PageScrollSync(),
-            // bare passthrough cell, COLUMN so the card cross-stretches to the cell's live width (fills it even mid-resize);
-            // the card carries its own visuals (no ItemContainer selection chrome around it). Single-row only: a bottom
-            // pad absorbs the card's shadow clearance (card stays shelfH, halo paints into the pad below the clip).
-            // Multi-row keeps the old clip — RowHeight(cross) would spread the pad across rows and distort every card,
-            // and interior rows occlude their own shadows against the row below anyway.
-            containerFactory: (i, content, state, onInteraction, onFocusChanged) =>
-                new BoxEl { Direction = 1, Padding = _rows == 1 ? new Edges4(0f, LiftClearance, 0f, ShadowClearance) : default, HoverElevatePaint = true, Children = [content] });
+            new ListOptions
+            {
+                SelectionMode = ItemsSelectionMode.None,
+                Controller = _ctl,
+                Overscan = shelfOverscan,
+                KeyOf = _keyOf,
+                Grow = 1f,
+                // paged: navigate by the chevron/pips pager, not a draggable scrollbar
+                Scroll = new ScrollOptions { SuppressScrollBar = true, AutoEdgeFade = fade, OnScrollGeometryChanged = PageScrollSync() },
+                // bare passthrough cell, COLUMN so the card cross-stretches to the cell's live width (fills it even mid-resize);
+                // the card carries its own visuals (no ItemContainer selection chrome around it). Single-row only: a bottom
+                // pad absorbs the card's shadow clearance (card stays shelfH, halo paints into the pad below the clip).
+                // Multi-row keeps the old clip — RowHeight(cross) would spread the pad across rows and distort every card,
+                // and interior rows occlude their own shadows against the row below anyway.
+                ContainerFactory = (i, content, state, onInteraction, onFocusChanged) =>
+                    new BoxEl { Direction = 1, Padding = _rows == 1 ? new Edges4(0f, LiftClearance, 0f, ShadowClearance) : default, HoverElevatePaint = true, Children = [content] },
+            });
 
         return _parts.Apply(PagedShelf.PartViewport, new BoxEl
         {
@@ -581,7 +584,8 @@ internal sealed class PagedShelfCore : Component
         else
         {
             if ((_pager & ShelfPager.Pips) != 0 && pageCount > 1)
-                row.Add(PipsPager.Create(pageCount, p, goTo));
+                // Pass the page signal directly; onChange=goTo re-arms the bring-into-view glide (_pageNav bump).
+                row.Add(PipsPager.Create(pageCount, _page, onChange: goTo));
             if ((_pager & ShelfPager.Chevrons) != 0)
             {
                 row.Add(Chevron(_prevGlyph, canPrev, () => goTo(p - 1), PagedShelf.PartChevronPrev));

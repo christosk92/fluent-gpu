@@ -28,7 +28,7 @@ sealed class SelectionCommandBar : Component
     readonly float _bottomPadding;
     readonly Signal<int> _fit = new(0);
 
-    public SelectionCommandBar(SelectionModel sel, Func<int, Track?> trackAt, float bottomPadding = WaveeSpace.XL,
+    public SelectionCommandBar(SelectionModel sel, Func<int, Track?> trackAt, float bottomPadding = Spacing.XL,
                                Func<PlaylistHost?>? host = null)
     { _sel = sel; _trackAt = trackAt; _bottomPadding = bottomPadding; _host = host; }
 
@@ -65,7 +65,7 @@ sealed class SelectionCommandBar : Component
             HitTestVisible = count >= 2,
             HitTestPassThrough = true,
             AlignItems = FlexAlign.Center, Justify = FlexJustify.End,
-            Padding = new Edges4(WaveeSpace.L, 0f, WaveeSpace.L, _bottomPadding),
+            Padding = new Edges4(Spacing.L, 0f, Spacing.L, _bottomPadding),
             OnBoundsChanged = MeasureFit,
             Children =
             [
@@ -141,9 +141,9 @@ sealed class SelectionCommandBar : Component
         kids.Add(ClearBtn());
         return new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
-            Padding = new Edges4(WaveeSpace.M, WaveeSpace.S, WaveeSpace.S, WaveeSpace.S),
-            Corners = CornerRadius4.All(WaveeRadius.Card), Shadow = Elevation.Flyout, ClipToBounds = true,
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M,
+            Padding = new Edges4(Spacing.M, Spacing.S, Spacing.S, Spacing.S),
+            Corners = CornerRadius4.All(Radii.Card), Shadow = Elevation.Flyout, ClipToBounds = true,
             Acrylic = Tok.AcrylicFlyout, BorderWidth = 1f, BorderColor = Tok.StrokeFlyoutDefault,
             Children = kids.ToArray(),
         };
@@ -183,7 +183,7 @@ sealed class SelectionCommandBar : Component
         items.Add(new MenuFlyoutItem(Loc.Get(Strings.Detail.SelectAll), Icons.Accept, true, SelectAllTracks));
         menuHandle.Value = overlaySvc.Open(
             () => menuAnchor.Value,
-            () => MenuFlyout.Build(items, () => menuHandle.Value?.Close()),
+            () => MenuFlyout.Create(items, () => menuHandle.Value?.Close()),
             FlyoutPlacement.TopEdgeAlignedRight, ToolFx.Popup);
         menuHandle.Value.ClosedAction = () => menuHandle.Value = null;
     }
@@ -250,7 +250,7 @@ sealed class SelectionCommandBar : Component
     static Element Divider() => new BoxEl
     {
         Width = 1f, Height = 22f, Fill = Tok.StrokeDividerDefault,
-        Margin = new Edges4(WaveeSpace.XS, 0f, WaveeSpace.XS, 0f),
+        Margin = new Edges4(Spacing.XS, 0f, Spacing.XS, 0f),
     };
 
     Element Action(string glyph, string label, int fit, Action onClick, string? font = null) => fit == 0
@@ -259,20 +259,20 @@ sealed class SelectionCommandBar : Component
 
     static Element ActionBtn(string glyph, string label, Action onClick, string? font = null) => new BoxEl
     {
-        Direction = 0, Height = 36f, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S,
-        Padding = new Edges4(WaveeSpace.M, 0f, WaveeSpace.M, 0f), Corners = CornerRadius4.All(18f),
-        HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary, OnClick = onClick,
+        Direction = 0, Height = 36f, AlignItems = FlexAlign.Center, Gap = Spacing.S,
+        Padding = new Edges4(Spacing.M, 0f, Spacing.M, 0f), Corners = CornerRadius4.All(18f),
+        OnClick = onClick,
         Children = [Icon(glyph, 14f, Tok.TextSecondary, family: font), new TextEl(label) { Size = 13f, Weight = 600, Color = Tok.TextSecondary }],
-    };
+    }.Interactive(Interaction.Subtle);
 
     static Element RoundBtn(string glyph, Action onClick, Action<NodeHandle>? realized = null, string? font = null) => new BoxEl
     {
         Width = 36f, Height = 36f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
         Corners = CornerRadius4.All(18f),
-        HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary, OnClick = onClick,
+        OnClick = onClick,
         OnRealized = realized,
         Children = [Icon(glyph, 13f, Tok.TextSecondary, family: font)],
-    };
+    }.Interactive(Interaction.Subtle);
 
     Element ClearBtn() => ToolTip.Wrap(RoundBtn(Icons.Cancel, () => _sel.DeselectAll()), Loc.Get(Strings.Detail.ClearSelection));
 }

@@ -35,9 +35,8 @@ sealed class App : Component
 `FluentApp.Run` signature (`src/FluentGpu.Windows/Hosting/FluentApp.cs`):
 
 ```csharp
-public static void Run(Func<Component> root, string title = "FluentGpu",
-                       int width = 800, int height = 600, bool mica = true, int frames = -1);
-public static void Run<T>(string title = "FluentGpu", int width = 800, int height = 600) where T : Component, new();
+public static void Run(Func<Component> root, AppOptions? options = null);
+public static void Run<T>(AppOptions? options = null) where T : Component, new();
 ```
 
 That's all you need to build apps. The rest of this page is for when you want to drive the loop yourself, or run

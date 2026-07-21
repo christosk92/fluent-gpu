@@ -19,7 +19,7 @@ namespace Wavee;
 // RESPONSIVE (mirrors PlayerBar): the right cluster collapses at width thresholds (band-gated via the Viewport signal so
 // it only re-renders when a threshold is crossed, not every resize frame) — otherwise the fixed account/icon cluster
 // eats the row and the omnibar shrinks to an unusable sliver on a narrow window.
-sealed class ShellToolbar : ReactiveComponent
+sealed class ShellToolbar : Component
 {
     readonly Signal<Route> _route;
     readonly Signal<bool> _canBack;
@@ -45,7 +45,7 @@ sealed class ShellToolbar : ReactiveComponent
         _backHistory = backHistory; _forwardHistory = forwardHistory;
     }
 
-    public override Element Setup()
+    public override Element Render()
     {
         var b = UseContext(PlaybackBridge.Slot);
         var ui = UseContext(ShellUi.Slot);   // the right-rail chrome state — the Friends button toggles the Friends panel
@@ -89,7 +89,7 @@ sealed class ShellToolbar : ReactiveComponent
                 // trailing icon butts right up against the profile avatar at narrower widths (reads as overlap).
                 Grow = 1f, Basis = 0f, Shrink = 1f, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start,
                 ClipToBounds = true,
-                Padding = new Edges4(8f, 0f, 8f, 0f), Margin = new Edges4(0f, 0f, WaveeSpace.L, 0f),
+                Padding = new Edges4(8f, 0f, 8f, 0f), Margin = new Edges4(0f, 0f, Spacing.L, 0f),
                 Children =
                 [
                     // Fills the omnibar slot, capped at 720 (shrinks below that on a narrow window). Live as-you-type
@@ -101,12 +101,12 @@ sealed class ShellToolbar : ReactiveComponent
             // ── right: account · friends · bell · theme (collapses by threshold) ──
             ProfileChip(b, L.ShowProfileName),
         };
-        if (L.ShowFriends) kids.Add(IconButton.Create(Mdl.Friends, () => ui?.Toggle(RailMode.Friends), nav));
+        if (L.ShowFriends) kids.Add(IconButton.Create(Icons.Friends, () => ui?.Toggle(RailMode.Friends), nav));
         if (L.ShowBell) kids.Add(Embed.Comp(() => new NotificationBell()));
         if (L.ShowThemeToggle)
         {
             kids.Add(new BoxEl { Width = 1f, Height = 20f, Fill = Tok.StrokeDividerDefault, Margin = new Edges4(4f, 0f, 4f, 0f) });
-            kids.Add(IconButton.Create(Theme.Dark ? Mdl.Moon : Mdl.Sun, _toggleTheme, nav));
+            kids.Add(IconButton.Create(Theme.Dark ? Icons.Moon : Icons.Sun, _toggleTheme, nav));
         }
         // Overflow: whatever dropped off the bar folds into a "⋯" MenuFlyout so it stays reachable. A plain MenuFlyout
         // (not CommandBarFlyout) gets the clean OverlayHost clip-reveal open — CommandBarFlyout layers its own
@@ -149,9 +149,9 @@ sealed class ShellToolbar : ReactiveComponent
     List<MenuFlyoutItem> OverflowItems(ToolbarLayout L, ShellUi? ui)
     {
         var items = new List<MenuFlyoutItem>(3);
-        if (!L.ShowFriends) items.Add(new MenuFlyoutItem(Loc.Get(Strings.Shell.Friends), Mdl.Friends, Invoke: () => ui?.Toggle(RailMode.Friends)));
+        if (!L.ShowFriends) items.Add(new MenuFlyoutItem(Loc.Get(Strings.Shell.Friends), Icons.Friends, Invoke: () => ui?.Toggle(RailMode.Friends)));
         // Notifications, when collapsed, are handled by OverflowMenu (it anchors the panel to the ⋯ button) — not a plain item.
-        if (!L.ShowThemeToggle) items.Add(new MenuFlyoutItem(Theme.Dark ? Loc.Get(Strings.Shell.LightTheme) : Loc.Get(Strings.Shell.DarkTheme), Theme.Dark ? Mdl.Sun : Mdl.Moon, Invoke: _toggleTheme));
+        if (!L.ShowThemeToggle) items.Add(new MenuFlyoutItem(Theme.Dark ? Loc.Get(Strings.Shell.LightTheme) : Loc.Get(Strings.Shell.DarkTheme), Theme.Dark ? Icons.Sun : Icons.Moon, Invoke: _toggleTheme));
         return items;
     }
 }
@@ -230,7 +230,7 @@ sealed class NavHistoryButton : Component
 
             handle.Value = svc.Open(
                 () => anchor.Value,
-                () => MenuFlyout.Build(items, () => handle.Value?.Close()),
+                () => MenuFlyout.Create(items, () => handle.Value?.Close()),
                 FlyoutPlacement.BottomEdgeAlignedLeft,
                 new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
             handle.Value.ClosedAction = () => handle.Value = null;
@@ -278,7 +278,7 @@ sealed class OverflowMenu : Component
             {
                 int unread = nc?.UnreadCount.Peek() ?? 0;
                 string label = unread > 0 ? Strings.Notifications.OverflowTitle(unread) : Loc.Get(Strings.Notifications.Title);
-                list.Add(new MenuFlyoutItem(label, Mdl.Bell, Invoke: OpenNotifications));
+                list.Add(new MenuFlyoutItem(label, Icons.Bell, Invoke: OpenNotifications));
             }
             list.AddRange(_items);
             return list;
@@ -289,7 +289,7 @@ sealed class OverflowMenu : Component
             if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
             handle.Value = svc.Open(
                 () => anchor.Value,
-                () => MenuFlyout.Build(BuildItems(), () => handle.Value?.Close()),
+                () => MenuFlyout.Create(BuildItems(), () => handle.Value?.Close()),
                 FlyoutPlacement.BottomEdgeAlignedRight,
                 new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
             handle.Value.ClosedAction = () => handle.Value = null;
@@ -305,7 +305,7 @@ sealed class Omnibar : Component
 {
     readonly Signal<string> _text;
     readonly Action<string, string?> _go;
-    // The results are held HERE (not via UseAsyncResource, which resets to the seed each keystroke and flashes the popup
+    // The results are held HERE (not via UseResource, which resets to the seed each keystroke and flashes the popup
     // empty): a new fetch keeps the prior list visible + flips _loading until the fresh set lands — no "No results" flash.
     readonly Signal<IReadOnlyList<string>> _sugg = new(System.Array.Empty<string>());
     readonly Signal<bool> _loading = new(false);
@@ -512,7 +512,6 @@ sealed class RichOmnibar : Component
             Grow = 1f, Margin = new Edges4(1, 3, 1, 3),
             AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Corners = Radii.ControlAll, Role = AutomationRole.Button,
-            HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
             OnClick = () => Submit(_text.Peek()),
             Children =
             [
@@ -522,7 +521,7 @@ sealed class RichOmnibar : Component
                     Color = Tok.TextSecondary, PressedColor = Tok.TextTertiary,
                 },
             ],
-        };
+        }.Interactive(Interaction.Subtle);
 
         return new BoxEl
         {
@@ -706,7 +705,7 @@ sealed class OmnibarSuggestionsPopup : Component
             Direction = 0,
             Height = 58f,
             AlignItems = FlexAlign.Center,
-            Gap = WaveeSpace.M,
+            Gap = Spacing.M,
             Padding = new Edges4(12, 0, 10, 0),
             Margin = new Edges4(4, 2, 4, 2),
             Corners = Radii.ControlAll,

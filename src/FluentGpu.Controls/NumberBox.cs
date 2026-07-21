@@ -82,7 +82,7 @@ public sealed class NumberBox : Component
     /// invariant <c>double.TryParse</c> (null = parse failure). With <see cref="AcceptsExpression"/> the expression
     /// evaluator runs instead (operands parse invariantly), mirroring NumberBoxParser::Compute.</summary>
     public Func<string, double?>? Parser;
-    public Action<double, double>? OnValueChanged;   // (oldValue, newValue) — WinUI ValueChangedEventArgs
+    public Action<double>? OnChange;   // the NEW value (controlled-input contract; peek the value signal for the old one)
     public Field<double>? Field;                     // form-validation.md: invalid border + touched-on-blur + message row
     public Style? StyleOverride;
     /// <summary>Lightweight per-part styling (CSS ::part): modifiers keyed by the <c>PartXxx</c> consts; see
@@ -126,43 +126,63 @@ public sealed class NumberBox : Component
     // ── Factories ────────────────────────────────────────────────────────────────────────────────────────────────
     // The full factory leads with `Signal<double>? value` so it never collides with the legacy (double,double) overloads.
 
-    /// <summary>LIVE enabled flag (provider idiom): <see cref="IsEnabled"/> is a plain field that freezes at mount via
-    /// <c>Embed.Comp</c>, so a toggle enabling/disabling the box would be dropped. <see cref="Create"/> routes it
-    /// through this provider; the frozen field is the fallback for direct callers.</summary>
-    internal static readonly Context<bool?> EnabledChannel = new(null);
+    /// <summary>LIVE enabled flag re-pushed to the mounted core (<c>Embed.Comp(props, …)</c>): <see cref="IsEnabled"/>
+    /// is a plain field that freezes at mount via a propless <c>Embed.Comp</c>, so a toggle enabling/disabling the box
+    /// would be dropped. <see cref="Create"/> routes it through re-pushed props; the frozen field is the fallback for
+    /// direct callers. A tiny record carries the bool because re-pushed props are class-typed.</summary>
+    internal sealed record EnabledProps(bool IsEnabled);
 
-    /// <summary>Full WinUI-aligned factory.</summary>
-    public static Element Create(
-        Signal<double>? value = null, double initial = double.NaN,
-        double minimum = double.MinValue, double maximum = double.MaxValue,
-        double smallChange = 1, double largeChange = 10,
-        NumberBoxSpinButtonPlacementMode spinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Hidden,
-        NumberBoxValidationMode validationMode = NumberBoxValidationMode.InvalidInputOverwritten,
-        bool isWrapEnabled = false, bool acceptsExpression = false,
-        string placeholderText = "", string? header = null, string? description = null,
-        float width = 120f, Func<double, string>? formatter = null, Action<double, double>? onValueChanged = null,
-        Signal<string>? text = null, Func<string, double?>? parser = null, bool isEnabled = true,
-        Field<double>? field = null)
-        => Ctx.Provide(EnabledChannel, isEnabled, Embed.Comp(() => new NumberBox
+    /// <summary>The long-tail NumberBox surface (everything past the controlled value + onChange) as one record —
+    /// mirrors <c>TextBoxOptions</c>: the numeric range/step (Min/Max/Small/LargeChange + Wrap), the spin-button
+    /// placement + validation mode, expression parsing, placeholder/width, header/description labels, the format/parse
+    /// seams, IsEnabled, and a form <see cref="Field{T}"/>. Field defaults mirror the control's own.</summary>
+    public sealed record NumberBoxOptions
+    {
+        public double Initial { get; init; } = double.NaN;
+        public double Minimum { get; init; } = double.MinValue;
+        public double Maximum { get; init; } = double.MaxValue;
+        public double SmallChange { get; init; } = 1;
+        public double LargeChange { get; init; } = 10;
+        public NumberBoxSpinButtonPlacementMode SpinButtonPlacementMode { get; init; } = NumberBoxSpinButtonPlacementMode.Hidden;
+        public NumberBoxValidationMode ValidationMode { get; init; } = NumberBoxValidationMode.InvalidInputOverwritten;
+        public bool IsWrapEnabled { get; init; }
+        public bool AcceptsExpression { get; init; }
+        public string PlaceholderText { get; init; } = "";
+        public string? Header { get; init; }
+        public string? Description { get; init; }
+        public float Width { get; init; } = 120f;
+        public Func<double, string>? Formatter { get; init; }
+        public Signal<string>? Text { get; init; }
+        public Func<string, double?>? Parser { get; init; }
+        public bool IsEnabled { get; init; } = true;
+        public Field<double>? Field { get; init; }
+    }
+
+    static readonly NumberBoxOptions DefaultOptions = new();
+
+    /// <summary>The one canonical NumberBox factory. The controlled numeric value is the two-way <paramref name="value"/>
+    /// signal (null ⇒ the field materializes its own, seeded from <see cref="NumberBoxOptions.Initial"/>); user edits
+    /// write it then fire <paramref name="onChange"/>. All other props live in <paramref name="options"/>
+    /// (<see cref="NumberBoxOptions"/>).</summary>
+    public static Element Create(Signal<double>? value = null, Action<double>? onChange = null, NumberBoxOptions? options = null)
+    {
+        var o = options ?? DefaultOptions;
+        return Embed.Comp(new EnabledProps(o.IsEnabled), () => new NumberBox
         {
-            Value = value, Initial = initial, Minimum = minimum, Maximum = maximum,
-            SmallChange = smallChange, LargeChange = largeChange,
-            SpinButtonPlacementMode = spinButtonPlacementMode, ValidationMode = validationMode,
-            IsWrapEnabled = isWrapEnabled, AcceptsExpression = acceptsExpression,
-            PlaceholderText = placeholderText, Header = header, Description = description,
-            Width = width, Formatter = formatter, OnValueChanged = onValueChanged,
-            Text = text, Parser = parser, IsEnabled = isEnabled, Field = field,
-        }));
+            Value = value, Initial = o.Initial, Minimum = o.Minimum, Maximum = o.Maximum,
+            SmallChange = o.SmallChange, LargeChange = o.LargeChange,
+            SpinButtonPlacementMode = o.SpinButtonPlacementMode, ValidationMode = o.ValidationMode,
+            IsWrapEnabled = o.IsWrapEnabled, AcceptsExpression = o.AcceptsExpression,
+            PlaceholderText = o.PlaceholderText, Header = o.Header, Description = o.Description,
+            Width = o.Width, Formatter = o.Formatter, OnChange = onChange,
+            Text = o.Text, Parser = o.Parser, IsEnabled = o.IsEnabled, Field = o.Field,
+        });
+    }
 
-    /// <summary>Legacy: an editable numeric field with NO spin buttons (WinUI default). <paramref name="step"/> maps to SmallChange.</summary>
-    public static Element Create(double initial = 0, double step = 1)
-        => Create(value: null, initial: initial, smallChange: step,
-                  spinButtonPlacementMode: NumberBoxSpinButtonPlacementMode.Hidden);
-
-    /// <summary>Legacy: an editable numeric field with an inline up/down spin column.</summary>
-    public static Element CreateWithSpinners(double initial = 0, double step = 1)
-        => Create(value: null, initial: initial, smallChange: step,
-                  spinButtonPlacementMode: NumberBoxSpinButtonPlacementMode.Inline);
+    /// <summary>Named variant — an editable numeric field with an inline up/down spin column (a one-line forwarder onto
+    /// <see cref="Create"/> with <see cref="NumberBoxSpinButtonPlacementMode.Inline"/>).</summary>
+    public static Element CreateWithSpinners(Signal<double>? value = null, Action<double>? onChange = null, NumberBoxOptions? options = null)
+        => Create(value, onChange, (options ?? DefaultOptions) with { SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Inline });
 
     // ── Numeric helpers ──────────────────────────────────────────────────────────────────────────────────────────
 
@@ -200,7 +220,7 @@ public sealed class NumberBox : Component
     public override Element Render()
     {
         // Reactive enabled flag (provider wins over the frozen field); shadowing local so downstream reads are live.
-        bool IsEnabled = UseContext(EnabledChannel) ?? this.IsEnabled;
+        bool IsEnabled = UsePropsOrDefault<EnabledProps>()?.IsEnabled ?? this.IsEnabled;
         var s = StyleOverride ?? DefaultStyle;
         var fallbackValue = UseSignal(Initial);
         var value = Value ?? fallbackValue;
@@ -232,7 +252,7 @@ public sealed class NumberBox : Component
             if (!NumEquals(old, next))
             {
                 value.Value = next;
-                OnValueChanged?.Invoke(old, next);
+                OnChange?.Invoke(next);
             }
             SetText(FormatToText(next));
         }

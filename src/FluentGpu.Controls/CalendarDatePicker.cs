@@ -1,6 +1,7 @@
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Localization;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
 using System;
@@ -13,7 +14,7 @@ namespace FluentGpu.Controls;
 /// localized default, calendardatepicker_partial.cpp:45-48) with a trailing calendar glyph (E787). Clicking opens an
 /// interactive <see cref="CalendarView"/> in a light-dismissable flyout anchored below the button; the calendar's
 /// <c>SelectedDatesChanged</c> is wired back — picking a date sets <see cref="Date"/>, CLOSES the flyout and raises
-/// <see cref="OnDateChanged"/> (calendardatepicker_partial.cpp:201-204, :259-276; a deselect nulls the date but keeps
+/// <see cref="OnChange"/> (calendardatepicker_partial.cpp:201-204, :259-276; a deselect nulls the date but keeps
 /// the flyout open). The face text uses the culture's short-date pattern by default (the WinUI ShortDate formatter,
 /// calendardatepicker_partial.cpp:467-473), overridable via <see cref="DateFormat"/>.
 /// </summary>
@@ -23,8 +24,10 @@ public sealed class CalendarDatePicker : Component
     //    FirstDayOfWeek forward to the hosted CalendarView — CalendarDatePicker_themeresources.xaml:203). ──
     /// <summary>Caller-owned date; null shows <see cref="PlaceholderText"/>. A fallback signal is used when null.</summary>
     public Signal<DateOnly?>? Date;
-    /// <summary>WinUI <c>PlaceholderText</c> — default localized "Pick a date" (calendardatepicker_partial.cpp:45-48).</summary>
-    public string PlaceholderText = "Pick a date";
+    /// <summary>WinUI <c>PlaceholderText</c> — null = the localized default (Strings.CalendarDatePicker.Placeholder,
+    /// neutral "Pick a date"), resolved at render so it translates and re-resolves on a culture change
+    /// (calendardatepicker_partial.cpp:45-48).</summary>
+    public string? PlaceholderText;
     /// <summary>WinUI <c>Header</c> — shown above the face (HeaderContentPresenter, CalendarDatePicker_themeresources.xaml:216).</summary>
     public string? Header;
     public DateOnly? MinDate;
@@ -35,7 +38,7 @@ public sealed class CalendarDatePicker : Component
     /// <summary>WinUI <c>DateFormat</c> analog: a .NET date format string; null = the culture's ShortDatePattern
     /// (the WinUI default ShortDate formatter, calendardatepicker_partial.cpp:467-473).</summary>
     public string? DateFormat;
-    public Action<DateOnly?>? OnDateChanged;
+    public Action<DateOnly?>? OnChange;
 
     /// <summary>Zero-arg factory — keeps the existing demo call site (DateTimePages.cs) compiling unchanged.</summary>
     public static Element Create() => Embed.Comp(() => new CalendarDatePicker());
@@ -47,13 +50,13 @@ public sealed class CalendarDatePicker : Component
         DayOfWeek? firstDayOfWeek = null, bool isTodayHighlighted = true,
         CalendarViewDisplayMode displayMode = CalendarViewDisplayMode.Month,
         string? dateFormat = null,
-        Action<DateOnly?>? onDateChanged = null)
+        Action<DateOnly?>? onChange = null)
         => Embed.Comp(() => new CalendarDatePicker
         {
-            Date = date, PlaceholderText = placeholderText ?? "Pick a date", Header = header,
+            Date = date, PlaceholderText = placeholderText, Header = header,
             MinDate = minDate, MaxDate = maxDate, FirstDayOfWeek = firstDayOfWeek,
             IsTodayHighlighted = isTodayHighlighted, DisplayMode = displayMode,
-            DateFormat = dateFormat, OnDateChanged = onDateChanged,
+            DateFormat = dateFormat, OnChange = onChange,
         });
 
     public override Element Render()
@@ -72,11 +75,11 @@ public sealed class CalendarDatePicker : Component
             if (dates.Count > 0)
             {
                 h.Value?.Close();
-                OnDateChanged?.Invoke(dates[0]);
+                OnChange?.Invoke(dates[0]);
             }
             else
             {
-                OnDateChanged?.Invoke(null);
+                OnChange?.Invoke(null);
             }
         }
 
@@ -87,14 +90,14 @@ public sealed class CalendarDatePicker : Component
                 () => anchor.Value,
                 () => CalendarView.Create(
                     date, MinDate, MaxDate, CalendarViewSelectionMode.Single, FirstDayOfWeek,
-                    IsTodayHighlighted, displayMode: DisplayMode, onSelectedDatesChanged: OnCalendarDates),
+                    IsTodayHighlighted, displayMode: DisplayMode, onChange: OnCalendarDates),
                 FlyoutPlacement.BottomLeft);
         }
 
         // Default formatter = the system short-date (calendardatepicker_partial.cpp:473 get_ShortDate).
         string faceText = d is { } picked
             ? picked.ToString(DateFormat ?? CultureInfo.CurrentCulture.DateTimeFormat.ShortDatePattern, CultureInfo.CurrentCulture)
-            : PlaceholderText;
+            : PlaceholderText ?? Loc.Get(Strings.CalendarDatePicker.Placeholder);
 
         var face = new BoxEl
         {

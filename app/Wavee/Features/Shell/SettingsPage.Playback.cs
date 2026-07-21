@@ -31,6 +31,9 @@ sealed partial class SettingsPage
     readonly Signal<int> _quality = new(2);
     readonly Signal<int> _eqPreset = new(0);
     readonly Signal<double> _crossSecs = new(5.0);
+    // The unified Slider.Create takes a FloatSignal; mirror _crossSecs (a Signal<double>, shared with the NumberBox)
+    // into it at both write sites so the thumb tracks settings-load AND NumberBox edits (signal-bound, no re-render).
+    readonly FloatSignal _crossSlider = new(5f);
 
     static string[] EqPresetLabels() =>
     [
@@ -61,7 +64,7 @@ sealed partial class SettingsPage
         int preset = Math.Clamp(_eqPreset.Value, 0, s_eqPresetIds.Length - 1);
 
         Element Toggle(SettingKey<bool> key, bool pushDsp = false, bool bumpPlayerBar = false, bool bumpPlayback = false) =>
-            ToggleSwitch.Create(settings?.Get(key) ?? true, () =>
+            ToggleSwitch.Create(new Signal<bool>(settings?.Get(key) ?? true), onChange: _ =>
             {
                 if (settings is null) return;
                 settings.Set(key, !settings.Get(key));
@@ -83,7 +86,7 @@ sealed partial class SettingsPage
             SettingsSectionHeader(Loc.Get(Strings.Settings.Sound.Title), Icons.Tag),
             EqualizerGroup(svc, settings, eqOn, gains, preset),
             CrossfadeGroup(svc, settings, crossOn),
-            SettingsSectionHeader(Loc.Get(Strings.Settings.Playback.PlayerBar), Mdl.Pin),
+            SettingsSectionHeader(Loc.Get(Strings.Settings.Playback.PlayerBar), Icons.Pin),
             SettingsRow(Loc.Get(Strings.Settings.Playback.ShowRemaining), Loc.Get(Strings.Settings.Playback.ShowRemainingSub),
                 Toggle(WaveeSettings.PlayerBarShowRemaining, bumpPlayerBar: true), Icons.Clock));
     }
@@ -135,7 +138,7 @@ sealed partial class SettingsPage
 
     Element EqualizerGroup(Services? svc, IAppSettings? settings, bool eqOn, float[] gains, int preset)
     {
-        var toggle = ToggleSwitch.Create(eqOn, () =>
+        var toggle = ToggleSwitch.Create(new Signal<bool>(eqOn), onChange: _ =>
         {
             if (settings is null) return;
             settings.Set(WaveeSettings.EqualizerEnabled, !settings.Get(WaveeSettings.EqualizerEnabled));
@@ -155,12 +158,12 @@ sealed partial class SettingsPage
                 SettingsExpander.Item(Loc.Get(Strings.Settings.Sound.Preset), EqPresetDescriptions()[preset],
                     ComboBox.Create(EqPresetLabels(), _eqPreset, width: 200f, itemDescriptions: EqPresetDescriptions(),
                         isEnabled: eqOn && settings is not null,
-                        onSelectionChanged: i => ApplyEqPreset(svc, settings, i))),
+                        onChange: i => ApplyEqPreset(svc, settings, i))),
                 SettingsExpander.Item(Loc.Get(Strings.Settings.Sound.Curve),
                     eqOn ? Loc.Get(Strings.Settings.Sound.CurveOn) : Loc.Get(Strings.Settings.Sound.CurveOff),
                     new BoxEl
                     {
-                        Direction = 1, Gap = WaveeSpace.S,
+                        Direction = 1, Gap = Spacing.S,
                         Children =
                         [
                             WaveeEqualizerCurve.Create(gains, (band, gain) => SetEqBand(svc, settings, band, gain), eqOn && settings is not null),
@@ -182,7 +185,7 @@ sealed partial class SettingsPage
 
     Element CrossfadeGroup(Services? svc, IAppSettings? settings, bool crossOn)
     {
-        var toggle = ToggleSwitch.Create(crossOn, () =>
+        var toggle = ToggleSwitch.Create(new Signal<bool>(crossOn), onChange: _ =>
         {
             if (settings is null) return;
             settings.Set(WaveeSettings.CrossfadeEnabled, !settings.Get(WaveeSettings.CrossfadeEnabled));
@@ -196,6 +199,7 @@ sealed partial class SettingsPage
             int ms = (int)MathF.Round((float)Math.Clamp(seconds, 0, 12) * 1000f);
             settings.Set(WaveeSettings.CrossfadeMs, ms);
             _crossSecs.Value = ms / 1000.0;
+            _crossSlider.Value = (float)(ms / 1000.0);
             PushDsp(svc);
             Bump();
         }
@@ -205,20 +209,25 @@ sealed partial class SettingsPage
             // NumberBox is a mounted component whose constructor fields intentionally freeze. Remount this small row when
             // the toggle flips so its enabled state follows crossfade immediately instead of staying at its first value.
             Key = crossOn ? "crossfade-duration-on" : "crossfade-duration-off",
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M,
             Children =
             [
-                Slider.Ranged((float)_crossSecs.Value, v => Commit(v),
-                    new Slider.Options
+                Slider.Create(_crossSlider, v => Commit(v),
+                    new Slider.SliderOptions
                     {
                         Min = 0f, Max = 12f, Step = 0.5f, TickFrequency = 2f, IsThumbToolTipEnabled = true,
                         ThumbToolTipValueConverter = v => v.ToString("0.#", CultureInfo.InvariantCulture) + " s",
                     },
                     length: 220f, isEnabled: crossOn && settings is not null),
-                NumberBox.Create(value: _crossSecs, minimum: 0, maximum: 12, smallChange: 0.5,
-                    spinButtonPlacementMode: NumberBoxSpinButtonPlacementMode.Compact, width: 96f,
-                    formatter: v => v.ToString("0.#", CultureInfo.InvariantCulture) + " s",
-                    onValueChanged: (_, v) => Commit(v), isEnabled: crossOn && settings is not null),
+                NumberBox.Create(value: _crossSecs,
+                    options: new NumberBox.NumberBoxOptions
+                    {
+                        Minimum = 0, Maximum = 12, SmallChange = 0.5,
+                        SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact, Width = 96f,
+                        Formatter = v => v.ToString("0.#", CultureInfo.InvariantCulture) + " s",
+                        IsEnabled = crossOn && settings is not null,
+                    },
+                    onChange: v => Commit(v)),
             ],
         };
 
@@ -255,7 +264,7 @@ sealed partial class SettingsPage
                 () =>
                 {
                     if (!PeAndSignature.TryShowNativeSignatureDialog(dllPath!, FluentApp.WindowHandle))
-                        Toasts.Show(Loc.Get(Strings.Playback.Runtime.ViewSignatureFailed), ToastSeverity.Caution);
+                        Toast.Show(Loc.Get(Strings.Playback.Runtime.ViewSignatureFailed), new ToastOptions { Severity = InfoBarSeverity.Warning });
                 })
             : null;
 
@@ -287,7 +296,7 @@ sealed partial class SettingsPage
         return ComboBox.Create(labels, _quality, width: 280f,
             itemDescriptions: descriptions, itemEnabled: enabled,
             isEnabled: settings is not null,
-            onSelectionChanged: i =>
+            onChange: i =>
             {
                 if (settings is null || i < 0 || i > 2) return;
                 settings.Set(WaveeSettings.PlaybackQuality, i);

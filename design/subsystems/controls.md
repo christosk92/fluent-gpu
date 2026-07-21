@@ -371,6 +371,31 @@ validation.md:
 The DEBUG `AccessibilityScanner` (validation.md / input-a11y §11.4) asserts (1)/(2)/(4) for every control instance; a
 control with an empty resolved `Name` or a missing required pattern is a CI failure, not a runtime degradation.
 
+### 4.6 As built (2026-07, G5) — the universal controlled-input contract (item 6 of the contract)
+
+The flagship overhaul (program phase G5, `docs/plans/luminous-dancing-cascade.md` §WS3) added a **sixth** universal
+rule that every stateful control obeys:
+
+6. **Value = a concrete signal in, `onChange` out, auto-materialized when absent.**
+   - The canonical factory takes its value as a **concrete signal** (`Signal<T>`/`FloatSignal`), *nullable-optional*,
+     plus **`Action<T>? onChange = null`** sugar. On interaction the control **writes the signal, THEN fires
+     `onChange`**; a *programmatic* write to the signal does NOT echo `onChange` (no feedback loop).
+   - **Auto-materialize:** passing no signal is not "uncontrolled" — the control makes its **own** internal
+     `UseSignal<T>` and uses it, so there is ONE code path (React-Hook-Form-default ergonomics). Exemplar pattern:
+     `var owned = UseSignal(false); var isOpen = IsOpenSignal ?? owned;` (PopupCore).
+   - The **signal instance freezes at mount** (bind wiring is mount-only) — swapping the signal requires a re-key;
+     the `BindContract` DEBUG tripwire (reconciler-hooks §0bis) catches a bound↔static flip. A VerticalSlice gate
+     pins the decoupling contract: **a signal write bypasses render/reconcile** (the whole safety argument for
+     controlled-everything, turned into a regression gate — research adjustment #8).
+   - **Closed callback-name set** (no `Action<TOld,TNew>` shapes): `onChange` (value), `onClick`/`onInvoked`
+     (actions), `onCommit`/`onCancel` (editors), `onOpenChanged` (open state). Gate-enforced; the NumberBox
+     old→new parity delta is documented. `RadioButton` *leaf* is the one documented exception (bool `isSelected` —
+     the group owns the value).
+
+Non-value props ride the re-pushed-props / `[Props]` channel (reconciler-hooks §8bis), not a hand-rolled context.
+Long tails collapse into an **options record** per control (`SliderOptions`/`TextBoxOptions`/`NumberBoxOptions`/…).
+Gates: `gate.ctl.bind.{toggle,check,tristate,radio,naming}`.
+
 ---
 
 ## 5. Primitive interactive controls
@@ -387,6 +412,17 @@ control with an empty resolved `Name` or a missing required pattern is a CI fail
 - **Motion/cursor/RTL:** hover/pressed implicit transition via `Button.*Motion` token; `CursorId = Arrow` (or `Hand`
   if `IsHyperlink`); padding/content mirror via §10A. Disabled state drops `HitTestVisible` + `IsTabStop` and sets the
   disabled brushes.
+- **As built (2026-07, G5d) — orthogonal axes, not a flattened variant product.** `Button.Create(string label,
+  Action onClick, ButtonAppearance appearance = Standard, ControlSize size = Medium, string? glyph = null, Style?
+  style = null, bool isEnabled = true, TemplateParts? parts = null)` + one-line forwarders `Button.Accent/Standard/
+  Subtle/Outline`. Two **independent** axes: `ButtonAppearance { Standard, Accent, Subtle, Outline }` selects a
+  token ramp (`ButtonPalette` — StateBrush×2 + BorderRamp + Sizing; one 4-arm `Tok` switch; Subtle = WinUI
+  `SubtleFill*`, Outline = documented Fluent-2 extension on existing timings only) and `ControlSize { Small, Medium,
+  Large }` (shared enum, `ControlMetrics.For(size)` 3-arm switch — Padding/MinHeight/FontSize/Corner/IconSize). The
+  24-member `Style` record survives as the full-override escape hatch; a per-appearance/size override rides
+  `Button.StyleHook` (`Func<ButtonAppearance, ControlSize, Style?>?`, consulted first). `AccentStyleOverride`/
+  `StandardStyleOverride` are **deleted** (replaced by `StyleHook`). `IconButton`/`ToggleButton`/`RepeatButton`/
+  `HyperlinkButton` adopt `ControlSize`; a glyph-slot + icon+label overload landed. Gate: `gate.ctl.button.variants`.
 
 ### 5.2 Checkbox
 
@@ -449,6 +485,14 @@ control with an empty resolved `Name` or a missing required pattern is a CI fail
 - **Motion/cursor:** thumb has no implicit position animation while dragging (1:1 to pointer); keyboard steps animate
   via a short `Slider.StepMotion` token. Cursor over the thumb = `Hand`; over the track = `Arrow`.
 - **Invalid-props:** `Min > Max` or `Step <= 0` is a DEBUG assert.
+- **As built (2026-07, G5c) — ONE `Create`.** `Slider.Create(FloatSignal? value = null, Action<float>? onChange =
+  null, SliderOptions? options = null, float length = 200f, float thickness = 32f, Style? style = null, bool
+  isEnabled = true, TemplateParts? parts = null)`. The old `Create(float)`/`Bind`/`Ranged` trio is **deleted** — the
+  merged `SliderCore` is always the component path (Ranged's tooltip machinery + Bind's compositor-bound geometry;
+  the value-fill/thumb transform binds read `(value−min)/range`, so a drag stays compositor-only — `Rendered==false`,
+  gate 60 re-run WITH tooltip). Tooltip binds the caller's signal directly; open/close is per-gesture-edge.
+  `SliderOptions` = `{ Min, Max, Step, TickFrequency, TickPlacement, Vertical, Header, SmallChange, LargeChange,
+  IsThumbToolTipEnabled, ThumbToolTipValueConverter }`.
 
 ### 5.6 ProgressBar / ProgressRing
 
@@ -590,9 +634,68 @@ popup itself. Opening/closing reveals via a phase-7 `AnimTrack` (flyout fade/sca
 - **Motion/cursor/RTL:** fast fade-in motion-token; `FlipEnabled=false` is acceptable (tooltips may prefer
   truncation, layout §10B note); cursor unchanged.
 
+### 6.5 As built (2026-07, G5f) — the controlled Popup primitive, Flyout sugar, and the Toast host
+
+Thin public surfaces over the existing `OverlayManager` + `FlyoutPositioner` (flip/nudge/live-anchor-follow/focus
+save-restore come free). All shipped in `FluentGpu.Controls`.
+
+- **`Popup.Create(Element anchor, Func<Element> content, Signal<bool>? isOpen = null, Action<bool>? onOpenChanged =
+  null, FlyoutPlacement placement = BottomLeft, PopupOptions options = default)`** — controlled, same signal contract
+  as §4.6 (auto-materializes its own `isOpen` when none is passed; light-dismiss/Escape write the signal back).
+  Internal `PopupCore` = anchor `UseRef` + `Overlay.Service` + a `UseEffect` on `isOpen`. **`Popup.Attach(anchor, svc,
+  content, …)`** is the event-driven sugar. `PopupOptions` (`readonly record struct`) carries `FocusTrap`,
+  `DismissBehavior`, `Chrome`, and — the WS-MediaUI fix #4 — **`PinsAnchor`** (default true for anchored flyouts, so
+  an open flyout pins its anchor's auto-hide scope; exposed via `IOverlayService.IsAnchorPinned(scope)`), plus
+  `PreserveFocusOnOpen`/`ConstrainToRootBounds`/`SeamOffsetY`/`PassThrough`/`AnchorOffsetX`. The old demo `Popup.cs`
+  class + `GenericFlyout` are superseded (the surviving `GenericFlyout.FlyoutButton` is the label-flyout convenience).
+- **MenuFlyout safe-triangle:** `MenuSafeTriangle` (a point-in-aim-triangle test from the pointer through the submenu
+  edge) keeps a submenu open while the pointer travels diagonally toward it (the WinUI/macOS hover-intent behavior).
+- **Toast:** an **auto-mounted lane** in `OverlayHost` (a top-Z, hit-test-transparent `ZStack` slot that every app
+  already gets) + an optional explicit `ToastHost.Create(ToastHostOptions?)`. `Toast.Show(string message,
+  ToastOptions? options = null) → ToastHandle{ bool IsOpen; void Close(); }`. `ToastOptions` = `{ InfoBarSeverity
+  Severity, string? Title, float DurationMs = 5000 (0 = sticky), string? ActionLabel, Action? OnAction, bool Closable
+  = true, Func<Element>? CustomContent }`. `MaxVisible = 3` stacked FIFO; hover pauses auto-dismiss; Enter/Exit ride
+  declarative motion tokens; severity visuals are shared with InfoBar (`SeverityVisuals`) so they can't drift.
+  **Naming collision flagged:** `FluentGpu.Controls.Toast` (in-app) vs `FluentGpu.WindowsApi` `Toast` (OS
+  notification) — apps alias one. `ToastHostOptions` as-shipped is `{ ToastPlacement Placement, int MaxVisible }`; a
+  safe-area/edge-inset knob is a tracked follow-up (G7 ledger #9). Gates: `gate.popup.{controlled,anchor}`,
+  `gate.toast.{queue,autodismiss,hover-pause,severity}`.
+
+### 6.6 As built (2026-07, G5a) — `InteractionRecipe`, the one interactive-styling surface
+
+`FluentGpu.Controls/Interaction.cs`: `public readonly record struct InteractionRecipe { StateBrush Fill;
+StateBrush? Stroke; float StrokeWidth=1, HoverScale=1, PressScale=1, HoverOpacity=NaN, PressedOpacity=NaN, BrushMs=83;
+MotionTokenId Motion }` + the extension `BoxEl.Interactive(this BoxEl el, in InteractionRecipe r, bool isEnabled =
+true)`. **HYBRID mechanism:** brushes ride the `BoxEl` field ramp (Fill/HoverFill/PressedFill + border ramp, engine-
+serviced via the `HoverFade`/`PressFade`/`BrushFade` animation channels), geometry rides `While*` MotionTargets
+(WhileHover/WhilePressed + a press>focus>hover>rest resolver). Theme-live presets computed from `Tok`:
+`Interaction.Subtle`/`ListRow`/`Card`/`AccentGhost`. This is the **app-authoring** surface that replaced ~254
+hand-rolled hover/press sites in Wavee; **framework controls keep their WinUI-exact hand ramps**. Value struct,
+cold-path expansion, zero-alloc. Gates: `gate.ctl.recipe.{expand,presets}`.
+
 ---
 
 ## 7. Collection & container controls (over virtualization + UIA collection relations)
+
+### 7.0 As built (2026-07, G5h) — the `ItemsView` / `ListOptions` consolidation
+
+The list story collapsed to **one canonical host with an options record**. `ItemsView.Create(int itemCount,
+Func<int,Element> itemTemplate, RepeatLayout layout, ListOptions? options = null)` (+ a bound `CreateBound<T>`);
+the exotic per-layout call-shapes become `RepeatLayout` presets so `ItemsView` hosts every layout (and
+`RepeatLayout.Custom(IVirtualLayout)` stays the extensible seam). All the former ~20-arg tails fold into
+**`ListOptions`** (record): `SelectionMode`, `Selection` (`SelectionModel`), `IsItemInvokedEnabled`/`OnInvoked`,
+`OnChange`, `ItemText`, `IsItemEnabled`, `Overscan`, `Grow`, `Selector`, `ContainerFactory`, `KeyOf`, `Transition`
+(`ItemCollectionTransition` → FLIP), `PartDelta`, `CountSignal`, and the grouped sub-records `Scroll`/`Reorder`/
+`Entrance`. **Virtualization knobs (research adjustment #16):** `ContentType` (recycle-pool discriminator),
+`CacheExtentPx` (pre-realize extent), `RepaintBoundary` (per-item boundary). **Keep-alive slots
+(research adjustment #16a):** `KeepAlive` (predicate) + `KeepAliveCap = 8` (LRU) mark an off-window row as
+keep-alive-but-hidden so mid-edit `TextBox`/in-flight `UseResource` state survives scroll-out (via the existing
+`SetSubtreeParked` reuse). `ListOptions<T>` adds the typed `OnInvokedTyped`/`ItemTextTyped`/`IsItemEnabledTyped`.
+Options are unpacked to fields at factory time — the zero-alloc recycling hot path is untouched (`gate.list.
+{options-parity,bound-zero-alloc}`; `HotPhaseAllocBytes==0` while scrolling). **`Virtual.*` demotion decision:** the
+`Virtual.{List,Grid,Custom,VariableList,Measured,LinedFlow,GroupedList,SpanGrid,HorizontalGrid,ListBound,GridBound}`
+factories **stay PUBLIC as the advanced L2 substrate** (see §13 note); `ItemsView` + `RepeatLayout` presets are the
+recommended surface.
 
 ### 7.1 ListView / GridView (over virtualization)
 
@@ -828,6 +931,26 @@ the `_borderBrushes` side-table (scene-memory.md) + the `BoxEl.BorderBrush` DSL 
 `BoxEl.HoverScale`/`PressScale` composited-scale recorder behaviour — registered in their owning docs, referenced
 here. `VirtualListEl` stays in `Reconciler`.
 
+**As built (2026-07, G5) — authority-list additions (this assembly OWNS these):**
+- **`InteractionRecipe`** + presets (`Interaction.Subtle/ListRow/Card/AccentGhost`) + `BoxEl.Interactive(in recipe,
+  isEnabled)` (§6.6) — `Controls/Interaction.cs`. The `While*`/`StateBrush`/animation-channel primitives it composes
+  are owned by backdrop-effects-animation.md; the recipe *struct + presets + expansion* are owned here.
+- **`Toast`** (`Toast.Show`/`ToastOptions`/`ToastHandle`/`ToastHost`/`ToastHostOptions`, §6.5) + the **`Popup`
+  primitive** (`Popup.Create`/`Attach`/`PopupOptions.PinsAnchor`) + **`MenuSafeTriangle`** — `Controls/{Toast,Popup,
+  MenuFlyout}.cs` + the auto-mounted lane in `Controls/OverlayHost.cs`. The `OverlayManager`/`FlyoutPositioner`/
+  `IsAnchorPinned` seam is owned by input-a11y.md; the public thin controls are owned here.
+- **The router** — `RouteDef`/`RouteRegistry`/`[Route]` + `PageHost.Create(nav, routes)` v2 (KeepAlive parking +
+  transitions) + `NavigationView` accepting a `Navigator` — `Controls/{RouteRegistry,Navigation}.cs`; the
+  `RouteTableGenerator` (FGRT001-003) is owned by dsl-aot.md (source-gen), the registry/runtime API is owned here.
+- **`ControlSize { Small, Medium, Large }`** + `ControlMetrics.For(size)` + `ButtonAppearance` + `Button.StyleHook`
+  (§5.1) — the shared cross-control sizing/appearance axes (`Controls/ControlSize.cs` + `Button.cs`).
+- **The control-kit localization keys** — `Loc.Bind(key) → Prop<string>` at the kit's user-facing strings, the ~41
+  neutral keys registered from `Controls/assets/loc/en-US.json` via `RegisterNeutral` (a generated module
+  initializer, gated by `FluentGpuLocRegisterNeutral`), `PseudoLocalizer` (`qps-ploc`), and the `FGRP008`
+  hardcoded-kit-string analyzer (armed only in `FluentGpu.Controls`, opt-out `// loc-allow`). The loc *runtime*
+  (`Localization`/`Loc`/`UseLocale`) + the `LocalizationKeysGenerator` are owned by the engine + dsl-aot.md; the
+  *kit's key set + activation* are owned here.
+
 **Explicitly NOT owned here (referenced):** SceneStore columns + opcode registration incl. `DrawGradientStroke` +
 `_borderBrushes` + `InteractionInfo.Role` (scene-memory.md / input-a11y.md); DrawList
 opcode shapes `DrawGradientStrokeCmd`/`DrawFocusRingCmd`/`DrawSelectionRectCmd`/`DrawScrimCmd`/`FillRoundRectCmd` (gpu-renderer.md §3.1/§3.1a/§3.6);
@@ -858,7 +981,12 @@ demanded, so no control bakes in a display-only / no-arena / direction-blind ass
 
 ## Contradictions
 
-None. This doc introduces no new cross-cutting contract and overrides nothing in SPEC-INDEX.md §2. It is a pure
+**Updated (2026-07, G5).** The control-kit rework added artifacts that ARE cross-cutting and are now **registered in
+SPEC-INDEX.md §2** (the control-kit row + the props-channel row): `InteractionRecipe`, the `Popup`/`Toast` public
+surfaces + `MenuSafeTriangle`, the router (`RouteDef`/`RouteRegistry`/`[Route]`), the shared `ControlSize` axis, and
+the kit localization keys. Each is owned here (§13) and cross-referenced to its engine seam (overlay manager,
+animation channels, source generators, loc runtime) — no engine primitive is minted here; the additions are
+composition + a few control-kit-scoped records/attributes. Otherwise: this doc is a pure
 consumer of the seams the other subsystem docs own; where it references a type (`SelectionState`, `OverlayPlacement`,
 `UseVirtual`, `DrawSelectionRectCmd`, `AnimTrack` spring mode, `PartToken`→`BrushHandle`, the UIA pattern set), it
 uses the owning doc's canonical shape unchanged. The only *requested* additions are two pure-composition hooks

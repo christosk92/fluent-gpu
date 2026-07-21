@@ -32,7 +32,7 @@ public sealed class ToggleSplitButton : Component
     public Element? PrimaryContent;
     public Signal<bool> IsChecked = new(false);
     public bool IsEnabled = true;
-    public Action<bool>? OnToggle;
+    public Action<bool>? OnChange;
     public IReadOnlyList<MenuFlyoutItem> Items = [];
     public bool OpenOnMount;   // deterministic visual-shot hook: open the real popup after first mount
 
@@ -46,11 +46,13 @@ public sealed class ToggleSplitButton : Component
     const float ChevronGlyphSize = 8f;      // FontIconSource FallbackIconSource FontSize = 8
     static readonly Edges4 Padding = new(11, 6, 11, 7);   // SplitButtonPadding "11,6,11,7"
 
-    public static Element Create(string label, Signal<bool> isChecked, IReadOnlyList<MenuFlyoutItem> items, Action<bool>? onToggle = null, string? glyph = null, bool isEnabled = true)
-        => Embed.Comp(() => new ToggleSplitButton { Label = label, IsChecked = isChecked, Items = items, OnToggle = onToggle, Glyph = glyph, IsEnabled = isEnabled });
+    public static Element Create(string label, IReadOnlyList<MenuFlyoutItem> items, Signal<bool>? isChecked = null, Action<bool>? onChange = null, string? glyph = null, bool isEnabled = true)
+        => Embed.Comp(() => new ToggleSplitButton { Label = label, IsChecked = isChecked ?? new(false), Items = items, OnChange = onChange, Glyph = glyph, IsEnabled = isEnabled });
 
-    public static Element Create(Element primaryContent, Signal<bool> isChecked, IReadOnlyList<MenuFlyoutItem> items, Action<bool>? onToggle = null, bool isEnabled = true)
-        => Embed.Comp(() => new ToggleSplitButton { PrimaryContent = primaryContent, IsChecked = isChecked, Items = items, OnToggle = onToggle, IsEnabled = isEnabled });
+    // PrimaryContent is a deliberate mount-time slot ([MountOnceContent]; see SplitButton) — static custom content,
+    // keyed/remounted or signal-driven for the dynamic case.
+    public static Element Create([MountOnceContent] Element primaryContent, IReadOnlyList<MenuFlyoutItem> items, Signal<bool>? isChecked = null, Action<bool>? onChange = null, bool isEnabled = true)
+        => Embed.Comp(() => new ToggleSplitButton { PrimaryContent = primaryContent, IsChecked = isChecked ?? new(false), Items = items, OnChange = onChange, IsEnabled = isEnabled });
 
     public override Element Render()
     {
@@ -84,7 +86,7 @@ public sealed class ToggleSplitButton : Component
             ToggleMenu();
         }, OpenOnMount);
         // ToggleSplitButton::OnClickPrimary → Toggle() → IsChecked(!IsChecked()), then base raises the Click event.
-        void Flip() { bool next = !on; IsChecked.Value = next; OnToggle?.Invoke(next); }
+        void Flip() { bool next = !on; IsChecked.Value = next; OnChange?.Invoke(next); }
 
         // ── Per-state colour matrix (SplitButton.xaml CommonStates; checked rows are ToggleSplitButton's). The engine eases
         //    pointer (hover/press) states from these resting tokens; the checked/disabled axis re-renders via the signal.

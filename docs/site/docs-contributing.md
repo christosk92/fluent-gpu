@@ -107,8 +107,8 @@ blunt: *open the file and copy the real names and signatures. If unsure, read mo
 Concretely, before you write a sample:
 
 - **Open the file.** Mirror exact method names, parameter names, and overload shapes. The signatures are stable enough to
-  quote: for example `FluentApp.Run(Func<Component> root, string title = "FluentGpu", int width = 800, int height = 600,
-  bool mica = true, …)` is the real entry point (`src/FluentGpu.WindowsApp/FluentApp.cs`), and
+  quote: for example `FluentApp.Run(Func<Component> root, AppOptions? options = null)` is the real entry point
+  (`src/FluentGpu.WindowsApp/FluentApp.cs`), and
   `ControlExample.Build(string title, Element example, string? description = null, …, string? code = null, …)` is the
   real gallery helper (`src/FluentGpu.WindowsApp/ControlExample.cs`).
 - **Use the real authoring imports.** The cheat-sheet imports are `using static FluentGpu.Dsl.Ui;`, `using
@@ -117,7 +117,7 @@ Concretely, before you write a sample:
   `FluentGpu.Signals` namespace even though their files live under the `FluentGpu.Engine` assembly's `Foundation/Signals/`
   folder.)
 - **Respect the signals mental model in the sample itself.** A bound thunk reads `.Value` (it subscribes), not `.Peek()`;
-  `ReactiveComponent.Setup()` shows a changing value through a bound prop (`Text = sig`, or `Text = Prop.Of(() => …)`),
+  a run-once `Component.Render()` shows a changing value through a bound prop (`Text = sig`, or `Text = Prop.Of(() => …)`),
   never `Ui.Text(sig.Value)`; parent→child data flows through signals or context, never constructor args. A sample that
   violates these isn't just stylistically off — it's wrong, and the [Pitfalls](../guide/pitfalls.md) page exists because
   these are the mistakes that actually ship.

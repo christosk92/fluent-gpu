@@ -61,14 +61,14 @@ sealed class EpisodeList : Component
 
         children.Add(WaveeType.RailHeader(Loc.Get(Strings.Podcast.Episodes)));
         if (view.Count == 0)
-            children.Add(new BoxEl { Padding = new Edges4(WaveeSpace.L, WaveeSpace.XL, WaveeSpace.L, WaveeSpace.XL),
+            children.Add(new BoxEl { Padding = new Edges4(Spacing.L, Spacing.XL, Spacing.L, Spacing.XL),
                 Children = [new TextEl(Loc.Get(Strings.Podcast.NoEpisodes)) { Size = 14f, Color = Tok.TextTertiary }] });
         else foreach (int oi in view) { int idx = oi; children.Add(EpisodeRow(eps[oi], () => _h.Play(idx))); }
 
         var body = new BoxEl
         {
-            Direction = 1, Gap = WaveeSpace.M,
-            Padding = new Edges4(WaveeSpace.L, WaveeSpace.M, WaveeSpace.L, PlayerDock.Reserve + WaveeSpace.XXL),
+            Direction = 1, Gap = Spacing.M,
+            Padding = new Edges4(Spacing.L, Spacing.M, Spacing.L, PlayerDock.Reserve + Spacing.XXL),
             Children = children.ToArray(),
         };
         return ScrollView(body) with { Grow = 1f };
@@ -76,12 +76,12 @@ sealed class EpisodeList : Component
 
     Element Toolbar(int status, int order) => new BoxEl
     {
-        Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, Margin = new Edges4(0f, 0f, 0f, WaveeSpace.XS),
+        Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M, Margin = new Edges4(0f, 0f, 0f, Spacing.XS),
         Children =
         [
-            SelectorBar.Create(StatusLabels(), status, i => _status.Value = i),
+            SelectorBar.Create(StatusLabels(), _status),
             new BoxEl { Grow = 1f },
-            SelectorBar.Create(OrderLabels(), order, i => _order.Value = i),
+            SelectorBar.Create(OrderLabels(), _order),
         ],
     };
 
@@ -94,15 +94,15 @@ sealed class EpisodeList : Component
 
     static Element ResumeBanner(Episode e, Action resume) => new BoxEl
     {
-        Direction = 1, Gap = WaveeSpace.S,
+        Direction = 1, Gap = Spacing.S,
         Children =
         [
             WaveeType.RailHeader(Loc.Get(Strings.Podcast.ListenNext)),
             new BoxEl
             {
-                Direction = 0, Gap = WaveeSpace.L, AlignItems = FlexAlign.Center,
-                Padding = new Edges4(WaveeSpace.M, WaveeSpace.M, WaveeSpace.L, WaveeSpace.M),
-                Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardSecondary,
+                Direction = 0, Gap = Spacing.L, AlignItems = FlexAlign.Center,
+                Padding = new Edges4(Spacing.M, Spacing.M, Spacing.L, Spacing.M),
+                Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillCardSecondary,
                 BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault, ClipToBounds = true,
                 Children =
                 [
@@ -110,7 +110,7 @@ sealed class EpisodeList : Component
                         Children = [Surfaces.Artwork(e.Image, e.Id.GetHashCode() & 0x7fffffff, 72f, 72f, 8f)] },
                     new BoxEl
                     {
-                        Direction = 1, Grow = 1f, Basis = 0f, Gap = WaveeSpace.XS,
+                        Direction = 1, Grow = 1f, Basis = 0f, Gap = Spacing.XS,
                         Children =
                         [
                             new TextEl(Loc.Get(Strings.Podcast.ContinueListening)) { Size = 10f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 80f },
@@ -141,15 +141,15 @@ sealed class EpisodeList : Component
         }
         return new BoxEl
         {
-            Direction = 1, Gap = WaveeSpace.S,
-            Padding = new Edges4(WaveeSpace.M, WaveeSpace.M, WaveeSpace.M, WaveeSpace.M),
-            Corners = CornerRadius4.All(WaveeRadius.Card), HoverFill = Tok.FillSubtleSecondary,
+            Direction = 1, Gap = Spacing.S,
+            Padding = new Edges4(Spacing.M, Spacing.M, Spacing.M, Spacing.M),
+            Corners = CornerRadius4.All(Radii.Card), HoverFill = Tok.FillSubtleSecondary,
             BorderWidth = 1f, BorderColor = Tok.StrokeDividerDefault,
             Children =
             [
                 new BoxEl
                 {
-                    Direction = 0, Gap = WaveeSpace.L, AlignItems = FlexAlign.Center,
+                    Direction = 0, Gap = Spacing.L, AlignItems = FlexAlign.Center,
                     Children =
                     [
                         new BoxEl { Width = 56f, Height = 56f, Shrink = 0f, Corners = CornerRadius4.All(8f), ClipToBounds = true,
@@ -166,7 +166,7 @@ sealed class EpisodeList : Component
                         PlayCircle(play),
                     ],
                 },
-                new BoxEl { Direction = 0, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center, Children = meta.ToArray() },
+                new BoxEl { Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, Children = meta.ToArray() },
                 pct > 0.01f ? ProgressBar(pct) : new BoxEl { Height = 0f },
             ],
         };
@@ -194,8 +194,8 @@ sealed class EpisodeList : Component
 
     static Element ResumePill(Action resume) => new BoxEl
     {
-        Direction = 0, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center, Shrink = 0f,
-        Corners = CornerRadius4.All(18f), Padding = new Edges4(WaveeSpace.L, 8f, WaveeSpace.L, 8f),
+        Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, Shrink = 0f,
+        Corners = CornerRadius4.All(18f), Padding = new Edges4(Spacing.L, 8f, Spacing.L, 8f),
         Fill = Tok.AccentDefault, HoverScale = 1.04f, PressScale = 0.96f, OnClick = resume,
         Children =
         [

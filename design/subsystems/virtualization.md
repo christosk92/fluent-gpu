@@ -182,7 +182,7 @@ UseVirtual(itemCount, renderItem, getItem, keyOf, spec, deps):
 
     // datasource version: if deps changed (itemCount, source identity, spec), bump st.DataVersion,
     // mark VirtualRangeDirty (forces a re-realize even without a scroll boundary cross).
-    if (!DepsEqual(st.Deps, deps)) { st.DataVersion++; backend.MarkDirty(host, VirtualRangeDirty); st.Deps.CopyFrom(deps); }
+    if (!DepDeps.Equals(st.Deps, deps)) { st.DataVersion++; backend.MarkDirty(host, VirtualRangeDirty); st.Deps.CopyFrom(deps); }
 
     // Compute the target window from the committed previous-frame ScrollOffset + viewport + overscan.
     // Uniform: O(1) arithmetic (first = floor(off/extent)-overscan ...). Variable: ExtentTable.RangeForOffset

@@ -1,5 +1,6 @@
 using FluentGpu.Foundation;
 using FluentGpu.Dsl;
+using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
 
@@ -94,9 +95,13 @@ public static partial class RadioButton
         OnRingDisabled = Tok.AccentDisabled, DotDisabled = Tok.TextOnAccentPrimary,
     };
 
-    public static BoxEl Create(string label, bool selected, Action onSelect, Style? style = null, bool isEnabled = true,
+    /// <summary>THE documented exception to the controlled-signal contract: a leaf radio takes a plain
+    /// <paramref name="isSelected"/> bool (the owning group owns the shared selection state — a
+    /// <see cref="Group"/> / <see cref="RadioButtons"/> <see cref="Signal{T}"/> of the selected index), and an optional
+    /// <paramref name="onChange"/> action fired on click. It has no self-state to own.</summary>
+    public static BoxEl Create(string label, bool isSelected, Action? onChange = null, Style? style = null, bool isEnabled = true,
                                TemplateParts? parts = null)
-        => Build(label, null, selected, onSelect, style ?? DefaultStyle, isEnabled,
+        => Build(label, null, isSelected, onChange ?? (static () => { }), style ?? DefaultStyle, isEnabled,
                  focusable: true, onKeyDown: null, onRealized: null, parts: parts);
 
     /// <summary>
@@ -232,16 +237,20 @@ public static partial class RadioButton
         return root;
     }
 
-    /// <summary>A mutually-exclusive group: renders one radio per option; clicking option i invokes <paramref name="onSelect"/>(i).
-    /// Ad-hoc (every item is a tab stop, no arrow roving) — prefer <see cref="RadioButtons"/> for the WinUI container semantics.</summary>
-    public static BoxEl Group(IReadOnlyList<string> options, int selected, Action<int> onSelect, bool horizontal = false, Style? style = null, bool isEnabled = true,
+    /// <summary>A mutually-exclusive group: the shared selection is a caller <see cref="Signal{T}"/> of the selected
+    /// index (the group owns the state — the leaf radios are the documented bool exception). Clicking option i WRITES
+    /// <paramref name="selectedIndex"/> then fires <paramref name="onChange"/>(i); a programmatic write re-skins with no
+    /// onChange echo. Ad-hoc (every item is a tab stop, no arrow roving) — prefer <see cref="RadioButtons"/> for the
+    /// WinUI container semantics.</summary>
+    public static BoxEl Group(IReadOnlyList<string> options, Signal<int> selectedIndex, Action<int>? onChange = null, bool horizontal = false, Style? style = null, bool isEnabled = true,
                               TemplateParts? parts = null)
     {
+        int selected = selectedIndex.Value;   // subscribes the calling component → re-skins on selection change
         var children = new Element[options.Count];
         for (int i = 0; i < options.Count; i++)
         {
             int idx = i;
-            children[i] = Create(options[i], i == selected, () => onSelect(idx), style, isEnabled, parts);
+            children[i] = Create(options[i], i == selected, () => { selectedIndex.Value = idx; onChange?.Invoke(idx); }, style, isEnabled, parts);
         }
         return new BoxEl { Direction = horizontal ? (byte)0 : (byte)1, Gap = horizontal ? 16f : 4f, Children = children };
     }

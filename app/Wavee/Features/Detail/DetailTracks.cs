@@ -203,7 +203,7 @@ sealed class TrackList : Component
     static Element FilterEmpty(bool noTracks) => new BoxEl
     {
         Grow = 1f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Padding = new Edges4(WaveeSpace.L, WaveeSpace.XXL, WaveeSpace.L, WaveeSpace.XXL),
+        Padding = new Edges4(Spacing.L, Spacing.XXL, Spacing.L, Spacing.XXL),
         Children = [new TextEl(noTracks ? Loc.Get(Strings.Detail.Empty.NoTracks) : Loc.Get(Strings.Detail.Empty.NoMatch)) { Size = 14f, Color = Tok.TextTertiary }],
     };
 
@@ -288,7 +288,7 @@ sealed class TrackList : Component
             rowsSnapshot,
             snapshot => View(snapshot).Length,
             (snapshot, displayIndex) => TrackAt(snapshot, displayIndex),
-            EmptyTrack));
+            EmptyTrack), DepKey.Empty);
         _rowsSnapshot = rowsSnapshot;
         _rowItems = rowItems;
 
@@ -413,11 +413,11 @@ sealed class TrackList : Component
         int listTotal = recsOn ? visible + 1 + recCount : visible;   // +1 = the always-present "Recommended" header row
         UseLayoutEffect(() =>
         {
-            if (_visibleCount.Peek() != visible) _visibleCount.Value = visible;
-            if (_listCount.Peek() != listTotal) _listCount.Value = listTotal;
+            _visibleCount.Value = visible;
+            _listCount.Value = listTotal;
             int verticalCount = VerticalTrackStart + Math.Max(visible, 1);
-            if (_verticalItemCount.Peek() != verticalCount) _verticalItemCount.Value = verticalCount;
-        }, visible, listTotal);
+            _verticalItemCount.Value = verticalCount;
+        }, (visible, listTotal));
 
         Element RealList()
         {
@@ -436,23 +436,21 @@ sealed class TrackList : Component
                     listTotal,
                     scope => Embed.Comp(() => new RowOrRecContent(this, scope, set, tracks, rowH, narrateRemount)),
                     RepeatLayout.Stack(rowH),
-                    selectionMode: _cfg.Selection,
-                    selection: _selection,
-                    isItemInvokedEnabled: true,
-                    itemInvoked: i => { if (rowItems.TryPeek(i, out _)) PlayRow(i); },
-                    isItemEnabled: i => rowItems.TryPeek(i, out _),   // only track rows are roving-focus / selection targets
-                    overscan: TrackOverscanItems,
-                    grow: _cfg.HasTrailing ? 0f : 1f,
-                    autoEdgeFade: !_cfg.HasTrailing,
-                    staggerColdRealize: staggerCold,
-                    scrollKey: _route.Value.Name + ":r" + _resetEpoch.Value,
-                    controller: _listCtl,
-                    itemDisplacement: static _ => (0f, 0f),
-                    displacementVersion: _dispVer,
-                    itemFlipFrom: i => _flip.TryGetValue(i, out var f) ? f : null,
-                    itemFadeFrom: i => _fade.TryGetValue(i, out var f) ? f : null,
-                    itemCountSignal: _listCount,
-                    onScrollGeometryChanged: SwipeCloseObserver());
+                    new ListOptions
+                    {
+                        SelectionMode = _cfg.Selection,
+                        Selection = _selection,
+                        IsItemInvokedEnabled = true,
+                        OnInvoked = i => { if (rowItems.TryPeek(i, out _)) PlayRow(i); },
+                        IsItemEnabled = i => rowItems.TryPeek(i, out _),   // only track rows are roving-focus / selection targets
+                        Overscan = TrackOverscanItems,
+                        Grow = _cfg.HasTrailing ? 0f : 1f,
+                        Controller = _listCtl,
+                        CountSignal = _listCount,
+                        Scroll = new ScrollOptions { ScrollKey = _route.Value.Name + ":r" + _resetEpoch.Value, AutoEdgeFade = !_cfg.HasTrailing, OnScrollGeometryChanged = SwipeCloseObserver() },
+                        Reorder = new ReorderOptions { ItemDisplacement = static _ => (0f, 0f), DisplacementVersion = _dispVer },
+                        Entrance = new EntranceOptions { StaggerColdRealize = staggerCold, ItemFlipFrom = i => _flip.TryGetValue(i, out var f) ? f : null, ItemFadeFrom = i => _fade.TryGetValue(i, out var f) ? f : null },
+                    });
             }
             return visible == 0
             ? FilterEmpty(_tracks.Count == 0)     // empty playlist, or a filter that matched nothing
@@ -465,42 +463,50 @@ sealed class TrackList : Component
                 rowItems,
                 scope => WrapRowSwipe(scope.Row, BoundRowSkin(scope.Row, BoundRow(scope.Row, scope.Item, set, tracks, rowH, 0), rowH, narrateRemount, 0), 0, scope.Item),
                 RepeatLayout.Stack(rowH),
-                selectionMode: _cfg.Selection,
-                selection: _selection,                // external → selection survives the tier remount
-                isItemInvokedEnabled: true,
-                itemInvoked: (i, _) => PlayRow(i),   // DoubleTap / Enter → same as a row click (visible-order play + now-playing toggle)
-                overscan: TrackOverscanItems,
-                grow: _cfg.HasTrailing ? 0f : 1f,
-                // Alpha-mask edge fade: the page floats over a gradient wash (no opaque plate), so the surface-colour
-                // EdgeCues fade self-skips — this feathers the rows' own alpha at the overflowing top/bottom instead.
-                // Only when the ItemsView is itself the scroller (playlist/liked); the album path fades its outer scroll.
-                autoEdgeFade: !_cfg.HasTrailing,
-                // Realize the full oversized row window immediately. Bound slots are persistent; exposing partial
-                // materialization during scroll reads as cut-off rows under the fixed chrome.
-                staggerColdRealize: staggerCold,
-                // Scroll-position restoration keyed by the detail content (route): navigate away from a 10k-track
-                // playlist and back and the viewport seeds the saved row BEFORE its first realize — no scroll-to-top
-                // flash, no jump (the engine scopes this per tab via the KeepAlive slot). A different album starts at
-                // top. The reset epoch folds in so a curated re-cut starts a FRESH scroll state (top) instead of
-                // restoring the pre-reset offset into all-new content.
-                scrollKey: _route.Value.Name + ":r" + _resetEpoch.Value,
-                // §4.6 choreography: the controller reads/adjusts the scroll for anchoring; the displacement seed
-                // (target always rest) starts each row from its FLIP residual and eases added rows' opacity in.
-                controller: _listCtl,
-                itemDisplacement: static _ => (0f, 0f),
-                displacementVersion: _dispVer,
-                itemFlipFrom: i => _flip.TryGetValue(i, out var f) ? f : null,
-                itemFadeFrom: i => _fade.TryGetValue(i, out var f) ? f : null,
-                onScrollGeometryChanged: SwipeCloseObserver());
+                new ListOptions<Track>
+                {
+                    SelectionMode = _cfg.Selection,
+                    Selection = _selection,                // external → selection survives the tier remount
+                    IsItemInvokedEnabled = true,
+                    OnInvokedTyped = (i, _) => PlayRow(i),   // DoubleTap / Enter → same as a row click (visible-order play + now-playing toggle)
+                    Overscan = TrackOverscanItems,
+                    Grow = _cfg.HasTrailing ? 0f : 1f,
+                    // §4.6 choreography: the controller reads/adjusts the scroll for anchoring; the displacement seed
+                    // (target always rest) starts each row from its FLIP residual and eases added rows' opacity in.
+                    Controller = _listCtl,
+                    Scroll = new ScrollOptions
+                    {
+                        // Alpha-mask edge fade: the page floats over a gradient wash (no opaque plate), so the surface-colour
+                        // EdgeCues fade self-skips — this feathers the rows' own alpha at the overflowing top/bottom instead.
+                        // Only when the ItemsView is itself the scroller (playlist/liked); the album path fades its outer scroll.
+                        AutoEdgeFade = !_cfg.HasTrailing,
+                        // Scroll-position restoration keyed by the detail content (route): navigate away from a 10k-track
+                        // playlist and back and the viewport seeds the saved row BEFORE its first realize — no scroll-to-top
+                        // flash, no jump (the engine scopes this per tab via the KeepAlive slot). A different album starts at
+                        // top. The reset epoch folds in so a curated re-cut starts a FRESH scroll state (top) instead of
+                        // restoring the pre-reset offset into all-new content.
+                        ScrollKey = _route.Value.Name + ":r" + _resetEpoch.Value,
+                        OnScrollGeometryChanged = SwipeCloseObserver(),
+                    },
+                    Reorder = new ReorderOptions { ItemDisplacement = static _ => (0f, 0f), DisplacementVersion = _dispVer },
+                    Entrance = new EntranceOptions
+                    {
+                        // Realize the full oversized row window immediately. Bound slots are persistent; exposing partial
+                        // materialization during scroll reads as cut-off rows under the fixed chrome.
+                        StaggerColdRealize = staggerCold,
+                        ItemFlipFrom = i => _flip.TryGetValue(i, out var f) ? f : null,
+                        ItemFadeFrom = i => _fade.TryGetValue(i, out var f) ? f : null,
+                    },
+                });
         }
 
         // The tracks stream in via the engine's skeleton boundary: while the model is Pending it shows shimmer rows the
         // engine DERIVES from the real Row(EmptyTrack) template (ONE definition — no hand-written shimmer, no drift); on
         // Ready it reveals the real virtualized list.
-        // SkelReveal.None: the ItemsView owns its entrance (per-row ItemCollectionTransition adds); the engine lingers
-        // the shimmer across that entrance so the gray rows cross-dissolve INTO the real rows at the same positions —
-        // no shimmer→empty→rows gap, and no exit-timing to hand-tune here.
-        Element list = Skel.Region(_full, () => RowsShimmer(set, tracks, rowH), _ => RealList(), reveal: SkelReveal.None, smoothResize: false);
+        // StaggerRows follows the ItemsView's virtual viewport to the currently realized row roots. That gives albums,
+        // playlists, singles and liked songs one shared per-visible-row blur-rise while leaving cold realization and
+        // recycling untouched; newly realized overscan/scroll rows do not replay the navigation reveal.
+        Element list = Skel.Region(_full, () => RowsShimmer(set, tracks, rowH), _ => RealList(), reveal: SkelReveal.StaggerRows, smoothResize: false);
 
         // Key the list by tier + density + filter → any of those REMOUNTS it (a clean, shape-stable slot template with
         // the right column set / row height / filtered window). Sort is NOT in the key — each bound row re-skins itself
@@ -642,24 +648,22 @@ sealed class TrackList : Component
             itemCount,
             scope => Embed.Comp(() => new VerticalItemContent(this, scope, set, tracks, rowH, labeled, tier, narrateRemount)),
             RepeatLayout.Measured(layout),
-            selectionMode: visible > 0 ? _cfg.Selection : ItemsSelectionMode.None,
-            selection: _selection,
-            isItemInvokedEnabled: true,
-            itemInvoked: i => { if (_rowItems!.TryPeek(i, out _, VerticalTrackStart)) PlayRow(DisplayOf(i)); },
-            itemText: i => _rowItems!.TryPeek(i, out var item, VerticalTrackStart) ? item.Title : "",
-            isItemEnabled: i => _rowItems!.TryPeek(i, out _, VerticalTrackStart),
-            overscan: TrackOverscanItems,
-            grow: _cfg.HasTrailing ? 0f : 1f,
-            autoEdgeFade: !_cfg.HasTrailing,
-            staggerColdRealize: staggerCold,
-            scrollKey: _route.Value.Name + ":r" + _resetEpoch.Value,
-            controller: _listCtl,
-            itemDisplacement: static _ => (0f, 0f),
-            displacementVersion: _dispVer,
-            itemFlipFrom: FlipFrom,
-            itemFadeFrom: FadeFrom,
-            onScrollGeometryChanged: _cfg.HasTrailing ? null : VerticalScrollObserver(),
-            itemCountSignal: _verticalItemCount);
+            new ListOptions
+            {
+                SelectionMode = visible > 0 ? _cfg.Selection : ItemsSelectionMode.None,
+                Selection = _selection,
+                IsItemInvokedEnabled = true,
+                OnInvoked = i => { if (_rowItems!.TryPeek(i, out _, VerticalTrackStart)) PlayRow(DisplayOf(i)); },
+                ItemText = i => _rowItems!.TryPeek(i, out var item, VerticalTrackStart) ? item.Title : "",
+                IsItemEnabled = i => _rowItems!.TryPeek(i, out _, VerticalTrackStart),
+                Overscan = TrackOverscanItems,
+                Grow = _cfg.HasTrailing ? 0f : 1f,
+                Controller = _listCtl,
+                CountSignal = _verticalItemCount,
+                Scroll = new ScrollOptions { ScrollKey = _route.Value.Name + ":r" + _resetEpoch.Value, AutoEdgeFade = !_cfg.HasTrailing, OnScrollGeometryChanged = _cfg.HasTrailing ? null : VerticalScrollObserver() },
+                Reorder = new ReorderOptions { ItemDisplacement = static _ => (0f, 0f), DisplacementVersion = _dispVer },
+                Entrance = new EntranceOptions { StaggerColdRealize = staggerCold, ItemFlipFrom = FlipFrom, ItemFadeFrom = FadeFrom },
+            });
     }
 
     // ── §4.6 — the choreography pass. Runs INSIDE the render that commits the new order (the ItemsView child renders
@@ -720,13 +724,13 @@ sealed class TrackList : Component
 
     void SetVerticalPinned(bool value)
     {
-        if (_verticalHeaderPinned is { } pinned && pinned.Peek() != value) pinned.Value = value;
+        if (_verticalHeaderPinned is { } pinned) pinned.Value = value;
     }
 
     void ResetVerticalHeaderScroll()
     {
-        if (_verticalScrollOffset.Peek() != 0f) _verticalScrollOffset.Value = 0f;
-        if (_verticalHeaderHeight.Peek() != 0f) _verticalHeaderHeight.Value = 0f;
+        _verticalScrollOffset.Value = 0f;
+        _verticalHeaderHeight.Value = 0f;
         SetVerticalPinned(false);
     }
 
@@ -859,7 +863,7 @@ sealed class TrackList : Component
     Element Chrome(ColumnSet set, TrackSize[] tracks, TrackSort sort, bool labeled, int tier, bool checkInset,
                    Element? lead = null, float padX = PadX, float? padRight = null, bool pinned = false) => new BoxEl
     {
-        Key = "chrome", Direction = 1, Padding = new Edges4(padX, WaveeSpace.S, padRight ?? padX, 0f),
+        Key = "chrome", Direction = 1, Padding = new Edges4(padX, Spacing.S, padRight ?? padX, 0f),
         Children = _showToolbar ? [Toolbar(labeled, tier, lead, pinned), Header(set, tracks, sort, checkInset)] : [Header(set, tracks, sort, checkInset)],
     };
 
@@ -872,7 +876,7 @@ sealed class TrackList : Component
         var kids = new List<Element>(4)
         {
             Surfaces.Artwork(_model.Cover, _model.ContextUri?.GetHashCode() ?? 0,
-                             32f, 32f, WaveeRadius.Control),
+                             32f, 32f, Radii.Control),
             new BoxEl
             {
                 Width = 32f, Height = 32f, Shrink = 0f, Corners = CornerRadius4.All(16f),
@@ -880,7 +884,7 @@ sealed class TrackList : Component
                 AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                 OnClick = _h.PlayAll, HoverScale = 1.06f, PressScale = 0.94f,
                 Cursor = CursorId.Hand, Role = AutomationRole.Button,
-                Children = [Icon(Icons.Play, 13f, WaveePalette.OnAccent(_h.Accent))],
+                Children = [Icon(Icons.Play, 13f, ColorContrast.PickContrast(_h.Accent))],
             },
             new TextEl(_model.Title)
             {
@@ -892,7 +896,7 @@ sealed class TrackList : Component
         // chrome reached by scrolling up).
         return new BoxEl
         {
-            Direction = 0, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center, Shrink = 1f, MinWidth = 0f,
+            Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, Shrink = 1f, MinWidth = 0f,
             Children = kids.ToArray(),
         };
     }
@@ -950,8 +954,8 @@ sealed class TrackList : Component
         return new BoxEl
         {
             Key = labeled ? "cmdbar:lbl" : "cmdbar:icon",
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.XS,
-            Margin = new Edges4(0f, 0f, 0f, WaveeSpace.XS),
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.XS,
+            Margin = new Edges4(0f, 0f, 0f, Spacing.XS),
             Children = [left, new BoxEl { Grow = 1f }, search],
         };
     }
@@ -971,11 +975,10 @@ sealed class TrackList : Component
     static Element ToolBtn(string glyph) => new BoxEl
     {
         Width = 32f, Height = 32f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Corners = CornerRadius4.All(WaveeRadius.Control),
-        HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+        Corners = CornerRadius4.All(Radii.Control),
         OnClick = () => { /* TODO: search-in-list / sort / view (visual stubs in v1) */ },
         Children = [Icon(glyph, 14f, Tok.TextSecondary)],
-    };
+    }.Interactive(Interaction.Subtle);
 
     Element Header(ColumnSet set, TrackSize[] tracks, TrackSort sort, bool checkInset)
     {
@@ -1019,7 +1022,7 @@ sealed class TrackList : Component
     }
 
     // The sort-direction caret (Segoe Fluent CaretSolid — chosen over the chevrons).
-    internal static readonly string CaretGlyph = Mdl.CaretSolidUp;   // track-list sort-direction caret (SortCaret rotates it 180° for descending)
+    internal static readonly string CaretGlyph = Icons.CaretSolidUp;   // track-list sort-direction caret (SortCaret rotates it 180° for descending)
 
     // Does this header own the active sort? The Title header also owns Artist (the title subline has no column of its
     // own), so it stays lit — and reads "Artist" — while the list is sorted by artist.
@@ -1051,8 +1054,8 @@ sealed class TrackList : Component
             : [content, Caret()];
         return new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.Center, Justify = justify, Gap = WaveeSpace.XS,
-            Corners = CornerRadius4.All(WaveeRadius.Control), HoverFill = Tok.FillSubtleSecondary,
+            Direction = 0, AlignItems = FlexAlign.Center, Justify = justify, Gap = Spacing.XS,
+            Corners = CornerRadius4.All(Radii.Control), HoverFill = Tok.FillSubtleSecondary,
             OnClick = () => _h.SetSort(NextSort(sort, col)),
             Children = kids,
         };
@@ -1338,7 +1341,7 @@ sealed class TrackList : Component
             return new BoxEl
             {
                 Key = "rec:header-row",
-                Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, MinHeight = _rowH,
+                Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M, MinHeight = _rowH,
                 Padding = new Edges4(TrackRow.PadX, 0f, TrackRow.PadX, 0f),
                 Children =
                 [
@@ -1356,11 +1359,10 @@ sealed class TrackList : Component
         {
             Width = 32f, Height = 32f, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Corners = CornerRadius4.All(16f),
-            HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
             HoverScale = 1.06f, PressScale = 0.94f, Cursor = CursorId.Hand,
             Role = AutomationRole.Button, OnClick = onClick,
             Children = [Icon(Icons.Refresh, 14f, Tok.TextSecondary)],
-        };
+        }.Interactive(Interaction.Subtle);
     }
 
     // One recommendation row: the shared art-forward ArtCard with a "+" Add button. Keyed by track id so a recycled slot
@@ -1440,7 +1442,7 @@ sealed class TrackList : Component
                 var next = new List<Track>(Math.Max(0, cur.Count - 1));
                 for (int i = 0; i < cur.Count; i++) { var o = cur[i]; if (!ReferenceEquals(o, t) && o.Id != t.Id) next.Add(o); }
                 _recs.Value = next;
-                Toasts.Show(Strings.Detail.AddedToPlaylist(_model.Title), ToastSeverity.Success);
+                Toast.Show(Strings.Detail.AddedToPlaylist(_model.Title), new ToastOptions { Severity = InfoBarSeverity.Success });
                 if (next.Count == 0 && _svc is not null && _post is not null)
                     FetchRecs(_svc, _post, uri, force: true);
             });
@@ -1772,7 +1774,7 @@ sealed class SortMenuButton : Component
             if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
             handle.Value = svc.Open(
                 () => anchor.Value,
-                () => MenuFlyout.Build(Items(), () => handle.Value?.Close()),
+                () => MenuFlyout.Create(Items(), () => handle.Value?.Close()),
                 FlyoutPlacement.BottomEdgeAlignedRight,
                 new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
             handle.Value.ClosedAction = () => handle.Value = null;
@@ -1841,7 +1843,7 @@ static class ToolFx
     public static Element Separator() => new BoxEl
     {
         Width = 1f, Height = 20f, AlignSelf = FlexAlign.Center, Fill = Tok.StrokeDividerDefault,
-        Margin = new Edges4(WaveeSpace.XS, 0f, WaveeSpace.XS, 0f),
+        Margin = new Edges4(Spacing.XS, 0f, Spacing.XS, 0f),
     };
 
     public static PopupOptions Popup => new(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false };
@@ -1886,7 +1888,7 @@ sealed class FilterButton : Component
         {
             if (svc is null) return;
             if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
-            handle.Value = svc.Open(() => anchor.Value, () => MenuFlyout.Build(Items(), () => handle.Value?.Close()),
+            handle.Value = svc.Open(() => anchor.Value, () => MenuFlyout.Create(Items(), () => handle.Value?.Close()),
                 FlyoutPlacement.BottomEdgeAlignedRight, ToolFx.Popup);
             handle.Value.ClosedAction = () => handle.Value = null;
         }
@@ -1897,7 +1899,7 @@ sealed class FilterButton : Component
         {
             Width = 30f, Margin = new Edges4(0f, 4f, 4f, 4f),
             AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Corners = CornerRadius4.All(WaveeRadius.Control),
+            Corners = CornerRadius4.All(Radii.Control),
             Fill = active ? accent with { A = 0.16f } : ColorF.Transparent,
             HoverFill = active ? accent with { A = 0.24f } : Tok.FillSubtleSecondary,
             PressedFill = active ? accent with { A = 0.12f } : Tok.FillSubtleTertiary,
@@ -1949,10 +1951,14 @@ sealed class DensityPanel : Component
     public override Element Render()
     {
         int d = _density.Value;   // subscribe → the slider thumb + label track the value
-        return Layer(Edges4.All(WaveeSpace.M),
+        // The unified Slider.Create takes a FloatSignal; mirror the external int density into one (synced via an effect
+        // keyed on d) so the thumb rides the compositor bind and still follows external density changes.
+        var dv = UseFloatSignal(d);
+        UseEffect(() => { dv.Value = d; return null; }, d);
+        return Layer(Edges4.All(Spacing.M),
             new BoxEl
             {
-                Direction = 1, Gap = WaveeSpace.S, MinWidth = 240f,
+                Direction = 1, Gap = Spacing.S, MinWidth = 240f,
                 Children =
                 [
                     new BoxEl
@@ -1964,8 +1970,8 @@ sealed class DensityPanel : Component
                             new TextEl(ListButton.Label(d)) { Size = 12f, Color = Tok.TextSecondary },
                         ],
                     },
-                    Slider.Ranged((float)d, v => _setDensity(Math.Clamp((int)MathF.Round(v), 0, 3)),
-                        new Slider.Options { Min = 0f, Max = 3f, Step = 1f, TickFrequency = 1f },   // Step=1 → snaps to each level
+                    Slider.Create(dv, v => _setDensity(Math.Clamp((int)MathF.Round(v), 0, 3)),
+                        new Slider.SliderOptions { Min = 0f, Max = 3f, Step = 1f, TickFrequency = 1f },   // Step=1 → snaps to each level
                         length: 216f),
                 ],
             });

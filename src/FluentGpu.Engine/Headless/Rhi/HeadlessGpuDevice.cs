@@ -92,7 +92,7 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     public IReadOnlyList<int> Evictions => _evictions;
     public void EvictImage(int imageId) { _resident.Remove(imageId); _evictions.Add(imageId); }
     public void SetBakedBlurQueue(BakedBlurQueue queue) => _bakedBlurs = queue;
-    public bool HasPendingUploads => _bakedBlurs?.HasPending ?? false;
+    public bool HasPendingUploads => false;
 
     public int HintSettlePresentCount { get; private set; }
     public void HintSettlePresent() => HintSettlePresentCount++;
@@ -101,14 +101,16 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     {
         _rects.Clear();   // retains capacity → no alloc after warmup
         if (_bakedBlurs is { Paused: false } bakes)
-            while (bakes.TryDequeueJob(out var job))
+            if (bakes.TryDequeueJob(out var job))
             {
                 if (_resident.ContainsKey(job.SourceId))
                 {
                     _resident[job.Id] = (job.OutputW, job.OutputH);
-                    bakes.Post(new BakedBlurQueue.Result(job.Id, job.Generation, true, job.OutputW, job.OutputH));
+                    bakes.Post(new BakedBlurQueue.Result(job.Id, job.Generation, true, job.OutputW, job.OutputH,
+                        job.Quality, job.IsUpgrade));
                 }
-                else bakes.Post(new BakedBlurQueue.Result(job.Id, job.Generation, false, 0, 0));
+                else bakes.Post(new BakedBlurQueue.Result(job.Id, job.Generation, false, 0, 0,
+                    job.Quality, job.IsUpgrade));
             }
         _glyphs.Clear();
         _glyphGradients.Clear();

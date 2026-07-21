@@ -94,9 +94,9 @@ sealed partial class SettingsPage
 
     static Element AboutHero(string version) => new BoxEl
     {
-        Direction = 1, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center,
-        Padding = new Edges4(WaveeSpace.XL, WaveeSpace.L, WaveeSpace.XL, WaveeSpace.L),
-        Corners = CornerRadius4.All(WaveeRadius.Card),
+        Direction = 1, Gap = Spacing.S, AlignItems = FlexAlign.Center,
+        Padding = new Edges4(Spacing.XL, Spacing.L, Spacing.XL, Spacing.L),
+        Corners = CornerRadius4.All(Radii.Card),
         Fill = Tok.FillCardSecondary, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
         Children =
         [
@@ -120,7 +120,7 @@ sealed partial class SettingsPage
                 HyperlinkButton.Create(Loc.Get(Strings.Settings.About.CopyDiagnostics), () =>
                 {
                     hooks.Clipboard?.SetText(diagInfo());
-                    Toasts.Show(Loc.Get(Strings.Settings.About.DiagnosticsCopied), ToastSeverity.Success);
+                    Toast.Show(Loc.Get(Strings.Settings.About.DiagnosticsCopied), new ToastOptions { Severity = InfoBarSeverity.Success });
                 }),
                 HyperlinkButton.Create(Loc.Get(Strings.Settings.About.OpenDataFolder),
                     () => SettingsShared.OpenFolder(SettingsShared.AppDataRoot)),

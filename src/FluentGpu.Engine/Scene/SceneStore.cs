@@ -82,7 +82,10 @@ public sealed class SceneStore : ISceneBackend
     private int[] _recordDirtyWrote;
     private int _recordDirtyWroteCount;
     private Action?[] _click;         // managed edge payload (GC ref at the edge only)
-    private Action<RectF>?[] _boundsChanged;   // post-layout arranged-bounds callback
+    private Action<RectF>?[] _boundsChanged;   // post-layout arranged-bounds callback — the ELEMENT AUTHOR's Element.OnBoundsChanged
+    private Action<RectF>?[] _boundsChangedHook;   // post-layout arranged-bounds callback — HOOK-owned (UseMeasuredBounds/Width). SEPARATE
+                                                   // slot because the reconciler re-writes _boundsChanged on every re-render (WriteColumns),
+                                                   // which would clobber a composed hook handler; FlexLayout dispatches to BOTH slots.
     private RectF[] _boundsDelivered;   // last arranged rect actually delivered to _boundsChanged: the edge baseline for
                                         // OnBoundsChanged. NOT the live Bounds (which Measure pre-writes to the hypothetical
                                         // size each pass), so the callback fires on a real ARRANGED-rect change even for an
@@ -203,6 +206,7 @@ public sealed class SceneStore : ISceneBackend
         _recordDirtyWrote = new int[capacity];
         _click = new Action?[capacity];
         _boundsChanged = new Action<RectF>?[capacity];
+        _boundsChangedHook = new Action<RectF>?[capacity];
         _boundsDelivered = new RectF[capacity];
         _keyHandler = new Action<KeyEventArgs>?[capacity];
         _charHandler = new Action<CharEventArgs>?[capacity];
@@ -256,6 +260,7 @@ public sealed class SceneStore : ISceneBackend
         MarkRecordDirty(idx);
         _click[idx] = null;
         _boundsChanged[idx] = null;
+        _boundsChangedHook[idx] = null;
         _boundsDelivered[idx] = default;
         _keyHandler[idx] = null;
         _charHandler[idx] = null;
@@ -301,6 +306,7 @@ public sealed class SceneStore : ISceneBackend
         ReleaseSpanRun(_layout[idx].TextStyle.SpanRunId);   // span-run + per-span family lifetime (rtb-01)
         _click[idx] = null;
         _boundsChanged[idx] = null;
+        _boundsChangedHook[idx] = null;
         _boundsDelivered[idx] = default;
         _keyHandler[idx] = null;
         _charHandler[idx] = null;
@@ -576,6 +582,25 @@ public sealed class SceneStore : ISceneBackend
         _boundsChanged[idx] = handler;
     }
     public Action<RectF>? GetBoundsChangedHandler(NodeHandle h) => _boundsChanged[LiveIndexOrZero(h)];
+    /// <summary>Add a HOOK-owned arranged-bounds observer (UseMeasuredBounds/Width) — composed via <see cref="Delegate.Combine"/>
+    /// into a SLOT SEPARATE from the element author's <see cref="SetBoundsChangedHandler"/> (which the reconciler clobbers on every
+    /// re-render). FlexLayout dispatches to both. Does NOT arm <see cref="NodeFlags.BoundsChangedPending"/>: the hook seeds its
+    /// own initial value from the live bounds and aligns the delivered baseline at install time, so no first-arrange one-shot is
+    /// needed (and none is wanted — it would double-deliver on top of the seed).</summary>
+    public void AddBoundsChangedHook(NodeHandle h, Action<RectF> handler)
+    {
+        int idx = LiveIndex(h);
+        _boundsChangedHook[idx] = (Action<RectF>?)Delegate.Combine(_boundsChangedHook[idx], handler);
+    }
+    /// <summary>Remove a handler added by <see cref="AddBoundsChangedHook"/> (hook cleanup / unmount). Safe on an
+    /// already-freed node (its slot was cleared on free).</summary>
+    public void RemoveBoundsChangedHook(NodeHandle h, Action<RectF> handler)
+    {
+        int idx = LiveIndexOrZero(h);
+        if (idx == 0) return;
+        _boundsChangedHook[idx] = (Action<RectF>?)Delegate.Remove(_boundsChangedHook[idx], handler);
+    }
+    public Action<RectF>? GetBoundsChangedHook(NodeHandle h) => _boundsChangedHook[LiveIndexOrZero(h)];
     /// <summary>The last arranged rect delivered to this node's OnBoundsChanged (the edge baseline). FlexLayout fires the
     /// handler when the freshly-arranged rect differs from this — NOT from the live <see cref="Bounds"/>, which Measure
     /// pre-writes to the hypothetical size each pass (so an unconstrained node would otherwise never re-notify).</summary>
@@ -1361,7 +1386,7 @@ public sealed class SceneStore : ISceneBackend
         Array.Resize(ref _recordDirty, n); Array.Resize(ref _recordDirtySelf, n); Array.Resize(ref _recordDirtyDescendant, n);
         Array.Resize(ref _recordDirtyWrote, n);
         if (_recordDirtyWroteCount > n) _recordDirtyWroteCount = n;
-        Array.Resize(ref _click, n); Array.Resize(ref _boundsChanged, n); Array.Resize(ref _boundsDelivered, n); Array.Resize(ref _keyHandler, n); Array.Resize(ref _charHandler, n);
+        Array.Resize(ref _click, n); Array.Resize(ref _boundsChanged, n); Array.Resize(ref _boundsChangedHook, n); Array.Resize(ref _boundsDelivered, n); Array.Resize(ref _keyHandler, n); Array.Resize(ref _charHandler, n);
         Array.Resize(ref _pointerDown, n); Array.Resize(ref _drag, n); Array.Resize(ref _hoverMove, n); Array.Resize(ref _pointerMoveWithin, n); Array.Resize(ref _pointerExit, n);
         Array.Resize(ref _pointerPressed, n); Array.Resize(ref _pointerReleased, n); Array.Resize(ref _pointerWheel, n); Array.Resize(ref _contextRequested, n);
         Array.Resize(ref _focusChanged, n);

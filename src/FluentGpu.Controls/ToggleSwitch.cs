@@ -1,6 +1,7 @@
 using FluentGpu.Foundation;
 using FluentGpu.Dsl;
 using FluentGpu.Hooks;
+using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
 
@@ -113,20 +114,25 @@ public static partial class ToggleSwitch
         ForegroundDisabled = Tok.TextDisabled, HeaderColorDisabled = Tok.TextDisabled,
     };
 
-    /// <summary>Controlled props, carried to the stateful core via context (a ComponentEl reuse never re-runs its
-    /// factory — Reconciler.cs:211-219 — so props MUST flow through a provider, the NavigationView pattern).</summary>
-    internal sealed record Props(bool IsOn, Action OnToggle, string? Header, string? OnContent, string? OffContent,
-                                 bool IsEnabled, Style Style, TemplateParts? Parts = null)
-    {
-        internal static readonly Context<Props?> Channel = new(null);
-    }
-
-    public static Element Create(bool isOn, Action onToggle, string? header = null, string? onContent = null,
-                                 string? offContent = null, bool isEnabled = true, Style? style = null,
-                                 TemplateParts? parts = null)
-        => Ctx.Provide(Props.Channel,
-                       new Props(isOn, onToggle, header, onContent, offContent, isEnabled, style ?? DefaultStyle, parts),
-                       Embed.Comp(() => new ToggleSwitchCore()));
+    /// <summary>The controlled on/off state is a caller <see cref="Signal{T}"/> (the value is read directly inside the
+    /// core — no props re-push needed for the value; signals are live). A gesture WRITES the signal first, then fires
+    /// <paramref name="onChange"/> once; a programmatic signal write re-skins the switch with NO onChange echo. The
+    /// signal INSTANCE freezes at mount (bind wiring is mount-only) — swap it by re-keying. Pass no signal
+    /// (<paramref name="isOn"/> = null) and the control materializes its own internal signal ("uncontrolled" = "the
+    /// control made its own signal" — one code path).
+    ///
+    /// <para>Non-value props (header/content/enabled/style/parts) ride the G4 props channel, RE-PUSHED live to the
+    /// stateful core (<c>Embed.Comp(props, …)</c>): a ComponentEl reuse never re-runs its factory, so props delivered
+    /// here stay current across re-renders. The core is a <c>[Props]</c> component (<see cref="ToggleSwitchCore"/>) —
+    /// the generator emits the signal-backed storage + <c>ToggleSwitchCore.PropsData</c> transport + the
+    /// <c>IPropsHost.ApplyProps</c> sink (per-field equality-gated; the <c>OnChange</c> delegate is a latest-write
+    /// forwarder that never re-renders). PropsData positional order MUST match the <c>[Prop]</c> declaration order.</para></summary>
+    public static Element Create(Signal<bool>? isOn = null, Action<bool>? onChange = null, string? header = null,
+                                 string? onContent = null, string? offContent = null, bool isEnabled = true,
+                                 Style? style = null, TemplateParts? parts = null)
+        => Embed.Comp(new ToggleSwitchCore.PropsData(isOn, onChange, header, onContent, offContent,
+                                                     isEnabled, style ?? DefaultStyle, parts),
+                      () => new ToggleSwitchCore());
 }
 
 /// <summary>
@@ -135,8 +141,24 @@ public static partial class ToggleSwitch
 /// anchor pin, travel) rides its <c>Animate</c> FLIP with per-commit dynamics (83ms size / 167ms travel / 250ms
 /// disabled / snap while dragging), so size and travel never double-animate through nested projections.
 /// </summary>
-internal sealed class ToggleSwitchCore : Component
+[Props]
+internal sealed partial class ToggleSwitchCore : Component
 {
+    // ── re-pushed props (the [Props] generator emits, into this partial, the Signal<T> backing + subscribing getters,
+    //    the XxxProp bind accessors, the PropsData transport, Of/CurrentProps/From, and IPropsHost.ApplyProps).
+    //    Declared order == PropsData positional order (see ToggleSwitch.Create). OnChange is a delegate → latest-write
+    //    forwarder: a fresh lambda from the parent never re-renders, and the wired handler invokes the newest. IsOn is
+    //    the caller's value signal (frozen instance) — read DIRECTLY inside Render (live, no props re-push for the value);
+    //    null ⇒ the control materializes its own internal signal (auto-materialize, adjustment #8 — one code path). ──
+    [Prop] public partial Signal<bool>? IsOn { get; }
+    [Prop] public partial Action<bool>? OnChange { get; }
+    [Prop] public partial string? Header { get; }
+    [Prop] public partial string? OnContent { get; }
+    [Prop] public partial string? OffContent { get; }
+    [Prop] public partial bool IsEnabled { get; }
+    [Prop] public partial ToggleSwitch.Style Style { get; }
+    [Prop] public partial TemplateParts? Parts { get; }
+
     /// <summary>Mutable mid-gesture state (a UseRef cell): immediate, never stale across the per-move re-renders.</summary>
     private sealed class Gesture
     {
@@ -151,17 +173,22 @@ internal sealed class ToggleSwitchCore : Component
     public override Element Render()
     {
         // Hooks — stable order, unconditionally, before any early-out.
-        var props = UseContext(ToggleSwitch.Props.Channel);
         var g = UseRef(new Gesture()).Value;
         var (dragX, setDragX) = UseState(float.NaN);     // NaN = not dragging; else the knob translation (0..travel)
         var (hovered, setHovered) = UseState(false);
         var (pressed, setPressed) = UseState(false);
+        // Auto-materialize (adjustment #8): the internal signal is always allocated once at mount (stable hook order);
+        // the caller's signal wins when supplied. `IsOn ?? own` is the ONE code path — gesture writes `sig`, whether
+        // caller-owned ("controlled") or internal ("uncontrolled" = the control made its own signal).
+        var own = UseSignal(false);
+        var sig = IsOn ?? own;
 
-        if (props is null) return new BoxEl();
-        var s = props.Style;
-        var parts = props.Parts;
-        bool isOn = props.IsOn;
-        bool enabled = props.IsEnabled;
+        // Read the generated [Prop] getters (subscribing) up-front: a re-pushed change to any of these re-renders the
+        // core in place. OnToggle stays a delegate forwarder (read only inside the handlers — never subscribes).
+        var s = Style;
+        var parts = Parts;
+        bool isOn = sig.Value;   // read the value signal DIRECTLY (live); a programmatic write re-skins with no onChange echo
+        bool enabled = IsEnabled;
         float travel = s.KnobTravel;
         bool dragging = !float.IsNaN(dragX);
         bool isHovered = hovered && enabled;
@@ -211,7 +238,8 @@ internal sealed class ToggleSwitchCore : Component
                 toggle = isOn ? g.LastX <= half : g.LastX >= half;
             }
             Reset();
-            if (toggle) props.OnToggle();
+            // Write the value signal FIRST, then fire onChange once (contract: user interaction → signal, then callback).
+            if (toggle) { bool next = !isOn; sig.Value = next; OnChange?.Invoke(next); }   // forwarder invokes the NEWEST re-pushed delegate
         }
 
         void Exit()
@@ -241,7 +269,7 @@ internal sealed class ToggleSwitchCore : Component
             bool toOff = a.KeyCode is Keys.Left or Keys.Down or Keys.Home;
             bool toOn = a.KeyCode is Keys.Right or Keys.Up or Keys.End;
             if (!toOff && !toOn) return;
-            if ((toOn && !isOn) || (toOff && isOn)) { props.OnToggle(); a.Handled = true; }
+            if ((toOn && !isOn) || (toOff && isOn)) { sig.Value = toOn; OnChange?.Invoke(toOn); a.Handled = true; }
         }
 
         // ── knob geometry for THIS commit (the storyboard targets) ──
@@ -339,7 +367,7 @@ internal sealed class ToggleSwitchCore : Component
             track = tp.Apply(ToggleSwitch.PartTrack, track) with { Children = trackKids };
 
         var row = new List<Element> { track };
-        string? side = isOn ? props.OnContent : props.OffContent;   // ContentStates Off/OnContent swap (template:461-486)
+        string? side = isOn ? OnContent : OffContent;   // ContentStates Off/OnContent swap (template:461-486)
         if (side is { Length: > 0 })
             row.Add(parts.Apply(ToggleSwitch.PartContentLabel,
                 new TextEl(side) { Size = s.FontSize, Color = s.Foreground, DisabledColor = s.ForegroundDisabled }));
@@ -380,7 +408,7 @@ internal sealed class ToggleSwitchCore : Component
                 Children = rowKids,
             };
 
-        if (props.Header is { Length: > 0 })
+        if (Header is { Length: > 0 })
             return new BoxEl
             {
                 Direction = 1,
@@ -388,7 +416,7 @@ internal sealed class ToggleSwitchCore : Component
                 Children =
                 [
                     parts.Apply(ToggleSwitch.PartHeader,
-                        new TextEl(props.Header) { Size = s.FontSize, Color = enabled ? s.HeaderColor : s.HeaderColorDisabled }),
+                        new TextEl(Header) { Size = s.FontSize, Color = enabled ? s.HeaderColor : s.HeaderColorDisabled }),
                     control,
                 ],
             };

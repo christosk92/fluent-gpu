@@ -20,8 +20,8 @@ public static class Skeletons
             Direction = 1, Gap = 6f, Grow = 1f,
             Children =
             [
-                new TextEl("Loading title") { Size = 14f, Grow = 1f },
-                new TextEl("Loading subtitle that is a little shorter") { Size = 12.5f, Width = 180f },
+                new TextEl("Loading title") { Size = 14f, Grow = 1f },                              // loc-allow: skeleton shimmer template — leaf text only sizes the bar, never rendered as readable text
+                new TextEl("Loading subtitle that is a little shorter") { Size = 12.5f, Width = 180f }, // loc-allow: skeleton shimmer template
             ],
         };
         Element[] kids = withThumbnail
@@ -38,9 +38,9 @@ public static class Skeletons
         Children =
         [
             new BoxEl { Height = mediaHeight, Corners = Radii.OverlayAll, Fill = Tok.FillSubtleSecondary },
-            new TextEl("Card title") { Size = 16f, Width = 160f },
-            new TextEl("First body line of the card placeholder") { Size = 13f, Grow = 1f },
-            new TextEl("Second body line, a bit shorter") { Size = 13f, Width = 140f },
+            new TextEl("Card title") { Size = 16f, Width = 160f },                                  // loc-allow: skeleton shimmer template
+            new TextEl("First body line of the card placeholder") { Size = 13f, Grow = 1f },        // loc-allow: skeleton shimmer template
+            new TextEl("Second body line, a bit shorter") { Size = 13f, Width = 140f },             // loc-allow: skeleton shimmer template
         ],
     };
 }

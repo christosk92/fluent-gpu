@@ -60,7 +60,7 @@ sealed class QueuePanel : Component
         UseEffect(() => setAutoplay(svc?.Settings.Get(WaveeSettings.AutoplayEnabled) ?? true), prefsEpoch);
 
         string ctxUri = b?.CurrentContext.Value ?? "";
-        var ctxName = UseAsyncResource(ct => ResolveContextNameAsync(svc, ctxUri, ct), (string?)null, ctxUri);
+        var ctxName = UseResource(ct => ResolveContextNameAsync(svc, ctxUri, ct), (string?)null, ctxUri).Loadable;
         var uiLogSig = UseRef<string?>(null);
         // New context ⇒ collapse the visual pagination back to the first page of each section.
         UseEffect(() => { _queuePages.Value = 1; _upPages.Value = 1; _autoPages.Value = 1; }, ctxUri);
@@ -188,7 +188,7 @@ sealed class QueuePanel : Component
             Direction = 0, AlignItems = FlexAlign.Center, Gap = 12f, MinHeight = 64f,
             Margin = new Edges4(0f, 0f, 0f, 10f),
             Padding = Edges4.All(10f),
-            Corners = CornerRadius4.All(WaveeRadius.Card),
+            Corners = CornerRadius4.All(Radii.Card),
             Fill = Tok.FillCardDefault,
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             Enter = new EnterExit(Dy: 6f, Opacity: 0f, Active: true),
@@ -399,7 +399,7 @@ sealed class QueuePanel : Component
                                 HoverFill = WaveeColors.RowPressed,
                                 Role = AutomationRole.Button, Cursor = CursorId.Hand,
                                 ClickRequestsContext = true,
-                                Children = [new TextEl(Mdl.More) { Size = 14f, FontFamily = Theme.IconFont, Color = Tok.TextTertiary, HoverColor = Tok.TextPrimary }],
+                                Children = [new TextEl(Icons.More) { Size = 14f, FontFamily = Theme.IconFont, Color = Tok.TextTertiary, HoverColor = Tok.TextPrimary }],
                             },
                         ],
                     }

@@ -112,7 +112,7 @@ static class PlaylistInlineEdit
         string ext = Path.GetExtension(path);
         if (!ext.Equals(".jpg", StringComparison.OrdinalIgnoreCase) && !ext.Equals(".jpeg", StringComparison.OrdinalIgnoreCase))
         {
-            Toasts.Show(Loc.Get(Strings.Detail.Edit.PickCover), ToastSeverity.Caution);
+            Toast.Show(Loc.Get(Strings.Detail.Edit.PickCover), new ToastOptions { Severity = InfoBarSeverity.Warning });
             return false;
         }
         return await ApplyCoverJpegAsync(lib, uri, await File.ReadAllBytesAsync(path).ConfigureAwait(false)).ConfigureAwait(false);
@@ -173,7 +173,7 @@ static class PlaylistInlineEdit
     /// <summary>Save/cancel row below the field — always visible, never clipped by the field chrome.</summary>
     static Element SaveCancelRow(Action save, Action cancel) => new BoxEl
     {
-        Direction = 0, Gap = WaveeSpace.S, Justify = FlexJustify.End, Shrink = 0f,
+        Direction = 0, Gap = Spacing.S, Justify = FlexJustify.End, Shrink = 0f,
         Children =
         [
             EditFieldBtn(Icons.Accept, Loc.Get(Strings.Detail.Edit.Save), accent: true, save),
@@ -186,7 +186,7 @@ static class PlaylistInlineEdit
     static Element EditChrome(Element field, float width, Action save, Action cancel, Ref<NodeHandle> shell,
         RenderContext ctx, Action<Action> post) => new BoxEl
     {
-        Direction = 1, Width = width, Gap = WaveeSpace.S,
+        Direction = 1, Width = width, Gap = Spacing.S,
         OnRealized = h =>
         {
             shell.Value = h;
@@ -236,7 +236,7 @@ static class PlaylistInlineEdit
         {
             if (!editing.Peek() || shell.Value.IsNull) return;
             post(() => BringIntoView(c.Context, shell.Value, margin: 32f));
-        }, editing.Value, uriKey, draftSnapshot);
+        }, DepKey.From(HashCode.Combine(editing.Value, uriKey, draftSnapshot)));
     }
 
     /// <summary>Snap-scroll a node into its nearest vertical viewport (viewport-relative bounds — reliable inside nested
@@ -321,7 +321,7 @@ static class PlaylistInlineEdit
 
             return new BoxEl
             {
-                Width = _size, Height = _size, Corners = CornerRadius4.All(WaveeRadius.Card),
+                Width = _size, Height = _size, Corners = CornerRadius4.All(Radii.Card),
                 Shadow = Elevation.Card, ClipToBounds = true, ZStack = true,
                 Cursor = CursorId.Hand,
                 DropTarget = _dropSpec.Value,
@@ -415,7 +415,7 @@ static class PlaylistInlineEdit
             var post = UsePost();
             var m = _full.Value.Value;
             string? uri = m.ContextUri;
-            UseLayoutEffect(() => { if (!_editing.Peek()) _draft.Value = m.Title; }, uri ?? "", m.Title);
+            UseLayoutEffect(() => { if (!_editing.Peek()) _draft.Value = m.Title; }, (uri ?? "", m.Title));
             UseEditScroll(this, post, _editing, _editShell, uri ?? "", _draft.Value);
 
             if (lib is null || !m.Capabilities.CanEditMetadata || uri is null)
@@ -453,9 +453,9 @@ static class PlaylistInlineEdit
             // and hairline border ease in engine-side (HoverFade channel — no re-render), cursor is always I-beam.
             Element titleRow = new BoxEl
             {
-                Direction = 0, Width = _width + 16f, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center,
+                Direction = 0, Width = _width + 16f, Gap = Spacing.S, AlignItems = FlexAlign.Center,
                 Margin = new Edges4(-8f, -4f, -8f, -4f), Padding = new Edges4(8f, 4f, 8f, 4f),
-                Corners = CornerRadius4.All(WaveeRadius.Control),
+                Corners = CornerRadius4.All(Radii.Control),
                 HoverFill = Tok.FillSubtleSecondary,
                 BorderWidth = 1f, BorderColor = ColorF.Transparent, HoverBorderColor = Tok.StrokeControlDefault,
                 Cursor = CursorId.IBeam,
@@ -542,7 +542,7 @@ static class PlaylistInlineEdit
             var post = UsePost();
             var m = _full.Value.Value;
             string? uri = m.ContextUri;
-            UseLayoutEffect(() => { if (!_editing.Peek()) _draft.Value = m.Description ?? ""; }, uri ?? "", m.Description ?? "");
+            UseLayoutEffect(() => { if (!_editing.Peek()) _draft.Value = m.Description ?? ""; }, (uri ?? "", m.Description ?? ""));
             UseEditScroll(this, post, _editing, _editShell, uri ?? "", _draft.Value);
 
             if (_maxLines <= 0 || lib is null || !m.Capabilities.CanEditMetadata || uri is null)
@@ -574,9 +574,9 @@ static class PlaylistInlineEdit
             int status = _status.Value;
             Element descriptionRow = new BoxEl
             {
-                Direction = 0, Width = _width + 16f, Gap = WaveeSpace.S, AlignItems = FlexAlign.Start,
+                Direction = 0, Width = _width + 16f, Gap = Spacing.S, AlignItems = FlexAlign.Start,
                 Margin = new Edges4(-8f, -4f, -8f, -4f), Padding = new Edges4(8f, 4f, 8f, 4f),
-                Corners = CornerRadius4.All(WaveeRadius.Control),
+                Corners = CornerRadius4.All(Radii.Control),
                 HoverFill = Tok.FillSubtleSecondary,
                 BorderWidth = 1f, BorderColor = ColorF.Transparent, HoverBorderColor = Tok.StrokeControlDefault,
                 Cursor = CursorId.IBeam,
@@ -661,7 +661,7 @@ static class PlaylistInlineEdit
             // rail width (the old hand-computed MaxWidth = _width - 120f under-reserved for the pill and clipped).
             return new BoxEl
             {
-                Direction = 0, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center, MaxWidth = _width,
+                Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, MaxWidth = _width,
                 Children =
                 [
                     PersonPicture.Create("", 24f, displayName: owner, imageSourcePath: m.OwnerImage?.Url),
@@ -678,14 +678,12 @@ static class PlaylistInlineEdit
     {
         readonly Loadable<DetailModel> _full;
         readonly Signal<bool> _copied = new(false);
-        System.Threading.Timer? _timer;
-        int _copyEpoch;
+        TimerHandle _copyReset;   // one-shot: flips the "copied ✓" glyph back after 1600ms (frame-clock UseTimeout, generation-guarded)
         public PlaylistShareButton(Loadable<DetailModel> full) => _full = full;
 
         public override Element Render()
         {
-            var post = UsePost();
-            UseSignalEffect(() => Reactive.OnCleanup(() => _timer?.Dispose()));
+            _copyReset = UseTimeout(() => _copied.Value = false, 1600f);
             var m = _full.Value.Value;
             bool copied = _copied.Value;
             return new BoxEl
@@ -697,10 +695,9 @@ static class PlaylistInlineEdit
                     {
                         Width = 40f, Height = 40f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                         Corners = CornerRadius4.All(20f),
-                        HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
                         HoverScale = 1.06f, PressScale = 0.94f,
                         Cursor = CursorId.Hand, Focusable = true, Role = AutomationRole.Button,
-                        OnClick = () => Share(m, post),
+                        OnClick = () => Share(m),
                         Children = [new BoxEl
                         {
                             Key = copied ? "share-check" : "share-link",
@@ -708,12 +705,12 @@ static class PlaylistInlineEdit
                             Children = [Icon(copied ? Icons.Accept : Icons.Share, 16f,
                                 copied ? Tok.AccentTextPrimary : Tok.TextSecondary)],
                         }],
-                    },
+                    }.Interactive(Interaction.Subtle),
                 ],
             };
         }
 
-        void Share(DetailModel m, Action<Action> post)
+        void Share(DetailModel m)
         {
             if (m.ContextUri is not { } uri) return;
             var url = m.ShareUrl ?? DetailPage.SpotifyPlaylistWebUrl(uri);
@@ -723,12 +720,7 @@ static class PlaylistInlineEdit
                 catch (Exception ex) { PlaylistEditErrors.Toast(ex); return; }
                 InputHooks.Current.Default.Announce?.Invoke(Loc.Get(Strings.Auth.Copied), false);
                 _copied.Value = true;
-                int epoch = ++_copyEpoch;
-                _timer?.Dispose();
-                _timer = new System.Threading.Timer(_ => post(() =>
-                {
-                    if (epoch == _copyEpoch) _copied.Value = false;
-                }), null, 1600, System.Threading.Timeout.Infinite);
+                _copyReset.Restart();   // reset the ✓ back to the share glyph after 1600ms (generation-guarded handle)
             }
             else InputHooks.Current.Default.OpenUri?.Invoke(url);
         }
@@ -822,29 +814,27 @@ static class PlaylistInlineEdit
                 return ToolTip.Wrap(new BoxEl
                 {
                     Width = 28f, Height = 28f, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                    Corners = CornerRadius4.All(14f), Fill = ColorF.Transparent,
-                    HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+                    Corners = CornerRadius4.All(14f),
                     HoverScale = 1.06f, PressScale = 0.94f,
                     Cursor = CursorId.Hand, Focusable = true, Role = AutomationRole.Button,
                     OnClick = Toggle, OnRealized = h => anchor.Value = h,
-                    Children = [Icon(Mdl.Friends, 14f, Tok.TextSecondary)],
-                }, Loc.Get(Strings.Detail.Edit.InviteCollaborators));
+                    Children = [Icon(Icons.Friends, 14f, Tok.TextSecondary)],
+                }.Interactive(Interaction.Subtle), Loc.Get(Strings.Detail.Edit.InviteCollaborators));
 
             return new BoxEl
             {
-                Direction = 0, Shrink = 0f, Height = 28f, Gap = WaveeSpace.XS, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                Direction = 0, Shrink = 0f, Height = 28f, Gap = Spacing.XS, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                 Padding = new Edges4(10f, 0f, 12f, 0f), Corners = CornerRadius4.All(14f),
-                Fill = ColorF.Transparent, BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault,
-                HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+                BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault,
                 HoverScale = 1.03f, PressScale = 0.97f,
                 Cursor = CursorId.Hand, Focusable = true, Role = AutomationRole.Button,
                 OnClick = Toggle, OnRealized = h => anchor.Value = h,
                 Children =
                 [
-                    Icon(Mdl.Friends, 12f, Tok.TextPrimary),
+                    Icon(Icons.Friends, 12f, Tok.TextPrimary),
                     new TextEl(Loc.Get(Strings.Detail.Edit.InviteCollaborators)) { Size = 12f, Weight = 600, Color = Tok.TextPrimary },
                 ],
-            };
+            }.Interactive(Interaction.Subtle);
         }
     }
 
@@ -918,7 +908,7 @@ static class PlaylistInlineEdit
             return new BoxEl
             {
                 Direction = 1, Width = 300f, Gap = 12f, Padding = Edges4.All(16f),
-                Corners = CornerRadius4.All(WaveeRadius.Card), ClipToBounds = true, Shadow = Elevation.Flyout,
+                Corners = CornerRadius4.All(Radii.Card), ClipToBounds = true, Shadow = Elevation.Flyout,
                 Acrylic = Tok.AcrylicFlyout, BorderWidth = 1f, BorderColor = Tok.StrokeFlyoutDefault,
                 Children = content.ToArray(),
             };
@@ -927,10 +917,10 @@ static class PlaylistInlineEdit
         Element CopyInviteCta(int status)
         {
             var accent = Tok.AccentDefault;
-            var ink = WaveePalette.OnAccent(accent);
+            var ink = ColorContrast.PickContrast(accent);
             return new BoxEl
             {
-                Direction = 0, Height = 34f, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                Direction = 0, Height = 34f, Gap = Spacing.S, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                 Corners = CornerRadius4.All(17f), Fill = accent,
                 HoverFill = Tok.AccentSecondary, PressedFill = Tok.AccentTertiary,
                 HoverScale = 1.02f, PressScale = 0.98f,
@@ -947,7 +937,7 @@ static class PlaylistInlineEdit
                         Animate = MotionRecipes.IconSwap,
                         Children = [status == StatusSaving
                             ? ProgressRing.Indeterminate(14f, true, ink)
-                            : Icon(status == StatusSaved ? Icons.Accept : Mdl.Link, 14f, ink)],
+                            : Icon(status == StatusSaved ? Icons.Accept : Icons.Link, 14f, ink)],
                     },
                     new BoxEl
                     {
@@ -964,7 +954,7 @@ static class PlaylistInlineEdit
 
         static Element ToggleRow(string label, string caption, bool isOn, int status, Action onToggle) => new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M,
             Children =
             [
                 new BoxEl
@@ -977,7 +967,7 @@ static class PlaylistInlineEdit
                     ],
                 },
                 status != StatusIdle ? StatusChip(status) : new BoxEl { Width = 0f },
-                ToggleSwitch.Create(isOn, onToggle, isEnabled: status != StatusSaving, style: SettingsCard.CompactToggleStyle()),
+                ToggleSwitch.Create(new Signal<bool>(isOn), onChange: _ => onToggle(), isEnabled: status != StatusSaving, style: SettingsCard.CompactToggleStyle()),
             ],
         };
     }
@@ -1013,7 +1003,7 @@ static class PlaylistInlineEdit
                 if (items.Count == 0) return;
                 handle.Value = overlay.Open(
                     () => anchor.Value,
-                    () => MenuFlyout.Build(items, () => handle.Value?.Close()),
+                    () => MenuFlyout.Create(items, () => handle.Value?.Close()),
                     FlyoutPlacement.BottomEdgeAlignedRight,
                     new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
                 handle.Value.ClosedAction = () => handle.Value = null;
@@ -1023,12 +1013,11 @@ static class PlaylistInlineEdit
             {
                 Width = 40f, Height = 40f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                 Corners = CornerRadius4.All(20f),
-                HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
                 HoverScale = 1.06f, PressScale = 0.94f,
                 OnClick = Toggle,
                 OnRealized = h => anchor.Value = h,
                 Children = [Icon(Icons.More, 16f, Tok.TextSecondary)],
-            };
+            }.Interactive(Interaction.Subtle);
         }
     }
 
@@ -1044,11 +1033,11 @@ static class PlaylistInlineEdit
             return;
         if (m.Capabilities.CanAdministratePermissions)
         {
-            items.Add(new MenuFlyoutItem(Loc.Get(Strings.Detail.Edit.InviteCollaborators), Mdl.Friends,
+            items.Add(new MenuFlyoutItem(Loc.Get(Strings.Detail.Edit.InviteCollaborators), Icons.Friends,
                 Invoke: () => OpenAccessFlyout(overlay, lib, svc, full, anchor, accessHandle, FlyoutPlacement.BottomEdgeAlignedRight)));
             items.Add(MenuFlyoutItem.Separator);
         }
-        items.Add(new MenuFlyoutItem(Loc.Get(Strings.Detail.Edit.DeletePlaylist), Mdl.Delete,
+        items.Add(new MenuFlyoutItem(Loc.Get(Strings.Detail.Edit.DeletePlaylist), Icons.Delete,
             Invoke: () => SettingsShared.Confirm(overlay,
                 Loc.Get(Strings.Detail.Edit.DeletePlaylist),
                 Loc.Get(Strings.Detail.Edit.DeletePlaylistConfirm),

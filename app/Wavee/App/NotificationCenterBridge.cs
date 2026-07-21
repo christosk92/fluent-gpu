@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using FluentGpu.Controls;
 using FluentGpu.Hooks;
 using FluentGpu.Localization;
 using FluentGpu.Signals;
@@ -100,7 +101,7 @@ public sealed class NotificationCenterBridge
     {
         bool ok = await _undo.UndoAsync(entry).ConfigureAwait(false);
         if (!ok && _post is { } post)
-            post(() => Toasts.Show(Loc.Get(Strings.Notifications.UndoFailed), ToastSeverity.Caution));
+            post(() => Toast.Show(Loc.Get(Strings.Notifications.UndoFailed), new ToastOptions { Severity = InfoBarSeverity.Warning }));
     }
 
     void AdvanceRemoteLastSeen()

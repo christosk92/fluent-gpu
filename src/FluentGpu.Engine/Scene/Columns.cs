@@ -92,6 +92,11 @@ public struct NodePaint
     // Gaussian. 0 = no blur layer (the default); a change sets PaintDirty (never LayoutDirty).
     public float BlurSigma;
     public BlurCachePolicy BlurCachePolicy;
+    // Engine-owned transient intent: 1 only while a LIVE, non-parked AnimChannel.BlurSigma row drives this node.
+    // Kept beside BlurCachePolicy so it consumes that byte field's existing alignment padding (no NodePaint growth).
+    // This is deliberately not authored by BoxEl: the animation slab is the single source of truth and clears it on
+    // settle/cancel/park, allowing the compositor to choose an animated-blur strategy without guessing from sigma.
+    internal byte BlurAnimationActive;
     // Composited transform origin (normalized 0..1 of the node box; default centre 0.5,0.5). The recorder scales/transforms
     // the node about (OriginX·W, OriginY·H) — so e.g. a menu can scale/unfold from its TOP edge (OriginY=0).
     public float OriginX, OriginY;

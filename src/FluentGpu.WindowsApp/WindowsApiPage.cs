@@ -14,6 +14,9 @@ using FluentGpu.WindowsApi.Network;
 using FluentGpu.WindowsApi.Notifications;
 using FluentGpu.WindowsApi.Packaging;
 using FluentGpu.WindowsApi.Power;
+// Disambiguate the flagged naming collision: this Windows-pillar page uses the OS-notification Toast. The in-app
+// Controls.Toast (a card in the app window) is a different type in a different namespace (see the Toast gallery page).
+using Toast = FluentGpu.WindowsApi.Notifications.Toast;
 using FluentGpu.WindowsApi.Shell;
 using FluentGpu.WindowsApi.Storage;
 using static FluentGpu.Dsl.Ui;
@@ -21,7 +24,7 @@ using static FluentGpu.Dsl.Ui;
 // ── The "Windows APIs" gallery page ─────────────────────────────────────────────────────────────────────────────────
 // A live, interactive showcase of the whole FluentGpu.WindowsApi surface — the four v1 pillars (Notifications /
 // Credentials / Packaging / Activation) and the five v2 pillars (Media / Dialogs / Shell / Power / Network) — each as a
-// self-contained demo card in the gallery house style (GalleryPage.Shell + ControlExample.Build). Every demo is safe to
+// self-contained demo card in the gallery house style (GalleryPage.Shell + ExampleCard.Build). Every demo is safe to
 // click repeatedly; OS round-trips run on the gallery UI thread, and the live ones (SMTC media-key presses, network
 // connectivity changes, suspend/resume) surface in an on-card event log.
 //
@@ -37,6 +40,7 @@ using static FluentGpu.Dsl.Ui;
 // re-render the card every frame (the earlier UseContext(FrameClock.Tick) drain did, which froze this page); the loop
 // stays idle until an event actually arrives, then runs exactly one frame to apply it.
 
+[GalleryPage("windowsapi", "Windows APIs", "App services", Icon = Icons.Globe, ShotMode = ShotMode.Skip)]
 sealed class WindowsApiPage : Component
 {
     public override Element Render()
@@ -166,7 +170,7 @@ sealed class EventLog
 static class WinApiUi
 {
     /// <summary>A stable, identity-equal empty dep array → a UseEffect carrying it runs exactly once per mount.</summary>
-    public static readonly object[] MountOnce = Array.Empty<object>();
+    public static readonly FluentGpu.Hooks.DepKey MountOnce = FluentGpu.Hooks.DepKey.Empty;
 
     // The accent/success/error/caution status colors WinUI uses for inline state lines.
     public static TextEl Status(string text, ColorF color) => new(text) { Size = 13f, Weight = 600, Color = color, Wrap = TextWrap.Wrap };
@@ -285,8 +289,8 @@ sealed class NotificationsCard : Component
             Direction = 1, Gap = 12f,
             Children =
             [
-                TextBox.Create(header: "Title", text: title, width: 320f),
-                TextBox.Create(header: "Body", text: body, width: 320f),
+                TextBox.Create(title, options: new TextBox.TextBoxOptions { Header = "Title", Width = 320f }),
+                TextBox.Create(body, options: new TextBox.TextBoxOptions { Header = "Body", Width = 320f }),
                 new BoxEl
                 {
                     Direction = 0, Gap = 8f, Wrap = true, AlignItems = FlexAlign.Center,
@@ -295,7 +299,7 @@ sealed class NotificationsCard : Component
             ],
         };
 
-        return ControlExample.Build("Toast notifications",
+        return ExampleCard.Build("Toast notifications",
             form,
             description: "Toast.Create() is a fluent builder — Title/Body/Button/Tag and no XML in sight: ShowVia() builds the ToastGeneric payload, carries the tag, and Show()s it. Buttons take a ToastButton config (icon, Success/Critical style, Dismiss, context-menu). The action toast's button argument round-trips to the Activated event (click a button on the banner). BuildXml() stays the raw escape hatch.",
             output: WinApiUi.OutputPanel(status, WinApiUi.Info, log),
@@ -372,9 +376,9 @@ sealed class CredentialsCard : Component
             Direction = 1, Gap = 12f,
             Children =
             [
-                TextBox.Create(header: "Target", text: target, width: 320f),
-                TextBox.Create(header: "User name", text: user, width: 320f),
-                TextBox.Create(header: "Secret", text: secret, width: 320f),
+                TextBox.Create(target, options: new TextBox.TextBoxOptions { Header = "Target", Width = 320f }),
+                TextBox.Create(user, options: new TextBox.TextBoxOptions { Header = "User name", Width = 320f }),
+                TextBox.Create(secret, options: new TextBox.TextBoxOptions { Header = "Secret", Width = 320f }),
                 new BoxEl
                 {
                     Direction = 0, Gap = 8f, Wrap = true, AlignItems = FlexAlign.Center,
@@ -388,7 +392,7 @@ sealed class CredentialsCard : Component
             ],
         };
 
-        return ControlExample.Build("Credential locker",
+        return ExampleCard.Build("Credential locker",
             form,
             description: "CredentialStore wraps the Win32 Credential Manager (CredWrite/CredRead/CredDelete). The secret round-trips byte-exact; the demo target is namespaced so it never collides with real app data.",
             output: new BoxEl { Direction = 1, MinWidth = 240f, Children = [new TextEl("") { Size = 13f, Weight = 600, Wrap = TextWrap.Wrap, Color = WinApiUi.Info, Text = Prop.Of(() => status.Value), }] },
@@ -428,7 +432,7 @@ sealed class PackagingCard : Component
             ],
         };
 
-        return ControlExample.Build("Package identity",
+        return ExampleCard.Build("Package identity",
             card,
             description: "PackageIdentity queries the modern-app runtime identity (GetCurrentPackageFullName + GetCurrentApplicationUserModelId). Under dotnet run / the bare exe this process is unpackaged, so the getters return null — exactly as designed.",
             code: """
@@ -515,7 +519,7 @@ sealed class ActivationCard : Component
             ],
         };
 
-        return ControlExample.Build("Protocol activation + single instance",
+        return ExampleCard.Build("Protocol activation + single instance",
             form,
             output: WinApiUi.OutputPanel(status, WinApiUi.Info, log),
             code: """
@@ -607,8 +611,8 @@ sealed class MediaCard : Component
             Direction = 1, Gap = 12f,
             Children =
             [
-                TextBox.Create(header: "Track title", text: trackTitle, width: 320f),
-                TextBox.Create(header: "Artist", text: artist, width: 320f),
+                TextBox.Create(trackTitle, options: new TextBox.TextBoxOptions { Header = "Track title", Width = 320f }),
+                TextBox.Create(artist, options: new TextBox.TextBoxOptions { Header = "Artist", Width = 320f }),
                 new BoxEl
                 {
                     Direction = 0, Gap = 8f, Wrap = true, AlignItems = FlexAlign.Center,
@@ -624,7 +628,7 @@ sealed class MediaCard : Component
             ],
         };
 
-        return ControlExample.Build("System Media Transport Controls",
+        return ExampleCard.Build("System Media Transport Controls",
             form,
             description: "SystemMediaControls.GetForWindow wires this window to the OS media surface (now-playing flyout, lock screen, hardware media keys). Enable it, then press the media keys on your keyboard or headset — each press lands in the log (marshalled off the SMTC worker thread). \"Push timeline\" sends the position + track length so the flyout shows a working scrub bar; \"+30s\" advances it.",
             output: WinApiUi.OutputPanel(status, WinApiUi.Info, log),
@@ -702,7 +706,7 @@ sealed class DialogsCard : Component
             ],
         };
 
-        return ControlExample.Build("File pickers",
+        return ExampleCard.Build("File pickers",
             form,
             description: "FilePicker wraps the modern IFileOpenDialog / IFileSaveDialog common-item dialog. Each picker is modal to the gallery window (owner HWND passed explicitly) and returns the chosen filesystem path, or null on cancel.",
             output: new BoxEl
@@ -730,7 +734,7 @@ sealed class ShellCard : Component
 {
     public override Element Render()
     {
-        var progress = UseSignal(0.4f);
+        var progress = UseFloatSignal(0.4f);
         var overlayOn = UseSignal(false);
         var status = UseSignal("Drag the slider to drive the taskbar button progress.");
         var statusColor = UseSignal(WinApiUi.Info);
@@ -812,11 +816,10 @@ sealed class ShellCard : Component
                     Children =
                     [
                         new BoxEl { Width = 64f, Children = [new TextEl("Progress") { Size = 13f, Color = Tok.TextSecondary }] },
-                        // .Value (NOT .Peek): Slider.Create is CONTROLLED — its thumb shows the value passed each render.
-                        // Reading .Value subscribes this card so an Apply() write re-renders it with the new value (granular,
-                        // only when progress changes — not every frame). With .Peek the card never re-rendered after the
-                        // FrameClock.Tick drain was removed, so the slider snapped back to the stale initial value on release.
-                        Slider.Create(progress.Value, Apply, 240f),
+                        // Signal-bound: the thumb rides `progress` on the compositor fast path (a scrub writes the signal,
+                        // no card re-render). Apply() runs the taskbar side-effect; its progress.Value write coalesces
+                        // (the slider already wrote the same value) and the status text below re-renders on that change.
+                        Slider.Create(progress, Apply, length: 240f),
                     ],
                 },
                 new BoxEl
@@ -844,7 +847,7 @@ sealed class ShellCard : Component
             ],
         };
 
-        return ControlExample.Build("Taskbar progress & jump list",
+        return ExampleCard.Build("Taskbar progress & jump list",
             form,
             description: "TaskbarManager drives the taskbar button's progress bar and overlay icon via ITaskbarList3; JumpList builds the right-click task list via ICustomDestinationList. The jump-list tasks carry fluentgpu-demo:// deep links — clicking one relaunches and round-trips through the activation pillar.",
             output: new BoxEl { Direction = 1, MinWidth = 240f, Children = [new TextEl("") { Size = 13f, Weight = 600, Wrap = TextWrap.Wrap, Color = WinApiUi.Info, Text = Prop.Of(() => status.Value), }] },
@@ -888,21 +891,21 @@ sealed class PowerCard : Component
             WindowsApiLive.Swap(ref WindowsApiLive.PowerSub, PowerSession.Subscribe());
         }, WinApiUi.MountOnce);
 
-        Action toggle = () =>
+        // The ToggleSwitch owns the `awake` signal (writes it before onChange), so this only performs the side effect
+        // for the NEW value — it must NOT flip `awake` again.
+        Action<bool> toggle = on =>
         {
             try
             {
-                if (awake.Peek())
+                if (!on)
                 {
                     WindowsApiLive.Swap(ref WindowsApiLive.KeepAwake, null);
-                    awake.Value = false;
                     status.Value = "System sleep is allowed.";
                     statusColor.Value = WinApiUi.Info;
                 }
                 else
                 {
                     WindowsApiLive.Swap(ref WindowsApiLive.KeepAwake, (System.IDisposable)PowerSession.KeepAwake(keepDisplayOn: false));
-                    awake.Value = true;
                     status.Value = "Keep-awake ACTIVE — the system will not sleep (display may still dim).";
                     statusColor.Value = WinApiUi.Ok;
                 }
@@ -936,13 +939,13 @@ sealed class PowerCard : Component
                 // Reading .Value subscribes this card so toggle()'s awake.Value write re-renders it (granular). With .Peek
                 // the card didn't re-render after the FrameClock.Tick drain was removed, so the switch froze OFF while the
                 // status text (a bound Prop) read ACTIVE.
-                ToggleSwitch.Create(awake.Value, toggle, header: "Keep system awake"),
+                ToggleSwitch.Create(awake, onChange: toggle, header: "Keep system awake"),
                 Body("Holds a power-availability request (SetThreadExecutionState) for as long as it is on. Suspend/resume broadcasts appear in the log — try sleeping and waking the machine.").Secondary() with { MaxWidth = 460f },
                 new BoxEl { Direction = 0, Gap = 8f, AlignItems = FlexAlign.Center, Children = [Button.Standard("Read power status", readPower)] },
             ],
         };
 
-        return ControlExample.Build("Power — keep awake, battery snapshot & suspend/resume",
+        return ExampleCard.Build("Power — keep awake, battery snapshot & suspend/resume",
             form,
             output: WinApiUi.OutputPanel(status, WinApiUi.Info, log),
             code: """
@@ -1036,7 +1039,7 @@ sealed class NetworkCard : Component
             ],
         };
 
-        return ControlExample.Build("Network connectivity",
+        return ExampleCard.Build("Network connectivity",
             readout,
             output: WinApiUi.OutputPanel(status, WinApiUi.Info, log),
             code: """
@@ -1074,13 +1077,13 @@ sealed class StorageCard : Component
             Direction = 1, Gap = 12f,
             Children =
             [
-                TextBox.Create(header: "Persisted note", text: note, width: 360f),
+                TextBox.Create(note, options: new TextBox.TextBoxOptions { Header = "Persisted note", Width = 360f }),
                 new BoxEl { Direction = 0, Gap = 8f, Wrap = true, AlignItems = FlexAlign.Center, Children = [Button.Accent("Save", save), Button.Standard("Reload", reload), Button.Standard("Clear", clear)] },
                 WinApiUi.Field("Local folder", store.Value!.LocalFolder),
             ],
         };
 
-        return ControlExample.Build("App data — settings & folders",
+        return ExampleCard.Build("App data — settings & folders",
             form,
             description: "AppDataStore is the unpackaged ApplicationData analogue: typed Get/Set (String/Bool/Int/Long/Double/Bytes) persisted under HKCU\\Software\\{publisher}\\{product}, plus Local/Cache/Temp folders. SettingsStore wraps it as write-through Signal<T> for one-line persisted bindings.",
             output: WinApiUi.OutputPanel(status, WinApiUi.Info, log),
@@ -1138,7 +1141,7 @@ sealed class FileDropCard : Component
             },
             content: content);
 
-        return ControlExample.Build("File & folder drop — styled DropZone",
+        return ExampleCard.Build("File & folder drop — styled DropZone",
             zone,
             description: "DropZone announces droppability by restyling the zone itself — a soft dashed accent ring + glow fade in while a compatible drag is live, and brighten when it hovers (no second labelled panel, so the content's own text never doubles). OS file drags deliver live hover: the Windows backend registers a hand-rolled OLE IDropTarget (DragEnter/Over/Leave → the engine external-drop seam) which also drives the OS \"+Copy\" cursor; the file list is read once, at drop. Lights up for in-app drags too. DropKinds.Files / FileDropData.",
             output: WinApiUi.OutputPanel(status, WinApiUi.Info, files),

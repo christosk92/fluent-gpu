@@ -242,8 +242,8 @@ What that does, in token terms:
   show. That is why the override exists: the engine sets the window background to transparent so Mica reads
   through.
 
-`FluentApp.Run` takes a `bool mica = true` parameter; pass `mica: false` for an opaque window (the backdrop
-becomes acrylic and the window background stays opaque). The accent injection happens either way.
+`FluentApp.Run` reads `AppOptions.Mica` (defaults to `true`); pass `new AppOptions { Mica = false }` for an opaque
+window (the backdrop becomes acrylic and the window background stays opaque). The accent injection happens either way.
 
 > Note: `FluentApp.Run` does not set the *theme kind* for you — light vs dark is your call (`Tok.Use(...)`).
 > The Mica/titlebar wiring above passes `Theme.Dark` (the current kind) through to the DWM dark-mode attribute,

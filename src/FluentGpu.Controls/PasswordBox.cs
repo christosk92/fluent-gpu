@@ -2,6 +2,7 @@ using FluentGpu.Dsl;
 using FluentGpu.Forms;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Localization;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
 
@@ -58,7 +59,7 @@ public sealed class PasswordBox : Component
     /// own (not forwarded — its part names would collide with this control's).</summary>
     public TemplateParts? Parts;
 
-    public string Placeholder = "Password";
+    public Prop<string> Placeholder = Loc.Bind(Strings.PasswordBox.Placeholder);   // culture-reactive default; a plain string overrides
     public float Width = 280f;
     public string? Header;
     public string? Description;
@@ -77,23 +78,24 @@ public sealed class PasswordBox : Component
 
     /// <summary>Source-compatible factory: the original (placeholder, width, header) shape plus the WinUI surface.</summary>
     public static Element Create(
-        string placeholder = "Password", float width = 280f, string? header = null,
+        string? placeholder = null, float width = 280f, string? header = null,
         PasswordRevealMode revealMode = PasswordRevealMode.Peek,
         char passwordChar = '●',
         int maxLength = 0,
         bool isEnabled = true,
         string? description = null,
         Signal<string>? password = null,
-        Action<string>? onPasswordChanged = null,
+        Action<string>? onChange = null,
         Action<string>? onCommit = null,
         TemplateParts? parts = null,
         Field<string>? field = null)
         => Embed.Comp(() => new PasswordBox
         {
-            Placeholder = placeholder, Width = width, Header = header,
+            Placeholder = placeholder is null ? Loc.Bind(Strings.PasswordBox.Placeholder) : (Prop<string>)placeholder,
+            Width = width, Header = header,
             RevealMode = revealMode, PasswordChar = passwordChar, MaxLength = maxLength, IsEnabled = isEnabled,
             Description = description, Password = password,
-            OnPasswordChanged = onPasswordChanged, OnCommit = onCommit, Parts = parts, Field = field,
+            OnPasswordChanged = onChange, OnCommit = onCommit, Parts = parts, Field = field,
         });
 
     private EditableText? _edit;

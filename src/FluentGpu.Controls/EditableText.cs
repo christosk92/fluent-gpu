@@ -109,7 +109,10 @@ public sealed class EditableText : Component
     private ColorF? _caretColor;
     // Kept for source compatibility; the caret bar itself is host-themed (TextEditStyle).
     public ColorF CaretColor { get => _caretColor ?? Tok.TextPrimary; set => _caretColor = value; }
-    public string Placeholder = "";
+    // Prop<string> so a placeholder can be a culture-reactive Loc.Bind("key") — resolved via .Current() inside the
+    // BindDisplay/BindColor thunks below (which already subscribe to _text/_epoch), so a locale change re-evaluates it.
+    // A plain string literal still assigns via the implicit Prop<string> conversion.
+    public Prop<string> Placeholder = "";
     public bool IsEnabled = true;            // gates the WinUI Disabled state visuals + the engine input gate
     public bool Mask = false;                // PasswordBox: display MaskChar per grapheme; copy/cut blocked, paste allowed
     /// <summary>Mask display character (WinUI <c>PasswordBox.PasswordChar</c>, default '●' U+25CF).</summary>
@@ -322,7 +325,12 @@ public sealed class EditableText : Component
         ];
         var lane = new BoxEl
         {
-            Direction = 0, Grow = 1f, AlignItems = laneAlign,
+            // Grow to fill the field, but ALSO Shrink=1 + MinWidth=0 so a long single-line (NoWrap) value can't blow the
+            // lane out to the text's full intrinsic width. FlexShrink defaults to 0 (Yoga-style), so without this the lane
+            // measured as wide as the whole token: the caret-follow viewport (`vw`) went huge → the text "fit" → nothing
+            // to scroll (wheel OR touchpad), AND the DeleteButton sibling was pushed past the field edge and clipped away
+            // (the "can't scroll to the overflow" + "missing ✕" bugs — both are this one missing constraint).
+            Direction = 0, Grow = 1f, Shrink = 1f, MinWidth = 0f, AlignItems = laneAlign,
             // WinUI TextBox content padding (10,5,6,6) unless the composer overrides it (the editable ComboBox passes
             // ComboBoxEditableTextPadding 11,5,38,6); the affix is a FULL-HEIGHT sibling outside this padding.
             Padding = LanePadding ?? new Edges4(10, 5, 6, 6),
@@ -846,7 +854,13 @@ public sealed class EditableText : Component
         bool first = !_synced;
         _core.ResetText(nv);
         LastChangeReason = TextChangeReason.ProgrammaticChange;
-        if (!first) OnTextChanged?.Invoke(v);
+        // Dispatch the consumer notification OUTSIDE this call's tracked scope. SyncFromSignal runs inside the
+        // BindDisplay text-bind thunk (a tracked computation), but a consumer's OnTextChanged is side-effect dispatch,
+        // NOT part of the display binding's reactive dependencies: its reads must not subscribe the bind thunk, and a
+        // normalize-write it makes to the bound text signal (e.g. NumberBox validation reformatting "25" → "10") must
+        // not be attributed to the bind thunk as a backwards-write. The write still notifies (BindDisplay re-evaluates
+        // and shows the normalized text) — only the false self-attribution is removed.
+        if (!first) Reactive.Untrack(() => OnTextChanged?.Invoke(v));
         var tn = TextNode();
         if (!tn.IsNull) _hooks?.CaretReset?.Invoke(tn);
         SyncVisual();
@@ -866,14 +880,14 @@ public sealed class EditableText : Component
         _synced = true;
         SyncFromSignal(v);
         if (_empty is { } em) em.Value = _core.Doc.Length == 0;   // re-renders the component on the FLIP only
-        return _core.Doc.Length == 0 ? Placeholder : DisplayText();
+        return _core.Doc.Length == 0 ? Placeholder.Current() : DisplayText();
     }
 
     private ColorF BindColor()
     {
         _ = _text!.Value;
         _ = _epoch!.Value;
-        bool placeholder = _core.Doc.Length == 0 && Placeholder.Length > 0;
+        bool placeholder = _core.Doc.Length == 0 && Placeholder.Current().Length > 0;
         // Disabled: placeholder = TextControlPlaceholderForegroundDisabled = TextFillColorDisabled (#5DFFFFFF dark /
         // #5C000000 light, TextBox_themeresources.xaml:38/145); text = TextControlForegroundDisabled =
         // TemporaryTextFillColorDisabled (#5DFEFEFE / #5C010101, TextBox_themeresources.xaml:22+34 / :129+141).

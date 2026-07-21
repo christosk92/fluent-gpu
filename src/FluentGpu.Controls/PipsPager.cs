@@ -2,6 +2,7 @@ using FluentGpu.Animation;
 using FluentGpu.Foundation;
 using FluentGpu.Dsl;
 using FluentGpu.Hooks;
+using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
 
@@ -34,24 +35,21 @@ public static class PipsPager
     /// Role, OnKeyDown (arrow roving focus), OnRealized (focus-handle capture).</summary>
     public const string PartDot = "Dot";
 
-    public static Element Create(int count, int selected, Action<int> onSelect, TemplateParts? parts = null,
+    public static Element Create(int count, Signal<int>? selectedIndex = null, Action<int>? onChange = null, TemplateParts? parts = null,
                                  int maxVisiblePips = 5,
                                  PipsPagerButtonVisibility previousButtonVisibility = PipsPagerButtonVisibility.Collapsed,
                                  PipsPagerButtonVisibility nextButtonVisibility = PipsPagerButtonVisibility.Collapsed,
                                  bool vertical = false)
-        => Ctx.Provide(Props.Channel,
-                       new Props(count, selected, onSelect, parts, maxVisiblePips,
-                                 previousButtonVisibility, nextButtonVisibility, vertical),
-                       Embed.Comp(() => new PipsPagerCore()));
+        => Embed.Comp(new Props(count, selectedIndex, onChange, parts, maxVisiblePips,
+                                previousButtonVisibility, nextButtonVisibility, vertical),
+                      () => new PipsPagerCore());
 
-    /// <summary>Controlled props via context — a reused ComponentEl never re-runs its factory, so props must flow
-    /// through a provider (the RadioButtons convention).</summary>
-    internal sealed record Props(int Count, int Selected, Action<int> OnSelect, TemplateParts? Parts,
+    /// <summary>Controlled props RE-PUSHED to the core (<c>Embed.Comp(props, …)</c>) — a reused ComponentEl never
+    /// re-runs its factory — so props are delivered live (equality-gated); the core reads them with <c>UseProps</c>
+    /// (the RadioButtons convention). The selected index is a caller <see cref="Signal{T}"/> (null ⇒ auto-materialize).</summary>
+    internal sealed record Props(int Count, Signal<int>? Selected, Action<int>? OnChange, TemplateParts? Parts,
                                  int MaxVisiblePips, PipsPagerButtonVisibility PrevVisibility,
-                                 PipsPagerButtonVisibility NextVisibility, bool Vertical)
-    {
-        internal static readonly Context<Props?> Channel = new(null);
-    }
+                                 PipsPagerButtonVisibility NextVisibility, bool Vertical);
 }
 
 /// <summary>The stateful core: pointer-over/focus reveal for the nav buttons, the scroll-to-center strip animation,
@@ -74,17 +72,19 @@ internal sealed class PipsPagerCore : Component
     public override Element Render()
     {
         // Hooks — stable order, unconditionally, before any early-out.
-        var props = UseContext(PipsPager.Props.Channel);
+        var props = UseProps<PipsPager.Props>();
         var hooks = UseContext(InputHooks.Current);
         var handles = UseRef(new List<NodeHandle>()).Value;   // pip node per index (roving focus targets)
         var stripRef = UseRef<NodeHandle>(default);
         var stripSeeded = UseRef(false);
         var pointerOver = UseSignal(false);
         var focusWithin = UseSignal(false);
+        var own = UseSignal(0);   // auto-materialize (unconditional hook)
 
         var p = props;
+        var sig = p?.Selected ?? own;   // caller's value signal, else the internal one (one code path)
         int count = Math.Max(0, p?.Count ?? 0);
-        int selected = p is not null && (uint)p.Selected < (uint)count ? p.Selected : 0;   // clamp like OnSelectedPageIndexChanged (PipsPager.cpp:419-428)
+        int selected = (uint)sig.Value < (uint)count ? sig.Value : 0;   // clamp like OnSelectedPageIndexChanged (PipsPager.cpp:419-428)
         int maxVisible = Math.Max(0, p?.MaxVisiblePips ?? 5);
         bool vertical = p?.Vertical ?? false;
 
@@ -109,9 +109,8 @@ internal sealed class PipsPagerCore : Component
             // A mid-flight retarget starts from the LIVE offset (the bring-into-view glide never snaps on interrupt).
             float from = anim.TryGetTrackValue(stripRef.Value, ch, out float live) ? live : to;
             anim.Animate(stripRef.Value, ch, from, to, Motion.ControlNormal, Easing.FluentPopOpen);
-        }, selected, count, maxVisible, vertical);
+        }, DepKey.From(HashCode.Combine(selected, count, maxVisible, vertical)));
 
-        if (p is null) return new BoxEl();
         var parts = p.Parts;
 
         while (handles.Count < count) handles.Add(NodeHandle.Null);
@@ -152,7 +151,7 @@ internal sealed class PipsPagerCore : Component
             bool isSelected = index == selected;
             // Same-value select is a no-op: WinUI raises SelectedIndexChanged only through an actual DP change
             // (PipsPager.cpp:418-448).
-            Action select = () => { if (index != selected) p.OnSelect(index); };
+            Action select = () => { if (index != selected) { sig.Value = index; p.OnChange?.Invoke(index); } };
             // Glyph EA3B in the icon font; selected 6px / normal 4px (PipsPagerButtonBaseStyle + SelectedPipButtonStyle,
             // PipsPager_themeresources.xaml:209, :282). The wrapper carries the state size morph as a composited scale:
             // PointerOver → the selected size 6 (:229-231), Pressed → back to the normal size 4 (:245-247). WinUI swaps
@@ -284,13 +283,13 @@ internal sealed class PipsPagerCore : Component
         {
             if (count <= 1) return;
             int ni = Math.Max(0, selected - 1);
-            if (ni != selected) p.OnSelect(ni);
+            if (ni != selected) { sig.Value = ni; p.OnChange?.Invoke(ni); }
         };
         Action nextClick = () =>
         {
             if (count <= 1) return;
             int ni = Math.Min(selected + 1, count - 1);
-            if (ni != selected) p.OnSelect(ni);
+            if (ni != selected) { sig.Value = ni; p.OnChange?.Invoke(ni); }
         };
 
         bool prevMounted = p.PrevVisibility != PipsPagerButtonVisibility.Collapsed;

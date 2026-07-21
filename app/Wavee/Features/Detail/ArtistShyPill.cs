@@ -64,8 +64,8 @@ sealed class ArtistShyPillSurface : Component
         ColorF accent = a.Palette is { } pal ? WaveePalette.Lift(WaveePalette.Accent(pal)) : Tok.AccentDefault;
         return new BoxEl
         {
-            Direction = 0, Gap = WaveeSpace.M, AlignItems = FlexAlign.Center,
-            Padding = new Edges4(WaveeSpace.S, WaveeSpace.S, WaveeSpace.L, WaveeSpace.S),
+            Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.Center,
+            Padding = new Edges4(Spacing.S, Spacing.S, Spacing.L, Spacing.S),
             Corners = CornerRadius4.All(28f), Acrylic = Tok.AcrylicFlyout, Fill = Tok.FillLayerDefault, Shadow = Elevation.Card,
             BorderWidth = 1f, BorderColor = Tok.StrokeSurfaceDefault,
             Children =
@@ -80,11 +80,11 @@ sealed class ArtistShyPillSurface : Component
                     ] },
                 new BoxEl
                 {
-                    Direction = 0, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center,
+                    Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
                     Corners = CornerRadius4.All(18f), Padding = new Edges4(16f, 8f, 16f, 8f),
                     Fill = accent, HoverScale = 1.04f, PressScale = 0.97f,
                     OnClick = () => _ = _svc.Player.PlayAsync(_uri, 0),
-                    Children = [ Icon(Icons.Play, 14f, WaveePalette.OnAccent(accent)), new TextEl(Loc.Get(Strings.Artist.Play)) { Size = 13f, Weight = 700, Color = WaveePalette.OnAccent(accent) } ],
+                    Children = [ Icon(Icons.Play, 14f, ColorContrast.PickContrast(accent)), new TextEl(Loc.Get(Strings.Artist.Play)) { Size = 13f, Weight = 700, Color = ColorContrast.PickContrast(accent) } ],
                 },
                 Embed.Comp(() => new FollowButton(_uri, a.Name)),
             ],

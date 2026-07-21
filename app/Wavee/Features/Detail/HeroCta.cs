@@ -14,7 +14,7 @@ static class HeroCta
     {
         var pill = new BoxEl
         {
-            Direction = 0, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Corners = CornerRadius4.All(24f), Padding = new Edges4(22f, 12f, 22f, 12f),
             Fill = fill, BrushTransitionMs = 420f, Shadow = Elevation.Card,
             HoverScale = 1.04f, PressScale = 0.97f, Cursor = CursorId.Hand, Role = AutomationRole.Button,

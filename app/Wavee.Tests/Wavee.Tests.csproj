@@ -131,7 +131,6 @@
     <Compile Include="..\Wavee\SpotifyLive\Audio\HeadFileClient.cs" />
     <Compile Include="..\Wavee\SpotifyLive\Audio\IPlayPlayProvisioner.cs" />
     <Compile Include="..\Wavee\SpotifyLive\Audio\AudioFormatProbe.cs" />
-    <Compile Include="..\Wavee\SpotifyLive\Audio\Host\Dsp\*.cs" />
     <Compile Include="..\Wavee\SpotifyLive\Audio\Runtime\*.cs" />
     <!-- the track resolver (extended-metadata file discovery + Ogg/FLAC selection) — LiveTrackResolverTests drive it -->
     <!-- Audio output-device state machine + its COM-free contract, and the picker service/model (all engine-independent)

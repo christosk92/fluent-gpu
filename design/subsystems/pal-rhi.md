@@ -524,19 +524,26 @@ public readonly struct VideoSurfaceId { public readonly uint Value; }   // POD; 
 
 public interface IVideoPresenter
 {
-    VideoSurfaceId CreateSurface(NativeHandle window);          // adds a DComp child visual below the swapchain
+    VideoSurfaceId CreateSurface();                            // adds a DComp child visual below the swapchain
+    void BindSurfaceHandle(VideoSurfaceId id, nuint dcompSurfaceHandle);   // surface-handoff + DRM attach point
     void Place(VideoSurfaceId id, in RectPx deviceRect, float opacity, int z); // off-loop transform poke
     void SetVisible(VideoSurfaceId id, bool visible);
     void Destroy(VideoSurfaceId id);
-    nint GetMediaPlayerSink(VideoSurfaceId id);                 // app binds its MediaPlayer/Element to this
+    void Commit();                                             // flush queued mutations in one DComp Commit (phase 11)
 }
 ```
 
-`FluentGpu.Windows` Pal/ → DComp child visual whose content is the external `IDCompositionSurface`/swapchain the
-app's `MediaPlayer` (PlayReady `MediaPlayerElement` / SpoutDx cross-process texture) renders into.
-FluentGpu records only `DrawVideoCmd` (the hole-punch) and pokes `Place`. **The heaviest continuous work
-is off our thread by construction** — this is the one surface where single-thread v1 is an advantage:
-video composites on the OS compositor thread independent of our loop.
+`FluentGpu.Windows` Pal/ → DComp child visual (as-built `FluentGpu.Windows/Pal/DCompVideoPresenter.cs`,
+`src/FluentGpu.Engine/Seams/Pal/IVideoPresenter.cs`) whose content is an external DirectComposition surface
+**handle** the app's video backend produces (native in-process PlayReady CDM / clear `IMFMediaEngineEx`
+windowless-swapchain). **`BindSurfaceHandle` is the surface-handoff seam** — an external owner creates the
+handle (`DCompositionCreateSurfaceHandle` / `GetVideoSwapchainHandle`) and the Windows impl wraps it via
+`IDCompositionDevice::CreateSurfaceFromHandle`; it is also the **single DRM attach point** (a PROTECTED handle
+changes nothing else in the seam). Supersedes the earlier `GetMediaPlayerSink` sink-pull shape
+<!-- canon-allow: names the superseded seam method on purpose -->. FluentGpu records only `DrawVideoCmd` (the
+hole-punch) and pokes `Place`. **The heaviest continuous work is off our thread by construction** — this is the
+one surface where single-thread v1 is an advantage: video composites on the OS compositor thread independent of
+our loop.
 
 - `VideoSurfaceRegistry` (`FluentGpu.Media`, portable) arbitrates a single surface by priority
   (theatre > PiP > sidebar); atomic handoff = no black frame.

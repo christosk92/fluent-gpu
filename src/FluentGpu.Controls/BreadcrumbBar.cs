@@ -29,15 +29,13 @@ public static class BreadcrumbBar
     /// Owned: nothing (pure styling).</summary>
     public const string PartSeparator = "Separator";
 
-    public static Element Create(IReadOnlyList<string> items, Action<int>? onSelect = null, TemplateParts? parts = null)
-        => Ctx.Provide(Props.Channel, new Props(items, onSelect, parts), Embed.Comp(() => new BreadcrumbBarCore()));
+    public static Element Create(IReadOnlyList<string> items, Action<int>? onChange = null, TemplateParts? parts = null)
+        => Embed.Comp(new Props(items, onChange, parts), () => new BreadcrumbBarCore());
 
-    /// <summary>Controlled props flow through a provider — a reused ComponentEl never re-runs its factory — so the
-    /// trail stays LIVE across parent re-renders (the RadioButtons convention).</summary>
-    internal sealed record Props(IReadOnlyList<string> Items, Action<int>? OnSelect, TemplateParts? Parts)
-    {
-        internal static readonly Context<Props?> Channel = new(null);
-    }
+    /// <summary>Controlled props are RE-PUSHED live to the reused core (<c>Embed.Comp(props, …)</c>) — a reused
+    /// ComponentEl never re-runs its factory — so the trail stays LIVE across parent re-renders; the core reads them
+    /// with <c>UseProps</c> (the SelectorBar/RadioButtons convention).</summary>
+    internal sealed record Props(IReadOnlyList<string> Items, Action<int>? OnChange, TemplateParts? Parts);
 }
 
 /// <summary>The stateful core: captures crumb node handles so Left/Right can move focus crumb-to-crumb, the
@@ -47,12 +45,10 @@ internal sealed class BreadcrumbBarCore : Component
     public override Element Render()
     {
         // Hooks — stable order, unconditionally, before any early-out.
-        var props = UseContext(BreadcrumbBar.Props.Channel);
+        var p = UseProps<BreadcrumbBar.Props>();   // re-pushed live props (items/selection stay current across re-renders)
         var hooks = UseContext(InputHooks.Current);
         var handles = UseRef(new List<NodeHandle>()).Value;   // crumb node per index (arrow-key focus targets)
 
-        if (props is null) return new BoxEl();
-        var p = props;
         var parts = p.Parts;
         int count = p.Items?.Count ?? 0;
         while (handles.Count < count) handles.Add(NodeHandle.Null);
@@ -107,8 +103,8 @@ internal sealed class BreadcrumbBarCore : Component
                     PressedColor = Tok.TextTertiary,  // BreadcrumbBarPressedForegroundBrush = TextFillColorTertiary (themeresources:11)
                 };
 
-            var onSelect = p.OnSelect;
-            Action? click = isLast || onSelect is null ? null : () => onSelect(index);
+            var onChange = p.OnChange;
+            Action? click = isLast || onChange is null ? null : () => onChange(index);
             var crumb = new BoxEl
             {
                 Direction = 0,

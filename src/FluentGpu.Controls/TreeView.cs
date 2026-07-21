@@ -116,13 +116,13 @@ public sealed class TreeView : Component
         var hooks = UseContext(InputHooks.Current);
         // Stable per-node identity (REFERENCE-keyed — TreeNode is a record, value equality would alias identical
         // subtrees): expansion/selection/keys survive sibling reorders, unlike positional paths.
-        var ids = UseMemo(static () => new Dictionary<TreeNode, string>(ReferenceEqualityComparer.Instance));
+        var ids = UseMemo(static () => new Dictionary<TreeNode, string>(ReferenceEqualityComparer.Instance), DepKey.Empty);
         var (expanded, setExpanded) = UseState(ImmutableHashSet<string>.Empty);
         var (selected, setSelected) = UseState<string?>(null);          // single-select
         var (multiSelected, setMultiSelected) = UseState(ImmutableHashSet<string>.Empty);
-        var handles = UseMemo(static () => new Dictionary<string, NodeHandle>());
+        var handles = UseMemo(static () => new Dictionary<string, NodeHandle>(), DepKey.Empty);
         var focusedId = UseRef<string?>(null);
-        var reorder = UseMemo(static () => new ReorderList { DwellMs = ReorderList.ListDwellMs });
+        var reorder = UseMemo(static () => new ReorderList { DwellMs = ReorderList.ListDwellMs }, DepKey.Empty);
         var dragParentId = UseRef<string?>(null);
         var orderVersion = UseSignal(0);
         var structureVersion = UseSignal(0);     // bumped on in-place sibling mutation (OnReorder == null commits)
@@ -326,9 +326,14 @@ public sealed class TreeView : Component
             return null;
         }
 
-        if (reordering)
+        // The dwell + 1s drag-over auto-expand tick on the frame clock while a drag is live. The tick subscription
+        // drives the per-frame re-render; the ADVANCE + orderVersion bump run in the post-render effect below, NOT the
+        // render body — writing orderVersion in render would be a backwards-write (the render subscribes it above to
+        // bootstrap the reorder loop, so a same-run write re-marks this render stale = a convergence risk).
+        long tick = reordering ? UseContext(FrameClock.Tick) : 0L;
+        UseEffect(() =>
         {
-            _ = UseContext(FrameClock.Tick);   // dwell ticks while a drag is live (safe conditional read)
+            if (!reorder.IsActive) { lastDwellTick.Value = 0; autoExpandId.Value = null; return; }
             long now = Environment.TickCount64;
             float dt = lastDwellTick.Value == 0 ? 0f : Math.Clamp(now - lastDwellTick.Value, 0, 100);
             lastDwellTick.Value = now;
@@ -348,8 +353,7 @@ public sealed class TreeView : Component
                     if (hn is not null && !expanded.Contains(hoverId)) { ToggleExpand(hn); orderVersion.Value = orderVersion.Peek() + 1; }
                 }
             }
-        }
-        else { lastDwellTick.Value = 0; autoExpandId.Value = null; }
+        }, DepKey.From(reordering ? tick + 1 : 0L));
 
         // Edge auto-scroll during a drag (WinUI band 100px, 150-1500px/s, ListViewBase_Partial_Reorder.cpp:39-47).
         // The flat row column has no ScrollView of its own, so nudge the nearest SCROLLABLE ANCESTOR (the consumer's

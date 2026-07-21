@@ -23,8 +23,9 @@ call), then for exactly that flush:
    caption + Mica). **Instant** — the OS can't cross-fade its backdrop.
 2. `Reconciler.SetThemeTransition(250f)` arms a cross-fade window, then `Reconciler.RethemeAll()`:
    - **Re-renders every mounted component in place** (`_comps` + root) — diff, **not** remount, so state and node
-     identity survive. `ReactiveComponent`s are `InvalidateTree()`'d first so their cached `Setup()` re-runs (positional
-     hook cells reused → state preserved).
+     identity survive. Scheduling each render-effect re-runs its `Render()` body against the SAME `RenderContext`
+     (keyed hook cells reused → state preserved), so a run-once component that reads `Tok.*` directly in `Render()`
+     (the former `Setup()` idiom — there's no tree cache to invalidate any more) picks up the new theme in place.
    - **Re-fires every binding + control-flow boundary** in `_nodeBindings` — `Flow.For`/`Flow.Show`/skeleton boundary
      effects (rebuild their rows/branches reading the new tokens) and **bound color channels**
      (`Fill = Prop.Of(() => Tok.X)`). These are *not* component renders, so without this they'd keep the old theme.
@@ -41,7 +42,7 @@ call), then for exactly that flush:
 | A `Flow.For` / `Flow.Show` row factory | ✅ boundary effect re-fires (RethemeAll → `_nodeBindings`) | ✅ cross-fade |
 | A bound channel `Fill = Prop.Of(() => Tok.X)` | ✅ bind re-fires (RethemeAll → `_nodeBindings`) | ⚠️ snaps |
 | A **frozen literal** passed as a constructor arg (`OverlayHost.Child`, a control's `ColorF` prop) | ❌ **stays stale** | — |
-| A `ReactiveComponent`'s `Setup()` direct `Tok.X` read | ✅ `InvalidateTree` re-runs Setup | ✅ cross-fade |
+| A run-once component's direct `Tok.X` read in `Render()` | ✅ render-effect re-scheduled → re-runs in place | ✅ cross-fade |
 | DWM Mica / caption | ✅ re-applied (instant) | ❌ OS-owned |
 
 ## App API
@@ -105,8 +106,8 @@ UseContext(ThemeControl.Request)?.Invoke(250f);        // host: in-place re-rend
    (#1/#2).
 3. Is X inside a `Flow.For`/`Flow.Show`/virtual row? → covered by `RethemeAll` `_nodeBindings` re-fire; if still stale,
    the boundary effect isn't registered (#4).
-4. Is X a `ReactiveComponent` reading `Tok` in `Setup()`? → covered by `InvalidateTree`; ensure `Setup`'s hook order is
-   theme-invariant.
+4. Is X a run-once component reading `Tok` directly in `Render()`? → covered by RethemeAll re-scheduling its
+   render-effect (it re-runs in place); ensure the render's hook call order is theme-invariant.
 5. Is X an app-local color constant? → make it theme-aware (#3).
 6. Is X the window backdrop/caption? → DWM/OS, not us (#6).
 
@@ -116,7 +117,7 @@ UseContext(ThemeControl.Request)?.Invoke(250f);        // host: in-place re-rend
 |---|---|
 | Tokens, `Use`, `Epoch`, accent | `src/FluentGpu.Engine/Dsl/Tokens.cs`; facade `Theme.cs` |
 | `RethemeAll` / `SetThemeTransition` / `BrushAnim` seeding | `src/FluentGpu.Engine/Reconciler/Reconciler.cs` |
-| `ReactiveComponent.InvalidateTree` | `src/FluentGpu.Engine/Hooks/Component.cs` |
+| `Component` (one base; render-effect owned by its per-component `ReactiveScope`) | `src/FluentGpu.Engine/Hooks/Component.cs` |
 | Host detection + transition window + `RequestThemeTransition` + `OnApplyThemeMaterial` + `SystemColorsChanged` | `src/FluentGpu.Engine/Hosting/AppHost.cs` |
 | Ambient `ThemeControl.Request` | `src/FluentGpu.Engine/Hooks/ThemeControl.cs` |
 | `BrushAnim` cross-fade | `src/FluentGpu.Engine/Scene/{Columns,SceneStore}.cs`, `Render/SceneRecorder.cs` |

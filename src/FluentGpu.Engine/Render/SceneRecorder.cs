@@ -474,12 +474,30 @@ public static class SceneRecorder
         }
     }
 
+    // Walk recurses once per tree level with a heavy frame and NO release-mode cap — stack headroom assumes tree depth
+    // stays in the low hundreds. This tripwire catches a runaway/cyclic tree long before stack exhaustion would.
+    // NOTE: `depth` carries a z-band in the high bits (drag ghost = 1<<16, connected-anim overlays = (1<<16)|1 — see
+    // Record's top-band walks); only the low 16 bits count recursion levels within a band.
+    private const int MaxRecordDepth = 512;
+
+    /// <summary>[Conditional("DEBUG")] record-depth tripwire: a scene deeper than <see cref="MaxRecordDepth"/> levels
+    /// (within its z-band — the high bits of <paramref name="depth"/> are the band, not recursion) is a runaway (a
+    /// reconciler cycle or pathological nesting), not a real UI — fail loudly here instead of overflowing the
+    /// render-thread stack mid-<see cref="Walk"/>. Erased from Release/Ship.</summary>
+    [System.Diagnostics.Conditional("DEBUG")]
+    private static void AssertRecordDepth(int depth, NodeHandle node)
+    {
+        if ((depth & 0xFFFF) > MaxRecordDepth)
+            throw new InvalidOperationException($"SceneRecorder.Walk exceeded {MaxRecordDepth} levels at node {node.Raw.Index} — runaway/cyclic scene tree.");
+    }
+
     private static SpanRecordResult Walk(SceneStore scene, DrawList dl, ImageCache? images, NodeHandle node, Affine2D parentWorld, float parentOpacity,
                                          int depth, RectF clip, in FocusVisualStyle focus, in TextEditStyle textEdit, ColorF scrollThumb, ColorF scrollTrack,
                                          float parentScaleX, float parentScaleY, bool parentInMotion, bool parentScrollInMotion, InheritedState inherited,
                                          ReadOnlySpan<NodeHandle> skipRoots, SpanTable? spans, uint spanFrame, bool spanReuseDisabled, bool spanStoreEnabled,
                                          ref RecordAccumulator stats)
     {
+        AssertRecordDepth(depth, node);
         if (!skipRoots.IsEmpty && ContainsNode(skipRoots, node)) return default;   // subtree renders in its own popup window
         NodeFlags flags = scene.Flags(node);
         if ((flags & NodeFlags.Visible) == 0) return default;   // invisible subtree contributes nothing
@@ -731,7 +749,10 @@ public static class SceneRecorder
         EdgeFadeSpec edgeFade = default;
         bool isEdgeFade = overlapsClip && TryResolveEdgeFade(scene, node, flags, maybeSparsePaint, out edgeFade);
         if (isEdgeFade) stats.EdgeFadeGroupCount++;
-        bool isBlurCandidate = !isEdgeFade && p.BlurSigma > 0.01f && overlapsClip;
+        // An opacity-zero stagger row still has a non-zero authored blur during its delay. It contributes no pixels, so
+        // allocating/clearing an offscreen RT and running two Gaussian passes is exact dead work (and made several
+        // delayed Home rows overlap their GPU cost). Keep walking for animation/hit state, but do not emit a blur group.
+        bool isBlurCandidate = !isEdgeFade && opacity > 0.001f && p.BlurSigma > 0.01f && overlapsClip;
         if (isBlurCandidate)
         {
             stats.BlurCandidateCount++;
@@ -767,7 +788,8 @@ public static class SceneRecorder
         else if (isBlurGroup)
         {
             dl.PushBlurLayer(deviceBounds, p.Corners, p.BlurSigma, opacity, key,
-                holdBlur ? p.BlurCachePolicy : BlurCachePolicy.Normal, inMotion, layerId);
+                holdBlur ? p.BlurCachePolicy : BlurCachePolicy.Normal, inMotion, layerId, clip,
+                p.BlurAnimationActive != 0);
             opacity = 1f;
         }
         else if (isOpacityGroup)

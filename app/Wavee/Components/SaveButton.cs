@@ -31,12 +31,11 @@ sealed class SaveButton : Component
         {
             Width = _box, Height = _box, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Corners = CornerRadius4.All(_box / 2f),
-            HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
             HoverScale = 1.06f, PressScale = 0.9f,
             Role = AutomationRole.Button,
             OnClick = () => lib.ToggleSaved(_uri, _name),
-            Children = [Icon(saved ? Mdl.HeartFill : Icons.Heart, _glyph, saved ? Tok.AccentTextPrimary : Tok.TextSecondary)],
-        };
+            Children = [Icon(saved ? Icons.HeartFill : Icons.Heart, _glyph, saved ? Tok.AccentTextPrimary : Tok.TextSecondary)],
+        }.Interactive(Interaction.Subtle);
     }
 }
 
@@ -57,8 +56,8 @@ sealed class FollowButton : Component
         ColorF idleInk = _foreground ?? Tok.TextPrimary;
         return new BoxEl
         {
-            Direction = 0, Height = 36f, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Padding = new Edges4(WaveeSpace.L, 0f, WaveeSpace.L, 0f), Corners = CornerRadius4.All(18f),
+            Direction = 0, Height = 36f, Gap = Spacing.S, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Padding = new Edges4(Spacing.L, 0f, Spacing.L, 0f), Corners = CornerRadius4.All(18f),
             BorderWidth = 1.5f, BorderColor = following ? Tok.AccentDefault
                 : _foreground is { } fg ? fg with { A = 0.42f } : Tok.StrokeControlDefault,
             HoverFill = _foreground is { } hover ? hover with { A = 0.12f } : Tok.FillSubtleSecondary,
@@ -67,7 +66,7 @@ sealed class FollowButton : Component
             OnClick = () => lib.ToggleSaved(_uri, _name),
             Children =
             [
-                Icon(following ? Mdl.HeartFill : Icons.Heart, 14f, following ? Tok.AccentTextPrimary : idleInk),
+                Icon(following ? Icons.HeartFill : Icons.Heart, 14f, following ? Tok.AccentTextPrimary : idleInk),
                 new TextEl(Loc.Get(following ? Strings.Artist.Following : Strings.Artist.Follow))
                     { Size = 13f, Weight = 700, Color = following ? Tok.AccentTextPrimary : idleInk },
             ],
@@ -78,8 +77,8 @@ sealed class FollowButton : Component
     // bordered pill, not a full-width default bar that would stretch across the actions row.
     public static Element SkeletonShape() => new BoxEl
     {
-        Direction = 0, Height = 36f, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Padding = new Edges4(WaveeSpace.L, 0f, WaveeSpace.L, 0f), Corners = CornerRadius4.All(18f),
+        Direction = 0, Height = 36f, Gap = Spacing.S, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+        Padding = new Edges4(Spacing.L, 0f, Spacing.L, 0f), Corners = CornerRadius4.All(18f),
         BorderWidth = 1.5f, BorderColor = Tok.StrokeControlDefault,
         Children =
         [

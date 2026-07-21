@@ -1,6 +1,7 @@
 using FluentGpu.Foundation;
 using FluentGpu.Dsl;
 using FluentGpu.Hooks;
+using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
 
@@ -33,18 +34,16 @@ public static class SelectorBar
 
     /// <summary><paramref name="icons"/> = optional per-item glyphs (WinUI SelectorBarItem.Icon, SelectorBar.idl):
     /// rendered before the text at 0.8 scale with the −2,0 icon margin, recolored by the same foreground states.</summary>
-    public static Element Create(IReadOnlyList<string> items, int selected, Action<int> onSelect,
+    public static Element Create(IReadOnlyList<string> items, Signal<int>? selectedIndex = null, Action<int>? onChange = null,
                                  TemplateParts? parts = null, IReadOnlyList<string?>? icons = null)
-        => Ctx.Provide(Props.Channel, new Props(items, icons, selected, onSelect, parts),
-                       Embed.Comp(() => new SelectorBarCore()));
+        => Embed.Comp(new Props(items, icons, selectedIndex, onChange, parts), () => new SelectorBarCore());
 
-    /// <summary>Controlled props flow through a provider — a reused ComponentEl never re-runs its factory — so the
-    /// items/selection stay LIVE across parent re-renders (the RadioButtons pattern).</summary>
-    internal sealed record Props(IReadOnlyList<string> Items, IReadOnlyList<string?>? Icons, int Selected,
-                                 Action<int> OnSelect, TemplateParts? Parts)
-    {
-        internal static readonly Context<Props?> Channel = new(null);
-    }
+    /// <summary>Controlled props are RE-PUSHED live to the reused core (<c>Embed.Comp(props, …)</c>) — a reused
+    /// ComponentEl never re-runs its factory, so the items stay LIVE across parent re-renders via the props channel.
+    /// The selected index is a caller <see cref="Signal{T}"/> read directly in the core (null ⇒ auto-materialize); a
+    /// select/roving move WRITES the signal then fires OnChange. The core reads props with <c>UseProps</c>.</summary>
+    internal sealed record Props(IReadOnlyList<string> Items, IReadOnlyList<string?>? Icons, Signal<int>? Selected,
+                                 Action<int>? OnChange, TemplateParts? Parts);
 }
 
 /// <summary>The stateful core: captures item node handles (for the roving focus moves) and routes the arrow keys —
@@ -65,23 +64,24 @@ internal sealed class SelectorBarCore : Component
     public override Element Render()
     {
         // Hooks — stable order, unconditionally, before any early-out.
-        var props = UseContext(SelectorBar.Props.Channel);
+        var p = UseProps<SelectorBar.Props>();   // re-pushed live props (items stay current across re-renders)
         var hooks = UseContext(InputHooks.Current);
         var handles = UseRef(new List<NodeHandle>()).Value;
+        var own = UseSignal(-1);                 // auto-materialize (unconditional hook)
+        var sig = p.Selected ?? own;             // caller's value signal, else the internal one (one code path)
+        int selected = sig.Value;                // read directly (live); a programmatic write re-skins with no OnChange echo
 
-        if (props is null) return new BoxEl();
-        var p = props;
         int count = p.Items?.Count ?? 0;
         while (handles.Count < count) handles.Add(NodeHandle.Null);
 
         // The single roving tab stop: the selected item, or the first when nothing is selected (TabNavigation=Once,
         // SelectorBar.xaml:13 — focus enters the bar exactly once).
-        int tabStop = (uint)p.Selected < (uint)count ? p.Selected : 0;
+        int tabStop = (uint)selected < (uint)count ? selected : 0;
 
         void MoveTo(int target)
         {
             if ((uint)target >= (uint)count) return;
-            p.OnSelect(target);                                  // selection follows focus (SelectorBarTests.cs:63-66)
+            sig.Value = target; p.OnChange?.Invoke(target);      // selection follows focus (SelectorBarTests.cs:63-66)
             if (target < handles.Count && !handles[target].IsNull)
                 (hooks.MoveFocusVisual ?? hooks.RestoreFocus)?.Invoke(handles[target]);   // keyboard move → focus visual
         }
@@ -109,8 +109,8 @@ internal sealed class SelectorBarCore : Component
         for (int i = 0; i < count; i++)
         {
             int index = i;
-            bool isSelected = index == p.Selected;
-            Action select = () => p.OnSelect(index);
+            bool isSelected = index == selected;
+            Action select = () => { sig.Value = index; p.OnChange?.Invoke(index); };
             Action<NodeHandle> onRealized = h => { if (index < handles.Count) handles[index] = h; };
 
             // Foreground states (SelectorBar_themeresources.xaml): rest/Selected = TextFillColorPrimary (:16, :18);
@@ -186,7 +186,7 @@ internal sealed class SelectorBarCore : Component
                 OnKeyDown = a => OnItemKey(index, a),
                 // Focus entering a bar with no selection auto-selects the focused item (SelectorBar::OnGotFocus,
                 // SelectorBar.cpp:98-126).
-                OnFocusChanged = got => { if (got && p.Selected < 0) p.OnSelect(index); },
+                OnFocusChanged = got => { if (got && selected < 0) { sig.Value = index; p.OnChange?.Invoke(index); } },
                 OnRealized = onRealized,
                 Children = [content, pillSlot],
             };

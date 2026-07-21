@@ -27,7 +27,7 @@ React-style authoring surface — and it is the *as-built* runtime, documented a
 | `Memo<T>` | `src/FluentGpu.Engine/Foundation/Signals/Memo.cs` |
 | The unified bindable channel `Prop<T>` | `src/FluentGpu.Engine/Foundation/Signals/Prop.cs` |
 | Hook cells + stable call-order | `src/FluentGpu.Engine/Hooks/RenderContext.cs` |
-| `Component` / `ReactiveComponent` (the `RunsOnce` gate) | `src/FluentGpu.Engine/Hooks/Component.cs` |
+| `Component` (run-once inferred) | `src/FluentGpu.Engine/Hooks/Component.cs` |
 | Reconcile, render-effects, `For`/`Show`, context, bind wiring | `src/FluentGpu.Engine/Reconciler/Reconciler.cs` |
 | The frame loop that calls `Flush` (phase 3) | `src/FluentGpu.Engine/Hosting/AppHost.cs` |
 | Golden checks | `src/FluentGpu.VerticalSlice/Program.cs` |
@@ -223,38 +223,29 @@ cell (`MemoHookCell : IDisposableCell`) so unmount disposes it.
 
 Cell types worth knowing when you add a hook: `SignalCell<T>`, `FloatSignalCell`, `MemoHookCell<T>` (disposable),
 `EffectCell` (holds `Deps` + `Cleanup`), `MemoCell<T>` (the dep-array `UseMemo`), `RefHolderCell`, `AnimValueCell`.
-`UseEffect`/`UseLayoutEffect` use a **dependency array** (`DepsEqual` over `object[]`), not signal tracking — they
-re-run when a dep changes and stage into `PendingEffects` (phase 12, after present) or `PendingLayoutEffects`
-(phase 6.5, after layout, `Bounds` valid). `RunAllCleanups()` runs every effect cleanup and disposes every
+`UseEffect`/`UseLayoutEffect` take a `DepKey deps = default` (compared via `DepDeps.Equals`) rather than signal
+tracking — they re-run when a dep changes and stage into `PendingEffects` (phase 12, after present) or
+`PendingLayoutEffects` (phase 6.5, after layout, `Bounds` valid); a `UseEffect(Func<Action?>)` with no deps is
+auto-tracked (re-runs when a signal it read changes). `RunAllCleanups()` runs every effect cleanup and disposes every
 `IDisposableCell` on unmount.
 
-> The AOT-clean **`ReadOnlySpan<DepKey>`** dep-span lowering described in
-> [`reconciler-hooks.md §3.2–3.4`](../../../design/subsystems/reconciler-hooks.md) is the design target that removes
-> the `params object[]` allocation; the as-built `RenderContext` still uses the `object[]` `DepsEqual` path (cheap,
-> correct, only runs when a component actually re-renders — never on the per-frame paint path). See
+> The AOT-clean **`DepKey`** dep contract described in
+> [`reconciler-hooks.md §3.2–3.4`](../../../design/subsystems/reconciler-hooks.md) is now the as-built shape (G1a):
+> `RenderContext` stores deps as `DepKey` and compares via `DepDeps.Equals`, killing the old `params object[]`
+> allocation and its boxing. It runs only when a component actually re-renders — never on the per-frame paint path. See
 > [DepKey / GcDepTable](#depkey--gcdeptable-the-pure-scalar-16-byte-dep-contract) below.
 
-## Component vs ReactiveComponent (RunsOnce gate; the 3-signal memo skip)
+## The one Component model (run-once inferred; the 3-signal memo skip)
 
-`Component.cs` defines both base classes. A plain **`Component`** overrides `Render()` and re-runs on its own
-state/context changes (granular). A **`ReactiveComponent`** overrides `Setup()`, which runs **once**, and never
-re-renders — reactivity comes purely from bindings / `For` / `Show` inside it. The discriminator is a single virtual:
+`Component.cs` defines **one** base class. `Component` overrides `Render()`, and every `Render()` runs **tracked** — it
+subscribes to the signals it reads and re-runs on its own state/context changes (granular). A `Render()` that reads
+**no** signals is inferred to run once and never re-renders: **run-once is a consequence, not a mode.** G4b removed the
+separate `ReactiveComponent` base, its `Setup()`, and the `RunsOnce` virtual — there is one tracked `Component` and
+run-once is inferred, so there is no `RunsOnce` gate and no untracked `Setup()` to reason about.
 
-```csharp
-public virtual bool RunsOnce => false;               // Component
-
-public abstract class ReactiveComponent : Component
-{
-    public sealed override bool RunsOnce => true;
-    public abstract Element Setup();
-    public sealed override Element Render() => _tree ??= Setup();   // memoize: built exactly once
-}
-```
-
-The reconciler reads `RunsOnce` to decide whether to run the body **untracked** (so the render-effect never subscribes
-and never re-renders). The author-visible consequence is the #1 signals-native mistake: in `Setup()`, `sig.Value` is a
-one-time read, so a changing value must go through a bound prop (`Text = sig`, or `Text = Prop.Of(() => …)`) or
-`For`/`Show` — never `Ui.Text(sig.Value)`.
+The author-visible consequence is the #1 signals-native mistake: in a run-once `Render()`, `sig.Value` is a one-time
+read, so a changing value must go through a bound prop (`Text = sig`, or `Text = Prop.Of(() => …)`) or `For`/`Show` —
+never `Ui.Text(sig.Value)`.
 
 **The 3-signal memo skip** is the reconciler-side decision (per component) of whether to re-run `Render()`. It is owned
 by [`reconciler-hooks.md §6.3`](../../../design/subsystems/reconciler-hooks.md) and pinned in the
@@ -342,9 +333,9 @@ is `ReferenceEquals` of last render's object at that slot vs this render's (Reac
 reference). The table double-buffers (`_prev`/`_cur`) and swaps-and-clears per render, so live objects stay rooted only
 while the component is mounted and the reset is O(slots) — never on the per-frame paint path.
 
-As-built, `RenderContext` still uses the `object[]` `DepsEqual` path; the `DepKey`/`GcDepTable` lowering (plus the
-`FluentGpu.SourceGen` dep-span generator) is the forward target. When you wire it, the canonical signatures are the
-`ReadOnlySpan<DepKey>` overloads listed in `reconciler-hooks.md §3.4`.
+As-built (G1a), `RenderContext` uses this `DepKey`/`GcDepTable` path — deps store as `DepKey` and compare via
+`DepDeps.Equals`, never the old `object[]`. The canonical signatures are the `ReadOnlySpan<DepKey>` overloads listed in
+`reconciler-hooks.md §3.4`.
 
 ## Allocation rules (set/notify must stay alloc-free)
 

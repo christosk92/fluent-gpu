@@ -57,7 +57,7 @@ sealed class LoginView : Component
                     announce(Loc.Get(Strings.Auth.CodeExpired), true);
                     break;
             }
-        }, snap.Phase);
+        }, (int)snap.Phase);
 
         Element card = snap.Phase switch
         {
@@ -78,7 +78,7 @@ sealed class LoginView : Component
         return new BoxEl
         {
             Grow = 1f, Direction = 1, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Padding = Edges4.All(WaveeSpace.XXL),
+            Padding = Edges4.All(Spacing.XXL),
             Children = [card],
         };
     }
@@ -86,8 +86,8 @@ sealed class LoginView : Component
     // ── shared chrome ────────────────────────────────────────────────────────────────────────────────────────────────
     internal static BoxEl Card(params Element[] kids) => new BoxEl
     {
-        Direction = 1, Width = 440f, MaxWidth = 440f, AlignItems = FlexAlign.Center, Gap = WaveeSpace.L,
-        Padding = Edges4.All(32f), Corners = CornerRadius4.All(WaveeRadius.Card), Shadow = Elevation.Card,
+        Direction = 1, Width = 440f, MaxWidth = 440f, AlignItems = FlexAlign.Center, Gap = Spacing.L,
+        Padding = Edges4.All(32f), Corners = CornerRadius4.All(Radii.Card), Shadow = Elevation.Card,
         Fill = WaveeColors.Content, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
         Enter = new EnterExit(Dy: 8f, Opacity: 0f, Active: true),
         Exit = new EnterExit(Dy: -6f, Sx: 0.98f, Sy: 0.98f, Opacity: 0f, Active: true),   // success/dismiss: dissolve out as the shell rises
@@ -96,7 +96,7 @@ sealed class LoginView : Component
 
     internal static Element Brand() => new BoxEl
     {
-        Direction = 0, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center,
+        Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
         Children = [new TextEl(Icons.MusicNote) { Size = 30f, FontFamily = Theme.IconFont, Color = Tok.AccentDefault }, WaveeType.PageHero("Wavee")],
     };
 
@@ -122,7 +122,7 @@ sealed class LoginView : Component
     // ── narrow status screens ────────────────────────────────────────────────────────────────────────────────────────
     Element Splash(string status, string? sub) => Card(
         Brand(),
-        new BoxEl { Margin = new Edges4(0, WaveeSpace.S, 0, WaveeSpace.S), AlignSelf = FlexAlign.Center, Children = [ProgressBar.Indeterminate(220f)] },
+        new BoxEl { Margin = new Edges4(0, Spacing.S, 0, Spacing.S), AlignSelf = FlexAlign.Center, Children = [ProgressBar.Indeterminate(220f)] },
         BodyStrong(status),
         sub is null ? new BoxEl() : Caption(sub).Secondary());
 
@@ -146,7 +146,7 @@ sealed class LoginView : Component
         CenteredText(Body(Loc.Get(Strings.Auth.PremiumBody)).Secondary(), 360f),
         new BoxEl
         {
-            AlignSelf = FlexAlign.Stretch, Direction = 0, Gap = WaveeSpace.M, Justify = FlexJustify.Center,
+            AlignSelf = FlexAlign.Stretch, Direction = 0, Gap = Spacing.M, Justify = FlexJustify.Center,
             Children =
             [
                 Button.Accent(Loc.Get(Strings.Auth.Upgrade), () => OpenUrl("https://www.spotify.com/premium")),
@@ -187,8 +187,8 @@ sealed class TwoPaneLogin : Component
 
         var bottom = new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.Center, AlignSelf = FlexAlign.Stretch, Gap = WaveeSpace.L,
-            Margin = new Edges4(0, WaveeSpace.L, 0, 0), Padding = new Edges4(0, WaveeSpace.L, 0, 0),
+            Direction = 0, AlignItems = FlexAlign.Center, AlignSelf = FlexAlign.Stretch, Gap = Spacing.L,
+            Margin = new Edges4(0, Spacing.L, 0, 0), Padding = new Edges4(0, Spacing.L, 0, 0),
             BorderColor = Tok.StrokeDividerDefault, BorderWidth = 0f,
             Children =
             [
@@ -198,13 +198,13 @@ sealed class TwoPaneLogin : Component
         };
 
         // A top hairline above the bottom bar (the card's footer separator).
-        var footerSep = new BoxEl { Height = 1f, AlignSelf = FlexAlign.Stretch, Margin = new Edges4(0, WaveeSpace.L, 0, 0), Fill = Tok.StrokeDividerDefault };
+        var footerSep = new BoxEl { Height = 1f, AlignSelf = FlexAlign.Stretch, Margin = new Edges4(0, Spacing.L, 0, 0), Fill = Tok.StrokeDividerDefault };
 
         return new BoxEl
         {
             Direction = 1, Width = CardW, MaxWidth = CardW, AlignItems = FlexAlign.Stretch,
             Padding = new Edges4(36f, 32f, 36f, 24f), Gap = 0f,
-            Corners = CornerRadius4.All(WaveeRadius.Card), Shadow = Elevation.Card,
+            Corners = CornerRadius4.All(Radii.Card), Shadow = Elevation.Card,
             Fill = WaveeColors.Content, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             Enter = new EnterExit(Dy: 8f, Opacity: 0f, Active: true),
             Exit = new EnterExit(Dy: -6f, Sx: 0.98f, Sy: 0.98f, Opacity: 0f, Active: true),   // success: dissolve out as the shell rises in
@@ -214,14 +214,14 @@ sealed class TwoPaneLogin : Component
 
     Element LeftPane() => new BoxEl
     {
-        Direction = 1, Grow = 1f, Basis = 0f, Gap = WaveeSpace.L, Justify = FlexJustify.Start,
+        Direction = 1, Grow = 1f, Basis = 0f, Gap = Spacing.L, Justify = FlexJustify.Start,
         Padding = new Edges4(4f, 8f, 36f, 8f),
         Children =
         [
             // Spotify wordmark (green) — identification use; the disclaimer below states the trademark.
             new BoxEl
             {
-                Direction = 0, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center,
+                Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
                 Children =
                 [
                     new TextEl(Icons.MusicNote) { Size = 30f, FontFamily = Theme.IconFont, Color = LoginView.SpotifyGreen },
@@ -232,7 +232,7 @@ sealed class TwoPaneLogin : Component
             // The primary: open the official Spotify login in the system browser (PKCE loopback races the device code).
             new BoxEl
             {
-                AlignSelf = FlexAlign.Stretch, Direction = 0, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, MinHeight = 48f,
+                AlignSelf = FlexAlign.Stretch, Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, MinHeight = 48f,
                 Corners = Radii.ControlAll, Fill = Tok.AccentDefault, HoverFill = Tok.AccentSecondary, PressedFill = Tok.AccentTertiary,
                 BrushTransitionMs = Motion.ControlFaster, Role = AutomationRole.Button, Focusable = true, OnClick = _onLoginBrowser,
                 Children =
@@ -247,7 +247,7 @@ sealed class TwoPaneLogin : Component
 
     Element OrDivider() => new BoxEl
     {
-        Direction = 1, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Width = 48f, Gap = WaveeSpace.S,
+        Direction = 1, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Width = 48f, Gap = Spacing.S,
         Children =
         [
             new BoxEl { Width = 1f, Grow = 1f, Fill = Tok.StrokeDividerDefault },
@@ -262,7 +262,7 @@ sealed class TwoPaneLogin : Component
 
     Element RightPane(Signal<bool> copied, Action onCopy) => new BoxEl
     {
-        Direction = 1, Grow = 1f, Basis = 0f, Gap = WaveeSpace.M, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start,
+        Direction = 1, Grow = 1f, Basis = 0f, Gap = Spacing.M, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start,
         Padding = new Edges4(36f, 0f, 4f, 0f),
         Children =
         [
@@ -281,13 +281,13 @@ sealed class TwoPaneLogin : Component
             },
             new BoxEl
             {
-                Direction = 1, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center, AlignSelf = FlexAlign.Center,
+                Direction = 1, Gap = Spacing.S, AlignItems = FlexAlign.Center, AlignSelf = FlexAlign.Center,
                 Children =
                 [
                     new TextEl(_c.UserCode) { Size = 32f, Weight = 700, CharSpacing = 70f, FontFamily = LoginView.CodeFont, Color = Tok.TextPrimary },
                     new BoxEl
                     {
-                        Direction = 0, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center,
+                        Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
                         Children = [Embed.Comp(() => new CopyButton(copied, onCopy)), OpenButton(_c.VerificationUriComplete ?? _c.VerificationUri)],
                     },
                 ],
@@ -295,12 +295,12 @@ sealed class TwoPaneLogin : Component
             // Live "Waiting for you to authorize…" (animated dots) + the 1 Hz expiry countdown — replaces the static status.
             new BoxEl
             {
-                Direction = 1, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center, AlignSelf = FlexAlign.Center, Margin = new Edges4(0, WaveeSpace.S, 0, 0),
+                Direction = 1, Gap = Spacing.S, AlignItems = FlexAlign.Center, AlignSelf = FlexAlign.Center, Margin = new Edges4(0, Spacing.S, 0, 0),
                 Children =
                 [
                     new BoxEl
                     {
-                        Direction = 0, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center,
+                        Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
                         Children = [Embed.Comp(() => new WaitingDots()), Caption(Loc.Get(Strings.Auth.WaitingApproval)).Secondary()],
                     },
                     Embed.Comp(() => new LoginCountdown(_c.Expiry)),
@@ -312,21 +312,20 @@ sealed class TwoPaneLogin : Component
     // A compact inline link with a trailing external-open glyph (tight padding so it sits flush between the words).
     static Element LinkWithIcon(string text, string url) => new BoxEl
     {
-        Direction = 0, Gap = 4f, AlignItems = FlexAlign.Center, Padding = new Edges4(3, 1, 3, 1), Corners = CornerRadius4.All(WaveeRadius.Control),
-        HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+        Direction = 0, Gap = 4f, AlignItems = FlexAlign.Center, Padding = new Edges4(3, 1, 3, 1), Corners = CornerRadius4.All(Radii.Control),
         Role = AutomationRole.Hyperlink, Focusable = true, OnClick = () => LoginView.OpenUrl(url),
         Children =
         [
             new TextEl(text) { Size = 13f, Weight = 600, Color = Tok.AccentTextPrimary },
             new TextEl(Icons.OpenInNewWindow) { Size = 11f, FontFamily = Theme.IconFont, Color = Tok.AccentTextPrimary },
         ],
-    };
+    }.Interactive(Interaction.Subtle);
 
     // Open the pairing page (pre-filled with the code via VerificationUriComplete) in the system browser.
     static Element OpenButton(string url) => new BoxEl
     {
-        Direction = 0, Gap = WaveeSpace.XS, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Height = 34f, MinWidth = 96f, Padding = new Edges4(10, 0, 12, 0), Corners = CornerRadius4.All(WaveeRadius.Control),
+        Direction = 0, Gap = Spacing.XS, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+        Height = 34f, MinWidth = 96f, Padding = new Edges4(10, 0, 12, 0), Corners = CornerRadius4.All(Radii.Control),
         Fill = Tok.FillControlDefault, HoverFill = Tok.FillControlSecondary, PressedFill = Tok.FillControlTertiary,
         BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault, BrushTransitionMs = Motion.ControlFaster,
         Role = AutomationRole.Button, Focusable = true, OnClick = () => LoginView.OpenUrl(url),
@@ -363,8 +362,8 @@ sealed class CopyButton : Component
 
         return new BoxEl
         {
-            Direction = 0, Gap = WaveeSpace.XS, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Height = 34f, MinWidth = 116f, Padding = new Edges4(10, 0, 12, 0), Corners = CornerRadius4.All(WaveeRadius.Control),
+            Direction = 0, Gap = Spacing.XS, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Height = 34f, MinWidth = 116f, Padding = new Edges4(10, 0, 12, 0), Corners = CornerRadius4.All(Radii.Control),
             Fill = Tok.FillControlDefault, HoverFill = Tok.FillControlSecondary, PressedFill = Tok.FillControlTertiary,
             BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault, BrushTransitionMs = Motion.ControlFaster,
             Role = AutomationRole.Button, Focusable = true, OnClick = _onClick,
@@ -411,7 +410,7 @@ sealed class WaitingDots : Component
             Drive(d0.Value, 0.16f);   // STAGGERED peaks → a left-to-right hop wave (dot0 → dot1 → dot2)
             Drive(d1.Value, 0.28f);
             Drive(d2.Value, 0.40f);
-        });
+        }, DepKey.Empty);
         Element Dot(Action<NodeHandle> cap) => new BoxEl { Width = 6f, Height = 6f, Corners = CornerRadius4.All(3f), Fill = Tok.AccentDefault, OnRealized = cap };
         return new BoxEl { Direction = 0, Gap = 5f, AlignItems = FlexAlign.Center, Children = [Dot(h => d0.Value = h), Dot(h => d1.Value = h), Dot(h => d2.Value = h)] };
     }
@@ -435,7 +434,7 @@ sealed class LoginCountdown : Component
                 await Task.Delay(1000, ct).ConfigureAwait(false);
                 post(() => tick.Value++);   // marshal the 1 Hz write to the UI thread (the loop runs off-thread)
             }
-        }));
+        }), DepKey.Empty);
         _ = tick.Value;   // subscribe → re-render each second
 
         var remaining = _expiry - DateTimeOffset.UtcNow;
@@ -443,7 +442,7 @@ sealed class LoginCountdown : Component
         string txt = ((int)remaining.TotalMinutes).ToString("00") + ":" + remaining.Seconds.ToString("00");
         return new BoxEl
         {
-            Direction = 0, Gap = WaveeSpace.XS, AlignItems = FlexAlign.Center,
+            Direction = 0, Gap = Spacing.XS, AlignItems = FlexAlign.Center,
             Padding = new Edges4(10, 4, 11, 5), Corners = CornerRadius4.All(11f), Fill = Tok.FillSubtleSecondary,
             Children =
             [

@@ -1,3 +1,5 @@
+using FluentGpu;
+using FluentGpu.Controls;
 using FluentGpu.Hooks;
 using FluentGpu.Localization;
 using FluentGpu.Signals;
@@ -38,6 +40,17 @@ public sealed class PlaybackBridge
     long _queueRev;
     Action? _playbackErrorAction;
     long _playbackErrorActionToken;
+    // Seek latch (#2): a seek is applied by the engine ASYNCHRONOUSLY, so a stale pre-seek PositionTick can land between
+    // the optimistic paint and the engine catching up — snapping the slider back to the old spot for a frame. While the
+    // latch is live we drop incoming position ticks that are still far from the target, and release it once a tick lands
+    // near the target (the seek took) or the window expires. UI-thread only (every writer is post-marshalled).
+    long _seekLatchTargetMs = -1;
+    long _seekLatchDeadlineTick;
+    const long SeekLatchWindowMs = 1200;   // max time to suppress stale ticks after a seek
+    const long SeekLatchToleranceMs = 750;  // a tick within this of the target = the seek landed → release
+    // OS media surfaces (SMTC: lock screen, now-playing flyout, hardware media keys) mirrored from the unified state below.
+    // Null when the platform refuses it or before Activate; every push is then a no-op.
+    SystemMediaControlsBridge? _smtc;
 
     // ── UI signals (read by components) ─────────────────────────────────────────────────────────────────────────────
     public Signal<Track?> CurrentTrack { get; } = new(null);
@@ -118,8 +131,12 @@ public sealed class PlaybackBridge
                 OutputDeviceNoticeKind.DeviceRestored => Strings.Player.DeviceRestored(name),
                 _ => Loc.Get(Strings.Player.OutputFailed),
             };
-            Toasts.Show(msg, ToastSeverity.Caution, Loc.Get(Strings.Player.ChooseDevice),
-                () => DevicePickerRequest.Value = DevicePickerRequest.Peek() + 1);
+            Toast.Show(msg, new ToastOptions
+            {
+                Severity = InfoBarSeverity.Warning,
+                ActionLabel = Loc.Get(Strings.Player.ChooseDevice),
+                OnAction = () => DevicePickerRequest.Value = DevicePickerRequest.Peek() + 1,
+            });
         });
     }
 
@@ -164,6 +181,14 @@ public sealed class PlaybackBridge
             User.Value = _session.CurrentUser;            // profile chip (name/avatar) follows the session
         })));
         WireStore();   // if a store was attached before mount, start observing it now
+        // Mirror the unified now-playing state onto the OS media surfaces (SMTC). UI-thread + the real top-level HWND
+        // (FluentApp.WindowHandle); fail-soft if the platform refuses. Enabled for every backend (fake/offline included) —
+        // it reflects whatever the bridge is showing, and transport buttons route back through _player like the on-screen ones.
+        if (OperatingSystem.IsWindowsVersionAtLeast(8, 0))
+        {
+            _smtc = new SystemMediaControlsBridge(this, _player, post);
+            _smtc.Activate(FluentApp.WindowHandle);
+        }
         PlaybackBucketDiagnostics.Startup("bridge", "activated");
         PlaybackBucketDiagnostics.QueueIfChanged(ref _lastQueueDiagSig, "bridge.activate.initial",
             _state.Queue, _state.ContextUri, _state.CurrentTrack?.Uri);
@@ -176,11 +201,14 @@ public sealed class PlaybackBridge
     public void NotifyLocalPlaybackUnsupported()
     {
         if (_post is not { } post) return;
-        post(() => Toasts.Show(
+        post(() => Toast.Show(
             Loc.Get(Strings.Player.LocalPlaybackUnsupported),
-            ToastSeverity.Critical,
-            Loc.Get(Strings.Player.ChooseDevice),
-            () => DevicePickerRequest.Value = DevicePickerRequest.Peek() + 1));
+            new ToastOptions
+            {
+                Severity = InfoBarSeverity.Error,
+                ActionLabel = Loc.Get(Strings.Player.ChooseDevice),
+                OnAction = () => DevicePickerRequest.Value = DevicePickerRequest.Peek() + 1,
+            }));
     }
 
     /// <summary>An outbound Connect command (transfer / play) to the active remote device failed — surface it as a critical
@@ -188,7 +216,7 @@ public sealed class PlaybackBridge
     public void NotifyRemoteCommandFailed()
     {
         if (_post is not { } post) return;
-        post(() => Toasts.Show(Loc.Get(Strings.Player.RemoteCommandFailed), ToastSeverity.Critical));
+        post(() => Toast.Show(Loc.Get(Strings.Player.RemoteCommandFailed), new ToastOptions { Severity = InfoBarSeverity.Error }));
     }
 
     /// <summary>A LOCAL playback attempt failed (key/CDN/decode/provisioning) — surface a typed, user-facing message as a
@@ -205,8 +233,12 @@ public sealed class PlaybackBridge
             var token = ++_playbackErrorActionToken;
             _playbackErrorAction = retry;
             HasPlaybackErrorAction.Value = retry is not null;
-            Toasts.Show(message, ToastSeverity.Critical, retryLabel,
-                retry is null ? null : () => InvokePlaybackErrorAction(token));
+            Toast.Show(message, new ToastOptions
+            {
+                Severity = InfoBarSeverity.Error,
+                ActionLabel = retryLabel,
+                OnAction = retry is null ? null : () => InvokePlaybackErrorAction(token),
+            });
         });
     }
 
@@ -317,6 +349,7 @@ public sealed class PlaybackBridge
         CanSeek.Value = s.CanSeek && s.RecoveryKind == PlaybackRecoveryKind.None;
         ActiveDeviceId.Value = s.ActiveDeviceId;
         PushPosition(s.PositionMs);
+        _smtc?.OnStateChanged();   // metadata / play-status / prev-next availability → OS media surface
     }
 
     // Fold the queue's SET identity (count + per-row id/bucket/provider) and bump the revision only on a real change.
@@ -339,10 +372,26 @@ public sealed class PlaybackBridge
         QueueRevision.Value = ++_queueRev;
     }
 
+    /// <summary>Arm the seek latch (#2): call the instant a seek is issued from the UI so stale pre-seek position ticks are
+    /// suppressed until the engine catches up. UI-thread only. The caller also optimistically writes PositionMs/Frac.</summary>
+    public void NoteSeek(long targetMs)
+    {
+        _seekLatchTargetMs = targetMs;
+        _seekLatchDeadlineTick = Environment.TickCount64 + SeekLatchWindowMs;
+    }
+
     void PushPosition(long ms)
     {
+        if (_seekLatchTargetMs >= 0)
+        {
+            bool landed = Math.Abs(ms - _seekLatchTargetMs) <= SeekLatchToleranceMs;
+            bool expired = Environment.TickCount64 >= _seekLatchDeadlineTick;
+            if (!landed && !expired) return;   // stale pre-seek tick → keep the optimistic target on screen
+            _seekLatchTargetMs = -1;           // seek took (or gave up waiting) → resume normal position flow
+        }
         PositionMs.Value = ms;
         long dur = DurationMs.Value;
         PositionFrac.Value = dur > 0 ? Math.Clamp(ms / (float)dur, 0f, 1f) : 0f;
+        _smtc?.OnPositionChanged(ms);   // ~1 Hz timeline scrub → OS media surface (throttled inside)
     }
 }

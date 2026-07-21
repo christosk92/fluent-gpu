@@ -12,6 +12,7 @@ using static FluentGpu.Dsl.Ui;
 
 
 // ===== TypographyPage =====
+[GalleryPage("typography", "Typography", "Design", Icon = Icons.Font)]
 sealed class TypographyPage : Component
 {
     static readonly ColorF Grey = ColorF.FromRgba(0x9A, 0x9A, 0x9A);
@@ -211,12 +212,13 @@ sealed class TypographyPage : Component
 }
 
 // ===== ButtonsPage =====
+[GalleryPage("buttons", "Buttons", "Overview", Hidden = true)]
 sealed class ButtonsPage : Component
 {
     public override Element Render()
     {
         var (count, setCount) = UseState(0);
-        var (shuffle, setShuffle) = UseState(false);
+        var shuffle = UseSignal(false);
 
         var greenStyle = Button.AccentStyle with
         {
@@ -284,10 +286,10 @@ sealed class ButtonsPage : Component
                             AlignItems = FlexAlign.Center,
                             Children =
                             [
-                                ToggleButton.Create("Shuffle", shuffle, () => setShuffle(!shuffle)),
-                                new TextEl(shuffle ? "Shuffle is ON" : "Shuffle is OFF")
+                                ToggleButton.Create("Shuffle", shuffle),
+                                new TextEl(shuffle.Value ? "Shuffle is ON" : "Shuffle is OFF")
                                     .FontSize(14f)
-                                    .Foreground(shuffle ? Theme.Accent : Theme.WindowText)
+                                    .Foreground(shuffle.Value ? Theme.Accent : Theme.WindowText)
                             ],
                         }),
 
@@ -341,6 +343,7 @@ sealed class ButtonsPage : Component
 }
 
 // ===== InputsPage =====
+[GalleryPage("inputs", "Inputs", "Overview", Hidden = true)]
 sealed class InputsPage : Component
 {
     static string FormatTime(float fraction, int totalSeconds)
@@ -386,10 +389,10 @@ sealed class InputsPage : Component
 
     public override Element Render()
     {
-        var (vol, setVol) = UseState(0.6f);
-        var (seek, setSeek) = UseState(0.3f);
-        var (shuffle, setShuffle) = UseState(false);
-        var (repeat, setRepeat) = UseState(true);
+        var vol = UseFloatSignal(0.6f);
+        var seek = UseFloatSignal(0.3f);
+        var shuffle = UseSignal(false);
+        var repeat = UseSignal(true);
         var (pos, setPos) = UseState(0f);
 
         const int trackSeconds = 214; // ~3:34 song
@@ -405,15 +408,16 @@ sealed class InputsPage : Component
                 Children =
                 [
                     SectionLabel("Volume", 70f),
-                    Slider.Create(vol, setVol, 260f),
+                    Slider.Create(vol, length: 260f),
                     new BoxEl
                     {
                         Width = 52f,
                         AlignItems = FlexAlign.End,
                         Children =
                         [
-                            new TextEl(((int)(vol * 100f)).ToString() + "%")
+                            new TextEl("")
                             {
+                                Text = Prop.Of(() => ((int)(vol.Value * 100f)).ToString() + "%"),
                                 Size = 14f,
                                 Bold = true,
                                 Color = Theme.Accent,
@@ -438,14 +442,15 @@ sealed class InputsPage : Component
                         Width = 52f,
                         Children =
                         [
-                            new TextEl(FormatTime(seek, trackSeconds))
+                            new TextEl("")
                             {
+                                Text = Prop.Of(() => FormatTime(seek.Value, trackSeconds)),
                                 Size = 13f,
                                 Color = Theme.ControlText,
                             }
                         ],
                     },
-                    Slider.Create(seek, setSeek, 240f),
+                    Slider.Create(seek, length: 240f),
                     new BoxEl
                     {
                         Width = 52f,
@@ -472,15 +477,15 @@ sealed class InputsPage : Component
                 AlignItems = FlexAlign.Center,
                 Children =
                 [
-                    ToggleButton.Create("Shuffle", shuffle, () => setShuffle(!shuffle)),
-                    ToggleButton.Create("Repeat", repeat, () => setRepeat(!repeat)),
+                    ToggleButton.Create("Shuffle", shuffle),
+                    ToggleButton.Create("Repeat", repeat),
                     new BoxEl
                     {
                         Children =
                         [
                             new TextEl(
-                                "shuffle=" + (shuffle ? "on" : "off") +
-                                "  repeat=" + (repeat ? "on" : "off"))
+                                "shuffle=" + (shuffle.Value ? "on" : "off") +
+                                "  repeat=" + (repeat.Value ? "on" : "off"))
                             {
                                 Size = 12.5f,
                                 Color = Theme.ControlText with { A = 0.7f },
@@ -542,6 +547,7 @@ sealed class InputsPage : Component
 }
 
 // ===== FlexPage =====
+[GalleryPage("flex", "Flexbox", "Fundamentals", Icon = Icons.Tag)]
 sealed class FlexPage : Component
 {
     static Element Tile(int i, float w = 44, float h = 44) => new BoxEl
@@ -713,6 +719,7 @@ sealed class FlexPage : Component
 }
 
 // ===== GridPage =====
+[GalleryPage("grid", "CSS Grid", "Fundamentals", Icon = Icons.Grid)]
 sealed class GridPage : Component
 {
     static readonly ColorF[] TileTints =
@@ -861,11 +868,12 @@ sealed class GridPage : Component
 }
 
 // ===== ImagePage (Media › Image) =====
-// The Ui.Image element as a control-style gallery page: GalleryPage.Shell + ControlExample cards, each with a C# code
+// The Ui.Image element as a control-style gallery page: GalleryPage.Shell + ExampleCard cards, each with a C# code
 // panel — a simple image, object-fit (Cover/Contain), corner radius, sizing/decodePx, the placeholder tint, and the
 // responsive async album grid (the full FluentGpu.Media pipeline: HTTP/2 fetch → off-thread WIC decode → disk cache →
 // GPU texture residency).
-sealed class ImagePage : Component
+[GalleryPage("Image", "Image", "Media", Icon = Icons.Picture)]
+sealed partial class ImagePage : Component
 {
     static readonly string[] AlbumTitles =
     [
@@ -922,85 +930,57 @@ sealed class ImagePage : Component
         ],
     };
 
-    public override Element Render()
+    public override Element Render() => GalleryPage.Shell("Image",
+        "Async, GPU-resident images. Ui.Image fetches over HTTP/2, decodes off-thread (WIC, constrained to the display size), caches to disk, and uploads to a GPU texture — with object-fit, corner radius, a decode-size hint, and a placeholder tint shown until the decode lands.",
+        ExampleCard.Show(SimpleImageSample),
+        ExampleCard.Show(ObjectFitSample),
+        ExampleCard.Show(CornerRadiusSample),
+        ExampleCard.Show(SizingSample),
+        ExampleCard.Show(PlaceholderTintSample),
+        ExampleCard.Show(AlbumGridSample));
+
+    [Sample("A simple image", Description = "Ui.Image(source, width, height, corners) renders a fixed-size, GPU-resident texture; the placeholder tint shows until the off-thread decode lands.")]
+    static Element SimpleImage()
     {
-        var albumCards = new Element[AlbumTitles.Length];
-        for (int i = 0; i < albumCards.Length; i++) albumCards[i] = AlbumCard(i);
+        // Fetched over HTTP/2, decoded off-thread (WIC), disk-cached, uploaded to a GPU texture.
+        return Image(Cover(1, 120), 120f, 120f, 8f, "#273E6C");
+    }
 
-        return GalleryPage.Shell("Image",
-            "Async, GPU-resident images. Ui.Image fetches over HTTP/2, decodes off-thread (WIC, constrained to the display size), caches to disk, and uploads to a GPU texture — with object-fit, corner radius, a decode-size hint, and a placeholder tint shown until the decode lands.",
+    [Sample("Object-fit: Cover vs. Contain", Description = "A responsive image fills the width its layout gives it and derives its height from aspect. ImageFit.Cover fills the box and crops the overflow; ImageFit.Contain fits the whole image and letterboxes the remainder with the placeholder.")]
+    static Element ObjectFit()
+        // The album/thumbnail shape: no fixed extent — fills its cell, height from aspect.
+        => WrapRow(FitBox("Cover", ImageFit.Cover, "#273E6C"), FitBox("Contain", ImageFit.Contain, "#4F776C"));
 
-            ControlExample.Build("A simple image",
-                Image(Cover(1, 120), 120f, 120f, 8f, "#273E6C"),
-                description: "Ui.Image(source, width, height, corners) renders a fixed-size, GPU-resident texture; the placeholder tint shows until the off-thread decode lands.",
-                code: """
-                // Fetched over HTTP/2, decoded off-thread (WIC), disk-cached, uploaded to a GPU texture.
-                Image("https://picsum.photos/seed/cover/240/240", 120f, 120f, corners: 8f)
-                """),
+    [Sample("Corner radius", Description = "The same decode feeds any corner radius — a radius of half the extent gives a full circle.")]
+    static Element CornerRadius() => WrapRow(
+        LabeledTile("square (0)", Image(Cover(10, 80), 80f, 80f, 0f, AlbumPlaceholders[0])),
+        LabeledTile("rounded (12)", Image(Cover(11, 80), 80f, 80f, 12f, AlbumPlaceholders[1])),
+        LabeledTile("circle (40)", Image(Cover(12, 80), 80f, 80f, 40f, AlbumPlaceholders[2])));
 
-            ControlExample.Build("Object-fit: Cover vs. Contain",
-                WrapRow(FitBox("Cover", ImageFit.Cover, "#273E6C"), FitBox("Contain", ImageFit.Contain, "#4F776C")),
-                description: "A responsive image fills the width its layout gives it and derives its height from aspect. ImageFit.Cover fills the box and crops the overflow; ImageFit.Contain fits the whole image and letterboxes the remainder with the placeholder.",
-                code: """
-                // The album/thumbnail shape: no fixed extent — fills its cell, height from aspect.
-                Image(src, ImageFit.Cover,   aspect: 16f / 9f, decodePx: 200f, corners: 8f)
-                Image(src, ImageFit.Contain, aspect: 16f / 9f, decodePx: 200f, corners: 8f)
-                """),
+    [Sample("Sizing & decode resolution", Description = "One source requested at several display sizes; the cache keys on logical extent, so each size gets its own residency slot decoded to fit — no oversized texture for a thumbnail.")]
+    static Element Sizing() => WrapRow(
+        LabeledTile("48", Image(Cover(20, 48), 48f, 48f, 6f, AlbumPlaceholders[3])),
+        LabeledTile("80", Image(Cover(20, 80), 80f, 80f, 6f, AlbumPlaceholders[4])),
+        LabeledTile("120", Image(Cover(20, 120), 120f, 120f, 6f, AlbumPlaceholders[5])));
 
-            ControlExample.Build("Corner radius",
-                WrapRow(
-                    LabeledTile("square (0)", Image(Cover(10, 80), 80f, 80f, 0f, AlbumPlaceholders[0])),
-                    LabeledTile("rounded (12)", Image(Cover(11, 80), 80f, 80f, 12f, AlbumPlaceholders[1])),
-                    LabeledTile("circle (40)", Image(Cover(12, 80), 80f, 80f, 40f, AlbumPlaceholders[2]))),
-                description: "The same decode feeds any corner radius — a radius of half the extent gives a full circle.",
-                code: """
-                Image(src, 80f, 80f, corners: 0f)    // square
-                Image(src, 80f, 80f, corners: 12f)   // rounded
-                Image(src, 80f, 80f, corners: 40f)   // circle (radius = size / 2)
-                """),
+    [Sample("Placeholder tint", Description = "Every image shows its placeholder fill until the decode lands; an unresolved source keeps the tint indefinitely — no broken-image box.")]
+    static Element PlaceholderTint()
+        // The argument after corners is the placeholder (ColorF or "#RRGGBB") shown pre-decode.
+        => WrapRow(
+            LabeledTile("decoded", Image(Cover(30, 96), 96f, 96f, 8f, "#3D5E7A")),
+            LabeledTile("unresolved → tint", Image("https://example.invalid/cover.jpg", 96f, 96f, 8f, "#7A3544")));
 
-            ControlExample.Build("Sizing & decode resolution",
-                WrapRow(
-                    LabeledTile("48", Image(Cover(20, 48), 48f, 48f, 6f, AlbumPlaceholders[3])),
-                    LabeledTile("80", Image(Cover(20, 80), 80f, 80f, 6f, AlbumPlaceholders[4])),
-                    LabeledTile("120", Image(Cover(20, 120), 120f, 120f, 6f, AlbumPlaceholders[5]))),
-                description: "One source requested at several display sizes; the cache keys on logical extent, so each size gets its own residency slot decoded to fit — no oversized texture for a thumbnail.",
-                code: """
-                Image(src, 48f, 48f, corners: 6f)
-                Image(src, 80f, 80f, corners: 6f)
-                Image(src, 120f, 120f, corners: 6f)
-                """),
-
-            ControlExample.Build("Placeholder tint",
-                WrapRow(
-                    LabeledTile("decoded", Image(Cover(30, 96), 96f, 96f, 8f, "#3D5E7A")),
-                    LabeledTile("unresolved → tint", Image("https://example.invalid/cover.jpg", 96f, 96f, 8f, "#7A3544"))),
-                description: "Every image shows its placeholder fill until the decode lands; an unresolved source keeps the tint indefinitely — no broken-image box.",
-                code: """
-                // The argument after corners is the placeholder (ColorF or "#RRGGBB") shown pre-decode.
-                Image(src, 96f, 96f, corners: 8f, placeholder: "#3D5E7A")
-                """),
-
-            ControlExample.Build("Async album grid",
-                AutoGrid(180f, 16f, float.NaN, albumCards),
-                description: "A responsive auto-fill grid of 8 covers: the column count reflows with the width and each tile fills its cell as a square (object-fit: cover). Real cover art from a public CDN — fetch → off-thread WIC decode → disk cache → GPU residency, end to end.",
-                code: """
-                Element AlbumCard(int i) => new BoxEl
-                {
-                    Direction = 1, Gap = 8f, Padding = Edges4.All(12),
-                    Fill = Tok.FillCardDefault, BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f, Corners = Radii.OverlayAll,
-                    Children =
-                    [
-                        Image(cover(i), ImageFit.Cover, aspect: 1f, decodePx: 300f, corners: 8f),
-                        BodyStrong(titles[i]), Caption(artists[i]).Secondary(),
-                    ],
-                };
-                AutoGrid(180f, 16f, float.NaN, cards);   // reflow columns ≥180px, rows size to content
-                """));
+    [Sample("Async album grid", Description = "A responsive auto-fill grid of 8 covers: the column count reflows with the width and each tile fills its cell as a square (object-fit: cover). Real cover art from a public CDN — fetch → off-thread WIC decode → disk cache → GPU residency, end to end.")]
+    static Element AlbumGrid()
+    {
+        var cards = new Element[AlbumTitles.Length];
+        for (int i = 0; i < cards.Length; i++) cards[i] = AlbumCard(i);
+        return AutoGrid(180f, 16f, float.NaN, cards);   // reflow columns ≥180px, rows size to content
     }
 }
 
 // ===== ScrollPage =====
+[GalleryPage("scrolling", "Scrolling", "Fundamentals", Icon = Icons.Document)]
 sealed class ScrollPage : Component
 {
     static readonly ColorF RowA = ColorF.FromRgba(38, 38, 44, 255);
@@ -1090,6 +1070,7 @@ sealed class ScrollPage : Component
 }
 
 // ===== VirtualizationPage =====
+[GalleryPage("virtualization", "List virtualization", "Fundamentals", Icon = Icons.List)]
 sealed class VirtualizationPage : Component
 {
     static readonly ColorF RowEven = ColorF.FromRgba(255, 255, 255, 8);
@@ -1176,6 +1157,7 @@ sealed class VirtualizationPage : Component
 // ===== AnimationPage lives in AnimationPage.cs — the complete AnimEngine showcase =====
 
 // ===== CompositorPage =====
+[GalleryPage("compositor", "Compositor", "Fundamentals", Icon = Icons.Brush, ShotMode = ShotMode.Animated)]
 sealed class CompositorPage : Component
 {
     static ColorF AccentTint(float t) => ColorF.Lerp(Theme.Accent, Theme.WindowBackground, t);
@@ -1379,6 +1361,7 @@ sealed class CompositorPage : Component
 // The signals-first state model, demonstrated end to end: the three update mechanisms (binding / granular re-render /
 // reactive control flow), the state hooks (UseState, UseSignal, UseComputed, UseReducer, UseContext), and live
 // render-count instrumentation that PROVES which path re-renders. Canon: docs/guide/reactivity.md.
+[GalleryPage("state", "State & components", "Fundamentals", Icon = Icons.Refresh)]
 sealed class StatePage : Component
 {
     public static readonly Context<int> ThemeLevel = new(1);
@@ -1437,7 +1420,7 @@ sealed class StatePage : Component
         };
     }
 
-    static Element NestedDemo() => ControlExample.Build("Nested independent components",
+    static Element NestedDemo() => ExampleCard.Build("Nested independent components",
         new BoxEl
         {
             Direction = 0, Gap = 16f, Wrap = true,
@@ -1465,7 +1448,7 @@ sealed class StatePage : Component
         [
             BodyStrong("Rules that prevent most state bugs"),
             Rule(".Value subscribes the current computation; .Peek() reads without subscribing. A bind thunk must read .Value."),
-            Rule("ReactiveComponent.Setup() runs ONCE — show changing values via a bound prop (Text = sig, or Text = Prop.Of(() => …) for derived text), never Ui.Text(sig.Value)."),
+            Rule("A component whose Render() reads no signals renders ONCE — show changing values via a bound prop (Text = sig, or Text = Prop.Of(() => …) for derived text), never Ui.Text(sig.Value)."),
             Rule("Never write a signal during render (infinite loop) — write from an event handler or UseEffect."),
             Rule("Parent→child data flows through signals or context, never constructor args — those freeze at mount."),
             Rule("Prefer Transform/Opacity/Fill binds for hot values; Width/Height/Text binds cost a scoped relayout."),
@@ -1493,7 +1476,7 @@ sealed class StatePage_CounterHost : Component
     {
         _renders++;
         var (count, setCount) = UseState(0);
-        return ControlExample.Build("Granular re-render — UseState",
+        return ExampleCard.Build("Granular re-render — UseState",
             new BoxEl
             {
                 Direction = 0, Gap = 14f, AlignItems = FlexAlign.Center,
@@ -1531,7 +1514,7 @@ sealed class StatePage_SignalHost : Component
     {
         _renders++;
         var n = UseSignal(0);
-        return ControlExample.Build("Signal + TextBind — update text without a re-render",
+        return ExampleCard.Build("Signal + TextBind — update text without a re-render",
             new BoxEl
             {
                 Direction = 0, Gap = 12f, AlignItems = FlexAlign.Center,
@@ -1577,14 +1560,14 @@ sealed class StatePage_BindHost : Component
                 },
             ],
         };
-        return ControlExample.Build("Compositor-only binding — Slider.Bind + a bound Transform",
-            VStack(14, Slider.Bind(x), track),
+        return ExampleCard.Build("Compositor-only binding — Slider.Create + a bound Transform",
+            VStack(14, Slider.Create(x), track),
             description: "The slider drag writes the FloatSignal (no setState per move); the box rides bound Transform + Fill thunks. Frames while dragging are compositor-only: no render, no reconcile, no layout.",
             output: VStack(4, GalleryPage.LiveText(() => $"x = {x.Value:0.00}"), Caption($"host renders: {_renders}").Tertiary()),
             code: """
-            var x = UseFloatSignal(0.3f);   // hot scalar → bind it, don't setState per move
+            var x = UseFloatSignal(0.3f);   // hot scalar → pass the signal, don't setState per move
 
-            Slider.Bind(x);
+            Slider.Create(x);
 
             new BoxEl
             {
@@ -1614,7 +1597,7 @@ sealed class StatePage_ThreeFormsHost : Component
             new BoxEl { Width = 56f, Height = 36f, Corners = Radii.ControlAll, Fill = Tok.AccentDefault, Opacity = opacity },
             Caption(label).Tertiary());
 
-        return ControlExample.Build("One channel, three forms — Opacity",
+        return ExampleCard.Build("One channel, three forms — Opacity",
             VStack(14,
                 HStack(20,
                     Chip("value (re-render)", staticOp),                  // float        → Prop<float>
@@ -1622,7 +1605,7 @@ sealed class StatePage_ThreeFormsHost : Component
                     Chip("signal (compositor)", op)),                     // FloatSignal  → Prop<float>, no closure
                 HStack(12,
                     Button.Standard($"static → {(staticOp > 0.7f ? "0.4" : "1.0")}", () => setStaticOp(staticOp > 0.7f ? 0.4f : 1.0f)),
-                    Slider.Bind(op))),
+                    Slider.Create(op))),
             description: "Every bindable channel is one Prop<T> property accepting a static value, a Func<T> thunk, or a concrete signal. " +
                          "The static form re-asserts on re-render (the button bumps the counter); the two bound forms ride the compositor — " +
                          "scrubbing the slider updates both right-hand chips with zero host re-renders.",
@@ -1649,7 +1632,7 @@ sealed class StatePage_MemoHost : Component
         var a = UseSignal(2);
         var b = UseSignal(3);
         var product = UseComputed(() => a.Value * b.Value);
-        return ControlExample.Build("Derived state — UseComputed (memo)",
+        return ExampleCard.Build("Derived state — UseComputed (memo)",
             new BoxEl
             {
                 Direction = 0, Gap = 10f, AlignItems = FlexAlign.Center,
@@ -1687,7 +1670,7 @@ sealed class StatePage_ShowHost : Component
             Children = [Body("This branch is mounted. Toggling unmounts it — its component state is discarded, not hidden.")],
         };
         var fallback = Caption("Hidden — the branch is unmounted.").Tertiary();
-        return ControlExample.Build("Reactive control flow — Flow.Show",
+        return ExampleCard.Build("Reactive control flow — Flow.Show",
             VStack(10,
                 Button.Standard("Toggle details", () => open.Value = !open.Peek()),
                 Flow.Show(() => open.Value, panel, fallback)),
@@ -1719,7 +1702,7 @@ sealed class StatePage_ForHost : Component
             edit(next);
             items.Value = next;   // a NEW list instance — signal writes are value-equality gated
         }
-        return ControlExample.Build("Reactive control flow — Flow.For (keyed list)",
+        return ExampleCard.Build("Reactive control flow — Flow.For (keyed list)",
             VStack(12,
                 new BoxEl
                 {
@@ -1731,15 +1714,15 @@ sealed class StatePage_ForHost : Component
                         Button.Standard("Reverse", () => Mutate(l => l.Reverse())),
                     ],
                 },
-                Flow.For(() => items.Value.Count, i => Row(items.Value[i]), keyOf: i => items.Value[i])),
+                Flow.For<string>(() => items.Value, s => s, (s, i) => Row(s))),
             description: "Flow.For diffs its rows by key when the list signal changes: adds mount, removes unmount, moves reorder — row state is preserved by key, and the host never re-renders.",
             output: VStack(4, GalleryPage.LiveText(() => $"{items.Value.Count} items"), Caption($"host renders: {_renders}").Tertiary()),
             code: """
             var items = UseSignal(new List<string> { "Alpha", "Beta", "Gamma" });
 
-            Flow.For(() => items.Value.Count,
-                     i => Row(items.Value[i]),
-                     keyOf: i => items.Value[i]);   // keyed: moves preserve row state
+            Flow.For(() => items.Value,     // snapshotted once per change
+                     s => s,                // key: a stable unique per-item id (NOT the index)
+                     (s, i) => Row(s));      // keyed: moves preserve row state
 
             // mutate by writing a NEW list instance:
             var next = new List<string>(items.Peek()); next.Reverse(); items.Value = next;
@@ -1768,7 +1751,7 @@ sealed class StatePage_ReducerHost : Component
     {
         _renders++;
         var (s, dispatch) = UseReducer<int, int>((st, a) => st + a, 0);
-        return ControlExample.Build("Folded state — UseReducer",
+        return ExampleCard.Build("Folded state — UseReducer",
             new BoxEl
             {
                 Direction = 0, Gap = 12f, AlignItems = FlexAlign.Center, Wrap = true,
@@ -1796,7 +1779,7 @@ sealed class StatePage_ContextHost : Component
     public override Element Render()
     {
         var (level, setLevel) = UseState(1);
-        return ControlExample.Build("Ambient state — Context (Ctx.Provide + UseContext)",
+        return ExampleCard.Build("Ambient state — Context (Ctx.Provide + UseContext)",
             new BoxEl
             {
                 Direction = 1, Gap = 12f,

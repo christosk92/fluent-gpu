@@ -3,21 +3,9 @@ using FluentGpu.Foundation;
 
 namespace Wavee;
 
-// Wavee's geometry token layer. COLOR comes entirely from the engine's WinUI-faithful `Tok.*` (Dsl/Tokens.cs) — we do
-// NOT duplicate it. This adds the spacing / rounding / sizing scale Tok doesn't carry. The 4px grid is the native tell;
-// every value here is a multiple of 4.
-
-/// <summary>Spacing scale (DIPs) — the 4px grid. Use for gaps, padding, gutters.</summary>
-public static class WaveeSpace
-{
-    public const float XS = 4, S = 8, M = 12, L = 16, XL = 20, XXL = 24, Gutter = 24;
-}
-
-/// <summary>Corner radii. Native Fluent tell: 8 for surfaces/cards, 4 for nested controls (outer-8 → inner-4).</summary>
-public static class WaveeRadius
-{
-    public const float Control = 4, Card = 8, Overlay = 8, Pill = 999, Straight = 0;
-}
+// Wavee's geometry token layer. COLOR comes entirely from the engine's WinUI-faithful `Tok.*` (Dsl/Tokens.cs) and the
+// spacing / rounding scales come from the engine's `Spacing.*` / `Radii.*` supersets — we do NOT duplicate either. This
+// keeps only the fixed sizing scale Tok doesn't carry. The 4px grid is the native tell; every value here is a multiple of 4.
 
 /// <summary>Fixed control / surface dimensions.</summary>
 public static class WaveeSize

@@ -27,7 +27,7 @@ sealed class ExpandableAlbumGrid : Component
     readonly Action<string, string?> _go;
     readonly Action<string> _play;
     const float MinCol = 180f;
-    static readonly float Gap = WaveeSpace.M;
+    static readonly float Gap = Spacing.M;
 
     readonly Signal<string?> _expanded = new(null);
 
@@ -124,9 +124,9 @@ sealed class AlbumDrawer : Component
         var show = album ?? _last;
         // Fetch the full album (the discography album is thin — no tracklist). Unconditional hook (stable order); keyed by
         // uri so it re-fetches per album. Cached by GetAlbumAsync, so a re-expand is instant.
-        var full = UseAsyncResource(
+        var full = UseResource(
             ct => show is null ? System.Threading.Tasks.Task.FromResult<Album?>(null) : _svc.Library.GetAlbumAsync(show.Uri, ct),
-            (Album?)null, show?.Uri ?? "");
+            (Album?)null, show?.Uri ?? "").Loadable;
         if (show is null) return new BoxEl();
 
         var ts = (full.Value.Value?.Tracks ?? show.Tracks) ?? System.Array.Empty<Track>();
@@ -135,9 +135,9 @@ sealed class AlbumDrawer : Component
                      : EmptyNote();
         return new BoxEl
         {
-            Direction = 1, Gap = WaveeSpace.S, Animate = Reveal,
-            Padding = new Edges4(WaveeSpace.L, WaveeSpace.M, WaveeSpace.L, WaveeSpace.M),
-            Corners = CornerRadius4.All(WaveeRadius.Card), ClipToBounds = true,
+            Direction = 1, Gap = Spacing.S, Animate = Reveal,
+            Padding = new Edges4(Spacing.L, Spacing.M, Spacing.L, Spacing.M),
+            Corners = CornerRadius4.All(Radii.Card), ClipToBounds = true,
             Fill = Tok.FillCardSecondary, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             Children = [ Header(show), body ],
         };
@@ -145,8 +145,8 @@ sealed class AlbumDrawer : Component
 
     Element Header(Album album) => new BoxEl
     {
-        Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
-        Padding = new Edges4(0f, 0f, 0f, WaveeSpace.XS),
+        Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M,
+        Padding = new Edges4(0f, 0f, 0f, Spacing.XS),
         Children =
         [
             new BoxEl   // play all (album context from the top)
@@ -179,9 +179,8 @@ sealed class AlbumDrawer : Component
 
     Element Row(Album album, int num, Track t) => new BoxEl
     {
-        Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, Height = 40f,
-        Padding = new Edges4(WaveeSpace.S, 0f, WaveeSpace.S, 0f), Corners = CornerRadius4.All(6f),
-        HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+        Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M, Height = 40f,
+        Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f), Corners = CornerRadius4.All(6f),
         OnClick = () => _ = _svc.Player.PlayAsync(album.Uri, num - 1),
         Children =
         [
@@ -189,11 +188,11 @@ sealed class AlbumDrawer : Component
             new TextEl(t.Title) { Grow = 1f, Basis = 0f, Size = 14f, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
             new TextEl(Dur(t.DurationMs)) { Size = 12f, Color = Tok.TextSecondary },
         ],
-    };
+    }.Interactive(Interaction.Subtle);
 
     static Element EmptyNote() => new BoxEl
     {
-        Padding = new Edges4(WaveeSpace.S, WaveeSpace.M, WaveeSpace.S, WaveeSpace.M),
+        Padding = new Edges4(Spacing.S, Spacing.M, Spacing.S, Spacing.M),
         Children = [ new TextEl(Loc.Get(Strings.Search.NoResults)) { Size = 13f, Color = Tok.TextTertiary } ],
     };
 
@@ -205,8 +204,8 @@ sealed class AlbumDrawer : Component
         for (int i = 0; i < n; i++)
             rows[i] = new BoxEl
             {
-                Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, Height = 40f,
-                Padding = new Edges4(WaveeSpace.S, 0f, WaveeSpace.S, 0f),
+                Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M, Height = 40f,
+                Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f),
                 Children =
                 [
                     new BoxEl { Width = 18f, Height = 12f, Corners = CornerRadius4.All(4f), Fill = Tok.FillSubtleSecondary },
@@ -238,11 +237,10 @@ static class AlbumNavAction
         Width = size, Height = size, Shrink = 0f,
         AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
         Corners = CornerRadius4.All(size / 2f),
-        Fill = ColorF.Transparent, HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
         BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault,
         OnClick = onClick, Cursor = CursorId.Hand, Role = AutomationRole.Button, Focusable = true,
         Children = [ Icon(Icons.OpenInNewWindow, size * 0.42f, Tok.TextSecondary) ],
-    }, "Go to album");
+    }.Interactive(Interaction.Subtle), "Go to album");
 }
 
 // Builds the paged data source for one (artist, facet): pages of 60; the source reports the facet total from page 0.
@@ -287,7 +285,7 @@ sealed class AlbumDrawerPanel : Component
         var lib = UseContext(LibraryBridge.Slot);
         var acts = UseContext(ActionServices.Slot);
         var menuOverlay = UseContext(Overlay.Service);   // row context menus (right-click / long-press / the "…" cell)
-        var full = UseAsyncResource(ct => _svc.Library.GetAlbumAsync(_thin.Uri, ct), (Album?)null, _thin.Uri);
+        var full = UseResource(ct => _svc.Library.GetAlbumAsync(_thin.Uri, ct), (Album?)null, _thin.Uri).Loadable;
         var tracks = (full.Value.Value?.Tracks ?? _thin.Tracks) ?? System.Array.Empty<Track>();
         _rows = tracks;
         bool loading = tracks.Count == 0 && full.State.Value == (byte)LoadState.Pending;
@@ -298,22 +296,22 @@ sealed class AlbumDrawerPanel : Component
         return new BoxEl
         {
             Direction = 1, Height = _panelH, ClipToBounds = true,
-            Padding = new Edges4(WaveeSpace.L, WaveeSpace.S, WaveeSpace.L, WaveeSpace.S),
-            Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardSecondary,
+            Padding = new Edges4(Spacing.L, Spacing.S, Spacing.L, Spacing.S),
+            Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillCardSecondary,
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             Children =
             [
                 Head(),
                 ZStack(body, Embed.Comp(() => new SelectionCommandBar(_sel,
                     i => (uint)i < (uint)Math.Min(_rows.Count, 10) ? _rows[i] : null,
-                    bottomPadding: WaveeSpace.S))),
+                    bottomPadding: Spacing.S))),
             ],
         };
     }
 
     Element Head() => new BoxEl
     {
-        Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, Height = 40f,
+        Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M, Height = 40f,
         Children =
         [
             new BoxEl { Width = 30f, Height = 30f, Shrink = 0f, Corners = CornerRadius4.All(15f), Fill = _accent(),
@@ -348,18 +346,21 @@ sealed class AlbumDrawerPanel : Component
                 }, _swipeGroup, TrackActions.ToggleLike, TrackActions.AddToQueue, scope.Index);
             },
             RepeatLayout.Stack(TrackRow.CompactListItemExtent),
-            selectionMode: ItemsSelectionMode.Extended,
-            selection: _sel,
-            isItemInvokedEnabled: true,
-            itemInvoked: i =>
+            new ListOptions
             {
-                if ((uint)i >= (uint)n) return;
-                var t = tracks[i];
-                TrackRow.Invoke(bridge, t, () => _ = _svc.Player.PlayAsync(_thin.Uri, i));
-            },
-            itemText: i => (uint)i < (uint)n ? tracks[i].Title : "",
-            onScrollGeometryChanged: (g => _swipeGroup.AnyOpen ? BitConverter.SingleToInt32Bits(g.OffsetY) : 0L, _ => _swipeGroup.Close()),
-            grow: 0f);
+                SelectionMode = ItemsSelectionMode.Extended,
+                Selection = _sel,
+                IsItemInvokedEnabled = true,
+                OnInvoked = i =>
+                {
+                    if ((uint)i >= (uint)n) return;
+                    var t = tracks[i];
+                    TrackRow.Invoke(bridge, t, () => _ = _svc.Player.PlayAsync(_thin.Uri, i));
+                },
+                ItemText = i => (uint)i < (uint)n ? tracks[i].Title : "",
+                Grow = 0f,
+                Scroll = new ScrollOptions { OnScrollGeometryChanged = (g => _swipeGroup.AnyOpen ? BitConverter.SingleToInt32Bits(g.OffsetY) : 0L, _ => _swipeGroup.Close()) },
+            });
 
     sealed class DrawerTrackRow : Component
     {
@@ -403,7 +404,7 @@ sealed class AlbumDrawerPanel : Component
 
     static Element ShimmerRow() => new BoxEl
     {
-        Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, Height = TrackRow.CompactListItemExtent, Padding = new Edges4(WaveeSpace.S, 0f, WaveeSpace.S, 0f),
+        Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M, Height = TrackRow.CompactListItemExtent, Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f),
         Children =
         [
             new BoxEl { Width = 16f, Height = 11f, Corners = CornerRadius4.All(4f), Fill = Tok.FillSubtleSecondary },
@@ -429,7 +430,7 @@ sealed class DiscoGrid : Component
     IOverlayService? _menuOverlay;
 
     const float MinCol = 180f;
-    static readonly float Gap = WaveeSpace.L;          // column gap (the vertical row gap is RowGap, folded into rowExtra)
+    static readonly float Gap = Spacing.L;          // column gap (the vertical row gap is RowGap, folded into rowExtra)
 
     // Uniform-card geometry → predictable drawer spacing. GridCard's cover is cardW-16; adding 20px vertical padding,
     // an 8px card gap, and 38px for one title + one metadata line yields an exact cardW+50 card. Keeping this separate
@@ -518,16 +519,16 @@ sealed class DiscoGrid : Component
     static Element Placeholder(float cardW) => new BoxEl
     {
         Key = "album:placeholder",
-        Direction = 1, Gap = WaveeSpace.S, Height = cardW + CardChrome,
-        Padding = new Edges4(WaveeSpace.S, WaveeSpace.S, WaveeSpace.S, WaveeSpace.M),
+        Direction = 1, Gap = Spacing.S, Height = cardW + CardChrome,
+        Padding = new Edges4(Spacing.S, Spacing.S, Spacing.S, Spacing.M),
         // Borderless like the restyled GridCard's resting state (the plate is hover-only now) — a plated skeleton
         // would flash a different silhouette than the card it becomes.
-        Corners = CornerRadius4.All(WaveeRadius.Card),
+        Corners = CornerRadius4.All(Radii.Card),
         Children =
         [
             // Fluid square cover: Width left NaN + AspectRatio 1f → fills the engine-laid-out cell width and derives its
             // height (the same self-sizing the real ArtworkFill cover uses) — no hardcoded dimensions.
-            new ImageEl { Source = "", AspectRatio = 1f, AlignSelf = FlexAlign.Stretch, Corners = CornerRadius4.All(WaveeRadius.Card), Placeholder = Tok.FillSubtleSecondary },
+            new ImageEl { Source = "", AspectRatio = 1f, AlignSelf = FlexAlign.Stretch, Corners = CornerRadius4.All(Radii.Card), Placeholder = Tok.FillSubtleSecondary },
             new BoxEl { Height = 13f, AlignSelf = FlexAlign.Stretch, MaxWidth = 150f, Corners = CornerRadius4.All(4f), Fill = Tok.FillSubtleSecondary },
             new BoxEl { Height = 11f, Width = 92f, Corners = CornerRadius4.All(4f), Fill = Tok.FillSubtleSecondary },
         ],
@@ -617,7 +618,7 @@ sealed class DiscographySection : Component
             if (total > Cap) body.Add(SeeAllButton(total));
             children.Add(new BoxEl
             {
-                Direction = 1, Gap = WaveeSpace.M,
+                Direction = 1, Gap = Spacing.M,
                 // The sticky header's backdrop is the PAGE ITSELF: while the header is pinned at the viewport top,
                 // this body (the grid + the See-all card) stops painting at the line just under it (the engine's
                 // sticky-clip bind — ClipRect.top rides the viewport line), so the real Mica/tint backdrop shows
@@ -629,7 +630,7 @@ sealed class DiscographySection : Component
         }
         return new BoxEl
         {
-            Direction = 1, Gap = WaveeSpace.M, Padding = new Edges4(0f, 0f, 0f, WaveeSpace.XXL),
+            Direction = 1, Gap = Spacing.M, Padding = new Edges4(0f, 0f, 0f, Spacing.XXL),
             Children = children.ToArray(),
         };
     }
@@ -668,7 +669,7 @@ sealed class DiscographySection : Component
         // Left padding 0 so the accent bar aligns with the non-collapsible AccentHeader sections (Top tracks / Appears on).
         Direction = 0, AlignItems = FlexAlign.Center, Gap = 10f,
         Corners = CornerRadius4.All(6f), HoverFill = Tok.FillSubtleSecondary,
-        Padding = new Edges4(0f, WaveeSpace.XS, WaveeSpace.S, WaveeSpace.XS),
+        Padding = new Edges4(0f, Spacing.XS, Spacing.S, Spacing.XS),
         // CSS-sticky wayfinding: the header pins at the viewport top while ITS section (the parent column = the
         // containing block) is in view, clamps at the section's end, and releases on scroll-back — so mid-grid the
         // user always sees which facet (Albums / Singles & EPs) they're in. The header itself never changes looks;
@@ -689,7 +690,7 @@ sealed class DiscographySection : Component
     Element SeeAllButton(int total) => new BoxEl
     {
         Direction = 0, AlignItems = FlexAlign.Center, Height = 56f,
-        Padding = new Edges4(WaveeSpace.L, 0f, WaveeSpace.M, 0f), Corners = CornerRadius4.All(WaveeRadius.Card),
+        Padding = new Edges4(Spacing.L, 0f, Spacing.M, 0f), Corners = CornerRadius4.All(Radii.Card),
         Fill = Tok.FillCardSecondary, HoverFill = Tok.FillCardDefault,
         BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
         OnClick = () => _go(DiscographyRoute.Make(_kind, _artistUri), _artistName),

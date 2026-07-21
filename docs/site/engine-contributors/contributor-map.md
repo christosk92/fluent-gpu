@@ -31,7 +31,7 @@ Each row is **one owner**. Change the artifact there; reference it elsewhere. (P
 | Reactive runtime (signals, effects, scheduler) | `src/FluentGpu.Engine/Foundation/Signals/{ReactiveCore,Signal,Effect,Memo}.cs` | `Reactive`, `Computation`, `ReactiveRuntime`, `Signal<T>`, `FloatSignal`, `Effect`, `Memo<T>` |
 | The unified bindable channel | `src/FluentGpu.Engine/Foundation/Signals/Prop.cs` | `Prop<T>`, `Prop.Of` |
 | Hooks (`UseState`/`UseSignal`/`UseContext`/…) | `src/FluentGpu.Engine/Hooks/RenderContext.cs` (impl) + `Component.cs` (surface) | `RenderContext`, hook cells |
-| Component model | `src/FluentGpu.Engine/Hooks/Component.cs` | `Component`, `ReactiveComponent`, `RunsOnce` |
+| Component model | `src/FluentGpu.Engine/Hooks/Component.cs` | `Component` (run-once inferred) |
 | Reconcile, render-effects, `For`/`Show`, context, bindings | `src/FluentGpu.Engine/Reconciler/Reconciler.cs` | `TreeReconciler` |
 | `Element` shapes / props | `src/FluentGpu.Engine/Dsl/Element.cs`, and `src/FluentGpu.Engine/Hooks/{ComponentEl,Context,ControlFlow}.cs` | `Element`, `BoxEl`, `TextEl`, `GridEl`, `ImageEl`, `ScrollEl`, `ShowEl`, `ForEl`, … |
 | DSL helpers (`Ui.*`) / modifiers | `src/FluentGpu.Engine/Dsl/{Factories,Modifiers}.cs` | `Ui`, modifier extensions |
@@ -67,7 +67,7 @@ five solution folders. (`FluentGpu.slnx` is the source of truth.) <!-- canon-all
 | `FluentGpu.Engine` (`Layout/`) | `FlexLayout`, `LayoutInvalidator` (scoped relayout), `ExtentTable` |
 | `FluentGpu.Engine` (`Render/`) | `SceneRecorder` (scene → DrawList) |
 | `FluentGpu.Engine` (`Dsl/`) | `Element` records, `Ui.*` builders, `Modifiers`, theming (`Tok`/`Theme`) |
-| `FluentGpu.Engine` (`Hooks/`) | `Component`/`ReactiveComponent`, `RenderContext` + hooks, `ComponentEl`/`Context`/`ControlFlow` |
+| `FluentGpu.Engine` (`Hooks/`) | `Component`, `RenderContext` + hooks, `ComponentEl`/`Context`/`ControlFlow` |
 | `FluentGpu.Engine` (`Reconciler/`) | the reconciler (render-effects, keyed diff, `For`/`Show`, bindings), `VirtualListEl` |
 | `FluentGpu.Engine` (`Input/`) | hit-testing, the dispatcher, focus, gestures |
 | `FluentGpu.Engine` (`Animation/`) | the `AnimValue` slab + `AnimEngine` (the slab scheduler), the analytical spring, keyframes, the motion channels, `DetachedAnimSlab` |
@@ -146,9 +146,9 @@ The hook surface lives on `Component` (`Component.cs`) and is implemented in `Re
 
 - **`Component.cs`** is the authoring surface: `UseState`/`UseSignal`/`UseFloatSignal`/`UseComputed`/`UseEffect`/
   `UseLayoutEffect`/`UseReducer`/`UseMemo`/`UseRef`/`UseContext` plus the animation/media hooks, all forwarding to
-  `Context`. It also defines `RunsOnce` — `false` for a classic `Component` (its render-effect re-subscribes and
-  re-runs on its own state/context changes), sealed `true` on `ReactiveComponent` (the reconciler runs its body
-  *untracked*, so it never re-renders; reactivity comes purely from the bindings/`For`/`Show` inside).
+  `Context`. Every `Render()` runs *tracked* — its render-effect subscribes to the signals it reads and re-runs on its
+  own state/context changes; a `Render()` that reads no signals creates no subscriptions, so it runs once and never
+  re-renders (run-once is *inferred*, not a `RunsOnce` flag), with reactivity coming purely from the bindings/`For`/`Show` inside.
 - **`RenderContext.cs`** is the per-component hook store: an ordered `List<HookCell>` walked by `_cursor` each render,
   so **hooks must run in stable call order** (no hooks inside `if`/loops — same rule as React). Each hook kind has its
   cell type (`SignalCell<T>`, `FloatSignalCell`, `MemoHookCell<T>`, `EffectCell`, `MemoCell<T>`, `RefHolderCell`,

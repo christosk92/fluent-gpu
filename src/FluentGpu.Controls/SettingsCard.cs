@@ -105,10 +105,8 @@ public static partial class SettingsCard
         BorderDisabled = Tok.StrokeControlDefault,
     };
 
-    internal static readonly Context<Options?> OptionsContext = new(null);
-
     public static Element Create(Options options)
-        => Ctx.Provide(OptionsContext, options, Embed.Comp(() => new SettingsCardCore()));
+        => Embed.Comp(options, () => new SettingsCardCore());
 
     public static ToggleSwitch.Style CompactToggleStyle() => ToggleSwitch.DefaultStyle with
     {
@@ -322,7 +320,7 @@ sealed class SettingsCardCore : Component
 
     public override Element Render()
     {
-        var options = UseContext(SettingsCard.OptionsContext) ?? new SettingsCard.Options();
+        var options = UseProps<SettingsCard.Options>();
         float w = _w.Value;
         float effective = w > 0.5f ? w : 720f;
         return new BoxEl

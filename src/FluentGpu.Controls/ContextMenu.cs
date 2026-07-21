@@ -96,7 +96,11 @@ public static class ContextMenu
             FocusTrap: true,
             DismissBehavior: DismissBehavior.LightDismiss,
             Chrome: commandBar ? PopupChrome.CommandBar : PopupChrome.Flyout)
-        { ConstrainToRootBounds = false };
+        {
+            ConstrainToRootBounds = false,
+            // Pointer/invoke menus preserve the invoker's focus. Keyboard menus still focus the first command.
+            PreserveFocusOnOpen = !keyboard,
+        };
 
         // The anchor node, value-copied from the reused args. Rect-anchored triggers use args.Source: Keyboard sets
         // Source == Node (the focused owner), Invoke sets Source == the ClickRequestsContext button (below the owner in

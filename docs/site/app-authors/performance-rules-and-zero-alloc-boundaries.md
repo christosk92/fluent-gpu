@@ -60,7 +60,7 @@ The canonical failure it fixes: a slider that pushes its value through `setState
 ```csharp
 var x = UseFloatSignal(0.3f);   // hot scalar → bind it, don't setState per move
 
-Slider.Bind(x);                 // a drag writes x.Value directly — no setState per pointer-move
+Slider.Create(x);               // a drag writes x.Value directly — no setState per pointer-move
 
 new BoxEl
 {
@@ -71,7 +71,7 @@ new BoxEl
 // elsewhere x.Value = pointerX → both thunks re-run → node transform/fill update → recomposite. NO re-render.
 ```
 
-`Slider.Bind(FloatSignal value, …)` (`src/FluentGpu.Controls/Slider.cs`) is the built-in compositor-path slider: the thumb offset and the fill scale are bound `Transform`s, so dragging is a `TransformDirty` frame. The gallery's `StatePage_BindHost` runs exactly this with a live render counter that stays put while the slider moves. Proof is harness check #60: a bound slider drag moves the thumb (`thumbDx 51→131`) with **`renders+0 rendered=False`**.
+`Slider.Create(FloatSignal value, Action<float>? onChange = null, SliderOptions? options = null, …)` (`src/FluentGpu.Controls/Slider.cs`) bound to a `FloatSignal` IS the built-in compositor-path slider: the thumb offset and the fill scale are bound `Transform`s, so dragging is a `TransformDirty` frame (no render/reconcile/layout). The gallery's `StatePage_BindHost` runs exactly this with a live render counter that stays put while the slider moves. Proof is harness check #60: a bound slider drag moves the thumb (`thumbDx 51→131`) with **`renders+0 rendered=False`**.
 
 Two rules make or break the bypass (both enforced by `Prop<T>`):
 
@@ -164,7 +164,7 @@ var product = UseComputed(() => a.Value * b.Value);   // Memo<int>: cached, lazy
 new TextEl("") { Text = Prop.Of(() => $"{a.Value} × {b.Value} = {product.Value}") };   // binds through the memo
 ```
 
-`Flow.For` and `Flow.Show` are the structural counterpart to a binding — a bind updates one node's *property*; a boundary updates the *set of children* at one position, both without re-rendering the surrounding component. `Flow.For(() => count, i => …, keyOf: i => …)` diffs rows by key (moves preserve row state); `Flow.Show(() => when, then, @else)` mounts/unmounts one branch. (Their thunks subscribe via `.Value` exactly like a bind.) Full treatment: [bindings page → reactive control-flow](./signals-components-and-bindings.md#3-reactive-control-flow--flowfor--flowshow).
+`Flow.For` and `Flow.Show` are the structural counterpart to a binding — a bind updates one node's *property*; a boundary updates the *set of children* at one position, both without re-rendering the surrounding component. `Flow.For(() => items, x => x.Id, (x, i) => …)` diffs rows by key (moves preserve row state); `Flow.Show(() => when, then, @else)` mounts/unmounts one branch. (Their thunks subscribe via `.Value` exactly like a bind.) Full treatment: [bindings page → reactive control-flow](./signals-components-and-bindings.md#3-reactive-control-flow--flowfor--flowshow).
 
 ## Measuring — `FrameStats`, the ambient HUD, and the diag flags
 
@@ -217,7 +217,7 @@ Scan the **Symptom** column for what you're seeing. The full performance + layou
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Dragging a slider tanks FPS | a `setState` per pointer-move re-renders the owning component every frame | `Slider.Bind(FloatSignal)`, or hand-bind the value to a `Transform`. Confirm `FrameStats.Rendered == false` on drag. |
+| Dragging a slider tanks FPS | a `setState` per pointer-move re-renders the owning component every frame | `Slider.Create(FloatSignal)`, or hand-bind the value to a `Transform`. Confirm `FrameStats.Rendered == false` on drag. |
 | A small change relayouts the whole page | no layout boundary above the change → the up-walk reaches the root → full layout | give the enclosing container explicit `Width`+`Height`+`ClipToBounds = true` so it's a boundary. |
 | Whole app re-renders on one interaction | state lives too high (at the root), so the root's render-effect runs | move state **down** into the component that owns it; or bind the hot value instead of `setState`. |
 | `ComponentsRendered` is much larger than 1 after a leaf change | state is too high, or a value passed by constructor forces a wider re-render | keep state local; pass parent→child data via a signal/context, not a constructor arg. |

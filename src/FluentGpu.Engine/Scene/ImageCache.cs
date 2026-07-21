@@ -83,6 +83,13 @@ public interface IImageDecoder
     /// once the job has started.</summary>
     void Prioritize(int id, ImagePriority priority) { }
 
+    /// <summary>True when a worker has published at least one completion for the UI thread to drain. Unlike an in-flight
+    /// request count, this is actionable work and may keep the frame loop awake.</summary>
+    bool HasReadyCompletions => false;
+    /// <summary>Install the thread-safe host wake callback invoked after a worker publishes a completion. Decoders that
+    /// complete synchronously may ignore it.</summary>
+    void SetCompletionWake(System.Action? wake) { }
+
     /// <summary>Census (MemCensus): decodes currently in flight on worker threads. Defaults to 0 for decoders that
     /// don't track it (e.g. the synchronous test decoder). O(1).</summary>
     int DiagInflight => 0;
@@ -121,9 +128,13 @@ public sealed class ImageCache
         public float LastRestartMs = float.NegativeInfinity;   // backoff gate for visible/transient-failure retries
         public bool Derived;
         public int SourceId;
+        public int BakeTargetW, BakeTargetH;
         public float BakeSigmaTexels;
         public int BakeGeneration;
         public bool BakeQueued;
+        public bool BakeUpgradeQueued;
+        public byte BakeUpgradeAttempts;
+        public BakedBlurQueue.Quality BakeQuality;
     }
 
     const float RestartBackoffMs = 2000f;   // min gap between visible retries on the same handle (avoids hammering a dead URL)
@@ -216,6 +227,12 @@ public sealed class ImageCache
     public int ContentEpoch { get; private set; }
     /// <summary>Entries still decoding (State==Pending) — O(1) maintained counter (was a per-call scan, wake-04).</summary>
     public int PendingCount => _pendingCount;
+    /// <summary>True when decoded results are ready to apply on the UI thread. In-flight network/decode work does not
+    /// require frame polling because its completion wakes the host.</summary>
+    public bool HasReadyCompletions => _decoder.HasReadyCompletions || (_bakedBlurs?.HasResults ?? false);
+
+    /// <summary>Wire the decoder's cross-thread completion notification to the platform message loop.</summary>
+    public void SetCompletionWake(System.Action? wake) => _decoder.SetCompletionWake(wake);
 
     /// <summary>Census (MemCensus): decodes in flight on the backing decoder's workers (0 for non-tracking decoders). O(1).</summary>
     public int DecodeInflight => _decoder.DiagInflight;
@@ -310,8 +327,11 @@ public sealed class ImageCache
             State = ImageState.Pending,
             W = outW,
             H = outH,
+            BakeTargetW = outW,
+            BakeTargetH = outH,
             BakeSigmaTexels = sigmaQ * 0.25f,
             BakeGeneration = 1,
+            BakeQuality = BakedBlurQueue.Quality.Minimal,
             LastUsed = _clock++,
             Transition = transition ?? ImageTransition.Default,
         };
@@ -452,11 +472,16 @@ public sealed class ImageCache
         {
             if (e.State is ImageState.None or ImageState.Failed) RestartDerived(h.Id, e);
             else if (e.State == ImageState.Pending) TryQueueDerived(h.Id, e);
+            else if (e.State == ImageState.Ready) TryQueueDerivedUpgrade(h.Id, e);
         }
         else if (ShouldRestart(e, ImagePriority.Visible)) RestartDecode(h.Id, e, ImagePriority.Visible);
         else if (e.State == ImageState.Pending) _decoder.Prioritize(h.Id, ImagePriority.Visible);
     }
-    public void Unpin(ImageHandle h) { if (_byId.TryGetValue(h.Id, out var e) && e.Refs > 0) e.Refs--; }
+    public void Unpin(ImageHandle h)
+    {
+        if (!_byId.TryGetValue(h.Id, out var e) || e.Refs <= 0) return;
+        if (--e.Refs == 0 && e.Derived) e.BakeUpgradeAttempts = 0;
+    }
 
     /// <summary>Whether a cache entry should (re)start decoding at <paramref name="priority"/>.</summary>
     static bool ShouldRestart(Entry e, ImagePriority priority)
@@ -508,6 +533,9 @@ public sealed class ImageCache
         e.Bytes = 0;
         e.TextureMs = float.NaN;
         e.BakeQueued = false;
+        e.BakeUpgradeQueued = false;
+        e.BakeUpgradeAttempts = 0;
+        e.BakeQuality = BakedBlurQueue.Quality.Minimal;
         e.BakeGeneration++;
         _pendingCount++;
         ContentEpoch++;
@@ -519,7 +547,22 @@ public sealed class ImageCache
         if (!e.Derived || e.State != ImageState.Pending || e.BakeQueued || _bakedBlurs is null) return;
         if (!_byId.TryGetValue(e.SourceId, out var source) || source.State != ImageState.Ready) return;
         e.BakeQueued = true;
-        _bakedBlurs.Enqueue(new BakedBlurQueue.Job(id, e.SourceId, e.W, e.H, e.BakeSigmaTexels, e.BakeGeneration));
+        _bakedBlurs.Enqueue(new BakedBlurQueue.Job(id, e.SourceId, e.BakeTargetW, e.BakeTargetH,
+            e.BakeSigmaTexels, e.BakeGeneration));
+        _totalBakeQueued++;
+        Diag.Set("media", "bakedBlurQueued", _totalBakeQueued);
+    }
+
+    private void TryQueueDerivedUpgrade(int id, Entry e)
+    {
+        if (!e.Derived || e.State != ImageState.Ready || e.Refs <= 0
+            || e.BakeQuality == BakedBlurQueue.Quality.High || e.BakeUpgradeQueued
+            || e.BakeUpgradeAttempts >= 3 || _bakedBlurs is null) return;
+        if (!_byId.TryGetValue(e.SourceId, out var source) || source.State != ImageState.Ready) return;
+        e.BakeUpgradeQueued = true;
+        e.BakeUpgradeAttempts++;
+        _bakedBlurs.Enqueue(new BakedBlurQueue.Job(id, e.SourceId, e.BakeTargetW, e.BakeTargetH,
+            e.BakeSigmaTexels, e.BakeGeneration, IsUpgrade: true));
         _totalBakeQueued++;
         Diag.Set("media", "bakedBlurQueued", _totalBakeQueued);
     }
@@ -534,7 +577,8 @@ public sealed class ImageCache
             if (sourceReady)
             {
                 if (e.State is ImageState.None or ImageState.Failed) RestartDerived(id, e);
-                else TryQueueDerived(id, e);
+                else if (e.State == ImageState.Pending) TryQueueDerived(id, e);
+                else TryQueueDerivedUpgrade(id, e);
             }
             else if (e.State == ImageState.Pending && !e.BakeQueued)
             {
@@ -589,14 +633,52 @@ public sealed class ImageCache
         if (_bakedBlurs is not { } q) return;
         while (q.TryDequeueResult(out var result))
         {
-            if (!_byId.TryGetValue(result.Id, out var e) || !e.Derived
-                || e.BakeGeneration != result.Generation || e.State != ImageState.Pending)
+            if (!_byId.TryGetValue(result.Id, out var e) || !e.Derived || e.BakeGeneration != result.Generation)
             {
                 _totalBakeStale++;
                 Diag.Set("media", "bakedBlurStale", _totalBakeStale);
                 continue;
             }
 
+            if (result.IsUpgrade)
+            {
+                if (e.State != ImageState.Ready || !e.BakeUpgradeQueued)
+                {
+                    _totalBakeStale++;
+                    Diag.Set("media", "bakedBlurStale", _totalBakeStale);
+                    continue;
+                }
+                e.BakeUpgradeQueued = false;
+                if (!result.Ok)
+                {
+                    // The provisional texture remains valid. Retry a bounded number of times while it stays visible;
+                    // unpinning resets the budget so a later remount can try again after memory pressure subsides.
+                    _totalBakeFailed++;
+                    Diag.Set("media", "bakedBlurFailed", _totalBakeFailed);
+                    TryQueueDerivedUpgrade(result.Id, e);
+                    continue;
+                }
+                long priorBytes = e.Bytes;
+                e.W = result.W;
+                e.H = result.H;
+                e.Bytes = (long)result.W * result.H * 4;
+                e.BakeQuality = result.Quality;
+                e.BakeUpgradeAttempts = 0;
+                UsedBytes += e.Bytes - priorBytes;
+                DerivedUsedBytes += e.Bytes - priorBytes;
+                _totalBakeReady++;
+                _pumpCompleted++;
+                ContentEpoch++;
+                Diag.Set("media", "bakedBlurReady", _totalBakeReady);
+                continue;
+            }
+
+            if (e.State != ImageState.Pending || !e.BakeQueued)
+            {
+                _totalBakeStale++;
+                Diag.Set("media", "bakedBlurStale", _totalBakeStale);
+                continue;
+            }
             e.BakeQueued = false;
             _pendingCount--;
             e.State = result.Ok ? ImageState.Ready : ImageState.Failed;
@@ -606,22 +688,20 @@ public sealed class ImageCache
                 e.W = result.W;
                 e.H = result.H;
                 e.Bytes = (long)result.W * result.H * 4;
+                e.BakeQuality = result.Quality;
                 UsedBytes += e.Bytes;
                 DerivedUsedBytes += e.Bytes;
                 BeginReveal(e);
                 _totalBakeReady++;
             }
-            else
-            {
-                e.Bytes = 0;
-                _totalBakeFailed++;
-            }
+            else { e.Bytes = 0; _totalBakeFailed++; }
             _pumpCompleted++;
             ContentEpoch++;
             Diag.Set("media", "bakedBlurReady", _totalBakeReady);
             Diag.Set("media", "bakedBlurFailed", _totalBakeFailed);
             Diag.Set("media", "pending", PendingCount);
             ImageStatusChanged?.Invoke(result.Id, e.State, e.Failure, 1);
+            if (result.Ok) TryQueueDerivedUpgrade(result.Id, e);
         }
     }
 
@@ -743,6 +823,15 @@ public sealed class ImageCache
             if (!e2.Derived) e2.W = e2.H = 0;
             e2.Bytes = 0;
             e2.TextureMs = float.NaN;
+            if (e2.Derived)
+            {
+                e2.BakeQueued = false;
+                e2.BakeUpgradeQueued = false;
+                e2.BakeUpgradeAttempts = 0;
+                e2.BakeQuality = BakedBlurQueue.Quality.Minimal;
+                e2.BakeGeneration++;
+                _bakedBlurs?.Invalidate(victim, e2.BakeGeneration);
+            }
             // If the evicted entry could still be the crossfade-deadline high-water (an unpinned image whose fade hasn't
             // elapsed), recompute the max so HasActiveCrossfades can't report a stale future deadline. Settled entries
             // (deadline < clock — the overwhelming evict case) skip the recompute, so the steady path stays scan-free.

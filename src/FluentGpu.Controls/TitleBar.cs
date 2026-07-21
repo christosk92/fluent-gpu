@@ -6,6 +6,31 @@ using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
 
+/// <summary>The <see cref="TitleBar.Create"/> options record — wraps the TitleBar property-init config. The
+/// <see cref="Content"/> builder receives the LIVE content-slot width signal (subscribe it for content that must
+/// resize with the slot at runtime, e.g. <c>AutoSuggestBox.Create(widthSignal: …)</c>; read <c>.Peek()</c> to pick the
+/// shape per render). Field defaults mirror the control's own.</summary>
+public sealed record TitleBarOptions
+{
+    public string Title { get; init; } = "";
+    public string Subtitle { get; init; } = "";
+    public string IconGlyph { get; init; } = "";
+    public ColorF? IconColor { get; init; }
+    public bool ShowBackButton { get; init; }
+    public bool BackEnabled { get; init; }
+    /// <summary>Live back-enabled override (see <see cref="TitleBar.BackEnabledSignal"/>) — bind this when the back
+    /// button reflects a runtime navigation stack.</summary>
+    public IReadSignal<bool>? BackEnabledSignal { get; init; }
+    public Action? OnBack { get; init; }
+    public bool ShowPaneToggle { get; init; }
+    public Action? OnPaneToggle { get; init; }
+    public Func<IReadSignal<float>, Element>? Content { get; init; }
+    public Func<Element>? Tabs { get; init; }
+    public Func<int>? TabsVersion { get; init; }
+    public bool ShowCaptionButtons { get; init; } = true;
+    public TemplateParts? Parts { get; init; }
+}
+
 /// <summary>
 /// The WinUI 3 <c>TitleBar</c> control (WinAppSDK 1.7, microsoft-ui-xaml controls\dev\TitleBar) over a custom frame
 /// (<see cref="WindowDesc.CustomFrame"/>): back + pane-toggle buttons (40w, 16px glyphs), a 16×16 app-identity icon,
@@ -71,6 +96,10 @@ public sealed class TitleBar : Component
     public bool ShowBackButton;
     /// <summary>WinUI IsBackEnabled.</summary>
     public bool BackEnabled;
+    /// <summary>Live override of <see cref="BackEnabled"/>: when set, the back button's enabled state tracks this signal
+    /// (component fields freeze at mount, so a shell whose back-availability changes at runtime — a navigation back
+    /// stack — binds this instead). Reading it subscribes the bar, so the button re-glyphs enabled↔disabled in place.</summary>
+    public IReadSignal<bool>? BackEnabledSignal;
     public Action? OnBack;
     /// <summary>WinUI IsPaneToggleButtonVisible.</summary>
     public bool ShowPaneToggle;
@@ -98,6 +127,28 @@ public sealed class TitleBar : Component
     /// <summary>False = a standard OS frame owns the caption buttons; the bar keeps a right inset clear of them.</summary>
     public bool ShowCaptionButtons = true;
     public TemplateParts? Parts;
+
+    /// <summary>The one canonical TitleBar factory (WS3 creation idiom). Wraps the property-init surface in a
+    /// <see cref="TitleBarOptions"/> record; the options' <see cref="TitleBarOptions.Content"/> builder is handed the
+    /// live <see cref="ContentAvail"/> signal so it can wire content that resizes with the slot without needing the
+    /// instance. Property-init stays available for the in-repo probes/shells that compose the bar directly, but this is
+    /// the documented public path.</summary>
+    public static Element Create(TitleBarOptions options)
+        => Embed.Comp(() =>
+        {
+            var tb = new TitleBar
+            {
+                Title = options.Title, Subtitle = options.Subtitle, IconGlyph = options.IconGlyph,
+                ShowBackButton = options.ShowBackButton, BackEnabled = options.BackEnabled,
+                BackEnabledSignal = options.BackEnabledSignal, OnBack = options.OnBack,
+                ShowPaneToggle = options.ShowPaneToggle, OnPaneToggle = options.OnPaneToggle,
+                Tabs = options.Tabs, TabsVersion = options.TabsVersion,
+                ShowCaptionButtons = options.ShowCaptionButtons, Parts = options.Parts,
+            };
+            if (options.IconColor is { } ic) tb.IconColor = ic;
+            if (options.Content is { } content) tb.Content = _ => content(tb.ContentAvail);
+            return tb;
+        });
 
     // Captured part handles (OnRealized fires at mount; the component instance persists across re-renders, so plain
     // fields are the stable store) → the WM_NCHITTEST region report.
@@ -128,19 +179,20 @@ public sealed class TitleBar : Component
         bool active = hooks.IsWindowActive?.Invoke() ?? true;
         bool maximized = hooks.GetWindowState?.Invoke() == WindowState.Maximized;
         int tabsVer = TabsVersion?.Invoke() ?? 0;                 // subscribe: re-render + re-push regions on tab add/remove
+        bool backEnabled = BackEnabledSignal is { } bes ? bes.Value : BackEnabled;   // subscribe: re-glyph the back button live
 
         // Report the drag/button regions after THIS render's layout settles (phase 6.5) — deps cover everything that
         // moves the parts (resize, maximize→WM_SIZE→viewport, DPI hop→DIP viewport change, the measured-width feedback
         // render whose island rect must re-push, and the tab-set revision so the strip island re-reports on change).
         UseLayoutEffect(() => PushRegions(hooks),
-            viewport.Width, viewport.Height, epoch, _availDip.Peek(), tabsVer, ShowBackButton, ShowPaneToggle, ShowCaptionButtons);
+            DepKey.From(HashCode.Combine(viewport.Width, viewport.Height, epoch, _availDip.Peek(), tabsVer, ShowBackButton, ShowPaneToggle, ShowCaptionButtons)));
 
         // Memo gate: a resize-only re-render returns the cached tree alloc-free (the layout effect above already re-ran
         // — its viewport deps changed — so regions re-push without a rebuild). Key excludes the viewport on purpose.
         // Tok.Epoch is in the key so a live theme switch busts the cache — otherwise RethemeAll re-runs this effect but
         // the memo returns the OLD-theme tree (the caption glyphs/foregrounds would stay stale).
         int key = unchecked(((((epoch * 397 ^ tabsVer) * 397 ^ _availDip.Peek().GetHashCode()) * 397 ^ Tok.Epoch) * 397)
-            ^ ((active ? 1 : 0) | (maximized ? 2 : 0) | (ShowBackButton ? 4 : 0) | (ShowPaneToggle ? 8 : 0) | (ShowCaptionButtons ? 16 : 0) | (BackEnabled ? 32 : 0)));
+            ^ ((active ? 1 : 0) | (maximized ? 2 : 0) | (ShowBackButton ? 4 : 0) | (ShowPaneToggle ? 8 : 0) | (ShowCaptionButtons ? 16 : 0) | (backEnabled ? 32 : 0)));
         if (_cachedTree is { } cached && key == _cacheKey) return cached;
 
         // WinUI back/pane: 40w × 44h with Margin 2 (the hover backplate spans y=2..46 of the 48px bar; adjacent
@@ -158,7 +210,7 @@ public sealed class TitleBar : Component
 
         if (ShowBackButton)
         {
-            var back = IconButton.Create(Icons.Back, () => OnBack?.Invoke(), navStyle, isEnabled: BackEnabled)
+            var back = IconButton.Create(Icons.Back, () => OnBack?.Invoke(), navStyle, isEnabled: backEnabled)
                 with { Margin = navMargin };
             var applied = Parts.Apply(PartBackButton, back);
             kids.Add(applied with

@@ -96,7 +96,7 @@ sealed class DiscographyPage : Component
                 {
                     OnClick = () => go("artist:" + uri, artistName),
                     Corners = CornerRadius4.All(6f), HoverFill = Tok.FillSubtleSecondary,
-                    Padding = new Edges4(WaveeSpace.XS, WaveeSpace.XS, WaveeSpace.XS, WaveeSpace.XS),
+                    Padding = new Edges4(Spacing.XS, Spacing.XS, Spacing.XS, Spacing.XS),
                     Children = [ new TextEl(artistName) { Size = 28f, Weight = 700, Color = Tok.TextSecondary, HoverColor = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis } ],
                 },
                 Icon(Icons.ChevronRight, 18f, Tok.TextTertiary),
@@ -106,7 +106,7 @@ sealed class DiscographyPage : Component
 
         var content = new BoxEl
         {
-            Direction = 1, Gap = WaveeSpace.L,
+            Direction = 1, Gap = Spacing.L,
             Padding = new Edges4(32f, 40f, 32f, PlayerDock.Reserve + 40f),
             Children =
             [

@@ -54,7 +54,7 @@ public sealed class CalendarView : Component
     /// <summary>False renders adjacent-month cells blank (WinUI IsOutOfScopeEnabled).</summary>
     public bool IsOutOfScopeEnabled = true;
     /// <summary>WinUI <c>SelectedDatesChanged</c>: invoked with the post-change selected dates (empty on deselect).</summary>
-    public Action<IReadOnlyList<DateOnly>>? OnSelectedDatesChanged;
+    public Action<IReadOnlyList<DateOnly>>? OnChange;
 
     /// <summary>Zero-arg factory — keeps the existing demo call sites (DateTimePages.cs) compiling unchanged.</summary>
     public static Element Create() => Embed.Comp(() => new CalendarView());
@@ -68,13 +68,13 @@ public sealed class CalendarView : Component
         int numberOfWeeksInView = 6,
         CalendarViewDisplayMode displayMode = CalendarViewDisplayMode.Month,
         bool isOutOfScopeEnabled = true,
-        Action<IReadOnlyList<DateOnly>>? onSelectedDatesChanged = null)
+        Action<IReadOnlyList<DateOnly>>? onChange = null)
         => Embed.Comp(() => new CalendarView
         {
             SelectedDate = selectedDate, MinDate = minDate, MaxDate = maxDate, SelectionMode = selectionMode,
             FirstDayOfWeek = firstDayOfWeek, IsTodayHighlighted = isTodayHighlighted,
             NumberOfWeeksInView = numberOfWeeksInView, DisplayMode = displayMode,
-            IsOutOfScopeEnabled = isOutOfScopeEnabled, OnSelectedDatesChanged = onSelectedDatesChanged,
+            IsOutOfScopeEnabled = isOutOfScopeEnabled, OnChange = onChange,
         });
 
     private static int Depth(CalendarViewDisplayMode m)
@@ -114,14 +114,14 @@ public sealed class CalendarView : Component
                 case CalendarViewSelectionMode.Single:
                     bool deselect = selected.Peek() == d;
                     selected.Value = deselect ? null : d;
-                    OnSelectedDatesChanged?.Invoke(deselect ? Array.Empty<DateOnly>() : new[] { d });
+                    OnChange?.Invoke(deselect ? Array.Empty<DateOnly>() : new[] { d });
                     return;
                 default:   // Multiple — toggle membership (Partial_Selection.cpp:85-100)
                     var list = multiSel.Value;
                     int idx = list.IndexOf(d);
                     if (idx >= 0) list.RemoveAt(idx); else list.Add(d);
                     multiVersion.Value++;
-                    OnSelectedDatesChanged?.Invoke(list.ToArray());
+                    OnChange?.Invoke(list.ToArray());
                     return;
             }
         }

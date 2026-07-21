@@ -63,9 +63,22 @@ public static partial class IconButton
         DisabledFill = Tok.FillSubtleTransparent,
     };
 
-    public static BoxEl Create(string glyph, Action onClick, Style? style = null, bool isEnabled = true, TemplateParts? parts = null)
+    /// <summary>The per-control clamp seam (adjustment #6 — the shared size axis a control can contextually refuse,
+    /// mirroring Radix Themes' radius=full-refused-on-Checkbox). IconButton is a fixed-affordance SQUARE (transport /
+    /// command-bar chrome), so it REFUSES <see cref="ControlSize.Large"/> — clamping it to <see cref="ControlSize.Medium"/>
+    /// so a shared Large axis can't inflate the glyph box past its sane toolbar size. Small/Medium pass through.</summary>
+    internal static ControlSize ClampSize(ControlSize size) => size == ControlSize.Large ? ControlSize.Medium : size;
+
+    /// <summary>The square chrome box size per (clamped) <see cref="ControlSize"/>: Small = 28 (WinUI compact affordance),
+    /// Medium = 36 (the default — unchanged). Large is clamped to Medium by <see cref="ClampSize"/>.</summary>
+    static float IconBox(ControlSize size) => size == ControlSize.Small ? 28f : 36f;
+
+    public static BoxEl Create(string glyph, Action onClick, Style? style = null, bool isEnabled = true, TemplateParts? parts = null, ControlSize size = ControlSize.Medium)
     {
-        var s = style ?? DefaultStyle;
+        var cs = ClampSize(size);
+        // Size axis drives the square box + the glyph run; Medium is byte-identical to the pre-axis default (incl. any
+        // StyleOverride), so existing IconButtons are unchanged. An explicit style is the full-override escape hatch.
+        var s = style ?? (cs == ControlSize.Medium ? DefaultStyle : DefaultStyle with { Size = IconBox(cs), GlyphSize = ControlMetrics.For(cs).IconSize });
         // Inline glyph wrapper (mirrors AnimatedIcon.Glyph) so the TextEl carries the foreground interaction ramps
         // and the wrapper carries the AnimatedIcon-analogue scale (rides the button's eased hover/press progress).
         var icon = new BoxEl

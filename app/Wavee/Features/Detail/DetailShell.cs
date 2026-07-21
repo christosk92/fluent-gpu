@@ -126,7 +126,7 @@ sealed class DetailShell : Component
             var s = new HashSet<string>(m.Tracks.Count);
             for (int i = 0; i < m.Tracks.Count; i++) s.Add(m.Tracks[i].Id);
             return s;
-        }, raw);
+        }, DepKey.FromRef(raw));
 
         Track? cur = bridge?.CurrentTrack.Value;     // subscribe → re-derive wash/tint on track change (rare)
         Palette? livePal = bridge?.TrackPalette.Value;   // subscribe
@@ -170,8 +170,13 @@ sealed class DetailShell : Component
         // of their 32-bit hash: the latter could suppress a real palette change and did not force a fresh ownership
         // claim when A -> B happened to resolve to the same tint. Reference comparison is correct for the shell signal;
         // nullable ColorF and routeName compare by value.
-        UseEffect(() => SetTint(micaTint), route.Name, micaTint.HasValue, micaTint.GetValueOrDefault(), Tok.Theme);
+        UseEffect(() => SetTint(micaTint), DepKey.From(HashCode.Combine(route.Name, micaTint.HasValue, micaTint.GetValueOrDefault(), Tok.Theme)));
         UseActivation(onActivated: () => SetTint(micaTint), onDeactivated: ClearTint);
+        // onDeactivated fires ONLY on PARK, never on unmount (RenderContext.UseActivation). A nav that unmounts this page
+        // without parking it first (keep-alive eviction / direct replace) would otherwise leave the wash stuck — owned by
+        // a gone page — until the next page's SetTint overwrites it (the intermittent "color wash sticks" bug). Clear on
+        // UNMOUNT too via a mount-once effect cleanup; owner-gated, so it never clobbers the next page's tint.
+        UseEffect(() => (Action?)ClearTint, DepKey.Empty);
 
         // ── handlers (close over live svc/model; not frozen ctor args) ──
         void Play(int index) { if (m.ContextUri is { } uri && svc is not null) _ = svc.Player.PlayAsync(uri, Math.Max(0, index)); }
@@ -189,20 +194,23 @@ sealed class DetailShell : Component
             // opens the player-bar device picker) instead of the old silent no-op.
             if (string.IsNullOrEmpty(bridge.ActiveDeviceId.Peek())) { bridge.NotifyLocalPlaybackUnsupported(); return; }
             int n = DetailQueueActions.AddToEnd(svc?.Player, m.Tracks);
-            if (n > 0) Toasts.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), ToastSeverity.Success);
+            if (n > 0) Toast.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), new ToastOptions { Severity = InfoBarSeverity.Success });
         }
         void PlayNext()
         {
             if (string.IsNullOrEmpty(bridge.ActiveDeviceId.Peek())) { bridge.NotifyLocalPlaybackUnsupported(); return; }
             int n = DetailQueueActions.PlayNext(svc?.Player, m.Tracks);
-            if (n > 0) Toasts.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), ToastSeverity.Success);
+            if (n > 0) Toast.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), new ToastOptions { Severity = InfoBarSeverity.Success });
         }
         void AddToPlaylist()
         {
             if (libBridge is null || m.Tracks.Count == 0) return;
             var (plUri, plName) = libBridge.AddToDefaultPlaylist(m.Tracks);
-            Toasts.Show(Strings.Detail.AddedToPlaylist(plName), ToastSeverity.Success,
-                actionLabel: Loc.Get(Strings.Detail.GoToPlaylist), onAction: () => go("pl:" + plUri, plName));
+            Toast.Show(Strings.Detail.AddedToPlaylist(plName), new ToastOptions
+            {
+                Severity = InfoBarSeverity.Success,
+                ActionLabel = Loc.Get(Strings.Detail.GoToPlaylist), OnAction = () => go("pl:" + plUri, plName),
+            });
         }
         // ── persisted per-context sort: load once at mount, save on every change (must be assigned BEFORE handlers
         // captures SetSort, which closes over `settings`) ──
@@ -237,7 +245,7 @@ sealed class DetailShell : Component
             MultiSelect: _multiSelect, SetMultiSelect: v => _multiSelect.Value = v);
         // TrackList is retained across preview→palette hydration and route reuse. Publish after render so its accent and
         // context-closing actions update through the supported signal path instead of frozen constructor arguments.
-        UseEffect(() => _liveHandlers.Value = handlers, handlers);
+        UseEffect(() => _liveHandlers.Value = handlers, DepKey.FromRef(handlers));
 
         // Viewport-size context signal — resolved UNCONDITIONALLY here (rules of hooks): the positional-hook cursor must
         // see the SAME hook sequence on every render, but the branches below differ (single-column / vertical / two-column),

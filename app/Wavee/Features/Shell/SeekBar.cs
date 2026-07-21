@@ -9,7 +9,7 @@ using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
 
-// The center scrub bar — a bespoke media-seek control that REPLACES the old Slider.Bind seek in the player bar. Three
+// The center scrub bar — a bespoke media-seek control that REPLACES the old signal-bound Slider seek in the player bar. Three
 // reasons it isn't a Slider:
 //   1. THE SCRUB GATE (the bug fix). While the user is dragging, the displayed fraction must IGNORE PositionFrac so the
 //      1 Hz position tick can't yank the thumb back under the finger. Slider.Bind reads one signal; we need a derived
@@ -106,6 +106,16 @@ sealed class SeekBar : Component
             _tickPosMs = b.PositionMs.Peek();
             Recompute();
         }, posTick);
+
+        // RE-ANCHOR on a play/pause flip. Position doesn't tick while paused, so on RESUME the interpolation would
+        // extrapolate `_tickPosMs + (now - _tickWallMs)` across the whole paused gap for one frame (the timestamp jumps
+        // ahead, then snaps back when the next tick re-anchors). Resetting the wall/pos anchor on the transition kills it.
+        UseEffect(() =>
+        {
+            _tickWallMs = Environment.TickCount64;
+            _tickPosMs = b.PositionMs.Peek();
+            Recompute();
+        }, playing);
 
         // Fill: a full-width accent bar scaled from the LEFT edge by _displayFrac. TransformOriginX=0 makes the bound
         // Scale pivot on the left (SceneRecorder: world ∘ T(ox,oy) ∘ Local ∘ T(-ox,-oy), ox = W·OriginX = 0), so the
@@ -300,6 +310,7 @@ sealed class SeekBar : Component
         if (!Enabled() || (dur = _b.DurationMs.Peek()) <= 0) { OnCanceled(); return; }
         float f = _scrubFrac.Peek();
         long targetMs = Math.Clamp((long)(f * dur), 0, dur);
+        _b.NoteSeek(targetMs);                             // arm the seek latch: suppress stale pre-seek position ticks (#2)
         _b.PositionFrac.Value = f;                         // optimistic: paint the new position immediately
         _b.PositionMs.Value = targetMs;                    // keep time labels + interpolation anchor in the same place
         _tickWallMs = Environment.TickCount64;
@@ -326,11 +337,11 @@ sealed class SeekBar : Component
 /// track is playing, it subscribes to the host frame clock and advances the owner's <c>_displayFrac</c> signal each
 /// frame so the playhead interpolates smoothly between the ~1 Hz position ticks. The owner unmounts it on pause/stop,
 /// idling the frame loop. It NEVER re-renders the owner (it only writes a signal the compositor binds read).</summary>
-sealed class SeekTicker : ReactiveComponent
+sealed class SeekTicker : Component
 {
     public required SeekBar Owner;
 
-    public override Element Setup()
+    public override Element Render()
     {
         var tick = UseContextSignal(FrameClock.Tick);
         UseSignalEffect(() =>

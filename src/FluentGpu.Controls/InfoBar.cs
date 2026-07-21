@@ -1,5 +1,6 @@
 using FluentGpu.Foundation;
 using FluentGpu.Dsl;
+using FluentGpu.Localization;
 
 namespace FluentGpu.Controls;
 
@@ -57,10 +58,8 @@ public static class InfoBar
     // single-sourced from Icons.cs as VISIBLE \uXXXX escapes (raw PUA literals read as "empty" in most viewers —
     // the audit's blocker — so the named constants are the canonical spelling).
     private const string IconBackgroundGlyph = Icons.InfoBarBackgroundCircle; // F136 (InfoBar_themeresources.xaml:70)
-    private const string GlyphInfo    = Icons.StatusInfo;                     // F13F (:71)
-    private const string GlyphSuccess = Icons.StatusSuccess;                  // F13E (:74)
-    private const string GlyphWarning = Icons.StatusWarning;                  // F13C (:73)
-    private const string GlyphError   = Icons.StatusError;                    // F13D (:72)
+    // The per-severity status glyphs (F13F/F13E/F13C/F13D) + severity color ramp live in the shared SeverityVisuals
+    // helper (single-sourced with Toast; see InfoBarTemplateSettings.For).
 
     // WinUI sizes/margins (InfoBar_themeresources.xaml, verbatim).
     private const float MinHeight        = 48f;          // InfoBarMinHeight
@@ -103,15 +102,12 @@ public static class InfoBar
     /// per severity by the pure factory <see cref="For"/> - no per-frame allocation.</summary>
     public readonly record struct InfoBarTemplateSettings(string Glyph, ColorF IconBackground, ColorF IconForeground, ColorF Background)
     {
-        public static InfoBarTemplateSettings For(InfoBarSeverity severity) => severity switch
+        // Single-sourced from the shared SeverityVisuals helper so InfoBar and Toast can NEVER drift (gate.toast.severity).
+        public static InfoBarTemplateSettings For(InfoBarSeverity severity)
         {
-            // InfoBar*SeverityIconBackground = SystemFillColor*Brush; IconForeground = TextFillColorInverseBrush;
-            // background = SystemFillColor*BackgroundBrush. Informational follows the OS accent (SystemFillColorAttention).
-            InfoBarSeverity.Success => new(GlyphSuccess, Tok.SystemFillSuccess,   Tok.TextInverse, Tok.SystemFillSuccessBackground),
-            InfoBarSeverity.Warning => new(GlyphWarning, Tok.SystemFillCaution,   Tok.TextInverse, Tok.SystemFillCautionBackground),
-            InfoBarSeverity.Error   => new(GlyphError,   Tok.SystemFillCritical,  Tok.TextInverse, Tok.SystemFillCriticalBackground),
-            _                       => new(GlyphInfo,    Tok.SystemFillAttention, Tok.TextInverse, Tok.SystemFillAttentionBackground),
-        };
+            var v = SeverityVisuals.For(severity);
+            return new(v.Glyph, v.IconBackground, v.IconForeground, v.Background);
+        }
     }
 
     /// <param name="severity">Selects the status glyph + severity colors via <see cref="InfoBarTemplateSettings"/>.</param>
@@ -283,7 +279,7 @@ public static class InfoBar
             var m = parts.Apply(PartCloseButton, closeButton);
             // WinUI attaches a localized "Close" tooltip to the close button in OnApplyTemplate (InfoBar.cpp:55-59,
             // SR_InfoBarCloseButtonTooltip = "Close"). The ToolTip wrapper self-aligns Start (VerticalAlignment="Top").
-            children.Add(ToolTip.Wrap(m with { OnClick = closeClick ?? m.OnClick, Role = AutomationRole.Button }, "Close"));
+            children.Add(ToolTip.Wrap(m with { OnClick = closeClick ?? m.OnClick, Role = AutomationRole.Button }, Loc.Get(Strings.InfoBar.Close)));
         }
 
         var root = new BoxEl

@@ -209,6 +209,9 @@ internal sealed class BoundRowCheckBox : Component
             MinWidth = 0f, MinHeight = 20f, ContentGap = 0f,   // compact: a bare 20px box, no label lane
             FocusVisualMargin = Edges4.All(1f),                // the labeled control's −7,−3 halo would spill the row
         };
-        return CheckBox.Create("", on, () => _interact(ItemContainerTrigger.Tap, KeyModifiers.Ctrl), style, parts: NotFocusable);
+        // Zero-alloc per-item hot path: build the checkbox visual synchronously (no component/signal) — this visual's
+        // own render reads _isChecked() (subscribes SelectionModel), so it re-skins without a per-item value signal.
+        return CheckBox.Build("", on ? CheckState.Checked : CheckState.Unchecked,
+            _ => _interact(ItemContainerTrigger.Tap, KeyModifiers.Ctrl), style, enabled: true, parts: NotFocusable);
     }
 }

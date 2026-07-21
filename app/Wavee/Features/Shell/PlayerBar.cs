@@ -20,7 +20,7 @@ namespace Wavee;
 //
 // Cost discipline (signals-first): the bar's Render reads only the LOW-frequency signals (track/play-state/shuffle/repeat/
 // buffering/error/viewport) so it re-renders only on those. The HOT values never re-render the bar — the SEEK is a
-// bespoke compositor-bound SeekBar sub-component (smooth interpolated playhead + scrub-gate), the VOLUME is Slider.Bind
+// bespoke compositor-bound SeekBar sub-component (smooth interpolated playhead + scrub-gate), the VOLUME is Slider.Create (signal-bound)
 // (compositor-only), and the time labels + volume glyph are isolated sub-components that re-render at ~1 Hz.
 enum PlayerState : byte { NoTrack, Loading, Reconnecting, Error, Active }
 
@@ -100,11 +100,11 @@ readonly record struct PlayerBarLayout(
     }
 }
 
-sealed class PlayerBar : ReactiveComponent
+sealed class PlayerBar : Component
 {
     static readonly bool DiagEnabled = Diag.EnvFlag("WAVEE_PLAYERBAR_DIAG");
 
-    public override Element Setup()
+    public override Element Render()
     {
         var viewport = UseContextSignal(Viewport.Size);
         var layout = UseSignal(PlayerBarLayout.FromWidth(viewport.Peek().Width));
@@ -280,7 +280,8 @@ sealed class PlayerBarContent : Component
         }
 
         var titleLinkHover = UseSignal(false);
-        bool titleHot = albumNav && titleLinkHover.Value;
+        // titleHot is read INSIDE the Prop.Of thunks below (albumNav && titleLinkHover.Value) so the hover recolor stays
+        // live — a render-time bool snapshot would freeze at mount (replacement thunks are ignored after reconcile).
         Element titleEl = marqueeDisabled
             ? new BoxEl
             {
@@ -288,7 +289,7 @@ sealed class PlayerBarContent : Component
                 Children = [new TextEl(Prop.Of(() => NowPlaying(b).Title))
                 {
                     Size = 14f, Weight = 700,
-                    Color = Prop.Of(() => titleHot ? Tok.AccentTextPrimary : NowPlaying(b).Color),
+                    Color = Prop.Of(() => albumNav && titleLinkHover.Value ? Tok.AccentTextPrimary : NowPlaying(b).Color),
                     Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
                 }],
             }
@@ -296,7 +297,7 @@ sealed class PlayerBarContent : Component
                 new Marquee.Style
                 {
                     FontSize = 14f, Weight = 700,
-                    Foreground = Prop.Of(() => titleHot ? Tok.AccentTextPrimary : NowPlaying(b).Color),
+                    Foreground = Prop.Of(() => albumNav && titleLinkHover.Value ? Tok.AccentTextPrimary : NowPlaying(b).Color),
                     Speed = 18f, CycleMs = MarqueeCycleMs, EndPauseMs = MarqueeEndPauseMs,
                     Mode = Marquee.ScrollMode.PingPong, Trigger = Marquee.TriggerMode.PauseOnHover,
                 },
@@ -356,7 +357,7 @@ sealed class PlayerBarContent : Component
             });
         leftKids.Add(metaCol);
         if (showLike)
-            leftKids.Add(Transport(liked ? Mdl.HeartFill : Icons.Heart, () => { if (track is { } lt) lib?.ToggleSaved(lt.Uri, lt.Title); }, true, liked, accent, MathF.Min(30f, buttonBox), 15f,
+            leftKids.Add(Transport(liked ? Icons.HeartFill : Icons.Heart, () => { if (track is { } lt) lib?.ToggleSaved(lt.Uri, lt.Title); }, true, liked, accent, MathF.Min(30f, buttonBox), 15f,
                     onRealized: h => likeNode.Value = h)
                 with { Key = "like", Animate = ItemMotion });
 
@@ -427,7 +428,7 @@ sealed class PlayerBarContent : Component
             overflowCommands.Add(new AppBarCommand(repeat == RepeatMode.Track ? Icons.RepeatOne : Icons.RepeatAll, Loc.Get(Strings.Player.Repeat), () => CycleRepeat(b), AppBarCommandKind.ToggleButton, repeat != RepeatMode.Off, canTransport));
         }
         if (!showLike && active)
-            overflowCommands.Add(new AppBarCommand(liked ? Mdl.HeartFill : Icons.Heart, Loc.Get(Strings.Player.Like), () => { if (track is { } lt) lib?.ToggleSaved(lt.Uri, lt.Title); }, AppBarCommandKind.ToggleButton, liked, true));
+            overflowCommands.Add(new AppBarCommand(liked ? Icons.HeartFill : Icons.Heart, Loc.Get(Strings.Player.Like), () => { if (track is { } lt) lib?.ToggleSaved(lt.Uri, lt.Title); }, AppBarCommandKind.ToggleButton, liked, true));
         // In the small-window overflow, Queue / Now Playing open their right-rail panels (the rail floats over the
         // content when it doesn't fit inline).
         if (!showQueue)
@@ -458,7 +459,11 @@ sealed class PlayerBarContent : Component
                 ]
             });
         if (showVolumeSlider)
-            rightKids.Add(Slider.Bind(b.Volume, v => { _ = b.Player.SetVolumeAsync(v); }, 96f, 16f, RailStyle) with { Key = "volume-slider", Animate = ItemMotion });
+            rightKids.Add(new BoxEl
+            {
+                Key = "volume-slider", Animate = ItemMotion,   // Slider.Create returns a component element (no Animate lane); wrap it like the other Embed.Comp items
+                Children = [Slider.Create(b.Volume, v => { _ = b.Player.SetVolumeAsync(v); }, length: 96f, thickness: 16f, style: RailStyle)],
+            });
         if (ui is not null && active)
             rightKids.Add(Transport(WaveeIcons.Lyrics,
                 () => ui.Toggle(RailMode.Lyrics),
@@ -611,7 +616,7 @@ sealed class PlayerBarContent : Component
         DevicePickerRowKind.Header => new MenuFlyoutItem(r.Label, default, false, () => { }),
         DevicePickerRowKind.Empty => new MenuFlyoutItem(r.Label, default, false, () => { }),
         DevicePickerRowKind.LocalDefault => MenuFlyoutItem.RadioItem(r.Label, r.IsChecked,
-            r.Enabled ? () => { _ = b.LocalOutputs?.SelectAsync(null); } : null, Mdl.ThisPc, enabled: r.Enabled)
+            r.Enabled ? () => { _ = b.LocalOutputs?.SelectAsync(null); } : null, Icons.ThisPc, enabled: r.Enabled)
             with { AcceleratorText = r.Accelerator },
         DevicePickerRowKind.LocalDevice => MenuFlyoutItem.RadioItem(r.Label, r.IsChecked,
             r.Enabled ? () => { var id = r.DeviceId; _ = b.LocalOutputs?.SelectAsync(id); } : null, LocalGlyph(r.LocalKind), enabled: r.Enabled)
@@ -624,19 +629,19 @@ sealed class PlayerBarContent : Component
     // Segoe Fluent glyph for a local (this-computer) output form factor.
     static string LocalGlyph(LocalAudioDeviceKind k) => k switch
     {
-        LocalAudioDeviceKind.Speakers => Mdl.Speakers,
-        LocalAudioDeviceKind.Headphones or LocalAudioDeviceKind.Headset => Mdl.Headphones,
-        LocalAudioDeviceKind.Hdmi => Mdl.TvMonitor,
-        _ => Mdl.ThisPc,
+        LocalAudioDeviceKind.Speakers => Icons.Speakers,
+        LocalAudioDeviceKind.Headphones or LocalAudioDeviceKind.Headset => Icons.Headphones,
+        LocalAudioDeviceKind.Hdmi => Icons.TvMonitor,
+        _ => Icons.ThisPc,
     };
 
     // Segoe Fluent glyph per Connect device kind (app-local Mdl set; the engine Icons.* set doesn't carry these).
     static string DeviceGlyph(DeviceKind k) => k switch
     {
-        DeviceKind.Phone => Mdl.CellPhone,
-        DeviceKind.Speaker => Mdl.Speakers,
-        DeviceKind.Tv => Mdl.TvMonitor,
-        _ => Mdl.ThisPc,   // ThisDevice / Computer
+        DeviceKind.Phone => Icons.CellPhone,
+        DeviceKind.Speaker => Icons.Speakers,
+        DeviceKind.Tv => Icons.TvMonitor,
+        _ => Icons.ThisPc,   // ThisDevice / Computer
     };
 
     internal static string Fmt(long ms)
@@ -794,7 +799,7 @@ sealed class PlayerBarContent : Component
                 if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
                 handle.Value = svc.Open(
                     () => anchor.Value,
-                    () => MenuFlyout.Build(_items, () => handle.Value?.Close()),
+                    () => MenuFlyout.Create(_items, () => handle.Value?.Close()),
                     FlyoutPlacement.TopEdgeAlignedRight,
                     new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
                 handle.Value.ClosedAction = () => handle.Value = null;
@@ -877,7 +882,7 @@ sealed class TimeText : Component
             Fill = ColorF.Transparent,
             HoverFill = rightDuration ? Tok.FillSubtleSecondary : ColorF.Transparent,
             PressedFill = rightDuration ? Tok.FillSubtleTertiary : ColorF.Transparent,
-            Corners = CornerRadius4.All(WaveeRadius.Control),
+            Corners = CornerRadius4.All(Radii.Control),
             OnClick = rightDuration ? ToggleDuration : null,
             Cursor = rightDuration ? CursorId.Hand : (CursorId?)null,
             Children = [Caption(s).Secondary() with { Wrap = TextWrap.NoWrap }],
@@ -893,7 +898,7 @@ sealed class DevicePickerMenu : Component
 {
     readonly PlaybackBridge _b; readonly Action _close;
     public DevicePickerMenu(PlaybackBridge b, Action close) { _b = b; _close = close; }
-    public override Element Render() => MenuFlyout.Build(PlayerBarContent.DevicePickerItems(_b), _close);
+    public override Element Render() => MenuFlyout.Create(PlayerBarContent.DevicePickerItems(_b), _close);
 }
 
 sealed class VolumeButton : Component
@@ -1056,16 +1061,16 @@ sealed class VolumePopup : Component
 
     public override Element Render()
     {
-        float v = _b.Volume.Value;
-        void SetVolume(float next) { _b.Volume.Value = next; _ = _b.Player.SetVolumeAsync(next); }
+        // Signal-bound: the vertical volume thumb rides _b.Volume on the compositor bind (a scrub writes the signal),
+        // so onChange only pushes the async device write; no per-move re-render.
         return new BoxEl
         {
             Width = 52f, Height = 168f, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Padding = new Edges4(10f, 14f, 10f, 14f),
             Children =
             [
-                Slider.Ranged(v, SetVolume,
-                    new Slider.Options { Vertical = true, IsThumbToolTipEnabled = false },
+                Slider.Create(_b.Volume, next => { _ = _b.Player.SetVolumeAsync(next); },
+                    new Slider.SliderOptions { Vertical = true, IsThumbToolTipEnabled = false },
                     length: 124f, thickness: 32f, style: Slider.DefaultStyle)
             ],
         };

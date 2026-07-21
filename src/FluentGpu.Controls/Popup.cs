@@ -2,80 +2,145 @@ using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Scene;
+using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
 
-/// <summary>A WinUI Popup: displays arbitrary content above other content, opened and closed programmatically.
-/// A trigger button toggles a small anchored popup; re-clicking (or invoking again) closes it. Reuses the overlay
-/// service, which already wraps the content thunk in an acrylic card with shadow/border/corners.</summary>
-public sealed class Popup : Component
+/// <summary>
+/// A controlled WinUI <c>Popup</c>/<c>Flyout</c> primitive over the shared <see cref="OverlayHost"/> machinery: an
+/// <paramref name="anchor"/> element plus arbitrary <paramref name="content"/> displayed above the page, its open state
+/// owned by a caller <see cref="Signal{Boolean}"/>. Setting <c>isOpen.Value</c> opens/closes it; a light-dismiss
+/// (click-outside) or Escape writes the signal BACK to <c>false</c> and fires <c>onOpenChanged(false)</c> exactly once
+/// (cause-mapped — a programmatic close, i.e. the caller writing <c>false</c>, does NOT echo <c>onOpenChanged</c>). The
+/// flip/nudge/live-anchor-follow/focus-restore/light-dismiss all come free from the overlay host + FlyoutPositioner.
+/// The signal freezes at mount (bind wiring is mount-only) — swapping the signal requires a re-key (the controlled-input
+/// contract). For an event-driven, self-managed flyout button use <see cref="Flyout.Attach"/>.
+/// </summary>
+public static class Popup
 {
-    public string TriggerLabel = "Show popup";
-    public string Text = "Popup content";
-    public bool OpenOnMount;   // deterministic visual-shot hook: open the real popup after first mount
+    /// <param name="anchor">The trigger/anchor element (a button, a row, any element) the popup is positioned against.</param>
+    /// <param name="content">The popup body, built lazily at open time (wrapped by the host's acrylic FlyoutSurface).</param>
+    /// <param name="isOpen">The controlled open-state signal. <c>null</c> = the primitive materializes its own internal
+    /// signal (uncontrolled: "the control made its own signal"), so a caller who only wants light-dismiss behaviour need
+    /// not thread one.</param>
+    /// <param name="onOpenChanged">Fired when the popup CLOSES itself via light-dismiss/Escape (with <c>false</c>);
+    /// never on a programmatic open/close (no echo).</param>
+    public static Element Create(
+        Element anchor,
+        Func<Element> content,
+        Signal<bool>? isOpen = null,
+        Action<bool>? onOpenChanged = null,
+        FlyoutPlacement placement = FlyoutPlacement.BottomLeft,
+        PopupOptions options = default)
+        => Embed.Comp(() => new PopupCore
+        {
+            Anchor = anchor,
+            Content = content,
+            IsOpenSignal = isOpen,
+            OnOpenChanged = onOpenChanged,
+            Placement = placement,
+            Options = options.Equals(default) ? new PopupOptions(Chrome: PopupChrome.Popup) : options,
+        });
+}
 
-    /// <summary>WinUI <c>Popup.ShouldConstrainToRootBounds</c> (Popup_Partial.cpp:951-970: false ⇒ a WINDOWED popup
-    /// rendered in its own top-level window, placed against the monitor work area — Popup_Partial.cpp:1019
-    /// <c>SetIsWindowed</c>). Default true (constrained to the window, like a non-windowed XAML popup). When the
-    /// platform/host cannot create popup windows the overlay host silently falls back to constrained placement
-    /// (WinUI's <c>DoesPlatformSupportWindowedPopup</c> gate, FlyoutBase_Partial.cpp:3188).</summary>
-    public bool ShouldConstrainToRootBounds = true;
-
-    public static Element Create(string triggerLabel, string text)
-        => Embed.Comp(() => new Popup { TriggerLabel = triggerLabel, Text = text });
-
-    // Frozen-props tripwire (ReuseGuard): TriggerLabel/Text freeze at mount. A reused instance whose text changed is
-    // the frozen-props bug — deliver it reactively or remount with a Key.
-    public override bool ChecksReuse => ReuseGuard.CompiledIn;
-    public override void DebugCheckReuse(Component next)
-    {
-        if (next is not Popup n) return;
-        if (n.TriggerLabel != TriggerLabel) ReuseGuard.ScalarChanged(this, nameof(TriggerLabel));
-        else if (n.Text != Text) ReuseGuard.ScalarChanged(this, nameof(Text));
-    }
+/// <summary>Internal controlled-popup component: captures the anchor node (<see cref="BoxEl.OnRealized"/>), resolves the
+/// overlay service (<c>UseRequiredContext</c>), and drives an AUTO-TRACKED effect off the open signal — open when it
+/// reads <c>true</c>, close when <c>false</c>. Light-dismiss/Escape (any non-programmatic close cause) writes the signal
+/// back + fires onOpenChanged(false) once.</summary>
+internal sealed class PopupCore : Component
+{
+    public required Element Anchor;
+    public required Func<Element> Content;
+    public Signal<bool>? IsOpenSignal;
+    public Action<bool>? OnOpenChanged;
+    public FlyoutPlacement Placement = FlyoutPlacement.BottomLeft;
+    public PopupOptions Options;
 
     public override Element Render()
     {
-        var anchor = UseRef<NodeHandle>(default);
+        // Auto-materialize the open signal when the caller passed none (the controlled-input "control made its own
+        // signal" contract). The UseSignal call is unconditional (stable hook order); the field only selects which one.
+        var owned = UseSignal(false);
+        var isOpen = IsOpenSignal ?? owned;
+        var svc = UseRequiredContext(Overlay.Service);
+        var anchorRef = UseRef<NodeHandle>(default);
         var handle = UseRef<OverlayHandle?>(null);
-        var svc = UseContext(Overlay.Service);
-        var autoOpened = UseRef(false);
-        bool constrain = ShouldConstrainToRootBounds;
+        var placement = Placement;
+        var options = Options;
+        var content = Content;
+        var onOpenChanged = OnOpenChanged;
 
-        void Toggle()
-        {
-            if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
-            handle.Value = svc.Open(
-                () => anchor.Value,
-                () => new BoxEl
-                {
-                    Direction = 1,
-                    Padding = Edges4.All(16),
-                    MinWidth = 180f,
-                    Children = new Element[]
-                    {
-                        new TextEl(Text) { Size = 14f, Color = Tok.TextPrimary },
-                    },
-                },
-                FlyoutPlacement.BottomLeft,
-                new PopupOptions() { ConstrainToRootBounds = constrain });
-        }
-
+        // Auto-tracked open/close driver: reading isOpen.Value subscribes this effect, so it re-runs on every open-state
+        // change (no deps list). Render itself reads no signals → the wrapper renders once; all reactivity is here.
         UseEffect(() =>
         {
-            if (!OpenOnMount || autoOpened.Value) return;
-            autoOpened.Value = true;
-            Toggle();
-        }, OpenOnMount);
+            if (isOpen.Value)
+            {
+                if (handle.Value is { IsOpen: true }) return null;   // already open
+                var h = svc.Open(() => anchorRef.Value, content, placement, options);
+                handle.Value = h;
+                // Close STARTED by the host (light-dismiss / Escape / programmatic). ClosedWithCauseAction fires once at
+                // finalize: map the cause → a programmatic close (the caller already wrote false) must not echo.
+                h.ClosedWithCauseAction = cause =>
+                {
+                    if (cause == OverlayCloseCause.Programmatic) return;
+                    isOpen.Value = false;          // write the controlled signal BACK (light-dismiss/Escape)
+                    onOpenChanged?.Invoke(false);
+                };
+            }
+            else
+            {
+                if (handle.Value is { IsOpen: true } open) open.Close();   // programmatic → cause Programmatic (no echo)
+                handle.Value = null;
+            }
+            return null;
+        });
+
+        // Unmount safety: a popup still open when its owner unmounts must close (mount-once effect; cleanup at unmount).
+        UseEffect(() => (Action?)(() => { if (handle.Value is { IsOpen: true } h) h.Close(); }), default);
 
         return new BoxEl
         {
             AlignSelf = FlexAlign.Start,
-            OnRealized = h => anchor.Value = h,
-            Children = new Element[]
-            {
-                Button.Standard(TriggerLabel, Toggle),
-            },
+            OnRealized = h => anchorRef.Value = h,
+            Children = [Anchor],
         };
     }
+}
+
+/// <summary>
+/// Event-driven sugar over <see cref="OverlayHost"/> (the <see cref="ContextMenu.Attach"/> precedent): attaches a
+/// light-dismissable content flyout to a <see cref="BoxEl"/>, chaining its <see cref="BoxEl.OnClick"/> (never clobbering
+/// an existing one) to open the flyout anchored to the element. Re-clicking closes it — the light-dismiss scrim (topmost
+/// while open) consumes the press before it reaches the trigger, so no toggle state is needed (WinUI Flyout semantics).
+/// For a fully CONTROLLED popup (a caller-owned signal, re-render-safe binding, onOpenChanged), use
+/// <see cref="Popup.Create"/> instead.
+/// </summary>
+public static class Flyout
+{
+    /// <param name="anchor">The trigger element; its own <c>OnClick</c>/<c>OnRealized</c> are preserved (chained).</param>
+    /// <param name="svc">The overlay service (one <c>UseContext(Overlay.Service)</c> per component — the ContextMenu/DropDownButton canon).</param>
+    /// <param name="content">The flyout body, built lazily at open time.</param>
+    public static BoxEl Attach(
+        BoxEl anchor,
+        IOverlayService svc,
+        Func<Element> content,
+        FlyoutPlacement placement = FlyoutPlacement.BottomLeft,
+        PopupOptions options = default)
+    {
+        // A content flyout uses the WinUI FlyoutPresenter chrome (PopupThemeTransition) by default; a caller that
+        // configured any option is taken verbatim.
+        var opts = options.Equals(default) ? new PopupOptions(Chrome: PopupChrome.Popup) : options;
+        var node = new Ref<NodeHandle>(default);
+        void Open() { if (!node.Value.IsNull) svc.Open(() => node.Value, content, placement, opts); }
+        return anchor with
+        {
+            OnRealized = TemplateParts.Chain(anchor.OnRealized, h => node.Value = h),
+            OnClick = ChainClick(anchor.OnClick, Open),
+        };
+    }
+
+    // Compose two parameterless click handlers: the element's own runs first, then ours (mirrors TemplateParts.Chain<T>).
+    private static Action ChainClick(Action? existing, Action added)
+        => existing is null ? added : () => { existing(); added(); };
 }

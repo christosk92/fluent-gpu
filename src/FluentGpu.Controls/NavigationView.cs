@@ -3,6 +3,7 @@ using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Localization;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
 
@@ -42,6 +43,43 @@ public enum NavPaneDisplayMode : byte { Auto = 0, Left = 1, LeftCompact = 2, Lef
 public sealed class NavPaneClosingArgs
 {
     public bool Cancel;
+}
+
+/// <summary>The <see cref="NavigationView.Create"/> options record — wraps the NavigationView property-init config
+/// (items/footer, the selected/content seam, pane display + toggle/navigate request signals, the AutoSuggest slot,
+/// settings footer, and the adaptive-threshold/width metrics) so the control has one canonical factory. Field defaults
+/// mirror the control's own.</summary>
+public sealed record NavigationViewOptions
+{
+    public NavItem[] Items { get; init; } = [];
+    public NavItem[] Footer { get; init; } = [];
+    public string Initial { get; init; } = "";
+    public Action<string>? OnSelect { get; init; }
+    public Func<string, Element>? Content { get; init; }
+    public string? Header { get; init; }
+    public bool ShowBackButton { get; init; }
+    public Action? OnBack { get; init; }
+    public bool ShowPaneToggle { get; init; } = true;
+    public Signal<int>? PaneToggleRequest { get; init; }
+    public Signal<string>? NavigateRequest { get; init; }
+    public NavPaneDisplayMode PaneDisplayMode { get; init; } = NavPaneDisplayMode.Auto;
+    public Edges4 ContentPadding { get; init; }
+    public bool SelectionFollowsFocus { get; init; }
+    public bool IsSettingsVisible { get; init; }
+    public string? SettingsLabel { get; init; }   // null = localized default (Strings.Nav.Settings)
+    public Element? AutoSuggest { get; init; }
+    public Action<NavPaneClosingArgs>? PaneClosing { get; init; }
+    public Action<PaneMode>? DisplayModeChanged { get; init; }
+    public TemplateParts? Parts { get; init; }
+    /// <summary>Optional <see cref="Controls.Navigator"/> drive: selecting a top-level item calls
+    /// <see cref="Navigator.Replace(Route)"/> (top-level nav is a replace, not a push) and the initial selection follows
+    /// <see cref="Navigator.Current"/>. Pair with a <see cref="TitleBar"/> back button (<c>ShowBackButton = nav.CanGoBack</c>,
+    /// <c>OnBack = nav.Pop</c>) for the back-stack story.</summary>
+    public Navigator? Navigator { get; init; }
+    public float ExpandedModeThresholdWidth { get; init; } = 1008f;
+    public float CompactModeThresholdWidth { get; init; } = 641f;
+    public float PaneWidth { get; init; } = 320f;
+    public float CompactWidth { get; init; } = 48f;
 }
 
 /// <summary>
@@ -130,7 +168,7 @@ public sealed class NavigationView : Component
     public bool SelectionFollowsFocus;
     /// <summary>Append the WinUI auto settings footer item (gear E713, key "settings"). See the class doc.</summary>
     public bool IsSettingsVisible;
-    public string SettingsLabel = "Settings";
+    public string? SettingsLabel;   // null = localized default (Strings.Nav.Settings), resolved at render
     /// <summary>The AutoSuggestBox slot (WinUI AutoSuggestArea): rendered under the pane title row when the pane is
     /// open; the compact rail shows a search button that opens the pane (the PaneAutoSuggestButton behavior).</summary>
     public Element? AutoSuggest;
@@ -138,9 +176,28 @@ public sealed class NavigationView : Component
     public Action<NavPaneClosingArgs>? PaneClosing;
     /// <summary>WinUI <c>DisplayModeChanged</c> — fired when the resolved adaptive mode transitions.</summary>
     public Action<PaneMode>? DisplayModeChanged;
+    /// <summary>Optional navigator drive (see <see cref="NavigationViewOptions.Navigator"/>): select ⇒
+    /// <c>Navigator.Replace(new Route(key))</c>; initial selection follows <c>Navigator.Current</c>.</summary>
+    public Navigator? Navigator;
     /// <summary>Lightweight per-part styling (CSS ::part): modifiers keyed by the <c>PartXxx</c> consts; see
     /// <see cref="TemplateParts"/> for the contract. Top-mode bar items are not part-routed (different structure).</summary>
     public TemplateParts? Parts;
+
+    /// <summary>The one canonical NavigationView factory (WS3 creation idiom). Wraps the property-init surface in a
+    /// <see cref="NavigationViewOptions"/> record. Property-init construction stays available for the in-repo headless
+    /// probes/shells that compose the control directly, but this is the documented public path.</summary>
+    public static Element Create(NavigationViewOptions options)
+        => Embed.Comp(() => new NavigationView
+        {
+            Items = options.Items, Footer = options.Footer, Initial = options.Initial, OnSelect = options.OnSelect,
+            Content = options.Content, Header = options.Header, ShowBackButton = options.ShowBackButton, OnBack = options.OnBack,
+            ShowPaneToggle = options.ShowPaneToggle, PaneToggleRequest = options.PaneToggleRequest, NavigateRequest = options.NavigateRequest,
+            PaneDisplayMode = options.PaneDisplayMode, ContentPadding = options.ContentPadding, SelectionFollowsFocus = options.SelectionFollowsFocus,
+            IsSettingsVisible = options.IsSettingsVisible, SettingsLabel = options.SettingsLabel, AutoSuggest = options.AutoSuggest,
+            PaneClosing = options.PaneClosing, DisplayModeChanged = options.DisplayModeChanged, Parts = options.Parts, Navigator = options.Navigator,
+            ExpandedModeThresholdWidth = options.ExpandedModeThresholdWidth, CompactModeThresholdWidth = options.CompactModeThresholdWidth,
+            PaneWidth = options.PaneWidth, CompactWidth = options.CompactWidth,
+        });
 
     /// <summary>Ambient navigate action for descendants that need to drive selection without prop threading.</summary>
     public static readonly Context<Action<string>> Nav = new(static _ => { });
@@ -208,18 +265,21 @@ public sealed class NavigationView : Component
     public override Element Render()
     {
         var hooks = UseContext(InputHooks.Current);
-        var (selected, setSelected) = UseState(Initial.Length > 0 ? Initial : (Items.Length > 0 ? FirstSelectable() : ""));
+        var (selected, setSelected) = UseState(
+            Navigator is { } nav0 && nav0.Current.Name.Length > 0 ? nav0.Current.Name
+            : Initial.Length > 0 ? Initial
+            : Items.Length > 0 ? FirstSelectable() : "");
         var (paneOpen, setPaneOpen) = UseState(false);
         var (collapsed, setCollapsed) = UseState(false);
         var (expanded, setExpanded) = UseState(SeedExpanded(Items));     // expanded parent keys (new array per toggle — value-eq gated)
-        var rowHandles = UseMemo(static () => new Dictionary<string, NodeHandle>());
+        var rowHandles = UseMemo(static () => new Dictionary<string, NodeHandle>(), DepKey.Empty);
         var focusedKey = UseRef(selected);                               // keyboard cursor (real roving focus, no fill)
         var lastMode = UseRef((PaneMode)255);
         var overlayService = UseContext(Overlay.Service);                // top-mode overflow flyout host
         var overflowAnchor = UseRef(NodeHandle.Null);
 
         NavItem[] footerItems = IsSettingsVisible
-            ? [.. Footer, new NavItem("settings", Icons.Settings, SettingsLabel) { IsSettings = true }]   // gear E713 (Icons.Settings)
+            ? [.. Footer, new NavItem("settings", Icons.Settings, SettingsLabel ?? Loc.Get(Strings.Nav.Settings)) { IsSettings = true }]   // gear E713 (Icons.Settings)
             : Footer;
 
         float width = UseContext(Viewport.Size).Width;
@@ -282,6 +342,7 @@ public sealed class NavigationView : Component
             // ClosePaneIfNeccessaryAfterItemIsClicked (cpp:4838-4845): pane open ∧ mode ≠ Expanded ∧ no children.
             if (paneOpen && !inlinePane && !hasChildren) TryClosePane();
             OnSelect?.Invoke(key);
+            Navigator?.Replace(new Route(key));   // top-level nav is a replace; the navigator mirrors the current page
         }
 
         void ToggleExpand(string key)

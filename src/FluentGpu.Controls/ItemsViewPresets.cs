@@ -75,9 +75,9 @@ internal sealed class ItemsViewListPreset : Component
     public override Element Render()
     {
         int count = ItemCount >= 0 ? ItemCount : Items.Count;
-        var controller = UseMemo(() => Controller ?? new ItemsViewController());
-        var model = UseMemo<SelectionModel>(() => Selection ?? new SelectionModel());
-        var reorder = UseMemo(static () => new ReorderList { DwellMs = ReorderList.ListDwellMs });
+        var controller = UseMemo(() => Controller ?? new ItemsViewController(), DepKey.Empty);
+        var model = UseMemo<SelectionModel>(() => Selection ?? new SelectionModel(), DepKey.Empty);
+        var reorder = UseMemo(static () => new ReorderList { DwellMs = ReorderList.ListDwellMs }, DepKey.Empty);
         var orderVersion = UseSignal(0);
         var order = UseRef<int[]>([]);
         var lastDwellTick = UseRef(0L);
@@ -114,16 +114,24 @@ internal sealed class ItemsViewListPreset : Component
         for (int i = 0; i < count; i++) slots[i] = i;
 
         // The 200ms live-reorder dwell ticks on the frame clock ONLY while a drag is active (the conditional
-        // FrameClock read is safe — UseContext keeps no hook cell).
-        if (reordering)
+        // FrameClock read is safe — UseContext keeps no hook cell). The tick subscription drives the per-frame
+        // re-render; the dwell ADVANCE + orderVersion bump run in the post-render effect below, NOT here — writing
+        // orderVersion in the render body would be a backwards-write (the render subscribes it above to bootstrap
+        // the reorder loop on drag-start, so a same-run write re-marks this render stale = a convergence risk).
+        long tick = reordering ? UseContext(FrameClock.Tick) : 0L;
+
+        // Advance the dwell OUTSIDE the tracked render scope: this effect (a SEPARATE computation) bumps orderVersion,
+        // which re-renders this preset (the subscribe above) AND re-seeds ItemsView's displacement channel — so the
+        // read and the write never share one computation. Keyed on the frame tick so it advances once per frame while
+        // a drag is live; the transition to idle runs it once more to reset the dwell clock.
+        UseEffect(() =>
         {
-            _ = UseContext(FrameClock.Tick);
+            if (!reorder.IsActive) { lastDwellTick.Value = 0; return; }
             long now = Environment.TickCount64;
             float dt = lastDwellTick.Value == 0 ? 0f : Math.Clamp(now - lastDwellTick.Value, 0, 100);
             lastDwellTick.Value = now;
             if (reorder.Advance(dt)) orderVersion.Value = orderVersion.Peek() + 1;
-        }
-        else lastDwellTick.Value = 0;
+        }, DepKey.From(reordering ? tick + 1 : 0L));
 
         var ctx = Context;   // edge auto-scroll host-node rect + dwell re-render context
 
@@ -217,34 +225,35 @@ internal sealed class ItemsViewListPreset : Component
         var list = ItemsView.Create(count,
             itemTemplate: i => contentOf(slotsLocal[i]),
             layout: RepeatLayout.Stack(ItemExtent),
-            selectionMode: SelectionMode,
-            selection: model,
-            isItemInvokedEnabled: OnItemInvoked is not null,
-            itemInvoked: OnItemInvoked is null ? null : i => OnItemInvoked(slotsLocal[i]),
-            selectionChanged: SelectionToSignal,
-            itemText: textFn is null ? null : i => textFn(slotsLocal[i]),
-            isItemEnabled: IsItemEnabled is null ? null : i => IsItemEnabled(slotsLocal[i]),
-            controller: controller,
-            // The List preset's selector: the WinUI accent bar (the row plate + 3×16 indicator + multi-select
-            // checkbox now live in SelectorVisuals.AccentPill). Chrome adds only the drag wiring + ItemClick.
-            selector: SelectorVisual.AccentPill,
-            containerFactory: Chrome,
-            // Displacement via the channel: resting index i → vertical offset (OffsetFor returns 0 for the dragged
-            // item, and 0 for everything while idle — _dragged < 0). ItemsView skips the dragged ghost itself via its
-            // DragGhost scene flag (NOT via OffsetFor==0, which would still animate the ghost's live translate back to
-            // 0 and fight DragController). orderVersion drives the host-seeded translate FLIP re-seed. STABLE captures
-            // only: this closure freezes at the inner
-            // ItemsView's mount (autonomous-component boundary — constructor args freeze, engine Rule #2), so it must
-            // read the memoized `reorder` live; a per-render local (`reordering`) freezes to its mount-time false and
-            // kills the live displacement.
-            itemDisplacement: i => (0f, reorder.OffsetFor(i)),
-            displacementVersion: orderVersion,
-            keyOf: keyFn is null ? null : i => keyFn(slotsLocal[i]),
-            transition: ReorderTransition,
-            // Natural (unconstrained) lists size the viewport to its content extent — the auto-WIDTH chain
-            // also needs the non-flexing viewport's availW fallback (the 280-card gallery shape, D1).
-            // Constrained lists (explicit Height or Grow) keep the hard-viewport fill path.
-            grow: natural ? 0f : 1f);
+            options: new ListOptions
+            {
+                SelectionMode = SelectionMode,
+                Selection = model,
+                IsItemInvokedEnabled = OnItemInvoked is not null,
+                OnInvoked = OnItemInvoked is null ? null : i => OnItemInvoked(slotsLocal[i]),
+                OnChange = SelectionToSignal,
+                ItemText = textFn is null ? null : i => textFn(slotsLocal[i]),
+                IsItemEnabled = IsItemEnabled is null ? null : i => IsItemEnabled(slotsLocal[i]),
+                Controller = controller,
+                // The List preset's selector: the WinUI accent bar (row plate + 3×16 indicator + multi-select checkbox
+                // now in SelectorVisuals.AccentPill). Chrome adds only the drag wiring + ItemClick.
+                Selector = SelectorVisual.AccentPill,
+                ContainerFactory = Chrome,
+                KeyOf = keyFn is null ? null : i => keyFn(slotsLocal[i]),
+                Transition = ReorderTransition,
+                // Displacement via the channel: resting index i → vertical offset (OffsetFor returns 0 for the dragged
+                // item, and 0 while idle). ItemsView skips the dragged ghost via its DragGhost scene flag. orderVersion
+                // drives the host-seeded translate FLIP re-seed. STABLE captures only (freezes at the inner ItemsView's
+                // mount — engine Rule #2): read the memoized `reorder` live, not a per-render `reordering` local.
+                Reorder = new ReorderOptions
+                {
+                    ItemDisplacement = i => (0f, reorder.OffsetFor(i)),
+                    DisplacementVersion = orderVersion,
+                },
+                // Natural (unconstrained) lists size the viewport to their content extent (the 280-card gallery shape,
+                // D1); constrained lists (explicit Height or Grow) keep the hard-viewport fill path.
+                Grow = natural ? 0f : 1f,
+            });
 
         return new BoxEl
         {
@@ -327,11 +336,11 @@ internal sealed class ItemsViewGridPreset : Component
     {
         int count = ItemCount >= 0 ? ItemCount : Items.Count;
         int columns = Math.Max(1, Columns);
-        var controller = UseMemo(() => Controller ?? new ItemsViewController());
-        var model = UseMemo<SelectionModel>(() => Selection ?? new SelectionModel());
+        var controller = UseMemo(() => Controller ?? new ItemsViewController(), DepKey.Empty);
+        var model = UseMemo<SelectionModel>(() => Selection ?? new SelectionModel(), DepKey.Empty);
         var orderVersion = UseSignal(0);
         var order = UseRef<int[]>([]);
-        var rl = UseMemo(static () => new ReorderList { DwellMs = ReorderList.GridDwellMs });   // 300ms grid dwell
+        var rl = UseMemo(static () => new ReorderList { DwellMs = ReorderList.GridDwellMs }, DepKey.Empty);   // 300ms grid dwell
         var lastDwellTick = UseRef(0L);
 
         // ── 2-D live-reorder: RESTING order; displacement flows through ItemsView.ItemDisplacement (host-seeded FLIP) ──
@@ -345,15 +354,18 @@ internal sealed class ItemsViewGridPreset : Component
         var slots = order.Value;
         for (int i = 0; i < count; i++) slots[i] = i;
 
-        if (reordering)
+        // The 300ms grid dwell subscribes the frame tick to re-render each frame; the dwell ADVANCE + orderVersion bump
+        // run in the post-render effect below, NOT the render body — writing orderVersion here would be a backwards-write
+        // (the render subscribes it above to bootstrap the reorder loop, so a same-run write re-marks this render stale).
+        long tick = reordering ? UseContext(FrameClock.Tick) : 0L;
+        UseEffect(() =>
         {
-            _ = UseContext(FrameClock.Tick);   // safe conditional read (no hook cell) — drives the 300ms dwell
+            if (!rl.IsActive) { lastDwellTick.Value = 0; return; }
             long now = Environment.TickCount64;
             float dt = lastDwellTick.Value == 0 ? 0f : Math.Clamp(now - lastDwellTick.Value, 0, 100);
             lastDwellTick.Value = now;
             if (rl.Advance(dt)) orderVersion.Value = orderVersion.Peek() + 1;
-        }
-        else lastDwellTick.Value = 0;
+        }, DepKey.From(reordering ? tick + 1 : 0L));
 
         float stride = TileSize + ItemGap;
         void Bump() => orderVersion.Value = orderVersion.Peek() + 1;
@@ -451,38 +463,40 @@ internal sealed class ItemsViewGridPreset : Component
                     // not also space by ItemGap (that double-counted to ~8px net; parity:424). The tile margin is the
                     // parity value; the layout pitch is TileSize + the tile's own margin.
                     layout: RepeatLayout.Grid(columns, TileSize, gap: 0f),
-                    selectionMode: SelectionMode,
-                    selection: model,
-                    isItemInvokedEnabled: OnItemInvoked is not null,
-                    // slot→item mapping (consistent with the List preset; slotsLocal[i]==i in resting order, so identical
-                    // behavior today, but future-proof if the host ever projects).
-                    itemInvoked: OnItemInvoked is null ? null : i => OnItemInvoked(slotsLocal[i]),
-                    selectionChanged: OnSelectionChanged,
-                    itemText: textFn is null ? null : i => textFn(slotsLocal[i]),
-                    isItemEnabled: IsItemEnabled is null ? null : i => IsItemEnabled(slotsLocal[i]),
-                    controller: controller,
-                    // The Grid preset's selector: the WinUI corner check + dual border (now in SelectorVisuals.Check).
-                    selector: SelectorVisual.Check,
-                    containerFactory: Chrome,
-                    // 2-D displacement via the channel: resting index i → (dx,dy) from OffsetFor2D (a one-slot shift can
-                    // wrap a row; returns (0,0) while idle and for the dragged tile — but ItemsView skips the dragged
-                    // ghost itself via its DragGhost scene flag, since (0,0) alone would still animate the tile's live
-                    // translate back to 0 and fight DragController on both axes). colW is the realized column width
-                    // (host rect / columns), same as the delta handler. STABLE captures only: this closure freezes at the
-                    // inner ItemsView's mount (constructor args freeze, engine Rule #2) — `rl`/`Context` are stable
-                    // memoized state; a per-render local (`reordering`) froze to false here and killed the displacement.
-                    itemDisplacement: i =>
+                    options: new ListOptions
                     {
-                        var sc = Context.Scene;
-                        float colW = stride;
-                        if (sc is not null && !Context.HostNode.IsNull && sc.IsLive(Context.HostNode))
-                            colW = MathF.Max(1f, sc.AbsoluteRect(Context.HostNode).W / columns);
-                        rl.OffsetFor2D(i, colW, stride, out float dx, out float dy);
-                        return (dx, dy);
-                    },
-                    displacementVersion: orderVersion,
-                    keyOf: keyFn is null ? null : i => keyFn(slotsLocal[i]),
-                    transition: ReorderTransition),
+                        SelectionMode = SelectionMode,
+                        Selection = model,
+                        IsItemInvokedEnabled = OnItemInvoked is not null,
+                        // slot→item mapping (consistent with the List preset; slotsLocal[i]==i in resting order).
+                        OnInvoked = OnItemInvoked is null ? null : i => OnItemInvoked(slotsLocal[i]),
+                        OnChange = OnSelectionChanged,
+                        ItemText = textFn is null ? null : i => textFn(slotsLocal[i]),
+                        IsItemEnabled = IsItemEnabled is null ? null : i => IsItemEnabled(slotsLocal[i]),
+                        Controller = controller,
+                        // The Grid preset's selector: the WinUI corner check + dual border (SelectorVisuals.Check).
+                        Selector = SelectorVisual.Check,
+                        ContainerFactory = Chrome,
+                        KeyOf = keyFn is null ? null : i => keyFn(slotsLocal[i]),
+                        Transition = ReorderTransition,
+                        // 2-D displacement via the channel: resting index i → (dx,dy) from OffsetFor2D (a one-slot shift
+                        // can wrap a row; (0,0) while idle / for the dragged tile — ItemsView skips the ghost via its
+                        // DragGhost scene flag). colW = realized column width (host rect / columns). STABLE captures only
+                        // (freezes at the inner ItemsView's mount — engine Rule #2): `rl`/`Context` are memoized state.
+                        Reorder = new ReorderOptions
+                        {
+                            ItemDisplacement = i =>
+                            {
+                                var sc = Context.Scene;
+                                float colW = stride;
+                                if (sc is not null && !Context.HostNode.IsNull && sc.IsLive(Context.HostNode))
+                                    colW = MathF.Max(1f, sc.AbsoluteRect(Context.HostNode).W / columns);
+                                rl.OffsetFor2D(i, colW, stride, out float dx, out float dy);
+                                return (dx, dy);
+                            },
+                            DisplacementVersion = orderVersion,
+                        },
+                    }),
             ],
         };
     }

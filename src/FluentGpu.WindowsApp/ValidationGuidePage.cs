@@ -17,11 +17,12 @@ using static FluentGpu.Dsl.Ui;
 // this is the *manual*: the model, the full built-in Rules surface, CUSTOM RULES (inline / Predicate / reusable factory /
 // cross-field / async), validation timing, forms + submit gating + focus-first-error, the source-generator story, and a
 // small self-contained live demo at the end. It mirrors the LocalizationPage doc-card idiom verbatim:
-// GalleryPage.ShellKeyed + ControlExample.Build cards + Subtitle/Body section headings + a collapsible Notes appendix.
+// GalleryPage.ShellKeyed + ExampleCard.Build cards + Subtitle/Body section headings + a collapsible Notes appendix.
 //
 // Every code snippet uses the EXACT public signatures from FluentGpu.Forms. The only loc keys resolved LIVE are the ones
 // shipped in assets/loc/*.json under "validation" (required/minlen/maxlen/range/email/match); illustrative custom keys
 // (validation.reserved, validation.nospaces, …) appear ONLY inside code: text blocks, never in compiled bindings.
+[GalleryPage("validation-guide", "Validation", "App services", Icon = Icons.Accept)]
 sealed class ValidationGuidePage : Component
 {
     public override Element Render()
@@ -49,7 +50,7 @@ sealed class ValidationGuidePage : Component
             Embed.Comp(() => new ValidationGuideBody()));
     }
 
-    static readonly object[] MountOnce = new object[] { "validation-guide-mount" };
+    static readonly FluentGpu.Hooks.DepKey MountOnce = FluentGpu.Hooks.DepKey.Empty;
 }
 
 /// <summary>The documentation body + the embedded live demo. A plain <see cref="Component"/>: the prose is static, and the
@@ -73,7 +74,7 @@ sealed class ValidationGuideBody : Component
                      "that signal too. This is the gap WinUI never closed: no INotifyDataErrorInfo error dictionary, no " +
                      "ErrorsChanged plumbing, no manual re-validation calls.").Secondary(),
 
-                ControlExample.Build("The types you touch",
+                ExampleCard.Build("The types you touch",
                     new BoxEl
                     {
                         Direction = 1, Gap = 2f,
@@ -122,7 +123,7 @@ sealed class ValidationGuideBody : Component
                      "rules, and the field: prop on a control. That one prop wires everything — the invalid border, the " +
                      "error message TextEl, and touched-on-blur — so the control turns red only after the user has left it.").Secondary(),
 
-                ControlExample.Build("1 · Load the validation.* message keys",
+                ExampleCard.Build("1 · Load the validation.* message keys",
                     GalleryPage.LiveText(() => $"validation.required → \"{Loc.Get("validation.required")}\""),
                     description: "Rule factories default to loc keys (validation.required, validation.email, …). Ship them in " +
                                  "assets/loc/<culture>.json and load the folder once at startup (idempotent; safe from a mount " +
@@ -142,7 +143,7 @@ sealed class ValidationGuideBody : Component
                     Localization.LoadFolder(Path.Combine(AppContext.BaseDirectory, "assets", "loc"));
                     """),
 
-                ControlExample.Build("2 · A controlled signal + UseField + the field: prop",
+                ExampleCard.Build("2 · A controlled signal + UseField + the field: prop",
                     Embed.Comp(() => new EmailOnlyDemo()),
                     description: "_email is the controlled value signal. UseField wraps it with two rules and returns a " +
                                  "Field<string>. Passing field: to TextBox.Create wires the invalid border, the message line, " +
@@ -157,8 +158,8 @@ sealed class ValidationGuideBody : Component
                         Rules.Matches(EmailRx, "validation.email"));
 
                     // ONE prop wires border + message + touched-on-blur:
-                    TextBox.Create(header: "Email", placeholder: "you@example.com",
-                                   width: 380f, text: _email, field: email);
+                    TextBox.Create(_email, options: new TextBox.TextBoxOptions { Header = "Email", Placeholder = "you@example.com",
+                                   Width = 380f, Field = email });
                     """),
 
                 new BoxEl { Height = 12f },
@@ -170,7 +171,7 @@ sealed class ValidationGuideBody : Component
                      "may take any number of rules; FirstFailing surfaces the first failing message (FieldError.First) and " +
                      "counts the rest into FailCount.").Secondary(),
 
-                ControlExample.Build("Rules.Required / MinLength / MaxLength / Matches / Range",
+                ExampleCard.Build("Rules.Required / MinLength / MaxLength / Matches / Range",
                     new BoxEl
                     {
                         Direction = 1, Gap = 2f,
@@ -197,7 +198,7 @@ sealed class ValidationGuideBody : Component
                     var qty = UseField(_qty, Rules.Range(1, 99, "validation.range"));
                     """),
 
-                ControlExample.Build("FieldError / MsgId — what a control reads",
+                ExampleCard.Build("FieldError / MsgId — what a control reads",
                     new TextEl("control reads field.Error.Value → FieldError(First, FailCount); display via Msg.Resolve in a bind thunk")
                         { Size = 13f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap },
                     description: "A control displays field.Error: when FailCount == 0 it is valid (no border, no text); " +
@@ -224,7 +225,7 @@ sealed class ValidationGuideBody : Component
                      "intern Msg.Key ONCE outside the returned closure (mirroring the built-in Rules), so the per-keystroke " +
                      "call only compares.").Secondary(),
 
-                ControlExample.Build("1 · An inline lambda",
+                ExampleCard.Build("1 · An inline lambda",
                     new TextEl("Reject a single reserved value with a throwaway delegate — no ceremony.")
                         { Size = 13f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap },
                     description: "The simplest custom rule is a lambda matching Validator<string>: return a MsgId when the " +
@@ -238,7 +239,7 @@ sealed class ValidationGuideBody : Component
                     var name = UseField(_name, Rules.Required(), notReserved);
                     """),
 
-                ControlExample.Build("2 · Rules.Predicate — a one-off bool test",
+                ExampleCard.Build("2 · Rules.Predicate — a one-off bool test",
                     new TextEl("Wrap any Func<T,bool> as a rule; supply the message key.")
                         { Size = 13f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap },
                     description: "Rules.Predicate<T>(Func<T,bool> ok, string locKey) turns a boolean test into a Validator<T>. " +
@@ -252,7 +253,7 @@ sealed class ValidationGuideBody : Component
                     var slug = UseField(_slug, Rules.Predicate<string>(s => s.Length is > 2 and < 32, "validation.slug"));
                     """),
 
-                ControlExample.Build("3 · A reusable, zero-alloc factory",
+                ExampleCard.Build("3 · A reusable, zero-alloc factory",
                     Embed.Comp(() => new NoSpacesDemo()),
                     description: "Mirror the built-in Rules: a static method that interns Msg.Key ONCE, then returns a delegate " +
                                  "that only reads the value. The interned message is captured by value, so the per-keystroke " +
@@ -272,7 +273,7 @@ sealed class ValidationGuideBody : Component
                     var user = UseField(_user, Rules.Required(), MyRules.NoSpaces());
                     """),
 
-                ControlExample.Build("4 · Cross-field & conditional (free)",
+                ExampleCard.Build("4 · Cross-field & conditional (free)",
                     new TextEl("A rule that reads a sibling signal's .Value auto-subscribes the error memo to it.")
                         { Size = 13f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap },
                     description: "Because Error is a memo, reading another signal's .Value inside a rule body subscribes this " +
@@ -301,7 +302,7 @@ sealed class ValidationGuideBody : Component
                      "pristine field shows nothing until the user has been in and out of it (or a submit reveals it). Set it " +
                      "via FieldOptions.Timing.").Secondary(),
 
-                ControlExample.Build("The 5 ValidationTiming modes",
+                ExampleCard.Build("The 5 ValidationTiming modes",
                     new BoxEl
                     {
                         Direction = 1, Gap = 2f,
@@ -339,7 +340,7 @@ sealed class ValidationGuideBody : Component
                      "while a check is pending (drive a spinner); a server error always displays (it bypasses the touched " +
                      "gate). SetServerError injects one imperatively after a real submit.").Secondary(),
 
-                ControlExample.Build("FieldOptions.Async — debounced, cancel-stale, race-immune",
+                ExampleCard.Build("FieldOptions.Async — debounced, cancel-stale, race-immune",
                     new TextEl("Sync rules run first (free); the async check runs only after the value settles.")
                         { Size = 13f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap },
                     description: "Pass Async on FieldOptions; the sync rules (Required/Matches) still run synchronously on every " +
@@ -372,7 +373,7 @@ sealed class ValidationGuideBody : Component
                      "even while errors are still hidden. form.Validate() reveals every error, focuses the first invalid field, " +
                      "and returns the overall validity.").Secondary(),
 
-                ControlExample.Build("UseForm + auto-join + submit gating",
+                ExampleCard.Build("UseForm + auto-join + submit gating",
                     new TextEl("One UseForm(); the following UseFields join it; the button reads form.IsValid.Value.")
                         { Size = 13f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap },
                     description: "Validate() flips SubmitAttempted (revealing all gated errors), walks for the first invalid " +
@@ -390,7 +391,7 @@ sealed class ValidationGuideBody : Component
                         isEnabled: form.IsValid.Value);
                     """),
 
-                ControlExample.Build("Nested forms — a child component owning fields",
+                ExampleCard.Build("Nested forms — a child component owning fields",
                     new TextEl("A child component's fields join the parent form via FormScope.Context.")
                         { Size = 13f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap },
                     description: "Auto-join only works for UseFields in the SAME component as UseForm(). When fields live in a " +
@@ -415,7 +416,7 @@ sealed class ValidationGuideBody : Component
                      "/ Strings.Validation.Email are generated consts equal to the dotted key. Use them instead of the magic " +
                      "string and a renamed or mistyped key becomes a COMPILE error.").Secondary(),
 
-                ControlExample.Build("Typed message keys — compile-safe, refactor-safe",
+                ExampleCard.Build("Typed message keys — compile-safe, refactor-safe",
                     new TextEl("Rules.Required(Strings.Validation.Required) — a renamed key fails the build, not at runtime.")
                         { Size = 13f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap },
                     description: "The generator emits one const per leaf of the base-culture JSON (Strings.Validation.Required " +
@@ -434,7 +435,7 @@ sealed class ValidationGuideBody : Component
                         Rules.Matches(EmailRx, Strings.Validation.Email));
                     """),
 
-                ControlExample.Build("Why the rule layer itself is NOT generated",
+                ExampleCard.Build("Why the rule layer itself is NOT generated",
                     new TextEl("Rules are hand-written delegates by design — not attributes mined by reflection.")
                         { Size = 13f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap },
                     description: "There is deliberately no [Required]/[Range] attribute generator. Attribute-driven validation " +
@@ -547,7 +548,7 @@ sealed class EmailOnlyDemo : Component
             Rules.Required("validation.required"),
             Rules.Matches(EmailRx, "validation.email"));
 
-        return TextBox.Create(header: "Email", placeholder: "you@example.com", width: 380f, text: _email, field: email);
+        return TextBox.Create(_email, options: new TextBox.TextBoxOptions { Header = "Email", Placeholder = "you@example.com", Width = 380f, Field = email });
     }
 }
 
@@ -568,7 +569,7 @@ sealed class NoSpacesDemo : Component
         // Reuse the shipped "match" message text for this demo (no validation.nospaces key in the sample table); the
         // factory body is the point — interning once, comparing per keystroke.
         var user = UseField(_user, Rules.Required("validation.required"), NoSpaces("validation.match"));
-        return TextBox.Create(header: "Username (no spaces)", placeholder: "no spaces allowed", width: 380f, text: _user, field: user);
+        return TextBox.Create(_user, options: new TextBox.TextBoxOptions { Header = "Username (no spaces)", Placeholder = "no spaces allowed", Width = 380f, Field = user });
     }
 }
 
@@ -598,15 +599,15 @@ sealed class ValidationGuideDemo : Component
         // Cross-field: the rule reads _pwd.Value, so editing EITHER password re-validates Confirm once it is touched.
         var confirm = UseField(_confirm, Rules.Equals(_pwd, "validation.match"));
 
-        return ControlExample.Build("Sign-up form",
+        return ExampleCard.Build("Sign-up form",
             new BoxEl
             {
                 Direction = 1, Gap = 14f, MaxWidth = 460f,
                 Children =
                 [
-                    TextBox.Create(header: "Email", placeholder: "you@example.com", width: 380f, text: _email, field: email),
-                    TextBox.Create(header: "Password", width: 380f, text: _pwd, field: pwd),
-                    TextBox.Create(header: "Confirm password", width: 380f, text: _confirm, field: confirm),
+                    TextBox.Create(_email, options: new TextBox.TextBoxOptions { Header = "Email", Placeholder = "you@example.com", Width = 380f, Field = email }),
+                    TextBox.Create(_pwd, options: new TextBox.TextBoxOptions { Header = "Password", Width = 380f, Field = pwd }),
+                    TextBox.Create(_confirm, options: new TextBox.TextBoxOptions { Header = "Confirm password", Width = 380f, Field = confirm }),
                     Embed.Comp(() => new ValidationGuideSubmitRow(form)),
                 ],
             },
@@ -619,7 +620,7 @@ sealed class ValidationGuideDemo : Component
             var pwd     = UseField(_pwd,     Rules.Required(), Rules.MinLength(8));
             var confirm = UseField(_confirm, Rules.Equals(_pwd, "validation.match"));   // cross-field, free
 
-            TextBox.Create(header: "Email", text: _email, field: email);   // one prop wires border + message + touched
+            TextBox.Create(_email, options: new TextBox.TextBoxOptions { Header = "Email", Field = email });   // one prop wires border + message + touched
 
             Button.Accent("Create account",
                 () => { if (form.Validate()) Save(); },

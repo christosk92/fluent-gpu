@@ -12,7 +12,7 @@ namespace FluentGpu.Signals;
 /// against re-firing while in flight, and supports CANCELLATION. Completion is marshalled back to the UI thread via the
 /// <c>post</c> delegate (so the state signal write lands in the host's batched flush, never off-thread); a completion
 /// that lands AFTER the owning component unmounts writes a signal with no subscribers — a harmless no-op. Modeled on
-/// <c>RenderContext.UseAsyncResource</c> (per-run <see cref="CancellationTokenSource"/> + post + cancelled-token guard).
+/// <c>RenderContext.UseResource</c> (per-run <see cref="CancellationTokenSource"/> + post + cancelled-token guard).
 ///
 /// Obtain one with <c>UseAsyncCommand()</c> (it wires <c>UsePost()</c> + unmount disposal). It does NOT cancel on
 /// unmount by default — a started command (e.g. play) should run to completion; opt into <c>cancelOnUnmount: true</c>

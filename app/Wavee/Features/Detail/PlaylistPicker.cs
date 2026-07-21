@@ -97,8 +97,11 @@ public sealed class PlaylistPickerPanel : Component
             if (lib is null) return;
             _ = lib.AddTracksAsync(uri, getTracks());
             close();
-            Toasts.Show(Strings.Detail.AddedToPlaylist(name), ToastSeverity.Success,
-                actionLabel: Loc.Get(Strings.Detail.GoToPlaylist), onAction: () => go?.Invoke("pl:" + uri, name));
+            Toast.Show(Strings.Detail.AddedToPlaylist(name), new ToastOptions
+            {
+                Severity = InfoBarSeverity.Success,
+                ActionLabel = Loc.Get(Strings.Detail.GoToPlaylist), OnAction = () => go?.Invoke("pl:" + uri, name),
+            });
         }
 
         void CreateAndAdd()
@@ -113,12 +116,15 @@ public sealed class PlaylistPickerPanel : Component
                     string uri = await lib.CreatePlaylistAsync(name).ConfigureAwait(false);
                     await lib.AddTracksAsync(uri, getTracks()).ConfigureAwait(false);
                     close();
-                    Toasts.Show(Strings.Detail.AddedToPlaylist(name), ToastSeverity.Success,
-                        actionLabel: Loc.Get(Strings.Detail.GoToPlaylist), onAction: () => go?.Invoke("pl:" + uri, name));
+                    Toast.Show(Strings.Detail.AddedToPlaylist(name), new ToastOptions
+                    {
+                        Severity = InfoBarSeverity.Success,
+                        ActionLabel = Loc.Get(Strings.Detail.GoToPlaylist), OnAction = () => go?.Invoke("pl:" + uri, name),
+                    });
                 }
                 catch (Exception ex)
                 {
-                    Toasts.Show(ex.Message, ToastSeverity.Critical);
+                    Toast.Show(ex.Message, new ToastOptions { Severity = InfoBarSeverity.Error });
                 }
             }
         }
@@ -146,7 +152,7 @@ public sealed class PlaylistPickerPanel : Component
 
         return new BoxEl
         {
-            Direction = 1, Width = 320f, Gap = WaveeSpace.XS, Padding = new Edges4(8f, 8f, 8f, 8f),
+            Direction = 1, Width = 320f, Gap = Spacing.XS, Padding = new Edges4(8f, 8f, 8f, 8f),
             Children =
             [
                 Embed.Comp(() => new EditableText
@@ -181,7 +187,6 @@ public sealed class PlaylistPickerPanel : Component
     {
         Direction = 0, Height = 44f, AlignItems = FlexAlign.Center, Gap = 10f,
         Padding = new Edges4(6f, 0f, 8f, 0f), Corners = CornerRadius4.All(4f),
-        HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
         Role = AutomationRole.Button, OnClick = onClick,
         Children =
         [
@@ -189,25 +194,24 @@ public sealed class PlaylistPickerPanel : Component
             {
                 Width = 40f, Height = 40f, Shrink = 0f, Corners = CornerRadius4.All(6f), Fill = Tok.FillSubtleSecondary,
                 AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                Children = [Icon(Mdl.Add, 20f, Tok.TextSecondary)],
+                Children = [Icon(Icons.Add, 20f, Tok.TextSecondary)],
             },
             new TextEl(Loc.Get(Strings.Detail.NewPlaylist)) { Size = 14f, Color = Tok.TextPrimary, Grow = 1f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
         ],
-    };
+    }.Interactive(Interaction.Subtle);
 
     static Element PlaylistRow(PlaylistSummary p, Action onClick) => new BoxEl
     {
         Key = p.Uri,
         Direction = 0, Height = 44f, AlignItems = FlexAlign.Center, Gap = 10f,
         Padding = new Edges4(6f, 0f, 8f, 0f), Corners = CornerRadius4.All(4f),
-        HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
         Role = AutomationRole.Button, OnClick = onClick,
         Children =
         [
             Surfaces.Artwork(CoverOf(p), SeedFrom(p.Uri), 40f, 40f, 6f, decodePx: 80),
             new BoxEl { Direction = 1, Grow = 1f, Gap = 1f, Children = NameColumn(p) },
         ],
-    };
+    }.Interactive(Interaction.Subtle);
 
     static Element[] NameColumn(PlaylistSummary p) =>
         p.CanEdit && !p.IsOwner

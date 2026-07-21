@@ -30,5 +30,7 @@
        hand-vtable IDropTarget's by-value POINTL ABI in-process (the crash-fix regression guard). -->
   <ItemGroup>
     <InternalsVisibleTo Include="FluentGpu.WindowsApp" />
+    <!-- The M1 media backend unit tests inject a fake IVideoEngine into MfMediaSession (no real D3D/MF/DComp device). -->
+    <InternalsVisibleTo Include="FluentGpu.Windows.Tests" />
   </ItemGroup>
 </Project>

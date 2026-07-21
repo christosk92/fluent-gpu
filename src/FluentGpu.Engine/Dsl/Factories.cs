@@ -20,6 +20,30 @@ public static partial class Ui
     public static BoxEl ZStack(params Element[] children)
         => new() { ZStack = true, Children = children };
 
+    /// <summary>A flexible spacer: grows to eat all free space on its parent's main axis (pushes its siblings apart —
+    /// e.g. a leading label and a trailing button in an HStack). Zero intrinsic size.</summary>
+    public static BoxEl Spacer() => new() { Grow = 1f };
+
+    /// <summary>A fixed-size gap on its parent's main axis (<paramref name="px"/> DIP): a rigid spacer that never grows
+    /// or shrinks. Use for a one-off gap where a container Gap would over-apply.</summary>
+    public static BoxEl Spacer(float px) => new() { Basis = px, Shrink = 0f };
+
+    /// <summary>A horizontal wrap panel: children flow left-to-right and wrap to the next line when the main axis is
+    /// constrained, with <paramref name="gap"/> applied between items (and between lines). The chip/tag-cloud shape.</summary>
+    public static BoxEl Wrap(float gap, params Element[] children)
+        => new() { Direction = 0, Wrap = true, Gap = gap, Children = children };
+
+    /// <summary>Centers <paramref name="child"/> on both axes inside a box that grows to fill the space its parent
+    /// offers (the empty-state / hero-centering shape).</summary>
+    public static BoxEl Center(Element child)
+        => new() { Grow = 1f, Justify = FlexJustify.Center, AlignItems = FlexAlign.Center, Children = [child] };
+
+    /// <summary>A box that sizes itself to a fixed <paramref name="ratio"/> (width÷height, CSS <c>aspect-ratio</c>):
+    /// it takes the width its parent offers and derives its height (or vice versa when only the height is constrained),
+    /// stretching <paramref name="child"/> to fill it — the responsive 16:9 / square media-tile shape.</summary>
+    public static BoxEl AspectRatio(float ratio, Element child)
+        => new() { AspectRatio = ratio, Children = [child] };
+
     public static TextEl Heading(string text)
         => new(text) { Size = 28f, Bold = true, Color = Theme.WindowText };
 

@@ -27,10 +27,12 @@ public sealed class FrozenPropsAnalyzer : DiagnosticAnalyzer
         id: DiagnosticId,
         title: "Element content is frozen when passed as a field into Embed.Comp",
         messageFormat: "'{0}' is Element content assigned as a component field inside Embed.Comp — it freezes at first "
-                     + "mount and later values are dropped. Deliver it via Ctx.Provide + UseContext (the SelectorBar/"
-                     + "Expander idiom) or remount with a changed Key.",
+                     + "mount and later values are dropped. Re-push it via Embed.Comp(props, factory) + UseProps<T>() "
+                     + "(the SelectorBar idiom), or Ctx.Provide + UseContext for ambient data, or remount with a changed Key.",
         category: "FluentGpu.Reactivity",
-        defaultSeverity: DiagnosticSeverity.Info,
+        // Promoted Info -> Warning in G4f: the props channel (Embed.Comp(props, factory) + [Props]/UseProps<T>) is now
+        // the sanctioned re-push path, so a frozen Element content slot is almost always a real bug.
+        defaultSeverity: DiagnosticSeverity.Warning,
         isEnabledByDefault: true,
         description: "Components are autonomous: a reused ComponentEl discards the new factory, so fields set inside "
                    + "Embed.Comp(() => new T { … }) are frozen at mount. Element content is rebuilt every render, so a "
@@ -88,18 +90,38 @@ public sealed class FrozenPropsAnalyzer : DiagnosticAnalyzer
             if (rhsSymbol is not (ILocalSymbol or IParameterSymbol))
                 continue;
 
+            // [MountOnceContent] on the source parameter/local opts the capture out — a deliberate mount-time slot
+            // (the sanctioned replacement for a blanket #pragma around a static-content convenience factory).
+            if (HasMountOnceContent(rhsSymbol))
+                continue;
+
             // The assigned member's type must be Element (or a collection of Element) — the content-slot case.
-            var memberType = context.SemanticModel.GetSymbolInfo(member, context.CancellationToken).Symbol switch
+            var memberSymbol = context.SemanticModel.GetSymbolInfo(member, context.CancellationToken).Symbol;
+            var memberType = memberSymbol switch
             {
                 IFieldSymbol f => f.Type,
                 IPropertySymbol p => p.Type,
                 _ => null,
             };
-            if (memberType is null || !IsElementContent(memberType))
+            if (memberType is null || !AnalyzerSemantics.IsElementContent(memberType))
+                continue;
+
+            // [MountOnceContent] on the target field/property likewise marks the slot intentionally frozen.
+            if (memberSymbol is not null && HasMountOnceContent(memberSymbol))
                 continue;
 
             context.ReportDiagnostic(Diagnostic.Create(Rule, rhs.GetLocation(), member.Identifier.ValueText));
         }
+    }
+
+    // A symbol is exempt when it (a parameter/local source, or the target field/property) carries
+    // [FluentGpu.Hooks.MountOnceContent] — the declaration-site marker that the content is a deliberate mount-time slot.
+    private static bool HasMountOnceContent(ISymbol symbol)
+    {
+        foreach (var attr in symbol.GetAttributes())
+            if (attr.AttributeClass?.Name == "MountOnceContentAttribute")
+                return true;
+        return false;
     }
 
     private static ObjectCreationExpressionSyntax? SingleReturnedCreation(BlockSyntax block)
@@ -112,23 +134,5 @@ public sealed class FrozenPropsAnalyzer : DiagnosticAnalyzer
                 found = oc;
             }
         return found;
-    }
-
-    // True for `Element` (the DSL base record) or a collection/array whose element type is `Element`.
-    private static bool IsElementContent(ITypeSymbol type)
-    {
-        if (IsElementType(type)) return true;
-        if (type is IArrayTypeSymbol array) return IsElementType(array.ElementType);
-        if (type is INamedTypeSymbol { IsGenericType: true } named)
-            return named.TypeArguments.Length == 1 && IsElementType(named.TypeArguments[0]);
-        return false;
-    }
-
-    private static bool IsElementType(ITypeSymbol type)
-    {
-        for (ITypeSymbol? t = type; t is not null; t = t.BaseType)
-            if (t.Name == "Element" && t.ContainingNamespace?.ToDisplayString() == "FluentGpu.Dsl")
-                return true;
-        return false;
     }
 }

@@ -1,6 +1,7 @@
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Localization;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
 using System;
@@ -58,7 +59,7 @@ public sealed class DatePicker : Component
     /// <summary>WinUI <c>Header</c> — shown above the face (HeaderContentPresenter, DatePicker_themeresources.xaml:237).</summary>
     public string? Header;
     public bool IsEnabled = true;
-    public Action<DateOnly?>? OnDateChanged;
+    public Action<DateOnly?>? OnChange;
 
     /// <summary>Zero-arg factory — keeps the existing demo call site (DateTimePages.cs) compiling unchanged.</summary>
     public static Element Create() => Embed.Comp(() => new DatePicker());
@@ -67,13 +68,13 @@ public sealed class DatePicker : Component
         Signal<DateOnly?> selectedDate,
         bool dayVisible = true, bool monthVisible = true, bool yearVisible = true,
         int? minYear = null, int? maxYear = null,
-        Action<DateOnly?>? onDateChanged = null,
+        Action<DateOnly?>? onChange = null,
         string? header = null, bool isEnabled = true)
         => Embed.Comp(() => new DatePicker
         {
             SelectedDate = selectedDate,
             DayVisible = dayVisible, MonthVisible = monthVisible, YearVisible = yearVisible,
-            MinYear = minYear, MaxYear = maxYear, OnDateChanged = onDateChanged,
+            MinYear = minYear, MaxYear = maxYear, OnChange = onChange,
             Header = header, IsEnabled = isEnabled,
         });
 
@@ -107,9 +108,9 @@ public sealed class DatePicker : Component
 
         // ── FACE text per column (placeholder day/month/year when no date). ──
         var seed = committed ?? DateOnly.FromDateTime(DateTime.Now);
-        string dayText = hasDate ? seed.Day.ToString(CultureInfo.CurrentCulture) : "day";
-        string monthText = hasDate ? monthNames[seed.Month - 1] : "month";
-        string yearText = hasDate ? seed.Year.ToString(CultureInfo.CurrentCulture) : "year";
+        string dayText = hasDate ? seed.Day.ToString(CultureInfo.CurrentCulture) : Loc.Get(Strings.DatePicker.Day);
+        string monthText = hasDate ? monthNames[seed.Month - 1] : Loc.Get(Strings.DatePicker.Month);
+        string yearText = hasDate ? seed.Year.ToString(CultureInfo.CurrentCulture) : Loc.Get(Strings.DatePicker.Year);
         // HasNoDate → DatePickerButtonForegroundDefault = TextFillColorSecondary (DatePicker_themeresources.xaml:25, :228).
         var faceColor = hasDate ? Tok.TextPrimary : Tok.TextSecondary;
 
@@ -207,7 +208,7 @@ public sealed class DatePicker : Component
             int day = Math.Clamp(tentDay.Peek() + 1, 1, maxDay);
             var picked = new DateOnly(year, month, day);
             date.Value = picked;
-            OnDateChanged?.Invoke(picked);
+            OnChange?.Invoke(picked);
             handle.Value?.Close();
         }
 

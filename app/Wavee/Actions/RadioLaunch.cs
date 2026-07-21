@@ -1,5 +1,6 @@
 using System;
 using System.Threading.Tasks;
+using FluentGpu.Controls;
 using FluentGpu.Localization;
 using Wavee.Core;
 
@@ -23,18 +24,21 @@ static class RadioLaunch
     {
         string? uri;
         try { uri = await player.StartRadioAsync(seedUri, displayName).ConfigureAwait(false); }
-        catch (Exception ex) { Toasts.Show(ex.Message, ToastSeverity.Critical); return; }
+        catch (Exception ex) { Toast.Show(ex.Message, new ToastOptions { Severity = InfoBarSeverity.Error }); return; }
 
         if (string.IsNullOrEmpty(uri))
         {
-            Toasts.Show(Loc.Get(Strings.Menu.RadioUnavailable), ToastSeverity.Caution);
+            Toast.Show(Loc.Get(Strings.Menu.RadioUnavailable), new ToastOptions { Severity = InfoBarSeverity.Warning });
             return;
         }
 
         // The action label routes through the same go("pl:" + uri, name) scheme every other "open a playlist" affordance
         // uses (Menus.AddTo, ActionRules.RouteFor), so it lands on the seeded radio playlist's detail page.
-        Toasts.Show(Loc.Get(Strings.Menu.RadioStarted), ToastSeverity.Success,
-            actionLabel: Loc.Get(Strings.Menu.OpenRadioPlaylist),
-            onAction: () => go?.Invoke("pl:" + uri, string.IsNullOrEmpty(displayName) ? Loc.Get(Strings.Menu.Radio) : displayName));
+        Toast.Show(Loc.Get(Strings.Menu.RadioStarted), new ToastOptions
+        {
+            Severity = InfoBarSeverity.Success,
+            ActionLabel = Loc.Get(Strings.Menu.OpenRadioPlaylist),
+            OnAction = () => go?.Invoke("pl:" + uri, string.IsNullOrEmpty(displayName) ? Loc.Get(Strings.Menu.Radio) : displayName),
+        });
     }
 }

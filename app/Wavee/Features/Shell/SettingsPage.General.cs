@@ -58,7 +58,7 @@ sealed partial class SettingsPage
         var languageOptions = LanguageOptions();
         int language = Math.Clamp(_language.Value, 0, languageOptions.Codes.Length - 1);
 
-        Element AppearanceToggle(SettingKey<bool> key) => ToggleSwitch.Create(settings?.Get(key) ?? false, () =>
+        Element AppearanceToggle(SettingKey<bool> key) => ToggleSwitch.Create(new Signal<bool>(settings?.Get(key) ?? false), onChange: _ =>
         {
             if (settings is null) return;
             settings.Set(key, !settings.Get(key));
@@ -98,7 +98,7 @@ sealed partial class SettingsPage
         return SettingsTabStack(
             SettingsSectionHeader(Loc.Get(Strings.Settings.Appearance.Title), Icons.Brush),
             SettingsRow(Loc.Get(Strings.Settings.Appearance.Theme), Loc.Get(Strings.Settings.Appearance.ThemeSub),
-                SelectorBar.Create(ThemeLabels(), themeMode, SetTheme), Icons.Brush),
+                SelectorBar.Create(ThemeLabels(), new Signal<int>(themeMode), onChange: SetTheme), Icons.Brush),
             SettingsRow(Loc.Get(Strings.Settings.Appearance.Palette), Loc.Get(Strings.Settings.Appearance.PaletteSub),
                 PaletteRow(settings, requestTheme), Icons.Brush),
             SettingsRow(Loc.Get(Strings.Settings.Appearance.DisableMarquee), Loc.Get(Strings.Settings.Appearance.DisableMarqueeSub),
@@ -111,7 +111,7 @@ sealed partial class SettingsPage
             SettingsSectionHeader(Loc.Get(Strings.Settings.Language.Title), Icons.Globe),
             SettingsRow(Loc.Get(Strings.Settings.Language.Label), Loc.Get(Strings.Settings.Language.RestartSub),
                 ComboBox.Create(languageOptions.Labels, _language, width: 260f, isEnabled: settings is not null,
-                    onSelectionChanged: SetLanguage), Icons.Globe));
+                    onChange: SetLanguage), Icons.Globe));
     }
 
     // ── the page-layout picker: the preview cards ARE the selector (a radio pair, PaletteRow-style) ─────────────────
@@ -185,7 +185,7 @@ sealed partial class SettingsPage
                         // Drop 10f→9f when selected so the 1f→2f border growth draws inward and the wireframe stays put.
                         Width = 116f, Height = 84f, Padding = Edges4.All(on ? 9f : 10f),
                         Direction = 1, ClipToBounds = true,
-                        Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillSubtleSecondary,
+                        Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillSubtleSecondary,
                         BorderWidth = on ? 2f : 1f, BorderColor = on ? Tok.AccentDefault : Tok.StrokeControlDefault,
                         HoverScale = 1.02f, PressScale = 0.98f,
                         Children = [sketch],
@@ -251,7 +251,7 @@ sealed partial class SettingsPage
     Element DensityBlock(int density, Action<int> setDensity) => new BoxEl
     {
         Direction = 1, AlignSelf = FlexAlign.Stretch,
-        Corners = CornerRadius4.All(WaveeRadius.Card),
+        Corners = CornerRadius4.All(Radii.Card),
         Fill = Tok.FillCardSecondary, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
         ClipToBounds = true,
         Children =
@@ -297,7 +297,7 @@ sealed partial class SettingsPage
                     {
                         Width = 116f, Height = 84f, Padding = Edges4.All(on ? 9f : 10f),
                         Direction = 1, Gap = 4f, Justify = FlexJustify.Center, ClipToBounds = true,
-                        Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillSubtleSecondary,
+                        Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillSubtleSecondary,
                         BorderWidth = on ? 2f : 1f, BorderColor = on ? Tok.AccentDefault : Tok.StrokeControlDefault,
                         HoverScale = 1.02f, PressScale = 0.98f,
                         Children = [MockRow(), MockRow(), MockRow()],

@@ -16,6 +16,7 @@ using static FluentGpu.Dsl.Ui;
 // free (a rule that reads a sibling signal auto-re-validates), errors stay silent until a field is touched (no red on
 // load), the submit button auto-disables until the whole form is valid, and a failed submit reveals every error. It is
 // reflection-free (NativeAOT), zero-allocation on the keystroke path, and i18n — messages are localization keys.
+[GalleryPage("validation", "Sign-up form", "Samples", Icon = Icons.Accept)]
 sealed class ValidationPage : Component
 {
     public override Element Render()
@@ -39,7 +40,7 @@ sealed class ValidationPage : Component
             Embed.Comp(() => new ValidationDemo()));
     }
 
-    static readonly object[] MountOnce = new object[] { "validation-mount" };
+    static readonly FluentGpu.Hooks.DepKey MountOnce = FluentGpu.Hooks.DepKey.Empty;
 }
 
 /// <summary>The live sign-up form. Three controlled signals feed three <c>UseField</c>s under one <c>UseForm</c>; the
@@ -75,15 +76,15 @@ sealed class ValidationDemo : Component
             Direction = 1, Gap = 16f, MaxWidth = 460f,
             Children =
             [
-                ControlExample.Build("Sign-up form",
+                ExampleCard.Build("Sign-up form",
                     new BoxEl
                     {
                         Direction = 1, Gap = 14f,
                         Children =
                         [
-                            TextBox.Create(header: "Email", placeholder: "you@example.com", width: 380f, text: _email, field: email),
-                            TextBox.Create(header: "Password", width: 380f, text: _pwd, field: pwd),
-                            TextBox.Create(header: "Confirm password", width: 380f, text: _confirm, field: confirm),
+                            TextBox.Create(_email, options: new TextBox.TextBoxOptions { Header = "Email", Placeholder = "you@example.com", Width = 380f, Field = email }),
+                            TextBox.Create(_pwd, options: new TextBox.TextBoxOptions { Header = "Password", Width = 380f, Field = pwd }),
+                            TextBox.Create(_confirm, options: new TextBox.TextBoxOptions { Header = "Confirm password", Width = 380f, Field = confirm }),
                             Embed.Comp(() => new SubmitRow(form)),
                         ],
                     },
@@ -100,8 +101,8 @@ sealed class ValidationDemo : Component
                     var confirm = UseField(_confirm, Rules.Equals(_pwd));
 
                     // one prop wires the border + message + touched:
-                    TextBox.Create(header: "Email", text: _email,
-                                   field: email);
+                    TextBox.Create(_email, options: new TextBox.TextBoxOptions { Header = "Email",
+                                   Field = email });
 
                     // submit auto-gated by the whole form's validity:
                     Button.Accent("Create account",

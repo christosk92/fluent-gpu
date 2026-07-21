@@ -316,7 +316,7 @@ slider-scrubber fix:
 ```csharp
 var x = UseFloatSignal(0.3f);   // a hot scalar — bind it, don't setState per move
 
-Slider.Bind(x);                 // the drag writes the signal
+Slider.Create(x);               // the drag writes the signal
 
 new BoxEl
 {
@@ -412,7 +412,7 @@ internalising before they bite:
   one with no `OnClick`/`OnPointerDown` won't receive input.
 - **Hot values: bind, don't `setState`.** A `setState` per pointer-move re-renders the owning component every
   frame and tanks FPS. Bind the value to `Transform`/`Opacity`/`Fill` (compositor-only) or use
-  `Slider.Bind(FloatSignal)`. Confirm `FrameStats.Rendered == false` on the drag.
+  `Slider.Create(FloatSignal)`. Confirm `FrameStats.Rendered == false` on the drag.
 
 ## Where to go next
 

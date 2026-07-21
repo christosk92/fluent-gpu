@@ -6,6 +6,10 @@
        zero-alloc harness (FluentGpu.VerticalSlice) and the future macOS port both consume Controls unchanged —
        platform code reaches controls only through the Engine's seam interfaces. -->
   <ItemGroup>
+    <!-- The M1 tests exercise MediaPlayerElement's pure layout/degrade helpers (internal static). -->
+    <InternalsVisibleTo Include="FluentGpu.Windows.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\FluentGpu.Engine\FluentGpu.Engine.csproj" />
     <!-- The in-repo Roslyn analyzer (FluentGpu.SourceGen) as an analyzer — controls are AUTHORED here, so the
          frozen-props lint (FGRP001, component-props-contract.md) must run in this compilation. Analyzer-only
@@ -13,4 +17,28 @@
     <ProjectReference Include="..\FluentGpu.SourceGen\FluentGpu.SourceGen.csproj"
                       OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
+  <!-- Icons source of truth: glyphs.json -> GlyphTableGenerator emits the Icons const surface (dormant unless present). -->
+  <ItemGroup>
+    <AdditionalFiles Include="glyphs.json" FluentGpuGlyphs="true" />
+    <CompilerVisibleItemMetadata Include="AdditionalFiles" MetadataName="FluentGpuGlyphs" />
+  </ItemGroup>
+
+  <!-- ── Control-kit localization (source generator) ────────────────────────────────────────────────────────────
+       The kit's neutral (English) strings are the base-culture loc JSON fed to FluentGpu.SourceGen. The generator emits
+       (1) the compile-safe `FluentGpu.Controls.Strings` key surface and (2) — because FluentGpuLocRegisterNeutral is set
+       — a module initializer that registers the flattened dotted-key → neutral-string table with the engine's neutral
+       fallback floor. That baked-in floor is what makes the kit's text render its neutral English with ZERO app
+       configuration (the sacred zero-config contract); an app that ships its own culture folder overrides `controls.*`
+       per-key. The JSON is a BUILD input only (not Content) — the strings live in the DLL as generated code, so the
+       NuGet package carries them without shipping a loose file. -->
+  <ItemGroup>
+    <AdditionalFiles Include="assets\loc\en-US.json" FluentGpuLocBase="true" />
+    <CompilerVisibleItemMetadata Include="AdditionalFiles" MetadataName="FluentGpuLocBase" />
+    <CompilerVisibleProperty Include="FluentGpuLocNamespace" />
+    <CompilerVisibleProperty Include="FluentGpuLocRegisterNeutral" />
+  </ItemGroup>
+  <PropertyGroup>
+    <FluentGpuLocNamespace>FluentGpu.Controls</FluentGpuLocNamespace>
+    <FluentGpuLocRegisterNeutral>true</FluentGpuLocRegisterNeutral>
+  </PropertyGroup>
 </Project>

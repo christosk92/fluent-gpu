@@ -1,6 +1,7 @@
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
 
@@ -17,20 +18,22 @@ public sealed class AppBarToggleButton : Component
 {
     public string Glyph = "";
     public string Label = "";
-    public bool InitialChecked = false;
+    /// <summary>Controlled checked state (the caller's value signal, frozen at mount); null ⇒ the control materializes
+    /// its own internal signal (auto-materialize). A click writes it first, then fires <see cref="OnChange"/>.</summary>
+    public Signal<bool>? IsChecked;
     public bool IsEnabled = true;
     /// <summary>Compact layout (the closed CommandBar): icon-only at the 48px compact height
     /// (AppBarThemeCompactHeight, CommandBar_themeresources.xaml:72); FullSize is 64 (AppBarThemeMinHeight :71 —
     /// audit fix: was 48).</summary>
     public bool IsCompact = false;
-    public Action<bool>? OnToggled;
+    public Action<bool>? OnChange;
 
-    public static Element Create(string glyph, string label, bool initiallyChecked = false, bool isEnabled = true,
-                                 bool isCompact = false, Action<bool>? onToggled = null) =>
+    public static Element Create(string glyph, string label, Signal<bool>? isChecked = null, Action<bool>? onChange = null,
+                                 bool isEnabled = true, bool isCompact = false) =>
         Embed.Comp(() => new AppBarToggleButton
         {
-            Glyph = glyph, Label = label, InitialChecked = initiallyChecked, IsEnabled = isEnabled,
-            IsCompact = isCompact, OnToggled = onToggled,
+            Glyph = glyph, Label = label, IsChecked = isChecked, OnChange = onChange, IsEnabled = isEnabled,
+            IsCompact = isCompact,
         });
 
     // Frozen-props tripwire (ReuseGuard): Glyph/Label/IsEnabled/IsCompact freeze at mount (InitialChecked is a genuine
@@ -47,7 +50,9 @@ public sealed class AppBarToggleButton : Component
 
     public override Element Render()
     {
-        var (on, setOn) = UseState(InitialChecked);
+        var own = UseSignal(false);
+        var sig = IsChecked ?? own;   // auto-materialize: one code path (caller's signal wins; else the internal one)
+        bool on = sig.Value;          // read the value signal directly; a programmatic write re-skins with no onChange echo
         bool enabled = IsEnabled;
         bool labeled = !IsCompact && Label.Length > 0;
 
@@ -93,7 +98,7 @@ public sealed class AppBarToggleButton : Component
             IsEnabled = enabled,
             Focusable = enabled,
             FocusVisualMargin = Edges4.All(-3f),    // FocusVisualMargin -3 (AppBarButton family templates)
-            OnClick = () => { setOn(!on); OnToggled?.Invoke(!on); },
+            OnClick = () => { bool next = !on; sig.Value = next; OnChange?.Invoke(next); },
             Role = AutomationRole.ToggleButton,
             Children = children.ToArray(),
         };

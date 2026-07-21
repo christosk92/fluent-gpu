@@ -131,7 +131,7 @@ sealed partial class SettingsPage
         if (size is { } b) actions.Add(new TextEl(FmtBytes(b)) { Size = 13f, Color = Tok.TextSecondary, Shrink = 0f });
         actions.Add(HyperlinkButton.Create(Loc.Get(Strings.Settings.Storage.OpenFolder), () => SettingsShared.OpenFolder(folder)));
         if (extra is not null) actions.Add(extra);
-        return new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, Children = actions.ToArray() };
+        return new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M, Children = actions.ToArray() };
     }
 
     static Element StorageRowCard(string label, string? sub, long? size, string folder, ColorF accent,
@@ -180,10 +180,10 @@ sealed partial class SettingsPage
             catch { }
             post(() =>
             {
-                Toasts.Show(deleted > 0
+                Toast.Show(deleted > 0
                     ? Loc.Format("settings.storage.oldLogsDeleted", ("count", deleted))
                     : Loc.Get(Strings.Settings.Storage.NoOldLogsDeleted),
-                    ToastSeverity.Success);
+                    new ToastOptions { Severity = InfoBarSeverity.Success });
                 RefreshStorage(post);
             });
         });
@@ -234,7 +234,7 @@ sealed partial class SettingsPage
                 : Loc.Format("settings.storage.licenseKeysCount", ("count", ks.Count)))
             : Loc.Get(Strings.Settings.Storage.LicenseKeysSub);
 
-        Element Toggle(SettingKey<bool> key) => ToggleSwitch.Create(settings?.Get(key) ?? true, () =>
+        Element Toggle(SettingKey<bool> key) => ToggleSwitch.Create(new Signal<bool>(settings?.Get(key) ?? true), onChange: _ =>
         {
             if (settings is null) return;
             settings.Set(key, !settings.Get(key));
@@ -250,8 +250,8 @@ sealed partial class SettingsPage
             : storageLoad == StorageLoadPhase.Loading || s is null
                 ? new BoxEl
                 {
-                    Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
-                    Padding = new Edges4(0, WaveeSpace.L, 0, WaveeSpace.L),
+                    Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M,
+                    Padding = new Edges4(0, Spacing.L, 0, Spacing.L),
                     Children =
                     [
                         ProgressRing.Indeterminate(size: 20f),
@@ -309,7 +309,7 @@ sealed partial class SettingsPage
                 Button.Standard(Loc.Get(Strings.Settings.Storage.ReleaseNow), () =>
                 {
                     svc?.LibraryStore.ShedDetails(keep: 16);
-                    Toasts.Show(Loc.Get(Strings.Settings.Storage.DetailsReleased), ToastSeverity.Success);
+                    Toast.Show(Loc.Get(Strings.Settings.Storage.DetailsReleased), new ToastOptions { Severity = InfoBarSeverity.Success });
                     Bump();
                 }), Icons.List));
     }
@@ -349,15 +349,15 @@ sealed partial class SettingsPage
 
         return new BoxEl
         {
-            Direction = 1, Gap = WaveeSpace.M,
-            Padding = new Edges4(WaveeSpace.L, WaveeSpace.M, WaveeSpace.L, WaveeSpace.M),
-            Corners = CornerRadius4.All(WaveeRadius.Card),
+            Direction = 1, Gap = Spacing.M,
+            Padding = new Edges4(Spacing.L, Spacing.M, Spacing.L, Spacing.M),
+            Corners = CornerRadius4.All(Radii.Card),
             Fill = Tok.FillCardSecondary, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             Children =
             [
                 new BoxEl
                 {
-                    Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S,
+                    Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S,
                     Children =
                     [
                         new TextEl(Loc.Get(Strings.Settings.Storage.Total)) { Size = 12f, Weight = 600, Color = Tok.TextSecondary },
@@ -372,7 +372,7 @@ sealed partial class SettingsPage
                         Children = barKids.ToArray(),
                     }
                     : new BoxEl(),
-                new BoxEl { Direction = 0, Gap = WaveeSpace.S, Wrap = true, Children = legend.ToArray() },
+                new BoxEl { Direction = 0, Gap = Spacing.S, Wrap = true, Children = legend.ToArray() },
             ],
         };
     }
@@ -390,7 +390,6 @@ sealed partial class SettingsPage
         {
             if (settings is null) return;
             next = Math.Clamp(next, 0, 2);
-            _bodyBudgetMode.Value = next;
             settings.Set(WaveeSettings.AudioBodyCacheBudgetMode, next);
             svc?.AudioBodyCache?.Trim();
             Bump();
@@ -400,9 +399,8 @@ sealed partial class SettingsPage
         {
             (int)AudioCacheBudgetMode.FixedBytes => FixedBudgetEditor(svc, settings),
             (int)AudioCacheBudgetMode.DriveShare => NumberBox.Create(value: _bodyBudgetPercent,
-                minimum: 0, maximum: 90, smallChange: 1, spinButtonPlacementMode: NumberBoxSpinButtonPlacementMode.Compact,
-                width: 150f, formatter: v => v <= 0 ? Loc.Get(Strings.Settings.Storage.AutoTenPercent) : v.ToString("0", CultureInfo.InvariantCulture) + "%",
-                onValueChanged: (_, v) =>
+                options: new NumberBox.NumberBoxOptions { Minimum = 0, Maximum = 90, SmallChange = 1, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact, Width = 150f, Formatter = v => v <= 0 ? Loc.Get(Strings.Settings.Storage.AutoTenPercent) : v.ToString("0", CultureInfo.InvariantCulture) + "%", IsEnabled = settings is not null },
+                onChange: v =>
                 {
                     if (settings is null) return;
                     int pct = Math.Clamp((int)Math.Round(v), 0, 90);
@@ -410,7 +408,7 @@ sealed partial class SettingsPage
                     settings.Set(WaveeSettings.AudioBodyCacheBudgetPercent, pct);
                     svc?.AudioBodyCache?.Trim();
                     Bump();
-                }, isEnabled: settings is not null),
+                }),
             _ => new TextEl(Loc.Get(Strings.Settings.Storage.UnlimitedReserve)) { Size = 12f, Color = Tok.TextSecondary },
         };
 
@@ -424,7 +422,7 @@ sealed partial class SettingsPage
                 SelectorBar.Create([
                     Loc.Get(Strings.Settings.Storage.FixedSize),
                     Loc.Get(Strings.Settings.Storage.DriveShare),
-                    Loc.Get(Strings.Settings.Storage.Unlimited)], mode, SetMode),
+                    Loc.Get(Strings.Settings.Storage.Unlimited)], _bodyBudgetMode, onChange: SetMode),
                 editor,
                 ProgressBar.Determinate(frac, width: 300f, state: over ? ProgressBarState.Error : ProgressBarState.Normal),
                 new TextEl(Strings.Settings.Storage.UsedOfBudget(FmtBytes(used), budgetLabel))
@@ -452,25 +450,29 @@ sealed partial class SettingsPage
 
         return new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, Wrap = true,
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M, Wrap = true,
             Children =
             [
                 ComboBox.Create(s_bodyBudgetLabels, _bodyBudgetPreset, width: 120f, isEnabled: settings is not null,
-                    onSelectionChanged: i =>
+                    onChange: i =>
                     {
                         if (i < 0 || i >= s_bodyBudgetBytes.Length) return;
                         _bodyBudgetGiB.Value = s_bodyBudgetBytes[i] / (double)(1L << 30);
                         CommitGiB(_bodyBudgetGiB.Value);
                     }),
-                NumberBox.Create(value: _bodyBudgetGiB, minimum: 0.0625,
-                    maximum: long.MaxValue / (double)(1L << 30), smallChange: 1,
-                    spinButtonPlacementMode: NumberBoxSpinButtonPlacementMode.Compact, width: 150f,
-                    formatter: v => v.ToString("0.###", CultureInfo.InvariantCulture) + " GB",
-                    onValueChanged: (_, v) =>
+                NumberBox.Create(value: _bodyBudgetGiB,
+                    options: new NumberBox.NumberBoxOptions
+                    {
+                        Minimum = 0.0625, Maximum = long.MaxValue / (double)(1L << 30), SmallChange = 1,
+                        SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact, Width = 150f,
+                        Formatter = v => v.ToString("0.###", CultureInfo.InvariantCulture) + " GB",
+                        IsEnabled = settings is not null,
+                    },
+                    onChange: v =>
                     {
                         _bodyBudgetPreset.Value = s_bodyBudgetLabels.Length - 1;
                         CommitGiB(v);
-                    }, isEnabled: settings is not null),
+                    }),
             ],
         };
     }
@@ -478,7 +480,7 @@ sealed partial class SettingsPage
     Element CacheLocationActions(Services? svc, IAppSettings? settings, Action<Action> post, string audioDir) =>
         new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S, Wrap = true,
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S, Wrap = true,
             Children =
             [
                 Button.Standard(Loc.Get(Strings.Settings.Storage.ChooseLocation), () => PickCacheLocation(svc, settings, post)),
@@ -536,12 +538,12 @@ sealed partial class SettingsPage
                 if (ok)
                 {
                     settings.Set(WaveeSettings.AudioBodyCacheBasePath, newBase);
-                    Toasts.Show(Loc.Get(Strings.Settings.Storage.CacheLocationChanged), ToastSeverity.Success);
+                    Toast.Show(Loc.Get(Strings.Settings.Storage.CacheLocationChanged), new ToastOptions { Severity = InfoBarSeverity.Success });
                     _storage = null;
                     RefreshStorage(post);
                     Bump();
                 }
-                else Toasts.Show(Loc.Get(Strings.Settings.Storage.CacheLocationFailed), ToastSeverity.Critical);
+                else Toast.Show(Loc.Get(Strings.Settings.Storage.CacheLocationFailed), new ToastOptions { Severity = InfoBarSeverity.Error });
             });
         });
     }
@@ -564,7 +566,7 @@ sealed partial class SettingsPage
             }
             post(() =>
             {
-                Toasts.Show(Loc.Get(Strings.Settings.Storage.AudioCacheCleared), ToastSeverity.Success);
+                Toast.Show(Loc.Get(Strings.Settings.Storage.AudioCacheCleared), new ToastOptions { Severity = InfoBarSeverity.Success });
                 _storage = null;
                 RefreshStorage(post);
             });
@@ -579,7 +581,7 @@ sealed partial class SettingsPage
             catch { }
             post(() =>
             {
-                Toasts.Show(Loc.Get(Strings.Settings.Storage.LicenseKeysCleared), ToastSeverity.Success);
+                Toast.Show(Loc.Get(Strings.Settings.Storage.LicenseKeysCleared), new ToastOptions { Severity = InfoBarSeverity.Success });
                 _storage = null;
                 RefreshStorage(post);
             });

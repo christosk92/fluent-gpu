@@ -195,29 +195,74 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         return false;
     }
 
-    /// <summary>Register a render-produced persistent texture under an ordinary image id. Ownership transfers on
-    /// success; eviction follows the same fence-deferred path as standalone decoded images.</summary>
-    internal bool TryAdoptBaked(int id, ID3D12Resource* resource, int w, int h)
+    /// <summary>Copy a render-produced image out of a temporary shader-readable target into the ordinary atlas/pool
+    /// residency path. Pool growth may allocate once, but steady derivatives reuse the same placements as decoded art;
+    /// no committed output render target is created per bake.</summary>
+    internal bool TryAdoptBakedFrom(ID3D12GraphicsCommandList* cmd, int id, ID3D12Resource* source, int w, int h)
     {
         AssertRenderThread();
-        if (resource == null || w <= 0 || h <= 0 || !TryAcquireSlot(out int slot)) return false;
+        if (source == null || w <= 0 || h <= 0) return false;
+        int bucket = BucketFor(Math.Max(w, h));
+        bool wantAtlas = bucket <= 128;
+        Tex t = default;
+        if (wantAtlas)
+        {
+            if (!AcquireCell(bucket, out int page, out int cx, out int cy)) return false;
+            t.Atlas = true; t.Page = page; t.Slot = -1; t.Bucket = bucket;
+            t.Srv = _pages[page].Srv; t.TexSize = PageSize; t.Ox = cx; t.Oy = cy;
+        }
+        else if (bucket <= 512)
+        {
+            if (!AcquirePooled(bucket, out var pt)) return false;
+            t.Resource = pt.Resource; t.Srv = pt.Srv; t.Slot = pt.Slot; t.Bucket = bucket;
+            t.TexSize = bucket; t.State = pt.State;
+        }
+        else
+        {
+            if (!TryAcquireSlot(out int slot)) return false;
+            t.Resource = CreateTexture(w, h); t.Slot = slot; t.Bucket = 0;
+            t.TexSize = Math.Max(w, h); t.State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST;
+            CreateSrv(t.Resource, slot, out t.Srv);
+        }
+
         if (_byId.Remove(id, out var old))
         {
             _pendingCopies.Remove(id);
             RetirePlacement(ref old);
             if (old.Atlas) _atlasCount--; else if (old.Bucket > 0) _poolCount--;
         }
-        var t = new Tex
+
+        ID3D12Resource* destination = t.Atlas ? _pages[t.Page].Tex : t.Resource;
+        D3D12_RESOURCE_STATES destinationState = t.Atlas ? _pages[t.Page].State : t.State;
+        Transition(cmd, source, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_SOURCE);
+        if (destinationState != D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST)
+            Transition(cmd, destination, destinationState, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST);
+
+        D3D12_TEXTURE_COPY_LOCATION dst = default;
+        dst.pResource = destination;
+        dst.Type = D3D12_TEXTURE_COPY_TYPE.D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        dst.Anonymous.SubresourceIndex = 0;
+        D3D12_TEXTURE_COPY_LOCATION src = default;
+        src.pResource = source;
+        src.Type = D3D12_TEXTURE_COPY_TYPE.D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        src.Anonymous.SubresourceIndex = 0;
+        D3D12_BOX box = new() { right = (uint)w, bottom = (uint)h, back = 1 };
+        cmd->CopyTextureRegion(&dst, (uint)t.Ox, (uint)t.Oy, 0, &src, &box);
+
+        Transition(cmd, destination, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        Transition(cmd, source, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_SOURCE,
+            D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        t.W = w; t.H = h; t.Live = true; t.NeedsCopy = false;
+        t.State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        if (t.Atlas)
         {
-            Resource = resource,
-            Slot = slot,
-            W = w,
-            H = h,
-            TexSize = Math.Max(w, h),
-            State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-            Live = true,
-        };
-        CreateSrv(resource, slot, out t.Srv);
+            _pages[t.Page].State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+            _pages[t.Page].Live = true;
+            _atlasCount++;
+        }
+        else if (t.Bucket > 0) _poolCount++;
         _byId[id] = t;
         return true;
     }

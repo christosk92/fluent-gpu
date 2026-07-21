@@ -694,11 +694,11 @@ PopLayer  → EndRenderPass → (optional IEffectRunner on layerRT) →
 child visual** via `IVideoPresenter` (PAL → DComp; POD `VideoSurfaceId`):
 
 ```csharp
-public interface IVideoPresenter {            // PAL seam; FluentGpu.Windows Pal/ → DComp
-    VideoSurfaceId CreateSurface(in VideoSurfaceDesc d);
+public interface IVideoPresenter {            // PAL seam; FluentGpu.Windows Pal/ → DComp (shape owned by pal-rhi.md)
+    VideoSurfaceId CreateSurface();
+    void BindSurfaceHandle(VideoSurfaceId id, nuint dcompSurfaceHandle);  // surface-handoff + DRM attach point
     void Place(VideoSurfaceId id, in RectPx deviceRect, float opacity, int z);
-    void SetVisible(VideoSurfaceId id, bool on);  void Destroy(VideoSurfaceId id);
-    nint GetMediaPlayerSink(VideoSurfaceId id);   // app binds MediaPlayer/MediaPlayerElement here
+    void SetVisible(VideoSurfaceId id, bool on);  void Destroy(VideoSurfaceId id);  void Commit();
 }
 ```
 Render-thread cost per frame: re-record the scrubber (tiny damage), emit a `DrawVideoCmd` whose batch step

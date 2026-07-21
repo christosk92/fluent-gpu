@@ -8,11 +8,11 @@ namespace FluentGpu.Controls;
 /// <summary>
 /// WinUI <c>ScrollBar</c>. Two surfaces:
 /// <list type="bullet">
-/// <item><see cref="Create"/> — the legacy thin PANNING-indicator variant (thumb-only, absolute drag), kept
+/// <item><c>Create</c> (thin panning overload) — the legacy thin PANNING-indicator variant (thumb-only, absolute drag), kept
 /// source/behavior-compatible (VerticalSlice check 48 and the gallery drive it); it mirrors the template's
 /// VerticalPanningThumb (ScrollBar_themeresources.xaml:714 — Width 2, MinHeight 32, Margin 2,0,2,0, NO
 /// hover/press states — the touch indicator).</item>
-/// <item><see cref="Anatomy"/> — the full WinUI mouse scrollbar: 12px rail (ScrollBarSize :180), acrylic track
+/// <item><c>Create</c> (full-anatomy signal overload) — the full WinUI mouse scrollbar: 12px rail (ScrollBarSize :180), acrylic track
 /// (ScrollBarTrackFill = AcrylicInAppFillColorDefaultBrush, :31/:143 both themes), two arrow RepeatButtons
 /// (vertical glyphs EDDB up / EDDC down, horizontal EDD9 left / EDDA right, FontSize 8 — :387/:344/:301/:258/:186;
 /// pressed arrow scale 0.875 :187; Interval=50 like every template RepeatButton :681-711), track-click PAGE
@@ -111,14 +111,14 @@ public static partial class ScrollBar
     /// template's VerticalPanningThumb: 2px thumb, 32px min length, 2px side margins (ScrollBar_themeresources
     /// .xaml:714). <paramref name="parts"/> = per-part styling (only <see cref="PartThumb"/> exists on this
     /// variant).</summary>
-    public static BoxEl Create(float fraction, float position, Action<float> onScroll, float height = 200f, Style? style = null, bool disabled = false, TemplateParts? parts = null)
+    public static BoxEl Create(float fraction, float position, Action<float> onChange, float height = 200f, Style? style = null, bool disabled = false, TemplateParts? parts = null)
     {
         var s = style ?? DefaultStyle;
         fraction = Math.Clamp(fraction, 0.05f, 1f);
         position = Math.Clamp(position, 0f, 1f);
         float thumbH = MathF.Max(s.MinThumb, fraction * height);
         float travel = MathF.Max(1f, height - thumbH);
-        void Set(Point2 p) => onScroll(Math.Clamp((p.Y - thumbH * 0.5f) / travel, 0f, 1f));
+        void Set(Point2 p) => onChange(Math.Clamp((p.Y - thumbH * 0.5f) / travel, 0f, 1f));
         var thumb = new BoxEl
         {
             Width = s.ThumbWidth, Height = thumbH, Corners = CornerRadius4.All(s.CornerRadius),
@@ -144,20 +144,10 @@ public static partial class ScrollBar
     }
 
     /// <summary>
-    /// The full WinUI mouse-scrollbar anatomy with a FROZEN position (component props freeze at mount — use the
-    /// <see cref="Anatomy(float, Signal{float}, Action{float}, float, bool, TemplateParts, bool, float, float)"/>
-    /// signal overload for a live, app-controlled position).
-    /// </summary>
-    public static Element Anatomy(float fraction, float position, Action<float> onScroll,
-                                  float length = 200f, bool disabled = false, TemplateParts? parts = null,
-                                  bool horizontal = false, float largeChange01 = float.NaN, float smallChange01 = float.NaN)
-        => Anatomy(fraction, new Signal<float>(Math.Clamp(position, 0f, 1f)), onScroll, length, disabled, parts,
-                   horizontal, largeChange01, smallChange01);
-
-    /// <summary>
-    /// The full WinUI mouse-scrollbar anatomy (see the class doc for cites). <paramref name="fraction"/> =
-    /// viewport/content (thumb proportion); <paramref name="position"/> = offset/(content−viewport) in 0..1, read
-    /// through a signal so writes move the thumb compositor-instantly (no re-render); <paramref name="onScroll"/>
+    /// The ONE canonical full WinUI mouse-scrollbar anatomy (WS3 creation idiom; see the class doc for cites).
+    /// <paramref name="fraction"/> = viewport/content (thumb proportion); <paramref name="position"/> = a caller-owned
+    /// <see cref="FloatSignal"/> holding offset/(content−viewport) in 0..1, read compositor-instant (a write moves the
+    /// thumb the same frame, no re-render), <c>null</c> ⇒ an internal static (fixed) position; <paramref name="onChange"/>
     /// receives the new position for every interaction: thumb drag (absolute), track-click paging (one VIEWPORT
     /// per page — LargeDecrement→IScrollInfo::PageUp = SetVerticalOffset(offset − viewport),
     /// ScrollViewer_Partial.cpp:3146-3150 / ScrollContentPresenter_Partial.cpp:543-547 — auto-repeating at the
@@ -167,16 +157,17 @@ public static partial class ScrollBar
     /// <paramref name="largeChange01"/>/<paramref name="smallChange01"/> override the page/line amounts in 0..1
     /// position units (NaN = the WinUI-derived defaults above; pass 16/scrollableExtentPx for the exact line when
     /// the real content extent is known). <paramref name="parts"/> = per-part styling keyed by the <c>PartXxx</c>
-    /// consts (see <see cref="TemplateParts"/> for the contract).
+    /// consts (see <see cref="TemplateParts"/> for the contract). The legacy thin panning-indicator variant remains a
+    /// distinct overload of <see cref="Create(float, float, Action{float}, float, Style, bool, TemplateParts)"/>.
     /// </summary>
-    public static Element Anatomy(float fraction, Signal<float> position, Action<float> onScroll,
-                                  float length = 200f, bool disabled = false, TemplateParts? parts = null,
-                                  bool horizontal = false, float largeChange01 = float.NaN, float smallChange01 = float.NaN)
+    public static Element Create(float fraction, FloatSignal? position = null, Action<float>? onChange = null,
+                                 float length = 200f, bool disabled = false, TemplateParts? parts = null,
+                                 bool horizontal = false, float largeChange01 = float.NaN, float smallChange01 = float.NaN)
         => Embed.Comp(() => new ScrollBarAnatomy
         {
             Fraction = fraction,
-            Position = position,
-            OnScroll = onScroll,
+            Position = position ?? new FloatSignal(0f),
+            OnChange = onChange,
             Length = length,
             Disabled = disabled,
             Parts = parts,
@@ -186,7 +177,7 @@ public static partial class ScrollBar
         });
 }
 
-/// <summary>Component behind <see cref="ScrollBar.Anatomy"/> — owns the WinUI "conscious" state machine:
+/// <summary>Component behind <see cref="ScrollBar.Create(float, FloatSignal, Action{float}, float, bool, TemplateParts, bool, float, float)"/> — owns the WinUI "conscious" state machine:
 /// lane-hover dwell 400ms → expand / lane-leave dwell 500ms → contract (the template storyboards' BeginTimes,
 /// modeled as a debounce so geometry never rides a delayed FLIP), then the 167ms KeySpline(0,0,0,1) cross-axis
 /// width 2↔6 + the 83ms linear chrome fades, stepped per frame by a mounted <see cref="FrameClock"/> ticker
@@ -199,8 +190,8 @@ public static partial class ScrollBar
 internal sealed class ScrollBarAnatomy : Component
 {
     public float Fraction;
-    public required Signal<float> Position;
-    public Action<float>? OnScroll;
+    public required FloatSignal Position;
+    public Action<float>? OnChange;
     public float Length = 200f;
     public bool Disabled;
     /// <summary>Mirror the anatomy on the X axis (WinUI HorizontalRoot, ScrollBar_themeresources.xaml:672-693).</summary>
@@ -419,7 +410,7 @@ internal sealed class ScrollBarAnatomy : Component
 
     private float MainOf(Point2 p) => Horizontal ? p.X : p.Y;
 
-    private void Move(float to) => OnScroll?.Invoke(Math.Clamp(to, 0f, 1f));
+    private void Move(float to) => OnChange?.Invoke(Math.Clamp(to, 0f, 1f));
 
     /// <summary>The strip gesture's release edge (wired as the strip's OnClick — an OnDrag gesture delivers its
     /// release to the gesture owner via implicit capture): ends a held page-repeat and replays a lane exit that

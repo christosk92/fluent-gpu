@@ -228,65 +228,67 @@ public sealed class ItemsView : Component
     public string? ScrollKey;
     public (Func<ScrollGeometry, long> Project, Action<ScrollGeometry> Action)? OnScrollGeometryChanged;
 
+    // ── research adjustment #16 — virtualization knobs (forwarded to the built VirtualListEl / applied per-container) ──
+    /// <summary>Recycle-pool discriminator (bound path): heterogeneous rows only rebind within their content-type pool.</summary>
+    public Func<int, int>? ContentType;
+    /// <summary>Pre-realize cache extent in PIXELS beyond the viewport (overrides row-based <see cref="OverscanItems"/> when set).</summary>
+    public float CacheExtentPx = float.NaN;
+    /// <summary>Per-item paint isolation: wrap each realized item container as a layout/paint boundary (IsolateLayout + clip).</summary>
+    public bool RepaintBoundary;
+    // ── research adjustment #5 — keep-alive-but-hidden slot (bound path) ──
+    /// <summary>Keep-alive predicate (bound path): an item whose slot must park hidden instead of index-rebinding off-window.</summary>
+    public Func<int, bool>? KeepAlive;
+    /// <summary>Bounded keep-alive bucket cap (default 8; LRU-evicted beyond it).</summary>
+    public int KeepAliveCap = 8;
+
     /// <summary>Legacy demo factory (compat): a single-selectable grid of labeled tiles, now riding the full
     /// L0–L3 substrate (virtualized grid + ItemContainer chrome + keyboard nav). Natural-sized (Grow 0): the demo
     /// grid sits in an auto-height gallery card, so the view measures to its grid's ContentExtent.</summary>
     public static Element Create(IReadOnlyList<string> items, int columns = 4)
         => Embed.Comp(() => new ItemsView { Items = items, Columns = columns, Grow = 0f });
 
-    /// <summary>The full WinUI-shaped factory: templated items over any <see cref="RepeatLayout"/>.</summary>
+    /// <summary>The canonical WinUI-shaped factory: templated items over any <see cref="RepeatLayout"/>. The ~20 former
+    /// named arguments collapse into <paramref name="options"/> (a <see cref="ListOptions"/> record + the grouped
+    /// <see cref="ScrollOptions"/>/<see cref="ReorderOptions"/> sub-records); the options are UNPACKED to the component's
+    /// fields at factory time — the recycling hot path never reads the record.</summary>
     public static Element Create(int itemCount, Func<int, Element> itemTemplate, RepeatLayout layout,
-                                 ItemsSelectionMode selectionMode = ItemsSelectionMode.Single,
-                                 SelectionModel? selection = null,
-                                 bool isItemInvokedEnabled = false,
-                                 Action<int>? itemInvoked = null,
-                                 Action? selectionChanged = null,
-                                 Func<int, string>? itemText = null,
-                                 Func<int, bool>? isItemEnabled = null,
-                                 ItemsViewController? controller = null,
-                                 int overscan = 4,
-                                 ItemContainerFactory? containerFactory = null,
-                                 Func<int, string>? keyOf = null,
-                                 float grow = 1f,
-                                 ItemCollectionTransition? transition = null,
-                                 SelectorVisual selector = SelectorVisual.Border,
-                                 Func<int, (float, float)>? itemDisplacement = null,
-                                 IReadSignal<int>? displacementVersion = null,
-                                 IReadSignal<int>? draggedSlot = null,
-                                 Func<int, ItemChromeState, PartDelta>? partDelta = null,
-                                 bool suppressScrollBar = false,
-                                 bool autoEdgeFade = false,
-                                 string? scrollKey = null,
-                                 (Func<ScrollGeometry, long> Project, Action<ScrollGeometry> Action)? onScrollGeometryChanged = null)
-        => Embed.Comp(() => new ItemsView
+                                 ListOptions? options = null)
+    {
+        var o = options ?? ListOptions.Default;
+        return Embed.Comp(() => new ItemsView
         {
             ItemCount = itemCount,
             ItemTemplate = itemTemplate,
             Layout = layout,
             HasExplicitLayout = true,
-            SelectionMode = selectionMode,
-            Selection = selection,
-            IsItemInvokedEnabled = isItemInvokedEnabled,
-            ItemInvoked = itemInvoked,
-            SelectionChanged = selectionChanged,
-            ItemText = itemText,
-            IsItemEnabled = isItemEnabled,
-            Controller = controller,
-            OverscanItems = overscan,
-            ContainerFactory = containerFactory,
-            KeyOf = keyOf,
-            Grow = grow,
-            SuppressScrollBar = suppressScrollBar,
-            ScrollKey = scrollKey,
-            AutoEdgeFade = autoEdgeFade,
-            Transition = transition,
-            Selector = selector,
-            ItemDisplacement = itemDisplacement,
-            DisplacementVersion = displacementVersion,
-            DraggedSlot = draggedSlot,
-            PartDelta = partDelta,
-            OnScrollGeometryChanged = onScrollGeometryChanged,
+            SelectionMode = o.SelectionMode,
+            Selection = o.Selection,
+            IsItemInvokedEnabled = o.IsItemInvokedEnabled,
+            ItemInvoked = o.OnInvoked,
+            SelectionChanged = o.OnChange,
+            ItemText = o.ItemText,
+            IsItemEnabled = o.IsItemEnabled,
+            Controller = o.Controller,
+            OverscanItems = o.Overscan,
+            ContainerFactory = o.ContainerFactory,
+            KeyOf = o.KeyOf,
+            Grow = o.Grow,
+            SuppressScrollBar = o.Scroll?.SuppressScrollBar ?? false,
+            ScrollKey = o.Scroll?.ScrollKey,
+            AutoEdgeFade = o.Scroll?.AutoEdgeFade ?? false,
+            OnScrollGeometryChanged = o.Scroll?.OnScrollGeometryChanged,
+            Transition = o.Transition,
+            Selector = o.Selector,
+            ItemDisplacement = o.Reorder?.ItemDisplacement,
+            DisplacementVersion = o.Reorder?.DisplacementVersion,
+            DraggedSlot = o.Reorder?.DraggedSlot,
+            PartDelta = o.PartDelta,
+            ContentType = o.ContentType,
+            CacheExtentPx = o.CacheExtentPx,
+            RepaintBoundary = o.RepaintBoundary,
+            ItemCountSignal = o.CountSignal,
         });
+    }
 
     /// <summary>The SIGNALS-FIRST bound factory: the same WinUI ItemsView substrate (selection model, keyboard nav,
     /// typeahead, invoke, controller, reorder) but rows are PERSISTENT bound slots instead of a rebuilt-per-index
@@ -297,121 +299,107 @@ public sealed class ItemsView : Component
     /// re-skin in place via signal writes — no list re-render, no row rebuild, no Enter-transition replay. Requires a
     /// VIRTUAL layout (Stack/Grid/Custom); the small-collection Wrap/Inline fallback has no bound path.</summary>
     public static Element CreateBound(int itemCount, Func<RowScope, Element> rowTemplate, RepeatLayout layout,
-                                      ItemsSelectionMode selectionMode = ItemsSelectionMode.Single,
-                                      SelectionModel? selection = null,
-                                      bool isItemInvokedEnabled = false,
-                                      Action<int>? itemInvoked = null,
-                                      Action? selectionChanged = null,
-                                      Func<int, string>? itemText = null,
-                                      Func<int, bool>? isItemEnabled = null,
-                                      ItemsViewController? controller = null,
-                                      int overscan = 4,
-                                      float grow = 1f,
-                                      Func<int, (float, float)>? itemDisplacement = null,
-                                      IReadSignal<int>? displacementVersion = null,
-                                      IReadSignal<int>? draggedSlot = null,
-                                      bool suppressScrollBar = false,
-                                      bool autoEdgeFade = false,
-                                      bool staggerColdRealize = false,
-                                      string? scrollKey = null,
-                                      Func<int, (float dx, float dy)?>? itemFlipFrom = null,
-                                      Func<int, (float from, float delayMs)?>? itemFadeFrom = null,
-                                      (Func<ScrollGeometry, long> Project, Action<ScrollGeometry> Action)? onScrollGeometryChanged = null,
-                                      IReadSignal<int>? itemCountSignal = null)
-        => Embed.Comp(() => new ItemsView
+                                      ListOptions? options = null)
+    {
+        var o = options ?? ListOptions.Default;
+        return Embed.Comp(() => new ItemsView
         {
             ItemCount = itemCount,
-            ItemCountSignal = itemCountSignal,
+            ItemCountSignal = o.CountSignal,
             RowTemplate = rowTemplate,
             BoundMode = true,
-            StaggerColdRealize = staggerColdRealize,
+            StaggerColdRealize = o.Entrance?.StaggerColdRealize ?? false,
             Layout = layout,
             HasExplicitLayout = true,
-            SelectionMode = selectionMode,
-            Selection = selection,
-            IsItemInvokedEnabled = isItemInvokedEnabled,
-            ItemInvoked = itemInvoked,
-            SelectionChanged = selectionChanged,
-            ItemText = itemText,
-            IsItemEnabled = isItemEnabled,
-            Controller = controller,
-            OverscanItems = overscan,
-            Grow = grow,
-            SuppressScrollBar = suppressScrollBar,
-            ScrollKey = scrollKey,
-            AutoEdgeFade = autoEdgeFade,
-            ItemDisplacement = itemDisplacement,
-            DisplacementVersion = displacementVersion,
-            DraggedSlot = draggedSlot,
-            ItemFlipFrom = itemFlipFrom,
-            ItemFadeFrom = itemFadeFrom,
-            OnScrollGeometryChanged = onScrollGeometryChanged,
+            SelectionMode = o.SelectionMode,
+            Selection = o.Selection,
+            IsItemInvokedEnabled = o.IsItemInvokedEnabled,
+            ItemInvoked = o.OnInvoked,
+            SelectionChanged = o.OnChange,
+            ItemText = o.ItemText,
+            IsItemEnabled = o.IsItemEnabled,
+            Controller = o.Controller,
+            OverscanItems = o.Overscan,
+            Grow = o.Grow,
+            SuppressScrollBar = o.Scroll?.SuppressScrollBar ?? false,
+            ScrollKey = o.Scroll?.ScrollKey,
+            AutoEdgeFade = o.Scroll?.AutoEdgeFade ?? false,
+            OnScrollGeometryChanged = o.Scroll?.OnScrollGeometryChanged,
+            ItemDisplacement = o.Reorder?.ItemDisplacement,
+            DisplacementVersion = o.Reorder?.DisplacementVersion,
+            DraggedSlot = o.Reorder?.DraggedSlot,
+            ItemFlipFrom = o.Entrance?.ItemFlipFrom,
+            ItemFadeFrom = o.Entrance?.ItemFadeFrom,
+            ContentType = o.ContentType,
+            CacheExtentPx = o.CacheExtentPx,
+            RepaintBoundary = o.RepaintBoundary,
+            KeepAlive = o.KeepAlive,
+            KeepAliveCap = o.KeepAliveCap,
         });
+    }
 
     /// <summary>The typed bound factory. The collection snapshot and recycled slot index are resolved together through
     /// <paramref name="items"/>, so every row property can read <see cref="BoundItemScope{T}.Item"/> without capturing
     /// a mount-time list instance. The row template still runs once per slot; source changes re-run only computations
     /// that read the item signal. Typed callbacks resolve the current item at invocation time.</summary>
     public static Element CreateBound<T>(BoundItemsSource<T> items, Func<BoundItemScope<T>, Element> rowTemplate,
-                                         RepeatLayout layout,
-                                         ItemsSelectionMode selectionMode = ItemsSelectionMode.Single,
-                                         SelectionModel? selection = null,
-                                         bool isItemInvokedEnabled = false,
-                                         Action<int, T>? itemInvoked = null,
-                                         Action? selectionChanged = null,
-                                         Func<int, T, string>? itemText = null,
-                                         Func<int, T, bool>? isItemEnabled = null,
-                                         ItemsViewController? controller = null,
-                                         int overscan = 4,
-                                         float grow = 1f,
-                                         Func<int, (float, float)>? itemDisplacement = null,
-                                         IReadSignal<int>? displacementVersion = null,
-                                         IReadSignal<int>? draggedSlot = null,
-                                         bool suppressScrollBar = false,
-                                         bool autoEdgeFade = false,
-                                         bool staggerColdRealize = false,
-                                         string? scrollKey = null,
-                                         Func<int, (float dx, float dy)?>? itemFlipFrom = null,
-                                         Func<int, (float from, float delayMs)?>? itemFadeFrom = null,
-                                         (Func<ScrollGeometry, long> Project, Action<ScrollGeometry> Action)? onScrollGeometryChanged = null)
+                                         RepeatLayout layout, ListOptions<T>? options = null)
     {
         ArgumentNullException.ThrowIfNull(items);
         ArgumentNullException.ThrowIfNull(rowTemplate);
+        var o = options ?? new ListOptions<T>();
 
-        Action<int>? invoke = itemInvoked is null ? null : i =>
+        // Typed callbacks WIN over the untyped ones (both resolve the current item at invocation time — no capture).
+        Action<int, T>? typedInvoke = o.OnInvokedTyped;
+        Action<int>? untypedInvoke = o.OnInvoked;
+        Action<int>? invoke = typedInvoke is not null
+            ? i => { if (items.TryPeek(i, out var item)) typedInvoke(i, item); }
+            : untypedInvoke;
+
+        Func<int, T, string>? typedText = o.ItemTextTyped;
+        Func<int, string>? text = typedText is not null
+            ? i => items.TryPeek(i, out var item) ? typedText(i, item) : string.Empty
+            : o.ItemText;
+
+        Func<int, T, bool>? typedEnabled = o.IsItemEnabledTyped;
+        Func<int, bool>? enabled = typedEnabled is not null
+            ? i => items.TryPeek(i, out var item) && typedEnabled(i, item)
+            : o.IsItemEnabled;
+
+        // Rebuild a base ListOptions with the bridged callbacks + the typed source's reactive count.
+        var baseOptions = new ListOptions
         {
-            if (items.TryPeek(i, out var item)) itemInvoked(i, item);
+            SelectionMode = o.SelectionMode,
+            Selection = o.Selection,
+            IsItemInvokedEnabled = o.IsItemInvokedEnabled,
+            OnInvoked = invoke,
+            OnChange = o.OnChange,
+            ItemText = text,
+            IsItemEnabled = enabled,
+            Controller = o.Controller,
+            Overscan = o.Overscan,
+            Grow = o.Grow,
+            Selector = o.Selector,
+            ContainerFactory = o.ContainerFactory,
+            KeyOf = o.KeyOf,
+            Transition = o.Transition,
+            PartDelta = o.PartDelta,
+            CountSignal = items.Count,
+            Scroll = o.Scroll,
+            Reorder = o.Reorder,
+            Entrance = o.Entrance,
+            ContentType = o.ContentType,
+            CacheExtentPx = o.CacheExtentPx,
+            RepaintBoundary = o.RepaintBoundary,
+            KeepAlive = o.KeepAlive,
+            KeepAliveCap = o.KeepAliveCap,
         };
-        Func<int, string>? text = itemText is null ? null : i =>
-            items.TryPeek(i, out var item) ? itemText(i, item) : string.Empty;
-        Func<int, bool>? enabled = isItemEnabled is null ? null : i =>
-            items.TryPeek(i, out var item) && isItemEnabled(i, item);
 
         return CreateBound(
             items.Count.Peek(),
             scope => rowTemplate(new BoundItemScope<T>(scope, items.BindItem(scope.Index))),
             layout,
-            selectionMode,
-            selection,
-            isItemInvokedEnabled,
-            invoke,
-            selectionChanged,
-            text,
-            enabled,
-            controller,
-            overscan,
-            grow,
-            itemDisplacement,
-            displacementVersion,
-            draggedSlot,
-            suppressScrollBar,
-            autoEdgeFade,
-            staggerColdRealize,
-            scrollKey,
-            itemFlipFrom,
-            itemFadeFrom,
-            onScrollGeometryChanged,
-            items.Count);
+            baseOptions);
     }
 
     // ── built-in presets (the former ListView/GridView controls, folded onto ItemsView) ──────────────
@@ -486,7 +474,7 @@ public sealed class ItemsView : Component
     public override Element Render()
     {
         var hooks = UseContext(InputHooks.Current);
-        var ownModel = UseMemo(static () => new SelectionModel());
+        var ownModel = UseMemo(static () => new SelectionModel(), DepKey.Empty);
         var current = UseSignal(-1);                       // CurrentItemIndex (idl:46-47, default −1)
         var viewportNode = UseRef(NodeHandle.Null);        // the VirtualListEl scene node (OnRealized capture)
         var subscribed = UseRef<SelectionModel?>(null);
@@ -526,7 +514,7 @@ public sealed class ItemsView : Component
                 RepeatKind.Custom => spec.CustomLayout,
                 _ => null,   // Wrap/Inline — non-virtual fallback
             },
-            spec.Kind, spec.Extent, spec.Gap, spec.Columns, spec.MinCellWidth, spec.Estimate, spec.Horizontal, spec.CustomLayout ?? (object)0);
+            DepKey.From(HashCode.Combine((int)spec.Kind, spec.Extent, spec.Gap, spec.Columns, spec.MinCellWidth, spec.Estimate, spec.Horizontal, spec.CustomLayout)));
         bool horizontal = spec.Horizontal;
 
         var sceneRef = Context.Scene;
@@ -1153,6 +1141,16 @@ public sealed class ItemsView : Component
             };
         }
 
+        // #16 RepaintBoundary: isolate each realized item container's layout/paint (IsolateLayout + ClipToBounds) so an
+        // item's internal invalidation can't escape to relayout the whole list. Applied to the virtual realize paths.
+        if (RepaintBoundary)
+        {
+            if (rowBind is { } rb)
+                rowBind = i => { var e = rb(i); return e is BoxEl b ? b with { IsolateLayout = true, ClipToBounds = true } : e; };
+            var rt = realizeTemplate;
+            realizeTemplate = i => { var e = rt(i); return e is BoxEl b ? b with { IsolateLayout = true, ClipToBounds = true } : e; };
+        }
+
         Element itemsHost = rowBind is not null && layout is not null
             // Bound slots: the RowBind path (RealizeBoundWindow) — persistent rows, recycle by index-signal write.
             ? new VirtualListEl
@@ -1162,6 +1160,10 @@ public sealed class ItemsView : Component
                 RowBind = rowBind,
                 StaggerColdRealize = StaggerColdRealize,
                 Overscan = OverscanItems,
+                CacheExtentPx = CacheExtentPx,
+                ContentType = ContentType,       // #16 recycle-pool discriminator (bound path)
+                KeepAlive = KeepAlive,           // #5 keep-alive-but-hidden bucket (bound path)
+                KeepAliveCap = KeepAliveCap,
                 Horizontal = horizontal,
                 EdgeCues = EdgeCues,
                 AutoEdgeFade = AutoEdgeFade,
@@ -1179,6 +1181,7 @@ public sealed class ItemsView : Component
                 RenderItem = realizeTemplate,
                 KeyOf = KeyOf,
                 Overscan = OverscanItems,
+                CacheExtentPx = CacheExtentPx,   // #16 pixel cache extent (both paths)
                 Horizontal = horizontal,
                 EdgeCues = EdgeCues,
                 AutoEdgeFade = AutoEdgeFade,

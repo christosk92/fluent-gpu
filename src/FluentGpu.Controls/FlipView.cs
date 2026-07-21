@@ -2,6 +2,7 @@ using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
 
@@ -19,7 +20,7 @@ public static class FlipView
 {
     /// <summary>String-item convenience: each entry renders centered at 20px primary text.</summary>
     public static Element Create(IReadOnlyList<string> items, float width = 400f, float height = 240f,
-                                 int selectedIndex = 0, Action<int>? onSelectionChanged = null,
+                                 Signal<int>? selectedIndex = null, Action<int>? onChange = null,
                                  bool useTouchAnimationsForAllNavigation = true, bool vertical = false)
     {
         var cells = new Element[items.Count];
@@ -29,29 +30,27 @@ public static class FlipView
                 AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                 Children = [new TextEl(items[i]) { Size = 20f, Color = Tok.TextPrimary }],
             };
-        return Create(cells, width, height, selectedIndex, onSelectionChanged, useTouchAnimationsForAllNavigation, vertical);
+        return Create(cells, width, height, selectedIndex, onChange, useTouchAnimationsForAllNavigation, vertical);
     }
 
     /// <summary>Arbitrary per-item content (the WinUI FlipViewItem surface — FlipViewItem_themeresources.xaml:23-25).
     /// Each item fills its page cell (FlipViewItem Horizontal/VerticalContentAlignment = Stretch, :17-18).
     /// <paramref name="selectedIndex"/> is live-controlled: a changed value navigates the view (the Selector
     /// SelectedIndex DP, FlipView_Partial.cpp:1607-1613); internal navigation reports through
-    /// <paramref name="onSelectionChanged"/> (SelectionChanged).</summary>
+    /// <paramref name="onChange"/> (SelectionChanged).</summary>
     public static Element Create(IReadOnlyList<Element> items, float width = 400f, float height = 240f,
-                                 int selectedIndex = 0, Action<int>? onSelectionChanged = null,
+                                 Signal<int>? selectedIndex = null, Action<int>? onChange = null,
                                  bool useTouchAnimationsForAllNavigation = true, bool vertical = false)
-        => Ctx.Provide(Props.Channel,
-                       new Props(items, width, height, selectedIndex, onSelectionChanged,
-                                 useTouchAnimationsForAllNavigation, vertical),
-                       Embed.Comp(() => new FlipViewCore()));
+        => Embed.Comp(new Props(items, width, height, selectedIndex, onChange,
+                                useTouchAnimationsForAllNavigation, vertical),
+                      () => new FlipViewCore());
 
-    /// <summary>Controlled props via context — a reused ComponentEl never re-runs its factory, so props must flow
-    /// through a provider (the SelectorBar/PipsPager convention).</summary>
-    internal sealed record Props(IReadOnlyList<Element> Items, float Width, float Height, int SelectedIndex,
-                                 Action<int>? OnSelectionChanged, bool UseTouchAnimations, bool Vertical)
-    {
-        internal static readonly Context<Props?> Channel = new(null);
-    }
+    /// <summary>Controlled props RE-PUSHED to the core (<c>Embed.Comp(props, …)</c>) — a reused ComponentEl never
+    /// re-runs its factory, so props are delivered live (equality-gated); the core reads them with <c>UseProps</c>
+    /// (the SelectorBar/PipsPager convention). The selected index is a caller <see cref="Signal{T}"/> read directly
+    /// (null ⇒ auto-materialize); navigation WRITES it then fires OnChange, a programmatic write re-skins with no echo.</summary>
+    internal sealed record Props(IReadOnlyList<Element> Items, float Width, float Height, Signal<int>? SelectedIndex,
+                                 Action<int>? OnChange, bool UseTouchAnimations, bool Vertical);
 }
 
 /// <summary>The stateful core: the clamped Selector index, the sliding item strip, the 3s-fading navigation bars,
@@ -92,13 +91,12 @@ internal sealed class FlipViewCore : Component
     public override Element Render()
     {
         // Hooks — stable order, unconditionally.
-        var props = UseContext(FlipView.Props.Channel);
+        var props = UseProps<FlipView.Props>();
         var hooks = UseContext(InputHooks.Current);   // PointerVelocity: real flick speed for the touch commit
-        var (idx, setIdx) = UseState(Math.Max(0, props?.SelectedIndex ?? 0));
+        var own = UseSignal(0);
         var stripRef = UseRef<NodeHandle>(default);
         var stripSeeded = UseRef(false);
-        var lastIdx = UseRef(Math.Max(0, props?.SelectedIndex ?? 0));
-        var lastExternal = UseRef(props?.SelectedIndex ?? 0);
+        var lastIdx = UseRef(0);
         var panKeys = UseRef(new Keyframe[2]);   // reused pan-follow keyframes (0-alloc per pointer move)
         var panStart = UseRef(0f);
         var panBase = UseRef(0f);
@@ -121,20 +119,10 @@ internal sealed class FlipViewCore : Component
         bool animations = p?.UseTouchAnimations ?? true;
         float extent = vertical ? h : w;
         var ch = vertical ? AnimChannel.TranslateY : AnimChannel.TranslateX;
-        int cur = count == 0 ? 0 : Math.Clamp(idx, 0, count - 1);
-
-        // A changed external SelectedIndex wins (the Selector SelectedIndex DP set path — FlipView_Partial.cpp
-        // OnSelectedIndexChanged :1624-1721 — which also raises SelectionChanged, :1607-1613).
-        int external = p?.SelectedIndex ?? 0;
-        UseEffect(() =>
-        {
-            if (external == lastExternal.Value) return;
-            lastExternal.Value = external;
-            int clamped = Math.Clamp(external, 0, Math.Max(0, count - 1));
-            if (clamped == cur) return;
-            setIdx(clamped);
-            p?.OnSelectionChanged?.Invoke(clamped);
-        }, external);
+        var sig = p?.SelectedIndex ?? own;   // caller's value signal, else the internal one (one code path)
+        // The signal IS the selection source: reading it directly reflects both internal navigation AND a programmatic
+        // external write (which re-skins/glides with no onChange echo — the reconciliation is subsumed by the signal).
+        int cur = count == 0 ? 0 : Math.Clamp(sig.Value, 0, count - 1);
 
         // Strip offset follows the selection. Adjacent ±1 changes glide (WinUI ScrollViewer.BringIntoViewport DManip
         // inertia when UseTouchAnimationsForAllNavigation, FlipView_Partial.cpp:1643-1699 — substituted with the
@@ -164,15 +152,15 @@ internal sealed class FlipViewCore : Component
             {
                 anim.Animate(stripRef.Value, ch, to, to, 1f, Easing.Linear);   // jump
             }
-        }, cur, count, vertical, w, h, animations);
+        }, DepKey.From(HashCode.Combine(cur, count, vertical, w, h, animations)));
 
         // ── Selection (clamped — MoveNext stops at nCount-1, MovePrevious at 0; FlipView_Partial.cpp:131-139/:165-171)
         void Select(int target)
         {
             target = Math.Clamp(target, 0, count - 1);
             if (target == cur) return;
-            setIdx(target);
-            p?.OnSelectionChanged?.Invoke(target);
+            sig.Value = target;
+            p?.OnChange?.Invoke(target);
         }
         bool MoveNext()
         {
@@ -333,8 +321,8 @@ internal sealed class FlipViewCore : Component
             target = Math.Clamp(target, cur - 1, cur + 1);   // adjacent only (the rail)
             if (target != cur)
             {
-                setIdx(target);   // the selection effect glides from the live pan offset
-                p?.OnSelectionChanged?.Invoke(target);
+                sig.Value = target;   // the selection effect glides from the live pan offset
+                p?.OnChange?.Invoke(target);
             }
             else if (!stripRef.Value.IsNull)
             {

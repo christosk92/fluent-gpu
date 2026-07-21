@@ -33,7 +33,7 @@ public static class ConcertUi
         {
             Width = width, Height = height, Shrink = 0f, Gap = 1f,
             Direction = 1, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Corners = CornerRadius4.All(WaveeRadius.Control), Fill = Tok.FillCardSecondary,
+            Corners = CornerRadius4.All(Radii.Control), Fill = Tok.FillCardSecondary,
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             Children =
             [
@@ -76,7 +76,7 @@ public static class ConcertUi
             if (pill) secondary.Add(StatusPill("Near you"));
             lines.Add(new BoxEl
             {
-                Direction = 0, MinWidth = 0f, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S,
+                Direction = 0, MinWidth = 0f, AlignItems = FlexAlign.Center, Gap = Spacing.S,
                 Children = secondary.ToArray(),
             });
         }
@@ -85,9 +85,9 @@ public static class ConcertUi
         {
             Key = concert.Uri,
             Direction = 0, MinHeight = wide ? 76f : 84f, MinWidth = 0f,
-            AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
-            Padding = new Edges4(WaveeSpace.M, WaveeSpace.S, WaveeSpace.M, WaveeSpace.S),
-            Corners = CornerRadius4.All(WaveeRadius.Card),
+            AlignItems = FlexAlign.Center, Gap = Spacing.M,
+            Padding = new Edges4(Spacing.M, Spacing.S, Spacing.M, Spacing.S),
+            Corners = CornerRadius4.All(Radii.Card),
             Fill = Tok.FillCardDefault, HoverFill = Tok.FillControlSecondary, PressedFill = Tok.FillControlTertiary,
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault, ClipToBounds = true,
             Role = AutomationRole.Button, Focusable = true, FocusVisualMargin = new Edges4(2f, 2f, 2f, 2f),
@@ -100,7 +100,7 @@ public static class ConcertUi
                     Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = 2f, Justify = FlexJustify.Center,
                     Children = lines.ToArray(),
                 },
-                Icon(Mdl.ChevronRight, 16f, Tok.TextSecondary) with { Shrink = 0f },
+                Icon(Icons.ChevronRight, 16f, Tok.TextSecondary) with { Shrink = 0f },
             ],
         };
     }
@@ -135,10 +135,9 @@ public static class ConcertUi
         return new BoxEl
         {
             Key = concert.Uri,
-            Direction = 1, MinWidth = 0f, ClipToBounds = true, Gap = WaveeSpace.S,
-            Padding = new Edges4(WaveeSpace.S, WaveeSpace.S, WaveeSpace.S, WaveeSpace.M),
-            Corners = CornerRadius4.All(WaveeRadius.Card),
-            Fill = ColorF.Transparent, HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+            Direction = 1, MinWidth = 0f, ClipToBounds = true, Gap = Spacing.S,
+            Padding = new Edges4(Spacing.S, Spacing.S, Spacing.S, Spacing.M),
+            Corners = CornerRadius4.All(Radii.Card),
             Role = AutomationRole.Button, Focusable = true, FocusVisualMargin = new Edges4(2f, 2f, 2f, 2f),
             Cursor = CursorId.Hand, OnClick = onClick,
             Children =
@@ -150,7 +149,7 @@ public static class ConcertUi
                     Children = text.ToArray(),
                 },
             ],
-        };
+        }.Interactive(Interaction.Subtle);
     }
 
     // Compatibility while the schedule checkpoint lands; Hub/Detail migrate to EventTile in the second pass.
@@ -166,10 +165,9 @@ public static class ConcertUi
         return new BoxEl
         {
             Key = "browse-all-concerts",
-            Direction = 1, MinWidth = 0f, ClipToBounds = true, Gap = WaveeSpace.S,
-            Padding = new Edges4(WaveeSpace.S, WaveeSpace.S, WaveeSpace.S, WaveeSpace.M),
-            Corners = CornerRadius4.All(WaveeRadius.Card),
-            Fill = ColorF.Transparent, HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+            Direction = 1, MinWidth = 0f, ClipToBounds = true, Gap = Spacing.S,
+            Padding = new Edges4(Spacing.S, Spacing.S, Spacing.S, Spacing.M),
+            Corners = CornerRadius4.All(Radii.Card),
             Role = AutomationRole.Button, Focusable = true, FocusVisualMargin = new Edges4(2f, 2f, 2f, 2f),
             Cursor = CursorId.Hand, OnClick = onClick,
             Children =
@@ -177,26 +175,26 @@ public static class ConcertUi
                 new BoxEl
                 {
                     AlignSelf = FlexAlign.Stretch, ZStack = true, ClipToBounds = true,
-                    Corners = CornerRadius4.All(WaveeRadius.Card),
+                    Corners = CornerRadius4.All(Radii.Card),
                     Children =
                     [
                         new ImageEl { Source = "", AspectRatio = 1f, AlignSelf = FlexAlign.Stretch, Placeholder = baseFill },
                         new BoxEl
                         {
-                            Padding = new Edges4(WaveeSpace.M, WaveeSpace.M, WaveeSpace.M, WaveeSpace.M),
+                            Padding = new Edges4(Spacing.M, Spacing.M, Spacing.M, Spacing.M),
                             AlignItems = FlexAlign.Start, Justify = FlexJustify.Start,
-                            Children = [ Icon(Mdl.Calendar, 30f, glyph) ],
+                            Children = [ Icon(Icons.Calendar, 30f, glyph) ],
                         },
                         new BoxEl
                         {
                             AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                            Children = [ Icon(Mdl.MapPin, 44f, glyph) ],
+                            Children = [ Icon(Icons.MapPin, 44f, glyph) ],
                         },
                         new BoxEl
                         {
-                            Padding = new Edges4(WaveeSpace.M, WaveeSpace.M, WaveeSpace.M, WaveeSpace.M),
+                            Padding = new Edges4(Spacing.M, Spacing.M, Spacing.M, Spacing.M),
                             AlignItems = FlexAlign.End, Justify = FlexJustify.End,
-                            Children = [ Icon(Mdl.Calendar, 22f, glyph) ],
+                            Children = [ Icon(Icons.Calendar, 22f, glyph) ],
                         },
                     ],
                 },
@@ -217,7 +215,7 @@ public static class ConcertUi
                     ],
                 },
             ],
-        };
+        }.Interactive(Interaction.Subtle);
     }
 
     // The card's rounded-top media: a fluid square cover (fills the engine-laid-out card width, derives its height via
@@ -228,8 +226,8 @@ public static class ConcertUi
             return new BoxEl
             {
                 AlignSelf = FlexAlign.Stretch, ZStack = true, ClipToBounds = true,
-                Corners = CornerRadius4.All(WaveeRadius.Card),
-                Children = [ Surfaces.ArtworkFill(concert.Image, corners: WaveeRadius.Card, decodePx: 320) ],
+                Corners = CornerRadius4.All(Radii.Card),
+                Children = [ Surfaces.ArtworkFill(concert.Image, corners: Radii.Card, decodePx: 320) ],
             };
 
         ColorF baseFill = Tok.Theme == ThemeKind.Dark ? ColorF.FromRgba(0x1C, 0x1C, 0x1E) : Tok.FillCardSecondary;
@@ -239,14 +237,14 @@ public static class ConcertUi
         return new BoxEl
         {
             AlignSelf = FlexAlign.Stretch, ZStack = true, ClipToBounds = true,
-            Corners = CornerRadius4.All(WaveeRadius.Card),
+            Corners = CornerRadius4.All(Radii.Card),
             Children =
             [
                 new ImageEl { Source = "", AspectRatio = 1f, AlignSelf = FlexAlign.Stretch, Placeholder = pane },
                 new BoxEl
                 {
                     AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                    Children = [ Icon(Mdl.Calendar, 38f, Tok.TextSecondary with { A = 0.72f }) ],
+                    Children = [ Icon(Icons.Calendar, 38f, Tok.TextSecondary with { A = 0.72f }) ],
                 },
             ],
         };
@@ -265,7 +263,7 @@ public static class ConcertUi
             ? ColorF.Lerp(baseFill, WaveePalette.ToColor(argb), dark ? 0.30f : 0.18f)
             : baseFill;
 
-        Element media = SplitHeroMedia(artwork, mediaFill, fallbackGlyph ?? Mdl.Calendar, wide, metrics.MediaHeight);
+        Element media = SplitHeroMedia(artwork, mediaFill, fallbackGlyph ?? Icons.Calendar, wide, metrics.MediaHeight);
         Element groundedCopy = new BoxEl
         {
             Direction = 1, Grow = wide ? 0.56f : 0f, Basis = wide ? 0f : float.NaN, MinWidth = 0f,
@@ -278,7 +276,7 @@ public static class ConcertUi
         {
             Direction = (byte)(wide ? 0 : 1), MinWidth = 0f,
             Height = wide ? metrics.Height : float.NaN,
-            ClipToBounds = true, Corners = CornerRadius4.All(WaveeRadius.Card),
+            ClipToBounds = true, Corners = CornerRadius4.All(Radii.Card),
             Fill = Tok.FillCardDefault, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             Shadow = Elevation.Card,
             Children = wide ? [ groundedCopy, media ] : [ media, groundedCopy ],
@@ -379,7 +377,7 @@ public static class ConcertUi
         {
             Width = width, Height = bandH, ZStack = true, ClipToBounds = true,
             EdgeFade = new EdgeFadeSpec(EdgeMask.Bottom, 112f),
-            Corners = CornerRadius4.All(WaveeRadius.Card),
+            Corners = CornerRadius4.All(Radii.Card),
             Children = bandLayers.ToArray(),
         };
 
@@ -404,7 +402,7 @@ public static class ConcertUi
             ? copy
             : new BoxEl
             {
-                Direction = 0, AlignItems = FlexAlign.End, Gap = WaveeSpace.M, MinWidth = 0f,
+                Direction = 0, AlignItems = FlexAlign.End, Gap = Spacing.M, MinWidth = 0f,
                 Children = [ copy, new BoxEl { Width = 260f, Shrink = 0f, Children = [ trailing ] } ],
             };
 
@@ -460,9 +458,9 @@ public static class ConcertUi
         return new BoxEl
         {
             Key = "spotlight:" + concert.Uri,
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.L, MinWidth = 0f,
-            Padding = new Edges4(WaveeSpace.L, WaveeSpace.M, WaveeSpace.L, WaveeSpace.M),
-            Corners = CornerRadius4.All(WaveeRadius.Card),
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.L, MinWidth = 0f,
+            Padding = new Edges4(Spacing.L, Spacing.M, Spacing.L, Spacing.M),
+            Corners = CornerRadius4.All(Radii.Card),
             Fill = fill, HoverFill = Tok.FillControlSecondary, PressedFill = Tok.FillControlTertiary,
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault, Shadow = Elevation.Card, ClipToBounds = true,
             Role = AutomationRole.Button, Focusable = true, FocusVisualMargin = new Edges4(2f, 2f, 2f, 2f),
@@ -488,7 +486,7 @@ public static class ConcertUi
         {
             Width = 84f, Height = 92f, Shrink = 0f, Gap = 2f,
             Direction = 1, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Corners = CornerRadius4.All(WaveeRadius.Control), Fill = Tok.FillCardSecondary,
+            Corners = CornerRadius4.All(Radii.Control), Fill = Tok.FillCardSecondary,
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             Children =
             [
@@ -512,9 +510,9 @@ public static class ConcertUi
     {
         Direction = 0, Grow = 1f, Basis = 0f, MinHeight = WaveeSize.ControlH, MinWidth = 0f,
         AlignSelf = FlexAlign.Stretch,
-        AlignItems = FlexAlign.Center, Gap = WaveeSpace.S,
-        Padding = new Edges4(WaveeSpace.M, WaveeSpace.XS, WaveeSpace.M, WaveeSpace.XS),
-        Corners = CornerRadius4.All(WaveeRadius.Control),
+        AlignItems = FlexAlign.Center, Gap = Spacing.S,
+        Padding = new Edges4(Spacing.M, Spacing.XS, Spacing.M, Spacing.XS),
+        Corners = CornerRadius4.All(Radii.Control),
         Fill = Tok.FillControlDefault, HoverFill = Tok.FillControlSecondary, PressedFill = Tok.FillControlTertiary,
         BorderWidth = 1f, BorderBrush = Tok.ControlElevationBorder,
         Role = AutomationRole.Button, Focusable = true, Cursor = CursorId.Hand, OnClick = onClick,
@@ -523,7 +521,7 @@ public static class ConcertUi
             new BoxEl
             {
                 Width = 20f, Height = 20f, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                Children = [ Icon(Mdl.MapPin, 16f, Tok.TextSecondary) ],
+                Children = [ Icon(Icons.MapPin, 16f, Tok.TextSecondary) ],
             },
             BodyStrong(label) with
             {
@@ -532,7 +530,7 @@ public static class ConcertUi
             new BoxEl
             {
                 Width = 16f, Height = 20f, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                Children = [ Icon(Mdl.ChevronDown, 10f, Tok.TextSecondary) ],
+                Children = [ Icon(Icons.ChevronDown, 10f, Tok.TextSecondary) ],
             },
         ],
     };
@@ -548,7 +546,7 @@ public static class ConcertUi
             Size: SizeMode.Reflow, Axes: SizeAxes.Width),
         Direction = 0, Height = 32f, Shrink = 0f, AlignItems = FlexAlign.Center, Gap = 6f,
         Padding = new Edges4(selected ? 10f : 14f, 5f, 14f, 5f),
-        Corners = CornerRadius4.All(WaveeRadius.Pill),
+        Corners = CornerRadius4.All(Radii.Full),
         Fill = selected ? Tok.AccentDefault : Tok.FillControlDefault,
         HoverFill = selected ? Tok.AccentSecondary : Tok.FillControlSecondary,
         PressedFill = selected ? Tok.AccentTertiary : Tok.FillControlTertiary,
@@ -564,7 +562,7 @@ public static class ConcertUi
                     Key = "filter-check:" + label, Width = 14f, Height = 14f, Shrink = 0f,
                     AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                     Animate = MotionRecipes.IconSwap,
-                    Children = [ Icon(Mdl.Check, 12f, Tok.TextOnAccentPrimary) ],
+                    Children = [ Icon(Icons.Check, 12f, Tok.TextOnAccentPrimary) ],
                 },
                 Body(label) with { Color = Tok.TextOnAccentPrimary, MaxLines = 1 },
             ]
@@ -580,15 +578,15 @@ public static class ConcertUi
     {
         Direction = 0, Height = 32f, Shrink = 0f, AlignItems = FlexAlign.Center, Gap = 6f,
         Padding = new Edges4(12f, 5f, 12f, 5f),
-        Corners = CornerRadius4.All(WaveeRadius.Pill),
+        Corners = CornerRadius4.All(Radii.Full),
         Fill = Tok.FillControlDefault, HoverFill = Tok.FillControlSecondary, PressedFill = Tok.FillControlTertiary,
         BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault,
         Role = AutomationRole.Button, Focusable = true, Cursor = CursorId.Hand, OnClick = onClick,
         Children =
         [
-            Icon(Mdl.MapPin, 14f, Tok.TextSecondary) with { Shrink = 0f },
+            Icon(Icons.MapPin, 14f, Tok.TextSecondary) with { Shrink = 0f },
             BodyStrong(label) with { Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-            Icon(Mdl.ChevronDown, 10f, Tok.TextSecondary) with { Shrink = 0f },
+            Icon(Icons.ChevronDown, 10f, Tok.TextSecondary) with { Shrink = 0f },
         ],
     };
 
@@ -605,15 +603,15 @@ public static class ConcertUi
             Size: SizeMode.Reflow, Axes: SizeAxes.Width),
         Direction = 0, Height = 32f, Shrink = 0f, AlignItems = FlexAlign.Center, Gap = 6f,
         Padding = new Edges4(12f, 5f, 12f, 5f),
-        Corners = CornerRadius4.All(WaveeRadius.Pill),
+        Corners = CornerRadius4.All(Radii.Full),
         Fill = Tok.FillControlDefault, HoverFill = Tok.FillControlSecondary, PressedFill = Tok.FillControlTertiary,
         BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault,
         Role = AutomationRole.Button, Focusable = true, Cursor = CursorId.Hand, OnClick = onClick,
         Children =
         [
-            Icon(Mdl.Calendar, 14f, Tok.TextSecondary) with { Shrink = 0f },
+            Icon(Icons.Calendar, 14f, Tok.TextSecondary) with { Shrink = 0f },
             Body(Loc.Get(Strings.Concerts.Filter.Dates)) with { Color = Tok.TextPrimary, MaxLines = 1 },
-            Icon(Mdl.ChevronDown, 10f, Tok.TextSecondary) with { Shrink = 0f },
+            Icon(Icons.ChevronDown, 10f, Tok.TextSecondary) with { Shrink = 0f },
         ],
     };
 
@@ -631,7 +629,7 @@ public static class ConcertUi
             Size: SizeMode.Reflow, Axes: SizeAxes.Width),
         Direction = 0, Height = 32f, Shrink = 0f, AlignItems = FlexAlign.Center, Gap = 8f,
         Padding = new Edges4(3f, 3f, 12f, 3f),
-        Corners = CornerRadius4.All(WaveeRadius.Pill),
+        Corners = CornerRadius4.All(Radii.Full),
         Fill = Tok.AccentDefault, HoverFill = Tok.AccentSecondary, PressedFill = Tok.AccentTertiary,
         Shadow = Elevation.Card,
         Role = AutomationRole.Button, Focusable = true, Cursor = CursorId.Hand, OnClick = onClick,
@@ -649,12 +647,12 @@ public static class ConcertUi
                 Fill = Tok.FillCardDefault, Shadow = Elevation.Flyout,
                 Children =
                 [
-                    Icon(Mdl.Check, 12f, Tok.AccentTextPrimary) with { Shrink = 0f },
+                    Icon(Icons.Check, 12f, Tok.AccentTextPrimary) with { Shrink = 0f },
                     Body(name) with { Color = Tok.AccentTextPrimary, Weight = 600, MaxLines = 1 },
                 ],
             },
             Body(rangeText) with { Color = Tok.TextOnAccentPrimary, Weight = 600, MaxLines = 1 },
-            Icon(Mdl.ChevronDown, 10f, Tok.TextOnAccentPrimary) with { Shrink = 0f },
+            Icon(Icons.ChevronDown, 10f, Tok.TextOnAccentPrimary) with { Shrink = 0f },
         ],
     };
 
@@ -670,16 +668,15 @@ public static class ConcertUi
             Size: SizeMode.Reflow, Axes: SizeAxes.Width),
         Direction = 0, Height = 32f, Shrink = 0f, AlignItems = FlexAlign.Center, Gap = 6f,
         Padding = new Edges4(14f, 5f, 14f, 5f),
-        Corners = CornerRadius4.All(WaveeRadius.Pill),
-        Fill = ColorF.Transparent, HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+        Corners = CornerRadius4.All(Radii.Full),
         BorderWidth = 1f, BorderColor = Tok.AccentTextPrimary with { A = 0.55f }, BorderDashOn = 5f, BorderDashOff = 4f,
         Role = AutomationRole.Button, Focusable = true, Cursor = CursorId.Hand, OnClick = onClick,
         Children =
         [
             Body(label) with { Color = Tok.AccentTextPrimary, MaxLines = 1 },
-            Icon(expanded ? Mdl.ChevronUp : Mdl.ChevronDown, 10f, Tok.AccentTextPrimary) with { Shrink = 0f },
+            Icon(expanded ? Icons.ChevronUp : Icons.ChevronDown, 10f, Tok.AccentTextPrimary) with { Shrink = 0f },
         ],
-    };
+    }.Interactive(Interaction.Subtle);
 
     public static Element WideEditorialDestination(
         Image? artwork,
@@ -716,7 +713,7 @@ public static class ConcertUi
         return new BoxEl
         {
             Height = metrics.Height, MinWidth = 0f, ZStack = true, ClipToBounds = true,
-            Corners = CornerRadius4.All(WaveeRadius.Card),
+            Corners = CornerRadius4.All(Radii.Card),
             Fill = Tok.FillCardDefault, HoverFill = Tok.FillControlSecondary, PressedFill = Tok.FillControlTertiary,
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault, Shadow = Elevation.Card,
             Role = AutomationRole.Button, Focusable = true, FocusVisualMargin = new Edges4(2f, 2f, 2f, 2f),
@@ -738,7 +735,7 @@ public static class ConcertUi
                 new BoxEl
                 {
                     Direction = 1, Width = copyWidth, Padding = new Edges4(metrics.Padding, metrics.Padding, metrics.Padding, metrics.Padding),
-                    Gap = WaveeSpace.S, Justify = FlexJustify.Center,
+                    Gap = Spacing.S, Justify = FlexJustify.Center,
                     Children =
                     [
                         Caption(eyebrow.ToUpper(CultureInfo.CurrentCulture)) with
@@ -757,11 +754,11 @@ public static class ConcertUi
                         },
                         new BoxEl
                         {
-                            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S,
+                            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S,
                             Children =
                             [
                                 BodyStrong(actionLabel) with { Color = Tok.AccentTextPrimary },
-                                Icon(Mdl.ChevronRight, 14f, Tok.AccentTextPrimary),
+                                Icon(Icons.ChevronRight, 14f, Tok.AccentTextPrimary),
                             ],
                         },
                     ],
@@ -774,8 +771,8 @@ public static class ConcertUi
     // is placed AFTER the city, never over it.
     static Element StatusPill(string text) => new BoxEl
     {
-        AlignSelf = FlexAlign.Start, Shrink = 0f, Padding = new Edges4(WaveeSpace.S, 2f, WaveeSpace.S, 2f),
-        Corners = CornerRadius4.All(WaveeRadius.Pill), Fill = Tok.AccentSubtle,
+        AlignSelf = FlexAlign.Start, Shrink = 0f, Padding = new Edges4(Spacing.S, 2f, Spacing.S, 2f),
+        Corners = CornerRadius4.All(Radii.Full), Fill = Tok.AccentSubtle,
         Children = [ Caption(text) with { Color = Tok.AccentTextPrimary, MaxLines = 1 } ],
     };
 
@@ -851,8 +848,8 @@ public sealed class ConcertLocationPickerPanel : Component
 
         return new BoxEl
         {
-            Direction = 1, Width = 360f, Gap = WaveeSpace.S,
-            Padding = new Edges4(WaveeSpace.M, WaveeSpace.M, WaveeSpace.M, WaveeSpace.M),
+            Direction = 1, Width = 360f, Gap = Spacing.S,
+            Padding = new Edges4(Spacing.M, Spacing.M, Spacing.M, Spacing.M),
             Children = children.ToArray(),
         };
     }
@@ -867,16 +864,15 @@ public sealed class ConcertLocationPickerPanel : Component
             : new Element[] { WaveeType.TrackTitle(place.Name) };
         return new BoxEl
         {
-            Key = place.Id, Direction = 0, MinHeight = 48f, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
-            Padding = new Edges4(WaveeSpace.S, WaveeSpace.XS, WaveeSpace.S, WaveeSpace.XS),
-            Corners = CornerRadius4.All(WaveeRadius.Control),
-            HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+            Key = place.Id, Direction = 0, MinHeight = 48f, AlignItems = FlexAlign.Center, Gap = Spacing.M,
+            Padding = new Edges4(Spacing.S, Spacing.XS, Spacing.S, Spacing.XS),
+            Corners = CornerRadius4.All(Radii.Control),
             Role = AutomationRole.Button, Focusable = true, Cursor = CursorId.Hand, OnClick = onClick,
             Children =
             [
-                Icon(Mdl.MapPin, 18f, Tok.TextSecondary),
+                Icon(Icons.MapPin, 18f, Tok.TextSecondary),
                 new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = 1f, Children = text },
             ],
-        };
+        }.Interactive(Interaction.Subtle);
     }
 }

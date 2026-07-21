@@ -131,7 +131,7 @@ The per-glyph color field of GlyphInstance: **text.md**.)
 | Hook | Authority |
 |------|-----------|
 | **Signals reactive core** (`Signal<T>`/`FloatSignal`/`Memo<T>`/`Effect`/`ReactiveRuntime`; AS-BUILT signals-first runtime, shipped in `FluentGpu.Foundation`) | reconciler-hooks.md §0bis |
-| UseSignal / UseFloatSignal / UseComputed (signals hooks) + ReactiveComponent.Setup() + Flow.For/Flow.Show/Flow.KeepAlive + the `Prop<T>` reactive element props (Transform/Opacity/Fill/Width/Height/Text/Color/Source/Placeholder; record shape co-owned by dsl-aot.md) | reconciler-hooks.md §0bis |
+| UseSignal / UseFloatSignal / UseComputed (signals hooks) + the unified tracked `Component.Render()` (run-once inferred; `ReactiveComponent`/`Setup()` deleted, G4b) + Flow.For&lt;T&gt;/Flow.Show/Flow.KeepAlive + non-positional `UseProps<T>()` (re-pushed live props, G4c–G4e) + the `Prop<T>` reactive element props (Transform/Opacity/Fill/Width/Height/Text/Color/Source/Placeholder; record shape co-owned by dsl-aot.md) | reconciler-hooks.md §0bis |
 | UseState / UseReducer / UseMemo / UseCallback / UseEffect / UseLayoutEffect / UseContext / UseRef | reconciler-hooks.md |
 | UseIsActive / UseActivation (component activation lifecycle: parked-by-KeepAlive OR window-minimized; the `Activation.IsActive` ambient + the `SetSubtreeParked` engine auto-quiesce of parked anim/scroll tickers) | reconciler-hooks.md §0bis (window-visibility source: pal-rhi.md; as-built: src\FluentGpu.Engine\Hooks\RenderContext.cs + Reconciler.cs + Hosting\AppHost.cs) |
 | UseVirtual / UseInfiniteCollection / UseVisibleRange | virtualization.md (DepKey/cell semantics: reconciler-hooks.md) |
@@ -180,7 +180,7 @@ Localization) live where their owning doc places them — Engine folders or CI-o
 | FluentGpu.Foundation (Handle/Slab/HandleTable/ChunkedArena/StringId) → `FluentGpu.Engine` Foundation/ | scene-memory.md (usage) / `../foundations.md` (root primitives) |
 | FluentGpu.Scene (SoA SceneStore + DrawList encoding) → `FluentGpu.Engine` Scene/ | scene-memory.md |
 | FluentGpu.Render (renderer + DrawList arenas + render-frame body) → `FluentGpu.Engine` Render/ | gpu-renderer.md (renderer) / threading-render-seam.md (frame body) |
-| FluentGpu.Media → `FluentGpu.Engine` Media/ (+ WIC codec leaf → `FluentGpu.Windows` Wic/) | media-pipeline.md |
+| FluentGpu.Media → `FluentGpu.Engine` Media/ — **split (G7, 2026-07, namespaces unchanged):** `Media/Playback/` (transport/audio/video/queue/DRM-relay/lyrics + `Playback/Audio/` + `Playback/Adaptive/`) and `Media/Images/` (the image/asset decode subsystem: `DecodeScheduler`/`PixelBufferPool`/`IImageCodec`/`DiskImageCache`/`DefaultImageFetcher`/`IImageFetcher`); WIC codec leaf → `FluentGpu.Windows` Wic/ | media-pipeline.md |
 | FluentGpu.Theme (theming engine; design-only, lands in `FluentGpu.Engine` when split out) | theming.md |
 | FluentGpu.Validation (CI-only; not a shipped library) | validation.md |
 | **FluentGpu.Testing** (shipped public app-author harness — `TestHost`/simulate/assert/goldens; portable, no `#if WINDOWS`; design-only target) | validation.md |
@@ -222,6 +222,7 @@ Localization) live where their owning doc places them — Engine folders or CI-o
 | **Springs/retarget/shared-element/motion-tokens** (`SpringParams`, the `AnimValue` 64B slab row + `Generators` analytical spring, `ConnectedAnimation`/`DetachedAnimSlab`, `MotionTok`/`MotionTokenDef`, `ReducedMotionPolicy`; writes the compositor LocalTransform/Opacity/EffectAux columns) | backdrop-effects-animation.md (semantics) / theming.md (token table pattern) / dsl-aot.md (`MotionTokenId` gen) |
 | **`FluentGpu.Testing` app-author harness** (`TestHost`/`TestHostOptions`/simulate/assert/MatchGolden; shipped public) | validation.md |
 | **`FluentGpu.Devtools` quarantine participation** (`QUARANTINE = RenderInFlightDepth + (devtools ? 1 : 0) + 1`; reverts on detach; never in release) | devtools.md (derives, never hard-codes) / threading-render-seam.md (canonical quarantine relationship) |
+| **Unified media playback API** (`IMediaPlayer`/`MediaPlayer`/`MediaRouter` — one headless signals-first contract routed by `MediaSource.Kind`; the per-platform video seam `IMediaBackend`/`IMediaSession`/`VideoDelivery`; the `MediaSource` model + algebra; the audio-graph seams `IAudioSink`/`IAudioClockSource`/`IDeviceWatcher`/`IDspStage`/`AudioGraphHost`/`CrossfadeMixer` — graph published by atomic swap under `RenderInFlightDepth+1` quarantine; the `WithDrm` license relay `LicenseRequest`/`LicenseResponse` — native CDM challenge → managed POST → protected handle at `IVideoPresenter.BindSurfaceHandle`; `DecryptingSource`/`IAudioKeyProvider`; the cross-backend `IPreparableBackend` preroll. **LANDED M0–M5**, verified by Engine.Tests+Windows.Tests) | media-pipeline.md (subsystem owner: `FluentGpu.Media` present-tree §8 + DRM §8.4; seam `IVideoPresenter` shape → pal-rhi.md) + `../../docs/plans/media-playback-api-spec.md` (deep API) / `../../docs/plans/video-drm-layer-design.md` (DRM) — registered in `SPEC-INDEX.md §2` |
 
 ---
 

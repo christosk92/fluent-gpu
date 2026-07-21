@@ -110,21 +110,20 @@ public sealed class ToolTip : Component
     /// the bubble closes once the pointer has been outside owner ∪ bubble for one full check interval.</summary>
     public const float SafeZoneCheckMs = 1000f;
 
-    /// <summary>LIVE target+text slots (the SelectorBar/RadioButtons provider idiom). <see cref="Target"/> and
-    /// <see cref="Text"/> are plain fields, so via <c>Embed.Comp</c> they freeze at first mount — a re-rendering
-    /// parent's new wrapped element or new tooltip text would be silently dropped (the toggle-tooltip staleness bug).
-    /// <see cref="Wrap"/> routes them through this provider instead; when present they WIN over the fields and the
-    /// ToolTip re-renders reactively (context is signal-backed).</summary>
+    /// <summary>LIVE target+text slots RE-PUSHED to the core (<c>Embed.Comp(slots, …)</c>; the SelectorBar/RadioButtons
+    /// idiom). <see cref="Target"/> and <see cref="Text"/> are plain fields, so via a propless <c>Embed.Comp</c> they
+    /// freeze at first mount — a re-rendering parent's new wrapped element or new tooltip text would be silently
+    /// dropped (the toggle-tooltip staleness bug). <see cref="Wrap"/> routes them through re-pushed props instead; when
+    /// present they WIN over the fields and the ToolTip re-renders reactively (props are signal-backed). Read with
+    /// <c>UsePropsOrDefault</c>.</summary>
     public sealed record ToolTipSlots(Element Target, string Text);
 
-    internal static readonly Context<ToolTipSlots?> SlotsChannel = new(null);
-
     public static Element Wrap(Element target, string text)
-        => Ctx.Provide(SlotsChannel, new ToolTipSlots(target, text), Embed.Comp(() => new ToolTip()));
+        => Embed.Comp(new ToolTipSlots(target, text), () => new ToolTip());
 
     public override Element Render()
     {
-        var slots = UseContext(SlotsChannel);
+        var slots = UsePropsOrDefault<ToolTipSlots>();
         Element target = slots?.Target ?? Target;
         string text = slots?.Text ?? Text;
         var svc = UseContext(Overlay.Service);

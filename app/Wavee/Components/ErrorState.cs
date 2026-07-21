@@ -18,13 +18,13 @@ public static class ErrorState
         var kids = new List<Element>
         {
             Icon(Icons.Cancel, 32f, Tok.SystemFillCritical),
-            new BoxEl { Height = WaveeSpace.M },
+            new BoxEl { Height = Spacing.M },
             WaveeType.RailHeader(message ?? Loc.Get(Strings.Common.ErrorTitle)),
             WaveeType.TrackMeta(Loc.Get(Strings.Common.ErrorSubtitle)),
         };
         if (onRetry is not null)
         {
-            kids.Add(new BoxEl { Height = WaveeSpace.L });
+            kids.Add(new BoxEl { Height = Spacing.L });
             kids.Add(Button.Accent(Loc.Get(Strings.Common.Retry), onRetry));
         }
         return EmptyState.Centered(kids);

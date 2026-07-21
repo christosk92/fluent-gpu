@@ -1,4 +1,5 @@
 using System;
+using FluentGpu.Controls;
 using FluentGpu.Localization;
 
 namespace Wavee;
@@ -22,5 +23,5 @@ static class PlaylistEditErrors
         _ => ex.Message,
     };
 
-    public static void Toast(Exception ex) => Toasts.Show(UserMessage(ex), ToastSeverity.Critical);
+    public static void Toast(Exception ex) => FluentGpu.Controls.Toast.Show(UserMessage(ex), new ToastOptions { Severity = InfoBarSeverity.Error });
 }

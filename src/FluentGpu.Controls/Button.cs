@@ -20,12 +20,30 @@ public enum BackgroundSizing : byte
 }
 
 /// <summary>
-/// The Button control: barebone behavior (clickable, hover/pressed, focusable) + a default Fluent style. Overrideable
-/// globally (<see cref="AccentStyleOverride"/>/<see cref="StandardStyleOverride"/>), per-instance (pass a
-/// <see cref="Style"/>), or ad-hoc (chain modifiers). Defaults are sourced from WinUI 3 DefaultButtonStyle /
-/// AccentButtonStyle (microsoft-ui-xaml controls\dev\CommonStyles\Button_themeresources.xaml): ButtonPadding 11,5,11,6
-/// (line 152); ControlCornerRadius 4 (line 168); ControlContentThemeFontSize 14; ButtonBorderThemeThickness 1
-/// (lines 29/90/127); FocusVisualMargin −3 (line 167); BackgroundTransition 83ms (lines 173-175).
+/// The button's <b>appearance</b> axis — WHICH token ramp fills/strokes the chrome. ORTHOGONAL to
+/// <see cref="ControlSize"/> (Radix Themes/CVA precedent: appearance selects colors, size selects geometry; they
+/// compose freely, they are not a flattened product). Standard/Accent are the two WinUI 3 button styles; Subtle/Outline
+/// are documented extensions built from existing WinUI tokens (see <see cref="ButtonPalette.For"/>).
+/// </summary>
+public enum ButtonAppearance : byte
+{
+    /// <summary>WinUI DefaultButtonStyle — neutral control fill.</summary>
+    Standard,
+    /// <summary>WinUI AccentButtonStyle — the accent (primary) fill.</summary>
+    Accent,
+    /// <summary>Transparent chrome that reveals a subtle fill on interaction (the WinUI SubtleFillColor* ramp).</summary>
+    Subtle,
+    /// <summary>A hollow button: a solid stroke in all states + transparent interior (a documented Fluent-2 extension).</summary>
+    Outline,
+}
+
+/// <summary>The Button control: barebone behavior (clickable, hover/pressed, focusable) + a default Fluent style on the
+/// two ORTHOGONAL axes <see cref="ButtonAppearance"/> × <see cref="ControlSize"/>. Override the look per-instance (pass a
+/// <see cref="Style"/> — the full-override escape hatch), globally (<see cref="StyleHook"/>), or ad-hoc (chain
+/// modifiers). Defaults are sourced from WinUI 3 DefaultButtonStyle / AccentButtonStyle (microsoft-ui-xaml
+/// controls\dev\CommonStyles\Button_themeresources.xaml): ButtonPadding 11,5,11,6 (line 152); ControlCornerRadius 4
+/// (line 168); ControlContentThemeFontSize 14; ButtonBorderThemeThickness 1 (lines 29/90/127); FocusVisualMargin −3
+/// (line 167); BackgroundTransition 83ms (lines 173-175).
 /// WinUI Button has NO scale animation — its state storyboards swap Background/BorderBrush/Foreground only
 /// (Button_themeresources.xaml:176-229), so no Hover/PressScale here (removed at the Wave-1 parity pass).
 /// Keyboard: the engine arms a pressed visual on Space/Enter key-DOWN and clicks on key-UP — held keys never repeat,
@@ -37,8 +55,11 @@ public static partial class Button
 {
     // Template parts (see TemplateParts; docs/guide/control-fidelity.md §6). Each part's doc lists the props the
     // control OWNS (re-asserted after any modifier — a Parts customization cannot win those).
-    /// <summary>The button chrome (the WinUI ContentPresenter root). Owned: OnClick, Role, Children (the label slot).</summary>
+    /// <summary>The button chrome (the WinUI ContentPresenter root). Owned: OnClick, Role, Children (the icon+label slots).</summary>
     public const string PartRoot = "Root";
+    /// <summary>The optional leading-icon run — a <see cref="TextEl"/> in the icon font, present only when a
+    /// <c>glyph</c> was passed. Customize via <c>parts.Set&lt;TextEl&gt;(Button.PartGlyph, …)</c>. Owned: none.</summary>
+    public const string PartGlyph = "Glyph";
     /// <summary>The label run — a <see cref="TextEl"/>, so customize via <c>parts.Set&lt;TextEl&gt;(Button.PartLabel, …)</c>.
     /// Owned: none (the P2 foreground ramp is style-driven and a modifier may override it).</summary>
     public const string PartLabel = "Label";
@@ -90,56 +111,145 @@ public static partial class Button
         public float BrushTransitionMs { get; init; } = 83f;
     }
 
-    /// <summary>Set to globally replace the accent-button default style.</summary>
-    public static Style? AccentStyleOverride;
-    /// <summary>Set to globally replace the standard-button default style.</summary>
-    public static Style? StandardStyleOverride;
-
-    // AccentButton* resources: Button_themeresources.xaml:5-16 (Default = dark) / :103-114 (Light) — same semantic
-    // tokens in both themes; the theme split happens inside Tok (Common_themeresources_any.xaml values).
-    public static Style AccentStyle => AccentStyleOverride ?? new Style
+    /// <summary>The <b>appearance</b>-axis color bundle — the four interaction-state ramps (fill, foreground, border) +
+    /// the WinUI BackgroundSizing, selected by ONE 4-arm switch (<see cref="For"/>) over the live <see cref="Tok"/>. This
+    /// is the only place variant colors live; there are no per-variant <see cref="Style"/> copies.</summary>
+    internal readonly record struct ButtonPalette(StateBrush Background, StateBrush Foreground, BorderRamp Border, BackgroundSizing Sizing)
     {
-        Background = Tok.AccentDefault,                     // AccentButtonBackground = AccentFillColorDefault (line 5)
-        Foreground = Tok.TextOnAccentPrimary,               // AccentButtonForeground = TextOnAccentFillColorPrimary (line 9)
-        BorderBrush = Tok.AccentControlElevationBorder,     // AccentButtonBorderBrush = AccentControlElevationBorder (line 13)
-        HoverBackground = Tok.AccentSecondary,              // AccentButtonBackgroundPointerOver = AccentFillColorSecondary (line 6)
-        PressedBackground = Tok.AccentTertiary,             // AccentButtonBackgroundPressed = AccentFillColorTertiary (line 7)
-        DisabledBackground = Tok.AccentDisabled,            // AccentButtonBackgroundDisabled = AccentFillColorDisabled (line 8)
-        HoverForeground = Tok.TextOnAccentPrimary,          // AccentButtonForegroundPointerOver (line 10)
-        PressedForeground = Tok.TextOnAccentSecondary,      // AccentButtonForegroundPressed = TextOnAccentFillColorSecondary (line 11)
-        DisabledForeground = Tok.TextOnAccentDisabled,      // AccentButtonForegroundDisabled = TextOnAccentFillColorDisabled (line 12)
-        HoverBorderBrush = Tok.AccentControlElevationBorder,          // AccentButtonBorderBrushPointerOver (line 14)
-        PressedBorderBrush = GradientSpec.Solid(ColorF.Transparent),  // AccentButtonBorderBrushPressed = ControlFillColorTransparent (line 15)
-        DisabledBorderBrush = GradientSpec.Solid(ColorF.Transparent), // AccentButtonBorderBrushDisabled = ControlFillColorTransparent (line 16)
-        BackgroundSizing = BackgroundSizing.OuterBorderEdge,          // AccentButtonStyle setter (Button_themeresources.xaml:238)
-    };
+        /// <summary>The ONE 4-arm appearance switch. Reads Tok fresh on every call, so it is theme-live like the old
+        /// computed styles were.</summary>
+        public static ButtonPalette For(ButtonAppearance appearance) => appearance switch
+        {
+            // Accent — WinUI AccentButtonStyle. AccentButton* resources: Button_themeresources.xaml:5-16 (Default=dark)/
+            // :103-114 (Light). AccentButtonBackground = AccentFillColorDefault/Secondary/Tertiary/Disabled (5-8);
+            // Foreground = TextOnAccentFillColorPrimary/Primary/Secondary/Disabled (9-12);
+            // Border = AccentControlElevationBorder (13) → Pointer-over unchanged (14) → Pressed/Disabled = transparent
+            // (ControlFillColorTransparent, 15-16). BackgroundSizing = OuterBorderEdge (setter, :238).
+            ButtonAppearance.Accent => new ButtonPalette(
+                Background: new StateBrush(Tok.AccentDefault, Tok.AccentSecondary, Tok.AccentTertiary, Tok.AccentDisabled),
+                Foreground: new StateBrush(Tok.TextOnAccentPrimary, Tok.TextOnAccentPrimary, Tok.TextOnAccentSecondary, Tok.TextOnAccentDisabled),
+                Border: new BorderRamp(Tok.AccentControlElevationBorder, Tok.AccentControlElevationBorder,
+                                       GradientSpec.Solid(ColorF.Transparent), GradientSpec.Solid(ColorF.Transparent)),
+                Sizing: BackgroundSizing.OuterBorderEdge),
 
-    // Button* resources: Button_themeresources.xaml:30-41 (Default = dark) / :128-139 (Light).
-    public static Style StandardStyle => StandardStyleOverride ?? new Style
+            // Subtle — the WinUI SubtleFillColor* ramp (AppBarButton/command-bar chrome, AppBarButton_themeresources.xaml
+            // :5-8: SubtleFillColorTransparent/Secondary/Tertiary; SubtleFillColorDisabled = #00FFFFFF → transparent in
+            // both themes, Common_themeresources_any.xaml:28/232). Text = Standard's neutral ramp. Border transparent
+            // in all states. BackgroundSizing = InnerBorderEdge (the neutral default).
+            ButtonAppearance.Subtle => new ButtonPalette(
+                Background: new StateBrush(Tok.FillSubtleTransparent, Tok.FillSubtleSecondary, Tok.FillSubtleTertiary, Tok.FillSubtleTransparent),
+                Foreground: new StateBrush(Tok.TextPrimary, Tok.TextPrimary, Tok.TextSecondary, Tok.TextDisabled),
+                Border: BorderRamp.Flat(GradientSpec.Solid(ColorF.Transparent)),
+                Sizing: BackgroundSizing.InnerBorderEdge),
+
+            // Outline — a DOCUMENTED Fluent-2 extension (no direct WinUI button style): a solid ControlStrokeColorDefault
+            // border in ALL states (the "outline" identity) over a transparent interior that picks up the same subtle
+            // fill ramp as Subtle on interaction (SubtleFillColorSecondary/Tertiary). Text = Standard's neutral ramp.
+            // Uses only existing WinUI tokens + the existing 83ms brush timing — no invented colors or curves.
+            ButtonAppearance.Outline => new ButtonPalette(
+                Background: new StateBrush(Tok.FillSubtleTransparent, Tok.FillSubtleSecondary, Tok.FillSubtleTertiary, Tok.FillSubtleTransparent),
+                Foreground: new StateBrush(Tok.TextPrimary, Tok.TextPrimary, Tok.TextSecondary, Tok.TextDisabled),
+                Border: BorderRamp.Flat(GradientSpec.Solid(Tok.StrokeControlDefault)),
+                Sizing: BackgroundSizing.InnerBorderEdge),
+
+            // Standard — WinUI DefaultButtonStyle. Button* resources: Button_themeresources.xaml:30-41 (Default=dark)/
+            // :128-139 (Light). Background = ControlFillColorDefault/Secondary/Tertiary/Disabled (30-33);
+            // Foreground = TextFillColorPrimary/Primary/Secondary/Disabled (34-37);
+            // Border = ControlElevationBorder (38) → Pointer-over unchanged (39) → Pressed/Disabled = solid
+            // ControlStrokeColorDefault (40-41). BackgroundSizing = InnerBorderEdge (style default, :156).
+            _ => new ButtonPalette(
+                Background: new StateBrush(Tok.FillControlDefault, Tok.FillControlSecondary, Tok.FillControlTertiary, Tok.FillControlDisabled),
+                Foreground: new StateBrush(Tok.TextPrimary, Tok.TextPrimary, Tok.TextSecondary, Tok.TextDisabled),
+                Border: new BorderRamp(Tok.ControlElevationBorder, Tok.ControlElevationBorder,
+                                       GradientSpec.Solid(Tok.StrokeControlDefault), GradientSpec.Solid(Tok.StrokeControlDefault)),
+                Sizing: BackgroundSizing.InnerBorderEdge),
+        };
+    }
+
+    /// <summary>The border sibling of <see cref="StateBrush"/>: the four interaction-state border gradients (a
+    /// WinUI elevation gradient or a solid via <c>GradientSpec.Solid</c>). Null legs = no stroke.</summary>
+    internal readonly record struct BorderRamp(GradientSpec? Rest, GradientSpec? Hover, GradientSpec? Pressed, GradientSpec? Disabled)
     {
-        Background = Tok.FillControlDefault,                // ButtonBackground = ControlFillColorDefault (line 30)
-        Foreground = Tok.TextPrimary,                       // ButtonForeground = TextFillColorPrimary (line 34)
-        BorderBrush = Tok.ControlElevationBorder,           // ButtonBorderBrush = ControlElevationBorder (line 38)
-        HoverBackground = Tok.FillControlSecondary,         // ButtonBackgroundPointerOver = ControlFillColorSecondary (line 31)
-        PressedBackground = Tok.FillControlTertiary,        // ButtonBackgroundPressed = ControlFillColorTertiary (line 32)
-        DisabledBackground = Tok.FillControlDisabled,       // ButtonBackgroundDisabled = ControlFillColorDisabled (line 33)
-        HoverForeground = Tok.TextPrimary,                  // ButtonForegroundPointerOver = TextFillColorPrimary (line 35)
-        PressedForeground = Tok.TextSecondary,              // ButtonForegroundPressed = TextFillColorSecondary (line 36)
-        DisabledForeground = Tok.TextDisabled,              // ButtonForegroundDisabled = TextFillColorDisabled (line 37)
-        HoverBorderBrush = Tok.ControlElevationBorder,      // ButtonBorderBrushPointerOver = ControlElevationBorder (line 39)
-        PressedBorderBrush = GradientSpec.Solid(Tok.StrokeControlDefault),  // ButtonBorderBrushPressed = ControlStrokeColorDefault (line 40)
-        DisabledBorderBrush = GradientSpec.Solid(Tok.StrokeControlDefault), // ButtonBorderBrushDisabled = ControlStrokeColorDefault (line 41)
-        // BackgroundSizing stays the InnerBorderEdge style default (Button_themeresources.xaml:156).
-    };
+        /// <summary>The same gradient in all four states (a border that doesn't react to interaction).</summary>
+        public static BorderRamp Flat(GradientSpec g) => new(g, g, g, g);
+    }
 
-    /// <summary>An accent (primary) button. Override the look by passing a <see cref="Style"/>; restyle internals via
-    /// <paramref name="parts"/> (see <see cref="TemplateParts"/> and the <c>PartXxx</c> consts).</summary>
-    public static BoxEl Accent(string label, Action onClick, Style? style = null, bool isEnabled = true, TemplateParts? parts = null) => Build(label, onClick, style ?? AccentStyle, isEnabled, parts);
+    /// <summary>Global style hook consulted BEFORE <see cref="DefaultStyle(ButtonAppearance, ControlSize)"/> composes:
+    /// return a <see cref="Style"/> to override that (appearance, size) pair, or <c>null</c> to fall through to the
+    /// composed default. The single, axis-aware replacement for the old per-appearance style-override statics
+    /// (the accent/standard override fields deleted in G5d).</summary>
+    public static Func<ButtonAppearance, ControlSize, Style?>? StyleHook;
 
-    /// <summary>A neutral (standard) button.</summary>
-    public static BoxEl Standard(string label, Action onClick, Style? style = null, bool isEnabled = true, TemplateParts? parts = null) => Build(label, onClick, style ?? StandardStyle, isEnabled, parts);
+    /// <summary>Composes the full 24-member <see cref="Style"/> for a point on the (<paramref name="appearance"/>,
+    /// <paramref name="size"/>) axes: the <see cref="StyleHook"/> wins if it returns non-null, else the
+    /// <see cref="ButtonPalette"/> (colors) + <see cref="ControlMetrics"/> (geometry) fold into the record. Everything
+    /// else (BorderWidth 1, Center content alignment, FocusVisualMargin −3, 83ms brush) keeps the record defaults.</summary>
+    public static Style DefaultStyle(ButtonAppearance appearance, ControlSize size = ControlSize.Medium)
+    {
+        if (StyleHook is { } hook && hook(appearance, size) is { } custom) return custom;
+        var p = ButtonPalette.For(appearance);
+        var m = ControlMetrics.For(size);
+        return new Style
+        {
+            Background = p.Background.Rest,
+            HoverBackground = p.Background.Hover,
+            PressedBackground = p.Background.Pressed,
+            DisabledBackground = p.Background.Disabled,
+            Foreground = p.Foreground.Rest,
+            HoverForeground = p.Foreground.Hover,
+            PressedForeground = p.Foreground.Pressed,
+            DisabledForeground = p.Foreground.Disabled,
+            BorderBrush = p.Border.Rest,
+            HoverBorderBrush = p.Border.Hover,
+            PressedBorderBrush = p.Border.Pressed,
+            DisabledBorderBrush = p.Border.Disabled,
+            BackgroundSizing = p.Sizing,
+            Padding = m.Padding,
+            MinHeight = m.MinHeight,
+            FontSize = m.FontSize,
+            CornerRadius = m.CornerRadius,
+        };
+    }
 
-    private static BoxEl Build(string label, Action onClick, Style s, bool enabled, TemplateParts? parts)
+    /// <summary>The accent (primary) button's default Medium style — kept as a property so <c>with</c>-tweak call sites
+    /// (<c>Button.AccentStyle with { … }</c>) stay compiling. Equivalent to <c>DefaultStyle(ButtonAppearance.Accent)</c>.</summary>
+    public static Style AccentStyle => DefaultStyle(ButtonAppearance.Accent);
+    /// <summary>The neutral (standard) button's default Medium style. Equivalent to <c>DefaultStyle(ButtonAppearance.Standard)</c>.</summary>
+    public static Style StandardStyle => DefaultStyle(ButtonAppearance.Standard);
+
+    /// <summary>The per-control clamp seam (adjustment #6 — a shared axis value a control can contextually refuse,
+    /// Radix precedent). Button honors every size, so this is the identity; siblings like <see cref="IconButton"/>
+    /// override it (IconButton clamps Large to keep its square glyph box sane).</summary>
+    internal static ControlSize ClampSize(ControlSize size) => size;
+
+    /// <summary>The canonical factory: a button on the orthogonal <paramref name="appearance"/> × <paramref name="size"/>
+    /// axes, with an optional leading <paramref name="glyph"/> (icon-font codepoint). Pass a <see cref="Style"/> to
+    /// fully override both axes (the escape hatch); restyle internals via <paramref name="parts"/>.</summary>
+    public static BoxEl Create(string label, Action onClick, ButtonAppearance appearance = ButtonAppearance.Standard,
+        ControlSize size = ControlSize.Medium, string? glyph = null, Style? style = null, bool isEnabled = true, TemplateParts? parts = null)
+    {
+        var cs = ClampSize(size);
+        return Build(label, onClick, glyph, ControlMetrics.For(cs).IconSize, style ?? DefaultStyle(appearance, cs), isEnabled, parts);
+    }
+
+    /// <summary>Sugar: an accent (primary) button. One-line forwarder to <see cref="Create"/> — signature preserved so
+    /// existing call sites (and <c>Button.Accent(label, onClick, style)</c>) keep compiling.</summary>
+    public static BoxEl Accent(string label, Action onClick, Style? style = null, bool isEnabled = true, TemplateParts? parts = null)
+        => Create(label, onClick, ButtonAppearance.Accent, style: style, isEnabled: isEnabled, parts: parts);
+
+    /// <summary>Sugar: a neutral (standard) button.</summary>
+    public static BoxEl Standard(string label, Action onClick, Style? style = null, bool isEnabled = true, TemplateParts? parts = null)
+        => Create(label, onClick, ButtonAppearance.Standard, style: style, isEnabled: isEnabled, parts: parts);
+
+    /// <summary>Sugar: a subtle button (transparent chrome, subtle fill on interaction).</summary>
+    public static BoxEl Subtle(string label, Action onClick, Style? style = null, bool isEnabled = true, TemplateParts? parts = null)
+        => Create(label, onClick, ButtonAppearance.Subtle, style: style, isEnabled: isEnabled, parts: parts);
+
+    /// <summary>Sugar: an outline button (solid stroke, transparent interior).</summary>
+    public static BoxEl Outline(string label, Action onClick, Style? style = null, bool isEnabled = true, TemplateParts? parts = null)
+        => Create(label, onClick, ButtonAppearance.Outline, style: style, isEnabled: isEnabled, parts: parts);
+
+    private static BoxEl Build(string label, Action onClick, string? glyph, float iconSize, Style s, bool enabled, TemplateParts? parts)
     {
         var labelEl = parts.Apply(PartLabel, new TextEl(label)
         {
@@ -149,12 +259,35 @@ public static partial class Button
             PressedColor = s.PressedForeground,
             DisabledColor = s.DisabledForeground,
         });
+        // Optional leading icon: an icon-font glyph riding the SAME foreground ramp as the label (the most-requested
+        // composition). Present only when a glyph was passed — without it the child list is label-only (structure
+        // identical to the pre-axis button, so Standard/Accent stay pixel-identical).
+        Element[] children;
+        if (glyph is not null)
+        {
+            var glyphEl = parts.Apply(PartGlyph, new TextEl(glyph)
+            {
+                Size = iconSize, FontFamily = Theme.IconFont,
+                Color = s.Foreground,
+                HoverColor = s.HoverForeground,
+                PressedColor = s.PressedForeground,
+                DisabledColor = s.DisabledForeground,
+            });
+            children = [glyphEl, labelEl];
+        }
+        else
+        {
+            children = [labelEl];
+        }
         var root = new BoxEl
         {
             Direction = 0,
             Role = AutomationRole.Button,
             Padding = s.Padding,
             MinHeight = s.MinHeight,
+            // Icon↔label gap only when the icon slot is present (8px = the standard content gutter); no glyph ⇒ 0 ⇒
+            // layout byte-identical to the pre-axis button.
+            Gap = glyph is not null ? 8f : 0f,
             Justify = s.HorizontalContentAlignment,   // WinUI HorizontalContentAlignment default Center (DependencyProperty.cpp:646-648)
             AlignItems = s.VerticalContentAlignment,  // WinUI VerticalContentAlignment default Center (DependencyProperty.cpp:650-652)
             // Disabled is a logical state (no engine ramp): resting fill/border swap to the WinUI disabled tokens. Hover/Pressed
@@ -178,9 +311,9 @@ public static partial class Button
             // hand, HyperLinkButton_Partial.cpp:28-34); unset also lets an ancestor's explicit cursor show through.
             IsEnabled = enabled,                              // P1 engine gate (no manual handler-nulling)
             OnClick = onClick,
-            Children = [labelEl],
+            Children = children,
         };
-        // Parts: restyle anything (fills, corners, padding…); the click mechanics and the label slot always win.
+        // Parts: restyle anything (fills, corners, padding…); the click mechanics and the icon+label slots always win.
         return parts.Apply(PartRoot, root) with { OnClick = onClick, Role = AutomationRole.Button, Children = root.Children };
     }
 }

@@ -62,6 +62,17 @@ public readonly struct RepeatLayout
     /// <summary>Horizontally-scrolling uniform grid (a shelf <paramref name="rows"/> cells tall), by column.</summary>
     public static RepeatLayout HorizontalGrid(int rows, float itemWidth, float gap = 0f)
         => new(RepeatKind.Custom, 0, 0, 0, true, new HorizontalGridVirtualLayout(rows, itemWidth, gap));
+    /// <summary>Variable-extent uniform-list: every row seeds at <paramref name="estimatedExtent"/> and corrects to its
+    /// measured extent on realize (Fenwick estimate-then-correct + scroll anchoring — the <c>MeasuredStackVirtualLayout</c>).
+    /// Stateful — hoist when the owner re-renders (see the struct remarks).</summary>
+    public static RepeatLayout VariableList(float estimatedExtent, bool horizontal = false)
+        => new(RepeatKind.Custom, 0, 0, 0, horizontal, new MeasuredStackVirtualLayout(estimatedExtent, horizontal));
+    /// <summary>Grouped flat list with measured rows + a sticky-header hook: <paramref name="headerIndices"/> (sorted
+    /// ascending) are group-header flat indices — a header is just a measured item KIND. For <c>StickyHeaderIndexAt</c>
+    /// keep your own <c>GroupedListVirtualLayout</c> and pass it via <see cref="Measured"/> instead. Stateful — hoist when
+    /// the owner re-renders.</summary>
+    public static RepeatLayout GroupedList(int[] headerIndices, float headerExtent, float itemEstimate)
+        => new(RepeatKind.Custom, 0, 0, 0, false, new GroupedListVirtualLayout(headerIndices, headerExtent, itemEstimate));
     /// <summary>Non-virtual wrap (flex-wrap) — for small collections.</summary>
     public static RepeatLayout Wrap(float gap = 8f) => new(RepeatKind.Wrap, 0, gap, 0, false, null);
     /// <summary>Non-virtual stack (column/row) — for small collections (nav panes, toolbars).</summary>

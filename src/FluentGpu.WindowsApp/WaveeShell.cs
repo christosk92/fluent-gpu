@@ -3,6 +3,7 @@ using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Reconciler;
+using FluentGpu.Signals;
 using static FluentGpu.Dsl.Ui;
 
 // The Wavee skeleton on the real GPU path: a sidebar (nav) → PageHost back stack; a Home page (album-art card Grid in
@@ -10,6 +11,7 @@ using static FluentGpu.Dsl.Ui;
 // (Slider + transport IconButtons + ToggleButton). Composes every subsystem built this session.
 //
 //   dotnet run --project src/FluentGpu.WindowsApp -- --demo wavee
+[GalleryPage("wavee", "Wavee skeleton", "Samples", Icon = Icons.MusicNote)]
 sealed class WaveeShell : Component
 {
     static readonly ColorF Grey = ColorF.FromRgba(0x9A, 0x9A, 0x9A);
@@ -21,15 +23,15 @@ sealed class WaveeShell : Component
     public override Element Render()
     {
         var (playing, setPlaying) = UseState(false);
-        var (seek, setSeek) = UseState(0.3f);
-        var (shuffle, setShuffle) = UseState(false);
+        var seek = UseFloatSignal(0.3f);
+        var shuffle = UseSignal(false);
         return new BoxEl
         {
             Direction = 1,
             Children =
             [
                 new BoxEl { Direction = 0, Grow = 1, Children = [Sidebar(), Embed.Comp(() => new PageHost(_nav, Page))] },
-                PlayerBar(playing, setPlaying, seek, setSeek, shuffle, setShuffle),
+                PlayerBar(playing, setPlaying, seek, shuffle),
             ],
         };
     }
@@ -101,7 +103,7 @@ sealed class WaveeShell : Component
         ],
     };
 
-    Element PlayerBar(bool playing, Action<bool> setPlaying, float seek, Action<float> setSeek, bool shuffle, Action<bool> setShuffle) => new BoxEl
+    Element PlayerBar(bool playing, Action<bool> setPlaying, FloatSignal seek, Signal<bool> shuffle) => new BoxEl
     {
         Direction = 0, Height = 84, AlignItems = FlexAlign.Center, Gap = 16, Padding = new Edges4(16, 0, 16, 0),
         Fill = ColorF.FromRgba(0x18, 0x18, 0x18),
@@ -112,8 +114,8 @@ sealed class WaveeShell : Component
             IconButton.Create(Icons.Previous, () => { }),
             IconButton.Create(playing ? Icons.Pause : Icons.Play, () => setPlaying(!playing), IconButton.DefaultStyle with { Size = 44f }),
             IconButton.Create(Icons.Next, () => { }),
-            Slider.Create(seek, setSeek, 260f),
-            ToggleButton.Create("Shuffle", shuffle, () => setShuffle(!shuffle)),
+            Slider.Create(seek, length: 260f),
+            ToggleButton.Create("Shuffle", shuffle),
         ],
     };
 }

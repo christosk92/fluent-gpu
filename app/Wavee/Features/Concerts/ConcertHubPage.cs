@@ -94,7 +94,7 @@ sealed class ConcertHubPage : Component
                 place is null
                     ? Loc.Get(Strings.Concerts.EmptyWithoutLocation)
                     : Loc.Get(Strings.Concerts.EmptyForLocation),
-                Mdl.MapPin,
+                Icons.MapPin,
                 actionLabel: place is null ? Loc.Get(Strings.Concerts.Location.Set) : null,
                 onAction: place is null ? () => _location.TogglePicker(() => _anchor.Value) : null),
             group: "concert-hub");
@@ -121,7 +121,7 @@ sealed class ConcertHubPage : Component
 
         var content = new BoxEl
         {
-            Direction = 1, Gap = WaveeSpace.L,
+            Direction = 1, Gap = Spacing.L,
             Padding = new Edges4(32f, 40f, 32f, PlayerDock.Reserve + 40f),
             Children = kids.ToArray(),
         };
@@ -149,8 +149,8 @@ sealed class ConcertHubPage : Component
         return new BoxEl
         {
             Direction = 1, MinWidth = 0f, Gap = 4f,
-            Padding = new Edges4(WaveeSpace.XL, WaveeSpace.L, WaveeSpace.XL, WaveeSpace.L),
-            Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardDefault,
+            Padding = new Edges4(Spacing.XL, Spacing.L, Spacing.XL, Spacing.L),
+            Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillCardDefault,
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault, Shadow = Elevation.Card,
             Children =
             [
@@ -189,7 +189,7 @@ sealed class ConcertHubPage : Component
                 NearTail = _nearTail,
                 Start = () => AppendFeed(svc),
             }) with { Key = "concert-append:" + paginationKey });
-        return new BoxEl { Direction = 1, Gap = WaveeSpace.XL, MinWidth = 0f, Children = sections.ToArray() };
+        return new BoxEl { Direction = 1, Gap = Spacing.XL, MinWidth = 0f, Children = sections.ToArray() };
     }
 
     // Hub shelves host MANY artists, so the title-primary card family is correct here (unlike the artist schedule).
@@ -204,7 +204,7 @@ sealed class ConcertHubPage : Component
             header: SectionCaption(Upper(section.Kind == ConcertFeedSectionKind.Nearby
                 ? Loc.Get(Strings.Concerts.NearYou)
                 : Loc.Get(Strings.Concerts.RecommendedForYou))),
-            headerGap: WaveeSpace.S,
+            headerGap: Spacing.S,
             measured: true, keyOf: i => concerts[i].Uri) with { Key = "hub-shelf:" + section.Key };
     }
 
@@ -230,8 +230,8 @@ sealed class ConcertHubPage : Component
             return new BoxEl
             {
                 Key = "hub-grid:" + section.Key,
-                Direction = 1, Gap = WaveeSpace.S,
-                Children = [ SectionCaption(Upper(Loc.Get(Strings.Concerts.AllEvents))), AutoGrid(GridMinCol, WaveeSpace.M, float.NaN, cards) ],
+                Direction = 1, Gap = Spacing.S,
+                Children = [ SectionCaption(Upper(Loc.Get(Strings.Concerts.AllEvents))), AutoGrid(GridMinCol, Spacing.M, float.NaN, cards) ],
             };
         }
 
@@ -241,7 +241,7 @@ sealed class ConcertHubPage : Component
         return new BoxEl
         {
             Key = "hub-grid:all-events",
-            Direction = 1, Gap = WaveeSpace.S, MinWidth = 0f,
+            Direction = 1, Gap = Spacing.S, MinWidth = 0f,
             Children =
             [
                 SectionCaption(Upper(Loc.Get(Strings.Concerts.AllEvents))),
@@ -249,7 +249,7 @@ sealed class ConcertHubPage : Component
                     count: () => _allEvents.Value.Count,
                     cell: (i, w) => EventCell(i, go),
                     ensureRange: static (_, _) => { },   // appends land whole in memory; paging is the tail preloader's job
-                    minColWidth: GridMinCol, gap: WaveeSpace.M, rowExtra: EventChrome + GridRowGap, overscanRows: 3))
+                    minColWidth: GridMinCol, gap: Spacing.M, rowExtra: EventChrome + GridRowGap, overscanRows: 3))
                     with { Key = "hub-grid-lazy" },
             ],
         };
@@ -271,7 +271,7 @@ sealed class ConcertHubPage : Component
             cardAt: (i, w) => PlaylistPromoCard(promos[i],
                 () => go("pl:" + promos[i].Uri, promos[i].Name), w),
             header: SectionCaption(Upper(Loc.Get(Strings.Concerts.PlaylistsForScene))),
-            headerGap: WaveeSpace.S,
+            headerGap: Spacing.S,
             measured: true, keyOf: i => promos[i].Uri) with { Key = "hub-promos:" + sectionKey };
     }
 
@@ -279,13 +279,13 @@ sealed class ConcertHubPage : Component
     // MediaCard variant hard-mounts NowPlayingOverlay, and no concert surface may wire playback — navigation only.
     static Element PlaylistPromoCard(PlaylistRef playlist, Action onClick, float cardW)
     {
-        float inner = MathF.Max(48f, cardW - 2f * WaveeSpace.S);
+        float inner = MathF.Max(48f, cardW - 2f * Spacing.S);
         return new BoxEl
         {
             Key = playlist.Uri,
-            Direction = 1, Gap = WaveeSpace.S, Grow = 1f, ClipToBounds = true,
-            Padding = new Edges4(WaveeSpace.S, WaveeSpace.S, WaveeSpace.S, WaveeSpace.M),
-            Corners = CornerRadius4.All(WaveeRadius.Card),
+            Direction = 1, Gap = Spacing.S, Grow = 1f, ClipToBounds = true,
+            Padding = new Edges4(Spacing.S, Spacing.S, Spacing.S, Spacing.M),
+            Corners = CornerRadius4.All(Radii.Card),
             Fill = Tok.FillCardDefault, HoverFill = Tok.FillControlSecondary, PressedFill = Tok.FillControlTertiary,
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             Role = AutomationRole.Button, Focusable = true, FocusVisualMargin = new Edges4(2f, 2f, 2f, 2f),
@@ -293,7 +293,7 @@ sealed class ConcertHubPage : Component
             Children =
             [
                 Surfaces.Artwork(playlist.Cover, playlist.Uri.GetHashCode() & 0x7fffffff, inner, inner,
-                    WaveeRadius.Control, decodePx: 256),
+                    Radii.Control, decodePx: 256),
                 WaveeType.TrackTitle(playlist.Name) with
                 {
                     Width = inner, Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.CharacterEllipsis,

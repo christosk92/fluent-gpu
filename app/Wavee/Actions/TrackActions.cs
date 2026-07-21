@@ -36,7 +36,7 @@ public static class TrackActions
         Execute = static c =>
         {
             int n = DetailQueueActions.PlayNext(c.S.Svc?.Player, c.Target.Tracks, c.Target.Count);
-            if (n > 0) Toasts.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), ToastSeverity.Success);
+            if (n > 0) Toast.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), new ToastOptions { Severity = InfoBarSeverity.Success });
         },
     };
 
@@ -49,7 +49,7 @@ public static class TrackActions
         Execute = static c =>
         {
             int n = DetailQueueActions.AddToEnd(c.S.Svc?.Player, c.Target.Tracks, c.Target.Count);
-            if (n > 0) Toasts.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), ToastSeverity.Success);
+            if (n > 0) Toast.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), new ToastOptions { Severity = InfoBarSeverity.Success });
         },
     };
 
@@ -57,8 +57,8 @@ public static class TrackActions
     {
         Id = ActionId.ToggleLike, IconKey = ActionIcons.Heart,
         // Checked visual in the labeled context-menu strip: the two-tone accent-filled heart (no pill) — the player-bar
-        // Like convention (PlayerBar.cs: liked ? Mdl.HeartFill : Icons.Heart + accent color). Glyph fallback pre-registry.
-        CheckedIcon = IconRef.Themed("HeartFill", Mdl.HeartFill),
+        // Like convention (PlayerBar.cs: liked ? Icons.HeartFill : Icons.Heart + accent color). Glyph fallback pre-registry.
+        CheckedIcon = IconRef.Themed("HeartFill", Icons.HeartFill),
         // Multi: checked iff ALL saved; Execute then saves the rest (or unsaves all when everything was saved).
         IsChecked = static c => AllSaved(in c),
         // Short strip-friendly verb (user: Explorer strip labels are one word; "Save"/"Saved" is Spotify's compact form —
@@ -91,7 +91,7 @@ public static class TrackActions
             try { clip.SetText(text); }
             catch (Exception ex) { PlaylistEditErrors.Toast(ex); return; }   // the PlaylistInlineEdit.Share precedent
             InputHooks.Current.Default.Announce?.Invoke(Loc.Get(Strings.Auth.Copied), false);
-            Toasts.Show(Loc.Get(Strings.Menu.LinkCopied), ToastSeverity.Success);
+            Toast.Show(Loc.Get(Strings.Menu.LinkCopied), new ToastOptions { Severity = InfoBarSeverity.Success });
         },
     };
 
@@ -175,7 +175,7 @@ public static class TrackActions
             try { clip.SetText(uri); }
             catch (Exception ex) { PlaylistEditErrors.Toast(ex); return; }
             InputHooks.Current.Default.Announce?.Invoke(Loc.Get(Strings.Auth.Copied), false);
-            Toasts.Show(Loc.Get(Strings.Menu.UriCopied), ToastSeverity.Success);
+            Toast.Show(Loc.Get(Strings.Menu.UriCopied), new ToastOptions { Severity = InfoBarSeverity.Success });
         },
     };
 

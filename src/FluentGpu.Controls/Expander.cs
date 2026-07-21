@@ -65,23 +65,31 @@ public sealed class Expander : Component
     /// the expander reads this signal instead of its local state — writes from anywhere (an "expand all" button, a
     /// view-model) open/close it with the full motion — and the header click writes back into it.</summary>
     public Signal<bool>? IsExpanded;
+    /// <summary>Optional <c>onChange</c> sugar: fired with the new open state AFTER a header toggle writes the state;
+    /// a programmatic <see cref="IsExpanded"/> write does not echo it.</summary>
+    public Action<bool>? OnChange;
     /// <summary>Lightweight per-part styling (CSS ::part): modifiers keyed by the <c>PartXxx</c> consts; see the
     /// class remarks and <see cref="TemplateParts"/> for the contract.</summary>
     public TemplateParts? Parts;
 
-    public static Element Create(string header, Element content, bool initiallyExpanded = false)
-        => Embed.Comp(() => new Expander { Header = header, Content = content, InitiallyExpanded = initiallyExpanded });
+    /// <summary><paramref name="isExpanded"/> = optional CONTROLLED open-state <see cref="Signal{T}"/> (null ⇒ the
+    /// expander owns its state via <paramref name="initiallyExpanded"/> — today's behavior); <paramref name="onChange"/>
+    /// fires on a header toggle. <paramref name="content"/> is a <see cref="MountOnceContentAttribute">deliberate
+    /// mount-time slot</see> (STATIC content); a parent with per-render content uses the re-push slots overload below
+    /// (<c>Embed.Comp(new ExpanderSlots(...), …)</c>).</summary>
+    public static Element Create(string header, [MountOnceContent] Element content, bool initiallyExpanded = false,
+                                 Signal<bool>? isExpanded = null, Action<bool>? onChange = null)
+        => Embed.Comp(() => new Expander { Header = header, Content = content, InitiallyExpanded = initiallyExpanded,
+                                           IsExpanded = isExpanded, OnChange = onChange });
 
-    /// <summary>LIVE content slots delivered by a parent provider (the SelectorBar/RadioButtons pattern). An
-    /// <see cref="Expander"/> is an autonomous component: its <see cref="Content"/>/<see cref="HeaderContent"/>/
+    /// <summary>LIVE content slots RE-PUSHED to the core (<c>Embed.Comp(slots, …)</c>; the SelectorBar/RadioButtons
+    /// pattern). An <see cref="Expander"/> is an autonomous component: its <see cref="Content"/>/<see cref="HeaderContent"/>/
     /// <see cref="Parts"/> FIELDS are frozen at first mount (a reused <c>ComponentEl</c> never re-runs its factory),
     /// so dynamic content passed by value would go stale. A parent that rebuilds its content each render must instead
-    /// wrap the Expander in <c>Ctx.Provide(Expander.SlotsChannel, new ExpanderSlots(...), Embed.Comp(() =&gt; new
-    /// Expander { InitiallyExpanded = …, IsExpanded = … }))</c>; when present these slots WIN over the fields, and the
-    /// Expander re-renders reactively whenever the provided value changes (context is signal-backed).</summary>
+    /// mount the Expander as <c>Embed.Comp(new ExpanderSlots(...), () =&gt; new Expander { InitiallyExpanded = …,
+    /// IsExpanded = … })</c>; when present these slots WIN over the fields, and the Expander re-renders reactively
+    /// whenever the re-pushed value changes (props are signal-backed). Read with <c>UsePropsOrDefault</c>.</summary>
     public sealed record ExpanderSlots(Element? HeaderContent, Element Content, TemplateParts? Parts);
-
-    internal static readonly Context<ExpanderSlots?> SlotsChannel = new(null);
 
     // WinUI Expander durations/easings (Expander.xaml, ExpandDown ~62-77 / CollapseUp ~78-90), applied to the clip
     // wrapper's LAYOUT height (SizeMode.Reflow) instead of WinUI's content TranslateY-into-snapped-space:
@@ -99,9 +107,9 @@ public sealed class Expander : Component
 
     public override Element Render()
     {
-        // Live content slots (SettingsExpander etc.) win over the frozen fields; reading the context subscribes this
-        // component so a parent that rebuilds its content re-renders us with it. Static callers provide no slots → fields.
-        var slots = UseContext(SlotsChannel);
+        // Live content slots (SettingsExpander etc.) win over the frozen fields; reading the re-pushed props subscribes
+        // this component so a parent that rebuilds its content re-renders us with it. Static callers provide no slots → fields.
+        var slots = UsePropsOrDefault<ExpanderSlots>();
         Element? headerContent = slots?.HeaderContent ?? HeaderContent;
         Element contentSlot = slots?.Content ?? Content;
         TemplateParts? parts = slots?.Parts ?? Parts;
@@ -154,8 +162,9 @@ public sealed class Expander : Component
         Action toggle = () =>
         {
             bool next = !open;
-            if (IsExpanded is { } sig) sig.Value = next; else setLocalOpen(next);
+            if (IsExpanded is { } sig) sig.Value = next; else setLocalOpen(next);   // write the state first
             if (next) shown.Value = true;
+            OnChange?.Invoke(next);                                                  // then onChange (user toggle only)
         };
 
         // Trailing 32x32 rounded chevron button: only this gets the subtle hover/press, not the whole header.

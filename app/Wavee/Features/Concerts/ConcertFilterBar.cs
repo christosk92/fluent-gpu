@@ -62,7 +62,7 @@ sealed class ConcertFilterBar : Component
 
         Element caption = new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.Center, MinWidth = 0f, Gap = WaveeSpace.S,
+            Direction = 0, AlignItems = FlexAlign.Center, MinWidth = 0f, Gap = Spacing.S,
             Children =
             [
                 Caption(Upper(Loc.Get(Strings.Concerts.Filter.FilterBy))) with
@@ -84,7 +84,7 @@ sealed class ConcertFilterBar : Component
 
         Element row = new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M,
             Children = [ wherePill, Divider(), WhenArea(when, culture), Divider(), Genres(all, selected, expanded) ],
         };
 
@@ -96,9 +96,9 @@ sealed class ConcertFilterBar : Component
 
         return new BoxEl
         {
-            Direction = 1, Gap = WaveeSpace.XS, MinWidth = 0f,
-            Padding = new Edges4(WaveeSpace.M, WaveeSpace.S, WaveeSpace.M, WaveeSpace.S),
-            Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillLayerDefault,
+            Direction = 1, Gap = Spacing.XS, MinWidth = 0f,
+            Padding = new Edges4(Spacing.M, Spacing.S, Spacing.M, Spacing.S),
+            Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillLayerDefault,
             BorderWidth = 1f, BorderColor = Tok.StrokeSurfaceDefault, Shadow = Elevation.Card,
             ScrollBinds = [ new() { PinTop = 0f } ],
             Children = [ caption, scroller ],
@@ -128,12 +128,12 @@ sealed class ConcertFilterBar : Component
                     TransitionDynamics.Tween(220f, Easing.FluentAccelerate),
                     Exit: new EnterExit(Dx: -56f, Opacity: 0f, Active: true)),
             };
-            return new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S, Children = [ pill, chip ] };
+            return new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S, Children = [ pill, chip ] };
         }
 
         BoxEl fused = ConcertUi.SegmentedDatePill(when.Name, ConcertHub.WhenLabel(when.Range!, culture), OpenWhenFlyout)
             with { OnRealized = h => _whenAnchor.Value = h };
-        return new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S, Children = [ fused ] };
+        return new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S, Children = [ fused ] };
     }
 
     void PickThisWeekend()
@@ -166,7 +166,7 @@ sealed class ConcertFilterBar : Component
         else if (expanded && all.Count > 3)
             kids.Add(ConcertUi.MoreToken(Loc.Get(Strings.Concerts.Filter.ShowLess), true, () => _expanded.Value = false));
 
-        return new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S, Children = kids.ToArray() };
+        return new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S, Children = kids.ToArray() };
     }
 
     void ClearGenres()
