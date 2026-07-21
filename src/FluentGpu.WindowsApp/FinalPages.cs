@@ -7,6 +7,7 @@ using static FluentGpu.Dsl.Ui;
 
 // ── RichTextBlock / Canvas / ToolTip / CommandBarFlyout demo pages ─────────────────
 
+[Route("RichTextBlock")]
 sealed class RichTextBlockPage : Component
 {
     static readonly string[] Paras =
@@ -55,6 +56,7 @@ sealed class RichTextBlockPage : Component
             """));
 }
 
+[Route("Canvas")]
 sealed class CanvasPage : Component
 {
     static Element Dot(ColorF c) => new BoxEl { Width = 48, Height = 48, Corners = Radii.Circle(48), Fill = c };
@@ -110,6 +112,7 @@ sealed class CanvasPage : Component
             """));
 }
 
+[Route("ToolTip")]
 sealed class ToolTipPage : Component
 {
     static BoxEl Chip(string label) => new()
@@ -167,6 +170,7 @@ sealed class ToolTipPage : Component
     }
 }
 
+[Route("CommandBarFlyout")]
 sealed class CommandBarFlyoutPage : Component
 {
     // Each example owns its own output state, so the command sets are built per example around its reporter.

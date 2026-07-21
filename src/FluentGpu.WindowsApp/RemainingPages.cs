@@ -7,6 +7,7 @@ using static FluentGpu.Dsl.Ui;
 
 // ── ProgressRing / RelativePanel / VariableSizedWrapGrid / AnnotatedScrollBar / SwipeControl / MediaPlayerElement ──
 
+[Route("ProgressRing")]
 sealed class ProgressRingPage : Component
 {
     public override Element Render()
@@ -48,6 +49,7 @@ sealed class ProgressRingPage : Component
     }
 }
 
+[Route("RelativePanel")]
 sealed class RelativePanelPage : Component
 {
     static Element Chip(string s) => new BoxEl { Padding = new Edges4(12, 8, 12, 8), Corners = Radii.ControlAll, Fill = Tok.FillCardDefault, BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f, Children = [new TextEl(s) { Size = 13f, Color = Tok.TextPrimary }] };
@@ -97,6 +99,7 @@ sealed class RelativePanelPage : Component
             """));
 }
 
+[Route("VariableSizedWrapGrid")]
 sealed class VariableSizedWrapGridPage : Component
 {
     public override Element Render() => GalleryPage.Shell("VariableSizedWrapGrid",
@@ -129,6 +132,7 @@ sealed class VariableSizedWrapGridPage : Component
             """));
 }
 
+[Route("AnnotatedScrollBar")]
 sealed class AnnotatedScrollBarPage : Component
 {
     public override Element Render()
@@ -169,6 +173,7 @@ sealed class AnnotatedScrollBarPage : Component
     }
 }
 
+[Route("SwipeControl")]
 sealed class SwipeControlPage : Component
 {
     public override Element Render() => GalleryPage.Shell("SwipeControl",
@@ -199,6 +204,7 @@ sealed class SwipeControlPage : Component
             """));
 }
 
+[Route("MediaPlayerElement")]
 sealed class MediaPlayerElementPage : Component
 {
     public override Element Render()

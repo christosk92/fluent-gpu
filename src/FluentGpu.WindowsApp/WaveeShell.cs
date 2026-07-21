@@ -11,6 +11,7 @@ using static FluentGpu.Dsl.Ui;
 // (Slider + transport IconButtons + ToggleButton). Composes every subsystem built this session.
 //
 //   dotnet run --project src/FluentGpu.WindowsApp -- --demo wavee
+[Route("wavee")]
 sealed class WaveeShell : Component
 {
     static readonly ColorF Grey = ColorF.FromRgba(0x9A, 0x9A, 0x9A);

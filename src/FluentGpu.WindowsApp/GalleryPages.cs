@@ -12,6 +12,7 @@ using static FluentGpu.Dsl.Ui;
 
 
 // ===== TypographyPage =====
+[Route("typography")]
 sealed class TypographyPage : Component
 {
     static readonly ColorF Grey = ColorF.FromRgba(0x9A, 0x9A, 0x9A);
@@ -211,6 +212,7 @@ sealed class TypographyPage : Component
 }
 
 // ===== ButtonsPage =====
+[Route("buttons")]
 sealed class ButtonsPage : Component
 {
     public override Element Render()
@@ -341,6 +343,7 @@ sealed class ButtonsPage : Component
 }
 
 // ===== InputsPage =====
+[Route("inputs")]
 sealed class InputsPage : Component
 {
     static string FormatTime(float fraction, int totalSeconds)
@@ -544,6 +547,7 @@ sealed class InputsPage : Component
 }
 
 // ===== FlexPage =====
+[Route("flex")]
 sealed class FlexPage : Component
 {
     static Element Tile(int i, float w = 44, float h = 44) => new BoxEl
@@ -715,6 +719,7 @@ sealed class FlexPage : Component
 }
 
 // ===== GridPage =====
+[Route("grid")]
 sealed class GridPage : Component
 {
     static readonly ColorF[] TileTints =
@@ -867,6 +872,7 @@ sealed class GridPage : Component
 // panel — a simple image, object-fit (Cover/Contain), corner radius, sizing/decodePx, the placeholder tint, and the
 // responsive async album grid (the full FluentGpu.Media pipeline: HTTP/2 fetch → off-thread WIC decode → disk cache →
 // GPU texture residency).
+[Route("Image")]
 sealed class ImagePage : Component
 {
     static readonly string[] AlbumTitles =
@@ -1003,6 +1009,7 @@ sealed class ImagePage : Component
 }
 
 // ===== ScrollPage =====
+[Route("scrolling")]
 sealed class ScrollPage : Component
 {
     static readonly ColorF RowA = ColorF.FromRgba(38, 38, 44, 255);
@@ -1092,6 +1099,7 @@ sealed class ScrollPage : Component
 }
 
 // ===== VirtualizationPage =====
+[Route("virtualization")]
 sealed class VirtualizationPage : Component
 {
     static readonly ColorF RowEven = ColorF.FromRgba(255, 255, 255, 8);
@@ -1178,6 +1186,7 @@ sealed class VirtualizationPage : Component
 // ===== AnimationPage lives in AnimationPage.cs — the complete AnimEngine showcase =====
 
 // ===== CompositorPage =====
+[Route("compositor")]
 sealed class CompositorPage : Component
 {
     static ColorF AccentTint(float t) => ColorF.Lerp(Theme.Accent, Theme.WindowBackground, t);
@@ -1381,6 +1390,7 @@ sealed class CompositorPage : Component
 // The signals-first state model, demonstrated end to end: the three update mechanisms (binding / granular re-render /
 // reactive control flow), the state hooks (UseState, UseSignal, UseComputed, UseReducer, UseContext), and live
 // render-count instrumentation that PROVES which path re-renders. Canon: docs/guide/reactivity.md.
+[Route("state")]
 sealed class StatePage : Component
 {
     public static readonly Context<int> ThemeLevel = new(1);

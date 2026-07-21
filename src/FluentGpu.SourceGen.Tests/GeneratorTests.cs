@@ -1,5 +1,6 @@
 using System.Linq;
 using FluentGpu.SourceGen.Engine;
+using FluentGpu.SourceGen.Routing;
 using Xunit;
 
 namespace FluentGpu.SourceGen.Tests;
@@ -142,5 +143,101 @@ public sealed class GeneratorTests
         var (_, diags) = Harness.Generate(new GlyphTableGenerator(), "",
             ("glyphs.json", "{\"Play\":\"NOPE\"}"));
         Assert.Contains(diags, d => d.Id == "FGGLYPH002");
+    }
+
+    // ── RouteTableGenerator ──────────────────────────────────────────────────────────────────────────────────────
+    // Minimal shims for the trigger surface the generator keys off (BCL-only refs; no engine clash).
+    private const string RouteShim = """
+        namespace FluentGpu.Hooks { public abstract class Component { } }
+        namespace FluentGpu.Controls {
+            [System.AttributeUsage(System.AttributeTargets.Class)]
+            public sealed class RouteAttribute : System.Attribute {
+                public RouteAttribute(string key) { }
+                public string? Title { get; set; } public string? Icon { get; set; } public string? Category { get; set; }
+                public int Order { get; set; } public bool KeepAlive { get; set; } public bool ShowInNav { get; set; }
+            }
+            public sealed record Route(string Name, string? Arg = null);
+        }
+        """;
+
+    [Fact]
+    public void RouteTableGenerator_Emits_RegisterAll_With_Metadata_And_Parameterless_Factory()
+    {
+        var (gen, diags) = Harness.Generate(new RouteTableGenerator(), RouteShim + """
+            namespace Test {
+                [FluentGpu.Controls.Route("home", Title = "Home", Icon = "H", Category = "Nav", Order = 3, KeepAlive = true)]
+                public sealed class HomePage : FluentGpu.Hooks.Component { }
+            }
+            """);
+        Assert.Empty(diags);                                                     // clean page → no FGRT diagnostics
+        Assert.Contains("class Routes", gen);
+        Assert.Contains("RegisterAll(global::FluentGpu.Controls.RouteRegistry r)", gen);
+        Assert.Contains("new global::FluentGpu.Controls.RouteDef(\"home\"", gen);
+        Assert.Contains("Embed.Comp(static () => new global::Test.HomePage())", gen);  // parameterless factory
+        Assert.Contains("Title = \"Home\"", gen);
+        Assert.Contains("Icon = \"H\"", gen);
+        Assert.Contains("Category = \"Nav\"", gen);
+        Assert.Contains("Order = 3", gen);
+        Assert.Contains("KeepAlive = true", gen);
+    }
+
+    [Fact]
+    public void RouteTableGenerator_String_Ctor_Threads_Route_Arg()
+    {
+        var (gen, _) = Harness.Generate(new RouteTableGenerator(), RouteShim + """
+            namespace Test {
+                [FluentGpu.Controls.Route("detail")]
+                public sealed class DetailPage : FluentGpu.Hooks.Component { public DetailPage(string arg) { } }
+            }
+            """);
+        Assert.Contains("new global::Test.DetailPage(route.Arg ?? \"\")", gen);
+    }
+
+    [Fact]
+    public void RouteTableGenerator_Route_Ctor_Threads_Route()
+    {
+        var (gen, _) = Harness.Generate(new RouteTableGenerator(), RouteShim + """
+            namespace Test {
+                [FluentGpu.Controls.Route("detail")]
+                public sealed class DetailPage : FluentGpu.Hooks.Component { public DetailPage(FluentGpu.Controls.Route r) { } }
+            }
+            """);
+        Assert.Contains("new global::Test.DetailPage(route)", gen);
+    }
+
+    [Fact]
+    public void RouteTableGenerator_FGRT001_On_Duplicate_Keys()
+    {
+        var (_, diags) = Harness.Generate(new RouteTableGenerator(), RouteShim + """
+            namespace Test {
+                [FluentGpu.Controls.Route("dup")] public sealed class A : FluentGpu.Hooks.Component { }
+                [FluentGpu.Controls.Route("dup")] public sealed class B : FluentGpu.Hooks.Component { }
+            }
+            """);
+        Assert.Contains(diags, d => d.Id == "FGRT001");
+    }
+
+    [Fact]
+    public void RouteTableGenerator_FGRT002_On_No_Routable_Ctor()
+    {
+        var (_, diags) = Harness.Generate(new RouteTableGenerator(), RouteShim + """
+            namespace Test {
+                [FluentGpu.Controls.Route("bad")]
+                public sealed class BadPage : FluentGpu.Hooks.Component { public BadPage(int x) { } }
+            }
+            """);
+        Assert.Contains(diags, d => d.Id == "FGRT002");
+    }
+
+    [Fact]
+    public void RouteTableGenerator_FGRT003_When_Not_A_Component()
+    {
+        var (_, diags) = Harness.Generate(new RouteTableGenerator(), RouteShim + """
+            namespace Test {
+                [FluentGpu.Controls.Route("x")]
+                public sealed class NotAPage { }
+            }
+            """);
+        Assert.Contains(diags, d => d.Id == "FGRT003");
     }
 }

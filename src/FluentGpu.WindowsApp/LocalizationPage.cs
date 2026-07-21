@@ -17,6 +17,7 @@ using static FluentGpu.Dsl.Ui;
 // live slider — watch the form change across en one/other and pl one/few/many), ICU select (gender), and a pseudo-loc
 // toggle. The language picker re-renders ONLY itself (a scoped Component reading UseLocale) to move the selection.
 
+[Route("localization")]
 sealed class LocalizationPage : Component
 {
     // Cultures offered by the picker (must have a loaded JSON table). qps-ploc is the pseudo dev-locale.

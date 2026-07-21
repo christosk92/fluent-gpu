@@ -278,8 +278,42 @@ new NavigationView {
     Items = [new NavItem("home","","Home"), …], Footer = [...], Header = "App",
     Content = key => Pages[key],
     OnSelect = key => { … },
+    Navigator = nav,     // optional: select => nav.Replace(new Route(key)); initial selection follows nav.Current
 };   // adapts Expanded/Compact/Minimal by Viewport.Size width (1008 / 641 thresholds)
 ```
+
+#### Registry-driven routing (`RouteRegistry` + `[Route]`)
+
+Instead of a hand-synced page switch, tag each page component with `[Route("key")]` and let the **RouteTableGenerator**
+build the table at compile time (zero reflection, AOT-clean). `PageHost.Create(nav, registry)` then resolves the top
+route through the registry — with a fallback for unknown keys, `KeepAlive` parking (state survives navigating away and
+back), and per-route entrance transitions. One registry is the single source of truth for the page factory, and can
+also derive a nav tree (`BuildNavTree`) and a search corpus (`BuildSearchIndex`).
+
+```csharp
+// 1. Tag pages (parameterless ctor, or a (Route)/(string) ctor to receive route.Arg):
+[Route("home", Title = "Home", Icon = "", Category = "Main")]
+sealed class HomePage : Component { public override Element Render() => body; }
+
+[Route("playlist", KeepAlive = true)]
+sealed class PlaylistPage : Component {
+    public PlaylistPage(string id) { }                 // (string) ctor => gets route.Arg
+    public override Element Render() => body;
+}
+
+// 2. Build the registry once and host it:
+var registry = new RouteRegistry();
+Routes.RegisterAll(registry);                          // generated from the [Route] attributes (FluentGpu.Generated)
+registry.Add(new RouteDef("about", _ => Embed.Comp(() => new AboutPage())) { KeepAlive = true });  // runtime routes
+registry.Fallback = r => Embed.Comp(() => new NotFoundPage());
+var nav = new Navigator(new Route("home"));
+PageHost.Create(nav, registry);                        // the one-liner router (Nav.Context + KeepAlive + transitions)
+```
+
+`RouteDef` carries `{ Title, Icon, Category, Order, ShowInNav, KeepAlive, Transition, SearchTerms }`. `NavTransition` is
+`Default | None | Entrance` — `Default`/`Entrance` seed the engine's declarative `Enter`/`Transition` motion tokens on
+the page root (a fade + slide-up), `None` snaps. Duplicate keys throw at runtime (`RouteRegistry.Add`) and are a compile
+error from the generator (**FGRT001**); a page with no routable ctor is **FGRT002**, a non-`Component` is **FGRT003**.
 
 ### Overlays: Popup, Flyout & Toast
 

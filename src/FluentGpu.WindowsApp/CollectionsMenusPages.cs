@@ -11,6 +11,7 @@ using static FluentGpu.Dsl.Ui;
 // coverage moved onto the flagship ItemsViewPage (MiscPages.cs) as the List/Grid preset card groups (simple +
 // multiple + reorder, same Coffees/drinks/GridItems/colors data), via ItemsView.List(...) / ItemsView.Grid(...).
 
+[Route("FlipView")]
 sealed class FlipViewPage : Component
 {
     static readonly string[] Items = { "Page 1", "Page 2", "Page 3", "Page 4" };
@@ -34,6 +35,7 @@ sealed class FlipViewPage : Component
             """));
 }
 
+[Route("TreeView")]
 sealed class TreeViewPage : Component
 {
     static readonly TreeNode[] Roots =
@@ -108,6 +110,7 @@ sealed class TreeViewPage : Component
     static Element Card(Element tree) => new BoxEl { Width = 320, Corners = Radii.OverlayAll, BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f, Padding = new Edges4(0, 6, 0, 6), Children = [tree] };
 }
 
+[Route("AppBarButton")]
 sealed class AppBarButtonPage : Component
 {
     public override Element Render()
@@ -171,6 +174,7 @@ sealed class AppBarButtonPage : Component
     };
 }
 
+[Route("MenuBar")]
 sealed class MenuBarPage : Component
 {
     public override Element Render()
@@ -254,6 +258,7 @@ sealed class MenuBarPage : Component
 }
 
 // Category overview pages.
+[Route("collections")]
 sealed class CollectionsOverviewPage : Component
 {
     public override Element Render()
@@ -264,6 +269,7 @@ sealed class CollectionsOverviewPage : Component
     }
 }
 
+[Route("menus")]
 sealed class MenusOverviewPage : Component
 {
     public override Element Render()
@@ -277,6 +283,7 @@ sealed class MenusOverviewPage : Component
 // Context menus attached with ContextMenu.Attach / .WithContextMenu — the one-liner over any element. Right-click, the
 // Menu key / Shift+F10 on a focused row, or a touch long-press all open it. A non-empty Primary strip yields the
 // Explorer command-bar shape; an empty Primary yields a plain vertical menu; a null / all-disabled model opens nothing.
+[Route("ContextMenu")]
 sealed class ContextMenuPage : Component
 {
     static readonly string[] Tracks = { "Bohemian Rhapsody", "Stairway to Heaven", "Hotel California", "Imagine" };

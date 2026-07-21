@@ -16,6 +16,7 @@ using static FluentGpu.Dsl.Ui;
 // free (a rule that reads a sibling signal auto-re-validates), errors stay silent until a field is touched (no red on
 // load), the submit button auto-disables until the whole form is valid, and a failed submit reveals every error. It is
 // reflection-free (NativeAOT), zero-allocation on the keystroke path, and i18n — messages are localization keys.
+[Route("validation")]
 sealed class ValidationPage : Component
 {
     public override Element Render()

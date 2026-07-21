@@ -7,6 +7,7 @@ using static FluentGpu.Dsl.Ui;
 
 // ── Pivot / NumberBox / AppBarToggleButton / CommandBar / Viewbox / ContentDialog demo pages (batch 4) ──────────
 
+[Route("Pivot")]
 sealed class PivotPage : Component
 {
     static readonly string[] Headers = { "All", "Recent", "Favorites" };
@@ -24,6 +25,7 @@ sealed class PivotPage : Component
             """));
 }
 
+[Route("NumberBox")]
 sealed class NumberBoxPage : Component
 {
     public override Element Render()
@@ -79,6 +81,7 @@ sealed class NumberBoxPage : Component
     }
 }
 
+[Route("AppBarToggleButton")]
 sealed class AppBarToggleButtonPage : Component
 {
     public override Element Render()
@@ -125,6 +128,7 @@ sealed class AppBarToggleButtonPage : Component
     }
 }
 
+[Route("CommandBar")]
 sealed class CommandBarPage : Component
 {
     public override Element Render()
@@ -184,6 +188,7 @@ sealed class CommandBarPage : Component
     }
 }
 
+[Route("Viewbox")]
 sealed class ViewboxPage : Component
 {
     public override Element Render() => GalleryPage.Shell("Viewbox",
@@ -254,6 +259,7 @@ sealed class ViewboxPage : Component
         Caption(label));
 }
 
+[Route("ContentDialog")]
 sealed class ContentDialogPage : Component
 {
     public override Element Render()
@@ -301,6 +307,7 @@ sealed class ContentDialogPage : Component
     }
 }
 
+[Route("text-cat")]
 sealed class TextOverviewPage : Component
 {
     public override Element Render()

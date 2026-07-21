@@ -7,6 +7,7 @@ using static FluentGpu.Dsl.Ui;
 
 // ── Date & time control demo pages ──────────
 
+[Route("CalendarView")]
 sealed class CalendarViewPage : Component
 {
     public override Element Render() => GalleryPage.Shell("CalendarView",
@@ -24,6 +25,7 @@ sealed class CalendarViewPage : Component
             """));
 }
 
+[Route("DatePicker")]
 sealed class DatePickerPage : Component
 {
     public override Element Render()
@@ -59,6 +61,7 @@ sealed class DatePickerPage : Component
     }
 }
 
+[Route("TimePicker")]
 sealed class TimePickerPage : Component
 {
     public override Element Render() => GalleryPage.Shell("TimePicker",
@@ -71,6 +74,7 @@ sealed class TimePickerPage : Component
             """));
 }
 
+[Route("CalendarDatePicker")]
 sealed class CalendarDatePickerPage : Component
 {
     public override Element Render() => GalleryPage.Shell("CalendarDatePicker",
@@ -82,6 +86,7 @@ sealed class CalendarDatePickerPage : Component
             """));
 }
 
+[Route("datetime")]
 sealed class DateTimeOverviewPage : Component
 {
     public override Element Render()

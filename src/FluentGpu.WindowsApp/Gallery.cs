@@ -352,116 +352,27 @@ sealed class GalleryApp : Component
         Children = [Embed.Comp(() => new FrameDiagnosticsHud())],
     };
 
-    static Element Page(string key) => key switch
+    // WS3 P8: pages are registered by the RouteTableGenerator from their [Route] attributes
+    // (FluentGpu.Generated.Routes.RegisterAll), replacing the former hand-synced ~100-arm switch. The NavItem tree +
+    // search index above stay hand-authored this phase; the registry is the page FACTORY (the full registry-derived
+    // shell is G8/WS7).
+    static readonly RouteRegistry _routes = BuildRoutes();
+
+    static RouteRegistry BuildRoutes()
     {
-        // Overview / category pages (WinUI-Gallery shape).
-        "fundamentals" => Embed.Comp(() => new FundamentalsPage()),
-        "patterns" => Embed.Comp(() => new PatternsPage()),
-        "app-services" => Embed.Comp(() => new AppServicesPage()),
-        "design" => Embed.Comp(() => new DesignPage()),
-        "all" => Embed.Comp(() => new AllControlsPage()),
-        "basic-input" => Embed.Comp(() => new BasicInputOverviewPage()),
+        var r = new RouteRegistry();
+        FluentGpu.Generated.Routes.RegisterAll(r);
+        // Deep-link aliases the old switch folded onto one class (Media Lab hosts the former Desktop/Protected video pages).
+        if (r.Resolve("media-lab") is { } lab)
+        {
+            r.Add(new RouteDef("desktop-video", lab.Factory));
+            r.Add(new RouteDef("playready-video", lab.Factory));
+        }
+        r.Fallback = _ => Embed.Comp(() => new WelcomePage());   // unknown key -> Home (the old switch's default arm)
+        return r;
+    }
 
-        // Basic input — the 14 control demo pages.
-        "Button" => Embed.Comp(() => new ButtonControlPage()),
-        "DropDownButton" => Embed.Comp(() => new DropDownButtonControlPage()),
-        "HyperlinkButton" => Embed.Comp(() => new HyperlinkButtonControlPage()),
-        "RepeatButton" => Embed.Comp(() => new RepeatButtonControlPage()),
-        "ToggleButton" => Embed.Comp(() => new ToggleButtonControlPage()),
-        "SplitButton" => Embed.Comp(() => new SplitButtonControlPage()),
-        "ToggleSplitButton" => Embed.Comp(() => new ToggleSplitButtonControlPage()),
-        "CheckBox" => Embed.Comp(() => new CheckBoxControlPage()),
-        "ColorPicker" => Embed.Comp(() => new ColorPickerControlPage()),
-        "ComboBox" => Embed.Comp(() => new ComboBoxControlPage()),
-        "RadioButton" => Embed.Comp(() => new RadioButtonControlPage()),
-        "RatingControl" => Embed.Comp(() => new RatingControlControlPage()),
-        "Slider" => Embed.Comp(() => new SliderControlPage()),
-        "ToggleSwitch" => Embed.Comp(() => new ToggleSwitchControlPage()),
-
-        // Status & info / Layout / Scrolling (WinUI Gallery parity).
-        "status-info" => Embed.Comp(() => new StatusInfoOverviewPage()),
-        "InfoBadge" => Embed.Comp(() => new InfoBadgePage()),
-        "InfoBar" => Embed.Comp(() => new InfoBarPage()),
-        "ProgressBar" => Embed.Comp(() => new ProgressBarPage()),
-        "layout" => Embed.Comp(() => new LayoutOverviewPage()),
-        "Expander" => Embed.Comp(() => new ExpanderPage()),
-        "scrolling-controls" => Embed.Comp(() => new ScrollingOverviewPage()),
-        "PipsPager" => Embed.Comp(() => new PipsPagerPage()),
-        "SplitView" => Embed.Comp(() => new SplitViewPage()),
-        "navigation-cat" => Embed.Comp(() => new NavigationOverviewPage()),
-        "BreadcrumbBar" => Embed.Comp(() => new BreadcrumbBarPage()),
-        "SelectorBar" => Embed.Comp(() => new SelectorBarPage()),
-        "TabView" => Embed.Comp(() => new TabViewPage()),
-        "dialogs" => Embed.Comp(() => new DialogsOverviewPage()),
-        "Flyout" => Embed.Comp(() => new FlyoutPage()),
-        "media" => Embed.Comp(() => new MediaOverviewPage()),
-        "PersonPicture" => Embed.Comp(() => new PersonPicturePage()),
-        "collections" => Embed.Comp(() => new CollectionsOverviewPage()),
-        "FlipView" => Embed.Comp(() => new FlipViewPage()),
-        "TreeView" => Embed.Comp(() => new TreeViewPage()),
-        "menus" => Embed.Comp(() => new MenusOverviewPage()),
-        "MenuBar" => Embed.Comp(() => new MenuBarPage()),
-        "AppBarButton" => Embed.Comp(() => new AppBarButtonPage()),
-        "AppBarToggleButton" => Embed.Comp(() => new AppBarToggleButtonPage()),
-        "CommandBar" => Embed.Comp(() => new CommandBarPage()),
-        "Pivot" => Embed.Comp(() => new PivotPage()),
-        "ContentDialog" => Embed.Comp(() => new ContentDialogPage()),
-        "Viewbox" => Embed.Comp(() => new ViewboxPage()),
-        "text-cat" => Embed.Comp(() => new TextOverviewPage()),
-        "NumberBox" => Embed.Comp(() => new NumberBoxPage()),
-        "TextBlock" => Embed.Comp(() => new TextBlockPage()),
-        "TeachingTip" => Embed.Comp(() => new TeachingTipPage()),
-        "Popup" => Embed.Comp(() => new PopupPage()),
-        "Toast" => Embed.Comp(() => new ToastPage()),
-        "ItemsView" => Embed.Comp(() => new ItemsViewPage()),
-        "Border" => Embed.Comp(() => new BorderPage()),
-        "AppBarSeparator" => Embed.Comp(() => new AppBarSeparatorPage()),
-        "RichTextBlock" => Embed.Comp(() => new RichTextBlockPage()),
-        "TextBox" => Embed.Comp(() => new TextBoxPage()),
-        "PasswordBox" => Embed.Comp(() => new PasswordBoxPage()),
-        "AutoSuggestBox" => Embed.Comp(() => new AutoSuggestBoxPage()),
-        "Canvas" => Embed.Comp(() => new CanvasPage()),
-        "ToolTip" => Embed.Comp(() => new ToolTipPage()),
-        "CommandBarFlyout" => Embed.Comp(() => new CommandBarFlyoutPage()),
-        "ContextMenu" => Embed.Comp(() => new ContextMenuPage()),
-        "ProgressRing" => Embed.Comp(() => new ProgressRingPage()),
-        "RelativePanel" => Embed.Comp(() => new RelativePanelPage()),
-        "VariableSizedWrapGrid" => Embed.Comp(() => new VariableSizedWrapGridPage()),
-        "AnnotatedScrollBar" => Embed.Comp(() => new AnnotatedScrollBarPage()),
-        "SwipeControl" => Embed.Comp(() => new SwipeControlPage()),
-        "MediaPlayerElement" => Embed.Comp(() => new MediaPlayerElementPage()),
-        // "desktop-video"/"playready-video" fold into the Media Lab (kept as deep-link aliases).
-        "media-lab" or "desktop-video" or "playready-video" => Embed.Comp(() => new MediaLabPage()),
-        "datetime" => Embed.Comp(() => new DateTimeOverviewPage()),
-        "CalendarView" => Embed.Comp(() => new CalendarViewPage()),
-        "CalendarDatePicker" => Embed.Comp(() => new CalendarDatePickerPage()),
-        "DatePicker" => Embed.Comp(() => new DatePickerPage()),
-        "TimePicker" => Embed.Comp(() => new TimePickerPage()),
-
-        // Engine capability demos (remapped under Fundamentals / Design).
-        "typography" => Embed.Comp(() => new TypographyPage()),
-        "icons" => Embed.Comp(() => new IconsPage()),
-        "buttons" => Embed.Comp(() => new ButtonsPage()),
-        "inputs" => Embed.Comp(() => new InputsPage()),
-        "flex" => Embed.Comp(() => new FlexPage()),
-        "grid" => Embed.Comp(() => new GridPage()),
-        "repeater" => Embed.Comp(() => new RepeaterPage()),
-        "Image" => Embed.Comp(() => new ImagePage()),
-        "scrolling" => Embed.Comp(() => new ScrollPage()),
-        "virtualization" => Embed.Comp(() => new VirtualizationPage()),
-        "animation" => Embed.Comp(() => new AnimationPage()),
-        "motion-recipes" => Embed.Comp(() => new MotionRecipesPage()),
-        "async-skeletons" => Embed.Comp(() => new AsyncSkeletonPage()),
-        "compositor" => Embed.Comp(() => new CompositorPage()),
-        "edge-fade" => Embed.Comp(() => new EdgeFadePage()),
-        "state" => Embed.Comp(() => new StatePage()),
-        "wavee" => Embed.Comp(() => new WaveeShell()),
-        "windowsapi" => Embed.Comp(() => new WindowsApiPage()),
-        "localization" => Embed.Comp(() => new LocalizationPage()),
-        "validation-guide" => Embed.Comp(() => new ValidationGuidePage()),
-        "validation" => Embed.Comp(() => new ValidationPage()),
-        _ => Embed.Comp(() => new WelcomePage()),
-    };
+    static Element Page(string key) => (_routes.Resolve(key)?.Factory ?? _routes.Fallback!)(new Route(key));
 }
 
 sealed class FrameDiagnosticsHud : Component

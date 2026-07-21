@@ -8,6 +8,7 @@ using static FluentGpu.Dsl.Ui;
 
 // ── TeachingTip / Popup / ItemsView / TextBlock / Border / AppBarSeparator demo pages (batch 5) ──────────
 
+[Route("TeachingTip")]
 sealed class TeachingTipPage : Component
 {
     public override Element Render()
@@ -88,6 +89,7 @@ sealed class TeachingTipPage : Component
     }
 }
 
+[Route("Popup")]
 sealed class PopupPage : Component
 {
     public override Element Render() => GalleryPage.Shell("Popup",
@@ -146,6 +148,7 @@ sealed class PopupDemo : Component
     }
 }
 
+[Route("Toast")]
 sealed class ToastPage : Component
 {
     public override Element Render() => GalleryPage.Shell("Toast",
@@ -193,6 +196,7 @@ sealed class ToastPage : Component
             description: "Two unrelated APIs share the name Toast: the in-app card here, and the OS notification builder in the Windows pillar."));
 }
 
+[Route("ItemsView")]
 sealed class ItemsViewPage : Component
 {
     static readonly string[] Items = { "Photo 1", "Photo 2", "Photo 3", "Photo 4", "Photo 5", "Photo 6", "Photo 7", "Photo 8" };
@@ -489,6 +493,7 @@ sealed class ItemsViewPage : Component
     static Element ListCard(Element list) => new BoxEl { Width = 280, Corners = Radii.OverlayAll, BorderColor = Tok.StrokeCardDefault, BorderWidth = 1f, Padding = new Edges4(0, 4, 0, 4), Children = [list] };
 }
 
+[Route("TextBlock")]
 sealed class TextBlockPage : Component
 {
     const string LongText = "Text wrapping flows this sentence onto as many lines as its 320 epx column needs, breaking between words exactly like a WinUI TextBlock.";
@@ -541,6 +546,7 @@ sealed class TextBlockPage : Component
             """));
 }
 
+[Route("Border")]
 sealed class BorderPage : Component
 {
     public override Element Render()
@@ -578,6 +584,7 @@ sealed class BorderPage : Component
     }
 }
 
+[Route("AppBarSeparator")]
 sealed class AppBarSeparatorPage : Component
 {
     public override Element Render() => GalleryPage.Shell("AppBarSeparator",

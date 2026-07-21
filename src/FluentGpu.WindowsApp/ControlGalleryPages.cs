@@ -67,6 +67,7 @@ static class GalleryPage
 }
 
 // ── Overview / category pages ─────────────────────────────────────────────────────
+[Route("fundamentals")]
 sealed class FundamentalsPage : Component
 {
     // The engine model — kept in lockstep with the "fundamentals" nav group's children (Gallery.Items).
@@ -88,6 +89,7 @@ sealed class FundamentalsPage : Component
     }
 }
 
+[Route("patterns")]
 sealed class PatternsPage : Component
 {
     static readonly (string Key, string Glyph, string Title)[] Items =
@@ -105,6 +107,7 @@ sealed class PatternsPage : Component
     }
 }
 
+[Route("app-services")]
 sealed class AppServicesPage : Component
 {
     static readonly (string Key, string Glyph, string Title)[] Items =
@@ -123,6 +126,7 @@ sealed class AppServicesPage : Component
     }
 }
 
+[Route("design")]
 sealed class DesignPage : Component
 {
     static readonly (string Key, string Glyph, string Title)[] Items =
@@ -139,6 +143,7 @@ sealed class DesignPage : Component
     }
 }
 
+[Route("basic-input")]
 sealed class BasicInputOverviewPage : Component
 {
     public override Element Render()
@@ -149,6 +154,7 @@ sealed class BasicInputOverviewPage : Component
     }
 }
 
+[Route("all")]
 sealed class AllControlsPage : Component
 {
     public override Element Render()
@@ -168,6 +174,7 @@ sealed class AllControlsPage : Component
 }
 
 // ── Basic input — the 14 control demo pages ───────────────────────────────────────
+[Route("Button")]
 sealed class ButtonControlPage : Component
 {
     public override Element Render()
@@ -230,6 +237,7 @@ sealed class ButtonControlPage : Component
     };
 }
 
+[Route("DropDownButton")]
 sealed class DropDownButtonControlPage : Component
 {
     public override Element Render()
@@ -261,6 +269,7 @@ sealed class DropDownButtonControlPage : Component
     }
 }
 
+[Route("HyperlinkButton")]
 sealed class HyperlinkButtonControlPage : Component
 {
     public override Element Render()
@@ -279,6 +288,7 @@ sealed class HyperlinkButtonControlPage : Component
     }
 }
 
+[Route("RepeatButton")]
 sealed class RepeatButtonControlPage : Component
 {
     public override Element Render()
@@ -297,6 +307,7 @@ sealed class RepeatButtonControlPage : Component
     }
 }
 
+[Route("ToggleButton")]
 sealed class ToggleButtonControlPage : Component
 {
     public override Element Render()
@@ -320,6 +331,7 @@ sealed class ToggleButtonControlPage : Component
     }
 }
 
+[Route("SplitButton")]
 sealed class SplitButtonControlPage : Component
 {
     public override Element Render()
@@ -357,6 +369,7 @@ sealed class SplitButtonControlPage : Component
     }
 }
 
+[Route("ToggleSplitButton")]
 sealed class ToggleSplitButtonControlPage : Component
 {
     public override Element Render()
@@ -384,6 +397,7 @@ sealed class ToggleSplitButtonControlPage : Component
     }
 }
 
+[Route("CheckBox")]
 sealed class CheckBoxControlPage : Component
 {
     public override Element Render()
@@ -432,6 +446,7 @@ sealed class CheckBoxControlPage : Component
     }
 }
 
+[Route("ColorPicker")]
 sealed class ColorPickerControlPage : Component
 {
     public override Element Render()
@@ -453,6 +468,7 @@ sealed class ColorPickerControlPage : Component
     }
 }
 
+[Route("ComboBox")]
 sealed class ComboBoxControlPage : Component
 {
     static readonly string[] Fonts = { "Segoe UI", "Cascadia Code", "Arial", "Calibri", "Consolas", "Georgia" };
@@ -482,6 +498,7 @@ sealed class ComboBoxControlPage : Component
     }
 }
 
+[Route("RadioButton")]
 sealed class RadioButtonControlPage : Component
 {
     static readonly string[] Options = { "Small", "Medium", "Large" };
@@ -501,6 +518,7 @@ sealed class RadioButtonControlPage : Component
     }
 }
 
+[Route("RatingControl")]
 sealed class RatingControlControlPage : Component
 {
     public override Element Render()
@@ -521,6 +539,7 @@ sealed class RatingControlControlPage : Component
     }
 }
 
+[Route("Slider")]
 sealed class SliderControlPage : Component
 {
     public override Element Render()
@@ -557,6 +576,7 @@ sealed class SliderControlPage : Component
     }
 }
 
+[Route("ToggleSwitch")]
 sealed class ToggleSwitchControlPage : Component
 {
     public override Element Render()

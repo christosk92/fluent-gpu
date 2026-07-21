@@ -7,6 +7,7 @@ using static FluentGpu.Dsl.Ui;
 
 // ── Text input control demo pages (TextBox, PasswordBox, AutoSuggestBox) ──────────
 
+[Route("TextBox")]
 sealed class TextBoxPage : Component
 {
     public override Element Render()
@@ -67,6 +68,7 @@ sealed class TextBoxPage : Component
     }
 }
 
+[Route("PasswordBox")]
 sealed class PasswordBoxPage : Component
 {
     public override Element Render()
@@ -107,6 +109,7 @@ sealed class PasswordBoxPage : Component
     }
 }
 
+[Route("AutoSuggestBox")]
 sealed class AutoSuggestBoxPage : Component
 {
     static readonly string[] Fruits = { "Apple", "Apricot", "Banana", "Blueberry", "Cherry", "Grape", "Mango", "Orange", "Peach", "Pear" };

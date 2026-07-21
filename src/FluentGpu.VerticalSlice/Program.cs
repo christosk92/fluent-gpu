@@ -2455,6 +2455,48 @@ sealed class ResourceProbe : Component
 }
 
 // ── Basic-input infrastructure probes (overlay / text input / repeat) ─────────────
+// ── §WS3 P8 registry-driven router probes (gate.nav.*) ──────────────────────────────────────────────────────────
+// A [Route]-tagged page the RouteTableGenerator picks up (metadata + a parameterless-ctor factory).
+[Route("vs.route-gen.plain", Title = "Plain Page", Icon = "P", Category = "RouteGen", Order = 7, KeepAlive = true)]
+sealed class RouteGenPlainPage : Component
+{
+    public override Element Render() => new BoxEl { Children = [Text("VSGEN-PLAIN")] };
+}
+
+// A [Route]-tagged page with a (string) ctor — the generated factory threads route.Arg into it.
+[Route("vs.route-gen.arg")]
+sealed class RouteGenArgPage : Component
+{
+    readonly string _arg;
+    public RouteGenArgPage(string arg) { _arg = arg; }
+    public override Element Render() => new BoxEl { Children = [Text("VSGEN-ARG:" + _arg)] };
+}
+
+// A router page with a clickable counter — the PageHost.Create gate checks resolve/fallback/keepalive-restore.
+sealed class RouterProbePage : Component
+{
+    readonly string _label;
+    public RouterProbePage(string label) { _label = label; }
+    public override Element Render()
+    {
+        var (count, setCount) = UseState(0);
+        return new BoxEl
+        {
+            Direction = 1, Width = 200, Height = 120,
+            Children =
+            [
+                new BoxEl
+                {
+                    Width = 140, Height = 32, Role = AutomationRole.Button,
+                    Fill = new ColorF(0.2f, 0.2f, 0.2f, 1f),
+                    OnClick = () => setCount(count + 1),
+                    Children = [Text(_label + ":" + count)],
+                },
+            ],
+        };
+    }
+}
+
 sealed class KeepAliveProbe : Component
 {
     public Signal<string>? Route;
@@ -15781,6 +15823,134 @@ static class Slice
             $"scroll=n#{nestedScroll.Raw.Index} routed=n#{nestedRouted.Raw.Index} offset={nestedState.OffsetY:0.#}");
     }
 
+    // §WS3 P8 registry-driven router: RouteRegistry, the RouteTableGenerator (FluentGpu.Generated.Routes),
+    // PageHost.Create (fallback + KeepAlive parking), and the NavTransition → Enter-token mapping.
+    static void NavRouterChecks(StringTable strings)
+    {
+        // gate.nav.registry — pure: Add/Resolve/Fallback/duplicate-throw/BuildNavTree grouping/BuildSearchIndex.
+        {
+            var reg = new RouteRegistry();
+            reg.Add(new RouteDef("a", _ => new BoxEl()) { Title = "Alpha", Icon = "IA", Category = "Group1", Order = 2 });
+            reg.Add("b", "Beta", "IB", () => new BoxEl());                          // convenience overload; uncategorized
+            reg.Add(new RouteDef("c", _ => new BoxEl()) { Title = "Gamma", Icon = "IC", Category = "Group1", Order = 1 });
+            reg.Add(new RouteDef("d", _ => new BoxEl()) { Title = "Delta", Icon = "ID", Category = "Group2" });
+            reg.Add(new RouteDef("hid", _ => new BoxEl()) { Title = "Hidden", ShowInNav = false });
+
+            bool resolve = reg.Resolve("a")?.Title == "Alpha" && reg.Resolve("zzz") is null && reg.All.Count == 5;
+
+            bool threw = false;
+            try { reg.Add(new RouteDef("a", _ => new BoxEl())); } catch (InvalidOperationException) { threw = true; }
+
+            reg.Fallback = r => new TextEl("FB:" + r.Name);
+            bool fallbackSettable = reg.Fallback is not null;
+
+            var tree = reg.BuildNavTree(("Group1", "G1I"), ("Group2", "G2I"));
+            // Group1 first (children sorted by Order: c(1) then a(2)); Group2 (d); then top-level b. "hid" is excluded.
+            bool g1 = tree.Length == 3 && tree[0].Key == "Group1" && tree[0].Glyph == "G1I"
+                      && tree[0].Children is { Length: 2 } k1 && k1[0].Key == "c" && k1[1].Key == "a";
+            bool g2 = tree[1].Key == "Group2" && tree[1].Children is { Length: 1 } k2 && k2[0].Key == "d";
+            bool top = tree[2].Key == "b" && tree[2].Children is null;
+            bool hiddenOut = true;
+            foreach (var t in tree)
+            {
+                if (t.Key == "hid") hiddenOut = false;
+                if (t.Children is { } ch) foreach (var c in ch) if (c.Key == "hid") hiddenOut = false;
+            }
+
+            var idx = reg.BuildSearchIndex();
+            bool hasAlpha = false, hasHidden = false;
+            foreach (var (label, key) in idx) { if (key == "a" && label == "Alpha") hasAlpha = true; if (key == "hid") hasHidden = true; }
+            bool search = hasAlpha && !hasHidden;
+
+            Check("gate.nav.registry Add/Resolve/Fallback/duplicate-throw/BuildNavTree/BuildSearchIndex",
+                resolve && threw && fallbackSettable && g1 && g2 && top && hiddenOut && search,
+                $"resolve={resolve} threw={threw} g1={g1} g2={g2} top={top} hiddenOut={hiddenOut} search={search}");
+        }
+
+        // gate.nav.route-gen — the generated Routes.RegisterAll registers a [Route] page with correct metadata, and an
+        // argful ([string] ctor) page threads route.Arg through PageHost.
+        {
+            var reg = new RouteRegistry();
+            FluentGpu.Generated.Routes.RegisterAll(reg);
+            var plain = reg.Resolve("vs.route-gen.plain");
+            bool meta = plain is { Title: "Plain Page", Icon: "P", Category: "RouteGen", Order: 7, KeepAlive: true };
+
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("route-gen", new Size2(320, 240), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var nav = new Navigator(new Route("vs.route-gen.arg", "ZZZ"));
+            using var host = new AppHost(app, window, device, fonts, strings, new PageHost(nav, reg));
+            host.RunFrame();
+            bool argRoutes = HasGlyph(device, strings, "VSGEN-ARG:ZZZ");
+
+            Check("gate.nav.route-gen generated RegisterAll: page metadata + argful ctor threads route.Arg",
+                meta && argRoutes, $"meta={meta} argRoutes={argRoutes}");
+        }
+
+        // gate.nav.pagehost-v2 — PageHost.Create resolves by key; unknown → Fallback; a KeepAlive route restores its
+        // state on return, a non-KeepAlive route remounts fresh.
+        {
+            var reg = new RouteRegistry();
+            reg.Add(new RouteDef("home", _ => Embed.Comp(() => new RouterProbePage("HOME"))));
+            reg.Add(new RouteDef("ka", _ => Embed.Comp(() => new RouterProbePage("KA"))) { KeepAlive = true });
+            reg.Add(new RouteDef("plain", _ => Embed.Comp(() => new RouterProbePage("PLAIN"))));
+            reg.Fallback = r => new BoxEl { Children = [Text("FALLBACK:" + r.Name)] };
+
+            bool createShape = PageHost.Create(new Navigator(new Route("home")), reg) is ComponentEl ce && ce.ComponentType == typeof(PageHost);
+
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("pagehost-v2", new Size2(320, 240), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var nav = new Navigator(new Route("home"));
+            using var host = new AppHost(app, window, device, fonts, strings, new PageHost(nav, reg));
+
+            host.RunFrame();
+            bool onHome = HasGlyph(device, strings, "HOME:0");
+
+            nav.Replace(new Route("ka")); host.RunFrame();
+            bool onKa = HasGlyph(device, strings, "KA:0");
+            ClickNode(host, window, FindRole(host.Scene, host.Scene.Root, AutomationRole.Button));
+            bool kaClicked = HasGlyph(device, strings, "KA:1");
+
+            nav.Replace(new Route("home")); host.RunFrame();
+            bool backHome = HasGlyph(device, strings, "HOME:0") && !HasGlyph(device, strings, "KA:1");
+
+            nav.Replace(new Route("ka")); host.RunFrame();
+            bool kaRestored = HasGlyph(device, strings, "KA:1");                    // KeepAlive kept the counter
+
+            nav.Replace(new Route("plain")); host.RunFrame();
+            ClickNode(host, window, FindRole(host.Scene, host.Scene.Root, AutomationRole.Button));
+            bool plainClicked = HasGlyph(device, strings, "PLAIN:1");
+            nav.Replace(new Route("home")); host.RunFrame();
+            nav.Replace(new Route("plain")); host.RunFrame();
+            bool plainFresh = HasGlyph(device, strings, "PLAIN:0") && !HasGlyph(device, strings, "PLAIN:1");   // non-KeepAlive remounts fresh
+
+            nav.Replace(new Route("nope")); host.RunFrame();
+            bool fallback = HasGlyph(device, strings, "FALLBACK:nope");
+
+            Check("gate.nav.pagehost-v2 resolve-by-key/fallback/keepalive-restore/non-keepalive-fresh",
+                createShape && onHome && onKa && kaClicked && backHome && kaRestored && plainClicked && plainFresh && fallback,
+                $"create={createShape} home={onHome} ka={onKa} kaClick={kaClicked} back={backHome} kaRestored={kaRestored} plainFresh={plainFresh} fallback={fallback}");
+        }
+
+        // gate.nav.transition — an Entrance route gets Enter tokens on its root; Default too; None snaps (author owns motion).
+        {
+            var entrance = PageHost.WithTransition(new BoxEl(), NavTransition.Entrance);
+            var standard = PageHost.WithTransition(new BoxEl(), NavTransition.Default);
+            var none = PageHost.WithTransition(new BoxEl(), NavTransition.None);
+            bool entranceEnter = entrance.Enter is { Active: true } && entrance.Transition is not null;
+            bool standardEnter = standard.Enter is { Active: true } && standard.Transition is not null;
+            bool noneBare = none.Enter is null && none.Transition is null;
+            Check("gate.nav.transition Entrance/Default seed Enter tokens on the page root; None snaps",
+                entranceEnter && standardEnter && noneBare,
+                $"entrance={entranceEnter} standard={standardEnter} none={noneBare}");
+        }
+    }
+
     // Component activation lifecycle: UseActivation fires once per park/minimize transition (never at mount), and a
     // parked subtree's looping animation is auto-quiesced so AnimEngine.HasActive (the Anim wake reason) drops.
     static void ActivationLifecycleChecks(StringTable strings)
@@ -28440,6 +28610,7 @@ static class Slice
         NavigationChecks();
         PageHostChecks(strings);
         KeepAliveChecks(strings);
+        NavRouterChecks(strings);      // WS3 P8 registry-driven router (gate.nav.registry/route-gen/pagehost-v2/transition)
         ActivationLifecycleChecks(strings);
         AutoFitTextChecks(strings);
         G3TokenChecks();

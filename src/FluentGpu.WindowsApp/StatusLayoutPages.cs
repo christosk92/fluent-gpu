@@ -7,6 +7,7 @@ using static FluentGpu.Dsl.Ui;
 
 // ── Status & info / Layout / Scrolling control demo pages (WinUI Gallery parity) ──────────────
 
+[Route("ProgressBar")]
 sealed class ProgressBarPage : Component
 {
     public override Element Render()
@@ -61,6 +62,7 @@ sealed class ProgressBarPage : Component
     }
 }
 
+[Route("InfoBar")]
 sealed class InfoBarPage : Component
 {
     public override Element Render()
@@ -131,6 +133,7 @@ sealed class InfoBarPage : Component
     }
 }
 
+[Route("InfoBadge")]
 sealed class InfoBadgePage : Component
 {
     public override Element Render()
@@ -203,6 +206,7 @@ sealed class InfoBadgePage : Component
     }
 }
 
+[Route("Expander")]
 sealed class ExpanderPage : Component
 {
     public override Element Render()
@@ -268,6 +272,7 @@ sealed class ExpanderPage : Component
     }
 }
 
+[Route("PipsPager")]
 sealed class PipsPagerPage : Component
 {
     static readonly string[] Slides = { "Mountains", "Coastline", "Forest", "Desert", "City lights" };
@@ -318,6 +323,7 @@ sealed class PipsPagerPage : Component
 }
 
 // Category overview pages (the expandable group keys land here when selected) — WinUI tile grids per category.
+[Route("status-info")]
 sealed class StatusInfoOverviewPage : Component
 {
     public override Element Render()
@@ -328,6 +334,7 @@ sealed class StatusInfoOverviewPage : Component
     }
 }
 
+[Route("layout")]
 sealed class LayoutOverviewPage : Component
 {
     public override Element Render()
@@ -338,6 +345,7 @@ sealed class LayoutOverviewPage : Component
     }
 }
 
+[Route("scrolling-controls")]
 sealed class ScrollingOverviewPage : Component
 {
     public override Element Render()

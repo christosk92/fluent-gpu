@@ -70,6 +70,11 @@ public sealed record NavigationViewOptions
     public Action<NavPaneClosingArgs>? PaneClosing { get; init; }
     public Action<PaneMode>? DisplayModeChanged { get; init; }
     public TemplateParts? Parts { get; init; }
+    /// <summary>Optional <see cref="Controls.Navigator"/> drive: selecting a top-level item calls
+    /// <see cref="Navigator.Replace(Route)"/> (top-level nav is a replace, not a push) and the initial selection follows
+    /// <see cref="Navigator.Current"/>. Pair with a <see cref="TitleBar"/> back button (<c>ShowBackButton = nav.CanGoBack</c>,
+    /// <c>OnBack = nav.Pop</c>) for the back-stack story.</summary>
+    public Navigator? Navigator { get; init; }
     public float ExpandedModeThresholdWidth { get; init; } = 1008f;
     public float CompactModeThresholdWidth { get; init; } = 641f;
     public float PaneWidth { get; init; } = 320f;
@@ -170,6 +175,9 @@ public sealed class NavigationView : Component
     public Action<NavPaneClosingArgs>? PaneClosing;
     /// <summary>WinUI <c>DisplayModeChanged</c> — fired when the resolved adaptive mode transitions.</summary>
     public Action<PaneMode>? DisplayModeChanged;
+    /// <summary>Optional navigator drive (see <see cref="NavigationViewOptions.Navigator"/>): select ⇒
+    /// <c>Navigator.Replace(new Route(key))</c>; initial selection follows <c>Navigator.Current</c>.</summary>
+    public Navigator? Navigator;
     /// <summary>Lightweight per-part styling (CSS ::part): modifiers keyed by the <c>PartXxx</c> consts; see
     /// <see cref="TemplateParts"/> for the contract. Top-mode bar items are not part-routed (different structure).</summary>
     public TemplateParts? Parts;
@@ -185,7 +193,7 @@ public sealed class NavigationView : Component
             ShowPaneToggle = options.ShowPaneToggle, PaneToggleRequest = options.PaneToggleRequest, NavigateRequest = options.NavigateRequest,
             PaneDisplayMode = options.PaneDisplayMode, ContentPadding = options.ContentPadding, SelectionFollowsFocus = options.SelectionFollowsFocus,
             IsSettingsVisible = options.IsSettingsVisible, SettingsLabel = options.SettingsLabel, AutoSuggest = options.AutoSuggest,
-            PaneClosing = options.PaneClosing, DisplayModeChanged = options.DisplayModeChanged, Parts = options.Parts,
+            PaneClosing = options.PaneClosing, DisplayModeChanged = options.DisplayModeChanged, Parts = options.Parts, Navigator = options.Navigator,
             ExpandedModeThresholdWidth = options.ExpandedModeThresholdWidth, CompactModeThresholdWidth = options.CompactModeThresholdWidth,
             PaneWidth = options.PaneWidth, CompactWidth = options.CompactWidth,
         });
@@ -256,7 +264,10 @@ public sealed class NavigationView : Component
     public override Element Render()
     {
         var hooks = UseContext(InputHooks.Current);
-        var (selected, setSelected) = UseState(Initial.Length > 0 ? Initial : (Items.Length > 0 ? FirstSelectable() : ""));
+        var (selected, setSelected) = UseState(
+            Navigator is { } nav0 && nav0.Current.Name.Length > 0 ? nav0.Current.Name
+            : Initial.Length > 0 ? Initial
+            : Items.Length > 0 ? FirstSelectable() : "");
         var (paneOpen, setPaneOpen) = UseState(false);
         var (collapsed, setCollapsed) = UseState(false);
         var (expanded, setExpanded) = UseState(SeedExpanded(Items));     // expanded parent keys (new array per toggle — value-eq gated)
@@ -330,6 +341,7 @@ public sealed class NavigationView : Component
             // ClosePaneIfNeccessaryAfterItemIsClicked (cpp:4838-4845): pane open ∧ mode ≠ Expanded ∧ no children.
             if (paneOpen && !inlinePane && !hasChildren) TryClosePane();
             OnSelect?.Invoke(key);
+            Navigator?.Replace(new Route(key));   // top-level nav is a replace; the navigator mirrors the current page
         }
 
         void ToggleExpand(string key)

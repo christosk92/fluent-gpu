@@ -27,6 +27,7 @@ sealed class StaggerLayout : IVirtualLayout
 }
 
 // Showcases the ItemsRepeater abstraction: one control, data + template + a pluggable layout (Wrap / Grid / Custom).
+[Route("repeater")]
 sealed class RepeaterPage : Component
 {
     static readonly ColorF Grey = ColorF.FromRgba(0x9A, 0x9A, 0x9A);

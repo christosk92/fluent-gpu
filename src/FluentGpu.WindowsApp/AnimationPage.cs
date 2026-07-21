@@ -17,6 +17,7 @@ using static FluentGpu.Dsl.Ui;
 // LayoutTransition family (Position FLIP, ScaleCorrect, Relayout, SizeMode.Reflow smooth reflow with the Trailing
 // anchor, EnterExit terminals with per-item stagger), interaction motion (hover/press), and implicit brush
 // transitions. The page header teaches the mental model: one engine, per-(node, channel) tracks, three ways to seed.
+[Route("animation")]
 sealed class AnimationPage : Component
 {
     public override Element Render()

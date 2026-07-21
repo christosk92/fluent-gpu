@@ -7,6 +7,7 @@ using static FluentGpu.Dsl.Ui;
 
 // ── Navigation / Layout / Media / Dialogs control demo pages (WinUI Gallery parity, batch 2) ──────────
 
+[Route("SplitView")]
 sealed class SplitViewPage : Component
 {
     public override Element Render()
@@ -46,6 +47,7 @@ sealed class SplitViewPage : Component
     };
 }
 
+[Route("BreadcrumbBar")]
 sealed class BreadcrumbBarPage : Component
 {
     static readonly string[] Crumbs = { "Home", "Documents", "Design", "Specs" };
@@ -73,6 +75,7 @@ sealed class BreadcrumbBarPage : Component
     }
 }
 
+[Route("SelectorBar")]
 sealed class SelectorBarPage : Component
 {
     static readonly string[] Items = { "All", "Photos", "Videos", "Folders" };
@@ -116,6 +119,7 @@ sealed class SelectorBarPage : Component
     }
 }
 
+[Route("TabView")]
 sealed class TabViewPage : Component
 {
     static readonly string[] Tabs = { "Document 1", "Document 2", "Document 3" };
@@ -163,6 +167,7 @@ sealed class TabViewPage : Component
     };
 }
 
+[Route("PersonPicture")]
 sealed class PersonPicturePage : Component
 {
     public override Element Render() => GalleryPage.Shell("PersonPicture",
@@ -220,6 +225,7 @@ sealed class PersonPicturePage : Component
         => new BoxEl { Direction = 1, Gap = 8, AlignItems = FlexAlign.Center, Children = [avatar, Caption(caption)] };
 }
 
+[Route("Flyout")]
 sealed class FlyoutPage : Component
 {
     public override Element Render()
@@ -255,6 +261,7 @@ sealed class FlyoutPage : Component
 }
 
 // Category overview pages (the expandable group keys land here when selected).
+[Route("navigation-cat")]
 sealed class NavigationOverviewPage : Component
 {
     public override Element Render()
@@ -265,6 +272,7 @@ sealed class NavigationOverviewPage : Component
     }
 }
 
+[Route("dialogs")]
 sealed class DialogsOverviewPage : Component
 {
     public override Element Render()
@@ -275,6 +283,7 @@ sealed class DialogsOverviewPage : Component
     }
 }
 
+[Route("media")]
 sealed class MediaOverviewPage : Component
 {
     public override Element Render()
