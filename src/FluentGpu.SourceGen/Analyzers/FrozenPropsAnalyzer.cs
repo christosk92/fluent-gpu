@@ -30,7 +30,9 @@ public sealed class FrozenPropsAnalyzer : DiagnosticAnalyzer
                      + "mount and later values are dropped. Re-push it via Embed.Comp(props, factory) + UseProps<T>() "
                      + "(the SelectorBar idiom), or Ctx.Provide + UseContext for ambient data, or remount with a changed Key.",
         category: "FluentGpu.Reactivity",
-        defaultSeverity: DiagnosticSeverity.Info,
+        // Promoted Info -> Warning in G4f: the props channel (Embed.Comp(props, factory) + [Props]/UseProps<T>) is now
+        // the sanctioned re-push path, so a frozen Element content slot is almost always a real bug.
+        defaultSeverity: DiagnosticSeverity.Warning,
         isEnabledByDefault: true,
         description: "Components are autonomous: a reused ComponentEl discards the new factory, so fields set inside "
                    + "Embed.Comp(() => new T { … }) are frozen at mount. Element content is rebuilt every render, so a "
@@ -95,7 +97,7 @@ public sealed class FrozenPropsAnalyzer : DiagnosticAnalyzer
                 IPropertySymbol p => p.Type,
                 _ => null,
             };
-            if (memberType is null || !IsElementContent(memberType))
+            if (memberType is null || !AnalyzerSemantics.IsElementContent(memberType))
                 continue;
 
             context.ReportDiagnostic(Diagnostic.Create(Rule, rhs.GetLocation(), member.Identifier.ValueText));
@@ -112,23 +114,5 @@ public sealed class FrozenPropsAnalyzer : DiagnosticAnalyzer
                 found = oc;
             }
         return found;
-    }
-
-    // True for `Element` (the DSL base record) or a collection/array whose element type is `Element`.
-    private static bool IsElementContent(ITypeSymbol type)
-    {
-        if (IsElementType(type)) return true;
-        if (type is IArrayTypeSymbol array) return IsElementType(array.ElementType);
-        if (type is INamedTypeSymbol { IsGenericType: true } named)
-            return named.TypeArguments.Length == 1 && IsElementType(named.TypeArguments[0]);
-        return false;
-    }
-
-    private static bool IsElementType(ITypeSymbol type)
-    {
-        for (ITypeSymbol? t = type; t is not null; t = t.BaseType)
-            if (t.Name == "Element" && t.ContainingNamespace?.ToDisplayString() == "FluentGpu.Dsl")
-                return true;
-        return false;
     }
 }

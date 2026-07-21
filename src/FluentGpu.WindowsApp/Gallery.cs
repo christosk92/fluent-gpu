@@ -335,7 +335,10 @@ sealed class GalleryApp : Component
 
         var content = ShowDiagnosticsHud ? ZStack(shell, DiagnosticsOverlay()) with { Grow = 1 } : shell;
         // Host the overlay layer at the top so anchored flyouts (ComboBox/DropDownButton/SplitButton/ColorPicker) work app-wide.
+        // FGRP001: OverlayHost.Child is the app composition root — mounted once; all reactivity lives in child components.
+#pragma warning disable FGRP001
         return Embed.Comp(() => new OverlayHost { Child = content });
+#pragma warning restore FGRP001
     }
 
     static Element DiagnosticsOverlay() => new BoxEl

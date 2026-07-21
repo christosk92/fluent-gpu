@@ -40,6 +40,9 @@ public sealed class DropZone : Component
     /// <summary>Seed the hover state (for an always-on cue or a static screenshot of the hover look).</summary>
     public bool InitiallyOver;
 
+    // FGRP001: Content is a deliberate mount-time slot for these convenience factories — a drop zone wraps STATIC
+    // content built once by the caller. A caller with per-render-changing content should key/remount the zone.
+#pragma warning disable FGRP001
     /// <summary>A sized drop zone wrapping <paramref name="content"/>.</summary>
     public static Element Create(string[] accept, Action<DragSession> onDrop, Element content)
         => Embed.Comp(() => new DropZone { Accept = accept, OnDrop = onDrop, Content = content });
@@ -47,6 +50,7 @@ public sealed class DropZone : Component
     /// <summary>A whole-window "drop anywhere" zone (spans the parent).</summary>
     public static Element Window(string[] accept, Action<DragSession> onDrop, Element content)
         => Embed.Comp(() => new DropZone { Accept = accept, OnDrop = onDrop, Content = content, Fill = true });
+#pragma warning restore FGRP001
 
     public override Element Render()
     {

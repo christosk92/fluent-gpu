@@ -83,14 +83,14 @@ public sealed record BoxEl : Element
     public Edges4 Padding { get; init; }
     public Edges4 Margin { get; init; }
     /// <summary>Unified channel (Prop&lt;T&gt;): a static color, a <c>Func&lt;ColorF&gt;</c> thunk, or a concrete signal.</summary>
-    public Prop<ColorF> Fill { get; init; }
+    public Prop<ColorF> Fill { get; init; } = ColorF.Transparent;
     /// <summary>Bindable like <see cref="Fill"/>: a bound hover/press fill re-fires on RethemeAll (theme/palette
     /// switch) and can read recycle-varying state (e.g. a virtual list's slot index for zebra-aware hover depth)
     /// without remounting the slot. A==0 ⇒ the recorder auto-lightens/darkens <see cref="Fill"/> instead.</summary>
-    public Prop<ColorF> HoverFill { get; init; }
-    public Prop<ColorF> PressedFill { get; init; }
+    public Prop<ColorF> HoverFill { get; init; } = ColorF.Transparent;
+    public Prop<ColorF> PressedFill { get; init; } = ColorF.Transparent;
     /// <summary>Bindable like <see cref="Fill"/> so retained shell/card borders can follow a live theme switch.</summary>
-    public Prop<ColorF> BorderColor { get; init; }
+    public Prop<ColorF> BorderColor { get; init; } = ColorF.Transparent;
     public ColorF HoverBorderColor { get; init; }    // A==0 ⇒ recorder auto-lightens BorderColor on hover; else eases to this exact state token
     public ColorF PressedBorderColor { get; init; }  // A==0 ⇒ recorder auto-darkens BorderColor on press; else eases to this exact state token
     public float BorderWidth { get; init; }
@@ -101,12 +101,12 @@ public sealed record BoxEl : Element
     public float BorderDashOff { get; init; }
     // Bindable (like Fill/Opacity): the shell content card squares its rail-side corners while the docked right rail is
     // open — a re-render can't reach it (frozen literal inside OverlayHost.Child), so the corner set must be a bind.
-    public Prop<CornerRadius4> Corners { get; init; }
+    public Prop<CornerRadius4> Corners { get; init; } = default;
     /// <summary>Form-validation visual state (form-validation.md). Bind it to a field's error memo
     /// (<c>Validation = Prop.Of(() =&gt; field.Error.Value.IsValid ? ValidationState.None : ValidationState.Error)</c>):
     /// on <see cref="ValidationState.Error"/> the reconciler resolves the theme critical color and the recorder swaps
     /// this node's border to it. A bound channel — no re-render per keystroke; the write is equality-gated.</summary>
-    public Prop<ValidationState> Validation { get; init; }
+    public Prop<ValidationState> Validation { get; init; } = default;
 
     // Optional rich paint (carried into sparse scene side-tables by the reconciler; default = none).
     public ShadowSpec? Shadow { get; init; }       // soft drop shadow / elevation, drawn beneath the fill
@@ -322,7 +322,7 @@ public sealed record BoxEl : Element
     /// the STATIC path composes from the decomposed OffsetX/Y/ScaleX/Y/Rotation floats above). When bound, the
     /// decomposed statics are ignored: one transform owner per node — never combine with a sticky/stretch ScrollBind or
     /// transform-channel animations. An unbound Transform's Value is never read.</summary>
-    public Prop<Affine2D> Transform { get; init; }
+    public Prop<Affine2D> Transform { get; init; } = default;
 
     // Legacy *Bind spellings — write-only init-aliases into the unified channel props, deleted per-channel by the
     // migration waves. A null assignment leaves the channel static (preserves the `cond ? null : bind` idiom).

@@ -65,6 +65,20 @@ Read this before debugging. Each row is a real failure mode of the signals-first
 | AOT publish fails at the native link step | The shell isn't a VS Developer environment (`link.exe`/`vswhere` not on PATH) | The managed/IL-AOT analysis still validated; run the publish from a VS Developer prompt for the final native link. Don't treat the link error as a code defect. |
 | Claimed a fix works without evidence | No verification run | Show the harness output / `FrameStats` (`Rendered`, `ComponentsRendered`, `HotPhaseAllocBytes`). Evidence before assertions. |
 
+## Analyzer diagnostics (FGRP)
+
+The in-repo Roslyn analyzer flags reactivity mistakes at build time (`FluentGpu.SourceGen`; warnings unless noted).
+
+| Symptom | Rule | Fix |
+|---|---|---|
+| Frozen Element content slot — a child never shows updated content | FGRP001 (Warning) | Content assigned as a field inside `Embed.Comp(() => new T { … })` freezes at mount. Re-push via `Embed.Comp(props, factory)` + `[Props]`/`UseProps<T>`, use `Ctx.Provide`, or remount with a changed `Key`. |
+| A bound channel never updates after the first render | FGRP002 (Warning) | A `Prop.Of` thunk captured a `var v = sig.Value;` snapshot. Read the signal's `.Value` *inside* the thunk instead. |
+| A bind thunk fires once then goes dead | FGRP003 (Warning) | The `Prop.Of` thunk reads only `.Peek()` (no subscription). Read `.Value` inside it, or bind the signal directly. |
+| An element expression statement has no effect | FGRP004 (Warning) | `Element` is immutable; a modifier (`box.Rounded(8);`) or `new BoxEl { … };` returns a new element you discarded — return/assign/add it to a children list. |
+| A hook in a loop shifts state between iterations on reorder | FGRP005 (Info) | Positional-cell hooks key by per-line ordinal + index; key rows with `Flow.For` (a keyed child per item) or hoist the state out of the loop. Conditional hooks are fine. |
+| A dep-gated effect/memo re-runs every render | FGRP006 (Warning) | `DepKey.FromRef(new …/lambda)` keys off a fresh identity each render. Hoist the reference or key on a value projection (`DepKey.From(...)`). |
+| A declared channel silently paints `default(T)` | FGRP007 (Warning) | `default(Prop<T>)` is a static `default(T)`, not "unset". Give every `Prop<T> { get; init; }` channel on an `Element` record an explicit initializer (`= Tok.Foo` / `= 1f` / `= default`). |
+
 ## Quick self-check before committing an engine change
 
 1. `dotnet build src/FluentGpu.VerticalSlice` — clean.

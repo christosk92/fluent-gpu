@@ -23989,7 +23989,11 @@ static class Slice
                 Build = () =>
                 {
                     int r = rr.Value;                            // each render captures a FRESH r in a FRESH thunk
+                    // FGRP002: this probe DELIBERATELY captures a signal-value snapshot to prove the reconciler ignores
+                    // replacement thunks (the exact anti-pattern the rule flags). Suppressed on purpose.
+#pragma warning disable FGRP002
                     return new BoxEl { Width = 40, Height = 10, Opacity = Prop.Of(() => 0.1f + 0.2f * r), OnRealized = h => box = h };
+#pragma warning restore FGRP002
                 },
             });
             host.RunFrame();

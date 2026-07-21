@@ -49,8 +49,12 @@ public sealed class ToggleSplitButton : Component
     public static Element Create(string label, Signal<bool> isChecked, IReadOnlyList<MenuFlyoutItem> items, Action<bool>? onToggle = null, string? glyph = null, bool isEnabled = true)
         => Embed.Comp(() => new ToggleSplitButton { Label = label, IsChecked = isChecked, Items = items, OnToggle = onToggle, Glyph = glyph, IsEnabled = isEnabled });
 
+    // FGRP001: PrimaryContent is a deliberate mount-time slot (see SplitButton) — static custom content, keyed/
+    // remounted or signal-driven for the dynamic case.
+#pragma warning disable FGRP001
     public static Element Create(Element primaryContent, Signal<bool> isChecked, IReadOnlyList<MenuFlyoutItem> items, Action<bool>? onToggle = null, bool isEnabled = true)
         => Embed.Comp(() => new ToggleSplitButton { PrimaryContent = primaryContent, IsChecked = isChecked, Items = items, OnToggle = onToggle, IsEnabled = isEnabled });
+#pragma warning restore FGRP001
 
     public override Element Render()
     {
