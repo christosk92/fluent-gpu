@@ -227,8 +227,8 @@ sealed class HistoryPage : Component
                 PageHeader(store, search, filterIndex, totalVisits, uniqueRoutes),
                 ScrollView(new BoxEl
                 {
-                    Direction = 1, Gap = WaveeSpace.L,
-                    Padding = new Edges4(WaveeSpace.L, WaveeSpace.M, WaveeSpace.L, WaveeSpace.XXL),
+                    Direction = 1, Gap = Spacing.L,
+                    Padding = new Edges4(Spacing.L, Spacing.M, Spacing.L, Spacing.XXL),
                     Children = [ body ],
                 }) with { Grow = 1f },
             ],
@@ -303,20 +303,20 @@ sealed class HistoryPage : Component
                 rows[k] = EntryRow(entries[start + k], store, go, now, visitCount: 0, showDivider: k < rows.Length - 1);
             sections.Add(DateGroup(label, i - start, rows));
         }
-        return new BoxEl { Direction = 1, Gap = WaveeSpace.L, Children = sections.ToArray() };
+        return new BoxEl { Direction = 1, Gap = Spacing.L, Children = sections.ToArray() };
     }
 
     static Element DateGroup(string label, int count, Element[] rows)
     {
         return new BoxEl
         {
-            Direction = 1, Gap = WaveeSpace.S,
+            Direction = 1, Gap = Spacing.S,
             Children =
             [
                 // Section header: label • divider line • count badge
                 new BoxEl
                 {
-                    Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S,
+                    Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S,
                     Margin = new Edges4(0f, 0f, 0f, 4f),
                     Children =
                     [
@@ -324,7 +324,7 @@ sealed class HistoryPage : Component
                         new BoxEl { Grow = 1f, Height = 1f, Margin = new Edges4(4f, 0f, 4f, 0f), Fill = Tok.StrokeDividerDefault },
                         new BoxEl
                         {
-                            Padding = new Edges4(8f, 2f, 8f, 2f), Corners = CornerRadius4.All(WaveeRadius.Pill),
+                            Padding = new Edges4(8f, 2f, 8f, 2f), Corners = CornerRadius4.All(Radii.Full),
                             Fill = Tok.FillSubtleSecondary,
                             Children = [ new TextEl(Strings.Nav.History.VisitCount(count)) { Size = 11f, Color = Tok.TextSecondary } ],
                         },
@@ -333,7 +333,7 @@ sealed class HistoryPage : Component
                 // Card containing all rows for this group
                 new BoxEl
                 {
-                    Direction = 1, Corners = CornerRadius4.All(WaveeRadius.Card),
+                    Direction = 1, Corners = CornerRadius4.All(Radii.Card),
                     Fill = Tok.FillCardSecondary, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
                     ClipToBounds = true,
                     Children = rows,
@@ -358,12 +358,12 @@ sealed class HistoryPage : Component
         // Remove last divider (trim) — can't do that easily without knowing last; just leave it, the card clips.
         return new BoxEl
         {
-            Direction = 1, Gap = WaveeSpace.S,
+            Direction = 1, Gap = Spacing.S,
             Children =
             [
                 new BoxEl
                 {
-                    Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S,
+                    Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S,
                     Margin = new Edges4(0f, 0f, 0f, 4f),
                     Children =
                     [
@@ -373,7 +373,7 @@ sealed class HistoryPage : Component
                 },
                 new BoxEl
                 {
-                    Direction = 1, Corners = CornerRadius4.All(WaveeRadius.Card),
+                    Direction = 1, Corners = CornerRadius4.All(Radii.Card),
                     Fill = Tok.FillCardSecondary, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
                     ClipToBounds = true,
                     Children = rows.ToArray(),
@@ -408,7 +408,7 @@ sealed class HistoryPage : Component
             // Icon box
             new BoxEl
             {
-                Width = 36f, Height = 36f, Corners = CornerRadius4.All(WaveeRadius.Control),
+                Width = 36f, Height = 36f, Corners = CornerRadius4.All(Radii.Control),
                 Fill = iconBg, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                 Children = [ Icon(glyph, 16f, iconFg) ],
             },
@@ -421,7 +421,7 @@ sealed class HistoryPage : Component
                     Body(title) with { Trim = TextTrim.CharacterEllipsis, MaxLines = 1 },
                     new BoxEl
                     {
-                        Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.XS,
+                        Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.XS,
                         Children = BuildKindAndArg(e, kindLabel),
                     },
                 ],
@@ -435,7 +435,7 @@ sealed class HistoryPage : Component
         {
             rowChildren.Add(new BoxEl
             {
-                Padding = new Edges4(8f, 3f, 8f, 3f), Corners = CornerRadius4.All(WaveeRadius.Pill),
+                Padding = new Edges4(8f, 3f, 8f, 3f), Corners = CornerRadius4.All(Radii.Full),
                 Fill = Tok.FillSubtleSecondary,
                 Children = [ new TextEl(Strings.Nav.History.VisitMultiplier(visitCount)) { Size = 11f, Color = Tok.TextSecondary } ],
             });
@@ -446,22 +446,19 @@ sealed class HistoryPage : Component
         {
             Width = 28f, Height = 28f, Margin = new Edges4(0f, 0f, 0f, 0f),
             AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Corners = CornerRadius4.All(WaveeRadius.Control),
-            HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+            Corners = CornerRadius4.All(Radii.Control),
             Opacity = 0.5f,
             OnClick = () => store.Remove(e),
             Children = [ Icon(Icons.Cancel, 10f, Tok.TextSecondary) ],
-        });
+        }.Interactive(Interaction.Subtle));
 
         Element row = new BoxEl
         {
             Direction = 0, Height = 56f, AlignItems = FlexAlign.Center,
-            Gap = WaveeSpace.M, Padding = new Edges4(WaveeSpace.M, 0f, WaveeSpace.S, 0f),
-            HoverFill = Tok.FillSubtleSecondary,
-            PressedFill = Tok.FillSubtleTertiary,
+            Gap = Spacing.M, Padding = new Edges4(Spacing.M, 0f, Spacing.S, 0f),
             OnClick = () => go(e.Route.Name, e.Route.Arg),
             Children = rowChildren.ToArray(),
-        };
+        }.Interactive(Interaction.Subtle);
 
         if (!showDivider) return row;
 
@@ -471,7 +468,7 @@ sealed class HistoryPage : Component
             Children =
             [
                 row,
-                new BoxEl { Height = 1f, Margin = new Edges4(WaveeSpace.M + 36f + WaveeSpace.M, 0f, 0f, 0f), Fill = Tok.StrokeDividerDefault },
+                new BoxEl { Height = 1f, Margin = new Edges4(Spacing.M + 36f + Spacing.M, 0f, 0f, 0f), Fill = Tok.StrokeDividerDefault },
             ],
         };
     }
@@ -506,7 +503,7 @@ sealed class HistoryPage : Component
         return new BoxEl
         {
             Grow = 1f, Direction = 1, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Gap = WaveeSpace.M, Padding = new Edges4(0f, 0f, 0f, 80f),
+            Gap = Spacing.M, Padding = new Edges4(0f, 0f, 0f, 80f),
             Children =
             [
                 Icon(isSearch ? Icons.Search : Icons.Clock, 40f, Tok.TextTertiary),
@@ -522,8 +519,8 @@ sealed class HistoryPage : Component
     {
         return new BoxEl
         {
-            Direction = 1, Gap = WaveeSpace.M,
-            Padding = new Edges4(WaveeSpace.L, WaveeSpace.L, WaveeSpace.L, WaveeSpace.M),
+            Direction = 1, Gap = Spacing.M,
+            Padding = new Edges4(Spacing.L, Spacing.L, Spacing.L, Spacing.M),
             // No Fill — inherits the content card background so it doesn't conflict in light theme
             BorderColor = Tok.StrokeDividerDefault, BorderWidth = 0f,
             Children =
@@ -531,14 +528,14 @@ sealed class HistoryPage : Component
                 // ── Title row ──────────────────────────────────────────────────────
                 new BoxEl
                 {
-                    Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
+                    Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M,
                     Children =
                     [
                         Icon(Icons.Clock, 22f, Tok.TextPrimary),
                         WaveeType.PageHero(Loc.Get(Strings.Nav.History.Title)) with { Grow = 1f },
                         new BoxEl
                         {
-                            Direction = 0, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center,
+                            Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
                             Children =
                             [
                                 StatPill($"{totalVisits}", Loc.Get(Strings.Nav.History.Stat.Visits)),
@@ -557,13 +554,13 @@ sealed class HistoryPage : Component
                     onQuerySubmitted: q => _search.Value = q,
                     onChange: q => _search.Value = q,
                     minHeight: 36f,
-                    cornerRadius: WaveeRadius.Control),
+                    cornerRadius: Radii.Control),
                 // ── Filter (SelectorBar) + Sort (ComboBox) ────────────────────────
                 // Bottom margin clears the SelectorBar's selection underline from the first scroll-content group header.
                 new BoxEl
                 {
-                    Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
-                    Margin = new Edges4(0f, 0f, 0f, WaveeSpace.S),
+                    Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M,
+                    Margin = new Edges4(0f, 0f, 0f, Spacing.S),
                     Children =
                     [
                         SelectorBar.Create(s_filterLabels, _filterIndex),
@@ -579,7 +576,7 @@ sealed class HistoryPage : Component
         new BoxEl
         {
             Direction = 0, Gap = 4f, AlignItems = FlexAlign.Center,
-            Padding = new Edges4(8f, 3f, 8f, 3f), Corners = CornerRadius4.All(WaveeRadius.Pill),
+            Padding = new Edges4(8f, 3f, 8f, 3f), Corners = CornerRadius4.All(Radii.Full),
             Fill = Tok.FillSubtleSecondary,
             Children =
             [

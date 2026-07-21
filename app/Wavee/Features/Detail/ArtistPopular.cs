@@ -52,11 +52,13 @@ sealed class ArtistPopular : Component
         var lib = UseContext(LibraryBridge.Slot);
         var acts = UseContext(ActionServices.Slot);      // row context menus (selection-aware TrackContextMenu)
         var menuOverlay = UseContext(Overlay.Service);
-        var width = UseSignal(600f);                     // self-measured → responsive column count
+        var measuredW = UseMeasuredWidth(1f);            // self-measured root width → responsive column count
         var page = UseSignal(0);
         int total = Math.Min(_tracks.Count, MaxTracks);
         var layout = _layout ??= new FillRowVirtualLayout(MinItemWidth, MaxItemWidth, ItemGap, Rows);
-        var (colsFit, cardW) = FillRowVirtualLayout.Fit(width.Value, MinItemWidth, MaxItemWidth, ItemGap);
+        float mw = measuredW.Value;
+        float width = mw > 0.5f ? mw : 600f;             // fallback until the first arrange seeds the real width
+        var (colsFit, cardW) = FillRowVirtualLayout.Fit(width, MinItemWidth, MaxItemWidth, ItemGap);
         int perPage = Math.Max(1, colsFit * Rows);
         int pages = Math.Max(1, (total + perPage - 1) / perPage);
         int pg = Math.Min(page.Value, pages - 1);
@@ -138,7 +140,7 @@ sealed class ArtistPopular : Component
 
         var header = new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M,
             Children =
             [
                 Surfaces.AccentHeader(_title, _accent()) with { Grow = 1f, Basis = 0f },
@@ -188,13 +190,12 @@ sealed class ArtistPopular : Component
         return new BoxEl
         {
             Direction = 1, Gap = 20f,
-            OnBoundsChanged = r => { if (r.W > 0f && MathF.Abs(r.W - width.Peek()) > 0.5f) width.Value = r.W; },
             Children =
             [
                 header,
                 ZStack(stripHost, Embed.Comp(() => new SelectionCommandBar(_sel,
                     i => (uint)i < (uint)Math.Min(_tracks.Count, MaxTracks) ? _tracks[i] : null,
-                    bottomPadding: WaveeSpace.S))),
+                    bottomPadding: Spacing.S))),
             ],
         };
     }
@@ -256,7 +257,7 @@ sealed class ArtistPopular : Component
             Direction = 1, Gap = 20f,
             Children =
             [
-                new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
+                new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M,
                             Children = [ Surfaces.AccentHeader(title, Tok.AccentDefault) with { Grow = 1f, Basis = 0f } ] },
                 new BoxEl { Direction = 1, Gap = ItemGap, Children = rowEls },
             ],
@@ -371,12 +372,12 @@ sealed class ArtistPopular : Component
 
     static Element Pager(int pg, int pages, Action<int> goTo) => new BoxEl
     {
-        Direction = 0, Gap = WaveeSpace.XS, AlignItems = FlexAlign.Center,
+        Direction = 0, Gap = Spacing.XS, AlignItems = FlexAlign.Center,
         Children =
         [
-            Chevron(Mdl.ChevronLeft, pg > 0, () => goTo(pg - 1)),
+            Chevron(Icons.ChevronLeft, pg > 0, () => goTo(pg - 1)),
             new TextEl($"{pg + 1}/{pages}") { Size = 12f, Weight = 600, Color = Tok.TextSecondary },
-            Chevron(Mdl.ChevronRight, pg < pages - 1, () => goTo(pg + 1)),
+            Chevron(Icons.ChevronRight, pg < pages - 1, () => goTo(pg + 1)),
         ],
     };
 

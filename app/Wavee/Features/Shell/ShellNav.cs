@@ -13,23 +13,23 @@ static class ShellNav
     public static (string Title, string Glyph) Dest(string key, string? arg = null)
     {
         if (key.StartsWith("pl:", StringComparison.Ordinal)) return (arg ?? Loc.Get(Strings.Nav.Playlist), Icons.MusicNote);
-        if (key.StartsWith("album:", StringComparison.Ordinal)) return (arg ?? Loc.Get(Strings.Nav.Album), Mdl.Album);
-        if (key.StartsWith("artist:", StringComparison.Ordinal)) return (arg ?? Loc.Get(Strings.Nav.Artist), Mdl.Contact);
+        if (key.StartsWith("album:", StringComparison.Ordinal)) return (arg ?? Loc.Get(Strings.Nav.Album), Icons.Album);
+        if (key.StartsWith("artist:", StringComparison.Ordinal)) return (arg ?? Loc.Get(Strings.Nav.Artist), Icons.Contact);
         if (ConcertRoutes.TryParse(key, out var concertRoute))
             return concertRoute.Kind switch
             {
-                ConcertRouteKind.ArtistSchedule => (arg is { Length: > 0 } ? arg + " concerts" : "Artist concerts", Mdl.Calendar),
-                ConcertRouteKind.Detail => (arg is { Length: > 0 } ? arg : "Concert details", Mdl.Calendar),
-                _ => ("Concerts", Mdl.Calendar),
+                ConcertRouteKind.ArtistSchedule => (arg is { Length: > 0 } ? arg + " concerts" : "Artist concerts", Icons.Calendar),
+                ConcertRouteKind.Detail => (arg is { Length: > 0 } ? arg : "Concert details", Icons.Calendar),
+                _ => ("Concerts", Icons.Calendar),
             };
         return key switch
         {
             "home"     => (Loc.Get(Strings.Nav.Home), Icons.Home),
             "search"   => (arg is { Length: > 0 } ? arg : Loc.Get(Strings.Nav.Search), Icons.Search),
-            "albums"   => (Loc.Get(Strings.Nav.Albums), Mdl.Album),
-            "artists"  => (Loc.Get(Strings.Nav.Artists), Mdl.Contact),
+            "albums"   => (Loc.Get(Strings.Nav.Albums), Icons.Album),
+            "artists"  => (Loc.Get(Strings.Nav.Artists), Icons.Contact),
             "liked"    => (Loc.Get(Strings.Nav.LikedSongs), Icons.Heart),
-            "podcasts" => (Loc.Get(Strings.Nav.Podcasts), Mdl.RadioTower),
+            "podcasts" => (Loc.Get(Strings.Nav.Podcasts), Icons.RadioTower),
             "local"    => (Loc.Get(Strings.Nav.LocalFiles), Icons.Folder),
             "history"  => (Loc.Get(Strings.Nav.History.Title), Icons.Clock),
             "settings" => ("Settings", Icons.Settings),

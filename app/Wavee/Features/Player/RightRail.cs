@@ -55,14 +55,14 @@ sealed class RightRail : Component
         }, DepKey.From(HashCode.Combine(open, railWidth, baseline)));
         // Flat FileArea surface (the album-wash gradient read as a muddy smudge), TOP-LEFT rounded like the content
         // card's top-right — the two sit as sibling cards across the 4px chrome gap.
-        var corners = new CornerRadius4(WaveeRadius.Card, 0f, 0f, 0f);
+        var corners = new CornerRadius4(Radii.Card, 0f, 0f, 0f);
 
         Element surface = new BoxEl { Grow = 1f, Fill = Prop.Of(() => WaveeColors.FileArea), Corners = corners, ClipToBounds = true };
 
         var header = new BoxEl
         {
             Direction = 0, Height = 36f, AlignItems = FlexAlign.Center, Gap = 4f,
-            Padding = new Edges4(WaveeSpace.M, 0f, WaveeSpace.S, 0f),
+            Padding = new Edges4(Spacing.M, 0f, Spacing.S, 0f),
             Children =
             [
                 new TextEl(Title(mode))
@@ -130,10 +130,9 @@ sealed class RightRail : Component
     static Element CloseButton(Action onClick) => new BoxEl
     {
         Width = 32f, Height = 32f, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Corners = CornerRadius4.All(WaveeRadius.Control),
-        Fill = ColorF.Transparent, HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+        Corners = CornerRadius4.All(Radii.Control),
         Role = AutomationRole.Button, Focusable = true, AllowFocusOnInteraction = false,
         Cursor = CursorId.Hand, OnClick = onClick,
         Children = [new TextEl(Icons.ChromeClose) { Size = 12f, FontFamily = Theme.IconFont, Color = Tok.TextSecondary, HoverColor = Tok.TextPrimary }],
-    };
+    }.Interactive(Interaction.Subtle);
 }

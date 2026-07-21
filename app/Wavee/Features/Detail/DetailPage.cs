@@ -150,7 +150,7 @@ sealed class DetailPage : Component
                 if (cfg.TwoColumn && cfg.Content == DetailContent.Tracks
                     && (r.W < DetailLayoutBreakpoints.VerticalEnterW || forceHero))
                     k = DetailVerticalLayout.OrientationFor(r.W) == DetailHeroOrientation.Stacked ? 2 : 1;
-                if (_skelKind.Peek() != k) _skelKind.Value = k;
+                _skelKind.Value = k;
             },
             Children =
             [
@@ -353,8 +353,8 @@ static class DetailSkeleton
         for (int i = 0; i < rows.Length; i++) rows[i] = RowBar();
         var tracks = new BoxEl
         {
-            Direction = 1, Gap = WaveeSpace.S, Grow = 1f,
-            Padding = new Edges4(WaveeSpace.L, WaveeSpace.M, WaveeSpace.L, WaveeSpace.L),
+            Direction = 1, Gap = Spacing.S, Grow = 1f,
+            Padding = new Edges4(Spacing.L, Spacing.M, Spacing.L, Spacing.L),
             Children = rows,
         };
 
@@ -365,14 +365,14 @@ static class DetailSkeleton
         var rail = new BoxEl
         {
             Direction = 1, Gap = 14f, Shrink = 0f, Width = cfg.RailWidth,
-            Padding = new Edges4(WaveeSpace.L, WaveeSpace.XXL, WaveeSpace.S, WaveeSpace.XXL),
+            Padding = new Edges4(Spacing.L, Spacing.XXL, Spacing.S, Spacing.XXL),
             Children =
             [
                 // The reserved cover slot doubles as the connected-animation dest while the album loads — the flying card
                 // art lands here immediately (no wait for the fetch); the real cover cross-fades in underneath when ready.
-                new BoxEl { Width = cover, Height = cover, Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardDefault },
+                new BoxEl { Width = cover, Height = cover, Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillCardDefault },
                 Bar(cover * 0.5f, 12f), Bar(cover * 0.85f, 30f), Bar(cover * 0.6f, 13f),
-                new BoxEl { Height = WaveeSpace.S },
+                new BoxEl { Height = Spacing.S },
                 Bar(120f, 40f),
             ],
         };
@@ -393,7 +393,7 @@ static class DetailSkeleton
 
         Element artBox = new BoxEl
         {
-            Width = art, Height = art, Shrink = 0f, Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardDefault,
+            Width = art, Height = art, Shrink = 0f, Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillCardDefault,
             AlignSelf = stacked ? FlexAlign.Center : FlexAlign.Start,
         };
         Element PillBar() => new BoxEl
@@ -406,21 +406,21 @@ static class DetailSkeleton
             Bar(infoW * 0.4f, 14f),   // badges / owner
             Bar(infoW * 0.82f, 30f),  // title
             Bar(infoW * 0.5f, 12f),   // meta
-            new BoxEl { Direction = 0, Gap = WaveeSpace.M, Children = [PillBar(), PillBar()] },
+            new BoxEl { Direction = 0, Gap = Spacing.M, Children = [PillBar(), PillBar()] },
         ];
         Element info = stacked
-            ? new BoxEl { Direction = 1, Width = infoW, Gap = WaveeSpace.M, AlignItems = FlexAlign.Center, Children = infoKids }
-            : new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = WaveeSpace.M, AlignItems = FlexAlign.Stretch, Children = infoKids };
+            ? new BoxEl { Direction = 1, Width = infoW, Gap = Spacing.M, AlignItems = FlexAlign.Center, Children = infoKids }
+            : new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = Spacing.M, AlignItems = FlexAlign.Stretch, Children = infoKids };
         Element hero = stacked
-            ? new BoxEl { Direction = 1, Gap = WaveeSpace.L, AlignItems = FlexAlign.Center, Children = [artBox, info] }
+            ? new BoxEl { Direction = 1, Gap = Spacing.L, AlignItems = FlexAlign.Center, Children = [artBox, info] }
             : new BoxEl { Direction = 0, Gap = DetailVerticalLayout.HeroGap, AlignItems = FlexAlign.Start, Children = [artBox, info] };
 
         var rows = new Element[8];
         for (int i = 0; i < rows.Length; i++) rows[i] = RowBar();
         var tracks = new BoxEl
         {
-            Direction = 1, Gap = WaveeSpace.S, Grow = 1f,
-            Padding = new Edges4(WaveeSpace.L, WaveeSpace.M, WaveeSpace.L, WaveeSpace.L),
+            Direction = 1, Gap = Spacing.S, Grow = 1f,
+            Padding = new Edges4(Spacing.L, Spacing.M, Spacing.L, Spacing.L),
             Children = rows,
         };
 
@@ -437,7 +437,7 @@ static class DetailSkeleton
 
     static Element RowBar() => new BoxEl
     {
-        Direction = 0, Height = 48f, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
+        Direction = 0, Height = 48f, AlignItems = FlexAlign.Center, Gap = Spacing.M,
         Children = [Bar(20f, 14f), new BoxEl { Grow = 1f, Height = 14f, Corners = CornerRadius4.All(4f), Fill = Tok.FillCardDefault }, Bar(40f, 12f)],
     };
 

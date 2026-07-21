@@ -53,7 +53,7 @@ sealed class ConcertAppendPreloader : Component
 
         if (!loading && _attempts >= MaxAttempts) return new BoxEl();   // repeated quiet failures: collapse the tail
         // Far from the tail: a quiet spacer — no shimmer subtree, no standing skeleton pulse, nothing to animate.
-        if (!near && !loading) return new BoxEl { Height = WaveeSpace.L };
+        if (!near && !loading) return new BoxEl { Height = Spacing.L };
 
         return Skel.Region(_shimmer,
             shimmerSource: ShimmerGrid,
@@ -95,6 +95,6 @@ sealed class ConcertAppendPreloader : Component
                 start.AddDays(7 * i));
             cards[i] = ConcertUi.VerticalCard(seed, static () => { });
         }
-        return AutoGrid(240f, WaveeSpace.M, float.NaN, cards);
+        return AutoGrid(240f, Spacing.M, float.NaN, cards);
     }
 }

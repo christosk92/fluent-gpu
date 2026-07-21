@@ -48,7 +48,7 @@ sealed class ConcertDateFlyout : Component
         return new BoxEl
         {
             Direction = 1, Width = 320f, ClipToBounds = true,
-            Padding = new Edges4(WaveeSpace.S, WaveeSpace.S, WaveeSpace.S, WaveeSpace.S),
+            Padding = new Edges4(Spacing.S, Spacing.S, Spacing.S, Spacing.S),
             Children = [ body ],
         };
     }
@@ -71,7 +71,7 @@ sealed class ConcertDateFlyout : Component
         {
             int idx = i;
             var month = firstThisMonth.AddMonths(i);
-            rows.Add(RowButton(month.ToString("MMMM yyyy", Culture), Mdl.ChevronRight,
+            rows.Add(RowButton(month.ToString("MMMM yyyy", Culture), Icons.ChevronRight,
                 () => { _forward = true; _view.Value = idx; }));
         }
         return new BoxEl { Direction = 1, Gap = 2f, Children = rows.ToArray() };
@@ -93,7 +93,7 @@ sealed class ConcertDateFlyout : Component
         {
             new BoxEl
             {
-                Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S, MinHeight = 36f,
+                Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S, MinHeight = 36f,
                 Children =
                 [
                     BackButton(),
@@ -115,7 +115,7 @@ sealed class ConcertDateFlyout : Component
         return new ScrollEl
         {
             ContentSized = true, MaxHeight = 400f,
-            Content = new BoxEl { Direction = 1, Gap = WaveeSpace.XS, Children = rows.ToArray() },
+            Content = new BoxEl { Direction = 1, Gap = Spacing.XS, Children = rows.ToArray() },
         };
     }
 
@@ -124,8 +124,8 @@ sealed class ConcertDateFlyout : Component
 
     Element Footer(DateOnly? start) => new BoxEl
     {
-        Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S, MinHeight = 44f,
-        Padding = new Edges4(WaveeSpace.XS, WaveeSpace.XS, WaveeSpace.XS, 0f),
+        Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S, MinHeight = 44f,
+        Padding = new Edges4(Spacing.XS, Spacing.XS, Spacing.XS, 0f),
         Children =
         [
             Button.Standard(Loc.Get(Strings.Concerts.Filter.Clear), ClearRange),
@@ -207,7 +207,7 @@ sealed class ConcertDateFlyout : Component
         var cell = new BoxEl
         {
             Width = 38f, Height = 32f, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Corners = CornerRadius4.All(WaveeRadius.Control), Fill = fill,
+            Corners = CornerRadius4.All(Radii.Control), Fill = fill,
             Children = [ Body(day.ToString(Culture)) with { Color = fg, MaxLines = 1 } ],
         };
         if (past) return cell with { HitTestVisible = false };
@@ -232,28 +232,26 @@ sealed class ConcertDateFlyout : Component
         if (trailingGlyph is not null) children.Add(Icon(trailingGlyph, 14f, Tok.TextSecondary) with { Shrink = 0f });
         return new BoxEl
         {
-            Direction = 0, MinHeight = 40f, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S,
-            Padding = new Edges4(WaveeSpace.M, WaveeSpace.XS, WaveeSpace.M, WaveeSpace.XS),
-            Corners = CornerRadius4.All(WaveeRadius.Control),
-            HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+            Direction = 0, MinHeight = 40f, AlignItems = FlexAlign.Center, Gap = Spacing.S,
+            Padding = new Edges4(Spacing.M, Spacing.XS, Spacing.M, Spacing.XS),
+            Corners = CornerRadius4.All(Radii.Control),
             Role = AutomationRole.Button, Focusable = true, Cursor = CursorId.Hand, OnClick = onClick,
             Children = children.ToArray(),
-        };
+        }.Interactive(Interaction.Subtle);
     }
 
     Element BackButton() => new BoxEl
     {
         Width = 28f, Height = 28f, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Corners = CornerRadius4.All(WaveeRadius.Control),
-        HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+        Corners = CornerRadius4.All(Radii.Control),
         Role = AutomationRole.Button, Focusable = true, Cursor = CursorId.Hand,
         OnClick = () => { _forward = false; _view.Value = -1; },
-        Children = [ Icon(Mdl.ChevronLeft, 14f, Tok.TextSecondary) ],
-    };
+        Children = [ Icon(Icons.ChevronLeft, 14f, Tok.TextSecondary) ],
+    }.Interactive(Interaction.Subtle);
 
     static Element Divider() => new BoxEl
     {
-        AlignSelf = FlexAlign.Stretch, Padding = new Edges4(0f, WaveeSpace.XS, 0f, WaveeSpace.XS),
+        AlignSelf = FlexAlign.Stretch, Padding = new Edges4(0f, Spacing.XS, 0f, Spacing.XS),
         Children = [ new BoxEl { Height = 1f, AlignSelf = FlexAlign.Stretch, Fill = Tok.StrokeSurfaceDefault } ],
     };
 
@@ -287,8 +285,8 @@ sealed class ConcertWhereFlyout : Component
         int radius = Radius.Value;   // subscribe → the active-radius check
         var kids = new List<Element>(7)
         {
-            ActionRow(Mdl.MapPin, Loc.Get(Strings.Concerts.Location.SearchCities), Mdl.ChevronRight, OnSearchCities),
-            ActionRow(Mdl.MapPin, Loc.Get(Strings.Concerts.Location.UseMine), null, OnUseMyLocation),
+            ActionRow(Icons.MapPin, Loc.Get(Strings.Concerts.Location.SearchCities), Icons.ChevronRight, OnSearchCities),
+            ActionRow(Icons.MapPin, Loc.Get(Strings.Concerts.Location.UseMine), null, OnUseMyLocation),
             Divider(),
         };
         foreach (int km in Options)
@@ -299,7 +297,7 @@ sealed class ConcertWhereFlyout : Component
         return new BoxEl
         {
             Direction = 1, Width = 264f, Gap = 2f,
-            Padding = new Edges4(WaveeSpace.S, WaveeSpace.S, WaveeSpace.S, WaveeSpace.S),
+            Padding = new Edges4(Spacing.S, Spacing.S, Spacing.S, Spacing.S),
             Children = kids.ToArray(),
         };
     }
@@ -317,26 +315,24 @@ sealed class ConcertWhereFlyout : Component
         if (trailingGlyph is not null) children.Add(Icon(trailingGlyph, 14f, Tok.TextSecondary) with { Shrink = 0f });
         return new BoxEl
         {
-            Direction = 0, MinHeight = 40f, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S,
-            Padding = new Edges4(WaveeSpace.M, WaveeSpace.XS, WaveeSpace.M, WaveeSpace.XS),
-            Corners = CornerRadius4.All(WaveeRadius.Control),
-            HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+            Direction = 0, MinHeight = 40f, AlignItems = FlexAlign.Center, Gap = Spacing.S,
+            Padding = new Edges4(Spacing.M, Spacing.XS, Spacing.M, Spacing.XS),
+            Corners = CornerRadius4.All(Radii.Control),
             Role = AutomationRole.Button, Focusable = true, Cursor = CursorId.Hand, OnClick = onClick,
             Children = children.ToArray(),
-        };
+        }.Interactive(Interaction.Subtle);
     }
 
     static Element RadioRow(string label, bool active, Action onClick)
     {
         Element check = active
-            ? Icon(Mdl.Check, 14f, Tok.AccentTextPrimary) with { Shrink = 0f }
+            ? Icon(Icons.Check, 14f, Tok.AccentTextPrimary) with { Shrink = 0f }
             : new BoxEl { Width = 14f, Height = 14f, Shrink = 0f };
         return new BoxEl
         {
-            Direction = 0, MinHeight = 40f, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S,
-            Padding = new Edges4(WaveeSpace.M, WaveeSpace.XS, WaveeSpace.M, WaveeSpace.XS),
-            Corners = CornerRadius4.All(WaveeRadius.Control),
-            HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+            Direction = 0, MinHeight = 40f, AlignItems = FlexAlign.Center, Gap = Spacing.S,
+            Padding = new Edges4(Spacing.M, Spacing.XS, Spacing.M, Spacing.XS),
+            Corners = CornerRadius4.All(Radii.Control),
             Role = AutomationRole.ToggleButton, Focusable = true, Cursor = CursorId.Hand, OnClick = onClick,
             Children =
             [
@@ -347,12 +343,12 @@ sealed class ConcertWhereFlyout : Component
                 },
                 check,
             ],
-        };
+        }.Interactive(Interaction.Subtle);
     }
 
     static Element Divider() => new BoxEl
     {
-        AlignSelf = FlexAlign.Stretch, Padding = new Edges4(0f, WaveeSpace.XS, 0f, WaveeSpace.XS),
+        AlignSelf = FlexAlign.Stretch, Padding = new Edges4(0f, Spacing.XS, 0f, Spacing.XS),
         Children = [ new BoxEl { Height = 1f, AlignSelf = FlexAlign.Stretch, Fill = Tok.StrokeSurfaceDefault } ],
     };
 }

@@ -57,7 +57,7 @@ sealed class QrGrid : Component
         return new BoxEl
         {
             ZStack = true, Width = plate, Height = plate, AlignSelf = FlexAlign.Center,
-            Corners = CornerRadius4.All(WaveeRadius.Card), Fill = ColorF.FromRgba(0xFF, 0xFF, 0xFF), ClipToBounds = true,
+            Corners = CornerRadius4.All(Radii.Card), Fill = ColorF.FromRgba(0xFF, 0xFF, 0xFF), ClipToBounds = true,
             Children = [modules, CentreBadge(plate)],
         };
     }
@@ -88,7 +88,7 @@ sealed class QrGrid : Component
     Element Fallback() => new BoxEl
     {
         Width = _size, Height = _size, AlignSelf = FlexAlign.Center,
-        Corners = CornerRadius4.All(WaveeRadius.Card), Fill = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
+        Corners = CornerRadius4.All(Radii.Card), Fill = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
         AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
         Children = [new TextEl(Icons.MusicNote) { Size = 28f, FontFamily = Theme.IconFont, Color = ColorF.FromRgba(0x1D, 0xB9, 0x54) }],
     };

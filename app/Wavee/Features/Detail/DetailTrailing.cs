@@ -183,16 +183,16 @@ sealed class AlbumTrailing : Component
             };
             // The bento: a wrap row of compact fact tiles. Wrap-grow (FlexLayout.ArrangeWrap) fills each line edge-to-edge,
             // so the tiles flow 2×2 in a narrow rail and a single row when wide — no ragged gaps.
-            if (tiles.Length > 0) body.Add(new BoxEl { Direction = 0, Gap = WaveeSpace.S, Wrap = true, Children = tiles });
+            if (tiles.Length > 0) body.Add(new BoxEl { Direction = 0, Gap = Spacing.S, Wrap = true, Children = tiles });
             if (notes.Length > 0) body.Add(new BoxEl { Direction = 1, Gap = 3f, Children = notes });
-            children.Add(new BoxEl { Direction = 1, Gap = WaveeSpace.M, Children = body.ToArray() });
+            children.Add(new BoxEl { Direction = 1, Gap = Spacing.M, Children = body.ToArray() });
         }
 
         if (children.Count == 0) return new BoxEl();
         return new BoxEl
         {
-            Direction = 1, Gap = WaveeSpace.M,
-            Padding = outerPadding ? new Edges4(WaveeSpace.L, WaveeSpace.XL, WaveeSpace.L, WaveeSpace.L) : Edges4.All(0f),
+            Direction = 1, Gap = Spacing.M,
+            Padding = outerPadding ? new Edges4(Spacing.L, Spacing.XL, Spacing.L, Spacing.L) : Edges4.All(0f),
             Children = children.ToArray(),
         };
     }
@@ -235,8 +235,8 @@ sealed class AlbumTrailing : Component
     static Element CompactStatTile(string value, string label) => new BoxEl
     {
         Direction = 1, Gap = 1f, Grow = 1f, Basis = 0f, MinWidth = 0f,
-        Padding = new Edges4(WaveeSpace.M, WaveeSpace.S, WaveeSpace.M, WaveeSpace.S),
-        Corners = CornerRadius4.All(WaveeRadius.Control), Fill = Tok.FillCardSecondary,
+        Padding = new Edges4(Spacing.M, Spacing.S, Spacing.M, Spacing.S),
+        Corners = CornerRadius4.All(Radii.Control), Fill = Tok.FillCardSecondary,
         BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
         Children =
         [
@@ -293,7 +293,7 @@ sealed class AlbumTrailing : Component
             };
         return new BoxEl
         {
-            Direction = 0, Gap = WaveeSpace.L, AlignItems = FlexAlign.Start,
+            Direction = 0, Gap = Spacing.L, AlignItems = FlexAlign.Start,
             Children =
             [
                 new TextEl(label) { Size = 13f, Color = Tok.TextSecondary, Width = 84f, Shrink = 0f },
@@ -333,14 +333,14 @@ sealed class AlbumTrailing : Component
         Direction = 1,
         Grow = 1f,
         AlignSelf = FlexAlign.Stretch,
-        Padding = new Edges4(WaveeSpace.L, WaveeSpace.XL, WaveeSpace.L, 0f),
+        Padding = new Edges4(Spacing.L, Spacing.XL, Spacing.L, 0f),
         Children =
         [
             new BoxEl
             {
-                Direction = 0, Gap = WaveeSpace.L, AlignItems = FlexAlign.Center,
-                Padding = new Edges4(WaveeSpace.M, WaveeSpace.M, WaveeSpace.L, WaveeSpace.M),
-                Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardSecondary,
+                Direction = 0, Gap = Spacing.L, AlignItems = FlexAlign.Center,
+                Padding = new Edges4(Spacing.M, Spacing.M, Spacing.L, Spacing.M),
+                Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillCardSecondary,
                 BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault, ClipToBounds = true,
                 HoverFill = Tok.FillCardDefault, OnClick = () => h.PlayContext(m.ContextUri ?? ""),
                 Children =
@@ -348,10 +348,10 @@ sealed class AlbumTrailing : Component
                     new BoxEl
                     {
                         Width = 200f, Height = 116f, Shrink = 0f, ZStack = true,
-                        Corners = CornerRadius4.All(WaveeRadius.Control), ClipToBounds = true,
+                        Corners = CornerRadius4.All(Radii.Control), ClipToBounds = true,
                         Children =
                         [
-                            Surfaces.Artwork(m.Cover, m.Title.GetHashCode() & 0x7fffffff, 200f, 116f, WaveeRadius.Control),
+                            Surfaces.Artwork(m.Cover, m.Title.GetHashCode() & 0x7fffffff, 200f, 116f, Radii.Control),
                             new BoxEl
                             {
                                 Width = 200f, Height = 116f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
@@ -369,7 +369,7 @@ sealed class AlbumTrailing : Component
                     },
                     new BoxEl
                     {
-                        Direction = 1, Grow = 1f, Basis = 0f, Gap = WaveeSpace.XS,
+                        Direction = 1, Grow = 1f, Basis = 0f, Gap = Spacing.XS,
                         Children =
                         [
                             new TextEl(Loc.Get(Strings.Detail.WatchOfficialVideo)) { Size = 11f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 60f },
@@ -385,14 +385,14 @@ sealed class AlbumTrailing : Component
     // "Fans also like" — a clipped row of artist chips (avatar + name).
     static Element FansRow(IReadOnlyList<Artist> fans, DetailHandlers h) => new BoxEl
     {
-        Direction = 0, Gap = WaveeSpace.M, ClipToBounds = true,
+        Direction = 0, Gap = Spacing.M, ClipToBounds = true,
         Children = fans.Take(8).Select(a => ArtistChip(a, h)).ToArray(),
     };
 
     static Element ArtistChip(Artist a, DetailHandlers h) => new BoxEl
     {
-        Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S, Shrink = 0f, Height = 48f,
-        Padding = new Edges4(WaveeSpace.S, 0f, WaveeSpace.L, 0f),
+        Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S, Shrink = 0f, Height = 48f,
+        Padding = new Edges4(Spacing.S, 0f, Spacing.L, 0f),
         Corners = CornerRadius4.All(24f), Fill = Tok.FillCardSecondary,
         BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
         HoverFill = Tok.FillCardDefault, PressedFill = Tok.FillSubtleTertiary,
@@ -414,7 +414,7 @@ sealed class AlbumTrailing : Component
         Direction = 1,
         Grow = 1f,
         AlignSelf = FlexAlign.Stretch,
-        Padding = new Edges4(WaveeSpace.L, WaveeSpace.XL, WaveeSpace.L, WaveeSpace.L),
+        Padding = new Edges4(Spacing.L, Spacing.XL, Spacing.L, Spacing.L),
         Children =
         [
             PagedShelf.Create(
@@ -432,7 +432,7 @@ sealed class AlbumTrailing : Component
         Direction = 1,
         Grow = 1f,
         AlignSelf = FlexAlign.Stretch,
-        Padding = new Edges4(WaveeSpace.L, WaveeSpace.XL, WaveeSpace.L, WaveeSpace.L),
+        Padding = new Edges4(Spacing.L, Spacing.XL, Spacing.L, Spacing.L),
         Children =
         [
             PagedShelf.Create(
@@ -456,7 +456,7 @@ sealed class AlbumTrailing : Component
         Direction = 1,
         Grow = 1f,
         AlignSelf = FlexAlign.Stretch,
-        Padding = new Edges4(WaveeSpace.L, WaveeSpace.XL, WaveeSpace.L, WaveeSpace.L),
+        Padding = new Edges4(Spacing.L, Spacing.XL, Spacing.L, Spacing.L),
         Children =
         [
             PagedShelf.Create(
@@ -469,11 +469,11 @@ sealed class AlbumTrailing : Component
 
     static Element MerchCard(MerchItem item, float w)
     {
-        float inner = MathF.Max(48f, w - 2f * WaveeSpace.S);
+        float inner = MathF.Max(48f, w - 2f * Spacing.S);
         return new BoxEl
         {
-            Width = w, Direction = 1, Gap = WaveeSpace.XS, Padding = Edges4.All(WaveeSpace.S),
-            Corners = CornerRadius4.All(WaveeRadius.Card), ClipToBounds = true,
+            Width = w, Direction = 1, Gap = Spacing.XS, Padding = Edges4.All(Spacing.S),
+            Corners = CornerRadius4.All(Radii.Card), ClipToBounds = true,
             HoverFill = Tok.FillCardSecondary, PressedFill = Tok.FillCardDefault,
             // Open the external shop through the IPlatformApp.OpenUri PAL seam (what HyperlinkButton uses); headless records.
             OnClick = item.ShopUrl is { Length: > 0 } url ? () => InputHooks.Current.Default.OpenUri?.Invoke(url) : null,
@@ -481,8 +481,8 @@ sealed class AlbumTrailing : Component
             [
                 new BoxEl
                 {
-                    Width = inner, Height = inner, Corners = CornerRadius4.All(WaveeRadius.Control), ClipToBounds = true,
-                    Children = [Surfaces.Artwork(item.Image, item.Name.GetHashCode() & 0x7fffffff, inner, inner, WaveeRadius.Control)],
+                    Width = inner, Height = inner, Corners = CornerRadius4.All(Radii.Control), ClipToBounds = true,
+                    Children = [Surfaces.Artwork(item.Image, item.Name.GetHashCode() & 0x7fffffff, inner, inner, Radii.Control)],
                 },
                 new TextEl(item.Name) { Size = 13f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 2, Trim = TextTrim.CharacterEllipsis, Width = inner },
                 new TextEl(item.Price.Length > 0 ? item.Price : Loc.Get(Strings.Artist.Buy)) { Size = 12f, Weight = 600, Color = Tok.AccentTextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, Width = inner },
@@ -492,10 +492,10 @@ sealed class AlbumTrailing : Component
 
     static Element Section(string title, Element body) => new BoxEl
     {
-        Direction = 1, Gap = WaveeSpace.M,
+        Direction = 1, Gap = Spacing.M,
         Grow = 1f,
         AlignSelf = FlexAlign.Stretch,
-        Padding = new Edges4(WaveeSpace.L, WaveeSpace.XL, WaveeSpace.L, WaveeSpace.L),
+        Padding = new Edges4(Spacing.L, Spacing.XL, Spacing.L, Spacing.L),
         Children = [WaveeType.RailHeader(title), body],
     };
 
@@ -504,7 +504,7 @@ sealed class AlbumTrailing : Component
         Direction = 1,
         Grow = 1f,
         AlignSelf = FlexAlign.Stretch,
-        Padding = new Edges4(WaveeSpace.L, WaveeSpace.XL, WaveeSpace.L, WaveeSpace.L),
+        Padding = new Edges4(Spacing.L, Spacing.XL, Spacing.L, Spacing.L),
         Children = [AboutCard(artist, h)],
     };
 
@@ -514,10 +514,10 @@ sealed class AlbumTrailing : Component
     {
         return new BoxEl
         {
-            Direction = 0, Gap = WaveeSpace.L, AlignItems = FlexAlign.Center,
+            Direction = 0, Gap = Spacing.L, AlignItems = FlexAlign.Center,
             Grow = 1f, AlignSelf = FlexAlign.Stretch,
-            Padding = new Edges4(WaveeSpace.L, WaveeSpace.M, WaveeSpace.L, WaveeSpace.M),
-            Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardSecondary,
+            Padding = new Edges4(Spacing.L, Spacing.M, Spacing.L, Spacing.M),
+            Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillCardSecondary,
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             OnClick = () => h.Go("artist:" + artist.Uri, artist.Name),
             HoverFill = Tok.FillCardDefault, ClipToBounds = true, Cursor = CursorId.Hand,
@@ -530,18 +530,18 @@ sealed class AlbumTrailing : Component
                 },
                 new BoxEl
                 {
-                    Direction = 1, Grow = 1f, Basis = 0f, Gap = WaveeSpace.XS,
+                    Direction = 1, Grow = 1f, Basis = 0f, Gap = Spacing.XS,
                     Children =
                     [
                         new TextEl(Loc.Get(Strings.Detail.AboutTheArtist).ToUpperInvariant())
                             { Size = 11f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 120f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                         new BoxEl
                         {
-                            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S,
+                            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S,
                             Children =
                             [
                                 new TextEl(artist.Name) { Size = 20f, Weight = 700, Color = Tok.TextPrimary, Grow = 1f, Basis = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-                                artist.Verified ? Icon(Mdl.Check, 12f, Tok.TextSecondary) : new BoxEl(),
+                                artist.Verified ? Icon(Icons.Check, 12f, Tok.TextSecondary) : new BoxEl(),
                             ],
                         },
                         string.IsNullOrWhiteSpace(artist.Bio)
@@ -569,24 +569,24 @@ sealed class AlbumTrailing : Component
     };
 
     static Element CardSkeleton() => SectionSkeleton(
-        new BoxEl { Height = 96f, Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardDefault });
+        new BoxEl { Height = 96f, Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillCardDefault });
 
     static Element ChipsSkeleton() => SectionSkeleton(new BoxEl
     {
-        Direction = 0, Gap = WaveeSpace.S, ClipToBounds = true,
+        Direction = 0, Gap = Spacing.S, ClipToBounds = true,
         Children = Enumerable.Range(0, 5).Select(_ => (Element)new BoxEl
         { Width = 132f, Height = 40f, Shrink = 0f, Corners = CornerRadius4.All(20f), Fill = Tok.FillCardDefault }).ToArray(),
     });
 
     static Element ShelfSkeleton() => SectionSkeleton(new BoxEl
     {
-        Direction = 0, Gap = WaveeSpace.M, ClipToBounds = true,
+        Direction = 0, Gap = Spacing.M, ClipToBounds = true,
         Children = Enumerable.Range(0, 5).Select(_ => (Element)new BoxEl
         {
-            Width = 150f, Direction = 1, Gap = WaveeSpace.S, Shrink = 0f,
+            Width = 150f, Direction = 1, Gap = Spacing.S, Shrink = 0f,
             Children =
             [
-                new BoxEl { Width = 150f, Height = 150f, Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardDefault },
+                new BoxEl { Width = 150f, Height = 150f, Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillCardDefault },
                 new BoxEl { Width = 110f, Height = 12f, Corners = CornerRadius4.All(4f), Fill = Tok.FillCardDefault },
                 new BoxEl { Width = 70f, Height = 10f, Corners = CornerRadius4.All(4f), Fill = Tok.FillCardDefault },
             ],
@@ -595,10 +595,10 @@ sealed class AlbumTrailing : Component
 
     static Element SectionSkeleton(Element body) => new BoxEl
     {
-        Direction = 1, Gap = WaveeSpace.M,
+        Direction = 1, Gap = Spacing.M,
         Grow = 1f,
         AlignSelf = FlexAlign.Stretch,
-        Padding = new Edges4(WaveeSpace.L, WaveeSpace.XL, WaveeSpace.L, WaveeSpace.L),
+        Padding = new Edges4(Spacing.L, Spacing.XL, Spacing.L, Spacing.L),
         Children =
         [
             new BoxEl { Width = 160f, Height = 18f, Corners = CornerRadius4.All(4f), Fill = Tok.FillCardDefault },

@@ -131,7 +131,7 @@ sealed partial class SettingsPage
         if (size is { } b) actions.Add(new TextEl(FmtBytes(b)) { Size = 13f, Color = Tok.TextSecondary, Shrink = 0f });
         actions.Add(HyperlinkButton.Create(Loc.Get(Strings.Settings.Storage.OpenFolder), () => SettingsShared.OpenFolder(folder)));
         if (extra is not null) actions.Add(extra);
-        return new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, Children = actions.ToArray() };
+        return new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M, Children = actions.ToArray() };
     }
 
     static Element StorageRowCard(string label, string? sub, long? size, string folder, ColorF accent,
@@ -250,8 +250,8 @@ sealed partial class SettingsPage
             : storageLoad == StorageLoadPhase.Loading || s is null
                 ? new BoxEl
                 {
-                    Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
-                    Padding = new Edges4(0, WaveeSpace.L, 0, WaveeSpace.L),
+                    Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M,
+                    Padding = new Edges4(0, Spacing.L, 0, Spacing.L),
                     Children =
                     [
                         ProgressRing.Indeterminate(size: 20f),
@@ -349,15 +349,15 @@ sealed partial class SettingsPage
 
         return new BoxEl
         {
-            Direction = 1, Gap = WaveeSpace.M,
-            Padding = new Edges4(WaveeSpace.L, WaveeSpace.M, WaveeSpace.L, WaveeSpace.M),
-            Corners = CornerRadius4.All(WaveeRadius.Card),
+            Direction = 1, Gap = Spacing.M,
+            Padding = new Edges4(Spacing.L, Spacing.M, Spacing.L, Spacing.M),
+            Corners = CornerRadius4.All(Radii.Card),
             Fill = Tok.FillCardSecondary, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             Children =
             [
                 new BoxEl
                 {
-                    Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S,
+                    Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S,
                     Children =
                     [
                         new TextEl(Loc.Get(Strings.Settings.Storage.Total)) { Size = 12f, Weight = 600, Color = Tok.TextSecondary },
@@ -372,7 +372,7 @@ sealed partial class SettingsPage
                         Children = barKids.ToArray(),
                     }
                     : new BoxEl(),
-                new BoxEl { Direction = 0, Gap = WaveeSpace.S, Wrap = true, Children = legend.ToArray() },
+                new BoxEl { Direction = 0, Gap = Spacing.S, Wrap = true, Children = legend.ToArray() },
             ],
         };
     }
@@ -450,7 +450,7 @@ sealed partial class SettingsPage
 
         return new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, Wrap = true,
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M, Wrap = true,
             Children =
             [
                 ComboBox.Create(s_bodyBudgetLabels, _bodyBudgetPreset, width: 120f, isEnabled: settings is not null,
@@ -480,7 +480,7 @@ sealed partial class SettingsPage
     Element CacheLocationActions(Services? svc, IAppSettings? settings, Action<Action> post, string audioDir) =>
         new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S, Wrap = true,
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S, Wrap = true,
             Children =
             [
                 Button.Standard(Loc.Get(Strings.Settings.Storage.ChooseLocation), () => PickCacheLocation(svc, settings, post)),

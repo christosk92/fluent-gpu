@@ -125,7 +125,7 @@ sealed class ContentHost : Component
         return new BoxEl
         {
             Key = "page:" + r.Name,
-            Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1, Gap = WaveeSpace.M,
+            Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1, Gap = Spacing.M,
             AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Children =
             [

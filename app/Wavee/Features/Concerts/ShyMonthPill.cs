@@ -106,7 +106,7 @@ sealed class ShyMonthPill : Component
             // ScrollableUnder finds the scroller SIBLING beneath. The pill never steals wheel/touchpad, shown or hidden.
             HitTestVisible = false, HitTestPassThrough = true, Grow = 1f, Direction = 1,
             AlignItems = FlexAlign.Center, Justify = FlexJustify.Start,
-            Padding = new Edges4(0f, WaveeSpace.M, 0f, 0f),
+            Padding = new Edges4(0f, Spacing.M, 0f, 0f),
             Children = clock is null ? [ pill ] : [ pill, clock ],
         };
     }
@@ -119,8 +119,8 @@ sealed class ShyMonthPill : Component
         HitTestVisible = false,
         AlignSelf = FlexAlign.Center, Height = 32f, Shrink = 0f,   // explicit size (never NaN in a ZStack)
         Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Padding = new Edges4(WaveeSpace.M, 0f, WaveeSpace.M, 0f),
-        Corners = CornerRadius4.All(WaveeRadius.Pill),
+        Padding = new Edges4(Spacing.M, 0f, Spacing.M, 0f),
+        Corners = CornerRadius4.All(Radii.Full),
         Acrylic = Tok.AcrylicFlyout, Fill = Tok.FillLayerDefault, Shadow = Elevation.Card,
         BorderWidth = 1f, BorderColor = Tok.StrokeSurfaceDefault,
         Children =

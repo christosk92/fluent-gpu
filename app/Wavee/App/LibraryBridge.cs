@@ -133,7 +133,7 @@ public sealed class LibraryBridge : IUndoTarget
         foreach (var (uri, state) in _savedByUri)
         {
             bool saved = next.Contains(uri);
-            if (state.Peek() != saved) state.Value = saved;
+            state.Value = saved;
         }
     }
 

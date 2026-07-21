@@ -15,13 +15,13 @@ public static class EmptyState
         var kids = new List<Element>
         {
             Icon(glyph, 32f, Tok.TextTertiary),
-            new BoxEl { Height = WaveeSpace.M },
+            new BoxEl { Height = Spacing.M },
             WaveeType.RailHeader(title),
         };
         if (subtitle is not null) kids.Add(WaveeType.TrackMeta(subtitle));
         if (actionLabel is not null && onAction is not null)
         {
-            kids.Add(new BoxEl { Height = WaveeSpace.L });
+            kids.Add(new BoxEl { Height = Spacing.L });
             kids.Add(Button.Accent(actionLabel, onAction));
         }
         return Centered(kids);
@@ -32,6 +32,6 @@ public static class EmptyState
     internal static Element Centered(List<Element> kids) => new BoxEl
     {
         Direction = 1, Grow = 1, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Gap = WaveeSpace.XS, Padding = Edges4.All(WaveeSpace.XXL), Children = kids.ToArray(),
+        Gap = Spacing.XS, Padding = Edges4.All(Spacing.XXL), Children = kids.ToArray(),
     };
 }

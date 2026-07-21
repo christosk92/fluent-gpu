@@ -86,7 +86,7 @@ sealed partial class SettingsPage
             SettingsSectionHeader(Loc.Get(Strings.Settings.Sound.Title), Icons.Tag),
             EqualizerGroup(svc, settings, eqOn, gains, preset),
             CrossfadeGroup(svc, settings, crossOn),
-            SettingsSectionHeader(Loc.Get(Strings.Settings.Playback.PlayerBar), Mdl.Pin),
+            SettingsSectionHeader(Loc.Get(Strings.Settings.Playback.PlayerBar), Icons.Pin),
             SettingsRow(Loc.Get(Strings.Settings.Playback.ShowRemaining), Loc.Get(Strings.Settings.Playback.ShowRemainingSub),
                 Toggle(WaveeSettings.PlayerBarShowRemaining, bumpPlayerBar: true), Icons.Clock));
     }
@@ -163,7 +163,7 @@ sealed partial class SettingsPage
                     eqOn ? Loc.Get(Strings.Settings.Sound.CurveOn) : Loc.Get(Strings.Settings.Sound.CurveOff),
                     new BoxEl
                     {
-                        Direction = 1, Gap = WaveeSpace.S,
+                        Direction = 1, Gap = Spacing.S,
                         Children =
                         [
                             WaveeEqualizerCurve.Create(gains, (band, gain) => SetEqBand(svc, settings, band, gain), eqOn && settings is not null),
@@ -209,7 +209,7 @@ sealed partial class SettingsPage
             // NumberBox is a mounted component whose constructor fields intentionally freeze. Remount this small row when
             // the toggle flips so its enabled state follows crossfade immediately instead of staying at its first value.
             Key = crossOn ? "crossfade-duration-on" : "crossfade-duration-off",
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M,
             Children =
             [
                 Slider.Create(_crossSlider, v => Commit(v),

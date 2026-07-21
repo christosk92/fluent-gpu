@@ -1,4 +1,4 @@
-﻿// Vendored verbatim from Lyricify.Lyrics.Helper (Apache-2.0) — Decrypter/Qrc/DESHelper.cs. QQ Music QRC uses a NON-standard
+// Vendored verbatim from Lyricify.Lyrics.Helper (Apache-2.0) — Decrypter/Qrc/DESHelper.cs. QQ Music QRC uses a NON-standard
 // DES (15-round, no final swap), so .NET TripleDES cannot substitute; kept byte-identical. See app/docs LICENSE note.
 namespace Wavee.Backend.Lyrics.Lyricify
 {

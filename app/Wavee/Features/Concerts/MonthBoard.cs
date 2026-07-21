@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
@@ -88,8 +89,8 @@ sealed class MonthBoard : Component
         int shows = _group.ShowCount;
         return new BoxEl
         {
-            Direction = 0, MinWidth = 0f, MinHeight = 58f, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
-            Padding = new Edges4(WaveeSpace.L, WaveeSpace.M, WaveeSpace.L, WaveeSpace.M),
+            Direction = 0, MinWidth = 0f, MinHeight = 58f, AlignItems = FlexAlign.Center, Gap = Spacing.M,
+            Padding = new Edges4(Spacing.L, Spacing.M, Spacing.L, Spacing.M),
             OnRealized = _onHeaderRealized,
             Children =
             [
@@ -138,7 +139,7 @@ sealed class MonthBoard : Component
     {
         var txt = ConcertScheduleShaping.TileText(c, _artistName);
         var secondary = new List<Element>(2);
-        if (near) secondary.Add(Icon(Mdl.MapPin, 12f, Tok.AccentTextPrimary) with { Shrink = 0f });
+        if (near) secondary.Add(Icon(Icons.MapPin, 12f, Tok.AccentTextPrimary) with { Shrink = 0f });
         if (txt.Secondary.Length > 0)
             secondary.Add(Body(txt.Secondary) with
             {
@@ -149,9 +150,8 @@ sealed class MonthBoard : Component
         return new BoxEl
         {
             Key = c.Uri,
-            Direction = 0, MinHeight = 68f, MinWidth = 0f, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
-            Padding = new Edges4(WaveeSpace.M, WaveeSpace.S, WaveeSpace.M, WaveeSpace.S),
-            HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+            Direction = 0, MinHeight = 68f, MinWidth = 0f, AlignItems = FlexAlign.Center, Gap = Spacing.M,
+            Padding = new Edges4(Spacing.M, Spacing.S, Spacing.M, Spacing.S),
             Role = AutomationRole.Button, Focusable = true, FocusVisualMargin = new Edges4(2f, 2f, 2f, 2f),
             Cursor = CursorId.Hand, OnClick = () => _go(ConcertRoutes.Detail(c.Uri), c.Title ?? c.Venue),
             Children =
@@ -166,12 +166,12 @@ sealed class MonthBoard : Component
                         BodyStrong(txt.Primary) with
                         { Color = Tok.TextPrimary, MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                         new BoxEl
-                        { Direction = 0, MinWidth = 0f, AlignItems = FlexAlign.Center, Gap = WaveeSpace.XS, Children = secondary.ToArray() },
+                        { Direction = 0, MinWidth = 0f, AlignItems = FlexAlign.Center, Gap = Spacing.XS, Children = secondary.ToArray() },
                     ],
                 },
-                Icon(Mdl.ChevronRight, 16f, Tok.TextSecondary) with { Shrink = 0f },
+                Icon(Icons.ChevronRight, 16f, Tok.TextSecondary) with { Shrink = 0f },
             ],
-        };
+        }.Interactive(Interaction.Subtle);
     }
 
     Element RunTile(ConcertRun run, bool near)
@@ -179,7 +179,7 @@ sealed class MonthBoard : Component
         var c = run.First;
         var txt = ConcertScheduleShaping.TileText(c, _artistName);
         var meta = new List<Element>(4);
-        if (near) meta.Add(Icon(Mdl.MapPin, 12f, Tok.AccentTextPrimary) with { Shrink = 0f });
+        if (near) meta.Add(Icon(Icons.MapPin, 12f, Tok.AccentTextPrimary) with { Shrink = 0f });
         meta.Add(Chip(run.NightCount + " nights"));
         if (txt.CityIsPrimary)
         {
@@ -196,9 +196,8 @@ sealed class MonthBoard : Component
         return new BoxEl
         {
             Key = "run:" + run.Uri,
-            Direction = 0, MinHeight = 68f, MinWidth = 0f, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
-            Padding = new Edges4(WaveeSpace.M, WaveeSpace.S, WaveeSpace.M, WaveeSpace.S),
-            HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+            Direction = 0, MinHeight = 68f, MinWidth = 0f, AlignItems = FlexAlign.Center, Gap = Spacing.M,
+            Padding = new Edges4(Spacing.M, Spacing.S, Spacing.M, Spacing.S),
             Role = AutomationRole.Button, Focusable = true, FocusVisualMargin = new Edges4(2f, 2f, 2f, 2f),
             Cursor = CursorId.Hand,
             OnClick = () => { if (_expandedRuns.Add(run.Uri)) _revision.Value++; },
@@ -214,27 +213,26 @@ sealed class MonthBoard : Component
                         BodyStrong(txt.Primary) with
                         { Color = Tok.TextPrimary, MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                         new BoxEl
-                        { Direction = 0, MinWidth = 0f, AlignItems = FlexAlign.Center, Gap = WaveeSpace.XS, Children = meta.ToArray() },
+                        { Direction = 0, MinWidth = 0f, AlignItems = FlexAlign.Center, Gap = Spacing.XS, Children = meta.ToArray() },
                     ],
                 },
-                Icon(Mdl.ChevronDown, 16f, Tok.TextSecondary) with { Shrink = 0f },
+                Icon(Icons.ChevronDown, 16f, Tok.TextSecondary) with { Shrink = 0f },
             ],
-        };
+        }.Interactive(Interaction.Subtle);
     }
 
     Element ShowAllFooter() => new BoxEl
     {
         Direction = 0, MinWidth = 0f, MinHeight = 44f, AlignItems = FlexAlign.Center,
-        Justify = FlexJustify.Center, Gap = WaveeSpace.XS,
-        HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+        Justify = FlexJustify.Center, Gap = Spacing.XS,
         Role = AutomationRole.Button, Focusable = true, Cursor = CursorId.Hand,
         OnClick = () => { if (_expandedMonths.Add(_group.Key)) _revision.Value++; },
         Children =
         [
             BodyStrong(Strings.Concerts.Schedule.ShowAll(_group.ShowCount)) with { Color = Tok.AccentTextPrimary, MaxLines = 1 },
-            Icon(Mdl.ChevronDown, 14f, Tok.AccentTextPrimary) with { Shrink = 0f },
+            Icon(Icons.ChevronDown, 14f, Tok.AccentTextPrimary) with { Shrink = 0f },
         ],
-    };
+    }.Interactive(Interaction.Subtle);
 
     static Element NearRail(bool near) => new BoxEl
     {
@@ -274,8 +272,8 @@ sealed class MonthBoard : Component
 
     static Element Chip(string text) => new BoxEl
     {
-        AlignSelf = FlexAlign.Center, Shrink = 0f, Padding = new Edges4(WaveeSpace.S, 1f, WaveeSpace.S, 1f),
-        Corners = CornerRadius4.All(WaveeRadius.Pill), Fill = Tok.AccentSubtle,
+        AlignSelf = FlexAlign.Center, Shrink = 0f, Padding = new Edges4(Spacing.S, 1f, Spacing.S, 1f),
+        Corners = CornerRadius4.All(Radii.Full), Fill = Tok.AccentSubtle,
         Children = [ Caption(text) with { Color = Tok.AccentTextPrimary, MaxLines = 1 } ],
     };
 

@@ -20,9 +20,9 @@ public static class OfflineBanner
         if (onRetry is not null) kids.Add(Button.Standard(Loc.Get(Strings.Common.Retry), onRetry));
         return new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
-            Padding = new Edges4(WaveeSpace.L, WaveeSpace.S, WaveeSpace.L, WaveeSpace.S),
-            Fill = Tok.SystemFillCautionBackground, Corners = CornerRadius4.All(WaveeRadius.Control),
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M,
+            Padding = new Edges4(Spacing.L, Spacing.S, Spacing.L, Spacing.S),
+            Fill = Tok.SystemFillCautionBackground, Corners = CornerRadius4.All(Radii.Control),
             Children = kids.ToArray(),
         };
     }

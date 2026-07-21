@@ -185,7 +185,7 @@ sealed partial class SettingsPage
                         // Drop 10f→9f when selected so the 1f→2f border growth draws inward and the wireframe stays put.
                         Width = 116f, Height = 84f, Padding = Edges4.All(on ? 9f : 10f),
                         Direction = 1, ClipToBounds = true,
-                        Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillSubtleSecondary,
+                        Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillSubtleSecondary,
                         BorderWidth = on ? 2f : 1f, BorderColor = on ? Tok.AccentDefault : Tok.StrokeControlDefault,
                         HoverScale = 1.02f, PressScale = 0.98f,
                         Children = [sketch],
@@ -251,7 +251,7 @@ sealed partial class SettingsPage
     Element DensityBlock(int density, Action<int> setDensity) => new BoxEl
     {
         Direction = 1, AlignSelf = FlexAlign.Stretch,
-        Corners = CornerRadius4.All(WaveeRadius.Card),
+        Corners = CornerRadius4.All(Radii.Card),
         Fill = Tok.FillCardSecondary, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
         ClipToBounds = true,
         Children =
@@ -297,7 +297,7 @@ sealed partial class SettingsPage
                     {
                         Width = 116f, Height = 84f, Padding = Edges4.All(on ? 9f : 10f),
                         Direction = 1, Gap = 4f, Justify = FlexJustify.Center, ClipToBounds = true,
-                        Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillSubtleSecondary,
+                        Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillSubtleSecondary,
                         BorderWidth = on ? 2f : 1f, BorderColor = on ? Tok.AccentDefault : Tok.StrokeControlDefault,
                         HoverScale = 1.02f, PressScale = 0.98f,
                         Children = [MockRow(), MockRow(), MockRow()],

@@ -85,12 +85,11 @@ sealed class ProfileMenu : Component
         return new BoxEl
         {
             Direction = 0, Gap = 8f, AlignItems = FlexAlign.Center, Height = 32f,
-            Padding = new Edges4(4f, 0f, _showName ? 10f : 4f, 0f), Corners = CornerRadius4.All(WaveeRadius.Control),
-            HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+            Padding = new Edges4(4f, 0f, _showName ? 10f : 4f, 0f), Corners = CornerRadius4.All(Radii.Control),
             Role = AutomationRole.Button, Focusable = true,
             OnClick = OpenMenu, OnRealized = h => anchor.Value = h,
             Children = _showName ? new Element[] { pic, Caption(name).Primary() } : new Element[] { pic },
-        };
+        }.Interactive(Interaction.Subtle);
     }
 
     // The dropdown: a compact account header over stock WinUI menu rows.
@@ -207,14 +206,14 @@ sealed class ProfileMenu : Component
     {
         Direction = 1, Width = 380f, MinWidth = 320f, MaxWidth = 420f,
         Corners = Radii.OverlayAll, Fill = Tok.FillSolidBase, BorderColor = Tok.StrokeSurfaceDefault, BorderWidth = 1f,
-        Shadow = Elevation.Dialog, Padding = Edges4.All(24f), Gap = WaveeSpace.M,
+        Shadow = Elevation.Dialog, Padding = Edges4.All(24f), Gap = Spacing.M,
         Children =
         [
             new TextEl(title) { Size = 20f, Weight = 600, Color = Tok.TextPrimary, Wrap = TextWrap.Wrap },
             new TextEl(message) { Size = 14f, Color = Tok.TextPrimary, Wrap = TextWrap.Wrap },
             new BoxEl
             {
-                Direction = 0, Gap = WaveeSpace.S, Justify = FlexJustify.End, Margin = new Edges4(0, WaveeSpace.M, 0, 0),
+                Direction = 0, Gap = Spacing.S, Justify = FlexJustify.End, Margin = new Edges4(0, Spacing.M, 0, 0),
                 Children =
                 [
                     Button.Standard(Loc.Get(Strings.Auth.Cancel), onCancel) with { MinWidth = 96f },

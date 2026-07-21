@@ -40,18 +40,6 @@ public static class WaveePalette
             ? (art is { } p ? Lift(Accent(p)) : Tok.AccentDefault)
             : BackgroundDark(art ?? Neutral);
 
-    /// <summary>The legible ink (near-black or white) for text/icons sitting ON a solid <paramref name="accent"/> fill,
-    /// chosen by the fill's WCAG luminance — NOT the theme. A cover-extracted accent (after <see cref="Lift"/>) can land
-    /// anywhere from a near-white grey to a saturated mid-tone, so the theme-only <c>Tok.TextOnAccentPrimary</c> (white in
-    /// light theme) failed contrast on a lifted-bright cover accent. This always picks the higher-contrast of black/white.</summary>
-    public static ColorF OnAccent(ColorF accent)
-    {
-        static float Lin(float c) => c <= 0.04045f ? c / 12.92f : MathF.Pow((c + 0.055f) / 1.055f, 2.4f);
-        float l = 0.2126f * Lin(accent.R) + 0.7152f * Lin(accent.G) + 0.0722f * Lin(accent.B);
-        // Contrast vs white = 1.05/(l+0.05); vs black = (l+0.05)/0.05. Pick whichever reads better on this fill.
-        return (l + 0.05f) / 0.05f >= 1.05f / (l + 0.05f) ? ColorF.FromRgba(0x16, 0x16, 0x16) : ColorF.FromRgba(255, 255, 255);
-    }
-
     /// <summary>Neutral fallback when no palette is available (no current track / not yet extracted).</summary>
     public static Palette Neutral { get; } = new(BackgroundDark: 0xFF1C1C1C, TintedDark: 0xFF2A2A2A, Light: 0xFFFFFFFF, Accent: 0xFF2E6CE0);
 

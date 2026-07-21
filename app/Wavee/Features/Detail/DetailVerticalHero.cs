@@ -40,7 +40,7 @@ static class DetailVerticalHero
         Element artworkBox = new BoxEl
         {
             Width = artSize, Height = artSize, Shrink = 0f,
-            Corners = CornerRadius4.All(WaveeRadius.Card), Shadow = Elevation.Card, ClipToBounds = true,
+            Corners = CornerRadius4.All(Radii.Card), Shadow = Elevation.Card, ClipToBounds = true,
             AlignSelf = side ? FlexAlign.Start : FlexAlign.Center,
             Children = [editable ? PlaylistInlineEdit.Cover(full, artSize) : DetailRail.HeroArtwork(m, artSize)],
         };
@@ -54,10 +54,10 @@ static class DetailVerticalHero
             var pills = new List<Element>(2);
             if (m.BadgeType is { Length: > 0 }) pills.Add(DetailRail.BadgePill(m.BadgeType));
             if (m.Year is { Length: > 0 }) pills.Add(DetailRail.BadgePill(m.Year));
-            if (pills.Count > 0) idKids.Add(new BoxEl { Direction = 0, Gap = WaveeSpace.S, Children = pills.ToArray() });
+            if (pills.Count > 0) idKids.Add(new BoxEl { Direction = 0, Gap = Spacing.S, Children = pills.ToArray() });
             if (m.Artists.Count > 0) idKids.Add(Embed.Comp(() => new ArtistFacePile(m, contentW, h)));
             if (idKids.Count > 0)
-                infoKids.Add(new BoxEl { Direction = 1, Gap = WaveeSpace.XS, AlignItems = side ? FlexAlign.Start : FlexAlign.Center, Children = idKids.ToArray() });
+                infoKids.Add(new BoxEl { Direction = 1, Gap = Spacing.XS, AlignItems = side ? FlexAlign.Start : FlexAlign.Center, Children = idKids.ToArray() });
         }
         else if (cfg.Badges == BadgeStyle.OwnerRow && m.OwnerName is { Length: > 0 })
         {
@@ -80,10 +80,10 @@ static class DetailVerticalHero
 
         // Actions row 1 — the ONLY two prominent buttons: Play (solid accent) + Shuffle (accent-tinted fill). This
         // deliberately reverses the two-column rail's "Shuffle lives in the toolbar" decision for the vertical layout.
-        ColorF onAccent = WaveePalette.OnAccent(h.Accent);
+        ColorF onAccent = ColorContrast.PickContrast(h.Accent);
         infoKids.Add(new BoxEl
         {
-            Direction = 0, Gap = WaveeSpace.M, AlignItems = FlexAlign.Center,
+            Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.Center,
             Children =
             [
                 ActionPill(Icons.Play, Loc.Get(Strings.Detail.Play), h.Accent, onAccent, h.PlayAll),
@@ -97,7 +97,7 @@ static class DetailVerticalHero
             quiet.Add(Embed.Comp(() => new SaveButton(saveUri, 16f, 40f, m.Title)));
         quiet.Add(PlaylistInlineEdit.ShareButton(full));
         quiet.Add(Embed.Comp(() => new DetailHeroMoreButton(full, cfg, h)) with { Key = "vhero-more:" + m.ContextUri });
-        infoKids.Add(new BoxEl { Direction = 0, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center, Children = quiet.ToArray() });
+        infoKids.Add(new BoxEl { Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, Children = quiet.ToArray() });
 
         // Description — the release/playlist blurb, capped to the orientation's line count.
         if (editable)
@@ -113,16 +113,16 @@ static class DetailVerticalHero
                 Children =
                 [
                     artworkBox,
-                    new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = WaveeSpace.M, AlignItems = FlexAlign.Stretch, Children = infoKids.ToArray() },
+                    new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = Spacing.M, AlignItems = FlexAlign.Stretch, Children = infoKids.ToArray() },
                 ],
             }
             : new BoxEl
             {
-                Direction = 1, Gap = WaveeSpace.L, AlignItems = FlexAlign.Center,
+                Direction = 1, Gap = Spacing.L, AlignItems = FlexAlign.Center,
                 Children =
                 [
                     artworkBox,
-                    new BoxEl { Direction = 1, Width = contentW, Gap = WaveeSpace.M, AlignItems = FlexAlign.Center, Children = infoKids.ToArray() },
+                    new BoxEl { Direction = 1, Width = contentW, Gap = Spacing.M, AlignItems = FlexAlign.Center, Children = infoKids.ToArray() },
                 ],
             };
 
@@ -171,7 +171,7 @@ sealed class DetailHeroMoreButton : Component
             var items = new List<MenuFlyoutItem>
             {
                 new(Loc.Get(copy ? Strings.Detail.CopyToPlaylist : Strings.Detail.AddToPlaylist),
-                    new IconRef { Glyph = Mdl.Add, Font = null },
+                    new IconRef { Glyph = Icons.Add, Font = null },
                     Invoke: () => PlaylistPickerLauncher.OpenFlyout(overlay, () => anchor.Value, () => _full.Value.Peek().Tracks, pickerHandle)),
                 new(Loc.Get(Strings.Detail.PlayNext), new IconRef { Glyph = WaveeIcons.PlayNext, Font = WaveeIcons.Font }, Invoke: _h.PlayNext),
                 new(Loc.Get(Strings.Detail.AddToQueue), new IconRef { Glyph = WaveeIcons.PlayAfter, Font = WaveeIcons.Font }, Invoke: _h.AddToQueue),
@@ -196,13 +196,12 @@ sealed class DetailHeroMoreButton : Component
         {
             Width = 40f, Height = 40f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Corners = CornerRadius4.All(20f),
-            HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
             HoverScale = 1.06f, PressScale = 0.94f,
             Cursor = CursorId.Hand, Role = AutomationRole.Button,
             OnClick = Toggle,
             OnRealized = h => anchor.Value = h,
-            Children = [Icon(Mdl.More, 16f, Tok.TextSecondary)],
-        };
+            Children = [Icon(Icons.More, 16f, Tok.TextSecondary)],
+        }.Interactive(Interaction.Subtle);
     }
 }
 

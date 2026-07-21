@@ -32,7 +32,7 @@ sealed class LibrarySortView : Component
         4 => Loc.Get(Strings.Library.Sort.ReleaseDate),
         _ => Loc.Get(Strings.Library.Sort.Recents),
     };
-    public static string ViewGlyph(int v) => v >= 2 ? Mdl.ViewGrid : Mdl.ViewList;
+    public static string ViewGlyph(int v) => v >= 2 ? Icons.ViewGrid : Icons.ViewList;
 
     public override Element Render()
     {
@@ -57,18 +57,17 @@ sealed class LibrarySortView : Component
         return new BoxEl
         {
             Direction = 0, Height = 32f, AlignItems = FlexAlign.Center, Gap = 5f, Shrink = 0f,
-            Padding = new Edges4(10f, 0f, 8f, 0f), Corners = CornerRadius4.All(WaveeRadius.Control),
-            HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+            Padding = new Edges4(10f, 0f, 8f, 0f), Corners = CornerRadius4.All(Radii.Control),
             OnRealized = h => anchor.Value = h, OnClick = Toggle,
             Children =
             [
-                Icon(Mdl.Sort, 14f, Tok.TextSecondary),
+                Icon(Icons.Sort, 14f, Tok.TextSecondary),
                 new TextEl(SortLabel(sort)) { Size = 13f, Weight = 600, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-                Icon(desc ? Mdl.ChevronDown : Mdl.ChevronUp, 10f, Tok.TextTertiary),
+                Icon(desc ? Icons.ChevronDown : Icons.ChevronUp, 10f, Tok.TextTertiary),
                 new BoxEl { Width = 1f, Height = 16f, Fill = Tok.StrokeDividerDefault },
                 Icon(ViewGlyph(view), 14f, Tok.TextSecondary),
             ],
-        };
+        }.Interactive(Interaction.Subtle);
     }
 }
 
@@ -103,8 +102,8 @@ sealed class LibrarySortPanel : Component
         // A frosted WinUI flyout surface (acrylic + 1px flyout stroke + flyout shadow), NOT a solid plate — lighter than Ui.Layer.
         return new BoxEl
         {
-            Direction = 1, Gap = 1f, MinWidth = 230f, Padding = new Edges4(WaveeSpace.XS, WaveeSpace.XS, WaveeSpace.XS, WaveeSpace.XS),
-            Corners = CornerRadius4.All(WaveeRadius.Card), ClipToBounds = true, Shadow = Elevation.Flyout,
+            Direction = 1, Gap = 1f, MinWidth = 230f, Padding = new Edges4(Spacing.XS, Spacing.XS, Spacing.XS, Spacing.XS),
+            Corners = CornerRadius4.All(Radii.Card), ClipToBounds = true, Shadow = Elevation.Flyout,
             Acrylic = Tok.AcrylicFlyout, BorderWidth = 1f, BorderColor = Tok.StrokeFlyoutDefault,
             Children = rows.ToArray(),
         };
@@ -115,27 +114,26 @@ sealed class LibrarySortPanel : Component
         bool active = sort == key;
         return new BoxEl
         {
-            Direction = 0, Height = 32f, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S,
+            Direction = 0, Height = 32f, AlignItems = FlexAlign.Center, Gap = Spacing.S,
             Padding = new Edges4(10f, 0f, 8f, 0f), Corners = CornerRadius4.All(5f),
-            HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
             OnClick = () => { if (_sort.Peek() == key) _desc.Value = !_desc.Peek(); else { _sort.Value = key; _desc.Value = false; } },
             Children =
             [
                 new TextEl(LibrarySortView.SortLabel(key)) { Size = 14f, Weight = (ushort)(active ? 600 : 400), Color = active ? Tok.AccentTextPrimary : Tok.TextPrimary, Grow = 1f, Basis = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-                active ? Icon(desc ? Mdl.ChevronDown : Mdl.ChevronUp, 11f, Tok.AccentTextPrimary) : new BoxEl(),
-                active ? Icon(Mdl.Check, 12f, Tok.AccentTextPrimary) : new BoxEl { Width = 12f },
+                active ? Icon(desc ? Icons.ChevronDown : Icons.ChevronUp, 11f, Tok.AccentTextPrimary) : new BoxEl(),
+                active ? Icon(Icons.Check, 12f, Tok.AccentTextPrimary) : new BoxEl { Width = 12f },
             ],
-        };
+        }.Interactive(Interaction.Subtle);
     }
 
     Element ViewToggles(int view)
     {
         var defs = new (string Glyph, float Size, string Label)[]
         {
-            (Mdl.ViewList, 14f, Loc.Get(Strings.Library.View.CompactList)),
-            (Mdl.ViewList, 16f, Loc.Get(Strings.Library.View.List)),
-            (Mdl.ViewGrid, 12f, Loc.Get(Strings.Library.View.CompactGrid)),
-            (Mdl.ViewGrid, 15f, Loc.Get(Strings.Library.View.Grid)),
+            (Icons.ViewList, 14f, Loc.Get(Strings.Library.View.CompactList)),
+            (Icons.ViewList, 16f, Loc.Get(Strings.Library.View.List)),
+            (Icons.ViewGrid, 12f, Loc.Get(Strings.Library.View.CompactGrid)),
+            (Icons.ViewGrid, 15f, Loc.Get(Strings.Library.View.Grid)),
         };
         var cells = new Element[4];
         for (int i = 0; i < 4; i++)

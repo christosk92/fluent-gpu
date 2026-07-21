@@ -82,7 +82,7 @@ sealed class ArtistFacePile : Component
 
         return new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S, MaxWidth = _maxWidth,
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S, MaxWidth = _maxWidth,
             Children =
             [
                 ToolTip.Wrap(button, "View all artists"),
@@ -151,9 +151,9 @@ sealed class ArtistFacePile : Component
             var a = artists[i];
             rows[i] = new BoxEl
             {
-                Direction = 0, Height = 44f, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
-                Padding = new Edges4(WaveeSpace.S, 0f, WaveeSpace.S, 0f),
-                Corners = CornerRadius4.All(6f), HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+                Direction = 0, Height = 44f, AlignItems = FlexAlign.Center, Gap = Spacing.M,
+                Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f),
+                Corners = CornerRadius4.All(6f),
                 Role = AutomationRole.MenuItem, Focusable = true, Cursor = a.Uri.Length > 0 ? CursorId.Hand : (CursorId?)null,
                 OnClick = a.Uri.Length > 0 ? () => { _h.Go("artist:" + a.Uri, a.Name); close(); } : null,
                 Children =
@@ -161,7 +161,7 @@ sealed class ArtistFacePile : Component
                     PersonPicture.Create("", 32f, displayName: a.Name, imageSourcePath: a.Image?.Url),
                     new TextEl(a.Name) { Size = 14f, Weight = 600, Color = Tok.TextPrimary, Grow = 1f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                 ],
-            };
+            }.Interactive(Interaction.Subtle);
         }
 
         var list = new BoxEl { Direction = 1, Gap = 2f, Width = 264f, Children = rows };
@@ -169,7 +169,7 @@ sealed class ArtistFacePile : Component
         {
             Direction = 1, Width = 280f, MaxHeight = 360f,
             Padding = new Edges4(8f, 8f, 8f, 8f),
-            Corners = CornerRadius4.All(WaveeRadius.Card), ClipToBounds = true, Shadow = Elevation.Flyout,
+            Corners = CornerRadius4.All(Radii.Card), ClipToBounds = true, Shadow = Elevation.Flyout,
             Acrylic = Tok.AcrylicFlyout, BorderWidth = 1f, BorderColor = Tok.StrokeFlyoutDefault,
             Children = [ScrollView(list) with { Width = 264f, MaxHeight = 344f, ContentSized = true, AutoEdgeFade = true, Grow = 0f }],
         };

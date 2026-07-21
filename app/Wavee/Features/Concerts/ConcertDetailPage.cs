@@ -61,7 +61,7 @@ sealed class ConcertDetailPage : Component
             onFailed: () => ErrorState.Build(details.Error, onRetry: () => reload.Value++),
             isEmpty: d => d is null,
             onEmpty: () => EmptyState.Build(Loc.Get(Strings.Concerts.Detail.NotAvailable),
-                Loc.Get(Strings.Concerts.Detail.NotAvailableSubtitle), Mdl.Calendar),
+                Loc.Get(Strings.Concerts.Detail.NotAvailableSubtitle), Icons.Calendar),
             group: "concert-detail:" + _concertUri);
 
         var content = new BoxEl
@@ -91,13 +91,13 @@ sealed class ConcertDetailPage : Component
         if (d.Artists is { Count: > 0 } artists) main.Add(Lineup(artists, go));
         if (d.Related is { Count: > 0 } related) main.Add(RelatedShelf(related, go));
 
-        var mainColumn = new BoxEl { Direction = 1, Gap = WaveeSpace.XL, MinWidth = 0f, Children = main.ToArray() };
+        var mainColumn = new BoxEl { Direction = 1, Gap = Spacing.XL, MinWidth = 0f, Children = main.ToArray() };
         if (!wide || tickets is null) return mainColumn;
 
         // Wide: the 320-DIP ticket panel rides the page scroll (no nested vertical viewport).
         return new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.Start, Gap = WaveeSpace.XL, MinWidth = 0f,
+            Direction = 0, AlignItems = FlexAlign.Start, Gap = Spacing.XL, MinWidth = 0f,
             Children =
             [
                 mainColumn with { Grow = 1f, Basis = 0f },
@@ -137,32 +137,32 @@ sealed class ConcertDetailPage : Component
         // local offset is preserved (never converted to the machine's zone).
         var facts = new List<Element>(4)
         {
-            FactRow(Mdl.Calendar, s.Date.ToString("dddd, MMMM d, yyyy", culture) + " · " + s.Date.ToString("t", culture)),
+            FactRow(Icons.Calendar, s.Date.ToString("dddd, MMMM d, yyyy", culture) + " · " + s.Date.ToString("t", culture)),
         };
         if (d.DoorsOpenAt is { } doors)
-            facts.Add(FactRow(Mdl.Clock, Strings.Concerts.Detail.DoorsOpen(doors.ToString("t", culture))));
+            facts.Add(FactRow(Icons.Clock, Strings.Concerts.Detail.DoorsOpen(doors.ToString("t", culture))));
         string location = ConcertDetailInfo.LocationLine(s.City, d.Region ?? s.Region, d.Country ?? s.Country);
         string place = s.Venue.Length > 0 && location.Length > 0 ? s.Venue + " · " + location
             : s.Venue.Length > 0 ? s.Venue : location;
-        if (place.Length > 0) facts.Add(FactRow(Mdl.MapPin, place));
+        if (place.Length > 0) facts.Add(FactRow(Icons.MapPin, place));
         if (!string.IsNullOrWhiteSpace(d.AgeRestriction))
-            facts.Add(FactRow(Mdl.Info, Strings.Concerts.Detail.Ages(d.AgeRestriction!)));
+            facts.Add(FactRow(Icons.Info, Strings.Concerts.Detail.Ages(d.AgeRestriction!)));
 
         var blocks = new List<Element>(2);
         if (headline.Count > 0)
             blocks.Add(new BoxEl { Direction = 1, Gap = 4f, MinWidth = 0f, Children = headline.ToArray() });
-        blocks.Add(new BoxEl { Direction = 1, Gap = WaveeSpace.S, MinWidth = 0f, Children = facts.ToArray() });
+        blocks.Add(new BoxEl { Direction = 1, Gap = Spacing.S, MinWidth = 0f, Children = facts.ToArray() });
 
         return new BoxEl
         {
-            Direction = 1, Gap = WaveeSpace.M, MinWidth = 0f,
+            Direction = 1, Gap = Spacing.M, MinWidth = 0f,
             Children = blocks.ToArray(),
         };
     }
 
     static Element FactRow(string glyph, string text) => new BoxEl
     {
-        Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S, MinWidth = 0f,
+        Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S, MinWidth = 0f,
         Children =
         [
             Icon(glyph, 16f, Tok.TextSecondary) with { Shrink = 0f },
@@ -177,8 +177,8 @@ sealed class ConcertDetailPage : Component
     // A notable state (cancelled / postponed / ...) as a quiet critical-text pill — neutral fill, accent-free.
     static Element StatusPill(string status) => new BoxEl
     {
-        AlignSelf = FlexAlign.Start, Padding = new Edges4(WaveeSpace.S, 2f, WaveeSpace.S, 2f),
-        Corners = CornerRadius4.All(WaveeRadius.Pill), Fill = Tok.FillSubtleSecondary,
+        AlignSelf = FlexAlign.Start, Padding = new Edges4(Spacing.S, 2f, Spacing.S, 2f),
+        Corners = CornerRadius4.All(Radii.Full), Fill = Tok.FillSubtleSecondary,
         Children = [ Caption(status) with { Color = Tok.SystemFillCritical, Weight = 700, MaxLines = 1 } ],
     };
 
@@ -187,7 +187,7 @@ sealed class ConcertDetailPage : Component
     {
         var kids = new List<Element>(offers.Count + 1) { SectionCaption(Upper(Loc.Get(Strings.Concerts.Detail.Tickets))) };
         for (int i = 0; i < offers.Count; i++) kids.Add(OfferCard(offers[i], i));
-        return new BoxEl { Direction = 1, Gap = WaveeSpace.S, MinWidth = 0f, Children = kids.ToArray() };
+        return new BoxEl { Direction = 1, Gap = Spacing.S, MinWidth = 0f, Children = kids.ToArray() };
     }
 
     static Element OfferCard(ConcertOffer offer, int index)
@@ -219,7 +219,7 @@ sealed class ConcertDetailPage : Component
         if (ConcertOffers.ValidTicketUrl(offer.Url) is { } url)
             lines.Add(new BoxEl
             {
-                Direction = 0, Padding = new Edges4(0f, WaveeSpace.XS, 0f, 0f),
+                Direction = 0, Padding = new Edges4(0f, Spacing.XS, 0f, 0f),
                 Children = [ Button.Accent(Loc.Get(Strings.Concerts.Detail.BuyTickets),
                     () => InputHooks.Current.Default.OpenUri?.Invoke(url)) ],
             });
@@ -230,9 +230,9 @@ sealed class ConcertDetailPage : Component
         {
             // Offers carry no canonical URI; provider+index keeps siblings unique in this bounded, stable-at-mount list.
             Key = "offer:" + index + ":" + provider,
-            Direction = 1, Gap = WaveeSpace.XS, MinWidth = 0f,
-            Padding = new Edges4(WaveeSpace.M, WaveeSpace.M, WaveeSpace.M, WaveeSpace.M),
-            Corners = CornerRadius4.All(WaveeRadius.Card),
+            Direction = 1, Gap = Spacing.XS, MinWidth = 0f,
+            Padding = new Edges4(Spacing.M, Spacing.M, Spacing.M, Spacing.M),
+            Corners = CornerRadius4.All(Radii.Card),
             Fill = Tok.FillCardDefault, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             Children = lines.ToArray(),
         };
@@ -246,14 +246,14 @@ sealed class ConcertDetailPage : Component
         return new BoxEl
         {
             Direction = 1, MinWidth = 0f, ClipToBounds = true,
-            Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardDefault,
+            Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillCardDefault,
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             Children =
             [
                 new BoxEl
                 {
                     Direction = 0, AlignItems = FlexAlign.Center,
-                    Padding = new Edges4(WaveeSpace.L, WaveeSpace.M, WaveeSpace.L, WaveeSpace.M),
+                    Padding = new Edges4(Spacing.L, Spacing.M, Spacing.L, Spacing.M),
                     Children =
                     [
                         new BoxEl
@@ -269,7 +269,7 @@ sealed class ConcertDetailPage : Component
                 new BoxEl
                 {
                     Direction = 1, MinWidth = 0f,
-                    Padding = new Edges4(WaveeSpace.S, WaveeSpace.XS, WaveeSpace.S, WaveeSpace.S),
+                    Padding = new Edges4(Spacing.S, Spacing.XS, Spacing.S, Spacing.S),
                     Children = rows,
                 },
             ],
@@ -295,14 +295,14 @@ sealed class ConcertDetailPage : Component
                 Grow = 1f, Basis = 0f, MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
             },
         };
-        if (artistUri is not null) kids.Add(Icon(Mdl.ChevronRight, 14f, Tok.TextSecondary) with { Shrink = 0f });
+        if (artistUri is not null) kids.Add(Icon(Icons.ChevronRight, 14f, Tok.TextSecondary) with { Shrink = 0f });
 
         return new BoxEl
         {
             Key = artistUri ?? ("lineup:" + index + ":" + name),
-            Direction = 0, MinHeight = 60f, MinWidth = 0f, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
-            Padding = new Edges4(WaveeSpace.S, WaveeSpace.XS, WaveeSpace.S, WaveeSpace.XS),
-            Corners = CornerRadius4.All(WaveeRadius.Control),
+            Direction = 0, MinHeight = 60f, MinWidth = 0f, AlignItems = FlexAlign.Center, Gap = Spacing.M,
+            Padding = new Edges4(Spacing.S, Spacing.XS, Spacing.S, Spacing.XS),
+            Corners = CornerRadius4.All(Radii.Control),
             HoverFill = artistUri is not null ? Tok.FillSubtleSecondary : ColorF.Transparent,
             PressedFill = artistUri is not null ? Tok.FillSubtleTertiary : ColorF.Transparent,
             Role = artistUri is not null ? AutomationRole.Button : AutomationRole.None,
@@ -327,7 +327,7 @@ sealed class ConcertDetailPage : Component
                 : ConcertUi.VerticalCard(related[i - 1],
                     () => go(ConcertRoutes.Detail(related[i - 1].Uri), related[i - 1].Title ?? related[i - 1].Venue)),
             header: SectionCaption(Upper(Loc.Get(Strings.Concerts.Detail.RelatedConcerts))),
-            headerGap: WaveeSpace.S,
+            headerGap: Spacing.S,
             measured: true, keyOf: i => i == 0 ? "browse-all" : related[i - 1].Uri);
     }
 

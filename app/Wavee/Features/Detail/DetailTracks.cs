@@ -203,7 +203,7 @@ sealed class TrackList : Component
     static Element FilterEmpty(bool noTracks) => new BoxEl
     {
         Grow = 1f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Padding = new Edges4(WaveeSpace.L, WaveeSpace.XXL, WaveeSpace.L, WaveeSpace.XXL),
+        Padding = new Edges4(Spacing.L, Spacing.XXL, Spacing.L, Spacing.XXL),
         Children = [new TextEl(noTracks ? Loc.Get(Strings.Detail.Empty.NoTracks) : Loc.Get(Strings.Detail.Empty.NoMatch)) { Size = 14f, Color = Tok.TextTertiary }],
     };
 
@@ -413,10 +413,10 @@ sealed class TrackList : Component
         int listTotal = recsOn ? visible + 1 + recCount : visible;   // +1 = the always-present "Recommended" header row
         UseLayoutEffect(() =>
         {
-            if (_visibleCount.Peek() != visible) _visibleCount.Value = visible;
-            if (_listCount.Peek() != listTotal) _listCount.Value = listTotal;
+            _visibleCount.Value = visible;
+            _listCount.Value = listTotal;
             int verticalCount = VerticalTrackStart + Math.Max(visible, 1);
-            if (_verticalItemCount.Peek() != verticalCount) _verticalItemCount.Value = verticalCount;
+            _verticalItemCount.Value = verticalCount;
         }, (visible, listTotal));
 
         Element RealList()
@@ -724,13 +724,13 @@ sealed class TrackList : Component
 
     void SetVerticalPinned(bool value)
     {
-        if (_verticalHeaderPinned is { } pinned && pinned.Peek() != value) pinned.Value = value;
+        if (_verticalHeaderPinned is { } pinned) pinned.Value = value;
     }
 
     void ResetVerticalHeaderScroll()
     {
-        if (_verticalScrollOffset.Peek() != 0f) _verticalScrollOffset.Value = 0f;
-        if (_verticalHeaderHeight.Peek() != 0f) _verticalHeaderHeight.Value = 0f;
+        _verticalScrollOffset.Value = 0f;
+        _verticalHeaderHeight.Value = 0f;
         SetVerticalPinned(false);
     }
 
@@ -863,7 +863,7 @@ sealed class TrackList : Component
     Element Chrome(ColumnSet set, TrackSize[] tracks, TrackSort sort, bool labeled, int tier, bool checkInset,
                    Element? lead = null, float padX = PadX, float? padRight = null, bool pinned = false) => new BoxEl
     {
-        Key = "chrome", Direction = 1, Padding = new Edges4(padX, WaveeSpace.S, padRight ?? padX, 0f),
+        Key = "chrome", Direction = 1, Padding = new Edges4(padX, Spacing.S, padRight ?? padX, 0f),
         Children = _showToolbar ? [Toolbar(labeled, tier, lead, pinned), Header(set, tracks, sort, checkInset)] : [Header(set, tracks, sort, checkInset)],
     };
 
@@ -876,7 +876,7 @@ sealed class TrackList : Component
         var kids = new List<Element>(4)
         {
             Surfaces.Artwork(_model.Cover, _model.ContextUri?.GetHashCode() ?? 0,
-                             32f, 32f, WaveeRadius.Control),
+                             32f, 32f, Radii.Control),
             new BoxEl
             {
                 Width = 32f, Height = 32f, Shrink = 0f, Corners = CornerRadius4.All(16f),
@@ -884,7 +884,7 @@ sealed class TrackList : Component
                 AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                 OnClick = _h.PlayAll, HoverScale = 1.06f, PressScale = 0.94f,
                 Cursor = CursorId.Hand, Role = AutomationRole.Button,
-                Children = [Icon(Icons.Play, 13f, WaveePalette.OnAccent(_h.Accent))],
+                Children = [Icon(Icons.Play, 13f, ColorContrast.PickContrast(_h.Accent))],
             },
             new TextEl(_model.Title)
             {
@@ -896,7 +896,7 @@ sealed class TrackList : Component
         // chrome reached by scrolling up).
         return new BoxEl
         {
-            Direction = 0, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center, Shrink = 1f, MinWidth = 0f,
+            Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, Shrink = 1f, MinWidth = 0f,
             Children = kids.ToArray(),
         };
     }
@@ -954,8 +954,8 @@ sealed class TrackList : Component
         return new BoxEl
         {
             Key = labeled ? "cmdbar:lbl" : "cmdbar:icon",
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.XS,
-            Margin = new Edges4(0f, 0f, 0f, WaveeSpace.XS),
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.XS,
+            Margin = new Edges4(0f, 0f, 0f, Spacing.XS),
             Children = [left, new BoxEl { Grow = 1f }, search],
         };
     }
@@ -975,11 +975,10 @@ sealed class TrackList : Component
     static Element ToolBtn(string glyph) => new BoxEl
     {
         Width = 32f, Height = 32f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Corners = CornerRadius4.All(WaveeRadius.Control),
-        HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+        Corners = CornerRadius4.All(Radii.Control),
         OnClick = () => { /* TODO: search-in-list / sort / view (visual stubs in v1) */ },
         Children = [Icon(glyph, 14f, Tok.TextSecondary)],
-    };
+    }.Interactive(Interaction.Subtle);
 
     Element Header(ColumnSet set, TrackSize[] tracks, TrackSort sort, bool checkInset)
     {
@@ -1023,7 +1022,7 @@ sealed class TrackList : Component
     }
 
     // The sort-direction caret (Segoe Fluent CaretSolid — chosen over the chevrons).
-    internal static readonly string CaretGlyph = Mdl.CaretSolidUp;   // track-list sort-direction caret (SortCaret rotates it 180° for descending)
+    internal static readonly string CaretGlyph = Icons.CaretSolidUp;   // track-list sort-direction caret (SortCaret rotates it 180° for descending)
 
     // Does this header own the active sort? The Title header also owns Artist (the title subline has no column of its
     // own), so it stays lit — and reads "Artist" — while the list is sorted by artist.
@@ -1055,8 +1054,8 @@ sealed class TrackList : Component
             : [content, Caret()];
         return new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.Center, Justify = justify, Gap = WaveeSpace.XS,
-            Corners = CornerRadius4.All(WaveeRadius.Control), HoverFill = Tok.FillSubtleSecondary,
+            Direction = 0, AlignItems = FlexAlign.Center, Justify = justify, Gap = Spacing.XS,
+            Corners = CornerRadius4.All(Radii.Control), HoverFill = Tok.FillSubtleSecondary,
             OnClick = () => _h.SetSort(NextSort(sort, col)),
             Children = kids,
         };
@@ -1342,7 +1341,7 @@ sealed class TrackList : Component
             return new BoxEl
             {
                 Key = "rec:header-row",
-                Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, MinHeight = _rowH,
+                Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M, MinHeight = _rowH,
                 Padding = new Edges4(TrackRow.PadX, 0f, TrackRow.PadX, 0f),
                 Children =
                 [
@@ -1360,11 +1359,10 @@ sealed class TrackList : Component
         {
             Width = 32f, Height = 32f, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Corners = CornerRadius4.All(16f),
-            HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
             HoverScale = 1.06f, PressScale = 0.94f, Cursor = CursorId.Hand,
             Role = AutomationRole.Button, OnClick = onClick,
             Children = [Icon(Icons.Refresh, 14f, Tok.TextSecondary)],
-        };
+        }.Interactive(Interaction.Subtle);
     }
 
     // One recommendation row: the shared art-forward ArtCard with a "+" Add button. Keyed by track id so a recycled slot
@@ -1845,7 +1843,7 @@ static class ToolFx
     public static Element Separator() => new BoxEl
     {
         Width = 1f, Height = 20f, AlignSelf = FlexAlign.Center, Fill = Tok.StrokeDividerDefault,
-        Margin = new Edges4(WaveeSpace.XS, 0f, WaveeSpace.XS, 0f),
+        Margin = new Edges4(Spacing.XS, 0f, Spacing.XS, 0f),
     };
 
     public static PopupOptions Popup => new(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false };
@@ -1901,7 +1899,7 @@ sealed class FilterButton : Component
         {
             Width = 30f, Margin = new Edges4(0f, 4f, 4f, 4f),
             AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Corners = CornerRadius4.All(WaveeRadius.Control),
+            Corners = CornerRadius4.All(Radii.Control),
             Fill = active ? accent with { A = 0.16f } : ColorF.Transparent,
             HoverFill = active ? accent with { A = 0.24f } : Tok.FillSubtleSecondary,
             PressedFill = active ? accent with { A = 0.12f } : Tok.FillSubtleTertiary,
@@ -1957,10 +1955,10 @@ sealed class DensityPanel : Component
         // keyed on d) so the thumb rides the compositor bind and still follows external density changes.
         var dv = UseFloatSignal(d);
         UseEffect(() => { dv.Value = d; return null; }, d);
-        return Layer(Edges4.All(WaveeSpace.M),
+        return Layer(Edges4.All(Spacing.M),
             new BoxEl
             {
-                Direction = 1, Gap = WaveeSpace.S, MinWidth = 240f,
+                Direction = 1, Gap = Spacing.S, MinWidth = 240f,
                 Children =
                 [
                     new BoxEl

@@ -36,7 +36,6 @@ sealed class WaveeEqualizerCurveCore : Component
     const float FallbackWidth = 720f;
     const int Samples = 96;
 
-    readonly Signal<float> _width = new(0f);
     readonly Signal<int> _active = new(5);
     readonly Signal<int> _hover = new(-1);
     int _dragBand = -1;
@@ -44,20 +43,16 @@ sealed class WaveeEqualizerCurveCore : Component
     public override Element Render()
     {
         var p = UseContext(WaveeEqualizerCurve.Props.Channel);
+        var measuredW = UseMeasuredWidth(1f);   // self-measured root width (replaces the hand OnBoundsChanged→signal mirror)
         if (p is null) return new BoxEl { MinHeight = 250f };
 
-        float measured = _width.Value;
+        float measured = measuredW.Value;
         float width = measured > 0.5f ? measured : FallbackWidth;
         int active = Math.Clamp(_active.Value, 0, 9);
         int hover = _hover.Value;
         return new BoxEl
         {
             Direction = 1,
-            OnBoundsChanged = r =>
-            {
-                if (r.W > 0f && MathF.Abs(r.W - _width.Peek()) > 0.5f)
-                    _width.Value = r.W;
-            },
             Children = [BuildSurface(p, MathF.Max(width, 260f), active, hover)],
         };
     }
@@ -75,7 +70,7 @@ sealed class WaveeEqualizerCurveCore : Component
             if (!enabled) return;
             band = Math.Clamp(band, 0, 9);
             _dragBand = band;
-            if (_active.Peek() != band) _active.Value = band;
+            _active.Value = band;
             float gain = MathF.Round(YToGain(y - PadTop, plotH) * 2f) * 0.5f;
             p.OnBandChanged(band, gain);
         }
@@ -90,13 +85,13 @@ sealed class WaveeEqualizerCurveCore : Component
         void Hover(Point2 pt)
         {
             int band = NearestBand(pt.X, plotW);
-            if (_hover.Peek() != band) _hover.Value = band;
+            _hover.Value = band;
         }
 
         void Exit()
         {
             _dragBand = -1;
-            if (_hover.Peek() != -1) _hover.Value = -1;
+            _hover.Value = -1;
         }
 
         void Key(KeyEventArgs e)
@@ -118,7 +113,7 @@ sealed class WaveeEqualizerCurveCore : Component
                 default: return;
             }
             e.Handled = true;
-            if (_active.Peek() != band) _active.Value = band;
+            _active.Value = band;
             p.OnBandChanged(band, Math.Clamp(next, MinGain, MaxGain));
         }
 

@@ -44,7 +44,7 @@ sealed partial class ArtistPage : Component
 
             var copy = new BoxEl
             {
-                Direction = 1, Justify = FlexJustify.End, Gap = WaveeSpace.S, Grow = 1f, Basis = 0f,
+                Direction = 1, Justify = FlexJustify.End, Gap = Spacing.S, Grow = 1f, Basis = 0f,
                 Children =
                 [
                     EyebrowPills(a),
@@ -57,8 +57,8 @@ sealed partial class ArtistPage : Component
                     HeroMetaLine(a, albumCount, singleCount),
                     new BoxEl
                     {
-                        Direction = 0, Gap = WaveeSpace.M, AlignItems = FlexAlign.Center,
-                        Padding = new Edges4(0f, WaveeSpace.S, 0f, 0f),
+                        Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.Center,
+                        Padding = new Edges4(0f, Spacing.S, 0f, 0f),
                         Children =
                         [
                             PlayPill(play), Fab(Icons.Shuffle, shuffle),
@@ -75,8 +75,8 @@ sealed partial class ArtistPage : Component
             // pill as the hero finishes collapsing, so they can leave with the rest of the copy here.
             var overlay = new BoxEl
             {
-                Width = w, Height = height, Direction = 0, AlignItems = FlexAlign.End, Gap = WaveeSpace.XL,
-                Padding = new Edges4(WaveeSpace.XL, WaveeSpace.XL, WaveeSpace.XL, WaveeSpace.XL),
+                Width = w, Height = height, Direction = 0, AlignItems = FlexAlign.End, Gap = Spacing.XL,
+                Padding = new Edges4(Spacing.XL, Spacing.XL, Spacing.XL, Spacing.XL),
                 OpacityGroup = true,
                 ScrollBinds =
                 [
@@ -262,7 +262,7 @@ sealed partial class ArtistPage : Component
             ? new BoxEl()
             : new BoxEl
             {
-                Direction = 0, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center, Children = pills.ToArray()
+                Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, Children = pills.ToArray()
             };
     }
 
@@ -272,9 +272,9 @@ sealed partial class ArtistPage : Component
         Padding = new Edges4(8f, 4f, 12f, 4f), Corners = CornerRadius4.All(13f), Fill = _accent,
         Children =
         [
-            Icon(Mdl.Check, 12f, WaveePalette.OnAccent(_accent)),
+            Icon(Icons.Check, 12f, ColorContrast.PickContrast(_accent)),
             new TextEl(Loc.Get(Strings.Artist.Verified))
-                { Size = 11f, Weight = 700, Color = WaveePalette.OnAccent(_accent), CharSpacing = 20f }
+                { Size = 11f, Weight = 700, Color = ColorContrast.PickContrast(_accent), CharSpacing = 20f }
         ],
     };
 
@@ -290,19 +290,19 @@ sealed partial class ArtistPage : Component
     // ── hero pinned promo card ───────────────────────────────────────────────────────────────────────────
     static Element PinnedCard(PinnedItem p, Action<string, string?> go) => new BoxEl
     {
-        Width = 320f, Shrink = 0f, Direction = 0, Gap = WaveeSpace.M, AlignItems = FlexAlign.Center,
-        Padding = new Edges4(WaveeSpace.M, WaveeSpace.M, WaveeSpace.M, WaveeSpace.M),
-        Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Scrim(0.55f), ClipToBounds = true,
+        Width = 320f, Shrink = 0f, Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.Center,
+        Padding = new Edges4(Spacing.M, Spacing.M, Spacing.M, Spacing.M),
+        Corners = CornerRadius4.All(Radii.Card), Fill = Scrim(0.55f), ClipToBounds = true,
         HoverFill = Scrim(0.65f), OnClick = () => go("album:" + p.Uri, p.Title),
         Children =
         [
             new BoxEl
             {
-                Width = 64f, Height = 64f, Shrink = 0f, Corners = CornerRadius4.All(WaveeRadius.Control),
+                Width = 64f, Height = 64f, Shrink = 0f, Corners = CornerRadius4.All(Radii.Control),
                 ClipToBounds = true,
                 Children =
                 [
-                    Surfaces.Artwork(p.Cover, p.Uri.GetHashCode() & 0x7fffffff, 64f, 64f, WaveeRadius.Control,
+                    Surfaces.Artwork(p.Cover, p.Uri.GetHashCode() & 0x7fffffff, 64f, 64f, Radii.Control,
                         decodePx: 256)
                 ]
             },
@@ -316,7 +316,7 @@ sealed partial class ArtistPage : Component
                         Direction = 0, Gap = 4f, AlignItems = FlexAlign.Center,
                         Children =
                         [
-                            Icon(Mdl.Pin, 11f, WhiteText with { A = 0.7f }),
+                            Icon(Icons.Pin, 11f, WhiteText with { A = 0.7f }),
                             new TextEl(p.Eyebrow)
                                 { Size = 10f, Weight = 700, Color = WhiteText with { A = 0.7f }, CharSpacing = 20f }
                         ]
@@ -339,25 +339,25 @@ sealed partial class ArtistPage : Component
 
     // ── action affordances ───────────────────────────────────────────────────────────────────────────────
     Element PlayPill(Action onPlay)
-        => HeroCta.Pill(Icons.Play, Loc.Get(Strings.Artist.Play), _accent, WaveePalette.OnAccent(_accent), onPlay);
+        => HeroCta.Pill(Icons.Play, Loc.Get(Strings.Artist.Play), _accent, ColorContrast.PickContrast(_accent), onPlay);
 
     static Element Fab(string glyph, Action onClick) => new BoxEl
     {
         Width = 44f, Height = 44f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Corners = CornerRadius4.All(22f), HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+        Corners = CornerRadius4.All(22f),
         HoverScale = 1.06f, PressScale = 0.94f, OnClick = onClick,
         Children = [Icon(glyph, 18f, WhiteText)],
-    };
+    }.Interactive(Interaction.Subtle);
 
     static Element ArtistRadioPill(Action onClick) => new BoxEl
     {
-        Direction = 0, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center,
+        Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
         Corners = CornerRadius4.All(22f), Padding = new Edges4(16f, 10f, 16f, 10f),
         BorderWidth = 1f, BorderColor = WhiteText with { A = 0.35f }, HoverFill = WhiteText with { A = 0.12f },
         HoverScale = 1.03f, PressScale = 0.97f, OnClick = onClick,
         Children =
         [
-            Icon(Mdl.RadioTower, 16f, WhiteText),
+            Icon(Icons.RadioTower, 16f, WhiteText),
             new TextEl(Loc.Get(Strings.Artist.ArtistRadio)) { Size = 14f, Weight = 600, Color = WhiteText }
         ],
     };

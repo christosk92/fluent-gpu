@@ -1,3 +1,4 @@
+using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
@@ -51,17 +52,17 @@ sealed class Rail : Component
 
         var header = new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S,
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S,
             Children =
             [
                 WaveeType.RailHeader(_title),
                 new BoxEl { Grow = 1 },
-                Chevron(Mdl.ChevronLeft, canPrev, () => setPage(page - 1)),
-                Chevron(Mdl.ChevronRight, canNext, () => setPage(page + 1)),
+                Chevron(Icons.ChevronLeft, canPrev, () => setPage(page - 1)),
+                Chevron(Icons.ChevronRight, canNext, () => setPage(page + 1)),
             ],
         };
 
-        return new BoxEl { Direction = 1, Gap = WaveeSpace.M, Children = [header, viewport] };
+        return new BoxEl { Direction = 1, Gap = Spacing.M, Children = [header, viewport] };
     }
 
     static Element Chevron(string glyph, bool enabled, Action onClick) => new BoxEl

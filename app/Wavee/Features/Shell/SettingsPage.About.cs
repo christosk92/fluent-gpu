@@ -94,9 +94,9 @@ sealed partial class SettingsPage
 
     static Element AboutHero(string version) => new BoxEl
     {
-        Direction = 1, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center,
-        Padding = new Edges4(WaveeSpace.XL, WaveeSpace.L, WaveeSpace.XL, WaveeSpace.L),
-        Corners = CornerRadius4.All(WaveeRadius.Card),
+        Direction = 1, Gap = Spacing.S, AlignItems = FlexAlign.Center,
+        Padding = new Edges4(Spacing.XL, Spacing.L, Spacing.XL, Spacing.L),
+        Corners = CornerRadius4.All(Radii.Card),
         Fill = Tok.FillCardSecondary, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
         Children =
         [

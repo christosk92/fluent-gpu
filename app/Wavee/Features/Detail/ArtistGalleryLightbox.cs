@@ -301,8 +301,8 @@ sealed class ArtistGalleryLightbox : Component
     Element TopChrome(Size2 vp, int current, Action<Action> post) => new BoxEl
     {
         Height = 72f,   // explicit height + NaN width fills the ZStack width; AlignSelf(Auto) anchors it to the top
-        Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
-        Padding = new Edges4(WaveeSpace.L, WaveeSpace.M, WaveeSpace.L, WaveeSpace.M),
+        Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M,
+        Padding = new Edges4(Spacing.L, Spacing.M, Spacing.L, Spacing.M),
         Gradient = TopScrim,
         Opacity = _chrome.Value ? 1f : 0f,
         Transition = MotionTok.ControlNormal,
@@ -335,21 +335,21 @@ sealed class ArtistGalleryLightbox : Component
             thumbs[i] = new BoxEl
             {
                 Width = Thumb, Height = Thumb, Shrink = 0f,
-                Corners = CornerRadius4.All(WaveeRadius.Control), ClipToBounds = true,
+                Corners = CornerRadius4.All(Radii.Control), ClipToBounds = true,
                 BorderWidth = 2f,
                 BorderColor = active ? Tok.AccentTextPrimary : ColorF.FromRgba(0, 0, 0, 0),
                 Opacity = active ? 1f : 0.55f,
                 Transition = MotionTok.ControlFast,
                 OnClick = () => setSelected(idx),
                 Cursor = CursorId.Hand, HoverScale = 1.05f,
-                Children = [ Surfaces.Artwork(_photos[idx], idx, Thumb, Thumb, WaveeRadius.Control, decodePx: 128) ],
+                Children = [ Surfaces.Artwork(_photos[idx], idx, Thumb, Thumb, Radii.Control, decodePx: 128) ],
             };
         }
         return new BoxEl
         {
             // explicit height + AlignSelf.End anchors the strip to the window bottom; content centers horizontally
             Height = Thumb + 2 * Pad, AlignSelf = FlexAlign.End,
-            Direction = 0, Justify = FlexJustify.Center, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S,
+            Direction = 0, Justify = FlexJustify.Center, AlignItems = FlexAlign.Center, Gap = Spacing.S,
             Padding = Edges4.All(Pad),
             Opacity = _chrome.Value ? 1f : 0f,
             Transition = MotionTok.ControlNormal,

@@ -126,7 +126,7 @@ sealed partial class ArtistPage : Component
                 {
                     Grow = 1f, HitTestPassThrough = true, Direction = 1,
                     AlignItems = FlexAlign.Center, Justify = FlexJustify.Start,
-                    Padding = new Edges4(0f, WaveeSpace.M, 0f, 0f),
+                    Padding = new Edges4(0f, Spacing.M, 0f, 0f),
                     Children = [ Embed.Comp(() => new ArtistShyPill(uri, artist, pinned, svc)) with { Key = "artist-pill:" + routeKey } ],
                 },
             ],
@@ -148,8 +148,8 @@ sealed partial class ArtistPage : Component
         // Hero: a full-width dim image placeholder (ImageEl stretches in the ZStack) with the headline overlaid bottom-left.
         Element heroCopy = new BoxEl
         {
-            Direction = 1, Justify = FlexJustify.End, Gap = WaveeSpace.S,
-            Padding = new Edges4(WaveeSpace.XL, WaveeSpace.XL, WaveeSpace.XL, WaveeSpace.XL),
+            Direction = 1, Justify = FlexJustify.End, Gap = Spacing.S,
+            Padding = new Edges4(Spacing.XL, Spacing.XL, Spacing.XL, Spacing.XL),
             Children =
             [
                 Bar(96f, 26f, 13f),                 // verified pill
@@ -157,7 +157,7 @@ sealed partial class ArtistPage : Component
                 Bar(480f, 16f),                     // monthly-listeners / followers meta line
                 new BoxEl
                 {
-                    Direction = 0, Gap = WaveeSpace.M, AlignItems = FlexAlign.Center, Padding = new Edges4(0f, WaveeSpace.S, 0f, 0f),
+                    Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.Center, Padding = new Edges4(0f, Spacing.S, 0f, 0f),
                     Children = [ Bar(120f, 48f, 24f), Bar(44f, 44f, 22f), Bar(120f, 44f, 22f), Bar(150f, 44f, 22f) ],   // Play / shuffle / Follow / radio
                 },
             ],
@@ -167,28 +167,28 @@ sealed partial class ArtistPage : Component
         // LEFT column (wider): "Top tracks & popular releases" header + track rows (index · cover · title · duration).
         static Element TrackRow() => new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, Height = 48f,
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M, Height = 48f,
             Children = [ Bar(14f, 14f), Cover(40f, 4f), GrowBar(14f), Bar(36f, 12f) ],
         };
         Element left = new BoxEl
         {
-            Direction = 1, Grow = 2f, Basis = 0f, Gap = WaveeSpace.M,
-            Children = [ Bar(240f, 20f), new BoxEl { Direction = 1, Gap = WaveeSpace.S, Children = [ TrackRow(), TrackRow(), TrackRow(), TrackRow(), TrackRow() ] } ],
+            Direction = 1, Grow = 2f, Basis = 0f, Gap = Spacing.M,
+            Children = [ Bar(240f, 20f), new BoxEl { Direction = 1, Gap = Spacing.S, Children = [ TrackRow(), TrackRow(), TrackRow(), TrackRow(), TrackRow() ] } ],
         };
         // RIGHT column (narrower): "Popular releases" header + album rows (cover · title · year).
         static Element ReleaseRow() => new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, Height = 64f,
-            Children = [ Cover(56f, 8f), new BoxEl { Direction = 1, Grow = 1f, Gap = WaveeSpace.S, Children = [ Bar(130f, 14f), Bar(80f, 12f) ] } ],
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M, Height = 64f,
+            Children = [ Cover(56f, 8f), new BoxEl { Direction = 1, Grow = 1f, Gap = Spacing.S, Children = [ Bar(130f, 14f), Bar(80f, 12f) ] } ],
         };
         Element right = new BoxEl
         {
-            Direction = 1, Grow = 1f, Basis = 0f, Gap = WaveeSpace.M,
-            Children = [ Bar(150f, 20f), new BoxEl { Direction = 1, Gap = WaveeSpace.S, Children = [ ReleaseRow(), ReleaseRow(), ReleaseRow(), ReleaseRow() ] } ],
+            Direction = 1, Grow = 1f, Basis = 0f, Gap = Spacing.M,
+            Children = [ Bar(150f, 20f), new BoxEl { Direction = 1, Gap = Spacing.S, Children = [ ReleaseRow(), ReleaseRow(), ReleaseRow(), ReleaseRow() ] } ],
         };
         Element band = new BoxEl
         {
-            Direction = 0, Gap = WaveeSpace.XL, Padding = new Edges4(WaveeSpace.XL, WaveeSpace.XL, WaveeSpace.XL, WaveeSpace.XL),
+            Direction = 0, Gap = Spacing.XL, Padding = new Edges4(Spacing.XL, Spacing.XL, Spacing.XL, Spacing.XL),
             Children = [ left, right ],
         };
 
@@ -245,7 +245,7 @@ sealed partial class ArtistPage : Component
 
         var inner = new BoxEl
         {
-            Direction = 1, Gap = WaveeSpace.XL,
+            Direction = 1, Gap = Spacing.XL,
             Padding = new Edges4(32f, 40f, 32f, PlayerDock.Reserve + 40f),
             Children = sections.ToArray(),
         };

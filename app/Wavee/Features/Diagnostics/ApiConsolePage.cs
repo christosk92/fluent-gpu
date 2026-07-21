@@ -198,7 +198,7 @@ sealed class ApiConsolePage : Component
                 ScrollView(new BoxEl
                 {
                     Direction = 1, Gap = 12f, MaxWidth = ContentMaxW, AlignSelf = FlexAlign.Stretch,
-                    Padding = new Edges4(WaveeSpace.L, WaveeSpace.L, WaveeSpace.L, WaveeSpace.XXL),
+                    Padding = new Edges4(Spacing.L, Spacing.L, Spacing.L, Spacing.XXL),
                     Children =
                     [
                         Caption($"Base URL: {baseHint}"),
@@ -289,8 +289,8 @@ sealed class ApiConsolePage : Component
 
     static Element PageHeader() => new BoxEl
     {
-        Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
-        Padding = new Edges4(WaveeSpace.L, WaveeSpace.L, WaveeSpace.L, WaveeSpace.M),
+        Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M,
+        Padding = new Edges4(Spacing.L, Spacing.L, Spacing.L, Spacing.M),
         Children =
         [
             Icon(Icons.Code, 22f, Tok.TextPrimary),

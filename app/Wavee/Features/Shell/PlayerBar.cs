@@ -280,7 +280,8 @@ sealed class PlayerBarContent : Component
         }
 
         var titleLinkHover = UseSignal(false);
-        bool titleHot = albumNav && titleLinkHover.Value;
+        // titleHot is read INSIDE the Prop.Of thunks below (albumNav && titleLinkHover.Value) so the hover recolor stays
+        // live — a render-time bool snapshot would freeze at mount (replacement thunks are ignored after reconcile).
         Element titleEl = marqueeDisabled
             ? new BoxEl
             {
@@ -288,7 +289,7 @@ sealed class PlayerBarContent : Component
                 Children = [new TextEl(Prop.Of(() => NowPlaying(b).Title))
                 {
                     Size = 14f, Weight = 700,
-                    Color = Prop.Of(() => titleHot ? Tok.AccentTextPrimary : NowPlaying(b).Color),
+                    Color = Prop.Of(() => albumNav && titleLinkHover.Value ? Tok.AccentTextPrimary : NowPlaying(b).Color),
                     Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
                 }],
             }
@@ -296,7 +297,7 @@ sealed class PlayerBarContent : Component
                 new Marquee.Style
                 {
                     FontSize = 14f, Weight = 700,
-                    Foreground = Prop.Of(() => titleHot ? Tok.AccentTextPrimary : NowPlaying(b).Color),
+                    Foreground = Prop.Of(() => albumNav && titleLinkHover.Value ? Tok.AccentTextPrimary : NowPlaying(b).Color),
                     Speed = 18f, CycleMs = MarqueeCycleMs, EndPauseMs = MarqueeEndPauseMs,
                     Mode = Marquee.ScrollMode.PingPong, Trigger = Marquee.TriggerMode.PauseOnHover,
                 },
@@ -356,7 +357,7 @@ sealed class PlayerBarContent : Component
             });
         leftKids.Add(metaCol);
         if (showLike)
-            leftKids.Add(Transport(liked ? Mdl.HeartFill : Icons.Heart, () => { if (track is { } lt) lib?.ToggleSaved(lt.Uri, lt.Title); }, true, liked, accent, MathF.Min(30f, buttonBox), 15f,
+            leftKids.Add(Transport(liked ? Icons.HeartFill : Icons.Heart, () => { if (track is { } lt) lib?.ToggleSaved(lt.Uri, lt.Title); }, true, liked, accent, MathF.Min(30f, buttonBox), 15f,
                     onRealized: h => likeNode.Value = h)
                 with { Key = "like", Animate = ItemMotion });
 
@@ -427,7 +428,7 @@ sealed class PlayerBarContent : Component
             overflowCommands.Add(new AppBarCommand(repeat == RepeatMode.Track ? Icons.RepeatOne : Icons.RepeatAll, Loc.Get(Strings.Player.Repeat), () => CycleRepeat(b), AppBarCommandKind.ToggleButton, repeat != RepeatMode.Off, canTransport));
         }
         if (!showLike && active)
-            overflowCommands.Add(new AppBarCommand(liked ? Mdl.HeartFill : Icons.Heart, Loc.Get(Strings.Player.Like), () => { if (track is { } lt) lib?.ToggleSaved(lt.Uri, lt.Title); }, AppBarCommandKind.ToggleButton, liked, true));
+            overflowCommands.Add(new AppBarCommand(liked ? Icons.HeartFill : Icons.Heart, Loc.Get(Strings.Player.Like), () => { if (track is { } lt) lib?.ToggleSaved(lt.Uri, lt.Title); }, AppBarCommandKind.ToggleButton, liked, true));
         // In the small-window overflow, Queue / Now Playing open their right-rail panels (the rail floats over the
         // content when it doesn't fit inline).
         if (!showQueue)
@@ -615,7 +616,7 @@ sealed class PlayerBarContent : Component
         DevicePickerRowKind.Header => new MenuFlyoutItem(r.Label, default, false, () => { }),
         DevicePickerRowKind.Empty => new MenuFlyoutItem(r.Label, default, false, () => { }),
         DevicePickerRowKind.LocalDefault => MenuFlyoutItem.RadioItem(r.Label, r.IsChecked,
-            r.Enabled ? () => { _ = b.LocalOutputs?.SelectAsync(null); } : null, Mdl.ThisPc, enabled: r.Enabled)
+            r.Enabled ? () => { _ = b.LocalOutputs?.SelectAsync(null); } : null, Icons.ThisPc, enabled: r.Enabled)
             with { AcceleratorText = r.Accelerator },
         DevicePickerRowKind.LocalDevice => MenuFlyoutItem.RadioItem(r.Label, r.IsChecked,
             r.Enabled ? () => { var id = r.DeviceId; _ = b.LocalOutputs?.SelectAsync(id); } : null, LocalGlyph(r.LocalKind), enabled: r.Enabled)
@@ -628,19 +629,19 @@ sealed class PlayerBarContent : Component
     // Segoe Fluent glyph for a local (this-computer) output form factor.
     static string LocalGlyph(LocalAudioDeviceKind k) => k switch
     {
-        LocalAudioDeviceKind.Speakers => Mdl.Speakers,
-        LocalAudioDeviceKind.Headphones or LocalAudioDeviceKind.Headset => Mdl.Headphones,
-        LocalAudioDeviceKind.Hdmi => Mdl.TvMonitor,
-        _ => Mdl.ThisPc,
+        LocalAudioDeviceKind.Speakers => Icons.Speakers,
+        LocalAudioDeviceKind.Headphones or LocalAudioDeviceKind.Headset => Icons.Headphones,
+        LocalAudioDeviceKind.Hdmi => Icons.TvMonitor,
+        _ => Icons.ThisPc,
     };
 
     // Segoe Fluent glyph per Connect device kind (app-local Mdl set; the engine Icons.* set doesn't carry these).
     static string DeviceGlyph(DeviceKind k) => k switch
     {
-        DeviceKind.Phone => Mdl.CellPhone,
-        DeviceKind.Speaker => Mdl.Speakers,
-        DeviceKind.Tv => Mdl.TvMonitor,
-        _ => Mdl.ThisPc,   // ThisDevice / Computer
+        DeviceKind.Phone => Icons.CellPhone,
+        DeviceKind.Speaker => Icons.Speakers,
+        DeviceKind.Tv => Icons.TvMonitor,
+        _ => Icons.ThisPc,   // ThisDevice / Computer
     };
 
     internal static string Fmt(long ms)
@@ -881,7 +882,7 @@ sealed class TimeText : Component
             Fill = ColorF.Transparent,
             HoverFill = rightDuration ? Tok.FillSubtleSecondary : ColorF.Transparent,
             PressedFill = rightDuration ? Tok.FillSubtleTertiary : ColorF.Transparent,
-            Corners = CornerRadius4.All(WaveeRadius.Control),
+            Corners = CornerRadius4.All(Radii.Control),
             OnClick = rightDuration ? ToggleDuration : null,
             Cursor = rightDuration ? CursorId.Hand : (CursorId?)null,
             Children = [Caption(s).Secondary() with { Wrap = TextWrap.NoWrap }],

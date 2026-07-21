@@ -43,7 +43,7 @@ sealed class NotificationBell : Component
             nc.OnPanelOpened();
         }
 
-        var button = IconButton.Create(Mdl.Bell, Open, ShellToolbar.NavStyle) with { OnRealized = h => anchor.Value = h };
+        var button = IconButton.Create(Icons.Bell, Open, ShellToolbar.NavStyle) with { OnRealized = h => anchor.Value = h };
         if (unread <= 0) return button;
 
         return new BoxEl

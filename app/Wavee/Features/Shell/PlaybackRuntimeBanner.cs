@@ -37,7 +37,7 @@ public static class PlaybackRuntimeBanner
         {
             Shrink = 0f,
             Fill = Tok.FillSolidBase,
-            Corners = CornerRadius4.All(WaveeRadius.Control),
+            Corners = CornerRadius4.All(Radii.Control),
             Shadow = Elevation.Flyout,
             ClipToBounds = true,
             Children =

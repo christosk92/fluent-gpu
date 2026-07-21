@@ -462,7 +462,7 @@ sealed class SetupBody : Component
         };
     }
 
-    static Element Column(params Element[] kids) => new BoxEl { Direction = 1, Gap = WaveeSpace.M, Children = kids };
+    static Element Column(params Element[] kids) => new BoxEl { Direction = 1, Gap = Spacing.M, Children = kids };
 
     static Element Body(string text, ColorF? color = null) =>
         new TextEl(text) { Size = 13f, Color = color ?? Tok.TextSecondary, Wrap = TextWrap.Wrap };
@@ -471,7 +471,7 @@ sealed class SetupBody : Component
     /// content instead of a box-in-a-box InfoBar.</summary>
     static Element Status(string glyph, ColorF glyphColor, string heading, string body) => new BoxEl
     {
-        Direction = 0, Gap = WaveeSpace.M, AlignItems = FlexAlign.Start,
+        Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.Start,
         Children =
         [
             new TextEl(glyph) { Size = 18f, FontFamily = Theme.IconFont, Color = glyphColor, Shrink = 0f, Margin = new Edges4(0, 1f, 0, 0) },
@@ -498,7 +498,7 @@ sealed class SetupBody : Component
             };
         return new BoxEl
         {
-            Direction = 0, Gap = WaveeSpace.M, AlignItems = FlexAlign.Center, MinHeight = 48f,
+            Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.Center, MinHeight = 48f,
             Children = [ProgressRing.Indeterminate(), label],
         };
     }
@@ -535,7 +535,7 @@ sealed class SetupBody : Component
         };
         static Element DetailRow(string label, string? value) => new BoxEl
         {
-            Direction = 0, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center,
+            Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
             Children =
             [
                 new TextEl(label) { Size = 12f, Color = Tok.TextSecondary, Width = 92f, Shrink = 0f },
@@ -545,7 +545,7 @@ sealed class SetupBody : Component
         return Column(
             new BoxEl
             {
-                Direction = 0, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center,
+                Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
                 Children =
                 [
                     InfoBadge.Icon(InfoBadgeSeverity.Success),
@@ -555,7 +555,7 @@ sealed class SetupBody : Component
             new BoxEl
             {
                 Direction = 1, Gap = 6f, Padding = Edges4.All(12f),
-                Fill = Tok.FillLayerAlt, Corners = CornerRadius4.All(WaveeRadius.Control),
+                Fill = Tok.FillLayerAlt, Corners = CornerRadius4.All(Radii.Control),
                 BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
                 Children =
                 [
@@ -567,7 +567,7 @@ sealed class SetupBody : Component
             },
             new BoxEl
             {
-                Direction = 0, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center,
+                Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
                 Children =
                 [
                     HyperlinkButton.Create(Loc.Get(Strings.Playback.Runtime.Replace), _m.ShowAdvanced),
@@ -602,7 +602,7 @@ sealed class SetupBody : Component
         }
         return new BoxEl
         {
-            Direction = 0, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center,
+            Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
             Children = kids.ToArray(),
         };
     }
@@ -625,12 +625,12 @@ sealed class SetupBody : Component
 
     static Element SignatureDetailsContent(PlaybackRuntimeStatus status, DigitalSignatureInfo signature) => new BoxEl
     {
-        Direction = 1, Gap = WaveeSpace.M,
+        Direction = 1, Gap = Spacing.M,
         Children =
         [
             new BoxEl
             {
-                Direction = 0, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center,
+                Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
                 Children =
                 [
                     InfoBadge.Icon(signature.Trust == SignatureTrust.Trusted
@@ -731,7 +731,7 @@ sealed class SetupBody : Component
             Loc.Get(Strings.Playback.Runtime.UseInstalled),
             Loc.Get(Strings.Playback.Runtime.UseInstalledCaption),
             _m.UseInstalled));
-        return new BoxEl { Direction = 1, Gap = WaveeSpace.S, Children = kids.ToArray() };
+        return new BoxEl { Direction = 1, Gap = Spacing.S, Children = kids.ToArray() };
     }
 
     /// <summary>A clickable settings-card row: leading glyph, title + caption stack, trailing chevron — the
@@ -740,8 +740,7 @@ sealed class SetupBody : Component
     {
         Direction = 0, AlignItems = FlexAlign.Center, Gap = 13f,
         Padding = new Edges4(12f, 9f, 12f, 9f),
-        Corners = CornerRadius4.All(WaveeRadius.Control),
-        HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+        Corners = CornerRadius4.All(Radii.Control),
         Role = AutomationRole.Button, Focusable = true, OnClick = onClick,
         Children =
         [
@@ -757,7 +756,7 @@ sealed class SetupBody : Component
             },
             new TextEl(Icons.ChevronRightMed) { Size = 12f, FontFamily = Theme.IconFont, Color = Tok.TextTertiary, Shrink = 0f },
         ],
-    };
+    }.Interactive(Interaction.Subtle);
 }
 
 /// <summary>The dialog's single command row — optional left-aligned link (the secondary path), right-aligned buttons
@@ -832,7 +831,7 @@ sealed class SetupFooter : Component
         kids.AddRange(right);
         return new BoxEl
         {
-            Direction = 0, Grow = 1f, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center,
+            Direction = 0, Grow = 1f, Gap = Spacing.S, AlignItems = FlexAlign.Center,
             Children = kids.ToArray(),
         };
     }

@@ -44,22 +44,22 @@ public static class ActionIcons
         // Heart: the layered two-tone Like toggle — a neutral outline "Heart" when unliked, the accent-filled
         // "HeartFill" when liked (Segoe glyph fallbacks until the themed registry is warm). The strip renders the
         // accent from the icon's own Accent layer; the checked-strip fg tint covers the glyph-fallback case.
-        Heart => isChecked ? IconRef.Themed("HeartFill", Mdl.HeartFill) : IconRef.Themed("Heart", Icons.Heart),
+        Heart => isChecked ? IconRef.Themed("HeartFill", Icons.HeartFill) : IconRef.Themed("Heart", Icons.Heart),
         Add => IconRef.Themed("Add", Icons.Add),
-        Album => Mdl.Album,
+        Album => Icons.Album,
         Artist => Icons.Contact,
         Link => IconRef.Themed("Link", Icons.Link),
         Remove => Icons.Remove,
-        Delete => IconRef.Themed("Delete", Mdl.Delete),
+        Delete => IconRef.Themed("Delete", Icons.Delete),
         Open => IconRef.Themed("Open", Icons.OpenInNewWindow),
         Rename => IconRef.Themed("Rename", Icons.Edit),
-        People => Mdl.Friends,
+        People => Icons.Friends,
         Globe => Icons.Globe,
         Credits => Icons.Document,
         Share => Icons.Share,
         CopyUri => Icons.Copy,
         OpenWeb => Icons.Globe,
-        Radio => Mdl.RadioTower,
+        Radio => Icons.RadioTower,
         _ => Icons.More,
     };
 }

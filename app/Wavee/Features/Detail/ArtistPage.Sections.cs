@@ -32,12 +32,12 @@ sealed partial class ArtistPage : Component
 
     Element Section(string title, Element body) => new BoxEl
     {
-        Direction = 1, Gap = WaveeSpace.M, Children = [AccentHeader(title), body],
+        Direction = 1, Gap = Spacing.M, Children = [AccentHeader(title), body],
     };
 
     Element SectionN(string title, int count, Element body) => new BoxEl
     {
-        Direction = 1, Gap = WaveeSpace.M,
+        Direction = 1, Gap = Spacing.M,
         Children = [ AccentHeader(title, count), body ],
     };
 

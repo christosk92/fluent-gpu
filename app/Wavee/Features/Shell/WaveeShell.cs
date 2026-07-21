@@ -294,9 +294,8 @@ sealed class WaveeShell : Component
             float vpW = vpSig.Value.Width;
             float sbW = _sidebarCompact.Value ? 56f : _sidebarWidth.Value;
             bool fits = ShellUi.CanFitRail(vpW, sbW, _shellUi.RailWidth.Value);
-            if (_shellUi.RailFits.Peek() != fits)
+            if (_shellUi.RailFits.SetIfChanged(fits))
             {
-                _shellUi.RailFits.Value = fits;
                 if (_shellUi.RailOpen.Peek()) ArmRailLockWithClear();
             }
         });
@@ -389,11 +388,11 @@ sealed class WaveeShell : Component
                                     // trailing side from exposing toolbar chrome (the false "right rail ghost").
                                     new BoxEl
                                     {
-                                        Grow = 1f, Margin = new Edges4(0f, 0f, WaveeSpace.S, 0f),
+                                        Grow = 1f, Margin = new Edges4(0f, 0f, Spacing.S, 0f),
                                         Fill = Prop.Of(() => WaveeColors.FileArea),
-                                        Corners = new CornerRadius4(WaveeRadius.Card, WaveeRadius.Card, 0f, 0f),
+                                        Corners = new CornerRadius4(Radii.Card, Radii.Card, 0f, 0f),
                                     },
-                                    new BoxEl { Width = WaveeRadius.Card, Grow = 1f, Fill = Prop.Of(() => WaveeColors.Sidebar) },
+                                    new BoxEl { Width = Radii.Card, Grow = 1f, Fill = Prop.Of(() => WaveeColors.Sidebar) },
                                     new BoxEl
                                     {
                                         // MinHeight=0 (the flex `min-height:0` override): this card CLIPS its content, so it
@@ -404,7 +403,7 @@ sealed class WaveeShell : Component
                                         // shrinks to the available space and clips/scrolls, so the player bar stays docked.
                                         Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f,
                                         // Flush against the navigation pane and player dock; only the trailing edge is inset.
-                                        Margin = new Edges4(0f, 0f, WaveeSpace.S, 0f),
+                                        Margin = new Edges4(0f, 0f, Spacing.S, 0f),
                                         // BOUND (not a static ColorF): this content "page" is a frozen literal inside the
                                         // OverlayHost.Child column (constructor args freeze at mount), so a re-render can't
                                         // re-read the token. As a bind it lives in the reconciler's _nodeBindings and the
@@ -412,7 +411,7 @@ sealed class WaveeShell : Component
                                         Fill = Prop.Of(() => WaveeColors.FileArea),
                                         BorderWidth = 1f,
                                         BorderColor = Prop.Of(() => Tok.StrokeCardDefault),
-                                        Corners = new CornerRadius4(WaveeRadius.Card, WaveeRadius.Card, 0f, 0f),
+                                        Corners = new CornerRadius4(Radii.Card, Radii.Card, 0f, 0f),
                                         ClipToBounds = true,
                                         // Layout firewall (#5): this card is Grow=1 (its size is the shell's content region,
                                         // parent-determined) and clips — so a re-render deep inside a page re-solves only this
@@ -507,7 +506,7 @@ sealed class WaveeShell : Component
                                         // relayout. When RightRail marks its root non-hit-testable, this wrapper must also
                                         // yield or the invisible retained 340-DIP strip covers the page scrollbar.
                                         Direction = 1, Grow = 1f, MinHeight = 0f, ClipToBounds = true, HitTestPassThrough = true,
-                                        Corners = new CornerRadius4(WaveeRadius.Card, 0f, 0f, 0f),
+                                        Corners = new CornerRadius4(Radii.Card, 0f, 0f, 0f),
                                         Children = [ Embed.Comp(() => new RightRail()) ],
                                     },
                                 ],
@@ -583,7 +582,7 @@ sealed class WaveeShell : Component
                Ctx.Provide(NavPreviewStore.Slot, _navPreview,
                Ctx.Provide(SearchQuery.Slot, _searchText,
                Ctx.Provide(ActionServices.Slot, _actions,
-               Embed.Comp(() => new OverlayHost { Child = shellWithOverlays }))))))));
+               OverlayHost.Create(shellWithOverlays))))))));
     }
 
     TabStrip BuildTabStrip() => new TabStrip

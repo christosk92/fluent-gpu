@@ -26,9 +26,9 @@ sealed partial class ArtistPage : Component
     // ── on-tour banner ───────────────────────────────────────────────────────────────────────────────────
     Element TourBannerCard(TourBanner t, Action onClick) => new BoxEl
     {
-        Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.L,
-        Padding = new Edges4(WaveeSpace.L, WaveeSpace.L, WaveeSpace.L, WaveeSpace.L),
-        Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardSecondary,
+        Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.L,
+        Padding = new Edges4(Spacing.L, Spacing.L, Spacing.L, Spacing.L),
+        Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillCardSecondary,
         BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault, HoverFill = Tok.FillCardDefault,
         HoverScale = 1.005f, PressScale = 0.997f, OnClick = onClick,
         Role = AutomationRole.Button, Focusable = true, FocusVisualMargin = new Edges4(2f, 2f, 2f, 2f),
@@ -37,7 +37,7 @@ sealed partial class ArtistPage : Component
         [
             new BoxEl { Width = 44f, Height = 44f, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                 Corners = CornerRadius4.All(22f), Fill = _accent,
-                Children = [ Icon(t.IsLive ? Mdl.RadioTower : Mdl.Calendar, 18f, Tok.TextOnAccentPrimary) ] },
+                Children = [ Icon(t.IsLive ? Icons.RadioTower : Icons.Calendar, 18f, Tok.TextOnAccentPrimary) ] },
             new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Gap = 2f,
                 Children =
                 [
@@ -45,7 +45,7 @@ sealed partial class ArtistPage : Component
                     new TextEl(t.Headline) { Size = 16f, Weight = 700, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                     new TextEl(t.Subline) { Size = 13f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                 ] },
-            Icon(Mdl.ChevronRight, 16f, Tok.TextSecondary),
+            Icon(Icons.ChevronRight, 16f, Tok.TextSecondary),
         ],
     };
 
@@ -96,9 +96,9 @@ sealed partial class ArtistPage : Component
     static Element ConcertStub(Concert c, Action onClick) => new BoxEl
     {
         Key = c.Uri,
-        Direction = 0, Grow = 1f, Gap = WaveeSpace.M, AlignItems = FlexAlign.Center,
-        Padding = new Edges4(WaveeSpace.M, WaveeSpace.M, WaveeSpace.M, WaveeSpace.M),
-        Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardSecondary,
+        Direction = 0, Grow = 1f, Gap = Spacing.M, AlignItems = FlexAlign.Center,
+        Padding = new Edges4(Spacing.M, Spacing.M, Spacing.M, Spacing.M),
+        Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillCardSecondary,
         BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault, HoverFill = Tok.FillCardDefault,
         OnClick = onClick, Role = AutomationRole.Button, Focusable = true,
         FocusVisualMargin = new Edges4(2f, 2f, 2f, 2f), Cursor = CursorId.Hand,
@@ -115,7 +115,7 @@ sealed partial class ArtistPage : Component
                 [
                     new TextEl(c.Venue) { Size = 14f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                     new BoxEl { Direction = 0, Gap = 4f, AlignItems = FlexAlign.Center,
-                        Children = [ Icon(Mdl.MapPin, 11f, Tok.TextSecondary), new TextEl(c.City) { Size = 12f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis } ] },
+                        Children = [ Icon(Icons.MapPin, 11f, Tok.TextSecondary), new TextEl(c.City) { Size = 12f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis } ] },
                 ] },
         ],
     };
@@ -135,14 +135,14 @@ sealed partial class ArtistPage : Component
 
     static Element MerchCard(MerchItem m, float w) => new BoxEl
     {
-        Direction = 1, Gap = WaveeSpace.S, Grow = 1f, ClipToBounds = true,
-        Padding = new Edges4(WaveeSpace.S, WaveeSpace.S, WaveeSpace.S, WaveeSpace.M),
-        Corners = CornerRadius4.All(WaveeRadius.Card), Fill = Tok.FillCardSecondary,
+        Direction = 1, Gap = Spacing.S, Grow = 1f, ClipToBounds = true,
+        Padding = new Edges4(Spacing.S, Spacing.S, Spacing.S, Spacing.M),
+        Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillCardSecondary,
         BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault, HoverFill = Tok.FillCardDefault, HoverScale = 1.02f,
         Children =
         [
-            new BoxEl { ZStack = true, ClipToBounds = true, Corners = CornerRadius4.All(WaveeRadius.Control),
-                Children = [ Surfaces.ArtworkFill(m.Image, WaveeRadius.Control) ] },
+            new BoxEl { ZStack = true, ClipToBounds = true, Corners = CornerRadius4.All(Radii.Control),
+                Children = [ Surfaces.ArtworkFill(m.Image, Radii.Control) ] },
             new TextEl(m.Name) { Size = 13f, Weight = 600, Color = Tok.TextPrimary, Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.CharacterEllipsis },
             new TextEl(m.Price) { Size = 13f, Weight = 700, Color = Tok.AccentTextPrimary, MaxLines = 1 },
         ],
@@ -156,9 +156,9 @@ sealed partial class ArtistPage : Component
         [
             PagedShelf.Create(
                 Math.Min(photos.Count, 16),
-                cardAt: (i, w) => new BoxEl { Width = w, Height = w, Corners = CornerRadius4.All(WaveeRadius.Card), ClipToBounds = true,
+                cardAt: (i, w) => new BoxEl { Width = w, Height = w, Corners = CornerRadius4.All(Radii.Card), ClipToBounds = true,
                     OnClick = () => OpenGallery(photos, i), Cursor = CursorId.Hand, HoverScale = 1.015f, PressScale = 0.985f,
-                    Children = [ Surfaces.Artwork(photos[i], i, w, w, WaveeRadius.Card, decodePx: 480) ] },
+                    Children = [ Surfaces.Artwork(photos[i], i, w, w, Radii.Card, decodePx: 480) ] },
                 measured: true, header: AccentHeader(Loc.Get(Strings.Artist.Gallery))),
         ],
     };

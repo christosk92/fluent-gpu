@@ -173,7 +173,7 @@ static class PlaylistInlineEdit
     /// <summary>Save/cancel row below the field — always visible, never clipped by the field chrome.</summary>
     static Element SaveCancelRow(Action save, Action cancel) => new BoxEl
     {
-        Direction = 0, Gap = WaveeSpace.S, Justify = FlexJustify.End, Shrink = 0f,
+        Direction = 0, Gap = Spacing.S, Justify = FlexJustify.End, Shrink = 0f,
         Children =
         [
             EditFieldBtn(Icons.Accept, Loc.Get(Strings.Detail.Edit.Save), accent: true, save),
@@ -186,7 +186,7 @@ static class PlaylistInlineEdit
     static Element EditChrome(Element field, float width, Action save, Action cancel, Ref<NodeHandle> shell,
         RenderContext ctx, Action<Action> post) => new BoxEl
     {
-        Direction = 1, Width = width, Gap = WaveeSpace.S,
+        Direction = 1, Width = width, Gap = Spacing.S,
         OnRealized = h =>
         {
             shell.Value = h;
@@ -321,7 +321,7 @@ static class PlaylistInlineEdit
 
             return new BoxEl
             {
-                Width = _size, Height = _size, Corners = CornerRadius4.All(WaveeRadius.Card),
+                Width = _size, Height = _size, Corners = CornerRadius4.All(Radii.Card),
                 Shadow = Elevation.Card, ClipToBounds = true, ZStack = true,
                 Cursor = CursorId.Hand,
                 DropTarget = _dropSpec.Value,
@@ -453,9 +453,9 @@ static class PlaylistInlineEdit
             // and hairline border ease in engine-side (HoverFade channel — no re-render), cursor is always I-beam.
             Element titleRow = new BoxEl
             {
-                Direction = 0, Width = _width + 16f, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center,
+                Direction = 0, Width = _width + 16f, Gap = Spacing.S, AlignItems = FlexAlign.Center,
                 Margin = new Edges4(-8f, -4f, -8f, -4f), Padding = new Edges4(8f, 4f, 8f, 4f),
-                Corners = CornerRadius4.All(WaveeRadius.Control),
+                Corners = CornerRadius4.All(Radii.Control),
                 HoverFill = Tok.FillSubtleSecondary,
                 BorderWidth = 1f, BorderColor = ColorF.Transparent, HoverBorderColor = Tok.StrokeControlDefault,
                 Cursor = CursorId.IBeam,
@@ -574,9 +574,9 @@ static class PlaylistInlineEdit
             int status = _status.Value;
             Element descriptionRow = new BoxEl
             {
-                Direction = 0, Width = _width + 16f, Gap = WaveeSpace.S, AlignItems = FlexAlign.Start,
+                Direction = 0, Width = _width + 16f, Gap = Spacing.S, AlignItems = FlexAlign.Start,
                 Margin = new Edges4(-8f, -4f, -8f, -4f), Padding = new Edges4(8f, 4f, 8f, 4f),
-                Corners = CornerRadius4.All(WaveeRadius.Control),
+                Corners = CornerRadius4.All(Radii.Control),
                 HoverFill = Tok.FillSubtleSecondary,
                 BorderWidth = 1f, BorderColor = ColorF.Transparent, HoverBorderColor = Tok.StrokeControlDefault,
                 Cursor = CursorId.IBeam,
@@ -661,7 +661,7 @@ static class PlaylistInlineEdit
             // rail width (the old hand-computed MaxWidth = _width - 120f under-reserved for the pill and clipped).
             return new BoxEl
             {
-                Direction = 0, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center, MaxWidth = _width,
+                Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, MaxWidth = _width,
                 Children =
                 [
                     PersonPicture.Create("", 24f, displayName: owner, imageSourcePath: m.OwnerImage?.Url),
@@ -697,7 +697,6 @@ static class PlaylistInlineEdit
                     {
                         Width = 40f, Height = 40f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                         Corners = CornerRadius4.All(20f),
-                        HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
                         HoverScale = 1.06f, PressScale = 0.94f,
                         Cursor = CursorId.Hand, Focusable = true, Role = AutomationRole.Button,
                         OnClick = () => Share(m, post),
@@ -708,7 +707,7 @@ static class PlaylistInlineEdit
                             Children = [Icon(copied ? Icons.Accept : Icons.Share, 16f,
                                 copied ? Tok.AccentTextPrimary : Tok.TextSecondary)],
                         }],
-                    },
+                    }.Interactive(Interaction.Subtle),
                 ],
             };
         }
@@ -822,29 +821,27 @@ static class PlaylistInlineEdit
                 return ToolTip.Wrap(new BoxEl
                 {
                     Width = 28f, Height = 28f, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                    Corners = CornerRadius4.All(14f), Fill = ColorF.Transparent,
-                    HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+                    Corners = CornerRadius4.All(14f),
                     HoverScale = 1.06f, PressScale = 0.94f,
                     Cursor = CursorId.Hand, Focusable = true, Role = AutomationRole.Button,
                     OnClick = Toggle, OnRealized = h => anchor.Value = h,
-                    Children = [Icon(Mdl.Friends, 14f, Tok.TextSecondary)],
-                }, Loc.Get(Strings.Detail.Edit.InviteCollaborators));
+                    Children = [Icon(Icons.Friends, 14f, Tok.TextSecondary)],
+                }.Interactive(Interaction.Subtle), Loc.Get(Strings.Detail.Edit.InviteCollaborators));
 
             return new BoxEl
             {
-                Direction = 0, Shrink = 0f, Height = 28f, Gap = WaveeSpace.XS, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                Direction = 0, Shrink = 0f, Height = 28f, Gap = Spacing.XS, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                 Padding = new Edges4(10f, 0f, 12f, 0f), Corners = CornerRadius4.All(14f),
-                Fill = ColorF.Transparent, BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault,
-                HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+                BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault,
                 HoverScale = 1.03f, PressScale = 0.97f,
                 Cursor = CursorId.Hand, Focusable = true, Role = AutomationRole.Button,
                 OnClick = Toggle, OnRealized = h => anchor.Value = h,
                 Children =
                 [
-                    Icon(Mdl.Friends, 12f, Tok.TextPrimary),
+                    Icon(Icons.Friends, 12f, Tok.TextPrimary),
                     new TextEl(Loc.Get(Strings.Detail.Edit.InviteCollaborators)) { Size = 12f, Weight = 600, Color = Tok.TextPrimary },
                 ],
-            };
+            }.Interactive(Interaction.Subtle);
         }
     }
 
@@ -918,7 +915,7 @@ static class PlaylistInlineEdit
             return new BoxEl
             {
                 Direction = 1, Width = 300f, Gap = 12f, Padding = Edges4.All(16f),
-                Corners = CornerRadius4.All(WaveeRadius.Card), ClipToBounds = true, Shadow = Elevation.Flyout,
+                Corners = CornerRadius4.All(Radii.Card), ClipToBounds = true, Shadow = Elevation.Flyout,
                 Acrylic = Tok.AcrylicFlyout, BorderWidth = 1f, BorderColor = Tok.StrokeFlyoutDefault,
                 Children = content.ToArray(),
             };
@@ -927,10 +924,10 @@ static class PlaylistInlineEdit
         Element CopyInviteCta(int status)
         {
             var accent = Tok.AccentDefault;
-            var ink = WaveePalette.OnAccent(accent);
+            var ink = ColorContrast.PickContrast(accent);
             return new BoxEl
             {
-                Direction = 0, Height = 34f, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                Direction = 0, Height = 34f, Gap = Spacing.S, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                 Corners = CornerRadius4.All(17f), Fill = accent,
                 HoverFill = Tok.AccentSecondary, PressedFill = Tok.AccentTertiary,
                 HoverScale = 1.02f, PressScale = 0.98f,
@@ -947,7 +944,7 @@ static class PlaylistInlineEdit
                         Animate = MotionRecipes.IconSwap,
                         Children = [status == StatusSaving
                             ? ProgressRing.Indeterminate(14f, true, ink)
-                            : Icon(status == StatusSaved ? Icons.Accept : Mdl.Link, 14f, ink)],
+                            : Icon(status == StatusSaved ? Icons.Accept : Icons.Link, 14f, ink)],
                     },
                     new BoxEl
                     {
@@ -964,7 +961,7 @@ static class PlaylistInlineEdit
 
         static Element ToggleRow(string label, string caption, bool isOn, int status, Action onToggle) => new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M,
             Children =
             [
                 new BoxEl
@@ -1023,12 +1020,11 @@ static class PlaylistInlineEdit
             {
                 Width = 40f, Height = 40f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                 Corners = CornerRadius4.All(20f),
-                HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
                 HoverScale = 1.06f, PressScale = 0.94f,
                 OnClick = Toggle,
                 OnRealized = h => anchor.Value = h,
                 Children = [Icon(Icons.More, 16f, Tok.TextSecondary)],
-            };
+            }.Interactive(Interaction.Subtle);
         }
     }
 
@@ -1044,11 +1040,11 @@ static class PlaylistInlineEdit
             return;
         if (m.Capabilities.CanAdministratePermissions)
         {
-            items.Add(new MenuFlyoutItem(Loc.Get(Strings.Detail.Edit.InviteCollaborators), Mdl.Friends,
+            items.Add(new MenuFlyoutItem(Loc.Get(Strings.Detail.Edit.InviteCollaborators), Icons.Friends,
                 Invoke: () => OpenAccessFlyout(overlay, lib, svc, full, anchor, accessHandle, FlyoutPlacement.BottomEdgeAlignedRight)));
             items.Add(MenuFlyoutItem.Separator);
         }
-        items.Add(new MenuFlyoutItem(Loc.Get(Strings.Detail.Edit.DeletePlaylist), Mdl.Delete,
+        items.Add(new MenuFlyoutItem(Loc.Get(Strings.Detail.Edit.DeletePlaylist), Icons.Delete,
             Invoke: () => SettingsShared.Confirm(overlay,
                 Loc.Get(Strings.Detail.Edit.DeletePlaylist),
                 Loc.Get(Strings.Detail.Edit.DeletePlaylistConfirm),

@@ -176,7 +176,7 @@ sealed class WaveeSidebar : Component
         // space on the right once the pane is dragged wider than that natural width (same reason CompactBody sets it).
         // Filling the width lets every row cross-stretch so its Grow=1f label pushes the trailing badge to the edge.
         Grow = 1f,
-        Direction = 1, Gap = WaveeSpace.S, Padding = new Edges4(8f, 8f, 8f, 12f),
+        Direction = 1, Gap = Spacing.S, Padding = new Edges4(8f, 8f, 8f, 12f),
         Children =
         [
             Section(Loc.Get(Strings.Sidebar.Pinned), _pinnedOpen, PinnedDropZone()),
@@ -185,10 +185,10 @@ sealed class WaveeSidebar : Component
                 Direction = 1, Gap = 2f,
                 Children =
                 [
-                    LibRow("albums",   Mdl.Album,      Loc.Get(Strings.Sidebar.Albums),     sel, 0, CountBadge(stats, s => s.Albums)),
-                    LibRow("artists",  Mdl.Contact,    Loc.Get(Strings.Sidebar.Artists),    sel, 1, CountBadge(stats, s => s.Artists)),
+                    LibRow("albums",   Icons.Album,      Loc.Get(Strings.Sidebar.Albums),     sel, 0, CountBadge(stats, s => s.Albums)),
+                    LibRow("artists",  Icons.Contact,    Loc.Get(Strings.Sidebar.Artists),    sel, 1, CountBadge(stats, s => s.Artists)),
                     LibRow("liked",    Icons.Heart,    Loc.Get(Strings.Sidebar.LikedSongs), sel, 2, CountBadge(stats, s => s.LikedSongs)),
-                    LibRow("podcasts", Mdl.RadioTower, Loc.Get(Strings.Sidebar.Podcasts),   sel, 3, CountBadge(stats, s => s.Podcasts)),
+                    LibRow("podcasts", Icons.RadioTower, Loc.Get(Strings.Sidebar.Podcasts),   sel, 3, CountBadge(stats, s => s.Podcasts)),
                     LocalRow(sel),
                 ],
             }),
@@ -353,7 +353,7 @@ sealed class WaveeSidebar : Component
                                 HoverFill = Tok.FillSubtleTertiary,
                                 Role = AutomationRole.Button, Cursor = CursorId.Hand,
                                 ClickRequestsContext = true,
-                                Children = [Icon(Mdl.More, 14f, Tok.TextSecondary)],
+                                Children = [Icon(Icons.More, 14f, Tok.TextSecondary)],
                             },
                         ],
                     }
@@ -397,10 +397,10 @@ sealed class WaveeSidebar : Component
 
         var kids = new List<Element>
         {
-            CompactIcon("albums",   Mdl.Album,      sel),
-            CompactIcon("artists",  Mdl.Contact,    sel),
+            CompactIcon("albums",   Icons.Album,      sel),
+            CompactIcon("artists",  Icons.Contact,    sel),
             CompactIcon("liked",    Icons.Heart,    sel),
-            CompactIcon("podcasts", Mdl.RadioTower, sel),
+            CompactIcon("podcasts", Icons.RadioTower, sel),
             CompactIcon("local",    Icons.Folder,   sel),
             CompactDivider(),
             Embed.Comp(() => new SidebarCreateButton(CreatePlaylist, CreateFolder, 40f, 16f)),
@@ -467,10 +467,9 @@ sealed class WaveeSidebar : Component
             Width = 40f, Height = 40f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Corners = CornerRadius4.All(8f),
             BorderColor = selected ? Tok.AccentDefault : ColorF.Transparent, BorderWidth = selected ? 2f : 0f,
-            HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
             OnClick = () => _go(key, p.Name),
             Children = [ Surfaces.Artwork(p.Cover, SeedFrom(p.Uri), 36f, 36f, 6f) ],
-        };
+        }.Interactive(Interaction.Subtle);
     }
 
     static Element CompactSkeleton() => new BoxEl
@@ -644,11 +643,10 @@ sealed class SidebarCreateButton : Component
         {
             Width = _box, Height = _box, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Corners = CornerRadius4.All(4f),
-            HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
             Role = AutomationRole.Button,
             OnRealized = h => anchor.Value = h,
             OnClick = Toggle,
-            Children = [ Icon(Mdl.Add, _glyph, Tok.TextSecondary) ],
-        };
+            Children = [ Icon(Icons.Add, _glyph, Tok.TextSecondary) ],
+        }.Interactive(Interaction.Subtle);
     }
 }

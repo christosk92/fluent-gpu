@@ -29,7 +29,7 @@ sealed partial class ArtistPage : Component
             Element right = Section(Loc.Get(Strings.Artist.PopularReleases), PopularReleases(albumsAll, go, play));
             return new BoxEl
             {
-                Direction = (byte)(wide ? 0 : 1), Gap = WaveeSpace.XL,
+                Direction = (byte)(wide ? 0 : 1), Gap = Spacing.XL,
                 Children =
                 [
                     new BoxEl { Direction = 1, Grow = wide ? 2f : 1f, Basis = 0f, Children = [left] },
@@ -40,20 +40,19 @@ sealed partial class ArtistPage : Component
 
     static Element PopularReleases(IReadOnlyList<Album> albums, Action<string, string?> go, Action<string> play) => new BoxEl
     {
-        Direction = 1, Gap = WaveeSpace.XS,
+        Direction = 1, Gap = Spacing.XS,
         Children = albums.Take(4).Select(al => ReleaseRow(al, go, play)).ToArray(),
     };
 
     static Element ReleaseRow(Album al, Action<string, string?> go, Action<string> play) => new BoxEl
     {
-        Direction = 0, Height = 64f, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
-        Padding = new Edges4(WaveeSpace.S, 0f, WaveeSpace.S, 0f), Corners = CornerRadius4.All(6f),
-        HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+        Direction = 0, Height = 64f, AlignItems = FlexAlign.Center, Gap = Spacing.M,
+        Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f), Corners = CornerRadius4.All(6f),
         OnClick = () => go("album:" + al.Uri, al.Name),
         Children =
         [
-            new BoxEl { Width = 48f, Height = 48f, Shrink = 0f, Corners = CornerRadius4.All(WaveeRadius.Control), ClipToBounds = true,
-                Children = [Surfaces.Artwork(al.Cover, al.Id.GetHashCode() & 0x7fffffff, 48f, 48f, WaveeRadius.Control)] },
+            new BoxEl { Width = 48f, Height = 48f, Shrink = 0f, Corners = CornerRadius4.All(Radii.Control), ClipToBounds = true,
+                Children = [Surfaces.Artwork(al.Cover, al.Id.GetHashCode() & 0x7fffffff, 48f, 48f, Radii.Control)] },
             new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Gap = 1f,
                 Children =
                 [
@@ -61,7 +60,7 @@ sealed partial class ArtistPage : Component
                     new TextEl((al.Year > 0 ? al.Year + " · " : "") + KindLabel(al.Kind)) { Size = 12f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                 ] },
         ],
-    };
+    }.Interactive(Interaction.Subtle);
 
     internal static string KindLabel(AlbumKind k) => k switch
     {

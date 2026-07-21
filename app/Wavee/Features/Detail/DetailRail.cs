@@ -17,8 +17,8 @@ namespace Wavee;
 // discipline). The cover edge is a constant per config (RailWidth − side padding), so no SizeChanged hack is needed.
 static class DetailRail
 {
-    const float SidePadL = WaveeSpace.L;   // 16
-    const float SidePadR = WaveeSpace.S;   // 8
+    const float SidePadL = Spacing.L;   // 16
+    const float SidePadR = Spacing.S;   // 8
     const float FabSize = 40f;
     // Decode the rail/header cover at the SAME size the Home shelf card uses (MediaCard's ShelfDecodePx, 256) so a Hero
     // fly hands the cover off to the SAME cached texture — pixel-identical, with NO fresh first-visit cover decode (the
@@ -29,8 +29,8 @@ static class DetailRail
 
     internal static Element HeroArtwork(DetailModel m, float size) =>
         LikedSongsArtwork.IsLikedUri(m.ContextUri) && m.Cover is null
-            ? LikedSongsArtwork.Cover(size, WaveeRadius.Card, m.MorphKey)
-            : Surfaces.Artwork(m.Cover, m.Title.GetHashCode() & 0x7fffffff, size, size, WaveeRadius.Card, m.MorphKey, decodePx: HeroCoverDecodePx);
+            ? LikedSongsArtwork.Cover(size, Radii.Card, m.MorphKey)
+            : Surfaces.Artwork(m.Cover, m.Title.GetHashCode() & 0x7fffffff, size, size, Radii.Card, m.MorphKey, decodePx: HeroCoverDecodePx);
 
     // The side rail: the cover STRETCHES to fill the column width (a big hero — the image is NEVER shrunk for height).
     // The height fit comes from the TEXT — titleSize (the shell lowers it on a short rail; auto-fits down to 18px) and
@@ -44,7 +44,7 @@ static class DetailRail
         bool editable = m.Capabilities.CanEditMetadata && m.ContextUri is { Length: > 0 };
         kids.Add(new BoxEl
         {
-            Width = cover, Height = cover, Corners = CornerRadius4.All(WaveeRadius.Card),
+            Width = cover, Height = cover, Corners = CornerRadius4.All(Radii.Card),
             Shadow = Elevation.Card, ClipToBounds = true,
             Children = [editable ? PlaylistInlineEdit.Cover(modelSource, cover) : HeroArtwork(m, cover)],
         });
@@ -56,7 +56,7 @@ static class DetailRail
             if (m.BadgeType is { Length: > 0 }) pills.Add(BadgePill(m.BadgeType));
             if (m.Year is { Length: > 0 }) pills.Add(BadgePill(m.Year));
             if (pills.Count > 0)
-                kids.Add(new BoxEl { Direction = 0, Gap = WaveeSpace.S, Children = pills.ToArray() });
+                kids.Add(new BoxEl { Direction = 0, Gap = Spacing.S, Children = pills.ToArray() });
         }
         else if (cfg.Badges == BadgeStyle.OwnerRow && m.OwnerName is { Length: > 0 })
         {
@@ -89,14 +89,14 @@ static class DetailRail
         // of orphaning a single FAB on its own line.
         kids.Add(new BoxEl
         {
-            Direction = 0, Wrap = true, Gap = WaveeSpace.M, AlignItems = FlexAlign.Center,
-            Margin = new Edges4(0f, WaveeSpace.XS, 0f, 0f),
+            Direction = 0, Wrap = true, Gap = Spacing.M, AlignItems = FlexAlign.Center,
+            Margin = new Edges4(0f, Spacing.XS, 0f, 0f),
             Children =
             [
                 PlayPill(h.Accent, h.PlayAll),
                 new BoxEl
                 {
-                    Direction = 0, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center,
+                    Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
                     Children =
                     [
                         // Shuffle now lives in the track-list command bar; the rail keeps just the hero Play + save/share.
@@ -127,7 +127,7 @@ static class DetailRail
         var rail = new BoxEl
         {
             Direction = 1, Gap = 14f, Width = railW, Shrink = 0f,
-            Padding = new Edges4(SidePadL, WaveeSpace.XXL, SidePadR, WaveeSpace.XXL),
+            Padding = new Edges4(SidePadL, Spacing.XXL, SidePadR, Spacing.XXL),
             Children = kids.ToArray(),
         };
         // Own vertical scroller (hidden bar by default) — the LAST resort once the TEXT has shrunk and it still overflows
@@ -163,7 +163,7 @@ static class DetailRail
             var pills = new List<Element>(2);
             if (m.BadgeType is { Length: > 0 }) pills.Add(BadgePill(m.BadgeType));
             if (m.Year is { Length: > 0 }) pills.Add(BadgePill(m.Year));
-            if (pills.Count > 0) info.Add(new BoxEl { Direction = 0, Gap = WaveeSpace.S, Children = pills.ToArray() });
+            if (pills.Count > 0) info.Add(new BoxEl { Direction = 0, Gap = Spacing.S, Children = pills.ToArray() });
         }
         else if (cfg.Badges == BadgeStyle.OwnerRow && m.OwnerName is { Length: > 0 })
         {
@@ -183,16 +183,16 @@ static class DetailRail
 
         var coverRow = new BoxEl
         {
-            Direction = 0, Gap = WaveeSpace.L, AlignItems = FlexAlign.Center,   // center → balanced (no big wedge)
+            Direction = 0, Gap = Spacing.L, AlignItems = FlexAlign.Center,   // center → balanced (no big wedge)
             Children =
             [
                 new BoxEl
                 {
-                    Width = coverSz, Height = coverSz, Corners = CornerRadius4.All(WaveeRadius.Card),
+                    Width = coverSz, Height = coverSz, Corners = CornerRadius4.All(Radii.Card),
                     Shadow = Elevation.Card, ClipToBounds = true,
                     Children = [editable ? PlaylistInlineEdit.Cover(modelSource, coverSz) : HeroArtwork(m, coverSz)],
                 },
-                new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Gap = WaveeSpace.XS, Children = info.ToArray() },
+                new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Gap = Spacing.XS, Children = info.ToArray() },
             ],
         };
 
@@ -204,8 +204,8 @@ static class DetailRail
 
         return new BoxEl
         {
-            Direction = 1, Gap = WaveeSpace.M, Shrink = 0f,
-            Padding = new Edges4(WaveeSpace.L, WaveeSpace.L, WaveeSpace.L, WaveeSpace.S),
+            Direction = 1, Gap = Spacing.M, Shrink = 0f,
+            Padding = new Edges4(Spacing.L, Spacing.L, Spacing.L, Spacing.S),
             Children = headerKids.ToArray(),
         };
     }
@@ -214,7 +214,7 @@ static class DetailRail
     // view controls (filter / sort / row size) now live in the track list's own command bar, so this row carries none.
     static Element PlayRow(DetailHandlers h, DetailModel m) => new BoxEl
     {
-        Direction = 0, Gap = WaveeSpace.M, AlignItems = FlexAlign.Center, Wrap = true,
+        Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.Center, Wrap = true,
         Children =
         [
             PlayPill(h.Accent, h.PlayAll),
@@ -235,7 +235,7 @@ static class DetailRail
         string addLabel = Loc.Get(copy ? Strings.Detail.CopyToPlaylist : Strings.Detail.AddToPlaylist);
         return new BoxEl
         {
-            Direction = 0, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center, Wrap = true,
+            Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, Wrap = true,
             Margin = new Edges4(0f, 2f, 0f, 0f),
             Children =
             [
@@ -300,8 +300,8 @@ static class DetailRail
 
         return new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S, MaxWidth = cover,
-            Corners = CornerRadius4.All(16f), Padding = new Edges4(2f, 2f, WaveeSpace.S, 2f),
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S, MaxWidth = cover,
+            Corners = CornerRadius4.All(16f), Padding = new Edges4(2f, 2f, Spacing.S, 2f),
             HoverFill = Tok.FillSubtleSecondary, OnClick = () => h.Go("artist:" + lead.Uri, lead.Name),
             Children =
             [
@@ -327,15 +327,14 @@ static class DetailRail
     };
 
     static Element PlayPill(ColorF accent, Action onPlay)
-        => HeroCta.Pill(Icons.Play, Loc.Get(Strings.Detail.Play), accent, WaveePalette.OnAccent(accent), onPlay);
+        => HeroCta.Pill(Icons.Play, Loc.Get(Strings.Detail.Play), accent, ColorContrast.PickContrast(accent), onPlay);
 
     static Element Fab(string glyph, Action onClick) => new BoxEl
     {
         Width = FabSize, Height = FabSize, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
         Corners = CornerRadius4.All(FabSize / 2f),
-        HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
         HoverScale = 1.06f, PressScale = 0.94f, OnClick = onClick,
         Children = [Icon(glyph, 16f, Tok.TextSecondary)],
-    };
+    }.Interactive(Interaction.Subtle);
 
 }

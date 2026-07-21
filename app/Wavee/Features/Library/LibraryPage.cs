@@ -246,7 +246,7 @@ sealed class LibraryPage : Component
         Direction = 1, Shrink = 0f, Fill = Tok.FillLayerDefault,
         Children =
         [
-            new BoxEl { Padding = new Edges4(WaveeSpace.M, WaveeSpace.S, WaveeSpace.M, WaveeSpace.S),
+            new BoxEl { Padding = new Edges4(Spacing.M, Spacing.S, Spacing.M, Spacing.S),
                 Children = [BreadcrumbBar.Create(crumbs, i => _depth.Value = i)] },
             new BoxEl { Height = 1f, Fill = Tok.StrokeDividerDefault },
         ],
@@ -388,7 +388,7 @@ sealed class LibraryPage : Component
 
     Element Toolbar() => new BoxEl
     {
-        Direction = 1, Gap = WaveeSpace.S, Padding = new Edges4(WaveeSpace.M, WaveeSpace.M, WaveeSpace.M, WaveeSpace.S),
+        Direction = 1, Gap = Spacing.S, Padding = new Edges4(Spacing.M, Spacing.M, Spacing.M, Spacing.S),
         Children =
         [
             new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Children = [Embed.Comp(() => new LibrarySortView(_sort, _desc, _view, _size, HasCreator, HasRelease)), new BoxEl { Grow = 1f }] },
@@ -404,7 +404,7 @@ sealed class LibraryPage : Component
     {
         int view = _view.Value; int size = _size.Value;   // subscribe
         if (shown.Length == 0)
-            return new BoxEl { Padding = new Edges4(WaveeSpace.M, WaveeSpace.XL, WaveeSpace.M, WaveeSpace.XL), Children = [new TextEl(_filter.Peek().Length > 0 ? Loc.Get(Strings.Library.NoMatch) : "…") { Size = 13f, Color = Tok.TextTertiary }] };
+            return new BoxEl { Padding = new Edges4(Spacing.M, Spacing.XL, Spacing.M, Spacing.XL), Children = [new TextEl(_filter.Peek().Length > 0 ? Loc.Get(Strings.Library.NoMatch) : "…") { Size = 13f, Color = Tok.TextTertiary }] };
 
         bool grid = view >= 2; bool compact = view == 0 || view == 2;
         string key = "nav:" + view + ":" + size + ":" + NavHash(shown);
@@ -412,7 +412,7 @@ sealed class LibraryPage : Component
         if (grid)
             return new BoxEl
             {
-                Key = key, Grow = 1f, Direction = 1, Padding = new Edges4(WaveeSpace.S, WaveeSpace.S, WaveeSpace.S, 0f),
+                Key = key, Grow = 1f, Direction = 1, Padding = new Edges4(Spacing.S, Spacing.S, Spacing.S, 0f),
                 Children = [ItemsView.Create(shown.Length, i => NavCardContent(shown[i], compact),
                     RepeatLayout.GridFit((compact ? 88f : 116f) + size * (compact ? 16f : 24f), 8f),
                     new ListOptions { SelectionMode = ItemsSelectionMode.Single, Selection = _navSel, Selector = SelectorVisual.Border, OnChange = () => OnNavSel(shown), Grow = 1f })],
@@ -572,15 +572,15 @@ sealed class LibraryPage : Component
         return ScrollView(new BoxEl
         {
             Direction = 1, Gap = 2f,
-            Padding = new Edges4(WaveeSpace.S, WaveeSpace.XS, WaveeSpace.S, PlayerDock.Reserve + WaveeSpace.XL),
+            Padding = new Edges4(Spacing.S, Spacing.XS, Spacing.S, PlayerDock.Reserve + Spacing.XL),
             Children = rows,
         }) with { Grow = 1f };
     }
 
     static Element FacetHeader(string label, int count) => new BoxEl
     {
-        Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.XS,
-        Padding = new Edges4(WaveeSpace.M, WaveeSpace.M, WaveeSpace.M, WaveeSpace.S),
+        Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.XS,
+        Padding = new Edges4(Spacing.M, Spacing.M, Spacing.M, Spacing.S),
         Children =
         [
             new TextEl(label) { Size = 11f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 50f },
@@ -590,7 +590,7 @@ sealed class LibraryPage : Component
 
     static Element SearchMessage(string text) => new BoxEl
     {
-        Padding = new Edges4(WaveeSpace.M, WaveeSpace.XL, WaveeSpace.M, WaveeSpace.XL),
+        Padding = new Edges4(Spacing.M, Spacing.XL, Spacing.M, Spacing.XL),
         Children = [new TextEl(text) { Size = 13f, Color = Tok.TextTertiary }],
     };
 
@@ -610,8 +610,8 @@ sealed class LibraryPage : Component
         return new BoxEl
         {
             Key = "search:" + uri, Animate = SearchRowChange,
-            Direction = 0, Height = 56f, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, ClipToBounds = true,
-            Padding = new Edges4(WaveeSpace.S, 0f, WaveeSpace.S, 0f), Corners = CornerRadius4.All(6f),
+            Direction = 0, Height = 56f, AlignItems = FlexAlign.Center, Gap = Spacing.M, ClipToBounds = true,
+            Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f), Corners = CornerRadius4.All(6f),
             Fill = selected ? Tok.AccentSubtle : ColorF.Transparent,
             HoverFill = selected ? Tok.AccentSubtle : Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
             OnClick = onClick,
@@ -627,9 +627,8 @@ sealed class LibraryPage : Component
     Element TrackHitRow(LibraryTrackHit t, string albumUri) => new BoxEl
     {
         Key = "search:" + t.Uri, Animate = SearchRowChange,
-        Direction = 0, Height = 44f, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, ClipToBounds = true,
-        Padding = new Edges4(WaveeSpace.S, 0f, WaveeSpace.S, 0f), Corners = CornerRadius4.All(6f),
-        HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+        Direction = 0, Height = 44f, AlignItems = FlexAlign.Center, Gap = Spacing.M, ClipToBounds = true,
+        Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f), Corners = CornerRadius4.All(6f),
         OnClick = () => PlayTrack(albumUri, t.AlbumIndex),
         Children =
         [
@@ -638,7 +637,7 @@ sealed class LibraryPage : Component
             new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, ClipToBounds = true,
                 Children = [HighlightRow(t.Title, t.MatchStart, t.MatchLen, 13f, 600, Tok.TextPrimary)] },
         ],
-    };
+    }.Interactive(Interaction.Subtle);
 
     static string KindLabelOf(AlbumKind k) => k switch
     {
@@ -686,17 +685,17 @@ sealed class LibraryPage : Component
                 new TextEl(it.Title) { Size = compact ? 13f : 14f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                 compact ? new BoxEl() : new TextEl(it.Subtitle) { Size = 12f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
             ] });
-        return new BoxEl { Direction = 0, Grow = 1f, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, Padding = new Edges4(WaveeSpace.S, 0f, WaveeSpace.S, 0f), Children = children.ToArray() };
+        return new BoxEl { Direction = 0, Grow = 1f, AlignItems = FlexAlign.Center, Gap = Spacing.M, Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f), Children = children.ToArray() };
     }
 
     // Pure content — fills whatever cell the grid layouter hands it (no width passed in); the engine measures it at the
     // slot width so a long title truncates. Circular (artist) covers get extra pad so the round, blurry covers don't touch.
     Element NavCardContent(NavItem it, bool compact)
     {
-        float pad = it.Circular ? 16f : WaveeSpace.S;
+        float pad = it.Circular ? 16f : Spacing.S;
         var children = new List<Element>(2) { Surfaces.ArtworkFill(it.Cover, it.Circular ? 9999f : 6f) };
         if (!compact) children.Add(new TextEl(it.Title) { Size = 12f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, AlignSelf = it.Circular ? FlexAlign.Center : FlexAlign.Start });
-        return new BoxEl { Direction = 1, Gap = WaveeSpace.S, ClipToBounds = true, Padding = new Edges4(pad, pad, pad, pad), Children = children.ToArray() };
+        return new BoxEl { Direction = 1, Gap = Spacing.S, ClipToBounds = true, Padding = new Edges4(pad, pad, pad, pad), Children = children.ToArray() };
     }
 
     // ── right pane(s) ──
@@ -875,8 +874,8 @@ sealed class LibraryDetailPane : Component
 
     Element Hero(DetailModel m) => new BoxEl
     {
-        Direction = 0, Gap = WaveeSpace.L, AlignItems = FlexAlign.Center,
-        Padding = new Edges4(WaveeSpace.XL, WaveeSpace.XL, WaveeSpace.XL, WaveeSpace.M),
+        Direction = 0, Gap = Spacing.L, AlignItems = FlexAlign.Center,
+        Padding = new Edges4(Spacing.XL, Spacing.XL, Spacing.XL, Spacing.M),
         Children =
         [
             new BoxEl { Width = 104f, Height = 104f, Shrink = 0f, Corners = CornerRadius4.All(8f), ClipToBounds = true, Shadow = Elevation.Card,
@@ -894,11 +893,11 @@ sealed class LibraryDetailPane : Component
 
     Element Actions(string uri, string? name, Action play, Action shuffle) => new BoxEl
     {
-        Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
-        Padding = new Edges4(WaveeSpace.XL, 0f, WaveeSpace.XL, WaveeSpace.M),
+        Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M,
+        Padding = new Edges4(Spacing.XL, 0f, Spacing.XL, Spacing.M),
         Children =
         [
-            new BoxEl { Direction = 0, Gap = WaveeSpace.S, AlignItems = FlexAlign.Center, Corners = CornerRadius4.All(20f), Padding = new Edges4(18f, 9f, 18f, 9f),
+            new BoxEl { Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, Corners = CornerRadius4.All(20f), Padding = new Edges4(18f, 9f, 18f, 9f),
                 Fill = Tok.AccentDefault, HoverScale = 1.04f, PressScale = 0.97f, Shadow = Elevation.Card, OnClick = play,
                 Children = [Icon(Icons.Play, 14f, Tok.TextOnAccentPrimary), new TextEl(Loc.Get(Strings.Detail.Play)) { Size = 14f, Weight = 700, Color = Tok.TextOnAccentPrimary }] },
             Fab(Icons.Shuffle, shuffle),
@@ -909,9 +908,9 @@ sealed class LibraryDetailPane : Component
     static Element Fab(string glyph, Action onClick) => new BoxEl
     {
         Width = 40f, Height = 40f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Corners = CornerRadius4.All(20f),
-        HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary, HoverScale = 1.06f, PressScale = 0.94f, OnClick = onClick,
+        HoverScale = 1.06f, PressScale = 0.94f, OnClick = onClick,
         Children = [Icon(glyph, 16f, Tok.TextSecondary)],
-    };
+    }.Interactive(Interaction.Subtle);
 
     static Element CompactEpisodes(IReadOnlyList<Episode> eps, Action<int> onPlay)
     {
@@ -921,9 +920,9 @@ sealed class LibraryDetailPane : Component
             int idx = i; var e = eps[i];
             rows[i] = new BoxEl
             {
-                Direction = 0, MinHeight = 56f, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M,
-                Padding = new Edges4(WaveeSpace.S, WaveeSpace.S, WaveeSpace.S, WaveeSpace.S), Corners = CornerRadius4.All(6f),
-                HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary, OnClick = () => onPlay(idx),
+                Direction = 0, MinHeight = 56f, AlignItems = FlexAlign.Center, Gap = Spacing.M,
+                Padding = new Edges4(Spacing.S, Spacing.S, Spacing.S, Spacing.S), Corners = CornerRadius4.All(6f),
+                OnClick = () => onPlay(idx),
                 Children =
                 [
                     new BoxEl { Width = 32f, Height = 32f, Shrink = 0f, Corners = CornerRadius4.All(16f), Fill = Tok.FillSubtleSecondary, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
@@ -935,20 +934,20 @@ sealed class LibraryDetailPane : Component
                             new TextEl(DetailFormat.TrackTime(e.DurationMs)) { Size = 11f, Color = Tok.TextTertiary },
                         ] },
                 ],
-            };
+            }.Interactive(Interaction.Subtle);
         }
-        return new BoxEl { Direction = 1, Gap = 2f, Padding = new Edges4(WaveeSpace.M, 0f, WaveeSpace.M, PlayerDock.Reserve + WaveeSpace.XL), Children = rows };
+        return new BoxEl { Direction = 1, Gap = 2f, Padding = new Edges4(Spacing.M, 0f, Spacing.M, PlayerDock.Reserve + Spacing.XL), Children = rows };
     }
 
     static Element Skeleton() => new BoxEl
     {
-        Direction = 1, Padding = new Edges4(WaveeSpace.XL, WaveeSpace.XL, WaveeSpace.XL, WaveeSpace.XL), Gap = WaveeSpace.L,
+        Direction = 1, Padding = new Edges4(Spacing.XL, Spacing.XL, Spacing.XL, Spacing.XL), Gap = Spacing.L,
         Children =
         [
-            new BoxEl { Direction = 0, Gap = WaveeSpace.L, AlignItems = FlexAlign.Center,
+            new BoxEl { Direction = 0, Gap = Spacing.L, AlignItems = FlexAlign.Center,
                 Children = [new BoxEl { Width = 104f, Height = 104f, Corners = CornerRadius4.All(8f), Fill = Tok.FillCardDefault },
-                    new BoxEl { Direction = 1, Grow = 1f, Gap = WaveeSpace.S, Children = [new BoxEl { Width = 80f, Height = 12f, Corners = CornerRadius4.All(4f), Fill = Tok.FillCardDefault }, new BoxEl { Width = 200f, Height = 22f, Corners = CornerRadius4.All(4f), Fill = Tok.FillCardDefault }, new BoxEl { Width = 140f, Height = 12f, Corners = CornerRadius4.All(4f), Fill = Tok.FillCardDefault }] }] },
-            new BoxEl { Direction = 1, Gap = WaveeSpace.S, Children = Enumerable.Range(0, 6).Select(_ => (Element)new BoxEl { Height = 14f, Corners = CornerRadius4.All(4f), Fill = Tok.FillCardDefault, Margin = new Edges4(0f, WaveeSpace.S, 0f, 0f) }).ToArray() },
+                    new BoxEl { Direction = 1, Grow = 1f, Gap = Spacing.S, Children = [new BoxEl { Width = 80f, Height = 12f, Corners = CornerRadius4.All(4f), Fill = Tok.FillCardDefault }, new BoxEl { Width = 200f, Height = 22f, Corners = CornerRadius4.All(4f), Fill = Tok.FillCardDefault }, new BoxEl { Width = 140f, Height = 12f, Corners = CornerRadius4.All(4f), Fill = Tok.FillCardDefault }] }] },
+            new BoxEl { Direction = 1, Gap = Spacing.S, Children = Enumerable.Range(0, 6).Select(_ => (Element)new BoxEl { Height = 14f, Corners = CornerRadius4.All(4f), Fill = Tok.FillCardDefault, Margin = new Edges4(0f, Spacing.S, 0f, 0f) }).ToArray() },
         ],
     };
 }
@@ -997,10 +996,10 @@ sealed class LibraryArtistPane : Component
     // stays top-right (shown once the artist is loaded).
     Element Toolbar(Artist? a, Action<string, string?>? go) => new BoxEl
     {
-        Direction = 1, Gap = WaveeSpace.S, Padding = new Edges4(WaveeSpace.M, WaveeSpace.M, WaveeSpace.M, WaveeSpace.S),
+        Direction = 1, Gap = Spacing.S, Padding = new Edges4(Spacing.M, Spacing.M, Spacing.M, Spacing.S),
         Children =
         [
-            new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Gap = WaveeSpace.S, Children =
+            new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S, Children =
             [
                 Embed.Comp(() => new LibrarySortView(_aSort, _aDesc, _aView, _aSize, hasCreator: false, hasRelease: true)),
                 new BoxEl { Grow = 1f },
@@ -1013,16 +1012,16 @@ sealed class LibraryArtistPane : Component
     // The "Go to artist" pill — extracted verbatim from the former ArtistNav so it can sit inline in the toolbar row.
     static Element GoToArtist(Artist a, Action<string, string?> go) => new BoxEl
     {
-        Direction = 0, Gap = WaveeSpace.XS, AlignItems = FlexAlign.Center,
-        Corners = CornerRadius4.All(16f), Padding = new Edges4(WaveeSpace.M, WaveeSpace.XS, WaveeSpace.M, WaveeSpace.XS),
-        HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary, HoverScale = 1.02f, PressScale = 0.98f,
+        Direction = 0, Gap = Spacing.XS, AlignItems = FlexAlign.Center,
+        Corners = CornerRadius4.All(16f), Padding = new Edges4(Spacing.M, Spacing.XS, Spacing.M, Spacing.XS),
+        HoverScale = 1.02f, PressScale = 0.98f,
         OnClick = () => go("artist:" + a.Uri, a.Name),
         Children =
         [
             new TextEl(Loc.Get(Strings.Detail.GoToArtist)) { Size = 12f, Weight = 600, Color = Tok.TextSecondary, HoverColor = Tok.TextPrimary },
             Icon(Icons.OpenInNewWindow, 14f, Tok.TextSecondary),
         ],
-    };
+    }.Interactive(Interaction.Subtle);
 
     // Filter (title contains) + sort over the artist's releases. Sort codes mirror the picker: 0 = as returned by the API
     // (≈ release-date desc), 1 = reversed, 2 = Alphabetical, 4 = Release date (by Year). Direction flips the sorted forms.
@@ -1048,7 +1047,7 @@ sealed class LibraryArtistPane : Component
     Element Body(IReadOnlyList<Album> albums)
     {
         if (albums.Count == 0)
-            return new BoxEl { Padding = new Edges4(WaveeSpace.M, WaveeSpace.XL, WaveeSpace.M, WaveeSpace.XL),
+            return new BoxEl { Padding = new Edges4(Spacing.M, Spacing.XL, Spacing.M, Spacing.XL),
                 Children = [new TextEl(_aFilter.Peek().Length > 0 ? Loc.Get(Strings.Library.NoMatch) : "…") { Size = 13f, Color = Tok.TextTertiary }] };
 
         int view = _aView.Value, size = _aSize.Value;   // subscribe
@@ -1060,7 +1059,7 @@ sealed class LibraryArtistPane : Component
             return new BoxEl
             {
                 Key = key, Grow = 1f, Basis = 0f, MinHeight = 0f, Direction = 1, ClipToBounds = true,
-                Padding = new Edges4(WaveeSpace.M, 0f, WaveeSpace.M, 0f),
+                Padding = new Edges4(Spacing.M, 0f, Spacing.M, 0f),
                 Children = [ItemsView.Create(albums.Count, i => DiscoCardContent(albums[i], compact),
                     RepeatLayout.GridFit((compact ? 84f : 100f) + size * (compact ? 16f : 24f), 8f),
                     new ListOptions { SelectionMode = ItemsSelectionMode.Single, Selection = _discoSel, Selector = SelectorVisual.Border, OnChange = () => Pick(_discoSel.FirstSelectedIndex), Grow = 1f })],
@@ -1095,7 +1094,7 @@ sealed class LibraryArtistPane : Component
         };
         if (!compact)
             children.Add(new TextEl((al.Year > 0 ? al.Year + " · " : "") + KindLabel(al.Kind)) { Size = 11f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
-        return new BoxEl { Direction = 1, Gap = WaveeSpace.XS, ClipToBounds = true, Padding = new Edges4(WaveeSpace.XS, WaveeSpace.XS, WaveeSpace.XS, WaveeSpace.XS), Children = children.ToArray() };
+        return new BoxEl { Direction = 1, Gap = Spacing.XS, ClipToBounds = true, Padding = new Edges4(Spacing.XS, Spacing.XS, Spacing.XS, Spacing.XS), Children = children.ToArray() };
     }
 
     // List row: 40px cover (dropped when compact) + title + "year · KIND" subtitle — mirrors the left picker's NavRowContent.
@@ -1111,7 +1110,7 @@ sealed class LibraryArtistPane : Component
                 new TextEl(al.Name) { Size = compact ? 13f : 14f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                 compact ? new BoxEl() : new TextEl((al.Year > 0 ? al.Year + " · " : "") + KindLabel(al.Kind)) { Size = 12f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
             ] });
-        return new BoxEl { Direction = 0, Grow = 1f, AlignItems = FlexAlign.Center, Gap = WaveeSpace.M, Padding = new Edges4(WaveeSpace.S, 0f, WaveeSpace.S, 0f), Children = children.ToArray() };
+        return new BoxEl { Direction = 0, Grow = 1f, AlignItems = FlexAlign.Center, Gap = Spacing.M, Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f), Children = children.ToArray() };
     }
 
     static string KindLabel(AlbumKind k) => k switch
@@ -1124,7 +1123,7 @@ sealed class LibraryArtistPane : Component
 
     static Element Skeleton() => new BoxEl
     {
-        Direction = 1, Grow = 1f, Padding = new Edges4(WaveeSpace.M, WaveeSpace.M, WaveeSpace.M, WaveeSpace.M), Gap = WaveeSpace.S,
+        Direction = 1, Grow = 1f, Padding = new Edges4(Spacing.M, Spacing.M, Spacing.M, Spacing.M), Gap = Spacing.S,
         Children = Enumerable.Range(0, 8).Select(_ => (Element)new BoxEl { Height = 148f, Corners = CornerRadius4.All(6f), Fill = Tok.FillCardDefault }).ToArray(),
     };
 }

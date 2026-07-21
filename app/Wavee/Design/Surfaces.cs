@@ -152,9 +152,9 @@ public static class Surfaces
         ColorF top = ColorF.Lerp(card, accent, Tok.Theme == ThemeKind.Dark ? 0.10f : 0.06f) with { A = card.A };
         return new BoxEl
         {
-            Direction = 1, Gap = WaveeSpace.M,
-            Padding = new Edges4(WaveeSpace.L, WaveeSpace.L, WaveeSpace.L, WaveeSpace.L),
-            Corners = CornerRadius4.All(WaveeRadius.Card),
+            Direction = 1, Gap = Spacing.M,
+            Padding = new Edges4(Spacing.L, Spacing.L, Spacing.L, Spacing.L),
+            Corners = CornerRadius4.All(Radii.Card),
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             Gradient = GradientDown(
                 new GradientStop(0f, top),
