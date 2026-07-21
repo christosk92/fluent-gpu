@@ -154,32 +154,38 @@ internal sealed class SpotifyEngineAudioDecoder : IAudioDecoder
     public int Read(Span<float> dst)
     {
         if (_reader is null || _eof) return 0;
-        int ch = _target.Channels;
-        int wantFrames = dst.Length / ch;
-        if (wantFrames <= 0) return 0;
-
-        int srcFrames;
-        if (_resampler is { IsActive: true })
+        // A late worker pump against a stream torn down by a concurrent session dispose is silence/EOF, never a throw — the
+        // engine's per-loop containment is the outer net; this keeps the decode edge itself non-fatal.
+        try
         {
-            double ratio = (double)(_reader.SampleRate <= 0 ? _target.SampleRate : _reader.SampleRate) / _target.SampleRate;
-            srcFrames = (int)Math.Min(MaxSrcFramesPerRead, Math.Ceiling(wantFrames * ratio) + 2);
+            int ch = _target.Channels;
+            int wantFrames = dst.Length / ch;
+            if (wantFrames <= 0) return 0;
+
+            int srcFrames;
+            if (_resampler is { IsActive: true })
+            {
+                double ratio = (double)(_reader.SampleRate <= 0 ? _target.SampleRate : _reader.SampleRate) / _target.SampleRate;
+                srcFrames = (int)Math.Min(MaxSrcFramesPerRead, Math.Ceiling(wantFrames * ratio) + 2);
+            }
+            else srcFrames = Math.Min(MaxSrcFramesPerRead, wantFrames);
+
+            int gotSrc = ReadSource(srcFrames);
+            if (gotSrc <= 0) { _eof = true; return 0; }
+
+            var conformed = _conformed.AsSpan(0, gotSrc * ch);
+            int outFrames;
+            if (_resampler is { IsActive: true } rs) outFrames = rs.Process(conformed, gotSrc, dst);
+            else { conformed.CopyTo(dst); outFrames = gotSrc; }
+
+            if (_gainLinear != 1f)
+            {
+                int n = outFrames * ch;
+                for (int i = 0; i < n; i++) dst[i] *= _gainLinear;
+            }
+            return outFrames;
         }
-        else srcFrames = Math.Min(MaxSrcFramesPerRead, wantFrames);
-
-        int gotSrc = ReadSource(srcFrames);
-        if (gotSrc <= 0) { _eof = true; return 0; }
-
-        var conformed = _conformed.AsSpan(0, gotSrc * ch);
-        int outFrames;
-        if (_resampler is { IsActive: true } rs) outFrames = rs.Process(conformed, gotSrc, dst);
-        else { conformed.CopyTo(dst); outFrames = gotSrc; }
-
-        if (_gainLinear != 1f)
-        {
-            int n = outFrames * ch;
-            for (int i = 0; i < n; i++) dst[i] *= _gainLinear;
-        }
-        return outFrames;
+        catch (ObjectDisposedException) { _eof = true; return 0; }
     }
 
     // Pull up to srcFrames codec frames and channel-conform into _conformed (target channels, source rate).
@@ -658,7 +664,7 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
         float rg = ReplayGain.ScalarLinear(item.Loudness, sess.NormalizationMode, sess.ReferenceLufsValue);
 
         sess.AddCrossfadeVoice(item.AudioVoice!, GainEnvelope.Fade(FadeKind.In, start, fadeFrames, curve), start, rg, sess.BuildVoiceChain(), id);
-        sess.MixerRef.TrySetVoiceEnvelope(_activePrimaryId, GainEnvelope.Fade(FadeKind.Out, start, fadeFrames, curve));
+        sess.SetVoiceEnvelope(_activePrimaryId, GainEnvelope.Fade(FadeKind.Out, start, fadeFrames, curve));
 
         // Hand streams over: A retires (disposed on the Completed edge), B's kept stream becomes the active stream.
         _retiringStream = _activeStream;

@@ -11,12 +11,74 @@ namespace FluentGpu.Engine.Tests;
 /// <summary>
 /// M4 tests (spec docs/plans/media-playback-api-spec.md §7.9, §12) — the RT-flip seam: the graph publish/consume RACE GATE
 /// (the key M4 gate), the decode↔RT lock-free <see cref="PcmRing"/>/<see cref="RingAudioSource"/> firewall + underrun→xrun,
-/// and the golden-PCM-unchanged proof that the flip did not change output. Deterministic where possible; the one genuine
-/// multi-thread stress test is bounded + hard-timeout'd so a deadlock/livelock FAILS FAST. Fakes only — no real WASAPI.
+/// and the golden-PCM-unchanged proof that the flip did not change output, PLUS the primary-voice LIFETIME gates: SetVoice,
+/// crossfade-commit, and seek all racing a live feed (published ring table vs RT/worker snapshots; worker-only ring dispose
+/// and inner-decoder seek; dispose under a blocked worker never frees a ring under it). Deterministic where possible; the
+/// multi-thread stress tests are bounded + hard-timeout'd so a deadlock/livelock FAILS FAST. Fakes only — no real WASAPI.
 /// </summary>
 public sealed class AudioFeedRaceTests
 {
     private static readonly MixFormat Fmt = new(48000, 2);
+
+    /// <summary>A pass-through source that records whether it was disposed (proving WHICH thread frees the ring).</summary>
+    private sealed class DisposeTrackingSource : IAudioSource, IDisposable
+    {
+        private readonly IAudioSource _inner;
+        public bool Disposed { get; private set; }
+        public DisposeTrackingSource(IAudioSource inner) => _inner = inner;
+        public int Read(Span<float> dst, int channels) => _inner.Read(dst, channels);
+        public long PositionFrames => _inner.PositionFrames;
+        public bool Exhausted => _inner.Exhausted;
+        public GaplessInfo Gapless => _inner.Gapless;
+        public ReplayGainInfo Loudness => _inner.Loudness;
+        public void Dispose() => Disposed = true;
+    }
+
+    /// <summary>An <see cref="IAudioDecoder"/> that records the managed-thread id of every <c>Read</c>/<c>Seek</c> — used to
+    /// prove the inner decoder is touched ONLY by the worker pump thread (the sole-toucher invariant, spec §7.9/§12).</summary>
+    private sealed class ThreadRecordingDecoder : IAudioDecoder
+    {
+        private readonly int _channels;
+        private long _pos;
+        public readonly object Gate = new();
+        public readonly HashSet<int> Threads = new();
+        public ThreadRecordingDecoder(int channels) => _channels = channels;
+        public bool TryOpen(IMediaByteSource src, MixFormat target, out DecodedInfo info) { info = default; return true; }
+        public int Read(Span<float> dst)
+        {
+            lock (Gate) Threads.Add(Environment.CurrentManagedThreadId);
+            dst.Clear();
+            int frames = dst.Length / _channels;
+            _pos += frames;
+            return frames;   // endless
+        }
+        public long Seek(long frame) { lock (Gate) Threads.Add(Environment.CurrentManagedThreadId); _pos = frame; return frame; }
+        public GaplessInfo Gapless => GaplessInfo.None;
+    }
+
+    /// <summary>An endless source whose <c>Read</c> blocks ~800 ms (a slow network chunk) so a <see cref="AudioFeedThread.Dispose"/>
+    /// join times out under it — proving Dispose never frees a ring while the worker is mid-read.</summary>
+    private sealed class SlowBlockingSource : IAudioSource, IDisposable
+    {
+        private readonly int _channels;
+        private long _pos;
+        private volatile bool _disposed;
+        public bool Disposed => _disposed;
+        public SlowBlockingSource(int channels) => _channels = channels;
+        public int Read(Span<float> dst, int channels)
+        {
+            Thread.Sleep(800);
+            dst.Clear();
+            int frames = dst.Length / Math.Max(1, _channels);
+            _pos += frames;
+            return frames;   // endless — the worker keeps blocking in Read
+        }
+        public long PositionFrames => _pos;
+        public bool Exhausted => false;
+        public GaplessInfo Gapless => GaplessInfo.None;
+        public ReplayGainInfo Loudness => default;
+        public void Dispose() => _disposed = true;
+    }
 
     private static PcmAudioSession NewSession(out HeadlessAudioEndpoint endpoint, out AudioFeedThread? feed, double seconds = 30.0, bool attachFeed = false)
     {
@@ -98,6 +160,190 @@ public sealed class AudioFeedRaceTests
         Assert.True(host.RetiredCount > 0, "no graphs were retired");
         Assert.True(host.PendingRetire <= 16, $"retire ring overran: {host.PendingRetire}");
         Assert.True(host.RetiredCount <= publishes, "retired more graphs than were published");
+
+        await session.DisposeAsync();
+    }
+
+    // ── primary-voice LIFETIME gates: control mutations racing a live feed (SetVoice / commit / seek / dispose) ─────────
+
+    [Fact]
+    public async Task RaceGate_SetVoiceVsFeedAndWorker_NoThrow()
+    {
+        var session = NewSession(out _, out var feed, seconds: 5.0, attachFeed: true);
+        Assert.NotNull(feed);
+
+        Exception? err = null;
+        using var stop = new ManualResetEventSlim(false);
+        long frames = (long)(5.0 * Fmt.SampleRate);
+
+        var a = Task.Run(() => { try { while (!stop.IsSet) feed!.FeedOnce(); } catch (Exception e) { err = e; } });
+        var b = Task.Run(() => { try { while (!stop.IsSet) feed!.WorkerPumpOnce(); } catch (Exception e) { err = e; } });
+        var c = Task.Run(() =>
+        {
+            try
+            {
+                for (int i = 0; i < 200; i++)
+                {
+                    var voice = new SignalGeneratorSource(2, Fmt.SampleRate, 220, 0.5f, frames);
+                    session.SetVoice(voice, TimeSpan.FromSeconds(5.0), frames, NormMode.Off, -14f, initialVolume: 1f);
+                }
+            }
+            catch (Exception e) { err = e; }
+            finally { stop.Set(); }
+        });
+
+        await Task.WhenAll(a, b, c).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Null(err);   // publish-don't-mutate: the RT/worker snapshots never tore on a control-thread ring swap
+
+        // Drain the control-retire queue and confirm the ring table settled to the single live primary.
+        for (int i = 0; i < 8; i++) feed!.WorkerPumpOnce();
+        Assert.Equal(1, feed!.RingCount);
+
+        feed.Dispose();
+    }
+
+    [Fact]
+    public async Task RaceGate_CrossfadeCommitVsFeedAndWorker_NoThrow()
+    {
+        var session = NewSession(out _, out var feed, seconds: 30.0, attachFeed: true);
+        Assert.NotNull(feed);
+        session.ConnectSignals(new MediaSignalSink(new MediaPlayerCore()));
+        _ = session.PlayAsync();
+        feed!.ControlTickOnce();   // Opening → Buffering
+        feed.ControlTickOnce();    // Buffering → Ready → Playing
+        Assert.Equal(PlaybackState.Playing, session.CurrentState);
+
+        Exception? err = null;
+        using var stop = new ManualResetEventSlim(false);
+
+        var a = Task.Run(() => { try { while (!stop.IsSet) feed.FeedOnce(); } catch (Exception e) { err = e; } });
+        var b = Task.Run(() => { try { while (!stop.IsSet) feed.WorkerPumpOnce(); } catch (Exception e) { err = e; } });
+        var c = Task.Run(() =>
+        {
+            long id = 1;
+            try
+            {
+                for (int i = 0; i < 200; i++)
+                {
+                    var incoming = new MemoryAudioSource(new float[400 * 2], 2);   // short + finite → sounds, exhausts, retires
+                    long startNow = session.ConsumeSeqFrames;
+                    session.AddCrossfadeVoice(incoming, GainEnvelope.Constant, startNow, 1f, null, ++id);
+                    session.SetVoiceEnvelope(session.PrimaryVoiceIdValue, GainEnvelope.Constant);
+                }
+            }
+            catch (Exception e) { err = e; }
+            finally { stop.Set(); }
+        });
+
+        await Task.WhenAll(a, b, c).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Null(err);   // WrapAdditional copy-grow + RT retire + worker dispose never tore against the live snapshots
+
+        for (int i = 0; i < 16; i++) feed.WorkerPumpOnce();
+        Assert.True(feed.RingCount >= 1);
+
+        feed.Dispose();
+    }
+
+    [Fact]
+    public async Task RaceGate_SeekVsWorkerPump_InnerTouchedOnlyByWorker()
+    {
+        var endpoint = new HeadlessAudioEndpoint(Fmt);
+        var session = new PcmAudioSession(Fmt, endpoint.Sink, endpoint.Clock, maxBlock: 512, driveWithOwnThread: false);
+        var feed = new AudioFeedThread(session, blockFrames: 256);
+        session.Configure(AudioGraphSpec.Passthrough);
+        var decoder = new ThreadRecordingDecoder(2);
+        var voice = new DecoderAudioSource(decoder);
+        session.SetVoice(voice, TimeSpan.FromSeconds(30), 30L * Fmt.SampleRate, NormMode.Off, -14f, initialVolume: 1f);
+        session.ConnectSignals(new MediaSignalSink(new MediaPlayerCore()));
+
+        Exception? err = null;
+        int pumpThreadId = 0;
+        using var stop = new ManualResetEventSlim(false);
+
+        var a = Task.Run(() => { try { while (!stop.IsSet) feed.FeedOnce(); } catch (Exception e) { err = e; } });   // consumes seek flushes
+        var b = Task.Run(() =>
+        {
+            pumpThreadId = Environment.CurrentManagedThreadId;
+            try { while (!stop.IsSet) feed.WorkerPumpOnce(); } catch (Exception e) { err = e; }
+        });
+        var c = Task.Run(async () =>
+        {
+            try
+            {
+                var rnd = new Random(7);
+                for (int i = 0; i < 400; i++)
+                {
+                    await session.SeekAsync(TimeSpan.FromSeconds(rnd.NextDouble() * 20), SeekMode.Accurate);
+                }
+            }
+            catch (Exception e) { err = e; }
+            finally { stop.Set(); }
+        });
+
+        await Task.WhenAll(a, b, c).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Null(err);   // a control-thread inner seek mid-decode is the LinearResampler torn-Reset crash — routed away
+
+        // The inner decoder was touched ONLY by the worker pump thread (never the control seek task or the RT feed).
+        lock (decoder.Gate)
+        {
+            Assert.NotEmpty(decoder.Threads);
+            Assert.All(decoder.Threads, id => Assert.Equal(pumpThreadId, id));
+        }
+
+        feed.Dispose();
+    }
+
+    [Fact]
+    public void Wrap_RetiresPreviousPrimary_ViaWorkerOnly()
+    {
+        var session = NewSession(out _, out var feed, seconds: 5.0, attachFeed: true);
+        Assert.NotNull(feed);
+
+        // Re-install the primary as a dispose-tracking source so we can observe WHO frees the previous ring.
+        long frames = (long)(5.0 * Fmt.SampleRate);
+        var old = new DisposeTrackingSource(new SignalGeneratorSource(2, Fmt.SampleRate, 220, 0.5f, frames));
+        session.SetVoice(old, TimeSpan.FromSeconds(5.0), frames, NormMode.Off, -14f, initialVolume: 1f);
+        Assert.Equal(1, feed!.RingCount);
+
+        // A second SetVoice unpublishes the old primary and hands its ring to the worker — but must NOT dispose it yet.
+        var neu = new SignalGeneratorSource(2, Fmt.SampleRate, 330, 0.5f, frames);
+        session.SetVoice(neu, TimeSpan.FromSeconds(5.0), frames, NormMode.Off, -14f, initialVolume: 1f);
+        Assert.False(old.Disposed);   // the control thread never disposes a ring
+        Assert.Equal(1, feed.RingCount);
+        feed.FeedOnce();              // RT still runs cleanly against the new single-entry table
+        Assert.False(old.Disposed);
+
+        // Only the worker's retire-queue drain frees the old ring, off the RT thread.
+        feed.WorkerPumpOnce();
+        Assert.True(old.Disposed, "the previous primary's ring was never disposed by the worker");
+
+        feed.Dispose();
+    }
+
+    [Fact]
+    public async Task Dispose_WithLiveThreads_NeverDisposesUnderWorker()
+    {
+        var endpoint = new HeadlessAudioEndpoint(Fmt);
+        var session = new PcmAudioSession(Fmt, endpoint.Sink, endpoint.Clock, maxBlock: 512, driveWithOwnThread: false);
+        var feed = new AudioFeedThread(session, blockFrames: 256, ringFrames: 1024, targetAheadFrames: 512);
+        session.Configure(AudioGraphSpec.Passthrough);
+        var slow = new SlowBlockingSource(2);
+        session.SetVoice(slow, TimeSpan.FromSeconds(60), 60L * Fmt.SampleRate, NormMode.Off, -14f, initialVolume: 1f);
+        session.ConnectSignals(new MediaSignalSink(new MediaPlayerCore()));
+        _ = session.PlayAsync();
+
+        feed.Start();                 // real RT/worker/clock threads; the worker blocks ~800 ms in Read (> the 500 ms join)
+        await Task.Delay(400);        // let the worker get into a blocking Read and the state machine reach Playing
+        feed.Dispose();               // the worker-join times out → Dispose must NOT dispose the ring under the live worker
+
+        // The worker's final-cleanup sweep on loop exit is the SOLE safe disposer — the ring is freed once Read returns.
+        bool disposedInTime = false;
+        for (int i = 0; i < 100 && !disposedInTime; i++)
+        {
+            if (slow.Disposed) disposedInTime = true;
+            else await Task.Delay(50);
+        }
+        Assert.True(disposedInTime, "the ring was never disposed by the worker's final sweep");
 
         await session.DisposeAsync();
     }

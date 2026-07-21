@@ -176,8 +176,8 @@ public static partial class Button
 
     /// <summary>Global style hook consulted BEFORE <see cref="DefaultStyle(ButtonAppearance, ControlSize)"/> composes:
     /// return a <see cref="Style"/> to override that (appearance, size) pair, or <c>null</c> to fall through to the
-    /// composed default. The single, axis-aware replacement for the old per-appearance
-    /// <c>AccentStyleOverride</c>/<c>StandardStyleOverride</c> statics.</summary>
+    /// composed default. The single, axis-aware replacement for the old per-appearance style-override statics
+    /// (the accent/standard override fields deleted in G5d).</summary>
     public static Func<ButtonAppearance, ControlSize, Style?>? StyleHook;
 
     /// <summary>Composes the full 24-member <see cref="Style"/> for a point on the (<paramref name="appearance"/>,

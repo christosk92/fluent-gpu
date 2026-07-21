@@ -241,6 +241,9 @@ sealed class WaveeShell : Component
     public override Element Render()
     {
         _requestTheme = UseContext(ThemeControl.Request);   // host's live re-theme trigger (animated in-place; no remount)
+        // Float the auto-mounted toast lane ABOVE the fixed bottom player bar (idempotent static write — the
+        // ToastHost-registration idiom): reserve the player-bar height on the docked (bottom) edge.
+        Toast.EdgeInset = WaveeSize.PlayerBarH;
         // The shell's content lives in the OverlayHost ZStack, which deliberately lets its child OVERFLOW (a tall popup must
         // not be clipped to the window). For the page CONTENT that means a tall page (a Detail rail is ~600px and does not
         // scroll) sizes the whole column to its content (~827px) and overflows the 760px window — shoving the fixed player

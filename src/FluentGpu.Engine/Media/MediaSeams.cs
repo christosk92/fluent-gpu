@@ -76,8 +76,9 @@ public sealed record BufferPolicy
 
 // ── DRM relay (spec §9.2) ────────────────────────────────────────────────────────────────────────────────────────────
 
-/// <summary>The protection system a license request targets (spec §9). Native unpackaged PlayReady is currently BLOCKED
-/// (spec §9.2); Widevine-via-WebView2 is the fallback that renders; FairPlay is the macOS story.</summary>
+/// <summary>The protection system a license request targets (spec §9). Native in-process PlayReady is the SHIPPED v1
+/// DRM path (spec §9.2 M5, landed — see <c>FluentGpu.WindowsApi/Media/PlayReady/</c>); Widevine-via-WebView2 is an
+/// optional later fallback for Widevine-only content; FairPlay is the macOS story.</summary>
 public enum DrmSystem : byte { None, Widevine, PlayReady, FairPlay, ClearKey }
 
 /// <summary>Per-source DRM configuration (spec §5 <c>With(DrmConfig)</c>). The engine never sees a content key or a

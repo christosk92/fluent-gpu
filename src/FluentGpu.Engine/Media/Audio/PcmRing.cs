@@ -90,4 +90,8 @@ public sealed class PcmRing
         Volatile.Write(ref _head, 0);
         Volatile.Write(ref _tail, 0);
     }
+
+    /// <summary>CONSUMER (RT): discard everything currently buffered — a head jump to the published tail. Legal only from
+    /// the consumer thread (it owns <see cref="_head"/>); wait-free, SPSC-safe. Used by the seek flush (spec §7.9).</summary>
+    public void DiscardAllConsumerSide() => Volatile.Write(ref _head, Volatile.Read(ref _tail));
 }

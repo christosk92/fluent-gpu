@@ -45,6 +45,10 @@ public sealed record ToastHostOptions
 {
     public ToastPlacement Placement { get; init; } = ToastPlacement.BottomRight;
     public int MaxVisible { get; init; } = 3;
+    /// <summary>Extra DIP reserved on the DOCKED edge, beyond the default 24px screen-edge dock — so the strip
+    /// clears a persistent chrome bar (e.g. a now-playing / player bar or a safe-area inset). Applied to the bottom
+    /// edge for <c>Bottom*</c> placements and the top edge for <c>Top*</c> placements. Default 0.</summary>
+    public float EdgeInset { get; init; }
 }
 
 /// <summary>A live toast; <see cref="Close"/> dismisses it (idempotent).</summary>
@@ -65,6 +69,9 @@ public static class Toast
     public static int MaxVisible = 3;
     /// <summary>Default placement for the auto-mounted host. Default <see cref="ToastPlacement.BottomRight"/>.</summary>
     public static ToastPlacement Placement = ToastPlacement.BottomRight;
+    /// <summary>Extra DIP reserved on the docked edge for the auto-mounted lane (see
+    /// <see cref="ToastHostOptions.EdgeInset"/>) — e.g. set to a player-bar height so toasts float above it. Default 0.</summary>
+    public static float EdgeInset = 0f;
 
     // The process-default controller (the auto-mounted OverlayHost lane; save/restore stack for explicit overrides).
     internal static ToastController? Default;
@@ -106,6 +113,7 @@ internal sealed class ToastController
 
     public ToastPlacement Placement = ToastPlacement.BottomRight;
     public int MaxVisible = 3;
+    public float EdgeInset;   // extra DIP reserved on the docked edge (see ToastHostOptions.EdgeInset)
     public IReadSignal<int> Version => _version;
     public IReadOnlyList<ToastItem> Items => _items;
     public bool Paused => _paused;
@@ -245,7 +253,9 @@ internal sealed class ToastController
             HitTestPassThrough = true,   // yields self (children — the strip — keep hit-testing)
             Justify = bottom ? FlexJustify.End : FlexJustify.Start,
             AlignItems = sideAlign,
-            Padding = Edges4.All(24f),   // dock 24px in from the screen edges
+            // Dock 24px in from the screen edges; EdgeInset reserves extra DIP on the docked edge (bottom for
+            // Bottom* placements, top for Top*) so the strip clears a player/chrome bar.
+            Padding = new Edges4(24f, 24f + (bottom ? 0f : EdgeInset), 24f, 24f + (bottom ? EdgeInset : 0f)),
             Children = [strip],
         };
     }
@@ -316,6 +326,7 @@ public sealed class ToastHost : Component
         var ctl = ctlRef.Value;
         ctl.Placement = Options?.Placement ?? Toast.Placement;
         ctl.MaxVisible = Options?.MaxVisible ?? Toast.MaxVisible;
+        ctl.EdgeInset = Options?.EdgeInset ?? Toast.EdgeInset;
         ctl.SetQueue(UseContext(HostTimers.Current));
 
         // Register as the process-default for the static Toast API — an idempotent render-body write (NOT a mount

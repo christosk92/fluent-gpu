@@ -13,14 +13,12 @@ static class WaveeEqualizerCurve
 {
     public static readonly string[] FrequencyLabels = ["31", "62", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"];
 
-    internal sealed record Props(float[] Gains, Action<int, float> OnBandChanged, bool IsEnabled)
-    {
-        internal static readonly Context<Props?> Channel = new(null);
-    }
+    internal sealed record Props(float[] Gains, Action<int, float> OnBandChanged, bool IsEnabled);
 
     public static Element Create(float[] gains, Action<int, float> onBandChanged, bool isEnabled = true)
-        => Ctx.Provide(Props.Channel, new Props(gains, onBandChanged, isEnabled),
-            Embed.Comp(() => new WaveeEqualizerCurveCore()));
+        // Re-pushed live props (the G4 channel) — replaces the deleted Ctx.Provide(Props.Channel, …) pattern; the
+        // record-equality gate re-renders the core only when Gains/OnBandChanged/IsEnabled actually change.
+        => Embed.Comp(new Props(gains, onBandChanged, isEnabled), () => new WaveeEqualizerCurveCore());
 }
 
 sealed class WaveeEqualizerCurveCore : Component
@@ -42,7 +40,7 @@ sealed class WaveeEqualizerCurveCore : Component
 
     public override Element Render()
     {
-        var p = UseContext(WaveeEqualizerCurve.Props.Channel);
+        var p = UsePropsOrDefault<WaveeEqualizerCurve.Props>();
         var measuredW = UseMeasuredWidth(1f);   // self-measured root width (replaces the hand OnBoundsChanged→signal mirror)
         if (p is null) return new BoxEl { MinHeight = 250f };
 

@@ -180,7 +180,7 @@ Localization) live where their owning doc places them — Engine folders or CI-o
 | FluentGpu.Foundation (Handle/Slab/HandleTable/ChunkedArena/StringId) → `FluentGpu.Engine` Foundation/ | scene-memory.md (usage) / `../foundations.md` (root primitives) |
 | FluentGpu.Scene (SoA SceneStore + DrawList encoding) → `FluentGpu.Engine` Scene/ | scene-memory.md |
 | FluentGpu.Render (renderer + DrawList arenas + render-frame body) → `FluentGpu.Engine` Render/ | gpu-renderer.md (renderer) / threading-render-seam.md (frame body) |
-| FluentGpu.Media → `FluentGpu.Engine` Media/ (+ WIC codec leaf → `FluentGpu.Windows` Wic/) | media-pipeline.md |
+| FluentGpu.Media → `FluentGpu.Engine` Media/ — **split (G7, 2026-07, namespaces unchanged):** `Media/Playback/` (transport/audio/video/queue/DRM-relay/lyrics + `Playback/Audio/` + `Playback/Adaptive/`) and `Media/Images/` (the image/asset decode subsystem: `DecodeScheduler`/`PixelBufferPool`/`IImageCodec`/`DiskImageCache`/`DefaultImageFetcher`/`IImageFetcher`); WIC codec leaf → `FluentGpu.Windows` Wic/ | media-pipeline.md |
 | FluentGpu.Theme (theming engine; design-only, lands in `FluentGpu.Engine` when split out) | theming.md |
 | FluentGpu.Validation (CI-only; not a shipped library) | validation.md |
 | **FluentGpu.Testing** (shipped public app-author harness — `TestHost`/simulate/assert/goldens; portable, no `#if WINDOWS`; design-only target) | validation.md |

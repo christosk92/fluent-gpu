@@ -109,7 +109,10 @@ public sealed class EditableText : Component
     private ColorF? _caretColor;
     // Kept for source compatibility; the caret bar itself is host-themed (TextEditStyle).
     public ColorF CaretColor { get => _caretColor ?? Tok.TextPrimary; set => _caretColor = value; }
-    public string Placeholder = "";
+    // Prop<string> so a placeholder can be a culture-reactive Loc.Bind("key") — resolved via .Current() inside the
+    // BindDisplay/BindColor thunks below (which already subscribe to _text/_epoch), so a locale change re-evaluates it.
+    // A plain string literal still assigns via the implicit Prop<string> conversion.
+    public Prop<string> Placeholder = "";
     public bool IsEnabled = true;            // gates the WinUI Disabled state visuals + the engine input gate
     public bool Mask = false;                // PasswordBox: display MaskChar per grapheme; copy/cut blocked, paste allowed
     /// <summary>Mask display character (WinUI <c>PasswordBox.PasswordChar</c>, default '●' U+25CF).</summary>
@@ -877,14 +880,14 @@ public sealed class EditableText : Component
         _synced = true;
         SyncFromSignal(v);
         if (_empty is { } em) em.Value = _core.Doc.Length == 0;   // re-renders the component on the FLIP only
-        return _core.Doc.Length == 0 ? Placeholder : DisplayText();
+        return _core.Doc.Length == 0 ? Placeholder.Current() : DisplayText();
     }
 
     private ColorF BindColor()
     {
         _ = _text!.Value;
         _ = _epoch!.Value;
-        bool placeholder = _core.Doc.Length == 0 && Placeholder.Length > 0;
+        bool placeholder = _core.Doc.Length == 0 && Placeholder.Current().Length > 0;
         // Disabled: placeholder = TextControlPlaceholderForegroundDisabled = TextFillColorDisabled (#5DFFFFFF dark /
         // #5C000000 light, TextBox_themeresources.xaml:38/145); text = TextControlForegroundDisabled =
         // TemporaryTextFillColorDisabled (#5DFEFEFE / #5C010101, TextBox_themeresources.xaml:22+34 / :129+141).

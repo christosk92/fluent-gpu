@@ -93,7 +93,7 @@ public sealed class CrossfadeRtFeedTests
         // A second, persistent ring-wrapped voice so TWO rings are active during the zero-alloc measurement.
         var persistent = Tone(440, 1_000_000);
         session.AddCrossfadeVoice(persistent, GainEnvelope.Constant, startFrame: 0, replayGain: 1f, chain: null, id: 2);
-        Assert.Equal(2, feed!.Rings.Count);
+        Assert.Equal(2, feed!.RingCount);
 
         const int block = 256;
 
@@ -111,7 +111,7 @@ public sealed class CrossfadeRtFeedTests
         var outgoingInner = new DisposeTrackingSource(new MemoryAudioSource(new float[400 * Ch], Ch));  // 400 frames, finite
         long startNow = session.ConsumeSeqFrames;
         session.AddCrossfadeVoice(outgoingInner, GainEnvelope.Constant, startFrame: startNow, replayGain: 1f, chain: null, id: 3);
-        Assert.Equal(3, feed.Rings.Count);
+        Assert.Equal(3, feed.RingCount);
 
         // Buffer the whole 400-frame source into its ring so we can drain it to exhaustion WITHOUT pumping the worker
         // (pumping would drain the retire queue before we can observe the RT-side hand-off).
@@ -126,8 +126,8 @@ public sealed class CrossfadeRtFeedTests
             if (!session.MixerRef.HasVoice(3))
             {
                 retiredOnRt = true;
-                // The RT thread retired the voice from the mixer but did NOT touch the ring list or dispose the ring.
-                Assert.Equal(3, feed.Rings.Count);
+                // The RT thread retired the voice from the mixer but did NOT touch the ring table or dispose the ring.
+                Assert.Equal(3, feed.RingCount);
                 Assert.False(outgoingInner.Disposed);
             }
         }
@@ -135,7 +135,7 @@ public sealed class CrossfadeRtFeedTests
 
         // The worker drains the retire queue: it disposes the ring off-RT and removes it (no leak).
         feed.WorkerPumpOnce();
-        Assert.Equal(2, feed.Rings.Count);
+        Assert.Equal(2, feed.RingCount);
         Assert.True(outgoingInner.Disposed, "the retired voice's ring was never disposed by the worker");
 
         feed.Dispose();
@@ -160,8 +160,8 @@ public sealed class CrossfadeRtFeedTests
         var inEnv = overlap > 0 ? GainEnvelope.Fade(FadeKind.In, cs, overlap, CrossCurve.EqualPower) : GainEnvelope.Constant;
         session.AddCrossfadeVoice(incoming, inEnv, startFrame: cs, replayGain: 1f, chain: null, id: 2);
         if (overlap > 0)
-            Assert.True(session.MixerRef.TrySetVoiceEnvelope(session.PrimaryVoiceIdValue,
-                GainEnvelope.Fade(FadeKind.Out, cs, overlap, CrossCurve.EqualPower)));
+            session.SetVoiceEnvelope(session.PrimaryVoiceIdValue,
+                GainEnvelope.Fade(FadeKind.Out, cs, overlap, CrossCurve.EqualPower));
 
         if (withFeed) for (int i = 0; i < 60; i++) feed!.WorkerPumpOnce();
 

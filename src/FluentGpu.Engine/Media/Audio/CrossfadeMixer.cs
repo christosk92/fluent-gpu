@@ -167,10 +167,13 @@ public struct MixVoice
 /// </summary>
 public sealed class CrossfadeMixer
 {
-    private readonly List<MixVoice> _voices = new(4);
+    // Voices are RENDER-thread-owned (control mutations arrive via the session's mixer-command SPSC). Capacity 8 so an
+    // RT-side Add never grows the backing store mid-render (the zero-alloc gate).
+    private readonly List<MixVoice> _voices = new(8);
     private readonly float[] _scratch;   // sized MaxBlock*channels, reused every block
     private readonly int _channels;
     private readonly int _maxBlock;
+    private volatile bool _drainedPublished;
 
     // Voices retired during the LAST Render() call (RT thread writes; same-thread read by RenderBlock right after). The
     // ids are handed to the worker for off-RT ring disposal — the RT thread never frees the ring itself (spec §7.9).
@@ -194,12 +197,14 @@ public sealed class CrossfadeMixer
     /// <summary>The max pull block (frames).</summary>
     public int MaxBlock => _maxBlock;
 
-    /// <summary>A mutable view over the live voices (CONTROL thread only — never mutate while the RT path renders). The
-    /// <see cref="VoiceScheduler"/> uses it to retarget the outgoing voice's envelope at the crossfade commit.</summary>
+    /// <summary>A mutable view over the live voices (RENDER thread only — control mutations arrive via the session's
+    /// mixer-command SPSC; on the single-thread pull path control IS the render thread). The <see cref="VoiceScheduler"/>
+    /// uses it to retarget the outgoing voice's envelope at the crossfade commit.</summary>
     public Span<MixVoice> VoicesSpan => CollectionsMarshal.AsSpan(_voices);
 
-    /// <summary>Retarget the envelope of the voice with <paramref name="id"/> (control thread only) — the outgoing-voice
-    /// fade-out a crossfade commit installs. Returns false when no such voice is live.</summary>
+    /// <summary>Retarget the envelope of the voice with <paramref name="id"/> (RENDER thread — via the session command SPSC,
+    /// or inline on the single-thread pull path) — the outgoing-voice fade-out a crossfade commit installs. Returns false
+    /// when no such voice is live.</summary>
     public bool TrySetVoiceEnvelope(long id, GainEnvelope env)
     {
         var span = CollectionsMarshal.AsSpan(_voices);
@@ -216,11 +221,11 @@ public sealed class CrossfadeMixer
         return false;
     }
 
-    /// <summary>Add a voice (control thread / prepare — never on the RT block path). The voice's <c>StartFrame</c> is
-    /// the mixer-domain frame it begins at.</summary>
+    /// <summary>Add a voice (RENDER thread — via the session command SPSC, or inline on the single-thread pull path). The
+    /// voice's <c>StartFrame</c> is the mixer-domain frame it begins at.</summary>
     public void AddVoice(in MixVoice voice) => _voices.Add(voice);
 
-    /// <summary>Remove all voices (a hard stop / source change).</summary>
+    /// <summary>Remove all voices (a hard stop / source change — RENDER thread, via the session command SPSC or inline).</summary>
     public void Clear() => _voices.Clear();
 
     /// <summary>Sum every live voice into <paramref name="dst"/> for <paramref name="frames"/> frames (≤ MaxBlock),
@@ -266,4 +271,11 @@ public sealed class CrossfadeMixer
             if (!_voices[i].IsFinished(mixerFrame)) return false;
         return true;
     }
+
+    /// <summary>The RT-published "all voices finished" flag — the ONLY drained signal the control thread may read on the RT
+    /// path (spec §12; the control thread never touches <see cref="_voices"/>).</summary>
+    public bool DrainedPublished => _drainedPublished;
+
+    /// <summary>RENDER thread: publish the drained state at block end (read off the RT thread by the state machine).</summary>
+    public void PublishDrained(long mixerFrame) => _drainedPublished = IsDrained(mixerFrame);
 }

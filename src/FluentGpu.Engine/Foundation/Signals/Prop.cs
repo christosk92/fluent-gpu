@@ -45,6 +45,18 @@ public readonly struct Prop<T> : IEquatable<Prop<T>>
     /// scalar regardless (e.g. exit-animation seeds).</summary>
     public T ValueOr(T fallback) => _ref is null ? _value : fallback;
 
+    /// <summary>Resolve the CURRENT value regardless of kind: a static returns its value, a thunk is invoked, a
+    /// signal is read (<see cref="IReadSignal{T}.Value"/> — so reading this inside a bind thunk / reactive
+    /// computation subscribes to it). Use when a control reads a <see cref="Prop{T}"/> from INSIDE its own bind
+    /// thunk (e.g. a culture-reactive placeholder via <c>Loc.Bind(key)</c>), rather than letting the reconciler
+    /// wire the channel into a scene-column mount effect.</summary>
+    public T Current() => _ref switch
+    {
+        Func<T> f => f(),
+        IReadSignal<T> s => s.Value,
+        _ => _value,
+    };
+
     /// <summary>The thunk payload (bind wiring only — one type test per channel per mount).</summary>
     public Func<T>? Thunk => _ref as Func<T>;
     /// <summary>The signal payload (bind wiring only).</summary>

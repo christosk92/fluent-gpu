@@ -474,12 +474,30 @@ public static class SceneRecorder
         }
     }
 
+    // Walk recurses once per tree level with a heavy frame and NO release-mode cap — stack headroom assumes tree depth
+    // stays in the low hundreds. This tripwire catches a runaway/cyclic tree long before stack exhaustion would.
+    // NOTE: `depth` carries a z-band in the high bits (drag ghost = 1<<16, connected-anim overlays = (1<<16)|1 — see
+    // Record's top-band walks); only the low 16 bits count recursion levels within a band.
+    private const int MaxRecordDepth = 512;
+
+    /// <summary>[Conditional("DEBUG")] record-depth tripwire: a scene deeper than <see cref="MaxRecordDepth"/> levels
+    /// (within its z-band — the high bits of <paramref name="depth"/> are the band, not recursion) is a runaway (a
+    /// reconciler cycle or pathological nesting), not a real UI — fail loudly here instead of overflowing the
+    /// render-thread stack mid-<see cref="Walk"/>. Erased from Release/Ship.</summary>
+    [System.Diagnostics.Conditional("DEBUG")]
+    private static void AssertRecordDepth(int depth, NodeHandle node)
+    {
+        if ((depth & 0xFFFF) > MaxRecordDepth)
+            throw new InvalidOperationException($"SceneRecorder.Walk exceeded {MaxRecordDepth} levels at node {node.Raw.Index} — runaway/cyclic scene tree.");
+    }
+
     private static SpanRecordResult Walk(SceneStore scene, DrawList dl, ImageCache? images, NodeHandle node, Affine2D parentWorld, float parentOpacity,
                                          int depth, RectF clip, in FocusVisualStyle focus, in TextEditStyle textEdit, ColorF scrollThumb, ColorF scrollTrack,
                                          float parentScaleX, float parentScaleY, bool parentInMotion, bool parentScrollInMotion, InheritedState inherited,
                                          ReadOnlySpan<NodeHandle> skipRoots, SpanTable? spans, uint spanFrame, bool spanReuseDisabled, bool spanStoreEnabled,
                                          ref RecordAccumulator stats)
     {
+        AssertRecordDepth(depth, node);
         if (!skipRoots.IsEmpty && ContainsNode(skipRoots, node)) return default;   // subtree renders in its own popup window
         NodeFlags flags = scene.Flags(node);
         if ((flags & NodeFlags.Visible) == 0) return default;   // invisible subtree contributes nothing

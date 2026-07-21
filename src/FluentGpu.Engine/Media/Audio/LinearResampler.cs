@@ -54,13 +54,18 @@ public sealed class LinearResampler
         int ch = _channels;
         if (!IsActive)
         {
-            int n = inFrames * ch;
+            // Defense in depth (spec §7.1): clamp untrusted counts to the buffers rather than throw — a short copy is
+            // always safe; the real fix for a seek-torn state is worker-routed seek, not this branch.
+            int n = Math.Min(inFrames * ch, Math.Min(src.Length, dst.Length));
+            if (n <= 0) return 0;
             src[..n].CopyTo(dst);
-            return inFrames;
+            return n / ch;
         }
+        if (inFrames * ch > src.Length) inFrames = src.Length / ch;
         if (inFrames <= 0) return 0;
 
         double p = _pos;
+        if (p < -1) p = -1;   // a torn Reset can leave a wild negative phase — pinning p ≥ -1 keeps i1 ≥ 0 (no negative index)
         int outFrames = 0;
         int maxOut = dst.Length / ch;
 

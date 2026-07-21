@@ -4,7 +4,7 @@ namespace FluentGpu.Dsl;
 
 /// <summary>The Fluent spacing rhythm on the native 4px grid — the raw scale (XXS…XXXL + Gutter) plus the semantic
 /// names (page gutters, card spacing, internal padding, stack gaps) re-pointed onto it. A superset of any app's
-/// spacing layer (e.g. Wavee's WaveeSpace) so an app can drop its duplicate and read these const-for-const.</summary>
+/// own spacing-constants layer so an app can drop its duplicate and read these const-for-const.</summary>
 public static class Spacing
 {
     // ── The 4px-grid scale (DIPs). Use for gaps, padding, gutters. Every value is a multiple of 4 (XXS the sole 2px step).

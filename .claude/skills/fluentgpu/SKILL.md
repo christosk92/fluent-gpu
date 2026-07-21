@@ -58,11 +58,32 @@ sealed class Counter : Component {
 // hot path — no re-render on drag:
 var vol = UseFloatSignal(0.5f); Slider.Create(vol);
 // compose / context / reactive lists:
-Embed.Comp(() => new Counter());
-Ctx.Provide(MyCtx, "dark", child);
-Flow.For(() => xs.Value.Count, i => Row(xs.Value[i]), keyOf: i => xs.Value[i].Id);
+Embed.Comp(() => new Counter());                    // static child
+Embed.Comp(new Row.PropsData(title, count), () => new Row());   // re-pushed live props (parent→child); child reads UseProps<Row.PropsData>()
+Ctx.Provide(MyCtx, "dark", child);                  // ambient/broadcast (many consumers)
+Flow.For(() => xs.Value, x => x.Id, (x, i) => Row(x));   // typed keyed list: (items, keyOf, row) — key MANDATORY
 Flow.Show(() => open.Value, panel, fallback);
 ```
+
+**Four ways to get changing data into a child** (see `design/subsystems/component-props-contract.md`): (1) **re-pushed
+props** `Embed.Comp(props, factory)` + `UseProps<T>()`, or a `[Props]` partial component (per-field signals, generated);
+(2) a **bind** for a hot scalar (`Text = sig`, `Slider.Create(FloatSignal)`); (3) **context** for ambient/broadcast
+state; (4) a **`Key` remount** when the item *identity* changes. Frozen constructor fields are the trap `[Props]`/props
+cure — a parent re-render reuses the instance and discards a new factory.
+
+**Handy hooks:** `UseState`/`UseSignal`/`UseMemo`/`UseRef`; `UseEffect(() => { …; return cleanup; })` (auto-tracked on
+signals it reads — no deps list; pass a `DepKey` only to over-scope); `UseRequiredContext`; `UseResource(ct => Fetch(ct))`
+→ `Resource<T>{ Loadable, IsFetching, IsStale, Refresh(), Mutate(…) }` (SWR); `UseDebouncedValue`/`UseThrottledValue`/
+`UseTimeout`/`UseInterval` (host-timer-queue backed); `UseMeasuredBounds`/`UseMeasuredWidth(quantum)`; `sig.SetIfChanged(v)`.
+
+**Controls (one `X.Create` idiom; controlled-input contract — pass a signal + `onChange`, or none to auto-materialize):**
+`Button.Accent(label, onClick)` / `Button.Create(label, onClick, ButtonAppearance.Subtle, ControlSize.Small)`;
+`Slider.Create(vol, onChange)`; `ToggleSwitch.Create(isOn, onChange)`; `CheckBox.Create(label, isChecked, onChange)`;
+`TextBox.Create(text, onChange, new TextBoxOptions{…})`. Style hover/press with **`el.Interactive(Interaction.ListRow)`**
+(recipe: `Subtle`/`ListRow`/`Card`/`AccentGhost`). Overlays: `Popup.Create(anchor, content, isOpen)`,
+`Toast.Show("Saved", new ToastOptions{ Severity = Success })`. Lists: `ItemsView.Create(count, template, layout,
+new ListOptions{…})`. Routing: `[Route("key")]` on a page `Component` + `PageHost.Create(nav, routes)`.
+Localize kit strings with `Loc.Bind("key")` (a `Prop<string>`).
 
 Run an app: `FluentApp.Run(() => new App());` (`src/FluentGpu.WindowsApp/FluentApp.cs`).
 
@@ -89,7 +110,7 @@ All engine subsystems now live under the single `src/FluentGpu.Engine` project (
 | Element shapes / props / binds | `src/FluentGpu.Engine/Dsl/Element.cs`; `src/FluentGpu.Engine/Hooks/{ControlFlow,Context,ComponentEl}.cs` |
 | DSL helpers / modifiers | `src/FluentGpu.Engine/Dsl/Factories.cs`, `Modifiers.cs` |
 | Controls | `src/FluentGpu.Controls/*.cs` (composition only) — WinUI fidelity rules: `docs/guide/control-fidelity.md` |
-| Control visual state / motion | `StateBrush` ramps + `InteractionAnimator` progress; `BoxEl.{Hover,Pressed}{Fill,BorderColor,Opacity}` + `{Hover,Press}Scale` + `{Hover,Press}DurationMs/Easing`. Declare targets/specs, NOT a state matrix or per-control runtime |
+| Control visual state / motion | `StateBrush` ramps + `BoxEl.{Hover,Pressed}{Fill,BorderColor,Opacity}` + `{Hover,Press}Scale` — engine-serviced via the `HoverFade`/`PressFade`/`BrushFade` animation channels (the old `InteractionAnimator` runtime is **deleted**, subsumed into the slab). App code: prefer `el.Interactive(Interaction.*)` (`Controls/Interaction.cs`). Declare targets/specs, NOT a state matrix or per-control runtime |
 | Explicit control timelines | `AnimEngine` keyframes/channels (`Opacity`, transform, stroke trim, FLIP/reveal); use for draw-on paths and authored timelines, not hover/press visual states |
 | Rounded-rect / border rendering | `src/FluentGpu.Engine/Render/SceneRecorder.cs` + `src/FluentGpu.Windows/D3D12/{RoundRect,Gradient}Pipeline.cs` — hollow SDF ring (no donut), `InsetCorners`, VS quad inflation for stroke band + AA |
 | Frame loop / scheduling | `src/FluentGpu.Engine/Hosting/AppHost.cs` (`RunFrame`/`Paint`; flush = phase 3) |
@@ -149,9 +170,11 @@ interaction axis: Normal --pointer enter--> PointerOver --pointer down--> Presse
 ```
 
 Map WinUI cross-product names to axes: `SelectedPressed` = selected logical ramp + pressed interaction target.
-Hover/press visual states belong in `InteractionAnimator` data (`HoverFill`, `PressedOpacity`, `PressScale`,
-durations/easings). Explicit timelines belong in `AnimEngine` (stroke trim, reveal, FLIP, open/close, real AnimatedIcon
-segments). Do not add a per-control VisualStateManager or duplicate animation runtime.
+Hover/press visual states are declared as `BoxEl` fields (`HoverFill`, `PressedOpacity`, `PressScale`,
+durations/easings) and serviced by the engine's `HoverFade`/`PressFade`/`BrushFade` animation channels (the old
+`InteractionAnimator` runtime is deleted). App-level chrome uses `el.Interactive(Interaction.*)`. Explicit timelines
+belong in `AnimEngine` (stroke trim, reveal, FLIP, open/close, real AnimatedIcon segments). Do not add a per-control
+VisualStateManager or duplicate animation runtime.
 
 Design corpus (architecture authority, canon-gated) is `design/`; as-built reactive model is
 `design/subsystems/reconciler-hooks.md §0bis`. After editing `design/*`: `powershell -File design/check-canon.ps1`
@@ -165,7 +188,7 @@ Design corpus (architecture authority, canon-gated) is `design/`; as-built react
 - `docs/guide/pitfalls.md` — symptom → cause → fix.
 - `docs/guide/control-fidelity.md` — **building WinUI-faithful controls**: exact WinUI template/storyboard/timing-token
   lookup, state-search pitfalls, the logical-state x interaction-state graph, rounded-rect rendering rules,
-  `StateBrush`/`InteractionAnimator` visual states, explicit `AnimEngine` timelines like checkmark stroke trim, and the
+  `StateBrush`/interaction-channel (`HoverFade`/`PressFade`) visual states, explicit `AnimEngine` timelines like checkmark stroke trim, and the
   empirical verify workflow (golden checks + `--shot` + slow-motion proof). Read before any control parity work.
 - `docs/guide/motion-recipes.md` — the **Expressive Motion Kit** (`MotionRecipes.*`): named transitions adopted from
   transitions.dev (number pop-in, error shake, skeleton reveal, success check, icon swap, badge pop, soft/texts reveal,

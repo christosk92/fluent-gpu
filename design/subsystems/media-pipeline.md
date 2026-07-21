@@ -12,6 +12,11 @@ seams/hooks listed in its manifest; it **references** (never re-specifies) the s
 - Glyph realization / atlas / DrawGlyphRun that the image realization MIRRORS: `subsystems/text.md` §3/§5.
 - Hooks / DepKey / phase placement / effect timing: `subsystems/reconciler-hooks.md` §3/§4/§7.
 - RHI graphics surface, UploadRing, LayerPool, blend/gamma: `gpu-renderer.md` §2/§4/§7/§8/§12.
+- **The unified media *playback* API** (`IMediaPlayer`/`MediaPlayer`/`MediaRouter`, the audio graph, DRM `WithDrm`
+  relay): `../../docs/plans/media-playback-api-spec.md` (deep API, LANDED M0–M5) + `../../docs/plans/video-drm-layer-design.md`
+  (DRM), registered in `SPEC-INDEX.md §2`. **This doc owns the image/asset decode + video *present-tree* + lyrics;
+  the playback spec owns the transport/audio/DRM contract.** They meet at the `IVideoPresenter` seam (§8) and the
+  present-tree placement below.
 
 Where I add a contract surface (a DrawList opcode, an RHI method, a PAL seam, a Foundation column), it is
 filed as a **spec amendment** consistent with `app-requirements-waveemusic.md` §5 and stated as MADE.
@@ -46,6 +51,19 @@ beyond one `ImageRef` branch in the batcher's UV-resolve*.
 leaf **`FluentGpu.Windows` (Wic/ folder)** (behind portable `IImageCodec`). Referenced **only by `Hosting`**; acyclic.
 Palette extraction lives in **`FluentGpu.Theme`** (a sibling subsystem) and is fed by *this* pipeline's CPU
 staging block — see §4.6 for the handshake (no GPU readback).
+
+> **As built (2026-07, G6c — the app-binding architecture correction).** The flagship overhaul's Wavee sweep (S8)
+> originally proposed binding the app UI *directly* to the engine's `IMediaPlayer` signals and deleting the app's
+> `PlaybackBridge`. **That was refused at execution with evidence and is recorded here so it is not re-litigated:**
+> in a Spotify-Connect client the authoritative playback state is **`NowPlayingProjection`** — the LOCAL+REMOTE fold
+> (cluster deltas + local playback events + audio signals). `PlaybackBridge` (`app/Wavee/App/PlaybackBridge.cs`, the
+> one boundary between framework-neutral `Wavee.Core` `IObservable<T>` and engine `Signal<T>`) mirrors *that
+> projection*, not the engine player; binding the UI straight to `IMediaPlayer` would go dark during remote-device
+> playback. The engine's coordinator (synthetic clock + engine `PlayQueue`) is likewise incompatible with the WASAPI
+> live clock + Connect queue without a session rewrite. **What DID land (G6c):** SMTC wired end-to-end from the
+> unified projection (display/status/buttons/timeline/media-keys, remote-correct) + the ticker now quiesces on pause.
+> Re-homing the Spotify queue/audio path onto the engine coordinator is a **possible future dedicated phase**, not a
+> sweep. (See `docs/plans/luminous-dancing-cascade.md` §WS-Media "CORRECTED".)
 
 **Thread ownership at a glance (obeys `hardened-v1-plan.md` §2):**
 
@@ -529,6 +547,21 @@ public sealed class VideoSurfaceRegistry    // UI-thread arbitration; portable p
     public void Release(VideoOwner owner);
 }
 ```
+
+> **As built (2026-07, G5g — the pump/ownership seam).** The rebuilt `MediaPlayerElement` (SPEC-INDEX §2, the
+> unified-media control) turned the registry into the **single-writer video-pump seam**, so that per-frame
+> `Player.PumpVideo`/`SetViewport` no longer runs as a *side effect inside `Render`* (the old anti-pattern) but on
+> a dedicated engine frame phase. As-built (`src/FluentGpu.Engine/Media/Playback/VideoSurfaceRegistry.cs`):
+> `delegate void VideoPump(float scale)`; `RegisterPump(token, owner, pump)` (first registrant claims the slot) /
+> `UnregisterPump(regId)` / **`TransferOwnership(token, owner)`** (the first-class fullscreen hand-off — enforces
+> **exactly one pumping owner**, replacing the old "exactly one pumps" convention + conditional hook) /
+> `IsPumpOwner(token, owner)` / `PumpAll(scale)` (invokes only the owner's pump; non-owner calls are suppressed and
+> counted in `SuppressedNonOwnerPumpCount`, owner calls in `PumpInvocationCount`). The `VideoBinding` façade mirrors
+> them (`RegisterPump`/`TransferOwnershipTo`/`IsPumpOwner`). **Driven from `AppHost`** at **phase 7.2** —
+> `_videoSurfaces.PumpAll(_scene.DeviceScale)` in the paint prelude *after* `RunAfterAnimations()` (7.1) and
+> incremental relayout, *before* the phase-11.5 `Drain`. This is the ownership-transfer contract WS-MediaUI fix #2/#3
+> asked for; `Render` becomes pure.
+
 - **Atomic handoff:** on a higher-priority `Acquire`, the registry first `Place`s+`SetVisible(true)` the new
   owner's rect, then `SetVisible(false)` the old — committed in one render-thread DComp `Commit` (phase 11).
 - **PiP drag** moves the DComp child off-loop via `Place`, **with the canvas-RT hole committed in lockstep in

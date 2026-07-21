@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Threading;
 
 namespace FluentGpu.Media;
@@ -11,6 +12,11 @@ namespace FluentGpu.Media;
 /// raises <see cref="Starved"/> — the RT loop writes silence for the shortfall and bumps its xrun counter, never blocking.
 /// Position/exhaustion/gapless/loudness are forwarded so the ring is invisible to the mixer above it.
 /// <para>Single-producer (worker) / single-consumer (RT). The inner source is touched ONLY by the worker.</para>
+/// <para><b>Firewall invariant (spec §7.9/§12):</b> the RT-facing members (<see cref="Read"/>, <see cref="Exhausted"/>,
+/// <see cref="ConsumeStarve"/>, <see cref="RtConsumeFlush"/>) read ONLY the managed <see cref="PcmRing"/> — they never
+/// touch <see cref="_inner"/>. That is what makes worker-side inner disposal safe for the ≤1 block the RT thread may still
+/// hold the ring reference after a retire: a torn inner yields short reads/silence, never a use-after-free. No quarantine
+/// needed for rings — the firewall IS the quarantine.</para>
 /// </summary>
 public sealed class RingAudioSource : IAudioSource, IDisposable
 {
@@ -22,6 +28,7 @@ public sealed class RingAudioSource : IAudioSource, IDisposable
 
     private long _readFrames;             // frames drained by the RT thread (the mixer-domain cursor)
     private int _starve;                  // xrun flag latch (Interlocked-published by the RT thread)
+    private int _flushRequest;            // worker sets after an inner seek; RT consumes by discarding buffered pre-seek PCM
     private volatile bool _producerDone;  // the worker exhausted the inner source
 
     /// <summary>Wrap <paramref name="inner"/> with a ring sized to <paramref name="ringFrames"/> frames, keeping
@@ -46,6 +53,7 @@ public sealed class RingAudioSource : IAudioSource, IDisposable
     /// decoded this call. Idempotent when already full.</summary>
     public int PumpAhead()
     {
+        if (Volatile.Read(ref _flushRequest) != 0) return 0;   // seek pending: don't write post-seek PCM until RT discards pre-seek PCM
         int decodedFrames = 0;
         while (!_producerDone && _ring.AvailableFloats < _targetFloats)
         {
@@ -69,11 +77,35 @@ public sealed class RingAudioSource : IAudioSource, IDisposable
         return decodedFrames;
     }
 
-    // ── RT (consumer) side — copy ONLY ───────────────────────────────────────────────────────────────────────────────
+    /// <summary>WORKER: mark the producer failed/finished (a contained decode fault) — the mixer sees EOF and retires the
+    /// voice naturally; the ring is then disposed off-RT via the normal retire path (spec §7.9). Worker thread only.</summary>
+    public void MarkFailed() => _producerDone = true;
+
+    /// <summary>WORKER: apply a control-requested seek to the inner decoder (the sole-toucher invariant — spec §7.9/§12),
+    /// then ask the RT consumer to discard the buffered pre-seek PCM. The worker will not pump again until the flush is
+    /// consumed (<see cref="PumpAhead"/> early-returns while it is pending). Worker thread only.</summary>
+    public void WorkerApplySeek(long frame)
+    {
+        if (_inner is DecoderAudioSource das) das.SeekFrame(frame);
+        else if (_inner is MemoryAudioSource mas) mas.SeekFrame(frame);
+        _producerDone = _inner.Exhausted;
+        Interlocked.Exchange(ref _flushRequest, 1);
+    }
+
+    // ── RT (consumer) side — copy ONLY (never touches _inner; see the firewall invariant on the type) ────────────────────
+
+    /// <summary>RT: consume a pending seek flush — discard everything buffered (a consumer-side <see cref="PcmRing"/> head
+    /// jump; SPSC-legal, the consumer owns the head). Reads only the managed ring — never <see cref="_inner"/>.</summary>
+    public void RtConsumeFlush()
+    {
+        AssertRtFirewall();
+        if (Interlocked.Exchange(ref _flushRequest, 0) == 1) _ring.DiscardAllConsumerSide();
+    }
 
     /// <inheritdoc/>
     public int Read(Span<float> dst, int channels)
     {
+        AssertRtFirewall();
         if (channels != _channels) channels = _channels;
         int got = _ring.Read(dst);
         int frames = got / channels;
@@ -101,7 +133,13 @@ public sealed class RingAudioSource : IAudioSource, IDisposable
     public bool Starved => Volatile.Read(ref _starve) != 0;
 
     /// <summary>RT loop: atomically read-and-clear the underrun latch (drives the xrun counter).</summary>
-    public bool ConsumeStarve() => Interlocked.Exchange(ref _starve, 0) != 0;
+    public bool ConsumeStarve() { AssertRtFirewall(); return Interlocked.Exchange(ref _starve, 0) != 0; }
+
+    /// <summary>DEBUG-only anchor for the firewall invariant: the RT-facing members read only the managed ring, never
+    /// <see cref="_inner"/> — so the worker may dispose the inner while the RT still holds the ring for ≤1 block. Erased
+    /// from the shipping AOT binary (production safety == CI coverage); alloc-free when it holds.</summary>
+    [Conditional("DEBUG")]
+    private void AssertRtFirewall() => Debug.Assert(_ring is not null, "RingAudioSource RT firewall: RT-facing members must read only the managed ring, never _inner (worker-only).");
 
     /// <inheritdoc/>
     public void Dispose() => (_inner as IDisposable)?.Dispose();

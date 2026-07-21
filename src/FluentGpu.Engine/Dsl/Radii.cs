@@ -3,8 +3,8 @@ using FluentGpu.Foundation;
 namespace FluentGpu.Dsl;
 
 /// <summary>The Fluent corner-radius ramp (ControlCornerRadius / OverlayCornerRadius + the SelectorBar pill), plus the
-/// surface/none/full rungs an app UI needs. A superset of any app's radius layer (e.g. Wavee's WaveeRadius) so an app
-/// can drop its duplicate and read these const-for-const (its <c>Straight</c>→<see cref="None"/>, its full pill→<see cref="Full"/>).</summary>
+/// surface/none/full rungs an app UI needs. A superset of any app's own radius-constants layer so an app
+/// can drop its duplicate and read these const-for-const (a <c>Straight</c>→<see cref="None"/>, a full pill→<see cref="Full"/>).</summary>
 public static class Radii
 {
     public const float None = 0f;        // square corners (no rounding)

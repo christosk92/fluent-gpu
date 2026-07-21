@@ -200,6 +200,17 @@ public sealed class PcmAudioSession : IMediaSession
 
     private const long PrimaryVoiceId = 1;
 
+    // ── mixer-command SPSC (spec §7.9/§12): the CrossfadeMixer voice list is RENDER-thread-owned, so all control-side
+    // mutations (SetVoice / AddCrossfadeVoice / SetVoiceEnvelope) enqueue here and are applied at RenderBlock's top on the
+    // thread that renders. A producer-side lock serializes the two control producers (the Enqueue chain + the crossfade
+    // Timer tick are not mutually serialized); the consumer is lock-free. On a session with NO feed attached the command is
+    // drained INLINE right after enqueue, so the single-thread pull path keeps byte-identical golden-PCM/test semantics.
+    private struct MixerCmd { public byte Kind; public long Id; public MixVoice Voice; public GainEnvelope? Env; }
+    private const byte CmdReplacePrimary = 1, CmdAddVoice = 2, CmdSetEnvelope = 3;
+    private readonly MixerCmd[] _mixerCmdQ = new MixerCmd[16];
+    private int _mixerCmdHead, _mixerCmdTail;                 // Volatile head/tail; consumer = whichever thread runs RenderBlock
+    private readonly object _mixerCmdProducerLock = new();
+
     // ── live effects (spec §7.10): the control-thread reconcile that drives the M2 graph ─────────────────────────────
     private IAudioEffects? _liveEffects;
     private EqStage? _voiceEq;            // the primary voice's EQ stage (gain-only ramps land here, no republish)
@@ -296,19 +307,23 @@ public sealed class PcmAudioSession : IMediaSession
         float rg = ReplayGain.ScalarLinear(voice.Loudness, norm, referenceLufs);
         var chain = _graph.Live.BuildVoiceChain();
         _voiceEq = FindEq(chain);
-        _mixer.Clear();
         // RT path: the mixer reads pre-decoded PCM from a ring the worker fills (decode is off the RT thread; spec §7.9).
         // Single-thread pull path: the mixer reads the decoder directly (unchanged — golden-PCM identical). _voice stays the
-        // inner decoder so Seek/loudness address the real source.
+        // inner decoder so Seek/loudness address the real source. Wrap publishes the ring table FIRST (immediate); the
+        // mixer voice swap goes through the command SPSC (applied at RenderBlock's top on the render thread).
         var mixSrc = _feed is not null ? _feed.Wrap(voice) : voice;
-        _mixer.AddVoice(new MixVoice
+        EnqueueMixerCmd(new MixerCmd
         {
-            Id = PrimaryVoiceId,
-            Src = mixSrc,
-            Env = GainEnvelope.Constant,
-            StartFrame = 0,
-            ReplayGainScalar = rg,
-            Chain = chain,
+            Kind = CmdReplacePrimary,
+            Voice = new MixVoice
+            {
+                Id = PrimaryVoiceId,
+                Src = mixSrc,
+                Env = GainEnvelope.Constant,
+                StartFrame = 0,
+                ReplayGainScalar = rg,
+                Chain = chain,
+            },
         });
     }
 
@@ -337,16 +352,66 @@ public sealed class PcmAudioSession : IMediaSession
     public void AddCrossfadeVoice(IAudioSource voice, GainEnvelope env, long startFrame, float replayGain, IDspStage[]? chain, long id)
     {
         var src = _feed is not null ? _feed.WrapAdditional(voice, id) : voice;
-        _mixer.AddVoice(new MixVoice
+        EnqueueMixerCmd(new MixerCmd
         {
-            Id = id,
-            Src = src,
-            Env = env,
-            StartFrame = startFrame,
-            ReplayGainScalar = replayGain,
-            Chain = chain,
+            Kind = CmdAddVoice,
+            Voice = new MixVoice
+            {
+                Id = id,
+                Src = src,
+                Env = env,
+                StartFrame = startFrame,
+                ReplayGainScalar = replayGain,
+                Chain = chain,
+            },
         });
     }
+
+    /// <summary>Retarget the envelope of the mixer voice with <paramref name="id"/> (spec §8.3 crossfade commit) — the
+    /// outgoing-voice fade-out. Routed through the mixer-command SPSC and applied at the next block on the render thread, so
+    /// it is safe to call from the control/Timer thread while the RT feed renders. Fire-and-forget: returns true (the
+    /// enqueue always succeeds within the bounded queue; the command supersedes any older one on drop).</summary>
+    public bool SetVoiceEnvelope(long id, GainEnvelope env)
+    {
+        EnqueueMixerCmd(new MixerCmd { Kind = CmdSetEnvelope, Id = id, Env = env });
+        return true;
+    }
+
+    // CONTROL: enqueue a mixer mutation (producer-lock serialized). When no feed is attached, drain inline so the
+    // single-thread pull path applies it synchronously (golden-PCM/test semantics unchanged).
+    private void EnqueueMixerCmd(in MixerCmd cmd)
+    {
+        lock (_mixerCmdProducerLock)
+        {
+            int tail = _mixerCmdTail;
+            int next = (tail + 1) & (_mixerCmdQ.Length - 1);
+            if (next == Volatile.Read(ref _mixerCmdHead)) return;   // full → drop (bounded; a later command supersedes)
+            _mixerCmdQ[tail] = cmd;
+            Volatile.Write(ref _mixerCmdTail, next);
+        }
+        if (_feed is null) DrainMixerCmds();   // single-thread pull path: apply inline — control IS the render thread here
+    }
+
+    // RENDER thread (RenderBlock top): apply queued mixer mutations. Alloc-free (List ops within capacity 8).
+    private void DrainMixerCmds()
+    {
+        int head = _mixerCmdHead;
+        while (head != Volatile.Read(ref _mixerCmdTail))
+        {
+            ref var c = ref _mixerCmdQ[head];
+            switch (c.Kind)
+            {
+                case CmdReplacePrimary: _mixer.Clear(); _mixer.AddVoice(in c.Voice); break;
+                case CmdAddVoice:       _mixer.AddVoice(in c.Voice); break;
+                case CmdSetEnvelope:    _mixer.TrySetVoiceEnvelope(c.Id, c.Env!); break;
+            }
+            c = default;   // release refs (Src / Chain / Env)
+            head = (head + 1) & (_mixerCmdQ.Length - 1);
+        }
+        Volatile.Write(ref _mixerCmdHead, head);
+    }
+
+    private bool MixerCmdsPending => Volatile.Read(ref _mixerCmdHead) != Volatile.Read(ref _mixerCmdTail);
 
     /// <summary>Compute the per-source ReplayGain linear scalar under the session's current normalization/reference-LUFS
     /// for a crossfade voice (spec §7.7) — the scalar to pass to <see cref="AddCrossfadeVoice"/>.</summary>
@@ -513,7 +578,10 @@ public sealed class PcmAudioSession : IMediaSession
         double sec = Math.Clamp(to.TotalSeconds, 0.0, hi);
         long frame = (long)Math.Round(sec * _format.SampleRate);
 
-        if (_voice is DecoderAudioSource das) das.SeekFrame(frame);
+        // RT path: route the inner-decoder seek to the WORKER (the sole toucher of the inner decoder — spec §7.9/§12); a
+        // control-thread seek mid-decode is the LinearResampler torn-Reset crash. Single-thread path: seek inline.
+        if (_feed is not null) _feed.RequestSeek(frame);
+        else if (_voice is DecoderAudioSource das) das.SeekFrame(frame);
         else if (_voice is MemoryAudioSource mas) mas.SeekFrame(frame);
 
         // Anchor the position domain to the device clock's current count (spec §7.6): device keeps counting; origin re-maps.
@@ -593,7 +661,10 @@ public sealed class PcmAudioSession : IMediaSession
                 if (renderInline) RenderBlock(frames);   // single-thread path; RT path renders on the feed thread instead
                 PublishPosition(sink);
                 PublishVisualizer();
-                if (_mixer.IsDrained(_mixer.ConsumeSeq))
+                // RT path: read the RT-published drained flag (never the render-thread-owned voice list), and never declare
+                // Ended while a voice-add command is still queued (spec §12). Single-thread path: read the mixer directly.
+                bool drained = _feed is not null ? (_mixer.DrainedPublished && !MixerCmdsPending) : _mixer.IsDrained(_mixer.ConsumeSeq);
+                if (drained)
                 {
                     _playRequested = false;
                     sink.PlayRequested(false);
@@ -624,6 +695,8 @@ public sealed class PcmAudioSession : IMediaSession
 
         AudioTripwire.BeginBlock();
 
+        DrainMixerCmds();   // apply queued voice mutations on the render thread (alloc-free within capacity; spec §7.9/§12)
+
         _masterGain.SetTargetLinear(_muted ? 0f : _volume, _plane.DefaultRampSamples);
         var graph = _graph.Live;
 
@@ -635,6 +708,7 @@ public sealed class PcmAudioSession : IMediaSession
             var retired = _mixer.RetiredThisBlock;
             for (int i = 0; i < retired.Length; i++) _feed.EnqueueRetire(retired[i]);
         }
+        _mixer.PublishDrained(_mixer.ConsumeSeq);   // RT-publish the drained flag for the off-RT state machine (spec §12)
         _masterGain.Process(buf, buf, frames, ctx);
         _masterChannel.Process(buf, buf, frames, ctx);
         graph.RenderMaster(buf, frames, ctx);
@@ -733,7 +807,9 @@ public sealed class PcmAudioSession : IMediaSession
 
     private void SeekToStart()
     {
-        if (_voice is DecoderAudioSource das) das.SeekFrame(0);
+        // RT path: worker-routed (sole inner-decoder toucher — spec §7.9/§12); single-thread path: inline.
+        if (_feed is not null) _feed.RequestSeek(0);
+        else if (_voice is DecoderAudioSource das) das.SeekFrame(0);
         else if (_voice is MemoryAudioSource mas) mas.SeekFrame(0);
         _clock.TryGetPlayed(out long playedNow, out _);
         _position.Rebase(playedNow, 0);
@@ -745,6 +821,15 @@ public sealed class PcmAudioSession : IMediaSession
         _state = state;
         _sink?.State(state);
     }
+
+    /// <summary>Surface a contained background-loop fault (RT/worker/clock) as a typed <see cref="MediaError"/> on the
+    /// <c>Error</c> signal — OFF the RT thread (called from <see cref="AudioFeedThread.ControlTickOnce"/>; spec §11/§12). A
+    /// late-after-dispose fault is <see cref="MediaErrorCategory.Lifecycle"/>, a decode fault is
+    /// <see cref="MediaErrorCategory.Decode"/>; both are recoverable (the source retries / advances). Never process-fatal.</summary>
+    internal void ReportBackgroundFault(Exception e)
+        => _sink?.Error(new MediaError(
+            e is ObjectDisposedException ? MediaErrorCategory.Lifecycle : MediaErrorCategory.Decode,
+            e.Message, null, null, MediaRecovery.Retryable));
 
     private void StartFeeder()
     {

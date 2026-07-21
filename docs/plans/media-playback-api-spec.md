@@ -783,6 +783,18 @@ BEFORE the mix**, not globally after — you are mixing two tracks at *different
   via `IDeviceWatcher` (`IMMNotificationClient`, cold `[GeneratedComInterface]`): a default-device change /
   unplug rebuilds **ONLY the sink** under a live graph — sources, queue, `PreparedSlot`, and position survive —
   off the RT thread, with a short fade-in on resume and a latency re-measure.
+- **Primary-voice lifetime is publish-don't-mutate (as-built).** The per-voice decode rings live in an immutable
+  `RingEntry[]` published via `Volatile` and read by the RT feed + worker as a snapshot; installs (`SetVoice`
+  `Wrap`) and crossfade adds (`WrapAdditional`) rebuild it under a control/worker-only table lock the RT thread
+  never takes — the **same model as the crossfade retire path**. A `SetVoice` retires the previous primary by
+  **reference** through a control→worker SPSC (ids would collide — the old and new primary share the primary
+  voice id, which the ring table is tagged with so the RT natural-end retire resolves). **The worker is the sole
+  ring disposer**; the RT thread only reports a finished voice id. **Seek is worker-applied**: control posts the
+  frame to a one-slot mailbox, the worker applies the inner-decoder `Seek` between pumps (the sole toucher of the
+  inner decoder) and hands the RT a consumer-side ring flush — a control-thread seek mid-decode is the resampler
+  torn-`Reset` crash, so it is routed away. The RT/worker/clock loops are **fault-contained** per iteration: a
+  fault latches and surfaces as a `MediaError` off the RT thread (Lifecycle/Decode + Retryable) — never
+  process-fatal — and a failing decoder marks its ring exhausted → natural retire → clean off-RT disposal.
 
 ### 7.10 The `player.Effects` surface
 
@@ -1089,9 +1101,15 @@ and clears when buffer refills.
 | State | Sole writer |
 |---|---|
 | `IMediaPlayer` signals, queue model, `PreparedSlot`, `EffectSpec`, param signals | **CONTROL thread** (UI/app-loop) |
-| published `AudioGraph` node[], `MixVoice` list, smoothed `AudioParam`, ring drains, `IAudioClock` counters | **AUDIO RT thread** (WASAPI feed) — copy+mix ONLY |
-| per-source decode/decrypt/network fill, SPSC ring producer, key prefetch | **WORKER pool** |
+| published `AudioGraph` node[], `MixVoice` list, smoothed `AudioParam`, ring drains, `IAudioClock` counters, drained flag | **AUDIO RT thread** (WASAPI feed) — copy+mix ONLY |
+| per-source decode/decrypt/network fill, SPSC ring producer, key prefetch, **ring dispose + inner-decoder seek** | **WORKER pool** |
+| the published `RingEntry[]` ring table (rebuild) | **CONTROL ∪ WORKER under the table lock** (RT reads snapshots only) |
 | every WASAPI/DComp ComPtr | **AUDIO RT + cold DEVICE thread** (audio) / **RENDER thread** (video) |
+
+As-built refinement (M4): the `MixVoice` list is mutated on the **render thread** only — control-side voice changes
+(`SetVoice`/`AddCrossfadeVoice`/`SetVoiceEnvelope`) go through a mixer-command SPSC drained at the top of the render
+block. Ring **dispose** is the **worker**'s alone (both retire queues); the "all voices drained" signal the control
+state machine reads is an **RT-published flag**, never a read of the render-thread-owned voice list.
 
 ---
 
@@ -1385,9 +1403,11 @@ The WASAPI feed callback became the real RT thread on a dedicated MMCSS RT threa
 (graph render + ring drain moved onto it; the retire ring made genuine SPSC); `IAudioClock` polling +
 `Position` publish moved to the non-RT clock-poll tick; the device-loss state machine (`IMMNotificationClient`,
 `IDeviceWatcher`) + sink rebuild moved to the cold device thread. Nothing in the signal model / queue /
-`EffectSpec` / param signals moved. *Gate:* the seam **race gate** green; default-device change rebuilds only
-the sink under a live graph (sources/queue/position survive); underrun writes silence + bumps xrun. Depends
-on: M3.
+`EffectSpec` / param signals moved. *Gate:* the seam **race gate** green — now covering `SetVoice`, crossfade
+commit, and seek each racing a **live feed** (published ring table vs RT/worker snapshots; worker-only ring dispose
+and inner-decoder seek; dispose under a blocked worker never frees a ring under it), not only graph publish;
+default-device change rebuilds only the sink under a live graph (sources/queue/position survive); underrun writes
+silence + bumps xrun. Depends on: M3.
 
 **M5 — DRM: native in-process PlayReady via the `WithDrm` relay. UNBLOCKED. ✅ LANDED (pulled forward).**
 Native in-process PlayReady productionized into `MfMediaPlayer`'s DRM code path (§9.2): the generalized native
@@ -1408,6 +1428,17 @@ Re-parent `AudioPlayEngine`/`CrossfadeMixer` under `PcmAudioPlayer`; bind the Wa
 PlayPlay behind `DecryptingSource`; lyrics on the audio `IPlaybackClock`. *Gate:* one source of truth for
 position (no de-sync); the app's existing crossfade/gapless feel-tests pass on the unified surface. Depends on:
 M2–M4; app-team-owned internals.
+
+**Milestone numbering note (2026-07, G7 reconcile).** The canonical milestone list is **M0–M6** (plus the
+inserted **M1.5**). An early commit (`f247613`, "Add unified Media Playback API (M0–M5, M7)…") carried an
+**`M7`** label for a then-anticipated *system-integration* milestone (SMTC / lock-screen / media-keys). That
+number is **superseded** — the SMTC surface landed **app-side in the WaveeMusic sweep** (commit `d308987`,
+"G6c: SMTC wired end-to-end"), driven from the app's unified `NowPlayingProjection` (the Spotify-Connect
+LOCAL+REMOTE fold), so it is part of M6 integration rather than a separate engine milestone. There is no engine
+"M7". **Residual seam gap (tracked, not a milestone):** `SystemMediaControls` (`FluentGpu.WindowsApi/Media/`)
+exposes one-way timeline push (`UpdateTimeline`/`UpdatePosition`) but no
+`PlaybackPositionChangeRequested` event, so lock-screen scrub-drag is display-only; wrapping
+`add_PlaybackPositionChangeRequested` + routing a seek is the open follow-up.
 
 **Dependencies / proven-vs-net-new summary.** Proven and reused: the `IVideoPresenter` spine, `VideoMediaEngine`
 + `SetMultithreadProtected`, the app's `CrossfadeMixer`/`ReleasedFrames` shapes, the signals core, the

@@ -3530,27 +3530,24 @@ sealed class W1SliderTipProbe : Component
 }
 
 // FG_PROBE=ranged-tooltip variants: the W1 probe shape with a switchable IsThumbToolTipEnabled (the triangulation
-// lever) and an optional STATEFUL value — the drag-follow variant needs the thumb to actually move on scrub, so the
-// state lives in an INNER self-re-rendering component (the outer Embed.Comp factory freezes at mount).
+// lever). Since G5c the thumb follows the scrub via the compositor bind regardless of onChange, so the old
+// STATEFUL/UseState variant (whether the thumb moved) collapsed into one code path (the vestigial flag was removed).
 sealed class RangedTooltipProbeRoot : Component
 {
     public bool TooltipEnabled = true;
-    public bool Stateful;
     public override Element Render() => Embed.Comp(() => new OverlayHost
     {
-        Child = Embed.Comp(() => new RangedTooltipProbeBody { TooltipEnabled = TooltipEnabled, Stateful = Stateful }),
+        Child = Embed.Comp(() => new RangedTooltipProbeBody { TooltipEnabled = TooltipEnabled }),
     });
 }
 
 sealed class RangedTooltipProbeBody : Component
 {
     public bool TooltipEnabled = true;
-    public bool Stateful;   // constant per instance — the conditional hook below is slot-stable for the lifetime
 
     public override Element Render()
     {
-        // Signal-bound: the thumb follows the scrub via the compositor bind regardless of onChange, so the old
-        // Stateful/UseState distinction (whether the thumb moved) is now automatic — one code path.
+        // Signal-bound: the thumb follows the scrub via the compositor bind regardless of onChange (one code path).
         var value = UseFloatSignal(0f);
         return new BoxEl
         {
@@ -27007,7 +27004,7 @@ static class Slice
             var device = new HeadlessGpuDevice();
             var fonts = new HeadlessFontSystem(strings);
             using var host = new AppHost(app, window, device, fonts, strings,
-                new RangedTooltipProbeRoot { TooltipEnabled = true, Stateful = true });
+                new RangedTooltipProbeRoot { TooltipEnabled = true });
             host.RunFrame();
             var sliders = Roles(host.Scene, AutomationRole.Slider);
             if (sliders.Count == 0) { Console.WriteLine("V4: FAIL no slider node"); return 2; }

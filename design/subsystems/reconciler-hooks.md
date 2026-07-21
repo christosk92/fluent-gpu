@@ -39,6 +39,70 @@ contracts owned elsewhere:
 > the as-built model; the lane/`UpdateQueue` sections (P1/P2a) remain the design target for concurrency and are not
 > yet wired.
 
+> ### AS-BUILT (2026-07, G1+G4) — the reactive-core overhaul (the flagship API program landed this)
+>
+> The **flagship API overhaul** (`docs/plans/luminous-dancing-cascade.md`, program phases G1/G4) rebuilt the runtime
+> on top of the signals core described below. This callout is the current authority for the update mechanism; where an
+> older sentence in this section still spells the pre-overhaul shape, THIS wins (corrected-in-place per SPEC-INDEX §4).
+>
+> - **One component model, run-once *inferred* (G4b).** There is exactly **ONE `Component` base**. `ReactiveComponent`,
+>   `RunsOnce`, and `InvalidateTree` are **DELETED**. Every `Render()` runs **tracked**; a render that reads no signals
+>   simply never re-subscribes and so **never re-runs** — run-once is a *consequence*, not a mode (the developer picks
+>   nothing). A former `ReactiveComponent.Setup()` body is now just a `Render()` that happens to read no signals
+>   directly (dynamic values flow through binds / `Flow` / context, exactly as before).
+> - **Per-component `ReactiveScope` ownership (G4b).** Each component's render-effect + hook cleanups are owned by one
+>   `ReactiveScope` disposed at unmount (the scope the reactive core was designed for, finally wired), replacing the
+>   manual `RunAllCleanups` + `owner:null` split. (Node-level *binds* stay node-owned — the KeepAlive/park analysis.)
+> - **Call-site-keyed hook cells (G4a).** Hook cells are keyed by `(CallerFilePath-hash, CallerLineNumber, per-line
+>   loop ordinal)`, **not** a positional cursor — so **hooks in conditionals / loops / after early-return are LEGAL**
+>   and state is stable across edits. `FGRP005` (hooks-order) demotes from a load-bearing guard to a **compatibility
+>   lint** (Warning). Non-positional hooks (`UseContext`/`UseProps`/`UsePost`/`UseDragState`) are excluded from it.
+> - **Re-pushed live props (G4c–G4e) — the core new feature; see §8 for the context-vs-props split.**
+>   `Embed.Comp(props, () => new Core())` (props first, factory second; the propless `Embed.Comp(factory)` survives)
+>   delivers changing data to a *reused* instance. Substrate: `ComponentEl.Props` + `CompEntry.PropsSig` +
+>   `IPropsHost.ApplyProps`; the reuse seam writes the props (reference short-circuit → **record-equality gate** →
+>   same-flush **`Runtime.Batch` coalesce**; parked components defer + replay-latest once) — same physics as the
+>   proven provider-signal precedent. The child reads via the **non-positional** `UseProps<T>()` (no hook cell;
+>   subscribes the render-effect). Sugar: **`[Props]` partial components** (`PropsGenerator`) emit per-field
+>   `Signal<T>` backing + subscribing partial getters + `XxxProp` bind accessors + a nested `PropsData` record + an
+>   `Of(...)` factory + `CurrentProps()`/`From(...)` snapshot helpers + a build-time `PropsManifest` skippability report
+>   (the `Split`/`Merge` forwarding helpers remain a planned P5 add, not yet emitted); **delegate props ride a stable
+>   latest-write forwarder** (a fresh
+>   lambda does NOT re-render; the wired handler invokes the newest delegate — Compose Strong-Skipping shape).
+>   `FGSG001-005` diagnose the generator contract.
+> - **Effects: auto-tracked is the DEFAULT; `DepKey` is explicit opt-in (G1a).** `UseEffect(Func<Action?>)` with **no
+>   deps** = auto-tracked (re-runs when any signal it *read* changes — signals-first, never a static dep list);
+>   `UseEffect(fn, DepKey)` = "run only when THIS changes" over-scoping. Tracking is RUNTIME, re-armed **every** run
+>   (never one-shot). **`EffectCell.Cleanup` is now assigned + invoked** — cleanup-returning effects are live
+>   (`cell.Cleanup = effect()`); cleanup ordering is unchanged (bottom-up, §4.3/§4.4). A `BackwardsWriteGuard` (DEBUG,
+>   `[Conditional]`-erased) warns when an effect writes a signal it also reads.
+> - **`DepKey`: `params object[]` / `DepsEqual` DELETED (clean break, G1a).** The only deps shape is the pure-scalar
+>   16-byte `DepKey` (implicit conversions from int/long/float/double/bool/string(XxHash64)/NodeHandle + a finite tuple
+>   set, `DepKey.Combine`, and **`DepKey.FromRef(object?)` = identity-hash + tag bit — shipping now**). The exact
+>   reference-compare `GcDepTable` upgrade (§3.3) is the **gated** `[EnableHookDepsLowering]` (GEN-02) path — probabilistic
+>   FromRef today, exact if collisions ever bite. See the §3.2 status note (updated).
+> - **`UseRequiredContext<T>`** (throws naming the type if unprovided) + the **`BindContract`** DEBUG tripwire
+>   (`FG_BIND_CONTRACT`) flagging a bound↔static channel flip at the Update seam (mount-only bind wiring loses it).
+> - **Typed keyed `Flow.For<T>` + `UpdateFor` (G2).** `Flow.For<T>(items, keyOf, row)` (thunk or signal-direct source;
+>   **key mandatory**, DEBUG duplicate-key tripwire; `Fill` reads the source ONCE per effect run). `UpdateFor`
+>   **re-points the row/key closures on parent re-render** — fixing the latent `ForEl.Update` no-op where For closures
+>   froze at mount (unlike `ShowEl` which re-pointed). The old public index-shape `Flow.For(Func<int>, …)` is DELETED
+>   (survives only as `internal IndexForEl`).
+> - **`UseResource` (renames `UseAsyncResource`, clean break, G2) = full SWR.** Returns
+>   `Resource<T>{ Loadable, IsFetching, IsStale, LastError, Refresh() (stale-while-revalidate — keeps `Ready(old)`
+>   during reload; failure keeps old + `LastError`), Mutate(optimistic, refresh) }`; **epoch/generation-stamped** so a
+>   slower older fetch never
+>   commits over a fresher one; deps change re-keys to `Pending(seed)`.
+> - **Timing / measured hooks (G1b/G1c) — over the host timer queue, not `System.Threading.Timer`.** `UseDebouncedValue`
+>   / `UseThrottledValue` / `UseTimeout` (→ `TimerHandle{Cancel,Restart}`) / `UseInterval` (auto-pauses when
+>   KeepAlive-parked/minimized) ride the AppHost-owned **`HostTimerQueue`** (§4 / SPEC-INDEX; min-heap on the host frame
+>   clock, drained after the UI-post drain and *before* the reactive flush so writes coalesce into this frame — idle
+>   quiesce preserved). `Signal<T>.SetIfChanged(v): bool` (single compare, reports the write). `UseMeasuredBounds()` /
+>   `UseMeasuredWidth(quantum)` read the bounds-changed column; a layout-phase write only `MarksStale` so the re-render
+>   lands **next frame** (no re-entrancy) — quantum + delivered-baseline dedupe + a DEBUG oscillation tripwire (>8
+>   consecutive changed frames warns). `.Boundary()` = `IsolateLayout + ClipToBounds`; `FrameStats.RootRelayoutEscapes`
+>   counts relayouts that reached the root (+ a throttled `FG_DIAG` diagnostic).
+
 - **Reactive core** (`FluentGpu.Signals`, shipped in FluentGpu.Engine's `Foundation/` folder): `Signal<T>`/`FloatSignal`
   (observable cells, auto-tracked on read), `Memo<T>` (lazy derived), `Effect`/`Computation` (re-runs on dep change),
   `ReactiveRuntime` (per-`AppHost` scheduler: `Schedule`/`Flush`/`Batch`, `FrameRequested` wakes the loop). Files:
@@ -47,9 +111,9 @@ contracts owned elsewhere:
 - **A component is a reactive computation.** `UseState`/`UseReducer` return a `Signal<T>` value; reading it in
   `Render()` subscribes the component's **render-effect**. A setState writes the signal → schedules ONLY that
   component's render-effect → on the next `ReactiveRuntime.Flush` (phase 3) it re-renders and reconciles **just its
-  own subtree** (granular; no app-wide re-render, no global dirty bool). `ReactiveComponent.Setup()` is the
-  run-once (signals-native) variant whose body is untracked, so it never re-renders — reactivity comes purely from
-  bindings/`For`/`Show` inside.
+  own subtree** (granular; no app-wide re-render, no global dirty bool). *(Updated G4b: there is no separate
+  `ReactiveComponent`/`Setup()` any more — see the AS-BUILT (2026-07) callout above. A render that reads no signals
+  is inferred run-once and never re-renders; dynamic values flow through binds/`For`/`Show`/context, as before.)*
 - **Fine-grained bindings — one `Prop<T>` per bindable channel.** Each channel is ONE property (BoxEl
   `Transform : Prop<Affine2D>` / `Opacity` / `Fill` / `Width` / `Height`; TextEl `Text` / `Color`; ImageEl
   `Source` / `Placeholder`) accepting a static `T`, a `Func<T>` thunk, or a concrete signal (signal-direct — the
@@ -61,7 +125,7 @@ contracts owned elsewhere:
   scene column + marks the matching dirty axis (Transform/Paint → compositor-only; Width/Height/Text → scoped
   relayout). This is the **compositor bypass**: a high-frequency scalar (slider scrub via
   `Slider.Bind(FloatSignal)`, scroll offset) updates the exact node with **zero render/reconcile/layout** — the
-  "slider tank" fix (vertical-slice check #60). The superseded dual surface spelled each bind as a parallel
+  "slider tank" fix (vertical-slice check #60; the one slider API is `Slider.Create(FloatSignal)` since G5c). The superseded dual surface spelled each bind as a parallel
   `*Bind` prop (TransformBind/OpacityBind/…) beside its static twin <!-- canon-allow: names the superseded *Bind form on purpose -->.
 - **Reactive control-flow** reuses the keyed `ChildReconciler` as the *structural* engine: `ShowEl` (conditional)
   and `ForEl` (keyed list) are boundary effects that mount/remove/diff their subtree on signal change with no
@@ -304,6 +368,17 @@ cheaper than Reactor's `DepsEqual`.
 > pure-scalar / no-GC-ref-inside-`DepKey` canon (SPEC-INDEX §2) holds in BOTH shapes; the narrow v1 is a subset that
 > does not yet handle ref deps, not a violation.
 
+> **UPDATE (2026-07, G1a — clean break to DepKey-only).** The flagship overhaul made `DepKey` the **sole** deps shape:
+> the `params object[]` overloads + `DepsEqual(object[])` are **DELETED** (no `[Obsolete]` shim — see §3.4). `DepKey`
+> gained **implicit conversions** (int/long/float/double/bool/string via a local ~40-line XxHash64/NodeHandle + a finite
+> tuple set) + `DepKey.Combine(a,b)` + **`DepKey.FromRef(object?)`** — reference/delegate deps are now expressible as a
+> `DepKey` via **identity-hash + a tag bit** (probabilistic, XxHash64 of `RuntimeHelpers.GetHashCode`). This is the
+> shipping path; the **exact** reference-compare via the `GcDepTable` (§3.3) is the *gated* upgrade behind
+> `[EnableHookDepsLowering]` (GEN-02) for if a hash collision is ever observed. `deps = default` (no deps passed) now
+> means **auto-tracked** (re-run on any signal read) for `UseEffect`, not "always run" — see the §0bis AS-BUILT (2026-07)
+> callout + §4.1. So both "narrow v1" limitations above are lifted: ref deps ARE expressible (via FromRef), and the
+> `params object[]` killer landed as the clean break rather than the tagged-span generator.
+
 ### 3.3 `GcDepTable` — the side-buffer for reference & delegate deps
 
 `UseEffect(..., someObject)` / `UseCallback(cb, dep)` cannot put a GC ref in a `DepKey`. The dep-span lowering
@@ -384,8 +459,10 @@ public (TState State, Func<TArg,Task> Dispatch, bool IsPending)
 public static void StartTransition(Action cb);                                                    // (P1)
 ```
 
-The public `params object[]` overload is retained as a thin `[Obsolete("allocates; prefer span overload", false)]`
-shim for source-compat / dynamically-built deps; the generator never emits it.
+The public `params object[]` overload was originally to be retained as a thin `[Obsolete]` shim. **UPDATE (2026-07,
+G1a):** it is **DELETED outright** (the overhaul's clean-break mandate — no `[Obsolete]` shims), replaced by
+implicit `DepKey` conversions + `DepKey.FromRef` (see the §3.2 UPDATE); dynamically-built deps use
+`DepKey.Combine`/`FromRef` explicitly.
 
 **Storing prev deps across renders** — inline, no array:
 
@@ -472,6 +549,16 @@ frame-global queue during reconcile and drained at the ratified phase boundaries
 Both go through the **same 2-phase commit** (cleanups first, then new effects). Default `UseEffect = Passive`
 (matches Reactor + React). Phase 6.5 is **RATIFIED** by `architecture-spec.md` §4.8 and `hardened-v1-plan.md` §2.2 —
 it is no longer an amendment request.
+
+> **AS-BUILT (2026-07, G1a) — the *re-run* trigger is auto-tracked by default.** The two rows above still name *when*
+> an effect runs; the overhaul settled *what makes it re-run*. `UseEffect(Func<Action?>)` **with no `DepKey`** is
+> **auto-tracked**: it re-runs when any signal it *read on its last run* changes (signals-first — never a static dep
+> list; the SwiftUI one-shot-tracking failure mode is explicitly rejected — tracking is re-armed every run).
+> `UseEffect(fn, DepKey deps)` is the explicit **over-scoping** opt-in ("run only when THIS changes"); `deps = default`
+> = mount-once. **`EffectCell.Cleanup` is now assigned + invoked** — `UseEffect(Func<Action?>)`/`UseLayoutEffect(
+> Func<Action?>)` return a cleanup that runs before the next effect and at unmount (the field existed but was never
+> assigned pre-overhaul). Cleanup/effect ordering is unchanged (bottom-up, §4.3/§4.4). The `params object[]` deps
+> overloads are gone (§3.2/§3.4 UPDATE).
 
 ### 4.2 setState in an effect ⇒ frame N+1, NO synchronous re-loop (RATIFIED)
 
@@ -1061,6 +1148,36 @@ stored object (via the same `GcDepTable` discipline). Net: context-change detect
 `Context<int>`/`Context<bool>`/`Context<enum>`/`Context<uint>` cases — including the WaveeMusic
 **`Context<uint>` over the `ISystemColors.Epoch`** (a 112B `SystemTint` would box and is deliberately NOT the context
 payload; `app-requirements` §3.3).
+
+> ### 8bis. AS-BUILT (2026-07, G4c) — context vs re-pushed props (two distinct delivery channels)
+>
+> The overhaul added a SECOND live-delivery channel alongside context. They are not interchangeable — pick by shape:
+>
+> - **Context (`Ctx.Provide` + `UseContext`/`UseRequiredContext`)** — **ambient / coordination** state broadcast to a
+>   *subtree of unknown/many* consumers (theme `Epoch`, flow-direction, a `NavigationView` indicator target, a
+>   `SplitView` pane link, a form scope). One provider node, N consumers; a consumer opts in by reading it. This is the
+>   `Signal<object?>`-per-provider-node mechanism described in §8 above — unchanged.
+> - **Re-pushed props (`Embed.Comp(props, factory)` + `UseProps<T>()`, or `[Props]`)** — **per-instance** data a
+>   *specific parent* hands to *one specific child* it embeds (a label, a count, an enabled flag, a slots record).
+>   The mechanism is a **per-instance `Signal<object?> CompEntry.PropsSig`** (one signal, sitting *beside* the provider
+>   signals, owned by the child's `CompEntry`, not on the context stack) written at the reconciler's ComponentEl reuse
+>   seam: `nce.Props` is delivered via `IPropsHost.ApplyProps` (the `[Props]` path — per-field equality-gated signal
+>   writes) or, failing that, `entry.PropsSig.Value = nce.Props` (the plain-`UseProps` path) — each **reference
+>   short-circuited, then record-equality-gated, then `Runtime.Batch`-coalesced** so dependent effects never see torn
+>   intermediate state. A **parked** child defers the write and replays only the latest on un-park. `UseProps<T>()`
+>   (RenderContext.cs) is **non-positional** (no hook cell — it just subscribes the render-effect to `PropsSig`).
+> - **Why both.** Context makes a value reachable *without a parent knowing who reads it* (broadcast); props deliver a
+>   value *from a parent that DOES know its child* (point-to-point) without the ceremony of minting a context per
+>   parent→child pair — which is exactly what ~19 controls hand-rolled as `Props.Channel` providers before G4d
+>   (`SelectorBar`/`ToggleSwitch`/`ComboBox` `EnabledChannel`/`Expander` `SlotsChannel`/…, all now deleted — see
+>   `component-props-contract.md`). Ambient channels that genuinely have many/unknown consumers (`NavigationView`
+>   `IndicatorTarget`, `SplitView` `PaneLink`) stayed context.
+>
+> The other two channels round out the authoring contract (see `component-props-contract.md` for the decision table):
+> a **`Signal`/`Prop<T>` bind** for a hot scalar (compositor-only, no re-render), and a **`Key` remount** for a change
+> of *identity* (the item set changed). The pre-overhaul "everything freezes at mount unless it's a signal/context/
+> re-key" rule is superseded by "a parent CAN now push changing props to an embedded child" — `ReuseGuard` survives as
+> the legacy tripwire for a *propless* component that still carries caller-data in plain fields.
 
 ### 8.5 `UseDerived` / `UseContextSelector` — the general derived-state node (folds P6)
 

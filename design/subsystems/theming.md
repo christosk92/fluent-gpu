@@ -203,6 +203,42 @@ ladder, and pairwise preset distinctness (flattened-toolbar max-channel delta fl
 `HoverFill`/`PressedFill` are bindable `Prop<ColorF>` channels (like `Fill`), so recycled list rows re-fire on
 `Epoch` (`prop-net.hoverfill` gate).
 
+### 2.2ter On-media ink/scrim, OnAccent (memoized), spacing/radii scales, generated accessors (SHIPPED — G3, 2026-07)
+
+The flagship overhaul (program phase G3) added the non-color-token layer and the two token source generators. All
+leaf values / generated forwarders (NOT SPEC-INDEX §2 contracts); owner `src/FluentGpu.Engine/Dsl/{Tokens,Spacing,Radii}.cs`.
+
+- **On-media ink + scrim (theme-INVARIANT statics).** `Tok.OnMediaPrimary/Secondary/Tertiary` (white @ α 1.0/0.80/0.60),
+  `Tok.MediaScrim` (`#8C000000`), `Tok.MediaStage`/`MediaLetterbox`, and two `GradientSpec` scrims `Tok.ScrimBottom`/
+  `Tok.ScrimTop` (`Tokens.cs`, the "On-media ink + scrim" block). These are plain `static readonly` fields — they do
+  **not** follow Light/Dark (ink over imagery is always white-on-scrim), so no epoch memoization is needed. They are
+  the extracted-once ramp behind `MediaCard` and the rebuilt `MediaPlayerElement` (media-pipeline §8 / WS-MediaUI fix #6).
+- **`Tok.OnAccent` — the WCAG contrast picker, computed at accent-SET time.** `OnAccent` is a `ColorF` accessor
+  memoized against `Epoch` (`_onAccentEpoch`/`_onAccentInk`): it recomputes only when the epoch moved (SetAccent/`Use`
+  bump it), calling `ColorContrast.PickContrast(AccentDefault)`, so **paint phases read a baked field, never run
+  ratio math** (research adjustment #7; Material-3 "contrast is a property of the token pair"). Contrast primitives
+  `ColorContrast.{RelativeLuminance, Ratio, PickContrast}` live in `Foundation/ColorContrast.cs` (pure, alloc-free);
+  the near-black ink is `#161616`. Adopted from Wavee's `WaveePalette.OnAccent` (now deletable). Gates:
+  `gate.tok.onaccent-contrast`, `gate.tok.onmedia-static-identity`.
+- **Spacing / Radii scales.** `Spacing` (`Dsl/Spacing.cs`) = a 4px-grid scale `XXS(2)/XS(4)/S(8)/M(12)/L(16)/XL(20)/
+  XXL(24)/XXXL(32)` + `Gutter(24)` with the existing semantic names re-pointed onto it. `Radii` (`Dsl/Radii.cs`) adds
+  `None(0)/Card(8)/Full(999)` (Full clamped to half-box at record time). These make Wavee's `WaveeSpace`/`WaveeRadius`
+  const-for-const deletable (G6).
+- **`TokAccessorGenerator` (add-a-token ⇒ generated getter).** `src/FluentGpu.SourceGen/Engine/TokAccessorGenerator.cs`
+  (`IIncrementalGenerator`, off `CompilationProvider`) reflects the `FluentGpu.Dsl.TokenSet` record's public settable
+  properties and emits `public static X Foo => TheActiveSet.Foo;` for each into `partial class Tok`
+  (`Tok.Accessors.g.cs`, ~69 forwards as-built) — **but only for names `Tok` does not already declare by hand**, so a
+  getter-with-logic (e.g. the theme-aware accent getters, `OnAccent`) always wins. It fires only in the Engine
+  compilation that owns both types. **`TokenSet` stays hand-written C#** (`public sealed record TokenSet` with
+  `required ColorF … { get; init; }`) — palettes are computed/derived, so JSON would freeze the formulas (per the
+  "improve, don't port / JSON-over-XML but not for computed data" rule). Kills the silent drift where a new `TokenSet`
+  field lacked its `Tok` accessor.
+- **`GlyphTableGenerator` (Icons codepoints from JSON).** `src/FluentGpu.SourceGen/Engine/GlyphTableGenerator.cs`
+  reads a `glyphs.json` AdditionalFile (`src/FluentGpu.Controls/glyphs.json`, ~105 entries, marked
+  `FluentGpuGlyphs="true"` in the csproj) and emits `public const string <Name> = "\uXXXX";` into `partial class
+  FluentGpu.Controls.Icons` (`Icons.Glyphs.g.cs`). Dormant unless a `glyphs.json` is present (per the JSON-source-of-truth
+  preference; distinct from the layered-vector `ThemedIconData.g.cs`).
+
 ---
 
 ## 3. Core POD types (Foundation/Theme)
