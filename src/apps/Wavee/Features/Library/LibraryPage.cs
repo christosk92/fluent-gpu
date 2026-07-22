@@ -521,7 +521,7 @@ sealed class LibraryPage : Component
             return sr.Artists.Count == 0 ? SearchMessage(Loc.Get(Strings.Library.NoMatch))
                 : SearchScroll(sr.Artists, g => ArtistRow(g, g.Uri == sArtist));
         return sr.Albums.Count == 0 ? SearchMessage(Loc.Get(Strings.Library.NoMatch))
-            : SearchScroll(sr.Albums, g => AlbumRow(g, g.Uri == sAlbum));
+            : SearchScroll(sr.Albums, g => AlbumRow(g, g.Uri == sAlbum, explainMatch: true));
     }
 
     // Artists-view detail columns while searching: the selected artist's albums | grip | the selected album's tracks.
@@ -595,16 +595,41 @@ sealed class LibraryPage : Component
     };
 
     // ── search-mode rows ──
+    // Artists are always top-level results, so an artist that matched through one of its albums/tracks (name unmatched)
+    // always carries its "why" caption.
     Element ArtistRow(LibraryArtistGroup g, bool selected) =>
-        SelectableRow(g.Image, g.Uri, g.Name, "", circular: true, selected, g.MatchStart, g.MatchLen, () => SelectArtist(g.Uri, g.Name));
+        SelectableRow(g.Image, g.Uri, g.Name, "", circular: true, selected, g.MatchStart, g.MatchLen, () => SelectArtist(g.Uri, g.Name),
+            eyebrow: MatchEyebrow(g.Match));
 
-    Element AlbumRow(LibraryAlbumGroup g, bool selected) =>
-        SelectableRow(g.Cover, g.Uri, g.Name, (g.Year > 0 ? g.Year + " · " : "") + KindLabelOf(g.Kind), circular: false, selected, g.MatchStart, g.MatchLen, () => SelectAlbum(g.Uri, g.Name));
+    // The "why" caption shows ONLY when this album stands as a top-level result (explainMatch) — never in the artists-
+    // view drill-down column, where the album is browse context under an already-explained matched artist.
+    Element AlbumRow(LibraryAlbumGroup g, bool selected, bool explainMatch = false) =>
+        SelectableRow(g.Cover, g.Uri, g.Name, (g.Year > 0 ? g.Year + " · " : "") + KindLabelOf(g.Kind), circular: false, selected, g.MatchStart, g.MatchLen, () => SelectAlbum(g.Uri, g.Name),
+            eyebrow: explainMatch ? MatchEyebrow(g.Match) : null);
+
+    // The WinUI eyebrow: the reason a non-exact hit appeared, quoted from the field that actually matched. Rendered only
+    // when the reason is attributable AND is not the hit's own name (name hits are self-evident via the inline
+    // highlight). Honesty rule: an unattributable reason (None) renders nothing.
+    static string? MatchEyebrow(MatchReason r)
+    {
+        if (!r.ShouldExplain) return null;
+        return r.Kind switch
+        {
+            LibraryMatchKind.Album => Strings.Library.MatchedAlbum(r.Term!),
+            LibraryMatchKind.Track => Strings.Library.MatchedSong(r.Term!),
+            _ => null,
+        };
+    }
 
     static Element SelectableRow(Image? cover, string uri, string title, string subtitle, bool circular, bool selected,
-        int matchStart, int matchLen, Action onClick)
+        int matchStart, int matchLen, Action onClick, string? eyebrow = null)
     {
-        var textKids = new List<Element>(2) { HighlightRow(title, matchStart, matchLen, 14f, 600, Tok.TextPrimary) };
+        var textKids = new List<Element>(3);
+        // The eyebrow sits ABOVE the title (WinUI caption/eyebrow order): a small, secondary-color line naming the match
+        // reason. Only present for non-name hits with an attributable reason.
+        if (!string.IsNullOrEmpty(eyebrow))
+            textKids.Add(new TextEl(eyebrow!) { Size = 11f, Weight = 600, Color = Tok.TextSecondary, MaxLines = 1, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis });
+        textKids.Add(HighlightRow(title, matchStart, matchLen, 14f, 600, Tok.TextPrimary));
         if (subtitle.Length > 0)
             textKids.Add(new TextEl(subtitle) { Size = 12f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
         return new BoxEl

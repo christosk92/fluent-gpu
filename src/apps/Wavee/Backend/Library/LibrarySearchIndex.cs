@@ -45,8 +45,12 @@ public static class LibrarySearchIndex
 
                 if (aSpan is null && albums.Count == 0) continue;   // no match anywhere under this artist
                 var sortedAlbums = Sort(albums);
+                // Why the artist surfaced when its OWN name didn't match: attribute the child that pulled it in (a
+                // name-matched album, else a title-matched track). One of these always exists here (we only keep a
+                // name-unmatched artist when albums.Count > 0), so the "why" caption is certain — never a guess.
+                var reason = aSpan is not null ? MatchReason.None : ArtistReason(sortedAlbums);
                 artists.Add(new Ranked<LibraryArtistGroup>(
-                    new LibraryArtistGroup(artist.Uri, artist.Name, artist.Image, aSpan?.Start ?? -1, aSpan?.Len ?? 0, sortedAlbums),
+                    new LibraryArtistGroup(artist.Uri, artist.Name, artist.Image, aSpan?.Start ?? -1, aSpan?.Len ?? 0, sortedAlbums, reason),
                     aSpan is not null ? 0 : 1, 0, artist.Name));
             }
             return new LibrarySearchResults(SortArtists(artists), Array.Empty<LibraryAlbumGroup>());
@@ -90,7 +94,27 @@ public static class LibrarySearchIndex
         }
 
         if (!albumMatched && tracks.Count == 0) return null;
-        return new LibraryAlbumGroup(album.Uri, album.Name, album.Cover, album.Year, album.Kind, alSpan?.Start ?? -1, alSpan?.Len ?? 0, tracks);
+        // The album's own "why": its name matched → None (the highlight explains it). Else, when it was NOT pulled in by
+        // a matching parent artist (i.e. it stands as a top-level album result), it is here through a title-matched
+        // track → attribute that track. Under a matched artist (parentMatched) it is browse context → no reason.
+        var reason = MatchReason.None;
+        if (alSpan is null && !parentMatched)
+            foreach (var th in tracks)
+                if (th.MatchLen > 0) { reason = new MatchReason(LibraryMatchKind.Track, th.Title); break; }
+        return new LibraryAlbumGroup(album.Uri, album.Name, album.Cover, album.Year, album.Kind, alSpan?.Start ?? -1, alSpan?.Len ?? 0, tracks, reason);
+    }
+
+    // The reason a name-unmatched artist surfaced: prefer a child album whose NAME matched (the most specific, useful
+    // attribution), else the first child track whose TITLE matched. Returns None only if neither exists (defensive — the
+    // caller guarantees at least one child matched), so a hit is never captioned with a fabricated reason.
+    static MatchReason ArtistReason(IReadOnlyList<LibraryAlbumGroup> albums)
+    {
+        foreach (var a in albums)
+            if (a.MatchLen > 0) return new MatchReason(LibraryMatchKind.Album, a.Name);
+        foreach (var a in albums)
+            foreach (var t in a.Tracks)
+                if (t.MatchLen > 0) return new MatchReason(LibraryMatchKind.Track, t.Title);
+        return MatchReason.None;
     }
 
     readonly record struct MatchSpan(int Start, int Len);
