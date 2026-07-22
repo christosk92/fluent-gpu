@@ -41,8 +41,10 @@ public enum OverlayCloseCause : byte { Programmatic, LightDismiss, Escape }
 /// <list type="bullet">
 /// <item><see cref="Flyout"/> — menus (MenuFlyout/DropDownButton/SplitButton/MenuBar/context): MenuPopupThemeTransition
 /// (clip-reveal + content translate 250ms cubic-bezier(0,0,0,1); close = 83ms linear fade) — the default.</item>
-/// <item><see cref="Popup"/> — the WinUI <c>Flyout</c>/FlyoutPresenter (FlyoutBase attaches PopupThemeTransition,
-/// FlyoutBase_Partial.cpp:1968–1975): OS-PVL TAS_SHOWPOPUP/TAS_HIDEPOPUP (slide ±50 + delayed fade; close 83ms fade).</item>
+/// <item><see cref="Popup"/> — the WinUI <c>Flyout</c>/FlyoutPresenter/controlled Popup (FlyoutBase attaches
+/// PopupThemeTransition, FlyoutBase_Partial.cpp:1968–1975): TAS_SHOWPOPUP = an axis-aware ±50 slide (Y for Top/Bottom,
+/// X for Left/Right, none for Full — SetTransitionParameters cpp:2028-2051) + a coordinated fade over 167ms
+/// cubic-bezier(0,0,0,1); close = TAS_HIDEPOPUP 83ms linear fade (no slide).</item>
 /// <item><see cref="Dropdown"/> — the ComboBox dropdown: SplitOpen/SplitCloseThemeAnimation (generic.xaml:9047/9056) —
 /// clip reveal 250ms with NO content translate and NO open fade; close = 167ms clip collapse + late 83ms fade. With
 /// <see cref="PopupOptions.SeamOffsetY"/> set, the band is centred on the SEAM (selected row) and grows/shrinks both
@@ -197,6 +199,7 @@ internal sealed class OverlayEntry
     public RectF LastAnchorRect;      // anchor rect at last placement — the live-anchor follow re-places on drift
     public bool OpensUp;
     public CornerJoin CornerJoin;     // which popup corners abut the anchor (corner-squaring for ComboBox/AutoSuggestBox)
+    public FlyoutPlacement EffectivePlacement;   // placement that WON after fallback (FlyoutPositioner) — drives the PopupThemeTransition entrance AXIS
     public NodeHandle SavedFocus;     // focus captured at open time → restored when the close STARTS (WinUI timing)
     public bool FocusTrap;
     public bool PreserveFocusOnOpen;
@@ -514,6 +517,7 @@ internal sealed class OverlayServiceImpl : IOverlayService
             // template's Closed state, ToolTip_themeresources.xaml:59-63).
             anim.Cancel(e.SurfaceNode, AnimChannel.SizeH);
             anim.Cancel(e.SurfaceNode, AnimChannel.TranslateY);
+            anim.Cancel(e.SurfaceNode, AnimChannel.TranslateX);   // horizontal (Left/Right) PopupThemeTransition entrance — freeze on close mid-open
             anim.Cancel(e.SurfaceNode, AnimChannel.ClipL);
             anim.Cancel(e.SurfaceNode, AnimChannel.ClipT);
             anim.Cancel(e.SurfaceNode, AnimChannel.ClipR);
@@ -582,6 +586,7 @@ internal sealed class OverlayServiceImpl : IOverlayService
 
             e.OpensUp = place.OpensUp;
             e.CornerJoin = place.CornerJoin;
+            e.EffectivePlacement = place.Placement;
             e.PlacementInfo.Value = new OverlayPlacementInfo(
                 aRect.X + aRect.W * 0.5f - place.X,
                 aRect.Y + aRect.H * 0.5f - place.Y,
@@ -676,6 +681,12 @@ public sealed class OverlayHost : Component
     // closedRatioConstant; cascaded MenuFlyoutSubItem popups use 0.67, MenuFlyoutSubItem_Partial.cpp:741 — wire that
     // through when sub-menus land in Wave 3).
     const float OpenMs = 250f, OpacityMs = 83f, ClosedRatio = 0.5f;
+    // PopupThemeTransition (regular Flyout/FlyoutPresenter/controlled Popup, TAS_SHOWPOPUP): the OS timeline lives in
+    // uxtheme at runtime (not in the mux source), so the entrance rides the shared Fluent flyout-family values — the fast
+    // entrance duration (ControlFastAnimationDuration = 167ms, Common_themeresources_any.xaml:604) on the FastOutSlowIn
+    // spline cubic-bezier(0,0,0,1) (ControlFastOutSlowInKeySpline :602, the same spline Menu/PickerFlyout transitions use),
+    // with the fade running across the SAME 167ms window (no invisible hold). See the Popup open branch.
+    const float PopupOpenMs = 167f;
 
     // WinUI MenuFlyout renders into its OWN windowed popup over DesktopAcrylicBackdrop (it samples the desktop). The
     // Win32 analogue is a transparent composited popup HWND carrying DWM's DWMSBT_TRANSIENTWINDOW acrylic + rounded
@@ -852,6 +863,7 @@ public sealed class OverlayHost : Component
 
                         e.OpensUp = place.OpensUp;
                         e.CornerJoin = place.CornerJoin;
+                        e.EffectivePlacement = place.Placement;
                         e.LastAnchorRect = aRect;   // baseline for the live-anchor follow (AfterAnimations)
                         e.PlacementInfo.Value = new OverlayPlacementInfo(
                             aRect.X + aRect.W * 0.5f - place.X,
@@ -950,20 +962,21 @@ public sealed class OverlayHost : Component
                 {
                     e.OpenSeeded = true;
                     e.Phase = OverlayPhase.Open;
-                    // WinUI Flyout/FlyoutPresenter open = PopupThemeTransition (FlyoutBase_Partial.cpp:1968-1975)
-                    // = TAS_SHOWPOPUP. OS PVL ground truth (uxtheme "Animations" dump, stock Windows 11):
-                    //   TRANSLATE_2D: offset → 0, start=0, dur=367ms, cubic-bezier(0.1, 0.9, 0.2, 1.0)
-                    //   OPACITY:     0 → 1, start=83ms, dur=83ms, linear (holds 0 for the first 83ms)
-                    // The offset is FlyoutBase::g_entranceThemeOffset = 50 px in the major direction
-                    // (FlyoutBase_Partial.cpp:68 + SetTransitionParameters cpp:2024-2059): a below-anchor flyout
-                    // starts 50px ABOVE its resting spot (FromVerticalOffset −50) and slides down; an opens-up
-                    // flyout starts 50px BELOW (+50) and slides up — it emerges out of the anchor.
-                    float fromY = e.OpensUp ? 50f : -50f;
-                    var decel = EasingSpec.CubicBezier(0.1f, 0.9f, 0.2f, 1.0f);
-                    anim.Animate(e.SurfaceNode, AnimChannel.TranslateY, fromY, 0f, 367f, decel);
+                    // WinUI Flyout/FlyoutPresenter/controlled Popup open = PopupThemeTransition
+                    // (FlyoutBase_Partial.cpp:1968-1975) = TAS_SHOWPOPUP. The slide MAGNITUDE is
+                    // FlyoutBase::g_entranceThemeOffset = 50px (cpp:68); its AXIS + SIGN come from the EFFECTIVE placement
+                    // major side (SetTransitionParameters, cpp:2028-2051): Top +50 / Bottom −50 on Y, Left +50 / Right −50
+                    // on X, Full = 0,0 (fade only, no slide). The TAS_SHOWPOPUP TIMELINE itself lives in OS uxtheme at
+                    // runtime (not in the mux source), so the entrance rides the shared Fluent flyout-family values:
+                    // 167ms on the FastOutSlowIn spline cubic-bezier(0,0,0,1) — the SAME spline Menu/PickerFlyout use —
+                    // with the presenter fading 0→1 across the SAME 167ms window (NO invisible hold). It emerges from the
+                    // anchor edge and arrives opaque together — the snappy Fluent entrance, replacing the old floaty 367ms
+                    // slide + 83ms blank hold (which read as a laggy, delayed appearance vs the menu path).
                     scene.Paint(e.SurfaceNode).Opacity = 0f;
                     scene.Mark(e.SurfaceNode, NodeFlags.PaintDirty);
-                    anim.Animate(e.SurfaceNode, AnimChannel.Opacity, 0f, 1f, 83f, Easing.Linear, delayMs: 83f);
+                    if (PopupEntranceSlide(e.EffectivePlacement, e.OpensUp) is { } slide)
+                        anim.Animate(e.SurfaceNode, slide.Channel, slide.From, 0f, PopupOpenMs, Easing.FluentPopOpen);
+                    anim.Animate(e.SurfaceNode, AnimChannel.Opacity, 0f, 1f, PopupOpenMs, Easing.Linear);
                 }
                 else if (!e.OpenSeeded && e.Chrome == PopupChrome.Dropdown && e.MeasuredH > 0f)
                 {
@@ -1127,6 +1140,22 @@ public sealed class OverlayHost : Component
         bool leftOfAnchor = place.X + place.MeasuredW <= anchor.X + 0.5f;
         return place with { X = place.X + (leftOfAnchor ? -offsetX : offsetX) };
     }
+
+    /// <summary>The PopupThemeTransition entrance slide (channel + start offset) for the EFFECTIVE placement, mirroring
+    /// WinUI <c>FlyoutBase::SetTransitionParameters</c> (FlyoutBase_Partial.cpp:2028-2051) applied to
+    /// <c>g_entranceThemeOffset = 50</c> (cpp:68): Top → +50 / Bottom → −50 on <see cref="AnimChannel.TranslateY"/>
+    /// (sign via <paramref name="opensUp"/>), Left → +50 / Right → −50 on <see cref="AnimChannel.TranslateX"/>, and
+    /// <see cref="FlyoutPlacement.Full"/> → <c>null</c> (FromH=FromV=0 ⇒ fade only, no slide).</summary>
+    internal static (AnimChannel Channel, float From)? PopupEntranceSlide(FlyoutPlacement effective, bool opensUp)
+        => effective switch
+        {
+            FlyoutPlacement.Left or FlyoutPlacement.LeftEdgeAlignedTop or FlyoutPlacement.LeftEdgeAlignedBottom
+                => (AnimChannel.TranslateX, 50f),
+            FlyoutPlacement.Right or FlyoutPlacement.RightEdgeAlignedTop or FlyoutPlacement.RightEdgeAlignedBottom
+                => (AnimChannel.TranslateX, -50f),
+            FlyoutPlacement.Full => null,
+            _ => (AnimChannel.TranslateY, opensUp ? 50f : -50f),
+        };
 
     static BoxEl Positioned(OverlayEntry e) => e.Chrome == PopupChrome.Modal ? PositionedModal(e) : PositionedAnchored(e);
 

@@ -429,11 +429,10 @@ sealed class HeroArt : Component
         // The reveal zoom rides this host. A nested static frame adds real overscan + lift; FocusY alone only changes
         // visible pixels when Cover actually crops the decoded source, so same-ratio Spotify hero art needs this pan.
         //
-        // The zoom rides this BoxEl host (transform props live on BoxEl, not ImageEl). The host + photo are FLUID (a
-        // ZStack fills a NaN-sized child to its box — FlexLayout.ArrangeZStack), so LAYOUT — not a frozen ctor width —
-        // sizes them to the CURRENT responsive hero width every frame; the photo therefore always spans the full hero
-        // (a fixed-width child here left an empty band when the hero grew past the mount width). Decode uses the latched
-        // (decodeW, decodeH) above — never the live box — so a width correction can't restart the reveal. Origin defaults
+        // Own the LIVE hero slot (Width/Height = current HeroHeightFor(w)). The ComponentEl anchor is column flex, not a
+        // ZStack — a NaN-sized root would measure to the Image's latched decodeAspect (wide/short) and leave a gap under
+        // the photo when the live hero is taller (narrow widths). Explicit size fills media so EdgeFade still has pixels
+        // to fade. Decode stays on the latched (decodeW, decodeAspect) so resize can't restart the reveal. Origin defaults
         // to centre; the parent `media` box clips the 5% scale overscan, cover-fit crops.
         // Skip the placeholder crossfade when the cache already has this decode — avoids a blank flash on warm nav.
         var reveal = cacheWarm || settled.Value
@@ -441,7 +440,7 @@ sealed class HeroArt : Component
             : ImageTransition.Fade(RevealFadeMs);
         return new BoxEl
         {
-            ZStack = true, ScaleX = RestScale, ScaleY = RestScale,
+            Width = w, Height = h, ZStack = true, ScaleX = RestScale, ScaleY = RestScale,
             Children =
             [
                 new BoxEl

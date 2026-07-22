@@ -18,8 +18,13 @@ sealed class SpotifyArtistStatsService(PathfinderResource pf, IStore store) : IA
     public async Task<Artist?> EnsureStatsAsync(string artistUri, CancellationToken ct = default)
     {
         var current = store.GetArtist(artistUri);
-        // Fresh iff the overview already landed (TopTracks non-empty) AND the freshness stamp is within the TTL.
-        if (current is not null && current.TopTracks is { Count: > 0 } && DateTimeOffset.UtcNow - current.FetchedAt <= Ttl)
+        // Fresh iff the overview already landed (TopTracks non-empty), it carries the release facets, AND the
+        // freshness stamp is within the TTL. The facet check is a schema upgrade gate: CachedStore persists the
+        // MAPPED Artist, so records saved before LatestRelease/PopularReleases existed deserialize with both null
+        // while still stamped fresh — without the check those artists show no releases column for a whole TTL.
+        bool hasReleaseFacets = current?.LatestRelease is not null || current?.PopularReleases is { Count: > 0 };
+        if (current is not null && current.TopTracks is { Count: > 0 } && hasReleaseFacets
+            && DateTimeOffset.UtcNow - current.FetchedAt <= Ttl)
             return current;
         try
         {

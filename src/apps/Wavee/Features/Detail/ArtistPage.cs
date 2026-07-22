@@ -164,27 +164,40 @@ sealed partial class ArtistPage : Component
         };
         Element hero = new BoxEl { Height = 420f, ZStack = true, Children = [ new ImageEl { Height = 420f }, heroCopy ] };
 
-        // LEFT column (wider): "Top tracks & popular releases" header + track rows (index · cover · title · duration).
-        static Element TrackRow() => new BoxEl
+        // LEFT: Top tracks chart (rank · art · title · plays). RIGHT: Releases masthead + strip.
+        static Element ChartRow() => new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M, Height = 48f,
-            Children = [ Bar(14f, 14f), Cover(40f, 4f), GrowBar(14f), Bar(36f, 12f) ],
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S, Height = 48f,
+            Children = [ Bar(14f, 10f), Cover(36f, 4f), GrowBar(12f), Bar(28f, 10f) ],
+        };
+        Element leftCol = new BoxEl
+        {
+            Direction = 0, Gap = Spacing.M, Grow = 2f, Basis = 0f,
+            Children =
+            [
+                new BoxEl { Direction = 1, Grow = 1f, Gap = 2f, Children = [ ChartRow(), ChartRow(), ChartRow(), ChartRow(), ChartRow() ] },
+                new BoxEl { Direction = 1, Grow = 1f, Gap = 2f, Children = [ ChartRow(), ChartRow(), ChartRow(), ChartRow(), ChartRow() ] },
+            ],
         };
         Element left = new BoxEl
         {
             Direction = 1, Grow = 2f, Basis = 0f, Gap = Spacing.M,
-            Children = [ Bar(240f, 20f), new BoxEl { Direction = 1, Gap = Spacing.S, Children = [ TrackRow(), TrackRow(), TrackRow(), TrackRow(), TrackRow() ] } ],
+            Children = [ Bar(140f, 20f), leftCol ],
         };
-        // RIGHT column (narrower): "Popular releases" header + album rows (cover · title · year).
-        static Element ReleaseRow() => new BoxEl
+        Element mast = new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M, Height = 64f,
-            Children = [ Cover(56f, 8f), new BoxEl { Direction = 1, Grow = 1f, Gap = Spacing.S, Children = [ Bar(130f, 14f), Bar(80f, 12f) ] } ],
+            Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.Center, Padding = Edges4.All(Spacing.M),
+            Children = [ Cover(112f, 8f), new BoxEl { Direction = 1, Grow = 1f, Gap = Spacing.S, Children = [ Bar(80f, 10f), Bar(140f, 14f), Bar(100f, 12f) ] } ],
+        };
+        static Element Chip() => new BoxEl
+        {
+            Direction = 1, Grow = 1f, Gap = Spacing.S,
+            Children = [ Cover(72f, 8f), Bar(60f, 12f), Bar(40f, 10f) ],
         };
         Element right = new BoxEl
         {
             Direction = 1, Grow = 1f, Basis = 0f, Gap = Spacing.M,
-            Children = [ Bar(150f, 20f), new BoxEl { Direction = 1, Gap = Spacing.S, Children = [ ReleaseRow(), ReleaseRow(), ReleaseRow(), ReleaseRow() ] } ],
+            Children = [ Bar(100f, 20f), mast, new BoxEl { Direction = 0, Gap = Spacing.S, Children = [ Chip(), Chip(), Chip() ] } ],
         };
         Element band = new BoxEl
         {
@@ -227,7 +240,8 @@ sealed partial class ArtistPage : Component
         void Radio() => RadioLaunch.Start(svc.Player, uri, a.Name, go);
 
         var sections = new List<Element>(14);
-        if (popular.Count > 0) sections.Add(TopBand(popular, uri, bridge, svc, albumsAll, go, PlayContext, accent));
+        if (popular.Count > 0)
+            sections.Add(TopBand(popular, uri, bridge, svc, a.LatestRelease, a.PopularReleases, go, PlayContext, accent));
         // Discography facets: a capped grid + "See all N" that navigates to the dedicated facet page (breadcrumb + full grid).
         if (albums.Length > 0) sections.Add(Embed.Comp(() => new DiscographySection(uri, a.Name, DiscographyKind.Albums, Loc.Get(Strings.Artist.Albums), svc, go, PlayContext, accent)));
         if (singles.Length > 0) sections.Add(Embed.Comp(() => new DiscographySection(uri, a.Name, DiscographyKind.Singles, Loc.Get(Strings.Artist.SinglesEps), svc, go, PlayContext, accent)));
@@ -246,7 +260,8 @@ sealed partial class ArtistPage : Component
         var inner = new BoxEl
         {
             Direction = 1, Gap = Spacing.XL,
-            Padding = new Edges4(32f, 40f, 32f, PlayerDock.Reserve + 40f),
+            // Top pad kept tight so Top tracks sits close under the hero Play/Follow row (was 40).
+            Padding = new Edges4(32f, 12f, 32f, PlayerDock.Reserve + 40f),
             Children = sections.ToArray(),
         };
         // Arm the shy pill as the hero finishes collapsing (≈offset 380, near full collapse) so the compact bar takes over
@@ -261,7 +276,7 @@ sealed partial class ArtistPage : Component
         // draws a line where it ends.
         float heroWidth = _heroWidth.Value;
         ColorF wash = Tok.Theme == ThemeKind.Light ? _accent : WaveePalette.BackgroundDark(a.Palette ?? WaveePalette.Neutral);
-        ColorF washTint = wash with { A = Tok.Theme == ThemeKind.Light ? 0.12f : 0.16f };
+        ColorF washTint = wash with { A = Tok.Theme == ThemeKind.Light ? 38f / 255f : 60f / 255f };
         bool colorWashesDisabled = svc.Settings.Get(WaveeSettings.DisableColorWashes);
         Element washLayer = colorWashesDisabled
             ? new BoxEl()

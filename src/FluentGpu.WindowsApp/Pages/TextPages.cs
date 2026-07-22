@@ -98,7 +98,8 @@ sealed partial class PasswordBoxPage : Component
         GalleryPage.LiveText(() => _pw.Value.Length == 0 ? "—" : _pw.Value.Length < 8 ? $"Too short — {_pw.Value.Length}/8" : "Strong enough"));
 }
 
-[GalleryPage("AutoSuggestBox", "AutoSuggestBox", "Text", Icon = Icons.List)]
+[GalleryPage("AutoSuggestBox", "AutoSuggestBox", "Text", Icon = Icons.List, Level = GalleryLevel.RealWorld,
+    WaveeUse = "Debounced search-as-you-type", WaveePath = "src/apps/Wavee/Features/Search/SearchPage.cs")]
 sealed partial class AutoSuggestBoxPage : Component
 {
     static readonly string[] Fruits = { "Apple", "Apricot", "Banana", "Blueberry", "Cherry", "Grape", "Mango", "Orange", "Peach", "Pear" };

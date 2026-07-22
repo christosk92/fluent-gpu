@@ -48,6 +48,7 @@ public class LibrarySearchTests
         Assert.Equal("spotify:artist:mj", a.Uri);
         Assert.True(a.MatchLen > 0);                 // the artist name itself matched → highlighted
         Assert.Equal(2, a.Albums.Count);             // artist matched → ALL albums shown (browse the artist)
+        Assert.Equal(LibraryMatchKind.None, a.Match.Kind);   // name hit → no "why" caption (highlight is self-evident)
     }
 
     [Fact]
@@ -56,6 +57,8 @@ public class LibrarySearchTests
         var r = LibrarySearchIndex.Run(SeedArtistLibrary(), LibrarySearchScope.Artists, "thriller");
         var a = Assert.Single(r.Artists);
         Assert.Equal(0, a.MatchLen);                 // artist present via its album, name not highlighted
+        Assert.Equal(LibraryMatchKind.Album, a.Match.Kind);  // "why": surfaced through a name-matched album …
+        Assert.Equal("Thriller", a.Match.Term);              // … and the caption quotes that album
         var al = Assert.Single(a.Albums);
         Assert.Equal("Thriller", al.Name);
         Assert.True(al.MatchLen > 0);                // album name matched → highlighted
@@ -67,6 +70,8 @@ public class LibrarySearchTests
     {
         var r = LibrarySearchIndex.Run(SeedArtistLibrary(), LibrarySearchScope.Artists, "billie");
         var a = Assert.Single(r.Artists);
+        Assert.Equal(LibraryMatchKind.Track, a.Match.Kind);  // "why": surfaced through a title-matched track …
+        Assert.Equal("Billie Jean", a.Match.Term);           // … and the caption quotes that track
         var al = Assert.Single(a.Albums);            // only Thriller (contains the match), not Bad
         Assert.Equal("Thriller", al.Name);
         Assert.Equal(0, al.MatchLen);                // album present via a track, not highlighted
@@ -122,10 +127,14 @@ public class LibrarySearchTests
 
         var byName = LibrarySearchIndex.Run(store, LibrarySearchScope.Albums, "thril");
         Assert.Empty(byName.Artists);
-        Assert.Equal("Thriller", Assert.Single(byName.Albums).Name);
+        var byNameAl = Assert.Single(byName.Albums);
+        Assert.Equal("Thriller", byNameAl.Name);
+        Assert.Equal(LibraryMatchKind.None, byNameAl.Match.Kind);   // album name hit → no caption
 
         var byTrack = LibrarySearchIndex.Run(store, LibrarySearchScope.Albums, "billie");
         var al = Assert.Single(byTrack.Albums);
+        Assert.Equal(LibraryMatchKind.Track, al.Match.Kind);        // "why": album surfaced through a track match …
+        Assert.Equal("Billie Jean", al.Match.Term);                 // … quoted in the caption
         var t = Assert.Single(al.Tracks);
         Assert.Equal("Billie Jean", t.Title);
         Assert.Equal(0, t.AlbumIndex);

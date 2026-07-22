@@ -781,13 +781,18 @@ public sealed class FlexLayout
         int first = sc.FirstRealized;
         float cross = horizontal ? innerH : innerW;
 
+        // Viewport-aware measured layouts (focal-band lists, fill-width measured shelves) need the live scroll-axis
+        // viewport before ANY geometry read, exactly like ArrangeVirtualLayout. Besides keeping ItemRect/ContentExtent
+        // coherent during resize, this makes IViewportVirtualLayout's documented ordering true for the measured seam.
+        if (layout is IViewportVirtualLayout vl) vl.SetViewport(horizontal ? innerW : innerH, cross);
+
         // Anchor: the topmost-visible item + its sub-item offset, captured BEFORE this frame's corrections.
         float offset = horizontal ? sc.OffsetX : sc.OffsetY;
         int anchorIndex = layout.IndexAt(offset, cross);
         float anchorWithin = offset - layout.OffsetOf(anchorIndex, cross);
 
-        if (layout is GridVirtualLayout { IsMeasured: true } grid)
-            grid.ResetMeasurePass(sc.ItemCount, cross);
+        GridVirtualLayout? measuredGrid = layout is GridVirtualLayout { IsMeasured: true } grid ? grid : null;
+        if (measuredGrid is not null) measuredGrid.ResetMeasurePass(sc.ItemCount, cross);
 
         int prevFirst = sc.PrevArrangedFirst, prevLast = sc.PrevArrangedLast;
         bool deferred = false;
@@ -815,7 +820,14 @@ public sealed class FlexLayout
             layout.SetMeasured(index, main, cross);
         }
 
-        // Pass 2 — arrange at the corrected slots (row-synced for grids).
+        // Pass 2 — arrange at the corrected slots (row-synced for grids). A fresh-above-anchor item deliberately did
+        // NOT update the extent table in pass 1, but its Measure result is already retained in Bounds. Use that measured
+        // main size for this frame's child box while keeping the old table POSITION; only the extent-table write remains
+        // deferred. Without this distinction a wrapped row is arranged into its one-line estimate for one frame, and a
+        // self-blur layer dutifully scissors the multi-line glyphs into that thin estimated strip.
+        int gridCols = measuredGrid?.EffectiveColumns(cross) ?? 1;
+        int deferredGridRow = -1;
+        float deferredGridMain = 0f;
         ord = 0;
         for (var rc = _scene.FirstChild(content); !rc.IsNull; rc = _scene.NextSibling(rc), ord++)
         {
@@ -823,6 +835,39 @@ public sealed class FlexLayout
             var rect = layout.ItemRect(index, cross);
             ref LayoutInput rli = ref _scene.Layout(rc);
             float mL = rli.Margin.Left, mT = rli.Margin.Top, mR = rli.Margin.Right, mB = rli.Margin.Bottom;
+
+            bool fresh = index < prevFirst || index > prevLast;
+            if (fresh && index < anchorIndex)
+            {
+                float measuredMain;
+                if (measuredGrid is null)
+                {
+                    ref RectF measured = ref _scene.Bounds(rc);
+                    measuredMain = horizontal ? measured.W : measured.H;
+                }
+                else
+                {
+                    // Grid rows must remain row-synchronised even on the deferred frame: use the maximum measured cell
+                    // height as a TEMPORARY slot for every realised cell in this fresh row, without touching the row table.
+                    int row = index / gridCols;
+                    if (row != deferredGridRow)
+                    {
+                        deferredGridRow = row;
+                        deferredGridMain = 0f;
+                        int scanIndex = index;
+                        for (var scan = rc; !scan.IsNull && scanIndex / gridCols == row;
+                             scan = _scene.NextSibling(scan), scanIndex++)
+                        {
+                            ref RectF measured = ref _scene.Bounds(scan);
+                            deferredGridMain = MathF.Max(deferredGridMain, horizontal ? measured.W : measured.H);
+                        }
+                    }
+                    measuredMain = deferredGridMain;
+                }
+
+                if (horizontal) rect = new RectF(rect.X, rect.Y, measuredMain, rect.H);
+                else            rect = new RectF(rect.X, rect.Y, rect.W, measuredMain);
+            }
             Arrange(rc, rect.X + mL, rect.Y + mT,
                 MathF.Max(0f, rect.W - mL - mR), MathF.Max(0f, rect.H - mT - mB));
         }

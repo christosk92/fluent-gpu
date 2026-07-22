@@ -92,9 +92,13 @@ Run an app: `FluentApp.Run(() => new App());` (`src/FluentGpu.WindowsApp/FluentA
 ```bash
 dotnet build src/FluentGpu.VerticalSlice          # must be clean
 dotnet run   --project src/FluentGpu.VerticalSlice # must print "ALL CHECKS PASSED"
+# Local subset while iterating (CI = full suite, no FG_SUITE):
+dotnet run   --project src/FluentGpu.VerticalSlice -- --suite scroll   # or FG_SUITE=hooks
 ```
-The harness (`src/FluentGpu.VerticalSlice/Program.cs`) runs ~60 cross-seam golden checks headlessly (no GPU/window).
-Add a check with `Check("…", cond, detail)` and call it from `Main`. GPU pixels are a separate manual check.
+The harness (`src/FluentGpu.VerticalSlice/`) runs headless golden checks (no GPU/window): thin `Program.cs` +
+`Harness/` (`Gate.Check`, scene helpers, `SuiteRegistry`) + domain `Suites/*Suite.cs` + `Probes/`.
+Add a check with `Check("…", cond, detail)` in the owning suite and register it in that suite's `Run` +
+`SuiteRegistry` (new suite only). GPU pixels are a separate manual check.
 Useful: `FrameStats` from `RunFrame()` — `Rendered` (false ⇒ compositor-only), `ComponentsRendered`,
 `HotPhaseAllocBytes` (must be 0 steady). Diagnostics: `FG_DUMP=1` (scene dump), `FG_DIAG=1`.
 
@@ -119,7 +123,7 @@ All engine subsystems now live under the single `src/FluentGpu.Engine` project (
 | Scroll-driven effects (sticky / overscroll-stretch / parallax / fade / collapse / shy header / pull-to-refresh / scrollbar flags / nested scroll) | author via `Element.ScrollBinds` (a `ScrollBindDsl[]`: `PinTop`/`StretchFromTop`/`{From,To,Range,OutStart,OutEnd}`, `OnFlag`, `OnScrollGeometryChanged`, `Chaining`); engine = the generic zero-alloc binding evaluator `src/FluentGpu.Engine/Animation/{ScrollBind,ScrollBindEval}.cs` + `ScrollState` predicate flags. Design: `docs/plans/generic-hookable-scroll-engine-design.md` |
 | Record → DrawList | `src/FluentGpu.Engine/Render/SceneRecorder.cs` |
 | Theming tokens + LIVE theme switching (animated, in-place; gotchas) | `src/FluentGpu.Engine/Dsl/Tokens.cs` (`Tok`), `Theme.cs` — **read `theming.md` before any theme work** |
-| Tests | `src/FluentGpu.VerticalSlice/Program.cs` |
+| Tests | `src/FluentGpu.VerticalSlice/` (`Harness/`, `Suites/`, `Probes/`) |
 | Windows OS services | `src/FluentGpu.WindowsApi/*` (pillars, refs Engine only) — see below |
 
 ## Windows OS services (`FluentGpu.WindowsApi`)

@@ -182,6 +182,11 @@ public sealed class NavigationView : Component
     /// <summary>Lightweight per-part styling (CSS ::part): modifiers keyed by the <c>PartXxx</c> consts; see
     /// <see cref="TemplateParts"/> for the contract. Top-mode bar items are not part-routed (different structure).</summary>
     public TemplateParts? Parts;
+    /// <summary>Opt-in (default false): render expandable GROUP rows with a distinct eyebrow treatment — an uppercased,
+    /// smaller, secondary-color label — so a group header can never be misread as a leaf page (pages keep the icon +
+    /// primary-text look). Used by a flat, group-heavy nav spine (the capability gallery); off preserves the WinUI-parity
+    /// look for every other consumer.</summary>
+    public bool DistinctGroupHeaders;
 
     /// <summary>The one canonical NavigationView factory (WS3 creation idiom). Wraps the property-init surface in a
     /// <see cref="NavigationViewOptions"/> record. Property-init construction stays available for the in-repo headless
@@ -626,7 +631,7 @@ public sealed class NavigationView : Component
                      Action<NavItem> activate, Action<KeyEventArgs> handleNavKey, Action toggle,
                      Func<string, Action<NodeHandle>> captureRow, bool overlay, bool labelsVisible)
     {
-        var mainItems = BuildItems(flat, selected, expanded, activate, expandedLayout: labelsVisible, ownIndicator: false, labelsVisible, captureRow, Parts);
+        var mainItems = BuildItems(flat, selected, expanded, activate, expandedLayout: labelsVisible, ownIndicator: false, labelsVisible, captureRow, Parts, DistinctGroupHeaders);
         var footerRows = BuildItems(footerItems.Select(f => (f, 0)).ToList(), selected, expanded, activate, expandedLayout: labelsVisible, ownIndicator: true, labelsVisible, captureRow, Parts);
         // Pane background, per the shipped WinUI generic.xaml: the EXPANDED (always-visible) pane =
         // NavigationViewExpandedPaneBackground = SolidBackgroundFillColorTransparent → FULLY TRANSPARENT, so DWM's Mica
@@ -995,14 +1000,14 @@ public sealed class NavigationView : Component
 
     static Element[] BuildItems(List<(NavItem Item, int Depth)> flat, string selected, string[] expanded,
                                 Action<NavItem> activate, bool expandedLayout, bool ownIndicator, bool labelsVisible,
-                                Func<string, Action<NodeHandle>> captureRow, TemplateParts? parts)
+                                Func<string, Action<NodeHandle>> captureRow, TemplateParts? parts, bool eyebrowGroups = false)
     {
         var result = new Element[flat.Count];
         for (int i = 0; i < flat.Count; i++)
             result[i] = flat[i].Item.IsSeparator
                 ? SeparatorRow(expandedLayout, flat[i].Depth)
                 : Item(flat[i].Item, flat[i].Depth, i, selected, expanded, activate, expandedLayout, ownIndicator, labelsVisible,
-                       captureRow(flat[i].Item.Key), parts);
+                       captureRow(flat[i].Item.Key), parts, eyebrowGroups);
 
         return result;
     }
@@ -1049,13 +1054,16 @@ public sealed class NavigationView : Component
 
     static Element Item(NavItem it, int depth, int visualIndex, string selected, string[] expanded,
                         Action<NavItem> activate, bool expandedLayout, bool ownIndicator, bool labelsVisible,
-                        Action<NodeHandle> capture, TemplateParts? parts)
+                        Action<NodeHandle> capture, TemplateParts? parts, bool eyebrowGroups = false)
     {
         if (it.IsHeader)
             return HeaderItem(it, expandedLayout, labelsVisible, depth);
 
         bool sel = it.Key == selected;
         bool isExpanded = it.IsExpandable && expanded.Contains(it.Key);
+        // Opt-in eyebrow: a group header rendered as a distinct section label (uppercased, smaller, secondary) so it can
+        // never read as a leaf page. Only the label styling changes — the row plate/hover/press/reflow are unchanged.
+        bool eyebrow = eyebrowGroups && it.IsExpandable && expandedLayout;
         // NavigationViewItemForeground = TextFillColorPrimary in every state EXCEPT Pressed → TextFillColorSecondary
         // (NavigationView_themeresources.xaml:21-34) — the old engine TextSecondary-at-rest was a drift.
         var foreground = Tok.TextPrimary;
@@ -1119,10 +1127,11 @@ public sealed class NavigationView : Component
         if (expandedLayout)
         {
             var label = AnimatedLabel(labelsVisible, new NavLabelSpec(
-                new TextEl(it.Label)
+                new TextEl(eyebrow ? it.Label.ToUpperInvariant() : it.Label)
                 {
-                    Size = 14f,
-                    Color = foreground,
+                    Size = eyebrow ? 11.5f : 14f,
+                    Bold = eyebrow,
+                    Color = eyebrow ? Tok.TextSecondary : foreground,
                     PressedColor = Tok.TextSecondary,
                     Grow = 1f,
                     Shrink = 1f,

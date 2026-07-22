@@ -152,6 +152,8 @@ static class StoreEntityMerge
             AlbumsTotal = incoming.AlbumsTotal > 0 ? incoming.AlbumsTotal : current.AlbumsTotal,
             SinglesTotal = incoming.SinglesTotal > 0 ? incoming.SinglesTotal : current.SinglesTotal,
             CompilationsTotal = incoming.CompilationsTotal > 0 ? incoming.CompilationsTotal : current.CompilationsTotal,
+            LatestRelease = incoming.LatestRelease ?? current.LatestRelease,
+            PopularReleases = Has(incoming.PopularReleases) ? incoming.PopularReleases : current.PopularReleases,
             // Keep the newer freshness stamp: a full-overview write carries UtcNow; a thin write carries default → keeps current.
             FetchedAt = incoming.FetchedAt > current.FetchedAt ? incoming.FetchedAt : current.FetchedAt,
         };

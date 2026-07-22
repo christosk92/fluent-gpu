@@ -279,6 +279,7 @@ public struct ScrollState
     // which the fixed ζ=1 exponential cannot express. Velocity-continuous retargets work identically in both forms.
     public float ProgrammaticZeta;        // damping ratio; 0 (default) ⇒ legacy critically-damped chase
     public float ProgrammaticOmega;       // natural frequency ω0 rad/s; settle ≈ 4/(ζ·ω0)
+    public float ProgrammaticSettleVelocity; // optional per-viewport landing speed (DIP/s); 0 ⇒ legacy WheelSettleVelPxPerS
     // Persistent scrollbar: keep the bar visible (thin rail) whenever content overflows, bypassing the auto-hide FadeT
     // gate at record time (hover still expands it). Set by the reconciler from ScrollEl.AlwaysShowScrollbar.
     public bool  AlwaysShowBar;

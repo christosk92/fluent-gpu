@@ -213,11 +213,14 @@ public readonly struct ScrollGeometry
 {
     public readonly float OffsetX, OffsetY, ViewportW, ViewportH, ContentW, ContentH, Band, Velocity;
     public readonly byte Flags;
+    /// <summary>True only for real user-driven motion; false for programmatic bring-into-view and rest.</summary>
+    public readonly bool UserScrollActive;
 
-    public ScrollGeometry(float ox, float oy, float vw, float vh, float cw, float ch, float band, float vel, byte flags)
+    public ScrollGeometry(float ox, float oy, float vw, float vh, float cw, float ch, float band, float vel, byte flags,
+                          bool userScrollActive = false)
     {
         OffsetX = ox; OffsetY = oy; ViewportW = vw; ViewportH = vh; ContentW = cw; ContentH = ch;
-        Band = band; Velocity = vel; Flags = flags;
+        Band = band; Velocity = vel; Flags = flags; UserScrollActive = userScrollActive;
     }
 }
 

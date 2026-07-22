@@ -14,7 +14,8 @@ using static FluentGpu.Dsl.Ui;
 // partial-known content immediately (cover + title), shimmers the still-loading region (the track list), and swaps to
 // real with the blur reveal we built — then streams per-row durations in via incremental per-field Loadables. No second
 // hand-authored skeleton tree, no two UIs to keep in sync.
-[GalleryPage("async-skeletons", "Async & skeletons", "Patterns", Icon = Icons.Refresh, ShotMode = ShotMode.Animated)]
+[GalleryPage("async-skeletons", "Async & skeletons", "Patterns", Icon = Icons.Refresh, ShotMode = ShotMode.Animated,
+    Level = GalleryLevel.RealWorld, WaveeUse = "Skeleton-while-loading on the home hub", WaveePath = "src/apps/Wavee/Features/Home/HomePage.cs")]
 sealed class AsyncSkeletonPage : Component
 {
     public override Element Render() => GalleryPage.Shell("Async & skeletons",

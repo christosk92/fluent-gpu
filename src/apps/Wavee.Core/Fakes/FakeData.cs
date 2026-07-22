@@ -1,3 +1,6 @@
+using System;
+using System.Linq;
+
 namespace Wavee.Core;
 
 /// <summary>The in-memory, deterministic catalog that drives the whole skeleton with NO network. Cover art is BUNDLED
@@ -144,10 +147,16 @@ public static class FakeData
         // The full magazine facets, synthesized deterministically (each gated so artists differ). The real Spotify
         // export overrides these for exported artists; here every fake artist still gets a rich page (square art).
         int n = Wrap(i, Seed.Length);
+        // Latest = newest-by-year album; popular = first few distinct cards (offline stand-in for Pathfinder facets).
+        Album? latest = albums.Length > 0
+            ? albums.OrderByDescending(a => a.Year).ThenBy(a => a.Name, StringComparer.Ordinal).First()
+            : null;
+        var popular = albums.Take(4).ToArray();
         return new Artist($"ar{n}", $"spotify:artist:ar{n}", s.Artist, Cover(i, 300), albums,
             monthly, followers, ArtistBio(s.Artist, monthly), verified,
             WorldRank: rank, HeaderImage: Cover(i, 640), TopTracks: null,
-            AppearsOn: null, Pinned: SynthPinned(h, albums), Extras: SynthExtras(i, s.Artist, h, monthly, albums));
+            AppearsOn: null, Pinned: SynthPinned(h, albums), Extras: SynthExtras(i, s.Artist, h, monthly, albums),
+            LatestRelease: latest, PopularReleases: popular.Length > 0 ? popular : null);
     }
 
     // ── synthesized "magazine" facets (fallback for artists with no real Spotify export) ─────────────────────────

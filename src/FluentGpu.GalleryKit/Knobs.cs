@@ -87,6 +87,12 @@ public sealed class Knobs
     /// <summary>True once any knob has been registered (the card shows the options panel only then).</summary>
     public bool HasAny => _rows.Count > 0;
 
+    /// <summary>The labels of every knob registered so far (registration order not guaranteed). The
+    /// <c>--gallery-audit</c> knob/code-coherence check runs a sample factory against a throwaway <see cref="Knobs"/> and
+    /// asserts each label appears verbatim in the sample's extracted <see cref="Sample.Code"/> — a knobbed sample whose
+    /// code doesn't show the knob wiring is drift.</summary>
+    public IReadOnlyCollection<string> Labels => _cells.Keys;
+
     /// <summary>The auto-generated options panel — one framework-control row per registered knob, in registration order.
     /// The knob wiring appears verbatim in the displayed sample code, so the panel documents the API for free.</summary>
     public Element BuildPanel()

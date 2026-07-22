@@ -57,7 +57,8 @@ sealed partial class TeachingTipPage : Component
     });
 }
 
-[GalleryPage("Popup", "Popup", "Dialogs & flyouts", Icon = Icons.More)]
+[GalleryPage("Popup", "Popup", "Dialogs & flyouts", Icon = Icons.More,
+    WaveeUse = "Add-to-playlist picker", WaveePath = "src/apps/Wavee/Features/Detail/PlaylistPicker.cs")]
 sealed partial class PopupPage : Component
 {
     static readonly Signal<bool> _open = new(false);
@@ -109,7 +110,8 @@ sealed class PopupDemo : Component
     }
 }
 
-[GalleryPage("Toast", "Toast", "Dialogs & flyouts", Icon = Icons.More)]
+[GalleryPage("Toast", "Toast", "Dialogs & flyouts", Icon = Icons.More,
+    WaveeUse = "Playback & save-to-library toasts", WaveePath = "src/apps/Wavee/App/NotificationCenterBridge.cs")]
 sealed partial class ToastPage : Component
 {
     public override Element Render() => GalleryPage.Shell("Toast",
@@ -149,7 +151,8 @@ sealed partial class ToastPage : Component
     };
 }
 
-[GalleryPage("ItemsView", "ItemsView", "Collections", Icon = Icons.Grid)]
+[GalleryPage("ItemsView", "ItemsView", "Collections", Icon = Icons.Grid, Level = GalleryLevel.RealWorld,
+    WaveeUse = "Virtualized album & playlist track lists", WaveePath = "src/apps/Wavee/Features/Detail/DetailTracks.cs")]
 sealed partial class ItemsViewPage : Component
 {
     static readonly string[] Items = { "Photo 1", "Photo 2", "Photo 3", "Photo 4", "Photo 5", "Photo 6", "Photo 7", "Photo 8" };

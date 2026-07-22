@@ -503,7 +503,10 @@ public sealed class ScrollIntegrator
                         sc.FlingVelocity = vel;
                     }
 
-                    if (MathF.Abs(newOff - pending) < 0.5f && MathF.Abs(vel) < WheelSettleVelPxPerS)
+                    float settleVelocity = programmatic && sc.ProgrammaticSettleVelocity > 0f
+                        ? sc.ProgrammaticSettleVelocity
+                        : WheelSettleVelPxPerS;
+                    if (MathF.Abs(newOff - pending) < 0.5f && MathF.Abs(vel) < settleVelocity)
                     {
                         moved = ScrollWrite?.Invoke(n, pending) ?? false;   // land exactly on the accumulated target
                         sc.Phase = Idle; sc.FlingVelocity = 0f; sc.PhaseFlags = 0;
@@ -515,7 +518,7 @@ public sealed class ScrollIntegrator
                         moved = ScrollWrite?.Invoke(n, newOff) ?? false;
                         off = horizontal ? sc.OffsetX : sc.OffsetY;
                         // Hard-stop at the extent (§2.2): a clamped write that no longer advances ends the chase (no band).
-                        if (!moved && MathF.Abs(vel) < WheelSettleVelPxPerS)
+                        if (!moved && MathF.Abs(vel) < settleVelocity)
                         {
                             sc.Phase = Idle; sc.FlingVelocity = 0f; sc.PhaseFlags = 0;
                             if (horizontal) sc.PendingTargetX = float.NaN; else sc.PendingTargetY = float.NaN;

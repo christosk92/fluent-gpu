@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
@@ -60,8 +61,60 @@ internal static class GalleryAudit
                 if (!keys.Contains(rel)) { Console.WriteLine($"[gallery-audit] page '{p.Key}' Related key '{rel}' does not resolve to a page"); failures++; }
         }
 
-        Console.WriteLine($"[gallery-audit] {pages.Length} registry pages checked; {failures} failure(s).");
+        // 4) Wavee link contract (G8c2): every [GalleryPage(WaveeUse=…, WaveePath=…)] must name BOTH, and WaveePath must
+        // exist on disk relative to the repo root. A "See this in Wavee" pointer that rots is worse than none.
+        string? repo = RepoRoot();
+        int waveeTagged = 0;
+        foreach (var p in pages)
+        {
+            bool hasUse = p.WaveeUse.Length > 0, hasPath = p.WaveePath.Length > 0;
+            if (!hasUse && !hasPath) continue;
+            waveeTagged++;
+            if (hasUse != hasPath)
+            {
+                Console.WriteLine($"[gallery-audit] page '{p.Key}' WaveeUse/WaveePath must be set together (Use='{p.WaveeUse}' Path='{p.WaveePath}')"); failures++; continue;
+            }
+            if (repo is null) { Console.WriteLine($"[gallery-audit] page '{p.Key}' WaveePath '{p.WaveePath}' — cannot verify (repo root not found)"); failures++; continue; }
+            string full = System.IO.Path.Combine(repo, p.WaveePath.Replace('/', System.IO.Path.DirectorySeparatorChar));
+            if (!System.IO.File.Exists(full)) { Console.WriteLine($"[gallery-audit] page '{p.Key}' WaveePath '{p.WaveePath}' does not exist on disk"); failures++; }
+        }
+
+        // 5) Knob/code coherence (G8c2, the research trap-3 guard): a knobbed [Sample] whose extracted Code text does not
+        // mention a knob's label is drift (the shown code doesn't match the live example's wiring). Pragmatic string
+        // containment over the generated GallerySamples registry — no reflection (AOT-clean).
+        int samplesChecked = 0, knobbed = 0;
+        foreach (var (owner, sample) in FluentGpu.Generated.GallerySamples.All)
+        {
+            samplesChecked++;
+            var probe = new FluentGpu.GalleryKit.Knobs();
+            try { _ = sample.Factory(probe); }
+            catch (Exception ex) { Console.WriteLine($"[gallery-audit] sample '{owner}.{sample.Title}' threw while probing knobs: {ex.GetType().Name}"); failures++; continue; }
+            if (probe.Labels.Count == 0) continue;
+            knobbed++;
+            foreach (var label in probe.Labels)
+                if (!sample.Code.Contains(label, StringComparison.Ordinal))
+                {
+                    Console.WriteLine($"[gallery-audit] sample '{owner}.{sample.Title}' knob label '{label}' is not present in its shown code (knob/code drift)"); failures++;
+                }
+        }
+
+        Console.WriteLine($"[gallery-audit] {pages.Length} registry pages checked; {waveeTagged} Wavee-tagged; {samplesChecked} samples ({knobbed} knobbed); {failures} failure(s).");
         return failures;
+    }
+
+    /// <summary>Walk up from the working dir / base dir to the repo root (the folder holding <c>src/FluentGpu.slnx</c>).</summary>
+    private static string? RepoRoot()
+    {
+        foreach (var start in new[] { Directory.GetCurrentDirectory(), AppContext.BaseDirectory })
+        {
+            var dir = new DirectoryInfo(start);
+            while (dir is not null)
+            {
+                if (File.Exists(System.IO.Path.Combine(dir.FullName, "src", "FluentGpu.slnx"))) return dir.FullName;
+                dir = dir.Parent;
+            }
+        }
+        return null;
     }
 
     /// <summary>The <c>--shot-list</c> sweep contract: one <c>page:&lt;key&gt;</c> id per registry page whose

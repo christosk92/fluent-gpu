@@ -123,6 +123,10 @@
   "artist": {
     "popular": "Popular",
     "popularReleases": "Popular releases",
+    "releases": "Releases",
+    "latestRelease": "Latest release",
+    "topTracks": "Top tracks",
+    "feat": "feat.",
     "discography": "Discography",
     "albums": "Albums",
     "singlesEps": "Singles & EPs",
@@ -318,6 +322,8 @@
 
   "library": {
     "filter": "Filter",
+    "matchedAlbum": "Matched · album ‘{name}’",
+    "matchedSong": "Matched · song ‘{name}’",
     "noMatch": "Nothing matches your filter",
     "selectAlbum": "Select an album to see its tracks",
     "selectArtist": "Select an artist to see their discography",
@@ -740,6 +746,7 @@
     "repeat": "Repeat",
     "like": "Like",
     "lyrics": "Lyrics",
+    "resyncLyrics": "Resync",
     "queue": "Queue",
     "nextInQueue": "Next in queue",
     "nextUp": "Next up",

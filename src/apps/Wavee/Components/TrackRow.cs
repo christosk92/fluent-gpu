@@ -18,8 +18,10 @@ namespace Wavee;
 // Tier = the resolved width tier this set was built for — carried here so Grid/Header/TracksFor all derive the SAME
 // tier-scaled padding/gap (the alignment invariant). Both are defaulted so the many non-tiered ColumnSet sites (search,
 // artist "Popular", queue, drawers) keep their current look (Actions present, tier-0 spacing).
+// FullPlays = the Plays cell shows the exact comma-separated count ("3,434,405,128") instead of the compact "3.43B" —
+// for wide surfaces (the artist top-tracks chart) where the abbreviated form reads underwhelming; needs a ~96px column.
 internal readonly record struct ColumnSet(bool Album, bool By, bool Date, bool Video, bool Plays, bool Heart, bool Thumb,
-                                          bool Actions = true, int Tier = 0);
+                                          bool Actions = true, int Tier = 0, bool FullPlays = false);
 
 // ── the ONE track-row cell, used EVERYWHERE a track is shown (detail list, library pane, artist "Popular", search) ──
 // This is the single source of truth for what a track row LOOKS like and how it BEHAVES at rest/hover/now-playing — the
@@ -47,9 +49,12 @@ internal static class TrackRow
     internal static float PadXFor(int tier) => tier <= 3 ? PadX : tier <= 5 ? Spacing.M : Spacing.S;
     internal static float ColGapFor(int tier) => tier <= 4 ? ColGap : Spacing.S;
 
-    // Stream count → "11.8M" / "654.8K".
+    // Stream count → "1.85B" / "11.8M" / "654.8K".
     internal static string PlaysLabel(long n) =>
-        n >= 1_000_000 ? $"{n / 1_000_000f:0.#}M" : n >= 1_000 ? $"{n / 1_000f:0.#}K" : n.ToString("N0");
+        n >= 1_000_000_000 ? $"{n / 1_000_000_000f:0.##}B"
+        : n >= 1_000_000 ? $"{n / 1_000_000f:0.#}M"
+        : n >= 1_000 ? $"{n / 1_000f:0.#}K"
+        : n.ToString("N0");
 
     // The per-row playback state the cell reflects (now-playing equalizer / buffer spinner / top-track star / saved heart).
     internal readonly record struct State(bool IsNow, bool IsPlaying, bool IsBuffering, bool IsTop, bool Saved);
@@ -89,7 +94,7 @@ internal static class TrackRow
     internal static Element Grid(Track t, int displayIndex, in State st, ColumnSet set, TrackSize[] tracks, float rowH,
                                  Element title, bool showTrackArtist, Action<string, string?> go,
                                  Action? onPlay = null, Action? onLike = null, Owner? addedByProfile = null,
-                                 bool likePop = false, Element? actionsCell = null)
+                                 bool likePop = false, Element? actionsCell = null, Element? artistsLine = null)
     {
         float thumb = ThumbSize;   // fixed art size → a stable dedicated art column
 
@@ -109,9 +114,10 @@ internal static class TrackRow
         var titleCol = new BoxEl
         {
             Direction = 1, Grow = 1f, Basis = 0f, Gap = 1f,
-            // Subline artist(s) — per config (playlists/Liked/compilations show them; single-artist albums/singles/EPs don't).
+            // Subline artist(s) — per config (playlists/Liked/compilations show them; single-artist albums/singles/EPs
+            // don't). artistsLine overrides the default full-credit links (the artist chart's "feat. X" line).
             Children = showTrackArtist
-                ? [title, ArtistLinks(t.Artists, go)]
+                ? [title, artistsLine ?? ArtistLinks(t.Artists, go)]
                 : [title],
         };
         cells.Add(new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Children = [titleCol] });
@@ -125,7 +131,7 @@ internal static class TrackRow
         if (set.Video)
             cells.Add(CenterCell(t.HasVideo ? Icon(Icons.Movie, 13f, Tok.TextTertiary) : new BoxEl()));
         if (set.Plays)
-            cells.Add(EndCell(new TextEl(PlaysLabel(t.PlayCount)) { Size = 13f, Color = Tok.TextTertiary }));
+            cells.Add(EndCell(new TextEl(set.FullPlays ? t.PlayCount.ToString("N0") : PlaysLabel(t.PlayCount)) { Size = 13f, Color = Tok.TextTertiary }));
         cells.Add(EndCell(new TextEl(DetailFormat.TrackTime(t.DurationMs)) { Size = 13f, Color = Tok.TextSecondary }));
 
         // Trailing "..." overflow lane (Apple Music style) — a fixed column AFTER Duration. Present only when the set
@@ -151,14 +157,23 @@ internal static class TrackRow
     // title is a plain now-playing-coloured ellipsis (the marquee is reserved for the full lists' now-playing row).
     internal static Element Row(Track t, int displayIndex, in State st, ColumnSet set, TrackSize[] tracks, float rowH,
                                 bool showTrackArtist, Action<string, string?> go, Action onPlay, Action? onLike = null, bool zebra = false,
-                                Element? actionsCell = null)
+                                Element? actionsCell = null, int? zebraIndex = null, Element? artistsLine = null,
+                                bool explicitBadge = false)
     {
-        bool oddZebra = zebra && displayIndex % 2 != 0;
+        // zebraIndex: multi-column surfaces (the artist chart) stripe by VISUAL row so adjacent columns stay in phase;
+        // displayIndex still carries the global rank shown in the # cell.
+        bool oddZebra = zebra && (zebraIndex ?? displayIndex) % 2 != 0;
         Element title = new TextEl(t.Title)
         {
             Size = 14f, Weight = 600, Color = st.IsNow ? Tok.AccentTextPrimary : Tok.TextPrimary,
             Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
         };
+        if (explicitBadge && t.IsExplicit)
+            title = new BoxEl
+            {
+                Direction = 0, Gap = 6f, AlignItems = FlexAlign.Center, MinWidth = 0f,
+                Children = [title, new BoxEl { Shrink = 0f, Children = [ExplicitBadge()] }],
+            };
         return new BoxEl
         {
             MinHeight = rowH, ClipToBounds = true, Margin = new Edges4(RowInset, 0f, RowInset, 0f),
@@ -168,12 +183,14 @@ internal static class TrackRow
             Fill = oddZebra ? WaveeColors.RowZebra : ColorF.Transparent,
             HoverFill = oddZebra ? WaveeColors.RowHoverZebra : WaveeColors.RowHover,
             PressedFill = oddZebra ? WaveeColors.RowPressedZebra : WaveeColors.RowPressed,
-            PressScale = 0.985f, BorderWidth = 1f, BorderColor = ColorF.Transparent, HoverBorderColor = Tok.StrokeCardDefault,
+            PressScale = 0.985f, BorderWidth = 1f,
+            BorderColor = oddZebra ? Tok.StrokeCardDefault : ColorF.Transparent,
+            HoverBorderColor = Tok.StrokeCardDefault,
             Role = AutomationRole.Button, OnClick = onPlay,
             // No-op pointer-exit → registers PointerBit so this row is the "interactive ancestor" whose hover progress the
             // # cell inherits (SceneRecorder.TryResolveInteractionProgress) — that's what reveals play/pause on row hover.
             OnPointerExit = static () => { },
-            Children = [Grid(t, displayIndex, st, set, tracks, rowH, title, showTrackArtist, go, onPlay, onLike, actionsCell: actionsCell)],
+            Children = [Grid(t, displayIndex, st, set, tracks, rowH, title, showTrackArtist, go, onPlay, onLike, actionsCell: actionsCell, artistsLine: artistsLine)],
         };
     }
 

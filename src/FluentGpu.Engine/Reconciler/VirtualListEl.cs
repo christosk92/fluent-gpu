@@ -34,6 +34,10 @@ public sealed record VirtualListEl : Element
     public IVirtualLayout? Layout { get; init; }      // fixed OR measured (IMeasuredVirtualLayout) seam; null ⇒ legacy variable Fenwick
     public float EstimatedExtent { get; init; } = 48f;// legacy variable path: seed extent for unmeasured rows
     public int Overscan { get; init; } = 4;
+    /// <summary>Opt out of the shared per-frame overscan budget and realize the requested halo on the mount frame.
+    /// Intended for small, stateful measured documents whose complete extent table is part of their visual contract
+    /// (for example synced lyrics). False keeps the normal visible-first, budget-warmed virtualization path.</summary>
+    public bool RealizeOverscanImmediately { get; init; }
     /// <summary>Research adjustment #16 — pre-realize CACHE EXTENT in PIXELS beyond the viewport (per edge). Overscan is
     /// row-based (<see cref="Overscan"/>); this is a pixel band converted to a row count against the average row extent
     /// at realize time and used as the effective overscan when set. <see cref="float.NaN"/> (default) ⇒ <see cref="Overscan"/>

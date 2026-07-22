@@ -146,7 +146,8 @@ sealed class DetailShell : Component
                       : thisPlaying && livePal is { } lp ? WaveePalette.Accent(lp)
                       : Tok.AccentDefault;
         // The hero wash. Dark: the art's dark background tone (or the neutral #1C1C1C). Light: a soft ACCENT band instead
-        // — a neutral-dark wash over the off-white card just reads as a muddy gray smudge (HeroWash applies it at 22%).
+        // — a neutral-dark wash over the off-white card just reads as a muddy gray smudge. HeroWash paints WinUI-parity
+        // solid alphas (dark ≈0.235 / light ≈0.149).
         ColorF washColor = Tok.Theme == ThemeKind.Light
             ? accent
             : WaveePalette.BackgroundDark(art ?? WaveePalette.Neutral);

@@ -43,7 +43,7 @@ Each row is **one owner**. Change the artifact there; reference it elsewhere. (P
 | Rounded-rect / border raster | `src/FluentGpu.Engine/Render/SceneRecorder.cs` + `src/FluentGpu.Windows/D3D12/*Pipeline.cs` | the SDF ring + gradient PSOs |
 | Frame loop, scheduling | `src/FluentGpu.Engine/Hosting/AppHost.cs` | `AppHost.RunFrame` / `Paint`, `FrameStats` |
 | Theming tokens / colors | `src/FluentGpu.Engine/Dsl/{Tokens,Theme}.cs` | `Tok`, `TokenSet` |
-| Tests / golden checks | `src/FluentGpu.VerticalSlice/Program.cs` | `Check(...)` |
+| Tests / golden checks | `src/FluentGpu.VerticalSlice/` (`Harness/`, `Suites/`, `Probes/`) | `Gate.Check(...)` |
 
 The cross-cutting **contract** owners (every opcode, RHI method, PAL seam, hook, source generator, scene column,
 assembly → its one authoritative design doc) live in the
@@ -341,30 +341,21 @@ Add a token = a `required` field on `TokenSet`, a value in both `BuildDark()`/`B
 
 ## Tests / golden checks — `FluentGpu.VerticalSlice`
 
-The `FluentGpu.VerticalSlice` app is the **single source of truth for "does the engine still work"** — ~60 end-to-end
-golden checks across every seam (layout, reconcile, signals, scroll, virtualization, images, controls, navigation,
-animation), run entirely on the **headless** backends (no GPU, no window). Run it:
+The `FluentGpu.VerticalSlice` app is the **single source of truth for "does the engine still work"** — hundreds of
+end-to-end golden checks across every seam (layout, reconcile, signals, scroll, virtualization, images, controls,
+navigation, animation), run entirely on the **headless** backends (no GPU, no window). Layout: thin `Program.cs` +
+`Harness/` + domain `Suites/*Suite.cs` + `Probes/`. Run it:
 
 ```bash
 dotnet build src/FluentGpu.VerticalSlice                 # clean build first
 dotnet run   --project src/FluentGpu.VerticalSlice       # expect: ALL CHECKS PASSED
+dotnet run   --project src/FluentGpu.VerticalSlice -- --suite scroll   # local subset (not for CI)
 ```
 
-Each check is a one-liner; the harness prints `[PASS]`/`[FAIL]` and exits non-zero if any failed:
+Each check is a one-liner via `Gate.Check`; the harness prints `[PASS]`/`[FAIL]` and exits non-zero if any failed.
 
-```csharp
-static void Check(string name, bool ok, string? detail = null)
-{
-    Console.WriteLine($"  [{(ok ? "PASS" : "FAIL")}] {name}{(detail is null ? "" : $"  ({detail})")}");
-    if (!ok) s_failures++;
-}
-// …at the end of Main:
-//   if (s_failures == 0) { Console.WriteLine("ALL CHECKS PASSED …"); return 0; }
-//   Console.WriteLine($"{s_failures} CHECK(S) FAILED."); return 1;
-```
-
-Real examples from `Program.cs` show the style — drive the headless `AppHost`, then assert on `host.Scene` bounds or
-the `HeadlessGpuDevice`'s recorded `LastGlyphs`/`LastRects`:
+Real examples from the suite modules show the style — drive the headless `AppHost`, then assert on `host.Scene` bounds
+or the `HeadlessGpuDevice`'s recorded `LastGlyphs`/`LastRects`:
 
 ```csharp
 Check("11. flex-grow splits free space", Near(g0.W, 150) && Near(g1.W, 150) && Near(g1.X, 150), $"w0={g0.W:0.#} x1={g1.X:0.#}");
@@ -372,10 +363,11 @@ Check("17. keyed reconcile reorders, preserving identity", reordered, "[a,b,c] �
 Check("22. opacity timeline samples t0, eases & completes (no relayout)", startOk && midOk && doneOk, $"@50ms={op:0.00}");
 ```
 
-**Add a check** by writing a `Check("…", condition, detail)` in `src/FluentGpu.VerticalSlice/Program.cs` and calling it
-from `Main`. If you touched reactivity/layout/render, also assert on `FrameStats` for the interaction you changed —
-`Rendered`, `ComponentsRendered`, and `HotPhaseAllocBytes` (which **must be 0** on steady frames). The headless setup
-(swapping in `HeadlessPlatformApp`/`HeadlessWindow`/`HeadlessGpuDevice`/`HeadlessFontSystem`) is shown in
+**Add a check** by writing a `Check("…", condition, detail)` in the owning `Suites/*Suite.cs` and calling it from that
+suite's `Run`. New suite types also need a line in `Harness/SuiteRegistry.All`. If you touched reactivity/layout/render,
+also assert on `FrameStats` for the interaction you changed — `Rendered`, `ComponentsRendered`, and `HotPhaseAllocBytes`
+(which **must be 0** on steady frames). The headless setup (swapping in
+`HeadlessPlatformApp`/`HeadlessWindow`/`HeadlessGpuDevice`/`HeadlessFontSystem`) is shown in
 [getting-started.md → Run headless](../../guide/getting-started.md). GPU pixels are **not** asserted here — that is a
 separate manual "needs-pixels" pass on the real D3D12 path.
 
@@ -419,7 +411,7 @@ Walking the existing wiring (above) gives the exact steps. Say you're adding a l
    and `Update` must route it if it needs special structural handling (like `ScrollEl`/`VirtualListEl`).
 
 5. **Add a factory + a golden check.** Expose a `Ui.MyLeaf(...)` builder in `Factories.cs`, then add a
-   `Check("…", …)` in `src/FluentGpu.VerticalSlice/Program.cs` that mounts it headlessly and asserts the recorded output (and `FrameStats` if it
+   `Check("…", …)` in the owning `src/FluentGpu.VerticalSlice/Suites/*Suite.cs` that mounts it headlessly and asserts the recorded output (and `FrameStats` if it
    participates in reactivity). Run the harness.
 
 The source-generator-driven `ElementTypeId` allocation and the keyed reconcile mechanics are specified in

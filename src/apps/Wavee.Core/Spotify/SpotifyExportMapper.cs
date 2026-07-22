@@ -1095,6 +1095,14 @@ public static class SpotifyExportMapper
             foreach (var it in tt.EnumerateArray())
                 if (MapArtistTrack(Dig(it, "track")) is { } t) topTracks.Add(t);
 
+        // Releases column: latest + popular are first-class Pathfinder facets (not TopAlbums.Take(N)).
+        Album? latestRelease = MapRelease(Dig(au, "discography", "latest"));
+        var popularReleases = new List<Album>();
+        var popItems = Dig(au, "discography", "popularReleasesAlbums", "items");
+        if (popItems.ValueKind == JsonValueKind.Array)
+            foreach (var it in popItems.EnumerateArray())
+                if (MapRelease(it) is { } al) popularReleases.Add(al);
+
         var appearsOn = new List<Album>();
         AddReleases(Dig(au, "relatedContent", "appearsOn", "items"), appearsOn);
 
@@ -1119,7 +1127,9 @@ public static class SpotifyExportMapper
             // Per-facet totals — carried alongside the first ~10 items so the grid sizes the whole facet up front.
             AlbumsTotal: (int)Long(au, "discography", "albums", "totalCount"),
             SinglesTotal: (int)Long(au, "discography", "singles", "totalCount"),
-            CompilationsTotal: (int)Long(au, "discography", "compilations", "totalCount"));
+            CompilationsTotal: (int)Long(au, "discography", "compilations", "totalCount"),
+            LatestRelease: latestRelease,
+            PopularReleases: popularReleases.Count > 0 ? popularReleases : null);
     }
 
     static IReadOnlyList<TopCity>? MapTopCities(JsonElement items)

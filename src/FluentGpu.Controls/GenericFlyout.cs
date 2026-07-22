@@ -60,7 +60,8 @@ public sealed class FlyoutButton : Component
                 // restored to the invoker on close. No focus trap (Tab can leave; FlyoutShowMode_Auto). Both handled
                 // by OverlayHost (DismissBehavior.LightDismiss is the default; SavedFocus capture/restore is host-wired).
                 // Chrome=Popup: FlyoutBase attaches PopupThemeTransition (FlyoutBase_Partial.cpp:1968-1975) — the
-                // TAS_SHOWPOPUP slide(±g_entranceThemeOffset 50, cpp:68 + 2024-2059)+delayed-fade open and the
+                // TAS_SHOWPOPUP axis-aware ±50 slide (g_entranceThemeOffset 50, cpp:68; axis+sign from placement,
+                // SetTransitionParameters cpp:2028-2051) + a coordinated fade over 167ms cubic(0,0,0,1) open and the
                 // TAS_HIDEPOPUP 83ms fade close — NOT the menus' MenuPopupThemeTransition clip-reveal.
                 new PopupOptions(FocusTrap: false, DismissBehavior: DismissBehavior.LightDismiss, Chrome: PopupChrome.Popup));
         }

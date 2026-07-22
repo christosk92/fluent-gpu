@@ -71,7 +71,15 @@ sealed class SpotifyAlbumEnrichmentService : IAlbumEnrichmentService
         if (doc is null) return Array.Empty<Artist>();
         var artist = SpotifyExportMapper.ArtistFromOverview(doc.RootElement);
         if (artist is null) return Array.Empty<Artist>();
-        _store.UpsertArtist(artist with { FetchedAt = DateTimeOffset.UtcNow });   // full overview → stamp SWR freshness
+        // STATS-ONLY write (mirrors SpotifyArtistStatsService): the overview carries only the FIRST ~10 releases per
+        // facet, and MergeAlbumCards treats a non-null incoming list as the authoritative set — a raw upsert here
+        // clobbered a full ArtistV4 discography down to that first page (the "every artist caps at 10 albums" bug).
+        _store.UpsertArtist(artist with
+        {
+            TopAlbums = null, AppearsOn = null,
+            AlbumsTotal = 0, SinglesTotal = 0, CompilationsTotal = 0,
+            FetchedAt = DateTimeOffset.UtcNow,
+        });
         return artist.Extras?.Related is { Count: > 0 } related ? Artists(related) : Array.Empty<Artist>();
     }
 
