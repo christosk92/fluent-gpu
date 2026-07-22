@@ -112,7 +112,8 @@ internal sealed class SpotifyEngineAudioDecoder : IAudioDecoder
     private int _srcChannels;
     private LinearResampler? _resampler;
     private float[] _srcScratch = Array.Empty<float>();      // codec-native channels, source rate
-    private float[] _conformed = Array.Empty<float>();       // target channels, source rate
+    private float[] _conformed = Array.Empty<float>();       // target channels, source rate; [0.._holdFrames) is unread
+    private int _holdFrames;                                 // unconsumed conformed frames retained for the next Process
     private bool _eof;
 
     public GaplessInfo Gapless => GaplessInfo.None;
@@ -165,50 +166,61 @@ internal sealed class SpotifyEngineAudioDecoder : IAudioDecoder
             int wantFrames = dst.Length / ch;
             if (wantFrames <= 0) return 0;
 
-            int srcFrames;
-            if (_resampler is { IsActive: true })
+            if (_resampler is { IsActive: true } rs)
             {
-                double ratio = (double)(_reader.SampleRate <= 0 ? _target.SampleRate : _reader.SampleRate) / _target.SampleRate;
-                srcFrames = (int)Math.Min(MaxSrcFramesPerRead, Math.Ceiling(wantFrames * ratio) + 2);
-            }
-            else srcFrames = Math.Min(MaxSrcFramesPerRead, wantFrames);
+                // Top up the retained prefix so Process has enough source; retain src[Consumed..] after (spec: caller holds unread).
+                int wantAvail = Math.Min(MaxSrcFramesPerRead, rs.SrcFramesForOutput(wantFrames));
+                int wantPull = Math.Min(MaxSrcFramesPerRead - _holdFrames, Math.Max(0, wantAvail - _holdFrames));
+                if (wantPull > 0) _holdFrames += AppendSource(wantPull);
+                if (_holdFrames <= 0) { _eof = true; return 0; }
 
-            int gotSrc = ReadSource(srcFrames);
+                ResampleResult rr = rs.Process(_conformed.AsSpan(0, _holdFrames * ch), _holdFrames, dst);
+                int unread = _holdFrames - rr.Consumed;
+                if (unread > 0 && rr.Consumed > 0)
+                    Array.Copy(_conformed, rr.Consumed * ch, _conformed, 0, unread * ch);
+                _holdFrames = Math.Max(0, unread);
+
+                if (rr.Produced <= 0) { if (_holdFrames <= 0) _eof = true; return 0; }
+                ApplyGain(dst, rr.Produced, ch);
+                return rr.Produced;
+            }
+
+            int srcFrames = Math.Min(MaxSrcFramesPerRead, wantFrames);
+            int gotSrc = AppendSource(srcFrames);   // hold is always 0 on the passthrough path
             if (gotSrc <= 0) { _eof = true; return 0; }
-
-            var conformed = _conformed.AsSpan(0, gotSrc * ch);
-            int outFrames;
-            if (_resampler is { IsActive: true } rs) outFrames = rs.Process(conformed, gotSrc, dst);
-            else { conformed.CopyTo(dst); outFrames = gotSrc; }
-
-            if (_gainLinear != 1f)
-            {
-                int n = outFrames * ch;
-                for (int i = 0; i < n; i++) dst[i] *= _gainLinear;
-            }
-            return outFrames;
+            _conformed.AsSpan(0, gotSrc * ch).CopyTo(dst);
+            ApplyGain(dst, gotSrc, ch);
+            return gotSrc;
         }
         catch (ObjectDisposedException) { _eof = true; return 0; }
     }
 
-    // Pull up to srcFrames codec frames and channel-conform into _conformed (target channels, source rate).
-    private int ReadSource(int srcFrames)
+    void ApplyGain(Span<float> dst, int frames, int ch)
     {
+        if (_gainLinear == 1f) return;
+        int n = frames * ch;
+        for (int i = 0; i < n; i++) dst[i] *= _gainLinear;
+    }
+
+    // Pull up to srcFrames codec frames and channel-conform into _conformed starting at _holdFrames.
+    private int AppendSource(int srcFrames)
+    {
+        if (srcFrames <= 0) return 0;
         int wantSamples = srcFrames * _srcChannels;
         int got = _reader!.ReadSamples(_srcScratch, 0, wantSamples);
         int framesGot = got / _srcChannels;
         if (framesGot <= 0) return 0;
 
         int ch = _target.Channels;
-        var outv = _conformed.AsSpan(0, framesGot * ch);
+        int baseF = _holdFrames;
         for (int f = 0; f < framesGot; f++)
         {
             int ib = f * _srcChannels;
             float l = _srcScratch[ib];
             float r = _srcChannels >= 2 ? _srcScratch[ib + 1] : l;
-            int ob = f * ch;
-            if (ch == 1) outv[ob] = _srcChannels >= 2 ? (l + r) * 0.5f : l;
-            else { outv[ob] = l; outv[ob + 1] = r; for (int c = 2; c < ch; c++) outv[ob + c] = 0f; }
+            int ob = (baseF + f) * ch;
+            if (ch == 1) _conformed[ob] = _srcChannels >= 2 ? (l + r) * 0.5f : l;
+            else { _conformed[ob] = l; _conformed[ob + 1] = r; for (int c = 2; c < ch; c++) _conformed[ob + c] = 0f; }
         }
         return framesGot;
     }
@@ -219,6 +231,7 @@ internal sealed class SpotifyEngineAudioDecoder : IAudioDecoder
         double sec = _target.SampleRate > 0 ? (double)frame / _target.SampleRate : 0;
         try { _reader.SeekTo(TimeSpan.FromSeconds(sec)); } catch { /* streaming source not seekable yet — best effort */ }
         _resampler?.Reset();
+        _holdFrames = 0;
         _eof = false;
         return frame;
     }

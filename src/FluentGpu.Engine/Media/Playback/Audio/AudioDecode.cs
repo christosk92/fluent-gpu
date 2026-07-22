@@ -130,7 +130,8 @@ public sealed class WavAudioDecoder : IAudioDecoder
 
     private LinearResampler? _resampler;
     private byte[] _byteScratch = Array.Empty<byte>();
-    private float[] _floatScratch = Array.Empty<float>();   // conformed to target channels, source rate
+    private float[] _floatScratch = Array.Empty<float>();   // conformed to target channels, source rate; [0.._holdFrames) unread
+    private int _holdFrames;                                // unconsumed conformed frames retained for the next Process
 
     /// <inheritdoc/>
     public GaplessInfo Gapless { get; private set; } = GaplessInfo.None;
@@ -166,37 +167,43 @@ public sealed class WavAudioDecoder : IAudioDecoder
         int wantFrames = dst.Length / ch;
         if (wantFrames <= 0) return 0;
 
-        // How many source frames to pull to produce ~wantFrames output frames. With no resampler, output frames == input
-        // frames, so cap to wantFrames (never over-fill dst). With a resampler, pull a small margin; the resampler bounds
-        // its own output to dst's capacity.
-        int srcFrames;
-        if (_resampler is { IsActive: true })
-        {
-            double ratio = (double)_srcRate / _target.SampleRate;
-            srcFrames = (int)Math.Min(MaxSrcFramesPerRead, Math.Ceiling(wantFrames * ratio) + 2);
-        }
-        else
-        {
-            srcFrames = Math.Min(MaxSrcFramesPerRead, wantFrames);
-        }
-        long remainingSrc = _srcFramesTotal - _srcFrameCursor;
-        srcFrames = (int)Math.Min(srcFrames, remainingSrc);
-        if (srcFrames <= 0) { _eof = true; return 0; }
-
-        // Fetch + decode + channel-conform into _floatScratch (source rate, target channels).
-        int gotSrc = DecodeSourceFrames(srcFrames);
-        if (gotSrc <= 0) { _eof = true; return 0; }
-        _srcFrameCursor += gotSrc;
-
-        var conformed = _floatScratch.AsSpan(0, gotSrc * ch);
         if (_resampler is { IsActive: true } rs)
         {
-            int outFrames = rs.Process(conformed, gotSrc, dst);
-            if (outFrames <= 0 && _srcFrameCursor >= _srcFramesTotal) _eof = true;
-            return outFrames;
+            // Top up retained unread input; Process returns Consumed so we keep src[Consumed..] for the next call.
+            int wantAvail = Math.Min(MaxSrcFramesPerRead, rs.SrcFramesForOutput(wantFrames));
+            int wantPull = Math.Min(MaxSrcFramesPerRead - _holdFrames, Math.Max(0, wantAvail - _holdFrames));
+            long remainingSrc = _srcFramesTotal - _srcFrameCursor;
+            wantPull = (int)Math.Min(wantPull, remainingSrc);
+            if (wantPull > 0)
+            {
+                int got = DecodeSourceFramesAt(_holdFrames, wantPull);
+                if (got > 0) { _holdFrames += got; _srcFrameCursor += got; }
+            }
+            if (_holdFrames <= 0) { _eof = true; return 0; }
+
+            ResampleResult rr = rs.Process(_floatScratch.AsSpan(0, _holdFrames * ch), _holdFrames, dst);
+            int unread = _holdFrames - rr.Consumed;
+            if (unread > 0 && rr.Consumed > 0)
+                Array.Copy(_floatScratch, rr.Consumed * ch, _floatScratch, 0, unread * ch);
+            _holdFrames = Math.Max(0, unread);
+
+            if (rr.Produced <= 0)
+            {
+                if (_holdFrames <= 0 && _srcFrameCursor >= _srcFramesTotal) _eof = true;
+                return 0;
+            }
+            return rr.Produced;
         }
 
-        conformed.CopyTo(dst);
+        int srcFrames = Math.Min(MaxSrcFramesPerRead, wantFrames);
+        long remain = _srcFramesTotal - _srcFrameCursor;
+        srcFrames = (int)Math.Min(srcFrames, remain);
+        if (srcFrames <= 0) { _eof = true; return 0; }
+
+        int gotSrc = DecodeSourceFramesAt(0, srcFrames);
+        if (gotSrc <= 0) { _eof = true; return 0; }
+        _srcFrameCursor += gotSrc;
+        _floatScratch.AsSpan(0, gotSrc * ch).CopyTo(dst);
         if (_srcFrameCursor >= _srcFramesTotal) _eof = true;
         return gotSrc;
     }
@@ -211,12 +218,15 @@ public sealed class WavAudioDecoder : IAudioDecoder
         long bytePos = _dataStart + srcFrame * _blockAlign;
         _src.Seek(bytePos);
         _srcFrameCursor = srcFrame;
+        _holdFrames = 0;
         _eof = false;
         _resampler?.Reset();
         return frame;
     }
 
-    private int DecodeSourceFrames(int srcFrames)
+    /// <summary>Decode <paramref name="srcFrames"/> into <see cref="_floatScratch"/> starting at frame
+    /// <paramref name="destFrame"/> (appends onto the retained unread hold).</summary>
+    private int DecodeSourceFramesAt(int destFrame, int srcFrames)
     {
         int ch = _target.Channels;
         int bytesWanted = srcFrames * _blockAlign;
@@ -224,22 +234,19 @@ public sealed class WavAudioDecoder : IAudioDecoder
         int framesGot = got / _blockAlign;
         if (framesGot <= 0) return 0;
 
-        var outFloat = _floatScratch.AsSpan(0, framesGot * ch);
         for (int f = 0; f < framesGot; f++)
         {
             int inBase = f * _blockAlign;
-            // Decode source channels for this frame.
             float l = SampleAt(inBase, 0);
             float r = _srcChannels >= 2 ? SampleAt(inBase, 1) : l;
 
-            // Conform to the target channel count.
-            int ob = f * ch;
-            if (ch == 1) { outFloat[ob] = _srcChannels >= 2 ? (l + r) * 0.5f : l; }
+            int ob = (destFrame + f) * ch;
+            if (ch == 1) { _floatScratch[ob] = _srcChannels >= 2 ? (l + r) * 0.5f : l; }
             else
             {
-                outFloat[ob] = l;
-                outFloat[ob + 1] = r;
-                for (int c = 2; c < ch; c++) outFloat[ob + c] = 0f;
+                _floatScratch[ob] = l;
+                _floatScratch[ob + 1] = r;
+                for (int c = 2; c < ch; c++) _floatScratch[ob + c] = 0f;
             }
         }
         return framesGot;

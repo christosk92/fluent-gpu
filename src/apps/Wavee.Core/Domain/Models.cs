@@ -71,6 +71,10 @@ public sealed record Artist(
     // the in-memory TopAlbums count. Additive/defaulted; carried so the virtualized grid can size a facet up front and
     // "See all N" gates on the true total rather than the ~10-item overview slice.
     int AlbumsTotal = 0, int SinglesTotal = 0, int CompilationsTotal = 0,
+    // Pathfinder discography.latest + popularReleasesAlbums — the artist-page Releases column (masthead + strip). Distinct
+    // from TopAlbums (the full facet grids). Null ⇒ UI falls back / hides.
+    Album? LatestRelease = null,
+    IReadOnlyList<Album>? PopularReleases = null,
     // SWR freshness stamp: when the rich overview (TopTracks/stats/palette/bio) was last fetched. default = never/old →
     // treated as stale and re-fetched on next open (which heals records persisted by an earlier build, whose deserialized
     // FetchedAt is default). Set ONLY by a full-overview write; the store merge keeps the newer value so a thin

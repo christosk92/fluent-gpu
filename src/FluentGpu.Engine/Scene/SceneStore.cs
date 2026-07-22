@@ -60,8 +60,8 @@ public sealed class SceneStore : ISceneBackend
     public RectF OverlayClip = RectF.Infinite;
 
     // Effective device-pixel scale (DIP→px), set by AppHost each frame from the window scale (1 in headless / on DPI
-    // change re-read). The sole consumer is the scroll content transform's device-pixel rounding (OverscrollPhysics.
-    // WriteContentTransform), so a sub-pixel pan advances in whole device pixels while the logical offset stays float.
+    // change re-read). Scroll transform rounding and recorder-side self-blur support geometry share it so both land on
+    // the same physical grid while their logical offsets/bounds remain float.
     public float DeviceScale = 1f;
 
     // topology (int indices; 0 = none)

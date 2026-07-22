@@ -353,7 +353,8 @@ public sealed class ResampleStage
     /// <summary>True when the rates differ (the stage is not a no-op).</summary>
     public bool IsActive => _resampler.IsActive;
 
-    /// <summary>Convert <paramref name="inFrames"/> input frames → output frames written to <paramref name="dst"/>;
-    /// returns output frames produced.</summary>
-    public int Convert(ReadOnlySpan<float> src, int inFrames, Span<float> dst) => _resampler.Process(src, inFrames, dst);
+    /// <summary>Convert <paramref name="inFrames"/> input frames → output frames written to <paramref name="dst"/>.
+    /// Returns produced-output and consumed-input counts — the caller retains <c>src[Consumed..]</c> on a short dst.</summary>
+    public ResampleResult Convert(ReadOnlySpan<float> src, int inFrames, Span<float> dst) =>
+        _resampler.Process(src, inFrames, dst);
 }

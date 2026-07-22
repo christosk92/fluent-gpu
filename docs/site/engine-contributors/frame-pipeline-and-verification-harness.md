@@ -1,6 +1,6 @@
 # Frame pipeline and verification harness
 
-> **✅ Animation engine — signals-first rework landed + verified.** The phase-7 animation tick is one `AnimScheduler` (`min(next-due)` wake, per-source `CadenceClass`) over a unified POD `AnimValue` slab — the former N independent tickers (interaction, brush, …) are folded in. The new gates are live and green: spring/gesture dt-determinism replay, the scheduler-tick alloc tripwire, the ambient-cadence idle check (521 VerticalSlice gates pass overall). Design, now implemented + the per-phase gate list: [`../../plans/animation-engine-rework-design.md`](../../plans/animation-engine-rework-design.md) §11.
+> **✅ Animation engine — signals-first rework landed + verified.** The phase-7 animation tick is one `AnimScheduler` (`min(next-due)` wake, per-source `CadenceClass`) over a unified POD `AnimValue` slab — the former N independent tickers (interaction, brush, …) are folded in. The new gates are live and green: spring/gesture dt-determinism replay, the scheduler-tick alloc tripwire, the ambient-cadence idle check. Design, now implemented + the per-phase gate list: [`../../plans/animation-engine-rework-design.md`](../../plans/animation-engine-rework-design.md) §11.
 
 This page is for people **changing engine internals** — the frame loop, a seam, the recorder, the reconciler — and
 who then need to *prove* the change didn't regress a cross-seam contract. If you are building an app, read
@@ -15,6 +15,8 @@ The harness is the single source of truth for "does the engine still work." Afte
 ```bash
 dotnet build src/FluentGpu.VerticalSlice   # must be clean
 dotnet run   --project src/FluentGpu.VerticalSlice   # must print: ALL CHECKS PASSED
+# Local subset while iterating (do NOT set FG_SUITE in CI):
+dotnet run   --project src/FluentGpu.VerticalSlice -- --suite scroll
 ```
 
 > Honesty note: the harness asserts *structure* — what the recorder emitted, where layout placed nodes, what re-rendered,
@@ -31,14 +33,14 @@ dotnet run   --project src/FluentGpu.VerticalSlice   # must print: ALL CHECKS PA
 | The headless GPU device (decoded DrawList) | `src/FluentGpu.Engine/Headless/Rhi/HeadlessGpuDevice.cs` |
 | The headless window / platform app / input | `src/FluentGpu.Engine/Headless/Pal/HeadlessPlatform.cs` |
 | The deterministic font advance model | `src/FluentGpu.Engine/Headless/Text/HeadlessFontSystem.cs` |
-| The checks themselves (add/modify a group) | `src/FluentGpu.VerticalSlice/Program.cs` |
+| The checks themselves (add/modify a group) | `src/FluentGpu.VerticalSlice/Suites/*Suite.cs` (+ `Probes/`, `Harness/`) |
 | `InputEvent` / `WindowDesc` / the PAL seam | `src/FluentGpu.Engine/Seams/Pal/Pal.cs` |
 
 The phase order and the SoA scene it patches are *described* (not re-derived) in the design canon: the 13-phase loop and
 the minimum vertical slice live in
 [`architecture-spec.md`](../../../design/architecture-spec.md), and the validation spine in
 [`subsystems/validation.md`](../../../design/subsystems/validation.md). This page documents the *as-built* loop in
-`AppHost.cs` and the harness in `Program.cs`.
+`AppHost.cs` and the harness under `src/FluentGpu.VerticalSlice/` (`Program.cs` + `Harness/` + `Suites/` + `Probes/`).
 
 ## The 13-phase frame loop
 
@@ -153,7 +155,7 @@ dotnet run --project src/FluentGpu.VerticalSlice
 ```
 
 It constructs the engine on the headless seams, drives a deterministic sequence of frames + synthetic input, and prints
-one `[PASS]`/`[FAIL]` line per assertion, ending with a verdict. The exact success line (asserted in `Program.cs`):
+one `[PASS]`/`[FAIL]` line per assertion, ending with a verdict. The exact success line (emitted by `Program.cs`):
 
 ```text
 FluentGpu — minimum vertical slice (headless RHI/PAL/Text)
@@ -211,7 +213,7 @@ verifiable here even though they're `needs-pixels` on D3D12 (see the `PopupWindo
 
 ## The check categories
 
-As of this writing the harness runs **521 assertions** (all green, including the animation-rework dt-determinism and
+As of this writing the harness runs **hundreds of assertions** (all green, including the animation-rework dt-determinism and
 scheduler-tick alloc gates): **9 inline core-slice checks** in `Main` (numbered 1–9, the minimum-vertical-slice
 acceptance: window→clear→present, two rounded-rect buttons, three text runs, flex bounds, reconcile+`UseState`, a
 clickable button round-trip, the steady idle frame, and the zero-alloc paint half), plus the rest spread across the
@@ -233,20 +235,32 @@ end-to-end — a non-exhaustive sample of the shape:
   `WaveCTextPipelineChecks`, the `D1…`/`D5…` defect-fix groups, `E11VirtChecks` for the virtualization substrate).
 - **Navigation** — `NavigationChecks`, `NavigationViewChecks`, `NavHierarchyChecks`, `PipsPagerOutputChecks`.
 
-> Keeping the counts honest: the numbers above (521 total, 9 inline) are exact at the time of writing but **will drift** as
-> checks are added — that's expected and good. Don't hard-code a count anywhere that has to match; the verdict line and
-> the exit code are the contract, not the total. If you want the live number, `grep -c 'Check(' src/FluentGpu.VerticalSlice/Program.cs`
-> (subtract the one definition line).
+> Keeping the counts honest: totals **will drift** as checks are added — that's expected and good. Don't hard-code a
+> count anywhere that has to match; the verdict line and the exit code are the contract, not the total. The live number
+> is printed on the success line (`ALL CHECKS PASSED … (N checks; …)`).
+
+## Layout
+
+| Path | Role |
+|---|---|
+| `Program.cs` | Thin runner: `FG_PROBE`, `--suite` / `FG_SUITE`, `CoreSuite` + `SuiteRegistry` |
+| `Harness/Gate.cs` | `Check`, failure counters, arena summary |
+| `Harness/Asserts.cs` | Scene / draw-list / input helpers (`Child`, `HasGlyph`, `Near`, …) |
+| `Harness/HeadlessFixture.cs` | Optional using-friendly `AppHost` bootstrap |
+| `Harness/SuiteRegistry.cs` | Explicit ordered suite list (no reflection — AOT-safe) |
+| `Suites/*Suite.cs` | Domain check groups (`ScrollSuite.Run`, `HooksSuite.Run`, …) |
+| `Probes/` | Probe components + `FG_PROBE` drivers |
 
 ## The `Check(...)` primitive and the fixture pattern
 
-Every assertion goes through one tiny primitive in `Program.cs`:
+Every assertion goes through one tiny primitive in `Harness/Gate.cs` (imported via `using static`):
 
 ```csharp
-static void Check(string name, bool ok, string? detail = null)
+public static void Check(string name, bool ok, string? detail = null)
 {
     Console.WriteLine($"  [{(ok ? "PASS" : "FAIL")}] {name}{(detail is null ? "" : $"  ({detail})")}");
-    if (!ok) s_failures++;
+    Total++;
+    if (!ok) Failures++;
 }
 ```
 
@@ -289,7 +303,7 @@ static void SliderSignalChecks(StringTable strings)
 }
 ```
 
-**The Probe pattern.** A *Probe* is a small `Component` defined at the top of `Program.cs` that
+**The Probe pattern.** A *Probe* is a small `Component` under `Probes/` (or nested in the owning suite) that
 exposes observable state for the assertion — a `static int Renders` it bumps in `Render()`, a `Signal<T>` field the test
 writes to drive it, or a captured hook value. The test resets the static, mounts the probe as the root, runs a frame,
 pokes a signal, runs another frame, and reads the probe back. Existing probes to copy: `Counter` (the slice root),
@@ -299,7 +313,7 @@ an existing probe before writing a new one.
 
 ## The finder/comparer toolbox
 
-`Program.cs` carries a small set of static helpers for navigating the scene and comparing what got drawn. Use these
+`Harness/Asserts.cs` carries a small set of static helpers for navigating the scene and comparing what got drawn. Use these
 instead of re-deriving tree walks:
 
 | Helper | Signature | Use |
@@ -343,16 +357,19 @@ Check("clickable", f.ClicksHandled == 1);
 
 The workflow is small and mechanical:
 
-1. **Write a Probe** at the top of `Program.cs` (or reuse one) that exposes the state your assertion reads — a static
-   counter, a `Signal<T>` field, or a captured value.
-2. **Write a `static void MyFeatureChecks(StringTable strings)`** following the fixture pattern: build the headless app +
-   window + device + fonts, reset the probe's statics, `new AppHost(...)`, `RunFrame()` to mount, drive input/signals,
-   `RunFrame()` again, then one or more `Check(...)` calls with a numbered name and a numeric `detail`.
-3. **Register one call** in `Main` — drop `MyFeatureChecks(strings);` next to the related group calls (the registration
-   block is just a long sequential list; there is no array/reflection — adding a group is a single line).
-4. **Verify**: `dotnet build src/FluentGpu.VerticalSlice` clean, then `dotnet run --project src/FluentGpu.VerticalSlice`
-   → `ALL CHECKS PASSED`. Confirm your new lines print `[PASS]` (and *make them fail once* on purpose to confirm the
-   assertion actually bites — a check that can't fail is worse than no check).
+1. **Write a Probe** under `Probes/` (or nest it in the owning suite) that exposes the state your assertion reads — a
+   static counter, a `Signal<T>` field, or a captured value.
+2. **Write a `static void MyFeatureChecks(StringTable strings)`** on the domain suite class (`Suites/ScrollSuite.cs`, …)
+   following the fixture pattern: build the headless app + window + device + fonts, reset the probe's statics,
+   `new AppHost(...)`, `RunFrame()` to mount, drive input/signals, `RunFrame()` again, then one or more `Check(...)`
+   calls with a numbered name and a numeric `detail`.
+3. **Register the call** in that suite's `Run(StringTable)` method. If you add a *new* suite type, also add one line to
+   `Harness/SuiteRegistry.All` (explicit ordered list — no reflection).
+4. **Verify**: `dotnet build src/FluentGpu.VerticalSlice` clean, then
+   `dotnet run --project src/FluentGpu.VerticalSlice` → `ALL CHECKS PASSED`. For a faster local loop while editing one
+   area: `dotnet run --project src/FluentGpu.VerticalSlice -- --suite scroll` (or `FG_SUITE=hooks`). CI must run the
+   full suite (no `FG_SUITE`). Confirm your new lines print `[PASS]` (and *make them fail once* on purpose to confirm
+   the assertion actually bites — a check that can't fail is worse than no check).
 
 Keep each group self-contained (its own host) so a failure is isolated and the suite stays order-independent.
 

@@ -41,7 +41,7 @@ dotnet run --project src/FluentGpu.WindowsApp -- --screenshot <path>   # render 
 powershell -File docs\design\check-canon.ps1              # design-time drift gate — run AFTER editing any docs/design/ doc (exit 0 = clean)
 ```
 
-The VerticalSlice harness (`src/FluentGpu.VerticalSlice/Program.cs`) runs ~60 cross-seam golden checks headlessly (no GPU/window) and enforces the alloc tripwire (`GC.GetAllocatedBytesForCurrentThread()` delta == 0 per hot phase) on the headless `Rhi.Headless`/`Pal.Headless` seams; GPU pixels are the separate `--screenshot` check.
+The VerticalSlice harness (`src/FluentGpu.VerticalSlice/` — `Program.cs` + `Harness/` + `Suites/` + `Probes/`) runs headless golden checks (no GPU/window) and enforces the alloc tripwire (`GC.GetAllocatedBytesForCurrentThread()` delta == 0 per hot phase) on the headless `Rhi.Headless`/`Pal.Headless` seams; local subset via `--suite` / `FG_SUITE` (CI must run the full suite). GPU pixels are the separate `--screenshot` check.
 
 ### Claude scratchpads and PlayPlay-inclusive Wavee publishes
 

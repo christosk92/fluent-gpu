@@ -21,6 +21,15 @@ public readonly record struct SelfBlurWorkGeometry(
     SelfBlurPixelBox RequiredSource,
     SelfBlurPixelBox Work);
 
+/// <summary>Recorder-side logical-space geometry for one self blur. <see cref="OutputBounds"/> is the full
+/// halo-bearing output (unclipped, so span/subtree culling remains translation-safe); <see cref="VisibleOutput"/> is
+/// the part that survives the active composite clip; <see cref="RequiredSource"/> is the crisp layer strip that must
+/// be recorded inside the blur group to produce that visible output.</summary>
+public readonly record struct SelfBlurRecordGeometry(
+    RectF OutputBounds,
+    RectF VisibleOutput,
+    RectF RequiredSource);
+
 /// <summary>
 /// Portable geometry for the per-node SELF-blur (the Expressive Motion Kit's <c>LayerKind.Blur</c>) run by the D3D12
 /// <c>OpacityLayerCompositor</c> — the physical-px box a self-blur writes and whether it is clamped by the canvas edge.
@@ -53,6 +62,36 @@ public static class SelfBlurRegion
         int down = AcrylicBackdropMath.DownsampleFactor(blurSigma, 1f);
         float texelSigma = AcrylicBackdropMath.EffectiveTexelSigma(blurSigma, 1f, down);
         return AcrylicBackdropMath.KernelRadiusTexels(texelSigma) * down;
+    }
+
+    /// <summary>
+    /// Compute the recorder's DIP-space visibility/source geometry from the same physical-pixel tap support used by
+    /// <see cref="ComputeWork"/>. Pixel boxes convert back OUTWARD by a tiny fraction of one device pixel so a
+    /// DIP→px floor/ceil round-trip can never lose the first or last contributing tap at fractional DPI.
+    /// </summary>
+    public static SelfBlurRecordGeometry ComputeRecordGeometry(
+        in RectF layerRect, in RectF compositeClip, float blurSigma, float scale)
+    {
+        if (!(scale > 0f) || layerRect.IsEmpty || !(blurSigma > 0f)) return default;
+
+        SelfBlurPixelBox layerPx = ToPixelBox(layerRect, scale);
+        int halo = TapRadius(blurSigma);
+        SelfBlurPixelBox outputPx = Inflate(layerPx, halo);
+        RectF output = FromPixelBoxOutward(outputPx, scale);
+
+        // SceneRecorder passes an actual active clip: empty means fully clipped; Infinite is the root/unbounded case.
+        if (compositeClip.IsEmpty) return new SelfBlurRecordGeometry(output, default, default);
+
+        SelfBlurPixelBox visiblePx = compositeClip.IsInfinite
+            ? outputPx
+            : Intersect(outputPx, ToPixelBox(compositeClip, scale));
+        if (visiblePx.IsEmpty) return new SelfBlurRecordGeometry(output, default, default);
+
+        SelfBlurPixelBox sourcePx = Intersect(layerPx, Inflate(visiblePx, halo));
+        return new SelfBlurRecordGeometry(
+            output,
+            FromPixelBoxOutward(visiblePx, scale),
+            FromPixelBoxOutward(sourcePx, scale));
     }
 
     /// <summary>
@@ -120,6 +159,17 @@ public static class SelfBlurRegion
             (int)MathF.Floor(rect.Y * scale),
             (int)MathF.Ceiling(rect.Right * scale),
             (int)MathF.Ceiling(rect.Bottom * scale));
+
+    private static RectF FromPixelBoxOutward(in SelfBlurPixelBox box, float scale)
+    {
+        if (box.IsEmpty || !(scale > 0f)) return default;
+        float epsilon = 1f / (scale * 1024f);
+        float x = box.MinX / scale - epsilon;
+        float y = box.MinY / scale - epsilon;
+        float right = box.MaxX / scale + epsilon;
+        float bottom = box.MaxY / scale + epsilon;
+        return new RectF(x, y, right - x, bottom - y);
+    }
 
     private static SelfBlurPixelBox Inflate(in SelfBlurPixelBox box, int amount)
         => new(box.MinX - amount, box.MinY - amount, box.MaxX + amount, box.MaxY + amount);

@@ -272,7 +272,7 @@ public static class ScrollBindEval
             if (h.IsNull || !scene.IsLive(h) || !scene.HasScroll(h)) continue;
             ref ScrollState sc = ref scene.ScrollRef(h);
             var g = new ScrollGeometry(sc.OffsetX, sc.OffsetY, sc.ViewportW, sc.ViewportH, sc.ContentW, sc.ContentH,
-                                       sc.OverscrollPx, sc.FlingVelocity, sc.ScrollFlags);
+                                       sc.OverscrollPx, sc.FlingVelocity, sc.ScrollFlags, sc.UserScrollActive);
             long key = row.Project(g);
             if (row.HasLast && key == row.LastKey) continue;
             row.Action(g);

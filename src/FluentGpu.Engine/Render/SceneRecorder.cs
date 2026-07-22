@@ -606,8 +606,18 @@ public static class SceneRecorder
         var local = new RectF(0f, 0f, pw, ph);
         var deviceBounds = world.TransformBounds(local);
         bool overlapsClip = deviceBounds.Overlaps(clip);
+        bool hasSelfBlur = p.BlurSigma > 0.01f;
+        SelfBlurRecordGeometry blurGeometry = hasSelfBlur
+            ? SelfBlurRegion.ComputeRecordGeometry(deviceBounds, clip, p.BlurSigma,
+                scene.DeviceScale > 0f ? scene.DeviceScale : 1f)
+            : default;
+        // A self-blur paints beyond its sharp layout/device rect. Store the UNCLIPPED halo in every span so an
+        // off-screen clean ancestor cannot discard a row whose Gaussian support has already entered the viewport.
+        RectF visualBounds = hasSelfBlur && !blurGeometry.OutputBounds.IsEmpty
+            ? blurGeometry.OutputBounds
+            : deviceBounds;
         var result = new SpanRecordResult();
-        result.Include(deviceBounds);
+        result.Include(visualBounds);
 
         ulong spanInputSig = 0;
         ulong spanMoveSig = 0;
@@ -632,7 +642,7 @@ public static class SceneRecorder
             // (the "rail background only shows a couple frames later" report).
             if (EnableSubtreeCull && spanStoreEnabled && !blocked
                 && recordDirtyBits == 0 && descendantDirtyBits == 0
-                && !deviceBounds.Overlaps(clip)
+                && !visualBounds.Overlaps(clip)
                 && spans.TryGetSubtree((int)node.Raw.Index, node.Raw.Gen, spanFrame, out var priorWorldC, out var priorSubtreeC)
                 && TryTranslationDelta(in priorWorldC, in world, out float cdx, out float cdy))
             {
@@ -699,7 +709,7 @@ public static class SceneRecorder
                     {
                         var dmgParent = scene.Parent(node);
                         if (dmgParent.IsNull || (scene.Flags(dmgParent) & NodeFlags.Scrollable) == 0)
-                            stats.AddDamage(deviceBounds);
+                            stats.AddDamage(visualBounds);
                     }
                     stats.SpansReused++;
                     stats.SpansRebased++;
@@ -729,7 +739,7 @@ public static class SceneRecorder
         {
             var dmgParent = scene.Parent(node);
             if (dmgParent.IsNull || (scene.Flags(dmgParent) & NodeFlags.Scrollable) == 0)
-                stats.AddDamage(deviceBounds);
+                stats.AddDamage(visualBounds);
         }
 
         // ── flat opacity group (NodePaint.OpacityGroup, WinUI Composition LayerVisual semantics): the subtree renders
@@ -747,12 +757,16 @@ public static class SceneRecorder
         // rounded corners (the curve). Takes precedence over the opacity/self-blur groups — it composites once at the
         // group alpha and blurs via its own sigma. Explicit (BoxEl/ScrollEl.EdgeFade) or a scroller's AutoEdgeFade.
         EdgeFadeSpec edgeFade = default;
-        bool isEdgeFade = overlapsClip && TryResolveEdgeFade(scene, node, flags, maybeSparsePaint, out edgeFade);
+        // Resolve PRESENCE independently of sharp visibility. A node carrying both effects remains an edge-fade node
+        // even while only a hypothetical self-blur halo would overlap; otherwise the precedence would flip at the clip.
+        bool hasEdgeFade = TryResolveEdgeFade(scene, node, flags, maybeSparsePaint, out edgeFade);
+        bool isEdgeFade = overlapsClip && hasEdgeFade;
         if (isEdgeFade) stats.EdgeFadeGroupCount++;
         // An opacity-zero stagger row still has a non-zero authored blur during its delay. It contributes no pixels, so
         // allocating/clearing an offscreen RT and running two Gaussian passes is exact dead work (and made several
         // delayed Home rows overlap their GPU cost). Keep walking for animation/hit state, but do not emit a blur group.
-        bool isBlurCandidate = !isEdgeFade && opacity > 0.001f && p.BlurSigma > 0.01f && overlapsClip;
+        bool isBlurCandidate = !hasEdgeFade && opacity > 0.001f && hasSelfBlur
+            && !blurGeometry.VisibleOutput.IsEmpty && !blurGeometry.RequiredSource.IsEmpty;
         if (isBlurCandidate)
         {
             stats.BlurCandidateCount++;
@@ -767,6 +781,8 @@ public static class SceneRecorder
         bool isBlurGroup = isBlurCandidate;
         if (isBlurGroup) stats.BlurGroupCount++;
         bool isOpacityGroup = !isEdgeFade && !isBlurGroup && p.OpacityGroup && opacity < 0.999f && overlapsClip;
+        RectF recordClip = clip;
+        bool pushedBlurSourceClip = false;
         if (isEdgeFade)
         {
             // DIP→device px scale from this node's own box (uniform DPI ⇒ sx≈sy); corners + bands scale with it.
@@ -790,6 +806,12 @@ public static class SceneRecorder
             dl.PushBlurLayer(deviceBounds, p.Corners, p.BlurSigma, opacity, key,
                 holdBlur ? p.BlurCachePolicy : BlurCachePolicy.Normal, inMotion, layerId, clip,
                 p.BlurAnimationActive != 0);
+            // The viewport clip applies to the FINAL composite, not to the crisp pixels feeding the Gaussian. Record
+            // and rasterize the exact contributing strip inside the layer; this explicit nested clip also makes the
+            // D3D target scissor widen before the first subtree draw, then restores the composite clip before PopLayer.
+            recordClip = blurGeometry.RequiredSource;
+            dl.PushClip(recordClip, key);
+            pushedBlurSourceClip = true;
             opacity = 1f;
         }
         else if (isOpacityGroup)
@@ -798,17 +820,19 @@ public static class SceneRecorder
             opacity = 1f;
         }
 
+        bool overlapsRecordClip = deviceBounds.Overlaps(recordClip);
+
         // ── shadow: drawn beneath the fill, BEFORE this node pushes its OWN clip — otherwise a ClipToBounds node (a flyout
         //    surface, a dialog) would clip its own soft-shadow halo away (the halo extends outside the node bounds). It is
         //    still bounded by the PARENT clip via the deviceBounds.Overlaps(clip) gate. ──
-        if (maybeSparsePaint && overlapsClip && scene.TryGetShadow(node, out var sh) && !sh.IsNone)
+        if (maybeSparsePaint && overlapsRecordClip && scene.TryGetShadow(node, out var sh) && !sh.IsNone)
             dl.Shadow(local, p.Corners, sh.Color, sh.OffsetX, sh.OffsetY, sh.Blur, sh.Spread, world, opacity, key);
 
         // Circular-arc stroke (ProgressRing): a trimmed, round-capped ring drawn as its own SDF primitive. The ring node
         // carries no fill (the arc IS the visual), so its order vs the fill block below doesn't matter for its own node.
         // The arc honors the StrokeTrim paint channels (AnimChannel.StrokeTrimStart/End) as a fraction of its sweep, so the
         // indeterminate ring can "breathe" (animate its arc length) — not just rotate.
-        if (maybeSparsePaint && overlapsClip && scene.TryGetArc(node, out var arcS) && !arcS.IsNone)
+        if (maybeSparsePaint && overlapsRecordClip && scene.TryGetArc(node, out var arcS) && !arcS.IsNone)
         {
             float trimS = float.IsNaN(p.StrokeTrimStart) ? 0f : Math.Clamp(p.StrokeTrimStart, 0f, 1f);
             float trimE = float.IsNaN(p.StrokeTrimEnd) ? 1f : Math.Clamp(p.StrokeTrimEnd, 0f, 1f);
@@ -821,7 +845,7 @@ public static class SceneRecorder
         // A clipping node (scroll viewport / virtual list) intersects the active clip and pushes the scissor. An authored
         // clip-rect (AnimChannel.ClipL/T/R/B, node-local) composes with ClipsToBounds into a single combined scissor.
         bool pushedClip = false;
-        RectF childClip = clip;
+        RectF childClip = recordClip;
         bool wantClip = (flags & NodeFlags.ClipsToBounds) != 0 || !p.ClipRect.IsInfinite;
         if ((flags & NodeFlags.ClipsToBounds) != 0)
             childClip = childClip.Intersect(deviceBounds);
@@ -861,7 +885,7 @@ public static class SceneRecorder
 
         // ── acrylic: snapshot + blur the backdrop drawn so far, composite the frosted surface, then content draws on top ──
         AcrylicSpec ac = default;
-        bool isAcrylic = maybeSparsePaint && overlapsClip && scene.TryGetAcrylic(node, out ac);
+        bool isAcrylic = maybeSparsePaint && overlapsRecordClip && scene.TryGetAcrylic(node, out ac);
         int acrylicRangeIdx = -1;   // E9: own-subtree damage-entry range slot for this layer (−1 = not a cached acrylic)
         if (isAcrylic)
         {
@@ -877,7 +901,7 @@ public static class SceneRecorder
 
         // Cull this node's OWN draw if it falls entirely outside the active clip (offscreen virtualized/overscan rows).
         bool hasOwnVisual = p.VisualKind != VisualKind.None;
-        bool ownVisible = overlapsClip;
+        bool ownVisible = overlapsRecordClip;
         if (hasOwnVisual)
         {
             if (ownVisible) stats.DrawnNodeCount++;
@@ -1273,7 +1297,7 @@ public static class SceneRecorder
         // ── focus ring: keyboard focus only (FocusVisual), drawn last so it overlays children. Emitted AFTER the
         // node's own clip pops — the WinUI ring lives OUTSIDE the bounds (FocusVisualMargin −3), so a ClipsToBounds
         // control (a TextBox field) must not scissor its own ring away. Ancestor clips still apply (correct).
-        if (focus.Enabled && (flags & NodeFlags.FocusVisual) != 0 && overlapsClip)
+        if (focus.Enabled && (flags & NodeFlags.FocusVisual) != 0 && overlapsRecordClip)
             EmitFocusRing(dl, b, p.Corners, interaction.FocusVisualMargin, world, opacity, in focus, key | 0x10);
 
         // Auto-hiding scrollbar overlay: draw after popping the viewport's content clip so the expanded gutter/thumb
@@ -1297,12 +1321,12 @@ public static class SceneRecorder
         // scrollable. Drawn BEFORE the scrollbar (under the thumb) and NOT gated on FadeT — the fade is always-on while
         // there is more content (unlike the auto-hiding bar). Self-gates on overflow + per-edge offset + the resolved
         // opaque surface to fade toward (no opaque plate ⇒ skip rather than a wrong-colour fade).
-        if (overlapsClip && !isEdgeFade && (flags & NodeFlags.Scrollable) != 0 &&
+        if (overlapsRecordClip && !isEdgeFade && (flags & NodeFlags.Scrollable) != 0 &&
             scene.TryGetScroll(node, out var sec) && sec.EdgeCueConfig != 0 &&
             TryResolveCueSurface(scene, node, flags, in p, out var cueSurface))
             EmitScrollEdgeCues(dl, b, in sec, p.Corners, world, opacity, key | 0x18, cueSurface, scrollThumb);
 
-        if (scrollThumb.A > 0f && overlapsClip && (flags & NodeFlags.Scrollable) != 0 &&
+        if (scrollThumb.A > 0f && overlapsRecordClip && (flags & NodeFlags.Scrollable) != 0 &&
             scene.TryGetScroll(node, out var scb))
             EmitScrollbar(dl, b, in scb, world, opacity, key | 0x20, scrollThumb, scrollTrack);
 
@@ -1311,6 +1335,7 @@ public static class SceneRecorder
         // group alpha. Exactly one of these was pushed (blur subsumes the opacity group).
         if (isEdgeFade) dl.PopLayer(deviceBounds, key);
         if (isOpacityGroup) dl.PopLayer(deviceBounds, key);
+        if (pushedBlurSourceClip) dl.PopClip(key);
         if (isBlurGroup) dl.PopLayer(deviceBounds, key);
 
         // Hover-elevate clip-ESCAPE consume: this node is the flagged clip root and a descendant deferral parked the

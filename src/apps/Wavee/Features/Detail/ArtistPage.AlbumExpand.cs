@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using FluentGpu.Animation;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -611,29 +612,57 @@ sealed class DiscographySection : Component
         int total = _vc.CountOr0;
         bool collapsed = _collapsed.Value;
 
-        var children = new List<Element>(2) { Header(total, collapsed) };
-        if (!collapsed)
+        // Body stays mounted so collapse can animate (Reflow height) and collapsed mode can peek the first album
+        // tops through a clipped, bottom-faded, softly blurred window. Leading anchor keeps content top-pinned.
+        Element grid = new BoxEl
         {
-            var body = new List<Element>(2) { Embed.Comp(() => new DiscoGrid(_vc!, _svc, _go, _play, cap: Cap, accent: _accent)) };
-            if (total > Cap) body.Add(SeeAllButton(total));
-            children.Add(new BoxEl
-            {
-                Direction = 1, Gap = Spacing.M,
-                // The sticky header's backdrop is the PAGE ITSELF: while the header is pinned at the viewport top,
-                // this body (the grid + the See-all card) stops painting at the line just under it (the engine's
-                // sticky-clip bind — ClipRect.top rides the viewport line), so the real Mica/tint backdrop shows
-                // behind the pinned header. No acrylic, no painted plate — the cards are simply guillotined at the
-                // header's bottom edge, exactly the iOS grouped-list sticky treatment.
-                ScrollBinds = [ new() { ClipTopAtViewport = HeaderClipInset } ],
-                Children = body.ToArray(),
-            });
-        }
+            Direction = 1,
+            // Collapsed peek is decorative — taps expand via the clip wrapper; cards must not open drawers.
+            HitTestVisible = !collapsed,
+            Children = [Embed.Comp(() => new DiscoGrid(_vc!, _svc, _go, _play, cap: Cap, accent: _accent))],
+        };
+        var bodyKids = new List<Element>(2) { grid };
+        if (!collapsed && total > Cap) bodyKids.Add(SeeAllButton(total));
+
+        Element body = new BoxEl
+        {
+            Direction = 1, Gap = Spacing.M,
+            ClipToBounds = true,
+            // Collapsed → short peek of the first cards; expanded → natural height. SizeMode.Reflow eases the layout
+            // height so sections below slide smoothly (WinUI Expander timings).
+            Height = collapsed ? CollapsedPeekH : float.NaN,
+            Animate = BodyMotion,
+            EdgeFade = collapsed ? new EdgeFadeSpec(EdgeMask.Bottom, CollapsedFadeBand) : null,
+            Blur = collapsed ? CollapsedPeekBlur : 0f,
+            Opacity = collapsed ? 0.92f : 1f,
+            // Peek is tappable to expand; expanded body keeps sticky-clip under the pinned header.
+            HitTestVisible = true,
+            OnClick = collapsed ? () => _collapsed.Value = false : null,
+            Children = bodyKids.ToArray(),
+        };
+        if (!collapsed)
+            body = ((BoxEl)body) with { ScrollBinds = [new() { ClipTopAtViewport = HeaderClipInset }] };
+
         return new BoxEl
         {
             Direction = 1, Gap = Spacing.M, Padding = new Edges4(0f, 0f, 0f, Spacing.XXL),
-            Children = children.ToArray(),
+            Children = [Header(total, collapsed), body],
         };
     }
+
+    // Peek of the first album-card tops when the facet is collapsed (~one card row tip).
+    const float CollapsedPeekH = 96f;
+    const float CollapsedFadeBand = 64f;
+    const float CollapsedPeekBlur = 8f;
+
+    // Expand 333ms / collapse ~220ms — Expander timings, height-only. Leading keeps album tops in the peek.
+    static readonly LayoutTransition BodyMotion = new(
+        TransitionChannels.Size,
+        TransitionDynamics.Tween(333f, Easing.FluentPopOpen),
+        Size: SizeMode.Reflow,
+        ExitDynamics: TransitionDynamics.Tween(220f, EasingSpec.CubicBezier(1f, 1f, 0f, 1f)),
+        Anchor: SizeAnchor.Leading,
+        Axes: SizeAxes.Height);
 
     // Total-only probe (limit 0 → NO network; resolves same-tick from the cached artist the page header already fetched).
     // Seeds the VC COUNT ONLY (items = default) as PROVISIONAL so shimmers render instantly; the first real page reconciles

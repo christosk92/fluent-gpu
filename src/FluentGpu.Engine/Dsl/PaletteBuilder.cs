@@ -100,11 +100,11 @@ public static class PaletteBuilder
             FileArea:   ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x0D),
             Content:    ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x0D),
             ContentAlt: ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x08),
-            RowZebra:        ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x0A),
+            RowZebra:        ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x0F), // match FillSubtleSecondary — WinUI even-row plate
             RowHover:        ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x0F),
-            RowHoverZebra:   ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x0F),
+            RowHoverZebra:   ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x14),
             RowPressed:      ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x0A),
-            RowPressedZebra: ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x0A));
+            RowPressedZebra: ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x0F));
     }
 
     static TokenSet BuildLight(PaletteSeed seed)

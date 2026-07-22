@@ -193,7 +193,12 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
             // V4 ensure is SWR-cheap (etag/resident-skip), so no TTL clause — re-run whenever the discography is missing or
             // still a bare stub. TopAlbums[0].Name empty ⇒ the ArtistV4 stubs haven't been upgraded to resident cards yet.
             var a = _store.GetArtist(uri);
-            need = a is null || a.TopAlbums is null or { Count: 0 } || a.TopAlbums[0].Name.Length == 0;
+            need = a is null || a.TopAlbums is null or { Count: 0 } || a.TopAlbums[0].Name.Length == 0
+                // Self-heal a TRUNCATED discography (persisted stores clobbered by the pre-fix overview write, which
+                // replaced the full V4 stub list with the overview's first ~10/facet while the totals kept the real
+                // counts): held cards < the facet totals ⇒ re-ensure. Redundant fires are fine — the V4 ensure is
+                // SWR/etag-cheap and resident-skipping by design.
+                || a.AlbumsTotal + a.SinglesTotal + a.CompilationsTotal > a.TopAlbums.Count;
         }
         if (need) { try { await fetch(uri, ct).ConfigureAwait(false); } catch { } }
     }

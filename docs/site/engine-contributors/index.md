@@ -150,13 +150,15 @@ topic; see [control-fidelity.md](../../guide/control-fidelity.md) and the
 ## The golden rule: verify with the headless harness before claiming done
 
 There is one rule that outranks the others: **verify with the headless harness, never by eye.** The
-`FluentGpu.VerticalSlice` is the single source of truth for "does the engine still work" — it runs ~60 end-to-end golden
-checks across every seam (layout, reconcile, signals, scroll, virtualization, images, controls, navigation, animation),
-with **no GPU and no window**, in seconds, and prints `[PASS]`/`[FAIL]` and `ALL CHECKS PASSED`:
+`FluentGpu.VerticalSlice` is the single source of truth for "does the engine still work" — it runs hundreds of end-to-end
+golden checks across every seam (layout, reconcile, signals, scroll, virtualization, images, controls, navigation,
+animation), with **no GPU and no window**, in seconds, and prints `[PASS]`/`[FAIL]` and `ALL CHECKS PASSED`. Layout:
+thin `Program.cs` + `Harness/` + domain `Suites/` + `Probes/`.
 
 ```bash
 dotnet build src/FluentGpu.VerticalSlice                 # clean build first
 dotnet run   --project src/FluentGpu.VerticalSlice       # expect: ALL CHECKS PASSED
+dotnet run   --project src/FluentGpu.VerticalSlice -- --suite scroll   # local subset (not for CI)
 ```
 
 After **any** engine change, run it and confirm `ALL CHECKS PASSED` before you claim success. It is fast, deterministic,
@@ -165,8 +167,8 @@ and catches the cross-seam regressions a focused test won't. It runs headless be
 tests assert *what was drawn* without pixels, and `host.Scene` exposes post-layout bounds — see
 [getting-started.md → run headless](../../guide/getting-started.md#run-headless-tests--ci--agents) for the exact wiring.
 
-**Add a check** for the behavior you changed by writing a `Check("…", condition, detail)` in
-`src/FluentGpu.VerticalSlice/Program.cs` and calling it from `Main`. If you touched reactivity, layout, or the renderer,
+**Add a check** for the behavior you changed by writing a `Check("…", condition, detail)` in the owning
+`Suites/*Suite.cs` and calling it from that suite's `Run`. If you touched reactivity, layout, or the renderer,
 assert on `FrameStats` for the interaction you changed:
 
 - `Rendered` — was there a reconcile/layout this frame? For a slider drag or scroll you bound (the compositor-bypass

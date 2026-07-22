@@ -984,7 +984,7 @@ sealed class TrackList : Component
     {
         var cells = new List<Element>(tracks.Length)
         {
-            new BoxEl(),   // # column: no header label
+            IndexSortCell(sort),
         };
         if (set.Heart) cells.Add(new BoxEl());
         if (set.Thumb) cells.Add(new BoxEl());
@@ -1031,7 +1031,7 @@ sealed class TrackList : Component
 
     // The owning header brightens — EXCEPT Index (#), the default "original order", which carries no indicator.
     static TextEl HLabel(string s, SortColumn col, TrackSort sort) =>
-        new(s) { Size = 12f, Weight = 600, Color = HeaderActive(col, sort.Column) && col != SortColumn.Index ? Tok.TextSecondary : Tok.TextTertiary };
+        new(s) { Size = 12f, Weight = 600, Color = HeaderActive(col, sort.Column) ? Tok.TextSecondary : Tok.TextTertiary };
 
     // A non-sortable column header (Added by) — a static, left-aligned label with no click/caret.
     static Element PlainHeader(string label) => new BoxEl
@@ -1040,12 +1040,41 @@ sealed class TrackList : Component
         Children = [new TextEl(label) { Size = 12f, Weight = 600, Color = Tok.TextTertiary }],
     };
 
+    // The row number lives at the exact centre of its 36-DIP lane. Reserve the same 9-DIP slot on both sides and put
+    // the descending caret only in the right slot, so enabling the indicator never nudges # away from the row numbers.
+    Element IndexSortCell(TrackSort sort)
+    {
+        bool showCaret = sort.Column == SortColumn.Index && sort.Descending;
+        Element side(bool trailing) => new BoxEl
+        {
+            Width = 9f, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Children = trailing && showCaret ? [Embed.Comp(() => new SortCaret(_h.Sort))] : [],
+        };
+        return new BoxEl
+        {
+            Direction = 0, AlignItems = FlexAlign.Center,
+            Corners = CornerRadius4.All(Radii.Control), HoverFill = Tok.FillSubtleSecondary,
+            OnClick = () => _h.SetSort(NextSort(sort, SortColumn.Index)),
+            Children =
+            [
+                side(false),
+                new BoxEl
+                {
+                    Grow = 1f, MinWidth = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                    Children = [HLabel(Loc.Get(Strings.Detail.Column.Number), SortColumn.Index, sort)],
+                },
+                side(true),
+            ],
+        };
+    }
+
     // A clickable column header: click to sort by this column (toggles asc/desc on repeat), with a caret on the active
     // column (before the content for the right-aligned duration, after it otherwise). The default Index/# column shows
     // NO caret and resets to the original order on click.
     Element SortCell(Element content, SortColumn col, TrackSort sort, FlexJustify justify)
     {
-        bool showCaret = HeaderActive(col, sort.Column) && col != SortColumn.Index;
+        bool showCaret = HeaderActive(col, sort.Column)
+            && (col != SortColumn.Index || sort.Descending);   // default/original order stays visually quiet
         // The caret is a self-animating component: it pops in when its column becomes the sort and springs its rotation
         // 0°↔180° on every direction flip (so the Title cell's ↑→↓→↑→↓ run reads as one continuous spin).
         Element Caret() => Embed.Comp(() => new SortCaret(_h.Sort));
@@ -1067,7 +1096,8 @@ sealed class TrackList : Component
     // header always resets to the default.
     static TrackSort NextSort(TrackSort cur, SortColumn clicked)
     {
-        if (clicked == SortColumn.Index) return TrackSort.Default;
+        if (clicked == SortColumn.Index)
+            return cur.Column == SortColumn.Index ? new TrackSort(SortColumn.Index, !cur.Descending) : TrackSort.Default;
         if (clicked == SortColumn.Title)
         {
             if (cur.Column == SortColumn.Title) return cur.Descending ? new TrackSort(SortColumn.Artist, false) : new TrackSort(SortColumn.Title, true);
@@ -1578,7 +1608,8 @@ sealed class TrackList : Component
             PressScale = 0.985f,   // subtle push-down on press (a depth cue so the row isn't flat)
 
             BorderWidth = 1f,
-            BorderColor = ColorF.Transparent,        // uniform (BorderColor is not bindable) → recycle-correct
+            // WinUI even rows: CardStroke at rest. BorderColor is Prop<ColorF> — bind to the zebra index.
+            BorderColor = Prop.Of(() => DisplayIndex() % 2 != 0 ? Tok.StrokeCardDefault : ColorF.Transparent),
             HoverBorderColor = Tok.StrokeCardDefault,
             FocusVisualMargin = Edges4.All(1f),
             Focusable = false,                       // the ItemsView roving effect owns the single tab stop
@@ -1750,13 +1781,12 @@ sealed class SortMenuButton : Component
             items.Add(MenuFlyoutItem.RadioItem(Label(col), cur.Column == col,
                 () => _setSort(col == SortColumn.Index ? TrackSort.Default : new TrackSort(col, cur.Descending))));
 
-        // Direction — irrelevant for Custom order, so it's disabled (and neither shown checked) there.
-        bool custom = cur.Column == SortColumn.Index;
+        // Direction applies to original/custom order too: descending is the explicit "invert this list" operation.
         items.Add(MenuFlyoutItem.Separator);
-        items.Add(MenuFlyoutItem.RadioItem(Loc.Get(Strings.Detail.Sort.Ascending), !custom && !cur.Descending,
-            () => { var s = _sort.Peek(); if (s.Column != SortColumn.Index) _setSort(s with { Descending = false }); }, enabled: !custom));
-        items.Add(MenuFlyoutItem.RadioItem(Loc.Get(Strings.Detail.Sort.Descending), !custom && cur.Descending,
-            () => { var s = _sort.Peek(); if (s.Column != SortColumn.Index) _setSort(s with { Descending = true }); }, enabled: !custom));
+        items.Add(MenuFlyoutItem.RadioItem(Loc.Get(Strings.Detail.Sort.Ascending), !cur.Descending,
+            () => _setSort(_sort.Peek() with { Descending = false })));
+        items.Add(MenuFlyoutItem.RadioItem(Loc.Get(Strings.Detail.Sort.Descending), cur.Descending,
+            () => _setSort(_sort.Peek() with { Descending = true })));
         return items;
     }
 

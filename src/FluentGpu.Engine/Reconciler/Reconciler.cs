@@ -1659,7 +1659,8 @@ public sealed class TreeReconciler
         int rowOverscan = ve.Overscan;
         if (!float.IsNaN(ve.CacheExtentPx) && ve.CacheExtentPx >= 0f)
             rowOverscan = Math.Max(0, (int)MathF.Ceiling(ve.CacheExtentPx / (avgExtent > 0f ? avgExtent : 1f)));
-        int effOverscan = mount ? 0 : rowOverscan;
+        bool eagerOverscan = ve.RealizeOverscanImmediately;
+        int effOverscan = mount && !eagerOverscan ? 0 : rowOverscan;
         VirtualWindowing.DirectionalOverscan(effOverscan, sc.FlingVelocity, avgExtent, out int lowOv, out int highOv);
 
         int first, last, visibleFirst, visibleLast, mandFirst, mandLast;
@@ -1702,8 +1703,8 @@ public sealed class TreeReconciler
         if (last < mandLast) last = mandLast;
 
         // E4 budget: the mandatory band is realized unconditionally; the overscan halo is clipped to the per-frame row pool.
-        bool budgetDeficit = ClipRealizeBudget(in sc, mandFirst, mandLast, ref first, ref last);
-        bool stayDirty = budgetDeficit || mount;
+        bool budgetDeficit = !eagerOverscan && ClipRealizeBudget(in sc, mandFirst, mandLast, ref first, ref last);
+        bool stayDirty = budgetDeficit || (mount && !eagerOverscan);
         if (last < first) last = first;
         int w = last - first;
         int visibleSlots = Math.Clamp(visibleLast - first, 0, w);

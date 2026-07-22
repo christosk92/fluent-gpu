@@ -32,7 +32,9 @@ There is no single solution build you should rely on; build/run the targets you 
 ```bash
 # Build + run the headless golden-check harness — THE verification gate (do this after every engine change):
 dotnet build src/FluentGpu.VerticalSlice
-dotnet run   --project src/FluentGpu.VerticalSlice      # expect: "ALL CHECKS PASSED" (~60 cross-seam checks)
+dotnet run   --project src/FluentGpu.VerticalSlice      # expect: "ALL CHECKS PASSED"
+# Local subset (CI must run the full suite — do not set FG_SUITE in CI):
+dotnet run   --project src/FluentGpu.VerticalSlice -- --suite scroll
 
 # Build the real Windows app:
 dotnet build src/FluentGpu.WindowsApp
@@ -125,7 +127,7 @@ sealed class App : Component {
 | Retained scene (SoA, dirty flags, side-tables) | `src/FluentGpu.Scene/{SceneStore,Columns}.cs` |
 | Record → DrawList | `src/FluentGpu.Render/SceneRecorder.cs` |
 | Theming tokens | `src/FluentGpu.Dsl/Tokens.cs` (`Tok`), `Theme.cs` |
-| Tests / golden checks | `src/FluentGpu.VerticalSlice/Program.cs` |
+| Tests / golden checks | `src/FluentGpu.VerticalSlice/` (`Program.cs` + `Harness/` + `Suites/` + `Probes/`) |
 
 Adding an `Element` type: assign a free `ElementTypeId`, then handle it in `Reconciler.Mount`/`Update` (and
 `ChildrenOf` if it has children).
