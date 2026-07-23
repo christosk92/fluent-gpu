@@ -187,7 +187,18 @@ public sealed class AppHost : IDisposable
     // composited swapchain + presenter, sharing this device/fonts/strings/images. Ticked by the loop via
     // TickDetachedHosts() on THIS (the parent's) UI+render thread. Empty on child hosts (no recursion).
     private readonly List<AppHost> _detachedHosts = new(1);
+    // Render-thread-visible copy of the live detached children (parent host only). The parent's ONE render thread iterates
+    // this to drain each child's seam on its own present turn (DrainChildRenderSources). Mutated ONLY under a render-thread
+    // rendezvous (AttachChildRenderSource/DetachChildRenderSource park the loop via Quiesce), so the render thread never
+    // races a structural List mutation. Distinct from _detachedHosts (which the UI thread mutates freely for its own reaping).
+    private readonly List<AppHost> _childRenderSources = new(1);
     private bool _isDetachedChild;   // true on a child host: it must not dispose the shared device, nor manage its own detached windows
+    // On a detached CHILD host under a threaded parent (async or force-sync): the PARENT's render thread. The child spawns
+    // NO render thread of its own (that would be a second submit/present owner racing the shared, render-confined device);
+    // instead its RunFrame PUBLISHes to its own seam and WAKES this parent thread, which drains the child's seam + presents
+    // the child's swapchain render-confined. Null on the primary host and on a child under a pure single-thread parent.
+    private readonly Threading.RenderThread? _parentRenderThread;
+    private bool _closedShutdownDone;   // guards the once-only on-close render-thread teardown (RunFrame close gate + Dispose)
     // On a detached CHILD host: the closed-callback the DetachedWindowHandle exposes, fired exactly once by the parent's
     // reaper (TickDetachedHosts) just before Dispose(). _onClosedFired guards against any double-fire.
     private Action? OnClosed;
@@ -757,7 +768,10 @@ public sealed class AppHost : IDisposable
     /// gate), or a backend without secondary swapchains. Host-wired to <c>InputHooks.OpenDetachedWindow</c>.</summary>
     public IDetachedVideoWindow? OpenDetachedWindow(DetachedWindowRequest request)
     {
-        if (_isDetachedChild || _isHeadless || _asyncActive || !_device.SupportsSecondarySwapchains || request.Content is null)
+        // Async is NO LONGER excluded: a detached child routes its present through THIS (the parent's) single render thread
+        // (AttachChildRenderSource + _parentRenderThread), so there is never a second submit/present owner on the shared,
+        // render-confined device. Still unavailable on a child host (no recursion), headless, or a backend without secondaries.
+        if (_isDetachedChild || _isHeadless || !_device.SupportsSecondarySwapchains || request.Content is null)
             return null;
         float scale = _window.Scale;
         var desc = new WindowDesc(request.Title, request.InitialSizeDip, scale, Composited: true);
@@ -790,8 +804,12 @@ public sealed class AppHost : IDisposable
         // stale ClientSizePx → its scene root lays out at 0×0 and the composited swapchain presents nothing (the
         // detached window then renders fully transparent, and the idle loop spins on the broken window).
         var child = new AppHost(_app, win, _device, _fonts, _strings, request.Content, images: _images,
-            compositeSwapchain: true, isDetachedChild: true);
+            compositeSwapchain: true, isDetachedChild: true, parentRenderThread: _renderThread);
         _detachedHosts.Add(child);
+        // Register the child as a render source for the parent's render loop (a no-op reader when there is no render thread —
+        // the pure single-thread parent leaves the child on the inline present path). The mutation rendezvouses with the
+        // render thread so it never races an in-flight DrainChildRenderSources.
+        AttachChildRenderSource(child);
         WakeFrame();
         return new DetachedWindowHandle(this, child, win);
     }
@@ -800,12 +818,20 @@ public sealed class AppHost : IDisposable
     /// <c>RunFrame</c>, same thread). Reaps a window the user closed (dispose + remove). No-op with no detached windows.</summary>
     public void TickDetachedHosts()
     {
+        // Parent closing: the render thread this frame's RunFrame just tore down (the window-close gate) still owns nothing,
+        // so DO NOT tick children — a child.RunFrame would wake the now-disposed parent render thread. The children are
+        // reaped by the parent's Dispose (which disposed the render thread first). The loop exits on the next !IsClosed check.
+        if (_window.IsClosed) return;
         for (int i = _detachedHosts.Count - 1; i >= 0; i--)
         {
             var child = _detachedHosts[i];
             if (child._window.IsClosed)
             {
                 _detachedHosts.RemoveAt(i);
+                // Stop the render thread from touching this child's seam/swapchain BEFORE we dispose it. The rendezvous
+                // (Quiesce) guarantees no in-flight DrainChildRenderSources present is mid-flight against the swapchain
+                // we are about to release. No-op when the parent has no render thread (pure single-thread inline path).
+                DetachChildRenderSource(child);
                 // Fire the closed-callback once, on this (the UI+render) thread, before teardown. Programmatic Close()
                 // also lands here (WM_CLOSE → IsClosed), so this single reap site gives exactly-once for free.
                 if (!child._onClosedFired) { child._onClosedFired = true; var cb = child.OnClosed; child.OnClosed = null; cb?.Invoke(); }
@@ -814,6 +840,56 @@ public sealed class AppHost : IDisposable
             }
             child.RunFrame();
         }
+    }
+
+    // ── detached-window render routing (parent host; runs THROUGH the parent's single render thread) ─────────────────────
+
+    /// <summary>The render thread that owns THIS host's submit/present: the host's own render thread if it has one, else the
+    /// parent's (a detached child), else null (pure single-thread inline). Used to rendezvous swapchain resize/teardown.</summary>
+    private Threading.RenderThread? OwningRenderThread => _renderThread ?? _parentRenderThread;
+
+    /// <summary>UI thread (parent host): register a detached child as a render source for the parent's render loop. When a
+    /// render thread exists it PARKS the loop (Quiesce) around the list mutation so the render thread never sees a torn
+    /// structural change; without one it is a plain add (the child then presents inline on the pure single-thread path).</summary>
+    private void AttachChildRenderSource(AppHost child)
+    {
+        Threading.ThreadGuard.AssertUi();
+        if (_renderThread is { } rt) { rt.Quiesce(); try { _childRenderSources.Add(child); } finally { rt.Resume(); } }
+        else _childRenderSources.Add(child);
+    }
+
+    /// <summary>UI thread (parent host): unregister a detached child (on close, BEFORE disposing it). Rendezvous-guarded so
+    /// an in-flight <see cref="DrainChildRenderSources"/> can't be presenting the child's swapchain as it is released.</summary>
+    private void DetachChildRenderSource(AppHost child)
+    {
+        Threading.ThreadGuard.AssertUi();
+        if (_renderThread is { } rt) { rt.Quiesce(); try { _childRenderSources.Remove(child); } finally { rt.Resume(); } }
+        else _childRenderSources.Remove(child);
+    }
+
+    /// <summary>Render thread (parent host): drain each registered child host's seam on this present turn — a fresh child
+    /// publish is submitted+presented against the CHILD's own swapchain + video presenter, render-confined (the child reuses
+    /// the same per-host <see cref="SubmitPresentOnRenderThread"/>). Runs every turn; a child with no new publish is a cheap
+    /// <c>TryAcquire</c>-false no-op. The list is mutated only under a Quiesce rendezvous, so it is stable during a turn.</summary>
+    private void DrainChildRenderSources()
+    {
+        Threading.ThreadGuard.AssertRender();
+        var list = _childRenderSources;
+        for (int i = 0; i < list.Count; i++)
+        {
+            var child = list[i];
+            if (child._renderSeam.TryAcquire(out var rf))
+                child.SubmitPresentOnRenderThread(rf);
+        }
+    }
+
+    /// <summary>UI thread: stop + join this host's render thread on window close (idempotent with Dispose). Ordered BEFORE
+    /// any swapchain/device teardown so the render thread — the sole ComPtr owner — is gone first.</summary>
+    private void ShutdownRenderThreadOnClose()
+    {
+        if (_closedShutdownDone) return;
+        _closedShutdownDone = true;
+        _renderThread?.Dispose();   // stop + join (idempotent); a still-armed WakeAsync can no longer submit after this
     }
 
     /// <summary>The loop's wait, folded across this host and every detached child (so a playing pop-out keeps the loop at
@@ -1168,11 +1244,13 @@ public sealed class AppHost : IDisposable
 
     public AppHost(IPlatformApp app, IPlatformWindow window, IGpuDevice device, IFontSystem fonts,
                    StringTable strings, Component root, ImageCache? images = null, IFrameTimeSource? frameTime = null,
-                   ScrollTuning? scrollTuning = null, bool compositeSwapchain = false, bool isDetachedChild = false)
+                   ScrollTuning? scrollTuning = null, bool compositeSwapchain = false, bool isDetachedChild = false,
+                   Threading.RenderThread? parentRenderThread = null)
     {
         _app = app;
         _fonts = fonts;
         _isDetachedChild = isDetachedChild;
+        _parentRenderThread = parentRenderThread;   // detached child: route presents through the parent's single render thread
         _window = window;
         _asyncActive = s_renderAsync && window.Handle.Kind != NativeHandleKind.Headless;   // headless never goes async (see field)
         // Step 3 (async): windowed out-of-bounds popups submit + present on the UI thread (RecordPopupWindows), sharing
@@ -1400,38 +1478,47 @@ public sealed class AppHost : IDisposable
         // not gen-checked handle) must be dropped or the next node reusing that index inherits the stale row.
         _scene.OnFreeIndex = OnSceneSlotFreed;
         _reconciler.Images = _images;
-        _images.SetBakedBlurQueue(_bakedBlurQueue);
-        _images.SetCompletionWake(_window.Wake);
-        _bakedBlurQueue.SetCompletionWake(_window.Wake);
-        _device.SetBakedBlurQueue(_bakedBlurQueue);
-        if (_asyncActive)
+        // A detached CHILD host shares the parent's device + ImageCache. The parent (always constructed FIRST) has already
+        // installed the image-upload sinks, the baked-blur queue, the completion wake, and — under async — the render-confined
+        // upload path on those shared objects. The child must NOT re-install any of them: doing so would CLOBBER the parent's
+        // async sinks and, worse, hand the shared (render-confined) device a UI-thread upload path — a confinement violation.
+        // The child's frames reference textures the parent's shared pipeline already made resident, plus its own video
+        // presenter; shared-texture uploads/evicts continue to ride the parent's queue on the one render thread.
+        if (!_isDetachedChild)
         {
-            // ASYNC (Step 1): the UI thread must not touch the device. The pixel sink COPIES the transient decode pixels
-            // into a rented ArrayPool buffer and enqueues it (optimistically admitting Ready); the render thread stages it
-            // (returning the buffer) and posts back only rejections. The evict sink enqueues too. See ImageUploadQueue.
-            _imageQueue = new Threading.ImageUploadQueue { BufferPool = _pixelPool };
-            var q = _imageQueue;
-            _images.SetPixelAttemptSink((int id, System.ReadOnlySpan<byte> px, int w, int h) =>
+            _images.SetBakedBlurQueue(_bakedBlurQueue);
+            _images.SetCompletionWake(_window.Wake);
+            _bakedBlurQueue.SetCompletionWake(_window.Wake);
+            _device.SetBakedBlurQueue(_bakedBlurQueue);
+            if (_asyncActive)
             {
-                byte[] buf = _pixelPool.Rent(px.Length);   // bounded pixel pool copy (returned render-side via the queue's BufferPool)
-                px.CopyTo(buf);
-                q.EnqueueUpload(id, buf, w, h, px.Length);
-                return FluentGpu.Scene.ImageUploadResult.Accepted;   // optimistic; a real rejection returns via the reject ring next Pump
-            });
-            _images.SetEvictSink(q.EnqueueEvict);
-            _images.SetAsyncUploadQueue(q);
-            _device.MarkImageUploadsRenderConfined();
+                // ASYNC (Step 1): the UI thread must not touch the device. The pixel sink COPIES the transient decode pixels
+                // into a rented ArrayPool buffer and enqueues it (optimistically admitting Ready); the render thread stages it
+                // (returning the buffer) and posts back only rejections. The evict sink enqueues too. See ImageUploadQueue.
+                _imageQueue = new Threading.ImageUploadQueue { BufferPool = _pixelPool };
+                var q = _imageQueue;
+                _images.SetPixelAttemptSink((int id, System.ReadOnlySpan<byte> px, int w, int h) =>
+                {
+                    byte[] buf = _pixelPool.Rent(px.Length);   // bounded pixel pool copy (returned render-side via the queue's BufferPool)
+                    px.CopyTo(buf);
+                    q.EnqueueUpload(id, buf, w, h, px.Length);
+                    return FluentGpu.Scene.ImageUploadResult.Accepted;   // optimistic; a real rejection returns via the reject ring next Pump
+                });
+                _images.SetEvictSink(q.EnqueueEvict);
+                _images.SetAsyncUploadQueue(q);
+                _device.MarkImageUploadsRenderConfined();
+            }
+            else
+            {
+                _images.SetPixelAttemptSink(_device.TryUploadImage);
+                _images.SetEvictSink(_device.EvictImage);
+            }
+            _images.ImageStatusChanged += (id, _, _, _) =>
+            {
+                _reconciler.MarkImageDirty(id);
+                WakeFrame();
+            };
         }
-        else
-        {
-            _images.SetPixelAttemptSink(_device.TryUploadImage);
-            _images.SetEvictSink(_device.EvictImage);
-        }
-        _images.ImageStatusChanged += (id, _, _, _) =>
-        {
-            _reconciler.MarkImageDirty(id);
-            WakeFrame();
-        };
 
         // Publish ambient contexts before the first render so UseContext(Viewport.Size)/FrameDiagnostics resolve.
         _lastViewportDip = ClientSizeDip();
@@ -1467,14 +1554,18 @@ public sealed class AppHost : IDisposable
         // event until the first Paint drains it, so constructing it here (before the first frame) is safe.
         // Spawn the render thread ONLY for a real (non-headless) backend — headless has no GPU work to offload and its
         // device seam methods are no-ops, so it stays on the deterministic synchronous inline path.
-        if ((s_renderThread || s_renderAsync) && window.Handle.Kind != NativeHandleKind.Headless)
+        // A detached CHILD host NEVER spawns its own render thread: the shared device is render-confined (ONE submit/present
+        // owner), so a second thread would race the single _cmdList/_queue/_fence undetected. The child instead routes its
+        // present through the parent's thread (_parentRenderThread), which drains the child seam via DrainChildRenderSources.
+        if ((s_renderThread || s_renderAsync) && window.Handle.Kind != NativeHandleKind.Headless && !_isDetachedChild)
         {
             // Step 4: under async, wire the device-lost recovery rendezvous — arm the backend to SIGNAL loss (not throw on
             // the render thread) + bound its fence waits, and give the render loop a recover gate (_device.RecoverDevice
             // under render confinement) + a thread-safe UI wake to nudge the UI out of its clean block on RecoverDone.
             if (_asyncActive) { _deviceLost = new Threading.DeviceLostCoordinator(); _device.EnableAsyncDeviceLostSignaling(); }
             _renderThread = new Threading.RenderThread(_renderSeam, SubmitPresentOnRenderThread, async: _asyncActive,
-                deviceLost: _deviceLost, recover: _deviceLost is null ? null : RecoverDeviceAfterDump, windowWake: _deviceLost is null ? null : _window.Wake);
+                deviceLost: _deviceLost, recover: _deviceLost is null ? null : RecoverDeviceAfterDump, windowWake: _deviceLost is null ? null : _window.Wake,
+                extraDrain: DrainChildRenderSources);
             _device.MarkRenderConfined();
         }
 
@@ -1577,6 +1668,21 @@ public sealed class AppHost : IDisposable
         _ring.Clear();
         _tracePumpedEvents = _window.PumpInto(_ring);              // 1 pump
         if (s_allocDiag) { db = Probe(SegPump, db, dt); dt = Stopwatch.GetTimestamp(); }
+
+        // Window-close gate: the pump above dispatches WM_CLOSE (→ _closed = true, HWND destroyed). Once closed, STOP driving
+        // the render thread NOW, on the UI thread, and paint nothing more. Without this a still-armed async WakeAsync (the
+        // last frame published before the close) — or any subsequent frame — would submit/present against a swapchain whose
+        // HWND was just torn down, and under async that runs on the render thread where the throw is swallowed but the join
+        // ordering is fragile. Deterministically quiescing + joining the render thread here (idempotent with Dispose) means
+        // the loop's next `!IsClosed` check exits cleanly and the process dies promptly (the IsBackground thread is only the
+        // backstop). Cheap no-op after the first closed frame. Detached children (no own render thread) skip straight through.
+        if (_window.IsClosed)
+        {
+            ShutdownRenderThreadOnClose();
+            LastStats = new FrameStats(0, 0, 0, Rendered: false) { Fps = _fps, FrameMs = _frameMs };
+            return LastStats;
+        }
+
         int clicks = _dispatcher.Dispatch(_ring.Drain(), _ring.DrainVelocitySamples());  // 2 input dispatch (handlers write signals → schedule effects)
         if (s_allocDiag) { db = Probe(SegDispatch, db, dt); dt = Stopwatch.GetTimestamp(); }
         // Post-input warm-cadence hold: any input this frame (a pumped event or a handled click) keeps the loop rendering
@@ -2208,6 +2314,18 @@ public sealed class AppHost : IDisposable
                     else _renderThread.DrainSync();                  // force-sync: block until the render thread presented
                     tSubmitDone = Stopwatch.GetTimestamp();          // async: present is off-thread; force-sync collapses the boundary
                 }
+                else if (_parentRenderThread is not null)
+                {
+                    // Detached CHILD host under a threaded parent: we own NO render thread (the shared device is render-
+                    // confined — one submit/present owner). We published our frame to our OWN seam above; now wake the
+                    // parent's render thread, which drains our seam (DrainChildRenderSources) and presents OUR swapchain
+                    // render-confined. An inline UI-thread submit here would violate that confinement + race the parent's
+                    // presents. Async: fire-and-return (BindDComp + video drain ride our first present on the render thread).
+                    // Force-sync: block until the parent thread's turn drained us (mirrors the primary DrainSync contract).
+                    if (_asyncActive) _parentRenderThread.WakeAsync();
+                    else _parentRenderThread.DrainSync();
+                    tSubmitDone = Stopwatch.GetTimestamp();
+                }
                 else
                 {
                     try
@@ -2244,7 +2362,10 @@ public sealed class AppHost : IDisposable
             // Only on the pure single-thread path: the UI thread IS the presenting thread here. In threaded modes
             // (force-sync + async, `_renderThread is not null`) both GetVideoPresenter and the presenter are
             // render-thread-confined, so the drain rides SubmitPresentOnRenderThread instead (same after-present turn).
-            if (_renderThread is null && _device.GetVideoPresenter(_swapchain) is { } vp) _videoSurfaces.Drain(vp, _window.Scale);
+            // A detached CHILD routed through the parent's thread (`_parentRenderThread is not null`) is ALSO confined —
+            // its video drain rides the parent thread's DrainChildRenderSources → child.SubmitPresentOnRenderThread — so
+            // this UI-side drain must skip it too, or GetVideoPresenter's AssertSubmitThread trips on the UI thread.
+            if (_renderThread is null && _parentRenderThread is null && _device.GetVideoPresenter(_swapchain) is { } vp) _videoSurfaces.Drain(vp, _window.Scale);
 
             DrainPassiveEffects();                             // 12 passive effects
             _strings.Tick();                                   // 12.5 reclaim released text ids (behind the reader quarantine)
@@ -2992,11 +3113,14 @@ public sealed class AppHost : IDisposable
         // ResizeBuffers + recreates RTVs — all mutating ComPtrs the render thread reads in submit/present. Under async,
         // PARK the render loop (mutual exclusion) around the unchanged Resize. Default + force-sync take the else branch
         // (no render thread running concurrently — force-sync's UI is the only toucher between publishes), byte-identical.
-        if (_renderThread is not null && _asyncActive)
+        // A detached child's swapchain is presented by the PARENT's render thread, so its resize must park THAT thread too —
+        // OwningRenderThread resolves to _renderThread (primary) or _parentRenderThread (child). Force-sync + single-thread
+        // take the else (the render thread is idle-parked between publishes, never mid-present concurrently with a resize).
+        if (OwningRenderThread is { } rt && _asyncActive)
         {
-            _renderThread.Quiesce();
+            rt.Quiesce();
             try { _swapchain.Resize(s); }
-            finally { _renderThread.Resume(); }
+            finally { rt.Resume(); }
         }
         else _swapchain.Resize(s);
         _needFullLayout = true;

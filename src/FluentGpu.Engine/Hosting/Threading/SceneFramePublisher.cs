@@ -82,6 +82,11 @@ public sealed class SceneFramePublisher
         int idx = Volatile.Read(ref _publishedIdx);                 // ACQUIRE — pairs with the Publish release
         if (idx < 0) { frame = default; return false; }
         frame = _slots[idx];                                        // POD header copy
+        // DropOldest-with-dedup: if the latest published frame is the one we already consumed, there is nothing new — a
+        // bare wake (no intervening Publish) must NOT re-submit/re-present the last frame. This makes the consumer
+        // idempotent across wakes, which the detached-window routing relies on (a child's wake carries no parent Publish,
+        // so the parent seam's TryAcquire here no-ops instead of re-presenting the parent's last frame).
+        if (frame.PublishSeq == Volatile.Read(ref _lastConsumedSeq)) { frame = default; return false; }
         Volatile.Write(ref _consumeIdx, idx);                       // RELEASE — UI now knows this slot is in use (won't overwrite its arena)
         Volatile.Write(ref _lastConsumedSeq, frame.PublishSeq);     // RELEASE — drives consume-gated quarantine (§5)
         return true;

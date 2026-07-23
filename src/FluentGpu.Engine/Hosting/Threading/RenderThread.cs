@@ -34,13 +34,20 @@ public sealed class RenderThread : IDisposable
     private readonly DeviceLostCoordinator? _deviceLost;
     private readonly Action? _recover;      // runs ON this thread: _device.RecoverDevice() under AssertRender
     private readonly Action? _windowWake;   // thread-safe UI wake (PostMessage WM_NULL) to nudge the UI out of its clean block
+    // Detached-window routing: after draining the parent host's OWN seam each turn, drain any registered CHILD host seams
+    // (pop-out video windows) on THIS render thread, so a second AppHost's swapchain presents through the ONE render thread
+    // that owns the shared device's submit/present (never a second render thread → no undetected _cmdList/_queue/_fence race).
+    // Null on a host with no children (or a child host, which has no render thread of its own). Runs regardless of whether
+    // the parent published this turn — a child wake carries no parent publish, so the parent-seam TryAcquire may no-op.
+    private readonly Action? _extraDrain;
     private readonly bool _async;                          // Step 5: false = force-sync (UI blocks in DrainSync); true = async (WakeAsync, UI proceeds)
     private volatile bool _running = true;
     private ulong _presentAck;
     private static readonly bool s_trace = FluentGpu.Foundation.Diag.EnvFlag("FG_DL_TRACE");   // device-lost recovery trace
 
     public RenderThread(SceneFramePublisher publisher, Action<RenderFrame> submitPresent, bool async = false,
-                        DeviceLostCoordinator? deviceLost = null, Action? recover = null, Action? windowWake = null)
+                        DeviceLostCoordinator? deviceLost = null, Action? recover = null, Action? windowWake = null,
+                        Action? extraDrain = null)
     {
         _publisher = publisher;
         _submitPresent = submitPresent;
@@ -48,6 +55,7 @@ public sealed class RenderThread : IDisposable
         _deviceLost = deviceLost;
         _recover = recover;
         _windowWake = windowWake;
+        _extraDrain = extraDrain;
         _thread = new Thread(Loop) { Name = "fgpu-render", IsBackground = true };
         _thread.Start();
     }
@@ -94,6 +102,10 @@ public sealed class RenderThread : IDisposable
                 _submitPresent(rf);
                 Volatile.Write(ref _presentAck, rf.PublishSeq);
             }
+            // Detached child hosts: present any freshly-published child frame on ITS own swapchain, on this same render
+            // thread. Runs every turn (a child's wake may carry no parent publish, so it must not hang off the parent
+            // TryAcquire above). Cheap no-op when no child has published since its last present (dedup in TryAcquire).
+            _extraDrain?.Invoke();
             if (!_async) _done.Set();   // force-sync only: unblock the UI's DrainSync
         }
     }
@@ -103,6 +115,7 @@ public sealed class RenderThread : IDisposable
     public void DrainSync()
     {
         ThreadGuard.AssertUi();
+        if (_disposed) return;   // teardown race (window closed / thread joined): nothing to present, don't touch a disposed event
         _wake.Set();
         _done.WaitOne();
     }
@@ -114,6 +127,7 @@ public sealed class RenderThread : IDisposable
     public void WakeAsync()
     {
         ThreadGuard.AssertUi();
+        if (_disposed) return;   // teardown race (e.g. a detached child's last publish after the parent thread joined): drop it
         _wake.Set();
     }
 
@@ -125,6 +139,7 @@ public sealed class RenderThread : IDisposable
     public void Quiesce()
     {
         ThreadGuard.AssertUi();
+        if (_disposed) return;   // teardown race: the loop is gone, nothing to park
         Volatile.Write(ref _resizeQuiesce, 1);
         _wake.Set();               // nudge the loop so it reaches the quiesce gate even if idle-parked on _wake
         _resizeIdle.WaitOne();     // acquire barrier: the loop is now parked on _resumeResize
@@ -134,6 +149,7 @@ public sealed class RenderThread : IDisposable
     public void Resume()
     {
         ThreadGuard.AssertUi();
+        if (_disposed) return;   // teardown race: paired with a Quiesce that also no-op'd
         _resumeResize.Set();
     }
 
