@@ -168,7 +168,7 @@ static class DetailVerticalHero
                     Color = Tok.TextPrimary,
                 };
 
-        Element? attribution = Attribution(m, h, contentW, immersive);
+        Element? attribution = Attribution(m, h, contentW, immersive, full);
 
         // Identity copy. Side-by-side keeps the prose-first desktop order; immersive follows the Apple Music stack:
         // tight identity cluster → actions → quieter prose.
@@ -510,8 +510,13 @@ static class DetailVerticalHero
         return 24f;
     }
 
-    static Element? Attribution(DetailModel m, DetailHandlers h, float maxWidth, bool onMedia)
+    static Element? Attribution(DetailModel m, DetailHandlers h, float maxWidth, bool onMedia, Loadable<DetailModel>? full = null)
     {
+        // Collaborative playlists get the stacked-avatar facepile here too — the rail renders it via PlaylistOwnerBlock,
+        // but the vertical/Hero system replaced the rail, silently dropping the collaborator overlays at every width
+        // (user report 2026-07-23). Same predicate as the rail; plain owner text remains the single-owner fallback.
+        if (DetailRail.ShowCollaborators(m))
+            return Embed.Comp(() => new CollaboratorFacePile(m, maxWidth, full));
         // Immersive artist/owner: Regular/Medium white — clearly below the Bold title, never Semibold competing with it.
         if (m.OwnerName is { Length: > 0 } owner)
             return new TextEl(owner)

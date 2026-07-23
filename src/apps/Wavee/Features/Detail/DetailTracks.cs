@@ -240,7 +240,11 @@ sealed class TrackList : Component
         // tiers (playlists/Liked) on the SAME gate as the standard profile; album surfaces retain their Plays lane so
         // stacked and automatic layouts expose the same hydrated metadata. No by/date/video/heart lanes (liking stays
         // via hover ⋯ / context menu).
-        ? new(Album: _cfg.ShowAlbumColumn && tier < 2, By: false, Date: false, Video: false,
+        // By/Date follow the SAME tier gates as the standard profile: the vertical SYSTEM is forced at every width by
+        // the "Hero" page-layout setting (DetailShell), so hard-false here silently dropped Date-added/Added-by on WIDE
+        // hero pages (user report 2026-07-23). At genuinely narrow widths the tiers hide them exactly as before; the
+        // no-heart/no-video interaction profile of the vertical table is unchanged.
+        ? new(Album: _cfg.ShowAlbumColumn && tier < 2, By: _hasBy && tier < 1, Date: _hasDate && tier < 3, Video: false,
               Plays: _cfg.ShowPlays && tier < 3, Heart: false,
               Thumb: _cfg.ShowArtThumb && tier < 5, Actions: tier < 6, Tier: tier)
         : new(

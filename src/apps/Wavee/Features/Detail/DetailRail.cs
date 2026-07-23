@@ -317,7 +317,7 @@ static class DetailRail
             ? Embed.Comp(() => new CollaboratorFacePile(m, cover, full))
             : PlaylistInlineEdit.OwnerRow(full, cover);
 
-    static bool ShowCollaborators(DetailModel m)
+    internal static bool ShowCollaborators(DetailModel m)
         => m.Collaborators is { Count: > 0 } members && (m.Capabilities.IsCollaborative || members.Count >= 2);
 
     internal static Element BadgePill(string text) => new BoxEl
