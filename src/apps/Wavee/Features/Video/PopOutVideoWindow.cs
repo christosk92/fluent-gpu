@@ -23,14 +23,20 @@ sealed class PopOutVideoWindow : Component
 
     public override Element Render()
     {
+        // Size the root to THIS window's viewport. The AppHost does NOT auto-stretch a scene root (a bare Grow=1 hugs to
+        // 0×0 and the composited swapchain then presents transparent — the pop-out looked see-through); WaveeShell fills
+        // the same way. Fill paints an opaque letterbox even before a source resolves, so the window is never transparent.
+        var vp = UseContextSignal(Viewport.Size);
         var src = Source.Value;   // subscribe → remount the stage on a source change
         return new BoxEl
         {
-            Grow = 1,
+            Direction = 1,
+            Width = Prop.Of(() => vp.Value.Width),
+            Height = Prop.Of(() => vp.Value.Height),
             Fill = Tok.MediaLetterbox,
             Children = src is null
                 ? Array.Empty<Element>()
-                : [Embed.Comp(() => new PopOutVideoStage { Source = src }) with { Key = "stage:" + src.Key }],
+                : [new BoxEl { Grow = 1, Children = [Embed.Comp(() => new PopOutVideoStage { Source = src }) with { Key = "stage:" + src.Key }] }],
         };
     }
 }
