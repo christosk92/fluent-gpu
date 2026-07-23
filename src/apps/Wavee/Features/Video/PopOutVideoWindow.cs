@@ -3,8 +3,8 @@ using FluentGpu.Controls.Media;
 using FluentGpu.Dsl;
 using FluentGpu.Hooks;
 using FluentGpu.Media;
+using FluentGpu.Media.Windows;
 using FluentGpu.Signals;
-using FluentGpu.Windows.Media;
 
 namespace Wavee.Features.Video;
 

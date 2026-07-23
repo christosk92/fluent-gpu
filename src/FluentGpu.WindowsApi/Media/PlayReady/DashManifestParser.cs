@@ -32,6 +32,9 @@ public sealed record DashSourceDescriptor
     /// <summary>Number of media segments to fetch (from the <c>SegmentTimeline</c>, or <c>@duration</c>/<c>@timescale</c>
     /// against the presentation duration).</summary>
     public int SegmentCount { get; init; } = 1;
+    /// <summary>Segment-number step: 1 for numbered <c>$Number$</c> content; N for time-addressed segments (Spotify names
+    /// segments by absolute time — segment i = <see cref="StartNumber"/> + i*stride, stride = segment length in seconds).</summary>
+    public int SegmentStride { get; init; } = 1;
     /// <summary>The PlayReady <c>cenc:pssh</c> init data (decoded from base64), or empty when the native parses it from the
     /// init segment.</summary>
     public ReadOnlyMemory<byte> Pssh { get; init; }
