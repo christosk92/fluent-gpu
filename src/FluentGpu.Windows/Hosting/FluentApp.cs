@@ -202,6 +202,7 @@ public static class FluentApp
         while (!window.IsClosed)
         {
             host.RunFrame();
+            host.TickDetachedHosts();   // pop-out video windows: one frame each on this same UI+render thread
             n++;
             if (fpsLog)
             {
@@ -234,8 +235,9 @@ public static class FluentApp
             else
                 // Low-rate wake pacing: idle/minimized block until a message (0% CPU); a HUD-only readout throttles to
                 // ~10 Hz; real animation/scroll/decode paces at the display rate. WaitForWork returns early on input,
-                // so responsiveness is identical at every timeout. (See AppHost.RecommendedWaitMs.)
-                window.WaitForWork(host.RecommendedWaitMs());
+                // so responsiveness is identical at every timeout. (See AppHost.RecommendedWaitMs.) Folded across any
+                // detached video windows, so a playing pop-out keeps the loop live even while the main window is idle.
+                window.WaitForWork(host.WaitMsWithDetached());
         }
 
         if (allocTypes) AllocTypeProfiler.Stop();   // tear down the EventListener (no leak past the run)

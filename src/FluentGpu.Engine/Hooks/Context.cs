@@ -67,6 +67,24 @@ public static class VideoCompositor
 /// <see cref="AfterAnimations"/> after the animation engine ticks but before recording. Read the host instance via
 /// <c>UseContext(InputHooks.Current)</c>.
 /// </summary>
+/// <summary>Parameters for a DETACHED video window (the pop-out mini-player). <see cref="Content"/> is a component the
+/// host mounts as the window's root; the window is composited, movable/resizable, and (by default) always-on-top.</summary>
+public readonly record struct DetachedWindowRequest(
+    string Title, FluentGpu.Foundation.Size2 InitialSizeDip, Component Content, bool AlwaysOnTop = true);
+
+/// <summary>A live handle to a detached video window (see <see cref="InputHooks.OpenDetachedWindow"/>).</summary>
+public interface IDetachedVideoWindow
+{
+    /// <summary>True until the window is closed/reaped.</summary>
+    bool IsOpen { get; }
+    /// <summary>Toggle persistent always-on-top.</summary>
+    void SetTopmost(bool topmost);
+    /// <summary>Move/resize the window (outer rect, physical virtual-screen px).</summary>
+    void SetBounds(FluentGpu.Foundation.RectF outerBoundsPx);
+    /// <summary>Close the window (the pop-out docks back to inline).</summary>
+    void Close();
+}
+
 public sealed class InputHooks
 {
     /// <summary>Return true to consume the key. Set by an open overlay; cleared when it closes.</summary>
@@ -140,6 +158,10 @@ public sealed class InputHooks
     /// <summary>Borderless monitor-fullscreen state + command. Media surfaces use this instead of maximizing.</summary>
     public Func<bool>? IsWindowFullscreen;
     public Action<bool>? WindowSetFullscreen;
+    /// <summary>Open a movable/resizable, always-on-top DETACHED video window hosting the request's content in its OWN
+    /// window + scene + swapchain (the pop-out mini-player). Returns a handle, or null when unavailable (headless, the
+    /// async render path, or a backend without secondary swapchains). Host-wired to <c>AppHost.OpenDetachedWindow</c>.</summary>
+    public Func<DetachedWindowRequest, IDetachedVideoWindow?>? OpenDetachedWindow;
     /// <summary>Push the titlebar drag/button regions (array + count — the caller reuses ONE array across pushes,
     /// the host forwards <c>regions.AsSpan(0, count)</c> to <c>IPlatformWindow.SetTitleBarRegions</c>; push happens
     /// on titlebar relayout only, never per frame).</summary>

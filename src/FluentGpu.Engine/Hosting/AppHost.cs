@@ -148,7 +148,14 @@ public sealed class AppHost : IDisposable
     private readonly ISwapchain _swapchain;
     private readonly Component _root;
     private readonly StringTable _strings;
+    private readonly IFontSystem _fonts;   // retained so a detached child host (pop-out video window) can be constructed with the same font system
     private readonly FluentGpu.Media.VideoSurfaceRegistry _videoSurfaces = new();   // UI-thread video-surface intents, drained into IVideoPresenter at phase 11
+
+    // Detached child hosts (the pop-out video mini-player): each is a full AppHost over its OWN top-level window +
+    // composited swapchain + presenter, sharing this device/fonts/strings/images. Ticked by the loop via
+    // TickDetachedHosts() on THIS (the parent's) UI+render thread. Empty on child hosts (no recursion).
+    private readonly List<AppHost> _detachedHosts = new(1);
+    private bool _isDetachedChild;   // true on a child host: it must not dispose the shared device, nor manage its own detached windows
 
     // E4 windowed out-of-bounds popups: one slot per leased popup window (see PopupWindowSlot).
     private readonly List<PopupWindowSlot> _popupWindows = new(2);
@@ -680,6 +687,72 @@ public sealed class AppHost : IDisposable
     /// <summary>The host-owned video-surface intent buffer (published on <c>VideoCompositor.Current</c>). A media player
     /// façade writes surface rect/visibility/handle here; the host drains it into the render-thread presenter at phase 11.</summary>
     public FluentGpu.Media.VideoSurfaceRegistry VideoSurfaces => _videoSurfaces;
+
+    // ── detached video window (the pop-out mini-player) ──────────────────────────────────────────────────────────────
+
+    /// <summary>Open a detached, movable/resizable, (by default) always-on-top top-level window hosting
+    /// <see cref="DetachedWindowRequest.Content"/> in its OWN composited window + AppHost + swapchain + video presenter.
+    /// Reuses the full frame loop (this is a real second AppHost sharing the device/fonts/strings/images), ticked by the
+    /// parent loop on the same UI+render thread via <see cref="TickDetachedHosts"/>. Returns null when unavailable: a
+    /// child host (no recursion), headless, the async render path (a second UI-thread submit source — matches the popup
+    /// gate), or a backend without secondary swapchains. Host-wired to <c>InputHooks.OpenDetachedWindow</c>.</summary>
+    public IDetachedVideoWindow? OpenDetachedWindow(DetachedWindowRequest request)
+    {
+        if (_isDetachedChild || _isHeadless || _asyncActive || !_device.SupportsSecondarySwapchains || request.Content is null)
+            return null;
+        var desc = new WindowDesc(request.Title, request.InitialSizeDip, _window.Scale, Composited: true);
+        var win = _app.CreateWindow(desc);
+        var child = new AppHost(_app, win, _device, _fonts, _strings, request.Content, images: _images,
+            compositeSwapchain: true, isDetachedChild: true);
+        win.Show();
+        if (request.AlwaysOnTop) win.SetTopmost(true);
+        _detachedHosts.Add(child);
+        WakeFrame();
+        return new DetachedWindowHandle(this, child, win);
+    }
+
+    /// <summary>Tick every live detached child host one frame (called by the loop right after the parent's own
+    /// <c>RunFrame</c>, same thread). Reaps a window the user closed (dispose + remove). No-op with no detached windows.</summary>
+    public void TickDetachedHosts()
+    {
+        for (int i = _detachedHosts.Count - 1; i >= 0; i--)
+        {
+            var child = _detachedHosts[i];
+            if (child._window.IsClosed) { _detachedHosts.RemoveAt(i); child.Dispose(); continue; }
+            child.RunFrame();
+        }
+    }
+
+    /// <summary>The loop's wait, folded across this host and every detached child (so a playing pop-out keeps the loop at
+    /// display rate even while the main window is idle/minimized). Calls <see cref="RecommendedWaitMs"/> (preserving its
+    /// LastWaitKind/Ms side effects for logging), then combines each child's recommended wait.</summary>
+    public int WaitMsWithDetached()
+    {
+        int w = RecommendedWaitMs();
+        for (int i = 0; i < _detachedHosts.Count; i++)
+            w = CombineWait(w, _detachedHosts[i].RecommendedWaitMs());
+        return w;
+    }
+
+    // -1 = "block until a message" (no preference); any finite wait wins; min of two finite waits.
+    private static int CombineWait(int a, int b) => a < 0 ? b : b < 0 ? a : Math.Min(a, b);
+
+    /// <summary>Probe/diagnostic: count of live detached video windows.</summary>
+    public int DetachedWindowCount => _detachedHosts.Count;
+
+    private sealed class DetachedWindowHandle : IDetachedVideoWindow
+    {
+        private readonly AppHost _parent;
+        private readonly AppHost _child;
+        private readonly IPlatformWindow _window;
+        public DetachedWindowHandle(AppHost parent, AppHost child, IPlatformWindow window)
+        { _parent = parent; _child = child; _window = window; }
+        public bool IsOpen => !_window.IsClosed && _parent._detachedHosts.Contains(_child);
+        public void SetTopmost(bool topmost) => _window.SetTopmost(topmost);
+        public void SetBounds(RectF outerBoundsPx) => _window.SetBoundsPx(outerBoundsPx);
+        public void Close() => _window.CloseWindow();   // WM_CLOSE → IsClosed → reaped by TickDetachedHosts
+    }
+
     /// <summary>Probe/diagnostic only: a live shared-element (connected-animation) key, so a harness can trigger a REAL Hero fly.</summary>
     public string? FirstMorphKey => _connected.FirstTaggedKey;
     /// <summary>Probe/diagnostic only: collect distinct live <c>pl:</c> shared-element keys (home cards) for fresh-page fly measurement.</summary>
@@ -989,9 +1062,11 @@ public sealed class AppHost : IDisposable
 
     public AppHost(IPlatformApp app, IPlatformWindow window, IGpuDevice device, IFontSystem fonts,
                    StringTable strings, Component root, ImageCache? images = null, IFrameTimeSource? frameTime = null,
-                   ScrollTuning? scrollTuning = null)
+                   ScrollTuning? scrollTuning = null, bool compositeSwapchain = false, bool isDetachedChild = false)
     {
         _app = app;
+        _fonts = fonts;
+        _isDetachedChild = isDetachedChild;
         _window = window;
         _asyncActive = s_renderAsync && window.Handle.Kind != NativeHandleKind.Headless;   // headless never goes async (see field)
         // Step 3 (async): windowed out-of-bounds popups submit + present on the UI thread (RecordPopupWindows), sharing
@@ -1023,7 +1098,11 @@ public sealed class AppHost : IDisposable
             : static () => Stopwatch.GetTimestamp() * 1000.0 / Stopwatch.Frequency);
         _drainTimers = _timers.Drain;
         _warmCadenceEnabled = !_isHeadless;   // gates opt in via WarmCadenceEnabledForTest
-        _swapchain = device.CreateSwapchain(new SwapchainDesc(window.Handle, window.ClientSizePx));
+        // A detached child window must be COMPOSITED (its own DComp tree) so its per-window video presenter can hole-punch
+        // and composite the protected/clear surface. The primary host passes false and relies on the device-composited
+        // default (identical behavior). CreateSwapchain only forces composited for the FIRST swapchain; the child is the
+        // second, so it must be requested explicitly here.
+        _swapchain = device.CreateSwapchain(new SwapchainDesc(window.Handle, window.ClientSizePx, Composited: compositeSwapchain));
         _reconciler = new TreeReconciler(_scene, strings, _runtime);
         _reconciler.RegisterPendingEffectContext = RegisterPendingEffectContext;
         _layout = new FlexLayout(_scene, fonts);
@@ -1094,6 +1173,7 @@ public sealed class AppHost : IDisposable
         _inputHooks.IsWindowFullscreen = () => _window.IsFullscreen;
         _inputHooks.WindowSetFullscreen = _window.SetFullscreen;
         _inputHooks.WindowClose = _window.CloseWindow;
+        _inputHooks.OpenDetachedWindow = OpenDetachedWindow;   // pop-out video window (guarded: a child host / async / headless returns null)
         _inputHooks.SetTitleBarRegions = (regions, count) => _window.SetTitleBarRegions(regions.AsSpan(0, count));
         _inputHooks.GetNodeRect = _scene.AbsoluteRect;
         var chromeEpoch = new Signal<int>(0);
@@ -2794,8 +2874,13 @@ public sealed class AppHost : IDisposable
             _popupWindows[i].Window.Dispose();
         }
         _popupWindows.Clear();
+        // Tear down detached child windows (each disposes its own swapchain — which releases its video presenter — and its
+        // window, but NOT the shared device). Do this before our own swapchain/device teardown.
+        for (int i = _detachedHosts.Count - 1; i >= 0; i--) _detachedHosts[i].Dispose();
+        _detachedHosts.Clear();
         _swapchain.Dispose();
-        _device.Dispose();
+        // A detached CHILD host shares the parent's device — it must NOT dispose it (the parent owns the device lifecycle).
+        if (!_isDetachedChild) _device.Dispose();
         _window.Dispose();
     }
 }

@@ -495,6 +495,10 @@ public interface IPlatformWindow : IDisposable
     void SetFullscreen(bool fullscreen) { }
     void CloseWindow() { }
 
+    /// <summary>True once the window has been closed (its HWND destroyed). The host loop reaps a closed detached window.
+    /// Default false (headless / never-closing seams).</summary>
+    bool IsClosed => false;
+
     // ── detached-window seam (a movable/resizable always-on-top secondary window, e.g. the pop-out video mini-player) ──
     // Defaults no-op so headless and single-window backends are unaffected; the Win32 backend implements them.
 
