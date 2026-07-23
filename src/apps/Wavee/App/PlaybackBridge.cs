@@ -99,6 +99,12 @@ public sealed class PlaybackBridge
     /// follow-up — for now this is the seam the player-bar button toggles (reset on every track change).</summary>
     public Signal<bool> PreferVideo { get; } = new(false);
 
+    /// <summary>UI-only placement intent: the user chose the IN-WINDOW picture-in-picture video surface (as opposed to the
+    /// detached pop-out window). Mutually exclusive with the detached pop-out — both consume the one resolved
+    /// <see cref="PopOutVideoSource"/>, but only one plays at a time. Reset to false on every track change (like
+    /// <see cref="PreferVideo"/>). The shell mounts <c>InWindowVideoPip</c> while this is true.</summary>
+    public Signal<bool> ShowInWindowPip { get; } = new(false);
+
     /// <summary>The resolved video source for the now-playing track (null = none resolved yet): a clear/Canvas URL or a
     /// PlayReady DRM descriptor + license relay. The pop-out / inline video surface plays it (clear on the MF backend,
     /// DRM via the native CDM). The Spotify video-resolution layer (Canvas from the feed; PlayReady once the probe
@@ -348,7 +354,7 @@ public sealed class PlaybackBridge
     {
         var prevUri = CurrentTrack.Value?.Uri;
         CurrentTrack.Value = s.CurrentTrack;
-        if (s.CurrentTrack?.Uri != prevUri) { PreferVideo.Value = false; PopOutVideoSource.Value = null; }   // a new track resets the swap toggle + resolved video source
+        if (s.CurrentTrack?.Uri != prevUri) { PreferVideo.Value = false; ShowInWindowPip.Value = false; PopOutVideoSource.Value = null; }   // a new track resets the swap toggles + resolved video source
         RecomputeHasVideo();                                            // reflect the new track's cached video state (if any)
         CurrentContext.Value = s.ContextUri;
         IsPlaying.Value = s.IsPlaying;

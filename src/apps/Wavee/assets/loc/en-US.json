@@ -769,6 +769,8 @@
     "creditsSource": "Source: {names}",
     "switchToVideo": "Switch to video",
     "switchToAudio": "Switch to audio",
+    "playVideoHere": "Play video in this window",
+    "closeVideo": "Close video",
     "playingOn": "Playing on {device}",
     "localPlaybackUnsupported": "Playback isn’t supported on this device yet",
     "chooseDevice": "Choose device",
