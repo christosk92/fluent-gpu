@@ -603,18 +603,25 @@ internal static class WaveeNavProbe
         public int OverBudgetGc;     // ...of those, frames on which a Gen0+ GC fired (a GC spike, not a work spike)
     }
 
-    // WAVEE_HOME_SCROLL_PROBE=1: the screenshot repro path, isolated from the full nav stress suite. It warms Home,
-    // toggles compact/expanded sidebar state, simulates a drag-resize sequence through the same shell signals, then
-    // scrolls the Home viewport with real wheel input. Output defaults to .wavee-diagnostics under the current dir; override
-    // with WAVEE_PROBE_OUT.
+    // WAVEE_HOME_SCROLL_PROBE=1: scroll-feel harness. Warms Home, exercises sidebar compact/expand/drag, scrolls Home
+    // (image cards) + Liked (dense track rows) with real wheel input, then reports per-phase percentiles + hitch
+    // attribution (fence/realize/alloc/blur/relayout-escape). Output defaults under .wavee-diagnostics; override with
+    // WAVEE_PROBE_OUT. Pair with FG_SCROLL_TRACE=<path> for the full input→offset POD CSV.
     static void RunHomeScrollProbe(AppHost host, Win32Window window, D3D12Device gpu)
     {
         string? outDir = ProbeOutputDir();
         string? csvPath = outDir is null ? null : Path.Combine(outDir, "wavee-home-scroll-probe.csv");
         string? summaryPath = outDir is null ? null : Path.Combine(outDir, "wavee-home-scroll-probe-summary.txt");
-        var csv = new StringBuilder(1 << 15);
-        csv.AppendLine("phase,frame,label,frameMs,flushMs,layoutMs,animMs,recordMs,submitMs,gen0,gen1,comps,nodes,draws,overBudget");
+        var csv = new StringBuilder(1 << 16);
+        csv.AppendLine("phase,frame,label,frameMs,flushMs,rxFlushMs,vrRealizeMs,layoutMs,animMs,recordMs,submitMs,fenceWaitMs,presentMs,imagePumpMs,realizeMs,hotAlloc,rootEscapes,blurGroups,rendered,gen0,gen1,comps,nodes,draws,overBudget");
         bool keepVsync = Diag.EnvFlag("WAVEE_PROBE_VSYNC");
+
+        // Rolling segment sums for scroll-phase attribution (mean of each Paint segment across measured frames).
+        double sumFlush = 0, sumLayout = 0, sumAnim = 0, sumRecord = 0, sumSubmit = 0, sumFence = 0, sumPresent = 0, sumPump = 0, sumRealize = 0;
+        double sumRx = 0, sumVr = 0;
+        long sumHotAlloc = 0, sumRootEsc = 0, sumBlur = 0, sumComps = 0;
+        int nAttrib = 0, renderedFrames = 0, hotAllocFrames = 0, rootEscFrames = 0;
+        var censusDumps = new List<string>(64);
 
         FrameStats Measure(Phase phase, string label)
         {
@@ -622,17 +629,34 @@ internal static class WaveeNavProbe
             if (!keepVsync) { gpu.SuppressLatencyWaitOnce(); gpu.SuppressVsyncOnce(); }
             var s = host.RunFrame();
             int dg0 = GC.CollectionCount(0) - g0, dg1 = GC.CollectionCount(1) - g1;
+            string census = host.LastRenderCensusDump;
+            if (census.Length > 0) censusDumps.Add(phase.Name + ":" + label + " | " + census);
             if (s.Rendered || s.DrawCommandCount > 0)
             {
                 phase.Ms.Add(s.FrameMs);
                 bool over = s.FrameMs > BudgetMs;
                 if (over) { phase.OverBudget++; if (dg0 > 0) phase.OverBudgetGc++; }
+                sumFlush += s.FlushMs; sumLayout += s.LayoutMs; sumAnim += s.AnimMs; sumRecord += s.RecordMs; sumSubmit += s.SubmitMs;
+                sumFence += s.FenceWaitMs; sumPresent += s.PresentMs; sumPump += s.ImagePumpMs; sumRealize += s.RealizeCatchupMs;
+                sumRx += s.ReactiveFlushMs; sumVr += s.VirtualRealizeMs;
+                sumHotAlloc += s.HotPhaseAllocBytes; sumRootEsc += s.RootRelayoutEscapes; sumBlur += s.BlurGroupCount;
+                sumComps += s.ComponentsRendered; nAttrib++;
+                if (s.Rendered) renderedFrames++;
+                if (s.HotPhaseAllocBytes > 0) hotAllocFrames++;
+                if (s.RootRelayoutEscapes > 0) rootEscFrames++;
                 static string F(double v) => v.ToString("0.00", CultureInfo.InvariantCulture);
                 csv.Append(phase.Name).Append(',').Append(phase.Ms.Count.ToString(CultureInfo.InvariantCulture)).Append(',')
                    .Append(label).Append(',')
                    .Append(s.FrameMs.ToString("0.000", CultureInfo.InvariantCulture)).Append(',')
-                   .Append(F(s.FlushMs)).Append(',').Append(F(s.LayoutMs)).Append(',').Append(F(s.AnimMs)).Append(',')
+                   .Append(F(s.FlushMs)).Append(',').Append(F(s.ReactiveFlushMs)).Append(',').Append(F(s.VirtualRealizeMs)).Append(',')
+                   .Append(F(s.LayoutMs)).Append(',').Append(F(s.AnimMs)).Append(',')
                    .Append(F(s.RecordMs)).Append(',').Append(F(s.SubmitMs)).Append(',')
+                   .Append(F(s.FenceWaitMs)).Append(',').Append(F(s.PresentMs)).Append(',')
+                   .Append(F(s.ImagePumpMs)).Append(',').Append(F(s.RealizeCatchupMs)).Append(',')
+                   .Append(s.HotPhaseAllocBytes.ToString(CultureInfo.InvariantCulture)).Append(',')
+                   .Append(s.RootRelayoutEscapes.ToString(CultureInfo.InvariantCulture)).Append(',')
+                   .Append(s.BlurGroupCount.ToString(CultureInfo.InvariantCulture)).Append(',')
+                   .Append(s.Rendered ? '1' : '0').Append(',')
                    .Append(dg0).Append(',').Append(dg1).Append(',')
                    .Append(s.ComponentsRendered).Append(',').Append(s.NodesVisited).Append(',').Append(s.DrawCommandCount).Append(',')
                    .Append(over ? '1' : '0').AppendLine();
@@ -643,17 +667,60 @@ internal static class WaveeNavProbe
         void Nav(string key, string? arg) => WaveeShell.ProbeNav!(key, arg);
         void Settle(int n) { for (int i = 0; i < n && !window.IsClosed; i++) host.RunFrame(); }
 
+        // Wheel burst on a named viewport (or largest content scroller when key is null). Returns whether offset moved.
+        bool WheelScroll(Phase phase, string? viewportKey, string labelPrefix, int wheelFrames, int flickReps)
+        {
+            var viewport = viewportKey is null ? FindLargestScrollViewport(host.Scene) : FindScrollViewportByKey(host.Scene, viewportKey);
+            if (viewport.IsNull)
+            {
+                Log.Info($"[home-scroll-probe] no scroll viewport for key={(viewportKey ?? "<largest>")}");
+                return false;
+            }
+            var vr = host.Scene.AbsoluteRect(viewport);
+            host.Scene.TryGetScroll(viewport, out var s0);
+            float vh = s0.ViewportH > 20f ? s0.ViewportH : (vr.H > 20f ? vr.H : 400f);
+            // Prefer content centre for liked/lists; home keeps the trailing-edge dead-strip repro (2-DIP thumb).
+            float px = viewportKey == "home" ? vr.X + vr.W - 2f : vr.X + vr.W * 0.5f;
+            var pos = new Point2(px, vr.Y + vh * 0.5f);
+            window.QueueInput(new InputEvent(InputKind.PointerMove, pos, 0, 0));
+            Settle(2);
+            var routed0 = host.Input.ScrollableUnderForAxis(pos, wantHorizontal: false);
+            Log.Info($"[home-scroll-probe] {labelPrefix} wheel @ ({pos.X:0},{pos.Y:0}) vp=n#{viewport.Raw.Index} routed=n#{routed0.Raw.Index} " +
+                $"content {s0.ContentH:0} viewH {s0.ViewportH:0}");
+
+            for (int i = 0; i < wheelFrames && !window.IsClosed; i++)
+            {
+                window.QueueInput(new InputEvent(InputKind.Wheel, pos, 0, 0, ((i / 30) & 1) == 0 ? +60f : -60f));
+                Measure(phase, labelPrefix + "-wheel");
+            }
+            for (int rep = 0; rep < flickReps && !window.IsClosed; rep++)
+            {
+                for (int k = 0; k < 6 && !window.IsClosed; k++)
+                {
+                    window.QueueInput(new InputEvent(InputKind.Wheel, pos, 0, 0, +60f));
+                    Measure(phase, labelPrefix + "-flick");
+                }
+                for (int st = 0; st < 16 && !window.IsClosed; st++) Measure(phase, labelPrefix + "-coast");
+            }
+            host.Scene.TryGetScroll(viewport, out var s1);
+            bool moved = MathF.Abs(s1.OffsetY - s0.OffsetY) > 1f;
+            Log.Info($"[home-scroll-probe] {labelPrefix} endOff {s1.OffsetY:0} — wheel {(moved ? "moved" : "DID NOT MOVE")}");
+            return moved;
+        }
+
         Log.Info("[home-scroll-probe] warmup");
         for (int i = 0; i < 80 && !window.IsClosed; i++) { gpu.SuppressLatencyWaitOnce(); gpu.SuppressVsyncOnce(); host.RunFrame(); }
         GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
 
         var sidebar = new Phase("sidebar-home");
-        var scroll = new Phase("home-scroll");
+        var homeScroll = new Phase("home-scroll");
+        var likedScroll = new Phase("liked-scroll");
+        var navPhase = new Phase("nav");
 
         Nav("home", null);
-        Settle(40);
+        for (int i = 0; i < 40 && !window.IsClosed; i++) Measure(navPhase, "home-mount");
         System.Threading.Thread.Sleep(700);     // let the Home feed and visible art settle before the sidebar scenario
-        Settle(30);
+        for (int i = 0; i < 30 && !window.IsClosed; i++) Measure(navPhase, "home-settle");
 
         if (WaveeShell.ProbeSidebarCompact is null || WaveeShell.ProbeSidebarDragBegin is null ||
             WaveeShell.ProbeSidebarDragWidth is null || WaveeShell.ProbeSidebarDragEnd is null)
@@ -678,45 +745,29 @@ internal static class WaveeNavProbe
             for (int f = 0; f < 12 && !window.IsClosed; f++) Measure(sidebar, "drag-end");
         }
 
-        // Select the actual Home ScrollEl, not merely the largest vertical extent. The latter can select a nested or
-        // retained viewport and produced a false PASS for the real page-scroll regression.
-        var viewport = FindScrollViewportByKey(host.Scene, "home");
-        if (viewport.IsNull)
+        // Home (image-card feed) — trailing-edge wheel target keeps the dead-strip routing regression covered.
+        WheelScroll(homeScroll, "home", "home", wheelFrames: 180, flickReps: 4);
+
+        // Liked (dense TrackRow list) — KeepAlive cross-slot swap is measured here (navPhase).
+        Nav("liked", null);
+        for (int i = 0; i < 50 && !window.IsClosed; i++) Measure(navPhase, "liked-mount");
+        System.Threading.Thread.Sleep(400);
+        for (int i = 0; i < 20 && !window.IsClosed; i++) Measure(navPhase, "liked-settle");
+        WheelScroll(likedScroll, null, "liked", wheelFrames: 120, flickReps: 3);
+
+        // Reactivate / real-cadence checks stay on Home (routing regression + ambient-throttle detection).
+        Nav("home", null);
+        for (int i = 0; i < 30 && !window.IsClosed; i++) Measure(navPhase, "home-return");
+        var homeVp = FindScrollViewportByKey(host.Scene, "home");
+        double realLoopMeanMs = 0, realLoopWorstMs = 0;
+        int realLoopOver16 = 0, realLoopThrottled = 0, realLoopMaxWait = 0;
+        if (!homeVp.IsNull)
         {
-            Log.Info("[home-scroll-probe] no Home scroll viewport found");
-        }
-        else
-        {
-            var vr = host.Scene.AbsoluteRect(viewport);
-            host.Scene.TryGetScroll(viewport, out var s0);
+            var vr = host.Scene.AbsoluteRect(homeVp);
+            host.Scene.TryGetScroll(homeVp, out var s0);
             float vh = s0.ViewportH > 20f ? s0.ViewportH : (vr.H > 20f ? vr.H : 400f);
-            // Reproduce the reported dead strip exactly: point at the collapsed 2-DIP thumb on the trailing edge. The
-            // retained closed-right-rail overlay used to win HitAny here even though the page remained clickable to its
-            // left, so a centre-point probe gave a false PASS.
             var pos = new Point2(vr.X + vr.W - 2f, vr.Y + vh * 0.5f);
-            window.QueueInput(new InputEvent(InputKind.PointerMove, pos, 0, 0));
-            Settle(2);
-            var routed0 = host.Input.ScrollableUnderForAxis(pos, wantHorizontal: false);
-            Log.Info($"[home-scroll-probe] wheel @ ({pos.X:0},{pos.Y:0}) home=n#{viewport.Raw.Index} routed=n#{routed0.Raw.Index} " +
-                $"viewport x={vr.X:0} w={vr.W:0} content {s0.ContentH:0} viewH {s0.ViewportH:0} suppressors={s0.LoadingBarSuppressors}");
 
-            for (int i = 0; i < 180 && !window.IsClosed; i++)
-            {
-                window.QueueInput(new InputEvent(InputKind.Wheel, pos, 0, 0, ((i / 30) & 1) == 0 ? +60f : -60f));
-                Measure(scroll, "wheel");
-            }
-            for (int rep = 0; rep < 4 && !window.IsClosed; rep++)
-            {
-                for (int k = 0; k < 6 && !window.IsClosed; k++) { window.QueueInput(new InputEvent(InputKind.Wheel, pos, 0, 0, +60f)); Measure(scroll, "flick"); }
-                for (int st = 0; st < 16 && !window.IsClosed; st++) Measure(scroll, "coast");
-            }
-            host.Scene.TryGetScroll(viewport, out var s1);
-            bool moved = MathF.Abs(s1.OffsetY - s0.OffsetY) > 1f;
-            Log.Info($"[home-scroll-probe] endOff {s1.OffsetY:0} - wheel input {(moved ? "took effect" : "did not move")}");
-
-            // Exact regression: a working scrollbar auto-hides, the window deactivates/reactivates, then BOTH wheel
-            // routing and the conscious indicator must restart on the same viewport. Real-time idle frames are used so
-            // the 2s WinUI contract delay actually expires (tight diagnostic frames have near-zero dt).
             window.QueueInput(new InputEvent(InputKind.WindowBlur, default, 0, 0));
             host.RunFrame();
             for (int i = 0; i < 145 && !window.IsClosed; i++)
@@ -724,13 +775,13 @@ internal static class WaveeNavProbe
                 System.Threading.Thread.Sleep(16);
                 host.RunFrame();
             }
-            host.Scene.TryGetScroll(viewport, out var hidden);
+            host.Scene.TryGetScroll(homeVp, out var hidden);
             Log.Info($"[home-scroll-reactivate] hidden fade={hidden.FadeT:0.00} pointerOver={hidden.PointerOver} off={hidden.OffsetY:0}");
 
             window.QueueInput(new InputEvent(InputKind.WindowFocus, default, 0, 0));
             window.QueueInput(new InputEvent(InputKind.PointerMove, pos, 0, 0));
             for (int i = 0; i < 8 && !window.IsClosed; i++) { System.Threading.Thread.Sleep(16); host.RunFrame(); }
-            host.Scene.TryGetScroll(viewport, out var focused);
+            host.Scene.TryGetScroll(homeVp, out var focused);
             var routedAfterFocus = host.Input.ScrollableUnderForAxis(pos, wantHorizontal: false);
             float beforeReactivatedWheel = focused.OffsetY;
             float maxReactivated = MathF.Max(0f, focused.ContentH - focused.ViewportH);
@@ -741,41 +792,38 @@ internal static class WaveeNavProbe
                 System.Threading.Thread.Sleep(8);
                 host.RunFrame();
             }
-            host.Scene.TryGetScroll(viewport, out var reactivated);
+            host.Scene.TryGetScroll(homeVp, out var reactivated);
             bool reactivatedMoved = MathF.Abs(reactivated.OffsetY - beforeReactivatedWheel) > 1f;
             bool reactivatedBar = reactivated.FadeT > 0.5f;
-            Log.Info($"[home-scroll-reactivate] home=n#{viewport.Raw.Index} routed=n#{routedAfterFocus.Raw.Index} fade={reactivated.FadeT:0.00} pointerOver={reactivated.PointerOver} " +
+            Log.Info($"[home-scroll-reactivate] home=n#{homeVp.Raw.Index} routed=n#{routedAfterFocus.Raw.Index} fade={reactivated.FadeT:0.00} pointerOver={reactivated.PointerOver} " +
                 $"off={beforeReactivatedWheel:0}->{reactivated.OffsetY:0} wheel={(reactivatedMoved ? "PASS" : "FAIL")} bar={(reactivatedBar ? "PASS" : "FAIL")}");
 
             // Real app-loop cadence: present at vsync and ask RecommendedWaitMs before each frame so accidental ambient
             // throttling during scroll shows up as wait>0.
             var iv = new List<double>(220);
             long prev = Stopwatch.GetTimestamp();
-            int throttled = 0, maxWait = 0;
             for (int i = 0; i < 200 && !window.IsClosed; i++)
             {
                 window.QueueInput(new InputEvent(InputKind.Wheel, pos, 0, 0, ((i / 20) & 1) == 0 ? +60f : -60f));
                 int wait = host.RecommendedWaitMs();
-                if (wait > 0) { throttled++; if (wait > maxWait) maxWait = wait; System.Threading.Thread.Sleep(Math.Min(wait, 40)); }
+                if (wait > 0) { realLoopThrottled++; if (wait > realLoopMaxWait) realLoopMaxWait = wait; System.Threading.Thread.Sleep(Math.Min(wait, 40)); }
                 host.RunFrame();
                 long now = Stopwatch.GetTimestamp();
                 iv.Add((now - prev) * 1000.0 / Stopwatch.Frequency);
                 prev = now;
             }
             var a = iv.ToArray();
-            double tot = 0, worst = 0;
-            foreach (var v in a) { tot += v; if (v > worst) worst = v; }
-            double mean = a.Length > 0 ? tot / a.Length : 0;
-            int o16 = 0;
-            foreach (var v in a) if (v > 16.7) o16++;
-            Log.Info($"[home-scroll-fps] REAL app-loop wheel scroll: {a.Length} frames mean {mean:0.0}ms ({(mean > 0 ? 1000.0 / mean : 0):0} fps) worst {worst:0.0}ms ({(worst > 0 ? 1000.0 / worst : 0):0} fps) >16.7ms(<60fps)={o16} throttledWaitFrames={throttled} maxWait={maxWait}ms");
+            double tot = 0;
+            foreach (var v in a) { tot += v; if (v > realLoopWorstMs) realLoopWorstMs = v; if (v > 16.7) realLoopOver16++; }
+            realLoopMeanMs = a.Length > 0 ? tot / a.Length : 0;
+            Log.Info($"[home-scroll-fps] REAL app-loop wheel scroll: {a.Length} frames mean {realLoopMeanMs:0.0}ms ({(realLoopMeanMs > 0 ? 1000.0 / realLoopMeanMs : 0):0} fps) worst {realLoopWorstMs:0.0}ms ({(realLoopWorstMs > 0 ? 1000.0 / realLoopWorstMs : 0):0} fps) >16.7ms(<60fps)={realLoopOver16} throttledWaitFrames={realLoopThrottled} maxWait={realLoopMaxWait}ms");
         }
 
-        var phases = new[] { sidebar, scroll };
+        var phases = new[] { sidebar, homeScroll, likedScroll, navPhase };
         var all = new Phase("ALL");
         foreach (var p in phases) { all.Ms.AddRange(p.Ms); all.OverBudget += p.OverBudget; all.OverBudgetGc += p.OverBudgetGc; }
 
-        var sb = new StringBuilder(4096);
+        var sb = new StringBuilder(8192);
         sb.AppendLine();
         sb.AppendLine("=== WAVEE HOME SCROLL PROBE - per-frame production time (ms); target < 8.33 ms at 120 Hz ===");
         sb.AppendLine(keepVsync ? "(WAVEE_PROBE_VSYNC: vblank-paced)" : "(vsync/latency throttle removed -> pure work cost)");
@@ -785,28 +833,117 @@ internal static class WaveeNavProbe
         sb.AppendLine(new string('-', 96));
         sb.AppendLine(Format(all));
 
-        var rows = new List<(string Tag, double Ms, double Flush, double Layout, double Anim, double Record, double Submit, int G0)>();
+        if (nAttrib > 0)
+        {
+            double inv = 1.0 / nAttrib;
+            sb.AppendLine();
+            sb.AppendLine("=== segment attribution (mean ms / measured frame) ===");
+            sb.AppendLine($"  flush={sumFlush * inv:0.00}  rx={sumRx * inv:0.00}  vr={sumVr * inv:0.00}  layout={sumLayout * inv:0.00}  anim={sumAnim * inv:0.00}  record={sumRecord * inv:0.00}  submit={sumSubmit * inv:0.00}");
+            sb.AppendLine($"  fenceWait={sumFence * inv:0.00}  present={sumPresent * inv:0.00}  imagePump={sumPump * inv:0.00}  realizeCatchup={sumRealize * inv:0.00}");
+            sb.AppendLine($"  hotAllocBytes/frame={sumHotAlloc * inv:0.0}  rootRelayoutEscapes/frame={sumRootEsc * inv:0.00}  blurGroups/frame={sumBlur * inv:0.00}  compsRendered/frame={sumComps * inv:0.00}");
+            sb.AppendLine($"  renderedFrames={renderedFrames}/{nAttrib}  hotAllocFrames={hotAllocFrames}  rootEscapeFrames={rootEscFrames}");
+        }
+
+        if (censusDumps.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine($"=== FG_RENDER_CENSUS dumps ({censusDumps.Count}) ===");
+            int show = Math.Min(40, censusDumps.Count);
+            for (int i = 0; i < show; i++) sb.AppendLine("  " + censusDumps[i]);
+            if (censusDumps.Count > show) sb.AppendLine($"  … +{censusDumps.Count - show} more");
+        }
+
+        var rows = new List<(string Tag, double Ms, double Flush, double Layout, double Anim, double Record, double Submit, double Fence, double Realize, long Hot, int Esc, int G0)>();
         foreach (var line in csv.ToString().Split('\n'))
         {
             var c = line.Split(',');
-            if (c.Length < 15 || c[0] == "phase") continue;
+            if (c.Length < 25 || c[0] == "phase") continue;
             double D(int i) => double.TryParse(c[i], NumberStyles.Float, CultureInfo.InvariantCulture, out double v) ? v : 0;
-            int.TryParse(c[9], out int g0);
-            rows.Add((c[0] + ":" + c[2], D(3), D(4), D(5), D(6), D(7), D(8), g0));
+            // cols: frameMs(3) flush(4) rx(5) vr(6) layout(7) anim(8) record(9) submit(10) fence(11) … realize(14) hot(15) esc(16) … gen0(19)
+            long.TryParse(c[15], NumberStyles.Integer, CultureInfo.InvariantCulture, out long hot);
+            int.TryParse(c[16], NumberStyles.Integer, CultureInfo.InvariantCulture, out int esc);
+            int.TryParse(c[19], NumberStyles.Integer, CultureInfo.InvariantCulture, out int g0);
+            rows.Add((c[0] + ":" + c[2], D(3), D(4), D(7), D(8), D(9), D(10), D(11), D(14), hot, esc, g0));
         }
         rows.Sort((a, b) => b.Ms.CompareTo(a.Ms));
         sb.AppendLine();
-        sb.AppendLine($"Worst 12 frames - {"total",7} = {"flush",6} + {"layout",6} + {"anim",5} + {"record",6} + {"submit",6}  (gc=Gen0)  transition");
+        sb.AppendLine($"Worst 12 frames - {"total",7} = flush+layout+anim+record+submit  (fence / realize / hotAlloc / esc / gc)");
         for (int i = 0; i < Math.Min(12, rows.Count); i++)
         {
             var r = rows[i];
-            sb.AppendLine($"  {r.Ms,7:0.00} = {r.Flush,6:0.00} + {r.Layout,6:0.00} + {r.Anim,5:0.00} + {r.Record,6:0.00} + {r.Submit,6:0.00}  gc={r.G0}  {r.Tag}");
+            sb.AppendLine($"  {r.Ms,7:0.00} = {r.Flush,5:0.00}+{r.Layout,5:0.00}+{r.Anim,5:0.00}+{r.Record,5:0.00}+{r.Submit,5:0.00}  fence={r.Fence:0.00} realize={r.Realize:0.00} hot={r.Hot} esc={r.Esc} gc={r.G0}  {r.Tag}");
         }
+
+        // Auto-verdicts: classify the likely "heavy scroll" cause from measured work (not present-paced).
+        sb.AppendLine();
+        sb.AppendLine("=== VERDICTS ===");
+        AppendScrollVerdicts(sb, homeScroll, likedScroll, all, nAttrib, sumFlush, sumLayout, sumAnim, sumRecord, sumSubmit,
+            sumFence, sumPresent, sumPump, sumRealize, sumHotAlloc, sumRootEsc, sumBlur, sumComps,
+            renderedFrames, hotAllocFrames, rootEscFrames,
+            realLoopMeanMs, realLoopWorstMs, realLoopOver16, realLoopThrottled, realLoopMaxWait);
 
         string report = sb.ToString();
         Log.Info(report);
         if (csvPath is not null) WriteProbeFile(csvPath, csv.ToString(), "home-scroll-probe");
         if (summaryPath is not null) WriteProbeFile(summaryPath, report, "home-scroll-probe");
+    }
+
+    static void AppendScrollVerdicts(StringBuilder sb, Phase home, Phase liked, Phase all, int nAttrib,
+        double sumFlush, double sumLayout, double sumAnim, double sumRecord, double sumSubmit,
+        double sumFence, double sumPresent, double sumPump, double sumRealize, long sumHotAlloc, long sumRootEsc, long sumBlur, long sumComps,
+        int renderedFrames, int hotAllocFrames, int rootEscFrames,
+        double realMean, double realWorst, int realOver16, int realThrottled, int realMaxWait)
+    {
+        if (all.Ms.Count == 0) { sb.AppendLine("  (no measured frames — probe did not paint)"); return; }
+        var sorted = all.Ms.ToArray(); Array.Sort(sorted);
+        double p50 = Pct(sorted, 50), p90 = Pct(sorted, 90), p99 = Pct(sorted, 99), max = sorted[^1];
+        double inv = nAttrib > 0 ? 1.0 / nAttrib : 0;
+        double mFlush = sumFlush * inv, mLayout = sumLayout * inv, mAnim = sumAnim * inv, mRecord = sumRecord * inv, mSubmit = sumSubmit * inv;
+        double mFence = sumFence * inv, mPump = sumPump * inv, mRealize = sumRealize * inv;
+        double mHot = sumHotAlloc * inv, mEsc = sumRootEsc * inv, mBlur = sumBlur * inv, mComps = sumComps * inv;
+
+        // Dominant segment among flush/layout/anim/record/(submit−fence).
+        var segs = new (string Name, double Ms)[] { ("flush", mFlush), ("layout", mLayout), ("anim", mAnim), ("record", mRecord), ("submit-cpu", Math.Max(0, mSubmit - mFence - sumPresent * inv)) };
+        Array.Sort(segs, (a, b) => b.Ms.CompareTo(a.Ms));
+        string dominant = segs[0].Name;
+
+        bool workOk120 = p90 <= BudgetMs;
+        bool workOk60 = p90 <= 16.7;
+        sb.AppendLine($"  work p50={p50:0.00}ms p90={p90:0.00}ms p99={p99:0.00}ms max={max:0.00}ms  over8.3={all.OverBudget}/{all.Ms.Count} (gc={all.OverBudgetGc})");
+        sb.AppendLine(workOk120
+            ? "  PASS 120Hz work budget: p90 ≤ 8.33 ms — CPU work is not the limiter on a 120 Hz panel."
+            : workOk60
+                ? "  WARN 120Hz work budget: p90 > 8.33 ms but ≤ 16.7 ms — drops 120→60 under load; feels 'heavy' on high-Hz panels."
+                : "  FAIL 60Hz work budget: p90 > 16.7 ms — visible stutter; CPU/GPU work exceeds one 60 Hz frame.");
+
+        if (home.Ms.Count > 0 && liked.Ms.Count > 0)
+        {
+            var h = home.Ms.ToArray(); Array.Sort(h);
+            var l = liked.Ms.ToArray(); Array.Sort(l);
+            double hp90 = Pct(h, 90), lp90 = Pct(l, 90);
+            sb.AppendLine(lp90 > hp90 * 1.25
+                ? $"  LIKED heavier than HOME: liked p90={lp90:0.00}ms vs home p90={hp90:0.00}ms — dense TrackRow / virtualize path is the likely feel culprit."
+                : hp90 > lp90 * 1.25
+                    ? $"  HOME heavier than LIKED: home p90={hp90:0.00}ms vs liked p90={lp90:0.00}ms — image-card / blur / art decode path dominates."
+                    : $"  HOME≈LIKED: home p90={hp90:0.00}ms liked p90={lp90:0.00}ms — cost is shared (shell/chrome/player), not page-local.");
+        }
+
+        sb.AppendLine($"  dominant segment: {dominant} ({segs[0].Ms:0.00} ms/frame mean)");
+        if (mFence > 2.0) sb.AppendLine($"  GPU-bound signal: mean fenceWait={mFence:0.00}ms — GPU/present pacing, not UI reconcile.");
+        if (mRealize > 1.0) sb.AppendLine($"  virtualize hitch: mean realizeCatchup={mRealize:0.00}ms — fling realizes windows mid-scroll.");
+        if (mPump > 1.0) sb.AppendLine($"  image-pump hitch: mean imagePump={mPump:0.00}ms — decode/upload during scroll.");
+        if (mEsc > 0.05) sb.AppendLine($"  layout-escape: mean rootRelayoutEscapes={mEsc:0.00}/frame ({rootEscFrames} frames) — missing ClipToBounds boundary on a hot subtree.");
+        if (hotAllocFrames > nAttrib * 0.05) sb.AppendLine($"  hot-phase alloc: {hotAllocFrames}/{nAttrib} frames alloc'd (mean {mHot:0.0} B) — phases 6–13 should be 0.");
+        if (mComps > 2.0) sb.AppendLine($"  re-render during scroll: mean compsRendered={mComps:0.00}/frame (rendered={renderedFrames}/{nAttrib}) — a signal/bind is forcing component work on the scroll path.");
+        if (mBlur > 2.0) sb.AppendLine($"  blur load: mean blurGroups={mBlur:0.00}/frame — acrylic/backdrop cost rides along with scroll.");
+        if (realMean > 0)
+        {
+            sb.AppendLine($"  real app-loop: mean {realMean:0.0}ms ({(realMean > 0 ? 1000.0 / realMean : 0):0} fps) worst {realWorst:0.0}ms >16.7ms={realOver16} throttledWait={realThrottled} maxWait={realMaxWait}ms");
+            if (realThrottled > 0 && realMaxWait >= 8)
+                sb.AppendLine("  ambient throttle during scroll: RecommendedWaitMs > 0 while wheeling — scroll grace/hold may be failing to keep display-rate pacing.");
+        }
+        if (workOk120 && mFence < 1.0 && mRealize < 0.5 && hotAllocFrames == 0 && mEsc < 0.01 && realOver16 == 0)
+            sb.AppendLine("  OVERALL: work path looks clean. If the app still 'feels heavy', suspect input latency / async present / subjective motion (not CPU frame budget).");
     }
 
     // WAVEE_RAIL_PROBE=1 (projected-motion P0): the dedicated rail/sidebar transition perf harness. Wide-window (rail

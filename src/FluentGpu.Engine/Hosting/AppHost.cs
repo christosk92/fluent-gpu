@@ -53,6 +53,12 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     // anim=phase-7 ticks, record=SceneRecorder (+ text shaping), submit=command build + GPU submit + present. ~5
     // Stopwatch reads/frame, zero alloc — so a profiler/probe can attribute a frame-time spike to a phase without FG_ALLOC_DIAG.
     public double FlushMs { get; init; }
+    /// <summary>Of <see cref="FlushMs"/>: wall time inside <c>_runtime.Flush()</c> (render-effects + bindings), including the
+    /// same-frame second flush after pre-layout virtual realize. Always-on Stopwatch; 0 when nothing flushed.</summary>
+    public double ReactiveFlushMs { get; init; }
+    /// <summary>Of <see cref="FlushMs"/>: wall time inside the pre-layout <c>ReRealizeVirtuals()</c> call. Always-on; post-
+    /// layout / scroll-catchup realize is charged to <see cref="RealizeCatchupMs"/> instead.</summary>
+    public double VirtualRealizeMs { get; init; }
     public double LayoutMs { get; init; }
     public double AnimMs { get; init; }
     public double RecordMs { get; init; }
@@ -117,6 +123,21 @@ public sealed class PopupWindowSlot
     public ISwapchain? Swapchain { get; internal set; }
     /// <summary>The popup's own command stream, re-recorded each frame via <c>SceneRecorder.RecordSubtree</c>.</summary>
     public DrawList DrawList { get; } = new();
+}
+
+/// <summary>Which branch of <see cref="AppHost.RecommendedWaitMs"/> produced the last wait — the diagnostic that
+/// distinguishes ambient software-pacing from display-rate free-run. <c>Ambient</c> means the loop was throttled to
+/// <see cref="AppHost.AmbientAnimationFps"/> (the software 60 Hz cap); <c>DisplayRate</c>/<c>PaceAsync</c> mean the loop
+/// ran at panel rate and any lock is downstream (Present/GPU miss-vblank). Surfaced via <see cref="AppHost.LastWaitKind"/>.</summary>
+public enum HostWaitKind : byte
+{
+    Idle,            // -1: fully idle / minimized — block until a message
+    Hud,             // 100: DynamicText-only readout throttle
+    Baked,           // baked-blur queue cadence
+    Ambient,         // AmbientFrameWaitMs — the software fps cap (the maximize-lock suspect)
+    PaceSkipSubmit,  // AsyncDisplayPaceMs after an elided submit (sync path)
+    PaceAsync,       // AsyncDisplayPaceMs — async present pace cap
+    DisplayRate,     // 0: latency-sensitive / one-shot motion — sync present-throttled (panel rate)
 }
 
 public sealed class AppHost : IDisposable
@@ -583,6 +604,7 @@ public sealed class AppHost : IDisposable
     // STALE throttle/idle gap, not a real render interval — so Paint resyncs the clock before the anim tick when this
     // frame drives interactive or one-shot motion, killing the first-frame lurch on a scroll-start or a connected fly.
     private int _lastWaitMs;
+    private HostWaitKind _lastWaitKind;   // which RecommendedWaitMsCore branch produced _lastWaitMs (present/pacing diagnosis)
     private int _traceGc0, _traceGc1, _traceGc2;   // GC collection counts at the last note-113 gap sample (hitch attribution)
     // Post-scroll grace window: keep display-rate pacing for a short tail after the last scroll-active frame so the eased
     // settle + any in-flight art reveal finish smoothly instead of snapping to the 30 Hz ambient cadence mid-motion.
@@ -601,6 +623,24 @@ public sealed class AppHost : IDisposable
     public int AmbientAnimationFps { get; set; } = s_ambientFpsDefault;
     private static readonly int s_ambientFpsDefault = ReadAmbientFps();
     private static int ReadAmbientFps() => int.TryParse(Environment.GetEnvironmentVariable("FG_ANIM_FPS"), out var v) && v >= 0 ? v : 30;
+    // FG_ADAPTIVE_FPS governor (default off): when the GPU genuinely cannot sustain the panel rate at the current size
+    // (smoothed fence-wait over the ~120Hz budget — e.g. a maximized frame that rasters in ~14ms), pace CONTINUOUS
+    // animation (playhead/shimmer) to the ambient cap instead of free-running the loop into vblank-misses. A steady 60
+    // beats a jittery 60 and halves GPU/power; it NEVER engages for latency-sensitive frames (no added input/scroll
+    // latency) and routes through the Resync-exempt AmbientFrameWaitMs so it can't trip the frozen-anim clock guard.
+    // DEFAULT ON (opt out with FG_ADAPTIVE_FPS=0): on a fast GPU the EMA stays under budget so it NEVER engages — a no-op;
+    // it only acts when the GPU is genuinely bound, turning a thrashing 60 into a steady one. Escape hatch keeps it safe.
+    private static readonly bool s_adaptiveFps = Environment.GetEnvironmentVariable("FG_ADAPTIVE_FPS") is not ("0" or "false" or "FALSE" or "off");
+    private double _gpuBoundEma;   // smoothed recent GPU fence-wait (ms); governor input
+    private const double GpuBoundBudgetMs = 10.0;   // sustained fence-wait above this ⇒ can't hold 120 (8.3ms) → pace to ambient
+    // The governor NEVER paces these: genuine interactions (would add input/scroll latency) + active video (needs the panel
+    // rate). It DOES pace art-reveal crossfades / one-shot transitions / ambient loops when GPU-bound (a 60Hz crossfade is
+    // imperceptible, and the GPU can't do better than ~60 at that size anyway). Narrower than LatencySensitiveWake — which
+    // includes the Image* bits — so the governor reliably engages during maximized playback where those bits stay set.
+    private const WakeReasons GovernorNeverPace =
+        WakeReasons.Interact | WakeReasons.ScrollAnim | WakeReasons.Repeat |
+        WakeReasons.DragActive | WakeReasons.DragDropWork | WakeReasons.GestureHold | WakeReasons.TouchPress |
+        WakeReasons.VideoPresenting;
     private const WakeReasons LatencySensitiveWake =
         WakeReasons.Interact | WakeReasons.ScrollAnim | WakeReasons.Repeat |
         WakeReasons.DragActive | WakeReasons.DragDropWork | WakeReasons.GestureHold | WakeReasons.TouchPress |
@@ -666,6 +706,13 @@ public sealed class AppHost : IDisposable
     /// <summary>Wall-time the render thread most recently BLOCKED on the GPU (frame fence + present latency) inside its
     /// submit — the real render-side cost async hides from FrameMs. High + climbing ⇒ GPU-bound. Diagnostic (FG_FPS_LOG).</summary>
     public double LastGpuFenceWaitMs => _device.LastFenceWaitMs;
+    /// <summary>Diagnostic (FG_GPU_TIMING=1): the TRUE on-GPU raster time (ms) of the most recent frame, from a whole-frame
+    /// timestamp-query pair (lags one frame). Unlike <see cref="LastGpuFenceWaitMs"/> this excludes the vblank/latency wait,
+    /// so it says whether a maximized 60fps lock is GPU-fill-bound (render ≳ refresh budget) or vblank-quantized. 0 when off.</summary>
+    public double LastGpuRenderMs => _device.LastGpuRenderMs;
+    /// <summary>Diagnostic (FG_GPU_TIMING=1): the scene-raster portion of <see cref="LastGpuRenderMs"/> (excl. uploads/baked-blur)
+    /// — when this dominates and exceeds the refresh budget, the maximize lock is content fill/overdraw. 0 when off.</summary>
+    public double LastGpuSceneMs => _device.LastGpuSceneMs;
 
     /// <summary>The message-loop wait timeout (ms) for the NEXT pump: how long to block in <c>WaitForWork</c> before
     /// running another frame. Computes the wake mask ONCE and paces by it:
@@ -686,6 +733,14 @@ public sealed class AppHost : IDisposable
         return w;
     }
 
+    /// <summary>The wait (ms) the loop last chose to pace INTO the current frame (the raw <see cref="RecommendedWaitMs"/>
+    /// value, timer-clamped): 0 = display-rate, &gt;0 = ambient/HUD throttle, -1 = blocked idle. Diagnostic (FG_FPS_LOG).</summary>
+    public int LastWaitMs => _lastWaitMs;
+    /// <summary>Which <see cref="RecommendedWaitMsCore"/> branch produced <see cref="LastWaitMs"/> — the signal that tells a
+    /// maximize/60fps investigation whether the loop is <see cref="HostWaitKind.Ambient"/>-throttled (software cap) or running
+    /// at display rate (a lock is then downstream in Present/GPU). Diagnostic (FG_FPS_LOG).</summary>
+    public HostWaitKind LastWaitKind => _lastWaitKind;
+
     /// <summary>Shorten an IDLE/throttled wait so the loop wakes when the earliest frame-clock timer is due (a pending
     /// timer keeps the loop from over-sleeping past its fire). A display-rate wait (0 sync / <see cref="AsyncDisplayPaceMs"/>
     /// async — animation/scroll live) is left untouched: it already drains the timer next frame, and shortening it to a
@@ -701,13 +756,17 @@ public sealed class AppHost : IDisposable
 
     private int RecommendedWaitMsCore()
     {
-        if (IsMinimized) { MaybeTrimOnIdle(); return -1; }   // nothing to paint; only the restore message wakes us (see RunFrame's minimize gate)
+        // Feed the FG_ADAPTIVE_FPS governor: smooth the render-thread/UI GPU fence-wait so a sustained over-budget stretch
+        // (a maximized fill-bound frame) is detected without one-frame jitter flipping the pacing. Cheap; only when armed.
+        if (s_adaptiveFps) _gpuBoundEma = _gpuBoundEma * 0.85 + _device.LastFenceWaitMs * 0.15;
+        if (IsMinimized) { MaybeTrimOnIdle(); _lastWaitKind = HostWaitKind.Idle; return -1; }   // nothing to paint; only the restore message wakes us (see RunFrame's minimize gate)
         WakeReasons r = ComputeWakeReasons();
-        if (r == WakeReasons.None) { MaybeTrimOnIdle(); return -1; }   // fully idle: trim the slab tail once, then block until a message arrives
-        if (r == WakeReasons.DynamicText) return 100;   // HUD-only: 10 Hz readout, ~0% idle CPU
+        if (r == WakeReasons.None) { MaybeTrimOnIdle(); _lastWaitKind = HostWaitKind.Idle; return -1; }   // fully idle: trim the slab tail once, then block until a message arrives
+        if (r == WakeReasons.DynamicText) { _lastWaitKind = HostWaitKind.Hud; return 100; }   // HUD-only: 10 Hz readout, ~0% idle CPU
         if ((r & ~(WakeReasons.BakedBlurPending | WakeReasons.DynamicText)) == 0)
         {
             int bakedWait = _bakedBlurQueue.RecommendedWaitMs;
+            _lastWaitKind = (r & WakeReasons.DynamicText) != 0 ? HostWaitKind.Hud : HostWaitKind.Baked;
             return (r & WakeReasons.DynamicText) != 0
                 ? (bakedWait < 0 ? 100 : Math.Min(100, bakedWait))
                 : bakedWait;
@@ -728,6 +787,17 @@ public sealed class AppHost : IDisposable
             && now >= _scrollGraceUntil && now >= _mainScrollHoldUntil)
         {
             MaybeTrimOnIdle();   // #10: playback/ambient never reaches WakeReasons.None, so trim the slab tail here too (30s-cadence-gated)
+            _lastWaitKind = HostWaitKind.Ambient;
+            return AmbientFrameWaitMs();
+        }
+        // FG_ADAPTIVE_FPS governor: the animation is NOT ambient-classified (e.g. a one-shot transition or the smooth
+        // playhead), but the GPU can't sustain the panel rate at this size — running full-rate just thrashes into
+        // vblank-misses. Pace to the ambient cap for a STEADY sustainable cadence. Same latency-sensitive + scroll-hold
+        // guards as the ambient branch (never touches interaction/scroll), and the same Resync-exempt wait.
+        if (s_adaptiveFps && AmbientAnimationFps > 0 && (r & GovernorNeverPace) == 0
+            && _gpuBoundEma > GpuBoundBudgetMs && now >= _scrollGraceUntil && now >= _mainScrollHoldUntil)
+        {
+            _lastWaitKind = HostWaitKind.Ambient;
             return AmbientFrameWaitMs();
         }
         // Skip-submit pacing floor: an elided submit skips Present — the sync path's ONLY pacer — so a scroll-armed-
@@ -738,7 +808,8 @@ public sealed class AppHost : IDisposable
         // monotonic (a novel wait value here would zero-dt every animating frame — the frozen one-shot-anim bug
         // class). Input still ends the wait immediately (WaitForWork is MsgWait-based), so nothing gains latency;
         // the first frame that actually changes pixels submits, and the next wait returns to 0 (present-throttled).
-        if (!_asyncActive && _lastFrameSkippedSubmit) return AsyncDisplayPaceMs;
+        if (!_asyncActive && _lastFrameSkippedSubmit) { _lastWaitKind = HostWaitKind.PaceSkipSubmit; return AsyncDisplayPaceMs; }
+        _lastWaitKind = _asyncActive ? HostWaitKind.PaceAsync : HostWaitKind.DisplayRate;
         return _asyncActive ? AsyncDisplayPaceMs : 0;   // latency-sensitive / one-shot motion: sync = present-throttled (0); async = pace cap (present is off-thread — 0 would free-spin)
     }
 
@@ -868,6 +939,8 @@ public sealed class AppHost : IDisposable
     // already expose are reused; these surface the rest. All passive O(1) reads.
     internal StringTable Strings => _strings;
     internal TreeReconciler Reconciler => _reconciler;
+    /// <summary>Last <c>FG_RENDER_CENSUS</c> spike dump (empty when census off or no spike this frame).</summary>
+    public string LastRenderCensusDump => _reconciler.LastRenderCensusDump;
     internal int InteractionAnimatorCensus => _anim.HoverPressTrackCount;   // hover/press are now engine HoverFade/PressFade tracks (InteractionAnimator deleted)
     internal int ScrollAnimatorCensus => _scrollAnim.ActiveCount;
 
@@ -1509,6 +1582,7 @@ public sealed class AppHost : IDisposable
             }
 
             long frameStart = Stopwatch.GetTimestamp();
+            _reconciler.BeginRenderCensus();
             Motion.SetLayoutTransitionsSuppressed(MotionSuppressionSource.WindowResize, _window.InModalLoop);
             // Scroll-coincident reconcile → snap, don't FLIP (perf plan W2-P2.2): while a user scroll is actually moving
             // content (an offset REALLY advanced last frame — the latch below the phase-7 scroll tick — AND the 0.45s
@@ -1625,15 +1699,27 @@ public sealed class AppHost : IDisposable
                 _reconciler.RethemeAll();
             }
             bool virtualsChanged = false;
+            double reactiveFlushMs = 0, virtualRealizeMs = 0;
             try
             {
+                long tRx0 = Stopwatch.GetTimestamp();
                 _runtime.Flush();                              // 3–5 apply scheduled re-renders (render-effects reconcile) + bindings
+                long tRx1 = Stopwatch.GetTimestamp();
                 virtualsChanged = _reconciler.ReRealizeVirtuals();   // virtual boundary re-realize (granular)
+                long tVr1 = Stopwatch.GetTimestamp();
                 if (virtualsChanged && _runtime.HasPending) _runtime.Flush();   // bound-row rebinds (slot signal writes) land THIS frame
+                long tRx2 = Stopwatch.GetTimestamp();
+                reactiveFlushMs = ToMs(tRx1 - tRx0) + ToMs(tRx2 - tVr1);
+                virtualRealizeMs = ToMs(tVr1 - tRx1);
             }
             finally { if (themeChanged) _reconciler.SetThemeTransition(float.NaN); }
             bool reconciled = _reconciler.ConsumeReconciled() || virtualsChanged;
             long tFlush = Stopwatch.GetTimestamp();   // always-on segment timing (FrameStats.*Ms) — see below
+            // Spike-gated type roster (FG_RENDER_CENSUS): one line when FlushMs ≥ 12 or comps are high. Peek render
+            // count WITHOUT consuming it (ConsumeRenderCount runs later when assembling LastStats).
+            int censusComps = _reconciler.PeekRenderCount();
+            _reconciler.MaybeDumpRenderCensus(ToMs(tFlush - frameStart), reactiveFlushMs, virtualRealizeMs, censusComps,
+                _anyOffsetWroteLastFrame || Stopwatch.GetTimestamp() < _mainScrollHoldUntil);
             if (s_allocDiag) { db = Probe(SegFlush, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
             bool layoutNeeded = _needFullLayout || reconciled || _scene.AnyLayoutDirty;
@@ -1994,6 +2080,8 @@ public sealed class AppHost : IDisposable
                 FrameMs = _frameMs,
                 ComponentsRendered = componentsRendered,
                 FlushMs = ToMs(tFlush - frameStart),   // incl. flip/FLIP-capture + reactive flush + reconcile
+                ReactiveFlushMs = reactiveFlushMs,
+                VirtualRealizeMs = virtualRealizeMs,
                 LayoutMs = ToMs(tLayout - tFlush),
                 AnimMs = ToMs(tAnim - tLayout),         // phase-7 ticks + projections
                 RecordMs = ToMs(tRecord - tAnim),       // image pump + SceneRecorder (+ text shaping) + dyntext

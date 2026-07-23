@@ -310,6 +310,25 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool GetPointerPenInfo(uint pointerId, POINTER_PEN_INFO* penInfo);
 
+    // Display-refresh query (diagnostic-only, FG_FPS_LOG resize line). GetDeviceCaps(VREFRESH) on the window DC reports the
+    // vertical refresh (Hz) of the display this window is on — the honest panel/mode rate to compare against the observed
+    // present cadence (a maximize that locks to 60 on a logged 120 Hz panel is a present/GPU miss-vblank, not a mode drop).
+    private const int VREFRESH = 116;   // wingdi.h GetDeviceCaps index
+    [LibraryImport("user32.dll")] private static partial nint GetDC(nint hWnd);
+    [LibraryImport("user32.dll")] private static partial int ReleaseDC(nint hWnd, nint hdc);
+    [LibraryImport("gdi32.dll")] private static partial int GetDeviceCaps(nint hdc, int index);
+
+    /// <summary>Vertical refresh (Hz) of the display this window is currently on, via <c>GetDeviceCaps(VREFRESH)</c> on the
+    /// window DC. Returns 0 when unknown (the driver reports 0/1 = "device default"). Diagnostic-only; call sparingly
+    /// (once per size change), not per frame.</summary>
+    public int CurrentRefreshHz()
+    {
+        nint hdc = GetDC((nint)_hwnd);
+        if (hdc == 0) return 0;
+        try { int hz = GetDeviceCaps(hdc, VREFRESH); return hz <= 1 ? 0 : hz; }
+        finally { ReleaseDC((nint)_hwnd, hdc); }
+    }
+
     // POINTER_INFO (winuser.h) — common to every pointer type. Sequential layout; only the fields the pump reads are
     // named meaningfully, the remainder are padding-faithful placeholders so the OS writes land at the right offsets.
     [StructLayout(LayoutKind.Sequential)]

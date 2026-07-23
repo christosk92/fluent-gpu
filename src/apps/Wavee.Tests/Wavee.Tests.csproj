@@ -15,7 +15,7 @@
     <NoWarn>$(NoWarn);CA1416;xUnit1051</NoWarn>
   </PropertyGroup>
 
-  <PropertyGroup Condition="Exists('..\Wavee.PlayPlay\Client\InProcessPlayPlayKeyDeriver.cs')">
+  <PropertyGroup Condition="'$(WaveeSkipPrivateSources)' != 'true' And Exists('..\Wavee.PlayPlay\Client\InProcessPlayPlayKeyDeriver.cs')">
     <DefineConstants>$(DefineConstants);WAVEE_PLAYPLAY_LOCAL</DefineConstants>
   </PropertyGroup>
 
@@ -164,7 +164,7 @@
                       OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
-  <ItemGroup Condition="Exists('..\Wavee.PlayPlay\Client\InProcessPlayPlayKeyDeriver.cs')">
+  <ItemGroup Condition="'$(WaveeSkipPrivateSources)' != 'true' And Exists('..\Wavee.PlayPlay\Client\InProcessPlayPlayKeyDeriver.cs')">
     <!-- The test assembly source-includes only the PlayPlay pieces the PlayPlay*Tests exercise; the CLI probe
          (app-only AppDataSettings dep) and the in-process native adapter are app-composition-only, excluded here. -->
     <!-- The test assembly source-includes the PlayPlay pieces the PlayPlay*Tests exercise; the CLI probe
