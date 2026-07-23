@@ -262,6 +262,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private const uint CS_VREDRAW = 0x0001, CS_HREDRAW = 0x0002;
     private const uint WS_OVERLAPPEDWINDOW = 0x00CF0000;
     private const int GWL_STYLE = -16;
+    private const int GWL_EXSTYLE = -20;
+    private const uint WM_GETMINMAXINFO = 0x0024;
     private const uint MONITOR_DEFAULTTONEAREST = 2;
     private const int SW_MAXIMIZE = 3;
     private const int CW_USEDEFAULT = unchecked((int)0x80000000);
@@ -309,6 +311,25 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool GetPointerPenInfo(uint pointerId, POINTER_PEN_INFO* penInfo);
+
+    // Display-refresh query (diagnostic-only, FG_FPS_LOG resize line). GetDeviceCaps(VREFRESH) on the window DC reports the
+    // vertical refresh (Hz) of the display this window is on — the honest panel/mode rate to compare against the observed
+    // present cadence (a maximize that locks to 60 on a logged 120 Hz panel is a present/GPU miss-vblank, not a mode drop).
+    private const int VREFRESH = 116;   // wingdi.h GetDeviceCaps index
+    [LibraryImport("user32.dll")] private static partial nint GetDC(nint hWnd);
+    [LibraryImport("user32.dll")] private static partial int ReleaseDC(nint hWnd, nint hdc);
+    [LibraryImport("gdi32.dll")] private static partial int GetDeviceCaps(nint hdc, int index);
+
+    /// <summary>Vertical refresh (Hz) of the display this window is currently on, via <c>GetDeviceCaps(VREFRESH)</c> on the
+    /// window DC. Returns 0 when unknown (the driver reports 0/1 = "device default"). Diagnostic-only; call sparingly
+    /// (once per size change), not per frame.</summary>
+    public int CurrentRefreshHz()
+    {
+        nint hdc = GetDC((nint)_hwnd);
+        if (hdc == 0) return 0;
+        try { int hz = GetDeviceCaps(hdc, VREFRESH); return hz <= 1 ? 0 : hz; }
+        finally { ReleaseDC((nint)_hwnd, hdc); }
+    }
 
     // POINTER_INFO (winuser.h) — common to every pointer type. Sequential layout; only the fields the pump reads are
     // named meaningfully, the remainder are padding-faithful placeholders so the OS writes land at the right offsets.
@@ -432,6 +453,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private int _w, _h;
     private float _scale = 1f;
     private bool _closed;
+    // Detached-window minimum CLIENT size (physical px); (0,0) = no clamp (the primary window is untouched). Converted to
+    // a window (outer) minimum in the WM_GETMINMAXINFO handler via AdjustWindowRectExForDpi (client → window rect).
+    private Size2 _minClientPx;
     private DropRegistration? _dropReg;   // OS file/folder drop registration (Win32DropTarget IDropTarget); null = not registered
     // The DirectManipulation touchpad producer (scroll-feel-rework-v2 §7, Phase D). null = unavailable (MTA thread /
     // CoCreate failed) OR session-disabled after a wedge — either way the §3.3 wheel-fallback classifier owns the
@@ -700,6 +724,47 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         => PostMessageW(_hwnd, WM_SYSCOMMAND, IsZoomed(_hwnd) ? SC_RESTORE : SC_MAXIMIZE, 0);
 
     public void CloseWindow() => PostMessageW(_hwnd, WM_CLOSE, 0, 0);
+
+    // ── detached-window seam (the pop-out video mini-player) ──────────────────────────────────────────────────────────
+
+    public void SetTopmost(bool topmost)
+    {
+        // HWND_TOPMOST (-1) / HWND_NOTOPMOST (-2). Persistent (unlike a one-shot bring-to-front); position/size/activation
+        // left untouched so it never steals focus or fights the user's placement.
+        var insertAfter = (HWND)(nint)(topmost ? -1 : -2);
+        SetWindowPos(_hwnd, insertAfter, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    }
+
+    public void SetBoundsPx(RectF outerBoundsPx)
+        => SetWindowPos(_hwnd, HWND.NULL, (int)outerBoundsPx.X, (int)outerBoundsPx.Y,
+            (int)MathF.Max(1f, outerBoundsPx.W), (int)MathF.Max(1f, outerBoundsPx.H), SWP_NOZORDER | SWP_NOACTIVATE);
+
+    /// <summary>Store the minimum CLIENT size (physical px). (0,0) = no clamp (the default — the primary window is
+    /// unaffected). The WM_GETMINMAXINFO handler converts it to a window (outer) minimum so the user cannot drag the
+    /// frame below a usable video size.</summary>
+    public void SetMinClientSizePx(Size2 px) => _minClientPx = px;
+
+    // client (physical px) → window (outer) size, adding the current frame for this window's style/exstyle/DPI. Standard
+    // frame ⇒ AdjustWindowRectExForDpi; a custom frame reclaims the caption as client (WM_NCCALCSIZE keeps the top inset
+    // at 0), so only the L/R/B thin frame is added — mirroring AdjustForFrame.
+    private void ClientToWindowPx(int clientW, int clientH, out int windowW, out int windowH)
+    {
+        RECT rc = new() { left = 0, top = 0, right = clientW, bottom = clientH };
+        if (!_customFrame)
+        {
+            uint style = (uint)GetWindowLongPtrW(_hwnd, GWL_STYLE);
+            uint exStyle = (uint)GetWindowLongPtrW(_hwnd, GWL_EXSTYLE);
+            uint dpi = GetDpiForWindow(_hwnd);
+            if (dpi == 0) dpi = 96u;
+            AdjustWindowRectExForDpi(&rc, style, false, exStyle, dpi);
+        }
+        else
+        {
+            AdjustForFrame(&rc);
+        }
+        windowW = rc.right - rc.left;
+        windowH = rc.bottom - rc.top;
+    }
 
     /// <summary>First engine region matching <paramref name="px"/>,<paramref name="py"/> (client PHYSICAL px) → its
     /// HT code; 0 = no region. Report order is the priority order (islands → buttons → caption catch-all).</summary>
@@ -1029,6 +1094,18 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 if (Win32Uia.HandleGetObject((nint)hWnd, (nint)wParam, (nint)lParam, _uiaProvider, out nint uiaRes)) { result = (LRESULT)uiaRes; return true; }
                 return false;
             case WM_ERASEBKGND: result = (LRESULT)1; return true;   // we paint every pixel — suppress the flicker-erase
+            case WM_GETMINMAXINFO:
+                // Clamp the minimum tracking size only when a detached window requested a floor (default (0,0) = no clamp,
+                // so the primary window keeps the OS default). Convert the min CLIENT px → min WINDOW px for the live frame.
+                if (_minClientPx.Width > 0f && _minClientPx.Height > 0f)
+                {
+                    ClientToWindowPx((int)_minClientPx.Width, (int)_minClientPx.Height, out int minW, out int minH);
+                    MINMAXINFO* mmi = (MINMAXINFO*)(nint)lParam;
+                    mmi->ptMinTrackSize.x = minW;
+                    mmi->ptMinTrackSize.y = minH;
+                    return true;
+                }
+                return false;
             case WM_SIZE:
                 // Iconic size is 0×0 — adopting it would churn a degenerate swapchain resize + full relayout, and the
                 // zoom edge-detect below would mis-fire on the maximized→minimize edge (IsZoomed false while iconic).

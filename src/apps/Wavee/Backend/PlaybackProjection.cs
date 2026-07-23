@@ -246,9 +246,10 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
                         _isPlaying = false; _speed = 1.0; _posMs = e.AtMs; _posAnchorWall = _now();
                         break;
                     case EvKind.Seeked:
+                    case EvKind.VolumeChanged:
                         _posMs = e.AtMs; _posAnchorWall = _now();
                         break;
-                    // OptionsChanged / VolumeChanged / QueueChanged: no play-state fold — options ride in the snapshot below.
+                    // OptionsChanged / QueueChanged: no play-state fold — options ride in the snapshot below.
                 }
             }
             _contextUri = snap.ContextUri;
@@ -299,6 +300,20 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
 
     /// <summary>Controller pushes the local volume after a change (so PutState carries it). 0..1.</summary>
     public void SetLocalVolume(double volume01) { lock (_gate) _volume = Math.Clamp(volume01, 0, 1); FireChanges(); }
+
+    /// <summary>Local volume changes are also a fresh authoritative host-position sample. Fold both under one lock so the
+    /// coarse volume notification cannot briefly publish an extrapolated/stale timeline before the next host tick.</summary>
+    internal void SetLocalVolume(double volume01, long positionMs)
+    {
+        lock (_gate)
+        {
+            _volume = Math.Clamp(volume01, 0, 1);
+            _speed = 1.0;
+            _posMs = Math.Clamp(positionMs, 0, _durMs > 0 ? _durMs : long.MaxValue);
+            _posAnchorWall = _now();
+        }
+        FireChanges();
+    }
 
     // ── Remote (cluster) fold — viewer mode + reconciliation ─────────────────────────────────────────────────────────
     public void OnCluster(in ClusterDelta c)
@@ -450,9 +465,10 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
                     _isPlaying = false; _speed = 1.0; _posMs = e.AtMs; _posAnchorWall = _now();
                     break;
                 case EvKind.Seeked:
+                case EvKind.VolumeChanged:
                     _posMs = e.AtMs; _posAnchorWall = _now();
                     break;
-                // OptionsChanged / VolumeChanged / QueueChanged: shuffle/repeat/volume/queue arrive via SetLocal* — just notify.
+                // OptionsChanged / QueueChanged: shuffle/repeat/queue arrive via SetLocal* — just notify.
             }
         }
         FireChanges();

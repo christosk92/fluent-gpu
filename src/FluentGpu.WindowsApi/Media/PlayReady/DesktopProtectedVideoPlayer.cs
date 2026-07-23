@@ -35,6 +35,9 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
     private Thread? _thread;
     private ulong _boundHandle;
     private bool _disposed;
+    private readonly bool _available;   // native DLL loadable? checked ONCE — every P/Invoke site is gated so a missing
+                                        // FluentGpu.PlayReady.Native.dll (or a missing dependency) degrades to a typed DRM
+                                        // error instead of an unhandled DllNotFoundException crashing the frame loop.
     private volatile int _runHr;
     private volatile bool _runCompleted;
     private volatile string? _runError;
@@ -53,6 +56,7 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
             : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "FluentGpu", "PlayReady");
         _defaultNativeMode = string.Equals(options?.Mode, "clear", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+        _available = IsAvailable;
     }
 
     public static bool IsAvailable
@@ -83,6 +87,14 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_thread is { IsAlive: true }) return;
+        // No native component → surface a typed DRM error and stop. NEVER P/Invoke (below), which would throw
+        // DllNotFoundException unhandled and crash the loop. The session maps this Error state to MediaError{Drm}.
+        if (!_available)
+        {
+            _error.Value = "PlayReady is unavailable: the native component (FluentGpu.PlayReady.Native.dll) could not be loaded.";
+            _state.Value = ProtectedVideoState.Error;
+            return;
+        }
         Directory.CreateDirectory(_dataRoot);
         _error.Value = null;
         _relayError = null;
@@ -134,6 +146,7 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
                 PsshLen = psshLen,
                 HttpHeaders = headers,
                 LicenseServerUrl = licUrl,
+                SegmentStride = request.SegmentStride > 0 ? request.SegmentStride : 1,
             };
 
             var callback = (IntPtr)(delegate* unmanaged[Stdcall]<
@@ -197,24 +210,25 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
         }
     }
 
+    // Transport is a no-op when the native component is unavailable (never P/Invoke → never DllNotFoundException).
     public ValueTask PlayAsync()
     {
         _playRequested = true;
-        return AwaitAppliedAsync(Native.FgPlayReadyPlay(), TransportAck.PlayPause);
+        return _available ? AwaitAppliedAsync(Native.FgPlayReadyPlay(), TransportAck.PlayPause) : ValueTask.CompletedTask;
     }
 
     public ValueTask PauseAsync()
     {
         _playRequested = false;
-        return AwaitAppliedAsync(Native.FgPlayReadyPause(), TransportAck.PlayPause);
+        return _available ? AwaitAppliedAsync(Native.FgPlayReadyPause(), TransportAck.PlayPause) : ValueTask.CompletedTask;
     }
 
     public ValueTask SeekAsync(long positionMs)
-        => AwaitAppliedAsync(Native.FgPlayReadySeek(positionMs), TransportAck.Seek);
+        => _available ? AwaitAppliedAsync(Native.FgPlayReadySeek(positionMs), TransportAck.Seek) : ValueTask.CompletedTask;
 
-    public void SetVolume(float volume) => _ = Native.FgPlayReadySetVolume(volume);
-    public void SetRate(float rate) => _ = Native.FgPlayReadySetRate(rate);
-    public void Stop() => Native.FgPlayReadyStop();
+    public void SetVolume(float volume) { if (_available) _ = Native.FgPlayReadySetVolume(volume); }
+    public void SetRate(float rate) { if (_available) _ = Native.FgPlayReadySetRate(rate); }
+    public void Stop() { if (_available) Native.FgPlayReadyStop(); }
 
     private enum TransportAck : byte { PlayPause, Seek }
 
@@ -245,6 +259,10 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
 
     public void Pump(in VideoBinding binding)
     {
+        // No native component → nothing to poll (Start already published the Error state). Returning here is what keeps a
+        // missing FluentGpu.PlayReady.Native.dll from throwing DllNotFoundException out of the per-frame pump (the crash).
+        if (!_available) return;
+
         // Mirror background completion on the UI thread; signals are never written by the native worker.
         int runHr = _runHr;
         if (_runCompleted && runHr < 0 && _error.Peek() is null)
@@ -282,7 +300,11 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
             _error.Value = $"Desktop PlayReady error 0x{unchecked((uint)s.ErrorHr):X8}.";
 
         // The backend DLL lives in THIS process, so this is the original handle. No OpenProcess/DuplicateHandle/IPC.
-        if (s.Handle != 0 && s.Handle != _boundHandle)
+        // Bind every pump (the registry value-gates a repeat). NOT guarded on `s.Handle == _boundHandle`: when the active
+        // window changes (inline ↔ detached pop-out) `binding` targets a DIFFERENT registry/token that must receive the
+        // handle — the clear MfMediaSession path binds unconditionally for the same reason. `_boundHandle` still tracks
+        // presence for HasSurface.
+        if (s.Handle != 0)
         {
             binding.Bind((nuint)s.Handle);
             _boundHandle = s.Handle;
@@ -334,6 +356,7 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
         public int PsshLen;
         public IntPtr HttpHeaders;
         public IntPtr LicenseServerUrl;
+        public int SegmentStride;   // ABI-appended (must match native FgPlayReadyOpenDesc): segment-number step (1 = numbered)
     }
 
     private static partial class Native

@@ -9,6 +9,7 @@ using FluentGpu.Localization;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
 using Wavee.Core;
+using Wavee.Features.Video;
 using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
@@ -166,6 +167,10 @@ sealed class PlayerBarContent : Component
     {
         TrackHeight = 4f, TrackCornerRadius = 2f, ThumbRingDiameter = 12f, InnerThumbDiameter = 8f, ThumbCornerRadius = 6f,
     };
+    static readonly Slider.SliderOptions VolumeSliderOptions = new()
+    {
+        ThumbToolTipValueConverter = static value => $"{Math.Clamp((int)MathF.Round(value * 100f), 0, 100)}%",
+    };
 
     public override Element Render()
     {
@@ -177,6 +182,10 @@ sealed class PlayerBarContent : Component
         var svc = UseContext(Services.Slot);
         var acts = UseContext(ActionServices.Slot);  // now-playing cluster context menu (Menus.NowPlaying)
         var menuOverlay = UseContext(Overlay.Service);
+        var hooks = UseContext(InputHooks.Current);              // pop-out video: OpenDetachedWindow seam
+        var popout = UseRef<IDetachedVideoWindow?>(null);        // the live detached video window handle (null = docked)
+        var videoAnchor = UseRef<NodeHandle>(default);           // the split video button container → the surface-picker MenuFlyout anchor
+        var videoMenu = UseRef<OverlayHandle?>(null);            // the open video surface-picker flyout (null = closed)
         var titleHover = UseSignal(false);           // hover the now-playing text → BOTH lines scroll together (synced); idle = static + edge fade
         var L = _layout.Value;                       // coarse breakpoint signal; does NOT change for every resize pixel
         _ = AppearancePrefs.Epoch.Value;
@@ -326,7 +335,7 @@ sealed class PlayerBarContent : Component
         if (showSubtitle && track is not null && err is null)
         {
             metaKids.Add(marqueeDisabled
-                ? new BoxEl { ClipToBounds = true, Children = [Embed.Comp(() => new NowPlayingArtistLinks())] }
+                ? new BoxEl { ClipToBounds = true, MinWidth = 0f, Children = [Embed.Comp(() => new NowPlayingArtistLinks(compact: true)) with { Key = "npartists:c" }] }
                 : Marquee.Content(() => new NowPlayingArtistLinks(),
                     new Marquee.Style
                     {
@@ -462,7 +471,8 @@ sealed class PlayerBarContent : Component
             rightKids.Add(new BoxEl
             {
                 Key = "volume-slider", Animate = ItemMotion,   // Slider.Create returns a component element (no Animate lane); wrap it like the other Embed.Comp items
-                Children = [Slider.Create(b.Volume, v => { _ = b.Player.SetVolumeAsync(v); }, length: 96f, thickness: 16f, style: RailStyle)],
+                Children = [Slider.Create(b.Volume, v => { _ = b.Player.SetVolumeAsync(v); }, options: VolumeSliderOptions,
+                    length: 96f, thickness: 16f, style: RailStyle)],
             });
         if (ui is not null && active)
             rightKids.Add(Transport(WaveeIcons.Lyrics,
@@ -471,13 +481,91 @@ sealed class PlayerBarContent : Component
                 ui.RailOpen.Value && ui.Mode.Value == RailMode.Lyrics, accent, buttonBox, buttonGlyph,
                 font: WaveeIcons.Font)
                 with { Key = "lyrics", Animate = ItemMotion });
-        // Switch-to-video toggle — shown only when the now-playing track has a music video (async-detected). The swap is a
-        // seam for now (sets PreferVideo); the actual video surface/host is a follow-up. Tooltip explains the affordance.
+        // Video — a SPLIT button, shown only when the now-playing track has a music video (async-detected). The PRIMARY
+        // (movie) part pops the video out into a detached, always-on-top window ("original video"); the trailing CHEVRON
+        // opens a MenuFlyout of the alternate surfaces (in-window mini-player + video window + close). Both surfaces are
+        // mutually exclusive — only one consumes the resolved source at a time (one swapchain per source).
         if (active && hasVideo)
-            rightKids.Add(ToolTip.Wrap(
-                Transport(Icons.Movie, () => { b.PreferVideo.Value = !b.PreferVideo.Value; }, true, preferVideo, accent, buttonBox, buttonGlyph),
-                Loc.Get(preferVideo ? Strings.Player.SwitchToAudio : Strings.Player.SwitchToVideo))
-                with { Key = "video" });
+        {
+            // PRIMARY action (verbatim from the old pop-out button): toggle the detached, always-on-top video window.
+            void PopOutVideo()
+            {
+                bool next = !b.PreferVideo.Value;
+                b.PreferVideo.Value = next;
+                if (next)
+                {
+                    // Mutually exclusive with the in-window PiP: only one surface consumes the resolved source at a time.
+                    b.ShowInWindowPip.Value = false;
+                    // Resolve the now-playing track's playable video source (Spotify manifest → PopOutVideoSource) and
+                    // pop the video out into a detached, always-on-top window (its own AppHost + composited swapchain +
+                    // video presenter) that plays it (clear on the MF backend, DRM via the native CDM).
+                    b.RequestPopOutSource(track?.Uri);
+                    popout.Value = hooks?.OpenDetachedWindow?.Invoke(new DetachedWindowRequest(
+                        Loc.Get(Strings.Player.SwitchToVideo), new Size2(480, 270),
+                        new PopOutVideoWindow { Source = b.PopOutVideoSource }, AlwaysOnTop: true));
+                }
+                else { popout.Value?.Close(); popout.Value = null; }
+            }
+
+            // MENU action (verbatim from the old in-window PiP button): open the floating in-window mini-player
+            // (WaveeShell → InWindowVideoPip); mutually exclusive with the detached window (turning it on closes it).
+            void ShowMiniPlayerHere()
+            {
+                bool next = !b.ShowInWindowPip.Peek();
+                if (next)
+                {
+                    popout.Value?.Close(); popout.Value = null;   // close the detached pop-out (mutual exclusivity)
+                    b.PreferVideo.Value = false;                  // the detached toggle reflects the pop-out window state
+                    b.RequestPopOutSource(track?.Uri);            // resolve the source both surfaces read
+                    b.ShowInWindowPip.Value = true;
+                }
+                else b.ShowInWindowPip.Value = false;
+            }
+
+            // MENU action: tear down whichever surface is live (either window).
+            void CloseVideo()
+            {
+                popout.Value?.Close(); popout.Value = null;
+                b.PreferVideo.Value = false;
+                b.ShowInWindowPip.Value = false;
+            }
+
+            // The chevron opens the surface picker UPWARD out of the split button (bottom bar) via the overlay service —
+            // the same path DropDownButton/DevicesButton use (light-dismiss + focus-trap + the engine clip-reveal).
+            void OpenVideoMenu()
+            {
+                if (menuOverlay is not { } videoSvc) return;
+                if (videoMenu.Value is { IsOpen: true } open) { open.Close(); return; }
+                var items = new List<MenuFlyoutItem>(3)
+                {
+                    new(Loc.Get(Strings.Player.PlayVideoHere), Icons.BackToWindow, true, ShowMiniPlayerHere),
+                    new(Loc.Get(Strings.Player.SwitchToVideo), Icons.Movie, true, PopOutVideo),
+                };
+                if (b.PreferVideo.Value || b.ShowInWindowPip.Value)   // only offer "close" when a surface is actually live
+                    items.Add(new(Loc.Get(Strings.Player.CloseVideo), Icons.Cancel, true, CloseVideo));
+                videoMenu.Value = videoSvc.Open(
+                    () => videoAnchor.Value,
+                    () => MenuFlyout.Create(items, () => videoMenu.Value?.Close()),
+                    FlyoutPlacement.TopEdgeAlignedLeft,
+                    new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
+                videoMenu.Value.ClosedAction = () => videoMenu.Value = null;
+            }
+
+            // The two parts share ONE tight anchor container (no gap); the chevron portion is narrower than the primary.
+            rightKids.Add(new BoxEl
+            {
+                Key = "video", Direction = 0, AlignItems = FlexAlign.Center, Animate = ItemMotion,
+                OnRealized = h => videoAnchor.Value = h,
+                Children =
+                [
+                    ToolTip.Wrap(
+                        Transport(Icons.Movie, PopOutVideo, true, preferVideo, accent, buttonBox, buttonGlyph),
+                        Loc.Get(preferVideo ? Strings.Player.SwitchToAudio : Strings.Player.SwitchToVideo)),
+                    Transport(Icons.ChevronDownSmall, OpenVideoMenu, true, b.ShowInWindowPip.Value, accent,
+                        buttonBox * 0.55f, buttonGlyph * 0.62f),
+                ],
+            });
+        }
         if (showQueue)
             rightKids.Add(Transport(Icons.Queue, () => ui?.Toggle(RailMode.Queue), ui is not null,
                 ui?.RailOpen.Value == true && ui.Mode.Value == RailMode.Queue, accent, buttonBox, buttonGlyph)
@@ -664,17 +752,42 @@ sealed class PlayerBarContent : Component
         }
     }
 
-    // Reactive artist row for the player-bar marquee — reads bridge/nav from context so track changes re-skin without remount.
+    // Reactive artist row for the player-bar marquee — reads bridge/nav from context so track changes re-skin without
+    // remount. Compact mode (marquee disabled): a hard-clipped full credit list is bad UX (names vanish mid-word), so
+    // show the FIRST artist (ellipsizing) + the shared "+N" overflow chip that opens a flyout of ALL credited artists.
     sealed class NowPlayingArtistLinks : Component
     {
+        readonly bool _compact;
+        public NowPlayingArtistLinks(bool compact = false) { _compact = compact; }
+
         public override Element Render()
         {
             var b = UseContext(PlaybackBridge.Slot);
             var go = UseContext(HistoryStore.NavCtx);
             var artists = b?.CurrentTrack.Value?.Artists;
-            var kids = new List<Element>(artists is { Count: > 0 } ? artists.Count * 2 : 0);
-            if (artists is { Count: > 0 })
-                AddArtistLinks(kids, artists, go);
+            if (artists is not { Count: > 0 })
+                return new BoxEl { Direction = 0 };
+
+            if (_compact && artists.Count > 1)
+            {
+                var a = artists[0];
+                bool enabled = a.Uri.Length > 0;
+                var all = artists;
+                return new BoxEl
+                {
+                    Direction = 0, AlignItems = FlexAlign.Center, MinWidth = 0f, Gap = 4f,
+                    Children =
+                    [
+                        NavSpan(a.Name, () => { if (enabled) go?.Invoke("artist:" + a.Uri, a.Name); }, enabled, trim: true)
+                            with { Key = "artist:" + (a.Uri.Length > 0 ? a.Uri : a.Id + ":" + a.Name) },
+                        Embed.Comp(() => new ArtistMoreButton(all, (u, n) => go?.Invoke(u, n)))
+                            with { Key = "npmore:" + (a.Uri.Length > 0 ? a.Uri : a.Name) + ":" + all.Count },
+                    ],
+                };
+            }
+
+            var kids = new List<Element>(artists.Count * 2);
+            AddArtistLinks(kids, artists, go);
             return new BoxEl
             {
                 Direction = 0, AlignItems = FlexAlign.Center, Shrink = 0f,
@@ -685,20 +798,22 @@ sealed class PlayerBarContent : Component
 
     // A clickable now-playing meta link (artist / album). It drives its own foreground because TextEl.HoverColor follows
     // the engine's ancestor hover path too, which makes the album look hovered when the pointer is over the title line.
-    static Element NavSpan(string text, Action onClick, bool enabled)
-        => Embed.Comp(() => new NowPlayingMetaLink(text, onClick, enabled));
+    static Element NavSpan(string text, Action onClick, bool enabled, bool trim = false)
+        => Embed.Comp(() => new NowPlayingMetaLink(text, onClick, enabled, trim));
 
     sealed class NowPlayingMetaLink : Component
     {
         readonly string _text;
         readonly Action _onClick;
         readonly bool _enabled;
+        readonly bool _trim;   // ellipsize under width pressure (the compact artists line) instead of hard-clipping
 
-        public NowPlayingMetaLink(string text, Action onClick, bool enabled)
+        public NowPlayingMetaLink(string text, Action onClick, bool enabled, bool trim = false)
         {
             _text = text;
             _onClick = onClick;
             _enabled = enabled;
+            _trim = trim;
         }
 
         public override Element Render()
@@ -711,8 +826,15 @@ sealed class PlayerBarContent : Component
                 OnHoverMove = _enabled ? _ => { if (!hover.Peek()) hover.Value = true; } : null,
                 OnPointerExit = _enabled ? () => { if (hover.Peek()) hover.Value = false; } : null,
                 ClipToBounds = true,
+                MinWidth = _trim ? 0f : float.NaN,
+                Shrink = _trim ? 1f : 1f,
                 Role = _enabled ? AutomationRole.Hyperlink : AutomationRole.Text,
-                Children = [new TextEl(_text) { Size = 12f, Color = hover.Value ? Tok.TextPrimary : Tok.TextSecondary }],
+                Children =
+                [
+                    _trim
+                        ? new TextEl(_text) { Size = 12f, Color = hover.Value ? Tok.TextPrimary : Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f }
+                        : new TextEl(_text) { Size = 12f, Color = hover.Value ? Tok.TextPrimary : Tok.TextSecondary },
+                ],
             };
         }
     }

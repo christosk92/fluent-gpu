@@ -138,7 +138,10 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // PSO/heap/scissor outside this cache (opacity/acrylic composites + blurs) — see the InvalidateCmdState call sites.
     // Barriers, OMSetRenderTargets and clears do NOT disturb these bindings, so the cache stays valid across opacity
     // group Acquire/Bind/BeginRead.
-    private enum BoundPipe : byte { None, Rect, Shadow, Arc, Polyline, Gradient, Glyph, GradGlyph, Image }
+    // RectOpaque shares ALL shared SDF state (root sig / viewport / topology / quad VB) with Rect — only the PSO differs
+    // (no-blend + minimal shader). So it participates in the same _sharedSdfStateBound dedup; only a PSO rebind is needed
+    // when a rect run crosses the opaque↔blended boundary.
+    private enum BoundPipe : byte { None, Rect, RectOpaque, Shadow, Arc, Polyline, Gradient, Glyph, GradGlyph, Image }
     private BoundPipe _boundPipe;
     private bool _sharedSdfStateBound;
     private RECT _lastScissor;
@@ -162,9 +165,10 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private IDCompositionTarget* _dcompTarget;
     private IDCompositionVisual* _dcompVisual;
 
-    // Video compositing spine (M0): the DComp video presenter shares this device's ONE IDCompositionDevice + the primary
-    // swapchain's root visual (docs/plans/video-compositing-spine-design.md §4/§13.6). Lazily created; render-thread-confined.
-    private FluentGpu.Pal.Windows.DCompVideoPresenter? _videoPresenter;
+    // Video compositing spine (M0): the DComp video presenter shares this device's ONE IDCompositionDevice
+    // (docs/plans/video-compositing-spine-design.md §4/§13.6). Each COMPOSITED swapchain gets its own presenter bound to
+    // ITS DComp root (stored on D3D12Swapchain.VideoPresenter) — the primary window and a detached video window each get
+    // one; all share _dcomp. Lazily created via GetVideoPresenter(...); render-thread-confined.
 
     // The shared IDCompositionDevice + the primary swapchain's DComp root/UI visual, for the video presenter (same assembly).
     internal IDCompositionDevice* DcompDevice => _dcomp;
@@ -177,16 +181,26 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     /// touched only after the primary swapchain's DComp graph is bound (render-thread-confined). Returns null if there is
     /// no composited primary swapchain (opaque HWND path has no DComp tree).
     /// </summary>
-    public FluentGpu.Pal.IVideoPresenter? GetVideoPresenter()
+    public FluentGpu.Pal.IVideoPresenter? GetVideoPresenter() => GetVideoPresenter(_primarySwapchain);
+
+    /// <summary><see cref="IGpuDevice.GetVideoPresenter(ISwapchain)"/> — the per-window video presenter bound to
+    /// <paramref name="swapchain"/>'s DComp root. Lazily creates + caches one presenter per COMPOSITED swapchain (stored
+    /// on <see cref="D3D12Swapchain.VideoPresenter"/>); null when the target is null / not composited. Render-thread
+    /// confined. The primary window and a detached video window each get their own; all share this device's one
+    /// <c>IDCompositionDevice</c>.</summary>
+    public FluentGpu.Pal.IVideoPresenter? GetVideoPresenter(ISwapchain swapchain)
     {
         AssertSubmitThread();
-        if (_primarySwapchain is not { Composited: true }) return null;
-        return _videoPresenter ??= new FluentGpu.Pal.Windows.DCompVideoPresenter(this);
+        if (swapchain is not D3D12Swapchain { Composited: true } sc) return null;
+        return sc.VideoPresenter ??= new FluentGpu.Pal.Windows.DCompVideoPresenter(this, sc);
     }
 
+    private FluentGpu.Pal.IVideoPresenter? GetVideoPresenter(D3D12Swapchain? swapchain)
+        => swapchain is null ? null : GetVideoPresenter((ISwapchain)swapchain);
+
     /// <summary><see cref="IGpuDevice.VideoPresenter"/> — the composited-video presenter for the host's phase-11 video
-    /// drain. Delegates to <see cref="GetVideoPresenter"/> (render-thread-confined; null unless the primary swapchain is
-    /// composited).</summary>
+    /// drain (the PRIMARY window). Delegates to <see cref="GetVideoPresenter()"/> (render-thread-confined; null unless
+    /// the primary swapchain is composited).</summary>
     public FluentGpu.Pal.IVideoPresenter? VideoPresenter => GetVideoPresenter();
 
     public D3D12Device(StringTable strings, bool composited = false)
@@ -661,7 +675,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         Check(target.DcompTarget->SetRoot(target.DcompRoot), "Target.SetRoot(root)");
         Check(_dcomp->Commit(), "DComp.Commit");
         target.DcompBindPending = false;
-        _videoPresenter?.OnSwapchainRebound(target);   // re-attach any live video children under the new root
+        target.VideoPresenter?.OnSwapchainRebound(target);   // re-attach THIS swapchain's live video children under its new root
     }
 
     // Producer swapchains that render into engine-owned shareable DComp surface handles (M0 test surfaces). Kept alive
@@ -831,10 +845,14 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _frameIndex = _swapChain->GetCurrentBackBufferIndex();
         WaitForFrame(_frameIndex);
         _lastFenceWaitMs = System.Diagnostics.Stopwatch.GetElapsedTime(fenceWaitStart).TotalMilliseconds;
+        if (s_gpuTiming) { EnsureGpuTiming(); CollectGpuRenderTime(_frameIndex); }   // read this index's retired timestamps
         ID3D12CommandAllocator* allocator = _allocators[_frameIndex];
         Check(allocator->Reset(), "allocator.Reset");
         Check(_cmdList->Reset(allocator, null), "cmdList.Reset");
         InvalidateCmdState();   // fresh command list — nothing is bound
+        // GPU timer: begin (query 3i) brackets ALL of this frame's GPU work.
+        if (s_gpuTiming && _gpuQueryHeap != null)
+            _cmdList->EndQuery(_gpuQueryHeap, D3D12_QUERY_TYPE.D3D12_QUERY_TYPE_TIMESTAMP, GpuTsPerFrame * _frameIndex);
         _imageTextures?.FlushUploads(_cmdList);
         if (ReferenceEquals(sc, _primarySwapchain) &&
             _bakedBlurQueue is { } bakedQueue && _bakedBlur is { } baker && _imageTextures is { } textures)
@@ -845,6 +863,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 InvalidateCmdState();
             }
         }
+        // GPU timer: mid (query 3i+1) — everything after this point is the scene-raster block (clear + drawlist + layers).
+        if (s_gpuTiming && _gpuQueryHeap != null)
+            _cmdList->EndQuery(_gpuQueryHeap, D3D12_QUERY_TYPE.D3D12_QUERY_TYPE_TIMESTAMP, GpuTsPerFrame * _frameIndex + 1u);
 
         ID3D12Resource* backBuffer = _backBuffers[_frameIndex];
         Barrier(backBuffer, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -956,6 +977,14 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         Diag.Set("text.run", "runsShaped", _glyphs.RunsShaped);      // this frame: runs (re)shaped — should be ~0 in steady state
 
         Barrier(backBuffer, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PRESENT);
+        // GPU timer: end (query 3i+2) + resolve this index's 3 marks into the readback (read one frame later).
+        if (s_gpuTiming && _gpuQueryHeap != null && _gpuTsReadback != null)
+        {
+            _cmdList->EndQuery(_gpuQueryHeap, D3D12_QUERY_TYPE.D3D12_QUERY_TYPE_TIMESTAMP, GpuTsPerFrame * _frameIndex + 2u);
+            _cmdList->ResolveQueryData(_gpuQueryHeap, D3D12_QUERY_TYPE.D3D12_QUERY_TYPE_TIMESTAMP,
+                GpuTsPerFrame * _frameIndex, GpuTsPerFrame, _gpuTsReadback, (ulong)(GpuTsPerFrame * _frameIndex) * sizeof(ulong));
+            _gpuTsPending[_frameIndex] = true;
+        }
         Check(_cmdList->Close(), "cmdList.Close");
 
         ID3D12CommandList* execList = (ID3D12CommandList*)_cmdList;
@@ -1457,6 +1486,15 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (bindSharedState || bindPipelineState) _framePipeBinds++; else _framePipeBindsSkipped++;
     }
 
+    // Classifier for the RoundRect opaque fast path: a fill that writes fully-opaque, pixel-crisp pixels — square (no
+    // rounded corners ⇒ no SDF AA feather), unstroked, plain kind (not checker/tab), fully opaque, and outside any tier-2
+    // rounded clip (a rounded clip needs the coverage-multiply, hence blend). Conservative: any doubt ⇒ the blended path.
+    private static bool IsOpaquePlainRect(in RectInstance r) =>
+        r.Kind == 0f && r.StrokeWidth == 0f
+        && r.RTL == 0f && r.RTR == 0f && r.RBR == 0f && r.RBL == 0f
+        && r.Opacity >= 1f && r.A >= 1f
+        && r.ClipW <= 0f;
+
     private int DroppedInstanceCount()
         => (_rectPipe?.DroppedInstances ?? 0) + (_shadowPipe?.DroppedInstances ?? 0) +
            (_arcPipe?.DroppedInstances ?? 0) + (_polylinePipe?.DroppedInstances ?? 0) +
@@ -1508,11 +1546,32 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                             bindGradientShared, bindGradientPso, BoundPipe.Gradient);
                         gc += count; break;
                     case PrimKind.Rect:
-                        bool bindRectShared = !_sharedSdfStateBound;
-                        bool bindRectPso = _boundPipe != BoundPipe.Rect;
-                        NoteSdfPipeBind(_rectPipe!.Record(_cmdList, rectSpan.Slice(rc, count), lw, lh, bindRectShared, bindRectPso),
-                            bindRectShared, bindRectPso, BoundPipe.Rect);
-                        rc += count; break;
+                        var rectRun = rectSpan.Slice(rc, count);
+                        rc += count;
+                        // Opaque fast path: split the run into maximal same-class (opaque plain vs everything-else) sub-runs
+                        // IN PAINTER ORDER (never reordered) and draw each with its PSO — opaque fills skip alpha blend +
+                        // the SDF shader (the dominant background/panel pixels). Disabled ⇒ one blended run, exactly as before.
+                        if (!_rectPipe!.HasOpaquePso)
+                        {
+                            bool bindRectShared = !_sharedSdfStateBound;
+                            bool bindRectPso = _boundPipe != BoundPipe.Rect;
+                            NoteSdfPipeBind(_rectPipe!.Record(_cmdList, rectRun, lw, lh, bindRectShared, bindRectPso),
+                                bindRectShared, bindRectPso, BoundPipe.Rect);
+                            break;
+                        }
+                        for (int si = 0; si < rectRun.Length;)
+                        {
+                            bool op = IsOpaquePlainRect(in rectRun[si]);
+                            int sj = si + 1;
+                            while (sj < rectRun.Length && IsOpaquePlainRect(in rectRun[sj]) == op) sj++;
+                            var want = op ? BoundPipe.RectOpaque : BoundPipe.Rect;
+                            bool bindShared = !_sharedSdfStateBound;
+                            bool bindPso = _boundPipe != want;
+                            NoteSdfPipeBind(_rectPipe!.Record(_cmdList, rectRun.Slice(si, sj - si), lw, lh, bindShared, bindPso, op),
+                                bindShared, bindPso, want);
+                            si = sj;
+                        }
+                        break;
                     case PrimKind.Image:
                         if (_boundPipe != BoundPipe.Image)
                         {
@@ -2090,6 +2149,75 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     /// <inheritdoc/>
     public double LastFenceWaitMs => _lastFenceWaitMs;
 
+    // ── Whole-frame GPU timer (FG_GPU_TIMING=1) ─────────────────────────────────────────────────────────────────────
+    // A begin/end TIMESTAMP-query pair bracketing the entire command list, one pair per back-buffer index. Resolved into a
+    // READBACK buffer each frame and read one frame later (WaitForFrame proves that index's GPU work retired), so the value
+    // lags by one frame. This is the TRUE raster cost — the number that disambiguates LastFenceWaitMs (which conflates
+    // raster with the vblank/present-latency wait). Mirrors the proven BakedBlurCompositor timestamp pattern. Default-off;
+    // creation failure silently disables it (never throws on the shipping path).
+    private static readonly bool s_gpuTiming = FluentGpu.Foundation.Diag.EnvFlag("FG_GPU_TIMING");
+    private ID3D12QueryHeap* _gpuQueryHeap;
+    private ID3D12Resource* _gpuTsReadback;
+    private ulong* _gpuTsData;
+    private ulong _gpuTsFreq;
+    private readonly bool[] _gpuTsPending = new bool[FRAME_COUNT];
+    private bool _gpuTimingInitTried;
+    private double _lastGpuRenderMs;
+    private double _lastGpuSceneMs;   // of the whole: the scene-raster block (clear + drawlist playback + layer composites), excl. uploads/baked-blur
+    private const uint GpuTsPerFrame = 3;   // begin | mid (after uploads+baked-blur) | end — splits scene-raster from setup
+    /// <inheritdoc/>
+    public double LastGpuRenderMs => _lastGpuRenderMs;
+    /// <inheritdoc/>
+    public double LastGpuSceneMs => _lastGpuSceneMs;
+
+    // Lazily create the query heap + readback buffer on the first submit (the queue exists by then). Guarded by
+    // _gpuTimingInitTried so a failed create is attempted once, then treated as "unsupported" (heap stays null).
+    private void EnsureGpuTiming()
+    {
+        if (_gpuTimingInitTried) return;
+        _gpuTimingInitTried = true;
+        ulong freq;
+        if (_queue == null || _queue->GetTimestampFrequency(&freq) < 0 || freq == 0) return;
+        _gpuTsFreq = freq;
+        D3D12_QUERY_HEAP_DESC qd = default;
+        qd.Type = D3D12_QUERY_HEAP_TYPE.D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+        qd.Count = GpuTsPerFrame * FRAME_COUNT;
+        ID3D12QueryHeap* heap;
+        if (_device->CreateQueryHeap(&qd, __uuidof<ID3D12QueryHeap>(), (void**)&heap) < 0) return;
+        _gpuQueryHeap = heap;
+
+        D3D12_HEAP_PROPERTIES hp = default;
+        hp.Type = D3D12_HEAP_TYPE.D3D12_HEAP_TYPE_READBACK;
+        D3D12_RESOURCE_DESC rd = default;
+        rd.Dimension = D3D12_RESOURCE_DIMENSION.D3D12_RESOURCE_DIMENSION_BUFFER;
+        rd.Width = (ulong)(GpuTsPerFrame * FRAME_COUNT) * sizeof(ulong); rd.Height = 1; rd.DepthOrArraySize = 1; rd.MipLevels = 1;
+        rd.Format = DXGI_FORMAT.DXGI_FORMAT_UNKNOWN; rd.SampleDesc.Count = 1;
+        rd.Layout = D3D12_TEXTURE_LAYOUT.D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        ID3D12Resource* readback;
+        if (_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &rd,
+            D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST, null,
+            __uuidof<ID3D12Resource>(), (void**)&readback) < 0)
+        {
+            _gpuQueryHeap->Release(); _gpuQueryHeap = null; return;
+        }
+        _gpuTsReadback = readback;
+        void* mapped;
+        if (readback->Map(0, null, &mapped) >= 0) _gpuTsData = (ulong*)mapped;
+        else { _gpuTsReadback->Release(); _gpuTsReadback = null; _gpuQueryHeap->Release(); _gpuQueryHeap = null; }
+    }
+
+    // Read the timestamps this back-buffer index resolved on its PREVIOUS use (its GPU work has since retired — WaitForFrame
+    // above proved it). end-begin over the queue's timestamp frequency = the true GPU raster ms of that earlier frame.
+    private void CollectGpuRenderTime(uint frameIndex)
+    {
+        if (_gpuTsData == null || _gpuTsFreq == 0 || !_gpuTsPending[frameIndex]) return;
+        _gpuTsPending[frameIndex] = false;
+        uint q = GpuTsPerFrame * frameIndex;
+        ulong begin = _gpuTsData[q], mid = _gpuTsData[q + 1], end = _gpuTsData[q + 2];
+        if (end >= begin) _lastGpuRenderMs = (end - begin) * 1000.0 / _gpuTsFreq;   // whole frame (uploads + baked-blur + scene)
+        if (end >= mid) _lastGpuSceneMs = (end - mid) * 1000.0 / _gpuTsFreq;         // scene-raster block only (the fill-cost suspect)
+    }
+
     /// <inheritdoc/>
     public bool HasPendingUploads => _imageTextures?.HasPendingUploads ?? false;
 
@@ -2232,6 +2360,11 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (target.Disposed) return;
         if (_device != null) WaitForGpu();
         ReleaseSwapchainResources(target);
+        // Release this swapchain's video presenter AFTER its resources (its DcompRoot is now null → DetachChild no-ops)
+        // but while the shared _dcomp is still alive (so the presenter's own child-visual ComPtrs release cleanly). This
+        // is the teardown path when a detached video window's swapchain is closed.
+        target.VideoPresenter?.Dispose();
+        target.VideoPresenter = null;
         _swapchains.Remove(target);
         if (_primarySwapchain == target) _primarySwapchain = null;
         if (_activeSwapchain == target) _activeSwapchain = null;
@@ -2329,12 +2462,17 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     {
         if (_device != null) WaitForGpu();
         for (int i = _swapchains.Count - 1; i >= 0; i--)
+        {
+            // Video spine: release each swapchain's presenter (child visuals + wrapped surface content) BEFORE the shared
+            // _dcomp below. ReleaseSwapchainResources has already nulled this swapchain's DcompRoot, so the presenter's
+            // DetachChild no-ops (guarded) — it only frees its own child ComPtrs.
             ReleaseSwapchainResources(_swapchains[i]);
+            _swapchains[i].VideoPresenter?.Dispose();
+            _swapchains[i].VideoPresenter = null;
+        }
         _swapchains.Clear();
         _primarySwapchain = null;
         _activeSwapchain = null;
-        _videoPresenter?.Dispose();   // video spine (M0): release child visuals + surface content before the DComp device
-        _videoPresenter = null;
         foreach (nint sc in _testSurfaceSwapchains)
             if (sc != 0) global::FluentGpu.Interop.Generated.IUnknownVtbl.Release((void*)sc);
         _testSurfaceSwapchains.Clear();
@@ -2352,6 +2490,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _rectPipe?.Dispose();
         _sdf?.Dispose();
         for (uint i = 0; i < FRAME_COUNT; i++) _backBuffers[i] = null;
+        if (_gpuTsReadback != null) { _gpuTsReadback->Unmap(0, null); _gpuTsReadback->Release(); _gpuTsReadback = null; _gpuTsData = null; }
+        if (_gpuQueryHeap != null) { _gpuQueryHeap->Release(); _gpuQueryHeap = null; }
         D3D12MemoryDiagnostics.Snapshot("D3D12Device.Dispose");
         // GEN-COM (wired): COM teardown via the generated IUnknown.Release calli (vtable slot 2, universal to every COM ptr).
         if (_cmdList != null) global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_cmdList);
@@ -2382,6 +2522,7 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     internal IDCompositionVisual* DcompRoot;     // video spine (M0): the tree root — UI child z-above, video children z-below
     internal IDCompositionVisual* DcompVisual;   // the UI child (owns the swapchain content); topmost, painted every frame
     internal bool DcompBindPending;   // seam: DComp graph deferred out of UI-thread InitSwapChain; bound on the presenting thread (see BindDComp)
+    internal FluentGpu.Pal.Windows.DCompVideoPresenter? VideoPresenter;   // per-window video presenter bound to THIS swapchain's DComp root (lazily created; disposed with the swapchain)
     internal CompositionBackdrop? Backdrop;   // non-null ⇒ WUC desktop-acrylic popup (replaces the DComp path)
     internal readonly bool DesktopAcrylic;
     internal readonly ColorF AcrylicTint;

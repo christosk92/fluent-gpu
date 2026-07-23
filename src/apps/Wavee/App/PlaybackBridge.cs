@@ -99,6 +99,40 @@ public sealed class PlaybackBridge
     /// follow-up — for now this is the seam the player-bar button toggles (reset on every track change).</summary>
     public Signal<bool> PreferVideo { get; } = new(false);
 
+    /// <summary>UI-only placement intent: the user chose the IN-WINDOW picture-in-picture video surface (as opposed to the
+    /// detached pop-out window). Mutually exclusive with the detached pop-out — both consume the one resolved
+    /// <see cref="PopOutVideoSource"/>, but only one plays at a time. Reset to false on every track change (like
+    /// <see cref="PreferVideo"/>). The shell mounts <c>InWindowVideoPip</c> while this is true.</summary>
+    public Signal<bool> ShowInWindowPip { get; } = new(false);
+
+    /// <summary>The resolved video source for the now-playing track (null = none resolved yet): a clear/Canvas URL or a
+    /// PlayReady DRM descriptor + license relay. The pop-out / inline video surface plays it (clear on the MF backend,
+    /// DRM via the native CDM). The Spotify video-resolution layer (Canvas from the feed; PlayReady once the probe
+    /// confirms it) populates it. Reset to null on every track change.</summary>
+    public Signal<Wavee.SpotifyLive.PopOutVideoSource?> PopOutVideoSource { get; } = new(null);
+
+    /// <summary>The video-resolution delegate (track uri → a playable <c>PopOutVideoSource</c>), wired by the live
+    /// bootstrap to <c>SpotifyVideoService.ResolvePlayableAsync</c>; null on the fake/offline backend. Off the UI thread.</summary>
+    public System.Func<string, System.Threading.CancellationToken, System.Threading.Tasks.Task<Wavee.SpotifyLive.PopOutVideoSource?>>? ResolveVideoSource;
+
+    /// <summary>Kick off (fire-and-forget) resolving the pop-out video source for <paramref name="trackUri"/> and publish
+    /// it onto <see cref="PopOutVideoSource"/> on the UI thread. No-op before <see cref="Activate"/> / without a resolver
+    /// (fake backend) — the pop-out then just shows the letterbox until a source arrives.</summary>
+    public void RequestPopOutSource(string? trackUri)
+    {
+        if (ResolveVideoSource is not { } resolve || string.IsNullOrEmpty(trackUri) || _post is not { } post) return;
+        _ = ResolveAndPublishAsync(resolve, trackUri!, post);
+    }
+
+    async System.Threading.Tasks.Task ResolveAndPublishAsync(
+        System.Func<string, System.Threading.CancellationToken, System.Threading.Tasks.Task<Wavee.SpotifyLive.PopOutVideoSource?>> resolve,
+        string uri, System.Action<System.Action> post)
+    {
+        Wavee.SpotifyLive.PopOutVideoSource? src = null;
+        try { src = await resolve(uri, default).ConfigureAwait(false); } catch { /* resolution failure → no source (pop-out stays letterbox) */ }
+        post(() => PopOutVideoSource.Value = src);
+    }
+
     /// <summary>Monotonic "open the device picker" request. The critical "playback unsupported" toast's <em>Choose device</em>
     /// action bumps it; the player-bar <c>DevicesButton</c> watches it and opens its flyout.</summary>
     public Signal<int> DevicePickerRequest { get; } = new(0);
@@ -320,7 +354,7 @@ public sealed class PlaybackBridge
     {
         var prevUri = CurrentTrack.Value?.Uri;
         CurrentTrack.Value = s.CurrentTrack;
-        if (s.CurrentTrack?.Uri != prevUri) PreferVideo.Value = false;   // a new track resets the swap toggle
+        if (s.CurrentTrack?.Uri != prevUri) { PreferVideo.Value = false; ShowInWindowPip.Value = false; PopOutVideoSource.Value = null; }   // a new track resets the swap toggles + resolved video source
         RecomputeHasVideo();                                            // reflect the new track's cached video state (if any)
         CurrentContext.Value = s.ContextUri;
         IsPlaying.Value = s.IsPlaying;

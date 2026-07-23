@@ -53,6 +53,12 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     // anim=phase-7 ticks, record=SceneRecorder (+ text shaping), submit=command build + GPU submit + present. ~5
     // Stopwatch reads/frame, zero alloc — so a profiler/probe can attribute a frame-time spike to a phase without FG_ALLOC_DIAG.
     public double FlushMs { get; init; }
+    /// <summary>Of <see cref="FlushMs"/>: wall time inside <c>_runtime.Flush()</c> (render-effects + bindings), including the
+    /// same-frame second flush after pre-layout virtual realize. Always-on Stopwatch; 0 when nothing flushed.</summary>
+    public double ReactiveFlushMs { get; init; }
+    /// <summary>Of <see cref="FlushMs"/>: wall time inside the pre-layout <c>ReRealizeVirtuals()</c> call. Always-on; post-
+    /// layout / scroll-catchup realize is charged to <see cref="RealizeCatchupMs"/> instead.</summary>
+    public double VirtualRealizeMs { get; init; }
     public double LayoutMs { get; init; }
     public double AnimMs { get; init; }
     public double RecordMs { get; init; }
@@ -119,6 +125,21 @@ public sealed class PopupWindowSlot
     public DrawList DrawList { get; } = new();
 }
 
+/// <summary>Which branch of <see cref="AppHost.RecommendedWaitMs"/> produced the last wait — the diagnostic that
+/// distinguishes ambient software-pacing from display-rate free-run. <c>Ambient</c> means the loop was throttled to
+/// <see cref="AppHost.AmbientAnimationFps"/> (the software 60 Hz cap); <c>DisplayRate</c>/<c>PaceAsync</c> mean the loop
+/// ran at panel rate and any lock is downstream (Present/GPU miss-vblank). Surfaced via <see cref="AppHost.LastWaitKind"/>.</summary>
+public enum HostWaitKind : byte
+{
+    Idle,            // -1: fully idle / minimized — block until a message
+    Hud,             // 100: DynamicText-only readout throttle
+    Baked,           // baked-blur queue cadence
+    Ambient,         // AmbientFrameWaitMs — the software fps cap (the maximize-lock suspect)
+    PaceSkipSubmit,  // AsyncDisplayPaceMs after an elided submit (sync path)
+    PaceAsync,       // AsyncDisplayPaceMs — async present pace cap
+    DisplayRate,     // 0: latency-sensitive / one-shot motion — sync present-throttled (panel rate)
+}
+
 public sealed class AppHost : IDisposable
 {
     private readonly IPlatformApp _app;
@@ -127,7 +148,14 @@ public sealed class AppHost : IDisposable
     private readonly ISwapchain _swapchain;
     private readonly Component _root;
     private readonly StringTable _strings;
+    private readonly IFontSystem _fonts;   // retained so a detached child host (pop-out video window) can be constructed with the same font system
     private readonly FluentGpu.Media.VideoSurfaceRegistry _videoSurfaces = new();   // UI-thread video-surface intents, drained into IVideoPresenter at phase 11
+
+    // Detached child hosts (the pop-out video mini-player): each is a full AppHost over its OWN top-level window +
+    // composited swapchain + presenter, sharing this device/fonts/strings/images. Ticked by the loop via
+    // TickDetachedHosts() on THIS (the parent's) UI+render thread. Empty on child hosts (no recursion).
+    private readonly List<AppHost> _detachedHosts = new(1);
+    private bool _isDetachedChild;   // true on a child host: it must not dispose the shared device, nor manage its own detached windows
 
     // E4 windowed out-of-bounds popups: one slot per leased popup window (see PopupWindowSlot).
     private readonly List<PopupWindowSlot> _popupWindows = new(2);
@@ -583,6 +611,7 @@ public sealed class AppHost : IDisposable
     // STALE throttle/idle gap, not a real render interval — so Paint resyncs the clock before the anim tick when this
     // frame drives interactive or one-shot motion, killing the first-frame lurch on a scroll-start or a connected fly.
     private int _lastWaitMs;
+    private HostWaitKind _lastWaitKind;   // which RecommendedWaitMsCore branch produced _lastWaitMs (present/pacing diagnosis)
     private int _traceGc0, _traceGc1, _traceGc2;   // GC collection counts at the last note-113 gap sample (hitch attribution)
     // Post-scroll grace window: keep display-rate pacing for a short tail after the last scroll-active frame so the eased
     // settle + any in-flight art reveal finish smoothly instead of snapping to the 30 Hz ambient cadence mid-motion.
@@ -601,6 +630,24 @@ public sealed class AppHost : IDisposable
     public int AmbientAnimationFps { get; set; } = s_ambientFpsDefault;
     private static readonly int s_ambientFpsDefault = ReadAmbientFps();
     private static int ReadAmbientFps() => int.TryParse(Environment.GetEnvironmentVariable("FG_ANIM_FPS"), out var v) && v >= 0 ? v : 30;
+    // FG_ADAPTIVE_FPS governor (default off): when the GPU genuinely cannot sustain the panel rate at the current size
+    // (smoothed fence-wait over the ~120Hz budget — e.g. a maximized frame that rasters in ~14ms), pace CONTINUOUS
+    // animation (playhead/shimmer) to the ambient cap instead of free-running the loop into vblank-misses. A steady 60
+    // beats a jittery 60 and halves GPU/power; it NEVER engages for latency-sensitive frames (no added input/scroll
+    // latency) and routes through the Resync-exempt AmbientFrameWaitMs so it can't trip the frozen-anim clock guard.
+    // DEFAULT ON (opt out with FG_ADAPTIVE_FPS=0): on a fast GPU the EMA stays under budget so it NEVER engages — a no-op;
+    // it only acts when the GPU is genuinely bound, turning a thrashing 60 into a steady one. Escape hatch keeps it safe.
+    private static readonly bool s_adaptiveFps = Environment.GetEnvironmentVariable("FG_ADAPTIVE_FPS") is not ("0" or "false" or "FALSE" or "off");
+    private double _gpuBoundEma;   // smoothed recent GPU fence-wait (ms); governor input
+    private const double GpuBoundBudgetMs = 10.0;   // sustained fence-wait above this ⇒ can't hold 120 (8.3ms) → pace to ambient
+    // The governor NEVER paces these: genuine interactions (would add input/scroll latency) + active video (needs the panel
+    // rate). It DOES pace art-reveal crossfades / one-shot transitions / ambient loops when GPU-bound (a 60Hz crossfade is
+    // imperceptible, and the GPU can't do better than ~60 at that size anyway). Narrower than LatencySensitiveWake — which
+    // includes the Image* bits — so the governor reliably engages during maximized playback where those bits stay set.
+    private const WakeReasons GovernorNeverPace =
+        WakeReasons.Interact | WakeReasons.ScrollAnim | WakeReasons.Repeat |
+        WakeReasons.DragActive | WakeReasons.DragDropWork | WakeReasons.GestureHold | WakeReasons.TouchPress |
+        WakeReasons.VideoPresenting;
     private const WakeReasons LatencySensitiveWake =
         WakeReasons.Interact | WakeReasons.ScrollAnim | WakeReasons.Repeat |
         WakeReasons.DragActive | WakeReasons.DragDropWork | WakeReasons.GestureHold | WakeReasons.TouchPress |
@@ -640,6 +687,98 @@ public sealed class AppHost : IDisposable
     /// <summary>The host-owned video-surface intent buffer (published on <c>VideoCompositor.Current</c>). A media player
     /// façade writes surface rect/visibility/handle here; the host drains it into the render-thread presenter at phase 11.</summary>
     public FluentGpu.Media.VideoSurfaceRegistry VideoSurfaces => _videoSurfaces;
+
+    // ── detached video window (the pop-out mini-player) ──────────────────────────────────────────────────────────────
+
+    /// <summary>Open a detached, movable/resizable, (by default) always-on-top top-level window hosting
+    /// <see cref="DetachedWindowRequest.Content"/> in its OWN composited window + AppHost + swapchain + video presenter.
+    /// Reuses the full frame loop (this is a real second AppHost sharing the device/fonts/strings/images), ticked by the
+    /// parent loop on the same UI+render thread via <see cref="TickDetachedHosts"/>. Returns null when unavailable: a
+    /// child host (no recursion), headless, the async render path (a second UI-thread submit source — matches the popup
+    /// gate), or a backend without secondary swapchains. Host-wired to <c>InputHooks.OpenDetachedWindow</c>.</summary>
+    public IDetachedVideoWindow? OpenDetachedWindow(DetachedWindowRequest request)
+    {
+        if (_isDetachedChild || _isHeadless || _asyncActive || !_device.SupportsSecondarySwapchains || request.Content is null)
+            return null;
+        float scale = _window.Scale;
+        var desc = new WindowDesc(request.Title, request.InitialSizeDip, scale, Composited: true);
+        var win = _app.CreateWindow(desc);
+
+        // A 16:9-ish client floor so the mini-player can never be dragged down to an unusable sliver.
+        win.SetMinClientSizePx(new Size2(320f, 180f));
+
+        // Open at the bottom-right of the work area of the monitor the parent lives on (a picture-in-picture home),
+        // fully on-screen, instead of the CW_USEDEFAULT cascade. Falls back to CW_USEDEFAULT when the work area is
+        // unavailable (headless / query failure → RectF.Infinite).
+        var work = _app.GetWorkArea(_window.ClientOriginPx);
+        if (!work.IsInfinite)
+        {
+            float wPx = request.InitialSizeDip.Width * scale;
+            float hPx = request.InitialSizeDip.Height * scale;
+            float margin = 24f * scale;
+            float x = work.X + work.W - wPx - margin;
+            float y = work.Y + work.H - hPx - margin;
+            if (x < work.X) x = work.X;   // keep the left/top edges on-screen for an over-large request
+            if (y < work.Y) y = work.Y;
+            win.SetBoundsPx(new RectF(x, y, wPx, hPx));
+        }
+
+        win.Show();
+        if (request.AlwaysOnTop) win.SetTopmost(true);
+
+        // Create the host ONLY AFTER the window is sized + shown, so its swapchain, first layout, and published
+        // Viewport.Size all use the FINAL client size. A host constructed before Show()/SetBoundsPx reads a 0×0 /
+        // stale ClientSizePx → its scene root lays out at 0×0 and the composited swapchain presents nothing (the
+        // detached window then renders fully transparent, and the idle loop spins on the broken window).
+        var child = new AppHost(_app, win, _device, _fonts, _strings, request.Content, images: _images,
+            compositeSwapchain: true, isDetachedChild: true);
+        _detachedHosts.Add(child);
+        WakeFrame();
+        return new DetachedWindowHandle(this, child, win);
+    }
+
+    /// <summary>Tick every live detached child host one frame (called by the loop right after the parent's own
+    /// <c>RunFrame</c>, same thread). Reaps a window the user closed (dispose + remove). No-op with no detached windows.</summary>
+    public void TickDetachedHosts()
+    {
+        for (int i = _detachedHosts.Count - 1; i >= 0; i--)
+        {
+            var child = _detachedHosts[i];
+            if (child._window.IsClosed) { _detachedHosts.RemoveAt(i); child.Dispose(); continue; }
+            child.RunFrame();
+        }
+    }
+
+    /// <summary>The loop's wait, folded across this host and every detached child (so a playing pop-out keeps the loop at
+    /// display rate even while the main window is idle/minimized). Calls <see cref="RecommendedWaitMs"/> (preserving its
+    /// LastWaitKind/Ms side effects for logging), then combines each child's recommended wait.</summary>
+    public int WaitMsWithDetached()
+    {
+        int w = RecommendedWaitMs();
+        for (int i = 0; i < _detachedHosts.Count; i++)
+            w = CombineWait(w, _detachedHosts[i].RecommendedWaitMs());
+        return w;
+    }
+
+    // -1 = "block until a message" (no preference); any finite wait wins; min of two finite waits.
+    private static int CombineWait(int a, int b) => a < 0 ? b : b < 0 ? a : Math.Min(a, b);
+
+    /// <summary>Probe/diagnostic: count of live detached video windows.</summary>
+    public int DetachedWindowCount => _detachedHosts.Count;
+
+    private sealed class DetachedWindowHandle : IDetachedVideoWindow
+    {
+        private readonly AppHost _parent;
+        private readonly AppHost _child;
+        private readonly IPlatformWindow _window;
+        public DetachedWindowHandle(AppHost parent, AppHost child, IPlatformWindow window)
+        { _parent = parent; _child = child; _window = window; }
+        public bool IsOpen => !_window.IsClosed && _parent._detachedHosts.Contains(_child);
+        public void SetTopmost(bool topmost) => _window.SetTopmost(topmost);
+        public void SetBounds(RectF outerBoundsPx) => _window.SetBoundsPx(outerBoundsPx);
+        public void Close() => _window.CloseWindow();   // WM_CLOSE → IsClosed → reaped by TickDetachedHosts
+    }
+
     /// <summary>Probe/diagnostic only: a live shared-element (connected-animation) key, so a harness can trigger a REAL Hero fly.</summary>
     public string? FirstMorphKey => _connected.FirstTaggedKey;
     /// <summary>Probe/diagnostic only: collect distinct live <c>pl:</c> shared-element keys (home cards) for fresh-page fly measurement.</summary>
@@ -666,6 +805,13 @@ public sealed class AppHost : IDisposable
     /// <summary>Wall-time the render thread most recently BLOCKED on the GPU (frame fence + present latency) inside its
     /// submit — the real render-side cost async hides from FrameMs. High + climbing ⇒ GPU-bound. Diagnostic (FG_FPS_LOG).</summary>
     public double LastGpuFenceWaitMs => _device.LastFenceWaitMs;
+    /// <summary>Diagnostic (FG_GPU_TIMING=1): the TRUE on-GPU raster time (ms) of the most recent frame, from a whole-frame
+    /// timestamp-query pair (lags one frame). Unlike <see cref="LastGpuFenceWaitMs"/> this excludes the vblank/latency wait,
+    /// so it says whether a maximized 60fps lock is GPU-fill-bound (render ≳ refresh budget) or vblank-quantized. 0 when off.</summary>
+    public double LastGpuRenderMs => _device.LastGpuRenderMs;
+    /// <summary>Diagnostic (FG_GPU_TIMING=1): the scene-raster portion of <see cref="LastGpuRenderMs"/> (excl. uploads/baked-blur)
+    /// — when this dominates and exceeds the refresh budget, the maximize lock is content fill/overdraw. 0 when off.</summary>
+    public double LastGpuSceneMs => _device.LastGpuSceneMs;
 
     /// <summary>The message-loop wait timeout (ms) for the NEXT pump: how long to block in <c>WaitForWork</c> before
     /// running another frame. Computes the wake mask ONCE and paces by it:
@@ -686,6 +832,14 @@ public sealed class AppHost : IDisposable
         return w;
     }
 
+    /// <summary>The wait (ms) the loop last chose to pace INTO the current frame (the raw <see cref="RecommendedWaitMs"/>
+    /// value, timer-clamped): 0 = display-rate, &gt;0 = ambient/HUD throttle, -1 = blocked idle. Diagnostic (FG_FPS_LOG).</summary>
+    public int LastWaitMs => _lastWaitMs;
+    /// <summary>Which <see cref="RecommendedWaitMsCore"/> branch produced <see cref="LastWaitMs"/> — the signal that tells a
+    /// maximize/60fps investigation whether the loop is <see cref="HostWaitKind.Ambient"/>-throttled (software cap) or running
+    /// at display rate (a lock is then downstream in Present/GPU). Diagnostic (FG_FPS_LOG).</summary>
+    public HostWaitKind LastWaitKind => _lastWaitKind;
+
     /// <summary>Shorten an IDLE/throttled wait so the loop wakes when the earliest frame-clock timer is due (a pending
     /// timer keeps the loop from over-sleeping past its fire). A display-rate wait (0 sync / <see cref="AsyncDisplayPaceMs"/>
     /// async — animation/scroll live) is left untouched: it already drains the timer next frame, and shortening it to a
@@ -701,13 +855,17 @@ public sealed class AppHost : IDisposable
 
     private int RecommendedWaitMsCore()
     {
-        if (IsMinimized) { MaybeTrimOnIdle(); return -1; }   // nothing to paint; only the restore message wakes us (see RunFrame's minimize gate)
+        // Feed the FG_ADAPTIVE_FPS governor: smooth the render-thread/UI GPU fence-wait so a sustained over-budget stretch
+        // (a maximized fill-bound frame) is detected without one-frame jitter flipping the pacing. Cheap; only when armed.
+        if (s_adaptiveFps) _gpuBoundEma = _gpuBoundEma * 0.85 + _device.LastFenceWaitMs * 0.15;
+        if (IsMinimized) { MaybeTrimOnIdle(); _lastWaitKind = HostWaitKind.Idle; return -1; }   // nothing to paint; only the restore message wakes us (see RunFrame's minimize gate)
         WakeReasons r = ComputeWakeReasons();
-        if (r == WakeReasons.None) { MaybeTrimOnIdle(); return -1; }   // fully idle: trim the slab tail once, then block until a message arrives
-        if (r == WakeReasons.DynamicText) return 100;   // HUD-only: 10 Hz readout, ~0% idle CPU
+        if (r == WakeReasons.None) { MaybeTrimOnIdle(); _lastWaitKind = HostWaitKind.Idle; return -1; }   // fully idle: trim the slab tail once, then block until a message arrives
+        if (r == WakeReasons.DynamicText) { _lastWaitKind = HostWaitKind.Hud; return 100; }   // HUD-only: 10 Hz readout, ~0% idle CPU
         if ((r & ~(WakeReasons.BakedBlurPending | WakeReasons.DynamicText)) == 0)
         {
             int bakedWait = _bakedBlurQueue.RecommendedWaitMs;
+            _lastWaitKind = (r & WakeReasons.DynamicText) != 0 ? HostWaitKind.Hud : HostWaitKind.Baked;
             return (r & WakeReasons.DynamicText) != 0
                 ? (bakedWait < 0 ? 100 : Math.Min(100, bakedWait))
                 : bakedWait;
@@ -728,6 +886,17 @@ public sealed class AppHost : IDisposable
             && now >= _scrollGraceUntil && now >= _mainScrollHoldUntil)
         {
             MaybeTrimOnIdle();   // #10: playback/ambient never reaches WakeReasons.None, so trim the slab tail here too (30s-cadence-gated)
+            _lastWaitKind = HostWaitKind.Ambient;
+            return AmbientFrameWaitMs();
+        }
+        // FG_ADAPTIVE_FPS governor: the animation is NOT ambient-classified (e.g. a one-shot transition or the smooth
+        // playhead), but the GPU can't sustain the panel rate at this size — running full-rate just thrashes into
+        // vblank-misses. Pace to the ambient cap for a STEADY sustainable cadence. Same latency-sensitive + scroll-hold
+        // guards as the ambient branch (never touches interaction/scroll), and the same Resync-exempt wait.
+        if (s_adaptiveFps && AmbientAnimationFps > 0 && (r & GovernorNeverPace) == 0
+            && _gpuBoundEma > GpuBoundBudgetMs && now >= _scrollGraceUntil && now >= _mainScrollHoldUntil)
+        {
+            _lastWaitKind = HostWaitKind.Ambient;
             return AmbientFrameWaitMs();
         }
         // Skip-submit pacing floor: an elided submit skips Present — the sync path's ONLY pacer — so a scroll-armed-
@@ -738,7 +907,8 @@ public sealed class AppHost : IDisposable
         // monotonic (a novel wait value here would zero-dt every animating frame — the frozen one-shot-anim bug
         // class). Input still ends the wait immediately (WaitForWork is MsgWait-based), so nothing gains latency;
         // the first frame that actually changes pixels submits, and the next wait returns to 0 (present-throttled).
-        if (!_asyncActive && _lastFrameSkippedSubmit) return AsyncDisplayPaceMs;
+        if (!_asyncActive && _lastFrameSkippedSubmit) { _lastWaitKind = HostWaitKind.PaceSkipSubmit; return AsyncDisplayPaceMs; }
+        _lastWaitKind = _asyncActive ? HostWaitKind.PaceAsync : HostWaitKind.DisplayRate;
         return _asyncActive ? AsyncDisplayPaceMs : 0;   // latency-sensitive / one-shot motion: sync = present-throttled (0); async = pace cap (present is off-thread — 0 would free-spin)
     }
 
@@ -868,6 +1038,8 @@ public sealed class AppHost : IDisposable
     // already expose are reused; these surface the rest. All passive O(1) reads.
     internal StringTable Strings => _strings;
     internal TreeReconciler Reconciler => _reconciler;
+    /// <summary>Last <c>FG_RENDER_CENSUS</c> spike dump (empty when census off or no spike this frame).</summary>
+    public string LastRenderCensusDump => _reconciler.LastRenderCensusDump;
     internal int InteractionAnimatorCensus => _anim.HoverPressTrackCount;   // hover/press are now engine HoverFade/PressFade tracks (InteractionAnimator deleted)
     internal int ScrollAnimatorCensus => _scrollAnim.ActiveCount;
 
@@ -916,9 +1088,11 @@ public sealed class AppHost : IDisposable
 
     public AppHost(IPlatformApp app, IPlatformWindow window, IGpuDevice device, IFontSystem fonts,
                    StringTable strings, Component root, ImageCache? images = null, IFrameTimeSource? frameTime = null,
-                   ScrollTuning? scrollTuning = null)
+                   ScrollTuning? scrollTuning = null, bool compositeSwapchain = false, bool isDetachedChild = false)
     {
         _app = app;
+        _fonts = fonts;
+        _isDetachedChild = isDetachedChild;
         _window = window;
         _asyncActive = s_renderAsync && window.Handle.Kind != NativeHandleKind.Headless;   // headless never goes async (see field)
         // Step 3 (async): windowed out-of-bounds popups submit + present on the UI thread (RecordPopupWindows), sharing
@@ -950,7 +1124,11 @@ public sealed class AppHost : IDisposable
             : static () => Stopwatch.GetTimestamp() * 1000.0 / Stopwatch.Frequency);
         _drainTimers = _timers.Drain;
         _warmCadenceEnabled = !_isHeadless;   // gates opt in via WarmCadenceEnabledForTest
-        _swapchain = device.CreateSwapchain(new SwapchainDesc(window.Handle, window.ClientSizePx));
+        // A detached child window must be COMPOSITED (its own DComp tree) so its per-window video presenter can hole-punch
+        // and composite the protected/clear surface. The primary host passes false and relies on the device-composited
+        // default (identical behavior). CreateSwapchain only forces composited for the FIRST swapchain; the child is the
+        // second, so it must be requested explicitly here.
+        _swapchain = device.CreateSwapchain(new SwapchainDesc(window.Handle, window.ClientSizePx, Composited: compositeSwapchain));
         _reconciler = new TreeReconciler(_scene, strings, _runtime);
         _reconciler.RegisterPendingEffectContext = RegisterPendingEffectContext;
         _layout = new FlexLayout(_scene, fonts);
@@ -1021,6 +1199,7 @@ public sealed class AppHost : IDisposable
         _inputHooks.IsWindowFullscreen = () => _window.IsFullscreen;
         _inputHooks.WindowSetFullscreen = _window.SetFullscreen;
         _inputHooks.WindowClose = _window.CloseWindow;
+        _inputHooks.OpenDetachedWindow = OpenDetachedWindow;   // pop-out video window (guarded: a child host / async / headless returns null)
         _inputHooks.SetTitleBarRegions = (regions, count) => _window.SetTitleBarRegions(regions.AsSpan(0, count));
         _inputHooks.GetNodeRect = _scene.AbsoluteRect;
         var chromeEpoch = new Signal<int>(0);
@@ -1509,6 +1688,7 @@ public sealed class AppHost : IDisposable
             }
 
             long frameStart = Stopwatch.GetTimestamp();
+            _reconciler.BeginRenderCensus();
             Motion.SetLayoutTransitionsSuppressed(MotionSuppressionSource.WindowResize, _window.InModalLoop);
             // Scroll-coincident reconcile → snap, don't FLIP (perf plan W2-P2.2): while a user scroll is actually moving
             // content (an offset REALLY advanced last frame — the latch below the phase-7 scroll tick — AND the 0.45s
@@ -1625,15 +1805,27 @@ public sealed class AppHost : IDisposable
                 _reconciler.RethemeAll();
             }
             bool virtualsChanged = false;
+            double reactiveFlushMs = 0, virtualRealizeMs = 0;
             try
             {
+                long tRx0 = Stopwatch.GetTimestamp();
                 _runtime.Flush();                              // 3–5 apply scheduled re-renders (render-effects reconcile) + bindings
+                long tRx1 = Stopwatch.GetTimestamp();
                 virtualsChanged = _reconciler.ReRealizeVirtuals();   // virtual boundary re-realize (granular)
+                long tVr1 = Stopwatch.GetTimestamp();
                 if (virtualsChanged && _runtime.HasPending) _runtime.Flush();   // bound-row rebinds (slot signal writes) land THIS frame
+                long tRx2 = Stopwatch.GetTimestamp();
+                reactiveFlushMs = ToMs(tRx1 - tRx0) + ToMs(tRx2 - tVr1);
+                virtualRealizeMs = ToMs(tVr1 - tRx1);
             }
             finally { if (themeChanged) _reconciler.SetThemeTransition(float.NaN); }
             bool reconciled = _reconciler.ConsumeReconciled() || virtualsChanged;
             long tFlush = Stopwatch.GetTimestamp();   // always-on segment timing (FrameStats.*Ms) — see below
+            // Spike-gated type roster (FG_RENDER_CENSUS): one line when FlushMs ≥ 12 or comps are high. Peek render
+            // count WITHOUT consuming it (ConsumeRenderCount runs later when assembling LastStats).
+            int censusComps = _reconciler.PeekRenderCount();
+            _reconciler.MaybeDumpRenderCensus(ToMs(tFlush - frameStart), reactiveFlushMs, virtualRealizeMs, censusComps,
+                _anyOffsetWroteLastFrame || Stopwatch.GetTimestamp() < _mainScrollHoldUntil);
             if (s_allocDiag) { db = Probe(SegFlush, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
             bool layoutNeeded = _needFullLayout || reconciled || _scene.AnyLayoutDirty;
@@ -1958,8 +2150,10 @@ public sealed class AppHost : IDisposable
             // 11.5 — flush queued video-surface intents into the composited presenter (render thread; the hole-punch
             // rides this same frame turn). GUARDED on a non-null presenter, so it is a no-op on the headless seam and on
             // an opaque (non-composited) window — the zero-alloc gates never execute this path. Internally cheap: the
-            // registry short-circuits when nothing is dirty.
-            if (_device.VideoPresenter is { } vp) _videoSurfaces.Drain(vp, _window.Scale);
+            // registry short-circuits when nothing is dirty. Targets THIS host's OWN swapchain's presenter (not the
+            // device primary), so a second AppHost driving a detached video window composites into ITS window's DComp
+            // root — for the primary host `_swapchain` IS the primary, so this is behaviorally identical there.
+            if (_device.GetVideoPresenter(_swapchain) is { } vp) _videoSurfaces.Drain(vp, _window.Scale);
 
             DrainPassiveEffects();                             // 12 passive effects
             _strings.Tick();                                   // 12.5 reclaim released text ids (behind the reader quarantine)
@@ -1994,6 +2188,8 @@ public sealed class AppHost : IDisposable
                 FrameMs = _frameMs,
                 ComponentsRendered = componentsRendered,
                 FlushMs = ToMs(tFlush - frameStart),   // incl. flip/FLIP-capture + reactive flush + reconcile
+                ReactiveFlushMs = reactiveFlushMs,
+                VirtualRealizeMs = virtualRealizeMs,
                 LayoutMs = ToMs(tLayout - tFlush),
                 AnimMs = ToMs(tAnim - tLayout),         // phase-7 ticks + projections
                 RecordMs = ToMs(tRecord - tAnim),       // image pump + SceneRecorder (+ text shaping) + dyntext
@@ -2704,8 +2900,13 @@ public sealed class AppHost : IDisposable
             _popupWindows[i].Window.Dispose();
         }
         _popupWindows.Clear();
+        // Tear down detached child windows (each disposes its own swapchain — which releases its video presenter — and its
+        // window, but NOT the shared device). Do this before our own swapchain/device teardown.
+        for (int i = _detachedHosts.Count - 1; i >= 0; i--) _detachedHosts[i].Dispose();
+        _detachedHosts.Clear();
         _swapchain.Dispose();
-        _device.Dispose();
+        // A detached CHILD host shares the parent's device — it must NOT dispose it (the parent owns the device lifecycle).
+        if (!_isDetachedChild) _device.Dispose();
         _window.Dispose();
     }
 }

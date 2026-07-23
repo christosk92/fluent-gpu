@@ -80,6 +80,15 @@ internal sealed class SpotifyMediaByteSource : IMediaByteSource
     public long DurationMs { get; }
     public float GainLinear { get; }
 
+    /// <summary>The container skip offset (the <see cref="SkipStream"/> logical-0). Retained so a mid-track device-rate
+    /// soft reload can rebuild a FRESH independent stream+source with the same offset (see FluentMediaAudioHost.SoftReloadAsync).</summary>
+    internal int SkipOffset => _skipOffset;
+
+    /// <summary>The resolved encrypted-body handle (CDN mirrors + key/seed), set once the body is attached, so a mid-track
+    /// device-rate soft reload can build a FRESH INDEPENDENT stream — the kept stream is single-cursor and MUST NOT be shared
+    /// across two concurrently-live sessions. Null for external/plain or not-yet-attached sources (treated as not re-openable).</summary>
+    internal AudioStreamHandle? ReopenBody { get; set; }
+
     /// <summary>Open a fresh forward decode view (the codec owns it). The <see cref="SkipStream"/> presents byte
     /// <c>skipOffset</c> as logical 0 (past the Spotify container header).</summary>
     public Stream OpenDecodeStream() => new SkipStream(_stream.AsStream(), _skipOffset);
@@ -266,8 +275,11 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
 
     IMediaSession? _session;
     SpotifyAudioStream? _activeStream;               // the kept fast-start stream (head now, body later); null for external
+    SpotifyMediaByteSource? _activeBytes;            // the current session's byte source — re-opened on a device-rate soft reload
     string _activeFileIdHex = "";
     long _loadEpoch;
+    int _softReloading;                              // 1 while a mid-track device-rate soft-reload drain is queued/running (single-drainer token)
+    int _softReloadPending;                          // 1 when a device-rate change awaits processing (set on coalesce / crossfade defer)
 
     // intents (applied to the session as it becomes ready)
     bool _playIntent;
@@ -287,6 +299,7 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
     // the prepared slot (track B) — built/attached ahead of the active track's natural end
     string? _prepToken;
     SpotifyAudioStream? _prepStream;
+    SpotifyMediaByteSource? _prepBytes;   // B's byte source — becomes _activeBytes at commit so a device-rate soft reload re-opens B
     IPreparedItem? _prepItem;
     string _prepUri = "";
     long _prepDurMs;
@@ -300,6 +313,11 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
     bool _crossfadeInFlight;      // set at commit, cleared on the Completed edge — guards a single commit per hand-off
     string? _committedToken;      // the token whose crossfade is committed (CancelPrepared → AlreadyStarted)
     SpotifyAudioStream? _retiringStream;   // track A's stream, disposed on the Completed edge once its voice retires
+    // Finding A (crossfade TOCTOU): CommitCrossfade bumps this seq + records this snapshot under _gate, so a SoftReloadAsync
+    // whose await raced a commit onto the OLD session detects it (seq changed) at its post-await re-check and restores the
+    // live crossfade bookkeeping that OpenSessionAsync's reset clobbered — instead of disposing B's session out of the mixer.
+    long _crossfadeCommitSeq;
+    (SpotifyMediaByteSource? Bytes, long StartMs, long DurMs, string Uri, long PrimaryId)? _committedActive;
 
     public event Action<OutputDeviceNotice>? OutputDeviceNotice;
     public event Action<double, bool>? ExternalVolumeChanged;
@@ -493,6 +511,8 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
         {
             // Fast path: attach the encrypted body to the already-open, already-playing head stream.
             await s.AttachBodyWithNativeDecryptorAsync(decryptor, cdnUrls, null, CancellationToken.None).ConfigureAwait(false);
+            // Retain the body handle on the active source so a mid-track device-rate change can rebuild an INDEPENDENT stream.
+            if (_activeBytes is not null) _activeBytes.ReopenBody = body;
             return;
         }
 
@@ -502,7 +522,8 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
         var stream = SpotifyAudioStream.CreateHeadOnly(_http, ReadOnlyMemory<byte>.Empty, 0, body.FileIdHex, _log, _bodyDisk);
         await stream.AttachBodyWithNativeDecryptorAsync(decryptor, cdnUrls, null, CancellationToken.None).ConfigureAwait(false);
         _activeStream = stream;
-        var bytes = new SpotifyMediaByteSource(stream, skip, kind2, _pendingDurMs, DbToLinear(_pendingGainDb));
+        // Retain the body handle so a mid-track device-rate change can rebuild an INDEPENDENT stream (see SoftReloadAsync).
+        var bytes = new SpotifyMediaByteSource(stream, skip, kind2, _pendingDurMs, DbToLinear(_pendingGainDb)) { ReopenBody = body };
         await OpenSessionAsync(bytes, epoch).ConfigureAwait(false);
     }
 
@@ -526,7 +547,7 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
         };
     }
 
-    async Task OpenSessionAsync(SpotifyMediaByteSource bytes, long epoch)
+    async Task OpenSessionAsync(SpotifyMediaByteSource bytes, long epoch, bool autoResume = true)
     {
         if (epoch != Volatile.Read(ref _loadEpoch)) return;
         try
@@ -536,16 +557,24 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
             if (epoch != Volatile.Read(ref _loadEpoch)) { await session.DisposeAsync().ConfigureAwait(false); return; }
             session.ConnectSignals(_sink);
             _session = session;
+            _activeBytes = bytes;   // retained so a mid-track device-rate change can re-open the SAME stream at the new rate
             // Fresh active track: reset the crossfade/offset bookkeeping to this session's primary voice.
             _activeStartMs = 0;
             _activeDurMs = bytes.DurationMs;
             _activeUri = "";
             _crossfadeInFlight = false;
-            if (session is PcmAudioSession pcm) _activePrimaryId = pcm.PrimaryVoiceIdValue;
+            if (session is PcmAudioSession pcm)
+            {
+                _activePrimaryId = pcm.PrimaryVoiceIdValue;
+                // Fix 2: re-arm THIS track if a mid-track default-endpoint switch adopts a different sample rate. The engine
+                // raises DeviceFormatChanged off its cold device thread; the handler enqueues a soft reload. Unsubscribed when
+                // this session is disposed (DisposeSessionAsync / the soft reload) so no handler leaks across loads.
+                pcm.DeviceFormatChanged += OnDeviceFormatChanged;
+            }
             _core.Volume.Value = (float)_volume;
             session.SetVolume(_volume);
             session.SetMuted(_muted);
-            if (_playIntent) { await session.PlayAsync().ConfigureAwait(false); StartTicker(); }
+            if (_playIntent && autoResume) { await session.PlayAsync().ConfigureAwait(false); StartTicker(); }
         }
         catch (Exception ex)
         {
@@ -554,16 +583,202 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
         }
     }
 
+    // ── Fix 2: mid-track device sample-rate change → soft reload at the NEW device rate ──────────────────────────────
+    // A default-endpoint switch to a device that clocks at a different rate keeps audio alive (the engine swaps the sink in
+    // PcmAudioSession.RebuildSink) but leaves the decoder/graph/mixer/rings frozen at the OLD rate, so the currently-playing
+    // track drifts off pitch. The engine raises DeviceFormatChanged fire-and-forget OFF its cold device thread; we coalesce
+    // it and enqueue a soft reload onto the serialized pump. NOT called for a same-endpoint control-panel rate change (no
+    // WASAPI notification) — that self-corrects on the next load via Fix 1. Runs on a ThreadPool thread; keep it minimal.
+    void OnDeviceFormatChanged(MixFormat newFormat)
+    {
+        if (_disposed) return;
+        Volatile.Write(ref _softReloadPending, 1);   // Finding #1: record the change unconditionally, THEN try to drain it —
+        TryStartSoftReloadDrain();                   // so a change arriving while a reload runs is never dropped (see the drain).
+    }
+
+    // Acquire the single-drainer token and enqueue the drain onto the serialized pump. A no-op if a drain is already active
+    // (it will pick up _softReloadPending itself) or after dispose. Also called from the crossfade Completed edge (Tick) and
+    // from the drain's own finally to re-arm a reload that was deferred / arrived at the check-then-clear boundary.
+    void TryStartSoftReloadDrain()
+    {
+        if (_disposed) return;
+        if (Interlocked.CompareExchange(ref _softReloading, 1, 0) != 0) return;   // a drain is already active — it drains pending
+        long epoch = Volatile.Read(ref _loadEpoch);                              // a genuine track change (bumped epoch) supersedes it
+        Enqueue(async () =>
+        {
+            try
+            {
+                // Finding #1: drain trailing device-rate changes. Each pass re-opens at the CURRENT live device rate (Fix 1),
+                // so a burst converges in at most one extra pass — it cannot spin. A real track change (epoch) ends the drain.
+                while (Interlocked.Exchange(ref _softReloadPending, 0) == 1)
+                {
+                    if (_disposed || epoch != Volatile.Read(ref _loadEpoch)) break;
+                    if (!await SoftReloadAsync(epoch).ConfigureAwait(false))
+                    {
+                        // Finding #4: deferred (a crossfade holds both voices). Re-mark pending and stop — the crossfade
+                        // Completed edge in Tick re-arms the drain once the fade finishes. This does NOT spin.
+                        Volatile.Write(ref _softReloadPending, 1);
+                        break;
+                    }
+                }
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _softReloading, 0);
+                // Close the check-then-clear race: a change that set _softReloadPending after our last claim but before we
+                // released the token must still be serviced. Skip while a crossfade is in flight — Tick will re-arm instead.
+                if (Volatile.Read(ref _softReloadPending) == 1 && !_crossfadeInFlight) TryStartSoftReloadDrain();
+            }
+        });
+    }
+
+    // Re-open the current track on a FRESH, INDEPENDENT stream (never the shared single-cursor kept stream — Finding #1)
+    // through the now-rate-correct open path (Fix 1 binds the decoder/graph to the LIVE device rate), preserving the playhead
+    // and play intent. Runs on the serialized pump. Returns true when handled (re-opened or a benign no-op — superseded epoch /
+    // no re-openable kept stream); returns FALSE when deferred because a crossfade is in flight (Finding #4) so the caller keeps
+    // the pending flag for the Completed edge to re-arm.
+    async Task<bool> SoftReloadAsync(long epoch)
+    {
+        if (epoch != Volatile.Read(ref _loadEpoch)) return true;   // superseded by a real track change — nothing to do
+        var bytes = _activeBytes;
+        if (bytes is null || _activeStream is null) return true;   // external/podcast (PlainHttpAudioStream) — not re-openable
+        if (bytes.ReopenBody is not { } body) return true;         // no captured body handle (ghost/not-attached) — leave old playing
+        if (body.SourceKind != AudioSourceKind.SpotifyEncrypted) return true;   // only the encrypted CDN path is re-openable
+
+        // Finding #4 + Finding A: atomically (under _gate, synchronous-only) DEFER if a crossfade already holds both voices,
+        // else capture the old session + the commit sequence. Tearing the session down mid-fade would silently drop track B;
+        // deferring keeps the pending flag so Tick's Completed edge re-arms the drain once the (short) fade finishes. Capturing
+        // the seq under the same lock CommitCrossfade bumps lets the post-await re-check tell whether a crossfade committed onto
+        // the old session DURING our await (Finding A) — that commit adds B's voice to the old session, so we must not dispose it.
+        IMediaSession? old;
+        long seqBefore;
+        lock (_gate)
+        {
+            if (_crossfadeInFlight) return false;   // the current track stays only briefly off-pitch; B is never dropped
+            old = _session;
+            seqBefore = _crossfadeCommitSeq;
+        }
+        if (old is null) return true;   // no live session to reload
+
+        long savedPos = PositionMs;   // active-track-relative; captured before the re-open resets the timeline to 0
+        // Finding B: OpenSessionAsync blanks _activeUri/_activeDurMs on every open, but a track made active via a committed
+        // crossfade carries B's identity here — snapshot it and restore after a SUCCESSFUL reopen so URI-dependent signals keep it.
+        string savedUri = _activeUri;
+        long savedDurMs = _activeDurMs;
+
+        // Finding #1: the kept stream is a SINGLE-CURSOR object — its AsStream() returns `this` with one Position — so it
+        // CANNOT be shared across two concurrently-live sessions: the new decoder's open seeks the shared cursor (garbling the
+        // still-decoding old session) and disposing EITHER session closes the shared stream out from under the other. Give the
+        // re-opened session an INDEPENDENT read view: a FRESH head-less SpotifyAudioStream (the encrypted body serves the header
+        // region and decrypts to the same clear head) with its OWN body attach + RangedHttpSource, wrapped in a fresh source.
+        // The old session keeps its own stream; we dispose old only AFTER the new session is confirmed, and dispose the fresh
+        // stream if the re-open fails — so both the shared-cursor race and Finding #2's keep-old-on-failure guarantee hold.
+        var freshStream = SpotifyAudioStream.CreateHeadOnly(_http, ReadOnlyMemory<byte>.Empty, 0, body.FileIdHex, _log, _bodyDisk);
+        var freshBytes = new SpotifyMediaByteSource(freshStream, bytes.SkipOffset, bytes.Kind, bytes.DurationMs, bytes.GainLinear)
+        {
+            ReopenBody = body,   // retain so a SUBSEQUENT device-rate change can reload the fresh stream again
+        };
+
+        // Finding #2: re-open the NEW session (still PAUSED via autoResume:false) BEFORE disposing the OLD one, so a failed
+        // re-open never leaves _session null with playback dead. Capture old + detach its DeviceFormatChanged; OpenSessionAsync
+        // installs the new session (and re-subscribes the event there) on success, or leaves _session == old on failure. The
+        // new session's WASAPI client is activated-but-not-Started until PlayAsync, so there is no double-audio window.
+        if (old is PcmAudioSession op) op.DeviceFormatChanged -= OnDeviceFormatChanged;
+
+        try
+        {
+            // Attach the encrypted body to the fresh independent stream (re-primes from the disk cache / CDN), then re-open
+            // PAUSED (autoResume:false) so the playhead is restored BEFORE audio starts — otherwise the track would audibly
+            // play from 0 for a beat before the seek lands. OpenSessionAsync re-applies volume/mute; _playIntent survives.
+            var cdnUrls = body.CdnUrls ?? (string.IsNullOrEmpty(body.CdnUrl) ? Array.Empty<string>() : new[] { body.CdnUrl });
+            await freshStream.AttachBodyWithNativeDecryptorAsync(BuildDecryptor(body), cdnUrls, null, CancellationToken.None).ConfigureAwait(false);
+            await OpenSessionAsync(freshBytes, epoch, autoResume: false).ConfigureAwait(false);
+        }
+        catch
+        {
+            // The body attach (or open) threw before installing the new session: dispose the fresh independent stream (it owns
+            // network/read-ahead resources) and KEEP the OLD session playing — re-subscribe its DeviceFormatChanged so a later
+            // switch still re-arms. Better a brief wrong-pitch than silent death.
+            try { freshStream.Dispose(); } catch { }
+            if (old is PcmAudioSession opx) opx.DeviceFormatChanged += OnDeviceFormatChanged;
+            return true;
+        }
+
+        // Finding A: re-check under _gate whether a crossfade COMMITTED onto the old session while we awaited. If it did, B's
+        // voice was just added to `old` — disposing `old` (the normal success path) would silently drop B. ABORT instead:
+        // discard the freshly-opened session, restore `old` with the live crossfade bookkeeping that OpenSessionAsync clobbered,
+        // and re-arm the drain (return false → the caller re-marks _softReloadPending; Tick's Completed edge retries the reload
+        // once the fade finishes). The old session's WASAPI sink is still clocking A→B, so playback continues uninterrupted.
+        bool committedDuringAwait;
+        lock (_gate) { committedDuringAwait = _crossfadeCommitSeq != seqBefore; }
+        if (committedDuringAwait)
+        {
+            var fresh = _session;
+            if (fresh is PcmAudioSession fp) fp.DeviceFormatChanged -= OnDeviceFormatChanged;   // OpenSessionAsync subscribed it
+            if (!ReferenceEquals(fresh, old) && fresh is not null) { try { await fresh.DisposeAsync().ConfigureAwait(false); } catch { } }
+            try { freshStream.Dispose(); } catch { }
+            lock (_gate)
+            {
+                _session = old;   // keep the live crossfade session; never leave B stranded
+                if (_committedActive is { } snap)
+                {
+                    // Restore only the fields OpenSessionAsync's reset clobbered; _activeStream/_retiringStream/_committedToken
+                    // survived it and still point at B/A. _crossfadeInFlight goes back true so Tick's Completed edge closes the fade.
+                    _activeBytes = snap.Bytes;
+                    _activeStartMs = snap.StartMs;
+                    _activeDurMs = snap.DurMs;
+                    _activeUri = snap.Uri;
+                    _activePrimaryId = snap.PrimaryId;
+                    _crossfadeInFlight = true;
+                }
+            }
+            if (old is PcmAudioSession op3) op3.DeviceFormatChanged += OnDeviceFormatChanged;   // re-arm device-rate switches on old
+            return false;
+        }
+
+        var reopened = _session;
+        if (!ReferenceEquals(reopened, old) && reopened is not null)
+        {
+            // Re-open SUCCEEDED: the fresh independent session is live and PAUSED. Adopt its stream, then retire the OLD session
+            // (Finding #2 — disposing old closes only OLD's stream, never the fresh one), then, if still the current track,
+            // restore the playhead and resume (seek-then-play → no start-from-0 blip).
+            _activeStream = freshStream;
+            // Finding B: OpenSessionAsync just blanked _activeUri/_activeDurMs — restore the pre-reload identity (only when it was
+            // non-default), so a track made active via a committed crossfade keeps reporting B's uri/duration after the reload.
+            if (savedUri.Length != 0) _activeUri = savedUri;
+            if (savedDurMs != 0) _activeDurMs = savedDurMs;
+            if (old is not null) { try { await old.DisposeAsync().ConfigureAwait(false); } catch { } }
+            if (epoch == Volatile.Read(ref _loadEpoch))
+            {
+                if (savedPos > 0)
+                    try { await reopened.SeekAsync(TimeSpan.FromMilliseconds(savedPos), SeekMode.Accurate).ConfigureAwait(false); } catch { }
+                if (_playIntent) { try { await reopened.PlayAsync().ConfigureAwait(false); StartTicker(); } catch { } }
+            }
+        }
+        else
+        {
+            // Re-open did NOT install a new session (OpenSessionAsync's epoch guard skipped/disposed the new one, or it faulted):
+            // dispose the fresh stream (idempotent — safe even if the guarded session already tore it down) and KEEP the OLD
+            // session playing — never leave _session null — re-subscribing its DeviceFormatChanged so a later switch re-arms.
+            try { freshStream.Dispose(); } catch { }
+            if (old is PcmAudioSession op2) op2.DeviceFormatChanged += OnDeviceFormatChanged;
+        }
+        return true;
+    }
+
     async Task DisposeSessionAsync()
     {
         var old = _session;
         _session = null;
+        _activeBytes = null;
+        if (old is PcmAudioSession p) p.DeviceFormatChanged -= OnDeviceFormatChanged;   // detach the soft-reload subscription
         var stream = _activeStream;
         _activeStream = null;
         var retiring = _retiringStream;
         _retiringStream = null;
         // A manual load/stop supersedes any prepared next and any in-flight crossfade.
         await DisposePreparedSlotAsync().ConfigureAwait(false);
+        Volatile.Write(ref _softReloadPending, 0);   // drop any device-rate reload deferred for the track we're tearing down
         _crossfadeInFlight = false;
         _committedToken = null;
         _activeUri = "";
@@ -582,6 +797,7 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
         var stream = _prepStream;
         _prepItem = null;
         _prepStream = null;
+        _prepBytes = null;
         _prepToken = null;
         _prepUri = "";
         _prepDurMs = 0;
@@ -621,6 +837,7 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
             await DisposePreparedSlotAsync().ConfigureAwait(false);
         _prepToken = req.Token;
         _prepStream = stream;
+        _prepBytes = bytes;
         _prepItem = result;
         _prepUri = start.TrackUri;
         _prepDurMs = start.DurationMs;
@@ -639,6 +856,8 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
                 {
                     var cdnUrls = b.CdnUrls ?? (string.IsNullOrEmpty(b.CdnUrl) ? Array.Empty<string>() : new[] { b.CdnUrl });
                     await s.AttachBodyWithNativeDecryptorAsync(BuildDecryptor(b), cdnUrls, null, ct).ConfigureAwait(false);
+                    // Retain B's body handle so a device-rate reload after the crossfade commit can rebuild B independently.
+                    if (_prepBytes is not null) _prepBytes.ReopenBody = b;
                 }
                 tcs.TrySetResult();
             }
@@ -676,36 +895,50 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
     // the active voice out over the same window, then re-point the active state at B. Runs exactly once per hand-off.
     void CommitCrossfade(PcmAudioSession sess, IPreparedItem item, long rawPos)
     {
-        _crossfadeInFlight = true;
         long id = ++_nextVoiceId;
         long start = sess.SampleClock;
         int fadeFrames = _crossfadeMs * sess.Format.SampleRate / 1000;
         var curve = CrossCurve.EqualPower;
         float rg = ReplayGain.ScalarLinear(item.Loudness, sess.NormalizationMode, sess.ReferenceLufsValue);
-
-        sess.AddCrossfadeVoice(item.AudioVoice!, GainEnvelope.Fade(FadeKind.In, start, fadeFrames, curve), start, rg, sess.BuildVoiceChain(), id);
-        sess.SetVoiceEnvelope(_activePrimaryId, GainEnvelope.Fade(FadeKind.Out, start, fadeFrames, curve));
-
-        // Hand streams over: A retires (disposed on the Completed edge), B's kept stream becomes the active stream.
-        _retiringStream = _activeStream;
-        _activeStream = _prepStream;
-        _committedToken = _prepToken;
         string token = _prepToken ?? "";
         string uri = _prepUri;
 
-        // Re-point the active bookkeeping at B so PositionMs reads B-relative from here on.
-        _activeStartMs = rawPos;
-        _activePrimaryId = id;
-        _activeDurMs = _prepDurMs;
-        _activeUri = uri;
+        // Finding A (crossfade TOCTOU): add B's voice, swap the active bookkeeping to B, and bump the commit sequence ATOMICALLY
+        // under _gate. This runs on the Tick/Timer thread, NOT the serialized pump, so a concurrent SoftReloadAsync must either
+        // DEFER (it saw _crossfadeInFlight under this same lock) or, if it already captured the sequence and is mid-await, observe
+        // the bumped seq at its post-await re-check and KEEP this session — never dispose it and drop B. Adding the voice and the
+        // seq bump share one lock so the reloader can never observe "B's voice added to old, but seq not yet bumped".
+        lock (_gate)
+        {
+            _crossfadeInFlight = true;
+            sess.AddCrossfadeVoice(item.AudioVoice!, GainEnvelope.Fade(FadeKind.In, start, fadeFrames, curve), start, rg, sess.BuildVoiceChain(), id);
+            sess.SetVoiceEnvelope(_activePrimaryId, GainEnvelope.Fade(FadeKind.Out, start, fadeFrames, curve));
 
-        // Clear the prepared slot WITHOUT disposing the item — its voice is now live in the mixer.
-        _prepItem = null;
-        _prepStream = null;
-        _prepToken = null;
-        _prepUri = "";
-        _prepDurMs = 0;
-        _prepOverlap = false;
+            // Hand streams over: A retires (disposed on the Completed edge), B's kept stream becomes the active stream.
+            _retiringStream = _activeStream;
+            _activeStream = _prepStream;
+            _activeBytes = _prepBytes;   // keep the (stream, bytes) pair consistent so a device-rate soft reload re-opens B, not A
+            _committedToken = _prepToken;
+
+            // Re-point the active bookkeeping at B so PositionMs reads B-relative from here on.
+            _activeStartMs = rawPos;
+            _activePrimaryId = id;
+            _activeDurMs = _prepDurMs;
+            _activeUri = uri;
+
+            // Snapshot the committed state so an aborting SoftReloadAsync can restore it (OpenSessionAsync's reset clobbers these).
+            _committedActive = (_prepBytes, rawPos, _prepDurMs, uri, id);
+            _crossfadeCommitSeq++;
+
+            // Clear the prepared slot WITHOUT disposing the item — its voice is now live in the mixer.
+            _prepItem = null;
+            _prepStream = null;
+            _prepBytes = null;
+            _prepToken = null;
+            _prepUri = "";
+            _prepDurMs = 0;
+            _prepOverlap = false;
+        }
 
         _transitions.OnNext(new AudioTransitionSignal(AudioTransitionKind.Started, token, uri, 0, _crossfadeMs));
     }
@@ -752,6 +985,9 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
             _retiringStream = null;
             if (retiring is not null) { try { retiring.Dispose(); } catch { } }
             _transitions.OnNext(new AudioTransitionSignal(AudioTransitionKind.Completed, _committedToken ?? "", _activeUri, PositionMs, _crossfadeMs));
+            // Finding #4: a device-rate change deferred while this crossfade held both voices now re-arms — the session is
+            // back to a single active voice, so a soft reload can safely re-open it at the live rate.
+            if (Volatile.Read(ref _softReloadPending) == 1) TryStartSoftReloadDrain();
         }
 
         switch (state)

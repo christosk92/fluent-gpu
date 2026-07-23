@@ -21,26 +21,36 @@ sealed partial class ArtistPage : Component
         Responsive.Of(w =>
         {
             bool wide = w >= 760f;
+            float releaseW = wide ? MathF.Max(0f, (w - Spacing.XL) / 3f) : w;
             string popTitle = Loc.Get(Strings.Artist.TopTracks);
             Element left = Embed.Comp(() => new ArtistPopular(popular, uri, bridge, svc, popTitle, accent))
                 with { SkeletonProxy = () => ArtistPopular.SkeletonShape(popular, popTitle) };
-            Element right = ReleasesColumn(latest, popularReleases, go, play, accent);
+            Element right = ReleasesColumn(latest, popularReleases, go, play, accent, releaseW);
             return new BoxEl
             {
                 Direction = (byte)(wide ? 0 : 1), Gap = Spacing.XL,
-                // Side-by-side: top-align — the releases column must not cross-stretch to the taller
-                // chart's height (the strip chips would absorb the leftover and float their labels).
-                AlignItems = wide ? FlexAlign.Start : FlexAlign.Stretch,
+                // Cross-stretch: when the releases column is taller, the chart distributes the extra
+                // height into its rows (taller cells, no dead band) so both columns bottom-align.
+                // The strip sizes its covers from this responsive width, so nothing fluid inflates the band later.
+                AlignItems = FlexAlign.Stretch,
                 Children =
                 [
-                    new BoxEl { Direction = 1, Grow = wide ? 2f : 1f, Basis = 0f, MinWidth = 0f, Children = [left] },
-                    new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Children = [right] },
+                    new BoxEl
+                    {
+                        Direction = 1, Grow = wide ? 2f : 0f, Basis = wide ? 0f : float.NaN,
+                        MinWidth = 0f, Children = [left],
+                    },
+                    new BoxEl
+                    {
+                        Direction = 1, Grow = wide ? 1f : 0f, Basis = wide ? 0f : float.NaN,
+                        MinWidth = 0f, Children = [right],
+                    },
                 ],
             };
         }, fallback: 900f);
 
     Element ReleasesColumn(Album? latest, IReadOnlyList<Album>? popular, Action<string, string?> go, Action<string> play,
-                           Func<ColorF> accent)
+                           Func<ColorF> accent, float availableWidth)
     {
         var popularList = popular ?? Array.Empty<Album>();
         bool hasLatest = latest is { Name.Length: > 0, Uri.Length: > 0 };
@@ -65,7 +75,9 @@ sealed partial class ArtistPage : Component
             Children =
             [
                 ReleaseMasthead(mast, eyebrow, go, play, accent),
-                strip.Count > 0 ? ReleaseStrip(strip, go) : new BoxEl(),
+                strip.Count > 0
+                    ? BuildReleaseStrip(strip, go, availableWidth)
+                    : new BoxEl(),
             ],
         });
     }
@@ -79,8 +91,9 @@ sealed partial class ArtistPage : Component
 
         return new BoxEl
         {
-            Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.Center,
-            Padding = Edges4.All(Spacing.M), Corners = CornerRadius4.All(Radii.Card),
+            // Prototype .mast: 96px cover, 10px padding/gap.
+            Direction = 0, Gap = 10f, AlignItems = FlexAlign.Center,
+            Padding = Edges4.All(10f), Corners = CornerRadius4.All(Radii.Card),
             Fill = Tok.FillCardDefault, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             HoverFill = Tok.FillSubtleSecondary,
             Role = AutomationRole.Button,
@@ -89,11 +102,11 @@ sealed partial class ArtistPage : Component
             [
                 new BoxEl
                 {
-                    Width = 112f, Height = 112f, Shrink = 0f, ClipToBounds = true,
+                    Width = 96f, Height = 96f, Shrink = 0f, ClipToBounds = true,
                     Corners = CornerRadius4.All(Radii.Control),
                     Children =
                     [
-                        Surfaces.Artwork(al.Cover, al.Id.GetHashCode() & 0x7fffffff, 112f, 112f, Radii.Control, decodePx: 224),
+                        Surfaces.Artwork(al.Cover, al.Id.GetHashCode() & 0x7fffffff, 96f, 96f, Radii.Control, decodePx: 192),
                     ],
                 },
                 new BoxEl
@@ -150,47 +163,56 @@ sealed partial class ArtistPage : Component
         };
     }
 
-    static Element ReleaseStrip(IReadOnlyList<Album> albums, Action<string, string?> go)
+    // The popular-releases strip (prototype .strip/.chip): equal-width chips whose square covers fill the chip
+    // edge-to-edge. Resolve explicit sizes from the enclosing responsive slot in this same render, so the strip's
+    // final height participates in parent layout before the Albums sibling is positioned.
+    static Element BuildReleaseStrip(IReadOnlyList<Album> albums, Action<string, string?> go, float availableWidth)
     {
-        var chips = new Element[albums.Count];
-        for (int i = 0; i < albums.Count; i++)
+        const float Gap = 2f;      // prototype .strip gap
+        const float ChipPad = 6f;  // prototype .chip padding
+        // Prototype strip-2 rule: under ~370px, two roomy chips beat three cramped ones.
+        int n = Math.Min(albums.Count, availableWidth > 0.5f && availableWidth < 370f ? 2 : 3);
+        if (n <= 0) return new BoxEl();
+        float chipW = availableWidth > 0.5f ? (availableWidth - (n - 1) * Gap) / n : 0f;
+        float cover = chipW > 0f ? MathF.Max(48f, MathF.Floor(chipW - 2f * ChipPad)) : 96f;
+
+        var chips = new Element[n];
+        for (int i = 0; i < n; i++)
         {
             var al = albums[i];
             string sub = (al.Year > 0 ? al.Year + " · " : "") + KindLabel(al.Kind);
             chips[i] = new BoxEl
             {
-                Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = 8f,
-                Padding = Edges4.All(Spacing.S), Corners = CornerRadius4.All(Radii.Card),
+                Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = 6f,
+                Padding = Edges4.All(ChipPad), Corners = CornerRadius4.All(Radii.Card),
                 BorderWidth = 1f, BorderColor = ColorF.Transparent,
                 HoverFill = Tok.FillSubtleSecondary, HoverBorderColor = Tok.StrokeCardDefault,
-                Role = AutomationRole.Button,
+                Role = AutomationRole.Button, Cursor = CursorId.Hand,
                 OnClick = () => go("album:" + al.Uri, al.Name),
                 Children =
                 [
                     new BoxEl
                     {
-                        // FIXED square cover (MediaCard.Shelf density) — a fluid AspectRatio box here measures against
-                        // the pre-flex offered width and inflates the whole strip's row height (the giant-gap bug).
-                        Width = 96f, Height = 96f, Shrink = 0f,
+                        Width = cover, Height = cover, Shrink = 0f,
                         Corners = CornerRadius4.All(Radii.Control), ClipToBounds = true,
                         Children =
                         [
-                            Surfaces.Artwork(al.Cover, al.Id.GetHashCode() & 0x7fffffff, 96f, 96f, Radii.Control, decodePx: 192),
+                            Surfaces.Artwork(al.Cover, al.Id.GetHashCode() & 0x7fffffff, cover, cover, Radii.Control, decodePx: 256),
                         ],
                     },
                     new TextEl(al.Name)
                     {
-                        Size = 13f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+                        Size = 12f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
                         MinWidth = 0f,
                     },
                     new TextEl(sub)
                     {
-                        Size = 12f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
+                        Size = 11f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
                     },
                 ],
             };
         }
-        return new BoxEl { Direction = 0, Gap = 4f, Children = chips };
+        return new BoxEl { Direction = 0, Gap = Gap, AlignItems = FlexAlign.Start, Children = chips };
     }
 
     static string ReleaseMeta(Album al)

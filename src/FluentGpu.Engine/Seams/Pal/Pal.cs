@@ -494,6 +494,26 @@ public interface IPlatformWindow : IDisposable
     /// <summary>Enter/leave borderless monitor fullscreen, restoring the exact prior window placement on exit.</summary>
     void SetFullscreen(bool fullscreen) { }
     void CloseWindow() { }
+
+    /// <summary>True once the window has been closed (its HWND destroyed). The host loop reaps a closed detached window.
+    /// Default false (headless / never-closing seams).</summary>
+    bool IsClosed => false;
+
+    // ── detached-window seam (a movable/resizable always-on-top secondary window, e.g. the pop-out video mini-player) ──
+    // Defaults no-op so headless and single-window backends are unaffected; the Win32 backend implements them.
+
+    /// <summary>Keep this window above all others (Win32 <c>SetWindowPos(HWND_TOPMOST/NOTOPMOST, SWP_NOMOVE|SWP_NOSIZE|
+    /// SWP_NOACTIVATE)</c>) — persistent, unlike a one-shot bring-to-front. Used by the pop-out video window's
+    /// always-on-top toggle. State-aware callers assert it only while there is video worth watching.</summary>
+    void SetTopmost(bool topmost) { }
+
+    /// <summary>Programmatically move/resize the window in physical virtual-screen px (restore saved geometry, fit to
+    /// content). Win32 <c>SetWindowPos(SWP_NOZORDER|SWP_NOACTIVATE)</c>. The rect is the OUTER window rect.</summary>
+    void SetBoundsPx(RectF outerBoundsPx) { }
+
+    /// <summary>Minimum CLIENT size in physical px (Win32 <c>WM_GETMINMAXINFO</c>). Default <c>0×0</c> = no clamp, so
+    /// the primary window is unaffected; a detached mini-player sets a floor.</summary>
+    void SetMinClientSizePx(Size2 px) { }
 }
 
 /// <summary>Versioned external-store-shaped locale seam (modeled on ISystemColors). L9.</summary>

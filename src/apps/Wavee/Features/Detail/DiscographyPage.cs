@@ -86,7 +86,48 @@ sealed class DiscographyPage : Component
         var pageScroll = UseSignal(0f);
         void Play(string u) => _ = svc.Player.PlayAsync(u, 0);
 
-        // Breadcrumb: clickable artist name → back to the artist page, chevron, then the (non-clickable) facet title.
+        var facetItems = new MenuFlyoutItem[]
+        {
+            MenuFlyoutItem.RadioItem("Albums", kind == DiscographyKind.Albums,
+                kind == DiscographyKind.Albums ? null : () => go(DiscographyRoute.Make(DiscographyKind.Albums, uri), artistName)),
+            MenuFlyoutItem.RadioItem("Singles", kind == DiscographyKind.Singles,
+                kind == DiscographyKind.Singles ? null : () => go(DiscographyRoute.Make(DiscographyKind.Singles, uri), artistName)),
+            MenuFlyoutItem.RadioItem("Compilations", kind == DiscographyKind.Compilations,
+                kind == DiscographyKind.Compilations ? null : () => go(DiscographyRoute.Make(DiscographyKind.Compilations, uri), artistName)),
+        };
+        var facetParts = new TemplateParts
+        {
+            [DropDownButton.PartRoot] = b => b with
+            {
+                MinHeight = 42f,
+                Padding = new Edges4(8f, 3f, 8f, 4f),
+                Fill = ColorF.Transparent,
+                HoverFill = Tok.FillSubtleSecondary,
+                PressedFill = Tok.FillSubtleTertiary,
+                BorderWidth = 0f,
+                Corners = CornerRadius4.All(6f),
+                Cursor = CursorId.Hand,
+            },
+        };
+        facetParts.Set<TextEl>(DropDownButton.PartLabel, t => t with
+        {
+            Size = 28f, Weight = 700, Color = Tok.TextPrimary,
+            HoverColor = Tok.TextPrimary, PressedColor = Tok.TextPrimary,
+        });
+        facetParts.Set<BoxEl>(DropDownButton.PartChevron, b => b with
+        {
+            Margin = new Edges4(6f, 0f, 0f, 0f),
+            Opacity = 0f, HoverOpacity = 1f, PressedOpacity = 1f,
+            HoverDurationMs = Motion.ControlFast,
+        });
+        Element facetSelector = Embed.Comp(() => new DropDownButton
+        {
+            Label = DiscographyRoute.FacetTitle(kind),
+            Items = facetItems,
+            Parts = facetParts,
+        }) with { Key = "discography-facet:" + route.Name };
+
+        // Breadcrumb: clickable artist name → back to the artist page, chevron, then the switchable facet title.
         Element breadcrumb = new BoxEl
         {
             Direction = 0, AlignItems = FlexAlign.Center, Gap = 10f,
@@ -100,7 +141,7 @@ sealed class DiscographyPage : Component
                     Children = [ new TextEl(artistName) { Size = 28f, Weight = 700, Color = Tok.TextSecondary, HoverColor = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis } ],
                 },
                 Icon(Icons.ChevronRight, 18f, Tok.TextTertiary),
-                new TextEl(DiscographyRoute.FacetTitle(kind)) { Size = 28f, Weight = 700, Color = Tok.TextPrimary },
+                facetSelector,
             ],
         };
 
