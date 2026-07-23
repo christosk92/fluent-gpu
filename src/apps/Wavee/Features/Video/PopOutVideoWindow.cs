@@ -5,39 +5,69 @@ using FluentGpu.Hooks;
 using FluentGpu.Media;
 using FluentGpu.Media.Windows;
 using FluentGpu.Signals;
+using FluentGpu.WindowsApi.Media.PlayReady;
+using Wavee.SpotifyLive;
 
 namespace Wavee.Features.Video;
 
 /// <summary>
-/// Root content of the detached, always-on-top pop-out video window (opened via <c>InputHooks.OpenDetachedWindow</c> —
-/// the window is its own composited <c>AppHost</c> + swapchain + video presenter). A full-bleed
-/// <see cref="MediaPlayerElement"/> on the clear Media-Foundation backend that (re)loads whenever the resolved
-/// video/Canvas URL changes. The OS window frame handles move/resize/close; the host sets always-on-top. The Spotify
-/// video-resolution layer (Canvas today; the gated PlayReady DRM path later) feeds <see cref="Url"/>.
+/// Root content of the detached, always-on-top pop-out video window (its own composited AppHost + swapchain + video
+/// presenter). Reads the resolved <see cref="PopOutVideoSource"/> and mounts a keyed <see cref="PopOutVideoStage"/> so
+/// the player rebuilds cleanly when the source changes (clear ↔ DRM / track change). The OS window frame handles
+/// move/resize/close; the host sets always-on-top.
 /// </summary>
 sealed class PopOutVideoWindow : Component
 {
-    /// <summary>The resolved, ready-to-play video/Canvas URL (null = nothing yet — shows the letterbox background).</summary>
-    public required IReadSignal<string?> Url { get; init; }
+    /// <summary>The resolved source (null = nothing yet — shows the letterbox background).</summary>
+    public required IReadSignal<PopOutVideoSource?> Source { get; init; }
 
     public override Element Render()
     {
-        // Clear MF backend registered once at mount; DRM (ProtectedMediaBackend + WithDrm) is added by the Spotify DRM
-        // lane once its runtime gate (the PlayReady/Widevine probe) is confirmed.
-        var player = UseMediaPlayer(b => b.WithBackend(MediaKind.MfVideoOrFile, new MfMediaPlayer()));
-        var url = Url.Value;                        // subscribe → re-render + reload on a URL change
-        var last = UseRef<string?>(null);
-        if (!string.Equals(url, last.Value, StringComparison.Ordinal))
-        {
-            last.Value = url;
-            if (!string.IsNullOrEmpty(url)) _ = player.Play(MediaSource.FromUri(url));
-        }
-
+        var src = Source.Value;   // subscribe → remount the stage on a source change
         return new BoxEl
         {
             Grow = 1,
-            Fill = Tok.MediaLetterbox,   // black surround behind the letterboxed frame (and before the first frame)
-            Children = [Embed.Comp(() => new MediaPlayerElement { Player = player, Stretch = MediaStretch.Uniform })],
+            Fill = Tok.MediaLetterbox,
+            Children = src is null
+                ? Array.Empty<Element>()
+                : [Embed.Comp(() => new PopOutVideoStage { Source = src }) with { Key = "stage:" + src.Key }],
         };
+    }
+}
+
+/// <summary>One player+surface for a FROZEN source (props freeze at mount; the parent remounts this on a source change).
+/// Builds the clear MF backend, or the clear+DRM MF backend (routing a DrmConfig source to the native PlayReady CDM),
+/// and opens the source once. The MediaPlayerElement uses THIS window's AppHost registry, so video composites here.</summary>
+sealed class PopOutVideoStage : Component
+{
+    public required PopOutVideoSource Source { get; init; }
+
+    public override Element Render()
+    {
+        var src = Source;
+        var player = UseMediaPlayer(b =>
+        {
+            if (src.IsDrm)
+                // MfMediaPlayer routes a DrmConfig-carrying source to the injected DRM backend (native in-process CDM);
+                // clear frames still use the proven engine path. ProtectedMediaBackend carries the parsed Spotify
+                // descriptor (init/segment/stride/PSSH); the relay POSTs the license challenge.
+                b.WithBackend(MediaKind.MfVideoOrFile, new MfMediaPlayer(new ProtectedMediaBackend(src.LicenseRelay, src.DrmDescriptor)))
+                 .WithDrm(src.LicenseRelay!);
+            else
+                b.WithBackend(MediaKind.MfVideoOrFile, new MfMediaPlayer());
+        });
+
+        var opened = UseRef(false);
+        if (!opened.Value)
+        {
+            opened.Value = true;
+            if (src.IsDrm)
+                // The descriptor drives the native open; the URI is advisory. DrmConfig routes to the DRM backend.
+                _ = player.Play(MediaSource.FromUri(src.DrmDescriptor!.InitUrl).With(new DrmConfig(DrmSystem.PlayReady, src.LicenseServerUri)));
+            else if (!string.IsNullOrEmpty(src.ClearUrl))
+                _ = player.Play(MediaSource.FromUri(src.ClearUrl));
+        }
+
+        return Embed.Comp(() => new MediaPlayerElement { Player = player, Stretch = MediaStretch.Uniform });
     }
 }

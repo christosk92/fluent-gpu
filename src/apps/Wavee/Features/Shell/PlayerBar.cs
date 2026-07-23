@@ -493,7 +493,7 @@ sealed class PlayerBarContent : Component
                         // video presenter). It plays PopOutVideoUrl on the clear MF backend; the DRM/Canvas resolver fills it.
                         popout.Value = hooks?.OpenDetachedWindow?.Invoke(new DetachedWindowRequest(
                             Loc.Get(Strings.Player.SwitchToVideo), new Size2(480, 270),
-                            new PopOutVideoWindow { Url = b.PopOutVideoUrl }, AlwaysOnTop: true));
+                            new PopOutVideoWindow { Source = b.PopOutVideoSource }, AlwaysOnTop: true));
                     }
                     else { popout.Value?.Close(); popout.Value = null; }
                 }, true, preferVideo, accent, buttonBox, buttonGlyph),

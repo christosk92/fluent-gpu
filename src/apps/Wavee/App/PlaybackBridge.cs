@@ -99,10 +99,11 @@ public sealed class PlaybackBridge
     /// follow-up — for now this is the seam the player-bar button toggles (reset on every track change).</summary>
     public Signal<bool> PreferVideo { get; } = new(false);
 
-    /// <summary>The resolved, ready-to-play video/Canvas URL for the now-playing track (null = none resolved yet). The
-    /// pop-out video window plays this on the clear MF backend; the Spotify video-resolution layer (Canvas today, DRM
-    /// once the PlayReady path is gated in) populates it. Reset to null on every track change.</summary>
-    public Signal<string?> PopOutVideoUrl { get; } = new(null);
+    /// <summary>The resolved video source for the now-playing track (null = none resolved yet): a clear/Canvas URL or a
+    /// PlayReady DRM descriptor + license relay. The pop-out / inline video surface plays it (clear on the MF backend,
+    /// DRM via the native CDM). The Spotify video-resolution layer (Canvas from the feed; PlayReady once the probe
+    /// confirms it) populates it. Reset to null on every track change.</summary>
+    public Signal<Wavee.SpotifyLive.PopOutVideoSource?> PopOutVideoSource { get; } = new(null);
 
     /// <summary>Monotonic "open the device picker" request. The critical "playback unsupported" toast's <em>Choose device</em>
     /// action bumps it; the player-bar <c>DevicesButton</c> watches it and opens its flyout.</summary>
@@ -325,7 +326,7 @@ public sealed class PlaybackBridge
     {
         var prevUri = CurrentTrack.Value?.Uri;
         CurrentTrack.Value = s.CurrentTrack;
-        if (s.CurrentTrack?.Uri != prevUri) { PreferVideo.Value = false; PopOutVideoUrl.Value = null; }   // a new track resets the swap toggle + resolved video url
+        if (s.CurrentTrack?.Uri != prevUri) { PreferVideo.Value = false; PopOutVideoSource.Value = null; }   // a new track resets the swap toggle + resolved video source
         RecomputeHasVideo();                                            // reflect the new track's cached video state (if any)
         CurrentContext.Value = s.ContextUri;
         IsPlaying.Value = s.IsPlaying;
