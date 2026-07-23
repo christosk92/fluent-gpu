@@ -34,10 +34,13 @@ public sealed record ProtectedVideoRequest
     public string? SegmentPrefix { get; init; }
     /// <summary>Media-segment name suffix (e.g. <c>.m4s</c>).</summary>
     public string? SegmentSuffix { get; init; }
-    /// <summary>First segment number.</summary>
+    /// <summary>First segment number (Spotify's timestamped segments start at 0; numbered content at 1).</summary>
     public int StartNumber { get; init; } = 1;
     /// <summary>Segment count to fetch.</summary>
     public int SegmentCount { get; init; } = 6;
+    /// <summary>Segment-number step: 1 for numbered <c>$Number$</c> content (Axinom/most VOD); Spotify names segments by
+    /// absolute time, so this is the segment length in seconds (segment <c>i</c> = <see cref="StartNumber"/> + i*stride).</summary>
+    public int SegmentStride { get; init; } = 1;
     /// <summary>Optional explicit PlayReady PSSH init data (else parsed natively from the init segment).</summary>
     public ReadOnlyMemory<byte> Pssh { get; init; }
     /// <summary>Optional <c>"Name: Value\n"</c> HTTP headers applied to segment fetches (auth for a real CDN).</summary>

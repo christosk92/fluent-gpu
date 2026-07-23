@@ -169,11 +169,13 @@ struct FgPlayReadyOpenDesc
     int32_t        psshLen;
     const wchar_t* httpHeaders;     // optional "Name: Value\n" lines applied to segment fetches (null => none)
     const wchar_t* licenseServerUrl;// optional license destination hint (advisory; the callback owns licensing)
+    int32_t        segmentStride;   // ABI-appended: segment-number step (1 = numbered $Number$; N = Spotify's N-second
+                                    // timestamped segments, e.g. startNumber=0, stride=segment_length). Guarded on structSize.
 };
 
 // The active open descriptor (copied deep by FgPlayReadyRunEx) + the managed license callback.
 static std::wstring       g_openInitUrl, g_openSegBase, g_openSegPrefix, g_openSegSuffix, g_openHeaders, g_openLicenseUrl;
-static int                g_openStartNumber = 1, g_openSegCount = 6;
+static int                g_openStartNumber = 1, g_openSegCount = 6, g_openSegStride = 1;
 static std::vector<uint8_t> g_openPssh;
 static FgLicenseCallback  g_licenseCallback = nullptr;
 static void*              g_licenseCtx = nullptr;
@@ -1928,7 +1930,7 @@ static bool RunCustomSourceAttempt(const std::wstring& storePath)
     //       supplies no init URL we fall back to the baked Axinom singlekey vector (legacy FgPlayReadyRun shim). ───────
     const std::wstring axBase = L"https://media.axprod.net/TestVectors/Dash/protected_dash_1080p_h264_singlekey/";
     std::wstring initUrl, segBase, segPrefix, segSuffix, segHeaders;
-    int startNumber = 1, segCount = 6;
+    int startNumber = 1, segCount = 6, segStride = 1;
 #ifdef FG_DESKTOP_DLL
     if (!g_openInitUrl.empty())
     {
@@ -1936,11 +1938,13 @@ static bool RunCustomSourceAttempt(const std::wstring& storePath)
         segBase    = g_openSegBase;
         segPrefix  = g_openSegPrefix;
         segSuffix  = g_openSegSuffix.empty() ? L".m4s" : g_openSegSuffix;
-        startNumber= g_openStartNumber > 0 ? g_openStartNumber : 1;
+        startNumber= g_openStartNumber >= 0 ? g_openStartNumber : 1;   // >= 0: Spotify's timestamped segments start at 0
         segCount   = g_openSegCount   > 0 ? g_openSegCount   : 1;
+        segStride  = g_openSegStride  > 0 ? g_openSegStride   : 1;      // 1 = numbered; N = N-second timestamped step
         segHeaders = g_openHeaders;
         LogLine("[cenc] source: descriptor initUrl=" + winrt::to_string(winrt::hstring(initUrl)) +
-                " segs=" + std::to_string(startNumber) + ".." + std::to_string(startNumber + segCount - 1));
+                " segs=" + std::to_string(startNumber) + ".." + std::to_string(startNumber + (segCount - 1) * segStride) +
+                " stride=" + std::to_string(segStride));
     }
     else
 #endif
@@ -1978,7 +1982,7 @@ static bool RunCustomSourceAttempt(const std::wstring& storePath)
     uint64_t decodeTicks = 0;
     for (int i = 0; i < segCount; i++)
     {
-        int num = startNumber + i;
+        int num = startNumber + i * segStride;
         std::wstring url = segBase + segPrefix + std::to_wstring(num) + segSuffix;
         auto seg = HttpGetBytes(url, st, segHeaders);
         if (st != 200 || seg.empty()) { LogLine("[cenc] media #" + std::to_string(num) + " HTTP " + std::to_string(st) + " — stop"); break; }
@@ -2272,7 +2276,7 @@ extern "C" __declspec(dllexport) int __stdcall FgPlayReadyRunEx(const wchar_t* b
     int mode = 0;
     g_openInitUrl.clear(); g_openSegBase.clear(); g_openSegPrefix.clear(); g_openSegSuffix.clear();
     g_openHeaders.clear(); g_openLicenseUrl.clear(); g_openPssh.clear(); g_kidHex.clear();
-    g_openStartNumber = 1; g_openSegCount = 6;
+    g_openStartNumber = 1; g_openSegCount = 6; g_openSegStride = 1;
     if (desc)
     {
         mode = desc->mode;
@@ -2280,8 +2284,10 @@ extern "C" __declspec(dllexport) int __stdcall FgPlayReadyRunEx(const wchar_t* b
         if (desc->segmentBaseUrl)   g_openSegBase     = desc->segmentBaseUrl;
         if (desc->segmentPrefix)    g_openSegPrefix   = desc->segmentPrefix;
         if (desc->segmentSuffix)    g_openSegSuffix   = desc->segmentSuffix;
-        if (desc->startNumber > 0)  g_openStartNumber = desc->startNumber;
+        if (desc->startNumber >= 0) g_openStartNumber = desc->startNumber;   // >= 0: Spotify timestamped segments start at 0
         if (desc->segmentCount > 0) g_openSegCount    = desc->segmentCount;
+        // ABI-appended field: only read when the managed struct is new enough to include it.
+        if (desc->structSize >= sizeof(FgPlayReadyOpenDesc) && desc->segmentStride > 0) g_openSegStride = desc->segmentStride;
         if (desc->httpHeaders)      g_openHeaders     = desc->httpHeaders;
         if (desc->licenseServerUrl) g_openLicenseUrl  = desc->licenseServerUrl;
         if (desc->pssh && desc->psshLen > 0) g_openPssh.assign(desc->pssh, desc->pssh + desc->psshLen);
