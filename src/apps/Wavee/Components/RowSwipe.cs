@@ -1,10 +1,38 @@
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Signals;
 
 namespace Wavee;
+
+/// <summary>Process-constant touch-digitizer probe. The per-row swipe belt is <c>touchOnly</c>, so on a machine with no
+/// touchscreen every row's <see cref="SwipeControl"/> is inert weight (35+ per list realize — a measured nav/scroll-mount
+/// cost). Skipping the wrapper there is look-identical (an untouchable touch-only swipe reveals nothing) and cuts that
+/// mount cost. Fails SAFE: any probe failure assumes touch present, so a feature is never removed on uncertainty.</summary>
+static partial class TouchInput
+{
+    private const int SM_MAXIMUMTOUCHES = 95;   // winuser.h: simultaneous touch points; 0 ⇒ no touch digitizer
+    private static int _cached = -1;            // -1 = not yet probed
+    public static bool Available
+    {
+        get
+        {
+            if (_cached < 0)
+            {
+                int max;
+                try { max = GetSystemMetrics(SM_MAXIMUMTOUCHES); }
+                catch { max = 1; }   // never DROP swipe on a probe error — assume touch present
+                _cached = max > 0 ? 1 : 0;
+            }
+            return _cached != 0;
+        }
+    }
+
+    [LibraryImport("user32.dll")]
+    private static partial int GetSystemMetrics(int nIndex);
+}
 
 /// <summary>
 /// The touch swipe-to-action layer for a row (Phase D): the THIRD projection of the shared action system
@@ -32,6 +60,7 @@ public static class RowSwipe
                                AppAction? leading = null, AppAction? trailing = null,
                                IReadSignal<int>? resetKey = null)
     {
+        if (!TouchInput.Available) return row;   // touchOnly swipe can't fire without a touch digitizer → skip the per-row wrapper
         var left = Project(leading, ctx);      // leading  → swipe right → left-revealed
         var right = Project(trailing, ctx);    // trailing → swipe left  → right-revealed
         if (left is null && right is null) return row;
@@ -52,6 +81,7 @@ public static class RowSwipe
                                     AppAction? leading = null, AppAction? trailing = null,
                                     IReadSignal<int>? resetKey = null)
     {
+        if (!TouchInput.Available) return row;   // see Wrap: no touch digitizer ⇒ the SwipeControl is inert, skip it
         var left = ProjectBound(leading, context);
         var right = ProjectBound(trailing, context);
         if (left is null && right is null) return row;

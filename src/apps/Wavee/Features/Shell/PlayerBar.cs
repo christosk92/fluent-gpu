@@ -166,6 +166,10 @@ sealed class PlayerBarContent : Component
     {
         TrackHeight = 4f, TrackCornerRadius = 2f, ThumbRingDiameter = 12f, InnerThumbDiameter = 8f, ThumbCornerRadius = 6f,
     };
+    static readonly Slider.SliderOptions VolumeSliderOptions = new()
+    {
+        ThumbToolTipValueConverter = static value => $"{Math.Clamp((int)MathF.Round(value * 100f), 0, 100)}%",
+    };
 
     public override Element Render()
     {
@@ -326,7 +330,7 @@ sealed class PlayerBarContent : Component
         if (showSubtitle && track is not null && err is null)
         {
             metaKids.Add(marqueeDisabled
-                ? new BoxEl { ClipToBounds = true, Children = [Embed.Comp(() => new NowPlayingArtistLinks())] }
+                ? new BoxEl { ClipToBounds = true, MinWidth = 0f, Children = [Embed.Comp(() => new NowPlayingArtistLinks(compact: true)) with { Key = "npartists:c" }] }
                 : Marquee.Content(() => new NowPlayingArtistLinks(),
                     new Marquee.Style
                     {
@@ -462,7 +466,8 @@ sealed class PlayerBarContent : Component
             rightKids.Add(new BoxEl
             {
                 Key = "volume-slider", Animate = ItemMotion,   // Slider.Create returns a component element (no Animate lane); wrap it like the other Embed.Comp items
-                Children = [Slider.Create(b.Volume, v => { _ = b.Player.SetVolumeAsync(v); }, length: 96f, thickness: 16f, style: RailStyle)],
+                Children = [Slider.Create(b.Volume, v => { _ = b.Player.SetVolumeAsync(v); }, options: VolumeSliderOptions,
+                    length: 96f, thickness: 16f, style: RailStyle)],
             });
         if (ui is not null && active)
             rightKids.Add(Transport(WaveeIcons.Lyrics,
@@ -664,17 +669,42 @@ sealed class PlayerBarContent : Component
         }
     }
 
-    // Reactive artist row for the player-bar marquee — reads bridge/nav from context so track changes re-skin without remount.
+    // Reactive artist row for the player-bar marquee — reads bridge/nav from context so track changes re-skin without
+    // remount. Compact mode (marquee disabled): a hard-clipped full credit list is bad UX (names vanish mid-word), so
+    // show the FIRST artist (ellipsizing) + the shared "+N" overflow chip that opens a flyout of ALL credited artists.
     sealed class NowPlayingArtistLinks : Component
     {
+        readonly bool _compact;
+        public NowPlayingArtistLinks(bool compact = false) { _compact = compact; }
+
         public override Element Render()
         {
             var b = UseContext(PlaybackBridge.Slot);
             var go = UseContext(HistoryStore.NavCtx);
             var artists = b?.CurrentTrack.Value?.Artists;
-            var kids = new List<Element>(artists is { Count: > 0 } ? artists.Count * 2 : 0);
-            if (artists is { Count: > 0 })
-                AddArtistLinks(kids, artists, go);
+            if (artists is not { Count: > 0 })
+                return new BoxEl { Direction = 0 };
+
+            if (_compact && artists.Count > 1)
+            {
+                var a = artists[0];
+                bool enabled = a.Uri.Length > 0;
+                var all = artists;
+                return new BoxEl
+                {
+                    Direction = 0, AlignItems = FlexAlign.Center, MinWidth = 0f, Gap = 4f,
+                    Children =
+                    [
+                        NavSpan(a.Name, () => { if (enabled) go?.Invoke("artist:" + a.Uri, a.Name); }, enabled, trim: true)
+                            with { Key = "artist:" + (a.Uri.Length > 0 ? a.Uri : a.Id + ":" + a.Name) },
+                        Embed.Comp(() => new ArtistMoreButton(all, (u, n) => go?.Invoke(u, n)))
+                            with { Key = "npmore:" + (a.Uri.Length > 0 ? a.Uri : a.Name) + ":" + all.Count },
+                    ],
+                };
+            }
+
+            var kids = new List<Element>(artists.Count * 2);
+            AddArtistLinks(kids, artists, go);
             return new BoxEl
             {
                 Direction = 0, AlignItems = FlexAlign.Center, Shrink = 0f,
@@ -685,20 +715,22 @@ sealed class PlayerBarContent : Component
 
     // A clickable now-playing meta link (artist / album). It drives its own foreground because TextEl.HoverColor follows
     // the engine's ancestor hover path too, which makes the album look hovered when the pointer is over the title line.
-    static Element NavSpan(string text, Action onClick, bool enabled)
-        => Embed.Comp(() => new NowPlayingMetaLink(text, onClick, enabled));
+    static Element NavSpan(string text, Action onClick, bool enabled, bool trim = false)
+        => Embed.Comp(() => new NowPlayingMetaLink(text, onClick, enabled, trim));
 
     sealed class NowPlayingMetaLink : Component
     {
         readonly string _text;
         readonly Action _onClick;
         readonly bool _enabled;
+        readonly bool _trim;   // ellipsize under width pressure (the compact artists line) instead of hard-clipping
 
-        public NowPlayingMetaLink(string text, Action onClick, bool enabled)
+        public NowPlayingMetaLink(string text, Action onClick, bool enabled, bool trim = false)
         {
             _text = text;
             _onClick = onClick;
             _enabled = enabled;
+            _trim = trim;
         }
 
         public override Element Render()
@@ -711,8 +743,15 @@ sealed class PlayerBarContent : Component
                 OnHoverMove = _enabled ? _ => { if (!hover.Peek()) hover.Value = true; } : null,
                 OnPointerExit = _enabled ? () => { if (hover.Peek()) hover.Value = false; } : null,
                 ClipToBounds = true,
+                MinWidth = _trim ? 0f : float.NaN,
+                Shrink = _trim ? 1f : 1f,
                 Role = _enabled ? AutomationRole.Hyperlink : AutomationRole.Text,
-                Children = [new TextEl(_text) { Size = 12f, Color = hover.Value ? Tok.TextPrimary : Tok.TextSecondary }],
+                Children =
+                [
+                    _trim
+                        ? new TextEl(_text) { Size = 12f, Color = hover.Value ? Tok.TextPrimary : Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f }
+                        : new TextEl(_text) { Size = 12f, Color = hover.Value ? Tok.TextPrimary : Tok.TextSecondary },
+                ],
             };
         }
     }

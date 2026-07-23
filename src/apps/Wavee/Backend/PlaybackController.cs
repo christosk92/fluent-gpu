@@ -470,9 +470,15 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             return Done;
         _lastIntentVolume = volume01;
 
+        bool local = RouteLocal();
         _projection.NoteLocalCommand();          // optimistic: a stale cluster echo won't snap the slider back
-        _projection.SetLocalVolume(volume01);    // move the slider immediately (it follows the active device's volume)
-        if (RouteLocal()) return Local(() => { _host.SetVolume(volume01); EmitState(EvKind.VolumeChanged); });
+        if (local)
+        {
+            _lastVolume = volume01;              // suppress OnProjectionChanged echo; the explicit host write below owns it
+            _projection.SetLocalVolume(volume01, _host.PositionMs);   // volume + authoritative timeline publish atomically
+            return Local(() => { _host.SetVolume(volume01); EmitState(EvKind.VolumeChanged); });
+        }
+        _projection.SetLocalVolume(volume01);    // remote optimistic slider; its cluster timeline remains authoritative
         var target = _projection.ActiveDeviceId;
         if (_outbound is null || string.IsNullOrEmpty(target)) return Done;
         _remoteVolumeTx.Post(() => _ = ForwardVolumeAsync(target, volume01, CancellationToken.None));
@@ -496,7 +502,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         _lastVolume = slider01;                  // suppress the OnProjectionChanged echo-down to the host
         _lastIntentVolume = slider01;
         _projection.NoteLocalCommand();          // a stale cluster echo must not snap the slider back (LocalCmdWindow)
-        _projection.SetLocalVolume(slider01);    // move the bridge slider (Volume signal via PushState)
+        _projection.SetLocalVolume(slider01, _host.PositionMs);   // move slider without publishing a stale position
         EmitState(EvKind.VolumeChanged);         // announce our device volume (coalesced PutState) — no outbound PUT
     }
 

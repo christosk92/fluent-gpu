@@ -101,6 +101,19 @@ public interface IGpuDevice : IDisposable
     /// (headless), so it reads as "no stall" rather than missing.</summary>
     double LastFenceWaitMs => 0;
 
+    /// <summary>Diagnostic (FG_GPU_TIMING=1): the TRUE on-GPU wall-time (ms) of the most recent submitted frame, measured
+    /// by a begin/end timestamp-query pair bracketing the whole command list (resolved one frame later, so it lags by one
+    /// frame). Unlike <see cref="LastFenceWaitMs"/> — which conflates raster with the vblank/present-latency wait — this is
+    /// the actual rasterization cost, the number that says whether a maximized 60fps lock is GPU-fill-bound (render ≳ the
+    /// refresh budget) or merely vblank-quantized (render &lt; budget but the fence stalls). 0 when timing is off or
+    /// unsupported. The host folds it into <c>FrameStats.GpuRenderMs</c>.</summary>
+    double LastGpuRenderMs => 0;
+
+    /// <summary>Diagnostic (FG_GPU_TIMING=1): of <see cref="LastGpuRenderMs"/>, the SCENE-RASTER portion (clear + draw-list
+    /// playback + layer composites), excluding image uploads and baked-blur. When this ≈ the whole and ≳ the refresh budget,
+    /// the maximize lock is content fill/overdraw (not uploads/blur). 0 when off. Host folds into <c>FrameStats.GpuSceneMs</c>.</summary>
+    double LastGpuSceneMs => 0;
+
     /// <summary>True when decoded image pixels are staged but not yet copied to their resident GPU texture, or when
     /// transient upload resources are awaiting fence-gated release. The host must NOT elide that submit, or the texture
     /// stays empty and deferred upload memory can remain resident until unrelated UI work happens. Default false (a

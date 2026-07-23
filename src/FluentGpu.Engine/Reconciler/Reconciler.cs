@@ -1,4 +1,7 @@
 using System.Buffers;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Text;
 using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -190,11 +193,69 @@ public sealed class TreeReconciler
     private float _themeTransitionMs = float.NaN;        // live-re-theme cross-fade duration; armed only during a RethemeAll flush
     private readonly List<CompEntry> _rethemeScratch = new();   // snapshot of _comps.Values for RethemeAll (defensive vs reentrancy)
 
+    // FG_RENDER_CENSUS=1: per-frame type histogram of RunComponent/RunRoot, dumped once when FlushMs spikes. Off = null
+    // dict + one branch; never allocates on the hot path when the env flag is unset.
+    private static readonly bool s_renderCensus = Diag.EnvFlag("FG_RENDER_CENSUS");
+    private Dictionary<string, int>? _renderCensus;
+    private readonly List<KeyValuePair<string, int>> _censusScratch = new(32);
+    private readonly StringBuilder _censusSb = new(256);
+    /// <summary>Last spike dump line (empty when none this process). Probes / stderr consumers can peek it.</summary>
+    public string LastRenderCensusDump { get; private set; } = "";
+
     /// <summary>True (and reset) if any mount/update/remove happened since the last call — the host's "layout needed" gate.</summary>
     public bool ConsumeReconciled() { var r = _reconciled; _reconciled = false; return r; }
 
     /// <summary>Number of component render-effects that ran since the last call (proves granular re-render in tests).</summary>
     public int ConsumeRenderCount() { var c = _renderCount; _renderCount = 0; return c; }
+    /// <summary>Current frame's render-effect count without resetting (census dump before <see cref="ConsumeRenderCount"/>).</summary>
+    public int PeekRenderCount() => _renderCount;
+
+    /// <summary>Clear the per-frame render-type histogram (no-op unless <c>FG_RENDER_CENSUS=1</c>). Call at Paint start.</summary>
+    public void BeginRenderCensus()
+    {
+        if (!s_renderCensus) return;
+        _renderCensus ??= new Dictionary<string, int>(64, StringComparer.Ordinal);
+        _renderCensus.Clear();
+    }
+
+    private void NoteRenderCensus(Component comp)
+    {
+        if (_renderCensus is null) return;   // census off (the steady/shipping case) — no GetType().Name work below
+        string typeName = comp.GetType().Name;
+        _renderCensus.TryGetValue(typeName, out int n);
+        _renderCensus[typeName] = n + 1;
+    }
+
+    /// <summary>If this frame's flush is a hitch (FlushMs ≥ 12 or comps ≥ 25), emit one census line to <see cref="Diag.Sink"/>
+    /// / stderr and stash it in <see cref="LastRenderCensusDump"/>. Returns the line (or null when not a spike / census off).</summary>
+    public string? MaybeDumpRenderCensus(double flushMs, double reactiveFlushMs, double virtualRealizeMs, int comps, bool scrollActive)
+    {
+        if (_renderCensus is null) return null;
+        if (flushMs < 12.0 && comps < 25) { LastRenderCensusDump = ""; return null; }
+        _censusScratch.Clear();
+        foreach (var kv in _renderCensus) _censusScratch.Add(kv);
+        _censusScratch.Sort(static (a, b) => b.Value.CompareTo(a.Value));
+        _censusSb.Clear();
+        _censusSb.Append("[render-census] flush=").Append(flushMs.ToString("0.0", CultureInfo.InvariantCulture))
+            .Append("ms rx=").Append(reactiveFlushMs.ToString("0.0", CultureInfo.InvariantCulture))
+            .Append(" vr=").Append(virtualRealizeMs.ToString("0.0", CultureInfo.InvariantCulture))
+            .Append(" comps=").Append(comps.ToString(CultureInfo.InvariantCulture))
+            .Append(scrollActive ? " scroll=1" : " scroll=0")
+            .Append(" top=");
+        int n = Math.Min(12, _censusScratch.Count);
+        if (n == 0) _censusSb.Append("(none)");
+        for (int i = 0; i < n; i++)
+        {
+            if (i > 0) _censusSb.Append(',');
+            _censusSb.Append(_censusScratch[i].Key).Append('×').Append(_censusScratch[i].Value.ToString(CultureInfo.InvariantCulture));
+        }
+        string line = _censusSb.ToString();
+        LastRenderCensusDump = line;
+        // Always mirror to stderr so FG_FPS_LOG redirects capture spikes even when Diag.Sink is Debug-only (Wavee file default = Info).
+        Console.Error.WriteLine(line);
+        if (Diag.Sink is { } sink) sink(line);
+        return line;
+    }
 
     /// <summary>The reactive scheduler — one per host; signals schedule render-effects/bindings here, the host flushes it.</summary>
     public ReactiveRuntime Runtime { get; }
@@ -319,6 +380,7 @@ public sealed class TreeReconciler
     private void RunRoot(Component root)
     {
         _renderCount++;
+        NoteRenderCensus(root);
         Element newRoot = root.RenderWithHooks();
         RenderRootDiff(newRoot);
     }
@@ -740,6 +802,7 @@ public sealed class TreeReconciler
         // Remember that a render was owed; ReactivateKeepAliveEntry replays it once when the subtree comes back.
         if (entry.Parked) { entry.DeferredRender = true; return; }
         _renderCount++;
+        NoteRenderCensus(entry.Comp);
         if (Diag.Enabled) Diag.Event("render", entry.Comp.GetType().Name);   // who re-rendered (granularity diagnosis)
         var comp = entry.Comp;
         Element newRendered = comp.RenderWithHooks();

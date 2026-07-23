@@ -46,6 +46,14 @@ public static class SceneRecorder
 {
     private const bool EnableSubtreeCull = true;
 
+    // Opaque occlusion cull (FG_OCCLUSION_CULL=1, OPT-IN): skip a node's own visual when a later-drawn direct child
+    // provably, fully, opaquely covers it — those fill/border pixels are overwritten regardless, so the emit is dead work
+    // (finding: the nested opaque background stack overdraws 4-8× with no z-reject). DEFAULT OFF because a wrong cull hides
+    // UI; the predicate is deliberately strict (visible, unclipped, square, fully-opaque Box child whose absolute rect
+    // fully contains the node's visible rect, and no transform animation in flight) so it only ever fires when the node's
+    // pixels are guaranteed dead. Enable to A/B; promote to default once eyeballed clean.
+    private static readonly bool s_occlusionCull = Environment.GetEnvironmentVariable("FG_OCCLUSION_CULL") == "1";
+
     // Opt-in scroll diagnostics: set FG_SCROLLLOG=1, run, scroll, copy the [scroll] lines.
     private static readonly bool ScrollLog = Environment.GetEnvironmentVariable("FG_SCROLLLOG") == "1";
     private static int _scrollLogFrame;
@@ -491,6 +499,34 @@ public static class SceneRecorder
             throw new InvalidOperationException($"SceneRecorder.Walk exceeded {MaxRecordDepth} levels at node {node.Raw.Index} — runaway/cyclic scene tree.");
     }
 
+    // True when a direct child provably, fully, opaquely covers this node's VISIBLE rect — so the node's own fill/border
+    // are dead pixels the child overwrites (all children paint AFTER the node's own visual, in painter order). Strict by
+    // design; any doubt returns false. Only reached when FG_OCCLUSION_CULL is on.
+    private static bool IsOccludedByOpaqueChild(SceneStore scene, NodeHandle node, in RectF nodeDevice, in RectF clip, bool inMotion)
+    {
+        if (inMotion) return false;   // a transform in flight ⇒ AbsoluteRect may not equal the drawn rect — don't risk it
+        RectF visible = nodeDevice.Intersect(clip);
+        if (visible.W <= 0f || visible.H <= 0f) return false;
+        for (var c = scene.FirstChild(node); !c.IsNull; c = scene.NextSibling(c))
+        {
+            if (!scene.IsLive(c)) continue;
+            var cf = scene.Flags(c);
+            if ((cf & NodeFlags.Visible) == 0) continue;
+            if ((cf & NodeFlags.ClipsToBounds) != 0) continue;   // a self-clipping child may cover less than its bounds
+            ref readonly NodePaint cp = ref scene.Paint(c);
+            if (cp.VisualKind != VisualKind.Box) continue;
+            if (cp.Fill.A < 1f || cp.Opacity < 1f) continue;     // must paint FULLY opaque to overwrite
+            if (cp.BlurSigma > 0.01f || cp.OpacityGroup) continue;
+            var cn = cp.Corners;
+            if (cn.TopLeft != 0f || cn.TopRight != 0f || cn.BottomRight != 0f || cn.BottomLeft != 0f) continue;  // square only (rounded reveals corners)
+            RectF cb = scene.AbsoluteRect(c);
+            if (cb.X <= visible.X && cb.Y <= visible.Y
+                && cb.X + cb.W >= visible.X + visible.W && cb.Y + cb.H >= visible.Y + visible.H)
+                return true;   // this child's opaque square fill fully contains the node's visible rect
+        }
+        return false;
+    }
+
     private static SpanRecordResult Walk(SceneStore scene, DrawList dl, ImageCache? images, NodeHandle node, Affine2D parentWorld, float parentOpacity,
                                          int depth, RectF clip, in FocusVisualStyle focus, in TextEditStyle textEdit, ColorF scrollThumb, ColorF scrollTrack,
                                          float parentScaleX, float parentScaleY, bool parentInMotion, bool parentScrollInMotion, InheritedState inherited,
@@ -877,10 +913,17 @@ public static class SceneRecorder
                 if (c4.TopRight <= 0f && c4.BottomRight <= 0f) sdfBox = new RectF(sdfBox.X, sdfBox.Y, sdfBox.W + rDev, sdfBox.H);
                 if (c4.TopLeft <= 0f && c4.BottomLeft <= 0f) sdfBox = new RectF(sdfBox.X - rDev, sdfBox.Y, sdfBox.W + rDev, sdfBox.H);
                 dl.PushClipRounded(childClip, sdfBox, rDev, key);
+                pushedClip = true;
             }
-            else
+            // A plain scissor equal to the clip ALREADY in effect is a no-op push — very common: a ClipsToBounds container
+            // whose device bounds already contain the incoming clip (the shell's nested page/content-host panels). Skip the
+            // PushClip+PopClip pair + its two sort entries: the active scissor is unchanged, so children clip identically.
+            // Cuts command-stream bloat and scissor churn on every such container, every frame, incl. every reused span.
+            else if (childClip != recordClip)
+            {
                 dl.PushClip(childClip, key);
-            pushedClip = true;
+                pushedClip = true;
+            }
         }
 
         // ── acrylic: snapshot + blur the backdrop drawn so far, composite the frosted surface, then content draws on top ──
@@ -919,6 +962,12 @@ public static class SceneRecorder
         float pendingBorderHoverT = 0f, pendingBorderPressT = 0f;
 
         bool drawSelf = hasOwnVisual && ownVisible;
+        // Occlusion cull (opt-in): drop this node's own fill when a later opaque square child fully covers it. Only when
+        // the node has NO border — the SDF border ring straddles the edge (extends ~stroke/2 OUTSIDE deviceBounds), which a
+        // child that merely contains deviceBounds wouldn't cover, so a bordered node keeps drawing to be safe.
+        if (drawSelf && s_occlusionCull && p.BorderWidth <= 0f && p.ValidationBorder.A <= 0f
+            && IsOccludedByOpaqueChild(scene, node, in deviceBounds, in recordClip, inMotion))
+            drawSelf = false;
         GradientSpec nodeGradient = default;
         bool hasNodeGradient = maybeSparsePaint && scene.TryGetGradient(node, out nodeGradient) && nodeGradient.Stops is { Length: > 0 };
         if (drawSelf)
@@ -1186,7 +1235,9 @@ public static class SceneRecorder
             childState = childState.WithUnderElevateRoot();
         // Logically-detached exits remain visually owned by this node. Emit them before live children so incoming
         // content paints over them while this parent's transform, opacity/layers, clip, and popup target stay active.
-        var exitingChildren = scene.OrphanChildrenOf(node);
+        // Perf: OrphanCount is a scene-wide field (0 whenever no presence-exit animation is in flight = the steady case),
+        // so gate the per-node dictionary probe on it — skips thousands of always-null hash lookups per maximized frame.
+        var exitingChildren = scene.OrphanCount > 0 ? scene.OrphanChildrenOf(node) : null;
         if (exitingChildren is not null)
             for (int i = 0; i < exitingChildren.Count; i++)
             {

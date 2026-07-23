@@ -50,6 +50,14 @@ internal sealed unsafe class RoundRectPipeline : IDisposable
 
     private SdfSharedResources _shared = null!;
     private ID3D12PipelineState* _pso;
+    // Opaque plain-rect fast path (gpu-renderer overdraw pass): a NO-BLEND PSO + a minimal no-SDF shader for fills that are
+    // fully opaque, square, unstroked, and outside any rounded clip. Those are the large background/panel fills that
+    // dominate the pixel budget; drawing them with a plain opaque write (no read-modify-write blend, no fwidth/branch SDF,
+    // no AA-inflated quad) is ~2× cheaper on a tiled GPU. FAIL-SAFE: null when its shader/PSO didn't build — the device
+    // then draws every rect through _pso exactly as before, so a build failure degrades to "no optimization", never a crash.
+    private ID3D12PipelineState* _psoOpaque;
+    /// <summary>True when the opaque fast-path PSO built successfully; the device segments rect runs by opacity only then.</summary>
+    public bool HasOpaquePso => _psoOpaque != null;
     private readonly ID3D12Resource*[] _instances = new ID3D12Resource*[FrameCount];   // structured buffer of RectInstance per frame-in-flight (upload heap, persistently mapped)
     private readonly RectInstance*[] _mapped = new RectInstance*[FrameCount];
     private int _cursor;
@@ -220,10 +228,47 @@ float4 PSMain(VSOut i) : SV_Target
 }
 """;
 
+    // Minimal shader for the opaque fast path: the SAME Inst layout / root signature / quad VB as the main pipeline (so the
+    // instance SRV + shared state bind identically), but NO quad inflation, NO SDF, NO fwidth/branches — a plain opaque
+    // rectangle written with premultiplied alpha. Paired with a no-blend PSO; only reached for instances the device proved
+    // opaque+square+unstroked+unclipped, whose edges are pixel-aligned so no AA feather is needed.
+    private const string OpaqueHlsl = """
+struct Inst
+{
+    float2 pos; float2 size;
+    float4 radii;
+    float4 color;
+    float4 m; float2 t; float opacity; float stroke;
+    float2 dash; float kind; float cellPx;
+    float4 colorB;
+    float4 clip;
+    float clipR; float3 pad;
+};
+StructuredBuffer<Inst> gInst : register(t0);
+cbuffer Root : register(b0) { float2 gViewport; };
+struct VSO { float4 pos : SV_Position; float4 color : TEXCOORD0; };
+
+VSO VSMain(float2 corner : POSITION, uint iid : SV_InstanceID)
+{
+    Inst it = gInst[iid];
+    float2 lp = it.pos + corner * it.size;   // no inflation: a plain opaque rect needs no AA-feather margin
+    float2 world = float2(it.m.x * lp.x + it.m.z * lp.y + it.t.x,
+                          it.m.y * lp.x + it.m.w * lp.y + it.t.y);
+    float2 ndc = float2(world.x / gViewport.x * 2.0 - 1.0, 1.0 - world.y / gViewport.y * 2.0);
+    VSO o; o.pos = float4(ndc, 0.0, 1.0); o.color = it.color; return o;
+}
+
+float4 PSMain(VSO i) : SV_Target
+{
+    return float4(i.color.rgb * i.color.a, i.color.a);   // premultiplied (predicate guarantees a==1)
+}
+""";
+
     public void Init(ID3D12Device* device, SdfSharedResources shared)
     {
         _shared = shared;
         BuildPipeline(device);
+        TryBuildOpaquePipeline(device);   // best-effort; leaves _psoOpaque null (fall back to _pso) on any failure
         BuildBuffers(device);
     }
 
@@ -232,9 +277,11 @@ float4 PSMain(VSOut i) : SV_Target
         if ((int)hr < 0) throw new InvalidOperationException($"{what} failed: 0x{(uint)hr:X8}");
     }
 
-    private static ID3DBlob* Compile(string entry, string target)
+    private static ID3DBlob* Compile(string entry, string target) => CompileFrom(Hlsl, entry, target);
+
+    private static ID3DBlob* CompileFrom(string source, string entry, string target)
     {
-        byte[] src = Encoding.ASCII.GetBytes(Hlsl);
+        byte[] src = Encoding.ASCII.GetBytes(source);
         byte[] ent = Encoding.ASCII.GetBytes(entry + "\0");
         byte[] tgt = Encoding.ASCII.GetBytes(target + "\0");
         ID3DBlob* code = null; ID3DBlob* err = null;
@@ -305,6 +352,56 @@ float4 PSMain(VSOut i) : SV_Target
         ps->Release();
     }
 
+    // Best-effort build of the no-blend opaque PSO: identical desc to _pso (same root sig / input layout / topology / RTV /
+    // rasterizer / depth-off) EXCEPT the minimal opaque shaders and BlendEnable=FALSE. Any failure leaves _psoOpaque null,
+    // and the device then routes every rect through _pso (unchanged behavior) — so this can never crash or regress the app.
+    private void TryBuildOpaquePipeline(ID3D12Device* device)
+    {
+        ID3DBlob* vs = null, ps = null;
+        try
+        {
+            vs = CompileFrom(OpaqueHlsl, "VSMain", "vs_5_1");
+            ps = CompileFrom(OpaqueHlsl, "PSMain", "ps_5_1");
+            byte[] semantic = Encoding.ASCII.GetBytes("POSITION\0");
+            fixed (byte* sem = semantic)
+            {
+                D3D12_INPUT_ELEMENT_DESC elem = default;
+                elem.SemanticName = (sbyte*)sem;
+                elem.SemanticIndex = 0;
+                elem.Format = DXGI_FORMAT.DXGI_FORMAT_R32G32_FLOAT;
+                elem.InputSlot = 0;
+                elem.AlignedByteOffset = 0;
+                elem.InputSlotClass = D3D12_INPUT_CLASSIFICATION.D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
+                elem.InstanceDataStepRate = 0;
+
+                D3D12_GRAPHICS_PIPELINE_STATE_DESC pd = default;
+                pd.pRootSignature = _shared.RootSignature;
+                pd.VS = new D3D12_SHADER_BYTECODE { pShaderBytecode = vs->GetBufferPointer(), BytecodeLength = vs->GetBufferSize() };
+                pd.PS = new D3D12_SHADER_BYTECODE { pShaderBytecode = ps->GetBufferPointer(), BytecodeLength = ps->GetBufferSize() };
+                pd.InputLayout = new D3D12_INPUT_LAYOUT_DESC { pInputElementDescs = &elem, NumElements = 1 };
+                pd.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE.D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+                pd.NumRenderTargets = 1;
+                pd.RTVFormats[0] = DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM;
+                pd.SampleDesc.Count = 1;
+                pd.SampleMask = uint.MaxValue;
+                pd.RasterizerState.FillMode = D3D12_FILL_MODE.D3D12_FILL_MODE_SOLID;
+                pd.RasterizerState.CullMode = D3D12_CULL_MODE.D3D12_CULL_MODE_NONE;
+                pd.RasterizerState.DepthClipEnable = BOOL.TRUE;
+                // The whole point: a plain opaque write, no read-modify-write blend.
+                pd.BlendState.RenderTarget[0].BlendEnable = BOOL.FALSE;
+                pd.BlendState.RenderTarget[0].RenderTargetWriteMask = (byte)D3D12_COLOR_WRITE_ENABLE.D3D12_COLOR_WRITE_ENABLE_ALL;
+                pd.DepthStencilState.DepthEnable = BOOL.FALSE;
+                pd.DepthStencilState.StencilEnable = BOOL.FALSE;
+
+                ID3D12PipelineState* pso;
+                if ((int)device->CreateGraphicsPipelineState(&pd, __uuidof<ID3D12PipelineState>(), (void**)&pso) >= 0)
+                    _psoOpaque = pso;
+            }
+        }
+        catch { _psoOpaque = null; }
+        finally { if (vs != null) vs->Release(); if (ps != null) ps->Release(); }
+    }
+
     private void BuildBuffers(ID3D12Device* device)
     {
         for (int f = 0; f < FrameCount; f++)
@@ -345,7 +442,7 @@ float4 PSMain(VSOut i) : SV_Target
     /// false, only the per-run instance SRV offset + draw are recorded. Returns false when the instance buffer is full
     /// and nothing was recorded (the command-list state is then untouched).</summary>
     public bool Record(ID3D12GraphicsCommandList* cmd, ReadOnlySpan<RectInstance> instances, float vpW, float vpH,
-                       bool bindSharedState = true, bool bindPipelineState = true)
+                       bool bindSharedState = true, bool bindPipelineState = true, bool opaque = false)
     {
         int start = _cursor;
         int count = Math.Min(instances.Length, MaxInstances - start);
@@ -363,7 +460,7 @@ float4 PSMain(VSOut i) : SV_Target
             cmd->IASetVertexBuffers(0, 1, &qv);
         }
         if (bindPipelineState)
-            cmd->SetPipelineState(_pso);
+            cmd->SetPipelineState(opaque && _psoOpaque != null ? _psoOpaque : _pso);
         cmd->SetGraphicsRootShaderResourceView(1, _activeGva + (ulong)(start * sizeof(RectInstance)));
         cmd->DrawInstanced(4, (uint)count, 0, 0);
         return true;
@@ -374,5 +471,6 @@ float4 PSMain(VSOut i) : SV_Target
         for (int f = 0; f < FrameCount; f++)
             if (_instances[f] != null) { _instances[f]->Unmap(0, null); D3D12MemoryDiagnostics.Release(_instances[f], "RoundRect.InstanceUpload"); _instances[f]->Release(); _instances[f] = null; }
         if (_pso != null) _pso->Release();
+        if (_psoOpaque != null) { _psoOpaque->Release(); _psoOpaque = null; }
     }
 }

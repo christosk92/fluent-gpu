@@ -21,17 +21,22 @@ public static class Surfaces
     internal static ColorF ArtworkPlaceholder =>
         Tok.Theme == ThemeKind.Dark ? ColorF.FromRgba(0x2A, 0x2A, 0x2A) : ColorF.FromRgba(0xF2, 0xF2, 0xF2);
 
-    // WinUI album/playlist PaletteBackdropBrush: solid dark α=60 / light α=38. Kept as a two-stop gradient so the
-    // existing Gradient= call sites stay unchanged; both stops share the same alpha (no fade-out before the tracklist).
-    const float HeroWashDarkA = 60f / 255f;   // ≈0.235
-    const float HeroWashLightA = 38f / 255f;  // ≈0.149
+    // A restrained, top-anchored accent fade (Spotify's top-of-page colour band): a soft tint over the header that
+    // fades out well before the tracklist, so the art colour reads as an accent — never a full-page flood. The peak
+    // alpha is low and the falloff is steep (transparent by ~55% down, clear below); the previous solid WinUI-parity
+    // fill (dark α≈0.235 / light α≈0.149, both stops equal — no fade) overpowered a strongly-coloured cover.
+    const float HeroWashDarkA = 0.15f;    // peak at the top edge; was 60f/255f ≈0.235 painted solid
+    const float HeroWashLightA = 0.10f;   // peak at the top edge; was 38f/255f ≈0.149 painted solid
+    const float HeroWashFade = 0.55f;     // top→transparent by this fraction of the page; nothing below it
 
-    /// <summary>Page wash over Mica — solid WinUI-parity alphas (not a top→transparent fade).</summary>
+    /// <summary>Page wash over Mica — a soft top-anchored accent fade (not an edge-to-edge fill).</summary>
     public static GradientSpec HeroWash(ColorF accent)
     {
         float a = Tok.Theme == ThemeKind.Light ? HeroWashLightA : HeroWashDarkA;
-        var c = accent with { A = a };
-        return GradientDown(new GradientStop(0f, c), new GradientStop(1f, c));
+        return GradientDown(
+            new GradientStop(0f, accent with { A = a }),
+            new GradientStop(HeroWashFade, accent with { A = 0f }),
+            new GradientStop(1f, accent with { A = 0f }));
     }
 
     /// <summary>A neutral album-art placeholder: the app's skeleton tile (<see cref="Tok.FillCardDefault"/>) that

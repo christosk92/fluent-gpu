@@ -17,7 +17,11 @@ public static class WasapiPcm
     public static MixFormat ProbeFormat()
     {
         using var probe = new WasapiAudioDevice(new MixFormat(48000, 2));
-        return probe.IsReady ? probe.Format : new MixFormat(48000, 2);
+        if (probe.IsReady) return probe.Format;
+        // The device never came up, so we can't know its clock — fall back to 48k, but say so loudly: a wrong guess here is
+        // a second route to a decoder/hardware rate divergence (slowed/pitched playback). DiagSink is optional (dev-only).
+        WasapiAudioDevice.DiagSink?.Invoke("probe FAILED, falling back to 48000 - device rate unknown");
+        return new MixFormat(48000, 2);
     }
 
     /// <summary>Build the WASAPI-backed PCM backend (spec §7). <paramref name="effects"/> supplies the live

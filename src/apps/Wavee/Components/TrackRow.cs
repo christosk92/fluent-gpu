@@ -5,11 +5,63 @@ using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Scene;
 using FluentGpu.Signals;
 using Wavee.Core;
 using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
+
+/// <summary>The "+N" artist-overflow chip: a small tertiary "+N" that opens a MenuFlyout listing the given
+/// artists, each navigating to its own page. The shared answer to "more credited artists than the line can
+/// show" — the artist chart's feat line and the player bar's subtitle both use it, so overflow never clips
+/// a name silently.</summary>
+sealed class ArtistMoreButton : Component
+{
+    readonly IReadOnlyList<ArtistRef> _artists;
+    readonly Action<string, string?> _go;
+    readonly int _shown;   // artists already visible inline — the chip label counts only the hidden rest
+
+    public ArtistMoreButton(IReadOnlyList<ArtistRef> artists, Action<string, string?> go, int shown = 1)
+    { _artists = artists; _go = go; _shown = shown; }
+
+    public override Element Render()
+    {
+        var anchor = UseRef<NodeHandle>(default);
+        var handle = UseRef<OverlayHandle?>(null);
+        var svc = UseContext(Overlay.Service);
+        int extra = Math.Max(0, _artists.Count - _shown);
+
+        void Toggle()
+        {
+            if (svc is null) return;
+            if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
+            var items = new MenuFlyoutItem[_artists.Count];
+            for (int i = 0; i < _artists.Count; i++)
+            {
+                var a = _artists[i];
+                items[i] = new MenuFlyoutItem(a.Name, Invoke: () => _go("artist:" + a.Uri, a.Name));
+            }
+            handle.Value = svc.Open(
+                () => anchor.Value,
+                () => MenuFlyout.Create(items, () => handle.Value?.Close()),
+                FlyoutPlacement.BottomEdgeAlignedLeft,
+                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
+            handle.Value.ClosedAction = () => handle.Value = null;
+        }
+
+        return new BoxEl
+        {
+            Shrink = 0f, Padding = new Edges4(2f, 0f, 2f, 0f),
+            OnRealized = h => anchor.Value = h,
+            Role = AutomationRole.Button, Cursor = CursorId.Hand, OnClick = Toggle,
+            Children =
+            [
+                new TextEl("+" + extra) { Size = 11f, Weight = 600, Color = Tok.TextTertiary },
+            ],
+        };
+    }
+}
 
 // Which optional columns a track row shows. #, Title and Duration are always present. Cell build order (and the matching
 // track widths) is: # · ♥ · (thumb) · Title · Album · AddedBy · DateAdded · Video · Plays · Duration. SHARED by the detail
@@ -18,10 +70,8 @@ namespace Wavee;
 // Tier = the resolved width tier this set was built for — carried here so Grid/Header/TracksFor all derive the SAME
 // tier-scaled padding/gap (the alignment invariant). Both are defaulted so the many non-tiered ColumnSet sites (search,
 // artist "Popular", queue, drawers) keep their current look (Actions present, tier-0 spacing).
-// FullPlays = the Plays cell shows the exact comma-separated count ("3,434,405,128") instead of the compact "3.43B" —
-// for wide surfaces (the artist top-tracks chart) where the abbreviated form reads underwhelming; needs a ~96px column.
 internal readonly record struct ColumnSet(bool Album, bool By, bool Date, bool Video, bool Plays, bool Heart, bool Thumb,
-                                          bool Actions = true, int Tier = 0, bool FullPlays = false);
+                                          bool Actions = true, int Tier = 0);
 
 // ── the ONE track-row cell, used EVERYWHERE a track is shown (detail list, library pane, artist "Popular", search) ──
 // This is the single source of truth for what a track row LOOKS like and how it BEHAVES at rest/hover/now-playing — the
@@ -94,7 +144,7 @@ internal static class TrackRow
     internal static Element Grid(Track t, int displayIndex, in State st, ColumnSet set, TrackSize[] tracks, float rowH,
                                  Element title, bool showTrackArtist, Action<string, string?> go,
                                  Action? onPlay = null, Action? onLike = null, Owner? addedByProfile = null,
-                                 bool likePop = false, Element? actionsCell = null, Element? artistsLine = null)
+                                 bool likePop = false, Element? actionsCell = null)
     {
         float thumb = ThumbSize;   // fixed art size → a stable dedicated art column
 
@@ -114,10 +164,9 @@ internal static class TrackRow
         var titleCol = new BoxEl
         {
             Direction = 1, Grow = 1f, Basis = 0f, Gap = 1f,
-            // Subline artist(s) — per config (playlists/Liked/compilations show them; single-artist albums/singles/EPs
-            // don't). artistsLine overrides the default full-credit links (the artist chart's "feat. X" line).
+            // Subline artist(s) — per config (playlists/Liked/compilations show them; single-artist albums/singles/EPs don't).
             Children = showTrackArtist
-                ? [title, artistsLine ?? ArtistLinks(t.Artists, go)]
+                ? [title, ArtistLinks(t.Artists, go)]
                 : [title],
         };
         cells.Add(new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Children = [titleCol] });
@@ -131,7 +180,7 @@ internal static class TrackRow
         if (set.Video)
             cells.Add(CenterCell(t.HasVideo ? Icon(Icons.Movie, 13f, Tok.TextTertiary) : new BoxEl()));
         if (set.Plays)
-            cells.Add(EndCell(new TextEl(set.FullPlays ? t.PlayCount.ToString("N0") : PlaysLabel(t.PlayCount)) { Size = 13f, Color = Tok.TextTertiary }));
+            cells.Add(EndCell(new TextEl(PlaysLabel(t.PlayCount)) { Size = 13f, Color = Tok.TextTertiary }));
         cells.Add(EndCell(new TextEl(DetailFormat.TrackTime(t.DurationMs)) { Size = 13f, Color = Tok.TextSecondary }));
 
         // Trailing "..." overflow lane (Apple Music style) — a fixed column AFTER Duration. Present only when the set
@@ -157,23 +206,14 @@ internal static class TrackRow
     // title is a plain now-playing-coloured ellipsis (the marquee is reserved for the full lists' now-playing row).
     internal static Element Row(Track t, int displayIndex, in State st, ColumnSet set, TrackSize[] tracks, float rowH,
                                 bool showTrackArtist, Action<string, string?> go, Action onPlay, Action? onLike = null, bool zebra = false,
-                                Element? actionsCell = null, int? zebraIndex = null, Element? artistsLine = null,
-                                bool explicitBadge = false)
+                                Element? actionsCell = null)
     {
-        // zebraIndex: multi-column surfaces (the artist chart) stripe by VISUAL row so adjacent columns stay in phase;
-        // displayIndex still carries the global rank shown in the # cell.
-        bool oddZebra = zebra && (zebraIndex ?? displayIndex) % 2 != 0;
+        bool oddZebra = zebra && displayIndex % 2 != 0;
         Element title = new TextEl(t.Title)
         {
             Size = 14f, Weight = 600, Color = st.IsNow ? Tok.AccentTextPrimary : Tok.TextPrimary,
             Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
         };
-        if (explicitBadge && t.IsExplicit)
-            title = new BoxEl
-            {
-                Direction = 0, Gap = 6f, AlignItems = FlexAlign.Center, MinWidth = 0f,
-                Children = [title, new BoxEl { Shrink = 0f, Children = [ExplicitBadge()] }],
-            };
         return new BoxEl
         {
             MinHeight = rowH, ClipToBounds = true, Margin = new Edges4(RowInset, 0f, RowInset, 0f),
@@ -190,7 +230,7 @@ internal static class TrackRow
             // No-op pointer-exit → registers PointerBit so this row is the "interactive ancestor" whose hover progress the
             // # cell inherits (SceneRecorder.TryResolveInteractionProgress) — that's what reveals play/pause on row hover.
             OnPointerExit = static () => { },
-            Children = [Grid(t, displayIndex, st, set, tracks, rowH, title, showTrackArtist, go, onPlay, onLike, actionsCell: actionsCell, artistsLine: artistsLine)],
+            Children = [Grid(t, displayIndex, st, set, tracks, rowH, title, showTrackArtist, go, onPlay, onLike, actionsCell: actionsCell)],
         };
     }
 

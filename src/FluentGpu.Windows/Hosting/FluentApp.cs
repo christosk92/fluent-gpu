@@ -183,6 +183,22 @@ public static class FluentApp
         // wall-time = real on-screen fps) + its last GPU fence-wait. present << ui-fps ⇒ GPU-bound (the real bottleneck).
         ulong lastPresentSeq = host.RenderPresentSeq;
         long lastPresentTick = System.Diagnostics.Stopwatch.GetTimestamp();
+        // Present-path diagnosis (maximize → 60fps): watch the swapchain size + window state so a resize emits a one-shot
+        // [fps resize] marker (WxH, scale, state, panel Hz, wait-kind), and every [fps] line carries the wait-kind/ms the
+        // loop paced by (Ambient = software 60 cap; DisplayRate/Pace = panel rate → a lock is downstream in Present/GPU).
+        float lastLoggedW = -1f, lastLoggedH = -1f;
+        int cachedHz = fpsLog ? window.CurrentRefreshHz() : 0;
+        static string WaitTok(FluentGpu.Hosting.HostWaitKind k) => k switch
+        {
+            FluentGpu.Hosting.HostWaitKind.Idle => "idle",
+            FluentGpu.Hosting.HostWaitKind.Hud => "hud",
+            FluentGpu.Hosting.HostWaitKind.Baked => "baked",
+            FluentGpu.Hosting.HostWaitKind.Ambient => "ambient",
+            FluentGpu.Hosting.HostWaitKind.PaceSkipSubmit => "pace-skip",
+            FluentGpu.Hosting.HostWaitKind.PaceAsync => "pace-async",
+            FluentGpu.Hosting.HostWaitKind.DisplayRate => "display",
+            _ => "?",
+        };
         while (!window.IsClosed)
         {
             host.RunFrame();
@@ -191,7 +207,15 @@ public static class FluentApp
             {
                 var s = host.LastStats;
                 double gpuMs = host.LastGpuFenceWaitMs;
-                bool spike = s.FrameMs > 11.0 || gpuMs > 11.0;   // UI-thread OR render-thread GPU stall over the ~90Hz line
+                var szpx = window.ClientSizePx;
+                if (szpx.Width != lastLoggedW || szpx.Height != lastLoggedH)
+                {
+                    lastLoggedW = szpx.Width; lastLoggedH = szpx.Height;
+                    cachedHz = window.CurrentRefreshHz();   // once per size change, not per frame
+                    Console.Error.WriteLine($"[fps resize] {szpx.Width}x{szpx.Height} scale {window.Scale:0.##} state {window.State} panel {cachedHz}Hz wait {WaitTok(host.LastWaitKind)}{host.LastWaitMs} (f{n})");
+                }
+                bool workSpike = (s.FlushMs + s.LayoutMs + s.RecordMs) > 11.0;
+                bool spike = workSpike || gpuMs > 11.0;   // UI work (not bare submit pacing) OR render-thread GPU stall
                 if (spike || n % 30 == 0)
                 {
                     ulong curSeq = host.RenderPresentSeq;
@@ -199,7 +223,9 @@ public static class FluentApp
                     double presentFps = curSeq > lastPresentSeq && nowT > lastPresentTick
                         ? (curSeq - lastPresentSeq) * (double)System.Diagnostics.Stopwatch.Frequency / (nowT - lastPresentTick) : 0;
                     lastPresentSeq = curSeq; lastPresentTick = nowT;
-                    Console.Error.WriteLine($"[fps]{(spike ? " SPIKE" : "")} ui {s.Fps:0}fps {s.FrameMs:0.0}ms (flush{s.FlushMs:0.0} layout{s.LayoutMs:0.0} anim{s.AnimMs:0.0} record{s.RecordMs:0.0} submit{s.SubmitMs:0.0}) | present {presentFps:0}fps gpu {gpuMs:0.0}ms (f{n})");
+                    double gpuRenderMs = host.LastGpuRenderMs;   // FG_GPU_TIMING: true raster ms (0 when off) — disambiguates the fence wait
+                    string gpuRenderTok = gpuRenderMs > 0.0 ? $" grender {gpuRenderMs:0.0}ms(scene {host.LastGpuSceneMs:0.0})" : "";
+                    Console.Error.WriteLine($"[fps]{(spike ? " SPIKE" : "")} ui {s.Fps:0}fps {s.FrameMs:0.0}ms (flush{s.FlushMs:0.0} rx{s.ReactiveFlushMs:0.0}/vr{s.VirtualRealizeMs:0.0} layout{s.LayoutMs:0.0} anim{s.AnimMs:0.0} record{s.RecordMs:0.0} submit{s.SubmitMs:0.0}) | present {presentFps:0}fps gpu {gpuMs:0.0}ms{gpuRenderTok} | wait {WaitTok(host.LastWaitKind)}{host.LastWaitMs} {szpx.Width}x{szpx.Height}@{cachedHz}Hz (f{n})");
                 }
             }
             if (h.Frames > 0 && n >= h.Frames) break;
