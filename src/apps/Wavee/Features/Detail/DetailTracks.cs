@@ -69,6 +69,18 @@ sealed class TrackList : Component
     readonly Signal<int> _tier = new(0);                       // width tier (0 = widest/full), written by OnBoundsChanged
     readonly Signal<int> _visibleCount = new(0);
     readonly Signal<int> _verticalItemCount = new(VerticalTrackStart + 1);
+
+    // ── progressive reveal (cold shimmer→content swap) ───────────────────────────────────────────────────────────────
+    // Measured: navigating to a detail/playlist page, the whole visible track band swapped shimmer→real in ONE ~80ms UI
+    // frame (694 spans re-recorded, record=72.4ms, 138 component re-renders, a gen2 GC inside it) — freshly mounted rows
+    // have no cached span to reuse and the engine's realize budget exempts the visible band by design. Instead of that
+    // one-shot swap, the cold reveal ramps the count of REAL rows up DetailRevealRamp.Chunk-at-a-time over a few frames;
+    // rows past the ramp render a cheap ShimmerRow, so no single frame records the whole band. Steady state = _reveal at
+    // DetailRevealRamp.Done (every row real, no per-row cost); an instant/cached load (no shimmer) never ramps. The
+    // progression math is the pure, unit-tested DetailRevealRamp.
+    readonly Signal<int> _reveal = new(DetailRevealRamp.Done);   // rows with displayIndex < _reveal are REAL; the rest render ShimmerRow. Done ⇒ all real
+    readonly Signal<bool> _rampActive = new(false);     // gates the per-frame reveal clock — mounted only while ramping so the frame loop quiesces after
+    bool _sawPending;                                    // this content actually showed shimmer (cold load) ⇒ the ready edge ramps; a cached/instant load does not
     float _lastRightW;                                         // last measured right-area width — replayed once when the rail layout-lock clears (Task C)
     readonly SelectionModel _selection = new();                // external → survives a tier remount
     readonly Dictionary<int, TrackSize[]> _tracksByTier = new();
@@ -322,6 +334,9 @@ sealed class TrackList : Component
         // Reused slot: a detail-route swap changes the track set under a stable (sort,query,flags) view key, so the cached
         // view map + per-tier column sets + selection would be STALE (wrong / out-of-range indices). Invalidate them on a
         // context change so the new page recomputes cleanly.
+        // A row can only cold-ramp if this content actually showed shimmer (a Pending→Ready load). Tracked every render
+        // so the ready edge below (which lands on a Ready render) knows whether the swap was cold or instant/cached.
+        if (_full.State.Value == (byte)LoadState.Pending) _sawPending = true;
         if (model.ContextUri != _lastCtxUri)
         {
             _lastCtxUri = model.ContextUri;
@@ -332,6 +347,15 @@ sealed class TrackList : Component
             _lastDisplayed = null;
             _flip.Clear(); _fade.Clear();
             _resetEpoch.Value = _resetEpoch.Peek() + 1;   // remount the virtual list — bound rows must not recycle A's cells under B's route
+            // Progressive reveal: a fresh content identity that showed shimmer ⇒ start the ramp (real rows fill in over
+            // frames instead of the whole band in one ~80ms frame). Keyed to the ContextUri edge, so it fires ONCE per
+            // content and never on scroll / re-render / a same-context refresh; an instant/cached load skips it entirely.
+            if (model.ContextUri is { Length: > 0 } && _sawPending)
+            {
+                _reveal.Value = DetailRevealRamp.Chunk;   // the swap frame shows the first chunk real, the rest shimmer
+                _rampActive.Value = true;
+                _sawPending = false;
+            }
         }
 
         // The present columns depend on the tracks (Date-added/Added-by/Video appear once they load). When that set
@@ -592,7 +616,12 @@ sealed class TrackList : Component
             AlignItems = FlexAlign.Stretch, Justify = FlexJustify.End,
             Children = [Embed.Comp(() => new SelectionCommandBar(_selection, i => DisplayTrack(i, selectionTrackStart), host: HostInfo))],
         };
-        return ZStack(column, selectionOverlay) with { Grow = 1f, Shrink = 1f, MinHeight = 0f };
+        // The per-frame reveal clock: mounted ONLY while a cold ramp is in flight (Flow.Show gated on _rampActive), so it
+        // advances _reveal once per frame and then unmounts — the frame loop quiesces (no forever-loop). Copies the
+        // FrameClock.Tick idiom (TickerClock / CountTicker). Hidden 0×0 node → no layout/hit-test footprint.
+        Element revealClock = Flow.Show(() => _rampActive.Value,
+            Embed.Comp(() => new TickerClock { OnFrame = _ => AdvanceReveal() }));
+        return ZStack(column, selectionOverlay, revealClock) with { Grow = 1f, Shrink = 1f, MinHeight = 0f };
     }
 
     // Resolve a display row index (what the SelectionModel stores) → the track, through the current filtered+sorted view.
@@ -1146,6 +1175,53 @@ sealed class TrackList : Component
         return new BoxEl { Direction = 1, Children = rows };
     }
 
+    // ── progressive reveal ───────────────────────────────────────────────────────────────────────────────────────────
+    // Advance the cold ramp one chunk. Called once per frame by the reveal clock (Flow.Show-gated on _rampActive). When
+    // the chunk crosses the realized band, snap _reveal to MaxValue (all rows real, incl. any scrolled in later) and drop
+    // _rampActive so the clock unmounts. All Peek/arithmetic/signal-write — no per-frame allocation.
+    void AdvanceReveal()
+    {
+        int next = DetailRevealRamp.Next(_reveal.Peek(), _visibleCount.Peek());
+        _reveal.Value = next;
+        if (next == DetailRevealRamp.Done) _rampActive.Value = false;   // ramp finished → the clock unmounts, the frame loop quiesces
+    }
+
+    // Is the row at this display position a REAL row yet, or still a shimmer placeholder? Reading _reveal.Value subscribes
+    // the caller (an equality-gated per-row bool memo), so as the ramp advances only the newly-crossed chunk re-renders
+    // shimmer→real. Done (MaxValue) in steady state ⇒ always true, so a revealed list pays nothing here.
+    internal bool RowRevealed(int displayIndex) => DetailRevealRamp.Revealed(displayIndex, _reveal.Value);
+
+    // A cheap placeholder row for slots beyond the reveal ramp: grey bars on the SAME column grid as a real row (so the
+    // reveal sweeps down cleanly, no ragged shift, same rowH extent) but with NO art component (CoverShimmer), text
+    // shaping, hover transport, marquee or context menu — the record cost the ramp spreads across frames. Static (no
+    // breathe): the ramp finishes in ≈4 frames, far too fast to perceive a pulse, and a static tile keeps the loop asleep.
+    Element ShimmerRow(ColumnSet set, TrackSize[] tracks, float rowH)
+    {
+        static Element Bar(float w, float h) => new BoxEl { Width = w, Height = h, Corners = CornerRadius4.All(4f), Fill = Tok.FillSubtleSecondary };
+        // Follows TrackRow.Grid's column build order verbatim so cell count == tracks.Length and every bar lands in its lane.
+        var cells = new List<Element>(tracks.Length) { new BoxEl() };   // # lane (empty)
+        if (set.Heart) cells.Add(new BoxEl());
+        if (set.Thumb) cells.Add(new BoxEl { AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Children = [Bar(ThumbSize, ThumbSize)] });
+        cells.Add(new BoxEl
+        {
+            Direction = 1, Grow = 1f, Basis = 0f, Gap = 6f, Justify = FlexJustify.Center,
+            Children = _cfg.ShowTrackArtist ? [Bar(150f, 11f), Bar(90f, 9f)] : [Bar(180f, 11f)],
+        });
+        if (set.Album) cells.Add(new BoxEl { AlignItems = FlexAlign.Center, Children = [Bar(120f, 10f)] });
+        if (set.By) cells.Add(new BoxEl());
+        if (set.Date) cells.Add(new BoxEl { AlignItems = FlexAlign.Center, Children = [Bar(72f, 10f)] });
+        if (set.Video) cells.Add(new BoxEl());
+        if (set.Plays) cells.Add(new BoxEl { AlignItems = FlexAlign.Center, Justify = FlexJustify.End, Children = [Bar(48f, 10f)] });
+        cells.Add(new BoxEl { AlignItems = FlexAlign.Center, Justify = FlexJustify.End, Children = [Bar(32f, 10f)] });   // duration
+        if (set.Actions) cells.Add(new BoxEl());
+        return new GridEl
+        {
+            Columns = tracks, ColGap = TrackRow.ColGapFor(set.Tier), RowHeight = rowH, Grow = 1f,
+            Padding = new Edges4(TrackRow.PadX - RowInset, 0f, TrackRow.PadX - RowInset, 0f),
+            Children = cells.ToArray(),
+        };
+    }
+
     // ── bound row ────────────────────────────────────────────────────────────────────────────────────────
     // A bound row: ONE self-subscribing content component (re-renders on recycle/sort/now-playing, patching cells in
     // place — never a remount, so no flash) wrapped in the shape-stable bound selection skin.
@@ -1235,6 +1311,10 @@ sealed class TrackList : Component
         public override Element Render()
         {
             var likePrev = UseRef(((string?)null, false));               // hook FIRST (stable order) — per-slot like-edge memory
+            // Progressive reveal: while the cold list ramps in, a row past the ramp renders a cheap shimmer placeholder.
+            // The bool is equality-gated (per-slot), so this row re-renders shimmer→real only on the single frame its own
+            // reveal edge crosses — not on every ramp tick. MaxValue in steady state ⇒ always true (no per-row cost).
+            var revealed = UseComputed(() => _o.RowRevealed(_scope.Index.Value - _trackStart));   // hook order stays stable: all hooks run before the branch below
             // Full-detail/playback invalidations may recompute this record, but Memo's equality gate schedules a render
             // only when this particular row's visual state actually changed.
             var presentation = UseComputed(() =>
@@ -1256,6 +1336,9 @@ sealed class TrackList : Component
                     rowState.Handlers.Go,
                     AddedByProfile(rowState.Model, t));
             });
+            // Not yet revealed (cold ramp): a cheap shimmer placeholder. All hooks above ran, so this early return keeps
+            // hook order stable; presentation stays unread (lazy) so no real-row work happens until this row reveals.
+            if (!revealed.Value) return _o.ShimmerRow(_set, _tracks, _rowH);
             var row = presentation.Value;
             var t = row.Track;
             var st = row.State;

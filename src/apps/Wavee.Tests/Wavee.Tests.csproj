@@ -79,6 +79,8 @@
     <Compile Include="..\Wavee\Components\MembershipDiff.cs" />
     <!-- detail layout breakpoint hysteresis (Wavee.Core + BCL only) — DetailLayoutBreakpointTests -->
     <Compile Include="..\Wavee\Features\Detail\DetailLayoutBreakpoints.cs" />
+    <!-- progressive-reveal ramp progression (BCL only) — DetailRevealRampTests -->
+    <Compile Include="..\Wavee\Features\Detail\DetailRevealRamp.cs" />
     <!-- concert schedule/detail hysteresis + wide-editorial metrics (BCL only) -->
     <Compile Include="..\Wavee\Features\Concerts\ConcertLayout.cs" />
     <Compile Include="..\Wavee\Features\Concerts\ConcertRoutes.cs" />
