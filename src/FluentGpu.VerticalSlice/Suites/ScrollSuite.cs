@@ -64,6 +64,68 @@ static class ScrollSuite
         D1CollectionHostSizingChecks(strings);
         Cp2ConsolidationChecks(strings);
         D4ScrollBarChecks(strings);
+        OcclusionCullChecks();
+    }
+
+    // Opaque occlusion cull (SceneRecorder.IsOccludedByOpaqueChild, always-on): a node's own fill is dropped when a
+    // later-drawn direct child provably, fully, opaquely covers it. These gates replace the retired opt-in env-flag A/B —
+    // they pin the space-consistent predicate (child cover rect transformed through the SAME parent world) against the
+    // 2026-07-23 regression (a Scale(0.3,1) value-fill must NOT read as covering).
+    static void OcclusionCullChecks()
+    {
+        // Distinct probe colors so FindFillCommandNear pins the exact node's own fill emit.
+        var parentFill  = new ColorF(0.80f, 0.12f, 0.16f, 1f);   // opaque red  — the (maybe) covered parent
+        var childOpaque = new ColorF(0.12f, 0.62f, 0.24f, 1f);   // opaque green — a covering child
+        var childSemi   = new ColorF(0.12f, 0.62f, 0.24f, 0.5f); // same green @ 50% alpha — cannot overwrite
+
+        // Build a parent Box (root) with one direct child; return whether the PARENT's own fill survives the record.
+        // The child's alpha / corners / LocalTransform are the per-case knobs. Direct paint writes mirror what a
+        // Transform bind's effect does at flush (Reconciler writes _scene.Paint(node).LocalTransform = tb()).
+        static bool ParentFillPresent(ColorF parentFill, ColorF childFill, CornerRadius4 parentCorners,
+                                      Affine2D childTransform)
+        {
+            var sq = new CornerRadius4(0f, 0f, 0f, 0f);
+            var scene = new SceneStore();
+            var parent = scene.CreateNode(1); scene.Root = parent;
+            ref RectF pb = ref scene.Bounds(parent); pb = new RectF(0f, 0f, 100f, 40f);
+            ref NodePaint pp = ref scene.Paint(parent);
+            pp.VisualKind = VisualKind.Box; pp.Fill = parentFill; pp.Corners = parentCorners;
+
+            var child = scene.CreateNode(1); scene.AppendChild(parent, child);
+            ref RectF cb = ref scene.Bounds(child); cb = new RectF(0f, 0f, 100f, 40f);
+            ref NodePaint cp = ref scene.Paint(child);
+            cp.VisualKind = VisualKind.Box; cp.Fill = childFill; cp.Corners = sq;   // child must be square to cover
+            cp.LocalTransform = childTransform;
+
+            var dl = new DrawList();
+            SceneRecorder.Record(scene, dl);
+            return FindFillCommandNear(dl, parentFill).Order >= 0;
+        }
+
+        var square  = new CornerRadius4(0f, 0f, 0f, 0f);
+        var rounded = CornerRadius4.All(8f);
+
+        // 1. Opaque square child fully covering an opaque square parent → the parent's fill is dead work, dropped.
+        //    The identical scene with a semi-transparent child cannot overwrite, so the parent's fill survives.
+        bool culled   = !ParentFillPresent(parentFill, childOpaque, square, Affine2D.Identity);
+        bool keptSemi =  ParentFillPresent(parentFill, childSemi,   square, Affine2D.Identity);
+        Check("gate.record.occlusion-culls opaque square child fully covering the parent drops the parent's own fill (semi-transparent child keeps it)",
+            culled && keptSemi, $"culled={culled} keptSemi={keptSemi}");
+
+        // 2. The seek-bar shape: a full-width opaque square child scaled to 30% width (Scale(0.3,1) — the value-fill's
+        //    bound transform) covers only part of the rounded rail; its non-identity linear part is rejected, so the
+        //    rail keeps its grey track. The truly-covered case (identity) still culls — proving the transform is honored.
+        bool railKept    =  ParentFillPresent(parentFill, childOpaque, rounded, Affine2D.Scale(0.3f, 1f));
+        bool railCovered = !ParentFillPresent(parentFill, childOpaque, rounded, Affine2D.Identity);
+        Check("gate.record.occlusion-respects-transform Scale(0.3,1) value-fill leaves the rail track drawn; an untransformed full cover still culls",
+            railKept && railCovered, $"kept={railKept} covered={railCovered}");
+
+        // 3. Dx/Dy-aware math: a child translated off the parent (Dx=60) no longer covers → parent fill drawn; the same
+        //    child translated back to Dx=0 covers exactly → parent fill dropped. Pins the new translation modeling.
+        bool shiftedKept   =  ParentFillPresent(parentFill, childOpaque, square, Affine2D.Translation(60f, 0f));
+        bool alignedCulled = !ParentFillPresent(parentFill, childOpaque, square, Affine2D.Translation(0f, 0f));
+        Check("gate.record.occlusion-respects-translation a translated (Dx=60) child leaves the parent drawn; Dx=0 covering drops it",
+            shiftedKept && alignedCulled, $"shiftedKept={shiftedKept} alignedCulled={alignedCulled}");
     }
 
     static void HoverSubtreeChecks(StringTable strings)

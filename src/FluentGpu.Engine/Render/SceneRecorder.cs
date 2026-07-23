@@ -46,14 +46,15 @@ public static class SceneRecorder
 {
     private const bool EnableSubtreeCull = true;
 
-    // Opaque occlusion cull (DEFAULT-OFF; set FG_OCCLUSION_CULL=1 to opt IN for A/B): skip a node's own visual when a
-    // later-drawn direct child provably, fully, opaquely covers it — those fill/border pixels are overwritten regardless, so
-    // the emit is dead work (finding: the nested opaque background stack overdraws 4-8× with no z-reject). This was promoted
-    // to default-on then reverted 2026-07-23 because the predicate is transform-blind: AbsoluteRect is translation-only, so a
-    // full-width opaque square child scaled down by a bound compositor transform — the Wavee seek-bar value fill — still reads
-    // as fully covering, and the cull wrongly drops the rail's grey track. Keep opt-in until the predicate is transform-aware
-    // AND eyeballed clean in the real app.
-    private static readonly bool s_occlusionCull = Environment.GetEnvironmentVariable("FG_OCCLUSION_CULL") == "1";
+    // Opaque occlusion cull (ALWAYS ON): skip a node's own visual when a later-drawn direct child provably, fully,
+    // opaquely covers it — those fill/border pixels are overwritten regardless, so the emit is dead work (finding: the
+    // nested opaque background stack overdraws 4-8× with no z-reject). INVARIANT: the predicate is strict and
+    // space-consistent — the child's covered rect is transformed through the SAME parent `world` as the node's own
+    // device rect (no AbsoluteRect coordinate-space mismatch), so containment is sound under any DPI / ancestor scale;
+    // any doubt returns false. An earlier default-on attempt was reverted 2026-07-23 because it compared the
+    // translation-only AbsoluteRect against a full-world device rect (two spaces), wrongly dropping the Wavee seek-bar
+    // rail under its Scale(0.3,1) value-fill; the rewrite computes the child rect in device space and rejects any
+    // non-identity linear transform, so that case is handled correctly. Regression-gated by gate.record.occlusion-*.
 
     // Opt-in scroll diagnostics: set FG_SCROLLLOG=1, run, scroll, copy the [scroll] lines.
     private static readonly bool ScrollLog = Environment.GetEnvironmentVariable("FG_SCROLLLOG") == "1";
@@ -501,11 +502,15 @@ public static class SceneRecorder
     }
 
     // True when a direct child provably, fully, opaquely covers this node's VISIBLE rect — so the node's own fill/border
-    // are dead pixels the child overwrites (all children paint AFTER the node's own visual, in painter order). Strict by
-    // design; any doubt returns false. Only reached when FG_OCCLUSION_CULL is on.
-    private static bool IsOccludedByOpaqueChild(SceneStore scene, NodeHandle node, in RectF nodeDevice, in RectF clip, bool inMotion)
+    // are dead pixels the child overwrites (all children paint AFTER the node's own visual, in painter order). ALWAYS ON;
+    // strict — any doubt returns false. The child's covered rect is computed in the SAME device space as the node's own
+    // rect: its LAYOUT bounds (+ its own translation + the parent's ChildShift) transformed through the PARENT's `world`,
+    // exactly as the child's own Walk will place it. No AbsoluteRect (that was translation-only, a different space than
+    // the full-world nodeDevice — the 2026-07-23 seek-bar regression). Regression-gated by gate.record.occlusion-*.
+    private static bool IsOccludedByOpaqueChild(SceneStore scene, NodeHandle node, in Affine2D world,
+        float childShiftX, float childShiftY, in RectF nodeDevice, in RectF clip, bool inMotion)
     {
-        if (inMotion) return false;   // a transform in flight ⇒ AbsoluteRect may not equal the drawn rect — don't risk it
+        if (inMotion) return false;   // a transform in flight ⇒ the child's persisted LocalTransform may not equal its drawn rect — don't risk it
         RectF visible = nodeDevice.Intersect(clip);
         if (visible.W <= 0f || visible.H <= 0f) return false;
         for (var c = scene.FirstChild(node); !c.IsNull; c = scene.NextSibling(c))
@@ -514,18 +519,31 @@ public static class SceneRecorder
             var cf = scene.Flags(c);
             if ((cf & NodeFlags.Visible) == 0) continue;
             if ((cf & NodeFlags.ClipsToBounds) != 0) continue;   // a self-clipping child may cover less than its bounds
+            // Drawn extents diverge from layout bounds under an interaction scale (hover/press grow) or a counter-scale —
+            // neither is modeled by cb-through-world, so be conservative and keep the parent's fill.
+            if ((cf & (NodeFlags.InteractionAnim | NodeFlags.CounterScaled)) != 0) continue;
             ref readonly NodePaint cp = ref scene.Paint(c);
             if (cp.VisualKind != VisualKind.Box) continue;
             if (cp.Fill.A < 1f || cp.Opacity < 1f) continue;     // must paint FULLY opaque to overwrite
             if (cp.BlurSigma > 0.01f || cp.OpacityGroup) continue;
+            if (!float.IsNaN(cp.PresentedW) || !float.IsNaN(cp.PresentedH)) continue;   // a reveal draws non-layout extents
             var cn = cp.Corners;
             if (cn.TopLeft != 0f || cn.TopRight != 0f || cn.BottomRight != 0f || cn.BottomLeft != 0f) continue;  // square only (rounded reveals corners)
-            // A scaled/rotated child's AbsoluteRect ignores its linear part (translation-only), so containment would lie — the seek-bar fill-bind case.
-            var lt = cp.LocalTransform;
-            if (lt.M11 != 1f || lt.M22 != 1f || lt.M12 != 0f || lt.M21 != 0f) continue;
-            RectF cb = scene.AbsoluteRect(c);
-            if (cb.X <= visible.X && cb.Y <= visible.Y
-                && cb.X + cb.W >= visible.X + visible.W && cb.Y + cb.H >= visible.Y + visible.H)
+            // Only a translated (linear-identity) child is modeled: its drawn rect is its layout bounds shifted by its
+            // own Dx/Dy (translation composes cleanly), transformed through the parent `world`. A non-identity linear
+            // part (the seek-bar value-fill's Scale(0.3,1)) draws a rect we can't derive from cb through `world` alone —
+            // its scale pivots about a transform origin we don't reconstruct here — so reject it.
+            var clt = cp.LocalTransform;
+            if (clt.M11 != 1f || clt.M22 != 1f || clt.M12 != 0f || clt.M21 != 0f) continue;
+            RectF cb = scene.Bounds(c);   // LAYOUT bounds (parent-content space), NOT AbsoluteRect
+            RectF childDevice = world.TransformBounds(new RectF(
+                childShiftX + cb.X + clt.Dx, childShiftY + cb.Y + clt.Dy, cb.W, cb.H));
+            // Containment with a tiny slack: EXPAND the child rect by ε (never shrink `visible`) so AA-irrelevant subpixel
+            // rounding can't defeat an otherwise-full opaque cover.
+            const float eps = 0.01f;
+            if (childDevice.X - eps <= visible.X && childDevice.Y - eps <= visible.Y
+                && childDevice.X + childDevice.W + eps >= visible.X + visible.W
+                && childDevice.Y + childDevice.H + eps >= visible.Y + visible.H)
                 return true;   // this child's opaque square fill fully contains the node's visible rect
         }
         return false;
@@ -968,11 +986,11 @@ public static class SceneRecorder
         float pendingBorderHoverT = 0f, pendingBorderPressT = 0f;
 
         bool drawSelf = hasOwnVisual && ownVisible;
-        // Occlusion cull (opt-in): drop this node's own fill when a later opaque square child fully covers it. Only when
+        // Occlusion cull (always on): drop this node's own fill when a later opaque square child fully covers it. Only when
         // the node has NO border — the SDF border ring straddles the edge (extends ~stroke/2 OUTSIDE deviceBounds), which a
         // child that merely contains deviceBounds wouldn't cover, so a bordered node keeps drawing to be safe.
-        if (drawSelf && s_occlusionCull && p.BorderWidth <= 0f && p.ValidationBorder.A <= 0f
-            && IsOccludedByOpaqueChild(scene, node, in deviceBounds, in recordClip, inMotion))
+        if (drawSelf && p.BorderWidth <= 0f && p.ValidationBorder.A <= 0f
+            && IsOccludedByOpaqueChild(scene, node, in world, p.ChildShiftX, p.ChildShiftY, in deviceBounds, in recordClip, inMotion))
             drawSelf = false;
         GradientSpec nodeGradient = default;
         bool hasNodeGradient = maybeSparsePaint && scene.TryGetGradient(node, out nodeGradient) && nodeGradient.Stops is { Length: > 0 };
