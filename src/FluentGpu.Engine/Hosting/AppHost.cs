@@ -700,12 +700,38 @@ public sealed class AppHost : IDisposable
     {
         if (_isDetachedChild || _isHeadless || _asyncActive || !_device.SupportsSecondarySwapchains || request.Content is null)
             return null;
-        var desc = new WindowDesc(request.Title, request.InitialSizeDip, _window.Scale, Composited: true);
+        float scale = _window.Scale;
+        var desc = new WindowDesc(request.Title, request.InitialSizeDip, scale, Composited: true);
         var win = _app.CreateWindow(desc);
-        var child = new AppHost(_app, win, _device, _fonts, _strings, request.Content, images: _images,
-            compositeSwapchain: true, isDetachedChild: true);
+
+        // A 16:9-ish client floor so the mini-player can never be dragged down to an unusable sliver.
+        win.SetMinClientSizePx(new Size2(320f, 180f));
+
+        // Open at the bottom-right of the work area of the monitor the parent lives on (a picture-in-picture home),
+        // fully on-screen, instead of the CW_USEDEFAULT cascade. Falls back to CW_USEDEFAULT when the work area is
+        // unavailable (headless / query failure → RectF.Infinite).
+        var work = _app.GetWorkArea(_window.ClientOriginPx);
+        if (!work.IsInfinite)
+        {
+            float wPx = request.InitialSizeDip.Width * scale;
+            float hPx = request.InitialSizeDip.Height * scale;
+            float margin = 24f * scale;
+            float x = work.X + work.W - wPx - margin;
+            float y = work.Y + work.H - hPx - margin;
+            if (x < work.X) x = work.X;   // keep the left/top edges on-screen for an over-large request
+            if (y < work.Y) y = work.Y;
+            win.SetBoundsPx(new RectF(x, y, wPx, hPx));
+        }
+
         win.Show();
         if (request.AlwaysOnTop) win.SetTopmost(true);
+
+        // Create the host ONLY AFTER the window is sized + shown, so its swapchain, first layout, and published
+        // Viewport.Size all use the FINAL client size. A host constructed before Show()/SetBoundsPx reads a 0×0 /
+        // stale ClientSizePx → its scene root lays out at 0×0 and the composited swapchain presents nothing (the
+        // detached window then renders fully transparent, and the idle loop spins on the broken window).
+        var child = new AppHost(_app, win, _device, _fonts, _strings, request.Content, images: _images,
+            compositeSwapchain: true, isDetachedChild: true);
         _detachedHosts.Add(child);
         WakeFrame();
         return new DetachedWindowHandle(this, child, win);
