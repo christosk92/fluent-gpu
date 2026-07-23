@@ -226,6 +226,9 @@ public sealed class ItemsView : Component
     /// <summary>Scroll-position restoration key (see <see cref="VirtualListEl.ScrollKey"/>): a stable per-content identity
     /// so a revisit lands at the saved row on the first realized window. Forwarded onto the built VirtualListEl.</summary>
     public string? ScrollKey;
+    /// <summary>Viewport-space top clip applied as one shared band to recyclable items after
+    /// <see cref="PersistentPrefixCount"/>. NaN disables it.</summary>
+    public float ItemClipTopInset = float.NaN;
     public (Func<ScrollGeometry, long> Project, Action<ScrollGeometry> Action)? OnScrollGeometryChanged;
 
     // ── research adjustment #16 — virtualization knobs (forwarded to the built VirtualListEl / applied per-container) ──
@@ -277,6 +280,7 @@ public sealed class ItemsView : Component
             Grow = o.Grow,
             SuppressScrollBar = o.Scroll?.SuppressScrollBar ?? false,
             ScrollKey = o.Scroll?.ScrollKey,
+            ItemClipTopInset = o.Scroll?.ItemClipTopInset ?? float.NaN,
             AutoEdgeFade = o.Scroll?.AutoEdgeFade ?? false,
             OnScrollGeometryChanged = o.Scroll?.OnScrollGeometryChanged,
             Transition = o.Transition,
@@ -326,6 +330,7 @@ public sealed class ItemsView : Component
             Grow = o.Grow,
             SuppressScrollBar = o.Scroll?.SuppressScrollBar ?? false,
             ScrollKey = o.Scroll?.ScrollKey,
+            ItemClipTopInset = o.Scroll?.ItemClipTopInset ?? float.NaN,
             AutoEdgeFade = o.Scroll?.AutoEdgeFade ?? false,
             OnScrollGeometryChanged = o.Scroll?.OnScrollGeometryChanged,
             ItemDisplacement = o.Reorder?.ItemDisplacement,
@@ -1181,6 +1186,7 @@ public sealed class ItemsView : Component
                 AutoEdgeFade = AutoEdgeFade,
                 SuppressScrollBar = SuppressScrollBar,
                 ScrollKey = ScrollKey,
+                ItemClipTopInset = ItemClipTopInset,
                 OnScrollGeometryChanged = OnScrollGeometryChanged,
                 Grow = Grow,
                 OnRealized = h => viewportNode.Value = h,
@@ -1199,6 +1205,7 @@ public sealed class ItemsView : Component
                 AutoEdgeFade = AutoEdgeFade,
                 SuppressScrollBar = SuppressScrollBar,
                 ScrollKey = ScrollKey,
+                ItemClipTopInset = ItemClipTopInset,
                 OnScrollGeometryChanged = OnScrollGeometryChanged,
                 // Grow rides through to the viewport: 1 = fill the parent (hard viewport, never content-measured);
                 // 0 = natural — FlexLayout.MeasureViewport sizes a non-flexing viewport to the layout's ContentExtent

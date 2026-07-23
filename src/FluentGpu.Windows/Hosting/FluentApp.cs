@@ -177,17 +177,19 @@ public static class FluentApp
         if (DiagnosticRun is { } diag && diag(host, window, device)) { WindowHandle = 0; return; }
 
         bool fpsLog = Diag.EnvFlag("FG_FPS_LOG");   // periodic [fps] readout to stderr (frame-rate / frame-ms diagnosis)
+        bool scrollPerf = Diag.EnvFlag("FG_SCROLL_PERF");
         int n = 0;
-        // Render-side pacing signal (async): FrameMs times only the UI thread, which under async EXCLUDES submit/present/
-        // the GPU fence-wait (off-thread). So also report the render thread's ACTUAL present cadence (PresentAck delta /
-        // wall-time = real on-screen fps) + its last GPU fence-wait. present << ui-fps ⇒ GPU-bound (the real bottleneck).
-        ulong lastPresentSeq = host.RenderPresentSeq;
-        long lastPresentTick = System.Diagnostics.Stopwatch.GetTimestamp();
+        // FrameMs/Fps time the UI loop. PresentFps comes from the host's successful-swapchain-present counter in every
+        // submit mode, so async coalescing and inline mode are both represented truthfully.
         // Present-path diagnosis (maximize → 60fps): watch the swapchain size + window state so a resize emits a one-shot
         // [fps resize] marker (WxH, scale, state, panel Hz, wait-kind), and every [fps] line carries the wait-kind/ms the
         // loop paced by (Ambient = software 60 cap; DisplayRate/Pace = panel rate → a lock is downstream in Present/GPU).
         float lastLoggedW = -1f, lastLoggedH = -1f;
         int cachedHz = fpsLog ? window.CurrentRefreshHz() : 0;
+        int spikeCluster = 0;
+        bool prevSpike = false;
+        long scrollPerfWindowStart = scrollPerf ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
+        int spFrames = 0, spClipE = 0, spClipD = 0, spFullHide = 0, spPinD = 0, spMorphD = 0, spContD = 0, spBindsMax = 0;
         static string WaitTok(FluentGpu.Hosting.HostWaitKind k) => k switch
         {
             FluentGpu.Hosting.HostWaitKind.Idle => "idle",
@@ -204,12 +206,12 @@ public static class FluentApp
             host.RunFrame();
             host.TickDetachedHosts();   // pop-out video windows: one frame each on this same UI+render thread
             n++;
-            if (fpsLog)
+            if (fpsLog || scrollPerf)
             {
                 var s = host.LastStats;
                 double gpuMs = host.LastGpuFenceWaitMs;
                 var szpx = window.ClientSizePx;
-                if (szpx.Width != lastLoggedW || szpx.Height != lastLoggedH)
+                if (fpsLog && (szpx.Width != lastLoggedW || szpx.Height != lastLoggedH))
                 {
                     lastLoggedW = szpx.Width; lastLoggedH = szpx.Height;
                     cachedHz = window.CurrentRefreshHz();   // once per size change, not per frame
@@ -217,16 +219,63 @@ public static class FluentApp
                 }
                 bool workSpike = (s.FlushMs + s.LayoutMs + s.RecordMs) > 11.0;
                 bool spike = workSpike || gpuMs > 11.0;   // UI work (not bare submit pacing) OR render-thread GPU stall
-                if (spike || n % 30 == 0)
+                if (spike)
                 {
-                    ulong curSeq = host.RenderPresentSeq;
-                    long nowT = System.Diagnostics.Stopwatch.GetTimestamp();
-                    double presentFps = curSeq > lastPresentSeq && nowT > lastPresentTick
-                        ? (curSeq - lastPresentSeq) * (double)System.Diagnostics.Stopwatch.Frequency / (nowT - lastPresentTick) : 0;
-                    lastPresentSeq = curSeq; lastPresentTick = nowT;
-                    double gpuRenderMs = host.LastGpuRenderMs;   // FG_GPU_TIMING: true raster ms (0 when off) — disambiguates the fence wait
-                    string gpuRenderTok = gpuRenderMs > 0.0 ? $" grender {gpuRenderMs:0.0}ms(scene {host.LastGpuSceneMs:0.0})" : "";
-                    Console.Error.WriteLine($"[fps]{(spike ? " SPIKE" : "")} ui {s.Fps:0}fps {s.FrameMs:0.0}ms (flush{s.FlushMs:0.0} rx{s.ReactiveFlushMs:0.0}/vr{s.VirtualRealizeMs:0.0} layout{s.LayoutMs:0.0} anim{s.AnimMs:0.0} record{s.RecordMs:0.0} submit{s.SubmitMs:0.0}) | present {presentFps:0}fps gpu {gpuMs:0.0}ms{gpuRenderTok} | wait {WaitTok(host.LastWaitKind)}{host.LastWaitMs} {szpx.Width}x{szpx.Height}@{cachedHz}Hz (f{n})");
+                    spikeCluster = prevSpike ? spikeCluster + 1 : 1;
+                    prevSpike = true;
+                }
+                else
+                {
+                    spikeCluster = 0;
+                    prevSpike = false;
+                }
+                if (scrollPerf && (s.StickyClipEvals | s.StickyClipDirties | s.PinDirties | s.MorphDirties | s.ContinuousDirties) != 0)
+                {
+                    spFrames++;
+                    spClipE += s.StickyClipEvals;
+                    spClipD += s.StickyClipDirties;
+                    spFullHide += s.StickyClipFullyHidden;
+                    spPinD += s.PinDirties;
+                    spMorphD += s.MorphDirties;
+                    spContD += s.ContinuousDirties;
+                    if (s.ScrollBindCount > spBindsMax) spBindsMax = s.ScrollBindCount;
+                }
+                if (scrollPerf)
+                {
+                    double spSec = (System.Diagnostics.Stopwatch.GetTimestamp() - scrollPerfWindowStart)
+                        / (double)System.Diagnostics.Stopwatch.Frequency;
+                    if (spSec >= 1.0)
+                    {
+                        if (spFrames > 0)
+                        {
+                            Console.Error.WriteLine(
+                                $"[scrollperf] frames={spFrames} clipE={spClipE} clipD={spClipD} fullHide={spFullHide} " +
+                                $"pinD={spPinD} morphD={spMorphD} contD={spContD} bindsMax={spBindsMax}");
+                        }
+                        spFrames = spClipE = spClipD = spFullHide = spPinD = spMorphD = spContD = spBindsMax = 0;
+                        scrollPerfWindowStart = System.Diagnostics.Stopwatch.GetTimestamp();
+                    }
+                }
+                if (fpsLog && (spike || n % 30 == 0))
+                {
+                    double gpuRenderMs = s.GpuRenderMs;   // FG_GPU_TIMING: true raster ms (0 when off) — disambiguates the fence wait
+                    string gpuRenderTok = gpuRenderMs > 0.0 ? $" grender {gpuRenderMs:0.0}ms(scene {s.GpuSceneMs:0.0})" : "";
+                    string clusterTok = spike && spikeCluster > 0 ? $" cluster={spikeCluster}" : "";
+                    string hitchTok =
+                        $" | hitch comps={s.ComponentsRendered} nodes={s.NodesVisited}/{s.DrawNodeCount} " +
+                        $"pump={s.ImagePumpMs:0.0}ms apply={s.ImageApplyCount}/{s.ImageApplyBytes / 1024}KB realize={s.RealizeCatchupMs:0.0}ms " +
+                        $"escapes={s.RootRelayoutEscapes} spans={s.SpansReused}/{s.SpansRebased}/{s.SpansReRecorded} " +
+                        $"reasons=0x{((uint)s.SpanReuseDisabledReasons):X} gc0=+{s.Gc0Delta} gc1=+{s.Gc1Delta} gc2=+{s.Gc2Delta}";
+                    string scrollTok = scrollPerf
+                        ? $" | scroll clipE={s.StickyClipEvals} clipD={s.StickyClipDirties} fullHide={s.StickyClipFullyHidden} " +
+                          $"pinD={s.PinDirties} morphD={s.MorphDirties} contD={s.ContinuousDirties} binds={s.ScrollBindCount}"
+                        : "";
+                    Console.Error.WriteLine(
+                        $"[fps]{(spike ? " SPIKE" : "")}{clusterTok} loop {s.Fps:0}fps {s.FrameMs:0.0}ms " +
+                        $"(flush{s.FlushMs:0.0} rx{s.ReactiveFlushMs:0.0}/vr{s.VirtualRealizeMs:0.0} layout{s.LayoutMs:0.0} " +
+                        $"anim{s.AnimMs:0.0} record{s.RecordMs:0.0} submit{s.SubmitMs:0.0}) | present {s.PresentFps:0}fps seq={s.PresentedSequence} " +
+                        $"gpu {gpuMs:0.0}ms{gpuRenderTok} | wait {WaitTok(host.LastWaitKind)}{host.LastWaitMs} " +
+                        $"{szpx.Width}x{szpx.Height}@{cachedHz}Hz (f{n}){hitchTok}{scrollTok}");
                 }
             }
             if (h.Frames > 0 && n >= h.Frames) break;

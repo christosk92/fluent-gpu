@@ -87,7 +87,7 @@ public static class Surfaces
     /// <summary>Artwork slot: a neutral <see cref="Shimmer"/> tile under the async image (which cross-fades in over it
     /// once decoded). <paramref name="morphKey"/> tags the image as a connected-animation (Hero) participant so it flies
     /// to/from the like-tagged Home card. The tile shares ONE decode handle with the image (matched W×H, any aspect).</summary>
-    public static Element Artwork(Image? image, int seed, float width, float height, float corners, string? morphKey = null, int decodePx = 0)
+    public static Element Artwork(Image? image, int seed, float width, float height, float corners, string? morphKey = null, int decodePx = 0, float saturation = 1f)
     {
         if (image?.MosaicTiles is { Count: > 0 } tiles)
         {
@@ -103,8 +103,8 @@ public static class Surfaces
         int dw = decodePx > 0 ? decodePx : (int)width, dh = decodePx > 0 ? decodePx : (int)height;
         Element img = url is null ? new BoxEl()
             : decodePx > 0
-                ? Ui.Image(url, ImageFit.Cover, 1f, decodePx, corners, ColorF.Transparent, image!.BlurHash) with { MorphId = morphKey }
-                : Ui.Image(url, width, height, corners, ColorF.Transparent, image!.BlurHash) with { MorphId = morphKey };
+                ? Ui.Image(url, ImageFit.Cover, 1f, decodePx, corners, ColorF.Transparent, image!.BlurHash) with { MorphId = morphKey, Saturation = saturation }
+                : Ui.Image(url, width, height, corners, ColorF.Transparent, image!.BlurHash) with { MorphId = morphKey, Saturation = saturation };
         return new BoxEl
         {
             ZStack = true, Width = width, Height = height, ClipToBounds = true,

@@ -35,7 +35,7 @@ sealed class ArtistPopular : Component
     const int MaxColumns = 3;
     const float MinColW = 260f;     // prototype --chart-min-col
     const float ColGap = 12f;       // prototype .chart gap: 2px 12px
-    const float RowVGap = 2f;
+    const float RowVGap = Spacing.S;
     const float RowH = 56f;
 
     public override Element Render()
@@ -190,12 +190,12 @@ sealed class ArtistPopular : Component
 
         var trail = new List<Element>(2) { TrackRow.Heart(st.Saved, onLike) };
         if (showDuration)
-            trail.Add(new TextEl(DetailFormat.TrackTime(t.DurationMs)) { Size = 12f, Color = Tok.TextSecondary });
+            trail.Add(new TextEl(DetailFormat.TrackTime(t.DurationMs)) { Size = 13f, Color = Tok.TextSecondary });
 
         return new BoxEl
         {
             Direction = 0, MinHeight = RowH, Grow = 1f, Basis = 0f, AlignItems = FlexAlign.Center, Gap = 8f,
-            Padding = new Edges4(6f, 0f, 6f, 0f), Corners = CornerRadius4.All(6f), MinWidth = 0f,
+            Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f), Corners = CornerRadius4.All(6f), MinWidth = 0f,
             Fill = shaded ? WaveeColors.RowZebra : ColorF.Transparent,
             HoverFill = shaded ? WaveeColors.RowHoverZebra : WaveeColors.RowHover,
             PressedFill = shaded ? WaveeColors.RowPressedZebra : WaveeColors.RowPressed,

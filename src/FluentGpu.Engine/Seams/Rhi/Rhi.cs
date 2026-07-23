@@ -184,6 +184,10 @@ public interface ISwapchain : IDisposable
     Size2 SizePx { get; }
     void Resize(Size2 px);
     void Present();
+    /// <summary>True when a SyncInterval-0 present is still tear-free because the swapchain is handed to a desktop
+    /// compositor (for example DirectComposition). The host uses this to scope interactive present experiments; opaque
+    /// HWND swapchains and backends that do not opt in stay on their ordinary vsync path.</summary>
+    bool SupportsCompositedIntervalZero => false;
 
     /// <summary>Configure the windowed popup's composition chrome (rounded acrylic content rect + outer shadow) for the
     /// current placement. Called on each placement before show. Default no-op: only a backdrop-backed backend honors it.</summary>

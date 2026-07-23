@@ -899,6 +899,38 @@ sealed class BoundVirtualProbe : Component
            with { Width = 300, Height = 400 };
 }
 
+// Captures the stable signal identity behind each bound slot. The overlap recycler gate pairs those signals with the
+// initial scene roots, then proves small window shifts preserve every overlapping logical item's root.
+sealed class BoundOverlapProbe : Component
+{
+    public const int N = 10_000;
+    public readonly List<IReadSignal<int>> SlotSignals = [];
+    public readonly ItemsViewController Controller = new();
+
+    public override Element Render() => new BoxEl
+    {
+        Width = 300f,
+        Height = 200f,
+        Direction = 1,
+        Children =
+        [
+            ItemsView.CreateBound(
+                N,
+                scope =>
+                {
+                    SlotSignals.Add(scope.Index);
+                    return new BoxEl
+                    {
+                        Height = 40f,
+                        Fill = Prop.Of(() => ColorF.FromRgba(30, 30, (byte)(scope.Index.Value % 2 == 0 ? 30 : 50))),
+                    };
+                },
+                RepeatLayout.Stack(40f),
+                new ListOptions { Overscan = 0, Controller = Controller }),
+        ],
+    };
+}
+
 // A component-backed bound row deliberately mixes a component snapshot with an index subscription, mirroring Wavee's
 // TrackRow. Used to prove a stable published virtual range still reports progress when its slot signals need rebinding.
 sealed class StableRangeBoundRow(IReadSignal<int> index) : Component
@@ -2019,6 +2051,38 @@ sealed class UseImageProbe : Component
 }
 
 // An image with a BlurHash → proves the LQIP preview decodes + uploads instantly (before the full-res decode).
+sealed class UseImageFanoutProbe : Component
+{
+    public int RendersA, RendersB;
+    public ImageState StateA, StateB;
+
+    public override Element Render() => new BoxEl
+    {
+        Direction = 0,
+        Children =
+        [
+            Embed.Comp(() => new UseImageFanoutLeaf(this, first: true)),
+            Embed.Comp(() => new UseImageFanoutLeaf(this, first: false)),
+        ],
+    };
+}
+
+sealed class UseImageFanoutLeaf(UseImageFanoutProbe owner, bool first) : Component
+{
+    public override Element Render()
+    {
+        var binding = UseImage(first ? "fanout/a" : "fanout/b", 32);
+        if (first) { owner.RendersA++; owner.StateA = binding.State; }
+        else { owner.RendersB++; owner.StateB = binding.State; }
+        return new BoxEl
+        {
+            Width = 32,
+            Height = 32,
+            Fill = binding.IsReady ? ColorF.FromRgba(40, 180, 90) : ColorF.FromRgba(60, 60, 60),
+        };
+    }
+}
+
 sealed class BlurHashProbe : Component
 {
     public override Element Render() => new BoxEl
@@ -3867,7 +3931,12 @@ sealed class LifecycleRepeaterProbe : Component
 sealed class PersistentPrefixProbe : Component
 {
     public const int N = 1000;
+    public static ColorF HeroFill => ColorF.FromRgba(142, 48, 190);
+    public static ColorF ChromeFill => ColorF.FromRgba(42, 156, 196);
+    public static ColorF RowFill => ColorF.FromRgba(38, 44, 52);
     public readonly List<IReadSignal<int>> PrefixSignals = new();
+    public int Clicks;
+    public int LastClicked = -1;
     public override Element Render()
         => ItemsView.CreateBound(N,
             scope =>
@@ -3877,11 +3946,20 @@ sealed class PersistentPrefixProbe : Component
                 return new BoxEl
                 {
                     Height = 40f,
+                    Fill = initial == 0 ? HeroFill : initial == 1 ? ChromeFill : RowFill,
+                    ScrollBinds = initial == 0 ? [new() { PinTop = 0f }]
+                        : initial == 1 ? [new() { PinTop = 40f }] : null,
+                    OnClick = () => { Clicks++; LastClicked = scope.Index.Peek(); },
                     Children = [new TextEl(Prop.Of(() => $"row {scope.Index.Value}")) { Size = 12f }],
                 };
             },
             RepeatLayout.Stack(40f),
-            new ListOptions { Overscan = 4, PersistentPrefixCount = 2 });
+            new ListOptions
+            {
+                Overscan = 4,
+                PersistentPrefixCount = 2,
+                Scroll = new ScrollOptions { ItemClipTopInset = 80f },
+            });
 }
 
 // Reconcile-window in-place diff (the Home "like-flash" class of bug): a parent re-render rebuilds the VirtualListEl

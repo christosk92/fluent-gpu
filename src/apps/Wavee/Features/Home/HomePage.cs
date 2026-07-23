@@ -93,7 +93,7 @@ sealed class HomePage : Component
 
         Element Tile(HomeCard c, string section = "", int index = -1)
         {
-            string? url = HomeImageDiagnostics.NormalizedUrl(c.Image);
+            string? url = HomeImageDiagnostics.Enabled ? HomeImageDiagnostics.NormalizedUrl(c.Image) : null;
             Element tile = MediaCard.QuickPick(c.Image, c.Title, c.Uri, () => NavCard(c), () => PlayCard(c),
                 accent: c.Accent is { } a ? WaveePalette.Lift(WaveePalette.ToColor(a)) : null,
                 diagnostics: url is { Length: > 0 }
@@ -621,6 +621,8 @@ sealed class HomeQuickImageProbe : Component
 
 static class HomeImageDiagnostics
 {
+    public static readonly bool Enabled =
+        Environment.GetEnvironmentVariable("WAVEE_HOME_IMAGE_DIAG") is "1" or "true" or "TRUE";
     static readonly object Gate = new();
     static readonly HashSet<string> Seen = new(StringComparer.Ordinal);
 
@@ -633,6 +635,7 @@ static class HomeImageDiagnostics
 
     public static void LogFeed(HomeFeed feed)
     {
+        if (!Enabled) return;
         for (int gi = 0; gi < feed.Groups.Count; gi++)
         {
             var group = feed.Groups[gi];
@@ -671,6 +674,7 @@ static class HomeImageDiagnostics
 
     public static void LogState(string uri, string title, string section, int index, string url, ImageBinding binding)
     {
+        if (!Enabled) return;
         string key = "state|" + uri + "|" + index + "|" + binding.State + "|" + binding.Failure + "|" + binding.Attempts;
         LogOnce(key, () =>
         {

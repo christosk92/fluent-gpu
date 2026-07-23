@@ -9,6 +9,50 @@ using Wavee.Core;
 
 namespace Wavee;
 
+/// <summary>Atomic, equality-gated identity used by high-fanout playback matchers (rows/cards/lyrics). It retains the
+/// rich track for album/artist matching but compares only the identity fields that can change a match, so metadata-only
+/// refreshes do not invalidate every visible consumer.</summary>
+public readonly struct PlaybackIdentity : IEquatable<PlaybackIdentity>
+{
+    public string? ContextUri { get; }
+    public Track? Track { get; }
+    readonly int _membershipHash;
+
+    public PlaybackIdentity(string? contextUri, Track? track)
+    {
+        ContextUri = contextUri;
+        Track = track;
+        int h = 17;
+        h = unchecked(h * 31 + StringComparer.Ordinal.GetHashCode(track?.Id ?? ""));
+        h = unchecked(h * 31 + StringComparer.Ordinal.GetHashCode(track?.Album.Uri ?? ""));
+        if (track is { } t)
+            for (int i = 0; i < t.Artists.Count; i++)
+                h = unchecked(h * 31 + StringComparer.Ordinal.GetHashCode(t.Artists[i].Uri ?? ""));
+        _membershipHash = h;
+    }
+
+    public bool Equals(PlaybackIdentity other)
+    {
+        if (!StringComparer.Ordinal.Equals(ContextUri, other.ContextUri)
+            || !StringComparer.Ordinal.Equals(Track?.Id, other.Track?.Id)
+            || !StringComparer.Ordinal.Equals(Track?.Album.Uri, other.Track?.Album.Uri))
+            return false;
+        int count = Track?.Artists.Count ?? 0;
+        if (count != (other.Track?.Artists.Count ?? 0)) return false;
+        for (int i = 0; i < count; i++)
+            if (!StringComparer.Ordinal.Equals(Track!.Artists[i].Uri, other.Track!.Artists[i].Uri))
+                return false;
+        return true;
+    }
+
+    public override bool Equals(object? obj) => obj is PlaybackIdentity other && Equals(other);
+    public override int GetHashCode() => HashCode.Combine(
+        ContextUri is null ? 0 : StringComparer.Ordinal.GetHashCode(ContextUri),
+        _membershipHash);
+    public static bool operator ==(PlaybackIdentity left, PlaybackIdentity right) => left.Equals(right);
+    public static bool operator !=(PlaybackIdentity left, PlaybackIdentity right) => !left.Equals(right);
+}
+
 /// <summary>
 /// THE single boundary between framework-neutral <c>Wavee.Core</c> (<see cref="IObservable{T}"/>) and the engine's
 /// reactive <see cref="Signal{T}"/>. It subscribes to the Core observables and, marshaling every callback onto the UI
@@ -57,6 +101,9 @@ public sealed class PlaybackBridge
     /// <summary>The currently-playing context uri (playlist/album/liked) — content cards compare their own uri to this
     /// to show the now-playing equalizer.</summary>
     public Signal<string?> CurrentContext { get; } = new(null);
+    /// <summary>Atomic context + match-relevant track identity for high-fanout consumers. Prefer this over separately
+    /// observing <see cref="CurrentTrack"/> and <see cref="CurrentContext"/> when only now-playing matching is needed.</summary>
+    public Signal<PlaybackIdentity> Identity { get; } = new(default);
     public Signal<bool> IsPlaying { get; } = new(false);
     public Signal<bool> IsBuffering { get; } = new(false);
     public Signal<PlaybackRecoveryKind> RecoveryKind { get; } = new(PlaybackRecoveryKind.None);
@@ -95,15 +142,44 @@ public sealed class PlaybackBridge
     /// asynchronously after the track resolves). Drives the player-bar video button's visibility. Fed by the optional
     /// store probe (<see cref="AttachStore"/>); the fake backend has none, so it stays false.</summary>
     public Signal<bool> CurrentTrackHasVideo { get; } = new(false);
-    /// <summary>UI-only swap intent: the user picked "video" for the now-playing track. The actual video surface/host is a
-    /// follow-up — for now this is the seam the player-bar button toggles (reset on every track change).</summary>
+    /// <summary>STICKY "watch video" intent: the user prefers video for playback. It carries ACROSS track changes (a new
+    /// track that also has a video keeps playing video) and is cleared ONLY by an explicit "switch to audio" / close-video
+    /// (see <see cref="PlayerBar"/>). A placement change (PiP ↔ detached) never clears it. This is one of the two inputs to
+    /// <see cref="VideoActive"/>; NEVER read it alone to decide whether a video surface should be live — read
+    /// <see cref="VideoActive"/>, which also honors has-video and the per-track PiP dismiss.</summary>
     public Signal<bool> PreferVideo { get; } = new(false);
 
-    /// <summary>UI-only placement intent: the user chose the IN-WINDOW picture-in-picture video surface (as opposed to the
-    /// detached pop-out window). Mutually exclusive with the detached pop-out — both consume the one resolved
-    /// <see cref="PopOutVideoSource"/>, but only one plays at a time. Reset to false on every track change (like
-    /// <see cref="PreferVideo"/>). The shell mounts <c>InWindowVideoPip</c> while this is true.</summary>
-    public Signal<bool> ShowInWindowPip { get; } = new(false);
+    /// <summary>The SINGLE owned placement state: where the now-playing video plays when <see cref="VideoActive"/> is true.
+    /// Defaults to <see cref="VideoPlacement.Detached"/> — the primary "watch video" action pops out. The one owner of the
+    /// surfaces (<c>VideoPlacementHost</c> for the detached window; <c>InWindowVideoPip</c> self-gates on it) derives from
+    /// this + <see cref="VideoActive"/>; the player-bar button highlights derive from it too, so the toggle can never get
+    /// out of sync with the actual surface state.</summary>
+    public Signal<VideoPlacement> VideoPlacement { get; } = new(Wavee.VideoPlacement.Detached);
+
+    // ── video placement plumbing (single-owner model) ──────────────────────────────────────────────────────────────
+    // Monotonic per-track generation, bumped on every track change (PushState). Used both to expire the PiP-dismiss
+    // (below) and to fence stale async video resolves (see _videoResolveGen).
+    long _trackGen;
+    // The track generation the user DISMISSED the video for (PiP ✕). While it equals _trackGen, VideoActive() is false
+    // for this track WITHOUT clearing the sticky PreferVideo — audio keeps playing, the surface hides, and the next track
+    // (a higher _trackGen) or an explicit RestoreVideo() re-activates. A signal so VideoActive() re-evaluates reactively.
+    // -1 = "not dismissed" (_trackGen is never negative).
+    readonly Signal<long> _dismissedForTrackGen = new(-1L);
+
+    /// <summary>The one predicate every video surface + player-bar highlight reads: a video should be live iff the user
+    /// prefers video, the current track HAS a video, and the video is not dismissed for this track. Reads signals, so a
+    /// caller in <c>Render</c> subscribes and re-derives automatically — this is what keeps the button toggle, the PiP,
+    /// and the detached window from desyncing (they all derive from this ONE truth, not three separate flags).</summary>
+    public bool VideoActive()
+        => VideoPlacementLogic.VideoActive(PreferVideo.Value, CurrentTrackHasVideo.Value, _trackGen, _dismissedForTrackGen.Value);
+
+    /// <summary>Dismiss the video for the CURRENT track (the PiP ✕): audio keeps playing and the surface hides until the
+    /// track changes or <see cref="RestoreVideo"/> is called. Does NOT clear the sticky <see cref="PreferVideo"/>.</summary>
+    public void DismissVideoForCurrentTrack() => _dismissedForTrackGen.Value = _trackGen;
+
+    /// <summary>Clear a per-track PiP dismiss so <see cref="VideoActive"/> can light up again for the current track (used by
+    /// the player-bar "watch video" intents, so re-clicking video after dismissing the PiP restores it).</summary>
+    public void RestoreVideo() => _dismissedForTrackGen.Value = -1L;
 
     /// <summary>The resolved video source for the now-playing track (null = none resolved yet): a clear/Canvas URL or a
     /// PlayReady DRM descriptor + license relay. The pop-out / inline video surface plays it (clear on the MF backend,
@@ -115,22 +191,33 @@ public sealed class PlaybackBridge
     /// bootstrap to <c>SpotifyVideoService.ResolvePlayableAsync</c>; null on the fake/offline backend. Off the UI thread.</summary>
     public System.Func<string, System.Threading.CancellationToken, System.Threading.Tasks.Task<Wavee.SpotifyLive.PopOutVideoSource?>>? ResolveVideoSource;
 
+    // Monotonic resolve generation (bug 4 guard): each RequestPopOutSource captures ++_videoResolveGen; a track change
+    // (PushState) also bumps it. An async resolve only publishes if its captured gen is still current — a resolve for a
+    // superseded track is dropped instead of overwriting the current track's source with a stale video. The CTS cancels
+    // the previous in-flight resolve so a dropped one also stops early. UI-thread only (every writer is post-marshalled).
+    long _videoResolveGen;
+    System.Threading.CancellationTokenSource? _videoResolveCts;
+
     /// <summary>Kick off (fire-and-forget) resolving the pop-out video source for <paramref name="trackUri"/> and publish
     /// it onto <see cref="PopOutVideoSource"/> on the UI thread. No-op before <see cref="Activate"/> / without a resolver
-    /// (fake backend) — the pop-out then just shows the letterbox until a source arrives.</summary>
+    /// (fake backend) — the pop-out then just shows the letterbox until a source arrives. A resolve superseded by the next
+    /// request or a track change is dropped at publish (never overwrites the current track's source).</summary>
     public void RequestPopOutSource(string? trackUri)
     {
         if (ResolveVideoSource is not { } resolve || string.IsNullOrEmpty(trackUri) || _post is not { } post) return;
-        _ = ResolveAndPublishAsync(resolve, trackUri!, post);
+        _videoResolveCts?.Cancel();
+        _videoResolveCts = new System.Threading.CancellationTokenSource();
+        var gen = ++_videoResolveGen;
+        _ = ResolveAndPublishAsync(resolve, trackUri!, post, gen, _videoResolveCts.Token);
     }
 
     async System.Threading.Tasks.Task ResolveAndPublishAsync(
         System.Func<string, System.Threading.CancellationToken, System.Threading.Tasks.Task<Wavee.SpotifyLive.PopOutVideoSource?>> resolve,
-        string uri, System.Action<System.Action> post)
+        string uri, System.Action<System.Action> post, long gen, System.Threading.CancellationToken ct)
     {
         Wavee.SpotifyLive.PopOutVideoSource? src = null;
-        try { src = await resolve(uri, default).ConfigureAwait(false); } catch { /* resolution failure → no source (pop-out stays letterbox) */ }
-        post(() => PopOutVideoSource.Value = src);
+        try { src = await resolve(uri, ct).ConfigureAwait(false); } catch { /* resolution failure / cancellation → no source (pop-out stays letterbox) */ }
+        post(() => { if (VideoPlacementLogic.ShouldPublishResolve(gen, _videoResolveGen)) PopOutVideoSource.Value = src; });   // drop a stale (superseded-track) resolve
     }
 
     /// <summary>Monotonic "open the device picker" request. The critical "playback unsupported" toast's <em>Choose device</em>
@@ -339,6 +426,11 @@ public sealed class PlaybackBridge
         if (!string.IsNullOrEmpty(uri) && _store is { } store)
             has = (store.GetVideoAssociation(uri)?.HasVideo ?? false) || (store.GetTrack(uri)?.HasVideo ?? false);
         CurrentTrackHasVideo.Value = has;
+        // Sticky video: if the user prefers video and this track has one (whether known at the track change or arriving
+        // asynchronously after it) but no source is resolved yet, kick a resolve so the surface has something to play.
+        // Gen-fenced at publish, so this is safe to call redundantly (last request wins).
+        if (has && VideoActive() && PopOutVideoSource.Peek() is null)
+            RequestPopOutSource(uri);
     }
 
     /// <summary>An <see cref="ILoginProgress"/> the live-login bootstrap reports to off the UI thread; each snapshot is
@@ -354,9 +446,21 @@ public sealed class PlaybackBridge
     {
         var prevUri = CurrentTrack.Value?.Uri;
         CurrentTrack.Value = s.CurrentTrack;
-        if (s.CurrentTrack?.Uri != prevUri) { PreferVideo.Value = false; ShowInWindowPip.Value = false; PopOutVideoSource.Value = null; }   // a new track resets the swap toggles + resolved video source
-        RecomputeHasVideo();                                            // reflect the new track's cached video state (if any)
+        if (s.CurrentTrack?.Uri != prevUri)
+        {
+            // A new track. PreferVideo is STICKY now (video carries across tracks) — do NOT clear it. Bump the track
+            // generation (expires any PiP-dismiss AND fences an in-flight resolve for the previous track), cancel that
+            // resolve, and clear the previous track's resolved source. RecomputeHasVideo() (next line) re-resolves for
+            // the new track iff VideoActive() — so a video-less track just goes inactive, a video track auto-continues.
+            _trackGen++;
+            _videoResolveGen++;
+            _videoResolveCts?.Cancel();
+            _dismissedForTrackGen.Value = -1L;   // the new track is not dismissed
+            PopOutVideoSource.Value = null;
+        }
+        RecomputeHasVideo();                                            // reflect the new track's cached video state (+ re-resolve if VideoActive)
         CurrentContext.Value = s.ContextUri;
+        Identity.Value = new PlaybackIdentity(s.ContextUri, s.CurrentTrack);
         IsPlaying.Value = s.IsPlaying;
         IsBuffering.Value = s.IsBuffering;
         RecoveryKind.Value = s.RecoveryKind;

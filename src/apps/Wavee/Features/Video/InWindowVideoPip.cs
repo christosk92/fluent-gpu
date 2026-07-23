@@ -16,7 +16,9 @@ namespace Wavee.Features.Video;
 /// <see cref="PopOutVideoSource"/> — so the player logic (clear MF / PlayReady CDM) is reused verbatim, not duplicated.
 /// Video composites here because the stage's <c>MediaPlayerElement</c> uses the PRIMARY window's AppHost registry (the
 /// PiP lives INSIDE the main scene). Mutually exclusive with the detached pop-out window (both read the one resolved
-/// source; only one plays at a time). Visibility is driven by <see cref="PlaybackBridge.ShowInWindowPip"/>.
+/// source; only one plays at a time). Visibility is derived: it mounts iff <see cref="PlaybackBridge.VideoActive"/> and
+/// <see cref="PlaybackBridge.VideoPlacement"/> is <see cref="VideoPlacement.InWindowPip"/> (the single-owner placement
+/// model — never a standalone flag).
 ///
 /// Drag/resize follow the SidebarResizeGrip idiom: BoxEl.OnDrag uses the engine's eager pointer capture, so the gesture
 /// keeps firing as the pointer leaves the thin grip; because the grip MOVES with the surface, the true window-space
@@ -49,8 +51,8 @@ sealed class InWindowVideoPip : Component
         var b = UseContext(PlaybackBridge.Slot);
         if (b is null) return new BoxEl();
 
-        // Subscribe → mount/unmount the whole surface when the user toggles the in-window placement.
-        if (!b.ShowInWindowPip.Value) return new BoxEl();
+        // Subscribe → mount/unmount the whole surface as the DERIVED placement state changes (VideoActive × placement).
+        if (!(b.VideoActive() && b.VideoPlacement.Value == VideoPlacement.InWindowPip)) return new BoxEl();
 
         var vp = UseContextSignal(Viewport.Size);
         _vpSig = vp;
@@ -138,7 +140,9 @@ sealed class InWindowVideoPip : Component
             Fill = ColorF.Transparent, HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
             Role = AutomationRole.Button, Focusable = true, AllowFocusOnInteraction = false,
             Cursor = CursorId.Hand,
-            OnClick = () => b.ShowInWindowPip.Value = false,
+            // ✕ dismisses the video for THIS track (audio keeps playing, surface hides) — it does NOT clear the sticky
+            // PreferVideo. The next track (or a "watch video" re-click → RestoreVideo) brings it back.
+            OnClick = () => b.DismissVideoForCurrentTrack(),
             Children =
             [
                 new TextEl(Icons.Cancel) { Size = 12f, FontFamily = Theme.IconFont, Color = Tok.TextSecondary, HoverColor = Tok.TextPrimary },

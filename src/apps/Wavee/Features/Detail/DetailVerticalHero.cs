@@ -85,8 +85,8 @@ static class DetailVerticalHero
             ? DetailVerticalLayout.HeroPad
             : 0f;
         float fullArtY = side ? DetailVerticalLayout.HeroPad : 0f;
-        // Side-by-side must pin Opacity/TransY to identity: immersive binds leave compositor values on the retained
-        // node across an orientation flip, and without an explicit rewrite the cover stays faded/offset (empty hero).
+        // Side-by-side: pin Opacity/Trans to identity and morph in place. (In-flow cover — no overlay.)
+        // connected:false avoids a Hero-fly dest that can leave the slot empty if the fly handoff glitches.
         ScrollBindDsl[] SideArtworkBinds() =>
         [
             new() { From = ScrollChannel.Offset, To = BindSink.Opacity,
@@ -105,7 +105,6 @@ static class DetailVerticalHero
         Element artworkBox = new BoxEl
         {
             Width = artSize, Height = artSize, Shrink = 0f,
-            Opacity = 1f,
             HitTestVisible = expandedInteractive,
             Corners = CornerRadius4.All(side ? Radii.Card : 0f),
             Shadow = side ? Elevation.Card : default,
@@ -118,7 +117,9 @@ static class DetailVerticalHero
             [
                 editable
                     ? PlaylistInlineEdit.Cover(full, artSize, side ? Radii.Card : 0f, shadow: side)
-                    : DetailRail.HeroArtwork(m, artSize, side ? Radii.Card : 0f)
+                    // Apple oversaturates album art for a punchier look under the hero scrim — applied in both hero
+                    // layouts (immersive/stacked and the wide side-by-side rail).
+                    : DetailRail.HeroArtwork(m, artSize, side ? Radii.Card : 0f, connected: !side, saturation: 1.18f)
             ],
         };
 
@@ -141,22 +142,63 @@ static class DetailVerticalHero
                 MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
             }));
 
-        // Title — Apple's album/playlist hero is Bold white display type. Immersive uses MaxWidth (not Width) so the
-        // text box shrink-wraps and AlignItems.Center can actually center short titles; a full-width box left-aligns.
-        float titleSize = side ? 32f : 30f;
+        // Immersive type is Apple Music display hierarchy — NOT the Fluent Title ramp (Semibold + 36 LH). Short titles
+        // punch larger; long titles stay Bold but step down so two lines still read as one cluster. Tracking is slight
+        // negative (1/1000 em). Side-by-side keeps Wavee's desktop Title voice.
+        float titleSize = immersive ? ImmersiveTitleSize(m.Title) : 32f;
         ushort titleWeight = immersive ? (ushort)700 : (ushort)600;
         Element title = editable
             ? PlaylistInlineEdit.Title(full, contentW, titleSize, titleWeight, onMedia: immersive)
-            : WaveeType.PageHero(m.Title) with
-            {
-                Size = titleSize, MinSize = 18f, Weight = titleWeight, LineHeight = float.NaN,
-                Width = immersive ? float.NaN : contentW,
-                MaxWidth = contentW,
-                Wrap = TextWrap.WrapWholeWords, MaxLines = immersive ? 2 : 3, Trim = TextTrim.CharacterEllipsis,
-                Color = immersive ? Tok.OnMediaPrimary : Tok.TextPrimary,
-            };
-        infoKids.Add(side
-            ? new BoxEl
+            : immersive
+                ? new TextEl(m.Title)
+                {
+                    // Display optical size when available (SF Pro Display analogue on Windows).
+                    FontFamily = "Segoe UI Variable Display",
+                    Size = titleSize, Weight = titleWeight,
+                    LineHeight = titleSize * 1.08f, CharSpacing = titleSize >= 34f ? -28f : -16f,
+                    MaxWidth = contentW,
+                    Wrap = TextWrap.WrapWholeWords, MaxLines = 2, Trim = TextTrim.CharacterEllipsis,
+                    Color = Tok.OnMediaPrimary,
+                }
+                : WaveeType.PageHero(m.Title) with
+                {
+                    Size = titleSize, MinSize = 18f, Weight = titleWeight, LineHeight = float.NaN,
+                    Width = contentW, MaxWidth = contentW,
+                    Wrap = TextWrap.WrapWholeWords, MaxLines = 3, Trim = TextTrim.CharacterEllipsis,
+                    Color = Tok.TextPrimary,
+                };
+
+        Element? attribution = Attribution(m, h, contentW, immersive);
+
+        // Identity copy. Side-by-side keeps the prose-first desktop order; immersive follows the Apple Music stack:
+        // tight identity cluster → actions → quieter prose.
+        Element? description = null;
+        if (editable)
+            description = Fade(PlaylistInlineEdit.Description(full, contentW, descLines, h, onMedia: immersive));
+        else if (m.Description is { Length: > 0 })
+            description = Fade(RichText.Expandable(m.Description, immersive ? 13f : 12f,
+                immersive ? ColorF.FromRgba(255, 255, 255) with { A = 0.58f } : Tok.TextSecondary,
+                immersive ? Tok.OnMediaPrimary : Tok.AccentTextPrimary,
+                contentW, descLines, m.ContextUri ?? m.Title,
+                u => { if (RichText.RouteForUri(u) is { } k) h.Go(k, null); }));
+
+        Element? meta = null;
+        if (m.MetaLine is { Length: > 0 })
+            meta = immersive
+                ? new TextEl(m.MetaLine)
+                {
+                    Size = 12f, Weight = 400, LineHeight = 16f,
+                    Color = ColorF.FromRgba(255, 255, 255) with { A = 0.58f },
+                    MaxWidth = contentW, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+                }
+                : WaveeType.TrackMeta(m.MetaLine) with
+                {
+                    MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+                };
+
+        if (side)
+        {
+            infoKids.Add(new BoxEl
             {
                 Direction = 1, Width = contentW, HitTestVisible = expandedInteractive,
                 TransformOriginX = 0f, TransformOriginY = 0f,
@@ -171,43 +213,31 @@ static class DetailVerticalHero
                         Range = ScrollRange.Px(0f, collapseDistance), OutStart = 1f, OutEnd = 14f / titleSize },
                 ],
                 Children = [title],
-            }
-            : Fade(title));
-
-        Element? attribution = Attribution(m, h, contentW, immersive);
-        if (attribution is not null) infoKids.Add(Fade(attribution));
-
-        // Identity copy. Side-by-side keeps the prose-first desktop order; immersive follows the Apple Music stack:
-        // identity → facts → actions → prose, all inside the lower artwork fade.
-        Element? description = null;
-        if (editable)
-            description = Fade(PlaylistInlineEdit.Description(full, contentW, descLines, h, onMedia: immersive));
-        else if (m.Description is { Length: > 0 })
-            description = Fade(RichText.Expandable(m.Description, immersive ? 13f : 12f,
-                immersive ? Tok.OnMediaSecondary : Tok.TextSecondary,
-                immersive ? Tok.OnMediaPrimary : Tok.AccentTextPrimary,
-                contentW, descLines, m.ContextUri ?? m.Title,
-                u => { if (RichText.RouteForUri(u) is { } k) h.Go(k, null); }));
-
-        // Meta line for ALL kinds (albums' MetaLine carries songs·duration·year; playlists/liked carry songs·duration).
-        Element? meta = null;
-        if (m.MetaLine is { Length: > 0 })
-            meta = Fade(WaveeType.TrackMeta(m.MetaLine) with
-            {
-                Size = immersive ? 13f : float.NaN,
-                Color = immersive ? Tok.OnMediaSecondary : Tok.TextSecondary,
-                MaxWidth = immersive ? contentW : float.NaN,
-                MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
             });
-        if (side)
-        {
+            if (attribution is not null) infoKids.Add(Fade(attribution));
             if (description is not null) infoKids.Add(description);
-            if (meta is not null) infoKids.Add(meta);
+            if (meta is not null) infoKids.Add(Fade(meta));
+        }
+        else
+        {
+            // One Fade for the whole identity: title / artist / meta sit in a tight Apple stack (not Fluent 6-DIP list gap).
+            var identityKids = new List<Element>(3) { title };
+            if (attribution is not null) identityKids.Add(attribution);
+            if (meta is not null) identityKids.Add(meta);
+            infoKids.Add(Fade(new BoxEl
+            {
+                Direction = 1, Gap = 3f, AlignItems = FlexAlign.Start,
+                Children = identityKids.ToArray(),
+            }));
         }
 
         // Desktop keeps Wavee's full action cluster. Immersive follows Apple's phone hierarchy exactly: a quiet circular
         // Shuffle, a dominant wide Play pill, and a quiet circular Save/Add. Share + More move to the artwork's top edge.
+        // Circle fills are white-alpha "glass" so the art-derived wash tints them (Apple vibrancy) — never opaque MediaScrim.
         ColorF onAccent = ColorContrast.PickContrast(h.Accent);
+        ColorF glass = ImmersiveGlass;
+        ColorF glassHover = ImmersiveGlassHover;
+        ColorF glassPress = ImmersiveGlassPress;
         float actionSize = side ? 32f : 40f;
         float compactPlayLeft = viewportW - compactLeft - DetailVerticalLayout.CompactArtworkSize;
         // Immersive Play is a plain white pill in the Apple 3-control row (no morph slot → no 48-DIP wrapper offset).
@@ -215,7 +245,8 @@ static class DetailVerticalHero
         Element playButton = ActionButton(Icons.Play, Loc.Get(Strings.Detail.Play), actionSize,
             immersive ? Tok.OnMediaPrimary : h.Accent,
             immersive ? ColorF.FromRgba(0, 0, 0) : onAccent,
-            h.PlayAll, pill: immersive, width: immersive ? 120f : float.NaN);
+            h.PlayAll, pill: immersive, width: immersive ? 132f : float.NaN,
+            labelSize: immersive ? 15f : 13f);
         Element expandedPlay = immersive
             ? Fade(playButton)
             : new BoxEl
@@ -252,9 +283,9 @@ static class DetailVerticalHero
             ScrollBinds =
             [
                 new() { From = ScrollChannel.Offset, MorphLeftTo = compactPlayLeft,
-                    Range = ScrollRange.Px(0f, collapseDistance) },
+                    Range = ScrollRange.Px(0f, collapseDistance), OutStart = 0f, OutEnd = 1f },
                 new() { From = ScrollChannel.Offset, MorphTopTo = 10f,
-                    Range = ScrollRange.Px(0f, collapseDistance) },
+                    Range = ScrollRange.Px(0f, collapseDistance), OutStart = 0f, OutEnd = 1f },
                 new() { From = ScrollChannel.Offset, To = BindSink.ScaleUniform,
                     Range = ScrollRange.Px(0f, collapseDistance), OutStart = 1f, OutEnd = 0.75f },
             ],
@@ -269,7 +300,8 @@ static class DetailVerticalHero
         if (immersive)
         {
             actions.Add(Fade(ActionButton(Icons.Shuffle, Loc.Get(Strings.Detail.Shuffle), actionSize,
-                Tok.MediaScrim, Tok.OnMediaPrimary, h.Shuffle, iconOnly: true, pill: true)));
+                glass, Tok.OnMediaPrimary, h.Shuffle, iconOnly: true, pill: true,
+                hoverFill: glassHover, pressedFill: glassPress, hairline: true)));
             actions.Add(expandedPlay);
         }
         else
@@ -289,23 +321,31 @@ static class DetailVerticalHero
             actions.Add(Fade(Embed.Comp(() => new DetailHeroMoreButton(full, cfg, h, actionSize))
                 with { Key = $"vhero-more:{m.ContextUri}:{(int)actionSize}" }));
         }
-        if (immersive && meta is not null) infoKids.Add(meta);
+        // Breathing room between the tight identity cluster and the control row (Apple ~12–16pt).
+        if (immersive) infoKids.Add(new BoxEl { Height = 12f, HitTestVisible = false });
         infoKids.Add(new BoxEl
         {
             Direction = 0, Gap = side ? Spacing.S : 12f, AlignItems = FlexAlign.Center,
-            Justify = side ? FlexJustify.Start : FlexJustify.Center,
+            Justify = FlexJustify.Start,
             Children = actions.ToArray(),
         });
-        if (immersive && description is not null) infoKids.Add(description);
+        if (immersive && description is not null)
+        {
+            infoKids.Add(new BoxEl { Height = 14f, HitTestVisible = false });
+            infoKids.Add(description);
+        }
 
         Element artworkPlaceholder = new BoxEl { Width = artSize, Height = artSize, Shrink = 0f };
+        // Side-by-side: keep the cover IN FLOW (not a ZStack overlay). The overlay path left a transparent spacer when
+        // compositor opacity/transform leftover from immersive, or when scroll binds failed to resolve — the classic
+        // "empty hero with floating text" failure. Morph still runs on the in-flow node; layout space stays reserved.
         Element hero = side
             ? new BoxEl
             {
                 Direction = 0, Gap = DetailVerticalLayout.HeroGap, AlignItems = FlexAlign.Start,
                 Children =
                 [
-                    artworkPlaceholder,
+                    artworkBox,
                     new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = Spacing.M, AlignItems = FlexAlign.Stretch, Children = infoKids.ToArray() },
                 ],
             }
@@ -321,8 +361,9 @@ static class DetailVerticalHero
                         Direction = 1, Width = viewportW, Height = artSize,
                         Justify = FlexJustify.End,
                         Padding = new Edges4(DetailVerticalLayout.HeroPad, DetailVerticalLayout.HeroPad,
-                            DetailVerticalLayout.HeroPad, 20f),
-                        Gap = 6f, AlignItems = FlexAlign.Center,
+                            DetailVerticalLayout.HeroPad, 22f),
+                        // Identity cluster owns its own 3-DIP gap; outer gap only separates major blocks.
+                        Gap = 0f, AlignItems = FlexAlign.Start,
                         Children = infoKids.ToArray(),
                     },
                 ],
@@ -346,8 +387,9 @@ static class DetailVerticalHero
             ],
         };
 
-        // Side-by-side keeps the existing single-node artwork morph. Immersive art is intentionally different: it
-        // remains page media, drifts/fades under an alpha edge, and a separate compact identity crossfades in.
+        // Immersive art stays a page-media overlay (parallax dissolve). Side-by-side already placed artworkBox in-flow.
+        if (!immersive) return expanded;
+
         Element artworkLayer = new BoxEl
         {
             Direction = 1,
@@ -355,8 +397,6 @@ static class DetailVerticalHero
             HitTestPassThrough = true,
             Children = [artworkBox],
         };
-
-        if (!immersive) return ZStack(expanded, artworkLayer) with { Direction = 1 };
 
         static ColorF Scrim(float alpha) => ColorF.FromRgba(0, 0, 0) with { A = alpha };
         // Mid-band contrast only: EdgeFade dissolves the bitmap into the opaque page wash; this veil sits ABOVE the
@@ -366,9 +406,9 @@ static class DetailVerticalHero
         {
             Width = viewportW, Height = artSize, HitTestPassThrough = true,
             Gradient = GradientDown(
-                new GradientStop(0.34f, Scrim(0f)),
-                new GradientStop(0.58f, Scrim(0.55f)),
-                new GradientStop(0.82f, Scrim(0.28f)),
+                new GradientStop(0.50f, Scrim(0f)),
+                new GradientStop(0.74f, Scrim(0.46f)),
+                new GradientStop(0.90f, Scrim(0.26f)),
                 new GradientStop(1f, Scrim(0f))),
             OpacityGroup = true, ScrollBinds = FadeExpanded(),
         };
@@ -376,8 +416,9 @@ static class DetailVerticalHero
         var utilityKids = new List<Element>(2);
         if (m.ShareUrl is { Length: > 0 } shareUrl)
             utilityKids.Add(ActionButton(Icons.Share, Loc.Get(Strings.Menu.Share), 36f,
-                Tok.MediaScrim, Tok.OnMediaPrimary,
-                () => InputHooks.Current.Default.OpenUri?.Invoke(shareUrl), iconOnly: true, pill: true));
+                glass, Tok.OnMediaPrimary,
+                () => InputHooks.Current.Default.OpenUri?.Invoke(shareUrl), iconOnly: true, pill: true,
+                hoverFill: glassHover, pressedFill: glassPress, hairline: true));
         utilityKids.Add(Embed.Comp(() => new DetailHeroMoreButton(full, cfg, h, 36f, onMedia: true))
             with { Key = $"vhero-more-media:{m.ContextUri}" });
         Element immersiveUtilities = new BoxEl
@@ -427,6 +468,8 @@ static class DetailVerticalHero
                 }),
             ],
         };
+        // CompactReveal drives opacity 0→1; do not also set a literal Opacity here — reconciler would reset it
+        // each update and the scroll bind's LastWritten gate could skip rewriting the scrolled-in value.
         Element compactIdentity = new BoxEl
         {
             Direction = 0, Width = viewportW, Height = DetailVerticalLayout.CompactIdentityHeight,
@@ -450,12 +493,32 @@ static class DetailVerticalHero
         return ZStack(artworkLayer, copyContrast, expanded, immersiveUtilities, compactIdentity) with { Direction = 1 };
     }
 
+    // White-alpha plates over the art-derived wash — Apple's "accent-aware" circle controls (vibrancy without blur).
+    static ColorF ImmersiveGlass => DetailHeroImmersiveGlass.Fill;
+    static ColorF ImmersiveGlassHover => DetailHeroImmersiveGlass.Hover;
+    static ColorF ImmersiveGlassPress => DetailHeroImmersiveGlass.Press;
+    static ColorF ImmersiveGlassStroke => DetailHeroImmersiveGlass.Stroke;
+
+    /// <summary>Apple Music scales the immersive title with string length — short punches (SOS/GUTS) sit near display
+    /// size; long album names step down so a 2-line wrap still feels like one title, not a Fluent Title block.</summary>
+    static float ImmersiveTitleSize(string title)
+    {
+        int n = title.Length;
+        if (n <= 6) return 42f;
+        if (n <= 14) return 34f;
+        if (n <= 28) return 28f;
+        return 24f;
+    }
+
     static Element? Attribution(DetailModel m, DetailHandlers h, float maxWidth, bool onMedia)
     {
+        // Immersive artist/owner: Regular/Medium white — clearly below the Bold title, never Semibold competing with it.
         if (m.OwnerName is { Length: > 0 } owner)
             return new TextEl(owner)
             {
-                Size = onMedia ? 15f : 12f, Weight = onMedia ? (ushort)500 : (ushort)600,
+                FontFamily = onMedia ? "Segoe UI Variable Text" : null,
+                Size = onMedia ? 17f : 12f, Weight = onMedia ? (ushort)400 : (ushort)600,
+                LineHeight = onMedia ? 22f : float.NaN,
                 Color = onMedia ? Tok.OnMediaSecondary : Tok.TextSecondary,
                 MaxWidth = maxWidth, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
             };
@@ -467,33 +530,42 @@ static class DetailVerticalHero
         {
             if (i > 0) spans[at++] = new TextSpan(", ");
             var artist = m.Artists[i];
-            spans[at++] = new TextSpan(artist.Name, Weight: onMedia ? (ushort)500 : (ushort)600,
+            spans[at++] = new TextSpan(artist.Name, Weight: onMedia ? (ushort)400 : (ushort)600,
                 Color: onMedia ? Tok.OnMediaSecondary : Tok.AccentTextPrimary,
                 OnClick: () => h.Go("artist:" + artist.Uri, artist.Name));
         }
         return new SpanTextEl(spans)
         {
-            Size = onMedia ? 15f : 12f, Color = onMedia ? Tok.OnMediaSecondary : Tok.TextSecondary, MaxWidth = maxWidth,
+            FontFamily = onMedia ? "Segoe UI Variable Text" : null,
+            Size = onMedia ? 17f : 12f,
+            LineHeight = onMedia ? 22f : float.NaN,
+            Color = onMedia ? Tok.OnMediaSecondary : Tok.TextSecondary,
+            MaxWidth = maxWidth,
             Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
         };
     }
 
     static Element ActionButton(string glyph, string label, float height, ColorF fill, ColorF fg, Action onClick,
-        bool iconOnly = false, bool pill = false, float width = float.NaN)
+        bool iconOnly = false, bool pill = false, float width = float.NaN,
+        ColorF? hoverFill = null, ColorF? pressedFill = null, bool hairline = false, float labelSize = 13f)
     {
+        bool subtleBorder = hairline || fill == Tok.FillSubtleSecondary;
         BoxEl button = new()
         {
             Direction = 0, Width = float.IsNaN(width) ? (iconOnly ? height : float.NaN) : width, Height = height,
-            Padding = iconOnly ? Edges4.All(0f) : new Edges4(10f, 0f, 10f, 0f), Gap = 6f,
+            Padding = iconOnly ? Edges4.All(0f) : new Edges4(14f, 0f, 16f, 0f), Gap = 6f,
             Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Corners = CornerRadius4.All(pill || iconOnly ? height * 0.5f : Radii.Control), Fill = fill,
-            BorderWidth = fill == Tok.FillSubtleSecondary ? 1f : 0f,
-            BorderColor = Tok.StrokeControlDefault,
+            HoverFill = hoverFill ?? ColorF.Transparent,
+            PressedFill = pressedFill ?? ColorF.Transparent,
+            BrushTransitionMs = hoverFill.HasValue ? 100f : 0f,
+            BorderWidth = subtleBorder ? 1f : 0f,
+            BorderColor = hairline ? ImmersiveGlassStroke : Tok.StrokeControlDefault,
             Cursor = CursorId.Hand, Focusable = true, Role = AutomationRole.Button, OnClick = onClick,
             HoverScale = 1.03f, PressScale = 0.97f,
             Children = iconOnly
                 ? [Icon(glyph, 14f, fg)]
-                : [Icon(glyph, 14f, fg), new TextEl(label) { Size = 13f, Weight = 600, Color = fg, MaxLines = 1 }],
+                : [Icon(glyph, labelSize + 1f, fg), new TextEl(label) { Size = labelSize, Weight = 600, Color = fg, MaxLines = 1 }],
         };
         return iconOnly ? ToolTip.Wrap(button, label) : button;
     }
@@ -520,9 +592,11 @@ sealed class DetailHeroSaveButton : Component
         {
             Width = _size, Height = _size,
             AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Corners = CornerRadius4.All(_size * 0.5f), Fill = Tok.MediaScrim,
-            HoverFill = ColorF.FromRgba(0, 0, 0) with { A = 0.68f },
-            PressedFill = ColorF.FromRgba(0, 0, 0) with { A = 0.78f },
+            Corners = CornerRadius4.All(_size * 0.5f),
+            Fill = DetailHeroImmersiveGlass.Fill,
+            HoverFill = DetailHeroImmersiveGlass.Hover,
+            PressedFill = DetailHeroImmersiveGlass.Press,
+            BorderWidth = 1f, BorderColor = DetailHeroImmersiveGlass.Stroke,
             BrushTransitionMs = 100f,
             Cursor = CursorId.Hand, Focusable = true, Role = AutomationRole.Button,
             OnClick = () => lib.ToggleSaved(_uri, _name),
@@ -594,9 +668,12 @@ sealed class DetailHeroMoreButton : Component
         {
             Width = _size, Height = _size, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Corners = CornerRadius4.All(_size * 0.5f),
-            Fill = _onMedia ? Tok.MediaScrim : ColorF.Transparent,
-            HoverFill = _onMedia ? ColorF.FromRgba(0, 0, 0) with { A = 0.68f } : ColorF.Transparent,
-            PressedFill = _onMedia ? ColorF.FromRgba(0, 0, 0) with { A = 0.78f } : ColorF.Transparent,
+            Fill = _onMedia ? DetailHeroImmersiveGlass.Fill : ColorF.Transparent,
+            HoverFill = _onMedia ? DetailHeroImmersiveGlass.Hover : ColorF.Transparent,
+            PressedFill = _onMedia ? DetailHeroImmersiveGlass.Press : ColorF.Transparent,
+            BorderWidth = _onMedia ? 1f : 0f,
+            BorderColor = _onMedia ? DetailHeroImmersiveGlass.Stroke : ColorF.Transparent,
+            BrushTransitionMs = _onMedia ? 100f : 0f,
             HoverScale = 1.06f, PressScale = 0.94f,
             Cursor = CursorId.Hand, Role = AutomationRole.Button,
             OnClick = Toggle,
@@ -613,4 +690,14 @@ static class DetailHeroPrefs
 {
     public static readonly Signal<int> Epoch = new(0);
     public static void Bump() => Epoch.Value = Epoch.Peek() + 1;
+}
+
+/// <summary>Immersive hero circle-control fills: white-alpha over the art wash so buttons read accent-aware
+/// (Apple Music vibrancy look) without a backdrop-blur material.</summary>
+file static class DetailHeroImmersiveGlass
+{
+    public static ColorF Fill => ColorF.FromRgba(255, 255, 255) with { A = 0.18f };
+    public static ColorF Hover => ColorF.FromRgba(255, 255, 255) with { A = 0.28f };
+    public static ColorF Press => ColorF.FromRgba(255, 255, 255) with { A = 0.12f };
+    public static ColorF Stroke => ColorF.FromRgba(255, 255, 255) with { A = 0.16f };
 }

@@ -430,12 +430,24 @@ static class PlaylistInlineEdit
 
             if (lib is null || !m.Capabilities.CanEditMetadata || uri is null)
             {
-                return WaveeType.PageHero(m.Title) with
-                {
-                    Size = _titleSize, MinSize = 18f, Weight = _weight, Width = _width, LineHeight = float.NaN,
-                    Wrap = TextWrap.WrapWholeWords, MaxLines = _onMedia ? 2 : 3, Trim = TextTrim.CharacterEllipsis,
-                    Color = _onMedia ? Tok.OnMediaPrimary : Tok.TextPrimary,
-                };
+                return _onMedia
+                    ? new TextEl(m.Title)
+                    {
+                        FontFamily = "Segoe UI Variable Display",
+                        Size = _titleSize, Weight = _weight,
+                        LineHeight = _titleSize * 1.08f,
+                        CharSpacing = _titleSize >= 34f ? -28f : -16f,
+                        MaxWidth = _width,
+                        Wrap = TextWrap.WrapWholeWords, MaxLines = 2, Trim = TextTrim.CharacterEllipsis,
+                        Color = Tok.OnMediaPrimary,
+                    }
+                    : WaveeType.PageHero(m.Title) with
+                    {
+                        Size = _titleSize, MinSize = 18f, Weight = _weight, Width = _width, LineHeight = float.NaN,
+                        MaxWidth = _width,
+                        Wrap = TextWrap.WrapWholeWords, MaxLines = 3, Trim = TextTrim.CharacterEllipsis,
+                        Color = Tok.TextPrimary,
+                    };
             }
 
             if (_editing.Value)
@@ -464,12 +476,15 @@ static class PlaylistInlineEdit
             // and hairline border ease in engine-side (HoverFade channel — no re-render), cursor is always I-beam.
             Element titleRow = new BoxEl
             {
-                Direction = 0, Width = _width + 16f, Gap = Spacing.S, AlignItems = FlexAlign.Center,
+                Direction = 0,
+                Width = _onMedia ? float.NaN : _width + 16f,
+                MaxWidth = _onMedia ? _width + 16f : float.NaN,
+                Gap = Spacing.S, AlignItems = FlexAlign.Center,
                 Margin = new Edges4(-8f, -4f, -8f, -4f), Padding = new Edges4(8f, 4f, 8f, 4f),
                 Corners = CornerRadius4.All(Radii.Control),
-                HoverFill = _onMedia ? Tok.MediaScrim : Tok.FillSubtleSecondary,
+                HoverFill = _onMedia ? ColorF.FromRgba(255, 255, 255) with { A = 0.14f } : Tok.FillSubtleSecondary,
                 BorderWidth = 1f, BorderColor = ColorF.Transparent,
-                HoverBorderColor = _onMedia ? Tok.OnMediaTertiary : Tok.StrokeControlDefault,
+                HoverBorderColor = _onMedia ? ColorF.FromRgba(255, 255, 255) with { A = 0.22f } : Tok.StrokeControlDefault,
                 Cursor = CursorId.IBeam,
                 OnHoverMove = _ => { if (!_hovered.Peek()) _hovered.Value = true; },
                 OnPointerExit = () => { if (_hovered.Peek()) _hovered.Value = false; },
@@ -479,7 +494,12 @@ static class PlaylistInlineEdit
                 [
                     WaveeType.PageHero(title) with
                     {
-                        Size = _titleSize, MinSize = 18f, Weight = _weight, Grow = 1f, LineHeight = float.NaN,
+                        FontFamily = _onMedia ? "Segoe UI Variable Display" : null,
+                        Size = _titleSize, MinSize = _onMedia ? float.NaN : 18f, Weight = _weight,
+                        Grow = _onMedia ? 0f : 1f,
+                        LineHeight = _onMedia ? _titleSize * 1.08f : float.NaN,
+                        CharSpacing = _onMedia ? (_titleSize >= 34f ? -28f : -16f) : 0f,
+                        MaxWidth = _onMedia ? _width : float.NaN,
                         Wrap = TextWrap.WrapWholeWords, MaxLines = _onMedia ? 2 : 3, Trim = TextTrim.CharacterEllipsis,
                         Color = string.IsNullOrWhiteSpace(m.Title)
                             ? (_onMedia ? Tok.OnMediaTertiary : Tok.TextTertiary)

@@ -209,6 +209,36 @@ using static FluentGpu.VerticalSlice.Harness.Asserts;
         }
     }
 
+    sealed class SelectiveGatedDecoder : IImageDecoder
+    {
+        readonly List<(int Id, string Source, int W, int H)> _pending = new();
+        readonly HashSet<string> _released = new(StringComparer.Ordinal);
+        byte[] _scratch = Array.Empty<byte>();
+
+        public void Release(string source) => _released.Add(source);
+
+        public bool Begin(int id, string source, int targetW, int targetH, ImagePriority priority = ImagePriority.Visible)
+        {
+            _pending.Add((id, source, Math.Max(1, targetW), Math.Max(1, targetH)));
+            return true;
+        }
+
+        public void Pump(ImageCompleteHandler onComplete, ImageReadyHandler onPixels)
+        {
+            for (int i = _pending.Count - 1; i >= 0; i--)
+            {
+                var p = _pending[i];
+                if (!_released.Contains(p.Source)) continue;
+                _pending.RemoveAt(i);
+                int bytes = p.W * p.H * 4;
+                if (_scratch.Length < bytes) _scratch = new byte[bytes];
+                _scratch.AsSpan(0, bytes).Fill(0xFF);
+                onPixels(p.Id, _scratch.AsSpan(0, bytes), p.W, p.H);
+                onComplete(p.Id, true, p.W, p.H, ImageFailureKind.None, 1);
+            }
+        }
+    }
+
 static class ImageSuite
 {
     public static void Run(StringTable strings)
@@ -579,6 +609,14 @@ static class ImageSuite
 
     static void DecodeSchedulerChecks()
     {
+        static bool WaitPublished(DecodeScheduler scheduler, int timeoutMs = 5000)
+        {
+            var wait = System.Diagnostics.Stopwatch.StartNew();
+            while ((scheduler.RequestCount != 0 || scheduler.Inflight != 0) && wait.ElapsedMilliseconds < timeoutMs)
+                System.Threading.Thread.Sleep(2);
+            return scheduler.RequestCount == 0 && scheduler.Inflight == 0;
+        }
+
         int cur = 0, maxc = 0; object g = new();
         var codec = new TestCodec(() =>
         {
@@ -621,6 +659,75 @@ static class ImageSuite
         bool transient = r2.ok && r2.att == 3;                                            // 5xx ×2 then 200 → success on attempt 3
         Check("46d. DecodeScheduler: 404 fails fast (no retry); transient 5xx retried to success",
             permanent && transient, $"404=(ok={r1.ok} {r1.fail} att={r1.att}) flaky=(ok={r2.ok} att={r2.att})");
+
+        // Cancellation/failure notifications are control work, not texture uploads. A recycle storm can therefore
+        // resolve every canceled handle in one Pump while the surviving texture still gets the frame's upload slot.
+        using (var sched = new DecodeScheduler(new TestCodec(), new TestFetcher(),
+                   new DecodeOptions { MaxConcurrency = 1 }))
+        {
+            const int N = 24;
+            for (int i = 1; i <= N; i++) sched.Begin(i, "cancel-storm/" + i, 8, 8);
+            for (int i = 1; i < N; i++) sched.Cancel(i);
+            bool published = WaitPublished(sched);
+            int canceled = 0, ready = 0, pixels = 0;
+            sched.Pump(
+                (id, ok, w, h, failure, attempts) =>
+                {
+                    if (ok) ready++;
+                    else if (failure == ImageFailureKind.Canceled) canceled++;
+                },
+                (id, px, w, h) => pixels++);
+            Check("46d2. DecodeScheduler: cancellation cleanup drains independently and does not consume the surviving upload slot",
+                published && canceled == N - 1 && ready == 1 && pixels == 1
+                && sched.LastPumpAppliedCount == 1 && sched.LastPumpAppliedBytes == 8 * 8 * 4,
+                $"published={published} canceled={canceled}/{N - 1} ready={ready} pixels={pixels} apply={sched.LastPumpAppliedCount}/{sched.LastPumpAppliedBytes}B");
+        }
+
+        // A row can recycle after its worker published pixels but before Pump uploads them. Keep the second result queued
+        // behind the scroll cap, cancel it, then prove cleanup reports Canceled with zero upload/apply charge.
+        using (var sched = new DecodeScheduler(new TestCodec(), new TestFetcher(),
+                   new DecodeOptions { MaxConcurrency = 1 }))
+        {
+            sched.Begin(101, "late-cancel/1", 8, 8);
+            sched.Begin(102, "late-cancel/2", 8, 8);
+            bool published = WaitPublished(sched);
+            sched.ScrollThrottled = true;
+            int firstPixels = 0;
+            sched.Pump((id, ok, w, h, failure, attempts) => { }, (id, px, w, h) => firstPixels++);
+            bool firstBounded = sched.LastPumpAppliedCount == 1 && firstPixels == 1 && sched.HasReadyCompletions;
+            sched.Cancel(102);
+            int latePixels = 0, lateCanceled = 0;
+            sched.Pump(
+                (id, ok, w, h, failure, attempts) =>
+                {
+                    if (id == 102 && !ok && failure == ImageFailureKind.Canceled) lateCanceled++;
+                },
+                (id, px, w, h) => latePixels++);
+            Check("46d3. DecodeScheduler: completed-but-unapplied cancellation suppresses pixels and costs zero upload budget",
+                published && firstBounded && lateCanceled == 1 && latePixels == 0
+                && sched.LastPumpAppliedCount == 0 && sched.LastPumpAppliedBytes == 0 && !sched.HasReadyCompletions,
+                $"published={published} first={firstBounded} canceled={lateCanceled} latePixels={latePixels} apply={sched.LastPumpAppliedCount}/{sched.LastPumpAppliedBytes}B pending={sched.HasReadyCompletions}");
+        }
+
+        // Default rest budget is three applies; active scrolling tightens that to one. The byte budget is deliberately
+        // irrelevant here (tiny textures), so this pins the count throttles that protect the 8.33ms frame slot.
+        using (var sched = new DecodeScheduler(new TestCodec(), new TestFetcher(),
+                   new DecodeOptions { MaxConcurrency = 1 }))
+        {
+            for (int i = 201; i <= 206; i++) sched.Begin(i, "budget/" + i, 8, 8);
+            bool published = WaitPublished(sched);
+            sched.Pump((id, ok, w, h, failure, attempts) => { }, (id, px, w, h) => { });
+            int restApplies = sched.LastPumpAppliedCount;
+            sched.ScrollThrottled = true;
+            sched.Pump((id, ok, w, h, failure, attempts) => { }, (id, px, w, h) => { });
+            int scrollApplies = sched.LastPumpAppliedCount;
+            sched.ScrollThrottled = false;
+            while (sched.HasReadyCompletions)
+                sched.Pump((id, ok, w, h, failure, attempts) => { }, (id, px, w, h) => { });
+            Check("46d4. DecodeScheduler: rest applies cap at 3 and active scroll applies cap at 1",
+                published && restApplies == 3 && scrollApplies == 1,
+                $"published={published} rest={restApplies} scroll={scrollApplies}");
+        }
     }
 
     static void PixelBufferPoolChecks()
@@ -910,5 +1017,37 @@ static class ImageSuite
         host.RunFrame();   // re-render: UseImage now reports Ready → the component swaps the spinner for the image
         Check("46h. UseImage: hook surfaces load state to the component (spinner → ready)",
             UseImageProbe.LastState == ImageState.Ready, $"state={UseImageProbe.LastState}");
+
+        // Each UseImage consumer observes its own handle epoch. Completing A must not re-render B (and vice versa):
+        // this is the Home-card image-status fan-out regression in a deterministic two-leaf shape.
+        {
+            var selective = new SelectiveGatedDecoder();
+            var selectiveCache = new ImageCache(selective);
+            using var fanoutApp = new HeadlessPlatformApp();
+            var fanoutWindow = new HeadlessWindow(new WindowDesc("useimg-fanout", new Size2(200, 100), 1f));
+            fanoutWindow.Show();
+            var fanoutDevice = new HeadlessGpuDevice();
+            var fanoutFonts = new HeadlessFontSystem(strings);
+            var fanoutProbe = new UseImageFanoutProbe();
+            using var fanoutHost = new AppHost(fanoutApp, fanoutWindow, fanoutDevice, fanoutFonts, strings, fanoutProbe, selectiveCache);
+            fanoutHost.RunFrame();
+            int initialA = fanoutProbe.RendersA, initialB = fanoutProbe.RendersB;
+
+            selective.Release("fanout/a");
+            fanoutHost.RunFrame();   // Pump: A Pending -> Ready, schedules only A's render effect
+            fanoutHost.RunFrame();   // flush A
+            int afterA = fanoutProbe.RendersA, untouchedB = fanoutProbe.RendersB;
+            bool onlyA = afterA == initialA + 1 && untouchedB == initialB
+                && fanoutProbe.StateA == ImageState.Ready && fanoutProbe.StateB == ImageState.Pending;
+
+            selective.Release("fanout/b");
+            fanoutHost.RunFrame();
+            fanoutHost.RunFrame();
+            bool onlyB = fanoutProbe.RendersA == afterA && fanoutProbe.RendersB == untouchedB + 1
+                && fanoutProbe.StateA == ImageState.Ready && fanoutProbe.StateB == ImageState.Ready;
+            Check("46h2. UseImage: per-handle status epochs re-render only the image consumer whose handle completed",
+                onlyA && onlyB,
+                $"renders A={initialA}->{afterA}->{fanoutProbe.RendersA} B={initialB}->{untouchedB}->{fanoutProbe.RendersB} states={fanoutProbe.StateA}/{fanoutProbe.StateB}");
+        }
     }
 }

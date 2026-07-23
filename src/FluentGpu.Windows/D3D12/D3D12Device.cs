@@ -1313,6 +1313,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             MaskEdges = im.MaskEdges, MaskLeft = im.MaskLeft, MaskTop = im.MaskTop,
             MaskRight = im.MaskRight, MaskBottom = im.MaskBottom,
             MaskFalloff = im.MaskFalloff, MaskIntensity = im.MaskIntensity,
+            Saturation = im.Saturation,
         };
         ApplyRoundedClip(ref inst);
         _imageDraws.Add((inst, im.ImageId));
@@ -2542,6 +2543,7 @@ public sealed unsafe class D3D12Swapchain : ISwapchain
     }
 
     public Size2 SizePx => new(W, H);
+    public bool SupportsCompositedIntervalZero => Composited;
     public void Resize(Size2 px) => Device.Resize(this, (uint)px.Width, (uint)px.Height);
     public void Present() => Device.Present(this);
     public void ConfigurePopupChrome(in PopupChromeMetrics m) => Backdrop?.ConfigureChrome(m.ContentRectPx, m.OpensUp, m.ClosedRatio, m.CornerRadiusPx);

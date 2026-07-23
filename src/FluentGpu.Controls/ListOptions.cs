@@ -18,6 +18,10 @@ public sealed record ScrollOptions
     public bool AutoEdgeFade { get; init; }
     /// <summary>Scroll-geometry observer (project a scalar, get the change) forwarded onto the viewport.</summary>
     public (Func<ScrollGeometry, long> Project, Action<ScrollGeometry> Action)? OnScrollGeometryChanged { get; init; }
+    /// <summary>Optional viewport-space TOP inset that clips only recyclable items after
+    /// <see cref="ListOptions.PersistentPrefixCount"/>. Persistent prefix items (for example a hero + sticky chrome)
+    /// remain unclipped. The recorder applies one shared band clip without per-row paint writes; NaN disables it.</summary>
+    public float ItemClipTopInset { get; init; } = float.NaN;
 }
 
 /// <summary>

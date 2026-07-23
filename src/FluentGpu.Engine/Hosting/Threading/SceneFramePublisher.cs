@@ -50,7 +50,8 @@ public sealed class SceneFramePublisher
 
     /// <summary>UI thread: copy a finished DrawList into a FREE slot's arena and publish it. Returns the monotonic
     /// publish seq. Zero-alloc in steady state (grows a pinned arena only on a new high-water size).</summary>
-    public ulong Publish(ReadOnlySpan<byte> cmds, ReadOnlySpan<ulong> sort, in FrameInfo submit, bool suppressVsync = false)
+    public ulong Publish(ReadOnlySpan<byte> cmds, ReadOnlySpan<ulong> sort, in FrameInfo submit,
+                         bool suppressVsync = false, bool interactivePresent = false)
     {
         ThreadGuard.AssertUi();
         int consumed = Volatile.Read(ref _consumeIdx);              // ACQUIRE — what the consumer is/was reading
@@ -60,7 +61,16 @@ public sealed class SceneFramePublisher
         cmds.CopyTo(_cmds[free]);
         sort.CopyTo(_sort[free]);
         ulong seq = ++_publishSeq;
-        _slots[free] = new RenderFrame { PublishSeq = seq, ArenaIndex = free, ByteLen = cmds.Length, SortLen = sort.Length, Submit = submit, SuppressVsync = suppressVsync };
+        _slots[free] = new RenderFrame
+        {
+            PublishSeq = seq,
+            ArenaIndex = free,
+            ByteLen = cmds.Length,
+            SortLen = sort.Length,
+            Submit = submit,
+            SuppressVsync = suppressVsync,
+            InteractivePresent = interactivePresent,
+        };
         Volatile.Write(ref _publishedIdx, free);                    // RELEASE — makes the arena copy + header visible-before
         return seq;
     }

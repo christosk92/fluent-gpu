@@ -114,7 +114,7 @@ internal static class TrackRow
     internal static State StateOf(PlaybackBridge? bridge, LibraryBridge? lib, Track t,
                                   bool isTop = false, bool extraBuffering = false)
     {
-        bool isNow = bridge?.CurrentTrack.Value?.Id == t.Id;
+        bool isNow = bridge?.Identity.Value.Track?.Id == t.Id;
         bool isPlaying = isNow && (bridge?.IsPlaying.Value ?? false);
         bool isBuffering = extraBuffering || (isNow && bridge is not null && bridge.IsBuffering.Value);
         bool saved = t.Uri.Length > 0 && (lib?.IsSaved(t.Uri) ?? false);
@@ -130,7 +130,7 @@ internal static class TrackRow
 
     internal static void Invoke(PlaybackBridge? bridge, Track track, Action startDifferent)
     {
-        if (bridge is not null && bridge.CurrentTrack.Peek()?.Id == track.Id)
+        if (bridge is not null && bridge.Identity.Peek().Track?.Id == track.Id)
         {
             TogglePlayPause(bridge);
             return;

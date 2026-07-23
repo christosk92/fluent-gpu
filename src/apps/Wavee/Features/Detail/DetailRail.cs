@@ -27,11 +27,11 @@ static class DetailRail
 
     public static float CoverEdge(float railW) => MathF.Max(80f, railW - SidePadL - SidePadR);
 
-    internal static Element HeroArtwork(DetailModel m, float size, float radius = Radii.Card, bool connected = true) =>
+    internal static Element HeroArtwork(DetailModel m, float size, float radius = Radii.Card, bool connected = true, float saturation = 1f) =>
         LikedSongsArtwork.IsLikedUri(m.ContextUri) && m.Cover is null
             ? LikedSongsArtwork.Cover(size, radius, connected ? m.MorphKey : null)
             : Surfaces.Artwork(m.Cover, m.Title.GetHashCode() & 0x7fffffff, size, size, radius,
-                connected ? m.MorphKey : null, decodePx: HeroCoverDecodePx);
+                connected ? m.MorphKey : null, decodePx: HeroCoverDecodePx, saturation: saturation);
 
     // The side rail: the cover STRETCHES to fill the column width (a big hero — the image is NEVER shrunk for height).
     // The height fit comes from the TEXT — titleSize (the shell lowers it on a short rail; auto-fits down to 18px) and
@@ -47,7 +47,7 @@ static class DetailRail
         {
             Width = cover, Height = cover, Corners = CornerRadius4.All(Radii.Card),
             Shadow = Elevation.Card, ClipToBounds = true,
-            Children = [editable ? PlaylistInlineEdit.Cover(modelSource, cover) : HeroArtwork(m, cover)],
+            Children = [editable ? PlaylistInlineEdit.Cover(modelSource, cover) : HeroArtwork(m, cover, saturation: 1.18f)],
         });
 
         // Badges row.

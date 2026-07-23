@@ -92,6 +92,10 @@
     <Compile Include="..\Wavee\Features\Library\LibraryLayoutBreakpoints.cs" />
     <!-- vertical track-detail hero layout resolver (BCL only) — DetailVerticalLayoutTests -->
     <Compile Include="..\Wavee\Features\Detail\DetailVerticalLayout.cs" />
+    <!-- pure video placement/lifecycle decision rules (System + the VideoPlacement enum only) — VideoPlacementLogicTests -->
+    <Compile Include="..\Wavee\App\VideoPlacementModel.cs" Link="VideoPlacementModel.cs" />
+    <!-- pure media host-swap decision rules (System + the PlayableKind enum only) — MediaSwitchLogicTests -->
+    <Compile Include="..\Wavee\App\MediaSwitchLogic.cs" Link="MediaSwitchLogic.cs" />
     <!-- the activity-undo executor (engine-free: IUndoTarget + IMusicLibrary + ActivityLog) — ActivityUndoTests drive it -->
     <Compile Include="..\Wavee\App\ActivityUndo.cs" />
     <!-- The engine-free core of the context-menu action system (Wavee.Core + BCL only) — Actions/*Tests drive the

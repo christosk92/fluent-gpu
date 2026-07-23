@@ -193,7 +193,7 @@ public readonly record struct ClipCmd(RectF DeviceRect, RectF RoundedRect = defa
 public readonly record struct DrawImageCmd(RectF Rect, CornerRadius4 Radii, int ImageId, int Ready, ColorF Placeholder,
     Affine2D Transform, float Opacity, RectF UvRect, float FadeStartMs = float.NaN, float FadeDurationMs = 0f,
     int FadeEasing = 0, ColorF Overlay = default, int MaskEdges = 0, float MaskLeft = 0f, float MaskTop = 0f,
-    float MaskRight = 0f, float MaskBottom = 0f, int MaskFalloff = 0, float MaskIntensity = 0f);
+    float MaskRight = 0f, float MaskBottom = 0f, int MaskFalloff = 0, float MaskIntensity = 0f, float Saturation = 1f);
 // An SDF outline (focus visual / border ring). Same SDF rounded-box as FillRoundRect, but the PS draws a
 // <see cref="StrokeWidth"/>-wide band centered on the edge instead of filling. Drawn over the control; works on any
 // fill/background. DashOn/DashOff (device-independent px along the perimeter) modulate the band into dashes:
@@ -444,12 +444,13 @@ public sealed class DrawList
 
     public void DrawImage(in RectF rect, in CornerRadius4 radii, int imageId, bool ready, in ColorF placeholder, in Affine2D transform, float opacity, in RectF uvRect, float fadeStartMs = float.NaN, float fadeDurationMs = 0f, int fadeEasing = 0, ulong sortKey = 0,
                           ColorF overlay = default, int maskEdges = 0, float maskLeft = 0f, float maskTop = 0f,
-                          float maskRight = 0f, float maskBottom = 0f, int maskFalloff = 0, float maskIntensity = 0f)
+                          float maskRight = 0f, float maskBottom = 0f, int maskFalloff = 0, float maskIntensity = 0f,
+                          float saturation = 1f)
     {
         WriteOp(DrawOp.DrawImage);
         WritePayload(new DrawImageCmd(rect, radii, imageId, ready ? 1 : 0, placeholder, transform, opacity, uvRect,
             fadeStartMs, fadeDurationMs, fadeEasing, overlay, maskEdges, maskLeft, maskTop, maskRight, maskBottom,
-            maskFalloff, maskIntensity));
+            maskFalloff, maskIntensity, saturation));
         PushSort(sortKey);
     }
 

@@ -33,6 +33,7 @@ public sealed class LiveConnect : IDisposable
     readonly ClusterIngest _ingest;
     readonly ConnectCommandRouter _commands;
     readonly IAudioHost _host;
+    readonly FluentVideoMediaHost _videoHost;   // the VIDEO half of the ONE current media (Milestone B)
     readonly SpotifyServerClock _clock;   // server-clock skew estimator → corrects remote-position aging
     readonly ApConnection? _apChannel;   // owned: the adopted login socket
     readonly AudioPlaybackStack? _audio; // optional local-audio stack (null = silent/stub resolver)
@@ -66,6 +67,10 @@ public sealed class LiveConnect : IDisposable
             onCluster: _ingest.OnAnnounceResponse, log: log);
 
         _host = audio is not null ? audio.Host : new SilentAudioHost();
+        // The video-media host: the VIDEO half of the ONE current media. Constructed regardless of the audio backend (it is
+        // self-contained — a resolved PopOutVideoSource carries its own descriptor/relay), so the SilentAudioHost path still
+        // has a real video host available for the swap.
+        _videoHost = new FluentVideoMediaHost(playbackLog);
         var resolver = audio?.TrackResolver ?? (ITrackResolver)new StubTrackResolver();
         // Instant-start: when the local-audio stack is present, resolve head+key in parallel and start on the clear head.
         var fast = audio is not null
@@ -84,7 +89,15 @@ public sealed class LiveConnect : IDisposable
             contexts ?? EmptyContextResolver.Instance,
             deviceId, outbound, new IPlaybackProjection[] { _gabo, _resume, _publisher }, playbackLog,
             SpotifyClientIdentity.XpuiSnapshotVersion,   // play_origin.feature_version
-            fast: fast);
+            fast: fast, videoHost: _videoHost);
+        // TODO(B-wire): wire the app-level video decision + async source handoff from the composition root (where
+        // PlaybackBridge.ResolveVideoSource + the video-active state live, e.g. LiveSessionHost): set
+        //   Controller.ShouldPlayAsVideo = track => <VideoActive() && CurrentTrackHasVideo>;
+        //   Controller.LoadCurrentVideoAsync = async (track, ct) => { var src = await bridge.ResolveVideoSource(track.Uri, ct);
+        //       if (src is null) return false; _videoHost.LoadVideo(src); return true; };
+        // Until both hooks are set, ShouldPlayAsVideo defaults to null → every playable is audio, so the swap stays inert and
+        // the audio path is unchanged. FluentVideoMediaHost.CurrentPlayer/PlayerChanged is the seam a mounted PiP/pop-out
+        // surface binds to so the MF session actually pumps (see the MF-pump caveat in FluentVideoMediaHost).
         Controller.EpisodeResumeMicros = (uri, ct) => herodotus.TryGetEpisodeResumeMicrosAsync(uri, ct);
         if (audio?.TrackResolver is LiveTrackResolver ltr)
         {
@@ -135,6 +148,7 @@ public sealed class LiveConnect : IDisposable
         _clock.Dispose();
         _apChannel?.Dispose();
         Projection.Dispose();
+        try { _videoHost.DisposeAsync().AsTask().GetAwaiter().GetResult(); } catch { }
         try { _host.DisposeAsync().AsTask().GetAwaiter().GetResult(); } catch { }
         try { _audio?.DisposeAsync().AsTask().GetAwaiter().GetResult(); } catch { }
     }

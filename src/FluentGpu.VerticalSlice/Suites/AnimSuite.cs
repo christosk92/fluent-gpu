@@ -1636,6 +1636,18 @@ static class AnimSuite
                 restReleased && Near(clipA, 150f, 0.5f) && Near(clipB - clipA, 1f, 0.1f)
                 && releasedMid && clipEvents == 2 && !lastClip,
                 $"rest={restReleased} clipA={clipA:0.#} clipB={clipB:0.#} releasedMid={releasedMid} clipEvents={clipEvents} lastClip={lastClip}");
+
+            // Fully-hidden freeze: once the sticky line is past the body bottom, ClipRect.Y locks at Bounds.H so
+            // further offset advances do not keep rewriting / dirtying the node (playlist overscan hitch).
+            ScrollTo(600f);   // line at 640 → body-local top = 500 ≥ body H 400
+            float frozenA = s.Paint(bodyN).ClipRect.Y;
+            s.Unmark(bodyN, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+            ScrollTo(620f);
+            float frozenB = s.Paint(bodyN).ClipRect.Y;
+            bool stayedClean = (s.Flags(bodyN) & (NodeFlags.TransformDirty | NodeFlags.PaintDirty)) == 0;
+            Check("23u3b. sticky clip-top fully-hidden freezes ClipRect.Y at Bounds.H — further offset does not re-Mark",
+                Near(frozenA, 400f, 0.5f) && Near(frozenB, frozenA, 0.01f) && stayedClean,
+                $"frozenA={frozenA:0.#} frozenB={frozenB:0.#} stayedClean={stayedClean}");
         }
 
         // 23u2 — trailing-anchored presented height: a pinned hero collapses without relayout, its bottom-authored

@@ -673,6 +673,9 @@ public sealed record ImageEl : Element
     public ColorF ColorOverlay { get; init; }
     /// <summary>Optional leaf-local alpha feather evaluated in the image shader (no offscreen layer).</summary>
     public ImageMaskSpec? Mask { get; init; }
+    /// <summary>Luminance-preserving saturation multiplier applied in the image shader after sampling. 1 = unchanged,
+    /// 0 = grayscale, &gt;1 = boosted (Apple Music oversaturates album art under its hero scrim).</summary>
+    public float Saturation { get; init; } = 1f;
     public Edges4 Margin { get; init; }
     public FlexAlign AlignSelf { get; init; } = FlexAlign.Auto;
 }

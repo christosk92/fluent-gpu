@@ -414,9 +414,9 @@ static class DetailSkeleton
         Element[] infoKids = immersive
             ?
             [
-                Bar(infoW * 0.72f, 26f),  // title
-                Bar(infoW * 0.36f, 14f),  // artist
-                Bar(infoW * 0.48f, 11f),  // meta
+                Bar(infoW * 0.72f, 34f),  // title (Apple display scale)
+                Bar(infoW * 0.36f, 17f),  // artist
+                Bar(infoW * 0.48f, 12f),  // meta
                 new BoxEl { Direction = 0, Gap = 12f, AlignItems = FlexAlign.Center, Children = [PillBar(), PlayPill(), PillBar()] },
                 Bar(infoW * 0.88f, 12f),  // description
             ]

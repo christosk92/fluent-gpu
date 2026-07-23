@@ -4436,6 +4436,8 @@ public sealed class InputDispatcher
 
         ref RectF b = ref _scene.Bounds(node);
         ref NodePaint np = ref _scene.Paint(node);
+        bool hasItemBand = _scene.TryGetVirtualItemBand(node, out int itemBandPrefix, out float itemBandTopInset);
+        bool itemBandAllowsPoint = !hasItemBand || q.Y >= itemBandTopInset;
         var local = q;
         if (!StepIntoNode(node, ref local, ref netSx, ref netSy)) return NodeHandle.Null;
         float hitW = float.IsNaN(np.PresentedW) ? b.W : np.PresentedW;
@@ -4445,8 +4447,10 @@ public sealed class InputDispatcher
 
         var childLocal = new Point2(local.X - np.ChildShiftX, local.Y - np.ChildShiftY);
         NodeHandle result = NodeHandle.Null;
-        for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
+        int childOrdinal = 0;
+        for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c), childOrdinal++)
         {
+            if (hasItemBand && childOrdinal >= itemBandPrefix && !itemBandAllowsPoint) continue;
             var r = HitAny(c, childLocal, netSx, netSy);
             if (!r.IsNull) result = r;
         }
@@ -4463,6 +4467,8 @@ public sealed class InputDispatcher
 
         ref RectF b = ref _scene.Bounds(node);
         ref NodePaint np = ref _scene.Paint(node);
+        bool hasItemBand = _scene.TryGetVirtualItemBand(node, out int itemBandPrefix, out float itemBandTopInset);
+        bool itemBandAllowsPoint = !hasItemBand || q.Y >= itemBandTopInset;
         var local = q;
         if (!StepIntoNode(node, ref local, ref netSx, ref netSy)) return NodeHandle.Null;
         float hitW = float.IsNaN(np.PresentedW) ? b.W : np.PresentedW;
@@ -4472,8 +4478,10 @@ public sealed class InputDispatcher
 
         var childLocal = new Point2(local.X - np.ChildShiftX, local.Y - np.ChildShiftY);
         NodeHandle result = NodeHandle.Null;
-        for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
+        int childOrdinal = 0;
+        for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c), childOrdinal++)
         {
+            if (hasItemBand && childOrdinal >= itemBandPrefix && !itemBandAllowsPoint) continue;
             var r = Hit(c, childLocal, netSx, netSy);
             if (!r.IsNull) result = r;
         }

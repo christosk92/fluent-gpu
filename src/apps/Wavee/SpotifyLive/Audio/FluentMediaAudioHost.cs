@@ -150,7 +150,7 @@ internal sealed class SpotifyEngineAudioDecoder : IAudioDecoder
         _srcScratch = new float[MaxSrcFramesPerRead * _srcChannels];
         _conformed = new float[MaxSrcFramesPerRead * target.Channels];
 
-        WaveeLog.Instance.Event(WaveeLogLevel.Info, "audio", "audiodiag.decoder",   // TEMP: confirm the resample edge
+        WaveeLog.Instance.Event(WaveeLogLevel.Debug, "audio", "audiodiag.decoder",
             $"[audiodiag] decoder kind={_kind} srcRate={srcRate} targetRate={target.SampleRate} srcCh={_srcChannels} targetCh={target.Channels} resampler={(_resampler is { IsActive: true } ? "active" : "passthrough")} gain={_gainLinear:0.000}");
 
         var codec = _kind switch
@@ -331,7 +331,7 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
         _nativeDecryptorFactory = (_, seed) => decryptors()?.CreateCdnDecryptor(seed);
         _core = new MediaPlayerCore(_effects);
         _sink = new MediaSignalSink(_core);
-        WasapiAudioDevice.DiagSink = s => _log.Info("[audiodiag] " + s);   // TEMP: device format + feed/play throughput
+        // DiagSink stays unwired — the 1 Hz feed/play counters are opt-in (set WasapiAudioDevice.DiagSink in a debugger).
         _backend = WasapiPcm.CreateBackend(_effects, decoderFactory: static _ => new SpotifyEngineAudioDecoder());
         _ticker = new Timer(_ => Tick(), null, Timeout.Infinite, Timeout.Infinite);
     }

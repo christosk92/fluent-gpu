@@ -99,13 +99,13 @@ public readonly record struct AudioHostSignal
         new(AudioHostSignalKind.Error, positionMs, false, false, false, PlaybackRecoveryKind.None, reason, detail);
 }
 
-/// <summary>The reshaped audio seam (replaces the old <c>IAudioEngine</c> in Stage E). Takes a resolved handle, not a
-/// bare Track — resolution lives in front of the seam (the controller), in scope.</summary>
-public interface IAudioHost : IAsyncDisposable
+/// <summary>The COMMON current-media host surface (Milestone B): the transport + clock verbs shared by BOTH the audio
+/// host and the video-media host, so the app's ONE current media can be swapped between them under a single clock. LOADING
+/// is kind-specific and deliberately NOT here — audio loads via <see cref="IAudioHost"/> (<see cref="IAudioHost.Load"/> /
+/// <see cref="IAudioHost.LoadFastStart"/> / <see cref="IAudioHost.SupplyBody"/>), video via its own host's video load.
+/// Both hosts report on the same <see cref="AudioHostSignal"/> channel so the source-agnostic projection is unchanged.</summary>
+public interface IMediaHost : IAsyncDisposable
 {
-    void Load(in AudioStreamHandle stream);
-    void LoadFastStart(in AudioFastStart start);
-    void SupplyBody(in AudioStreamHandle body);
     void Play();
     void Pause();
     void Stop();
@@ -113,8 +113,18 @@ public interface IAudioHost : IAsyncDisposable
     void SetVolume(double volume01);                  // realtime, host-side (buffered-PCM-independent)
     long PositionMs { get; }
     bool IsPlaying { get; }
-    bool IsBuffering { get; }
     IObservable<AudioHostSignal> Signals { get; }     // the clock + Ended report
+}
+
+/// <summary>The reshaped audio seam (replaces the old <c>IAudioEngine</c> in Stage E). Takes a resolved handle, not a
+/// bare Track — resolution lives in front of the seam (the controller), in scope. Extends the common
+/// <see cref="IMediaHost"/> with the AUDIO-specific loading verbs (the video host does not have these).</summary>
+public interface IAudioHost : IMediaHost
+{
+    void Load(in AudioStreamHandle stream);
+    void LoadFastStart(in AudioFastStart start);
+    void SupplyBody(in AudioStreamHandle body);
+    bool IsBuffering { get; }
 }
 
 public interface IAudioDspControl

@@ -318,7 +318,7 @@ public static class SceneRecorder
             BlockSpecials(scene, spans, spanFrame, skipRoots, overlayCount, reuseBlockRoots, ref stats);
 
         Walk(scene, dl, images, scene.Root, Affine2D.Identity, 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack,
-            1f, 1f, false, holdSelfBlurForAnyUserScroll, default, skips[..skipCount], spans, spanFrame, spanReuseOff, spanStoreOn, ref stats);
+            1f, 1f, false, holdSelfBlurForAnyUserScroll, false, default, skips[..skipCount], spans, spanFrame, spanReuseOff, spanStoreOn, ref stats);
 
         // Defensive rootless-orphan fallback. Normal exits replay inside their former parent's Walk (preserving ancestor
         // clips/layers, painter order, and popup-window routing); only nodes that genuinely had no visual parent land here.
@@ -328,7 +328,7 @@ public static class SceneRecorder
             var o = scene.OrphanAt(i, out float px, out float py);
             if ((scene.Flags(o) & NodeFlags.ConnectedOverlay) != 0) continue;   // an overlay-flagged orphan draws in the top band, not here
             Walk(scene, dl, images, o, Affine2D.Translation(px, py), 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack,
-                1f, 1f, false, holdSelfBlurForAnyUserScroll, default, skipRoots, null, 0, true, false, ref stats);
+                1f, 1f, false, holdSelfBlurForAnyUserScroll, false, default, skipRoots, null, 0, true, false, ref stats);
         }
 
         // E5 drag-ghost top band: walk the ghost subtree at its LIVE parent-world origin (scroll / animated ancestor
@@ -342,7 +342,7 @@ public static class SceneRecorder
             Walk(scene, dl, images, ghost,
                  Affine2D.Translation(abs.X - gb.X - gp.LocalTransform.Dx, abs.Y - gb.Y - gp.LocalTransform.Dy),
                  1f, 1 << 16, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack,
-                 1f, 1f, false, holdSelfBlurForAnyUserScroll, default, default, null, 0, true, false, ref stats);
+                 1f, 1f, false, holdSelfBlurForAnyUserScroll, false, default, default, null, 0, true, false, ref stats);
         }
 
         // Connected-animation overlay band: flying shared-element (Hero) visuals. Each overlay draws in a top band ABOVE
@@ -361,7 +361,7 @@ public static class SceneRecorder
             Walk(scene, dl, images, ov,
                  Affine2D.Translation(abs.X - ob.X - op.LocalTransform.Dx, abs.Y - ob.Y - op.LocalTransform.Dy),
                  1f, (1 << 16) | 1, overlayClip, in focus, in textEdit, scrollThumb, scrollTrack,
-                 1f, 1f, false, holdSelfBlurForAnyUserScroll, default, default, null, 0, true, false, ref stats);
+                 1f, 1f, false, holdSelfBlurForAnyUserScroll, false, default, default, null, 0, true, false, ref stats);
         }
         // E9 own-subtree carve-out: now that every entry + every cached-acrylic own-subtree range is known, bake each
         // layer's EXTERNAL damage rect + this frame's epoch into its PushLayerCmd (before the DrawList is published).
@@ -430,7 +430,7 @@ public static class SceneRecorder
         }
         var stats = new RecordAccumulator();
         Walk(scene, dl, images, root, Affine2D.Translation(pax - originDip.X, pay - originDip.Y), 1f, 0, RectF.Infinite,
-             in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, false, default, default, null, 0, true, false, ref stats);
+             in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, false, false, default, default, null, 0, true, false, ref stats);
         return stats.ToStats();
     }
 
@@ -529,7 +529,8 @@ public static class SceneRecorder
 
     private static SpanRecordResult Walk(SceneStore scene, DrawList dl, ImageCache? images, NodeHandle node, Affine2D parentWorld, float parentOpacity,
                                          int depth, RectF clip, in FocusVisualStyle focus, in TextEditStyle textEdit, ColorF scrollThumb, ColorF scrollTrack,
-                                         float parentScaleX, float parentScaleY, bool parentInMotion, bool parentScrollInMotion, InheritedState inherited,
+                                         float parentScaleX, float parentScaleY, bool parentInMotion, bool globalBlurHold,
+                                         bool parentScrollInMotion, InheritedState inherited,
                                          ReadOnlySpan<NodeHandle> skipRoots, SpanTable? spans, uint spanFrame, bool spanReuseDisabled, bool spanStoreEnabled,
                                          ref RecordAccumulator stats)
     {
@@ -564,14 +565,14 @@ public static class SceneRecorder
         // Its glyph runs skip the device-grid baseline snap and ride sub-pixel WITH their plates (no 1px shear against
         // the smoothly-translating fill), then re-snap crisp on the settle frame the host queues after the last write.
         bool inMotion = parentInMotion || (flags & NodeFlags.TransformDirty) != 0;
-        // parentScrollInMotion may be seeded globally by the host when ANY viewport is in real user scroll motion. This
-        // makes stationary sibling self-blurs (lyrics DoF) HOLD under their cache policy during user scrolling (their pin
-        // serves the translated strip) rather than re-Gaussian every forced submit, so scroll input gets the GPU.
+        // Scroll motion is deliberately LOCAL to this viewport chain. The host's global user-scroll hold is a separate
+        // blur-policy input: it may defer an expensive stationary sibling blur, but must not invalidate span reuse for
+        // unrelated branches of the scene.
         // Scroll-defer: a self-blur inside a viewport being actively USER-scrolled (wheel/fling/drag) this frame is HELD
         // (its BlurCachePolicy governs a miss: crisp-on-miss or skip-on-miss), NOT re-blurred — the content is translating,
         // so re-running both Gaussian passes on every forced submit (a scroll defeats skip-submit) is wasted; the
         // position-INDEPENDENT pin key HITS the moving (translated) rect, so the DoF stays visible without a re-blur. The
-        // host can seed this globally so sibling effects are deferred during the same user scroll.
+        // globalBlurHold handles that sibling effect suppression without contaminating scrollInMotion.
         // Keys off ScrollState.UserScrollActive (ScrollIntegrator.Tick sets it = movingNow && !PhaseProgrammatic), NOT
         // the raw Phase. The auto-scroll bring-into-view ease KEEPS the DoF (PhaseProgrammatic ⇒ not user); crucially so
         // do its SETTLE frame (settled ⇒ movingNow false, though the Phase has already flipped to Idle while still
@@ -812,7 +813,8 @@ public static class SceneRecorder
         // policy blurs Normally (builds the pin cache, no glow dropout). NB: this must pass the ACTUAL policy through —
         // collapsing HoldOrSkipOnMiss to Normal here silently downgraded the lyrics glow to a full per-frame Gaussian
         // during scroll (the skip-on-miss path went dead), reintroducing the UMA-bound cost this whole change removes.
-        bool holdBlur = isBlurCandidate && scrollInMotion && p.BlurCachePolicy != BlurCachePolicy.Normal;
+        bool holdBlur = isBlurCandidate && (globalBlurHold || scrollInMotion) &&
+                        p.BlurCachePolicy != BlurCachePolicy.Normal;
         if (holdBlur) stats.BlurHoldCandidateCount++;
         bool isBlurGroup = isBlurCandidate;
         if (isBlurGroup) stats.BlurGroupCount++;
@@ -1168,8 +1170,8 @@ public static class SceneRecorder
             }
             case VisualKind.Image:
             {
-                ImageVisualEffects effects = default;
-                _ = scene.TryGetImageEffects(node, out effects);
+                bool hasEffects = scene.TryGetImageEffects(node, out ImageVisualEffects effects);
+                float saturation = hasEffects ? effects.Saturation : 1f;
                 int imageId = p.ImageId;
                 if (effects.DerivedImageId != 0 && images is not null
                     && images.StateOf(new ImageHandle(effects.DerivedImageId)) == ImageState.Ready)
@@ -1191,7 +1193,7 @@ public static class SceneRecorder
                 ImageMaskSpec mask = effects.Mask;
                 dl.DrawImage(drawRect, p.Corners, imageId, ready, p.Fill, world, opacity, uv, fadeStart, fadeDur,
                     fadeEase, key, effects.Overlay, (int)mask.Edges, mask.BandLeft, mask.BandTop, mask.BandRight,
-                    mask.BandBottom, (int)mask.Falloff, mask.Intensity);
+                    mask.BandBottom, (int)mask.Falloff, mask.Intensity, saturation);
                 break;
             }
             case VisualKind.IconLayer:
@@ -1233,20 +1235,38 @@ public static class SceneRecorder
         // (see the deferral below and the consume after this node's scope closes) instead of emitting in place.
         if ((interaction.HandlerMask & InteractionInfo.HoverElevateClipRootBit) != 0)
             childState = childState.WithUnderElevateRoot();
+        bool hasItemBand = scene.TryGetVirtualItemBand(node, out int itemBandPrefix, out float itemBandTopInset);
+        RectF itemBandClip = childClip;
+        bool itemBandClipChanged = false;
+        if (hasItemBand)
+        {
+            // parentWorld is the viewport's child frame BEFORE this content node's scrolling LocalTransform. Transforming
+            // the authored inset through it therefore keeps the clip line fixed in viewport space while item roots move.
+            float bandTop = parentWorld.Transform(new Point2(0f, itemBandTopInset)).Y;
+            float clippedTop = MathF.Max(childClip.Y, bandTop);
+            itemBandClip = new RectF(childClip.X, clippedTop, childClip.W,
+                MathF.Max(0f, childClip.Bottom - clippedTop));
+            itemBandClipChanged = itemBandClip != childClip;
+        }
         // Logically-detached exits remain visually owned by this node. Emit them before live children so incoming
         // content paints over them while this parent's transform, opacity/layers, clip, and popup target stay active.
         // Perf: OrphanCount is a scene-wide field (0 whenever no presence-exit animation is in flight = the steady case),
         // so gate the per-node dictionary probe on it — skips thousands of always-null hash lookups per maximized frame.
         var exitingChildren = scene.OrphanCount > 0 ? scene.OrphanChildrenOf(node) : null;
         if (exitingChildren is not null)
+        {
+            if (itemBandClipChanged && !itemBandClip.IsEmpty) dl.PushClip(itemBandClip, key);
             for (int i = 0; i < exitingChildren.Count; i++)
             {
                 var exiting = exitingChildren[i];
                 if (!scene.IsLive(exiting)) continue;
-                var exitResult = Walk(scene, dl, images, exiting, childWorld, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack,
-                    childScaleX, childScaleY, inMotion, scrollInMotion, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
+                var exitResult = Walk(scene, dl, images, exiting, childWorld, opacity, depth + 1,
+                    hasItemBand ? itemBandClip : childClip, in focus, in textEdit, scrollThumb, scrollTrack,
+                    childScaleX, childScaleY, inMotion, globalBlurHold, scrollInMotion, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
                 result.Include(exitResult);
             }
+            if (itemBandClipChanged && !itemBandClip.IsEmpty) dl.PopClip(key);
+        }
         // Sticky pin paint order: a PINNED child (position:sticky engaged) is emitted AFTER its siblings so the
         // content scrolling beneath it paints underneath — CSS sticky's implicit stacking. Unpinned = normal order.
         {
@@ -1257,10 +1277,32 @@ public static class SceneRecorder
             // card deferred (the lower one records in place) — O(1) space, no sort, no allocation.
             NodeHandle deferElevate = NodeHandle.Null;
             float deferElevateT = 0f;
+            int childOrdinal = 0;
+            bool itemBandPushed = false;
             for (var c = scene.FirstChild(node); !c.IsNull; c = scene.NextSibling(c))
             {
+                if (hasItemBand && !itemBandPushed && childOrdinal >= itemBandPrefix)
+                {
+                    // A prefix child deferred for hover elevation must paint before the recyclable-band scissor starts;
+                    // the prefix is deliberately exempt from the sticky item clip.
+                    if (!deferElevate.IsNull)
+                    {
+                        var prefixElevated = Walk(scene, dl, images, deferElevate, childWorld, opacity, depth + 1,
+                            childClip, in focus, in textEdit, scrollThumb, scrollTrack,
+                            childScaleX, childScaleY, inMotion, globalBlurHold, scrollInMotion, childState, skipRoots,
+                            spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
+                        result.Include(prefixElevated);
+                        deferElevate = NodeHandle.Null;
+                        deferElevateT = 0f;
+                    }
+                    if (itemBandClipChanged && !itemBandClip.IsEmpty) dl.PushClip(itemBandClip, key);
+                    itemBandPushed = itemBandClipChanged && !itemBandClip.IsEmpty;
+                }
+                RectF activeChildClip = hasItemBand && childOrdinal >= itemBandPrefix ? itemBandClip : childClip;
                 NodeFlags cf = scene.Flags(c);
+                childOrdinal++;
                 if ((cf & NodeFlags.StickyPinned) != 0) { anyPinned = true; continue; }
+                if (activeChildClip.IsEmpty) continue;
                 if ((scene.Interaction(c).HandlerMask & InteractionInfo.HoverElevatePaintBit) != 0)
                 {
                     // Hover source published at record time: NodeFlags.Hovered/HoverWithin (instantaneous), else the
@@ -1274,8 +1316,9 @@ public static class SceneRecorder
                         {
                             // A higher-progress card appeared — flush the previously-deferred (lower) one in place now,
                             // then defer this one so the most-hovered card ends up on top.
-                            var flushed = Walk(scene, dl, images, deferElevate, childWorld, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack,
-                                childScaleX, childScaleY, inMotion, scrollInMotion, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
+                            var flushed = Walk(scene, dl, images, deferElevate, childWorld, opacity, depth + 1,
+                                activeChildClip, in focus, in textEdit, scrollThumb, scrollTrack,
+                                childScaleX, childScaleY, inMotion, globalBlurHold, scrollInMotion, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
                             result.Include(flushed);
                             deferElevate = c; deferElevateT = ht;
                             continue;
@@ -1283,8 +1326,9 @@ public static class SceneRecorder
                         // Lower progress than the deferred card → record it now in normal order (falls through).
                     }
                 }
-                var childResult = Walk(scene, dl, images, c, childWorld, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack,
-                    childScaleX, childScaleY, inMotion, scrollInMotion, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
+                var childResult = Walk(scene, dl, images, c, childWorld, opacity, depth + 1,
+                    activeChildClip, in focus, in textEdit, scrollThumb, scrollTrack,
+                    childScaleX, childScaleY, inMotion, globalBlurHold, scrollInMotion, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
                 result.Include(childResult);
             }
             // The elevated (hovered) card paints after its non-elevated siblings, but before any sticky-pinned chrome.
@@ -1310,19 +1354,35 @@ public static class SceneRecorder
                 }
                 else
                 {
-                    var elevResult = Walk(scene, dl, images, deferElevate, childWorld, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack,
-                        childScaleX, childScaleY, inMotion, scrollInMotion, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
+                    var elevResult = Walk(scene, dl, images, deferElevate, childWorld, opacity, depth + 1,
+                        hasItemBand ? itemBandClip : childClip, in focus, in textEdit, scrollThumb, scrollTrack,
+                        childScaleX, childScaleY, inMotion, globalBlurHold, scrollInMotion, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
                     result.Include(elevResult);
                 }
             }
+            if (itemBandPushed) dl.PopClip(key);
             if (anyPinned)
-                for (var c = scene.FirstChild(node); !c.IsNull; c = scene.NextSibling(c))
+            {
+                int pinnedOrdinal = 0;
+                bool pinnedBandPushed = false;
+                for (var c = scene.FirstChild(node); !c.IsNull; c = scene.NextSibling(c), pinnedOrdinal++)
                     if ((scene.Flags(c) & NodeFlags.StickyPinned) != 0)
                     {
-                        var childResult = Walk(scene, dl, images, c, childWorld, opacity, depth + 1, childClip, in focus, in textEdit, scrollThumb, scrollTrack,
-                            childScaleX, childScaleY, inMotion, scrollInMotion, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
+                        RectF pinnedClip = hasItemBand && pinnedOrdinal >= itemBandPrefix ? itemBandClip : childClip;
+                        if (hasItemBand && pinnedOrdinal >= itemBandPrefix && !pinnedBandPushed
+                            && itemBandClipChanged && !itemBandClip.IsEmpty)
+                        {
+                            dl.PushClip(itemBandClip, key);
+                            pinnedBandPushed = true;
+                        }
+                        if (pinnedClip.IsEmpty) continue;
+                        var childResult = Walk(scene, dl, images, c, childWorld, opacity, depth + 1,
+                            pinnedClip, in focus, in textEdit, scrollThumb, scrollTrack,
+                            childScaleX, childScaleY, inMotion, globalBlurHold, scrollInMotion, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
                         result.Include(childResult);
                     }
+                if (pinnedBandPushed) dl.PopClip(key);
+            }
         }
 
         // Box border chrome paints after descendants. A control border must remain visible over filled child regions
@@ -1402,7 +1462,7 @@ public static class SceneRecorder
             var hoistResult = Walk(scene, dl, images, hoist, stats.PendingElevateWorld, stats.PendingElevateOpacity,
                 stats.PendingElevateDepth, clip, in focus, in textEdit, scrollThumb, scrollTrack,
                 stats.PendingElevateScaleX, stats.PendingElevateScaleY, stats.PendingElevateInMotion,
-                stats.PendingElevateScrollInMotion, stats.PendingElevateState, skipRoots, spans, spanFrame,
+                globalBlurHold, stats.PendingElevateScrollInMotion, stats.PendingElevateState, skipRoots, spans, spanFrame,
                 spanReuseDisabled: true, spanStoreEnabled: false, ref stats);
             result.Include(hoistResult);
         }
@@ -1447,6 +1507,7 @@ public static class SceneRecorder
         Mix(ref h, inMotion ? 1u : 0u);
         Mix(ref h, scrollInMotion ? 1u : 0u);
         MixScrollViewport(scene, node, flags, ref h);
+        MixVirtualItemBand(scene, node, ref h);
         MixPaintReveal(scene, node, ref h);
         MixFloat(ref h, inherited.HoverT);
         MixFloat(ref h, inherited.PressT);
@@ -1484,6 +1545,7 @@ public static class SceneRecorder
         MixFloat(ref h, ph);
         Mix(ref h, scrollInMotion ? 1u : 0u);
         MixScrollViewport(scene, node, flags, ref h);
+        MixVirtualItemBand(scene, node, ref h);
         MixPaintReveal(scene, node, ref h);
         MixFloat(ref h, inherited.HoverT);
         MixFloat(ref h, inherited.PressT);
@@ -1536,6 +1598,13 @@ public static class SceneRecorder
         Mix(ref h, sc.AlwaysShowBar ? 1u : 0u);
         Mix(ref h, sc.SuppressBar ? 1u : 0u);
         Mix(ref h, (uint)sc.LoadingBarSuppressors);
+    }
+
+    private static void MixVirtualItemBand(SceneStore scene, NodeHandle node, ref ulong h)
+    {
+        if (!scene.TryGetVirtualItemBand(node, out int prefix, out float inset)) return;
+        Mix(ref h, (uint)prefix);
+        MixFloat(ref h, inset);
     }
 
     private static bool IsDirectMovingScrollContent(SceneStore scene, NodeHandle node, NodeFlags flags)

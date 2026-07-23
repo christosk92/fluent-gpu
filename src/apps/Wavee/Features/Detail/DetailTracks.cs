@@ -38,8 +38,8 @@ sealed class TrackList : Component
     const int VerticalHeroIndex = 0;
     const int VerticalChromeIndex = 1;
     const int VerticalTrackStart = 2;
-    const float VerticalHeaderFallbackHeight = 260f;
-    const int TrackOverscanItems = 16;
+    const float VerticalHeaderFallbackHeight = 420f;
+    const int TrackOverscanItems = 8;
 
     // The detail model is a Loadable: the HEADER bits (HasVideo, columns) read reactively from its current value
     // (preview → full), and the TRACK ROWS stream in via Skel.Region — which derives the shimmer from the REAL Row
@@ -78,6 +78,7 @@ sealed class TrackList : Component
     IReadOnlyList<Track>? _viewTrackSet;                       // source-list identity paired with the sort/filter cache key
     int[] _view = Array.Empty<int>();                          // filtered + sorted → original track-index map (rows read via this)
     Memo<TrackRowsSnapshot>? _rowsSnapshot;                    // atomic model/config/handlers/sort/filter value for persistent rows
+    Memo<ColorF>? _rowAccent;                                  // equality-gated scalar: row pills never observe the full snapshot
     BoundItemsSource<Track>? _rowItems;                        // snapshot + recycled slot index resolve together
     AsyncCommandSet<string>? _play;                            // per-track-id play command in flight → the row's #-cell buffering spinner
     string? _lastCtxUri;                                       // last loaded context uri → detect a reused-slot album swap (invalidate view/columns/selection)
@@ -135,6 +136,11 @@ sealed class TrackList : Component
         DetailModel Model, DetailConfig Config, DetailHandlers Handlers,
         TrackSort Sort, string Query, TrackFilterFlags Flags,
         bool MarqueeDisabled, string? TopTrackId);
+
+    readonly record struct RowPresentation(
+        Track Track, int DisplayIndex, TrackRow.State State,
+        bool MarqueeDisabled, bool ShowTrackArtist,
+        Action<string, string?> Go, Owner? AddedBy);
 
     // The visible order (cached, keyed by sort + filter): view[displayPos] = original track index, for the tracks that
     // pass the filter (search query + hide-explicit), in the current sort order. Read live by the frozen row template /
@@ -300,7 +306,9 @@ sealed class TrackList : Component
             snapshot => View(snapshot).Length,
             (snapshot, displayIndex) => TrackAt(snapshot, displayIndex),
             EmptyTrack), DepKey.Empty);
+        var rowAccent = UseComputed(() => rowsSnapshot.Value.Handlers.Accent);
         _rowsSnapshot = rowsSnapshot;
+        _rowAccent = rowAccent;
         _rowItems = rowItems;
 
         var rowState = rowsSnapshot.Value;
@@ -427,14 +435,16 @@ sealed class TrackList : Component
         {
             _visibleCount.Value = visible;
             _listCount.Value = listTotal;
-            int verticalCount = VerticalTrackStart + Math.Max(visible, 1);
-            _verticalItemCount.Value = verticalCount;
+            _verticalItemCount.Value = VerticalTrackStart + Math.Max(visible, 1);
         }, (visible, listTotal));
 
         Element RealList()
         {
+            // Playlist/liked vertical keeps hero + chrome as persistent virtual-prefix items. The list therefore owns
+            // a real viewport and realizes only its bounded row window, while the recorder applies one shared item-band
+            // clip below the sticky chrome (never one reactive clip binding per realized row).
             if (_verticalHeader && !_cfg.HasTrailing)
-                return VerticalList(visible, set, tracks, sort, labeled, tier, rowH, narrateRemount, staggerCold, verticalLayout);
+                return VerticalList(visible, set, tracks, labeled, tier, rowH, narrateRemount, staggerCold, verticalLayout);
             if (recsOn)
             {
                 // A search/filter that matched nothing still shows the no-match message (recs browse the whole list, not
@@ -490,7 +500,7 @@ sealed class TrackList : Component
                     {
                         // Alpha-mask edge fade: the page floats over a gradient wash (no opaque plate), so the surface-colour
                         // EdgeCues fade self-skips — this feathers the rows' own alpha at the overflowing top/bottom instead.
-                        // Only when the ItemsView is itself the scroller (playlist/liked); the album path fades its outer scroll.
+                        // Nested under vertical sticky / album trailing scroll: the OUTER ScrollView owns scrolling.
                         AutoEdgeFade = !_cfg.HasTrailing,
                         // Scroll-position restoration keyed by the detail content (route): navigate away from a 10k-track
                         // playlist and back and the viewport seeds the saved row BEFORE its first realize — no scroll-to-top
@@ -532,8 +542,7 @@ sealed class TrackList : Component
         // model load turns CanEditItems on) must REMOUNT the list to swap in the recommendations template. Constant once
         // the full model has landed, so this is a one-time remount, not per-render churn.
         string filterKey = _verticalHeader ? "" : ":q" + query + ":f" + (int)flags;
-        string heroMeasureKey = _verticalHeader && !_cfg.HasTrailing ? ":h" + (int)MathF.Round(verticalHeroH) : "";
-        Element listKeyed = new BoxEl { Key = "list:" + _route.Value.Name + ":" + (_verticalHeader ? "vh:" : "") + "t" + tier + ":d" + density + filterKey + heroMeasureKey + ":r" + _resetEpoch.Value + (recsOn ? ":rec" : ""), Grow = listGrow, Shrink = 1f, MinHeight = 0f, Direction = 1, Children = [list] };
+        Element listKeyed = new BoxEl { Key = "list:" + _route.Value.Name + ":" + (_verticalHeader ? "vh:" : "") + "t" + tier + ":d" + density + filterKey + ":r" + _resetEpoch.Value + (recsOn ? ":rec" : ""), Grow = listGrow, Shrink = 1f, MinHeight = 0f, Direction = 1, Children = [list] };
 
         Element rightBody = _cfg.HasTrailing
             ? TrailingBody(listKeyed,
@@ -554,6 +563,11 @@ sealed class TrackList : Component
                 {
                     var orientation = DetailVerticalLayout.OrientationFor(
                         r.W, _verticalHeroOrientation, _verticalHeroOrientationInitialized);
+                    // Orientation flips change natural hero height a lot (200-art row ↔ full-bleed square). Clear the
+                    // cached measure so PresentedH OutStart cannot stay stuck on the previous orientation's height and
+                    // clip the new composition (missing actions / empty lower hero).
+                    if (_verticalHeroOrientationInitialized && orientation != _verticalHeroOrientation)
+                        _verticalHeaderHeight.Value = 0f;
                     _verticalHeroOrientation = orientation;
                     _verticalHeroOrientationInitialized = true;
                     bool immersive = orientation == DetailHeroOrientation.Immersive;
@@ -614,7 +628,10 @@ sealed class TrackList : Component
         return rows.Count == 0 ? null : new PlaylistHost(uri, model.Capabilities, rows);
     }
 
-    Element VerticalList(int visible, ColumnSet set, TrackSize[] tracks, TrackSort sort, bool labeled, int tier,
+    // Playlist/liked vertical owns a HARD viewport. Hero + chrome are persistent leading items; all track rows remain
+    // positional-recycled beneath them. ItemClipTopInset is one recorder/input band for the recyclable suffix, avoiding
+    // both the unbounded outer ScrollView regression and the former O(realized rows) ClipTopAtViewport bindings.
+    Element VerticalList(int visible, ColumnSet set, TrackSize[] tracks, bool labeled, int tier,
                          float rowH, bool narrateRemount, bool staggerCold, MeasuredStackVirtualLayout layout)
     {
         int itemCount = VerticalTrackStart + Math.Max(visible, 1);
@@ -634,13 +651,12 @@ sealed class TrackList : Component
             itemCount,
             scope =>
             {
-                Element content = Embed.Comp(() => new VerticalItemContent(this, scope, set, tracks, rowH, labeled, tier, narrateRemount));
+                Element content = Embed.Comp(() =>
+                    new VerticalItemContent(this, scope, set, tracks, rowH, labeled, tier, narrateRemount));
                 int initial = scope.Index.Peek();
-                ScrollBindDsl[] binds = initial == VerticalHeroIndex
+                ScrollBindDsl[]? binds = initial == VerticalHeroIndex
                     ? VerticalHeroBinds(VerticalHeaderHeight(), DetailVerticalLayout.CollapseDistance(VerticalHeaderHeight()))
-                    : initial == VerticalChromeIndex
-                        ? VerticalChromeBinds()
-                        : [new() { ClipTopAtViewport = DetailVerticalLayout.StickyClipInset }];
+                    : initial == VerticalChromeIndex ? VerticalChromeBinds() : null;
                 return new BoxEl { Direction = 1, ScrollBinds = binds, Children = [content] };
             },
             RepeatLayout.Measured(layout),
@@ -649,17 +665,36 @@ sealed class TrackList : Component
                 SelectionMode = visible > 0 ? _cfg.Selection : ItemsSelectionMode.None,
                 Selection = _selection,
                 IsItemInvokedEnabled = true,
-                OnInvoked = i => { if (_rowItems!.TryPeek(i, out _, VerticalTrackStart)) PlayRow(DisplayOf(i)); },
+                OnInvoked = i =>
+                {
+                    if (_rowItems!.TryPeek(i, out _, VerticalTrackStart))
+                        PlayRow(DisplayOf(i));
+                },
                 ItemText = i => _rowItems!.TryPeek(i, out var item, VerticalTrackStart) ? item.Title : "",
                 IsItemEnabled = i => _rowItems!.TryPeek(i, out _, VerticalTrackStart),
                 Overscan = TrackOverscanItems,
                 PersistentPrefixCount = VerticalTrackStart,
-                Grow = _cfg.HasTrailing ? 0f : 1f,
+                Grow = 1f,
                 Controller = _listCtl,
                 CountSignal = _verticalItemCount,
-                Scroll = new ScrollOptions { ScrollKey = _route.Value.Name + ":r" + _resetEpoch.Value, AutoEdgeFade = false, OnScrollGeometryChanged = SwipeCloseObserver() },
-                Reorder = new ReorderOptions { ItemDisplacement = static _ => (0f, 0f), DisplacementVersion = _dispVer },
-                Entrance = new EntranceOptions { StaggerColdRealize = staggerCold, ItemFlipFrom = FlipFrom, ItemFadeFrom = FadeFrom },
+                Scroll = new ScrollOptions
+                {
+                    ScrollKey = _route.Value.Name + ":r" + _resetEpoch.Value,
+                    AutoEdgeFade = false,
+                    ItemClipTopInset = DetailVerticalLayout.StickyClipInset,
+                    OnScrollGeometryChanged = SwipeCloseObserver(),
+                },
+                Reorder = new ReorderOptions
+                {
+                    ItemDisplacement = static _ => (0f, 0f),
+                    DisplacementVersion = _dispVer,
+                },
+                Entrance = new EntranceOptions
+                {
+                    StaggerColdRealize = staggerCold,
+                    ItemFlipFrom = FlipFrom,
+                    ItemFadeFrom = FadeFrom,
+                },
             });
     }
 
@@ -750,12 +785,10 @@ sealed class TrackList : Component
 
     Element VerticalHero()
     {
-        // This method runs inside VerticalItemContent's OWN render computation. Read the live signal here as well as in
-        // TrackList.Render so palette hydration invalidates the virtual hero slot itself, not only its retained parent.
+        // This method runs from VerticalHeroRoot (TrackList.Render). Palette hydration + width subscribe here so the
+        // hero updates when the wash lands / the right pane resizes. Its measured height now lives outside the
+        // ItemsView identity, so a settle cannot remount every realized track row.
         var h = _liveHandlers?.Value ?? _h;
-        // The width subscription lands HERE (VerticalItemContent's hero-slot render), so a width change re-renders only
-        // the hero slot — never the whole list. First frame uses the 580 fallback and corrects on the first bounds pass.
-        // Composition is width-driven with a 560/600-DIP hysteresis band; the page-layout preference lives in DetailShell.
         float availW = _verticalHeroW.Value;
         var orientation = _verticalHeroOrientation;
         float artSize = DetailVerticalLayout.ArtworkFor(availW, orientation);
@@ -795,15 +828,19 @@ sealed class TrackList : Component
         Children = [chrome],
     };
 
-    // Album/single: hero + chrome are direct children of the OUTER scroll content, so their binds resolve this scroller
-    // rather than the natural-size row ItemsView nested below. Everything after chrome shares one sticky clip owner.
-    Element TrailingBody(Element listKeyed, Element? verticalHero, Element? verticalChrome)
+    // Album/single AND playlist/liked vertical: hero + chrome are direct children of the OUTER scroll content, so
+    // their binds resolve this scroller. Everything after chrome shares ONE sticky clip owner (never per-row clips —
+    // those were O(realized window) PaintDirty/frame under the stuck bar).
+    Element TrailingBody(Element listKeyed, Element? verticalHero, Element? verticalChrome, bool includeAlbumTrailing = true)
     {
-        Element trailing = Embed.Comp(() => new AlbumTrailing(_full, _route, _h));
         var bodyChildren = new List<Element>(3) { listKeyed };
-        if (_verticalHeader && _cfg.Badges == BadgeStyle.TypeYear && AlbumTrailing.HasReleasePanel(_model))
-            bodyChildren.Add(AlbumTrailing.ReleasePanel(_model, _h));
-        bodyChildren.Add(trailing);
+        if (includeAlbumTrailing)
+        {
+            Element trailing = Embed.Comp(() => new AlbumTrailing(_full, _route, _h));
+            if (_verticalHeader && _cfg.Badges == BadgeStyle.TypeYear && AlbumTrailing.HasReleasePanel(_model))
+                bodyChildren.Add(AlbumTrailing.ReleasePanel(_model, _h));
+            bodyChildren.Add(trailing);
+        }
 
         Element body = new BoxEl
         {
@@ -1155,17 +1192,14 @@ sealed class TrackList : Component
         return (uint)orig < (uint)_tracks.Count ? _tracks[orig] : EmptyTrack;
     }
 
-    // The title element: a Marquee whose text + now-playing colour are bound to the slot's INDEX signal, so it re-skins
-    // on recycle / now-playing WITHOUT remounting. The marquee is a reused autonomous child of BoundRowContent — frozen
-    // constructor args would stick on the first track, so its inputs MUST read the signal, not a captured value.
+    // The title text stays bound to the recycled item signal. Playback colour is resolved by the row's equality-gated
+    // presentation memo, so every realized title no longer owns a CurrentTrack subscription.
     Element BoundTitle(IReadSignal<Track> item) => Marquee.Of(
         Prop.Of(() => item.Value.Title),
         new Marquee.Style
         {
             FontSize = 14f, Weight = 600,
-            Foreground = Prop.Of(() =>
-                _bridge is not null && _bridge.CurrentTrack.Value?.Id == item.Value.Id
-                    ? Tok.AccentTextPrimary : Tok.TextPrimary),
+            Foreground = Tok.AccentTextPrimary,
         });
 
     // PERF: the marquee is 2 nested components + a measure→re-render cycle + a perpetual TranslateX track PER ROW — on a
@@ -1177,9 +1211,7 @@ sealed class TrackList : Component
     Element BoundTitlePlain(IReadSignal<Track> item) => new TextEl(Prop.Of(() => item.Value.Title))
     {
         Size = 14f, Weight = 600,
-        Color = Prop.Of(() =>
-            _bridge is not null && _bridge.CurrentTrack.Value?.Id == item.Value.Id
-                ? Tok.AccentTextPrimary : Tok.TextPrimary),
+        Color = Tok.TextPrimary,
         Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
     };
 
@@ -1203,33 +1235,52 @@ sealed class TrackList : Component
         public override Element Render()
         {
             var likePrev = UseRef(((string?)null, false));               // hook FIRST (stable order) — per-slot like-edge memory
-            _ = _o._full.Value.Value;                                    // subscribe → re-skin when the track set / context model changes (playlist nav, live /diff)
-            int i = _scope.Index.Value;                                  // recycle → re-render
-            int displayIndex = i - _trackStart;
-            var rowState = _state.Value;
-            var t = _item.Value;
-            bool isTop = rowState.Config.ShowPlays && rowState.TopTrackId is not null && t.Id == rowState.TopTrackId;
-            var st = TrackRow.StateOf(_o._bridge, _o._lib, t, isTop, _o._play?.IsRunning(t.Id) ?? false);
+            // Full-detail/playback invalidations may recompute this record, but Memo's equality gate schedules a render
+            // only when this particular row's visual state actually changed.
+            var presentation = UseComputed(() =>
+            {
+                int i = _scope.Index.Value;
+                int displayIndex = i - _trackStart;
+                var rowState = _state.Value;
+                var t = _item.Value;
+                bool isTop = rowState.Config.ShowPlays
+                    && rowState.TopTrackId is not null
+                    && t.Id == rowState.TopTrackId;
+                var st = TrackRow.StateOf(
+                    _o._bridge, _o._lib, t, isTop,
+                    _o._play?.IsRunning(t.Id) ?? false);
+                return new RowPresentation(
+                    t, displayIndex, st,
+                    rowState.MarqueeDisabled,
+                    rowState.Config.ShowTrackArtist,
+                    rowState.Handlers.Go,
+                    AddedByProfile(rowState.Model, t));
+            });
+            var row = presentation.Value;
+            var t = row.Track;
+            var st = row.State;
             // Buffering = this track's PlayAsync command is in flight (the Task-driven start spinner), OR the now-playing
             // track is mid-playback re-buffering (the bridge signal). Reading _play.IsRunning subscribes this row so the
             // spinner appears/clears as the command starts/finishes.
             bool likePop = TrackRow.LikeEdge(likePrev, t.Uri, st.Saved);   // pop only on the SAME-uri unsaved→saved edge
 
             // Marquee only for the now-playing row; every other row is a cheap plain ellipsis title (see BoundTitlePlain).
-            Element title = st.IsNow && !rowState.MarqueeDisabled
+            Element title = st.IsNow && !row.MarqueeDisabled
                 ? _o.BoundTitle(_item)
                 : _o.BoundTitlePlain(_item);
-            return _o.RowGrid(t, displayIndex, st.IsNow, st.IsPlaying, st.IsBuffering, st.IsTop, title, _set, _tracks, _rowH,
-                              onPlay: () => _o.PlayRow(displayIndex),
+            return _o.RowGrid(t, row.DisplayIndex, st.IsNow, st.IsPlaying, st.IsBuffering, st.IsTop, title, _set, _tracks, _rowH,
+                              onPlay: () => _o.PlayRow(row.DisplayIndex),
                               saved: st.Saved, onLike: t.Uri.Length > 0 ? (Action)(() =>
                               {
                                   var current = _item.Peek();
                                   if (current.Uri.Length > 0) _o._lib?.ToggleSaved(current.Uri, current.Title);
                               }) : null,
-                              likePop: likePop, rowState: rowState);
+                              likePop: likePop, presentation: row);
         }
     }
 
+    // Heterogeneous persistent-prefix content for the vertical playlist viewport. Prefix slots never recycle; track
+    // slots bind their item through the same positional source as the flat list. Constructor values are shape-only.
     sealed class VerticalItemContent : Component
     {
         readonly TrackList _o;
@@ -1242,12 +1293,22 @@ sealed class TrackList : Component
         readonly int _tier;
         readonly bool _entrance;
 
-        public VerticalItemContent(TrackList o, RowScope scope, ColumnSet set, TrackSize[] tracks, float rowH, bool labeled, int tier, bool entrance)
-        { _o = o; _scope = scope; _item = o._rowItems!.BindItem(scope.Index, VerticalTrackStart); _set = set; _tracks = tracks; _rowH = rowH; _labeled = labeled; _tier = tier; _entrance = entrance; }
+        public VerticalItemContent(TrackList o, RowScope scope, ColumnSet set, TrackSize[] tracks,
+                                   float rowH, bool labeled, int tier, bool entrance)
+        {
+            _o = o;
+            _scope = scope;
+            _item = o._rowItems!.BindItem(scope.Index, VerticalTrackStart);
+            _set = set;
+            _tracks = tracks;
+            _rowH = rowH;
+            _labeled = labeled;
+            _tier = tier;
+            _entrance = entrance;
+        }
 
         public override Element Render()
         {
-            _ = _o._full.Value.Value;   // same subscription as BoundRowContent — vertical slots must not show a prior context's rows
             int i = _scope.Index.Value;
             Element child;
             if (i == VerticalHeroIndex)
@@ -1256,32 +1317,38 @@ sealed class TrackList : Component
             }
             else if (i == VerticalChromeIndex)
             {
-                child = _o.Chrome(_set, _tracks, _o._h.Sort.Value, _labeled, _tier, _o._checksVisible?.Value ?? false) with { Key = "vitem:chrome" };
+                child = _o.Chrome(_set, _tracks, _o._h.Sort.Value, _labeled, _tier,
+                    _o._checksVisible?.Value ?? false) with { Key = "vitem:chrome" };
             }
             else
             {
                 int displayIndex = i - VerticalTrackStart;
                 int visible = _o._rowItems!.Count.Value;
                 child = displayIndex >= 0 && displayIndex < visible
-                    ? _o.WrapRowSwipe(_scope,
-                        _o.BoundRowSkin(_scope, _o.BoundRow(_scope, _item, _set, _tracks, _rowH, VerticalTrackStart), _rowH, _entrance, VerticalTrackStart),
+                    ? _o.WrapRowSwipe(
+                        _scope,
+                        _o.BoundRowSkin(
+                            _scope,
+                            _o.BoundRow(_scope, _item, _set, _tracks, _rowH, VerticalTrackStart),
+                            _rowH, _entrance, VerticalTrackStart),
                         VerticalTrackStart, _item) with { Key = "vitem:row" }
-                    : new BoxEl { Key = "vitem:empty", MinHeight = 160f, Direction = 1, Children = [FilterEmpty(_o._tracks.Count == 0)] };
+                    : new BoxEl
+                    {
+                        Key = "vitem:empty",
+                        MinHeight = 160f,
+                        Direction = 1,
+                        Children = [FilterEmpty(_o._tracks.Count == 0)],
+                    };
             }
 
-            return new BoxEl
-            {
-                Direction = 1,
-                Children = [child],
-            };
+            return new BoxEl { Direction = 1, Children = [child] };
         }
     }
 
     // ── "Recommended songs" — the appended header + rec rows (playlist extender) ──────────────────────────────────────
     // The bound-slot content when recommendations are ON: ONE bound list carries the track rows, then the "Recommended"
-    // header, then the recommendation rows — branching on the recycled slot index (mirrors VerticalItemContent). Track
-    // rows use the normal bound selection skin (multi-select); the header + rec rows render their OWN content, so they
-    // never join the track selection (exactly like the vertical hero/chrome rows).
+    // header, then the recommendation rows — branching on the recycled slot index. Track rows use the normal bound
+    // selection skin (multi-select); the header + rec rows render their OWN content, so they never join the track selection.
     sealed class RowOrRecContent : Component
     {
         readonly TrackList _o;
@@ -1296,7 +1363,6 @@ sealed class TrackList : Component
 
         public override Element Render()
         {
-            _ = _o._full.Value.Value;              // re-skin on context / track-set change (same subscription as BoundRowContent)
             int i = _scope.Index.Value;            // recycle → re-render
             int visible = _o._rowItems!.Count.Value;
             Element child;
@@ -1543,12 +1609,15 @@ sealed class TrackList : Component
     // (BoundRowContent), and the skeleton passes a static title. Plain/diffable → a BoundRowContent re-render patches in place.
     Element RowGrid(Track t, int displayIndex, bool isNow, bool isPlaying, bool isBuffering, bool isTop, Element title,
                     ColumnSet set, TrackSize[] tracks, float rowH, Action? onPlay = null, bool saved = false, Action? onLike = null,
-                    bool likePop = false, bool more = true, TrackRowsSnapshot? rowState = null)
+                    bool likePop = false, bool more = true, RowPresentation? presentation = null)
     {
-        var snapshot = rowState ?? _rowsSnapshot!.Peek();
+        var snapshot = presentation is null ? _rowsSnapshot!.Peek() : default;
+        bool showTrackArtist = presentation is { } row ? row.ShowTrackArtist : snapshot.Config.ShowTrackArtist;
+        var go = presentation is { } rowGo ? rowGo.Go : snapshot.Handlers.Go;
+        Owner? addedBy = presentation is { } rowOwner ? rowOwner.AddedBy : AddedByProfile(snapshot.Model, t);
         return TrackRow.Grid(t, displayIndex, new TrackRow.State(isNow, isPlaying, isBuffering, isTop, saved),
-                         set, tracks, rowH, title, snapshot.Config.ShowTrackArtist, snapshot.Handlers.Go,
-                         onPlay, onLike, AddedByProfile(snapshot.Model, t), likePop,
+                         set, tracks, rowH, title, showTrackArtist, go,
+                         onPlay, onLike, addedBy, likePop,
                          // The trailing "…" — ClickRequestsContext opens the row's own context menu anchored at the
                          // button (input-a11y §6.5.1). Disabled for the shimmer rows: a skeleton keeps the identical
                          // reserved lane but stays non-interactive and hidden.
@@ -1576,11 +1645,14 @@ sealed class TrackList : Component
         var onInteraction = scope.OnInteraction;
         var onFocusChanged = scope.OnFocusChanged;
         int DisplayIndex() => Math.Max(0, index.Value - trackStart);
+        // Apple's immersive/stacked track list uses plain rows (no per-row pill/border) — only in that mode; wide
+        // side-by-side keeps the WinUI zebra-pill treatment below.
+        bool plainRows = _verticalHeader && _verticalHeroOrientation == DetailHeroOrientation.Immersive;
         var skin = new BoxEl
         {
             ZStack = true, MinHeight = rowH, ClipToBounds = true,    // ZStack → the left accent bar overlays the content
-            Margin = new Edges4(RowInset, 0f, RowInset, 0f),         // inset → the highlight reads as a rounded pill (#32)
-            Corners = CornerRadius4.All(6f),
+            Margin = plainRows ? Edges4.All(0f) : new Edges4(RowInset, 0f, RowInset, 0f), // inset → rounded pill (#32)
+            Corners = plainRows ? CornerRadius4.All(0f) : CornerRadius4.All(6f),
             // Reveal on slot MOUNT for navigation cold load + curated re-cut (reset epoch). Tier/density/filter remounts
             // skip the entrance — recycling reuses the slot (no mount), so this never replays on scroll or selection.
             Animate = entrance ? new LayoutTransition(TransitionChannels.Opacity,
@@ -1589,15 +1661,19 @@ sealed class TrackList : Component
             // Zebra REST fill bound to the slot index (recycle-correct), reading WaveeColors so RethemeAll recolours
             // it on a theme/palette switch (RowZebra chooses the theme-appropriate neutral overlay).
             // Selection does NOT change the fill — the left accent bar (below) is the ONLY selection cue.
-            Fill = Prop.Of(() => DisplayIndex() % 2 != 0 ? WaveeColors.RowZebra : ColorF.Transparent),
-            HoverFill = Prop.Of(() => DisplayIndex() % 2 != 0 ? WaveeColors.RowHoverZebra : WaveeColors.RowHover),
-            PressedFill = Prop.Of(() => DisplayIndex() % 2 != 0 ? WaveeColors.RowPressedZebra : WaveeColors.RowPressed),
+            Fill = plainRows ? ColorF.Transparent
+                : Prop.Of(() => DisplayIndex() % 2 != 0 ? WaveeColors.RowZebra : ColorF.Transparent),
+            HoverFill = plainRows ? WaveeColors.RowHover
+                : Prop.Of(() => DisplayIndex() % 2 != 0 ? WaveeColors.RowHoverZebra : WaveeColors.RowHover),
+            PressedFill = plainRows ? WaveeColors.RowPressed
+                : Prop.Of(() => DisplayIndex() % 2 != 0 ? WaveeColors.RowPressedZebra : WaveeColors.RowPressed),
             PressScale = 0.985f,   // subtle push-down on press (a depth cue so the row isn't flat)
 
-            BorderWidth = 1f,
+            BorderWidth = plainRows ? 0f : 1f,
             // WinUI even rows: CardStroke at rest. BorderColor is Prop<ColorF> — bind to the zebra index.
-            BorderColor = Prop.Of(() => DisplayIndex() % 2 != 0 ? Tok.StrokeCardDefault : ColorF.Transparent),
-            HoverBorderColor = Tok.StrokeCardDefault,
+            BorderColor = plainRows ? ColorF.Transparent
+                : Prop.Of(() => DisplayIndex() % 2 != 0 ? Tok.StrokeCardDefault : ColorF.Transparent),
+            HoverBorderColor = plainRows ? ColorF.Transparent : Tok.StrokeCardDefault,
             FocusVisualMargin = Edges4.All(1f),
             Focusable = false,                       // the ItemsView roving effect owns the single tab stop
             Role = AutomationRole.Button,
@@ -1639,7 +1715,7 @@ sealed class TrackList : Component
                 {
                     Key = "row-pill", Width = 3f, Height = 16f, Margin = new Edges4(2f, 0f, 0f, 0f),
                     Corners = CornerRadius4.All(1.5f),
-                    Fill = Prop.Of(() => _rowsSnapshot!.Value.Handlers.Accent), AlignSelf = FlexAlign.Center,
+                    Fill = Prop.Of(() => _rowAccent!.Value), AlignSelf = FlexAlign.Center,
                     HitTestVisible = false, PressScale = 10f / 16f,
                     Opacity = Prop.Of(() => isSel() && !_checksVisibleRead() ? 1f : 0f),
                 },

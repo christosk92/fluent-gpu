@@ -83,6 +83,9 @@ public interface IDetachedVideoWindow
     void SetBounds(FluentGpu.Foundation.RectF outerBoundsPx);
     /// <summary>Close the window (the pop-out docks back to inline).</summary>
     void Close();
+    /// <summary>Fired exactly once, on the UI thread, when the window has closed (OS chrome/Alt+F4 OR programmatic
+    /// <see cref="Close"/>), immediately before the child host is torn down. Cleared after it fires.</summary>
+    Action? OnClosed { get; set; }
 }
 
 public sealed class InputHooks

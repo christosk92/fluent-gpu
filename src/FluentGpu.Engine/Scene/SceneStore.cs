@@ -393,6 +393,22 @@ public sealed class SceneStore : ISceneBackend
         MarkRecordDirty(c);
     }
 
+    /// <summary>Attach <paramref name="child"/> as the first child without freeing/recreating it. Used by reverse
+    /// virtual-window rotation so logical-item overlap keeps its retained subtree and only entering rows rebind.</summary>
+    internal void PrependChild(NodeHandle parent, NodeHandle child)
+    {
+        Debug.Assert(IsLive(parent) && IsLive(child));
+        int p = (int)parent.Raw.Index, c = (int)child.Raw.Index;
+        _parent[c] = p;
+        _prevSib[c] = 0;
+        _nextSib[c] = _firstChild[p];
+        if (_firstChild[p] != 0) _prevSib[_firstChild[p]] = c;
+        else _lastChild[p] = c;
+        _firstChild[p] = c;
+        _childCount[p]++;
+        MarkRecordDirty(c);
+    }
+
     /// <summary>Unlink a child from its parent without freeing it (used by keyed reconcile to reorder).</summary>
     public void Detach(NodeHandle child)
     {
@@ -1049,6 +1065,21 @@ public sealed class SceneStore : ISceneBackend
     public bool HasScroll(NodeHandle h) => _scroll.Contains((int)h.Raw.Index);
     /// <summary>Read the scroll row by value (default if the node is not a viewport).</summary>
     public bool TryGetScroll(NodeHandle h, out ScrollState s) => _scroll.TryGet((int)h.Raw.Index, out s);
+    /// <summary>Resolve the shared recyclable-item clip owned by a virtual viewport from its direct content node.
+    /// The returned prefix count maps directly to the content node's leading child ordinals.</summary>
+    public bool TryGetVirtualItemBand(NodeHandle content, out int persistentPrefixCount, out float topInset)
+    {
+        persistentPrefixCount = 0;
+        topInset = float.NaN;
+        if (content.IsNull || !IsLive(content)) return false;
+        NodeHandle viewport = Parent(content);
+        if (viewport.IsNull || !IsLive(viewport) || !_scroll.TryGet((int)viewport.Raw.Index, out var sc)
+            || sc.ContentNode != content || sc.Orientation != 0 || !float.IsFinite(sc.ItemClipTopInset))
+            return false;
+        persistentPrefixCount = Math.Clamp(sc.PersistentPrefixCount, 0, sc.ItemCount);
+        topInset = MathF.Max(0f, sc.ItemClipTopInset);
+        return true;
+    }
 
     // ── hit-test pass-through (WinUI FlyoutBase.OverlayInputPassThroughElement) ──────────────────
     // A light-dismiss scrim registers ONE target subtree whose rendered bounds it yields to: pointer input there

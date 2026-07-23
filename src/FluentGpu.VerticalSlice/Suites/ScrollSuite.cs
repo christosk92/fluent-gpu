@@ -2672,7 +2672,8 @@ static class ScrollSuite
             var window = new HeadlessWindow(new WindowDesc("e11-prefix", new Size2(640, 480), 1f));
             window.Show();
             var probe = new PersistentPrefixProbe();
-            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            var device = new HeadlessGpuDevice();
+            using var host = new AppHost(app, window, device, fonts, strings, probe);
             host.RunFrame();
 
             var vp = FindScrollNode(host.Scene, host.Scene.Root);
@@ -2696,10 +2697,48 @@ static class ScrollSuite
                 && probe.PrefixSignals[0].Peek() == 0 && probe.PrefixSignals[1].Peek() == 1;
             bool stableRoots = p0 == q0 && p1 == q1;
             bool bounded = census0 == normal0 + 2 && census1 == normal1 + 2;
-            Check("e11virt.5c persistent prefix keeps two fixed bound roots ahead of a bounded deep recyclable window",
+            bool bandState = host.Scene.TryGetVirtualItemBand(content, out int bandPrefix, out float bandInset)
+                && bandPrefix == 2 && Near(bandInset, 80f);
+            var vpRect = host.Scene.AbsoluteRect(vp);
+            bool bandClip = false;
+            for (int i = 0; i < device.LastClips.Count; i++)
+            {
+                var r = device.LastClips[i].DeviceRect;
+                if (Near(r.Y, vpRect.Y + 80f, 0.5f) && Near(r.H, MathF.Max(0f, vpRect.H - 80f), 0.5f))
+                {
+                    bandClip = true;
+                    break;
+                }
+            }
+            (int Order, int ClipDepth) RectDepth(ColorF fill)
+            {
+                for (int i = 0; i < device.LastRects.Count; i++)
+                {
+                    var c = device.LastRects[i].Fill;
+                    if (Near(c.R, fill.R, 0.006f) && Near(c.G, fill.G, 0.006f)
+                        && Near(c.B, fill.B, 0.006f) && Near(c.A, fill.A, 0.006f))
+                        return (i, device.LastRectClipDepths[i]);
+                }
+                return (-1, -1);
+            }
+            var heroDraw = RectDepth(PersistentPrefixProbe.HeroFill);
+            var chromeDraw = RectDepth(PersistentPrefixProbe.ChromeFill);
+            var rowDraw = RectDepth(PersistentPrefixProbe.RowFill);
+            bool suffixOnlyClip = heroDraw.Order >= 0 && chromeDraw.Order >= 0 && rowDraw.Order >= 0
+                && heroDraw.ClipDepth == chromeDraw.ClipDepth
+                && rowDraw.ClipDepth == heroDraw.ClipDepth + 1;
+
+            var heroHit = host.Input.HitTest(new Point2(160f, 20f));
+            var chromeHit = host.Input.HitTest(new Point2(160f, 60f));
+            var rowHit = host.Input.HitTest(new Point2(160f, 100f));
+            bool hitBand = heroHit == p0 && chromeHit == p1 && !rowHit.IsNull && rowHit != p0 && rowHit != p1;
+
+            Check("e11virt.5c persistent prefix stays fixed/hittable while one shared item-band clip bounds the recyclable suffix of a deep virtual window",
                 sc0.PersistentPrefixCount == 2 && sc1.PersistentPrefixCount == 2 && sc1.FirstRealized > 2
-                && fixedSignals && stableRoots && bounded,
-                $"first={sc1.FirstRealized} prefixSignals={probe.PrefixSignals.Count} roots={stableRoots} census={census0}/{normal0}+2->{census1}/{normal1}+2");
+                && fixedSignals && stableRoots && bounded && bandState && bandClip && suffixOnlyClip && hitBand
+                && device.ClipBalance == 0,
+                $"first={sc1.FirstRealized} prefixSignals={probe.PrefixSignals.Count} roots={stableRoots} census={census0}/{normal0}+2->{census1}/{normal1}+2 " +
+                $"band={bandState}/{bandClip} depths={heroDraw.ClipDepth}/{chromeDraw.ClipDepth}/{rowDraw.ClipDepth} hits={heroHit.Raw.Index}/{chromeHit.Raw.Index}/{rowHit.Raw.Index}");
         }
 
         // e11virt.6 — typed ItemsRepeater (E11-L2): the (index, item) template binds without casts, and an
@@ -3234,6 +3273,145 @@ static class ScrollSuite
                 $"realized={realized} modelWired={modelWired} selects={selects} invokeWired={(probe.Options!.OnInvoked is not null)}");
         }
 
+        // ── gate.list.bound-overlap-recycler: a small contiguous window shift rotates retained slots around the
+        //    overlap. Exactly |delta| entering rows rebind; every overlapping logical item keeps its scene root. ───
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("lo-overlap", new Size2(360, 240), 1f));
+            window.Show();
+            var probe = new BoundOverlapProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            host.RunFrame();
+            var vp = FindVp(host.Scene, BoundOverlapProbe.N);
+
+            List<NodeHandle> Roots()
+            {
+                var roots = new List<NodeHandle>();
+                if (!vp.IsNull && host.Scene.TryGetScroll(vp, out var state) && !state.ContentNode.IsNull)
+                    for (var root = host.Scene.FirstChild(state.ContentNode); !root.IsNull; root = host.Scene.NextSibling(root))
+                        roots.Add(root);
+                return roots;
+            }
+
+            FrameStats MoveToRow(int row)
+            {
+                // The visible-window math intentionally treats an item ending exactly at the top edge as visible.
+                // Align one item beyond that boundary through InputDispatcher's single-writer chokepoint so `row`
+                // becomes FirstRealized. Unlike the control-level BringIntoView helper this does not invalidate the
+                // ItemsView component itself, so the measured frame isolates the engine's slot rotation/rebind path.
+                host.Input.WriteScrollOffset(vp, row == 0 ? 0f : (row + 1) * 40f);
+                return host.RunFrame();
+            }
+
+            // Warm the largest signal fan-out once so the runtime queues are at capacity before measuring allocation.
+            MoveToRow(500);
+            MoveToRow(0);
+            MoveToRow(1);
+            MoveToRow(0);
+            MoveToRow(3);
+            MoveToRow(0);
+
+            host.Scene.TryGetScroll(vp, out var initialState);
+            var initialRoots = Roots();
+            var rootSignals = new Dictionary<NodeHandle, IReadSignal<int>>();
+            bool paired = initialRoots.Count > 0;
+            for (int i = 0; i < initialRoots.Count; i++)
+            {
+                int logicalIndex = initialState.FirstRealized + i;
+                IReadSignal<int>? match = null;
+                for (int j = 0; j < probe.SlotSignals.Count; j++)
+                    if (probe.SlotSignals[j].Peek() == logicalIndex)
+                    {
+                        match = probe.SlotSignals[j];
+                        break;
+                    }
+                if (match is null)
+                {
+                    paired = false;
+                    continue;
+                }
+                rootSignals[initialRoots[i]] = match;
+            }
+
+            Dictionary<int, NodeHandle> Snapshot()
+            {
+                var map = new Dictionary<int, NodeHandle>();
+                foreach (var root in Roots())
+                    if (rootSignals.TryGetValue(root, out var signal))
+                        map[signal.Peek()] = root;
+                return map;
+            }
+
+            static bool OverlapPreserved(Dictionary<int, NodeHandle> before, Dictionary<int, NodeHandle> after)
+            {
+                foreach (var (index, root) in before)
+                    if (after.TryGetValue(index, out var next) && next != root)
+                        return false;
+                return true;
+            }
+
+            Dictionary<IReadSignal<int>, int> SignalSnapshot()
+            {
+                var values = new Dictionary<IReadSignal<int>, int>(probe.SlotSignals.Count);
+                for (int i = 0; i < probe.SlotSignals.Count; i++)
+                    values[probe.SlotSignals[i]] = probe.SlotSignals[i].Peek();
+                return values;
+            }
+
+            int ChangedSignals(Dictionary<IReadSignal<int>, int> before)
+            {
+                int changed = 0;
+                foreach (var (signal, value) in before)
+                    if (signal.Peek() != value) changed++;
+                return changed;
+            }
+
+            int first0 = initialState.FirstRealized;
+            int windowSize = initialState.LastRealized - initialState.FirstRealized;
+            var map0 = Snapshot();
+
+            var signals0 = SignalSnapshot();
+            var forwardFrame = MoveToRow(first0 + 1);
+            host.Scene.TryGetScroll(vp, out var forwardState);
+            var map1 = Snapshot();
+            int forwardChanges = ChangedSignals(signals0);
+            bool forward = forwardState.FirstRealized == first0 + 1 &&
+                           forwardChanges == 1 &&
+                           OverlapPreserved(map0, map1);
+
+            var signals1 = SignalSnapshot();
+            var reverseFrame = MoveToRow(first0);
+            host.Scene.TryGetScroll(vp, out var reverseState);
+            var map2 = Snapshot();
+            int reverseChanges = ChangedSignals(signals1);
+            bool reverse = reverseState.FirstRealized == first0 &&
+                           reverseChanges == 1 &&
+                           OverlapPreserved(map1, map2);
+
+            var signals2 = SignalSnapshot();
+            var kFrame = MoveToRow(first0 + 3);
+            host.Scene.TryGetScroll(vp, out var kState);
+            var map3 = Snapshot();
+            int kChanges = ChangedSignals(signals2);
+            bool shiftK = kState.FirstRealized == first0 + 3 &&
+                          kChanges == 3 &&
+                          OverlapPreserved(map2, map3);
+
+            var signals3 = SignalSnapshot();
+            var farFrame = MoveToRow(500);
+            host.Scene.TryGetScroll(vp, out var farState);
+            int farChanges = ChangedSignals(signals3);
+            int farWindowSize = farState.LastRealized - farState.FirstRealized;
+            bool far = farState.FirstRealized == 500 && farChanges == farWindowSize;
+            Check("gate.list.bound-overlap-recycler ±1/k shifts rebind only entering rows and preserve overlap roots; a no-overlap jump rebinds the full window",
+                paired && map0.Count == windowSize && forward && reverse && shiftK && far,
+                $"paired={paired} roots/signals={initialRoots.Count}/{probe.SlotSignals.Count} W={windowSize} " +
+                $"forward={forward} reverse={reverse} k3={shiftK} far={far} first={first0}->{forwardState.FirstRealized}->{reverseState.FirstRealized}->{kState.FirstRealized}->{farState.FirstRealized} " +
+                $"changes={forwardChanges}/{reverseChanges}/{kChanges}/{farChanges} farW={farState.LastRealized - farState.FirstRealized} " +
+                $"alloc={forwardFrame.HotPhaseAllocBytes}/{reverseFrame.HotPhaseAllocBytes}/{kFrame.HotPhaseAllocBytes}/{farFrame.HotPhaseAllocBytes}");
+        }
+
         // ── gate.list.bound-zero-alloc: a bound list scrolled over recycled slots stays 0-alloc on phases 6–13 (the
         //    recycling contract re-asserted through ItemsView.CreateBound + ListOptions). ──────────────────────────
         {
@@ -3311,8 +3489,8 @@ static class ScrollSuite
                 $"keptBound={keptBound}(sig0={sig0?.Peek()}) plainRecycled={plainRecycled}(sig0P={sig0P?.Peek()}) capLive={live}");
         }
 
-        // ── gate.list.contenttype-pools: heterogeneous rows never cross-rebind — a scroll that FLIPS a slot's content
-        //    type rebuilds it (rowBind runs); a scroll that PRESERVES the type cheap-rebinds (no rebuild). ──────────
+        // ── gate.list.contenttype-pools: overlapping logical rows retain their roots. Only a newly entering row whose
+        //    recycled leaving slot has an incompatible content type rebuilds. ───────────────────────────────────────
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("lo-ctype", new Size2(360, 240), 1f));
@@ -3332,12 +3510,12 @@ static class ScrollSuite
             int b0 = probe.Builds;
             ScrollTo(host, window, vp, 42 * 40f);
             int sameTypeBuilds = probe.Builds - b0;
-            // A 1-row jump flips every slot's parity => every reused slot must REBUILD (never cross-rebind).
+            // A 1-row jump retains every overlap exactly; only the one entering row can require a rebuild.
             int b1 = probe.Builds;
             ScrollTo(host, window, vp, 43 * 40f);
             int crossTypeBuilds = probe.Builds - b1;
-            Check("gate.list.contenttype-pools a type-preserving scroll cheap-rebinds (0 rebuilds); a type-flipping scroll rebuilds every reused slot (never cross-rebinds)",
-                sameTypeBuilds == 0 && crossTypeBuilds > 0,
+            Check("gate.list.contenttype-pools overlap rows retain their logical roots; a type-preserving shift rebuilds 0 rows and a type-incompatible entering row rebuilds exactly once",
+                sameTypeBuilds == 0 && crossTypeBuilds == 1,
                 $"sameTypeBuilds={sameTypeBuilds} crossTypeBuilds={crossTypeBuilds}");
         }
 
@@ -4480,21 +4658,21 @@ static class ScrollSuite
         host.Scene.TryGetScroll(vp, out var scA);
         int firstA = scA.FirstRealized;
 
-        // MEASURED: scroll DOWN several rows with the pointer NOT moving — enough to force a re-realize (NeedsRealize fires
-        // in ~guard-sized jumps, not 1:1). FirstRealized advances ⇒ the slot at ordinal `overscan` (the SAME handle) is
-        // rebound to a new item and the reconciler's Unmark clears its Hovered flag. RefreshHoverAfterScroll must re-assert
-        // it: the handle is unchanged, so SetState early-outs and (pre-fix) leaves the row un-hovered.
+        // MEASURED: scroll DOWN several rows with the pointer NOT moving — enough to force a re-realize. The overlap
+        // recycler keeps each logical row's root, so the newly visible row under this fixed point has a different handle.
+        // RefreshHoverAfterScroll must move Hovered from the departing row to that new hit.
         window.QueueInput(new InputEvent(InputKind.Wheel, pt, 0, 0, 200f));
         host.RunFrame();
         var b = host.Input.HitTest(pt);
         host.Scene.TryGetScroll(vp, out var scB);
         bool reRealized = scB.FirstRealized > firstA;                                   // the realize window shifted (rebind ran)
-        bool sameHandle = !b.IsNull && b == a;                                          // the SAME slot handle stayed under the point
-        bool hovB = !b.IsNull && (host.Scene.Flags(b) & NodeFlags.Hovered) != 0;         // the recycled slot is (re-)Hovered
+        bool logicalHitChanged = !b.IsNull && b != a;                                   // a different logical row now occupies the point
+        bool hovB = !b.IsNull && (host.Scene.Flags(b) & NodeFlags.Hovered) != 0;         // hover followed the visible content
+        bool oldCleared = a.IsNull || !host.Scene.IsLive(a) || (host.Scene.Flags(a) & NodeFlags.Hovered) == 0;
 
-        Check("gate.scroll.hover-follows-content.recycled-slot a boundary-crossing virtual scroll re-asserts NodeFlags.Hovered on the recycled slot handle that stays under a stationary cursor (the reconciler's rebind Unmark would otherwise leave it un-hovered)",
-            hovA && reRealized && sameHandle && hovB,
-            $"a={(a.IsNull ? "null" : a.Raw.Index.ToString())} b={(b.IsNull ? "null" : b.Raw.Index.ToString())} firstA={firstA} firstB={scB.FirstRealized} hovA={hovA} reRealized={reRealized} sameHandle={sameHandle} hovB={hovB}");
+        Check("gate.scroll.hover-follows-content.recycled-slot a boundary-crossing virtual scroll moves NodeFlags.Hovered to the overlapping logical row now under a stationary cursor",
+            hovA && reRealized && logicalHitChanged && hovB && oldCleared,
+            $"a={(a.IsNull ? "null" : a.Raw.Index.ToString())} b={(b.IsNull ? "null" : b.Raw.Index.ToString())} firstA={firstA} firstB={scB.FirstRealized} hovA={hovA} reRealized={reRealized} logicalHitChanged={logicalHitChanged} hovB={hovB} oldCleared={oldCleared}");
     }
 
 }
