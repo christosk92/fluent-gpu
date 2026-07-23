@@ -489,6 +489,8 @@ sealed class PlayerBarContent : Component
                     b.PreferVideo.Value = next;
                     if (next)
                     {
+                        // Mutually exclusive with the in-window PiP: only one surface consumes the resolved source at a time.
+                        b.ShowInWindowPip.Value = false;
                         // Resolve the now-playing track's playable video source (Spotify manifest → PopOutVideoSource) and
                         // pop the video out into a detached, always-on-top window (its own AppHost + composited swapchain +
                         // video presenter) that plays it (clear on the MF backend, DRM via the native CDM).
@@ -501,6 +503,25 @@ sealed class PlayerBarContent : Component
                 }, true, preferVideo, accent, buttonBox, buttonGlyph),
                 Loc.Get(preferVideo ? Strings.Player.SwitchToAudio : Strings.Player.SwitchToVideo))
                 with { Key = "video" });
+        // In-window picture-in-picture toggle — a distinct affordance beside the pop-out button (same has-video gate).
+        // Opens/closes the floating in-window PiP surface (WaveeShell → InWindowVideoPip); mutually exclusive with the
+        // detached pop-out window (turning it on closes the detached window if open — one swapchain per source).
+        if (active && hasVideo)
+            rightKids.Add(ToolTip.Wrap(
+                Transport(Icons.BackToWindow, () =>
+                {
+                    bool next = !b.ShowInWindowPip.Peek();
+                    if (next)
+                    {
+                        popout.Value?.Close(); popout.Value = null;   // close the detached pop-out (mutual exclusivity)
+                        b.PreferVideo.Value = false;                  // the detached toggle reflects the pop-out window state
+                        b.RequestPopOutSource(track?.Uri);            // resolve the source both surfaces read
+                        b.ShowInWindowPip.Value = true;
+                    }
+                    else b.ShowInWindowPip.Value = false;
+                }, true, b.ShowInWindowPip.Value, accent, buttonBox, buttonGlyph),
+                Loc.Get(b.ShowInWindowPip.Value ? Strings.Player.CloseVideo : Strings.Player.PlayVideoHere))
+                with { Key = "pip" });
         if (showQueue)
             rightKids.Add(Transport(Icons.Queue, () => ui?.Toggle(RailMode.Queue), ui is not null,
                 ui?.RailOpen.Value == true && ui.Mode.Value == RailMode.Queue, accent, buttonBox, buttonGlyph)
