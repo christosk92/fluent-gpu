@@ -720,6 +720,20 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
 
     public void CloseWindow() => PostMessageW(_hwnd, WM_CLOSE, 0, 0);
 
+    // ── detached-window seam (the pop-out video mini-player) ──────────────────────────────────────────────────────────
+
+    public void SetTopmost(bool topmost)
+    {
+        // HWND_TOPMOST (-1) / HWND_NOTOPMOST (-2). Persistent (unlike a one-shot bring-to-front); position/size/activation
+        // left untouched so it never steals focus or fights the user's placement.
+        var insertAfter = (HWND)(nint)(topmost ? -1 : -2);
+        SetWindowPos(_hwnd, insertAfter, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    }
+
+    public void SetBoundsPx(RectF outerBoundsPx)
+        => SetWindowPos(_hwnd, HWND.NULL, (int)outerBoundsPx.X, (int)outerBoundsPx.Y,
+            (int)MathF.Max(1f, outerBoundsPx.W), (int)MathF.Max(1f, outerBoundsPx.H), SWP_NOZORDER | SWP_NOACTIVATE);
+
     /// <summary>First engine region matching <paramref name="px"/>,<paramref name="py"/> (client PHYSICAL px) → its
     /// HT code; 0 = no region. Report order is the priority order (islands → buttons → caption catch-all).</summary>
     private int HitTestRegions(int px, int py, bool buttonsOnly)
