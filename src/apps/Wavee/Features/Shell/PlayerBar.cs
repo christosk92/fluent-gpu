@@ -9,6 +9,7 @@ using FluentGpu.Localization;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
 using Wavee.Core;
+using Wavee.Features.Video;
 using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
@@ -181,6 +182,8 @@ sealed class PlayerBarContent : Component
         var svc = UseContext(Services.Slot);
         var acts = UseContext(ActionServices.Slot);  // now-playing cluster context menu (Menus.NowPlaying)
         var menuOverlay = UseContext(Overlay.Service);
+        var hooks = UseContext(InputHooks.Current);              // pop-out video: OpenDetachedWindow seam
+        var popout = UseRef<IDetachedVideoWindow?>(null);        // the live detached video window handle (null = docked)
         var titleHover = UseSignal(false);           // hover the now-playing text → BOTH lines scroll together (synced); idle = static + edge fade
         var L = _layout.Value;                       // coarse breakpoint signal; does NOT change for every resize pixel
         _ = AppearancePrefs.Epoch.Value;
@@ -480,7 +483,20 @@ sealed class PlayerBarContent : Component
         // seam for now (sets PreferVideo); the actual video surface/host is a follow-up. Tooltip explains the affordance.
         if (active && hasVideo)
             rightKids.Add(ToolTip.Wrap(
-                Transport(Icons.Movie, () => { b.PreferVideo.Value = !b.PreferVideo.Value; }, true, preferVideo, accent, buttonBox, buttonGlyph),
+                Transport(Icons.Movie, () =>
+                {
+                    bool next = !b.PreferVideo.Value;
+                    b.PreferVideo.Value = next;
+                    if (next)
+                    {
+                        // Pop the video out into a detached, always-on-top window (its own AppHost + composited swapchain +
+                        // video presenter). It plays PopOutVideoUrl on the clear MF backend; the DRM/Canvas resolver fills it.
+                        popout.Value = hooks?.OpenDetachedWindow?.Invoke(new DetachedWindowRequest(
+                            Loc.Get(Strings.Player.SwitchToVideo), new Size2(480, 270),
+                            new PopOutVideoWindow { Url = b.PopOutVideoUrl }, AlwaysOnTop: true));
+                    }
+                    else { popout.Value?.Close(); popout.Value = null; }
+                }, true, preferVideo, accent, buttonBox, buttonGlyph),
                 Loc.Get(preferVideo ? Strings.Player.SwitchToAudio : Strings.Player.SwitchToVideo))
                 with { Key = "video" });
         if (showQueue)
