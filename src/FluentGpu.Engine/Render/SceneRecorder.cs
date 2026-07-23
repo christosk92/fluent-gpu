@@ -46,14 +46,14 @@ public static class SceneRecorder
 {
     private const bool EnableSubtreeCull = true;
 
-    // Opaque occlusion cull (DEFAULT-ON; FG_OCCLUSION_CULL=0 opts OUT, =1 still accepted): skip a node's own visual when a
+    // Opaque occlusion cull (DEFAULT-OFF; set FG_OCCLUSION_CULL=1 to opt IN for A/B): skip a node's own visual when a
     // later-drawn direct child provably, fully, opaquely covers it — those fill/border pixels are overwritten regardless, so
-    // the emit is dead work (finding: the nested opaque background stack overdraws 4-8× with no z-reject). Pixel-identical by
-    // construction: the predicate is deliberately strict (visible, unclipped, square, fully-opaque Box child whose absolute
-    // rect fully contains the node's visible rect, and no transform animation in flight) so it only ever fires when the
-    // node's pixels are guaranteed dead — verified byte-identical via A/B screenshot, so promoted from opt-in to default-on.
-    // Set FG_OCCLUSION_CULL=0 to disable (fallback for any regression).
-    private static readonly bool s_occlusionCull = Environment.GetEnvironmentVariable("FG_OCCLUSION_CULL") != "0";
+    // the emit is dead work (finding: the nested opaque background stack overdraws 4-8× with no z-reject). This was promoted
+    // to default-on then reverted 2026-07-23 because the predicate is transform-blind: AbsoluteRect is translation-only, so a
+    // full-width opaque square child scaled down by a bound compositor transform — the Wavee seek-bar value fill — still reads
+    // as fully covering, and the cull wrongly drops the rail's grey track. Keep opt-in until the predicate is transform-aware
+    // AND eyeballed clean in the real app.
+    private static readonly bool s_occlusionCull = Environment.GetEnvironmentVariable("FG_OCCLUSION_CULL") == "1";
 
     // Opt-in scroll diagnostics: set FG_SCROLLLOG=1, run, scroll, copy the [scroll] lines.
     private static readonly bool ScrollLog = Environment.GetEnvironmentVariable("FG_SCROLLLOG") == "1";
@@ -520,6 +520,9 @@ public static class SceneRecorder
             if (cp.BlurSigma > 0.01f || cp.OpacityGroup) continue;
             var cn = cp.Corners;
             if (cn.TopLeft != 0f || cn.TopRight != 0f || cn.BottomRight != 0f || cn.BottomLeft != 0f) continue;  // square only (rounded reveals corners)
+            // A scaled/rotated child's AbsoluteRect ignores its linear part (translation-only), so containment would lie — the seek-bar fill-bind case.
+            var lt = cp.LocalTransform;
+            if (lt.M11 != 1f || lt.M22 != 1f || lt.M12 != 0f || lt.M21 != 0f) continue;
             RectF cb = scene.AbsoluteRect(c);
             if (cb.X <= visible.X && cb.Y <= visible.Y
                 && cb.X + cb.W >= visible.X + visible.W && cb.Y + cb.H >= visible.Y + visible.H)

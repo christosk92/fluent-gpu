@@ -619,8 +619,16 @@ sealed class TrackList : Component
         // The per-frame reveal clock: mounted ONLY while a cold ramp is in flight (Flow.Show gated on _rampActive), so it
         // advances _reveal once per frame and then unmounts — the frame loop quiesces (no forever-loop). Copies the
         // FrameClock.Tick idiom (TickerClock / CountTicker). Hidden 0×0 node → no layout/hit-test footprint.
-        Element revealClock = Flow.Show(() => _rampActive.Value,
-            Embed.Comp(() => new TickerClock { OnFrame = _ => AdvanceReveal() }));
+        // Wrapped in a zero-size hit-invisible Box: a bare ZStack sibling above the column would capture HitAny (topmost sibling)
+        // and kill wheel scrolling — the list's scroller lives inside `column`, not up the ancestor chain from this node.
+        Element revealClock = new BoxEl
+        {
+            HitTestVisible = false,
+            Width = 0f,
+            Height = 0f,
+            Children = [Flow.Show(() => _rampActive.Value,
+                Embed.Comp(() => new TickerClock { OnFrame = _ => AdvanceReveal() }))],
+        };
         return ZStack(column, selectionOverlay, revealClock) with { Grow = 1f, Shrink = 1f, MinHeight = 0f };
     }
 
