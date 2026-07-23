@@ -29,6 +29,36 @@
 
   <Import Project="Wavee.Publish.props" />
 
+  <!-- Native in-process PlayReady CDM DLL (ops/tools/playready-native): build it if its sources changed, then copy it
+       NEXT TO Wavee.exe so DesktopProtectedVideoPlayer's P/Invokes resolve at runtime. Without this the DLL is absent
+       from Wavee's bin and DRM video fails to load (it now degrades to a typed DRM error, but the DLL is required to
+       actually play). Mirrors FluentGpu.WindowsApp.csproj; the Exec is tolerant so a machine without the C++ toolchain
+       still builds Wavee (DRM just stays unavailable). -->
+  <PropertyGroup>
+    <_PlayReadyNativeArch Condition="'$(RuntimeIdentifier)' == 'win-x64'">x64</_PlayReadyNativeArch>
+    <_PlayReadyNativeArch Condition="'$(RuntimeIdentifier)' == 'win-arm64'">arm64</_PlayReadyNativeArch>
+    <_PlayReadyNativeArch Condition="'$(_PlayReadyNativeArch)' == '' and '$(PROCESSOR_ARCHITECTURE)' == 'AMD64'">x64</_PlayReadyNativeArch>
+    <_PlayReadyNativeArch Condition="'$(_PlayReadyNativeArch)' == ''">arm64</_PlayReadyNativeArch>
+    <_PlayReadyNativeDir>$(MSBuildProjectDirectory)\..\..\..\ops\tools\playready-native</_PlayReadyNativeDir>
+    <_PlayReadyNativeDll>$(_PlayReadyNativeDir)\out\$(_PlayReadyNativeArch)\FluentGpu.PlayReady.Native.dll</_PlayReadyNativeDll>
+  </PropertyGroup>
+  <Target Name="BuildDesktopPlayReadyNative" BeforeTargets="PrepareForBuild"
+          Inputs="$(_PlayReadyNativeDir)\PlayReadyNative.cpp;$(_PlayReadyNativeDir)\CencMediaSource.h;$(_PlayReadyNativeDir)\build.cmd"
+          Outputs="$(_PlayReadyNativeDll)">
+    <Exec Command="cmd /c &quot;$(_PlayReadyNativeDir)\build.cmd&quot; $(_PlayReadyNativeArch)" ContinueOnError="true" />
+  </Target>
+  <Target Name="CopyDesktopPlayReadyNative" AfterTargets="Build" DependsOnTargets="BuildDesktopPlayReadyNative">
+    <Copy SourceFiles="$(_PlayReadyNativeDll)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true"
+          Condition="Exists('$(_PlayReadyNativeDll)')" />
+  </Target>
+  <Target Name="PublishDesktopPlayReadyNative" BeforeTargets="ComputeFilesToPublish"
+          DependsOnTargets="BuildDesktopPlayReadyNative">
+    <ItemGroup>
+      <ResolvedFileToPublish Include="$(_PlayReadyNativeDll)" RelativePath="FluentGpu.PlayReady.Native.dll"
+                             CopyToPublishDirectory="PreserveNewest" Condition="Exists('$(_PlayReadyNativeDll)')" />
+    </ItemGroup>
+  </Target>
+
   <!-- Composition root: the Windows backend (D3D12 / Win32 / DirectWrite / WIC) wired into the
        portable engine + control kit, plus the framework-neutral Wavee.Core backend seam. -->
   <ItemGroup>
