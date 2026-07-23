@@ -63,6 +63,7 @@ public sealed class LibrarySync : IAsyncDisposable
 
     readonly object _gate = new();
     readonly HashSet<string> _dirtyPlaylists = new(StringComparer.Ordinal);            // pushed-while-cold → revalidate on open
+    readonly HashSet<string> _attrHealForced = new(StringComparer.Ordinal);           // uris force-refetched once for attr-less rows (loop guard)
     readonly Dictionary<string, DateTime> _lastRevalidatedAt = new(StringComparer.Ordinal);
     readonly Dictionary<string, TaskCompletionSource> _openInFlight = new(StringComparer.Ordinal);  // per-uri open dedup
     readonly HashSet<string> _pendingSets = new(StringComparer.Ordinal);              // collection-push settle coalescing
@@ -440,9 +441,25 @@ public sealed class LibrarySync : IAsyncDisposable
         try
         {
             if (uri.Length == 0) return;
-            if (_store.Membership(uri).Count == 0)
+            var members = _store.Membership(uri);
+            if (members.Count == 0)
             {
                 await _playlists.FetchPlaylistAsync(uri, _ct).ConfigureAwait(false);   // first open — the skeleton path
+                MarkRevalidated(uri); ClearDirty(uri);
+                return;
+            }
+            // Attribute-aware heal gate. Membership can be resident yet attribute-less — every row has no added_at and no
+            // added_by, so the Date-added / Added-by columns render blank forever: the /diff revalidate path (the only path
+            // a NON-empty baseline takes) never re-reads item attributes for existing rows, so once a playlist was cached
+            // without Item.attributes it stays that way. Treat that as still-cold and run the full, attribute-bearing
+            // FetchPlaylistAsync instead — the same spirit as StoreLibrarySource.IsAlbumComplete ("unnamed track ⇒ cold").
+            // ALSO heals historically-poisoned caches written before this gate existed (recovery is lazy, per-open — no
+            // SQLite migration). Force at most ONCE per session (_attrHealForced): a playlist whose server data genuinely
+            // carries no attributes stays attribute-less after the fetch, and this guard stops it re-forcing a full GET on
+            // every open — it falls through to the normal dirty/stale /diff path from the second open on.
+            if (IsAttributeLess(members) && TryMarkAttrHealForced(uri))
+            {
+                await _playlists.FetchPlaylistAsync(uri, _ct).ConfigureAwait(false);
                 MarkRevalidated(uri); ClearDirty(uri);
                 return;
             }
@@ -599,6 +616,19 @@ public sealed class LibrarySync : IAsyncDisposable
     }
 
     string RootlistUri() => "spotify:user:" + _username() + ":rootlist";
+
+    // Every row lacks BOTH membership facts (added_at <= 0 AND no added_by) ⇒ the cached membership was recorded without
+    // Item.attributes; the joined Date-added / Added-by columns can never populate from it. Called only when Count > 0.
+    static bool IsAttributeLess(IReadOnlyList<PlaylistMember> members)
+    {
+        for (int i = 0; i < members.Count; i++)
+            if (members[i].AddedAt > 0 || !string.IsNullOrEmpty(members[i].AddedBy)) return false;
+        return true;
+    }
+
+    // Once-per-session single-flight for the attr-less heal fetch: returns true the FIRST time a uri is forced (and records
+    // it), false thereafter — so a genuinely attribute-less server playlist never storms a full GET on every open.
+    bool TryMarkAttrHealForced(string uri) { lock (_gate) return _attrHealForced.Add(uri); }
 
     bool IsOpen(string uri) { lock (_gate) return _openUri == uri; }
     void MarkDirty(string uri) { lock (_gate) _dirtyPlaylists.Add(uri); }
