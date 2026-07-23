@@ -134,6 +134,7 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
                 PsshLen = psshLen,
                 HttpHeaders = headers,
                 LicenseServerUrl = licUrl,
+                SegmentStride = request.SegmentStride > 0 ? request.SegmentStride : 1,
             };
 
             var callback = (IntPtr)(delegate* unmanaged[Stdcall]<
@@ -338,6 +339,7 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
         public int PsshLen;
         public IntPtr HttpHeaders;
         public IntPtr LicenseServerUrl;
+        public int SegmentStride;   // ABI-appended (must match native FgPlayReadyOpenDesc): segment-number step (1 = numbered)
     }
 
     private static partial class Native
