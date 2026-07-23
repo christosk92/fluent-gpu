@@ -450,6 +450,13 @@ would otherwise cause, **subordinate to one hard safety invariant**:
 - **Nested-rail mount deferral.** `MountVirtual` realizes with overscan 0 (the visible cards + guard only) and marks
   `VirtualRangeDirty`, so a rail scrolling into view lands its visible content in the mount frame and trickles its
   overscan halo in over later frames via the same budget — flattening the all-rails-mount-at-once spike.
+- **Persistent bound prefix.** `PersistentPrefixCount=N` changes the attached coverage set to
+  `[0,N) ∪ [FirstRealized,LastRealized)`: the first N bound slots retain fixed index signals and remain the leading
+  content children, while only the second interval recycles. Layout maps child ordinals through that union, focus lookup
+  includes the prefix offset, and `NeedsRealize` evaluates only the uncovered tail. This is the native sticky/
+  scroll-linked composition seam (for example a collapsing hero plus list chrome), not a second overlay and not the
+  hidden parked state of `KeepAlive`. Its live-node budget is exactly ordinary window + N; zero preserves the original
+  recycler path byte-for-byte.
 
 ### 6.2 Variable-height path — `MeasureItems=true`, anchoring
 

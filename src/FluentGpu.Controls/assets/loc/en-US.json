@@ -50,6 +50,7 @@
     "catchingUp": "Catching up to live…",
     "reconnecting": "Reconnecting…",
     "buffering": "Buffering…",
+    "videoFailed": "Video failed to play",
     "off": "Off",
     "auto": "Auto",
     "goLive": "Go live",

@@ -1544,10 +1544,15 @@ static class AnimSuite
             ScrollTo(520f);
             float clampedY = s.AbsoluteRect(headerN).Y;
             bool stillPinned = (s.Flags(headerN) & NodeFlags.StickyPinned) != 0;
+            // Reconcile/layout may restore the element's literal transform before the next pin pass while the retained
+            // StickyPinned bit still describes the previous frame. Release must derive from current geometry, not from
+            // whether ApplyPin also had to change LocalTransform.Dy.
+            s.Paint(headerN).LocalTransform = Affine2D.Identity;
+            s.Mark(headerN, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
             ScrollTo(0f);     // released, back at its natural slot
             bool releasedFlag = (s.Flags(headerN) & NodeFlags.StickyPinned) == 0;
             float releasedY = s.AbsoluteRect(headerN).Y;
-            Check("23u. position:sticky — pins at viewport top, clamps at the card's end, releases, OnPinned fires per transition",
+            Check("23u. position:sticky — pins at viewport top, clamps at the card's end, releases even when reconcile already restored identity, OnPinned fires per transition",
                 pinnedNow && Near(pinnedY, vpTop, 0.5f)
                 && stillPinned && Near(clampedY, vpTop - 20f, 0.5f)
                 && releasedFlag && Near(releasedY, restY, 0.5f)

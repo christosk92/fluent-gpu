@@ -35,6 +35,15 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession
     private double _volume = 1.0;
     private bool _muted;
 
+    // Session-level start watchdog (belt-and-suspenders around the player's own): guarantees a terminal Failed even if the
+    // underlying player never reports Error. Overridable via FG_VIDEO_START_TIMEOUT_MS (ms); default 20s.
+    private const int DefaultStartTimeoutMs = 20_000;
+    private static readonly int StartTimeoutMs =
+        int.TryParse(Environment.GetEnvironmentVariable("FG_VIDEO_START_TIMEOUT_MS"), out int t) && t > 0
+            ? t : DefaultStartTimeoutMs;
+    private long _startTicks;
+    private bool _watchdogFired;
+
     /// <summary>Create a protected session over <paramref name="player"/> for <paramref name="request"/>.</summary>
     public ProtectedMediaSession(IProtectedVideoPlayer player, ProtectedVideoRequest request, MediaOpenOptions opts)
     {
@@ -59,6 +68,7 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession
     {
         if (_started) return;
         _started = true;
+        _startTicks = Environment.TickCount64;
         _player.Start(_request);   // non-blocking; the native CDM/decode loop runs on its own MTA thread
     }
 
@@ -140,6 +150,23 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession
                     _player.Error.Value ?? "Protected playback failed (CDM/license).", null, _locus, MediaRecovery.NeedsLicense));
                 Publish(sink, PlaybackState.Failed);
             }
+            return;
+        }
+
+        // 1b. Session watchdog — guarantee a terminal failure even if the player never reports Error (e.g. an OLD native
+        // DLL that only LOGS a rejected license). If we asked to play and are still merely Opening/Buffering past the start
+        // budget with no natural size, surface the same typed DRM failure instead of an eternal "Starting playback…".
+        if (!_watchdogFired && !_errorPublished && _playRequested && _naturalSize.IsEmpty
+            && _publishedState is PlaybackState.Opening or PlaybackState.Buffering
+            && Environment.TickCount64 - _startTicks > StartTimeoutMs)
+        {
+            _watchdogFired = true;
+            _errorPublished = true;
+            sink.Error(new MediaError(MediaErrorCategory.Drm,
+                _player.Error.Value ?? "PlayReady license was rejected or no key became usable — video cannot start " +
+                    "(see %LOCALAPPDATA%\\FluentGpu\\PlayReady\\desktop-playready.log).",
+                null, _locus, MediaRecovery.NeedsLicense));
+            Publish(sink, PlaybackState.Failed);
             return;
         }
 

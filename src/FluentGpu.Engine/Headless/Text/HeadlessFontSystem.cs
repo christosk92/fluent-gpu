@@ -33,7 +33,11 @@ namespace FluentGpu.Text.Headless;
 /// </summary>
 public sealed class HeadlessFontSystem : IFontSystem
 {
-    private struct LineRange { public int Start, End; }
+    private struct LineRange
+    {
+        public int Start, End;
+        public int VisibleBodyEnd, SuffixStart;
+    }
 
     private readonly StringTable _strings;
     private LineRange[] _lines = new LineRange[4];
@@ -41,6 +45,8 @@ public sealed class HeadlessFontSystem : IFontSystem
     // Span-run state for the current call: the resolved spans + the per-char prefix-sum X table (xs[i] = advance sum
     // of [0, i)). Null spans ⇒ the uniform fast path (the exact pre-span constants — goldens unchanged).
     private SpanStyle[]? _spans;
+    private int _overflowSuffixStart = -1;
+    private bool _overflowSuffixVisible;
     private float[] _xs = new float[64];
 
     public HeadlessFontSystem(StringTable strings)
@@ -55,7 +61,9 @@ public sealed class HeadlessFontSystem : IFontSystem
     /// <summary>Resolve the span overlay for this call; build the per-char prefix table when present.</summary>
     private void ResolveSpans(ReadOnlySpan<char> text, in TextStyle style)
     {
-        _spans = style.SpanRunId != 0 ? SpanRunTable.Shared.Resolve(style.SpanRunId)?.Spans : null;
+        var run = style.SpanRunId != 0 ? SpanRunTable.Shared.Resolve(style.SpanRunId) : null;
+        _spans = run?.Spans;
+        _overflowSuffixStart = run?.OverflowSuffixStart ?? -1;
         if (_spans is null) return;
         int n = text.Length;
         if (_xs.Length < n + 1) System.Array.Resize(ref _xs, System.Math.Max(n + 1, _xs.Length * 2));
@@ -117,11 +125,14 @@ public sealed class HeadlessFontSystem : IFontSystem
         ResolveSpans(s.AsSpan(), in style);
         float lineH = LineHeightOf(in style);
         float baseline = BaselineOf(in style);
-        float total = _spans is not null ? _xs[s.Length] : s.Length * AdvanceOf(in style);
-        bool wrapped = style.Wrap != TextWrap.NoWrap && !float.IsInfinity(maxWidth) && total > maxWidth;
+        int bodyLength = _overflowSuffixStart >= 0 && _overflowSuffixStart <= s.Length
+            ? _overflowSuffixStart : s.Length;
+        float total = XAt(in style, bodyLength);
+        LayoutLines(s.AsSpan(), in style, maxWidth);
+        bool wrapped = style.Wrap != TextWrap.NoWrap && !float.IsInfinity(maxWidth)
+            && (total > maxWidth || _lineCount > 1 || _overflowSuffixVisible);
         bool clampW = !float.IsInfinity(maxWidth) && total > maxWidth
             && style.Trim != TextTrim.None;
-        LayoutLines(s.AsSpan(), in style, maxWidth);
         // An unbreakable over-long word keeps the wrapped box width clamped to maxWidth (1 line, width = maxWidth).
         // NoWrap + Trim/MaxLines still clamps the reported box to maxWidth so virtual grid cells don't spill.
         var size = wrapped || clampW ? new Size2(maxWidth, _lineCount * lineH) : new Size2(total, lineH);
@@ -143,18 +154,20 @@ public sealed class HeadlessFontSystem : IFontSystem
             if (flags == 0) continue;
             for (int li = 0; li < _lineCount; li++)
             {
-                int s = System.Math.Max(spans[i].Start, _lines[li].Start);
-                int e = System.Math.Min(spans[i].End, _lines[li].End);
-                if (s >= e) continue;
-                float x0 = _xs[s] - _xs[_lines[li].Start];
-                float w = _xs[e] - _xs[s];
                 float top = li * lineH;
-                if ((flags & SpanStyle.LinkBit) != 0)
-                    rects.Add(new SpanRect(new RectF(x0, top, w, lineH), i, SpanStyle.LinkBit));
-                if ((flags & SpanStyle.UnderlineBit) != 0)
-                    rects.Add(new SpanRect(new RectF(x0, top + baseline + 1f, w, 1f), i, SpanStyle.UnderlineBit));
-                if ((flags & SpanStyle.StrikethroughBit) != 0)
-                    rects.Add(new SpanRect(new RectF(x0, top + strikeY, w, 1f), i, SpanStyle.StrikethroughBit));
+                ref readonly var line = ref _lines[li];
+                if (line.SuffixStart >= 0)
+                {
+                    AddArtifactsForRange(rects, in style, in line,
+                        System.Math.Max(spans[i].Start, line.Start), System.Math.Min(spans[i].End, line.VisibleBodyEnd),
+                        top, lineH, baseline, strikeY, i, flags);
+                    AddArtifactsForRange(rects, in style, in line,
+                        System.Math.Max(spans[i].Start, line.SuffixStart), System.Math.Min(spans[i].End, line.End),
+                        top, lineH, baseline, strikeY, i, flags);
+                }
+                else AddArtifactsForRange(rects, in style, in line,
+                    System.Math.Max(spans[i].Start, line.Start), System.Math.Min(spans[i].End, line.End),
+                    top, lineH, baseline, strikeY, i, flags);
             }
         }
         run.PublishRects(new SpanRunRects(maxWidth, rects.ToArray()));
@@ -169,19 +182,27 @@ public sealed class HeadlessFontSystem : IFontSystem
         float lineH = LineHeightOf(in style);
         int li = point.Y < 0f ? 0 : (int)(point.Y / lineH);
         if (li >= _lineCount) li = _lineCount - 1;
-        int start = _lines[li].Start, len = _lines[li].End - _lines[li].Start;
+        ref readonly var line = ref _lines[li];
+        int start = line.Start, len = line.End - line.Start;
+        if (line.SuffixStart >= 0)
+        {
+            float bodyW = DisplayX(in style, in line, line.VisibleBodyEnd);
+            if (line.VisibleBodyEnd > line.Start && point.X < bodyW)
+                return HitTestRange(in style, line.Start, line.VisibleBodyEnd, 0f, point.X, out trailing);
+            return HitTestRange(in style, line.SuffixStart, line.End, bodyW, point.X, out trailing);
+        }
         if (len <= 0 || point.X <= 0f) return start;                  // empty line / left of the line → line start
         if (_spans is null)
         {
             float cells = point.X / AdvanceOf(in style);
             int cell = (int)cells;
-            if (cell >= len) { trailing = true; return _lines[li].End; }  // right of the line → line end (affinity = caller)
+            if (cell >= len) { trailing = true; return line.End; }  // right of the line → line end (affinity = caller)
             trailing = cells - cell >= 0.5f;
             return start + cell + (trailing ? 1 : 0);
         }
         // Span path: non-uniform cells — walk the prefix table within the line.
         float lineX0 = _xs[start];
-        for (int k = start; k < _lines[li].End; k++)
+        for (int k = start; k < line.End; k++)
         {
             float cx = _xs[k] - lineX0, cw = _xs[k + 1] - _xs[k];
             if (point.X < cx + cw)
@@ -191,7 +212,7 @@ public sealed class HeadlessFontSystem : IFontSystem
             }
         }
         trailing = true;
-        return _lines[li].End;
+        return line.End;
     }
 
     public void GetCaret(ReadOnlySpan<char> text, in TextStyle style, float maxWidth, int charIndex, out float x, out float lineTop, out float lineHeight, out int lineIndex)
@@ -203,7 +224,7 @@ public sealed class HeadlessFontSystem : IFontSystem
         int li = _lineCount - 1;
         for (int i = 0; i < _lineCount; i++)
             if (charIndex < _lines[i].End) { li = i; break; }         // boundary index belongs to the NEXT line (leading)
-        x = XAt(in style, charIndex) - XAt(in style, _lines[li].Start);
+        x = DisplayX(in style, in _lines[li], charIndex);
         lineTop = li * lineHeight;
         lineIndex = li;
     }
@@ -219,12 +240,16 @@ public sealed class HeadlessFontSystem : IFontSystem
         int written = 0;
         for (int li = 0; li < _lineCount && written < rects.Length; li++)
         {
-            int s = start > _lines[li].Start ? start : _lines[li].Start;
-            int e = end < _lines[li].End ? end : _lines[li].End;
-            if (s >= e) continue;
-            float x0 = XAt(in style, s) - XAt(in style, _lines[li].Start);
-            float w = XAt(in style, e) - XAt(in style, s);
-            rects[written++] = new RectF(x0, li * lineH, w, lineH);
+            ref readonly var line = ref _lines[li];
+            if (line.SuffixStart >= 0)
+            {
+                AddRangeRect(in style, in line, start > line.Start ? start : line.Start,
+                    end < line.VisibleBodyEnd ? end : line.VisibleBodyEnd, li, lineH, rects, ref written);
+                AddRangeRect(in style, in line, start > line.SuffixStart ? start : line.SuffixStart,
+                    end < line.End ? end : line.End, li, lineH, rects, ref written);
+            }
+            else AddRangeRect(in style, in line, start > line.Start ? start : line.Start,
+                end < line.End ? end : line.End, li, lineH, rects, ref written);
         }
         return written;
     }
@@ -238,8 +263,15 @@ public sealed class HeadlessFontSystem : IFontSystem
     private void LayoutLines(ReadOnlySpan<char> s, in TextStyle style, float maxWidth)
     {
         _lineCount = 0;
-        int n = s.Length;
-        float total = _spans is not null ? _xs[n] : n * AdvanceOf(in style);
+        _overflowSuffixVisible = false;
+        int textLength = s.Length;
+        bool hasSuffixData = _overflowSuffixStart >= 0 && _overflowSuffixStart < textLength;
+        bool canEmitSuffix = hasSuffixData && style.Wrap != TextWrap.NoWrap && style.MaxLines > 0
+            && !float.IsInfinity(maxWidth);
+        // OverflowSuffix is auxiliary content, not part of the ordinary paragraph. Hide it unless a finite wrapping
+        // budget actually overflows and reserves space for the suffix.
+        int n = hasSuffixData ? _overflowSuffixStart : textLength;
+        float total = XAt(in style, n);
         if (style.Wrap == TextWrap.NoWrap || float.IsInfinity(maxWidth) || total <= maxWidth)
         {
             AddLine(0, n);
@@ -257,7 +289,12 @@ public sealed class HeadlessFontSystem : IFontSystem
             {
                 // Line budget reached: the last line still wraps at the word boundary and the remainder is
                 // DROPPED (WinUI MaxLines clips whole lines past the cap — never the remainder run-on).
-                if (_lineCount + 1 >= maxL) { AddLine(lineStart, ws); return; }
+                if (_lineCount + 1 >= maxL)
+                {
+                    if (canEmitSuffix) AddOverflowLine(s, in style, lineStart, n, textLength, maxWidth);
+                    else AddLine(lineStart, ws);
+                    return;
+                }
                 AddLine(lineStart, ws);
                 lineStart = ws; pen = 0f;
             }
@@ -269,6 +306,101 @@ public sealed class HeadlessFontSystem : IFontSystem
     private void AddLine(int start, int end)
     {
         if (_lines.Length == _lineCount) System.Array.Resize(ref _lines, _lines.Length * 2);
-        _lines[_lineCount++] = new LineRange { Start = start, End = end };
+        _lines[_lineCount++] = new LineRange { Start = start, End = end, VisibleBodyEnd = -1, SuffixStart = -1 };
+    }
+
+    private void AddOverflowLine(ReadOnlySpan<char> s, in TextStyle style, int bodyStart, int bodyEnd, int textEnd, float maxWidth)
+    {
+        float suffixW = XAt(in style, textEnd) - XAt(in style, _overflowSuffixStart);
+        int suffixEnd = textEnd;
+        if (suffixW > maxWidth)
+        {
+            suffixEnd = _overflowSuffixStart;
+            while (suffixEnd < textEnd
+                && XAt(in style, suffixEnd + 1) - XAt(in style, _overflowSuffixStart) <= maxWidth)
+                suffixEnd++;
+            suffixW = XAt(in style, suffixEnd) - XAt(in style, _overflowSuffixStart);
+        }
+
+        float budget = MathF.Max(0f, maxWidth - suffixW);
+        int visibleEnd = bodyStart;
+        int i = bodyStart;
+        float pen = 0f;
+        while (i < bodyEnd)
+        {
+            int ws = i;
+            while (i < bodyEnd && s[i] != ' ') i++;
+            float wordW = XAt(in style, i) - XAt(in style, ws);
+            int spaceStart = i;
+            while (i < bodyEnd && s[i] == ' ') i++;
+            float spacesW = XAt(in style, i) - XAt(in style, spaceStart);
+            if (pen + wordW > budget) break;
+            pen += wordW;
+            visibleEnd = spaceStart;
+            if (pen + spacesW > budget) break;
+            pen += spacesW;
+            visibleEnd = i;
+        }
+
+        if (_lines.Length == _lineCount) System.Array.Resize(ref _lines, _lines.Length * 2);
+        _lines[_lineCount++] = new LineRange
+        {
+            Start = bodyStart,
+            End = suffixEnd,
+            VisibleBodyEnd = visibleEnd,
+            SuffixStart = _overflowSuffixStart,
+        };
+        _overflowSuffixVisible = true;
+    }
+
+    private float DisplayX(in TextStyle style, in LineRange line, int index)
+    {
+        if (line.SuffixStart >= 0 && index >= line.SuffixStart)
+            return XAt(in style, line.VisibleBodyEnd) - XAt(in style, line.Start)
+                 + XAt(in style, index) - XAt(in style, line.SuffixStart);
+        if (line.SuffixStart >= 0 && index > line.VisibleBodyEnd) index = line.VisibleBodyEnd;
+        return XAt(in style, index) - XAt(in style, line.Start);
+    }
+
+    private int HitTestRange(in TextStyle style, int start, int end, float offsetX, float pointX, out bool trailing)
+    {
+        trailing = false;
+        if (end <= start) return start;
+        float rangeX = XAt(in style, start);
+        for (int k = start; k < end; k++)
+        {
+            float cx = offsetX + XAt(in style, k) - rangeX;
+            float cw = XAt(in style, k + 1) - XAt(in style, k);
+            if (pointX < cx + cw)
+            {
+                trailing = pointX >= cx + cw * 0.5f;
+                return k + (trailing ? 1 : 0);
+            }
+        }
+        trailing = true;
+        return end;
+    }
+
+    private void AddArtifactsForRange(List<SpanRect> rects, in TextStyle style, in LineRange line,
+        int start, int end, float top, float lineH, float baseline, float strikeY, int spanIndex, byte flags)
+    {
+        if (start >= end) return;
+        float x0 = DisplayX(in style, in line, start);
+        float w = DisplayX(in style, in line, end) - x0;
+        if ((flags & SpanStyle.LinkBit) != 0)
+            rects.Add(new SpanRect(new RectF(x0, top, w, lineH), spanIndex, SpanStyle.LinkBit));
+        if ((flags & SpanStyle.UnderlineBit) != 0)
+            rects.Add(new SpanRect(new RectF(x0, top + baseline + 1f, w, 1f), spanIndex, SpanStyle.UnderlineBit));
+        if ((flags & SpanStyle.StrikethroughBit) != 0)
+            rects.Add(new SpanRect(new RectF(x0, top + strikeY, w, 1f), spanIndex, SpanStyle.StrikethroughBit));
+    }
+
+    private void AddRangeRect(in TextStyle style, in LineRange line, int start, int end, int lineIndex, float lineH,
+        Span<RectF> rects, ref int written)
+    {
+        if (written >= rects.Length || start >= end) return;
+        float x0 = DisplayX(in style, in line, start);
+        float w = DisplayX(in style, in line, end) - x0;
+        rects[written++] = new RectF(x0, lineIndex * lineH, w, lineH);
     }
 }

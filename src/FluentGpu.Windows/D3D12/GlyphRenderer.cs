@@ -592,7 +592,8 @@ float4 PSMain(VSOutG i) : SV_Target
         _scratch.Clear();
         _colorScratch.Clear();
         ShapeInto(text, family, size, weight, originX, topY, maxWidth, wrap, trim, maxLines, charSpacing, lineHeight, lineStacking, lineBounds, dpiScale, _scratch,
-            spanRun is not null ? spanRun.Spans : default, spanRun is not null ? _colorScratch : null);
+            spanRun is not null ? spanRun.Spans : default, spanRun is not null ? _colorScratch : null,
+            spanRun?.OverflowSuffixStart ?? -1);
         int n = _scratch.Count;
         var arr = RentQuads(n);
         for (int i = 0; i < n; i++) arr[i] = _scratch[i];
@@ -831,9 +832,10 @@ float4 PSMain(VSOutG i) : SV_Target
     /// receives the per-quad span color (A==0 = inherit), parallel to <paramref name="outList"/>.</summary>
     private void ShapeInto(string text, string family, float size, int weight, float originX, float topY, float maxWidth, int wrap, int trim, int maxLines,
         float charSpacing, float lineHeight, int lineStacking, int lineBounds, float dpiScale, List<ShapedGlyph> outList,
-        ReadOnlySpan<SpanStyle> spans = default, List<ColorF>? colorsOut = null)
+        ReadOnlySpan<SpanStyle> spans = default, List<ColorF>? colorsOut = null, int overflowSuffixStart = -1)
     {
-        _engine.Layout(text.AsSpan(), family ?? "", weight, size, maxWidth, wrap, trim, maxLines, charSpacing, lineHeight, lineStacking, lineBounds, spans, _liveness);
+        _engine.Layout(text.AsSpan(), family ?? "", weight, size, maxWidth, wrap, trim, maxLines, charSpacing, lineHeight,
+            lineStacking, lineBounds, spans, _liveness, overflowSuffixStart);
         float inv = 1f / dpiScale;
         // If the atlas generation resets mid-run (PackOrReset), quads already baked this pass hold stale UVs —
         // re-shape the whole run into the fresh generation so a cached run is always generation-consistent.
@@ -951,7 +953,7 @@ float4 PSMain(VSOutG i) : SV_Target
         _scratch.Clear();
         var spanRun = spanRunId != 0 ? SpanRunTable.Shared.Resolve(spanRunId) : null;
         ShapeInto(text, family, size, weight, originX, topY, maxWidth, wrap, trim, maxLines, charSpacing, lineHeight, lineStacking, lineBounds, dpiScale, _scratch,
-            spanRun is not null ? spanRun.Spans : default);
+            spanRun is not null ? spanRun.Spans : default, overflowSuffixStart: spanRun?.OverflowSuffixStart ?? -1);
         Debug.Assert(_scratch.Count == cached.Count, $"shaped-run cache count mismatch for \"{text}\": {_scratch.Count} vs {cached.Count}");
         for (int i = 0; i < _scratch.Count && i < cached.Count; i++)
         {

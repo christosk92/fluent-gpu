@@ -6,17 +6,18 @@ namespace Wavee.Tests;
 public class DetailVerticalLayoutTests
 {
     [Theory]
-    [InlineData(579f)]
-    [InlineData(539f)]
-    [InlineData(440f)]   // boundary inclusive: 440 is NOT below the 440 stack threshold
+    [InlineData(580f)]
+    [InlineData(600f)]
+    [InlineData(900f)]
     public void OrientationFor_WideEnough_SideBySide(float w)
         => Assert.Equal(DetailHeroOrientation.SideBySide, DetailVerticalLayout.OrientationFor(w));
 
     [Theory]
-    [InlineData(439f)]
+    [InlineData(579f)]
+    [InlineData(540f)]
     [InlineData(340f)]
-    public void OrientationFor_Narrow_Stacked(float w)
-        => Assert.Equal(DetailHeroOrientation.Stacked, DetailVerticalLayout.OrientationFor(w));
+    public void OrientationFor_Narrow_Immersive(float w)
+        => Assert.Equal(DetailHeroOrientation.Immersive, DetailVerticalLayout.OrientationFor(w));
 
     [Fact]
     public void OrientationFor_Unmeasured_UsesFallbackSideBySide()
@@ -30,23 +31,51 @@ public class DetailVerticalLayoutTests
     }
 
     [Theory]
-    [InlineData(440f, 160f)]   // 440·0.36 = 158.4 → clamp up to 160 min
-    [InlineData(500f, 180f)]   // 500·0.36 = 180
-    [InlineData(800f, 256f)]   // wide hero → taller cover carries the full info/description column
-    public void ArtworkFor_SideBySide_Clamps(float w, float expected)
+    [InlineData(580f, 200f)]
+    [InlineData(800f, 200f)]
+    [InlineData(1400f, 200f)]
+    public void ArtworkFor_SideBySide_IsFixed200(float w, float expected)
         => Assert.Equal(expected, DetailVerticalLayout.ArtworkFor(w, DetailHeroOrientation.SideBySide));
 
     [Theory]
-    [InlineData(439f, 240f)]   // 439-48 = 391 → clamp down to 240 max
-    [InlineData(260f, 212f)]   // 260-48 = 212 → in range
-    [InlineData(200f, 180f)]   // 200-48 = 152 → clamp up to 180 min
-    public void ArtworkFor_Stacked_Clamps(float w, float expected)
-        => Assert.Equal(expected, DetailVerticalLayout.ArtworkFor(w, DetailHeroOrientation.Stacked));
+    [InlineData(579f, 579f)]
+    [InlineData(420f, 420f)]
+    [InlineData(300f, 300f)]
+    public void ArtworkFor_Immersive_IsFullWidthSquare(float w, float expected)
+        => Assert.Equal(expected, DetailVerticalLayout.ArtworkFor(w, DetailHeroOrientation.Immersive));
 
     [Fact]
-    public void DescriptionMaxLines_SideBySide3_Stacked4()
+    public void DescriptionMaxLines_SideBySide3_Immersive4()
     {
         Assert.Equal(3, DetailVerticalLayout.DescriptionMaxLines(DetailHeroOrientation.SideBySide));
-        Assert.Equal(4, DetailVerticalLayout.DescriptionMaxLines(DetailHeroOrientation.Stacked));
+        Assert.Equal(4, DetailVerticalLayout.DescriptionMaxLines(DetailHeroOrientation.Immersive));
     }
+
+    [Fact]
+    public void OrientationFor_UsesResizeHysteresis()
+    {
+        Assert.Equal(DetailHeroOrientation.SideBySide,
+            DetailVerticalLayout.OrientationFor(579f, DetailHeroOrientation.SideBySide, initialized: true));
+        Assert.Equal(DetailHeroOrientation.Immersive,
+            DetailVerticalLayout.OrientationFor(560f, DetailHeroOrientation.SideBySide, initialized: true));
+        Assert.Equal(DetailHeroOrientation.Immersive,
+            DetailVerticalLayout.OrientationFor(599f, DetailHeroOrientation.Immersive, initialized: true));
+        Assert.Equal(DetailHeroOrientation.SideBySide,
+            DetailVerticalLayout.OrientationFor(600f, DetailHeroOrientation.Immersive, initialized: true));
+    }
+
+    [Fact]
+    public void StickyGeometry_UsesCompactIdentityPlusChromeInset()
+    {
+        Assert.Equal(56f, DetailVerticalLayout.CompactIdentityHeight);
+        Assert.Equal(36f, DetailVerticalLayout.CompactArtworkSize);
+        Assert.Equal(93f, DetailVerticalLayout.StickyClipInset);
+    }
+
+    [Theory]
+    [InlineData(260f, 204f)]
+    [InlineData(56f, 1f)]
+    [InlineData(20f, 1f)]
+    public void CollapseDistance_EndsAtCompactIdentity(float expanded, float expected)
+        => Assert.Equal(expected, DetailVerticalLayout.CollapseDistance(expanded));
 }

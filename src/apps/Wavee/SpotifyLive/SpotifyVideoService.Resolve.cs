@@ -22,6 +22,7 @@ partial class SpotifyVideoService
     public async Task<PopOutVideoSource?> ResolvePlayableAsync(string trackUri, ITransport transport, CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(trackUri) || transport is null) return null;
+        _log.Debug($"[video] resolve begin track={trackUri}");
 
         string? manifestId;
         try
@@ -43,6 +44,10 @@ partial class SpotifyVideoService
         }
         var descriptor = manifest.ToDashDescriptor();
         if (descriptor is null) return null;
+        string initHost = ""; try { initHost = new Uri(descriptor.InitUrl).Host; } catch { }
+        _log.Debug($"[video] resolved PlayReady manifest={manifestId} isDrm=true initHost={initHost} " +
+                   $"segs={descriptor.SegmentCount} stride={descriptor.SegmentStride} kid={descriptor.DefaultKid ?? "-"} " +
+                   $"codecs={descriptor.Codecs ?? "-"} licSrv={manifest.LicenseServerEndpoint ?? "-"}");
         var relay = SpotifyLicenseRelay.Create(transport, manifest.LicenseServerEndpoint);
         return PopOutVideoSource.PlayReady(manifestId, descriptor, relay, manifest.LicenseServerEndpoint);
     }

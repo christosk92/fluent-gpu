@@ -37,7 +37,7 @@ public static class ScrollBindEval
             if (!scene.IsLive(b.Target)) continue;
             if (b.Has(ScrollBind.FlagStretchClosedForm)) { ApplyStretch(scene, ref b, in sc); continue; }
             float v = EvalScalar(scene, ref b, in sc, offset, horiz, vp);
-            WriteScalarSink(scene, ref b, v);
+            WriteScalarSink(scene, ref b, v, vp);
         }
     }
 
@@ -164,12 +164,18 @@ public static class ScrollBindEval
         bool pinned = shift > 0f;
         if (MathF.Abs(p.LocalTransform.Dy - shift) > 0.01f)
         {
-            bool wasPinned = (scene.Flags(n) & NodeFlags.StickyPinned) != 0;
             p.LocalTransform = pinned ? Affine2D.Translation(0f, shift) : Affine2D.Identity;
             scene.Mark(n, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+        }
+        // Pin state is not derived from whether this pass happened to change the transform. Reconcile/layout can restore
+        // the literal identity transform before the pin pass; a stale StickyPinned bit must still release in that frame.
+        bool nodeWasPinned = (scene.Flags(n) & NodeFlags.StickyPinned) != 0;
+        if (pinned != nodeWasPinned)
+        {
             if (pinned) scene.Mark(n, NodeFlags.StickyPinned); else scene.Unmark(n, NodeFlags.StickyPinned);
-            // CSS :stuck — once per engage/release transition, never per frame.
-            if (pinned != wasPinned) b.OnFlag?.Invoke(pinned);
+            // CSS :stuck — once per retained presented-state edge, even when reconcile already restored the matching
+            // transform. The node flag survives a bind re-bake, so it also carries the correct previous state here.
+            b.OnFlag?.Invoke(pinned);
         }
         return pinned;
     }
@@ -302,7 +308,7 @@ public static class ScrollBindEval
         return b.OutLo + (b.OutHi - b.OutLo) * t;
     }
 
-    static void WriteScalarSink(SceneStore scene, ref ScrollBind b, float v)
+    static void WriteScalarSink(SceneStore scene, ref ScrollBind b, float v, NodeHandle vp)
     {
         ref NodePaint p = ref scene.Paint(b.Target);
         if (b.Sink == BindSink.PresentedHTrailing)
@@ -317,8 +323,22 @@ public static class ScrollBindEval
             b.LastWritten = v;
             return;
         }
-        if (MathF.Abs(v - b.LastWritten) <= 1e-3f) return;
         var lt = p.LocalTransform;
+        if (b.Sink is BindSink.MorphViewportX or BindSink.MorphViewportY)
+        {
+            bool x = b.Sink == BindSink.MorphViewportX;
+            float natural = NodeAxisInViewport(scene, b.Target, vp, x);
+            float delta = (b.Inset - natural) * Math.Clamp(v, 0f, 1f);
+            float current = x ? lt.Dx : lt.Dy;
+            if (MathF.Abs(delta - current) <= 1e-3f) return;
+            p.LocalTransform = x
+                ? new Affine2D(lt.M11, lt.M12, lt.M21, lt.M22, delta, lt.Dy)
+                : new Affine2D(lt.M11, lt.M12, lt.M21, lt.M22, lt.Dx, delta);
+            scene.Mark(b.Target, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+            b.LastWritten = v;
+            return;
+        }
+        if (MathF.Abs(v - b.LastWritten) <= 1e-3f) return;
         switch (b.Sink)
         {
             case BindSink.TransY: p.LocalTransform = new Affine2D(lt.M11, lt.M12, lt.M21, lt.M22, lt.Dx, v); break;
@@ -342,6 +362,27 @@ public static class ScrollBindEval
         scene.Mark(b.Target, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
         if (b.Has(ScrollBind.FlagPaintAbove)) scene.Mark(b.Target, NodeFlags.StickyPinned);
         b.LastWritten = v;
+    }
+
+    /// <summary>Target leading coordinate in viewport space, excluding only the target's own transform. Scroll-content
+    /// translation, sticky-ancestor translation, and presented trailing shifts are included so a morph remains attached
+    /// while those compositor owners move. Pair with transform origin (0,0) when scaling the target.</summary>
+    static float NodeAxisInViewport(SceneStore scene, NodeHandle node, NodeHandle vp, bool x)
+    {
+        float p = 0f;
+        var n = node;
+        while (!n.IsNull && n != vp)
+        {
+            ref RectF b = ref scene.Bounds(n);
+            p += x ? b.X : b.Y;
+            if (n != node)
+            {
+                ref NodePaint paint = ref scene.Paint(n);
+                p += x ? paint.LocalTransform.Dx : paint.LocalTransform.Dy + paint.ChildShiftY;
+            }
+            n = scene.Parent(n);
+        }
+        return p;
     }
 
     /// <summary>iOS/Spotify stretchy header: the (h+pull)/h scale + band-cancel matrix on the target node directly

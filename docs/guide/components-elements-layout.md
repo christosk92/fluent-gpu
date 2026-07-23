@@ -99,6 +99,12 @@ don't put a transform-owning `ScrollBinds` entry (a `PinTop` sticky / `StretchFr
 on a transform-owned part (e.g. the Expander clip mid-reflow). **New per-control
 styling knobs are banned**: if a prop's only job is to restyle one template part, it must be a Parts modifier instead.
 
+For a retained shared-element collapse, `MorphLeftTo` / `MorphTopTo` move the node's laid-out leading edges toward
+viewport-space coordinates over the authored `ScrollRange`. The engine resolves the live source coordinate after
+layout, including scroll and sticky-ancestor translation, so responsive heroes can morph their actual artwork, title,
+and control nodes instead of cross-fading duplicate compact copies. Put the morph on a plain scene element (not a
+`ComponentEl` anchor), use transform origin `(0,0)` when combining it with `ScaleUniform`, and keep one transform owner.
+
 ## Layout
 
 Flexbox (Yoga-style) is the default; CSS-grid is available via `GridEl`. Key `BoxEl` layout props:
@@ -395,6 +401,7 @@ new ListOptions {
   Entrance = new EntranceOptions { StaggerColdRealize = …, ItemFlipFrom = …, ItemFadeFrom = … },   // bound path
   // ── virtualization knobs ──
   ContentType   = i => rowKind(i),   // recycle-pool discriminator: heterogeneous rows only rebind within their type pool
+  PersistentPrefixCount = 2,         // bound path: keep leading items mounted for native sticky/scroll-linked composition
   CacheExtentPx = 400f,              // pre-realize margin in PIXELS beyond the viewport (overrides row-based Overscan)
   RepaintBoundary = true,            // per-item paint isolation (IsolateLayout + clip) so an item can't relayout the list
   KeepAlive = i => rows[i].IsEditing,// #5: this row's slot parks HIDDEN off-window instead of recycling (state survives)
@@ -412,6 +419,10 @@ new ListOptions {
   live state is preserved until it re-enters the window or the bounded bucket (`KeepAliveCap`, default 8) LRU-evicts it.
 - **`ContentType` (#16)** — heterogeneous bound rows (e.g. header vs track) only cheap-rebind within their content-type
   pool; a cross-type reuse rebuilds the slot (structure differs), never showing type-B data in a type-A subtree.
+- **`PersistentPrefixCount`** — the first N bound items stay mounted as normal leading content children while the tail
+  remains virtualized. Use it when a hero/header must own native `PinTop`, presented-height, or sticky-clip bindings and
+  survive deep scroll. The retained prefix still occupies its logical layout slots and adds exactly N live roots to the
+  ordinary window; it is not an overlay and not the hidden/parked `KeepAlive` state.
 - **`CacheExtentPx` (#16)** — pixel pre-realize band; overscan stays row-based by default, this overrides it when set.
 - **`RepaintBoundary` (#16)** — wraps each realized item container as a layout/paint boundary.
 - Reorder rides the displacement channel (`ReorderOptions`); displaced siblings glide aside via an animated translate

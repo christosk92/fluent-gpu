@@ -806,6 +806,16 @@ caches each. Our **L2 cache** turns each probe into a hash hit after the first, 
 ⇒ a text node is fully laid out **once** per content/constraint set, reused across measure passes and the
 final arrange. The arrange-phase `Bounds` (LOCAL space, phase 8) then feeds `Emit`.
 
+**Inline overflow suffix.** `SpanTextEl.OverflowSuffix` is an optional styled/clickable tail for finite
+wrapping `MaxLines` (for example, `“… More”`). Reconcile appends those spans to the registered `SpanRun` and
+records the UTF-16 body/suffix boundary in that run, so the boundary participates in the existing
+`SpanRunId`-keyed measure and shaped-run caches. Layout treats the appended range as auxiliary content:
+when the body fits, when wrapping is disabled, or when `MaxLines` is unlimited, it is omitted. When the body
+would exceed the final allowed line, the layout seam measures the suffix first, reserves that width, cuts the
+body at a legal break, then emits body fragment + suffix as one visual line. Range geometry represents those
+two logical ranges as disjoint fragments, so hidden body text has no decoration/link hit rectangle and the
+suffix uses ordinary `TextSpan.OnClick` dispatch. The headless and DirectWrite seams implement the same rule.
+
 ### 8.3 Hit-testing (caret/selection) — over the retained slot, no re-shape, no COM
 
 - `HitTestPoint(x,y)` → binary-search lines by `BaselineY`, walk runs in visual/BiDi order accumulating

@@ -66,7 +66,7 @@
       "rowDensity": "행 밀도",
       "rowDensitySub": "트랙 목록의 행 높이",
       "pageLayout": "트랙 페이지 레이아웃",
-      "pageLayoutSub": "넓은 창에서는 사이드 레일을 사용하거나 항상 쌓인 헤더를 사용합니다",
+      "pageLayoutSub": "자동 사이드 레일을 사용하거나 모든 크기에서 아트워크 히어로를 사용합니다",
       "disableMarquee": "흐르는 텍스트 끄기",
       "disableMarqueeSub": "긴 제목을 스크롤하지 않고 자릅니다",
       "disableColorWashes": "색상 워시 끄기",
@@ -85,7 +85,7 @@
       "cozy": "여유롭게",
       "comfortable": "편안하게",
       "automatic": "자동",
-      "stacked": "쌓기"
+      "hero": "히어로"
     }
   },
 
@@ -122,6 +122,7 @@
   },
 
   "common": {
+    "less": "접기",
     "more": "더 보기",
     "retry": "다시 시도",
     "dismiss": "닫기",

@@ -42,6 +42,10 @@ public sealed class TreeReconciler
     {
         public Element[]? Prev; public int PrevLen; public int PrevFirst; public VirtualListEl? El;
         public List<(Signal<int> Index, Element El)>? Slots;
+        // Opt-in retained prefix: fixed-index slots stay attached ahead of Slots while the latter keep their ordinary
+        // positional/extended recycler semantics. Roots are stored because prefix nodes are temporarily detached while
+        // the existing recycler operates on the normal child band, then restored before layout.
+        public List<(Signal<int> Index, Element El, NodeHandle Root)>? PrefixSlots;
         // Cold-mount stagger (bound lists): while a freshly-mounted list's large initial window is being realized a few
         // rows per frame (not all at once → the nav cold-mount spike), Warming is true. LastGrowEpoch caps the grow to
         // ONE batch per frame (the host calls realize up to ~5x/frame: pre-layout + the 2-pass post-layout loop + the
@@ -1765,6 +1769,16 @@ public sealed class TreeReconciler
         if (first > mandFirst) first = mandFirst;
         if (last < mandLast) last = mandLast;
 
+        // A persistent prefix is covered by retained children, not by the recyclable interval. Trim every normal range
+        // to begin after it; layout/window coverage treats the two bands as [0,prefix) U [FirstRealized,LastRealized).
+        int prefix = ve.RowBind is null ? 0 : Math.Clamp(ve.PersistentPrefixCount, 0, count);
+        if (prefix > 0)
+        {
+            visibleFirst = Math.Max(visibleFirst, prefix); visibleLast = Math.Max(visibleLast, prefix);
+            mandFirst = Math.Max(mandFirst, prefix); mandLast = Math.Max(mandLast, prefix);
+            first = Math.Max(first, prefix); last = Math.Max(last, prefix);
+        }
+
         // E4 budget: the mandatory band is realized unconditionally; the overscan halo is clipped to the per-frame row pool.
         bool budgetDeficit = !eagerOverscan && ClipRealizeBudget(in sc, mandFirst, mandLast, ref first, ref last);
         bool stayDirty = budgetDeficit || (mount && !eagerOverscan);
@@ -1776,7 +1790,9 @@ public sealed class TreeReconciler
         {
             // Research adjustments #5/#16: the keep-alive bucket + content-type pools ride an EXTENDED realize; when
             // neither is opted into (the default) the original zero-alloc positional recycler runs unchanged.
-            if (ve.KeepAlive is not null || ve.ContentType is not null)
+            if (prefix > 0 || entry.PrefixSlots is { Count: > 0 })
+                RealizeBoundWindowWithPersistentPrefix(node, content, entry, ve, prefix, first, last, w, visibleSlots, stayDirty);
+            else if (ve.KeepAlive is not null || ve.ContentType is not null)
                 RealizeBoundWindowExtended(node, content, entry, ve, first, last, w, visibleSlots, stayDirty);
             else
                 RealizeBoundWindow(node, content, entry, ve, first, last, w, visibleSlots, stayDirty);
@@ -1872,6 +1888,71 @@ public sealed class TreeReconciler
     }
 
     private static float Hint(float explicitSize) => float.IsNaN(explicitSize) ? 1024f : explicitSize;
+
+    /// <summary>Retain <paramref name="prefixCount"/> fixed-index bound slots ahead of the ordinary recyclable window.
+    /// Prefix nodes are detached only for the duration of realization so the existing positional/extended recyclers can
+    /// remain unchanged; they are restored as the leading direct content children before layout/paint.</summary>
+    private void RealizeBoundWindowWithPersistentPrefix(NodeHandle node, NodeHandle content, VirtualEntry entry,
+        VirtualListEl ve, int prefixCount, int first, int last, int w, int visibleSlots, bool stayDirty)
+    {
+        var prefix = entry.PrefixSlots ??= new List<(Signal<int>, Element, NodeHandle)>(prefixCount);
+        bool prefixChanged = prefix.Count != prefixCount;
+
+        // Remove the retained band from the child chain while the normal recycler walks children by ordinal.
+        for (int i = 0; i < prefix.Count; i++)
+            if (_scene.IsLive(prefix[i].Root) && !_scene.Parent(prefix[i].Root).IsNull)
+                _scene.Detach(prefix[i].Root);
+
+        while (prefix.Count > prefixCount)
+        {
+            int i = prefix.Count - 1;
+            var slot = prefix[i];
+            ve.OnItemClearing?.Invoke(i);
+            if (_scene.IsLive(slot.Root)) Remove(slot.Root);
+            prefix.RemoveAt(i);
+        }
+        while (prefix.Count < prefixCount)
+        {
+            int index = prefix.Count;
+            var sig = new Signal<int>(index);
+            Element el = ve.RowBind!(sig);
+            var root = _scene.CreateNode(el.ElementTypeId);
+            _scene.AppendChild(content, root);   // mount under the viewport so scroll bindings resolve their container
+            Mount(root, el);
+            _scene.Detach(root);
+            prefix.Add((sig, el, root));
+            ve.OnItemPrepared?.Invoke(index);
+        }
+
+        // With the prefix detached, the existing paths see exactly their original child/slot invariant.
+        if (ve.KeepAlive is not null || ve.ContentType is not null)
+            RealizeBoundWindowExtended(node, content, entry, ve, first, last, w, visibleSlots, stayDirty);
+        else
+            RealizeBoundWindow(node, content, entry, ve, first, last, w, visibleSlots, stayDirty);
+
+        // Existing normal roots currently occupy the content chain. Append the prefix, then rotate the normal band
+        // behind it using only linked-list operations (no per-realize buffer/allocation).
+        int normalCount = 0;
+        for (var c = _scene.FirstChild(content); !c.IsNull; c = _scene.NextSibling(c)) normalCount++;
+        for (int i = 0; i < prefix.Count; i++) _scene.AppendChild(content, prefix[i].Root);
+        var normal = _scene.FirstChild(content);
+        for (int i = 0; i < normalCount && !normal.IsNull; i++)
+        {
+            var next = _scene.NextSibling(normal);
+            _scene.Detach(normal);
+            _scene.AppendChild(content, normal);
+            normal = next;
+        }
+
+        ref ScrollState sc = ref _scene.ScrollRef(node);
+        sc.PersistentPrefixCount = prefixCount;
+        if (prefixChanged)
+        {
+            _scene.Mark(content, NodeFlags.LayoutDirty);
+            _reconciled = true;
+            _realizeProgress = true;
+        }
+    }
 
     /// <summary>
     /// Bound (signals-first) realize: slots are PERSISTENT — recycling a slot = writing its index signal, which
@@ -2590,7 +2671,17 @@ public sealed class TreeReconciler
             else
             {
                 row.Source = d.From;
-                row.Sink = d.To;
+                if (d.MorphLeftTo is { } morphX)
+                {
+                    row.Sink = FluentGpu.Animation.BindSink.MorphViewportX;
+                    row.Inset = morphX;
+                }
+                else if (d.MorphTopTo is { } morphY)
+                {
+                    row.Sink = FluentGpu.Animation.BindSink.MorphViewportY;
+                    row.Inset = morphY;
+                }
+                else row.Sink = d.To;
                 row.OutLo = d.OutStart;
                 row.OutHi = d.OutEnd;
                 row.Ease = d.Ease;
@@ -2616,7 +2707,8 @@ public sealed class TreeReconciler
         for (int i = 0; i < dsls.Length; i++)
         {
             var d = dsls[i];
-            if (d.PinTop is null && d.ClipTopAtViewport is null && !d.StretchFromTop && d.To == sink) return true;
+            if (d.PinTop is null && d.ClipTopAtViewport is null && d.MorphLeftTo is null && d.MorphTopTo is null
+                && !d.StretchFromTop && d.To == sink) return true;
         }
         return false;
     }
@@ -3127,6 +3219,7 @@ public sealed class TreeReconciler
                 sc.ItemCount = Math.Max(0, v.ItemCount);
                 sc.Layout = v.Layout;
                 sc.Overscan = v.Overscan;
+                sc.PersistentPrefixCount = v.RowBind is null ? 0 : Math.Clamp(v.PersistentPrefixCount, 0, sc.ItemCount);
                 sc.EdgeCueConfig = ResolveEdgeCues(v.EdgeCues);
                 if (v.OnScrollGeometryChanged is { } obs) _scene.SetScrollObserver(node, obs.Project, obs.Action);
                 else _scene.ClearScrollObserver(node);
@@ -3307,16 +3400,39 @@ public sealed class TreeReconciler
                 paint.TextDecorations = 0;   // span decorations ride the span-run artifact path, not the single-run bits
 
                 ref LayoutInput li = ref _scene.Layout(node);
-                var spans = st.Spans;
+                var bodySpans = st.Spans;
+                var suffixSpans = st.OverflowSuffix;
+                int bodySpanCount = bodySpans.Length;
+                int suffixSpanCount = suffixSpans?.Length ?? 0;
+                TextSpan[] spans;
+                if (suffixSpanCount == 0) spans = bodySpans;
+                else
+                {
+                    spans = new TextSpan[bodySpanCount + suffixSpanCount];
+                    Array.Copy(bodySpans, spans, bodySpanCount);
+                    Array.Copy(suffixSpans!, 0, spans, bodySpanCount, suffixSpanCount);
+                }
+                int overflowSuffixStart = -1;
+                if (suffixSpanCount > 0)
+                {
+                    overflowSuffixStart = 0;
+                    for (int i = 0; i < bodySpanCount; i++) overflowSuffixStart += bodySpans[i].Text?.Length ?? 0;
+                }
                 // Re-register the POD shaping overlay ONLY when a shaping input changed: the run id is the key of the
                 // measure cache AND the renderer's shaped-run cache, so minting a fresh id IS the invalidation; an
                 // identical re-render keeps the id (steady reconciles never churn the caches).
                 int runId = li.TextStyle.SpanRunId;
-                bool same = runId != 0 && _scene.TryGetSpanText(node, out var oldSpans) && SameSpanShaping(oldSpans, spans);
+                bool same = runId != 0
+                    && SpanRunTable.Shared.Resolve(runId)?.OverflowSuffixStart == overflowSuffixStart
+                    && _scene.TryGetSpanText(node, out var oldSpans)
+                    && SameSpanShaping(oldSpans, spans);
                 if (!same)
                 {
                     int total = 0;
-                    for (int i = 0; i < spans.Length; i++) total += spans[i].Text?.Length ?? 0;
+                    for (int i = 0; i < spans.Length; i++)
+                    {
+                        total += spans[i].Text?.Length ?? 0;
+                    }
                     var concat = string.Create(total, spans, static (dst, src) =>
                     {
                         int at = 0;
@@ -3342,7 +3458,7 @@ public sealed class TreeReconciler
                         styles[i] = new SpanStyle(pos, pos + len, sp.Weight, sp.Size ?? 0f, spanFam, sp.Color, flags);
                         pos += len;
                     }
-                    int newRunId = SpanRunTable.Shared.Create(styles);
+                    int newRunId = SpanRunTable.Shared.Create(styles, overflowSuffixStart);
                     SpanRunTable.Shared.AddRef(newRunId);
                     _scene.ReleaseSpanRun(runId);
                     runId = newRunId;

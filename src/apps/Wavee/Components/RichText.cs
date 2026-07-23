@@ -3,6 +3,9 @@ using System.Collections.Generic;
 using System.Text;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
+using FluentGpu.Hooks;
+using FluentGpu.Localization;
+using FluentGpu.Signals;
 
 namespace Wavee;
 
@@ -40,6 +43,19 @@ public static class RichText
             Grow = 1f, Basis = 0f, MaxLines = maxLines, Wrap = TextWrap.Wrap, Trim = TextTrim.CharacterEllipsis,
         };
     }
+
+    /// <summary>A rich paragraph with a native inline overflow suffix. The collapsed state reserves “&#x2026; More” on
+    /// the final line only when the body actually overflows; the expanded state appends a clickable “Less” span.</summary>
+    public static Element Expandable(string? html, float size, ColorF color, ColorF linkColor, float width, int maxLines,
+        string contextKey, Action<string>? onNavUri = null)
+        => Embed.Comp(() => new ExpandableRichText(html, size, color, linkColor, width, maxLines, onNavUri, flex: false))
+            with { Key = $"rich-expand:{contextKey}:{html}:{(int)width}:{maxLines}" };
+
+    /// <summary>Flex-width twin of <see cref="Expandable"/> for inline-edit read states.</summary>
+    public static Element ExpandableFlex(string? html, float size, ColorF color, ColorF linkColor, int maxLines,
+        string contextKey, Action<string>? onNavUri = null)
+        => Embed.Comp(() => new ExpandableRichText(html, size, color, linkColor, float.NaN, maxLines, onNavUri, flex: true))
+            with { Key = $"rich-expand-flex:{contextKey}:{html}:{maxLines}" };
 
     /// <summary>A single-line, FLEX rich caption for a media ROW subtitle: same anchor→hyperlink parsing as <see cref="Of"/>,
     /// but it GROWS into the row's text column (Grow/Basis=0, no fixed width) and ellipsises ONE line. A span whose href
@@ -117,6 +133,55 @@ public static class RichText
         }
         Flush();
         return spans;
+    }
+
+    sealed class ExpandableRichText : Component
+    {
+        readonly string? _html;
+        readonly float _size;
+        readonly ColorF _color;
+        readonly ColorF _linkColor;
+        readonly float _width;
+        readonly int _maxLines;
+        readonly Action<string>? _onNavUri;
+        readonly bool _flex;
+        readonly Signal<bool> _expanded = new(false);
+
+        public ExpandableRichText(string? html, float size, ColorF color, ColorF linkColor, float width, int maxLines,
+            Action<string>? onNavUri, bool flex)
+        {
+            _html = html; _size = size; _color = color; _linkColor = linkColor; _width = width;
+            _maxLines = maxLines; _onNavUri = onNavUri; _flex = flex;
+        }
+
+        public override Element Render()
+        {
+            if (string.IsNullOrWhiteSpace(_html)) return new BoxEl();
+            var parsed = Parse(_html!, _linkColor, _onNavUri);
+            if (parsed.Count == 0) return new BoxEl();
+
+            bool expanded = _expanded.Value;
+            if (expanded)
+                parsed.Add(new TextSpan(" " + Loc.Get(Strings.Common.Less), Weight: 600, Color: _linkColor,
+                    OnClick: () => _expanded.Value = false));
+
+            return new SpanTextEl(parsed.ToArray())
+            {
+                Size = _size,
+                Color = _color,
+                LineHeight = _size <= 12f ? 16f : float.NaN,
+                Width = _flex ? float.NaN : _width,
+                Grow = _flex ? 1f : 0f,
+                Basis = _flex ? 0f : float.NaN,
+                MaxLines = expanded ? 0 : _maxLines,
+                Wrap = TextWrap.Wrap,
+                Trim = TextTrim.CharacterEllipsis,
+                OverflowSuffix = expanded
+                    ? null
+                    : [new TextSpan("… " + Loc.Get(Strings.Common.More), Weight: 600, Color: _linkColor,
+                        OnClick: () => _expanded.Value = true)],
+            };
+        }
     }
 
     // href value from an anchor tag body ("a href=\"spotify:…\"" or unquoted "a href=spotify:…"). Null if absent.

@@ -3863,6 +3863,27 @@ sealed class LifecycleRepeaterProbe : Component
            with { Width = 300, Height = 400 };   // explicit size ⇒ the MOUNT realize windows against 400, not the hint
 }
 
+// Persistent-prefix virtualization: indices 0/1 are fixed bound slots ahead of the ordinary recyclable window.
+sealed class PersistentPrefixProbe : Component
+{
+    public const int N = 1000;
+    public readonly List<IReadSignal<int>> PrefixSignals = new();
+    public override Element Render()
+        => ItemsView.CreateBound(N,
+            scope =>
+            {
+                int initial = scope.Index.Peek();
+                if (initial < 2) PrefixSignals.Add(scope.Index);
+                return new BoxEl
+                {
+                    Height = 40f,
+                    Children = [new TextEl(Prop.Of(() => $"row {scope.Index.Value}")) { Size = 12f }],
+                };
+            },
+            RepeatLayout.Stack(40f),
+            new ListOptions { Overscan = 4, PersistentPrefixCount = 2 });
+}
+
 // Reconcile-window in-place diff (the Home "like-flash" class of bug): a parent re-render rebuilds the VirtualListEl
 // and re-runs RenderItem for every realized slot (Update → RealizeWindow, reuseOverlap:false). Same-slot rows with
 // matching type+key must UPDATE IN PLACE so a component hosted inside a row keeps its instance/state instead of
@@ -4336,4 +4357,3 @@ sealed class ComposeBoundsProbe : Component
         };
     }
 }
-

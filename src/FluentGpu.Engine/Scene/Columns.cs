@@ -328,6 +328,7 @@ public struct ScrollState
     public IVirtualLayout? Layout;        // pluggable layout (stack/grid/custom; IMeasuredVirtualLayout ⇒ variable-extent
                                           // estimate-then-correct + anchoring); null ⇒ the legacy Fenwick extent-table path
     public int   Overscan;                // rows realized beyond the viewport on each side
+    public int   PersistentPrefixCount;   // leading logical items retained before the recyclable [First,Last) window
     public int   FirstRealized, LastRealized;
     public int   ExtentTableRef;          // -1 = uniform / non-virtual; else index into the ExtentTable slab
     public NodeHandle ContentNode;        // the single content child carrying the -ScrollOffset LocalTransform

@@ -61,9 +61,11 @@ public sealed class SpanRunRects(float maxWidth, SpanRect[] rects)
 /// <summary>A registered span run: the immutable per-span shaping overlays plus the seam-published layout artifacts.
 /// Lives in <see cref="SpanRunTable.Shared"/>; referenced from <c>TextStyle.SpanRunId</c> (the measure-cache /
 /// shaped-run-cache key), so a style change ⇒ a fresh run id ⇒ every downstream cache self-invalidates.</summary>
-public sealed class SpanRun(SpanStyle[] spans)
+public sealed class SpanRun(SpanStyle[] spans, int overflowSuffixStart)
 {
     public readonly SpanStyle[] Spans = spans;
+    /// <summary>UTF-16 start of an atomic overflow-only suffix, or -1 when the full run is ordinary body text.</summary>
+    public readonly int OverflowSuffixStart = overflowSuffixStart;
     private SpanRunRects? _rects;
 
     /// <summary>The latest seam-published rect artifacts (null until the first measure). Volatile read — the UI thread
@@ -110,7 +112,7 @@ public sealed class SpanRunTable
     private readonly Queue<(int Id, int CountAtRelease)> _pendingClear = new();
 
     /// <summary>Register a span run (UI thread). The spans array is taken by reference and must not be mutated after.</summary>
-    public int Create(SpanStyle[] spans)
+    public int Create(SpanStyle[] spans, int overflowSuffixStart = -1)
     {
         int id = _count;
         int ci = id >> ChunkBits, off = id & ChunkMask;
@@ -120,7 +122,7 @@ public sealed class SpanRunTable
             Volatile.Write(ref _chunks[ci], new SpanRun?[ChunkSize]);
             _refs[ci] = new int[ChunkSize];
         }
-        _chunks[ci]![off] = new SpanRun(spans);
+        _chunks[ci]![off] = new SpanRun(spans, overflowSuffixStart);
         _refs[ci]![off] = 0;
         Volatile.Write(ref _count, id + 1);   // release: a reader that sees the count sees the slot
         DrainQuarantine();

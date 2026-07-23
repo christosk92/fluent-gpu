@@ -107,6 +107,9 @@ public record ListOptions
     /// band the engine converts to rows against the average row extent. <see cref="float.NaN"/> (default) ⇒ row-based
     /// <see cref="Overscan"/> stays authoritative; a finite value overrides it.</summary>
     public float CacheExtentPx { get; init; } = float.NaN;
+    /// <summary>BOUND path only: keep the first N logical items mounted as normal leading content children while all
+    /// later items continue to recycle. Use this for native sticky/scroll-linked prefix composition; default 0.</summary>
+    public int PersistentPrefixCount { get; init; }
     /// <summary>Per-item paint isolation: wrap each realized item container as a layout/paint boundary
     /// (<c>IsolateLayout</c> + <c>ClipToBounds</c>) so an item's internal invalidation can't escape to relayout the list.
     /// Off by default.</summary>

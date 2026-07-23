@@ -43,6 +43,24 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
     private volatile string? _runError;
     private volatile bool _playRequested;
 
+    // Watchdog: an OLD native DLL that only LOGS a rejected license (never sets the Error snapshot state) must not leave
+    // the UI spinning forever. If play was requested and the native backend is still merely "loading" (state ≤1, no
+    // surface, no natural size) past this budget, surface a typed DRM failure. Overridable via FG_VIDEO_START_TIMEOUT_MS.
+    private const int DefaultStartTimeoutMs = 20_000;
+    private static readonly int StartTimeoutMs =
+        int.TryParse(Environment.GetEnvironmentVariable("FG_VIDEO_START_TIMEOUT_MS"), out int t) && t > 0
+            ? t : DefaultStartTimeoutMs;
+    private long _startTicks;
+    private bool _watchdogFired;
+    private int _lastLoggedState = -1;
+    private bool _loggedSize, _loggedHandle;
+
+    // [video] lifecycle diagnostics are gated on the app's file-log verbosity (WAVEE_LOG_FILE_LEVEL=Debug|Trace) and
+    // APPENDED to the SAME desktop-playready.log the native backend writes, so native + managed lines share one timeline.
+    private static readonly bool VideoLogEnabled =
+        Environment.GetEnvironmentVariable("WAVEE_LOG_FILE_LEVEL") is { } lvl
+        && (lvl.Equals("Debug", StringComparison.OrdinalIgnoreCase) || lvl.Equals("Trace", StringComparison.OrdinalIgnoreCase));
+
     // The active session's license bridge + a background-thread-recorded typed relay error (mirrored on the UI pump).
     private DrmLicenseBridge? _bridge;
     private volatile MediaError? _relayError;
@@ -100,6 +118,18 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
         _relayError = null;
         _state.Value = ProtectedVideoState.Loading;
         _playRequested = !request.StartPaused;
+        _startTicks = Environment.TickCount64;
+        _watchdogFired = false;
+        _lastLoggedState = -1;
+        _loggedSize = _loggedHandle = false;
+        if (VideoLogEnabled)
+        {
+            string host = "";
+            try { if (!string.IsNullOrEmpty(request.InitUrl)) host = new Uri(request.InitUrl).Host; } catch { }
+            LogVideo($"open requested isDrm={request.Drm is not null} system={request.Drm?.System.ToString() ?? "-"} " +
+                     $"initHost={host} segs={request.SegmentCount} stride={request.SegmentStride} pssh={request.Pssh.Length}B " +
+                     $"mode={request.Mode ?? "-"} startPaused={request.StartPaused} timeoutMs={StartTimeoutMs}");
+        }
 
         // Seed the process-global native transport level BEFORE the worker enters FgPlayReadyRunEx. MediaPlayer opens
         // sessions paused and immediately calls PlayAsync; that Play can otherwise arrive before RunEx initializes and
@@ -192,15 +222,18 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
             var copy = new byte[challengeLen < 0 ? 0 : challengeLen];
             if (copy.Length > 0) new ReadOnlySpan<byte>(challenge, copy.Length).CopyTo(copy);
             string? keyId = keyIdHex != null ? new string(keyIdHex) : null;
+            self.LogVideo($"license challenge {copy.Length}B kid={keyId ?? "-"} → running app relay");
 
             LicenseOutcome outcome = bridge.Resolve(copy, keyId);
             if (!outcome.Success)
             {
                 self._relayError = outcome.Error;
+                self.LogVideo($"license relay FAILED: {outcome.Error?.Message ?? "(no detail)"}");
                 return unchecked((int)0x8004110E);   // DRM_E_CH_BAD_KEY-shaped: "no usable license"
             }
 
             byte[] license = outcome.License!;
+            self.LogVideo($"license relay OK {license.Length}B → handing to CDM.Update()");
             fixed (byte* p = license) deliver(deliverCtx, p, license.Length);
             return 0;
         }
@@ -282,6 +315,31 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
 
         if (Native.FgPlayReadyGetSnapshot(out var s) < 0) return;
 
+        // Low-volume [video] transition log (never per-frame: only when the native state integer actually changes).
+        if (VideoLogEnabled && s.State != _lastLoggedState)
+        {
+            LogVideo($"native state {_lastLoggedState} -> {s.State} ({NativeStateName(s.State)}) at " +
+                     $"{Environment.TickCount64 - _startTicks}ms handle=0x{s.Handle:X} size={s.Width}x{s.Height} " +
+                     $"err=0x{unchecked((uint)s.ErrorHr):X8}");
+            _lastLoggedState = s.State;
+        }
+
+        // Managed watchdog — the failure-surfacing safety net for an OLD native DLL that never reports Error. When play was
+        // requested and native is still only "loading" (state ≤1, no surface, no natural size) past the budget, surface a
+        // typed DRM error so the layers above stop spinning. A NEW DLL sets state=5 first (mapped below) and pre-empts this.
+        if (!_watchdogFired && _playRequested && _error.Peek() is null
+            && s.State <= 1 && s.Handle == 0 && s.Width == 0
+            && Environment.TickCount64 - _startTicks > StartTimeoutMs)
+        {
+            _watchdogFired = true;
+            _error.Value = "PlayReady license was rejected or no key became usable — video cannot start " +
+                           "(see %LOCALAPPDATA%\\FluentGpu\\PlayReady\\desktop-playready.log).";
+            _state.Value = ProtectedVideoState.Error;
+            LogVideo($"watchdog FIRED after {Environment.TickCount64 - _startTicks}ms " +
+                     $"(state={s.State} handle=0x{s.Handle:X} size={s.Width}x{s.Height}) — surfacing Error");
+            return;
+        }
+
         var state = s.State switch
         {
             1 => ProtectedVideoState.Loading,
@@ -295,7 +353,12 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
         if (_positionMs.Peek() != s.PositionMs) _positionMs.Value = s.PositionMs;
         if (_durationMs.Peek() != s.DurationMs) _durationMs.Value = s.DurationMs;
         var size = new Size2(s.Width, s.Height);
-        if (s.Width > 0 && !_naturalSize.Peek().Equals(size)) _naturalSize.Value = size;
+        if (s.Width > 0 && !_naturalSize.Peek().Equals(size))
+        {
+            if (VideoLogEnabled && !_loggedSize)
+            { _loggedSize = true; LogVideo($"first natural size {s.Width}x{s.Height} at {Environment.TickCount64 - _startTicks}ms"); }
+            _naturalSize.Value = size;
+        }
         if (s.ErrorHr < 0 && _error.Peek() is null)
             _error.Value = $"Desktop PlayReady error 0x{unchecked((uint)s.ErrorHr):X8}.";
 
@@ -306,9 +369,25 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
         // presence for HasSurface.
         if (s.Handle != 0)
         {
+            if (VideoLogEnabled && !_loggedHandle)
+            { _loggedHandle = true; LogVideo($"first surface handle=0x{s.Handle:X} at {Environment.TickCount64 - _startTicks}ms"); }
             binding.Bind((nuint)s.Handle);
             _boundHandle = s.Handle;
         }
+    }
+
+    private static string NativeStateName(int s) => s switch
+    {
+        0 => "idle", 1 => "loading", 2 => "playing", 3 => "paused", 4 => "stopped", 5 => "error", _ => "?",
+    };
+
+    // Append a low-volume [video] lifecycle line to desktop-playready.log (the native backend's log — one shared timeline).
+    // Best-effort: a transient sharing violation with the native writer is swallowed so diagnostics never disrupt the pump.
+    private void LogVideo(string message)
+    {
+        if (!VideoLogEnabled) return;
+        try { File.AppendAllText(Path.Combine(_dataRoot, "desktop-playready.log"), "[video] " + message + "\r\n"); }
+        catch { }
     }
 
     /// <summary>The typed error recorded by the license relay (if any) — richer than the string error signal.</summary>

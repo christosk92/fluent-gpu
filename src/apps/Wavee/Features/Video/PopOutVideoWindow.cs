@@ -1,6 +1,7 @@
 using System;
 using FluentGpu.Controls.Media;
 using FluentGpu.Dsl;
+using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Media;
 using FluentGpu.Media.Windows;
@@ -23,9 +24,8 @@ sealed class PopOutVideoWindow : Component
 
     public override Element Render()
     {
-        // Size the root to THIS window's viewport. The AppHost does NOT auto-stretch a scene root (a bare Grow=1 hugs to
-        // 0×0 and the composited swapchain then presents transparent — the pop-out looked see-through); WaveeShell fills
-        // the same way. Fill paints an opaque letterbox even before a source resolves, so the window is never transparent.
+        // Size the root to THIS window's viewport (the AppHost does NOT auto-stretch a scene root — a bare Grow=1 hugs to
+        // 0×0; WaveeShell fills the same way).
         var vp = UseContextSignal(Viewport.Size);
         var src = Source.Value;   // subscribe → remount the stage on a source change
         return new BoxEl
@@ -33,7 +33,12 @@ sealed class PopOutVideoWindow : Component
             Direction = 1,
             Width = Prop.Of(() => vp.Value.Width),
             Height = Prop.Of(() => vp.Value.Height),
-            Fill = Tok.MediaLetterbox,
+            // The video composites as a PASSIVE HOLE: the DComp video sits z-BELOW the UI swapchain, so the video rect
+            // must stay TRANSPARENT (premul-0) for it to show through. An opaque fill here paints OVER the video (the
+            // black-video bug). So fill opaque ONLY before a source mounts (keeps the empty window from being
+            // see-through); once the stage is up, MediaPlayerElement paints the opaque letterbox bars AROUND the video
+            // rect and leaves the rect itself the transparent hole.
+            Fill = src is null ? Tok.MediaLetterbox : ColorF.Transparent,
             Children = src is null
                 ? Array.Empty<Element>()
                 : [new BoxEl { Grow = 1, Children = [Embed.Comp(() => new PopOutVideoStage { Source = src }) with { Key = "stage:" + src.Key }] }],

@@ -106,6 +106,13 @@ public static class VirtualWindowing
         visibleFirst = Math.Clamp(visibleFirst, 0, sc.ItemCount);
         visibleLast = Math.Clamp(visibleLast, visibleFirst, sc.ItemCount);
 
+        // Persistent leading items are attached independently of the recyclable interval. Coverage and guard-band
+        // decisions therefore operate on the still-needed normal tail only.
+        int prefix = Math.Clamp(sc.PersistentPrefixCount, 0, sc.ItemCount);
+        visibleFirst = Math.Max(visibleFirst, prefix);
+        visibleLast = Math.Max(visibleLast, prefix);
+        if (visibleLast <= prefix) return false;
+
         if (sc.LastRealized <= sc.FirstRealized) return true;
         if (visibleFirst < sc.FirstRealized || visibleLast > sc.LastRealized) return true;   // hard coverage net (never removed)
 
@@ -118,7 +125,7 @@ public static class VirtualWindowing
         int guardLow = Math.Max(1, lowOv / 2);
         int guardHigh = Math.Max(1, highOv / 2);
 
-        if (sc.FirstRealized > 0 && visibleFirst < sc.FirstRealized + guardLow) return true;
+        if (sc.FirstRealized > prefix && visibleFirst < sc.FirstRealized + guardLow) return true;
         if (sc.LastRealized < sc.ItemCount && visibleLast > sc.LastRealized - guardHigh) return true;
         return false;
     }

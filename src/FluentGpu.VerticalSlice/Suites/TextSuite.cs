@@ -131,12 +131,13 @@ static class TextSuite
         CursorId cursor = CursorId.Arrow;
         dispatcher.OnCursorChanged = c => cursor = c;
         bool linkClicked = false;
+        bool suffixClicked = false;
         var gold = ColorF.FromRgba(0xFF, 0xD7, 0x00);
         var red = ColorF.FromRgba(0xFF, 0x00, 0x00);
 
         recon.ReconcileRoot(new BoxEl
         {
-            Direction = 1, Width = 200, Height = 100,
+            Direction = 1, Width = 200, Height = 140,
             Children =
             [
                 // [0] mixed-weight flow: "aaaa " base 400 (5 × 5.5 = 27.5) + "bbbb" 700 (4 × 6.2 = 24.8) → 52.3 one flow
@@ -152,6 +153,12 @@ static class TextSuite
                 new SpanTextEl([new TextSpan("Hello world")]) { Size = 10f, IsTextSelectionEnabled = true, SelectionHighlightColor = red },
                 // [3] plain TextEl, selection opt-in (WinUI TextBlock.cpp:583), engine-default highlight brush
                 new TextEl("Copy me too") { Size = 10f, IsTextSelectionEnabled = true },
+                // [4] overflow-only suffix: body wraps past 2 lines at 55 DIP; “… More” stays atomic + clickable on line 2.
+                new SpanTextEl([new TextSpan("one two three four five six seven")])
+                {
+                    Size = 10f, Width = 55f, MaxLines = 2, Wrap = TextWrap.Wrap, Trim = TextTrim.CharacterEllipsis,
+                    OverflowSuffix = [new TextSpan("… More", Color: gold, OnClick: () => suffixClicked = true)],
+                },
             ],
         }, null);
         new FlexLayout(scene, fonts).Run(scene.Root);
@@ -160,6 +167,7 @@ static class TextSuite
         var linky = Child(scene, scene.Root, 1);
         var sel = Child(scene, scene.Root, 2);
         var plain = Child(scene, scene.Root, 3);
+        var overflow = Child(scene, scene.Root, 4);
 
         // (a) rtb-01: the paragraph measures as ONE flow with per-span advances (NOT a uniform-weight run), wraps as
         // one unit, and reaches the draw stream as ONE glyph op carrying the span-run id.
@@ -195,6 +203,34 @@ static class TextSuite
         Check("WC-SPAN.b hyperlink span: Hand over its rects, arrow off them, OnClick fires, underline bar in the span color",
             handOverLink && arrowOffLink && linkClicked && underlineInLinkColor,
             $"hand={handOverLink} arrow={arrowOffLink} clicked={linkClicked} underline={underlineInLinkColor}");
+
+        // (b2) OverflowSuffix is hidden while the body fits, but when MaxLines clips it is reserved atomically on the
+        // final line and remains an ordinary clickable TextSpan through the existing span artifact/dispatcher path.
+        var overflowStyle = scene.Layout(overflow).TextStyle;
+        var overflowRun = SpanRunTable.Shared.Resolve(overflowStyle.SpanRunId);
+        SpanRect suffixRect = default;
+        bool suffixVisible = false;
+        if (overflowRun?.Rects is { } overflowRects)
+            for (int i = 0; i < overflowRects.Rects.Length; i++)
+                if (overflowRects.Rects[i].Span == 1 && overflowRects.Rects[i].Kind == SpanStyle.LinkBit)
+                { suffixRect = overflowRects.Rects[i]; suffixVisible = true; break; }
+        if (suffixVisible)
+        {
+            var or = scene.AbsoluteRect(overflow);
+            var p = new Point2(or.X + suffixRect.Rect.X + suffixRect.Rect.W * 0.5f,
+                or.Y + suffixRect.Rect.Y + suffixRect.Rect.H * 0.5f);
+            dispatcher.Dispatch(new[] { new InputEvent(InputKind.PointerDown, p, 0, 0) });
+            dispatcher.Dispatch(new[] { new InputEvent(InputKind.PointerUp, p, 0, 0) });
+        }
+        var fitMetrics = fonts.Measure(scene.Paint(overflow).Text, overflowStyle, 400f);
+        bool suffixHiddenWhenFit = true;
+        if (overflowRun?.Rects is { } fitRects)
+            for (int i = 0; i < fitRects.Rects.Length; i++)
+                if (fitRects.Rects[i].Span == 1 && fitRects.Rects[i].Kind == SpanStyle.LinkBit)
+                { suffixHiddenWhenFit = false; break; }
+        Check("WC-SPAN.b2 OverflowSuffix is atomic/clickable only on clipped MaxLines and hidden when the body fits",
+            suffixVisible && suffixClicked && suffixHiddenWhenFit && Near(fitMetrics.Size.Width, 181.5f, 0.01f),
+            $"visible={suffixVisible} clicked={suffixClicked} hiddenWhenFit={suffixHiddenWhenFit} fitW={fitMetrics.Size.Width:0.0}");
 
         // (c) rtb-02: drag-select publishes selection rects through the editor slab; Ctrl+C copies through the
         // clipboard seam (TextSelectionManager.cpp:30-41); double-click selects the word under the press.

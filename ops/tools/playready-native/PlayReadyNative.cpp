@@ -988,9 +988,41 @@ static void HandleCdmKeyMessage(const BYTE* msg, DWORD cb, LPCWSTR destUrl)
                 HRESULT hu = g_cdmSession->Update(license.data(), (DWORD)license.size());
                 LogLine("[cdm] Update() (relay) hr=0x" + [&]{ std::stringstream s; s << std::hex << (uint32_t)hu; return s.str(); }());
                 g_cdmLicHttp = (rc == 0) ? 200 : 0;
+                if (FAILED(hu))
+                {
+                    // CRITICAL DIAGNOSTIC: dump a printable prefix of the relay license body so we can tell a genuine
+                    // license apart from a SOAP fault / error page (mirrors the non-relay path below).
+                    std::string head; head.reserve(600);
+                    for (size_t i = 0; i < license.size() && head.size() < 600; i++)
+                    {
+                        char c = (char)license[i];
+                        if (c == '\r' || c == '\n' || c == '\t') c = ' ';
+                        if (c >= 32 && c < 127) head.push_back(c);
+                    }
+                    LogLine("[cdm] relay license response head: " + head);
+                }
                 QueryCdmKeyStatus();
+                // Surface a hard Error via the desktop snapshot atomics ONLY when Update() itself failed — a rejected
+                // license means every layer above would otherwise spin on "Loading" forever. Do NOT gate on
+                // !g_cdmUsable here: the key status settles ASYNCHRONOUSLY (KeyStatusChanged fires a beat later), so
+                // right after a SUCCESSFUL Update() g_cdmUsable is legitimately still false — treating that as an
+                // error is a false positive. The managed watchdog (FG_VIDEO_START_TIMEOUT_MS) catches a key that
+                // never becomes usable.
+                if (FAILED(hu))
+                {
+                    g_desktopErrorHr.store((int)hu, std::memory_order_release);
+                    g_desktopState.store(5, std::memory_order_release); // 5 = Error
+                    LogLine("[cdm] relay bind FAILED — surfacing Error (hr=0x" +
+                            [&]{ std::stringstream s; s << std::hex << (uint32_t)hu; return s.str(); }() + ")");
+                }
             }
-            else LogLine("[cdm] managed relay produced no license — key will not become usable.");
+            else
+            {
+                LogLine("[cdm] managed relay produced no license — key will not become usable.");
+                g_desktopErrorHr.store((int)0x80704005, std::memory_order_release); // MF_TYPE_ERR sentinel
+                g_desktopState.store(5, std::memory_order_release);                 // 5 = Error
+                LogLine("[cdm] relay produced no license — surfacing Error.");
+            }
             return;
         }
 #endif
@@ -1892,12 +1924,13 @@ static bool DriveCdmLicenseProactive(const std::vector<uint8_t>& initData)
     if (initData.empty()) { LogLine("[cenc] no init data (pssh) for GenerateRequest."); return false; }
     CdmSessionCallbacks* cb = new CdmSessionCallbacks();
     IMFContentDecryptionModuleSession* session = nullptr;
-    // PERSISTENT_LICENSE, not TEMPORARY: the Axinom entitlement token carries allow_persistence=true, so their
-    // license server returns a PERSISTABLE license — and the EME spec (which MFCdm implements faithfully) requires
-    // Update() on a temporary session to reject a persistable license with TypeError. That was the whole
-    // Update() hr=0x80704005 (MF_TYPE_ERR) failure. FG_CENC_TEMP_SESSION=1 restores the old behavior for A/B.
-    MF_MEDIAKEYSESSION_TYPE sessionType = GetEnvironmentVariableW(L"FG_CENC_TEMP_SESSION", nullptr, 0) != 0
-        ? MF_MEDIAKEYSESSION_TYPE_TEMPORARY : MF_MEDIAKEYSESSION_TYPE_PERSISTENT_LICENSE;
+    // Session type MUST match the license's persistence or Update() rejects it with TypeError (MF_TYPE_ERR,
+    // 0x80704005). Production = Spotify, which issues NON-persistable streaming licenses → TEMPORARY (verified: temp
+    // session → Update() hr=0x0, key USABLE, plays). The Axinom test entitlement carries allow_persistence=true and
+    // returns a PERSISTABLE license, which conversely needs PERSISTENT_LICENSE — set FG_CENC_PERSIST_SESSION=1 for
+    // that A/B path. Default TEMPORARY.
+    MF_MEDIAKEYSESSION_TYPE sessionType = GetEnvironmentVariableW(L"FG_CENC_PERSIST_SESSION", nullptr, 0) != 0
+        ? MF_MEDIAKEYSESSION_TYPE_PERSISTENT_LICENSE : MF_MEDIAKEYSESSION_TYPE_TEMPORARY;
     HRESULT hr = g_emeCdm->CreateSession(sessionType, cb, &session);
     LogLine(std::string("[cenc] proactive CreateSession (") +
             (sessionType == MF_MEDIAKEYSESSION_TYPE_TEMPORARY ? "temporary" : "persistent-license") +
@@ -2301,7 +2334,7 @@ extern "C" __declspec(dllexport) int __stdcall FgPlayReadyRunEx(const wchar_t* b
     g_logPath = root + L"\\desktop-playready.log";
     g_stopPath.clear(); g_evtPath.clear(); g_cmdPath.clear();
     { std::ofstream f(g_logPath, std::ios::binary | std::ios::trunc); }
-    LogLine("[desktop] BUILD=desktop-cdm-20260719-persist-v11 root=" +
+    LogLine("[desktop] BUILD=desktop-cdm-20260719-tempsess-v13 root=" +
             std::string(root.begin(), root.end()));
 
     // Clear-video diagnostic through the exact same in-process DLL and DirectComposition handoff. This is used to

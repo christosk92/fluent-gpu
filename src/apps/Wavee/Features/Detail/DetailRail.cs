@@ -27,10 +27,11 @@ static class DetailRail
 
     public static float CoverEdge(float railW) => MathF.Max(80f, railW - SidePadL - SidePadR);
 
-    internal static Element HeroArtwork(DetailModel m, float size) =>
+    internal static Element HeroArtwork(DetailModel m, float size, float radius = Radii.Card, bool connected = true) =>
         LikedSongsArtwork.IsLikedUri(m.ContextUri) && m.Cover is null
-            ? LikedSongsArtwork.Cover(size, Radii.Card, m.MorphKey)
-            : Surfaces.Artwork(m.Cover, m.Title.GetHashCode() & 0x7fffffff, size, size, Radii.Card, m.MorphKey, decodePx: HeroCoverDecodePx);
+            ? LikedSongsArtwork.Cover(size, radius, connected ? m.MorphKey : null)
+            : Surfaces.Artwork(m.Cover, m.Title.GetHashCode() & 0x7fffffff, size, size, radius,
+                connected ? m.MorphKey : null, decodePx: HeroCoverDecodePx);
 
     // The side rail: the cover STRETCHES to fill the column width (a big hero — the image is NEVER shrunk for height).
     // The height fit comes from the TEXT — titleSize (the shell lowers it on a short rail; auto-fits down to 18px) and

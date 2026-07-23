@@ -31,7 +31,7 @@ static class WaveeSettings
     // an explicit BCP-47/language tag selects the matching bundled JSON table. Applied before first mount on next launch.
     public static readonly SettingKey<string> UiCulture = new("localization.culture", "system");
     public static readonly SettingKey<int> RowDensity = new("detail.rowdensity", 1);   // 0 Compact · 1 Default · 2 Cozy · 3 Comfortable
-    // Track-detail page layout: 0 Automatic (metadata rail on wide windows, stacked hero on narrow) · 1 Stacked (the
+    // Track-detail page layout: 0 Automatic (metadata rail on wide windows, immersive Hero on narrow) · 1 Hero (the
     // hero composition at every width — the rail is never composed for track pages; podcasts keep the automatic layout).
     public static readonly SettingKey<int> DetailPageLayout = new("detail.page.layout", 0);
     public static readonly SettingKey<bool> DisableMarquee = new("appearance.marquee.disabled", false);

@@ -684,7 +684,8 @@ public sealed class FlexLayout
         int ord = 0;
         for (var rc = _scene.FirstChild(content); !rc.IsNull; rc = _scene.NextSibling(rc), ord++)
         {
-            var rect = layout.ItemRect(first + ord, cross);   // children are in window (index) order; content-space rect
+            int index = VirtualIndex(in sc, ord);
+            var rect = layout.ItemRect(index, cross);   // retained prefix first, then recyclable window in index order
             // Inset the item by its Margin within the slot, so a list item honors Margin like any stack child (the WinUI
             // ListViewItem backplate inset {4,2,4,2}). Without this the item filled the full slot — a margined row (an
             // inset highlight pill / backplate) then started its content at padding-only, drifting out of alignment with
@@ -718,7 +719,7 @@ public sealed class FlexLayout
         int ord = 0;
         for (var rc = _scene.FirstChild(content); !rc.IsNull; rc = _scene.NextSibling(rc), ord++)
         {
-            int index = first + ord;
+            int index = VirtualIndex(in sc, ord);
             var cs = Measure(rc);                                  // the row's natural main extent
             float pos = table.OffsetOf(index);                    // content-space position (corrections so far applied)
             float main = horizontal ? cs.Width : cs.Height;
@@ -727,7 +728,8 @@ public sealed class FlexLayout
             // Fresh row above the anchor: defer the extent correction one arrange — its first measure can be
             // transiently short (deferred inner content), and pushing that into the table re-pins the offset down then
             // back up (the felt jitter). See ArrangeVirtualMeasured for the full rationale.
-            if ((index < prevFirst || index > prevLast) && index < anchorIndex) { deferred = true; continue; }
+            bool persistent = ord < sc.PersistentPrefixCount;
+            if (!persistent && (index < prevFirst || index > prevLast) && index < anchorIndex) { deferred = true; continue; }
             table.SetExtent(index, main);                         // correct this row's extent (O(log n))
         }
 
@@ -745,7 +747,7 @@ public sealed class FlexLayout
         scw.AnchorIndex = anchorIndex;
         RecordAnchorShift(ref scw, pinned - offset, horizontal, (int)node.Raw.Index, anchorIndex, offset);
         scw.PrevArrangedFirst = first;
-        scw.PrevArrangedLast = first + ord - 1;   // ord = realized child count (empty window ⇒ first-1)
+        scw.PrevArrangedLast = first + Math.Max(0, ord - sc.PersistentPrefixCount) - 1;
         if (deferred) _scene.Mark(node, NodeFlags.LayoutDirty);   // a deferred fresh-row correction needs one follow-up arrange
         ref NodePaint cp = ref _scene.Paint(content);
         cp.LocalTransform = Affine2D.Translation(horizontal ? -pinned : 0f, horizontal ? 0f : -pinned);
@@ -801,7 +803,7 @@ public sealed class FlexLayout
         int ord = 0;
         for (var rc = _scene.FirstChild(content); !rc.IsNull; rc = _scene.NextSibling(rc), ord++)
         {
-            int index = first + ord;
+            int index = VirtualIndex(in sc, ord);
             var rect = layout.ItemRect(index, cross);
             ref LayoutInput rli = ref _scene.Layout(rc);
             float mL = rli.Margin.Left, mT = rli.Margin.Top, mR = rli.Margin.Right, mB = rli.Margin.Bottom;
@@ -813,7 +815,7 @@ public sealed class FlexLayout
             // inner content lands next frame). Above the anchor that transient would re-pin the offset down then back up
             // — the felt jitter — so defer the correction one arrange (the slot keeps its table extent; next arrange
             // measures the settled value and usually matches, so no pin fires at all).
-            bool fresh = index < prevFirst || index > prevLast;
+            bool fresh = ord >= sc.PersistentPrefixCount && (index < prevFirst || index > prevLast);
             if (fresh && index < anchorIndex) { deferred = true; continue; }
             if (FluentGpu.Foundation.ScrollTrace.On && MathF.Abs(main - oldMain) > 0.5f)
                 FluentGpu.Foundation.ScrollTrace.Note(111, main - oldMain, (int)node.Raw.Index, index, main);   // extent correction: which row, by how much
@@ -831,12 +833,12 @@ public sealed class FlexLayout
         ord = 0;
         for (var rc = _scene.FirstChild(content); !rc.IsNull; rc = _scene.NextSibling(rc), ord++)
         {
-            int index = first + ord;
+            int index = VirtualIndex(in sc, ord);
             var rect = layout.ItemRect(index, cross);
             ref LayoutInput rli = ref _scene.Layout(rc);
             float mL = rli.Margin.Left, mT = rli.Margin.Top, mR = rli.Margin.Right, mB = rli.Margin.Bottom;
 
-            bool fresh = index < prevFirst || index > prevLast;
+            bool fresh = ord >= sc.PersistentPrefixCount && (index < prevFirst || index > prevLast);
             if (fresh && index < anchorIndex)
             {
                 float measuredMain;
@@ -854,9 +856,10 @@ public sealed class FlexLayout
                     {
                         deferredGridRow = row;
                         deferredGridMain = 0f;
+                        int scanOrd = ord;
                         int scanIndex = index;
                         for (var scan = rc; !scan.IsNull && scanIndex / gridCols == row;
-                             scan = _scene.NextSibling(scan), scanIndex++)
+                             scan = _scene.NextSibling(scan), scanIndex = VirtualIndex(in sc, ++scanOrd))
                         {
                             ref RectF measured = ref _scene.Bounds(scan);
                             deferredGridMain = MathF.Max(deferredGridMain, horizontal ? measured.W : measured.H);
@@ -886,11 +889,17 @@ public sealed class FlexLayout
         scw.AnchorIndex = anchorIndex;
         RecordAnchorShift(ref scw, pinned - offset, horizontal, (int)node.Raw.Index, anchorIndex, offset);
         scw.PrevArrangedFirst = first;
-        scw.PrevArrangedLast = first + ord - 1;   // ord = realized child count after the loops (empty window ⇒ first-1)
+        scw.PrevArrangedLast = first + Math.Max(0, ord - sc.PersistentPrefixCount) - 1;
         if (deferred) _scene.Mark(node, NodeFlags.LayoutDirty);   // a deferred fresh-row correction needs one follow-up arrange
         ref NodePaint cp = ref _scene.Paint(content);
         cp.LocalTransform = Affine2D.Translation(horizontal ? -pinned : 0f, horizontal ? 0f : -pinned);
         return (contentW, contentH);
+    }
+
+    private static int VirtualIndex(in ScrollState sc, int childOrdinal)
+    {
+        int prefix = Math.Clamp(sc.PersistentPrefixCount, 0, sc.ItemCount);
+        return childOrdinal < prefix ? childOrdinal : sc.FirstRealized + childOrdinal - prefix;
     }
 
     // ── Z-stack: children overlay at the origin (each filling the box unless explicitly sized), painted in order ──

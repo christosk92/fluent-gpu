@@ -70,7 +70,10 @@ sealed class InWindowVideoPip : Component
                 float y = _placed ? _y.Value : DefaultY(v, h);
                 return Affine2D.Translation(ClampX(x, v, w), ClampY(y, v, h));
             }),
-            Fill = Tok.MediaLetterbox,
+            // Transparent: the video composites as a passive z-below hole, so nothing opaque may sit behind the video
+            // rect (an opaque surface fill paints OVER it → black video). The chrome bar + MediaPlayerElement's
+            // letterbox bars + the border/shadow give the PiP its solid framed look; the video area punches the hole.
+            Fill = ColorF.Transparent,
             Corners = CornerRadius4.All(Radii.Card),
             BorderWidth = 1f,
             BorderColor = Prop.Of(() => Tok.StrokeCardDefault),
@@ -156,7 +159,9 @@ sealed class InWindowVideoPip : Component
         var src = source.Value;   // subscribe → remount the stage on a source change (clear ↔ DRM / track change)
         return new BoxEl
         {
-            Grow = 1f, MinHeight = 0f, ClipToBounds = true, Fill = Tok.MediaLetterbox,
+            // Opaque only until the stage mounts; then transparent so the z-below video shows through (MediaPlayerElement
+            // fills the letterbox bars around the transparent video rect). See the surface-fill note above.
+            Grow = 1f, MinHeight = 0f, ClipToBounds = true, Fill = src is null ? Tok.MediaLetterbox : ColorF.Transparent,
             Children = src is null
                 ? Array.Empty<Element>()
                 : [ Embed.Comp(() => new PopOutVideoStage { Source = src }) with { Key = "pipstage:" + src.Key } ],

@@ -39,6 +39,23 @@ public static class Surfaces
             new GradientStop(1f, accent with { A = 0f }));
     }
 
+    /// <summary>Detail-Hero wash. Side-by-side keeps <see cref="HeroWash"/> restrained. Immersive needs an opaque
+    /// art-derived landing surface: EdgeFade dissolves the cover into this wash, and the same tone continues under the
+    /// track body (Apple Music album/playlist continuity — never a soft tint that clears into charcoal).</summary>
+    public static GradientSpec DetailHeroWash(ColorF accent, bool immersive)
+    {
+        if (!immersive) return HeroWash(accent);
+        // Peak alphas are high so the melted art edge lands on a readable plate; the falloff stays past the upper list.
+        float top = Tok.Theme == ThemeKind.Light ? 0.42f : 0.78f;
+        float mid = Tok.Theme == ThemeKind.Light ? 0.28f : 0.55f;
+        float low = Tok.Theme == ThemeKind.Light ? 0.10f : 0.22f;
+        return GradientDown(
+            new GradientStop(0f, accent with { A = top }),
+            new GradientStop(0.42f, accent with { A = mid }),
+            new GradientStop(0.78f, accent with { A = low }),
+            new GradientStop(1f, accent with { A = 0f }));
+    }
+
     /// <summary>A neutral album-art placeholder: the app's skeleton tile (<see cref="Tok.FillCardDefault"/>) that
     /// BREATHES while the art at <paramref name="url"/> is still loading and settles to a calm static tile once it is
     /// ready / failed / absent — so an art slot reads as "loading", never a coloured hole, and the pulse stops (a

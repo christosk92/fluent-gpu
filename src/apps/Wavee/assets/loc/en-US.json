@@ -377,7 +377,7 @@
       "rowDensity": "Row density",
       "rowDensitySub": "Height of rows in track lists",
       "pageLayout": "Track page layout",
-      "pageLayoutSub": "Side rail on wide windows, or the stacked header at every size",
+      "pageLayoutSub": "Use the side rail automatically, or the artwork Hero at every size",
       "disableMarquee": "Disable marquee text",
       "disableMarqueeSub": "Keep overflowing titles truncated instead of scrolling them",
       "disableColorWashes": "Disable color washes",
@@ -396,7 +396,7 @@
       "cozy": "Cozy",
       "comfortable": "Comfortable",
       "automatic": "Automatic",
-      "stacked": "Stacked"
+      "hero": "Hero"
     },
     "playback": {
       "runtimeTitle": "Playback runtime",
@@ -918,6 +918,7 @@
   },
 
   "common": {
+    "less": "Less",
     "more": "More",
     "retry": "Retry",
     "dismiss": "Dismiss",

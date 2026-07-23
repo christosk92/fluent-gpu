@@ -24,14 +24,19 @@ namespace Wavee;
 /// <see cref="Loadable{T}"/> at event time.</summary>
 static class PlaylistInlineEdit
 {
-    internal static Element Cover(Loadable<DetailModel> full, float size)
-        => Embed.Comp(() => new EditableCover(full, size)) with { Key = $"pl-edit-cover:{(int)size}" };
+    internal static Element Cover(Loadable<DetailModel> full, float size, float radius = Radii.Card, bool shadow = true)
+        => Embed.Comp(() => new EditableCover(full, size, radius, shadow))
+            with { Key = $"pl-edit-cover:{(int)size}:{(int)radius}:{shadow}" };
 
-    internal static Element Title(Loadable<DetailModel> full, float width, float titleSize)
-        => Embed.Comp(() => new EditableTitle(full, width, titleSize)) with { Key = $"pl-edit-title:{(int)width}:{(int)titleSize}" };
+    internal static Element Title(Loadable<DetailModel> full, float width, float titleSize, ushort weight = 900,
+                                  bool onMedia = false)
+        => Embed.Comp(() => new EditableTitle(full, width, titleSize, weight, onMedia))
+            with { Key = $"pl-edit-title:{(int)width}:{(int)titleSize}:{weight}:{onMedia}" };
 
-    internal static Element Description(Loadable<DetailModel> full, float width, int maxLines, DetailHandlers h)
-        => Embed.Comp(() => new EditableDescription(full, width, maxLines, h)) with { Key = $"pl-edit-desc:{(int)width}:{maxLines}" };
+    internal static Element Description(Loadable<DetailModel> full, float width, int maxLines, DetailHandlers h,
+                                        bool onMedia = false)
+        => Embed.Comp(() => new EditableDescription(full, width, maxLines, h, onMedia))
+            with { Key = $"pl-edit-desc:{(int)width}:{maxLines}:{onMedia}" };
 
     internal static Element OwnerRow(Loadable<DetailModel> full, float width)
         => Embed.Comp(() => new PlaylistOwnerRow(full, width)) with { Key = $"pl-owner-row:{(int)width}" };
@@ -39,8 +44,8 @@ static class PlaylistInlineEdit
     internal static Element OwnerMenu(Loadable<DetailModel> full, DetailHandlers h)
         => Embed.Comp(() => new OwnerOverflowMenu(full, h)) with { Key = "pl-owner-menu" };
 
-    internal static Element ShareButton(Loadable<DetailModel> full)
-        => Embed.Comp(() => new PlaylistShareButton(full)) with { Key = "pl-share" };
+    internal static Element ShareButton(Loadable<DetailModel> full, float size = 40f)
+        => Embed.Comp(() => new PlaylistShareButton(full, size)) with { Key = $"pl-share:{(int)size}" };
 
     /// <summary>The shared adaptive invite affordance (owner row + collaborator pile): a labeled pill when the row is
     /// wide, a round icon button + tooltip when narrow. Clicking opens the Invite &amp; access flyout anchored to it.
@@ -288,13 +293,16 @@ static class PlaylistInlineEdit
     {
         readonly Loadable<DetailModel> _full;
         readonly float _size;
+        readonly float _radius;
+        readonly bool _shadow;
         readonly Signal<bool> _hovered = new(false);
         readonly Signal<bool> _dropOver = new(false);
         readonly Signal<int> _status = new(StatusIdle);
         readonly Ref<DropTargetSpec?> _dropSpec = new(null);
         int _saveEpoch;
 
-        public EditableCover(Loadable<DetailModel> full, float size) { _full = full; _size = size; }
+        public EditableCover(Loadable<DetailModel> full, float size, float radius, bool shadow)
+        { _full = full; _size = size; _radius = radius; _shadow = shadow; }
 
         public override Element Render()
         {
@@ -302,7 +310,7 @@ static class PlaylistInlineEdit
             var svc = UseContext(Services.Slot);
             var m = _full.Value.Value;
             if (lib is null || !m.Capabilities.CanEditMetadata || m.ContextUri is not { } uri)
-                return DetailRail.HeroArtwork(m, _size);
+                return DetailRail.HeroArtwork(m, _size, _radius);
 
             var drag = UseDragState();
             bool compatibleDrag = drag.Active && drag.Kind == DropKinds.Files;
@@ -321,8 +329,8 @@ static class PlaylistInlineEdit
 
             return new BoxEl
             {
-                Width = _size, Height = _size, Corners = CornerRadius4.All(Radii.Card),
-                Shadow = Elevation.Card, ClipToBounds = true, ZStack = true,
+                Width = _size, Height = _size, Corners = CornerRadius4.All(_radius),
+                Shadow = _shadow ? Elevation.Card : default, ClipToBounds = true, ZStack = true,
                 Cursor = CursorId.Hand,
                 DropTarget = _dropSpec.Value,
                 OnHoverMove = _ => { if (!_hovered.Peek()) _hovered.Value = true; },
@@ -330,7 +338,7 @@ static class PlaylistInlineEdit
                 OnClick = () => _ = PickCoverAsync(lib, svc, uri),
                 Children =
                 [
-                    DetailRail.HeroArtwork(m, _size),
+                    DetailRail.HeroArtwork(m, _size, _radius),
                     // Always-mounted overlay — the cross-fade is a bound-opacity transition (compositor-only).
                     CoverOverlay(dropCue),
                 ],
@@ -398,6 +406,8 @@ static class PlaylistInlineEdit
         readonly Loadable<DetailModel> _full;
         readonly float _width;
         readonly float _titleSize;
+        readonly ushort _weight;
+        readonly bool _onMedia;
         readonly Signal<string> _draft = new("");
         readonly Signal<bool> _editing = new(false);
         readonly Signal<bool> _hovered = new(false);
@@ -405,8 +415,8 @@ static class PlaylistInlineEdit
         readonly Ref<NodeHandle> _editShell = new(NodeHandle.Null);
         int _saveEpoch;
 
-        public EditableTitle(Loadable<DetailModel> full, float width, float titleSize)
-        { _full = full; _width = width; _titleSize = titleSize; }
+        public EditableTitle(Loadable<DetailModel> full, float width, float titleSize, ushort weight, bool onMedia)
+        { _full = full; _width = width; _titleSize = titleSize; _weight = weight; _onMedia = onMedia; }
 
         public override Element Render()
         {
@@ -422,8 +432,9 @@ static class PlaylistInlineEdit
             {
                 return WaveeType.PageHero(m.Title) with
                 {
-                    Size = _titleSize, MinSize = 18f, Weight = 900, Width = _width, LineHeight = float.NaN,
-                    Wrap = TextWrap.WrapWholeWords, MaxLines = 3, Trim = TextTrim.CharacterEllipsis,
+                    Size = _titleSize, MinSize = 18f, Weight = _weight, Width = _width, LineHeight = float.NaN,
+                    Wrap = TextWrap.WrapWholeWords, MaxLines = _onMedia ? 2 : 3, Trim = TextTrim.CharacterEllipsis,
+                    Color = _onMedia ? Tok.OnMediaPrimary : Tok.TextPrimary,
                 };
             }
 
@@ -456,8 +467,9 @@ static class PlaylistInlineEdit
                 Direction = 0, Width = _width + 16f, Gap = Spacing.S, AlignItems = FlexAlign.Center,
                 Margin = new Edges4(-8f, -4f, -8f, -4f), Padding = new Edges4(8f, 4f, 8f, 4f),
                 Corners = CornerRadius4.All(Radii.Control),
-                HoverFill = Tok.FillSubtleSecondary,
-                BorderWidth = 1f, BorderColor = ColorF.Transparent, HoverBorderColor = Tok.StrokeControlDefault,
+                HoverFill = _onMedia ? Tok.MediaScrim : Tok.FillSubtleSecondary,
+                BorderWidth = 1f, BorderColor = ColorF.Transparent,
+                HoverBorderColor = _onMedia ? Tok.OnMediaTertiary : Tok.StrokeControlDefault,
                 Cursor = CursorId.IBeam,
                 OnHoverMove = _ => { if (!_hovered.Peek()) _hovered.Value = true; },
                 OnPointerExit = () => { if (_hovered.Peek()) _hovered.Value = false; },
@@ -467,9 +479,11 @@ static class PlaylistInlineEdit
                 [
                     WaveeType.PageHero(title) with
                     {
-                        Size = _titleSize, MinSize = 18f, Weight = 900, Grow = 1f, LineHeight = float.NaN,
-                        Wrap = TextWrap.WrapWholeWords, MaxLines = 3, Trim = TextTrim.CharacterEllipsis,
-                        Color = string.IsNullOrWhiteSpace(m.Title) ? Tok.TextTertiary : Tok.TextPrimary,
+                        Size = _titleSize, MinSize = 18f, Weight = _weight, Grow = 1f, LineHeight = float.NaN,
+                        Wrap = TextWrap.WrapWholeWords, MaxLines = _onMedia ? 2 : 3, Trim = TextTrim.CharacterEllipsis,
+                        Color = string.IsNullOrWhiteSpace(m.Title)
+                            ? (_onMedia ? Tok.OnMediaTertiary : Tok.TextTertiary)
+                            : (_onMedia ? Tok.OnMediaPrimary : Tok.TextPrimary),
                     },
                     // Always-mounted pencil — fades via a bound-opacity transition (no discrete pop).
                     new BoxEl
@@ -477,7 +491,8 @@ static class PlaylistInlineEdit
                         Width = 20f, Height = 20f, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                         Opacity = Prop.Of(() => _hovered.Value && _status.Value == StatusIdle ? 1f : 0f),
                         Transition = MotionTok.ControlFast,
-                        Children = [Ui.Icon(Icons.Edit, MathF.Max(14f, _titleSize * 0.4f), Tok.TextSecondary)],
+                        Children = [Ui.Icon(Icons.Edit, MathF.Max(14f, _titleSize * 0.4f),
+                            _onMedia ? Tok.OnMediaSecondary : Tok.TextSecondary)],
                     },
                 ],
             };
@@ -524,6 +539,7 @@ static class PlaylistInlineEdit
         readonly float _width;
         readonly int _maxLines;
         readonly DetailHandlers _h;
+        readonly bool _onMedia;
         readonly Signal<string> _draft = new("");
         readonly Signal<bool> _editing = new(false);
         readonly Signal<bool> _hovered = new(false);
@@ -532,8 +548,8 @@ static class PlaylistInlineEdit
         readonly Ref<NodeHandle> _readShell = new(NodeHandle.Null);
         int _saveEpoch;
 
-        public EditableDescription(Loadable<DetailModel> full, float width, int maxLines, DetailHandlers h)
-        { _full = full; _width = width; _maxLines = maxLines; _h = h; }
+        public EditableDescription(Loadable<DetailModel> full, float width, int maxLines, DetailHandlers h, bool onMedia)
+        { _full = full; _width = width; _maxLines = maxLines; _h = h; _onMedia = onMedia; }
 
         public override Element Render()
         {
@@ -577,8 +593,9 @@ static class PlaylistInlineEdit
                 Direction = 0, Width = _width + 16f, Gap = Spacing.S, AlignItems = FlexAlign.Start,
                 Margin = new Edges4(-8f, -4f, -8f, -4f), Padding = new Edges4(8f, 4f, 8f, 4f),
                 Corners = CornerRadius4.All(Radii.Control),
-                HoverFill = Tok.FillSubtleSecondary,
-                BorderWidth = 1f, BorderColor = ColorF.Transparent, HoverBorderColor = Tok.StrokeControlDefault,
+                HoverFill = _onMedia ? Tok.MediaScrim : Tok.FillSubtleSecondary,
+                BorderWidth = 1f, BorderColor = ColorF.Transparent,
+                HoverBorderColor = _onMedia ? Tok.OnMediaTertiary : Tok.StrokeControlDefault,
                 Cursor = CursorId.IBeam,
                 OnRealized = h => _readShell.Value = h,
                 OnHoverMove = _ => { if (!_hovered.Peek()) _hovered.Value = true; },
@@ -594,11 +611,14 @@ static class PlaylistInlineEdit
                     // FLEX text (Grow/Basis=0): wraps to whatever width the row leaves after the pencil/chip take
                     // their intrinsic space — no hand-computed width reservations (the title row's exact model).
                     hasDesc
-                        ? RichText.OfFlex(m.Description!, 12f, Tok.TextSecondary, Tok.AccentTextPrimary, _maxLines,
+                        ? RichText.ExpandableFlex(m.Description!, 12f,
+                            _onMedia ? Tok.OnMediaSecondary : Tok.TextSecondary,
+                            _onMedia ? Tok.OnMediaPrimary : Tok.AccentTextPrimary, _maxLines, uri,
                             u => { if (RichText.RouteForUri(u) is { } k) _h.Go(k, null); })
                         : new TextEl(Loc.Get(Strings.Detail.Edit.DescriptionPlaceholder))
                         {
-                            Size = 12f, Color = Tok.TextTertiary, Grow = 1f, Basis = 0f,
+                            Size = 12f, Color = _onMedia ? Tok.OnMediaTertiary : Tok.TextTertiary,
+                            Grow = 1f, Basis = 0f,
                             Wrap = TextWrap.Wrap, MaxLines = _maxLines,
                         },
                     // Pencil pinned to the first text line (18px line box), fading with the hover state.
@@ -607,7 +627,7 @@ static class PlaylistInlineEdit
                         Width = 16f, Height = 18f, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                         Opacity = Prop.Of(() => _hovered.Value && _status.Value == StatusIdle ? 1f : 0f),
                         Transition = MotionTok.ControlFast,
-                        Children = [Ui.Icon(Icons.Edit, 13f, Tok.TextSecondary)],
+                        Children = [Ui.Icon(Icons.Edit, 13f, _onMedia ? Tok.OnMediaSecondary : Tok.TextSecondary)],
                     },
                 ],
             };
@@ -677,9 +697,10 @@ static class PlaylistInlineEdit
     sealed class PlaylistShareButton : Component
     {
         readonly Loadable<DetailModel> _full;
+        readonly float _size;
         readonly Signal<bool> _copied = new(false);
         TimerHandle _copyReset;   // one-shot: flips the "copied ✓" glyph back after 1600ms (frame-clock UseTimeout, generation-guarded)
-        public PlaylistShareButton(Loadable<DetailModel> full) => _full = full;
+        public PlaylistShareButton(Loadable<DetailModel> full, float size) { _full = full; _size = size; }
 
         public override Element Render()
         {
@@ -688,13 +709,13 @@ static class PlaylistInlineEdit
             bool copied = _copied.Value;
             return new BoxEl
             {
-                Width = 40f, Height = 40f,
+                Width = _size, Height = _size,
                 Children =
                 [
                     new BoxEl
                     {
-                        Width = 40f, Height = 40f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                        Corners = CornerRadius4.All(20f),
+                        Width = _size, Height = _size, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                        Corners = CornerRadius4.All(_size * 0.5f),
                         HoverScale = 1.06f, PressScale = 0.94f,
                         Cursor = CursorId.Hand, Focusable = true, Role = AutomationRole.Button,
                         OnClick = () => Share(m),

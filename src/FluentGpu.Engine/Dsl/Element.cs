@@ -582,6 +582,14 @@ public sealed record SpanTextEl(TextSpan[] Spans) : Element
 {
     public override ushort ElementTypeId => 12;
 
+    /// <summary>
+    /// Optional atomic tail shown only when a finite wrapping <see cref="MaxLines"/> clips <see cref="Spans"/>.
+    /// The text seam reserves the tail on the last visible line and trims the body at a legal break before it, so
+    /// affordances such as “&#x2026; More” stay inline and their ordinary <see cref="TextSpan.OnClick"/> hit rects remain
+    /// exact. Hidden when the body fits or when <see cref="MaxLines"/> is unlimited.
+    /// </summary>
+    public TextSpan[]? OverflowSuffix { get; init; }
+
     // ── base (paragraph) style — every TextSpan field that is unset inherits these ──
     public float Size { get; init; } = 14f;
     /// <summary>Base numeric font weight (0 = Normal 400); spans override per range.</summary>

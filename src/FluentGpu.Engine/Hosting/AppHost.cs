@@ -502,7 +502,7 @@ public sealed class AppHost : IDisposable
         try
         {
             if (rf.SuppressVsync) { _device.SuppressVsyncOnce(); _device.SuppressLatencyWaitOnce(); }
-            _device.SubmitDrawList(_renderSeam.Bytes(rf), _renderSeam.SortKeys(rf), in rf.Submit);
+            _device.SubmitDrawList(_renderSeam.Bytes(rf), _renderSeam.SortKeys(rf), in rf.Submit, _swapchain);
             _swapchain.Present();
         }
         catch (System.Exception) when (_asyncActive)
@@ -2130,7 +2130,7 @@ public sealed class AppHost : IDisposable
                     try
                     {
                         if (_renderSeam.TryAcquire(out var rf))
-                            _device.SubmitDrawList(_renderSeam.Bytes(rf), _renderSeam.SortKeys(rf), in rf.Submit); // 10 submit
+                            _device.SubmitDrawList(_renderSeam.Bytes(rf), _renderSeam.SortKeys(rf), in rf.Submit, _swapchain); // 10 submit (own swapchain — primary host: _swapchain IS _primarySwapchain)
                         tSubmitDone = Stopwatch.GetTimestamp();     // boundary: SubmitDrawList done, Present not yet called
                         _swapchain.Present();                       // 11 present (UI thread)
                     }

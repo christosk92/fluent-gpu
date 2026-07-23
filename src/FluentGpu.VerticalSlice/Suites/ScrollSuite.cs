@@ -2665,6 +2665,43 @@ static class ScrollSuite
                 $"renders={renders0}->{probe.ParentRenders} built={built0}->{probe.RowConstructions} window=[{sc1.FirstRealized},{sc1.LastRealized}) state={row0.Local.Peek()}");
         }
 
+        // e11virt.5c — persistent prefix: the first two bound slots remain attached at the head while a deep normal
+        // window recycles. Their handles and fixed index signals survive; the realized census is window + exactly 2.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("e11-prefix", new Size2(640, 480), 1f));
+            window.Show();
+            var probe = new PersistentPrefixProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+
+            var vp = FindScrollNode(host.Scene, host.Scene.Root);
+            host.Scene.TryGetScroll(vp, out var sc0);
+            var content = sc0.ContentNode;
+            var p0 = host.Scene.FirstChild(content);
+            var p1 = host.Scene.NextSibling(p0);
+            int normal0 = sc0.LastRealized - sc0.FirstRealized;
+            int census0 = host.Scene.ChildCount(content);
+
+            var ptr = new Point2(160f, 220f);
+            window.QueueInput(new InputEvent(InputKind.Wheel, ptr, 0, 0, 2400f));
+            for (int i = 0; i < 8; i++) host.RunFrame();
+            host.Scene.TryGetScroll(vp, out var sc1);
+            var q0 = host.Scene.FirstChild(content);
+            var q1 = host.Scene.NextSibling(q0);
+            int normal1 = sc1.LastRealized - sc1.FirstRealized;
+            int census1 = host.Scene.ChildCount(content);
+
+            bool fixedSignals = probe.PrefixSignals.Count == 2
+                && probe.PrefixSignals[0].Peek() == 0 && probe.PrefixSignals[1].Peek() == 1;
+            bool stableRoots = p0 == q0 && p1 == q1;
+            bool bounded = census0 == normal0 + 2 && census1 == normal1 + 2;
+            Check("e11virt.5c persistent prefix keeps two fixed bound roots ahead of a bounded deep recyclable window",
+                sc0.PersistentPrefixCount == 2 && sc1.PersistentPrefixCount == 2 && sc1.FirstRealized > 2
+                && fixedSignals && stableRoots && bounded,
+                $"first={sc1.FirstRealized} prefixSignals={probe.PrefixSignals.Count} roots={stableRoots} census={census0}/{normal0}+2->{census1}/{normal1}+2");
+        }
+
         // e11virt.6 — typed ItemsRepeater (E11-L2): the (index, item) template binds without casts, and an
         // ItemCollectionTransition stamps the engine FLIP/fade spec on each item root — Moves = Position FLIP,
         // Adds/Removes = opacity 0↔1, over ControlFastAnimationDuration 167ms decelerate (the ItemContainer.xaml:54-56
