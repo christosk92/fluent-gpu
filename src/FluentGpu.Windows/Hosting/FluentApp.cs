@@ -218,7 +218,12 @@ public static class FluentApp
                     Console.Error.WriteLine($"[fps resize] {szpx.Width}x{szpx.Height} scale {window.Scale:0.##} state {window.State} panel {cachedHz}Hz wait {WaitTok(host.LastWaitKind)}{host.LastWaitMs} (f{n})");
                 }
                 bool workSpike = (s.FlushMs + s.LayoutMs + s.RecordMs) > 11.0;
-                bool spike = workSpike || gpuMs > 11.0;   // UI work (not bare submit pacing) OR render-thread GPU stall
+                // gpuMs (LastGpuFenceWaitMs) goes stale when submits are elided (skip-submit / pace-skip), so gate the
+                // render-side spike on the frame actually presenting; scale the threshold with refresh so ordinary
+                // vsync-pacing waits at 120Hz (~8.33ms → 12.5ms trip) aren't flagged, staying 11ms at 60Hz.
+                double vsyncMs = cachedHz > 0 ? 1000.0 / cachedHz : 8.33;
+                double gpuThreshold = Math.Max(11.0, vsyncMs * 1.5);
+                bool spike = workSpike || (s.Presented && gpuMs > gpuThreshold);   // UI work OR a real render-thread GPU stall on a presented frame
                 if (spike)
                 {
                     spikeCluster = prevSpike ? spikeCluster + 1 : 1;
