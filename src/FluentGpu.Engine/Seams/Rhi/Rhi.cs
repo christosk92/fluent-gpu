@@ -39,6 +39,13 @@ public interface IGpuDevice : IDisposable
     /// while the primary swapchain is composited).</summary>
     FluentGpu.Pal.IVideoPresenter? VideoPresenter => null;
 
+    /// <summary>The composited-video presenter bound to a SPECIFIC swapchain's DirectComposition root — the per-window
+    /// form of <see cref="VideoPresenter"/> (which targets the primary swapchain). A detached/secondary video window
+    /// passes its own swapchain here so its video child visuals attach under ITS DComp root, not the primary's. Returns
+    /// <see langword="null"/> when the target is not composited / the backend cannot composite video. Default routes to
+    /// the primary <see cref="VideoPresenter"/> so single-window backends are unaffected.</summary>
+    FluentGpu.Pal.IVideoPresenter? GetVideoPresenter(ISwapchain swapchain) => VideoPresenter;
+
     /// <summary>Record + batch + submit the per-frame DrawList. <paramref name="drawList"/> is the POD command stream.</summary>
     void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx);
 

@@ -44,10 +44,20 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
     // The PRODUCTION path is z-BELOW the UI, revealed through the premultiplied-0 hole (IVideoPresenter contract).
     private static readonly bool s_zAbove = Environment.GetEnvironmentVariable("FG_VIDEO_ZABOVE") == "1";
 
-    public DCompVideoPresenter(D3D12Device device) => _device = device;
+    // The swapchain whose DirectComposition root hosts THIS presenter's video children. The primary window's presenter
+    // targets the primary swapchain; a detached/secondary video window gets its OWN presenter targeting ITS swapchain
+    // (see D3D12Device.GetVideoPresenter(ISwapchain)). Every presenter shares the device's one IDCompositionDevice, so
+    // one IDCompositionDevice::Commit flushes all windows' trees — a per-presenter Commit is correct, just redundant.
+    private readonly D3D12Swapchain _target;
+
+    public DCompVideoPresenter(D3D12Device device, D3D12Swapchain target)
+    {
+        _device = device;
+        _target = target;
+    }
 
     private IDCompositionDevice* Dcomp => _device.DcompDevice;
-    private D3D12Swapchain? Primary => _device.PrimarySwapchain;
+    private D3D12Swapchain Target => _target;
 
     public VideoSurfaceId CreateSurface()
     {
@@ -142,8 +152,11 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
     }
 
     // Re-attach every live child under a freshly-(re)built root (device recover rebinds the DComp graph in BindDComp).
+    // Only responds to ITS OWN target's rebind — BindDComp calls the per-swapchain presenter, and this guard makes a
+    // stray cross-swapchain call a no-op (a second video window's presenter must not re-parent under another's root).
     internal void OnSwapchainRebound(D3D12Swapchain target)
     {
+        if (!ReferenceEquals(target, _target)) return;
         for (int i = 0; i < MaxSurfaces; i++)
         {
             ref Slot s = ref _slots[i];
@@ -158,7 +171,7 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
 
     private void AttachChild(ref Slot s)
     {
-        if (s.InTree || Primary is not { DcompRoot: not null, DcompVisual: not null } sc) return;
+        if (s.InTree || Target is not { DcompRoot: not null, DcompVisual: not null } sc) return;
         // PRODUCTION (default): z-BELOW the UI visual — AddVisual(child, insertAbove=FALSE, reference=uiVisual). The video
         // child renders BENEATH the UI swapchain and is revealed at its rect through the premultiplied-0 hole-punch the
         // UI back buffer draws there (the IVideoPresenter contract). This lets UI chrome (rounded corners, overlays,
@@ -175,7 +188,7 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
 
     private void DetachChild(ref Slot s)
     {
-        if (!s.InTree || Primary is not { DcompRoot: not null } sc) { s.InTree = false; return; }
+        if (!s.InTree || Target is not { DcompRoot: not null } sc) { s.InTree = false; return; }
         sc.DcompRoot->RemoveVisual(s.Child);
         s.InTree = false;
     }
