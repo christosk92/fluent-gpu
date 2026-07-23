@@ -884,6 +884,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _framePipeBinds = 0; _framePipeBindsSkipped = 0;
         _frameScissorSets = 0; _frameScissorSkipped = 0;
         _frameSegments = 0; _frameRuns = 0; _frameClipOps = 0; _frameLayerOps = 0;
+        _sceneCurCat = CatNone; _sceneMarkCount = 0; _sceneCatCount[_frameIndex] = 0;   // reset the per-category scene-split timeline (FG_GPU_TIMING)
         _blurCacheHit = 0; _blurCacheMiss = 0; _blurHoldHit = 0; _blurHoldFallback = 0;
         (_lastBlurHashes, _curBlurHashes) = (_curBlurHashes, _lastBlurHashes);   // rotate the blur-cache recurrence ring
         _lastBlurHashCount = _curBlurHashCount; _curBlurHashCount = 0;
@@ -977,9 +978,15 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         Diag.Set("text.run", "runsShaped", _glyphs.RunsShaped);      // this frame: runs (re)shaped — should be ~0 in steady state
 
         Barrier(backBuffer, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PRESENT);
-        // GPU timer: end (query 3i+2) + resolve this index's 3 marks into the readback (read one frame later).
+        // GPU timer: end (query base+2) + resolve this index's marks (begin/mid/end + category boundaries) into the readback
+        // (read one frame later). Before stamping 'end', close the final scene interval so the tail is attributed correctly.
         if (s_gpuTiming && _gpuQueryHeap != null && _gpuTsReadback != null)
         {
+            if (_sceneCurCat != CatNone)   // scene had at least one run: the last interval [last-boundary .. end] is the current category
+            {
+                _sceneCat[_frameIndex][_sceneCatCount[_frameIndex]] = _sceneCurCat;
+                _sceneCatCount[_frameIndex]++;
+            }
             _cmdList->EndQuery(_gpuQueryHeap, D3D12_QUERY_TYPE.D3D12_QUERY_TYPE_TIMESTAMP, GpuTsPerFrame * _frameIndex + 2u);
             _cmdList->ResolveQueryData(_gpuQueryHeap, D3D12_QUERY_TYPE.D3D12_QUERY_TYPE_TIMESTAMP,
                 GpuTsPerFrame * _frameIndex, GpuTsPerFrame, _gpuTsReadback, (ulong)(GpuTsPerFrame * _frameIndex) * sizeof(ulong));
@@ -1523,30 +1530,35 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 switch (kind)
                 {
                     case PrimKind.Shadow:
+                        SceneCat(CatFill);
                         bool bindShadowShared = !_sharedSdfStateBound;
                         bool bindShadowPso = _boundPipe != BoundPipe.Shadow;
                         NoteSdfPipeBind(_shadowPipe!.Record(_cmdList, shadowSpan.Slice(sc, count), lw, lh, bindShadowShared, bindShadowPso),
                             bindShadowShared, bindShadowPso, BoundPipe.Shadow);
                         sc += count; break;
                     case PrimKind.Arc:
+                        SceneCat(CatFill);
                         bool bindArcShared = !_sharedSdfStateBound;
                         bool bindArcPso = _boundPipe != BoundPipe.Arc;
                         NoteSdfPipeBind(_arcPipe!.Record(_cmdList, arcSpan.Slice(ac, count), lw, lh, bindArcShared, bindArcPso),
                             bindArcShared, bindArcPso, BoundPipe.Arc);
                         ac += count; break;
                     case PrimKind.Polyline:
+                        SceneCat(CatFill);
                         bool bindPolylineShared = !_sharedSdfStateBound;
                         bool bindPolylinePso = _boundPipe != BoundPipe.Polyline;
                         NoteSdfPipeBind(_polylinePipe!.Record(_cmdList, polylineSpan.Slice(pc, count), lw, lh, bindPolylineShared, bindPolylinePso),
                             bindPolylineShared, bindPolylinePso, BoundPipe.Polyline);
                         pc += count; break;
                     case PrimKind.Gradient:
+                        SceneCat(CatFill);
                         bool bindGradientShared = !_sharedSdfStateBound;
                         bool bindGradientPso = _boundPipe != BoundPipe.Gradient;
                         NoteSdfPipeBind(_gradPipe!.Record(_cmdList, gradSpan.Slice(gc, count), lw, lh, bindGradientShared, bindGradientPso),
                             bindGradientShared, bindGradientPso, BoundPipe.Gradient);
                         gc += count; break;
                     case PrimKind.Rect:
+                        SceneCat(CatFill);
                         var rectRun = rectSpan.Slice(rc, count);
                         rc += count;
                         // Opaque fast path: split the run into maximal same-class (opaque plain vs everything-else) sub-runs
@@ -1574,6 +1586,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                         }
                         break;
                     case PrimKind.Image:
+                        SceneCat(CatImage);
                         if (_boundPipe != BoundPipe.Image)
                         {
                             _imagePipe!.Begin(_cmdList, _imageTextures!.Heap, lw, lh);   // (re)bind heap/PSO/root-sig/VB for this image run
@@ -1618,11 +1631,13 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         }
         if (_glyphInsts.Count > 0)
         {
+            SceneCat(CatGlyph);
             bool rb = _boundPipe != BoundPipe.Glyph;
             NotePipeBind(_glyphs!.Record(_cmdList, _glyphInsts, lw, lh, rb), rb, BoundPipe.Glyph);
         }
         if (_gradGlyphInsts.Count > 0)   // sub-glyph wipe, same RT/z as glyphs
         {
+            SceneCat(CatGlyph);
             bool rb = _boundPipe != BoundPipe.GradGlyph;
             NotePipeBind(_glyphs!.RecordGradient(_cmdList, _gradGlyphInsts, lw, lh, rb), rb, BoundPipe.GradGlyph);
         }
@@ -1883,6 +1898,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     bool carve = L.DamageEpoch != 0 && L.DamageEpoch == ctx.FrameEpoch;
                     float dmgX = carve ? L.OwnDmgX : ctx.Damage.X, dmgY = carve ? L.OwnDmgY : ctx.Damage.Y;
                     float dmgW = carve ? L.OwnDmgW : ctx.Damage.W, dmgH = carve ? L.OwnDmgH : ctx.Damage.H;
+                    SceneCat(CatComposite);
                     _acrylic.BlurAndComposite(_cmdList, L, lw, lh, _frameScale, _fenceValue + 1,
                         dmgX * _frameScale, dmgY * _frameScale, dmgW * _frameScale, dmgH * _frameScale,
                         acrylicClip, backdropSourceId, acrylicTarget, acrylicRtv);
@@ -1909,6 +1925,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     OpacityLayerCompositor.LocalBlurSurface localSurface = closed.LocalBlur;
                     bool localBlur = localSurface.UsedW > 0;
                     _opacityGroups.RemoveAt(_opacityGroups.Count - 1);
+                    SceneCat(CatComposite);
                     // Self-blur (or edge-fade-with-blur): gaussian-blur the group RT in place (leaves it readable); else BeginRead.
                     if (localBlur)
                         _opacity.BlurLocalInPlace(_cmdList, in localSurface, gl.BlurSigma, _fenceValue + 1);
@@ -2165,11 +2182,61 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private bool _gpuTimingInitTried;
     private double _lastGpuRenderMs;
     private double _lastGpuSceneMs;   // of the whole: the scene-raster block (clear + drawlist playback + layer composites), excl. uploads/baked-blur
-    private const uint GpuTsPerFrame = 3;   // begin | mid (after uploads+baked-blur) | end — splits scene-raster from setup
+    // ── Per-category scene split (FG_GPU_TIMING=1) ─────────────────────────────────────────────────────────────────────
+    // The scene-raster block (mid→end) is further split into rect/solid FILL, IMAGE, GLYPH and layer/acrylic COMPOSITE. The
+    // categories INTERLEAVE in painter order (a card emits bg-fill → image → text; segments repeat), so a fixed pair-per-run
+    // bracket is impossible within a compile-time slot budget. Instead we lay down a *boundary timeline*: mid is the first
+    // boundary, and one timestamp is emitted at every category CHANGE (SceneCat). The interval between two consecutive marks
+    // is attributed CPU-side to the category active across it; the per-interval category tags are captured at record time
+    // into a managed side-buffer (no GPU roundtrip for the tags), read one frame later alongside the timestamps. Bounded:
+    // at most SceneMarkCap interior boundaries per frame; beyond that the category freezes and the tail lumps into the last
+    // seen category (rare; only under extreme interleave — the accounting degrades, never corrupts). Composite marks are
+    // placed only at the main acrylic/opacity composite sites; any un-marked composite time falls into the preceding FILL
+    // interval (a documented, benign approximation). All zero when FG_GPU_TIMING is off or the query heap is unavailable.
+    private const byte CatFill = 0, CatImage = 1, CatGlyph = 2, CatComposite = 3, CatNone = 0xFF;
+    private const int SceneMarkCap = 256;   // interior-boundary timestamp slots per frame (past this the tail lumps into the current category)
+    private byte _sceneCurCat = CatNone;    // category currently active in the scene replay; CatNone before the first run
+    private int _sceneMarkCount;            // interior boundaries emitted this frame (slots used past base+3)
+    private readonly byte[][] _sceneCat = CreateSceneCatBuffers();   // [FRAME_COUNT][SceneMarkCap+1]: per-interval category tag, filled at record time
+    private readonly int[] _sceneCatCount = new int[FRAME_COUNT];    // [FRAME_COUNT]: intervals recorded for that back-buffer index
+    private static byte[][] CreateSceneCatBuffers()
+    {
+        var a = new byte[FRAME_COUNT][];
+        for (int i = 0; i < a.Length; i++) a[i] = new byte[SceneMarkCap + 1];
+        return a;
+    }
+    private double _lastGpuFillMs, _lastGpuImageMs, _lastGpuGlyphMs, _lastGpuCompositeMs;
+    private const uint GpuTsPerFrame = 3 + (uint)SceneMarkCap;   // begin | mid (after uploads+baked-blur) | end | then up to SceneMarkCap category-boundary marks
     /// <inheritdoc/>
     public double LastGpuRenderMs => _lastGpuRenderMs;
     /// <inheritdoc/>
     public double LastGpuSceneMs => _lastGpuSceneMs;
+    /// <inheritdoc/>
+    public double LastGpuFillMs => _lastGpuFillMs;
+    /// <inheritdoc/>
+    public double LastGpuImageMs => _lastGpuImageMs;
+    /// <inheritdoc/>
+    public double LastGpuGlyphMs => _lastGpuGlyphMs;
+    /// <inheritdoc/>
+    public double LastGpuCompositeMs => _lastGpuCompositeMs;
+
+    // Record a category boundary in the scene timeline. No-op unless GPU timing is on; only emits a timestamp when the
+    // category actually CHANGES (consecutive same-category runs cost nothing). Called from the record hot path — the leading
+    // static-readonly guard is a single well-predicted branch when timing is off, and there is no allocation on any path.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void SceneCat(byte cat)
+    {
+        if (!s_gpuTiming || _gpuQueryHeap == null) return;
+        if (cat == _sceneCurCat) return;
+        if (_sceneCurCat == CatNone) { _sceneCurCat = cat; return; }   // first interval opens at 'mid' — no boundary mark
+        if (_sceneMarkCount >= SceneMarkCap) return;                    // slot budget spent: freeze category, tail lumps into current (bounded/approx)
+        byte[] cats = _sceneCat[_frameIndex];
+        cats[_sceneCatCount[_frameIndex]] = _sceneCurCat;               // the interval ENDING at this boundary belongs to the old category
+        _sceneCatCount[_frameIndex]++;
+        _cmdList->EndQuery(_gpuQueryHeap, D3D12_QUERY_TYPE.D3D12_QUERY_TYPE_TIMESTAMP, GpuTsPerFrame * _frameIndex + 3u + (uint)_sceneMarkCount);
+        _sceneMarkCount++;
+        _sceneCurCat = cat;
+    }
 
     // Lazily create the query heap + readback buffer on the first submit (the queue exists by then). Guarded by
     // _gpuTimingInitTried so a failed create is attempted once, then treated as "unsupported" (heap stays null).
@@ -2217,6 +2284,30 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         ulong begin = _gpuTsData[q], mid = _gpuTsData[q + 1], end = _gpuTsData[q + 2];
         if (end >= begin) _lastGpuRenderMs = (end - begin) * 1000.0 / _gpuTsFreq;   // whole frame (uploads + baked-blur + scene)
         if (end >= mid) _lastGpuSceneMs = (end - mid) * 1000.0 / _gpuTsFreq;         // scene-raster block only (the fill-cost suspect)
+
+        // Fold the boundary timeline into the four category buckets. Marks in EXECUTION order: mid (t0), then
+        // _sceneCatCount-1 interior boundaries at slots q+3+j, then end. Interval j (category = cats[j]) spans [t_j, t_{j+1}].
+        double fill = 0, image = 0, glyph = 0, comp = 0;
+        int nCat = _sceneCatCount[frameIndex];
+        if (nCat > 0)
+        {
+            byte[] cats = _sceneCat[frameIndex];
+            ulong prev = mid;
+            for (int j = 0; j < nCat; j++)
+            {
+                ulong cur = (j < nCat - 1) ? _gpuTsData[q + 3u + (uint)j] : end;   // last interval closes at 'end'
+                double ms = cur >= prev ? (cur - prev) * 1000.0 / _gpuTsFreq : 0.0;
+                switch (cats[j])
+                {
+                    case CatFill: fill += ms; break;
+                    case CatImage: image += ms; break;
+                    case CatGlyph: glyph += ms; break;
+                    case CatComposite: comp += ms; break;
+                }
+                prev = cur;
+            }
+        }
+        _lastGpuFillMs = fill; _lastGpuImageMs = image; _lastGpuGlyphMs = glyph; _lastGpuCompositeMs = comp;
     }
 
     /// <inheritdoc/>

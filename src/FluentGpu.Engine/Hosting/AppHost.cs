@@ -86,6 +86,14 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     public double GpuRenderMs { get; init; }
     /// <summary>Scene-raster portion of <see cref="GpuRenderMs"/> (0 when timestamp queries are disabled).</summary>
     public double GpuSceneMs { get; init; }
+    /// <summary>Rect/solid-fill portion of <see cref="GpuSceneMs"/> (0 when timestamp queries are disabled).</summary>
+    public double GpuFillMs { get; init; }
+    /// <summary>Image-draw portion of <see cref="GpuSceneMs"/> (0 when timestamp queries are disabled).</summary>
+    public double GpuImageMs { get; init; }
+    /// <summary>Glyph/text portion of <see cref="GpuSceneMs"/> (0 when timestamp queries are disabled).</summary>
+    public double GpuGlyphMs { get; init; }
+    /// <summary>Layer/acrylic composite portion of <see cref="GpuSceneMs"/> (0 when timestamp queries are disabled).</summary>
+    public double GpuCompositeMs { get; init; }
     // This frame actually submitted + presented (skip-submit did NOT elide it). A probe uses it to see how often a
     // "static" scene is force-presented anyway (a sustained loop animation marking TransformDirty defeats skip-submit).
     public bool Presented { get; init; }
@@ -870,6 +878,14 @@ public sealed class AppHost : IDisposable
     /// <summary>Diagnostic (FG_GPU_TIMING=1): the scene-raster portion of <see cref="LastGpuRenderMs"/> (excl. uploads/baked-blur)
     /// — when this dominates and exceeds the refresh budget, the maximize lock is content fill/overdraw. 0 when off.</summary>
     public double LastGpuSceneMs => _device.LastGpuSceneMs;
+    /// <summary>Diagnostic (FG_GPU_TIMING=1): the rect/solid-fill, image, glyph and composite splits of <see cref="LastGpuSceneMs"/> (0 when off).</summary>
+    public double LastGpuFillMs => _device.LastGpuFillMs;
+    /// <inheritdoc cref="LastGpuFillMs"/>
+    public double LastGpuImageMs => _device.LastGpuImageMs;
+    /// <inheritdoc cref="LastGpuFillMs"/>
+    public double LastGpuGlyphMs => _device.LastGpuGlyphMs;
+    /// <inheritdoc cref="LastGpuFillMs"/>
+    public double LastGpuCompositeMs => _device.LastGpuCompositeMs;
 
     /// <summary>The message-loop wait timeout (ms) for the NEXT pump: how long to block in <c>WaitForWork</c> before
     /// running another frame. Computes the wake mask ONCE and paces by it:
@@ -2278,6 +2294,10 @@ public sealed class AppHost : IDisposable
                 PresentMs = ToMs(tSubmit - tSubmitDone),// of which: the Present() call (0 on a skipped frame)
                 GpuRenderMs = _device.LastGpuRenderMs,
                 GpuSceneMs = _device.LastGpuSceneMs,
+                GpuFillMs = _device.LastGpuFillMs,
+                GpuImageMs = _device.LastGpuImageMs,
+                GpuGlyphMs = _device.LastGpuGlyphMs,
+                GpuCompositeMs = _device.LastGpuCompositeMs,
                 Presented = !skipSubmit,
                 LyricsScrollMode = probeLyMode,
                 LyricsUserScrollActive = probeLyUser,

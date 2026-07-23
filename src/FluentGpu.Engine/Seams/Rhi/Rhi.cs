@@ -121,6 +121,20 @@ public interface IGpuDevice : IDisposable
     /// the maximize lock is content fill/overdraw (not uploads/blur). 0 when off. Host folds into <c>FrameStats.GpuSceneMs</c>.</summary>
     double LastGpuSceneMs => 0;
 
+    /// <summary>Diagnostic (FG_GPU_TIMING=1): of <see cref="LastGpuSceneMs"/>, the rect/solid-FILL portion (all opaque/blended
+    /// primitive fills — rects, shadows, arcs, polylines, gradients). Isolates overdraw fill cost from image/text/composite.
+    /// 0 when off/unsupported. Host folds into <c>FrameStats.GpuFillMs</c>.</summary>
+    double LastGpuFillMs => 0;
+
+    /// <summary>Diagnostic (FG_GPU_TIMING=1): of <see cref="LastGpuSceneMs"/>, the IMAGE-draw portion. 0 when off. Folds into <c>FrameStats.GpuImageMs</c>.</summary>
+    double LastGpuImageMs => 0;
+
+    /// <summary>Diagnostic (FG_GPU_TIMING=1): of <see cref="LastGpuSceneMs"/>, the GLYPH/text portion. 0 when off. Folds into <c>FrameStats.GpuGlyphMs</c>.</summary>
+    double LastGpuGlyphMs => 0;
+
+    /// <summary>Diagnostic (FG_GPU_TIMING=1): of <see cref="LastGpuSceneMs"/>, the layer/acrylic COMPOSITE portion. 0 when off. Folds into <c>FrameStats.GpuCompositeMs</c>.</summary>
+    double LastGpuCompositeMs => 0;
+
     /// <summary>True when decoded image pixels are staged but not yet copied to their resident GPU texture, or when
     /// transient upload resources are awaiting fence-gated release. The host must NOT elide that submit, or the texture
     /// stays empty and deferred upload memory can remain resident until unrelated UI work happens. Default false (a

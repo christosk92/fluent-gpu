@@ -264,7 +264,10 @@ public static class FluentApp
                 if (fpsLog && (spike || n % 30 == 0))
                 {
                     double gpuRenderMs = s.GpuRenderMs;   // FG_GPU_TIMING: true raster ms (0 when off) — disambiguates the fence wait
-                    string gpuRenderTok = gpuRenderMs > 0.0 ? $" grender {gpuRenderMs:0.0}ms(scene {s.GpuSceneMs:0.0})" : "";
+                    // grender X(scene Y: rect R img I glyph G comp C) — the per-category scene split (all 0 unless FG_GPU_TIMING).
+                    string gpuRenderTok = gpuRenderMs > 0.0
+                        ? $" grender {gpuRenderMs:0.0}ms(scene {s.GpuSceneMs:0.0}: rect {s.GpuFillMs:0.0} img {s.GpuImageMs:0.0} glyph {s.GpuGlyphMs:0.0} comp {s.GpuCompositeMs:0.0})"
+                        : "";
                     string clusterTok = spike && spikeCluster > 0 ? $" cluster={spikeCluster}" : "";
                     string hitchTok =
                         $" | hitch comps={s.ComponentsRendered} nodes={s.NodesVisited}/{s.DrawNodeCount} " +

@@ -46,13 +46,14 @@ public static class SceneRecorder
 {
     private const bool EnableSubtreeCull = true;
 
-    // Opaque occlusion cull (FG_OCCLUSION_CULL=1, OPT-IN): skip a node's own visual when a later-drawn direct child
-    // provably, fully, opaquely covers it — those fill/border pixels are overwritten regardless, so the emit is dead work
-    // (finding: the nested opaque background stack overdraws 4-8× with no z-reject). DEFAULT OFF because a wrong cull hides
-    // UI; the predicate is deliberately strict (visible, unclipped, square, fully-opaque Box child whose absolute rect
-    // fully contains the node's visible rect, and no transform animation in flight) so it only ever fires when the node's
-    // pixels are guaranteed dead. Enable to A/B; promote to default once eyeballed clean.
-    private static readonly bool s_occlusionCull = Environment.GetEnvironmentVariable("FG_OCCLUSION_CULL") == "1";
+    // Opaque occlusion cull (DEFAULT-ON; FG_OCCLUSION_CULL=0 opts OUT, =1 still accepted): skip a node's own visual when a
+    // later-drawn direct child provably, fully, opaquely covers it — those fill/border pixels are overwritten regardless, so
+    // the emit is dead work (finding: the nested opaque background stack overdraws 4-8× with no z-reject). Pixel-identical by
+    // construction: the predicate is deliberately strict (visible, unclipped, square, fully-opaque Box child whose absolute
+    // rect fully contains the node's visible rect, and no transform animation in flight) so it only ever fires when the
+    // node's pixels are guaranteed dead — verified byte-identical via A/B screenshot, so promoted from opt-in to default-on.
+    // Set FG_OCCLUSION_CULL=0 to disable (fallback for any regression).
+    private static readonly bool s_occlusionCull = Environment.GetEnvironmentVariable("FG_OCCLUSION_CULL") != "0";
 
     // Opt-in scroll diagnostics: set FG_SCROLLLOG=1, run, scroll, copy the [scroll] lines.
     private static readonly bool ScrollLog = Environment.GetEnvironmentVariable("FG_SCROLLLOG") == "1";
