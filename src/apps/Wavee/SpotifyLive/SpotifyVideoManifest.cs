@@ -3,6 +3,7 @@ using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text.Json;
+using FluentGpu.WindowsApi.Media.PlayReady;
 
 namespace Wavee.SpotifyLive;
 
@@ -176,6 +177,27 @@ sealed class SpotifyVideoManifest
             CencKid = cencKid,
             PlayReadyKid = prKid,
             LicenseServerEndpoint = licenseEndpoint,
+        };
+    }
+
+    /// <summary>Project the selected mp4/PlayReady profile into the engine's <see cref="DashSourceDescriptor"/> for the
+    /// native CENC source: StartNumber 0 + a timestamp stride (Spotify names segments by absolute time), the split
+    /// init/segment addressing, and the PSSH. Null when no playable PlayReady mp4 profile / segment addressing resolved.</summary>
+    public DashSourceDescriptor? ToDashDescriptor()
+    {
+        if (!HasPlayReadyMp4 || string.IsNullOrEmpty(InitUrl) || SegmentCount <= 0) return null;
+        return new DashSourceDescriptor
+        {
+            InitUrl = InitUrl,
+            SegmentBaseUrl = SegmentBaseUrl,
+            SegmentPrefix = SegmentPrefix,
+            SegmentSuffix = SegmentSuffix,
+            StartNumber = 0,                          // Spotify's first segment timestamp is 0
+            SegmentCount = SegmentCount,
+            SegmentStride = SegmentStrideSeconds,      // segment names step by the segment length (seconds)
+            Pssh = Pssh ?? System.Array.Empty<byte>(),
+            DefaultKid = CencKid,
+            Codecs = VideoCodec,
         };
     }
 
