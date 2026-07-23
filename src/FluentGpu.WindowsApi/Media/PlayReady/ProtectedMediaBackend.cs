@@ -119,6 +119,7 @@ public sealed class ProtectedMediaBackend : IMediaBackend, IPreparableBackend
                 SegmentSuffix = descriptor.SegmentSuffix,
                 StartNumber = descriptor.StartNumber,
                 SegmentCount = descriptor.SegmentCount,
+                SegmentStride = descriptor.SegmentStride,
                 Pssh = descriptor.Pssh,
             };
         }
