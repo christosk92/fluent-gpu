@@ -184,6 +184,8 @@ sealed class PlayerBarContent : Component
         var menuOverlay = UseContext(Overlay.Service);
         var hooks = UseContext(InputHooks.Current);              // pop-out video: OpenDetachedWindow seam
         var popout = UseRef<IDetachedVideoWindow?>(null);        // the live detached video window handle (null = docked)
+        var videoAnchor = UseRef<NodeHandle>(default);           // the split video button container → the surface-picker MenuFlyout anchor
+        var videoMenu = UseRef<OverlayHandle?>(null);            // the open video surface-picker flyout (null = closed)
         var titleHover = UseSignal(false);           // hover the now-playing text → BOTH lines scroll together (synced); idle = static + edge fade
         var L = _layout.Value;                       // coarse breakpoint signal; does NOT change for every resize pixel
         _ = AppearancePrefs.Epoch.Value;
@@ -479,49 +481,91 @@ sealed class PlayerBarContent : Component
                 ui.RailOpen.Value && ui.Mode.Value == RailMode.Lyrics, accent, buttonBox, buttonGlyph,
                 font: WaveeIcons.Font)
                 with { Key = "lyrics", Animate = ItemMotion });
-        // Switch-to-video toggle — shown only when the now-playing track has a music video (async-detected). The swap is a
-        // seam for now (sets PreferVideo); the actual video surface/host is a follow-up. Tooltip explains the affordance.
+        // Video — a SPLIT button, shown only when the now-playing track has a music video (async-detected). The PRIMARY
+        // (movie) part pops the video out into a detached, always-on-top window ("original video"); the trailing CHEVRON
+        // opens a MenuFlyout of the alternate surfaces (in-window mini-player + video window + close). Both surfaces are
+        // mutually exclusive — only one consumes the resolved source at a time (one swapchain per source).
         if (active && hasVideo)
-            rightKids.Add(ToolTip.Wrap(
-                Transport(Icons.Movie, () =>
+        {
+            // PRIMARY action (verbatim from the old pop-out button): toggle the detached, always-on-top video window.
+            void PopOutVideo()
+            {
+                bool next = !b.PreferVideo.Value;
+                b.PreferVideo.Value = next;
+                if (next)
                 {
-                    bool next = !b.PreferVideo.Value;
-                    b.PreferVideo.Value = next;
-                    if (next)
-                    {
-                        // Mutually exclusive with the in-window PiP: only one surface consumes the resolved source at a time.
-                        b.ShowInWindowPip.Value = false;
-                        // Resolve the now-playing track's playable video source (Spotify manifest → PopOutVideoSource) and
-                        // pop the video out into a detached, always-on-top window (its own AppHost + composited swapchain +
-                        // video presenter) that plays it (clear on the MF backend, DRM via the native CDM).
-                        b.RequestPopOutSource(track?.Uri);
-                        popout.Value = hooks?.OpenDetachedWindow?.Invoke(new DetachedWindowRequest(
-                            Loc.Get(Strings.Player.SwitchToVideo), new Size2(480, 270),
-                            new PopOutVideoWindow { Source = b.PopOutVideoSource }, AlwaysOnTop: true));
-                    }
-                    else { popout.Value?.Close(); popout.Value = null; }
-                }, true, preferVideo, accent, buttonBox, buttonGlyph),
-                Loc.Get(preferVideo ? Strings.Player.SwitchToAudio : Strings.Player.SwitchToVideo))
-                with { Key = "video" });
-        // In-window picture-in-picture toggle — a distinct affordance beside the pop-out button (same has-video gate).
-        // Opens/closes the floating in-window PiP surface (WaveeShell → InWindowVideoPip); mutually exclusive with the
-        // detached pop-out window (turning it on closes the detached window if open — one swapchain per source).
-        if (active && hasVideo)
-            rightKids.Add(ToolTip.Wrap(
-                Transport(Icons.BackToWindow, () =>
+                    // Mutually exclusive with the in-window PiP: only one surface consumes the resolved source at a time.
+                    b.ShowInWindowPip.Value = false;
+                    // Resolve the now-playing track's playable video source (Spotify manifest → PopOutVideoSource) and
+                    // pop the video out into a detached, always-on-top window (its own AppHost + composited swapchain +
+                    // video presenter) that plays it (clear on the MF backend, DRM via the native CDM).
+                    b.RequestPopOutSource(track?.Uri);
+                    popout.Value = hooks?.OpenDetachedWindow?.Invoke(new DetachedWindowRequest(
+                        Loc.Get(Strings.Player.SwitchToVideo), new Size2(480, 270),
+                        new PopOutVideoWindow { Source = b.PopOutVideoSource }, AlwaysOnTop: true));
+                }
+                else { popout.Value?.Close(); popout.Value = null; }
+            }
+
+            // MENU action (verbatim from the old in-window PiP button): open the floating in-window mini-player
+            // (WaveeShell → InWindowVideoPip); mutually exclusive with the detached window (turning it on closes it).
+            void ShowMiniPlayerHere()
+            {
+                bool next = !b.ShowInWindowPip.Peek();
+                if (next)
                 {
-                    bool next = !b.ShowInWindowPip.Peek();
-                    if (next)
-                    {
-                        popout.Value?.Close(); popout.Value = null;   // close the detached pop-out (mutual exclusivity)
-                        b.PreferVideo.Value = false;                  // the detached toggle reflects the pop-out window state
-                        b.RequestPopOutSource(track?.Uri);            // resolve the source both surfaces read
-                        b.ShowInWindowPip.Value = true;
-                    }
-                    else b.ShowInWindowPip.Value = false;
-                }, true, b.ShowInWindowPip.Value, accent, buttonBox, buttonGlyph),
-                Loc.Get(b.ShowInWindowPip.Value ? Strings.Player.CloseVideo : Strings.Player.PlayVideoHere))
-                with { Key = "pip" });
+                    popout.Value?.Close(); popout.Value = null;   // close the detached pop-out (mutual exclusivity)
+                    b.PreferVideo.Value = false;                  // the detached toggle reflects the pop-out window state
+                    b.RequestPopOutSource(track?.Uri);            // resolve the source both surfaces read
+                    b.ShowInWindowPip.Value = true;
+                }
+                else b.ShowInWindowPip.Value = false;
+            }
+
+            // MENU action: tear down whichever surface is live (either window).
+            void CloseVideo()
+            {
+                popout.Value?.Close(); popout.Value = null;
+                b.PreferVideo.Value = false;
+                b.ShowInWindowPip.Value = false;
+            }
+
+            // The chevron opens the surface picker UPWARD out of the split button (bottom bar) via the overlay service —
+            // the same path DropDownButton/DevicesButton use (light-dismiss + focus-trap + the engine clip-reveal).
+            void OpenVideoMenu()
+            {
+                if (menuOverlay is not { } videoSvc) return;
+                if (videoMenu.Value is { IsOpen: true } open) { open.Close(); return; }
+                var items = new List<MenuFlyoutItem>(3)
+                {
+                    new(Loc.Get(Strings.Player.PlayVideoHere), Icons.BackToWindow, true, ShowMiniPlayerHere),
+                    new(Loc.Get(Strings.Player.SwitchToVideo), Icons.Movie, true, PopOutVideo),
+                };
+                if (b.PreferVideo.Value || b.ShowInWindowPip.Value)   // only offer "close" when a surface is actually live
+                    items.Add(new(Loc.Get(Strings.Player.CloseVideo), Icons.Cancel, true, CloseVideo));
+                videoMenu.Value = videoSvc.Open(
+                    () => videoAnchor.Value,
+                    () => MenuFlyout.Create(items, () => videoMenu.Value?.Close()),
+                    FlyoutPlacement.TopEdgeAlignedLeft,
+                    new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
+                videoMenu.Value.ClosedAction = () => videoMenu.Value = null;
+            }
+
+            // The two parts share ONE tight anchor container (no gap); the chevron portion is narrower than the primary.
+            rightKids.Add(new BoxEl
+            {
+                Key = "video", Direction = 0, AlignItems = FlexAlign.Center, Animate = ItemMotion,
+                OnRealized = h => videoAnchor.Value = h,
+                Children =
+                [
+                    ToolTip.Wrap(
+                        Transport(Icons.Movie, PopOutVideo, true, preferVideo, accent, buttonBox, buttonGlyph),
+                        Loc.Get(preferVideo ? Strings.Player.SwitchToAudio : Strings.Player.SwitchToVideo)),
+                    Transport(Icons.ChevronDownSmall, OpenVideoMenu, true, b.ShowInWindowPip.Value, accent,
+                        buttonBox * 0.55f, buttonGlyph * 0.62f),
+                ],
+            });
+        }
         if (showQueue)
             rightKids.Add(Transport(Icons.Queue, () => ui?.Toggle(RailMode.Queue), ui is not null,
                 ui?.RailOpen.Value == true && ui.Mode.Value == RailMode.Queue, accent, buttonBox, buttonGlyph)
