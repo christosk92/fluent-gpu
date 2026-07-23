@@ -282,7 +282,11 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
             _error.Value = $"Desktop PlayReady error 0x{unchecked((uint)s.ErrorHr):X8}.";
 
         // The backend DLL lives in THIS process, so this is the original handle. No OpenProcess/DuplicateHandle/IPC.
-        if (s.Handle != 0 && s.Handle != _boundHandle)
+        // Bind every pump (the registry value-gates a repeat). NOT guarded on `s.Handle == _boundHandle`: when the active
+        // window changes (inline ↔ detached pop-out) `binding` targets a DIFFERENT registry/token that must receive the
+        // handle — the clear MfMediaSession path binds unconditionally for the same reason. `_boundHandle` still tracks
+        // presence for HasSurface.
+        if (s.Handle != 0)
         {
             binding.Bind((nuint)s.Handle);
             _boundHandle = s.Handle;
