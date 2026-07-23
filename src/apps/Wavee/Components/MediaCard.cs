@@ -1011,7 +1011,18 @@ sealed class LazyNowPlayingOverlay : Component
         var active = UseSignal(false);
         UseSignalEffect(() =>
         {
-            var identity = bridge?.Identity.Value ?? default;
+            // Cold-path decoupling. Read the COARSE HasActiveContext bool FIRST and bail before touching the hot Identity
+            // signal: while nothing is playing no card can match (Matches is false with an empty context+track), so an idle
+            // overlay must NOT join Identity's ~70-way fanout nor run Matches. With the subscription-per-run model
+            // (ReactiveCore re-links sources each run), this early return leaves the effect subscribed to HasActiveContext
+            // ALONE while idle; when a context goes active every overlay's effect re-runs, reads Identity, and evaluates the
+            // precise match. (The hook itself still runs unconditionally each render — only its SUBSCRIPTIONS narrow.)
+            if (bridge is not { } b || !b.HasActiveContext.Value)
+            {
+                active.Value = false;
+                return;
+            }
+            var identity = b.Identity.Value;
             active.Value = NowPlayingOverlay.Matches(_uri, identity.ContextUri, identity.Track);
         });
 

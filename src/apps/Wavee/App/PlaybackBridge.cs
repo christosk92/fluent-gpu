@@ -104,6 +104,13 @@ public sealed class PlaybackBridge
     /// <summary>Atomic context + match-relevant track identity for high-fanout consumers. Prefer this over separately
     /// observing <see cref="CurrentTrack"/> and <see cref="CurrentContext"/> when only now-playing matching is needed.</summary>
     public Signal<PlaybackIdentity> Identity { get; } = new(default);
+    /// <summary>Coarse "is anything playing?" gate for the very-high-fanout now-playing matchers. True iff there is an
+    /// active context OR a current track — i.e. iff any card COULD match (see <c>NowPlayingOverlay.Matches</c>, which
+    /// returns false when both are empty). While idle (the common case at page-load, when ~70 card overlays mount at
+    /// once) a cold overlay subscribes to THIS one bool instead of the hot <see cref="Identity"/>, so it neither runs
+    /// <c>Matches</c> nor joins Identity's fanout until playback actually starts. Equality-gated by the signal setter, so
+    /// idle→idle refreshes never notify.</summary>
+    public Signal<bool> HasActiveContext { get; } = new(false);
     public Signal<bool> IsPlaying { get; } = new(false);
     public Signal<bool> IsBuffering { get; } = new(false);
     public Signal<PlaybackRecoveryKind> RecoveryKind { get; } = new(PlaybackRecoveryKind.None);
@@ -461,6 +468,9 @@ public sealed class PlaybackBridge
         RecomputeHasVideo();                                            // reflect the new track's cached video state (+ re-resolve if VideoActive)
         CurrentContext.Value = s.ContextUri;
         Identity.Value = new PlaybackIdentity(s.ContextUri, s.CurrentTrack);
+        // Coarse gate for the now-playing card overlays: true iff any card COULD match (mirrors NowPlayingOverlay.Matches,
+        // which is false when both context and track are empty). Equality-gated by the setter, so an idle→idle push is free.
+        HasActiveContext.Value = !string.IsNullOrEmpty(s.ContextUri) || s.CurrentTrack is not null;
         IsPlaying.Value = s.IsPlaying;
         IsBuffering.Value = s.IsBuffering;
         RecoveryKind.Value = s.RecoveryKind;
