@@ -237,11 +237,12 @@ void ResetModalContentOffset() { }
   and calls `_device.ResetModalContentOffset()` inside `EnsureSize` immediately before
   `_swapchain.Resize(s)` — the reset and the settle frame are then atomic from DWM's perspective
   (both land in the settle commit/present).
-- **Threading**: today WndProc, the frame loop, and Present all run on the **same thread**
-  (FluentApp.Run's loop thread; no render thread by default — AppHost.cs:1044-1053 requires
-  `FG_RENDER_THREAD`/`FG_RENDER_ASYNC`). So direct calls are confinement-safe and the v1
-  `ModalPresentationQueue` is unnecessary **now**. Record in `threading-render-seam.md`: if/when the
-  async render thread ships, these two calls become render-confined and need an SPSC job + explicit
+- **Threading**: the async render thread is now the default (2026-07-23), BUT modal keep-alive paints
+  (`WM_TIMER` / throttled `WM_SIZE`) still run `AppHost.Paint` — including `Present` — **inline on the
+  WndProc thread**, which is the presenting thread for those ticks; no frames publish to the render thread
+  mid-drag. So direct DComp calls remain confinement-safe during the modal loop and the v1
+  `ModalPresentationQueue` is unnecessary. Recorded in `threading-render-seam.md`: these two calls are
+  render-confined and, if a keep-alive tick ever needs to reach the render thread, need an SPSC job + explicit
   render-thread wake (a frame-publish-drain is NOT sufficient — no frames publish mid-drag, so jobs
   would starve; this was a latent flaw in the v1 queue design too).
 - **Honest caveat**: DWM moves the window immediately; our commit lands one composition frame later →
@@ -304,29 +305,28 @@ it adds a thread hop, a second failure surface (quiesce/resume rendezvous around
 AppHost.cs:2259-2264), and device confinement asserts, for nothing the user can feel. Spawning it by
 default is risk without reward.
 
-The mode that *would* matter for resize (and everything else) is **async** (`FG_RENDER_ASYNC`), which
-is deliberately default-off: presenting from the render thread to the DComp-composited swapchain
-produces a documented DIM/wrong on-screen composite (AppHost.cs:241-252). The correct successor work
-item — **outside this plan** — is root-causing that composite bug (prime suspects: DComp device
-bind/commit thread affinity vs. the `BindDComp`-on-presenting-thread contract, D3D12Device.cs:595-614,
-and premultiplied-alpha handling). Until then, defer means there are no mid-drag presents to
-parallelize anyway.
+The mode that matters for resize (and everything else) is **async**, which — **as of 2026-07-23 — is now
+the DEFAULT** for every real windowed host (there is no longer an `FG_RENDER_ASYNC` flag; see below). The
+dim-composite bug that once held it off (presenting from the render thread to the DComp-composited swapchain
+produced a DIM/wrong on-screen composite) was root-caused and fixed: `BindDComp` is deferred to the
+presenting thread's first present (`D3D12Device.cs:626-679`), satisfying the `BindDComp`-on-presenting-thread
+contract. Re-verified 2026-07-23 with on-screen desktop captures + a 4-minute resize/scroll soak (zero
+device-lost).
 
-**Env-flag disposition (per §12)**: `FG_RENDER_THREAD` and `FG_RENDER_ASYNC` are deleted *now*, not
-kept dormant. The seam itself must stay testable (the race gates and the future async workstream need
-it), so the spawn decision moves to an internal constructor option:
+**Env-flag disposition (per §12) — LANDED 2026-07-23**: `FG_RENDER_THREAD` and `FG_RENDER_ASYNC` are
+deleted. The seam stays testable (the race gates and async workstream need it), so the mode decision is an
+internal constructor override:
 
 ```csharp
-internal enum RenderLoopMode : byte { Inline, ForceSync, Async }
-// AppHost ctor gains: internal AppHost(..., RenderLoopMode renderLoop = RenderLoopMode.Inline)
+internal enum RenderLoopMode { SingleThread, ForceSync, Async }   // as landed (SingleThread == the old "Inline")
+// AppHost public ctor delegates to: internal AppHost(..., RenderLoopMode? loopModeOverride)
 ```
 
-`FluentApp.Run` always passes the default (`Inline` — today's shipped behavior); the VerticalSlice
-exercises `ForceSync`/`Async` directly for the seam gates (it already refs Engine internals via the
-same assembly boundary — if not, add `InternalsVisibleTo("FluentGpu.VerticalSlice")`). When the async
-composite bug is fixed and its gates are green, flip the *default* to `Async` and delete `Inline` —
-one experience, no fork left behind. `WaveeResizeProbe.cs:92` reads `FG_RENDER_ASYNC` today and must
-be updated with this change.
+`AppHost` resolves the mode itself: a Headless window is always `SingleThread` (deterministic gates); a real
+windowed host defaults to `Async` (the flipped default). `FluentApp.Run` passes nothing (⇒ `Async`). The
+VerticalSlice / Windows.Tests reach `ForceSync` via the internal ctor override (existing `InternalsVisibleTo`).
+`WaveeResizeProbe.cs` no longer reads the env flag — it reads the host's actual mode via the public
+`AppHost.IsAsyncRenderActive`.
 
 ---
 
@@ -543,7 +543,7 @@ must be identical for identical inputs regardless of environment. Full inventory
 | Flag | Site(s) | Disposition |
 | --- | --- | --- |
 | `FG_LIVE_MODAL_RESIZE` | Win32Platform.cs:458, AppHost.cs:240 | Deleted (Phase 1) |
-| `FG_RENDER_THREAD`, `FG_RENDER_ASYNC` | AppHost.cs:244/252 | Deleted → internal `RenderLoopMode` ctor option (§5); update the `FG_RENDER_ASYNC` read in `WaveeResizeProbe.cs:92` |
+| `FG_RENDER_THREAD`, `FG_RENDER_ASYNC` | AppHost.cs:244/252 | **Deleted ✓ (2026-07-23)** → internal `RenderLoopMode { SingleThread, ForceSync, Async }` ctor override (§5); async is the default for real windowed hosts, headless stays SingleThread. `WaveeResizeProbe` now reads the public `AppHost.IsAsyncRenderActive` instead of the flag |
 | `FG_NOVSYNC` | D3D12Device.cs:45 | Deleted → API: `D3D12Device` ctor param / device method; bench probes get the device via the `FluentApp.DiagnosticRun` seam and call it in code |
 | `FG_DETACHED_FLY` | ConnectedAnimation.cs:66 | **Decision run, no dormant fork**: enable, run VerticalSlice + visual captures; promote (delete the old path) or delete the detached rebuild. Update the CLAUDE.md sentence that documents it |
 | `FG_ANIM_FPS` | AppHost.cs:529, FluentApp.cs:119 | Deleted — this one is an env var abused as an *intra-process parameter channel* (FluentApp checks it to decide whether its own `ambientFps` param may seed the host). The real API already exists: `FluentApp.Run(ambientFps:)` → `AppHost.AmbientAnimationFps`. Default 30 becomes a const |

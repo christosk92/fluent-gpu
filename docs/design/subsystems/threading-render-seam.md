@@ -45,6 +45,15 @@ And the blunt operational truth carried from the plan: **production safety == CI
 from the shipping NativeAOT binary, so in the customer's hands these hazards are caught by the corpus the
 team maintained, not by the running app.
 
+> **Landed (2026-07-23) — async is DEFAULT-ON; env flags removed.** The Step 5 async flip is landed and is now the
+> **default for every real windowed host** (`AppHost` selects `RenderLoopMode.Async`; a Headless window stays
+> `RenderLoopMode.SingleThread` so the VerticalSlice gates are deterministic). The `FG_RENDER_THREAD` and
+> `FG_RENDER_ASYNC` env flags are **deleted** — there is no runtime toggle. `RenderLoopMode.ForceSync` (render thread,
+> UI blocks in `DrainSync`) survives only as an internal `AppHost` constructor override for seam tests/probes; nothing
+> selects it by default. The 2026-07-03 dim-composite defect that once held async off is fixed (BindDComp deferred to the
+> presenting thread's first present) and re-verified 2026-07-23 with on-screen desktop captures + a 4-minute resize/scroll
+> soak (zero device-lost). The staged-landing narrative below is kept as history.
+
 > **Implementation note (2026-07-01) — landing as Cut A.** Per `docs/plans/render-thread-seam-landing-plan.md` §2 the
 > seam is being landed as **Cut A (submit-only)**: the per-frame carrier is a `RenderFrame` naming a finished DrawList in
 > a `DrawListArenaRing`, and **record stays on the UI thread** (already sub-ms + zero-alloc; the measured stall is in
@@ -58,9 +67,11 @@ team maintained, not by the running app.
 > **Modal move/size (butter-smooth resize v2).** Today **`WndProc == the presenting thread`**: keep-alive modal paints
 > (`WM_TIMER` / throttled `WM_SIZE`) call `AppHost.Paint` inline on that thread, including `Present()` and any
 > one-shot `HintSettlePresent`/`DwmFlush` on settle. The WndProc budget invariant therefore applies directly — modal
-> ticks must stay sub-ms on the UI thread. When `FG_RENDER_THREAD`/`FG_RENDER_ASYNC` are enabled, **DirectComposition
-> calls (`SetOffset`, `Commit`, `BindDComp`) remain confined to whichever thread presents**; a future async render thread
-> must not touch DComp from the WndProc without an explicit SPSC wake (see `pal-rhi.md` §1.2 modal table).
+> ticks must stay sub-ms on the UI thread. Under the async render loop (now the default; formerly behind the removed
+> `FG_RENDER_THREAD`/`FG_RENDER_ASYNC` flags), **DirectComposition calls (`SetOffset`, `Commit`, `BindDComp`) remain
+> confined to whichever thread presents** — this is exactly the deferral that fixed the dim-composite defect (`BindDComp`
+> runs on the render thread's first present); the WndProc must not touch DComp without an explicit SPSC wake (see
+> `pal-rhi.md` §1.2 modal table).
 
 ---
 

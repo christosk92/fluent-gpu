@@ -227,9 +227,9 @@ public sealed class AppHost : IDisposable
     // submit, no behaviour/perf change. This only establishes the seam SHAPE so the later (soak-gated) render-thread
     // spawn — which moves submit/present/the GPU fence-wait stall off the UI thread — is an additive change, not a rewrite.
     private readonly Threading.SceneFramePublisher _renderSeam = new();
-    // STEP 4 (force-sync): the dedicated render thread, constructed only when FG_RENDER_THREAD is set. null ⇒ the Step-1
-    // single-thread inline pass-through (the default shipping path). It runs submit/present off the UI thread but the UI
-    // still blocks on it (no async overlap until the soak-gated Step 5 flip).
+    // The dedicated render thread, constructed for a real windowed host (mode Async — the default — or ForceSync). null ⇒
+    // the SingleThread inline pass-through (headless, and the internal SingleThread override). It runs submit/present off
+    // the UI thread; under ForceSync the UI still blocks on it (no async overlap), under Async it presents on its own timeline.
     private readonly Threading.RenderThread? _renderThread;
     // Step 1 (ASYNC only): the image upload/evict handoff. Non-null ⇒ ImageCache hands GPU work to the render thread
     // through this queue (drained in SubmitPresentOnRenderThread before submit) instead of touching the device on the UI
@@ -247,11 +247,22 @@ public sealed class AppHost : IDisposable
     private readonly DeviceLostFrameSnapshot[] _deviceLostFrames = new DeviceLostFrameSnapshot[DeviceLostFrameRingSize];
     private int _deviceLostFrameSeq;
     private int _deviceLostRecoveryCount;
-    // The effective async gate: s_renderAsync AND a REAL (non-headless) GPU backend. The render thread offloads real GPU
+    // The resolved render-loop mode for THIS host (see RenderLoopMode). Real windowed hosts default to Async; a Headless
+    // window is forced to SingleThread so the VerticalSlice gates stay deterministic; ForceSync is reachable only via the
+    // internal constructor override (seam tests/probes). Detached children keep this mode but never spawn their OWN thread.
+    private readonly RenderLoopMode _loopMode;
+    // The effective async gate: mode == Async AND a REAL (non-headless) GPU backend. The render thread offloads real GPU
     // submit/present; a headless (test) backend has none, and its device seam methods (DrainImageJobs/RecoverDevice/…) are
-    // no-ops — so headless always stays on the deterministic synchronous inline path regardless of the flag. Every async
-    // branch keys off THIS, not s_renderAsync directly, so the VerticalSlice headless gates are unperturbed by the flip.
+    // no-ops — so headless always stays on the deterministic synchronous inline path. Every async branch keys off THIS, not
+    // the raw mode, so the VerticalSlice headless gates are unperturbed. Exposed via LoopMode for host-actual-mode probes.
     private readonly bool _asyncActive;
+    /// <summary>The resolved render-loop mode this host is running (Async is the default for real windowed hosts). Used by
+    /// in-assembly / IVT diagnostics that need the host's ACTUAL mode rather than a removed env flag.</summary>
+    internal RenderLoopMode LoopMode => _loopMode;
+    /// <summary>True when this host runs the async render loop (the default for a real windowed host; never headless). The
+    /// public read of the host's actual mode for app-side diagnostics/probes (e.g. WaveeResizeProbe) — replaces the removed
+    /// FG_RENDER_ASYNC env flag, so probe behavior keys off the host's real state, not an env var.</summary>
+    public bool IsAsyncRenderActive => _asyncActive;
     private readonly InputDispatcher _dispatcher;
     private readonly InputEventRing _ring = new();
     private readonly IFrameTimeSource _frameTime;
@@ -369,18 +380,18 @@ public sealed class AppHost : IDisposable
     // One [motion-diag] line per reconciling frame (capture summary) + one per captured node in ApplyProjections (branch OUTCOME)
     // + AnimEngine seed/snap lines + per-frame structural tick values. Entirely gated — no work, no allocation, when the flag is off.
     private static readonly bool s_motionDiag = Diag.EnvFlag("FG_MOTION_DIAG");
-    // Render-thread seam rollout gate (Step 4/5), default OFF: FG_RENDER_THREAD spawns the fgpu-render thread and routes
-    // submit/present onto it (FORCE-SYNC in Step 4 — the UI still blocks). The engine ships the proven single-thread
-    // inline path until the seam.race soak is green; this flag is the staged flip mechanism, not a user quality knob.
-    private static readonly bool s_renderThread = Diag.EnvFlag("FG_RENDER_THREAD");
-    // Step 5 async flip — REVERTED TO DEFAULT-OFF (opt-in FG_RENDER_ASYNC=1). Async correctly decouples the UI from the
-    // GPU (the back buffer renders byte-identically — proven by --screenshot), BUT presenting from the render thread to
-    // the DComp-composited swapchain produces a DIM/wrong ON-SCREEN composite (a desktop capture shows it, though the
-    // back-buffer CaptureBgra passes — the blind spot that hid it). Until that on-screen present path is fixed, async
-    // ships OFF: the proven single-thread inline path renders correctly. The Step 1-4 machinery stays wired for opt-in
-    // debugging. (Separately: the lyrics choppiness this was meant to fix is GPU-bound — the DoF blur exceeds the vblank —
-    // which async would not have fixed regardless; that needs a DoF cost reduction, not a threading change.)
-    private static readonly bool s_renderAsync = Diag.EnvFlag("FG_RENDER_ASYNC");
+    // Render-thread seam — LANDED, async is the DEFAULT for real windowed hosts (RenderLoopMode.Async; headless stays
+    // SingleThread). There is no env flag: FG_RENDER_THREAD and FG_RENDER_ASYNC were removed on 2026-07-23. ForceSync
+    // survives only as an internal constructor override (seam tests/probes); nothing selects it by default.
+    //
+    // Historical note (the 2026-07-03 defect that once held async OFF): presenting from the render thread to the DComp-
+    // composited swapchain produced a DIM/wrong ON-SCREEN composite while the back-buffer CaptureBgra passed (the blind
+    // spot that hid it). ROOT CAUSE + FIX: BindDComp must run on the PRESENTING thread — deferring the DComp bind to the
+    // render thread's first present (D3D12Device.cs:626-679) fixes the dim composite. Re-verified 2026-07-23 with on-screen
+    // desktop captures + a 4-minute resize/scroll soak (zero device-lost). Windowed out-of-bounds popups use the in-window
+    // clamped fallback under async (see PopupWindowsEnabled below); detached child hosts ride the PARENT's render thread
+    // (they never spawn their own — the shared device is render-confined). (Aside: the lyrics choppiness async was once
+    // meant to fix is GPU-bound — the DoF blur exceeds the vblank — a DoF cost reduction, not a threading change.)
     private readonly WakeDiagnostics? _wakeDiag;
     private readonly MemCensus? _memCensus;
 
@@ -531,11 +542,11 @@ public sealed class AppHost : IDisposable
         contentDirty = !c.IsNull && _scene.IsLive(c) && (_scene.Flags(c) & NodeFlags.TransformDirty) != 0;
     }
 
-    // Runs ON the fgpu-render thread (bound Render) when FG_RENDER_THREAD / FG_RENDER_ASYNC is set — the sole toucher of
-    // the device/swapchain ComPtrs for submit+present in that mode. Reads the frame's bytes from the publisher's per-slot
-    // arena (PickFreeSlot guarantees the UI is not writing that slot). Force-sync (Step 4) blocks the UI in DrainSync;
-    // async (Step 5) presents on its own timeline. Device/swapchain CREATION + UploadImage staging + resize/device-lost
-    // are still UI-side — the documented async residuals (landing plan §9); force-sync makes those splits safe meanwhile.
+    // Runs ON the fgpu-render thread (bound Render) whenever one exists (mode Async — the default — or ForceSync) — the sole
+    // toucher of the device/swapchain ComPtrs for submit+present in that mode. Reads the frame's bytes from the publisher's
+    // per-slot arena (PickFreeSlot guarantees the UI is not writing that slot). ForceSync blocks the UI in DrainSync; Async
+    // presents on its own timeline. Device/swapchain CREATION + UploadImage staging + resize/device-lost are still UI-side —
+    // the documented async residuals (landing plan §9); ForceSync makes those splits safe meanwhile.
     /// <summary>Stop + join the fgpu-render thread so the UI thread becomes the SOLE GPU-ComPtr owner again — required
     /// before a one-shot UI-thread GPU op like <c>CaptureBgra</c> (--screenshot), which resets the command allocator +
     /// fence the render thread is otherwise using (the async capture race). No-op when no render thread; the host must
@@ -604,7 +615,7 @@ public sealed class AppHost : IDisposable
     {
         int seq = ++_deviceLostFrameSeq;
         var size = _window.ClientSizePx;
-        int mode = _asyncActive ? 2 : (_renderThread is null ? 0 : 1);
+        int mode = (int)_loopMode;   // 0/1/2 = single/force-sync/async (RenderLoopMode values are load-bearing here)
         _deviceLostFrames[(seq - 1) % DeviceLostFrameRingSize] = new DeviceLostFrameSnapshot(
             seq, _frameOrdinal, mode, (int)MathF.Round(size.Width), (int)MathF.Round(size.Height),
             _window.Scale, clicks, _tracePumpedEvents, keepAlive, resized, reconciled, layoutNeeded, transformWrote,
@@ -1246,13 +1257,31 @@ public sealed class AppHost : IDisposable
                    StringTable strings, Component root, ImageCache? images = null, IFrameTimeSource? frameTime = null,
                    ScrollTuning? scrollTuning = null, bool compositeSwapchain = false, bool isDetachedChild = false,
                    Threading.RenderThread? parentRenderThread = null)
+        : this(app, window, device, fonts, strings, root, images, frameTime, scrollTuning, compositeSwapchain,
+               isDetachedChild, parentRenderThread, loopModeOverride: null) { }
+
+    // Internal ctor carrying the render-loop mode override. loopModeOverride is the ONLY way to request ForceSync (or pin
+    // SingleThread) — there is no env var; nothing selects ForceSync by default. Reachable from the IVT seam tests/probes
+    // (FluentGpu.VerticalSlice / FluentGpu.Windows.Tests) so they can exercise the threaded submit path without the async
+    // timeline. A Headless window ignores the override and stays SingleThread (the deterministic gate path). The public
+    // ctor above delegates here with null (⇒ Async for a real windowed host — the landed default).
+    internal AppHost(IPlatformApp app, IPlatformWindow window, IGpuDevice device, IFontSystem fonts,
+                     StringTable strings, Component root, ImageCache? images, IFrameTimeSource? frameTime,
+                     ScrollTuning? scrollTuning, bool compositeSwapchain, bool isDetachedChild,
+                     Threading.RenderThread? parentRenderThread, RenderLoopMode? loopModeOverride)
     {
         _app = app;
         _fonts = fonts;
         _isDetachedChild = isDetachedChild;
         _parentRenderThread = parentRenderThread;   // detached child: route presents through the parent's single render thread
         _window = window;
-        _asyncActive = s_renderAsync && window.Handle.Kind != NativeHandleKind.Headless;   // headless never goes async (see field)
+        // Render-loop mode decision: a Headless window is ALWAYS SingleThread (the deterministic path the slice/gates need);
+        // a real windowed host defaults to Async (the landed default). loopModeOverride is the internal-only escape hatch —
+        // seam tests/probes pass ForceSync (or SingleThread) explicitly; it never forces a Headless window off SingleThread.
+        _loopMode = window.Handle.Kind == NativeHandleKind.Headless
+            ? RenderLoopMode.SingleThread
+            : (loopModeOverride ?? RenderLoopMode.Async);
+        _asyncActive = _loopMode == RenderLoopMode.Async && window.Handle.Kind != NativeHandleKind.Headless;   // headless never goes async (see field)
         // Step 3 (async): windowed out-of-bounds popups submit + present on the UI thread (RecordPopupWindows), sharing
         // the one device/queue/fence/command-list with the render thread — a concurrent submit source that would race the
         // async loop and defeat the device-level submit/present confinement assert. Gate them OFF under async: flyouts/menus
@@ -1549,15 +1578,15 @@ public sealed class AppHost : IDisposable
         // (the drag-start / live-resize hitch). Live resize still paints synchronously; it just no longer blocks.
         _window.PaintRequested = () => Paint(0, keepAlive: true);
 
-        // Render-thread seam (Step 4, force-sync): spawn the fgpu-render thread that runs submit/present off the UI
-        // thread. Default OFF — ships single-thread until the seam.race soak is green. The thread just waits on its wake
-        // event until the first Paint drains it, so constructing it here (before the first frame) is safe.
-        // Spawn the render thread ONLY for a real (non-headless) backend — headless has no GPU work to offload and its
-        // device seam methods are no-ops, so it stays on the deterministic synchronous inline path.
+        // Render-thread seam: spawn the fgpu-render thread that runs submit/present off the UI thread. This is the DEFAULT
+        // for a real windowed host (mode Async — present on its own timeline; or the internal ForceSync — the UI blocks in
+        // DrainSync). The thread just waits on its wake event until the first Paint drains it, so constructing it here
+        // (before the first frame) is safe. A Headless window stays SingleThread (no render thread) — no GPU work to offload
+        // and its device seam methods are no-ops — so the deterministic synchronous inline path is preserved for the gates.
         // A detached CHILD host NEVER spawns its own render thread: the shared device is render-confined (ONE submit/present
         // owner), so a second thread would race the single _cmdList/_queue/_fence undetected. The child instead routes its
         // present through the parent's thread (_parentRenderThread), which drains the child seam via DrainChildRenderSources.
-        if ((s_renderThread || s_renderAsync) && window.Handle.Kind != NativeHandleKind.Headless && !_isDetachedChild)
+        if (_loopMode is (RenderLoopMode.ForceSync or RenderLoopMode.Async) && window.Handle.Kind != NativeHandleKind.Headless && !_isDetachedChild)
         {
             // Step 4: under async, wire the device-lost recovery rendezvous — arm the backend to SIGNAL loss (not throw on
             // the render thread) + bound its fence waits, and give the render loop a recover gate (_device.RecoverDevice
@@ -2295,10 +2324,10 @@ public sealed class AppHost : IDisposable
             else
             {
                 // Render-thread seam (Cut A): the UI records into _drawList and PUBLISHes it (copied into a FREE slot's
-                // render-readable arena — PickFreeSlot makes the arena reuse safe for every mode). Step 1 (inline,
-                // default): the UI submits from the acquired arena — byte-identical to a direct submit. Step 4
-                // (FG_RENDER_THREAD): the fgpu-render thread submits/presents; the UI BLOCKS in DrainSync (force-sync).
-                // Step 5 (FG_RENDER_ASYNC): the UI WakeAsyncs and PROCEEDS — the render thread presents on its own
+                // render-readable arena — PickFreeSlot makes the arena reuse safe for every mode). SingleThread (inline,
+                // headless / internal override): the UI submits from the acquired arena — byte-identical to a direct submit.
+                // ForceSync: the fgpu-render thread submits/presents; the UI BLOCKS in DrainSync. Async (the default):
+                // the UI WakeAsyncs and PROCEEDS — the render thread presents on its own
                 // timeline (the smoothness win: the GPU fence-wait no longer bounds back to the UI thread).
                 var submitInfo = new FrameInfo(FrameSizePx(keepAlive), _window.Scale, Clear, recordStats.Damage, _images.ClockMs, _damageEpoch);
                 if (resized && keepAlive) _device.HintSettlePresent();

@@ -320,10 +320,10 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     }
 
     // Render-thread-seam confinement tripwire (seam Step 0). Armed (via MarkRenderConfined) once the render thread owns
-    // submit/present — i.e. when AppHost spawns it for FG_RENDER_THREAD (force-sync) or FG_RENDER_ASYNC. While armed, a
-    // SubmitDrawList/Present from any thread but Render throws deterministically UNDER FGGUARD, so a stray UI-side GPU
-    // touch in async is caught in CI, never shipped. Inert in the default single-thread build (_renderConfined stays
-    // false ⇒ the assert is a no-op), and the whole thing erases in Release (the [Conditional] + ThreadGuard vanish).
+    // submit/present — i.e. when AppHost spawns it for a real windowed host (mode Async — the default — or ForceSync).
+    // While armed, a SubmitDrawList/Present from any thread but Render throws deterministically UNDER FGGUARD, so a stray
+    // UI-side GPU touch in async is caught in CI, never shipped. Inert on the SingleThread path (headless / internal
+    // override — _renderConfined stays false ⇒ the assert is a no-op); the whole thing erases in Release (the [Conditional] + ThreadGuard vanish).
     private bool _renderConfined;
     public void MarkRenderConfined() => _renderConfined = true;
     [System.Diagnostics.Conditional("FGGUARD")]

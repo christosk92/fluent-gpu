@@ -302,7 +302,7 @@ public static class FluentApp
         // --screenshot: read the last-rendered back buffer back to CPU and write a PNG for visual fidelity diffing.
         if (h.Screenshot is { } shotPath && device is D3D12Device d3d)
         {
-            host.QuiesceRenderThread();   // async (FG_RENDER_ASYNC): stop the render thread so CaptureBgra (a UI-thread GPU op) is the sole GPU owner
+            host.QuiesceRenderThread();   // async (the default): stop the render thread so CaptureBgra (a UI-thread GPU op) is the sole GPU owner
             var px = d3d.CaptureBgra(out int cw, out int ch);
             PngWriter.WriteBgra(shotPath, px, cw, ch);
             Console.Error.WriteLine($"screenshot: wrote {shotPath} ({cw}x{ch})");

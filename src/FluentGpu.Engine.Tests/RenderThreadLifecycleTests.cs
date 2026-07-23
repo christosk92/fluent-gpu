@@ -7,7 +7,7 @@ namespace FluentGpu.Engine.Tests;
 /// <summary>
 /// Focused coverage for the render-thread seam's shutdown + detached-window routing (the async-render-flip work). The
 /// full AppHost render thread is NOT constructible headlessly — AppHost gates the spawn on a non-headless window kind
-/// (AppHost.cs), so NEITHER force-sync (FG_RENDER_THREAD) NOR async (FG_RENDER_ASYNC) spawns one under a HeadlessWindow.
+/// (AppHost.cs), so a HeadlessWindow is always RenderLoopMode.SingleThread and never spawns one (neither ForceSync nor Async).
 /// These tests therefore exercise the seam primitives directly (RenderThread + SceneFramePublisher), which is exactly
 /// the machinery Change 1 (deterministic stop+join on close) and Change 2 (parent-thread child drain) are built on.
 /// Live verification of an actual pop-out under async is separate (needs a real GPU/DRM runtime).
