@@ -105,6 +105,28 @@ public sealed class PlaybackBridge
     /// confirms it) populates it. Reset to null on every track change.</summary>
     public Signal<Wavee.SpotifyLive.PopOutVideoSource?> PopOutVideoSource { get; } = new(null);
 
+    /// <summary>The video-resolution delegate (track uri → a playable <c>PopOutVideoSource</c>), wired by the live
+    /// bootstrap to <c>SpotifyVideoService.ResolvePlayableAsync</c>; null on the fake/offline backend. Off the UI thread.</summary>
+    public System.Func<string, System.Threading.CancellationToken, System.Threading.Tasks.Task<Wavee.SpotifyLive.PopOutVideoSource?>>? ResolveVideoSource;
+
+    /// <summary>Kick off (fire-and-forget) resolving the pop-out video source for <paramref name="trackUri"/> and publish
+    /// it onto <see cref="PopOutVideoSource"/> on the UI thread. No-op before <see cref="Activate"/> / without a resolver
+    /// (fake backend) — the pop-out then just shows the letterbox until a source arrives.</summary>
+    public void RequestPopOutSource(string? trackUri)
+    {
+        if (ResolveVideoSource is not { } resolve || string.IsNullOrEmpty(trackUri) || _post is not { } post) return;
+        _ = ResolveAndPublishAsync(resolve, trackUri!, post);
+    }
+
+    async System.Threading.Tasks.Task ResolveAndPublishAsync(
+        System.Func<string, System.Threading.CancellationToken, System.Threading.Tasks.Task<Wavee.SpotifyLive.PopOutVideoSource?>> resolve,
+        string uri, System.Action<System.Action> post)
+    {
+        Wavee.SpotifyLive.PopOutVideoSource? src = null;
+        try { src = await resolve(uri, default).ConfigureAwait(false); } catch { /* resolution failure → no source (pop-out stays letterbox) */ }
+        post(() => PopOutVideoSource.Value = src);
+    }
+
     /// <summary>Monotonic "open the device picker" request. The critical "playback unsupported" toast's <em>Choose device</em>
     /// action bumps it; the player-bar <c>DevicesButton</c> watches it and opens its flyout.</summary>
     public Signal<int> DevicePickerRequest { get; } = new(0);

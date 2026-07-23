@@ -489,8 +489,10 @@ sealed class PlayerBarContent : Component
                     b.PreferVideo.Value = next;
                     if (next)
                     {
-                        // Pop the video out into a detached, always-on-top window (its own AppHost + composited swapchain +
-                        // video presenter). It plays PopOutVideoUrl on the clear MF backend; the DRM/Canvas resolver fills it.
+                        // Resolve the now-playing track's playable video source (Spotify manifest → PopOutVideoSource) and
+                        // pop the video out into a detached, always-on-top window (its own AppHost + composited swapchain +
+                        // video presenter) that plays it (clear on the MF backend, DRM via the native CDM).
+                        b.RequestPopOutSource(track?.Uri);
                         popout.Value = hooks?.OpenDetachedWindow?.Invoke(new DetachedWindowRequest(
                             Loc.Get(Strings.Player.SwitchToVideo), new Size2(480, 270),
                             new PopOutVideoWindow { Source = b.PopOutVideoSource }, AlwaysOnTop: true));
