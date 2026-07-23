@@ -545,6 +545,12 @@ public sealed class AppHost : IDisposable
             _device.SubmitDrawList(_renderSeam.Bytes(rf), _renderSeam.SortKeys(rf), in rf.Submit, _swapchain);
             _swapchain.Present();
             NotePresented();
+            // 11.5 (threaded) — the video hole-punch drain rides THIS present turn on the presenting thread, mirroring
+            // the sync path's after-present ordering (AppHost.Paint phase 11.5). Both GetVideoPresenter and every
+            // presenter call assert the render/submit thread when render-confined, so the drain MUST run here, not
+            // UI-side; the UI-side call at phase 11.5 is skipped whenever a render thread exists. Uses the FRAME's scale
+            // (rf.Submit.Scale) rather than the live _window.Scale — the drain must place video for the frame it presents.
+            if (_device.GetVideoPresenter(_swapchain) is { } vp) _videoSurfaces.Drain(vp, rf.Submit.Scale);
         }
         catch (System.Exception) when (_asyncActive)
         {
@@ -2235,7 +2241,10 @@ public sealed class AppHost : IDisposable
             // registry short-circuits when nothing is dirty. Targets THIS host's OWN swapchain's presenter (not the
             // device primary), so a second AppHost driving a detached video window composites into ITS window's DComp
             // root — for the primary host `_swapchain` IS the primary, so this is behaviorally identical there.
-            if (_device.GetVideoPresenter(_swapchain) is { } vp) _videoSurfaces.Drain(vp, _window.Scale);
+            // Only on the pure single-thread path: the UI thread IS the presenting thread here. In threaded modes
+            // (force-sync + async, `_renderThread is not null`) both GetVideoPresenter and the presenter are
+            // render-thread-confined, so the drain rides SubmitPresentOnRenderThread instead (same after-present turn).
+            if (_renderThread is null && _device.GetVideoPresenter(_swapchain) is { } vp) _videoSurfaces.Drain(vp, _window.Scale);
 
             DrainPassiveEffects();                             // 12 passive effects
             _strings.Tick();                                   // 12.5 reclaim released text ids (behind the reader quarantine)
