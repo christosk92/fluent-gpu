@@ -2044,8 +2044,10 @@ public sealed class AppHost : IDisposable
             // 11.5 — flush queued video-surface intents into the composited presenter (render thread; the hole-punch
             // rides this same frame turn). GUARDED on a non-null presenter, so it is a no-op on the headless seam and on
             // an opaque (non-composited) window — the zero-alloc gates never execute this path. Internally cheap: the
-            // registry short-circuits when nothing is dirty.
-            if (_device.VideoPresenter is { } vp) _videoSurfaces.Drain(vp, _window.Scale);
+            // registry short-circuits when nothing is dirty. Targets THIS host's OWN swapchain's presenter (not the
+            // device primary), so a second AppHost driving a detached video window composites into ITS window's DComp
+            // root — for the primary host `_swapchain` IS the primary, so this is behaviorally identical there.
+            if (_device.GetVideoPresenter(_swapchain) is { } vp) _videoSurfaces.Drain(vp, _window.Scale);
 
             DrainPassiveEffects();                             // 12 passive effects
             _strings.Tick();                                   // 12.5 reclaim released text ids (behind the reader quarantine)
