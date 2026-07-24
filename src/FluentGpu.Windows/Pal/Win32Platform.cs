@@ -258,6 +258,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     // fire" with evidence instead of guesses.
     private static readonly bool s_ncDiag =
         System.Environment.GetEnvironmentVariable("FG_NC_DIAG") is "1" or "true";
+    // Default-on production path; FG_PRECISE_WAIT=0 is the same-binary A/B/fallback switch.
+    private static readonly bool s_preciseWait =
+        System.Environment.GetEnvironmentVariable("FG_PRECISE_WAIT") != "0";
 
     private const uint CS_VREDRAW = 0x0001, CS_HREDRAW = 0x0002;
     private const uint WS_OVERLAPPEDWINDOW = 0x00CF0000;
@@ -271,6 +274,10 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private const uint PM_REMOVE = 0x0001;
     private const uint QS_ALLINPUT = 0x04FF;
     private const uint MWMO_INPUTAVAILABLE = 0x0004;
+    private const uint CREATE_WAITABLE_TIMER_HIGH_RESOLUTION = 0x00000002; // Windows 10 1803+
+    private const uint TIMER_MODIFY_STATE = 0x0002;
+    private const uint SYNCHRONIZE = 0x00100000;
+    private const uint WAIT_FAILED = 0xFFFFFFFF;
     private const int GWLP_USERDATA = -21;
     private const int IDC_ARROW = 32512;
     private const uint SWP_NOMOVE = 0x0002, SWP_NOZORDER = 0x0004, SWP_NOACTIVATE = 0x0010;
@@ -480,6 +487,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private bool _windowedWasZoomed;
     private nint _windowedStyle;
     private RECT _windowedRect;
+    private HANDLE _preciseWaitTimer;       // lazy one-shot timer for display-rate waits
+    private bool _preciseWaitUnavailable;   // sticky creation failure => plain timeout forever
     private bool _wasZoomed;      // WM_SIZE edge-detect → InputKind.WindowStateChanged
     private bool _inMoveSizeLoop; // WM_ENTERSIZEMOVE..WM_EXITSIZEMOVE modal loop
     private bool _sizedInMoveSizeLoop; // true once this modal loop has delivered WM_SIZE (edge resize, not pure titlebar move)
@@ -1028,8 +1037,55 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
 
     public void WaitForWork(int timeoutMs)
     {
+        // MsgWaitForMultipleObjectsEx's millisecond timeout is quantized by the system timer. On this 120-Hz device a
+        // requested 7 ms display-rate wait repeatedly took ~12-13 ms, limiting an otherwise 0.3 ms scroll frame to
+        // ~80 fps. A high-resolution waitable timer preserves the same "message OR deadline" contract without
+        // timeBeginPeriod's process-wide interrupt-rate/battery cost. Infinite/zero and long idle waits keep the plain
+        // path; only short animation/pacing waits need sub-tick precision.
+        if (s_preciseWait && timeoutMs > 0 && timeoutMs <= 50 && TryEnsurePreciseWaitTimer())
+        {
+            LARGE_INTEGER due;
+            due.QuadPart = -(long)timeoutMs * 10_000L; // relative deadline in 100 ns units; one-shot (period = 0)
+            HANDLE timer = _preciseWaitTimer;
+            if (SetWaitableTimer(timer, &due, 0, null, null, false))
+            {
+                // One handle: 0 = timer, 1 = queued message. The coarse timeout is only a fault backstop.
+                if (MsgWaitForMultipleObjectsEx(
+                        1, &timer, (uint)(timeoutMs + 16), QS_ALLINPUT, MWMO_INPUTAVAILABLE) != WAIT_FAILED)
+                    return;
+            }
+            // A wait/set failure is not recoverable by retrying the same handle every animation frame. Retire it once,
+            // then preserve correctness through the ordinary message-aware timeout path below.
+            DisablePreciseWait();
+        }
+
         uint timeout = timeoutMs < 0 ? 0xFFFFFFFF : (uint)timeoutMs;
         MsgWaitForMultipleObjectsEx(0, null, timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+    }
+
+    private bool TryEnsurePreciseWaitTimer()
+    {
+        if (_preciseWaitTimer != HANDLE.NULL) return true;
+        if (_preciseWaitUnavailable) return false;
+        HANDLE timer = CreateWaitableTimerExW(
+            null, null, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_MODIFY_STATE | SYNCHRONIZE);
+        if (timer == HANDLE.NULL)
+        {
+            _preciseWaitUnavailable = true;
+            return false;
+        }
+        _preciseWaitTimer = timer;
+        return true;
+    }
+
+    private void DisablePreciseWait()
+    {
+        if (_preciseWaitTimer != HANDLE.NULL)
+        {
+            CloseHandle(_preciseWaitTimer);
+            _preciseWaitTimer = HANDLE.NULL;
+        }
+        _preciseWaitUnavailable = true;
     }
 
     /// <summary>Thread-safe wake (IPlatformWindow.Wake): post a benign WM_NULL so a blocked <see cref="WaitForWork"/>
@@ -1049,6 +1105,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         _dm = null;
         _textInput?.DisposeSip();   // release the WinRT InputPane refs + SIP event subscriptions before the HWND dies
         if (_hwnd != HWND.NULL) { KillTimer(_hwnd, MoveLoopTimerId); KillTimer(_hwnd, LiftTimerId); DestroyWindow(_hwnd); }
+        if (_preciseWaitTimer != HANDLE.NULL) { CloseHandle(_preciseWaitTimer); _preciseWaitTimer = HANDLE.NULL; }
         // The UIA provider CCW is intentionally LEAKED (not freed): UIA may still hold a ref after the HWND dies and a
         // synchronous free would risk a use-after-free. A few bytes, one per window, reclaimed at process exit.
         if (_uiaProvider != null) { _uiaProvider = null; FluentGpu.Hooks.InputHooks.Current.Default.Announce = null; }

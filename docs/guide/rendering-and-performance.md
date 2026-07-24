@@ -30,6 +30,23 @@ re-record cheap world transforms — no relayout, no re-diff. That's the "compos
 A frame whose only work was transform/paint **binding** writes does **nothing in 3/6** — it skips render, reconcile,
 and layout, and just re-records (`FrameStats.Rendered == false`). That's the compositor bypass.
 
+### Windows short-deadline pacing
+
+The async render path cannot use `Present` as the UI-thread pacer, so display-rate motion requests a short software
+wait (currently 7 ms). A bare `MsgWaitForMultipleObjectsEx(..., timeoutMs)` timeout follows the process/system timer
+resolution; on a 120 Hz system that can turn a requested 7 ms into a 12–16 ms sleep and cap an otherwise cheap frame
+loop near 80 fps.
+
+`Win32Window.WaitForWork` therefore uses a one-shot
+`CreateWaitableTimerExW(CREATE_WAITABLE_TIMER_HIGH_RESOLUTION)` timer for finite 1–50 ms deadlines and waits on that
+timer **plus** the message queue. Input still wakes the loop immediately. Infinite idle waits and long background
+waits keep the ordinary message-only path, so a quiescent window remains parked at 0% CPU; this is not a
+process-wide `timeBeginPeriod` change. Timer creation/set/wait failure permanently falls back to the ordinary path.
+`FG_PRECISE_WAIT=0` is the same-binary diagnostic kill switch.
+
+This pacing seam is independent of the window material: Windows Mica/MicaAlt remains the exact
+`DWMWA_SYSTEMBACKDROP_TYPE` surface drawn by DWM behind the premultiplied swapchain.
+
 ### The retained scene (`SceneStore`, `src/FluentGpu.Engine/Scene/`)
 
 - SoA columns indexed by a generational **handle** `{u32 index, u32 gen}` (a stale handle is detected via `gen`).
