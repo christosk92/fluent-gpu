@@ -157,6 +157,14 @@ public sealed class LazyGrid : Component
         float drawerH = expandedIndex >= 0 && _drawerHeight is { } dh ? dh(expandedIndex) : 0f;
 
         var view = LazyGridMath.Compute(scrollOffset - sectionTop, viewportH, rowH, totalRows, _overscanRows, expandedRow, drawerH);
+        int ensureFirst = totalRows == 0 ? 0 : view.FirstRow * cols;
+        int ensureLastExclusive = totalRows == 0 ? 1 : Math.Min(count, (view.LastRow + 1) * cols);
+
+        // Paging may complete synchronously (memory/cache-backed sources do). Never call it from Render: the collection's
+        // Fill bumps Version, which the count delegate commonly read above, so an inline request becomes a backwards write
+        // on this render computation. Passive timing also keeps fetch dispatch outside reconcile/layout.
+        UseEffect(() => _ensureRange(ensureFirst, ensureLastExclusive),
+                  DepKey.From(ensureFirst, ensureLastExclusive));
 
         int oldCols = _lastCols;
         float oldRowH = _lastRowH;
@@ -189,12 +197,8 @@ public sealed class LazyGrid : Component
 
         if (totalRows == 0)
         {
-            _ensureRange(0, 1);                        // bootstrap: pull page 0 so the total is learned (dedup'd thereafter)
             return Root(new BoxEl { Height = 1f });    // measure-only stub until the count lands
         }
-
-        // Page the data in for the realized window (+ overscan already folded into first/last).
-        _ensureRange(view.FirstRow * cols, Math.Min(count, (view.LastRow + 1) * cols));
 
         var children = new List<Element>(5);
         if (view.TopPad > 0.5f) children.Add(new BoxEl { Key = "lazy-top", Height = view.TopPad });

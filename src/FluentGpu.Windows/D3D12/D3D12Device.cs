@@ -1777,7 +1777,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                         ApplyCurrentScissor();
                         continue;
                     }
-                    if (L.Kind == (int)LayerKind.Blur && L.BlurSigma > 0f
+                    if (BlurPinKey.CanUseStationaryCache(in L)
                         && BlurPinKey.TryCompute(drawList, pos, in L, out ulong bhash, out int afterPop))
                     {
                         if (_curBlurHashCount < _curBlurHashes.Length) _curBlurHashes[_curBlurHashCount++] = bhash;

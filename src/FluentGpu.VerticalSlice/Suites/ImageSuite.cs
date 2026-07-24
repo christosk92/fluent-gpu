@@ -729,9 +729,8 @@ static class ImageSuite
                 $"published={published} rest={restApplies} scroll={scrollApplies}");
         }
 
-        // The scroll byte target is a burst budget, not an absolute image-size ceiling. A normal 512x512 BGRA cover is
-        // 1 MiB, twice the 512 KiB scrolling target; it must consume the one allowed scrolling slot instead of wedging
-        // the FIFO (and every completion behind it) until the gesture ends.
+        // A normal 512x512 BGRA cover is 1 MiB, twice the scrolling byte cap. Defer it until rest without letting it
+        // head-of-line block a small completion behind it; once scrolling settles, merge it back and apply it.
         using (var sched = new DecodeScheduler(new TestCodec(), new TestFetcher(),
                    new DecodeOptions { MaxConcurrency = 1 }))
         {
@@ -740,24 +739,31 @@ static class ImageSuite
             bool published = WaitPublished(sched);
             sched.ScrollThrottled = true;
 
-            int firstId = 0, secondId = 0;
+            int firstId = 0, restId = 0;
             sched.Pump(
                 (id, ok, w, h, failure, attempts) => { if (ok) firstId = id; },
                 (id, px, w, h) => { });
             int firstCount = sched.LastPumpAppliedCount;
             int firstBytes = sched.LastPumpAppliedBytes;
-            bool followerPending = sched.HasReadyCompletions;
+            bool largePending = sched.HasReadyCompletions;
 
             sched.Pump(
-                (id, ok, w, h, failure, attempts) => { if (ok) secondId = id; },
+                (id, ok, w, h, failure, attempts) => { },
+                (id, px, w, h) => { });
+            bool strictWhileScrolling = sched.LastPumpAppliedCount == 0 && sched.HasReadyCompletions;
+
+            sched.ScrollThrottled = false;
+            sched.Pump(
+                (id, ok, w, h, failure, attempts) => { if (ok) restId = id; },
                 (id, px, w, h) => { });
 
-            Check("46d5. DecodeScheduler: one oversized visible cover passes the scroll budget without head-of-line starvation",
-                published && firstId == 301 && firstCount == 1 && firstBytes == 512 * 512 * 4
-                && followerPending && secondId == 302 && sched.LastPumpAppliedCount == 1
+            Check("46d5. DecodeScheduler: oversized cover waits for rest without head-of-line starving a small scroll upload",
+                published && firstId == 302 && firstCount == 1 && firstBytes == 8 * 8 * 4
+                && largePending && strictWhileScrolling
+                && restId == 301 && sched.LastPumpAppliedCount == 1 && sched.LastPumpAppliedBytes == 512 * 512 * 4
                 && !sched.HasReadyCompletions,
-                $"published={published} first={firstId}/{firstCount}/{firstBytes}B pending={followerPending} " +
-                $"second={secondId}/{sched.LastPumpAppliedCount} left={sched.HasReadyCompletions}");
+                $"published={published} scroll={firstId}/{firstCount}/{firstBytes}B pending={largePending} strict={strictWhileScrolling} " +
+                $"rest={restId}/{sched.LastPumpAppliedCount}/{sched.LastPumpAppliedBytes}B left={sched.HasReadyCompletions}");
         }
     }
 

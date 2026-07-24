@@ -42,8 +42,10 @@ sealed class SelectionCommandBar : Component
         _ = _sel.Version.Value;
         int count = SelectedTrackCount();
         // Only for a MULTI-selection (2+) — a plain single click selects a row constantly during normal browsing and
-        // must not summon the batch bar (matches the checkboxes' 2+ auto-show threshold).
-        this.UseSoftReveal(key: count >= 2, dy: 14f, blur: 2f);
+        // must not summon the batch bar (matches the checkboxes' 2+ auto-show threshold). This component's root is the
+        // full-bleed pass-through positioner, so self-blurring that host allocates and Gaussian-filters a page-sized
+        // layer just to soften the small bar. Keep the rise + fade compositor motion, but leave blur to leaf-sized swaps.
+        this.UseSoftReveal(key: count >= 2, dy: 14f, blur: 0f);
         // The count label's TextSwap must not pop on top of the bar's own soft-reveal: strip its Enter on the build
         // where the bar first becomes visible (tracked across renders, not derivable from count alone).
         bool barWasVisible = prevCount.Value >= 2;

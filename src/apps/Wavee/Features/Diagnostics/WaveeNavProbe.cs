@@ -761,12 +761,19 @@ internal static class WaveeNavProbe
         var homeVp = FindScrollViewportByKey(host.Scene, "home");
         double realLoopMeanMs = 0, realLoopWorstMs = 0;
         int realLoopOver16 = 0, realLoopThrottled = 0, realLoopMaxWait = 0;
+        int realLoopScrollActive = 0, realLoopWaitAsync = 0, realLoopWaitAmbient = 0, realLoopWaitOther = 0;
+        ulong realLoopPresents = 0, realLoopDrainPresents = 0;
+        double realLoopPresentFps = 0, realLoopTrailingPresentFps = 0;
+        float realLoopOffsetSpan = 0f;
         if (!homeVp.IsNull)
         {
             var vr = host.Scene.AbsoluteRect(homeVp);
             host.Scene.TryGetScroll(homeVp, out var s0);
             float vh = s0.ViewportH > 20f ? s0.ViewportH : (vr.H > 20f ? vr.H : 400f);
-            var pos = new Point2(vr.X + vr.W - 2f, vr.Y + vh * 0.5f);
+            // Keep this inside content, not the trailing-edge scrollbar/dead strip used by the routing regression above.
+            // The old X=right-2 target could land on a wheel-handling child after the Home remount; then this block timed
+            // an ambient loop while claiming it was scrolling.
+            var pos = new Point2(vr.X + vr.W * 0.5f, vr.Y + vh * 0.5f);
 
             window.QueueInput(new InputEvent(InputKind.WindowBlur, default, 0, 0));
             host.RunFrame();
@@ -798,25 +805,58 @@ internal static class WaveeNavProbe
             Log.Info($"[home-scroll-reactivate] home=n#{homeVp.Raw.Index} routed=n#{routedAfterFocus.Raw.Index} fade={reactivated.FadeT:0.00} pointerOver={reactivated.PointerOver} " +
                 $"off={beforeReactivatedWheel:0}->{reactivated.OffsetY:0} wheel={(reactivatedMoved ? "PASS" : "FAIL")} bar={(reactivatedBar ? "PASS" : "FAIL")}");
 
-            // Real app-loop cadence: present at vsync and ask RecommendedWaitMs before each frame so accidental ambient
-            // throttling during scroll shows up as wait>0.
+            // Real app-loop cadence: production order is RunFrame -> RecommendedWaitMs -> WaitForWork. The old probe
+            // queried/slept BEFORE RunFrame, so the just-queued synthetic wheel had not armed ScrollAnim yet and every
+            // sample inherited the ambient 60-Hz timeout. Drive a movable target, then record successful presents and
+            // wait-branch attribution so "low FPS" is split into production pacing vs render/present cadence.
             var iv = new List<double>(220);
-            long prev = Stopwatch.GetTimestamp();
+            ulong presentStart = host.PresentedSequence;
+            long loopStart = Stopwatch.GetTimestamp();
+            long prev = 0;
+            float minOffset = reactivated.OffsetY, maxOffsetSeen = reactivated.OffsetY;
+            float direction = reactivated.OffsetY > maxReactivated * 0.5f ? -60f : 60f;
             for (int i = 0; i < 200 && !window.IsClosed; i++)
             {
-                window.QueueInput(new InputEvent(InputKind.Wheel, pos, 0, 0, ((i / 20) & 1) == 0 ? +60f : -60f));
-                int wait = host.RecommendedWaitMs();
-                if (wait > 0) { realLoopThrottled++; if (wait > realLoopMaxWait) realLoopMaxWait = wait; System.Threading.Thread.Sleep(Math.Min(wait, 40)); }
+                if (i > 0 && i % 40 == 0) direction = -direction;
+                host.Scene.TryGetScroll(homeVp, out var before);
+                if (before.OffsetY <= 0.5f) direction = +60f;
+                else if (before.OffsetY >= maxReactivated - 0.5f) direction = -60f;
+                window.QueueInput(new InputEvent(InputKind.Wheel, pos, 0, 0, direction));
                 host.RunFrame();
                 long now = Stopwatch.GetTimestamp();
-                iv.Add((now - prev) * 1000.0 / Stopwatch.Frequency);
+                if (prev != 0) iv.Add((now - prev) * 1000.0 / Stopwatch.Frequency);
                 prev = now;
+                if ((host.CurrentWakeReasons & WakeReasons.ScrollAnim) != 0) realLoopScrollActive++;
+                host.Scene.TryGetScroll(homeVp, out var after);
+                minOffset = MathF.Min(minOffset, after.OffsetY);
+                maxOffsetSeen = MathF.Max(maxOffsetSeen, after.OffsetY);
+
+                int wait = host.RecommendedWaitMs();
+                if (wait > 0) { realLoopThrottled++; if (wait > realLoopMaxWait) realLoopMaxWait = wait; }
+                if (host.LastWaitKind == HostWaitKind.PaceAsync) realLoopWaitAsync++;
+                else if (host.LastWaitKind == HostWaitKind.Ambient) realLoopWaitAmbient++;
+                else realLoopWaitOther++;
+                // A synthetic queued event is not an HWND message and therefore cannot wake an infinite idle wait.
+                // Clamp that diagnostic-only case; a correctly armed scroll returns PaceAsync (7ms) here.
+                window.WaitForWork(wait < 0 ? 8 : Math.Min(wait, 40));
             }
+            long loopEnd = Stopwatch.GetTimestamp();
+            ulong presentAtLoopEnd = host.PresentedSequence;
+            realLoopPresents = presentAtLoopEnd - presentStart;
+            double loopSec = (loopEnd - loopStart) / (double)Stopwatch.Frequency;
+            realLoopPresentFps = loopSec > 0 ? realLoopPresents / loopSec : 0;
+            realLoopTrailingPresentFps = host.PresentFps;
+            System.Threading.Thread.Sleep(80);   // async-drain accounting only — deliberately OUTSIDE the active FPS denominator
+            realLoopDrainPresents = host.PresentedSequence - presentAtLoopEnd;
+            realLoopOffsetSpan = maxOffsetSeen - minOffset;
             var a = iv.ToArray();
             double tot = 0;
             foreach (var v in a) { tot += v; if (v > realLoopWorstMs) realLoopWorstMs = v; if (v > 16.7) realLoopOver16++; }
             realLoopMeanMs = a.Length > 0 ? tot / a.Length : 0;
-            Log.Info($"[home-scroll-fps] REAL app-loop wheel scroll: {a.Length} frames mean {realLoopMeanMs:0.0}ms ({(realLoopMeanMs > 0 ? 1000.0 / realLoopMeanMs : 0):0} fps) worst {realLoopWorstMs:0.0}ms ({(realLoopWorstMs > 0 ? 1000.0 / realLoopWorstMs : 0):0} fps) >16.7ms(<60fps)={realLoopOver16} throttledWaitFrames={realLoopThrottled} maxWait={realLoopMaxWait}ms");
+            Log.Info($"[home-scroll-fps] REAL app-loop wheel scroll: {a.Length} frames mean {realLoopMeanMs:0.0}ms ({(realLoopMeanMs > 0 ? 1000.0 / realLoopMeanMs : 0):0} fps) worst {realLoopWorstMs:0.0}ms ({(realLoopWorstMs > 0 ? 1000.0 / realLoopWorstMs : 0):0} fps) >16.7ms(<60fps)={realLoopOver16} " +
+                $"offsetSpan={realLoopOffsetSpan:0} scrollActive={realLoopScrollActive}/200 waits(async/ambient/other)={realLoopWaitAsync}/{realLoopWaitAmbient}/{realLoopWaitOther} " +
+                $"activePresents={realLoopPresents} activePresentFps={realLoopPresentFps:0.0} trailingPresentFps={realLoopTrailingPresentFps:0.0} drainPresents={realLoopDrainPresents} " +
+                $"throttledWaitFrames={realLoopThrottled} maxWait={realLoopMaxWait}ms");
         }
 
         var phases = new[] { sidebar, homeScroll, likedScroll, navPhase };
@@ -877,6 +917,11 @@ internal static class WaveeNavProbe
         // Auto-verdicts: classify the likely "heavy scroll" cause from measured work (not present-paced).
         sb.AppendLine();
         sb.AppendLine("=== VERDICTS ===");
+        if (realLoopMeanMs > 0)
+            sb.AppendLine($"  real-loop proof: offsetSpan={realLoopOffsetSpan:0} scrollActive={realLoopScrollActive}/200 " +
+                $"waits(async/ambient/other)={realLoopWaitAsync}/{realLoopWaitAmbient}/{realLoopWaitOther} " +
+                $"activePresents={realLoopPresents} activePresentFps={realLoopPresentFps:0.0} " +
+                $"trailingPresentFps={realLoopTrailingPresentFps:0.0} drainPresents={realLoopDrainPresents}");
         AppendScrollVerdicts(sb, homeScroll, likedScroll, all, nAttrib, sumFlush, sumLayout, sumAnim, sumRecord, sumSubmit,
             sumFence, sumPresent, sumPump, sumRealize, sumHotAlloc, sumRootEsc, sumBlur, sumComps,
             renderedFrames, hotAllocFrames, rootEscFrames,

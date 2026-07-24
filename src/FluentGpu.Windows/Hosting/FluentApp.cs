@@ -91,6 +91,18 @@ public static class FluentApp
         if (Array.IndexOf(Environment.GetCommandLineArgs(), "--audio-host") >= 0)
             throw new InvalidOperationException("FluentApp.Run must not be reached in --audio-host child mode.");
 
+#if DEBUG || FLUENTGPU_DIAG
+        // Diagnostic A/B only: remove the DWM-Mica / premultiplied-composition path as ONE variable. This creates the
+        // ordinary opaque HWND flip-model swapchain, letting PresentMon tell us whether DWM composition is the cadence
+        // bottleneck on the current build. The entire override (including the environment lookup) is absent from a normal
+        // Release build; it is not a product backdrop decision.
+        if (Diag.EnvFlag("FG_OPAQUE_WINDOW"))
+        {
+            o = o with { Mica = false };
+            Console.Error.WriteLine("[window] FG_OPAQUE_WINDOW=1 — DWM Mica disabled; using opaque HWND swapchain");
+        }
+#endif
+
         bool consoleDiagnostics = Diag.EnvFlag("FG_DIAG") || Diag.EnvFlag("FG_DIAG_CONSOLE");
         if (consoleDiagnostics)
         {

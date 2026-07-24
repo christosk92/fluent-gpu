@@ -44,15 +44,21 @@ sealed class WaveeApp : Component
         var requestTheme = UseContext(ThemeControl.Request);
         Context.UseEffect(() =>
         {
-            FluentApp.SystemColorsChanged += () =>
+            void OnSystemColorsChanged()
             {
                 if (_services.Settings.Get(WaveeSettings.ThemeMode) != 0) return;
+                int oldEpoch = Tok.Epoch;
                 var kind = FluentApp.SystemUsesLightTheme() ? ThemeKind.Light : ThemeKind.Dark;
                 Tok.Use(WaveeTheme.ResolvePalette(_services.Settings.Get(WaveeSettings.PaletteId)), kind);
                 if (FluentApp.SystemAccentRamp() is { } ramp) Tok.SetAccent(in ramp);
                 else if (FluentApp.SystemAccent() is { } a) Tok.SetAccent(a);
-                requestTheme?.Invoke(250f);
-            };
+                // Windows can broadcast ImmersiveColorSet without an effective palette/accent change. Requesting a
+                // transition in that case still forces RethemeAll, re-rendering the entire mounted app for identical
+                // colors. Only arm the cross-fade when a guarded Tok mutator actually advanced the epoch.
+                if (Tok.Epoch != oldEpoch) requestTheme?.Invoke(250f);
+            }
+            FluentApp.SystemColorsChanged += OnSystemColorsChanged;
+            return () => FluentApp.SystemColorsChanged -= OnSystemColorsChanged;
         }, DepKey.Empty);
 
         var post = Context.UsePost();

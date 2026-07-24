@@ -20,7 +20,7 @@ namespace FluentGpu.Media;
 public sealed class DecodeScheduler : IImageDecoder, IDisposable
 {
     private readonly record struct Req(int Id, string Src, int W, int H, ImagePriority Priority);
-    private struct Done { public int Id; public bool Ok; public int W, H; public ImageFailureKind Failure; public int Attempts; public byte[]? Buffer; public int ByteLen; }
+    private struct Done { public int Id; public bool Ok; public int W, H; public ImageFailureKind Failure; public int Attempts; public byte[]? Buffer; public int ByteLen; public long Sequence; }
 
     private readonly IImageCodec _codec;
     private readonly IImageFetcher _fetcher;
@@ -32,7 +32,11 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     // Control completions (cancel/fail) drain independently from decoded pixels. They must never consume the GPU-upload
     // apply/byte budget or sit behind a scroll-throttled oversized texture.
     private readonly ConcurrentQueue<Done> _controlOut = new();
+    // Workers classify decoded pixels before publishing them. During active scroll Pump consumes only the bounded-size
+    // lane, so a 1–4 MiB cover cannot puncture the 512 KiB fence-stall budget; the small lane still drains, avoiding the
+    // old head-of-line wedge. At rest the sequence stamp merges both lane heads back into completion order.
     private readonly ConcurrentQueue<Done> _pixelOut = new();
+    private readonly ConcurrentQueue<Done> _largePixelOut = new();
     // Claimed ids remain active until their terminal completion is consumed by Pump. This lets a late recycle cancel a
     // decode that has already published pixels but has not uploaded yet, without creating unbounded unknown tombstones.
     private readonly ConcurrentDictionary<int, byte> _activeIds = new();
@@ -41,6 +45,7 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     private readonly CancellationTokenSource _shutdown = new();
     private Action? _completionWake;
     private int _inflight, _queued;
+    private long _completionSequence;
     // Max decoded images APPLIED (GPU-uploaded) per Pump = per frame. An UNBOUNDED drain uploaded a whole fast-scroll's
     // worth of album art in ONE frame → a 10-35ms GPU submit spike (the frame lands late → a stale composited frame =
     // the edge "another viewport" flash). Bounding it spreads uploads over frames: un-applied decodes stay in _out and
@@ -58,9 +63,10 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     /// each apply stages a GPU CopyTextureRegion into the SAME command list the double-buffered present then fences on
     /// (max-latency-1 couples the UI thread to GPU completion), so an upload burst mid-scroll reads as a fence-wait
     /// hitch (traced as the dominant GPU hitch class). Reveals are already suppressed during scroll, so the slower
-    /// landing is invisible. An image larger than the scroll byte budget waits until rest instead of punching through
-    /// as the first apply; the backlog drains the moment the gesture settles. (Triple-buffering was the alternative
-    /// and is OFF-LIMITS: it correlated with a DXGI_ERROR_DEVICE_HUNG on the Adreno — see D3D12Device.FRAME_COUNT.)</summary>
+    /// landing is invisible. An image larger than the scroll byte budget waits in its worker-published large lane until
+    /// rest, while smaller completions behind it remain eligible — strict pacing without head-of-line starvation.
+    /// (Triple-buffering was the alternative and is OFF-LIMITS: it correlated with a DXGI_ERROR_DEVICE_HUNG on the
+    /// Adreno — see D3D12Device.FRAME_COUNT.)</summary>
     public bool ScrollThrottled { get; set; }
     /// <summary>Number of completions applied by the most recent UI-thread <see cref="Pump"/>.</summary>
     public int LastPumpAppliedCount { get; private set; }
@@ -85,7 +91,7 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     // IImageDecoder census passthroughs (MemCensus reads these through ImageCache).
     int IImageDecoder.DiagInflight => Volatile.Read(ref _inflight);
     int IImageDecoder.DiagCanceledPending => _canceled.Count;
-    public bool HasReadyCompletions => !_controlOut.IsEmpty || !_pixelOut.IsEmpty;
+    public bool HasReadyCompletions => !_controlOut.IsEmpty || !_pixelOut.IsEmpty || !_largePixelOut.IsEmpty;
 
     /// <inheritdoc/>
     public void SetCompletionWake(Action? wake) => Volatile.Write(ref _completionWake, wake);
@@ -160,24 +166,24 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
         int cap = ScrollThrottled ? Math.Min(1, s_maxAppliesPerFrame) : s_maxAppliesPerFrame;
         int byteCap = ScrollThrottled ? Math.Min(ScrollApplyBytesPerFrame, s_maxApplyBytesPerFrame) : s_maxApplyBytesPerFrame;
         int appliedBytes = 0;
-        while (applied < cap && _pixelOut.TryPeek(out var next))
+        while (applied < cap && TryPeekPixels(ScrollThrottled, out var next, out bool large))
         {
             // A row may recycle after the worker published pixels but before this UI-thread pump. Discard that buffer
             // as control work: no upload, no apply slot, and no byte-budget charge.
             if (_canceled.ContainsKey(next.Id))
             {
-                if (!_pixelOut.TryDequeue(out var canceled)) continue;
+                if (!TryDequeuePixels(large, out var canceled)) continue;
                 Finish(canceled.Id);
                 onComplete(canceled.Id, false, 0, 0, ImageFailureKind.Canceled, canceled.Attempts);
                 if (canceled.Buffer != null) _pixels.Return(canceled.Buffer);
                 if (++controlDrained >= ControlDrainPerFrame) break;
                 continue;
             }
-            // The byte budget is a burst budget, never an absolute per-image ceiling. Admit one oversized head item so
-            // a 1 MiB 512x512 cover cannot wedge behind the 512 KiB scroll target; after the first apply, enforce the
-            // remaining budget normally. ScrollThrottled already caps the count at one, so this cannot create a burst.
+            // At rest the byte budget is a burst budget, not an absolute size ceiling: one oversized head item may use
+            // the frame so it cannot wedge forever. During scroll TryPeekPixels exposes only the <=512 KiB lane, making
+            // the scroll byte cap strict while still allowing a small completion behind a deferred large cover.
             if (next.ByteLen > byteCap - appliedBytes && applied > 0) break;
-            if (!_pixelOut.TryDequeue(out var d)) continue;
+            if (!TryDequeuePixels(large, out var d)) continue;
             // UI-thread callers normally serialize Cancel and Pump, but retain the final check for another-thread
             // cancellation between TryPeek and TryDequeue.
             if (_canceled.ContainsKey(d.Id))
@@ -207,6 +213,36 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
             Diag.Set("media", "poolRetainedKB", (int)(_pixels.RetainedBytes / 1024));
         }
     }
+
+    private bool TryPeekPixels(bool scrollThrottled, out Done done, out bool large)
+    {
+        if (scrollThrottled)
+        {
+            large = false;
+            return _pixelOut.TryPeek(out done);
+        }
+
+        bool hasSmall = _pixelOut.TryPeek(out var small);
+        bool hasLarge = _largePixelOut.TryPeek(out var big);
+        if (!hasSmall)
+        {
+            large = hasLarge;
+            done = big;
+            return hasLarge;
+        }
+        if (!hasLarge || small.Sequence <= big.Sequence)
+        {
+            large = false;
+            done = small;
+            return true;
+        }
+        large = true;
+        done = big;
+        return true;
+    }
+
+    private bool TryDequeuePixels(bool large, out Done done)
+        => (large ? _largePixelOut : _pixelOut).TryDequeue(out done);
 
     private async Task WorkerLoop()
     {
@@ -278,8 +314,16 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
 
     private void Complete(int id, bool ok, int w, int h, ImageFailureKind failure, int attempts, byte[]? buffer, int byteLen)
     {
-        var done = new Done { Id = id, Ok = ok, W = w, H = h, Failure = failure, Attempts = attempts, Buffer = buffer, ByteLen = byteLen };
-        if (ok && buffer is not null && byteLen > 0) _pixelOut.Enqueue(done);
+        var done = new Done
+        {
+            Id = id, Ok = ok, W = w, H = h, Failure = failure, Attempts = attempts,
+            Buffer = buffer, ByteLen = byteLen, Sequence = Interlocked.Increment(ref _completionSequence),
+        };
+        if (ok && buffer is not null && byteLen > 0)
+        {
+            if (byteLen <= ScrollApplyBytesPerFrame) _pixelOut.Enqueue(done);
+            else _largePixelOut.Enqueue(done);
+        }
         else _controlOut.Enqueue(done);
         Volatile.Read(ref _completionWake)?.Invoke();
     }

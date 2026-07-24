@@ -226,6 +226,22 @@ static class AnimSuite
             Check("BP.6 BlurPinKey.TryCompute is zero-alloc (10000 calls)", delta == 0 && last != 0, $"delta={delta}B/10000 last={last:X16}");
         }
 
+        // BP.7 — a live sigma animation may use the region-local fast path, but if that path rejects the layer (for
+        // example because both axes are canvas-sized) it must fall back to an exact TRANSIENT render, never the
+        // stationary pin cache. Otherwise a slowly easing full-page reveal retains one large pin per recurring sigma
+        // bucket. A settled authored blur remains cacheable.
+        {
+            var tAdmission = strings.Intern("admission");
+            var (_, settled) = BlurStripKeyL(strings, 100f, 200f, 4f, 300f, 40f, tAdmission);
+            var transient = settled with { BlurIsTransient = 1 };
+            var zero = settled with { BlurSigma = 0f };
+            Check("BP.7 transient animated blur cannot enter the stationary pin cache",
+                BlurPinKey.CanUseStationaryCache(in settled)
+                && !BlurPinKey.CanUseStationaryCache(in transient)
+                && !BlurPinKey.CanUseStationaryCache(in zero),
+                $"settled={BlurPinKey.CanUseStationaryCache(in settled)} transient={BlurPinKey.CanUseStationaryCache(in transient)} zero={BlurPinKey.CanUseStationaryCache(in zero)}");
+        }
+
         // gate.blur.edgeClampedPinCaches (FA-2a edge-clamp fix). A self-blur whose halo-inflated region is clamped by a
         // canvas edge is STILL cacheable: SelfBlurRegion clamps the region and the compositor's FindPin matches SIZE-
         // exactly, so a STATIONARY clamped row produces a byte-identical key AND a byte-identical clamped region box two
@@ -1941,6 +1957,58 @@ static class AnimSuite
             Check("virtual-collection: paged data-windowing — total from page 0, fill, dedup, seed, 0-alloc hot path",
                 before && firstPage && deduped && windowed && hot == 0 && seedFree,
                 $"count={vc.Count} fetches={fetches} hotAlloc={hot} seedFetches={seedFetches} sum={sum}");
+        }
+
+        // lazy-grid paging runs passively: a cache-backed page can complete synchronously and bump Version. Dispatching
+        // that request from Render would write the very signal the count delegate just read (a backwards-write loop).
+        {
+            bool prevEnabled = BackwardsWriteGuard.Enabled, prevThrow = BackwardsWriteGuard.ThrowOnViolation;
+            BackwardsWriteGuard.Enabled = BackwardsWriteGuard.CompiledIn;
+            BackwardsWriteGuard.ThrowOnViolation = false;
+            BackwardsWriteGuard.Reset();
+            try
+            {
+                var data = new int[120];
+                for (int i = 0; i < data.Length; i++) data[i] = i;
+                int fetches = 0;
+                var vc = new VirtualCollection<int>((off, cnt, ct) =>
+                {
+                    fetches++;
+                    return new ValueTask<PageResult<int>>(
+                        new PageResult<int>(data.Length, data.AsMemory(off, Math.Min(cnt, data.Length - off))));
+                }, pageSize: 30);
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("lazy-grid-passive-page", new Size2(640, 480), 1f));
+                window.Show();
+                var root = new W0fStaticProbe
+                {
+                    Build = () => new BoxEl
+                    {
+                        Width = 620f,
+                        Children =
+                        [
+                            Embed.Comp(() => new LazyGrid(
+                                count: () => { _ = vc.Version.Value; return vc.CountOr0; },
+                                cell: (i, _) => new BoxEl { Height = 40f },
+                                ensureRange: (first, lastExclusive) => vc.EnsureRange(first, lastExclusive - 1),
+                                minColWidth: 180f, rowExtra: 40f, overscanRows: 2)),
+                        ],
+                    },
+                };
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, root);
+                host.RunFrame();
+                host.RunFrame();
+                host.RunFrame();
+
+                Check("lazy-grid.passive-page: synchronous paging runs after Render and trips no backwards-write",
+                    vc.Count == data.Length && fetches >= 1 && BackwardsWriteGuard.Violations == 0,
+                    $"count={vc.Count} fetches={fetches} backWrites={BackwardsWriteGuard.Violations} [{BackwardsWriteGuard.LastViolation}]");
+            }
+            finally
+            {
+                BackwardsWriteGuard.Enabled = prevEnabled;
+                BackwardsWriteGuard.ThrowOnViolation = prevThrow;
+            }
         }
 
         // lazy-grid windowing math — the in-page virtualized grid: a scroll band → the visible row range + spacer heights

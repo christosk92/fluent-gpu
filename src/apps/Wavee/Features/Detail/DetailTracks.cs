@@ -109,7 +109,7 @@ sealed class TrackList : Component
     // an added row's neighbors part (FLIP down) and the row itself fades in at its slot. No overlays, no remounts.
     readonly ItemsViewController _listCtl = new();             // scroll anchoring (ScrollOffset/ScrollBy)
     readonly Signal<int> _dispVer = new(0);                    // bump → the ItemsView displacement seed re-runs (FLIP/fade)
-    readonly Signal<int> _resetEpoch = new(0);                 // curated re-cut → keyed remount crossfade (fresh scroll state)
+    int _resetEpoch;                                          // render-local identity epoch: curated re-cut → keyed remount + fresh scroll state
     readonly Dictionary<int, (float dx, float dy)> _flip = new();        // new display index → FLIP start residual (dy DIP)
     readonly Dictionary<int, (float from, float delayMs)> _fade = new(); // added display index → opacity ease-in + stagger
     Track[]? _lastDisplayed;                                   // displayed (view-ordered) snapshot — the keyed-diff baseline
@@ -359,7 +359,7 @@ sealed class TrackList : Component
             // §4.6 — navigation is not an edit: never choreograph across a context swap.
             _lastDisplayed = null;
             _flip.Clear(); _fade.Clear();
-            _resetEpoch.Value = _resetEpoch.Peek() + 1;   // remount the virtual list — bound rows must not recycle A's cells under B's route
+            _resetEpoch++;                               // current render remounts the virtual list — never publish a signal from Render
             // Progressive reveal: a fresh content identity that showed shimmer ⇒ start the ramp (real rows fill in over
             // frames instead of the whole band in one ~80ms frame). Keyed to the ContextUri edge, so it fires ONCE per
             // content and never on scroll / re-render / a same-context refresh; an instant/cached load skips it entirely.
@@ -426,7 +426,7 @@ sealed class TrackList : Component
         // the FLIP/fade seeds land with the SAME frame — a post-layout seed is one frame late and reads as a
         // jump-then-snap-back flash. The snapshot refreshes EVERY render (sort/filter also reorder the displayed
         // sequence), so the diff baseline is always the order the user was actually looking at.
-        int resetEpochBefore = _resetEpoch.Peek();
+        int resetEpochBefore = _resetEpoch;
         {
             var vNow = View();
             var displayedNow = new Track[vNow.Length];
@@ -436,7 +436,7 @@ sealed class TrackList : Component
             _lastDisplayed = displayedNow;
         }
         // Curated re-cut (reset epoch) remounts replay row mount-opacity; tier/density/filter remounts do not.
-        bool narrateRemount = _resetEpoch.Peek() != resetEpochBefore;
+        bool narrateRemount = _resetEpoch != resetEpochBefore;
         // The bound slots are cheap and persistent. Partial cold materialization leaves the track window visibly
         // catching up during fast scroll, especially when this list is embedded in the trailing page scroller.
         bool staggerCold = false;
@@ -506,7 +506,7 @@ sealed class TrackList : Component
                         Grow = _cfg.HasTrailing ? 0f : 1f,
                         Controller = _listCtl,
                         CountSignal = _listCount,
-                        Scroll = new ScrollOptions { ScrollKey = _route.Value.Name + ":r" + _resetEpoch.Value, AutoEdgeFade = !_cfg.HasTrailing, OnScrollGeometryChanged = SwipeCloseObserver() },
+                        Scroll = new ScrollOptions { ScrollKey = _route.Value.Name + ":r" + _resetEpoch, AutoEdgeFade = !_cfg.HasTrailing, OnScrollGeometryChanged = SwipeCloseObserver() },
                         Reorder = new ReorderOptions { ItemDisplacement = static _ => (0f, 0f), DisplacementVersion = _dispVer },
                         Entrance = new EntranceOptions { StaggerColdRealize = staggerCold, ItemFlipFrom = i => _flip.TryGetValue(i, out var f) ? f : null, ItemFadeFrom = i => _fade.TryGetValue(i, out var f) ? f : null },
                     });
@@ -544,7 +544,7 @@ sealed class TrackList : Component
                         // flash, no jump (the engine scopes this per tab via the KeepAlive slot). A different album starts at
                         // top. The reset epoch folds in so a curated re-cut starts a FRESH scroll state (top) instead of
                         // restoring the pre-reset offset into all-new content.
-                        ScrollKey = _route.Value.Name + ":r" + _resetEpoch.Value,
+                        ScrollKey = _route.Value.Name + ":r" + _resetEpoch,
                         OnScrollGeometryChanged = SwipeCloseObserver(),
                     },
                     Reorder = new ReorderOptions { ItemDisplacement = static _ => (0f, 0f), DisplacementVersion = _dispVer },
@@ -579,7 +579,7 @@ sealed class TrackList : Component
         // model load turns CanEditItems on) must REMOUNT the list to swap in the recommendations template. Constant once
         // the full model has landed, so this is a one-time remount, not per-render churn.
         string filterKey = _verticalHeader ? "" : ":q" + query + ":f" + (int)flags;
-        Element listKeyed = new BoxEl { Key = "list:" + _route.Value.Name + ":" + (_verticalHeader ? "vh:" : "") + "t" + tier + ":d" + density + filterKey + ":r" + _resetEpoch.Value + (recsOn ? ":rec" : ""), Grow = listGrow, Shrink = 1f, MinHeight = 0f, Direction = 1, Children = [list] };
+        Element listKeyed = new BoxEl { Key = "list:" + _route.Value.Name + ":" + (_verticalHeader ? "vh:" : "") + "t" + tier + ":d" + density + filterKey + ":r" + _resetEpoch + (recsOn ? ":rec" : ""), Grow = listGrow, Shrink = 1f, MinHeight = 0f, Direction = 1, Children = [list] };
 
         Element rightBody = _cfg.HasTrailing
             ? TrailingBody(listKeyed,
@@ -729,7 +729,7 @@ sealed class TrackList : Component
                 CountSignal = _verticalItemCount,
                 Scroll = new ScrollOptions
                 {
-                    ScrollKey = _route.Value.Name + ":r" + _resetEpoch.Value,
+                    ScrollKey = _route.Value.Name + ":r" + _resetEpoch,
                     AutoEdgeFade = false,
                     ItemClipTopInset = DetailVerticalLayout.StickyClipInset,
                     OnScrollGeometryChanged = SwipeCloseObserver(),
@@ -763,7 +763,7 @@ sealed class TrackList : Component
             // Curated re-cut (Discover-Weekly style): ONE deliberate crossfade — the keyed remount replays the slots'
             // mount entrance and the fresh scroll state starts at top — never a 40-row animation storm.
             _flip.Clear(); _fade.Clear();
-            _resetEpoch.Value = _resetEpoch.Peek() + 1;   // read below in the same render — the remount lands this frame
+            _resetEpoch++;   // plain render-local identity write — the remount lands in this pass without scheduling it again
             return;
         }
 

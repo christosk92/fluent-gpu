@@ -1257,8 +1257,12 @@ float4 PSMain(VSOutG i) : SV_Target
     {
         _engine?.Dispose();
         for (int f = 0; f < FrameCount; f++)
+        {
             if (_instances[f] != null) { _instances[f]->Unmap(0, null); D3D12MemoryDiagnostics.Release(_instances[f], "Glyph.InstanceUpload"); _instances[f]->Release(); _instances[f] = null; }
+            if (_gradInstances[f] != null) { _gradInstances[f]->Unmap(0, null); D3D12MemoryDiagnostics.Release(_gradInstances[f], "Glyph.GradInstanceUpload"); _gradInstances[f]->Release(); _gradInstances[f] = null; }
+        }
         if (_quad != null) { D3D12MemoryDiagnostics.Release(_quad, "Glyph.QuadUpload"); _quad->Release(); _quad = null; }
+        if (_psoGrad != null) { _psoGrad->Release(); _psoGrad = null; }
         if (_pso != null) _pso->Release();
         if (_rootSig != null) _rootSig->Release();
         if (_srvHeap != null) { D3D12MemoryDiagnostics.Release(_srvHeap, "Glyph.SrvHeap"); _srvHeap->Release(); }
