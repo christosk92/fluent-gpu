@@ -401,7 +401,10 @@ public static class SceneRecorder
                 (drawRect, uv) = ImageContentFit((ImageFit)d.Fit, in local, srcW, srcH);
             }
             ulong key = (ulong)((1 << 16) | 1) << 32;
+            bool localClip = !d.ClipRect.IsInfinite;
+            if (localClip) dl.PushClip(d.WorldTransform.TransformBounds(d.ClipRect).Intersect(clip), key);
             dl.DrawImage(drawRect, d.Corners, d.ImageId, ready, d.Fill, d.WorldTransform, d.Opacity, uv, fadeStart, fadeDur, fadeEase, key);
+            if (localClip) dl.PopClip(key);
         }
         if (clipped) dl.PopClip();
     }

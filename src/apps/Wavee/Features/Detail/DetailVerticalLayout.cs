@@ -20,6 +20,17 @@ public static class DetailVerticalLayout
     public const float HeroGap = 24f;
     public const float CompactIdentityHeight = 56f;
     public const float CompactArtworkSize = 36f;
+    public const float CompactPillHeight = 44f;
+    public const float CompactPlaySize = 40f;
+    public const float CompactPillMaxWidth = 480f;
+    public const float CompactPillViewportRatio = 0.46f;
+    public const float ImmersiveIdentityTokenSize = 44f;
+    public const float IdentityVisibleFraction = 0.68f;
+    public const float MorphHysteresis = 24f;
+    public const float ToolsEnterProgress = 0.62f;
+    public const float ToolsExitProgress = 0.50f;
+    public const float SideHeroBottomPad = 0f;
+    public const float SideToolbarTopPad = 0f;
     public const float ExpandedToolbarTopPad = 8f;
     public const float ExpandedToolbarBottomPad = 4f;
     public const float ExpandedContentFadeDistance = 96f;
@@ -63,4 +74,38 @@ public static class DetailVerticalLayout
     /// <summary>Scroll distance over which the expanded hero becomes the 56-DIP compact identity.</summary>
     public static float CollapseDistance(float expandedHeight)
         => MathF.Max(1f, expandedHeight - CompactIdentityHeight);
+
+    /// <summary>Late, geometry-derived shared-transition edge. The shared source keeps 68% of its useful identity before
+    /// it yields to the shy pill; immersive uses its 44-DIP bottom token, never the full-bleed background.</summary>
+    public static float IdentityMorphEnterOffset(DetailHeroOrientation orientation, float artworkSize, float collapseDistance)
+    {
+        float raw = orientation == DetailHeroOrientation.SideBySide
+            ? HeroPad + artworkSize * (1f - IdentityVisibleFraction)
+            : artworkSize - HeroPad - ImmersiveIdentityTokenSize * IdentityVisibleFraction;
+        float hi = MathF.Max(1f, collapseDistance - 48f);
+        float lo = MathF.Min(72f, hi);
+        return Math.Clamp(raw, lo, hi);
+    }
+
+    public static float IdentityMorphExitOffset(float enterOffset)
+        => MathF.Max(0f, enterOffset - MorphHysteresis);
+
+    /// <summary>The search/play cluster follows the identity rather than arriving in the same flush. On short heroes the
+    /// progress curve wins; on immersive heroes the lower token edge keeps tools after the shared identity.</summary>
+    public static float ToolsEnterOffset(float collapseDistance, float identityEnter)
+        => MathF.Min(MathF.Max(1f, collapseDistance - 8f),
+            MathF.Max(identityEnter + 16f, collapseDistance * ToolsEnterProgress));
+
+    public static float ToolsExitOffset(float collapseDistance, float identityExit)
+        => MathF.Min(MathF.Max(0f, collapseDistance - 12f),
+            MathF.Max(identityExit + 8f, collapseDistance * ToolsExitProgress));
+
+    public static float CompactPillWidthCap(float viewportWidth)
+        => MathF.Min(CompactPillMaxWidth,
+            MathF.Max(160f, MathF.Max(1f, viewportWidth) * CompactPillViewportRatio));
+
+    /// <summary>Decode bucket for a full-width immersive cover. The source mapper retains the largest CDN rendition;
+    /// this controls the decoded texture size without churning a cache key on every resize pixel.</summary>
+    public static int ImmersiveArtworkDecodePx(float artworkSize)
+        => artworkSize <= 384f ? 512 : 1024;
 }

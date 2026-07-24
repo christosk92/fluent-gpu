@@ -104,7 +104,10 @@ public readonly record struct LayoutTransition(
     // their FINAL layout, but their structural tracks are snapped instead of starting a second wave of Relayout/Reflow
     // work inside the already-projecting surface. This is scoped to the changed container subtree (unlike the global
     // interactive-resize suppression gate), so sibling panels and unrelated motion keep running.
-    bool SuppressDescendantTransitions = false)
+    bool SuppressDescendantTransitions = false,
+    // Optional EXIT-only delay. Null preserves the historical behavior (exit reuses DelayMs); setting 0 lets a delayed
+    // entrance dismiss immediately — the TransitionHelper-style asymmetric show/hide timing used by shy overlays.
+    float? ExitDelayMs = null)
 {
     /// <summary>Translate-only reflow (the default for reordered / moved items). Springs.</summary>
     public static LayoutTransition Slide => new(TransitionChannels.Position, TransitionDynamics.Default);

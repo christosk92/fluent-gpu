@@ -54,9 +54,12 @@ public static class ImageSource
         if (image is null) return ImageSourceQuality.None;
         var url = Quality(image.Url);
         if (url == ImageSourceQuality.Usable) return url;
+        var largest = Quality(image.LargestUrl);
+        if (largest == ImageSourceQuality.Usable) return largest;
 
         var tiles = Quality(image.MosaicTiles);
-        return tiles > url ? tiles : url;
+        var best = largest > url ? largest : url;
+        return tiles > best ? tiles : best;
     }
 
     public static bool IsUsable(Image? image) => Quality(image) == ImageSourceQuality.Usable;
@@ -94,7 +97,23 @@ public static class ImageSource
         if (!inOk) return visOk ? visible : incoming ?? visible;
         if (!visOk) return incoming;
         if (SameSource(incoming, visible)) return EnrichVisible(visible!, incoming!);
-        return visible;
+        // Preview and detail payloads commonly use different CDN hashes for the same cover size ladder. Keep the already
+        // visible lightweight URL (no blank/redecode during navigation), but retain the loaded payload's largest source
+        // so an immersive hero can explicitly upgrade without forcing every row/card to download it.
+        string? largest = incoming!.LargestUrl ?? incoming.Url;
+        return string.Equals(visible!.LargestUrl, largest, StringComparison.OrdinalIgnoreCase)
+            ? visible
+            : visible with { LargestUrl = largest };
+    }
+
+    /// <summary>Resolve the normal or largest known source for a rendering context.</summary>
+    public static string? UrlFor(Image? image, bool preferLargest)
+    {
+        if (image is null) return null;
+        string? value = preferLargest && !string.IsNullOrWhiteSpace(image.LargestUrl)
+            ? image.LargestUrl
+            : image.Url;
+        return Normalize(value);
     }
 
     public static ImageSourceQuality Quality(string? source)
@@ -108,12 +127,15 @@ public static class ImageSource
         bool needBlur = string.IsNullOrEmpty(visible.BlurHash) && !string.IsNullOrEmpty(incoming.BlurHash);
         bool needW = visible.Width is null && incoming.Width is not null;
         bool needH = visible.Height is null && incoming.Height is not null;
-        if (!needBlur && !needW && !needH) return visible;
+        string? incomingLargest = incoming.LargestUrl ?? incoming.Url;
+        bool needLargest = string.IsNullOrEmpty(visible.LargestUrl) && !string.IsNullOrEmpty(incomingLargest);
+        if (!needBlur && !needW && !needH && !needLargest) return visible;
         return visible with
         {
             BlurHash = needBlur ? incoming.BlurHash : visible.BlurHash,
             Width = needW ? incoming.Width : visible.Width,
             Height = needH ? incoming.Height : visible.Height,
+            LargestUrl = needLargest ? incomingLargest : visible.LargestUrl,
         };
     }
 

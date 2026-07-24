@@ -17,20 +17,40 @@ namespace Wavee;
 // per-render from live values (BuildHeader's pattern → the hero re-derives on every re-render, so no frozen-prop hazard
 // for the plain elements; Embed.Comp children freeze exactly as BuildHeader's do). Composition adapts to the resolved
 // orientation: fixed artwork BESIDE a flexing info column, or full-width artwork carrying its centered identity/actions
-// in the lower edge fade (immersive, matching Apple Music's album/playlist hierarchy). The former morphs its retained
-// identity into the shy header; immersive media instead parallax-dissolves into the page while a compact identity
-// crossfades in, avoiding the full-viewport-cover-to-thumbnail shrink.
+// in the lower edge fade (immersive, matching Apple Music's album/playlist hierarchy). The side cover, or the immersive
+// hero's small lower-edge token, morphs into the shy header; the full-bleed immersive media itself stays static.
 static class DetailVerticalHero
 {
+    static readonly LayoutTransition CompactPillPresence = new(
+        TransitionChannels.Opacity,
+        TransitionDynamics.Tween(280f, Easing.FluentDecelerate),
+        Enter: new EnterExit(Dy: 3f, Opacity: 0f, Active: true),
+        Exit: new EnterExit(Dy: -2f, Opacity: 0f, Active: true),
+        ExitDynamics: TransitionDynamics.Tween(150f, Easing.FluentAccelerate),
+        DelayMs: 80f,
+        ExitDelayMs: 0f);
+
+    static readonly LayoutTransition CompactToolPresence = new(
+        TransitionChannels.Opacity,
+        TransitionDynamics.Tween(220f, Easing.FluentDecelerate),
+        Enter: new EnterExit(Dy: 2f, Opacity: 0f, Active: true),
+        Exit: new EnterExit(Dy: -1f, Opacity: 0f, Active: true),
+        ExitDynamics: TransitionDynamics.Tween(120f, Easing.FluentAccelerate),
+        DelayMs: 24f,
+        ExitDelayMs: 0f);
+
+    static readonly MotionTokenDef ExpandedCrossfade =
+        MotionTokenDef.Eased(210f, Easing.FluentStandard, ReducedMotionPolicy.KeepFade);
+
     public static Element Build(DetailModel m, DetailConfig cfg, DetailHandlers h, Loadable<DetailModel> full,
-                                DetailHeroOrientation o, float artSize, float availW, float collapseDistance,
-                                float compactLeft, float compactSearchWidth,
-                                IReadSignal<bool> compactInteractive, Element toolbar)
+                                DetailHeroOrientation o, float artSize, float availW,
+                                float compactLeft, IReadSignal<bool> collapsed,
+                                IReadSignal<bool> compactInteractive, IReadSignal<bool> toolsVisible,
+                                string morphKey, Element toolbar, Element compactSearch)
     {
         bool side = o == DetailHeroOrientation.SideBySide;
         bool immersive = !side;
         bool editable = m.Capabilities.CanEditMetadata && m.ContextUri is { Length: > 0 };
-        bool expandedInteractive = !compactInteractive.Value;
 
         // Bucket the available width to 8 DIP before deriving the content width, so the InlineEdit facades' width-folding
         // keys (title/description) don't churn a remount on every sub-pixel resize frame.
@@ -43,40 +63,10 @@ static class DetailVerticalHero
         // leading-aligned (the cap never affects the < 580 vertical band, where the geometry is width-limited anyway).
         float contentW = MathF.Min(640f, MathF.Max(160f, side ? bw - pad - artSize - DetailVerticalLayout.HeroGap : bw - pad));
         int descLines = DetailVerticalLayout.DescriptionMaxLines(o);
-        float expandedFadeEnd = MathF.Min(collapseDistance, DetailVerticalLayout.ExpandedContentFadeDistance);
-        ScrollBindDsl[] FadeExpanded() =>
-        [
-            new() { From = ScrollChannel.Offset, To = BindSink.Opacity,
-                Range = ScrollRange.Px(0f, expandedFadeEnd), OutStart = 1f, OutEnd = 0f },
-        ];
-        ScrollBindDsl[] FadeMorphingPlay() =>
-        [
-            new() { From = ScrollChannel.Offset, To = BindSink.Opacity,
-                Range = ScrollRange.Px(collapseDistance * 0.42f, collapseDistance * 0.68f), OutStart = 1f, OutEnd = 0f },
-        ];
-        ScrollBindDsl[] ImmersiveArtworkBinds() =>
-        [
-            new() { From = ScrollChannel.Offset, To = BindSink.TransY,
-                Range = ScrollRange.Px(0f, collapseDistance), OutStart = 0f, OutEnd = -MathF.Min(96f, artSize * 0.16f),
-                Ease = Easing.Linear },
-            new() { From = ScrollChannel.Offset, To = BindSink.Opacity,
-                Range = ScrollRange.Px(collapseDistance * 0.12f, collapseDistance * 0.62f), OutStart = 1f, OutEnd = 0f,
-                Ease = Easing.Linear },
-        ];
-        ScrollBindDsl[] CompactRevealBinds() =>
-        [
-            new() { From = ScrollChannel.Offset, To = BindSink.Opacity,
-                Range = ScrollRange.Px(collapseDistance * 0.56f, collapseDistance * 0.82f), OutStart = 0f, OutEnd = 1f,
-                Ease = Easing.Linear },
-            new() { From = ScrollChannel.Offset, To = BindSink.TransY,
-                Range = ScrollRange.Px(collapseDistance * 0.56f, collapseDistance * 0.82f), OutStart = -6f, OutEnd = 0f,
-                Ease = Easing.Linear },
-        ];
         Element Fade(Element e) => new BoxEl
         {
             Direction = 1,
-            HitTestVisible = expandedInteractive,
-            OpacityGroup = true, ScrollBinds = FadeExpanded(),
+            HitTestVisible = true,
             Children = [e],
         };
 
@@ -87,39 +77,27 @@ static class DetailVerticalHero
         float fullArtY = side ? DetailVerticalLayout.HeroPad : 0f;
         // Side-by-side: pin Opacity/Trans to identity and morph in place. (In-flow cover — no overlay.)
         // connected:false avoids a Hero-fly dest that can leave the slot empty if the fly handoff glitches.
-        ScrollBindDsl[] SideArtworkBinds() =>
-        [
-            new() { From = ScrollChannel.Offset, To = BindSink.Opacity,
-                Range = ScrollRange.Px(0f, 1f), OutStart = 1f, OutEnd = 1f },
-            new() { From = ScrollChannel.Offset, To = BindSink.TransY,
-                Range = ScrollRange.Px(0f, 1f), OutStart = 0f, OutEnd = 0f },
-            new() { From = ScrollChannel.Offset, MorphLeftTo = compactLeft,
-                Range = ScrollRange.Px(0f, collapseDistance), OutStart = 0f, OutEnd = 1f },
-            new() { From = ScrollChannel.Offset,
-                MorphTopTo = (DetailVerticalLayout.CompactIdentityHeight - DetailVerticalLayout.CompactArtworkSize) * 0.5f,
-                Range = ScrollRange.Px(0f, collapseDistance), OutStart = 0f, OutEnd = 1f },
-            new() { From = ScrollChannel.Offset, To = BindSink.ScaleUniform,
-                Range = ScrollRange.Px(0f, collapseDistance), OutStart = 1f,
-                OutEnd = DetailVerticalLayout.CompactArtworkSize / MathF.Max(1f, artSize) },
-        ];
+        int heroDecodePx = side ? 256 : DetailVerticalLayout.ImmersiveArtworkDecodePx(artSize);
         Element artworkBox = new BoxEl
         {
             Width = artSize, Height = artSize, Shrink = 0f,
-            HitTestVisible = expandedInteractive,
+            HitTestVisible = true,
             Corners = CornerRadius4.All(side ? Radii.Card : 0f),
             Shadow = side ? Elevation.Card : default,
             ClipToBounds = true,
             // Apple melts the lower ~⅓ of the bitmap into the opaque page wash (longer melt = less hard plate).
             EdgeFade = immersive ? new EdgeFadeSpec(EdgeMask.Bottom, MathF.Min(260f, artSize * 0.34f)) : null,
             TransformOriginX = 0f, TransformOriginY = 0f,
-            ScrollBinds = side ? SideArtworkBinds() : ImmersiveArtworkBinds(),
             Children =
             [
                 editable
-                    ? PlaylistInlineEdit.Cover(full, artSize, side ? Radii.Card : 0f, shadow: side)
+                    ? PlaylistInlineEdit.Cover(full, artSize, side ? Radii.Card : 0f, shadow: side,
+                        morphKey: side ? morphKey : null, decodePx: heroDecodePx, preferLargest: immersive)
                     // Apple oversaturates album art for a punchier look under the hero scrim — applied in both hero
                     // layouts (immersive/stacked and the wide side-by-side rail).
-                    : DetailRail.HeroArtwork(m, artSize, side ? Radii.Card : 0f, connected: !side, saturation: 1.18f)
+                    : DetailRail.HeroArtwork(m, artSize, side ? Radii.Card : 0f, connected: false,
+                        saturation: 1.18f, morphKey: side ? morphKey : null, decodePx: heroDecodePx,
+                        preferLargest: immersive)
             ],
         };
 
@@ -167,6 +145,11 @@ static class DetailVerticalHero
                     Wrap = TextWrap.WrapWholeWords, MaxLines = 3, Trim = TextTrim.CharacterEllipsis,
                     Color = Tok.TextPrimary,
                 };
+        Element expandedTitle = new BoxEl
+        {
+            Direction = 1,
+            Children = [title],
+        };
 
         Element? attribution = Attribution(m, h, contentW, immersive, full);
 
@@ -200,19 +183,9 @@ static class DetailVerticalHero
         {
             infoKids.Add(new BoxEl
             {
-                Direction = 1, Width = contentW, HitTestVisible = expandedInteractive,
+                Direction = 1, Width = contentW, HitTestVisible = true,
                 TransformOriginX = 0f, TransformOriginY = 0f,
-                ScrollBinds =
-                [
-                    new() { From = ScrollChannel.Offset,
-                        MorphLeftTo = compactLeft + DetailVerticalLayout.CompactArtworkSize + Spacing.M,
-                        Range = ScrollRange.Px(0f, collapseDistance), OutStart = 0f, OutEnd = 1f },
-                    new() { From = ScrollChannel.Offset, MorphTopTo = 17f,
-                        Range = ScrollRange.Px(0f, collapseDistance), OutStart = 0f, OutEnd = 1f },
-                    new() { From = ScrollChannel.Offset, To = BindSink.ScaleUniform,
-                        Range = ScrollRange.Px(0f, collapseDistance), OutStart = 1f, OutEnd = 14f / titleSize },
-                ],
-                Children = [title],
+                Children = [expandedTitle],
             });
             if (attribution is not null) infoKids.Add(Fade(attribution));
             if (description is not null) infoKids.Add(description);
@@ -221,7 +194,7 @@ static class DetailVerticalHero
         else
         {
             // One Fade for the whole identity: title / artist / meta sit in a tight Apple stack (not Fluent 6-DIP list gap).
-            var identityKids = new List<Element>(3) { title };
+            var identityKids = new List<Element>(3) { expandedTitle };
             if (attribution is not null) identityKids.Add(attribution);
             if (meta is not null) identityKids.Add(meta);
             infoKids.Add(Fade(new BoxEl
@@ -239,7 +212,6 @@ static class DetailVerticalHero
         ColorF glassHover = ImmersiveGlassHover;
         ColorF glassPress = ImmersiveGlassPress;
         float actionSize = side ? 32f : 40f;
-        float compactPlayLeft = viewportW - compactLeft - DetailVerticalLayout.CompactArtworkSize;
         // Immersive Play is a plain white pill in the Apple 3-control row (no morph slot → no 48-DIP wrapper offset).
         // Side-by-side keeps the morphing Play that compositor-transforms into the compact header control.
         Element playButton = ActionButton(Icons.Play, Loc.Get(Strings.Detail.Play), actionSize,
@@ -247,55 +219,7 @@ static class DetailVerticalHero
             immersive ? ColorF.FromRgba(0, 0, 0) : onAccent,
             h.PlayAll, pill: immersive, width: immersive ? 132f : float.NaN,
             labelSize: immersive ? 15f : 13f);
-        Element expandedPlay = immersive
-            ? Fade(playButton)
-            : new BoxEl
-            {
-                Direction = 1, Height = 48f,
-                AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                HitTestVisible = expandedInteractive, OpacityGroup = true,
-                ScrollBinds = FadeMorphingPlay(),
-                Children = [playButton],
-            };
-        Element compactPlayVisual = new BoxEl
-        {
-            Width = 48f, Height = 48f, Shrink = 0f,
-            Corners = CornerRadius4.All(24f), Fill = h.Accent,
-            AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            HitTestVisible = false, OpacityGroup = true,
-            ScrollBinds =
-            [
-                new() { From = ScrollChannel.Offset, To = BindSink.Opacity,
-                    Range = ScrollRange.Px(collapseDistance * 0.52f, collapseDistance * 0.74f), OutStart = 0f, OutEnd = 1f },
-            ],
-            Children = [Icon(Icons.Play, 16f, onAccent)],
-        };
-        Element compactPlayHit = new BoxEl
-        {
-            Width = 48f, Height = 48f, Shrink = 0f,
-            Corners = CornerRadius4.All(24f), Cursor = CursorId.Hand, Role = AutomationRole.Button,
-            OnClick = h.PlayAll, HoverScale = 1.06f, PressScale = 0.94f,
-        };
-        Element playMorph = new BoxEl
-        {
-            ZStack = true, Width = side ? 76f : 88f, Height = 48f, Shrink = 0f,
-            HitTestPassThrough = true, TransformOriginX = 0f, TransformOriginY = 0f,
-            ScrollBinds =
-            [
-                new() { From = ScrollChannel.Offset, MorphLeftTo = compactPlayLeft,
-                    Range = ScrollRange.Px(0f, collapseDistance), OutStart = 0f, OutEnd = 1f },
-                new() { From = ScrollChannel.Offset, MorphTopTo = 10f,
-                    Range = ScrollRange.Px(0f, collapseDistance), OutStart = 0f, OutEnd = 1f },
-                new() { From = ScrollChannel.Offset, To = BindSink.ScaleUniform,
-                    Range = ScrollRange.Px(0f, collapseDistance), OutStart = 1f, OutEnd = 0.75f },
-            ],
-            Children =
-            [
-                Flow.Show(() => !compactInteractive.Value, expandedPlay),
-                compactPlayVisual,
-                Flow.Show(() => compactInteractive.Value, compactPlayHit),
-            ],
-        };
+        Element expandedPlay = Fade(playButton);
         var actions = new List<Element>(5);
         if (immersive)
         {
@@ -306,7 +230,7 @@ static class DetailVerticalHero
         }
         else
         {
-            actions.Add(playMorph);
+            actions.Add(expandedPlay);
             actions.Add(Fade(ActionButton(Icons.Shuffle, Loc.Get(Strings.Detail.Shuffle), actionSize,
                 Tok.FillSubtleSecondary, Tok.TextPrimary, h.Shuffle)));
         }
@@ -345,8 +269,13 @@ static class DetailVerticalHero
                 Direction = 0, Gap = DetailVerticalLayout.HeroGap, AlignItems = FlexAlign.Start,
                 Children =
                 [
-                    artworkBox,
-                    new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = Spacing.M, AlignItems = FlexAlign.Stretch, Children = infoKids.ToArray() },
+                    Flow.Show(() => !collapsed.Value, artworkBox, artworkPlaceholder),
+                    new BoxEl
+                    {
+                        Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f,
+                        Gap = Spacing.M, AlignItems = FlexAlign.Stretch,
+                        Children = infoKids.ToArray(),
+                    },
                 ],
             }
             : new BoxEl
@@ -360,8 +289,9 @@ static class DetailVerticalHero
                     {
                         Direction = 1, Width = viewportW, Height = artSize,
                         Justify = FlexJustify.End,
-                        Padding = new Edges4(DetailVerticalLayout.HeroPad, DetailVerticalLayout.HeroPad,
-                            DetailVerticalLayout.HeroPad, 22f),
+                        Padding = new Edges4(
+                            DetailVerticalLayout.HeroPad + DetailVerticalLayout.ImmersiveIdentityTokenSize + Spacing.M,
+                            DetailVerticalLayout.HeroPad, DetailVerticalLayout.HeroPad, DetailVerticalLayout.HeroPad),
                         // Identity cluster owns its own 3-DIP gap; outer gap only separates major blocks.
                         Gap = 0f, AlignItems = FlexAlign.Start,
                         Children = infoKids.ToArray(),
@@ -372,31 +302,40 @@ static class DetailVerticalHero
         Element expanded = new BoxEl
         {
             Direction = 1,
+            // Keep the measured tree mounted so the virtual prefix height cannot collapse into a blank band. One
+            // equality-gated compositor binding hides the whole expanded presentation at the identity edge.
+            Opacity = Prop.Of(() => collapsed.Value ? 0f : 1f),
+            Transition = ExpandedCrossfade,
             Children =
             [
                 side
-                    ? new BoxEl { Direction = 1, Padding = Edges4.All(DetailVerticalLayout.HeroPad), Children = [hero] }
+                    ? new BoxEl
+                    {
+                        Direction = 1,
+                        Padding = new Edges4(DetailVerticalLayout.HeroPad, DetailVerticalLayout.HeroPad,
+                            DetailVerticalLayout.HeroPad, DetailVerticalLayout.SideHeroBottomPad),
+                        Children = [hero],
+                    }
                     : hero,
                 new BoxEl
                 {
                     Direction = 1,
-                    Padding = new Edges4(compactLeft, DetailVerticalLayout.ExpandedToolbarTopPad,
+                    Padding = new Edges4(compactLeft,
+                        side ? DetailVerticalLayout.SideToolbarTopPad : DetailVerticalLayout.ExpandedToolbarTopPad,
                         compactLeft, DetailVerticalLayout.ExpandedToolbarBottomPad),
                     Children = [toolbar],
                 },
             ],
         };
 
-        // Immersive art stays a page-media overlay (parallax dissolve). Side-by-side already placed artworkBox in-flow.
-        if (!immersive) return expanded;
-
-        Element artworkLayer = new BoxEl
+        // Immersive art stays a static page-media overlay. Side-by-side already placed artworkBox in-flow.
+        Element? artworkLayer = immersive ? new BoxEl
         {
             Direction = 1,
             Padding = new Edges4(fullArtX, fullArtY, 0f, 0f),
             HitTestPassThrough = true,
             Children = [artworkBox],
-        };
+        } : null;
 
         static ColorF Scrim(float alpha) => ColorF.FromRgba(0, 0, 0) with { A = alpha };
         // Mid-band contrast only: EdgeFade dissolves the bitmap into the opaque page wash; this veil sits ABOVE the
@@ -410,7 +349,7 @@ static class DetailVerticalHero
                 new GradientStop(0.74f, Scrim(0.46f)),
                 new GradientStop(0.90f, Scrim(0.26f)),
                 new GradientStop(1f, Scrim(0f))),
-            OpacityGroup = true, ScrollBinds = FadeExpanded(),
+            OpacityGroup = true,
         };
 
         var utilityKids = new List<Element>(2);
@@ -426,8 +365,39 @@ static class DetailVerticalHero
             Direction = 0, Width = viewportW, Height = 60f, Gap = Spacing.S,
             Padding = new Edges4(0f, 12f, 14f, 0f),
             AlignItems = FlexAlign.Start, Justify = FlexJustify.End,
-            HitTestVisible = expandedInteractive, OpacityGroup = true,
-            ScrollBinds = FadeExpanded(), Children = utilityKids.ToArray(),
+            HitTestVisible = true,
+            Opacity = Prop.Of(() => collapsed.Value ? 0f : 1f),
+            Transition = ExpandedCrossfade,
+            Children = utilityKids.ToArray(),
+        };
+
+        Element immersiveToken = new BoxEl
+        {
+            Width = DetailVerticalLayout.ImmersiveIdentityTokenSize,
+            Height = DetailVerticalLayout.ImmersiveIdentityTokenSize,
+            Shrink = 0f, ClipToBounds = true,
+            Corners = CornerRadius4.All(6f), Shadow = Elevation.Card,
+            BorderWidth = 1f, BorderColor = ColorF.FromRgba(255, 255, 255) with { A = 0.20f },
+            HitTestVisible = false,
+            Children =
+            [
+                DetailRail.HeroArtwork(m, DetailVerticalLayout.ImmersiveIdentityTokenSize,
+                    radius: 6f, connected: false, morphKey: morphKey, decodePx: 256)
+            ],
+        };
+        Element immersiveTokenPlaceholder = new BoxEl
+        {
+            Width = DetailVerticalLayout.ImmersiveIdentityTokenSize,
+            Height = DetailVerticalLayout.ImmersiveIdentityTokenSize,
+            Shrink = 0f, HitTestVisible = false,
+        };
+        Element immersiveTokenLayer = new BoxEl
+        {
+            Direction = 1, Width = viewportW, Height = artSize,
+            Padding = new Edges4(DetailVerticalLayout.HeroPad, 0f, 0f, DetailVerticalLayout.HeroPad),
+            AlignItems = FlexAlign.Start, Justify = FlexJustify.End,
+            HitTestPassThrough = true,
+            Children = [Flow.Show(() => !collapsed.Value, immersiveToken, immersiveTokenPlaceholder)],
         };
 
         Element compactArtwork = new BoxEl
@@ -438,59 +408,120 @@ static class DetailVerticalHero
             Corners = CornerRadius4.All(4f), HitTestVisible = false,
             Children =
             [
-                DetailRail.HeroArtwork(m, DetailVerticalLayout.CompactArtworkSize, radius: 4f, connected: false)
+                DetailRail.HeroArtwork(m, DetailVerticalLayout.CompactArtworkSize, radius: 4f,
+                    connected: false, morphKey: morphKey, decodePx: 256)
             ],
         };
         Element compactPlay = new BoxEl
         {
             ZStack = true,
-            Width = DetailVerticalLayout.CompactArtworkSize,
-            Height = DetailVerticalLayout.CompactArtworkSize,
+            Width = DetailVerticalLayout.CompactPlaySize,
+            Height = DetailVerticalLayout.CompactPlaySize,
             Shrink = 0f, HitTestPassThrough = true,
             Children =
             [
                 new BoxEl
                 {
-                    Width = DetailVerticalLayout.CompactArtworkSize,
-                    Height = DetailVerticalLayout.CompactArtworkSize,
-                    Corners = CornerRadius4.All(DetailVerticalLayout.CompactArtworkSize * 0.5f),
+                    Width = DetailVerticalLayout.CompactPlaySize,
+                    Height = DetailVerticalLayout.CompactPlaySize,
+                    Corners = CornerRadius4.All(DetailVerticalLayout.CompactPlaySize * 0.5f),
                     Fill = h.Accent, HitTestVisible = false,
                     AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                     Children = [Icon(Icons.Play, 14f, onAccent)],
                 },
                 Flow.Show(() => compactInteractive.Value, new BoxEl
                 {
-                    Width = DetailVerticalLayout.CompactArtworkSize,
-                    Height = DetailVerticalLayout.CompactArtworkSize,
-                    Corners = CornerRadius4.All(DetailVerticalLayout.CompactArtworkSize * 0.5f),
+                    Width = DetailVerticalLayout.CompactPlaySize,
+                    Height = DetailVerticalLayout.CompactPlaySize,
+                    Corners = CornerRadius4.All(DetailVerticalLayout.CompactPlaySize * 0.5f),
                     Cursor = CursorId.Hand, Role = AutomationRole.Button, OnClick = h.PlayAll,
                     HoverScale = 1.06f, PressScale = 0.94f,
                 }),
             ],
         };
-        // CompactReveal drives opacity 0→1; do not also set a literal Opacity here — reconciler would reset it
-        // each update and the scroll bind's LastWritten gate could skip rewriting the scrolled-in value.
-        Element compactIdentity = new BoxEl
+        // Presence owns the pill fade/offset; the connected overlay independently carries the artwork between endpoints.
+        string compactMeta = m.OwnerName ?? m.MetaLine ?? eyebrow;
+        float compactPillMax = DetailVerticalLayout.CompactPillWidthCap(viewportW);
+        float compactTextMax = MathF.Max(80f,
+            compactPillMax - DetailVerticalLayout.CompactArtworkSize - Spacing.S - 16f);
+        ColorF compactPillFill = ColorF.Lerp(
+            Tok.FillSolidSecondary, h.Accent, Tok.Theme == ThemeKind.Dark ? 0.14f : 0.08f);
+        Element compactPill = new BoxEl
         {
-            Direction = 0, Width = viewportW, Height = DetailVerticalLayout.CompactIdentityHeight,
-            Padding = new Edges4(compactLeft, 0f, compactLeft, 0f), Gap = Spacing.M,
-            AlignItems = FlexAlign.Center, HitTestPassThrough = true, OpacityGroup = true,
-            ScrollBinds = CompactRevealBinds(),
+            Direction = 0, MinWidth = 0f, MaxWidth = compactPillMax,
+            Height = DetailVerticalLayout.CompactPillHeight, Shrink = 1f,
+            Padding = new Edges4(4f, 4f, 12f, 4f), Gap = Spacing.S,
+            AlignItems = FlexAlign.Center,
+            Corners = CornerRadius4.All(DetailVerticalLayout.CompactPillHeight * 0.5f),
+            Fill = compactPillFill, Shadow = Elevation.Card,
+            BorderWidth = 1f, BorderColor = Tok.StrokeSurfaceDefault,
+            HitTestVisible = false, Animate = CompactPillPresence,
+            TransformOriginX = 0f, TransformOriginY = 0.5f,
             Children =
             [
                 compactArtwork,
-                new TextEl(m.Title)
+                new BoxEl
                 {
-                    Grow = 1f, Basis = 0f, MinWidth = 0f,
-                    Size = 14f, Weight = 600, Color = Tok.TextPrimary,
-                    MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+                    Direction = 1, MinWidth = 0f, MaxWidth = compactTextMax, Shrink = 1f, Gap = 0f,
+                    Children =
+                    [
+                        new TextEl(m.Title)
+                        {
+                            Size = 13f, Weight = 650, Color = Tok.TextPrimary,
+                            MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+                        },
+                        new TextEl(compactMeta)
+                        {
+                            Size = 10f, Weight = 450, Color = Tok.TextTertiary,
+                            MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+                        },
+                    ],
                 },
-                new BoxEl { Width = compactSearchWidth, Height = 1f, Shrink = 0f, HitTestVisible = false },
-                compactPlay,
+            ],
+        };
+        Element compactSearchHost = new BoxEl
+        {
+            Shrink = 0f,
+            Children = [compactSearch],
+        };
+        Element compactTools = new BoxEl
+        {
+            Direction = 0, Shrink = 0f, Gap = Spacing.M,
+            AlignItems = FlexAlign.Center, Animate = CompactToolPresence,
+            Children = [compactSearchHost, compactPlay],
+        };
+        Element compactIdentityContent = new BoxEl
+        {
+            Direction = 0, Width = viewportW, Height = DetailVerticalLayout.CompactIdentityHeight,
+            Padding = new Edges4(compactLeft, 0f, compactLeft, 0f), Gap = Spacing.M,
+            AlignItems = FlexAlign.Center, HitTestPassThrough = true,
+            Children =
+            [
+                Flow.Show(() => collapsed.Value, compactPill),
+                new BoxEl { Grow = 1f, Basis = 0f, MinWidth = 0f, Height = 1f, HitTestVisible = false },
+                Flow.Show(() => toolsVisible.Value, compactTools),
+            ],
+        };
+        Element compactIdentity = new BoxEl
+        {
+            ZStack = true, Width = viewportW, Height = DetailVerticalLayout.CompactIdentityHeight,
+            HitTestPassThrough = true,
+            Children =
+            [
+                // Once compact, swallow clicks in the transparent gaps so the still-mounted faded controls cannot
+                // receive input. This node remains inside the scroller, so wheel/touch routing still reaches it.
+                Flow.Show(() => collapsed.Value, new BoxEl
+                {
+                    Width = viewportW, Height = DetailVerticalLayout.CompactIdentityHeight,
+                }),
+                compactIdentityContent,
             ],
         };
 
-        return ZStack(artworkLayer, copyContrast, expanded, immersiveUtilities, compactIdentity) with { Direction = 1 };
+        return immersive
+            ? ZStack(artworkLayer!, copyContrast, expanded,
+                immersiveUtilities, immersiveTokenLayer, compactIdentity) with { Direction = 1 }
+            : ZStack(expanded, compactIdentity) with { Direction = 1 };
     }
 
     // White-alpha plates over the art-derived wash — Apple's "accent-aware" circle controls (vibrancy without blur).

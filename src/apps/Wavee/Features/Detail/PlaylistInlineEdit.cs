@@ -24,9 +24,10 @@ namespace Wavee;
 /// <see cref="Loadable{T}"/> at event time.</summary>
 static class PlaylistInlineEdit
 {
-    internal static Element Cover(Loadable<DetailModel> full, float size, float radius = Radii.Card, bool shadow = true)
-        => Embed.Comp(() => new EditableCover(full, size, radius, shadow))
-            with { Key = $"pl-edit-cover:{(int)size}:{(int)radius}:{shadow}" };
+    internal static Element Cover(Loadable<DetailModel> full, float size, float radius = Radii.Card, bool shadow = true,
+                                  string? morphKey = null, int decodePx = 256, bool preferLargest = false)
+        => Embed.Comp(() => new EditableCover(full, size, radius, shadow, morphKey, decodePx, preferLargest))
+            with { Key = $"pl-edit-cover:{(int)size}:{(int)radius}:{shadow}:{morphKey}:{decodePx}:{preferLargest}" };
 
     internal static Element Title(Loadable<DetailModel> full, float width, float titleSize, ushort weight = 900,
                                   bool onMedia = false)
@@ -295,14 +296,21 @@ static class PlaylistInlineEdit
         readonly float _size;
         readonly float _radius;
         readonly bool _shadow;
+        readonly string? _morphKey;
+        readonly int _decodePx;
+        readonly bool _preferLargest;
         readonly Signal<bool> _hovered = new(false);
         readonly Signal<bool> _dropOver = new(false);
         readonly Signal<int> _status = new(StatusIdle);
         readonly Ref<DropTargetSpec?> _dropSpec = new(null);
         int _saveEpoch;
 
-        public EditableCover(Loadable<DetailModel> full, float size, float radius, bool shadow)
-        { _full = full; _size = size; _radius = radius; _shadow = shadow; }
+        public EditableCover(Loadable<DetailModel> full, float size, float radius, bool shadow,
+                             string? morphKey, int decodePx, bool preferLargest)
+        {
+            _full = full; _size = size; _radius = radius; _shadow = shadow;
+            _morphKey = morphKey; _decodePx = decodePx; _preferLargest = preferLargest;
+        }
 
         public override Element Render()
         {
@@ -310,7 +318,8 @@ static class PlaylistInlineEdit
             var svc = UseContext(Services.Slot);
             var m = _full.Value.Value;
             if (lib is null || !m.Capabilities.CanEditMetadata || m.ContextUri is not { } uri)
-                return DetailRail.HeroArtwork(m, _size, _radius);
+                return DetailRail.HeroArtwork(m, _size, _radius, connected: false,
+                    morphKey: _morphKey, decodePx: _decodePx, preferLargest: _preferLargest);
 
             var drag = UseDragState();
             bool compatibleDrag = drag.Active && drag.Kind == DropKinds.Files;
@@ -338,7 +347,8 @@ static class PlaylistInlineEdit
                 OnClick = () => _ = PickCoverAsync(lib, svc, uri),
                 Children =
                 [
-                    DetailRail.HeroArtwork(m, _size, _radius),
+                    DetailRail.HeroArtwork(m, _size, _radius, connected: false,
+                        morphKey: _morphKey, decodePx: _decodePx, preferLargest: _preferLargest),
                     // Always-mounted overlay — the cross-fade is a bound-opacity transition (compositor-only).
                     CoverOverlay(dropCue),
                 ],

@@ -60,10 +60,20 @@ sealed class TrackList : Component
     readonly bool _verticalHeader;                              // narrow detail mode: hero + chrome are measured rows in this list's scroller
     readonly Signal<bool>? _verticalHeroImmersive;
     readonly Signal<bool> _verticalCompactInteractive = new(false); // pin-edge only: enable compact Play hit target
+    readonly Signal<bool> _verticalIdentityCollapsed = new(false);   // coarse threshold edge: one shared-layout morph
+    readonly Signal<bool> _verticalToolsVisible = new(false);        // later threshold: search/play do not arrive with identity
     readonly Signal<float> _verticalHeaderHeight = new(0f);
     readonly Signal<float> _verticalHeroW = new(0f);           // measured page width (vertical mode) → the hero's orientation/art size
     DetailHeroOrientation _verticalHeroOrientation = DetailHeroOrientation.SideBySide;
     bool _verticalHeroOrientationInitialized;
+    float _verticalMorphEnter = 96f;
+    float _verticalMorphExit = 72f;
+    float _verticalToolsEnter = 128f;
+    float _verticalToolsExit = 104f;
+    string _verticalMorphKey = "detail-shy:pending";
+    Action<ConnectedTransitionRequest>? _beginConfiguredTransition;
+    static readonly ConnectedMotion ShyHeaderMotion =
+        ConnectedMotion.Eased(EasingSpec.CubicBezier(0.8f, 0f, 0.2f, 1f), 480f);
     bool _hasDate;                                             // any track carries an AddedAt → the Date-added column exists
     bool _hasBy;                                               // collaborative (≥2 contributors) → the Added-by column exists
     readonly Signal<int> _tier = new(0);                       // width tier (0 = widest/full), written by OnBoundsChanged
@@ -291,6 +301,7 @@ sealed class TrackList : Component
         _acts = UseContext(ActionServices.Slot); // the action system behind the row context menus + the batch bar
         _menuOverlay = UseContext(Overlay.Service);   // the overlay service the rows' attached menus open through
         var svc = UseContext(Services.Slot);     // extender client (recommended songs) + gate on live edits
+        _beginConfiguredTransition = UseContext(SharedTransition.BeginConfigured);
         _svc = svc; _post = UsePost();           // cached so the rec fetch/add handlers reach the extender + marshal results back to the UI thread
         Context.UseSignalEffect(() => Reactive.OnCleanup(() => { try { _recCts.Cancel(); _recCts.Dispose(); } catch { } }));   // cancel in-flight rec fetches on unmount
         var ui = UseContext(ShellUi.Slot);       // rail layout-defer lock (Task C): gate tier churn during a rail reflow
@@ -301,6 +312,8 @@ sealed class TrackList : Component
             // this runs AFTER OnBoundsChanged has published the real height; clearing it then re-bakes PresentedH with
             // the fallback while layout still reserves the natural height, clipping the hero until the next resize.
             _verticalCompactInteractive.Value = false;
+            _verticalIdentityCollapsed.Value = false;
+            _verticalToolsVisible.Value = false;
         }, _route.Value.Name);
         // One stable reactive snapshot owns every non-slot input a persistent row can observe. The memo reads the real
         // sources directly, so child rows never depend on this parent publishing mutable fields first.
@@ -802,7 +815,44 @@ sealed class TrackList : Component
     }
 
     (Func<ScrollGeometry, long> Project, Action<ScrollGeometry> Action) SwipeCloseObserver()
-        => (g => _swipeGroup.AnyOpen ? BitConverter.SingleToInt32Bits(g.OffsetY) : 0L, _ => _swipeGroup.Close());
+        => (ProjectScrollState, ApplyScrollState);
+
+    long ProjectScrollState(ScrollGeometry g)
+    {
+        int headerBands = 0;
+        if (_verticalHeader)
+        {
+            bool collapsed = _verticalIdentityCollapsed.Peek();
+            bool identity = collapsed
+                ? g.OffsetY > _verticalMorphExit
+                : g.OffsetY >= _verticalMorphEnter;
+            bool toolsShown = _verticalToolsVisible.Peek();
+            bool tools = toolsShown
+                ? g.OffsetY > _verticalToolsExit
+                : g.OffsetY >= _verticalToolsEnter;
+            headerBands = (identity ? 1 : 0) | (tools ? 2 : 0);
+        }
+        uint swipe = _swipeGroup.AnyOpen ? unchecked((uint)BitConverter.SingleToInt32Bits(g.OffsetY)) : 0u;
+        return ((long)headerBands << 32) | swipe;
+    }
+
+    void ApplyScrollState(ScrollGeometry g)
+    {
+        if (_swipeGroup.AnyOpen) _swipeGroup.Close();
+        if (!_verticalHeader) return;
+
+        bool identity = _verticalIdentityCollapsed.Peek();
+        bool nextIdentity = identity ? g.OffsetY > _verticalMorphExit : g.OffsetY >= _verticalMorphEnter;
+        bool tools = _verticalToolsVisible.Peek();
+        bool nextTools = tools ? g.OffsetY > _verticalToolsExit : g.OffsetY >= _verticalToolsEnter;
+        if (nextIdentity == identity && nextTools == tools) return;
+
+        if (nextIdentity != identity && g.UserScrollActive)
+            _beginConfiguredTransition?.Invoke(new ConnectedTransitionRequest(
+                _verticalMorphKey, ShyHeaderMotion, PreserveSourceOpacity: true, EnableClipAnimation: true));
+        if (nextIdentity != identity) _verticalIdentityCollapsed.Value = nextIdentity;
+        if (nextTools != tools) _verticalToolsVisible.Value = nextTools;
+    }
 
     ScrollBindDsl[] VerticalHeroBinds(float expandedHeight, float collapseDistance) =>
     [
@@ -838,15 +888,23 @@ sealed class TrackList : Component
         int tier = _tier.Value;
         float compactLeft = TrackRow.PadXFor(tier);
         bool toolbarLabeled = tier <= 1;
-        float compactSearchWidth = ToolbarSearchWidth(toolbarLabeled, tier);
-        Element toolbar = Toolbar(toolbarLabeled, tier, availW, compactLeft);
+        _verticalMorphEnter = DetailVerticalLayout.IdentityMorphEnterOffset(orientation, artSize, collapseDistance);
+        _verticalMorphExit = DetailVerticalLayout.IdentityMorphExitOffset(_verticalMorphEnter);
+        _verticalToolsEnter = DetailVerticalLayout.ToolsEnterOffset(collapseDistance, _verticalMorphEnter);
+        _verticalToolsExit = DetailVerticalLayout.ToolsExitOffset(collapseDistance, _verticalMorphExit);
+        string morphSuffix = _model.ContextUri ?? _route.Peek().Name;
+        string nextMorphKey = "detail-shy:" + morphSuffix;
+        if (!string.Equals(_verticalMorphKey, nextMorphKey, StringComparison.Ordinal)) _verticalMorphKey = nextMorphKey;
+        Element toolbar = Toolbar(toolbarLabeled, tier);
+        Element compactSearch = CompactSearch(tier);
         Element header = new BoxEl
         {
             Key = "vhero:header",
             Direction = 1,
             OnBoundsChanged = MeasureVerticalHeader,
             Children = [DetailVerticalHero.Build(_model, _cfg, h, _full, orientation, artSize, availW,
-                collapseDistance, compactLeft, compactSearchWidth, _verticalCompactInteractive, toolbar)],
+                compactLeft, _verticalIdentityCollapsed, _verticalCompactInteractive,
+                _verticalToolsVisible, _verticalMorphKey, toolbar, compactSearch)],
         };
         return new BoxEl
         {
@@ -949,7 +1007,7 @@ sealed class TrackList : Component
         return ZStack(content, shadow) with { Direction = 1 };
     }
 
-    Element Toolbar(bool labeled, int tier, float? morphWidth = null, float compactLeft = 0f)
+    Element Toolbar(bool labeled, int tier)
     {
         // Play / Shuffle: labeled (icon + text) at wide tiers, icon-only when the list narrows — the same collapse as the
         // view controls. Plain action buttons (no flyout) so they take the no-op NoAnchor.
@@ -972,56 +1030,16 @@ sealed class TrackList : Component
         if (_h.MultiSelect is not null && _h.SetMultiSelect is not null)
             leftKids.Add(Embed.Comp(() => new MultiSelectButton(_h.MultiSelect!, _h.SetMultiSelect!, _selection, labeled)));
 
-        float collapseDistance = _verticalHeader
-            ? DetailVerticalLayout.CollapseDistance(VerticalHeaderHeight(subscribe: true))
-            : 1f;
-        float expandedToolbarFadeEnd = MathF.Min(collapseDistance, DetailVerticalLayout.ExpandedToolbarFadeDistance);
         Element leftVisual = new BoxEl
         {
             Direction = 0, AlignItems = FlexAlign.Center, Gap = 2f,
-            OpacityGroup = _verticalHeader,
-            ScrollBinds = _verticalHeader
-                ? [new() { From = ScrollChannel.Offset, To = BindSink.Opacity,
-                    Range = ScrollRange.Px(0f, expandedToolbarFadeEnd), OutStart = 1f, OutEnd = 0f }]
-                : null,
             Children = leftKids.ToArray(),
         };
-        // At the exact native pin edge the already-transparent expanded controls leave the hit-test tree. On scroll-back
-        // they return at opacity zero and then fade up, so the visual remains continuous while clicks never hit ghosts.
-        Element left = _verticalHeader
-            ? Flow.Show(() => !_verticalCompactInteractive.Value, leftVisual)
-            : leftVisual;
+        Element left = leftVisual;
         // The "Find" box, docked alone on the right — a plain search field (no suggestions flyout), two-way bound to the
         // live filter query (View() matches case-insensitively on title / artist / album). Its trailing affix is the
         // filter funnel, so the "advanced filter" (hide explicit / videos only) folds into the search box itself.
-        float searchWidth = ToolbarSearchWidth(labeled, tier);
-        Element searchControl = Embed.Comp(() => new EditableText
-        {
-            Placeholder = Loc.Get(Strings.Detail.Filter.SearchThisList),
-            // Tiered width so icon-bar (~200px) + search always fit the tier's minimum pane width (720/440/340).
-            Width = searchWidth, Height = 32f,
-            Text = _h.Query,
-            RightAffix = Embed.Comp(() => new FilterButton(_h.Flags, _h.SetFlags, _model.HasVideo)),
-        });
-        Element search = searchControl;
-        if (_verticalHeader && morphWidth is { } compactW)
-        {
-            float compactPlayLeft = compactW - compactLeft - DetailVerticalLayout.CompactArtworkSize;
-            float compactSearchLeft = compactPlayLeft - Spacing.M - searchWidth;
-            search = new BoxEl
-            {
-                Width = searchWidth, Height = 32f, Shrink = 0f,
-                TransformOriginX = 0f, TransformOriginY = 0f,
-                ScrollBinds =
-                [
-                    new() { From = ScrollChannel.Offset, MorphLeftTo = compactSearchLeft,
-                        Range = ScrollRange.Px(0f, collapseDistance) },
-                    new() { From = ScrollChannel.Offset, MorphTopTo = 12f,
-                        Range = ScrollRange.Px(0f, collapseDistance) },
-                ],
-                Children = [searchControl],
-            };
-        }
+        Element search = SearchControl(labeled, tier);
         return new BoxEl
         {
             Key = labeled ? "cmdbar:lbl" : "cmdbar:icon",
@@ -1029,6 +1047,20 @@ sealed class TrackList : Component
             Margin = _verticalHeader ? default : new Edges4(0f, 0f, 0f, Spacing.XS),
             Children = [left, new BoxEl { Grow = 1f }, search],
         };
+    }
+
+    Element CompactSearch(int tier) => SearchControl(tier <= 1, tier);
+
+    Element SearchControl(bool labeled, int tier)
+    {
+        float searchWidth = ToolbarSearchWidth(labeled, tier);
+        return Embed.Comp(() => new EditableText
+        {
+            Placeholder = Loc.Get(Strings.Detail.Filter.SearchThisList),
+            Width = searchWidth, Height = 32f,
+            Text = _h.Query,
+            RightAffix = Embed.Comp(() => new FilterButton(_h.Flags, _h.SetFlags, _model.HasVideo)),
+        });
     }
 
     // A no-op OnRealized for the plain action buttons (Play / Shuffle) — they open no flyout, so they need no anchor.

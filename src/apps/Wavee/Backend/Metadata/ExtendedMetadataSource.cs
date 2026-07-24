@@ -424,19 +424,30 @@ public sealed class ExtendedMetadataSource : IMetadataSource
     static Image? PickImage(Lean.LeanImageGroup? group)
     {
         if (group is null) return null;
-        Lean.LeanImage? chosen = null, fallback = null;
+        // Keep DEFAULT as the normal card/list source, but retain the largest rendition separately for full-width heroes.
+        // This avoids paying 1024px decode/upload costs across every thumbnail while preventing a 300px cover from being
+        // stretched across the immersive detail surface.
+        Lean.LeanImage? chosen = null, fallback = null, largest = null;
+        int largestScore = int.MinValue;
         foreach (var img in group.Image)
         {
             if (img.FileId.Length == 0) continue;
             fallback ??= img;
-            if (img.Size == 0) { chosen = img; break; }   // 0 = Image.Size.DEFAULT (~300px)
+            if (img.Size == 0) chosen ??= img;   // 0 = Image.Size.DEFAULT (~300px)
+            int score = img.HasWidth && img.Width > 0 ? img.Width * 8 : img.Size;
+            if (largest is null || score > largestScore) { largest = img; largestScore = score; }
         }
         var pick = chosen ?? fallback;
         if (pick is null) return null;
+        string url = "https://i.scdn.co/image/" + Convert.ToHexStringLower(pick.FileId.Span);
+        string? largestUrl = largest is null
+            ? null
+            : "https://i.scdn.co/image/" + Convert.ToHexStringLower(largest.FileId.Span);
         return new Image(
-            "https://i.scdn.co/image/" + Convert.ToHexStringLower(pick.FileId.Span),   // one alloc, not ToHexString+ToLower
+            url,
             pick.HasWidth ? pick.Width : null,
-            pick.HasHeight ? pick.Height : null);
+            pick.HasHeight ? pick.Height : null,
+            LargestUrl: largestUrl);
     }
 
     // Per-sync memoization: a playlist's tracks share albums/artists, so the same gid recurs many times. Dedupe the base62

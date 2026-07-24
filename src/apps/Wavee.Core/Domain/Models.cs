@@ -11,16 +11,18 @@ namespace Wavee.Core;
 public sealed record Image
 {
     string _url = "";
+    string? _largestUrl;
     System.Collections.Generic.IReadOnlyList<string>? _mosaicTiles;
 
     public Image(string Url, int? Width = null, int? Height = null, string? BlurHash = null,
-        System.Collections.Generic.IReadOnlyList<string>? MosaicTiles = null)
+        System.Collections.Generic.IReadOnlyList<string>? MosaicTiles = null, string? LargestUrl = null)
     {
         this.Url = Url;
         this.Width = Width;
         this.Height = Height;
         this.BlurHash = BlurHash;
         this.MosaicTiles = MosaicTiles;
+        this.LargestUrl = LargestUrl;
     }
 
     public string Url
@@ -32,6 +34,18 @@ public sealed record Image
     public int? Width { get; init; }
     public int? Height { get; init; }
     public string? BlurHash { get; init; }
+
+    /// <summary>Largest rendition known for this artwork. Normal cards keep using <see cref="Url"/>; large immersive
+    /// surfaces opt into this source so a lightweight preview URL never becomes a blurry full-width hero.</summary>
+    public string? LargestUrl
+    {
+        get => _largestUrl;
+        init
+        {
+            var normalized = ImageSource.Normalize(value);
+            _largestUrl = string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+        }
+    }
 
     public System.Collections.Generic.IReadOnlyList<string>? MosaicTiles
     {

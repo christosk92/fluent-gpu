@@ -8,8 +8,9 @@ namespace FluentGpu.Animation;
 /// <summary>
 /// Connected animation / shared-element (Hero) transitions (backdrop-effects-animation.md §5.4/§5.6/§5.9). A node
 /// tagged with a shared key (<see cref="FluentGpu.Dsl.Element.MorphId"/>) flies its album-art image from the rect it
-/// occupied on the LEAVING route to the rect it occupies on the ARRIVING route — drawn as an UNCLIPPED overlay above
-/// all page content (so a grid card flying into a narrow detail rail is never cut off by the rail's scissor).
+/// occupied on the LEAVING route to the rect it occupies on the ARRIVING route — drawn as an overlay above all page
+/// content. Route transitions remain free of inner layout scissors; an opt-in local morph can instead carry its effective
+/// ancestor crop through the flight so clipped header media is never resurrected outside its visible band.
 ///
 /// Lifecycle: a node is registered by the reconciler (<see cref="NoteTagged"/>) and its laid-out rect + image are
 /// remembered each frame (<see cref="Tick65"/>, phase 6.5, Bounds valid). A source snapshot is captured either at
@@ -40,6 +41,17 @@ public readonly struct ConnectedMotion
     public static ConnectedMotion Default => Springy(SpringParams.FromResponse(0.32f, 1.0f));   // critically damped — smooth, no overshoot; tightened from 0.40s so a long Home→Detail fly settles into place instead of sailing
 }
 
+/// <summary>A one-shot connected-animation capture. The legacy string-only trigger continues to use the host's global
+/// motion token; this request lets a local shared-layout transition choose its own motion without retuning route flies.
+/// <paramref name="PreserveSourceOpacity"/> keeps a visibly-present source continuous during an in-page morph instead of
+/// replaying the route-navigation materialize fade. <paramref name="EnableClipAnimation"/> carries the source's effective
+/// ancestor clip into the overlay and eases it toward the destination clip, matching TransitionHelper's clip animation.</summary>
+public readonly record struct ConnectedTransitionRequest(
+    string Key,
+    ConnectedMotion Motion,
+    bool PreserveSourceOpacity = false,
+    bool EnableClipAnimation = false);
+
 public sealed class ConnectedAnimation
 {
     private readonly SceneStore _scene;
@@ -51,14 +63,45 @@ public sealed class ConnectedAnimation
     private readonly Dictionary<NodeHandle, Tag> _tagged = new();
 
     // Single-slot-per-key source snapshot awaiting a dest on the new route.
-    private struct Snapshot { public RectF Rect; public int ImageId; public CornerRadius4 Corners; public byte Fit; public NodeHandle Source; public int Age; }
+    private struct Snapshot
+    {
+        public RectF Rect;
+        public int ImageId;
+        public CornerRadius4 Corners;
+        public byte Fit;
+        public NodeHandle Source;
+        public int Age;
+        public float Opacity;
+        public ConnectedMotion Motion;
+        public bool PreserveSourceOpacity;
+        public bool OwnsPin;
+        public bool RestoreTaggedOnExpire;
+        public RectF VisibleRect;
+        public bool AnimateClip;
+    }
     private readonly Dictionary<string, Snapshot> _pending = new();
     private readonly HashSet<string> _freshlyCaptured = new();   // keys captured by Begin() this frame ⇒ suppress the source's own NoteUntagged reverse-capture
 
     // In-flight overlay flies. Keyed so every live node carrying the key stays hidden under the overlay until it lands.
     // SrcCorners→DestCorners morph the rounding over the fly (a circular artist cover squaring into a card slot); Sx0 is
     // the seed scale, so the morph progress tracks the spring (1 at the source, 0-radius-delta at the dest).
-    private struct Flight { public NodeHandle Overlay; public NodeHandle Dest; public string Key; public int ImageId; public int Age; public CornerRadius4 SrcCorners, DestCorners; public float Sx0; public float LastDx, LastM11; public bool HasLast; public RectF DestRect; public int DetSlot; }
+    private struct Flight
+    {
+        public NodeHandle Overlay;
+        public NodeHandle Dest;
+        public string Key;
+        public int ImageId;
+        public int Age;
+        public CornerRadius4 SrcCorners, DestCorners;
+        public float Sx0, Sy0, Tx0, Ty0;
+        public float LastDx, LastM11;
+        public bool HasLast;
+        public RectF DestRect;
+        public RectF DestClip;
+        public int DetSlot;
+        public ConnectedMotion Motion;
+        public bool AnimateClip;
+    }
     private readonly List<Flight> _flights = new();
     // Flag-gated rebuild (FG_DETACHED_FLY): the fly renders as a DetachedAnimSlab snapshot (SceneRecorder.RecordDetached)
     // instead of a live overlay node. Default off → the proven live-overlay path is unchanged (every existing gate holds).
@@ -196,27 +239,205 @@ public sealed class ConnectedAnimation
     // ── forward capture at click (app, before the nav route write) ───────────────────────────────
     /// <summary>Snapshot the live source tagged with <paramref name="key"/> just before navigation, so its art can fly
     /// to the dest on the new route. No-op under reduced motion or if no live source carries an image.</summary>
-    public void Begin(string key)
+    public void Begin(string key) => Begin(new ConnectedTransitionRequest(key, FlyMotion));
+
+    /// <summary>Capture a source with request-local motion. If the same key is already flying, its CURRENT presented
+    /// overlay becomes the new source so a threshold reversal continues without snapping to either endpoint.</summary>
+    public void Begin(ConnectedTransitionRequest request)
     {
-        if (ReducedMotion) return;
+        if (ReducedMotion || string.IsNullOrEmpty(request.Key)) return;
+        ConnectedMotion motion = NormalizeMotion(request.Motion);
+        if (TryCaptureFlight(request.Key, motion, out Snapshot interrupted))
+        {
+            Register(request.Key, interrupted);
+            _freshlyCaptured.Add(request.Key);
+            return;
+        }
+
         foreach (var kv in _tagged)
         {
-            if (kv.Value.Key != key || !_scene.IsLive(kv.Key)) continue;
+            if (kv.Value.Key != request.Key || !_scene.IsLive(kv.Key)) continue;
             ref NodePaint p = ref _scene.Paint(kv.Key);
             if (p.ImageId == 0) continue;
             var sr = _scene.AbsoluteRect(kv.Key);
-            if (MorphLog) System.Console.Error.WriteLine($"[morph] Begin key={key} src node={kv.Key.Raw.Index} rect=({sr.X:0},{sr.Y:0},{sr.W:0},{sr.H:0}) img={p.ImageId}");
-            Register(key, new Snapshot { Rect = sr, ImageId = p.ImageId, Corners = p.Corners, Fit = p.ImageFit, Source = kv.Key });
-            _freshlyCaptured.Add(key);
+            if (MorphLog) System.Console.Error.WriteLine($"[morph] Begin key={request.Key} src node={kv.Key.Raw.Index} rect=({sr.X:0},{sr.Y:0},{sr.W:0},{sr.H:0}) img={p.ImageId}");
+            Register(request.Key, new Snapshot
+            {
+                Rect = sr,
+                ImageId = p.ImageId,
+                Corners = p.Corners,
+                Fit = p.ImageFit,
+                Source = kv.Key,
+                Opacity = p.Opacity,
+                Motion = motion,
+                PreserveSourceOpacity = request.PreserveSourceOpacity,
+                VisibleRect = request.EnableClipAnimation ? EffectiveVisibleRect(kv.Key) : RectF.Infinite,
+                AnimateClip = request.EnableClipAnimation,
+            });
+            _freshlyCaptured.Add(request.Key);
             return;
         }
     }
 
+    private ConnectedMotion NormalizeMotion(ConnectedMotion motion)
+        => !motion.IsSpring && motion.DurationMs <= 0f ? FlyMotion : motion;
+
     private void Register(string key, Snapshot snap)
     {
-        if (_pending.TryGetValue(key, out var old)) _images.Unpin(new ImageHandle(old.ImageId));   // supersede: release the prior pin
-        _images.Pin(new ImageHandle(snap.ImageId));   // survive the source's synchronous unmount until the fly retires
+        if (_pending.TryGetValue(key, out var old))
+        {
+            if (old.OwnsPin) _images.Unpin(new ImageHandle(old.ImageId));
+            if (old.RestoreTaggedOnExpire) { SetTaggedVisible(key, true); SetTaggedOpacity(key, 1f, fade: false); }
+        }
+        if (!snap.OwnsPin)
+        {
+            _images.Pin(new ImageHandle(snap.ImageId));   // survive the source's synchronous unmount until the fly retires
+            snap.OwnsPin = true;
+        }
         _pending[key] = snap;
+    }
+
+    // A second Begin for an in-flight key is a reversal/retarget. Preserve the exact pixels currently on screen, transfer
+    // the existing image pin to a pending snapshot, and leave the old tagged endpoint culled until the new destination
+    // mounts. The app flips its Flow.Show signal immediately after this call.
+    private bool TryCaptureFlight(string key, ConnectedMotion requested, out Snapshot snapshot)
+    {
+        for (int i = _flights.Count - 1; i >= 0; i--)
+        {
+            var f = _flights[i];
+            if (f.Key != key || !_scene.IsLive(f.Overlay)) continue;
+            MorphCorners(in f);
+            ref NodePaint p = ref _scene.Paint(f.Overlay);
+            float progress = FlightProgress(in f, in p.LocalTransform);
+            snapshot = new Snapshot
+            {
+                Rect = PresentedRect(f.Overlay),
+                ImageId = f.ImageId,
+                Corners = p.Corners,
+                Fit = p.ImageFit,
+                Source = f.Dest,
+                Opacity = p.Opacity,
+                Motion = ScaleMotion(requested, progress),
+                PreserveSourceOpacity = true,
+                OwnsPin = true,
+                RestoreTaggedOnExpire = true,
+                VisibleRect = f.AnimateClip ? EffectiveVisibleRect(f.Overlay) : RectF.Infinite,
+                AnimateClip = f.AnimateClip,
+            };
+            FreeFlight(in f);                         // pin deliberately transfers to snapshot
+            _flights.RemoveAt(i);
+            if (_flights.Count == 0) _scene.OverlayClip = RectF.Infinite;
+            return true;
+        }
+        snapshot = default;
+        return false;
+    }
+
+    private RectF PresentedRect(NodeHandle node)
+    {
+        ref RectF b = ref _scene.Bounds(node);
+        var t = _scene.Paint(node).LocalTransform;
+        float w = b.W * t.M11, h = b.H * t.M22;
+        float cx = b.X + b.W * 0.5f + t.Dx, cy = b.Y + b.H * 0.5f + t.Dy;
+        return new RectF(cx - w * 0.5f, cy - h * 0.5f, w, h);
+    }
+
+    // Recompose the recorder's node-local→window transform without allocating an ancestor list. Connected captures are
+    // rare edge work, while Tick65 uses this only for the one or two live flights that explicitly requested clip motion.
+    private Affine2D WorldTransform(NodeHandle node)
+    {
+        NodeHandle parent = _scene.Parent(node);
+        Affine2D world = parent.IsNull ? Affine2D.Identity : WorldTransform(parent);
+        if (!parent.IsNull)
+        {
+            ref NodePaint pp = ref _scene.Paint(parent);
+            world = world.Translate(pp.ChildShiftX, pp.ChildShiftY);
+        }
+
+        ref RectF b = ref _scene.Bounds(node);
+        ref NodePaint p = ref _scene.Paint(node);
+        world = world.Translate(b.X, b.Y);
+        if (!p.LocalTransform.IsIdentity)
+        {
+            float ox = b.W * p.OriginX, oy = b.H * p.OriginY;
+            world = world.Translate(ox, oy).Multiply(p.LocalTransform).Translate(-ox, -oy);
+        }
+        return world;
+    }
+
+    // The pixels a tagged node can actually contribute after every ancestor's presented extent / authored clip. A local
+    // detail-header morph uses this instead of resurrecting the clipped portion in the unbounded overlay band.
+    private RectF EffectiveVisibleRect(NodeHandle node)
+    {
+        if (!_scene.IsLive(node)) return default;
+        ref RectF nb = ref _scene.Bounds(node);
+        RectF visible = WorldTransform(node).TransformBounds(new RectF(0f, 0f, nb.W, nb.H));
+        for (NodeHandle n = node; !n.IsNull; n = _scene.Parent(n))
+        {
+            ref NodePaint p = ref _scene.Paint(n);
+            Affine2D world = WorldTransform(n);
+            if ((_scene.Flags(n) & NodeFlags.ClipsToBounds) != 0)
+            {
+                ref RectF b = ref _scene.Bounds(n);
+                float w = float.IsNaN(p.PresentedW) ? b.W : p.PresentedW;
+                float h = float.IsNaN(p.PresentedH) ? b.H : p.PresentedH;
+                visible = visible.Intersect(world.TransformBounds(new RectF(0f, 0f, w, h)));
+            }
+            if (!p.ClipRect.IsInfinite)
+                visible = visible.Intersect(world.TransformBounds(p.ClipRect));
+            if (visible.IsEmpty) break;
+        }
+        return visible;
+    }
+
+    // Map a window-space visible rectangle into an overlay's model-local space. `presented` is where the overlay's full
+    // model box currently lands after FLIP; the normalized crop therefore survives translate/scale and reversal.
+    private static RectF LocalClip(in RectF visible, in RectF presented, float modelW, float modelH)
+    {
+        if (visible.IsInfinite || presented.W <= 0f || presented.H <= 0f) return RectF.Infinite;
+        float l = Math.Clamp((visible.X - presented.X) / presented.W, 0f, 1f) * modelW;
+        float t = Math.Clamp((visible.Y - presented.Y) / presented.H, 0f, 1f) * modelH;
+        float r = Math.Clamp((visible.Right - presented.X) / presented.W, 0f, 1f) * modelW;
+        float b = Math.Clamp((visible.Bottom - presented.Y) / presented.H, 0f, 1f) * modelH;
+        return RectF.FromLTRB(l, t, r, b);
+    }
+
+    private static bool IsFullClip(in RectF clip, float w, float h) =>
+        clip.IsInfinite ||
+        (MathF.Abs(clip.X) < 0.01f && MathF.Abs(clip.Y) < 0.01f &&
+         MathF.Abs(clip.Right - w) < 0.01f && MathF.Abs(clip.Bottom - h) < 0.01f);
+
+    private static bool SameRect(in RectF a, in RectF b, float eps = 0.01f) =>
+        (a.IsInfinite && b.IsInfinite) ||
+        (!a.IsInfinite && !b.IsInfinite &&
+         MathF.Abs(a.X - b.X) <= eps && MathF.Abs(a.Y - b.Y) <= eps &&
+         MathF.Abs(a.W - b.W) <= eps && MathF.Abs(a.H - b.H) <= eps);
+
+    private static ConnectedMotion ScaleMotion(ConnectedMotion motion, float fraction)
+    {
+        if (motion.IsSpring) return motion;
+        float baseMs = motion.DurationMs > 0f ? motion.DurationMs : 1f;
+        float floorMs = MathF.Min(120f, baseMs);
+        return ConnectedMotion.Eased(motion.Easing,
+            Math.Clamp(baseMs * Math.Clamp(fraction, 0f, 1f), floorMs, baseMs));
+    }
+
+    private static float FlightProgress(in Flight f, in Affine2D t)
+    {
+        float bestWeight = 0f, progress = 1f;
+        void Candidate(float weight, float value)
+        {
+            if (weight <= bestWeight) return;
+            bestWeight = weight;
+            progress = Math.Clamp(value, 0f, 1f);
+        }
+        Candidate(MathF.Abs(f.Tx0), MathF.Abs(f.Tx0) < 0.001f ? 1f : 1f - t.Dx / f.Tx0);
+        Candidate(MathF.Abs(f.Ty0), MathF.Abs(f.Ty0) < 0.001f ? 1f : 1f - t.Dy / f.Ty0);
+        Candidate(MathF.Abs(f.Sx0 - 1f) * MathF.Max(1f, f.DestRect.W),
+            MathF.Abs(f.Sx0 - 1f) < 0.001f ? 1f : (t.M11 - f.Sx0) / (1f - f.Sx0));
+        Candidate(MathF.Abs(f.Sy0 - 1f) * MathF.Max(1f, f.DestRect.H),
+            MathF.Abs(f.Sy0 - 1f) < 0.001f ? 1f : (t.M22 - f.Sy0) / (1f - f.Sy0));
+        return progress;
     }
 
     // ── phase 6.5: remember rects, seed flies to arrived dests, expire stale ─────────────────────
@@ -263,6 +484,11 @@ public sealed class ConnectedAnimation
                 {
                     if (MorphLog) System.Console.Error.WriteLine($"[morph] EXPIRE key={key} (no dest found in {MaxPendingAge} frames)");
                     _images.Unpin(new ImageHandle(snap.ImageId));   // no dest laid out in time → release the pin, drop the snapshot
+                    if (snap.RestoreTaggedOnExpire)
+                    {
+                        SetTaggedVisible(key, true);
+                        SetTaggedOpacity(key, 1f, fade: false);
+                    }
                     _pending.Remove(key);
                 }
                 else _pending[key] = snap;                       // dest not yet laid out on the live route — wait a frame
@@ -367,6 +593,16 @@ public sealed class ConnectedAnimation
         if (dest.W <= 0f || dest.H <= 0f) { _images.Unpin(new ImageHandle(snap.ImageId)); return; }
         if (MorphLog) System.Console.Error.WriteLine($"[morph] Fly key={key} src=({snap.Rect.X:0},{snap.Rect.Y:0},{snap.Rect.W:0},{snap.Rect.H:0}) dest=({dest.X:0},{dest.Y:0},{dest.W:0},{dest.H:0})");
 
+        RectF sourceClip = snap.AnimateClip
+            ? LocalClip(snap.VisibleRect, snap.Rect, dest.W, dest.H)
+            : RectF.Infinite;
+        RectF destVisible = snap.AnimateClip ? EffectiveVisibleRect(destNode) : RectF.Infinite;
+        RectF destClip = snap.AnimateClip
+            ? LocalClip(destVisible, dest, dest.W, dest.H)
+            : RectF.Infinite;
+        bool animateClip = snap.AnimateClip &&
+            (!IsFullClip(sourceClip, dest.W, dest.H) || !IsFullClip(destClip, dest.W, dest.H));
+
         RetireFlightsForKey(key);   // velocity-handoff lite: a rapid re-nav to the same key retires the old overlay so flies never stack
 
         var ov = _scene.CreateNode(8 /* ImageEl */);
@@ -387,6 +623,7 @@ public sealed class ConnectedAnimation
         float tx = (snap.Rect.X + snap.Rect.W * 0.5f) - (dest.X + dest.W * 0.5f);
         float ty = (snap.Rect.Y + snap.Rect.H * 0.5f) - (dest.Y + dest.H * 0.5f);
         p.LocalTransform = Affine2D.Translation(tx, ty).Multiply(Affine2D.Scale(sx, sy));
+        if (animateClip) p.ClipRect = sourceClip;
 
         if (!_detachedFly) _scene.AddOverlay(ov);   // detached rebuild draws via RecordDetached instead (overlay node stays engine-animated, undrawn)
         // Materialize-in: a short opacity fade so the cover eases into view rather than hard-popping at the source rect.
@@ -394,14 +631,29 @@ public sealed class ConnectedAnimation
         // image — only the overlay carries the art for this fade. Starts at a small floor (not 0) so the cover is never
         // a fully-transparent frame even if a tick were skipped, and keeps the shared element more continuous. Independent
         // of the translate/scale fly + the corner morph.
-        _anim.Animate(ov, AnimChannel.Opacity, 0.12f, 1f, FadeInMs, Easing.SmoothOut);
-        var motion = FlyMotion;
+        if (snap.PreserveSourceOpacity)
+        {
+            float opacity = snap.Opacity > 0f ? snap.Opacity : 1f;
+            p.Opacity = opacity;
+        }
+        else
+        {
+            _anim.Animate(ov, AnimChannel.Opacity, 0.12f, 1f, FadeInMs, Easing.SmoothOut);
+        }
+        var motion = NormalizeMotion(snap.Motion);
         if (motion.IsSpring)
         {
             _anim.Spring(ov, AnimChannel.ScaleX, 1f, motion.Spring, initial: sx);
             _anim.Spring(ov, AnimChannel.ScaleY, 1f, motion.Spring, initial: sy);
             _anim.Spring(ov, AnimChannel.TranslateX, 0f, motion.Spring, initial: tx);
             _anim.Spring(ov, AnimChannel.TranslateY, 0f, motion.Spring, initial: ty);
+            if (animateClip)
+            {
+                _anim.Spring(ov, AnimChannel.ClipL, destClip.X, motion.Spring, initial: sourceClip.X);
+                _anim.Spring(ov, AnimChannel.ClipT, destClip.Y, motion.Spring, initial: sourceClip.Y);
+                _anim.Spring(ov, AnimChannel.ClipR, destClip.Right, motion.Spring, initial: sourceClip.Right);
+                _anim.Spring(ov, AnimChannel.ClipB, destClip.Bottom, motion.Spring, initial: sourceClip.Bottom);
+            }
         }
         else   // eased — a custom EasingSpec (named or cubic-bézier) over a fixed duration
         {
@@ -410,6 +662,13 @@ public sealed class ConnectedAnimation
             _anim.Animate(ov, AnimChannel.ScaleY, sy, 1f, dur, motion.Easing);
             _anim.Animate(ov, AnimChannel.TranslateX, tx, 0f, dur, motion.Easing);
             _anim.Animate(ov, AnimChannel.TranslateY, ty, 0f, dur, motion.Easing);
+            if (animateClip)
+            {
+                _anim.Animate(ov, AnimChannel.ClipL, sourceClip.X, destClip.X, dur, motion.Easing);
+                _anim.Animate(ov, AnimChannel.ClipT, sourceClip.Y, destClip.Y, dur, motion.Easing);
+                _anim.Animate(ov, AnimChannel.ClipR, sourceClip.Right, destClip.Right, dur, motion.Easing);
+                _anim.Animate(ov, AnimChannel.ClipB, sourceClip.Bottom, destClip.Bottom, dur, motion.Easing);
+            }
         }
 
         SetTaggedOpacity(key, 0f, fade: false); SetTaggedVisible(key, false);   // hide the real dest under the flying overlay (record-culled; Tick65 re-applies each frame)
@@ -420,7 +679,24 @@ public sealed class ConnectedAnimation
             ref DetachedNode dn = ref _detached.At(detSlot);
             dn.Kind = (byte)VisualKind.Image; dn.ImageId = snap.ImageId; dn.Fit = snap.Fit;
         }
-        _flights.Add(new Flight { Overlay = ov, Dest = destNode, Key = key, ImageId = snap.ImageId, SrcCorners = snap.Corners, DestCorners = destCorners, Sx0 = sx, DestRect = dest, DetSlot = detSlot });
+        _flights.Add(new Flight
+        {
+            Overlay = ov,
+            Dest = destNode,
+            Key = key,
+            ImageId = snap.ImageId,
+            SrcCorners = snap.Corners,
+            DestCorners = destCorners,
+            Sx0 = sx,
+            Sy0 = sy,
+            Tx0 = tx,
+            Ty0 = ty,
+            DestRect = dest,
+            DestClip = destClip,
+            DetSlot = detSlot,
+            Motion = motion,
+            AnimateClip = animateClip,
+        });
     }
 
     private void RetireFlightsForKey(string key)
@@ -488,6 +764,20 @@ public sealed class ConnectedAnimation
                 MorphCorners(in f);   // morph the rounding source→dest over the fly (circle→square for an artist cover)
                 _flights[i] = f; continue;
             }
+            // Clip tracks restore the Infinite sentinel when they settle. Hold a partially clipped destination crop
+            // while waiting for its own image so the landed overlay cannot reveal pixels outside the live ancestor clip.
+            if (!overlayDead && f.AnimateClip)
+            {
+                ref NodePaint op = ref _scene.Paint(f.Overlay);
+                RectF landedClip = IsFullClip(f.DestClip, f.DestRect.W, f.DestRect.H)
+                    ? RectF.Infinite
+                    : f.DestClip;
+                if (!SameRect(op.ClipRect, landedClip))
+                {
+                    op.ClipRect = landedClip;
+                    _scene.Mark(f.Overlay, NodeFlags.PaintDirty);
+                }
+            }
             // LANDED — but HOLD the overlay (which carries the already-decoded source art) over the dest until the dest's
             // OWN image has decoded + revealed, so the hand-off is seamless (no music-note placeholder flash on reveal).
             if (!overlayDead && !wedged && !DestReady(f.Dest)) { _flights[i] = f; continue; }
@@ -531,6 +821,7 @@ public sealed class ConnectedAnimation
             d.WorldTransform = world;
             d.Bounds = b;
             d.Opacity = p.Opacity;
+            d.ClipRect = p.ClipRect;
             d.Corners = p.Corners;
             d.Fill = p.Fill;
             d.ImageId = p.ImageId;
@@ -578,35 +869,71 @@ public sealed class ConnectedAnimation
         // The visual rect the overlay occupies THIS frame (recorder composes T(bounds) ∘ about-centre(local)).
         float vw = b.W * t.M11, vh = b.H * t.M22;
         float vcx = b.X + b.W * 0.5f + t.Dx, vcy = b.Y + b.H * 0.5f + t.Dy;
+        RectF currentVisual = new(vcx - vw * 0.5f, vcy - vh * 0.5f, vw, vh);
+        RectF currentClipWorld = RectF.Infinite;
+        RectF currentClip = RectF.Infinite;
+        RectF destClip = RectF.Infinite;
+        if (f.AnimateClip)
+        {
+            currentClipWorld = p.ClipRect.IsInfinite
+                ? currentVisual
+                : WorldTransform(f.Overlay).TransformBounds(p.ClipRect).Intersect(currentVisual);
+            currentClip = LocalClip(currentClipWorld, currentVisual, newDest.W, newDest.H);
+            RectF destVisible = EffectiveVisibleRect(f.Dest);
+            destClip = LocalClip(destVisible, newDest, newDest.W, newDest.H);
+        }
 
         // Re-base: model box = the live dest rect; transform re-derived so the visual rect is bit-identical this frame.
         b = newDest;
         float sx = vw / newDest.W, sy = vh / newDest.H;
         float tx = vcx - (newDest.X + newDest.W * 0.5f), ty = vcy - (newDest.Y + newDest.H * 0.5f);
         p.LocalTransform = Affine2D.Translation(tx, ty).Multiply(Affine2D.Scale(sx, sy));
+        if (f.AnimateClip) p.ClipRect = currentClip;
         _scene.Mark(f.Overlay, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
 
         // Re-seed the motion from the re-based state toward the new identity (== exactly covering the live dest).
-        var motion = FlyMotion;
+        float progressNow = FlightProgress(in f, in t);
+        var motion = f.Motion;
         if (motion.IsSpring)
         {
             _anim.Spring(f.Overlay, AnimChannel.ScaleX, 1f, motion.Spring, initial: sx);
             _anim.Spring(f.Overlay, AnimChannel.ScaleY, 1f, motion.Spring, initial: sy);
             _anim.Spring(f.Overlay, AnimChannel.TranslateX, 0f, motion.Spring, initial: tx);
             _anim.Spring(f.Overlay, AnimChannel.TranslateY, 0f, motion.Spring, initial: ty);
+            if (f.AnimateClip)
+            {
+                _anim.Spring(f.Overlay, AnimChannel.ClipL, destClip.X, motion.Spring, initial: currentClip.X);
+                _anim.Spring(f.Overlay, AnimChannel.ClipT, destClip.Y, motion.Spring, initial: currentClip.Y);
+                _anim.Spring(f.Overlay, AnimChannel.ClipR, destClip.Right, motion.Spring, initial: currentClip.Right);
+                _anim.Spring(f.Overlay, AnimChannel.ClipB, destClip.Bottom, motion.Spring, initial: currentClip.Bottom);
+            }
         }
         else
         {
-            float dur = motion.DurationMs;
+            float floorMs = MathF.Min(120f, motion.DurationMs);
+            float dur = Math.Clamp(motion.DurationMs * (1f - progressNow), floorMs, motion.DurationMs);
             _anim.Animate(f.Overlay, AnimChannel.ScaleX, sx, 1f, dur, motion.Easing);
             _anim.Animate(f.Overlay, AnimChannel.ScaleY, sy, 1f, dur, motion.Easing);
             _anim.Animate(f.Overlay, AnimChannel.TranslateX, tx, 0f, dur, motion.Easing);
             _anim.Animate(f.Overlay, AnimChannel.TranslateY, ty, 0f, dur, motion.Easing);
+            if (f.AnimateClip)
+            {
+                _anim.Animate(f.Overlay, AnimChannel.ClipL, currentClip.X, destClip.X, dur, motion.Easing);
+                _anim.Animate(f.Overlay, AnimChannel.ClipT, currentClip.Y, destClip.Y, dur, motion.Easing);
+                _anim.Animate(f.Overlay, AnimChannel.ClipR, currentClip.Right, destClip.Right, dur, motion.Easing);
+                _anim.Animate(f.Overlay, AnimChannel.ClipB, currentClip.Bottom, destClip.Bottom, dur, motion.Easing);
+            }
+            motion = ConnectedMotion.Eased(motion.Easing, dur);
         }
 
         // Corner morph continuity: keep the eased progress across the basis change (MorphCorners reads (M11-Sx0)/(1-Sx0)).
         if (prog >= 0.99f) f.SrcCorners = f.DestCorners;
         f.Sx0 = prog < 0.99f ? (sx - prog) / (1f - prog) : sx;
+        f.Sy0 = sy;
+        f.Tx0 = tx;
+        f.Ty0 = ty;
+        f.Motion = motion;
+        if (f.AnimateClip) f.DestClip = destClip;
         f.DestCorners = _scene.IsLive(f.Dest) ? _scene.Paint(f.Dest).Corners : f.DestCorners;
         f.DestRect = newDest;
         f.HasLast = false;   // the settle detector's last-frame samples are in the old basis — re-prime
@@ -619,7 +946,9 @@ public sealed class ConnectedAnimation
         foreach (var kv in _tagged)
         {
             if (kv.Value.Key != key || !_scene.IsLive(kv.Key)) continue;
-            _scene.Paint(kv.Key).Opacity = op;
+            ref NodePaint p = ref _scene.Paint(kv.Key);
+            if (MathF.Abs(p.Opacity - op) <= 0.0001f) continue;
+            p.Opacity = op;
             _scene.Mark(kv.Key, NodeFlags.PaintDirty);
             if (fade && op > 0f) _anim.Animate(kv.Key, AnimChannel.Opacity, 0f, op, RevealMs, Easing.FluentDecelerate);
         }
@@ -634,7 +963,10 @@ public sealed class ConnectedAnimation
         foreach (var kv in _tagged)
         {
             if (kv.Value.Key != key || !_scene.IsLive(kv.Key)) continue;
-            if (visible) _scene.Flags(kv.Key) |= NodeFlags.Visible; else _scene.Flags(kv.Key) &= ~NodeFlags.Visible;
+            bool current = (_scene.Flags(kv.Key) & NodeFlags.Visible) != 0;
+            if (current == visible) continue;
+            if (visible) _scene.Flags(kv.Key) |= NodeFlags.Visible;
+            else _scene.Flags(kv.Key) &= ~NodeFlags.Visible;
             _scene.Mark(kv.Key, NodeFlags.PaintDirty);
         }
     }

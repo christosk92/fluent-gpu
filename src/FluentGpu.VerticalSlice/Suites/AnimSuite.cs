@@ -35,6 +35,13 @@ using static FluentGpu.VerticalSlice.Harness.Asserts;
 
 static class AnimSuite
 {
+    sealed class NeverImageDecoder : IImageDecoder
+    {
+        public bool Begin(int id, string source, int targetW, int targetH,
+                          ImagePriority priority = ImagePriority.Visible) => false;
+        public void Pump(ImageCompleteHandler onComplete, ImageReadyHandler onPixels) { }
+    }
+
     public static void Run(StringTable strings)
     {
         AnimChecks();
@@ -1189,6 +1196,123 @@ static class AnimSuite
             bool reclaimed = settledAt >= 0 && !scene.IsLive(child);     // deferred free → handle dead
             Check("23e. exit orphan stays live while fading, then reclaims (deferred free)",
                 mountedLive && orphaned && reclaimed, $"settled@{settledAt}");
+        }
+
+        // 23e1 — asymmetric presence delay: a shy overlay may wait before entering, but must start dismissing
+        // immediately. ExitDelayMs=0 overrides the entrance DelayMs without changing legacy specs where it is null.
+        {
+            var scene = new SceneStore();
+            var engine = new AnimEngine(scene);
+            var recon = new TreeReconciler(scene, strings) { Anim = engine };
+            var presence = new LayoutTransition(
+                TransitionChannels.Opacity,
+                TransitionDynamics.Tween(160f, Easing.Linear),
+                Enter: new EnterExit(Opacity: 0f, Active: true),
+                Exit: new EnterExit(Opacity: 0f, Active: true),
+                DelayMs: 240f,
+                ExitDelayMs: 0f);
+            Element Tree(bool present) => new BoxEl
+            {
+                Width = 100, Height = 100,
+                Children = present ? [new BoxEl { Key = "shy", Width = 50, Height = 20, Animate = presence }] : [],
+            };
+            var old = Tree(true);
+            recon.ReconcileRoot(old, null);
+            new FlexLayout(scene, new HeadlessFontSystem(strings)).Run(scene.Root);
+            var child = Child(scene, scene.Root, 0);
+            recon.ReconcileRoot(Tree(false), old);
+            engine.Tick(16f); engine.Tick(32f);
+            float opacity = scene.Paint(child).Opacity;
+            Check("23e1. ExitDelayMs overrides a delayed entrance so a shy overlay dismisses immediately",
+                scene.IsOrphan(child) && opacity < 0.99f, $"orphan={scene.IsOrphan(child)} opacity={opacity:0.00}");
+        }
+
+        // 23e1b — a local shared-layout fly carries the effective ancestor crop into its overlay, interpolates the clip
+        // with the same curve, and reverses from the currently presented crop. Reapplying an unchanged tag cull is clean.
+        {
+            var scene = new SceneStore();
+            var engine = new AnimEngine(scene);
+            var images = new ImageCache(new NeverImageDecoder());
+            var connected = new ConnectedAnimation(scene, engine, images);
+            var image = images.Request("clip-flight", 100, 100);
+
+            scene.Root = scene.CreateNode(1);
+            scene.Bounds(scene.Root) = new RectF(0f, 0f, 640f, 480f);
+            var clip = scene.CreateNode(1);
+            var source = scene.CreateNode(8);
+            var dest = scene.CreateNode(8);
+            scene.AppendChild(scene.Root, clip);
+            scene.AppendChild(clip, source);
+            scene.AppendChild(scene.Root, dest);
+            scene.Bounds(clip) = new RectF(20f, 20f, 200f, 200f);
+            scene.Paint(clip).PresentedH = 80f;
+            scene.Flags(clip) |= NodeFlags.Visible | NodeFlags.ClipsToBounds;
+            scene.Bounds(source) = new RectF(0f, 20f, 100f, 100f);
+            scene.Flags(source) |= NodeFlags.Visible;
+            scene.Paint(source).VisualKind = VisualKind.Image;
+            scene.Paint(source).ImageId = image.Id;
+            scene.Bounds(dest) = new RectF(300f, 30f, 36f, 36f);
+            scene.Flags(dest) |= NodeFlags.Visible;
+            scene.Paint(dest).VisualKind = VisualKind.Image;
+            scene.Paint(dest).ImageId = image.Id;
+
+            const string key = "local-cover";
+            connected.NoteTagged(source, key);
+            connected.NoteTagged(dest, key);
+            var request = new ConnectedTransitionRequest(
+                key,
+                ConnectedMotion.Eased(EasingSpec.CubicBezier(0.8f, 0f, 0.2f, 1f), 480f),
+                PreserveSourceOpacity: true,
+                EnableClipAnimation: true);
+            connected.Begin(request);
+            connected.Tick65();
+
+            var overlay = scene.OverlayAt(0);
+            RectF startClip = scene.Paint(overlay).ClipRect;
+            bool sourceCropCaptured = scene.OverlayCount == 1
+                && Near(startClip.X, 0f, 0.05f)
+                && Near(startClip.Y, 0f, 0.05f)
+                && Near(startClip.W, 36f, 0.05f)
+                && Near(startClip.H, 21.6f, 0.15f);
+
+            engine.Tick(0f);
+            engine.Tick(160f);
+            RectF midClip = scene.Paint(overlay).ClipRect;
+            bool clipInterpolates = midClip.H > startClip.H && midClip.H < 36f;
+
+            static RectF PresentedClip(SceneStore s, NodeHandle node)
+            {
+                ref RectF b = ref s.Bounds(node);
+                ref NodePaint p = ref s.Paint(node);
+                float w = b.W * p.LocalTransform.M11, h = b.H * p.LocalTransform.M22;
+                float x = b.X + (b.W - w) * 0.5f + p.LocalTransform.Dx;
+                float y = b.Y + (b.H - h) * 0.5f + p.LocalTransform.Dy;
+                RectF full = new(x, y, w, h);
+                if (p.ClipRect.IsInfinite) return full;
+                return new RectF(
+                    x + p.ClipRect.X * p.LocalTransform.M11,
+                    y + p.ClipRect.Y * p.LocalTransform.M22,
+                    p.ClipRect.W * p.LocalTransform.M11,
+                    p.ClipRect.H * p.LocalTransform.M22);
+            }
+
+            RectF beforeReverse = PresentedClip(scene, overlay);
+            connected.Begin(request);
+            connected.Tick65();
+            var reverseOverlay = scene.OverlayAt(0);
+            RectF afterReverse = PresentedClip(scene, reverseOverlay);
+            bool reverseContinuous = Near(beforeReverse.X, afterReverse.X, 0.25f)
+                && Near(beforeReverse.Y, afterReverse.Y, 0.25f)
+                && Near(beforeReverse.W, afterReverse.W, 0.25f)
+                && Near(beforeReverse.H, afterReverse.H, 0.25f);
+
+            scene.ClearRecordDirty();
+            connected.Tick65();
+            bool stableCullIsClean = !scene.AnyRecordDirty;
+
+            Check("23e1b. connected clip captures ancestor crop, interpolates, reverses continuously, and equality-gates tag culls",
+                sourceCropCaptured && clipInterpolates && reverseContinuous && stableCullIsClean,
+                $"start={startClip} mid={midClip} before={beforeReverse} after={afterReverse} clean={stableCullIsClean}");
         }
 
         // 23e2: an exit inside a rounded flyout + rectangular scroller must replay at its former parent, not in the

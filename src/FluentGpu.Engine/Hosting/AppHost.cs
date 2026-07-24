@@ -1564,6 +1564,7 @@ public sealed class AppHost : IDisposable
         _reconciler.SetAmbient(HostDispatch.Post, _hostPostSig);
         HostDispatch.Current = _uiPoster;   // process-static poster for non-component services (localization, …) — cleared in Dispose
         _reconciler.SetAmbient(SharedTransition.Begin, new Signal<object?>((Action<string>)_connected.Begin));   // connected-anim forward capture-at-click
+        _reconciler.SetAmbient(SharedTransition.BeginConfigured, new Signal<object?>((Action<FluentGpu.Animation.ConnectedTransitionRequest>)_connected.Begin));
         _reconciler.SetAmbient(SharedTransition.SetMotion, new Signal<object?>((Action<FluentGpu.Animation.ConnectedMotion>)(m => _connected.FlyMotion = m)));   // live fly-curve switcher (app A/B)
         // Window-visibility ambient: the channel value IS the visibility signal (an IReadSignal<bool>, never re-published),
         // so UseIsActive resolves it once and subscribes to the INNER signal — see Activation.IsActive.

@@ -87,29 +87,33 @@ public static class Surfaces
     /// <summary>Artwork slot: a neutral <see cref="Shimmer"/> tile under the async image (which cross-fades in over it
     /// once decoded). <paramref name="morphKey"/> tags the image as a connected-animation (Hero) participant so it flies
     /// to/from the like-tagged Home card. The tile shares ONE decode handle with the image (matched W×H, any aspect).</summary>
-    public static Element Artwork(Image? image, int seed, float width, float height, float corners, string? morphKey = null, int decodePx = 0, float saturation = 1f)
+    public static Element Artwork(Image? image, int seed, float width, float height, float corners, string? morphKey = null,
+                                  int decodePx = 0, float saturation = 1f, bool preferLargest = false)
     {
         if (image?.MosaicTiles is { Count: > 0 } tiles)
         {
             if (tiles.Count >= 4) return Mosaic(tiles, width, height, corners);
             image = new Image(tiles[0]);   // 1–3 distinct album covers → show the first as a single cover
         }
-        string? url = image?.Url is { Length: > 0 } u ? ImageSource.Normalize(u) : null;
+        string? url = ImageSource.UrlFor(image, preferLargest);
         if (url is { Length: 0 }) url = null;
         // Decode target: the display size by default; when decodePx>0 decode at THAT square size and COVER-fit it into the
         // slot instead. A connected-animation dest (the detail cover) passes the SAME decodePx as the Home card (256) so it
         // resolves to the SAME cached texture — the Hero fly hands off pixel-identically with NO fresh decode (killing the
         // cold first-visit cover-decode spike). The shimmer shares the chosen decode handle (matched W×H), so no fork.
         int dw = decodePx > 0 ? decodePx : (int)width, dh = decodePx > 0 ? decodePx : (int)height;
+        // Shared-layout art owns its placeholder. Culling only the tagged ImageEl must not leave a separate shimmer
+        // sibling painting the old large slot behind the flying overlay.
+        ColorF placeholder = morphKey is null ? ColorF.Transparent : ArtworkPlaceholder;
         Element img = url is null ? new BoxEl()
             : decodePx > 0
-                ? Ui.Image(url, ImageFit.Cover, 1f, decodePx, corners, ColorF.Transparent, image!.BlurHash) with { MorphId = morphKey, Saturation = saturation }
-                : Ui.Image(url, width, height, corners, ColorF.Transparent, image!.BlurHash) with { MorphId = morphKey, Saturation = saturation };
+                ? Ui.Image(url, ImageFit.Cover, 1f, decodePx, corners, placeholder, image!.BlurHash) with { MorphId = morphKey, Saturation = saturation }
+                : Ui.Image(url, width, height, corners, placeholder, image!.BlurHash) with { MorphId = morphKey, Saturation = saturation };
         return new BoxEl
         {
             ZStack = true, Width = width, Height = height, ClipToBounds = true,
             Corners = CornerRadius4.All(corners),
-            Children = [ Shimmer(url, dw, dh, width, height, corners), img ],
+            Children = morphKey is null ? [Shimmer(url, dw, dh, width, height, corners), img] : [img],
         };
     }
 

@@ -97,12 +97,13 @@ public sealed partial class AnimEngine
     public void SeedExit(NodeHandle node, in EnterExit e, in LayoutTransition spec)
     {
         TransitionDynamics dyn = Normalize(spec.ExitDynamics ?? spec.Dynamics);
-        SeedTerminal(node, AnimChannel.Opacity, e.Opacity, dyn, delayMs: spec.DelayMs);   // always (the exit-settle signal)
-        if (e.Dx != 0f) SeedTerminal(node, AnimChannel.TranslateX, e.Dx, dyn, delayMs: spec.DelayMs);
-        if (e.Dy != 0f) SeedTerminal(node, AnimChannel.TranslateY, e.Dy, dyn, delayMs: spec.DelayMs);
-        if (e.Sx != 1f) SeedTerminal(node, AnimChannel.ScaleX, e.Sx, dyn, delayMs: spec.DelayMs);
-        if (e.Sy != 1f) SeedTerminal(node, AnimChannel.ScaleY, e.Sy, dyn, delayMs: spec.DelayMs);
-        if (e.Blur != 0f) SeedTerminal(node, AnimChannel.BlurSigma, e.Blur, dyn, delayMs: spec.DelayMs);
+        float delay = spec.ExitDelayMs ?? spec.DelayMs;
+        SeedTerminal(node, AnimChannel.Opacity, e.Opacity, dyn, delayMs: delay);   // always (the exit-settle signal)
+        if (e.Dx != 0f) SeedTerminal(node, AnimChannel.TranslateX, e.Dx, dyn, delayMs: delay);
+        if (e.Dy != 0f) SeedTerminal(node, AnimChannel.TranslateY, e.Dy, dyn, delayMs: delay);
+        if (e.Sx != 1f) SeedTerminal(node, AnimChannel.ScaleX, e.Sx, dyn, delayMs: delay);
+        if (e.Sy != 1f) SeedTerminal(node, AnimChannel.ScaleY, e.Sy, dyn, delayMs: delay);
+        if (e.Blur != 0f) SeedTerminal(node, AnimChannel.BlurSigma, e.Blur, dyn, delayMs: delay);
     }
 
     private void SeedTerminal(NodeHandle node, AnimChannel ch, float to, in TransitionDynamics dyn, float? initial = null, float delayMs = 0f)
