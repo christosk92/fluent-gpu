@@ -173,9 +173,10 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
                 if (++controlDrained >= ControlDrainPerFrame) break;
                 continue;
             }
-            // At rest, admit one oversized image so a request larger than the budget cannot wedge forever. During
-            // scroll, never let that first oversized upload puncture the throttle; it remains Pending until rest.
-            if (next.ByteLen > byteCap - appliedBytes && (ScrollThrottled || applied > 0)) break;
+            // The byte budget is a burst budget, never an absolute per-image ceiling. Admit one oversized head item so
+            // a 1 MiB 512x512 cover cannot wedge behind the 512 KiB scroll target; after the first apply, enforce the
+            // remaining budget normally. ScrollThrottled already caps the count at one, so this cannot create a burst.
+            if (next.ByteLen > byteCap - appliedBytes && applied > 0) break;
             if (!_pixelOut.TryDequeue(out var d)) continue;
             // UI-thread callers normally serialize Cancel and Pump, but retain the final check for another-thread
             // cancellation between TryPeek and TryDequeue.

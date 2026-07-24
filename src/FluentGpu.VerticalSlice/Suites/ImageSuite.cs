@@ -728,6 +728,37 @@ static class ImageSuite
                 published && restApplies == 3 && scrollApplies == 1,
                 $"published={published} rest={restApplies} scroll={scrollApplies}");
         }
+
+        // The scroll byte target is a burst budget, not an absolute image-size ceiling. A normal 512x512 BGRA cover is
+        // 1 MiB, twice the 512 KiB scrolling target; it must consume the one allowed scrolling slot instead of wedging
+        // the FIFO (and every completion behind it) until the gesture ends.
+        using (var sched = new DecodeScheduler(new TestCodec(), new TestFetcher(),
+                   new DecodeOptions { MaxConcurrency = 1 }))
+        {
+            sched.Begin(301, "oversized-scroll/cover", 512, 512, ImagePriority.Visible);
+            sched.Begin(302, "oversized-scroll/follower", 8, 8, ImagePriority.Visible);
+            bool published = WaitPublished(sched);
+            sched.ScrollThrottled = true;
+
+            int firstId = 0, secondId = 0;
+            sched.Pump(
+                (id, ok, w, h, failure, attempts) => { if (ok) firstId = id; },
+                (id, px, w, h) => { });
+            int firstCount = sched.LastPumpAppliedCount;
+            int firstBytes = sched.LastPumpAppliedBytes;
+            bool followerPending = sched.HasReadyCompletions;
+
+            sched.Pump(
+                (id, ok, w, h, failure, attempts) => { if (ok) secondId = id; },
+                (id, px, w, h) => { });
+
+            Check("46d5. DecodeScheduler: one oversized visible cover passes the scroll budget without head-of-line starvation",
+                published && firstId == 301 && firstCount == 1 && firstBytes == 512 * 512 * 4
+                && followerPending && secondId == 302 && sched.LastPumpAppliedCount == 1
+                && !sched.HasReadyCompletions,
+                $"published={published} first={firstId}/{firstCount}/{firstBytes}B pending={followerPending} " +
+                $"second={secondId}/{sched.LastPumpAppliedCount} left={sched.HasReadyCompletions}");
+        }
     }
 
     static void PixelBufferPoolChecks()
