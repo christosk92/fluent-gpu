@@ -114,6 +114,7 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
     private long _pumpQpc;                   // Stopwatch.GetTimestamp() captured once at the top of Update() — the frame instant
     private long _pumpMs;                    // Environment.TickCount64 captured at the same instant (coarse ms clock, kept in step)
     private float _pumpEmaMs = 8f;           // EMA of the pump-to-pump interval ≈ this machine's vblank period during a gesture
+    private DmManualUpdatePacer _updatePacer;
                                              // (present-paced loop) — feeds CompositionDeltaMs so DM's lead matches the display
     // A stamp older than this (relative to now) was NOT produced by the current Update pump — an Emit reached from a
     // ProcessInput-time status change (contact-engage → RUNNING) — so Emit re-reads now instead of back-dating it.
@@ -156,6 +157,15 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
     /// legacy wheel messages for the SAME gesture (observed at runway exhaustion), and a second producer taking over a
     /// live gesture snaps the band and hijacks the coast.</summary>
     internal bool GestureLive => _enabled && (_status == DM_RUNNING || _status == DM_INERTIA);
+
+    /// <summary>True while manual-update DirectManipulation needs a compositor tick. The update manager is STA-bound:
+    /// the window pump owns the tick, while <see cref="DmManualUpdatePacer"/> prevents self-posted DM messages from
+    /// advancing it faster than display production.</summary>
+    internal bool NeedsClockTick => _enabled && (_awaitingEngage || GestureLive);
+
+    /// <summary>Remaining whole milliseconds until the absolute manual-update deadline, or -1 while idle.</summary>
+    internal int DelayUntilNextUpdateMs(long nowQpc)
+        => NeedsClockTick ? _updatePacer.ClampWait(-1, nowQpc) : -1;
 
     private bool SetUp()
     {
@@ -241,17 +251,40 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
         return (bool)handled;
     }
 
-    /// <summary>One <c>UpdateManager.Update</c> per pump drain (§7) — advances the OS inertia curve and pumps content
-    /// updates; also runs the wedge watchdog. Idempotent / cheap when idle.</summary>
-    internal void Update()
+    /// <summary>Advance manual-update DirectManipulation at most once per absolute display-production interval. A DM
+    /// update can enqueue another window message; an unconditional update after every message drain therefore forms a
+    /// self-wake loop. The absolute pacer never slides on those early wakes and never catches up missed ticks in a burst.</summary>
+    internal void UpdateIfDue()
     {
         if (!_enabled) return;
+        long nowQpc = Stopwatch.GetTimestamp();
+        long nowMs = Environment.TickCount64;
+        // Wedge watchdog: a SetContact that never reached RUNNING within the engage window is a wedge (DManip did not
+        // engage). Reaching RUNNING clears _awaitingEngage, so a legitimate finger-down-then-pause is NOT a wedge.
+        if (_awaitingEngage && nowMs - _engageTick > DmEngageTimeoutMs)
+        {
+            _awaitingEngage = false;
+            OnWedge();
+            if (!_enabled) return;   // OnWedge may have session-disabled + torn down
+        }
+        if (!NeedsClockTick)
+        {
+            _updatePacer.Disarm();
+            return;
+        }
+        if (!_updatePacer.Armed) _updatePacer.ArmImmediate(nowQpc);
+        if (!_updatePacer.TryConsume(nowQpc)) return;
+        UpdateCore(nowQpc, nowMs);
+    }
+
+    private void UpdateCore(long nowQpc, long nowMs)
+    {
         // §B.1: stamp this pump once. Every content update DM advances inside the _upd->Update() below fires on this
         // thread synchronously, so all of them (which Emit coalesces into one per-frame ScrollUpdate downstream) share
         // this single instant — the resampler's QPC x-axis then carries no per-packet receive jitter.
         long prevPump = _pumpQpc;
-        _pumpQpc = Stopwatch.GetTimestamp();
-        _pumpMs = Environment.TickCount64;
+        _pumpQpc = nowQpc;
+        _pumpMs = nowMs;
         // Self-measured pump cadence (EMA): during a gesture the loop is present-paced, so the pump interval IS this
         // machine's vblank period (8.3ms @120Hz, 16.7 @60Hz) — no refresh-rate query exists in the PAL, and hardcoding
         // either value over/under-leads the finger on the other class of machine. Idle gaps (>25ms) are excluded.
@@ -259,14 +292,6 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
         {
             float iv = (_pumpQpc - prevPump) * 1000f / Stopwatch.Frequency;
             if (iv > 2f && iv < 25f) _pumpEmaMs += (iv - _pumpEmaMs) * 0.1f;
-        }
-        // Wedge watchdog: a SetContact that never reached RUNNING within the engage window is a wedge (DManip did not
-        // engage). Reaching RUNNING clears _awaitingEngage, so a legitimate finger-down-then-pause is NOT a wedge.
-        if (_awaitingEngage && Environment.TickCount64 - _engageTick > DmEngageTimeoutMs)
-        {
-            _awaitingEngage = false;
-            OnWedge();
-            if (!_enabled) return;   // OnWedge may have session-disabled + torn down
         }
         if (_upd != null)
         {
@@ -303,6 +328,7 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
         }
         _awaitingEngage = true;
         _engageTick = Environment.TickCount64;
+        _updatePacer.ArmImmediate(Stopwatch.GetTimestamp());
         return true;
     }
 
@@ -333,9 +359,24 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
             if (previous == DM_INERTIA) Emit(InputKind.MomentumEnd, 0f, 0f);
             else if (previous == DM_RUNNING) Emit(InputKind.ScrollEnd, 0f, 0f);   // hold-release, no OS momentum
             _awaitingEngage = false;
+            _updatePacer.Disarm();
             ResetViewport();           // §7 "viewport reset" — recenter so the next gesture has fresh runway
             _haveBaseline = false;     // the recenter's content update re-baselines silently (Owns is false now)
         }
+    }
+
+    /// <summary>Give a positively identified physical mouse immediate ownership over a live touchpad manipulation.
+    /// Stop covers both contact and inertia; one synchronous manual update emits the terminal phase before the caller
+    /// queues the same wheel packet. Unknown/touchpad sources must never call this method.</summary>
+    internal bool TryStopForPhysicalWheel()
+    {
+        if (!GestureLive || _vp == null) return false;
+        _vp->Stop();
+        long nowQpc = Stopwatch.GetTimestamp();
+        _updatePacer.ArmImmediate(nowQpc);
+        if (_updatePacer.TryConsume(nowQpc))
+            UpdateCore(nowQpc, Environment.TickCount64);
+        return true;
     }
 
     internal void HandleContentUpdated(IDirectManipulationContent* content)
@@ -453,6 +494,7 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
         if (_torn) return;
         _torn = true;
         _enabled = false;
+        _updatePacer.Disarm();
 
         if (_vp != null)
         {
@@ -492,6 +534,72 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
         new(0x28B85A3D, 0x60A0, 0x48BD, 0x9B, 0xA1, 0x5C, 0xE8, 0xD9, 0xEA, 0x3A, 0x6D);
     private static readonly Guid IID_IDirectManipulationContent =
         new(0xB89962CB, 0x3D89, 0x442B, 0xBB, 0x58, 0x50, 0x98, 0xFA, 0x0F, 0x9F, 0x16);
+}
+
+/// <summary>Allocation-free absolute-deadline pacer for manual-update DirectManipulation. It is deliberately pure so
+/// message-storm, no-drift, and no-catch-up behavior can be locked by the Windows headless tests.</summary>
+internal struct DmManualUpdatePacer
+{
+    internal const int IntervalMs = 7;
+    private static readonly long s_intervalTicks = Math.Max(1L,
+        (long)Math.Ceiling(Stopwatch.Frequency * (IntervalMs / 1000d)));
+
+    private long _nextDueQpc;
+    internal bool Armed { get; private set; }
+
+    internal void ArmImmediate(long nowQpc)
+    {
+        _nextDueQpc = nowQpc;
+        Armed = true;
+    }
+
+    internal void Disarm()
+    {
+        _nextDueQpc = 0;
+        Armed = false;
+    }
+
+    internal bool TryConsume(long nowQpc)
+    {
+        if (!Armed || nowQpc < _nextDueQpc) return false;
+        long late = nowQpc - _nextDueQpc;
+        long slots = late / s_intervalTicks + 1;
+        _nextDueQpc += slots * s_intervalTicks;
+        return true;
+    }
+
+    internal int ClampWait(int hostTimeoutMs, long nowQpc)
+    {
+        if (!Armed) return hostTimeoutMs;
+        long remaining = _nextDueQpc - nowQpc;
+        int dueMs = remaining <= 0 ? 0 : (int)Math.Min(int.MaxValue,
+            Math.Ceiling(remaining * 1000d / Stopwatch.Frequency));
+        return hostTimeoutMs < 0 ? dueMs : Math.Min(hostTimeoutMs, dueMs);
+    }
+}
+
+internal enum DmWheelSourceEvidence : byte
+{
+    Unknown,
+    PhysicalMouse,
+    Touchpad,
+}
+
+internal enum DmWheelRoute : byte
+{
+    ExistingClassifier,
+    StopDmAndPass,
+    DmOwned,
+}
+
+/// <summary>Pure device-evidence arbitration. Only a positively identified physical mouse can preempt live DM.</summary>
+internal static class DmWheelArbitration
+{
+    internal static DmWheelRoute Decide(bool dmLive, DmWheelSourceEvidence source)
+        => !dmLive ? DmWheelRoute.ExistingClassifier
+         : source == DmWheelSourceEvidence.PhysicalMouse ? DmWheelRoute.StopDmAndPass
+         : source == DmWheelSourceEvidence.Touchpad ? DmWheelRoute.DmOwned
+         : DmWheelRoute.ExistingClassifier;
 }
 
 /// <summary>The hand-rolled <c>IDirectManipulationViewportEventHandler</c> CCW (vtable + refcount + owner GCHandle) —

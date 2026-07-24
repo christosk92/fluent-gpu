@@ -937,7 +937,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
-        _dm?.Update();           // one UpdateManager.Update per drain (§7) — advances OS inertia + runs the wedge watchdog
+        _dm?.UpdateIfDue();      // absolute-deadline manual-update tick; self-posted DM messages cannot spin the UI loop
         TryEmitFallbackLift();   // hi-res silence lift (also fires off the LiftTimer when the loop is idle — see below)
         // Live-DM wheel defense: a held ±120 notch that survived WheelBurstMaxGapMs without a fast follow-up was a
         // genuine mouse notch (synthesis bursts arrive at packet cadence) — deliver it now, ≤50ms late.
@@ -1037,6 +1037,13 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
 
     public void WaitForWork(int timeoutMs)
     {
+        // Manual-update DirectManipulation shares this UI/STA pump. Clamp to its ABSOLUTE remaining deadline; queued
+        // messages may wake us early, but never re-arm or postpone that deadline.
+        if (_dm is { Enabled: true } dm)
+        {
+            int dmWaitMs = dm.DelayUntilNextUpdateMs(System.Diagnostics.Stopwatch.GetTimestamp());
+            if (dmWaitMs >= 0 && (timeoutMs < 0 || dmWaitMs < timeoutMs)) timeoutMs = dmWaitMs;
+        }
         // MsgWaitForMultipleObjectsEx's millisecond timeout is quantized by the system timer. On this 120-Hz device a
         // requested 7 ms display-rate wait repeatedly took ~12-13 ms, limiting an otherwise 0.3 ms scroll frame to
         // ~80 fps. A high-resolution waitable timer preserves the same "message OR deadline" contract without
@@ -1351,7 +1358,31 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 if (streamIdle) { _wheelHiRes = false; _wheelBurstRun = 0; _wheelAccumX = 0; _wheelAccumY = 0; }
 
                 uint wheelPid = GET_POINTERID_WPARAM(wParam);
-                bool ptTouchpad = PointerKindOf(wheelPid) == PointerKind.Touchpad;   // rule 1
+                DmWheelSourceEvidence sourceEvidence = WheelSourceEvidenceOf(wheelPid);
+                bool ptTouchpad = sourceEvidence == DmWheelSourceEvidence.Touchpad
+                                  || PointerKindOf(wheelPid) == PointerKind.Touchpad;   // rule 1
+                if (ptTouchpad) sourceEvidence = DmWheelSourceEvidence.Touchpad;
+
+                // Device-evidence arbitration happens before the live-DM hold/confirm heuristic. A positively identified
+                // physical mouse owns the same packet immediately over BOTH contact and inertia; a known touchpad stays
+                // DM-owned. Unknown sources retain the conservative hold/confirm path below.
+                bool wheelTookOverDm = false;
+                DmWheelRoute dmRoute = DmWheelArbitration.Decide(
+                    _dm is { Enabled: true, GestureLive: true }, sourceEvidence);
+                if (dmRoute == DmWheelRoute.DmOwned) return true;
+                if (dmRoute == DmWheelRoute.StopDmAndPass && _dm is { Enabled: true } takeoverDm)
+                {
+                    wheelTookOverDm = takeoverDm.TryStopForPhysicalWheel();
+                    if (wheelTookOverDm)
+                    {
+                        _dmWheelBurstLatch = false;
+                        FlushHeldWheelNotch();
+                        _wheelHiRes = false;
+                        _wheelBurstRun = 0;
+                        _wheelAccumX = 0;
+                        _wheelAccumY = 0;
+                    }
+                }
                 bool subNotch = notch != 0 && (notch % 120) != 0;                    // rule 2 (also the trace's "thisHiRes")
                 bool thisHiRes = subNotch;
                 if (ptTouchpad || subNotch) _wheelHiRes = true;
@@ -1380,7 +1411,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 // letting them through hijacks the coast (CancelGesture + WheelAnimating) and snaps the band. Hold-and-
                 // confirm: first ±120-multiple is held; a <50ms follow-up confirms synthesis (swallow the whole burst);
                 // 50ms of silence flushes it as a genuine mouse notch (FlushHeldWheelNotch in PumpInto).
-                if (notch != 0 && notch % 120 == 0 && _dm is { Enabled: true } dmg && dmg.GestureLive)
+                if (!wheelTookOverDm && notch != 0 && notch % 120 == 0
+                    && _dm is { Enabled: true } dmg && dmg.GestureLive)
                 {
                     if (_dmWheelBurstLatch)
                     {
@@ -1413,7 +1445,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                     // Never two phase-contract producers for one gesture (§7): while a DManip manipulation is live, DM
                     // is THE producer — a wheel packet routed to the hi-res fallback here would emit a competing
                     // ScrollBegin/Update stream into the same latched gesture. Swallow it; DM reports the motion.
-                    if (_dm is { Enabled: true } dmOwner && dmOwner.GestureLive) return true;
+                    if (!wheelTookOverDm && _dm is { Enabled: true } dmOwner && dmOwner.GestureLive) return true;
                     // Ctrl+hi-res wheel is the OS's legacy PINCH synthesis — consume it, never scroll (design §5/§11).
                     if ((Mods() & KeyModifiers.Ctrl) != 0)
                     {
@@ -1822,6 +1854,22 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 pressure = 1f;
                 return;
         }
+    }
+
+    // Strong wheel-source evidence used only for live-DM ownership transfer. Unknown never means mouse: promoted
+    // precision-touchpad wheels can report PT_MOUSE, so a source device that GetPointerDevice cannot resolve stays on
+    // the conservative hold/confirm path.
+    private DmWheelSourceEvidence WheelSourceEvidenceOf(uint pointerId)
+    {
+        POINTER_INFO pi;
+        if (!GetPointerInfo(pointerId, &pi)) return DmWheelSourceEvidence.Unknown;
+        if (pi.pointerType == PT_TOUCHPAD) return DmWheelSourceEvidence.Touchpad;
+        if (pi.pointerType != PT_MOUSE || pi.sourceDevice == 0) return DmWheelSourceEvidence.Unknown;
+        POINTER_DEVICE_INFO device;
+        if (!GetPointerDevice(pi.sourceDevice, &device)) return DmWheelSourceEvidence.Unknown;
+        return device.pointerDeviceType == POINTER_DEVICE_TYPE_TOUCH_PAD
+            ? DmWheelSourceEvidence.Touchpad
+            : DmWheelSourceEvidence.PhysicalMouse;
     }
 
     // Device-class tag used by wheel/leave/capture. Some precision-touchpad stacks expose the message-level pointer type

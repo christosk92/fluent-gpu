@@ -51,17 +51,25 @@ public enum ScrollWriter : byte
 /// string+console writes — visibly perturbs pacing): this one is built for offline numeric analysis.
 ///
 /// CSV columns: <c>tMs,frame,kind,i0,i1,i2,f0,f1,f2,f3,f4,f5,auxMs</c> — tMs is ms since trace start (Stopwatch),
-/// auxMs the event's own QPC stamp mapped to the same axis (empty when the event carried none). Zero work when
-/// <see cref="On"/> is false (one branch per call site; nothing allocated — the headless alloc gates run with it off).
+/// auxMs the event's own QPC stamp mapped to the same axis (empty when the event carried none). Debug pays one disabled
+/// branch per guarded call. Release erases those call sites entirely unless <c>FLUENTGPU_DIAG</c> is explicitly defined.
 /// Default output: <c>%TEMP%\fg-scrolltrace.csv</c> (overwritten per run).
 /// </summary>
 public static class ScrollTrace
 {
     /// <summary>True iff <c>FG_SCROLL_TRACE</c> was set (non-empty, not "0") at process start.</summary>
+#if DEBUG || FLUENTGPU_DIAG
     public static readonly bool On;
+#else
+    public const bool On = false;
+#endif
 
     private static readonly string s_path = "";
+#if DEBUG || FLUENTGPU_DIAG
     private static readonly Rec[] s_buf;
+#else
+    private static readonly Rec[] s_buf = Array.Empty<Rec>();
+#endif
     private static readonly double s_msPerTick = 1000.0 / Stopwatch.Frequency;
     private static readonly long s_t0;
     private static int s_count;
@@ -84,6 +92,7 @@ public static class ScrollTrace
         public ScrollTraceKind K;
     }
 
+#if DEBUG || FLUENTGPU_DIAG
     static ScrollTrace()
     {
         string? v = Environment.GetEnvironmentVariable("FG_SCROLL_TRACE");
@@ -95,6 +104,7 @@ public static class ScrollTrace
         AppDomain.CurrentDomain.ProcessExit += static (_, _) => Flush();
         try { Console.WriteLine("[scrolltrace] writing to " + s_path); } catch { }
     }
+#endif
 
     // ── frame boundary + idle flush ──────────────────────────────────────────────────────────────────────────────
 
@@ -293,19 +303,23 @@ public static class ScrollTrace
     public static int AuditMaxWritesPerFrame;
 
     /// <summary>Begin an offset-write audit window (resets the counters + arms <see cref="Audit"/>).</summary>
+    [Conditional("DEBUG"), Conditional("FLUENTGPU_DIAG")]
     public static void AuditBegin() { Audit = true; AuditForeignWriter = false; AuditWritesThisFrame = 0; AuditMaxWritesPerFrame = 0; }
     /// <summary>Frame boundary: fold this frame's write count into the running max, then zero it for the next frame.</summary>
+    [Conditional("DEBUG"), Conditional("FLUENTGPU_DIAG")]
     public static void AuditResetFrame()
     {
         if (AuditWritesThisFrame > AuditMaxWritesPerFrame) AuditMaxWritesPerFrame = AuditWritesThisFrame;
         AuditWritesThisFrame = 0;
     }
     /// <summary>End the audit window.</summary>
+    [Conditional("DEBUG"), Conditional("FLUENTGPU_DIAG")]
     public static void AuditStop() { Audit = false; }
 
     /// <summary>Record ONE real offset write (scroll-feel-rework-v2 §8): the sole offset-mutation chokepoint calls this
     /// after an actual move. Feeds the 0-alloc single-writer audit always, and the CSV ring when <see cref="On"/>. Never
     /// allocates.</summary>
+    [Conditional("DEBUG"), Conditional("FLUENTGPU_DIAG")]
     public static void OffsetWrite(int nodeIdx, byte phase, ScrollWriter writer, float offset)
     {
         if (Audit)

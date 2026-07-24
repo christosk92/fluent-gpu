@@ -2180,6 +2180,18 @@ static class ScrollSuite
             host.Scene.TryGetScroll(vp, out var before);
             bool touchpadHeldBand = host.Input.GestureActive && before.OverscrollPx < -1f && before.OffsetY == 0f;
 
+            // Enter OS-owned inertia without ticking another frame. A physical wheel may arrive while either fingers are
+            // still down or this momentum tail is live; both must hand over synchronously.
+            host.Input.Dispatch(new[]
+            {
+                new InputEvent(InputKind.MomentumBegin, pos, 0, 0,
+                    Pointer: PointerKind.Touchpad, TimestampMs: 1024, PointerId: 7,
+                    DeviceClassRaw: (byte)ScrollDeviceClass.Touchpad),
+                new InputEvent(InputKind.MomentumUpdate, pos, 0, 0, ScrollDelta: -8f,
+                    Pointer: PointerKind.Touchpad, TimestampMs: 1025, PointerId: 7,
+                    DeviceClassRaw: (byte)ScrollDeviceClass.Touchpad),
+            });
+
             // Dispatch the mouse event directly so the state is observed immediately after input ownership transfers,
             // before the integrator advances the newly-seeded WheelAnimating chase.
             var mouse = new[]
@@ -2196,6 +2208,24 @@ static class ScrollSuite
                                 && !float.IsNaN(handed.PendingTargetY) && handed.PendingTargetY > 0f
                                 && handed.OffsetY == 0f && handed.TargetY == handed.OffsetY;
 
+            // A terminal DM callback can already be in the window queue when Stop() hands ownership to the mouse. Those
+            // stale events must not revive the old gesture or erase the newly seeded wheel chase.
+            float handedPending = handed.PendingTargetY;
+            host.Input.Dispatch(new[]
+            {
+                new InputEvent(InputKind.MomentumUpdate, pos, 0, 0, ScrollDelta: 20f,
+                    Pointer: PointerKind.Touchpad, TimestampMs: 1033, PointerId: 7,
+                    DeviceClassRaw: (byte)ScrollDeviceClass.Touchpad),
+                new InputEvent(InputKind.MomentumEnd, pos, 0, 0,
+                    Pointer: PointerKind.Touchpad, TimestampMs: 1034, PointerId: 7,
+                    DeviceClassRaw: (byte)ScrollDeviceClass.Touchpad),
+            });
+            host.Scene.TryGetScroll(vp, out var afterStale);
+            bool staleIgnored = !host.Input.GestureActive
+                                && afterStale.Phase == ScrollIntegrator.WheelAnimating
+                                && MathF.Abs(afterStale.PendingTargetY - handedPending) < 0.01f
+                                && afterStale.OverscrollPx == 0f;
+
             float minOff = handed.OffsetY;
             bool noBandReturned = true;
             for (int i = 0; i < 30; i++)
@@ -2208,8 +2238,8 @@ static class ScrollSuite
             host.Scene.TryGetScroll(vp, out var after);
             bool wheelAdvanced = after.OffsetY > 5f && minOff >= 0f;
             Check("gate.touchpad.mouse-wheel-takeover a physical mouse wheel synchronously cancels an active phase-driven scroll gesture, clears its held overscroll band, and advances under one WheelAnimating owner (accumulated PendingTarget) — no positive offset + negative top-band dead zone",
-                touchpadHeldBand && cleanHandoff && noBandReturned && wheelAdvanced,
-                $"before=(active {touchpadHeldBand},off {before.OffsetY:0.0},band {before.OverscrollPx:0.0}) handoff=(active {host.Input.GestureActive},phase {handed.Phase},pending {handed.PendingTargetY:0},band {handed.OverscrollPx:0.0}) after=(off {after.OffsetY:0.0},band {after.OverscrollPx:0.0})");
+                touchpadHeldBand && cleanHandoff && staleIgnored && noBandReturned && wheelAdvanced,
+                $"before=(active {touchpadHeldBand},off {before.OffsetY:0.0},band {before.OverscrollPx:0.0}) handoff=(active {host.Input.GestureActive},phase {handed.Phase},pending {handed.PendingTargetY:0},band {handed.OverscrollPx:0.0}) staleIgnored={staleIgnored} after=(off {after.OffsetY:0.0},band {after.OverscrollPx:0.0})");
         }
 
         // gate.scroll.wheel-accumulates-to-extent (v2 §4.2): a fast detented-wheel burst does NOT accumulate an unbounded
