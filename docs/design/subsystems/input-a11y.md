@@ -535,21 +535,25 @@ Recognized gestures emit their bubble events **only after the arena declares thi
 >    An OS engine cannot pass either gate. (Confined-to-`FluentGpu.Windows` Pal/ Win32 calls like `EnableMouseInPointer`
 >    are fine; an OS *animation/physics* engine in the hot integrator path is the rejected dependency.)
 
-> **Settled (as-built): scroll is ONE engine-owned mechanism — there is no OS scroll source.** The two grounds above are
-> not merely binding on a default, they are the WHOLE scroll path: the deterministic `ScrollAnimator` integrator is the
-> single, portable scroll source on every platform (wheel target-chase + touch/touchpad fling + overscroll spring +
-> conscious scrollbar), and every standing gate runs against it. A Phase-3 experiment added an optional, Windows-only
-> manual-update DirectManipulation **sample source** behind an `IScrollSource` seam; it was **removed** (the
-> `Win32DmScrollSource`, the `IScrollSource`/`IScrollHost`/`ScrollSourceMux` seam, the `IPlatformWindow.CreateScrollSource`
-> hook, `DmScrollMath`, and the `FG_DM_*` knobs are all gone) — on this hardware the OS would not reliably feed DM's
-> captured contact (it promoted the pan to `WM_POINTERWHEEL` and the viewport sat `SUSPENDED` → dead scroll), so DM bought
-> only complexity and a COM carve-out for no feel. **Every device input now routes to the one integrator:** a
-> precision-touchpad pan arrives as a hi-res `WM_POINTERWHEEL` (soft-kneed + scaled in `FluentGpu.Windows`, then
-> `PanTouchpad → TickTouchpad`), a detented mouse wheel as a notch (`ScrollAt`/`ScrollAxis`/`ScrollBy`), and a genuine
-> touch contact through the dispatcher's gesture path (`TouchDown/Move/Up → ApplyTouchPan` + fling). All of them re-apply
-> through the SAME `SetScrollOffset`/`WriteScrollOffset` clamp chokepoint, so `VirtualRangeDirty` fires and the virtual
-> re-realize is preserved; `SetScrollOffset` stays the **sole clamp authority**. No DirectManipulation, no OS-manipulation
-> COM domain, no out-of-band clock — the scroll path is fully deterministic and headless-testable end to end.
+> **Settled (as-built): scroll has ONE engine-owned offset mechanism; Windows may supply phase intent.** The old
+> `Win32DmScrollSource` design was removed: `IScrollSource`/`IScrollHost`/`ScrollSourceMux`,
+> `IPlatformWindow.CreateScrollSource`, `DmScrollMath`, and the `FG_DM_*` knobs remain gone. In particular, no OS object
+> owns a scene transform, viewport offset, clamp, or virtual-window realization. `ScrollIntegrator` plus
+> `SetScrollOffset`/`WriteScrollOffset` remain the sole mutation path, so every real movement still fires
+> `VirtualRangeDirty` and every portable physics/ownership gate remains headless.
+>
+> Windows now has a narrower `Win32DirectManipulation` **event producer**, not the removed scroll-source seam. When a
+> precision-touchpad contact is accepted, manual-update DirectManipulation emits only the shared
+> `ScrollBegin/Update/End` + `MomentumBegin/Update/End` phase contract (including OS-curved momentum deltas) into
+> `InputDispatcher`; the engine applies those deltas through its one offset chokepoint. If DM is unavailable or wedges,
+> the hi-resolution `WM_POINTERWHEEL` phase producer takes over. A positively identified physical mouse synchronously
+> stops either live contact or inertia before its wheel event is queued; touchpad evidence stays DM-owned and unknown
+> devices keep the conservative hold/confirm classifier.
+>
+> Manual `UpdateManager.Update` stays on the STA window thread but is paced by an absolute ~7 ms deadline. Messages that
+> DM posts during an update may wake the pump early, but cannot slide that deadline or trigger a catch-up burst. This
+> distinction is load-bearing: Windows can provide high-fidelity contact/lift/momentum **intent**, while the deterministic
+> engine remains the only offset/virtualization owner and the only portable fallback physics implementation.
 
 > **Shipped Phase-1 subset (the arena lands later, §7A unchanged).** Phase 1 ships the **synchronous
 > single-recognizer** path only: one pan/tap recognizer in `Dispatch` (touch-down on a `Scrollable` anchors;

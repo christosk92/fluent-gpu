@@ -105,7 +105,15 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
 {
     readonly PlaybackSession _session = new();
     QueueSnapshot _snap;                   // the latest atomic snapshot (published via ApplyLocalSnapshot); the ONE truth
-    readonly IAudioHost _host;
+    // ── the ONE current-media host (Milestone B) ────────────────────────────────────────────────────────────────────
+    // The current media is EITHER audio or video, swapped under one clock. Common transport verbs go through _currentHost;
+    // audio-specific loading (Load/LoadFastStart/SupplyBody) always targets _audioHost (only reached when the current kind
+    // is audio/local). _videoHost is the optional video-media host (null on the fake/silent backend); the swap picks it for
+    // a video playable. _currentKind tracks which kind the current media is, so the swap knows when the host must flip.
+    readonly IAudioHost _audioHost;
+    readonly IMediaHost? _videoHost;
+    IMediaHost _currentHost;
+    PlayableKind _currentKind = PlayableKind.Audio;
     readonly ITrackResolver _resolver;
     readonly IFastTrackResolver? _fast;   // when set, local play uses instant-start (head before key); else the plain resolve
     readonly NowPlayingProjection _projection;
@@ -115,7 +123,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     readonly string _ourDeviceId;
     readonly string _featureVersion;
     readonly WaveeLogger _log;
-    readonly IDisposable _hostSub;
+    IDisposable _hostSub;                   // reassigned when the current-media host is swapped (audio ↔ video)
     readonly IPreparedAudioHost? _preparedHost;
     readonly IDisposable? _transitionSub;
     readonly IDisposable _projSub;
@@ -149,9 +157,11 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     public PlaybackController(IAudioHost host, ITrackResolver resolver, NowPlayingProjection projection,
         IContextResolver contexts,
         string ourDeviceId, IOutboundControl? outbound = null, IReadOnlyList<IPlaybackProjection>? extraProjections = null, WaveeLogger log = default,
-        string? playFeatureVersion = null, IFastTrackResolver? fast = null)
+        string? playFeatureVersion = null, IFastTrackResolver? fast = null, IMediaHost? videoHost = null)
     {
-        _host = host;
+        _audioHost = host;
+        _currentHost = host;                 // audio is the current media until a video boundary swaps it
+        _videoHost = videoHost;
         _snap = _session.Snapshot();
         _resolver = resolver;
         _fast = fast;
@@ -162,8 +172,8 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         _extra = extraProjections ?? Array.Empty<IPlaybackProjection>();
         _log = log;
         _featureVersion = playFeatureVersion ?? OutboundEnvelope.DefaultFeatureVersion;
-        _hostSub = host.Signals.Subscribe(Observers.From<AudioHostSignal>(OnHostSignal));
-        _preparedHost = host as IPreparedAudioHost;
+        _hostSub = _currentHost.Signals.Subscribe(Observers.From<AudioHostSignal>(OnHostSignal));
+        _preparedHost = host as IPreparedAudioHost;   // prepared-next/crossfade is an AUDIO-host capability only
         _transitionSub = _preparedHost?.Transitions.Subscribe(Observers.From<AudioTransitionSignal>(OnAudioTransition));
         _projSub = projection.Changes.Subscribe(Observers.From<IPlaybackState>(OnProjectionChanged));
         PlaybackBucketDiagnostics.Startup("controller", "created",
@@ -183,6 +193,52 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     public Func<bool>? AutoplayEnabled { get; set; }
     public Func<Track, CancellationToken, Task<PlaybackTrackMeta?>>? MetaResolver { get; set; }
     public Func<string, CancellationToken, Task<long>>? EpisodeResumeMicros { get; set; }
+
+    /// <summary>Milestone B — decides whether the current playable should play as VIDEO right now (a music video AND the
+    /// user prefers video). When null (the default — unit tests + audio-only builds) every playable is treated as AUDIO, so
+    /// the audio path is byte-for-byte unchanged. Wired by the live app bootstrap to the video-active state (PlaybackBridge).</summary>
+    public Func<Track, bool>? ShouldPlayAsVideo { get; set; }
+
+    /// <summary>Milestone B — loads the current VIDEO playable onto the injected video host: the delegate resolves the track's
+    /// <c>PopOutVideoSource</c> (PlaybackBridge.ResolveVideoSource) and calls <c>FluentVideoMediaHost.LoadVideo</c>, returning
+    /// true once a source has started opening. Kept as a delegate so the portable controller never references the SpotifyLive
+    /// video types. Null (tests / no video host / not-yet-wired) → a video playable cannot start (see the B-wire TODO).</summary>
+    public Func<Track, CancellationToken, Task<bool>>? LoadCurrentVideoAsync { get; set; }
+
+    // The kind that selects the current playable's host. isVideoTrack is playback INTENT (music video + user prefers video),
+    // supplied by ShouldPlayAsVideo — never a bare HasVideo flag — so an unwired build always resolves to audio.
+    PlayableKind KindFor(Track t) => MediaSwitchLogic.KindOf(ShouldPlayAsVideo?.Invoke(t) ?? false, t.Origin == TrackOrigin.Local);
+
+    // Point the current-media host at the given instance, stopping the outgoing one first (bug 1 — never two decoders at
+    // once) and moving the signal subscription with it. A no-op when the instance is unchanged (Audio↔LocalFile share the
+    // audio host), so a same-host reload keeps the audio fast-start / prepared-next path untouched.
+    void SwitchHost(IMediaHost target)
+    {
+        if (ReferenceEquals(_currentHost, target)) return;
+        _currentHost.Pause();
+        _currentHost.Stop();
+        _currentHost = target;
+        _hostSub.Dispose();
+        _hostSub = _currentHost.Signals.Subscribe(Observers.From<AudioHostSignal>(OnHostSignal));
+    }
+
+    IMediaHost HostFor(PlayableKind kind) => kind == PlayableKind.Video && _videoHost is not null ? _videoHost : _audioHost;
+
+    // Swap the ONE current-media host to whatever the incoming playable needs, per the pure MediaSwitchLogic rules. Called at
+    // the LoadAndPlayCurrentAsync chokepoint BEFORE the (kind-specific) load. Returns the resolved kind so the caller loads on
+    // the right host. Caller holds _lock.
+    Task<PlayableKind> SwitchCurrentMediaAsync(Track track)
+    {
+        var next = KindFor(track);
+        if (MediaSwitchLogic.HostChanges(_currentKind, next))
+        {
+            var target = HostFor(next);
+            _log.Info($"media swap {_currentKind}→{next} host={(ReferenceEquals(target, _videoHost) ? "video" : "audio")} track={track.Uri}");
+            SwitchHost(target);
+        }
+        _currentKind = next;
+        return Task.FromResult(next);
+    }
 
     bool RejectLocalPlay()
     {
@@ -232,7 +288,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             if (string.Equals(current, expectedTrackUri, StringComparison.Ordinal))
             {
                 _log.Info($"fast-start body ready track={expectedTrackUri} file={h.FileIdHex}; supplying to audio host");
-                _host.SupplyBody(h);
+                _audioHost.SupplyBody(h);   // audio-specific: this flow is only scheduled from the audio fast-start path
             }
             else
             {
@@ -249,7 +305,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             if (string.Equals(current, expectedTrackUri, StringComparison.Ordinal))
             {
                 _log.Info($"fast-start body failed for active track={expectedTrackUri}; stopping audio host to unblock head stream: {ex.GetType().Name}: {ex.Message}");
-                _host.Stop();
+                _audioHost.Stop();
             }
             else
             {
@@ -314,15 +370,15 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             if (deactivate) _ownsActivePlayback = false;
         }
         if (!deactivate) return;
-        _host.Stop();
+        _currentHost.Stop();
         EmitState(EvKind.BecameInactive);
     }
 
     void StopStrayLocalHost(string message)
     {
-        if (!_host.IsPlaying) return;
+        if (!_currentHost.IsPlaying) return;
         _log.Info(message);
-        _host.Stop();
+        _currentHost.Stop();
     }
 
     void OnProjectionChanged(IPlaybackState s)
@@ -330,7 +386,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         // Apply a volume change (incl. one a remote controller made to the active device) to the local host when WE are
         // active. Silent host = no-op today, but correct once real audio lands; never loops (the host has no readback).
         double vol = s.Volume;
-        if (Math.Abs(vol - _lastVolume) > 0.0009) { _lastVolume = vol; _lastIntentVolume = vol; if (RouteLocal()) _host.SetVolume(vol); }
+        if (Math.Abs(vol - _lastVolume) > 0.0009) { _lastVolume = vol; _lastIntentVolume = vol; if (RouteLocal()) _currentHost.SetVolume(vol); }
 
         var aid = s.ActiveDeviceId ?? "";
         if (aid == _ourDeviceId) SetActiveOwner(true);
@@ -439,7 +495,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     }
 
     public Task PauseAsync(CancellationToken ct = default)
-        => RouteLocal() ? Local(() => { _host.Pause(); EmitState(EvKind.Paused); }) : Forward("pause", ct);
+        => RouteLocal() ? Local(() => { _currentHost.Pause(); EmitState(EvKind.Paused); }) : Forward("pause", ct);
 
     public async Task ResumeAsync(CancellationToken ct = default)
     {
@@ -470,9 +526,15 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             return Done;
         _lastIntentVolume = volume01;
 
+        bool local = RouteLocal();
         _projection.NoteLocalCommand();          // optimistic: a stale cluster echo won't snap the slider back
-        _projection.SetLocalVolume(volume01);    // move the slider immediately (it follows the active device's volume)
-        if (RouteLocal()) return Local(() => { _host.SetVolume(volume01); EmitState(EvKind.VolumeChanged); });
+        if (local)
+        {
+            _lastVolume = volume01;              // suppress OnProjectionChanged echo; the explicit host write below owns it
+            _projection.SetLocalVolume(volume01, _currentHost.PositionMs);   // volume + authoritative timeline publish atomically
+            return Local(() => { _currentHost.SetVolume(volume01); EmitState(EvKind.VolumeChanged); });
+        }
+        _projection.SetLocalVolume(volume01);    // remote optimistic slider; its cluster timeline remains authoritative
         var target = _projection.ActiveDeviceId;
         if (_outbound is null || string.IsNullOrEmpty(target)) return Done;
         _remoteVolumeTx.Post(() => _ = ForwardVolumeAsync(target, volume01, CancellationToken.None));
@@ -496,7 +558,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         _lastVolume = slider01;                  // suppress the OnProjectionChanged echo-down to the host
         _lastIntentVolume = slider01;
         _projection.NoteLocalCommand();          // a stale cluster echo must not snap the slider back (LocalCmdWindow)
-        _projection.SetLocalVolume(slider01);    // move the bridge slider (Volume signal via PushState)
+        _projection.SetLocalVolume(slider01, _currentHost.PositionMs);   // move slider without publishing a stale position
         EmitState(EvKind.VolumeChanged);         // announce our device volume (coalesced PutState) — no outbound PUT
     }
 
@@ -661,7 +723,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         {
             if (RejectLocalPlay()) return;   // transfer-to-this-device = local playback, which is unsupported → toast + abort
             await _lock.WaitAsync(ct).ConfigureAwait(false);
-            try { if (_session.Current is not null) { _host.Play(); EmitState(EvKind.Resumed); } else await GhostResumeAsync(ct).ConfigureAwait(false); }
+            try { if (_session.Current is not null) { _currentHost.Play(); EmitState(EvKind.Resumed); } else await GhostResumeAsync(ct).ConfigureAwait(false); }
             finally { _lock.Release(); }
             return;
         }
@@ -677,7 +739,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     {
         switch (cmd.Kind)
         {
-            case ConnectCmd.Pause: _host.Pause(); EmitState(EvKind.Paused); break;
+            case ConnectCmd.Pause: _currentHost.Pause(); EmitState(EvKind.Paused); break;
             case ConnectCmd.Resume: _ = LocalResumeAsync(); break;
             case ConnectCmd.SkipNext: _ = HandleInboundSkipNextAsync(cmd); break;   // next_track w/ a row payload → skip-to-uid; bare → advance one (F7)
             case ConnectCmd.SkipPrev: _ = LocalPrevAsync(); break;
@@ -950,7 +1012,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         await _lock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            if (_session.Current is not null) { if (RejectLocalPlay()) return; _host.Play(); EmitState(EvKind.Resumed); }   // we have a local context → normal resume
+            if (_session.Current is not null) { if (RejectLocalPlay()) return; _currentHost.Play(); EmitState(EvKind.Resumed); }   // we have a local context → normal resume
             else await GhostResumeAsync(ct).ConfigureAwait(false);   // cold/ghost → seed from the cluster snapshot
         }
         finally { _lock.Release(); }
@@ -965,7 +1027,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             _snap = _session.Next();
             if (_snap.Current is not null) await LoadAndPlayCurrentAsync(EvKind.TrackChanged, ct).ConfigureAwait(false);
             else if (await TryContinueContextAsync(ct).ConfigureAwait(false)) { }
-            else { _host.Stop(); Emit(BuildEvent(EvKind.Ended, null, 0, reasonEnd: "endplay")); }   // end-of-context
+            else { _currentHost.Stop(); Emit(BuildEvent(EvKind.Ended, null, 0, reasonEnd: "endplay")); }   // end-of-context
         }
         finally { _lock.Release(); }
     }
@@ -977,7 +1039,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         {
             _projection.NoteLocalCommand();
             // Desktop semantics: >3 s into the track, "previous" restarts the current track instead of stepping back.
-            if (_host.PositionMs > 3000) { _host.Seek(0); return; }
+            if (_currentHost.PositionMs > 3000) { _currentHost.Seek(0); return; }
             if (_session.Prev() is { } snap) { _snap = snap; await LoadAndPlayCurrentAsync(EvKind.TrackChanged, ct).ConfigureAwait(false); }
         }
         finally { _lock.Release(); }
@@ -992,11 +1054,15 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         if (track is null) { _log.Info("ghost resume: nothing in the cluster to resume"); return; }
         var ctxUri = _projection.ContextUri ?? track.Uri;
         SeedSessionFromCluster(track, ctxUri);
+        // Ghost resume seeds an AUDIO session from the cluster (the resolver yields an AudioStreamHandle), so make audio the
+        // current media host before loading — a prior video session, if any, is stopped and its subscription moved off.
+        SwitchHost(_audioHost);
+        _currentKind = PlayableKind.Audio;
         AudioStreamHandle handle;
         try { handle = await _resolver.ResolveAsync(track, ct).ConfigureAwait(false); }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex) { ReportPlaybackError(ex); return; }   // no silent drop — surface a typed reason
-        _host.Load(handle);
+        _audioHost.Load(handle);   // audio-specific loading (only reached when the current kind is audio/local)
         long pos = _projection.PositionMs;
         if (track.Uri.StartsWith("spotify:episode:", StringComparison.Ordinal) && EpisodeResumeMicros is { } resumeFn)
         {
@@ -1007,8 +1073,8 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             }
             catch (Exception ex) { _log.Info("episode resume lookup failed: " + ex.Message); }
         }
-        if (pos > 0) _host.Seek(pos);
-        _host.Play();
+        if (pos > 0) _currentHost.Seek(pos);
+        _currentHost.Play();
         MintCommand("playbtn");
         _currentIds = MintPlaybackIds(track);
         Emit(BuildEvent(EvKind.Started, track, pos));   // the atomic publish carries the session snapshot seeded above
@@ -1040,7 +1106,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         try
         {
             long micros = await fn(track.Uri, ct).ConfigureAwait(false);
-            if (micros > 0) _host.Seek(micros / 1000);
+            if (micros > 0) _currentHost.Seek(micros / 1000);
         }
         catch (Exception ex) { _log.Info("episode resume lookup failed: " + ex.Message); }
     }
@@ -1074,8 +1140,8 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     void EmitSeeked(long targetMs)
     {
         _projection.NoteLocalCommand();
-        long fromMs = _host.PositionMs;
-        _host.Seek(targetMs);
+        long fromMs = _currentHost.PositionMs;
+        _currentHost.Seek(targetMs);
         Emit(BuildEvent(EvKind.Seeked, _snap.Current?.Track, fromMs, seekToMs: targetMs));
     }
 
@@ -1090,7 +1156,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     {
         if (RejectLocalPlay()) return;   // local audio unsupported → toast + abort (covers play / next / prev / enqueue-idle / inbound)
         var cur = _session.Current;
-        if (cur is null) { _host.Stop(); return; }
+        if (cur is null) { _currentHost.Stop(); return; }
 
         byte[]? mediaId = null;
         byte[]? fileId = null;
@@ -1115,6 +1181,15 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         if (string.IsNullOrEmpty(_commandIdHex)) MintCommand(kind == EvKind.TrackChanged ? "trackdone" : "playbtn");
         _currentIds = MintPlaybackIds(cur, mediaId);
 
+        // Milestone B: point the ONE current-media host at the kind this playable needs (stopping the outgoing host first on
+        // a real host boundary), then load kind-specifically. Audio/LocalFile keep the audio host + its fast-start path below.
+        var mediaKind = await SwitchCurrentMediaAsync(cur).ConfigureAwait(false);
+        if (mediaKind == PlayableKind.Video)
+        {
+            await LoadAndPlayVideoAsync(cur, kind, mediaId, bitrateKbps, audioFormat, durationMs, fileId, resumePositionMs, ct).ConfigureAwait(false);
+            return;
+        }
+
         if (_fast is not null)
         {
             // Instant-start: play the clear head immediately; the encrypted body (key + CDN) resolves in parallel and is
@@ -1124,9 +1199,9 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             catch (OperationCanceledException) { throw; }
             catch (Exception ex) { ReportPlaybackError(ex); return; }
             var loadStartedTicks = Stopwatch.GetTimestamp();
-            _host.LoadFastStart(plan.Start);
-            _host.Play();
-            if (resumePositionMs > 0) _host.Seek(resumePositionMs);
+            _audioHost.LoadFastStart(plan.Start);   // audio-specific loading (guarded: current kind is audio/local here)
+            _currentHost.Play();
+            if (resumePositionMs > 0) _currentHost.Seek(resumePositionMs);
             else await MaybeSeekEpisodeResumeAsync(cur, ct).ConfigureAwait(false);
             WarmUpcomingFastTrack("after-start");
             Emit(BuildEvent(kind, cur, Math.Max(0, resumePositionMs), mediaId, bitrateKbps, audioFormat, durationMs, fileId));
@@ -1140,13 +1215,46 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         try { handle = await _resolver.ResolveAsync(cur, ct).ConfigureAwait(false); }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex) { ReportPlaybackError(ex); return; }   // no silent drop — surface a typed reason
-        _host.Load(handle);
-        _host.Play();
-        if (resumePositionMs > 0) _host.Seek(resumePositionMs);
+        _audioHost.Load(handle);   // audio-specific loading (only reached when the current kind is audio/local)
+        _currentHost.Play();
+        if (resumePositionMs > 0) _currentHost.Seek(resumePositionMs);
         else await MaybeSeekEpisodeResumeAsync(cur, ct).ConfigureAwait(false);
         WarmUpcomingFastTrack("after-start");
         Emit(BuildEvent(kind, cur, Math.Max(0, resumePositionMs), mediaId, bitrateKbps, audioFormat, durationMs, fileId));
         SchedulePreparedNext("after-start");
+        MaybeStartContinuationFetch();
+    }
+
+    // Load + start the current VIDEO playable on the swapped-in video host. The resolved PopOutVideoSource is obtained via the
+    // injected LoadCurrentVideoAsync hook (the async PlaybackBridge.ResolveVideoSource → FluentVideoMediaHost.LoadVideo handoff)
+    // so the portable controller never references the SpotifyLive video types. Prepared-next / crossfade are skipped across a
+    // video boundary (MediaSwitchLogic.AllowCrossfade is false for any video pair). Caller holds _lock.
+    async Task LoadAndPlayVideoAsync(Track cur, EvKind kind, byte[]? mediaId, int bitrateKbps, string audioFormat,
+        long durationMs, byte[]? fileId, long resumePositionMs, CancellationToken ct)
+    {
+        bool loaded = false;
+        if (LoadCurrentVideoAsync is { } loadVideo)
+        {
+            try { loaded = await loadVideo(cur, ct).ConfigureAwait(false); }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex) { ReportPlaybackError(ex); return; }
+        }
+        else
+        {
+            // TODO(B-wire): no video-load hook wired — the async PopOutVideoSource handoff (PlaybackBridge.ResolveVideoSource
+            // → FluentVideoMediaHost.LoadVideo, injected via LoadCurrentVideoAsync by the live app bootstrap) must supply the
+            // resolved source here. Until then a video playable cannot start; the audio path is entirely unaffected.
+            _log.Info($"video playable but LoadCurrentVideoAsync is not wired — cannot start video track={cur.Uri} (see TODO B-wire)");
+        }
+
+        if (loaded)
+        {
+            _currentHost.Play();
+            if (resumePositionMs > 0) _currentHost.Seek(resumePositionMs);
+        }
+        // Publish the track change even while the video source is still opening — the projection is source-agnostic (position
+        // comes from the host clock; duration from Track.DurationMs). A video boundary is a hard cut: no prepared-next warm.
+        Emit(BuildEvent(kind, cur, Math.Max(0, resumePositionMs), mediaId, bitrateKbps, audioFormat, durationMs, fileId));
         MaybeStartContinuationFetch();
     }
 
@@ -1456,13 +1564,13 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     void EmitSnap(QueueSnapshot snap, EvKind kind)
     {
         _snap = snap;
-        Emit(BuildEvent(kind, snap.Current?.Track, _host.PositionMs));
+        Emit(BuildEvent(kind, snap.Current?.Track, _currentHost.PositionMs));
         SchedulePreparedNext("session-changed");
     }
 
     // Emit a state event carrying the current track + position (drives the projection slab + the PutState publish). Reads
     // the current off the immutable _snap (never the live _session) so it is safe on the unlocked inbound paths (F7).
-    void EmitState(EvKind kind) => Emit(BuildEvent(kind, _snap.Current?.Track, _host.PositionMs));
+    void EmitState(EvKind kind) => Emit(BuildEvent(kind, _snap.Current?.Track, _currentHost.PositionMs));
 
     // queue.snapshot diagnostics for the current atomic snapshot (rev + itemId columns, §9). Dedup-guarded.
     void DiagnoseQueue(string reason)
@@ -1492,11 +1600,18 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     void SchedulePreparedNext(string reason)
     {
         if (_preparedHost is null) return;
+        // Milestone B: the prepared-next / crossfade path is an AUDIO-host capability. While a VIDEO is the current media
+        // there is no audio host to prepare on — bail (a swap back to audio re-schedules from LoadAndPlayCurrent). This is a
+        // no-op on the unchanged audio path (_currentKind stays Audio when ShouldPlayAsVideo is unwired).
+        if (_currentKind == PlayableKind.Video) return;
 
         var current = _snap.Current;
         var next = current is null ? null : _session.PreviewNext();
+        // Never prepare an audio hand-off INTO a video track — that boundary is a hard cut (AllowCrossfade is false).
+        if (next is not null && KindFor(next.Track) == PlayableKind.Video) next = null;
         bool allowOverlap = current is not null && next is not null && _snap.Repeat != RepeatMode.Track
-            && IsMusic(current.Track) && IsMusic(next.Track);
+            && IsMusic(current.Track) && IsMusic(next.Track)
+            && MediaSwitchLogic.AllowCrossfade(_currentKind, KindFor(next.Track));   // overlap only Audio→Audio (never across a video boundary)
         string? signature = next is null ? null
             : $"{current!.ItemId.Value:x}:{next.ItemId.Value:x}:{(allowOverlap ? 1 : 0)}";
 

@@ -561,8 +561,16 @@ sealed class WaveeShell : Component
         };
         // The zero-size binder leaf lives INSIDE the OverlayHost subtree so it can capture the real overlay service
         // into the stable ActionServices bag (invoke-time dialogs: confirm / rename / add-to-playlist picker).
+        // The in-window picture-in-picture video surface: a top-Z, pass-through floating layer (draggable + resizable),
+        // visible only when the derived placement is the in-window PiP (VideoActive × VideoPlacement.InWindowPip). Reads
+        // the resolved PopOutVideoSource from the bridge (provided at the app root) and reuses PopOutVideoStage for the
+        // player. Sits above the content/banner layers so it floats over the page + player bar; engine popups (in the
+        // outer OverlayHost ZStack) still stack above it. VideoPlacementHost is the sibling CONTROLLER leaf (renders
+        // empty) that owns the detached pop-out window's lifecycle off the same derived placement state.
         var shellWithOverlays = Ui.ZStack(tinted, runtimeBannerLayer,
-            Embed.Comp(() => new ActionServicesOverlayBinder(_actions))) with { Grow = 1f };
+            Embed.Comp(() => new ActionServicesOverlayBinder(_actions)),
+            Embed.Comp(() => new Wavee.Features.Video.InWindowVideoPip()),
+            Embed.Comp(() => new Wavee.Features.Video.VideoPlacementHost())) with { Grow = 1f };
 
         return Ctx.Provide(ShellUi.Slot, _shellUi,
                Ctx.Provide(ShellTint.Slot, _shellTint,

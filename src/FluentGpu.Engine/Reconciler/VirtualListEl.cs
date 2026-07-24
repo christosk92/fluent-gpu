@@ -43,6 +43,15 @@ public sealed record VirtualListEl : Element
     /// at realize time and used as the effective overscan when set. <see cref="float.NaN"/> (default) ⇒ <see cref="Overscan"/>
     /// stays authoritative (byte-identical to the pre-knob path).</summary>
     public float CacheExtentPx { get; init; } = float.NaN;
+    /// <summary>BOUND-path persistent prefix: the first N logical items stay mounted as the leading content children
+    /// while the remaining window recycles normally. This is intended for native scroll-linked/sticky composition
+    /// (hero + list chrome) whose retained nodes must survive deep scroll. The prefix still occupies its normal layout
+    /// slots and counts in the realized-node census; zero (default) preserves the ordinary recycler path.</summary>
+    public int PersistentPrefixCount { get; init; }
+    /// <summary>Optional viewport-space TOP inset shared by every recyclable item after
+    /// <see cref="PersistentPrefixCount"/>. The recorder emits one band clip around the contiguous recyclable child
+    /// range and hit-testing applies the same boundary. NaN disables it.</summary>
+    public float ItemClipTopInset { get; init; } = float.NaN;
     /// <summary>Research adjustment #16 — recycle-pool discriminator for the BOUND path (<see cref="RowBind"/>):
     /// <c>index → contentType</c>. A slot only rebinds to an index whose content-type matches the type it was built for;
     /// a cross-type reuse falls back to a full element rebuild (fresh slot). Null ⇒ one homogeneous pool (today's cheap

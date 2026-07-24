@@ -400,7 +400,11 @@ public sealed class LiveSessionHost : IAsyncDisposable
             // never reads it (100% V4). The discography itself is served from V4, not this.
             svc.ArtistStats.SetInner(new SpotifyArtistStatsService(pathfinderResource, store));
             // Music-video detection + the video↔audio file-id map over the SAME extended-metadata source (etag-cached).
-            svc.Video.SetInner(new SpotifyVideoService(em, store, metadataLog, extensionCache));
+            var videoSvc = new SpotifyVideoService(em, store, metadataLog, extensionCache);
+            svc.Video.SetInner(videoSvc);
+            // Wire the pop-out/inline video resolver: track uri → Spotify manifest → a playable PopOutVideoSource
+            // (PlayReady via the native CDM, or null when the account isn't served a PlayReady mp4). Over the live transport.
+            svc.Playback.ResolveVideoSource = (uri, ct) => videoSvc.ResolvePlayableAsync(uri, transport, ct);
             var userProfiles = new SpotifyUserProfileService(em, live.Pipeline, () => live.BaseUrl, socialLog, extensionCache);
             if (profileFetched)
                 userProfiles.Seed(live.Username, new Owner(

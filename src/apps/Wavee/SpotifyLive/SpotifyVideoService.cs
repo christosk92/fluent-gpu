@@ -17,7 +17,7 @@ namespace Wavee.SpotifyLive;
 /// so the list indicator lights up. DATA ONLY — it never resolves/plays the video (those files are DRM-protected and
 /// resolve over their own route; this stops at caching the file id). Reverse mapping (AUDIO_ASSOCIATIONS, video→audio)
 /// is a follow-up tied to the deferred player swap.</summary>
-sealed class SpotifyVideoService : IVideoService
+sealed partial class SpotifyVideoService : IVideoService
 {
     // After this long we revalidate (cheap — the request carries the etag, so an unchanged entity comes back 304).
     static readonly TimeSpan RevalidateAfter = TimeSpan.FromHours(6);

@@ -36,4 +36,9 @@ public struct RenderFrame
     /// cheap tear-free hand-off (the <c>keepAlive</c> path). Applied on the render thread just before submit so the
     /// vsync-suppress (a ComPtr touch) is render-thread-confined.</summary>
     public bool SuppressVsync;
+
+    /// <summary>Latency-sensitive interactive frame on a compositor-owned swapchain: use SyncInterval 0 for this present
+    /// only, but retain the ordinary frame-latency wait. Unlike <see cref="SuppressVsync"/>, this does not bypass the
+    /// latency throttle and therefore cannot turn an inline scroll loop into an unpaced submit spin.</summary>
+    public bool InteractivePresent;
 }

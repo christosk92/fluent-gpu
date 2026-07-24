@@ -58,9 +58,9 @@ sealed class DetailShell : Component
     DetailConfig _cfg = DetailConfig.Album;   // derived from route kind + loaded ReleaseKind each render (reused slot re-derives)
     readonly object _tintOwner = new();   // identity for race-free last-writer-wins on ShellTint (see ShellTintState)
     readonly Signal<int> _mode = new(0);  // adaptive layout mode (0 widest), written by OnBoundsChanged
+    readonly Signal<bool> _verticalHeroImmersive = new(false);
     float _measuredW;                     // last measured page width — replayed once when the rail layout-lock clears (Task C)
     bool _modeInitialized;                // first measurement uses the nominal breakpoints; later vertical crosses hysteresis
-    readonly Signal<bool> _verticalHeaderPinned = new(false);   // vertical detail header scrolled past the top -> pinned chrome bar
     readonly Signal<TrackSort> _sort = new(TrackSort.Default);   // track-list sort, persisted per context (loaded per route)
     readonly Signal<string> _query = new("");                    // filter search query (transient — clears on navigation)
     readonly Signal<TrackFilterFlags> _filterFlags = new(TrackFilterFlags.None);   // quick-filter toggles (transient)
@@ -257,7 +257,6 @@ sealed class DetailShell : Component
         // and only the two-column path needs the window height. Reading `.Value` (the subscription) is deferred to that
         // branch so single-column / vertical pages don't take a needless re-render on every resize.
         var viewportSig = UseContextSignal(Viewport.Size);
-        UseEffect(() => _verticalHeaderPinned.Value = false, route.Name);
 
         // Task C flush: when the rail layout-lock clears, apply the SETTLED mode once from the last measured width (the
         // intermediate reflow widths were skipped in Measure while locked). Keyed on railLocked so it fires on the
@@ -275,7 +274,8 @@ sealed class DetailShell : Component
 
         // Single-column fallback: just the track table, full width, no rail / no wash.
         if (!_cfg.TwoColumn)
-            return Embed.Comp(() => new TrackList(_route, _model, bridge, handlers, liveHandlers: _liveHandlers));
+            return Embed.Comp(() => new TrackList(_route, _model, bridge, handlers, liveHandlers: _liveHandlers))
+                with { Key = "tracks:single:" + route.Name };
 
         // Adaptive two-column / vertical: measure the page width → mode. Value-gated → re-render only on a breakpoint cross.
         void Measure(RectF r)
@@ -292,7 +292,7 @@ sealed class DetailShell : Component
         // width supports — a stale mode signal (stuck rail lock / lost flush) would keep the two-column layout at a
         // width where its rail + tracks cannot coexist. Narrower-than-needed is fine; the next Measure widens it.
         if (_measuredW > 0f && shellUi?.RailLockActive != true) { int fit = ModeFor(_measuredW, mode, _modeInitialized); if (fit > mode) mode = fit; }
-        // Page-layout preference: "Stacked" forces the vertical hero SYSTEM at every width for track pages — the
+        // Page-layout preference: "Hero" forces the vertical hero SYSTEM at every width for track pages — the
         // metadata rail is never composed; Automatic keeps the responsive rail↔hero behavior. The override is applied
         // at render time only (the _mode signal keeps tracking the real width, so flipping the setting back reverts
         // instantly). Epoch-subscribed → the Settings toggle re-renders any mounted (incl. KeepAlive-parked) page live.
@@ -301,7 +301,6 @@ sealed class DetailShell : Component
             && (settings?.Get(WaveeSettings.DetailPageLayout) ?? DetailVerticalLayout.PageAuto) == DetailVerticalLayout.PageHero)
             mode = Vertical;
         bool verticalTracks = mode == Vertical && _cfg.Content == DetailContent.Tracks;
-        if (!verticalTracks && _verticalHeaderPinned.Peek()) _verticalHeaderPinned.Value = false;
 
         // The track list (drops columns by breakpoint, owns the now-playing re-skin + an external SelectionModel). Its
         // view controls (filter / sort / row size) ride a responsive Fluent command bar in the list's OWN chrome (always
@@ -317,7 +316,12 @@ sealed class DetailShell : Component
         // overflow guard crushed columns into overlapping glyphs. With the floor the worst transient is a clean edge
         // clip at the card boundary, never glyph soup.
         Element right = _cfg.Content == DetailContent.Episodes
-            ? new BoxEl { Key = "right:eps", Grow = 1f, Shrink = 1f, MinWidth = 300f, Direction = 1, Children = [Embed.Comp(() => new EpisodeList(_route, _model, bridge, handlers, showToolbar))] }
+            ? new BoxEl
+            {
+                Key = "right:eps", Grow = 1f, Shrink = 1f, MinWidth = 300f, Direction = 1,
+                Children = [Embed.Comp(() => new EpisodeList(_route, _model, bridge, handlers, showToolbar))
+                    with { Key = "episodes:" + route.Name }],
+            }
             : new BoxEl
             {
                 Key = "right:tracks", Grow = 1f, Shrink = 1f, MinWidth = 300f, MinHeight = 0f, Direction = 1,
@@ -325,16 +329,21 @@ sealed class DetailShell : Component
                 [
                     Embed.Comp(() => new TrackList(_route, _model, bridge, handlers, showToolbar,
                         verticalHeader: verticalTracks,
-                        verticalHeaderPinned: _verticalHeaderPinned,
-                        liveHandlers: _liveHandlers)) with { Key = verticalTracks ? "tracks:vertical" : "tracks:standard" },
+                        verticalHeroImmersive: _verticalHeroImmersive,
+                        liveHandlers: _liveHandlers)) with
+                    {
+                        // A route is a new scroll/hero identity. Remounting prevents an album→album swap from painting
+                        // the previous page's collapsed-header signals for one async frame (the blank/clipped hero bug).
+                        Key = (verticalTracks ? "tracks:vertical:" : "tracks:standard:") + route.Name,
+                    },
                 ],
             };
 
-        // VERTICAL (narrow): the rail HEADER (cover, title, meta, play + toolbar) fixed on top + the list (Grow=1)
-        // scrolling below — a single column over the wash. (The list remounts on the two-column↔vertical cross, so its
-        // scroll resets there; the rail-width modes 0/1/2 keep it mounted.)
+        // HERO SYSTEM: item 0 owns the expanded identity and the custom retained shy-header morph; the chrome pins below
+        // it inside TrackList's overlay. The list remounts only on the two-column↔Hero-system cross.
         if (mode == Vertical)
         {
+            bool immersiveHero = verticalTracks && _verticalHeroImmersive.Value;
             Element verticalContent = new BoxEl
             {
                 Direction = 1, Grow = 1f, ClipToBounds = true,
@@ -356,9 +365,14 @@ sealed class DetailShell : Component
                 [
                     new BoxEl
                     {
-                        Key = "detail-wash:" + (art?.GetHashCode() ?? 0) + ":" + Tok.Theme + ":" + colorWashesDisabled,
+                        Key = "detail-wash:" + (art?.GetHashCode() ?? 0) + ":" + Tok.Theme + ":"
+                            + colorWashesDisabled + ":" + immersiveHero,
                         ZStack = true, Grow = 1f, HitTestVisible = false,
-                        Gradient = colorWashesDisabled ? null : Surfaces.HeroWash(washColor), Animate = PaletteWashTransition,
+                        // Confine the wash to the content card's shape: round the top corners (Radii.Card) + clip, so the
+                        // tint never square-fills the card's cut-away top-left corner over the sidebar seam / material.
+                        ClipToBounds = true, Corners = new CornerRadius4(Radii.Card, Radii.Card, 0f, 0f),
+                        Gradient = colorWashesDisabled ? null : Surfaces.DetailHeroWash(washColor, immersiveHero),
+                        Animate = PaletteWashTransition,
                     },
                     verticalPage,
                 ],
@@ -413,6 +427,9 @@ sealed class DetailShell : Component
                 {
                     Key = "detail-wash:" + (art?.GetHashCode() ?? 0) + ":" + Tok.Theme + ":" + colorWashesDisabled,
                     ZStack = true, Grow = 1f, HitTestVisible = false,
+                    // Confine the wash to the content card's shape: round the top corners (Radii.Card) + clip, so the
+                    // tint never square-fills the card's cut-away top-left corner over the sidebar seam / material.
+                    ClipToBounds = true, Corners = new CornerRadius4(Radii.Card, Radii.Card, 0f, 0f),
                     Gradient = colorWashesDisabled ? null : Surfaces.HeroWash(washColor), Animate = PaletteWashTransition,
                 },
                 twoColumnPage,

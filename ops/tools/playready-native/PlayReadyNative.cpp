@@ -169,11 +169,13 @@ struct FgPlayReadyOpenDesc
     int32_t        psshLen;
     const wchar_t* httpHeaders;     // optional "Name: Value\n" lines applied to segment fetches (null => none)
     const wchar_t* licenseServerUrl;// optional license destination hint (advisory; the callback owns licensing)
+    int32_t        segmentStride;   // ABI-appended: segment-number step (1 = numbered $Number$; N = Spotify's N-second
+                                    // timestamped segments, e.g. startNumber=0, stride=segment_length). Guarded on structSize.
 };
 
 // The active open descriptor (copied deep by FgPlayReadyRunEx) + the managed license callback.
 static std::wstring       g_openInitUrl, g_openSegBase, g_openSegPrefix, g_openSegSuffix, g_openHeaders, g_openLicenseUrl;
-static int                g_openStartNumber = 1, g_openSegCount = 6;
+static int                g_openStartNumber = 1, g_openSegCount = 6, g_openSegStride = 1;
 static std::vector<uint8_t> g_openPssh;
 static FgLicenseCallback  g_licenseCallback = nullptr;
 static void*              g_licenseCtx = nullptr;
@@ -986,9 +988,41 @@ static void HandleCdmKeyMessage(const BYTE* msg, DWORD cb, LPCWSTR destUrl)
                 HRESULT hu = g_cdmSession->Update(license.data(), (DWORD)license.size());
                 LogLine("[cdm] Update() (relay) hr=0x" + [&]{ std::stringstream s; s << std::hex << (uint32_t)hu; return s.str(); }());
                 g_cdmLicHttp = (rc == 0) ? 200 : 0;
+                if (FAILED(hu))
+                {
+                    // CRITICAL DIAGNOSTIC: dump a printable prefix of the relay license body so we can tell a genuine
+                    // license apart from a SOAP fault / error page (mirrors the non-relay path below).
+                    std::string head; head.reserve(600);
+                    for (size_t i = 0; i < license.size() && head.size() < 600; i++)
+                    {
+                        char c = (char)license[i];
+                        if (c == '\r' || c == '\n' || c == '\t') c = ' ';
+                        if (c >= 32 && c < 127) head.push_back(c);
+                    }
+                    LogLine("[cdm] relay license response head: " + head);
+                }
                 QueryCdmKeyStatus();
+                // Surface a hard Error via the desktop snapshot atomics ONLY when Update() itself failed — a rejected
+                // license means every layer above would otherwise spin on "Loading" forever. Do NOT gate on
+                // !g_cdmUsable here: the key status settles ASYNCHRONOUSLY (KeyStatusChanged fires a beat later), so
+                // right after a SUCCESSFUL Update() g_cdmUsable is legitimately still false — treating that as an
+                // error is a false positive. The managed watchdog (FG_VIDEO_START_TIMEOUT_MS) catches a key that
+                // never becomes usable.
+                if (FAILED(hu))
+                {
+                    g_desktopErrorHr.store((int)hu, std::memory_order_release);
+                    g_desktopState.store(5, std::memory_order_release); // 5 = Error
+                    LogLine("[cdm] relay bind FAILED — surfacing Error (hr=0x" +
+                            [&]{ std::stringstream s; s << std::hex << (uint32_t)hu; return s.str(); }() + ")");
+                }
             }
-            else LogLine("[cdm] managed relay produced no license — key will not become usable.");
+            else
+            {
+                LogLine("[cdm] managed relay produced no license — key will not become usable.");
+                g_desktopErrorHr.store((int)0x80704005, std::memory_order_release); // MF_TYPE_ERR sentinel
+                g_desktopState.store(5, std::memory_order_release);                 // 5 = Error
+                LogLine("[cdm] relay produced no license — surfacing Error.");
+            }
             return;
         }
 #endif
@@ -1890,12 +1924,13 @@ static bool DriveCdmLicenseProactive(const std::vector<uint8_t>& initData)
     if (initData.empty()) { LogLine("[cenc] no init data (pssh) for GenerateRequest."); return false; }
     CdmSessionCallbacks* cb = new CdmSessionCallbacks();
     IMFContentDecryptionModuleSession* session = nullptr;
-    // PERSISTENT_LICENSE, not TEMPORARY: the Axinom entitlement token carries allow_persistence=true, so their
-    // license server returns a PERSISTABLE license — and the EME spec (which MFCdm implements faithfully) requires
-    // Update() on a temporary session to reject a persistable license with TypeError. That was the whole
-    // Update() hr=0x80704005 (MF_TYPE_ERR) failure. FG_CENC_TEMP_SESSION=1 restores the old behavior for A/B.
-    MF_MEDIAKEYSESSION_TYPE sessionType = GetEnvironmentVariableW(L"FG_CENC_TEMP_SESSION", nullptr, 0) != 0
-        ? MF_MEDIAKEYSESSION_TYPE_TEMPORARY : MF_MEDIAKEYSESSION_TYPE_PERSISTENT_LICENSE;
+    // Session type MUST match the license's persistence or Update() rejects it with TypeError (MF_TYPE_ERR,
+    // 0x80704005). Production = Spotify, which issues NON-persistable streaming licenses → TEMPORARY (verified: temp
+    // session → Update() hr=0x0, key USABLE, plays). The Axinom test entitlement carries allow_persistence=true and
+    // returns a PERSISTABLE license, which conversely needs PERSISTENT_LICENSE — set FG_CENC_PERSIST_SESSION=1 for
+    // that A/B path. Default TEMPORARY.
+    MF_MEDIAKEYSESSION_TYPE sessionType = GetEnvironmentVariableW(L"FG_CENC_PERSIST_SESSION", nullptr, 0) != 0
+        ? MF_MEDIAKEYSESSION_TYPE_PERSISTENT_LICENSE : MF_MEDIAKEYSESSION_TYPE_TEMPORARY;
     HRESULT hr = g_emeCdm->CreateSession(sessionType, cb, &session);
     LogLine(std::string("[cenc] proactive CreateSession (") +
             (sessionType == MF_MEDIAKEYSESSION_TYPE_TEMPORARY ? "temporary" : "persistent-license") +
@@ -1928,7 +1963,7 @@ static bool RunCustomSourceAttempt(const std::wstring& storePath)
     //       supplies no init URL we fall back to the baked Axinom singlekey vector (legacy FgPlayReadyRun shim). ───────
     const std::wstring axBase = L"https://media.axprod.net/TestVectors/Dash/protected_dash_1080p_h264_singlekey/";
     std::wstring initUrl, segBase, segPrefix, segSuffix, segHeaders;
-    int startNumber = 1, segCount = 6;
+    int startNumber = 1, segCount = 6, segStride = 1;
 #ifdef FG_DESKTOP_DLL
     if (!g_openInitUrl.empty())
     {
@@ -1936,11 +1971,13 @@ static bool RunCustomSourceAttempt(const std::wstring& storePath)
         segBase    = g_openSegBase;
         segPrefix  = g_openSegPrefix;
         segSuffix  = g_openSegSuffix.empty() ? L".m4s" : g_openSegSuffix;
-        startNumber= g_openStartNumber > 0 ? g_openStartNumber : 1;
+        startNumber= g_openStartNumber >= 0 ? g_openStartNumber : 1;   // >= 0: Spotify's timestamped segments start at 0
         segCount   = g_openSegCount   > 0 ? g_openSegCount   : 1;
+        segStride  = g_openSegStride  > 0 ? g_openSegStride   : 1;      // 1 = numbered; N = N-second timestamped step
         segHeaders = g_openHeaders;
         LogLine("[cenc] source: descriptor initUrl=" + winrt::to_string(winrt::hstring(initUrl)) +
-                " segs=" + std::to_string(startNumber) + ".." + std::to_string(startNumber + segCount - 1));
+                " segs=" + std::to_string(startNumber) + ".." + std::to_string(startNumber + (segCount - 1) * segStride) +
+                " stride=" + std::to_string(segStride));
     }
     else
 #endif
@@ -1978,7 +2015,7 @@ static bool RunCustomSourceAttempt(const std::wstring& storePath)
     uint64_t decodeTicks = 0;
     for (int i = 0; i < segCount; i++)
     {
-        int num = startNumber + i;
+        int num = startNumber + i * segStride;
         std::wstring url = segBase + segPrefix + std::to_wstring(num) + segSuffix;
         auto seg = HttpGetBytes(url, st, segHeaders);
         if (st != 200 || seg.empty()) { LogLine("[cenc] media #" + std::to_string(num) + " HTTP " + std::to_string(st) + " — stop"); break; }
@@ -2272,7 +2309,7 @@ extern "C" __declspec(dllexport) int __stdcall FgPlayReadyRunEx(const wchar_t* b
     int mode = 0;
     g_openInitUrl.clear(); g_openSegBase.clear(); g_openSegPrefix.clear(); g_openSegSuffix.clear();
     g_openHeaders.clear(); g_openLicenseUrl.clear(); g_openPssh.clear(); g_kidHex.clear();
-    g_openStartNumber = 1; g_openSegCount = 6;
+    g_openStartNumber = 1; g_openSegCount = 6; g_openSegStride = 1;
     if (desc)
     {
         mode = desc->mode;
@@ -2280,8 +2317,10 @@ extern "C" __declspec(dllexport) int __stdcall FgPlayReadyRunEx(const wchar_t* b
         if (desc->segmentBaseUrl)   g_openSegBase     = desc->segmentBaseUrl;
         if (desc->segmentPrefix)    g_openSegPrefix   = desc->segmentPrefix;
         if (desc->segmentSuffix)    g_openSegSuffix   = desc->segmentSuffix;
-        if (desc->startNumber > 0)  g_openStartNumber = desc->startNumber;
+        if (desc->startNumber >= 0) g_openStartNumber = desc->startNumber;   // >= 0: Spotify timestamped segments start at 0
         if (desc->segmentCount > 0) g_openSegCount    = desc->segmentCount;
+        // ABI-appended field: only read when the managed struct is new enough to include it.
+        if (desc->structSize >= sizeof(FgPlayReadyOpenDesc) && desc->segmentStride > 0) g_openSegStride = desc->segmentStride;
         if (desc->httpHeaders)      g_openHeaders     = desc->httpHeaders;
         if (desc->licenseServerUrl) g_openLicenseUrl  = desc->licenseServerUrl;
         if (desc->pssh && desc->psshLen > 0) g_openPssh.assign(desc->pssh, desc->pssh + desc->psshLen);
@@ -2295,7 +2334,7 @@ extern "C" __declspec(dllexport) int __stdcall FgPlayReadyRunEx(const wchar_t* b
     g_logPath = root + L"\\desktop-playready.log";
     g_stopPath.clear(); g_evtPath.clear(); g_cmdPath.clear();
     { std::ofstream f(g_logPath, std::ios::binary | std::ios::trunc); }
-    LogLine("[desktop] BUILD=desktop-cdm-20260719-persist-v11 root=" +
+    LogLine("[desktop] BUILD=desktop-cdm-20260719-tempsess-v13 root=" +
             std::string(root.begin(), root.end()));
 
     // Clear-video diagnostic through the exact same in-process DLL and DirectComposition handoff. This is used to

@@ -50,7 +50,8 @@ public sealed class SceneFramePublisher
 
     /// <summary>UI thread: copy a finished DrawList into a FREE slot's arena and publish it. Returns the monotonic
     /// publish seq. Zero-alloc in steady state (grows a pinned arena only on a new high-water size).</summary>
-    public ulong Publish(ReadOnlySpan<byte> cmds, ReadOnlySpan<ulong> sort, in FrameInfo submit, bool suppressVsync = false)
+    public ulong Publish(ReadOnlySpan<byte> cmds, ReadOnlySpan<ulong> sort, in FrameInfo submit,
+                         bool suppressVsync = false, bool interactivePresent = false)
     {
         ThreadGuard.AssertUi();
         int consumed = Volatile.Read(ref _consumeIdx);              // ACQUIRE — what the consumer is/was reading
@@ -60,7 +61,16 @@ public sealed class SceneFramePublisher
         cmds.CopyTo(_cmds[free]);
         sort.CopyTo(_sort[free]);
         ulong seq = ++_publishSeq;
-        _slots[free] = new RenderFrame { PublishSeq = seq, ArenaIndex = free, ByteLen = cmds.Length, SortLen = sort.Length, Submit = submit, SuppressVsync = suppressVsync };
+        _slots[free] = new RenderFrame
+        {
+            PublishSeq = seq,
+            ArenaIndex = free,
+            ByteLen = cmds.Length,
+            SortLen = sort.Length,
+            Submit = submit,
+            SuppressVsync = suppressVsync,
+            InteractivePresent = interactivePresent,
+        };
         Volatile.Write(ref _publishedIdx, free);                    // RELEASE — makes the arena copy + header visible-before
         return seq;
     }
@@ -72,6 +82,11 @@ public sealed class SceneFramePublisher
         int idx = Volatile.Read(ref _publishedIdx);                 // ACQUIRE — pairs with the Publish release
         if (idx < 0) { frame = default; return false; }
         frame = _slots[idx];                                        // POD header copy
+        // DropOldest-with-dedup: if the latest published frame is the one we already consumed, there is nothing new — a
+        // bare wake (no intervening Publish) must NOT re-submit/re-present the last frame. This makes the consumer
+        // idempotent across wakes, which the detached-window routing relies on (a child's wake carries no parent Publish,
+        // so the parent seam's TryAcquire here no-ops instead of re-presenting the parent's last frame).
+        if (frame.PublishSeq == Volatile.Read(ref _lastConsumedSeq)) { frame = default; return false; }
         Volatile.Write(ref _consumeIdx, idx);                       // RELEASE — UI now knows this slot is in use (won't overwrite its arena)
         Volatile.Write(ref _lastConsumedSeq, frame.PublishSeq);     // RELEASE — drives consume-gated quarantine (§5)
         return true;

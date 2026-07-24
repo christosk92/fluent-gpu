@@ -44,6 +44,9 @@ public readonly struct LaidCluster
 public struct LaidLine
 {
     public int StartChar, EndChar;
+    /// <summary>For an overflow-suffix line, the visible body ends here and resumes at <see cref="SuffixStart"/>.
+    /// Both values are -1 for an ordinary contiguous line.</summary>
+    public int VisibleBodyEnd, SuffixStart;
     public float Top, Height, Width;
     public int FirstGlyph, GlyphCount;
 }
@@ -247,7 +250,7 @@ public sealed unsafe class TextLayoutEngine : IDisposable
     /// lines is future work; uniform-size spans, the overwhelming case, are exact).</para></summary>
     public void Layout(ReadOnlySpan<char> text, string family, int weight, float size, float maxWidth, int wrap, int trim, int maxLines,
         float charSpacing = 0f, float lineHeight = float.NaN, int stacking = 0, int lineBounds = 0,
-        ReadOnlySpan<SpanStyle> spans = default, StringTable? names = null)
+        ReadOnlySpan<SpanStyle> spans = default, StringTable? names = null, int overflowSuffixStart = -1)
     {
         if (weight <= 0) weight = 400; else if (weight > 999) weight = 999;   // DWRITE_FONT_WEIGHT range
         _glyphCount = 0; _laidCount = 0; _clusterCount = 0; _lineRecCount = 0;
@@ -264,7 +267,7 @@ public sealed unsafe class TextLayoutEngine : IDisposable
             {
                 RestoreShape(hit);
                 hit.Tick = ++_shapeTick;
-                WrapAndPosition(size, 1f, hit.LineH, maxWidth, wrap, trim, maxLines, _ellFace);
+                WrapAndPosition(size, 1f, hit.LineH, maxWidth, wrap, trim, maxLines, _ellFace, overflowSuffixStart);
                 return;
             }
         }
@@ -319,7 +322,11 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         {
             Width = 0; Height = lineH; LineCount = 1;
             EnsureLines(1);
-            _lines[_lineRecCount++] = new LaidLine { StartChar = 0, EndChar = 0, Top = 0f, Height = lineH, Width = 0f, FirstGlyph = 0, GlyphCount = 0 };
+            _lines[_lineRecCount++] = new LaidLine
+            {
+                StartChar = 0, EndChar = 0, VisibleBodyEnd = -1, SuffixStart = -1,
+                Top = 0f, Height = lineH, Width = 0f, FirstGlyph = 0, GlyphCount = 0,
+            };
             return;
         }
 
@@ -389,7 +396,7 @@ public sealed unsafe class TextLayoutEngine : IDisposable
 
         ShapeCount++;   // an actual itemize+shape pass (this was a cache miss); a re-wrap returns above without bumping it
         if (cacheable) StoreShape(shapeKey, text, family, weight, size, charSpacing, lineHeight, stacking, lineBounds, lineH);
-        WrapAndPosition(size, scale, lineH, maxWidth, wrap, trim, maxLines, (nint)face);
+        WrapAndPosition(size, scale, lineH, maxWidth, wrap, trim, maxLines, (nint)face, overflowSuffixStart);
     }
 
     // A word wraps to the next line only when it overruns the box by MORE than this sub-pixel slack. The box width
@@ -401,12 +408,27 @@ public sealed unsafe class TextLayoutEngine : IDisposable
     // that boundary — the run clips at most ~1px on the right, imperceptible — without affecting genuinely-narrower boxes.
     private const float WrapSlack = 1f;
 
-    private void WrapAndPosition(float size, float scale, float lineHeight, float maxWidth, int wrap, int trim, int maxLines, nint face)
+    private void WrapAndPosition(float size, float scale, float lineHeight, float maxWidth, int wrap, int trim, int maxLines, nint face,
+        int overflowSuffixStart)
     {
         bool doWrap = wrap != 0 && maxWidth > 1f && !float.IsInfinity(maxWidth);
         bool doTrim = trim != 0 && maxWidth > 1f && !float.IsInfinity(maxWidth);
         int maxL = maxLines > 0 ? maxLines : int.MaxValue;
-        int gc = _glyphCount;
+        int allGc = _glyphCount;
+        int suffixGlyph = allGc;
+        bool hasOverflowSuffixData = overflowSuffixStart >= 0 && overflowSuffixStart < _textLen;
+        if (hasOverflowSuffixData)
+        {
+            suffixGlyph = 0;
+            while (suffixGlyph < allGc && _glyphs[suffixGlyph].Cluster < overflowSuffixStart) suffixGlyph++;
+            if (suffixGlyph >= allGc) hasOverflowSuffixData = false;
+        }
+        bool canEmitOverflowSuffix = hasOverflowSuffixData && doWrap && maxLines > 0;
+        // The appended suffix is never ordinary paragraph content. It is either emitted atomically on finite-line
+        // wrapping overflow, or omitted altogether (including NoWrap and unlimited-line layouts).
+        int gc = hasOverflowSuffixData ? suffixGlyph : allGc;
+        int visibleTextEnd = hasOverflowSuffixData ? overflowSuffixStart : _textLen;
+        bool emittedOverflowSuffix = false;
 
         float maxLineW = 0f;
         int line = 0;
@@ -430,7 +452,13 @@ public sealed unsafe class TextLayoutEngine : IDisposable
                     {
                         // Line budget reached at a hard break: emit this line as-is and DROP the rest — WinUI
                         // MaxLines clips whole lines past the cap; it never runs the next paragraph on.
-                        EmitLine(lineStart, i, line, lineHeight, doTrim, maxWidth, ref maxLineW);
+                        if (canEmitOverflowSuffix)
+                        {
+                            EmitOverflowSuffixLine(lineStart, gc, suffixGlyph, allGc, overflowSuffixStart,
+                                line, lineHeight, maxWidth, ref maxLineW);
+                            emittedOverflowSuffix = true;
+                        }
+                        else EmitLine(lineStart, i, line, lineHeight, doTrim, maxWidth, ref maxLineW);
                         line++; lineStart = gc;
                         break;
                     }
@@ -447,7 +475,13 @@ public sealed unsafe class TextLayoutEngine : IDisposable
                         // Overflow ON the last allowed line: it still wraps at the break point — the remainder is
                         // dropped, never dumped unwrapped past maxWidth. With trimming, EmitLine ellipsizes the
                         // remainder down to the width budget instead (WinUI CharacterEllipsis + MaxLines).
-                        EmitLine(lineStart, doTrim ? gc : br, line, lineHeight, doTrim, maxWidth, ref maxLineW);
+                        if (canEmitOverflowSuffix)
+                        {
+                            EmitOverflowSuffixLine(lineStart, gc, suffixGlyph, allGc, overflowSuffixStart,
+                                line, lineHeight, maxWidth, ref maxLineW);
+                            emittedOverflowSuffix = true;
+                        }
+                        else EmitLine(lineStart, doTrim ? gc : br, line, lineHeight, doTrim, maxWidth, ref maxLineW);
                         line++; lineStart = gc;
                         break;
                     }
@@ -474,9 +508,95 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         if (_lineRecCount == 0)
         {
             EnsureLines(1);
-            _lines[_lineRecCount++] = new LaidLine { StartChar = 0, EndChar = _textLen, Top = 0f, Height = lineHeight, Width = 0f, FirstGlyph = 0, GlyphCount = 0 };
+            _lines[_lineRecCount++] = new LaidLine
+            {
+                StartChar = 0, EndChar = visibleTextEnd, VisibleBodyEnd = -1, SuffixStart = -1,
+                Top = 0f, Height = lineHeight, Width = 0f, FirstGlyph = 0, GlyphCount = 0,
+            };
         }
         for (int li = 0; li + 1 < _lineRecCount; li++) _lines[li].EndChar = _lines[li + 1].StartChar;
+        if (!emittedOverflowSuffix) _lines[_lineRecCount - 1].EndChar = visibleTextEnd;
+    }
+
+    // Emit the final visible body fragment plus an atomic overflow-only suffix. The suffix is shaped as part of the
+    // paragraph, but omitted entirely when the body fits. On overflow its advance is reserved before the body is cut.
+    private void EmitOverflowSuffixLine(int bodyStart, int bodyEnd, int suffixStartGlyph, int suffixEndGlyph,
+        int suffixStartChar, int lineIndex, float lineHeight, float maxWidth, ref float maxLineW)
+    {
+        float suffixW = 0f;
+        for (int i = suffixStartGlyph; i < suffixEndGlyph; i++) suffixW += _glyphs[i].Advance;
+
+        int suffixUseEnd = suffixEndGlyph;
+        if (suffixW > maxWidth)
+        {
+            suffixW = 0f;
+            suffixUseEnd = suffixStartGlyph;
+            while (suffixUseEnd < suffixEndGlyph
+                && suffixW + _glyphs[suffixUseEnd].Advance <= maxWidth + WrapSlack)
+                suffixW += _glyphs[suffixUseEnd++].Advance;
+        }
+
+        float bodyBudget = MathF.Max(0f, maxWidth - suffixW);
+        int bodyUseEnd = FitOverflowBody(bodyStart, bodyEnd, bodyBudget);
+        int visibleBodyEndChar = bodyUseEnd < bodyEnd ? _glyphs[bodyUseEnd].Cluster : suffixStartChar;
+        int firstGlyph = _clusterCount;
+        float x = 0f;
+        float baselineY = Baseline + lineIndex * lineHeight;
+        AppendLogicalRange(bodyStart, bodyUseEnd, lineIndex, baselineY, ref x);
+        AppendLogicalRange(suffixStartGlyph, suffixUseEnd, lineIndex, baselineY, ref x);
+        if (x > maxLineW) maxLineW = x;
+
+        int startChar = bodyStart < bodyEnd ? _glyphs[bodyStart].Cluster
+            : suffixUseEnd > suffixStartGlyph ? _glyphs[suffixStartGlyph].Cluster
+            : suffixStartChar;
+        EnsureLines(_lineRecCount + 1);
+        _lines[_lineRecCount++] = new LaidLine
+        {
+            StartChar = startChar,
+            EndChar = _textLen,
+            VisibleBodyEnd = visibleBodyEndChar,
+            SuffixStart = suffixStartChar,
+            Top = lineIndex * lineHeight,
+            Height = lineHeight,
+            Width = x,
+            FirstGlyph = firstGlyph,
+            GlyphCount = _clusterCount - firstGlyph,
+        };
+    }
+
+    private int FitOverflowBody(int start, int end, float budget)
+    {
+        if (budget <= 0f || start >= end) return start;
+        float used = 0f;
+        int lastBreak = -1;
+        for (int i = start; i < end; i++)
+        {
+            int c = _glyphs[i].Cluster;
+            if (c >= 0 && c < _breaks.Count)
+            {
+                byte before = _breaks[c].BreakBefore;
+                if (before == BreakOpp.CanBreak || before == BreakOpp.MustBreak) lastBreak = i;
+            }
+            float next = used + _glyphs[i].Advance;
+            if (next > budget + WrapSlack)
+                return lastBreak > start ? lastBreak : i;
+            used = next;
+        }
+        return end;
+    }
+
+    private void AppendLogicalRange(int start, int end, int lineIndex, float baselineY, ref float x)
+    {
+        if (end <= start) return;
+        EnsureLaid(_laidCount + end - start);
+        EnsureClusters(_clusterCount + end - start);
+        for (int i = start; i < end; i++)
+        {
+            ref readonly var g = ref _glyphs[i];
+            _laid[_laidCount++] = new LaidGlyph(g.Gid, g.Face, x, baselineY, g.Size, g.Span);
+            _clusters[_clusterCount++] = new LaidCluster(g.Cluster, x, g.Advance, lineIndex);
+            x += g.Advance;
+        }
     }
 
     // Position glyphs [start,end) on one line with BiDi L2 reordering; trim+ellipsize if the line overflows; append to _laid.
@@ -543,7 +663,7 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         EnsureLines(_lineRecCount + 1);
         _lines[_lineRecCount++] = new LaidLine
         {
-            StartChar = minCluster, EndChar = _textLen,
+            StartChar = minCluster, EndChar = _textLen, VisibleBodyEnd = -1, SuffixStart = -1,
             Top = lineIndex * lineHeight, Height = lineHeight, Width = x,
             FirstGlyph = firstGlyph, GlyphCount = useLen,
         };
@@ -617,6 +737,27 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         for (int li = 0; li < _lineRecCount && written < rects.Length; li++)
         {
             ref readonly var line = ref _lines[li];
+            if (line.SuffixStart >= 0)
+            {
+                int bs = start > line.StartChar ? start : line.StartChar;
+                int be = end < line.VisibleBodyEnd ? end : line.VisibleBodyEnd;
+                if (bs < be)
+                {
+                    float bx0 = CaretXOnLine(li, bs);
+                    float bx1 = CaretXOnLine(li, be);
+                    if (bx1 > bx0) rects[written++] = new RectF(bx0, line.Top, bx1 - bx0, line.Height);
+                }
+                if (written >= rects.Length) continue;
+                int ss = start > line.SuffixStart ? start : line.SuffixStart;
+                int se = end < line.EndChar ? end : line.EndChar;
+                if (ss < se)
+                {
+                    float sx0 = CaretXOnLine(li, ss);
+                    float sx1 = CaretXOnLine(li, se);
+                    if (sx1 > sx0) rects[written++] = new RectF(sx0, line.Top, sx1 - sx0, line.Height);
+                }
+                continue;
+            }
             int s = start > line.StartChar ? start : line.StartChar;
             int e = end < line.EndChar ? end : line.EndChar;
             if (s >= e) continue;

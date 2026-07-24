@@ -24,6 +24,16 @@ public sealed class ImageSourceTests
     }
 
     [Fact]
+    public void Image_NormalizesLargestSpotifyImageToken()
+    {
+        var image = new Image("https://i.scdn.co/image/card", LargestUrl: " spotify:image:largest ");
+
+        Assert.Equal("https://i.scdn.co/image/largest", image.LargestUrl);
+        Assert.Equal("https://i.scdn.co/image/card", ImageSource.UrlFor(image, preferLargest: false));
+        Assert.Equal("https://i.scdn.co/image/largest", ImageSource.UrlFor(image, preferLargest: true));
+    }
+
+    [Fact]
     public void Image_NormalizesMosaicTiles()
     {
         var image = new Image("", MosaicTiles: new List<string>
@@ -65,7 +75,11 @@ public sealed class ImageSourceTests
 
         Image? chosen = ImageSource.PreferVisible(incoming, visible);
 
-        Assert.Same(visible, chosen);
+        Assert.NotNull(chosen);
+        Assert.Equal(visible.Url, chosen!.Url);
+        Assert.Equal(incoming.Url, chosen.LargestUrl);
+        Assert.Equal(visible.Url, ImageSource.UrlFor(chosen, preferLargest: false));
+        Assert.Equal(incoming.Url, ImageSource.UrlFor(chosen, preferLargest: true));
     }
 
     [Fact]
@@ -97,5 +111,6 @@ public sealed class ImageSourceTests
         Assert.Equal(visible.Url, chosen!.Url);
         Assert.Equal(incoming.BlurHash, chosen.BlurHash);
         Assert.Equal(300, chosen.Width); // keep the already-decoded size metadata
+        Assert.Equal(incoming.Url, chosen.LargestUrl);
     }
 }

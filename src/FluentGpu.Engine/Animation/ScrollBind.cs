@@ -27,6 +27,8 @@ public enum BindSink : byte
     ClipTop = 7,       // NodePaint.ClipRect top edge
     PresentedH = 8,    // NodePaint.PresentedH (compositor reveal; clips children, no relayout)
     PresentedHTrailing = 9, // PresentedH + ChildShiftY: child content's trailing edge rides the reveal edge
+    MorphViewportX = 10, // translate so the node's laid-out left edge approaches a viewport-space target
+    MorphViewportY = 11, // translate so the node's laid-out top edge approaches a viewport-space target
 }
 
 /// <summary>How a <see cref="ScrollBind"/> range anchor is authored before it is baked to a scroll-px bound. Literal-px

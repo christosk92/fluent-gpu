@@ -27,6 +27,12 @@ public static class MediaCard
     internal const float FabInset = 8f;
     const float Pad      = Spacing.S;
 
+    static Element LazyOverlay(Signal<bool> hovered, string uri, Action onPlay, float fab, bool cover, float inner,
+                               Action? onNavigate = null, bool centered = false)
+        => Embed.Comp(() => new LazyNowPlayingOverlay(
+                hovered, uri, onPlay, fab, cover, inner, onNavigate, centered))
+            .Skeletonized(false);
+
     /// <summary>Wide Home destination used by the concert feature. It keeps one responsive layered tree and avoids the
     /// stateful portrait editorial card's image zoom, acrylic, and shelf-specific clipping behavior.</summary>
     public static Element WideEditorialDestination(Image? artwork, string eyebrow, string title, string subtitle,
@@ -159,6 +165,7 @@ public static class MediaCard
                                 Action onClick, Action onPlay, float cardW, bool circular = false, string? morphKey = null,
                                 Action<string>? onNavUri = null, MenuAttach? menu = null)
     {
+        var hovered = new Signal<bool>(false);
         float inner = MathF.Max(48f, cardW - 2f * Pad);
         float r = circular ? inner / 2f : Radii.Card;
 
@@ -194,7 +201,7 @@ public static class MediaCard
             // only the FAB itself is a hit target.
             // Skeletonized(false): a hover-only affordance is not skeleton content — without this the deriver maps the
             // opaque overlay to its default bar, leaving a stray stripe across the top-left of every loading cover.
-            Embed.Comp(() => new NowPlayingOverlay(uri, onPlay, FabSize, cover: true, inner)).Skeletonized(false),
+            LazyOverlay(hovered, uri, onPlay, FabSize, cover: true, inner),
             MoreCorner(menu is not null),
             ],
         };
@@ -226,7 +233,12 @@ public static class MediaCard
             ],
         };
         // Grow=1 on the shell: a measured shelf cell stretches every card to the tallest card's height.
-        var card = (CardShell(content, onClick) with { Grow = 1f }).WithMenu(menu);
+        var card = (CardShell(content, onClick) with
+        {
+            Grow = 1f,
+            OnPointerMoveWithin = _ => { if (!hovered.Peek()) hovered.Value = true; },
+            OnPointerExit = () => { if (hovered.Peek()) hovered.Value = false; },
+        }).WithMenu(menu);
         return new BoxEl { Grow = 1f, Direction = 1, Padding = new Edges4(0f, 4f, 0f, 2f), Children = [ card ] };
     }
 
@@ -238,6 +250,7 @@ public static class MediaCard
     public static Element Compact(Image? cover, string title, string subtitle, string uri, HomeCardKind kind,
                                   Action onClick, Action onPlay, float art, float cardH, MenuAttach? menu = null)
     {
+        var hovered = new Signal<bool>(false);
         bool circular = kind == HomeCardKind.Artist;
         float radius = circular ? art / 2f : Radii.Card;
         float action = art <= 100f ? 40f : 44f;
@@ -279,9 +292,11 @@ public static class MediaCard
                 },
                 // Same reveal convention as the cover cards: retain the trailing slot for stable text geometry, but
                 // fade the play/pause surface in only while the compact card is hovered.
-                Embed.Comp(() => new NowPlayingOverlay(uri, onPlay, action, cover: false, action, persistent: false)).Skeletonized(false),
+                LazyOverlay(hovered, uri, onPlay, action, cover: false, action),
                 MoreInline(menu is not null),
             ],
+            OnPointerMoveWithin = _ => { if (!hovered.Peek()) hovered.Value = true; },
+            OnPointerExit = () => { if (hovered.Peek()) hovered.Value = false; },
         };
         return new BoxEl { Direction = 1, Padding = new Edges4(0f, 3f, 0f, 3f), Children = [ card.WithMenu(menu) ] };
     }
@@ -290,6 +305,7 @@ public static class MediaCard
                                    Action onClick, Action onPlay, bool circular = false, Action? onNavigate = null,
                                    ColorF? accent = null, MenuAttach? menu = null)
     {
+        var hovered = new Signal<bool>(false);
         float r = circular ? 9999f : Radii.Card;
         var coverStack = new BoxEl
         {
@@ -299,7 +315,7 @@ public static class MediaCard
             Children =
             [
                 Surfaces.ArtworkFill(cover, r),
-                Embed.Comp(() => new NowPlayingOverlay(uri, onPlay, FabSize, cover: true, 0f, onNavigate)).Skeletonized(false),
+                LazyOverlay(hovered, uri, onPlay, FabSize, cover: true, 0f, onNavigate),
                 MoreCorner(menu is not null),
             ],
         };
@@ -327,7 +343,11 @@ public static class MediaCard
         };
         // Same shell as Shelf; the album-palette accent tints the HOVER plate only (accent = small emphasis) — the
         // expanded-drawer owner still gets its resting accent border/fill via the caller's root override.
-        return CardShell(content, onClick, AccentCardHoverFill(accent)).WithMenu(menu);
+        return (CardShell(content, onClick, AccentCardHoverFill(accent)) with
+        {
+            OnPointerMoveWithin = _ => { if (!hovered.Peek()) hovered.Value = true; },
+            OnPointerExit = () => { if (hovered.Peek()) hovered.Value = false; },
+        }).WithMenu(menu);
     }
 
     // Editorial home card: intentionally reserved for HomeFeedBaselineSectionData. Normal home sections keep the regular
@@ -340,7 +360,8 @@ public static class MediaCard
     // Stateful (EditorialCardCore): hover zooms the ARTWORK inside the card's own rounded clip (a root HoverScale pushed
     // the outermost shelf cards past the viewport's exact-bounds clip — squared corners), expands the description, and —
     // after a swept countdown ring — peeks the recommendation's preview tracks (previewsOf, the feedBaselineLookup cache).
-    // Component props freeze at mount, so the Key remounts on identity or a ≥16px fitted-width change (shelf re-fit).
+    // Component props freeze at mount. Identity is the component key; width changes flow through the responsive shelf's
+    // retained layout and no longer remount the entire editorial subtree in 16px buckets.
     public static Element EditorialCard(Image? cover, string? eyebrow, string title, string subtitle, string uri, HomeCardKind kind,
                                         Action onClick, Action onPlay, float cardW, MenuAttach? menu = null,
                                         Func<string, IReadOnlyList<HomePreviewTrack>?>? previewsOf = null,
@@ -349,7 +370,7 @@ public static class MediaCard
                                                   previewsOf, previewsEpoch))
            with
            {
-               Key = $"edcard:{uri}:{(int)(cardW / 16f)}",
+               Key = $"edcard:{uri}",
                // The deriver can't see into the component — hand it the resting card shape (no hover, no peek).
                SkeletonProxy = () => EditorialCardCore.Build(cover, eyebrow, title, subtitle, uri, kind, onClick, onPlay,
                    MathF.Min(cardW, 360f), menu, hovered: false, peek: null, counting: false,
@@ -378,6 +399,7 @@ public static class MediaCard
         readonly Signal<Point2> _spotlightCenter = new(new Point2(0.5f, 0.35f));
         int _hoverEpoch;                                   // bumped on every hover edge — abandons stale countdown tails
         NodeHandle _arcNode = NodeHandle.Null;
+        float _liveCardW;
 
         public EditorialCardCore(Image? cover, string? eyebrow, string title, string subtitle, string uri, HomeCardKind kind,
                                  Action onClick, Action onPlay, float cardW, MenuAttach? menu,
@@ -386,6 +408,7 @@ public static class MediaCard
             _cover = cover; _eyebrow = eyebrow; _title = title; _subtitle = subtitle; _uri = uri; _kind = kind;
             _onClick = onClick; _onPlay = onPlay; _cardW = cardW; _menu = menu;
             _previewsOf = previewsOf; _previewsEpoch = previewsEpoch;
+            _liveCardW = cardW;
         }
 
         void HoverStart()
@@ -413,8 +436,8 @@ public static class MediaCard
         {
             HoverStart();
             if (Motion.ReducedMotion) return;
-            float w = MathF.Max(1f, _cardW);
-            float h = MathF.Max(360f, _cardW * 1.25f);
+            float w = MathF.Max(1f, _liveCardW);
+            float h = MathF.Max(360f, _liveCardW * 1.25f);
             _spotlightCenter.Value = new Point2(Math.Clamp(local.X / w, 0f, 1f), Math.Clamp(local.Y / h, 0f, 1f));
         }
 
@@ -440,7 +463,21 @@ public static class MediaCard
                     new Keyframe[] { new(0f, 0f, Easing.Linear), new(1f, 1f, Easing.Linear) }, CountdownMs, false);
             }, (_hoverEpoch, counting));
 
-            return Build(_cover, _eyebrow, _title, _subtitle, _uri, _kind, _onClick, _onPlay, _cardW, _menu,
+            // ResponsiveBox owns the live fitted width. Its retained delegate reads the same state signals, so hover /
+            // preview changes and shelf refits rebuild only this card's content without remounting EditorialCardCore.
+            return Responsive.Of(BuildAtWidth, fallback: _cardW);
+        }
+
+        Element BuildAtWidth(float cardW)
+        {
+            _liveCardW = cardW;
+            bool hovered = _hovered.Value;
+            bool revealed = _revealed.Value;
+            _ = _previewsEpoch?.Value;
+            var previews = _previewsOf?.Invoke(_uri);
+            bool hasPeek = previews is { Count: > 0 };
+            bool counting = hovered && !revealed && hasPeek;
+            return Build(_cover, _eyebrow, _title, _subtitle, _uri, _kind, _onClick, _onPlay, cardW, _menu,
                 hovered, revealed && hasPeek ? previews : null, counting,
                 arcCapture: h => _arcNode = h, spotlightCenter: Prop<Point2>.FromSignal(_spotlightCenter),
                 pointerMove: PointerMove, pointerExit: HoverEnd);
@@ -701,6 +738,7 @@ public static class MediaCard
     public static Element VideoCard(Image? thumb, string title, string duration, string uri,
                                     Action onClick, Action onPlay, float cardW, MenuAttach? menu = null)
     {
+        var hovered = new Signal<bool>(false);
         float inner = MathF.Max(64f, cardW - 2f * Pad);
         float ar = inner * 9f / 16f;
         var card = new BoxEl
@@ -712,6 +750,8 @@ public static class MediaCard
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             Shadow = Elevation.Card,
             HoverScale = 1.02f, PressScale = 0.99f, OnClick = onClick,
+            OnPointerMoveWithin = _ => { if (!hovered.Peek()) hovered.Value = true; },
+            OnPointerExit = () => { if (hovered.Peek()) hovered.Value = false; },
             Children =
             [
                 new BoxEl
@@ -720,7 +760,7 @@ public static class MediaCard
                     Children =
                     [
                         Surfaces.Artwork(thumb, Seed(uri), inner, ar, Radii.Control, decodePx: 480),
-                        Embed.Comp(() => new NowPlayingOverlay(uri, onPlay, FabSize, cover: true, 0f)).Skeletonized(false),
+                        LazyOverlay(hovered, uri, onPlay, FabSize, cover: true, 0f),
                         MoreCorner(menu is not null),
                     ],
                 },
@@ -735,12 +775,15 @@ public static class MediaCard
     // ── Wide "jump back in" tile: cover + title (fills, ellipsised) + trailing now-playing/play overlay ───
     public static Element QuickPick(Image? cover, string title, string uri, Action onClick, Action onPlay, ColorF? accent = null, Element? diagnostics = null, MenuAttach? menu = null)
     {
+        var hovered = new Signal<bool>(false);
         var card = new BoxEl
         {
             Direction = 0, Height = QuickH, AlignItems = FlexAlign.Center, Gap = Spacing.M,
             Corners = CornerRadius4.All(Radii.Card), Fill = AccentCardFill(accent), HoverFill = AccentCardHoverFill(accent),
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault, ClipToBounds = true, OnClick = onClick,
             Shadow = Elevation.Card,
+            OnPointerMoveWithin = _ => { if (!hovered.Peek()) hovered.Value = true; },
+            OnPointerExit = () => { if (hovered.Peek()) hovered.Value = false; },
             Children =
             [
                 // Surfaces.Artwork = a neutral shimmer/placeholder tile + the real art on top (graceful when the cover
@@ -752,7 +795,7 @@ public static class MediaCard
                 {
                     Direction = 0, AlignItems = FlexAlign.Center,
                     Padding = new Edges4(0f, 0f, Spacing.M, 0f),
-                    Children = [ Embed.Comp(() => new NowPlayingOverlay(uri, onPlay, 36f, cover: false, 36f)).Skeletonized(false) ],
+                    Children = [ LazyOverlay(hovered, uri, onPlay, 36f, cover: false, 36f) ],
                 },
             ],
         };
@@ -769,6 +812,7 @@ public static class MediaCard
                               string? detail = null, Action<string>? onSubtitleNav = null, string? meta = null, bool detailBelowArt = false,
                               MenuAttach? menu = null)
     {
+        var hovered = new Signal<bool>(false);
         float art = large ? 84f : 48f;
         float r = circular ? art / 2f : (large ? Radii.Card : 6f);
         float fab = large ? 44f : 30f;
@@ -781,7 +825,7 @@ public static class MediaCard
             Children =
             [
                 ArtworkOrLiked(cover, uri, art, art, r),
-                Embed.Comp(() => new NowPlayingOverlay(uri, onPlay, fab, cover: true, art, centered: true)).Skeletonized(false),
+                LazyOverlay(hovered, uri, onPlay, fab, cover: true, art, centered: true),
             ],
         };
         var textKids = new System.Collections.Generic.List<Element>(3);
@@ -816,7 +860,9 @@ public static class MediaCard
                 HoverFill = Tok.FillCardDefault,
                 PressedFill = Tok.FillSubtleTertiary,
                 BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
-                Role = AutomationRole.Button, OnClick = onClick, OnPointerExit = static () => { },
+                Role = AutomationRole.Button, OnClick = onClick,
+                OnPointerMoveWithin = _ => { if (!hovered.Peek()) hovered.Value = true; },
+                OnPointerExit = () => { if (hovered.Peek()) hovered.Value = false; },
                 Children =
                 [
                     new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M, Children = kids.ToArray() },
@@ -841,7 +887,9 @@ public static class MediaCard
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             // The row is the interactive ancestor (OnClick + a no-op pointer-exit), so the cover's hover-revealed play FAB
             // resolves off ROW hover — identical to the card behavior.
-            Role = AutomationRole.Button, OnClick = onClick, OnPointerExit = static () => { },
+            Role = AutomationRole.Button, OnClick = onClick,
+            OnPointerMoveWithin = _ => { if (!hovered.Peek()) hovered.Value = true; },
+            OnPointerExit = () => { if (hovered.Peek()) hovered.Value = false; },
             Children = kids.ToArray(),
         }.WithMenu(menu);
     }
@@ -930,6 +978,68 @@ sealed class CardLibraryAction : Component
     }
 }
 
+// Cheap cold-card sentinel. The full play/equalizer subtree is mounted only for the card under the pointer or the
+// playback-matching card; Home Ready therefore pays one tiny component/effect per card instead of every FAB, tooltip,
+// equalizer, and icon tree in the first flush.
+sealed class LazyNowPlayingOverlay : Component
+{
+    readonly IReadSignal<bool> _hovered;
+    readonly string _uri;
+    readonly Action _onPlay;
+    readonly Action? _onNavigate;
+    readonly float _fab;
+    readonly bool _cover;
+    readonly float _inner;
+    readonly bool _centered;
+
+    public LazyNowPlayingOverlay(IReadSignal<bool> hovered, string uri, Action onPlay, float fab, bool cover, float inner,
+                                 Action? onNavigate, bool centered)
+    {
+        _hovered = hovered;
+        _uri = uri;
+        _onPlay = onPlay;
+        _fab = fab;
+        _cover = cover;
+        _inner = inner;
+        _onNavigate = onNavigate;
+        _centered = centered;
+    }
+
+    public override Element Render()
+    {
+        var bridge = UseContext(PlaybackBridge.Slot);
+        var active = UseSignal(false);
+        UseSignalEffect(() =>
+        {
+            // Cold-path decoupling. Read the COARSE HasActiveContext bool FIRST and bail before touching the hot Identity
+            // signal: while nothing is playing no card can match (Matches is false with an empty context+track), so an idle
+            // overlay must NOT join Identity's ~70-way fanout nor run Matches. With the subscription-per-run model
+            // (ReactiveCore re-links sources each run), this early return leaves the effect subscribed to HasActiveContext
+            // ALONE while idle; when a context goes active every overlay's effect re-runs, reads Identity, and evaluates the
+            // precise match. (The hook itself still runs unconditionally each render — only its SUBSCRIPTIONS narrow.)
+            if (bridge is not { } b || !b.HasActiveContext.Value)
+            {
+                active.Value = false;
+                return;
+            }
+            var identity = b.Identity.Value;
+            active.Value = NowPlayingOverlay.Matches(_uri, identity.ContextUri, identity.Track);
+        });
+
+        if (!_hovered.Value && !active.Value)
+        {
+            if (_cover)
+                return _centered
+                    ? new BoxEl { Width = _inner, Height = _inner, HitTestVisible = false }
+                    : new BoxEl { Grow = 1f, HitTestVisible = false };
+            return new BoxEl { Width = _fab, Height = _fab, Shrink = 0f, HitTestVisible = false };
+        }
+
+        return Embed.Comp(() => new NowPlayingOverlay(
+            _uri, _onPlay, _fab, _cover, _inner, _onNavigate, _centered));
+    }
+}
+
 // The reactive now-playing / play affordance on a content card (mirrors WaveeMusic's ContentCard state model):
 //   • the play/pause FAB is REVEALED ON HOVER (and shows PAUSE when this card's context is the one playing);
 //   • when this card's context IS playing, the now-playing EQUALIZER shows (bottom-left on a cover; in the trailing
@@ -967,9 +1077,8 @@ sealed class NowPlayingOverlay : Component
         var vis = UseSignal((active: false, playingHere: false));
         UseSignalEffect(() =>
         {
-            var ctx = b?.CurrentContext.Value;
-            var track = b?.CurrentTrack.Value;
-            bool a = Matches(_uri, ctx, track);
+            var identity = b?.Identity.Value ?? default;
+            bool a = Matches(_uri, identity.ContextUri, identity.Track);
             vis.Value = (a, a && (b?.IsPlaying.Value ?? false));   // short-circuit: a non-active card never subscribes to IsPlaying
         });
         var (active, playingHere) = vis.Value;
@@ -978,7 +1087,8 @@ sealed class NowPlayingOverlay : Component
         void Toggle()
         {
             if (b is null) { _onPlay(); return; }
-            if (Matches(_uri, b.CurrentContext.Peek(), b.CurrentTrack.Peek()))
+            var identity = b.Identity.Peek();
+            if (Matches(_uri, identity.ContextUri, identity.Track))
             {
                 bool p = b.IsPlaying.Peek();
                 b.IsPlaying.Value = !p;                              // optimistic, then the player reconciles
@@ -1089,7 +1199,7 @@ sealed class NowPlayingOverlay : Component
         };
     }
 
-    static bool Matches(string uri, string? contextUri, Track? track)
+    internal static bool Matches(string uri, string? contextUri, Track? track)
     {
         if (string.IsNullOrEmpty(uri)) return false;
         if (!string.IsNullOrEmpty(contextUri) && string.Equals(uri, contextUri, StringComparison.OrdinalIgnoreCase)) return true;

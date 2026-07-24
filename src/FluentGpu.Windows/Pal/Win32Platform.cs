@@ -258,10 +258,15 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     // fire" with evidence instead of guesses.
     private static readonly bool s_ncDiag =
         System.Environment.GetEnvironmentVariable("FG_NC_DIAG") is "1" or "true";
+    // Default-on production path; FG_PRECISE_WAIT=0 is the same-binary A/B/fallback switch.
+    private static readonly bool s_preciseWait =
+        System.Environment.GetEnvironmentVariable("FG_PRECISE_WAIT") != "0";
 
     private const uint CS_VREDRAW = 0x0001, CS_HREDRAW = 0x0002;
     private const uint WS_OVERLAPPEDWINDOW = 0x00CF0000;
     private const int GWL_STYLE = -16;
+    private const int GWL_EXSTYLE = -20;
+    private const uint WM_GETMINMAXINFO = 0x0024;
     private const uint MONITOR_DEFAULTTONEAREST = 2;
     private const int SW_MAXIMIZE = 3;
     private const int CW_USEDEFAULT = unchecked((int)0x80000000);
@@ -269,6 +274,10 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private const uint PM_REMOVE = 0x0001;
     private const uint QS_ALLINPUT = 0x04FF;
     private const uint MWMO_INPUTAVAILABLE = 0x0004;
+    private const uint CREATE_WAITABLE_TIMER_HIGH_RESOLUTION = 0x00000002; // Windows 10 1803+
+    private const uint TIMER_MODIFY_STATE = 0x0002;
+    private const uint SYNCHRONIZE = 0x00100000;
+    private const uint WAIT_FAILED = 0xFFFFFFFF;
     private const int GWLP_USERDATA = -21;
     private const int IDC_ARROW = 32512;
     private const uint SWP_NOMOVE = 0x0002, SWP_NOZORDER = 0x0004, SWP_NOACTIVATE = 0x0010;
@@ -309,6 +318,25 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool GetPointerPenInfo(uint pointerId, POINTER_PEN_INFO* penInfo);
+
+    // Display-refresh query (diagnostic-only, FG_FPS_LOG resize line). GetDeviceCaps(VREFRESH) on the window DC reports the
+    // vertical refresh (Hz) of the display this window is on — the honest panel/mode rate to compare against the observed
+    // present cadence (a maximize that locks to 60 on a logged 120 Hz panel is a present/GPU miss-vblank, not a mode drop).
+    private const int VREFRESH = 116;   // wingdi.h GetDeviceCaps index
+    [LibraryImport("user32.dll")] private static partial nint GetDC(nint hWnd);
+    [LibraryImport("user32.dll")] private static partial int ReleaseDC(nint hWnd, nint hdc);
+    [LibraryImport("gdi32.dll")] private static partial int GetDeviceCaps(nint hdc, int index);
+
+    /// <summary>Vertical refresh (Hz) of the display this window is currently on, via <c>GetDeviceCaps(VREFRESH)</c> on the
+    /// window DC. Returns 0 when unknown (the driver reports 0/1 = "device default"). Diagnostic-only; call sparingly
+    /// (once per size change), not per frame.</summary>
+    public int CurrentRefreshHz()
+    {
+        nint hdc = GetDC((nint)_hwnd);
+        if (hdc == 0) return 0;
+        try { int hz = GetDeviceCaps(hdc, VREFRESH); return hz <= 1 ? 0 : hz; }
+        finally { ReleaseDC((nint)_hwnd, hdc); }
+    }
 
     // POINTER_INFO (winuser.h) — common to every pointer type. Sequential layout; only the fields the pump reads are
     // named meaningfully, the remainder are padding-faithful placeholders so the OS writes land at the right offsets.
@@ -432,6 +460,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private int _w, _h;
     private float _scale = 1f;
     private bool _closed;
+    // Detached-window minimum CLIENT size (physical px); (0,0) = no clamp (the primary window is untouched). Converted to
+    // a window (outer) minimum in the WM_GETMINMAXINFO handler via AdjustWindowRectExForDpi (client → window rect).
+    private Size2 _minClientPx;
     private DropRegistration? _dropReg;   // OS file/folder drop registration (Win32DropTarget IDropTarget); null = not registered
     // The DirectManipulation touchpad producer (scroll-feel-rework-v2 §7, Phase D). null = unavailable (MTA thread /
     // CoCreate failed) OR session-disabled after a wedge — either way the §3.3 wheel-fallback classifier owns the
@@ -456,6 +487,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private bool _windowedWasZoomed;
     private nint _windowedStyle;
     private RECT _windowedRect;
+    private HANDLE _preciseWaitTimer;       // lazy one-shot timer for display-rate waits
+    private bool _preciseWaitUnavailable;   // sticky creation failure => plain timeout forever
     private bool _wasZoomed;      // WM_SIZE edge-detect → InputKind.WindowStateChanged
     private bool _inMoveSizeLoop; // WM_ENTERSIZEMOVE..WM_EXITSIZEMOVE modal loop
     private bool _sizedInMoveSizeLoop; // true once this modal loop has delivered WM_SIZE (edge resize, not pure titlebar move)
@@ -701,6 +734,47 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
 
     public void CloseWindow() => PostMessageW(_hwnd, WM_CLOSE, 0, 0);
 
+    // ── detached-window seam (the pop-out video mini-player) ──────────────────────────────────────────────────────────
+
+    public void SetTopmost(bool topmost)
+    {
+        // HWND_TOPMOST (-1) / HWND_NOTOPMOST (-2). Persistent (unlike a one-shot bring-to-front); position/size/activation
+        // left untouched so it never steals focus or fights the user's placement.
+        var insertAfter = (HWND)(nint)(topmost ? -1 : -2);
+        SetWindowPos(_hwnd, insertAfter, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    }
+
+    public void SetBoundsPx(RectF outerBoundsPx)
+        => SetWindowPos(_hwnd, HWND.NULL, (int)outerBoundsPx.X, (int)outerBoundsPx.Y,
+            (int)MathF.Max(1f, outerBoundsPx.W), (int)MathF.Max(1f, outerBoundsPx.H), SWP_NOZORDER | SWP_NOACTIVATE);
+
+    /// <summary>Store the minimum CLIENT size (physical px). (0,0) = no clamp (the default — the primary window is
+    /// unaffected). The WM_GETMINMAXINFO handler converts it to a window (outer) minimum so the user cannot drag the
+    /// frame below a usable video size.</summary>
+    public void SetMinClientSizePx(Size2 px) => _minClientPx = px;
+
+    // client (physical px) → window (outer) size, adding the current frame for this window's style/exstyle/DPI. Standard
+    // frame ⇒ AdjustWindowRectExForDpi; a custom frame reclaims the caption as client (WM_NCCALCSIZE keeps the top inset
+    // at 0), so only the L/R/B thin frame is added — mirroring AdjustForFrame.
+    private void ClientToWindowPx(int clientW, int clientH, out int windowW, out int windowH)
+    {
+        RECT rc = new() { left = 0, top = 0, right = clientW, bottom = clientH };
+        if (!_customFrame)
+        {
+            uint style = (uint)GetWindowLongPtrW(_hwnd, GWL_STYLE);
+            uint exStyle = (uint)GetWindowLongPtrW(_hwnd, GWL_EXSTYLE);
+            uint dpi = GetDpiForWindow(_hwnd);
+            if (dpi == 0) dpi = 96u;
+            AdjustWindowRectExForDpi(&rc, style, false, exStyle, dpi);
+        }
+        else
+        {
+            AdjustForFrame(&rc);
+        }
+        windowW = rc.right - rc.left;
+        windowH = rc.bottom - rc.top;
+    }
+
     /// <summary>First engine region matching <paramref name="px"/>,<paramref name="py"/> (client PHYSICAL px) → its
     /// HT code; 0 = no region. Report order is the priority order (islands → buttons → caption catch-all).</summary>
     private int HitTestRegions(int px, int py, bool buttonsOnly)
@@ -863,7 +937,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
-        _dm?.Update();           // one UpdateManager.Update per drain (§7) — advances OS inertia + runs the wedge watchdog
+        _dm?.UpdateIfDue();      // absolute-deadline manual-update tick; self-posted DM messages cannot spin the UI loop
         TryEmitFallbackLift();   // hi-res silence lift (also fires off the LiftTimer when the loop is idle — see below)
         // Live-DM wheel defense: a held ±120 notch that survived WheelBurstMaxGapMs without a fast follow-up was a
         // genuine mouse notch (synthesis bursts arrive at packet cadence) — deliver it now, ≤50ms late.
@@ -963,8 +1037,62 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
 
     public void WaitForWork(int timeoutMs)
     {
+        // Manual-update DirectManipulation shares this UI/STA pump. Clamp to its ABSOLUTE remaining deadline; queued
+        // messages may wake us early, but never re-arm or postpone that deadline.
+        if (_dm is { Enabled: true } dm)
+        {
+            int dmWaitMs = dm.DelayUntilNextUpdateMs(System.Diagnostics.Stopwatch.GetTimestamp());
+            if (dmWaitMs >= 0 && (timeoutMs < 0 || dmWaitMs < timeoutMs)) timeoutMs = dmWaitMs;
+        }
+        // MsgWaitForMultipleObjectsEx's millisecond timeout is quantized by the system timer. On this 120-Hz device a
+        // requested 7 ms display-rate wait repeatedly took ~12-13 ms, limiting an otherwise 0.3 ms scroll frame to
+        // ~80 fps. A high-resolution waitable timer preserves the same "message OR deadline" contract without
+        // timeBeginPeriod's process-wide interrupt-rate/battery cost. Infinite/zero and long idle waits keep the plain
+        // path; only short animation/pacing waits need sub-tick precision.
+        if (s_preciseWait && timeoutMs > 0 && timeoutMs <= 50 && TryEnsurePreciseWaitTimer())
+        {
+            LARGE_INTEGER due;
+            due.QuadPart = -(long)timeoutMs * 10_000L; // relative deadline in 100 ns units; one-shot (period = 0)
+            HANDLE timer = _preciseWaitTimer;
+            if (SetWaitableTimer(timer, &due, 0, null, null, false))
+            {
+                // One handle: 0 = timer, 1 = queued message. The coarse timeout is only a fault backstop.
+                if (MsgWaitForMultipleObjectsEx(
+                        1, &timer, (uint)(timeoutMs + 16), QS_ALLINPUT, MWMO_INPUTAVAILABLE) != WAIT_FAILED)
+                    return;
+            }
+            // A wait/set failure is not recoverable by retrying the same handle every animation frame. Retire it once,
+            // then preserve correctness through the ordinary message-aware timeout path below.
+            DisablePreciseWait();
+        }
+
         uint timeout = timeoutMs < 0 ? 0xFFFFFFFF : (uint)timeoutMs;
         MsgWaitForMultipleObjectsEx(0, null, timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+    }
+
+    private bool TryEnsurePreciseWaitTimer()
+    {
+        if (_preciseWaitTimer != HANDLE.NULL) return true;
+        if (_preciseWaitUnavailable) return false;
+        HANDLE timer = CreateWaitableTimerExW(
+            null, null, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_MODIFY_STATE | SYNCHRONIZE);
+        if (timer == HANDLE.NULL)
+        {
+            _preciseWaitUnavailable = true;
+            return false;
+        }
+        _preciseWaitTimer = timer;
+        return true;
+    }
+
+    private void DisablePreciseWait()
+    {
+        if (_preciseWaitTimer != HANDLE.NULL)
+        {
+            CloseHandle(_preciseWaitTimer);
+            _preciseWaitTimer = HANDLE.NULL;
+        }
+        _preciseWaitUnavailable = true;
     }
 
     /// <summary>Thread-safe wake (IPlatformWindow.Wake): post a benign WM_NULL so a blocked <see cref="WaitForWork"/>
@@ -984,6 +1112,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         _dm = null;
         _textInput?.DisposeSip();   // release the WinRT InputPane refs + SIP event subscriptions before the HWND dies
         if (_hwnd != HWND.NULL) { KillTimer(_hwnd, MoveLoopTimerId); KillTimer(_hwnd, LiftTimerId); DestroyWindow(_hwnd); }
+        if (_preciseWaitTimer != HANDLE.NULL) { CloseHandle(_preciseWaitTimer); _preciseWaitTimer = HANDLE.NULL; }
         // The UIA provider CCW is intentionally LEAKED (not freed): UIA may still hold a ref after the HWND dies and a
         // synchronous free would risk a use-after-free. A few bytes, one per window, reclaimed at process exit.
         if (_uiaProvider != null) { _uiaProvider = null; FluentGpu.Hooks.InputHooks.Current.Default.Announce = null; }
@@ -1029,6 +1158,18 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 if (Win32Uia.HandleGetObject((nint)hWnd, (nint)wParam, (nint)lParam, _uiaProvider, out nint uiaRes)) { result = (LRESULT)uiaRes; return true; }
                 return false;
             case WM_ERASEBKGND: result = (LRESULT)1; return true;   // we paint every pixel — suppress the flicker-erase
+            case WM_GETMINMAXINFO:
+                // Clamp the minimum tracking size only when a detached window requested a floor (default (0,0) = no clamp,
+                // so the primary window keeps the OS default). Convert the min CLIENT px → min WINDOW px for the live frame.
+                if (_minClientPx.Width > 0f && _minClientPx.Height > 0f)
+                {
+                    ClientToWindowPx((int)_minClientPx.Width, (int)_minClientPx.Height, out int minW, out int minH);
+                    MINMAXINFO* mmi = (MINMAXINFO*)(nint)lParam;
+                    mmi->ptMinTrackSize.x = minW;
+                    mmi->ptMinTrackSize.y = minH;
+                    return true;
+                }
+                return false;
             case WM_SIZE:
                 // Iconic size is 0×0 — adopting it would churn a degenerate swapchain resize + full relayout, and the
                 // zoom edge-detect below would mis-fire on the maximized→minimize edge (IsZoomed false while iconic).
@@ -1217,7 +1358,31 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 if (streamIdle) { _wheelHiRes = false; _wheelBurstRun = 0; _wheelAccumX = 0; _wheelAccumY = 0; }
 
                 uint wheelPid = GET_POINTERID_WPARAM(wParam);
-                bool ptTouchpad = PointerKindOf(wheelPid) == PointerKind.Touchpad;   // rule 1
+                DmWheelSourceEvidence sourceEvidence = WheelSourceEvidenceOf(wheelPid);
+                bool ptTouchpad = sourceEvidence == DmWheelSourceEvidence.Touchpad
+                                  || PointerKindOf(wheelPid) == PointerKind.Touchpad;   // rule 1
+                if (ptTouchpad) sourceEvidence = DmWheelSourceEvidence.Touchpad;
+
+                // Device-evidence arbitration happens before the live-DM hold/confirm heuristic. A positively identified
+                // physical mouse owns the same packet immediately over BOTH contact and inertia; a known touchpad stays
+                // DM-owned. Unknown sources retain the conservative hold/confirm path below.
+                bool wheelTookOverDm = false;
+                DmWheelRoute dmRoute = DmWheelArbitration.Decide(
+                    _dm is { Enabled: true, GestureLive: true }, sourceEvidence);
+                if (dmRoute == DmWheelRoute.DmOwned) return true;
+                if (dmRoute == DmWheelRoute.StopDmAndPass && _dm is { Enabled: true } takeoverDm)
+                {
+                    wheelTookOverDm = takeoverDm.TryStopForPhysicalWheel();
+                    if (wheelTookOverDm)
+                    {
+                        _dmWheelBurstLatch = false;
+                        FlushHeldWheelNotch();
+                        _wheelHiRes = false;
+                        _wheelBurstRun = 0;
+                        _wheelAccumX = 0;
+                        _wheelAccumY = 0;
+                    }
+                }
                 bool subNotch = notch != 0 && (notch % 120) != 0;                    // rule 2 (also the trace's "thisHiRes")
                 bool thisHiRes = subNotch;
                 if (ptTouchpad || subNotch) _wheelHiRes = true;
@@ -1246,7 +1411,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 // letting them through hijacks the coast (CancelGesture + WheelAnimating) and snaps the band. Hold-and-
                 // confirm: first ±120-multiple is held; a <50ms follow-up confirms synthesis (swallow the whole burst);
                 // 50ms of silence flushes it as a genuine mouse notch (FlushHeldWheelNotch in PumpInto).
-                if (notch != 0 && notch % 120 == 0 && _dm is { Enabled: true } dmg && dmg.GestureLive)
+                if (!wheelTookOverDm && notch != 0 && notch % 120 == 0
+                    && _dm is { Enabled: true } dmg && dmg.GestureLive)
                 {
                     if (_dmWheelBurstLatch)
                     {
@@ -1279,7 +1445,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                     // Never two phase-contract producers for one gesture (§7): while a DManip manipulation is live, DM
                     // is THE producer — a wheel packet routed to the hi-res fallback here would emit a competing
                     // ScrollBegin/Update stream into the same latched gesture. Swallow it; DM reports the motion.
-                    if (_dm is { Enabled: true } dmOwner && dmOwner.GestureLive) return true;
+                    if (!wheelTookOverDm && _dm is { Enabled: true } dmOwner && dmOwner.GestureLive) return true;
                     // Ctrl+hi-res wheel is the OS's legacy PINCH synthesis — consume it, never scroll (design §5/§11).
                     if ((Mods() & KeyModifiers.Ctrl) != 0)
                     {
@@ -1688,6 +1854,22 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 pressure = 1f;
                 return;
         }
+    }
+
+    // Strong wheel-source evidence used only for live-DM ownership transfer. Unknown never means mouse: promoted
+    // precision-touchpad wheels can report PT_MOUSE, so a source device that GetPointerDevice cannot resolve stays on
+    // the conservative hold/confirm path.
+    private DmWheelSourceEvidence WheelSourceEvidenceOf(uint pointerId)
+    {
+        POINTER_INFO pi;
+        if (!GetPointerInfo(pointerId, &pi)) return DmWheelSourceEvidence.Unknown;
+        if (pi.pointerType == PT_TOUCHPAD) return DmWheelSourceEvidence.Touchpad;
+        if (pi.pointerType != PT_MOUSE || pi.sourceDevice == 0) return DmWheelSourceEvidence.Unknown;
+        POINTER_DEVICE_INFO device;
+        if (!GetPointerDevice(pi.sourceDevice, &device)) return DmWheelSourceEvidence.Unknown;
+        return device.pointerDeviceType == POINTER_DEVICE_TYPE_TOUCH_PAD
+            ? DmWheelSourceEvidence.Touchpad
+            : DmWheelSourceEvidence.PhysicalMouse;
     }
 
     // Device-class tag used by wheel/leave/capture. Some precision-touchpad stacks expose the message-level pointer type

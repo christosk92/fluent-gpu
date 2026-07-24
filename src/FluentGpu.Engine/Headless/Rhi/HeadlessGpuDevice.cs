@@ -14,6 +14,7 @@ namespace FluentGpu.Rhi.Headless;
 public sealed class HeadlessGpuDevice : IGpuDevice
 {
     private readonly List<FillRoundRectCmd> _rects = new(64);
+    private readonly List<int> _rectClipDepth = new(64);
     private readonly List<DrawGlyphRunCmd> _glyphs = new(64);
     private readonly List<DrawGlyphRunGradientCmd> _glyphGradients = new(16);
     private readonly List<ClipCmd> _clips = new(16);
@@ -37,6 +38,8 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     public int FrameCount { get; private set; }
     public ColorF LastClear { get; private set; }
     public IReadOnlyList<FillRoundRectCmd> LastRects => _rects;
+    /// <summary>Clip-stack depth at each <see cref="LastRects"/> command (parallel list).</summary>
+    public IReadOnlyList<int> LastRectClipDepths => _rectClipDepth;
     public IReadOnlyList<DrawGlyphRunCmd> LastGlyphs => _glyphs;
     /// <summary>Karaoke-wipe glyph runs drawn this frame (the soft-wipe op, A1).</summary>
     public IReadOnlyList<DrawGlyphRunGradientCmd> LastGlyphGradients => _glyphGradients;
@@ -112,6 +115,7 @@ public sealed class HeadlessGpuDevice : IGpuDevice
                 else bakes.Post(new BakedBlurQueue.Result(job.Id, job.Generation, false, 0, 0,
                     job.Quality, job.IsUpgrade));
             }
+        _rectClipDepth.Clear();
         _glyphs.Clear();
         _glyphGradients.Clear();
         _clips.Clear();
@@ -140,6 +144,7 @@ public sealed class HeadlessGpuDevice : IGpuDevice
             {
                 case DrawOp.FillRoundRect:
                     _rects.Add(MemoryMarshal.Read<FillRoundRectCmd>(drawList.Slice(pos)));
+                    _rectClipDepth.Add(balance);
                     pos += Unsafe.SizeOf<FillRoundRectCmd>();
                     break;
                 case DrawOp.DrawGlyphRun:

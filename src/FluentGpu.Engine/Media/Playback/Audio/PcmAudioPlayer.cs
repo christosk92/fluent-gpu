@@ -97,27 +97,44 @@ public sealed class PcmAudioPlayer : IMediaBackend, IPreparableBackend
         var byteSource = ResolveByteSource(source)
             ?? throw new NotSupportedException("PcmAudioPlayer supports FromFile/FromStream/FromBytes/FromPull sources.");
 
-        var decoder = _decoderFactory(Format);
+        // Open the endpoint FIRST and adopt the rate the hardware actually clocks at (live GetMixFormat) — the startup probe
+        // (Format) is only a hint. Binding the decode/graph target to `mix` keeps decoder.targetRate == device rate for every
+        // load and device switch, so playback is never slowed/pitched by a probe-vs-device divergence (spec §7.1).
+        var endpoint = _endpointFactory(Format);
+        var mix = endpoint.Sink.Format;
+
+        var decoder = _decoderFactory(mix);
         DecodedInfo info = default;
-        bool opened = await Task.Run(() =>
+        bool opened;
+        try
         {
-            bool ok = decoder.TryOpen(byteSource, Format, out var i);
-            info = i;
-            return ok;
-        }, ct).ConfigureAwait(false);
+            opened = await Task.Run(() =>
+            {
+                bool ok = decoder.TryOpen(byteSource, mix, out var i);
+                info = i;
+                return ok;
+            }, ct).ConfigureAwait(false);
+            ct.ThrowIfCancellationRequested();
+        }
+        catch
+        {
+            // The endpoint (an opened WASAPI device) exists before decode now — release it so a decode failure/cancel can't leak the device.
+            try { endpoint.Dispose(); } catch { /* teardown never throws */ }
+            throw;
+        }
 
         if (!opened)
+        {
+            try { endpoint.Dispose(); } catch { /* teardown never throws */ }
             throw new InvalidOperationException("The audio source could not be decoded (unsupported or corrupt WAV/PCM).");
-
-        ct.ThrowIfCancellationRequested();
+        }
 
         var loudness = ResolveLoudness(source, info);
         var voice = new DecoderAudioSource(decoder, loudness);
-        long totalFrames = MixFrames(decoder, info.Duration, Format);
+        long totalFrames = MixFrames(decoder, info.Duration, mix);
 
-        var endpoint = _endpointFactory(Format);
-        var session = new PcmAudioSession(Format, endpoint.Sink, endpoint.Clock, _maxBlock, _driveWithOwnThread, endpoint);
-        session.Configure(BuildGraphSpec(_effects, Format));
+        var session = new PcmAudioSession(mix, endpoint.Sink, endpoint.Clock, _maxBlock, _driveWithOwnThread, endpoint);
+        session.Configure(BuildGraphSpec(_effects, mix));
         _onSessionCreated?.Invoke(session);   // M4 (on-box): attach the RT feed BEFORE SetVoice so the voice is ring-wrapped
         var (norm, refLufs) = ResolveNorm(_effects, opts);
         session.SetVoice(voice, info.Duration, totalFrames, norm, refLufs, initialVolume: 1f);
@@ -769,6 +786,13 @@ public sealed class PcmAudioSession : IMediaSession
         _out.Start();
     }
 
+    /// <summary>Raised when a device rebuild adopts an endpoint that clocks at a DIFFERENT sample rate than the session's
+    /// fixed mix format (spec §7.9): the sink swap keeps audio alive, but the decoder/graph/mixer/rings/EQ are all frozen at
+    /// the old rate, so the currently-playing track needs a full re-arm at the new rate. The host subscribes and drives a
+    /// soft reload (re-open rate-correct through the OpenAsync path) — the session does NOT re-rate itself in place. Raised
+    /// fire-and-forget OFF the cold device thread; a throwing subscriber can never stall or fault the device switch.</summary>
+    public event Action<MixFormat>? DeviceFormatChanged;
+
     /// <summary>Device-loss / follow-default rebuild (spec §7.9): swap ONLY the sink+clock endpoint under a LIVE graph. The
     /// sources, mixer voices, queue/<c>PreparedSlot</c>, published graph, and the derived timeline position ALL survive — the
     /// position domain is re-anchored to the new device's zero, the stream latency is re-measured on the next poll, and a
@@ -800,6 +824,17 @@ public sealed class PcmAudioSession : IMediaSession
 
         if (oldEndpoint is not null && !ReferenceEquals(oldEndpoint, newEndpoint))
             try { oldEndpoint.Dispose(); } catch { /* teardown never throws */ }
+
+        // Rate change (e.g. the new default endpoint clocks at 44100 vs the graph's 48000): the swap above kept audio alive,
+        // but the decoder/graph/mixer/rings/EQ are frozen at the old rate. Signal the host to drive a soft reload (re-open
+        // rate-correct via OpenAsync — Fix 1); we do NOT re-rate the graph in place. Fire-and-forget OFF this cold device
+        // thread so a throwing subscriber can neither stall nor fault the switch.
+        var onFormatChanged = DeviceFormatChanged;
+        var newFormat = newEndpoint.Sink.Format;
+        if (onFormatChanged is not null && newFormat.SampleRate != _format.SampleRate)
+            ThreadPool.QueueUserWorkItem(
+                static s => { try { s.h(s.f); } catch { /* a soft-reload subscriber never faults the device switch */ } },
+                (h: onFormatChanged, f: newFormat), preferLocal: false);
 
         if (_state == PlaybackState.Playing || _playRequested) EnsureStarted();
         return true;

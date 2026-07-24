@@ -234,7 +234,17 @@ public sealed class ConnectStateBuilder
             AddIfMissing(meta, "actions.skipping_prev_past_track", "resume");
             AddIfMissing(meta, "actions.skipping_next_past_track", "resume");
         }
-        AddIfMissing(meta, "track_player", "audio");
+        // bug 6: report the correct player for the current media kind. A video track advertises track_player="video" so
+        // remote controllers render it as a video; audio + local files report "audio" (the single source of truth is
+        // MediaSwitchLogic.TrackPlayer). LocalFile can't be distinguished from Audio on the wire snapshot, and both play
+        // through the audio host, so mapping non-video → Audio is exact.
+        AddIfMissing(meta, "track_player", MediaSwitchLogic.TrackPlayer(isVideo ? PlayableKind.Video : PlayableKind.Audio));
+        // A video also carries media.manifest_id so remotes know which manifest is playing. The resolved id
+        // (PopOutVideoSource.Key) rides in the queue-entry metadata (copied wholesale into `meta` above) once attached.
+        // TODO(B-wire): the controller/bridge must stamp the resolved PopOutVideoSource.Key into the QueueEntry.Metadata as
+        // "media.manifest_id" at the video switch; this only forwards a manifest id the resolver already put on the entry.
+        if (isVideo && t.Metadata is { } vm && vm.TryGetValue("media.manifest_id", out var manifestId) && !string.IsNullOrEmpty(manifestId))
+            AddIfMissing(meta, "media.manifest_id", manifestId);
         AddIfMissing(meta, "interaction_id", interactionId);
         AddIfMissing(meta, "page_instance_id", pageInstanceId);
         if (!isVideo && !isQueue && !isAutoplay)

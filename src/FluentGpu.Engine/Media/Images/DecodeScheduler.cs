@@ -20,7 +20,7 @@ namespace FluentGpu.Media;
 public sealed class DecodeScheduler : IImageDecoder, IDisposable
 {
     private readonly record struct Req(int Id, string Src, int W, int H, ImagePriority Priority);
-    private struct Done { public int Id; public bool Ok; public int W, H; public ImageFailureKind Failure; public int Attempts; public byte[]? Buffer; public int ByteLen; }
+    private struct Done { public int Id; public bool Ok; public int W, H; public ImageFailureKind Failure; public int Attempts; public byte[]? Buffer; public int ByteLen; public long Sequence; }
 
     private readonly IImageCodec _codec;
     private readonly IImageFetcher _fetcher;
@@ -29,39 +29,56 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     private readonly ConcurrentQueue<int>[] _lanes = { new(), new(), new() };   // [Visible, Overscan, Prefetch]
     private readonly ConcurrentDictionary<int, Req> _reqs = new();
     private readonly SemaphoreSlim _signal = new(0);
-    private readonly ConcurrentQueue<Done> _out = new();
+    // Control completions (cancel/fail) drain independently from decoded pixels. They must never consume the GPU-upload
+    // apply/byte budget or sit behind a scroll-throttled oversized texture.
+    private readonly ConcurrentQueue<Done> _controlOut = new();
+    // Workers classify decoded pixels before publishing them. During active scroll Pump consumes only the bounded-size
+    // lane, so a 1–4 MiB cover cannot puncture the 512 KiB fence-stall budget; the small lane still drains, avoiding the
+    // old head-of-line wedge. At rest the sequence stamp merges both lane heads back into completion order.
+    private readonly ConcurrentQueue<Done> _pixelOut = new();
+    private readonly ConcurrentQueue<Done> _largePixelOut = new();
+    // Claimed ids remain active until their terminal completion is consumed by Pump. This lets a late recycle cancel a
+    // decode that has already published pixels but has not uploaded yet, without creating unbounded unknown tombstones.
+    private readonly ConcurrentDictionary<int, byte> _activeIds = new();
     private readonly ConcurrentDictionary<int, byte> _canceled = new();
     private readonly Task[] _workers;
     private readonly CancellationTokenSource _shutdown = new();
     private Action? _completionWake;
     private int _inflight, _queued;
+    private long _completionSequence;
     // Max decoded images APPLIED (GPU-uploaded) per Pump = per frame. An UNBOUNDED drain uploaded a whole fast-scroll's
     // worth of album art in ONE frame → a 10-35ms GPU submit spike (the frame lands late → a stale composited frame =
     // the edge "another viewport" flash). Bounding it spreads uploads over frames: un-applied decodes stay in _out and
     // their ImageCache entries stay State==Pending. HasReadyCompletions keeps only actionable UI work awake until the
     // queue drains (rows show their skeleton/blur-hash meanwhile). FG_IMG_UPLOADS overrides; default tuned for ~120fps.
     private static readonly int s_maxAppliesPerFrame =
-        int.TryParse(System.Environment.GetEnvironmentVariable("FG_IMG_UPLOADS"), out int __u) && __u > 0 ? __u : 6;
+        int.TryParse(System.Environment.GetEnvironmentVariable("FG_IMG_UPLOADS"), out int __u) && __u > 0 ? __u : 3;
     private static readonly int s_maxApplyBytesPerFrame =
         int.TryParse(System.Environment.GetEnvironmentVariable("FG_IMG_UPLOAD_BYTES"), out int __b) && __b > 0
             ? __b : 2 * 1024 * 1024;
     private const int ScrollApplyBytesPerFrame = 512 * 1024;
+    private const int ControlDrainPerFrame = 256;
 
-    /// <summary>Scroll-scoped upload throttle: while a scroll gesture is live the per-frame apply cap drops to 2 —
+    /// <summary>Scroll-scoped upload throttle: while a scroll gesture is live the per-frame apply cap drops to 1 —
     /// each apply stages a GPU CopyTextureRegion into the SAME command list the double-buffered present then fences on
-    /// (max-latency-1 couples the UI thread to GPU completion), so a 6-upload burst mid-scroll reads as a fence-wait
+    /// (max-latency-1 couples the UI thread to GPU completion), so an upload burst mid-scroll reads as a fence-wait
     /// hitch (traced as the dominant GPU hitch class). Reveals are already suppressed during scroll, so the slower
-    /// landing is invisible; the backlog drains the moment the gesture settles. (Triple-buffering was the alternative
-    /// and is OFF-LIMITS: it correlated with a DXGI_ERROR_DEVICE_HUNG on the Adreno — see D3D12Device.FRAME_COUNT.)</summary>
+    /// landing is invisible. An image larger than the scroll byte budget waits in its worker-published large lane until
+    /// rest, while smaller completions behind it remain eligible — strict pacing without head-of-line starvation.
+    /// (Triple-buffering was the alternative and is OFF-LIMITS: it correlated with a DXGI_ERROR_DEVICE_HUNG on the
+    /// Adreno — see D3D12Device.FRAME_COUNT.)</summary>
     public bool ScrollThrottled { get; set; }
+    /// <summary>Number of completions applied by the most recent UI-thread <see cref="Pump"/>.</summary>
+    public int LastPumpAppliedCount { get; private set; }
+    /// <summary>Decoded pixel bytes applied by the most recent UI-thread <see cref="Pump"/>.</summary>
+    public int LastPumpAppliedBytes { get; private set; }
     private long _bytesDownloaded;
 
     public int WorkerCount => _workers.Length;
     public int Inflight => Volatile.Read(ref _inflight);
-    /// <summary>Live entries in the cancellation map. Bounded by <see cref="Inflight"/>: a tombstone is set only when a
-    /// cancel races a claimed (in-flight) decode, and is reclaimed at that decode's terminal point (Process's finally /
-    /// the Pump drain) — a queued-then-canceled request leaves none. Reaches 0 once all decodes drain. (Census-cadence
-    /// only: <c>ConcurrentDictionary.Count</c> takes the bucket locks, but the map holds at most a handful of entries.)</summary>
+    /// <summary>Live entries in the cancellation map. Bounded by claimed terminal work: a tombstone is set only when a
+    /// cancel races a claimed decode or its completed-but-unapplied pixels, and is reclaimed by the Pump drain. A
+    /// queued-then-canceled request leaves none. (Census cadence only: Count takes the bucket locks.)</summary>
     public int CanceledPending => _canceled.Count;
     /// <summary>Requests enqueued in the priority lanes but not yet claimed by a worker — O(1) census. NOTE: not
     /// decremented for a cancel-before-claim id (TryClaim dequeues-and-skips it without a successful claim), so this
@@ -74,7 +91,7 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     // IImageDecoder census passthroughs (MemCensus reads these through ImageCache).
     int IImageDecoder.DiagInflight => Volatile.Read(ref _inflight);
     int IImageDecoder.DiagCanceledPending => _canceled.Count;
-    public bool HasReadyCompletions => !_out.IsEmpty;
+    public bool HasReadyCompletions => !_controlOut.IsEmpty || !_pixelOut.IsEmpty || !_largePixelOut.IsEmpty;
 
     /// <inheritdoc/>
     public void SetCompletionWake(Action? wake) => Volatile.Write(ref _completionWake, wake);
@@ -106,9 +123,9 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
         return true;
     }
 
-    // Cancel a queued/in-flight decode. A queued request publishes a terminal Canceled completion so ImageCache does not
-    // keep a forever-Pending handle for work workers will later skip. A claimed request uses a tombstone that the worker
-    // reclaims at its terminal point, so the map stays bounded by Inflight.
+    // Cancel queued/claimed/unapplied work. A queued request publishes a control completion so ImageCache does not keep
+    // a forever-Pending handle. A claimed request uses a tombstone retained through Pump, including the narrow window
+    // after pixels were published but before their GPU upload.
     public void Cancel(int id)
     {
         if (_reqs.TryRemove(id, out _))
@@ -116,7 +133,9 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
             Complete(id, false, 0, 0, ImageFailureKind.Canceled, 0, null, 0);
             return;
         }
-        _canceled[id] = 1;
+        // Unknown/already-consumed ids leave no residue. A claimed-or-completed-but-unapplied id stays in _activeIds
+        // through Pump, so a late cancel can suppress its pending upload.
+        if (_activeIds.ContainsKey(id)) _canceled[id] = 1;
     }
 
     public void Prioritize(int id, ImagePriority priority)
@@ -132,27 +151,60 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     // UI thread: drain finished decodes; upload pixels; report completion. Idle ⇒ one empty TryDequeue, zero alloc.
     public void Pump(ImageCompleteHandler onComplete, ImageReadyHandler onPixels)
     {
-        int drained = 0;
-        int cap = ScrollThrottled ? Math.Min(2, s_maxAppliesPerFrame) : s_maxAppliesPerFrame;
+        LastPumpAppliedCount = 0;
+        LastPumpAppliedBytes = 0;
+        int controlDrained = 0;
+        while (controlDrained < ControlDrainPerFrame && _controlOut.TryDequeue(out var control))
+        {
+            Finish(control.Id);
+            onComplete(control.Id, control.Ok, control.W, control.H, control.Failure, control.Attempts);
+            if (control.Buffer != null) _pixels.Return(control.Buffer);
+            controlDrained++;
+        }
+
+        int applied = 0;
+        int cap = ScrollThrottled ? Math.Min(1, s_maxAppliesPerFrame) : s_maxAppliesPerFrame;
         int byteCap = ScrollThrottled ? Math.Min(ScrollApplyBytesPerFrame, s_maxApplyBytesPerFrame) : s_maxApplyBytesPerFrame;
         int appliedBytes = 0;
-        while (drained < cap && _out.TryPeek(out var next))
+        while (applied < cap && TryPeekPixels(ScrollThrottled, out var next, out bool large))
         {
-            // Always admit one oversized image so a request larger than the budget cannot wedge the queue forever.
-            if (drained > 0 && next.ByteLen > byteCap - appliedBytes) break;
-            if (!_out.TryDequeue(out var d)) continue;
+            // A row may recycle after the worker published pixels but before this UI-thread pump. Discard that buffer
+            // as control work: no upload, no apply slot, and no byte-budget charge.
+            if (_canceled.ContainsKey(next.Id))
+            {
+                if (!TryDequeuePixels(large, out var canceled)) continue;
+                Finish(canceled.Id);
+                onComplete(canceled.Id, false, 0, 0, ImageFailureKind.Canceled, canceled.Attempts);
+                if (canceled.Buffer != null) _pixels.Return(canceled.Buffer);
+                if (++controlDrained >= ControlDrainPerFrame) break;
+                continue;
+            }
+            // At rest the byte budget is a burst budget, not an absolute size ceiling: one oversized head item may use
+            // the frame so it cannot wedge forever. During scroll TryPeekPixels exposes only the <=512 KiB lane, making
+            // the scroll byte cap strict while still allowing a small completion behind a deferred large cover.
+            if (next.ByteLen > byteCap - appliedBytes && applied > 0) break;
+            if (!TryDequeuePixels(large, out var d)) continue;
+            // UI-thread callers normally serialize Cancel and Pump, but retain the final check for another-thread
+            // cancellation between TryPeek and TryDequeue.
+            if (_canceled.ContainsKey(d.Id))
+            {
+                Finish(d.Id);
+                onComplete(d.Id, false, 0, 0, ImageFailureKind.Canceled, d.Attempts);
+                if (d.Buffer != null) _pixels.Return(d.Buffer);
+                if (++controlDrained >= ControlDrainPerFrame) break;
+                continue;
+            }
+            Finish(d.Id);
             if (d.Ok && d.Buffer != null) onPixels(d.Id, d.Buffer.AsSpan(0, d.ByteLen), d.W, d.H);
             onComplete(d.Id, d.Ok, d.W, d.H, d.Failure, d.Attempts);
             if (d.Buffer != null) _pixels.Return(d.Buffer);
-            // This decode is terminal — reclaim any tombstone a cancel set after the worker's finally (the Done was
-            // already queued). The apply above is unchanged: a late cancel does NOT suppress it (today's semantics);
-            // reclaim only bounds the map. Idempotent with Process's finally (a no-op when it already removed the id).
-            _canceled.TryRemove(d.Id, out _);
             appliedBytes += d.ByteLen;
-            drained++;
+            applied++;
         }
+        LastPumpAppliedCount = applied;
+        LastPumpAppliedBytes = appliedBytes;
         int inflight = Volatile.Read(ref _inflight);
-        if (drained > 0 || inflight > 0)
+        if (applied > 0 || controlDrained > 0 || inflight > 0)
         {
             Diag.Set("media", "inflight", inflight);
             Diag.Set("media", "queued", Volatile.Read(ref _queued));
@@ -162,6 +214,36 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
         }
     }
 
+    private bool TryPeekPixels(bool scrollThrottled, out Done done, out bool large)
+    {
+        if (scrollThrottled)
+        {
+            large = false;
+            return _pixelOut.TryPeek(out done);
+        }
+
+        bool hasSmall = _pixelOut.TryPeek(out var small);
+        bool hasLarge = _largePixelOut.TryPeek(out var big);
+        if (!hasSmall)
+        {
+            large = hasLarge;
+            done = big;
+            return hasLarge;
+        }
+        if (!hasLarge || small.Sequence <= big.Sequence)
+        {
+            large = false;
+            done = small;
+            return true;
+        }
+        large = true;
+        done = big;
+        return true;
+    }
+
+    private bool TryDequeuePixels(bool large, out Done done)
+        => (large ? _largePixelOut : _pixelOut).TryDequeue(out done);
+
     private async Task WorkerLoop()
     {
         try
@@ -170,6 +252,7 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
             {
                 await _signal.WaitAsync(_shutdown.Token).ConfigureAwait(false);
                 if (!TryClaim(out var req)) continue;          // stale (promotion dup / canceled) → back to wait
+                _activeIds[req.Id] = 0;
                 Interlocked.Increment(ref _inflight);
                 try { await Process(req).ConfigureAwait(false); }
                 finally { Interlocked.Decrement(ref _inflight); }
@@ -196,52 +279,59 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     private async Task Process(Req req)
     {
         // The worker claimed req.Id exclusively (TryClaim's atomic TryRemove), so this is the single owner of the id for
-        // its whole lifetime. Every in-Process _canceled check above has run by the time control reaches the finally; the
-        // tombstone has discharged its only duty (abort this in-flight decode), so reclaim it here on EVERY exit path
-        // (entry-cancel, fetch-fail, post-fetch-cancel, decode result). A cancel racing in after the finally has no
-        // in-flight decode left to abort and is reclaimed by the Pump drain instead — so no tombstone outlives its decode.
+        // its whole lifetime. _activeIds and any cancellation tombstone stay live through the UI-thread Pump so a row
+        // recycled after decode publication can still suppress the pending upload.
+        if (_canceled.ContainsKey(req.Id)) { Complete(req.Id, false, 0, 0, ImageFailureKind.Canceled, 0, null, 0); return; }
+
+        var (fetch, attempts) = await FetchWithRetry(req.Src, req.Id).ConfigureAwait(false);
+        if (!fetch.Ok)
+        {
+            if (fetch.Buffer != null) ArrayPool<byte>.Shared.Return(fetch.Buffer);
+            Complete(req.Id, false, 0, 0, fetch.Failure, attempts, null, 0);
+            return;
+        }
+        Interlocked.Add(ref _bytesDownloaded, fetch.Length);
+
         try
         {
-            if (_canceled.ContainsKey(req.Id)) { Complete(req.Id, false, 0, 0, ImageFailureKind.Canceled, 0, null, 0); return; }
+            if (_canceled.ContainsKey(req.Id)) { Complete(req.Id, false, 0, 0, ImageFailureKind.Canceled, attempts, null, 0); return; }
 
-            var (fetch, attempts) = await FetchWithRetry(req.Src, req.Id).ConfigureAwait(false);
-            if (!fetch.Ok)
-            {
-                if (fetch.Buffer != null) ArrayPool<byte>.Shared.Return(fetch.Buffer);
-                Complete(req.Id, false, 0, 0, fetch.Failure, attempts, null, 0);
-                return;
-            }
-            Interlocked.Add(ref _bytesDownloaded, fetch.Length);
+            int cap = req.W * req.H * 4;
+            byte[] dst = _pixels.Rent(cap);                          // bounded pixel pool decode buffer (returned in Pump after upload)
+            bool ok; int dw = req.W, dh = req.H;
+            try { ok = _codec.DecodeConstrained(fetch.Span, req.W, req.H, dst.AsSpan(0, cap), out dw, out dh); }
+            catch { ok = false; }
 
-            try
-            {
-                if (_canceled.ContainsKey(req.Id)) { Complete(req.Id, false, 0, 0, ImageFailureKind.Canceled, attempts, null, 0); return; }
-
-                int cap = req.W * req.H * 4;
-                byte[] dst = _pixels.Rent(cap);                          // bounded pixel pool decode buffer (returned in Pump after upload)
-                bool ok; int dw = req.W, dh = req.H;
-                try { ok = _codec.DecodeConstrained(fetch.Span, req.W, req.H, dst.AsSpan(0, cap), out dw, out dh); }
-                catch { ok = false; }
-
-                if (ok && dw > 0 && dh > 0 && dw * dh * 4 <= cap)
-                    Complete(req.Id, true, dw, dh, ImageFailureKind.None, attempts, dst, dw * dh * 4);
-                else { _pixels.Return(dst); Complete(req.Id, false, 0, 0, ImageFailureKind.Decode, attempts, null, 0); }
-            }
-            finally
-            {
-                ArrayPool<byte>.Shared.Return(fetch.Buffer!);            // return the POOLED fetch buffer after decode reads it
-            }
+            if (ok && dw > 0 && dh > 0 && dw * dh * 4 <= cap)
+                Complete(req.Id, true, dw, dh, ImageFailureKind.None, attempts, dst, dw * dh * 4);
+            else { _pixels.Return(dst); Complete(req.Id, false, 0, 0, ImageFailureKind.Decode, attempts, null, 0); }
         }
         finally
         {
-            _canceled.TryRemove(req.Id, out _);   // reclaim this id's tombstone: its decode is terminal (bounds _canceled by Inflight)
+            ArrayPool<byte>.Shared.Return(fetch.Buffer!);            // return the POOLED fetch buffer after decode reads it
         }
     }
 
     private void Complete(int id, bool ok, int w, int h, ImageFailureKind failure, int attempts, byte[]? buffer, int byteLen)
     {
-        _out.Enqueue(new Done { Id = id, Ok = ok, W = w, H = h, Failure = failure, Attempts = attempts, Buffer = buffer, ByteLen = byteLen });
+        var done = new Done
+        {
+            Id = id, Ok = ok, W = w, H = h, Failure = failure, Attempts = attempts,
+            Buffer = buffer, ByteLen = byteLen, Sequence = Interlocked.Increment(ref _completionSequence),
+        };
+        if (ok && buffer is not null && byteLen > 0)
+        {
+            if (byteLen <= ScrollApplyBytesPerFrame) _pixelOut.Enqueue(done);
+            else _largePixelOut.Enqueue(done);
+        }
+        else _controlOut.Enqueue(done);
         Volatile.Read(ref _completionWake)?.Invoke();
+    }
+
+    private void Finish(int id)
+    {
+        _activeIds.TryRemove(id, out _);
+        _canceled.TryRemove(id, out _);
     }
 
     private async Task<(FetchResult result, int attempts)> FetchWithRetry(string src, int id)

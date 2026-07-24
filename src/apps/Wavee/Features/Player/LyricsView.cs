@@ -29,6 +29,8 @@ enum FollowScrollIntent : byte { Normal, Resync }
 
 sealed class LyricsView : Component
 {
+    readonly record struct TrackIdentity(string Id, string Artist);
+
     internal readonly record struct FrameDiagnostics(long NowMs, long AuthMs, int ActiveLine, int VoiceLine, bool ActiveChanged, bool VoiceChanged, bool ScrollSnapped, bool Playing, int LineCount);
     internal static FrameDiagnostics LastFrameDiagnostics { get; private set; }
 
@@ -128,7 +130,6 @@ sealed class LyricsView : Component
     static readonly bool _lyricsDebug =
         Environment.GetEnvironmentVariable("WAVEE_LYRICS_DEBUG") is "1" or "true" or "TRUE";
     readonly Signal<bool> _debugOpen = new(false);
-
     public LyricsView(bool large = false, Func<bool>? visible = null) { _large = large; _visible = visible; }
 
     public override Element Render()
@@ -140,31 +141,24 @@ sealed class LyricsView : Component
         _svc = svc;
         var post = UsePost();
 
-        var track = b?.CurrentTrack.Value;
         bool open = _visible is not null ? _visible() : (ui?.RailOpen.Value ?? false);
         UseEffect(() =>
         {
             if (!open) ResetFollowState(Context.Scene);
         }, DepKey.From(open));
+        // Subscribe only to the bridge's atomic match identity. Metadata-only CurrentTrack refreshes no longer rebuild
+        // this chrome host, and track/context cannot be observed in a transient mismatched pair.
+        var live = b?.Identity.Value.Track;
+        var identity = new TrackIdentity(
+            live?.Id ?? "",
+            live is { Artists.Count: > 0 } ? live.Artists[0].Name : "");
         // Peek, NEVER .Value: subscribing the lyrics view to the IPC position snapshot forces a full re-render every
-        // tick, which re-runs the Skel.Region content delegate -> re-realizes the virtual line window -> ReconcileWindow
-        // tears down + re-mounts every LyricLineView (Components are not recyclable), re-seeding each line's opacity/scale
-        // spring from the fresh node's default paint (1.0) -- the all-lines-pulse bug. The position is consumed by the
-        // per-frame ticker (OnFrame, via Peek) and re-anchored there.
+        // tick. The position is consumed by the per-frame ticker (OnFrame, via Peek) and re-anchored there.
         long posNow = b?.PositionMs.Peek() ?? 0L;
-        string trackId = track?.Id ?? "";
-        string artist = track is { Artists.Count: > 0 } ? track.Artists[0].Name : "";
-        string fetchKey = trackId.Length == 0 ? "" : trackId + "|" + artist;
-
-        var docL = UseResource(
-            ct => fetchKey.Length > 0 && svc?.Lyrics is { } lp
-                ? lp.GetLyricsAsync(trackId, ct)
-                : Task.FromResult<LyricsDocument?>(null),
-            (LyricsDocument?)null, fetchKey).Loadable;
-        _docLoadable = docL;
+        string trackId = identity.Id;
         UseSignalEffect(() =>
         {
-            string currentTrackId = _b?.CurrentTrack.Value?.Id ?? "";
+            string currentTrackId = _b?.Identity.Value.Track?.Id ?? "";
             if (currentTrackId.Length == 0 || _svc?.Lyrics is not IUpgradingLyricsProvider up) return;
 
             var sub = up.LyricsUpgraded.Subscribe(new LyricsUpgradeObserver(upgrade =>
@@ -172,7 +166,7 @@ sealed class LyricsView : Component
                 if (!StringComparer.Ordinal.Equals(upgrade.TrackId, currentTrackId)) return;
                 post(() =>
                 {
-                    string liveTrackId = _b?.CurrentTrack.Peek()?.Id ?? "";
+                    string liveTrackId = _b?.Identity.Peek().Track?.Id ?? "";
                     if (StringComparer.Ordinal.Equals(liveTrackId, upgrade.TrackId))
                         ReceiveUpgrade(upgrade);
                 });
@@ -180,10 +174,8 @@ sealed class LyricsView : Component
             Reactive.OnCleanup(() => sub.Dispose());
         });
 
-        var doc = docL.Value.Value;
-
         if (b is null || svc is null) return new BoxEl { Grow = 1f };
-        if (track is null)
+        if (trackId.Length == 0)
         {
             ClearDocument();
             return Message("Nothing playing");
@@ -192,22 +184,16 @@ sealed class LyricsView : Component
         if (_doc is not null && !StringComparer.Ordinal.Equals(_doc.TrackId, trackId))
             ClearDocument();
 
-        if (doc is { Lines.Count: > 0 } ready)
-            PrepareDocument(ready, posNow);
+        // The document + Virtual.Custom live under a track-id keyed component boundary. Rail/debug/chrome rerenders now
+        // reconcile this one ComponentEl in place instead of rebuilding the virtual element and remounting every line.
+        Element body = Embed.Comp(() => new LyricsDocHost(this, trackId, identity.Artist, posNow))
+            with { Key = "lyrics-doc:" + trackId };
 
-        Element body = Skel.Region<LyricsDocument?>(
-            docL,
-            shimmerSource: () => LyricsShimmer(_large),
-            content: d => d is { Lines.Count: > 0 } readyDoc ? LyricsContent(readyDoc) : Message("No lyrics available"),
-            reveal: SkelReveal.FadeOnly,
-            onFailed: () => Message("No lyrics available"),
-            isEmpty: d => d?.Lines is null || d.Lines.Count == 0,
-            onEmpty: () => Message("No lyrics available"),
-            style: new SkeletonStyle(Tok.FillSubtleSecondary, RowGap: _large ? 18f : 14f, BarRadius: 6f, TextRatio: 0.86f),
-            smoothResize: false);
-
-        bool timedLyrics = doc is { Lines.Count: > 0 } d && IsTimed(d);
-        Element? ticker = open && timedLyrics ? Embed.Comp(() => new LyricsTicker { Owner = this }) : null;
+        // The ticker self-no-ops until a timed document exists. Key it by track so its once-per-mount scroll-snap reset
+        // still follows track identity now that parent chrome rerenders no longer remount the document subtree.
+        Element? ticker = open
+            ? Embed.Comp(() => new LyricsTicker { Owner = this }) with { Key = "lyrics-ticker:" + trackId }
+            : null;
         Element resync = ResyncOverlay();
         var stack = new BoxEl
         {
@@ -264,6 +250,36 @@ sealed class LyricsView : Component
                     }),
             ],
         };
+    }
+
+    sealed class LyricsDocHost(LyricsView owner, string trackId, string artist, long initialPositionMs) : Component
+    {
+        public override Element Render()
+        {
+            var svc = UseContext(Services.Slot);
+            string fetchKey = trackId + "|" + artist;
+            var docL = UseResource(
+                ct => svc?.Lyrics is { } provider
+                    ? provider.GetLyricsAsync(trackId, ct)
+                    : Task.FromResult<LyricsDocument?>(null),
+                (LyricsDocument?)null, fetchKey).Loadable;
+            owner._docLoadable = docL;
+
+            var doc = docL.Value.Value;
+            if (doc is { Lines.Count: > 0 } ready)
+                owner.PrepareDocument(ready, owner._b?.PositionMs.Peek() ?? initialPositionMs);
+
+            return Skel.Region<LyricsDocument?>(
+                docL,
+                shimmerSource: () => LyricsShimmer(owner._large),
+                content: d => d is { Lines.Count: > 0 } readyDoc ? owner.LyricsContent(readyDoc) : Message("No lyrics available"),
+                reveal: SkelReveal.FadeOnly,
+                onFailed: () => Message("No lyrics available"),
+                isEmpty: d => d?.Lines is null || d.Lines.Count == 0,
+                onEmpty: () => Message("No lyrics available"),
+                style: new SkeletonStyle(Tok.FillSubtleSecondary, RowGap: owner._large ? 18f : 14f, BarRadius: 6f, TextRatio: 0.86f),
+                smoothResize: false);
+        }
     }
 
     Element DebugButton() => new BoxEl

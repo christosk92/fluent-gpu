@@ -14,6 +14,10 @@ public static class SharedTransition
     /// <c>key</c> for an imminent navigation. Null when no host published one (headless/test).</summary>
     public static readonly Context<System.Action<string>?> Begin = new(null);
 
+    /// <summary>Host-provided request-local capture trigger. Use this for an in-page shared-layout morph that needs its
+    /// own curve and interruption policy without changing the app-wide route-fly token.</summary>
+    public static readonly Context<System.Action<FluentGpu.Animation.ConnectedTransitionRequest>?> BeginConfigured = new(null);
+
     /// <summary>Host-provided setter for the connected-animation fly MOTION token (spring OR an eased curve + duration),
     /// so an app can surface a LIVE switcher to A/B the shared-element feel. Null when no host published one.</summary>
     public static readonly Context<System.Action<FluentGpu.Animation.ConnectedMotion>?> SetMotion = new(null);

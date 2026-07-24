@@ -22,7 +22,7 @@ namespace Wavee;
 sealed class DetailPage : Component
 {
     readonly Signal<Route> _route;   // the (per-pane) navigation route, read reactively so ONE instance serves successive detail pages
-    // Deep-link skeleton orientation (0 two-column · 1 vertical side-by-side · 2 vertical stacked) + the measured width,
+    // Deep-link skeleton orientation (0 two-column · 1 Hero side-by-side · 2 Hero immersive) + the measured width,
     // so the loading shimmer matches the geometry the Ready reveal will use (no rail→hero jump). Value-gated.
     readonly Signal<int> _skelKind = new(0);
     float _skelW;
@@ -144,12 +144,12 @@ sealed class DetailPage : Component
                 int k = 0;
                 // The vertical hero skeleton stands in for a TWO-COLUMN TRACK page (album/playlist/liked) whenever the page
                 // will use the hero SYSTEM at reveal: either the window is narrow enough to enter it, or the page-layout
-                // setting is Stacked (always-hero, every width). A podcast (Episodes) deep link keeps the two-column
-                // skeleton regardless of the setting. Orientation is width-only (stacked below 440, side-by-side otherwise).
+                // setting is Hero (always-hero, every width). A podcast (Episodes) deep link keeps the two-column
+                // skeleton regardless of the setting. The Hero's own orientation remains width-driven.
                 bool forceHero = svc.Settings?.Get(WaveeSettings.DetailPageLayout) == DetailVerticalLayout.PageHero;
                 if (cfg.TwoColumn && cfg.Content == DetailContent.Tracks
                     && (r.W < DetailLayoutBreakpoints.VerticalEnterW || forceHero))
-                    k = DetailVerticalLayout.OrientationFor(r.W) == DetailHeroOrientation.Stacked ? 2 : 1;
+                    k = DetailVerticalLayout.OrientationFor(r.W) == DetailHeroOrientation.Immersive ? 2 : 1;
                 _skelKind.Value = k;
             },
             Children =
@@ -158,7 +158,7 @@ sealed class DetailPage : Component
                     model,
                     shimmerSource: () => skelKind == 0
                         ? DetailSkeleton.Build(SkeletonConfig(kind))
-                        : DetailSkeleton.BuildVertical(SkeletonConfig(kind), stacked: skelKind == 2, _skelW),
+                        : DetailSkeleton.BuildVertical(SkeletonConfig(kind), immersive: skelKind == 2, _skelW),
                     onFailed: () => ErrorState.Build(model.Error),
                     // Pass the SHARED loadable (Ready when content runs), not a fresh Loadable.Ready(m): the shell is REUSED
                     // across detail routes, so it must read the one re-driven loadable — a per-render wrapper would leave the
@@ -380,39 +380,73 @@ static class DetailSkeleton
         return new BoxEl { Direction = 0, Grow = 1f, Children = [rail, tracks] };
     }
 
-    // The vertical (Apple Music) deep-link skeleton: a 24-pad hero block matching DetailVerticalHero's composition —
-    // an ArtworkFor(...)-sized art box (centered when stacked), title/meta bars, two 48-DIP pill bars — over the same
+    // The deep-link Hero skeleton: a 24-pad side-by-side block or edge-to-edge immersive artwork, followed by
+    // title/meta bars and one compact action row over the same
     // 8 track RowBar()s. Reuses Bar(...) so the shimmer shape can't drift from the real bars.
-    public static Element BuildVertical(DetailConfig cfg, bool stacked, float w)
+    public static Element BuildVertical(DetailConfig cfg, bool immersive, float w)
     {
-        var o = stacked ? DetailHeroOrientation.Stacked : DetailHeroOrientation.SideBySide;
+        var o = immersive ? DetailHeroOrientation.Immersive : DetailHeroOrientation.SideBySide;
         float art = DetailVerticalLayout.ArtworkFor(w, o);
         float pad = DetailVerticalLayout.HeroPad;
         float inner = MathF.Max(160f, (w > 0f ? w : DetailVerticalLayout.FallbackW) - 2f * pad);
-        float infoW = stacked ? inner : MathF.Max(120f, inner - art - DetailVerticalLayout.HeroGap);
+        float infoW = immersive ? inner : MathF.Max(120f, inner - art - DetailVerticalLayout.HeroGap);
 
         Element artBox = new BoxEl
         {
-            Width = art, Height = art, Shrink = 0f, Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillCardDefault,
-            AlignSelf = stacked ? FlexAlign.Center : FlexAlign.Start,
+            Width = art, Height = art, Shrink = 0f,
+            Corners = CornerRadius4.All(immersive ? 0f : Radii.Card), Fill = Tok.FillCardDefault,
+            AlignSelf = immersive ? FlexAlign.Center : FlexAlign.Start,
+            EdgeFade = immersive ? new EdgeFadeSpec(EdgeMask.Bottom, MathF.Min(220f, art * 0.28f)) : null,
         };
         Element PillBar() => new BoxEl
         {
-            Grow = 1f, Basis = 0f, MaxWidth = 200f, Height = 48f,
-            Corners = CornerRadius4.All(24f), Fill = Tok.FillCardDefault,
+            Width = immersive ? 40f : float.NaN,
+            Grow = immersive ? 0f : 1f, Basis = immersive ? float.NaN : 0f,
+            MaxWidth = immersive ? 120f : 120f, Height = immersive ? 40f : 32f,
+            Corners = CornerRadius4.All(immersive ? 20f : Radii.Control), Fill = Tok.FillCardDefault,
         };
-        Element[] infoKids =
-        [
-            Bar(infoW * 0.4f, 14f),   // badges / owner
-            Bar(infoW * 0.82f, 30f),  // title
-            Bar(infoW * 0.5f, 12f),   // meta
-            new BoxEl { Direction = 0, Gap = Spacing.M, Children = [PillBar(), PillBar()] },
-        ];
-        Element info = stacked
-            ? new BoxEl { Direction = 1, Width = infoW, Gap = Spacing.M, AlignItems = FlexAlign.Center, Children = infoKids }
+        Element PlayPill() => new BoxEl
+        {
+            Width = immersive ? 120f : float.NaN, Grow = immersive ? 0f : 1f, Basis = immersive ? float.NaN : 0f,
+            MaxWidth = 120f, Height = immersive ? 40f : 32f,
+            Corners = CornerRadius4.All(immersive ? 20f : Radii.Control), Fill = Tok.FillCardDefault,
+        };
+        Element[] infoKids = immersive
+            ?
+            [
+                Bar(infoW * 0.72f, 34f),  // title (Apple display scale)
+                Bar(infoW * 0.36f, 17f),  // artist
+                Bar(infoW * 0.48f, 12f),  // meta
+                new BoxEl { Direction = 0, Gap = 12f, AlignItems = FlexAlign.Center, Children = [PillBar(), PlayPill(), PillBar()] },
+                Bar(infoW * 0.88f, 12f),  // description
+            ]
+            :
+            [
+                Bar(infoW * 0.4f, 14f),   // badges / owner
+                Bar(infoW * 0.82f, 30f),  // title
+                Bar(infoW * 0.5f, 12f),   // meta
+                new BoxEl { Direction = 0, Gap = Spacing.M, Children = [PillBar(), PillBar()] },
+            ];
+        Element info = immersive
+            ? new BoxEl { Direction = 1, Width = infoW, Gap = 6f, AlignItems = FlexAlign.Center, Children = infoKids }
             : new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = Spacing.M, AlignItems = FlexAlign.Stretch, Children = infoKids };
-        Element hero = stacked
-            ? new BoxEl { Direction = 1, Gap = Spacing.L, AlignItems = FlexAlign.Center, Children = [artBox, info] }
+        Element hero = immersive
+            ? new BoxEl
+            {
+                ZStack = true, Width = w > 0f ? w : DetailVerticalLayout.FallbackW, Height = art,
+                AlignItems = FlexAlign.Center, ClipToBounds = true,
+                Children =
+                [
+                    artBox,
+                    new BoxEl
+                    {
+                        Direction = 1, Width = w > 0f ? w : DetailVerticalLayout.FallbackW, Height = art,
+                        Justify = FlexJustify.End,
+                        Padding = new Edges4(pad, pad, pad, 20f),
+                        AlignItems = FlexAlign.Center, Children = [info],
+                    },
+                ],
+            }
             : new BoxEl { Direction = 0, Gap = DetailVerticalLayout.HeroGap, AlignItems = FlexAlign.Start, Children = [artBox, info] };
 
         var rows = new Element[8];
@@ -429,7 +463,7 @@ static class DetailSkeleton
             Direction = 1, Grow = 1f,
             Children =
             [
-                new BoxEl { Direction = 1, Padding = Edges4.All(pad), Children = [hero] },
+                immersive ? hero : new BoxEl { Direction = 1, Padding = Edges4.All(pad), Children = [hero] },
                 tracks,
             ],
         };

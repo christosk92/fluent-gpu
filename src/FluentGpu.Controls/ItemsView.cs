@@ -226,6 +226,9 @@ public sealed class ItemsView : Component
     /// <summary>Scroll-position restoration key (see <see cref="VirtualListEl.ScrollKey"/>): a stable per-content identity
     /// so a revisit lands at the saved row on the first realized window. Forwarded onto the built VirtualListEl.</summary>
     public string? ScrollKey;
+    /// <summary>Viewport-space top clip applied as one shared band to recyclable items after
+    /// <see cref="PersistentPrefixCount"/>. NaN disables it.</summary>
+    public float ItemClipTopInset = float.NaN;
     public (Func<ScrollGeometry, long> Project, Action<ScrollGeometry> Action)? OnScrollGeometryChanged;
 
     // ── research adjustment #16 — virtualization knobs (forwarded to the built VirtualListEl / applied per-container) ──
@@ -233,6 +236,8 @@ public sealed class ItemsView : Component
     public Func<int, int>? ContentType;
     /// <summary>Pre-realize cache extent in PIXELS beyond the viewport (overrides row-based <see cref="OverscanItems"/> when set).</summary>
     public float CacheExtentPx = float.NaN;
+    /// <summary>Bound-path leading items kept mounted for native sticky/scroll-linked composition.</summary>
+    public int PersistentPrefixCount;
     /// <summary>Per-item paint isolation: wrap each realized item container as a layout/paint boundary (IsolateLayout + clip).</summary>
     public bool RepaintBoundary;
     // ── research adjustment #5 — keep-alive-but-hidden slot (bound path) ──
@@ -275,6 +280,7 @@ public sealed class ItemsView : Component
             Grow = o.Grow,
             SuppressScrollBar = o.Scroll?.SuppressScrollBar ?? false,
             ScrollKey = o.Scroll?.ScrollKey,
+            ItemClipTopInset = o.Scroll?.ItemClipTopInset ?? float.NaN,
             AutoEdgeFade = o.Scroll?.AutoEdgeFade ?? false,
             OnScrollGeometryChanged = o.Scroll?.OnScrollGeometryChanged,
             Transition = o.Transition,
@@ -285,6 +291,7 @@ public sealed class ItemsView : Component
             PartDelta = o.PartDelta,
             ContentType = o.ContentType,
             CacheExtentPx = o.CacheExtentPx,
+            PersistentPrefixCount = o.PersistentPrefixCount,
             RepaintBoundary = o.RepaintBoundary,
             ItemCountSignal = o.CountSignal,
         });
@@ -323,6 +330,7 @@ public sealed class ItemsView : Component
             Grow = o.Grow,
             SuppressScrollBar = o.Scroll?.SuppressScrollBar ?? false,
             ScrollKey = o.Scroll?.ScrollKey,
+            ItemClipTopInset = o.Scroll?.ItemClipTopInset ?? float.NaN,
             AutoEdgeFade = o.Scroll?.AutoEdgeFade ?? false,
             OnScrollGeometryChanged = o.Scroll?.OnScrollGeometryChanged,
             ItemDisplacement = o.Reorder?.ItemDisplacement,
@@ -332,6 +340,7 @@ public sealed class ItemsView : Component
             ItemFadeFrom = o.Entrance?.ItemFadeFrom,
             ContentType = o.ContentType,
             CacheExtentPx = o.CacheExtentPx,
+            PersistentPrefixCount = o.PersistentPrefixCount,
             RepaintBoundary = o.RepaintBoundary,
             KeepAlive = o.KeepAlive,
             KeepAliveCap = o.KeepAliveCap,
@@ -390,6 +399,7 @@ public sealed class ItemsView : Component
             Entrance = o.Entrance,
             ContentType = o.ContentType,
             CacheExtentPx = o.CacheExtentPx,
+            PersistentPrefixCount = o.PersistentPrefixCount,
             RepaintBoundary = o.RepaintBoundary,
             KeepAlive = o.KeepAlive,
             KeepAliveCap = o.KeepAliveCap,
@@ -624,9 +634,10 @@ public sealed class ItemsView : Component
             Context.RequestRerender();
         }
 
-        // The REALIZED container node for an index: ord = index − FirstRealized → the ord-th window child (Null when not
-        // realized). Non-virtual hosts (Wrap/Inline fallback) have no scroll state: every container is a direct child of
-        // the captured host box, so ord == index. Shared by FocusIndex and the bound-mode roving tab stop.
+        // The REALIZED container node for an index: persistent-prefix indices map 1:1 to the leading children; a normal
+        // index maps to prefix + index − FirstRealized (Null when outside the window). Non-virtual hosts (Wrap/Inline
+        // fallback) have no scroll state: every container is a direct child of the captured host box, so ord == index.
+        // Shared by FocusIndex and the bound-mode roving tab stop.
         NodeHandle SlotRootForIndex(int index)
         {
             if (sceneRef is null) return NodeHandle.Null;
@@ -636,8 +647,13 @@ public sealed class ItemsView : Component
             int ord;
             if (sceneRef.TryGetScroll(vp, out var sc))
             {
-                ord = index - sc.FirstRealized;
-                if (ord < 0 || index >= sc.LastRealized) return NodeHandle.Null;
+                int prefix = Math.Clamp(sc.PersistentPrefixCount, 0, sc.ItemCount);
+                if (index < prefix) ord = index;
+                else
+                {
+                    ord = prefix + index - sc.FirstRealized;
+                    if (index < sc.FirstRealized || index >= sc.LastRealized) return NodeHandle.Null;
+                }
                 first = sceneRef.FirstChild(sc.ContentNode);
             }
             else
@@ -1161,6 +1177,7 @@ public sealed class ItemsView : Component
                 StaggerColdRealize = StaggerColdRealize,
                 Overscan = OverscanItems,
                 CacheExtentPx = CacheExtentPx,
+                PersistentPrefixCount = PersistentPrefixCount,
                 ContentType = ContentType,       // #16 recycle-pool discriminator (bound path)
                 KeepAlive = KeepAlive,           // #5 keep-alive-but-hidden bucket (bound path)
                 KeepAliveCap = KeepAliveCap,
@@ -1169,6 +1186,7 @@ public sealed class ItemsView : Component
                 AutoEdgeFade = AutoEdgeFade,
                 SuppressScrollBar = SuppressScrollBar,
                 ScrollKey = ScrollKey,
+                ItemClipTopInset = ItemClipTopInset,
                 OnScrollGeometryChanged = OnScrollGeometryChanged,
                 Grow = Grow,
                 OnRealized = h => viewportNode.Value = h,
@@ -1187,6 +1205,7 @@ public sealed class ItemsView : Component
                 AutoEdgeFade = AutoEdgeFade,
                 SuppressScrollBar = SuppressScrollBar,
                 ScrollKey = ScrollKey,
+                ItemClipTopInset = ItemClipTopInset,
                 OnScrollGeometryChanged = OnScrollGeometryChanged,
                 // Grow rides through to the viewport: 1 = fill the parent (hard viewport, never content-measured);
                 // 0 = natural — FlexLayout.MeasureViewport sizes a non-flexing viewport to the layout's ContentExtent

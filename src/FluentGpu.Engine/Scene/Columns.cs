@@ -7,7 +7,7 @@ public enum VisualKind : byte { None = 0, Box = 1, Text = 2, Image = 3, Polyline
 
 /// <summary>Sparse image-only payload kept out of the dense paint column. The source id stays in
 /// <see cref="NodePaint.ImageId"/>; <see cref="DerivedImageId"/> is selected only after its bake reaches Ready.</summary>
-public readonly record struct ImageVisualEffects(int DerivedImageId, ColorF Overlay, ImageMaskSpec Mask);
+public readonly record struct ImageVisualEffects(int DerivedImageId, ColorF Overlay, ImageMaskSpec Mask, float Saturation = 1f);
 
 /// <summary>Per-text-node measure cache (layout.md §2.3): a pure-function cache of (text, style, availWidth) → size, so a
 /// scoped relayout skips re-shaping a text leaf whose inputs are unchanged. Self-invalidating — any input change makes
@@ -328,6 +328,8 @@ public struct ScrollState
     public IVirtualLayout? Layout;        // pluggable layout (stack/grid/custom; IMeasuredVirtualLayout ⇒ variable-extent
                                           // estimate-then-correct + anchoring); null ⇒ the legacy Fenwick extent-table path
     public int   Overscan;                // rows realized beyond the viewport on each side
+    public int   PersistentPrefixCount;   // leading logical items retained before the recyclable [First,Last) window
+    public float ItemClipTopInset;         // viewport-space top clip for recyclable items; NaN = disabled
     public int   FirstRealized, LastRealized;
     public int   ExtentTableRef;          // -1 = uniform / non-virtual; else index into the ExtentTable slab
     public NodeHandle ContentNode;        // the single content child carrying the -ScrollOffset LocalTransform
@@ -368,7 +370,7 @@ public struct ScrollState
     /// offset + rubber-band exactly like the resampler path (scroll-feel-rework-v2 §4.1/§4.4).</summary>
     public const byte PhaseTouchPan = 16;
 
-    public static ScrollState Default => new() { ExtentTableRef = -1, ZoomFactor = 1f, MinZoom = 0.1f, MaxZoom = 10f, FlingSnapTarget = float.NaN, PendingTargetX = float.NaN, PendingTargetY = float.NaN, PendingRawOffset = float.NaN, PrevArrangedFirst = 0, PrevArrangedLast = -1 };
+    public static ScrollState Default => new() { ExtentTableRef = -1, ZoomFactor = 1f, MinZoom = 0.1f, MaxZoom = 10f, FlingSnapTarget = float.NaN, PendingTargetX = float.NaN, PendingTargetY = float.NaN, PendingRawOffset = float.NaN, ItemClipTopInset = float.NaN, PrevArrangedFirst = 0, PrevArrangedLast = -1 };
 
     /// <summary>True when this viewport has any snap points configured (a fling lands on one).</summary>
     public readonly bool HasSnap => SnapInterval > 0f || (SnapPoints is { Length: > 0 });

@@ -32,6 +32,14 @@ public static class BlurPinKey
 
     private static float QuantizeScale(float m) => RoundGrid(m / ScaleBucket) * ScaleBucket;
 
+    /// <summary>True only for a settled self-blur that may participate in the cross-frame stationary pin cache.
+    /// A live <see cref="PushLayerCmd.BlurIsTransient"/> animation changes sigma every frame and must stay on a transient
+    /// render path even when the region-local fast path cannot represent it (for example, a canvas-sized component root).
+    /// Letting that fallback enter the cache retains one region texture per recurring sigma bucket and can turn a brief
+    /// reveal into several full-canvas pins.</summary>
+    public static bool CanUseStationaryCache(in PushLayerCmd layer)
+        => layer.Kind == (int)LayerKind.Blur && layer.BlurSigma > 0f && layer.BlurIsTransient == 0;
+
     /// <summary>Compute the position-independent pin key for the self-blur subtree starting at <paramref name="start"/>
     /// (the first op AFTER the <see cref="PushLayerCmd"/>) up to its matching <see cref="DrawOp.PopLayer"/>. Returns
     /// false (uncacheable, render normally) on a nested <see cref="DrawOp.PushLayer"/> or any unrecognized op.

@@ -46,7 +46,7 @@ sealed partial class SettingsPage
     static string[] PageLayoutLabels() =>
     [
         Loc.Get(Strings.Settings.Choice.Automatic),
-        Loc.Get(Strings.Settings.Choice.Stacked),
+        Loc.Get(Strings.Settings.Choice.Hero),
     ];
 
     Element GeneralTab(Services? svc, Action<float>? requestTheme)
@@ -116,8 +116,8 @@ sealed partial class SettingsPage
 
     // ── the page-layout picker: the preview cards ARE the selector (a radio pair, PaletteRow-style) ─────────────────
     // Each card is a mini skeleton-bar wireframe of the page SYSTEM it selects — Automatic: a narrow metadata rail
-    // (art + title/meta bars + a pill) BESIDE a column of full-width track rows (the rail-when-wide layout); Stacked:
-    // the vertical hero (art beside title/meta/pills) ABOVE the track rows, at every width. The selected card lights
+    // (art + title/meta bars + a pill) BESIDE a column of full-width track rows (the rail-when-wide layout); Hero:
+    // adaptive artwork + identity ABOVE the track rows at every width. The selected card lights
     // its blocks + border with the accent so the choice reads at a glance.
     static Element PageLayoutCards(int selected, Action<int> set)
     {
@@ -154,7 +154,7 @@ sealed partial class SettingsPage
                         },
                     ],
                 }
-                // Stacked: the side-by-side hero (art beside title/meta/pills) above the track rows.
+                // Hero: an immersive artwork field and compact identity above the track rows.
                 : new BoxEl
                 {
                     Direction = 1, Gap = 5f, Grow = 1f, Justify = FlexJustify.Center,
@@ -162,11 +162,19 @@ sealed partial class SettingsPage
                     [
                         new BoxEl
                         {
-                            Direction = 0, Gap = 6f, AlignItems = FlexAlign.Start,
+                            Direction = 1, Gap = 4f, AlignItems = FlexAlign.Stretch,
                             Children =
                             [
-                                Art(26f),
-                                new BoxEl { Direction = 1, Gap = 4f, Grow = 1f, Children = [Bar(58f, 6f), Bar(40f, 4f), Pills()] },
+                                new BoxEl
+                                {
+                                    Height = 24f, AlignSelf = FlexAlign.Stretch,
+                                    Corners = CornerRadius4.All(4f), Fill = block,
+                                },
+                                new BoxEl
+                                {
+                                    Direction = 0, Gap = 5f, AlignItems = FlexAlign.Center,
+                                    Children = [Bar(48f, 6f), Bar(28f, 4f), Pills()],
+                                },
                             ],
                         },
                         RowBar(), RowBar(), RowBar(),

@@ -166,6 +166,33 @@ public class StoreLibrarySourceTests
         Assert.Contains("spotify:user:friend_raw", profiles.Prefetched);
     }
 
+    // The HeaderOf owner seed (Owner id+name = username, avatar null) renders the name immediately, and the resolved
+    // profile still WINS — OverlayOwner returns Get(raw) ?? header.Owner, so the null-avatar seed never clobbers it.
+    [Fact]
+    public async Task GetPlaylist_SeededOwnerChip_IsOverriddenByResolvedProfile_NotClobbered()
+    {
+        const string uri = "spotify:playlist:seeded";
+        var store = new InMemoryStore();
+        store.UpsertTrack(Trk("t1"));
+        store.UpsertPlaylist(new Playlist("p", uri, "My Mix", null, "owner_raw", null, 0,
+            Owner: new Owner("owner_raw", "owner_raw", null)));   // exactly what HeaderOf now seeds
+        store.SetMembership(uri, new[] { new PlaylistMember("i1", "spotify:track:t1", "owner_raw", 1) }, null);
+        var src = new StoreLibrarySource(store);
+
+        // before any profile resolves: the seed renders its name; avatar still null.
+        var seeded = await src.GetPlaylistAsync(uri);
+        Assert.NotNull(seeded!.Owner);
+        Assert.Equal("owner_raw", seeded.Owner!.Name);
+        Assert.Null(seeded.Owner.Avatar);
+
+        // once the profile resolves, the overlay WINS — the seed does not clobber the resolved display name + avatar.
+        src.UserProfiles = new FakeUserProfiles(new Owner("owner_raw", "Owner Display", new Image("https://img/owner")));
+        var resolved = await src.GetPlaylistAsync(uri);
+        Assert.Equal("Owner Display", resolved!.Owner!.Name);
+        Assert.Equal("https://img/owner", resolved.Owner.Avatar!.Url);
+        Assert.Equal("Owner Display", resolved.OwnerName);
+    }
+
     [Fact]
     public async Task GetPlaylists_OverlaysResolvedOwnerName_ForSidebarAndHomeSummaries()
     {

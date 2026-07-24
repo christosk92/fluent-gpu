@@ -1,4 +1,8 @@
 using System.Buffers;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Runtime.InteropServices;
+using System.Text;
 using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -33,12 +37,36 @@ public sealed class TreeReconciler
     private readonly Dictionary<Component, NodeHandle> _anchorOf = new();
     private readonly List<Component> _live = new();
 
+    private struct BoundSlot
+    {
+        public Signal<int> Index;
+        public Element El;
+        public NodeHandle Root;
+        public int ContentType;
+
+        public BoundSlot(Signal<int> index, Element el, NodeHandle root, int contentType = 0)
+        {
+            Index = index;
+            El = el;
+            Root = root;
+            ContentType = contentType;
+        }
+    }
+
     // The previously-realized window per virtual-list viewport (the keyed-diff's oldKids). Rented from ArrayPool.
-    // Bound (RowBind) viewports keep persistent SLOTS instead: one (index signal, mounted element) per visible row.
+    // Bound (RowBind) viewports keep persistent SLOTS instead: one signal/element/root per realized logical item.
     private sealed class VirtualEntry
     {
         public Element[]? Prev; public int PrevLen; public int PrevFirst; public VirtualListEl? El;
-        public List<(Signal<int> Index, Element El)>? Slots;
+        public List<BoundSlot>? Slots;
+        // Retained slow-path scratch. Equal-size contiguous scrolls use the in-place rotation fast path; this is touched
+        // only for cold grow/shrink or defensive invariant repair and grows only with the viewport high-water mark.
+        public List<BoundSlot>? SlotScratch;
+        public bool[]? SlotUsed;
+        // Opt-in retained prefix: fixed-index slots stay attached ahead of Slots while the latter keep their ordinary
+        // overlap/extended recycler semantics. Roots are stored because prefix nodes are temporarily detached while
+        // the existing recycler operates on the normal child band, then restored before layout.
+        public List<BoundSlot>? PrefixSlots;
         // Cold-mount stagger (bound lists): while a freshly-mounted list's large initial window is being realized a few
         // rows per frame (not all at once → the nav cold-mount spike), Warming is true. LastGrowEpoch caps the grow to
         // ONE batch per frame (the host calls realize up to ~5x/frame: pre-layout + the 2-pass post-layout loop + the
@@ -50,9 +78,6 @@ public sealed class TreeReconciler
         public bool RealizeDeferred;
         // ── extended bound-realize state (research adjustments #5 keep-alive + #16 content-type) — allocated ONLY when
         //    ve.KeepAlive or ve.ContentType is set (the default RealizeBoundWindow leaves both null; byte-identical path).
-        // Per-active-slot content-type (parallel to Slots): the type each live slot's frozen subtree was BUILT for; a
-        // rebind is legal only when the target index's content-type matches (else the slot rebuilds). Null ⇒ no discriminator.
-        public List<int>? SlotTypes;
         // Keep-alive bucket: item index → its parked slot (detached, hidden, quiesced). Bounded + LRU-evicted.
         public Dictionary<int, KeptSlot>? Kept;
     }
@@ -190,11 +215,69 @@ public sealed class TreeReconciler
     private float _themeTransitionMs = float.NaN;        // live-re-theme cross-fade duration; armed only during a RethemeAll flush
     private readonly List<CompEntry> _rethemeScratch = new();   // snapshot of _comps.Values for RethemeAll (defensive vs reentrancy)
 
+    // FG_RENDER_CENSUS=1: per-frame type histogram of RunComponent/RunRoot, dumped once when FlushMs spikes. Off = null
+    // dict + one branch; never allocates on the hot path when the env flag is unset.
+    private static readonly bool s_renderCensus = Diag.EnvFlag("FG_RENDER_CENSUS");
+    private Dictionary<string, int>? _renderCensus;
+    private readonly List<KeyValuePair<string, int>> _censusScratch = new(32);
+    private readonly StringBuilder _censusSb = new(256);
+    /// <summary>Last spike dump line (empty when none this process). Probes / stderr consumers can peek it.</summary>
+    public string LastRenderCensusDump { get; private set; } = "";
+
     /// <summary>True (and reset) if any mount/update/remove happened since the last call — the host's "layout needed" gate.</summary>
     public bool ConsumeReconciled() { var r = _reconciled; _reconciled = false; return r; }
 
     /// <summary>Number of component render-effects that ran since the last call (proves granular re-render in tests).</summary>
     public int ConsumeRenderCount() { var c = _renderCount; _renderCount = 0; return c; }
+    /// <summary>Current frame's render-effect count without resetting (census dump before <see cref="ConsumeRenderCount"/>).</summary>
+    public int PeekRenderCount() => _renderCount;
+
+    /// <summary>Clear the per-frame render-type histogram (no-op unless <c>FG_RENDER_CENSUS=1</c>). Call at Paint start.</summary>
+    public void BeginRenderCensus()
+    {
+        if (!s_renderCensus) return;
+        _renderCensus ??= new Dictionary<string, int>(64, StringComparer.Ordinal);
+        _renderCensus.Clear();
+    }
+
+    private void NoteRenderCensus(Component comp)
+    {
+        if (_renderCensus is null) return;   // census off (the steady/shipping case) — no GetType().Name work below
+        string typeName = comp.GetType().Name;
+        _renderCensus.TryGetValue(typeName, out int n);
+        _renderCensus[typeName] = n + 1;
+    }
+
+    /// <summary>If this frame's flush is a hitch (FlushMs ≥ 12 or comps ≥ 25), emit one census line to <see cref="Diag.Sink"/>
+    /// / stderr and stash it in <see cref="LastRenderCensusDump"/>. Returns the line (or null when not a spike / census off).</summary>
+    public string? MaybeDumpRenderCensus(double flushMs, double reactiveFlushMs, double virtualRealizeMs, int comps, bool scrollActive)
+    {
+        if (_renderCensus is null) return null;
+        if (flushMs < 12.0 && comps < 25) { LastRenderCensusDump = ""; return null; }
+        _censusScratch.Clear();
+        foreach (var kv in _renderCensus) _censusScratch.Add(kv);
+        _censusScratch.Sort(static (a, b) => b.Value.CompareTo(a.Value));
+        _censusSb.Clear();
+        _censusSb.Append("[render-census] flush=").Append(flushMs.ToString("0.0", CultureInfo.InvariantCulture))
+            .Append("ms rx=").Append(reactiveFlushMs.ToString("0.0", CultureInfo.InvariantCulture))
+            .Append(" vr=").Append(virtualRealizeMs.ToString("0.0", CultureInfo.InvariantCulture))
+            .Append(" comps=").Append(comps.ToString(CultureInfo.InvariantCulture))
+            .Append(scrollActive ? " scroll=1" : " scroll=0")
+            .Append(" top=");
+        int n = Math.Min(12, _censusScratch.Count);
+        if (n == 0) _censusSb.Append("(none)");
+        for (int i = 0; i < n; i++)
+        {
+            if (i > 0) _censusSb.Append(',');
+            _censusSb.Append(_censusScratch[i].Key).Append('×').Append(_censusScratch[i].Value.ToString(CultureInfo.InvariantCulture));
+        }
+        string line = _censusSb.ToString();
+        LastRenderCensusDump = line;
+        // Always mirror to stderr so FG_FPS_LOG redirects capture spikes even when Diag.Sink is Debug-only (Wavee file default = Info).
+        Console.Error.WriteLine(line);
+        if (Diag.Sink is { } sink) sink(line);
+        return line;
+    }
 
     /// <summary>The reactive scheduler — one per host; signals schedule render-effects/bindings here, the host flushes it.</summary>
     public ReactiveRuntime Runtime { get; }
@@ -225,7 +308,6 @@ public sealed class TreeReconciler
     /// <summary>Set by the host; image nodes request decodes through it and pin/unpin for residency (liveness).</summary>
     public ImageCache? Images { get; set; }
     /// <summary>Set by the host; bumped on any image status change so <c>UseImage</c> consumers re-render granularly.</summary>
-    public IReadSignal<int>? ImageEpoch { get; set; }
     /// <summary>Set by the host; clears input/focus state when a retained subtree is parked off the live scene chain.</summary>
     public Action<NodeHandle>? OnSubtreeDeactivated { get; set; }
     /// <summary>Set by the host; called when a component context's passive/layout effect queue transitions 0→1.</summary>
@@ -319,6 +401,7 @@ public sealed class TreeReconciler
     private void RunRoot(Component root)
     {
         _renderCount++;
+        NoteRenderCensus(root);
         Element newRoot = root.RenderWithHooks();
         RenderRootDiff(newRoot);
     }
@@ -398,7 +481,6 @@ public sealed class TreeReconciler
         ctx.PeekMainScrollBusy = PeekMainScrollBusy;
         ctx.AnchorNode = anchor;
         ctx.ResolveContextSignal = ResolveContext;
-        ctx.ImageEpoch = ImageEpoch;
         ctx.RegisterPendingEffectContext = RegisterPendingEffectContext;
     }
 
@@ -740,6 +822,7 @@ public sealed class TreeReconciler
         // Remember that a render was owed; ReactivateKeepAliveEntry replays it once when the subtree comes back.
         if (entry.Parked) { entry.DeferredRender = true; return; }
         _renderCount++;
+        NoteRenderCensus(entry.Comp);
         if (Diag.Enabled) Diag.Event("render", entry.Comp.GetType().Name);   // who re-rendered (granularity diagnosis)
         var comp = entry.Comp;
         Element newRendered = comp.RenderWithHooks();
@@ -1509,8 +1592,8 @@ public sealed class TreeReconciler
     private void WriteImageEffects(NodeHandle node, in ImageEl im, int derivedId)
     {
         ImageMaskSpec mask = im.Mask is { } m && !m.IsNone ? m : default;
-        if (derivedId != 0 || im.ColorOverlay.A > 0f || !mask.IsNone)
-            _scene.SetImageEffects(node, new ImageVisualEffects(derivedId, im.ColorOverlay, mask));
+        if (derivedId != 0 || im.ColorOverlay.A > 0f || !mask.IsNone || im.Saturation != 1f)
+            _scene.SetImageEffects(node, new ImageVisualEffects(derivedId, im.ColorOverlay, mask, im.Saturation));
         else
             _scene.ClearImageEffects(node);
     }
@@ -1702,6 +1785,16 @@ public sealed class TreeReconciler
         if (first > mandFirst) first = mandFirst;
         if (last < mandLast) last = mandLast;
 
+        // A persistent prefix is covered by retained children, not by the recyclable interval. Trim every normal range
+        // to begin after it; layout/window coverage treats the two bands as [0,prefix) U [FirstRealized,LastRealized).
+        int prefix = ve.RowBind is null ? 0 : Math.Clamp(ve.PersistentPrefixCount, 0, count);
+        if (prefix > 0)
+        {
+            visibleFirst = Math.Max(visibleFirst, prefix); visibleLast = Math.Max(visibleLast, prefix);
+            mandFirst = Math.Max(mandFirst, prefix); mandLast = Math.Max(mandLast, prefix);
+            first = Math.Max(first, prefix); last = Math.Max(last, prefix);
+        }
+
         // E4 budget: the mandatory band is realized unconditionally; the overscan halo is clipped to the per-frame row pool.
         bool budgetDeficit = !eagerOverscan && ClipRealizeBudget(in sc, mandFirst, mandLast, ref first, ref last);
         bool stayDirty = budgetDeficit || (mount && !eagerOverscan);
@@ -1713,7 +1806,9 @@ public sealed class TreeReconciler
         {
             // Research adjustments #5/#16: the keep-alive bucket + content-type pools ride an EXTENDED realize; when
             // neither is opted into (the default) the original zero-alloc positional recycler runs unchanged.
-            if (ve.KeepAlive is not null || ve.ContentType is not null)
+            if (prefix > 0 || entry.PrefixSlots is { Count: > 0 })
+                RealizeBoundWindowWithPersistentPrefix(node, content, entry, ve, prefix, first, last, w, visibleSlots, stayDirty);
+            else if (ve.KeepAlive is not null || ve.ContentType is not null)
                 RealizeBoundWindowExtended(node, content, entry, ve, first, last, w, visibleSlots, stayDirty);
             else
                 RealizeBoundWindow(node, content, entry, ve, first, last, w, visibleSlots, stayDirty);
@@ -1810,18 +1905,84 @@ public sealed class TreeReconciler
 
     private static float Hint(float explicitSize) => float.IsNaN(explicitSize) ? 1024f : explicitSize;
 
+    /// <summary>Retain <paramref name="prefixCount"/> fixed-index bound slots ahead of the ordinary recyclable window.
+    /// Prefix nodes are detached only for the duration of realization so the existing positional/extended recyclers can
+    /// remain unchanged; they are restored as the leading direct content children before layout/paint.</summary>
+    private void RealizeBoundWindowWithPersistentPrefix(NodeHandle node, NodeHandle content, VirtualEntry entry,
+        VirtualListEl ve, int prefixCount, int first, int last, int w, int visibleSlots, bool stayDirty)
+    {
+        var prefix = entry.PrefixSlots ??= new List<BoundSlot>(prefixCount);
+        bool prefixChanged = prefix.Count != prefixCount;
+
+        // Remove the retained band from the child chain while the normal recycler walks children by ordinal.
+        for (int i = 0; i < prefix.Count; i++)
+            if (_scene.IsLive(prefix[i].Root) && !_scene.Parent(prefix[i].Root).IsNull)
+                _scene.Detach(prefix[i].Root);
+
+        while (prefix.Count > prefixCount)
+        {
+            int i = prefix.Count - 1;
+            var slot = prefix[i];
+            ve.OnItemClearing?.Invoke(i);
+            if (_scene.IsLive(slot.Root)) Remove(slot.Root);
+            prefix.RemoveAt(i);
+        }
+        while (prefix.Count < prefixCount)
+        {
+            int index = prefix.Count;
+            var sig = new Signal<int>(index);
+            Element el = ve.RowBind!(sig);
+            var root = _scene.CreateNode(el.ElementTypeId);
+            _scene.AppendChild(content, root);   // mount under the viewport so scroll bindings resolve their container
+            Mount(root, el);
+            _scene.Detach(root);
+            prefix.Add(new BoundSlot(sig, el, root));
+            ve.OnItemPrepared?.Invoke(index);
+        }
+
+        // With the prefix detached, the existing paths see exactly their original child/slot invariant.
+        if (ve.KeepAlive is not null || ve.ContentType is not null)
+            RealizeBoundWindowExtended(node, content, entry, ve, first, last, w, visibleSlots, stayDirty);
+        else
+            RealizeBoundWindow(node, content, entry, ve, first, last, w, visibleSlots, stayDirty);
+
+        // Existing normal roots currently occupy the content chain. Append the prefix, then rotate the normal band
+        // behind it using only linked-list operations (no per-realize buffer/allocation).
+        int normalCount = 0;
+        for (var c = _scene.FirstChild(content); !c.IsNull; c = _scene.NextSibling(c)) normalCount++;
+        for (int i = 0; i < prefix.Count; i++) _scene.AppendChild(content, prefix[i].Root);
+        var normal = _scene.FirstChild(content);
+        for (int i = 0; i < normalCount && !normal.IsNull; i++)
+        {
+            var next = _scene.NextSibling(normal);
+            _scene.Detach(normal);
+            _scene.AppendChild(content, normal);
+            normal = next;
+        }
+
+        ref ScrollState sc = ref _scene.ScrollRef(node);
+        sc.PersistentPrefixCount = prefixCount;
+        if (prefixChanged)
+        {
+            _scene.Mark(content, NodeFlags.LayoutDirty);
+            _reconciled = true;
+            _realizeProgress = true;
+        }
+    }
+
     /// <summary>
-    /// Bound (signals-first) realize: slots are PERSISTENT — recycling a slot = writing its index signal, which
-    /// re-runs only that row's reactive binds (TextBind/FillBind/SourceBind). No element rebuild, no reconcile, no
-    /// node churn: the thumb-drag storm degenerates to signal writes + granular column updates. The host flushes the
-    /// runtime again after re-realize so the rebinds land in the SAME frame.
+    /// Bound (signals-first) realize: a slot follows its LOGICAL ITEM while that item overlaps the next window. A
+    /// one-row shift therefore rotates one leaving root to the entering edge and writes ONE index signal rather than
+    /// positionally rebinding the whole realized window. Frozen element trees never rebuild on the homogeneous path;
+    /// the host flushes recycled-slot bindings in the same frame.
     /// </summary>
     private void RealizeBoundWindow(NodeHandle node, NodeHandle content, VirtualEntry entry,
                                     VirtualListEl ve, int first, int last, int w, int visibleSlots, bool stayDirty)
     {
         var rowBind = ve.RowBind!;
-        var slots = entry.Slots ??= new List<(Signal<int>, Element)>(Math.Max(4, w));
+        var slots = entry.Slots ??= new List<BoundSlot>(Math.Max(4, w));
         bool structural = false;
+        bool orderChanged = false;
         int oldFirst = entry.PrevFirst, oldLast = entry.PrevFirst + entry.PrevLen;   // E11 lifecycle window delta
 
         // Cold-mount stagger can spread overscan slot creation, but it must never present a partial visible window.
@@ -1839,55 +2000,138 @@ public sealed class TreeReconciler
             }
         }
 
-        while (slots.Count < target)   // grow: the template runs ONCE per slot; its element tree is never rebuilt
+        int desiredCount = Math.Min(target, w);
+        bool fastContiguous = desiredCount == slots.Count
+            && slots.Count == entry.PrevLen
+            && BoundSlotsAreContiguous(content, slots, entry.PrevFirst);
+
+        if (fastContiguous)
         {
-            var sig = new Signal<int>(first + slots.Count);
-            Element el = rowBind(sig);
-            var child = _scene.CreateNode(el.ElementTypeId);
-            _scene.AppendChild(content, child);
-            Mount(child, el);
-            slots.Add((sig, el));
-            structural = true;
+            int count = slots.Count;
+            int shift = first - entry.PrevFirst;
+            if (count > 0 && shift > 0 && shift < count)
+            {
+                // Downward scroll: leading roots leave; append them in the same order, then rotate the slot metadata.
+                for (int i = 0; i < shift; i++)
+                {
+                    var root = slots[i].Root;
+                    _scene.Detach(root);
+                    _scene.AppendChild(content, root);
+                }
+                RotateSlotsLeft(slots, count, shift);
+                var span = CollectionsMarshal.AsSpan(slots);
+                for (int i = count - shift; i < count; i++)
+                    RebindBoundSlot(ref span[i], first + i, ve);
+                orderChanged = true;
+            }
+            else if (count > 0 && shift < 0 && -shift < count)
+            {
+                // Reverse scroll: trailing roots enter at the front. Prepend in reverse so their logical order survives.
+                int entering = -shift;
+                for (int i = count - 1; i >= count - entering; i--)
+                {
+                    var root = slots[i].Root;
+                    _scene.Detach(root);
+                    _scene.PrependChild(content, root);
+                }
+                RotateSlotsRight(slots, count, entering);
+                var span = CollectionsMarshal.AsSpan(slots);
+                for (int i = 0; i < entering; i++)
+                    RebindBoundSlot(ref span[i], first + i, ve);
+                orderChanged = true;
+            }
+            else if (shift != 0)
+            {
+                // No overlap: keep the retained roots in place and bind the complete window to its new logical range.
+                var span = CollectionsMarshal.AsSpan(slots);
+                for (int i = 0; i < count; i++)
+                    RebindBoundSlot(ref span[i], first + i, ve);
+            }
         }
-        while (slots.Count > w)   // shrink (viewport got smaller): drop the trailing slot
+        else
         {
-            var c = _scene.FirstChild(content);
-            for (int ord = 1; !c.IsNull && ord < slots.Count; ord++) c = _scene.NextSibling(c);
-            if (!c.IsNull) Remove(c);
-            slots.RemoveAt(slots.Count - 1);
-            structural = true;
+            // Cold grow/shrink and defensive invariant recovery: preserve every exact logical-index overlap first,
+            // recycle only the unmatched roots, then reorder the child chain. Scratch storage is retained on the entry,
+            // so recurring resize/recovery at the same high-water mark does not allocate.
+            var scratch = entry.SlotScratch ??= new List<BoundSlot>(Math.Max(4, desiredCount));
+            scratch.Clear();
+            for (int i = 0; i < desiredCount; i++) scratch.Add(default);
+
+            bool[] used = entry.SlotUsed ?? Array.Empty<bool>();
+            if (used.Length < slots.Count)
+                entry.SlotUsed = used = new bool[Math.Max(4, slots.Count)];
+            else
+                Array.Clear(used, 0, slots.Count);
+
+            // Reserve exact overlaps before consuming any leaving slot, otherwise a leading gap could steal a later
+            // logical survivor and turn a one-row repair into a full-window fan-out.
+            for (int ord = 0; ord < desiredCount; ord++)
+            {
+                int idx = first + ord;
+                for (int j = 0; j < slots.Count; j++)
+                {
+                    if (used[j] || slots[j].Index.Peek() != idx) continue;
+                    scratch[ord] = slots[j];
+                    used[j] = true;
+                    break;
+                }
+            }
+
+            for (int ord = 0; ord < desiredCount; ord++)
+            {
+                if (scratch[ord].Index is not null) continue;
+                int idx = first + ord;
+                int reuse = -1;
+                for (int j = 0; j < slots.Count; j++)
+                    if (!used[j]) { reuse = j; break; }
+
+                if (reuse >= 0)
+                {
+                    var recycled = slots[reuse];
+                    used[reuse] = true;
+                    RebindBoundSlot(ref recycled, idx, ve);
+                    scratch[ord] = recycled;
+                }
+                else
+                {
+                    var sig = new Signal<int>(idx);
+                    Element el = rowBind(sig);
+                    var child = _scene.CreateNode(el.ElementTypeId);
+                    _scene.AppendChild(content, child);
+                    Mount(child, el);
+                    scratch[ord] = new BoundSlot(sig, el, child);
+                    structural = true;
+                }
+            }
+
+            for (int j = 0; j < slots.Count; j++)
+                if (!used[j] && _scene.IsLive(slots[j].Root))
+                {
+                    Remove(slots[j].Root);
+                    structural = true;
+                }
+
+            // Exact logical order is part of the layout/hit-test contract: FirstRealized + child ordinal maps to item.
+            for (int i = 0; i < desiredCount; i++)
+            {
+                var root = scratch[i].Root;
+                _scene.Detach(root);
+                _scene.AppendChild(content, root);
+            }
+
+            slots.Clear();
+            slots.AddRange(scratch);
+            orderChanged = true;
+            _realizeProgress = true;
         }
 
-        // Walk the slot ROOT nodes (direct children of content, in slot order) alongside the rebind loop so a recycled
-        // slot can drop transient interaction state — the same reset the recycling window-diff does (ReconcileWindow,
-        // the Unmark at the recycle match). Without it a slot rebound under a STATIONARY pointer keeps the previous
-        // item's hover/press tint until the next pointer move.
         // `mat` = rows actually materialized so far (== w once warmed). All downstream state keys off the MATERIALIZED
         // count, never the uncapped target `w`, so a partially-realized window is internally consistent (rebind walk,
         // PrevLen, LastRealized, focus/tab-stop). LastRealized = first + mat means NeedsRealize re-flags the still-short
         // window next layout, and SlotRootForIndex correctly reports "not realized yet" for the not-yet-mounted tail.
         int mat = Math.Min(slots.Count, w);
-        var slotRoot = _scene.FirstChild(content);
-        for (int i = 0; i < mat; i++)
-        {
-            var sig = slots[i].Index;
-            int idx = first + i;
-            int prevIdx = sig.Peek();
-            if (prevIdx != idx)
-            {
-                if (!slotRoot.IsNull)
-                    _scene.Unmark(slotRoot, NodeFlags.Hovered | NodeFlags.Pressed | NodeFlags.Focused | NodeFlags.FocusVisual);
-                sig.Value = idx;   // granular rebind — only this slot's bind effects re-run
-                // ScrollState's range can already equal [first,last) while a slot signal is one generation behind.
-                // Range-only progress detection would then return false and AppHost would skip the post-realize Flush,
-                // presenting mixed rows (index-bound title from the new item, component snapshot cells from the old).
-                _realizeProgress = true;
-                ve.OnItemIndexChanged?.Invoke(prevIdx, idx);   // E11: a persistent bound slot moved indices
-            }
-            if (!slotRoot.IsNull) slotRoot = _scene.NextSibling(slotRoot);
-        }
 
-        bool moved = structural || first != entry.PrevFirst || mat != entry.PrevLen;
+        bool moved = structural || orderChanged || first != entry.PrevFirst || mat != entry.PrevLen;
         entry.PrevFirst = first;
         entry.PrevLen = mat;
         if (moved) _scene.Mark(content, NodeFlags.LayoutDirty);   // children are positioned by FirstRealized + order
@@ -1907,11 +2151,46 @@ public sealed class TreeReconciler
         FireWindowLifecycle(ve, oldFirst, oldLast, first, first + mat);
     }
 
+    private bool BoundSlotsAreContiguous(NodeHandle content, List<BoundSlot> slots, int first)
+    {
+        var root = _scene.FirstChild(content);
+        for (int i = 0; i < slots.Count; i++)
+        {
+            if (root.IsNull || slots[i].Root != root || slots[i].Index.Peek() != first + i) return false;
+            root = _scene.NextSibling(root);
+        }
+        return root.IsNull;
+    }
+
+    private void RebindBoundSlot(ref BoundSlot slot, int index, VirtualListEl ve)
+    {
+        int previous = slot.Index.Peek();
+        if (previous == index) return;
+        if (_scene.IsLive(slot.Root))
+            _scene.Unmark(slot.Root, NodeFlags.Hovered | NodeFlags.Pressed | NodeFlags.Focused | NodeFlags.FocusVisual);
+        slot.Index.Value = index;
+        // A signal repair can be progress even when ScrollState's published range did not move. The host must perform
+        // its post-realize reactive flush or component-snapshot cells can remain one generation behind bound leaves.
+        _realizeProgress = true;
+        ve.OnItemIndexChanged?.Invoke(previous, index);
+    }
+
+    private static void RotateSlotsLeft(List<BoundSlot> slots, int count, int shift)
+    {
+        if (shift <= 0 || shift >= count) return;
+        var span = CollectionsMarshal.AsSpan(slots)[..count];
+        span[..shift].Reverse();
+        span[shift..].Reverse();
+        span.Reverse();
+    }
+
+    private static void RotateSlotsRight(List<BoundSlot> slots, int count, int shift)
+        => RotateSlotsLeft(slots, count, count - shift);
+
     /// <summary>
     /// The EXTENDED bound realize (research adjustments #5 keep-alive + #16 content-type pools). Runs ONLY when
-    /// <see cref="VirtualListEl.KeepAlive"/> or <see cref="VirtualListEl.ContentType"/> is set — the default
-    /// <see cref="RealizeBoundWindow"/> stays the byte-identical zero-alloc positional recycler. This path trades the
-    /// tight positional recycle for two behaviours:
+    /// <see cref="VirtualListEl.KeepAlive"/> or <see cref="VirtualListEl.ContentType"/> is set. Like the default path,
+    /// exact logical-index overlaps keep their subtree; this path additionally trades allocation for two behaviours:
     /// <list type="bullet">
     /// <item><b>Keep-alive (#5):</b> a slot bound to an item for which <c>KeepAlive(item)</c> is true is NOT recycled when
     /// it leaves the window — it PARKS (detached from the content node ⇒ no layout/paint, and <see cref="SetSubtreeParked"/>
@@ -1921,8 +2200,8 @@ public sealed class TreeReconciler
     /// the type its frozen subtree was built for; a cross-type reuse REBUILDS the slot (fresh subtree) instead. Homogeneous
     /// lists (all one type) rebind exactly as the default path does.</item>
     /// </list>
-    /// Allocation here is acceptable (opt-in, never a zero-alloc-gated list); the content children are re-ordered to window
-    /// order at the end (the arrange pass positions the ord-th child at item <c>first+ord</c>).
+    /// Allocation here is acceptable (opt-in, never a zero-alloc-gated list); content children are re-ordered to logical
+    /// window order at the end (the arrange pass positions the ord-th child at item <c>first+ord</c>).
     /// </summary>
     private void RealizeBoundWindowExtended(NodeHandle node, NodeHandle content, VirtualEntry entry,
                                             VirtualListEl ve, int first, int last, int w, int visibleSlots, bool stayDirty)
@@ -1930,8 +2209,7 @@ public sealed class TreeReconciler
         var rowBind = ve.RowBind!;
         var keepAlive = ve.KeepAlive;
         var contentTypeOf = ve.ContentType;
-        var slots = entry.Slots ??= new List<(Signal<int>, Element)>(Math.Max(4, w));
-        var types = entry.SlotTypes ??= new List<int>(Math.Max(4, w));
+        var slots = entry.Slots ??= new List<BoundSlot>(Math.Max(4, w));
         var kept = entry.Kept ??= new Dictionary<int, KeptSlot>();
         int epoch = FrameEpoch;
         bool structural = false;
@@ -1939,114 +2217,123 @@ public sealed class TreeReconciler
 
         int TypeOf(int idx) => contentTypeOf?.Invoke(idx) ?? 0;
 
-        // Snapshot the live pool (slot signal/element/type + its content child node, by ordinal — the invariant the
-        // default path maintains: slots[i] ↔ the i-th child of content).
         int n0 = slots.Count;
-        var poolNode = n0 > 0 ? new NodeHandle[n0] : System.Array.Empty<NodeHandle>();
-        {
-            var c = _scene.FirstChild(content);
-            for (int i = 0; i < n0 && !c.IsNull; i++) { poolNode[i] = c; c = _scene.NextSibling(c); }
-        }
+        var consumed = n0 > 0 ? new bool[n0] : Array.Empty<bool>();
 
-        // ── PHASE 1 — PARK keep-alive slots leaving the window. Marked consumed (Null node) so PHASE 2 skips them.
+        // PHASE 1 — park keep-alive slots leaving the window. They remain bound to their logical item and are excluded
+        // from the leaving-slot recycle pool.
         if (keepAlive is not null)
         {
             for (int i = 0; i < n0; i++)
             {
-                if (poolNode[i].IsNull) continue;
                 int item = slots[i].Index.Peek();
                 if (item >= first && item < last) continue;          // stays in the window — normal handling
                 if (!keepAlive(item)) continue;                       // plain row — recycle/shrink handles it
                 if (kept.ContainsKey(item)) continue;                 // defensive: already parked
-                _scene.Detach(poolNode[i]);
-                SetSubtreeParked(poolNode[i], parked: true);          // quiesce render-effects/animations (Flow.KeepAlive mechanics)
+                _scene.Detach(slots[i].Root);
+                SetSubtreeParked(slots[i].Root, parked: true);         // quiesce render-effects/animations (Flow.KeepAlive mechanics)
                 kept[item] = new KeptSlot
                 {
-                    Index = slots[i].Index, El = slots[i].El, Root = poolNode[i],
-                    ContentType = i < types.Count ? types[i] : 0, LastUsed = epoch,
+                    Index = slots[i].Index, El = slots[i].El, Root = slots[i].Root,
+                    ContentType = slots[i].ContentType, LastUsed = epoch,
                 };
-                poolNode[i] = NodeHandle.Null;   // consumed
+                consumed[i] = true;
                 structural = true;
             }
         }
 
-        // ── PHASE 2 — rebuild the active window [first,last) in order, consuming kept slots first, then the surviving
-        //    pool (rebind on type-match, rebuild on type-mismatch), then growing. Result lists replace slots/types.
-        var newSlots = new List<(Signal<int>, Element)>(Math.Max(4, w));
-        var newTypes = new List<int>(Math.Max(4, w));
-        var order = w > 0 ? new NodeHandle[w] : System.Array.Empty<NodeHandle>();
-        int poolCursor = 0;
+        // PHASE 2 — reserve exact active overlaps first. A one-row shift must not let the entering gap consume a slot
+        // that already represents a later survivor.
+        var newSlots = new List<BoundSlot>(Math.Max(4, w));
+        for (int ord = 0; ord < w; ord++) newSlots.Add(default);
         for (int ord = 0; ord < w; ord++)
         {
             int item = first + ord;
             int dtype = TypeOf(item);
             if (kept.TryGetValue(item, out var ks))
             {
-                // Reactivate: re-attach (so a replayed render resolves context up-tree), un-park, ensure bound to item.
                 kept.Remove(item);
-                _scene.AppendChild(content, ks.Root);
-                SetSubtreeParked(ks.Root, parked: false);
-                if (ks.Index.Peek() != item) ks.Index.Value = item;
-                newSlots.Add((ks.Index, ks.El)); newTypes.Add(ks.ContentType); order[ord] = ks.Root;
-                structural = true; _realizeProgress = true;
-                continue;
-            }
-            // Advance to the next surviving (non-parked) pool slot.
-            while (poolCursor < n0 && poolNode[poolCursor].IsNull) poolCursor++;
-            if (poolCursor < n0)
-            {
-                var (sig, el) = slots[poolCursor];
-                int stype = poolCursor < types.Count ? types[poolCursor] : 0;
-                var pnode = poolNode[poolCursor];
-                poolCursor++;
-                if (stype == dtype)
+                if (ks.ContentType == dtype)
                 {
-                    int prev = sig.Peek();
-                    if (prev != item)
-                    {
-                        _scene.Unmark(pnode, NodeFlags.Hovered | NodeFlags.Pressed | NodeFlags.Focused | NodeFlags.FocusVisual);
-                        sig.Value = item;   // cheap in-pool rebind (same content type)
-                        _realizeProgress = true;
-                        ve.OnItemIndexChanged?.Invoke(prev, item);
-                    }
-                    newSlots.Add((sig, el)); newTypes.Add(stype); order[ord] = pnode;
+                    _scene.AppendChild(content, ks.Root);
+                    SetSubtreeParked(ks.Root, parked: false);
+                    var restored = new BoundSlot(ks.Index, ks.El, ks.Root, ks.ContentType);
+                    RebindBoundSlot(ref restored, item, ve);
+                    newSlots[ord] = restored;
+                    structural = true;
+                    _realizeProgress = true;
                 }
                 else
                 {
-                    // Cross-type: never rebind — rebuild a fresh subtree for the new content type.
-                    Remove(pnode);
-                    var nsig = new Signal<int>(item);
-                    Element nel = rowBind(nsig);
-                    var child = _scene.CreateNode(nel.ElementTypeId);
-                    _scene.AppendChild(content, child);
-                    Mount(child, nel);
-                    newSlots.Add((nsig, nel)); newTypes.Add(dtype); order[ord] = child;
-                    structural = true; _realizeProgress = true;
+                    if (_scene.IsLive(ks.Root)) Remove(ks.Root);
+                    structural = true;
                 }
+                continue;
             }
-            else
+
+            for (int i = 0; i < n0; i++)
             {
-                // Grow: no free pool slot — build a fresh one (its template runs once).
-                var nsig = new Signal<int>(item);
-                Element nel = rowBind(nsig);
-                var child = _scene.CreateNode(nel.ElementTypeId);
-                _scene.AppendChild(content, child);
-                Mount(child, nel);
-                newSlots.Add((nsig, nel)); newTypes.Add(dtype); order[ord] = child;
-                structural = true;
+                if (consumed[i] || slots[i].Index.Peek() != item || slots[i].ContentType != dtype) continue;
+                consumed[i] = true;
+                newSlots[ord] = slots[i];
+                break;
             }
         }
 
-        // Shrink: any surviving pool slot not consumed by the window is dropped.
-        for (int i = poolCursor; i < n0; i++)
-            if (!poolNode[i].IsNull) { Remove(poolNode[i]); structural = true; }
-
-        entry.Slots = newSlots; entry.SlotTypes = newTypes;
-
-        // Re-order the content children to window order (ord-th child ⇒ item first+ord — the arrange contract).
+        // PHASE 3 — fill entering gaps from leaving slots of the same content type. Cross-type leftovers rebuild exactly
+        // that entering row; overlapping logical items above never rebuild merely because their screen ordinal changed.
         for (int ord = 0; ord < w; ord++)
         {
-            var h = order[ord];
+            if (newSlots[ord].Index is not null) continue;
+            int item = first + ord;
+            int dtype = TypeOf(item);
+            int reuse = -1;
+            for (int i = 0; i < n0; i++)
+                if (!consumed[i] && slots[i].ContentType == dtype) { reuse = i; break; }
+
+            if (reuse >= 0)
+            {
+                consumed[reuse] = true;
+                var recycled = slots[reuse];
+                RebindBoundSlot(ref recycled, item, ve);
+                newSlots[ord] = recycled;
+                continue;
+            }
+
+            // No compatible leaving root. Consume one incompatible root so it cannot leak, then build the correct shape.
+            for (int i = 0; i < n0; i++)
+                if (!consumed[i])
+                {
+                    consumed[i] = true;
+                    if (_scene.IsLive(slots[i].Root)) Remove(slots[i].Root);
+                    structural = true;
+                    break;
+                }
+
+            var nsig = new Signal<int>(item);
+            Element nel = rowBind(nsig);
+            var child = _scene.CreateNode(nel.ElementTypeId);
+            _scene.AppendChild(content, child);
+            Mount(child, nel);
+            newSlots[ord] = new BoundSlot(nsig, nel, child, dtype);
+            structural = true;
+            _realizeProgress = true;
+        }
+
+        // Shrink any unused plain leaving roots.
+        for (int i = 0; i < n0; i++)
+            if (!consumed[i] && _scene.IsLive(slots[i].Root))
+            {
+                Remove(slots[i].Root);
+                structural = true;
+            }
+
+        entry.Slots = newSlots;
+
+        // Re-order active children to window order (ord-th child ⇒ item first+ord — the arrange contract).
+        for (int ord = 0; ord < newSlots.Count; ord++)
+        {
+            var h = newSlots[ord].Root;
             if (h.IsNull || !_scene.IsLive(h)) continue;
             _scene.Detach(h);
             _scene.AppendChild(content, h);
@@ -2527,7 +2814,17 @@ public sealed class TreeReconciler
             else
             {
                 row.Source = d.From;
-                row.Sink = d.To;
+                if (d.MorphLeftTo is { } morphX)
+                {
+                    row.Sink = FluentGpu.Animation.BindSink.MorphViewportX;
+                    row.Inset = morphX;
+                }
+                else if (d.MorphTopTo is { } morphY)
+                {
+                    row.Sink = FluentGpu.Animation.BindSink.MorphViewportY;
+                    row.Inset = morphY;
+                }
+                else row.Sink = d.To;
                 row.OutLo = d.OutStart;
                 row.OutHi = d.OutEnd;
                 row.Ease = d.Ease;
@@ -2553,7 +2850,8 @@ public sealed class TreeReconciler
         for (int i = 0; i < dsls.Length; i++)
         {
             var d = dsls[i];
-            if (d.PinTop is null && d.ClipTopAtViewport is null && !d.StretchFromTop && d.To == sink) return true;
+            if (d.PinTop is null && d.ClipTopAtViewport is null && d.MorphLeftTo is null && d.MorphTopTo is null
+                && !d.StretchFromTop && d.To == sink) return true;
         }
         return false;
     }
@@ -3028,6 +3326,7 @@ public sealed class TreeReconciler
                 ss.Zoomable = s.Zoomable;
                 ss.MinZoom = s.MinZoom; ss.MaxZoom = s.MaxZoom;
                 ss.EdgeCueConfig = ResolveEdgeCues(s.EdgeCues);
+                ss.ItemClipTopInset = float.NaN;
                 ss.Chaining = (byte)s.Chaining;                  // nested-scroll hand-off policy (touch pan)
                 // Change-only scroll-geometry observer (the escape hatch; pull-to-refresh / analytics).
                 if (s.OnScrollGeometryChanged is { } obs) _scene.SetScrollObserver(node, obs.Project, obs.Action);
@@ -3064,6 +3363,10 @@ public sealed class TreeReconciler
                 sc.ItemCount = Math.Max(0, v.ItemCount);
                 sc.Layout = v.Layout;
                 sc.Overscan = v.Overscan;
+                sc.PersistentPrefixCount = v.RowBind is null ? 0 : Math.Clamp(v.PersistentPrefixCount, 0, sc.ItemCount);
+                sc.ItemClipTopInset = v.RowBind is null || !float.IsFinite(v.ItemClipTopInset)
+                    ? float.NaN
+                    : MathF.Max(0f, v.ItemClipTopInset);
                 sc.EdgeCueConfig = ResolveEdgeCues(v.EdgeCues);
                 if (v.OnScrollGeometryChanged is { } obs) _scene.SetScrollObserver(node, obs.Project, obs.Action);
                 else _scene.ClearScrollObserver(node);
@@ -3244,16 +3547,39 @@ public sealed class TreeReconciler
                 paint.TextDecorations = 0;   // span decorations ride the span-run artifact path, not the single-run bits
 
                 ref LayoutInput li = ref _scene.Layout(node);
-                var spans = st.Spans;
+                var bodySpans = st.Spans;
+                var suffixSpans = st.OverflowSuffix;
+                int bodySpanCount = bodySpans.Length;
+                int suffixSpanCount = suffixSpans?.Length ?? 0;
+                TextSpan[] spans;
+                if (suffixSpanCount == 0) spans = bodySpans;
+                else
+                {
+                    spans = new TextSpan[bodySpanCount + suffixSpanCount];
+                    Array.Copy(bodySpans, spans, bodySpanCount);
+                    Array.Copy(suffixSpans!, 0, spans, bodySpanCount, suffixSpanCount);
+                }
+                int overflowSuffixStart = -1;
+                if (suffixSpanCount > 0)
+                {
+                    overflowSuffixStart = 0;
+                    for (int i = 0; i < bodySpanCount; i++) overflowSuffixStart += bodySpans[i].Text?.Length ?? 0;
+                }
                 // Re-register the POD shaping overlay ONLY when a shaping input changed: the run id is the key of the
                 // measure cache AND the renderer's shaped-run cache, so minting a fresh id IS the invalidation; an
                 // identical re-render keeps the id (steady reconciles never churn the caches).
                 int runId = li.TextStyle.SpanRunId;
-                bool same = runId != 0 && _scene.TryGetSpanText(node, out var oldSpans) && SameSpanShaping(oldSpans, spans);
+                bool same = runId != 0
+                    && SpanRunTable.Shared.Resolve(runId)?.OverflowSuffixStart == overflowSuffixStart
+                    && _scene.TryGetSpanText(node, out var oldSpans)
+                    && SameSpanShaping(oldSpans, spans);
                 if (!same)
                 {
                     int total = 0;
-                    for (int i = 0; i < spans.Length; i++) total += spans[i].Text?.Length ?? 0;
+                    for (int i = 0; i < spans.Length; i++)
+                    {
+                        total += spans[i].Text?.Length ?? 0;
+                    }
                     var concat = string.Create(total, spans, static (dst, src) =>
                     {
                         int at = 0;
@@ -3279,7 +3605,7 @@ public sealed class TreeReconciler
                         styles[i] = new SpanStyle(pos, pos + len, sp.Weight, sp.Size ?? 0f, spanFam, sp.Color, flags);
                         pos += len;
                     }
-                    int newRunId = SpanRunTable.Shared.Create(styles);
+                    int newRunId = SpanRunTable.Shared.Create(styles, overflowSuffixStart);
                     SpanRunTable.Shared.AddRef(newRunId);
                     _scene.ReleaseSpanRun(runId);
                     runId = newRunId;

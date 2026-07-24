@@ -231,11 +231,15 @@ public sealed class MediaPlayerElement : Component
         UseEffect(() => { if (autoHideArmed) hideTimer.Restart(); else hideTimer.Cancel(); return (Action?)null; }, autoHideArmed ? 1 : 0);
         void RevealAndRearm() { RevealChrome(); hideTimer.Restart(); }
 
-        Element? statusOverlay = !videoReady && (state is PlaybackState.Opening or PlaybackState.Buffering || playIntent)
-            ? OpeningOverlay(playIntent)
-            : bufferingInfo.IsBuffering || state is PlaybackState.Buffering or PlaybackState.Stalled
-                ? BufferingOverlay(bufferingInfo)
-                : null;
+        // A terminal failure wins over the opening spinner: otherwise a Failed state with a lingering play intent would
+        // keep showing "Starting playback…" forever (the DRM-license-rejected infinite-spinner bug).
+        Element? statusOverlay = state == PlaybackState.Failed
+            ? FailedOverlay(Player.Error.Value?.Message)
+            : !videoReady && (state is PlaybackState.Opening or PlaybackState.Buffering || playIntent)
+                ? OpeningOverlay(playIntent)
+                : bufferingInfo.IsBuffering || state is PlaybackState.Buffering or PlaybackState.Stalled
+                    ? BufferingOverlay(bufferingInfo)
+                    : null;
 
         // Base layer under the (transparent) video hole: while a loading/buffering overlay is up, show a plain dark
         // stage — the poster's play glyph underneath the spinner reads as two competing affordances.
@@ -710,6 +714,21 @@ public sealed class MediaPlayerElement : Component
         };
     }
 
+    // Terminal-failure overlay (e.g. a rejected DRM license): an error glyph + the player's typed error text (or a generic
+    // fallback) INSTEAD of the opening spinner — so a failed video never reads as an eternal "Starting playback…".
+    private static Element FailedOverlay(string? errorMessage) => new BoxEl
+    {
+        Direction = 1, Gap = 10f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+        Padding = new Edges4(18f, 16f, 18f, 16f), Corners = Radii.OverlayAll, MaxWidth = 420f,
+        Fill = Tok.MediaScrim,
+        Children =
+        [
+            new TextEl(Icons.StatusError) { Size = 30f, Color = Tok.OnMediaPrimary, FontFamily = Theme.IconFont },
+            new TextEl(string.IsNullOrWhiteSpace(errorMessage) ? MediaStrings.VideoFailed : errorMessage!)
+            { Size = 13f, Color = Tok.OnMediaSecondary, Wrap = TextWrap.Wrap, MaxWidth = 380f },
+        ],
+    };
+
     private static Element CaptionOverlay(TimedCue cue) => new BoxEl
     {
         AlignSelf = FlexAlign.Center,
@@ -845,6 +864,7 @@ internal static class MediaStrings
     public static string CatchingUp => Loc.Get(Strings.Media.CatchingUp);
     public static string Reconnecting => Loc.Get(Strings.Media.Reconnecting);
     public static string Buffering => Loc.Get(Strings.Media.Buffering);
+    public static string VideoFailed => Loc.Get(Strings.Media.VideoFailed);
 
     public static string CaptionsFor(string? label) => Loc.Format(Strings.Media.CaptionsForKey, ("label", label ?? ""));
     public static string CaptionsIndexed(int n) => Loc.Format(Strings.Media.CaptionsIndexedKey, ("n", n));

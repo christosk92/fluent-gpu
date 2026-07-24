@@ -69,6 +69,12 @@ public readonly record struct ScrollBindDsl
     /// combine with <see cref="BindSink.ClipTop"/>/<see cref="BindSink.ClipBottom"/> binds on the same node.
     /// <see cref="OnFlag"/> observes the clip's engage/release edge (the :stuck analog).</summary>
     public float? ClipTopAtViewport { get; init; }
+    /// <summary>Shared-element morph: translate this retained node from its laid-out position toward a viewport-space
+    /// LEFT coordinate over <see cref="Range"/>. The engine resolves the live arranged source coordinate, including
+    /// scrolling and sticky ancestors. Author X and Y as separate entries when both axes move.</summary>
+    public float? MorphLeftTo { get; init; }
+    /// <summary>Shared-element morph counterpart to <see cref="MorphLeftTo"/> for a viewport-space TOP coordinate.</summary>
+    public float? MorphTopTo { get; init; }
 
     // ── predicate channel hook (the CSS :stuck-style observable) ──
     /// <summary>Fires once per edge flip of the watched flag (UI-thread, never per-frame). For a <see cref="PinTop"/>

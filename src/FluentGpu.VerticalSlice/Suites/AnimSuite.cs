@@ -35,6 +35,13 @@ using static FluentGpu.VerticalSlice.Harness.Asserts;
 
 static class AnimSuite
 {
+    sealed class NeverImageDecoder : IImageDecoder
+    {
+        public bool Begin(int id, string source, int targetW, int targetH,
+                          ImagePriority priority = ImagePriority.Visible) => false;
+        public void Pump(ImageCompleteHandler onComplete, ImageReadyHandler onPixels) { }
+    }
+
     public static void Run(StringTable strings)
     {
         AnimChecks();
@@ -217,6 +224,22 @@ static class AnimSuite
             for (int i = 0; i < 10000; i++) { BlurPinKey.TryCompute(dl.Bytes, st, in pl, out ulong k, out _); last = k; }
             long delta = GC.GetAllocatedBytesForCurrentThread() - before;
             Check("BP.6 BlurPinKey.TryCompute is zero-alloc (10000 calls)", delta == 0 && last != 0, $"delta={delta}B/10000 last={last:X16}");
+        }
+
+        // BP.7 — a live sigma animation may use the region-local fast path, but if that path rejects the layer (for
+        // example because both axes are canvas-sized) it must fall back to an exact TRANSIENT render, never the
+        // stationary pin cache. Otherwise a slowly easing full-page reveal retains one large pin per recurring sigma
+        // bucket. A settled authored blur remains cacheable.
+        {
+            var tAdmission = strings.Intern("admission");
+            var (_, settled) = BlurStripKeyL(strings, 100f, 200f, 4f, 300f, 40f, tAdmission);
+            var transient = settled with { BlurIsTransient = 1 };
+            var zero = settled with { BlurSigma = 0f };
+            Check("BP.7 transient animated blur cannot enter the stationary pin cache",
+                BlurPinKey.CanUseStationaryCache(in settled)
+                && !BlurPinKey.CanUseStationaryCache(in transient)
+                && !BlurPinKey.CanUseStationaryCache(in zero),
+                $"settled={BlurPinKey.CanUseStationaryCache(in settled)} transient={BlurPinKey.CanUseStationaryCache(in transient)} zero={BlurPinKey.CanUseStationaryCache(in zero)}");
         }
 
         // gate.blur.edgeClampedPinCaches (FA-2a edge-clamp fix). A self-blur whose halo-inflated region is clamped by a
@@ -1191,6 +1214,123 @@ static class AnimSuite
                 mountedLive && orphaned && reclaimed, $"settled@{settledAt}");
         }
 
+        // 23e1 — asymmetric presence delay: a shy overlay may wait before entering, but must start dismissing
+        // immediately. ExitDelayMs=0 overrides the entrance DelayMs without changing legacy specs where it is null.
+        {
+            var scene = new SceneStore();
+            var engine = new AnimEngine(scene);
+            var recon = new TreeReconciler(scene, strings) { Anim = engine };
+            var presence = new LayoutTransition(
+                TransitionChannels.Opacity,
+                TransitionDynamics.Tween(160f, Easing.Linear),
+                Enter: new EnterExit(Opacity: 0f, Active: true),
+                Exit: new EnterExit(Opacity: 0f, Active: true),
+                DelayMs: 240f,
+                ExitDelayMs: 0f);
+            Element Tree(bool present) => new BoxEl
+            {
+                Width = 100, Height = 100,
+                Children = present ? [new BoxEl { Key = "shy", Width = 50, Height = 20, Animate = presence }] : [],
+            };
+            var old = Tree(true);
+            recon.ReconcileRoot(old, null);
+            new FlexLayout(scene, new HeadlessFontSystem(strings)).Run(scene.Root);
+            var child = Child(scene, scene.Root, 0);
+            recon.ReconcileRoot(Tree(false), old);
+            engine.Tick(16f); engine.Tick(32f);
+            float opacity = scene.Paint(child).Opacity;
+            Check("23e1. ExitDelayMs overrides a delayed entrance so a shy overlay dismisses immediately",
+                scene.IsOrphan(child) && opacity < 0.99f, $"orphan={scene.IsOrphan(child)} opacity={opacity:0.00}");
+        }
+
+        // 23e1b — a local shared-layout fly carries the effective ancestor crop into its overlay, interpolates the clip
+        // with the same curve, and reverses from the currently presented crop. Reapplying an unchanged tag cull is clean.
+        {
+            var scene = new SceneStore();
+            var engine = new AnimEngine(scene);
+            var images = new ImageCache(new NeverImageDecoder());
+            var connected = new ConnectedAnimation(scene, engine, images);
+            var image = images.Request("clip-flight", 100, 100);
+
+            scene.Root = scene.CreateNode(1);
+            scene.Bounds(scene.Root) = new RectF(0f, 0f, 640f, 480f);
+            var clip = scene.CreateNode(1);
+            var source = scene.CreateNode(8);
+            var dest = scene.CreateNode(8);
+            scene.AppendChild(scene.Root, clip);
+            scene.AppendChild(clip, source);
+            scene.AppendChild(scene.Root, dest);
+            scene.Bounds(clip) = new RectF(20f, 20f, 200f, 200f);
+            scene.Paint(clip).PresentedH = 80f;
+            scene.Flags(clip) |= NodeFlags.Visible | NodeFlags.ClipsToBounds;
+            scene.Bounds(source) = new RectF(0f, 20f, 100f, 100f);
+            scene.Flags(source) |= NodeFlags.Visible;
+            scene.Paint(source).VisualKind = VisualKind.Image;
+            scene.Paint(source).ImageId = image.Id;
+            scene.Bounds(dest) = new RectF(300f, 30f, 36f, 36f);
+            scene.Flags(dest) |= NodeFlags.Visible;
+            scene.Paint(dest).VisualKind = VisualKind.Image;
+            scene.Paint(dest).ImageId = image.Id;
+
+            const string key = "local-cover";
+            connected.NoteTagged(source, key);
+            connected.NoteTagged(dest, key);
+            var request = new ConnectedTransitionRequest(
+                key,
+                ConnectedMotion.Eased(EasingSpec.CubicBezier(0.8f, 0f, 0.2f, 1f), 480f),
+                PreserveSourceOpacity: true,
+                EnableClipAnimation: true);
+            connected.Begin(request);
+            connected.Tick65();
+
+            var overlay = scene.OverlayAt(0);
+            RectF startClip = scene.Paint(overlay).ClipRect;
+            bool sourceCropCaptured = scene.OverlayCount == 1
+                && Near(startClip.X, 0f, 0.05f)
+                && Near(startClip.Y, 0f, 0.05f)
+                && Near(startClip.W, 36f, 0.05f)
+                && Near(startClip.H, 21.6f, 0.15f);
+
+            engine.Tick(0f);
+            engine.Tick(160f);
+            RectF midClip = scene.Paint(overlay).ClipRect;
+            bool clipInterpolates = midClip.H > startClip.H && midClip.H < 36f;
+
+            static RectF PresentedClip(SceneStore s, NodeHandle node)
+            {
+                ref RectF b = ref s.Bounds(node);
+                ref NodePaint p = ref s.Paint(node);
+                float w = b.W * p.LocalTransform.M11, h = b.H * p.LocalTransform.M22;
+                float x = b.X + (b.W - w) * 0.5f + p.LocalTransform.Dx;
+                float y = b.Y + (b.H - h) * 0.5f + p.LocalTransform.Dy;
+                RectF full = new(x, y, w, h);
+                if (p.ClipRect.IsInfinite) return full;
+                return new RectF(
+                    x + p.ClipRect.X * p.LocalTransform.M11,
+                    y + p.ClipRect.Y * p.LocalTransform.M22,
+                    p.ClipRect.W * p.LocalTransform.M11,
+                    p.ClipRect.H * p.LocalTransform.M22);
+            }
+
+            RectF beforeReverse = PresentedClip(scene, overlay);
+            connected.Begin(request);
+            connected.Tick65();
+            var reverseOverlay = scene.OverlayAt(0);
+            RectF afterReverse = PresentedClip(scene, reverseOverlay);
+            bool reverseContinuous = Near(beforeReverse.X, afterReverse.X, 0.25f)
+                && Near(beforeReverse.Y, afterReverse.Y, 0.25f)
+                && Near(beforeReverse.W, afterReverse.W, 0.25f)
+                && Near(beforeReverse.H, afterReverse.H, 0.25f);
+
+            scene.ClearRecordDirty();
+            connected.Tick65();
+            bool stableCullIsClean = !scene.AnyRecordDirty;
+
+            Check("23e1b. connected clip captures ancestor crop, interpolates, reverses continuously, and equality-gates tag culls",
+                sourceCropCaptured && clipInterpolates && reverseContinuous && stableCullIsClean,
+                $"start={startClip} mid={midClip} before={beforeReverse} after={afterReverse} clean={stableCullIsClean}");
+        }
+
         // 23e2: an exit inside a rounded flyout + rectangular scroller must replay at its former parent, not in the
         // global un-clipped band. Outgoing paints first (behind the incoming row), under both active ancestor clips.
         // Hard-removing the containing surface then cascade-reclaims the still-running exit.
@@ -1544,10 +1684,15 @@ static class AnimSuite
             ScrollTo(520f);
             float clampedY = s.AbsoluteRect(headerN).Y;
             bool stillPinned = (s.Flags(headerN) & NodeFlags.StickyPinned) != 0;
+            // Reconcile/layout may restore the element's literal transform before the next pin pass while the retained
+            // StickyPinned bit still describes the previous frame. Release must derive from current geometry, not from
+            // whether ApplyPin also had to change LocalTransform.Dy.
+            s.Paint(headerN).LocalTransform = Affine2D.Identity;
+            s.Mark(headerN, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
             ScrollTo(0f);     // released, back at its natural slot
             bool releasedFlag = (s.Flags(headerN) & NodeFlags.StickyPinned) == 0;
             float releasedY = s.AbsoluteRect(headerN).Y;
-            Check("23u. position:sticky — pins at viewport top, clamps at the card's end, releases, OnPinned fires per transition",
+            Check("23u. position:sticky — pins at viewport top, clamps at the card's end, releases even when reconcile already restored identity, OnPinned fires per transition",
                 pinnedNow && Near(pinnedY, vpTop, 0.5f)
                 && stillPinned && Near(clampedY, vpTop - 20f, 0.5f)
                 && releasedFlag && Near(releasedY, restY, 0.5f)
@@ -1631,6 +1776,18 @@ static class AnimSuite
                 restReleased && Near(clipA, 150f, 0.5f) && Near(clipB - clipA, 1f, 0.1f)
                 && releasedMid && clipEvents == 2 && !lastClip,
                 $"rest={restReleased} clipA={clipA:0.#} clipB={clipB:0.#} releasedMid={releasedMid} clipEvents={clipEvents} lastClip={lastClip}");
+
+            // Fully-hidden freeze: once the sticky line is past the body bottom, ClipRect.Y locks at Bounds.H so
+            // further offset advances do not keep rewriting / dirtying the node (playlist overscan hitch).
+            ScrollTo(600f);   // line at 640 → body-local top = 500 ≥ body H 400
+            float frozenA = s.Paint(bodyN).ClipRect.Y;
+            s.Unmark(bodyN, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+            ScrollTo(620f);
+            float frozenB = s.Paint(bodyN).ClipRect.Y;
+            bool stayedClean = (s.Flags(bodyN) & (NodeFlags.TransformDirty | NodeFlags.PaintDirty)) == 0;
+            Check("23u3b. sticky clip-top fully-hidden freezes ClipRect.Y at Bounds.H — further offset does not re-Mark",
+                Near(frozenA, 400f, 0.5f) && Near(frozenB, frozenA, 0.01f) && stayedClean,
+                $"frozenA={frozenA:0.#} frozenB={frozenB:0.#} stayedClean={stayedClean}");
         }
 
         // 23u2 — trailing-anchored presented height: a pinned hero collapses without relayout, its bottom-authored
@@ -1800,6 +1957,58 @@ static class AnimSuite
             Check("virtual-collection: paged data-windowing — total from page 0, fill, dedup, seed, 0-alloc hot path",
                 before && firstPage && deduped && windowed && hot == 0 && seedFree,
                 $"count={vc.Count} fetches={fetches} hotAlloc={hot} seedFetches={seedFetches} sum={sum}");
+        }
+
+        // lazy-grid paging runs passively: a cache-backed page can complete synchronously and bump Version. Dispatching
+        // that request from Render would write the very signal the count delegate just read (a backwards-write loop).
+        {
+            bool prevEnabled = BackwardsWriteGuard.Enabled, prevThrow = BackwardsWriteGuard.ThrowOnViolation;
+            BackwardsWriteGuard.Enabled = BackwardsWriteGuard.CompiledIn;
+            BackwardsWriteGuard.ThrowOnViolation = false;
+            BackwardsWriteGuard.Reset();
+            try
+            {
+                var data = new int[120];
+                for (int i = 0; i < data.Length; i++) data[i] = i;
+                int fetches = 0;
+                var vc = new VirtualCollection<int>((off, cnt, ct) =>
+                {
+                    fetches++;
+                    return new ValueTask<PageResult<int>>(
+                        new PageResult<int>(data.Length, data.AsMemory(off, Math.Min(cnt, data.Length - off))));
+                }, pageSize: 30);
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("lazy-grid-passive-page", new Size2(640, 480), 1f));
+                window.Show();
+                var root = new W0fStaticProbe
+                {
+                    Build = () => new BoxEl
+                    {
+                        Width = 620f,
+                        Children =
+                        [
+                            Embed.Comp(() => new LazyGrid(
+                                count: () => { _ = vc.Version.Value; return vc.CountOr0; },
+                                cell: (i, _) => new BoxEl { Height = 40f },
+                                ensureRange: (first, lastExclusive) => vc.EnsureRange(first, lastExclusive - 1),
+                                minColWidth: 180f, rowExtra: 40f, overscanRows: 2)),
+                        ],
+                    },
+                };
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, root);
+                host.RunFrame();
+                host.RunFrame();
+                host.RunFrame();
+
+                Check("lazy-grid.passive-page: synchronous paging runs after Render and trips no backwards-write",
+                    vc.Count == data.Length && fetches >= 1 && BackwardsWriteGuard.Violations == 0,
+                    $"count={vc.Count} fetches={fetches} backWrites={BackwardsWriteGuard.Violations} [{BackwardsWriteGuard.LastViolation}]");
+            }
+            finally
+            {
+                BackwardsWriteGuard.Enabled = prevEnabled;
+                BackwardsWriteGuard.ThrowOnViolation = prevThrow;
+            }
         }
 
         // lazy-grid windowing math — the in-page virtualized grid: a scroll band → the visible row range + spacer heights

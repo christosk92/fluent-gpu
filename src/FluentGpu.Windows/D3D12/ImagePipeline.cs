@@ -24,7 +24,7 @@ internal struct ImageInstance
     public float ClipR, Pad0, Pad1, Pad2;       // 112; ClipW <= 0 = none
     public float OverlayR, OverlayG, OverlayB, OverlayA;
     public float MaskLeft, MaskTop, MaskRight, MaskBottom;
-    public float MaskEdges, MaskFalloff, MaskIntensity, Pad3;
+    public float MaskEdges, MaskFalloff, MaskIntensity, Saturation;
 }
 
 /// <summary>
@@ -57,7 +57,7 @@ StructuredBuffer<Inst> gInst : register(t1);
 Texture2D gTex : register(t0);
 SamplerState gSamp : register(s0);
 cbuffer Root : register(b0) { float2 gViewport; };
-struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; float2 local : TEXCOORD1; float2 halfSize : TEXCOORD2; float4 radii : TEXCOORD3; float opacity : TEXCOORD4; float crossFade : TEXCOORD5; float4 ph : TEXCOORD6; float4 atlasUv : TEXCOORD7; float4 clip : TEXCOORD8; float clipR : TEXCOORD9; float2 world : TEXCOORD10; float4 overlay : TEXCOORD11; float4 maskBands : TEXCOORD12; float3 maskParams : TEXCOORD13; };
+struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; float2 local : TEXCOORD1; float2 halfSize : TEXCOORD2; float4 radii : TEXCOORD3; float opacity : TEXCOORD4; float crossFade : TEXCOORD5; float4 ph : TEXCOORD6; float4 atlasUv : TEXCOORD7; float4 clip : TEXCOORD8; float clipR : TEXCOORD9; float2 world : TEXCOORD10; float4 overlay : TEXCOORD11; float4 maskBands : TEXCOORD12; float4 maskParams : TEXCOORD13; };
 
 VSOut VSMain(float2 corner : POSITION, uint iid : SV_InstanceID)
 {
@@ -80,7 +80,7 @@ VSOut VSMain(float2 corner : POSITION, uint iid : SV_InstanceID)
     o.world = world;
     o.overlay = it.overlay;
     o.maskBands = it.maskBands;
-    o.maskParams = it.maskParams.xyz;
+    o.maskParams = it.maskParams;   // .w carries Saturation (repurposed padding slot, see ImageInstance)
     return o;
 }
 
@@ -100,6 +100,11 @@ float4 PSMain(VSOut i) : SV_Target
     float4 ov = float4(i.overlay.rgb * i.overlay.a, i.overlay.a);
     img = ov + img * (1.0 - i.overlay.a);
     col = lerp(i.ph, img, saturate(i.crossFade));
+    // Saturation multiply on the premultiplied color is equivalent to unpremultiply->adjust->repremultiply here:
+    // premultiplication is a uniform per-channel scale by alpha, and lerp(gray, col, s) is linear in col, so the
+    // scale commutes through — luminance(alpha*rgb) == alpha*luminance(rgb) already gives the correctly-scaled gray.
+    float pgray = dot(col.rgb, float3(0.2126, 0.7152, 0.0722));
+    col.rgb = lerp(pgray.xxx, col.rgb, i.maskParams.w);
     float2 s = sign(i.local);
     float r = (s.x < 0.0) ? (s.y < 0.0 ? i.radii.x : i.radii.w) : (s.y < 0.0 ? i.radii.y : i.radii.z);
     float2 q = abs(i.local) - (i.halfSize - r);

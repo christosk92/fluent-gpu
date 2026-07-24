@@ -11,16 +11,27 @@ namespace Wavee;
 
 // The floating "shy" artist pill — revealed once the hero scrolls past the viewport top (the sticky sentinel in the page
 // body flips `pinned`). Kept SMALL (avatar + name + monthly listeners + Play + Follow) and rendered through a pass-through
-// overlay so it never blocks scrolling. Its own component so a pin toggle re-renders only this, not the whole page.
-sealed class ArtistShyPill : Component
+// overlay so it never blocks scrolling.
+//
+// Reverted from a self-pinning ScrollBinds rewrite: moving the pill inline as a second PinTop=0 sibling of the hero
+// caused a worse regression (the hero's own collapse got stuck, plus a broken empty card) that couldn't be fixed
+// blind without live visual iteration. Back to the page-level-overlay + sentinel/Signal bridge — the last confirmed
+// working positioning — but keeping the fixes that don't depend on positioning:
+//
+// Re-pushed live props (the WaveeEqualizerCurve/G4 idiom), NOT a routeKey-keyed Embed.Comp(factory): a keyed remount
+// on every artist→artist hop would unmount the outgoing instance mid-exit-animation while a fresh one mounts at the
+// same overlay slot, so both could render simultaneously for a frame span. One stable component instance across the
+// page's lifetime; Uri/Artist updates flow through Props instead of a remount, so there is never more than one pill.
+static class ArtistShyPill
 {
-    readonly string _uri;
-    readonly Loadable<Artist> _artist;
-    readonly Signal<bool> _pinned;
-    readonly Services _svc;
-    public ArtistShyPill(string uri, Loadable<Artist> artist, Signal<bool> pinned, Services svc)
-    { _uri = uri; _artist = artist; _pinned = pinned; _svc = svc; }
+    internal sealed record Props(string Uri, Loadable<Artist> Artist, Services Svc, Signal<bool> Pinned);
 
+    public static Element Create(string uri, Loadable<Artist> artist, Services svc, Signal<bool> pinned)
+        => Embed.Comp(new Props(uri, artist, svc, pinned), () => new ArtistShyPillCore());
+}
+
+sealed class ArtistShyPillCore : Component
+{
     static readonly LayoutTransition Presence = new(
         TransitionChannels.Opacity,
         TransitionDynamics.Tween(280f, Easing.SmoothOut),
@@ -30,36 +41,30 @@ sealed class ArtistShyPill : Component
 
     public override Element Render()
     {
+        var p = UsePropsOrDefault<ArtistShyPill.Props>();
+        if (p is null) return new BoxEl();
         // Gate on Ready, not just pinned: the pill is a scrolled-past-hero affordance, so showing its real avatar +
         // monthly-listeners over the page's loading skeleton both leaks real data early and floats a solid card on top
-        // of the shimmer grid (the "overlapping components" artifact). While Pending/Failed it stays hidden; on Ready,
-        // if still scrolled past the hero, it animates in. KeepAlive owns page visibility and detaches this entire
-        // subtree synchronously on navigation; page deactivation must not be converted into a local animated exit.
+        // of the shimmer grid. While Pending/Failed it stays hidden; on Ready, if still scrolled past the hero, it
+        // animates in. KeepAlive owns page visibility and detaches this entire subtree synchronously on navigation;
+        // page deactivation must not be converted into a local animated exit.
         return Flow.Show(
-            () => _pinned.Value && _artist.State.Value == (byte)LoadState.Ready,
+            () => p.Pinned.Value && p.Artist.State.Value == (byte)LoadState.Ready,
             new BoxEl
             {
                 Animate = Presence,
                 TransformOriginX = 0.5f,
                 TransformOriginY = 0f,
-                Children = [Embed.Comp(() => new ArtistShyPillSurface(_uri, _artist, _svc))],
+                // A plain static builder, not a nested component with its own frozen constructor closure — reading
+                // p.Artist.Value.Value here (inside this reactive Render()) means live artist-data updates (e.g. async
+                // stats hydration) still reach the card with no remount, the same reactivity the original Loadable-based
+                // design relied on, without needing a per-uri Key to avoid staleness.
+                Children = [Surface(p.Uri, p.Artist.Value.Value, p.Svc)],
             });
     }
-}
 
-// The live pill content is a child component so the reactive presence boundary can remain stable while artist data
-// updates. The animated wrapper above owns insertion/removal; this component only renders the actual interactive card.
-sealed class ArtistShyPillSurface : Component
-{
-    readonly string _uri;
-    readonly Loadable<Artist> _artist;
-    readonly Services _svc;
-    public ArtistShyPillSurface(string uri, Loadable<Artist> artist, Services svc)
-    { _uri = uri; _artist = artist; _svc = svc; }
-
-    public override Element Render()
+    static Element Surface(string uri, Artist a, Services svc)
     {
-        var a = _artist.Value.Value;                     // Loadable.Value is a Signal<Artist>; read its value
         // Match the page's cover-extracted accent (lifted) so the floating pill isn't default-blue over an accented page.
         ColorF accent = a.Palette is { } pal ? WaveePalette.Lift(WaveePalette.Accent(pal)) : Tok.AccentDefault;
         return new BoxEl
@@ -83,10 +88,10 @@ sealed class ArtistShyPillSurface : Component
                     Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
                     Corners = CornerRadius4.All(18f), Padding = new Edges4(16f, 8f, 16f, 8f),
                     Fill = accent, HoverScale = 1.04f, PressScale = 0.97f,
-                    OnClick = () => _ = _svc.Player.PlayAsync(_uri, 0),
+                    OnClick = () => _ = svc.Player.PlayAsync(uri, 0),
                     Children = [ Icon(Icons.Play, 14f, ColorContrast.PickContrast(accent)), new TextEl(Loc.Get(Strings.Artist.Play)) { Size = 13f, Weight = 700, Color = ColorContrast.PickContrast(accent) } ],
                 },
-                Embed.Comp(() => new FollowButton(_uri, a.Name)),
+                Embed.Comp(() => new FollowButton(uri, a.Name)) with { Key = "artist-pill-follow:" + uri },
             ],
         };
     }

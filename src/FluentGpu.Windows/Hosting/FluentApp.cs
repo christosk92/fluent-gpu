@@ -91,6 +91,18 @@ public static class FluentApp
         if (Array.IndexOf(Environment.GetCommandLineArgs(), "--audio-host") >= 0)
             throw new InvalidOperationException("FluentApp.Run must not be reached in --audio-host child mode.");
 
+#if DEBUG || FLUENTGPU_DIAG
+        // Diagnostic A/B only: remove the DWM-Mica / premultiplied-composition path as ONE variable. This creates the
+        // ordinary opaque HWND flip-model swapchain, letting PresentMon tell us whether DWM composition is the cadence
+        // bottleneck on the current build. The entire override (including the environment lookup) is absent from a normal
+        // Release build; it is not a product backdrop decision.
+        if (Diag.EnvFlag("FG_OPAQUE_WINDOW"))
+        {
+            o = o with { Mica = false };
+            Console.Error.WriteLine("[window] FG_OPAQUE_WINDOW=1 — DWM Mica disabled; using opaque HWND swapchain");
+        }
+#endif
+
         bool consoleDiagnostics = Diag.EnvFlag("FG_DIAG") || Diag.EnvFlag("FG_DIAG_CONSOLE");
         if (consoleDiagnostics)
         {
@@ -177,29 +189,113 @@ public static class FluentApp
         if (DiagnosticRun is { } diag && diag(host, window, device)) { WindowHandle = 0; return; }
 
         bool fpsLog = Diag.EnvFlag("FG_FPS_LOG");   // periodic [fps] readout to stderr (frame-rate / frame-ms diagnosis)
+        bool scrollPerf = Diag.EnvFlag("FG_SCROLL_PERF");
         int n = 0;
-        // Render-side pacing signal (async): FrameMs times only the UI thread, which under async EXCLUDES submit/present/
-        // the GPU fence-wait (off-thread). So also report the render thread's ACTUAL present cadence (PresentAck delta /
-        // wall-time = real on-screen fps) + its last GPU fence-wait. present << ui-fps ⇒ GPU-bound (the real bottleneck).
-        ulong lastPresentSeq = host.RenderPresentSeq;
-        long lastPresentTick = System.Diagnostics.Stopwatch.GetTimestamp();
+        // FrameMs/Fps time the UI loop. PresentFps comes from the host's successful-swapchain-present counter in every
+        // submit mode, so async coalescing and inline mode are both represented truthfully.
+        // Present-path diagnosis (maximize → 60fps): watch the swapchain size + window state so a resize emits a one-shot
+        // [fps resize] marker (WxH, scale, state, panel Hz, wait-kind), and every [fps] line carries the wait-kind/ms the
+        // loop paced by (Ambient = software 60 cap; DisplayRate/Pace = panel rate → a lock is downstream in Present/GPU).
+        float lastLoggedW = -1f, lastLoggedH = -1f;
+        int cachedHz = fpsLog ? window.CurrentRefreshHz() : 0;
+        int spikeCluster = 0;
+        bool prevSpike = false;
+        long scrollPerfWindowStart = scrollPerf ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
+        int spFrames = 0, spClipE = 0, spClipD = 0, spFullHide = 0, spPinD = 0, spMorphD = 0, spContD = 0, spBindsMax = 0;
+        static string WaitTok(FluentGpu.Hosting.HostWaitKind k) => k switch
+        {
+            FluentGpu.Hosting.HostWaitKind.Idle => "idle",
+            FluentGpu.Hosting.HostWaitKind.Hud => "hud",
+            FluentGpu.Hosting.HostWaitKind.Baked => "baked",
+            FluentGpu.Hosting.HostWaitKind.Ambient => "ambient",
+            FluentGpu.Hosting.HostWaitKind.PaceSkipSubmit => "pace-skip",
+            FluentGpu.Hosting.HostWaitKind.PaceAsync => "pace-async",
+            FluentGpu.Hosting.HostWaitKind.DisplayRate => "display",
+            _ => "?",
+        };
         while (!window.IsClosed)
         {
             host.RunFrame();
+            host.TickDetachedHosts();   // pop-out video windows: one frame each on this same UI+render thread
             n++;
-            if (fpsLog)
+            if (fpsLog || scrollPerf)
             {
                 var s = host.LastStats;
                 double gpuMs = host.LastGpuFenceWaitMs;
-                bool spike = s.FrameMs > 11.0 || gpuMs > 11.0;   // UI-thread OR render-thread GPU stall over the ~90Hz line
-                if (spike || n % 30 == 0)
+                var szpx = window.ClientSizePx;
+                if (fpsLog && (szpx.Width != lastLoggedW || szpx.Height != lastLoggedH))
                 {
-                    ulong curSeq = host.RenderPresentSeq;
-                    long nowT = System.Diagnostics.Stopwatch.GetTimestamp();
-                    double presentFps = curSeq > lastPresentSeq && nowT > lastPresentTick
-                        ? (curSeq - lastPresentSeq) * (double)System.Diagnostics.Stopwatch.Frequency / (nowT - lastPresentTick) : 0;
-                    lastPresentSeq = curSeq; lastPresentTick = nowT;
-                    Console.Error.WriteLine($"[fps]{(spike ? " SPIKE" : "")} ui {s.Fps:0}fps {s.FrameMs:0.0}ms (flush{s.FlushMs:0.0} layout{s.LayoutMs:0.0} anim{s.AnimMs:0.0} record{s.RecordMs:0.0} submit{s.SubmitMs:0.0}) | present {presentFps:0}fps gpu {gpuMs:0.0}ms (f{n})");
+                    lastLoggedW = szpx.Width; lastLoggedH = szpx.Height;
+                    cachedHz = window.CurrentRefreshHz();   // once per size change, not per frame
+                    Console.Error.WriteLine($"[fps resize] {szpx.Width}x{szpx.Height} scale {window.Scale:0.##} state {window.State} panel {cachedHz}Hz wait {WaitTok(host.LastWaitKind)}{host.LastWaitMs} (f{n})");
+                }
+                bool workSpike = (s.FlushMs + s.LayoutMs + s.RecordMs) > 11.0;
+                // gpuMs (LastGpuFenceWaitMs) goes stale when submits are elided (skip-submit / pace-skip), so gate the
+                // render-side spike on the frame actually presenting; scale the threshold with refresh so ordinary
+                // vsync-pacing waits at 120Hz (~8.33ms → 12.5ms trip) aren't flagged, staying 11ms at 60Hz.
+                double vsyncMs = cachedHz > 0 ? 1000.0 / cachedHz : 8.33;
+                double gpuThreshold = Math.Max(11.0, vsyncMs * 1.5);
+                bool spike = workSpike || (s.Presented && gpuMs > gpuThreshold);   // UI work OR a real render-thread GPU stall on a presented frame
+                if (spike)
+                {
+                    spikeCluster = prevSpike ? spikeCluster + 1 : 1;
+                    prevSpike = true;
+                }
+                else
+                {
+                    spikeCluster = 0;
+                    prevSpike = false;
+                }
+                if (scrollPerf && (s.StickyClipEvals | s.StickyClipDirties | s.PinDirties | s.MorphDirties | s.ContinuousDirties) != 0)
+                {
+                    spFrames++;
+                    spClipE += s.StickyClipEvals;
+                    spClipD += s.StickyClipDirties;
+                    spFullHide += s.StickyClipFullyHidden;
+                    spPinD += s.PinDirties;
+                    spMorphD += s.MorphDirties;
+                    spContD += s.ContinuousDirties;
+                    if (s.ScrollBindCount > spBindsMax) spBindsMax = s.ScrollBindCount;
+                }
+                if (scrollPerf)
+                {
+                    double spSec = (System.Diagnostics.Stopwatch.GetTimestamp() - scrollPerfWindowStart)
+                        / (double)System.Diagnostics.Stopwatch.Frequency;
+                    if (spSec >= 1.0)
+                    {
+                        if (spFrames > 0)
+                        {
+                            Console.Error.WriteLine(
+                                $"[scrollperf] frames={spFrames} clipE={spClipE} clipD={spClipD} fullHide={spFullHide} " +
+                                $"pinD={spPinD} morphD={spMorphD} contD={spContD} bindsMax={spBindsMax}");
+                        }
+                        spFrames = spClipE = spClipD = spFullHide = spPinD = spMorphD = spContD = spBindsMax = 0;
+                        scrollPerfWindowStart = System.Diagnostics.Stopwatch.GetTimestamp();
+                    }
+                }
+                if (fpsLog && (spike || n % 30 == 0))
+                {
+                    double gpuRenderMs = s.GpuRenderMs;   // FG_GPU_TIMING: true raster ms (0 when off) — disambiguates the fence wait
+                    // grender X(scene Y: rect R img I glyph G comp C) — the per-category scene split (all 0 unless FG_GPU_TIMING).
+                    string gpuRenderTok = gpuRenderMs > 0.0
+                        ? $" grender {gpuRenderMs:0.0}ms(scene {s.GpuSceneMs:0.0}: rect {s.GpuFillMs:0.0} img {s.GpuImageMs:0.0} glyph {s.GpuGlyphMs:0.0} comp {s.GpuCompositeMs:0.0})"
+                        : "";
+                    string clusterTok = spike && spikeCluster > 0 ? $" cluster={spikeCluster}" : "";
+                    string hitchTok =
+                        $" | hitch comps={s.ComponentsRendered} nodes={s.NodesVisited}/{s.DrawNodeCount} " +
+                        $"pump={s.ImagePumpMs:0.0}ms apply={s.ImageApplyCount}/{s.ImageApplyBytes / 1024}KB realize={s.RealizeCatchupMs:0.0}ms " +
+                        $"escapes={s.RootRelayoutEscapes} spans={s.SpansReused}/{s.SpansRebased}/{s.SpansReRecorded} " +
+                        $"reasons=0x{((uint)s.SpanReuseDisabledReasons):X} gc0=+{s.Gc0Delta} gc1=+{s.Gc1Delta} gc2=+{s.Gc2Delta}";
+                    string scrollTok = scrollPerf
+                        ? $" | scroll clipE={s.StickyClipEvals} clipD={s.StickyClipDirties} fullHide={s.StickyClipFullyHidden} " +
+                          $"pinD={s.PinDirties} morphD={s.MorphDirties} contD={s.ContinuousDirties} binds={s.ScrollBindCount}"
+                        : "";
+                    Console.Error.WriteLine(
+                        $"[fps]{(spike ? " SPIKE" : "")}{clusterTok} loop {s.Fps:0}fps {s.FrameMs:0.0}ms " +
+                        $"(flush{s.FlushMs:0.0} rx{s.ReactiveFlushMs:0.0}/vr{s.VirtualRealizeMs:0.0} layout{s.LayoutMs:0.0} " +
+                        $"anim{s.AnimMs:0.0} record{s.RecordMs:0.0} submit{s.SubmitMs:0.0}) | present {s.PresentFps:0}fps seq={s.PresentedSequence} " +
+                        $"gpu {gpuMs:0.0}ms{gpuRenderTok} | wait {WaitTok(host.LastWaitKind)}{host.LastWaitMs} " +
+                        $"{szpx.Width}x{szpx.Height}@{cachedHz}Hz (f{n}){hitchTok}{scrollTok}");
                 }
             }
             if (h.Frames > 0 && n >= h.Frames) break;
@@ -208,8 +304,9 @@ public static class FluentApp
             else
                 // Low-rate wake pacing: idle/minimized block until a message (0% CPU); a HUD-only readout throttles to
                 // ~10 Hz; real animation/scroll/decode paces at the display rate. WaitForWork returns early on input,
-                // so responsiveness is identical at every timeout. (See AppHost.RecommendedWaitMs.)
-                window.WaitForWork(host.RecommendedWaitMs());
+                // so responsiveness is identical at every timeout. (See AppHost.RecommendedWaitMs.) Folded across any
+                // detached video windows, so a playing pop-out keeps the loop live even while the main window is idle.
+                window.WaitForWork(host.WaitMsWithDetached());
         }
 
         if (allocTypes) AllocTypeProfiler.Stop();   // tear down the EventListener (no leak past the run)
@@ -217,7 +314,7 @@ public static class FluentApp
         // --screenshot: read the last-rendered back buffer back to CPU and write a PNG for visual fidelity diffing.
         if (h.Screenshot is { } shotPath && device is D3D12Device d3d)
         {
-            host.QuiesceRenderThread();   // async (FG_RENDER_ASYNC): stop the render thread so CaptureBgra (a UI-thread GPU op) is the sole GPU owner
+            host.QuiesceRenderThread();   // async (the default): stop the render thread so CaptureBgra (a UI-thread GPU op) is the sole GPU owner
             var px = d3d.CaptureBgra(out int cw, out int ch);
             PngWriter.WriteBgra(shotPath, px, cw, ch);
             Console.Error.WriteLine($"screenshot: wrote {shotPath} ({cw}x{ch})");

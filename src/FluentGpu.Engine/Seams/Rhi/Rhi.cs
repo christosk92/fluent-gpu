@@ -39,6 +39,13 @@ public interface IGpuDevice : IDisposable
     /// while the primary swapchain is composited).</summary>
     FluentGpu.Pal.IVideoPresenter? VideoPresenter => null;
 
+    /// <summary>The composited-video presenter bound to a SPECIFIC swapchain's DirectComposition root — the per-window
+    /// form of <see cref="VideoPresenter"/> (which targets the primary swapchain). A detached/secondary video window
+    /// passes its own swapchain here so its video child visuals attach under ITS DComp root, not the primary's. Returns
+    /// <see langword="null"/> when the target is not composited / the backend cannot composite video. Default routes to
+    /// the primary <see cref="VideoPresenter"/> so single-window backends are unaffected.</summary>
+    FluentGpu.Pal.IVideoPresenter? GetVideoPresenter(ISwapchain swapchain) => VideoPresenter;
+
     /// <summary>Record + batch + submit the per-frame DrawList. <paramref name="drawList"/> is the POD command stream.</summary>
     void SubmitDrawList(ReadOnlySpan<byte> drawList, ReadOnlySpan<ulong> sortKeys, in FrameInfo ctx);
 
@@ -100,6 +107,33 @@ public interface IGpuDevice : IDisposable
     /// thread). The host folds it into <c>FrameStats.FenceWaitMs</c>. Default 0 for backends that don't block on a GPU fence
     /// (headless), so it reads as "no stall" rather than missing.</summary>
     double LastFenceWaitMs => 0;
+
+    /// <summary>Diagnostic (FG_GPU_TIMING=1): the TRUE on-GPU wall-time (ms) of the most recent submitted frame, measured
+    /// by a begin/end timestamp-query pair bracketing the whole command list (resolved one frame later, so it lags by one
+    /// frame). Unlike <see cref="LastFenceWaitMs"/> — which conflates raster with the vblank/present-latency wait — this is
+    /// the actual rasterization cost, the number that says whether a maximized 60fps lock is GPU-fill-bound (render ≳ the
+    /// refresh budget) or merely vblank-quantized (render &lt; budget but the fence stalls). 0 when timing is off or
+    /// unsupported. The host folds it into <c>FrameStats.GpuRenderMs</c>.</summary>
+    double LastGpuRenderMs => 0;
+
+    /// <summary>Diagnostic (FG_GPU_TIMING=1): of <see cref="LastGpuRenderMs"/>, the SCENE-RASTER portion (clear + draw-list
+    /// playback + layer composites), excluding image uploads and baked-blur. When this ≈ the whole and ≳ the refresh budget,
+    /// the maximize lock is content fill/overdraw (not uploads/blur). 0 when off. Host folds into <c>FrameStats.GpuSceneMs</c>.</summary>
+    double LastGpuSceneMs => 0;
+
+    /// <summary>Diagnostic (FG_GPU_TIMING=1): of <see cref="LastGpuSceneMs"/>, the rect/solid-FILL portion (all opaque/blended
+    /// primitive fills — rects, shadows, arcs, polylines, gradients). Isolates overdraw fill cost from image/text/composite.
+    /// 0 when off/unsupported. Host folds into <c>FrameStats.GpuFillMs</c>.</summary>
+    double LastGpuFillMs => 0;
+
+    /// <summary>Diagnostic (FG_GPU_TIMING=1): of <see cref="LastGpuSceneMs"/>, the IMAGE-draw portion. 0 when off. Folds into <c>FrameStats.GpuImageMs</c>.</summary>
+    double LastGpuImageMs => 0;
+
+    /// <summary>Diagnostic (FG_GPU_TIMING=1): of <see cref="LastGpuSceneMs"/>, the GLYPH/text portion. 0 when off. Folds into <c>FrameStats.GpuGlyphMs</c>.</summary>
+    double LastGpuGlyphMs => 0;
+
+    /// <summary>Diagnostic (FG_GPU_TIMING=1): of <see cref="LastGpuSceneMs"/>, the layer/acrylic COMPOSITE portion. 0 when off. Folds into <c>FrameStats.GpuCompositeMs</c>.</summary>
+    double LastGpuCompositeMs => 0;
 
     /// <summary>True when decoded image pixels are staged but not yet copied to their resident GPU texture, or when
     /// transient upload resources are awaiting fence-gated release. The host must NOT elide that submit, or the texture
@@ -164,6 +198,10 @@ public interface ISwapchain : IDisposable
     Size2 SizePx { get; }
     void Resize(Size2 px);
     void Present();
+    /// <summary>True when a SyncInterval-0 present is still tear-free because the swapchain is handed to a desktop
+    /// compositor (for example DirectComposition). The host uses this to scope interactive present experiments; opaque
+    /// HWND swapchains and backends that do not opt in stay on their ordinary vsync path.</summary>
+    bool SupportsCompositedIntervalZero => false;
 
     /// <summary>Configure the windowed popup's composition chrome (rounded acrylic content rect + outer shadow) for the
     /// current placement. Called on each placement before show. Default no-op: only a backdrop-backed backend honors it.</summary>

@@ -27,10 +27,14 @@ static class DetailRail
 
     public static float CoverEdge(float railW) => MathF.Max(80f, railW - SidePadL - SidePadR);
 
-    internal static Element HeroArtwork(DetailModel m, float size) =>
+    internal static Element HeroArtwork(DetailModel m, float size, float radius = Radii.Card, bool connected = true,
+                                        float saturation = 1f, string? morphKey = null,
+                                        int decodePx = HeroCoverDecodePx, bool preferLargest = false) =>
         LikedSongsArtwork.IsLikedUri(m.ContextUri) && m.Cover is null
-            ? LikedSongsArtwork.Cover(size, Radii.Card, m.MorphKey)
-            : Surfaces.Artwork(m.Cover, m.Title.GetHashCode() & 0x7fffffff, size, size, Radii.Card, m.MorphKey, decodePx: HeroCoverDecodePx);
+            ? LikedSongsArtwork.Cover(size, radius, morphKey ?? (connected ? m.MorphKey : null))
+            : Surfaces.Artwork(m.Cover, m.Title.GetHashCode() & 0x7fffffff, size, size, radius,
+                morphKey ?? (connected ? m.MorphKey : null), decodePx: decodePx, saturation: saturation,
+                preferLargest: preferLargest);
 
     // The side rail: the cover STRETCHES to fill the column width (a big hero — the image is NEVER shrunk for height).
     // The height fit comes from the TEXT — titleSize (the shell lowers it on a short rail; auto-fits down to 18px) and
@@ -46,7 +50,7 @@ static class DetailRail
         {
             Width = cover, Height = cover, Corners = CornerRadius4.All(Radii.Card),
             Shadow = Elevation.Card, ClipToBounds = true,
-            Children = [editable ? PlaylistInlineEdit.Cover(modelSource, cover) : HeroArtwork(m, cover)],
+            Children = [editable ? PlaylistInlineEdit.Cover(modelSource, cover) : HeroArtwork(m, cover, saturation: 1.18f)],
         });
 
         // Badges row.
@@ -316,7 +320,7 @@ static class DetailRail
             ? Embed.Comp(() => new CollaboratorFacePile(m, cover, full))
             : PlaylistInlineEdit.OwnerRow(full, cover);
 
-    static bool ShowCollaborators(DetailModel m)
+    internal static bool ShowCollaborators(DetailModel m)
         => m.Collaborators is { Count: > 0 } members && (m.Capabilities.IsCollaborative || members.Count >= 2);
 
     internal static Element BadgePill(string text) => new BoxEl

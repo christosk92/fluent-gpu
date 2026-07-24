@@ -123,6 +123,92 @@ public class LibrarySyncTests
         return Ok(Array.Empty<byte>());
     }
 
+    // A full playlist fetch response carrying ITEM attributes (added_by + timestamp) — the attribute-bearing path.
+    static byte[] FullSlcWithAttrs(byte[] rev, params (string Uri, string AddedBy, long At)[] items)
+    {
+        var slc = new Pl.SelectedListContent
+        {
+            Revision = ByteString.CopyFrom(rev),
+            OwnerUsername = "someowner",
+            Attributes = new Pl.ListAttributes { Name = "Poisoned Mix" },
+            Capabilities = new Pl.Capabilities { CanView = true },   // non-default + non-heal shape → no header re-fetch
+        };
+        var c = new Pl.ListItems { Pos = 0, Truncated = false };
+        foreach (var it in items)
+            c.Items.Add(new Pl.Item { Uri = it.Uri, Attributes = new Pl.ItemAttributes { AddedBy = it.AddedBy, Timestamp = it.At } });
+        slc.Contents = c;
+        return slc.ToByteArray();
+    }
+
+    // A full playlist fetch response with NO item attributes — a genuinely attribute-less server playlist.
+    static byte[] FullSlcNoAttrs(byte[] rev, params string[] uris)
+    {
+        var slc = new Pl.SelectedListContent
+        {
+            Revision = ByteString.CopyFrom(rev),
+            OwnerUsername = "someowner",
+            Attributes = new Pl.ListAttributes { Name = "No Attrs" },
+            Capabilities = new Pl.Capabilities { CanView = true },
+        };
+        var c = new Pl.ListItems { Pos = 0, Truncated = false };
+        foreach (var u in uris) c.Items.Add(new Pl.Item { Uri = u });
+        slc.Contents = c;
+        return slc.ToByteArray();
+    }
+
+    // ── the attribute-aware heal gate (Date-added / Added-by regression) ──────────────────────────────────────────────
+    // A resident-but-attribute-less membership (rows cached WITHOUT Item.attributes, e.g. the followed "Summer 2016 vibes"
+    // playlist) must open through the FULL attribute-bearing fetch, not the /diff revalidate — /diff never re-reads
+    // attributes for existing rows, so the poisoned cache would otherwise serve blank added_at/added_by forever.
+    [Fact]
+    public async Task OpenPlaylist_AttributeLessMembership_HealsViaFullFetch_NotDiff()
+    {
+        const string uri = "spotify:playlist:poisoned";
+        int diffs = 0, fulls = 0;
+        await using var h = new SyncHarness(req =>
+        {
+            if (req.Url.Contains("/diff?")) { Interlocked.Increment(ref diffs); return Ok(new Pl.SelectedListContent { UpToDate = true }.ToByteArray()); }
+            Interlocked.Increment(ref fulls);
+            return Ok(FullSlcWithAttrs(new byte[] { 2 },
+                ("spotify:track:t1", "alice", 1_700_000_000_000L), ("spotify:track:t2", "bob", 1_700_000_100_000L)));
+        });
+        // resident membership recorded WITHOUT item attributes (the poisoned cache) + a revision (so /diff would be taken).
+        h.Store.SetMembership(uri, new[] { M("i1", "spotify:track:t1"), M("i2", "spotify:track:t2") }, new byte[] { 1 });
+
+        await h.Sync.OpenPlaylistAsync(uri, CancellationToken.None);
+
+        Assert.Equal(0, diffs);                                   // NOT the /diff revalidate path
+        Assert.Equal(1, fulls);                                   // the full attribute-bearing fetch was chosen
+        var healed = h.Store.Membership(uri);
+        Assert.Equal(2, healed.Count);
+        Assert.Equal("alice", healed[0].AddedBy);                 // rows now carry added_by …
+        Assert.True(healed[0].AddedAt > 0);                       // … and added_at
+        Assert.Equal("bob", healed[1].AddedBy);
+        Assert.True(healed[1].AddedAt > 0);
+    }
+
+    // The loop guard: a playlist whose server data GENUINELY has no attributes stays attribute-less after the heal fetch,
+    // so it must force the full GET only ONCE per session — never storm one on every open.
+    [Fact]
+    public async Task OpenPlaylist_GenuinelyAttributeLess_ForcesFullFetchOnce_ThenDoesNotLoop()
+    {
+        const string uri = "spotify:playlist:noattrs";
+        int fulls = 0;
+        await using var h = new SyncHarness(req =>
+        {
+            if (req.Url.Contains("/diff?")) return Ok(new Pl.SelectedListContent { UpToDate = true }.ToByteArray());
+            Interlocked.Increment(ref fulls);
+            return Ok(FullSlcNoAttrs(new byte[] { 2 }, "spotify:track:t1"));   // server returns no item attributes
+        });
+        h.Store.SetMembership(uri, new[] { M("i1", "spotify:track:t1") }, new byte[] { 1 });
+
+        await h.Sync.OpenPlaylistAsync(uri, CancellationToken.None);
+        Assert.Equal(1, fulls);                                   // forced once
+
+        await h.Sync.OpenPlaylistAsync(uri, CancellationToken.None);
+        Assert.Equal(1, fulls);                                   // NOT forced again this session (still attribute-less, but guarded)
+    }
+
     [Fact]
     public async Task InitialHydrate_PopulatesRootlistSetsTokensAndFold_CoalescedIntoBulkSignals()
     {

@@ -15,7 +15,7 @@
     <NoWarn>$(NoWarn);CA1416;xUnit1051</NoWarn>
   </PropertyGroup>
 
-  <PropertyGroup Condition="Exists('..\Wavee.PlayPlay\Client\InProcessPlayPlayKeyDeriver.cs')">
+  <PropertyGroup Condition="'$(WaveeSkipPrivateSources)' != 'true' And Exists('..\Wavee.PlayPlay\Client\InProcessPlayPlayKeyDeriver.cs')">
     <DefineConstants>$(DefineConstants);WAVEE_PLAYPLAY_LOCAL</DefineConstants>
   </PropertyGroup>
 
@@ -79,6 +79,8 @@
     <Compile Include="..\Wavee\Components\MembershipDiff.cs" />
     <!-- detail layout breakpoint hysteresis (Wavee.Core + BCL only) — DetailLayoutBreakpointTests -->
     <Compile Include="..\Wavee\Features\Detail\DetailLayoutBreakpoints.cs" />
+    <!-- progressive-reveal ramp progression (BCL only) — DetailRevealRampTests -->
+    <Compile Include="..\Wavee\Features\Detail\DetailRevealRamp.cs" />
     <!-- concert schedule/detail hysteresis + wide-editorial metrics (BCL only) -->
     <Compile Include="..\Wavee\Features\Concerts\ConcertLayout.cs" />
     <Compile Include="..\Wavee\Features\Concerts\ConcertRoutes.cs" />
@@ -92,6 +94,10 @@
     <Compile Include="..\Wavee\Features\Library\LibraryLayoutBreakpoints.cs" />
     <!-- vertical track-detail hero layout resolver (BCL only) — DetailVerticalLayoutTests -->
     <Compile Include="..\Wavee\Features\Detail\DetailVerticalLayout.cs" />
+    <!-- pure video placement/lifecycle decision rules (System + the VideoPlacement enum only) — VideoPlacementLogicTests -->
+    <Compile Include="..\Wavee\App\VideoPlacementModel.cs" Link="VideoPlacementModel.cs" />
+    <!-- pure media host-swap decision rules (System + the PlayableKind enum only) — MediaSwitchLogicTests -->
+    <Compile Include="..\Wavee\App\MediaSwitchLogic.cs" Link="MediaSwitchLogic.cs" />
     <!-- the activity-undo executor (engine-free: IUndoTarget + IMusicLibrary + ActivityLog) — ActivityUndoTests drive it -->
     <Compile Include="..\Wavee\App\ActivityUndo.cs" />
     <!-- The engine-free core of the context-menu action system (Wavee.Core + BCL only) — Actions/*Tests drive the
@@ -164,7 +170,7 @@
                       OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
-  <ItemGroup Condition="Exists('..\Wavee.PlayPlay\Client\InProcessPlayPlayKeyDeriver.cs')">
+  <ItemGroup Condition="'$(WaveeSkipPrivateSources)' != 'true' And Exists('..\Wavee.PlayPlay\Client\InProcessPlayPlayKeyDeriver.cs')">
     <!-- The test assembly source-includes only the PlayPlay pieces the PlayPlay*Tests exercise; the CLI probe
          (app-only AppDataSettings dep) and the in-process native adapter are app-composition-only, excluded here. -->
     <!-- The test assembly source-includes the PlayPlay pieces the PlayPlay*Tests exercise; the CLI probe

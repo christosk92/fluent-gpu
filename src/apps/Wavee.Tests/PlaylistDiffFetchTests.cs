@@ -72,10 +72,12 @@ public class PlaylistDiffFetchTests
         return (new PlaylistFetcher(http, () => "https://x", store, Hydrate, () => ""), store, hydrated, reqs);
     }
 
+    // A resident baseline stamped WITH item attributes (added_by + added_at) — a normally-hydrated playlist, so the
+    // LibrarySync open path takes the intended /diff revalidate, not the attribute-less heal-to-full fetch.
     static void Seed(IStore store, byte[] rev, params string[] uris)
     {
         var rows = new List<PlaylistMember>(uris.Length);
-        for (int i = 0; i < uris.Length; i++) rows.Add(new PlaylistMember("id" + i, uris[i], null, 0));
+        for (int i = 0; i < uris.Length; i++) rows.Add(new PlaylistMember("id" + i, uris[i], "seed", 1_700_000_000_000L));
         store.SetMembership(Uri, rows, rev);
     }
 
@@ -214,6 +216,32 @@ public class PlaylistDiffFetchTests
         Assert.Equal(DiffOutcome.Applied, await f.FetchPlaylistDiffAsync(Uri, Ct));
         Assert.Equal(2, store.Membership(Uri).Count);
         Assert.Equal(to, store.PlaylistRevision(Uri));
+    }
+
+    // ── a full fetch seeds a minimal owner chip so the owner name renders before the profile service resolves ─────────
+    [Fact]
+    public async Task FullFetch_SeedsOwnerChip_NameSet_AvatarNull()
+    {
+        var slc = new Pl.SelectedListContent
+        {
+            Revision = ByteString.CopyFrom(Rev(1, 0x01)),
+            OwnerUsername = "catherine",
+            Attributes = new Pl.ListAttributes { Name = "Summer 2016 vibes" },
+        };
+        var c = new Pl.ListItems { Pos = 0, Truncated = false };
+        c.Items.Add(new Pl.Item { Uri = "spotify:track:t1" });
+        slc.Contents = c;
+        var (f, store, _, _) = Rig((req, _) => Ok(slc.ToByteArray()));
+
+        await f.FetchPlaylistAsync(Uri, Ct);
+
+        var pl = store.GetPlaylist(Uri);
+        Assert.NotNull(pl);
+        Assert.NotNull(pl!.Owner);
+        Assert.Equal("catherine", pl.Owner!.Name);   // renders the name immediately, before profile resolution
+        Assert.Equal("catherine", pl.Owner.Id);      // RawOwnerId stays the username → overlay resolution unchanged
+        Assert.Null(pl.Owner.Avatar);                // upgrades to the avatar when the profile resolves
+        Assert.Equal("catherine", pl.OwnerName);
     }
 
     // ── the LibrarySync revalidate path rides /diff: an open stale playlist costs one up-to-date probe ───────────────

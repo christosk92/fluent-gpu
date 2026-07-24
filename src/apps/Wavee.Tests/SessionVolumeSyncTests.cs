@@ -62,6 +62,15 @@ public class SessionVolumeSyncTests
         return new PlaybackController(host, new StubTrackResolver(), proj, new FakeContextResolver("spotify:track:a"), "us", outbound, new[] { extra });
     }
 
+    static async Task PrimeLocalPlaybackWithStaleProjection(
+        PlaybackController controller, RecAudioHost host, NowPlayingProjection projection)
+    {
+        await controller.PlayAsync("spotify:track:a");
+        host.PositionMs = 15_000;   // the audio engine is authoritative at 0:15
+        projection.OnEvent(new PlaybackEvent(EvKind.Seeked, projection.CurrentTrack, 60_000));
+        host.Calls.Clear();         // ignore setup calls; the volume intent must write the host exactly once
+    }
+
     [Fact]
     public void OnExternalVolumeChanged_MovesProjection_AnnouncesVolume_NoHostSet_NoOutboundPut()
     {
@@ -81,6 +90,40 @@ public class SessionVolumeSyncTests
         c.OnExternalVolumeChanged(0.5);                          // NoteLocalCommand + slider 0.5
         proj.OnCluster(Cluster("us") with { ActiveVolume0_65535 = 6553 });   // stale ~0.1 echo inside the window
         Assert.Equal(0.5, proj.Volume, 2);                       // not snapped back
+    }
+
+    [Fact]
+    public async Task LocalVolumeChange_PublishesOnlyAuthoritativeHostPosition_AndSetsHostOnce()
+    {
+        using var c = Make(out var host, out var proj, out _, out var extra);
+        await PrimeLocalPlaybackWithStaleProjection(c, host, proj);
+        var positions = new List<long>();
+        using var sub = proj.Changes.Subscribe(ConnectHarness.Obs<IPlaybackState>(s => positions.Add(s.PositionMs)));
+
+        await c.SetVolumeAsync(0.42);
+
+        Assert.NotEmpty(positions);
+        Assert.All(positions, p => Assert.Equal(15_000, p));     // no stale 1.0/end-frame before the host tick corrects it
+        Assert.Equal(0.42, proj.Volume, 3);
+        Assert.Equal(1, host.Calls.Count(x => x == "vol"));
+        Assert.Equal(1, extra.Count(EvKind.VolumeChanged));
+    }
+
+    [Fact]
+    public async Task ExternalVolumeChange_PublishesOnlyAuthoritativeHostPosition_WithoutEcho()
+    {
+        using var c = Make(out var host, out var proj, out var outbound, out var extra);
+        await PrimeLocalPlaybackWithStaleProjection(c, host, proj);
+        var positions = new List<long>();
+        using var sub = proj.Changes.Subscribe(ConnectHarness.Obs<IPlaybackState>(s => positions.Add(s.PositionMs)));
+
+        c.OnExternalVolumeChanged(0.55);
+
+        Assert.NotEmpty(positions);
+        Assert.All(positions, p => Assert.Equal(15_000, p));
+        Assert.DoesNotContain("vol", host.Calls);
+        Assert.Empty(outbound.Volumes);
+        Assert.Equal(1, extra.Count(EvKind.VolumeChanged));
     }
 
     [Fact]

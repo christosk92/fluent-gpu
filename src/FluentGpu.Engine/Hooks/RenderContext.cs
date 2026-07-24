@@ -438,7 +438,6 @@ public sealed partial class RenderContext
     public NodeHandle HostNode;                 // this component's rendered child (animation hooks target it)
     public NodeHandle AnchorNode;               // this component's anchor in the scene (context resolution walks up from here)
     public Func<NodeHandle, object, Signal<object?>?>? ResolveContextSignal;   // (anchor, channel) → nearest provider signal
-    public IReadSignal<int>? ImageEpoch;        // bumped by the host on any image status change → re-renders UseImage consumers
     public Func<Signal<bool>>? GetActiveSig;    // reconciler-injected: get-or-create THIS component's KeepAlive-parked signal (UseIsActive)
     /// <summary>Reconciler-injected at mount when this component was embedded with re-pushed props
     /// (<c>Embed.Comp(props, factory)</c>): the per-instance signal the reconciler's reuse seam writes on each parent
@@ -911,8 +910,8 @@ public sealed partial class RenderContext
         UseLayoutEffect(st.Register, st.KindDep);
     }
 
-    /// <summary>Bind an async image and observe its load state (media-pipeline.md §5). Subscribes this component to the
-    /// host's image-status epoch so a ready/failed transition re-renders just this component.</summary>
+    /// <summary>Bind an async image and observe its load state (media-pipeline.md §5). Subscribes this component to that
+    /// cache handle's status epoch, so an unrelated image completion cannot fan out across every image consumer.</summary>
     public ImageBinding UseImage(string src, int decodePx, ImagePriority priority = ImagePriority.Visible, string? blurHash = null)
         => UseImage(src, decodePx, decodePx, priority, blurHash);
 
@@ -921,9 +920,9 @@ public sealed partial class RenderContext
     /// instead of forking a second decode.</summary>
     public ImageBinding UseImage(string src, int decodeW, int decodeH, ImagePriority priority = ImagePriority.Visible, string? blurHash = null)
     {
-        _ = ImageEpoch?.Value;   // subscribe: any image status change re-renders this UseImage consumer
         if (Images is null || string.IsNullOrEmpty(src)) return default;
         var h = Images.Request(src, decodeW, decodeH, priority, blurHash);
+        _ = Images.StatusSignalOf(h)?.Value;
         return new ImageBinding(h, Images.StateOf(h), Images.FailureOf(h), Images.AttemptsOf(h));
     }
 

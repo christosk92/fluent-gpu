@@ -201,7 +201,14 @@ public sealed class PlaylistFetcher
         string? desc = attr.HasDescription ? attr.Description : null;
         string owner = slc.HasOwnerUsername ? slc.OwnerUsername : "";
         int len = slc.HasLength ? slc.Length : 0;
+        // Seed a minimal owner chip from the header's owner username (id + name = the username, avatar null) so the owner
+        // chip renders its NAME immediately on first paint instead of a bare monogram. This does NOT change owner
+        // resolution: StoreLibrarySource.RawOwnerId already returned this same username (its OwnerName fallback), so the
+        // UserProfileService overlay (StoreLibrarySource.OverlayOwner) still WINS — Get(raw) ?? header.Owner upgrades this
+        // seed to the resolved display name + avatar; the null-avatar seed only fills the gap until the profile lands.
+        Owner? ownerChip = owner.Length > 0 ? new Owner(owner, owner, null) : null;
         return new Playlist(IdOf(uri), uri, name, desc, owner, CoverOf(attr), len,
+            Owner: ownerChip,
             Capabilities: CapabilitiesOf(attr, slc, owner));
     }
 

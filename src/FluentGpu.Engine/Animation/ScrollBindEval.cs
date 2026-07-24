@@ -18,6 +18,39 @@ public static class ScrollBindEval
     /// <summary>Idle time (ms) after which <c>IdleExpired</c> latches (drives the conscious-scrollbar auto-hide, §9).</summary>
     public const float IdleExpireMs = 2000f;
 
+    /// <summary>Opt-in hitch census (<c>FG_SCROLL_PERF=1</c>). Zero cost when off — counters are never touched.</summary>
+    public static readonly bool PerfEnabled = Diag.EnvFlag("FG_SCROLL_PERF");
+    public static int StickyClipEvals;
+    public static int StickyClipDirties;
+    public static int StickyClipFullyHidden;
+    public static int PinDirties;
+    public static int MorphDirties;
+    public static int ContinuousDirties;
+    public static int ScrollBindCount;
+
+    /// <summary>Reset the per-frame census and snapshot the live bind count. Call once at paint start when
+    /// <see cref="PerfEnabled"/>.</summary>
+    public static void BeginPerfFrame(SceneStore scene)
+    {
+        StickyClipEvals = 0;
+        StickyClipDirties = 0;
+        StickyClipFullyHidden = 0;
+        PinDirties = 0;
+        MorphDirties = 0;
+        ContinuousDirties = 0;
+        int binds = 0;
+        var table = scene.ScrollBinds;
+        if (table.HasAny)
+        {
+            foreach (int vpIdx in table.ScrollerIndices)
+            {
+                for (int s = table.Head(vpIdx); s >= 0; s = table.At(s).Next)
+                    binds++;
+            }
+        }
+        ScrollBindCount = binds;
+    }
+
     // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
     //  Continuous pass — offset / band / velocity / signed-phase ops. Called at the offset-write chokepoint
     //  (InputDispatcher.ApplyScrollPosition) and from FlexLayout.ArrangeViewport, so effects stay synchronous with the
@@ -37,7 +70,7 @@ public static class ScrollBindEval
             if (!scene.IsLive(b.Target)) continue;
             if (b.Has(ScrollBind.FlagStretchClosedForm)) { ApplyStretch(scene, ref b, in sc); continue; }
             float v = EvalScalar(scene, ref b, in sc, offset, horiz, vp);
-            WriteScalarSink(scene, ref b, v);
+            WriteScalarSink(scene, ref b, v, vp);
         }
     }
 
@@ -164,12 +197,19 @@ public static class ScrollBindEval
         bool pinned = shift > 0f;
         if (MathF.Abs(p.LocalTransform.Dy - shift) > 0.01f)
         {
-            bool wasPinned = (scene.Flags(n) & NodeFlags.StickyPinned) != 0;
             p.LocalTransform = pinned ? Affine2D.Translation(0f, shift) : Affine2D.Identity;
             scene.Mark(n, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+            if (PerfEnabled) PinDirties++;
+        }
+        // Pin state is not derived from whether this pass happened to change the transform. Reconcile/layout can restore
+        // the literal identity transform before the pin pass; a stale StickyPinned bit must still release in that frame.
+        bool nodeWasPinned = (scene.Flags(n) & NodeFlags.StickyPinned) != 0;
+        if (pinned != nodeWasPinned)
+        {
             if (pinned) scene.Mark(n, NodeFlags.StickyPinned); else scene.Unmark(n, NodeFlags.StickyPinned);
-            // CSS :stuck — once per engage/release transition, never per frame.
-            if (pinned != wasPinned) b.OnFlag?.Invoke(pinned);
+            // CSS :stuck — once per retained presented-state edge, even when reconcile already restored the matching
+            // transform. The node flag survives a bind re-bake, so it also carries the correct previous state here.
+            b.OnFlag?.Invoke(pinned);
         }
         return pinned;
     }
@@ -188,11 +228,19 @@ public static class ScrollBindEval
         if (sc.ContentNode.IsNull) return;
         float yN = NodeYInContent(scene, n, vp, sc.ContentNode, out bool inContent);
         if (!inContent) return;
+        if (PerfEnabled) StickyClipEvals++;
         float top = sc.OffsetY + b.Inset - yN;                     // node-local y of the viewport-anchored line
         float s = scene.DeviceScale;
         if (float.IsFinite(s) && s > 0f) top = MathF.Round(top * s) / s;
+        float nodeH = scene.Bounds(n).H;
+        // Fully above the sticky line: freeze ClipRect.Y at nodeH so further offset advances do not re-Mark every
+        // pixel (overscan rows under translucent chrome were the playlist sticky hitch — O(window) PaintDirty/frame).
+        bool fullyHidden = top >= nodeH && nodeH > 0f;
+        if (PerfEnabled && fullyHidden) StickyClipFullyHidden++;
         bool clipping = top > 0f;
-        float applied = clipping ? top : -1e9f;                    // -1e9 = the released sentinel
+        float applied = !clipping ? -1e9f
+                      : fullyHidden ? nodeH
+                      : top;
         // Change-gate against the LIVE paint (exactly like ApplyPin's LocalTransform.Dy compare), NOT a cached
         // last-written: paint can be re-derived between passes, and a cached gate would skip the healing re-write,
         // leaving the clip permanently released.
@@ -200,8 +248,9 @@ public static class ScrollBindEval
         float cur = p.ClipRect.IsInfinite ? -1e9f : p.ClipRect.Y;
         if (MathF.Abs(applied - cur) > 0.01f)
         {
-            p.ClipRect = clipping ? RectF.FromLTRB(-1e8f, top, 1e8f, 1e8f) : RectF.Infinite;
+            p.ClipRect = clipping ? RectF.FromLTRB(-1e8f, applied, 1e8f, 1e8f) : RectF.Infinite;
             scene.Mark(n, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+            if (PerfEnabled) StickyClipDirties++;
         }
         // Edge-only, and the unset state counts as "not clipping" — the first evaluation of a released clip must NOT
         // fire a spurious false (mirrors ApplyPin, whose initial unpinned state fires nothing).
@@ -302,7 +351,7 @@ public static class ScrollBindEval
         return b.OutLo + (b.OutHi - b.OutLo) * t;
     }
 
-    static void WriteScalarSink(SceneStore scene, ref ScrollBind b, float v)
+    static void WriteScalarSink(SceneStore scene, ref ScrollBind b, float v, NodeHandle vp)
     {
         ref NodePaint p = ref scene.Paint(b.Target);
         if (b.Sink == BindSink.PresentedHTrailing)
@@ -314,11 +363,36 @@ public static class ScrollBindEval
             p.PresentedH = h;
             p.ChildShiftY = shift;
             scene.Mark(b.Target, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+            if (PerfEnabled) ContinuousDirties++;
+            b.LastWritten = v;
+            return;
+        }
+        var lt = p.LocalTransform;
+        if (b.Sink is BindSink.MorphViewportX or BindSink.MorphViewportY)
+        {
+            // Saturated morphs freeze: once progress hits 0 or 1, skip re-resolving viewport coords every scroll tick.
+            // Sticky/parent LocalTransform continues to carry children; remorph resumes when progress leaves the rail.
+            float t = Math.Clamp(v, 0f, 1f);
+            if (t >= 1f - 1e-3f && b.LastWritten >= 1f - 1e-3f) return;
+            if (t <= 1e-3f && b.LastWritten <= 1e-3f)
+            {
+                float cur0 = b.Sink == BindSink.MorphViewportX ? lt.Dx : lt.Dy;
+                if (MathF.Abs(cur0) <= 1e-3f) return;
+            }
+            bool x = b.Sink == BindSink.MorphViewportX;
+            float natural = NodeAxisInViewport(scene, b.Target, vp, x);
+            float delta = (b.Inset - natural) * t;
+            float current = x ? lt.Dx : lt.Dy;
+            if (MathF.Abs(delta - current) <= 1e-3f) { b.LastWritten = v; return; }
+            p.LocalTransform = x
+                ? new Affine2D(lt.M11, lt.M12, lt.M21, lt.M22, delta, lt.Dy)
+                : new Affine2D(lt.M11, lt.M12, lt.M21, lt.M22, lt.Dx, delta);
+            scene.Mark(b.Target, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+            if (PerfEnabled) MorphDirties++;
             b.LastWritten = v;
             return;
         }
         if (MathF.Abs(v - b.LastWritten) <= 1e-3f) return;
-        var lt = p.LocalTransform;
         switch (b.Sink)
         {
             case BindSink.TransY: p.LocalTransform = new Affine2D(lt.M11, lt.M12, lt.M21, lt.M22, lt.Dx, v); break;
@@ -340,8 +414,30 @@ public static class ScrollBindEval
             }
         }
         scene.Mark(b.Target, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+        if (PerfEnabled) ContinuousDirties++;
         if (b.Has(ScrollBind.FlagPaintAbove)) scene.Mark(b.Target, NodeFlags.StickyPinned);
         b.LastWritten = v;
+    }
+
+    /// <summary>Target leading coordinate in viewport space, excluding only the target's own transform. Scroll-content
+    /// translation, sticky-ancestor translation, and presented trailing shifts are included so a morph remains attached
+    /// while those compositor owners move. Pair with transform origin (0,0) when scaling the target.</summary>
+    static float NodeAxisInViewport(SceneStore scene, NodeHandle node, NodeHandle vp, bool x)
+    {
+        float p = 0f;
+        var n = node;
+        while (!n.IsNull && n != vp)
+        {
+            ref RectF b = ref scene.Bounds(n);
+            p += x ? b.X : b.Y;
+            if (n != node)
+            {
+                ref NodePaint paint = ref scene.Paint(n);
+                p += x ? paint.LocalTransform.Dx : paint.LocalTransform.Dy + paint.ChildShiftY;
+            }
+            n = scene.Parent(n);
+        }
+        return p;
     }
 
     /// <summary>iOS/Spotify stretchy header: the (h+pull)/h scale + band-cancel matrix on the target node directly
@@ -363,6 +459,7 @@ public static class ScrollBindEval
         {
             hp.LocalTransform = target;
             scene.Mark(b.Target, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+            if (PerfEnabled) ContinuousDirties++;
         }
     }
 

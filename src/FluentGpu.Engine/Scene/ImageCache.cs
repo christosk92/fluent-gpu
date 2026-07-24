@@ -1,5 +1,6 @@
 using FluentGpu.Foundation;
 using FluentGpu.Hosting.Threading;
+using FluentGpu.Signals;
 
 namespace FluentGpu.Scene;
 
@@ -79,6 +80,10 @@ public interface IImageDecoder
     /// <summary>While true, per-frame GPU upload applies are throttled (scroll-scoped fence-stall guard). Default no-op
     /// for decoders without an upload stage (headless fakes).</summary>
     bool ScrollThrottled { get => false; set { } }
+    /// <summary>Number of decoded images applied by the most recent <see cref="Pump"/>.</summary>
+    int LastPumpAppliedCount => 0;
+    /// <summary>Decoded pixel bytes applied by the most recent <see cref="Pump"/>.</summary>
+    int LastPumpAppliedBytes => 0;
     /// <summary>Raise the priority of a queued decode (e.g. a prefetch that just scrolled into view). Idempotent; no-op
     /// once the job has started.</summary>
     void Prioritize(int id, ImagePriority priority) { }
@@ -135,6 +140,9 @@ public sealed class ImageCache
         public bool BakeUpgradeQueued;
         public byte BakeUpgradeAttempts;
         public BakedBlurQueue.Quality BakeQuality;
+        // Allocated lazily only when a UseImage consumer observes this handle. Terminal state changes bump this signal,
+        // so one image completion invalidates only its own observers instead of every unsettled image component.
+        public Signal<int>? StatusEpoch;
     }
 
     const float RestartBackoffMs = 2000f;   // min gap between visible retries on the same handle (avoids hammering a dead URL)
@@ -349,11 +357,24 @@ public sealed class ImageCache
     }
 
     public ImageState StateOf(ImageHandle h) => _byId.TryGetValue(h.Id, out var e) ? e.State : ImageState.None;
+    /// <summary>Per-handle status epoch used by <c>UseImage</c>. Lazily allocated on first observation; null for an
+    /// unknown handle. Unlike the legacy host-wide epoch, a completion wakes only consumers of this cache entry.</summary>
+    public IReadSignal<int>? StatusSignalOf(ImageHandle h)
+    {
+        if (!_byId.TryGetValue(h.Id, out var e)) return null;
+        return e.StatusEpoch ??= new Signal<int>(0);
+    }
     public (int W, int H) SizeOf(ImageHandle h) => _byId.TryGetValue(h.Id, out var e) ? (e.W, e.H) : (0, 0);
     /// <summary>Why an image is <see cref="ImageState.Failed"/> (None otherwise) — for app fallbacks / retry UI.</summary>
     public ImageFailureKind FailureOf(ImageHandle h) => _byId.TryGetValue(h.Id, out var e) ? e.Failure : ImageFailureKind.None;
     /// <summary>How many fetch attempts the decoder made (≥1 once resolved; &gt;1 means transient retries happened).</summary>
     public int AttemptsOf(ImageHandle h) => _byId.TryGetValue(h.Id, out var e) ? e.Attempts : 0;
+
+    private static void NotifyStatus(Entry e)
+    {
+        if (e.StatusEpoch is { } epoch)
+            epoch.Value = epoch.Peek() + 1;
+    }
     /// <summary>The source URL bound to a handle (null when unknown).</summary>
     public string? SourceOf(ImageHandle h)
     {
@@ -383,6 +404,8 @@ public sealed class ImageCache
     /// <summary>While true, per-frame GPU texture uploads are throttled (see <see cref="DecodeScheduler.ScrollThrottled"/>)
     /// — set alongside <see cref="SuppressReveals"/> during scroll so upload bursts can't feed the present fence stall.</summary>
     public bool ScrollThrottled { get => _decoder.ScrollThrottled; set => _decoder.ScrollThrottled = value; }
+    public int LastPumpAppliedCount => _decoder.LastPumpAppliedCount;
+    public int LastPumpAppliedBytes => _decoder.LastPumpAppliedBytes;
 
     /// <summary>Bake-time fade params for <see cref="DrawImageCmd"/>. False when no texture has landed yet.</summary>
     public bool FadeParamsOf(ImageHandle h, out float startMs, out float durationMs, out int easing)
@@ -515,6 +538,7 @@ public sealed class ImageCache
             {
                 UsedBytes -= e.Bytes;   // the texture is gone; RestartDecode re-adds the bytes when the fresh decode completes
                 RestartDecode(id, e, e.Refs > 0 ? ImagePriority.Visible : ImagePriority.Prefetch);
+                NotifyStatus(e);
             }
         foreach (var (id, e) in _byId)
             if (e.Derived && e.State == ImageState.Ready)
@@ -522,6 +546,7 @@ public sealed class ImageCache
                 UsedBytes -= e.Bytes;
                 DerivedUsedBytes -= e.Bytes;
                 RestartDerived(id, e);
+                NotifyStatus(e);
             }
     }
 
@@ -586,6 +611,7 @@ public sealed class ImageCache
                 e.State = ImageState.Failed;
                 e.Failure = ImageFailureKind.Decode;
                 _totalBakeFailed++;
+                NotifyStatus(e);
                 ImageStatusChanged?.Invoke(id, e.State, e.Failure, 1);
             }
         }
@@ -700,6 +726,7 @@ public sealed class ImageCache
             Diag.Set("media", "bakedBlurReady", _totalBakeReady);
             Diag.Set("media", "bakedBlurFailed", _totalBakeFailed);
             Diag.Set("media", "pending", PendingCount);
+            NotifyStatus(e);
             ImageStatusChanged?.Invoke(result.Id, e.State, e.Failure, 1);
             if (result.Ok) TryQueueDerivedUpgrade(result.Id, e);
         }
@@ -727,6 +754,7 @@ public sealed class ImageCache
             _totalFailed++;
             ContentEpoch++;
             Diag.Set("media", "failed", _totalFailed);
+            NotifyStatus(e);
             ImageStatusChanged?.Invoke(r.Id, e.State, e.Failure, e.Attempts);
         }
     }
@@ -797,6 +825,7 @@ public sealed class ImageCache
         }
         else
         {
+            NotifyStatus(e);
             ImageStatusChanged?.Invoke(id, e.State, e.Failure, attempts);
         }
         QueueSourceDependents(id, ok);
@@ -839,6 +868,7 @@ public sealed class ImageCache
                 RecomputeCrossfadeDeadline();
             _totalEvicted++;
             Diag.Set("media", "evicted", _totalEvicted);
+            NotifyStatus(e2);
             _evictSink(victim);   // free the GPU texture (the device defers the release behind the frame fence)
         }
     }

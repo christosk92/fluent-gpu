@@ -127,7 +127,7 @@ sealed partial class ArtistPage : Component
                     Grow = 1f, HitTestPassThrough = true, Direction = 1,
                     AlignItems = FlexAlign.Center, Justify = FlexJustify.Start,
                     Padding = new Edges4(0f, Spacing.M, 0f, 0f),
-                    Children = [ Embed.Comp(() => new ArtistShyPill(uri, artist, pinned, svc)) with { Key = "artist-pill:" + routeKey } ],
+                    Children = [ ArtistShyPill.Create(uri, artist, svc, pinned) ],
                 },
             ],
         });
