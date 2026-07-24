@@ -274,7 +274,8 @@ sealed class DetailShell : Component
 
         // Single-column fallback: just the track table, full width, no rail / no wash.
         if (!_cfg.TwoColumn)
-            return Embed.Comp(() => new TrackList(_route, _model, bridge, handlers, liveHandlers: _liveHandlers));
+            return Embed.Comp(() => new TrackList(_route, _model, bridge, handlers, liveHandlers: _liveHandlers))
+                with { Key = "tracks:single:" + route.Name };
 
         // Adaptive two-column / vertical: measure the page width → mode. Value-gated → re-render only on a breakpoint cross.
         void Measure(RectF r)
@@ -315,7 +316,12 @@ sealed class DetailShell : Component
         // overflow guard crushed columns into overlapping glyphs. With the floor the worst transient is a clean edge
         // clip at the card boundary, never glyph soup.
         Element right = _cfg.Content == DetailContent.Episodes
-            ? new BoxEl { Key = "right:eps", Grow = 1f, Shrink = 1f, MinWidth = 300f, Direction = 1, Children = [Embed.Comp(() => new EpisodeList(_route, _model, bridge, handlers, showToolbar))] }
+            ? new BoxEl
+            {
+                Key = "right:eps", Grow = 1f, Shrink = 1f, MinWidth = 300f, Direction = 1,
+                Children = [Embed.Comp(() => new EpisodeList(_route, _model, bridge, handlers, showToolbar))
+                    with { Key = "episodes:" + route.Name }],
+            }
             : new BoxEl
             {
                 Key = "right:tracks", Grow = 1f, Shrink = 1f, MinWidth = 300f, MinHeight = 0f, Direction = 1,
@@ -324,7 +330,12 @@ sealed class DetailShell : Component
                     Embed.Comp(() => new TrackList(_route, _model, bridge, handlers, showToolbar,
                         verticalHeader: verticalTracks,
                         verticalHeroImmersive: _verticalHeroImmersive,
-                        liveHandlers: _liveHandlers)) with { Key = verticalTracks ? "tracks:vertical" : "tracks:standard" },
+                        liveHandlers: _liveHandlers)) with
+                    {
+                        // A route is a new scroll/hero identity. Remounting prevents an album→album swap from painting
+                        // the previous page's collapsed-header signals for one async frame (the blank/clipped hero bug).
+                        Key = (verticalTracks ? "tracks:vertical:" : "tracks:standard:") + route.Name,
+                    },
                 ],
             };
 

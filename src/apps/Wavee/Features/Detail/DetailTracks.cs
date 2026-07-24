@@ -71,9 +71,6 @@ sealed class TrackList : Component
     float _verticalToolsEnter = 128f;
     float _verticalToolsExit = 104f;
     string _verticalMorphKey = "detail-shy:pending";
-    Action<ConnectedTransitionRequest>? _beginConfiguredTransition;
-    static readonly ConnectedMotion ShyHeaderMotion =
-        ConnectedMotion.Eased(EasingSpec.CubicBezier(0.8f, 0f, 0.2f, 1f), 480f);
     bool _hasDate;                                             // any track carries an AddedAt → the Date-added column exists
     bool _hasBy;                                               // collaborative (≥2 contributors) → the Added-by column exists
     readonly Signal<int> _tier = new(0);                       // width tier (0 = widest/full), written by OnBoundsChanged
@@ -301,7 +298,6 @@ sealed class TrackList : Component
         _acts = UseContext(ActionServices.Slot); // the action system behind the row context menus + the batch bar
         _menuOverlay = UseContext(Overlay.Service);   // the overlay service the rows' attached menus open through
         var svc = UseContext(Services.Slot);     // extender client (recommended songs) + gate on live edits
-        _beginConfiguredTransition = UseContext(SharedTransition.BeginConfigured);
         _svc = svc; _post = UsePost();           // cached so the rec fetch/add handlers reach the extender + marshal results back to the UI thread
         Context.UseSignalEffect(() => Reactive.OnCleanup(() => { try { _recCts.Cancel(); _recCts.Dispose(); } catch { } }));   // cancel in-flight rec fetches on unmount
         var ui = UseContext(ShellUi.Slot);       // rail layout-defer lock (Task C): gate tier churn during a rail reflow
@@ -847,9 +843,6 @@ sealed class TrackList : Component
         bool nextTools = tools ? g.OffsetY > _verticalToolsExit : g.OffsetY >= _verticalToolsEnter;
         if (nextIdentity == identity && nextTools == tools) return;
 
-        if (nextIdentity != identity && g.UserScrollActive)
-            _beginConfiguredTransition?.Invoke(new ConnectedTransitionRequest(
-                _verticalMorphKey, ShyHeaderMotion, PreserveSourceOpacity: true, EnableClipAnimation: true));
         if (nextIdentity != identity) _verticalIdentityCollapsed.Value = nextIdentity;
         if (nextTools != tools) _verticalToolsVisible.Value = nextTools;
     }
