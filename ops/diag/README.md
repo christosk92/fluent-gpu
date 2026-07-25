@@ -35,6 +35,11 @@ ops\diag\wavee-scroll-session.cmd -Diag -NoImagePump
 # Produces a bundle stamped synthetic — it can NEVER answer a question about feel.
 ops\diag\wavee-scroll-session.cmd -Diag -Unattended
 
+# 5. Unattended A/B of CADENCE (no human): identical synthetic input into two builds, then compare.
+ops\diag\synthetic-scroll-capture.ps1 -ExePath <build A>\Wavee.exe -Label BEFORE
+ops\diag\synthetic-scroll-capture.ps1 -ExePath <build B>\Wavee.exe -Label AFTER
+python ops\diag\analyze-cadence.py <before-dir>[;<more>] <after-dir>[;<more>]
+
 # Re-pack an existing bundle after editing the packager:
 ops\diag\pack-feel-summary.cmd -Session ops\diag\sessions\<id>
 ```
@@ -233,6 +238,26 @@ Use it to answer *"does the toolchain work?"* — did the diag build arm, did th
 did the phase marker reach the app, did the packager run. Use it for nothing else. With no input there is no scroll,
 so there are no latency rows, and the packager will correctly hard-fail on that: **a hard fail here is the expected
 and correct result**, and seeing it is itself the proof that the hard-fail path works.
+
+## Synthetic capture: cadence without a human
+
+`synthetic-scroll-capture.ps1` drives a real Wavee process with `SendInput` wheel packets on a fixed
+script, so two builds can be compared without gesture variation. It answers **cadence** questions —
+production-vs-present ratio, presented sample-time jitter, present interval — because those are properties
+of the frame loop and independent of which device drove it. It cannot answer **feel**, and it does not
+exercise the DirectManipulation touchpad path (DM contacts are real HID packets and cannot be
+synthesized). Bundles are stamped `synthetic: true`.
+
+Two traps it now guards, both of which produced confidently wrong results first:
+
+- **One-directional input measures nothing.** The first version scrolled only down; the page hit its
+  extent four seconds in and the remaining four phases recorded zero rows — which looks exactly like a
+  perfectly smooth app. Every moving phase now sawtooths, and the script hard-warns (`THIN CAPTURE`) if
+  fewer than three of the four moving phases produced data.
+- **A quiet app never flushes the trace.** `ScrollTrace`'s idle flush counts idle FRAMES, but a loop with
+  nothing to do stops running frames at all, so an app that simply goes quiet after a gesture never
+  reaches the threshold. A 50 s capture kept 32 of ~20,000 records. `FluentApp` now flushes before any
+  wait of 100 ms or longer.
 
 ## Bisection: the only causal evidence here
 
