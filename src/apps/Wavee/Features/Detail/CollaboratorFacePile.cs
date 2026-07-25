@@ -49,7 +49,8 @@ sealed class CollaboratorFacePile : Component
                 () => anchor.Value,
                 () => Flyout(() => handle.Value?.Close()),
                 FlyoutPlacement.BottomEdgeAlignedLeft,
-                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss, Chrome: PopupChrome.Raw) { ConstrainToRootBounds = false });
+                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss, Chrome: PopupChrome.Popup)
+                { ConstrainToRootBounds = false });
             handle.Value.ClosedAction = () => handle.Value = null;
         }
 
@@ -151,8 +152,6 @@ sealed class CollaboratorFacePile : Component
         {
             Direction = 1, Width = 280f, MaxHeight = 360f,
             Padding = new Edges4(8f, 8f, 8f, 8f),
-            Corners = CornerRadius4.All(Radii.Card), ClipToBounds = true, Shadow = Elevation.Flyout,
-            Acrylic = Tok.AcrylicFlyout, BorderWidth = 1f, BorderColor = Tok.StrokeFlyoutDefault,
             Children = [ScrollView(list) with { Width = 264f, MaxHeight = 344f, ContentSized = true, AutoEdgeFade = true, Grow = 0f }],
         };
     }

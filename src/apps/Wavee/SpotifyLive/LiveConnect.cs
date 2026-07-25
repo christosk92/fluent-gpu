@@ -33,7 +33,9 @@ public sealed class LiveConnect : IDisposable
     readonly ClusterIngest _ingest;
     readonly ConnectCommandRouter _commands;
     readonly IAudioHost _host;
-    readonly FluentVideoMediaHost _videoHost;   // the VIDEO half of the ONE current media (Milestone B)
+    readonly FluentVideoMediaHost _videoHost;   // the VIDEO half of the ONE current media (Milestone B) — OWNS the player
+    readonly WaveeLogger _playbackLog;
+    Action<FluentGpu.Media.MediaPlayer?>? _onVideoPlayerChanged;   // the wired PlayerChanged relay (detached on Dispose)
     readonly SpotifyServerClock _clock;   // server-clock skew estimator → corrects remote-position aging
     readonly ApConnection? _apChannel;   // owned: the adopted login socket
     readonly AudioPlaybackStack? _audio; // optional local-audio stack (null = silent/stub resolver)
@@ -49,6 +51,7 @@ public sealed class LiveConnect : IDisposable
         _apChannel = apChannel;
         _audio = audio;
         var playbackLog = log.With("playback");
+        _playbackLog = playbackLog;
         var telemetryLog = log.With("telemetry");
 
         // Server-clock estimator: probes GET /melody/v1/time over the authenticated spclient pipeline; its corrected
@@ -60,10 +63,15 @@ public sealed class LiveConnect : IDisposable
 
         var builder = new ConnectStateBuilder(deviceId, "Wavee", isPrivateSession: () => Projection.IsPrivateSession);
         _connect = new ConnectService(transport);   // connection-id capture only
+        // bug 6 / M0: the current track's Connect `track_player` must come from the controller's LIVE media kind (the ONE
+        // truth about which host is playing), not from a bare has-video flag on the wire snapshot. The controller does not
+        // exist yet here, so the publisher's build delegate reads it through this late-bound thunk (Audio until then).
+        Func<PlayableKind>? currentMediaKind = null;
         // The SINGLE PutState writer: NewConnection announce on the connection-id + our local player_state on playback
         // changes (so other devices/controllers see us as the active player). Re-injects the response cluster.
         _publisher = new DeviceStatePublisher(transport, deviceId, Projection, _connect.ConnectionId, () => _connect.CurrentConnectionId,
-            (reason, snap, mid, isActive) => builder.BuildPutState(reason, snap, mid, isActive),
+            (reason, snap, mid, isActive) => builder.BuildPutState(reason, snap, mid, isActive,
+                currentKind: currentMediaKind is null ? PlayableKind.Audio : currentMediaKind()),
             onCluster: _ingest.OnAnnounceResponse, log: log);
 
         _host = audio is not null ? audio.Host : new SilentAudioHost();
@@ -90,14 +98,7 @@ public sealed class LiveConnect : IDisposable
             deviceId, outbound, new IPlaybackProjection[] { _gabo, _resume, _publisher }, playbackLog,
             SpotifyClientIdentity.XpuiSnapshotVersion,   // play_origin.feature_version
             fast: fast, videoHost: _videoHost);
-        // TODO(B-wire): wire the app-level video decision + async source handoff from the composition root (where
-        // PlaybackBridge.ResolveVideoSource + the video-active state live, e.g. LiveSessionHost): set
-        //   Controller.ShouldPlayAsVideo = track => <VideoActive() && CurrentTrackHasVideo>;
-        //   Controller.LoadCurrentVideoAsync = async (track, ct) => { var src = await bridge.ResolveVideoSource(track.Uri, ct);
-        //       if (src is null) return false; _videoHost.LoadVideo(src); return true; };
-        // Until both hooks are set, ShouldPlayAsVideo defaults to null → every playable is audio, so the swap stays inert and
-        // the audio path is unchanged. FluentVideoMediaHost.CurrentPlayer/PlayerChanged is the seam a mounted PiP/pop-out
-        // surface binds to so the MF session actually pumps (see the MF-pump caveat in FluentVideoMediaHost).
+        currentMediaKind = () => Controller.CurrentMediaKind;   // close the late-bound `track_player` loop (see above)
         Controller.EpisodeResumeMicros = (uri, ct) => herodotus.TryGetEpisodeResumeMicrosAsync(uri, ct);
         if (audio?.TrackResolver is LiveTrackResolver ltr)
         {
@@ -123,6 +124,66 @@ public sealed class LiveConnect : IDisposable
         _clock.Start();
     }
 
+    // ── M0 — "one media, one host, one player": the app-level video hooks ─────────────────────────────────────────────────
+    // This is the wiring the old TODO(B-wire) described. It lives here (not in Backend/) precisely because the controller's
+    // hooks are DELEGATES: PlaybackController never references PlaybackBridge, the SpotifyLive video types, or FluentGpu.
+    //
+    //   ShouldPlayAsVideo      → the bridge's derived per-track predicate (the ONE VideoPlacementLogic.VideoActive rule, read
+    //                            without subscribing), so turning video off / dismissing it routes the media back to audio.
+    //   LoadCurrentVideoAsync  → the bridge's existing resolve path, then FluentVideoMediaHost.LoadVideo — the HOST builds and
+    //                            owns the engine MediaPlayer; the mounted surface only presents it.
+    //   PlayerChanged          → mirrored onto PlaybackBridge.VideoPlayer (UI-thread marshalled) so the surface re-binds.
+    //   RequestMediaKindRefresh→ the controller's re-evaluation entry point, so a mid-track "watch video" takes effect NOW.
+    /// <summary>Hand the controller the app-level video hooks (M0). Called ONCE by the live composition root
+    /// (<c>LiveSessionHost</c>); idempotent.
+    /// <para>KNOWN GAP, not a switch: a DRM music video has no audio track yet — the native CENC source demuxes video only
+    /// (the manifest parser drops every audio profile; <c>ProtectedMediaBackend</c> advertises no audio voice), so the swap
+    /// stops the song and the video plays silent. The milestone that demuxes the video's OWN audio is what makes this fully
+    /// correct (<c>docs/plans/wavee-surfaces-placement-design.md</c>, M7).</para></summary>
+    public void WireVideoMedia(PlaybackBridge bridge)
+    {
+        if (_onVideoPlayerChanged is not null) return;
+
+        // 1. The per-playable video decision. The bridge folds the sticky intent × this track's has-video × the per-content
+        //    dismissal through the one pure rule; a throwing predicate degrades to audio inside the controller.
+        Controller.ShouldPlayAsVideo = track => bridge.ShouldPlayAsVideo(track);
+
+        // 2. The async source handoff. Reuses the bridge's resolve path (same resolver, same publish onto PopOutVideoSource so
+        //    the surfaces key their content on the very source the host plays). Returns FALSE on "no playable video", which is
+        //    the controller's signal to fall back to audio for this playable instead of leaving the user in silence.
+        Controller.LoadCurrentVideoAsync = async (track, ct) =>
+        {
+            var src = await bridge.ResolveVideoSourceForPlaybackAsync(track.Uri, ct).ConfigureAwait(false);
+            if (src is null)
+            {
+                _playbackLog.Info($"no playable video source resolved for {track.Uri} - the controller will play it as audio");
+                return false;
+            }
+            _videoHost.LoadVideo(src);   // the HOST builds/owns the player and raises PlayerChanged (relayed below)
+            return true;
+        };
+
+        // 3. The player reaches the surfaces REACTIVELY (never a frozen field): the host raises PlayerChanged on its own
+        //    thread, the bridge marshals it onto the UI thread as one atomic (player, generation) value, and the mounted
+        //    MediaPlayerElement is keyed on that generation so it re-binds to the new instance.
+        _onVideoPlayerChanged = p => bridge.NotifyVideoPlayerChanged(p);
+        _videoHost.PlayerChanged += _onVideoPlayerChanged;
+        // Seed only if a player somehow already exists (re-wire after a logout/login); the default binding is already "none",
+        // so seeding null would bump the generation and re-render the surfaces for nothing.
+        if (_videoHost.CurrentPlayer is { } existing) bridge.NotifyVideoPlayerChanged(existing);
+
+        // 4. Every writer of the video INTENT asks the controller to re-evaluate the CURRENT playable's kind, so "watch video",
+        //    "switch to audio", and the surface ✕ swap the media host for the track already playing — not only at the next
+        //    track boundary. Fire-and-forget: it is a locked backend operation, never awaited from a UI handler.
+        bridge.RequestMediaKindRefresh = () => _ = RefreshMediaKindAsync();
+    }
+
+    async Task RefreshMediaKindAsync()
+    {
+        try { await Controller.RefreshCurrentMediaKindAsync().ConfigureAwait(false); }
+        catch (Exception ex) { _playbackLog.Info("media-kind refresh failed: " + ex.Message); }
+    }
+
     // Fetch the server's wall clock (Unix ms) over the authenticated spclient pipeline. GET /melody/v1/time → {"timestamp": ms}.
     // Tolerates a seconds-resolution payload (scaled to ms) so a unit change on the endpoint can't silently corrupt the offset.
     static async Task<long> FetchServerTimeMs(ITransport transport, CancellationToken ct)
@@ -136,6 +197,7 @@ public sealed class LiveConnect : IDisposable
 
     public void Dispose()
     {
+        if (_onVideoPlayerChanged is { } relay) { try { _videoHost.PlayerChanged -= relay; } catch { } _onVideoPlayerChanged = null; }
         try { Controller.DeactivateIfActiveOwner(); } catch { }   // best-effort clean is_active=false hand-off on logout
         _commands.Dispose();
         _publisher.Dispose();

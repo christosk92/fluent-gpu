@@ -424,6 +424,12 @@ public interface IPlatformWindow : IDisposable
     /// headless: settable, default (0,0)).</summary>
     Point2 ClientOriginPx => default;
 
+    /// <summary>The window's OUTER rect in physical virtual-screen px (Win32 <c>GetWindowRect</c>), or an empty rect when
+    /// the backend cannot report it. This is the read side of <see cref="SetBoundsPx"/>: a host that remembers where the
+    /// user put a secondary window needs to ask where it ENDED UP, which client origin + client size cannot answer for a
+    /// window with OS chrome.</summary>
+    RectF OuterBoundsPx => default;
+
     /// <summary>Drain queued OS input/window events into the ring (once per frame).</summary>
     int PumpInto(InputEventRing ring);
 

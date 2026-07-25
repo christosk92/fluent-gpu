@@ -820,8 +820,8 @@ static class PlaylistInlineEdit
 
     // ── invite affordance + access flyout ────────────────────────────────────────────────────────────────────────
 
-    /// <summary>Open (or toggle) the Invite &amp; access flyout anchored to <paramref name="anchor"/>. Raw acrylic card,
-    /// focus-trapped, light-dismiss — the CollaboratorFacePile flyout template.</summary>
+    /// <summary>Open (or toggle) the Invite &amp; access WinUI-style FlyoutPresenter anchored to
+    /// <paramref name="anchor"/>; focus-trapped and light-dismissable.</summary>
     static void OpenAccessFlyout(IOverlayService? overlay, LibraryBridge lib, Services? svc, Loadable<DetailModel> full,
         Func<NodeHandle> anchor, Ref<OverlayHandle?> handle, FlyoutPlacement placement)
     {
@@ -831,7 +831,8 @@ static class PlaylistInlineEdit
             anchor,
             () => Embed.Comp(() => new PlaylistAccessFlyout(full, lib, svc)),
             placement,
-            new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss, Chrome: PopupChrome.Raw) { ConstrainToRootBounds = false });
+            new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss, Chrome: PopupChrome.Popup)
+            { ConstrainToRootBounds = false });
         handle.Value.ClosedAction = () => handle.Value = null;
     }
 
@@ -959,8 +960,6 @@ static class PlaylistInlineEdit
             return new BoxEl
             {
                 Direction = 1, Width = 300f, Gap = 12f, Padding = Edges4.All(16f),
-                Corners = CornerRadius4.All(Radii.Card), ClipToBounds = true, Shadow = Elevation.Flyout,
-                Acrylic = Tok.AcrylicFlyout, BorderWidth = 1f, BorderColor = Tok.StrokeFlyoutDefault,
                 Children = content.ToArray(),
             };
         }

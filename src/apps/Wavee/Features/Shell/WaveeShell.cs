@@ -60,13 +60,9 @@ sealed class WaveeShell : Component
     readonly Signal<float> _sidebarFade = new(1f);             // content-opacity cue as a resize nears the collapse detent
     Action<float>? _requestTheme;                              // ambient ThemeControl.Request: live animated re-theme (captured in Render)
 
-    // Rail layout-defer lock (Task C): while the RailReveal spring plays out (and the fits-flip settles) the responsive
-    // breakpoints (track-list tier, detail mode) are gated so a transient width state doesn't churn multiple remounts
-    // (the open/close flash). Armed on every rail toggle; a one-shot UseTimeout clears it after the spring settles. RailLockMs
-    // must EXCEED the RailReveal settle (Spring(0.22f,1f) ≈ 220ms) so the lock never clears mid-flight → an extra remount.
-    bool _lastRailOpen;
-    TimerHandle _railLockClear;   // frame-clock one-shot; Restart() re-arms, generation-guarded (replaces the old System.Threading.Timer + gen int)
-    const int RailLockMs = 300;
+    // (The rail layout-defer lock that used to live here is gone — see the note in ShellUi. The projected path commits
+    // the reserved width in one frame, so there is nothing to debounce, and deferring the breakpoints only guaranteed a
+    // window where the wide column set was rendered into the narrow pane.)
     // Interactive grip drag owns geometry and therefore suppresses projection globally while the pointer is down. Rail
     // and collapse toggles must NOT use this gate: doing so cancels their own Reveal/FLIP tracks. Those commits use the
     // scoped SuppressDescendantTransitions contract on the projected shell containers instead.
@@ -264,9 +260,6 @@ sealed class WaveeShell : Component
         // Rail viewport-fit + layout-defer (off-render, auto-tracking effects — the render body stays subscription-free
         // so the shell isn't re-run on every resize pixel; only the rail band / pages re-solve from the signals below).
         var post = UsePost();
-        // One-shot layout-defer clear: fires RailLockMs after each arm to release RailLayoutLocked once the RailReveal
-        // spring settles (frame-clock UseTimeout — generation-guarded, auto-cancels on unmount; replaces the old Timer + post).
-        _railLockClear = UseTimeout(() => _shellUi.RailLayoutLocked.Value = false, RailLockMs);
 
         // Refresh the (reference-stable) ActionServices bag — plain field writes on the same instance, so the
         // Ctx.Provide below never churns its consumers. Overlay is bound by ActionServicesOverlayBinder (inside the
@@ -278,33 +271,15 @@ sealed class WaveeShell : Component
         _actions.Clipboard = UseContext(InputHooks.Current).Clipboard;
         _actions.Go = GoNav;
         _actions.Post = post;
-        void ArmRailLockWithClear()
-        {
-            _shellUi.ArmRailLock();
-            _railLockClear.Restart();   // one-shot clear after RailLockMs; the handle's generation guard drops a stale fire
-        }
-        // (1) Maintain ShellUi.RailFits from the live viewport/sidebar/rail widths. The rail no longer auto-closes on a
-        // fits-flip — it switches between inline (spacer reserves width) and floating (overlay only); the flip animates
-        // the spacer, so arm the layout-defer lock while that reflow is in flight. Peek-guarded so this never re-triggers.
+        // Maintain ShellUi.RailFits from the live viewport/sidebar/rail widths. The rail no longer auto-closes on a
+        // fits-flip — it switches between inline (spacer reserves width) and floating (overlay only). Peek-guarded so
+        // this never re-triggers.
         UseSignalEffect(() =>
         {
             float vpW = vpSig.Value.Width;
             float sbW = _sidebarCompact.Value ? 56f : _sidebarWidth.Value;
             bool fits = ShellUi.CanFitRail(vpW, sbW, _shellUi.RailWidth.Value);
-            if (_shellUi.RailFits.SetIfChanged(fits))
-            {
-                if (_shellUi.RailOpen.Peek()) ArmRailLockWithClear();
-            }
-        });
-        // (2) Arm the layout-defer lock on every rail toggle (open OR close); a one-shot Timer clears it after the
-        // RailReveal spring settles. The _lastRailOpen change-guard avoids arming on an unrelated re-render; the
-        // generation guard lets a rapid re-toggle cancel a stale clear. Cleared via post() (UI thread), like LyricsTicker.
-        UseSignalEffect(() =>
-        {
-            bool open = _shellUi.RailOpen.Value;
-            if (open == _lastRailOpen) return;
-            _lastRailOpen = open;
-            ArmRailLockWithClear();
+            _shellUi.RailFits.SetIfChanged(fits);
         });
 
         var column = new BoxEl
@@ -443,10 +418,27 @@ sealed class WaveeShell : Component
                             new BoxEl
                             {
                                 Shrink = 0f,
-                                // CHROME backing: the rail's rounded top-left wedge (overlay above) reads against this.
+                                // CHROME backing: the rail's rounded top-left wedge (underlay + overlay above) reads against this.
                                 Fill = Prop.Of(() => WaveeColors.Toolbar),
                                 Width = Prop.Of(() => _shellUi.RailOpen.Value && _shellUi.RailFits.Value ? _shellUi.RailWidth.Value : 0f),
                                 Animate = RailSpacerAnim,   // null (snap) in the projected path; Reflow spring in the baseline
+                                Children =
+                                [
+                                    // Static final-geometry underlay — the rail-side twin of the content card's underlay
+                                    // above. The reserved width SNAPS at commit while RightRail translates its panel in
+                                    // over 300ms; without this, that band is raw Toolbar chrome for the whole slide and
+                                    // the open reads as "the content jumps away from a dark hole, then a panel arrives".
+                                    // Painting the rail's own surface here (same Fill + same top-left card corner as
+                                    // RightRail's surface) means the band IS the rail from frame 0 and only the panel's
+                                    // CONTENT is seen to arrive. Paint-only: never a hit target, no opacity track (a
+                                    // fading full-height rail surface is what produced the old "ghost rail").
+                                    new BoxEl
+                                    {
+                                        Grow = 1f, HitTestPassThrough = true,
+                                        Fill = Prop.Of(() => WaveeColors.FileArea),
+                                        Corners = new CornerRadius4(Radii.Card, 0f, 0f, 0f),
+                                    },
+                                ],
                             },
                         ],
                     },
@@ -563,14 +555,16 @@ sealed class WaveeShell : Component
         // into the stable ActionServices bag (invoke-time dialogs: confirm / rename / add-to-playlist picker).
         // The in-window picture-in-picture video surface: a top-Z, pass-through floating layer (draggable + resizable),
         // visible only when the derived placement is the in-window PiP (VideoActive × VideoPlacement.InWindowPip). Reads
-        // the resolved PopOutVideoSource from the bridge (provided at the app root) and reuses PopOutVideoStage for the
-        // player. Sits above the content/banner layers so it floats over the page + player bar; engine popups (in the
+        // the resolved PopOutVideoSource + the backend-owned player (PlaybackBridge.VideoPlayer) from the bridge (provided at
+        // the app root) and PRESENTS that player via PopOutVideoStage — no surface ever builds one, which is why moving
+        // between the PiP and the pop-out does not restart the video. Sits above the content/banner layers so it floats over
+        // the page + player bar; engine popups (in the
         // outer OverlayHost ZStack) still stack above it. VideoPlacementHost is the sibling CONTROLLER leaf (renders
         // empty) that owns the detached pop-out window's lifecycle off the same derived placement state.
         var shellWithOverlays = Ui.ZStack(tinted, runtimeBannerLayer,
             Embed.Comp(() => new ActionServicesOverlayBinder(_actions)),
-            Embed.Comp(() => new Wavee.Features.Video.InWindowVideoPip()),
-            Embed.Comp(() => new Wavee.Features.Video.VideoPlacementHost())) with { Grow = 1f };
+            Embed.Comp(() => new Wavee.Features.Video.InWindowVideoPip { Settings = _settings }),
+            Embed.Comp(() => new Wavee.Features.Video.VideoPlacementHost { Settings = _settings })) with { Grow = 1f };
 
         return Ctx.Provide(ShellUi.Slot, _shellUi,
                Ctx.Provide(ShellTint.Slot, _shellTint,

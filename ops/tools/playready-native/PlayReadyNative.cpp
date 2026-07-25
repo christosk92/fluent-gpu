@@ -40,6 +40,7 @@
 #include <chrono>
 #include <thread>
 #include <cstdint>
+#include <cstddef>   // offsetof — the per-field ABI guard (FG_DESC_HAS)
 #include <cmath>
 #include <cstdio>
 #include <atomic>
@@ -171,10 +172,25 @@ struct FgPlayReadyOpenDesc
     const wchar_t* licenseServerUrl;// optional license destination hint (advisory; the callback owns licensing)
     int32_t        segmentStride;   // ABI-appended: segment-number step (1 = numbered $Number$; N = Spotify's N-second
                                     // timestamped segments, e.g. startNumber=0, stride=segment_length). Guarded on structSize.
+    // ABI-appended: the paired AUDIO representation — the video's OWN soundtrack. A music video is its own edit (intros,
+    // spoken pre/post-roll), so this audio is NOT interchangeable with the plain song's audio track. It sits on the SAME
+    // segment grid as the video (startNumber / segmentCount / segmentStride are shared) under the SAME content key, so it
+    // needs no separate licence acquisition. All null => video only.
+    const wchar_t* audioInitUrl;
+    const wchar_t* audioSegmentBaseUrl;
+    const wchar_t* audioSegmentPrefix;
+    const wchar_t* audioSegmentSuffix;
 };
+
+// An ABI-appended field is present iff the caller's struct is large enough to CONTAIN it. A `structSize >= sizeof(whole
+// struct)` test breaks the moment another field is appended — every older-but-still-valid caller would suddenly fail the
+// check for fields it genuinely does send — so version the fields individually.
+#define FG_DESC_HAS(desc, field) \
+    ((desc)->structSize >= (uint32_t)(offsetof(FgPlayReadyOpenDesc, field) + sizeof((desc)->field)))
 
 // The active open descriptor (copied deep by FgPlayReadyRunEx) + the managed license callback.
 static std::wstring       g_openInitUrl, g_openSegBase, g_openSegPrefix, g_openSegSuffix, g_openHeaders, g_openLicenseUrl;
+static std::wstring       g_openAudioInitUrl, g_openAudioSegBase, g_openAudioSegPrefix, g_openAudioSegSuffix;
 static int                g_openStartNumber = 1, g_openSegCount = 6, g_openSegStride = 1;
 static std::vector<uint8_t> g_openPssh;
 static FgLicenseCallback  g_licenseCallback = nullptr;
@@ -1963,6 +1979,7 @@ static bool RunCustomSourceAttempt(const std::wstring& storePath)
     //       supplies no init URL we fall back to the baked Axinom singlekey vector (legacy FgPlayReadyRun shim). ───────
     const std::wstring axBase = L"https://media.axprod.net/TestVectors/Dash/protected_dash_1080p_h264_singlekey/";
     std::wstring initUrl, segBase, segPrefix, segSuffix, segHeaders;
+    std::wstring aInitUrl, aSegBase, aSegPrefix, aSegSuffix;   // the video's own soundtrack; empty => video only
     int startNumber = 1, segCount = 6, segStride = 1;
 #ifdef FG_DESKTOP_DLL
     if (!g_openInitUrl.empty())
@@ -1975,9 +1992,16 @@ static bool RunCustomSourceAttempt(const std::wstring& storePath)
         segCount   = g_openSegCount   > 0 ? g_openSegCount   : 1;
         segStride  = g_openSegStride  > 0 ? g_openSegStride   : 1;      // 1 = numbered; N = N-second timestamped step
         segHeaders = g_openHeaders;
+        // The audio representation rides the SAME segment grid (same start number, count and stride) — only the profile
+        // in its URL differs — so one loop drives both tracks.
+        aInitUrl   = g_openAudioInitUrl;
+        aSegBase   = g_openAudioSegBase;
+        aSegPrefix = g_openAudioSegPrefix;
+        aSegSuffix = g_openAudioSegSuffix;
         LogLine("[cenc] source: descriptor initUrl=" + winrt::to_string(winrt::hstring(initUrl)) +
                 " segs=" + std::to_string(startNumber) + ".." + std::to_string(startNumber + (segCount - 1) * segStride) +
-                " stride=" + std::to_string(segStride));
+                " stride=" + std::to_string(segStride) +
+                " audio=" + (aInitUrl.empty() ? "none" : "yes"));
     }
     else
 #endif
@@ -2011,9 +2035,45 @@ static bool RunCustomSourceAttempt(const std::wstring& storePath)
     { std::wstringstream ks; for (int i = 0; i < 16; i++) ks << std::hex << std::setw(2) << std::setfill(L'0') << (int)info.kid[i]; g_kidHex = ks.str(); }
 #endif
 
-    std::vector<cenc::Sample> samples;
-    uint64_t decodeTicks = 0;
-    for (int i = 0; i < segCount; i++)
+    // ── 1b. The AUDIO init segment: the video's own soundtrack, a separate single-track file under the same key. Its
+    //        absence is NOT a failure — the session then plays video only, exactly as it did before. ────────────────
+    cenc::InitInfo audioInfo;
+    bool haveAudio = false;
+    if (!aInitUrl.empty())
+    {
+        int ast = 0;
+        auto aInitSeg = HttpGetBytes(aInitUrl, ast, segHeaders);
+        if (ast == 200 && !aInitSeg.empty() && cenc::ParseInit(aInitSeg, audioInfo) &&
+            audioInfo.kind == cenc::TrackKind::Audio)
+        {
+            haveAudio = true;
+            char acc[5] = { (char)(audioInfo.codec4cc >> 24), (char)(audioInfo.codec4cc >> 16),
+                            (char)(audioInfo.codec4cc >> 8), (char)audioInfo.codec4cc, 0 };
+            LogLine("[cenc] audio init parsed: codec=" + std::string(acc) +
+                    " " + std::to_string(audioInfo.channels) + "ch/" + std::to_string(audioInfo.sampleRate) + "Hz" +
+                    " asc=" + std::to_string(audioInfo.asc.size()) + "B" +
+                    " enc=" + (audioInfo.encrypted ? "1" : "0") +
+                    " timescale=" + std::to_string(audioInfo.timescale) +
+                    " ivSize=" + std::to_string((int)audioInfo.perSampleIvSize));
+        }
+        else
+        {
+            LogLine("[cenc] audio init UNUSABLE (HTTP " + std::to_string(ast) + ", " + std::to_string(aInitSeg.size()) +
+                    "B) — continuing VIDEO ONLY");
+        }
+    }
+
+    // ── 1c. Fetch a SHORT initial burst, then let the rest stream in behind playback. Downloading the whole track first
+    //        (~50 serial requests for a 3.5-minute video, doubled once audio joins) is what made "watch video" sit on a
+    //        spinner for tens of seconds and would now trip the managed start watchdog outright. ─────────────────────
+    constexpr int kInitialBurstSegments = 2;    // ~8s of media at Spotify's 4s segments — enough to reach first frame
+    constexpr size_t kMaxSamplesAhead   = 900;  // fetch-ahead ceiling per track (~30s of video) so memory stays bounded
+
+    std::vector<cenc::Sample> samples, audioSamples;
+    uint64_t decodeTicks = 0, audioDecodeTicks = 0;
+    int burst = segCount < kInitialBurstSegments ? segCount : kInitialBurstSegments;
+    int nextSegment = 0;   // index of the first segment the background feeder must fetch
+    for (int i = 0; i < burst; i++)
     {
         int num = startNumber + i * segStride;
         std::wstring url = segBase + segPrefix + std::to_wstring(num) + segSuffix;
@@ -2021,9 +2081,29 @@ static bool RunCustomSourceAttempt(const std::wstring& storePath)
         if (st != 200 || seg.empty()) { LogLine("[cenc] media #" + std::to_string(num) + " HTTP " + std::to_string(st) + " — stop"); break; }
         int n = cenc::ParseSegment(seg, info, samples, decodeTicks);
         LogLine("[cenc] seg#" + std::to_string(num) + " " + std::to_string(seg.size()) + "B -> " + std::to_string(n) + " sample(s)");
+        if (haveAudio)
+        {
+            int ast = 0;
+            std::wstring aUrl = aSegBase + aSegPrefix + std::to_wstring(num) + aSegSuffix;
+            auto aSeg = HttpGetBytes(aUrl, ast, segHeaders);
+            if (ast == 200 && !aSeg.empty())
+            {
+                int an = cenc::ParseSegment(aSeg, audioInfo, audioSamples, audioDecodeTicks);
+                LogLine("[cenc] aseg#" + std::to_string(num) + " " + std::to_string(aSeg.size()) + "B -> " + std::to_string(an) + " sample(s)");
+            }
+            else
+            {
+                LogLine("[cenc] aseg#" + std::to_string(num) + " HTTP " + std::to_string(ast) + " — dropping audio track");
+                haveAudio = false; audioSamples.clear();
+            }
+        }
+        nextSegment = i + 1;
     }
     if (samples.empty()) { LogLine("[cenc] no samples demuxed — abort."); return false; }
-    LogLine("[cenc] demuxed " + std::to_string(samples.size()) + " total sample(s).");
+    bool streaming = nextSegment < segCount;
+    LogLine("[cenc] initial burst: " + std::to_string(samples.size()) + " video + " + std::to_string(audioSamples.size()) +
+            " audio sample(s) from " + std::to_string(nextSegment) + "/" + std::to_string(segCount) + " segment(s)" +
+            (streaming ? " — the rest streams in behind playback" : " (complete)"));
 
     // ── 2. D3D11 + MF DXGI manager (shared, multithread-protected). ─────────────────────────────────────────────────
     HRESULT hr;
@@ -2063,7 +2143,90 @@ static bool RunCustomSourceAttempt(const std::wstring& storePath)
     catch (winrt::hresult_error const& e) { LogLine("[cenc] protection manager ctor hr=" + hx(e.code().value)); g_emeCdm->Release(); g_emeCdm=nullptr; dxgiMgr->Release(); d3d->Release(); return false; }
 
     // ── 4. Build the custom source + wire it to the media engine via the MF_MEDIA_ENGINE_EXTENSION extension. ───────
-    winrt::com_ptr<CencMediaSource> source = BuildCencSource(info, std::move(samples));
+    CencAudioFeed audioFeed;
+    if (haveAudio) { audioFeed.info = audioInfo; audioFeed.samples = std::move(audioSamples); }
+    // The WHOLE track's duration, extrapolated from the burst: segments are equal length, so the media time covered by
+    // `nextSegment` of them scales to `segCount`. Scheme-agnostic (works for both time-addressed and numbered segments)
+    // and accurate to within one segment. Without it the presentation would claim to be only as long as the burst.
+    uint64_t burstEnd100ns = info.timescale ? (decodeTicks * 10000000ULL) / info.timescale : 0;
+    uint64_t total100ns = (streaming && nextSegment > 0)
+        ? burstEnd100ns * (uint64_t)segCount / (uint64_t)nextSegment
+        : 0;
+    if (total100ns)
+        LogLine("[cenc] presentation duration " + std::to_string(total100ns / 10000000ULL) + "s (extrapolated from " +
+                std::to_string(nextSegment) + "/" + std::to_string(segCount) + " segments)");
+    winrt::com_ptr<CencMediaSource> source =
+        BuildCencSource(info, std::move(samples), haveAudio ? &audioFeed : nullptr, streaming, total100ns);
+
+    // ── 4b. The background feeder: keeps fetching + demuxing behind the playhead, bounded so memory does not grow with
+    //        the whole track. It owns strong refs to the streams, and the joiner below guarantees it is stopped and
+    //        joined before those streams (and this frame) go away — on EVERY exit path, including the failure ones.
+    std::atomic<bool> feedStop{ false };
+    std::thread feeder;
+    struct FeedJoiner
+    {
+        std::atomic<bool>& stop; std::thread& t;
+        ~FeedJoiner() { stop.store(true, std::memory_order_release); if (t.joinable()) t.join(); }
+    } feedJoiner{ feedStop, feeder };
+
+    if (streaming)
+    {
+        auto videoStream = source->m_streams[0];
+        auto audioStream = source->m_streams.size() > 1 ? source->m_streams[1] : nullptr;
+        feeder = std::thread([=, &feedStop]() mutable
+        {
+            int hrInit = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+            uint64_t vTicks = decodeTicks, aTicks = audioDecodeTicks;
+            int i = nextSegment;
+            for (; i < segCount; i++)
+            {
+                // Backpressure: stay a bounded distance ahead of the playhead. While paused the playhead stops, so this
+                // naturally stops fetching too instead of racing to download the rest of the track.
+                while (!feedStop.load(std::memory_order_acquire) && !StopRequested() &&
+                       !videoStream->IsShutdown() && videoStream->Ahead() > kMaxSamplesAhead)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                if (feedStop.load(std::memory_order_acquire) || StopRequested() || videoStream->IsShutdown()) break;
+
+                int num = startNumber + i * segStride;
+                int status = 0;
+                auto seg = HttpGetBytes(segBase + segPrefix + std::to_wstring(num) + segSuffix, status, segHeaders);
+                if (status != 200 || seg.empty())
+                { LogLine("[cenc-feed] video seg#" + std::to_string(num) + " HTTP " + std::to_string(status) + " — stopping feed"); break; }
+                std::vector<cenc::Sample> more;
+                cenc::ParseSegment(seg, info, more, vTicks);
+                videoStream->AppendSamples(std::move(more));
+
+                if (audioStream)
+                {
+                    int aStatus = 0;
+                    auto aSeg = HttpGetBytes(aSegBase + aSegPrefix + std::to_wstring(num) + aSegSuffix, aStatus, segHeaders);
+                    if (aStatus == 200 && !aSeg.empty())
+                    {
+                        std::vector<cenc::Sample> aMore;
+                        cenc::ParseSegment(aSeg, audioInfo, aMore, aTicks);
+                        audioStream->AppendSamples(std::move(aMore));
+                    }
+                    else
+                    {
+                        // Audio ran out but video has not: end the audio stream cleanly so the presentation still ends
+                        // on the video, rather than leaving a stream that can never satisfy another request.
+                        LogLine("[cenc-feed] audio seg#" + std::to_string(num) + " HTTP " + std::to_string(aStatus) + " — ending audio feed");
+                        audioStream->MarkComplete();
+                        audioStream = nullptr;
+                    }
+                }
+                if ((i % 10) == 0)
+                    LogLine("[cenc-feed] seg#" + std::to_string(num) + " fed (" + std::to_string(i + 1) + "/" +
+                            std::to_string(segCount) + ", ahead=" + std::to_string(videoStream->Ahead()) + ")");
+            }
+            // Whatever the reason we stopped, both streams must be told: a stream left incomplete would park requests
+            // forever instead of reporting end-of-stream.
+            videoStream->MarkComplete();
+            if (audioStream) audioStream->MarkComplete();
+            LogLine("[cenc-feed] feeder exit at segment " + std::to_string(i) + "/" + std::to_string(segCount));
+            if (SUCCEEDED(hrInit)) CoUninitialize();
+        });
+    }
 #if defined(FG_DESKTOP_DLL) || defined(FG_WIN32_PMP)
     // Desktop-only PMP bridge: the protected source exposes the CDM's trusted input so Media Foundation can obtain
     // the per-stream ITA/decrypter inside Windows' protected process.
@@ -2262,6 +2425,12 @@ static bool RunCustomSourceAttempt(const std::wstring& storePath)
         LogLine("[cenc] exiting keep-alive (shutdown).");
     }
 
+    // Stop and join the feeder BEFORE tearing the source down. Its streams hold a weak back-pointer to this source, so
+    // an append (or an end-of-stream notification) racing with the releases below would touch freed memory. The RAII
+    // joiner above remains the backstop for the early-return paths; here it becomes a no-op.
+    feedStop.store(true, std::memory_order_release);
+    if (feeder.joinable()) feeder.join();
+
     engine->Shutdown();
     if (g_cdmSession) { g_cdmSession->Release(); g_cdmSession = nullptr; }
     if (engineEx) engineEx->Release();
@@ -2309,6 +2478,7 @@ extern "C" __declspec(dllexport) int __stdcall FgPlayReadyRunEx(const wchar_t* b
     int mode = 0;
     g_openInitUrl.clear(); g_openSegBase.clear(); g_openSegPrefix.clear(); g_openSegSuffix.clear();
     g_openHeaders.clear(); g_openLicenseUrl.clear(); g_openPssh.clear(); g_kidHex.clear();
+    g_openAudioInitUrl.clear(); g_openAudioSegBase.clear(); g_openAudioSegPrefix.clear(); g_openAudioSegSuffix.clear();
     g_openStartNumber = 1; g_openSegCount = 6; g_openSegStride = 1;
     if (desc)
     {
@@ -2319,11 +2489,21 @@ extern "C" __declspec(dllexport) int __stdcall FgPlayReadyRunEx(const wchar_t* b
         if (desc->segmentSuffix)    g_openSegSuffix   = desc->segmentSuffix;
         if (desc->startNumber >= 0) g_openStartNumber = desc->startNumber;   // >= 0: Spotify timestamped segments start at 0
         if (desc->segmentCount > 0) g_openSegCount    = desc->segmentCount;
-        // ABI-appended field: only read when the managed struct is new enough to include it.
-        if (desc->structSize >= sizeof(FgPlayReadyOpenDesc) && desc->segmentStride > 0) g_openSegStride = desc->segmentStride;
+        // ABI-appended fields: each read only when the caller's struct is large enough to carry it.
+        if (FG_DESC_HAS(desc, segmentStride) && desc->segmentStride > 0) g_openSegStride = desc->segmentStride;
         if (desc->httpHeaders)      g_openHeaders     = desc->httpHeaders;
         if (desc->licenseServerUrl) g_openLicenseUrl  = desc->licenseServerUrl;
         if (desc->pssh && desc->psshLen > 0) g_openPssh.assign(desc->pssh, desc->pssh + desc->psshLen);
+        // The paired audio representation. Copied here (M2) so the addressing is available to the CENC source; the
+        // two-stream demux that actually PLAYS it is the next milestone (M3) — until then these are inert and the
+        // session behaves exactly as before, which is deliberate: this half cannot regress playback.
+        if (FG_DESC_HAS(desc, audioSegmentSuffix))
+        {
+            if (desc->audioInitUrl)        g_openAudioInitUrl   = desc->audioInitUrl;
+            if (desc->audioSegmentBaseUrl) g_openAudioSegBase   = desc->audioSegmentBaseUrl;
+            if (desc->audioSegmentPrefix)  g_openAudioSegPrefix = desc->audioSegmentPrefix;
+            if (desc->audioSegmentSuffix)  g_openAudioSegSuffix = desc->audioSegmentSuffix;
+        }
     }
     g_licenseCallback = licenseCallback;
     g_licenseCtx = licenseCtx;
@@ -2334,8 +2514,14 @@ extern "C" __declspec(dllexport) int __stdcall FgPlayReadyRunEx(const wchar_t* b
     g_logPath = root + L"\\desktop-playready.log";
     g_stopPath.clear(); g_evtPath.clear(); g_cmdPath.clear();
     { std::ofstream f(g_logPath, std::ios::binary | std::ios::trunc); }
-    LogLine("[desktop] BUILD=desktop-cdm-20260719-tempsess-v13 root=" +
+    LogLine("[desktop] BUILD=desktop-cdm-20260725-audiodemux-v15 root=" +
             std::string(root.begin(), root.end()));
+    // Proof that the audio representation crossed the ABI (the M2 acceptance line, and the first thing to check when the
+    // M3 two-stream demux misbehaves). "none" is a legitimate outcome: a manifest without AAC audio plays video only.
+    LogLine(std::string("[desktop] audio representation: ") +
+            (g_openAudioInitUrl.empty()
+                 ? "none (video only)"
+                 : "present prefix=" + std::string(g_openAudioSegPrefix.begin(), g_openAudioSegPrefix.end())));
 
     // Clear-video diagnostic through the exact same in-process DLL and DirectComposition handoff. This is used to
     // distinguish a compositor-binding defect from protected-output behavior; production PlayReady uses mode 0.

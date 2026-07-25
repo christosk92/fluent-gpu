@@ -100,6 +100,7 @@ static class LayoutShellSuite
         SidebarCollapseFlipChecks(strings);
         DeviceLostRecoveryChecks(strings);
         FlexChecks(strings);
+        GridSqueezeChecks(strings);
         ShellDockChecks(strings);
         ShellResizeChecks(strings);
         DetailResizeFlickerChecks(strings);
@@ -188,6 +189,61 @@ static class LayoutShellSuite
     }
 
 
+
+    // gate.grid.zero-width-squeeze — a grid handed LESS width than its fixed tracks need is a layout error the engine
+    // degrades gracefully (FlexLayout.ResolveColumns scales the fixed tracks; the Star track resolves to 0). What must
+    // never happen is a collapsed cell painting across its neighbours. That is exactly what shipped: a track list whose
+    // column set was one breakpoint too wide for its pane rendered title, artist, album and added-by stacked on the same
+    // pixels. Two independent guards make it safe and this gate pins both — the geometry (cells stay ordered, disjoint
+    // and inside the grid even at scale ~0) and the containment (a cell's content is bounded by its own track). The
+    // paint-side half — a 0-width text budget silently disabling the AUTHORED ellipsis — lives in the DirectWrite seam's
+    // WrapAndPosition trim guard, and is NOT observable from here: the headless font system clamps its reported width
+    // whatever the guard does, so it reported a narrower box than DirectWrite actually rasterised. That divergence is
+    // precisely why the original defect could ship green, and it is not closed by this gate — the slice's closure is
+    // deliberately TerraFX-free, so the DirectWrite path cannot be exercised headlessly at all. Verified there by the
+    // rail probe's PNG captures instead. What IS pinned here is the geometry every cell relies on to stay safe.
+    static void GridSqueezeChecks(StringTable strings)
+    {
+        // 120 + 120 fixed + 2 gaps = 256 > 200 available ⇒ the guard scales the fixed tracks and Star gets nothing.
+        var s = LayoutTree(strings, new BoxEl
+        {
+            Direction = 1, Width = 200f, Height = 60f,
+            Children =
+            [
+                new GridEl
+                {
+                    Columns = [TrackSize.Px(120f), TrackSize.Star(), TrackSize.Px(120f)],
+                    ColGap = 8f, RowHeight = 40f, Grow = 1f,
+                    Children =
+                    [
+                        SqueezeCell("leading column"),
+                        SqueezeCell("a very long squeezed title that must not escape its own column"),
+                        SqueezeCell("trailing column"),
+                    ],
+                },
+            ],
+        });
+        var grid = Child(s, s.Root, 0);
+        RectF g = s.AbsoluteRect(grid);
+        RectF c0 = s.AbsoluteRect(Child(s, grid, 0));
+        RectF c1 = s.AbsoluteRect(Child(s, grid, 1));
+        RectF c2 = s.AbsoluteRect(Child(s, grid, 2));
+        RectF t1 = s.AbsoluteRect(Child(s, Child(s, grid, 1), 0));
+
+        bool starCollapsed = c1.W <= 0.5f;                                   // the squeeze actually happened
+        bool disjoint = c0.X + c0.W <= c1.X + 0.5f && c1.X + c1.W <= c2.X + 0.5f;   // no cell overlaps the next
+        bool inside = c2.X + c2.W <= g.X + g.W + 0.5f;                       // nothing spills past the grid
+        bool contentBounded = t1.W <= c1.W + 0.5f;                           // the collapsed cell's content is bounded
+        Check("gate.grid.zero-width-squeeze an over-narrow grid collapses its Star track to 0 and every cell stays ordered, disjoint, inside the grid, and bounded by its own track (no cell-over-cell glyph pile-up)",
+            starCollapsed && disjoint && inside && contentBounded,
+            $"star={c1.W:0.##} cells=({c0.X:0.#}+{c0.W:0.#}, {c1.X:0.#}+{c1.W:0.#}, {c2.X:0.#}+{c2.W:0.#}) grid={g.X:0.#}+{g.W:0.#} content={t1.W:0.##}");
+
+        static Element SqueezeCell(string text) => new BoxEl
+        {
+            MinWidth = 0f, ClipToBounds = true, AlignItems = FlexAlign.Center,
+            Children = [new TextEl(text) { Size = 13f, Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f }],
+        };
+    }
 
     static void FlexChecks(StringTable strings)
     {

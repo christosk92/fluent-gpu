@@ -161,6 +161,9 @@ public sealed class Services
         Settings = settings;
         Locale = appLocale;
         Playback = new PlaybackBridge(player, devices, session);
+        // Seed the movable video surface from persisted settings BEFORE the first frame, so the remembered placement is
+        // already in effect rather than popping in after the shell mounts.
+        if (settings is not null) Playback.SeedVideoSurfaceFromSettings(settings);
         Activity = new ActivityLog(activityStore);
         LibraryBridge = new LibraryBridge(mutations, userPlaylists, playlistEdits, Activity);
         FriendsBridge = new FriendsBridge(Friends);

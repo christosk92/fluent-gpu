@@ -259,6 +259,15 @@ internal sealed unsafe class CompositionBackdrop : IDisposable
         Check(_roundGeo->put_Offset(new Vector2(contentPx.X, contentPx.Y)), "round put_Offset");
         Check(_roundGeo->put_Size(new Vector2(contentPx.W, contentPx.H)), "round put_Size");
         Check(_roundGeo->put_CornerRadius(new Vector2(cornerRadiusPx, cornerRadiusPx)), "round put_CornerRadius");
+        // ConfigureChrome runs while a newly leased popup HWND is still hidden. Seed the composition root NOW so the
+        // first visible desktop-acrylic frame is already at MenuPopupThemeTransition's closed offset; AnimateOpen only
+        // starts the interpolation after the swapchain's first seeded frame has presented.
+        if (!_opened)
+        {
+            float slide = _contentHPx * _closedRatio;
+            float initial = _closedRatio > 0f ? (_opensUp ? slide : -slide) : 0f;
+            Check(_animRootVisual->put_Offset(new Vector3(0f, initial, 0f)), "put_Offset(configure seed)");
+        }
 
         // Drop-shadow recipe to fit the WinUI medium-popup insets (L10 T2 R10 B18 DIP): blur ≈ side inset (10), offset down
         // ≈ (B−T)/2 (8) — at scale, blur extends ~10 sideways, ~2 up, ~18 down. cornerRadiusPx = OverlayCornerRadius(8 DIP)·scale.
@@ -290,10 +299,6 @@ internal sealed unsafe class CompositionBackdrop : IDisposable
         _opened = true;
         if (_closedRatio <= 0f) return;   // no-slide chrome (CommandBar): appear in place, the body fades itself
         _motionStartTick = Environment.TickCount64;
-
-        float slide = _contentHPx * _closedRatio;
-        float initial = _opensUp ? slide : -slide;
-        Check(_animRootVisual->put_Offset(new Vector3(0f, initial, 0f)), "put_Offset(seed)");
 
         IScalarKeyFrameAnimation* anim; Check(s_comp->CreateScalarKeyFrameAnimation(&anim), "CreateScalarKeyFrameAnimation");
         ICubicBezierEasingFunction* ease; Check(s_comp->CreateCubicBezierEasingFunction(new Vector2(0f, 0f), new Vector2(0f, 1f), &ease), "CreateCubicBezierEasingFunction");

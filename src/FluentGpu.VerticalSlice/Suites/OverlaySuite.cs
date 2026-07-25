@@ -1636,6 +1636,7 @@ static class OverlaySuite
         var root = new OverlayProbe();
         var clock = new ManualFrameTimeSource();
         using var host = new AppHost(app, window, device, fonts, strings, root, frameTime: clock);
+        host.PopupWindowsEnabled = false;   // exercise the in-window fallback transition family deterministically
         host.RunFrame();
 
         var svc = root.Service!;
@@ -1897,25 +1898,22 @@ static class OverlaySuite
                     $"end={tEnd} close48={close48} (op={c48.Opacity:0.00} clipH={c48.ClipRect.H:0.0}≈{ddH * 0.3778f:0.0}) close112={close112} (op={op112:0.000})");
             }
 
-            // 64i — Flyout/FlyoutPresenter (PopupThemeTransition → TAS_SHOWPOPUP/TAS_HIDEPOPUP; FlyoutBase attaches it,
-            // FlyoutBase_Partial.cpp:1968-1975). [ASSERTION-CHANGE: the OS TAS_SHOWPOPUP timeline is uxtheme-RUNTIME (not
-            // in the mux source — only g_entranceThemeOffset=50 + the per-side axis are pinned), so the entrance is aligned
-            // to the verified Fluent flyout-family curve: TRANSLATE ±50→0 (axis+sign from the effective placement) over
-            // 167ms cubic-bezier(0,0,0,1) with OPACITY 0→1 over the SAME 167ms LINEAR (no 83ms hold); hide = OPACITY →0
-            // over 83ms linear, no slide (TAS_HIDEPOPUP offset 0→0).]
+            // 64i — Flyout/FlyoutPresenter (PopupThemeTransition → TAS_SHOWPOPUP/TAS_HIDEPOPUP): stock-Windows PVL
+            // translates ±50→0 over 367ms cubic(.1,.9,.2,1); opacity holds 83ms then fades over 83ms. Hide is an
+            // 83ms linear opacity-only transition.
             {
                 var (s, _) = OpenKind(PopupChrome.Popup);
                 var p0 = host.Scene.Paint(s);
                 bool t0 = Near(p0.LocalTransform.Dy, -50f, 1f) && p0.Opacity < 0.01f;
                 clock.Advance(48f); host.RunFrame();
                 var p1 = host.Scene.Paint(s);
-                bool t48 = Near(p1.Opacity, 48f / 167f, 0.06f)     // opacity fades from the FIRST tick (no hold)
-                    && p1.LocalTransform.Dy > -30f && p1.LocalTransform.Dy < -3f;   // 0,0,0,1 front-loaded slide underway
-                clock.Advance(80f); host.RunFrame();                // t=128 → opacity 128/167 = 0.766
+                bool t48 = p1.Opacity < 0.01f
+                    && p1.LocalTransform.Dy > -40f && p1.LocalTransform.Dy < -1f;
+                clock.Advance(80f); host.RunFrame();                // t=128 → opacity (128−83)/83
                 var p2 = host.Scene.Paint(s);
-                bool t128 = Near(p2.Opacity, 128f / 167f, 0.06f)
-                    && p2.LocalTransform.Dy > -8f && p2.LocalTransform.Dy <= 0f;
-                clock.Advance(320f); host.RunFrame();               // t=448 > 167 → settled
+                bool t128 = Near(p2.Opacity, (128f - 83f) / 83f, 0.06f)
+                    && p2.LocalTransform.Dy > p1.LocalTransform.Dy && p2.LocalTransform.Dy <= 0f;
+                clock.Advance(320f); host.RunFrame();               // t=448 > 367 → settled
                 var p3 = host.Scene.Paint(s);
                 bool tEnd = Near(p3.LocalTransform.Dy, 0f, 0.5f) && p3.Opacity > 0.99f;
                 svc.CloseTop(); host.RunFrame();
@@ -1923,10 +1921,10 @@ static class OverlaySuite
                 float op48 = host.Scene.IsLive(s) ? host.Scene.Paint(s).Opacity : -1f;
                 bool close48 = Near(op48, 1f - 48f / 83f, 0.02f);   // TAS_HIDEPOPUP: 83ms linear fade
                 SettleAll();
-                Check("64i. Flyout samples: PopupThemeTransition slide −50→0 over 167ms cubic(0,0,0,1) + opacity 0→1 over the SAME 167ms linear (no hold); close 83ms fade",
+                Check("64i. Flyout samples: slide −50→0 over 367ms cubic(.1,.9,.2,1); opacity hold 83ms + fade 83ms; close 83ms fade",
                     t0 && t48 && t128 && tEnd && close48,
                     $"t0={t0} (dy={p0.LocalTransform.Dy:0.0} op={p0.Opacity:0.00}) t48={t48} (dy={p1.LocalTransform.Dy:0.0} op={p1.Opacity:0.00}) " +
-                    $"t128={t128} (op={p2.Opacity:0.000}≈{128f / 167f:0.000} dy={p2.LocalTransform.Dy:0.0}) end={tEnd} close48={close48} (op={op48:0.000})");
+                    $"t128={t128} (op={p2.Opacity:0.000}≈{(128f - 83f) / 83f:0.000} dy={p2.LocalTransform.Dy:0.0}) end={tEnd} close48={close48} (op={op48:0.000})");
             }
 
             // 64j — ToolTip (FadeIn/FadeOutThemeAnimation, the template's Opened/Closed states,
@@ -2066,11 +2064,9 @@ static class OverlaySuite
                 $"minEdge={minEdge} monitor={monitor} secondary={secondary} (pwA.Y={pwA.Y:0.#} pwB.Y={pwB.Y:0.#} pwC.X={pwC.X:0.#})");
         }
 
-        // e4popup.3 — the windowed-popup headless pipeline: PopupOptions.ConstrainToRootBounds=false leases a PAL
-        // popup window + its own swapchain, the subtree records into ITS OWN DrawList re-origined to the popup's
-        // (0,0) (SceneRecorder.RecordSubtree) while the MAIN record skips it (skipRoots); default (true) keeps
-        // today's in-window path, and PopupWindowsEnabled=false falls back silently (CPopup::
-        // DoesPlatformSupportWindowedPopup == false, FlyoutBase_Partial.cpp:3188).
+        // e4popup.3 — MenuFlyout always windows when supported; other Flyouts window when
+        // ConstrainToRootBounds=false. Each gets a PAL popup + swapchain and subtree DrawList while the main record
+        // skips it. A constrained ordinary Flyout stays in-window; PopupWindowsEnabled=false falls back silently.
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("e4win", new Size2(480, 360), 1f));
@@ -2086,7 +2082,7 @@ static class OverlaySuite
             var popupBody = new PopupExitProbeBody();
             var hWin = svc.Open(() => root.Anchor,
                 () => Embed.Comp(() => popupBody),
-                FlyoutPlacement.BottomLeft, new PopupOptions { ConstrainToRootBounds = false });
+                FlyoutPlacement.BottomLeft);
             host.RunFrame();
 
             bool leased = host.PopupWindows.Count == 1 && app.PopupWindows.Count == 1;
@@ -2134,10 +2130,10 @@ static class OverlaySuite
                 && HasGlyph(scratch, strings, "popup-exit-new")
                 && !HasGlyph(device, strings, "popup-exit-old");
 
-            // Default (ConstrainToRootBounds = true): in-window popup — no window lease, content in the MAIN DrawList.
+            // A constrained ordinary FlyoutPresenter remains in-window — no new lease, content in the main DrawList.
             var hIn = svc.Open(() => root.Anchor,
                 () => new BoxEl { Width = 120, Height = 40, Children = [new TextEl("inwin-body") { Size = 12f }] },
-                FlyoutPlacement.BottomLeft);
+                FlyoutPlacement.BottomLeft, new PopupOptions(Chrome: PopupChrome.Popup));
             host.RunFrame();
             bool defaultInWindow = app.PopupWindows.Count == 1 && HasGlyph(device, strings, "inwin-body");
             hIn.Close();
@@ -2150,20 +2146,40 @@ static class OverlaySuite
             for (int i = 0; i < 20; i++) host.RunFrame();
             bool released = host.PopupWindows.Count == 0 && pal is { Disposed: true, IsShown: false };
 
-            // PopupWindowsEnabled = false (the DoesPlatformSupportWindowedPopup gate): silent constrained fallback.
+            // An unconstrained ordinary FlyoutPresenter does NOT lease an HWND. WinUI would window it
+            // (FlyoutBase_Partial.cpp:966), but a material-less popup window carries no CompositionBackdrop and the
+            // engine acrylic compositor snapshots the canvas it renders INTO — a windowed FlyoutPresenter would blur
+            // its own transparent-cleared swapchain and composite a flat, unfrosted slab. It stays in-window, where the
+            // acrylic has the app backdrop to sample, and its content lands in the MAIN DrawList.
+            var hRich = svc.Open(() => root.Anchor,
+                () => new BoxEl { Width = 140, Height = 50, Children = [new TextEl("rich-body") { Size = 12f }] },
+                FlyoutPlacement.BottomLeft,
+                new PopupOptions(Chrome: PopupChrome.Popup) { ConstrainToRootBounds = false });
+            host.RunFrame(); host.RunFrame();
+            bool ordinaryInWindow = host.PopupWindows.Count == 0 && app.PopupWindows.Count == 1
+                && HasGlyph(device, strings, "rich-body");
+            hRich.Close();
+            for (int i = 0; i < 20; i++) host.RunFrame();
+
+            // PopupWindowsEnabled = false (the DoesPlatformSupportWindowedPopup gate): a MENU that would otherwise be
+            // windowed leases nothing and falls back to the in-window path (content lands in the MAIN DrawList).
+            int leasedBeforeFallback = app.PopupWindows.Count;
             host.PopupWindowsEnabled = false;
             var hFb = svc.Open(() => root.Anchor,
                 () => new BoxEl { Width = 120, Height = 40, Children = [new TextEl("fb-body") { Size = 12f }] },
                 FlyoutPlacement.BottomLeft, new PopupOptions { ConstrainToRootBounds = false });
             for (int i = 0; i < 20; i++) host.RunFrame();
-            bool fallback = app.PopupWindows.Count == 1 && HasGlyph(device, strings, "fb-body");
+            bool fallback = app.PopupWindows.Count == leasedBeforeFallback && HasGlyph(device, strings, "fb-body");
             hFb.Close();
             for (int i = 0; i < 20; i++) host.RunFrame();
 
-            Check("e4popup.3 windowed popup: PAL lease + own DrawList/swapchain, main record skips the subtree; default + disabled stay in-window",
+            Check("e4popup.3 windowing: menus always HWND+DesktopAcrylic; FlyoutPresenter stays in-window (constrained OR not); disabled falls back",
                 leased && shown && placed && osBackdrop && routed && noEngineAcrylic && reorigined && mainSkips && presented
-                && popupExitRouted && defaultInWindow && keptWhileFading && released && fallback,
-                $"leased={leased} shown={shown} placed={placed} os={osBackdrop} routed={routed} noAcrylic={noEngineAcrylic} reorig={reorigined} skip={mainSkips} exitRoute={popupExitRouted} present={presented} def={defaultInWindow} kept={keptWhileFading} rel={released} fb={fallback}");
+                && popupExitRouted && defaultInWindow && keptWhileFading && released
+                && ordinaryInWindow && fallback,
+                $"menu={leased}/{shown}/{osBackdrop} routed={routed} noAcrylic={noEngineAcrylic} reorig={reorigined} " +
+                $"skip={mainSkips} exitRoute={popupExitRouted} present={presented} constrained={defaultInWindow} " +
+                $"kept={keptWhileFading} released={released} unconstrained={ordinaryInWindow} fallback={fallback}");
         }
 
         // e4popup.4 — the GetWorkArea seam through the host: the work-area query lands at the anchor's centre in
@@ -2208,7 +2224,8 @@ static class OverlaySuite
 
             var hIn = svc.Open(() => root.Anchor,
                 () => new BoxEl { Width = 180, Height = 80, Children = [new TextEl("wa-in-body") { Size = 12f }] },
-                FlyoutPlacement.BottomLeft);
+                FlyoutPlacement.BottomLeft,
+                new PopupOptions(Chrome: PopupChrome.Popup));
             for (int i = 0; i < 20; i++) host.RunFrame();
             var inBody = FindTextNode(host.Scene, strings, host.Scene.Root, "wa-in-body");
             bool constrainedBelow = !inBody.IsNull && host.Scene.AbsoluteRect(inBody).Y > anchorRect.Bottom;
@@ -2500,10 +2517,11 @@ static class OverlaySuite
                 var fonts = new HeadlessFontSystem(strings);
                 var root = new OverlayProbe();
                 using var host = new AppHost(app, window, device, fonts, strings, root);
+                host.PopupWindowsEnabled = false;   // inspect engine acrylic, not DesktopAcrylic substitution
                 host.RunFrame();
                 var svc = root.Service!;
 
-                bool SurfaceLayerOk(PopupChrome chrome)
+                (bool Recipe, float GroupAlpha) SurfaceLayer(PopupChrome chrome)
                 {
                     var hd = svc.Open(() => root.Anchor,
                         () => new BoxEl { Width = 220f, Height = 80f, Fill = Tok.FillCardDefault },
@@ -2511,28 +2529,36 @@ static class OverlaySuite
                     host.RunFrame();
                     host.RunFrame();
                     bool found = false;
+                    float groupAlpha = -1f;
                     foreach (var l in device.LastLayers)
                         if (ColorClose(l.Tint, tint, 0.004f) && ColorClose(l.Fallback, fall, 0.004f)
                             && Near(l.TintOpacity, tintOp, 0.005f) && Near(l.LuminosityOpacity, lumOp, 0.005f)
                             && Near(l.BlurSigma, 30f, 0.5f) && l.NoiseOpacity > 0f)
+                        {
                             found = true;
+                            groupAlpha = l.GroupAlpha;
+                        }
                     hd.Close();
                     for (int i = 0; i < 16; i++) host.RunFrame();
-                    return found;
+                    return (found, groupAlpha);
                 }
 
-                bool menuOk = SurfaceLayerOk(PopupChrome.Flyout);      // MenuFlyoutPresenter (system backdrop recipe)
-                bool comboOk = SurfaceLayerOk(PopupChrome.Dropdown);   // ComboBox PopupBorder
-                bool suggestOk = SurfaceLayerOk(PopupChrome.Static);   // AutoSuggestBox SuggestionsContainer
-                bool flyoutOk = SurfaceLayerOk(PopupChrome.Popup);     // FlyoutPresenter
+                var menu = SurfaceLayer(PopupChrome.Flyout);      // MenuFlyoutPresenter (system backdrop recipe)
+                var combo = SurfaceLayer(PopupChrome.Dropdown);   // ComboBox PopupBorder
+                var suggest = SurfaceLayer(PopupChrome.Static);   // AutoSuggestBox SuggestionsContainer
+                var flyout = SurfaceLayer(PopupChrome.Popup);     // FlyoutPresenter, still in the 83ms opacity hold
+                bool menuOk = menu.Recipe, comboOk = combo.Recipe, suggestOk = suggest.Recipe, flyoutOk = flyout.Recipe;
+                bool alphaOk = Near(menu.GroupAlpha, 1f, 0.01f) && Near(combo.GroupAlpha, 1f, 0.01f)
+                    && Near(suggest.GroupAlpha, 1f, 0.01f) && flyout.GroupAlpha < 0.01f;
                 // ToolTip + the Slider value tip bind Tok.AcrylicFlyout directly (ToolTip.cs BubbleContent /
                 // Slider.cs TipBubble) — assert the token equals the WinUI recipe so those surfaces are covered too.
                 var spec = Tok.AcrylicFlyout;
                 bool tokenOk = ColorClose(spec.Tint, tint, 0.004f) && ColorClose(spec.Fallback, fall, 0.004f)
                     && Near(spec.TintOpacity, tintOp, 0.005f) && Near(spec.LuminosityOpacity, lumOp, 0.005f);
-                Check($"64m. {label} flyout acrylic: PushLayer tint/fallback/tint-opacity/luminosity match the WinUI default acrylic on every transient surface",
-                    menuOk && comboOk && suggestOk && flyoutOk && tokenOk,
-                    $"menu={menuOk} combo={comboOk} suggest={suggestOk} flyout={flyoutOk} token={tokenOk}");
+                Check($"64m. {label} flyout acrylic: recipe matches WinUI and PushLayer inherits the presenter's cumulative opacity",
+                    menuOk && comboOk && suggestOk && flyoutOk && tokenOk && alphaOk,
+                    $"menu={menuOk}/{menu.GroupAlpha:0.00} combo={comboOk}/{combo.GroupAlpha:0.00} " +
+                    $"suggest={suggestOk}/{suggest.GroupAlpha:0.00} flyout={flyoutOk}/{flyout.GroupAlpha:0.00} token={tokenOk}");
             }
         }
         finally { Tok.Use(ThemeKind.Dark); }
@@ -2773,6 +2799,7 @@ static class OverlaySuite
         var fonts = new HeadlessFontSystem(strings);
         var root = new OverlayProbe();
         using var host = new AppHost(app, window, device, fonts, strings, root);
+        host.PopupWindowsEnabled = false;   // inspect the engine MenuFlyoutPresenter plate
 
         host.RunFrame();
         var items = new[]

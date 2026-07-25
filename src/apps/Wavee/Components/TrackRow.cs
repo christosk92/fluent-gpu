@@ -99,6 +99,23 @@ internal static class TrackRow
     internal static float PadXFor(int tier) => tier <= 3 ? PadX : tier <= 5 ? Spacing.M : Spacing.S;
     internal static float ColGapFor(int tier) => tier <= 4 ? ColGap : Spacing.S;
 
+    /// <summary>Stable per-column cell keys, shared by the row grid and the header grid so a column that disappears at a
+    /// breakpoint is removed by the keyed diff instead of shifting every later cell onto the wrong column.</summary>
+    internal static class CellKey
+    {
+        internal const string Num = "c.num";
+        internal const string Heart = "c.heart";
+        internal const string Art = "c.art";
+        internal const string Title = "c.title";
+        internal const string Album = "c.album";
+        internal const string By = "c.by";
+        internal const string Date = "c.date";
+        internal const string Video = "c.video";
+        internal const string Plays = "c.plays";
+        internal const string Duration = "c.dur";
+        internal const string More = "c.more";
+    }
+
     // Stream count → "1.85B" / "11.8M" / "654.8K".
     internal static string PlaysLabel(long n) =>
         n >= 1_000_000_000 ? $"{n / 1_000_000_000f:0.##}B"
@@ -149,45 +166,53 @@ internal static class TrackRow
         float thumb = ThumbSize;   // fixed art size → a stable dedicated art column
 
         var cells = new List<Element>(tracks.Length);
+        // Every cell carries a STABLE key. The column set changes at runtime (a breakpoint cross drops Album/Added-by/
+        // Date), and these are the GridEl's positional children — unkeyed, the reconciler would match the surviving
+        // Added-by cell against the departed Album cell and patch the wrong content into the wrong column (and destroy
+        // /remount any component that landed opposite a different element type). Keyed, it removes exactly the cells
+        // that left and updates the rest in place. Keys are per-parent, so the header below reuses the same names.
+        void Add(string key, Element cell) => cells.Add(cell with { Key = key });
 
         // # cell: number / live equalizer / fetch spinner at rest; reveals a SINGLE-CLICK play (or pause) button on ROW hover.
-        cells.Add(NumberCell(displayIndex, st.IsNow, st.IsPlaying, st.IsBuffering, st.IsTop, onPlay));
+        Add(CellKey.Num, NumberCell(displayIndex, st.IsNow, st.IsPlaying, st.IsBuffering, st.IsTop, onPlay));
 
         // ♥ — in the left cluster (between # and the art thumb). Filled when saved; click toggles via the caller's bridge.
-        if (set.Heart) cells.Add(CenterCell(Heart(st.Saved, onLike, likePop)));
+        if (set.Heart) Add(CellKey.Heart, CenterCell(Heart(st.Saved, onLike, likePop)));
 
         // Art thumb (playlist/liked) gets its OWN column before Title — so the "Title" header aligns over the title TEXT,
         // not the artwork (the WaveeMusic RowArtColDef pattern). Then the title + artist subline (subline hidden on
         // single-artist albums/singles/EPs).
         if (set.Thumb)
-            cells.Add(CenterCell(Surfaces.Artwork(t.Image, t.Id.GetHashCode() & 0x7fffffff, thumb, thumb, Radii.Control)));
+            Add(CellKey.Art, CenterCell(Surfaces.Artwork(t.Image, t.Id.GetHashCode() & 0x7fffffff, thumb, thumb, Radii.Control)));
         var titleCol = new BoxEl
         {
-            Direction = 1, Grow = 1f, Basis = 0f, Gap = 1f,
+            // MinWidth=0: this stack sits in the STAR track, which the overflow guard collapses to 0 first. Without the
+            // floor override it keeps its natural width and the title/artist runs paint across the whole row.
+            Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = 1f,
             // Subline artist(s) — per config (playlists/Liked/compilations show them; single-artist albums/singles/EPs don't).
             Children = showTrackArtist
                 ? [title, ArtistLinks(t.Artists, go)]
                 : [title],
         };
-        cells.Add(new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Children = [titleCol] });
+        Add(CellKey.Title, new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, MinWidth = 0f, ClipToBounds = true, Children = [titleCol] });
 
         if (set.Album)
-            cells.Add(LeftCell(AlbumLink(t.Album, go)));
+            Add(CellKey.Album, LeftCell(AlbumLink(t.Album, go)));
         if (set.By)
-            cells.Add(AddedByCell(t.AddedBy, addedByProfile));
+            Add(CellKey.By, AddedByCell(t.AddedBy, addedByProfile));
         if (set.Date)
-            cells.Add(LeftCell(new TextEl(DetailFormat.DateAddedLabel(t.AddedAt)) { Size = 13f, Color = Tok.TextSecondary, Grow = 1f, Basis = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis }));
+            Add(CellKey.Date, LeftCell(new TextEl(DetailFormat.DateAddedLabel(t.AddedAt)) { Size = 13f, Color = Tok.TextSecondary, Grow = 1f, Basis = 0f, MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis }));
         if (set.Video)
-            cells.Add(CenterCell(t.HasVideo ? Icon(Icons.Movie, 13f, Tok.TextTertiary) : new BoxEl()));
+            Add(CellKey.Video, CenterCell(t.HasVideo ? Icon(Icons.Movie, 13f, Tok.TextTertiary) : new BoxEl()));
         if (set.Plays)
-            cells.Add(EndCell(new TextEl(PlaysLabel(t.PlayCount)) { Size = 13f, Color = Tok.TextTertiary }));
-        cells.Add(EndCell(new TextEl(DetailFormat.TrackTime(t.DurationMs)) { Size = 13f, Color = Tok.TextSecondary }));
+            Add(CellKey.Plays, EndCell(new TextEl(PlaysLabel(t.PlayCount)) { Size = 13f, Color = Tok.TextTertiary }));
+        Add(CellKey.Duration, EndCell(new TextEl(DetailFormat.TrackTime(t.DurationMs)) { Size = 13f, Color = Tok.TextSecondary }));
 
         // Trailing "..." overflow lane (Apple Music style) — a fixed column AFTER Duration. Present only when the set
         // keeps the Actions lane AND the caller reserved its width in `tracks` (the detail list; eager/preview rows and
         // the ultra-compact tier pass null → no extra cell). Kept in cell order so the header's matching empty cell and
         // the row stay column-aligned.
-        if (set.Actions && actionsCell is not null) cells.Add(actionsCell);
+        if (set.Actions && actionsCell is not null) Add(CellKey.More, actionsCell);
 
         float padX = PadXFor(set.Tier);
         return new GridEl
@@ -419,7 +444,7 @@ internal static class TrackRow
         new SpanTextEl([new TextSpan(album.Name, OnClick: () => go("album:" + album.Uri, album.Name))])
         {
             Size = 13f, Color = Tok.TextSecondary, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis, MaxLines = 1,
-            Grow = 1f, Basis = 0f,
+            Grow = 1f, Basis = 0f, MinWidth = 0f,   // yield to a squeezed Album track instead of flooring at the name's width
         };
 
     // The Added-by cell: resolved profile when available, otherwise the raw playlist membership id.
@@ -430,10 +455,11 @@ internal static class TrackRow
         return new BoxEl
         {
             Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start, Gap = Spacing.S,
+            MinWidth = 0f, ClipToBounds = true,
             Children =
             [
                 PersonPicture.Create("", 22f, displayName: label, imageSourcePath: profile?.Avatar?.Url),
-                new TextEl(label) { Size = 13f, Color = Tok.TextSecondary, Grow = 1f, Basis = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                new TextEl(label) { Size = 13f, Color = Tok.TextSecondary, Grow = 1f, Basis = 0f, MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
             ],
         };
     }
@@ -559,10 +585,15 @@ internal static class TrackRow
     internal static Element Spinner() => ProgressRing.Indeterminate(size: 16f, foreground: Tok.AccentTextPrimary);
 
     // ── cell wrappers (the cell fills its grid rect; these vertical-center + horizontally place the content) ──
+    // Every column cell is a CLIPPED, fully-shrinkable box. Both halves are load-bearing whenever the grid is handed
+    // less width than its fixed tracks need (FlexLayout.ResolveColumns scales the fixed tracks and resolves Star to 0):
+    // MinWidth=0 lets the cell's content actually yield instead of flooring at its natural min, and ClipToBounds bounds
+    // whatever still overflows to its own track — without it a squeezed cell paints straight over its neighbours (the
+    // rail-open pile-up: title, artist and album stacked on the same pixels).
     internal static Element CenterCell(Element content) =>
-        new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Children = [content] };
+        new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, MinWidth = 0f, ClipToBounds = true, Children = [content] };
     internal static Element LeftCell(Element content) =>
-        new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start, Children = [content] };
+        new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start, MinWidth = 0f, ClipToBounds = true, Children = [content] };
     internal static Element EndCell(Element content) =>
-        new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.End, Children = [content] };
+        new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.End, MinWidth = 0f, ClipToBounds = true, Children = [content] };
 }

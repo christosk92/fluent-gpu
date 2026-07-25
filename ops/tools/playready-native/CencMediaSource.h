@@ -23,6 +23,9 @@
 #include <mutex>
 #include <functional>
 #include <algorithm>
+#include <map>        // per-stream ITA cache (a single slot thrashes once there are two streams)
+#include <set>        // announced / ended stream ids
+#include <iterator>   // make_move_iterator — appending fetched samples without copying them
 
 // ── MF_MT_PROTECTED is not in the 26100 SDK headers; its documented GUID (media type "content is protected"). ──
 // {5FA1B54B-B61A-4d76-A99B-8FD7F0EA8F55}
@@ -71,12 +74,23 @@ static bool FindBox(const uint8_t* data, size_t len, uint32_t type, Box& out)
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 //  Parsed init-segment info.
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// Which kind of track an init segment described. Spotify addresses every representation as its own single-track file
+// (video profile N, audio profile M), so one InitInfo == one track and there is no multi-track-per-file case to handle.
+enum class TrackKind { Video, Audio };
+
 struct InitInfo
 {
-    uint32_t codec4cc = 0;             // original sample format (e.g. 'avc1'/'avc3') from frma, else stsd entry type
+    TrackKind kind = TrackKind::Video;
+    uint32_t codec4cc = 0;             // original sample format (e.g. 'avc1'/'avc3'/'mp4a') from frma, else stsd entry type
     std::vector<uint8_t> avcC;         // raw AVCDecoderConfigurationRecord (from the 'avcC' box)
     std::vector<uint8_t> spspps;       // SPS+PPS as Annex-B (for MF_MT_MPEG_SEQUENCE_HEADER)
     uint32_t width = 0, height = 0;
+    // ── audio (mp4a/enca) ───────────────────────────────────────────────────────────────────────────────────────────
+    uint32_t channels = 0;             // AudioSampleEntry channelcount
+    uint32_t sampleRate = 0;           // AudioSampleEntry samplerate (integer part of the 16.16 fixed-point field)
+    uint32_t bitsPerSample = 16;       // AudioSampleEntry samplesize
+    uint32_t avgBitrate = 0;           // esds DecoderConfigDescriptor avgBitrate (bits/s), 0 when absent
+    std::vector<uint8_t> asc;          // AudioSpecificConfig (esds → DecoderSpecificInfo) — AAC's real configuration
     uint64_t timescale = 90000;        // media timescale (mdhd)
     int scheme = 0;                    // 0 = cenc (AES-CTR), 1 = cbcs (AES-CBC pattern)
     bool encrypted = false;
@@ -163,6 +177,80 @@ static void ParseVisualSampleEntry(const Box& entry, InitInfo& info)
     });
 }
 
+// Walk an MPEG-4 ES_Descriptor (the 'esds' box payload) down to the DecoderSpecificInfo, which for AAC IS the
+// AudioSpecificConfig — the two bytes that tell the decoder the real object type, sample rate and channel configuration.
+// Descriptor lengths use the 7-bit continuation encoding (top bit = "another length byte follows"), and getting that
+// wrong yields a silently empty config rather than an error, which is why the walk is explicit here.
+static void ParseEsds(const Box& esds, InitInfo& info)
+{
+    const uint8_t* p = esds.payload; size_t n = esds.payloadLen;
+    if (n < 5) return;
+    size_t o = 4;   // version + flags
+
+    auto readTag = [&](uint8_t& tag, size_t& len) -> bool {
+        if (o >= n) return false;
+        tag = p[o++];
+        len = 0;
+        for (int i = 0; i < 4 && o < n; i++)
+        {
+            uint8_t b = p[o++];
+            len = (len << 7) | (b & 0x7F);
+            if ((b & 0x80) == 0) break;
+        }
+        return o + len <= n || o <= n;   // tolerate a slightly over-declared length
+    };
+
+    uint8_t tag = 0; size_t len = 0;
+    if (!readTag(tag, len) || tag != 0x03 /*ES_DescrTag*/) return;
+    if (o + 3 > n) return;
+    uint8_t esFlags = p[o + 2];
+    o += 3;                                        // ES_ID(2) + flags(1)
+    if (esFlags & 0x80) o += 2;                    // streamDependenceFlag → dependsOn_ES_ID
+    if (esFlags & 0x40) { if (o >= n) return; o += 1 + p[o]; }   // URL_Flag → length-prefixed URL
+    if (esFlags & 0x20) o += 2;                    // OCRstreamFlag → OCR_ES_Id
+
+    if (!readTag(tag, len) || tag != 0x04 /*DecoderConfigDescrTag*/) return;
+    if (o + 13 > n) return;
+    info.avgBitrate = rd32(p + o + 9);
+    o += 13;                                       // objectType(1) + streamType/bufferSize(4) + max(4) + avg(4)
+
+    if (!readTag(tag, len) || tag != 0x05 /*DecSpecificInfoTag*/) return;
+    if (len == 0 || o + len > n) return;
+    info.asc.assign(p + o, p + o + len);
+}
+
+// Parse an AudioSampleEntry (mp4a/enca). Its fixed header is 28 bytes — HALF the VisualSampleEntry's 78 — and child
+// boxes (esds, sinf) begin there; using the visual offset silently reads past the entry and finds nothing.
+static void ParseAudioSampleEntry(const Box& entry, InitInfo& info)
+{
+    const uint8_t* p = entry.payload; size_t n = entry.payloadLen;
+    if (n < 28) return;
+    // 0..5 reserved, 6..7 data_reference_index, 8..15 reserved,
+    // 16..17 channelcount, 18..19 samplesize, 20..21 pre_defined, 22..23 reserved, 24..27 samplerate (16.16 fixed).
+    info.channels = rd16(p + 16);
+    info.bitsPerSample = rd16(p + 18);
+    info.sampleRate = rd16(p + 24);   // integer part; fractional part is always 0 in practice
+    const uint8_t* kids = p + 28; size_t klen = n - 28;
+    ForEachBox(kids, klen, [&](const Box& b) {
+        if (b.type == fourcc("esds")) ParseEsds(b, info);
+        else if (b.type == fourcc("wave"))   // QuickTime nesting: esds one level deeper
+            ForEachBox(b.payload, b.payloadLen, [&](const Box& w) { if (w.type == fourcc("esds")) ParseEsds(w, info); });
+        else if (b.type == fourcc("sinf"))
+        {
+            Box frma, schm, schi, tenc;
+            if (FindBox(b.payload, b.payloadLen, fourcc("frma"), frma) && frma.payloadLen >= 4)
+                info.codec4cc = rd32(frma.payload);
+            if (FindBox(b.payload, b.payloadLen, fourcc("schm"), schm) && schm.payloadLen >= 8)
+            {
+                uint32_t st = rd32(schm.payload + 4);
+                info.scheme = (st == fourcc("cbcs") || st == fourcc("cbc1")) ? 1 : 0;
+            }
+            if (FindBox(b.payload, b.payloadLen, fourcc("schi"), schi))
+                if (FindBox(schi.payload, schi.payloadLen, fourcc("tenc"), tenc)) ParseTenc(tenc, info);
+        }
+    });
+}
+
 static void ParseStsd(const Box& stsd, InitInfo& info)
 {
     // stsd: version/flags(4) + entry_count(4) + entries.
@@ -173,8 +261,17 @@ static void ParseStsd(const Box& stsd, InitInfo& info)
         if (done) return;
         if (b.type == fourcc("encv") || b.type == fourcc("avc1") || b.type == fourcc("avc3"))
         {
+            info.kind = TrackKind::Video;
             if (info.codec4cc == 0 && b.type != fourcc("encv")) info.codec4cc = b.type;
             ParseVisualSampleEntry(b, info);
+            done = true;
+        }
+        else if (b.type == fourcc("enca") || b.type == fourcc("mp4a"))
+        {
+            // The video's OWN soundtrack. 'enca' is the CENC-protected wrapper whose sinf/frma names the real format.
+            info.kind = TrackKind::Audio;
+            if (info.codec4cc == 0 && b.type != fourcc("enca")) info.codec4cc = b.type;
+            ParseAudioSampleEntry(b, info);
             done = true;
         }
     });
@@ -207,11 +304,16 @@ static bool ParseInit(const std::vector<uint8_t>& data, InitInfo& info)
             FindBox(stbl.payload, stbl.payloadLen, fourcc("stsd"), stsd))
         {
             ParseStsd(stsd, info);
-            ok = info.width > 0 && !info.avcC.empty();
+            // Validate against the kind actually found: a video track needs its avcC, an audio track needs its
+            // AudioSpecificConfig + sample rate. Validating audio against the VIDEO rule is how an audio init segment
+            // gets reported as "no usable sample entry" even when it parsed perfectly.
+            ok = info.kind == TrackKind::Video
+                     ? (info.width > 0 && !info.avcC.empty())
+                     : (info.sampleRate > 0 && !info.asc.empty());
         }
     });
-    if (ok) ExtractSpsPps(info.avcC, info);
-    if (info.timescale == 0) info.timescale = 90000;
+    if (ok && info.kind == TrackKind::Video) ExtractSpsPps(info.avcC, info);
+    if (info.timescale == 0) info.timescale = info.kind == TrackKind::Audio ? 48000 : 90000;
     return ok;
 }
 
@@ -365,7 +467,10 @@ static int ParseSegment(const std::vector<uint8_t>& seg, const InitInfo& info, s
         s.decodeTicks = runningDecodeTicks;
         int64_t t = (int64_t)s.decodeTicks + cto;
         s.timeTicks = t < 0 ? 0 : (uint64_t)t;
-        s.keyframe = (flags & 0x00010000) == 0;   // sample_is_non_sync_sample bit clear => sync/keyframe
+        // Every AAC access unit is independently decodable, so an audio track is all sync samples regardless of what the
+        // trun flags happen to say (some muxers set the non-sync bit on audio, which would leave a seek with no
+        // reposition target and — worse — make the first delivered sample look like a non-clean point).
+        s.keyframe = info.kind == TrackKind::Audio || (flags & 0x00010000) == 0;
         s.encrypted = info.encrypted;
 
         // IV: per-sample from senc, else constant IV (cbcs). Preserve the declared byte length exactly.
@@ -378,6 +483,19 @@ static int ParseSegment(const std::vector<uint8_t>& seg, const InitInfo& info, s
         if (src) iv = *src;
         s.iv = std::move(iv);
         if (i < senc.size()) s.subsamples = senc[i].subs;
+
+        // ── AVC-ONLY transforms. An AAC access unit is already exactly what the decoder wants: no length prefixes to
+        // rewrite and no parameter sets to prepend (its configuration travels out-of-band in the media type's
+        // AudioSpecificConfig). Running either transform over audio would corrupt the payload AND desynchronise the CENC
+        // subsample mapping, so both are gated on the track kind rather than on "did it happen to parse".
+        if (info.kind == TrackKind::Audio)
+        {
+            out.push_back(std::move(s));
+            cursor += sz;
+            runningDecodeTicks += dur;
+            produced++;
+            continue;
+        }
 
         // The decoder accepts Annex-B, not the MP4/AVCC payload stored in mdat. Four-byte replacement preserves every
         // CENC byte offset. Refuse malformed/unsupported samples rather than delivering a packet the decoder can only
@@ -439,8 +557,15 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
     std::vector<cenc::Sample> m_samples;
     cenc::InitInfo m_info;
     size_t m_next = 0;
+    DWORD m_streamId = 1;                 // 1 = video, 2 = audio (matches the stream descriptors in BuildCencSource)
+    const char* m_label = "video";        // log prefix only
     bool m_started = false, m_paused = false, m_eos = false, m_discontinuity = true, m_shutdown = false;
+    // Incremental feeding: the fetcher appends segments while playback runs, so the first frame does not wait for the
+    // whole track to download. Until m_complete is set, running out of samples is STARVATION (park the request and
+    // satisfy it when more arrive), not end-of-stream — reporting EOS there would truncate the track to its prefix.
+    bool m_complete = false;
     std::vector<winrt::com_ptr<::IUnknown>> m_pausedRequests;
+    std::vector<winrt::com_ptr<::IUnknown>> m_starvedRequests;
     std::mutex m_mx;
 
     CencMediaStream() { winrt::check_hresult(MFCreateEventQueue(m_queue.put())); }
@@ -488,6 +613,17 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
     {
         if (m_next >= m_samples.size())
         {
+            if (!m_complete)
+            {
+                // Starved, not finished: park the request. AppendSamples releases it the moment the next segment lands.
+                winrt::com_ptr<::IUnknown> token;
+                if (pToken) token.copy_from(pToken);
+                m_starvedRequests.push_back(std::move(token));
+                if (m_starvedRequests.size() == 1)
+                    LogLine(std::string("[cenc-src] ") + m_label + " starved at sample " + std::to_string(m_next) +
+                            " — awaiting fetch (not EOS)");
+                return S_OK;
+            }
             if (!m_eos) { m_eos = true; m_queue->QueueEventParamVar(MEEndOfStream, GUID_NULL, S_OK, nullptr); NotifySourceEnded(); }
             return S_OK;
         }
@@ -573,6 +709,7 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         // which the stream may resume data delivery. Deliver under the same stream lock to preserve request order.
         for (auto const& token : m_pausedRequests) DeliverSampleLocked(token.get());
         m_pausedRequests.clear();
+        ReleaseStarvedLocked();   // a request parked while stopped/paused becomes deliverable again here
     }
     void Pause()
     {
@@ -587,7 +724,46 @@ struct CencMediaStream : winrt::implements<CencMediaStream, IMFMediaStream>
         m_started = false; m_paused = false;
         m_next = 0; m_eos = false; m_discontinuity = true;
         m_pausedRequests.clear();
+        m_starvedRequests.clear();
         m_queue->QueueEventParamVar(MEStreamStopped, GUID_NULL, S_OK, nullptr);
+    }
+
+    /// Append freshly demuxed samples (the background fetcher) and release any request that was parked on starvation.
+    /// Called from the fetch thread; the stream lock serialises it against RequestSample.
+    void AppendSamples(std::vector<cenc::Sample>&& more)
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        if (m_shutdown || more.empty()) return;
+        m_samples.insert(m_samples.end(), std::make_move_iterator(more.begin()), std::make_move_iterator(more.end()));
+        ReleaseStarvedLocked();
+    }
+
+    /// No more samples are coming (the fetcher finished, or gave up). After this, running dry is a real end of stream —
+    /// including for requests parked while starved, which must not hang forever if the fetch failed.
+    void MarkComplete()
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        if (m_complete) return;
+        m_complete = true;
+        LogLine(std::string("[cenc-src] ") + m_label + " feed complete: " + std::to_string(m_samples.size()) + " sample(s)");
+        ReleaseStarvedLocked();
+    }
+
+    /// How many demuxed samples are buffered ahead of the playhead — the fetcher's backpressure signal, so it stays a
+    /// bounded distance in front of playback instead of pulling the whole track into memory.
+    size_t Ahead()
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        return m_samples.size() > m_next ? m_samples.size() - m_next : 0;
+    }
+    bool IsShutdown() { std::lock_guard<std::mutex> g(m_mx); return m_shutdown; }
+
+    void ReleaseStarvedLocked()
+    {
+        if (m_starvedRequests.empty() || !m_started || m_paused) return;
+        auto parked = std::move(m_starvedRequests);
+        m_starvedRequests.clear();
+        for (auto const& token : parked) DeliverSampleLocked(token.get());
     }
     void Shutdown() { std::lock_guard<std::mutex> g(m_mx); if (m_shutdown) return; m_shutdown = true; if (m_queue) m_queue->Shutdown(); }
 
@@ -659,11 +835,19 @@ struct CencMediaSource : winrt::implements<CencMediaSource, IMFMediaSource, IMFT
 {
     winrt::com_ptr<IMFMediaEventQueue> m_queue;
     winrt::com_ptr<IMFPresentationDescriptor> m_pd;
-    winrt::com_ptr<CencMediaStream> m_stream;
+    // Every stream this source can serve: video (id 1) and, for a music video, its own soundtrack (id 2). A vector
+    // rather than a single member because the topology loader selects and starts them independently.
+    std::vector<winrt::com_ptr<CencMediaStream>> m_streams;
     winrt::com_ptr<IMFTrustedInput> m_trustedInput;
-    winrt::com_ptr<IMFInputTrustAuthority> m_inputTrustAuthority;   // one stable ITA per stream (PMP contract)
-    DWORD m_inputTrustAuthorityStreamId = UINT32_MAX;
-    bool m_started = false, m_paused = false, m_streamAnnounced = false, m_shutdown = false;
+    // One STABLE Input Trust Authority per stream id. Re-creating an authority for a stream the loader already asked
+    // about resets PlayReady's policy/decrypter state and is rejected as DRM_E_LOGICERR — and with two streams the
+    // loader alternates between them, so a single-slot cache would thrash on every other query. The cached value is the
+    // exact IUnknown proxy the CDM handed back: re-querying another interface into this output can produce a
+    // proxy/vtable mismatch across the PMP boundary (mirrors Firefox's MFCDMProxy cache).
+    std::map<DWORD, winrt::com_ptr<::IUnknown>> m_itaByStream;
+    std::set<DWORD> m_announcedStreams;   // MENewStream is sent once per stream; later Starts send MEUpdatedStream
+    std::set<DWORD> m_endedStreams;       // MEEndOfPresentation waits for ALL streams (see NotifyStreamEnded)
+    bool m_started = false, m_paused = false, m_shutdown = false;
     std::mutex m_mx;
 
     CencMediaSource() { winrt::check_hresult(MFCreateEventQueue(m_queue.put())); }
@@ -694,8 +878,8 @@ struct CencMediaSource : winrt::implements<CencMediaSource, IMFMediaSource, IMFT
     IFACEMETHODIMP Start(IMFPresentationDescriptor* pd, const GUID* timeFormat, const PROPVARIANT* startPos) noexcept override
     {
         PROPVARIANT startVar; PropVariantInit(&startVar);
-        winrt::com_ptr<CencMediaStream> stream;
-        bool isNew = false, wasActive = false, seeking = false, explicitPosition = false;
+        std::vector<winrt::com_ptr<CencMediaStream>> starting;
+        bool wasActive = false, seeking = false, explicitPosition = false;
         {
             std::lock_guard<std::mutex> g(m_mx);
             if (m_shutdown) return MF_E_SHUTDOWN;
@@ -704,77 +888,112 @@ struct CencMediaSource : winrt::implements<CencMediaSource, IMFMediaSource, IMFT
             if (FAILED(PropVariantCopy(&startVar, startPos))) return E_OUTOFMEMORY;
 
             wasActive = m_started;
-            isNew = !m_streamAnnounced;
             explicitPosition = startVar.vt == VT_I8;
             seeking = wasActive && explicitPosition;
-            LogLine("[cenc-src] Start previous=" + std::string(m_paused ? "paused" : (wasActive ? "started" : "stopped")) +
-                    " position=" + (explicitPosition
-                        ? std::to_string((long long)startVar.hVal.QuadPart) : std::string("current")) +
-                    " event=" + (seeking ? "seeked" : "started"));
 
-            // MENewStream is sent only for the first selection; every later Start (resume or seek) updates it.
-            BOOL selected = FALSE; winrt::com_ptr<IMFStreamDescriptor> sd;
-            if (FAILED(pd->GetStreamDescriptorByIndex(0, &selected, sd.put())) || !selected || !m_stream)
+            // Honour the SELECTION the topology loader made: walk every descriptor in the presentation descriptor it
+            // handed us and start exactly the streams marked selected. Assuming index 0 is the only stream is what makes
+            // a second (audio) stream impossible — it would never be announced, so nothing would ever request from it.
+            DWORD count = 0;
+            if (FAILED(pd->GetStreamDescriptorCount(&count)) || count == 0)
             {
                 PropVariantClear(&startVar);
                 return MF_E_INVALIDREQUEST;
             }
-            stream = m_stream;
-            m_queue->QueueEventParamUnk(isNew ? MENewStream : MEUpdatedStream, GUID_NULL, S_OK,
-                                        (::IUnknown*)(IMFMediaStream*)stream.get());
+            std::string sel;
+            for (DWORD i = 0; i < count; i++)
+            {
+                BOOL selected = FALSE; winrt::com_ptr<IMFStreamDescriptor> sd;
+                if (FAILED(pd->GetStreamDescriptorByIndex(i, &selected, sd.put())) || !sd) continue;
+                DWORD id = 0;
+                if (FAILED(sd->GetStreamIdentifier(&id))) continue;
+                auto stream = FindStreamLocked(id);
+                if (!stream) continue;
+                sel += (sel.empty() ? "" : ",") + std::string(stream->m_label) + (selected ? ":on" : ":off");
+                if (!selected) continue;
+
+                bool isNew = m_announcedStreams.insert(id).second;
+                m_queue->QueueEventParamUnk(isNew ? MENewStream : MEUpdatedStream, GUID_NULL, S_OK,
+                                            (::IUnknown*)(IMFMediaStream*)stream.get());
+                starting.push_back(stream);
+            }
+            if (starting.empty())
+            {
+                PropVariantClear(&startVar);
+                return MF_E_INVALIDREQUEST;
+            }
+
+            LogLine("[cenc-src] Start previous=" + std::string(m_paused ? "paused" : (wasActive ? "started" : "stopped")) +
+                    " position=" + (explicitPosition
+                        ? std::to_string((long long)startVar.hVal.QuadPart) : std::string("current")) +
+                    " event=" + (seeking ? "seeked" : "started") + " streams=[" + sel + "]");
 
             m_started = true;
             m_paused = false;
-            m_streamAnnounced = true;
-            // The source event precedes the corresponding stream event (the documented custom-source sequence).
+            if (explicitPosition || !wasActive) m_endedStreams.clear();   // a reposition un-ends the presentation
+            // The source event precedes the corresponding stream events (the documented custom-source sequence).
             m_queue->QueueEventParamVar(seeking ? MESourceSeeked : MESourceStarted, GUID_NULL, S_OK, &startVar);
         }
 
-        if (stream)
-        {
-            // A non-empty position also repositions a previously stopped source, but that operation is still a Start
-            // (MESourceStarted/MEStreamStarted), not a seek. VT_EMPTY is pause-resume and preserves the sample cursor.
+        // A non-empty position also repositions a previously stopped source, but that operation is still a Start
+        // (MESourceStarted/MEStreamStarted), not a seek. VT_EMPTY is pause-resume and preserves the sample cursor.
+        for (auto const& stream : starting)
             stream->Start(&startVar, seeking, explicitPosition || !wasActive);
-        }
         PropVariantClear(&startVar);
         return S_OK;
     }
+
+    winrt::com_ptr<CencMediaStream> FindStreamLocked(DWORD id)
+    {
+        for (auto const& s : m_streams) if (s && s->m_streamId == id) return s;
+        return nullptr;
+    }
     IFACEMETHODIMP Stop() noexcept override
     {
-        winrt::com_ptr<CencMediaStream> stream;
+        std::vector<winrt::com_ptr<CencMediaStream>> streams;
         HRESULT hr;
         {
             std::lock_guard<std::mutex> g(m_mx);
             if (m_shutdown) return MF_E_SHUTDOWN;
             m_started = false; m_paused = false;
-            stream = m_stream;
+            m_endedStreams.clear();
+            streams = m_streams;
             hr = m_queue->QueueEventParamVar(MESourceStopped, GUID_NULL, S_OK, nullptr);
         }
-        if (stream) stream->Stop();
+        for (auto const& s : streams) if (s) s->Stop();
         return hr;
     }
     IFACEMETHODIMP Pause() noexcept override
     {
-        winrt::com_ptr<CencMediaStream> stream;
+        std::vector<winrt::com_ptr<CencMediaStream>> streams;
         HRESULT hr;
         {
             std::lock_guard<std::mutex> g(m_mx);
             if (m_shutdown) return MF_E_SHUTDOWN;
             if (!m_started || m_paused) return MF_E_INVALID_STATE_TRANSITION;
             m_paused = true;
-            stream = m_stream;
+            streams = m_streams;
             LogLine("[cenc-src] Pause -> MESourcePaused + MEStreamPaused");
             hr = m_queue->QueueEventParamVar(MESourcePaused, GUID_NULL, S_OK, nullptr);
         }
-        if (stream) stream->Pause();
+        for (auto const& s : streams) if (s) s->Pause();
         return hr;
     }
     IFACEMETHODIMP Shutdown() noexcept override
     {
+        // Shut the streams down OUTSIDE this lock. A stream that is mid-delivery holds its own lock and then reaches for
+        // the source lock (end-of-stream notification); taking them in the opposite order here — source first, then
+        // stream — is a textbook lock inversion, and with two streams delivering concurrently it is reachable.
+        // Setting m_shutdown first makes the notification a no-op, so nothing is lost by releasing the lock.
+        std::vector<winrt::com_ptr<CencMediaStream>> streams;
+        {
+            std::lock_guard<std::mutex> g(m_mx);
+            if (m_shutdown) return MF_E_SHUTDOWN;
+            m_shutdown = true;
+            streams = m_streams;
+        }
+        for (auto const& s : streams) if (s) s->Shutdown();
         std::lock_guard<std::mutex> g(m_mx);
-        if (m_shutdown) return MF_E_SHUTDOWN;
-        m_shutdown = true;
-        if (m_stream) m_stream->Shutdown();
         if (m_queue) m_queue->Shutdown();
         return S_OK;
     }
@@ -788,56 +1007,118 @@ struct CencMediaSource : winrt::implements<CencMediaSource, IMFMediaSource, IMFT
         if (!m_trustedInput) return MF_E_NOT_INITIALIZED;
         std::lock_guard<std::mutex> g(m_mx);
 
-        // The topology loader can ask repeatedly while resolving the protected branch. Keep the same per-stream ITA;
-        // creating a fresh authority on every query resets PlayReady's policy/decrypter state and is rejected as
-        // DRM_E_LOGICERR. This mirrors Firefox's MFCDMProxy cache.
+        // The topology loader asks repeatedly while resolving each protected branch, and with two streams it ALTERNATES
+        // between them — so the cache must be keyed by stream id. A single slot would evict the video's authority when
+        // the audio branch resolves (and vice versa), and the re-created authority is rejected as DRM_E_LOGICERR.
         HRESULT hr;
-        if (m_inputTrustAuthority && m_inputTrustAuthorityStreamId == streamId)
+        bool cached = false;
+        auto it = m_itaByStream.find(streamId);
+        if (it != m_itaByStream.end() && it->second)
         {
-            // GetInputTrustAuthority's output is IUnknown**, even though riid normally requests
-            // IMFInputTrustAuthority. Copy the cached interface pointer directly: querying another interface into
-            // this output can produce a proxy/vtable mismatch across the PMP boundary. This deliberately mirrors
-            // Firefox's MFCDMProxy rather than wrapping or re-querying the CDM-owned proxy.
-            *value = static_cast<IUnknown*>(m_inputTrustAuthority.get());
+            // Hand back the EXACT proxy pointer the CDM returned the first time. GetInputTrustAuthority's output is
+            // IUnknown** even though riid normally requests IMFInputTrustAuthority; re-querying another interface into
+            // this output can produce a proxy/vtable mismatch across the PMP boundary. Mirrors Firefox's MFCDMProxy.
+            *value = it->second.get();
             (*value)->AddRef();
             hr = S_OK;
+            cached = true;
         }
         else
         {
-            winrt::com_ptr<IUnknown> unknown;
+            winrt::com_ptr<::IUnknown> unknown;
             hr = m_trustedInput->GetInputTrustAuthority(streamId, riid, unknown.put());
-            if (SUCCEEDED(hr))
+            if (SUCCEEDED(hr) && unknown)
             {
-                winrt::com_ptr<IMFInputTrustAuthority> inner;
-                hr = unknown->QueryInterface(IID_PPV_ARGS(inner.put()));
-                if (SUCCEEDED(hr))
-                {
-                    m_inputTrustAuthority = std::move(inner);
-                    m_inputTrustAuthorityStreamId = streamId;
-                    // Preserve the exact COM proxy identity/vtable returned by the CDM on the first request.
-                    *value = unknown.detach();
-                    hr = S_OK;
-                }
+                m_itaByStream[streamId] = unknown;      // keep the proxy identity itself, not a re-queried interface
+                *value = unknown.detach();
+                hr = S_OK;
             }
         }
         std::stringstream ss; ss << "[cenc-src] GetInputTrustAuthority stream=" << streamId
+                                 << (cached ? " (cached)" : " (fresh)")
                                  << " hr=0x" << std::hex << (uint32_t)hr;
         LogLine(ss.str());
         return hr;
     }
 
-    void QueueSourceEndOfStream() { std::lock_guard<std::mutex> g(m_mx); if (!m_shutdown) m_queue->QueueEventParamVar(MEEndOfPresentation, GUID_NULL, S_OK, nullptr); }
+    /// One stream drained. The PRESENTATION only ends when EVERY selected stream has: video and audio never hold the
+    /// same number of samples, so a first-stream-wins MEEndOfPresentation truncates playback at whichever track runs out
+    /// first — the shorter one, always, and usually well before the end of the song.
+    void NotifyStreamEnded(DWORD streamId)
+    {
+        std::lock_guard<std::mutex> g(m_mx);
+        if (m_shutdown) return;
+        m_endedStreams.insert(streamId);
+        // The denominator is the streams the topology actually SELECTED, not every stream we offered. If MF declined the
+        // audio branch, that stream is never started and can never end — waiting for it would hold the presentation open
+        // forever and the track would never advance.
+        size_t total = m_announcedStreams.empty() ? m_streams.size() : m_announcedStreams.size();
+        if (m_endedStreams.size() < total)
+        {
+            LogLine("[cenc-src] stream " + std::to_string(streamId) + " ended (" +
+                    std::to_string(m_endedStreams.size()) + "/" + std::to_string(total) +
+                    ") — holding MEEndOfPresentation");
+            return;
+        }
+        LogLine("[cenc-src] all " + std::to_string(total) + " stream(s) ended -> MEEndOfPresentation");
+        m_queue->QueueEventParamVar(MEEndOfPresentation, GUID_NULL, S_OK, nullptr);
+    }
 };
 
 inline void CencMediaStream::NotifySourceEnded()
 {
-    if (m_source) static_cast<CencMediaSource*>(m_source)->QueueSourceEndOfStream();
+    if (m_source) static_cast<CencMediaSource*>(m_source)->NotifyStreamEnded(m_streamId);
 }
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 //  Factory: build the media type / stream descriptor / presentation descriptor and wire the demuxed samples.
 // ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-static winrt::com_ptr<CencMediaSource> BuildCencSource(const cenc::InitInfo& info, std::vector<cenc::Sample>&& samples)
+/// The video's own soundtrack, handed to <see cref="BuildCencSource"/> alongside the video. Absent (null) ⇒ video only.
+struct CencAudioFeed
+{
+    cenc::InitInfo info;
+    std::vector<cenc::Sample> samples;
+};
+
+/// Build the AAC media type for the protected pipeline. Two things here are easy to get silently wrong:
+///  • MF wants the AAC configuration as MF_MT_USER_DATA in the HEAACWAVEINFO layout — the 12 bytes that FOLLOW the
+///    WAVEFORMATEX part (payload type, profile-level, struct type, two reserved fields) and THEN the raw
+///    AudioSpecificConfig. Handing it the bare ASC produces a type MF accepts and then fails to decode.
+///  • payload type 0 means "raw AAC access units" (what fMP4 stores). Anything else describes ADTS/ADIF framing that
+///    our samples do not have.
+static winrt::com_ptr<IMFMediaType> BuildAacMediaType(const cenc::InitInfo& a)
+{
+    winrt::com_ptr<IMFMediaType> mt;
+    winrt::check_hresult(MFCreateMediaType(mt.put()));
+    mt->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
+    mt->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_AAC);
+    mt->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, a.sampleRate ? a.sampleRate : 44100);
+    mt->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS, a.channels ? a.channels : 2);
+    mt->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, 16);
+    mt->SetUINT32(MF_MT_AUDIO_BLOCK_ALIGNMENT, 1);
+    mt->SetUINT32(MF_MT_ALL_SAMPLES_INDEPENDENT, TRUE);
+    if (a.avgBitrate) mt->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND, a.avgBitrate / 8);
+    // AAC-LC unless the AudioSpecificConfig says otherwise; 0x29 is the AAC-LC profile-level indication MF expects.
+    const uint16_t profileLevel = 0x29;
+    mt->SetUINT32(MF_MT_AAC_PAYLOAD_TYPE, 0);
+    mt->SetUINT32(MF_MT_AAC_AUDIO_PROFILE_LEVEL_INDICATION, profileLevel);
+
+    std::vector<uint8_t> userData(12, 0);
+    userData[0] = 0; userData[1] = 0;                                   // wPayloadType = 0 (raw AAC)
+    userData[2] = (uint8_t)(profileLevel & 0xFF); userData[3] = (uint8_t)(profileLevel >> 8);
+    userData[4] = 0; userData[5] = 0;                                   // wStructType = 0 (AudioSpecificConfig follows)
+    userData.insert(userData.end(), a.asc.begin(), a.asc.end());
+    mt->SetBlob(MF_MT_USER_DATA, userData.data(), (UINT32)userData.size());
+    return mt;
+}
+
+/// <param name="totalDuration100ns">The WHOLE track's duration when only a prefix has been demuxed so far. Required for a
+/// streaming build: deriving the presentation duration from the samples in hand would declare the track to be as long as
+/// the initial burst (~8s), and the media engine then treats every later position as past the end — the seek bar pins,
+/// the clock overshoots ("0:36 / 0:08"), and Play() after a Pause does nothing because the presentation already ended.</param>
+static winrt::com_ptr<CencMediaSource> BuildCencSource(const cenc::InitInfo& info, std::vector<cenc::Sample>&& samples,
+                                                       CencAudioFeed* audio = nullptr, bool streaming = false,
+                                                       uint64_t totalDuration100ns = 0)
 {
     auto hx = [](HRESULT h) { std::stringstream ss; ss << "0x" << std::hex << (uint32_t)h; return ss.str(); };
 
@@ -883,20 +1164,48 @@ static winrt::com_ptr<CencMediaSource> BuildCencSource(const cenc::InitInfo& inf
         winrt::check_hresult(mth->SetCurrentMediaType(streamType.get()));
     }
 
-    winrt::com_ptr<IMFPresentationDescriptor> pd;
-    IMFStreamDescriptor* sds[1] = { sd.get() };
-    winrt::check_hresult(MFCreatePresentationDescriptor(1, sds, pd.put()));
-    pd->SelectStream(0);
-    if (!samples.empty())
+    // ── the audio stream (the video's own soundtrack), same protected envelope as the video ─────────────────────────
+    winrt::com_ptr<IMFStreamDescriptor> audioSd;
+    if (audio)
     {
-        uint64_t endTicks = 0;
-        for (auto const& sample : samples)
+        auto audioMt = BuildAacMediaType(audio->info);
+        winrt::com_ptr<IMFMediaType> audioStreamType = audioMt;
+        bool wrapAudio = audio->info.encrypted && !markProtected &&
+                         GetEnvironmentVariableW(L"FG_CENC_NO_PROTECTED_WRAP", nullptr, 0) == 0;
+        if (audio->info.encrypted && markProtected) audioMt->SetUINT32(FG_MF_MT_PROTECTED, TRUE);
+        if (wrapAudio)
         {
-            uint64_t sampleEnd = sample.timeTicks + sample.durTicks;
-            if (sampleEnd > endTicks) endTicks = sampleEnd;
+            winrt::com_ptr<IMFMediaType> wrapped;
+            HRESULT hrWrap = MFWrapMediaType(audioMt.get(), MFMediaType_Protected, MFAudioFormat_AAC, wrapped.put());
+            LogLine("[cenc-src] MFWrapMediaType(Protected, AAC) hr=" + hx(hrWrap));
+            if (SUCCEEDED(hrWrap)) audioStreamType = wrapped;
         }
-        pd->SetUINT64(MF_PD_DURATION, (UINT64)((endTicks * 10000000ULL) / info.timescale));
+        IMFMediaType* amts[1] = { audioStreamType.get() };
+        winrt::check_hresult(MFCreateStreamDescriptor(2 /*streamId*/, 1, amts, audioSd.put()));
+        if (audio->info.encrypted && (markProtected || wrapAudio)) audioSd->SetUINT32(MF_SD_PROTECTED, 1);
+        winrt::com_ptr<IMFMediaTypeHandler> amth;
+        winrt::check_hresult(audioSd->GetMediaTypeHandler(amth.put()));
+        winrt::check_hresult(amth->SetCurrentMediaType(audioStreamType.get()));
     }
+
+    winrt::com_ptr<IMFPresentationDescriptor> pd;
+    IMFStreamDescriptor* sds[2] = { sd.get(), audioSd.get() };
+    winrt::check_hresult(MFCreatePresentationDescriptor(audioSd ? 2 : 1, sds, pd.put()));
+    pd->SelectStream(0);
+    if (audioSd) pd->SelectStream(1);
+
+    // Presentation duration = the longer of the two tracks. Reporting only the video's would cut the last audio samples
+    // off (they routinely extend past the final frame), and reporting a partial prefix would make the seek bar lie while
+    // the rest of the track is still being fetched — so a STREAMING build reports the caller-supplied total instead.
+    auto endOf = [](const std::vector<cenc::Sample>& v, uint64_t timescale) -> uint64_t {
+        uint64_t endTicks = 0;
+        for (auto const& s : v) { uint64_t e = s.timeTicks + s.durTicks; if (e > endTicks) endTicks = e; }
+        return timescale ? (endTicks * 10000000ULL) / timescale : 0;
+    };
+    uint64_t dur100ns = endOf(samples, info.timescale);
+    if (audio) dur100ns = std::max<uint64_t>(dur100ns, endOf(audio->samples, audio->info.timescale));
+    if (totalDuration100ns > dur100ns) dur100ns = totalDuration100ns;   // streaming: the WHOLE track, not the prefix
+    if (dur100ns) pd->SetUINT64(MF_PD_DURATION, (UINT64)dur100ns);
 
     auto source = winrt::make_self<CencMediaSource>();
     auto stream = winrt::make_self<CencMediaStream>();
@@ -904,14 +1213,35 @@ static winrt::com_ptr<CencMediaSource> BuildCencSource(const cenc::InitInfo& inf
     stream->m_source = (IMFMediaSource*)source.get();   // weak — source holds the strong ref
     stream->m_info = info;
     stream->m_samples = std::move(samples);
+    stream->m_streamId = 1;
+    stream->m_label = "video";
+    stream->m_complete = !streaming;
     source->m_pd = pd;
-    source->m_stream = stream;
+    source->m_streams.push_back(stream);
+
+    if (audio)
+    {
+        auto astream = winrt::make_self<CencMediaStream>();
+        astream->m_sd = audioSd;
+        astream->m_source = (IMFMediaSource*)source.get();
+        astream->m_info = audio->info;
+        astream->m_samples = std::move(audio->samples);
+        astream->m_streamId = 2;
+        astream->m_label = "audio";
+        astream->m_complete = !streaming;
+        source->m_streams.push_back(astream);
+    }
 
     LogLine("[cenc-src] built source: " + std::to_string(info.width) + "x" + std::to_string(info.height) +
             " scheme=" + std::string(info.scheme == 1 ? "cbcs" : "cenc") +
             " ivSize=" + std::to_string((int)info.perSampleIvSize) +
-            " spspps=" + std::to_string(info.spspps.size()) + "B samples=" + std::to_string(stream->m_samples.size()));
-    (void)hx;
+            " spspps=" + std::to_string(info.spspps.size()) + "B samples=" + std::to_string(source->m_streams[0]->m_samples.size()) +
+            (audio ? (" + AUDIO " + std::to_string(source->m_streams[1]->m_info.channels) + "ch/" +
+                      std::to_string(source->m_streams[1]->m_info.sampleRate) + "Hz asc=" +
+                      std::to_string(source->m_streams[1]->m_info.asc.size()) + "B samples=" +
+                      std::to_string(source->m_streams[1]->m_samples.size()))
+                    : std::string(" (no audio track)")) +
+            (streaming ? "  [streaming: more segments arriving]" : ""));
     return source;
 }
 

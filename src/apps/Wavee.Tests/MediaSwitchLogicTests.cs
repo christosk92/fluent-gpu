@@ -126,4 +126,49 @@ public class MediaSwitchLogicTests
         Assert.True(MediaSwitchLogic.HostChanges(current, next));
         Assert.True(MediaSwitchLogic.ShouldStopOutgoingHost(current, next));
     }
+
+    // ── M0: the whole audio→video→audio sequence, walked through the pure rules ──────────────────────────────────────
+    // The controller composes exactly these four rules per boundary. Walking a sequence pins the composition, not just the
+    // individual predicates: every host change stops the outgoing host, never crossfades, and reports the right track_player.
+    [Fact]
+    public void AudioVideoAudioSequence_SwapsTwice_StopsOutgoingBothTimes_AndNeverCrossfades()
+    {
+        PlayableKind[] sequence = [PlayableKind.Audio, PlayableKind.Video, PlayableKind.Audio];
+        var swaps = new List<(PlayableKind From, PlayableKind To)>();
+        for (int i = 1; i < sequence.Length; i++)
+        {
+            var from = sequence[i - 1];
+            var to = sequence[i];
+            if (!MediaSwitchLogic.HostChanges(from, to)) continue;
+            swaps.Add((from, to));
+            Assert.Equal(MediaSwitchLogic.SwitchAction.SwapThenLoad, MediaSwitchLogic.Decide(from, to));
+            Assert.True(MediaSwitchLogic.ShouldStopOutgoingHost(from, to));   // stop-first at EVERY real host boundary
+            Assert.False(MediaSwitchLogic.AllowCrossfade(from, to));          // a kind boundary is always a hard cut
+        }
+        Assert.Equal(2, swaps.Count);
+        Assert.Equal("audio", MediaSwitchLogic.TrackPlayer(sequence[0]));
+        Assert.Equal("video", MediaSwitchLogic.TrackPlayer(sequence[1]));
+        Assert.Equal("audio", MediaSwitchLogic.TrackPlayer(sequence[2]));
+    }
+
+    // A LocalFile leg in the middle must NOT move the host (Audio and LocalFile share it), so an audio→local→audio run keeps
+    // the audio fast-start / prepared-next path untouched — the "preserve the audio path exactly" guarantee.
+    [Fact]
+    public void AudioLocalAudioSequence_NeverSwapsTheHost()
+    {
+        PlayableKind[] sequence = [PlayableKind.Audio, PlayableKind.LocalFile, PlayableKind.Audio];
+        for (int i = 1; i < sequence.Length; i++)
+            Assert.False(MediaSwitchLogic.HostChanges(sequence[i - 1], sequence[i]));
+    }
+
+    // Idempotence: asking again for the boundary we already took is never a second swap.
+    [Theory]
+    [InlineData(PlayableKind.Audio, PlayableKind.Video)]
+    [InlineData(PlayableKind.Video, PlayableKind.Audio)]
+    public void HostChanges_IsIdempotent_OnceTheBoundaryHasBeenTaken(PlayableKind from, PlayableKind to)
+    {
+        Assert.True(MediaSwitchLogic.HostChanges(from, to));
+        Assert.False(MediaSwitchLogic.HostChanges(to, to));            // already there → no second swap
+        Assert.False(MediaSwitchLogic.ShouldStopOutgoingHost(to, to)); // …and nothing to stop
+    }
 }

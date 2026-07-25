@@ -69,8 +69,13 @@ public static class VideoCompositor
 /// </summary>
 /// <summary>Parameters for a DETACHED video window (the pop-out mini-player). <see cref="Content"/> is a component the
 /// host mounts as the window's root; the window is composited, movable/resizable, and (by default) always-on-top.</summary>
+/// <param name="InitialBoundsPx">Optional restored placement (outer rect, physical virtual-screen px). Empty ⇒ the host
+/// picks a picture-in-picture home at the bottom-right of the parent's monitor. A restored rect is still clamped to a
+/// visible monitor, so a window remembered on a display that is now gone still opens where the user can see it.</param>
+/// <param name="MinClientSizeDip">Optional minimum client size (DIP). Empty ⇒ the host's 16:9-ish default floor.</param>
 public readonly record struct DetachedWindowRequest(
-    string Title, FluentGpu.Foundation.Size2 InitialSizeDip, Component Content, bool AlwaysOnTop = true);
+    string Title, FluentGpu.Foundation.Size2 InitialSizeDip, Component Content, bool AlwaysOnTop = true,
+    FluentGpu.Foundation.RectF InitialBoundsPx = default, FluentGpu.Foundation.Size2 MinClientSizeDip = default);
 
 /// <summary>A live handle to a detached video window (see <see cref="InputHooks.OpenDetachedWindow"/>).</summary>
 public interface IDetachedVideoWindow
@@ -86,6 +91,18 @@ public interface IDetachedVideoWindow
     /// <summary>Fired exactly once, on the UI thread, when the window has closed (OS chrome/Alt+F4 OR programmatic
     /// <see cref="Close"/>), immediately before the child host is torn down. Cleared after it fires.</summary>
     Action? OnClosed { get; set; }
+
+    /// <summary>Where the window is NOW (outer rect, physical virtual-screen px), or an empty rect when the backend
+    /// cannot report it. The read side of <see cref="SetBounds"/> — an owner that wants to reopen the window where the
+    /// user left it has to be able to ask.</summary>
+    FluentGpu.Foundation.RectF BoundsPx => default;
+    /// <summary>Retitle a live window (the OS taskbar / Alt+Tab text), so a title that describes CONTENT can follow the
+    /// content instead of being frozen at whatever was playing when the window opened.</summary>
+    void SetTitle(string title) { }
+    /// <summary>Fired on the UI thread when the user has finished moving or resizing the window (settled bounds, outer
+    /// rect, physical px). Debounced by the host — one call per gesture, not one per pixel — so an owner can persist
+    /// geometry directly from it.</summary>
+    Action<FluentGpu.Foundation.RectF>? BoundsChanged { get; set; }
 }
 
 public sealed class InputHooks
@@ -165,6 +182,10 @@ public sealed class InputHooks
     /// window + scene + swapchain (the pop-out mini-player). Returns a handle, or null when unavailable (headless, the
     /// async render path, or a backend without secondary swapchains). Host-wired to <c>AppHost.OpenDetachedWindow</c>.</summary>
     public Func<DetachedWindowRequest, IDetachedVideoWindow?>? OpenDetachedWindow;
+    /// <summary>Whether <see cref="OpenDetachedWindow"/> would actually succeed right now (a child host, headless, or a
+    /// backend without secondary swapchains all say no). An affordance can PREFLIGHT with this instead of discovering the
+    /// answer by opening nothing — the difference between "that option isn't available here" and a dead click.</summary>
+    public Func<bool>? CanOpenDetachedWindow;
     /// <summary>Push the titlebar drag/button regions (array + count — the caller reuses ONE array across pushes,
     /// the host forwards <c>regions.AsSpan(0, count)</c> to <c>IPlatformWindow.SetTitleBarRegions</c>; push happens
     /// on titlebar relayout only, never per frame).</summary>
@@ -187,10 +208,10 @@ public sealed class InputHooks
     /// back to constrained placement (WinUI's <c>DoesPlatformSupportWindowedPopup</c> gate).</summary>
     public Func<NodeHandle, PopupWindowMaterial, int>? OpenPopupWindow;
     /// <summary>Place a leased popup window: token + the logical menu CONTENT bounds in main-window DIP. The host
-    /// inflates by the shadow insets, converts to physical px, shows the window (without activating), and — for a
-    /// desktop-acrylic popup — configures + plays the open motion. <c>opensUp</c> = the menu opens upward (anchored at
-    /// its bottom); <c>closedRatio</c> is the WinUI MenuPopupThemeTransition ratio (0.5 root menu, 0.67 cascaded submenu)
-    /// that drives the open slide distance + the plate ScaleY.</summary>
+    /// inflates by the shadow insets, converts to physical px, and configures the hidden window's opening state.
+    /// The host shows it only after its first subtree frame has been recorded and presented. <c>opensUp</c> = the menu
+    /// opens upward (anchored at its bottom); <c>closedRatio</c> is the WinUI MenuPopupThemeTransition ratio
+    /// (0.5 root menu, 0.67 cascaded submenu, 0 CommandBar) that drives the host-chrome open slide.</summary>
     public Action<int, RectF, bool, float>? SetPopupWindowBounds;
     /// <summary>Begin the desktop-acrylic close fade on a leased popup window's composition chrome (acrylic + shadow),
     /// synced with the engine's content fade. The window is disposed separately at finalize (<see cref="ClosePopupWindow"/>).</summary>

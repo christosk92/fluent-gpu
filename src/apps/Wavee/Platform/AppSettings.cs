@@ -44,6 +44,13 @@ static class WaveeSettings
     // The saved / liked / followed library set (Mutations facet) — a newline-joined list of uris. The single in-process
     // outbox: every optimistic save/follow rewrites it. (A real source would reconcile server-side + revision conflicts.)
     public static readonly SettingKey<string> SavedLibrary = new("library.saved", "");
+    // ── the movable video surface: WHERE the user likes to watch, and where they put things. Deliberately NOT whether a
+    // video is playing — a launch must never resume one on its own. See PlacementPersistence for the stored shapes.
+    // Empty = never chosen ⇒ the surface's own default placement / its anchored home.
+    public static readonly SettingKey<string> VideoPreferredPlacement = new("video.placement", "");
+    public static readonly SettingKey<string> VideoPipRect = new("video.pip.rect", "");        // window-DIP "x,y,w,h"
+    public static readonly SettingKey<string> VideoWindowRect = new("video.window.rect", "");  // screen-px "x,y,w,h"
+
     // PlayPlay runtime pointer — empty string means unset (AppDataSettings cannot round-trip null strings).
     public static readonly SettingKey<string> PlaybackRuntimePath = new("playback.runtime.path", "");
     public static readonly SettingKey<string> PlaybackRuntimePackId = new("playback.runtime.packId", "");

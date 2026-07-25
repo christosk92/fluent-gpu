@@ -869,6 +869,26 @@ sealed class ScrollRestoreProbe : Component
     }
 }
 
+// A virtual list with a FIXED ScrollKey inside a KEYED wrapper. Flipping WrapperKey re-keys the wrapper, so the
+// reconciler tears the list down and mounts a fresh one — a NEW viewport node — while the content identity, and
+// therefore the ScrollKey, is unchanged. This is the shape Wavee's track list has (re-keyed by row density / filter
+// while staying the same playlist) and the one that exposed the mount-before-remove scroll bug: the incoming viewport
+// read ScrollMemory before the outgoing one had written its live offset there.
+sealed class ScrollKeyedSwapProbe : Component
+{
+    public readonly Signal<int> WrapperKey = new(0);
+    public override Element Render()
+    {
+        Element list = Virtual.List(1000, 20f, i => new BoxEl { Height = 20, Fill = ColorF.FromRgba(30, 30, 30) }, keyOf: i => "r" + i)
+            with { ScrollKey = "same-content", Width = 300, Height = 200 };
+        return new BoxEl
+        {
+            Width = 320, Height = 220,
+            Children = [new BoxEl { Key = "wrap:" + WrapperKey.Value, Width = 300, Height = 200, Children = [list] }],
+        };
+    }
+}
+
 // A NavigationView with 3 items + a footer → proves adaptive Expanded/Compact/Minimal display modes.
 sealed class CountingVirtualProbe : Component
 {
@@ -2629,6 +2649,64 @@ sealed class KeepAlivePage : Component
                     Content = new BoxEl { Direction = 1, Children = rows },
                 },
                 Image("keepalive-" + _key, 24, 24, 2f, ColorF.FromRgba(0x33, 0x33, 0x33)),
+            ],
+        };
+    }
+}
+
+// Navigation-motion regression: the retained page first renders a narrow proxy, then publishes its real width from
+// OnBoundsChanged on the following frame. With the KeepAlive activation policy, that correction must land without
+// CardRefit's ScaleCorrect FLIP; a cached structural row must also settle instead of resuming on reactivation.
+sealed class KeepAliveMotionSuppressionProbe : Component
+{
+    public Signal<string>? Route;
+    public NodeHandle AnimatedNode;
+
+    public override Element Render()
+    {
+        var route = UseSignal("idle");
+        Route = route;
+        return Flow.KeepAlive(
+            () => route.Value,
+            key => key,
+            key => key == "measured"
+                ? Embed.Comp(() => new KeepAliveMeasuredPage(this))
+                : new BoxEl { Width = 220f, Height = 100f, Children = [Text("idle-page")] },
+            new KeepAliveOptions(MaxEntries: 2, SuppressLayoutTransitionsOnActivation: true));
+    }
+}
+
+sealed class KeepAliveMeasuredPage : Component
+{
+    readonly KeepAliveMotionSuppressionProbe _owner;
+    readonly Signal<float> _width = new(80f);
+
+    public KeepAliveMeasuredPage(KeepAliveMotionSuppressionProbe owner) => _owner = owner;
+
+    public override Element Render()
+    {
+        float width = _width.Value;
+        return new BoxEl
+        {
+            Direction = 1,
+            Width = 220f,
+            Height = 100f,
+            ClipToBounds = true,
+            OnBoundsChanged = r =>
+            {
+                float measured = MathF.Max(80f, r.W - 20f);
+                if (MathF.Abs(measured - _width.Peek()) > 0.5f) _width.Value = measured;
+            },
+            Children =
+            [
+                new BoxEl
+                {
+                    Width = width,
+                    Height = 40f,
+                    Animate = MotionRecipes.CardRefit,
+                    OnRealized = n => _owner.AnimatedNode = n,
+                    Children = [Text("measured-card")],
+                },
             ],
         };
     }

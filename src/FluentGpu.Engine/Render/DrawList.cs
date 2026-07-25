@@ -492,10 +492,11 @@ public sealed class DrawList
         PushSort(sortKey);
     }
 
-    public void PushLayer(in RectF deviceRect, in CornerRadius4 radii, in ColorF tint, in ColorF fallback, float tintOpacity, float blurSigma, float noiseOpacity, float luminosityOpacity, ulong sortKey = 0, ulong layerId = 0, float featherFrac = 0f)
+    public void PushLayer(in RectF deviceRect, in CornerRadius4 radii, in ColorF tint, in ColorF fallback, float tintOpacity, float blurSigma, float noiseOpacity, float luminosityOpacity, ulong sortKey = 0, ulong layerId = 0, float featherFrac = 0f, float groupAlpha = 1f)
     {
         WriteOp(DrawOp.PushLayer);
-        WritePayload(new PushLayerCmd(deviceRect, radii, tint, fallback, tintOpacity, blurSigma, noiseOpacity, luminosityOpacity, LayerId: layerId, FeatherFrac: featherFrac));
+        WritePayload(new PushLayerCmd(deviceRect, radii, tint, fallback, tintOpacity, blurSigma, noiseOpacity, luminosityOpacity,
+            GroupAlpha: Math.Clamp(groupAlpha, 0f, 1f), LayerId: layerId, FeatherFrac: featherFrac));
         PushSort(sortKey);
     }
 

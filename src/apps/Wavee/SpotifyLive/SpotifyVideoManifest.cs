@@ -41,6 +41,28 @@ sealed class SpotifyVideoManifest
     public int SegmentStrideSeconds { get; init; } = 4;   // Spotify names segments by absolute time; step == segment length
     public int SegmentCount { get; init; }
 
+    // ── selected mp4/PlayReady AUDIO profile: the VIDEO'S OWN soundtrack ──────────────────────────────────────────────
+    // A music video is its own edit — intros, spoken pre/post-roll, a different arrangement — so its audio is NOT the
+    // plain song's audio track and cannot be substituted for it. The manifest does carry it: the audio profiles sit in
+    // the same `profiles` array, under the same PlayReady encryption index, addressed by the same templates via their own
+    // profile_id, and (verified on real manifests) under the SAME content key as the video — so playing it needs no
+    // additional licence work at all. This parser used to drop every audio profile on the floor, which is the whole
+    // reason a music video played silently.
+    public int AudioProfileId { get; init; }
+    /// <summary>The selected audio profile's codec string, e.g. <c>mp4a.40.2</c> (AAC-LC). Empty ⇒ no usable audio.</summary>
+    public string AudioCodec { get; init; } = "";
+    public int AudioBitrate { get; init; }
+    public string AudioInitUrl { get; init; } = "";
+    public string AudioSegmentBaseUrl { get; init; } = "";
+    public string AudioSegmentPrefix { get; init; } = "";
+    public string AudioSegmentSuffix { get; init; } = "";
+    /// <summary>The audio profile's own CENC key id (hyphenated GUID). Equal to <see cref="CencKid"/> on real Spotify
+    /// manifests — that equality is what makes the already-acquired video licence cover the audio too.</summary>
+    public string? AudioCencKid { get; init; }
+
+    /// <summary>Whether a usable (AAC, PlayReady-indexed, addressable) audio representation was selected.</summary>
+    public bool HasAudio => AudioCodec.Length > 0 && AudioInitUrl.Length > 0;
+
     // ── PlayReady protection ──
     public byte[]? Pssh { get; init; }
     public byte[]? Pro { get; init; }
@@ -56,14 +78,7 @@ sealed class SpotifyVideoManifest
 
     public static SpotifyVideoManifest FromJson(JsonElement root)
     {
-        // v9 has two shapes: contents[0] carries profiles/encryption, root carries templates/base URLs; or everything
-        // under sources[0]. Mirror the reference's host resolution.
-        var content = root;
-        var templateHost = root;
-        if (root.TryGetProperty("contents", out var contents) && contents.ValueKind == JsonValueKind.Array && contents.GetArrayLength() > 0)
-            content = contents[0];
-        if (root.TryGetProperty("sources", out var sources) && sources.ValueKind == JsonValueKind.Array && sources.GetArrayLength() > 0)
-        { content = sources[0]; templateHost = content; }
+        var (content, templateHost) = ResolveHosts(root);
 
         string encodingId = Str(content, "encoding_id") ?? Str(content, "media_id") ?? "";
         int segLen = Int(content, "segment_length") ?? 4;
@@ -108,10 +123,13 @@ sealed class SpotifyVideoManifest
             }
         }
 
-        // ── profiles: the first mp4 profile matching the playready encryption index; conservative ≤480p ──
+        // ── profiles: mp4 profiles matching the playready encryption index — a conservative ≤480p VIDEO representation
+        // and, separately, the AAC AUDIO representation that is the video's own soundtrack ──
         int profileId = 0; string vcodec = ""; int w = 0, h = 0;
         string? cencKid = null, prKid = null;
         bool hasPlayReadyMp4 = false;
+        SpotifyVideoManifestProfile? bestAudio = null;
+        string? audioKid = null;
         if (content.TryGetProperty("profiles", out var profiles) && profiles.ValueKind == JsonValueKind.Array)
         {
             SpotifyVideoManifestProfile? best = null;
@@ -119,40 +137,52 @@ sealed class SpotifyVideoManifest
             {
                 if (!string.Equals(Str(p, "file_type"), "mp4", StringComparison.Ordinal)) continue;
                 if (!ProfileMatchesEncryptionIndex(p, playReadyIndex)) continue;
-                if (Str(p, "video_codec") is not { Length: > 0 } vc) continue;   // skip audio-only profiles here
-
-                hasPlayReadyMp4 = true;
-                cencKid ??= FormatCencKeyId(Str(p, "key_id"));
-                prKid ??= FormatPlayReadyKeyId(Str(p, "key_id"));
-
-                int pw = Int(p, "video_width") ?? Int(p, "width") ?? 0;
-                int ph = Int(p, "video_height") ?? Int(p, "height") ?? 0;
-                int bw = Int(p, "max_bitrate") ?? Int(p, "bandwidth_estimate") ?? Int(p, "video_bitrate") ?? 0;
                 int pid = Int(p, "id") ?? 0;
-                var cand = new SpotifyVideoManifestProfile(pid, vc, pw, ph, bw);
-                best = ChooseConservative(best, cand);
+
+                if (Str(p, "video_codec") is { Length: > 0 } vc)
+                {
+                    hasPlayReadyMp4 = true;
+                    cencKid ??= FormatCencKeyId(Str(p, "key_id"));
+                    prKid ??= FormatPlayReadyKeyId(Str(p, "key_id"));
+
+                    int pw = Int(p, "video_width") ?? Int(p, "width") ?? 0;
+                    int ph = Int(p, "video_height") ?? Int(p, "height") ?? 0;
+                    int bw = Int(p, "max_bitrate") ?? Int(p, "bandwidth_estimate") ?? Int(p, "video_bitrate") ?? 0;
+                    best = ChooseConservative(best, new SpotifyVideoManifestProfile(pid, vc, pw, ph, bw));
+                    continue;
+                }
+
+                // Audio-only profile. It must be AAC: real manifests also advertise an OPUS profile under the SAME
+                // PlayReady index, and Opus is not decodable by the protected Media Foundation pipeline we feed — picking
+                // it would produce a session that fails deep inside the CDM rather than a clear "no audio".
+                if (Str(p, "audio_codec") is { Length: > 0 } ac && IsAac(ac))
+                {
+                    int abw = Int(p, "audio_bitrate") ?? Int(p, "max_bitrate") ?? Int(p, "bandwidth_estimate") ?? 0;
+                    var cand = new SpotifyVideoManifestProfile(pid, ac, 0, 0, abw);
+                    if (bestAudio is null || cand.Bandwidth > bestAudio.Bandwidth)
+                    {
+                        bestAudio = cand;
+                        audioKid = FormatCencKeyId(Str(p, "key_id"));
+                    }
+                }
             }
             if (best is { } sel) { profileId = sel.Id; vcodec = sel.Codec; w = sel.Width; h = sel.Height; }
         }
 
         // ── segment addressing: substitute profile_id + file_type, split at {{segment_timestamp}} ──
+        // The templates are per-PROFILE, so the audio representation is addressed by the exact same pair with its own
+        // profile_id — which is why adding the video's soundtrack needs no new manifest plumbing, only its profile.
         string initUrl = "", segBase = "", segPrefix = "", segSuffix = "";
+        string audioInit = "", audioBase = "", audioPrefix = "", audioSuffix = "";
         int segCount = 0;
-        if (baseUrl.Length > 0 && initTpl.Length > 0 && segTpl.Length > 0 && hasPlayReadyMp4)
+        bool addressable = baseUrl.Length > 0 && initTpl.Length > 0 && segTpl.Length > 0;
+        if (addressable && hasPlayReadyMp4)
         {
-            initUrl = baseUrl + Subst(initTpl, profileId);
-            string media = baseUrl + Subst(segTpl, profileId);
-            int tok = media.IndexOf("{{segment_timestamp}}", StringComparison.Ordinal);
-            if (tok >= 0)
-            {
-                string before = media[..tok];
-                segSuffix = media[(tok + "{{segment_timestamp}}".Length)..];
-                int slash = before.LastIndexOf('/');
-                if (slash >= 0) { segBase = before[..(slash + 1)]; segPrefix = before[(slash + 1)..]; }
-                else { segBase = ""; segPrefix = before; }
-            }
+            (initUrl, segBase, segPrefix, segSuffix) = BuildAddressing(baseUrl, initTpl, segTpl, profileId);
             double durS = durMs / 1000.0;
             segCount = durS > 0 ? (int)Math.Ceiling(durS / segLen) : 0;
+            if (bestAudio is { } aud)
+                (audioInit, audioBase, audioPrefix, audioSuffix) = BuildAddressing(baseUrl, initTpl, segTpl, aud.Id);
         }
 
         return new SpotifyVideoManifest
@@ -172,6 +202,14 @@ sealed class SpotifyVideoManifest
             SegmentSuffix = segSuffix,
             SegmentStrideSeconds = segLen,
             SegmentCount = segCount,
+            AudioProfileId = bestAudio?.Id ?? 0,
+            AudioCodec = audioInit.Length > 0 ? bestAudio?.Codec ?? "" : "",
+            AudioBitrate = bestAudio?.Bandwidth ?? 0,
+            AudioInitUrl = audioInit,
+            AudioSegmentBaseUrl = audioBase,
+            AudioSegmentPrefix = audioPrefix,
+            AudioSegmentSuffix = audioSuffix,
+            AudioCencKid = audioInit.Length > 0 ? audioKid : null,
             Pssh = pssh,
             Pro = pro,
             CencKid = cencKid,
@@ -198,8 +236,56 @@ sealed class SpotifyVideoManifest
             Pssh = Pssh ?? System.Array.Empty<byte>(),
             DefaultKid = CencKid,
             Codecs = VideoCodec,
+            // The video's OWN soundtrack, addressed by the same templates under the same content key. Null/empty when the
+            // manifest offers no AAC audio under the PlayReady index — the native side then plays video only, exactly as
+            // it does today, rather than failing.
+            AudioInitUrl = HasAudio ? AudioInitUrl : null,
+            AudioSegmentBaseUrl = HasAudio ? AudioSegmentBaseUrl : null,
+            AudioSegmentPrefix = HasAudio ? AudioSegmentPrefix : null,
+            AudioSegmentSuffix = HasAudio ? AudioSegmentSuffix : null,
+            AudioCodecs = HasAudio ? AudioCodec : null,
         };
     }
+
+    /// <summary>Locate the two elements a v9 manifest splits itself across — the ONE definition, shared with the
+    /// <c>--spotify-video-manifest</c> dump so the probe inspects exactly what this parser inspects. Two shapes exist:
+    /// <c>contents[0]</c> carries profiles/encryption while the root carries templates/base URLs, or everything sits under
+    /// <c>sources[0]</c>. Mirrors the reference's host resolution.</summary>
+    internal static (JsonElement Content, JsonElement TemplateHost) ResolveHosts(JsonElement root)
+    {
+        var content = root;
+        var templateHost = root;
+        if (root.TryGetProperty("contents", out var contents) && contents.ValueKind == JsonValueKind.Array && contents.GetArrayLength() > 0)
+            content = contents[0];
+        if (root.TryGetProperty("sources", out var sources) && sources.ValueKind == JsonValueKind.Array && sources.GetArrayLength() > 0)
+        { content = sources[0]; templateHost = content; }
+        return (content, templateHost);
+    }
+
+    /// <summary>Substitute one profile into the init + segment templates and split the media URL at the timestamp token
+    /// into the <c>base | prefix | suffix</c> triple the native CENC source concatenates. Shared by the video and audio
+    /// representations — same templates, different <c>profile_id</c>.</summary>
+    static (string Init, string Base, string Prefix, string Suffix) BuildAddressing(
+        string baseUrl, string initTpl, string segTpl, int profileId)
+    {
+        const string tokenName = "{{segment_timestamp}}";
+        string init = baseUrl + Subst(initTpl, profileId);
+        string media = baseUrl + Subst(segTpl, profileId);
+        int tok = media.IndexOf(tokenName, StringComparison.Ordinal);
+        if (tok < 0) return (init, "", "", "");
+        string before = media[..tok];
+        string suffix = media[(tok + tokenName.Length)..];
+        int slash = before.LastIndexOf('/');
+        return slash >= 0
+            ? (init, before[..(slash + 1)], before[(slash + 1)..], suffix)
+            : (init, "", before, suffix);
+    }
+
+    // AAC only (mp4a.40.x / "aac"): the protected MF pipeline we hand the stream to decodes AAC, and a manifest that also
+    // offers Opus under the same PlayReady index must not silently win the pick.
+    static bool IsAac(string codec)
+        => codec.StartsWith("mp4a", StringComparison.OrdinalIgnoreCase)
+        || codec.StartsWith("aac", StringComparison.OrdinalIgnoreCase);
 
     static string Subst(string template, int profileId) => template
         .Replace("{{profile_id}}", profileId.ToString(CultureInfo.InvariantCulture))

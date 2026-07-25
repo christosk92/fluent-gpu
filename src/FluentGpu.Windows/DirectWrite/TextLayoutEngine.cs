@@ -412,7 +412,14 @@ public sealed unsafe class TextLayoutEngine : IDisposable
         int overflowSuffixStart)
     {
         bool doWrap = wrap != 0 && maxWidth > 1f && !float.IsInfinity(maxWidth);
-        bool doTrim = trim != 0 && maxWidth > 1f && !float.IsInfinity(maxWidth);
+        // Trimming must survive a COLLAPSED box (0 <= maxWidth <= 1), which wrapping deliberately does not: a grid whose
+        // Star track resolves to 0 (FlexLayout.ResolveColumns' overflow guard) hands its cell a 0-width budget, and the
+        // old `> 1f` gate silently turned the authored ellipsis OFF — the run then rasterized at its NATURAL width while
+        // Width below still reported min(natural, maxWidth) ~= 0, so layout stayed "clean" and the glyphs painted
+        // straight across the neighbouring columns (the rail-open column pile-up). EmitLine's budget math already floors
+        // at 0, so a collapsed cell degrades to one glyph + the ellipsis instead of the whole string. Wrapping stays
+        // gated: breaking at a ~0 budget would emit one glyph per line, which is worse than a single trimmed line.
+        bool doTrim = trim != 0 && maxWidth >= 0f && !float.IsInfinity(maxWidth);
         int maxL = maxLines > 0 ? maxLines : int.MaxValue;
         int allGc = _glyphCount;
         int suffixGlyph = allGc;

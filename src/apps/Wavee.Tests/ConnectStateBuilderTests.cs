@@ -103,6 +103,90 @@ public class ConnectStateBuilderTests
         Assert.False(autoplay.Metadata.ContainsKey("entity_uri"));
     }
 
+    // ── M0: `track_player` is the controller's LIVE media kind, not a bare has-video flag ────────────────────────────
+    // The current track's track_player names the HOST that is actually decoding. A video-capable track played as AUDIO must
+    // report "audio" (remote controllers render the wrong player otherwise) — and a track playing as VIDEO must report
+    // "video" even if the wire snapshot's own metadata said otherwise. So: video IFF the current kind is Video.
+    static LocalPlaybackSnapshot Snap(bool hasVideo, Dictionary<string, string>? trackMetadata = null) =>
+        new(
+            Track: new SnapshotTrack("spotify:track:t", "uid", "context", "Title", "Album",
+                "spotify:artist:a", "Artist", "spotify:album:al", "", hasVideo, 3,
+                trackMetadata ?? new Dictionary<string, string>(StringComparer.Ordinal)),
+            ContextUri: "spotify:playlist:p",
+            PositionMs: 0,
+            DurationMs: 1000,
+            IsPlaying: true,
+            IsPaused: false,
+            Shuffle: false,
+            Repeat: RepeatMode.Off,
+            PrevTracks: Array.Empty<SnapshotTrack>(),
+            NextTracks: new[]
+            {
+                new SnapshotTrack("spotify:track:next", "un", "context", "Next", "Album",
+                    "spotify:artist:a", "Artist", "spotify:album:al", "", false, 4,
+                    new Dictionary<string, string>(StringComparer.Ordinal)),
+            },
+            ContextMetadata: new Dictionary<string, string>(StringComparer.Ordinal),
+            ContextIndex: 3,
+            InteractionId: "interaction",
+            PageInstanceId: "page",
+            QueueRevision: "1",
+            SessionId: "session",
+            PlaybackId: "playback",
+            HasBeenPlayingForMs: 0,
+            StartedPlayingAtMs: 9000);
+
+    static string TrackPlayerOf(LocalPlaybackSnapshot snap, PlayableKind? kind)
+    {
+        var builder = new ConnectStateBuilder("device", "Wavee");
+        var ps = PutStateRequest.Parser.ParseFrom(builder.BuildPutState(
+            PutStateReasonKind.PlayerStateChanged, snap, 1, true, nowMs: 10_000, currentKind: kind)).Device.PlayerState;
+        return ps.Track.Metadata["track_player"];
+    }
+
+    [Theory]
+    [InlineData(PlayableKind.Video, "video")]
+    [InlineData(PlayableKind.Audio, "audio")]
+    [InlineData(PlayableKind.LocalFile, "audio")]
+    public void BuildPutState_TrackPlayer_FollowsTheCurrentMediaKind_ForAPlainTrack(PlayableKind kind, string expected)
+        => Assert.Equal(expected, TrackPlayerOf(Snap(hasVideo: false), kind));
+
+    [Theory]
+    [InlineData(PlayableKind.Video, "video")]
+    [InlineData(PlayableKind.Audio, "audio")]
+    [InlineData(PlayableKind.LocalFile, "audio")]
+    public void BuildPutState_TrackPlayer_FollowsTheCurrentMediaKind_ForAVideoCapableTrack(PlayableKind kind, string expected)
+    {
+        // has-video AND a stale metadata claim of "video" — the live kind still wins (this is the M0 defect: the app used to
+        // advertise track_player="video" while the audio host was the one playing).
+        var meta = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["track_player"] = "video",
+            ["media.type"] = "video",
+        };
+        Assert.Equal(expected, TrackPlayerOf(Snap(hasVideo: true, meta), kind));
+    }
+
+    [Fact]
+    public void BuildPutState_TrackPlayer_KeepsTheWireHeuristic_WhenNoKindIsSupplied()
+    {
+        // The empty NewConnection announce (and any caller that genuinely doesn't know the kind) keeps the pre-M0 behavior.
+        Assert.Equal("audio", TrackPlayerOf(Snap(hasVideo: false), null));
+        Assert.Equal("video", TrackPlayerOf(Snap(hasVideo: true), null));
+    }
+
+    [Fact]
+    public void BuildPutState_CurrentMediaKind_DoesNotLeakOntoNextTracks()
+    {
+        var builder = new ConnectStateBuilder("device", "Wavee");
+        var ps = PutStateRequest.Parser.ParseFrom(builder.BuildPutState(
+            PutStateReasonKind.PlayerStateChanged, Snap(hasVideo: false), 1, true,
+            nowMs: 10_000, currentKind: PlayableKind.Video)).Device.PlayerState;
+
+        Assert.Equal("video", ps.Track.Metadata["track_player"]);
+        Assert.Equal("audio", ps.NextTracks[0].Metadata["track_player"]);   // next-up is not the current media
+    }
+
     [Fact]
     public void BuildPutState_Paused_KeepsIsPlayingTrueAndAddsPauseRestrictions()
     {

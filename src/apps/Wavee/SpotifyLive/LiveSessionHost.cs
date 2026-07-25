@@ -168,6 +168,11 @@ public sealed class LiveSessionHost : IAsyncDisposable
         var connect = new LiveConnect(transport, live.DeviceId, live.ApChannel, contexts, log: connectLog, audio: audio,
             initialVolume01: initialVolume, refreshTokens: live.TokenProvider);
         connect.Controller.AutoplayEnabled = () => svc.Settings.Get(WaveeSettings.AutoplayEnabled);
+        // M0 — "one media, one host, one player": hand the controller the app-level video hooks (the per-track video predicate,
+        // the async PopOutVideoSource handoff onto the player-owning FluentVideoMediaHost, the PlayerChanged → surface relay,
+        // and the mid-track kind re-evaluation). All of it lives in LiveConnect.WireVideoMedia, wired unconditionally.
+        // svc.Playback.ResolveVideoSource is wired later in GoLive — the hooks read it late-bound, at invoke time.
+        connect.WireVideoMedia(svc.Playback);
         transport.Start();
         // Profile (name + avatar) fetched before go-live so CurrentUser is complete on the first render (no refresh hook).
         // Best-effort — a failure just omits that field.

@@ -160,7 +160,7 @@ float4 KawaseUpPS(V i) : SV_Target
 cbuffer C : register(b0) { float4 rect; float4 vpro; float4 rsuf; float4 tint; float4 fallback; float4 prm; float4 blurTexel; };
 // rect = layer rect (logical DIP); vpro = logical viewport W,H + snapshot-region origin (phys px);
 // rsuf = snapshot-region size (phys px) + blurred-RT used-uv fraction; prm = radius,tintOp,lumOp,noiseOp;
-// blurTexel.xy = blurred-RT texel size (for the half-texel edge clamp).
+// blurTexel.xy = blurred-RT texel size (for the half-texel edge clamp); z = top feather; w = cumulative surface alpha.
 Texture2D gBlur : register(t0);
 SamplerState gSamp : register(s0);
 struct V { float4 pos : SV_Position; float2 local : TEXCOORD0; float2 half : TEXCOORD1; };
@@ -199,6 +199,7 @@ float4 PSMain(V i) : SV_Target
         float distFromTop = (i.local.y + i.half.y) / max(2.0 * i.half.y, 1e-4);   // 0 at top edge → 1 at bottom
         cov *= smoothstep(0.0, blurTexel.z, distFromTop);
     }
+    cov *= saturate(blurTexel.w);
     // SV_Position is physical px → uv into the blurred snapshot: region-relative position × used fraction of the
     // bucket RT, clamped half a texel inside the used sub-rect (pooled RTs can be larger than the snapshot).
     float2 uv = (i.pos.xy - vpro.zw) / rsuf.xy * rsuf.zw;
@@ -607,7 +608,7 @@ float4 PSMain(V i) : SV_Target
         cc[12] = L.Tint.R; cc[13] = L.Tint.G; cc[14] = L.Tint.B; cc[15] = L.Tint.A;
         cc[16] = L.Fallback.R; cc[17] = L.Fallback.G; cc[18] = L.Fallback.B; cc[19] = L.Fallback.A;
         cc[20] = L.Radii.TopLeft; cc[21] = L.TintOpacity; cc[22] = L.LuminosityOpacity; cc[23] = L.NoiseOpacity;
-        cc[24] = 1f / aw; cc[25] = 1f / ah; cc[26] = Math.Clamp(L.FeatherFrac, 0f, 1f); cc[27] = 0f;
+        cc[24] = 1f / aw; cc[25] = 1f / ah; cc[26] = Math.Clamp(L.FeatherFrac, 0f, 1f); cc[27] = Math.Clamp(L.GroupAlpha, 0f, 1f);
         fixed (float* c = cc) cmd->SetGraphicsRoot32BitConstants(0, 28, c, 0);
         cmd->SetGraphicsRootDescriptorTable(1, SrvGpu(PoolSrvSlot(ia)));
         cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);

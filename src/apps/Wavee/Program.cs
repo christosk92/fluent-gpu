@@ -130,6 +130,23 @@ static class Program
             Environment.Exit(code);
         }
 
+        // LIVE RAW music-video manifest dump: login -> resolve the track's manifest_id (TrackV4 OriginalVideo, else the
+        // VIDEO_ASSOCIATIONS counterpart) -> GET /manifests/v9/json/sources/{id}/options/supports_drm -> print every
+        // profile / encryption_info / template field AS SERVED + a VERDICT on whether an AUDIO profile exists (the parsed
+        // model drops audio-only profiles, so only the raw body can answer it) + a JSON dump under %LOCALAPPDATA%\Wavee\diag.
+        // Usage: --spotify-video-manifest [spotify:track:...] (defaults to Blinding Lights — a mainstream track that should
+        // carry a music video). Exit 3 = that track has no video at all, so pass one that does.
+        int vidIdx = Array.IndexOf(args, "--spotify-video-manifest");
+        if (vidIdx >= 0)
+        {
+            string uri = vidIdx + 1 < args.Length && !args[vidIdx + 1].StartsWith("--")
+                ? args[vidIdx + 1]
+                : "spotify:track:0VjIjW4GlUZAMYd2vXMi3b";
+            using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(8));
+            int code = Wavee.SpotifyLive.SpotifyVideoManifestProbe.RunAsync(uri, CliLog("probe"), cts.Token, appLocale.SpotifyLanguage).GetAwaiter().GetResult();
+            Environment.Exit(code);
+        }
+
         // LIVE playlist membership round-trip: login -> GET /playlist/v2 -> thin header + ordered membership -> hydrate -> print.
         // Usage: --spotify-playlist spotify:playlist:<id>
         int plIdx = Array.IndexOf(args, "--spotify-playlist");

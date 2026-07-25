@@ -52,6 +52,20 @@ public sealed record ProtectedVideoRequest
     public bool StartPaused { get; init; } = true;
     /// <summary>The playback mode (<c>"clear"</c> selects the native clear diagnostic; else the protected CENC path).</summary>
     public string? Mode { get; init; }
+
+    // ── the paired AUDIO representation (optional) — the video's own soundtrack ───────────────────────────────────────
+    // Null ⇒ video only (today's behavior). Segment count / start number / stride are SHARED with the video: both
+    // representations sit on the same segment grid, so only the four URL parts and the codec differ.
+    /// <summary>Audio init-segment URL, or null when the source has no usable audio representation.</summary>
+    public string? AudioInitUrl { get; init; }
+    /// <summary>Base URL for the audio media segments.</summary>
+    public string? AudioSegmentBaseUrl { get; init; }
+    /// <summary>Audio media-segment name prefix.</summary>
+    public string? AudioSegmentPrefix { get; init; }
+    /// <summary>Audio media-segment name suffix.</summary>
+    public string? AudioSegmentSuffix { get; init; }
+    /// <summary>The audio representation's codec string (e.g. <c>mp4a.40.2</c>) — advisory for logs/diagnostics.</summary>
+    public string? AudioCodecs { get; init; }
 }
 
 /// <summary>The lifecycle state of a protected-video session, surfaced as a signal on the player façade.</summary>

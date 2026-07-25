@@ -478,72 +478,44 @@ sealed class PlayerBarContent : Component
                 ui.RailOpen.Value && ui.Mode.Value == RailMode.Lyrics, accent, buttonBox, buttonGlyph,
                 font: WaveeIcons.Font)
                 with { Key = "lyrics", Animate = ItemMotion });
-        // Video — a SPLIT button, shown only when the now-playing track has a music video (async-detected). The PRIMARY
-        // (movie) part pops the video out into a detached, always-on-top window ("original video"); the trailing CHEVRON
-        // opens a MenuFlyout of the alternate surfaces (in-window mini-player + video window + close). Both surfaces are
-        // mutually exclusive — only one consumes the resolved source at a time (one swapchain per source).
-        if (active && hasVideo)
+        // Video — a SPLIT button, shown only when the now-playing track has a music video (async-detected).
+        //   PRIMARY (movie glyph) — a SYMMETRIC toggle: off → show the video at the user's preferred placement (which
+        //     starts as the in-window mini player, the lowest-commitment surface: no new OS window, dismissible, stays
+        //     with the app); on → off, from ANY placement. It lights whenever video is live, wherever it is.
+        //   CHEVRON — opens the placement picker. It NEVER lights: it is a disclosure, not a state, and lighting it made
+        //     the pair read as two independent toggles that could disagree.
+        //   RIGHT-CLICK / Menu key on either part opens the same picker (WinUI ContextRequested).
+        // Everything here is a pure INTENT on the bridge; the placement model decides the rest, and the surfaces render
+        // from its one resolved answer. The split button needs ~1.5 slots, so it rides the same crowding threshold as
+        // Queue and degrades into the overflow menu below it (see the else-branch) instead of vanishing.
+        if (active && hasVideo && showQueue)
         {
-            // DERIVED highlight/visibility state — the single source of truth (VideoActive × VideoPlacement). The button
-            // faces reflect the ACTUAL surface state instead of standalone flags, so the toggle can never get stuck.
+            // DERIVED state — the ONE resolved placement. The button faces reflect what is actually mounted, so they
+            // cannot get stuck or disagree with each other.
             bool videoActive = b.VideoActive();
-            var placement = b.VideoPlacement.Value;
-            bool detachedActive = videoActive && placement == VideoPlacement.Detached;
-            bool pipActive = videoActive && placement == VideoPlacement.InWindowPip;
+            var placement = b.VideoPlacementNow();
 
-            // The handlers are PURE INTENTS on the bridge — they never touch a window handle (VideoPlacementHost owns the
-            // detached window's lifecycle; InWindowVideoPip owns the PiP surface). RestoreVideo() clears any per-track PiP
-            // dismiss so re-clicking "watch video" brings it back. Peek the track at invoke time (survives a track change
-            // between render and click). The source resolve is also auto-kicked by the bridge (RecomputeHasVideo).
-
-            // PRIMARY "watch video": enable video in the detached pop-out; if video is already live, switch to audio.
-            void PopOutVideo()
-            {
-                if (!b.VideoActive())
-                {
-                    b.RestoreVideo();
-                    b.VideoPlacement.Value = VideoPlacement.Detached;
-                    b.PreferVideo.Value = true;
-                    b.RequestPopOutSource(b.CurrentTrack.Peek()?.Uri);
-                }
-                else b.PreferVideo.Value = false;   // switch to audio → VideoActive false → owner closes the surface
-            }
-
-            // MENU "play video here": move video into the in-window PiP surface.
-            void ShowMiniPlayerHere()
-            {
-                b.RestoreVideo();
-                b.VideoPlacement.Value = VideoPlacement.InWindowPip;
-                b.PreferVideo.Value = true;
-                b.RequestPopOutSource(b.CurrentTrack.Peek()?.Uri);
-            }
-
-            // MENU "switch to video": (re)enable video in the detached pop-out window (always enable — not a toggle).
-            void SwitchToVideoWindow()
-            {
-                b.RestoreVideo();
-                b.VideoPlacement.Value = VideoPlacement.Detached;
-                b.PreferVideo.Value = true;
-                b.RequestPopOutSource(b.CurrentTrack.Peek()?.Uri);
-            }
-
-            // MENU "close video": stop video, keep audio. VideoActive → false, so the owner closes the detached window and
-            // the PiP hides. PreferVideo is the sticky master switch.
-            void CloseVideo() => b.PreferVideo.Value = false;
-
-            // The chevron opens the surface picker UPWARD out of the split button (bottom bar) via the overlay service —
-            // the same path DropDownButton/DevicesButton use (light-dismiss + focus-trap + the engine clip-reveal).
+            // The chevron opens the placement picker UPWARD out of the split button (bottom bar) via the overlay service —
+            // the same path DropDownButton/DevicesButton use (light-dismiss + focus-trap + the engine clip-reveal). The
+            // items are RADIO-checked against the resolved placement, so the menu shows where the video IS, and choosing
+            // the checked one again is a harmless no-op rather than a hidden toggle.
             void OpenVideoMenu()
             {
                 if (menuOverlay is not { } videoSvc) return;
                 if (videoMenu.Value is { IsOpen: true } open) { open.Close(); return; }
-                var items = new List<MenuFlyoutItem>(3)
+                var now = b.VideoPlacementNow();
+                var items = new List<MenuFlyoutItem>(4)
                 {
-                    new(Loc.Get(Strings.Player.PlayVideoHere), Icons.BackToWindow, true, ShowMiniPlayerHere),
-                    new(Loc.Get(Strings.Player.SwitchToVideo), Icons.Movie, true, SwitchToVideoWindow),
+                    MenuFlyoutItem.RadioItem(Loc.Get(Strings.Player.PlayVideoHere), now == SurfacePlacement.Floating,
+                        () => b.ShowVideoAt(SurfacePlacement.Floating), Icons.BackToWindow),
+                    MenuFlyoutItem.RadioItem(Loc.Get(Strings.Player.VideoInSeparateWindow), now == SurfacePlacement.Detached,
+                        () => b.ShowVideoAt(SurfacePlacement.Detached), Icons.Movie),
                 };
-                if (b.VideoActive())   // only offer "close" when video is actually live
-                    items.Add(new(Loc.Get(Strings.Player.CloseVideo), Icons.Cancel, true, CloseVideo));
+                if (b.VideoActive())   // "off" is only meaningful while something is on
+                {
+                    items.Add(MenuFlyoutItem.Separator);
+                    items.Add(new(Loc.Get(Strings.Player.TurnOffVideo), Icons.Cancel, true, b.TurnVideoOff));
+                }
                 videoMenu.Value = videoSvc.Open(
                     () => videoAnchor.Value,
                     () => MenuFlyout.Create(items, () => videoMenu.Value?.Close()),
@@ -553,20 +525,33 @@ sealed class PlayerBarContent : Component
             }
 
             // The two parts share ONE tight anchor container (no gap); the chevron portion is narrower than the primary.
+            // Right-click / Menu key anywhere on the pair raises the same picker as the chevron.
             rightKids.Add(new BoxEl
             {
                 Key = "video", Direction = 0, AlignItems = FlexAlign.Center, Animate = ItemMotion,
                 OnRealized = h => videoAnchor.Value = h,
+                OnContextRequested = _ => OpenVideoMenu(),
                 Children =
                 [
                     ToolTip.Wrap(
-                        Transport(Icons.Movie, PopOutVideo, true, detachedActive, accent, buttonBox, buttonGlyph),
+                        // Lit whenever video is live, in ANY placement — the primary reflects "am I watching?", not
+                        // "am I watching in one specific surface?" (which is what made it read as stuck).
+                        Transport(Icons.Movie, b.ToggleVideo, true, videoActive, accent, buttonBox, buttonGlyph),
                         Loc.Get(videoActive ? Strings.Player.SwitchToAudio : Strings.Player.SwitchToVideo)),
-                    Transport(Icons.ChevronDownSmall, OpenVideoMenu, true, pipActive, accent,
-                        buttonBox * 0.55f, buttonGlyph * 0.62f),
+                    ToolTip.Wrap(
+                        // active: false — a disclosure never lights.
+                        Transport(Icons.ChevronDownSmall, OpenVideoMenu, true, false, accent,
+                            buttonBox * 0.55f, buttonGlyph * 0.62f),
+                        Loc.Get(Strings.Player.VideoOptions)),
                 ],
             });
         }
+        // Narrow windows drop the split button entirely; without this the whole feature silently disappears instead of
+        // degrading into the overflow menu like every other transport command.
+        else if (active && hasVideo)
+            overflowCommands.Add(new AppBarCommand(Icons.Movie,
+                Loc.Get(b.VideoActive() ? Strings.Player.SwitchToAudio : Strings.Player.SwitchToVideo),
+                b.ToggleVideo, AppBarCommandKind.ToggleButton, b.VideoActive(), true));
         if (showQueue)
             rightKids.Add(Transport(Icons.Queue, () => ui?.Toggle(RailMode.Queue), ui is not null,
                 ui?.RailOpen.Value == true && ui.Mode.Value == RailMode.Queue, accent, buttonBox, buttonGlyph)
@@ -1047,7 +1032,9 @@ sealed class VolumeButton : Component
             handle.Value = svc.Open(
                 () => anchor.Value,
                 () => Embed.Comp(() => new VolumePopup(_b)),
-                FlyoutPlacement.TopCenter);
+                FlyoutPlacement.TopCenter,
+                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss, Chrome: PopupChrome.Popup)
+                { ConstrainToRootBounds = false });
         }
         return PlayerBarContent.Transport(g, TogglePopup, true, false, Tok.AccentDefault, _box, _glyphSize, h => anchor.Value = h);
     }

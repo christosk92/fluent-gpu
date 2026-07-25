@@ -43,8 +43,8 @@ public enum OverlayCloseCause : byte { Programmatic, LightDismiss, Escape }
 /// (clip-reveal + content translate 250ms cubic-bezier(0,0,0,1); close = 83ms linear fade) — the default.</item>
 /// <item><see cref="Popup"/> — the WinUI <c>Flyout</c>/FlyoutPresenter/controlled Popup (FlyoutBase attaches
 /// PopupThemeTransition, FlyoutBase_Partial.cpp:1968–1975): TAS_SHOWPOPUP = an axis-aware ±50 slide (Y for Top/Bottom,
-/// X for Left/Right, none for Full — SetTransitionParameters cpp:2028-2051) + a coordinated fade over 167ms
-/// cubic-bezier(0,0,0,1); close = TAS_HIDEPOPUP 83ms linear fade (no slide).</item>
+/// X for Left/Right, none for Full — SetTransitionParameters cpp:2028-2051) over 367ms cubic-bezier(.1,.9,.2,1);
+/// opacity holds at 0 for 83ms then fades to 1 over 83ms linear. Close = TAS_HIDEPOPUP 83ms linear (no slide).</item>
 /// <item><see cref="Dropdown"/> — the ComboBox dropdown: SplitOpen/SplitCloseThemeAnimation (generic.xaml:9047/9056) —
 /// clip reveal 250ms with NO content translate and NO open fade; close = 167ms clip collapse + late 83ms fade. With
 /// <see cref="PopupOptions.SeamOffsetY"/> set, the band is centred on the SEAM (selected row) and grows/shrinks both
@@ -582,7 +582,7 @@ internal sealed class OverlayServiceImpl : IOverlayService
                 e.AnchorOffsetX, in aRect);
             if (windowed)
                 Hooks!.SetPopupWindowBounds?.Invoke(e.PopupWindowToken, new RectF(place.X, place.Y, e.MeasuredW, e.MeasuredH), place.OpensUp,
-                    e.ParentId >= 0 ? 0.67f : 0.5f);
+                    OverlayHost.ClosedRatioFor(e));
 
             e.OpensUp = place.OpensUp;
             e.CornerJoin = place.CornerJoin;
@@ -681,19 +681,26 @@ public sealed class OverlayHost : Component
     // closedRatioConstant; cascaded MenuFlyoutSubItem popups use 0.67, MenuFlyoutSubItem_Partial.cpp:741 — wire that
     // through when sub-menus land in Wave 3).
     const float OpenMs = 250f, OpacityMs = 83f, ClosedRatio = 0.5f;
-    // PopupThemeTransition (regular Flyout/FlyoutPresenter/controlled Popup, TAS_SHOWPOPUP): the OS timeline lives in
-    // uxtheme at runtime (not in the mux source), so the entrance rides the shared Fluent flyout-family values — the fast
-    // entrance duration (ControlFastAnimationDuration = 167ms, Common_themeresources_any.xaml:604) on the FastOutSlowIn
-    // spline cubic-bezier(0,0,0,1) (ControlFastOutSlowInKeySpline :602, the same spline Menu/PickerFlyout transitions use),
-    // with the fade running across the SAME 167ms window (no invisible hold). See the Popup open branch.
-    const float PopupOpenMs = 167f;
+    // PopupThemeTransition (regular Flyout/FlyoutPresenter/controlled Popup, TAS_SHOWPOPUP), from the stock-Windows
+    // uxtheme PVL: translate starts at 0 and settles over 367ms on cubic-bezier(.1,.9,.2,1); opacity holds at zero
+    // for 83ms, then reaches one over 83ms linear. TAS_HIDEPOPUP is an 83ms linear opacity-only close.
+    const float PopupTranslateMs = 367f, PopupOpacityDelayMs = 83f;
 
     // WinUI MenuFlyout renders into its OWN windowed popup over DesktopAcrylicBackdrop (it samples the desktop). The
     // Win32 analogue is a transparent composited popup HWND carrying DWM's DWMSBT_TRANSIENTWINDOW acrylic + rounded
-    // corners + system shadow (native Windows 11 menu). Only PopupChrome.Flyout opts into that today; other chromes
-    // stay in-window with the engine acrylic compositor (no regression).
+    // corners + system shadow (native Windows 11 menu). CommandBar shares that host material. Every other chrome maps
+    // to None — and since a popup HWND is only leased when the material is non-None (see the wantWindowed gate), those
+    // chromes stay in-window on the engine acrylic compositor.
     private static PopupWindowMaterial WindowMaterialFor(OverlayEntry e)
         => e.Chrome is PopupChrome.Flyout or PopupChrome.CommandBar ? PopupWindowMaterial.TransientAcrylic : PopupWindowMaterial.None;
+
+    /// <summary>The composition open-slide ratio for a windowed popup. Only the MENU chrome unfolds
+    /// (MenuPopupThemeTransition: 0.5 root / 0.67 cascaded sub-menu — MenuFlyout_Partial.cpp:253,
+    /// MenuFlyoutSubItem_Partial.cpp:741). Every other windowed chrome passes 0 = NO host slide: CommandBarFlyout
+    /// drives its own 83ms body fade, and a FlyoutPresenter's entrance is the engine-side PopupThemeTransition — a
+    /// host unfold on top of it would double-animate the surface.</summary>
+    internal static float ClosedRatioFor(OverlayEntry e)
+        => e.Chrome == PopupChrome.Flyout ? (e.ParentId >= 0 ? 0.67f : 0.5f) : 0f;
 
     /// <summary>Reconcile the menu presenter plate to its placement: an OS-backed windowed flyout (a popup HWND was
     /// leased) renders TRANSPARENT over DWM acrylic — clear the engine acrylic AND the engine drop shadow (the
@@ -827,11 +834,20 @@ public sealed class OverlayHost : Component
                         // (WinUI FlyoutBase_Partial.cpp:3382-3392 useMonitorBounds = IsWindowedPopup()); constrained
                         // popups place against the viewport. The work-area seam is host-wired (AppHost → IPlatformApp
                         // GetWorkArea via MonitorFromPoint/GetMonitorInfo).
-                        // Windowed only when we have an OS material to back the transparent popup HWND (Flyout today).
-                        // A non-backed chrome with ConstrainToRootBounds=false stays in-window (engine acrylic) — a
-                        // transparent popup window with no DWM backdrop would render content on bare desktop.
-                        bool wantWindowed = !e.ConstrainToRootBounds && svc.Hooks is { OpenPopupWindow: not null }
-                                            && WindowMaterialFor(e) != PopupWindowMaterial.None;
+                        // WinUI: "MenuFlyouts are always windowed, whereas other flyouts are windowed if
+                        // ShouldConstrainToRootBounds is false" (FlyoutBase_Partial.cpp:965-966; only
+                        // MenuFlyout::ShowAtCore calls SetIsWindowedPopup, MenuFlyout_Partial.cpp:145). We honour that
+                        // ONLY for chromes that carry an OS window material. DELIBERATE DEVIATION: a material-less
+                        // popup HWND gets no CompositionBackdrop (D3D12Device.cs:614 creates one only for
+                        // DesktopAcrylic), and the engine's in-app acrylic compositor snapshots THE CANVAS IT IS
+                        // RENDERING INTO — inside a popup swapchain that canvas is the popup's own transparent-cleared
+                        // back buffer, so the FlyoutPresenter would composite a flat, unfrosted ~0.97-coverage slab
+                        // instead of blurred app content (and ConfigurePopupChrome/AnimatePopupOpen/Close would all be
+                        // silent no-ops). A FlyoutPresenter therefore stays IN-WINDOW, where its acrylic has a backdrop
+                        // to sample. Revisit if a popup swapchain ever gains access to the owner window's canvas.
+                        bool wantWindowed = (e.Chrome == PopupChrome.Flyout || !e.ConstrainToRootBounds)
+                                            && WindowMaterialFor(e) != PopupWindowMaterial.None
+                                            && svc.Hooks is { OpenPopupWindow: not null };
                         RectF container = vpRect;
                         if (wantWindowed && svc.Hooks!.GetWorkArea is { } workArea)
                             container = workArea(new Point2(aRect.X + aRect.W * 0.5f, aRect.Y + aRect.H * 0.5f));
@@ -853,7 +869,7 @@ public sealed class OverlayHost : Component
                                 // chrome passes 0 = NO slide (WinUI CommandBarFlyout opens with its own 83ms body
                                 // fade only — OpeningOpacityStoryboard, CommandBarFlyout_themeresources.xaml:655-658).
                                 svc.Hooks!.SetPopupWindowBounds?.Invoke(e.PopupWindowToken, new RectF(place.X, place.Y, pRect.W, pRect.H), place.OpensUp,
-                                    e.Chrome == PopupChrome.CommandBar ? 0f : (e.ParentId >= 0 ? 0.67f : 0.5f));
+                                    ClosedRatioFor(e));
                             else
                                 place = ApplyAnchorOffsetX(
                                     FlyoutPositioner.Place(in aRect, in popupSize, in vpRect, e.Placement, isWindowed: false),
@@ -966,17 +982,13 @@ public sealed class OverlayHost : Component
                     // (FlyoutBase_Partial.cpp:1968-1975) = TAS_SHOWPOPUP. The slide MAGNITUDE is
                     // FlyoutBase::g_entranceThemeOffset = 50px (cpp:68); its AXIS + SIGN come from the EFFECTIVE placement
                     // major side (SetTransitionParameters, cpp:2028-2051): Top +50 / Bottom −50 on Y, Left +50 / Right −50
-                    // on X, Full = 0,0 (fade only, no slide). The TAS_SHOWPOPUP TIMELINE itself lives in OS uxtheme at
-                    // runtime (not in the mux source), so the entrance rides the shared Fluent flyout-family values:
-                    // 167ms on the FastOutSlowIn spline cubic-bezier(0,0,0,1) — the SAME spline Menu/PickerFlyout use —
-                    // with the presenter fading 0→1 across the SAME 167ms window (NO invisible hold). It emerges from the
-                    // anchor edge and arrives opaque together — the snappy Fluent entrance, replacing the old floaty 367ms
-                    // slide + 83ms blank hold (which read as a laggy, delayed appearance vs the menu path).
+                    // on X, Full = 0,0 (fade only, no slide). Stock-Windows TAS_SHOWPOPUP then settles translation over
+                    // 367ms cubic-bezier(.1,.9,.2,1), while opacity holds at 0 for 83ms and fades to 1 over 83ms linear.
                     scene.Paint(e.SurfaceNode).Opacity = 0f;
                     scene.Mark(e.SurfaceNode, NodeFlags.PaintDirty);
                     if (PopupEntranceSlide(e.EffectivePlacement, e.OpensUp) is { } slide)
-                        anim.Animate(e.SurfaceNode, slide.Channel, slide.From, 0f, PopupOpenMs, Easing.FluentPopOpen);
-                    anim.Animate(e.SurfaceNode, AnimChannel.Opacity, 0f, 1f, PopupOpenMs, Easing.Linear);
+                        anim.Animate(e.SurfaceNode, slide.Channel, slide.From, 0f, PopupTranslateMs, Easing.FluentDecelerate);
+                    anim.Animate(e.SurfaceNode, AnimChannel.Opacity, 0f, 1f, OpacityMs, Easing.Linear, delayMs: PopupOpacityDelayMs);
                 }
                 else if (!e.OpenSeeded && e.Chrome == PopupChrome.Dropdown && e.MeasuredH > 0f)
                 {

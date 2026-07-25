@@ -966,7 +966,7 @@ public static class SceneRecorder
             int pushByteOffset = dl.BytePosition;
             acrylicRangeIdx = OpenAcrylicRange(pushByteOffset, _dmgEntryCount);
             dl.PushLayer(deviceBounds, p.Corners, ac.Tint, ac.Fallback, ac.TintOpacity, ac.BlurSigma, ac.NoiseOpacity, ac.LuminosityOpacity, key,
-                ((ulong)node.Raw.Index << 32) | node.Raw.Gen, Math.Clamp(ac.FeatherTop, 0f, 1f));
+                ((ulong)node.Raw.Index << 32) | node.Raw.Gen, Math.Clamp(ac.FeatherTop, 0f, 1f), opacity);
         }
 
         // Cull this node's OWN draw if it falls entirely outside the active clip (offscreen virtualized/overscan rows).

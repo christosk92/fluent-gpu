@@ -45,6 +45,22 @@ public sealed record DashSourceDescriptor
     public string? RepresentationId { get; init; }
     /// <summary>The chosen representation's <c>@codecs</c> (e.g. <c>avc1.640028</c>).</summary>
     public string? Codecs { get; init; }
+
+    // ── the paired AUDIO representation (optional) ───────────────────────────────────────────────────────────────────
+    // A music video carries its own soundtrack on a second, separately-addressed representation under the same content
+    // key. All four URL parts are null when the source has no usable audio, in which case the native side plays video
+    // only — the absence must degrade, never fail. <see cref="SegmentCount"/>/<see cref="StartNumber"/>/
+    // <see cref="SegmentStride"/> are shared: both representations are cut on the same segment grid.
+    /// <summary>Absolute URL of the audio initialization segment, or null when there is no audio representation.</summary>
+    public string? AudioInitUrl { get; init; }
+    /// <summary>Base URL for the audio media segments.</summary>
+    public string? AudioSegmentBaseUrl { get; init; }
+    /// <summary>Audio media-segment name prefix.</summary>
+    public string? AudioSegmentPrefix { get; init; }
+    /// <summary>Audio media-segment name suffix.</summary>
+    public string? AudioSegmentSuffix { get; init; }
+    /// <summary>The audio representation's <c>@codecs</c> (e.g. <c>mp4a.40.2</c>).</summary>
+    public string? AudioCodecs { get; init; }
 }
 
 /// <summary>Thrown when an MPD cannot be parsed into a playable protected descriptor (no H.264 video representation, no

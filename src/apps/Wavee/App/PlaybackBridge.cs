@@ -149,54 +149,173 @@ public sealed class PlaybackBridge
     /// asynchronously after the track resolves). Drives the player-bar video button's visibility. Fed by the optional
     /// store probe (<see cref="AttachStore"/>); the fake backend has none, so it stays false.</summary>
     public Signal<bool> CurrentTrackHasVideo { get; } = new(false);
-    /// <summary>STICKY "watch video" intent: the user prefers video for playback. It carries ACROSS track changes (a new
-    /// track that also has a video keeps playing video) and is cleared ONLY by an explicit "switch to audio" / close-video
-    /// (see <see cref="PlayerBar"/>). A placement change (PiP ↔ detached) never clears it. This is one of the two inputs to
-    /// <see cref="VideoActive"/>; NEVER read it alone to decide whether a video surface should be live — read
-    /// <see cref="VideoActive"/>, which also honors has-video and the per-track PiP dismiss.</summary>
-    public Signal<bool> PreferVideo { get; } = new(false);
+    /// <summary>
+    /// THE complete state of the now-playing video surface — intent (<c>Requested</c>/<c>Preferred</c>), reality
+    /// (<c>Live</c>), what is possible right now (<c>Available</c>), and the per-track dismiss — as ONE value behind ONE
+    /// signal with ONE owner. Everything that used to be a separate flag (a sticky <c>PreferVideo</c> bool, a placement
+    /// enum, a dismiss generation, and a view-local window handle in the player bar) is now a field of this state, which
+    /// is precisely why the surfaces, the detached-window owner and the player-bar button can no longer disagree —
+    /// a stuck toggle is not "fixed", it is unrepresentable. The rules live in the pure, unit-tested
+    /// <see cref="PlacementCore"/>.
+    ///
+    /// <para>READ it through <see cref="VideoActive"/> / <see cref="VideoPlacementNow"/> (both subscribe, so a
+    /// <c>Render</c> caller re-derives automatically). WRITE it ONLY through the intent methods below — never assign a
+    /// placement directly, because the intents also swap what is actually PLAYING (a bare state write would light a
+    /// surface while the song kept playing underneath it).</para>
+    /// </summary>
+    public Signal<PlacementState> VideoSurface { get; } = new(PlacementState.Initial(PlacementPolicy.Video));
 
-    /// <summary>The SINGLE owned placement state: where the now-playing video plays when <see cref="VideoActive"/> is true.
-    /// Defaults to <see cref="VideoPlacement.Detached"/> — the primary "watch video" action pops out. The one owner of the
-    /// surfaces (<c>VideoPlacementHost</c> for the detached window; <c>InWindowVideoPip</c> self-gates on it) derives from
-    /// this + <see cref="VideoActive"/>; the player-bar button highlights derive from it too, so the toggle can never get
-    /// out of sync with the actual surface state.</summary>
-    public Signal<VideoPlacement> VideoPlacement { get; } = new(Wavee.VideoPlacement.Detached);
+    /// <summary>The settings store, wired at composition. Only the PREFERRED placement is persisted here — never whether
+    /// a video is running (a launch must not resume one) and never Fullscreen (a mode, not a home).</summary>
+    public IAppSettings? Settings;
 
-    // ── video placement plumbing (single-owner model) ──────────────────────────────────────────────────────────────
-    // Monotonic per-track generation, bumped on every track change (PushState). Used both to expire the PiP-dismiss
-    // (below) and to fence stale async video resolves (see _videoResolveGen).
-    long _trackGen;
-    // The track generation the user DISMISSED the video for (PiP ✕). While it equals _trackGen, VideoActive() is false
-    // for this track WITHOUT clearing the sticky PreferVideo — audio keeps playing, the surface hides, and the next track
-    // (a higher _trackGen) or an explicit RestoreVideo() re-activates. A signal so VideoActive() re-evaluates reactively.
-    // -1 = "not dismissed" (_trackGen is never negative).
-    readonly Signal<long> _dismissedForTrackGen = new(-1L);
+    /// <summary>Seed the video surface from persisted settings. Call ONCE at composition, before the first frame, so the
+    /// remembered placement is already in place rather than popping in after the shell mounts.</summary>
+    public void SeedVideoSurfaceFromSettings(IAppSettings settings)
+    {
+        Settings = settings;
+        var preferred = PlacementPersistence.LoadPlacement(settings.Get(WaveeSettings.VideoPreferredPlacement), PlacementPolicy.Video);
+        var s = VideoSurface.Peek();
+        if (s.Preferred != preferred) VideoSurface.Value = s with { Preferred = preferred };
+    }
 
-    /// <summary>The one predicate every video surface + player-bar highlight reads: a video should be live iff the user
-    /// prefers video, the current track HAS a video, and the video is not dismissed for this track. Reads signals, so a
-    /// caller in <c>Render</c> subscribes and re-derives automatically — this is what keeps the button toggle, the PiP,
-    /// and the detached window from desyncing (they all derive from this ONE truth, not three separate flags).</summary>
-    public bool VideoActive()
-        => VideoPlacementLogic.VideoActive(PreferVideo.Value, CurrentTrackHasVideo.Value, _trackGen, _dismissedForTrackGen.Value);
+    /// <summary>The placement that should be mounted right now, or <see cref="SurfacePlacement.None"/> for "nothing".
+    /// This is the ONE thing every video surface gates on (each mounts iff it is the resolved placement) and the ONE
+    /// thing the player-bar affordance reflects.</summary>
+    public SurfacePlacement VideoPlacementNow() => PlacementCore.Resolve(VideoSurface.Value);
 
-    /// <summary>Dismiss the video for the CURRENT track (the PiP ✕): audio keeps playing and the surface hides until the
-    /// track changes or <see cref="RestoreVideo"/> is called. Does NOT clear the sticky <see cref="PreferVideo"/>.</summary>
-    public void DismissVideoForCurrentTrack() => _dismissedForTrackGen.Value = _trackGen;
+    /// <summary>Whether the video is live at all: the media should be video and the primary affordance is lit. Derived
+    /// from <see cref="VideoSurface"/> — never a standalone flag.</summary>
+    public bool VideoActive() => PlacementCore.IsActive(VideoSurface.Value);
 
-    /// <summary>Clear a per-track PiP dismiss so <see cref="VideoActive"/> can light up again for the current track (used by
-    /// the player-bar "watch video" intents, so re-clicking video after dismissing the PiP restores it).</summary>
-    public void RestoreVideo() => _dismissedForTrackGen.Value = -1L;
+    /// <summary>How much bottom space the floating surface currently claims from the page content, in DIP (0 = none).
+    /// A floating surface RESERVES layout while it sits at its default anchor — the content area shrinks by exactly its
+    /// height, so it can never cover anything — and gives the reservation up the moment the user DRAGS it, because
+    /// putting it somewhere specific is them saying they want it there. Written by the surface, read by
+    /// <c>ContentHost</c>.</summary>
+    public Signal<float> FloatingSurfaceReserve { get; } = new(0f);
+
+    /// <summary>The PLAYBACK-side predicate the backend asks per playable (<c>PlaybackController.ShouldPlayAsVideo</c>): the
+    /// SAME single rule as <see cref="VideoActive"/>, but scoped to <em>this</em> track and read WITHOUT subscribing (Peek),
+    /// because the controller calls it from a playback/dealer thread where a reactive subscription would be meaningless.
+    /// has-video comes from the hydrated <see cref="Track.HasVideo"/> or — for the now-playing track — from the
+    /// async-detected <see cref="CurrentTrackHasVideo"/> signal (the association routinely lands after the track resolved;
+    /// <see cref="RecomputeHasVideo"/> then asks the controller to re-evaluate, so the swap is not deferred to the next
+    /// track). Never returns true for a track the user has dismissed video for, so the ✕ really does route back to audio.</summary>
+    public bool ShouldPlayAsVideo(Track track)
+    {
+        bool hasVideo = track.HasVideo
+            || (string.Equals(CurrentTrack.Peek()?.Uri, track.Uri, StringComparison.Ordinal) && CurrentTrackHasVideo.Peek());
+        // Same state, same rules — only the AVAILABILITY input is swapped for that track's, so this asks "what would be
+        // resolved if THIS track were playing?" without mutating anything.
+        return PlacementCore.ResolveWith(VideoSurface.Peek(), AvailabilityFor(hasVideo)) != SurfacePlacement.None;
+    }
+
+    /// <summary>Content availability → the placement set. A track WITHOUT a video makes every placement unavailable, so
+    /// the surface hides and the media stays audio through the exact same path a host limitation would take. (Host
+    /// capability — "can a second window be opened at all?" — folds in here too once that seam exists.)</summary>
+    static PlacementSet AvailabilityFor(bool hasVideo) => hasVideo ? PlacementPolicy.Video.Allowed : PlacementSet.None;
+
+    /// <summary>Ask the backend to re-evaluate the CURRENT playable's media kind right now (wired at composition to
+    /// <c>PlaybackController.RefreshCurrentMediaKindAsync</c>; null on the fake backend / with the video-host kill switch off).
+    /// Every writer of the video INTENT calls it, so "watch video" / "switch to audio" / the surface ✕ swap the media host for
+    /// the track that is already playing instead of only taking effect at the next track boundary.</summary>
+    public Action? RequestMediaKindRefresh;
+
+    /// <summary>
+    /// The ONE write path for <see cref="VideoSurface"/>. Publishes the new state and then does the two things a bare
+    /// signal write cannot: when the surface turns ON or OFF it asks the backend to re-evaluate the current media kind
+    /// (so "watch video" swaps what is PLAYING for the track already playing, instead of lighting a surface over a
+    /// still-audio stream), and when it turns on it kicks the source resolve. Moving between placements is neither —
+    /// the media and the source are already right, which is what keeps a move from restarting the video.
+    /// </summary>
+    void CommitVideoSurface(in PlacementState after)
+    {
+        var before = VideoSurface.Peek();
+        if (after.Equals(before)) return;
+        bool wasActive = PlacementCore.IsActive(before), isActive = PlacementCore.IsActive(after);
+        VideoSurface.Value = after;
+        // Remember where the user likes to watch (only when it actually changed — this runs on availability edges and
+        // track changes too, and those must not rewrite the preference).
+        if (after.Preferred != before.Preferred && Settings is { } settings)
+        {
+            var stored = PlacementPersistence.SavePlacement(after.Preferred);
+            if (stored.Length > 0) settings.Set(WaveeSettings.VideoPreferredPlacement, stored);
+        }
+        if (isActive != wasActive) RequestMediaKindRefresh?.Invoke();
+        if (isActive && !wasActive) RequestPopOutSource(CurrentTrack.Peek()?.Uri);
+    }
+
+    /// <summary>The PRIMARY video affordance, and it is symmetric: lit → off (from ANY placement), unlit → open at the
+    /// user's preferred placement. Nothing else is needed to guarantee the toggle can always be turned off.</summary>
+    public void ToggleVideo() => CommitVideoSurface(PlacementCore.TogglePrimary(VideoSurface.Peek()));
+
+    /// <summary>Show the video at a specific placement (the surface picker). Also clears a per-track dismiss and adopts
+    /// the target as the preferred home, so the primary button and the next track follow the user there.</summary>
+    public void ShowVideoAt(SurfacePlacement placement) => CommitVideoSurface(PlacementCore.OpenAt(VideoSurface.Peek(), placement));
+
+    /// <summary>Turn video off entirely (the menu's "turn off video"): the surface goes away and the media swaps back to
+    /// the song's own audio. The preferred placement is remembered for the next time.</summary>
+    public void TurnVideoOff() => CommitVideoSurface(PlacementCore.TurnOff(VideoSurface.Peek()));
+
+    /// <summary>Dismiss the video for the CURRENT track (a surface's own ✕): audio keeps playing, the surface hides, and
+    /// the standing intent survives — the next track brings it straight back. Routes the media back to AUDIO for this
+    /// track (otherwise the video's soundtrack would keep playing behind a hidden surface).</summary>
+    public void DismissVideoForCurrentTrack() => CommitVideoSurface(PlacementCore.DismissForContent(VideoSurface.Peek()));
+
+    /// <summary>Clear a per-track dismiss so the video can light up again for the current track.</summary>
+    public void RestoreVideo() => CommitVideoSurface(PlacementCore.Restore(VideoSurface.Peek()));
+
+    /// <summary>A surface reports that the USER closed it by its own chrome (the pop-out's OS ✕ / Alt+F4). Closing the
+    /// detached window means "not in a separate window", not "stop watching", so it falls back to the mini player —
+    /// the transition that used to be missing entirely, leaving the toggle lit with no surface behind it. A close for a
+    /// placement that is no longer resolved is stale and inert (see <see cref="PlacementCore.HostClosed"/>).</summary>
+    public void NotifyVideoSurfaceClosed(SurfacePlacement closed) => CommitVideoSurface(PlacementCore.HostClosed(VideoSurface.Peek(), closed));
+
+    /// <summary>Surface-only: report whether <paramref name="surface"/> — the CALLER'S OWN placement — is mounted right
+    /// now. Never changes intent; it maintains the reality half of the state so the model can tell "asked for" from
+    /// "has". Scoped per surface (<see cref="PlacementCore.LiveAfterReport"/>): a surface can claim reality for itself
+    /// and release only its own claim, so the two surfaces watching this state cannot overwrite each other's.</summary>
+    public void SetVideoSurfaceLive(SurfacePlacement surface, bool mounted)
+    {
+        var s = VideoSurface.Peek();
+        var live = PlacementCore.LiveAfterReport(s.Live, surface, mounted);
+        if (live != s.Live) VideoSurface.Value = PlacementCore.WithLive(s, live);
+    }
 
     /// <summary>The resolved video source for the now-playing track (null = none resolved yet): a clear/Canvas URL or a
-    /// PlayReady DRM descriptor + license relay. The pop-out / inline video surface plays it (clear on the MF backend,
-    /// DRM via the native CDM). The Spotify video-resolution layer (Canvas from the feed; PlayReady once the probe
-    /// confirms it) populates it. Reset to null on every track change.</summary>
+    /// PlayReady DRM descriptor + license relay. It is the surfaces' CONTENT IDENTITY (they key their subtree on
+    /// <c>Key</c>); the player itself is owned by <c>FluentVideoMediaHost</c> and reaches them via <see cref="VideoPlayer"/>.
+    /// The Spotify video-resolution layer (Canvas from the feed; PlayReady once the probe confirms it) populates it.
+    /// Reset to null on every track change, EXCEPT when the playback path already resolved+published it for the new track.</summary>
     public Signal<Wavee.SpotifyLive.PopOutVideoSource?> PopOutVideoSource { get; } = new(null);
 
     /// <summary>The video-resolution delegate (track uri → a playable <c>PopOutVideoSource</c>), wired by the live
     /// bootstrap to <c>SpotifyVideoService.ResolvePlayableAsync</c>; null on the fake/offline backend. Off the UI thread.</summary>
     public System.Func<string, System.Threading.CancellationToken, System.Threading.Tasks.Task<Wavee.SpotifyLive.PopOutVideoSource?>>? ResolveVideoSource;
+
+    // ── M0: the ONE player, owned by the backend host and PRESENTED by the surfaces ─────────────────────────────────
+    /// <summary>The live video player + a monotonic generation, as ONE atomic equality-gated value. The player is built and
+    /// owned by <c>FluentVideoMediaHost</c> (never by a surface — that was the "video restarts from 0 on every placement
+    /// flip" defect); the surfaces bind a <c>MediaPlayerElement</c> to it and key that element on <c>Generation</c>,
+    /// because <c>MediaPlayerElement.Player</c> is a frozen-at-mount prop. Two signals would allow a torn frame where the
+    /// player changed but the generation had not, so this is deliberately one struct.</summary>
+    public readonly record struct VideoPlayerBinding(FluentGpu.Media.MediaPlayer? Player, long Generation);
+
+    /// <summary>The video player the mounted surface must present (see <see cref="VideoPlayerBinding"/>). UI-thread signal;
+    /// written ONLY by <see cref="NotifyVideoPlayerChanged"/>, which marshals <c>FluentVideoMediaHost.PlayerChanged</c>
+    /// (raised on a playback thread) onto the UI thread.</summary>
+    public Signal<VideoPlayerBinding> VideoPlayer { get; } = new(default);
+
+    long _videoPlayerGen;
+
+    /// <summary>Mirror a <c>FluentVideoMediaHost.PlayerChanged</c> notification onto <see cref="VideoPlayer"/>, marshalled to
+    /// the UI thread. Safe to call from any thread; before <see cref="Activate"/> it writes directly (headless CLI).</summary>
+    public void NotifyVideoPlayerChanged(FluentGpu.Media.MediaPlayer? player)
+    {
+        if (_post is not { } post) { VideoPlayer.Value = new VideoPlayerBinding(player, ++_videoPlayerGen); return; }
+        post(() => VideoPlayer.Value = new VideoPlayerBinding(player, ++_videoPlayerGen));
+    }
 
     // Monotonic resolve generation (bug 4 guard): each RequestPopOutSource captures ++_videoResolveGen; a track change
     // (PushState) also bumps it. An async resolve only publishes if its captured gen is still current — a resolve for a
@@ -204,6 +323,11 @@ public sealed class PlaybackBridge
     // the previous in-flight resolve so a dropped one also stops early. UI-thread only (every writer is post-marshalled).
     long _videoResolveGen;
     System.Threading.CancellationTokenSource? _videoResolveCts;
+    // The track uri PopOutVideoSource currently holds a source FOR (null = none). Written only inside the UI-thread publish
+    // paths below; read (racily, benignly — a miss just costs one extra resolve) by the playback resolve. It exists so a
+    // track change does NOT clear a source the PLAYBACK path already resolved and published for that very track — which would
+    // unmount the surface for a frame and force a second network resolve.
+    string? _videoSourceUri;
 
     /// <summary>Kick off (fire-and-forget) resolving the pop-out video source for <paramref name="trackUri"/> and publish
     /// it onto <see cref="PopOutVideoSource"/> on the UI thread. No-op before <see cref="Activate"/> / without a resolver
@@ -224,7 +348,42 @@ public sealed class PlaybackBridge
     {
         Wavee.SpotifyLive.PopOutVideoSource? src = null;
         try { src = await resolve(uri, ct).ConfigureAwait(false); } catch { /* resolution failure / cancellation → no source (pop-out stays letterbox) */ }
-        post(() => { if (VideoPlacementLogic.ShouldPublishResolve(gen, _videoResolveGen)) PopOutVideoSource.Value = src; });   // drop a stale (superseded-track) resolve
+        post(() =>
+        {
+            if (!PlacementCore.IsCurrentGeneration(gen, _videoResolveGen)) return;   // drop a stale (superseded-track) resolve
+            _videoSourceUri = src is null ? null : uri;
+            PopOutVideoSource.Value = src;
+        });
+    }
+
+    /// <summary>The AWAITABLE half of <see cref="RequestPopOutSource"/>, for the playback path
+    /// (<c>PlaybackController.LoadCurrentVideoAsync</c>): resolve this track's video source with the SAME
+    /// <see cref="ResolveVideoSource"/> resolver, publish it onto <see cref="PopOutVideoSource"/> (so the mounted surface keys
+    /// its content on the very source the media host is about to play), and return it so the caller can hand it to
+    /// <c>FluentVideoMediaHost.LoadVideo</c>. Returns null when there is no resolver (fake/offline backend) or the track has no
+    /// playable video — the controller then falls back to audio rather than leaving the user in silence.
+    ///
+    /// Callable from any thread. It needs no generation fence of its own: the controller serializes its loads under one lock,
+    /// so at most ONE playback resolve is ever in flight and it always belongs to the playable currently being loaded (a
+    /// cancelled load throws out of <paramref name="ct"/> and publishes nothing).</summary>
+    public async System.Threading.Tasks.Task<Wavee.SpotifyLive.PopOutVideoSource?> ResolveVideoSourceForPlaybackAsync(
+        string? trackUri, System.Threading.CancellationToken ct)
+    {
+        if (ResolveVideoSource is not { } resolve || string.IsNullOrEmpty(trackUri)) return null;
+        // Already resolved for this exact track (the player-bar intent pre-resolved it) → reuse it; re-resolving would only
+        // republish an equal source and make the surface remount.
+        if (string.Equals(_videoSourceUri, trackUri, StringComparison.Ordinal) && PopOutVideoSource.Peek() is { } cached)
+            return cached;
+
+        Wavee.SpotifyLive.PopOutVideoSource? src;
+        try { src = await resolve(trackUri!, ct).ConfigureAwait(false); }
+        catch (OperationCanceledException) { return null; }
+        catch { return null; }   // resolution failure → no source; the controller plays this track as audio
+        if (src is null) return null;
+
+        if (_post is { } post) post(() => { _videoSourceUri = trackUri; PopOutVideoSource.Value = src; });
+        else { _videoSourceUri = trackUri; PopOutVideoSource.Value = src; }
+        return src;
     }
 
     /// <summary>Monotonic "open the device picker" request. The critical "playback unsupported" toast's <em>Choose device</em>
@@ -432,10 +591,16 @@ public sealed class PlaybackBridge
         bool has = false;
         if (!string.IsNullOrEmpty(uri) && _store is { } store)
             has = (store.GetVideoAssociation(uri)?.HasVideo ?? false) || (store.GetTrack(uri)?.HasVideo ?? false);
-        CurrentTrackHasVideo.Value = has;
-        // Sticky video: if the user prefers video and this track has one (whether known at the track change or arriving
-        // asynchronously after it) but no source is resolved yet, kick a resolve so the surface has something to play.
-        // Gen-fenced at publish, so this is safe to call redundantly (last request wins).
+        CurrentTrackHasVideo.SetIfChanged(has);
+        // AVAILABILITY is the one channel through which "this track has no video" reaches the surfaces: it hides them and
+        // routes the media back to audio WITHOUT touching the user's standing intent, so the next track that DOES have a
+        // video returns to exactly the placement they had. CommitVideoSurface then does the edge work — and because the
+        // music-video association is detected ASYNCHRONOUSLY (a video track routinely starts playing as AUDIO and only
+        // then becomes known to have a video), that edge is also what swaps the media for the track already playing
+        // instead of deferring the swap to the next track boundary.
+        CommitVideoSurface(PlacementCore.WithAvailability(VideoSurface.Peek(), AvailabilityFor(has)));
+        // Already-active but source-less (e.g. the track changed under a live surface): kick a resolve so the surface has
+        // something to play. Gen-fenced at publish, so this is safe to call redundantly (last request wins).
         if (has && VideoActive() && PopOutVideoSource.Peek() is null)
             RequestPopOutSource(uri);
     }
@@ -455,15 +620,25 @@ public sealed class PlaybackBridge
         CurrentTrack.Value = s.CurrentTrack;
         if (s.CurrentTrack?.Uri != prevUri)
         {
-            // A new track. PreferVideo is STICKY now (video carries across tracks) — do NOT clear it. Bump the track
-            // generation (expires any PiP-dismiss AND fences an in-flight resolve for the previous track), cancel that
-            // resolve, and clear the previous track's resolved source. RecomputeHasVideo() (next line) re-resolves for
-            // the new track iff VideoActive() — so a video-less track just goes inactive, a video track auto-continues.
-            _trackGen++;
+            // A new track. The video INTENT is sticky (video carries across tracks) — do NOT clear it. Fence any
+            // in-flight resolve for the previous track, cancel it, and clear that track's resolved source.
+            // RecomputeHasVideo() (below) then re-resolves for the new track iff it is active — so a video-less track
+            // just goes inactive while a video track auto-continues.
             _videoResolveGen++;
             _videoResolveCts?.Cancel();
-            _dismissedForTrackGen.Value = -1L;   // the new track is not dismissed
-            PopOutVideoSource.Value = null;
+            // Bump the CONTENT generation. That alone expires a per-track dismiss (it is compared against this
+            // generation, never cleared), and routing it through the commit path means the resulting off→on edge also
+            // swaps the media back to video for the new track.
+            var vs = VideoSurface.Peek();
+            CommitVideoSurface(PlacementCore.ContentChanged(vs, vs.ContentGen + 1));
+            // Keep a source the PLAYBACK path already resolved+published for THIS (new) track: the controller resolves the
+            // video BEFORE it publishes the track change, so clearing here would unmount the live surface for a frame and
+            // force a second resolve for a source we already have. Anything else (a stale source) is cleared as before.
+            if (!string.Equals(_videoSourceUri, s.CurrentTrack?.Uri, StringComparison.Ordinal))
+            {
+                _videoSourceUri = null;
+                PopOutVideoSource.Value = null;
+            }
         }
         RecomputeHasVideo();                                            // reflect the new track's cached video state (+ re-resolve if VideoActive)
         CurrentContext.Value = s.ContextUri;

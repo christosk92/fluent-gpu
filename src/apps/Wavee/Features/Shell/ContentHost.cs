@@ -26,11 +26,30 @@ sealed class ContentHost : Component
     { _route = route; _motion = motion; _activeTabId = activeTabId; _settings = settings; }
 
     public override Element Render()
-        => Flow.KeepAlive(
-            () => new PageSlot(_activeTabId(), _route.Value, _motion.Value),
-            SlotKey,
-            s => PageFor(s.Route),
-            new KeepAliveOptions(MaxEntries: 8, TransitionFor: PageTransition));
+    {
+        // A floating surface (today: the video mini player) RESERVES bottom space while it sits at its default anchor,
+        // so the page content simply ends above it instead of being covered. Dragging the surface releases the
+        // reservation. The wrapper is UNCONDITIONAL — padding 0 when nothing is reserved — because appearing and
+        // disappearing from the tree would remount the KeepAlive subtree and cold-restart every cached page.
+        var bridge = UseContext(PlaybackBridge.Slot);
+        float reserve = bridge?.FloatingSurfaceReserve.Value ?? 0f;   // subscribe → re-inset as the surface comes and goes
+        return new BoxEl
+        {
+            Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
+            Padding = new Edges4(0f, 0f, 0f, reserve),
+            Children =
+            [
+                Flow.KeepAlive(
+                    () => new PageSlot(_activeTabId(), _route.Value, _motion.Value),
+                    SlotKey,
+                    s => PageFor(s.Route),
+                    new KeepAliveOptions(
+                        MaxEntries: 8,
+                        TransitionFor: PageTransition,
+                        SuppressLayoutTransitionsOnActivation: true)),
+            ],
+        };
+    }
 
     // Detail and artist routes each collapse to ONE slot per tab (identity = tab × page-class; the route is content) so
     // album→album / artist→artist reconciles the mounted shell instead of cold-remounting. TabId stays in the key → tabs

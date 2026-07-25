@@ -208,6 +208,52 @@ static class NavSuite
                 afterRoot == retainedRoot && entrance,
                 $"sameRoot={afterRoot == retainedRoot} entrance={entrance} opacity={op:0.00}");
         }
+
+        // A page-navigation KeepAlive opts out of descendant layout motion for two commits: the activation itself and
+        // the next-frame OnBoundsChanged correction used by Responsive/PagedShelf-style controls. Reactivating a cached
+        // page also lands a parked structural row instead of resuming it from an arbitrary mid-navigation sample.
+        {
+            using var motionApp = new HeadlessPlatformApp();
+            var motionWindow = new HeadlessWindow(new WindowDesc("keepalive-motion-suppression", new Size2(260, 180), 1f));
+            motionWindow.Show();
+            var motionDevice = new HeadlessGpuDevice();
+            var motionFonts = new HeadlessFontSystem(strings);
+            var motionProbe = new KeepAliveMotionSuppressionProbe();
+            using var motionHost = new AppHost(motionApp, motionWindow, motionDevice, motionFonts, strings, motionProbe);
+
+            motionHost.RunFrame();
+            motionProbe.Route!.Value = "measured";
+            motionHost.RunFrame();   // proxy width 80; layout publishes the real width
+            motionHost.RunFrame();   // measured width 200; activation policy must snap CardRefit
+
+            NodeHandle card = motionProbe.AnimatedNode;
+            RectF cardBounds = motionHost.Scene.AbsoluteRect(card);
+            bool measuredLanded = !card.IsNull && MathF.Abs(cardBounds.W - 200f) < 0.5f;
+            bool correctionSnapped = !HasStructuralTrack(motionHost.Animation, card);
+
+            motionProbe.Route.Value = "idle";
+            motionHost.RunFrame();
+            motionHost.Animation.Animate(card, AnimChannel.TranslateX, 32f, 0f, 1000f, Easing.Linear);
+            motionHost.Animation.SetNodeParked(card, true);   // mirrors a row retained halfway through its finite track
+            bool parkedTrackSeeded = motionHost.Animation.TryGetTrackValue(card, AnimChannel.TranslateX, out _);
+            motionProbe.Route.Value = "measured";
+            motionHost.RunFrame();
+            bool cachedTrackLanded = !HasStructuralTrack(motionHost.Animation, card);
+
+            Check("50a5. KeepAlive navigation suppression lands first-measure CardRefit and cached structural tracks without random resize motion",
+                measuredLanded && correctionSnapped && parkedTrackSeeded && cachedTrackLanded,
+                $"width={cardBounds.W:0.#} correctionSnapped={correctionSnapped} parkedSeeded={parkedTrackSeeded} cachedLanded={cachedTrackLanded}");
+        }
+
+        static bool HasStructuralTrack(AnimEngine anim, NodeHandle node)
+            => anim.TryGetTrackValue(node, AnimChannel.TranslateX, out _)
+               || anim.TryGetTrackValue(node, AnimChannel.TranslateY, out _)
+               || anim.TryGetTrackValue(node, AnimChannel.ScaleX, out _)
+               || anim.TryGetTrackValue(node, AnimChannel.ScaleY, out _)
+               || anim.TryGetTrackValue(node, AnimChannel.SizeW, out _)
+               || anim.TryGetTrackValue(node, AnimChannel.SizeH, out _)
+               || anim.TryGetTrackValue(node, AnimChannel.LayoutW, out _)
+               || anim.TryGetTrackValue(node, AnimChannel.LayoutH, out _);
     }
 
     static void GalleryChecks(StringTable strings)

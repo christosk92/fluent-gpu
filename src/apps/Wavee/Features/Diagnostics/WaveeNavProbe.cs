@@ -1059,9 +1059,38 @@ internal static class WaveeNavProbe
         }
 
         var railOC = new Phase("rail-open-close");
+        var railOCTracks = new Phase("rail-open-close-tracks");
         var railRev = new Phase("rail-reversal");
         var sbToggle = new Phase("sidebar-toggle");
         var sbDrag = new Phase("sidebar-drag");
+
+        // (a0) THE leg this probe existed without: a rail toggle over a real TRACK LIST. On "home" the rail toggle moves
+        // chrome only — it never crosses a track-list breakpoint, so the single most expensive frame of the whole gesture
+        // (the column-set commit: every realized row re-renders, the grid re-arranges, the title lane re-truncates) was
+        // simply not measured. The acceptance bar lives here: measure/arrange non-zero on the COMMIT frame only, ~0 on
+        // every animation tick, and no tick over the 8.33 ms 120 Hz budget.
+        Log.Info("[rail-probe] (a0) rail open/close x3 over a track list");
+        Nav("liked", null); Settle(60); System.Threading.Thread.Sleep(700); Settle(30);
+        GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
+        for (int rep = 0; rep < 3 && !window.IsClosed; rep++)
+        {
+            WaveeShell.ProbeRailOpen!(true);
+            for (int f = 0; f < 40 && !window.IsClosed; f++)
+            {
+                Measure(railOCTracks, "open");
+                if (rep == 0 && f == 1) Shot("tracks_open_commit");
+                if (rep == 0 && f == 8) Shot("tracks_open_mid");
+            }
+            if (rep == 0) Shot("tracks_open_final");
+            WaveeShell.ProbeRailOpen!(false);
+            for (int f = 0; f < 40 && !window.IsClosed; f++)
+            {
+                Measure(railOCTracks, "close");
+                if (rep == 0 && f == 8) Shot("tracks_close_mid");
+            }
+            if (rep == 0) Shot("tracks_close_final");
+        }
+        Nav("home", null); Settle(40);
 
         // (a) rail open→settle→close→settle ×3 (first cycle captures first/mid/final PNGs of both legs).
         Log.Info("[rail-probe] (a) rail open/close x3");
@@ -1180,7 +1209,7 @@ internal static class WaveeNavProbe
         }
 
         // ── report ──
-        var phases = new[] { railOC, railRev, sbToggle, sbDrag };
+        var phases = new[] { railOCTracks, railOC, railRev, sbToggle, sbDrag };
         var all = new Phase("ALL");
         foreach (var p in phases) { all.Ms.AddRange(p.Ms); all.OverBudget += p.OverBudget; all.OverBudgetGc += p.OverBudgetGc; }
 

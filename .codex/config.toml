@@ -1,44 +1,14 @@
-# Codex filesystem permissions — fences the model OUT of out-of-scope paths that
-# belong to a separate workspace.
+# Codex config for this repo.
 #
-# NOTE: The deny SYNTAX below is per https://developers.openai.com/codex/permissions
-# (deny > write > read; ":workspace_roots" scope). Whether Codex honors a *repo-local*
-# .codex/config.toml is NOT confirmed by those docs (they describe user/system-level
-# config). Treat this as best-effort defense in depth; the reliable lever is
-# AGENTS.md steering + keeping that work in its own workspace. If repo-local is
-# unsupported on your build, mirror these deny rules into your user-level Codex config.
-
-default_permissions = "fluentgpu"
-
-# Caps pre-expansion of deny-read `**` globs on Windows/Linux/WSL (required by Codex
-# sandboxing; macOS supports unbounded `**` natively). 8 covers nested native/runtime trees.
-[permissions.fluentgpu.filesystem]
-glob_scan_max_depth = 8
-
-[permissions.fluentgpu.filesystem.":workspace_roots"]
-"." = "write"
-
-# --- Native / binary artifacts ---
-"src/apps/.native/**" = "deny"
-"src/apps/Wavee.PlayPlay/**" = "deny"
-"private-runtimes/**" = "deny"
-
-# --- Scratch scripts + RE dumps ---
-"src/apps/tmp_*" = "deny"
-"ops/scripts/pyghidra*" = "deny"
-"ops/tools/pyghidra*" = "deny"
-"ops/tools/playplay_*" = "deny"
-"ops/tools/x64_*" = "deny"
-"ops/tools/fill_random_sweep.py" = "deny"
-"playplay-probe-out*.txt" = "deny"
-
-# --- Out-of-scope docs ---
-"docs/plans/wavee/wavee-playplay*.md" = "deny"
-"docs/plans/wavee/playplay-*.md" = "deny"
-"docs/plans/wavee/spotiload-offline-path.md" = "deny"
-"**/playplay-runtime.json" = "deny"
-
-# Optional — uncomment to also fence off the C# seams. Left readable so agents can
-# still help with the provisioning UX.
-# "src/apps/Wavee/SpotifyLive/Audio/*PlayPlay*" = "deny"
-# "src/apps/Wavee/SpotifyLive/Protos/playplay.proto" = "deny"
+# Hard filesystem deny rules were REMOVED (2026-07-25): they interacted badly with
+# Windows path casing (C:\WAVEE vs C:\wavee) and caused workspace writes to fail
+# closed as "blocked by policy" even under Full Access / danger-full-access.
+#
+# Out-of-scope PlayPlay/native fencing remains via soft guards only:
+#   - AGENTS.md / CLAUDE.md steering
+#   - .codexignore (context exclusion)
+#   - .gitignore + .githooks/pre-commit + CI no-drm-material workflow
+#
+# Do NOT reintroduce default_permissions / [permissions.*] deny tables here unless
+# you have verified Windows path identity is stable for the session root. Prefer
+# user-level ~/.codex/config.toml sandbox_mode = "danger-full-access" (already set).

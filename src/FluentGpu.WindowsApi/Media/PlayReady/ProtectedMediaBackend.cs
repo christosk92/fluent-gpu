@@ -121,6 +121,12 @@ public sealed class ProtectedMediaBackend : IMediaBackend, IPreparableBackend
                 SegmentCount = descriptor.SegmentCount,
                 SegmentStride = descriptor.SegmentStride,
                 Pssh = descriptor.Pssh,
+                // The paired audio representation (the video's own soundtrack), when the manifest carried one.
+                AudioInitUrl = descriptor.AudioInitUrl,
+                AudioSegmentBaseUrl = descriptor.AudioSegmentBaseUrl,
+                AudioSegmentPrefix = descriptor.AudioSegmentPrefix,
+                AudioSegmentSuffix = descriptor.AudioSegmentSuffix,
+                AudioCodecs = descriptor.AudioCodecs,
             };
         }
 

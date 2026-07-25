@@ -128,6 +128,7 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
             try { if (!string.IsNullOrEmpty(request.InitUrl)) host = new Uri(request.InitUrl).Host; } catch { }
             LogVideo($"open requested isDrm={request.Drm is not null} system={request.Drm?.System.ToString() ?? "-"} " +
                      $"initHost={host} segs={request.SegmentCount} stride={request.SegmentStride} pssh={request.Pssh.Length}B " +
+                     $"audio={(string.IsNullOrEmpty(request.AudioInitUrl) ? "none" : request.AudioCodecs ?? "yes")} " +
                      $"mode={request.Mode ?? "-"} startPaused={request.StartPaused} timeoutMs={StartTimeoutMs}");
         }
 
@@ -155,6 +156,11 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
         IntPtr segSuffix = Marshal.StringToHGlobalUni(request.SegmentSuffix);
         IntPtr headers = Marshal.StringToHGlobalUni(request.HttpHeaders);
         IntPtr licUrl = Marshal.StringToHGlobalUni(request.Drm?.LicenseServerUri);
+        // The paired audio representation (the video's own soundtrack). All four stay null for a video-only source.
+        IntPtr audioInit = Marshal.StringToHGlobalUni(request.AudioInitUrl);
+        IntPtr audioBase = Marshal.StringToHGlobalUni(request.AudioSegmentBaseUrl);
+        IntPtr audioPrefix = Marshal.StringToHGlobalUni(request.AudioSegmentPrefix);
+        IntPtr audioSuffix = Marshal.StringToHGlobalUni(request.AudioSegmentSuffix);
         IntPtr pssh = IntPtr.Zero;
         int psshLen = request.Pssh.Length;
         if (psshLen > 0) { pssh = Marshal.AllocHGlobal(psshLen); Marshal.Copy(request.Pssh.ToArray(), 0, pssh, psshLen); }
@@ -177,6 +183,10 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
                 HttpHeaders = headers,
                 LicenseServerUrl = licUrl,
                 SegmentStride = request.SegmentStride > 0 ? request.SegmentStride : 1,
+                AudioInitUrl = audioInit,
+                AudioSegmentBaseUrl = audioBase,
+                AudioSegmentPrefix = audioPrefix,
+                AudioSegmentSuffix = audioSuffix,
             };
 
             var callback = (IntPtr)(delegate* unmanaged[Stdcall]<
@@ -200,6 +210,10 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
             if (segSuffix != IntPtr.Zero) Marshal.FreeHGlobal(segSuffix);
             if (headers != IntPtr.Zero) Marshal.FreeHGlobal(headers);
             if (licUrl != IntPtr.Zero) Marshal.FreeHGlobal(licUrl);
+            if (audioInit != IntPtr.Zero) Marshal.FreeHGlobal(audioInit);
+            if (audioBase != IntPtr.Zero) Marshal.FreeHGlobal(audioBase);
+            if (audioPrefix != IntPtr.Zero) Marshal.FreeHGlobal(audioPrefix);
+            if (audioSuffix != IntPtr.Zero) Marshal.FreeHGlobal(audioSuffix);
             if (pssh != IntPtr.Zero) Marshal.FreeHGlobal(pssh);
             _runCompleted = true;
         }
@@ -436,6 +450,13 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
         public IntPtr HttpHeaders;
         public IntPtr LicenseServerUrl;
         public int SegmentStride;   // ABI-appended (must match native FgPlayReadyOpenDesc): segment-number step (1 = numbered)
+        // ABI-appended: the paired AUDIO representation (the video's own soundtrack). All-null ⇒ video only. The native
+        // side reads these only when StructSize says they are present, so an older DLL beside a newer host still runs
+        // (video-only) instead of reading past the struct.
+        public IntPtr AudioInitUrl;
+        public IntPtr AudioSegmentBaseUrl;
+        public IntPtr AudioSegmentPrefix;
+        public IntPtr AudioSegmentSuffix;
     }
 
     private static partial class Native

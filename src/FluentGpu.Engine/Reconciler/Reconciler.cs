@@ -212,6 +212,7 @@ public sealed class TreeReconciler
     private Effect? _rootEffect;
     private bool _reconciled;   // set when any structural/column change happened → the host runs (scoped) layout
     private int _renderCount;   // component render-effects that ran since the last frame (granularity metric)
+    private int _keepAliveLayoutSuppressionFrames;   // activation commit + first bounds-measure correction
     private float _themeTransitionMs = float.NaN;        // live-re-theme cross-fade duration; armed only during a RethemeAll flush
     private readonly List<CompEntry> _rethemeScratch = new();   // snapshot of _comps.Values for RethemeAll (defensive vs reentrancy)
 
@@ -231,6 +232,16 @@ public sealed class TreeReconciler
     public int ConsumeRenderCount() { var c = _renderCount; _renderCount = 0; return c; }
     /// <summary>Current frame's render-effect count without resetting (census dump before <see cref="ConsumeRenderCount"/>).</summary>
     public int PeekRenderCount() => _renderCount;
+
+    /// <summary>Consume one frame of a KeepAlive activation's opt-in layout-transition suppression. The activation
+    /// frame lands the route swap itself; the second frame lands self-measuring controls that publish their first real
+    /// bounds after layout. Page-root enter/opacity tracks remain authored by <c>TransitionFor</c>.</summary>
+    public bool ConsumeKeepAliveLayoutSuppressionFrame()
+    {
+        if (_keepAliveLayoutSuppressionFrames <= 0) return false;
+        _keepAliveLayoutSuppressionFrames--;
+        return true;
+    }
 
     /// <summary>Clear the per-frame render-type histogram (no-op unless <c>FG_RENDER_CENSUS=1</c>). Call at Paint start.</summary>
     public void BeginRenderCensus()
@@ -1095,6 +1106,7 @@ public sealed class TreeReconciler
         state.Options = options;
 
         LayoutTransition? transition = null;
+        bool activationChanged = state.ActiveKey != key;
 
         if (state.ActiveKey is { } activeKey && state.Entries.TryGetValue(activeKey, out var activeEntry)
             && activeKey == key && !Equals(activeEntry.Token, token))
@@ -1104,7 +1116,14 @@ public sealed class TreeReconciler
             // edge so the in-place update receives its directional entrance. There is no outgoing root in this case:
             // Update below preserves the mounted component/state, then the normal enter seed animates that same root.
             transition = options.TransitionFor?.Invoke(activeEntry.Token, token);
+            activationChanged = true;
         }
+
+        // A retained page commonly contains self-measuring responsive controls: activation mounts/attaches their proxy
+        // geometry now, then OnBoundsChanged publishes the real width for the following frame. Suppress both projection
+        // windows so navigation never turns that implementation detail into card/shelf/content-card size motion.
+        if (activationChanged && options.SuppressLayoutTransitionsOnActivation)
+            _keepAliveLayoutSuppressionFrames = Math.Max(_keepAliveLayoutSuppressionFrames, 2);
 
         if (state.ActiveKey is { } oldKey && oldKey != key && state.Entries.TryGetValue(oldKey, out var oldActive))
         {
@@ -1228,7 +1247,8 @@ public sealed class TreeReconciler
             SetSubtreeResourcesActive(entry.Root, active: true);
             entry.ResourcesActive = true;
         }
-        SetSubtreeParked(entry.Root, parked: false);   // re-attached → un-park + replay any render owed while parked
+        SetSubtreeParked(entry.Root, parked: false,
+            snapStructural: options.SuppressLayoutTransitionsOnActivation);
         _scene.Mark(entry.Root, NodeFlags.HitTestVisible);
         _scene.Mark(parent, NodeFlags.LayoutDirty);
     }
@@ -1320,9 +1340,12 @@ public sealed class TreeReconciler
     //  (3) a scene-level Parked marker + a per-node ticker notification so the animation/scroll engines quiesce this
     //      subtree's tracks (a backgrounded looping animation / mid-fling scroll must not defeat the idle wake-stop), and
     //      so a component mounted under a parked ancestor seeds inactive (MountComponent reads the marker).
-    private void SetSubtreeParked(NodeHandle node, bool parked)
+    private void SetSubtreeParked(NodeHandle node, bool parked, bool snapStructural = false)
     {
         if (!_scene.IsLive(node)) return;
+        // A cached page can be parked halfway through a card-refit/reveal. Navigation-owned activation must land those
+        // finite geometry rows before un-parking; looping/opacity/brush tracks remain paused/resumable as authored.
+        if (!parked && snapStructural) Anim?.SnapStructuralToLayout(node);
         if (parked) _scene.Mark(node, NodeFlags.Parked); else _scene.Unmark(node, NodeFlags.Parked);
         OnNodeParkedChanged?.Invoke(node, parked);
         if (_comps.TryGetValue(node, out var entry))
@@ -1332,7 +1355,7 @@ public sealed class TreeReconciler
             if (!parked && entry.DeferredRender) { entry.DeferredRender = false; entry.Effect?.Schedule(); }
         }
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
-            SetSubtreeParked(c, parked);
+            SetSubtreeParked(c, parked, snapStructural);
     }
 
     private void AddBinding(NodeHandle node, Computation c)
@@ -1667,6 +1690,22 @@ public sealed class TreeReconciler
         ref ScrollState sc = ref _scene.ScrollRef(node);
         if (sc.ScrollKey is not null)
             _scrollMem.Put(ScrollCacheKey(sc.ScrollScope, sc.ScrollKey), sc.OffsetX, sc.OffsetY);
+    }
+
+    /// <summary>Persist the offsets of every viewport in a subtree that is ABOUT to be removed, before anything new
+    /// mounts. <see cref="ReconcileChildren"/> mounts new keyed children before removing the old ones, so without this
+    /// the incoming viewport's <see cref="ApplyScrollKey"/> reads <see cref="_scrollMem"/> BEFORE the outgoing one has
+    /// written to it: a keyed swap of the same content (same ScrollKey, e.g. a track list re-keyed by row density)
+    /// seeded from a stale entry — or none, landing at the top — and only then saved the position the user was looking
+    /// at. Re-keying twice therefore ping-ponged between two stale offsets. The later
+    /// <see cref="UnmountSubtree"/> → <see cref="SaveScroll"/> writes the same value again; Put is idempotent.
+    /// Deliberately a pre-SAVE rather than the more obvious fix of removing before mounting — see the note at the call
+    /// site. Allocation-free by construction (sibling-pointer recursion, no collections, no closures): this runs inside
+    /// a frame-hot function.</summary>
+    private void PreSaveScroll(NodeHandle node)
+    {
+        SaveScroll(node);
+        for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c)) PreSaveScroll(c);
     }
 
     /// <summary>While a <see cref="SkelRegionEl"/> is loading, hide its enclosing viewport's scrollbar (the nearest scroll
@@ -2625,18 +2664,36 @@ public sealed class TreeReconciler
                 newNodes[i] = oldNodes[match];
                 Update(oldNodes[match], nk, oldKids[match]);
             }
-            else
-            {
-                var child = _scene.CreateNode(nk.ElementTypeId);
-                // Parent BEFORE Mount (like the single-child Diff path): a ComponentEl mounted here runs its first
-                // render synchronously, and UseContext resolves providers by walking UP from the component's anchor —
-                // mounting detached would silently resolve to the context DEFAULT (and never subscribe, so it stays
-                // wrong forever). The ordering pass below detaches/re-appends every child anyway.
-                _scene.AppendChild(node, child);
-                Mount(child, nk);
-                newNodes[i] = child;
-                structural = true;
-            }
+        }
+
+        // Any viewport in a departing subtree persists its offset HERE, before a single new child mounts. Mounting is
+        // what reads ScrollMemory back (Mount → WriteColumns → ApplyScrollKey), and the save used to happen on the far
+        // side of it (Remove → UnmountSubtree → SaveScroll), so a same-key swap restored a stale position. Splitting
+        // the match loop above from the create loop below is what makes the unmatched-OLD set knowable this early.
+        for (int j = 0; j < oldN; j++)
+            if (!used[j]) PreSaveScroll(oldNodes[j]);
+
+        // Creation still happens BEFORE removal, deliberately. Hoisting the removal instead looks tempting — it would
+        // align this with every other replace path (ReplaceSingleChild, ReconcileSingleChild and ReplaceKeepAliveRoot
+        // all remove first) and it makes the pre-save above unnecessary — but it breaks e4popup.3 (menus/flyouts
+        // windowing) reproducibly: some popup/overlay state is order-sensitive across the removal of the outgoing
+        // presenter and the mount of the incoming one. Pre-saving is the change that fixes the scroll bug WITHOUT
+        // touching node lifecycle ordering at all. (An earlier note here blamed gate.arena.alloc-zero for the same
+        // conclusion — that was a stale-incremental-build false positive, the one ops/diag/README.md warns about for
+        // exactly that gate. On a clean build the reordering passes it 3/3. e4popup.3 is the real constraint.)
+        for (int i = 0; i < newN; i++)
+        {
+            if (!newNodes[i].IsNull) continue;
+            Element nk = newKids[i];
+            var child = _scene.CreateNode(nk.ElementTypeId);
+            // Parent BEFORE Mount (like the single-child Diff path): a ComponentEl mounted here runs its first
+            // render synchronously, and UseContext resolves providers by walking UP from the component's anchor —
+            // mounting detached would silently resolve to the context DEFAULT (and never subscribe, so it stays
+            // wrong forever). The ordering pass below detaches/re-appends every child anyway.
+            _scene.AppendChild(node, child);
+            Mount(child, nk);
+            newNodes[i] = child;
+            structural = true;
         }
 
         for (int j = 0; j < oldN; j++)

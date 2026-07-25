@@ -4475,6 +4475,7 @@ static class ControlsSuite
             var fonts = new HeadlessFontSystem(strings);
             var clock = new ManualFrameTimeSource();
             using var host = new AppHost(app, window, device, fonts, strings, new SplitButtonLongMenuProbe(), frameTime: clock);
+            host.PopupWindowsEnabled = false;   // explicitly verify the constrained fallback's local clip reveal
             host.RunFrame();
 
             var halves = Roles(host.Scene, AutomationRole.Button);
@@ -4573,6 +4574,26 @@ static class ControlsSuite
                     $"metrics={(m is { } x ? $"up={x.OpensUp} cr={x.ClosedRatio:0.00} w={x.ContentRectPx.W:0.0} h={x.ContentRectPx.H:0.0} corner={x.CornerRadiusPx:0.0}" : "null")} played={played}");
             }
 
+            // cp6.i — CommandBarFlyout suppresses the popup slide: closedRatio=0 must survive the host seam unchanged
+            // (zero is a contract value, not "unset"). The window still presents once before it is shown/animated.
+            {
+                var hd = svc.Open(() => root.Anchor,
+                    () => new BoxEl { Width = 180f, Height = 64f, Children = [new TextEl("commandbar-body") { Size = 12f }] },
+                    FlyoutPlacement.BottomLeft,
+                    new PopupOptions(Chrome: PopupChrome.CommandBar) { ConstrainToRootBounds = false });
+                host.RunFrame(); host.RunFrame();
+                var hs = host.PopupWindows.Count == 1 ? host.PopupWindows[0].Swapchain as HeadlessSwapchain : null;
+                bool zero = hs?.LastPopupChrome is { } m && Near(m.ClosedRatio, 0f, 0.001f);
+                bool seededBeforeShow = hs is { PresentCount: >= 1, PopupOpenPlayed: true };
+                hd.Close();
+                Settle();
+                Check("cp6.i — CommandBar window chrome keeps closedRatio 0 and opens only after a seeded present",
+                    zero && seededBeforeShow,
+                    $"zero={zero} present={hs?.PresentCount ?? 0} played={hs?.PopupOpenPlayed}");
+            }
+
+            host.PopupWindowsEnabled = false;   // remaining checks exercise the in-window transition implementation
+
             // cp7.d — menu plate (WinUI MenuFlyoutPresenterBorder ScaleY, LayoutTransition_partial.cpp:497-503):
             // ScaleY (1−ratio)→1 mid-flight about the BOTTOM pivot (AnimationDirection_Top sets CenterY=openedLength —
             // a downward menu scales about its bottom/anchor-far edge), settled at 1 by 250ms; the surface stays opaque
@@ -4649,13 +4670,8 @@ static class ControlsSuite
                     $"opened={opened} close48={close48} (op={c48.Opacity:0.00} T={c48.ClipRect.Y:0.0} B={c48.ClipRect.Bottom:0.0}) close112={close112} (op={op112:0.000})");
             }
 
-            // cp7.f — plain Flyout (PopupChrome.Popup, TAS_SHOWPOPUP): axis-aware entrance on the shared Fluent
-            // flyout-family curve — TranslateY −50→0 (below-anchor) over 167ms cubic-bezier(0,0,0,1) with opacity 0→1
-            // over the SAME 167ms window, linear, NO invisible hold. [ASSERTION-CHANGE vs the prior 367ms/FluentDecelerate
-            // slide + 83ms opacity-hold "PVL dump": the OS TAS_SHOWPOPUP timeline is uxtheme-RUNTIME (not in the mux
-            // source — verified: only g_entranceThemeOffset=50 + the per-side axis are pinned), so the entrance is aligned
-            // to the verified Menu/PickerFlyout family spline (0,0,0,1) + the flyout-open-curve gate, removing the
-            // perceptible ~83ms blank hold + floaty tail that read as a laggy open vs the menu path.]
+            // cp7.f — plain Flyout (PopupChrome.Popup, TAS_SHOWPOPUP): TranslateY −50→0 over 367ms on
+            // cubic-bezier(.1,.9,.2,1); opacity holds at zero for 83ms then fades to one over 83ms linear.
             {
                 NodeHandle body = NodeHandle.Null;
                 svc.Open(() => root.Anchor,
@@ -4668,15 +4684,15 @@ static class ControlsSuite
                 bool t0 = !s.IsNull && Near(p0.LocalTransform.Dy, -50f, 1f) && p0.Opacity < 0.01f;
                 clock.Advance(40f); host.RunFrame();
                 var p40 = s.IsNull ? default : host.Scene.Paint(s);
-                // opacity fades from the FIRST tick (linear, no hold) ≈ 40/167; TranslateY decaying from −50 (0,0,0,1 is front-loaded).
-                bool t40 = !s.IsNull && Near(p40.Opacity, 40f / 167f, 0.06f) && p40.LocalTransform.Dy > -49f && p40.LocalTransform.Dy < 0f;
+                bool t40 = !s.IsNull && p40.Opacity < 0.01f
+                    && p40.LocalTransform.Dy > -49f && p40.LocalTransform.Dy < 0f;
                 clock.Advance(80f); host.RunFrame();   // t=120
                 var p120 = s.IsNull ? default : host.Scene.Paint(s);
-                bool t120 = !s.IsNull && Near(p120.Opacity, 120f / 167f, 0.06f)
+                bool t120 = !s.IsNull && Near(p120.Opacity, (120f - 83f) / 83f, 0.06f)
                     && p120.LocalTransform.Dy > p40.LocalTransform.Dy && p120.LocalTransform.Dy <= 0.5f;
                 svc.CloseTop();
                 Settle();
-                Check("cp7.f — plain Flyout: axis-aware TranslateY −50→0 over 167ms cubic(0,0,0,1) + opacity 0→1 over the SAME 167ms linear (no hold)",
+                Check("cp7.f — plain Flyout: TranslateY −50→0 over 367ms cubic(.1,.9,.2,1); opacity holds 83ms then fades over 83ms",
                     t0 && t40 && t120,
                     $"t0={t0} (dy={p0.LocalTransform.Dy:0.0} op={p0.Opacity:0.00}) t40={t40} (dy={p40.LocalTransform.Dy:0.0} op={p40.Opacity:0.00}) " +
                     $"t120={t120} (dy={p120.LocalTransform.Dy:0.0} op={p120.Opacity:0.000})");
@@ -4722,8 +4738,8 @@ static class ControlsSuite
             // gate.overlay.flyout-open-curve — the PopupThemeTransition entrance picks its slide AXIS + SIGN from the
             // EFFECTIVE placement major side (FlyoutBase::SetTransitionParameters, FlyoutBase_Partial.cpp:2028-2051) applied
             // to g_entranceThemeOffset = 50 (cpp:68): Left → TranslateX +50, Right → TranslateX −50, Full → NO slide (fade
-            // only, FromH=FromV=0), Top/Bottom → TranslateY (covered by cp7.f). All ride cubic-bezier(0,0,0,1) over 167ms
-            // with opacity 0→1 over the same window. A synthetic 40×40 anchor at (300,180) leaves room for BOTH Left
+            // only, FromH=FromV=0), Top/Bottom → TranslateY (covered by cp7.f). All ride cubic-bezier(.1,.9,.2,1) over
+            // 367ms, with the delayed 83ms opacity fade. A synthetic 40×40 anchor at (300,180) leaves room for BOTH Left
             // (popup to its left) and Right to place UNFLIPPED, so the effective placement equals the requested one.
             {
                 // Spin frames at dt=0 (clock frozen → the anim stays at its enter initial) until the surface mounts, then
@@ -4745,7 +4761,7 @@ static class ControlsSuite
                     FlyoutPlacement.Left, new PopupOptions(Chrome: PopupChrome.Popup));
                 var (lx, ly, lop) = Seed0(() => bodyL);
                 bool leftOk = Near(lx, 50f, 1f) && Near(ly, 0f, 0.5f) && lop < 0.01f;
-                clock.Advance(60f); host.RunFrame();
+                clock.Advance(120f); host.RunFrame();
                 var sL = SurfaceOf(host.Scene, bodyL);
                 var pL = sL.IsNull ? default : host.Scene.Paint(sL);
                 bool leftDecays = !sL.IsNull && pL.LocalTransform.Dx < 49f && pL.LocalTransform.Dx >= 0f && pL.Opacity > 0.05f;
@@ -4767,13 +4783,13 @@ static class ControlsSuite
                     FlyoutPlacement.Full, new PopupOptions(Chrome: PopupChrome.Popup));
                 var (fx, fy, fop) = Seed0(() => bodyF);
                 bool full0 = Near(fx, 0f, 0.5f) && Near(fy, 0f, 0.5f) && fop < 0.01f;
-                clock.Advance(60f); host.RunFrame();
+                clock.Advance(120f); host.RunFrame();
                 var sF = SurfaceOf(host.Scene, bodyF);
                 var pF = sF.IsNull ? default : host.Scene.Paint(sF);
                 bool fullFadeNoSlide = !sF.IsNull && Near(pF.LocalTransform.Dx, 0f, 0.5f) && Near(pF.LocalTransform.Dy, 0f, 0.5f) && pF.Opacity > 0.05f;
                 svc.CloseTop(); Settle();
 
-                Check("gate.overlay.flyout-open-curve — PopupThemeTransition entrance axis: Left→TranslateX +50, Right→TranslateX −50, Full→fade-only (no slide); cubic(0,0,0,1)+opacity over 167ms",
+                Check("gate.overlay.flyout-open-curve — PopupThemeTransition axis: Left→TranslateX +50, Right→TranslateX −50, Full→fade-only; 367ms FluentDecelerate + delayed opacity",
                     leftOk && leftDecays && rightOk && full0 && fullFadeNoSlide,
                     $"left=({lx:0.0},{ly:0.0},op{lop:0.00}) leftDecays={leftDecays} right=({rx:0.0},{ry:0.0},op{rop:0.00}) full0=({fx:0.0},{fy:0.0},op{fop:0.00}) fullFadeNoSlide={fullFadeNoSlide}");
             }

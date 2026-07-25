@@ -30,23 +30,12 @@ public sealed class ShellUi
     /// </summary>
     public Signal<bool> RailFits { get; } = new(true);
 
-    /// <summary>
-    /// Defer responsive breakpoint reactions while a rail open/close reflow is in flight. This prevents intermediate
-    /// spring widths from churning multiple remounts.
-    /// </summary>
-    public Signal<bool> RailLayoutLocked { get; } = new(false);
-
-    long _railLockArmedAt;
-
-    /// <summary>Arm the layout-defer lock, stamping the arm time for the fail-safe below.</summary>
-    public void ArmRailLock()
-    {
-        _railLockArmedAt = System.Environment.TickCount64;
-        RailLayoutLocked.Value = true;
-    }
-
-    /// <summary>Time-bounded fail-safe for breakpoint gates in case the timer-driven clear is lost.</summary>
-    public bool RailLockActive => RailLayoutLocked.Peek() && System.Environment.TickCount64 - _railLockArmedAt < 900;
+    // NOTE: there is deliberately no layout-defer lock here any more. It existed to stop the OLD reflow-spring rail
+    // (which animated REAL width) from churning a breakpoint remount on every intermediate width. The shipping path
+    // commits the reserved width in ONE frame (the spacer snaps; the content card eases only a clip window), so there
+    // are no intermediate widths to debounce — and deferring the breakpoint reaction instead GUARANTEED a ~300ms window
+    // where the wide column set was rendered into the already-narrow pane, which the grid's overflow guard crushed into
+    // overlapping glyphs. Breakpoints now react on the same frame the width commits.
 
     /// <summary>Clicking the already-showing mode closes the rail; otherwise switch to that mode and open.</summary>
     public void Toggle(RailMode mode)

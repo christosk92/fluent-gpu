@@ -11,8 +11,9 @@ namespace Wavee.SpotifyLive.Audio;
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 // The VIDEO half of the ONE current media (Milestone B). Implements the app's common IMediaHost seam over the unified
-// FluentGpu.Media engine MediaPlayer configured with the MF (+ native PlayReady) backend — the SAME builder the pop-out
-// PopOutVideoStage uses. The PlaybackController swaps its current host to THIS one at a video boundary and drives the
+// FluentGpu.Media engine MediaPlayer configured with the MF (+ native PlayReady) backend — this host now OWNS that player
+// (the M0 ownership inversion; the builder moved here out of PopOutVideoStage, which only PRESENTS it). The
+// PlaybackController swaps its current host to THIS one at a video boundary and drives the
 // common transport verbs (Play/Pause/Stop/Seek/SetVolume/PositionMs/IsPlaying) here; the video-specific LoadVideo(source)
 // is called at the switch (NOT via IMediaHost). State is polled off the engine's reactive signals and translated into the
 // SAME AudioHostSignal channel the audio host emits, so the source-agnostic NowPlayingProjection is unchanged.
@@ -21,8 +22,9 @@ namespace Wavee.SpotifyLive.Audio;
 // (IMediaPlayer.PumpVideo, driven from a composited surface's frame loop). This host builds the MediaPlayer and reports
 // whatever the session publishes; it does NOT itself pump. A surface (the in-window PiP or the detached pop-out) must be
 // mounted and bound to THIS player for frames/position to advance — the video-placement state guarantees one is mounted
-// whenever a video is the current media. To let a surface bind to the exact same player instance, the live player is
-// exposed via CurrentPlayer + PlayerChanged (a source change rebuilds it, mirroring PopOutVideoStage's keyed remount).
+// whenever a video is the current media. Surfaces bind to the exact same player instance through CurrentPlayer +
+// PlayerChanged (the app mirrors them onto PlaybackBridge.VideoPlayer, a UI-thread signal the surfaces read); EXACTLY ONE
+// mounted surface may pump a given player at a time, which the single-placement state guarantees.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /// <summary>
@@ -38,6 +40,7 @@ public sealed class FluentVideoMediaHost : IMediaHost
     readonly Timer _ticker;
 
     MediaPlayer? _player;
+    string _sourceKey = "";           // the PopOutVideoSource.Key the live player was built for ("" = none)
     double _volume = 1.0;
     readonly bool _muted;
     PlaybackState _lastState = PlaybackState.Idle;
@@ -54,6 +57,11 @@ public sealed class FluentVideoMediaHost : IMediaHost
     /// clear). A mounted video surface (PiP / pop-out) MUST bind to this instance so it pumps the MF session — see the MF-pump
     /// caveat above. Rebuilt on every source change (a clear↔DRM / track switch), announced on <see cref="PlayerChanged"/>.</summary>
     public MediaPlayer? CurrentPlayer { get { lock (_gate) return _player; } }
+
+    /// <summary>The <c>PopOutVideoSource.Key</c> the live <see cref="CurrentPlayer"/> was built for ("" = no player). Used by
+    /// <see cref="LoadVideo"/> to make a redundant load of the SAME source a no-op, so re-entering the video path for a track
+    /// already playing can never restart it from 0.</summary>
+    public string CurrentSourceKey { get { lock (_gate) return _sourceKey; } }
 
     /// <summary>Fires (on the caller's thread) whenever <see cref="CurrentPlayer"/> is rebuilt/cleared, so a mounted surface
     /// can re-bind to the new player instance. Carries the new player (null after a stop/clear).</summary>
@@ -91,6 +99,7 @@ public sealed class FluentVideoMediaHost : IMediaHost
         {
             old = _player;
             _player = null;
+            _sourceKey = "";
             _lastState = PlaybackState.Idle;
             _errorReported = false;
         }
@@ -121,11 +130,23 @@ public sealed class FluentVideoMediaHost : IMediaHost
 
     /// <summary>Build (or rebuild) the engine <see cref="MediaPlayer"/> for a resolved <see cref="PopOutVideoSource"/> and open
     /// it — the clear MF backend for a Canvas/clear URL, or the clear+DRM backend (native in-process PlayReady CDM) for a DRM
-    /// descriptor. Mirrors <c>PopOutVideoStage</c>'s builder exactly. The prior player (if any) is torn down first so two
-    /// sessions never coexist. Playback advances only once a surface pumps the MF session (see the MF-pump caveat).</summary>
+    /// descriptor. THIS HOST OWNS THE PLAYER (the M0 ownership inversion): the surfaces only present <see cref="CurrentPlayer"/>,
+    /// so a placement flip re-binds a presenter instead of rebuilding a player — no restart from 0. The prior player (if any)
+    /// is torn down first so two sessions never coexist, and a redundant load of the SAME <see cref="PopOutVideoSource.Key"/> is
+    /// a no-op for the same reason. Playback advances only once a surface pumps the MF session (see the MF-pump caveat).</summary>
     public void LoadVideo(PopOutVideoSource src)
     {
         if (_disposed || src is null) return;
+        // Idempotent for the same source: the controller may re-enter the video path for the track that is already playing
+        // (a placement flip, a re-published source, a kind re-evaluation). Rebuilding would restart it from 0 — don't.
+        lock (_gate)
+        {
+            if (_player is not null && string.Equals(_sourceKey, src.Key, StringComparison.Ordinal))
+            {
+                _log.Info($"video-host load ignored — already playing key={src.Key}");
+                return;
+            }
+        }
         MediaPlayer? old;
         MediaPlayer built;
         try
@@ -155,14 +176,17 @@ public sealed class FluentVideoMediaHost : IMediaHost
         {
             old = _player;
             _player = built;
+            _sourceKey = src.Key ?? "";
             _lastState = PlaybackState.Idle;
             _errorReported = false;
         }
         if (old is not null) _ = DisposePlayerAsync(old);
+        // Announce the new player so the mounted surface re-binds its MediaPlayerElement to THIS instance (the app marshals
+        // this onto the UI thread; the event fires on the caller's — playback — thread).
         PlayerChanged?.Invoke(built);
 
         // Open + start (Play == open then play). The descriptor drives the native open for DRM (the URI is advisory); a clear
-        // source opens its plain URL. Fire-and-forget exactly like PopOutVideoStage — errors surface via the Error signal poll.
+        // source opens its plain URL. Fire-and-forget — errors surface via the Error signal poll in Tick, never as a throw.
         try
         {
             var source = src.IsDrm
@@ -179,6 +203,16 @@ public sealed class FluentVideoMediaHost : IMediaHost
         }
         StartTicker();
         _log.Info($"video-host loaded key={src.Key} drm={src.IsDrm}");
+        // A DRM music video plays its OWN soundtrack: the manifest carries an AAC representation under the same content
+        // key, and the native CENC source demuxes it alongside the video so Media Foundation renders both under one
+        // clock. That is why the song's audio host is stopped while video is the current media — the plain audio track is
+        // a DIFFERENT edit (no intro, no spoken pre/post-roll) and would drift against the picture.
+        // Logged either way so a silent video is diagnosable: "audio=no" means the manifest offered no AAC representation
+        // under the PlayReady index (the parser refuses Opus, which the protected pipeline cannot decode).
+        // A clear/Canvas source is unaffected — the MF media engine renders its audio itself.
+        if (src.IsDrm)
+            _log.Info($"video-host: DRM video is now the current media; the song's audio host is stopped. " +
+                $"own-soundtrack={(string.IsNullOrEmpty(src.DrmDescriptor?.AudioInitUrl) ? "NO (video-only manifest)" : "yes " + src.DrmDescriptor!.AudioCodecs)}");
     }
 
     // ── the poll tick: derive AudioHostSignals from the engine's reactive state (mirrors FluentMediaAudioHost.Tick) ────
@@ -250,7 +284,7 @@ public sealed class FluentVideoMediaHost : IMediaHost
         StopTicker();
         try { await _ticker.DisposeAsync().ConfigureAwait(false); } catch { }
         MediaPlayer? old;
-        lock (_gate) { old = _player; _player = null; }
+        lock (_gate) { old = _player; _player = null; _sourceKey = ""; }
         if (old is not null) { try { await old.DisposeAsync().ConfigureAwait(false); } catch { } }
     }
 }

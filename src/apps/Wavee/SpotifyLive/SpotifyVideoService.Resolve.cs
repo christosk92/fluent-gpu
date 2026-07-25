@@ -25,14 +25,7 @@ partial class SpotifyVideoService
         _log.Debug($"[video] resolve begin track={trackUri}");
 
         string? manifestId;
-        try
-        {
-            // Self-contained first: the track's OWN TrackV4 → OriginalVideo[0].Gid.
-            manifestId = await ResolveManifestIdFromTrackV4Async(trackUri, ct).ConfigureAwait(false);
-            // Fallback: the VIDEO_ASSOCIATIONS counterpart (an audio track linking out to its paired video track).
-            if (string.IsNullOrEmpty(manifestId))
-                manifestId = await ResolveLinkedManifestIdAsync(trackUri, ct).ConfigureAwait(false);
-        }
+        try { (manifestId, _) = await ResolveManifestIdAsync(trackUri, ct).ConfigureAwait(false); }
         catch (Exception ex) when (ex is not OperationCanceledException) { _log.Info("video resolve TrackV4: " + ex.Message); return null; }
         if (string.IsNullOrEmpty(manifestId)) return null;
 
@@ -50,6 +43,22 @@ partial class SpotifyVideoService
                    $"codecs={descriptor.Codecs ?? "-"} licSrv={manifest.LicenseServerEndpoint ?? "-"}");
         var relay = SpotifyLicenseRelay.Create(transport, manifest.LicenseServerEndpoint);
         return PopOutVideoSource.PlayReady(manifestId, descriptor, relay, manifest.LicenseServerEndpoint);
+    }
+
+    /// <summary>The manifest-id resolution ORDER — the ONE definition, shared by playback above and the
+    /// <c>--spotify-video-manifest</c> probe: the track's OWN TrackV4 (<c>OriginalVideo[0].Gid</c>, hex) first, else its
+    /// <c>VIDEO_ASSOCIATIONS</c> counterpart's TrackV4. <c>Source</c> names the path that produced it
+    /// (<c>track-v4</c> / <c>video-associations</c> / <c>none</c>) so a diagnostic can report it. Throws only what the
+    /// metadata chain throws — callers guard.</summary>
+    internal async Task<(string? ManifestId, string Source)> ResolveManifestIdAsync(string trackUri, CancellationToken ct = default)
+    {
+        // Self-contained first: the track's OWN TrackV4 → OriginalVideo[0].Gid.
+        if (await ResolveManifestIdFromTrackV4Async(trackUri, ct).ConfigureAwait(false) is { Length: > 0 } own)
+            return (own, "track-v4");
+        // Fallback: the VIDEO_ASSOCIATIONS counterpart (an audio track linking out to its paired video track).
+        if (await ResolveLinkedManifestIdAsync(trackUri, ct).ConfigureAwait(false) is { Length: > 0 } linked)
+            return (linked, "video-associations");
+        return (null, "none");
     }
 
     /// <summary>Fetch <paramref name="uri"/>'s TrackV4 and read <c>OriginalVideo[0].Gid</c> (hex) = manifest_id; null when

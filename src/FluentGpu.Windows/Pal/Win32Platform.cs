@@ -748,6 +748,19 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         => SetWindowPos(_hwnd, HWND.NULL, (int)outerBoundsPx.X, (int)outerBoundsPx.Y,
             (int)MathF.Max(1f, outerBoundsPx.W), (int)MathF.Max(1f, outerBoundsPx.H), SWP_NOZORDER | SWP_NOACTIVATE);
 
+    /// <summary>The window's current OUTER rect (physical virtual-screen px) — the read side of
+    /// <see cref="SetBoundsPx"/>, so the host can ask where the user actually left a secondary window (client origin +
+    /// client size cannot answer that for a window with a frame).</summary>
+    public RectF OuterBoundsPx
+    {
+        get
+        {
+            RECT rc;
+            if (GetWindowRect(_hwnd, &rc) == 0) return default;
+            return new RectF(rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top);
+        }
+    }
+
     /// <summary>Store the minimum CLIENT size (physical px). (0,0) = no clamp (the default — the primary window is
     /// unaffected). The WM_GETMINMAXINFO handler converts it to a window (outer) minimum so the user cannot drag the
     /// frame below a usable video size.</summary>

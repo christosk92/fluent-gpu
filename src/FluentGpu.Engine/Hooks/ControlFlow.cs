@@ -119,7 +119,8 @@ public sealed record KeepAliveOptions(
     int MaxEntries = 5,
     bool ReleaseInactiveResources = true,
     Func<object, bool>? ShouldCache = null,
-    Func<object, object, LayoutTransition?>? TransitionFor = null)
+    Func<object, object, LayoutTransition?>? TransitionFor = null,
+    bool SuppressLayoutTransitionsOnActivation = false)
 {
     public static KeepAliveOptions Default { get; } = new();
 }

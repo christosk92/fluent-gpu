@@ -1918,6 +1918,42 @@ static class AnimSuite
                 $"newKeyTop={bTop:0} restoredPrev={aBack:0}");
         }
 
+        // 23x — the OTHER swap shape: same content (same ScrollKey), but the viewport NODE is replaced because an
+        // ancestor was re-keyed. ReconcileChildren mounts new keyed children before removing the old ones, and the
+        // outgoing offset is only persisted on the way out (Remove → UnmountSubtree → SaveScroll) — so the incoming
+        // viewport used to read ScrollMemory before that write landed and fell back to the top. Re-keying twice then
+        // ping-ponged between two stale offsets. Reconciler.PreSaveScroll persists the departing subtree's offsets
+        // before anything mounts, which is what makes this pass without touching node lifecycle ordering.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("scrollkeyedswap", new Size2(360, 260), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new ScrollKeyedSwapProbe();
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var s = host.Scene;
+            NodeHandle Find(NodeHandle n)
+            {
+                if (n.IsNull) return NodeHandle.Null;
+                if (s.HasScroll(n)) return n;
+                for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c)) { var r = Find(c); if (!r.IsNull) return r; }
+                return NodeHandle.Null;
+            }
+            var before = Find(s.Root);
+            { ref ScrollState st = ref s.ScrollRef(before); st.OffsetY = 400f; st.TargetY = 400f; }
+            host.RunFrame();
+
+            root.WrapperKey.Value = 1; host.RunFrame();   // re-key the ANCESTOR → the list remounts onto a new viewport
+            var after = Find(s.Root);
+            ref ScrollState sa = ref s.ScrollRef(after);
+            bool newNode = !after.Equals(before);
+            Check("scroll-restore.keyed-swap: re-keying an ANCESTOR remounts the viewport, and the same-ScrollKey content keeps its offset on the first realized window (the outgoing offset is saved before the incoming mount reads it)",
+                newNode && Near(sa.OffsetY, 400f, 1f) && sa.FirstRealized > 0,
+                $"newViewport={newNode} offset={sa.OffsetY:0} firstRealized={sa.FirstRealized}");
+        }
+
         // virtual-collection — the source-agnostic data-windowing primitive (paged remote list of known total): the total is
         // learned from page 0, pages fill on demand, repeat requests dedup, a seeded prefix refetches nothing, and the hot
         // path (indexing + an already-satisfied EnsureRange) allocates ZERO. The artist-discography virtualization rides this.

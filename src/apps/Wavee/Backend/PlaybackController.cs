@@ -194,29 +194,53 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     public Func<Track, CancellationToken, Task<PlaybackTrackMeta?>>? MetaResolver { get; set; }
     public Func<string, CancellationToken, Task<long>>? EpisodeResumeMicros { get; set; }
 
-    /// <summary>Milestone B — decides whether the current playable should play as VIDEO right now (a music video AND the
-    /// user prefers video). When null (the default — unit tests + audio-only builds) every playable is treated as AUDIO, so
-    /// the audio path is byte-for-byte unchanged. Wired by the live app bootstrap to the video-active state (PlaybackBridge).</summary>
+    /// <summary>Milestone B / M0 — decides whether the given playable should play as VIDEO right now (that track has a music
+    /// video AND the user's sticky "watch video" intent is live and not dismissed for this content). When null (the default —
+    /// unit tests and audio-only builds, which never wire the hooks) every playable is treated as AUDIO, so
+    /// the audio path is byte-for-byte unchanged. Wired by <c>LiveConnect.WireVideoMedia</c> to
+    /// <c>PlaybackBridge.ShouldPlayAsVideo</c> (which folds the one pure <c>VideoPlacementLogic.VideoActive</c> rule).</summary>
     public Func<Track, bool>? ShouldPlayAsVideo { get; set; }
 
-    /// <summary>Milestone B — loads the current VIDEO playable onto the injected video host: the delegate resolves the track's
-    /// <c>PopOutVideoSource</c> (PlaybackBridge.ResolveVideoSource) and calls <c>FluentVideoMediaHost.LoadVideo</c>, returning
-    /// true once a source has started opening. Kept as a delegate so the portable controller never references the SpotifyLive
-    /// video types. Null (tests / no video host / not-yet-wired) → a video playable cannot start (see the B-wire TODO).</summary>
+    /// <summary>Milestone B / M0 — loads the given VIDEO playable onto the injected video host: the delegate resolves the
+    /// track's <c>PopOutVideoSource</c> (PlaybackBridge.ResolveVideoSourceForPlaybackAsync) and calls
+    /// <c>FluentVideoMediaHost.LoadVideo</c>, returning true once a source has started opening and FALSE when the track has no
+    /// playable video (so this controller can fall back to audio instead of leaving the user in silence). Kept as a delegate
+    /// so the portable controller never references the SpotifyLive video types. Wired by <c>LiveConnect.WireVideoMedia</c>.</summary>
     public Func<Track, CancellationToken, Task<bool>>? LoadCurrentVideoAsync { get; set; }
 
+    /// <summary>The kind the ONE current media is playing as right now (Audio until a video boundary swaps it). The single
+    /// truth Connect's <c>track_player</c> derives from via <see cref="MediaSwitchLogic.TrackPlayer"/> — never a bare
+    /// has-video flag.</summary>
+    public PlayableKind CurrentMediaKind => _currentKind;
+
     // The kind that selects the current playable's host. isVideoTrack is playback INTENT (music video + user prefers video),
-    // supplied by ShouldPlayAsVideo — never a bare HasVideo flag — so an unwired build always resolves to audio.
-    PlayableKind KindFor(Track t) => MediaSwitchLogic.KindOf(ShouldPlayAsVideo?.Invoke(t) ?? false, t.Origin == TrackOrigin.Local);
+    // supplied by ShouldPlayAsVideo — never a bare HasVideo flag — so an unwired build always resolves to audio. Fail-soft:
+    // a throwing predicate (it reads app signals) degrades to AUDIO rather than breaking playback.
+    PlayableKind KindFor(Track t)
+    {
+        bool isVideo = false;
+        if (ShouldPlayAsVideo is { } predicate)
+        {
+            try { isVideo = predicate(t); }
+            catch (Exception ex) { _log.Info($"ShouldPlayAsVideo threw for {t.Uri}; treating as audio: {ex.GetType().Name}: {ex.Message}"); }
+        }
+        return MediaSwitchLogic.KindOf(isVideo, t.Origin == TrackOrigin.Local);
+    }
 
     // Point the current-media host at the given instance, stopping the outgoing one first (bug 1 — never two decoders at
-    // once) and moving the signal subscription with it. A no-op when the instance is unchanged (Audio↔LocalFile share the
-    // audio host), so a same-host reload keeps the audio fast-start / prepared-next path untouched.
-    void SwitchHost(IMediaHost target)
+    // once) and moving the signal subscription with it, so EXACTLY ONE host feeds OnHostSignal. A no-op when the instance is
+    // unchanged (Audio↔LocalFile share the audio host), so a same-host reload keeps the audio fast-start / prepared-next path
+    // untouched. stopOutgoing comes from MediaSwitchLogic.ShouldStopOutgoingHost — never inline logic.
+    void SwitchHost(IMediaHost target, bool stopOutgoing = true)
     {
         if (ReferenceEquals(_currentHost, target)) return;
-        _currentHost.Pause();
-        _currentHost.Stop();
+        if (stopOutgoing)
+        {
+            // Pause THEN Stop, both BEFORE the incoming host is loaded/played by the caller — that ordering is the
+            // one-audio-stream guarantee (PlaybackControllerHostSwapTests asserts stop-before-play on a shared call log).
+            _currentHost.Pause();
+            _currentHost.Stop();
+        }
         _currentHost = target;
         _hostSub.Dispose();
         _hostSub = _currentHost.Signals.Subscribe(Observers.From<AudioHostSignal>(OnHostSignal));
@@ -227,17 +251,49 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     // Swap the ONE current-media host to whatever the incoming playable needs, per the pure MediaSwitchLogic rules. Called at
     // the LoadAndPlayCurrentAsync chokepoint BEFORE the (kind-specific) load. Returns the resolved kind so the caller loads on
     // the right host. Caller holds _lock.
-    Task<PlayableKind> SwitchCurrentMediaAsync(Track track)
+    PlayableKind SwitchCurrentMedia(Track track)
     {
         var next = KindFor(track);
         if (MediaSwitchLogic.HostChanges(_currentKind, next))
         {
             var target = HostFor(next);
-            _log.Info($"media swap {_currentKind}→{next} host={(ReferenceEquals(target, _videoHost) ? "video" : "audio")} track={track.Uri}");
-            SwitchHost(target);
+            // Every real host boundary is also a kind change, so ShouldStopOutgoingHost is true here — but ASK it rather
+            // than assume it, so the stop-first rule lives in exactly one (unit-tested) place.
+            bool stopOutgoing = MediaSwitchLogic.ShouldStopOutgoingHost(_currentKind, next);
+            _log.Info($"media swap {_currentKind}→{next} host={(ReferenceEquals(target, _videoHost) ? "video" : "audio")} " +
+                $"stopOutgoing={stopOutgoing} track={track.Uri}");
+            SwitchHost(target, stopOutgoing);
         }
         _currentKind = next;
-        return Task.FromResult(next);
+        return next;
+    }
+
+    /// <summary>Re-evaluate the CURRENT playable's media kind and, if it changed, swap the host and reload the current track
+    /// on it. This is what makes the user's "watch video" / "switch to audio" toggle take effect NOW instead of at the next
+    /// track boundary — and what picks up the music-video association when it lands asynchronously after the track already
+    /// started. A no-op when nothing is playing, when the kind already matches, when the hooks are unwired (kill switch), or
+    /// when another Connect device owns playback. Wired to <c>PlaybackBridge.RequestMediaKindRefresh</c>.</summary>
+    public async Task RefreshCurrentMediaKindAsync(CancellationToken ct = default)
+    {
+        if (ShouldPlayAsVideo is null) return;   // hooks unwired → the kind can never be anything but audio
+        if (!RouteLocal()) return;               // a remote device owns playback — never reload locally
+        await _lock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var cur = _session.Current;
+            if (cur is null) return;
+            var next = KindFor(cur);
+            if (next == _currentKind) return;
+            _log.Info($"media kind re-evaluated {_currentKind}→{next} for {cur.Uri} — reloading the current playable");
+            // POSITION HANDOFF IS DELIBERATELY NOT ATTEMPTED across a kind boundary, in EITHER direction. A music video is a
+            // DIFFERENT EDIT of the song with its own timeline (spoken intros, alternate arrangements), so the audio position
+            // and the video position are NOT comparable — seeking one to the other lands in the wrong place. Both directions
+            // therefore start at 0. Do not "fix" this into a seek. (Real position continuity for the audio→video→audio round
+            // trip needs a per-kind checkpoint; that is M7's job, alongside real buffering.)
+            MintCommand("playbtn");
+            await LoadAndPlayCurrentAsync(EvKind.Started, ct).ConfigureAwait(false);
+        }
+        finally { _lock.Release(); }
     }
 
     bool RejectLocalPlay()
@@ -285,14 +341,21 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             }
 
             var current = _session.Current?.Uri ?? "";
-            if (string.Equals(current, expectedTrackUri, StringComparison.Ordinal))
+            if (!string.Equals(current, expectedTrackUri, StringComparison.Ordinal))
             {
-                _log.Info($"fast-start body ready track={expectedTrackUri} file={h.FileIdHex}; supplying to audio host");
-                _audioHost.SupplyBody(h);   // audio-specific: this flow is only scheduled from the audio fast-start path
+                _log.Info($"fast-start body ignored as stale expected={expectedTrackUri} current={current} bodyTrack={h.TrackUri} file={h.FileIdHex}");
+            }
+            else if (_currentKind == PlayableKind.Video)
+            {
+                // The user switched THIS track to video while its encrypted body was still resolving. The audio host has been
+                // stopped by the swap; feeding it a body now would hand a stopped decoder work it must not do (and risks a
+                // second stream). The body is simply dropped — a swap back to audio reloads from scratch.
+                _log.Info($"fast-start body dropped — {expectedTrackUri} is now playing as video (file={h.FileIdHex})");
             }
             else
             {
-                _log.Info($"fast-start body ignored as stale expected={expectedTrackUri} current={current} bodyTrack={h.TrackUri} file={h.FileIdHex}");
+                _log.Info($"fast-start body ready track={expectedTrackUri} file={h.FileIdHex}; supplying to audio host");
+                _audioHost.SupplyBody(h);   // audio-specific: this flow is only scheduled from the audio fast-start path
             }
         }
         catch (OperationCanceledException)
@@ -1183,11 +1246,18 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
 
         // Milestone B: point the ONE current-media host at the kind this playable needs (stopping the outgoing host first on
         // a real host boundary), then load kind-specifically. Audio/LocalFile keep the audio host + its fast-start path below.
-        var mediaKind = await SwitchCurrentMediaAsync(cur).ConfigureAwait(false);
+        var mediaKind = SwitchCurrentMedia(cur);
         if (mediaKind == PlayableKind.Video)
         {
-            await LoadAndPlayVideoAsync(cur, kind, mediaId, bitrateKbps, audioFormat, durationMs, fileId, resumePositionMs, ct).ConfigureAwait(false);
-            return;
+            if (await LoadAndPlayVideoAsync(cur, kind, mediaId, bitrateKbps, audioFormat, durationMs, fileId, resumePositionMs, ct).ConfigureAwait(false))
+                return;
+            // No playable video source for this track (the account isn't served one, the manifest resolve failed, or the hooks
+            // are unwired). Fall back to AUDIO for this playable rather than leaving the user in silence: re-point the host at
+            // audio and continue down the normal audio path below. The audio host was stopped by the swap above, so this is a
+            // clean load — never two decoders.
+            _log.Info($"no playable video source for {cur.Uri} — falling back to audio for this playable");
+            SwitchHost(_audioHost);
+            _currentKind = MediaSwitchLogic.KindOf(false, cur.Origin == TrackOrigin.Local);
         }
 
         if (_fast is not null)
@@ -1226,36 +1296,41 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     }
 
     // Load + start the current VIDEO playable on the swapped-in video host. The resolved PopOutVideoSource is obtained via the
-    // injected LoadCurrentVideoAsync hook (the async PlaybackBridge.ResolveVideoSource → FluentVideoMediaHost.LoadVideo handoff)
-    // so the portable controller never references the SpotifyLive video types. Prepared-next / crossfade are skipped across a
-    // video boundary (MediaSwitchLogic.AllowCrossfade is false for any video pair). Caller holds _lock.
-    async Task LoadAndPlayVideoAsync(Track cur, EvKind kind, byte[]? mediaId, int bitrateKbps, string audioFormat,
+    // injected LoadCurrentVideoAsync hook (the async PlaybackBridge resolve → FluentVideoMediaHost.LoadVideo handoff) so the
+    // portable controller never references the SpotifyLive video types. THE HOST OWNS THE PLAYER: this controller never sees a
+    // MediaPlayer, and the mounted video surface only PRESENTS the host's player — which is why a placement flip no longer
+    // rebuilds (and restarts) it. Prepared-next / crossfade are skipped across a video boundary (MediaSwitchLogic.AllowCrossfade
+    // is false for any video pair). Returns TRUE when the video was handled (started, or failed with an error already
+    // surfaced) and FALSE when there is simply no playable video source, so the caller falls back to audio.
+    // Caller holds _lock.
+    async Task<bool> LoadAndPlayVideoAsync(Track cur, EvKind kind, byte[]? mediaId, int bitrateKbps, string audioFormat,
         long durationMs, byte[]? fileId, long resumePositionMs, CancellationToken ct)
     {
-        bool loaded = false;
-        if (LoadCurrentVideoAsync is { } loadVideo)
+        if (LoadCurrentVideoAsync is not { } loadVideo)
         {
-            try { loaded = await loadVideo(cur, ct).ConfigureAwait(false); }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex) { ReportPlaybackError(ex); return; }
-        }
-        else
-        {
-            // TODO(B-wire): no video-load hook wired — the async PopOutVideoSource handoff (PlaybackBridge.ResolveVideoSource
-            // → FluentVideoMediaHost.LoadVideo, injected via LoadCurrentVideoAsync by the live app bootstrap) must supply the
-            // resolved source here. Until then a video playable cannot start; the audio path is entirely unaffected.
-            _log.Info($"video playable but LoadCurrentVideoAsync is not wired — cannot start video track={cur.Uri} (see TODO B-wire)");
+            // Hooks unwired (unit tests / audio-only build — in which case ShouldPlayAsVideo is null too and we never get
+            // here). Report "no source" so the caller plays the track as audio.
+            _log.Info($"video playable but LoadCurrentVideoAsync is not wired — playing {cur.Uri} as audio");
+            return false;
         }
 
-        if (loaded)
+        try
         {
-            _currentHost.Play();
-            if (resumePositionMs > 0) _currentHost.Seek(resumePositionMs);
+            if (!await loadVideo(cur, ct).ConfigureAwait(false)) return false;
         }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) { ReportPlaybackError(ex); return true; }   // handled (surfaced) — do not also start audio
+
+        _currentHost.Play();
+        // The video starts at ITS OWN 0 and a resume position is honored only when the caller explicitly asked for one (a
+        // retry checkpoint on the same video). A kind SWITCH never passes one — see RefreshCurrentMediaKindAsync: the audio
+        // and video timelines are different edits and are not comparable, so we deliberately do not seek across the boundary.
+        if (resumePositionMs > 0) _currentHost.Seek(resumePositionMs);
         // Publish the track change even while the video source is still opening — the projection is source-agnostic (position
         // comes from the host clock; duration from Track.DurationMs). A video boundary is a hard cut: no prepared-next warm.
         Emit(BuildEvent(kind, cur, Math.Max(0, resumePositionMs), mediaId, bitrateKbps, audioFormat, durationMs, fileId));
         MaybeStartContinuationFetch();
+        return true;
     }
 
     void MaybeStartContinuationFetch()
@@ -1600,13 +1675,13 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     void SchedulePreparedNext(string reason)
     {
         if (_preparedHost is null) return;
-        // Milestone B: the prepared-next / crossfade path is an AUDIO-host capability. While a VIDEO is the current media
-        // there is no audio host to prepare on — bail (a swap back to audio re-schedules from LoadAndPlayCurrent). This is a
-        // no-op on the unchanged audio path (_currentKind stays Audio when ShouldPlayAsVideo is unwired).
-        if (_currentKind == PlayableKind.Video) return;
 
         var current = _snap.Current;
-        var next = current is null ? null : _session.PreviewNext();
+        // Milestone B: the prepared-next / crossfade path is an AUDIO-host capability. While a VIDEO is the current media
+        // there is nothing to prepare — fall through with next = null so any PRIOR prepared token is CANCELLED rather than
+        // left dangling on a host that has been stopped (a swap back to audio re-schedules from LoadAndPlayCurrent). This is
+        // a no-op on the unchanged audio path (_currentKind stays Audio when ShouldPlayAsVideo is unwired).
+        var next = _currentKind == PlayableKind.Video || current is null ? null : _session.PreviewNext();
         // Never prepare an audio hand-off INTO a video track — that boundary is a hard cut (AllowCrossfade is false).
         if (next is not null && KindFor(next.Track) == PlayableKind.Video) next = null;
         bool allowOverlap = current is not null && next is not null && _snap.Repeat != RepeatMode.Track

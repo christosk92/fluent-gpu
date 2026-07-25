@@ -101,12 +101,16 @@ public sealed class ConnectStateBuilder
 
     /// <summary>Serialize a PutStateRequest from OUR local playback snapshot (null = empty player_state, for the initial
     /// NewConnection announce). Matches the DeviceStatePublisher's builder delegate. <paramref name="nowMs"/> overridable
-    /// for deterministic tests.</summary>
-    public byte[] BuildPutState(PutStateReasonKind reason, LocalPlaybackSnapshot? snap, uint messageId, bool isActive, long? nowMs = null)
+    /// for deterministic tests. <paramref name="currentKind"/> is the controller's LIVE media kind
+    /// (<c>PlaybackController.CurrentMediaKind</c>) and makes the current track's <c>track_player</c> truthful — video iff the
+    /// video host is what is actually playing. Null (the default) keeps the legacy per-track wire heuristic, for callers that
+    /// genuinely do not know the kind.</summary>
+    public byte[] BuildPutState(PutStateReasonKind reason, LocalPlaybackSnapshot? snap, uint messageId, bool isActive,
+        long? nowMs = null, PlayableKind? currentKind = null)
     {
         long ts = nowMs ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         if (snap is { } sv) SetVolume((int)Math.Round(Math.Clamp(sv.Volume01, 0, 1) * MaxVolume));   // DeviceInfo.Volume from our live volume
-        var ps = snap is { } s ? BuildPlayerState(s, ts) : new ProtoPlayerState { Timestamp = ts };
+        var ps = snap is { } s ? BuildPlayerState(s, ts, currentKind) : new ProtoPlayerState { Timestamp = ts };
         var req = new PutStateRequest
         {
             MemberType = MemberType.ConnectState,
@@ -134,7 +138,7 @@ public sealed class ConnectStateBuilder
         return req.ToByteArray();
     }
 
-    static ProtoPlayerState BuildPlayerState(LocalPlaybackSnapshot s, long ts)
+    static ProtoPlayerState BuildPlayerState(LocalPlaybackSnapshot s, long ts, PlayableKind? currentKind = null)
     {
         string contextUri = s.ContextUri ?? "";
         string feature = FeatureOf(contextUri, s.ContextMetadata);
@@ -158,7 +162,8 @@ public sealed class ConnectStateBuilder
             PlaybackId = s.PlaybackId,
             SessionId = s.SessionId,
             QueueRevision = s.QueueRevision ?? "",
-            Track = ToProvided(s.Track, contextUri, s.InteractionId, s.PageInstanceId),
+            // Only the CURRENT track carries the live media kind — prev/next are not the current media.
+            Track = ToProvided(s.Track, contextUri, s.InteractionId, s.PageInstanceId, currentKind),
             Index = new ContextIndex { Track = (uint)Math.Max(0, s.ContextIndex) },
             Options = new ContextPlayerOptions
             {
@@ -192,7 +197,8 @@ public sealed class ConnectStateBuilder
         return ps;
     }
 
-    static ProvidedTrack ToProvided(in SnapshotTrack t, string contextUri, string interactionId, string pageInstanceId)
+    static ProvidedTrack ToProvided(in SnapshotTrack t, string contextUri, string interactionId, string pageInstanceId,
+        PlayableKind? currentKind = null)
     {
         var pt = new ProvidedTrack
         {
@@ -234,15 +240,19 @@ public sealed class ConnectStateBuilder
             AddIfMissing(meta, "actions.skipping_prev_past_track", "resume");
             AddIfMissing(meta, "actions.skipping_next_past_track", "resume");
         }
-        // bug 6: report the correct player for the current media kind. A video track advertises track_player="video" so
-        // remote controllers render it as a video; audio + local files report "audio" (the single source of truth is
-        // MediaSwitchLogic.TrackPlayer). LocalFile can't be distinguished from Audio on the wire snapshot, and both play
-        // through the audio host, so mapping non-video → Audio is exact.
-        AddIfMissing(meta, "track_player", MediaSwitchLogic.TrackPlayer(isVideo ? PlayableKind.Video : PlayableKind.Audio));
+        // bug 6 / M0: report the correct player for the current media kind. The single source of truth is
+        // MediaSwitchLogic.TrackPlayer. For the CURRENT track the caller supplies the controller's LIVE kind, which is
+        // AUTHORITATIVE (it names the host that is actually decoding) — so it OVERWRITES any track_player the wire snapshot
+        // carried: a video-capable track played as audio must report "audio", or remote controllers render the wrong player.
+        // Without a kind (prev/next rows, the empty NewConnection announce) we fall back to the per-track wire heuristic.
+        // LocalFile can't be distinguished from Audio on the wire snapshot, and both play through the audio host, so mapping
+        // non-video → Audio is exact.
+        if (currentKind is { } kind) meta["track_player"] = MediaSwitchLogic.TrackPlayer(kind);
+        else AddIfMissing(meta, "track_player", MediaSwitchLogic.TrackPlayer(isVideo ? PlayableKind.Video : PlayableKind.Audio));
         // A video also carries media.manifest_id so remotes know which manifest is playing. The resolved id
         // (PopOutVideoSource.Key) rides in the queue-entry metadata (copied wholesale into `meta` above) once attached.
-        // TODO(B-wire): the controller/bridge must stamp the resolved PopOutVideoSource.Key into the QueueEntry.Metadata as
-        // "media.manifest_id" at the video switch; this only forwards a manifest id the resolver already put on the entry.
+        // TODO(M1+): nothing stamps the resolved PopOutVideoSource.Key into QueueEntry.Metadata as "media.manifest_id" yet, so
+        // this forwards only a manifest id the resolver already put on the entry. Kept as-is (forward-if-present) by M0.
         if (isVideo && t.Metadata is { } vm && vm.TryGetValue("media.manifest_id", out var manifestId) && !string.IsNullOrEmpty(manifestId))
             AddIfMissing(meta, "media.manifest_id", manifestId);
         AddIfMissing(meta, "interaction_id", interactionId);

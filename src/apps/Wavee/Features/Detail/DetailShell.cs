@@ -103,8 +103,6 @@ sealed class DetailShell : Component
         var go = UseContext(HistoryStore.NavCtx);
         var shellTint = UseContext(ShellTint.Slot);
         var navPreview = UseContext(NavPreviewStore.Slot);   // in-app card nav stashes a preview → destination reconciles in place
-        var shellUi = UseContext(ShellUi.Slot);              // rail layout-defer lock (Task C): gate mode churn during a rail reflow
-        bool railLocked = shellUi?.RailLayoutLocked.Value ?? false;   // subscribe → flush the settled mode when the lock clears
 
         var route = _route.Value;                      // subscribe → re-derive kind/cfg/morphKey on a detail-route swap (reused slot)
         var (kind, id) = DetailPage.ParseDetail(route);
@@ -258,20 +256,6 @@ sealed class DetailShell : Component
         // branch so single-column / vertical pages don't take a needless re-render on every resize.
         var viewportSig = UseContextSignal(Viewport.Size);
 
-        // Task C flush: when the rail layout-lock clears, apply the SETTLED mode once from the last measured width (the
-        // intermediate reflow widths were skipped in Measure while locked). Keyed on railLocked so it fires on the
-        // false-edge only; the write converges (dep is the bool, unchanged by writing _mode). Unconditional + placed
-        // BEFORE the single-column early return so the hook order stays stable across the layout branches.
-        UseLayoutEffect(() =>
-        {
-            if (!railLocked && _measuredW > 0f)
-            {
-                int md = ModeFor(_measuredW, _mode.Peek(), _modeInitialized);
-                _modeInitialized = true;
-                if (md != _mode.Peek()) _mode.Value = md;
-            }
-        }, railLocked);
-
         // Single-column fallback: just the track table, full width, no rail / no wash.
         if (!_cfg.TwoColumn)
             return Embed.Comp(() => new TrackList(_route, _model, bridge, handlers, liveHandlers: _liveHandlers))
@@ -282,16 +266,15 @@ sealed class DetailShell : Component
         {
             if (r.W <= 0f) return;
             _measuredW = r.W;
-            if (shellUi?.RailLockActive == true) return;
             int md = ModeFor(r.W, _mode.Peek(), _modeInitialized);
             _modeInitialized = true;
             if (md != _mode.Peek()) _mode.Value = md;
         }
         int mode = _mode.Value;   // subscribe → re-render on mode change
         // Self-heal (fail-safe #2, mirroring TrackList's tier clamp): never RENDER a mode wider than the last measured
-        // width supports — a stale mode signal (stuck rail lock / lost flush) would keep the two-column layout at a
-        // width where its rail + tracks cannot coexist. Narrower-than-needed is fine; the next Measure widens it.
-        if (_measuredW > 0f && shellUi?.RailLockActive != true) { int fit = ModeFor(_measuredW, mode, _modeInitialized); if (fit > mode) mode = fit; }
+        // width supports — a stale mode signal would keep the two-column layout at a width where its rail + tracks
+        // cannot coexist. Narrower-than-needed is fine; the next Measure widens it.
+        if (_measuredW > 0f) { int fit = ModeFor(_measuredW, mode, _modeInitialized); if (fit > mode) mode = fit; }
         // Page-layout preference: "Hero" forces the vertical hero SYSTEM at every width for track pages — the
         // metadata rail is never composed; Automatic keeps the responsive rail↔hero behavior. The override is applied
         // at render time only (the _mode signal keeps tracking the real width, so flipping the setting back reverts

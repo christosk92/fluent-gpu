@@ -75,7 +75,13 @@ sealed class ProfileMenu : Component
                     onPalette: SetPalette,
                     onLogout: () => { Close(); ConfirmLogout(); }),
                 FlyoutPlacement.BottomEdgeAlignedRight,
-                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss, Chrome: PopupChrome.Popup)
+                // MENU chrome, not FlyoutPresenter: the body IS a MenuFlyout (an account header over
+                // MenuFlyout.Create rows + a Palette sub-menu), so it takes MenuPopupThemeTransition — the anchored
+                // 250ms unfold with the content readable from the first frame, over a windowed DWM-acrylic popup.
+                // PopupChrome.Popup would give it the ordinary-Flyout PopupThemeTransition instead: 83ms of nothing,
+                // then an 83ms fade across a 367ms 50px slide (uxtheme TAS_SHOWPOPUP) — correct for arbitrary flyout
+                // CONTENT, wrong for a menu, and visibly unlike every other menu in the shell.
+                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss, Chrome: PopupChrome.Flyout)
                 {
                     ConstrainToRootBounds = false,
                 });
@@ -119,7 +125,9 @@ sealed class ProfileMenu : Component
             Direction = 1,
             MinWidth = MenuWidth,
             MaxWidth = MenuWidth,
-            Padding = new Edges4(0, 8, 0, 8),
+            // 6 + the menu presenter's own MenuFlyoutPresenterThemePadding (0,2,0,2, applied by FlyoutSurface's
+            // Flyout branch) = the 8px inset this card has always had.
+            Padding = new Edges4(0, 6, 0, 6),
             Children =
             [
                 AccountHeader(name, premium, avatar, email),

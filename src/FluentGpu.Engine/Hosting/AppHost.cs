@@ -214,6 +214,13 @@ public sealed class AppHost : IDisposable
     // reaper (TickDetachedHosts) just before Dispose(). _onClosedFired guards against any double-fire.
     private Action? OnClosed;
     private bool _onClosedFired;
+    // On a detached CHILD host: the SETTLED move/resize callback. The parent's reaper samples the window rect each frame
+    // and fires this only once the rect has stopped changing, so an owner that persists geometry writes once per gesture
+    // instead of once per pixel of a drag.
+    private Action<RectF>? BoundsChanged;
+    private RectF _lastBoundsPx;
+    private int _boundsSettleFrames;
+    private bool _boundsDirty;
 
     // E4 windowed out-of-bounds popups: one slot per leased popup window (see PopupWindowSlot).
     private readonly List<PopupWindowSlot> _popupWindows = new(2);
@@ -828,14 +835,34 @@ public sealed class AppHost : IDisposable
         var desc = new WindowDesc(request.Title, request.InitialSizeDip, scale, Composited: true);
         var win = _app.CreateWindow(desc);
 
-        // A 16:9-ish client floor so the mini-player can never be dragged down to an unusable sliver.
-        win.SetMinClientSizePx(new Size2(320f, 180f));
+        // A 16:9-ish client floor so the mini-player can never be dragged down to an unusable sliver (caller-overridable).
+        var minDip = request.MinClientSizeDip;
+        win.SetMinClientSizePx(minDip.Width > 0f && minDip.Height > 0f
+            ? new Size2(minDip.Width * scale, minDip.Height * scale)
+            : new Size2(320f, 180f));
 
-        // Open at the bottom-right of the work area of the monitor the parent lives on (a picture-in-picture home),
-        // fully on-screen, instead of the CW_USEDEFAULT cascade. Falls back to CW_USEDEFAULT when the work area is
-        // unavailable (headless / query failure → RectF.Infinite).
-        var work = _app.GetWorkArea(_window.ClientOriginPx);
-        if (!work.IsInfinite)
+        // A RESTORED placement wins (the user put it there last time), clamped into the work area of the monitor nearest
+        // to it — so a window remembered on a display that has since been unplugged still opens somewhere visible instead
+        // of off-screen. Otherwise open at the bottom-right of the parent's monitor (a picture-in-picture home), fully
+        // on-screen, instead of the CW_USEDEFAULT cascade. Falls back to CW_USEDEFAULT when the work area is unavailable
+        // (headless / query failure → RectF.Infinite).
+        var restored = request.InitialBoundsPx;
+        bool haveRestored = restored.W > 1f && restored.H > 1f;
+        var work = _app.GetWorkArea(haveRestored
+            ? new Point2(restored.X + restored.W * 0.5f, restored.Y + restored.H * 0.5f)
+            : _window.ClientOriginPx);
+        if (haveRestored)
+        {
+            if (!work.IsInfinite)
+            {
+                float w = MathF.Min(restored.W, work.W), h = MathF.Min(restored.H, work.H);
+                float x = MathF.Min(MathF.Max(restored.X, work.X), work.X + work.W - w);
+                float y = MathF.Min(MathF.Max(restored.Y, work.Y), work.Y + work.H - h);
+                win.SetBoundsPx(new RectF(x, y, w, h));
+            }
+            else win.SetBoundsPx(restored);
+        }
+        else if (!work.IsInfinite)
         {
             float wPx = request.InitialSizeDip.Width * scale;
             float hPx = request.InitialSizeDip.Height * scale;
@@ -890,7 +917,31 @@ public sealed class AppHost : IDisposable
                 continue;
             }
             child.RunFrame();
+            child.SampleDetachedBounds();
         }
+    }
+
+    // Detached CHILD host, UI thread: sample the window rect and raise BoundsChanged once it has SETTLED. Only runs while
+    // a detached window is open, and only when someone is listening — one cheap GetWindowRect per frame in that case.
+    private void SampleDetachedBounds()
+    {
+        if (BoundsChanged is null) return;
+        var now = _window.OuterBoundsPx;
+        if (now.W <= 1f || now.H <= 1f) return;   // backend cannot report bounds → nothing to settle
+        if (now != _lastBoundsPx)
+        {
+            _lastBoundsPx = now;
+            _boundsSettleFrames = 0;
+            _boundsDirty = true;
+            return;
+        }
+        if (!_boundsDirty) return;
+        // ~10 frames of stillness = the gesture is over. Anything shorter fires mid-drag; anything much longer loses the
+        // last position if the app exits immediately after a move.
+        if (++_boundsSettleFrames < 10) return;
+        _boundsDirty = false;
+        _boundsSettleFrames = 0;
+        BoundsChanged?.Invoke(now);
     }
 
     // ── detached-window render routing (parent host; runs THROUGH the parent's single render thread) ─────────────────────
@@ -973,6 +1024,10 @@ public sealed class AppHost : IDisposable
         public void Close() => _window.CloseWindow();   // WM_CLOSE → IsClosed → reaped by TickDetachedHosts
         // Reads/writes the child host's field so the parent's reaper (which holds the child, not the handle) fires it.
         public Action? OnClosed { get => _child.OnClosed; set => _child.OnClosed = value; }
+        public RectF BoundsPx => _window.OuterBoundsPx;
+        public void SetTitle(string title) => _window.SetTitle(_child._strings.Intern(title));
+        // Same indirection as OnClosed: the reaper samples the CHILD, so the callback must live on the child host.
+        public Action<RectF>? BoundsChanged { get => _child.BoundsChanged; set => _child.BoundsChanged = value; }
     }
 
     /// <summary>Probe/diagnostic only: a live shared-element (connected-animation) key, so a harness can trigger a REAL Hero fly.</summary>
@@ -1578,6 +1633,8 @@ public sealed class AppHost : IDisposable
         _inputHooks.WindowSetFullscreen = _window.SetFullscreen;
         _inputHooks.WindowClose = _window.CloseWindow;
         _inputHooks.OpenDetachedWindow = OpenDetachedWindow;   // pop-out video window (guarded: a child host / async / headless returns null)
+        // The same guard, askable in advance, so an affordance can offer or withhold the option instead of dead-clicking.
+        _inputHooks.CanOpenDetachedWindow = () => !_isDetachedChild && !_isHeadless && _device.SupportsSecondarySwapchains;
         _inputHooks.SetTitleBarRegions = (regions, count) => _window.SetTitleBarRegions(regions.AsSpan(0, count));
         _inputHooks.GetNodeRect = _scene.AbsoluteRect;
         var chromeEpoch = new Signal<int>(0);
@@ -2332,7 +2389,8 @@ public sealed class AppHost : IDisposable
             long tLayout = Stopwatch.GetTimestamp();
             if (s_allocDiag) { db = Probe(SegLayout, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
-            if (capturedProjections) ApplyProjections();       // FLIP "Last+Invert+Play"
+            bool keepAliveSuppressed = _reconciler.ConsumeKeepAliveLayoutSuppressionFrame();
+            if (capturedProjections) ApplyProjections(keepAliveSuppressed);       // FLIP "Last+Invert+Play"
             // fps consistency (root fix): if the loop paced INTO this frame from a throttled (ambient 30 Hz) or idle
             // cadence AND this frame now drives interactive or one-shot motion (scroll/hover/drag/repeat, or a
             // connected-animation fly / non-loop transition), the frame clock's pending delta is the stale throttle gap,
@@ -2783,8 +2841,8 @@ public sealed class AppHost : IDisposable
     }
 
     /// <summary>Place a leased popup window: bounds arrive in main-window DIP (the overlay's placement space); the
-    /// host converts to physical virtual-screen px (client origin + scale), resizes the popup swapchain, and shows the
-    /// window (never activating — focus stays here).</summary>
+    /// host converts to physical virtual-screen px (client origin + scale), resizes the popup swapchain, and seeds its
+    /// chrome while the window remains hidden. The first successful popup present reveals it without activation.</summary>
     private void SetPopupWindowBounds(int token, RectF dipBounds, bool opensUp, float closedRatio)
     {
         for (int i = 0; i < _popupWindows.Count; i++)
@@ -2809,10 +2867,7 @@ public sealed class AppHost : IDisposable
             // is masked to it; the engine draws the plate/border/items there too (recorded at the inset origin).
             var contentPx = new RectF(insL * s, insT * s, dipBounds.W * s, dipBounds.H * s);
             slot.Swapchain?.ConfigurePopupChrome(new PopupChromeMetrics(
-                contentPx, opensUp, closedRatio > 0f ? closedRatio : 0.5f, 8f * s, 1f * s));
-            bool firstShow = !slot.Window.IsShown;
-            if (firstShow) slot.Window.Show();
-            if (firstShow) slot.Swapchain?.AnimatePopupOpen();
+                contentPx, opensUp, MathF.Max(0f, closedRatio), 8f * s, 1f * s));
             WakeFrame();
             return;
         }
@@ -2874,6 +2929,14 @@ public sealed class AppHost : IDisposable
                     _device.SubmitDrawList(slot.DrawList.Bytes, slot.DrawList.SortKeys,
                         new FrameInfo(sc.SizePx, _window.Scale, ColorF.Transparent), sc);
                     sc.Present();
+                    // Atomic creation: the popup HWND stays hidden until its swapchain contains the seeded first frame.
+                    // This prevents an uninitialized/full-opacity plate from flashing before the engine/compositor
+                    // entrance state exists.
+                    if (!slot.Window.IsShown)
+                    {
+                        slot.Window.Show();
+                        sc.AnimatePopupOpen();
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -2951,7 +3014,7 @@ public sealed class AppHost : IDisposable
         => System.Console.Error.WriteLine(
             $"[motion-diag]   node={idx} {outcome} from=({f.X:0.0},{f.Y:0.0},{f.W:0.0},{f.H:0.0}) to=({t.X:0.0},{t.Y:0.0},{t.W:0.0},{t.H:0.0})");
 
-    private void ApplyProjections()
+    private void ApplyProjections(bool keepAliveSuppressed = false)
     {
         // Deadbands: below these the commit didn't move/resize the node WITHIN ITS PARENT, so it must ride any
         // ancestor reflow rigidly. The skip is required for correctness, not a fast path — AnimateBounds on a
@@ -2965,7 +3028,7 @@ public sealed class AppHost : IDisposable
         //    just laid out so bounds track the pointer with no stale translate/overlap.
         //  • ReducedMotion is a separate ACCESSIBILITY preference (gate-covered): it keeps its 1ms-tween snap and still
         //    lets opacity/etc. animate — behaviour left exactly as before.
-        bool suppressed = Motion.LayoutTransitionsSuppressed;
+        bool suppressed = Motion.LayoutTransitionsSuppressed || keepAliveSuppressed;
         bool reduced = Motion.ReducedMotion;
 
         // Discover changed containers that explicitly own the visual projection for their subtree. A shell/card width

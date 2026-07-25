@@ -50,7 +50,8 @@ sealed class LibrarySortView : Component
                 () => anchor.Value,
                 () => Embed.Comp(() => new LibrarySortPanel(_sort, _desc, _view, _size, _hasCreator, _hasRelease)),
                 FlyoutPlacement.BottomEdgeAlignedLeft,
-                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
+                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss, Chrome: PopupChrome.Popup)
+                { ConstrainToRootBounds = false });
             handle.Value.ClosedAction = () => handle.Value = null;
         }
 
@@ -99,12 +100,10 @@ sealed class LibrarySortPanel : Component
             rows.Add(SelectorBar.Create(["S", "M", "L"], _size));
         }
 
-        // A frosted WinUI flyout surface (acrylic + 1px flyout stroke + flyout shadow), NOT a solid plate — lighter than Ui.Layer.
+        // PopupChrome.Popup supplies the one WinUI FlyoutPresenter acrylic, stroke, corners, and shadow.
         return new BoxEl
         {
             Direction = 1, Gap = 1f, MinWidth = 230f, Padding = new Edges4(Spacing.XS, Spacing.XS, Spacing.XS, Spacing.XS),
-            Corners = CornerRadius4.All(Radii.Card), ClipToBounds = true, Shadow = Elevation.Flyout,
-            Acrylic = Tok.AcrylicFlyout, BorderWidth = 1f, BorderColor = Tok.StrokeFlyoutDefault,
             Children = rows.ToArray(),
         };
     }

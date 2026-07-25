@@ -67,7 +67,8 @@ internal static class PlaylistPickerLauncher
             anchor,
             () => Embed.Comp(() => new PlaylistPickerPanel { GetTracks = getTracks, Close = () => handle.Value?.Close() }),
             placement,
-            new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
+            new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss, Chrome: PopupChrome.Popup)
+            { ConstrainToRootBounds = false });
         handle.Value.ClosedAction = () => handle.Value = null;
     }
 }
