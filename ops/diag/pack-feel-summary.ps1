@@ -310,7 +310,14 @@ foreach ($ord in $phaseOrdinals) {
   # i2 packs BOTH counts: low 16 = our stamp-derived missed slots, high 16 = the OS-attested count biased by +1
   # (0 = not attested). Where the attested count exists it SUPERSEDES ours - it is what the display pipeline did,
   # not what our post-Present timestamp implies - so they are reported side by side and never averaged together.
-  $missed = @($warm | ForEach-Object { [int]$_.i2 -band 0xFFFF })
+  # IDLE-GAP EXCLUSION. A latency row is emitted per scroll-active frame, and missedVsyncs is derived from the
+  # interval since the previous PRESENT. The first row after a pause therefore measures the pause, not a stall:
+  # an 18 s gap between gestures reported 2194 "missed slots" in a real bundle, which is not a hitch, it is a
+  # human reading the screen. Drop any sample whose own present interval exceeds ~6 refresh periods; those are
+  # gap boundaries by construction, and a genuine stall that long would also be reported by every other metric.
+  $gapCutoffMs = 100.0
+  $missed = @($warm | Where-Object { (Num $_.f4) -le $gapCutoffMs } | ForEach-Object { [int]$_.i2 -band 0xFFFF })
+  $missedGapsDropped = $warm.Count - $missed.Count
   $attestedRaw = @($warm | ForEach-Object { ([int]$_.i2 -shr 16) -band 0xFFFF } | Where-Object { $_ -gt 0 })
   $attestedSum = $null; $attestedMax = $null; $attestedFrames = $attestedRaw.Count
   if ($attestedFrames -gt 0) {
@@ -363,6 +370,7 @@ foreach ($ord in $phaseOrdinals) {
       presentIntervalMsMeanPlus2Sd = $meanPlus2Sd
       missedVsyncsSum = (($missed | Measure-Object -Sum).Sum)
       missedVsyncsMax = (($missed | Measure-Object -Maximum).Maximum)
+      missedVsyncsGapSamplesExcluded = $missedGapsDropped
       frameOverrunMs = $(if ($insufficient) { NotMeasured $insufficientReason } else { Stats(@($warm | ForEach-Object { (Num $_.f2) })) })
       clockSampleSkewMs = $(if ($insufficient) { NotMeasured $insufficientReason } else { Stats(@($warm | ForEach-Object { (Num $_.f3) })) })
       overrunFrames = $overrunHere
@@ -470,8 +478,13 @@ AddBucket 'clockSampling' `
   $(if ($phaseSummaries.Count -eq 0) { 'insufficientData' } elseif ($skewFlagged -gt 0) { 'likelyContributor' } else { 'refuted' }) `
   "$skewFlagged of $($phaseSummaries.Count) phases flagged"
 
-# Rank by MEASURED tag frequency, not by a hardcoded order. Multi-label, so the total may exceed 100%.
-$ranked = @($buckets | Where-Object { $_.verdict -eq 'likelyContributor' } | Sort-Object -Property taggedFrames -Descending | ForEach-Object { $_.name })
+# Surviving buckets, NOT ranked by taggedFrames. That sort was wrong and actively misleading: taggedFrames means
+# a different thing per bucket - scrollBindThrash carries a peak binds-per-frame (22), clockSampling carries a
+# count of PHASES (0-7), the stage buckets carry frame counts in the thousands - so ordering them against each
+# other compared apples to oranges and put whichever bucket happened to use the largest unit on top. A reader
+# would then "fix" the first entry. Each bucket carries its own evidence string; read them individually, and use
+# fixOrder below for sequencing, which is causal (upstream first) rather than numeric.
+$ranked = @($buckets | Where-Object { $_.verdict -eq 'likelyContributor' } | ForEach-Object { $_.name })
 $noDominant = ($ranked.Count -eq 0)
 
 # ── did the session even reproduce the complaint? ────────────────────────────────────────────────────────────
@@ -531,6 +544,9 @@ $summary = [ordered]@{
   phases = @($phaseSummaries)
   buckets = @($buckets)
   globalVerdict = [ordered]@{
+    # Unordered on purpose - see the comment where $ranked is built. The key keeps its name for compatibility
+    # with existing readers, but the list is no longer sorted and must not be read as a priority order.
+    likelyContributorsUnranked = @($ranked)
     rankedLikelyContributors = @($ranked)
     noDominantStage = $noDominant
     # Detection starts at the present side because that is where the symptom shows. FIXING starts upstream: a span
@@ -558,7 +574,7 @@ else {
     Write-Host "    Every scored phase came back 4-5: THE SESSION DID NOT REPRODUCE THE COMPLAINT." -ForegroundColor Yellow
     Write-Host "    That is a successful run. Report it and re-capture when the problem is present." -ForegroundColor Yellow
   }
-  Step "Ranked likely contributors (multi-label; totals may exceed 100%)"
+  Step "Surviving likely contributors - UNORDERED (multi-label; read each bucket's own evidence, and use fixOrder for sequencing)"
   if ($noDominant) { Info "none - noDominantStage. The tool declines to name a suspect." }
   else { foreach ($r in $ranked) { Info $r } }
 }
