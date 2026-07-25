@@ -34,6 +34,12 @@ public sealed class RenderThread : IDisposable
     private readonly DeviceLostCoordinator? _deviceLost;
     private readonly Action? _recover;      // runs ON this thread: _device.RecoverDevice() under AssertRender
     private readonly Action? _windowWake;   // thread-safe UI wake (PostMessage WM_NULL) to nudge the UI out of its clean block
+    // Present-ack wake: fired right after each successful present so a UI thread parked on the display-phase gate resumes
+    // in time to produce the NEXT frame. This is the phase reference the async flip removed — before it, Present() ran on
+    // the UI thread and the vsync block itself paced the loop; after it, the UI had only a wall-clock timer, which drifts
+    // against the vblank. Kept separate from _windowWake because that one must fire unconditionally (device-lost
+    // recovery), whereas this one is per-present and the host elides it when nothing is waiting.
+    private readonly Action? _presentWake;
     // Detached-window routing: after draining the parent host's OWN seam each turn, drain any registered CHILD host seams
     // (pop-out video windows) on THIS render thread, so a second AppHost's swapchain presents through the ONE render thread
     // that owns the shared device's submit/present (never a second render thread → no undetected _cmdList/_queue/_fence race).
@@ -47,7 +53,7 @@ public sealed class RenderThread : IDisposable
 
     public RenderThread(SceneFramePublisher publisher, Action<RenderFrame> submitPresent, bool async = false,
                         DeviceLostCoordinator? deviceLost = null, Action? recover = null, Action? windowWake = null,
-                        Action? extraDrain = null)
+                        Action? extraDrain = null, Action? presentWake = null)
     {
         _publisher = publisher;
         _submitPresent = submitPresent;
@@ -55,6 +61,7 @@ public sealed class RenderThread : IDisposable
         _deviceLost = deviceLost;
         _recover = recover;
         _windowWake = windowWake;
+        _presentWake = presentWake;
         _extraDrain = extraDrain;
         _thread = new Thread(Loop) { Name = "fgpu-render", IsBackground = true };
         _thread.Start();
@@ -100,7 +107,17 @@ public sealed class RenderThread : IDisposable
             if (_publisher.TryAcquire(out var rf))   // consumer side (bound Render here)
             {
                 _submitPresent(rf);
+                // The ack MUST be published before the wake: a UI thread that woke first and re-read a stale ack would
+                // gate again and lose the slot. This write is the release half of the arm-then-recheck handshake in
+                // DisplayPhaseGate; the callback issues the matching full barrier before reading the armed flag,
+                // because store-ack/load-armed against store-armed/load-ack is a StoreLoad pair that neither x86 nor
+                // ARM orders for free.
+                //
+                // This lands one refresh period apart in steady state, NOT at CPU speed: _submitPresent blocks in the
+                // swapchain's frame-latency waitable (SetMaximumFrameLatency(1)) BEFORE it presents, so the loop above
+                // is vblank-paced and so is every wake it emits. That is precisely why the UI can trust it as a clock.
                 Volatile.Write(ref _presentAck, rf.PublishSeq);
+                _presentWake?.Invoke();
             }
             // Detached child hosts: present any freshly-published child frame on ITS own swapchain, on this same render
             // thread. Runs every turn (a child's wake may carry no parent publish, so it must not hang off the parent

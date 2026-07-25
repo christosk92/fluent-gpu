@@ -670,6 +670,71 @@ The `seam.race` soak **sweeps channel-capacity and reader-stall as fuzz paramete
 the *relationship* (consume-gated reclaim holds under arbitrary stall), not hard-code quarantine=2
 (`hardened-v1-plan.md` §4.5).
 
+### 11.1 The display-phase gate — production backpressure (LANDED)
+
+DropOldest above makes over-production *safe*. It does not make it *free*, and the cost is not the wasted
+work — it is **temporal aliasing**, which is a correctness problem for motion.
+
+Moving `Present()` to the render thread removed the UI thread's only vsync reference: in the sync path the
+present block itself paced the loop. What replaced it was a wall-clock cap (`AsyncDisplayPaceMs`), and a
+cap can bound how OFTEN the loop produces but never WHEN. Measured on a 120 Hz panel (`ops/diag` bundle
+20260725-080953, 29,867 latency rows, operator-scored): the loop woke on input, on the DirectManipulation
+pump deadline, and on the 7 ms cap, producing ~1.3 frames per present with a sample-time floor of 0.4 ms.
+Presents were metronomic (p50 8.33 ms, ~zero OS-attested missed slots, zero missed deadlines) — but which
+publish happened to be newest at each vblank varied, so the POSITIONS shown were sampled 6–15 ms apart.
+Even cadence, uneven motion: the operator scored STEADY 1–3 while GLUED scored 3–4.
+
+The gate is therefore an invariant on production, not a throttle:
+
+> **Never produce a frame while a published one is still unpresented.**
+
+`AppHost.PhaseGateBlocks()` compares `SceneFramePublisher.PublishSeq` against `RenderThread.PresentAck`
+and declines the frame (an early-out, `Rendered: false`) when one is in flight. The render thread fires a
+`presentWake` after each ack, which is the restored phase reference: `_submitPresent` blocks in the
+swapchain's frame-latency waitable (`SetMaximumFrameLatency(1)`) **before** it presents, so acks land one
+refresh apart and production inherits the display's phase.
+
+Three properties make this safe rather than a latency trade:
+
+- **Input is not gated.** The gate sits after phase-2 dispatch, so contact samples keep landing in the
+  resampler's history; the next produced frame folds all of them (`ScrollTuning.ResampleLatencyMs`).
+- **The declined frames are exactly the ones DropOldest was about to discard**, so nothing that could have
+  been seen is lost.
+- **A stall ceiling** (two measured refresh periods) keeps the gate an optimization, never a liveness
+  dependency — an occluded or stalled render thread stops acking and the loop must keep running.
+
+Async only; force-sync already blocks in `DrainSync` and headless is single-threaded, so the VerticalSlice
+gates are unperturbed.
+
+Measured after (3 paired synthetic runs, `ops/diag/analyze-cadence.py`): publishes per present
+1.29 → **1.000**, presented sample-time spread (p05–p95) 7.8 ms → **1.7 ms** on an 8.33 ms refresh, the
+sub-millisecond production floor 0.4 ms → 7.4 ms, UI frames 156/s → 119/s, present interval unchanged at
+8.30 ms.
+
+Clock-sample skew is reported **within** a run, never as "constant" off equal medians. The first
+measurement claimed constancy from three identical medians (−20.30 ms = −(refresh + `ResampleLatencyMs`));
+a histogram of the same bundles showed the distribution was in fact bimodal — 72% inside a 2 ms mode, but
+**~16% about one refresh late**. Equal medians cannot distinguish a tight single mode from a mode plus a
+tail, so the packager and analyzer both report **modal concentration** alongside the percentiles.
+
+That late tail was the gate's own lost-wake race, since fixed: the first implementation read the ack and
+*then* armed, so a present landing in between saw "not armed", skipped the wake, and the UI slept to the
+stall ceiling. The handshake is now arm-then-recheck with a full barrier on each side (`DisplayPhaseGate`),
+because a release-store followed by an acquire-load does not order StoreLoad on x86 or ARM. After the fix,
+on matched populations (3 paired runs): frames within 1 ms of the modal skew **24.9/24.6/25.7% → 92.3/93.3/
+94.0%**, and the one-refresh-late cluster fell from ~16% to ~5%. Note the skew percentiles are only emitted
+for frames that actually resampled a contact — a frame that sampled nothing has no sampling error, and
+including it produced a plausible number derived from frame-start alone.
+
+**The synthetic figures understate the problem on the path users actually complain about.** They come from
+`SendInput` wheel packets, which cannot reach DirectManipulation. The operator-scored touchpad capture
+shows a publish:present ratio of **2.24** during scroll, not 1.29 — DM drag over-produces far harder than
+a wheel chase. Cadence numbers from synthetic input bound the frame loop; they do not bound the feel.
+
+The same defect in wall-clock form applies to `AmbientFrameWaitMs`, which now anchors its deadline to the
+last present and quantizes to whole refresh periods — a 60 cap on a 120 Hz panel means "every 2nd vblank",
+not a 16.67 ms timer beating against 8.33 ms.
+
 ---
 
 ## 12. Interruptible reconcile on the UI thread — slice, carry-forward, AND discard-and-restart

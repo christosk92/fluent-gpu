@@ -87,11 +87,12 @@ public enum ScrollWriter : byte
 /// does not perturb the gesture being measured. Contrast <see cref="ScrollLog"/> (human-readable, per-event
 /// string+console writes — visibly perturbs pacing): this one is built for offline numeric analysis.
 ///
-/// CSV columns: <c>tMs,frame,kind,i0,i1,i2,f0,f1,f2,f3,f4,f5,auxMs,state</c> — tMs is ms since trace start (Stopwatch),
-/// auxMs the event's own QPC stamp mapped to the same axis (empty when the event carried none), state the packed
-/// <see cref="ScrollTraceState"/> word. NOTE <c>frame</c> is NOT a join key across artifacts (it counts Paint phase 7
-/// only, is written unsynchronised, and suppresses spin frames) — join on <c>tMs</c> or on the
-/// <see cref="ScrollTraceKind.Latency"/> row's publishSeq. Debug pays one disabled
+/// CSV columns: <c>tMs,frame,kind,i0,i1,i2,f0,f1,f2,f3,f4,f5,auxMs,state,ack</c> — tMs is ms since trace start
+/// (Stopwatch), auxMs the event's own QPC stamp mapped to the same axis (empty when the event carried none), state the
+/// packed <see cref="ScrollTraceState"/> word, and ack the render seam's acknowledged publish seq at emit (Latency
+/// rows only; blank elsewhere, and blank means NOT RECORDED rather than seq 0). NOTE <c>frame</c> is NOT a join key
+/// across artifacts (it counts Paint phase 7 only, is written unsynchronised, and suppresses spin frames) — join on
+/// <c>tMs</c>, or exactly via <c>ack</c> → the row whose publishSeq matches. Debug pays one disabled
 /// branch per guarded call. Release erases those call sites entirely unless <c>FLUENTGPU_DIAG</c> is explicitly defined.
 /// Default output: <c>%TEMP%\fg-scrolltrace.csv</c> (overwritten per run).
 /// </summary>
@@ -130,6 +131,7 @@ public static class ScrollTrace
         public int I0, I1, I2;
         public float F0, F1, F2, F3, F4, F5;
         public int State;           // packed ScrollTraceState slots as of this record (see SetState)
+        public int Ack;             // Latency rows only: the render seam's acknowledged publish seq (low 32) at emit
         public ScrollTraceKind K;
     }
 
@@ -449,7 +451,7 @@ public static class ScrollTrace
     /// <see cref="GenStampQuality.Tick"/> and the packager refuses sub-tick percentiles).</summary>
     public static void Latency(ulong publishSeq, GenStampQuality quality, int stageMask, int missedVsyncs,
         float lagDip, float wakeOverheadMs, float frameOverrunMs, float clockSampleSkewMs,
-        float presentIntervalMs, float velocityDipPerMs, long genQpc)
+        float presentIntervalMs, float velocityDipPerMs, long genQpc, ulong ackedPublishSeq = 0UL)
     {
         if (!On) return;
         Add(new Rec
@@ -458,6 +460,7 @@ public static class ScrollTrace
             I0 = unchecked((int)(uint)publishSeq), I1 = (int)(uint)((byte)quality | ((uint)stageMask << 8)), I2 = missedVsyncs,
             F0 = lagDip, F1 = wakeOverheadMs, F2 = frameOverrunMs, F3 = clockSampleSkewMs,
             F4 = presentIntervalMs, F5 = velocityDipPerMs, Aux = genQpc,
+            Ack = unchecked((int)(uint)ackedPublishSeq),
         });
     }
 
@@ -551,8 +554,10 @@ public static class ScrollTrace
             {
                 var fs = new FileStream(s_path, FileMode.Create, FileAccess.Write, FileShare.Read);
                 s_writer = new StreamWriter(fs) { AutoFlush = false };
-                // `state` is APPENDED, never inserted: existing parsers read this file by column position.
-                s_writer.WriteLine("tMs,frame,kind,i0,i1,i2,f0,f1,f2,f3,f4,f5,auxMs,state");
+                // `state` and `ack` are APPENDED, never inserted: existing parsers read this file by column position.
+                // `ack` is the render seam's acknowledged publish seq at the moment a Latency row was emitted, which
+                // is what turns "the frame before the one that observed a present" (an INFERENCE) into an exact join.
+                s_writer.WriteLine("tMs,frame,kind,i0,i1,i2,f0,f1,f2,f3,f4,f5,auxMs,state,ack");
             }
             var sb = s_sb;
             var ci = CultureInfo.InvariantCulture;
@@ -568,6 +573,10 @@ public static class ScrollTrace
                 AppendF(sb, r.F3, ci); AppendF(sb, r.F4, ci); AppendF(sb, r.F5, ci);
                 if (r.Aux != 0) sb.Append(((r.Aux - s_t0) * s_msPerTick).ToString("0.000", ci));
                 sb.Append(',').Append(r.State);
+                // Blank rather than 0 when there is no ack: a consumer must be able to tell "not recorded" from
+                // "acked seq 0", which are opposite facts. Every optional column in this file follows that rule.
+                sb.Append(',');
+                if (r.K == ScrollTraceKind.Latency) sb.Append(r.Ack);
                 s_writer.WriteLine(sb);
             }
             s_writer.Flush();

@@ -169,6 +169,12 @@ is the fault.
 `-GpuTiming` adds real per-frame query overhead that peaks during the very fling being measured; `-Opaque`
 removes the Mica composition path as one variable but requires a diag build.
 
+**The bucket list is not a priority order.** `likelyContributorsUnranked` is exactly what its name says. It was
+briefly sorted by `taggedFrames`, which was wrong: that field means a different thing per bucket — a peak
+binds-per-frame here, a count of phases there, a frame count elsewhere — so sorting compared incommensurable
+units and put whichever bucket used the largest one on top. Read each bucket's own evidence string, and take
+sequencing from `fixOrder`, which is causal (upstream first) rather than numeric.
+
 **A correlation is not a cause.** The image-decode and span buckets in particular can only be confirmed by
 **bisection** — running the identical phase with that subsystem disabled and showing the cadence changes. Say so
 rather than promoting a correlation to a verdict.

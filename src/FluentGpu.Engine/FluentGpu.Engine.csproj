@@ -10,6 +10,10 @@
     <!-- The M1 media backend unit tests construct a VideoBinding over a real VideoSurfaceRegistry (internal ctor) to
          exercise the session's surface handoff against a fake IVideoPresenter. -->
     <InternalsVisibleTo Include="FluentGpu.Windows.Tests" />
+    <!-- DisplayPhaseGate is an internal seam primitive with a cross-thread handshake that AppHost cannot cover: a
+         Headless window always resolves to RenderLoopMode.SingleThread, so async (and therefore the gate) never runs
+         headlessly. The race and the stall ceiling are testable only against the primitive directly. -->
+    <InternalsVisibleTo Include="FluentGpu.Engine.Tests" />
   </ItemGroup>
   <!-- The portable engine core: Foundation, the Rhi/Pal/Text seam interfaces, Scene, Render, Layout, Dsl, Hooks,
        Reconciler, Animation, Input, Media, Hosting, and the three Headless backends. No NuGet, no OS code — the

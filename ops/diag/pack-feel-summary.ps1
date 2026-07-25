@@ -62,6 +62,14 @@ function Stats([double[]]$v) {
 }
 function NotMeasured($reason) { return [ordered]@{ value = $null; reasonNotMeasured = $reason } }
 
+# Robust centre. Used to DERIVE the refresh period from a phase's own present intervals, so the idle-gap cutoff
+# scales with the panel instead of being a constant that silently means a different number of refreshes per device.
+function Median([double[]]$v) {
+  if (-not $v -or $v.Count -eq 0) { return $null }
+  $s = $v | Sort-Object
+  return $s[[int][math]::Floor(0.5 * ($s.Count - 1))]
+}
+
 # ScrollTrace writes an EMPTY field for an exact 0 (it is a size optimisation over millions of rows), and several
 # of its columns are deliberately SIGNED — frameOverrun, clockSampleSkew, lagDip. So the field must be parsed, not
 # string-prefixed: "0" + "-6.2" is not a number, and a naive prefix trick throws on exactly the negative values
@@ -162,7 +170,11 @@ $scrollFps = @()
 foreach ($l in $fpsLines) {
   $rec = [ordered]@{}
   if ($l -match 'tMs=([0-9.]+)') { $rec.tMs = [double]$Matches[1] }
-  $rec.scroll = ($l -match '\bscroll\b')
+  # The ScrollActive marker is the literal ' scroll loop ' the host prints before the loop-fps token. A bare
+  # \bscroll\b ALSO matches the ' | scroll clipE=' scroll-perf token, which appears on every [fps] line whenever
+  # FG_SCROLL_PERF is set - so with that flag on, "scroll-active" silently became "all frames" and every per-scroll
+  # statistic was computed over idle time as well.
+  $rec.scroll = ($l -match ' scroll loop ')
   $rec.spike = ($l -match '\bSPIKE\b')
   if ($l -match 'loop (\d+)fps ([0-9.]+)ms') { $rec.loopFps = [int]$Matches[1]; $rec.frameMs = [double]$Matches[2] }
   if ($l -match 'presentD=(\d+)') { $rec.presentDelta = [int]$Matches[1] }
@@ -183,7 +195,7 @@ $scrollOnly = @($scrollFps | Where-Object { $_.scroll })
 # Prefer SCROLL-ACTIVE lines: observer cost is only meaningful over the workload being measured. An idle window
 # does almost no work per frame, so comparing idle medians measures the printing resolution, not the instrument.
 function MedianFrameMs($lines) {
-  $active = @($lines | Where-Object { $_ -match '\bscroll\b' })
+  $active = @($lines | Where-Object { $_ -match ' scroll loop ' })   # precise marker; see the $rec.scroll note above
   $use = $(if ($active.Count -ge 20) { $active } else { $lines })
   $v = @()
   foreach ($l in $use) { if ($l -match 'loop \d+fps ([0-9.]+)ms') { $v += [double]$Matches[1] } }
@@ -310,15 +322,29 @@ foreach ($ord in $phaseOrdinals) {
   # i2 packs BOTH counts: low 16 = our stamp-derived missed slots, high 16 = the OS-attested count biased by +1
   # (0 = not attested). Where the attested count exists it SUPERSEDES ours - it is what the display pipeline did,
   # not what our post-Present timestamp implies - so they are reported side by side and never averaged together.
-  $missed = @($warm | ForEach-Object { [int]$_.i2 -band 0xFFFF })
-  $attestedRaw = @($warm | ForEach-Object { ([int]$_.i2 -shr 16) -band 0xFFFF } | Where-Object { $_ -gt 0 })
+  # IDLE-GAP EXCLUSION. A latency row is emitted per scroll-active frame, and missedVsyncs is derived from the
+  # interval since the previous PRESENT. The first row after a pause therefore measures the pause, not a stall:
+  # an 18 s gap between gestures reported 2194 "missed slots" in a real bundle, which is not a hitch, it is a
+  # human reading the screen. The cutoff is DERIVED from this phase's own observed cadence rather than hardcoded:
+  # the median present interval is the measured refresh period (robust to the very outliers being excluded), and six
+  # of them is comfortably past any real stall while still well inside a human pause. The previous 100 ms constant
+  # claimed to be "six refreshes" but was twelve on a 120 Hz panel and six on a 60 Hz one.
+  $allIntervals = @($warm | ForEach-Object { (Num $_.f4) } | Where-Object { $_ -gt 0 })
+  $refreshMs = $(if ($allIntervals.Count -ge 5) { (Median $allIntervals) } else { 16.67 })
+  $gapCutoffMs = [math]::Round([math]::Max(50.0, $refreshMs * 6.0), 2)
+  # Applied CONSISTENTLY: a sample excluded from the derived count must also be excluded from the attested count
+  # and from the interval distribution, or the three disagree about which frames the phase contains.
+  $inWindow = @($warm | Where-Object { $null -eq (Num $_.f4) -or (Num $_.f4) -le $gapCutoffMs })
+  $missedGapsDropped = $warm.Count - $inWindow.Count
+  $missed = @($inWindow | ForEach-Object { [int]$_.i2 -band 0xFFFF })
+  $attestedRaw = @($inWindow | ForEach-Object { ([int]$_.i2 -shr 16) -band 0xFFFF } | Where-Object { $_ -gt 0 })
   $attestedSum = $null; $attestedMax = $null; $attestedFrames = $attestedRaw.Count
   if ($attestedFrames -gt 0) {
     $attestedSum = (($attestedRaw | ForEach-Object { $_ - 1 } | Measure-Object -Sum).Sum)
     $attestedMax = (($attestedRaw | ForEach-Object { $_ - 1 } | Measure-Object -Maximum).Maximum)
   }
   $neverPresented = @($warm | Where-Object { [int]$_.i0 -eq 0 }).Count
-  $intervals = @($warm | Where-Object { (Num $_.f4) -gt 0 } | ForEach-Object { (Num $_.f4) })
+  $intervals = @($inWindow | Where-Object { (Num $_.f4) -gt 0 } | ForEach-Object { (Num $_.f4) })
   $intervalStats = Stats($intervals)
   # One scalar that balances throughput, outliers and consistency. Reported ALONGSIDE the distribution, never
   # instead of it: a single percentile cannot tell consistent 33ms frames from one 500ms frame among fast ones.
@@ -363,6 +389,7 @@ foreach ($ord in $phaseOrdinals) {
       presentIntervalMsMeanPlus2Sd = $meanPlus2Sd
       missedVsyncsSum = (($missed | Measure-Object -Sum).Sum)
       missedVsyncsMax = (($missed | Measure-Object -Maximum).Maximum)
+      missedVsyncsGapSamplesExcluded = $missedGapsDropped
       frameOverrunMs = $(if ($insufficient) { NotMeasured $insufficientReason } else { Stats(@($warm | ForEach-Object { (Num $_.f2) })) })
       clockSampleSkewMs = $(if ($insufficient) { NotMeasured $insufficientReason } else { Stats(@($warm | ForEach-Object { (Num $_.f3) })) })
       overrunFrames = $overrunHere
@@ -406,16 +433,25 @@ foreach ($n in $stageNames) {
     $tagged $cov $verdict "tagged $tagged of $overrunFrames overrun frames"
 }
 
-$coalescedTotal = 0; $skipTotal = 0
+# Discarded frames from DELTAS over scroll-active windows, not from the `coal` token. `coal` is
+# publishSequence - presentedSequence, a running difference of two counters that do not track each other: a present
+# that carries no new publish still advances presentedSequence, so the value can fall as well as rise and is neither
+# a cumulative discarded count nor a clean instantaneous backlog. Summing per-window (publishes - presents) over the
+# scroll-active lines is the quantity the bucket actually claims, and it is signed-safe because each delta pair comes
+# from the same line. The raw peak is still reported, named honestly.
+$publishedDuringScroll = 0; $presentedDuringScroll = 0; $coalPeak = 0; $skipTotal = 0
 foreach ($r in $scrollOnly) {
-  if ($r.Contains('coalesced')) { $coalescedTotal = [math]::Max($coalescedTotal, $r.coalesced) }
+  if ($r.Contains('publishDelta')) { $publishedDuringScroll += $r.publishDelta }
+  if ($r.Contains('presentDelta')) { $presentedDuringScroll += $r.presentDelta }
+  if ($r.Contains('coalesced')) { $coalPeak = [math]::Max($coalPeak, $r.coalesced) }
   if ($r.Contains('skipDelta')) { $skipTotal += $r.skipDelta }
 }
+$discarded = [math]::Max(0, $publishedDuringScroll - $presentedDuringScroll)
 AddBucket 'dropOldestCoalesce' `
-  'publishes exceeded presents while scroll was active - the render thread replaced frames it never showed' `
-  'publishSequence minus presentedSequence stayed flat across the phase' `
-  $coalescedTotal $null $(if ($coalescedTotal -gt 0) { 'likelyContributor' } else { 'refuted' }) `
-  "peak publish-minus-present backlog $coalescedTotal"
+  'more frames were published than presented while scroll was active - the render thread replaced frames it never showed, so which one won each vblank varied' `
+  'publishes and presents matched 1:1 across the scroll-active windows' `
+  $discarded $null $(if ($presentedDuringScroll -le 0) { 'insufficientData' } elseif ($discarded -gt 0) { 'likelyContributor' } else { 'refuted' }) `
+  "published $publishedDuringScroll vs presented $presentedDuringScroll during scroll (ratio $(if ($presentedDuringScroll) { [math]::Round($publishedDuringScroll / $presentedDuringScroll, 3) } else { 'n/a' })); raw publish-minus-present counter peaked at $coalPeak"
 
 AddBucket 'skipSubmitPacing' `
   'frames elided their submit while scroll was active (a ready frame was held, not slow work)' `
@@ -470,8 +506,13 @@ AddBucket 'clockSampling' `
   $(if ($phaseSummaries.Count -eq 0) { 'insufficientData' } elseif ($skewFlagged -gt 0) { 'likelyContributor' } else { 'refuted' }) `
   "$skewFlagged of $($phaseSummaries.Count) phases flagged"
 
-# Rank by MEASURED tag frequency, not by a hardcoded order. Multi-label, so the total may exceed 100%.
-$ranked = @($buckets | Where-Object { $_.verdict -eq 'likelyContributor' } | Sort-Object -Property taggedFrames -Descending | ForEach-Object { $_.name })
+# Surviving buckets, NOT ranked by taggedFrames. That sort was wrong and actively misleading: taggedFrames means
+# a different thing per bucket - scrollBindThrash carries a peak binds-per-frame (22), clockSampling carries a
+# count of PHASES (0-7), the stage buckets carry frame counts in the thousands - so ordering them against each
+# other compared apples to oranges and put whichever bucket happened to use the largest unit on top. A reader
+# would then "fix" the first entry. Each bucket carries its own evidence string; read them individually, and use
+# fixOrder below for sequencing, which is causal (upstream first) rather than numeric.
+$ranked = @($buckets | Where-Object { $_.verdict -eq 'likelyContributor' } | ForEach-Object { $_.name })
 $noDominant = ($ranked.Count -eq 0)
 
 # ── did the session even reproduce the complaint? ────────────────────────────────────────────────────────────
@@ -531,6 +572,9 @@ $summary = [ordered]@{
   phases = @($phaseSummaries)
   buckets = @($buckets)
   globalVerdict = [ordered]@{
+    # Unordered on purpose - see the comment where $ranked is built. The key keeps its name for compatibility
+    # with existing readers, but the list is no longer sorted and must not be read as a priority order.
+    likelyContributorsUnranked = @($ranked)
     rankedLikelyContributors = @($ranked)
     noDominantStage = $noDominant
     # Detection starts at the present side because that is where the symptom shows. FIXING starts upstream: a span
@@ -558,7 +602,7 @@ else {
     Write-Host "    Every scored phase came back 4-5: THE SESSION DID NOT REPRODUCE THE COMPLAINT." -ForegroundColor Yellow
     Write-Host "    That is a successful run. Report it and re-capture when the problem is present." -ForegroundColor Yellow
   }
-  Step "Ranked likely contributors (multi-label; totals may exceed 100%)"
+  Step "Surviving likely contributors - UNORDERED (multi-label; read each bucket's own evidence, and use fixOrder for sequencing)"
   if ($noDominant) { Info "none - noDominantStage. The tool declines to name a suspect." }
   else { foreach ($r in $ranked) { Info $r } }
 }
