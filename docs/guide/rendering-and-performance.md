@@ -168,6 +168,12 @@ Read `FrameStats` from `RunFrame()`:
 - Set `FG_DUMP=1` to dump the post-layout scene tree to stderr; `FG_DIAG=1` enables engine diagnostics;
   `FG_SCROLLLOG=1` traces the scrollbar.
 
+**The UI loop is phase-locked to the display.** Under the async seam the host never produces a frame while a
+published one is still unpresented (`threading-render-seam.md` §11.1) — so `Fps` sits at the panel rate rather
+than above it, and that is the healthy reading, not a regression. A loop running *faster* than the display was
+the old default and it looked worse: the surplus frames were discarded by DropOldest, and which one survived
+each vblank varied, so motion jittered while the frame rate looked perfect.
+
 **Careful with `Fps`.** It is UI-loop cadence, not on-screen cadence: under the async render seam the loop can run
 fast while presents arrive irregularly, which is exactly the "high FPS, feels wrong" shape. Likewise `Presented`
 means "published, not elided", decided before the render thread does anything — it is not a statement about

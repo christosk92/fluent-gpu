@@ -215,7 +215,7 @@ public static class FluentApp
         // Deltas, not levels: PresentedSequence/FramesSkippedSubmit/PublishSequence are monotonic counters, and the
         // question a cadence investigation asks is always "how many since the last line".
         ulong prevPresentSeq = 0, prevPublishSeq = 0;
-        long prevSkipped = 0;
+        long prevSkipped = 0, prevGated = 0;
         long scrollPerfWindowStart = scrollPerf ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         int spFrames = 0, spClipE = 0, spClipD = 0, spFullHide = 0, spPinD = 0, spMorphD = 0, spContD = 0, spBindsMax = 0;
         static string WaitTok(FluentGpu.Hosting.HostWaitKind k) => k switch
@@ -322,11 +322,16 @@ public static class FluentApp
                     // legitimately run ahead of publishSeq. An unguarded subtraction would wrap to ~1.8e19 and read as
                     // a catastrophic backlog.
                     static ulong Behind(ulong ahead, ulong behind) => ahead > behind ? ahead - behind : 0UL;
+                    // gateD = frames the display-phase gate declined since the last line. In steady scrolling this
+                    // should be SMALL and coal should sit at ~0: the gate's whole purpose is to stop producing the
+                    // frames that coal was counting as discarded. A large gateD with a large coal means the gate is
+                    // being bypassed (ceiling hit, or a non-async path).
+                    long gated = host.PhaseGatedFrames;
                     string seamTok =
                         $" presentD={Behind(presentSeq, prevPresentSeq)} pubD={Behind(publishSeq, prevPublishSeq)} " +
                         $"coal={Behind(publishSeq, presentSeq)} lag={Behind(publishSeq, consumedSeq)} " +
-                        $"ack={host.RenderPresentSeq} skipD={skipped - prevSkipped}";
-                    prevPresentSeq = presentSeq; prevPublishSeq = publishSeq; prevSkipped = skipped;
+                        $"ack={host.RenderPresentSeq} skipD={skipped - prevSkipped} gateD={gated - prevGated}";
+                    prevPresentSeq = presentSeq; prevPublishSeq = publishSeq; prevSkipped = skipped; prevGated = gated;
                     Console.Error.WriteLine(
                         $"[fps] tMs={FluentGpu.Foundation.ScrollTrace.NowMs:0.000}{(spike ? " SPIKE" : "")}{clusterTok}" +
                         $"{(s.ScrollActive ? " scroll" : "")} loop {s.Fps:0}fps {s.FrameMs:0.0}ms " +
@@ -340,11 +345,22 @@ public static class FluentApp
             if (h.Screenshot != null)
                 window.WaitForWork(h.FrameWaitMs);   // deterministic ~8ms/frame so time-driven animations advance (and never block)
             else
+            {
                 // Low-rate wake pacing: idle/minimized block until a message (0% CPU); a HUD-only readout throttles to
                 // ~10 Hz; real animation/scroll/decode paces at the display rate. WaitForWork returns early on input,
                 // so responsiveness is identical at every timeout. (See AppHost.RecommendedWaitMs.) Folded across any
                 // detached video windows, so a playing pop-out keeps the loop live even while the main window is idle.
-                window.WaitForWork(host.WaitMsWithDetached());
+                int waitMs = host.WaitMsWithDetached();
+                // About to sleep: persist any buffered scroll-trace records first. ScrollTrace's own idle flush counts
+                // IDLE FRAMES, but a loop that has nothing to do stops running frames at all — so an app that simply
+                // goes quiet after a gesture never reaches the threshold, and everything since the last flush is lost
+                // if the process is later killed rather than closed (ProcessExit is the only other flush). Measured:
+                // a 50 s synthetic capture kept 32 of ~20,000 records. Gated on a genuinely long wait so the lock is
+                // never taken on a display-rate frame, and a no-op (one uncontended lock, then an early return) both
+                // when nothing is pending and in any build without FLUENTGPU_DIAG.
+                if (waitMs < 0 || waitMs >= 100) FluentGpu.Foundation.ScrollTrace.Flush();
+                window.WaitForWork(waitMs);
+            }
         }
 
         if (allocTypes) AllocTypeProfiler.Stop();   // tear down the EventListener (no leak past the run)
