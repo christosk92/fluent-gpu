@@ -10,32 +10,6 @@
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-green" alt="MIT License" /></a>
 </p>
 
-## Download
-
-The FluentGpu Gallery ships as a signed **MSIX** from GitHub Releases — a single **~7 MB NativeAOT** package with **no .NET runtime to install**. The button installs it through Windows App Installer and keeps it current with background auto‑updates.
-
-<p align="center">
-  <a style="text-decoration:none" href="https://github.com/christosk92/fluent-gpu/releases/latest/download/FluentGpu.x64.appinstaller">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="./docs/media/download/download-x64-dark.png" />
-      <img src="./docs/media/download/download-x64-light.png" height="56" alt="Download for Windows x64" /></picture></a>
-  &nbsp;&nbsp;
-  <a style="text-decoration:none" href="https://github.com/christosk92/fluent-gpu/releases/latest/download/FluentGpu.arm64.appinstaller">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="./docs/media/download/download-arm64-dark.png" />
-      <img src="./docs/media/download/download-arm64-light.png" height="56" alt="Download for Windows ARM64" /></picture></a>
-</p>
-
-> Or build it yourself: `pwsh ops/build/pack-msix.ps1 -Install` (NativeAOT, self‑signed dev cert). Pipeline docs: [`ops/build/README.md`](./ops/build/README.md).
-
-> **Status (July 2026): the engine is built, and the API surface just went through a full flagship overhaul.**
-> One component model, live props, call-site-keyed hooks (conditionals and loops are legal), auto-tracked effects,
-> one controlled-input contract and one creation idiom across the whole control kit, a source-generated router,
-> a localized control kit, and a signals-first media pipeline — verified by **800+ end-to-end golden checks** on the
-> headless backends (including the zero-alloc frame gates) plus three xUnit test projects. The driving app — a real
-> Spotify desktop client — lives in-tree at [`src/apps/Wavee`](./src/apps/) and runs on every one of these APIs.
-> Full design corpus in [`docs/design/`](./docs/design/README.md); developer & agent guide in
-> [`docs/guide/`](./docs/guide/README.md).
 
 https://github.com/user-attachments/assets/8e82a2cc-b908-40df-88f9-30438b44c02c
 
