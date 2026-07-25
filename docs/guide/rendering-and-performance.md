@@ -168,4 +168,11 @@ Read `FrameStats` from `RunFrame()`:
 - Set `FG_DUMP=1` to dump the post-layout scene tree to stderr; `FG_DIAG=1` enables engine diagnostics;
   `FG_SCROLLLOG=1` traces the scrollbar.
 
+**Careful with `Fps`.** It is UI-loop cadence, not on-screen cadence: under the async render seam the loop can run
+fast while presents arrive irregularly, which is exactly the "high FPS, feels wrong" shape. Likewise `Presented`
+means "published, not elided", decided before the render thread does anything — it is not a statement about
+photons. For scroll specifically, use **[`ops/diag/README.md`](../../ops/diag/README.md)**: a guided interactive
+capture that measures the input side (is content glued to the finger?) and the present side (is the cadence even?)
+as two separate pillars, and emits a bundle with an explicit validity block and a refuter per finding.
+
 Next: **[pitfalls.md](./pitfalls.md)** — symptom → cause → fix.

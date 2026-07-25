@@ -49,4 +49,15 @@
     <DefineConstants>$(DefineConstants);FGGUARD</DefineConstants>
   </PropertyGroup>
 
+  <!-- FLUENTGPU_DIAG: the diagnostics compile gate. Ten source files fence probes behind `#if DEBUG || FLUENTGPU_DIAG`
+       or [Conditional("FLUENTGPU_DIAG")] — ScrollTrace's whole ring (Foundation/ScrollTrace.cs), RenderBudget's
+       per-component re-render roster, the FG_OPAQUE_WINDOW A/B, Diag's console sink. A plain Release publish erases all
+       of them; `dotnet publish /p:FluentGpuDiag=true` (or ops/build/publish-wavee-aot.ps1 -Diag) keeps them.
+       NOT the same as FGGUARD: this deliberately does NOT arm ThreadGuard, so the render-seam asserts stay erased and
+       the diag build's threading behaviour matches Release. Mirrored verbatim in src/apps/Directory.Build.props, which
+       does not inherit this file. See ops/diag/README.md. -->
+  <PropertyGroup Condition="'$(FluentGpuDiag)' == 'true'">
+    <DefineConstants>$(DefineConstants);FLUENTGPU_DIAG</DefineConstants>
+  </PropertyGroup>
+
 </Project>

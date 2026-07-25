@@ -135,6 +135,14 @@ public interface IGpuDevice : IDisposable
     /// <summary>Diagnostic (FG_GPU_TIMING=1): of <see cref="LastGpuSceneMs"/>, the layer/acrylic COMPOSITE portion. 0 when off. Folds into <c>FrameStats.GpuCompositeMs</c>.</summary>
     double LastGpuCompositeMs => 0;
 
+    /// <summary>Diagnostic: the OS-attested present/compositor statistics sampled at the last present, or
+    /// <c>default</c> on a backend that has none (headless — the struct's <c>Valid</c> bit reads false, which every
+    /// consumer must treat as NOT MEASURED rather than as zeroes). ALWAYS-ON: two OS calls per present and one per
+    /// second respectively, no queries, no allocation — this is the only vblank-attested cadence truth available, and
+    /// the in-app cadence metrics are computed against its refresh period rather than a nominal
+    /// <c>GetDeviceCaps(VREFRESH)</c> value. See <see cref="PresentStats"/>.</summary>
+    PresentStats LastPresentStats => default;
+
     /// <summary>True when decoded image pixels are staged but not yet copied to their resident GPU texture, or when
     /// transient upload resources are awaiting fence-gated release. The host must NOT elide that submit, or the texture
     /// stays empty and deferred upload memory can remain resident until unrelated UI work happens. Default false (a

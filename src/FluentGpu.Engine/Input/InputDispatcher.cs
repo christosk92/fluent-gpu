@@ -3161,6 +3161,11 @@ public sealed class InputDispatcher
             _sgTarget = NodeHandle.Null; _sgLatched = false; return;
         }
         float axisAccum = _sgHoriz ? _sgAccumX : _sgAccumY;   // cumulative offset-space position (rawOffset = anchor + this)
+        // Stamp provenance for the latency row: the producer sets the positive claim (hardware vs receive) because only
+        // it knows which API stamped the packet; here we can only DOWNGRADE — a packet that arrived with no QPC at all
+        // is millisecond-resolution message time, and a bundle must never publish sub-tick percentiles off that.
+        if (FluentGpu.Foundation.ScrollTrace.On && e.QpcTicks == 0)
+            FluentGpu.Foundation.ScrollTrace.ContactStampQuality = FluentGpu.Foundation.GenStampQuality.Tick;
         OnScrollTrackSample?.Invoke((int)_sgTarget.Raw.Index, ContactSampleSec(e.TimestampMs, e.QpcTicks), axisAccum);
         OnScrollArmed?.Invoke(_sgTarget);   // stay armed (BeginTracking armed it; re-arm each packet is idempotent)
     }

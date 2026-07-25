@@ -96,7 +96,18 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     public double GpuCompositeMs { get; init; }
     // This frame actually submitted + presented (skip-submit did NOT elide it). A probe uses it to see how often a
     // "static" scene is force-presented anyway (a sustained loop animation marking TransformDirty defeats skip-submit).
+    // NOTE this is `!skipSubmit`, decided BEFORE the render thread does anything — it means "published, not elided",
+    // never "photons reached the panel". Cadence verdicts must come from present stamps, not from this bit.
     public bool Presented { get; init; }
+    /// <summary>Did this frame drive scroll (a viewport offset advanced, or we are inside the post-scroll hold)? The
+    /// authoritative per-frame bit the engine already computes for its own throttles — surfaced so a diagnostic
+    /// consumer can normalise cadence metrics by SCROLL-ACTIVE time rather than wall time (an idle stretch otherwise
+    /// dilutes every per-second figure) and can gate its emission on the gesture instead of on a fixed frame counter.</summary>
+    public bool ScrollActive { get; init; }
+    /// <summary>The publish seq this frame's DrawList was handed to the render seam under (0 when the frame elided its
+    /// submit). This is the ONLY per-frame identity that survives the UI→render-thread boundary; see
+    /// <see cref="AppHost.LastPresentPublishSeq"/> for the ack side and the join contract.</summary>
+    public ulong PublishSeq { get; init; }
     // Probe-only record-time scroll capture (all default 0/false; populated only when AppHost.ProbeLyricsViewport /
     // ProbeMainViewport are set). Captured INSIDE RunFrame right after record, BEFORE ClearTransformDirty wipes the
     // content-node TransformDirty bit — so a probe can read the exact state that drove SceneRecorder's DoF-defer decision
@@ -566,7 +577,7 @@ public sealed class AppHost : IDisposable
             else if (rf.InteractivePresent) _device.SuppressVsyncOnce();
             _device.SubmitDrawList(_renderSeam.Bytes(rf), _renderSeam.SortKeys(rf), in rf.Submit, _swapchain);
             _swapchain.Present();
-            NotePresented();
+            NotePresented(rf.PublishSeq);
             // 11.5 (threaded) — the video hole-punch drain rides THIS present turn on the presenting thread, mirroring
             // the sync path's after-present ordering (AppHost.Paint phase 11.5). Both GetVideoPresenter and every
             // presenter call assert the render/submit thread when render-confined, so the drain MUST run here, not
@@ -669,6 +680,13 @@ public sealed class AppHost : IDisposable
     private int _actualPresentTimeCount;
     private long _lastSampledPresentedSequence;
     private long _presentedSequence;
+    // Present stamp + frame identity (the ONE pair that makes input→present correlation possible). Written on whichever
+    // thread actually called Present — the render thread under the async default — and read UI-side, hence volatile.
+    // _lastPresentQpc is sampled IMMEDIATELY after Present() returns: that is submit-confirmed, NOT vblank-confirmed, and
+    // every consumer must carry that error bar (the vblank-attested form is DXGI GetFrameStatistics; see IPresentStats).
+    private long _lastPresentQpc;
+    private long _lastPresentPublishSeq;
+    private ulong _framePublishSeq;   // UI-private: the seq THIS frame published under (0 when the submit was elided)
     private double _presentFps;
     private double _frameMs;
     private const double FpsWindowSeconds = 1.0;
@@ -718,6 +736,28 @@ public sealed class AppHost : IDisposable
     // the actual GPU render is inside the 8ms budget. Set FG_SCROLL_PRESENT_INTERVAL0=1 together with FG_GPU_TIMING=1;
     // otherwise ordinary vsync remains untouched.
     private static readonly bool s_scrollPresentIntervalZero = Diag.EnvFlag("FG_SCROLL_PRESENT_INTERVAL0");
+
+    // ── FG_BISECT_NO_IMAGE_PUMP: the image-pump bisection arm (ops/diag) ─────────────────────────────────────────
+    // A BEHAVIOUR FORK, and the only kind of evidence that can settle the imageDecodeDuringScroll question. That
+    // bucket's predicate is a correlation — "the phase-7.5 decode-apply cost is high while scroll is active" — and a
+    // correlation cannot distinguish the pump CAUSING the dropped presents from the pump merely being busy during
+    // them. Its refuter is therefore defined as a bisection: run the identical gesture with the pump suppressed
+    // during scroll and see whether the present cadence changes.
+    //
+    // Suppresses ONLY the pump, ONLY while scroll is active: decodes keep completing on their workers and are applied
+    // the moment the gesture settles. That is deliberately the shape a real fix would take (defer the apply past the
+    // gesture), so a positive result names an intervention rather than just an accusation. Compile-fenced exactly like
+    // FG_OPAQUE_WINDOW - it must be absent from a shipping build, because it visibly delays image reveals.
+#if DEBUG || FLUENTGPU_DIAG
+    private static readonly bool s_bisectNoImagePump = Diag.EnvFlag("FG_BISECT_NO_IMAGE_PUMP");
+#else
+    private const bool s_bisectNoImagePump = false;
+#endif
+    private long _bisectPumpsSuppressed;
+    /// <summary>Diagnostic census: phase-7.5 image pumps skipped by the <c>FG_BISECT_NO_IMAGE_PUMP</c> arm. Non-zero
+    /// PROVES the arm was live for this capture — a bisection whose suppression never actually engaged would
+    /// otherwise read as "disabling the pump changed nothing", which is the opposite of what happened.</summary>
+    public long BisectImagePumpsSuppressed => Volatile.Read(ref _bisectPumpsSuppressed);
     private const double ScrollPresentGpuBudgetMs = 8.0;
     private double _gpuBoundEma;   // smoothed recent GPU fence-wait (ms); governor input
     private const double GpuBoundBudgetMs = 10.0;   // sustained fence-wait above this ⇒ can't hold 120 (8.3ms) → pace to ambient
@@ -957,8 +997,24 @@ public sealed class AppHost : IDisposable
     /// <summary>Monotonic successful main-swapchain present count in inline, force-sync, and async modes. Unlike a
     /// publish sequence, coalesced/dropped async frames do not inflate it.</summary>
     public ulong PresentedSequence => (ulong)Volatile.Read(ref _presentedSequence);
-    /// <summary>Compatibility alias for diagnostics that previously read render-thread publish acknowledgements.</summary>
-    public ulong RenderPresentSeq => PresentedSequence;
+    /// <summary>The publish seq of the last frame that reached <c>Present()</c> — the real render-thread acknowledgement,
+    /// not the present COUNT. (This used to alias <see cref="PresentedSequence"/>, which discarded the identity: a
+    /// count cannot say WHICH frame's content is on screen, and every input→present join needs exactly that.)</summary>
+    public ulong RenderPresentSeq => (ulong)Volatile.Read(ref _lastPresentPublishSeq);
+    /// <inheritdoc cref="RenderPresentSeq"/>
+    public ulong LastPresentPublishSeq => RenderPresentSeq;
+    /// <summary>Stopwatch/QPC stamp taken immediately after the last successful <c>Present()</c> returned. SUBMIT-confirmed,
+    /// not vblank-confirmed — the panel had not scanned out yet. 0 before the first present.</summary>
+    public long LastPresentQpc => Volatile.Read(ref _lastPresentQpc);
+    /// <summary>Frames handed to the render seam so far (UI side). <c>PublishSequence - PresentedSequence</c> is the only
+    /// measure of DropOldest coalescing — publishes the render thread never presented because a newer frame replaced
+    /// them. Nothing else in the engine counts those.</summary>
+    public ulong PublishSequence => _renderSeam.PublishSeq;
+    /// <summary>Frames the consumer has acquired. <c>PublishSequence - ConsumedSequence</c> is how far behind render is.</summary>
+    public ulong ConsumedSequence => _renderSeam.LastConsumedSeq;
+    /// <summary>The render thread's own present acknowledgement (falls back to the consumed seq in inline/force-sync
+    /// modes, where there is no separate render thread to acknowledge).</summary>
+    public ulong RenderPresentAck => _renderThread?.PresentAck ?? _renderSeam.LastConsumedSeq;
     /// <summary>Actual successful-present cadence over the trailing one-second window.</summary>
     public double PresentFps => _presentFps;
     /// <summary>Wall-time the render thread most recently BLOCKED on the GPU (frame fence + present latency) inside its
@@ -2164,7 +2220,11 @@ public sealed class AppHost : IDisposable
             // (TickTouchpad is gone — scroll phase events apply 1:1 at dispatch; design §6/§12.)
             if (FluentGpu.Foundation.ScrollTrace.On)
                 FluentGpu.Foundation.ScrollTrace.Frame(dtMs, _tracePumpedEvents, _scrollAnim.HasActive || _dispatcher.GestureActive);
-            // scroll-feel-rework-v2 §4.1: the TouchpadTracking resampler targets frameT − 5ms. Feed the frame's QPC clock
+            // scroll-feel-rework-v2 §4.1: the TouchpadTracking resampler targets frameT − ScrollTuning.ResampleLatencyMs
+            // (12ms as shipped, NOT the 5ms of the original design — four comments drifted on that and are now fixed).
+            // NOTE the sampled instant is thereby BEHIND frame start, not ahead to the frame's expected PRESENT time; the
+            // signed gap is emitted as clockSampleSkewMs on the latency row so it is measured rather than assumed.
+            // Feed the frame's QPC clock
             // (matches the dispatcher's per-packet QpcTicks). Headless leaves it 0 → the resampler uses the latest deposited
             // sample (no synthesis), preserving gate determinism.
             if (!_isHeadless) _scrollAnim.FrameQpcSec = Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency;
@@ -2192,7 +2252,10 @@ public sealed class AppHost : IDisposable
             _dispatcher.TickGestureArenas(dtMs);               // 7 §7A arena timer tick (Hold long-press promotion on idle-held frames)
             long tAnim = Stopwatch.GetTimestamp();
             if (s_allocDiag) { db = Probe(SegAnim, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
-            _images.Pump();                                    // 7.5 apply finished decodes + evict
+            // 7.5 apply finished decodes + evict. The bisection arm skips ONLY the apply, and ONLY while scrolling —
+            // Tick still runs, so cross-fades and eviction bookkeeping stay live and the arm changes one variable.
+            if (s_bisectNoImagePump && scrollActive) _bisectPumpsSuppressed++;
+            else _images.Pump();
             _images.Tick(dtMs);
             long tImagePump = Stopwatch.GetTimestamp();
             if (s_allocDiag) { db = Probe(SegImages, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
@@ -2317,6 +2380,10 @@ public sealed class AppHost : IDisposable
             long tSubmitDone, tSubmit, hotAlloc;
             if (skipSubmit)
             {
+                // Terminal `neverPresented`: this frame publishes nothing, so any latency sample tagged with it can
+                // never join a present. Zeroing the tag makes that a LABELLED sample class in the trace rather than a
+                // silent hole — a hole would make the pacing bucket look clean precisely when pacing is the fault.
+                _framePublishSeq = 0;
                 _framesSkippedSubmit++;
                 _lastFrameSkippedSubmit = true;   // no Present happened → RecommendedWaitMs applies the pacing floor
                 hotAlloc = GC.GetAllocatedBytesForCurrentThread() - before;
@@ -2336,7 +2403,9 @@ public sealed class AppHost : IDisposable
                 bool interactivePresent = !keepAlive && s_scrollPresentIntervalZero && scrollActive
                     && _swapchain.SupportsCompositedIntervalZero
                     && gpuRenderMs > 0.0 && gpuRenderMs <= ScrollPresentGpuBudgetMs;
-                _renderSeam.Publish(_drawList.Bytes, _drawList.SortKeys, in submitInfo,
+                // Keep the returned seq: it is this frame's identity across the seam, and the ONLY thing that lets a
+                // present stamp be attributed back to the offsets this frame baked in (it was previously discarded).
+                _framePublishSeq = _renderSeam.Publish(_drawList.Bytes, _drawList.SortKeys, in submitInfo,
                     suppressVsync: keepAlive, interactivePresent: interactivePresent);
                 if (_renderThread is not null)
                 {
@@ -2368,7 +2437,9 @@ public sealed class AppHost : IDisposable
                         }
                         tSubmitDone = Stopwatch.GetTimestamp();     // boundary: SubmitDrawList done, Present not yet called
                         _swapchain.Present();                       // 11 present (UI thread)
-                        NotePresented();
+                        // rf is definitely-assigned on both TryAcquire outcomes; a false acquire leaves PublishSeq 0,
+                        // which NotePresented treats as "no new content" and does not let move the ack.
+                        NotePresented(rf.PublishSeq);
                     }
                     catch (Exception ex)
                     {
@@ -2459,6 +2530,8 @@ public sealed class AppHost : IDisposable
                 GpuGlyphMs = _device.LastGpuGlyphMs,
                 GpuCompositeMs = _device.LastGpuCompositeMs,
                 Presented = !skipSubmit,
+                ScrollActive = scrollActive,
+                PublishSeq = _framePublishSeq,
                 LyricsScrollMode = probeLyMode,
                 LyricsUserScrollActive = probeLyUser,
                 LyricsContentDirtyAtRecord = probeLyDirty,
@@ -2496,6 +2569,10 @@ public sealed class AppHost : IDisposable
                     _traceGc0 = g0; _traceGc1 = g1; _traceGc2 = g2;
                 }
             }
+            // Latency row — ONE per scroll-active frame, and deliberately NOT gated on a hitch threshold the way the
+            // FrameTiming row above is. The case this whole facility exists for ("cadence looks perfect, feel is bad")
+            // produces no hitch rows at all, so a dt-gated sensor would go silent exactly when it is needed.
+            if (FluentGpu.Foundation.ScrollTrace.On && scrollActive) EmitLatencyRow(dtMs);
             if (_frameClockSig.HasSubscribers) _frameClockSig.Value = ++_frameClock;   // drive per-frame pollers (overlay close) only when watched
             if (s_allocDiag) Probe(SegPublish, db, dt0);   // alloc-05: frame-stat box + frameclock long-box were untracked
             return LastStats;
@@ -2912,7 +2989,127 @@ public sealed class AppHost : IDisposable
         _scrollAnim.ClearForIndex(index);
     }
 
-    private void NotePresented() => Interlocked.Increment(ref _presentedSequence);
+    // ── Latency-row assembly (diagnostics; only reached when the scroll trace is armed AND scroll is active) ─────────
+    // Everything here is integer/float arithmetic over values the frame already computed. No allocation, no formatting,
+    // no syscalls beyond the two Stopwatch reads the frame took anyway — the phases 6-13 zero-alloc contract still binds.
+
+    private long _prevLatencyPresentQpc;   // the present stamp this row's predecessor saw (for the present interval)
+    private uint _prevPresentRefreshCount;  // DXGI vblank ordinal of the previous attested present (0 = none yet)
+
+    /// <summary>Refresh period in QPC ticks, MEASURED (DWM qpcRefreshPeriod) rather than nominal. Falls back to 60 Hz
+    /// only when the backend reports nothing; a consumer distinguishes the two via the stats' Valid bit.</summary>
+    private long RefreshPeriodQpcOrDefault()
+    {
+        long p = _device.LastPresentStats.RefreshPeriodQpc;
+        return p > 0 ? p : Stopwatch.Frequency / 60;
+    }
+
+    private void EmitLatencyRow(float dtMs)
+    {
+        var ps = _device.LastPresentStats;
+        long vsyncTicks = RefreshPeriodQpcOrDefault();
+        double msPerTick = 1000.0 / Stopwatch.Frequency;
+        long presentQpc = Volatile.Read(ref _lastPresentQpc);
+
+        // Present interval + missed refresh slots. The half-interval bias before the integer divide is part of the
+        // standard definition, not a rounding convenience. Both are 0/-1-suppressed on the first row of a session,
+        // which is structurally never late.
+        float presentIntervalMs = 0f;
+        int missedVsyncs = 0;
+        if (_prevLatencyPresentQpc != 0 && presentQpc > _prevLatencyPresentQpc)
+        {
+            long interval = presentQpc - _prevLatencyPresentQpc;
+            presentIntervalMs = (float)(interval * msPerTick);
+            missedVsyncs = (int)((interval + vsyncTicks / 2) / vsyncTicks) - 1;
+            if (missedVsyncs < 0) missedVsyncs = 0;
+        }
+        if (presentQpc != 0) _prevLatencyPresentQpc = presentQpc;
+
+        // OS-ATTESTED missed slots (supersedes the stamp-derived count above where present): the difference between
+        // consecutive vblank ordinals at which the display pipeline actually showed our frames, minus the one slot a
+        // healthy frame is entitled to. Carried BIASED BY +1 so that "not attested" (0) stays distinguishable from
+        // "attested zero missed" — those are opposite conclusions, and a bare 0 would silently merge them.
+        int attestedPlus1 = 0;
+        if (ps.Valid && ps.PresentRefreshCount != 0)
+        {
+            if (_prevPresentRefreshCount != 0 && ps.PresentRefreshCount > _prevPresentRefreshCount)
+            {
+                long slots = (long)ps.PresentRefreshCount - _prevPresentRefreshCount - 1;
+                if (slots < 0) slots = 0;
+                if (slots > 0xFFFE) slots = 0xFFFE;
+                attestedPlus1 = (int)slots + 1;
+            }
+            _prevPresentRefreshCount = ps.PresentRefreshCount;
+        }
+        int missedPacked = (missedVsyncs & 0xFFFF) | (attestedPlus1 << 16);
+
+        // "We woke up late" vs "we were slow" — two different bugs with two different fixes. Slack is the part of the
+        // raw frame gap that no measured phase accounts for; subtracting the wait the loop DELIBERATELY asked for
+        // leaves only the unrequested absence. Note 113 is the coarse, hitch-gated form of the same discriminator and
+        // stays as the cross-check.
+        float rawDt = _frameTime is StopwatchFrameTimeSource s ? s.LastRawDeltaMs : dtMs;
+        float workMs = (float)(LastStats.FlushMs + LastStats.LayoutMs + LastStats.AnimMs + LastStats.RecordMs + LastStats.SubmitMs);
+        float requestedWaitMs = _lastWaitMs > 0 ? _lastWaitMs : 0f;
+        float wakeOverheadMs = rawDt - workMs - requestedWaitMs;
+        if (wakeOverheadMs < 0f) wakeOverheadMs = 0f;
+
+        // Deadline model: the real deadline is bufferCount x refresh, NOT one 16.7ms frame — with the render-thread seam
+        // plus the consume-gated quarantine the pipeline is several frames deep, and measuring against a single frame
+        // over-reports hitches for this architecture. SIGNED: negative is headroom, and the distribution's negative tail
+        // is as diagnostic as its positive one.
+        const int SwapchainBufferCount = 2;
+        float frameOverrunMs = (float)((workMs) - (vsyncTicks * SwapchainBufferCount * msPerTick));
+
+        // clockSampleSkewMs: the offset baked into this frame represents frameStart − ResampleLatencyMs, but the frame
+        // will be SEEN at roughly the next refresh boundary. A consistently non-zero mean means the engine is animating
+        // from the wrong instant — perfect FPS, zero missed vsyncs, and still the wrong amount of motion per frame.
+        float clockSampleSkewMs = 0f;
+        double frameQpcSec = _scrollAnim.FrameQpcSec;
+        if (frameQpcSec > 0.0 && presentQpc != 0)
+        {
+            double offsetSampleQpc = frameQpcSec * Stopwatch.Frequency - FluentGpu.Animation.ScrollTuning.ResampleLatencyMs / msPerTick;
+            double expectedPresentQpc = presentQpc + vsyncTicks;
+            clockSampleSkewMs = (float)((offsetSampleQpc - expectedPresentQpc) * msPerTick);
+        }
+
+        // Multi-label stage set: EVERY stage over one refresh period, never a single winner. One frame legitimately
+        // carries several tags, and collapsing to a winner is how a secondary cause gets a fix it did not need.
+        double vsyncMs = vsyncTicks * msPerTick;
+        int stageMask = 0;
+        if (wakeOverheadMs > vsyncMs) stageMask |= 1 << 0;
+        if (LastStats.FlushMs > vsyncMs) stageMask |= 1 << 1;
+        if (LastStats.LayoutMs > vsyncMs) stageMask |= 1 << 2;
+        if (LastStats.AnimMs > vsyncMs) stageMask |= 1 << 3;
+        if (LastStats.RecordMs > vsyncMs) stageMask |= 1 << 4;
+        if (LastStats.ImagePumpMs > vsyncMs) stageMask |= 1 << 5;
+        if (LastStats.RealizeCatchupMs > vsyncMs) stageMask |= 1 << 6;
+        if (LastStats.SubmitMs > vsyncMs) stageMask |= 1 << 7;
+        if (LastStats.FenceWaitMs > vsyncMs) stageMask |= 1 << 8;
+
+        double genSec = _scrollAnim.LastContactSampleSec;
+        long genQpc = genSec > 0.0 ? (long)(genSec * Stopwatch.Frequency) : 0L;
+        var quality = genQpc == 0 ? Foundation.GenStampQuality.Tick : Foundation.ScrollTrace.ContactStampQuality;
+
+        FluentGpu.Foundation.ScrollTrace.Latency(
+            _framePublishSeq, quality, stageMask, missedPacked,
+            _scrollAnim.TrackingLagSampled ? _scrollAnim.TrackingLagDip : 0f,
+            wakeOverheadMs, frameOverrunMs, clockSampleSkewMs, presentIntervalMs,
+            _scrollAnim.TrackingLagSampled ? _scrollAnim.TrackingVelocityDipPerMs : 0f, genQpc);
+        _scrollAnim.TrackingLagSampled = false;   // one row per sample; a stale value must not be re-reported as fresh
+    }
+
+    /// <summary>Called on whichever thread just returned from <c>Present()</c> (the render thread under the async
+    /// default). Stamps WHEN the present returned and WHICH published frame it carried, then bumps the present count.
+    /// The QPC read must stay the first statement: everything downstream of Present is attribution error.
+    ///
+    /// A present with <paramref name="publishSeq"/> == 0 (nothing newly acquired — the previous frame is still on
+    /// screen) does NOT move the ack, so the ack stays monotone and a joiner never sees it go backwards.</summary>
+    private void NotePresented(ulong publishSeq)
+    {
+        Volatile.Write(ref _lastPresentQpc, Stopwatch.GetTimestamp());
+        if (publishSeq != 0) Volatile.Write(ref _lastPresentPublishSeq, (long)publishSeq);
+        Interlocked.Increment(ref _presentedSequence);
+    }
 
     private void UpdateFrameTiming(long frameStart)
     {

@@ -23,6 +23,13 @@ fluentgpu-*-counters.csv
 # Wavee probe output (WAVEE_*_PROBE CSV/summary dumps — regenerated on demand)
 .wavee-diagnostics/
 
+# ops/diag scroll-feel capture bundles (console.txt + scroll.csv + manifest/summary per session).
+# The SCRIPTS under ops/diag/ stay tracked — only the captures are ignored. A bundle is machine- and
+# session-specific (it records the exe hash, panel, power state and a human's subjective scores), so it is
+# evidence for one investigation, not a repo artifact. Session directory names must also avoid the literal
+# tokens "Debug"/"Release", which the rules at the top of this file would swallow whole.
+ops/diag/sessions/
+
 # --screenshot fidelity captures (generated PNGs for visual diffing)
 out/
 .shots/

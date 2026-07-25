@@ -1399,7 +1399,7 @@ static class ScrollSuite
         // crit-damped, lands on the target), and snap-back (closed-form spring → 0).
         {
             const float vel = 0.4f;   // DIP/ms
-            // Contact: run the 1-packet-per-frame-at-frame-time script at dt and return max deviation from vel·(t−5ms−t0).
+            // Contact: run the 1-packet-per-frame-at-frame-time script at dt and return max deviation from vel·(t−ResampleLatencyMs−t0).
             float ContactDev(float dt)
             {
                 using var app = new HeadlessPlatformApp();
@@ -1453,7 +1453,7 @@ static class ScrollSuite
 
         // gate.scroll.resample-cadence (§8.3, pins R2): a constant-velocity stream at 1-packet/2-packet ALTERNATING cadence
         // (8ms packets against a 12ms frame → 1,2,1,2 packets/frame) produces monotonic, NEAR-CONSTANT per-frame displacement
-        // (the §4.1 resampler samples the same linear position at frameT−5ms, so the packet cadence alias is gone). Without
+        // (the §4.1 resampler samples the same linear position at frameT−ResampleLatencyMs, so the packet cadence alias is gone). Without
         // resampling the per-frame displacement would alternate δ,2δ — the textbook 125Hz-into-60Hz judder.
         {
             using var app = new HeadlessPlatformApp();
@@ -1489,7 +1489,7 @@ static class ScrollSuite
         }
 
         // gate.scroll.contact-1to1 (§8.4): during TouchpadTracking the applied offset equals the resampled finger position
-        // (anchor + Σδ resampled to frameT−5ms) within 0.5 DIP every frame — the resampler neither lags nor gains.
+        // (anchor + Σδ resampled to frameT−ResampleLatencyMs) within 0.5 DIP every frame — the resampler neither lags nor gains.
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("v2-1to1", new Size2(360, 460), 1f)); window.Show();
@@ -1515,7 +1515,7 @@ static class ScrollSuite
                     maxErr = MathF.Max(maxErr, MathF.Abs(s.OffsetY - expected)); frames++;
                 }
             }
-            Check("gate.scroll.contact-1to1 during TouchpadTracking the applied offset tracks the resampled finger position (anchor + Σδ @ frameT−5ms) within 0.5 DIP every frame",
+            Check("gate.scroll.contact-1to1 during TouchpadTracking the applied offset tracks the resampled finger position (anchor + Σδ @ frameT−ResampleLatencyMs) within 0.5 DIP every frame",
                 maxErr <= 0.5f && frames >= 10, $"maxErr={maxErr:0.000} DIP over {frames} tracking frames (bound 0.5)");
         }
 
@@ -1648,7 +1648,7 @@ static class ScrollSuite
             for (int i = 0; i < 40; i++) { pr.Step(16); host.Scene.TryGetScroll(vp, out var q); if (q.Phase == ScrollIntegrator.Idle) break; }
             host.Scene.TryGetScroll(vp, out var s);
             float applied = s.OffsetY;
-            // Full owed displacement (a few DIP of resampler lag = end-velocity × 5ms is the only shortfall; a real clamp
+            // Full owed displacement (a few DIP of resampler lag = end-velocity × ResampleLatencyMs is the only shortfall; a real clamp
             // would lose ~150 DIP of the 193 hitch). Stayed interior (no edge conversion) throughout.
             bool oneToOne = MathF.Abs(applied - total) < 8f;
             Check("gate.scroll.relatch-catchup an OS-momentum stream with a 34ms hitch (one 193 DIP catch-up) applies the full owed displacement 1:1 within a vsync — no max-per-frame delta clamp (§A.6, resolves F8)",

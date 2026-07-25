@@ -20,4 +20,11 @@
     <RootNamespace>$(MSBuildProjectName)</RootNamespace>
   </PropertyGroup>
 
+  <!-- FLUENTGPU_DIAG: mirrors src/Directory.Build.props (which this file does NOT inherit — see the header above).
+       [Conditional] erasure is decided by the CALLING assembly, so without this the app's ScrollTrace.Note / OffsetWrite
+       call sites stay erased even when the engine is compiled with the symbol. See ops/diag/README.md. -->
+  <PropertyGroup Condition="'$(FluentGpuDiag)' == 'true'">
+    <DefineConstants>$(DefineConstants);FLUENTGPU_DIAG</DefineConstants>
+  </PropertyGroup>
+
 </Project>

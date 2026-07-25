@@ -337,6 +337,11 @@ public sealed class ScrollIntegrator
     {
         AnyUserScrollActiveThisFrame = false;
         AnyOffsetWroteThisFrame = false;
+        // ops/diag: reset the ambient gesture-state stamp each frame; the per-node loop below raises it. This is the
+        // drag → inertia → settle split, which a human phase marker structurally cannot record and which is exactly the
+        // boundary that separates "content is not glued to my finger" from "the fling is not smooth".
+        if (FluentGpu.Foundation.ScrollTrace.On)
+            FluentGpu.Foundation.ScrollTrace.SetState(FluentGpu.Foundation.ScrollTraceState.Gesture, 0);
         // §5 pacing: StopwatchFrameTimeSource deliberately emits one zero-delta frame after a cadence Resync. A zero
         // simulation step cannot move; treating it as a clamp killed newly-seeded motion (the wheel dead-zone). No
         // simulation time elapsed, so preserve every armed state unchanged and advance on the next positive tick. This
@@ -364,6 +369,16 @@ public sealed class ScrollIntegrator
             bool horizontal = sc.Orientation == 1;
             float off = horizontal ? sc.OffsetX : sc.OffsetY;
             byte phase = sc.Phase;
+            // Highest-wins across the frame's active nodes (an inertial outer scroller under a settling inner one reads
+            // as inertia, which is what the gesture felt like).
+            if (FluentGpu.Foundation.ScrollTrace.On)
+            {
+                int g = phase == TouchpadTracking || phase == Overscroll ? 1
+                      : phase == Fling ? 2
+                      : phase == SnapBack || phase == WheelAnimating ? 3 : 0;
+                if (g != 0 && g > ((FluentGpu.Foundation.ScrollTrace.StateWord >> 4) & 0x3))
+                    FluentGpu.Foundation.ScrollTrace.SetState(FluentGpu.Foundation.ScrollTraceState.Gesture, g);
+            }
             bool beganProgrammatic = (sc.PhaseFlags & ScrollState.PhaseProgrammatic) != 0;
 
             bool moved = false;
@@ -526,13 +541,13 @@ public sealed class ScrollIntegrator
                     }
                 }
             }
-            // ── TouchpadTracking / Overscroll (§4.1/§4.4): resample the latched contact position to frameT − 5ms, emit ONE
+            // ── TouchpadTracking / Overscroll (§4.1/§4.4): resample the latched contact position to frameT − ScrollTuning.ResampleLatencyMs (12ms), emit ONE
             // displacement. The dispatcher is a pure recorder (P3) — it deposits contact samples via AppendContactSample and
             // this is the SOLE offset/band writer for the gesture. Overscroll is TouchpadTracking past a content edge: the
             // finger keeps driving the band 1:1, so this branch stays live across the TouchpadTracking↔Overscroll flip
             // (else a past-edge sample would freeze the band).
             // A per-node direct-touch (WM_POINTER) pan reads its OWN PendingRawOffset (concurrent multi-touch stays
-            // independent); a PTP/touch-contract gesture reads the singleton resampler at frameT−5ms. Both split the same
+            // independent); a PTP/touch-contract gesture reads the singleton resampler at frameT−ResampleLatencyMs. Both split the same
             // raw offset into a clamped offset + rubber-band below (the SOLE offset/band writer for the gesture).
             else if ((phase == TouchpadTracking || phase == Overscroll)
                      && (((sc.PhaseFlags & ScrollState.PhaseTouchPan) != 0 && !float.IsNaN(sc.PendingRawOffset))
@@ -547,6 +562,7 @@ public sealed class ScrollIntegrator
                 moved = ScrollWrite?.Invoke(n, clamped) ?? false;
                 off = horizontal ? sc.OffsetX : sc.OffsetY;
                 float excess = rawOffset < 0f ? rawOffset : rawOffset > maxOffS ? rawOffset - maxOffS : 0f;
+                if (FluentGpu.Foundation.ScrollTrace.On) NoteTrackingLag(rawOffset, off, excess);
                 if (excess != 0f && !touchPan && (sc.PhaseFlags & ScrollState.PhaseOsOwned) != 0)
                 {
                     // OS-owned momentum (DManip INERTIA) reached the edge. The OS tail decays for up to ~2s and no
@@ -729,6 +745,44 @@ public sealed class ScrollIntegrator
             }   // fully settled: statically visible under hover, or hidden after the delays
         }
     }
+
+    // ── Pillar-A sensor: applied-vs-intended offset + gesture velocity (ops/diag) ────────────────────────────────────
+    // Deposited here per tick and drained once per frame by the host, which owns the present stamps needed to turn these
+    // into a latency row. Plain fields, single-threaded (phase 7, UI thread) — no allocation, no locking.
+
+    /// <summary>True when this frame's tick ran the contact-tracking writer, so the fields below hold fresh values.</summary>
+    public bool TrackingLagSampled;
+    /// <summary>SIGNED DIP: the resampled implied-finger offset MINUS what actually got applied, with any past-the-edge
+    /// excess removed. Interior tracking is ~0 BY CONSTRUCTION — the applied offset IS the clamped resampled one — and
+    /// that is the point: a non-zero value here means the write did not land where the resampler asked for a reason
+    /// other than the extent (a rejected/clamped write, a competing writer, an anchor that moved underneath).
+    ///
+    /// This is deliberately NOT "how far behind the finger the content is". That quantity is STRUCTURAL — the resampler
+    /// targets <c>frameT − ScrollTuning.ResampleLatencyMs</c> on purpose, and the pipeline adds its own present latency
+    /// on top — so it is not a defect to be caught in-frame but a product of velocity and measured present latency. It
+    /// is reconstructed offline as <c>TrackingVelocityDipPerMs x (ResampleLatencyMs + presentLatencyMs)</c>, which is
+    /// exactly why the latency row carries the velocity column.</summary>
+    public float TrackingLagDip;
+    /// <summary>Gesture velocity (DIP per MILLISECOND, signed) from the two newest contact samples — the sample-timestamp
+    /// slope, never a per-frame displacement. 0 when fewer than two samples are retained.</summary>
+    public float TrackingVelocityDipPerMs;
+
+    private void NoteTrackingLag(float rawOffset, float appliedOff, float excess)
+    {
+        float vel = 0f;
+        if (_rs.Count >= 2)
+        {
+            double span = _rs.T1 - _rs.T0;
+            if (span > 0.0) vel = (float)((_rs.X1 - _rs.X0) / span) / 1000f;   // DIP/s → DIP/ms
+        }
+        TrackingLagDip = rawOffset - appliedOff - excess;
+        TrackingVelocityDipPerMs = vel;
+        TrackingLagSampled = true;
+    }
+
+    /// <summary>QPC seconds of the newest retained contact sample (0 when none) — the input-side end of the latency
+    /// chain. Same clock domain as <c>Stopwatch.GetTimestamp()</c>, so it joins present stamps with no conversion.</summary>
+    public double LastContactSampleSec => _rs.Count > 0 ? _rs.T1 : 0.0;
 
     /// <summary>Resample the latched contact position to <c>frameT − ResampleLatencyMs</c> (scroll-feel-rework-v2 §4.1):
     /// interpolate between the two newest samples when the target is bracketed (preferred), else extrapolate capped at

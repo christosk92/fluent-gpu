@@ -285,6 +285,12 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
         long prevPump = _pumpQpc;
         _pumpQpc = nowQpc;
         _pumpMs = nowMs;
+        // Stamp provenance for the diagnostics latency row: RECEIVE, not hardware. This pump stamp is when WE observed
+        // the content update, and the digitizer runs at roughly twice this rate (see the EMA below), so every sample
+        // carries up to half a pump interval of quantisation. The packager refuses to publish sub-tick latency
+        // percentiles off anything below hardware grade — which, on a machine where DM is the primary touchpad
+        // producer, is the honest state of affairs rather than a defect to paper over.
+        FluentGpu.Foundation.ScrollTrace.ContactStampQuality = FluentGpu.Foundation.GenStampQuality.Receive;
         // Self-measured pump cadence (EMA): during a gesture the loop is present-paced, so the pump interval IS this
         // machine's vblank period (8.3ms @120Hz, 16.7 @60Hz) — no refresh-rate query exists in the PAL, and hardcoding
         // either value over/under-leads the finger on the other class of machine. Idle gaps (>25ms) are excluded.

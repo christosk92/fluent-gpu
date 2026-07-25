@@ -970,7 +970,33 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
             FluentGpu.Foundation.ScrollLog.Line($"WHEEL {(horizontal ? "H" : "V")} notch={notch} dip={(horizontal ? dipX : dipY):0.0} (held-notch flush)");
         _queue.Enqueue(new InputEvent(InputKind.Wheel, _dmHeldPt, 0, 0, dipY, Mods(),
             Pointer: PointerKind.Mouse, TimestampMs: Now(),
-            PointerId: _dmHeldPid, ScrollDeltaX: dipX, WheelNotch: notchY, WheelNotchX: notchX));
+            PointerId: _dmHeldPid, ScrollDeltaX: dipX, WheelNotch: notchY, WheelNotchX: notchX,
+            QpcTicks: WheelStampQpc(_dmHeldPid)));
+    }
+
+    /// <summary>The device stamp for a wheel packet, and the ONE place that records how good it is.
+    ///
+    /// The hi-res branch has always resolved <c>POINTER_INFO.PerformanceCount</c>; the DETENTED branch enqueued
+    /// <c>QpcTicks: 0</c>, which silently degrades every latency figure derived from a wheel gesture to millisecond
+    /// message time. Since the same pointer id is already in hand, the identical lookup costs one call and upgrades the
+    /// only non-contact path that can carry a hardware stamp at all.
+    ///
+    /// Deliberately NOT fixed by calling <c>EnableMouseInPointer(TRUE)</c>: that is callable once per process, is
+    /// irreversible, and re-routes input app-wide — a behaviour fork inside the instrument, which would change the very
+    /// feel being measured. Record the provenance instead and let the packager refuse sub-tick percentiles below
+    /// <see cref="FluentGpu.Foundation.GenStampQuality.Hardware"/>.</summary>
+    private long WheelStampQpc(uint wheelPid)
+    {
+        POINTER_INFO pi;
+        if (GetPointerInfo(wheelPid, &pi) && pi.PerformanceCount != 0)
+        {
+            FluentGpu.Foundation.ScrollTrace.ContactStampQuality = FluentGpu.Foundation.GenStampQuality.Hardware;
+            return unchecked((long)pi.PerformanceCount);
+        }
+        // No device stamp available: fall back to the moment WE received the message, and say so. This is `receive`
+        // quality, not `hardware` — the difference is the unmeasured device-to-host leg.
+        FluentGpu.Foundation.ScrollTrace.ContactStampQuality = FluentGpu.Foundation.GenStampQuality.Receive;
+        return System.Diagnostics.Stopwatch.GetTimestamp();
     }
 
     /// <summary>Fallback-gesture lift (scroll-feel-rework-v2 §5/§6): the hi-res wheel packets have gone silent for the
@@ -1463,9 +1489,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                     // Vertical: −delta = scroll toward content end (offset increases). Horizontal: +delta = right (offset increases).
                     float tpDipY = horizontal ? 0f : -dip;
                     float tpDipX = horizontal ? dip : 0f;
-                    long qpc = System.Diagnostics.Stopwatch.GetTimestamp();
-                    POINTER_INFO wpi;
-                    if (GetPointerInfo(wheelPid, &wpi) && wpi.PerformanceCount != 0) qpc = unchecked((long)wpi.PerformanceCount);
+                    long qpc = WheelStampQpc(wheelPid);   // device stamp when the OS has one; records its provenance either way
                     var pt = WheelPt(lp);
                     // Lift adaptivity (§5/§6): feed this packet's inter-packet gap into the median ring and recompute the
                     // silence threshold = clamp(1.4×median, 50, 120) ms. A fresh gesture (streamIdle) starts the cadence over.
@@ -1510,15 +1534,17 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 float dipY = -wholeV * WheelDipPerNotch;
                 float dipX =  wholeH * WheelDipPerNotch;
                 PointerKind wheelKind = _wheelHiRes ? PointerKind.Touchpad : PointerKind.Mouse;
+                long notchQpc = WheelStampQpc(wheelPid);
                 if (FluentGpu.Foundation.ScrollTrace.On)
                     FluentGpu.Foundation.ScrollTrace.RawWheel(notch,
                         WheelTraceFlags(horizontal, thisHiRes, streamIdle, ptTouchpad, ctrl: false, phasePath: false, fbActiveBefore: _fbActive),
-                        0, horizontal ? dipX : dipY, wheelGapMs, 0);
+                        0, horizontal ? dipX : dipY, wheelGapMs, notchQpc);
                 if (FluentGpu.Foundation.ScrollLog.On)
                     FluentGpu.Foundation.ScrollLog.Line($"WHEEL {(horizontal ? "H" : "V")} notch={notch} dip={(horizontal ? dipX : dipY):0.0} hiRes={_wheelHiRes} kind={wheelKind} (notch fallback)");
                 _queue.Enqueue(new InputEvent(InputKind.Wheel, WheelPt(lp), 0, 0, dipY, Mods(),
                     Pointer: wheelKind, TimestampMs: nowMs,
-                    PointerId: wheelPid, ScrollDeltaX: dipX, WheelNotch: notchY, WheelNotchX: notchX));
+                    PointerId: wheelPid, ScrollDeltaX: dipX, WheelNotch: notchY, WheelNotchX: notchX,
+                    QpcTicks: notchQpc));
                 return true;
             }
             case WM_KEYDOWN:
@@ -1808,7 +1834,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         float dipY = horizontal ? 0f : whole * WheelDipPerNotch;
         float dipX = horizontal ? whole * WheelDipPerNotch : 0f;
         _queue.Enqueue(new InputEvent(InputKind.Wheel, WheelPt(lp), 0, 0, dipY, Mods(),
-            Pointer: PointerKindOf(pointerId), TimestampMs: Now(), PointerId: pointerId, ScrollDeltaX: dipX, WheelNotch: notchY, WheelNotchX: notchX));
+            Pointer: PointerKindOf(pointerId), TimestampMs: Now(), PointerId: pointerId, ScrollDeltaX: dipX, WheelNotch: notchY, WheelNotchX: notchX,
+            QpcTicks: WheelStampQpc(pointerId)));
     }
 
     // WM_POINTERCAPTURECHANGED over the popup: the contact's implicit capture broke — cancel just THAT PointerId's
@@ -1823,6 +1850,12 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     {
         time = pi.dwTime != 0 ? pi.dwTime : Now();
         qpc = unchecked((long)pi.PerformanceCount);   // QPC domain == Stopwatch domain (SystemParams.QpcFrequency)
+        // Stamp provenance for the diagnostics latency row: this is the OS device stamp, the best grade available, but
+        // only genuinely calibrated when the digitizer itself reports scan timestamps — which is why the bundle's error
+        // budget still carries the unmeasured 0-8ms device-to-host leg at a 125 Hz report rate.
+        FluentGpu.Foundation.ScrollTrace.ContactStampQuality = qpc != 0
+            ? FluentGpu.Foundation.GenStampQuality.Hardware
+            : FluentGpu.Foundation.GenStampQuality.Tick;
         if (IsTouchpadDevice(in pi))
         {
             kind = PointerKind.Touchpad;

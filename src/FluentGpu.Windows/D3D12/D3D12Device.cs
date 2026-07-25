@@ -842,6 +842,11 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         long fenceWaitStart = System.Diagnostics.Stopwatch.GetTimestamp();
         if (_skipLatencyOnce) _skipLatencyOnce = false;
         else WaitForLatency();   // bound queued-frame latency before starting this frame's production
+        // Split the two waits: the LATENCY waitable is compositor/present-queue backpressure ("a ready frame is being
+        // held"), the frame FENCE is GPU work ("we were slow"). Summed together as one number they are indistinguishable,
+        // and those two diagnoses have opposite fixes. LastFenceWaitMs keeps its historical meaning (both, summed).
+        long latencyDone = System.Diagnostics.Stopwatch.GetTimestamp();
+        _lastLatencyWaitMs = System.Diagnostics.Stopwatch.GetElapsedTime(fenceWaitStart, latencyDone).TotalMilliseconds;
         _frameIndex = _swapChain->GetCurrentBackBufferIndex();
         WaitForFrame(_frameIndex);
         _lastFenceWaitMs = System.Diagnostics.Stopwatch.GetElapsedTime(fenceWaitStart).TotalMilliseconds;
@@ -2135,7 +2140,86 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             throw new InvalidOperationException($"Present failed: 0x{(uint)pr:X8}" + (reason != 0u ? $" (device removed reason 0x{reason:X8})" : ""));
         }
         if (_hintSettlePresent) { _hintSettlePresent = false; _ = DwmFlush(); }
+        if (ReferenceEquals(target, _primarySwapchain)) SamplePresentStats();
         StoreActive();
+    }
+
+    // ── OS-attested present statistics (always on) ──────────────────────────────────────────────────────────────────
+    // The in-app present stamp (AppHost.LastPresentQpc) is submit-confirmed: it says Present() returned, not that a
+    // scanout began. These two OS sources are the vblank-attested truth that bounds it. Cost is one DXGI call per
+    // present plus one DWM call per second — no queries, no allocation, nothing per-draw — so unlike FG_GPU_TIMING this
+    // is safe to leave on while measuring the very cadence it reports.
+    private PresentStats _lastPresentStats;
+    private long _lastDwmSampleQpc;
+    private ulong _dwmFramesDropped, _dwmFramesMissed, _dwmFramesLate;
+    private bool _dwmBaselined;   // the DWM counters are only meaningful as deltas — the first sample is a baseline, not data
+
+    /// <inheritdoc/>
+    public PresentStats LastPresentStats => _lastPresentStats;
+
+    private void SamplePresentStats()
+    {
+        DXGI_FRAME_STATISTICS fs = default;
+        bool fsOk = false;
+        if (_swapChain != null)
+        {
+            // DXGI_ERROR_FRAME_STATISTICS_DISJOINT (0x887A000A) on the first call and after every mode change: the
+            // sequence restarted, so this sample cannot be differenced against the previous one. Swallow it — the next
+            // call succeeds — but do NOT publish the garbage numbers as if they were data.
+            fsOk = (int)_swapChain->GetFrameStatistics(&fs) >= 0;
+        }
+
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+        long refreshPeriod = _lastPresentStats.RefreshPeriodQpc;
+        long vblankQpc = _lastPresentStats.VBlankQpc;
+        uint dropped = 0, missed = 0, late = 0;
+        bool dwmOk = _dwmBaselined;
+        if (now - _lastDwmSampleQpc >= System.Diagnostics.Stopwatch.Frequency)
+        {
+            _lastDwmSampleQpc = now;
+            DWM_TIMING_INFO ti = default;
+            ti.cbSize = (uint)sizeof(DWM_TIMING_INFO);
+            // hwnd MUST be NULL: the per-window form was removed in Windows 8.1 and now returns E_INVALIDARG. These are
+            // therefore main-monitor-GLOBAL counters, with no per-window attribution — a confound to record, not a fault
+            // to assign.
+            if ((int)DwmGetCompositionTimingInfo(HWND.NULL, &ti) >= 0)
+            {
+                refreshPeriod = (long)ti.qpcRefreshPeriod;
+                vblankQpc = (long)ti.qpcVBlank;
+                if (_dwmBaselined)
+                {
+                    dropped = unchecked((uint)(ti.cFramesDropped - _dwmFramesDropped));
+                    missed = unchecked((uint)(ti.cFramesMissed - _dwmFramesMissed));
+                    late = unchecked((uint)(ti.cFramesLate - _dwmFramesLate));
+                    dwmOk = true;
+                }
+                _dwmFramesDropped = ti.cFramesDropped;
+                _dwmFramesMissed = ti.cFramesMissed;
+                _dwmFramesLate = ti.cFramesLate;
+                _dwmBaselined = true;
+            }
+        }
+        else
+        {
+            dropped = _lastPresentStats.DwmFramesDroppedDelta;
+            missed = _lastPresentStats.DwmFramesMissedDelta;
+            late = _lastPresentStats.DwmFramesLateDelta;
+        }
+
+        _lastPresentStats = new PresentStats
+        {
+            Valid = fsOk && dwmOk && refreshPeriod > 0,
+            PresentCount = fsOk ? fs.PresentCount : 0u,
+            PresentRefreshCount = fsOk ? fs.PresentRefreshCount : 0u,
+            SyncRefreshCount = fsOk ? fs.SyncRefreshCount : 0u,
+            SyncQpc = fsOk ? fs.SyncQPCTime : 0L,
+            RefreshPeriodQpc = refreshPeriod,
+            VBlankQpc = vblankQpc,
+            DwmFramesDroppedDelta = dropped,
+            DwmFramesMissedDelta = missed,
+            DwmFramesLateDelta = late,
+            LatencyWaitMs = _lastLatencyWaitMs,
+        };
     }
 
     private void SignalFrame(uint frameIndex)
@@ -2164,6 +2248,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private bool _skipLatencyOnce;   // set by SuppressLatencyWaitOnce, consumed by the next SubmitDrawList
 
     private double _lastFenceWaitMs;   // wall-time blocked on the latency waitable + frame fence in the last SubmitDrawList
+    private double _lastLatencyWaitMs; // of which: the frame-latency waitable alone (compositor backpressure, not GPU work)
     /// <inheritdoc/>
     public double LastFenceWaitMs => _lastFenceWaitMs;
 

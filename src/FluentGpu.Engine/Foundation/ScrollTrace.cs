@@ -28,6 +28,43 @@ public enum ScrollTraceKind : byte
     OffsetWrite = 16,// integrator/chokepoint: ONE offset write (i0=node, i1=Phase §2.2, i2=writer §ScrollWriter, f0=offset)
     FrameTiming = 17,// hitch attribution (emitted only for frames >12ms): f0..f5=flush/layout/anim/record/submit/fenceWait ms,
                      // i0=presentMs×100, i1=(measureCount<<10)|min(textShapeMisses,1023), i2=unclampedDtMs×100
+    Latency = 18,    // input→offset→present correlation row (NOT dt-gated): i0=publishSeq low 32, i1=stampQuality|stageMask<<8,
+                     // i2=missedVsyncs, f0=lagDip signed, f1=wakeOverheadMs, f2=frameOverrunMs signed,
+                     // f3=clockSampleSkewMs signed, f4=presentIntervalMs, f5=velocityDipPerMs, aux=genQpc
+}
+
+/// <summary>Provenance of the input stamp a <see cref="ScrollTraceKind.Latency"/> row's <c>aux</c> column carries. The
+/// packager REFUSES to publish sub-tick latency percentiles for anything below <see cref="Hardware"/> — a
+/// <see cref="Receive"/> stamp is quantised by the producer's own pump rate and cannot resolve a fraction of a frame.
+/// </summary>
+public enum GenStampQuality : byte
+{
+    /// <summary>No stamp at all — the event carried QpcTicks == 0. Percentiles are meaningless.</summary>
+    Tick = 0,
+    /// <summary>Stamped when the engine dequeued the packet from the input ring.</summary>
+    Dequeue = 1,
+    /// <summary>Stamped when the producer received the packet (e.g. DirectManipulation's per-pump QPC) — quantised by
+    /// the pump rate, which runs at roughly half the digitizer rate.</summary>
+    Receive = 2,
+    /// <summary>The OS-reported device stamp (<c>POINTER_INFO.PerformanceCount</c>).</summary>
+    Hardware = 3,
+}
+
+/// <summary>Ambient state slots stamped into EVERY <see cref="ScrollTrace"/> record (packed into one int, so the POD
+/// record does not grow a cache line). This is how a capture is sliced by phase / gesture state / A-B arm offline
+/// without a per-frame filesystem poll on the scroll path. See <see cref="ScrollTrace.SetState"/>.</summary>
+public enum ScrollTraceState : byte
+{
+    /// <summary>Capture-protocol phase ordinal, 0..15 (0 = none). Set by the app from the launcher's marker file.</summary>
+    Phase = 0,
+    /// <summary>Gesture state, 0..3: 0=idle, 1=drag (finger down), 2=inertia (fling), 3=settle (bounce/snap spring).</summary>
+    Gesture = 1,
+    /// <summary>1 while the current phase is its first (cold) pass over the content.</summary>
+    ColdPass = 2,
+    /// <summary>Repetition index within the phase, 0..15.</summary>
+    Repetition = 3,
+    /// <summary>A/B arm ordinal, 0..3 (e.g. 0=Mica, 1=opaque).</summary>
+    AbVariant = 4,
 }
 
 /// <summary>Who wrote a scroll offset (scroll-feel-rework-v2 §8 single-writer gate). The v2 invariant (§2.1) is that
@@ -50,8 +87,11 @@ public enum ScrollWriter : byte
 /// does not perturb the gesture being measured. Contrast <see cref="ScrollLog"/> (human-readable, per-event
 /// string+console writes — visibly perturbs pacing): this one is built for offline numeric analysis.
 ///
-/// CSV columns: <c>tMs,frame,kind,i0,i1,i2,f0,f1,f2,f3,f4,f5,auxMs</c> — tMs is ms since trace start (Stopwatch),
-/// auxMs the event's own QPC stamp mapped to the same axis (empty when the event carried none). Debug pays one disabled
+/// CSV columns: <c>tMs,frame,kind,i0,i1,i2,f0,f1,f2,f3,f4,f5,auxMs,state</c> — tMs is ms since trace start (Stopwatch),
+/// auxMs the event's own QPC stamp mapped to the same axis (empty when the event carried none), state the packed
+/// <see cref="ScrollTraceState"/> word. NOTE <c>frame</c> is NOT a join key across artifacts (it counts Paint phase 7
+/// only, is written unsynchronised, and suppresses spin frames) — join on <c>tMs</c> or on the
+/// <see cref="ScrollTraceKind.Latency"/> row's publishSeq. Debug pays one disabled
 /// branch per guarded call. Release erases those call sites entirely unless <c>FLUENTGPU_DIAG</c> is explicitly defined.
 /// Default output: <c>%TEMP%\fg-scrolltrace.csv</c> (overwritten per run).
 /// </summary>
@@ -89,6 +129,7 @@ public static class ScrollTrace
         public int Frame;
         public int I0, I1, I2;
         public float F0, F1, F2, F3, F4, F5;
+        public int State;           // packed ScrollTraceState slots as of this record (see SetState)
         public ScrollTraceKind K;
     }
 
@@ -103,8 +144,94 @@ public static class ScrollTrace
         s_t0 = Stopwatch.GetTimestamp();
         AppDomain.CurrentDomain.ProcessExit += static (_, _) => Flush();
         try { Console.WriteLine("[scrolltrace] writing to " + s_path); } catch { }
+        EnsureAnchor(s_t0);
     }
 #endif
+
+    // ── the shared time anchor ───────────────────────────────────────────────────────────────────────────────────────
+
+    private static long s_anchorQpc;
+
+    /// <summary>QPC origin of the <c>tMs</c> axis: 0 before <see cref="EnsureAnchor"/> has run. When the CSV ring is
+    /// armed this is exactly the ring's own <c>t0</c>, so console lines and CSV rows share one axis with no offset.</summary>
+    public static long AnchorQpc => s_anchorQpc;
+
+    /// <summary>Milliseconds since the anchor — the timestamp prefix every diagnostic console line carries so that
+    /// artifacts which are otherwise timestamp-free ([fps], [scrollperf], [wakediag], [render-census]) can be joined to
+    /// the CSV and to the launcher's wall-clock phase markers. 0 before the anchor exists.</summary>
+    public static double NowMs => s_anchorQpc == 0 ? 0.0 : (Stopwatch.GetTimestamp() - s_anchorQpc) * s_msPerTick;
+
+    /// <summary>Establish the shared time axis and emit the ONE line that publishes it, to STDERR (the stdout banner is
+    /// a separate, human-facing line) so it lands in the same teed console as every other diagnostic stream. Idempotent
+    /// — the first caller wins. Callable in ANY build: the CSV ring may be compiled out while the console streams, which
+    /// still need an axis, are not.
+    ///
+    /// The packager HARD-FAILS a bundle whose console has no anchor line. That is deliberate: without it <c>tMs</c> is
+    /// milliseconds since an arbitrary in-process instant — not process start, not wall clock — so nothing in the bundle
+    /// can be correlated with anything else, and a summary computed anyway would be confidently wrong rather than empty.
+    ///
+    /// Build identity here is size+mtime, deliberately NOT a SHA256: hashing a ~100 MB NativeAOT image would cost tens
+    /// of milliseconds inside whatever frame first touches this class. The launcher's manifest.json carries the real
+    /// sha256 and the packager cross-checks size+mtime to prove the console belongs to that exe.</summary>
+    public static void EnsureAnchor(long qpc = 0)
+    {
+        if (s_anchorQpc != 0) return;
+        s_anchorQpc = qpc != 0 ? qpc : Stopwatch.GetTimestamp();
+        try
+        {
+            long size = 0, mtime = 0;
+            string exe = Environment.ProcessPath ?? "";
+            if (exe.Length != 0)
+            {
+                var fi = new FileInfo(exe);
+                if (fi.Exists) { size = fi.Length; mtime = fi.LastWriteTimeUtc.ToFileTimeUtc(); }
+            }
+            Console.Error.WriteLine(
+                "[scrolltrace] anchor wallUtc=" + DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture) +
+                " qpc=" + s_anchorQpc.ToString(CultureInfo.InvariantCulture) +
+                " qpcFreq=" + Stopwatch.Frequency.ToString(CultureInfo.InvariantCulture) +
+                " tMs=0 pid=" + Environment.ProcessId.ToString(CultureInfo.InvariantCulture) +
+                " trace=" + (On ? "1" : "0") +
+                " exeSize=" + size.ToString(CultureInfo.InvariantCulture) +
+                " exeMtimeUtc=" + mtime.ToString(CultureInfo.InvariantCulture) +
+                " exePath=" + exe);
+        }
+        catch { /* best-effort diagnostic */ }
+    }
+
+    // ── ambient state slots (packed; stamped into every record) ──────────────────────────────────────────────────
+
+    private static int s_state;
+
+    // Slot widths, packed low-to-high. 13 bits total, so Rec grows by one int and stays inside its existing padding.
+    private static readonly byte[] s_stateShift = { 0, 4, 6, 7, 11 };
+    private static readonly int[] s_stateMask = { 0xF, 0x3, 0x1, 0xF, 0x3 };
+
+    /// <summary>Stamp an ambient state slot into every subsequent record (0-alloc, one masked int write). The capture
+    /// protocol sets <see cref="ScrollTraceState.Phase"/>/<see cref="ScrollTraceState.Repetition"/>/
+    /// <see cref="ScrollTraceState.AbVariant"/> from the launcher's marker file — from the host loop, NEVER from inside
+    /// a frame — and the integrator sets <see cref="ScrollTraceState.Gesture"/> per tick, which is the split (drag →
+    /// inertia → settle) a human phase marker structurally cannot record. Values are clamped to the slot width.</summary>
+    public static void SetState(ScrollTraceState slot, int value)
+    {
+        if (!On) return;   // const false in plain Release ⇒ the whole body folds away and the call inlines to nothing
+        int i = (int)slot;
+        if ((uint)i >= (uint)s_stateShift.Length) return;
+        int mask = s_stateMask[i], shift = s_stateShift[i];
+        if (value < 0) value = 0; else if (value > mask) value = mask;
+        s_state = (s_state & ~(mask << shift)) | (value << shift);
+    }
+
+    /// <summary>The packed state word as stamped into records (diagnostics/gates only).</summary>
+    public static int StateWord => s_state;
+
+    /// <summary>Ambient provenance of the newest input stamp feeding the scroll path, set by the Win32 producer /
+    /// dispatcher (which know the device) and read by the host when it emits a <see cref="ScrollTraceKind.Latency"/>
+    /// row (which does not). A plain static POD field — the same ambient-diagnostic-state pattern as
+    /// <see cref="Audit"/> — chosen over widening the Input→Animation delegate seams for a diagnostics-only value.
+    /// Defaults to <see cref="GenStampQuality.Tick"/>, i.e. "assume the worst until a producer says otherwise", so an
+    /// unstamped path can never masquerade as hardware-timed.</summary>
+    public static GenStampQuality ContactStampQuality;
 
     // ── frame boundary + idle flush ──────────────────────────────────────────────────────────────────────────────
 
@@ -261,8 +388,21 @@ public static class ScrollTrace
         Add(new Rec { K = ScrollTraceKind.AnimEvent, I0 = nodeIdx, I1 = ev, F0 = f0, F1 = f1, F2 = f2 });
     }
 
-    /// <summary>Freeform marker: i0 = caller-defined code, f0 = payload; optional i1/i2/f1 for per-code context
-    /// (100=anchor re-pin: i1=node, i2=anchorIndex, f1=offset; 102/103=shift drain: i1=node; 104=stale discard: i1=node).</summary>
+    /// <summary>Freeform marker: i0 = caller-defined code, f0 = payload; optional i1/i2/f1 for per-code context.
+    /// THE code registry — every live emitter is listed here; adding a code without adding its row is how the next
+    /// reader mis-decodes a capture (100/102/103/104 were documented, 110/111/113 were not, and drifted):
+    /// <list type="bullet">
+    /// <item>100 = anchor re-pin (i1=node, i2=anchorIndex, f0=delta, f1=offset) — Layout/FlexLayout.cs</item>
+    /// <item>101 = resampler hit the no-extrapolation clamp — Animation/ScrollIntegrator.cs</item>
+    /// <item>102 / 103 = pending anchor shift folded into the live anchor / drained with no tracked gesture (i1=node)</item>
+    /// <item>104 = stale pre-latch shift discarded (i1=node)</item>
+    /// <item>110 = extent-table reseed (app: Wavee HomePage)</item>
+    /// <item>111 = per-row extent correction — Layout/FlexLayout.cs</item>
+    /// <item>113 = hitch slack + GC deltas + last requested wait — Hosting/AppHost.cs</item>
+    /// <item>210 / 211 = capture-protocol phase begin / end (i1=phase ordinal, i2=repetition) — ops/diag launcher.
+    ///       The 100-block is per-subsystem engine context; the deliberately distant 210-block is capture protocol.</item>
+    /// </list>
+    /// Next free engine code: 105 (also 106-109, 112, &gt;=114). Register here in the same commit as the emitter.</summary>
     public static void Note(int code, float f0 = 0f, int i1 = 0, int i2 = 0, float f1 = 0f)
     {
         if (!On) return;
@@ -283,6 +423,41 @@ public static class ScrollTrace
             K = ScrollTraceKind.FrameTiming,
             F0 = flushMs, F1 = layoutMs, F2 = animMs, F3 = recordMs, F4 = submitMs, F5 = fenceWaitMs,
             I0 = (int)(presentMs * 100f), I1 = packed, I2 = (int)(rawDtMs * 100f),
+        });
+    }
+
+    /// <summary>Input→offset→present correlation row: the ONE record that carries a frame identity (<paramref
+    /// name="publishSeq"/>) across the render seam, so an offset write can be joined to the present that actually
+    /// carried it. Deliberately NOT gated on a dt threshold the way <see cref="FrameTiming"/> is — a session whose
+    /// cadence is perfect and whose feel is bad produces no hitch rows at all, and that is exactly the case this row
+    /// exists to measure.
+    ///
+    /// The join contract (ops/diag/README.md): a sample tagged <c>publishSeq = S</c> joins to the FIRST present whose
+    /// acknowledged seq is <c>&gt;= S</c> — never to an equal one. The publisher is DropOldest last-writer-wins, so a
+    /// published frame may never present at all; a strict-equality join silently drops exactly the coalesced frames
+    /// that a cadence investigation is about.
+    ///
+    /// Columns: i0 = publishSeq low 32; i1 = (byte)<see cref="GenStampQuality"/> | stageMask&lt;&lt;8 (bit per stage that
+    /// exceeded one refresh period); i2 = missedVsyncs in the LOW 16 bits, and in the HIGH 16 bits the OS-ATTESTED
+    /// missed-slot count biased by +1 (0 there = not attested, so "no data" is distinguishable from "zero missed" —
+    /// they are opposite conclusions and a bare 0 would conflate them). The attested form comes from DXGI
+    /// PresentRefreshCount deltas and supersedes the stamp-derived one wherever it is present, because it is what the
+    /// display pipeline actually did rather than what our post-Present timestamp implies; f0 = lagDip SIGNED (applied
+    /// offset behind the resampled finger is positive); f1 = wakeOverheadMs; f2 = frameOverrunMs SIGNED (negative =
+    /// headroom); f3 = clockSampleSkewMs SIGNED; f4 = presentIntervalMs; f5 = velocityDipPerMs; aux = the input packet's
+    /// own QPC stamp (0 when the producer carried none — then <paramref name="quality"/> is
+    /// <see cref="GenStampQuality.Tick"/> and the packager refuses sub-tick percentiles).</summary>
+    public static void Latency(ulong publishSeq, GenStampQuality quality, int stageMask, int missedVsyncs,
+        float lagDip, float wakeOverheadMs, float frameOverrunMs, float clockSampleSkewMs,
+        float presentIntervalMs, float velocityDipPerMs, long genQpc)
+    {
+        if (!On) return;
+        Add(new Rec
+        {
+            K = ScrollTraceKind.Latency,
+            I0 = unchecked((int)(uint)publishSeq), I1 = (int)(uint)((byte)quality | ((uint)stageMask << 8)), I2 = missedVsyncs,
+            F0 = lagDip, F1 = wakeOverheadMs, F2 = frameOverrunMs, F3 = clockSampleSkewMs,
+            F4 = presentIntervalMs, F5 = velocityDipPerMs, Aux = genQpc,
         });
     }
 
@@ -337,6 +512,7 @@ public static class ScrollTrace
     {
         r.Qpc = Stopwatch.GetTimestamp();
         r.Frame = s_frame;
+        r.State = s_state;
         lock (s_gate)
         {
             if (s_count == s_buf.Length) FlushLocked();   // ring full mid-gesture: pay the write rather than drop data
@@ -351,12 +527,20 @@ public static class ScrollTrace
         lock (s_gate) FlushLocked();
     }
 
-    private static readonly string[] s_kindNames =
+    /// <summary>One name per <see cref="ScrollTraceKind"/> ordinal, in ordinal order. MUST be extended in the SAME edit
+    /// that adds a kind: <see cref="FlushLocked"/> indexes this unguarded, inside a swallow-all catch that then zeroes
+    /// the pending count — so a missing name throws on the first row of the new kind, the catch eats it, and EVERY
+    /// buffered row of the session is silently discarded with no error anywhere. <c>gate.latency.kind-names-parity</c>
+    /// in the VerticalSlice diagnostics suite exists solely to make that failure impossible to ship.</summary>
+    internal static readonly string[] s_kindNames =
     {
         "frame", "rawWheel", "fbLift", "coalesce", "velDeposit", "phase", "latch",
         "velSample", "release", "gestureEnd", "applyPan", "wheelSeed", "wheelCancel",
-        "animTick", "animEvent", "note", "offsetWrite", "frameTiming",
+        "animTick", "animEvent", "note", "offsetWrite", "frameTiming", "latency",
     };
+
+    /// <summary>Kind-name table length, for the parity gate (the array itself stays internal).</summary>
+    public static int KindNameCount => s_kindNames.Length;
 
     private static void FlushLocked()
     {
@@ -367,7 +551,8 @@ public static class ScrollTrace
             {
                 var fs = new FileStream(s_path, FileMode.Create, FileAccess.Write, FileShare.Read);
                 s_writer = new StreamWriter(fs) { AutoFlush = false };
-                s_writer.WriteLine("tMs,frame,kind,i0,i1,i2,f0,f1,f2,f3,f4,f5,auxMs");
+                // `state` is APPENDED, never inserted: existing parsers read this file by column position.
+                s_writer.WriteLine("tMs,frame,kind,i0,i1,i2,f0,f1,f2,f3,f4,f5,auxMs,state");
             }
             var sb = s_sb;
             var ci = CultureInfo.InvariantCulture;
@@ -382,6 +567,7 @@ public static class ScrollTrace
                 AppendF(sb, r.F0, ci); AppendF(sb, r.F1, ci); AppendF(sb, r.F2, ci);
                 AppendF(sb, r.F3, ci); AppendF(sb, r.F4, ci); AppendF(sb, r.F5, ci);
                 if (r.Aux != 0) sb.Append(((r.Aux - s_t0) * s_msPerTick).ToString("0.000", ci));
+                sb.Append(',').Append(r.State);
                 s_writer.WriteLine(sb);
             }
             s_writer.Flush();

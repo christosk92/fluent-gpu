@@ -356,6 +356,107 @@ static class DiagnosticsSuite
                 worstAlloc == 0 && appliedEvery, $"worstHotAlloc={worstAlloc}B @frame{idx} appliedEvery={appliedEvery}");
         }
 
+        // ── latency.kind-names-parity — the cheapest gate in the suite and the one that prevents a whole session's data
+        // from evaporating silently. ScrollTrace.FlushLocked indexes s_kindNames[(int)r.K] UNGUARDED, inside a
+        // swallow-all catch that then zeroes the pending count. Add a ScrollTraceKind without adding its name and the
+        // first row of the new kind throws IndexOutOfRange, the catch eats it, and every buffered row of the capture is
+        // discarded with no error printed anywhere — the operator sees a short CSV and concludes "not much happened". ──
+        {
+            int kinds = System.Enum.GetValues<FluentGpu.Foundation.ScrollTraceKind>().Length;
+            int names = FluentGpu.Foundation.ScrollTrace.KindNameCount;
+            Check("gate.latency.kind-names-parity ScrollTrace has exactly one CSV name per record kind (a missing name silently discards the whole capture at flush)",
+                kinds == names, $"kinds={kinds} names={names}");
+        }
+
+        // ── latency.state-pack — the ambient state slots are packed into ONE int so the POD ring record does not grow a
+        // cache line. Each slot must round-trip independently: a wrong shift/mask silently cross-contaminates (a phase
+        // change appearing to alter the gesture state), which is undetectable in the CSV after the fact. Also asserts
+        // out-of-range values clamp rather than bleed into the neighbouring slot. ──
+        {
+            var slots = new[]
+            {
+                (FluentGpu.Foundation.ScrollTraceState.Phase, 7, 7),
+                (FluentGpu.Foundation.ScrollTraceState.Gesture, 2, 2),
+                (FluentGpu.Foundation.ScrollTraceState.ColdPass, 1, 1),
+                (FluentGpu.Foundation.ScrollTraceState.Repetition, 3, 3),
+                (FluentGpu.Foundation.ScrollTraceState.AbVariant, 9, 3),   // over-wide ⇒ clamps to the slot, never bleeds
+            };
+            // Off in a plain Release/headless slice run (On is const false), so SetState is a no-op there and the
+            // round-trip is vacuously true; the gate still proves the packing arithmetic under FLUENTGPU_DIAG.
+            bool packOk = true;
+            string detail = "trace-off";
+            if (FluentGpu.Foundation.ScrollTrace.On)
+            {
+                foreach (var (slot, write, expect) in slots) FluentGpu.Foundation.ScrollTrace.SetState(slot, write);
+                int word = FluentGpu.Foundation.ScrollTrace.StateWord;
+                int[] shift = { 0, 4, 6, 7, 11 };
+                int[] mask = { 0xF, 0x3, 0x1, 0xF, 0x3 };
+                for (int i = 0; i < slots.Length; i++)
+                    if (((word >> shift[i]) & mask[i]) != slots[i].Item3) packOk = false;
+                detail = $"word=0x{word:X}";
+                foreach (var (slot, _, _) in slots) FluentGpu.Foundation.ScrollTrace.SetState(slot, 0);
+            }
+            Check("gate.latency.state-pack every ScrollTrace ambient state slot round-trips through the packed word without bleeding into its neighbours (over-wide values clamp)",
+                packOk, detail);
+        }
+
+        // ── latency.alloc-zero — the diagnostics sensors run INSIDE the frame (phases 6-13), so they are bound by the
+        // same zero-managed-allocation contract as everything else there; an instrument that allocates changes the
+        // cadence it is measuring, and a GC pause induced by the probe would be indistinguishable from the hitch it is
+        // meant to catch. Exercised directly rather than through RunFrame so it holds whether or not the ring is armed
+        // (vacuous when off — the record path is compiled out or early-returns — and real when a diag session arms it).
+        // The loop stays well under the 131072-record ring so no flush (which legitimately allocates a StreamWriter at
+        // idle) is triggered inside the measured window. ──
+        {
+            // Warm: first-touch JIT of the emit path must not land inside the measurement.
+            for (int i = 0; i < 32; i++)
+            {
+                FluentGpu.Foundation.ScrollTrace.SetState(FluentGpu.Foundation.ScrollTraceState.Repetition, i & 3);
+                FluentGpu.Foundation.ScrollTrace.Latency(1, FluentGpu.Foundation.GenStampQuality.Hardware, 0, 0, 0f, 0f, 0f, 0f, 0f, 0f, 0);
+                FluentGpu.Foundation.ScrollTrace.Note(210, 0f, i, 0, 0f);
+            }
+            long before = System.GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 256; i++)
+            {
+                FluentGpu.Foundation.ScrollTrace.SetState(FluentGpu.Foundation.ScrollTraceState.Repetition, i & 3);
+                FluentGpu.Foundation.ScrollTrace.Latency((ulong)i, FluentGpu.Foundation.GenStampQuality.Hardware,
+                    1 << (i & 8), i & 3, 0.5f, 1.5f, -2.5f, 0.25f, 8.3f, 1.25f, 12345);
+                FluentGpu.Foundation.ScrollTrace.Note(210, 0f, i, 0, 0f);
+            }
+            long delta = System.GC.GetAllocatedBytesForCurrentThread() - before;
+            FluentGpu.Foundation.ScrollTrace.SetState(FluentGpu.Foundation.ScrollTraceState.Repetition, 0);
+            Check("gate.latency.alloc-zero 256 latency/state/note emissions allocate 0 managed bytes (an instrument that allocates perturbs the cadence it measures)",
+                delta == 0, $"delta={delta}B armed={FluentGpu.Foundation.ScrollTrace.On}");
+        }
+
+        // ── latency.join-forward — the join contract, asserted against the real publisher rather than restated in prose.
+        // A latency sample tagged with publish seq S joins the FIRST present whose acknowledged seq is >= S, NEVER an
+        // equal one. The publisher is DropOldest last-writer-wins, so a published frame may never present at all; a
+        // strict-equality join would silently drop exactly the coalesced samples a cadence investigation is about, and
+        // the resulting bucket would read "clean" for the one failure mode it was built to find. ──
+        {
+            // The acked publish-seq stream a joiner sees when the middle publish was coalesced away: publish 1 was
+            // presented, publish 2 was replaced before the consumer ever acquired it, publish 3 was presented. That the
+            // publisher really does coalesce that way is gate.seam.publish-consume's job below; THIS gate owns the join
+            // RULE applied to the resulting stream — deliberately over a plain span, so it costs no allocation and does
+            // not construct a second publisher (a diagnostics gate must not perturb the alloc gates it shares a process
+            // with, which is the same discipline the instrumentation itself is held to).
+            System.ReadOnlySpan<ulong> acks = stackalloc ulong[] { 1, 3 };
+            const ulong Presented1 = 1, CoalescedAway = 2, Presented3 = 3;
+            static ulong JoinForward(System.ReadOnlySpan<ulong> presents, ulong sample)
+            {
+                foreach (ulong p in presents) if (p >= sample) return p;
+                return 0;   // 0 == neverPresented: a LABELLED terminal class, not a dropped sample
+            }
+            bool exactJoins = JoinForward(acks, Presented1) == Presented1;
+            bool coalescedJoinsForward = JoinForward(acks, CoalescedAway) == Presented3;   // forward to the frame that replaced it
+            bool coalescedNotDropped = JoinForward(acks, CoalescedAway) != 0;
+            bool unpresentedIsTerminal = JoinForward(acks, Presented3 + 5) == 0;           // beyond the stream ⇒ neverPresented
+            Check("gate.latency.join-forward a latency sample joins the FIRST present whose acked publish-seq is >= its own, so a DropOldest-coalesced publish joins forward instead of being dropped, and a sample past the stream is a labelled neverPresented terminal",
+                exactJoins && coalescedJoinsForward && coalescedNotDropped && unpresentedIsTerminal,
+                $"exact={exactJoins} fwd={coalescedJoinsForward} notDropped={coalescedNotDropped} terminal={unpresentedIsTerminal}");
+        }
+
         // ── seam.publish-consume (render-thread seam, Cut A, Step 1 — single-thread foundation): the publish/consume
         // ordering + the consume-gated quarantine are the concurrency-critical logic, verified here BEFORE the render
         // thread exists (the plan's "single-thread-correct first"). Asserts (1) a published frame round-trips

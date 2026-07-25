@@ -190,6 +190,18 @@ public static class FluentApp
 
         bool fpsLog = Diag.EnvFlag("FG_FPS_LOG");   // periodic [fps] readout to stderr (frame-rate / frame-ms diagnosis)
         bool scrollPerf = Diag.EnvFlag("FG_SCROLL_PERF");
+        // Publish the shared time axis before the first diagnostic line: [fps]/[scrollperf]/[wakediag]/[render-census]
+        // carry no timestamp of their own, so without an anchor none of them can be joined to each other, to the CSV, or
+        // to the launcher's wall-clock phase markers. No-op when the scroll trace already anchored at its own t0.
+        if (fpsLog || scrollPerf) FluentGpu.Foundation.ScrollTrace.EnsureAnchor();
+        // ops/diag phase protocol: the launcher writes one line ("<phase> <repetition> <abVariant> <cold>") into the file
+        // named by FG_SCROLL_PHASE_FILE as each phase begins. Polled HERE, in the host loop — deliberately OUTSIDE
+        // host.RunFrame() — because a filesystem touch inside phases 6-13 would breach the zero-alloc contract those
+        // phases are gated on. Rate-limited to a mtime check every PhasePollFrames frames; the contents are read only
+        // when the mtime actually moved.
+        string? phaseFile = Environment.GetEnvironmentVariable("FG_SCROLL_PHASE_FILE");
+        long phaseFileStamp = 0;
+        const int PhasePollFrames = 15;
         int n = 0;
         // FrameMs/Fps time the UI loop. PresentFps comes from the host's successful-swapchain-present counter in every
         // submit mode, so async coalescing and inline mode are both represented truthfully.
@@ -200,6 +212,10 @@ public static class FluentApp
         int cachedHz = fpsLog ? window.CurrentRefreshHz() : 0;
         int spikeCluster = 0;
         bool prevSpike = false;
+        // Deltas, not levels: PresentedSequence/FramesSkippedSubmit/PublishSequence are monotonic counters, and the
+        // question a cadence investigation asks is always "how many since the last line".
+        ulong prevPresentSeq = 0, prevPublishSeq = 0;
+        long prevSkipped = 0;
         long scrollPerfWindowStart = scrollPerf ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         int spFrames = 0, spClipE = 0, spClipD = 0, spFullHide = 0, spPinD = 0, spMorphD = 0, spContD = 0, spBindsMax = 0;
         static string WaitTok(FluentGpu.Hosting.HostWaitKind k) => k switch
@@ -218,6 +234,7 @@ public static class FluentApp
             host.RunFrame();
             host.TickDetachedHosts();   // pop-out video windows: one frame each on this same UI+render thread
             n++;
+            if (phaseFile is not null && n % PhasePollFrames == 0) PollPhaseMarker(phaseFile, ref phaseFileStamp);
             if (fpsLog || scrollPerf)
             {
                 var s = host.LastStats;
@@ -273,7 +290,10 @@ public static class FluentApp
                         scrollPerfWindowStart = System.Diagnostics.Stopwatch.GetTimestamp();
                     }
                 }
-                if (fpsLog && (spike || n % 30 == 0))
+                // Emit on every SCROLL-ACTIVE frame, not just every 30th: a fixed frame stride samples a 10-second
+                // gesture about 20 times, which cannot support a percentile and will miss a one-frame stall entirely.
+                // The line is built and written outside RunFrame, so its allocation never touches the hot phases.
+                if (fpsLog && (spike || s.ScrollActive || n % 30 == 0))
                 {
                     double gpuRenderMs = s.GpuRenderMs;   // FG_GPU_TIMING: true raster ms (0 when off) — disambiguates the fence wait
                     // grender X(scene Y: rect R img I glyph G comp C) — the per-category scene split (all 0 unless FG_GPU_TIMING).
@@ -290,10 +310,28 @@ public static class FluentApp
                         ? $" | scroll clipE={s.StickyClipEvals} clipD={s.StickyClipDirties} fullHide={s.StickyClipFullyHidden} " +
                           $"pinD={s.PinDirties} morphD={s.MorphDirties} contD={s.ContinuousDirties} binds={s.ScrollBindCount}"
                         : "";
+                    // Read the LIVE host properties, not the FrameStats copies: five early-out paths in RunFrame
+                    // construct `new FrameStats(0, ..., Rendered: false)` and leave both of these at 0, which is the
+                    // mechanical reason idle/minimized stretches have always printed "present 0fps seq=0" — a
+                    // construction artifact that reads exactly like a total present stall.
+                    ulong presentSeq = host.PresentedSequence, publishSeq = host.PublishSequence;
+                    ulong consumedSeq = host.ConsumedSequence;
+                    long skipped = host.FramesSkippedSubmit;
+                    // Saturating, because these are UNSIGNED counters that do not track each other exactly: a present
+                    // can happen with nothing newly acquired (the previous frame stays on screen), so presentSeq may
+                    // legitimately run ahead of publishSeq. An unguarded subtraction would wrap to ~1.8e19 and read as
+                    // a catastrophic backlog.
+                    static ulong Behind(ulong ahead, ulong behind) => ahead > behind ? ahead - behind : 0UL;
+                    string seamTok =
+                        $" presentD={Behind(presentSeq, prevPresentSeq)} pubD={Behind(publishSeq, prevPublishSeq)} " +
+                        $"coal={Behind(publishSeq, presentSeq)} lag={Behind(publishSeq, consumedSeq)} " +
+                        $"ack={host.RenderPresentSeq} skipD={skipped - prevSkipped}";
+                    prevPresentSeq = presentSeq; prevPublishSeq = publishSeq; prevSkipped = skipped;
                     Console.Error.WriteLine(
-                        $"[fps]{(spike ? " SPIKE" : "")}{clusterTok} loop {s.Fps:0}fps {s.FrameMs:0.0}ms " +
+                        $"[fps] tMs={FluentGpu.Foundation.ScrollTrace.NowMs:0.000}{(spike ? " SPIKE" : "")}{clusterTok}" +
+                        $"{(s.ScrollActive ? " scroll" : "")} loop {s.Fps:0}fps {s.FrameMs:0.0}ms " +
                         $"(flush{s.FlushMs:0.0} rx{s.ReactiveFlushMs:0.0}/vr{s.VirtualRealizeMs:0.0} layout{s.LayoutMs:0.0} " +
-                        $"anim{s.AnimMs:0.0} record{s.RecordMs:0.0} submit{s.SubmitMs:0.0}) | present {s.PresentFps:0}fps seq={s.PresentedSequence} " +
+                        $"anim{s.AnimMs:0.0} record{s.RecordMs:0.0} submit{s.SubmitMs:0.0}) | present {host.PresentFps:0}fps seq={presentSeq}{seamTok} " +
                         $"gpu {gpuMs:0.0}ms{gpuRenderTok} | wait {WaitTok(host.LastWaitKind)}{host.LastWaitMs} " +
                         $"{szpx.Width}x{szpx.Height}@{cachedHz}Hz (f{n}){hitchTok}{scrollTok}");
                 }
@@ -321,6 +359,49 @@ public static class FluentApp
         }
 
         WindowHandle = 0;   // the window is gone; don't leave a stale handle for a late SMTC/picker call.
+    }
+
+    /// <summary>ops/diag capture protocol: read the launcher's phase marker and stamp it into every subsequent scroll-trace
+    /// record, so a capture can be sliced by phase / repetition / A-B arm offline without any per-frame filesystem work
+    /// on the scroll path. Format is one whitespace-separated line: <c>phaseOrdinal repetition abVariant coldPass</c>.
+    ///
+    /// Called from the host LOOP, never from inside <c>RunFrame</c> — a <c>File.Exists</c>/read there would sit inside
+    /// the phases 6-13 window that <c>gate.alloc.steady-zero</c> and <c>gate.scroll.alloc-zero</c> hold at zero managed
+    /// allocations, and nothing in the engine touches the filesystem per frame today. The mtime check is the cheap
+    /// guard; the contents are parsed only when it actually moved.
+    ///
+    /// The human-named phase list lives in the launcher's phases.jsonl. Only the ORDINALS travel in-band, because the
+    /// state word is packed into a POD ring record. What a human marker structurally cannot record is the drag →
+    /// inertia → settle split within a phase; the integrator stamps that separately, per tick.</summary>
+    private static void PollPhaseMarker(string path, ref long stamp)
+    {
+        try
+        {
+            long t = File.GetLastWriteTimeUtc(path).ToFileTimeUtc();
+            if (t == stamp) return;
+            stamp = t;
+            // FileShare.ReadWrite is REQUIRED, not defensive: File.ReadAllText opens with FileShare.Read, which
+            // EXCLUDES writers, so this poll would intermittently lock the launcher out of the very file it owns and
+            // abort the capture mid-session. The reader must never be able to block the writer — a diagnostic that can
+            // kill the run it is instrumenting is worse than no diagnostic.
+            string text;
+            using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            using (var sr = new StreamReader(fs))
+                text = sr.ReadToEnd();
+            string[] parts = text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length > 0 && int.TryParse(parts[0], out int phase))
+                FluentGpu.Foundation.ScrollTrace.SetState(FluentGpu.Foundation.ScrollTraceState.Phase, phase);
+            if (parts.Length > 1 && int.TryParse(parts[1], out int rep))
+                FluentGpu.Foundation.ScrollTrace.SetState(FluentGpu.Foundation.ScrollTraceState.Repetition, rep);
+            if (parts.Length > 2 && int.TryParse(parts[2], out int ab))
+                FluentGpu.Foundation.ScrollTrace.SetState(FluentGpu.Foundation.ScrollTraceState.AbVariant, ab);
+            if (parts.Length > 3 && int.TryParse(parts[3], out int cold))
+                FluentGpu.Foundation.ScrollTrace.SetState(FluentGpu.Foundation.ScrollTraceState.ColdPass, cold);
+            // Note 210/211 mark the boundary IN the CSV itself, so a phase transition is visible in the row stream even
+            // if phases.jsonl is lost — the 210-block is deliberately far from the engine's 100-block note codes.
+            FluentGpu.Foundation.ScrollTrace.Note(210, 0f, FluentGpu.Foundation.ScrollTrace.StateWord, 0, 0f);
+        }
+        catch { /* best-effort diagnostic: a half-written marker is skipped, never fatal to the run */ }
     }
 
     private static long ImageCacheBudgetBytes()
