@@ -41,6 +41,7 @@ static class ControlsSuite
         ContextChecks(strings);
         HoverChecks(strings);
         MediaCardEngineChecks(strings);
+        VideoHoleChecks(strings);
         MediaPlayerElementChecks(strings);
         ControlsChecks(strings);
         RecipeChecks(strings);
@@ -4945,8 +4946,11 @@ static class ControlsSuite
                 $"shown={chromeShownAtPlaying} heldPinned={heldWhilePinned} collapsedAfterClose={collapsedAfterClose}");
         }
 
-        // gate.media.el.controlled-aspect: an external Signal<VideoAspectMode> drives the fitted video rect (letterbox
-        // pillars for Uniform, none for UniformToFill); the control also works standalone (auto-materialized signal).
+        // gate.media.el.controlled-aspect: an external Signal<VideoAspectMode> drives the fitted video rect — and since
+        // the restructure that rect IS the hole node's laid-out rect (one source of truth), so the aspect policy is
+        // asserted on the hole itself: pillarboxed under Uniform (narrower than the stage, full height), covering the
+        // stage under UniformToFill (the crop overflows and is clipped). The opaque letterbox stage fill is ONE element
+        // in every mode (the four bar elements are gone). The control also works standalone (auto-materialized signal).
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("g5g-mpe-aspect", new Size2(520, 340), 1f));
@@ -4962,13 +4966,33 @@ static class ControlsSuite
             player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();
             for (int i = 0; i < 5; i++) host.Paint(0);                        // settle layout + areaBounds → letterbox computed
 
-            int barsUniform = CountFill(host.Scene, host.Scene.Root, Tok.MediaLetterbox);
+            // Pillarboxed = the hole is narrower than the stage but full height; covered = the hole spans the stage on
+            // both axes (a UniformToFill crop deliberately overflows it and is clipped by the stage's ClipToBounds).
+            static bool Pillarboxed(AppHost h)
+            {
+                var n = FindVisual(h.Scene, h.Scene.Root, VisualKind.Video);
+                if (n.IsNull) return false;
+                RectF hole = h.Scene.AbsoluteRect(n), stage = h.Scene.AbsoluteRect(h.Scene.Parent(n));
+                return stage.W > 0f && hole.W > 0f && hole.W < stage.W - 1f && Near(hole.H, stage.H);
+            }
+            static bool Covered(AppHost h)
+            {
+                var n = FindVisual(h.Scene, h.Scene.Root, VisualKind.Video);
+                if (n.IsNull) return false;
+                RectF hole = h.Scene.AbsoluteRect(n), stage = h.Scene.AbsoluteRect(h.Scene.Parent(n));
+                return stage.W > 0f && hole.X <= stage.X + 0.01f && hole.Y <= stage.Y + 0.01f
+                    && hole.X + hole.W >= stage.X + stage.W - 0.01f && hole.Y + hole.H >= stage.Y + stage.H - 0.01f;
+            }
+
+            bool pillarUniform = Pillarboxed(host);
+            int fillsUniform = CountFill(host.Scene, host.Scene.Root, Tok.MediaLetterbox);
             ext.Value = VideoAspectMode.UniformToFill;
             for (int i = 0; i < 3; i++) host.Paint(0);
-            int barsCrop = CountFill(host.Scene, host.Scene.Root, Tok.MediaLetterbox);
+            bool coveredCrop = Covered(host) && !Pillarboxed(host);
+            int fillsCrop = CountFill(host.Scene, host.Scene.Root, Tok.MediaLetterbox);
             ext.Value = VideoAspectMode.Uniform;
             for (int i = 0; i < 3; i++) host.Paint(0);
-            int barsUniform2 = CountFill(host.Scene, host.Scene.Root, Tok.MediaLetterbox);
+            bool pillarUniform2 = Pillarboxed(host);
 
             // Standalone (auto-materialized: no AspectMode passed) still renders letterbox under the default Uniform.
             var player2 = PlayingPlayer(new SizeI(100, 100));
@@ -4980,10 +5004,14 @@ static class ControlsSuite
             player2.Pump(TimeSpan.FromMilliseconds(1)); host2.RunFrame();
             player2.Pump(TimeSpan.FromMilliseconds(1)); host2.RunFrame();
             for (int i = 0; i < 5; i++) host2.Paint(0);
-            int barsAuto = CountFill(host2.Scene, host2.Scene.Root, Tok.MediaLetterbox);
+            bool pillarAuto = Pillarboxed(host2);
+            int fillsAuto = CountFill(host2.Scene, host2.Scene.Root, Tok.MediaLetterbox);
 
-            Check("gate.media.el.controlled-aspect", barsUniform >= 2 && barsCrop == 0 && barsUniform2 >= 2 && barsAuto >= 2,
-                $"uniform={barsUniform} crop={barsCrop} uniform2={barsUniform2} autoMaterialized={barsAuto}");
+            Check("gate.media.el.controlled-aspect",
+                pillarUniform && coveredCrop && pillarUniform2 && pillarAuto
+                    && fillsUniform == 1 && fillsCrop == 1 && fillsAuto == 1,
+                $"uniformPillarboxed={pillarUniform} cropCovers={coveredCrop} uniform2={pillarUniform2} "
+                + $"autoMaterialized={pillarAuto} stageFills={fillsUniform}/{fillsCrop}/{fillsAuto} (want 1 each)");
         }
 
         // gate.media.el.tokens: the media element carries ZERO hardcoded FromRgba color literals — every ink/scrim/stage
@@ -4996,6 +5024,286 @@ static class ControlsSuite
                 && src.Contains("Tok.MediaStage") && src.Contains("Tok.MediaLetterbox");
             Check("gate.media.el.tokens", found && fromRgba == 0 && usesTokens,
                 $"found={found} FromRgba={fromRgba} usesTokens={usesTokens}");
+        }
+
+        // gate.media.el.video-knockout: ONE SOURCE OF TRUTH for the video rect. A PLAYING video player paints an OPAQUE
+        // LetterboxColor stage fill across the WHOLE video area FIRST, then punches EXACTLY ONE hole at the FITTED video
+        // rect — and PumpNow places the DComp visual from THAT node's rect, so the erased region and the composited
+        // video can never disagree. (The old shape — a full-area hole plus letterbox bars painted after it, presenter
+        // placed at an independently recomputed fit — left sub-pixel slivers at fractional device scale where the hole
+        // was punched but neither the video visual nor a bar covered the pixel: erased-to-zero ⇒ grey Mica showed.)
+        // Asserted: one hole, the live registry slot token, full erase strength, the hole's recorded device rect ==
+        // the expected fit for this area+natural size, the opaque fill FIRST in painter order (first child of the stage)
+        // covering the WHOLE area, and the NO-PIXEL-GAP invariant hole ⊆ fill (every erased pixel lands on opaque
+        // letterbox, never on the backdrop). The transport chrome's glyph runs record AFTER the hole, so their survival
+        // is the no-truncation proof (a mis-strided DrawVideo payload would shred every command after it).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("g5g-mpe-hole", new Size2(520, 340), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var natural = new SizeI(100, 100);                              // square video in a wide area → pillarboxed
+            var player = PlayingPlayer(natural);
+            var root = new FluentGpu.Controls.Media.MediaPlayerElement { Player = player };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();     // Opening → Buffering
+            player.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();     // Buffering → Playing
+            for (int i = 0; i < 5; i++) host.Paint(0);                      // settle layout + areaBounds → fit computed
+
+            int holes = device.LastVideos.Count;
+            int surfaceId = holes > 0 ? device.LastVideos[0].SurfaceId : -1;
+            float ready = holes > 0 ? device.LastVideos[0].VideoReady : -1f;
+            // Dst is the node-LOCAL (0,0,w,h) box; the world transform places it. Recombine into the device rect.
+            RectF dst = holes > 0 ? device.LastVideos[0].Dst : default;
+            Affine2D xf = holes > 0 ? device.LastVideos[0].Transform : default;
+            var recordedHole = new RectF(xf.Dx + dst.X, xf.Dy + dst.Y, dst.W, dst.H);
+
+            // Structural painter order: stage → [0] opaque letterbox fill, [1] the hole.
+            var holeNode = FindVisual(host.Scene, host.Scene.Root, VisualKind.Video);
+            var stage = holeNode.IsNull ? NodeHandle.Null : host.Scene.Parent(holeNode);
+            var fillNode = stage.IsNull ? NodeHandle.Null : host.Scene.FirstChild(stage);
+            ColorF fillColor = fillNode.IsNull ? default : host.Scene.Paint(fillNode).Fill;
+            bool fillIsFirstAndOpaque = !fillNode.IsNull && fillNode.Raw.Index != holeNode.Raw.Index
+                && ColorApprox(fillColor, Tok.MediaLetterbox) && fillColor.A == 1f;
+            RectF stageRect = stage.IsNull ? default : host.Scene.AbsoluteRect(stage);
+            RectF fillRect = fillNode.IsNull ? default : host.Scene.AbsoluteRect(fillNode);
+            bool fillCoversArea = stageRect.W > 0f && Near(fillRect.X, stageRect.X) && Near(fillRect.Y, stageRect.Y)
+                && Near(fillRect.W, stageRect.W) && Near(fillRect.H, stageRect.H);
+
+            RectF expected = FluentGpu.Controls.Media.MediaPlayerElement.FitVideoRect(
+                stageRect, natural, VideoAspectMode.Uniform, 16.0 / 9.0);
+            bool fitted = holes == 1 && Near(recordedHole.X, expected.X) && Near(recordedHole.Y, expected.Y)
+                && Near(recordedHole.W, expected.W) && Near(recordedHole.H, expected.H)
+                // the scene node the pump reads and the rect the recorder erased are the SAME rect
+                && !holeNode.IsNull && Near(host.Scene.AbsoluteRect(holeNode).X, recordedHole.X)
+                && Near(host.Scene.AbsoluteRect(holeNode).W, recordedHole.W);
+            // NO PIXEL GAP: hole ⊆ fill (strictly inside or equal) ⇒ no erased pixel can miss the opaque letterbox.
+            bool holeInsideFill = holes == 1 && fillRect.W > 0f
+                && recordedHole.X >= fillRect.X - 0.01f && recordedHole.Y >= fillRect.Y - 0.01f
+                && recordedHole.X + recordedHole.W <= fillRect.X + fillRect.W + 0.01f
+                && recordedHole.Y + recordedHole.H <= fillRect.Y + fillRect.H + 0.01f;
+            int letterboxFills = 0;
+            foreach (var r in device.LastRects) if (ColorApprox(r.Fill, Tok.MediaLetterbox)) letterboxFills++;
+            bool notTruncated = device.LastGlyphs.Count > 0;                // transport chrome records AFTER the hole
+
+            Check("gate.media.el.video-knockout",
+                holes == 1 && surfaceId > 0 && ready == 1f && fillIsFirstAndOpaque && fillCoversArea && letterboxFills >= 1
+                    && fitted && holeInsideFill && notTruncated && device.ClipBalance == 0,
+                $"holes={holes} surfaceId={surfaceId} ready={ready:0.###} fillFirst={fillIsFirstAndOpaque} "
+                + $"fillCoversArea={fillCoversArea} letterboxFills={letterboxFills} "
+                + $"hole=({recordedHole.X:0.##},{recordedHole.Y:0.##},{recordedHole.W:0.##},{recordedHole.H:0.##}) "
+                + $"want=({expected.X:0.##},{expected.Y:0.##},{expected.W:0.##},{expected.H:0.##}) "
+                + $"insideFill={holeInsideFill} notTruncated={notTruncated} clipBalance={device.ClipBalance}");
+        }
+
+        // gate.media.el.video-knockout-poster: the hole is gated EXACTLY on the existing videoReady branch. Audio-only
+        // playback (no video stream) and a video source still held pre-ready (Opening, poster/spinner up) both record
+        // ZERO holes — punching one early would knock a transparent rectangle through to the desktop/Mica.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("g5g-mpe-hole-audio", new Size2(520, 340), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var audio = PlayingPlayer();                                    // audio-only → NaturalSize empty
+            var root = new FluentGpu.Controls.Media.MediaPlayerElement { Player = audio };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            audio.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();
+            audio.Pump(TimeSpan.FromMilliseconds(1)); host.RunFrame();
+            for (int i = 0; i < 3; i++) host.Paint(0);
+            int audioHoles = device.LastVideos.Count;
+            bool audioPlaying = audio.State.Peek() == PlaybackState.Playing;
+            bool audioFrameRecorded = device.LastRects.Count > 0;           // the frame really WAS recorded (0 is meaningful)
+
+            // A VIDEO source held in Opening: never pumped, so the state machine cannot leave Opening.
+            using var app2 = new HeadlessPlatformApp();
+            var window2 = new HeadlessWindow(new WindowDesc("g5g-mpe-hole-open", new Size2(520, 340), 1f));
+            window2.Show();
+            var device2 = new HeadlessGpuDevice();
+            var pending = new HeadlessScriptedPlayer { OpenTicks = 64, BufferTicks = 64, DefaultDuration = TimeSpan.FromSeconds(120) };
+            pending.OpenAsync(MediaSource.FromSamples(new ScriptedSampleSource(
+                TimeSpan.FromSeconds(120), TimeSpan.FromMilliseconds(20), new SizeI(1920, 1080)))).GetAwaiter().GetResult();
+            pending.PlayAsync().GetAwaiter().GetResult();
+            var root2 = new FluentGpu.Controls.Media.MediaPlayerElement { Player = pending };
+            using var host2 = new AppHost(app2, window2, device2, new HeadlessFontSystem(strings), strings, root2);
+            host2.RunFrame();
+            for (int i = 0; i < 3; i++) host2.Paint(0);
+            int openingHoles = device2.LastVideos.Count;
+            bool stillOpening = pending.State.Peek() == PlaybackState.Opening;
+            bool openingFrameRecorded = device2.LastRects.Count > 0;
+
+            Check("gate.media.el.video-knockout-poster",
+                audioHoles == 0 && openingHoles == 0 && audioPlaying && stillOpening
+                    && audioFrameRecorded && openingFrameRecorded,
+                $"audioOnlyHoles={audioHoles} (playing={audioPlaying}) openingHoles={openingHoles} (state={pending.State.Peek()}) "
+                + $"framesRecorded={audioFrameRecorded}/{openingFrameRecorded}");
+        }
+    }
+
+    /// <summary>First node (pre-order) whose paint records <paramref name="kind"/> — e.g. the single VisualKind.Video
+    /// hole-punch node inside a media player's video stage.</summary>
+    static NodeHandle FindVisual(SceneStore s, NodeHandle n, VisualKind kind)
+    {
+        if (n.IsNull) return NodeHandle.Null;
+        if (s.Paint(n).VisualKind == kind) return n;
+        for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c))
+        {
+            var r = FindVisual(s, c, kind);
+            if (!r.IsNull) return r;
+        }
+        return NodeHandle.Null;
+    }
+
+    // ── DrawOp.DrawVideo — the video hole punch (gpu-renderer.md §7.3) ───────────────────────────────────────────────
+    // The op ERASES the already-painted UI pixels under its rect toward premultiplied zero so the DComp video visual
+    // composited z-BELOW the swapchain shows through. These gates pin the three seams the primitive rides: the POD
+    // stream (payload stride + byte-exact read-back), the clean-span translate fast path, and the recorder→RHI decode.
+    static void VideoHoleChecks(StringTable strings)
+    {
+        // gate.video.op.roundtrip — a hole recorded BETWEEN two fills round-trips byte-exactly and does NOT desync the
+        // walker: DrawPayloadSize(DrawVideo) must equal the writer's payload stride, or every op after the hole shreds.
+        {
+            var dl = new DrawList();
+            var xfA = new Affine2D(1f, 0f, 0f, 1f, 10f, 20f);
+            var xfHole = new Affine2D(1f, 0f, 0f, 1f, 12.5f, 34.25f);
+            var xfB = new Affine2D(1f, 0f, 0f, 1f, 70f, 80f);
+            var holeDst = new RectF(4f, 6f, 320f, 180f);
+            var holeRadii = new CornerRadius4(8f, 9f, 10f, 11f);
+            dl.FillRoundRect(new RectF(0f, 0f, 40f, 20f), CornerRadius4.All(2f), ColorF.FromRgba(0x11, 0x22, 0x33), xfA, 1f, 1UL);
+            dl.DrawVideo(holeDst, holeRadii, 7, 1f, xfHole, 0.75f, 2UL);
+            dl.FillRoundRect(new RectF(0f, 0f, 10f, 10f), default, ColorF.FromRgba(0x44, 0x55, 0x66), xfB, 1f, 3UL);
+
+            var bytes = dl.Bytes;
+            int pos = 0, ops = 0, videoAt = -1, fillsAfterHole = 0;
+            DrawVideoCmd hole = default;
+            FillRoundRectCmd tailFill = default;
+            while (pos + sizeof(int) <= bytes.Length)
+            {
+                var op = (DrawOp)MemoryMarshal.Read<int>(bytes.Slice(pos));
+                pos += sizeof(int);
+                if (op == DrawOp.DrawVideo) { videoAt = ops; hole = MemoryMarshal.Read<DrawVideoCmd>(bytes.Slice(pos)); }
+                else if (op == DrawOp.FillRoundRect && videoAt >= 0)
+                {
+                    fillsAfterHole++;
+                    tailFill = MemoryMarshal.Read<FillRoundRectCmd>(bytes.Slice(pos));
+                }
+                pos += DrawPayloadSize(op);
+                ops++;
+            }
+            // Landing exactly on the end (not merely "no overrun") is the stride proof; the trailing fill decoding to its
+            // authored transform proves the walk stayed phase-locked ACROSS the hole.
+            bool walked = pos == bytes.Length && ops == 3 && videoAt == 1 && fillsAfterHole == 1
+                && tailFill.Transform.Dx == 70f && tailFill.Transform.Dy == 80f;
+            bool payload = hole.Dst == holeDst && hole.Radii == holeRadii && hole.SurfaceId == 7
+                && hole.VideoReady == 1f && hole.Opacity == 0.75f
+                && hole.Transform.Dx == 12.5f && hole.Transform.Dy == 34.25f;
+            var st = dl.OpcodeStats;
+            bool stats = st.DrawVideo == 1 && st.FillRoundRect == 2 && dl.CommandCount == 3 && dl.SortKeys.Length == 3;
+
+            // Erase strength is a blend COVERAGE — the writer clamps it into 0..1 whatever the caller passes.
+            var dlc = new DrawList();
+            dlc.DrawVideo(holeDst, default, 3, 2.5f, xfHole, 1f);
+            dlc.DrawVideo(holeDst, default, 3, -1f, xfHole, 1f);
+            var cHi = MemoryMarshal.Read<DrawVideoCmd>(dlc.Bytes.Slice(sizeof(int)));
+            var cLo = MemoryMarshal.Read<DrawVideoCmd>(dlc.Bytes.Slice(sizeof(int) * 2 + Unsafe.SizeOf<DrawVideoCmd>()));
+            bool clamped = cHi.VideoReady == 1f && cLo.VideoReady == 0f;
+
+            Check("gate.video.op.roundtrip", walked && payload && stats && clamped,
+                $"ops={ops} videoAt={videoAt} fillsAfter={fillsAfterHole} walked={pos}/{bytes.Length} payload={payload} "
+                + $"stats={st.DrawVideo}/{st.FillRoundRect} cmds={dl.CommandCount} clamp={clamped}");
+        }
+
+        // gate.video.op.translate — the hole PARTICIPATES in clean-span reuse: a copied span containing it translates
+        // (Dx/Dy rebased, exactly like FillRoundRect — pure geometry, and the presenter drives the video visual's own
+        // rect independently, so a rebased span cannot desync). Control: a span carrying a glyph run still refuses.
+        {
+            var dl = new DrawList();
+            var xf = new Affine2D(1f, 0f, 0f, 1f, 40f, 60f);
+            var dst = new RectF(0f, 0f, 200f, 120f);
+            var radii = CornerRadius4.All(6f);
+            dl.FillRoundRect(dst, radii, ColorF.FromRgba(0x20, 0x20, 0x20), xf, 1f, 1UL);
+            dl.DrawVideo(dst, radii, 5, 1f, xf, 1f, 2UL);
+            int byteLen = dl.BytePosition, sortLen = dl.SortPosition, cmds = dl.CommandCount;
+            var stats = dl.OpcodeStats;
+            bool eligible = stats.CanTranslateCopiedSpan;
+
+            const float dx = -17.5f, dy = 23.25f;
+            dl.SwapAndReset();
+            bool copied = dl.CopySpanFromPriorTranslated(0, byteLen, 0, sortLen, cmds, in stats, dx, dy);
+
+            var outBytes = dl.Bytes;
+            int p = 0, seen = 0;
+            DrawVideoCmd movedHole = default;
+            FillRoundRectCmd movedFill = default;
+            while (p + sizeof(int) <= outBytes.Length)
+            {
+                var op = (DrawOp)MemoryMarshal.Read<int>(outBytes.Slice(p));
+                p += sizeof(int);
+                if (op == DrawOp.DrawVideo) movedHole = MemoryMarshal.Read<DrawVideoCmd>(outBytes.Slice(p));
+                else if (op == DrawOp.FillRoundRect) movedFill = MemoryMarshal.Read<FillRoundRectCmd>(outBytes.Slice(p));
+                p += DrawPayloadSize(op);
+                seen++;
+            }
+            bool rebased = copied && seen == 2 && p == outBytes.Length
+                && movedHole.Transform.Dx == 40f + dx && movedHole.Transform.Dy == 60f + dy
+                && movedFill.Transform.Dx == 40f + dx && movedFill.Transform.Dy == 60f + dy
+                // everything except the transform survives the memcpy untouched
+                && movedHole.Dst == dst && movedHole.Radii == radii && movedHole.SurfaceId == 5 && movedHole.VideoReady == 1f
+                && dl.CommandCount == 2 && dl.OpcodeStats.DrawVideo == 1;
+
+            // Control: a glyph run is shaping-dependent, so its span is ineligible — the copy must refuse and leave the
+            // destination list untouched (no half-written span).
+            var dg = new DrawList();
+            var fam = strings.Intern("Segoe UI");
+            var txt = strings.Intern("hole translate control");
+            dg.FillRoundRect(dst, radii, ColorF.FromRgba(0x20, 0x20, 0x20), xf, 1f, 1UL);
+            dg.DrawGlyphRun(dst, new ColorF(1f, 1f, 1f, 1f), txt, fam, 14f, 400, 0, 0, 1, 0f, 18f, 0, 0, xf, 1f, 2UL);
+            int gBytes = dg.BytePosition, gSort = dg.SortPosition, gCmds = dg.CommandCount;
+            var gStats = dg.OpcodeStats;
+            dg.SwapAndReset();
+            bool refused = !dg.CopySpanFromPriorTranslated(0, gBytes, 0, gSort, gCmds, in gStats, dx, dy)
+                && dg.BytePosition == 0 && dg.CommandCount == 0;
+
+            Check("gate.video.op.translate", eligible && copied && rebased && refused,
+                $"eligible={eligible} copied={copied} ops={seen} dx={movedHole.Transform.Dx:0.##} dy={movedHole.Transform.Dy:0.##} "
+                + $"(want {40f + dx:0.##}/{60f + dy:0.##}) rebased={rebased} glyphRefused={refused}");
+        }
+
+        // gate.video.op.headless — the full reconcile → record → RHI-decode path: a BoxEl{VideoHole} inside a rounded
+        // ClipToBounds container over a translucent page emits ONE DrawVideo, INSIDE the container's clip (that tier-2
+        // rounded clip is where a PiP hole's corner rounding actually comes from), and the frame is NOT truncated —
+        // the marker rect recorded AFTER the hole survives, and the clip stack still balances.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("video-hole", new Size2(480, 360), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new VideoHoleProbe { SurfaceId = 7 };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+
+            int holes = device.LastVideos.Count;
+            int surfaceId = holes > 0 ? device.LastVideos[0].SurfaceId : -1;
+            float ready = holes > 0 ? device.LastVideos[0].VideoReady : -1f;
+            int clipDepth = device.LastVideoClipDepths.Count > 0 ? device.LastVideoClipDepths[0] : -1;
+            bool page = false, marker = false;
+            foreach (var r in device.LastRects)
+            {
+                if (ColorApprox(r.Fill, VideoHoleProbe.PageFill)) page = true;
+                if (ColorApprox(r.Fill, VideoHoleProbe.MarkerFill)) marker = true;
+            }
+            RectF holeDst = holes > 0 ? device.LastVideos[0].Dst : default;
+            bool sized = holes > 0 && Near(holeDst.W, 320f) && Near(holeDst.H, 180f);
+
+            Check("gate.video.op.headless",
+                holes == 1 && surfaceId == 7 && ready == 1f && clipDepth >= 1 && page && marker && sized
+                    && device.ClipBalance == 0,
+                $"holes={holes} surfaceId={surfaceId} ready={ready:0.###} clipDepth={clipDepth} pageBelow={page} "
+                + $"markerAfter={marker} dst={holeDst.W:0}x{holeDst.H:0} clipBalance={device.ClipBalance}");
         }
     }
 

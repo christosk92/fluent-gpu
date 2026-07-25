@@ -134,9 +134,12 @@ Prove `BindSurfaceHandle` end-to-end with a `DCompositionCreateSurfaceHandle` su
 pattern into (per correction #4). **Verify the graded hole with a `--screenshot`** — this is the assumption
 everything else rests on; fallback is a binary reveal.
 
-**M1 — `DrawVideo` opcode + graded crossfade.** Add `DrawOp.DrawVideo`, the `VideoHole` painter-order pass, the
-premul-0 hole-punch clear, and the album-art→poster→live crossfade over `VideoReady` (reusing `ImagePipeline`).
-Still fed by the M0 engine-owned surface.
+**M1 — `DrawVideo` opcode + graded crossfade. DONE (2026-07-25).** Add `DrawOp.DrawVideo`, the `VideoHole`
+painter-order pass, the premul-0 hole-punch clear, and the album-art→poster→live crossfade over `VideoReady`
+(reusing `ImagePipeline`). Still fed by the M0 engine-owned surface.
+*Shipped as a DestOut erase on the RoundRect SDF PSO (canon: `gpu-renderer.md §7.3`); the graded crossfade is
+**deferred** — the recorder emits `VideoReady = 1` (discrete poster↔hole swap) and the field ships so grading
+can land with no payload change.*
 
 **M2 — `VideoSurfaceRegistry` + `UseVideoSurface` + placement/PiP.** Priority arbitration (theatre>PiP>sidebar),
 one live surface, atomic handoff, per-frame `Commit` at phase 11, snap-to-poster on interactive resize.

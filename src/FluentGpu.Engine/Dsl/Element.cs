@@ -126,6 +126,15 @@ public sealed record BoxEl : Element
     public AcrylicSpec? Acrylic { get; init; }     // per-node frosted-glass backdrop (blur + tint + noise)
     public bool TabShape { get; init; }            // selected TabView header: rounded top + bottom flares
     public float TabFlareRadius { get; init; } = 4f;
+    /// <summary>Punch a VIDEO HOLE at this box (DrawOp.DrawVideo): instead of painting, the box ERASES the UI pixels
+    /// already painted under it toward premultiplied zero, so the DComp video visual composited BELOW the swapchain shows
+    /// through. Painter-ordered — anything recorded after it (letterbox bars, transport chrome) paints back OVER the
+    /// video. Supersedes <see cref="Fill"/> for this node; see gpu-renderer.md §7.3 for the offscreen-layer limitation
+    /// (inside an opacity/blur/acrylic layer the erase hits the layer RT, not the back buffer).</summary>
+    public bool VideoHole { get; init; }
+    /// <summary>The video registry slot token this hole belongs to (diagnostic at replay — the presenter positions the
+    /// visual itself). Rides <c>NodePaint.ImageId</c>, so it is meaningful only with <see cref="VideoHole"/> set.</summary>
+    public int VideoSurfaceId { get; init; }
     /// <summary>Per-element edge fade (gpu-renderer.md): feather this element's content alpha to transparent (+ optional
     /// blur) near the chosen edges, following its rounded <see cref="Corners"/> (the curve) — it dissolves into whatever
     /// is behind. One offscreen RT per faded element. Null = none.</summary>

@@ -3006,7 +3006,10 @@ public sealed class TreeReconciler
                                   || b.HoverFill.IsBound || b.HoverFill.Value.A > 0f
                                   || b.PressedFill.IsBound || b.PressedFill.Value.A > 0f
                                   || b.BorderWidth > 0f || b.OnClick is not null || b.Gradient is not null || b.BorderBrush is not null;
-                paint.VisualKind = b.TabShape ? VisualKind.TabShape : hasSurface ? VisualKind.Box : VisualKind.None;
+                // A video hole outranks every surface kind: the node ERASES rather than paints, so any fill it declares is
+                // irrelevant (see BoxEl.VideoHole). The slot token rides ImageId — the IconLayer PathId pun.
+                paint.VisualKind = b.VideoHole ? VisualKind.Video : b.TabShape ? VisualKind.TabShape : hasSurface ? VisualKind.Box : VisualKind.None;
+                if (b.VideoHole) paint.ImageId = b.VideoSurfaceId;
 
                 // Implicit BrushTransition (WinUI, 83ms): a LIVE node re-rendered with a different fill/border cross-fades
                 // from the previously-DISPLAYED color (mid-flight retargets stay continuous) instead of snapping.

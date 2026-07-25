@@ -36,6 +36,20 @@ internal struct RectInstance
     public float Pad0, Pad1, Pad2;  // pad to a float4 multiple (36 floats = 144 B — must match the HLSL Inst)
 }
 
+/// <summary>Which blend the RoundRect pipeline draws a run with. All three share the SAME shader + instance layout —
+/// only the PSO's blend state differs.</summary>
+internal enum RectPass : byte
+{
+    /// <summary>Premultiplied source-over (the default): ONE/INV_SRC_ALPHA.</summary>
+    Blended = 0,
+    /// <summary>The opaque plain-rect fast path: no blend at all (falls back to <see cref="Blended"/> when that PSO
+    /// didn't build).</summary>
+    Opaque = 1,
+    /// <summary>The video hole punch (DrawOp.DrawVideo): DestOut — ZERO/INV_SRC_ALPHA on color AND alpha, so the
+    /// destination is ERASED toward premultiplied zero by the instance's coverage×alpha.</summary>
+    DestOut = 2,
+}
+
 /// <summary>
 /// The SDF rounded-rect pipeline (design/subsystems/gpu-renderer.md): a unit quad drawn instanced; instance data
 /// (rect/radii/color) is read in the VS from a root StructuredBuffer; the PS evaluates the analytic rounded-box SDF
@@ -56,6 +70,11 @@ internal sealed unsafe class RoundRectPipeline : IDisposable
     // no AA-inflated quad) is ~2× cheaper on a tiled GPU. FAIL-SAFE: null when its shader/PSO didn't build — the device
     // then draws every rect through _pso exactly as before, so a build failure degrades to "no optimization", never a crash.
     private ID3D12PipelineState* _psoOpaque;
+    // The video hole punch (DrawOp.DrawVideo): the SAME SDF shader on a DestOut blend (ZERO/INV_SRC_ALPHA, color+alpha),
+    // so an instance colored (0,0,0,VideoReady) yields dst' = dst×(1−VideoReady·cov·opacity) — the already-painted UI is
+    // erased toward premultiplied zero and the DComp video visual below the swapchain shows through. Unlike the opaque
+    // fast path this is CORRECTNESS, not an optimization: there is no equivalent fallback, so its build throws.
+    private ID3D12PipelineState* _psoDestOut;
     /// <summary>True when the opaque fast-path PSO built successfully; the device segments rect runs by opacity only then.</summary>
     public bool HasOpaquePso => _psoOpaque != null;
     private readonly ID3D12Resource*[] _instances = new ID3D12Resource*[FrameCount];   // structured buffer of RectInstance per frame-in-flight (upload heap, persistently mapped)
@@ -347,6 +366,22 @@ float4 PSMain(VSO i) : SV_Target
             ID3D12PipelineState* pso;
             Check(device->CreateGraphicsPipelineState(&pd, __uuidof<ID3D12PipelineState>(), (void**)&pso), "CreateGraphicsPipelineState");
             _pso = pso;
+
+            // The DestOut variant: identical desc + the SAME vs/ps blobs, only the blend swapped to ZERO/INV_SRC_ALPHA on
+            // BOTH color and alpha. The PS already emits premultiplied (rgb·a, a·cov·opacity), so a (0,0,0,VideoReady)
+            // instance multiplies the destination by (1 − VideoReady·cov·opacity) — the hole punch, with the SDF's corner
+            // AA and both clip tiers inherited free.
+            pd.BlendState.RenderTarget[0].BlendEnable = BOOL.TRUE;
+            pd.BlendState.RenderTarget[0].SrcBlend = D3D12_BLEND.D3D12_BLEND_ZERO;
+            pd.BlendState.RenderTarget[0].DestBlend = D3D12_BLEND.D3D12_BLEND_INV_SRC_ALPHA;
+            pd.BlendState.RenderTarget[0].BlendOp = D3D12_BLEND_OP.D3D12_BLEND_OP_ADD;
+            pd.BlendState.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND.D3D12_BLEND_ZERO;
+            pd.BlendState.RenderTarget[0].DestBlendAlpha = D3D12_BLEND.D3D12_BLEND_INV_SRC_ALPHA;
+            pd.BlendState.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP.D3D12_BLEND_OP_ADD;
+
+            ID3D12PipelineState* psoDestOut;
+            Check(device->CreateGraphicsPipelineState(&pd, __uuidof<ID3D12PipelineState>(), (void**)&psoDestOut), "CreateGraphicsPipelineState(DestOut)");
+            _psoDestOut = psoDestOut;
         }
         vs->Release();
         ps->Release();
@@ -438,11 +473,11 @@ float4 PSMain(VSO i) : SV_Target
     public void BeginFrame(int frameIndex) { _active = ((frameIndex % FrameCount) + FrameCount) % FrameCount; _activeGva = _instances[_active]->GetGPUVirtualAddress(); _cursor = 0; _dropped = 0; }
 
     /// <summary>Record one run. <paramref name="bindSharedState"/> binds the shared SDF root signature, viewport
-    /// constants, topology, and quad VB; <paramref name="bindPipelineState"/> binds this pipeline's PSO. When both are
-    /// false, only the per-run instance SRV offset + draw are recorded. Returns false when the instance buffer is full
-    /// and nothing was recorded (the command-list state is then untouched).</summary>
+    /// constants, topology, and quad VB; <paramref name="bindPipelineState"/> binds the PSO selected by
+    /// <paramref name="pass"/>. When both are false, only the per-run instance SRV offset + draw are recorded. Returns
+    /// false when the instance buffer is full and nothing was recorded (the command-list state is then untouched).</summary>
     public bool Record(ID3D12GraphicsCommandList* cmd, ReadOnlySpan<RectInstance> instances, float vpW, float vpH,
-                       bool bindSharedState = true, bool bindPipelineState = true, bool opaque = false)
+                       bool bindSharedState = true, bool bindPipelineState = true, RectPass pass = RectPass.Blended)
     {
         int start = _cursor;
         int count = Math.Min(instances.Length, MaxInstances - start);
@@ -460,7 +495,12 @@ float4 PSMain(VSO i) : SV_Target
             cmd->IASetVertexBuffers(0, 1, &qv);
         }
         if (bindPipelineState)
-            cmd->SetPipelineState(opaque && _psoOpaque != null ? _psoOpaque : _pso);
+            cmd->SetPipelineState(pass switch
+            {
+                RectPass.Opaque when _psoOpaque != null => _psoOpaque,   // absent ⇒ the blended PSO draws it identically
+                RectPass.DestOut => _psoDestOut,
+                _ => _pso,
+            });
         cmd->SetGraphicsRootShaderResourceView(1, _activeGva + (ulong)(start * sizeof(RectInstance)));
         cmd->DrawInstanced(4, (uint)count, 0, 0);
         return true;
@@ -472,5 +512,6 @@ float4 PSMain(VSO i) : SV_Target
             if (_instances[f] != null) { _instances[f]->Unmap(0, null); D3D12MemoryDiagnostics.Release(_instances[f], "RoundRect.InstanceUpload"); _instances[f]->Release(); _instances[f] = null; }
         if (_pso != null) _pso->Release();
         if (_psoOpaque != null) { _psoOpaque->Release(); _psoOpaque = null; }
+        if (_psoDestOut != null) { _psoDestOut->Release(); _psoDestOut = null; }
     }
 }

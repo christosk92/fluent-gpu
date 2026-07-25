@@ -25,6 +25,12 @@ public enum DrawOp : int
                                // through the EXISTING glyph atlas/PSO — no new shader/PSO/texture/RHI method. Deliberately
                                // NOT the gpu-renderer.md §5 tessellation lane (same non-tessellation-sibling posture as
                                // DrawTabShape) — icons are tiny glyph-shaped workloads that ride the R8 atlas like text.
+    DrawVideo = 17,            // the VIDEO HOLE PUNCH (gpu-renderer.md §7.3): ERASES the already-painted UI pixels under
+                               // Dst toward premultiplied zero (dst' = dst×(1−VideoReady×cov)) so the DComp video visual
+                               // z-BELOW the premultiplied UI swapchain shows through. Rides the RoundRect SDF shader on a
+                               // third DestOut PSO (SrcBlend=ZERO, DestBlend=INV_SRC_ALPHA) — no new shader, and coverage
+                               // AA, per-corner radii, and both clip tiers come free. Painter order only: later siblings
+                               // (letterbox bars, transport chrome) simply repaint over the hole.
 }
 
 /// <summary>Per-opcode command counts for the current <see cref="DrawList"/>. Stored as scalar fields so the host can
@@ -33,7 +39,7 @@ public struct DrawListOpcodeStats
 {
     public int FillRoundRect, DrawGlyphRun, PushClip, PopClip, DrawImage, DrawRoundRectStroke, DrawShadow;
     public int DrawGradientRect, PushLayer, PopLayer, DrawGradientStroke, DrawArc, DrawPolylineStroke, DrawTabShape, DrawGlyphRunGradient;
-    public int DrawIconMask;
+    public int DrawIconMask, DrawVideo;
 
     public void Add(DrawOp op)
     {
@@ -55,6 +61,7 @@ public struct DrawListOpcodeStats
             case DrawOp.DrawTabShape: DrawTabShape++; break;
             case DrawOp.DrawGlyphRunGradient: DrawGlyphRunGradient++; break;
             case DrawOp.DrawIconMask: DrawIconMask++; break;
+            case DrawOp.DrawVideo: DrawVideo++; break;
         }
     }
 
@@ -76,6 +83,7 @@ public struct DrawListOpcodeStats
         DrawTabShape += other.DrawTabShape;
         DrawGlyphRunGradient += other.DrawGlyphRunGradient;
         DrawIconMask += other.DrawIconMask;
+        DrawVideo += other.DrawVideo;
     }
 
     public readonly bool CanTranslateCopiedSpan
@@ -101,10 +109,11 @@ public struct DrawListOpcodeStats
         DrawTabShape = DrawTabShape - other.DrawTabShape,
         DrawGlyphRunGradient = DrawGlyphRunGradient - other.DrawGlyphRunGradient,
         DrawIconMask = DrawIconMask - other.DrawIconMask,
+        DrawVideo = DrawVideo - other.DrawVideo,
     };
 
     public override readonly string ToString()
-        => $"fill={FillRoundRect} glyph={DrawGlyphRun} glyphGrad={DrawGlyphRunGradient} clip={PushClip}/{PopClip} img={DrawImage} stroke={DrawRoundRectStroke} shadow={DrawShadow} grad={DrawGradientRect}/{DrawGradientStroke} layer={PushLayer}/{PopLayer} arc={DrawArc} poly={DrawPolylineStroke} tab={DrawTabShape} icon={DrawIconMask}";
+        => $"fill={FillRoundRect} glyph={DrawGlyphRun} glyphGrad={DrawGlyphRunGradient} clip={PushClip}/{PopClip} img={DrawImage} stroke={DrawRoundRectStroke} shadow={DrawShadow} grad={DrawGradientRect}/{DrawGradientStroke} layer={PushLayer}/{PopLayer} arc={DrawArc} poly={DrawPolylineStroke} tab={DrawTabShape} icon={DrawIconMask} video={DrawVideo}";
 }
 
 /// <summary>How a <see cref="FillRoundRectCmd"/> fills its interior.</summary>
@@ -267,6 +276,12 @@ public readonly record struct DrawTabShapeCmd(RectF Rect, float TopRadius, float
 // rasterizes the mask lazily on a (PathId, device-px) atlas miss and appends ONE glyph instance tinted by Tint, so it
 // batches in the glyph pass (text-like z within a layer scope). NOT the §5 tessellation lane (see the opcode note).
 public readonly record struct DrawIconMaskCmd(RectF Rect, ColorF Tint, int PathId, Affine2D Transform, float Opacity);
+// The video hole punch (see DrawOp.DrawVideo). <see cref="Dst"/> is the node-local (DIP) video box with <see cref="Radii"/>
+// per-corner rounding, placed by the baked world <see cref="Transform"/> — the FillRoundRect shape contract exactly.
+// <see cref="SurfaceId"/> is the video registry's slot token: diagnostic at replay only, since the presenter positions the
+// DComp visual independently. <see cref="VideoReady"/> (0..1) is the ERASE STRENGTH — the backend writes premultiplied
+// (0,0,0,VideoReady·cov·Opacity) through a DestOut blend, so 1 fully clears the hole and 0 records nothing.
+public readonly record struct DrawVideoCmd(RectF Dst, CornerRadius4 Radii, int SurfaceId, float VideoReady, Affine2D Transform, float Opacity);
 
 /// <summary>
 /// Flat POD command stream consumed by the RHI (<c>SubmitDrawList</c>). The slice grows a single contiguous buffer;
@@ -602,6 +617,17 @@ public sealed class DrawList
         PushSort(sortKey);
     }
 
+    /// <summary>The video hole punch (see <see cref="DrawVideoCmd"/>): ERASE the already-painted UI pixels under
+    /// <paramref name="dst"/> toward premultiplied zero at strength <paramref name="videoReady"/>, so the DComp video
+    /// visual composited BELOW the UI swapchain shows through. Emit it AFTER everything it must erase and BEFORE the
+    /// chrome that must sit over the video — the hole is painter-ordered like any other primitive.</summary>
+    public void DrawVideo(in RectF dst, in CornerRadius4 radii, int surfaceId, float videoReady, in Affine2D transform, float opacity, ulong sortKey = 0)
+    {
+        WriteOp(DrawOp.DrawVideo);
+        WritePayload(new DrawVideoCmd(dst, radii, surfaceId, Math.Clamp(videoReady, 0f, 1f), transform, opacity));
+        PushSort(sortKey);
+    }
+
     private void WriteOp(DrawOp op)
     {
         Ensure(sizeof(int));
@@ -685,6 +711,11 @@ public sealed class DrawList
                     break;
                 case DrawOp.DrawIconMask:
                     if (!TranslatePayload<DrawIconMaskCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
+                    break;
+                case DrawOp.DrawVideo:
+                    // Exact under translation, like FillRoundRect: the hole is pure geometry and the presenter drives the
+                    // video visual's own rect independently (PumpNow), so a rebased span can never desync from it.
+                    if (!TranslatePayload<DrawVideoCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
                     break;
                 default:
                     return false;

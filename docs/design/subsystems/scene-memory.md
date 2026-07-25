@@ -358,7 +358,10 @@ owns the stop rule). Animation writes **Transform/PaintDirty only, never LayoutD
 public enum VisualKind : byte {
     Container, RoundRect, Text, Path, Image, Backdrop,
     ComponentAnchor,   // Passthrough zero-cost identity node (reconciler-hooks §5.2)
-    Video,             // hole-punch (media-pipeline)
+    Video,             // = 7 (AS-BUILT): the hole-punch node (media-pipeline). Like IconLayer it REUSES the Image
+                       //   payload slot — the `ImageId` column doubles as the `VideoSurfaceRegistry` slot token — so
+                       //   no new NodePaint field and no new NodeFlags bit (the flag word is full). Recorded as
+                       //   DrawVideo (payload + raster: gpu-renderer.md §3.1/§7.3).
     IconLayer,         // one ThemedIcon vector layer (controls.md): a colorless coverage mask tinted per-instance.
                        //   REUSES the Image payload slot as the interned `IconGeometryTable.Shared` pathId, and `Fill`
                        //   as the theme-live layer tint — no new NodePaint field (the 64B cache line holds). Recorded
@@ -620,7 +623,13 @@ public enum DrawOp : byte {
                           //   gpu-renderer.md; carried by the sparse `_borderBrushes` side-table (mirrors `_gradients`),
                           //   driven by the `BoxEl.BorderBrush` (`GradientSpec?`) DSL field + `.BorderBrush(spec,width)`.
     // content (payloads: text.md / media-pipeline.md)
-    DrawGlyphRun, DrawImage, DrawVideo,
+    DrawGlyphRun, DrawImage,
+    DrawVideo,            // = 17 (AS-BUILT 2026-07): the video hole. Replay ERASES the already-painted UI pixels
+                          //   inside Dst (a DestOut-blend PSO riding the existing RoundRect SDF shader) so the DComp
+                          //   video child z-BELOW the UI swapchain shows through. Payload shape + raster + the
+                          //   emit-order/limitation contract: gpu-renderer.md §3.1/§7.3. Adds no column — the scene
+                          //   side is `VisualKind.Video` reusing the Image payload slot (§2.4). Ordering is
+                          //   painter/tree order only (NO pass bucket). Same POD-registration contract.
     DrawIconMask,         // a ThemedIcon vector-layer mask (controls.md; shape+raster: gpu-renderer.md DrawIconMaskCmd):
                           //   a CPU-rasterized colorless R8 coverage mask (interned geometry in IconGeometryTable.Shared,
                           //   keyed by PathId), tinted per-instance and drawn through the EXISTING glyph atlas/PSO — no

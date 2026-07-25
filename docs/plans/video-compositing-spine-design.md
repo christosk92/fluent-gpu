@@ -11,7 +11,10 @@
 > same frame-turn, not one Commit), and snap-`VideoReady`-to-0 during interactive resize is the **default**. The
 > consolidated, verified plan of record is `docs/plans/video-phase1-plan.md`.
 
-**Status:** design, not implemented. **Owner doc:** this refines `design/subsystems/media-pipeline.md §8`
+**Status:** §5 (the `DrawVideoCmd` opcode + hole-punch) is **implemented as-built 2026-07-25** — shipped as a
+DestOut erase, painter-order only, with the graded crossfade deferred; canon lives in
+`design/subsystems/gpu-renderer.md §3.1/§7.3`. The rest of this doc remains design.
+**Owner doc:** this refines `design/subsystems/media-pipeline.md §8`
 (which stays canon for the video present-tree). **Scope:** the DRM-free spine only — the multi-visual
 DirectComposition tree, the `IVideoPresenter` PAL seam, the `DrawVideoCmd` opcode + hole-punch, the
 art→poster→live crossfade, and `VideoSurfaceRegistry`/`UseVideoSurface`. **DRM is explicitly out of scope**

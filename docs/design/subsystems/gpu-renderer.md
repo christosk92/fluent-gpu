@@ -28,7 +28,7 @@ Decisions are stated as **MADE** with the losing option and reason. Residual unk
 
 | Category | This doc is authoritative for |
 |---|---|
-| **DrawList opcode PAYLOAD STRUCT SHAPES** | `FillRoundRectCmd`, `FillRoundRectStrokeCmd`, `DrawShadowCmd`, `DrawGlyphRunCmd` (consume), `FillPathCmd`/`StrokePathCmd`, **`DrawImageCmd`** (the UNION shape: `ImageHandle` + `Dst` + `Radii` + `PlaceholderFill` + `CrossFade` + `Clip` + `Stretch` + `Flags`; §3.1 is the authority — `media-pipeline.md` references it), **`DrawVideoCmd`** (the 7-field hole-punch shape; §3.1 authority), `PushLayerCmd`/`PopLayerCmd`, `PushClipRectCmd`/`PopClipCmd`, `PushStencilClipCmd`/`PopStencilClipCmd`, `PushTransformCmd`/`PopTransformCmd`, **`DrawSelectionRectCmd`** (text-selection highlight; the UNION shape: `Rect` + `Radii` + `SelectionBrush` + `Affinity` + `Clip` + `Flags`; §3.6 authority — `text.md` owns the geometry source, `input-a11y.md` owns the `SelectionState` semantics), **`DrawScrimCmd`** (overlay dismiss-layer fill; §3.6 authority — `input-a11y.md` owns the light-dismiss FSM), `DrawAccessKeyBadgeCmd`. **`DrawFocusRingCmd`:** the *struct shape* AND its **rasterization** are owned here (§3.6 + §4.4 — the focus-ring SDF + overlay/portal composition); `input-a11y.md` §8.4 only EMITS it. It is the single production focus-visual opcode (the rounded, clip-chain-anchored Fluent focus ring); the rectangular `DrawFocusRect(Cmd)` is a superseded debug placeholder. **NOT owned here:** `ImageRealization`/`ImageRefTable` + small-image-atlas residency/packing/`AcquireAtlasPage` (→ `media-pipeline.md`); `SelectionState`/`GetSelectionRects` geometry (→ `text.md`); overlay light-dismiss FSM + placement-flip (→ `input-a11y.md`/`layout.md`). |
+| **DrawList opcode PAYLOAD STRUCT SHAPES** | `FillRoundRectCmd`, `FillRoundRectStrokeCmd`, `DrawShadowCmd`, `DrawGlyphRunCmd` (consume), `FillPathCmd`/`StrokePathCmd`, **`DrawImageCmd`** (the UNION shape: `ImageHandle` + `Dst` + `Radii` + `PlaceholderFill` + `CrossFade` + `Clip` + `Stretch` + `Flags`; §3.1 is the authority — `media-pipeline.md` references it), **`DrawVideoCmd`** (the as-built 6-field hole-punch shape: `Dst` + `Radii` + `SurfaceId` + `VideoReady` + `Transform` + `Opacity`; §3.1 authority, raster/ordering §7.3), `PushLayerCmd`/`PopLayerCmd`, `PushClipRectCmd`/`PopClipCmd`, `PushStencilClipCmd`/`PopStencilClipCmd`, `PushTransformCmd`/`PopTransformCmd`, **`DrawSelectionRectCmd`** (text-selection highlight; the UNION shape: `Rect` + `Radii` + `SelectionBrush` + `Affinity` + `Clip` + `Flags`; §3.6 authority — `text.md` owns the geometry source, `input-a11y.md` owns the `SelectionState` semantics), **`DrawScrimCmd`** (overlay dismiss-layer fill; §3.6 authority — `input-a11y.md` owns the light-dismiss FSM), `DrawAccessKeyBadgeCmd`. **`DrawFocusRingCmd`:** the *struct shape* AND its **rasterization** are owned here (§3.6 + §4.4 — the focus-ring SDF + overlay/portal composition); `input-a11y.md` §8.4 only EMITS it. It is the single production focus-visual opcode (the rounded, clip-chain-anchored Fluent focus ring); the rectangular `DrawFocusRect(Cmd)` is a superseded debug placeholder. **NOT owned here:** `ImageRealization`/`ImageRefTable` + small-image-atlas residency/packing/`AcquireAtlasPage` (→ `media-pipeline.md`); `SelectionState`/`GetSelectionRects` geometry (→ `text.md`); overlay light-dismiss FSM + placement-flip (→ `input-a11y.md`/`layout.md`). |
 | **GPU instance structs** | `QuadInstance` (80B; rect/shadow/border/image), `GlyphInstance` (48B) |
 | **Render-thread algorithms** | `DrawListRecorder` (clean-span memcpy), `RenderLane` classifier, `Batcher` (LSD radix over `ulong[]`), `OverlapGrid` painter-order break, `PathTessellator` (monotone/trapezoidal sweep), `DamageAccumulator`, `LayerPool`, `UploadRing`, `TextureStagingRing` |
 | **RHI methods I drive** | `SubmitDrawList` (PRIMARY hot path), `ICommandEncoder.*` (incl. **`CopyBufferToTexture`**), `CreateGraphicsPipeline`/`CreatePipeline`, the multi-visual present tree |
@@ -142,10 +142,10 @@ seed. The interface is the exact substitution point for a future `Rhi.Metal` lea
 
 **Present tree (amended, multi-visual):** the swapchain is **NOT** a single DComp visual. It is a
 multi-visual DComp present tree — a UI swapchain/canvas visual z-**above** a **video child visual**;
-`DrawVideoCmd.Dst` is hole-punched by clearing a transparent (premultiplied-0) region in the UI canvas so
-the video child shows through. A window-Mica/Acrylic backdrop sibling visual sits **below** everything via
-`IBackdropSource` (PAL). The hole, the UI present, and `IVideoPresenter.Place` commit in **one DComp
-Commit** (§7.3, §11).
+`DrawVideoCmd.Dst` is hole-punched by erasing that region of the UI canvas to premultiplied-0 so the video
+child shows through (§7.3). A window-Mica/Acrylic backdrop sibling visual sits **below** everything via
+`IBackdropSource` (PAL). As built, the hole flushes with the UI present and the child placement with the
+per-frame DComp `Commit` (§7.3, §11).
 
 ---
 
@@ -212,15 +212,22 @@ public struct DrawImageCmd {
 public enum Stretch : byte { UniformToFill = 0, Uniform = 1, None = 2, Fill = 3 }
 // AUTHORITY (this doc owns the struct SHAPE). Hole-punch only; no video pixel work ever on our thread.
 // media-pipeline.md / pal-rhi.md REFERENCE this shape; they own the present/consume logic.
-public struct DrawVideoCmd {               // sortkey PassClass below chrome
-    public VideoSurfaceId Surface;         // which DComp child visual
-    public RectF Dst;                      // device-space hole (also the IVideoPresenter.Place rect)
-    public ImageHandle PosterBlur;         // lower crossfade layer (blurred poster) while VideoReady<1
-    public ImageHandle AlbumArt;           // lowest crossfade layer (art) before poster
-    public float VideoReady;               // 0..1, 3-layer crossfade (art→poster→live)
-    public CornerRadius4 Radii;            // rounded PiP corners (clip the hole + chrome)
-    public ClipHandle Clip;
-}
+// AS-BUILT (2026-07) — the earlier 7-field spec form reconciled to shipped reality per the table in
+// docs/plans/video-compositing-spine-design.md §5.1: `VideoSurfaceId Surface` → plain `int SurfaceId` (mirrors
+// how DrawImageCmd carries an int ImageId); `PosterBlur`/`AlbumArt` DROPPED (no ImageHandle type exists — poster
+// and art are ordinary DrawImageCmds emitted as siblings); `ClipHandle Clip` DROPPED (clipping is the ambient
+// PushClip/PopClip like every other op). Geometry follows FillRoundRectCmd: `Dst` is NODE-LOCAL and `Transform`
+// is the baked world affine.
+public readonly record struct DrawVideoCmd(
+    RectF Dst,                             // node-local video box (world placement comes from Transform)
+    CornerRadius4 Radii,                   // rounded-PiP corners of the hole (coverage-AA'd by the SDF)
+    int SurfaceId,                         // the VideoSurfaceRegistry slot token; DIAGNOSTIC at replay — the
+                                           //   presenter places its DComp child visual independently
+    float VideoReady,                      // 0..1 erase strength (see §7.3); the recorder emits a constant 1
+    Affine2D Transform,                    // baked world transform
+    float Opacity);                        // cumulative node opacity (attenuates the erase — §7.3)
+// Ordering is painter/tree order, NOT a pass bucket: the hole is emitted at the video node's paint slot and its
+// chrome paints over it as later siblings (§7.3; the no-PassClass decision is spine design §5.3).
 public struct FillPathCmd { public PathRef Path; public BrushHandle Fill; public ClipHandle Clip; public byte FillRule; }
 // AUTHORITY (this doc owns the SHAPE + raster posture). `DrawIconMask` = a ThemedIcon vector-layer mask (controls.md).
 // A CPU-rasterized COLORLESS R8 coverage mask — geometry interned in `IconGeometryTable.Shared` (a `.Shared` side-table
@@ -437,7 +444,9 @@ public static RenderLane Classify(DrawOp op, in NodePaintLite p)
             or DrawOp.DrawGradientStroke                                                 // §3.1a: gradient SDF outline
             or DrawOp.DrawSelectionRect or DrawOp.DrawScrim => RenderLane.AnalyticSdf,   // §3.6: tint quad / ring / dim
         DrawOp.DrawGlyphRun                                 => RenderLane.Glyph,
-        DrawOp.DrawImage or DrawOp.DrawVideo                => RenderLane.Image,   // video = hole-punch fill, image lane
+        DrawOp.DrawImage                                    => RenderLane.Image,
+        DrawOp.DrawVideo                                    => RenderLane.AnalyticSdf,  // as-built: the hole is a
+                                                            //   DestOut rect on the RoundRect SDF PSO (§7.3), not an image draw
         DrawOp.FillPath or DrawOp.StrokePath               => RenderLane.Path,
         _                                                   => RenderLane.AnalyticSdf,
     };
@@ -701,12 +710,51 @@ public interface IVideoPresenter {            // PAL seam; FluentGpu.Windows Pal
     void SetVisible(VideoSurfaceId id, bool on);  void Destroy(VideoSurfaceId id);  void Commit();
 }
 ```
-Render-thread cost per frame: re-record the scrubber (tiny damage), emit a `DrawVideoCmd` whose batch step
-**clears `Dst` to premultiplied-0** in the UI canvas (the hole, sortkey `PassClass=Video` below chrome so
-chrome draws OVER), and poke `IVideoPresenter.Place`. **The hole, the canvas present, and `Place` commit in
-ONE DComp Commit** so there is never a one-frame gap where the hole shows black or the video shows over
-chrome. PiP persists across nav as a retained visual; re-punch on overlapping damage. The 3-layer crossfade
-(art→poster→live) is opacity-only over stacked image/video draws.
+Render-thread cost per frame: re-record the scrubber (tiny damage), emit a `DrawVideoCmd` that **erases `Dst`
+in the UI canvas** (the hole), and poke the presenter's placement. PiP persists across nav as a retained
+visual.
+
+**AS-BUILT (2026-07) — the erase, not a clear.** Replay is a **DestOut blend** (`SrcBlend=ZERO`,
+`DestBlend=INV_SRC_ALPHA`, color **and** alpha, op `ADD`): a third `RoundRectPipeline` PSO riding the
+**existing** rounded-rect SDF shader and `RectInstance` — no new shader, texture, or RHI method. The PS
+already emits premultiplied `(rgb·a, a·cov·opacity)`, so an instance colored `(0,0,0,VideoReady)` yields
+`dst' = dst × (1 − VideoReady·cov)`: at `VideoReady = 1` the covered pixels land on premultiplied-0 (a true
+hole DWM composes the child through), and coverage AA, per-corner `Radii`, and **both** clip tiers (scissor +
+the in-shader rounded clip) are inherited for free — the rounded-PiP corner actually comes from the enclosing
+rounded clip. The op gets its **own run class** (`PrimKind.VideoHole` → `BoundPipe.RectDestOut`); this is
+load-bearing, not tidiness: an `A = 1` hole otherwise satisfies the opaque-plain-rect test and would be drawn
+by the no-blend opaque PSO as **solid black** — the exact inverse of the fix. Opaque segmentation is
+byte-identical otherwise. `SurfaceId` is the `VideoSurfaceRegistry` slot token and is **diagnostic at replay
+only** — the presenter places its child visual independently (`media-pipeline.md §8.3`).
+
+**Emit order (the ordering contract).** There is **no** pass bucket: the hole is emitted at the **video
+node's paint slot**, and its chrome — letterbox bars, scrim, transport — are later-painting descendants /
+siblings that repaint **over** the erased region and are therefore never transparent. Sorting is painter/tree
+order (`key = depth`), so "below all chrome" is a tree-shape property the layout already provides. Introducing
+a `PassClass` enum for one opcode was considered and **rejected** (`docs/plans/video-compositing-spine-design.md`
+§5.3); revisit only if a hole must punch below an *unrelated shallower* node.
+
+**`VideoReady` semantics pin.** Replay erases at strength `VideoReady` — it is the erase weight, not a fade
+curve the renderer interprets. The recorder emits a **constant `1f`** (the app's poster↔hole swap is discrete);
+the **graded art→poster→live crossfade is deferred**, and the field ships so it can land without a payload
+change. A poster-drawn-*after* pattern must therefore emit `VideoReady = 1` and grade the **poster's** opacity
+by `(1 − w)` (the premultiplied math in spine design §5.2) — grading the erase instead leaves residual UI alpha
+and the page bleeds through the video.
+
+**Limitation — main canvas only (canonical home for this caveat).** The erase hits whatever render target is
+bound. Inside an **offscreen layer** (opacity/blur/acrylic) that is the layer RT, not the back buffer, so the
+hole does not reach the swapchain: it vanishes during an enter/exit opacity fade (transient) and under an
+acrylic layer covering the video rect (the video must simply not bleed over the acrylic). Related: cumulative
+parent `Opacity` attenuates the erase, so a plain-parent fade ghosts the UI over the video for the duration.
+Both are **accepted and transient** — the supported scope is a video node on the main canvas. Consistent with
+that, the self-blur pin key treats the op as uncacheable (`BlurPinKey` has no case ⇒ conservative miss).
+
+**Damage / re-punch.** Under `FLIP_DISCARD` the back buffer is discarded after every present and the surface
+is re-rendered whole, so the hole is re-punched every frame with no extra rule. The damage-inflation rule —
+inflate the video node's damage to the full `Dst` whenever any node overlapping it is dirty — is **deferred**
+until partial present exists. Flush-wise the hole rides the UI swapchain `Present` while the child placement
+rides the per-frame DComp `Commit` the video pump issues: two flushes on one frame turn, not one
+(`docs/plans/video-phase1-plan.md §2`, correction #4).
 
 ---
 
@@ -1149,9 +1197,9 @@ Amendments folded into this actualization (everything else preserved from the or
    + `Stretch` + `Clip` (was a raw `TextureHandle`); batcher gains the **`ImageRef` UV-resolve branch**;
    **small-image atlas promoted `OQ-4` → v1 required**; image brushes reconciled onto the same indirection.
    (WaveeMusic §3.1)
-8. **`DrawVideoCmd` added** (hole-punch, sortkey `PassClass` below chrome) + the **multi-visual DComp
-   present tree** + `IVideoPresenter`/`IBackdropSource`/`ISystemColors` PAL seams; hole + present + `Place`
-   in one DComp Commit. (WaveeMusic §3.4)
+8. **`DrawVideoCmd` added** (hole-punch; as-built it orders by **painter order, not a pass bucket** — §7.3) +
+   the **multi-visual DComp present tree** + `IVideoPresenter`/`IBackdropSource`/`ISystemColors` PAL seams.
+   (WaveeMusic §3.4)
 9. **RHI delta `CopyBufferToTexture` + dedicated texture-staging ring + startup per-bucket texture pool**
    (no `CreateTexture` in phases 6–13); corrected the original claim that texture upload rides the instance
    `UploadRing`. (WaveeMusic §3.1)

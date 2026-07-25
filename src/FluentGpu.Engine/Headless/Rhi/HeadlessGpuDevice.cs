@@ -28,6 +28,8 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     private readonly List<PushLayerCmd> _layers = new(8);
     private readonly List<DrawTabShapeCmd> _tabShapes = new(8);
     private readonly List<DrawIconMaskCmd> _iconMasks = new(16);
+    private readonly List<DrawVideoCmd> _videos = new(4);
+    private readonly List<int> _videoClipDepth = new(4);
     private readonly List<(int id, int w, int h)> _uploads = new(32);
     private readonly Dictionary<int, (int w, int h)> _resident = new(32);
     private readonly List<int> _evictions = new(16);
@@ -72,6 +74,13 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     public IReadOnlyList<DrawTabShapeCmd> LastTabShapes => _tabShapes;
     /// <summary>ThemedIcon vector-layer masks drawn this frame (DrawIconMask — PathId + per-instance tint).</summary>
     public IReadOnlyList<DrawIconMaskCmd> LastIconMasks => _iconMasks;
+    /// <summary>Video hole punches recorded this frame (DrawVideo — SurfaceId + erase strength VideoReady). The real
+    /// backend ERASES these rects toward premultiplied zero so the DComp video visual below the swapchain shows through;
+    /// headless just captures the payload.</summary>
+    public IReadOnlyList<DrawVideoCmd> LastVideos => _videos;
+    /// <summary>Clip-stack depth at each <see cref="LastVideos"/> command (parallel list) — a PiP hole records INSIDE
+    /// its rounded container's clip, which is where its corner rounding actually comes from.</summary>
+    public IReadOnlyList<int> LastVideoClipDepths => _videoClipDepth;
     /// <summary>Push/pop balance check — must be 0 at end of a well-formed frame. Rounded (tier-2) clips are visible
     /// on <see cref="LastClips"/> entries via <see cref="ClipCmd.CornerRadius"/>/<c>RoundedRect</c>.</summary>
     public int ClipBalance { get; private set; }
@@ -130,6 +139,8 @@ public sealed class HeadlessGpuDevice : IGpuDevice
         _layers.Clear();
         _tabShapes.Clear();
         _iconMasks.Clear();
+        _videos.Clear();
+        _videoClipDepth.Clear();
         LastClear = ctx.Clear;
         FrameCount++;
         int balance = 0;
@@ -208,6 +219,11 @@ public sealed class HeadlessGpuDevice : IGpuDevice
                 case DrawOp.DrawIconMask:
                     _iconMasks.Add(MemoryMarshal.Read<DrawIconMaskCmd>(drawList.Slice(pos)));
                     pos += Unsafe.SizeOf<DrawIconMaskCmd>();
+                    break;
+                case DrawOp.DrawVideo:
+                    _videos.Add(MemoryMarshal.Read<DrawVideoCmd>(drawList.Slice(pos)));
+                    _videoClipDepth.Add(balance);
+                    pos += Unsafe.SizeOf<DrawVideoCmd>();
                     break;
                 default:
                     return; // unknown opcode — stop (corrupt stream guard)

@@ -117,7 +117,10 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // Painter-order draw runs: a segment's non-glyph primitives in STREAM order (consecutive same-kind ops batched into
     // one draw), so a shadow correctly sits OVER the background drawn before it and UNDER the element it belongs to.
     // Without this, all shadows batch before all rects and any opaque background paints over them. Glyphs always draw last.
-    private enum PrimKind : byte { Rect, Shadow, Gradient, Image, Arc, Polyline }
+    // VideoHole is its OWN run class, not a Rect: a hole instance is opaque-alpha (A = VideoReady = 1) and square, so
+    // inside the Rect class it would satisfy IsOpaquePlainRect and be drawn by the NO-BLEND opaque PSO as solid black —
+    // the exact inverse of an erase. Its own class keeps the opaque segmentation of real rects byte-identical too.
+    private enum PrimKind : byte { Rect, Shadow, Gradient, Image, Arc, Polyline, VideoHole }
     private readonly List<(PrimKind Kind, int Count)> _runs = new();
     private int _frameImageCount;
     private int _frameImageSkipped;
@@ -141,7 +144,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // RectOpaque shares ALL shared SDF state (root sig / viewport / topology / quad VB) with Rect — only the PSO differs
     // (no-blend + minimal shader). So it participates in the same _sharedSdfStateBound dedup; only a PSO rebind is needed
     // when a rect run crosses the opaque↔blended boundary.
-    private enum BoundPipe : byte { None, Rect, RectOpaque, Shadow, Arc, Polyline, Gradient, Glyph, GradGlyph, Image }
+    // RectDestOut is a third rect PSO on the same shared SDF state (the video hole punch — RectPass.DestOut).
+    private enum BoundPipe : byte { None, Rect, RectOpaque, RectDestOut, Shadow, Arc, Polyline, Gradient, Glyph, GradGlyph, Image }
     private BoundPipe _boundPipe;
     private bool _sharedSdfStateBound;
     private RECT _lastScissor;
@@ -1277,6 +1281,30 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     }
                     break;
                 }
+                case DrawOp.DrawVideo:
+                {
+                    // The video hole punch: the SAME RectInstance/shader as a fill, drawn later through the DestOut PSO.
+                    // Color is (0,0,0,VideoReady) and Kind stays 0 (a rounded-rect SDF — Kind 3 would fall into the
+                    // tab-shape branch), so the PS emits premultiplied (0,0,0, VideoReady·cov·opacity) and the blend
+                    // leaves dst×(1−VideoReady·cov·opacity): corner AA, per-corner radii and the tier-2 rounded clip
+                    // (the source of the rounded PiP hole) all come from the existing paths.
+                    var c = MemoryMarshal.Read<DrawVideoCmd>(cmds.Slice(pos));
+                    pos += Unsafe.SizeOf<DrawVideoCmd>();
+                    if (c.VideoReady <= 0f || c.Opacity <= 0f) break;   // nothing to erase (poster/audio-only)
+                    var inst = new RectInstance
+                    {
+                        PosX = c.Dst.X, PosY = c.Dst.Y, W = c.Dst.W, H = c.Dst.H,
+                        RTL = c.Radii.TopLeft, RTR = c.Radii.TopRight, RBR = c.Radii.BottomRight, RBL = c.Radii.BottomLeft,
+                        R = 0f, G = 0f, B = 0f, A = c.VideoReady,
+                        M11 = c.Transform.M11, M12 = c.Transform.M12, M21 = c.Transform.M21, M22 = c.Transform.M22,
+                        Dx = c.Transform.Dx, Dy = c.Transform.Dy, Opacity = c.Opacity,
+                    };
+                    ApplyRoundedClip(ref inst);
+                    _rectInsts.Add(inst);
+                    _frameRectCount++;
+                    PushRun(PrimKind.VideoHole);
+                    break;
+                }
                 case DrawOp.PushLayer:
                     pos += Unsafe.SizeOf<PushLayerCmd>();         // wired to the backdrop subsystem (phase 5)
                     break;
@@ -1585,10 +1613,21 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                             var want = op ? BoundPipe.RectOpaque : BoundPipe.Rect;
                             bool bindShared = !_sharedSdfStateBound;
                             bool bindPso = _boundPipe != want;
-                            NoteSdfPipeBind(_rectPipe!.Record(_cmdList, rectRun.Slice(si, sj - si), lw, lh, bindShared, bindPso, op),
+                            NoteSdfPipeBind(_rectPipe!.Record(_cmdList, rectRun.Slice(si, sj - si), lw, lh, bindShared, bindPso, op ? RectPass.Opaque : RectPass.Blended),
                                 bindShared, bindPso, want);
                             si = sj;
                         }
+                        break;
+                    case PrimKind.VideoHole:
+                        // The hole punch rides the rect instance buffer (so `rc` MUST advance with it) but always draws
+                        // through the DestOut PSO — never the opaque/blended segmentation above.
+                        SceneCat(CatFill);
+                        var holeRun = rectSpan.Slice(rc, count);
+                        rc += count;
+                        bool bindHoleShared = !_sharedSdfStateBound;
+                        bool bindHolePso = _boundPipe != BoundPipe.RectDestOut;
+                        NoteSdfPipeBind(_rectPipe!.Record(_cmdList, holeRun, lw, lh, bindHoleShared, bindHolePso, RectPass.DestOut),
+                            bindHoleShared, bindHolePso, BoundPipe.RectDestOut);
                         break;
                     case PrimKind.Image:
                         SceneCat(CatImage);
@@ -2044,6 +2083,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 case DrawOp.DrawGradientStroke: pos += Unsafe.SizeOf<DrawGradientStrokeCmd>(); break;
                 case DrawOp.DrawTabShape: pos += Unsafe.SizeOf<DrawTabShapeCmd>(); break;
                 case DrawOp.DrawIconMask: pos += Unsafe.SizeOf<DrawIconMaskCmd>(); break;
+                case DrawOp.DrawVideo: pos += Unsafe.SizeOf<DrawVideoCmd>(); break;
                 case DrawOp.PushLayer:
                     var L = MemoryMarshal.Read<PushLayerCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<PushLayerCmd>();
@@ -2085,6 +2125,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 case DrawOp.DrawGradientStroke: pos += Unsafe.SizeOf<DrawGradientStrokeCmd>(); break;
                 case DrawOp.DrawTabShape: pos += Unsafe.SizeOf<DrawTabShapeCmd>(); break;
                 case DrawOp.DrawIconMask: pos += Unsafe.SizeOf<DrawIconMaskCmd>(); break;
+                case DrawOp.DrawVideo: pos += Unsafe.SizeOf<DrawVideoCmd>(); break;
                 case DrawOp.PushLayer: pos += Unsafe.SizeOf<PushLayerCmd>(); depth++; break;
                 case DrawOp.PopLayer:
                     pos += Unsafe.SizeOf<PopLayerCmd>();

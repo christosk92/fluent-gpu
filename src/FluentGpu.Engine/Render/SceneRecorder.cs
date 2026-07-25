@@ -1069,6 +1069,20 @@ public static class SceneRecorder
                     dl.TabShape(local, p.Corners.TopLeft, p.TabFlareRadius, fill, world, opacity, key);
                 break;
             }
+            case VisualKind.Video:
+            {
+                // The video hole punch — this node ERASES instead of painting, so there is no fill to resolve. The
+                // PAINTER-ORDER contract does the compositing work: everything recorded BEFORE the hole (the page,
+                // the shell, the stage's letterbox-colored root) is what gets erased, and everything recorded AFTER
+                // it (letterbox bars, transport chrome, overlays) paints back over the video — so the emitter must
+                // place the hole as the FIRST child of the video stage, never last. Erase strength is a constant 1
+                // (the poster↔hole swap is discrete; a graded crossfade would grade the POSTER, not this value).
+                // Limitation (gpu-renderer.md §7.3): inside a PushLayer the erase hits the offscreen layer RT rather
+                // than the back buffer, so the hole vanishes under acrylic and during enter/exit fades.
+                // ImageId carries the video registry SurfaceId (the IconLayer PathId pun — Columns.cs).
+                dl.DrawVideo(local, p.Corners, p.ImageId, 1f, world, opacity, key);
+                break;
+            }
             case VisualKind.Text:
             {
                 ref var li = ref scene.Layout(node);

@@ -585,12 +585,22 @@ public sealed class PlaybackBridge
         post(RecomputeHasVideo);   // initial compute for whatever is playing now
     }
 
+    // The has-video LATCH: once a track uri is known to have a video, a later transient false for the SAME track must
+    // not commit an availability downgrade. The association store is never evicted, so true→false for an unchanged uri
+    // is always a read glitch (CurrentTrack momentarily null/other mid-push) — and committing it costs a full
+    // Video→Audio→Video media-kind round trip that tears down and rebuilds the whole DRM session (the observed
+    // ping-pong). Cleared only on a real track change (PushState).
+    string? _hasVideoLatchedUri;
+
     void RecomputeHasVideo()
     {
         var uri = CurrentTrack.Value?.Uri;
         bool has = false;
         if (!string.IsNullOrEmpty(uri) && _store is { } store)
             has = (store.GetVideoAssociation(uri)?.HasVideo ?? false) || (store.GetTrack(uri)?.HasVideo ?? false);
+        if (has) _hasVideoLatchedUri = uri;
+        else if (_hasVideoLatchedUri is not null && (uri is null || string.Equals(uri, _hasVideoLatchedUri, StringComparison.Ordinal)))
+            has = true;   // transient glitch on the latched track — suppress the downgrade (see the latch comment)
         CurrentTrackHasVideo.SetIfChanged(has);
         // AVAILABILITY is the one channel through which "this track has no video" reaches the surfaces: it hides them and
         // routes the media back to audio WITHOUT touching the user's standing intent, so the next track that DOES have a
@@ -626,6 +636,7 @@ public sealed class PlaybackBridge
             // just goes inactive while a video track auto-continues.
             _videoResolveGen++;
             _videoResolveCts?.Cancel();
+            _hasVideoLatchedUri = null;   // a REAL track change ends the has-video latch (see RecomputeHasVideo)
             // Bump the CONTENT generation. That alone expires a per-track dismiss (it is compared against this
             // generation, never cleared), and routing it through the commit path means the resulting off→on edge also
             // swaps the media back to video for the new track.

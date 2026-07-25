@@ -3,7 +3,7 @@ using FluentGpu.Text;
 
 namespace FluentGpu.Scene;
 
-public enum VisualKind : byte { None = 0, Box = 1, Text = 2, Image = 3, PolylineStroke = 4, TabShape = 5, IconLayer = 6 }
+public enum VisualKind : byte { None = 0, Box = 1, Text = 2, Image = 3, PolylineStroke = 4, TabShape = 5, IconLayer = 6, Video = 7 }
 
 /// <summary>Sparse image-only payload kept out of the dense paint column. The source id stays in
 /// <see cref="NodePaint.ImageId"/>; <see cref="DerivedImageId"/> is selected only after its bake reaches Ready.</summary>
@@ -149,6 +149,8 @@ public struct NodePaint
     public int ImageId;           // VisualKind.Image: handle into the ImageCache (Fill doubles as the placeholder tint).
                                   // VisualKind.IconLayer: DOUBLES as the IconGeometryTable.Shared PathId (Fill doubles as
                                   // the resolved, theme-live layer tint) — no new NodePaint field, so the 64B cache line holds.
+                                  // VisualKind.Video: DOUBLES as the video registry SurfaceId (the same pun as IconLayer's
+                                  // PathId — the hole punch carries no color, so nothing else on the node is displaced).
     public byte ImageFit;         // VisualKind.Image: (ImageFit) content-fit mode; 0 = Cover (default). Read by the recorder
     public float ImageFocusX, ImageFocusY;
     public VisualKind VisualKind;

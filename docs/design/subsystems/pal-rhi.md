@@ -342,7 +342,8 @@ the POD opcode stream (see `architecture-spec.md` §4.5 / `gpu-renderer.md` for 
 ```
 record into a pooled DIRECT command list:
   Barrier(backbuffer: PRESENT → RENDER_TARGET)
-  BeginRenderPass(RTV = _UNORM_SRGB, clear: transparent premul-0 in DrawVideoCmd.Dst regions)  // hole-punch
+  BeginRenderPass(RTV = _UNORM_SRGB)   // the DrawVideoCmd.Dst hole is ERASED in-stream at its paint slot,
+                                       // not pre-cleared here (gpu-renderer.md §7.3)
   for each batch (radix-sorted by ulong sortKey):
       SetPipeline(PSO for batch.Kind)            // SDF rrect / shadow / glyph / image / video-hole
       BindConstants(viewport/transform CB)
@@ -352,8 +353,9 @@ record into a pooled DIRECT command list:
 ExecuteCommandLists → queue.Signal(fence, ++v)
 ```
 
-`DrawVideoCmd` is recorded with a sortkey `PassClass` ordering its transparent alpha-punch **below all
-chrome**, so chrome composites over the hole (§7). The batcher's UV-resolve has glyph + **`ImageRef`**
+`DrawVideoCmd` is emitted at the video node's paint slot so chrome — later-painting siblings/descendants —
+composites over the hole; ordering is **painter/tree order, not a pass bucket** (as-built; the ordering and
+erase contract are owned by `gpu-renderer.md` §7.3). The batcher's UV-resolve has glyph + **`ImageRef`**
 branches (atlas UVs resolved at batch time, never baked into the command — keeps eviction transparent;
 `app-requirements-waveemusic.md` §3.1).
 

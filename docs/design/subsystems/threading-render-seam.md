@@ -626,8 +626,9 @@ mode-transition handshake (pause/recover/resume), never on a per-frame path.
 
 The DComp present-tree is a **multi-visual** tree owned by the render thread (architecture-spec §4.7,
 WaveeMusic fold-in): the UI swapchain visual is z-above a child **video visual** supplied by the PAL
-`IVideoPresenter` seam. `DrawVideoCmd` (sortkey below chrome) paints a **transparent premultiplied-0
-hole** into the UI canvas so the video child visual shows through.
+`IVideoPresenter` seam. `DrawVideoCmd` (emitted at the video node's paint slot, before its chrome — painter
+order, no pass bucket) erases a **transparent premultiplied-0 hole** into the UI canvas so the video child
+visual shows through (`gpu-renderer.md` §7.3).
 
 - The UI thread, at PUBLISH, records `PresentIntent` into the `SceneFrame`: video surface placements
   (`Place(id, deviceRect, opacity, z)`), and a `dcompCommitNeeded` flag (set only when a visual prop

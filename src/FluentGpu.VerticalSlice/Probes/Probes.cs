@@ -4513,3 +4513,35 @@ sealed class ComposeBoundsProbe : Component
         };
     }
 }
+
+// ── Video hole punch (DrawOp.DrawVideo) — the engine-level probe for gate.video.op.headless ──────────────────────
+// A rounded, ClipToBounds container (the PiP shape: the hole's corner rounding comes from this tier-2 rounded clip,
+// not from the hole node itself) wrapping the hole, stacked over a TRANSLUCENT page fill — the pixels the erase has
+// to remove. The Marker sibling is recorded AFTER the hole: if the decoder ever mis-strides the DrawVideo payload or
+// falls into its unknown-opcode guard, the marker disappears (frame truncation), which is what the gate detects.
+sealed class VideoHoleProbe : Component
+{
+    public int SurfaceId = 7;
+    public static readonly ColorF PageFill = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xC0);   // translucent → would bleed through the video
+    public static readonly ColorF MarkerFill = ColorF.FromRgba(0x00, 0xFF, 0x00);
+
+    public override Element Render() => new BoxEl
+    {
+        Width = 400f, Height = 300f, ZStack = true,
+        Children =
+        [
+            new BoxEl { Width = 400f, Height = 300f, Fill = PageFill },
+            new BoxEl
+            {
+                Width = 320f, Height = 180f, ZStack = true,
+                ClipToBounds = true,
+                Corners = CornerRadius4.All(12f),
+                Children =
+                [
+                    new BoxEl { Width = 320f, Height = 180f, VideoHole = true, VideoSurfaceId = SurfaceId },
+                    new BoxEl { Width = 40f, Height = 8f, Fill = MarkerFill },
+                ],
+            },
+        ],
+    };
+}

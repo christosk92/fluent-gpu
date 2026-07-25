@@ -198,6 +198,9 @@ public static class Asserts
         DrawOp.DrawArc => Unsafe.SizeOf<DrawArcCmd>(),
         DrawOp.DrawPolylineStroke => Unsafe.SizeOf<DrawPolylineStrokeCmd>(),
         DrawOp.DrawTabShape => Unsafe.SizeOf<DrawTabShapeCmd>(),
+        DrawOp.DrawGlyphRunGradient => Unsafe.SizeOf<DrawGlyphRunGradientCmd>(),
+        DrawOp.DrawIconMask => Unsafe.SizeOf<DrawIconMaskCmd>(),
+        DrawOp.DrawVideo => Unsafe.SizeOf<DrawVideoCmd>(),
         _ => 0,
     };
     public static void ClickNode(AppHost host, HeadlessWindow window, NodeHandle n)

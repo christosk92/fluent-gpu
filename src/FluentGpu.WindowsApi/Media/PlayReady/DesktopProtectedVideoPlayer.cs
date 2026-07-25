@@ -194,6 +194,27 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
             IntPtr ctx = GCHandle.ToIntPtr(self);
 
             _runHr = Native.FgPlayReadyRunEx(_dataRoot, ref desc, callback, ctx);
+
+            // BUSY self-heal: the native session is a process-global singleton (a CAS latch inside FgPlayReadyRunEx),
+            // so a previous session that was never stopped — any missed-stop bug, or a teardown still in its bounded
+            // 3s join — wedges EVERY later video with ERROR_BUSY. Rather than surfacing that as a permanent typed
+            // failure, signal whatever stale session holds the latch (FgPlayReadyStop sets its shutdown flag; its
+            // keep-alive exits within one 80ms tick) and retry on a bounded poll. This thread is the dedicated native
+            // run thread, so sleeping here blocks nothing else. Template: the transport-ack bounded wait below.
+            const int ErrorBusy = unchecked((int)0x800700AA);   // HRESULT_FROM_WIN32(ERROR_BUSY)
+            if (_runHr == ErrorBusy && !_disposed)
+            {
+                LogVideo("native session BUSY (a stale session holds the singleton latch) — signaling stop + retrying");
+                long deadline = Environment.TickCount64 + 5_000;
+                while (_runHr == ErrorBusy && !_disposed && Environment.TickCount64 < deadline)
+                {
+                    try { Native.FgPlayReadyStop(); } catch { }
+                    Thread.Sleep(200);
+                    _runHr = Native.FgPlayReadyRunEx(_dataRoot, ref desc, callback, ctx);
+                }
+                if (_runHr == ErrorBusy)
+                    LogVideo("native session still BUSY after 5s of stop+retry — surfacing the failure");
+            }
         }
         catch (Exception e)
         {
@@ -361,6 +382,10 @@ public sealed unsafe partial class DesktopProtectedVideoPlayer : IProtectedVideo
             3 => ProtectedVideoState.Paused,
             4 => ProtectedVideoState.Stopped,
             5 => ProtectedVideoState.Error,
+            // 6 = natural end of media. Before this mapping existed the native ENDED collapsed into Paused, so the
+            // controller's auto-advance never fired, the session was never stopped, and the native singleton latch
+            // wedged every later video with ERROR_BUSY (the track-end deadlock).
+            6 => ProtectedVideoState.Ended,
             _ => ProtectedVideoState.Idle,
         };
         if (_state.Peek() != state) _state.Value = state;

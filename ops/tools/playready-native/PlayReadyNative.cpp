@@ -451,6 +451,17 @@ struct MediaEngineNotify : public IMFMediaEngineNotify
             case MF_MEDIA_ENGINE_EVENT_SEEKED:
                 LogLine("[media-engine] SEEKED");
                 break;
+            case MF_MEDIA_ENGINE_EVENT_ENDED:
+                // Natural end of media. This was the whole track-end deadlock: without an ENDED state the managed
+                // side only ever saw "paused", so auto-advance never fired, FgPlayReadyStop was never called, and
+                // the g_desktopRunning latch wedged every later session with ERROR_BUSY. Ended is a STATE, not a
+                // shutdown — the session stays alive so a seek-after-end still works.
+                playing = false;
+                LogLine("[media-engine] ENDED");
+#ifdef FG_DESKTOP_DLL
+                g_desktopState.store(6, std::memory_order_release);   // 6 = ended (see ReconcileTransport)
+#endif
+                break;
             case MF_MEDIA_ENGINE_EVENT_ERROR:          error = true; errCode = (int)p1; errHr = (int)p2; break;
         }
         return S_OK;
@@ -495,10 +506,10 @@ static void ReconcileTransport(IMFMediaEngine* engine)
     double nowSec = engine->GetCurrentTime();
     uint64_t playSeq = g_desktopPlayRequestSeq.load(std::memory_order_acquire);
     bool wantsPlay = g_desktopDesiredPlay.load(std::memory_order_acquire) != 0;
+    double durSec = engine->GetDuration();
+    bool atEnd = durSec > 0.0 && nowSec >= durSec - 0.05;
     if (wantsPlay)
     {
-        double dur = engine->GetDuration();
-        bool atEnd = dur > 0.0 && nowSec >= dur - 0.05;
         if (!atEnd && engine->IsPaused())
         {
             HRESULT hr = engine->Play();
@@ -518,7 +529,11 @@ static void ReconcileTransport(IMFMediaEngine* engine)
     bool paused = engine->IsPaused();
     if ((wantsPlay && !paused) || (!wantsPlay && paused))
         g_desktopPlayAppliedSeq.store(playSeq, std::memory_order_release);
-    g_desktopState.store(paused ? 3 : 2, std::memory_order_release);
+    // 6 = ended: play intent is standing but the clock sits at the end of the presentation. This tick runs every
+    // 80ms and previously stored plain paused(3) here — silently CLOBBERING the ENDED event's state and hiding the
+    // end of the track from the managed side forever (the auto-advance deadlock). The atEnd fold also covers a
+    // missed/never-fired MF ENDED event. A user who seeks-to-end while PAUSED keeps reading as paused (no intent).
+    g_desktopState.store(wantsPlay && atEnd ? 6 : paused ? 3 : 2, std::memory_order_release);
     g_desktopPositionMs.store((int64_t)(nowSec * 1000.0), std::memory_order_release);
 }
 #endif
@@ -2514,7 +2529,7 @@ extern "C" __declspec(dllexport) int __stdcall FgPlayReadyRunEx(const wchar_t* b
     g_logPath = root + L"\\desktop-playready.log";
     g_stopPath.clear(); g_evtPath.clear(); g_cmdPath.clear();
     { std::ofstream f(g_logPath, std::ios::binary | std::ios::trunc); }
-    LogLine("[desktop] BUILD=desktop-cdm-20260725-audiodemux-v15 root=" +
+    LogLine("[desktop] BUILD=desktop-cdm-20260725-endedstate-v16 root=" +
             std::string(root.begin(), root.end()));
     // Proof that the audio representation crossed the ABI (the M2 acceptance line, and the first thing to check when the
     // M3 two-stream demux misbehaves). "none" is a legitimate outcome: a manifest without AAC audio plays video only.

@@ -77,8 +77,12 @@ public sealed class MediaPlayerElement : Component
     public Signal<double>? CustomAspectRatio { get; init; }
     /// <summary>Fired after the built-in aspect menu writes the aspect signal(s) (notification sugar).</summary>
     public Action<VideoAspectMode, double>? AspectModeChanged { get; init; }
-    /// <summary>Opaque bars painted around Uniform/Native content. Defaults to video black (<see cref="Tok.MediaLetterbox"/>).</summary>
+    /// <summary>The opaque stage color painted around Uniform/Native content (the letterbox/pillarbox). Defaults to
+    /// video black (<see cref="Tok.MediaLetterbox"/>). It is a single fill under the whole video area, not four bars —
+    /// see the painter-order note in <see cref="Render"/>.</summary>
     public ColorF LetterboxColor { get; init; } = Tok.MediaLetterbox;
+    /// <summary>Paint the opaque <see cref="LetterboxColor"/> stage fill behind the video. False ⇒ the area around the
+    /// fitted video stays whatever is behind the player (no letterbox).</summary>
     public bool ShowLetterboxBars { get; init; } = true;
     /// <summary>Shown over the video area until the first frame / when audio-only. Null → a default poster.</summary>
     public Element? PosterContent { get; init; }
@@ -100,6 +104,8 @@ public sealed class MediaPlayerElement : Component
     // Pump state (set each Render, read by the engine-invoked PumpNow — the video pump lives OUTSIDE Render).
     private VideoBinding _binding;
     private Ref<NodeHandle>? _areaRef;
+    // The video-hole node. Its laid-out rect IS the video rect (the presenter is placed from it) — one source of truth.
+    private Ref<NodeHandle>? _holeRef;
     private Signal<VideoAspectMode>? _aspectForPump;
     private Signal<double>? _customAspectForPump;
     private SceneStore? _scene;
@@ -113,6 +119,7 @@ public sealed class MediaPlayerElement : Component
         var hooks = UseContext(InputHooks.Current);
         var overlayService = UseContext(Overlay.Service);
         var areaRef = UseRef<NodeHandle>(default);
+        var holeRef = UseRef<NodeHandle>(default);
         var playerRoot = UseRef<NodeHandle>(default);
         var moreAnchor = UseRef<NodeHandle>(default);
         var ccAnchor = UseRef<NodeHandle>(default);
@@ -144,6 +151,7 @@ public sealed class MediaPlayerElement : Component
         // ── the video pump lives OUTSIDE Render (fix: pure Render). Publish the inputs it reads, register it once. ──
         _binding = binding;
         _areaRef = areaRef;
+        _holeRef = holeRef;
         _aspectForPump = aspectSig;
         _customAspectForPump = customAspectSig;
         _scene = Context.Scene;
@@ -241,17 +249,45 @@ public sealed class MediaPlayerElement : Component
                     ? BufferingOverlay(bufferingInfo)
                     : null;
 
-        // Base layer under the (transparent) video hole: while a loading/buffering overlay is up, show a plain dark
-        // stage — the poster's play glyph underneath the spinner reads as two competing affordances.
-        var videoChildren = new System.Collections.Generic.List<Element>(8)
+        // ── the video stage (a ZStack: children paint in author order) ───────────────────────────────────────────────
+        // Painter order once the frame is live:
+        //   [0] the OPAQUE LetterboxColor stage fill across the WHOLE video area. This fill IS the letterbox — there
+        //       are no separate bar elements any more.
+        //   [1] the VIDEO HOLE PUNCH (DrawOp.DrawVideo, gpu-renderer.md §7.3), laid out at EXACTLY the fitted video
+        //       rect. It paints nothing — it ERASES everything already recorded beneath it (this stage fill, the
+        //       translucent page behind an inline/PiP player, the shell) toward premultiplied zero, so the DComp video
+        //       visual composited z-BELOW the premultiplied UI swapchain shows through at full strength instead of
+        //       blending with what stayed in the back buffer. VideoSurfaceId carries the registry slot token
+        //       (diagnostic at replay — the presenter places the visual itself via PumpNow).
+        //   [2…] status / caption / transport overlays — LATER siblings, so they repaint over the video and stay
+        //       visible on top of it.
+        // ONE SOURCE OF TRUTH: PumpNow places the DComp visual from scene.AbsoluteRect of the HOLE node, so the erased
+        // region and the presented video are the same rect BY CONSTRUCTION. The old shape (a hole across the WHOLE
+        // area, then letterbox bars painted around an independently recomputed fit, with the presenter placed at a
+        // THIRD, pump-time fit) left sub-pixel slivers at fractional device scale: pixels the hole erased that neither
+        // the video visual nor a bar covered, revealing the DWM Mica backdrop as a grey edge. Any residual sub-pixel AA
+        // edge now falls on the OPAQUE stage fill — worst case a faint black hairline, never grey.
+        // Not yet ready: while a loading/buffering overlay is up, show a plain dark stage — the poster's play glyph
+        // underneath the spinner reads as two competing affordances.
+        var videoChildren = new System.Collections.Generic.List<Element>(8);
+        if (videoReady)
         {
-            videoReady
-                ? new BoxEl { Grow = 1f }
-                : statusOverlay is not null
-                    ? new BoxEl { Grow = 1f, Fill = Tok.MediaStage }
-                    : PosterContent ?? DefaultPoster(),
-        };
-        if (ShowLetterboxBars && videoReady) AddLetterboxBars(videoChildren, area, videoRect, LetterboxColor);
+            if (ShowLetterboxBars)
+                videoChildren.Add(new BoxEl { Grow = 1f, Fill = LetterboxColor, HitTestVisible = false });
+            videoChildren.Add(new BoxEl
+            {
+                Grow = 1f,
+                AlignSelf = FlexAlign.Start,
+                Margin = LetterboxInsets(area, videoRect),   // area MINUS these insets == the fitted video rect
+                VideoHole = true,
+                VideoSurfaceId = binding.Token,
+                OnRealized = h => holeRef.Value = h,
+            });
+        }
+        else
+            videoChildren.Add(statusOverlay is not null
+                ? new BoxEl { Grow = 1f, Fill = Tok.MediaStage }
+                : PosterContent ?? DefaultPoster());
 
         if (statusOverlay is not null)
             videoChildren.Add(new BoxEl
@@ -333,7 +369,11 @@ public sealed class MediaPlayerElement : Component
     /// <summary>The engine-invoked per-frame video pump (registered at mount; see <see cref="VideoPump"/>). Reads the
     /// live laid-out video-area rect + the current scale and drives <see cref="IMediaPlayer.PumpVideo"/> — NO side
     /// effect ever runs in Render. Zero-alloc (all struct math + value-gated intents). A no-op when a non-owner (the
-    /// registry only invokes the current owner's pump).</summary>
+    /// registry only invokes the current owner's pump).
+    /// <para>The video rect is read from the HOLE node itself — the same node whose rect the recorder erases — so the
+    /// erased region and the composited video visual are identical by construction (no second, independently computed
+    /// fit to drift out of alignment at fractional device scale). The viewport stays the whole area: it is what clips a
+    /// <see cref="VideoAspectMode.UniformToFill"/> crop, whose fitted rect deliberately overflows the stage.</para></summary>
     private void PumpNow(float scale)
     {
         VideoBinding b = _binding;
@@ -345,9 +385,18 @@ public sealed class MediaPlayerElement : Component
         if (area.W <= 0f || area.H <= 0f) return;
         SizeI natural = Player.NaturalSize.Peek();
         bool audioOnly = IsAudioOnly(natural);
-        RectF videoRect = audioOnly
-            ? area
-            : FitVideoRect(area, natural, _aspectForPump?.Peek() ?? VideoAspectMode.Uniform, _customAspectForPump?.Peek() ?? (16.0 / 9.0));
+        RectF videoRect = area;
+        if (!audioOnly)
+        {
+            // Fallback while the hole is not (yet) realized — the first frame after the stream goes ready, or any frame
+            // with no hole at all: recompute the fit so the pump never goes dark.
+            NodeHandle hole = _holeRef?.Value ?? default;
+            bool live = !hole.IsNull && scene.IsLive(hole);
+            videoRect = live ? scene.AbsoluteRect(hole) : default;
+            if (!live || videoRect.W <= 0f || videoRect.H <= 0f)
+                videoRect = FitVideoRect(area, natural, _aspectForPump?.Peek() ?? VideoAspectMode.Uniform,
+                    _customAspectForPump?.Peek() ?? (16.0 / 9.0));
+        }
         b.SetViewport(area);
         Player.PumpVideo(b, videoRect, scale <= 0f ? 1f : scale);
         if (audioOnly) b.SetVisible(false);
@@ -650,30 +699,31 @@ public sealed class MediaPlayerElement : Component
         ],
     };
 
-    private static void AddLetterboxBars(System.Collections.Generic.List<Element> children,
-        RectF area, RectF video, ColorF color)
+    /// <summary>The per-edge letterbox insets (DIP) that place <paramref name="video"/> inside <paramref name="area"/> —
+    /// the ONE piece of geometry the video stage is built from. The hole child is laid out with exactly these as its
+    /// Margin, so its arranged rect IS the fitted video rect and <see cref="PumpNow"/> can place the presenter from it.
+    /// Signed: a <see cref="VideoAspectMode.UniformToFill"/> crop yields NEGATIVE insets (the fitted rect overflows the
+    /// stage and is clipped). Sub-half-pixel insets collapse to zero — a &lt;0.5px bar was never a bar (the same
+    /// threshold <see cref="CalculateLetterboxBars"/> has always used).</summary>
+    internal static Edges4 LetterboxInsets(RectF area, RectF video)
     {
-        Span<RectF> bars = stackalloc RectF[4];
-        int count = CalculateLetterboxBars(area, video, bars);
-        for (int i = 0; i < count; i++)
-        {
-            RectF r = bars[i];
-            children.Add(new BoxEl
-            {
-                Width = r.W, Height = r.H, OffsetX = r.X, OffsetY = r.Y,
-                Fill = color, HitTestVisible = false,
-            });
-        }
+        if (area.W <= 0f || area.H <= 0f) return default;
+        float x = video.X - area.X, y = video.Y - area.Y;
+        return new Edges4(Trim(x), Trim(y), Trim(area.W - (x + video.W)), Trim(area.H - (y + video.H)));
+
+        static float Trim(float v) => MathF.Abs(v) < 0.5f ? 0f : v;
     }
 
+    /// <summary>The letterbox BAR rects (area-local) for an area/video pair — the pure geometry the stage fill replaced
+    /// as an element shape, kept as the unit-testable statement of the same insets.</summary>
     internal static int CalculateLetterboxBars(RectF area, RectF video, Span<RectF> bars)
     {
         if (area.W <= 0f || area.H <= 0f || bars.Length < 4) return 0;
-        float x = video.X - area.X, y = video.Y - area.Y;
-        float left = Math.Clamp(x, 0f, area.W);
-        float top = Math.Clamp(y, 0f, area.H);
-        float right = Math.Clamp(area.W - (x + video.W), 0f, area.W);
-        float bottom = Math.Clamp(area.H - (y + video.H), 0f, area.H);
+        Edges4 inset = LetterboxInsets(area, video);
+        float left = Math.Clamp(inset.Left, 0f, area.W);
+        float top = Math.Clamp(inset.Top, 0f, area.H);
+        float right = Math.Clamp(inset.Right, 0f, area.W);
+        float bottom = Math.Clamp(inset.Bottom, 0f, area.H);
         int count = 0;
         if (left > 0.5f) bars[count++] = new RectF(0, 0, left, area.H);
         if (right > 0.5f) bars[count++] = new RectF(area.W - right, 0, right, area.H);

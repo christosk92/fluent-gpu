@@ -515,22 +515,26 @@ handle here — nothing else in this seam or the renderer changes** (§8.4).
 §5.1 builds ONE opaque swapchain visual. Video needs a **root DComp visual with N children**: the **UI
 swapchain visual z-ABOVE a video child visual** whose content is the external surface.
 
-**Transparency protocol (the hole-punch):** the UI back buffer is **cleared transparent (premultiplied 0) in
+**Transparency protocol (the hole-punch):** the UI back buffer is **erased to transparent (premultiplied 0) in
 the `DrawVideoCmd.Dst` region**, so DComp composes the video child through the hole. Scrim, transport controls,
 and rounded-PiP corners are normal DrawList quads in the topmost UI visual, composited over by z-order. The
 COLOR contract (output premultiplied; swapchain `BGRA8_UNORM`) makes premul-0 a clean see-through.
 
-**The `DrawVideoCmd` struct SHAPE is owned by `gpu-renderer.md` §3.1** — the 7-field form
-`{ VideoSurfaceId Surface; RectF Dst; ImageHandle PosterBlur; ImageHandle AlbumArt; float VideoReady;
-CornerRadius4 Radii; ClipHandle Clip }`. This doc does NOT restate the struct body; it owns the
-present/crossfade behavior below (the `VideoReady` 3-layer art→poster→live crossfade, the registry
-arbitration, and the hole-punch present logic).
-- **SortKey:** a new `PassClass = VideoHole (= 0, below Shadow)` so the transparent clear in `Dst` is emitted
-  *before* any chrome; the art/poster lower layers are normal `DrawImageCmd`s (PassClass Image) drawn into the
-  hole region while `VideoReady < 1`, then the hole opens.
+**The `DrawVideoCmd` struct SHAPE is owned by `gpu-renderer.md` §3.1** (as-built 2026-07: a 6-field record —
+node-local `Dst` + `Radii` + `int SurfaceId` + `VideoReady` + baked `Transform` + `Opacity`; the earlier
+7-field spec form is reconciled there). This doc does NOT restate the struct body; it owns the
+present/crossfade behavior below (the `VideoReady` art→poster→live crossfade, the registry arbitration, and
+the hole-punch present logic).
+- **Ordering:** the hole is **emitted at the video node's paint slot, before its chrome descendants** —
+  painter/tree order, **no pass bucket** (`gpu-renderer.md §7.3` owns the ordering contract; the decision not
+  to mint a `PassClass` for one opcode is `docs/plans/video-compositing-spine-design.md §5.3`). Scrim and
+  transport are later-painting descendants/siblings, so they repaint over the hole; art/poster lower layers
+  are normal `DrawImageCmd`s drawn into the same region while `VideoReady < 1`.
 - **The 3-layer crossfade** (art → poster → live) is phase-7 composition animation over `VideoReady`; art and
   poster are this subsystem's `ImageHandle`s (so they decode/reside/evict like any image), the live layer is
-  the DComp child. There is no black frame because the lower layers paint until `VideoReady` hits 1.
+  the DComp child. There is no black frame because the lower layers paint until `VideoReady` hits 1. **As
+  built the grading is deferred** — the recorder emits `VideoReady = 1` and the app swaps poster↔hole
+  discretely; a poster-drawn-after pattern must grade the *poster* (`gpu-renderer.md §7.3`).
 
 ### 8.3 `VideoSurfaceRegistry` + `UseVideoSurface` (priority arbitration)
 
@@ -763,8 +767,9 @@ overclaims and §5 checklist), stated explicitly:
 7. **Palette is fed the CPU staging block (or a 16×16 downsample), never a GPU `ReadbackImage`** — and palette
    extraction is owned by `FluentGpu.Theme`, not here (this doc owns only the trigger + staging-block lifetime).
 8. **Video is a present-tree redesign**, NOT a fold onto §5.1: `IVideoPresenter` + multi-visual DComp tree +
-   premul-0 hole-punch + `DrawVideoCmd` with its own `PassClass=VideoHole` below all chrome; PiP-drag hole +
-   visual committed in **one** phase-11 DComp `Commit` (two-clock-tear fix); re-punch on overlapping damage.
+   premul-0 hole-punch + `DrawVideoCmd` emitted at the video node's paint slot, before its chrome descendants
+   (painter order, no pass bucket); PiP-drag hole + visual placed on the same frame turn (phase-11 DComp
+   `Commit`; two-clock-tear fix); re-punch on overlapping damage.
 9. **Per-syllable lyric color is per-INSTANCE glyph color on the playback clock** (active line PaintDirty +
    re-recorded each frame), NOT a `BrushHandle` re-bake (breaks clean-span) nor a gradient-atlas lerp (no
    per-frame glyph-atlas upload path). No `DrawLyricsRun` opcode.
