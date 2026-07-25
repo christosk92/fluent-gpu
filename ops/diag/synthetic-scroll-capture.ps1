@@ -30,6 +30,10 @@ param(
   [Parameter(Mandatory = $true)][string]$ExePath,
   [Parameter(Mandatory = $true)][string]$Label,
   [string]$OutRoot,
+  # The repo that produced -ExePath. Discovered by walking up from the exe when omitted. This must NOT default to the
+  # harness's own working directory: doing so recorded the harness branch for every arm, so a BEFORE bundle measuring
+  # a baseline binary claimed to be the fix branch and the two arms were indistinguishable in their manifests.
+  [string]$SourceRoot,
   [int]$Scale = 1
 )
 $ErrorActionPreference = 'Stop'
@@ -219,17 +223,48 @@ if (-not $proc.HasExited) {
 Start-Sleep -Milliseconds 800
 
 Set-Content -Path $console -Value $sb.ToString() -Encoding utf8
+# ---- provenance: identify the SOURCE that produced this exe, not the harness ------------------------
+if (-not $SourceRoot) {
+  # Walk up from the exe looking for the solution marker. Publish layouts nest ~6 deep
+  # (<root>\src\apps\Wavee\bin\...\publish\Wavee.exe), so a bounded climb is enough.
+  $d = Split-Path $ExePath -Parent
+  for ($i = 0; $i -lt 12 -and $d; $i++) {
+    if (Test-Path (Join-Path $d 'src\FluentGpu.slnx')) { $SourceRoot = $d; break }
+    $d = Split-Path $d -Parent
+  }
+}
+$gitSha = $null; $gitBranch = $null; $gitDirty = $null
+if ($SourceRoot -and (Test-Path $SourceRoot)) {
+  $SourceRoot = (Resolve-Path $SourceRoot).Path
+  $gitSha    = (& git -C $SourceRoot rev-parse HEAD 2>$null)
+  $gitBranch = (& git -C $SourceRoot rev-parse --abbrev-ref HEAD 2>$null)
+  $status    = (& git -C $SourceRoot status --porcelain 2>$null)
+  if ($null -ne $gitSha) { $gitDirty = [bool]($status) }
+}
+else {
+  Warn "Could not locate the source root for $ExePath - the bundle will be stamped UNIDENTIFIED and the analyzer will refuse to compare it."
+}
+# SHA-256 of the actual binary: the only identity that cannot be wrong. Two arms with the same hash are the same
+# build, whatever their manifests claim.
+$exeItem = Get-Item $ExePath
+$exeHash = (Get-FileHash $ExePath -Algorithm SHA256).Hash
+
 $manifest = [ordered]@{
   label      = $Label
   synthetic  = $true
   exePath    = $ExePath
-  exeSize    = (Get-Item $ExePath).Length
-  exeMtimeUtc= (Get-Item $ExePath).LastWriteTimeUtc.ToString('o')
-  gitSha     = (git rev-parse --short HEAD 2>$null)
-  gitBranch  = (git rev-parse --abbrev-ref HEAD 2>$null)
+  exeSize    = $exeItem.Length
+  exeMtimeUtc= $exeItem.LastWriteTimeUtc.ToString('o')
+  exeSha256  = $exeHash
+  sourceRoot = $SourceRoot
+  gitSha     = $gitSha
+  gitBranch  = $gitBranch
+  gitDirty   = $gitDirty
+  identified = [bool]($gitSha)
   capturedUtc= (Get-Date).ToUniversalTime().ToString('o')
   note       = 'SYNTHETIC wheel input via SendInput. Valid for CADENCE only; carries no feel verdict and does not exercise the DirectManipulation touchpad path.'
 }
+Info "source $(if ($gitSha) { "$($gitBranch)@$($gitSha.Substring(0,8))$(if ($gitDirty) { ' DIRTY' })" } else { 'UNIDENTIFIED' })  sha256 $($exeHash.Substring(0,12))"
 [System.IO.File]::WriteAllText((Join-Path $sess 'manifest.json'), ($manifest | ConvertTo-Json -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
 
 if (-not (Test-Path $csv)) { throw "No scroll.csv was written - the build is probably not FLUENTGPU_DIAG." }
