@@ -107,14 +107,16 @@ public sealed class RenderThread : IDisposable
             if (_publisher.TryAcquire(out var rf))   // consumer side (bound Render here)
             {
                 _submitPresent(rf);
-                Volatile.Write(ref _presentAck, rf.PublishSeq);
-                // The ack is the UI's display-phase reference, so it must be PUBLISHED before the wake — a UI thread
-                // that woke first and re-read a stale ack would gate again and lose the slot. The Volatile.Write above
-                // is a release; the host's Volatile.Read of the same field is the matching acquire.
+                // The ack MUST be published before the wake: a UI thread that woke first and re-read a stale ack would
+                // gate again and lose the slot. This write is the release half of the arm-then-recheck handshake in
+                // DisplayPhaseGate; the callback issues the matching full barrier before reading the armed flag,
+                // because store-ack/load-armed against store-armed/load-ack is a StoreLoad pair that neither x86 nor
+                // ARM orders for free.
                 //
                 // This lands one refresh period apart in steady state, NOT at CPU speed: _submitPresent blocks in the
                 // swapchain's frame-latency waitable (SetMaximumFrameLatency(1)) BEFORE it presents, so the loop above
                 // is vblank-paced and so is every wake it emits. That is precisely why the UI can trust it as a clock.
+                Volatile.Write(ref _presentAck, rf.PublishSeq);
                 _presentWake?.Invoke();
             }
             // Detached child hosts: present any freshly-published child frame on ITS own swapchain, on this same render

@@ -709,9 +709,27 @@ gates are unperturbed.
 Measured after (3 paired synthetic runs, `ops/diag/analyze-cadence.py`): publishes per present
 1.29 → **1.000**, presented sample-time spread (p05–p95) 7.8 ms → **1.7 ms** on an 8.33 ms refresh, the
 sub-millisecond production floor 0.4 ms → 7.4 ms, UI frames 156/s → 119/s, present interval unchanged at
-8.30 ms. Clock-sample skew becomes **constant** (−20.30 ms in all three runs, = −(refresh + 12 ms), where
-before it drifted −15.5 to −15.8): the eye cannot see a fixed offset between sampling and display, only a
-varying one.
+8.30 ms.
+
+Clock-sample skew is reported **within** a run, never as "constant" off equal medians. The first
+measurement claimed constancy from three identical medians (−20.30 ms = −(refresh + `ResampleLatencyMs`));
+a histogram of the same bundles showed the distribution was in fact bimodal — 72% inside a 2 ms mode, but
+**~16% about one refresh late**. Equal medians cannot distinguish a tight single mode from a mode plus a
+tail, so the packager and analyzer both report **modal concentration** alongside the percentiles.
+
+That late tail was the gate's own lost-wake race, since fixed: the first implementation read the ack and
+*then* armed, so a present landing in between saw "not armed", skipped the wake, and the UI slept to the
+stall ceiling. The handshake is now arm-then-recheck with a full barrier on each side (`DisplayPhaseGate`),
+because a release-store followed by an acquire-load does not order StoreLoad on x86 or ARM. After the fix,
+on matched populations (3 paired runs): frames within 1 ms of the modal skew **24.9/24.6/25.7% → 92.3/93.3/
+94.0%**, and the one-refresh-late cluster fell from ~16% to ~5%. Note the skew percentiles are only emitted
+for frames that actually resampled a contact — a frame that sampled nothing has no sampling error, and
+including it produced a plausible number derived from frame-start alone.
+
+**The synthetic figures understate the problem on the path users actually complain about.** They come from
+`SendInput` wheel packets, which cannot reach DirectManipulation. The operator-scored touchpad capture
+shows a publish:present ratio of **2.24** during scroll, not 1.29 — DM drag over-produces far harder than
+a wheel chase. Cadence numbers from synthetic input bound the frame loop; they do not bound the feel.
 
 The same defect in wall-clock form applies to `AmbientFrameWaitMs`, which now anchors its deadline to the
 last present and quantizes to whole refresh periods — a 60 cap on a 120 Hz panel means "every 2nd vblank",
