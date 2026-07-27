@@ -79,7 +79,7 @@ public class VideoOverrideStoreTests
             }
 
             Assert.True(HasTable(path, "video_override"));
-            Assert.Equal("5", SchemaVersion(path));   // the ladder keeps walking into the v5 cache-tier consolidation
+            Assert.Equal(SqliteColdStore.CurrentSchemaVersion.ToString(), SchemaVersion(path));   // the ladder keeps walking into the v5 cache-tier consolidation + the v6 membership clock
         }
         finally { TryDelete(path); }
     }
@@ -93,7 +93,7 @@ public class VideoOverrideStoreTests
         try
         {
             using (var cold = new SqliteColdStore(path)) Assert.Empty(cold.LoadAllVideoOverrides());
-            Assert.Equal("5", SchemaVersion(path));
+            Assert.Equal(SqliteColdStore.CurrentSchemaVersion.ToString(), SchemaVersion(path));
             Assert.True(HasTable(path, "video_override"));
         }
         finally { TryDelete(path); }
@@ -107,7 +107,7 @@ public class VideoOverrideStoreTests
         {
             using (var cold = new SqliteColdStore(path)) { cold.UpsertVideoOverride(Ovr("spotify:track:a", @"C:\v\a.mp4", "aaaa")); cold.Flush(); }
             using (var cold = new SqliteColdStore(path)) Assert.Single(cold.LoadAllVideoOverrides());
-            Assert.Equal("5", SchemaVersion(path));
+            Assert.Equal(SqliteColdStore.CurrentSchemaVersion.ToString(), SchemaVersion(path));
         }
         finally { TryDelete(path); }
     }

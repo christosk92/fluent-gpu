@@ -38,6 +38,10 @@ public sealed class Services
     /// <summary>The SQLite cold tier (REAL backend only) — exposed so the go-live block can wire the collection revision
     /// get/set + rootlist revision behind the sync loop.</summary>
     public Wavee.Backend.Persistence.SqliteColdStore? RealCold { get; private set; }
+    /// <summary>The metadata-cache garbage collector (REAL backend only; null for the fake). Armed from the app-mount
+    /// effect with the UI-thread <c>post</c> marshaller — it must snapshot <see cref="BuildPinSet"/> on the UI thread.
+    /// Also owns the one-time post-migration VACUUM and the user-settable cache budget.</summary>
+    public Wavee.Backend.Persistence.EntityCacheGc? CacheGc { get; private set; }
     /// <summary>The durable mutation engine (REAL backend only) — exposed so the sync loop drains it + the collection
     /// fetcher's mark-and-sweep can consult its pending-op shield.</summary>
     public Wavee.Backend.MutationEngine? RealMutations { get; private set; }
@@ -144,6 +148,9 @@ public sealed class Services
     const int EntityResidencyCap = 4000;
     const int SavedHeadPinCount = 200;
 
+    /// <summary>Floor for the user-settable metadata-cache budget (§G) — below this the pin set alone overflows it.</summary>
+    public const long MinMetadataCacheBudgetBytes = 32L * 1024 * 1024;
+
     /// <summary>App-side census contributor for the engine's FG_MEM_DIAG <c>[memcensus]</c> block: the entity-store + cache
     /// attribution line. The Windows host composes this into <c>AppHost.GpuDetail</c> (wired in <c>Program</c>'s
     /// DiagnosticRun, which runs once per launch); set on app mount. Built on demand at census cadence — never per frame.
@@ -198,8 +205,13 @@ public sealed class Services
 
     /// <summary>Build the entity-eviction pin-set on demand (inside the shed callback): the now-playing + queue uris, the
     /// uris a still-cached detail model will re-render, and the saved-set heads. UI-thread (the governor Trim is posted to
-    /// the UI thread); Peek reads never subscribe.</summary>
-    System.Collections.Generic.ISet<string> BuildPinSet()
+    /// the UI thread); Peek reads never subscribe.
+    ///
+    /// UI-THREAD-AFFINE (critique #10): <see cref="LibraryStore.CollectPinnedUris"/> walks the detail caches, which only
+    /// the UI thread mutates. Both callers marshal: the MemoryGovernor through its <c>post(() =&gt; Residency.Trim(...))</c>
+    /// timer, and the cache GC through the very same <c>post</c> handed to <see cref="Wavee.Backend.Persistence.EntityCacheGc.Start"/>.
+    /// Never call it from a background thread.</summary>
+    internal System.Collections.Generic.ISet<string> BuildPinSet()
     {
         var pins = new System.Collections.Generic.HashSet<string>(System.StringComparer.Ordinal);
         if (Playback.CurrentTrack.Peek()?.Uri is { Length: > 0 } cur) pins.Add(cur);
@@ -292,22 +304,15 @@ public sealed class Services
         accountDbPath ??= System.IO.Path.Combine(
             System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData), "Wavee", "library.db");
         System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(accountDbPath)!);
+        // §G startup marks: the two ctors are the only synchronous disk work before first paint, so they are what
+        // `boot.sqlite_open_ms` (open + migrate + open-time sweep) and `boot.identity_load_ms` (the DEFERRED ctor's
+        // identity tier: saved sets, video map, overrides, pin mirrors) actually measure.
+        long openStart = System.Environment.TickCount64;
         var cold = new Wavee.Backend.Persistence.SqliteColdStore(accountDbPath, Wavee.Backend.Persistence.SqliteColdStore.DefaultAccount, locale.SpotifyLanguage);
+        long openMs = System.Environment.TickCount64 - openStart;
+        long identityStart = System.Environment.TickCount64;
         var store = new Wavee.Backend.Persistence.CachedStore(cold);
-        // One-time post-migration reclaim: the v4→v5 migration leaves `vacuum_pending` set because it drops the legacy
-        // entity generation (tens of MB of freelist). Run it AFTER the warm pass has landed and the launch burst has
-        // settled — it takes the writer lock, so the write-behind drain simply waits behind it. Idempotent (Wave A gates
-        // it on the meta flag), so a crash before it runs just means the next launch reclaims instead.
-        _ = System.Threading.Tasks.Task.Run(async () =>
-        {
-            try
-            {
-                await store.WarmComplete.ConfigureAwait(false);
-                await System.Threading.Tasks.Task.Delay(System.TimeSpan.FromSeconds(30)).ConfigureAwait(false);
-                cold.RunFullVacuumIfPending();
-            }
-            catch { /* best-effort housekeeping — never fail a launch over it */ }
-        });
+        long identityMs = System.Environment.TickCount64 - identityStart;
 
         // The collection self-write echo registry (§7.1): the write strategy records accepted-write cuids; the sync loop
         // drops our own echoes. One instance shared between the write path and the read loop (wired below on go-live).
@@ -378,6 +383,15 @@ public sealed class Services
         svc.RealPlaylistMutations = playlistMutations;
         svc.RealExtender = extender;
         svc.RealSpclientBaseUrl = spclientBaseUrl;
+        // The metadata-cache GC (design §C). Constructed here (composition root) but NOT started: it needs the UI-thread
+        // marshaller to snapshot BuildPinSet, so WaveeApp's mount effect arms it — the same place, and the same `post`,
+        // the MemoryGovernor poll uses. It also owns the one-time post-migration VACUUM that used to be kicked off here.
+        svc.CacheGc = new Wavee.Backend.Persistence.EntityCacheGc(cold, store, svc.Log, svc.BuildPinSet,
+            System.Math.Max(MinMetadataCacheBudgetBytes, settings.Get(WaveeSettings.MetadataCacheBudgetBytes)))
+        {
+            OpenMillis = openMs,
+            IdentityLoadMillis = identityMs,
+        };
         svc.Log.Info("app", "Services created (REAL backend: persistent Store + StoreLibrarySource + durable multi-set mutations; live session/fetch/dealer connect on bootstrap)");
         return svc;
     }

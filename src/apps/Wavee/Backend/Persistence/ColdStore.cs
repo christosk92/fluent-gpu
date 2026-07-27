@@ -37,6 +37,13 @@ public readonly record struct ColdRecentSurface(string Uri, int Kind, long LastO
 /// is the DECODED raw JSON (the store owns the fmt framing). Its own TTL: disposable, re-derived by an ArtistV4 SWR pass.</summary>
 public readonly record struct ColdArtistOverview(string Uri, string Locale, byte[] Payload, long FetchedAtUnixSeconds);
 
+/// <summary>One cheap cache-tier diagnostics snapshot (§G metrics) — the Settings → Storage readout and the GC report.
+/// <paramref name="DbBytes"/>/<paramref name="ReclaimableBytes"/> are the whole file (identity tables included);
+/// <paramref name="CacheBytes"/>/<paramref name="PinnedBytes"/> are the cache tier only.</summary>
+public readonly record struct EntityCacheStats(
+    long DbBytes, long ReclaimableBytes, long CacheBytes, long PinnedBytes, long BudgetBytes,
+    long EntityRows, long PinnedRows, long OverviewRows, long ExtensionRows);
+
 public interface IColdStore : IDisposable
 {
     IEnumerable<ColdEntity> LoadAllEntities();
@@ -107,6 +114,13 @@ public interface IColdStore : IDisposable
     void UpsertArtistOverview(string uri, string locale, byte[] payloadJson, long nowUnixSeconds) { }
     /// <summary>Replace the pin-closure edges out of <paramref name="parentUri"/> (album→artists, artist→albums).</summary>
     void ReplaceEntityRefs(string parentUri, IEnumerable<string> children) { }
+    /// <summary>Batched last-access stamp at DAY granularity (§C.5 — the read path never writes; CachedStore accumulates
+    /// touched uris and flushes them here on the writer lane every 60 s and at every GC). <paramref name="day"/> is a
+    /// midnight-truncated unix-seconds value, so it compares directly against the TTL cutoffs.</summary>
+    void TouchEntities(IReadOnlyCollection<string> uris, long day) { }
+    /// <summary>Escape hatch (§G): drop every UNPINNED cache row + all artist overviews + all extension rows. Identity
+    /// tables are never touched. Returns (rows, bytes) freed.</summary>
+    (int Rows, long Bytes) ClearMetadataCache() => (0, 0);
 
     void Flush();   // block until queued writes are durable
 }

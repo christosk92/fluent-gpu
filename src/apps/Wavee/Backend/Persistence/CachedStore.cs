@@ -67,12 +67,28 @@ public sealed class CachedStore : IStore, IDisposable
     readonly Dictionary<string, ulong> _coldRows = new(StringComparer.Ordinal);
     readonly Dictionary<string, ulong> _coldOverviews = new(StringComparer.Ordinal);
 
+    // ── last-access touch tracking (§C.5 — last_access without a write per read) ──────────────────────────────────────
+    // The read path NEVER writes. A hot hit or a cold-fallback hit records the uri in a lock-free pending set, and the
+    // writer lane flushes it as one batched `UPDATE entity SET last_access=$day` every 60 s (and at every GC).
+    // Granularity is a DAY (midnight-truncated unix seconds, so it compares directly against the TTL cutoffs), and
+    // `_touchDay` remembers what was last recorded per uri — so the STEADY-STATE fast path (an entity already touched
+    // today) is exactly one ConcurrentDictionary lookup: no lock, no allocation, no LINQ, no closure. That matters
+    // because these calls sit on the scroll/render read path.
+    const int TouchPendingCap = 4096;      // overflow ⇒ flush early rather than grow unbounded
+    const int TouchDayCap = 250_000;       // the recorded-today map is cleared wholesale on overflow (costs one re-stamp)
+    readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> _touchDay = new(StringComparer.Ordinal);
+    readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _touchPending = new(StringComparer.Ordinal);
+    int _touchPendingCount;
+    readonly System.Threading.Timer _touchTimer;
+
     // ── the background lanes ─────────────────────────────────────────────────────────────────────────────────────────
     readonly Channels.Channel<FlushOp> _lane = Channels.Channel.CreateUnbounded<FlushOp>(new Channels.UnboundedChannelOptions { SingleReader = true });
     readonly Task _laneLoop;
     readonly Task _warm;
     readonly TaskCompletionSource _warmDone = new(TaskCreationOptions.RunContinuationsAsynchronously);
     volatile bool _coldNotFullyResident = true;
+    long _warmMillis;
+    int _warmRows;
 
     public CachedStore(IColdStore cold, int maxResidentPlaylists = 128, long maxResidentBytes = 24L * 1024 * 1024)
     {
@@ -91,6 +107,9 @@ public sealed class CachedStore : IStore, IDisposable
         foreach (var e in _cold.LoadRootlist()) if (e.Kind == 0 && e.Uri.Length > 0) _rootlistUris.Add(e.Uri);
         _laneLoop = Task.Run(LaneLoopAsync);
         _warm = Task.Run(Warm);
+        // The last-access flush cadence (§C.5). The Timer callback only ENQUEUES onto the lane — the actual UPDATE takes
+        // the cold store's writer lock, which must never happen on a timer thread pool slot held for a whole batch.
+        _touchTimer = new System.Threading.Timer(static s => ((CachedStore)s!).RequestTouchFlush(), this, 60_000, 60_000);
     }
 
     /// <summary>Completes when the background warm pass has replayed the pin head-set (or failed — it NEVER wedges a
@@ -100,6 +119,11 @@ public sealed class CachedStore : IStore, IDisposable
     /// <summary>True until the warm pass lands: the hot tier is a strict subset of cold by construction, so a hot miss is
     /// never proof of absence. (The cold fallback is unconditional either way — this is a diagnostic/readiness bit.)</summary>
     public bool ColdNotFullyResident => _coldNotFullyResident;
+
+    /// <summary>How long the background warm pass took, and how many rows it replayed (§G startup marks
+    /// <c>boot.warm_ms</c> / <c>boot.warm_rows</c>). Valid once <see cref="WarmComplete"/> has run.</summary>
+    public long WarmMillis => System.Threading.Volatile.Read(ref _warmMillis);
+    public int WarmRows => System.Threading.Volatile.Read(ref _warmRows);
 
     public int ResidentMembershipCount { get { lock (_lruGate) return _resident.Count; } }
     public long ResidentMembershipBytes { get { lock (_lruGate) return _residentBytes; } }
@@ -122,6 +146,8 @@ public sealed class CachedStore : IStore, IDisposable
     // O(n log n) shed per upsert), one Bulk change signal at the end.
     void Warm()
     {
+        long startTicks = Environment.TickCount64;
+        int rows = 0;
         try
         {
             var uris = new HashSet<string>(StringComparer.Ordinal);
@@ -138,6 +164,7 @@ public sealed class CachedStore : IStore, IDisposable
                     {
                         Replay(e);
                         NoteColdRow(e.Uri, Hash(e.Payload));   // warm rows ARE cold rows — seed the presence set
+                        rows++;
                     }
         }
         catch (Exception)
@@ -146,6 +173,8 @@ public sealed class CachedStore : IStore, IDisposable
         }
         finally
         {
+            System.Threading.Volatile.Write(ref _warmRows, rows);
+            System.Threading.Volatile.Write(ref _warmMillis, Environment.TickCount64 - startTicks);
             _coldNotFullyResident = false;
             _warmDone.TrySetResult();
         }
@@ -208,13 +237,13 @@ public sealed class CachedStore : IStore, IDisposable
     // over cold now (deferred ctor + warm head-set + eviction), so a hot miss is never proof of absence. One indexed PK
     // read, one deserialize, promote back into hot (re-stamping its LRU recency). Membership/rootlist keep their own lazy
     // cold-promotion paths below.
-    public Track? GetTrack(string uri) => _hot.GetTrack(uri) ?? ColdFallback<Track>(uri, EntityKind.Track, EntityJson.Default.Track, static (h, v) => h.UpsertTrack(v));
+    public Track? GetTrack(string uri) { var v = _hot.GetTrack(uri); if (v is not null) { Touch(uri); return v; } return ColdFallback<Track>(uri, EntityKind.Track, EntityJson.Default.Track, static (h, x) => h.UpsertTrack(x)); }
     public IReadOnlyList<Track> QueryTracks(string? text = null, TrackSort sort = TrackSort.None, int limit = 200) => _hot.QueryTracks(text, sort, limit);
-    public Album? GetAlbum(string uri) => _hot.GetAlbum(uri) ?? ColdFallback<Album>(uri, EntityKind.Album, EntityJson.Default.Album, static (h, v) => h.UpsertAlbum(v));
-    public Artist? GetArtist(string uri) => _hot.GetArtist(uri) ?? ColdFallbackArtist(uri);
-    public Playlist? GetPlaylist(string uri) => _hot.GetPlaylist(uri) ?? ColdFallback<Playlist>(uri, EntityKind.Playlist, EntityJson.Default.Playlist, static (h, v) => h.UpsertPlaylist(v));
-    public Show? GetShow(string uri) => _hot.GetShow(uri) ?? ColdFallback<Show>(uri, EntityKind.Show, EntityJson.Default.Show, static (h, v) => h.UpsertShow(v));
-    public Episode? GetEpisode(string uri) => _hot.GetEpisode(uri) ?? ColdFallback<Episode>(uri, EntityKind.Episode, EntityJson.Default.Episode, static (h, v) => h.UpsertEpisode(v));
+    public Album? GetAlbum(string uri) { var v = _hot.GetAlbum(uri); if (v is not null) { Touch(uri); return v; } return ColdFallback<Album>(uri, EntityKind.Album, EntityJson.Default.Album, static (h, x) => h.UpsertAlbum(x)); }
+    public Artist? GetArtist(string uri) { var v = _hot.GetArtist(uri); if (v is not null) { Touch(uri); return v; } return ColdFallbackArtist(uri); }
+    public Playlist? GetPlaylist(string uri) { var v = _hot.GetPlaylist(uri); if (v is not null) { Touch(uri); return v; } return ColdFallback<Playlist>(uri, EntityKind.Playlist, EntityJson.Default.Playlist, static (h, x) => h.UpsertPlaylist(x)); }
+    public Show? GetShow(string uri) { var v = _hot.GetShow(uri); if (v is not null) { Touch(uri); return v; } return ColdFallback<Show>(uri, EntityKind.Show, EntityJson.Default.Show, static (h, x) => h.UpsertShow(x)); }
+    public Episode? GetEpisode(string uri) { var v = _hot.GetEpisode(uri); if (v is not null) { Touch(uri); return v; } return ColdFallback<Episode>(uri, EntityKind.Episode, EntityJson.Default.Episode, static (h, x) => h.UpsertEpisode(x)); }
     public VideoAssociation? GetVideoAssociation(string uri) => _hot.GetVideoAssociation(uri);
     public VideoOverride? GetVideoOverride(string uri) => _hot.GetVideoOverride(uri);
     public IReadOnlyList<VideoOverride> VideoOverrides() => _hot.VideoOverrides();
@@ -236,6 +265,7 @@ public sealed class CachedStore : IStore, IDisposable
     {
         if (_cold.GetEntity(uri) is not { } ce || ce.Kind != kind) return null;
         NoteColdRow(uri, Hash(ce.Payload));   // a hit PROVES cold-presence (and pins the elision hash to what is stored)
+        Touch(uri);                           // a cold-fallback hit is the strongest possible "still in use" signal
         return ce.Payload;
     }
 
@@ -506,10 +536,29 @@ public sealed class CachedStore : IStore, IDisposable
         PersistEntity(t.Uri, EntityKind.Track, JsonSerializer.SerializeToUtf8Bytes(t, EntityJson.Default.Track));
     }
 
+    // The ALBUM thin split (design §D.1, deferred out of Wave B): the persisted blob keeps the core + the "About this
+    // release" scalars and drops the three FACET LISTS — MoreByArtist / ArtistsDetailed / OtherVersions — each of which
+    // is a list of whole Album/Artist records embedded in an album row (the single biggest album-row bloater; Tracks was
+    // already stripped). They are re-derivable: MoreByArtist/OtherVersions come back from the standalone album rows +
+    // the getAlbum refetch, ArtistsDetailed from the artist rows.
+    //
+    // Two rules keep this lossless where it matters:
+    //  1. `StoreEntityMerge.Album` keeps `current`'s facet when the incoming one is empty/null, so a re-loaded THIN album
+    //     can never clobber a FAT hot record (verified by AlbumFacetStrip tests) — the hot tier is untouched by all this.
+    //  2. The persisted Hydration is capped at `Tracks`: `Full` is the flag SpotifyAlbumEnrichmentService reads to decide
+    //     the below-the-fold getAlbum upgrade is unnecessary, and a Full row with no facets would suppress the very
+    //     refetch that rebuilds them. Capping is safe because the merge keeps the HIGHER of the two levels.
     void PersistAlbum(Album a)
     {
         for (int i = 0; i < a.Artists.Count; i++) NoteRefs(a.Artists[i].Uri);
-        var thin = a.Tracks is null ? a : a with { Tracks = null };
+        var thin = a.Tracks is null && a.MoreByArtist is null && a.ArtistsDetailed is null
+                   && a.OtherVersions is null && a.Hydration != AlbumHydrationLevel.Full
+            ? a
+            : a with
+            {
+                Tracks = null, MoreByArtist = null, ArtistsDetailed = null, OtherVersions = null,
+                Hydration = a.Hydration == AlbumHydrationLevel.Full ? AlbumHydrationLevel.Tracks : a.Hydration,
+            };
         if (PersistEntity(a.Uri, EntityKind.Album, JsonSerializer.SerializeToUtf8Bytes(thin, EntityJson.Default.Album)))
             _lane.Writer.TryWrite(FlushOp.Refs(a.Uri, ArtistUris(a.Artists)));   // album→artists edges (Addendum A3)
     }
@@ -582,6 +631,7 @@ public sealed class CachedStore : IStore, IDisposable
                         case FlushKind.Overview: WriteOverview(op.Uri, op.Doc!); break;
                         case FlushKind.Refs: _cold.ReplaceEntityRefs(op.Uri, op.Children!); break;
                         case FlushKind.Recent: _cold.UpsertRecentSurface(op.Uri, op.N, DateTimeOffset.UtcNow.ToUnixTimeSeconds()); break;
+                        case FlushKind.Touch: FlushTouches(); break;
                     }
                 }
                 catch (Exception) { /* a cache write is non-fatal: the data is in memory + re-fetchable */ }
@@ -669,6 +719,108 @@ public sealed class CachedStore : IStore, IDisposable
         }
     }
 
+    // ── last-access touch tracking (§C.5) ────────────────────────────────────────────────────────────────────────────
+    /// <summary>Midnight-truncated unix seconds — DAY granularity, directly comparable with the GC's TTL cutoffs.</summary>
+    internal static long TouchDayOf(long unixSeconds) => unixSeconds - (unixSeconds % 86_400);
+
+    static long Today() => TouchDayOf(DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+
+    // THE HOT READ PATH. Already-recorded-today is one ConcurrentDictionary lookup and nothing else: no lock, no
+    // allocation, no LINQ, no closure. Everything expensive lives behind the (rare) first-touch-of-the-day branch.
+    void Touch(string uri)
+    {
+        if (uri.Length == 0) return;
+        long day = Today();
+        if (_touchDay.TryGetValue(uri, out long recorded) && recorded == day) return;
+        _touchDay[uri] = day;
+        if (_touchDay.Count > TouchDayCap) _touchDay.Clear();   // bounded: costs one redundant re-stamp per uri
+        if (_touchPending.TryAdd(uri, 0) && System.Threading.Interlocked.Increment(ref _touchPendingCount) >= TouchPendingCap)
+            RequestTouchFlush();   // overflow ⇒ flush EARLY rather than let the pending set grow unbounded
+    }
+
+    void RequestTouchFlush()
+    {
+        if (System.Threading.Volatile.Read(ref _touchPendingCount) == 0) return;
+        _lane.Writer.TryWrite(FlushOp.Touch());
+    }
+
+    /// <summary>Drain the pending last-access set onto the cold tier. Called from the writer lane (60 s cadence / on
+    /// overflow) and synchronously by the GC before it computes TTL victims, so a page the user just scrolled past can
+    /// never be evicted for staleness.</summary>
+    public void FlushTouches()
+    {
+        if (System.Threading.Volatile.Read(ref _touchPendingCount) == 0) return;
+        var batch = new List<string>(Math.Min(TouchPendingCap, _touchPending.Count));
+        foreach (var kv in _touchPending)
+            if (_touchPending.TryRemove(kv.Key, out _))
+            {
+                System.Threading.Interlocked.Decrement(ref _touchPendingCount);
+                batch.Add(kv.Key);
+            }
+        if (batch.Count == 0) return;
+        try { _cold.TouchEntities(batch, Today()); }
+        catch (Exception) { /* a last-access stamp is advisory: losing one costs at most an early eviction */ }
+    }
+
+    // ── the GC's in-memory pin half (critique #10) ───────────────────────────────────────────────────────────────────
+    /// <summary>Copy the pin MIRRORS into <paramref name="into"/> — the in-memory half of the §A.3 pin set that the SQL
+    /// side cannot see mid-session (a surface opened but not yet flushed, an adopted membership, the rootlist). Fully
+    /// thread-safe (it only touches `_pinGate`), so the GC can call it from its own thread; the UI-THREAD-AFFINE half
+    /// (now-playing / queue / detail caches) is <c>Services.BuildPinSet</c> and is snapshotted separately.</summary>
+    public void SnapshotPinMirrors(ISet<string> into)
+    {
+        lock (_pinGate)
+        {
+            foreach (var u in _recentSurfaces) into.Add(u);
+            foreach (var u in _rootlistUris) into.Add(u);
+            foreach (var u in _adopted) into.Add(u);
+            foreach (var u in _memberUris) into.Add(u);
+        }
+    }
+
+    /// <summary>Membership-GC resync: the cold tier just purged these playlists' `playlist_items` + header rows, so the
+    /// mirrors that mirror them must shed the same rows or the write gate keeps re-persisting entities nothing pins any
+    /// more. `_adopted` is pruned exactly; `_memberUris` (add-only by design) is REBUILT from the still-adopted
+    /// playlists' resident membership — strictly tighter than before, and a miss can only cost one redundant cold write
+    /// (the entity is already on disk: adoption flushed it), never a stranded entity.</summary>
+    public void OnMembershipsPurged(IReadOnlyList<string> playlistUris)
+    {
+        if (playlistUris is null || playlistUris.Count == 0) return;
+        List<string> remaining;
+        lock (_pinGate)
+        {
+            for (int i = 0; i < playlistUris.Count; i++) _adopted.Remove(playlistUris[i]);
+            remaining = new List<string>(_adopted);
+        }
+        // Query the hot tier OUTSIDE _pinGate (it takes InMemoryStore's own gate) — never nest the two.
+        var rebuilt = new HashSet<string>(StringComparer.Ordinal);
+        for (int i = 0; i < remaining.Count; i++)
+        {
+            var rows = _hot.Membership(remaining[i]);
+            for (int j = 0; j < rows.Count; j++) if (rows[j].ItemUri.Length > 0) rebuilt.Add(rows[j].ItemUri);
+        }
+        lock (_pinGate)
+        {
+            _memberUris.Clear();
+            foreach (var u in rebuilt) _memberUris.Add(u);
+        }
+        for (int i = 0; i < playlistUris.Count; i++) _hot.EvictMembership(playlistUris[i]);
+        lock (_lruGate) for (int i = 0; i < playlistUris.Count; i++)
+            if (_resident.Remove(playlistUris[i], out var gone)) _residentBytes -= gone.Bytes;
+    }
+
+    /// <summary>Escape hatch (§G): drop the whole unpinned cache tier + every artist overview + every extension row.
+    /// The presence/elision maps MUST be cleared with it — otherwise the FNV-1a elision would refuse to re-persist a row
+    /// whose bytes are unchanged but whose disk row is gone. The hot tier is deliberately left alone: it is still valid
+    /// (it re-faults from network/cold on the next miss).</summary>
+    public (int Rows, long Bytes) ClearMetadataCache()
+    {
+        var result = _cold.ClearMetadataCache();
+        lock (_coldGate) { _coldRows.Clear(); _coldOverviews.Clear(); }
+        _touchDay.Clear();
+        return result;
+    }
+
     bool ColdPresent(string uri) { lock (_coldGate) return _coldRows.ContainsKey(uri); }
 
     void NoteColdRow(string uri, ulong hash)
@@ -702,6 +854,7 @@ public sealed class CachedStore : IStore, IDisposable
     /// cold store's own queue), then the cold write-behind queue.</summary>
     public void Flush()
     {
+        FlushTouches();
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         if (_lane.Writer.TryWrite(FlushOp.Barrier(done)))
             try { done.Task.Wait(TimeSpan.FromSeconds(30)); } catch { }
@@ -710,13 +863,15 @@ public sealed class CachedStore : IStore, IDisposable
 
     public void Dispose()
     {
+        _touchTimer.Dispose();
+        FlushTouches();
         _lane.Writer.TryComplete();
         try { _warm.Wait(TimeSpan.FromSeconds(10)); } catch { }
         try { _laneLoop.Wait(TimeSpan.FromSeconds(10)); } catch { }
         _cold.Dispose();
     }
 
-    enum FlushKind : byte { Entity, Overview, Refs, Recent, Barrier }
+    enum FlushKind : byte { Entity, Overview, Refs, Recent, Touch, Barrier }
 
     readonly struct FlushOp
     {
@@ -734,6 +889,7 @@ public sealed class CachedStore : IStore, IDisposable
         public static FlushOp Overview(string uri, ArtistOverviewDoc doc) => new(FlushKind.Overview, uri, 0, doc, null, null);
         public static FlushOp Refs(string uri, IReadOnlyList<string> children) => new(FlushKind.Refs, uri, 0, null, children, null);
         public static FlushOp Recent(string uri, int kind) => new(FlushKind.Recent, uri, kind, null, null, null);
+        public static FlushOp Touch() => new(FlushKind.Touch, "", 0, null, null, null);
         public static FlushOp Barrier(TaskCompletionSource done) => new(FlushKind.Barrier, "", 0, null, null, done);
     }
 }

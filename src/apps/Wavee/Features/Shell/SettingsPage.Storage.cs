@@ -43,6 +43,81 @@ sealed partial class SettingsPage
     StorageSnapshot? _storage;
     string? _storageError;
 
+    // ── metadata cache (library.db cache tier — design §C/§G) ────────────────────────────────────────────────────────
+    static readonly long[] s_metaBudgetBytes = [32L << 20, 64L << 20, 128L << 20, 256L << 20];
+    static readonly string[] s_metaBudgetLabels = ["32 MB", "64 MB", "128 MB", "256 MB"];
+    readonly Signal<int> _metaBudget = new(1);
+    readonly Signal<int> _metaTick = new(0);
+    bool _metaBudgetSeeded;
+    Wavee.Backend.Persistence.EntityCacheStats? _metaStats;
+
+    // The census is a handful of indexed counts + three pragmas on the cold store's WRITER connection, so it rides a
+    // background task exactly like ComputeStorage — never the UI thread.
+    void RefreshMetadataStats(Services? svc, Action<Action> post)
+    {
+        if (svc?.RealCold is not { } cold) return;
+        _ = Task.Run(() =>
+        {
+            Wavee.Backend.Persistence.EntityCacheStats? snap = null;
+            try { snap = cold.GetCacheStats(); }
+            catch { }
+            post(() => { _metaStats = snap; _metaTick.Value = _metaTick.Peek() + 1; });
+        });
+    }
+
+    string MetadataCacheDescription()
+    {
+        if (_metaStats is not { } s) return Loc.Get(Strings.Settings.Storage.MetadataCacheSub);
+        return Loc.Format("settings.storage.metadataCacheStats",
+            ("db", FmtBytes(s.DbBytes)),
+            ("cache", FmtBytes(s.CacheBytes)),
+            ("pinned", FmtBytes(s.PinnedBytes)),
+            ("rows", s.EntityRows),
+            ("pinnedRows", s.PinnedRows),
+            ("overviews", s.OverviewRows),
+            ("extensions", s.ExtensionRows));
+    }
+
+    Element MetadataBudgetControl(Services? svc, IAppSettings? settings)
+    {
+        if (!_metaBudgetSeeded && settings is not null)
+        {
+            _metaBudgetSeeded = true;
+            long chosen = settings.Get(WaveeSettings.MetadataCacheBudgetBytes);
+            int idx = Array.IndexOf(s_metaBudgetBytes, chosen);
+            _metaBudget.Value = idx >= 0 ? idx : 1;
+        }
+        return ComboBox.Create(s_metaBudgetLabels, _metaBudget, width: 120f, isEnabled: settings is not null,
+            onChange: i =>
+            {
+                if (settings is null || i < 0 || i >= s_metaBudgetBytes.Length) return;
+                long bytes = s_metaBudgetBytes[i];
+                settings.Set(WaveeSettings.MetadataCacheBudgetBytes, bytes);
+                // The GC reads the DB meta row; setting BudgetBytes writes BOTH, so a pass already scheduled picks the
+                // new ceiling up without a restart. With no GC instance (fake backend) the meta row still gets it.
+                if (svc?.CacheGc is { } gc) gc.BudgetBytes = bytes;
+                else svc?.RealCold?.SetCacheBudgetBytes(bytes);
+                Bump();
+            });
+    }
+
+    void ClearMetadataCache(Services? svc, Action<Action> post)
+    {
+        if (svc?.RealStore is not Wavee.Backend.Persistence.CachedStore store) return;
+        _ = Task.Run(() =>
+        {
+            try { store.ClearMetadataCache(); }
+            catch { }
+            post(() =>
+            {
+                Toast.Show(Loc.Get(Strings.Settings.Storage.MetadataCleared), new ToastOptions { Severity = InfoBarSeverity.Success });
+                _storage = null;
+                RefreshStorage(post);
+                RefreshMetadataStats(svc, post);
+            });
+        });
+    }
+
     void RefreshStorage(Action<Action> post)
     {
         if (_storageLoad.Peek() == StorageLoadPhase.Loading) return;
@@ -207,6 +282,7 @@ sealed partial class SettingsPage
     Element StorageTab(Services? svc, Action<Action> post)
     {
         var storageLoad = _storageLoad.Value;
+        _ = _metaTick.Value;   // subscribe: the metadata census lands asynchronously
         var s = _storage;
         string root = SettingsShared.AppDataRoot;
         string playplayDir = Path.Combine(root, "playplay");
@@ -304,6 +380,15 @@ sealed partial class SettingsPage
                         Loc.Get(Strings.Settings.Storage.ClearKeysBody),
                         Loc.Get(Strings.Settings.Storage.ClearKeys),
                         () => ClearLicenseKeys(svc, post)))),
+            SettingsSectionHeader(Loc.Get(Strings.Settings.Storage.MetadataCache), Icons.Document),
+            SettingsRow(Loc.Get(Strings.Settings.Storage.MetadataBudget), Loc.Get(Strings.Settings.Storage.MetadataBudgetSub),
+                MetadataBudgetControl(svc, settings), Icons.Document),
+            SettingsRow(Loc.Get(Strings.Settings.Storage.MetadataCache), MetadataCacheDescription(),
+                Button.Standard(Loc.Get(Strings.Settings.Storage.ClearMetadata), () =>
+                    ConfirmThen(Loc.Get(Strings.Settings.Storage.ClearMetadata),
+                        Loc.Get(Strings.Settings.Storage.ClearMetadataBody),
+                        Loc.Get(Strings.Settings.Storage.ClearMetadata),
+                        () => ClearMetadataCache(svc, post))), Icons.Document),
             SettingsSectionHeader(Loc.Get(Strings.Settings.Storage.Memory), Icons.List),
             SettingsRow(Loc.Get(Strings.Settings.Storage.ResidentCache), residentCacheDescription,
                 Button.Standard(Loc.Get(Strings.Settings.Storage.ReleaseNow), () =>

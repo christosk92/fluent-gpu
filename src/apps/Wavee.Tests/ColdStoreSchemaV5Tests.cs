@@ -239,7 +239,8 @@ public class ColdStoreSchemaV5Tests
             Assert.True(HasTable(path, "recent_surfaces"));
 
             Assert.Equal("1", Scalar(path, "SELECT value FROM meta WHERE key='vacuum_pending';") as string);
-            Assert.Equal("5", Scalar(path, "SELECT value FROM meta WHERE key='schema_version';") as string);
+            // v5 IS the cache-tier consolidation; the ladder then keeps walking into v6 (the `playlists.adopted_at` clock).
+            Assert.Equal(SqliteColdStore.CurrentSchemaVersion.ToString(), Scalar(path, "SELECT value FROM meta WHERE key='schema_version';") as string);
         }
         finally { TryDelete(path); }
     }

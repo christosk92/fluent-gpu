@@ -85,6 +85,9 @@ static class WaveeSettings
     public static readonly SettingKey<int> AudioBodyCacheBudgetPercent = new("audio.cache.body.budgetPercent", 0);
     // Empty = AppData default. A custom value is the user-selected parent; Wavee owns its WaveeAudioCache child only.
     public static readonly SettingKey<string> AudioBodyCacheBasePath = new("audio.cache.body.basePath", "");
+    // library.db metadata-cache budget (design §C.4/§G). The DB's `cache_budget_bytes` meta row is what the GC reads;
+    // this key holds the user's CHOICE so it survives a database rebuild, and is replayed into the meta row at launch.
+    public static readonly SettingKey<long> MetadataCacheBudgetBytes = new("cache.metadata.budgetBytes", 64L << 20);
     // Crash observability: the newest Windows Error Reporting dump we've already surfaced into wavee.log / Diagnostics.
     public static readonly SettingKey<string> LastSeenCrashDumpPath = new("diagnostics.crash.lastDumpPath", "");
     public static readonly SettingKey<long> LastSeenCrashDumpTicksUtc = new("diagnostics.crash.lastDumpTicksUtc", 0L);

@@ -164,6 +164,12 @@ sealed class WaveeApp : Component
                 post(() => _services.Residency.Trim(level));
             }, null, dueTime: 30_000, period: 30_000);
 
+            // Arm the metadata-cache GC (design §C) with the SAME UI-thread marshaller the governor poll uses above: it
+            // must snapshot Services.BuildPinSet on the UI thread (the detail caches are UI-thread-affine — critique
+            // #10) before every pass. The sequence itself — warm → +30 s → GC → one-time VACUUM → every 6 h — runs off
+            // the UI thread inside EntityCacheGc, so nothing here touches first paint. Null on the fake backend.
+            _services.CacheGc?.Start(post);
+
             if (Diag.EnvFlag("WAVEE_FAKE_CHALLENGE"))
             {
                 // Deterministic login screenshots (no network): seed a canned pairing challenge so the takeover renders the

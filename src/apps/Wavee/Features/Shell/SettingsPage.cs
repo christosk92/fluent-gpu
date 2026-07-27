@@ -93,7 +93,10 @@ sealed partial class SettingsPage : Component
         UseEffect(() =>
         {
             if (tab == TabStorage && _storageLoad.Peek() == StorageLoadPhase.NotStarted)
+            {
                 RefreshStorage(post);
+                RefreshMetadataStats(svc, post);   // the library.db cache-tier census (§G) — its own writer-lane read
+            }
             if (tab == TabPlayback) RefreshVideoOverrides(svc, post);
             // Leaving the tab destroys the Manage button: close its flyout and drop the now-dead anchor, so a later
             // deep-link can never open against a stale node.

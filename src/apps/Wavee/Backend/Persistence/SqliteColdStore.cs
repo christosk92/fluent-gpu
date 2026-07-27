@@ -26,8 +26,9 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
     public const string DefaultAccount = "default";
 
     /// <summary>The end-state schema version (v5 = the one `entity` table + entity_refs/artist_overview/recent_surfaces,
-    /// fmt-framed payloads, thin columns, cache accounting; legacy `entities`/`localized_entities` dropped).</summary>
-    public const int CurrentSchemaVersion = 5;
+    /// fmt-framed payloads, thin columns, cache accounting; legacy `entities`/`localized_entities` dropped. v6 = the
+    /// `playlists.adopted_at` stamp the membership GC dates its victims by — critique #6).</summary>
+    public const int CurrentSchemaVersion = 6;
 
     /// <summary>Matches ExtensionEtagCache's live <c>maxEntries</c> — the seed loop discards everything past it.</summary>
     public const int DefaultExtensionLimit = 2048;
@@ -35,6 +36,10 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
     // meta keys owned by the cache tier.
     public const string MetaCacheBytes = "cache_bytes";
     public const string MetaVacuumPending = "vacuum_pending";
+    public const string MetaCacheBudget = "cache_budget_bytes";
+
+    /// <summary>The default cache-tier byte budget (§C.4). User-settable through <see cref="SetCacheBudgetBytes"/>.</summary>
+    public const long DefaultCacheBudgetBytes = 64L * 1024 * 1024;
 
     const int MigrationBatchRows = 2000;    // chunked migrate: a 30k-row v4 db must never ride one giant transaction
     const int MaxInParams = 900;            // SQLITE_MAX_VARIABLE_NUMBER headroom for IN (...) lists
@@ -92,7 +97,9 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
         Exec("CREATE TABLE IF NOT EXISTS collection_rev(account TEXT NOT NULL, set_id TEXT NOT NULL, revision TEXT, synced_at INTEGER, PRIMARY KEY(account, set_id));");
         // Ordered playlists: the header lives in `entities` (kind=Playlist, thin); `playlists` carries only the opaque
         // revision; `playlist_items` is the ordered membership. (No header columns here → no duplication with the entity.)
-        Exec("CREATE TABLE IF NOT EXISTS playlists(uri TEXT PRIMARY KEY, base_rev BLOB);");
+        // `adopted_at` (v6) is the membership-GC clock: when this playlist's membership was last adopted. A fresh db gets
+        // the column here; an existing v5 file gets it through the guarded ALTER in MigrateToV6().
+        Exec("CREATE TABLE IF NOT EXISTS playlists(uri TEXT PRIMARY KEY, base_rev BLOB, adopted_at INTEGER NOT NULL DEFAULT 0);");
         Exec("CREATE TABLE IF NOT EXISTS playlist_items(playlist_uri TEXT NOT NULL, position INTEGER NOT NULL, item_id TEXT, " +
              "item_uri TEXT NOT NULL, added_by TEXT, added_at INTEGER, PRIMARY KEY(playlist_uri, position));");
         Exec("CREATE TABLE IF NOT EXISTS rootlist(account TEXT NOT NULL, position INTEGER NOT NULL, kind INTEGER, uri TEXT, group_name TEXT, depth INTEGER, PRIMARY KEY(account, position));");
@@ -260,7 +267,38 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
             }
 
             if (ver == "4") { MigrateToV5(); ver = "5"; }
+            if (ver == "5") { MigrateToV6(); ver = "6"; }
         }
+    }
+
+    // ── v5 → v6: the membership-GC clock ─────────────────────────────────────────────────────────────────────────────
+    // Purely ADDITIVE on an IDENTITY table (locked decision 2): one column, backfilled to "now" so no existing playlist
+    // is instantly 14 days stale. Guarded on the column already existing, so the fresh-db path (which creates it in the
+    // ctor DDL) and a re-run after a crash are both no-ops.
+    void MigrateToV6()
+    {
+        using var tx = _conn.BeginTransaction();
+        if (!ColumnExistsLocked("playlists", "adopted_at", tx))
+            ExecLocked("ALTER TABLE playlists ADD COLUMN adopted_at INTEGER NOT NULL DEFAULT 0;", tx);
+        using (var c = _conn.CreateCommand())
+        {
+            c.Transaction = tx;
+            c.CommandText = "UPDATE playlists SET adopted_at=$t WHERE adopted_at IS NULL OR adopted_at=0;";
+            c.Parameters.AddWithValue("$t", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            c.ExecuteNonQuery();
+        }
+        ExecLocked("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','6');", tx);
+        tx.Commit();
+    }
+
+    bool ColumnExistsLocked(string table, string column, SqliteTransaction? tx)
+    {
+        using var c = _conn.CreateCommand();
+        c.Transaction = tx;
+        c.CommandText = $"PRAGMA table_info({table});";
+        using var r = c.ExecuteReader();
+        while (r.Read()) if (string.Equals(r.GetString(1), column, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
     }
 
     // ── v4 → v5: the end-state cache tier ────────────────────────────────────────────────────────────────────────────
@@ -632,7 +670,11 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
 
     // Open-time hygiene: drop extension rows whose TTL lapsed more than the +7d ETag-revalidation grace ago. Writer-side
     // (it is a DELETE), before the reader opens, and it keeps `cache_bytes` honest.
-    void SweepExpiredExtensions()
+    void SweepExpiredExtensions() => SweepExpiredExtensionsNow();
+
+    /// <summary>The expired-extension sweep, shared between the open-time pass and the RECURRING GC pass (§C.3 — it is a
+    /// TTL tier like any other, not a one-shot). `expires_at` + the 7 d ETag-revalidation grace; returns what it freed.</summary>
+    public (int Rows, long Bytes) SweepExpiredExtensionsNow()
     {
         long cutoff = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - ExtensionGraceSeconds;
         lock (_connLock)
@@ -655,9 +697,10 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
                 d.Parameters.AddWithValue("$c", cutoff);
                 deleted = d.ExecuteNonQuery();
             }
-            if (deleted == 0) { tx.Rollback(); return; }
+            if (deleted == 0) { tx.Rollback(); return (0, 0); }
             if (freed > 0) ApplyCacheBytesDeltaLocked(-freed, tx);
             tx.Commit();
+            return (deleted, freed);
         }
     }
 
@@ -812,9 +855,13 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
             using (var rev = _conn.CreateCommand())
             {
                 rev.Transaction = tx;
-                rev.CommandText = "INSERT INTO playlists(uri,base_rev) VALUES($p,$r) ON CONFLICT(uri) DO UPDATE SET base_rev=excluded.base_rev;";
+                // adopted_at (v6) is stamped on EVERY adoption — it is the membership GC's "last time this playlist was
+                // actually synced" clock, so re-opening a foreign playlist keeps it alive for another 14 days.
+                rev.CommandText = "INSERT INTO playlists(uri,base_rev,adopted_at) VALUES($p,$r,$t) " +
+                                  "ON CONFLICT(uri) DO UPDATE SET base_rev=excluded.base_rev, adopted_at=excluded.adopted_at;";
                 rev.Parameters.AddWithValue("$p", playlistUri);
                 rev.Parameters.AddWithValue("$r", (object?)baseRev ?? DBNull.Value);
+                rev.Parameters.AddWithValue("$t", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
                 rev.ExecuteNonQuery();
             }
             tx.Commit();
@@ -1443,6 +1490,390 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
         }
         return list;
     }
+
+    // ── the cache GC SQL (Wave C, §C) ────────────────────────────────────────────────────────────────────────────────
+    // POLICY lives in EntityCacheGc; the SQL lives here because every statement below must ride the WRITER connection
+    // under `_connLock` (temp tables are per-connection, and a DELETE cannot go anywhere else). The pass is a sequence of
+    // INDIVIDUALLY ATOMIC steps + INDIVIDUALLY ATOMIC ≤1000-row DELETE batches: aborting between any two of them leaves a
+    // fully consistent database (every batch updates `cache_bytes` inside its own transaction), which is exactly what
+    // makes shutdown-cancellation safe.
+
+    /// <summary>DELETE batch size (§C.4 — Chromium's bounded-transaction pattern).</summary>
+    public const int GcDeleteBatchRows = 1000;
+    /// <summary>Never evict a row written in the last 15 minutes (critique #11 / Firefox bug 913808).</summary>
+    public const long GcNewRowGraceSeconds = 15 * 60;
+
+    /// <summary>Open a GC pass: materialize the pin table (§A.3 P0 ∪ recent_surfaces ∪ the one-level `entity_refs`
+    /// closure ∪ the caller's UI-thread in-memory snapshot), the reusable victim-batch table, and reconcile the running
+    /// `cache_bytes` counter against the real SUM(size) (§C.4). Every later sweep reads `temp.gc_pin`.</summary>
+    public void GcBeginPass(IReadOnlyCollection<string>? inMemoryExempt)
+    {
+        lock (_connLock)
+        {
+            ExecLocked("DROP TABLE IF EXISTS temp.gc_pin; CREATE TEMP TABLE gc_pin(uri TEXT PRIMARY KEY);");
+            ExecLocked($"INSERT OR IGNORE INTO temp.gc_pin(uri) {PinSetWithRecentSql};");
+            if (inMemoryExempt is { Count: > 0 }) GcInsertExemptLocked(inMemoryExempt);
+            // ONE level of closure is sufficient (track→album/artists, album→artists, artist→albums, show→episodes): the
+            // parent is what a pin reason names, the child is what renders with it. Materialized through a second temp
+            // table rather than INSERT…SELECT over the table being written, so the result never depends on whether SQLite
+            // sees rows added by the same statement.
+            ExecLocked("""
+                DROP TABLE IF EXISTS temp.gc_kids;
+                CREATE TEMP TABLE gc_kids(uri TEXT PRIMARY KEY);
+                INSERT OR IGNORE INTO temp.gc_kids(uri)
+                    SELECT DISTINCT child_uri FROM entity_refs
+                    WHERE parent_uri IN (SELECT uri FROM temp.gc_pin) AND child_uri IS NOT NULL AND child_uri<>'';
+                INSERT OR IGNORE INTO temp.gc_pin(uri) SELECT uri FROM temp.gc_kids;
+                DROP TABLE IF EXISTS temp.gc_kids;
+                DELETE FROM temp.gc_pin WHERE uri IS NULL OR uri='';
+                DROP TABLE IF EXISTS temp.gc_batch;
+                CREATE TEMP TABLE gc_batch(uri TEXT PRIMARY KEY);
+                """);
+            ReconcileCacheBytesLocked(null);
+        }
+    }
+
+    /// <summary>Tear the pass's temp tables down. Safe to call twice / after a cancellation.</summary>
+    public void GcEndPass()
+    {
+        lock (_connLock)
+            ExecLocked("DROP TABLE IF EXISTS temp.gc_pin; DROP TABLE IF EXISTS temp.gc_batch; DROP TABLE IF EXISTS temp.gc_kids;");
+    }
+
+    /// <summary>The number of uris the current pass considers pinned (the per-GC report's `pinned` field).</summary>
+    public long GcPinnedCount()
+    {
+        lock (_connLock)
+        {
+            using var c = _conn.CreateCommand();
+            c.CommandText = "SELECT count(*) FROM temp.gc_pin;";
+            try { return Convert.ToInt64(c.ExecuteScalar() ?? 0L); } catch (SqliteException) { return 0; }
+        }
+    }
+
+    void GcInsertExemptLocked(IReadOnlyCollection<string> exempt)
+    {
+        var chunk = new List<string>(Math.Min(exempt.Count, MaxInParams));
+        foreach (var uri in exempt)
+        {
+            if (string.IsNullOrEmpty(uri)) continue;
+            chunk.Add(uri);
+            if (chunk.Count == MaxInParams) { GcInsertExemptChunkLocked(chunk); chunk.Clear(); }
+        }
+        if (chunk.Count > 0) GcInsertExemptChunkLocked(chunk);
+    }
+
+    void GcInsertExemptChunkLocked(List<string> chunk)
+    {
+        var sql = new System.Text.StringBuilder("INSERT OR IGNORE INTO temp.gc_pin(uri) VALUES ");
+        for (int i = 0; i < chunk.Count; i++) { if (i > 0) sql.Append(','); sql.Append("($u").Append(i).Append(')'); }
+        sql.Append(';');
+        using var c = _conn.CreateCommand();
+        c.CommandText = sql.ToString();
+        for (int i = 0; i < chunk.Count; i++) c.Parameters.AddWithValue("$u" + i, chunk[i]);
+        c.ExecuteNonQuery();
+    }
+
+    /// <summary>`artist_overview` TTL (§C.3): 7 d since `fetched_at`, pinned artists exempt.</summary>
+    public (int Rows, long Bytes) GcSweepArtistOverviews(long fetchedBefore)
+    {
+        lock (_connLock)
+        {
+            using var tx = _conn.BeginTransaction();
+            const string where = " WHERE fetched_at<$t AND uri NOT IN (SELECT uri FROM temp.gc_pin)";
+            long freed;
+            using (var c = _conn.CreateCommand())
+            {
+                c.Transaction = tx;
+                c.CommandText = "SELECT IFNULL(SUM(size),0) FROM artist_overview" + where + ";";
+                c.Parameters.AddWithValue("$t", fetchedBefore);
+                freed = Convert.ToInt64(c.ExecuteScalar() ?? 0L);
+            }
+            int rows;
+            using (var c = _conn.CreateCommand())
+            {
+                c.Transaction = tx;
+                c.CommandText = "DELETE FROM artist_overview" + where + ";";
+                c.Parameters.AddWithValue("$t", fetchedBefore);
+                rows = c.ExecuteNonQuery();
+            }
+            if (rows == 0) { tx.Rollback(); return (0, 0); }
+            if (freed > 0) ApplyCacheBytesDeltaLocked(-freed, tx);
+            tx.Commit();
+            return (rows, freed);
+        }
+    }
+
+    /// <summary>Unpinned-entity TTL (§C.3): 30 d since `last_access`, in ≤<see cref="GcDeleteBatchRows"/>-row atomic
+    /// batches. `updatedBefore` is the 15-minute new-row grace. Cancelling between batches is safe by construction.</summary>
+    /// <param name="batchRows">Rows per atomic DELETE batch. Production always uses <see cref="GcDeleteBatchRows"/>;
+    /// the tests shrink it (together with <paramref name="maxBatches"/>) to reproduce an aborted-mid-sweep database.</param>
+    /// <param name="maxBatches">Stop after this many batches — the deterministic stand-in for a shutdown cancellation
+    /// landing between two batches.</param>
+    public (int Rows, long Bytes) GcSweepUnpinnedEntities(long accessBefore, long updatedBefore, System.Threading.CancellationToken ct,
+                                                          int batchRows = GcDeleteBatchRows, int maxBatches = int.MaxValue)
+        => GcDeleteLoop(
+            "SELECT DISTINCT uri FROM entity WHERE last_access<$a AND updated_at<$u " +
+            "AND uri NOT IN (SELECT uri FROM temp.gc_pin) LIMIT $n;",
+            accessBefore, updatedBefore, budget: 0, ct, batchRows, maxBatches);
+
+    /// <summary>Byte-budget LRU (§C.4): while `cache_bytes` &gt; budget, delete unpinned entities oldest-`last_access`
+    /// first until ≤ 0.9 × budget. Same atomic bounded batches.</summary>
+    public (int Rows, long Bytes) GcEnforceBudget(long budget, long updatedBefore, System.Threading.CancellationToken ct,
+                                                  int batchRows = GcDeleteBatchRows, int maxBatches = int.MaxValue)
+        => budget <= 0
+            ? (0, 0)
+            : GcDeleteLoop(
+                "SELECT DISTINCT uri FROM entity WHERE updated_at<$u AND uri NOT IN (SELECT uri FROM temp.gc_pin) " +
+                "ORDER BY last_access ASC LIMIT $n;",
+                accessBefore: 0, updatedBefore, budget, ct, batchRows, maxBatches);
+
+    // One loop for both sweeps. `budget > 0` ⇒ stop as soon as cache_bytes ≤ 0.9 × budget (the Chromium watermark);
+    // otherwise run until the predicate stops matching. Each iteration is ONE transaction: pick ≤batchRows victims into
+    // temp.gc_batch, sum their bytes, delete entity + entity_refs + video_assoc rows, apply the cache_bytes delta.
+    (int Rows, long Bytes) GcDeleteLoop(string pickSql, long accessBefore, long updatedBefore, long budget,
+                                        System.Threading.CancellationToken ct, int batchRows, int maxBatches)
+    {
+        long watermark = budget > 0 ? (long)(budget * 0.9) : 0;
+        int total = 0;
+        long freed = 0;
+        int batches = 0;
+        if (batchRows <= 0) batchRows = GcDeleteBatchRows;
+        while (!ct.IsCancellationRequested && batches++ < maxBatches)
+        {
+            lock (_connLock)
+            {
+                if (budget > 0 && GetCacheBytesLocked(null) <= watermark) return (total, freed);
+                using var tx = _conn.BeginTransaction();
+                ExecLocked("DELETE FROM temp.gc_batch;", tx);
+                using (var pick = _conn.CreateCommand())
+                {
+                    pick.Transaction = tx;
+                    pick.CommandText = "INSERT OR IGNORE INTO temp.gc_batch(uri) " + pickSql;
+                    if (pickSql.Contains("$a", StringComparison.Ordinal)) pick.Parameters.AddWithValue("$a", accessBefore);
+                    pick.Parameters.AddWithValue("$u", updatedBefore);
+                    pick.Parameters.AddWithValue("$n", batchRows);
+                    pick.ExecuteNonQuery();
+                }
+                long bytes;
+                using (var c = _conn.CreateCommand())
+                {
+                    c.Transaction = tx;
+                    c.CommandText = "SELECT IFNULL(SUM(size),0) FROM entity WHERE uri IN (SELECT uri FROM temp.gc_batch);";
+                    bytes = Convert.ToInt64(c.ExecuteScalar() ?? 0L);
+                }
+                int rows;
+                using (var c = _conn.CreateCommand())
+                {
+                    c.Transaction = tx;
+                    c.CommandText = "DELETE FROM entity WHERE uri IN (SELECT uri FROM temp.gc_batch);";
+                    rows = c.ExecuteNonQuery();
+                }
+                if (rows == 0) { tx.Rollback(); return (total, freed); }
+                // The pin closure and the video↔audio map are cache rows keyed by the entity we just dropped: a dangling
+                // edge would keep a stale parent alive on the next pass, and a dangling video_assoc row is unreadable.
+                ExecLocked("DELETE FROM entity_refs WHERE parent_uri IN (SELECT uri FROM temp.gc_batch);", tx);
+                ExecLocked("DELETE FROM video_assoc WHERE uri IN (SELECT uri FROM temp.gc_batch);", tx);
+                if (bytes > 0) ApplyCacheBytesDeltaLocked(-bytes, tx);
+                tx.Commit();
+                total += rows;
+                freed += bytes;
+            }
+        }
+        return (total, freed);
+    }
+
+    /// <summary>Membership GC (critique #6 / locked decision 11): a playlist that is NOT in the rootlist, NOT a recent
+    /// surface, has no pending outbox intent, is not a collection item, and was last adopted before
+    /// <paramref name="adoptedBefore"/> loses its `playlist_items` rows AND its `playlists` header row — the pin leg that
+    /// kept every track of every editorial playlist the user ever OPENED alive forever. Returns the purged playlist uris
+    /// so the caller can prune its in-memory mirrors. Own-library playlists are always in the rootlist, so user data is
+    /// untouched by construction.</summary>
+    public IReadOnlyList<string> GcSweepMemberships(long adoptedBefore)
+    {
+        var victims = new List<string>();
+        lock (_connLock)
+        {
+            using (var c = _conn.CreateCommand())
+            {
+                c.CommandText = """
+                    SELECT p.uri FROM playlists p
+                    WHERE p.adopted_at > 0 AND p.adopted_at < $t
+                      AND p.uri NOT IN (SELECT uri FROM rootlist WHERE uri IS NOT NULL AND uri<>'')
+                      AND p.uri NOT IN (SELECT uri FROM recent_surfaces)
+                      AND p.uri NOT IN (SELECT entity_key FROM outbox)
+                      AND p.uri NOT IN (SELECT item_uri FROM collection_items);
+                    """;
+                c.Parameters.AddWithValue("$t", adoptedBefore);
+                using var r = c.ExecuteReader();
+                while (r.Read()) victims.Add(r.GetString(0));
+            }
+            if (victims.Count == 0) return victims;
+
+            using var tx = _conn.BeginTransaction();
+            var chunk = new List<string>(Math.Min(victims.Count, MaxInParams));
+            for (int i = 0; i < victims.Count; i++)
+            {
+                chunk.Add(victims[i]);
+                if (chunk.Count == MaxInParams) { GcPurgeMembershipChunkLocked(chunk, tx); chunk.Clear(); }
+            }
+            if (chunk.Count > 0) GcPurgeMembershipChunkLocked(chunk, tx);
+            tx.Commit();
+        }
+        return victims;
+    }
+
+    void GcPurgeMembershipChunkLocked(List<string> chunk, SqliteTransaction tx)
+    {
+        var list = new System.Text.StringBuilder();
+        for (int i = 0; i < chunk.Count; i++) { if (i > 0) list.Append(','); list.Append("$u").Append(i); }
+        foreach (var sql in new[]
+                 {
+                     $"DELETE FROM playlist_items WHERE playlist_uri IN ({list});",
+                     $"DELETE FROM playlists WHERE uri IN ({list});",
+                 })
+        {
+            using var c = _conn.CreateCommand();
+            c.Transaction = tx;
+            c.CommandText = sql;
+            for (int i = 0; i < chunk.Count; i++) c.Parameters.AddWithValue("$u" + i, chunk[i]);
+            c.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>Idle hygiene after a GC pass: truncate the WAL so the freed pages actually leave the file.</summary>
+    public void CheckpointWal()
+    {
+        lock (_connLock)
+        {
+            using var c = _conn.CreateCommand();
+            c.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
+            try { c.ExecuteNonQuery(); } catch (SqliteException) { /* a busy checkpoint is a no-op, never an error */ }
+        }
+    }
+
+    // ── escape hatches (§G) ──────────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>"Clear metadata cache": every UNPINNED `entity` row (plus its refs), every `artist_overview` row and
+    /// every extension row. IDENTITY TABLES ARE NEVER TOUCHED (collection_items / playlists / playlist_items / rootlist /
+    /// outbox / dead_letter / video_override / collection_rev), and neither is `video_assoc` (the video-edge map is
+    /// eagerly loaded and fragile). Pinned entity rows survive, so the app stays offline-capable. Returns rows freed.</summary>
+    public (int Rows, long Bytes) ClearMetadataCache()
+    {
+        long before, after;
+        int rows;
+        lock (_connLock)
+        {
+            ExecLocked("DROP TABLE IF EXISTS temp.gc_pin; CREATE TEMP TABLE gc_pin(uri TEXT PRIMARY KEY);");
+            ExecLocked($"INSERT OR IGNORE INTO temp.gc_pin(uri) {PinSetWithRecentSql};");
+            ExecLocked("""
+                DROP TABLE IF EXISTS temp.gc_kids;
+                CREATE TEMP TABLE gc_kids(uri TEXT PRIMARY KEY);
+                INSERT OR IGNORE INTO temp.gc_kids(uri)
+                    SELECT DISTINCT child_uri FROM entity_refs
+                    WHERE parent_uri IN (SELECT uri FROM temp.gc_pin) AND child_uri IS NOT NULL AND child_uri<>'';
+                INSERT OR IGNORE INTO temp.gc_pin(uri) SELECT uri FROM temp.gc_kids;
+                DROP TABLE IF EXISTS temp.gc_kids;
+                DELETE FROM temp.gc_pin WHERE uri IS NULL OR uri='';
+                """);
+            before = GetCacheBytesLocked(null);
+            using (var tx = _conn.BeginTransaction())
+            {
+                using (var c = _conn.CreateCommand())
+                {
+                    c.Transaction = tx;
+                    c.CommandText = "DELETE FROM entity WHERE uri NOT IN (SELECT uri FROM temp.gc_pin);";
+                    rows = c.ExecuteNonQuery();
+                }
+                ExecLocked("""
+                    DELETE FROM entity_refs WHERE parent_uri NOT IN (SELECT uri FROM temp.gc_pin);
+                    DELETE FROM artist_overview;
+                    DELETE FROM localized_extension_cache;
+                    """, tx);
+                ReconcileCacheBytesLocked(tx);
+                tx.Commit();
+            }
+            after = GetCacheBytesLocked(null);
+            ExecLocked("DROP TABLE IF EXISTS temp.gc_pin;");
+        }
+        RunIncrementalVacuum(2000);
+        return (rows, Math.Max(0, before - after));
+    }
+
+    /// <summary>The user-settable cache-tier byte budget (§G). 0/absent ⇒ <see cref="DefaultCacheBudgetBytes"/>.</summary>
+    public long GetCacheBudgetBytes()
+    {
+        lock (_readLock)
+        {
+            using var c = _read.CreateCommand();
+            c.CommandText = $"SELECT value FROM meta WHERE key='{MetaCacheBudget}';";
+            return c.ExecuteScalar() is string s && long.TryParse(s, out var v) && v > 0 ? v : DefaultCacheBudgetBytes;
+        }
+    }
+
+    public void SetCacheBudgetBytes(long bytes)
+    {
+        if (bytes <= 0) return;
+        lock (_connLock)
+        {
+            using var c = _conn.CreateCommand();
+            c.CommandText = $"INSERT INTO meta(key,value) VALUES('{MetaCacheBudget}',$v) ON CONFLICT(key) DO UPDATE SET value=excluded.value;";
+            c.Parameters.AddWithValue("$v", bytes.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            c.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>One cheap diagnostics snapshot for the Settings → Storage readout (§G metrics). Writer-side (it needs the
+    /// pin subquery and the file pragmas); a settings-page action, never a hot path.</summary>
+    public EntityCacheStats GetCacheStats()
+    {
+        lock (_connLock)
+        {
+            long pageCount = ScalarLongLocked("PRAGMA page_count;");
+            long pageSize = ScalarLongLocked("PRAGMA page_size;");
+            long freelist = ScalarLongLocked("PRAGMA freelist_count;");
+            long pinnedBytes = ScalarLongLocked($"SELECT IFNULL(SUM(size),0) FROM entity WHERE uri IN ({PinSetWithRecentSql});");
+            long pinnedRows = ScalarLongLocked($"SELECT count(*) FROM entity WHERE uri IN ({PinSetWithRecentSql});");
+            long budget = ScalarLongLocked($"SELECT CAST(value AS INTEGER) FROM meta WHERE key='{MetaCacheBudget}';");
+            return new EntityCacheStats(
+                DbBytes: pageCount * pageSize,
+                ReclaimableBytes: freelist * pageSize,
+                CacheBytes: GetCacheBytesLocked(null),
+                PinnedBytes: pinnedBytes,
+                BudgetBytes: budget > 0 ? budget : DefaultCacheBudgetBytes,
+                EntityRows: ScalarLongLocked("SELECT count(*) FROM entity;"),
+                PinnedRows: pinnedRows,
+                OverviewRows: ScalarLongLocked("SELECT count(*) FROM artist_overview;"),
+                ExtensionRows: ScalarLongLocked("SELECT count(*) FROM localized_extension_cache;"));
+        }
+    }
+
+    long ScalarLongLocked(string sql)
+    {
+        using var c = _conn.CreateCommand();
+        c.CommandText = sql;
+        var v = c.ExecuteScalar();
+        return v is null or DBNull ? 0 : Convert.ToInt64(v);
+    }
+
+    long GetCacheBytesLocked(SqliteTransaction? tx)
+    {
+        using var c = _conn.CreateCommand();
+        c.Transaction = tx;
+        c.CommandText = $"SELECT value FROM meta WHERE key='{MetaCacheBytes}';";
+        return c.ExecuteScalar() is string s && long.TryParse(s, out var v) ? v : 0;
+    }
+
+    // The running counter is reconciled against the truth once per GC pass (§C.4): the delta bookkeeping is exact, but a
+    // torn shutdown mid-batch (or a hand-seeded fixture) can leave it drifted, and every eviction decision reads it.
+    void ReconcileCacheBytesLocked(SqliteTransaction? tx)
+        => ExecLocked($"""
+            INSERT INTO meta(key,value) VALUES('{MetaCacheBytes}', CAST(
+                (SELECT IFNULL(SUM(size),0) FROM entity)
+              + (SELECT IFNULL(SUM(size),0) FROM artist_overview)
+              + (SELECT IFNULL(SUM(length(payload)),0) FROM localized_extension_cache) AS TEXT))
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value;
+            """, tx);
 
     public void Dispose()
     {

@@ -419,7 +419,8 @@ public class SqliteColdStoreTests
             using var r = q.ExecuteReader();
             Assert.True(r.Read());
             Assert.Equal(0L, r.GetInt64(0));        // `saved` dropped
-            Assert.Equal("5", r.GetString(1));      // schema_version = 5 after the one-`entity`-table consolidation lands
+            // v5 = the one-`entity`-table consolidation, v6 = the `playlists.adopted_at` membership-GC clock.
+            Assert.Equal(SqliteColdStore.CurrentSchemaVersion.ToString(), r.GetString(1));
         }
         finally { TryDelete(path); }
     }
@@ -453,7 +454,8 @@ public class SqliteColdStoreTests
             verify.Open();
             using var q = verify.CreateCommand();
             q.CommandText = "SELECT value FROM meta WHERE key='schema_version';";
-            Assert.Equal("5", q.ExecuteScalar() as string);   // the runner walks the whole ladder: v1 → v2 → v3 → v4 → v5
+            // the runner walks the whole ladder: v1 → v2 → v3 → v4 → v5 → v6
+            Assert.Equal(SqliteColdStore.CurrentSchemaVersion.ToString(), q.ExecuteScalar() as string);
         }
         finally { TryDelete(path); }
     }
